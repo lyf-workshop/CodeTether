@@ -1,0 +1,294 @@
+import type { ComponentPropsWithoutRef } from 'react'
+import { Link } from '@tanstack/react-router'
+import {
+  Activity,
+  Bot,
+  ChevronDown,
+  Cpu,
+  FolderOpen,
+  Inbox,
+  Laptop,
+  Monitor,
+  Server,
+  Settings,
+  type LucideIcon,
+} from 'lucide-react'
+
+import {
+  Button,
+  Separator,
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+  agentDefinitions,
+  cn,
+  statusDefinitions,
+  type AgentId,
+  type ExecutionStatus,
+} from '@codetether/ui'
+
+type SidebarDestination =
+  '/inbox' | '/activity' | '/projects' | '/agents' | '/machines' | '/settings'
+
+interface SidebarNavItem {
+  label: string
+  to: SidebarDestination
+  icon: LucideIcon
+}
+
+interface AgentPresence {
+  agent: AgentId
+  status: ExecutionStatus
+}
+
+interface MachinePresence {
+  name: string
+  status: ExecutionStatus
+  icon: LucideIcon
+}
+
+const primaryNavItems = [
+  { label: 'Inbox', to: '/inbox', icon: Inbox },
+  { label: 'Activity', to: '/activity', icon: Activity },
+  { label: 'Projects', to: '/projects', icon: FolderOpen },
+  { label: 'Agents', to: '/agents', icon: Bot },
+  { label: 'Machines', to: '/machines', icon: Monitor },
+] as const satisfies readonly SidebarNavItem[]
+
+const settingsNavItem = {
+  label: 'Settings',
+  to: '/settings',
+  icon: Settings,
+} as const satisfies SidebarNavItem
+
+const agentPresences = [
+  { agent: 'codex', status: 'running' },
+  { agent: 'claude', status: 'running' },
+  { agent: 'opencode', status: 'running' },
+] as const satisfies readonly AgentPresence[]
+
+const machinePresences = [
+  { name: '本地电脑', status: 'running', icon: Monitor },
+  { name: '开发服务器', status: 'running', icon: Server },
+  { name: 'MacBook Pro', status: 'running', icon: Laptop },
+  { name: '树莓派设备', status: 'offline', icon: Cpu },
+] as const satisfies readonly MachinePresence[]
+
+function isCurrentRoute(currentPath: string, destination: SidebarDestination) {
+  return (
+    currentPath === destination || currentPath.startsWith(`${destination}/`)
+  )
+}
+
+interface PresenceDotProps {
+  label: string
+  status: ExecutionStatus
+}
+
+function PresenceDot({ label, status }: PresenceDotProps) {
+  const definition = statusDefinitions[status]
+
+  return (
+    <span
+      role="img"
+      aria-label={`${label}: ${definition.label}`}
+      data-status={status}
+      className={cn(
+        'size-2 shrink-0 rounded-full bg-current',
+        definition.iconClassName,
+        'motion-safe:animate-none',
+      )}
+    />
+  )
+}
+
+interface SidebarLinkProps {
+  currentPath: string
+  item: SidebarNavItem
+}
+
+function SidebarLink({ currentPath, item }: SidebarLinkProps) {
+  const selected = isCurrentRoute(currentPath, item.to)
+  const Icon = item.icon
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Link
+          to={item.to}
+          aria-label={item.label}
+          aria-current={selected ? 'page' : undefined}
+          data-selected={selected || undefined}
+          className={cn(
+            'group flex h-[var(--layout-sidebar-nav-item-height)] w-full min-w-0 items-center justify-center gap-[var(--layout-sidebar-nav-gap)] rounded-sm border px-2 text-md font-medium outline-none',
+            'transition-colors duration-150 motion-reduce:transition-none',
+            'focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-navigation',
+            'lg:justify-start',
+            selected
+              ? 'border-primary bg-primary-muted text-text-primary'
+              : 'border-transparent text-text-secondary hover:border-border hover:bg-surface-muted hover:text-text-primary',
+          )}
+        >
+          <Icon
+            aria-hidden="true"
+            className="size-4 shrink-0 text-text-secondary transition-colors duration-150 group-hover:text-text-primary motion-reduce:transition-none"
+          />
+          <span className="hidden min-w-0 flex-1 truncate lg:block">
+            {item.label}
+          </span>
+        </Link>
+      </TooltipTrigger>
+      <TooltipContent side="right" className="lg:hidden">
+        {item.label}
+      </TooltipContent>
+    </Tooltip>
+  )
+}
+
+export interface PrimarySidebarProps extends Omit<
+  ComponentPropsWithoutRef<'aside'>,
+  'children'
+> {
+  currentPath: string
+}
+
+/** Desktop-primary navigation and mock availability summary for Phase 1B. */
+export function PrimarySidebar({
+  currentPath,
+  className,
+  'aria-label': ariaLabel = 'Primary navigation',
+  ...props
+}: PrimarySidebarProps) {
+  return (
+    <aside
+      aria-label={ariaLabel}
+      data-slot="primary-sidebar"
+      className={cn(
+        'flex h-full min-h-0 w-[var(--layout-sidebar-collapsed-width)] shrink-0 flex-col overflow-hidden border-r border-border bg-navigation',
+        'transition-[width] duration-200 motion-reduce:transition-none',
+        'lg:w-[var(--layout-sidebar-width)]',
+        className,
+      )}
+      {...props}
+    >
+      <div className="flex min-h-0 flex-1 flex-col px-[var(--layout-sidebar-inline-padding)] py-[var(--layout-sidebar-block-padding)]">
+        <div>
+          <h2 className="hidden px-2 text-xs font-semibold text-text-muted lg:block">
+            Workspace
+          </h2>
+          <nav aria-label="Workspace" className="space-y-2 lg:mt-3">
+            {primaryNavItems.map((item) => (
+              <SidebarLink
+                key={item.to}
+                item={item}
+                currentPath={currentPath}
+              />
+            ))}
+          </nav>
+        </div>
+
+        <div className="hidden min-h-0 flex-1 overflow-y-auto lg:block">
+          <Separator className="my-3" />
+
+          <section aria-labelledby="sidebar-current-project-heading">
+            <h2
+              id="sidebar-current-project-heading"
+              className="px-2 text-xs font-semibold text-text-muted"
+            >
+              Current Project
+            </h2>
+            <Button
+              variant="outline"
+              aria-label="Current project: MyProject"
+              className="mt-2 h-[var(--layout-sidebar-context-item-height)] w-full justify-start rounded-sm border-border-strong bg-primary-muted/40 px-2 text-left hover:bg-primary-muted/60"
+            >
+              <FolderOpen
+                aria-hidden="true"
+                className="size-4 shrink-0 text-primary"
+              />
+              <span className="min-w-0 flex-1 truncate text-md font-semibold text-text-primary">
+                MyProject
+              </span>
+              <ChevronDown
+                aria-hidden="true"
+                className="size-4 shrink-0 text-text-secondary"
+              />
+            </Button>
+          </section>
+
+          <Separator className="my-3" />
+
+          <section aria-labelledby="sidebar-agents-heading">
+            <h2
+              id="sidebar-agents-heading"
+              className="px-2 text-xs font-semibold text-text-muted"
+            >
+              Agents
+            </h2>
+            <ul className="mt-2 space-y-0.5">
+              {agentPresences.map(({ agent, status }) => {
+                const definition = agentDefinitions[agent]
+
+                return (
+                  <li
+                    key={agent}
+                    className="flex h-[var(--layout-sidebar-presence-item-height)] min-w-0 items-center gap-1 pr-3 pl-2"
+                  >
+                    <span
+                      aria-hidden="true"
+                      className={cn(
+                        'grid size-[var(--layout-sidebar-mark-size)] shrink-0 place-items-center rounded-md border text-sm font-semibold',
+                        definition.accentClassName,
+                      )}
+                    >
+                      {definition.icon}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate text-md font-medium text-text-primary">
+                      {definition.name}
+                    </span>
+                    <PresenceDot label={definition.name} status={status} />
+                  </li>
+                )
+              })}
+            </ul>
+          </section>
+
+          <Separator className="my-3" />
+
+          <section aria-labelledby="sidebar-machines-heading">
+            <h2
+              id="sidebar-machines-heading"
+              className="px-2 text-xs font-semibold text-text-muted"
+            >
+              Machines
+            </h2>
+            <ul className="mt-2 space-y-0.5">
+              {machinePresences.map(({ icon: Icon, name, status }) => (
+                <li
+                  key={name}
+                  className="flex h-[var(--layout-sidebar-machine-item-height)] min-w-0 items-center gap-[var(--layout-sidebar-nav-gap)] pr-3 pl-2"
+                >
+                  <Icon
+                    aria-hidden="true"
+                    className="size-4 shrink-0 text-text-secondary"
+                  />
+                  <span className="min-w-0 flex-1 truncate text-sm font-medium text-text-primary">
+                    {name}
+                  </span>
+                  <PresenceDot label={name} status={status} />
+                </li>
+              ))}
+            </ul>
+          </section>
+        </div>
+
+        <div className="mt-auto pt-3">
+          <Separator className="mb-3" />
+          <nav aria-label="Application">
+            <SidebarLink item={settingsNavItem} currentPath={currentPath} />
+          </nav>
+        </div>
+      </div>
+    </aside>
+  )
+}

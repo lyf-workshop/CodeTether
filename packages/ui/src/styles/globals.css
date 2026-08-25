@@ -1,0 +1,295 @@
+@import '@fontsource-variable/inter/index.css';
+@import 'tailwindcss';
+
+@source '../**/*.{ts,tsx}';
+@source '../../../../apps/web/src/**/*.{ts,tsx}';
+
+@custom-variant dark (&:is(.dark, .dark *));
+
+/*
+ * CodeTether semantic theme layer.
+ *
+ * Phase 1A ships the Figma-approved dark values. Components only consume the
+ * semantic names below, so a future light theme can override this layer
+ * without changing component source.
+ */
+:root,
+.dark,
+[data-theme='dark'] {
+  color-scheme: dark;
+
+  /* Color — 00 Foundations */
+  --background: #06111f;
+  --navigation: #071321;
+  --surface: #0a1728;
+  --surface-muted: #0d1c30;
+  --surface-elevated: #10233b;
+  --surface-inset: #081625;
+  --surface-code: #07111d;
+
+  --border: #1d3552;
+  --border-strong: #29496e;
+  --input: #29496e;
+  --ring: #2f7bff;
+
+  --text-primary: #f5f8fc;
+  --text-secondary: #9aa9bc;
+  --text-muted: #6f8199;
+  --text-inverse: #ffffff;
+
+  --primary: #2f7bff;
+  --primary-action: #155dd9;
+  --primary-hover: #2f7bff;
+  --primary-muted: #0d2a50;
+  --primary-foreground: #ffffff;
+
+  --success: #22c55e;
+  --success-muted: #0e3524;
+  --warning: #f59e0b;
+  --warning-muted: #3a2a0b;
+  --danger: #ef4444;
+  --danger-muted: #3a1420;
+  --info: #65c7ff;
+  --info-muted: #0d2a50;
+
+  /* Canonical status colors */
+  --status-idle: #6f8199;
+  --status-idle-muted: #17263a;
+  --status-thinking: #8b5cf6;
+  --status-thinking-muted: #241b45;
+  --status-running: #22c55e;
+  --status-running-muted: #0e3524;
+  --status-waiting: #f59e0b;
+  --status-waiting-muted: #3a2a0b;
+  --status-completed: #22c55e;
+  --status-completed-muted: #0e3524;
+  --status-failed: #ef4444;
+  --status-failed-muted: #3a1420;
+  --status-offline: #667085;
+  --status-offline-muted: #202938;
+
+  /* Visual-only agent identity */
+  --agent-codex: #2f7bff;
+  --agent-claude: #cb7938;
+  --agent-opencode: #667085;
+
+  /* shadcn-compatible semantic aliases */
+  --foreground: var(--text-primary);
+  --card: var(--surface);
+  --card-foreground: var(--text-primary);
+  --popover: var(--surface-elevated);
+  --popover-foreground: var(--text-primary);
+  --secondary: var(--surface-muted);
+  --secondary-foreground: var(--text-primary);
+  --muted: var(--surface-muted);
+  --muted-foreground: var(--text-secondary);
+  --accent: var(--surface-elevated);
+  --accent-foreground: var(--text-primary);
+  --destructive: var(--danger);
+
+  /* Component dimensions */
+  --control-height-xs: 1.75rem;
+  --control-height-sm: 2rem;
+  --control-height-md: 2.25rem;
+  --control-height-lg: 2.5rem;
+  --avatar-size-sm: 1.625rem;
+  --avatar-size-md: 2.625rem;
+
+  /* Shared desktop shell geometry — Figma desktop references */
+  --layout-topbar-height: 4rem;
+  --layout-sidebar-width: 13.5rem;
+  --layout-sidebar-collapsed-width: 4.5rem;
+  --layout-sidebar-current-width: var(--layout-sidebar-width);
+  --layout-sidebar-inline-padding: 0.625rem;
+  --layout-sidebar-block-padding: 1.25rem;
+  --layout-sidebar-nav-item-height: 2.25rem;
+  --layout-sidebar-context-item-height: 2.625rem;
+  --layout-sidebar-presence-item-height: 2.625rem;
+  --layout-sidebar-machine-item-height: 2.375rem;
+  --layout-sidebar-nav-gap: 1.125rem;
+  --layout-sidebar-mark-size: 1.875rem;
+  --layout-topbar-inline-padding: 1.25rem;
+  --layout-content-inline-padding: 1.75rem;
+  --layout-content-block-padding: 1.5rem;
+  --layout-brand-mark-size: 2.125rem;
+}
+
+@theme inline {
+  /* Typography — Inter with system CJK fallbacks */
+  --font-sans:
+    'Inter Variable', Inter, ui-sans-serif, system-ui, -apple-system,
+    'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --font-mono:
+    'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, ui-monospace,
+    monospace;
+
+  --text-2xs: 0.625rem;
+  --text-2xs--line-height: 1rem;
+  --text-xs: 0.6875rem;
+  --text-xs--line-height: 1rem;
+  --text-sm: 0.75rem;
+  --text-sm--line-height: 1.125rem;
+  --text-md: 0.8125rem;
+  --text-md--line-height: 1.25rem;
+  --text-base: 0.875rem;
+  --text-base--line-height: 1.375rem;
+  --text-lg: 1rem;
+  --text-lg--line-height: 1.5rem;
+  --text-section: 1.125rem;
+  --text-section--line-height: 1.625rem;
+  --text-page: 1.75rem;
+  --text-page--line-height: 2.125rem;
+  --text-display: 2rem;
+  --text-display--line-height: 2.5rem;
+  --text-brand: 1.25rem;
+  --text-brand--line-height: 1.75rem;
+
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+
+  --leading-tight: 1.2;
+  --leading-snug: 1.4;
+  --leading-normal: 1.5;
+
+  /* Spacing — 4px base, approved scale: 4/8/12/16/20/24/32/40/48 */
+  --spacing: 0.25rem;
+  --spacing-1: 0.25rem;
+  --spacing-2: 0.5rem;
+  --spacing-3: 0.75rem;
+  --spacing-4: 1rem;
+  --spacing-5: 1.25rem;
+  --spacing-6: 1.5rem;
+  --spacing-8: 2rem;
+  --spacing-10: 2.5rem;
+  --spacing-12: 3rem;
+
+  /* Radius — Figma uses 4/8/10/12 and pill shapes */
+  --radius-small: 0.25rem;
+  --radius-medium: 0.5rem;
+  --radius-large: 0.75rem;
+  --radius-xs: 0.25rem;
+  --radius-sm: 0.5rem;
+  --radius-md: 0.625rem;
+  --radius-lg: 0.75rem;
+  --radius-full: 9999px;
+
+  /* Figma relies on borders rather than elevation; overlays use one shadow. */
+  --shadow-elevation: 0 1rem 3rem rgb(0 0 0 / 0.28);
+
+  --color-background: var(--background);
+  --color-navigation: var(--navigation);
+  --color-surface: var(--surface);
+  --color-surface-muted: var(--surface-muted);
+  --color-surface-elevated: var(--surface-elevated);
+  --color-surface-inset: var(--surface-inset);
+  --color-surface-code: var(--surface-code);
+
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-muted: var(--text-muted);
+  --color-text-inverse: var(--text-inverse);
+
+  --color-primary: var(--primary);
+  --color-primary-action: var(--primary-action);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-muted: var(--primary-muted);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-success: var(--success);
+  --color-success-muted: var(--success-muted);
+  --color-warning: var(--warning);
+  --color-warning-muted: var(--warning-muted);
+  --color-danger: var(--danger);
+  --color-danger-muted: var(--danger-muted);
+  --color-destructive: var(--destructive);
+  --color-info: var(--info);
+  --color-info-muted: var(--info-muted);
+
+  --color-status-idle: var(--status-idle);
+  --color-status-idle-muted: var(--status-idle-muted);
+  --color-status-thinking: var(--status-thinking);
+  --color-status-thinking-muted: var(--status-thinking-muted);
+  --color-status-running: var(--status-running);
+  --color-status-running-muted: var(--status-running-muted);
+  --color-status-waiting: var(--status-waiting);
+  --color-status-waiting-muted: var(--status-waiting-muted);
+  --color-status-completed: var(--status-completed);
+  --color-status-completed-muted: var(--status-completed-muted);
+  --color-status-failed: var(--status-failed);
+  --color-status-failed-muted: var(--status-failed-muted);
+  --color-status-offline: var(--status-offline);
+  --color-status-offline-muted: var(--status-offline-muted);
+
+  --color-agent-codex: var(--agent-codex);
+  --color-agent-claude: var(--agent-claude);
+  --color-agent-opencode: var(--agent-opencode);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  html {
+    @apply bg-background text-text-primary font-sans antialiased;
+  }
+
+  body {
+    min-height: 100vh;
+    margin: 0;
+    background: var(--background);
+    color: var(--text-primary);
+    font-size: 0.875rem;
+    line-height: 1.5;
+  }
+
+  button,
+  input,
+  textarea,
+  select {
+    font: inherit;
+  }
+
+  ::selection {
+    background: color-mix(in srgb, var(--primary) 38%, transparent);
+    color: var(--text-primary);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto;
+    animation-duration: 0s;
+    animation-iteration-count: 1;
+    transition-duration: 0s;
+  }
+}
+
+@media (width < 64rem) {
+  :root,
+  .dark,
+  [data-theme='dark'] {
+    --layout-sidebar-current-width: var(--layout-sidebar-collapsed-width);
+    --layout-topbar-inline-padding: 1rem;
+    --layout-content-inline-padding: 1.25rem;
+  }
+}

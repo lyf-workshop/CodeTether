@@ -97,7 +97,7 @@
 
   /* Shared desktop shell geometry — Figma desktop references */
   --layout-topbar-height: 4rem;
-  --layout-sidebar-width: 13.5rem;
+  --layout-sidebar-width: 12.5rem;
   --layout-sidebar-collapsed-width: 4.5rem;
   --layout-sidebar-current-width: var(--layout-sidebar-width);
   --layout-sidebar-inline-padding: 0.625rem;
@@ -112,6 +112,15 @@
   --layout-content-inline-padding: 1.75rem;
   --layout-content-block-padding: 1.5rem;
   --layout-brand-mark-size: 2.125rem;
+
+  /* Conversation Detail geometry — Figma 07 Desktop at 1536 × 1024 */
+  --layout-conversation-rail-width: 18rem;
+  --layout-conversation-rail-compact-width: 17rem;
+  --layout-conversation-inspector-width: 21.75rem;
+  --layout-conversation-header-height: 5.375rem;
+  --layout-conversation-day-marker-height: 2.875rem;
+  --layout-conversation-composer-height: 9.375rem;
+  --layout-conversation-composer-region-height: 10.625rem;
 }
 
 @theme inline {

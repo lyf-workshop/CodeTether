@@ -1,4 +1,9 @@
-export { AgentBadge, type AgentBadgeProps } from './agent-badge'
+export {
+  AgentBadge,
+  AgentIdentityMark,
+  type AgentBadgeProps,
+  type AgentIdentityMarkProps,
+} from './agent-badge'
 export { CodeBlock, type CodeBlockProps } from './code-block'
 export {
   ConversationItem,

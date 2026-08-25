@@ -70,7 +70,7 @@ export function AgentIdentityMark({
   return (
     <div
       role="img"
-      aria-label={`${definition.name} identity`}
+      aria-label={`${definition.name} 标识`}
       data-agent={agent}
       data-slot="agent-identity-mark"
       className={cn(

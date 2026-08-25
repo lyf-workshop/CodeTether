@@ -28,13 +28,13 @@ export function TerminalCard({
       aria-label={title}
       data-slot="terminal-card"
       className={cn(
-        'flex min-h-40 w-full min-w-0 flex-col overflow-hidden rounded-md border border-border bg-surface p-3',
+        'flex min-h-40 w-full min-w-0 flex-col overflow-hidden rounded-sm border border-border/70 bg-surface-inset/60 p-3',
         className,
       )}
       {...props}
     >
       <header className="flex min-w-0 items-center justify-between gap-3">
-        <h3 className="truncate text-md font-semibold text-text-primary">
+        <h3 className="truncate text-md font-medium text-text-primary">
           {title}
         </h3>
         {action ? (
@@ -46,7 +46,7 @@ export function TerminalCard({
       <pre
         tabIndex={0}
         aria-live={ariaLive}
-        className="mt-4 min-h-0 flex-1 overflow-auto whitespace-pre font-sans text-2xs font-regular text-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="mt-4 min-h-0 flex-1 overflow-auto whitespace-pre font-sans text-2xs font-regular text-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
       >
         <code className="font-sans">{outputText}</code>
       </pre>

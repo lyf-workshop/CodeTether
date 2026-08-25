@@ -159,4 +159,4 @@ Explicitly deferred:
 
 ## Current Phase
 
-Phase 1B builds only the shared desktop AppShell, its mock navigation, and minimal placeholder routes on top of the accepted Phase 1A design system. It contains no product-page content or runtime capabilities. See [`ROADMAP.md`](ROADMAP.md) for phase gates.
+Phase 1C.2 is the final UX polish pass for the accepted mock-only Desktop Conversation Detail workspace. It prioritizes the central workspace, reduces nested-card treatment in the execution timeline, restrains repeated running emphasis, and strengthens the locked-agent Composer as a command center without changing the accepted data model, page structure, or product architecture. It contains no host, persistence, networking, real agent actions, or other product-page content. See [`ROADMAP.md`](ROADMAP.md) for phase gates.

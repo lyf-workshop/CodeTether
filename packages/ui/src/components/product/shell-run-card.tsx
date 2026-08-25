@@ -14,7 +14,7 @@ export interface ShellRunCardProps extends Omit<
   action?: ReactNode
 }
 
-/** Compact shell execution summary based on Figma node 14:181. */
+/** Compact shell execution row based on Figma node 14:181. */
 export function ShellRunCard({
   command,
   status,
@@ -26,18 +26,24 @@ export function ShellRunCard({
   return (
     <div
       data-slot="shell-run-card"
+      data-status={status}
       className={cn(
-        'flex min-h-13 w-full min-w-0 items-center gap-3 rounded-sm border border-border bg-surface-inset p-3',
+        'flex min-h-12 w-full min-w-0 items-center gap-3 border-b border-border/50 px-1 py-2',
+        'transition-colors duration-150 motion-reduce:transition-none',
+        'focus-within:bg-surface-muted/45',
+        'data-[status=running]:bg-surface-muted/45',
+        'data-[status=waiting]:bg-status-waiting-muted/15',
+        'data-[status=failed]:bg-status-failed-muted/15',
         className,
       )}
       {...props}
     >
       <StatusGlyph status={status} />
-      <code className="min-w-0 flex-1 truncate font-sans text-sm font-medium text-text-primary">
+      <code className="min-w-0 flex-1 truncate font-sans text-md font-medium text-text-primary">
         {command}
       </code>
       {summary ? (
-        <span className="shrink-0 text-2xs font-medium text-text-secondary">
+        <span className="shrink-0 text-sm font-regular text-text-secondary">
           {summary}
         </span>
       ) : null}

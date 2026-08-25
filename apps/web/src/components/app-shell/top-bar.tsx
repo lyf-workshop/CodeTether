@@ -31,8 +31,8 @@ interface TopBarProps extends Omit<
 }
 
 const defaultProfile: TopBarProfile = {
-  initials: 'DU',
-  name: 'Demo user',
+  initials: '演',
+  name: '演示用户',
 }
 
 /** Shared desktop header. Actions remain callback-driven until product flows exist. */
@@ -50,9 +50,7 @@ function TopBar({
   ...props
 }: TopBarProps) {
   const notificationsLabel =
-    notificationCount > 0
-      ? `Notifications, ${notificationCount} unread`
-      : 'Notifications'
+    notificationCount > 0 ? `通知，${notificationCount} 条未读` : '通知'
 
   return (
     <header
@@ -76,10 +74,7 @@ function TopBar({
       </div>
 
       <div className="flex min-w-0 flex-1 items-center gap-4 pr-[var(--layout-topbar-inline-padding)] pl-[var(--layout-content-inline-padding)]">
-        <nav
-          aria-label="Current location"
-          className="min-w-0 flex-1 overflow-hidden"
-        >
+        <nav aria-label="当前位置" className="min-w-0 flex-1 overflow-hidden">
           <ol className="flex min-w-0 items-center gap-3 text-md font-medium">
             <li className="min-w-0 shrink truncate text-text-primary">
               {currentProject}
@@ -103,7 +98,7 @@ function TopBar({
             className="h-[2.125rem] w-9 gap-2 px-0 md:w-26 md:px-3"
           >
             <Plus aria-hidden="true" />
-            <span className="hidden md:inline">New Task</span>
+            <span className="hidden md:inline">新建任务</span>
           </Button>
 
           <Button
@@ -111,11 +106,11 @@ function TopBar({
             size="sm"
             onClick={onSearch}
             aria-keyshortcuts="Meta+K Control+K"
-            aria-label="Search, Command K or Control K"
+            aria-label="搜索，快捷键 ⌘K 或 Ctrl+K"
             className="h-9 w-9 justify-center border-border-strong bg-surface-inset px-0 text-text-secondary hover:bg-surface-muted hover:text-text-primary lg:w-44 lg:justify-start lg:px-3"
           >
             <Search aria-hidden="true" />
-            <span className="hidden lg:inline">Search</span>
+            <span className="hidden lg:inline">搜索</span>
             <kbd
               aria-hidden="true"
               className="ml-auto hidden whitespace-nowrap font-sans text-2xs text-text-muted xl:inline"
@@ -148,7 +143,7 @@ function TopBar({
             <Tooltip>
               <TooltipTrigger asChild>
                 <IconButton
-                  label="Help"
+                  label="帮助"
                   size="sm"
                   variant="ghost"
                   onClick={onHelp}
@@ -157,13 +152,13 @@ function TopBar({
                   <CircleHelp aria-hidden="true" />
                 </IconButton>
               </TooltipTrigger>
-              <TooltipContent side="bottom">Help</TooltipContent>
+              <TooltipContent side="bottom">帮助</TooltipContent>
             </Tooltip>
 
             <Tooltip>
               <TooltipTrigger asChild>
                 <IconButton
-                  label={`Open profile for ${profile.name}`}
+                  label={`打开${profile.name}的个人资料`}
                   size="sm"
                   variant="ghost"
                   onClick={onProfile}

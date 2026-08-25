@@ -4,7 +4,7 @@
 
 CodeTether is a planned desktop and mobile workspace for supervising and controlling coding agents across projects and machines. V1 is Codex-first, with provider-neutral boundaries for later Claude Code and OpenCode support.
 
-This repository is currently in **Phase 1B — Desktop AppShell**. Phase 1A has been accepted; the active work is limited to the Figma-approved shared desktop shell, mock navigation, placeholder routes, and the existing development-only component showcase. It does not contain product-page content, a host, persistence, desktop integration, or agent adapters.
+This repository is currently in **Phase 1C.2 — Core Workspace UX Polish**. The Phase 1C engineering and product structure is accepted; active work is limited to final visual and UX refinement of the Figma-approved, mock-only conversation workspace. It does not contain a host, persistence, desktop integration, real agent actions, or agent adapters.
 
 ## Repository layout
 
@@ -41,7 +41,7 @@ pnpm install
 pnpm dev
 ```
 
-The web app currently renders the shared desktop AppShell with placeholder routes only. During development, `/__ui` continues to present the shared component showcase; later product UI must follow Figma.
+The web app renders the shared desktop AppShell and a mock Conversation Detail preview at `/conversations/demo`. During development, `/__ui` continues to present the shared component showcase; later product UI must follow Figma.
 
 ## Commands
 
@@ -65,4 +65,4 @@ Tests will be added with behavior that merits testing; the root quality gate mus
 
 ## Status
 
-Do not start Conversation Detail or later Phase 1 product-screen content, or implement runtime infrastructure, without an explicit phase transition. See the roadmap for ordered gates.
+Do not start Conversations, Inbox, later Phase 1 product-screen content, or runtime infrastructure without an explicit phase transition. See the roadmap for ordered gates.

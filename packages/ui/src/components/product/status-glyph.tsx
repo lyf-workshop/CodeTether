@@ -18,7 +18,7 @@ export function StatusGlyph({ status, className, ...props }: StatusGlyphProps) {
   return (
     <span
       role="img"
-      aria-label={`${definition.label} status`}
+      aria-label={`${definition.label}状态`}
       data-status={status}
       data-slot="status-glyph"
       className={cn('inline-flex shrink-0', className)}
@@ -26,7 +26,11 @@ export function StatusGlyph({ status, className, ...props }: StatusGlyphProps) {
     >
       <Icon
         aria-hidden="true"
-        className={cn('size-4', definition.iconClassName)}
+        className={cn(
+          'size-4',
+          definition.iconClassName,
+          status === 'completed' && 'text-text-muted',
+        )}
       />
     </span>
   )
@@ -46,7 +50,7 @@ export function StatusDot({ status, className, ...props }: StatusDotProps) {
   return (
     <span
       role="img"
-      aria-label={`${definition.label} status`}
+      aria-label={`${definition.label}状态`}
       data-status={status}
       data-slot="status-dot"
       className={cn(

@@ -26,7 +26,7 @@ export function AppShell({
           href="#main-content"
           className="fixed top-2 left-2 z-50 -translate-y-20 rounded-sm bg-primary-action px-3 py-2 text-sm font-medium text-primary-foreground transition-transform focus-visible:translate-y-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
-          Skip to content
+          跳到主要内容
         </a>
         <TopBar currentPage={currentPage} currentProject={currentProject} />
         <div className="grid min-h-0 grid-cols-[var(--layout-sidebar-current-width)_minmax(0,1fr)]">

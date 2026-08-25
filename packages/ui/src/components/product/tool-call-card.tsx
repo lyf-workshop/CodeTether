@@ -21,7 +21,7 @@ export interface ToolCallCardProps extends Omit<
   action?: ReactNode
 }
 
-/** Dense, read-only tool activity card derived from Figma nodes 14:165/14:170. */
+/** Dense, read-only tool execution row derived from Figma nodes 14:165/14:170. */
 export function ToolCallCard({
   title,
   status,
@@ -35,32 +35,40 @@ export function ToolCallCard({
   return (
     <div
       data-slot="tool-call-card"
+      data-status={status}
       className={cn(
-        'flex min-h-13 w-full min-w-0 items-center gap-3 rounded-sm border border-border bg-surface-inset p-3',
+        'flex min-h-12 w-full min-w-0 items-center gap-3 border-b border-border/50 px-1 py-2',
+        'transition-colors duration-150 motion-reduce:transition-none',
+        'focus-within:bg-surface-muted/45',
+        'data-[status=running]:bg-surface-muted/45',
+        'data-[status=waiting]:bg-status-waiting-muted/15',
+        'data-[status=failed]:bg-status-failed-muted/15',
         className,
       )}
       {...props}
     >
       <StatusGlyph status={status} />
-      <div className="min-w-0 flex-1">
+      <div className="flex min-w-0 flex-1 items-baseline gap-2">
         {description ? (
-          <p className="truncate text-xs text-text-secondary">{description}</p>
+          <span className="shrink-0 text-md font-medium text-text-primary">
+            {description}
+          </span>
         ) : null}
-        <p
+        <span
           className={cn(
-            'truncate text-sm font-medium text-text-primary',
-            description && 'mt-1',
+            'truncate text-md font-medium text-text-primary',
+            description && 'text-sm font-regular text-text-secondary',
           )}
         >
           {title}
-        </p>
+        </span>
       </div>
-      <div className="ml-auto flex min-w-0 shrink-0 flex-wrap items-center justify-end gap-3 text-2xs">
+      <div className="ml-auto flex min-w-0 shrink-0 flex-wrap items-center justify-end gap-3 text-sm font-regular">
         {metadata ? (
           <span className="text-text-secondary">{metadata}</span>
         ) : null}
         {delta ? (
-          <span className="inline-flex items-center gap-2 font-medium tabular-nums">
+          <span className="inline-flex items-center gap-2 tabular-nums">
             <span className="text-success">+{Math.abs(delta.additions)}</span>
             <span className="text-danger">-{Math.abs(delta.deletions)}</span>
           </span>

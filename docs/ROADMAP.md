@@ -33,8 +33,8 @@ Exit gate:
 Required implementation order:
 
 1. **Phase 1A — Design System & Components** — approved `00 Foundations` tokens and reusable `92 Components`. Accepted.
-2. **Phase 1B — Desktop AppShell** — the shared TopBar, PrimarySidebar, MainContent region, and placeholder routes. No product-page content.
-3. **Phase 1C — 07 Desktop — Conversation Detail** — the most important workspace and the standard for live agent supervision.
+2. **Phase 1B — Desktop AppShell** — the shared TopBar, PrimarySidebar, MainContent region, and placeholder routes. Accepted.
+3. **Phase 1C — 07 Desktop — Conversation Detail** — engineering and product structure accepted; Phase 1C.1 is complete and Phase 1C.2 final core-workspace polish is active. Mock data only.
 4. **06 Desktop — Conversations** — conversation navigation and management experience.
 5. **02 Desktop — Inbox** — action-focused approvals, questions, failures, and completions.
 

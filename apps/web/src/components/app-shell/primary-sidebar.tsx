@@ -48,15 +48,15 @@ interface MachinePresence {
 }
 
 const primaryNavItems = [
-  { label: 'Inbox', to: '/inbox', icon: Inbox },
-  { label: 'Activity', to: '/activity', icon: Activity },
-  { label: 'Projects', to: '/projects', icon: FolderOpen },
-  { label: 'Agents', to: '/agents', icon: Bot },
-  { label: 'Machines', to: '/machines', icon: Monitor },
+  { label: '收件箱', to: '/inbox', icon: Inbox },
+  { label: '活动', to: '/activity', icon: Activity },
+  { label: '项目', to: '/projects', icon: FolderOpen },
+  { label: '智能体', to: '/agents', icon: Bot },
+  { label: '机器', to: '/machines', icon: Monitor },
 ] as const satisfies readonly SidebarNavItem[]
 
 const settingsNavItem = {
-  label: 'Settings',
+  label: '设置',
   to: '/settings',
   icon: Settings,
 } as const satisfies SidebarNavItem
@@ -91,7 +91,7 @@ function PresenceDot({ label, status }: PresenceDotProps) {
   return (
     <span
       role="img"
-      aria-label={`${label}: ${definition.label}`}
+      aria-label={`${label}：${definition.label}`}
       data-status={status}
       className={cn(
         'size-2 shrink-0 rounded-full bg-current',
@@ -156,7 +156,7 @@ export interface PrimarySidebarProps extends Omit<
 export function PrimarySidebar({
   currentPath,
   className,
-  'aria-label': ariaLabel = 'Primary navigation',
+  'aria-label': ariaLabel = '主导航',
   ...props
 }: PrimarySidebarProps) {
   return (
@@ -174,9 +174,9 @@ export function PrimarySidebar({
       <div className="flex min-h-0 flex-1 flex-col px-[var(--layout-sidebar-inline-padding)] py-[var(--layout-sidebar-block-padding)]">
         <div>
           <h2 className="hidden px-2 text-xs font-semibold text-text-muted lg:block">
-            Workspace
+            工作区
           </h2>
-          <nav aria-label="Workspace" className="space-y-2 lg:mt-3">
+          <nav aria-label="工作区" className="space-y-2 lg:mt-3">
             {primaryNavItems.map((item) => (
               <SidebarLink
                 key={item.to}
@@ -195,11 +195,11 @@ export function PrimarySidebar({
               id="sidebar-current-project-heading"
               className="px-2 text-xs font-semibold text-text-muted"
             >
-              Current Project
+              当前项目
             </h2>
             <Button
               variant="outline"
-              aria-label="Current project: MyProject"
+              aria-label="当前项目：MyProject"
               className="mt-2 h-[var(--layout-sidebar-context-item-height)] w-full justify-start rounded-sm border-border-strong bg-primary-muted/40 px-2 text-left hover:bg-primary-muted/60"
             >
               <FolderOpen
@@ -223,7 +223,7 @@ export function PrimarySidebar({
               id="sidebar-agents-heading"
               className="px-2 text-xs font-semibold text-text-muted"
             >
-              Agents
+              智能体
             </h2>
             <ul className="mt-2 space-y-0.5">
               {agentPresences.map(({ agent, status }) => {
@@ -260,7 +260,7 @@ export function PrimarySidebar({
               id="sidebar-machines-heading"
               className="px-2 text-xs font-semibold text-text-muted"
             >
-              Machines
+              机器
             </h2>
             <ul className="mt-2 space-y-0.5">
               {machinePresences.map(({ icon: Icon, name, status }) => (
@@ -284,7 +284,7 @@ export function PrimarySidebar({
 
         <div className="mt-auto pt-3">
           <Separator className="mb-3" />
-          <nav aria-label="Application">
+          <nav aria-label="应用">
             <SidebarLink item={settingsNavItem} currentPath={currentPath} />
           </nav>
         </div>

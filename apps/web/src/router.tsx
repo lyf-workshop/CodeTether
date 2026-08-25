@@ -2,17 +2,31 @@ import {
   createRootRoute,
   createRoute,
   createRouter,
+  redirect,
 } from '@tanstack/react-router'
 
 import { RootLayout } from './components/app-shell/root-layout'
 import { RoutePlaceholder } from './components/app-shell/route-placeholder'
+import { ConversationDetailPage } from './components/conversation'
 
 const rootRoute = createRootRoute({ component: RootLayout })
 
 const homeRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/',
-  component: () => <RoutePlaceholder title="Home" />,
+  beforeLoad: () => {
+    throw redirect({
+      to: '/conversations/$conversationId',
+      params: { conversationId: 'demo' },
+      replace: true,
+    })
+  },
+})
+
+const conversationRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/conversations/$conversationId',
+  component: ConversationDetailPage,
 })
 
 const inboxRoute = createRoute({
@@ -53,6 +67,7 @@ const settingsRoute = createRoute({
 
 const routeTree = rootRoute.addChildren([
   homeRoute,
+  conversationRoute,
   inboxRoute,
   activityRoute,
   projectsRoute,

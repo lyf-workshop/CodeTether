@@ -27,24 +27,28 @@ If sources conflict, stop and resolve the conflict instead of inventing a compro
 
 ## Current Scope
 
-The current phase is **Phase 1B — Desktop AppShell**. Phase 1A has been accepted. Allowed work is limited to:
+The current phase is **Phase 1C.2 — Core Workspace UX Polish**. The Phase 1C engineering and product structure has been accepted. Allowed work is limited to:
 
-- A single shared desktop `AppShell` composed from `TopBar`, `PrimarySidebar`, and `MainContent`.
-- Figma-faithful shell layout, navigation, selected states, spacing, surface hierarchy, and desktop-first responsive foundations.
-- Typed mock data for the current project, agent availability, machine availability, notifications, help, and profile affordances.
-- Minimal TanStack Router routes for `/`, `/inbox`, `/activity`, `/projects`, `/agents`, `/machines`, and `/settings`.
-- Simple route placeholders containing only the page name and "This page is not implemented yet."
-- Continued development-only access to the accepted Phase 1A component showcase at `/__ui`.
-- Accessibility and quality tooling required to validate the shell at the 1536 × 1024 desktop reference.
+- The Figma `07 Desktop - Conversation Detail` workspace inside the accepted shared `AppShell`.
+- `ConversationRail`, `ConversationHeader`, `ConversationTimeline`, user and agent messages, compact tool execution, code/diff and shell/test presentation, `InspectorPanel`, and `Composer`.
+- Typed mock data for the project, conversation, agents, machine, messages, tool calls, changes, terminal summaries, and context.
+- A formal mock route at `/conversations/:conversationId`, including `/conversations/demo` as the development preview.
+- Desktop-first responsive behavior validated at 1536 × 1024 and 1280 × 900; the inspector may collapse at narrower widths.
+- Accessible mock interactions, visible focus, reduced-motion support, and quality tooling required by this scope.
+- Visual and UX refinement of typography, zh-CN labels, surface hierarchy, execution-state emphasis, diff restraint, and the existing Composer information architecture.
+- A local responsive Inspector overlay for widths where the persistent Inspector is hidden.
+- Final workspace-priority tuning, compact execution-log presentation, restrained running emphasis, and command-center polish without changing the accepted data model or page architecture.
+- Continued access to the accepted placeholder routes and development-only `/__ui` showcase without expanding their content.
 
-Do not begin Conversation Detail or any other product-page content until Phase 1B is explicitly accepted. When the project moves phases, update this section as part of that deliberate transition.
+Do not begin Conversations, Inbox, or any later product-page work during this polish pass. When the project moves phases, update this section as part of that deliberate transition.
 
 ## Out of Scope
 
-During Phase 1B, do not implement:
+During Phase 1C.2, do not implement:
 
-- Product-page content beyond the approved shell and minimal route placeholders.
-- Conversation Detail, ConversationRail, conversation messages, composer, inspector, Inbox content, Projects content, Machines content, Agents content, or Settings content.
+- Conversations List, Inbox, Projects, Machines, Agents, Settings, or any other product-page content outside Conversation Detail.
+- Real terminal, Git, filesystem, permission, approval, or agent actions; all interactions and data remain mock-only.
+- Cross-agent switching or handoff inside an existing conversation. A conversation's agent is immutable.
 - Mobile navigation or mobile product screens.
 - Desktop/Tauri functionality.
 - Host processes, databases, persistence, networking, WebSocket servers, or remote access.

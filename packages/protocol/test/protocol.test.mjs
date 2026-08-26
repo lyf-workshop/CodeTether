@@ -5,6 +5,7 @@ import {
   BootstrapSchema,
   ConversationIdSchema,
   ConversationRecordSchema,
+  ConversationRuntimeSnapshotSchema,
   CreateConversationRequestSchema,
   CreateConversationResponseSchema,
   EventIdSchema,
@@ -15,6 +16,8 @@ import {
   ResolveApprovalRequestSchema,
   SafeErrorEnvelopeSchema,
   StartTurnRequestSchema,
+  TurnRecordSchema,
+  conversationRuntimeWireLimits,
   formatLastEventId,
   hostEventTypes,
   parseLastEventId,
@@ -46,6 +49,73 @@ const runningTurn = {
   conversationId,
   status: 'running',
   startedAt: timestamp,
+}
+
+const runningTurnWithInput = {
+  ...runningTurn,
+  input: {
+    type: 'text',
+    text: 'Inspect the workspace safely.',
+    timestamp,
+  },
+}
+
+const conversationRuntime = {
+  conversationId,
+  turns: [runningTurnWithInput],
+  messages: [
+    {
+      turnId,
+      itemId: 'item_message01',
+      text: 'I will inspect the workspace.',
+      status: 'completed',
+      timestamp,
+      order: 1,
+    },
+  ],
+  tools: [
+    {
+      turnId,
+      itemId,
+      name: 'command',
+      command: 'git status --short',
+      summary: 'Inspect the Git working tree',
+      status: 'completed',
+      success: true,
+      outputSummary: 'M src/example.ts',
+      startedAt: timestamp,
+      completedAt: timestamp,
+      order: 2,
+    },
+  ],
+  changes: [
+    {
+      turnId,
+      itemId,
+      path: 'src/example.ts',
+      kind: 'modified',
+      additions: 1,
+      deletions: 0,
+      timestamp,
+      order: 3,
+    },
+  ],
+  terminal: {
+    turnId,
+    itemId,
+    command: 'git status --short',
+    text: 'M src/example.ts\n',
+    stream: 'stdout',
+    truncated: false,
+    updatedAt: timestamp,
+  },
+  history: {
+    evictedTurns: 0,
+    evictedMessages: 0,
+    evictedTools: 0,
+    evictedChanges: 0,
+    truncated: false,
+  },
 }
 
 const pendingApproval = {
@@ -111,6 +181,11 @@ test('validates bootstrap and snapshot as separate wire records', () => {
   }
   assert.deepEqual(HostSnapshotSchema.parse(snapshot), snapshot)
   assert.equal(
+    HostSnapshotSchema.parse(snapshot).conversationRuntimes,
+    undefined,
+    'the accepted Phase 2B Snapshot remains valid without runtime history',
+  )
+  assert.equal(
     HostSnapshotSchema.safeParse({
       ...snapshot,
       activeTurns: [
@@ -137,6 +212,198 @@ test('validates bootstrap and snapshot as separate wire records', () => {
     HostSnapshotSchema.safeParse({
       ...snapshot,
       pendingApprovals: [{ ...pendingApproval, turnId: 'turn_missing01' }],
+    }).success,
+    false,
+  )
+})
+
+test('adds Host-owned Turn input without invalidating legacy Turn records', () => {
+  assert.deepEqual(TurnRecordSchema.parse(runningTurn), runningTurn)
+  assert.deepEqual(
+    TurnRecordSchema.parse(runningTurnWithInput),
+    runningTurnWithInput,
+  )
+  assert.equal(
+    TurnRecordSchema.safeParse({
+      ...runningTurn,
+      input: { type: 'text', text: '   ', timestamp },
+    }).success,
+    false,
+  )
+  assert.equal(
+    TurnRecordSchema.safeParse({
+      ...runningTurn,
+      input: { type: 'text', text: 'hello' },
+    }).success,
+    false,
+  )
+})
+
+test('validates a complete additive Conversation runtime Snapshot', () => {
+  assert.deepEqual(
+    ConversationRuntimeSnapshotSchema.parse(conversationRuntime),
+    conversationRuntime,
+  )
+
+  const snapshot = {
+    protocolVersion,
+    epoch,
+    currentSeq: 3,
+    conversations: [{ ...conversation, status: 'waiting' }],
+    activeTurns: [runningTurnWithInput],
+    pendingApprovals: [pendingApproval],
+    conversationRuntimes: [conversationRuntime],
+  }
+  assert.deepEqual(HostSnapshotSchema.parse(snapshot), snapshot)
+
+  const multiPathRuntime = {
+    ...conversationRuntime,
+    changes: [
+      conversationRuntime.changes[0],
+      {
+        ...conversationRuntime.changes[0],
+        path: 'src/second.ts',
+        order: conversationRuntime.changes[0].order + 1,
+      },
+    ],
+  }
+  assert.deepEqual(
+    ConversationRuntimeSnapshotSchema.parse(multiPathRuntime),
+    multiPathRuntime,
+  )
+})
+
+test('rejects runtime history with invalid ownership or duplicate identity', () => {
+  assert.equal(
+    ConversationRuntimeSnapshotSchema.safeParse({
+      ...conversationRuntime,
+      turns: [{ ...conversationRuntime.turns[0], input: undefined }],
+    }).success,
+    false,
+  )
+  assert.equal(
+    ConversationRuntimeSnapshotSchema.safeParse({
+      ...conversationRuntime,
+      messages: [
+        {
+          ...conversationRuntime.messages[0],
+          turnId: 'turn_missing01',
+        },
+      ],
+    }).success,
+    false,
+  )
+  assert.equal(
+    ConversationRuntimeSnapshotSchema.safeParse({
+      ...conversationRuntime,
+      tools: [
+        {
+          ...conversationRuntime.tools[0],
+          itemId: conversationRuntime.messages[0].itemId,
+        },
+      ],
+    }).success,
+    false,
+  )
+  assert.equal(
+    ConversationRuntimeSnapshotSchema.safeParse({
+      ...conversationRuntime,
+      tools: [{ ...conversationRuntime.tools[0], order: 1 }],
+    }).success,
+    false,
+  )
+  assert.equal(
+    ConversationRuntimeSnapshotSchema.safeParse({
+      ...conversationRuntime,
+      terminal: {
+        ...conversationRuntime.terminal,
+        itemId: 'item_missing01',
+      },
+    }).success,
+    false,
+  )
+})
+
+test('requires one consistent runtime record per Snapshot Conversation', () => {
+  const snapshot = {
+    protocolVersion,
+    epoch,
+    currentSeq: 3,
+    conversations: [
+      { ...conversation, status: 'waiting' },
+      {
+        ...conversation,
+        conversationId: 'conv_other01',
+        status: 'idle',
+        activeTurnId: undefined,
+      },
+    ],
+    activeTurns: [runningTurnWithInput],
+    pendingApprovals: [pendingApproval],
+    conversationRuntimes: [conversationRuntime],
+  }
+  assert.equal(HostSnapshotSchema.safeParse(snapshot).success, false)
+
+  assert.equal(
+    HostSnapshotSchema.safeParse({
+      ...snapshot,
+      conversations: [{ ...conversation, status: 'waiting' }],
+      activeTurns: [runningTurn],
+    }).success,
+    false,
+    'the top-level active Turn and retained runtime Turn cannot disagree',
+  )
+
+  assert.equal(
+    HostSnapshotSchema.safeParse({
+      ...snapshot,
+      conversations: [{ ...conversation, status: 'waiting' }],
+      conversationRuntimes: [
+        {
+          ...conversationRuntime,
+          turns: [],
+          messages: [],
+          tools: [],
+          changes: [],
+          terminal: { text: '', truncated: false },
+        },
+      ],
+    }).success,
+    false,
+    'a pending Approval cannot reference a Turn absent from runtime history',
+  )
+})
+
+test('makes runtime eviction and terminal truncation explicit and bounded', () => {
+  assert.equal(
+    ConversationRuntimeSnapshotSchema.safeParse({
+      ...conversationRuntime,
+      history: {
+        ...conversationRuntime.history,
+        evictedTools: 1,
+      },
+    }).success,
+    false,
+  )
+  assert.equal(
+    ConversationRuntimeSnapshotSchema.safeParse({
+      ...conversationRuntime,
+      terminal: {
+        ...conversationRuntime.terminal,
+        truncated: true,
+      },
+    }).success,
+    false,
+  )
+  assert.equal(
+    ConversationRuntimeSnapshotSchema.safeParse({
+      ...conversationRuntime,
+      terminal: {
+        ...conversationRuntime.terminal,
+        text: '💡'.repeat(
+          Math.floor(conversationRuntimeWireLimits.terminalBytes / 4) + 1,
+        ),
+      },
     }).success,
     false,
   )
@@ -345,7 +612,7 @@ function createHostEventFixtures() {
     {
       ...turnIdentity,
       type: 'turn.started',
-      payload: { turn: runningTurn },
+      payload: { turn: runningTurnWithInput },
     },
     { ...itemIdentity, type: 'message.delta', payload: { delta: 'hello' } },
     {
@@ -356,7 +623,11 @@ function createHostEventFixtures() {
     {
       ...itemIdentity,
       type: 'tool.started',
-      payload: { name: 'shell', summary: 'Run tests' },
+      payload: {
+        name: 'command',
+        command: 'pnpm test',
+        summary: 'Run tests',
+      },
     },
     {
       ...itemIdentity,
@@ -366,7 +637,7 @@ function createHostEventFixtures() {
     {
       ...itemIdentity,
       type: 'tool.completed',
-      payload: { name: 'shell', success: true },
+      payload: { name: 'command', command: 'pnpm test', success: true },
     },
     {
       ...itemIdentity,

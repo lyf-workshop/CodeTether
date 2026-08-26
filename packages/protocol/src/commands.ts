@@ -5,6 +5,7 @@ import {
   ApprovalDecisionSchema,
   ApprovalRecordSchema,
   ConversationRecordSchema,
+  TurnInputSchema,
   TurnRecordSchema,
 } from './records.js'
 
@@ -20,20 +21,6 @@ export const CreateConversationRequestSchema = z
 export type CreateConversationRequest = z.infer<
   typeof CreateConversationRequestSchema
 >
-
-export const TurnInputSchema = z
-  .object({
-    type: z.literal('text'),
-    text: z
-      .string()
-      .min(1)
-      .max(1024 * 1024)
-      .refine((value) => value.trim().length > 0, {
-        message: 'Turn input must contain non-whitespace text',
-      }),
-  })
-  .strict()
-export type TurnInput = z.infer<typeof TurnInputSchema>
 
 export const StartTurnRequestSchema = z
   .object({

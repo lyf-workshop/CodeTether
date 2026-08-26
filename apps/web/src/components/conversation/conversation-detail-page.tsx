@@ -3,6 +3,7 @@ import { useRef, useState } from 'react'
 import { Dialog, DialogContent, DialogTitle } from '@codetether/ui'
 
 import { ConversationRail } from './conversation-rail'
+import type { ConversationControls } from './conversation-controls'
 import type {
   ConversationConnectionIndicatorViewModel,
   ConversationRailViewModel,
@@ -16,6 +17,7 @@ export interface ConversationDetailPageProps {
   rail: ConversationRailViewModel
   connectionIndicator?: ConversationConnectionIndicatorViewModel
   initialInspectorTab?: InspectorTab
+  controls?: ConversationControls
 }
 
 export function ConversationDetailPage({
@@ -23,6 +25,7 @@ export function ConversationDetailPage({
   rail,
   connectionIndicator,
   initialInspectorTab = 'overview',
+  controls,
 }: ConversationDetailPageProps) {
   const [inspectorOpen, setInspectorOpen] = useState(
     () =>
@@ -53,6 +56,7 @@ export function ConversationDetailPage({
           connectionIndicator={connectionIndicator}
           onOpenInspector={() => setInspectorOpen(true)}
           inspectorTriggerRef={inspectorTriggerRef}
+          controls={controls}
         />
         <div className="hidden min-h-0 min-w-0 min-[1440px]:block">
           <InspectorPanel {...inspectorProps} />

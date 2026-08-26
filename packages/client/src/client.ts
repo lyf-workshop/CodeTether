@@ -332,7 +332,7 @@ async function responseError(
     payload,
     `error response with HTTP ${response.status}`,
   )
-  if (expectedActionId !== undefined) {
+  if (expectedActionId !== undefined && envelope.actionId !== undefined) {
     assertProtocolIdentity(
       envelope.actionId === expectedActionId,
       'Mutation error actionId does not match the request',

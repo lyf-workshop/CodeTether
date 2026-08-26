@@ -41,6 +41,7 @@ test('serves bootstrap, snapshot, and idempotent mutations with a fake runtime',
       conversations: [],
       activeTurns: [],
       pendingApprovals: [],
+      conversationRuntimes: [],
     })
 
     const createBody = {

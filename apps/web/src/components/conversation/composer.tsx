@@ -1,5 +1,13 @@
-import { useState, type FormEvent, type KeyboardEvent } from 'react'
-import { AtSign, Hash, LockKeyhole, Paperclip, Send, Zap } from 'lucide-react'
+import { useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
+import {
+  AtSign,
+  Hash,
+  LoaderCircle,
+  LockKeyhole,
+  Paperclip,
+  Send,
+  Zap,
+} from 'lucide-react'
 
 import {
   Button,
@@ -16,10 +24,18 @@ import type {
   ConversationCapabilitiesViewModel,
   ConversationViewModel,
 } from './conversation-view-model'
+import {
+  draftAfterSubmit,
+  isComposerEditableState,
+  shouldSubmitComposerKey,
+  type ComposerController,
+} from './conversation-controls'
 
 interface ComposerProps {
   conversation: ConversationViewModel
   capabilities: ConversationCapabilitiesViewModel
+  controller?: ComposerController
+  externalError?: string
 }
 
 const quickActions = [
@@ -30,20 +46,62 @@ const quickActions = [
   { label: '附件', accessibleLabel: '附件', icon: Paperclip },
 ] as const
 
-export function Composer({ conversation, capabilities }: ComposerProps) {
+const composerStateLabels = {
+  idle: 'Enter 发送 · Shift + Enter 换行',
+  submitting: '正在发送…',
+  running: 'Codex 正在运行',
+  waiting: 'Codex 正在等待审批',
+  interrupted: '已中断，可以继续发送',
+  unavailable: 'CodeTether Host 当前不可用',
+} as const
+
+export function Composer({
+  conversation,
+  capabilities,
+  controller,
+  externalError,
+}: ComposerProps) {
   const [value, setValue] = useState('')
-  const canSend = capabilities.canCompose && value.trim().length > 0
+  const compositionActive = useRef(false)
+  const submitActive = useRef(false)
+  const controlState = controller?.state ?? 'idle'
+  const canEdit =
+    capabilities.canCompose && isComposerEditableState(controlState)
+  const canSend = canEdit && value.trim().length > 0
+  const isLive = controller !== undefined
   const agentName = agentDefinitions[conversation.agent].name
 
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
+    if (!canSend || submitActive.current || controller === undefined) return
+
+    const submittedValue = value
+    submitActive.current = true
+    try {
+      const accepted = await controller.submit(submittedValue)
+      setValue((current) => draftAfterSubmit(current, submittedValue, accepted))
+    } finally {
+      submitActive.current = false
+    }
   }
 
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && canSend) {
-      event.preventDefault()
-    }
+    if (
+      !canSend ||
+      !shouldSubmitComposerKey({
+        key: event.key,
+        shiftKey: event.shiftKey,
+        isComposing: compositionActive.current || event.nativeEvent.isComposing,
+        keyCode: event.nativeEvent.keyCode,
+      })
+    )
+      return
+
+    event.preventDefault()
+    event.currentTarget.form?.requestSubmit()
   }
+
+  const feedback = controller?.error ?? externalError
 
   return (
     <form
@@ -58,7 +116,7 @@ export function Composer({ conversation, capabilities }: ComposerProps) {
             type="button"
             variant="ghost"
             size="sm"
-            disabled={!capabilities.canCompose}
+            disabled={isLive || !capabilities.canCompose}
             className="h-7 gap-1.5 px-2 text-sm text-text-muted hover:bg-surface-muted/70 hover:text-text-primary"
             aria-label={`${accessibleLabel}（演示）`}
           >
@@ -77,19 +135,32 @@ export function Composer({ conversation, capabilities }: ComposerProps) {
           value={value}
           onChange={(event) => setValue(event.currentTarget.value)}
           onKeyDown={handleKeyDown}
+          onCompositionStart={() => {
+            compositionActive.current = true
+          }}
+          onCompositionEnd={() => {
+            compositionActive.current = false
+          }}
           rows={2}
-          readOnly={!capabilities.canCompose}
+          readOnly={!canEdit}
           placeholder="输入消息…"
-          aria-keyshortcuts="Meta+Enter Control+Enter"
+          aria-keyshortcuts="Enter"
           className="min-h-12 flex-1 resize-none border-0 bg-transparent px-1 py-2.5 text-base font-regular leading-normal placeholder:text-text-secondary/80 hover:border-transparent hover:bg-transparent focus-visible:border-transparent focus-visible:ring-0"
         />
         <IconButton
           type="submit"
-          label="发送消息（演示）"
+          label={isLive ? '发送消息' : '发送消息（演示）'}
           disabled={!canSend}
           className="mt-2 size-[var(--avatar-size-md)]"
         >
-          <Send aria-hidden="true" />
+          {controlState === 'submitting' ? (
+            <LoaderCircle
+              aria-hidden="true"
+              className="animate-spin motion-reduce:animate-none"
+            />
+          ) : (
+            <Send aria-hidden="true" />
+          )}
         </IconButton>
       </div>
 
@@ -120,7 +191,7 @@ export function Composer({ conversation, capabilities }: ComposerProps) {
           type="button"
           variant="ghost"
           size="sm"
-          disabled={!capabilities.canCompose}
+          disabled={isLive || !capabilities.canCompose}
           className="h-7 gap-1.5 px-2 text-sm text-text-secondary hover:bg-surface-muted/70"
         >
           <span className="text-text-muted">模型</span>
@@ -130,7 +201,7 @@ export function Composer({ conversation, capabilities }: ComposerProps) {
           type="button"
           variant="ghost"
           size="sm"
-          disabled={!capabilities.canCompose}
+          disabled={isLive || !capabilities.canCompose}
           className="h-7 gap-1.5 px-2 text-sm text-text-secondary hover:bg-surface-muted/70"
         >
           <span className="text-text-muted">推理</span>
@@ -140,7 +211,7 @@ export function Composer({ conversation, capabilities }: ComposerProps) {
           type="button"
           variant="ghost"
           size="sm"
-          disabled={!capabilities.canCompose}
+          disabled={isLive || !capabilities.canCompose}
           className="h-7 gap-1.5 px-2 text-sm text-text-secondary hover:bg-surface-muted/70"
         >
           <span className="text-text-muted">权限</span>
@@ -151,7 +222,7 @@ export function Composer({ conversation, capabilities }: ComposerProps) {
           label="添加上下文（演示）"
           variant="ghost"
           size="sm"
-          disabled={!capabilities.canCompose}
+          disabled={isLive || !capabilities.canCompose}
           className="size-7 text-text-muted hover:bg-surface-muted/70 hover:text-text-primary"
         >
           <Hash aria-hidden="true" />
@@ -161,17 +232,28 @@ export function Composer({ conversation, capabilities }: ComposerProps) {
           label="快速操作（演示）"
           variant="ghost"
           size="sm"
-          disabled={!capabilities.canCompose}
+          disabled={isLive || !capabilities.canCompose}
           className="size-7 text-text-muted hover:bg-surface-muted/70 hover:text-text-primary"
         >
           <Zap aria-hidden="true" />
         </IconButton>
-        <kbd
-          aria-hidden="true"
-          className="ml-auto shrink-0 font-sans text-xs text-text-muted"
-        >
-          ⌘↵ 发送
-        </kbd>
+        {feedback ? (
+          <span
+            role="alert"
+            className="ml-auto max-w-64 truncate text-xs text-danger"
+          >
+            {feedback}
+          </span>
+        ) : (
+          <span
+            role="status"
+            className="ml-auto shrink-0 text-xs text-text-muted"
+          >
+            {isLive
+              ? composerStateLabels[controlState]
+              : 'Enter 发送 · Shift + Enter 换行'}
+          </span>
+        )}
       </div>
     </form>
   )

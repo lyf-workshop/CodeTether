@@ -4,6 +4,7 @@ import {
 } from '@codetether/client'
 import {
   formatLastEventId,
+  type ApprovalDecision,
   type Bootstrap,
   type HostEventEnvelope,
   type HostSnapshot,
@@ -25,6 +26,10 @@ import {
   replaceHostProjection,
   type HostReadClient,
 } from './host-query.js'
+import {
+  LiveConversationActions,
+  type LiveConversationMutationClient,
+} from './live-conversation-actions.js'
 
 export type HostConnectionState =
   'connecting' | 'connected' | 'reconnecting' | 'unavailable' | 'incompatible'
@@ -34,7 +39,8 @@ export interface HostEventStream extends AsyncIterable<HostEventEnvelope> {
   close(): Promise<void>
 }
 
-export interface HostRuntimeClient extends HostReadClient {
+export interface HostRuntimeClient
+  extends HostReadClient, LiveConversationMutationClient {
   connectEvents(options?: {
     readonly lastEventId?: LastEventId
     readonly signal?: AbortSignal
@@ -63,12 +69,14 @@ export interface HostRuntimeOptions {
 type ConnectionListener = () => void
 
 const runtimesByQueryClient = new WeakMap<QueryClient, HostRuntime>()
+const RELEASE_GRACE_MS = 100
 
 export class HostRuntime {
   readonly #queryClient: QueryClient
   readonly #client: HostRuntimeClient
   readonly #reconnectDelayMs: number
   readonly #listeners = new Set<ConnectionListener>()
+  readonly #actions: LiveConversationActions
   #connectionState: HostConnectionState = 'connecting'
   #lastError: unknown
   #started = false
@@ -77,7 +85,7 @@ export class HostRuntime {
   #runPromise?: Promise<void>
   #stream?: HostEventStream
   #retainers = 0
-  #stopScheduled = false
+  #stopTimer?: ReturnType<typeof setTimeout>
   #stats: HostRuntimeStats = emptyStats()
 
   constructor(options: HostRuntimeOptions) {
@@ -85,6 +93,7 @@ export class HostRuntime {
     this.#client =
       options.client ??
       new CodeTetherClient({ baseUrl: options.baseUrl ?? hostBaseUrl })
+    this.#actions = new LiveConversationActions(this.#client)
     this.#reconnectDelayMs = nonNegativeInteger(
       options.reconnectDelayMs,
       500,
@@ -108,12 +117,28 @@ export class HostRuntime {
     return readHostProjection(this.#queryClient)
   }
 
+  get bootstrap(): Bootstrap | undefined {
+    return this.#queryClient.getQueryData<Bootstrap>(hostQueryKeys.bootstrap)
+  }
+
   readonly subscribe = (listener: ConnectionListener): (() => void) => {
     this.#listeners.add(listener)
     return () => this.#listeners.delete(listener)
   }
 
   readonly getConnectionState = (): HostConnectionState => this.#connectionState
+
+  startTurn(conversationId: string, text: string) {
+    return this.#actions.startTurn(conversationId, text)
+  }
+
+  interruptTurn(conversationId: string, turnId: string) {
+    return this.#actions.interruptTurn(conversationId, turnId)
+  }
+
+  resolveApproval(approvalId: string, decision: ApprovalDecision) {
+    return this.#actions.resolveApproval(approvalId, decision)
+  }
 
   start(): void {
     if (this.#started) return
@@ -148,7 +173,10 @@ export class HostRuntime {
 
   retain(): () => void {
     this.#retainers += 1
-    this.#stopScheduled = false
+    if (this.#stopTimer !== undefined) {
+      clearTimeout(this.#stopTimer)
+      this.#stopTimer = undefined
+    }
     this.start()
     let released = false
     return () => {
@@ -156,17 +184,19 @@ export class HostRuntime {
       released = true
       this.#retainers = Math.max(0, this.#retainers - 1)
       if (this.#retainers !== 0) return
-      this.#stopScheduled = true
-      queueMicrotask(() => {
-        if (!this.#stopScheduled || this.#retainers !== 0) return
-        this.#stopScheduled = false
+      this.#stopTimer = setTimeout(() => {
+        this.#stopTimer = undefined
+        if (this.#retainers !== 0) return
         void this.stop()
-      })
+      }, RELEASE_GRACE_MS)
     }
   }
 
   async stop(): Promise<void> {
-    this.#stopScheduled = false
+    if (this.#stopTimer !== undefined) {
+      clearTimeout(this.#stopTimer)
+      this.#stopTimer = undefined
+    }
     if (!this.#started && this.#runPromise === undefined) return
     this.#started = false
     this.#generation += 1
@@ -190,7 +220,7 @@ export class HostRuntime {
 
   async #run(generation: number, signal: AbortSignal): Promise<void> {
     try {
-      const bootstrap = await this.#fetchBootstrap()
+      let bootstrap = await this.#fetchBootstrap()
       if (!this.#isActive(generation)) return
       let cursor = await this.#fetchAndReplaceSnapshot(
         generation,
@@ -203,7 +233,11 @@ export class HostRuntime {
         if (snapshotRequired) {
           this.#setConnectionState('reconnecting')
           try {
-            const replacement = await this.#fetchAndReplaceSnapshot(generation)
+            bootstrap = await this.#fetchBootstrap()
+            const replacement = await this.#fetchAndReplaceSnapshot(
+              generation,
+              bootstrap.epoch,
+            )
             if (!this.#isActive(generation)) return
             if (replacement === undefined) continue
             cursor = replacement

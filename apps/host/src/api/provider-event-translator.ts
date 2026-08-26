@@ -11,6 +11,10 @@ import {
   type TurnState,
 } from './host-service-state.js'
 
+const COMMAND_TOOL_NAME = 'command'
+const TOOL_COMMAND_MAX_CHARACTERS = 32 * 1024
+const TOOL_SUMMARY_MAX_CHARACTERS = 4096
+
 export interface ProviderEventTranslatorOptions {
   readonly providerThreads: ReadonlyMap<string, ConversationId>
   readonly conversations: ReadonlyMap<ConversationId, ConversationState>
@@ -48,7 +52,13 @@ export class ProviderEventTranslator {
     const conversation = this.#options.conversations.get(conversationId)
     if (conversation === undefined) return false
     const turnId = conversation.providerTurnIds.get(event.turnId)
-    if (turnId === undefined) return false
+    if (turnId === undefined) {
+      // Provider events observed while startTurn is in flight must wait for the
+      // public Turn binding. Once that command has settled, an unknown Turn is
+      // historical/late (including an intentionally evicted Turn), so it must
+      // not accumulate forever in the short binding buffer.
+      return !conversation.startingTurn
+    }
     const turn = conversation.turns.get(turnId)
     if (turn === undefined) return false
     if (
@@ -94,8 +104,16 @@ export class ProviderEventTranslator {
           timestamp: event.timestamp,
           type: event.type,
           payload: {
-            name: event.name,
-            ...(event.summary === undefined ? {} : { summary: event.summary }),
+            name: COMMAND_TOOL_NAME,
+            command: takeTextHead(event.name, TOOL_COMMAND_MAX_CHARACTERS),
+            ...(event.summary === undefined
+              ? {}
+              : {
+                  summary: takeTextHead(
+                    event.summary,
+                    TOOL_SUMMARY_MAX_CHARACTERS,
+                  ),
+                }),
           },
         })
         return true
@@ -124,9 +142,17 @@ export class ProviderEventTranslator {
           timestamp: event.timestamp,
           type: event.type,
           payload: {
-            name: event.name,
+            name: COMMAND_TOOL_NAME,
+            command: takeTextHead(event.name, TOOL_COMMAND_MAX_CHARACTERS),
             ...(event.success === undefined ? {} : { success: event.success }),
-            ...(event.summary === undefined ? {} : { summary: event.summary }),
+            ...(event.summary === undefined
+              ? {}
+              : {
+                  summary: takeTextTail(
+                    event.summary,
+                    TOOL_SUMMARY_MAX_CHARACTERS,
+                  ),
+                }),
           },
         })
         return true
@@ -217,4 +243,22 @@ export class ProviderEventTranslator {
         return true
     }
   }
+}
+
+function takeTextHead(value: string, maximum: number): string {
+  if (value.length <= maximum) return value
+  const bounded = value.slice(0, maximum)
+  const finalCodeUnit = bounded.charCodeAt(bounded.length - 1)
+  return finalCodeUnit >= 0xd800 && finalCodeUnit <= 0xdbff
+    ? bounded.slice(0, -1)
+    : bounded
+}
+
+function takeTextTail(value: string, maximum: number): string {
+  if (value.length <= maximum) return value
+  const bounded = value.slice(-maximum)
+  const firstCodeUnit = bounded.charCodeAt(0)
+  return firstCodeUnit >= 0xdc00 && firstCodeUnit <= 0xdfff
+    ? bounded.slice(1)
+    : bounded
 }

@@ -3,6 +3,7 @@ import type { Ref } from 'react'
 import { Composer } from './composer'
 import { ConversationHeader } from './conversation-header'
 import { ConversationTimeline } from './conversation-timeline'
+import type { ConversationControls } from './conversation-controls'
 import type {
   ConversationConnectionIndicatorViewModel,
   ConversationViewModel,
@@ -13,6 +14,7 @@ interface ConversationWorkspaceProps {
   connectionIndicator?: ConversationConnectionIndicatorViewModel
   inspectorTriggerRef?: Ref<HTMLButtonElement>
   onOpenInspector?: () => void
+  controls?: ConversationControls
 }
 
 export function ConversationWorkspace({
@@ -20,6 +22,7 @@ export function ConversationWorkspace({
   connectionIndicator,
   inspectorTriggerRef,
   onOpenInspector,
+  controls,
 }: ConversationWorkspaceProps) {
   return (
     <section
@@ -32,17 +35,21 @@ export function ConversationWorkspace({
         connectionIndicator={connectionIndicator}
         inspectorTriggerRef={inspectorTriggerRef}
         onOpenInspector={onOpenInspector}
+        interruptController={controls?.interrupt}
       />
       <ConversationTimeline
         agent={viewModel.agent}
         timeline={viewModel.timeline}
         changes={viewModel.changes}
-        pendingApproval={viewModel.pendingApproval}
+        pendingApprovals={viewModel.pendingApprovals}
+        approvalController={controls?.approvals}
       />
       <div className="min-h-0 px-4 pb-5">
         <Composer
           conversation={viewModel}
           capabilities={viewModel.capabilities}
+          controller={controls?.composer}
+          externalError={controls?.interrupt.error}
         />
       </div>
     </section>

@@ -4,6 +4,9 @@ import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import test from 'node:test'
 
+import { HostSnapshotSchema } from '@codetether/protocol'
+
+import { MAX_CANONICAL_TURN_INPUT_BYTES } from '../dist/api/conversation-runtime-history.js'
 import { HostEventPublisher } from '../dist/api/host-event-publisher.js'
 import { HostService, HostServiceError } from '../dist/api/host-service.js'
 import { WorkspacePolicy } from '../dist/api/workspace-policy.js'
@@ -145,7 +148,7 @@ class FakeRuntime {
   }
 }
 
-async function createFixture(t) {
+async function createFixture(t, options = {}) {
   const workspace = await mkdtemp(resolve(tmpdir(), 'codetether-service-'))
   const runtime = new FakeRuntime()
   const publisher = new HostEventPublisher({ epoch })
@@ -156,6 +159,9 @@ async function createFixture(t) {
     workspacePolicy,
     hostVersion: '0.0.0-test',
     now: () => new Date(timestamp),
+    ...(options.historyLimits === undefined
+      ? {}
+      : { historyLimits: options.historyLimits }),
   })
   const events = []
   const unsubscribe = publisher.subscribe((event) => events.push(event))
@@ -259,6 +265,52 @@ test('provider Turn identities must be non-empty and unique per Conversation', a
   const next = await startTurn(fixture, conversationId, 'act_start017')
   assert.equal(next.data.turn.status, 'running')
   assert.equal(fixture.service.snapshot().activeTurns.length, 1)
+})
+
+test('rejects an oversized canonical Turn input before calling the provider', async (t) => {
+  const fixture = await createFixture(t)
+  const created = await createConversation(fixture, 'act_input_create01')
+  const conversationId = created.data.conversation.conversationId
+  const oversized = '界'.repeat(
+    Math.floor(MAX_CANONICAL_TURN_INPUT_BYTES / 3) + 1,
+  )
+
+  await assert.rejects(
+    startTurn(fixture, conversationId, 'act_input_start01', oversized),
+    (error) =>
+      error instanceof HostServiceError &&
+      error.code === 'invalid_request' &&
+      error.httpStatus === 422 &&
+      error.details.maxBytes === MAX_CANONICAL_TURN_INPUT_BYTES,
+  )
+  assert.equal(fixture.runtime.turnCalls.length, 0)
+  assert.equal(fixture.service.snapshot().activeTurns.length, 0)
+  assert.equal(
+    fixture.service.snapshot().conversationRuntimes[0].turns.length,
+    0,
+  )
+})
+
+test('reserves terminal runtime overhead when the Conversation byte budget is small', async (t) => {
+  const fixture = await createFixture(t, {
+    historyLimits: { maxConversationBytes: 1024 },
+  })
+  const created = await createConversation(fixture, 'act_input_create02')
+
+  await assert.rejects(
+    startTurn(
+      fixture,
+      created.data.conversation.conversationId,
+      'act_input_start02',
+      'x'.repeat(300),
+    ),
+    (error) =>
+      error instanceof HostServiceError &&
+      error.code === 'invalid_request' &&
+      error.httpStatus === 422 &&
+      error.details.maxBytes === 256,
+  )
+  assert.equal(fixture.runtime.turnCalls.length, 0)
 })
 
 test('create, start, and interrupt route only through bound provider identities', async (t) => {
@@ -475,6 +527,13 @@ test('approval requests bind to the public conversation, turn, and item', async 
   assert.equal(pending[0].conversationId, conversationId)
   assert.equal(pending[0].turnId, turnId)
   assert.match(pending[0].itemId, /^item_/)
+  const waitingSnapshot = HostSnapshotSchema.parse(fixture.service.snapshot())
+  assert.equal(waitingSnapshot.conversationRuntimes.length, 1)
+  assert.equal(waitingSnapshot.conversationRuntimes[0].turns.length, 1)
+  assert.equal(
+    waitingSnapshot.conversationRuntimes[0].turns[0].input.text,
+    'Inspect',
+  )
 
   const resolved = await fixture.service.resolveApproval(
     pending[0].approvalId,
@@ -608,7 +667,7 @@ test('a terminal Turn hides an approval while provider resolution is pending', a
 
   let snapshot = fixture.service.snapshot()
   assert.equal(snapshot.pendingApprovals.length, 0)
-  assert.equal(snapshot.conversations[0].status, 'completed')
+  assert.equal(snapshot.conversations[0].status, 'idle')
   fixture.runtime.resolveApproval({
     providerRequestId: 'provider-request-terminal-async',
     providerApprovalId: 'provider-approval-terminal-async',
@@ -618,7 +677,7 @@ test('a terminal Turn hides an approval while provider resolution is pending', a
   })
   snapshot = fixture.service.snapshot()
   assert.equal(snapshot.pendingApprovals.length, 0)
-  assert.equal(snapshot.conversations[0].status, 'completed')
+  assert.equal(snapshot.conversations[0].status, 'idle')
   assert.equal(
     fixture.events.filter((event) => event.type === 'approval.resolved').length,
     1,
@@ -923,4 +982,664 @@ test('close still unsubscribes and clears listeners when runtime close rejects',
     'unsubscribe-approvals',
     'unsubscribe-failures',
   ])
+})
+
+test('records Host-owned Turn input once for every live observer and snapshot', async (t) => {
+  const fixture = await createFixture(t)
+  const secondObserver = []
+  const unsubscribe = fixture.publisher.subscribe((event) => {
+    secondObserver.push(event)
+  })
+  t.after(unsubscribe)
+
+  const created = await createConversation(fixture, 'act_history_create01')
+  const conversationId = created.data.conversation.conversationId
+  const started = await startTurn(
+    fixture,
+    conversationId,
+    'act_history_start01',
+    'Describe the workspace safely',
+  )
+
+  const firstEvent = fixture.events.find(
+    (event) => event.type === 'turn.started',
+  )
+  const secondEvent = secondObserver.find(
+    (event) => event.type === 'turn.started',
+  )
+  assert.deepEqual(firstEvent, secondEvent)
+  assert.deepEqual(firstEvent.payload.turn.input, {
+    type: 'text',
+    text: 'Describe the workspace safely',
+    timestamp,
+  })
+  assert.deepEqual(started.data.turn.input, firstEvent.payload.turn.input)
+
+  const snapshot = HostSnapshotSchema.parse(fixture.service.snapshot())
+  assert.deepEqual(
+    snapshot.conversationRuntimes[0].turns[0].input,
+    firstEvent.payload.turn.input,
+  )
+})
+
+test('reconstructs two completed Turns from the same semantics published live', async (t) => {
+  const fixture = await createFixture(t)
+  const created = await createConversation(fixture, 'act_history_create02')
+  const conversationId = created.data.conversation.conversationId
+
+  const first = await startTurn(
+    fixture,
+    conversationId,
+    'act_history_start02a',
+    'Inspect the file',
+  )
+  fixture.runtime.emitEvent({
+    provider: 'codex',
+    timestamp,
+    threadId: 'provider-thread-secret-1',
+    turnId: 'provider-turn-secret-1',
+    itemId: 'provider-message-history-1',
+    type: 'message.delta',
+    delta: 'First ',
+  })
+  fixture.runtime.emitEvent({
+    provider: 'codex',
+    timestamp,
+    threadId: 'provider-thread-secret-1',
+    turnId: 'provider-turn-secret-1',
+    itemId: 'provider-message-history-1',
+    type: 'message.completed',
+    message: 'First answer',
+  })
+  fixture.runtime.emitEvent({
+    provider: 'codex',
+    timestamp,
+    threadId: 'provider-thread-secret-1',
+    turnId: 'provider-turn-secret-1',
+    itemId: 'provider-tool-history-1',
+    type: 'tool.started',
+    name: 'git status --short',
+    summary: 'Inspect status',
+  })
+  fixture.runtime.emitEvent({
+    provider: 'codex',
+    timestamp,
+    threadId: 'provider-thread-secret-1',
+    turnId: 'provider-turn-secret-1',
+    itemId: 'provider-tool-history-1',
+    type: 'tool.output',
+    output: ' M src/example.ts\n',
+    stream: 'stdout',
+  })
+  fixture.runtime.emitEvent({
+    provider: 'codex',
+    timestamp,
+    threadId: 'provider-thread-secret-1',
+    turnId: 'provider-turn-secret-1',
+    itemId: 'provider-tool-history-1',
+    type: 'tool.completed',
+    name: 'git status --short',
+    success: true,
+    summary: 'Working tree inspected',
+  })
+  fixture.runtime.emitEvent({
+    provider: 'codex',
+    timestamp,
+    threadId: 'provider-thread-secret-1',
+    turnId: 'provider-turn-secret-1',
+    itemId: 'provider-tool-history-1',
+    type: 'file.changed',
+    path: 'src/example.ts',
+    kind: 'modified',
+    diff: '@@ -1 +1 @@\n-old\n+new',
+  })
+  fixture.runtime.emitEvent({
+    provider: 'codex',
+    timestamp,
+    threadId: 'provider-thread-secret-1',
+    turnId: 'provider-turn-secret-1',
+    type: 'turn.completed',
+    finalMessage: 'First answer',
+  })
+
+  const second = await startTurn(
+    fixture,
+    conversationId,
+    'act_history_start02b',
+    'Summarize the change',
+  )
+  fixture.runtime.emitEvent({
+    provider: 'codex',
+    timestamp,
+    threadId: 'provider-thread-secret-1',
+    turnId: 'provider-turn-secret-2',
+    itemId: 'provider-message-history-2',
+    type: 'message.completed',
+    message: 'Second answer',
+  })
+  fixture.runtime.emitEvent({
+    provider: 'codex',
+    timestamp,
+    threadId: 'provider-thread-secret-1',
+    turnId: 'provider-turn-secret-2',
+    type: 'turn.completed',
+    finalMessage: 'Second answer',
+  })
+
+  const snapshot = HostSnapshotSchema.parse(fixture.service.snapshot())
+  const runtime = snapshot.conversationRuntimes[0]
+  assert.deepEqual(
+    runtime.turns.map((turn) => [
+      turn.turnId,
+      turn.input.text,
+      turn.status,
+      turn.finalMessage,
+    ]),
+    [
+      [first.data.turn.turnId, 'Inspect the file', 'completed', 'First answer'],
+      [
+        second.data.turn.turnId,
+        'Summarize the change',
+        'completed',
+        'Second answer',
+      ],
+    ],
+  )
+  assert.deepEqual(
+    runtime.messages.map((message) => [
+      message.turnId,
+      message.text,
+      message.status,
+    ]),
+    [
+      [first.data.turn.turnId, 'First answer', 'completed'],
+      [second.data.turn.turnId, 'Second answer', 'completed'],
+    ],
+  )
+  assert.deepEqual(
+    runtime.tools.map((tool) => [
+      tool.turnId,
+      tool.name,
+      tool.command,
+      tool.status,
+      tool.success,
+      tool.outputSummary,
+    ]),
+    [
+      [
+        first.data.turn.turnId,
+        'command',
+        'git status --short',
+        'completed',
+        true,
+        'Working tree inspected',
+      ],
+    ],
+  )
+  assert.equal(runtime.changes[0].turnId, first.data.turn.turnId)
+  assert.equal(runtime.changes[0].diff, '@@ -1 +1 @@\n-old\n+new')
+  assert.equal(runtime.terminal.text, ' M src/example.ts\n')
+  assert.equal(runtime.terminal.command, 'git status --short')
+  assert.equal(runtime.terminal.stream, 'stdout')
+  assert.deepEqual(runtime.history, {
+    evictedTurns: 0,
+    evictedMessages: 0,
+    evictedTools: 0,
+    evictedChanges: 0,
+    truncated: false,
+  })
+
+  const liveItems = fixture.events.filter((event) =>
+    ['message.delta', 'tool.started', 'file.changed'].includes(event.type),
+  )
+  assert.deepEqual(
+    [
+      runtime.messages[0].order,
+      runtime.tools[0].order,
+      runtime.changes[0].order,
+    ],
+    liveItems.map((event) => event.seq),
+  )
+})
+
+test('publishes a stable Tool identity without exposing an oversized command as its name', async (t) => {
+  const fixture = await createFixture(t)
+  const created = await createConversation(fixture, 'act_tool_identity_create')
+  const conversationId = created.data.conversation.conversationId
+  await startTurn(
+    fixture,
+    conversationId,
+    'act_tool_identity_turn',
+    'Inspect safely',
+  )
+
+  const command = `powershell.exe -NoProfile -Command Get-Content ${'x'.repeat(40_000)}`
+  fixture.runtime.emitEvent({
+    provider: 'codex',
+    timestamp,
+    threadId: 'provider-thread-secret-1',
+    turnId: 'provider-turn-secret-1',
+    itemId: 'provider-tool-long-command',
+    type: 'tool.started',
+    name: command,
+  })
+  fixture.runtime.emitEvent({
+    provider: 'codex',
+    timestamp,
+    threadId: 'provider-thread-secret-1',
+    turnId: 'provider-turn-secret-1',
+    itemId: 'provider-tool-long-command',
+    type: 'tool.completed',
+    name: command,
+    success: false,
+    summary: `${'diagnostic '.repeat(600)}PathNotFound`,
+  })
+
+  const started = fixture.events.find(
+    (event) =>
+      event.type === 'tool.started' &&
+      event.itemId !== undefined &&
+      String(event.itemId).length > 0,
+  )
+  assert.equal(started.payload.name, 'command')
+  assert.equal(started.payload.command.length, 32 * 1024)
+  assert.equal(started.payload.command, command.slice(0, 32 * 1024))
+
+  const snapshot = HostSnapshotSchema.parse(fixture.service.snapshot())
+  const tool = snapshot.conversationRuntimes[0].tools[0]
+  assert.equal(tool.name, 'command')
+  assert.equal(tool.command, command.slice(0, 32 * 1024))
+  assert.equal(tool.status, 'failed')
+  assert.match(tool.outputSummary, /PathNotFound$/u)
+  assert.equal(snapshot.conversationRuntimes[0].terminal.command, tool.command)
+})
+
+test('retains the raw command when interleaved Tool output regains the terminal tail', async (t) => {
+  const fixture = await createFixture(t)
+  const created = await createConversation(
+    fixture,
+    'act_interleaved_tool_create',
+  )
+  const conversationId = created.data.conversation.conversationId
+  await startTurn(
+    fixture,
+    conversationId,
+    'act_interleaved_tool_turn',
+    'Inspect safely',
+  )
+
+  for (const [itemId, name] of [
+    ['provider-tool-first', 'git status --short'],
+    ['provider-tool-second', 'pnpm test'],
+  ]) {
+    fixture.runtime.emitEvent({
+      provider: 'codex',
+      timestamp,
+      threadId: 'provider-thread-secret-1',
+      turnId: 'provider-turn-secret-1',
+      itemId,
+      type: 'tool.started',
+      name,
+    })
+  }
+
+  fixture.runtime.emitEvent({
+    provider: 'codex',
+    timestamp,
+    threadId: 'provider-thread-secret-1',
+    turnId: 'provider-turn-secret-1',
+    itemId: 'provider-tool-first',
+    type: 'tool.output',
+    output: 'clean\n',
+    stream: 'stdout',
+  })
+
+  const snapshot = HostSnapshotSchema.parse(fixture.service.snapshot())
+  assert.equal(
+    snapshot.conversationRuntimes[0].terminal.command,
+    'git status --short',
+  )
+  assert.equal(snapshot.conversationRuntimes[0].terminal.text, 'clean\n')
+})
+
+test('preserves one public Item identity through active-Turn eviction and publishes a Snapshot boundary', async (t) => {
+  const fixture = await createFixture(t, {
+    historyLimits: { maxEntries: 1 },
+  })
+  const created = await createConversation(fixture, 'act_item_identity_create')
+  const conversationId = created.data.conversation.conversationId
+  await startTurn(
+    fixture,
+    conversationId,
+    'act_item_identity_turn',
+    'Inspect safely',
+  )
+
+  fixture.runtime.emitEvent({
+    provider: 'codex',
+    timestamp,
+    threadId: 'provider-thread-secret-1',
+    turnId: 'provider-turn-secret-1',
+    itemId: 'provider-item-stable',
+    type: 'tool.started',
+    name: 'echo safe',
+  })
+  fixture.runtime.emitEvent({
+    provider: 'codex',
+    timestamp,
+    threadId: 'provider-thread-secret-1',
+    turnId: 'provider-turn-secret-1',
+    itemId: 'provider-message-evicts-tool',
+    type: 'message.completed',
+    message: 'Still running',
+  })
+  fixture.runtime.emitEvent({
+    provider: 'codex',
+    timestamp,
+    threadId: 'provider-thread-secret-1',
+    turnId: 'provider-turn-secret-1',
+    itemId: 'provider-item-stable',
+    type: 'tool.output',
+    output: 'safe\n',
+  })
+
+  const toolEvents = fixture.events.filter(
+    (event) => event.type === 'tool.started' || event.type === 'tool.output',
+  )
+  assert.equal(toolEvents.length, 2)
+  assert.equal(toolEvents[0].itemId, toolEvents[1].itemId)
+  assert.equal(
+    fixture.events.some(
+      (event) =>
+        event.type === 'stream.reset' &&
+        event.payload.reason === 'history_evicted',
+    ),
+    true,
+  )
+  const replay = fixture.publisher.replayAfter({
+    epoch: fixture.publisher.epoch,
+    seq: toolEvents[0].seq,
+  })
+  assert.equal(replay.kind, 'replay')
+  assert.equal(
+    replay.events.some((event) => event.type === 'stream.reset'),
+    true,
+  )
+})
+
+test('retains every changed path when one provider file Item reports multiple files', async (t) => {
+  const fixture = await createFixture(t)
+  const created = await createConversation(
+    fixture,
+    'act_change_identity_create',
+  )
+  const conversationId = created.data.conversation.conversationId
+  await startTurn(
+    fixture,
+    conversationId,
+    'act_change_identity_turn',
+    'Inspect changes',
+  )
+
+  for (const path of ['src/one.ts', 'src/two.ts']) {
+    fixture.runtime.emitEvent({
+      provider: 'codex',
+      timestamp,
+      threadId: 'provider-thread-secret-1',
+      turnId: 'provider-turn-secret-1',
+      itemId: 'provider-file-item-shared',
+      type: 'file.changed',
+      path,
+      kind: 'modified',
+      diff: `@@ -1 +1 @@\n-old\n+${path}`,
+    })
+  }
+
+  const runtime = HostSnapshotSchema.parse(fixture.service.snapshot())
+    .conversationRuntimes[0]
+  assert.deepEqual(
+    runtime.changes.map((change) => change.path),
+    ['src/one.ts', 'src/two.ts'],
+  )
+  assert.equal(runtime.changes[0].itemId, runtime.changes[1].itemId)
+  assert.notEqual(runtime.changes[0].order, runtime.changes[1].order)
+})
+
+test('merges a terminal final message into the last streaming Agent Item', async (t) => {
+  const fixture = await createFixture(t)
+  const created = await createConversation(fixture, 'act_final_merge_create')
+  const conversationId = created.data.conversation.conversationId
+  await startTurn(
+    fixture,
+    conversationId,
+    'act_final_merge_turn',
+    'Summarize safely',
+  )
+  fixture.runtime.emitEvent({
+    provider: 'codex',
+    timestamp,
+    threadId: 'provider-thread-secret-1',
+    turnId: 'provider-turn-secret-1',
+    itemId: 'provider-message-final-merge',
+    type: 'message.delta',
+    delta: 'partial',
+  })
+  fixture.runtime.emitEvent({
+    provider: 'codex',
+    timestamp,
+    threadId: 'provider-thread-secret-1',
+    turnId: 'provider-turn-secret-1',
+    type: 'turn.completed',
+    finalMessage: 'authoritative final',
+  })
+
+  const runtime = HostSnapshotSchema.parse(fixture.service.snapshot())
+    .conversationRuntimes[0]
+  assert.equal(runtime.messages.length, 1)
+  assert.equal(runtime.messages[0].text, 'authoritative final')
+  assert.equal(runtime.messages[0].status, 'completed')
+  assert.equal(runtime.turns[0].finalMessage, 'authoritative final')
+})
+
+test('bounds retained Turns and consumes late events for an evicted provider Turn', async (t) => {
+  const fixture = await createFixture(t, {
+    historyLimits: { maxTurns: 2 },
+  })
+  const created = await createConversation(fixture, 'act_history_create03')
+  const conversationId = created.data.conversation.conversationId
+
+  for (let turnNumber = 1; turnNumber <= 3; turnNumber += 1) {
+    await startTurn(
+      fixture,
+      conversationId,
+      `act_history_start03${String(turnNumber)}`,
+      `Prompt ${String(turnNumber)}`,
+    )
+    fixture.runtime.emitEvent({
+      provider: 'codex',
+      timestamp,
+      threadId: 'provider-thread-secret-1',
+      turnId: `provider-turn-secret-${String(turnNumber)}`,
+      itemId: `provider-message-history-${String(turnNumber)}`,
+      type: 'message.completed',
+      message: `Answer ${String(turnNumber)}`,
+    })
+    fixture.runtime.emitEvent({
+      provider: 'codex',
+      timestamp,
+      threadId: 'provider-thread-secret-1',
+      turnId: `provider-turn-secret-${String(turnNumber)}`,
+      type: 'turn.completed',
+      finalMessage: `Answer ${String(turnNumber)}`,
+    })
+  }
+
+  const snapshot = HostSnapshotSchema.parse(fixture.service.snapshot())
+  const runtime = snapshot.conversationRuntimes[0]
+  assert.deepEqual(
+    runtime.turns.map((turn) => turn.input.text),
+    ['Prompt 2', 'Prompt 3'],
+  )
+  assert.equal(runtime.history.evictedTurns, 1)
+  assert.equal(runtime.history.evictedMessages, 1)
+  assert.equal(runtime.history.truncated, true)
+
+  const eventCount = fixture.events.length
+  for (let index = 0; index < 600; index += 1) {
+    fixture.runtime.emitEvent({
+      provider: 'codex',
+      timestamp,
+      threadId: 'provider-thread-secret-1',
+      turnId: 'provider-turn-secret-1',
+      itemId: `provider-late-item-${String(index)}`,
+      type: 'message.delta',
+      delta: 'late',
+    })
+  }
+  assert.equal(fixture.events.length, eventCount)
+})
+
+test('bounds active presentation entries and UTF-8 terminal tail explicitly', async (t) => {
+  const fixture = await createFixture(t, {
+    historyLimits: {
+      maxEntries: 2,
+      maxTerminalBytes: 10,
+      maxPresentationTextBytes: 5,
+    },
+  })
+  const created = await createConversation(fixture, 'act_history_create04')
+  const conversationId = created.data.conversation.conversationId
+  await startTurn(fixture, conversationId, 'act_history_start04')
+
+  for (let index = 1; index <= 3; index += 1) {
+    fixture.runtime.emitEvent({
+      provider: 'codex',
+      timestamp,
+      threadId: 'provider-thread-secret-1',
+      turnId: 'provider-turn-secret-1',
+      itemId: `provider-message-bound-${String(index)}`,
+      type: 'message.completed',
+      message: '甲乙',
+    })
+  }
+  fixture.runtime.emitEvent({
+    provider: 'codex',
+    timestamp,
+    threadId: 'provider-thread-secret-1',
+    turnId: 'provider-turn-secret-1',
+    itemId: 'provider-tool-terminal-bound',
+    type: 'tool.started',
+    name: 'safe-command',
+  })
+  fixture.runtime.emitEvent({
+    provider: 'codex',
+    timestamp,
+    threadId: 'provider-thread-secret-1',
+    turnId: 'provider-turn-secret-1',
+    itemId: 'provider-tool-terminal-bound',
+    type: 'tool.output',
+    output: '甲乙丙丁',
+    stream: 'stderr',
+  })
+
+  const runtime = HostSnapshotSchema.parse(fixture.service.snapshot())
+    .conversationRuntimes[0]
+  assert.equal(runtime.turns.length, 1)
+  assert.equal(runtime.turns[0].status, 'running')
+  assert.equal(runtime.messages.length + runtime.tools.length, 2)
+  assert.equal(runtime.messages[0].text, '甲')
+  assert.equal(runtime.messages[0].text.includes('\uFFFD'), false)
+  assert.equal(runtime.terminal.text, '乙丙丁')
+  assert.equal(Buffer.byteLength(runtime.terminal.text, 'utf8') <= 10, true)
+  assert.equal(runtime.terminal.text.includes('\uFFFD'), false)
+  assert.equal(runtime.terminal.stream, 'stderr')
+  assert.equal(runtime.terminal.truncated, true)
+  assert.equal(runtime.history.evictedMessages, 2)
+  assert.equal(runtime.history.truncated, true)
+})
+
+test('bounds encoded Conversation runtime memory without evicting its active Turn', async (t) => {
+  const maxConversationBytes = 2 * 1024
+  const fixture = await createFixture(t, {
+    historyLimits: {
+      maxEntries: 32,
+      maxConversationBytes,
+      maxPresentationTextBytes: 512,
+    },
+  })
+  const created = await createConversation(fixture, 'act_history_create05')
+  const conversationId = created.data.conversation.conversationId
+  const started = await startTurn(
+    fixture,
+    conversationId,
+    'act_history_start05',
+  )
+
+  for (let index = 0; index < 10; index += 1) {
+    fixture.runtime.emitEvent({
+      provider: 'codex',
+      timestamp,
+      threadId: 'provider-thread-secret-1',
+      turnId: 'provider-turn-secret-1',
+      itemId: `provider-message-memory-${String(index)}`,
+      type: 'message.completed',
+      message: `${String(index)}${'x'.repeat(400)}`,
+    })
+  }
+
+  const runtime = HostSnapshotSchema.parse(fixture.service.snapshot())
+    .conversationRuntimes[0]
+  assert.deepEqual(
+    runtime.turns.map((turn) => turn.turnId),
+    [started.data.turn.turnId],
+  )
+  assert.equal(runtime.turns[0].status, 'running')
+  assert.equal(
+    Buffer.byteLength(JSON.stringify(runtime), 'utf8') <= maxConversationBytes,
+    true,
+  )
+  assert.equal(runtime.history.evictedMessages > 0, true)
+  assert.equal(runtime.history.truncated, true)
+})
+
+test('truncates a terminal final message until one retained Turn fits its memory bound', async (t) => {
+  const maxConversationBytes = 1024
+  const fixture = await createFixture(t, {
+    historyLimits: {
+      maxConversationBytes,
+      maxPresentationTextBytes: 512,
+    },
+  })
+  const created = await createConversation(fixture, 'act_history_create06')
+  const conversationId = created.data.conversation.conversationId
+  const started = await startTurn(
+    fixture,
+    conversationId,
+    'act_history_start06',
+    'Safe prompt',
+  )
+  const rawFinalMessage = '\u0000'.repeat(512)
+  fixture.runtime.emitEvent({
+    provider: 'codex',
+    timestamp,
+    threadId: 'provider-thread-secret-1',
+    turnId: 'provider-turn-secret-1',
+    type: 'turn.completed',
+    finalMessage: rawFinalMessage,
+  })
+
+  const runtime = HostSnapshotSchema.parse(fixture.service.snapshot())
+    .conversationRuntimes[0]
+  assert.equal(runtime.turns.length, 1)
+  assert.equal(runtime.turns[0].turnId, started.data.turn.turnId)
+  assert.equal(runtime.turns[0].input.text, 'Safe prompt')
+  assert.equal(
+    runtime.turns[0].finalMessage.length < rawFinalMessage.length,
+    true,
+  )
+  assert.equal(runtime.history.truncated, true)
+  assert.equal(
+    Buffer.byteLength(JSON.stringify(runtime), 'utf8') <= maxConversationBytes,
+    true,
+  )
 })

@@ -62,7 +62,7 @@ test('returns explicit reset decisions for evicted, wrong, and future cursors', 
   assert.equal(publisher.replayAfter({ epoch, seq: 5 }).reason, 'future_cursor')
 })
 
-test('keeps stream.reset outside global sequence and replay fanout', () => {
+test('keeps cursor-specific stream.reset outside ordinary publish', () => {
   const publisher = new HostEventPublisher({ epoch })
 
   assert.throws(
@@ -76,6 +76,19 @@ test('keeps stream.reset outside global sequence and replay fanout', () => {
     /connection-local control/u,
   )
   assert.equal(publisher.currentSeq, 0)
+})
+
+test('sequences and replays an explicit Snapshot boundary after history compaction', () => {
+  const publisher = new HostEventPublisher({ epoch })
+  const observed = []
+  publisher.subscribe((event) => observed.push(event))
+  const reset = publisher.publishSnapshotBoundary('2026-08-26T07:00:00.000Z')
+
+  assert.equal(reset.type, 'stream.reset')
+  assert.equal(reset.payload.reason, 'history_evicted')
+  assert.equal(reset.seq, 1)
+  assert.deepEqual(observed, [reset])
+  assert.deepEqual(publisher.replayAfter({ epoch, seq: 0 }).events, [reset])
 })
 
 test('also evicts history by encoded byte size', () => {

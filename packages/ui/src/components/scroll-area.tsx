@@ -5,12 +5,16 @@ import { cn } from '@codetether/ui/lib/cn'
 
 type ScrollAreaProps = React.ComponentProps<typeof ScrollAreaPrimitive.Root> & {
   scrollbars?: 'vertical' | 'horizontal' | 'both'
+  viewportRef?: React.Ref<HTMLDivElement>
+  onViewportScroll?: React.UIEventHandler<HTMLDivElement>
 }
 
 function ScrollArea({
   children,
   className,
   scrollbars = 'vertical',
+  viewportRef,
+  onViewportScroll,
   ...props
 }: ScrollAreaProps) {
   return (
@@ -20,8 +24,10 @@ function ScrollArea({
       {...props}
     >
       <ScrollAreaPrimitive.Viewport
+        ref={viewportRef}
         data-slot="scroll-area-viewport"
         tabIndex={0}
+        onScroll={onViewportScroll}
         className="size-full rounded-[inherit] outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50"
       >
         {children}

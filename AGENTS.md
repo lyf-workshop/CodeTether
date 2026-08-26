@@ -27,32 +27,31 @@ If sources conflict, stop and resolve the conflict instead of inventing a compro
 
 ## Current Scope
 
-The current phase is **Phase 2C.1 — Live Conversation Read Model**. The accepted frontend is frozen as **CodeTether V2 Frontend Core v1**, the accepted local Codex runtime is frozen as **Phase 2A Codex Runtime v1**, and Protocol v1 is frozen at the accepted **Phase 2B Client ↔ Host Protocol** boundary. Allowed work is limited to:
+The current phase is **Phase 2C.2 — Live Conversation Control**. The accepted frontend is frozen as **CodeTether V2 Frontend Core v1**, the accepted local Codex runtime is frozen as **Phase 2A Codex Runtime v1**, Protocol v1 is frozen at the accepted **Phase 2B Client ↔ Host Protocol** boundary, and the complete read path is frozen as **Live Conversation Read Model v1**. Allowed work is limited to:
 
-- Connecting one application-scoped Web runtime to the loopback Host through `packages/client`.
-- Loading Protocol v1 bootstrap and snapshot records through TanStack Query.
-- Maintaining one browser-memory SSE connection with `Last-Event-ID`, reconnect, and `stream.reset` snapshot replacement.
-- Projecting only the Host fields and events required by the frozen Conversation Detail into a typed read model.
-- Adapting Demo Mock data and real Host data to the same `ConversationViewModel` without redesigning the page.
-- Rendering a real `conv_*` route read-only while keeping existing Mock routes, Inbox, and Conversations on Mock data.
-- Showing lightweight connecting, reconnecting, unavailable, and incompatible Host states.
-- Adding pure projection/runtime tests and a safe ignored-workspace live observation helper.
-- Recording verified read-path behavior and explicit Snapshot/history limitations.
+- Connecting the existing Composer on a live `conv_*` route to the Protocol v1 text Turn command without creating an optimistic canonical User message.
+- Resolving each Host-owned pending Approval by its exact `approvalId`, with one-shot `accept` and `decline` decisions only.
+- Connecting the existing interrupt control to the exact active Conversation and Turn while waiting for Host terminal events as final truth.
+- Generating a fresh `actionId` for each logical mutation, preventing duplicate submissions, and safely retrying ambiguous requests through Host idempotency.
+- Gating controls by Bootstrap capabilities, Host connection state, and active-Turn state; queueing, steering, and thread termination remain unsupported.
+- Preserving the frozen Conversation Detail component tree while supporting Mock and live control modes through one typed controller boundary.
+- Keeping multiple pending Approvals visible and independently actionable, retaining drafts on errors, handling IME safely, and providing restrained Timeline auto-follow behavior.
+- Running real Codex control validation only in ignored isolated workspaces and recording verified behavior and remaining gaps.
 
-This phase stops at a read-only live Conversation Detail. Do not wire Composer, approval resolution, interrupt, or another write action into React, and do not begin Phase 2C.2.
+This phase stops after browser-controlled text Turns, one-shot Approval resolution, interruption, and subsequent continuation are validated. Do not connect another page to live Host data or begin Phase 3.
 
 ## Out of Scope
 
-During Phase 2C.1, do not implement:
+During Phase 2C.2, do not implement:
 
-- Visual redesigns or unrelated refactors to the frozen Design System, AppShell, Inbox, Conversations, or Conversation Workspace; only the Conversation Detail data boundary may change for this read path.
+- Visual redesigns or unrelated refactors to the frozen Design System, AppShell, Inbox, Conversations, or Conversation Workspace; only the existing Conversation Detail control boundary may change.
 - Activity, Projects, Machines, Agents, Settings, New Conversation, or any other new product-page content or flow.
 - Live Host data in Inbox, Conversations, or another frozen page.
 - A generic WebSocket RPC transport or interactive PTY transport.
 - Tauri or desktop-shell functionality.
 - SQLite, another database, persistence, migrations, repositories, or durable event storage.
 - Machine management, project management, remote access, relay, authentication, or production Host services.
-- Composer submission, approval resolution, interrupt, stop, retry-Turn, or another React write path.
+- Stop/thread termination, Turn queueing, steering, retry-Turn, attachments, images, voice, Skill upload, or another React write path beyond text Turn start, one-shot Approval resolution, and interrupt.
 - Approval persistence, `Always Allow`, automatic approval, or a production permission-policy system.
 - Claude Code or OpenCode adapters, speculative provider implementations, or cross-agent conversation handoff.
 - Mobile screens, team, enterprise, public cloud relay, or other later-phase platform features.

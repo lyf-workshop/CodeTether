@@ -98,7 +98,7 @@ test('stream.reset fetches a fresh snapshot, replaces projection, and reconnects
   const first = new ControlledStream()
   const second = new ControlledStream()
   const client = new FakeHostClient({
-    bootstraps: [bootstrap(epochA)],
+    bootstraps: [bootstrap(epochA), bootstrap(epochB)],
     snapshots: [
       snapshot(epochA, 0, [conversation(conversationId)]),
       snapshot(epochB, 3, [conversation(replacementConversationId)]),
@@ -123,6 +123,8 @@ test('stream.reset fetches a fresh snapshot, replaces projection, and reconnects
   assert.ok(projection)
   assert.equal(projection.conversations[conversationId], undefined)
   assert.ok(projection.conversations[replacementConversationId])
+  assert.equal(client.bootstrapCalls, 2)
+  assert.equal(queryClient.getQueryData(hostQueryKeys.bootstrap)?.epoch, epochB)
   assert.deepEqual(client.connectCalls, [
     { lastEventId: `${epochA}:0` },
     { lastEventId: `${epochB}:3` },
@@ -131,6 +133,53 @@ test('stream.reset fetches a fresh snapshot, replaces projection, and reconnects
   assert.equal(runtime.stats.projectionUpdates, 0)
   assert.equal(runtime.stats.snapshotReplacements, 2)
   assert.equal(runtime.stats.resetRecoveries, 1)
+})
+
+test('stream.reset replacement restores retained multi-Turn snapshot history', async (t) => {
+  const first = new ControlledStream()
+  const second = new ControlledStream()
+  const client = new FakeHostClient({
+    bootstraps: [bootstrap(epochA), bootstrap(epochB)],
+    snapshots: [
+      snapshot(epochA, 0, [conversation(conversationId)]),
+      historicalSnapshot(epochB, 12),
+    ],
+    streams: [first, second],
+  })
+  const queryClient = createQueryClient()
+  const runtime = new HostRuntime({
+    queryClient,
+    client,
+    reconnectDelayMs: 1,
+  })
+  t.after(async () => await runtime.stop())
+
+  runtime.start()
+  await waitFor(() => runtime.connectionState === 'connected')
+  first.push(streamReset(epochB, 0))
+
+  await waitFor(() => client.connectCalls.length === 2)
+  const model = readHostProjection(queryClient)?.conversations[conversationId]
+  assert.ok(model)
+  assert.deepEqual(
+    model.turns.map((turn) => turn.id),
+    ['turn_history01', 'turn_history02'],
+  )
+  assert.deepEqual(
+    model.messages.map((message) => [message.author, message.body]),
+    [
+      ['user', 'First retained prompt'],
+      ['agent', 'First retained answer'],
+      ['user', 'Second retained prompt'],
+      ['agent', 'Second retained answer'],
+    ],
+  )
+  assert.equal(model.tools[0]?.name, 'command')
+  assert.equal(model.tools[0]?.command, 'pnpm test')
+  assert.equal(model.changes[0]?.path, 'src/example.ts')
+  assert.equal(model.terminal.text, '1 test passed\n')
+  assert.equal(client.connectCalls[1]?.lastEventId, `${epochB}:12`)
+  assert.equal(runtime.stats.snapshotReplacements, 2)
 })
 
 test('temporary stream failure keeps projection and reconnects from the last event', async (t) => {
@@ -179,7 +228,7 @@ test('duplicates are ignored and a sequence gap forces snapshot recovery', async
   const first = new ControlledStream()
   const second = new ControlledStream()
   const client = new FakeHostClient({
-    bootstraps: [bootstrap(epochA)],
+    bootstraps: [bootstrap(epochA), bootstrap(epochA)],
     snapshots: [runningSnapshot(epochA, 2), runningSnapshot(epochA, 4)],
     streams: [first, second],
   })
@@ -212,6 +261,31 @@ test('returns one default runtime per QueryClient', () => {
     getHostRuntime(queryClient),
     getHostRuntime(createQueryClient()),
   )
+})
+
+test('a same-task retain survives the deferred StrictMode release', async (t) => {
+  const client = new FakeHostClient({
+    bootstraps: [bootstrap(epochA)],
+    snapshots: [snapshot(epochA, 0)],
+    streams: [new ControlledStream()],
+  })
+  const runtime = new HostRuntime({
+    queryClient: createQueryClient(),
+    client,
+    reconnectDelayMs: 1,
+  })
+  t.after(async () => await runtime.stop())
+
+  const releaseFirstMount = runtime.retain()
+  releaseFirstMount()
+  const releaseSecondMount = runtime.retain()
+  t.after(releaseSecondMount)
+
+  await waitFor(() => runtime.connectionState === 'connected')
+  await nextTask()
+  assert.equal(runtime.connectionState, 'connected')
+  assert.equal(client.bootstrapCalls, 1)
+  assert.equal(client.snapshotCalls, 1)
 })
 
 class FakeHostClient {
@@ -357,6 +431,113 @@ function runningSnapshot(epoch, currentSeq) {
       },
     ],
     pendingApprovals: [],
+  }
+}
+
+function historicalSnapshot(epoch, currentSeq) {
+  const firstTurn = {
+    turnId: 'turn_history01',
+    conversationId,
+    status: 'completed',
+    input: {
+      type: 'text',
+      text: 'First retained prompt',
+      timestamp,
+    },
+    startedAt: timestamp,
+    completedAt: timestamp,
+    finalMessage: 'First retained answer',
+  }
+  const secondTurn = {
+    turnId: 'turn_history02',
+    conversationId,
+    status: 'completed',
+    input: {
+      type: 'text',
+      text: 'Second retained prompt',
+      timestamp,
+    },
+    startedAt: timestamp,
+    completedAt: timestamp,
+    finalMessage: 'Second retained answer',
+  }
+  return {
+    protocolVersion: 1,
+    epoch,
+    currentSeq,
+    conversations: [
+      conversation(conversationId, {
+        status: 'completed',
+        updatedAt: timestamp,
+      }),
+    ],
+    activeTurns: [],
+    pendingApprovals: [],
+    conversationRuntimes: [
+      {
+        conversationId,
+        turns: [firstTurn, secondTurn],
+        messages: [
+          {
+            turnId: firstTurn.turnId,
+            itemId: 'item_history01',
+            text: 'First retained answer',
+            status: 'completed',
+            timestamp,
+            order: 2,
+          },
+          {
+            turnId: secondTurn.turnId,
+            itemId: 'item_history02',
+            text: 'Second retained answer',
+            status: 'completed',
+            timestamp,
+            order: 8,
+          },
+        ],
+        tools: [
+          {
+            turnId: secondTurn.turnId,
+            itemId: 'item_tool02',
+            name: 'command',
+            command: 'pnpm test',
+            status: 'completed',
+            success: true,
+            outputSummary: '1 test passed\n',
+            startedAt: timestamp,
+            completedAt: timestamp,
+            order: 9,
+          },
+        ],
+        changes: [
+          {
+            turnId: secondTurn.turnId,
+            itemId: 'item_change02',
+            path: 'src/example.ts',
+            kind: 'modified',
+            diff: '@@ -1 +1 @@\n-old\n+new',
+            timestamp,
+            order: 10,
+          },
+        ],
+        terminal: {
+          turnId: secondTurn.turnId,
+          itemId: 'item_tool02',
+          command: 'pnpm test',
+          text: '1 test passed\n',
+          stream: 'combined',
+          truncated: false,
+          updatedAt: timestamp,
+        },
+        history: {
+          evictedTurns: 0,
+          evictedMessages: 0,
+          evictedTools: 0,
+          evictedChanges: 0,
+          truncated: false,
+        },
+      },
+    ],
   }
 }
 

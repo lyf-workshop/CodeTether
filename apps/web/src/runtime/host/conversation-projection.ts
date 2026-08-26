@@ -11,6 +11,8 @@ import type {
 export const TERMINAL_OUTPUT_MAX_BYTES = 128 * 1024
 
 const TOOL_OUTPUT_SUMMARY_MAX_CHARACTERS = 512
+const USER_INPUT_ORDER = -1
+const FINAL_MESSAGE_ORDER = Number.MAX_SAFE_INTEGER
 const encoder = new TextEncoder()
 const decoder = new TextDecoder()
 
@@ -25,33 +27,44 @@ export type CanonicalConversationStatus =
 
 export type ProjectedItemStatus = 'idle' | 'running' | 'completed' | 'failed'
 
-export interface CurrentTurnReadModel {
+export interface ConversationTurnReadModel {
   readonly id: string
   readonly status: 'running' | 'completed' | 'failed' | 'interrupted'
   readonly startedAt: string
   readonly completedAt?: string
   readonly finalMessage?: string
   readonly errorMessage?: string
-  readonly interruptionReason?: string
+  /** Stable retained-Turn order, independent of wall-clock formatting. */
+  readonly order: number
 }
+
+export type CurrentTurnReadModel = ConversationTurnReadModel
 
 export interface MessageReadModel {
   /** Opaque presentation identity derived from the Turn and Item identities. */
   readonly id: string
+  readonly turnId: string
+  readonly itemId?: string
+  readonly author: 'user' | 'agent'
   readonly body: string
   readonly status: ProjectedItemStatus
   readonly timestamp: string
+  /** Host sequence for Agent Items; user input is always first within its Turn. */
   readonly order: number
 }
 
 export interface ToolReadModel {
   /** Opaque presentation identity derived from the Turn and Item identities. */
   readonly id: string
+  readonly turnId: string
+  readonly itemId: string
   readonly name: string
+  readonly command?: string
   readonly description?: string
   readonly status: ProjectedItemStatus
   readonly outputSummary?: string
   readonly timestamp: string
+  readonly completedAt?: string
   readonly order: number
 }
 
@@ -64,6 +77,8 @@ export interface ProjectedDiffLine {
 
 export interface FileChangeReadModel {
   readonly id: string
+  readonly turnId: string
+  readonly itemId?: string
   readonly path: string
   readonly kind: FileChangeKind
   readonly additions: number
@@ -75,16 +90,29 @@ export interface FileChangeReadModel {
 
 export interface PendingApprovalReadModel {
   readonly id: string
+  readonly turnId: string
+  readonly itemId?: string
   readonly kind: ApprovalKind
   readonly summary: string
   readonly requestedAt: string
 }
 
 export interface TerminalReadModel {
+  readonly turnId?: string
+  readonly itemId?: string
   readonly toolId?: string
   readonly command?: string
   readonly stream?: ToolOutputStream
   readonly text: string
+  readonly truncated: boolean
+  readonly updatedAt?: string
+}
+
+export interface ConversationHistoryReadModel {
+  readonly evictedTurns: number
+  readonly evictedMessages: number
+  readonly evictedTools: number
+  readonly evictedChanges: number
   readonly truncated: boolean
 }
 
@@ -98,11 +126,15 @@ export interface ConversationReadModel {
   readonly reasoning?: string
   readonly createdAt: string
   readonly updatedAt: string
+  readonly turns: readonly ConversationTurnReadModel[]
+  /** Latest retained Turn. It remains available after terminal completion. */
   readonly currentTurn?: CurrentTurnReadModel
   readonly messages: readonly MessageReadModel[]
   readonly tools: readonly ToolReadModel[]
   readonly changes: readonly FileChangeReadModel[]
   readonly terminal: TerminalReadModel
+  /** Host-owned retention boundary; presentation remains intentionally frozen. */
+  readonly history: ConversationHistoryReadModel
   readonly pendingApprovals: readonly PendingApprovalReadModel[]
 }
 
@@ -134,12 +166,18 @@ export type ApplyHostEventResult =
       readonly streamReason?: StreamResetReason
     }
 
-/** Builds the replace boundary. Protocol v1 snapshots intentionally contain no Item history. */
+/** Builds the replace boundary from all runtime history retained by the Host. */
 export function projectSnapshot(
   snapshot: HostSnapshot,
 ): ConversationProjection {
   const activeTurns = new Map(
     snapshot.activeTurns.map((turn) => [String(turn.turnId), turn]),
+  )
+  const runtimes = new Map(
+    (snapshot.conversationRuntimes ?? []).map((runtime) => [
+      String(runtime.conversationId),
+      runtime,
+    ]),
   )
   const approvalsByConversation = new Map<string, PendingApprovalReadModel[]>()
 
@@ -153,12 +191,14 @@ export function projectSnapshot(
   const conversations: Record<string, ConversationReadModel> = {}
   for (const record of snapshot.conversations) {
     const conversationId = String(record.conversationId)
+    const runtime = runtimes.get(conversationId)
     const activeTurn =
       record.activeTurnId === undefined
         ? undefined
         : activeTurns.get(String(record.activeTurnId))
     conversations[conversationId] = projectConversationRecord(
       record,
+      runtime,
       activeTurn,
       approvalsByConversation.get(conversationId) ?? [],
     )
@@ -199,6 +239,7 @@ export function applyHostEvent(
     const conversation = projectConversationRecord(
       event.payload.conversation,
       undefined,
+      undefined,
       [],
     )
     return applied(projection, event, conversation)
@@ -211,25 +252,33 @@ export function applyHostEvent(
 
   switch (event.type) {
     case 'turn.started': {
+      const turnId = String(event.payload.turn.turnId)
+      if (conversation.turns.some((turn) => turn.id === turnId)) {
+        return resetRequired(projection, 'invalid-lifecycle')
+      }
+      const turn = projectTurn(event.payload.turn, conversation.turns.length)
+      const input = projectTurnInput(event.payload.turn)
       const next: ConversationReadModel = {
         ...conversation,
         status: 'running',
         updatedAt: event.timestamp,
-        currentTurn: projectCurrentTurn(event.payload.turn),
-        messages: [],
-        tools: [],
-        changes: [],
-        terminal: emptyTerminal(),
-        pendingApprovals: [],
+        turns: [...conversation.turns, turn],
+        currentTurn: turn,
+        messages:
+          input === undefined
+            ? conversation.messages
+            : [...conversation.messages, input],
       }
       return applied(projection, event, next)
     }
 
     case 'message.delta': {
-      if (!belongsToCurrentTurn(conversation, event.turnId)) {
+      if (!belongsToRunningTurn(conversation, event.turnId)) {
         return resetRequired(projection, 'invalid-lifecycle')
       }
-      const id = itemKey(event.turnId, event.itemId)
+      const turnId = String(event.turnId)
+      const itemId = String(event.itemId)
+      const id = itemKey(turnId, itemId)
       const index = conversation.messages.findIndex(
         (message) => message.id === id,
       )
@@ -239,6 +288,9 @@ export function applyHostEvent(
           ...conversation.messages,
           {
             id,
+            turnId,
+            itemId,
+            author: 'agent',
             body: event.payload.delta,
             status: 'running',
             timestamp: event.timestamp,
@@ -247,7 +299,11 @@ export function applyHostEvent(
         ]
       } else {
         const current = conversation.messages[index]
-        if (current === undefined || current.status !== 'running') {
+        if (
+          current === undefined ||
+          current.author !== 'agent' ||
+          current.status !== 'running'
+        ) {
           return resetRequired(projection, 'invalid-lifecycle')
         }
         messages = replaceAt(conversation.messages, index, {
@@ -264,15 +320,20 @@ export function applyHostEvent(
     }
 
     case 'message.completed': {
-      if (!belongsToCurrentTurn(conversation, event.turnId)) {
+      if (!belongsToRunningTurn(conversation, event.turnId)) {
         return resetRequired(projection, 'invalid-lifecycle')
       }
-      const id = itemKey(event.turnId, event.itemId)
+      const turnId = String(event.turnId)
+      const itemId = String(event.itemId)
+      const id = itemKey(turnId, itemId)
       const index = conversation.messages.findIndex(
         (message) => message.id === id,
       )
       const completed: MessageReadModel = {
         id,
+        turnId,
+        itemId,
+        author: 'agent',
         body: event.payload.message,
         status: 'completed',
         timestamp: event.timestamp,
@@ -293,14 +354,21 @@ export function applyHostEvent(
     }
 
     case 'tool.started': {
-      if (!belongsToCurrentTurn(conversation, event.turnId)) {
+      if (!belongsToRunningTurn(conversation, event.turnId)) {
         return resetRequired(projection, 'invalid-lifecycle')
       }
-      const id = itemKey(event.turnId, event.itemId)
+      const turnId = String(event.turnId)
+      const itemId = String(event.itemId)
+      const id = itemKey(turnId, itemId)
       const index = conversation.tools.findIndex((tool) => tool.id === id)
       const tool: ToolReadModel = {
         id,
+        turnId,
+        itemId,
         name: event.payload.name,
+        ...(event.payload.command === undefined
+          ? {}
+          : { command: event.payload.command }),
         ...(event.payload.summary === undefined
           ? {}
           : { description: event.payload.summary }),
@@ -320,19 +388,24 @@ export function applyHostEvent(
         updatedAt: event.timestamp,
         tools,
         terminal: {
+          turnId,
+          itemId,
           toolId: id,
-          command: event.payload.name,
+          command: event.payload.command ?? event.payload.name,
           text: '',
           truncated: false,
+          updatedAt: event.timestamp,
         },
       })
     }
 
     case 'tool.output': {
-      if (!belongsToCurrentTurn(conversation, event.turnId)) {
+      if (!belongsToRunningTurn(conversation, event.turnId)) {
         return resetRequired(projection, 'invalid-lifecycle')
       }
-      const id = itemKey(event.turnId, event.itemId)
+      const turnId = String(event.turnId)
+      const itemId = String(event.itemId)
+      const id = itemKey(turnId, itemId)
       const index = conversation.tools.findIndex((tool) => tool.id === id)
       const currentTool = index < 0 ? undefined : conversation.tools[index]
       if (currentTool !== undefined && currentTool.status !== 'running') {
@@ -343,8 +416,13 @@ export function applyHostEvent(
         conversation.terminal.toolId === id
           ? conversation.terminal
           : {
+              turnId,
+              itemId,
               toolId: id,
-              command: currentTool?.name ?? 'Command execution',
+              command:
+                currentTool?.command ??
+                currentTool?.name ??
+                'Command execution',
               text: '',
               truncated: false,
             }
@@ -352,16 +430,23 @@ export function applyHostEvent(
         baseTerminal,
         event.payload.output,
         event.payload.stream,
+        event.timestamp,
       )
+      const outputSummary = summarizeOutput(terminal.text)
       const tool: ToolReadModel = {
         id,
+        turnId,
+        itemId,
         name: currentTool?.name ?? 'Command execution',
+        ...(currentTool?.command === undefined
+          ? {}
+          : { command: currentTool.command }),
         ...(currentTool?.description === undefined
           ? {}
           : { description: currentTool.description }),
         status: 'running',
-        outputSummary: summarizeOutput(terminal.text),
-        timestamp: event.timestamp,
+        ...(outputSummary === undefined ? {} : { outputSummary }),
+        timestamp: currentTool?.timestamp ?? event.timestamp,
         order: currentTool?.order ?? event.seq,
       }
       const tools =
@@ -377,10 +462,12 @@ export function applyHostEvent(
     }
 
     case 'tool.completed': {
-      if (!belongsToCurrentTurn(conversation, event.turnId)) {
+      if (!belongsToRunningTurn(conversation, event.turnId)) {
         return resetRequired(projection, 'invalid-lifecycle')
       }
-      const id = itemKey(event.turnId, event.itemId)
+      const turnId = String(event.turnId)
+      const itemId = String(event.itemId)
+      const id = itemKey(turnId, itemId)
       const index = conversation.tools.findIndex((tool) => tool.id === id)
       const current = index < 0 ? undefined : conversation.tools[index]
       const outputSummary =
@@ -389,13 +476,20 @@ export function applyHostEvent(
           : summarizeOutput(event.payload.summary)
       const tool: ToolReadModel = {
         id,
+        turnId,
+        itemId,
         name: event.payload.name,
+        ...(event.payload.command === undefined &&
+        current?.command === undefined
+          ? {}
+          : { command: event.payload.command ?? current?.command }),
         ...(current?.description === undefined
           ? {}
           : { description: current.description }),
         status: event.payload.success === false ? 'failed' : 'completed',
         ...(outputSummary === undefined ? {} : { outputSummary }),
-        timestamp: event.timestamp,
+        timestamp: current?.timestamp ?? event.timestamp,
+        completedAt: event.timestamp,
         order: current?.order ?? event.seq,
       }
       const tools =
@@ -405,8 +499,8 @@ export function applyHostEvent(
       const terminal = completeTerminal(
         conversation.terminal,
         id,
-        event.payload.name,
-        event.payload.summary,
+        event.payload.command ?? current?.command ?? event.payload.name,
+        event.timestamp,
       )
       return applied(projection, event, {
         ...conversation,
@@ -417,14 +511,19 @@ export function applyHostEvent(
     }
 
     case 'file.changed': {
-      if (!belongsToCurrentTurn(conversation, event.turnId)) {
+      if (!belongsToRunningTurn(conversation, event.turnId)) {
         return resetRequired(projection, 'invalid-lifecycle')
       }
+      const turnId = String(event.turnId)
+      const itemId =
+        event.itemId === undefined ? undefined : String(event.itemId)
       const parsed = parseUnifiedDiff(event.payload.diff)
-      const id = event.payload.path
+      const id = changeKey(turnId, itemId, event.payload.path)
       const index = conversation.changes.findIndex((change) => change.id === id)
       const change: FileChangeReadModel = {
         id,
+        turnId,
+        ...(itemId === undefined ? {} : { itemId }),
         path: event.payload.path,
         kind: event.payload.kind,
         additions: event.payload.additions ?? parsed.additions,
@@ -448,7 +547,7 @@ export function applyHostEvent(
     }
 
     case 'approval.requested': {
-      if (!belongsToCurrentTurn(conversation, event.turnId)) {
+      if (!belongsToRunningTurn(conversation, event.turnId)) {
         return resetRequired(projection, 'invalid-lifecycle')
       }
       const approval = projectPendingApproval(event.payload.approval)
@@ -468,7 +567,7 @@ export function applyHostEvent(
     }
 
     case 'approval.resolved': {
-      if (!belongsToCurrentTurn(conversation, event.turnId)) {
+      if (!belongsToRunningTurn(conversation, event.turnId)) {
         return resetRequired(projection, 'invalid-lifecycle')
       }
       const id = String(event.payload.approval.approvalId)
@@ -489,83 +588,150 @@ export function applyHostEvent(
     }
 
     case 'turn.completed': {
-      if (!belongsToCurrentTurn(conversation, event.turnId)) {
+      const turnIndex = runningTurnIndex(conversation, event.turnId)
+      if (turnIndex < 0) {
         return resetRequired(projection, 'invalid-lifecycle')
       }
-      const messages = completeMessages(
-        conversation.messages,
-        event.turnId,
-        event.payload.finalMessage,
-        event.timestamp,
-        event.seq,
-      )
+      const current = conversation.turns[turnIndex]
+      if (current === undefined) {
+        return resetRequired(projection, 'invalid-lifecycle')
+      }
+      const turn: ConversationTurnReadModel = {
+        ...current,
+        status: 'completed',
+        completedAt: event.timestamp,
+        ...(event.payload.finalMessage === undefined
+          ? {}
+          : { finalMessage: event.payload.finalMessage }),
+      }
+      const turnId = String(event.turnId)
       return applied(projection, event, {
         ...conversation,
         status: 'completed',
         updatedAt: event.timestamp,
-        currentTurn: {
-          ...conversation.currentTurn,
-          status: 'completed',
-          completedAt: event.timestamp,
-          ...(event.payload.finalMessage === undefined
-            ? {}
-            : { finalMessage: event.payload.finalMessage }),
-        },
-        messages,
-        tools: settleRunningItems(conversation.tools, 'completed'),
-        pendingApprovals: [],
+        turns: replaceAt(conversation.turns, turnIndex, turn),
+        currentTurn: turn,
+        messages: completeMessages(
+          conversation.messages,
+          turnId,
+          event.payload.finalMessage,
+          event.timestamp,
+        ),
+        tools: settleRunningToolsForTurn(
+          conversation.tools,
+          turnId,
+          'completed',
+          event.timestamp,
+        ),
+        pendingApprovals: conversation.pendingApprovals.filter(
+          (approval) => approval.turnId !== turnId,
+        ),
       })
     }
 
     case 'turn.failed': {
-      if (!belongsToCurrentTurn(conversation, event.turnId)) {
+      const turnIndex = runningTurnIndex(conversation, event.turnId)
+      if (turnIndex < 0) {
         return resetRequired(projection, 'invalid-lifecycle')
+      }
+      const current = conversation.turns[turnIndex]
+      if (current === undefined) {
+        return resetRequired(projection, 'invalid-lifecycle')
+      }
+      const turnId = String(event.turnId)
+      const turn: ConversationTurnReadModel = {
+        ...current,
+        status: 'failed',
+        completedAt: event.timestamp,
+        errorMessage: event.payload.error.message,
       }
       return applied(projection, event, {
         ...conversation,
         status: 'failed',
         updatedAt: event.timestamp,
-        currentTurn: {
-          ...conversation.currentTurn,
-          status: 'failed',
-          completedAt: event.timestamp,
-          errorMessage: event.payload.error.message,
-        },
-        messages: settleRunningItems(conversation.messages, 'failed'),
-        tools: settleRunningItems(conversation.tools, 'failed'),
-        pendingApprovals: [],
+        turns: replaceAt(conversation.turns, turnIndex, turn),
+        currentTurn: turn,
+        messages: settleRunningMessagesForTurn(
+          conversation.messages,
+          turnId,
+          'failed',
+          event.timestamp,
+        ),
+        tools: settleRunningToolsForTurn(
+          conversation.tools,
+          turnId,
+          'failed',
+          event.timestamp,
+        ),
+        pendingApprovals: conversation.pendingApprovals.filter(
+          (approval) => approval.turnId !== turnId,
+        ),
       })
     }
 
     case 'turn.interrupted': {
-      if (!belongsToCurrentTurn(conversation, event.turnId)) {
+      const turnIndex = runningTurnIndex(conversation, event.turnId)
+      if (turnIndex < 0) {
         return resetRequired(projection, 'invalid-lifecycle')
+      }
+      const current = conversation.turns[turnIndex]
+      if (current === undefined) {
+        return resetRequired(projection, 'invalid-lifecycle')
+      }
+      const turnId = String(event.turnId)
+      const turn: ConversationTurnReadModel = {
+        ...current,
+        status: 'interrupted',
+        completedAt: event.timestamp,
       }
       return applied(projection, event, {
         ...conversation,
         status: 'idle',
         updatedAt: event.timestamp,
-        currentTurn: {
-          ...conversation.currentTurn,
-          status: 'interrupted',
-          completedAt: event.timestamp,
-          ...(event.payload.reason === undefined
-            ? {}
-            : { interruptionReason: event.payload.reason }),
-        },
-        messages: settleRunningItems(conversation.messages, 'idle'),
-        tools: settleRunningItems(conversation.tools, 'idle'),
-        pendingApprovals: [],
+        turns: replaceAt(conversation.turns, turnIndex, turn),
+        currentTurn: turn,
+        messages: settleRunningMessagesForTurn(
+          conversation.messages,
+          turnId,
+          'idle',
+          event.timestamp,
+        ),
+        tools: settleRunningToolsForTurn(
+          conversation.tools,
+          turnId,
+          'idle',
+          event.timestamp,
+        ),
+        pendingApprovals: conversation.pendingApprovals.filter(
+          (approval) => approval.turnId !== turnId,
+        ),
       })
     }
   }
 }
 
+type SnapshotRuntime = NonNullable<HostSnapshot['conversationRuntimes']>[number]
+type SnapshotTurn = HostSnapshot['activeTurns'][number]
+
 function projectConversationRecord(
   record: HostSnapshot['conversations'][number],
-  activeTurn: HostSnapshot['activeTurns'][number] | undefined,
+  runtime: SnapshotRuntime | undefined,
+  activeTurn: SnapshotTurn | undefined,
   pendingApprovals: readonly PendingApprovalReadModel[],
 ): ConversationReadModel {
+  const retainedTurns = runtime?.turns ?? (activeTurn ? [activeTurn] : [])
+  const turns = retainedTurns.map(projectTurn)
+  const messages = projectSnapshotMessages(runtime, retainedTurns)
+  const tools = (runtime?.tools ?? []).map(projectSnapshotTool).sort(byOrder)
+  const changes = (runtime?.changes ?? [])
+    .map(projectSnapshotChange)
+    .sort(byOrder)
+  const terminal = projectSnapshotTerminal(runtime?.terminal)
+  const activeTurnId =
+    record.activeTurnId === undefined ? undefined : String(record.activeTurnId)
+  const currentTurn =
+    turns.find((turn) => turn.id === activeTurnId) ?? turns.at(-1)
+
   return {
     id: String(record.conversationId),
     cwd: record.cwd,
@@ -576,20 +742,31 @@ function projectConversationRecord(
     ...(record.reasoning === undefined ? {} : { reasoning: record.reasoning }),
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
-    ...(activeTurn === undefined
-      ? {}
-      : { currentTurn: projectCurrentTurn(activeTurn) }),
-    messages: [],
-    tools: [],
-    changes: [],
-    terminal: emptyTerminal(),
+    turns,
+    ...(currentTurn === undefined ? {} : { currentTurn }),
+    messages,
+    tools,
+    changes,
+    terminal,
+    history: runtime?.history ?? emptyHistory(),
     pendingApprovals,
   }
 }
 
-function projectCurrentTurn(
-  turn: HostSnapshot['activeTurns'][number],
-): CurrentTurnReadModel {
+function emptyHistory(): ConversationHistoryReadModel {
+  return {
+    evictedTurns: 0,
+    evictedMessages: 0,
+    evictedTools: 0,
+    evictedChanges: 0,
+    truncated: false,
+  }
+}
+
+function projectTurn(
+  turn: SnapshotTurn,
+  order: number,
+): ConversationTurnReadModel {
   return {
     id: String(turn.turnId),
     status: turn.status,
@@ -601,7 +778,132 @@ function projectCurrentTurn(
       ? {}
       : { finalMessage: turn.finalMessage }),
     ...(turn.error === undefined ? {} : { errorMessage: turn.error.message }),
+    order,
   }
+}
+
+function projectTurnInput(turn: SnapshotTurn): MessageReadModel | undefined {
+  if (turn.input === undefined) return undefined
+  return {
+    id: `${String(turn.turnId)}:input`,
+    turnId: String(turn.turnId),
+    author: 'user',
+    body: turn.input.text,
+    status: 'completed',
+    timestamp: turn.input.timestamp,
+    order: USER_INPUT_ORDER,
+  }
+}
+
+function projectSnapshotMessages(
+  runtime: SnapshotRuntime | undefined,
+  turns: readonly SnapshotTurn[],
+): readonly MessageReadModel[] {
+  const agentMessages = (runtime?.messages ?? []).map((message) => ({
+    id: itemKey(String(message.turnId), String(message.itemId)),
+    turnId: String(message.turnId),
+    itemId: String(message.itemId),
+    author: 'agent' as const,
+    body: message.text,
+    status: projectRuntimeItemStatus(message.status),
+    timestamp: message.timestamp,
+    order: message.order,
+  }))
+
+  let messages: readonly MessageReadModel[] = turns.flatMap((turn) => {
+    const turnId = String(turn.turnId)
+    const input = projectTurnInput(turn)
+    const retained = agentMessages
+      .filter((message) => message.turnId === turnId)
+      .sort(byOrder)
+    return input === undefined ? retained : [input, ...retained]
+  })
+
+  for (const turn of turns) {
+    if (turn.status !== 'completed') continue
+    messages = completeMessages(
+      messages,
+      String(turn.turnId),
+      turn.finalMessage,
+      turn.completedAt ?? turn.startedAt,
+    )
+  }
+  return messages
+}
+
+function projectSnapshotTool(
+  tool: SnapshotRuntime['tools'][number],
+): ToolReadModel {
+  const turnId = String(tool.turnId)
+  const itemId = String(tool.itemId)
+  return {
+    id: itemKey(turnId, itemId),
+    turnId,
+    itemId,
+    name: tool.name,
+    ...(tool.command === undefined ? {} : { command: tool.command }),
+    ...(tool.summary === undefined ? {} : { description: tool.summary }),
+    status: projectRuntimeItemStatus(tool.status),
+    ...(tool.outputSummary === undefined
+      ? {}
+      : { outputSummary: summarizeOutput(tool.outputSummary) }),
+    timestamp: tool.startedAt,
+    ...(tool.completedAt === undefined
+      ? {}
+      : { completedAt: tool.completedAt }),
+    order: tool.order,
+  }
+}
+
+function projectSnapshotChange(
+  change: SnapshotRuntime['changes'][number],
+): FileChangeReadModel {
+  const turnId = String(change.turnId)
+  const itemId = change.itemId === undefined ? undefined : String(change.itemId)
+  const parsed = parseUnifiedDiff(change.diff)
+  return {
+    id: changeKey(turnId, itemId, change.path),
+    turnId,
+    ...(itemId === undefined ? {} : { itemId }),
+    path: change.path,
+    kind: change.kind,
+    additions: change.additions ?? parsed.additions,
+    deletions: change.deletions ?? parsed.deletions,
+    diffLines: parsed.lines,
+    timestamp: change.timestamp,
+    order: change.order,
+  }
+}
+
+function projectSnapshotTerminal(
+  terminal: SnapshotRuntime['terminal'] | undefined,
+): TerminalReadModel {
+  if (terminal === undefined) return emptyTerminal()
+  const turnId =
+    terminal.turnId === undefined ? undefined : String(terminal.turnId)
+  const itemId =
+    terminal.itemId === undefined ? undefined : String(terminal.itemId)
+  const bounded = retainUtf8Tail(terminal.text, TERMINAL_OUTPUT_MAX_BYTES)
+  return {
+    ...(turnId === undefined ? {} : { turnId }),
+    ...(itemId === undefined ? {} : { itemId }),
+    ...(turnId === undefined || itemId === undefined
+      ? {}
+      : { toolId: itemKey(turnId, itemId) }),
+    ...(terminal.command === undefined ? {} : { command: terminal.command }),
+    ...(terminal.stream === undefined ? {} : { stream: terminal.stream }),
+    text: bounded.text,
+    truncated: terminal.truncated || bounded.truncated,
+    ...(terminal.updatedAt === undefined
+      ? {}
+      : { updatedAt: terminal.updatedAt }),
+  }
+}
+
+function projectRuntimeItemStatus(
+  status: 'running' | 'completed' | 'failed' | 'interrupted',
+): ProjectedItemStatus {
+  return status === 'interrupted' ? 'idle' : status
 }
 
 function projectPendingApproval(
@@ -609,6 +911,10 @@ function projectPendingApproval(
 ): PendingApprovalReadModel {
   return {
     id: String(approval.approvalId),
+    turnId: String(approval.turnId),
+    ...(approval.itemId === undefined
+      ? {}
+      : { itemId: String(approval.itemId) }),
     kind: approval.kind,
     summary: approval.summary,
     requestedAt: approval.requestedAt,
@@ -624,13 +930,29 @@ function itemKey(turnId: string, itemId: string): string {
   return `${turnId}:${itemId}`
 }
 
-function belongsToCurrentTurn(
+function changeKey(
+  turnId: string,
+  itemId: string | undefined,
+  path: string,
+): string {
+  return `${turnId}:${itemId ?? 'no-item'}:${path}`
+}
+
+function belongsToRunningTurn(
   conversation: ConversationReadModel,
   turnId: string,
-): conversation is ConversationReadModel & {
-  readonly currentTurn: CurrentTurnReadModel
-} {
-  return conversation.currentTurn?.id === turnId
+): boolean {
+  return runningTurnIndex(conversation, turnId) >= 0
+}
+
+function runningTurnIndex(
+  conversation: ConversationReadModel,
+  turnId: string,
+): number {
+  const id = String(turnId)
+  return conversation.turns.findIndex(
+    (turn) => turn.id === id && turn.status === 'running',
+  )
 }
 
 function applied(
@@ -673,15 +995,32 @@ function replaceAt<T>(
   )
 }
 
-function settleRunningItems<T extends { readonly status: ProjectedItemStatus }>(
-  items: readonly T[],
+function settleRunningMessagesForTurn(
+  items: readonly MessageReadModel[],
+  turnId: string,
   status: Exclude<ProjectedItemStatus, 'running'>,
-): readonly T[] {
+  timestamp: string,
+): readonly MessageReadModel[] {
   let changed = false
   const settled = items.map((item) => {
-    if (item.status !== 'running') return item
+    if (item.turnId !== turnId || item.status !== 'running') return item
     changed = true
-    return { ...item, status }
+    return { ...item, status, timestamp }
+  })
+  return changed ? settled : items
+}
+
+function settleRunningToolsForTurn(
+  items: readonly ToolReadModel[],
+  turnId: string,
+  status: Exclude<ProjectedItemStatus, 'running'>,
+  completedAt: string,
+): readonly ToolReadModel[] {
+  let changed = false
+  const settled = items.map((item) => {
+    if (item.turnId !== turnId || item.status !== 'running') return item
+    changed = true
+    return { ...item, status, completedAt }
   })
   return changed ? settled : items
 }
@@ -691,16 +1030,30 @@ function completeMessages(
   turnId: string,
   finalMessage: string | undefined,
   timestamp: string,
-  order: number,
 ): readonly MessageReadModel[] {
-  let completed = settleRunningItems(messages, 'completed')
+  let completed = settleRunningMessagesForTurn(
+    messages,
+    turnId,
+    'completed',
+    timestamp,
+  )
   if (finalMessage === undefined || finalMessage.length === 0) return completed
-  if (completed.some((message) => message.body === finalMessage)) {
+  if (
+    completed.some(
+      (message) =>
+        message.turnId === turnId &&
+        message.author === 'agent' &&
+        message.body === finalMessage,
+    )
+  ) {
     return completed
   }
 
   const lastRunningIndex = messages.findLastIndex(
-    (message) => message.status === 'running',
+    (message) =>
+      message.turnId === turnId &&
+      message.author === 'agent' &&
+      message.status === 'running',
   )
   if (lastRunningIndex >= 0) {
     const current = completed[lastRunningIndex]
@@ -719,10 +1072,12 @@ function completeMessages(
     ...completed,
     {
       id: `${turnId}:final`,
+      turnId,
+      author: 'agent',
       body: finalMessage,
       status: 'completed',
       timestamp,
-      order,
+      order: FINAL_MESSAGE_ORDER,
     },
   ]
 }
@@ -735,6 +1090,7 @@ function appendTerminalOutput(
   terminal: TerminalReadModel,
   output: string,
   stream: ToolOutputStream | undefined,
+  updatedAt: string,
 ): TerminalReadModel {
   const bounded = retainUtf8Tail(
     `${terminal.text}${output}`,
@@ -745,6 +1101,7 @@ function appendTerminalOutput(
     ...(stream === undefined ? {} : { stream }),
     text: bounded.text,
     truncated: terminal.truncated || bounded.truncated,
+    updatedAt,
   }
 }
 
@@ -752,27 +1109,13 @@ function completeTerminal(
   terminal: TerminalReadModel,
   toolId: string,
   command: string,
-  summary: string | undefined,
+  updatedAt: string,
 ): TerminalReadModel {
-  if (terminal.toolId !== toolId) {
-    if (summary === undefined) return terminal
-    const bounded = retainUtf8Tail(summary, TERMINAL_OUTPUT_MAX_BYTES)
-    return {
-      toolId,
-      command,
-      text: bounded.text,
-      truncated: bounded.truncated,
-    }
-  }
-  if (terminal.text.length > 0 || summary === undefined) {
-    return terminal.command === command ? terminal : { ...terminal, command }
-  }
-  const bounded = retainUtf8Tail(summary, TERMINAL_OUTPUT_MAX_BYTES)
+  if (terminal.toolId !== toolId) return terminal
   return {
     ...terminal,
     command,
-    text: bounded.text,
-    truncated: terminal.truncated || bounded.truncated,
+    updatedAt,
   }
 }
 
@@ -803,6 +1146,13 @@ function summarizeOutput(output: string): string | undefined {
   const lastLine = normalized.split(/\r?\n/u).at(-1)?.trim()
   if (lastLine === undefined || lastLine.length === 0) return undefined
   return lastLine.slice(0, TOOL_OUTPUT_SUMMARY_MAX_CHARACTERS)
+}
+
+function byOrder<T extends { readonly order: number }>(
+  left: T,
+  right: T,
+): number {
+  return left.order - right.order
 }
 
 function parseUnifiedDiff(diff: string | undefined): {

@@ -54,6 +54,7 @@ export interface ConversationApprovalViewModel {
   readonly title: string
   readonly summary: string
   readonly requestedAt: string
+  readonly context?: string
 }
 
 export type ConversationRunExecutionViewModel =
@@ -134,7 +135,7 @@ export interface ConversationViewModel {
   readonly changes: ConversationChangesViewModel
   readonly terminal: ConversationTerminalViewModel
   readonly context: readonly ConversationContextReferenceViewModel[]
-  readonly pendingApproval?: ConversationApprovalViewModel
+  readonly pendingApprovals: readonly ConversationApprovalViewModel[]
   readonly capabilities: ConversationCapabilitiesViewModel
 }
 

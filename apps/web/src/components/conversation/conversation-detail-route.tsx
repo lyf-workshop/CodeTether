@@ -1,6 +1,9 @@
 import { useParams, useSearch } from '@tanstack/react-router'
 
-import { ConversationIdSchema } from '@codetether/protocol'
+import {
+  ConversationIdSchema,
+  type HostCapabilities,
+} from '@codetether/protocol'
 import { Button } from '@codetether/ui'
 
 import {
@@ -11,6 +14,11 @@ import {
 import { ConversationDetailPage } from './conversation-detail-page'
 import { createDemoConversationDetailSource } from './demo-conversation-adapter'
 import { createLiveConversationDetailSource } from './live-conversation-adapter'
+import { useLiveConversationControls } from './use-live-conversation-controls'
+import type {
+  ConversationProjection,
+  ConversationReadModel,
+} from '../../runtime/host/conversation-projection'
 
 export function ConversationDetailRoute() {
   const { conversationId } = useParams({
@@ -51,6 +59,7 @@ function LiveConversationDetailRoute({
 }: LiveConversationDetailRouteProps) {
   const runtime = useHostRuntime()
   const connectionState = useHostConnectionState()
+  const bootstrap = runtime.bootstrap
   const projection = useHostProjection()
   const conversation = projection?.conversations[conversationId]
 
@@ -64,16 +73,49 @@ function LiveConversationDetailRoute({
     )
   }
 
+  return (
+    <ConnectedLiveConversationDetail
+      conversation={conversation}
+      projection={projection}
+      connectionState={connectionState}
+      capabilities={bootstrap?.capabilities}
+      initialInspectorTab={initialInspectorTab}
+    />
+  )
+}
+
+interface ConnectedLiveConversationDetailProps {
+  readonly conversation: ConversationReadModel
+  readonly projection: ConversationProjection
+  readonly connectionState: ReturnType<typeof useHostConnectionState>
+  readonly capabilities: HostCapabilities | undefined
+  readonly initialInspectorTab?: 'changes'
+}
+
+function ConnectedLiveConversationDetail({
+  conversation,
+  projection,
+  connectionState,
+  capabilities,
+  initialInspectorTab,
+}: ConnectedLiveConversationDetailProps) {
   const source = createLiveConversationDetailSource(
     conversation,
     projection,
     connectionState,
+    capabilities,
   )
+  const controls = useLiveConversationControls(
+    conversation,
+    source.conversation.capabilities,
+  )
+
   return (
     <ConversationDetailPage
       viewModel={source.conversation}
       rail={source.rail}
       connectionIndicator={source.connectionIndicator}
+      controls={controls}
       initialInspectorTab={initialInspectorTab}
     />
   )

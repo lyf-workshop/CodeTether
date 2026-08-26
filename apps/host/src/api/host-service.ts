@@ -37,6 +37,10 @@ import {
 } from './action-idempotency-cache.js'
 import type { AgentHostRuntime } from './agent-runtime.js'
 import { ApprovalRegistry } from './approval-registry.js'
+import {
+  ConversationRuntimeHistory,
+  type ConversationRuntimeHistoryLimits,
+} from './conversation-runtime-history.js'
 import { HostEventPublisher } from './host-event-publisher.js'
 import type { ReplayResetReason } from './host-event-replay-buffer.js'
 import type { ConversationState, TurnState } from './host-service-state.js'
@@ -66,6 +70,7 @@ export interface HostServiceOptions {
   readonly publisher: HostEventPublisher
   readonly hostVersion: string
   readonly now?: () => Date
+  readonly historyLimits?: ConversationRuntimeHistoryLimits
 }
 
 /** In-memory authority for CodeTether Protocol identities and live state. */
@@ -79,6 +84,7 @@ export class HostService {
   readonly #conversations = new Map<ConversationId, ConversationState>()
   readonly #providerThreads = new Map<string, ConversationId>()
   readonly #approvalRegistry: ApprovalRegistry
+  readonly #runtimeHistory: ConversationRuntimeHistory
   readonly #providerEventTranslator: ProviderEventTranslator
   readonly #pendingProviderEvents: AgentEvent[] = []
   #pendingProviderEventBytes = 0
@@ -94,6 +100,7 @@ export class HostService {
     this.publisher = options.publisher
     this.#hostVersion = options.hostVersion
     this.#now = options.now ?? (() => new Date())
+    this.#runtimeHistory = new ConversationRuntimeHistory(options.historyLimits)
     this.#approvalRegistry = new ApprovalRegistry({
       providerThreads: this.#providerThreads,
       conversations: this.#conversations,
@@ -153,6 +160,7 @@ export class HostService {
       ),
       activeTurns,
       pendingApprovals: [...this.#approvalRegistry.pendingRecords()],
+      conversationRuntimes: [...this.#runtimeHistory.snapshots()],
     }
   }
 
@@ -259,6 +267,26 @@ export class HostService {
       `turn.start:${conversationId}`,
       { conversationId, request },
       async () => {
+        const inputBytes = Buffer.byteLength(request.input.text, 'utf8')
+        const inputRuntimeBytes = Buffer.byteLength(
+          JSON.stringify(request.input.text),
+          'utf8',
+        )
+        if (
+          inputBytes > this.#runtimeHistory.inputByteLimit ||
+          !this.#runtimeHistory.canRetainInput(request.input.text)
+        ) {
+          throw new HostServiceError(
+            'invalid_request',
+            'Turn input exceeds the Host runtime history byte limit',
+            422,
+            {
+              maxBytes: this.#runtimeHistory.inputByteLimit,
+              actualBytes: inputBytes,
+              runtimeEncodedBytes: inputRuntimeBytes,
+            },
+          )
+        }
         const conversation = this.#requireConversation(conversationId)
         if (
           conversation.startingTurn ||
@@ -309,6 +337,10 @@ export class HostService {
           turnId,
           conversationId,
           status: 'running',
+          input: {
+            ...request.input,
+            timestamp,
+          },
           startedAt: timestamp,
         }
         const state: TurnState = {
@@ -465,6 +497,7 @@ export class HostService {
       turnId: turn.record.turnId,
       conversationId: turn.record.conversationId,
       status,
+      ...(turn.record.input === undefined ? {} : { input: turn.record.input }),
       startedAt: turn.record.startedAt,
       completedAt,
       ...(fields.finalMessage === undefined
@@ -475,7 +508,12 @@ export class HostService {
     turn.interrupting = false
     conversation.record = {
       ...conversation.record,
-      status: status === 'failed' ? 'failed' : 'completed',
+      status:
+        status === 'failed'
+          ? 'failed'
+          : status === 'interrupted'
+            ? 'idle'
+            : 'completed',
       updatedAt: completedAt,
     }
     const withoutActive = { ...conversation.record }
@@ -495,7 +533,65 @@ export class HostService {
   }
 
   #publish(event: HostEvent): void {
-    this.publisher.publish(HostEventSchema.parse(event))
+    const envelope = this.publisher.publish(HostEventSchema.parse(event))
+    if (envelope.type === 'stream.reset') {
+      throw new Error('stream.reset cannot enter runtime history')
+    }
+    const eviction = this.#runtimeHistory.apply(envelope)
+    this.#pruneEvictedRuntimeIdentity(eviction)
+    if (eviction.snapshotRequired) {
+      this.publisher.publishSnapshotBoundary(event.timestamp)
+    }
+  }
+
+  #pruneEvictedRuntimeIdentity(
+    eviction: ReturnType<ConversationRuntimeHistory['apply']>,
+  ): void {
+    const conversation = this.#conversations.get(eviction.conversationId)
+    if (conversation === undefined) return
+
+    for (const turnId of eviction.turnIds) {
+      const turn = conversation.turns.get(turnId)
+      if (turn === undefined || turn.record.status === 'running') continue
+      conversation.turns.delete(turnId)
+      conversation.providerTurnIds.delete(turn.providerTurnId)
+    }
+
+    for (const [turnId, turn] of conversation.turns) {
+      const retained = this.#runtimeHistory.retainedTurnRecord(
+        eviction.conversationId,
+        turnId,
+      )
+      if (retained !== undefined) turn.record = retained
+    }
+
+    const pendingItems = new Set(
+      this.#approvalRegistry
+        .pendingRecords()
+        .filter(
+          (approval) => approval.conversationId === eviction.conversationId,
+        )
+        .flatMap((approval) =>
+          approval.itemId === undefined ? [] : [approval.itemId],
+        ),
+    )
+    for (const [turnId, turn] of conversation.turns) {
+      // Provider Item identity is Turn-scoped protocol state, not presentation
+      // history. Releasing it while the Turn is active would reassign a new
+      // public ItemId if the Provider emits another lifecycle event. Once the
+      // Turn is terminal, sweep every binding that is no longer represented by
+      // retained history or a still-pending Approval.
+      if (turn.record.status === 'running') continue
+      const retainedItems = this.#runtimeHistory.retainedItemIds(
+        eviction.conversationId,
+        turnId,
+      )
+      for (const [providerItemId, publicId] of turn.providerItems) {
+        if (!retainedItems.has(publicId) && !pendingItems.has(publicId)) {
+          turn.providerItems.delete(providerItemId)
+        }
+      }
+    }
   }
 
   #requireConversation(conversationId: ConversationId): ConversationState {

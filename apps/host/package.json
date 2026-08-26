@@ -12,6 +12,7 @@
     "semantics": "node dist/semantics.js",
     "serve": "node dist/serve.js",
     "observe": "node dist/live-read.js",
+    "control": "node dist/control.js",
     "integration": "node dist/integration.js"
   },
   "dependencies": {

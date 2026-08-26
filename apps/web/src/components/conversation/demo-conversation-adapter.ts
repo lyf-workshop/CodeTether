@@ -119,6 +119,7 @@ function createDemoConversation(conversationId: string): ConversationViewModel {
       truncated: false,
     },
     context: data.inspector.context,
+    pendingApprovals: [],
     capabilities: {
       canCompose: true,
       canInterrupt: true,

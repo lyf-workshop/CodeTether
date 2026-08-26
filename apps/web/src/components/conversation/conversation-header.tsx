@@ -1,5 +1,5 @@
 import type { Ref } from 'react'
-import { PanelRightOpen, Pause, Square } from 'lucide-react'
+import { LoaderCircle, PanelRightOpen, Pause, Square } from 'lucide-react'
 
 import {
   AgentBadge,
@@ -16,6 +16,7 @@ import type {
   ConversationConnectionState,
   ConversationViewModel,
 } from './conversation-view-model'
+import type { InterruptController } from './conversation-controls'
 
 const connectionBadgeVariants = {
   connecting: 'info',
@@ -34,6 +35,7 @@ interface ConversationHeaderProps {
   connectionIndicator?: ConversationConnectionIndicatorViewModel
   inspectorTriggerRef?: Ref<HTMLButtonElement>
   onOpenInspector?: () => void
+  interruptController?: InterruptController
 }
 
 export function ConversationHeader({
@@ -42,6 +44,7 @@ export function ConversationHeader({
   connectionIndicator,
   inspectorTriggerRef,
   onOpenInspector,
+  interruptController,
 }: ConversationHeaderProps) {
   return (
     <header className="flex h-[var(--layout-conversation-header-height)] min-w-0 items-start justify-between gap-4 border-b border-border px-5 py-4">
@@ -101,13 +104,27 @@ export function ConversationHeader({
           <span className="max-[1180px]:sr-only">查看变更</span>
         </Button>
         <IconButton
-          label="暂停或中断当前运行"
+          label={
+            interruptController?.pending ? '正在中断当前运行' : '中断当前运行'
+          }
           variant="ghost"
           size="sm"
           className="size-8 text-text-secondary"
-          disabled={!capabilities.canInterrupt}
+          disabled={
+            !capabilities.canInterrupt || interruptController?.pending === true
+          }
+          onClick={() => {
+            void interruptController?.execute()
+          }}
         >
-          <Pause aria-hidden="true" />
+          {interruptController?.pending ? (
+            <LoaderCircle
+              aria-hidden="true"
+              className="animate-spin motion-reduce:animate-none"
+            />
+          ) : (
+            <Pause aria-hidden="true" />
+          )}
         </IconButton>
         <IconButton
           label="停止当前会话"

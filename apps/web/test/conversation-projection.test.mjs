@@ -5,7 +5,7 @@ import {
   TERMINAL_OUTPUT_MAX_BYTES,
   applyHostEvent,
   projectSnapshot,
-} from '../../../.tmp/web-test-dist/runtime/host/conversation-projection.js'
+} from '../.tmp/test-dist/runtime/host/conversation-projection.js'
 
 const epoch = '1e7e3ce2-4ab2-4e80-a61d-9a6a345a7200'
 const otherEpoch = '2e7e3ce2-4ab2-4e80-a61d-9a6a345a7200'
@@ -59,6 +59,67 @@ function snapshot({
       },
     ],
     pendingApprovals: approvals,
+  }
+}
+
+function snapshotWithRuntime({
+  currentSeq = 0,
+  status = 'idle',
+  turns = [],
+  messages = [],
+  tools = [],
+  changes = [],
+  terminal = { text: '', truncated: false },
+  history = {
+    evictedTurns: 0,
+    evictedMessages: 0,
+    evictedTools: 0,
+    evictedChanges: 0,
+    truncated: false,
+  },
+  approvals = [],
+} = {}) {
+  const running = turns.find((turn) => turn.status === 'running')
+  return {
+    protocolVersion: 1,
+    epoch,
+    currentSeq,
+    conversations: [
+      {
+        conversationId,
+        provider: 'codex',
+        cwd: 'C:\\workspace\\agenthub',
+        model: 'gpt-5',
+        reasoning: 'high',
+        status,
+        ...(running === undefined ? {} : { activeTurnId: running.turnId }),
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+    ],
+    activeTurns: running === undefined ? [] : [running],
+    pendingApprovals: approvals,
+    conversationRuntimes: [
+      {
+        conversationId,
+        turns,
+        messages,
+        tools,
+        changes,
+        terminal,
+        history,
+      },
+    ],
+  }
+}
+
+function runningTurn(id, text) {
+  return {
+    turnId: id,
+    conversationId,
+    status: 'running',
+    input: { type: 'text', text, timestamp },
+    startedAt: timestamp,
   }
 }
 
@@ -129,6 +190,273 @@ test('projects snapshot metadata, active Turn, and multiple approvals', () => {
   assert.deepEqual(conversation.messages, [])
   assert.deepEqual(conversation.tools, [])
   assert.deepEqual(conversation.changes, [])
+  assert.deepEqual(conversation.history, {
+    evictedTurns: 0,
+    evictedMessages: 0,
+    evictedTools: 0,
+    evictedChanges: 0,
+    truncated: false,
+  })
+})
+
+test('projects explicit Host runtime eviction metadata', () => {
+  const projection = projectSnapshot(
+    snapshotWithRuntime({
+      history: {
+        evictedTurns: 2,
+        evictedMessages: 4,
+        evictedTools: 3,
+        evictedChanges: 1,
+        truncated: true,
+      },
+    }),
+  )
+
+  assert.deepEqual(projection.conversations[conversationId].history, {
+    evictedTurns: 2,
+    evictedMessages: 4,
+    evictedTools: 3,
+    evictedChanges: 1,
+    truncated: true,
+  })
+})
+
+test('extended snapshot and equivalent live events produce the same Turn history', () => {
+  const input = {
+    type: 'text',
+    text: 'Inspect the repository',
+    timestamp,
+  }
+  const completedTurn = {
+    turnId,
+    conversationId,
+    status: 'completed',
+    input,
+    startedAt: timestamp,
+    completedAt: timestamp,
+    finalMessage: 'Repository is clean',
+  }
+  const finalSnapshot = snapshotWithRuntime({
+    currentSeq: 8,
+    status: 'completed',
+    turns: [completedTurn],
+    messages: [
+      {
+        turnId,
+        itemId,
+        text: 'Repository is clean',
+        status: 'completed',
+        timestamp,
+        order: 2,
+      },
+    ],
+    tools: [
+      {
+        turnId,
+        itemId: 'item_tool01',
+        name: 'command',
+        command: 'git status --short',
+        summary: 'C:\\workspace\\agenthub',
+        status: 'completed',
+        success: true,
+        outputSummary: ' M src/example.ts\n',
+        startedAt: timestamp,
+        completedAt: timestamp,
+        order: 4,
+      },
+    ],
+    changes: [
+      {
+        turnId,
+        itemId: 'item_change01',
+        path: 'src/example.ts',
+        kind: 'modified',
+        diff: '@@ -1 +1 @@\n-old\n+new',
+        timestamp,
+        order: 7,
+      },
+    ],
+    terminal: {
+      turnId,
+      itemId: 'item_tool01',
+      command: 'git status --short',
+      text: ' M src/example.ts\n',
+      stream: 'combined',
+      truncated: false,
+      updatedAt: timestamp,
+    },
+  })
+
+  let live = projectSnapshot(snapshotWithRuntime())
+  live = apply(
+    live,
+    envelope(
+      1,
+      'turn.started',
+      {
+        turn: {
+          turnId,
+          conversationId,
+          status: 'running',
+          input,
+          startedAt: timestamp,
+        },
+      },
+      { itemId: undefined },
+    ),
+  )
+  live = apply(live, envelope(2, 'message.delta', { delta: 'Repository ' }))
+  live = apply(
+    live,
+    envelope(3, 'message.completed', { message: 'Repository is clean' }),
+  )
+  live = apply(
+    live,
+    envelope(
+      4,
+      'tool.started',
+      {
+        name: 'command',
+        command: 'git status --short',
+        summary: 'C:\\workspace\\agenthub',
+      },
+      { itemId: 'item_tool01' },
+    ),
+  )
+  live = apply(
+    live,
+    envelope(
+      5,
+      'tool.output',
+      { output: ' M src/example.ts\n', stream: 'combined' },
+      { itemId: 'item_tool01' },
+    ),
+  )
+  live = apply(
+    live,
+    envelope(
+      6,
+      'tool.completed',
+      {
+        name: 'command',
+        command: 'git status --short',
+        success: true,
+        summary: ' M src/example.ts\n',
+      },
+      { itemId: 'item_tool01' },
+    ),
+  )
+  live = apply(
+    live,
+    envelope(
+      7,
+      'file.changed',
+      {
+        path: 'src/example.ts',
+        kind: 'modified',
+        diff: '@@ -1 +1 @@\n-old\n+new',
+      },
+      { itemId: 'item_change01' },
+    ),
+  )
+  live = apply(
+    live,
+    envelope(
+      8,
+      'turn.completed',
+      { finalMessage: 'Repository is clean' },
+      { itemId: undefined },
+    ),
+  )
+
+  assert.deepEqual(
+    live.conversations[conversationId],
+    projectSnapshot(finalSnapshot).conversations[conversationId],
+  )
+  assert.deepEqual(
+    live.conversations[conversationId].messages.map((message) => [
+      message.author,
+      message.body,
+    ]),
+    [
+      ['user', 'Inspect the repository'],
+      ['agent', 'Repository is clean'],
+    ],
+  )
+})
+
+test('starting a second Turn preserves the first Turn and its ordered Items', () => {
+  const secondTurnId = 'turn_demo02'
+  let projection = projectSnapshot(snapshotWithRuntime())
+  projection = apply(
+    projection,
+    envelope(
+      1,
+      'turn.started',
+      { turn: runningTurn(turnId, 'First prompt') },
+      { itemId: undefined },
+    ),
+  )
+  projection = apply(
+    projection,
+    envelope(2, 'message.completed', { message: 'First answer' }),
+  )
+  projection = apply(
+    projection,
+    envelope(
+      3,
+      'turn.completed',
+      { finalMessage: 'First answer' },
+      { itemId: undefined },
+    ),
+  )
+  projection = apply(
+    projection,
+    envelope(
+      4,
+      'turn.started',
+      { turn: runningTurn(secondTurnId, 'Second prompt') },
+      { turnId: secondTurnId, itemId: undefined },
+    ),
+  )
+  projection = apply(
+    projection,
+    envelope(
+      5,
+      'tool.started',
+      { name: 'pnpm test' },
+      { turnId: secondTurnId, itemId: 'item_tool02' },
+    ),
+  )
+  projection = apply(
+    projection,
+    envelope(
+      6,
+      'tool.completed',
+      { name: 'pnpm test', success: true, summary: 'passed' },
+      { turnId: secondTurnId, itemId: 'item_tool02' },
+    ),
+  )
+
+  const conversation = projection.conversations[conversationId]
+  assert.deepEqual(
+    conversation.turns.map((turn) => turn.id),
+    [turnId, secondTurnId],
+  )
+  assert.deepEqual(
+    conversation.messages.map((message) => [
+      message.turnId,
+      message.author,
+      message.body,
+    ]),
+    [
+      [turnId, 'user', 'First prompt'],
+      [turnId, 'agent', 'First answer'],
+      [secondTurnId, 'user', 'Second prompt'],
+    ],
+  )
+  assert.equal(conversation.tools[0].turnId, secondTurnId)
+  assert.equal(conversation.currentTurn.id, secondTurnId)
 })
 
 test('merges deltas by Turn and Item and completion replaces without duplicating', () => {
@@ -299,6 +627,25 @@ test('parses unified file diffs, ignores headers, and upserts one shared change'
   assert.equal(change.additions, 9)
   assert.equal(change.deletions, 8)
   assert.equal(change.order, 1)
+
+  projection = apply(
+    projection,
+    envelope(3, 'file.changed', {
+      path: 'src/second.ts',
+      kind: 'modified',
+      diff: '@@ -1 +1 @@\n-before\n+after',
+    }),
+  )
+  assert.deepEqual(
+    projection.conversations[conversationId].changes.map((entry) => [
+      entry.path,
+      entry.order,
+    ]),
+    [
+      ['src/example.ts', 1],
+      ['src/second.ts', 3],
+    ],
+  )
 })
 
 test('tracks multiple pending approvals and returns to running after the last resolution', () => {
@@ -380,6 +727,54 @@ test('turn completion de-duplicates finalMessage and settles running items', () 
   assert.equal(conversation.tools[0].status, 'completed')
 })
 
+test('a terminal final message produces the same single Agent Item live and from Snapshot', () => {
+  let live = projectSnapshot(snapshot())
+  live = apply(live, envelope(1, 'message.delta', { delta: 'partial' }))
+  live = apply(
+    live,
+    envelope(
+      2,
+      'turn.completed',
+      { finalMessage: 'authoritative final' },
+      { itemId: undefined },
+    ),
+  )
+
+  const restored = projectSnapshot(
+    snapshotWithRuntime({
+      currentSeq: 2,
+      status: 'completed',
+      turns: [
+        {
+          ...runningTurn(turnId, 'Summarize safely'),
+          status: 'completed',
+          completedAt: timestamp,
+          finalMessage: 'authoritative final',
+        },
+      ],
+      messages: [
+        {
+          turnId,
+          itemId,
+          text: 'authoritative final',
+          status: 'completed',
+          timestamp,
+          order: 1,
+        },
+      ],
+    }),
+  )
+
+  assert.deepEqual(
+    live.conversations[conversationId].messages.filter(
+      (message) => message.author === 'agent',
+    ),
+    restored.conversations[conversationId].messages.filter(
+      (message) => message.author === 'agent',
+    ),
+  )
+})
+
 test('turn failure and interruption map to canonical terminal presentations', () => {
   let failed = projectSnapshot(snapshot())
   failed = apply(
@@ -414,8 +809,23 @@ test('turn failure and interruption map to canonical terminal presentations', ()
   const conversation = interrupted.conversations[conversationId]
   assert.equal(conversation.status, 'idle')
   assert.equal(conversation.currentTurn.status, 'interrupted')
-  assert.equal(conversation.currentTurn.interruptionReason, 'Stopped by user')
   assert.equal(conversation.tools[0].status, 'idle')
+
+  const restored = projectSnapshot(
+    snapshotWithRuntime({
+      currentSeq: 2,
+      status: 'idle',
+      turns: [
+        {
+          ...runningTurn(turnId, 'Run safely'),
+          status: 'interrupted',
+          completedAt: timestamp,
+        },
+      ],
+    }),
+  ).conversations[conversationId]
+  assert.equal(restored.status, conversation.status)
+  assert.equal(restored.currentTurn.status, conversation.currentTurn.status)
 })
 
 test('returns explicit reset results for stream reset and strict ordering failures', () => {

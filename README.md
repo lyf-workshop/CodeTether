@@ -4,7 +4,7 @@
 
 CodeTether is a planned desktop and mobile workspace for supervising and controlling coding agents across projects and machines. V1 is Codex-first, with provider-neutral boundaries for later Claude Code and OpenCode support.
 
-Phase 1 is accepted and frozen as **CodeTether V2 Frontend Core v1**, the accepted local runtime is frozen as **Phase 2A Codex Runtime v1**, and Phase 2B is accepted as the development-only Protocol v1 loopback HTTP/SSE boundary. Phase 2C.1 connects only a read-only real `conv_*` Conversation Detail route to that boundary. Demo, Inbox, and Conversations remain Mock data; there is still no persistence, Tauri shell, authentication, remote access, React write path, or non-Codex provider.
+Phase 1 is accepted and frozen as **CodeTether V2 Frontend Core v1**, the accepted local runtime is frozen as **Phase 2A Codex Runtime v1**, and Phase 2B is accepted as the development-only Protocol v1 loopback HTTP/SSE boundary. The complete read path is frozen as **Live Conversation Read Model v1**. Phase 2C.2 connects the existing live Conversation Composer, one-shot Approval actions, and Interrupt control to that boundary while the Host remains canonical state owner. Demo, Inbox, and Conversations remain Mock data; there is still no persistence, Tauri shell, authentication, remote access, or non-Codex provider.
 
 ## Repository layout
 
@@ -57,13 +57,14 @@ pnpm format:check  # Verify formatting
 pnpm codex:spike   # Run the manual real-Codex integration spike
 pnpm host:serve -- --workspace <absolute-path>  # Start the local-only Host API
 pnpm host:integration                          # Run real HTTP/SSE integration
+pnpm host:control                              # Run the isolated browser-control harness
 pnpm host:observe -- create --cwd <absolute-path>  # Create a live dev Conversation
 pnpm host:observe -- turn --conversation <conv_id> --input <text>  # Start a dev Turn
 ```
 
 `pnpm codex:spike` uses only the ignored `.tmp/codetether-codex-spike/` workspace. It must never target the CodeTether source repository.
 
-For a Phase 2C.1 read-path check, start `host:serve` with an explicitly allowed ignored workspace, start `pnpm dev`, create a Conversation with `host:observe`, open the returned `/conversations/conv_*` route, and only then start its Turn. The current Snapshot has no Item history, so opening the browser after the Turn streams cannot reconstruct earlier messages, Tools, terminal output, or diffs. The Composer and all other controls on a live route are intentionally read-only.
+For an end-to-end local browser-control check, run `pnpm host:control` and `pnpm dev`, then open one of the printed `/conversations/conv_*` routes. The general isolated Conversation supports text Turns and interruption; the linked Git fixture supports safe command-Approval checks. The Host records canonical User input and publishes final mutation state through Protocol events, so refresh and `stream.reset` reconstruct the same retained Timeline. History remains process-local and bounded; a Host restart still clears it.
 
 ## Documentation
 
@@ -74,4 +75,4 @@ For a Phase 2C.1 read-path check, start `host:serve` with an explicitly allowed 
 
 ## Status
 
-Phase 2C.1 read-path implementation and manual real-Codex browser observation are complete and awaiting review. Do not connect React write actions, add live data to Inbox or Conversations, add persistence or remote exposure, begin Phase 2C.2, or redesign the frozen frontend. See the roadmap for ordered gates.
+Phase 2C.2 live Conversation control is implemented and validated, and is awaiting review. Do not add live data to Inbox or Conversations, add persistence or remote exposure, begin Phase 3, or redesign the frozen frontend. See the roadmap for ordered gates.

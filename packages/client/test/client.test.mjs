@@ -275,6 +275,54 @@ test('rejects mutation responses and errors with another actionId', async () => 
   )
 })
 
+test('preserves mutation errors that predate actionId validation', async () => {
+  const responses = [
+    {
+      status: 413,
+      body: {
+        protocolVersion: 1,
+        code: 'invalid_request',
+        message: 'Request body exceeds the configured limit',
+      },
+    },
+    {
+      status: 422,
+      body: {
+        protocolVersion: 1,
+        code: 'invalid_request',
+        message: 'Request body does not match Protocol v1',
+      },
+    },
+  ]
+  const client = new CodeTetherClient({
+    baseUrl: 'http://host.test',
+    fetch: async () => {
+      const response = responses.shift()
+      assert.ok(response)
+      return jsonResponse(response.body, { status: response.status })
+    },
+  })
+
+  for (const [actionId, expectedStatus] of [
+    ['act_limit001', 413],
+    ['act_schema01', 422],
+  ]) {
+    await assert.rejects(
+      client.startTurn(conversationId, {
+        actionId,
+        input: { type: 'text', text: 'Inspect.' },
+      }),
+      (error) => {
+        assert.ok(error instanceof CodeTetherResponseError)
+        assert.equal(error.status, expectedStatus)
+        assert.equal(error.envelope.code, 'invalid_request')
+        assert.equal(error.envelope.actionId, undefined)
+        return true
+      },
+    )
+  }
+})
+
 test('rejects mutation records that do not match route identity', async () => {
   const responses = [
     {

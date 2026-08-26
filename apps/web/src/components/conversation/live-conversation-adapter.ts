@@ -1,8 +1,10 @@
 import type { ExecutionStatus } from '@codetether/ui'
+import type { HostCapabilities } from '@codetether/protocol'
 
 import type {
   ConversationProjection,
   ConversationReadModel,
+  ConversationTurnReadModel,
   FileChangeReadModel,
   MessageReadModel,
   PendingApprovalReadModel,
@@ -17,6 +19,8 @@ import type {
   ConversationTimelineBlockViewModel,
   ConversationViewModel,
 } from './conversation-view-model.js'
+import { createToolPresentation } from './tool-presentation.js'
+import { deriveLiveControlAvailability } from './conversation-controls.js'
 
 type OrderedActivity =
   | {
@@ -40,20 +44,18 @@ type OrderedActivity =
       readonly approval: PendingApprovalReadModel
     }
 
-const readOnlyCapabilities = {
-  canCompose: false,
-  canInterrupt: false,
-  canStop: false,
-  canResolveApproval: false,
-} as const
-
 export function createLiveConversationDetailSource(
   model: ConversationReadModel,
   projection: ConversationProjection,
   connectionState: HostConnectionState,
+  hostCapabilities?: HostCapabilities,
 ): ConversationDetailSourceViewModel {
   return {
-    conversation: createLiveConversationViewModel(model),
+    conversation: createLiveConversationViewModel(
+      model,
+      hostCapabilities,
+      connectionState,
+    ),
     rail: {
       groups: [
         {
@@ -79,8 +81,12 @@ export function createLiveConversationDetailSource(
 
 export function createLiveConversationViewModel(
   model: ConversationReadModel,
+  hostCapabilities?: HostCapabilities,
+  connectionState: HostConnectionState = 'unavailable',
 ): ConversationViewModel {
-  const files = model.changes.map(projectFileChange)
+  const files = model.changes.map((change) =>
+    projectFileChange(change, model.cwd),
+  )
   const totals = files.reduce(
     (summary, file) => ({
       additions: summary.additions + file.additions,
@@ -88,7 +94,14 @@ export function createLiveConversationViewModel(
     }),
     { additions: 0, deletions: 0 },
   )
-  const pendingApproval = model.pendingApprovals[0]
+  const pendingApprovals = model.pendingApprovals.map((approval) => ({
+    id: approval.id,
+    kind: approval.kind,
+    title: approvalTitle(approval.kind),
+    summary: approval.summary,
+    requestedAt: formatActivityTime(approval.requestedAt),
+    context: model.cwd,
+  }))
 
   return {
     id: model.id,
@@ -97,7 +110,7 @@ export function createLiveConversationViewModel(
     agent: model.agent,
     model: model.model ?? '默认模型',
     reasoning: model.reasoning ?? '默认',
-    permission: pendingApproval === undefined ? '由 Host 管理' : '等待审批',
+    permission: pendingApprovals.length === 0 ? '由 Host 管理' : '等待审批',
     machine: '本地电脑',
     branch: '未提供',
     duration: formatDuration(
@@ -105,7 +118,11 @@ export function createLiveConversationViewModel(
       model.currentTurn?.completedAt ?? model.updatedAt,
     ),
     timeline: {
-      dayLabel: formatDayLabel(model.currentTurn?.startedAt ?? model.updatedAt),
+      dayLabel: formatDayLabel(
+        model.turns[0]?.startedAt ??
+          model.currentTurn?.startedAt ??
+          model.updatedAt,
+      ),
       blocks: projectTimeline(model),
     },
     changes: { files, totals },
@@ -124,62 +141,78 @@ export function createLiveConversationViewModel(
       label: file.path,
       kind: 'file' as const,
     })),
-    ...(pendingApproval === undefined
-      ? {}
-      : {
-          pendingApproval: {
-            id: pendingApproval.id,
-            kind: pendingApproval.kind,
-            title: approvalTitle(pendingApproval.kind),
-            summary: pendingApproval.summary,
-            requestedAt: formatActivityTime(pendingApproval.requestedAt),
-          },
-        }),
-    capabilities: readOnlyCapabilities,
+    pendingApprovals,
+    capabilities: deriveLiveControlAvailability(
+      connectionState,
+      hostCapabilities,
+      model.currentTurn?.status,
+    ),
   }
 }
 
 function projectTimeline(
   model: ConversationReadModel,
 ): readonly ConversationTimelineBlockViewModel[] {
+  return [...model.turns]
+    .sort((left, right) => left.order - right.order)
+    .flatMap((turn) => projectTurnTimeline(model, turn))
+}
+
+function projectTurnTimeline(
+  model: ConversationReadModel,
+  turn: ConversationTurnReadModel,
+): readonly ConversationTimelineBlockViewModel[] {
   const activities: OrderedActivity[] = [
-    ...model.messages.map((message) => ({
-      kind: 'message' as const,
-      order: message.order,
-      message,
-    })),
-    ...model.tools.map((tool) => ({
-      kind: 'tool' as const,
-      order: tool.order,
-      tool,
-    })),
-    ...model.changes.map((change) => ({
-      kind: 'change' as const,
-      order: change.order,
-      change,
-    })),
-    ...model.pendingApprovals.map((approval, index) => ({
-      kind: 'approval' as const,
-      order: Number.MAX_SAFE_INTEGER - model.pendingApprovals.length + index,
-      approval,
-    })),
+    ...model.messages
+      .filter((message) => message.turnId === turn.id)
+      .map((message) => ({
+        kind: 'message' as const,
+        order: message.order,
+        message,
+      })),
+    ...model.tools
+      .filter((tool) => tool.turnId === turn.id)
+      .map((tool) => ({
+        kind: 'tool' as const,
+        order: tool.order,
+        tool,
+      })),
+    ...model.changes
+      .filter((change) => change.turnId === turn.id)
+      .map((change) => ({
+        kind: 'change' as const,
+        order: change.order,
+        change,
+      })),
+    ...model.pendingApprovals
+      .filter((approval) => approval.turnId === turn.id)
+      .map((approval, index, approvals) => ({
+        kind: 'approval' as const,
+        order: Number.MAX_SAFE_INTEGER - approvals.length + index,
+        approval,
+      })),
   ].sort((left, right) => left.order - right.order)
 
   const blocks: ConversationTimelineBlockViewModel[] = []
   let executions: ConversationRunExecutionViewModel[] = []
+  let executionTime: string | undefined
   let executionBlockOrder = 0
+  const pendingApprovals = model.pendingApprovals.filter(
+    (approval) => approval.turnId === turn.id,
+  )
 
   const flushExecutions = (): void => {
     if (executions.length === 0) return
     blocks.push({
       kind: 'agent-run',
-      id: `agent-run:${model.currentTurn?.id ?? model.id}:${executionBlockOrder}`,
-      time: formatActivityTime(model.updatedAt),
-      status: runStatus(model),
+      id: `agent-run:${turn.id}:${executionBlockOrder}`,
+      time: formatActivityTime(executionTime ?? turn.startedAt),
+      status: runStatus(turn, pendingApprovals.length > 0),
       executions,
     })
     executionBlockOrder += 1
     executions = []
+    executionTime = undefined
   }
 
   for (const activity of activities) {
@@ -190,7 +223,7 @@ function projectTimeline(
         id: activity.message.id,
         message: {
           id: activity.message.id,
-          author: 'agent',
+          author: activity.message.author,
           body: activity.message.body,
           time: formatActivityTime(activity.message.timestamp),
           status: activity.message.status,
@@ -199,21 +232,41 @@ function projectTimeline(
       continue
     }
     if (activity.kind === 'tool') {
+      const presentation = createToolPresentation({
+        command: activity.tool.command ?? activity.tool.name,
+        status: activity.tool.status,
+        ...(activity.tool.outputSummary === undefined
+          ? {}
+          : { outputSummary: activity.tool.outputSummary }),
+      })
+      const failureSummary =
+        activity.tool.status === 'failed' ? presentation.subtitle : undefined
+      executionTime ??= activity.tool.timestamp
       executions.push({
         kind: 'tool',
         id: `execution:${activity.tool.id}`,
         tool: {
           id: activity.tool.id,
-          title: activity.tool.name,
-          status: activity.tool.status,
-          ...(activity.tool.outputSummary === undefined
+          title:
+            activity.tool.status === 'failed'
+              ? presentation.title
+              : (presentation.subtitle ?? presentation.title),
+          ...(activity.tool.status === 'failed' ||
+          presentation.subtitle === undefined
             ? {}
-            : { outputSummary: compactSummary(activity.tool.outputSummary) }),
+            : { description: presentation.title }),
+          status: activity.tool.status,
+          ...(failureSummary !== undefined
+            ? { outputSummary: failureSummary }
+            : activity.tool.outputSummary === undefined
+              ? {}
+              : { outputSummary: compactSummary(activity.tool.outputSummary) }),
         },
       })
       continue
     }
     if (activity.kind === 'change') {
+      executionTime ??= activity.change.timestamp
       executions.push({
         kind: 'diff',
         id: `execution:${activity.change.id}`,
@@ -221,6 +274,7 @@ function projectTimeline(
       })
       continue
     }
+    executionTime ??= activity.approval.requestedAt
     executions.push({
       kind: 'approval',
       id: `execution:${activity.approval.id}`,
@@ -229,21 +283,25 @@ function projectTimeline(
   }
   flushExecutions()
 
-  if (blocks.length === 0 && model.currentTurn?.status === 'running') {
+  const hasAgentActivity = activities.some(
+    (activity) =>
+      activity.kind !== 'message' || activity.message.author === 'agent',
+  )
+  if (!hasAgentActivity && turn.status === 'running') {
     blocks.push({
       kind: 'agent-run',
-      id: `agent-run:${model.currentTurn.id}:waiting-for-events`,
-      time: formatActivityTime(model.currentTurn.startedAt),
-      status: model.status === 'waiting' ? 'waiting' : 'running',
+      id: `agent-run:${turn.id}:waiting-for-events`,
+      time: formatActivityTime(turn.startedAt),
+      status: pendingApprovals.length > 0 ? 'waiting' : 'running',
       executions: [],
       outcomeText:
-        model.status === 'waiting'
+        pendingApprovals.length > 0
           ? 'Codex 正在等待审批。'
           : 'Codex 正在运行，实时活动将在这里显示。',
     })
   }
 
-  const terminalOutcome = turnOutcome(model)
+  const terminalOutcome = turnOutcome(turn)
   if (terminalOutcome !== undefined) {
     const last = blocks.at(-1)
     if (last?.kind === 'agent-run') {
@@ -251,9 +309,9 @@ function projectTimeline(
     } else {
       blocks.push({
         kind: 'agent-run',
-        id: `agent-run:${model.currentTurn?.id ?? model.id}:outcome`,
-        time: formatActivityTime(model.updatedAt),
-        status: runStatus(model),
+        id: `agent-run:${turn.id}:outcome`,
+        time: formatActivityTime(turn.completedAt ?? turn.startedAt),
+        status: runStatus(turn, pendingApprovals.length > 0),
         executions: [],
         ...terminalOutcome,
       })
@@ -265,11 +323,13 @@ function projectTimeline(
 
 function projectFileChange(
   change: FileChangeReadModel,
+  cwd: string,
 ): ConversationFileChangeViewModel {
+  const path = workspaceRelativePath(change.path, cwd)
   return {
     id: change.id,
-    path: change.path,
-    name: fileName(change.path),
+    path,
+    name: fileName(path),
     kind: change.kind,
     additions: change.additions,
     deletions: change.deletions,
@@ -277,32 +337,50 @@ function projectFileChange(
   }
 }
 
-function runStatus(model: ConversationReadModel): ExecutionStatus {
-  if (model.status === 'waiting') return 'waiting'
-  if (model.currentTurn?.status === 'interrupted') return 'idle'
-  return model.status
+function workspaceRelativePath(path: string, cwd: string): string {
+  const normalizedPath = path.replace(/\\/gu, '/').replace(/^\.\//u, '')
+  const normalizedCwd = cwd.replace(/\\/gu, '/').replace(/\/+$/u, '')
+  const caseInsensitive = /^[A-Za-z]:\//u.test(normalizedPath)
+  const comparablePath = caseInsensitive
+    ? normalizedPath.toLowerCase()
+    : normalizedPath
+  const comparableCwd = caseInsensitive
+    ? normalizedCwd.toLowerCase()
+    : normalizedCwd
+  const prefix = `${comparableCwd}/`
+
+  return comparablePath.startsWith(prefix)
+    ? normalizedPath.slice(normalizedCwd.length + 1)
+    : normalizedPath
 }
 
-function turnOutcome(model: ConversationReadModel):
+function runStatus(
+  turn: ConversationTurnReadModel,
+  hasPendingApproval: boolean,
+): ExecutionStatus {
+  if (hasPendingApproval) return 'waiting'
+  if (turn.status === 'interrupted') return 'idle'
+  return turn.status
+}
+
+function turnOutcome(turn: ConversationTurnReadModel):
   | {
       readonly outcome: 'failed' | 'interrupted'
       readonly outcomeText: string
     }
   | undefined {
-  if (model.currentTurn?.status === 'failed') {
+  if (turn.status === 'failed') {
     return {
       outcome: 'failed',
-      outcomeText: model.currentTurn.errorMessage
-        ? `本轮失败：${model.currentTurn.errorMessage}`
+      outcomeText: turn.errorMessage
+        ? `本轮失败：${turn.errorMessage}`
         : '本轮执行失败。',
     }
   }
-  if (model.currentTurn?.status === 'interrupted') {
+  if (turn.status === 'interrupted') {
     return {
       outcome: 'interrupted',
-      outcomeText: model.currentTurn.interruptionReason
-        ? `本轮已中断：${model.currentTurn.interruptionReason}`
-        : '本轮已中断。',
+      outcomeText: '本轮已中断。',
     }
   }
   return undefined

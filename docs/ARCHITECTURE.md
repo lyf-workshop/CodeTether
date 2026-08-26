@@ -4,7 +4,7 @@
 
 Phase 1 Frontend Experience is accepted and frozen as **CodeTether V2 Frontend Core v1**. Phase 2A and Phase 2A.1 are accepted and frozen as **Phase 2A Codex Runtime v1**. Phase 2B is accepted as the versioned local Client-to-Host boundary: HTTP commands, an SSE event stream, CodeTether-owned public identities, in-memory snapshot/replay, and a non-React client.
 
-Phase 2C.1 connects only the frozen Conversation Detail read path to Protocol v1. One application-scoped Web runtime loads bootstrap and snapshot data through TanStack Query, follows the Host SSE stream, and applies normalized events to a typed Conversation projection. Demo, Inbox, and Conversations data remain Mock-only, and no React write command is connected.
+Phase 2C.1 is accepted, and Phase 2C.1.1 is frozen as **Live Conversation Read Model v1**: one application-scoped Web runtime connects the frozen Conversation Detail to Protocol v1, while bounded Host-owned history reconstructs the same retained multi-Turn view after initial load, refresh, reconnect reset, or live event application. Phase 2C.2 connects only the existing text Composer, one-shot Approval actions, and Interrupt control. Demo, Inbox, and Conversations remain Mock-only.
 
 No Tauri shell, database, persistence, remote access, authentication, or production machine-host service exists yet. The Phase 2B server is a development-only loopback API.
 
@@ -39,7 +39,7 @@ The future Machine Host will be the runtime authority. Clients must render norma
 ## Monorepo Boundaries
 
 ```text
-apps/web                   Frozen React UI plus Phase 2C.1 live Conversation read boundary
+apps/web                   Frozen React UI plus live Conversation read/control boundary
 apps/desktop               Future Tauri 2 desktop shell placeholder
 apps/host                  Codex runtime harnesses and Phase 2B local Host API
 
@@ -254,7 +254,7 @@ Create Conversation currently accepts only Codex, text-only Turns, optional mode
 
 Every Host process generates one non-persistent UUID `epoch`. A Host-global positive `seq` is assigned only after a regular event fits the reliable replay buffer. The SSE ID and envelope `eventId` are exactly `<epoch>:<seq>`, and the SSE `event` field equals the protocol event type. An empty snapshot's synthetic reconnect cursor is `<epoch>:0`; it closes the snapshot-to-stream race without claiming that sequence zero was emitted.
 
-The replay buffer holds aggregated client events, not raw Codex deltas. It is bounded to 2,048 events and approximately 8 MiB by default, evicting oldest events by count or encoded size. `Last-Event-ID` reconnect replays the subsequent retained sequence. An epoch mismatch, evicted cursor, or future cursor produces a connection-local `stream.reset` control carrying the current `<epoch>:<currentSeq>` boundary; it is sent first and the recovery stream closes. It does not allocate a global sequence, enter replay, or fan out to other observers. The client must fetch a fresh snapshot. Heartbeats are SSE comments and do not consume sequence numbers.
+The replay buffer holds aggregated client events, not raw Codex deltas. It is bounded to 2,048 events and approximately 8 MiB by default, evicting oldest events by count or encoded size. `Last-Event-ID` reconnect replays the subsequent retained sequence. An epoch mismatch, evicted cursor, or future cursor produces a connection-local `stream.reset` control carrying the current `<epoch>:<currentSeq>` boundary; it is sent first and the recovery stream closes without allocating a sequence or entering replay. Runtime-history compaction is a different reset cause: after applying the triggering event, the Host publishes a sequenced and replayable `stream.reset` with reason `history_evicted`. That boundary reaches current observers and reconnecting observers alike, forcing all projections to replace from the newly compacted Snapshot. Heartbeats are SSE comments and do not consume sequence numbers.
 
 Two live clients received identical event IDs and sequence values in tests and in the real integration path. Disconnecting one observer does not affect another. Replay is written directly with HTTP backpressure rather than being copied into the live queue. Each live connection defaults to 256 queued frames and approximately 1 MiB, while one standalone valid frame may be as large as 9 MiB. Heartbeats may coalesce or drop; reliable overflow closes only the slow connection so it can reconnect or fetch a snapshot. Approval and terminal events are never silently discarded. The non-React client independently caps an SSE frame at 10 MiB and an HTTP JSON body at 16 MiB.
 
@@ -288,21 +288,41 @@ Every regular event is checked against the current projection epoch and sequence
 
 The pure projection consumes `conversation.started`, Turn lifecycle, aggregated message, Tool, file-change, and Approval events. Message deltas are merged by Conversation, Turn, and Item identity; `message.completed` finalizes the same record instead of creating a duplicate. Tool output is attached to the corresponding Tool and, for command execution, to one bounded terminal tail. Terminal text is capped at 128 KiB per Conversation projection so a long process cannot create an unbounded browser history. File changes have one source in the projection and feed both Timeline and Inspector view data.
 
-The route boundary is explicit: `/conversations/demo` continues to use the accepted Mock adapter, while a valid `/conversations/conv_*` identity selects the Host projection. Both data sources become the same `ConversationViewModel` before entering the frozen component tree; the JSX does not parse Host or provider payloads. Live Composer, approval, pause/interrupt, stop, and change actions are read-only or disabled. A pending Approval is visible as a waiting state but cannot be resolved from React in this phase.
+The route boundary is explicit: `/conversations/demo` continues to use the accepted Mock adapter, while a valid `/conversations/conv_*` identity selects the Host projection. Both data sources become the same `ConversationViewModel` before entering the frozen component tree; the JSX does not parse Host or provider payloads. Phase 2C.2 supplies an optional typed control controller only at this route boundary, so the same Composer, Header, and Timeline components keep their accepted Mock presentation without branching on provider payloads.
 
-The Snapshot is a reconnect boundary, not Conversation history. Protocol v1 currently snapshots only Conversation summaries, active Turns, and pending Approvals. It does not include prior Agent messages, message deltas, Tools, terminal output, file-change/diff Items, completed Turn history, or the user's Turn input. Consequently, a browser that opens after a Turn has streamed cannot reconstruct that timeline, and a Snapshot replacement discards live Item detail that is absent from the Snapshot. A real observer must currently open the live route before an external development helper starts the Turn. Addressing historical reconstruction requires a later Host contract and persistence decision, not client-side fabrication.
+Phase 2C.1.1 extends Protocol v1 additively with optional per-Conversation runtime snapshots. A current Host always supplies retained Turns, canonical text inputs, Agent messages, Tools, file changes, Turn outcomes, pending Approvals through the existing top-level records, the latest terminal tail, and explicit eviction/truncation metadata. The Web read model preserves that retention metadata even though the frozen v1 Conversation UI does not add a truncation banner. Older Phase 2B Snapshots without this optional field remain valid Protocol v1 records.
 
-The 2026-08-26 manual browser run used the isolated `.tmp/codetether-live-read/` workspace and the local default `gpt-5.6-sol` model. With the live route open before Turn start, the frozen page rendered three Agent messages, four command executions, one `src/example.ts` Diff, terminal summaries, and the completed state. The requested one-line comment was the only workspace modification. A separate explicit-model attempt exercised the real `turn.failed` presentation; the public Host error intentionally did not expose the provider cause. Stopping the Host retained the completed projection and surfaced reconnecting state; the normal connected run and a clean Demo check produced zero browser console errors and warnings.
+Live `turn.started` and Snapshot Turn records carry the same Host-owned canonical input. The projection groups all presentation Items by public Turn/Item identity, so applying live events and rebuilding from Snapshot produce the same retained multi-Turn view. `stream.reset` atomically replaces from this complete process-local Snapshot rather than discarding the Timeline. Timeline Diff and Inspector Changes continue to consume one shared projected Changes collection.
+
+This is bounded runtime state, not an event store. The Host defaults to 20 retained Turns, 512 combined message/Tool/change entries, a 128 KiB terminal tail, a 512 KiB presentation-text ceiling, and an approximately 4 MiB encoded runtime budget per Conversation. Old completed Turns are evicted first; the active Turn and its canonical input are retained, and every eviction or truncation is explicit in Snapshot metadata and emits the replayable Snapshot boundary described above. Text input above the 512 KiB Host ceiling is rejected before Provider execution rather than silently truncated. Protocol wire safety ceilings remain higher than Host retention limits.
+
+Tool presentation is a deterministic client-side mapping over normalized Host Tool records. It lexically unwraps safe PowerShell `-Command` wrappers and recognizes a deliberately small set such as Git status, file reads, and test commands. Unknown commands remain “执行命令”; raw commands stay available in the bounded terminal/details state and never become the Timeline row title. Provider output is reduced to stable short failure summaries without losing the bounded full output tail.
+
+The final 2026-08-26 completeness run used the isolated `.tmp/codetether-read-completeness/` workspace and local default `gpt-5.6-sol` model. One long-running Host completed two Turns on the same Conversation. Its final Snapshot retained both canonical User inputs, five Agent messages, five command Tools, two `src/example.ts` changes, the latest terminal tail, and completed status. The second Turn used context from the first and replaced only the requested fixture comment. The browser observed the live Turn, then preserved the full Timeline after a sequenced `stream.reset` caused a fresh Snapshot request, and preserved it again after a page refresh. Timeline Tool titles remained stable labels such as `执行命令` and `读取文件`; full PowerShell commands appeared only in terminal/details presentation. The run produced zero browser console errors and warnings.
+
+The same manual path initially exposed an oversized Tool-name defect when a complete PowerShell invocation exceeded the Protocol title ceiling. Provider translation now emits the stable name `command`, carries raw command text in a separate field capped at 32 KiB, and bounds short started/completed summaries. A regression test covers commands above 40 KiB and verifies that failure tails remain available without crashing translation.
 
 The real browser check also exposed a Phase 2B client defect that Node-only tests had not caught: storing `Window.fetch` and invoking it as a client member loses the required browser receiver. `packages/client` now binds the configured Fetch implementation to `globalThis`, with a regression test for the receiver contract.
 
+## Phase 2C.2 Live Conversation Control
+
+The application-scoped `HostRuntime` owns one `LiveConversationActions` mutation boundary over `packages/client`. React controllers call only text Turn start, exact-Turn interrupt, and exact-Approval resolution. Every new logical action receives a cryptographically random `act_<uuid>` identity. A duplicate in-flight intent shares one Promise, while an ambiguous transport failure retains its action identity for a safe idempotent retry; a definitive HTTP result releases it. Provider errors remain behind the safe Protocol error envelope.
+
+Host events remain canonical. Composer submission does not append a User message locally: the Host records input, publishes `turn.started`, and the projection creates the User Timeline entry. HTTP acceptance may clear the matching draft, but it does not settle the Turn. The Composer disables duplicate submission and new input while a Turn is active, preserves a draft after failure or concurrent editing, treats Enter as send and Shift+Enter as newline, and ignores Enter during IME composition. Connection and Bootstrap capability state gate every live control. Unsupported quick actions, model/reasoning/permission changes, and Stop remain disabled rather than simulating success.
+
+Pending Approvals stay as an ordered plural projection. Each visible row uses its own public `approvalId`, independent mutation state, one-shot Allow Once or Decline action, and remains present after HTTP 202 until `approval.resolved` arrives. Interrupt similarly binds the exact public Conversation and active Turn and waits for `turn.interrupted`; it does not terminate the Thread. After that event, the same Conversation accepts another Turn.
+
+Timeline auto-follow is presentation-only state. New activity follows the bottom only while the user remains near it; scrolling upward freezes position and exposes a restrained “跳到最新” action. Tool rows use deterministic semantic titles and bounded wrapper-free subtitles, workspace file changes display paths relative to the authorized `cwd`, and complete command/error output remains in the bounded Terminal projection.
+
+The 2026-08-26 browser validation used only the ignored `.tmp/codetether-codex-semantics-browser-control/` and linked approval workspaces. One real Conversation completed multiple browser-submitted Turns, retained prior context, was interrupted during a bounded 20-second sleep, then completed a following Turn on the same Thread. Separate real command Approvals verified Allow Once and Decline: Allow executed `git status --short` and completed; Decline did not execute it and the Provider still completed the Turn. A longer read-only result caused no horizontal overflow at 1536 x 1024 or 1280 x 900. Synthetic browser composition events plus pure keyboard tests verified that an IME Enter does not submit; a physical Windows IME session remains a human acceptance check.
+
 ## UI
 
-The UI presents projects, conversations, agents, machines, approvals, changes, terminal output, context, and notifications. Figma defines visual and interaction behavior. Phase 2C.1 preserves the accepted visual structure and changes only the Conversation Detail data boundary for valid live Conversation routes.
+The UI presents projects, conversations, agents, machines, approvals, changes, terminal output, context, and notifications. Figma defines visual and interaction behavior. Phase 2C.1 through Phase 2C.2 preserve the accepted visual structure and change only the Conversation Detail data/control boundary for valid live Conversation routes.
 
-The client owns ephemeral presentation state only. TanStack Query now stores Phase 2C.1 bootstrap, Snapshot, and Conversation projection state; Zustand remains limited to UI state. Project, Conversation, Agent, and Machine records must not be duplicated into a client store as a second runtime authority.
+The client owns ephemeral presentation state only. TanStack Query stores bootstrap, Snapshot, and Conversation projection state; Zustand remains limited to UI state. Project, Conversation, Agent, Machine, and retained Timeline records must not be duplicated into a client store as a second runtime authority.
 
-The live Conversation read path consumes Protocol v1 through `packages/client`, never Codex wire messages or `packages/adapter-codex` directly. Inbox and Conversations remain Mock data. Phase 2C.1 deliberately does not send Composer, approval, interrupt, or another write command from React.
+The live Conversation path consumes Protocol v1 through `packages/client`, never Codex wire messages or `packages/adapter-codex` directly. Inbox and Conversations remain Mock data. Phase 2C.2 sends only text Turn start, one-shot Approval resolution, and exact-Turn interrupt commands; no other React write path is connected.
 
 ## Desktop Shell
 
@@ -326,7 +346,7 @@ Provider-specific capabilities may remain Codex-specific when a natural common c
 
 ## Persistence
 
-There is no CodeTether database, durable event store, repository abstraction, or migration in Phase 2A through Phase 2C.1. Public/provider identity maps, snapshots, replay events, action results, and the browser Conversation projection exist only in memory. Codex itself owns its resumable Thread record; CodeTether persistence and application-restart recovery remain deferred.
+There is no CodeTether database, durable event store, repository abstraction, or migration in Phase 2A through Phase 2C.2. Public/provider identity maps, bounded Conversation runtime history, snapshots, replay events, action results, and the browser Conversation projection exist only in memory. Codex itself owns its resumable Thread record; CodeTether persistence and application-restart recovery remain deferred.
 
 ## Event Streaming
 
@@ -342,7 +362,7 @@ The final two-Turn validation observed 171 raw message/tool delta events and del
 
 Phase 2B adds non-durable Host-global ordering, bounded replay, explicit reconnect reset, and isolated multi-client observation at the client boundary. These guarantees apply only within one in-memory Host epoch; durable replay remains deferred.
 
-Phase 2C.1 adds one browser consumer for that stream. It rejects duplicate and out-of-order events before updating the TanStack Query projection. A reset or unrecoverable cursor condition replaces from Snapshot rather than merging across incompatible epochs. Because Snapshot has no Item history, this guarantees a coherent current boundary but not restoration of an already-streamed Timeline.
+Phase 2C.1 adds one browser consumer for that stream. It rejects duplicate and out-of-order events before updating the TanStack Query projection. Phase 2C.1.1 makes the Snapshot replacement complete for all retained runtime history, so a reset or unrecoverable cursor condition reconstructs the same retained Timeline rather than merging across incompatible epochs. The guarantee ends at the explicit in-memory eviction boundary and at Host restart.
 
 ## Conversation Ownership
 
@@ -361,7 +381,7 @@ These controls are development safeguards, not a production security model. Auth
 - Only valid live Conversation Detail routes are connected to the runtime; Demo, Inbox, and Conversations remain Mock data.
 - The Host API is a development-only loopback service, not a durable daemon or remote service.
 - The real integration is Codex-only and was verified against local `codex-cli 0.149.1`.
-- React has a read-only Conversation projection only. Composer, approval resolution, interrupt, stop, and other write paths are not connected.
+- React can start text Turns, resolve one-shot pending Approvals, and interrupt the exact active Turn on a valid live Conversation route. Stop/thread termination, queueing, steering, attachments, configuration changes, and other write paths are not connected.
 - No Tauri shell, database, persistence, authentication, remote access, or production permission policy exists.
 - Command Allow Once and Decline were exercised through real App Server requests; file-change and permissions approvals were not observed.
 - Multi-Turn, multi-Thread, cross-process resume, interruption, and safe Tool failure were manually validated.
@@ -370,9 +390,11 @@ These controls are development safeguards, not a production security model. Auth
 - Action idempotency is bounded to the recent 256 retained actions, not durable exactly-once execution.
 - SSE slow-client recovery currently closes the lagging connection; clients must reconnect or fetch a snapshot after `stream.reset`.
 - The browser cursor and live Conversation projection are memory-only and reset on page refresh.
-- Snapshot does not contain message, Tool, terminal, file/diff Item history, completed Turns, or user Turn input, so it cannot reconstruct an already-streamed Timeline.
+- Snapshot reconstructs only the bounded in-memory history retained by the current Host process; evicted records and all state from a previous Host process are intentionally unavailable.
 - Terminal projection retains only the most recent 128 KiB per Conversation.
+- Runtime-history limits are per Conversation. The Host does not yet have a process-wide Conversation-count or aggregate Snapshot-memory admission limit. Provider Item bindings for an active Turn remain stable until that Turn becomes terminal, then unretained bindings are swept; the active binding map has no separate hard item-count limit yet.
 - An idle runtime failure changes bootstrap capabilities but has no proactive Protocol v1 capability-change event.
 - User approval hooks can pre-resolve escalation; the validation runner disables hooks only in disposable semantics scenarios.
+- Protocol v1 Approval presentation does not yet expose a trusted structured risk or provider reason field, so the live UI shows kind, semantic command/action, workspace context, and identity without fabricating risk.
 - Generated protocol artifacts and real-agent workspace files remain ignored under `.tmp/`.
 - Legacy CodeTether code and structure are not architectural inputs.

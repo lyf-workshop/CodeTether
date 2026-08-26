@@ -147,7 +147,7 @@ Exit gate:
 
 ### Phase 2C.1 — Live Conversation Read Model
 
-**Status:** read-path implementation and manual browser observation of a real Codex Turn are complete; awaiting Phase 2C.1 review.
+**Status:** accepted. The read-only live Conversation path is frozen except for explicit read-model completeness defects addressed in Phase 2C.1.1.
 
 Implemented scope:
 
@@ -160,12 +160,10 @@ Implemented scope:
 - Inbox and Conversations continue to use Mock data. Composer, Approval resolution, interrupt, stop, and all other React mutations remain disconnected.
 - A development observation helper can create a Host Conversation and start a Turn in an explicitly allowed ignored workspace; it is not a product creation flow.
 
-Known boundaries:
+Known boundaries at acceptance:
 
-- The in-memory Snapshot contains Conversation summaries, active Turns, and pending Approvals, but no historical message, Tool, terminal, file-change/diff Items, completed Turns, or user Turn input.
-- Refresh or `stream.reset` reconstructs only Snapshot-owned state; it cannot restore already-streamed Timeline details.
-- A live observer must currently open the route before the external development helper starts a Turn to see the complete stream.
-- Pending Approvals are projected as read-only waiting state. Resolution is deferred to Phase 2C.2.
+- The original Phase 2C.1 Snapshot did not carry Timeline history or canonical User input. Phase 2C.1.1 replaces that incomplete process-local boundary with a bounded runtime Snapshot.
+- Pending Approvals remain a read-only waiting state. Resolution is deferred to Phase 2C.2.
 - No persistence, Inbox/Conversations live data, Tauri, remote access, or non-Codex provider is introduced.
 
 Verified live observation:
@@ -182,6 +180,77 @@ Exit gate:
 - `pnpm typecheck`, `pnpm lint`, `pnpm format:check`, `pnpm build`, and `pnpm test` pass.
 - With Host and Web running separately, a real isolated Codex Turn streams message, Tool, file-change, and completion state into the frozen Conversation Detail with zero browser console errors or warnings.
 - The accepted Demo route and other frozen Mock pages remain visually and behaviorally unchanged.
+
+### Phase 2C.1.1 — Conversation Read Model Completeness
+
+**Status:** accepted and frozen as **Live Conversation Read Model v1**.
+
+Implemented scope:
+
+- Protocol v1 is extended additively with optional per-Conversation runtime Snapshots while retaining compatibility with accepted Phase 2B Snapshot records.
+- The Host owns canonical text Turn input and emits the same input through live `turn.started` data and Snapshot Turn records, so every observer sees the same User message.
+- Each Conversation retains bounded process-local Turns, Agent messages, Tool executions, file changes, Turn outcomes, pending Approvals, and the latest terminal tail; raw Codex JSON-RPC is never retained as history.
+- Snapshot-only reconstruction and live event application converge on the same multi-Turn `ConversationViewModel`; refresh and `stream.reset` replace from the complete retained Snapshot.
+- Runtime-history eviction or truncation publishes a sequenced, replayable `stream.reset` boundary so connected and reconnecting observers replace from the same compacted Snapshot.
+- Timeline Diff and Inspector Changes still use one projected Changes collection.
+- Provider command Tools use a stable presentation name plus a separately bounded raw command. Deterministic Tool presentation unwraps safe PowerShell command wrappers, recognizes a small stable command set, summarizes common failures, and keeps raw commands out of Timeline titles.
+
+Memory boundaries:
+
+- The Host retains at most 20 recent Turns and 512 combined message/Tool/change entries per Conversation by default.
+- Terminal output keeps the most recent 128 KiB; individual presentation text is bounded at 512 KiB; the encoded runtime budget is approximately 4 MiB per Conversation.
+- Old completed Turns are evicted before the active Turn. The active Turn and its canonical input are never silently removed, and Snapshot history metadata reports eviction or truncation.
+- Canonical text input above 512 KiB is rejected before Provider execution. Host restart still clears every runtime record because this phase adds no persistence.
+- These limits are per Conversation. Process-wide Conversation admission and an explicit cap for active-Turn provider Item bindings remain later Host lifecycle work; unretained bindings are swept when the Turn becomes terminal.
+
+Exit gate:
+
+- Tests cover Host-owned User input, two observers, multi-Turn reconstruction, live/Snapshot equivalence, refresh/reset replacement, Tool presentation, command failures, bounded eviction, terminal bounds, and pending Approval restoration.
+- `pnpm typecheck`, `pnpm lint`, `pnpm format:check`, `pnpm build`, and `pnpm test` pass.
+- A real isolated two-Turn Codex Conversation survives browser refresh and reconnect/reset reconstruction without losing User messages, Agent messages, Tools, Changes, or final status.
+- The frozen Conversation Detail visual structure and every React write boundary remain unchanged.
+
+Verified result:
+
+- One Host epoch completed two real Turns in the same `conv_*` Conversation and retained two canonical User inputs, five Agent messages, five command Tools, two file changes, the latest terminal tail, and completed status.
+- A sequenced Snapshot boundary caused the browser to fetch Snapshot and reconnect without losing Timeline content. A subsequent full page refresh reconstructed the same two-Turn view.
+- Stable Timeline Tool titles replaced full PowerShell executable strings; raw commands remained available in terminal/details data.
+- The final 1536 x 1024 browser review reported zero console errors and zero warnings.
+
+### Phase 2C.2 — Live Conversation Control
+
+**Status:** implementation, automated validation, and real browser-control validation are complete; awaiting review.
+
+Implemented scope:
+
+- The existing Composer starts real text Turns through Protocol v1. Canonical User messages still come only from Host-owned `turn.started` state; React never appends a competing optimistic message.
+- Every logical mutation receives a random `actionId`. In-flight duplicate intent is shared, ambiguous retries retain the same identity, and definitive results release it.
+- Active Turns disable new submission rather than introducing queue or steer behavior. Enter sends, Shift+Enter inserts a newline, and IME composition does not submit.
+- Every pending Approval remains visible by exact public `approvalId` with independent Allow Once/Decline mutation state until `approval.resolved` is observed.
+- Header Interrupt binds the exact active Conversation and Turn and waits for `turn.interrupted`. Stop remains unavailable because Protocol v1 has no Thread-termination command.
+- Host connection and advertised Bootstrap capabilities gate Composer, Approval, and Interrupt controls. Unsupported quick actions and model/reasoning/permission changes remain read-only.
+- Timeline auto-follow respects manual upward scrolling and offers “跳到最新”; workspace file paths are presented relative to the authorized root, while complete command/error text remains in Terminal/details.
+- Demo, Inbox, and Conversations remain Mock data, and the accepted visual/component structure is unchanged.
+
+Verified result:
+
+- A browser completed multiple real Turns in one Codex Conversation and retained context across follow-up prompts.
+- A safe real command Approval completed after Allow Once. A separate Decline prevented command execution and correctly allowed the Provider Turn to complete rather than forcing a failed UI state.
+- A bounded sleep Turn emitted `turn.interrupted`; the same Thread then accepted and completed another browser-submitted Turn.
+- A longer read-only Turn kept the Composer visible and caused no horizontal overflow at 1536 x 1024 or 1280 x 900.
+- Browser automation verified bottom-follow, manual-scroll preservation, jump-to-latest, and synthetic IME composition behavior. Physical Windows IME input remains a human acceptance check.
+
+Known boundaries:
+
+- Host and browser state remain process-local; Host restart loses CodeTether Conversation records.
+- Protocol Approval records do not yet carry a trusted structured risk/reason presentation, and file-change/permissions Approvals were not observed in this phase.
+- Stop, queue/steer, attachments, live Inbox/Conversations data, persistence, desktop packaging, remote access, and non-Codex providers remain deferred.
+
+Exit gate:
+
+- Tests cover Composer intent, action identity and duplicate suppression, IME keys, draft retention, connection/capability gating, interrupt identity, independent Approval identity, safe mutation errors, auto-scroll decisions, and stable Tool presentation.
+- `pnpm typecheck`, `pnpm lint`, `pnpm format:check`, `pnpm build`, and `pnpm test` pass.
+- Real browser validation completes Send, multi-Turn context, Approval Allow/Decline, Interrupt, and Continue in ignored isolated workspaces with no browser console errors or warnings.
 
 ## Phase 3 — Conversation Management
 

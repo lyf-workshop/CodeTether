@@ -23,7 +23,53 @@ test('maps one Host read model to the frozen read-only Conversation ViewModel', 
     canStop: false,
     canResolveApproval: false,
   })
-  assert.equal(viewModel.pendingApproval?.id, 'approval_live01')
+  assert.equal(viewModel.pendingApprovals[0]?.id, 'approval_live01')
+  assert.equal(
+    viewModel.pendingApprovals[0]?.context,
+    'E:\\spikes\\live-workspace',
+  )
+})
+
+test('maps every pending Approval and enables only advertised live controls', () => {
+  const viewModel = createLiveConversationViewModel(
+    conversation({
+      status: 'waiting',
+      pendingApprovals: [
+        approval(),
+        { ...approval(), id: 'approval_live02', summary: 'Write file' },
+      ],
+    }),
+    {
+      codex: true,
+      approvals: true,
+      interrupt: true,
+      resume: true,
+      diff: true,
+      streaming: true,
+    },
+    'connected',
+  )
+
+  assert.deepEqual(
+    viewModel.pendingApprovals.map((approval) => approval.id),
+    ['approval_live01', 'approval_live02'],
+  )
+  assert.deepEqual(viewModel.capabilities, {
+    canCompose: false,
+    canInterrupt: true,
+    canStop: false,
+    canResolveApproval: true,
+  })
+  assert.deepEqual(
+    viewModel.timeline.blocks.flatMap((block) =>
+      block.kind === 'agent-run'
+        ? block.executions.flatMap((execution) =>
+            execution.kind === 'approval' ? [execution.approvalId] : [],
+          )
+        : [],
+    ),
+    ['approval_live01', 'approval_live02'],
+  )
 })
 
 test('uses one projected file change for Timeline Diff and Inspector Changes', () => {
@@ -32,6 +78,8 @@ test('uses one projected file change for Timeline Diff and Inspector Changes', (
       changes: [
         {
           id: 'src/example.ts',
+          turnId: 'turn_live01',
+          itemId: 'item_change01',
           path: 'src/example.ts',
           kind: 'modified',
           additions: 1,
@@ -63,6 +111,120 @@ test('uses one projected file change for Timeline Diff and Inspector Changes', (
   assert.equal(run?.kind, 'agent-run')
   assert.equal(run?.executions[0]?.kind, 'diff')
   assert.equal(run?.executions[0]?.changeId, viewModel.changes.files[0]?.id)
+})
+
+test('presents workspace file changes without leaking an absolute local path', () => {
+  const viewModel = createLiveConversationViewModel(
+    conversation({
+      changes: [
+        {
+          id: 'absolute-change',
+          turnId: 'turn_live01',
+          itemId: 'item_change_absolute',
+          path: 'E:\\spikes\\live-workspace\\src\\example.ts',
+          kind: 'modified',
+          additions: 1,
+          deletions: 0,
+          diffLines: [],
+          timestamp,
+          order: 4,
+        },
+      ],
+    }),
+  )
+
+  assert.equal(viewModel.changes.files[0]?.path, 'src/example.ts')
+  assert.equal(viewModel.context[0]?.label, 'src/example.ts')
+})
+
+test('keeps two retained Turns in user/agent order', () => {
+  const secondTurn = {
+    id: 'turn_live02',
+    status: 'running',
+    startedAt: '2026-08-26T12:05:00.000Z',
+    order: 1,
+  }
+  const viewModel = createLiveConversationViewModel(
+    conversation({
+      turns: [
+        {
+          id: 'turn_live01',
+          status: 'completed',
+          startedAt: timestamp,
+          completedAt: '2026-08-26T12:04:00.000Z',
+          order: 0,
+        },
+        secondTurn,
+      ],
+      currentTurn: secondTurn,
+      messages: [
+        message('turn_live01', 'input', 'user', 'First prompt', -1),
+        message('turn_live01', 'answer', 'agent', 'First answer', 2),
+        message('turn_live02', 'input', 'user', 'Second prompt', -1),
+        message('turn_live02', 'answer', 'agent', 'Streaming answer', 7),
+      ],
+    }),
+  )
+
+  assert.deepEqual(
+    viewModel.timeline.blocks
+      .filter((block) => block.kind === 'message')
+      .map((block) => [block.message.author, block.message.body]),
+    [
+      ['user', 'First prompt'],
+      ['agent', 'First answer'],
+      ['user', 'Second prompt'],
+      ['agent', 'Streaming answer'],
+    ],
+  )
+})
+
+test('uses semantic Tool titles and keeps failure output out of the row title', () => {
+  const command =
+    'powershell -NoProfile -Command "Get-Content -LiteralPath \'missing.ts\'"'
+  const fullFailure =
+    "Get-Content: Cannot find path 'C:\\workspace\\missing.ts' because it does not exist. At line:1 char:1"
+  const viewModel = createLiveConversationViewModel(
+    conversation({
+      tools: [
+        tool('item_tool01', 'command', 'failed', {
+          command,
+          outputSummary: fullFailure,
+        }),
+        tool('item_tool02', 'command', 'completed', {
+          command: 'powershell -NoProfile -Command "Write-Output safe"',
+          order: 4,
+        }),
+      ],
+      terminal: {
+        turnId: 'turn_live01',
+        itemId: 'item_tool01',
+        toolId: 'turn_live01:item_tool01',
+        command,
+        text: fullFailure,
+        truncated: false,
+      },
+    }),
+  )
+  const tools = viewModel.timeline.blocks.flatMap((block) =>
+    block.kind === 'agent-run'
+      ? block.executions.flatMap((execution) =>
+          execution.kind === 'tool' ? [execution.tool] : [],
+        )
+      : [],
+  )
+
+  assert.deepEqual(
+    tools.map((entry) => [entry.title, entry.description, entry.outputSummary]),
+    [
+      ['读取文件', undefined, 'Path not found'],
+      ['执行命令', undefined, undefined],
+    ],
+  )
+  assert.equal(tools[1].title.includes('powershell'), false)
+  assert.equal(tools[0].title.includes('Cannot find path'), false)
+  assert.equal(JSON.stringify(tools).includes('Write-Output safe'), false)
+  assert.equal(viewModel.terminal.lines.join('\n'), fullFailure)
 })
 
 test('builds live rail and connection indicator from the shared projection', () => {
@@ -97,6 +259,12 @@ test('builds live rail and connection indicator from the shared projection', () 
 })
 
 function conversation(fields = {}) {
+  const currentTurn = fields.currentTurn ?? {
+    id: 'turn_live01',
+    status: 'running',
+    startedAt: timestamp,
+    order: 0,
+  }
   return {
     id: 'conv_live01',
     cwd: 'E:\\spikes\\live-workspace',
@@ -107,11 +275,8 @@ function conversation(fields = {}) {
     reasoning: 'high',
     createdAt: timestamp,
     updatedAt: timestamp,
-    currentTurn: {
-      id: 'turn_live01',
-      status: 'running',
-      startedAt: timestamp,
-    },
+    turns: fields.turns ?? [currentTurn],
+    currentTurn,
     messages: [],
     tools: [],
     changes: [],
@@ -124,8 +289,35 @@ function conversation(fields = {}) {
 function approval() {
   return {
     id: 'approval_live01',
+    turnId: 'turn_live01',
     kind: 'command',
     summary: 'echo safe',
     requestedAt: timestamp,
+  }
+}
+
+function message(turnId, suffix, author, body, order) {
+  return {
+    id: `${turnId}:${suffix}`,
+    turnId,
+    ...(author === 'agent' ? { itemId: `item_${suffix}` } : {}),
+    author,
+    body,
+    status: author === 'agent' ? 'running' : 'completed',
+    timestamp,
+    order,
+  }
+}
+
+function tool(itemId, name, status, fields = {}) {
+  return {
+    id: `turn_live01:${itemId}`,
+    turnId: 'turn_live01',
+    itemId,
+    name,
+    status,
+    timestamp,
+    order: 3,
+    ...fields,
   }
 }

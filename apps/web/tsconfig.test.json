@@ -20,9 +20,12 @@
   },
   "include": [
     "src/components/conversation/conversation-view-model.ts",
+    "src/components/conversation/conversation-controls.ts",
     "src/components/conversation/live-conversation-adapter.ts",
+    "src/components/conversation/tool-presentation.ts",
     "src/runtime/host/conversation-projection.ts",
     "src/runtime/host/host-query.ts",
-    "src/runtime/host/host-runtime.ts"
+    "src/runtime/host/host-runtime.ts",
+    "src/runtime/host/live-conversation-actions.ts"
   ]
 }

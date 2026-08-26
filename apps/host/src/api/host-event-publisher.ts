@@ -6,6 +6,7 @@ import {
   type EventCursor,
   type HostEvent,
   type HostEventEnvelope,
+  type StreamResetReason,
 } from '@codetether/protocol'
 
 import {
@@ -51,6 +52,28 @@ export class HostEventPublisher {
         'stream.reset is a connection-local control and cannot be published globally',
       )
     }
+    return this.#publish(event)
+  }
+
+  /**
+   * Publishes a sequenced recovery boundary after Host-owned runtime history
+   * was compacted. Unlike a cursor-specific reset, this record enters replay
+   * so clients that were disconnected during compaction also replace from a
+   * fresh Snapshot.
+   */
+  publishSnapshotBoundary(
+    timestamp: string,
+    reason: StreamResetReason = 'history_evicted',
+  ): HostEventEnvelope {
+    return this.#publish({
+      conversationId: null,
+      timestamp,
+      type: 'stream.reset',
+      payload: { reason },
+    })
+  }
+
+  #publish(event: HostEvent): HostEventEnvelope {
     const seq = this.#replay.currentSeq + 1
     if (!Number.isSafeInteger(seq)) {
       throw new HostEventSequenceError('Host event sequence is exhausted')

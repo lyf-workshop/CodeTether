@@ -7,7 +7,6 @@ import {
   EpochIdSchema,
   ItemIdSchema,
   ProtocolVersionSchema,
-  SnapshotSequenceSchema,
   TimestampSchema,
   TurnIdSchema,
 } from './ids.js'
@@ -70,11 +69,33 @@ export const TurnStatusSchema = z.enum([
 ])
 export type TurnStatus = z.infer<typeof TurnStatusSchema>
 
+/** Canonical text input accepted by the current Protocol v1 Turn command. */
+export const TurnInputSchema = z
+  .object({
+    type: z.literal('text'),
+    text: z
+      .string()
+      .min(1)
+      .max(1024 * 1024)
+      .refine((value) => value.trim().length > 0, {
+        message: 'Turn input must contain non-whitespace text',
+      }),
+  })
+  .strict()
+export type TurnInput = z.infer<typeof TurnInputSchema>
+
+/** Host-owned input with the timestamp assigned when the Turn is recorded. */
+export const TurnInputRecordSchema = TurnInputSchema.extend({
+  timestamp: TimestampSchema,
+}).strict()
+export type TurnInputRecord = z.infer<typeof TurnInputRecordSchema>
+
 export const TurnRecordSchema = z
   .object({
     turnId: TurnIdSchema,
     conversationId: ConversationIdSchema,
     status: TurnStatusSchema,
+    input: TurnInputRecordSchema.optional(),
     startedAt: TimestampSchema,
     completedAt: TimestampSchema.optional(),
     finalMessage: z
@@ -157,96 +178,6 @@ export const ApprovalRecordSchema = z
   })
 export type ApprovalRecord = z.infer<typeof ApprovalRecordSchema>
 
-export const HostSnapshotSchema = z
-  .object({
-    protocolVersion: ProtocolVersionSchema,
-    epoch: EpochIdSchema,
-    currentSeq: SnapshotSequenceSchema,
-    conversations: z.array(ConversationRecordSchema),
-    activeTurns: z.array(
-      TurnRecordSchema.refine((turn) => turn.status === 'running', {
-        message: 'activeTurns may only contain running turns',
-      }),
-    ),
-    pendingApprovals: z.array(
-      ApprovalRecordSchema.refine((approval) => approval.status === 'pending', {
-        message: 'pendingApprovals may only contain pending approvals',
-      }),
-    ),
-  })
-  .strict()
-  .superRefine((snapshot, context) => {
-    const conversations = new Map(
-      snapshot.conversations.map((conversation) => [
-        conversation.conversationId,
-        conversation,
-      ]),
-    )
-    if (conversations.size !== snapshot.conversations.length) {
-      addSnapshotIssue(
-        context,
-        ['conversations'],
-        'Conversation IDs must be unique',
-      )
-    }
-
-    const turns = new Map(
-      snapshot.activeTurns.map((turn) => [turn.turnId, turn]),
-    )
-    if (turns.size !== snapshot.activeTurns.length) {
-      addSnapshotIssue(context, ['activeTurns'], 'Turn IDs must be unique')
-    }
-    for (const [index, turn] of snapshot.activeTurns.entries()) {
-      const conversation = conversations.get(turn.conversationId)
-      if (conversation?.activeTurnId !== turn.turnId) {
-        addSnapshotIssue(
-          context,
-          ['activeTurns', index],
-          'Active Turn must match its Conversation activeTurnId',
-        )
-      }
-    }
-    for (const [index, conversation] of snapshot.conversations.entries()) {
-      if (
-        conversation.activeTurnId !== undefined &&
-        !turns.has(conversation.activeTurnId)
-      ) {
-        addSnapshotIssue(
-          context,
-          ['conversations', index, 'activeTurnId'],
-          'Conversation activeTurnId must exist in activeTurns',
-        )
-      }
-    }
-
-    const approvalIds = new Set(
-      snapshot.pendingApprovals.map((approval) => approval.approvalId),
-    )
-    if (approvalIds.size !== snapshot.pendingApprovals.length) {
-      addSnapshotIssue(
-        context,
-        ['pendingApprovals'],
-        'Approval IDs must be unique',
-      )
-    }
-    for (const [index, approval] of snapshot.pendingApprovals.entries()) {
-      const conversation = conversations.get(approval.conversationId)
-      const turn = turns.get(approval.turnId)
-      if (
-        conversation?.status !== 'waiting' ||
-        conversation.activeTurnId !== approval.turnId ||
-        turn?.conversationId !== approval.conversationId
-      ) {
-        addSnapshotIssue(
-          context,
-          ['pendingApprovals', index],
-          'Pending Approval must belong to an active waiting Turn',
-        )
-      }
-    }
-  })
-export type HostSnapshot = z.infer<typeof HostSnapshotSchema>
-
 export const BootstrapSchema = z
   .object({
     protocolVersion: ProtocolVersionSchema,
@@ -259,11 +190,3 @@ export type Bootstrap = z.infer<typeof BootstrapSchema>
 
 export const BootstrapResponseSchema = BootstrapSchema
 export type BootstrapResponse = Bootstrap
-
-function addSnapshotIssue(
-  context: z.RefinementCtx,
-  path: Array<string | number>,
-  message: string,
-): void {
-  context.addIssue({ code: 'custom', message, path })
-}

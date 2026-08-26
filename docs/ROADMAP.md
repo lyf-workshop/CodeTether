@@ -88,7 +88,7 @@ Exit gate:
 
 ### Phase 2A.1 — Codex Runtime Semantics & Approval Validation
 
-**Status:** implementation and controlled manual validation complete against local `codex-cli 0.149.1`; awaiting Phase 2A.1 review. Phase 2B has not started.
+**Status:** accepted and frozen with Phase 2A as **Phase 2A Codex Runtime v1** after controlled validation against local `codex-cli 0.149.1`.
 
 Verified outcomes:
 
@@ -114,21 +114,36 @@ Exit gate:
 - Real Allow Once and Decline, multiple Turns, multiple Threads, known-ID resume across App Server child processes, and interruption complete in isolated manual scenarios.
 - Lifecycle ownership, event identity, aggregation measurements, failure semantics, and unresolved protocol gaps are documented without overstating unobserved behavior.
 
-### Phase 2B — Client-to-Host Connection
+### Phase 2B — Client-to-Host Protocol & Local API
 
-**Status:** not started.
+**Status:** implementation and controlled real-Codex validation complete; awaiting Phase 2B review. React integration has not started.
 
-The browser-facing transport and its versioned contracts must be designed from the verified Runtime Spike without exposing raw Codex JSON-RPC to React. No HTTP, WebSocket, SSE, or alternative transport has been selected yet.
+Verified outcomes:
 
-Planned outcomes:
+- `packages/protocol` is the Protocol v1 source of truth for shared TypeScript and Zod contracts.
+- HTTP commands and an SSE event stream are exposed only on `127.0.0.1`; explicit development Origins are allowlisted without wildcard CORS.
+- The Host owns public Conversation, Turn, Item, Approval, action, epoch, sequence, and event identities while provider identities stay private.
+- Bootstrap, in-memory snapshot, CodeTether Conversation creation, text Turn start, interrupt, and one-shot approval resolution are implemented.
+- Every mutation requires a bounded in-memory idempotency key; identical retries do not duplicate provider actions while their recent result remains in the 256-entry cache.
+- Aggregated events receive one process-global sequence and `<epoch>:<seq>` SSE identity, with bounded replay and a connection-local reset for wrong, evicted, or future cursors.
+- Multi-client fanout preserves identical event identity. A bounded slow client is disconnected without affecting other observers; reliable lifecycle events are not silently dropped.
+- A small non-React client validates HTTP/SSE responses and supports caller-controlled reconnect with `Last-Event-ID`.
+- Fixture tests do not launch Codex. `pnpm host:integration` completed a real file-changing Turn, exact replay, command approval, interruption, reset handling, cleanup, and Host epoch change in isolated ignored workspaces.
 
-- Minimal machine host boundary and protocol contracts.
-- Codex detection and a typed Codex adapter.
-- Create/send/stream/interrupt/complete lifecycle on one local machine.
-- Normalized events required by the approved Conversation Detail UI.
-- Permission and question flows at the minimum scope needed for the local loop.
+Known boundaries:
 
-Exit gate: one local Codex task can be controlled end to end through CodeTether with observable, recoverable state and passing quality checks.
+- All Host state, replay, identity maps, and idempotency results are in memory and disappear on restart.
+- The idempotency cache is a bounded recent-retry window, not durable exactly-once execution.
+- `stream.reset` requires a fresh snapshot; no durable history or recovery exists.
+- An idle runtime failure has no proactive capability-change event.
+- The frozen React frontend still uses Mock data and has not imported the client.
+- Authentication, Tauri, LAN/remote exposure, interactive PTY, persistence, non-text inputs, and non-Codex providers remain unimplemented.
+
+Exit gate:
+
+- `pnpm typecheck`, `pnpm lint`, `pnpm format:check`, `pnpm build`, and `pnpm test` pass.
+- The real local integration verifies HTTP commands, SSE events, two observers, successful replay, reset paths, approval, interrupt, cleanup, and a new epoch after restart.
+- Protocol v1, local security boundaries, limits, and remaining non-durable behavior are documented without connecting React.
 
 ## Phase 3 — Conversation Management
 

@@ -44,6 +44,12 @@ importers:
       '@codetether/agent-core':
         specifier: workspace:*
         version: link:../../packages/agent-core
+      '@codetether/client':
+        specifier: workspace:*
+        version: link:../../packages/client
+      '@codetether/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
 
   apps/web:
     dependencies:
@@ -98,6 +104,18 @@ importers:
         version: link:../agent-core
 
   packages/agent-core: {}
+
+  packages/client:
+    dependencies:
+      '@codetether/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+
+  packages/protocol:
+    dependencies:
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
 
   packages/ui:
     dependencies:

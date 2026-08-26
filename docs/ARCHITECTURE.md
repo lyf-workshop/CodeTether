@@ -2,9 +2,9 @@
 
 ## Status
 
-Phase 1 Frontend Experience is accepted and frozen as **CodeTether V2 Frontend Core v1**. Phase 2A proved the basic local Codex App Server loop. Phase 2A.1 has now validated the control semantics needed before defining a client-to-host protocol: real approval, multiple Turns and Threads, cross-process resume, interruption, safe command failure, runtime cleanup, identity preservation, and bounded delta delivery. The frozen React frontend remains Mock-only and is not connected to this runtime.
+Phase 1 Frontend Experience is accepted and frozen as **CodeTether V2 Frontend Core v1**. Phase 2A and Phase 2A.1 are accepted and frozen as **Phase 2A Codex Runtime v1**. Phase 2B now adds the versioned local Client-to-Host boundary: HTTP commands, an SSE event stream, CodeTether-owned public identities, in-memory snapshot/replay, and a non-React client. The frozen React frontend remains Mock-only and is not connected to this API.
 
-No browser API, Tauri shell, database, persistence, remote access, or production machine-host service exists yet.
+No Tauri shell, database, persistence, remote access, authentication, or production machine-host service exists yet. The Phase 2B server is a development-only loopback API.
 
 ## System Context
 
@@ -39,10 +39,11 @@ The future Machine Host will be the runtime authority. Clients must render norma
 ```text
 apps/web                   React web/PWA client; frozen Mock frontend
 apps/desktop               Future Tauri 2 desktop shell placeholder
-apps/host                  Phase 2A development runners and process lifecycle
+apps/host                  Codex runtime harnesses and Phase 2B local Host API
 
 packages/ui                Shared design system
-packages/protocol          Future client-to-host contracts placeholder
+packages/protocol          Client-to-Host Protocol v1 and Zod wire contracts
+packages/client            Small non-React HTTP/SSE Protocol v1 client
 packages/agent-core        Minimal normalized runtime event contract
 packages/adapter-codex     Codex App Server process, transport, and translation
 packages/adapter-claude    Future Claude Code adapter placeholder
@@ -206,15 +207,70 @@ Streaming message text is not duplicated in the adapter's lifecycle state. The s
 
 ### Event Identity
 
-Every normalized Turn event carries the provider Thread ID and Turn ID. Item events retain the provider Item ID. Approval events also retain an approval/request identity, and the response path validates Thread, Turn, and Item binding. When Codex supplies no separate approval ID, the current event uses the JSON-RPC request ID, which is correlation identity for that connection rather than a durable approval identifier. There is no CodeTether-wide sequence or replay cursor yet; those belong to the future client-to-host protocol.
+Every normalized Turn event carries the provider Thread ID and Turn ID. Item events retain the provider Item ID. Approval events also retain an approval/request identity, and the response path validates Thread, Turn, and Item binding. When Codex supplies no separate approval ID, the current event uses the JSON-RPC request ID, which is correlation identity for that connection rather than a durable approval identifier. Phase 2B translates those provider identities to CodeTether-owned public identities before crossing the client boundary.
+
+## Verified Phase 2B Client-to-Host Protocol v1
+
+The implemented local path is:
+
+```text
+non-React client
+      -> HTTP commands + SSE events
+apps/host local API on 127.0.0.1
+      -> in-memory Host service
+      -> normalized Agent Core events
+      -> Codex adapter and App Server
+```
+
+`packages/protocol` is the only wire-contract source. It exports shared TypeScript types and strict Zod schemas. Every bootstrap, snapshot, mutation, event, and safe error envelope carries `protocolVersion: 1`. Raw Codex JSON-RPC methods, IDs, payloads, and errors are not public protocol fields.
+
+### Public Identity and State
+
+The Host creates opaque `conversationId`, `turnId`, `itemId`, and `approvalId` values. Private maps bind them to the exact Codex Thread, Turn, Item, approval request, and JSON-RPC request identities. Browser routing never uses a provider Thread ID. Numeric and string JSON-RPC request IDs remain distinct through tagged internal keys. Approval resolution revalidates the full Conversation/Turn/Item/provider-request binding, requires a still-pending record, and rejects repeated resolution.
+
+State is in memory only. `GET /api/v1/snapshot` returns the current epoch, current sequence, Conversation summaries, active Turns, and pending Approvals. A Host restart creates a new epoch and an empty snapshot; it does not recover Conversations.
+
+### HTTP Commands
+
+The local API implements:
+
+```text
+GET  /api/v1/bootstrap
+GET  /api/v1/snapshot
+GET  /api/v1/events
+POST /api/v1/conversations
+POST /api/v1/conversations/:conversationId/turns
+POST /api/v1/conversations/:conversationId/turns/:turnId/interrupt
+POST /api/v1/approvals/:approvalId/resolve
+```
+
+Mutations require an `actionId`. A bounded 256-entry in-memory cache returns the original Promise/result for an identical retry while that action remains retained, rejects reuse with different input, never evicts in-flight actions, and explicitly reports capacity pressure. Settled entries are eventually evicted, so this is a recent-retry guarantee rather than durable exactly-once execution; callers must use globally random action IDs and retry a lost response promptly. Mutation responses share `accepted`, `completed`, or `rejected` status semantics while retaining endpoint-specific data. Safe errors use protocol codes rather than forwarding provider JSON-RPC errors.
+
+Create Conversation currently accepts only Codex, text-only Turns, optional model/reasoning, and an absolute existing working directory contained by an explicit allowed root after real-path resolution. The API does not implement Project discovery or a general filesystem chooser.
+
+### SSE Ordering and Replay
+
+Every Host process generates one non-persistent UUID `epoch`. A Host-global positive `seq` is assigned only after a regular event fits the reliable replay buffer. The SSE ID and envelope `eventId` are exactly `<epoch>:<seq>`, and the SSE `event` field equals the protocol event type. An empty snapshot's synthetic reconnect cursor is `<epoch>:0`; it closes the snapshot-to-stream race without claiming that sequence zero was emitted.
+
+The replay buffer holds aggregated client events, not raw Codex deltas. It is bounded to 2,048 events and approximately 8 MiB by default, evicting oldest events by count or encoded size. `Last-Event-ID` reconnect replays the subsequent retained sequence. An epoch mismatch, evicted cursor, or future cursor produces a connection-local `stream.reset` control carrying the current `<epoch>:<currentSeq>` boundary; it is sent first and the recovery stream closes. It does not allocate a global sequence, enter replay, or fan out to other observers. The client must fetch a fresh snapshot. Heartbeats are SSE comments and do not consume sequence numbers.
+
+Two live clients received identical event IDs and sequence values in tests and in the real integration path. Disconnecting one observer does not affect another. Replay is written directly with HTTP backpressure rather than being copied into the live queue. Each live connection defaults to 256 queued frames and approximately 1 MiB, while one standalone valid frame may be as large as 9 MiB. Heartbeats may coalesce or drop; reliable overflow closes only the slow connection so it can reconnect or fetch a snapshot. Approval and terminal events are never silently discarded. The non-React client independently caps an SSE frame at 10 MiB and an HTTP JSON body at 16 MiB.
+
+A fatal Codex runtime signal terminates active public Turns with a safe `runtime_unavailable` error, resolves pending Approvals as declined, clears Turn-scoped buffers, disables the affected bootstrap capabilities, and makes new mutations return HTTP 503. Provider error text never crosses the client boundary. If failure occurs while idle, clients learn the capability change on their next bootstrap or mutation because Protocol v1 does not yet define a capability-change event.
+
+### Verified Real Integration
+
+`pnpm host:integration` starts one real Codex App Server behind the loopback API and uses only ignored, explicitly allowed `.tmp` workspaces. The final verified run completed a file-changing Turn, streamed aggregated message/tool/file events to two clients with identical identities, replayed 21 events exactly after reconnect, returned `history_evicted` and `epoch_mismatch` reset controls, accepted one bound command approval, interrupted a bounded command, reached zero active Turns and pending Approvals, shut down, and observed a different epoch after Host restart.
+
+The primary Turn delivered 56 aggregated message deltas, two completed messages, two tool starts, four tool-output batches, two tool completions, one file change, and one completed Turn. Unknown Codex notifications remained diagnostic-only. The interrupt produced a late provider command diagnostic about the terminated process, consistent with the previously observed interrupt semantics; it did not cross the public protocol or corrupt shutdown.
 
 ## UI
 
-The UI presents projects, conversations, agents, machines, approvals, changes, terminal output, context, and notifications. Figma defines visual and interaction behavior. The accepted frontend remains Mock-only during Phase 2A.
+The UI presents projects, conversations, agents, machines, approvals, changes, terminal output, context, and notifications. Figma defines visual and interaction behavior. The accepted frontend remains Mock-only during Phase 2B.
 
 The client owns ephemeral presentation state only. TanStack Query is reserved for future host/server state, and Zustand is limited to UI state. Project, Conversation, Agent, and Machine records must not be duplicated into a client store as a second runtime authority.
 
-The UI must eventually consume a versioned client-to-host protocol, not Codex wire messages or `packages/adapter-codex` directly. No transport has been selected or implemented in Phase 2A.
+The UI must consume Protocol v1 through the non-React client rather than Codex wire messages or `packages/adapter-codex` directly. That React integration is deliberately deferred; Phase 2B validates the boundary without changing UI data sources.
 
 ## Desktop Shell
 
@@ -222,13 +278,13 @@ The future Tauri 2 shell will package the web UI and supply OS-level capabilitie
 
 ## Host
 
-`apps/host` currently owns only development harness lifecycle: preparing isolated workspaces, checking the executable, starting the adapter, printing normalized events, collecting summaries, running Phase 2A.1 semantic scenarios, and shutting down. It is not yet a general machine-host service and exposes no HTTP, WebSocket, or SSE endpoint.
+`apps/host` owns the development harness lifecycle plus the Phase 2B in-memory Host service and loopback HTTP/SSE server. It allocates public identities, maps them to provider identities, validates actions and workspaces, owns live snapshot state, sequences client events, and performs bounded fanout/replay. It remains a development local service rather than a durable production machine host.
 
 The future Host is expected to coordinate project discovery, conversation lifecycle, execution commands, persistence, recovery, live event delivery, and remote trust. Those responsibilities remain planned rather than implemented.
 
 ## Client-to-Host Protocol
 
-`packages/protocol` remains a placeholder. A later phase must define versioned client-to-host identifiers, commands, records, events, errors, capability negotiation, ordering, and reconnection semantics. Provider wire payloads must stay behind adapters.
+`packages/protocol` defines Protocol v1 identifiers, commands, records, events, safe errors, capabilities, ordering, and reconnect cursors with TypeScript and Zod. `packages/client` implements the matching HTTP/SSE consumer without React. Provider wire payloads remain behind adapters, and unknown provider notifications are diagnostics rather than public events.
 
 ## Agent Adapter Boundary
 
@@ -238,7 +294,7 @@ Provider-specific capabilities may remain Codex-specific when a natural common c
 
 ## Persistence
 
-There is no CodeTether database, event store, repository abstraction, or migration in Phase 2A or Phase 2A.1. Thread IDs, Turn IDs, events, and summaries exist only in runtime memory and terminal output. Codex itself owns the resumable Thread record used by `thread/resume`; CodeTether persistence design remains deferred.
+There is no CodeTether database, durable event store, repository abstraction, or migration in Phase 2A or Phase 2B. Public/provider identity maps, snapshots, replay events, and action results exist only in Host memory. Codex itself owns its resumable Thread record; CodeTether persistence and application-restart recovery remain deferred.
 
 ## Event Streaming
 
@@ -252,7 +308,7 @@ It uses no polling or database scan. The adapter does not intentionally coalesce
 
 The final two-Turn validation observed 171 raw message/tool delta events and delivered 118 aggregated events, a 31.0% reduction, with exact raw-to-delivered integrity for both message text and tool output, canonical final-message integrity, and zero dropped deltas. The flush/coalescing parameters are experimental rather than a finalized client protocol.
 
-Durable ordering, a global sequence, replay, reconnection, and multi-client observation remain unsolved and must be designed at the future client-to-host boundary.
+Phase 2B adds non-durable Host-global ordering, bounded replay, explicit reconnect reset, and isolated multi-client observation at the client boundary. These guarantees apply only within one in-memory Host epoch; durable replay remains deferred.
 
 ## Conversation Ownership
 
@@ -262,18 +318,23 @@ A Conversation is bound to one Project, one Agent, and the Machine executing it,
 
 Agent execution can read files, run commands, and change code. The spike confines the real Turn to a dedicated ignored workspace, uses `workspace-write` and `on-request` approval settings, forbids automatic approval, and records protocol summaries without environment variables or credentials.
 
-These controls are development safeguards, not a production security model. Authentication, authorization, machine trust, durable audit, secret handling, and remote transport security remain unimplemented.
+The Phase 2B HTTP server additionally binds only `127.0.0.1`, requires the exact loopback `Host` authority, enforces an explicit Origin allowlist without a wildcard, limits JSON bodies and SSE connections, validates every wire payload, returns safe error envelopes, and real-path-checks working directories against explicit allowed roots.
+
+These controls are development safeguards, not a production security model. Authentication, authorization, machine trust, durable audit, TLS, pairing, and remote transport security remain unimplemented. The server must not bind to LAN interfaces in this phase.
 
 ## Current Architectural Constraints
 
 - The frozen React frontend is not connected to the runtime.
-- The Host is a development CLI harness, not a daemon or browser service.
+- The Host API is a development-only loopback service, not a durable daemon or remote service.
 - The real integration is Codex-only and was verified against local `codex-cli 0.149.1`.
-- No Tauri shell, browser API, database, persistence, remote access, or production permission policy exists.
+- No React integration, Tauri shell, database, persistence, authentication, remote access, or production permission policy exists.
 - Command Allow Once and Decline were exercised through real App Server requests; file-change and permissions approvals were not observed.
 - Multi-Turn, multi-Thread, cross-process resume, interruption, and safe Tool failure were manually validated.
 - A real terminal Turn failure was not observed.
-- The bounded queue is an in-process prototype, not a browser/client delivery protocol.
+- Protocol v1 replay, action idempotency, public identities, and snapshot state are process-local and reset on Host restart.
+- Action idempotency is bounded to the recent 256 retained actions, not durable exactly-once execution.
+- SSE slow-client recovery currently closes the lagging connection; clients must reconnect or fetch a snapshot after `stream.reset`.
+- An idle runtime failure changes bootstrap capabilities but has no proactive Protocol v1 capability-change event.
 - User approval hooks can pre-resolve escalation; the validation runner disables hooks only in disposable semantics scenarios.
 - Generated protocol artifacts and real-agent workspace files remain ignored under `.tmp/`.
 - Legacy CodeTether code and structure are not architectural inputs.

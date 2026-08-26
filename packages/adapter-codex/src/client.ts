@@ -67,6 +67,7 @@ export interface StartThreadOptions {
   readonly ephemeral?: boolean
   readonly approvalPolicy?: CodexApprovalPolicy
   readonly sandbox?: CodexSandboxMode
+  readonly model?: string
 }
 
 export interface ResumeThreadOptions {
@@ -168,6 +169,7 @@ export class CodexAppServerClient {
     }
     const result = await this.#transport.request<unknown>('thread/start', {
       cwd: options.cwd,
+      ...(options.model === undefined ? {} : { model: options.model }),
       approvalPolicy: options.approvalPolicy ?? 'on-request',
       approvalsReviewer: 'user',
       sandbox: options.sandbox ?? 'workspace-write',
@@ -216,6 +218,8 @@ export class CodexAppServerClient {
   async startTurn(options: {
     readonly threadId: string
     readonly prompt: string
+    readonly model?: string
+    readonly reasoning?: string
   }): Promise<TurnStartResult> {
     this.#assertOpen()
     const result = await this.#transport.request<unknown>('turn/start', {
@@ -227,6 +231,8 @@ export class CodexAppServerClient {
           text_elements: [],
         },
       ],
+      ...(options.model === undefined ? {} : { model: options.model }),
+      ...(options.reasoning === undefined ? {} : { effort: options.reasoning }),
     })
     const parsed = parseTurnStartResult(result)
     this.#lifecycle.activate(options.threadId, parsed.turn.id)

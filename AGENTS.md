@@ -27,26 +27,27 @@ If sources conflict, stop and resolve the conflict instead of inventing a compro
 
 ## Current Scope
 
-The current phase is **Phase 2A.1 — Codex Runtime Semantics & Approval Validation**. The accepted frontend is frozen as **CodeTether V2 Frontend Core v1**, including the Design System, AppShell, Desktop Inbox v1, Desktop Conversations v1, and Conversation Workspace v1. Allowed work is limited to:
+The current phase is **Phase 2B — Client ↔ Host Protocol & Local API**. The accepted frontend is frozen as **CodeTether V2 Frontend Core v1**, and the accepted local Codex runtime is frozen as **Phase 2A Codex Runtime v1**. Allowed work is limited to:
 
-- Inspecting the locally installed Codex CLI and generating ignored protocol evidence from that exact version.
-- Validating real one-shot command approval, including Allow Once and Decline, inside an ignored disposable workspace.
-- Validating multiple Turns, multiple Threads, cross-process Thread resume, Turn interruption, safe command failure, and graceful cleanup.
-- Clarifying Process-, Thread-, and Turn-scoped memory ownership without adding persistence.
-- Preserving provider Thread, Turn, Item, and approval identities in the minimal normalized runtime contract.
-- Prototyping bounded in-process event delivery and integrity-checked delta coalescing without defining a browser transport.
-- Adding fixture-based tests for routing, isolation, approval binding, cleanup, aggregation, reliable events, and unknown server requests without starting a real agent during `pnpm test`.
-- Recording only locally observed protocol behavior, limitations, and quality-gate results.
+- Defining the versioned Client ↔ Host Protocol v1 in `packages/protocol` with shared TypeScript and Zod contracts.
+- Exposing local-only HTTP command endpoints and a bounded SSE event stream from `apps/host` on `127.0.0.1`.
+- Owning CodeTether Conversation, Turn, Item, Approval, action, epoch, sequence, and event identities at the Host boundary without persistence.
+- Implementing bounded in-memory snapshots, replay, action idempotency, multi-client fanout, heartbeat, reconnect reset, and slow-client handling.
+- Translating only normalized Agent Core events into the public protocol; raw Codex JSON-RPC remains private diagnostics.
+- Building a small non-React client and fixture/integration tests for the browser-facing boundary.
+- Running real Codex integration only inside explicitly allowed ignored `.tmp` workspaces.
+- Recording only verified protocol, security, replay, idempotency, and integration behavior.
 
-This phase stops at an in-process Host CLI harness. Do not connect the runtime to the browser or begin Phase 2B. When the project moves phases, update this section as part of that deliberate transition.
+This phase stops at a local HTTP/SSE API and non-React integration client. Do not connect the runtime to the frozen frontend or begin Phase 2C.
 
 ## Out of Scope
 
-During Phase 2A.1, do not implement:
+During Phase 2B, do not implement:
 
 - Changes or visual refactors to the frozen Design System, AppShell, Inbox, Conversations, or Conversation Workspace.
 - Activity, Projects, Machines, Agents, Settings, New Conversation, or any other new product-page content or flow.
-- Browser-facing REST, WebSocket, SSE, or another client transport.
+- React integration or replacement of frontend Mock data with Host data.
+- A generic WebSocket RPC transport or interactive PTY transport.
 - Tauri or desktop-shell functionality.
 - SQLite, another database, persistence, migrations, repositories, or durable event storage.
 - Machine management, project management, remote access, relay, authentication, or production Host services.

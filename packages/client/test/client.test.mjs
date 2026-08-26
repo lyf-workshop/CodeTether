@@ -1,0 +1,674 @@
+import assert from 'node:assert/strict'
+import test from 'node:test'
+
+import {
+  CodeTetherClient,
+  CodeTetherProtocolError,
+  CodeTetherResponseError,
+} from '../dist/index.js'
+
+const epoch = '1e7e3ce2-4ab2-4e80-a61d-9a6a345a7200'
+const timestamp = '2026-08-26T07:00:00.000Z'
+const conversationId = 'conv_demo01'
+const turnId = 'turn_demo01'
+const approvalId = 'approval_demo01'
+
+const capabilities = {
+  codex: true,
+  approvals: true,
+  interrupt: true,
+  resume: true,
+  diff: true,
+  streaming: true,
+}
+
+const conversation = {
+  conversationId,
+  provider: 'codex',
+  cwd: 'C:\\workspace',
+  status: 'idle',
+  createdAt: timestamp,
+  updatedAt: timestamp,
+}
+
+const turn = {
+  turnId,
+  conversationId,
+  status: 'running',
+  startedAt: timestamp,
+}
+
+const approval = {
+  approvalId,
+  conversationId,
+  turnId,
+  kind: 'command',
+  summary: 'Run tests',
+  status: 'resolved',
+  decision: 'accept',
+  requestedAt: timestamp,
+  resolvedAt: timestamp,
+}
+
+function jsonResponse(body, init = {}) {
+  return new Response(JSON.stringify(body), {
+    status: init.status ?? 200,
+    headers: { 'Content-Type': 'application/json', ...init.headers },
+  })
+}
+
+function eventResponse(events) {
+  return new Response(
+    events
+      .map(
+        (event) =>
+          `id: ${event.eventId}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
+      )
+      .join(''),
+    { headers: { 'Content-Type': 'text/event-stream' } },
+  )
+}
+
+test('uses the Protocol v1 HTTP routes and validates every success response', async () => {
+  const calls = []
+  const responses = [
+    { protocolVersion: 1, hostVersion: '0.0.0', epoch, capabilities },
+    {
+      protocolVersion: 1,
+      epoch,
+      currentSeq: 0,
+      conversations: [],
+      activeTurns: [],
+      pendingApprovals: [],
+    },
+    {
+      protocolVersion: 1,
+      actionId: 'act_create1',
+      status: 'completed',
+      data: { conversation },
+    },
+    {
+      protocolVersion: 1,
+      actionId: 'act_start01',
+      status: 'accepted',
+      data: { turn },
+    },
+    {
+      protocolVersion: 1,
+      actionId: 'act_stop001',
+      status: 'completed',
+      data: {
+        turn: { ...turn, status: 'interrupted', completedAt: timestamp },
+      },
+    },
+    {
+      protocolVersion: 1,
+      actionId: 'act_allow01',
+      status: 'completed',
+      data: { approval },
+    },
+  ]
+  const fetch = async (input, init) => {
+    calls.push({ url: String(input), init })
+    return jsonResponse(responses.shift())
+  }
+  const client = new CodeTetherClient({
+    baseUrl: 'http://127.0.0.1:4711/',
+    fetch,
+  })
+
+  await client.bootstrap()
+  await client.snapshot()
+  await client.createConversation({
+    actionId: 'act_create1',
+    provider: 'codex',
+    cwd: 'C:\\workspace',
+  })
+  await client.startTurn(conversationId, {
+    actionId: 'act_start01',
+    input: { type: 'text', text: 'Inspect the workspace.' },
+  })
+  await client.interruptTurn(conversationId, turnId, {
+    actionId: 'act_stop001',
+  })
+  await client.resolveApproval(approvalId, {
+    actionId: 'act_allow01',
+    decision: 'accept',
+  })
+
+  assert.deepEqual(
+    calls.map(({ url, init }) => [new URL(url).pathname, init.method]),
+    [
+      ['/api/v1/bootstrap', 'GET'],
+      ['/api/v1/snapshot', 'GET'],
+      ['/api/v1/conversations', 'POST'],
+      [`/api/v1/conversations/${conversationId}/turns`, 'POST'],
+      [
+        `/api/v1/conversations/${conversationId}/turns/${turnId}/interrupt`,
+        'POST',
+      ],
+      [`/api/v1/approvals/${approvalId}/resolve`, 'POST'],
+    ],
+  )
+  assert.deepEqual(JSON.parse(calls[3].init.body), {
+    actionId: 'act_start01',
+    input: { type: 'text', text: 'Inspect the workspace.' },
+  })
+  assert.deepEqual(JSON.parse(calls[4].init.body), {
+    actionId: 'act_stop001',
+  })
+  assert.deepEqual(JSON.parse(calls[5].init.body), {
+    actionId: 'act_allow01',
+    decision: 'accept',
+  })
+})
+
+test('validates safe HTTP errors and surfaces a typed response error', async () => {
+  const envelope = {
+    protocolVersion: 1,
+    actionId: 'act_create1',
+    code: 'conflict',
+    message: 'Action already exists',
+  }
+  const client = new CodeTetherClient({
+    baseUrl: 'http://host.test',
+    fetch: async () => jsonResponse(envelope, { status: 409 }),
+  })
+
+  await assert.rejects(
+    client.createConversation({
+      actionId: 'act_create1',
+      provider: 'codex',
+      cwd: 'C:\\workspace',
+    }),
+    (error) =>
+      error instanceof CodeTetherResponseError &&
+      error.status === 409 &&
+      error.envelope.code === 'conflict',
+  )
+})
+
+test('rejects mutation responses and errors with another actionId', async () => {
+  const successClient = new CodeTetherClient({
+    baseUrl: 'http://host.test',
+    fetch: async () =>
+      jsonResponse({
+        protocolVersion: 1,
+        actionId: 'act_other001',
+        status: 'completed',
+        data: { conversation },
+      }),
+  })
+  await assert.rejects(
+    successClient.createConversation({
+      actionId: 'act_create1',
+      provider: 'codex',
+      cwd: 'C:\\workspace',
+    }),
+    CodeTetherProtocolError,
+  )
+
+  const errorClient = new CodeTetherClient({
+    baseUrl: 'http://host.test',
+    fetch: async () =>
+      jsonResponse(
+        {
+          protocolVersion: 1,
+          actionId: 'act_other001',
+          code: 'conflict',
+          message: 'Conflict',
+        },
+        { status: 409 },
+      ),
+  })
+  await assert.rejects(
+    errorClient.createConversation({
+      actionId: 'act_create1',
+      provider: 'codex',
+      cwd: 'C:\\workspace',
+    }),
+    CodeTetherProtocolError,
+  )
+})
+
+test('rejects mutation records that do not match route identity', async () => {
+  const responses = [
+    {
+      protocolVersion: 1,
+      actionId: 'act_start01',
+      status: 'accepted',
+      data: { turn: { ...turn, conversationId: 'conv_other01' } },
+    },
+    {
+      protocolVersion: 1,
+      actionId: 'act_stop001',
+      status: 'completed',
+      data: {
+        turn: {
+          ...turn,
+          turnId: 'turn_other01',
+          status: 'interrupted',
+          completedAt: timestamp,
+        },
+      },
+    },
+    {
+      protocolVersion: 1,
+      actionId: 'act_allow01',
+      status: 'completed',
+      data: { approval: { ...approval, approvalId: 'approval_other01' } },
+    },
+  ]
+  const client = new CodeTetherClient({
+    baseUrl: 'http://host.test',
+    fetch: async () => jsonResponse(responses.shift()),
+  })
+
+  await assert.rejects(
+    client.startTurn(conversationId, {
+      actionId: 'act_start01',
+      input: { type: 'text', text: 'Inspect.' },
+    }),
+    CodeTetherProtocolError,
+  )
+  await assert.rejects(
+    client.interruptTurn(conversationId, turnId, {
+      actionId: 'act_stop001',
+    }),
+    CodeTetherProtocolError,
+  )
+  await assert.rejects(
+    client.resolveApproval(approvalId, {
+      actionId: 'act_allow01',
+      decision: 'accept',
+    }),
+    CodeTetherProtocolError,
+  )
+})
+
+test('rejects invalid success and error JSON using protocol validation', async () => {
+  const invalidSuccess = new CodeTetherClient({
+    baseUrl: 'http://host.test',
+    fetch: async () => jsonResponse({ protocolVersion: 1 }),
+  })
+  await assert.rejects(invalidSuccess.bootstrap(), CodeTetherProtocolError)
+
+  const invalidError = new CodeTetherClient({
+    baseUrl: 'http://host.test',
+    fetch: async () => jsonResponse({ stack: 'private' }, { status: 500 }),
+  })
+  await assert.rejects(invalidError.snapshot(), CodeTetherProtocolError)
+})
+
+test('bounds HTTP JSON response bodies before parsing', async () => {
+  const client = new CodeTetherClient({
+    baseUrl: 'http://127.0.0.1:4010',
+    maxResponseBytes: 32,
+    fetch: async () =>
+      new Response('x'.repeat(64), {
+        headers: { 'Content-Type': 'application/json' },
+      }),
+  })
+
+  await assert.rejects(
+    client.snapshot(),
+    (error) =>
+      error instanceof CodeTetherProtocolError &&
+      /inbound body limit/u.test(error.message),
+  )
+})
+
+test('streams validated events and forwards Last-Event-ID', async () => {
+  const events = [
+    {
+      protocolVersion: 1,
+      epoch,
+      seq: 1,
+      eventId: `${epoch}:1`,
+      conversationId,
+      turnId,
+      itemId: 'item_demo01',
+      timestamp,
+      type: 'message.delta',
+      payload: { delta: '运行中' },
+    },
+    {
+      protocolVersion: 1,
+      epoch,
+      seq: 2,
+      eventId: `${epoch}:2`,
+      conversationId,
+      turnId,
+      itemId: 'item_demo01',
+      timestamp,
+      type: 'message.delta',
+      payload: { delta: '继续' },
+    },
+  ]
+  const bytes = new TextEncoder().encode(
+    events
+      .map(
+        (event) =>
+          `id: ${event.eventId}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
+      )
+      .join(''),
+  )
+  let requestInit
+  const client = new CodeTetherClient({
+    baseUrl: 'http://host.test',
+    fetch: async (_input, init) => {
+      requestInit = init
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(bytes.slice(0, 19))
+            controller.enqueue(bytes.slice(19))
+            controller.close()
+          },
+        }),
+        { headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } },
+      )
+    },
+  })
+
+  const stream = await client.connectEvents({ lastEventId: `${epoch}:0` })
+  const received = []
+  for await (const event of stream) received.push(event)
+
+  assert.equal(
+    new Headers(requestInit.headers).get('Last-Event-ID'),
+    `${epoch}:0`,
+  )
+  assert.deepEqual(
+    received.map((event) => event.type),
+    ['message.delta', 'message.delta'],
+  )
+  assert.equal(stream.lastEventId, `${epoch}:2`)
+})
+
+test('rejects event gaps, duplicates, and cross-epoch ordinary events', async () => {
+  const event = (eventEpoch, seq, delta) => ({
+    protocolVersion: 1,
+    epoch: eventEpoch,
+    seq,
+    eventId: `${eventEpoch}:${seq}`,
+    conversationId,
+    turnId,
+    itemId: 'item_demo01',
+    timestamp,
+    type: 'message.delta',
+    payload: { delta },
+  })
+  const otherEpoch = '2e7e3ce2-4ab2-4e80-a61d-9a6a345a7200'
+  const cases = [
+    [event(epoch, 2, 'gap')],
+    [event(epoch, 1, 'first'), event(epoch, 1, 'duplicate')],
+    [event(otherEpoch, 1, 'wrong epoch')],
+  ]
+
+  for (const events of cases) {
+    const client = new CodeTetherClient({
+      baseUrl: 'http://host.test',
+      fetch: async () => eventResponse(events),
+    })
+    const stream = await client.connectEvents({ lastEventId: `${epoch}:0` })
+    await assert.rejects(async () => {
+      for await (const received of stream) {
+        assert.equal(received.seq, 1)
+      }
+    }, CodeTetherProtocolError)
+  }
+})
+
+test('accepts an initial stream.reset as the reconnect recovery boundary', async () => {
+  const resetEpoch = '2e7e3ce2-4ab2-4e80-a61d-9a6a345a7200'
+  const reset = {
+    protocolVersion: 1,
+    epoch: resetEpoch,
+    seq: 0,
+    eventId: `${resetEpoch}:0`,
+    conversationId: null,
+    timestamp,
+    type: 'stream.reset',
+    payload: { reason: 'epoch_mismatch' },
+  }
+  const client = new CodeTetherClient({
+    baseUrl: 'http://host.test',
+    fetch: async () => eventResponse([reset]),
+  })
+  const stream = await client.connectEvents({ lastEventId: `${epoch}:7` })
+  const received = []
+  for await (const event of stream) received.push(event)
+  assert.deepEqual(received, [reset])
+  assert.equal(stream.lastEventId, reset.eventId)
+})
+
+test('rejects stream.reset after ordinary live events', async () => {
+  const events = [
+    {
+      protocolVersion: 1,
+      epoch,
+      seq: 1,
+      eventId: `${epoch}:1`,
+      conversationId,
+      turnId,
+      itemId: 'item_demo01',
+      timestamp,
+      type: 'message.delta',
+      payload: { delta: 'live' },
+    },
+    {
+      protocolVersion: 1,
+      epoch,
+      seq: 2,
+      eventId: `${epoch}:2`,
+      conversationId: null,
+      timestamp,
+      type: 'stream.reset',
+      payload: { reason: 'history_evicted' },
+    },
+  ]
+  const client = new CodeTetherClient({
+    baseUrl: 'http://host.test',
+    fetch: async () => eventResponse(events),
+  })
+  const stream = await client.connectEvents({ lastEventId: `${epoch}:0` })
+  const iterator = stream[Symbol.asyncIterator]()
+
+  assert.equal((await iterator.next()).value.type, 'message.delta')
+  await assert.rejects(iterator.next(), CodeTetherProtocolError)
+})
+
+test('event stream validates data and SSE id', async () => {
+  const invalidEvent = {
+    protocolVersion: 1,
+    epoch,
+    seq: 1,
+    eventId: `${epoch}:1`,
+    conversationId: null,
+    timestamp,
+    type: 'stream.reset',
+    payload: { reason: 'history_evicted' },
+  }
+  const client = new CodeTetherClient({
+    baseUrl: 'http://host.test',
+    fetch: async () => {
+      return new Response(
+        `id: ${epoch}:2\nevent: ${invalidEvent.type}\ndata: ${JSON.stringify(invalidEvent)}\n\n`,
+        { headers: { 'Content-Type': 'text/event-stream' } },
+      )
+    },
+  })
+
+  const stream = await client.connectEvents()
+  await assert.rejects(async () => {
+    for await (const event of stream) {
+      assert.fail(`Unexpected event delivery: ${event.type}`)
+    }
+  }, CodeTetherProtocolError)
+  await stream.close()
+})
+
+test('bounds an incomplete SSE frame and cancels the stream', async () => {
+  let cancelled = false
+  const body = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(`data: ${'x'.repeat(128)}`))
+    },
+    cancel() {
+      cancelled = true
+    },
+  })
+  const client = new CodeTetherClient({
+    baseUrl: 'http://127.0.0.1:4010',
+    maxEventFrameBytes: 64,
+    fetch: async () =>
+      new Response(body, {
+        headers: { 'Content-Type': 'text/event-stream' },
+      }),
+  })
+  const stream = await client.connectEvents()
+
+  await assert.rejects(
+    stream[Symbol.asyncIterator]().next(),
+    (error) =>
+      error instanceof CodeTetherProtocolError &&
+      /inbound frame limit/u.test(error.message),
+  )
+  assert.equal(cancelled, true)
+})
+
+test('normalizes an SSE frame limit reached during decoder EOF flush', async () => {
+  const prefix = new TextEncoder().encode('data:')
+  const body = new ReadableStream({
+    start(controller) {
+      controller.enqueue(Uint8Array.from([...prefix, 0xf0, 0x9f, 0x92]))
+      controller.close()
+    },
+  })
+  const client = new CodeTetherClient({
+    baseUrl: 'http://127.0.0.1:4010',
+    maxEventFrameBytes: 7,
+    fetch: async () =>
+      new Response(body, {
+        headers: { 'Content-Type': 'text/event-stream' },
+      }),
+  })
+  const stream = await client.connectEvents()
+
+  await assert.rejects(
+    stream[Symbol.asyncIterator]().next(),
+    (error) =>
+      error instanceof CodeTetherProtocolError &&
+      /inbound frame limit/u.test(error.message),
+  )
+})
+
+test('event stream requires the SSE event name to match the envelope type', async () => {
+  const event = {
+    protocolVersion: 1,
+    epoch,
+    seq: 1,
+    eventId: `${epoch}:1`,
+    conversationId: null,
+    timestamp,
+    type: 'stream.reset',
+    payload: { reason: 'history_evicted' },
+  }
+  const client = new CodeTetherClient({
+    baseUrl: 'http://host.test',
+    fetch: async () =>
+      new Response(
+        `id: ${event.eventId}\nevent: turn.completed\ndata: ${JSON.stringify(event)}\n\n`,
+        { headers: { 'Content-Type': 'text/event-stream' } },
+      ),
+  })
+
+  const stream = await client.connectEvents()
+  await assert.rejects(async () => {
+    for await (const received of stream) {
+      assert.fail(`Unexpected event delivery: ${received.type}`)
+    }
+  }, CodeTetherProtocolError)
+})
+
+test('event stream rejects JSON that does not match the event schema', async () => {
+  const client = new CodeTetherClient({
+    baseUrl: 'http://host.test',
+    fetch: async () =>
+      new Response(
+        `id: ${epoch}:1\nevent: stream.reset\ndata: {"protocolVersion":1}\n\n`,
+        { headers: { 'Content-Type': 'text/event-stream' } },
+      ),
+  })
+
+  const stream = await client.connectEvents()
+  await assert.rejects(async () => {
+    for await (const event of stream) {
+      assert.fail(`Unexpected event delivery: ${event.type}`)
+    }
+  }, CodeTetherProtocolError)
+})
+
+test('event stream supports explicit close', async () => {
+  let fetchSignal
+  const client = new CodeTetherClient({
+    baseUrl: 'http://host.test',
+    fetch: async (_input, init) => {
+      fetchSignal = init.signal
+      return new Response(new ReadableStream(), {
+        headers: { 'Content-Type': 'text/event-stream' },
+      })
+    },
+  })
+
+  const stream = await client.connectEvents()
+  const iterator = stream[Symbol.asyncIterator]()
+  const pending = iterator.next()
+  await stream.close()
+  assert.equal(fetchSignal.aborted, true)
+  assert.deepEqual(await pending, { done: true, value: undefined })
+})
+
+test('AsyncIterator return aborts before first read and during a pending read', async () => {
+  for (const startRead of [false, true]) {
+    let fetchSignal
+    const client = new CodeTetherClient({
+      baseUrl: 'http://host.test',
+      fetch: async (_input, init) => {
+        fetchSignal = init.signal
+        return new Response(new ReadableStream(), {
+          headers: { 'Content-Type': 'text/event-stream' },
+        })
+      },
+    })
+    const stream = await client.connectEvents()
+    const iterator = stream[Symbol.asyncIterator]()
+    const pending = startRead ? iterator.next() : undefined
+    assert.deepEqual(await iterator.return(), { done: true, value: undefined })
+    assert.equal(fetchSignal.aborted, true)
+    if (pending !== undefined) {
+      assert.deepEqual(await pending, { done: true, value: undefined })
+    }
+  }
+})
+
+test('external AbortSignal is linked to the event request', async () => {
+  const external = new AbortController()
+  let fetchSignal
+  const client = new CodeTetherClient({
+    baseUrl: 'http://host.test',
+    fetch: async (_input, init) => {
+      fetchSignal = init.signal
+      return new Response(new ReadableStream(), {
+        headers: { 'Content-Type': 'text/event-stream' },
+      })
+    },
+  })
+
+  const stream = await client.connectEvents({ signal: external.signal })
+  external.abort('test complete')
+  assert.equal(fetchSignal.aborted, true)
+  assert.equal(fetchSignal.reason, 'test complete')
+  await stream.close()
+})

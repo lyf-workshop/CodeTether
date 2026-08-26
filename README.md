@@ -4,7 +4,7 @@
 
 CodeTether is a planned desktop and mobile workspace for supervising and controlling coding agents across projects and machines. V1 is Codex-first, with provider-neutral boundaries for later Claude Code and OpenCode support.
 
-Phase 1 is accepted and frozen as **CodeTether V2 Frontend Core v1**. The current work is **Phase 2A — Codex App Server Runtime Spike**: a development-only Host CLI can drive one local Codex Thread and Turn inside an isolated temporary workspace. The real runtime is not connected to React and includes no persistence, browser API, Tauri shell, remote access, or non-Codex provider.
+Phase 1 is accepted and frozen as **CodeTether V2 Frontend Core v1**, and the accepted local runtime is frozen as **Phase 2A Codex Runtime v1**. Phase 2B adds a development-only Protocol v1 and loopback HTTP/SSE Host API. The real runtime is still not connected to React and includes no persistence, Tauri shell, authentication, remote access, or non-Codex provider.
 
 ## Repository layout
 
@@ -13,10 +13,11 @@ codetether-v2/
 ├── apps/
 │   ├── web/                 # Frozen React web/PWA frontend
 │   ├── desktop/             # Future Tauri 2 shell (placeholder)
-│   └── host/                # Phase 2A Runtime Spike runner
+│   └── host/                # Codex runtime harnesses and local Host API
 ├── packages/
 │   ├── ui/                  # Shared design-system foundation (active)
-│   ├── protocol/            # Future client/host contracts (placeholder)
+│   ├── protocol/            # Client-to-Host Protocol v1
+│   ├── client/              # Non-React HTTP/SSE Protocol client
 │   ├── agent-core/          # Minimal normalized runtime events
 │   ├── adapter-codex/       # Codex App Server spike adapter
 │   ├── adapter-claude/      # Future Claude Code adapter (placeholder)
@@ -54,6 +55,8 @@ pnpm test          # Run fixture-based runtime tests
 pnpm format        # Format writable source files
 pnpm format:check  # Verify formatting
 pnpm codex:spike   # Run the manual real-Codex integration spike
+pnpm host:serve -- --workspace <absolute-path>  # Start the local-only Host API
+pnpm host:integration                          # Run real HTTP/SSE integration
 ```
 
 `pnpm codex:spike` uses only the ignored `.tmp/codetether-codex-spike/` workspace. It must never target the CodeTether source repository.
@@ -67,4 +70,4 @@ pnpm codex:spike   # Run the manual real-Codex integration spike
 
 ## Status
 
-Phase 2A implementation is complete and awaiting review. Do not connect the Runtime Spike to the browser, add persistence, begin Phase 2B, or redesign the frozen frontend without an explicit phase transition. See the roadmap for ordered gates.
+Phase 2B implementation and controlled validation are complete and awaiting review. Do not connect the API to React, add persistence or remote exposure, begin Phase 2C, or redesign the frozen frontend without an explicit phase transition. See the roadmap for ordered gates.

@@ -9,10 +9,14 @@
     "lint": "eslint .",
     "test": "pnpm build && node --test --test-isolation=none test/*.test.mjs",
     "spike": "node dist/spike.js",
-    "semantics": "node dist/semantics.js"
+    "semantics": "node dist/semantics.js",
+    "serve": "node dist/serve.js",
+    "integration": "node dist/integration.js"
   },
   "dependencies": {
     "@codetether/adapter-codex": "workspace:*",
-    "@codetether/agent-core": "workspace:*"
+    "@codetether/agent-core": "workspace:*",
+    "@codetether/client": "workspace:*",
+    "@codetether/protocol": "workspace:*"
   }
 }

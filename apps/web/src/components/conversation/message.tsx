@@ -1,7 +1,13 @@
 import type { ReactNode } from 'react'
 import { UserRound } from 'lucide-react'
 
-import { AgentIdentityMark, StatusBadge, cn } from '@codetether/ui'
+import {
+  AgentIdentityMark,
+  StatusBadge,
+  agentDefinitions,
+  cn,
+  type AgentId,
+} from '@codetether/ui'
 
 import type { ConversationMessageMock } from '../../mocks/conversation-detail'
 
@@ -9,6 +15,10 @@ interface MessageProps {
   message: ConversationMessageMock
   children?: ReactNode
   className?: string
+}
+
+interface AgentMessageProps extends MessageProps {
+  agent: AgentId
 }
 
 export function UserMessage({ message, className }: MessageProps) {
@@ -36,12 +46,18 @@ export function UserMessage({ message, className }: MessageProps) {
   )
 }
 
-export function AgentMessage({ message, children, className }: MessageProps) {
+export function AgentMessage({
+  agent,
+  message,
+  children,
+  className,
+}: AgentMessageProps) {
+  const agentDefinition = agentDefinitions[agent]
   const hasExecution = Boolean(children)
 
   return (
     <article
-      aria-label={`Codex 在 ${message.time} 的工作记录`}
+      aria-label={`${agentDefinition.name} 在 ${message.time} 的工作记录`}
       data-status={message.status}
       className={cn(
         'relative flex min-w-0 gap-3 px-1 py-3',
@@ -51,10 +67,12 @@ export function AgentMessage({ message, children, className }: MessageProps) {
         className,
       )}
     >
-      <AgentIdentityMark agent="codex" className="size-8 rounded-sm text-sm" />
+      <AgentIdentityMark agent={agent} className="size-8 rounded-sm text-sm" />
       <div className="min-w-0 flex-1">
         <header className="flex min-w-0 items-center gap-2">
-          <span className="text-md font-semibold text-text-primary">Codex</span>
+          <span className="text-md font-semibold text-text-primary">
+            {agentDefinition.name}
+          </span>
           {message.status ? (
             <StatusBadge
               status={message.status}

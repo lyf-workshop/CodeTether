@@ -28,7 +28,7 @@ export function ConversationWorkspace({
         inspectorTriggerRef={inspectorTriggerRef}
         onOpenInspector={onOpenInspector}
       />
-      <ConversationTimeline timeline={timeline} />
+      <ConversationTimeline agent={conversation.agent} timeline={timeline} />
       <div className="min-h-0 px-4 pb-5">
         <Composer conversation={conversation} />
       </div>

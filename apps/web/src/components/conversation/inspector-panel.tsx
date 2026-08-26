@@ -270,8 +270,11 @@ export interface InspectorPanelProps extends Omit<
   totals: ConversationDetailMock['inspector']['totals']
   terminal: ConversationDetailMock['inspector']['terminal']
   context: ConversationDetailMock['inspector']['context']
+  initialTab?: InspectorTab
   onClose?: () => void
 }
+
+export type InspectorTab = 'overview' | 'changes' | 'terminal' | 'context'
 
 /** Mock-only Conversation Detail inspector based on Figma node 14:218. */
 export function InspectorPanel({
@@ -280,6 +283,7 @@ export function InspectorPanel({
   totals,
   terminal,
   context,
+  initialTab = 'overview',
   onClose,
   className,
   ...props
@@ -314,7 +318,11 @@ export function InspectorPanel({
         )}
       </header>
 
-      <Tabs defaultValue="overview" className="min-h-0 flex-1 gap-0">
+      <Tabs
+        key={initialTab}
+        defaultValue={initialTab}
+        className="min-h-0 flex-1 gap-0"
+      >
         <div className="shrink-0 px-4 pb-2">
           <TabsList
             variant="line"

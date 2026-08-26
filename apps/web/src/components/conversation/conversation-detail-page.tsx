@@ -3,21 +3,55 @@ import { useRef, useState } from 'react'
 import { Dialog, DialogContent, DialogTitle } from '@codetether/ui'
 
 import { conversationDetailMock } from '../../mocks/conversation-detail'
+import { conversationsMock } from '../../mocks/conversations'
 import { ConversationRail } from './conversation-rail'
 import { ConversationWorkspace } from './conversation-workspace'
-import { InspectorPanel } from './inspector-panel'
+import { InspectorPanel, type InspectorTab } from './inspector-panel'
 
-export function ConversationDetailPage() {
+interface ConversationDetailPageProps {
+  conversationId: string
+  initialInspectorTab?: InspectorTab
+}
+
+export function ConversationDetailPage({
+  conversationId,
+  initialInspectorTab = 'overview',
+}: ConversationDetailPageProps) {
   const data = conversationDetailMock
-  const [inspectorOpen, setInspectorOpen] = useState(false)
+  const catalogConversation = conversationsMock.conversations.find(
+    (conversation) => conversation.id === conversationId,
+  )
+  const conversationMachine = catalogConversation
+    ? conversationsMock.machines.find(
+        (machine) => machine.id === catalogConversation.machine,
+      )?.name
+    : undefined
+  const conversation = catalogConversation
+    ? {
+        ...data.conversation,
+        id: catalogConversation.id,
+        title: catalogConversation.title,
+        status: catalogConversation.status,
+        agent: catalogConversation.agent,
+        model: catalogConversation.model,
+        machine: conversationMachine ?? data.conversation.machine,
+      }
+    : data.conversation
+  const [inspectorOpen, setInspectorOpen] = useState(
+    () =>
+      initialInspectorTab !== 'overview' &&
+      typeof window !== 'undefined' &&
+      window.matchMedia('(max-width: 1439px)').matches,
+  )
   const inspectorTriggerRef = useRef<HTMLButtonElement>(null)
 
   const inspectorProps = {
-    conversation: data.conversation,
+    conversation,
     changes: data.inspector.changes,
     totals: data.inspector.totals,
     terminal: data.inspector.terminal,
     context: data.inspector.context,
+    initialTab: initialInspectorTab,
   } as const
 
   return (
@@ -26,10 +60,10 @@ export function ConversationDetailPage() {
         <ConversationRail
           groups={data.rail.groups}
           archivedCount={data.rail.archivedCount}
-          currentConversationId={data.conversation.id}
+          currentConversationId={conversationId}
         />
         <ConversationWorkspace
-          conversation={data.conversation}
+          conversation={conversation}
           timeline={data.timeline}
           onOpenInspector={() => setInspectorOpen(true)}
           inspectorTriggerRef={inspectorTriggerRef}

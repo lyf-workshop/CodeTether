@@ -29,10 +29,13 @@ async function renderApp() {
     import('@tanstack/react-router'),
     import('./router'),
   ])
+  const { DemoStateProvider } = await import('./state/demo-state-provider')
 
   createRoot(appRoot).render(
     <StrictMode>
-      <RouterProvider router={router} />
+      <DemoStateProvider>
+        <RouterProvider router={router} />
+      </DemoStateProvider>
     </StrictMode>,
   )
 }

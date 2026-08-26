@@ -55,7 +55,7 @@ type DialogContentProps = React.ComponentProps<
 function DialogContent({
   children,
   className,
-  closeLabel = 'Close dialog',
+  closeLabel = '关闭对话框',
   showCloseButton = true,
   ...props
 }: DialogContentProps) {
@@ -117,7 +117,7 @@ function DialogFooter({
       {children}
       {showCloseButton && (
         <DialogPrimitive.Close asChild>
-          <Button variant="secondary">Close</Button>
+          <Button variant="secondary">关闭</Button>
         </DialogPrimitive.Close>
       )}
     </div>

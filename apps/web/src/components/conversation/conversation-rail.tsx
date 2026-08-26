@@ -1,4 +1,5 @@
 import { useId, useMemo, useState, type ComponentPropsWithoutRef } from 'react'
+import { Link } from '@tanstack/react-router'
 import { Archive, MoreHorizontal, Plus } from 'lucide-react'
 
 import {
@@ -92,9 +93,8 @@ function ConversationRailRow({
   return (
     <li>
       <Button
+        asChild
         variant="ghost"
-        aria-current={selected ? 'page' : undefined}
-        data-selected={selected || undefined}
         className={cn(
           'group relative h-16 w-full min-w-0 justify-start gap-3 overflow-hidden rounded-sm px-3 text-left whitespace-normal',
           'border border-transparent bg-transparent hover:bg-surface-muted/60',
@@ -103,44 +103,52 @@ function ConversationRailRow({
             : attentionClass,
         )}
       >
-        <StatusDot status={conversation.status} />
+        <Link
+          to="/conversations/$conversationId"
+          params={{ conversationId: conversation.id }}
+          search={{}}
+          aria-current={selected ? 'page' : undefined}
+          data-selected={selected || undefined}
+        >
+          <StatusDot status={conversation.status} />
 
-        <span className="min-w-0 flex-1 self-stretch py-2">
-          <span
-            className={cn(
-              'block truncate text-md',
-              selected ? 'font-semibold' : 'font-medium',
-              conversation.status === 'completed' && !selected
-                ? 'text-text-secondary'
-                : 'text-text-primary',
-            )}
-          >
-            {conversation.title}
+          <span className="min-w-0 flex-1 self-stretch py-2">
+            <span
+              className={cn(
+                'block truncate text-md',
+                selected ? 'font-semibold' : 'font-medium',
+                conversation.status === 'completed' && !selected
+                  ? 'text-text-secondary'
+                  : 'text-text-primary',
+              )}
+            >
+              {conversation.title}
+            </span>
+            <span
+              className={cn(
+                'mt-1 block truncate text-xs font-regular',
+                statusTextColorClasses[conversation.status],
+              )}
+            >
+              {statusSummary}
+            </span>
           </span>
-          <span
-            className={cn(
-              'mt-1 block truncate text-xs font-regular',
-              statusTextColorClasses[conversation.status],
-            )}
-          >
-            {statusSummary}
-          </span>
-        </span>
 
-        <span className="flex h-full shrink-0 flex-col items-end justify-between py-2 text-text-muted">
-          <span className="text-xs font-regular tabular-nums">
-            {conversation.lastActivity}
+          <span className="flex h-full shrink-0 flex-col items-end justify-between py-2 text-text-muted">
+            <span className="text-xs font-regular tabular-nums">
+              {conversation.lastActivity}
+            </span>
+            <MoreHorizontal
+              aria-hidden="true"
+              className={cn(
+                'size-4 transition-opacity duration-150 motion-reduce:transition-none',
+                selected
+                  ? 'opacity-60 group-hover:opacity-100'
+                  : 'opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100',
+              )}
+            />
           </span>
-          <MoreHorizontal
-            aria-hidden="true"
-            className={cn(
-              'size-4 transition-opacity duration-150 motion-reduce:transition-none',
-              selected
-                ? 'opacity-60 group-hover:opacity-100'
-                : 'opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100',
-            )}
-          />
-        </span>
+        </Link>
       </Button>
     </li>
   )
@@ -202,7 +210,7 @@ export function ConversationRail({
           会话
         </h2>
         <IconButton
-          label="新建会话（Mock）"
+          label="新建会话"
           size="sm"
           variant="secondary"
           className="h-[var(--layout-brand-mark-size)] w-[var(--layout-sidebar-mark-size)]"

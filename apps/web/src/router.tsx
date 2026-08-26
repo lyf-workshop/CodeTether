@@ -7,66 +7,81 @@ import {
 
 import { RootLayout } from './components/app-shell/root-layout'
 import { RoutePlaceholder } from './components/app-shell/route-placeholder'
-import { ConversationDetailPage } from './components/conversation'
+import { ConversationDetailRoute } from './components/conversation/conversation-detail-route'
+import { ConversationsPage } from './components/conversations'
+import { InboxPage } from './components/inbox'
 
 const rootRoute = createRootRoute({ component: RootLayout })
+
+interface ConversationSearch {
+  panel?: 'changes'
+}
 
 const homeRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/',
   beforeLoad: () => {
     throw redirect({
-      to: '/conversations/$conversationId',
-      params: { conversationId: 'demo' },
+      to: '/inbox',
       replace: true,
     })
   },
 })
 
+const conversationsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/conversations',
+  component: ConversationsPage,
+})
+
 const conversationRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/conversations/$conversationId',
-  component: ConversationDetailPage,
+  validateSearch: (search: Record<string, unknown>): ConversationSearch => ({
+    panel: search.panel === 'changes' ? 'changes' : undefined,
+  }),
+  component: ConversationDetailRoute,
 })
 
 const inboxRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/inbox',
-  component: () => <RoutePlaceholder title="Inbox" />,
+  component: InboxPage,
 })
 
 const activityRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/activity',
-  component: () => <RoutePlaceholder title="Activity" />,
+  component: () => <RoutePlaceholder title="活动" />,
 })
 
 const projectsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/projects',
-  component: () => <RoutePlaceholder title="Projects" />,
+  component: () => <RoutePlaceholder title="项目" />,
 })
 
 const agentsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/agents',
-  component: () => <RoutePlaceholder title="Agents" />,
+  component: () => <RoutePlaceholder title="智能体" />,
 })
 
 const machinesRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/machines',
-  component: () => <RoutePlaceholder title="Machines" />,
+  component: () => <RoutePlaceholder title="机器" />,
 })
 
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/settings',
-  component: () => <RoutePlaceholder title="Settings" />,
+  component: () => <RoutePlaceholder title="设置" />,
 })
 
 const routeTree = rootRoute.addChildren([
   homeRoute,
+  conversationsRoute,
   conversationRoute,
   inboxRoute,
   activityRoute,

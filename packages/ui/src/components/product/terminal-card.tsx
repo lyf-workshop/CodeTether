@@ -14,7 +14,7 @@ export interface TerminalCardProps extends Omit<
 
 /** Static terminal preview based on Figma node 14:270. */
 export function TerminalCard({
-  title = 'Terminal',
+  title = '终端',
   output,
   action,
   ariaLive = 'off',

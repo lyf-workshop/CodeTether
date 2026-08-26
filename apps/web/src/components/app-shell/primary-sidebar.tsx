@@ -103,24 +103,33 @@ function PresenceDot({ label, status }: PresenceDotProps) {
 }
 
 interface SidebarLinkProps {
+  attentionCount?: number
   currentPath: string
   item: SidebarNavItem
 }
 
-function SidebarLink({ currentPath, item }: SidebarLinkProps) {
+function SidebarLink({
+  attentionCount = 0,
+  currentPath,
+  item,
+}: SidebarLinkProps) {
   const selected = isCurrentRoute(currentPath, item.to)
   const Icon = item.icon
+  const accessibleLabel =
+    attentionCount > 0
+      ? `${item.label}，${attentionCount} 项待处理`
+      : item.label
 
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         <Link
           to={item.to}
-          aria-label={item.label}
+          aria-label={accessibleLabel}
           aria-current={selected ? 'page' : undefined}
           data-selected={selected || undefined}
           className={cn(
-            'group flex h-[var(--layout-sidebar-nav-item-height)] w-full min-w-0 items-center justify-center gap-[var(--layout-sidebar-nav-gap)] rounded-sm border px-2 text-md font-medium outline-none',
+            'group relative flex h-[var(--layout-sidebar-nav-item-height)] w-full min-w-0 items-center justify-center gap-[var(--layout-sidebar-nav-gap)] rounded-sm border px-2 text-md font-medium outline-none',
             'transition-colors duration-150 motion-reduce:transition-none',
             'focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-navigation',
             'lg:justify-start',
@@ -136,10 +145,18 @@ function SidebarLink({ currentPath, item }: SidebarLinkProps) {
           <span className="hidden min-w-0 flex-1 truncate lg:block">
             {item.label}
           </span>
+          {attentionCount > 0 ? (
+            <span
+              aria-hidden="true"
+              className="absolute top-1 right-1 grid h-4 min-w-4 place-items-center rounded-full border border-primary/30 bg-primary-muted px-1 text-2xs font-semibold tabular-nums text-primary lg:static lg:h-5 lg:min-w-5"
+            >
+              {attentionCount}
+            </span>
+          ) : null}
         </Link>
       </TooltipTrigger>
       <TooltipContent side="right" className="lg:hidden">
-        {item.label}
+        {accessibleLabel}
       </TooltipContent>
     </Tooltip>
   )
@@ -150,11 +167,13 @@ export interface PrimarySidebarProps extends Omit<
   'children'
 > {
   currentPath: string
+  inboxAttentionCount?: number
 }
 
 /** Desktop-primary navigation and mock availability summary for Phase 1B. */
 export function PrimarySidebar({
   currentPath,
+  inboxAttentionCount = 0,
   className,
   'aria-label': ariaLabel = '主导航',
   ...props
@@ -182,6 +201,9 @@ export function PrimarySidebar({
                 key={item.to}
                 item={item}
                 currentPath={currentPath}
+                attentionCount={
+                  item.to === '/inbox' ? inboxAttentionCount : undefined
+                }
               />
             ))}
           </nav>
@@ -198,21 +220,29 @@ export function PrimarySidebar({
               当前项目
             </h2>
             <Button
+              asChild
               variant="outline"
-              aria-label="当前项目：MyProject"
               className="mt-2 h-[var(--layout-sidebar-context-item-height)] w-full justify-start rounded-sm border-border-strong bg-primary-muted/40 px-2 text-left hover:bg-primary-muted/60"
             >
-              <FolderOpen
-                aria-hidden="true"
-                className="size-4 shrink-0 text-primary"
-              />
-              <span className="min-w-0 flex-1 truncate text-md font-semibold text-text-primary">
-                MyProject
-              </span>
-              <ChevronDown
-                aria-hidden="true"
-                className="size-4 shrink-0 text-text-secondary"
-              />
+              <Link
+                to="/conversations"
+                aria-label="打开 MyProject 的会话"
+                aria-current={
+                  currentPath.startsWith('/conversations') ? 'page' : undefined
+                }
+              >
+                <FolderOpen
+                  aria-hidden="true"
+                  className="size-4 shrink-0 text-primary"
+                />
+                <span className="min-w-0 flex-1 truncate text-md font-semibold text-text-primary">
+                  MyProject
+                </span>
+                <ChevronDown
+                  aria-hidden="true"
+                  className="size-4 shrink-0 text-text-secondary"
+                />
+              </Link>
             </Button>
           </section>
 

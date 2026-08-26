@@ -105,7 +105,7 @@ export function Composer({ conversation }: ComposerProps) {
             </div>
           </TooltipTrigger>
           <TooltipContent side="top" className="max-w-72">
-            此会话由 Codex 创建。如需使用其他 Agent，请新建会话。
+            此会话由 Codex 创建。如需使用其他智能体，请新建会话。
           </TooltipContent>
         </Tooltip>
         <Button

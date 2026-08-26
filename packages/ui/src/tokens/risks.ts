@@ -17,17 +17,17 @@ export interface RiskDefinition {
 
 export const riskDefinitions = {
   low: {
-    label: 'Low risk',
+    label: '低风险',
     icon: ShieldCheck,
     badgeClassName: 'border-success/30 bg-success-muted text-success',
   },
   medium: {
-    label: 'Medium risk',
+    label: '中风险',
     icon: ShieldQuestion,
     badgeClassName: 'border-warning/30 bg-warning-muted text-warning',
   },
   high: {
-    label: 'High risk',
+    label: '高风险',
     icon: ShieldAlert,
     badgeClassName: 'border-danger/30 bg-danger-muted text-danger',
   },

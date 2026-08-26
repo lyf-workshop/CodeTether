@@ -6,13 +6,18 @@ import {
 } from '@codetether/ui'
 
 import type { ConversationDetailMock } from '../../mocks/conversation-detail'
+import type { AgentId } from '@codetether/ui'
 import { AgentMessage, UserMessage } from './message'
 
 interface ConversationTimelineProps {
+  agent: AgentId
   timeline: ConversationDetailMock['timeline']
 }
 
-export function ConversationTimeline({ timeline }: ConversationTimelineProps) {
+export function ConversationTimeline({
+  agent,
+  timeline,
+}: ConversationTimelineProps) {
   return (
     <ScrollArea aria-label="会话执行时间线" className="min-h-0 bg-background">
       <div className="mx-auto w-full max-w-3xl px-5 pb-5">
@@ -23,7 +28,7 @@ export function ConversationTimeline({ timeline }: ConversationTimelineProps) {
         <div className="space-y-3">
           <UserMessage message={timeline.userMessage} className="min-h-19" />
 
-          <AgentMessage message={timeline.agentRun.message}>
+          <AgentMessage agent={agent} message={timeline.agentRun.message}>
             <div className="border-t border-border/50">
               {timeline.agentRun.tools.map((tool) => (
                 <ToolCallCard
@@ -62,7 +67,11 @@ export function ConversationTimeline({ timeline }: ConversationTimelineProps) {
             </div>
           </AgentMessage>
 
-          <AgentMessage message={timeline.followUp} className="py-2" />
+          <AgentMessage
+            agent={agent}
+            message={timeline.followUp}
+            className="py-2"
+          />
         </div>
       </div>
     </ScrollArea>

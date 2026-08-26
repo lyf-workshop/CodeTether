@@ -11,6 +11,7 @@ interface AppShellProps {
   currentPage: string
   currentPath: string
   currentProject?: string
+  inboxAttentionCount?: number
 }
 
 export function AppShell({
@@ -18,6 +19,7 @@ export function AppShell({
   currentPage,
   currentPath,
   currentProject = 'MyProject',
+  inboxAttentionCount = 0,
 }: AppShellProps) {
   return (
     <TooltipProvider>
@@ -30,7 +32,10 @@ export function AppShell({
         </a>
         <TopBar currentPage={currentPage} currentProject={currentProject} />
         <div className="grid min-h-0 grid-cols-[var(--layout-sidebar-current-width)_minmax(0,1fr)]">
-          <PrimarySidebar currentPath={currentPath} />
+          <PrimarySidebar
+            currentPath={currentPath}
+            inboxAttentionCount={inboxAttentionCount}
+          />
           <MainContent>{children}</MainContent>
         </div>
       </div>

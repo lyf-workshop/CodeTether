@@ -67,12 +67,12 @@ export function ConversationHeader({
           variant="secondary"
           size="sm"
           className="h-8 border-border bg-surface-muted/65 px-3 text-sm"
-          aria-label="查看当前会话的变更（Mock）"
+          aria-label="查看当前会话的变更"
         >
           <span className="max-[1180px]:sr-only">查看变更</span>
         </Button>
         <IconButton
-          label="暂停或中断当前运行（Mock）"
+          label="暂停或中断当前运行"
           variant="ghost"
           size="sm"
           className="size-8 text-text-secondary"
@@ -80,7 +80,7 @@ export function ConversationHeader({
           <Pause aria-hidden="true" />
         </IconButton>
         <IconButton
-          label="停止当前会话（Mock）"
+          label="停止当前会话"
           variant="ghost"
           size="sm"
           className="size-8 text-danger hover:bg-danger-muted/60 hover:text-danger active:bg-danger-muted"

@@ -1,4 +1,5 @@
 import type { ComponentPropsWithoutRef, MouseEventHandler } from 'react'
+import { Link } from '@tanstack/react-router'
 import { Bell, CircleHelp, Plus, Search } from 'lucide-react'
 
 import {
@@ -23,7 +24,7 @@ interface TopBarProps extends Omit<
   currentProject: string
   notificationCount?: number
   onHelp?: MouseEventHandler<HTMLButtonElement>
-  onNewTask?: MouseEventHandler<HTMLButtonElement>
+  onNewConversation?: MouseEventHandler<HTMLButtonElement>
   onNotifications?: MouseEventHandler<HTMLButtonElement>
   onProfile?: MouseEventHandler<HTMLButtonElement>
   onSearch?: MouseEventHandler<HTMLButtonElement>
@@ -42,7 +43,7 @@ function TopBar({
   currentProject,
   notificationCount = 0,
   onHelp,
-  onNewTask,
+  onNewConversation,
   onNotifications,
   onProfile,
   onSearch,
@@ -76,8 +77,13 @@ function TopBar({
       <div className="flex min-w-0 flex-1 items-center gap-4 pr-[var(--layout-topbar-inline-padding)] pl-[var(--layout-content-inline-padding)]">
         <nav aria-label="当前位置" className="min-w-0 flex-1 overflow-hidden">
           <ol className="flex min-w-0 items-center gap-3 text-md font-medium">
-            <li className="min-w-0 shrink truncate text-text-primary">
-              {currentProject}
+            <li className="min-w-0 shrink truncate">
+              <Link
+                to="/conversations"
+                className="rounded-xs text-text-primary outline-none transition-colors hover:text-primary focus-visible:ring-2 focus-visible:ring-ring/60 motion-reduce:transition-none"
+              >
+                {currentProject}
+              </Link>
             </li>
             <li aria-hidden="true" className="shrink-0 text-lg text-text-muted">
               ›
@@ -94,11 +100,12 @@ function TopBar({
         <div className="flex shrink-0 items-center gap-4">
           <Button
             size="sm"
-            onClick={onNewTask}
+            onClick={onNewConversation}
+            aria-label="新建会话"
             className="h-[2.125rem] w-9 gap-2 px-0 md:w-26 md:px-3"
           >
             <Plus aria-hidden="true" />
-            <span className="hidden md:inline">新建任务</span>
+            <span className="hidden md:inline">新建会话</span>
           </Button>
 
           <Button

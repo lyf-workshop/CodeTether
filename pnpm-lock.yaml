@@ -36,6 +36,15 @@ importers:
         specifier: ^8.67.0
         version: 8.67.0(eslint@10.9.0(jiti@2.7.0))(typescript@6.0.3)
 
+  apps/host:
+    dependencies:
+      '@codetether/adapter-codex':
+        specifier: workspace:*
+        version: link:../../packages/adapter-codex
+      '@codetether/agent-core':
+        specifier: workspace:*
+        version: link:../../packages/agent-core
+
   apps/web:
     dependencies:
       '@codetether/ui':
@@ -81,6 +90,14 @@ importers:
       vite:
         specifier: ^8.2.2
         version: 8.2.2(@types/node@26.2.0)(jiti@2.7.0)
+
+  packages/adapter-codex:
+    dependencies:
+      '@codetether/agent-core':
+        specifier: workspace:*
+        version: link:../agent-core
+
+  packages/agent-core: {}
 
   packages/ui:
     dependencies:

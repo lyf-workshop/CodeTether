@@ -159,4 +159,4 @@ Explicitly deferred:
 
 ## Current Phase
 
-Phase 1C.2 is the final UX polish pass for the accepted mock-only Desktop Conversation Detail workspace. It prioritizes the central workspace, reduces nested-card treatment in the execution timeline, restrains repeated running emphasis, and strengthens the locked-agent Composer as a command center without changing the accepted data model, page structure, or product architecture. It contains no host, persistence, networking, real agent actions, or other product-page content. See [`ROADMAP.md`](ROADMAP.md) for phase gates.
+Phase 1 Frontend Experience is accepted and frozen as **CodeTether V2 Frontend Core v1**, including the Design System, AppShell, Desktop Inbox v1, Desktop Conversations v1, and Conversation Workspace v1. **Phase 2A — Codex App Server Runtime Spike** is active. It validates the local Host-to-Codex process and protocol loop in an isolated temporary workspace without connecting real runtime data to React. It adds no product page, browser transport, persistence, Tauri functionality, remote access, or non-Codex provider integration. See [`ROADMAP.md`](ROADMAP.md) for phase gates.

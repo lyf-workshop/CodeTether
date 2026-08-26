@@ -4,21 +4,21 @@
 
 CodeTether is a planned desktop and mobile workspace for supervising and controlling coding agents across projects and machines. V1 is Codex-first, with provider-neutral boundaries for later Claude Code and OpenCode support.
 
-This repository is currently in **Phase 1C.2 — Core Workspace UX Polish**. The Phase 1C engineering and product structure is accepted; active work is limited to final visual and UX refinement of the Figma-approved, mock-only conversation workspace. It does not contain a host, persistence, desktop integration, real agent actions, or agent adapters.
+Phase 1 is accepted and frozen as **CodeTether V2 Frontend Core v1**. The current work is **Phase 2A — Codex App Server Runtime Spike**: a development-only Host CLI can drive one local Codex Thread and Turn inside an isolated temporary workspace. The real runtime is not connected to React and includes no persistence, browser API, Tauri shell, remote access, or non-Codex provider.
 
 ## Repository layout
 
 ```text
 codetether-v2/
 ├── apps/
-│   ├── web/                 # React web/PWA bootstrap (active)
+│   ├── web/                 # Frozen React web/PWA frontend
 │   ├── desktop/             # Future Tauri 2 shell (placeholder)
-│   └── host/                # Future Node.js agent host (placeholder)
+│   └── host/                # Phase 2A Runtime Spike runner
 ├── packages/
 │   ├── ui/                  # Shared design-system foundation (active)
 │   ├── protocol/            # Future client/host contracts (placeholder)
-│   ├── agent-core/          # Future provider-neutral abstraction (placeholder)
-│   ├── adapter-codex/       # Future Codex adapter (placeholder)
+│   ├── agent-core/          # Minimal normalized runtime events
+│   ├── adapter-codex/       # Codex App Server spike adapter
 │   ├── adapter-claude/      # Future Claude Code adapter (placeholder)
 │   ├── adapter-opencode/    # Future OpenCode adapter (placeholder)
 │   └── shared/              # Future shared utilities (placeholder)
@@ -50,11 +50,13 @@ pnpm dev           # Start apps/web
 pnpm typecheck     # Typecheck all implemented workspaces
 pnpm lint          # Lint the repository
 pnpm build         # Build all implemented workspaces
+pnpm test          # Run fixture-based runtime tests
 pnpm format        # Format writable source files
 pnpm format:check  # Verify formatting
+pnpm codex:spike   # Run the manual real-Codex integration spike
 ```
 
-Tests will be added with behavior that merits testing; the root quality gate must include `pnpm test` once test scripts exist.
+`pnpm codex:spike` uses only the ignored `.tmp/codetether-codex-spike/` workspace. It must never target the CodeTether source repository.
 
 ## Documentation
 
@@ -65,4 +67,4 @@ Tests will be added with behavior that merits testing; the root quality gate mus
 
 ## Status
 
-Do not start Conversations, Inbox, later Phase 1 product-screen content, or runtime infrastructure without an explicit phase transition. See the roadmap for ordered gates.
+Phase 2A implementation is complete and awaiting review. Do not connect the Runtime Spike to the browser, add persistence, begin Phase 2B, or redesign the frozen frontend without an explicit phase transition. See the roadmap for ordered gates.

@@ -27,35 +27,32 @@ If sources conflict, stop and resolve the conflict instead of inventing a compro
 
 ## Current Scope
 
-The current phase is **Phase 1C.2 — Core Workspace UX Polish**. The Phase 1C engineering and product structure has been accepted. Allowed work is limited to:
+The current phase is **Phase 2A — Codex App Server Runtime Spike**. The accepted frontend is frozen as **CodeTether V2 Frontend Core v1**, including the Design System, AppShell, Desktop Inbox v1, Desktop Conversations v1, and Conversation Workspace v1. Allowed work is limited to:
 
-- The Figma `07 Desktop - Conversation Detail` workspace inside the accepted shared `AppShell`.
-- `ConversationRail`, `ConversationHeader`, `ConversationTimeline`, user and agent messages, compact tool execution, code/diff and shell/test presentation, `InspectorPanel`, and `Composer`.
-- Typed mock data for the project, conversation, agents, machine, messages, tool calls, changes, terminal summaries, and context.
-- A formal mock route at `/conversations/:conversationId`, including `/conversations/demo` as the development preview.
-- Desktop-first responsive behavior validated at 1536 × 1024 and 1280 × 900; the inspector may collapse at narrower widths.
-- Accessible mock interactions, visible focus, reduced-motion support, and quality tooling required by this scope.
-- Visual and UX refinement of typography, zh-CN labels, surface hierarchy, execution-state emphasis, diff restraint, and the existing Composer information architecture.
-- A local responsive Inspector overlay for widths where the persistent Inspector is hidden.
-- Final workspace-priority tuning, compact execution-log presentation, restrained running emphasis, and command-center polish without changing the accepted data model or page architecture.
-- Continued access to the accepted placeholder routes and development-only `/__ui` showcase without expanding their content.
+- Inspecting the locally installed Codex CLI and generating ignored protocol evidence from that exact version.
+- Building a minimal development-only runtime harness in `apps/host` for one long-running local Codex App Server process.
+- Implementing Codex process lifecycle, newline-delimited transport, request matching, notifications, server requests, and manual one-shot approvals in `packages/adapter-codex`.
+- Defining only the normalized runtime events actually required or observed by the spike in `packages/agent-core`.
+- Running one safe Thread and Turn inside the ignored, isolated `.tmp/codetether-codex-spike/` workspace.
+- Adding fixture-based tests for pure transport and normalization behavior without starting a real agent during `pnpm test`.
+- Recording verified protocol behavior, observed events, limitations, and quality-gate results.
 
-Do not begin Conversations, Inbox, or any later product-page work during this polish pass. When the project moves phases, update this section as part of that deliberate transition.
+This phase stops at an in-process Host CLI harness. Do not connect the runtime to the browser or begin Phase 2B. When the project moves phases, update this section as part of that deliberate transition.
 
 ## Out of Scope
 
-During Phase 1C.2, do not implement:
+During Phase 2A, do not implement:
 
-- Conversations List, Inbox, Projects, Machines, Agents, Settings, or any other product-page content outside Conversation Detail.
-- Real terminal, Git, filesystem, permission, approval, or agent actions; all interactions and data remain mock-only.
-- Cross-agent switching or handoff inside an existing conversation. A conversation's agent is immutable.
-- Mobile navigation or mobile product screens.
-- Desktop/Tauri functionality.
-- Host processes, databases, persistence, networking, WebSocket servers, or remote access.
-- Agent runtimes, SDKs, adapters, detection, session management, or tool execution.
-- Codex, Claude Code, or OpenCode integration.
-- Cross-agent conversation handoff.
-- Team, enterprise, public cloud relay, or speculative platform features.
+- Changes or visual refactors to the frozen Design System, AppShell, Inbox, Conversations, or Conversation Workspace.
+- Activity, Projects, Machines, Agents, Settings, New Conversation, or any other new product-page content or flow.
+- Browser-facing REST, WebSocket, SSE, or another client transport.
+- Tauri or desktop-shell functionality.
+- SQLite, another database, persistence, migrations, repositories, or durable event storage.
+- Machine management, project management, remote access, relay, authentication, or production Host services.
+- Connecting real Codex data to React, TanStack Query, Zustand, or any frontend Mock state.
+- Approval persistence, `Always Allow`, automatic approval, or a production permission-policy system.
+- Claude Code or OpenCode adapters, speculative provider implementations, or cross-agent conversation handoff.
+- Mobile screens, team, enterprise, public cloud relay, or other later-phase platform features.
 
 Do not install dependencies for an out-of-scope runtime merely because its directory exists.
 

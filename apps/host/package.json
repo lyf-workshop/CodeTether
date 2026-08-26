@@ -1,0 +1,16 @@
+{
+  "name": "@codetether/host",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit --pretty false",
+    "lint": "eslint .",
+    "spike": "node dist/spike.js"
+  },
+  "dependencies": {
+    "@codetether/adapter-codex": "workspace:*",
+    "@codetether/agent-core": "workspace:*"
+  }
+}

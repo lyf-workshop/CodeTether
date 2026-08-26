@@ -34,9 +34,10 @@ Required implementation order:
 
 1. **Phase 1A — Design System & Components** — approved `00 Foundations` tokens and reusable `92 Components`. Accepted.
 2. **Phase 1B — Desktop AppShell** — the shared TopBar, PrimarySidebar, MainContent region, and placeholder routes. Accepted.
-3. **Phase 1C — 07 Desktop — Conversation Detail** — engineering and product structure accepted; Phase 1C.1 is complete and Phase 1C.2 final core-workspace polish is active. Mock data only.
-4. **06 Desktop — Conversations** — conversation navigation and management experience.
-5. **02 Desktop — Inbox** — action-focused approvals, questions, failures, and completions.
+3. **Phase 1C — 07 Desktop — Conversation Detail** — accepted and frozen as **Conversation Workspace v1** after Phase 1C.2 final core-workspace polish. Mock data only.
+4. **Phase 1D — 06 Desktop — Conversations** — accepted and frozen as **Desktop Conversations v1**. Mock data only; the new-conversation flow remains deferred.
+5. **Phase 1E — 02 Desktop — Inbox** — accepted and frozen as **Desktop Inbox v1**. Mock data only.
+6. **Phase 1F — Core Product Integration & UX Review** — accepted. Terminology, navigation, deep links, shared typed Mock state, accessibility, and cross-screen consistency were reviewed across the frozen experiences.
 
 All data is mock data. Mock scenarios should cover realistic working, waiting, approval, question, failure, and completion states without pretending to be a backend.
 
@@ -56,9 +57,40 @@ Exit gate:
 - Typecheck, lint, relevant tests, and production build pass.
 - Product experience is explicitly accepted before backend work begins.
 
+Phase 1 passed its exit gate and is frozen as **CodeTether V2 Frontend Core v1**.
+
 ## Phase 2 — Codex Local Loop
 
 **Goal:** prove the first real end-to-end local agent loop with Codex.
+
+### Phase 2A — Codex App Server Runtime Spike
+
+**Status:** implementation complete and verified against local `codex-cli 0.149.1`; awaiting Phase 2A review. Phase 2B has not started.
+
+Verified outcomes:
+
+- Local App Server capabilities were inspected and both JSON Schema and TypeScript protocol definitions were generated into an ignored temporary directory.
+- One long-running App Server process completed `initialize` / `initialized` once.
+- A provider-owned ephemeral Thread and Turn were created in an isolated ignored workspace.
+- A safe real prompt produced streamed Agent messages, command/tool events, a file change, diff notification, and successful Turn completion.
+- Codex wire events were translated into the smallest currently needed `packages/agent-core` event contract.
+- Manual one-shot approval dispatch exists, but the successful real Turn did not trigger an approval request.
+- Fixture tests cover line framing, request matching, unknown notifications, event normalization, and pending-request rejection on process exit.
+- The runtime shut down cleanly after the completed Turn.
+
+Phase 2A deliberately contains no browser transport, React integration, persistence, Tauri shell, remote access, or non-Codex adapter.
+
+Exit gate:
+
+- `pnpm typecheck`, `pnpm lint`, `pnpm format:check`, `pnpm build`, and `pnpm test` pass.
+- `pnpm codex:spike` completes one real safe Turn in the isolated workspace.
+- Observed protocol behavior and unresolved gaps are documented.
+
+### Phase 2B — Client-to-Host Connection
+
+**Status:** not started.
+
+The browser-facing transport and its versioned contracts must be designed from the verified Runtime Spike without exposing raw Codex JSON-RPC to React. No HTTP, WebSocket, SSE, or alternative transport has been selected yet.
 
 Planned outcomes:
 

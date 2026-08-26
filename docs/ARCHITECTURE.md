@@ -2,11 +2,13 @@
 
 ## Status
 
-This document describes the intended architecture and its boundaries. In Phase 0, only `apps/web` and `packages/ui` have executable foundations. Desktop, Host, Protocol, Agent Core, adapters, persistence, and event streaming are documentation or README-only placeholders; none is implemented.
+Phase 1 Frontend Experience is accepted and frozen as **CodeTether V2 Frontend Core v1**. Phase 2A implements only a development Runtime Spike: an in-process Node.js CLI harness can drive one local Codex App Server through initialize, Thread, Turn, streamed events, and shutdown. The frozen React frontend remains Mock-only and is not connected to this runtime.
+
+No browser API, Tauri shell, database, persistence, remote access, or production machine-host service exists yet.
 
 ## System Context
 
-The future local desktop path is:
+The intended local desktop path remains:
 
 ```text
 Desktop UI
@@ -21,7 +23,7 @@ Agent Adapter
 Coding Agent
 ```
 
-Web and mobile clients use the same host boundary:
+Future web and mobile clients use the same host boundary:
 
 ```text
 Mobile / Web
@@ -30,143 +32,197 @@ Mobile / Web
  Machine Host
 ```
 
-The Machine Host is the authority for execution, persisted records, permissions, and live state. Clients render normalized data and send explicit commands; they do not operate agent protocols directly.
+The future Machine Host will be the runtime authority. Clients must render normalized data and send explicit commands rather than operate provider protocols directly. Phase 2A validates only the lower Host-to-Codex portion of this model.
 
-## Planned Monorepo Boundaries
+## Monorepo Boundaries
 
 ```text
-apps/web                 React web/PWA client
-apps/desktop             Tauri 2 desktop shell
-apps/host                Node.js machine host
+apps/web                   React web/PWA client; frozen Mock frontend
+apps/desktop               Future Tauri 2 desktop shell placeholder
+apps/host                  Phase 2A development runner and process lifecycle
 
-packages/ui              Shared design system
-packages/protocol        Versioned client ↔ host contracts
-packages/agent-core      Provider-neutral adapter interfaces and events
-packages/adapter-codex   Codex-specific integration
-packages/adapter-claude  Claude Code-specific integration
-packages/adapter-opencode OpenCode-specific integration
-packages/shared          Small environment-neutral shared utilities
+packages/ui                Shared design system
+packages/protocol          Future client-to-host contracts placeholder
+packages/agent-core        Minimal normalized runtime event contract
+packages/adapter-codex     Codex App Server process, transport, and translation
+packages/adapter-claude    Future Claude Code adapter placeholder
+packages/adapter-opencode  Future OpenCode adapter placeholder
+packages/shared            Environment-neutral shared utilities placeholder
 ```
 
-Dependencies should point inward toward stable contracts. UI code must not import provider adapters. Adapters may depend on agent-core and protocol-neutral domain types, never on product UI.
+Dependencies point inward toward stable contracts. UI code does not import provider adapters. `packages/adapter-codex` depends on `packages/agent-core`; neither package depends on product UI.
+
+## Verified Phase 2A Runtime
+
+The verified spike path is:
+
+```text
+apps/host spike CLI
+        │
+        ▼
+CodexAppServerClient
+        │
+        ▼
+newline transport + pending request map
+        │
+        ▼
+one long-running `codex app-server` child process
+        │
+        ▼
+local Codex runtime
+
+provider notifications
+        │
+        ▼
+Codex normalizer
+        │
+        ▼
+minimal CodeTether runtime events
+```
+
+The verified executable is `codex-cli 0.149.1`. Both JSON Schema and TypeScript protocol definitions were generated from that installed executable with:
+
+```text
+codex app-server generate-json-schema --out <directory>
+codex app-server generate-ts --out <directory>
+```
+
+Generated output is ignored development evidence under `.tmp/`; it is not copied into source and is not a runtime dependency. The implemented protocol subset follows the generated schema rather than an older external enum or legacy CodeTether implementation.
+
+### Process and Transport
+
+`packages/adapter-codex` owns one child process started with the App Server's stdio listener. It separates protocol stdout from diagnostic stderr, frames UTF-8 newline-delimited messages, generates request IDs, matches responses through a pending-request map, dispatches notifications and server requests, and rejects pending work on timeout or unexpected process exit.
+
+Unknown notifications are logged and ignored. Malformed JSON, unknown response IDs, remote errors, startup failure, request timeout, and unexpected exit remain visible diagnostic errors. Shutdown closes stdin first, allows a grace period, and terminates the child only when necessary.
+
+### Initialize Handshake
+
+The successful sequence is:
+
+```text
+initialize
+  clientInfo.name    = codetether
+  clientInfo.title   = CodeTether
+  clientInfo.version = repository package version
+initialized
+```
+
+The generated Codex 0.149.1 envelope does not require a `jsonrpc: "2.0"` member. Request IDs may be strings or numbers. The `initialized` notification has no parameters.
+
+### Thread and Turn
+
+The spike creates one Codex-owned ephemeral Thread with the isolated workspace's absolute path, `workspace-write` sandboxing, `on-request` approval policy, and user-reviewed approvals. It then starts one Turn with a safe text prompt. Provider-generated Thread and Turn IDs are retained; CodeTether does not invent replacements for them in this spike.
+
+The Test Workspace is `.tmp/codetether-codex-spike/`. It is ignored by the parent repository, contains restrictive local instructions, and has an independent Git boundary so provider Git inspection cannot walk into the CodeTether source repository.
+
+### Observed Provider Methods
+
+One successful real Turn observed these incoming methods:
+
+```text
+remoteControl/status/changed
+thread/started
+mcpServer/startupStatus/updated
+thread/status/changed
+turn/started
+hook/started
+hook/completed
+item/started
+item/completed
+item/agentMessage/delta
+item/commandExecution/outputDelta
+thread/tokenUsage/updated
+account/rateLimits/updated
+turn/diff/updated
+turn/completed
+```
+
+The implementation also recognizes the generated-schema file-patch and approval methods needed by the spike, but methods not seen in the real run are not documented as observed behavior.
+
+### Normalized Runtime Events
+
+`packages/agent-core` currently defines only:
+
+```text
+conversation.started
+turn.started
+message.delta
+message.completed
+tool.started
+tool.output
+tool.completed
+file.changed
+approval.requested
+turn.completed
+turn.failed
+```
+
+Raw provider method and payload may be attached as optional diagnostic metadata. They are not the normalized contract. A failed Codex Turn is derived from `turn/completed` with `turn.status = "failed"`; Codex 0.149.1 does not expose a separate `turn/failed` notification in the generated schema.
+
+### Approvals
+
+The client dispatches command and file-change approval server requests to an explicit terminal `y`/`n` prompt and returns only a one-shot allow or deny response. It does not auto-approve, persist decisions, or expose `Always Allow`.
+
+The successful real Turn did not request approval, so end-to-end approval behavior remains unverified. The generated `item/permissions/requestApproval` schema has no explicit deny response variant; denial behavior for that method remains a known protocol gap rather than an inferred fact.
 
 ## UI
 
-The UI presents projects, conversations, agents, machines, approvals, changes, terminal output, context, and notifications. Figma defines its visual and interaction behavior.
+The UI presents projects, conversations, agents, machines, approvals, changes, terminal output, context, and notifications. Figma defines visual and interaction behavior. The accepted frontend remains Mock-only during Phase 2A.
 
-The client owns ephemeral presentation state only—for example open panels, selected inspector tab, command palette visibility, and mobile navigation. TanStack Query will manage host/server state. Zustand will manage UI state and must not become a duplicate database for Projects, Conversations, Agents, or Machines.
+The client owns ephemeral presentation state only. TanStack Query is reserved for future host/server state, and Zustand is limited to UI state. Project, Conversation, Agent, and Machine records must not be duplicated into a client store as a second runtime authority.
 
-The UI consumes normalized protocol records and events. It must not parse Codex, Claude Code, or OpenCode wire formats.
+The UI must eventually consume a versioned client-to-host protocol, not Codex wire messages or `packages/adapter-codex` directly. No transport has been selected or implemented in Phase 2A.
 
 ## Desktop Shell
 
-The future Tauri 2 shell packages the web UI for desktop and supplies OS-level capabilities that truly require a native boundary, such as window lifecycle, secure local integration, and launching or connecting to the machine host.
-
-The shell should remain thin. Business rules, agent execution, and durable data do not belong in UI-specific Tauri commands merely because the desktop app can call them.
+The future Tauri 2 shell will package the web UI and supply OS-level capabilities that truly require a native boundary. It remains unimplemented. Business rules, agent execution, and durable data must not be moved into UI-specific Tauri commands.
 
 ## Host
 
-The future Node.js host runs on a Machine and coordinates:
+`apps/host` currently owns only the development spike lifecycle: preparing the isolated workspace, checking the executable, starting the adapter, printing normalized events, collecting a summary, and shutting down. It is not yet a general machine-host service and exposes no HTTP, WebSocket, or SSE endpoint.
 
-- Project discovery and local paths.
-- Conversation/session lifecycle.
-- Agent adapter detection and execution.
-- Commands such as send, interrupt, terminate, approve, and reject.
-- Persistence and recovery.
-- Normalized live event streaming.
-- Authentication, authorization, and machine trust for remote clients.
+The future Host is expected to coordinate project discovery, conversation lifecycle, execution commands, persistence, recovery, live event delivery, and remote trust. Those responsibilities remain planned rather than implemented.
 
-The host is the single runtime authority. Multiple clients may observe it, but client reconnection must not create a competing session owner.
+## Client-to-Host Protocol
 
-## Protocol
+`packages/protocol` remains a placeholder. A later phase must define versioned client-to-host identifiers, commands, records, events, errors, capability negotiation, ordering, and reconnection semantics. Provider wire payloads must stay behind adapters.
 
-`packages/protocol` will define versioned contracts between clients and the host, including:
+## Agent Adapter Boundary
 
-- Identifiers and normalized domain records.
-- Query and command payloads.
-- Event envelopes, sequence/cursor semantics, and timestamps.
-- Errors and capability negotiation.
-- Compatibility and protocol-version rules.
+Phase 2A deliberately does not introduce a speculative multi-provider `AgentAdapter` interface. The Codex implementation is separated by real responsibilities—process, transport, client, protocol subset, logging, and normalization—while `packages/agent-core` contains only the minimal observed product meaning.
 
-Contracts should be transport-aware only where necessary. A future transport can change without rewriting product-domain semantics.
-
-## Agent Adapter
-
-Each coding agent will be integrated through a provider-neutral boundary conceptually shaped like:
-
-```ts
-interface AgentAdapter {
-  detect(): unknown
-  listModels(): unknown
-  createSession(): unknown
-  resumeSession(): unknown
-  sendMessage(): unknown
-  interrupt(): unknown
-  terminate(): unknown
-  approve(): unknown
-  reject(): unknown
-}
-```
-
-This is an architectural sketch, not a current API. Real types and lifecycle semantics will be designed only when the Codex local loop is implemented.
-
-Adapters translate provider-specific behavior into normalized events such as:
-
-```text
-MessageDelta
-ReasoningDelta
-ToolStarted
-ToolFinished
-ShellStarted
-ShellOutput
-FileChanged
-DiffUpdated
-ApprovalRequested
-QuestionRequested
-SessionCompleted
-SessionFailed
-```
-
-Provider-specific details may be retained as optional metadata for diagnostics, but the UI should depend on the normalized meaning.
+Provider-specific capabilities may remain Codex-specific when a natural common concept has not been proven. Claude Code and OpenCode implementations are deferred to their roadmap phases.
 
 ## Persistence
 
-Persistence will eventually store durable entities and history: projects, conversations, machines, agent/session references, messages, events, permission decisions, and recovery metadata.
-
-Design principles:
-
-- The host owns durable records.
-- Stable CodeTether IDs are distinct from provider session IDs.
-- An append-oriented event history supports reconstruction and auditability where appropriate.
-- Schema migrations must be explicit and tested.
-- Secrets, credentials, and approval scope require separate security treatment.
-
-No database or persistence library is selected or installed in Phase 0 or Phase 1.
+There is no database, event store, repository abstraction, or migration in Phase 2A. Thread IDs, Turn IDs, events, and summaries exist only in process memory and terminal output. Persistence design starts only after the runtime loop is understood.
 
 ## Event Streaming
 
-Agent activity is incremental and ordered. The host will normalize provider output, persist durable events as required, and stream them to connected clients. The design must eventually account for:
+The verified runtime is event-driven:
 
-- Ordering within a conversation/session.
-- Stable event identity and duplicate handling.
-- Reconnection from a cursor or snapshot.
-- Backpressure and high-volume terminal output.
-- Partial message/reasoning deltas and terminal states.
-- Multiple observing clients without duplicated execution.
+```text
+Codex stdout → line decoder → transport dispatch → normalizer → CLI subscriber
+```
 
-WebSocket or another transport will be selected during the relevant phase. Phase 0 and Phase 1 must not implement a backend or simulate a production transport.
+It uses no polling or database scan. Ordering, durable event identity, replay, reconnection, backpressure, and multi-client observation are not solved by the spike and must be designed at the future client-to-host boundary.
 
 ## Conversation Ownership
 
-A Conversation is bound to one Project, one Agent, and the Machine executing it, plus model, reasoning, permission, and history. In the current plan, an existing Conversation cannot be continued by a different Agent. Supporting cross-agent handoff would require explicit product semantics and history translation and is out of scope.
+A Conversation is bound to one Project, one Agent, and the Machine executing it, plus model, reasoning, permission, and history. An existing Conversation cannot switch providers. Phase 2A maps one Codex Thread to one continuing Codex conversation concept but does not persist a CodeTether Conversation record.
 
 ## Security Boundary
 
-Agent execution can read files, run commands, and change code. The host must eventually enforce permission policy and produce explicit approval requests. Remote control requires authenticated clients, trusted machine identity, scoped authorization, secure transport, and auditable decisions. These requirements are recorded now but implemented only in their roadmap phases.
+Agent execution can read files, run commands, and change code. The spike confines the real Turn to a dedicated ignored workspace, uses `workspace-write` and `on-request` approval settings, forbids automatic approval, and records protocol summaries without environment variables or credentials.
+
+These controls are development safeguards, not a production security model. Authentication, authorization, machine trust, durable audit, secret handling, and remote transport security remain unimplemented.
 
 ## Current Architectural Constraints
 
-- Phase 0 implements frontend foundations only.
-- Phase 1 uses mock data only.
-- No Tauri, database, host, WebSocket backend, agent SDK, or adapter is installed yet.
-- Legacy CodeTether code and structure are not architectural inputs unless a later task explicitly requests review of a validated low-level capability.
+- The frozen React frontend is not connected to the runtime.
+- The Host is a development CLI harness, not a daemon or browser service.
+- The real integration is Codex-only and was verified against local `codex-cli 0.149.1`.
+- No Tauri shell, browser API, database, persistence, remote access, or production permission policy exists.
+- Approval dispatch is implemented but was not exercised by the successful real Turn.
+- Generated protocol artifacts and real-agent workspace files remain ignored under `.tmp/`.
+- Legacy CodeTether code and structure are not architectural inputs.

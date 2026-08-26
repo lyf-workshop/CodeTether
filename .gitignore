@@ -5,6 +5,7 @@ dist/
 .vite/
 coverage/
 output/
+.tmp/
 .playwright-cli/
 *.tsbuildinfo
 

@@ -2,6 +2,13 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 
 import { CodexExecutableNotFoundError, CodexProcessError } from './errors.js'
 
+const PARENT_CODEX_CONTROL_VARIABLES = new Set([
+  'CODEX_CI',
+  'CODEX_PERMISSION_PROFILE',
+  'CODEX_SESSION_ID',
+  'CODEX_THREAD_ID',
+])
+
 export interface CodexInstallation {
   readonly executable: string
   readonly version: string
@@ -55,11 +62,30 @@ export async function inspectCodexInstallation(
 
 export function spawnCodexAppServer(
   executable = 'codex',
+  options: { readonly disableHooks?: boolean } = {},
 ): ChildProcessWithoutNullStreams {
-  return spawn(executable, ['app-server', '--listen', 'stdio://'], {
+  const arguments_ = ['app-server', '--listen', 'stdio://']
+  if (options.disableHooks === true) arguments_.push('--disable', 'hooks')
+  return spawn(executable, arguments_, {
+    env: sanitizeCodexChildEnvironment(process.env),
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true,
   })
+}
+
+/**
+ * Prevents a Host launched from another Codex session from nesting the new
+ * App Server inside the parent's permission and conversation context. Auth,
+ * config, PATH, and unrelated CODEX_* variables remain available.
+ */
+export function sanitizeCodexChildEnvironment(
+  environment: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  return Object.fromEntries(
+    Object.entries(environment).filter(
+      ([name]) => !PARENT_CODEX_CONTROL_VARIABLES.has(name.toUpperCase()),
+    ),
+  )
 }
 
 export async function stopCodexAppServer(

@@ -27,21 +27,22 @@ If sources conflict, stop and resolve the conflict instead of inventing a compro
 
 ## Current Scope
 
-The current phase is **Phase 2A — Codex App Server Runtime Spike**. The accepted frontend is frozen as **CodeTether V2 Frontend Core v1**, including the Design System, AppShell, Desktop Inbox v1, Desktop Conversations v1, and Conversation Workspace v1. Allowed work is limited to:
+The current phase is **Phase 2A.1 — Codex Runtime Semantics & Approval Validation**. The accepted frontend is frozen as **CodeTether V2 Frontend Core v1**, including the Design System, AppShell, Desktop Inbox v1, Desktop Conversations v1, and Conversation Workspace v1. Allowed work is limited to:
 
 - Inspecting the locally installed Codex CLI and generating ignored protocol evidence from that exact version.
-- Building a minimal development-only runtime harness in `apps/host` for one long-running local Codex App Server process.
-- Implementing Codex process lifecycle, newline-delimited transport, request matching, notifications, server requests, and manual one-shot approvals in `packages/adapter-codex`.
-- Defining only the normalized runtime events actually required or observed by the spike in `packages/agent-core`.
-- Running one safe Thread and Turn inside the ignored, isolated `.tmp/codetether-codex-spike/` workspace.
-- Adding fixture-based tests for pure transport and normalization behavior without starting a real agent during `pnpm test`.
-- Recording verified protocol behavior, observed events, limitations, and quality-gate results.
+- Validating real one-shot command approval, including Allow Once and Decline, inside an ignored disposable workspace.
+- Validating multiple Turns, multiple Threads, cross-process Thread resume, Turn interruption, safe command failure, and graceful cleanup.
+- Clarifying Process-, Thread-, and Turn-scoped memory ownership without adding persistence.
+- Preserving provider Thread, Turn, Item, and approval identities in the minimal normalized runtime contract.
+- Prototyping bounded in-process event delivery and integrity-checked delta coalescing without defining a browser transport.
+- Adding fixture-based tests for routing, isolation, approval binding, cleanup, aggregation, reliable events, and unknown server requests without starting a real agent during `pnpm test`.
+- Recording only locally observed protocol behavior, limitations, and quality-gate results.
 
 This phase stops at an in-process Host CLI harness. Do not connect the runtime to the browser or begin Phase 2B. When the project moves phases, update this section as part of that deliberate transition.
 
 ## Out of Scope
 
-During Phase 2A, do not implement:
+During Phase 2A.1, do not implement:
 
 - Changes or visual refactors to the frozen Design System, AppShell, Inbox, Conversations, or Conversation Workspace.
 - Activity, Projects, Machines, Agents, Settings, New Conversation, or any other new product-page content or flow.

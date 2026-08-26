@@ -15,7 +15,11 @@ export interface NormalizationResult {
 
 /** Translates only the lifecycle and item shapes required by the Phase 2A spike. */
 export class CodexEventNormalizer {
-  readonly #seenFileChanges = new Set<string>()
+  readonly #seenFileChanges = new Map<string, Set<string>>()
+
+  releaseTurn(threadId: string, turnId: string): void {
+    this.#seenFileChanges.delete(turnKey(threadId, turnId))
+  }
 
   normalize(
     notification: JsonRpcNotification,
@@ -229,8 +233,11 @@ export class CodexEventNormalizer {
       const diff = readString(change, 'diff')
       const kind = normalizeChangeKind(change.kind)
       const key = `${threadId}\u0000${turnId}\u0000${itemId ?? ''}\u0000${path}\u0000${kind}\u0000${diff ?? ''}`
-      if (this.#seenFileChanges.has(key)) return []
-      this.#seenFileChanges.add(key)
+      const seenForTurn = this.#seenFileChanges.get(turnKey(threadId, turnId))
+      if (seenForTurn?.has(key) === true) return []
+      const seen = seenForTurn ?? new Set<string>()
+      seen.add(key)
+      this.#seenFileChanges.set(turnKey(threadId, turnId), seen)
       return [
         {
           type: 'file.changed' as const,
@@ -273,6 +280,26 @@ export class CodexEventNormalizer {
         ],
       }
     }
+    if (status === 'interrupted') {
+      return {
+        recognized: true,
+        events: [
+          {
+            type: 'turn.interrupted',
+            provider: 'codex',
+            timestamp,
+            threadId,
+            turnId,
+            raw,
+          },
+        ],
+      }
+    }
+    if (status === 'inProgress') {
+      throw new CodexProtocolError(
+        'turn/completed reported the non-terminal status inProgress',
+      )
+    }
     const error = isRecord(turn.error) ? turn.error : undefined
     return {
       recognized: true,
@@ -293,6 +320,10 @@ export class CodexEventNormalizer {
       ],
     }
   }
+}
+
+function turnKey(threadId: string, turnId: string): string {
+  return `${threadId}\u0000${turnId}`
 }
 
 export function normalizeApprovalRequest(

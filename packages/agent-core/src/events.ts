@@ -86,6 +86,8 @@ export interface TurnCompletedEvent extends TurnEventBase<'turn.completed'> {
   readonly finalMessage?: string
 }
 
+export type TurnInterruptedEvent = TurnEventBase<'turn.interrupted'>
+
 export interface TurnFailedEvent extends TurnEventBase<'turn.failed'> {
   readonly error: {
     readonly message: string
@@ -104,6 +106,7 @@ export type AgentEvent =
   | FileChangedEvent
   | ApprovalRequestedEvent
   | TurnCompletedEvent
+  | TurnInterruptedEvent
   | TurnFailedEvent
 
 export type AgentEventType = AgentEvent['type']

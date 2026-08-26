@@ -16,5 +16,6 @@ export type {
   ToolStartedEvent,
   TurnCompletedEvent,
   TurnFailedEvent,
+  TurnInterruptedEvent,
   TurnStartedEvent,
 } from './events.js'

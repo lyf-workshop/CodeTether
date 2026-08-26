@@ -63,6 +63,10 @@ export interface ThreadStartResult {
   readonly cwd: string
 }
 
+export type ThreadResumeResult = ThreadStartResult
+
+export type TurnInterruptResult = Record<string, never>
+
 export interface TurnStartResult {
   readonly turn: CodexTurn
 }

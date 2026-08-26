@@ -17,7 +17,14 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "codex:spike": "pnpm -r --workspace-concurrency=1 --filter @codetether/host... build && node apps/host/dist/spike.js"
+    "codex:spike": "pnpm -r --workspace-concurrency=1 --filter @codetether/host... build && node apps/host/dist/spike.js",
+    "codex:approval": "pnpm codex:semantics --scenario approval",
+    "codex:multiturn": "pnpm codex:semantics --scenario multiturn",
+    "codex:multithread": "pnpm codex:semantics --scenario multithread",
+    "codex:resume": "pnpm codex:semantics --scenario resume",
+    "codex:interrupt": "pnpm codex:semantics --scenario interrupt",
+    "codex:failure": "pnpm codex:semantics --scenario failure",
+    "codex:semantics": "pnpm -r --workspace-concurrency=1 --filter @codetether/host... build && node apps/host/dist/semantics.js"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

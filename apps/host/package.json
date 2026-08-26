@@ -7,7 +7,9 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit --pretty false",
     "lint": "eslint .",
-    "spike": "node dist/spike.js"
+    "test": "pnpm build && node --test --test-isolation=none test/*.test.mjs",
+    "spike": "node dist/spike.js",
+    "semantics": "node dist/semantics.js"
   },
   "dependencies": {
     "@codetether/adapter-codex": "workspace:*",

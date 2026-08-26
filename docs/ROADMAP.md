@@ -65,7 +65,7 @@ Phase 1 passed its exit gate and is frozen as **CodeTether V2 Frontend Core v1**
 
 ### Phase 2A — Codex App Server Runtime Spike
 
-**Status:** implementation complete and verified against local `codex-cli 0.149.1`; awaiting Phase 2A review. Phase 2B has not started.
+**Status:** accepted after verification against local `codex-cli 0.149.1`.
 
 Verified outcomes:
 
@@ -74,7 +74,7 @@ Verified outcomes:
 - A provider-owned ephemeral Thread and Turn were created in an isolated ignored workspace.
 - A safe real prompt produced streamed Agent messages, command/tool events, a file change, diff notification, and successful Turn completion.
 - Codex wire events were translated into the smallest currently needed `packages/agent-core` event contract.
-- Manual one-shot approval dispatch exists, but the successful real Turn did not trigger an approval request.
+- Manual one-shot approval dispatch was fixture-tested; real approval semantics were deliberately validated in Phase 2A.1.
 - Fixture tests cover line framing, request matching, unknown notifications, event normalization, and pending-request rejection on process exit.
 - The runtime shut down cleanly after the completed Turn.
 
@@ -85,6 +85,34 @@ Exit gate:
 - `pnpm typecheck`, `pnpm lint`, `pnpm format:check`, `pnpm build`, and `pnpm test` pass.
 - `pnpm codex:spike` completes one real safe Turn in the isolated workspace.
 - Observed protocol behavior and unresolved gaps are documented.
+
+### Phase 2A.1 — Codex Runtime Semantics & Approval Validation
+
+**Status:** implementation and controlled manual validation complete against local `codex-cli 0.149.1`; awaiting Phase 2A.1 review. Phase 2B has not started.
+
+Verified outcomes:
+
+- Real `item/commandExecution/requestApproval` requests completed one isolated Allow Once run and one isolated Decline run, each bound to its provider request, Thread, Turn, and Item.
+- One long-running App Server completed two sequential Turns in one Thread with retained context.
+- One App Server hosted two concurrent Threads and Turns without cross-Thread event or delta contamination.
+- A known non-ephemeral provider Thread ID resumed after restarting the App Server child process, and a follow-up Turn retained context. This does not claim Host/application restart recovery or CodeTether persistence.
+- `turn/interrupt` produced a terminal interrupted status, and the same Thread accepted a later Turn.
+- A safe non-zero command verified Tool failure inside a completed Turn; a true terminal Turn failure was not observed.
+- Process-, Thread-, and Turn-scoped runtime memory now has explicit cleanup behavior.
+- A bounded in-process Host queue coalesces compatible deltas while preserving identity and final text; approval and terminal lifecycle signals are delivered or cause an explicit runtime failure rather than being silently dropped.
+- Fixture tests cover routing, Thread isolation, approval binding, cleanup, aggregation integrity, reliable overflow behavior, unknown request rejection, and process-exit rejection without launching Codex in `pnpm test`.
+
+Known boundaries:
+
+- File-change, permissions, and legacy approval requests were not observed in a real run.
+- The runtime wire included an `availableDecisions` command-approval field omitted by the generated 0.149.1 binding, so tolerant parsing and raw diagnostic metadata remain necessary.
+- No durable sequence, replay, reconnection, browser transport, React integration, persistence, Tauri shell, remote access, or production permission policy exists.
+
+Exit gate:
+
+- `pnpm typecheck`, `pnpm lint`, `pnpm format:check`, `pnpm build`, and `pnpm test` pass.
+- Real Allow Once and Decline, multiple Turns, multiple Threads, known-ID resume across App Server child processes, and interruption complete in isolated manual scenarios.
+- Lifecycle ownership, event identity, aggregation measurements, failure semantics, and unresolved protocol gaps are documented without overstating unobserved behavior.
 
 ### Phase 2B — Client-to-Host Connection
 

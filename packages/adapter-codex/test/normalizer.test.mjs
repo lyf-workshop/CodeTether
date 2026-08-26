@@ -200,6 +200,54 @@ test('normalizes successful and failed turn completion fixtures', () => {
   ])
 })
 
+test('normalizes interruption separately from failure', () => {
+  const normalizer = new CodexEventNormalizer()
+  const interrupted = normalize(normalizer, 'turn/completed', {
+    threadId,
+    turn: { id: turnId, status: 'interrupted', error: null },
+  })
+
+  assert.deepEqual(interrupted.events.map(stripRaw), [
+    {
+      type: 'turn.interrupted',
+      provider: 'codex',
+      timestamp,
+      threadId,
+      turnId,
+    },
+  ])
+})
+
+test('releases file de-duplication state at the turn boundary', () => {
+  const normalizer = new CodexEventNormalizer()
+  const params = {
+    threadId,
+    turnId,
+    itemId: 'file-1',
+    changes: [
+      {
+        path: 'src/example.ts',
+        kind: { type: 'update', move_path: null },
+        diff: 'same patch',
+      },
+    ],
+  }
+
+  assert.equal(
+    normalize(normalizer, 'item/fileChange/patchUpdated', params).events.length,
+    1,
+  )
+  assert.equal(
+    normalize(normalizer, 'item/fileChange/patchUpdated', params).events.length,
+    0,
+  )
+  normalizer.releaseTurn(threadId, turnId)
+  assert.equal(
+    normalize(normalizer, 'item/fileChange/patchUpdated', params).events.length,
+    1,
+  )
+})
+
 test('returns recognized=false for a future notification', () => {
   const normalizer = new CodexEventNormalizer()
 

@@ -13,7 +13,7 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit --pretty false",
     "lint": "eslint .",
-    "test": "pnpm build && node --test --test-isolation=none test/line-decoder.test.mjs test/transport.test.mjs test/normalizer.test.mjs test/client.test.mjs"
+    "test": "pnpm build && node --test --test-isolation=none test/line-decoder.test.mjs test/transport.test.mjs test/normalizer.test.mjs test/client.test.mjs test/turn-lifecycle.test.mjs test/process.test.mjs"
   },
   "dependencies": {
     "@codetether/agent-core": "workspace:*"

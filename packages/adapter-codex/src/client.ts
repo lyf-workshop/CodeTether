@@ -3,7 +3,7 @@ import { isAbsolute, resolve } from 'node:path'
 
 import type { AgentEvent, ApprovalRequestedEvent } from '@codetether/agent-core'
 
-import { CodexProtocolError } from './errors.js'
+import { CodexProcessError, CodexProtocolError } from './errors.js'
 import type { ProtocolLogger } from './logging.js'
 import { CodexEventNormalizer, normalizeApprovalRequest } from './normalizer.js'
 import { spawnCodexAppServer, stopCodexAppServer } from './process.js'
@@ -13,18 +13,38 @@ import type {
   InitializeResult,
   JsonRpcNotification,
   JsonRpcRequest,
+  ThreadResumeResult,
   ThreadStartResult,
+  TurnInterruptResult,
   TurnStartResult,
   TurnTerminalResult,
 } from './protocol.js'
 import { isRecord, readString } from './protocol.js'
 import { JsonRpcTransport } from './transport.js'
+import { TurnLifecycleRegistry } from './turn-lifecycle.js'
 
 export type ApprovalDecision = 'allow' | 'deny'
+export type CodexApprovalPolicy = 'untrusted' | 'on-request' | 'never'
+export type CodexSandboxMode =
+  'read-only' | 'workspace-write' | 'danger-full-access'
 
 export interface ApprovalPrompt {
   readonly event: ApprovalRequestedEvent
   readonly request: JsonRpcRequest
+}
+
+export type ApprovalWireResponse =
+  | { readonly result: unknown }
+  | {
+      readonly error: {
+        readonly code: number
+        readonly message: string
+      }
+    }
+
+export interface ApprovalResolution extends ApprovalPrompt {
+  readonly decision: ApprovalDecision
+  readonly response: ApprovalWireResponse
 }
 
 export interface CodexAppServerClientOptions {
@@ -39,6 +59,21 @@ export interface CodexAppServerClientOptions {
   readonly approvalHandler?: (
     prompt: ApprovalPrompt,
   ) => ApprovalDecision | Promise<ApprovalDecision>
+  readonly onApprovalResolved?: (resolution: ApprovalResolution) => void
+}
+
+export interface StartThreadOptions {
+  readonly cwd: string
+  readonly ephemeral?: boolean
+  readonly approvalPolicy?: CodexApprovalPolicy
+  readonly sandbox?: CodexSandboxMode
+}
+
+export interface ResumeThreadOptions {
+  readonly threadId: string
+  readonly cwd?: string
+  readonly approvalPolicy?: CodexApprovalPolicy
+  readonly sandbox?: CodexSandboxMode
 }
 
 export interface LaunchCodexClientOptions extends CodexAppServerClientOptions {
@@ -50,23 +85,17 @@ export interface LaunchCodexClientOptions extends CodexAppServerClientOptions {
   }
 }
 
-interface TurnWaiter {
-  readonly resolve: (result: TurnTerminalResult) => void
-  readonly reject: (error: Error) => void
-  readonly timer: NodeJS.Timeout
-}
-
 /** Coordinates the App Server handshake and the small Thread/Turn spike API. */
 export class CodexAppServerClient {
   readonly #transport: JsonRpcTransport
   readonly #normalizer = new CodexEventNormalizer()
+  readonly #lifecycle = new TurnLifecycleRegistry((threadId, turnId) =>
+    this.#normalizer.releaseTurn(threadId, turnId),
+  )
   readonly #options: CodexAppServerClientOptions
   readonly #observedMethods = new Set<string>()
-  readonly #activeTurns = new Map<string, string>()
-  readonly #finalMessages = new Map<string, string>()
-  readonly #terminalTurns = new Map<string, TurnTerminalResult>()
-  readonly #turnWaiters = new Map<string, Set<TurnWaiter>>()
-  #runtimeFailure?: Error
+  #closing = false
+  #shutdownPromise?: Promise<void>
 
   constructor(
     readonly process: ChildProcessWithoutNullStreams,
@@ -86,7 +115,13 @@ export class CodexAppServerClient {
         this.#fail(toError(error))
       })
     })
-    this.#transport.onUnknownResponse((id) => options.onUnknownResponse?.(id))
+    this.#transport.onUnknownResponse((id) => {
+      try {
+        options.onUnknownResponse?.(id)
+      } catch (error) {
+        this.#reportDiagnostic(toError(error))
+      }
+    })
     this.#transport.onError((error) => this.#fail(error))
   }
 
@@ -113,6 +148,7 @@ export class CodexAppServerClient {
     readonly title: string
     readonly version: string
   }): Promise<InitializeResult> {
+    this.#assertOpen()
     const result = await this.#transport.request<unknown>('initialize', {
       clientInfo,
       capabilities: {
@@ -125,25 +161,53 @@ export class CodexAppServerClient {
     return response
   }
 
-  async startThread(options: {
-    readonly cwd: string
-    readonly ephemeral?: boolean
-  }): Promise<ThreadStartResult> {
+  async startThread(options: StartThreadOptions): Promise<ThreadStartResult> {
+    this.#assertOpen()
     if (!isAbsolute(options.cwd)) {
       throw new CodexProtocolError('thread/start cwd must be an absolute path')
     }
     const result = await this.#transport.request<unknown>('thread/start', {
       cwd: options.cwd,
-      approvalPolicy: 'on-request',
+      approvalPolicy: options.approvalPolicy ?? 'on-request',
       approvalsReviewer: 'user',
-      sandbox: 'workspace-write',
+      sandbox: options.sandbox ?? 'workspace-write',
       ephemeral: options.ephemeral ?? true,
       serviceName: 'CodeTether',
     })
-    const parsed = parseThreadStartResult(result)
+    const parsed = parseThreadResult(result, 'thread/start response')
     if (!samePath(parsed.cwd, options.cwd)) {
       throw new CodexProtocolError(
         `thread/start returned unexpected cwd ${parsed.cwd}`,
+      )
+    }
+    return parsed
+  }
+
+  async resumeThread(
+    options: ResumeThreadOptions,
+  ): Promise<ThreadResumeResult> {
+    this.#assertOpen()
+    if (options.cwd !== undefined && !isAbsolute(options.cwd)) {
+      throw new CodexProtocolError('thread/resume cwd must be an absolute path')
+    }
+    const result = await this.#transport.request<unknown>('thread/resume', {
+      threadId: options.threadId,
+      ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+      ...(options.approvalPolicy === undefined
+        ? {}
+        : { approvalPolicy: options.approvalPolicy }),
+      approvalsReviewer: 'user',
+      ...(options.sandbox === undefined ? {} : { sandbox: options.sandbox }),
+    })
+    const parsed = parseThreadResult(result, 'thread/resume response')
+    if (parsed.thread.id !== options.threadId) {
+      throw new CodexProtocolError(
+        `thread/resume returned unexpected thread ${parsed.thread.id}`,
+      )
+    }
+    if (options.cwd !== undefined && !samePath(parsed.cwd, options.cwd)) {
+      throw new CodexProtocolError(
+        `thread/resume returned unexpected cwd ${parsed.cwd}`,
       )
     }
     return parsed
@@ -153,6 +217,7 @@ export class CodexAppServerClient {
     readonly threadId: string
     readonly prompt: string
   }): Promise<TurnStartResult> {
+    this.#assertOpen()
     const result = await this.#transport.request<unknown>('turn/start', {
       threadId: options.threadId,
       input: [
@@ -164,8 +229,21 @@ export class CodexAppServerClient {
       ],
     })
     const parsed = parseTurnStartResult(result)
-    this.#activeTurns.set(options.threadId, parsed.turn.id)
+    this.#lifecycle.activate(options.threadId, parsed.turn.id)
     return parsed
+  }
+
+  async interruptTurn(options: {
+    readonly threadId: string
+    readonly turnId: string
+  }): Promise<TurnInterruptResult> {
+    this.#assertOpen()
+    const result = await this.#transport.request<unknown>('turn/interrupt', {
+      threadId: options.threadId,
+      turnId: options.turnId,
+    })
+    requireRecord(result, 'turn/interrupt response')
+    return {}
   }
 
   waitForTurn(
@@ -173,36 +251,16 @@ export class CodexAppServerClient {
     turnId: string,
     timeoutMs = 300_000,
   ): Promise<TurnTerminalResult> {
-    const key = turnKey(threadId, turnId)
-    const terminal = this.#terminalTurns.get(key)
-    if (terminal !== undefined) return Promise.resolve(terminal)
-    if (this.#runtimeFailure !== undefined)
-      return Promise.reject(this.#runtimeFailure)
-
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        const waiters = this.#turnWaiters.get(key)
-        if (waiters !== undefined) {
-          for (const waiter of waiters) {
-            if (waiter.resolve === resolve) waiters.delete(waiter)
-          }
-          if (waiters.size === 0) this.#turnWaiters.delete(key)
-        }
-        reject(new CodexProtocolError(`Timed out waiting for turn ${turnId}`))
-      }, timeoutMs)
-      const waiter: TurnWaiter = { resolve, reject, timer }
-      const waiters = this.#turnWaiters.get(key) ?? new Set<TurnWaiter>()
-      waiters.add(waiter)
-      this.#turnWaiters.set(key, waiters)
-    })
+    return this.#lifecycle.wait(threadId, turnId, timeoutMs)
   }
 
   async shutdown(): Promise<void> {
-    this.#transport.beginShutdown()
-    await stopCodexAppServer(this.process)
+    this.#shutdownPromise ??= this.#shutdown()
+    await this.#shutdownPromise
   }
 
   #handleNotification(notification: JsonRpcNotification): void {
+    if (this.#closing || this.#lifecycle.failure !== undefined) return
     this.#observedMethods.add(notification.method)
     let result
     try {
@@ -213,9 +271,15 @@ export class CodexAppServerClient {
     }
 
     if (!result.recognized) {
-      this.#options.onUnknownNotification?.(notification)
+      try {
+        this.#options.onUnknownNotification?.(notification)
+      } catch (error) {
+        this.#reportDiagnostic(toError(error))
+      }
     }
-    for (const event of result.events) this.#emitEvent(event)
+    for (const event of result.events) {
+      this.#emitEvent(this.#recordAndEnrichEvent(event))
+    }
 
     if (notification.method === 'turn/started') {
       const params = isRecord(notification.params)
@@ -226,7 +290,11 @@ export class CodexAppServerClient {
       const threadId = readString(params ?? {}, 'threadId')
       const turnId = readString(turn ?? {}, 'id')
       if (threadId !== undefined && turnId !== undefined) {
-        this.#activeTurns.set(threadId, turnId)
+        try {
+          this.#lifecycle.activate(threadId, turnId)
+        } catch (error) {
+          this.#fail(toError(error))
+        }
       }
     }
     if (notification.method === 'turn/completed') {
@@ -235,27 +303,37 @@ export class CodexAppServerClient {
   }
 
   #emitEvent(event: AgentEvent): void {
-    const key =
-      'turnId' in event ? turnKey(event.threadId, event.turnId) : undefined
-    let emitted = event
-
-    if (key !== undefined && event.type === 'message.delta') {
-      this.#finalMessages.set(
-        key,
-        `${this.#finalMessages.get(key) ?? ''}${event.delta}`,
+    try {
+      this.#options.onEvent?.(event)
+    } catch (error) {
+      this.#reportDiagnostic(
+        new CodexProtocolError('CodeTether event consumer failed', {
+          cause: error,
+        }),
       )
     }
-    if (key !== undefined && event.type === 'message.completed') {
-      this.#finalMessages.set(key, event.message)
+  }
+
+  #recordAndEnrichEvent(event: AgentEvent): AgentEvent {
+    if (event.type === 'message.completed') {
+      this.#lifecycle.completeMessage(
+        event.threadId,
+        event.turnId,
+        event.message,
+      )
+      return event
     }
-    if (key !== undefined && event.type === 'turn.completed') {
-      const finalMessage = this.#finalMessages.get(key)
-      emitted = {
+    if (event.type === 'turn.completed') {
+      const finalMessage = this.#lifecycle.finalMessage(
+        event.threadId,
+        event.turnId,
+      )
+      return {
         ...event,
         ...(finalMessage === undefined ? {} : { finalMessage }),
       }
     }
-    this.#options.onEvent?.(emitted)
+    return event
   }
 
   #completeTurn(notification: JsonRpcNotification): void {
@@ -278,23 +356,16 @@ export class CodexAppServerClient {
       return
     }
 
-    const key = turnKey(threadId, turn.id)
+    const finalMessage = this.#lifecycle.finalMessage(threadId, turn.id)
     const result: TurnTerminalResult = {
       threadId,
       turn,
-      ...(this.#finalMessages.get(key) === undefined
-        ? {}
-        : { finalMessage: this.#finalMessages.get(key) }),
+      ...(finalMessage === undefined ? {} : { finalMessage }),
     }
-    this.#terminalTurns.set(key, result)
-    this.#activeTurns.delete(threadId)
-    const waiters = this.#turnWaiters.get(key)
-    if (waiters === undefined) return
-    this.#turnWaiters.delete(key)
-    for (const waiter of waiters) {
-      clearTimeout(waiter.timer)
-      waiter.resolve(result)
-    }
+    this.#lifecycle.settle(result)
+    // A waiter timeout may have released turn state before late provider file
+    // events arrived. Terminal notification is the final cleanup authority.
+    this.#normalizer.releaseTurn(threadId, turn.id)
   }
 
   async #handleServerRequest(request: JsonRpcRequest): Promise<void> {
@@ -302,19 +373,49 @@ export class CodexAppServerClient {
     const params = isRecord(request.params) ? request.params : {}
     const threadId =
       readString(params, 'threadId') ?? readString(params, 'conversationId')
-    const approvalEvent = normalizeApprovalRequest(
-      request,
-      threadId === undefined ? undefined : this.#activeTurns.get(threadId),
-    )
-    if (
-      approvalEvent === undefined ||
-      approvalEvent.type !== 'approval.requested'
-    ) {
-      this.#options.onUnknownServerRequest?.(request)
+    let approvalEvent: AgentEvent | undefined
+    try {
+      approvalEvent = normalizeApprovalRequest(
+        request,
+        threadId === undefined
+          ? undefined
+          : this.#lifecycle.activeTurn(threadId),
+      )
+    } catch (error) {
+      await this.#transport.respondError(
+        request.id,
+        -32602,
+        `Invalid approval request: ${toError(error).message}`,
+      )
+      this.#reportDiagnostic(toError(error))
+      return
+    }
+    if (approvalEvent === undefined) {
+      if (isApprovalRequestMethod(request.method)) {
+        await this.#transport.respondError(
+          request.id,
+          -32602,
+          `Approval request cannot be bound to a thread and turn: ${request.method}`,
+        )
+        return
+      }
+      try {
+        this.#options.onUnknownServerRequest?.(request)
+      } catch (error) {
+        this.#reportDiagnostic(toError(error))
+      }
       await this.#transport.respondError(
         request.id,
         -32601,
         `Unsupported server request: ${request.method}`,
+      )
+      return
+    }
+    if (approvalEvent.type !== 'approval.requested') {
+      await this.#transport.respondError(
+        request.id,
+        -32603,
+        `Approval normalizer returned an invalid event: ${request.method}`,
       )
       return
     }
@@ -333,50 +434,66 @@ export class CodexAppServerClient {
         -32603,
         'CodeTether approval handler failed',
       )
-      this.#options.onError?.(toError(error))
+      this.#reportDiagnostic(toError(error))
       return
     }
 
-    await this.#respondToApproval(request, decision)
+    const response = await this.#respondToApproval(request, decision)
+    try {
+      this.#options.onApprovalResolved?.({
+        event: approvalEvent,
+        request,
+        decision,
+        response,
+      })
+    } catch (error) {
+      this.#reportDiagnostic(toError(error))
+    }
   }
 
   async #respondToApproval(
     request: JsonRpcRequest,
     decision: ApprovalDecision,
-  ): Promise<void> {
+  ): Promise<ApprovalWireResponse> {
     if (
       request.method === 'item/commandExecution/requestApproval' ||
       request.method === 'item/fileChange/requestApproval'
     ) {
-      await this.#transport.respond(request.id, {
+      const result = {
         decision: decision === 'allow' ? 'accept' : 'decline',
-      })
-      return
+      }
+      await this.#transport.respond(request.id, result)
+      return { result }
     }
     if (
       request.method === 'execCommandApproval' ||
       request.method === 'applyPatchApproval'
     ) {
-      await this.#transport.respond(request.id, {
+      const result = {
         decision:
           decision === 'allow'
             ? 'approved'
             : { denied: { rejection: 'Denied by the CodeTether user' } },
-      })
-      return
+      }
+      await this.#transport.respond(request.id, result)
+      return { result }
     }
     if (request.method === 'item/permissions/requestApproval') {
       if (decision === 'deny') {
+        const error = {
+          code: -32001,
+          message: 'Permission request denied by the CodeTether user',
+        }
         await this.#transport.respondError(
           request.id,
-          -32001,
-          'Permission request denied by the CodeTether user',
+          error.code,
+          error.message,
         )
-        return
+        return { error }
       }
       const params = isRecord(request.params) ? request.params : {}
       const requested = isRecord(params.permissions) ? params.permissions : {}
-      await this.#transport.respond(request.id, {
+      const result = {
         permissions: {
           ...(requested.network === null || requested.network === undefined
             ? {}
@@ -387,33 +504,45 @@ export class CodexAppServerClient {
             : { fileSystem: requested.fileSystem }),
         },
         scope: 'turn',
-      })
-      return
+      }
+      await this.#transport.respond(request.id, result)
+      return { result }
     }
 
-    await this.#transport.respondError(
-      request.id,
-      -32601,
-      `Unsupported approval request: ${request.method}`,
-    )
+    const error = {
+      code: -32601,
+      message: `Unsupported approval request: ${request.method}`,
+    }
+    await this.#transport.respondError(request.id, error.code, error.message)
+    return { error }
   }
 
   #fail(error: Error): void {
-    if (
-      this.#runtimeFailure !== undefined &&
-      this.#runtimeFailure.message === error.message
-    ) {
-      return
+    if (this.#lifecycle.failure !== undefined) return
+    this.#lifecycle.failAll(error)
+    this.#reportDiagnostic(error)
+  }
+
+  #reportDiagnostic(error: Error): void {
+    try {
+      this.#options.onError?.(error)
+    } catch {
+      // A diagnostic callback must not change protocol or lifecycle behavior.
     }
-    this.#runtimeFailure = error
-    for (const waiters of this.#turnWaiters.values()) {
-      for (const waiter of waiters) {
-        clearTimeout(waiter.timer)
-        waiter.reject(error)
-      }
+  }
+
+  #assertOpen(): void {
+    if (this.#closing) {
+      throw new CodexProcessError('Codex App Server client is closing')
     }
-    this.#turnWaiters.clear()
-    this.#options.onError?.(error)
+    if (this.#lifecycle.failure !== undefined) throw this.#lifecycle.failure
+  }
+
+  async #shutdown(): Promise<void> {
+    this.#closing = true
+    this.#lifecycle.failAll(new CodexProcessError('Codex App Server closed'))
+    this.#transport.beginShutdown()
+    await stopCodexAppServer(this.process)
   }
 }
 
@@ -431,24 +560,20 @@ function parseInitializeResult(value: unknown): InitializeResult {
   }
 }
 
-function parseThreadStartResult(value: unknown): ThreadStartResult {
-  const record = requireRecord(value, 'thread/start response')
-  const threadRecord = requireRecord(record.thread, 'thread/start response')
+function parseThreadResult(value: unknown, context: string): ThreadStartResult {
+  const record = requireRecord(value, context)
+  const threadRecord = requireRecord(record.thread, context)
   const thread: CodexThread = {
-    id: requireString(threadRecord, 'id', 'thread/start response'),
+    id: requireString(threadRecord, 'id', context),
     ...(readString(threadRecord, 'cwd') === undefined
       ? {}
       : { cwd: readString(threadRecord, 'cwd') }),
   }
   return {
     thread,
-    model: requireString(record, 'model', 'thread/start response'),
-    modelProvider: requireString(
-      record,
-      'modelProvider',
-      'thread/start response',
-    ),
-    cwd: requireString(record, 'cwd', 'thread/start response'),
+    model: requireString(record, 'model', context),
+    modelProvider: requireString(record, 'modelProvider', context),
+    cwd: requireString(record, 'cwd', context),
   }
 }
 
@@ -501,16 +626,22 @@ function requireString(
   return result
 }
 
-function turnKey(threadId: string, turnId: string): string {
-  return `${threadId}\u0000${turnId}`
-}
-
 function samePath(left: string, right: string): boolean {
   const normalizedLeft = resolve(left)
   const normalizedRight = resolve(right)
   return process.platform === 'win32'
     ? normalizedLeft.toLowerCase() === normalizedRight.toLowerCase()
     : normalizedLeft === normalizedRight
+}
+
+function isApprovalRequestMethod(method: string): boolean {
+  return (
+    method === 'item/commandExecution/requestApproval' ||
+    method === 'item/fileChange/requestApproval' ||
+    method === 'item/permissions/requestApproval' ||
+    method === 'execCommandApproval' ||
+    method === 'applyPatchApproval'
+  )
 }
 
 function toError(value: unknown): Error {

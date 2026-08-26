@@ -116,7 +116,7 @@ Exit gate:
 
 ### Phase 2B — Client-to-Host Protocol & Local API
 
-**Status:** implementation and controlled real-Codex validation complete; awaiting Phase 2B review. React integration has not started.
+**Status:** accepted and frozen as **Client-to-Host Protocol v1** after controlled real-Codex validation. Phase 2C.1 may consume this boundary but must not change its wire contract implicitly.
 
 Verified outcomes:
 
@@ -136,7 +136,7 @@ Known boundaries:
 - The idempotency cache is a bounded recent-retry window, not durable exactly-once execution.
 - `stream.reset` requires a fresh snapshot; no durable history or recovery exists.
 - An idle runtime failure has no proactive capability-change event.
-- The frozen React frontend still uses Mock data and has not imported the client.
+- At the Phase 2B acceptance boundary, the frozen React frontend still used Mock data and had not imported the client.
 - Authentication, Tauri, LAN/remote exposure, interactive PTY, persistence, non-text inputs, and non-Codex providers remain unimplemented.
 
 Exit gate:
@@ -144,6 +144,44 @@ Exit gate:
 - `pnpm typecheck`, `pnpm lint`, `pnpm format:check`, `pnpm build`, and `pnpm test` pass.
 - The real local integration verifies HTTP commands, SSE events, two observers, successful replay, reset paths, approval, interrupt, cleanup, and a new epoch after restart.
 - Protocol v1, local security boundaries, limits, and remaining non-durable behavior are documented without connecting React.
+
+### Phase 2C.1 — Live Conversation Read Model
+
+**Status:** read-path implementation and manual browser observation of a real Codex Turn are complete; awaiting Phase 2C.1 review.
+
+Implemented scope:
+
+- One application-scoped Web `HostRuntime` uses `packages/client`; React components do not parse SSE or provider payloads.
+- Bootstrap, Snapshot, and the Conversation projection are stored through TanStack Query, while SSE connection lifecycle remains in the runtime.
+- The cursor is browser-memory only. Reconnect uses `Last-Event-ID`, and `stream.reset` or an invalid sequence boundary replaces the projection from a fresh Snapshot before streaming resumes.
+- A pure projection handles Conversation, Turn, message, Tool, file-change, Approval, and terminal lifecycle events with Conversation/Turn/Item identity and duplicate/out-of-order protection.
+- Command terminal output is bounded to the most recent 128 KiB per Conversation.
+- Demo Mock and live Host records adapt to one `ConversationViewModel`: `/conversations/demo` stays frozen Mock UI, while a valid `/conversations/conv_*` route is read-only live data.
+- Inbox and Conversations continue to use Mock data. Composer, Approval resolution, interrupt, stop, and all other React mutations remain disconnected.
+- A development observation helper can create a Host Conversation and start a Turn in an explicitly allowed ignored workspace; it is not a product creation flow.
+
+Known boundaries:
+
+- The in-memory Snapshot contains Conversation summaries, active Turns, and pending Approvals, but no historical message, Tool, terminal, file-change/diff Items, completed Turns, or user Turn input.
+- Refresh or `stream.reset` reconstructs only Snapshot-owned state; it cannot restore already-streamed Timeline details.
+- A live observer must currently open the route before the external development helper starts a Turn to see the complete stream.
+- Pending Approvals are projected as read-only waiting state. Resolution is deferred to Phase 2C.2.
+- No persistence, Inbox/Conversations live data, Tauri, remote access, or non-Codex provider is introduced.
+
+Verified live observation:
+
+- A browser subscribed to a real `conv_*` route before Turn start and displayed three Agent messages, four command executions, one file Diff, and terminal completion from a real local Codex Turn.
+- The default local model was `gpt-5.6-sol`; the isolated workspace changed only `src/example.ts` by adding the requested one-line comment.
+- A separate explicit-model attempt produced a real `turn.failed` presentation without crashing the page; the public Host error intentionally did not expose the provider cause.
+- Closing the Host retained the last projection and changed the indicator to reconnecting. A clean connected browser run completed with zero console errors and zero warnings.
+- The same `/conversations/demo` route continued to render the accepted Mock conversation after live validation.
+
+Exit gate:
+
+- Snapshot projection, delta merge/deduplication, Tool and Approval lifecycle, terminal bounds, duplicate/out-of-order handling, reset replacement, and unavailable/incompatible connection states have focused tests.
+- `pnpm typecheck`, `pnpm lint`, `pnpm format:check`, `pnpm build`, and `pnpm test` pass.
+- With Host and Web running separately, a real isolated Codex Turn streams message, Tool, file-change, and completion state into the frozen Conversation Detail with zero browser console errors or warnings.
+- The accepted Demo route and other frozen Mock pages remain visually and behaviorally unchanged.
 
 ## Phase 3 — Conversation Management
 

@@ -10,16 +10,36 @@ import {
   StatusBadge,
 } from '@codetether/ui'
 
-import type { ConversationDetailMock } from '../../mocks/conversation-detail'
+import type {
+  ConversationCapabilitiesViewModel,
+  ConversationConnectionIndicatorViewModel,
+  ConversationConnectionState,
+  ConversationViewModel,
+} from './conversation-view-model'
+
+const connectionBadgeVariants = {
+  connecting: 'info',
+  connected: 'secondary',
+  reconnecting: 'warning',
+  unavailable: 'danger',
+  incompatible: 'danger',
+} as const satisfies Record<
+  ConversationConnectionState,
+  'secondary' | 'info' | 'warning' | 'danger'
+>
 
 interface ConversationHeaderProps {
-  conversation: ConversationDetailMock['conversation']
+  conversation: ConversationViewModel
+  capabilities: ConversationCapabilitiesViewModel
+  connectionIndicator?: ConversationConnectionIndicatorViewModel
   inspectorTriggerRef?: Ref<HTMLButtonElement>
   onOpenInspector?: () => void
 }
 
 export function ConversationHeader({
   conversation,
+  capabilities,
+  connectionIndicator,
   inspectorTriggerRef,
   onOpenInspector,
 }: ConversationHeaderProps) {
@@ -49,6 +69,15 @@ export function ConversationHeader({
             name={conversation.machine}
             className="h-6 font-regular"
           />
+          {connectionIndicator ? (
+            <Badge
+              variant={connectionBadgeVariants[connectionIndicator.state]}
+              className="h-6 rounded-sm px-2 font-regular"
+              role="status"
+            >
+              {connectionIndicator.label}
+            </Badge>
+          ) : null}
         </div>
       </div>
 
@@ -76,6 +105,7 @@ export function ConversationHeader({
           variant="ghost"
           size="sm"
           className="size-8 text-text-secondary"
+          disabled={!capabilities.canInterrupt}
         >
           <Pause aria-hidden="true" />
         </IconButton>
@@ -84,6 +114,7 @@ export function ConversationHeader({
           variant="ghost"
           size="sm"
           className="size-8 text-danger hover:bg-danger-muted/60 hover:text-danger active:bg-danger-muted"
+          disabled={!capabilities.canStop}
         >
           <Square aria-hidden="true" className="size-3.5 fill-current" />
         </IconButton>

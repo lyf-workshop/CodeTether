@@ -3,6 +3,7 @@ import test from 'node:test'
 
 import {
   CodeTetherClient,
+  CodeTetherIncompatibleProtocolError,
   CodeTetherProtocolError,
   CodeTetherResponseError,
 } from '../dist/index.js'
@@ -186,6 +187,49 @@ test('validates safe HTTP errors and surfaces a typed response error', async () 
       error.status === 409 &&
       error.envelope.code === 'conflict',
   )
+})
+
+test('surfaces an incompatible bootstrap protocol version distinctly', async () => {
+  const client = new CodeTetherClient({
+    baseUrl: 'http://host.test',
+    fetch: async () =>
+      jsonResponse({
+        protocolVersion: 2,
+        hostVersion: '2.0.0',
+        epoch,
+        capabilities,
+      }),
+  })
+
+  await assert.rejects(
+    client.bootstrap(),
+    (error) =>
+      error instanceof CodeTetherIncompatibleProtocolError &&
+      error.expectedVersion === 1 &&
+      error.receivedVersion === 2,
+  )
+})
+
+test('invokes Fetch with the global receiver required by browsers', async () => {
+  let receivedGlobalThis = false
+  const client = new CodeTetherClient({
+    baseUrl: 'http://host.test',
+    fetch: function () {
+      receivedGlobalThis = this === globalThis
+      return Promise.resolve(
+        jsonResponse({
+          protocolVersion: 1,
+          hostVersion: '0.0.0',
+          epoch,
+          capabilities,
+        }),
+      )
+    },
+  })
+
+  await client.bootstrap()
+
+  assert.equal(receivedGlobalThis, true)
 })
 
 test('rejects mutation responses and errors with another actionId', async () => {

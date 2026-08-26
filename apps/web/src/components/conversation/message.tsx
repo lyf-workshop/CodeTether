@@ -9,10 +9,10 @@ import {
   type AgentId,
 } from '@codetether/ui'
 
-import type { ConversationMessageMock } from '../../mocks/conversation-detail'
+import type { ConversationMessageViewModel } from './conversation-view-model'
 
 interface MessageProps {
-  message: ConversationMessageMock
+  message: ConversationMessageViewModel
   children?: ReactNode
   className?: string
 }
@@ -38,9 +38,11 @@ export function UserMessage({ message, className }: MessageProps) {
           <span className="text-md font-semibold text-text-primary">你</span>
           <time className="text-xs text-text-muted">{message.time}</time>
         </header>
-        <p className="mt-2 text-base font-regular leading-normal text-text-primary">
-          {message.body}
-        </p>
+        {message.body.length > 0 ? (
+          <p className="mt-2 whitespace-pre-wrap break-words text-base font-regular leading-normal text-text-primary">
+            {message.body}
+          </p>
+        ) : null}
       </div>
     </article>
   )
@@ -84,10 +86,14 @@ export function AgentMessage({
             {message.time}
           </time>
         </header>
-        <p className="mt-2 text-base font-regular leading-normal text-text-primary">
-          {message.body}
-        </p>
-        {children ? <div className="mt-3">{children}</div> : null}
+        {message.body.length > 0 ? (
+          <p className="mt-2 whitespace-pre-wrap break-words text-base font-regular leading-normal text-text-primary">
+            {message.body}
+          </p>
+        ) : null}
+        {children ? (
+          <div className="mt-3 min-w-0 overflow-hidden">{children}</div>
+        ) : null}
       </div>
     </article>
   )

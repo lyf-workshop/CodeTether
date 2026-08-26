@@ -1,20 +1,23 @@
 import type { Ref } from 'react'
 
-import type { ConversationDetailMock } from '../../mocks/conversation-detail'
 import { Composer } from './composer'
 import { ConversationHeader } from './conversation-header'
 import { ConversationTimeline } from './conversation-timeline'
+import type {
+  ConversationConnectionIndicatorViewModel,
+  ConversationViewModel,
+} from './conversation-view-model'
 
 interface ConversationWorkspaceProps {
-  conversation: ConversationDetailMock['conversation']
-  timeline: ConversationDetailMock['timeline']
+  viewModel: ConversationViewModel
+  connectionIndicator?: ConversationConnectionIndicatorViewModel
   inspectorTriggerRef?: Ref<HTMLButtonElement>
   onOpenInspector?: () => void
 }
 
 export function ConversationWorkspace({
-  conversation,
-  timeline,
+  viewModel,
+  connectionIndicator,
   inspectorTriggerRef,
   onOpenInspector,
 }: ConversationWorkspaceProps) {
@@ -24,13 +27,23 @@ export function ConversationWorkspace({
       className="grid h-full min-h-0 min-w-0 grid-rows-[var(--layout-conversation-header-height)_minmax(0,1fr)_var(--layout-conversation-composer-region-height)] bg-background"
     >
       <ConversationHeader
-        conversation={conversation}
+        conversation={viewModel}
+        capabilities={viewModel.capabilities}
+        connectionIndicator={connectionIndicator}
         inspectorTriggerRef={inspectorTriggerRef}
         onOpenInspector={onOpenInspector}
       />
-      <ConversationTimeline agent={conversation.agent} timeline={timeline} />
+      <ConversationTimeline
+        agent={viewModel.agent}
+        timeline={viewModel.timeline}
+        changes={viewModel.changes}
+        pendingApproval={viewModel.pendingApproval}
+      />
       <div className="min-h-0 px-4 pb-5">
-        <Composer conversation={conversation} />
+        <Composer
+          conversation={viewModel}
+          capabilities={viewModel.capabilities}
+        />
       </div>
     </section>
   )

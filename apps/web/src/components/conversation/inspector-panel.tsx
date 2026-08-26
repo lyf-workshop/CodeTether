@@ -23,15 +23,17 @@ import {
 } from '@codetether/ui'
 
 import type {
-  ContextReferenceMock,
-  ConversationDetailMock,
-} from '../../mocks/conversation-detail'
+  ConversationChangesViewModel,
+  ConversationContextReferenceViewModel,
+  ConversationTerminalViewModel,
+  ConversationViewModel,
+} from './conversation-view-model'
 
 const contextIcons = {
   file: AtSign,
   git: GitCompareArrows,
   shell: SquareTerminal,
-} satisfies Record<ContextReferenceMock['kind'], LucideIcon>
+} satisfies Record<ConversationContextReferenceViewModel['kind'], LucideIcon>
 
 interface InspectorSectionProps extends Omit<
   ComponentPropsWithoutRef<'section'>,
@@ -68,7 +70,7 @@ function InspectorSection({
 }
 
 interface ConversationInfoProps {
-  conversation: ConversationDetailMock['conversation']
+  conversation: ConversationViewModel
 }
 
 function ConversationInfo({ conversation }: ConversationInfoProps) {
@@ -116,11 +118,11 @@ function ConversationInfo({ conversation }: ConversationInfoProps) {
 }
 
 interface ChangesSummaryProps {
-  changes: ConversationDetailMock['inspector']['changes']
-  totals: ConversationDetailMock['inspector']['totals']
+  changes: ConversationChangesViewModel
 }
 
-function ChangesSummary({ changes, totals }: ChangesSummaryProps) {
+function ChangesSummary({ changes }: ChangesSummaryProps) {
+  const { files, totals } = changes
   const totalsSummary = (
     <div
       className="flex items-center gap-1"
@@ -143,67 +145,89 @@ function ChangesSummary({ changes, totals }: ChangesSummaryProps) {
 
   return (
     <InspectorSection title="变更文件" action={totalsSummary}>
-      <ul aria-label={`${changes.length} 个变更文件`} className="space-y-0.5">
-        {changes.map((change) => (
-          <li
-            key={change.name}
-            className="flex min-h-7 min-w-0 items-center gap-2 text-sm"
-          >
-            <FileCode2
-              aria-hidden="true"
-              className="size-3.5 shrink-0 text-text-muted"
-            />
-            <span
-              className="min-w-0 flex-1 truncate font-regular text-text-primary"
-              title={change.name}
+      {files.length > 0 ? (
+        <ul aria-label={`${files.length} 个变更文件`} className="space-y-0.5">
+          {files.map((change) => (
+            <li
+              key={change.id}
+              className="flex min-h-7 min-w-0 items-center gap-2 text-sm"
             >
-              {change.name}
-            </span>
-            <span
-              aria-label={`新增 ${change.additions} 行`}
-              className="shrink-0 font-medium tabular-nums text-success/90"
-            >
-              +{change.additions}
-            </span>
-            {change.deletions > 0 ? (
+              <FileCode2
+                aria-hidden="true"
+                className="size-3.5 shrink-0 text-text-muted"
+              />
               <span
-                aria-label={`删除 ${change.deletions} 行`}
-                className="w-5 shrink-0 font-medium tabular-nums text-danger/90"
+                className="min-w-0 flex-1 truncate font-regular text-text-primary"
+                title={change.name}
               >
-                -{change.deletions}
+                {change.name}
               </span>
-            ) : (
-              <span aria-hidden="true" className="w-5 shrink-0" />
-            )}
-          </li>
-        ))}
-      </ul>
+              <span
+                aria-label={`新增 ${change.additions} 行`}
+                className="shrink-0 font-medium tabular-nums text-success/90"
+              >
+                +{change.additions}
+              </span>
+              {change.deletions > 0 ? (
+                <span
+                  aria-label={`删除 ${change.deletions} 行`}
+                  className="w-5 shrink-0 font-medium tabular-nums text-danger/90"
+                >
+                  -{change.deletions}
+                </span>
+              ) : (
+                <span aria-hidden="true" className="w-5 shrink-0" />
+              )}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p role="status" className="text-sm font-regular text-text-muted">
+          暂无变更。
+        </p>
+      )}
     </InspectorSection>
   )
 }
 
 interface TerminalSummaryProps {
-  terminal: ConversationDetailMock['inspector']['terminal']
+  terminal: ConversationTerminalViewModel
 }
 
 function TerminalSummary({ terminal }: TerminalSummaryProps) {
-  const output = [`$ ${terminal.command}`, ...terminal.lines].join('\n')
+  const output = [
+    ...(terminal.command ? [`$ ${terminal.command}`] : []),
+    ...terminal.lines,
+  ].join('\n')
 
   return (
     <InspectorSection title="终端">
-      <pre
-        tabIndex={0}
-        aria-label="最近终端输出"
-        className="max-h-32 overflow-auto whitespace-pre-wrap font-mono text-sm font-regular leading-normal text-text-secondary outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-      >
-        <code>{output}</code>
-      </pre>
+      {output.length > 0 ? (
+        <>
+          <pre
+            tabIndex={0}
+            aria-label="最近终端输出"
+            className="max-h-32 overflow-auto whitespace-pre-wrap break-words font-mono text-sm font-regular leading-normal text-text-secondary outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+          >
+            <code>{output}</code>
+          </pre>
+          {terminal.truncated ? (
+            <p className="mt-2 text-xs font-regular text-text-muted">
+              较早的终端输出已截断。
+            </p>
+          ) : null}
+        </>
+      ) : (
+        <p role="status" className="text-sm font-regular text-text-muted">
+          暂无终端输出。
+        </p>
+      )}
     </InspectorSection>
   )
 }
 
 interface ContextSummaryProps {
-  context: ConversationDetailMock['inspector']['context']
+  context: readonly ConversationContextReferenceViewModel[]
   visibleCount?: number
 }
 
@@ -214,22 +238,28 @@ function ContextSummary({ context, visibleCount }: ContextSummaryProps) {
 
   return (
     <InspectorSection title="上下文">
-      <div className="flex min-w-0 flex-wrap gap-1.5">
-        {visibleContext.map((reference) => {
-          const Icon = contextIcons[reference.kind]
+      {visibleContext.length > 0 ? (
+        <div className="flex min-w-0 flex-wrap gap-1.5">
+          {visibleContext.map((reference) => {
+            const Icon = contextIcons[reference.kind]
 
-          return (
-            <Badge
-              key={reference.id}
-              variant="secondary"
-              className="h-6 max-w-full rounded-sm border-transparent bg-surface-muted/60 px-2 text-sm font-regular"
-            >
-              <Icon aria-hidden="true" />
-              <span className="truncate">{reference.label}</span>
-            </Badge>
-          )
-        })}
-      </div>
+            return (
+              <Badge
+                key={reference.id}
+                variant="secondary"
+                className="h-6 max-w-full rounded-sm border-transparent bg-surface-muted/60 px-2 text-sm font-regular"
+              >
+                <Icon aria-hidden="true" />
+                <span className="truncate">{reference.label}</span>
+              </Badge>
+            )
+          })}
+        </div>
+      ) : (
+        <p role="status" className="text-sm font-regular text-text-muted">
+          暂无上下文。
+        </p>
+      )}
       {remainingCount > 0 ? (
         <p className="mt-2 text-sm font-regular text-text-muted">
           还有 {remainingCount} 项
@@ -241,20 +271,19 @@ function ContextSummary({ context, visibleCount }: ContextSummaryProps) {
 
 type OverviewPaneProps = Pick<
   InspectorPanelProps,
-  'conversation' | 'changes' | 'totals' | 'terminal' | 'context'
+  'conversation' | 'changes' | 'terminal' | 'context'
 >
 
 function OverviewPane({
   conversation,
   changes,
-  totals,
   terminal,
   context,
 }: OverviewPaneProps) {
   return (
     <div className="px-4 pb-4">
       <ConversationInfo conversation={conversation} />
-      <ChangesSummary changes={changes} totals={totals} />
+      <ChangesSummary changes={changes} />
       <TerminalSummary terminal={terminal} />
       <ContextSummary context={context} visibleCount={3} />
     </div>
@@ -265,22 +294,20 @@ export interface InspectorPanelProps extends Omit<
   ComponentPropsWithoutRef<'aside'>,
   'children'
 > {
-  conversation: ConversationDetailMock['conversation']
-  changes: ConversationDetailMock['inspector']['changes']
-  totals: ConversationDetailMock['inspector']['totals']
-  terminal: ConversationDetailMock['inspector']['terminal']
-  context: ConversationDetailMock['inspector']['context']
+  conversation: ConversationViewModel
+  changes: ConversationChangesViewModel
+  terminal: ConversationTerminalViewModel
+  context: readonly ConversationContextReferenceViewModel[]
   initialTab?: InspectorTab
   onClose?: () => void
 }
 
 export type InspectorTab = 'overview' | 'changes' | 'terminal' | 'context'
 
-/** Mock-only Conversation Detail inspector based on Figma node 14:218. */
+/** Conversation Detail inspector based on the frozen Figma node 14:218. */
 export function InspectorPanel({
   conversation,
   changes,
-  totals,
   terminal,
   context,
   initialTab = 'overview',
@@ -361,7 +388,6 @@ export function InspectorPanel({
             <OverviewPane
               conversation={conversation}
               changes={changes}
-              totals={totals}
               terminal={terminal}
               context={context}
             />
@@ -371,7 +397,7 @@ export function InspectorPanel({
         <TabsContent value="changes" className="min-h-0 overflow-hidden">
           <ScrollArea className="h-full">
             <div className="px-4 pb-4">
-              <ChangesSummary changes={changes} totals={totals} />
+              <ChangesSummary changes={changes} />
             </div>
           </ScrollArea>
         </TabsContent>

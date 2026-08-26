@@ -2,7 +2,9 @@
 
 ## Status
 
-Phase 1 Frontend Experience is accepted and frozen as **CodeTether V2 Frontend Core v1**. Phase 2A and Phase 2A.1 are accepted and frozen as **Phase 2A Codex Runtime v1**. Phase 2B now adds the versioned local Client-to-Host boundary: HTTP commands, an SSE event stream, CodeTether-owned public identities, in-memory snapshot/replay, and a non-React client. The frozen React frontend remains Mock-only and is not connected to this API.
+Phase 1 Frontend Experience is accepted and frozen as **CodeTether V2 Frontend Core v1**. Phase 2A and Phase 2A.1 are accepted and frozen as **Phase 2A Codex Runtime v1**. Phase 2B is accepted as the versioned local Client-to-Host boundary: HTTP commands, an SSE event stream, CodeTether-owned public identities, in-memory snapshot/replay, and a non-React client.
+
+Phase 2C.1 connects only the frozen Conversation Detail read path to Protocol v1. One application-scoped Web runtime loads bootstrap and snapshot data through TanStack Query, follows the Host SSE stream, and applies normalized events to a typed Conversation projection. Demo, Inbox, and Conversations data remain Mock-only, and no React write command is connected.
 
 No Tauri shell, database, persistence, remote access, authentication, or production machine-host service exists yet. The Phase 2B server is a development-only loopback API.
 
@@ -37,7 +39,7 @@ The future Machine Host will be the runtime authority. Clients must render norma
 ## Monorepo Boundaries
 
 ```text
-apps/web                   React web/PWA client; frozen Mock frontend
+apps/web                   Frozen React UI plus Phase 2C.1 live Conversation read boundary
 apps/desktop               Future Tauri 2 desktop shell placeholder
 apps/host                  Codex runtime harnesses and Phase 2B local Host API
 
@@ -264,13 +266,43 @@ A fatal Codex runtime signal terminates active public Turns with a safe `runtime
 
 The primary Turn delivered 56 aggregated message deltas, two completed messages, two tool starts, four tool-output batches, two tool completions, one file change, and one completed Turn. Unknown Codex notifications remained diagnostic-only. The interrupt produced a late provider command diagnostic about the terminated process, consistent with the previously observed interrupt semantics; it did not cross the public protocol or corrupt shutdown.
 
+## Phase 2C.1 Live Conversation Read Model
+
+The implemented browser read path is:
+
+```text
+Host HTTP/SSE
+      -> packages/client
+      -> one application-scoped HostRuntime
+      -> TanStack Query bootstrap/snapshot/projection cache
+      -> pure Conversation projection
+      -> ConversationViewModel adapter
+      -> frozen Conversation Detail components
+```
+
+`HostRuntime` is shared per application `QueryClient`, so React components never open or parse their own SSE connections. It requests bootstrap first, rejects an incompatible Protocol version, replaces the projection from `GET /api/v1/snapshot`, and then opens one event stream using the Snapshot cursor. The centralized development base URL defaults to `http://127.0.0.1:4317` and may be overridden with `VITE_CODETETHER_HOST_URL`; it is not repeated in components.
+
+TanStack Query owns Host bootstrap, Snapshot, and projection cache entries. The stream lifecycle remains outside Query. The runtime exposes only `connecting`, `connected`, `reconnecting`, `unavailable`, and `incompatible` connection states to views. A temporary disconnect retains the last projection while reconnecting. The epoch/sequence cursor is browser-memory only: a page refresh starts again from bootstrap and Snapshot rather than `localStorage` or IndexedDB.
+
+Every regular event is checked against the current projection epoch and sequence before application. Duplicate events do not update the projection. An epoch mismatch, sequence gap, invalid older event, or public `stream.reset` stops incremental application, fetches a fresh Snapshot, atomically replaces the projection, and then reconnects from the new Snapshot cursor. React components do not inspect `epoch`, `seq`, `Last-Event-ID`, provider Thread IDs, or Codex JSON-RPC.
+
+The pure projection consumes `conversation.started`, Turn lifecycle, aggregated message, Tool, file-change, and Approval events. Message deltas are merged by Conversation, Turn, and Item identity; `message.completed` finalizes the same record instead of creating a duplicate. Tool output is attached to the corresponding Tool and, for command execution, to one bounded terminal tail. Terminal text is capped at 128 KiB per Conversation projection so a long process cannot create an unbounded browser history. File changes have one source in the projection and feed both Timeline and Inspector view data.
+
+The route boundary is explicit: `/conversations/demo` continues to use the accepted Mock adapter, while a valid `/conversations/conv_*` identity selects the Host projection. Both data sources become the same `ConversationViewModel` before entering the frozen component tree; the JSX does not parse Host or provider payloads. Live Composer, approval, pause/interrupt, stop, and change actions are read-only or disabled. A pending Approval is visible as a waiting state but cannot be resolved from React in this phase.
+
+The Snapshot is a reconnect boundary, not Conversation history. Protocol v1 currently snapshots only Conversation summaries, active Turns, and pending Approvals. It does not include prior Agent messages, message deltas, Tools, terminal output, file-change/diff Items, completed Turn history, or the user's Turn input. Consequently, a browser that opens after a Turn has streamed cannot reconstruct that timeline, and a Snapshot replacement discards live Item detail that is absent from the Snapshot. A real observer must currently open the live route before an external development helper starts the Turn. Addressing historical reconstruction requires a later Host contract and persistence decision, not client-side fabrication.
+
+The 2026-08-26 manual browser run used the isolated `.tmp/codetether-live-read/` workspace and the local default `gpt-5.6-sol` model. With the live route open before Turn start, the frozen page rendered three Agent messages, four command executions, one `src/example.ts` Diff, terminal summaries, and the completed state. The requested one-line comment was the only workspace modification. A separate explicit-model attempt exercised the real `turn.failed` presentation; the public Host error intentionally did not expose the provider cause. Stopping the Host retained the completed projection and surfaced reconnecting state; the normal connected run and a clean Demo check produced zero browser console errors and warnings.
+
+The real browser check also exposed a Phase 2B client defect that Node-only tests had not caught: storing `Window.fetch` and invoking it as a client member loses the required browser receiver. `packages/client` now binds the configured Fetch implementation to `globalThis`, with a regression test for the receiver contract.
+
 ## UI
 
-The UI presents projects, conversations, agents, machines, approvals, changes, terminal output, context, and notifications. Figma defines visual and interaction behavior. The accepted frontend remains Mock-only during Phase 2B.
+The UI presents projects, conversations, agents, machines, approvals, changes, terminal output, context, and notifications. Figma defines visual and interaction behavior. Phase 2C.1 preserves the accepted visual structure and changes only the Conversation Detail data boundary for valid live Conversation routes.
 
-The client owns ephemeral presentation state only. TanStack Query is reserved for future host/server state, and Zustand is limited to UI state. Project, Conversation, Agent, and Machine records must not be duplicated into a client store as a second runtime authority.
+The client owns ephemeral presentation state only. TanStack Query now stores Phase 2C.1 bootstrap, Snapshot, and Conversation projection state; Zustand remains limited to UI state. Project, Conversation, Agent, and Machine records must not be duplicated into a client store as a second runtime authority.
 
-The UI must consume Protocol v1 through the non-React client rather than Codex wire messages or `packages/adapter-codex` directly. That React integration is deliberately deferred; Phase 2B validates the boundary without changing UI data sources.
+The live Conversation read path consumes Protocol v1 through `packages/client`, never Codex wire messages or `packages/adapter-codex` directly. Inbox and Conversations remain Mock data. Phase 2C.1 deliberately does not send Composer, approval, interrupt, or another write command from React.
 
 ## Desktop Shell
 
@@ -294,7 +326,7 @@ Provider-specific capabilities may remain Codex-specific when a natural common c
 
 ## Persistence
 
-There is no CodeTether database, durable event store, repository abstraction, or migration in Phase 2A or Phase 2B. Public/provider identity maps, snapshots, replay events, and action results exist only in Host memory. Codex itself owns its resumable Thread record; CodeTether persistence and application-restart recovery remain deferred.
+There is no CodeTether database, durable event store, repository abstraction, or migration in Phase 2A through Phase 2C.1. Public/provider identity maps, snapshots, replay events, action results, and the browser Conversation projection exist only in memory. Codex itself owns its resumable Thread record; CodeTether persistence and application-restart recovery remain deferred.
 
 ## Event Streaming
 
@@ -310,6 +342,8 @@ The final two-Turn validation observed 171 raw message/tool delta events and del
 
 Phase 2B adds non-durable Host-global ordering, bounded replay, explicit reconnect reset, and isolated multi-client observation at the client boundary. These guarantees apply only within one in-memory Host epoch; durable replay remains deferred.
 
+Phase 2C.1 adds one browser consumer for that stream. It rejects duplicate and out-of-order events before updating the TanStack Query projection. A reset or unrecoverable cursor condition replaces from Snapshot rather than merging across incompatible epochs. Because Snapshot has no Item history, this guarantees a coherent current boundary but not restoration of an already-streamed Timeline.
+
 ## Conversation Ownership
 
 A Conversation is bound to one Project, one Agent, and the Machine executing it, plus model, reasoning, permission, and history. An existing Conversation cannot switch providers. Phase 2A maps one Codex Thread to one continuing Codex conversation concept but does not persist a CodeTether Conversation record.
@@ -324,16 +358,20 @@ These controls are development safeguards, not a production security model. Auth
 
 ## Current Architectural Constraints
 
-- The frozen React frontend is not connected to the runtime.
+- Only valid live Conversation Detail routes are connected to the runtime; Demo, Inbox, and Conversations remain Mock data.
 - The Host API is a development-only loopback service, not a durable daemon or remote service.
 - The real integration is Codex-only and was verified against local `codex-cli 0.149.1`.
-- No React integration, Tauri shell, database, persistence, authentication, remote access, or production permission policy exists.
+- React has a read-only Conversation projection only. Composer, approval resolution, interrupt, stop, and other write paths are not connected.
+- No Tauri shell, database, persistence, authentication, remote access, or production permission policy exists.
 - Command Allow Once and Decline were exercised through real App Server requests; file-change and permissions approvals were not observed.
 - Multi-Turn, multi-Thread, cross-process resume, interruption, and safe Tool failure were manually validated.
 - A real terminal Turn failure was not observed.
 - Protocol v1 replay, action idempotency, public identities, and snapshot state are process-local and reset on Host restart.
 - Action idempotency is bounded to the recent 256 retained actions, not durable exactly-once execution.
 - SSE slow-client recovery currently closes the lagging connection; clients must reconnect or fetch a snapshot after `stream.reset`.
+- The browser cursor and live Conversation projection are memory-only and reset on page refresh.
+- Snapshot does not contain message, Tool, terminal, file/diff Item history, completed Turns, or user Turn input, so it cannot reconstruct an already-streamed Timeline.
+- Terminal projection retains only the most recent 128 KiB per Conversation.
 - An idle runtime failure changes bootstrap capabilities but has no proactive Protocol v1 capability-change event.
 - User approval hooks can pre-resolve escalation; the validation runner disables hooks only in disposable semantics scenarios.
 - Generated protocol artifacts and real-agent workspace files remain ignored under `.tmp/`.

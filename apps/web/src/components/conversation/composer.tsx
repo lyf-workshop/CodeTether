@@ -9,12 +9,17 @@ import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
+  agentDefinitions,
 } from '@codetether/ui'
 
-import type { ConversationDetailMock } from '../../mocks/conversation-detail'
+import type {
+  ConversationCapabilitiesViewModel,
+  ConversationViewModel,
+} from './conversation-view-model'
 
 interface ComposerProps {
-  conversation: ConversationDetailMock['conversation']
+  conversation: ConversationViewModel
+  capabilities: ConversationCapabilitiesViewModel
 }
 
 const quickActions = [
@@ -25,9 +30,10 @@ const quickActions = [
   { label: '附件', accessibleLabel: '附件', icon: Paperclip },
 ] as const
 
-export function Composer({ conversation }: ComposerProps) {
+export function Composer({ conversation, capabilities }: ComposerProps) {
   const [value, setValue] = useState('')
-  const canSend = value.trim().length > 0
+  const canSend = capabilities.canCompose && value.trim().length > 0
+  const agentName = agentDefinitions[conversation.agent].name
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -52,6 +58,7 @@ export function Composer({ conversation }: ComposerProps) {
             type="button"
             variant="ghost"
             size="sm"
+            disabled={!capabilities.canCompose}
             className="h-7 gap-1.5 px-2 text-sm text-text-muted hover:bg-surface-muted/70 hover:text-text-primary"
             aria-label={`${accessibleLabel}（演示）`}
           >
@@ -71,6 +78,7 @@ export function Composer({ conversation }: ComposerProps) {
           onChange={(event) => setValue(event.currentTarget.value)}
           onKeyDown={handleKeyDown}
           rows={2}
+          readOnly={!capabilities.canCompose}
           placeholder="输入消息…"
           aria-keyshortcuts="Meta+Enter Control+Enter"
           className="min-h-12 flex-1 resize-none border-0 bg-transparent px-1 py-2.5 text-base font-regular leading-normal placeholder:text-text-secondary/80 hover:border-transparent hover:bg-transparent focus-visible:border-transparent focus-visible:ring-0"
@@ -101,17 +109,18 @@ export function Composer({ conversation }: ComposerProps) {
                 className="size-3 text-text-muted"
               />
               <span className="text-text-muted">智能体</span>
-              <span>Codex</span>
+              <span>{agentName}</span>
             </div>
           </TooltipTrigger>
           <TooltipContent side="top" className="max-w-72">
-            此会话由 Codex 创建。如需使用其他智能体，请新建会话。
+            此会话由 {agentName} 创建。如需使用其他智能体，请新建会话。
           </TooltipContent>
         </Tooltip>
         <Button
           type="button"
           variant="ghost"
           size="sm"
+          disabled={!capabilities.canCompose}
           className="h-7 gap-1.5 px-2 text-sm text-text-secondary hover:bg-surface-muted/70"
         >
           <span className="text-text-muted">模型</span>
@@ -121,6 +130,7 @@ export function Composer({ conversation }: ComposerProps) {
           type="button"
           variant="ghost"
           size="sm"
+          disabled={!capabilities.canCompose}
           className="h-7 gap-1.5 px-2 text-sm text-text-secondary hover:bg-surface-muted/70"
         >
           <span className="text-text-muted">推理</span>
@@ -130,6 +140,7 @@ export function Composer({ conversation }: ComposerProps) {
           type="button"
           variant="ghost"
           size="sm"
+          disabled={!capabilities.canCompose}
           className="h-7 gap-1.5 px-2 text-sm text-text-secondary hover:bg-surface-muted/70"
         >
           <span className="text-text-muted">权限</span>
@@ -140,6 +151,7 @@ export function Composer({ conversation }: ComposerProps) {
           label="添加上下文（演示）"
           variant="ghost"
           size="sm"
+          disabled={!capabilities.canCompose}
           className="size-7 text-text-muted hover:bg-surface-muted/70 hover:text-text-primary"
         >
           <Hash aria-hidden="true" />
@@ -149,6 +161,7 @@ export function Composer({ conversation }: ComposerProps) {
           label="快速操作（演示）"
           variant="ghost"
           size="sm"
+          disabled={!capabilities.canCompose}
           className="size-7 text-text-muted hover:bg-surface-muted/70 hover:text-text-primary"
         >
           <Zap aria-hidden="true" />

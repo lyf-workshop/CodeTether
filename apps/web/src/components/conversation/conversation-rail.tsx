@@ -16,10 +16,10 @@ import {
 } from '@codetether/ui'
 
 import type {
-  ConversationGroupMock,
   ConversationRailFilter,
-  ConversationSummaryMock,
-} from '../../mocks/conversation-detail'
+  ConversationRailGroupViewModel,
+  ConversationRailItemViewModel,
+} from './conversation-view-model'
 
 const railFilters = [
   { label: '全部', value: 'all' },
@@ -71,7 +71,7 @@ function StatusDot({ status }: StatusDotProps) {
 }
 
 interface ConversationRailRowProps {
-  conversation: ConversationSummaryMock
+  conversation: ConversationRailItemViewModel
   selected: boolean
 }
 
@@ -160,10 +160,10 @@ export interface ConversationRailProps extends Omit<
 > {
   archivedCount: number
   currentConversationId: string
-  groups: readonly ConversationGroupMock[]
+  groups: readonly ConversationRailGroupViewModel[]
 }
 
-/** Mock-only conversation navigation for the Phase 1C desktop workspace. */
+/** Frozen conversation navigation presentation for the desktop workspace. */
 export function ConversationRail({
   archivedCount,
   className,

@@ -53,6 +53,12 @@ importers:
 
   apps/web:
     dependencies:
+      '@codetether/client':
+        specifier: workspace:*
+        version: link:../../packages/client
+      '@codetether/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
       '@codetether/ui':
         specifier: workspace:*
         version: link:../../packages/ui

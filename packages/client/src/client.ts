@@ -28,9 +28,14 @@ import {
   type StartTurnRequest,
   type StartTurnResponse,
   type TurnId,
+  protocolVersion,
 } from '@codetether/protocol'
 
-import { CodeTetherProtocolError, CodeTetherResponseError } from './errors.js'
+import {
+  CodeTetherIncompatibleProtocolError,
+  CodeTetherProtocolError,
+  CodeTetherResponseError,
+} from './errors.js'
 import { CodeTetherEventStream, linkedAbortController } from './event-stream.js'
 
 interface RuntimeSchema<T> {
@@ -60,7 +65,11 @@ export class CodeTetherClient {
 
   constructor(options: CodeTetherClientOptions) {
     this.#baseUrl = options.baseUrl.replace(/\/+$/, '')
-    this.#fetch = options.fetch ?? globalThis.fetch
+    const fetchImplementation = options.fetch ?? globalThis.fetch
+    if (fetchImplementation === undefined) {
+      throw new Error('CodeTetherClient requires a Fetch API implementation')
+    }
+    this.#fetch = fetchImplementation.bind(globalThis)
     this.#maxResponseBytes = positiveInteger(
       options.maxResponseBytes,
       16 * 1024 * 1024,
@@ -71,16 +80,19 @@ export class CodeTetherClient {
       10 * 1024 * 1024,
       'maxEventFrameBytes',
     )
-    if (this.#fetch === undefined) {
-      throw new Error('CodeTetherClient requires a Fetch API implementation')
-    }
   }
 
   async bootstrap(options: RequestOptions = {}): Promise<Bootstrap> {
-    return await this.#request('/api/v1/bootstrap', BootstrapSchema, {
-      method: 'GET',
-      signal: options.signal,
-    })
+    return await this.#request(
+      '/api/v1/bootstrap',
+      BootstrapSchema,
+      {
+        method: 'GET',
+        signal: options.signal,
+      },
+      undefined,
+      assertCompatibleBootstrapVersion,
+    )
   }
 
   async snapshot(options: RequestOptions = {}): Promise<HostSnapshot> {
@@ -256,6 +268,7 @@ export class CodeTetherClient {
     schema: RuntimeSchema<T>,
     init: RequestInit,
     expectedActionId?: CreateConversationRequest['actionId'],
+    inspectPayload?: (value: unknown) => void,
   ): Promise<T> {
     const response = await this.#fetch(this.#url(path), {
       ...init,
@@ -271,11 +284,9 @@ export class CodeTetherClient {
         expectedActionId,
       )
     }
-    const value = parseProtocol(
-      schema,
-      await readJson(response, this.#maxResponseBytes),
-      `response from ${path}`,
-    )
+    const payload = await readJson(response, this.#maxResponseBytes)
+    inspectPayload?.(payload)
+    const value = parseProtocol(schema, payload, `response from ${path}`)
     if (expectedActionId !== undefined) {
       assertProtocolIdentity(
         readActionId(value) === expectedActionId,
@@ -287,6 +298,17 @@ export class CodeTetherClient {
 
   #url(path: string): string {
     return `${this.#baseUrl}${path}`
+  }
+}
+
+function assertCompatibleBootstrapVersion(value: unknown): void {
+  if (
+    typeof value === 'object' &&
+    value !== null &&
+    'protocolVersion' in value &&
+    value.protocolVersion !== protocolVersion
+  ) {
+    throw new CodeTetherIncompatibleProtocolError(value.protocolVersion)
   }
 }
 

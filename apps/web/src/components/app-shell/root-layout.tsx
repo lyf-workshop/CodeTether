@@ -1,5 +1,7 @@
 import { Outlet, useRouterState } from '@tanstack/react-router'
 
+import { ConversationIdSchema } from '@codetether/protocol'
+
 import { conversationDetailMock } from '../../mocks/conversation-detail'
 import { conversationsMock } from '../../mocks/conversations'
 import { useDemoState } from '../../state/demo-state-context'
@@ -29,15 +31,25 @@ export function RootLayout() {
         (conversation) => conversation.id === conversationId,
       )?.title
     : undefined
+  const isLiveConversationRoute =
+    conversationId !== null &&
+    ConversationIdSchema.safeParse(conversationId).success
   const currentPage = currentPath.startsWith('/conversations/')
-    ? (conversationTitle ?? conversationDetailMock.conversation.title)
+    ? (conversationTitle ??
+      (isLiveConversationRoute
+        ? 'Codex 实时会话'
+        : conversationDetailMock.conversation.title))
     : (pageTitles[currentPath as keyof typeof pageTitles] ?? 'CodeTether')
 
   return (
     <AppShell
       currentPage={currentPage}
       currentPath={currentPath}
-      currentProject={conversationDetailMock.project.name}
+      currentProject={
+        isLiveConversationRoute
+          ? '本地工作区'
+          : conversationDetailMock.project.name
+      }
       inboxAttentionCount={inboxAttentionCount}
     >
       <Outlet />

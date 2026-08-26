@@ -43,7 +43,7 @@ export function ShellRunCard({
         {command}
       </code>
       {summary ? (
-        <span className="shrink-0 text-sm font-regular text-text-secondary">
+        <span className="min-w-0 shrink truncate text-sm font-regular text-text-secondary">
           {summary}
         </span>
       ) : null}

@@ -26,6 +26,7 @@
     "codex:failure": "pnpm codex:semantics --scenario failure",
     "codex:semantics": "pnpm -r --workspace-concurrency=1 --filter @codetether/host... build && node apps/host/dist/semantics.js",
     "host:serve": "pnpm -r --workspace-concurrency=1 --filter @codetether/host... build && node apps/host/dist/serve.js",
+    "host:observe": "pnpm -r --workspace-concurrency=1 --filter @codetether/host... build && node apps/host/dist/live-read.js",
     "host:integration": "pnpm -r --workspace-concurrency=1 --filter @codetether/host... build && node apps/host/dist/integration.js"
   },
   "devDependencies": {

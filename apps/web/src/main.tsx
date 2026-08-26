@@ -25,17 +25,33 @@ async function renderApp() {
     return
   }
 
-  const [{ RouterProvider }, { router }] = await Promise.all([
+  const [
+    { QueryClient, QueryClientProvider },
+    { RouterProvider },
+    { router },
+    { HostRuntimeProvider },
+  ] = await Promise.all([
+    import('@tanstack/react-query'),
     import('@tanstack/react-router'),
     import('./router'),
+    import('./runtime/host/host-runtime-provider'),
   ])
   const { DemoStateProvider } = await import('./state/demo-state-provider')
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+    },
+  })
 
   createRoot(appRoot).render(
     <StrictMode>
-      <DemoStateProvider>
-        <RouterProvider router={router} />
-      </DemoStateProvider>
+      <QueryClientProvider client={queryClient}>
+        <HostRuntimeProvider>
+          <DemoStateProvider>
+            <RouterProvider router={router} />
+          </DemoStateProvider>
+        </HostRuntimeProvider>
+      </QueryClientProvider>
     </StrictMode>,
   )
 }

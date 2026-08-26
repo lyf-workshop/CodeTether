@@ -1,0 +1,28 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "noEmit": false,
+    "outDir": "./.tmp/test-dist",
+    "baseUrl": ".",
+    "ignoreDeprecations": "6.0",
+    "paths": {
+      "@codetether/ui": ["test/fixtures/ui-types.d.ts"]
+    },
+    "rootDir": "src",
+    "sourceMap": false,
+    "types": ["node"]
+  },
+  "include": [
+    "src/components/conversation/conversation-view-model.ts",
+    "src/components/conversation/live-conversation-adapter.ts",
+    "src/runtime/host/conversation-projection.ts",
+    "src/runtime/host/host-query.ts",
+    "src/runtime/host/host-runtime.ts"
+  ]
+}

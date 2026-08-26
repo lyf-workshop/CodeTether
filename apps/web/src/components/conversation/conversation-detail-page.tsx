@@ -2,41 +2,28 @@ import { useRef, useState } from 'react'
 
 import { Dialog, DialogContent, DialogTitle } from '@codetether/ui'
 
-import { conversationDetailMock } from '../../mocks/conversation-detail'
-import { conversationsMock } from '../../mocks/conversations'
 import { ConversationRail } from './conversation-rail'
+import type {
+  ConversationConnectionIndicatorViewModel,
+  ConversationRailViewModel,
+  ConversationViewModel,
+} from './conversation-view-model'
 import { ConversationWorkspace } from './conversation-workspace'
 import { InspectorPanel, type InspectorTab } from './inspector-panel'
 
-interface ConversationDetailPageProps {
-  conversationId: string
+export interface ConversationDetailPageProps {
+  viewModel: ConversationViewModel
+  rail: ConversationRailViewModel
+  connectionIndicator?: ConversationConnectionIndicatorViewModel
   initialInspectorTab?: InspectorTab
 }
 
 export function ConversationDetailPage({
-  conversationId,
+  viewModel,
+  rail,
+  connectionIndicator,
   initialInspectorTab = 'overview',
 }: ConversationDetailPageProps) {
-  const data = conversationDetailMock
-  const catalogConversation = conversationsMock.conversations.find(
-    (conversation) => conversation.id === conversationId,
-  )
-  const conversationMachine = catalogConversation
-    ? conversationsMock.machines.find(
-        (machine) => machine.id === catalogConversation.machine,
-      )?.name
-    : undefined
-  const conversation = catalogConversation
-    ? {
-        ...data.conversation,
-        id: catalogConversation.id,
-        title: catalogConversation.title,
-        status: catalogConversation.status,
-        agent: catalogConversation.agent,
-        model: catalogConversation.model,
-        machine: conversationMachine ?? data.conversation.machine,
-      }
-    : data.conversation
   const [inspectorOpen, setInspectorOpen] = useState(
     () =>
       initialInspectorTab !== 'overview' &&
@@ -46,11 +33,10 @@ export function ConversationDetailPage({
   const inspectorTriggerRef = useRef<HTMLButtonElement>(null)
 
   const inspectorProps = {
-    conversation,
-    changes: data.inspector.changes,
-    totals: data.inspector.totals,
-    terminal: data.inspector.terminal,
-    context: data.inspector.context,
+    conversation: viewModel,
+    changes: viewModel.changes,
+    terminal: viewModel.terminal,
+    context: viewModel.context,
     initialTab: initialInspectorTab,
   } as const
 
@@ -58,13 +44,13 @@ export function ConversationDetailPage({
     <Dialog open={inspectorOpen} onOpenChange={setInspectorOpen}>
       <div className="grid h-full min-h-0 min-w-0 grid-cols-[var(--layout-conversation-rail-compact-width)_minmax(0,1fr)] bg-background min-[1440px]:grid-cols-[var(--layout-conversation-rail-width)_minmax(0,1fr)_var(--layout-conversation-inspector-width)]">
         <ConversationRail
-          groups={data.rail.groups}
-          archivedCount={data.rail.archivedCount}
-          currentConversationId={conversationId}
+          groups={rail.groups}
+          archivedCount={rail.archivedCount}
+          currentConversationId={viewModel.id}
         />
         <ConversationWorkspace
-          conversation={conversation}
-          timeline={data.timeline}
+          viewModel={viewModel}
+          connectionIndicator={connectionIndicator}
           onOpenInspector={() => setInspectorOpen(true)}
           inspectorTriggerRef={inspectorTriggerRef}
         />

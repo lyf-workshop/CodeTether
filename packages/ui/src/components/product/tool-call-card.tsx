@@ -50,7 +50,7 @@ export function ToolCallCard({
       <StatusGlyph status={status} />
       <div className="flex min-w-0 flex-1 items-baseline gap-2">
         {description ? (
-          <span className="shrink-0 text-md font-medium text-text-primary">
+          <span className="min-w-0 shrink truncate text-md font-medium text-text-primary">
             {description}
           </span>
         ) : null}
@@ -63,17 +63,21 @@ export function ToolCallCard({
           {title}
         </span>
       </div>
-      <div className="ml-auto flex min-w-0 shrink-0 flex-wrap items-center justify-end gap-3 text-sm font-regular">
+      <div className="ml-auto flex min-w-0 shrink items-center justify-end gap-3 text-sm font-regular">
         {metadata ? (
-          <span className="text-text-secondary">{metadata}</span>
+          <span className="min-w-0 truncate text-text-secondary">
+            {metadata}
+          </span>
         ) : null}
         {delta ? (
-          <span className="inline-flex items-center gap-2 tabular-nums">
+          <span className="inline-flex shrink-0 items-center gap-2 tabular-nums">
             <span className="text-success">+{Math.abs(delta.additions)}</span>
             <span className="text-danger">-{Math.abs(delta.deletions)}</span>
           </span>
         ) : null}
-        {action ? <span className="text-primary">{action}</span> : null}
+        {action ? (
+          <span className="shrink-0 text-primary">{action}</span>
+        ) : null}
       </div>
     </div>
   )

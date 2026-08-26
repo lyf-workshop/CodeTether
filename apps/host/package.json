@@ -11,6 +11,7 @@
     "spike": "node dist/spike.js",
     "semantics": "node dist/semantics.js",
     "serve": "node dist/serve.js",
+    "observe": "node dist/live-read.js",
     "integration": "node dist/integration.js"
   },
   "dependencies": {

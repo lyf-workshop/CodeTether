@@ -7,9 +7,12 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b --pretty false",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "test": "pnpm exec tsc -p tsconfig.test.json && node --test --test-isolation=none test/*.test.mjs"
   },
   "dependencies": {
+    "@codetether/client": "workspace:*",
+    "@codetether/protocol": "workspace:*",
     "@codetether/ui": "workspace:*",
     "@tanstack/react-query": "^5.102.2",
     "@tanstack/react-router": "^1.170.32",

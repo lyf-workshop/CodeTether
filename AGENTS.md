@@ -27,31 +27,32 @@ If sources conflict, stop and resolve the conflict instead of inventing a compro
 
 ## Current Scope
 
-The current phase is **Phase 2B — Client ↔ Host Protocol & Local API**. The accepted frontend is frozen as **CodeTether V2 Frontend Core v1**, and the accepted local Codex runtime is frozen as **Phase 2A Codex Runtime v1**. Allowed work is limited to:
+The current phase is **Phase 2C.1 — Live Conversation Read Model**. The accepted frontend is frozen as **CodeTether V2 Frontend Core v1**, the accepted local Codex runtime is frozen as **Phase 2A Codex Runtime v1**, and Protocol v1 is frozen at the accepted **Phase 2B Client ↔ Host Protocol** boundary. Allowed work is limited to:
 
-- Defining the versioned Client ↔ Host Protocol v1 in `packages/protocol` with shared TypeScript and Zod contracts.
-- Exposing local-only HTTP command endpoints and a bounded SSE event stream from `apps/host` on `127.0.0.1`.
-- Owning CodeTether Conversation, Turn, Item, Approval, action, epoch, sequence, and event identities at the Host boundary without persistence.
-- Implementing bounded in-memory snapshots, replay, action idempotency, multi-client fanout, heartbeat, reconnect reset, and slow-client handling.
-- Translating only normalized Agent Core events into the public protocol; raw Codex JSON-RPC remains private diagnostics.
-- Building a small non-React client and fixture/integration tests for the browser-facing boundary.
-- Running real Codex integration only inside explicitly allowed ignored `.tmp` workspaces.
-- Recording only verified protocol, security, replay, idempotency, and integration behavior.
+- Connecting one application-scoped Web runtime to the loopback Host through `packages/client`.
+- Loading Protocol v1 bootstrap and snapshot records through TanStack Query.
+- Maintaining one browser-memory SSE connection with `Last-Event-ID`, reconnect, and `stream.reset` snapshot replacement.
+- Projecting only the Host fields and events required by the frozen Conversation Detail into a typed read model.
+- Adapting Demo Mock data and real Host data to the same `ConversationViewModel` without redesigning the page.
+- Rendering a real `conv_*` route read-only while keeping existing Mock routes, Inbox, and Conversations on Mock data.
+- Showing lightweight connecting, reconnecting, unavailable, and incompatible Host states.
+- Adding pure projection/runtime tests and a safe ignored-workspace live observation helper.
+- Recording verified read-path behavior and explicit Snapshot/history limitations.
 
-This phase stops at a local HTTP/SSE API and non-React integration client. Do not connect the runtime to the frozen frontend or begin Phase 2C.
+This phase stops at a read-only live Conversation Detail. Do not wire Composer, approval resolution, interrupt, or another write action into React, and do not begin Phase 2C.2.
 
 ## Out of Scope
 
-During Phase 2B, do not implement:
+During Phase 2C.1, do not implement:
 
-- Changes or visual refactors to the frozen Design System, AppShell, Inbox, Conversations, or Conversation Workspace.
+- Visual redesigns or unrelated refactors to the frozen Design System, AppShell, Inbox, Conversations, or Conversation Workspace; only the Conversation Detail data boundary may change for this read path.
 - Activity, Projects, Machines, Agents, Settings, New Conversation, or any other new product-page content or flow.
-- React integration or replacement of frontend Mock data with Host data.
+- Live Host data in Inbox, Conversations, or another frozen page.
 - A generic WebSocket RPC transport or interactive PTY transport.
 - Tauri or desktop-shell functionality.
 - SQLite, another database, persistence, migrations, repositories, or durable event storage.
 - Machine management, project management, remote access, relay, authentication, or production Host services.
-- Connecting real Codex data to React, TanStack Query, Zustand, or any frontend Mock state.
+- Composer submission, approval resolution, interrupt, stop, retry-Turn, or another React write path.
 - Approval persistence, `Always Allow`, automatic approval, or a production permission-policy system.
 - Claude Code or OpenCode adapters, speculative provider implementations, or cross-agent conversation handoff.
 - Mobile screens, team, enterprise, public cloud relay, or other later-phase platform features.

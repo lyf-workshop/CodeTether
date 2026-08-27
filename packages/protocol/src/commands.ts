@@ -1,15 +1,34 @@
 import { z } from 'zod'
 
-import { ActionIdSchema, ProtocolVersionSchema } from './ids.js'
+import {
+  ActionIdSchema,
+  ProjectIdSchema,
+  ProtocolVersionSchema,
+} from './ids.js'
 import {
   ApprovalDecisionSchema,
   ApprovalRecordSchema,
   ConversationRecordSchema,
+  ProjectRecordSchema,
   TurnInputSchema,
   TurnRecordSchema,
 } from './records.js'
 
-export const CreateConversationRequestSchema = z
+const CreateConversationByProjectRequestSchema = z
+  .object({
+    actionId: ActionIdSchema,
+    provider: z.literal('codex'),
+    projectId: ProjectIdSchema,
+    model: z.string().trim().min(1).max(240).optional(),
+    reasoning: z.string().trim().min(1).max(120).optional(),
+  })
+  .strict()
+
+/**
+ * Deprecated Protocol v1 compatibility path. New callers identify the durable
+ * Project instead of sending an execution path with every Conversation.
+ */
+const CreateConversationByLegacyCwdRequestSchema = z
   .object({
     actionId: ActionIdSchema,
     provider: z.literal('codex'),
@@ -18,9 +37,45 @@ export const CreateConversationRequestSchema = z
     reasoning: z.string().trim().min(1).max(120).optional(),
   })
   .strict()
+
+/** Exactly one workspace locator is accepted; a request can never contain both. */
+export const CreateConversationRequestSchema = z.union([
+  CreateConversationByProjectRequestSchema,
+  CreateConversationByLegacyCwdRequestSchema,
+])
 export type CreateConversationRequest = z.infer<
   typeof CreateConversationRequestSchema
 >
+
+export const CreateProjectRequestSchema = z
+  .object({
+    actionId: ActionIdSchema,
+    name: z.string().trim().min(1).max(240).optional(),
+    path: z.string().trim().min(1).max(4096),
+  })
+  .strict()
+export type CreateProjectRequest = z.infer<typeof CreateProjectRequestSchema>
+
+export const DeleteProjectRequestSchema = z
+  .object({ actionId: ActionIdSchema })
+  .strict()
+export type DeleteProjectRequest = z.infer<typeof DeleteProjectRequestSchema>
+
+export const ListProjectsResponseSchema = z
+  .object({
+    protocolVersion: ProtocolVersionSchema,
+    projects: z.array(ProjectRecordSchema),
+  })
+  .strict()
+export type ListProjectsResponse = z.infer<typeof ListProjectsResponseSchema>
+
+export const GetProjectResponseSchema = z
+  .object({
+    protocolVersion: ProtocolVersionSchema,
+    project: ProjectRecordSchema,
+  })
+  .strict()
+export type GetProjectResponse = z.infer<typeof GetProjectResponseSchema>
 
 export const StartTurnRequestSchema = z
   .object({
@@ -67,6 +122,16 @@ export const ResolveApprovalDataSchema = z
   .strict()
 export type ResolveApprovalData = z.infer<typeof ResolveApprovalDataSchema>
 
+export const CreateProjectDataSchema = z
+  .object({ project: ProjectRecordSchema, created: z.boolean() })
+  .strict()
+export type CreateProjectData = z.infer<typeof CreateProjectDataSchema>
+
+export const DeleteProjectDataSchema = z
+  .object({ projectId: ProjectIdSchema })
+  .strict()
+export type DeleteProjectData = z.infer<typeof DeleteProjectDataSchema>
+
 export const MutationStatusSchema = z.enum([
   'accepted',
   'completed',
@@ -107,3 +172,13 @@ export const ResolveApprovalResponseSchema = mutationResponseSchema(
 export type ResolveApprovalResponse = z.infer<
   typeof ResolveApprovalResponseSchema
 >
+
+export const CreateProjectResponseSchema = mutationResponseSchema(
+  CreateProjectDataSchema,
+)
+export type CreateProjectResponse = z.infer<typeof CreateProjectResponseSchema>
+
+export const DeleteProjectResponseSchema = mutationResponseSchema(
+  DeleteProjectDataSchema,
+)
+export type DeleteProjectResponse = z.infer<typeof DeleteProjectResponseSchema>

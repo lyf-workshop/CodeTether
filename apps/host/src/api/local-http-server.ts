@@ -11,11 +11,18 @@ import {
   ConversationIdSchema,
   CreateConversationRequestSchema,
   CreateConversationResponseSchema,
+  CreateProjectRequestSchema,
+  CreateProjectResponseSchema,
+  DeleteProjectRequestSchema,
+  DeleteProjectResponseSchema,
+  GetProjectResponseSchema,
   HostSnapshotSchema,
   InterruptTurnRequestSchema,
   InterruptTurnResponseSchema,
   ResolveApprovalRequestSchema,
   ResolveApprovalResponseSchema,
+  ListProjectsResponseSchema,
+  ProjectIdSchema,
   StartTurnRequestSchema,
   StartTurnResponseSchema,
   TurnIdSchema,
@@ -168,6 +175,69 @@ export class LocalHttpServer {
           connections: this.#sse,
         })
         return
+      }
+      if (request.method === 'GET' && url.pathname === '/api/v1/projects') {
+        this.#http.writeJson(
+          response,
+          200,
+          ListProjectsResponseSchema.parse(await this.#service.listProjects()),
+          context.allowedOrigin,
+        )
+        return
+      }
+      if (request.method === 'POST' && url.pathname === '/api/v1/projects') {
+        const body = await this.#http.readValidatedBody(
+          request,
+          CreateProjectRequestSchema,
+        )
+        context.actionId = body.actionId
+        const result = await this.#service.createProject(body)
+        this.#http.writeJson(
+          response,
+          result.data.created ? 201 : 200,
+          CreateProjectResponseSchema.parse(result),
+          context.allowedOrigin,
+        )
+        return
+      }
+
+      const projectRoute = this.#http.matchPath(
+        url.pathname,
+        /^\/api\/v1\/projects\/([^/]+)$/u,
+      )
+      if (projectRoute !== undefined) {
+        const projectId = this.#http.parseRouteId(
+          ProjectIdSchema,
+          projectRoute[0],
+          'projectId',
+        )
+        if (request.method === 'GET') {
+          this.#http.writeJson(
+            response,
+            200,
+            GetProjectResponseSchema.parse(
+              await this.#service.getProject(projectId),
+            ),
+            context.allowedOrigin,
+          )
+          return
+        }
+        if (request.method === 'DELETE') {
+          const body = await this.#http.readValidatedBody(
+            request,
+            DeleteProjectRequestSchema,
+          )
+          context.actionId = body.actionId
+          this.#http.writeJson(
+            response,
+            200,
+            DeleteProjectResponseSchema.parse(
+              await this.#service.deleteProject(projectId, body),
+            ),
+            context.allowedOrigin,
+          )
+          return
+        }
       }
       if (
         request.method === 'POST' &&

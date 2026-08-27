@@ -8,11 +8,19 @@ import {
   ConversationRuntimeSnapshotSchema,
   CreateConversationRequestSchema,
   CreateConversationResponseSchema,
+  CreateProjectRequestSchema,
+  CreateProjectResponseSchema,
+  DeleteProjectRequestSchema,
+  DeleteProjectResponseSchema,
   EventIdSchema,
+  GetProjectResponseSchema,
   HostEventEnvelopeSchema,
   HostEventSchema,
   HostSnapshotSchema,
   InterruptTurnRequestSchema,
+  ListProjectsResponseSchema,
+  ProjectIdSchema,
+  ProjectRecordSchema,
   ResolveApprovalRequestSchema,
   SafeErrorEnvelopeSchema,
   StartTurnRequestSchema,
@@ -26,11 +34,21 @@ import {
 
 const epoch = '11111111-1111-4111-8111-111111111111'
 const conversationId = 'conv_demo01'
+const projectId = 'proj_demo01'
 const actionId = 'act_action01'
 const turnId = 'turn_demo01'
 const itemId = 'item_demo01'
 const approvalId = 'approval_demo01'
 const timestamp = '2026-08-26T08:00:00.000Z'
+
+const project = {
+  projectId,
+  name: 'Demo',
+  rootPath: 'C:\\workspace\\demo',
+  availability: 'available',
+  createdAt: timestamp,
+  updatedAt: timestamp,
+}
 
 const conversation = {
   conversationId,
@@ -148,6 +166,30 @@ test('accepts only CodeTether Conversation IDs and excludes provider IDs', () =>
       providerThreadId: 'thread-provider-123',
     }).success,
     false,
+  )
+})
+
+test('validates bounded Project identity and records', () => {
+  assert.equal(ProjectIdSchema.safeParse(projectId).success, true)
+  assert.equal(ProjectIdSchema.safeParse('project-a').success, false)
+  assert.deepEqual(ProjectRecordSchema.parse(project), project)
+  assert.equal(
+    ProjectRecordSchema.safeParse({ ...project, availability: 'missing' })
+      .success,
+    false,
+  )
+  assert.equal(
+    ProjectRecordSchema.safeParse({ ...project, provider: 'codex' }).success,
+    false,
+  )
+  assert.equal(
+    ConversationRecordSchema.safeParse({ ...conversation, projectId }).success,
+    true,
+  )
+  assert.equal(
+    ConversationRecordSchema.safeParse(conversation).success,
+    true,
+    'legacy v1 Conversation records remain valid without projectId',
   )
 })
 
@@ -424,6 +466,32 @@ test('keeps route identity out of mutation request bodies', () => {
     CreateConversationRequestSchema.safeParse({
       actionId,
       provider: 'codex',
+      projectId,
+      model: 'gpt-5',
+    }).success,
+    true,
+  )
+  assert.equal(
+    CreateConversationRequestSchema.safeParse({
+      actionId,
+      provider: 'codex',
+      projectId,
+      cwd: 'C:\\workspace\\demo',
+    }).success,
+    false,
+    'a Conversation request cannot contain both workspace locators',
+  )
+  assert.equal(
+    CreateConversationRequestSchema.safeParse({
+      actionId,
+      provider: 'codex',
+    }).success,
+    false,
+  )
+  assert.equal(
+    CreateConversationRequestSchema.safeParse({
+      actionId,
+      provider: 'codex',
       cwd: 'C:\\workspace\\demo',
       title: 'Not part of v1',
     }).success,
@@ -458,6 +526,67 @@ test('keeps route identity out of mutation request bodies', () => {
       .success,
     true,
   )
+})
+
+test('validates Project HTTP records and mutation envelopes', () => {
+  const createRequest = {
+    actionId,
+    name: project.name,
+    path: project.rootPath,
+  }
+  assert.deepEqual(
+    CreateProjectRequestSchema.parse(createRequest),
+    createRequest,
+  )
+  assert.deepEqual(
+    CreateProjectRequestSchema.parse({ actionId, path: project.rootPath }),
+    { actionId, path: project.rootPath },
+    'the Host may derive a default name from the canonical path basename',
+  )
+  assert.equal(
+    CreateProjectRequestSchema.safeParse({
+      ...createRequest,
+      rootPath: project.rootPath,
+    }).success,
+    false,
+  )
+  assert.deepEqual(DeleteProjectRequestSchema.parse({ actionId }), { actionId })
+  assert.equal(
+    DeleteProjectRequestSchema.safeParse({ actionId, projectId }).success,
+    false,
+    'Project route identity stays out of the DELETE body',
+  )
+
+  const list = { protocolVersion, projects: [project] }
+  const get = { protocolVersion, project }
+  assert.deepEqual(ListProjectsResponseSchema.parse(list), list)
+  assert.deepEqual(GetProjectResponseSchema.parse(get), get)
+
+  const created = {
+    protocolVersion,
+    actionId,
+    status: 'completed',
+    data: { project, created: true },
+  }
+  const deleted = {
+    protocolVersion,
+    actionId,
+    status: 'completed',
+    data: { projectId },
+  }
+  assert.deepEqual(CreateProjectResponseSchema.parse(created), created)
+  assert.deepEqual(DeleteProjectResponseSchema.parse(deleted), deleted)
+  for (const code of ['project_unavailable', 'project_has_conversations']) {
+    assert.equal(
+      SafeErrorEnvelopeSchema.safeParse({
+        protocolVersion,
+        actionId,
+        code,
+        message: 'Safe Project error',
+      }).success,
+      true,
+    )
+  }
 })
 
 test('separates mutation success and safe HTTP error envelopes', () => {

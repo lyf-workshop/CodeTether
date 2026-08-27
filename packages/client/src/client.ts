@@ -4,10 +4,17 @@ import {
   ConversationIdSchema,
   CreateConversationRequestSchema,
   CreateConversationResponseSchema,
+  CreateProjectRequestSchema,
+  CreateProjectResponseSchema,
+  DeleteProjectRequestSchema,
+  DeleteProjectResponseSchema,
+  GetProjectResponseSchema,
   HostSnapshotSchema,
   InterruptTurnRequestSchema,
   InterruptTurnResponseSchema,
   LastEventIdSchema,
+  ListProjectsResponseSchema,
+  ProjectIdSchema,
   ResolveApprovalRequestSchema,
   ResolveApprovalResponseSchema,
   SafeErrorEnvelopeSchema,
@@ -19,10 +26,17 @@ import {
   type ConversationId,
   type CreateConversationRequest,
   type CreateConversationResponse,
+  type CreateProjectRequest,
+  type CreateProjectResponse,
+  type DeleteProjectRequest,
+  type DeleteProjectResponse,
+  type GetProjectResponse,
   type HostSnapshot,
   type InterruptTurnRequest,
   type InterruptTurnResponse,
   type LastEventId,
+  type ListProjectsResponse,
+  type ProjectId,
   type ResolveApprovalRequest,
   type ResolveApprovalResponse,
   type StartTurnRequest,
@@ -100,6 +114,83 @@ export class CodeTetherClient {
       method: 'GET',
       signal: options.signal,
     })
+  }
+
+  async listProjects(
+    options: RequestOptions = {},
+  ): Promise<ListProjectsResponse> {
+    return await this.#request('/api/v1/projects', ListProjectsResponseSchema, {
+      method: 'GET',
+      signal: options.signal,
+    })
+  }
+
+  async getProject(
+    projectId: ProjectId,
+    options: RequestOptions = {},
+  ): Promise<GetProjectResponse> {
+    const project = parseProtocol(ProjectIdSchema, projectId, 'get-project id')
+    const response = await this.#request(
+      `/api/v1/projects/${encodeURIComponent(project)}`,
+      GetProjectResponseSchema,
+      {
+        method: 'GET',
+        signal: options.signal,
+      },
+    )
+    assertProtocolIdentity(
+      response.project.projectId === project,
+      'Project response does not match the requested Project',
+    )
+    return response
+  }
+
+  async createProject(
+    input: CreateProjectRequest,
+    options: RequestOptions = {},
+  ): Promise<CreateProjectResponse> {
+    const request = parseProtocol(
+      CreateProjectRequestSchema,
+      input,
+      'create-project request',
+    )
+    return await this.#request(
+      '/api/v1/projects',
+      CreateProjectResponseSchema,
+      jsonRequest(request, options.signal),
+      request.actionId,
+    )
+  }
+
+  async deleteProject(
+    projectId: ProjectId,
+    input: DeleteProjectRequest,
+    options: RequestOptions = {},
+  ): Promise<DeleteProjectResponse> {
+    const project = parseProtocol(
+      ProjectIdSchema,
+      projectId,
+      'delete-project id',
+    )
+    const request = parseProtocol(
+      DeleteProjectRequestSchema,
+      input,
+      'delete-project request',
+    )
+    const response = await this.#request(
+      `/api/v1/projects/${encodeURIComponent(project)}`,
+      DeleteProjectResponseSchema,
+      {
+        ...jsonRequest(request, options.signal),
+        method: 'DELETE',
+      },
+      request.actionId,
+    )
+    assertProtocolIdentity(
+      response.data.projectId === project,
+      'Delete Project response does not match the requested Project',
+    )
+    return response
   }
 
   async createConversation(

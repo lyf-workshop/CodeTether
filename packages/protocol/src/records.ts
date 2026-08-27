@@ -6,6 +6,7 @@ import {
   ConversationIdSchema,
   EpochIdSchema,
   ItemIdSchema,
+  ProjectIdSchema,
   ProtocolVersionSchema,
   TimestampSchema,
   TurnIdSchema,
@@ -35,9 +36,29 @@ export const ConversationStatusSchema = z.enum([
 ])
 export type ConversationStatus = z.infer<typeof ConversationStatusSchema>
 
+export const ProjectAvailabilitySchema = z.enum(['available', 'unavailable'])
+export type ProjectAvailability = z.infer<typeof ProjectAvailabilitySchema>
+
+export const ProjectRecordSchema = z
+  .object({
+    projectId: ProjectIdSchema,
+    name: z.string().trim().min(1).max(240),
+    rootPath: z.string().trim().min(1).max(4096),
+    availability: ProjectAvailabilitySchema,
+    createdAt: TimestampSchema,
+    updatedAt: TimestampSchema,
+  })
+  .strict()
+export type ProjectRecord = z.infer<typeof ProjectRecordSchema>
+
 export const ConversationRecordSchema = z
   .object({
     conversationId: ConversationIdSchema,
+    /**
+     * Additive in Protocol v1 so legacy persisted records remain readable.
+     * Current Project-aware Hosts populate this for every Conversation.
+     */
+    projectId: ProjectIdSchema.optional(),
     provider: z.literal('codex'),
     cwd: z.string().trim().min(1).max(4096),
     model: z.string().trim().min(1).max(240).optional(),

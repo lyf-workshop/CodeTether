@@ -4,14 +4,18 @@ import { DatabaseSync } from 'node:sqlite'
 
 import {
   ConversationIdSchema,
+  ProjectIdSchema,
   TimestampSchema,
   TurnIdSchema,
   TurnInputRecordSchema,
   type ConversationId,
+  type ProjectId,
   type Timestamp,
   type TurnId,
   type TurnInputRecord,
 } from '@codetether/protocol'
+
+import { normalizeTrustedProjectRoot } from '../project-path.js'
 
 import {
   resolveCodeTetherDatabasePath,
@@ -42,8 +46,18 @@ const durableTurnStatuses = [
 ] as const
 export type DurableTurnStatus = (typeof durableTurnStatuses)[number]
 
+export interface DurableProject {
+  readonly projectId: ProjectId
+  readonly name: string
+  readonly rootPath: string
+  readonly rootPathKey: string
+  readonly createdAt: Timestamp
+  readonly updatedAt: Timestamp
+}
+
 export interface DurableConversation {
   readonly conversationId: ConversationId
+  readonly projectId: ProjectId
   readonly provider: 'codex'
   readonly providerThreadId?: string
   readonly cwd: string
@@ -119,15 +133,89 @@ export class ConversationStore {
     }
   }
 
+  createProject(project: DurableProject): void {
+    const value = parseProject(project)
+    this.#statement(
+      `INSERT INTO projects (
+        project_id, name, root_path, root_path_key, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run(
+      value.projectId,
+      value.name,
+      value.rootPath,
+      value.rootPathKey,
+      value.createdAt,
+      value.updatedAt,
+    )
+  }
+
+  updateProject(project: DurableProject): void {
+    const value = parseProject(project)
+    const result = this.#statement(
+      `UPDATE projects SET
+        name = ?, root_path = ?, root_path_key = ?, created_at = ?,
+        updated_at = ?
+      WHERE project_id = ?`,
+    ).run(
+      value.name,
+      value.rootPath,
+      value.rootPathKey,
+      value.createdAt,
+      value.updatedAt,
+      value.projectId,
+    )
+    assertChanged(result.changes, 'Project', value.projectId)
+  }
+
+  getProject(projectId: ProjectId): DurableProject | undefined {
+    const id = ProjectIdSchema.parse(projectId)
+    const row = this.#statement(
+      'SELECT * FROM projects WHERE project_id = ?',
+    ).get(id) as ProjectRow | undefined
+    return row === undefined ? undefined : projectFromRow(row)
+  }
+
+  getProjectByRootPathKey(rootPathKey: string): DurableProject | undefined {
+    const key = parseRootPathKey(rootPathKey)
+    const row = this.#statement(
+      'SELECT * FROM projects WHERE root_path_key = ?',
+    ).get(key) as ProjectRow | undefined
+    return row === undefined ? undefined : projectFromRow(row)
+  }
+
+  listProjects(): DurableProject[] {
+    const rows = this.#statement(
+      'SELECT * FROM projects ORDER BY updated_at DESC, project_id ASC',
+    ).all() as unknown as ProjectRow[]
+    return rows.map(projectFromRow)
+  }
+
+  countConversationsForProject(projectId: ProjectId): number {
+    const id = ProjectIdSchema.parse(projectId)
+    const row = this.#statement(
+      'SELECT COUNT(*) AS count FROM conversations WHERE project_id = ?',
+    ).get(id) as { readonly count: number }
+    return row.count
+  }
+
+  deleteProject(projectId: ProjectId): boolean {
+    const id = ProjectIdSchema.parse(projectId)
+    return (
+      this.#statement('DELETE FROM projects WHERE project_id = ?').run(id)
+        .changes > 0
+    )
+  }
+
   createConversation(conversation: DurableConversation): void {
     const value = parseConversation(conversation)
     this.#statement(
       `INSERT INTO conversations (
-        conversation_id, provider, provider_thread_id, cwd, model, reasoning,
-        status, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        conversation_id, project_id, provider, provider_thread_id, cwd, model,
+        reasoning, status, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       value.conversationId,
+      value.projectId,
       value.provider,
       value.providerThreadId ?? null,
       value.cwd,
@@ -143,10 +231,11 @@ export class ConversationStore {
     const value = parseConversation(conversation)
     const result = this.#statement(
       `UPDATE conversations SET
-        provider = ?, provider_thread_id = ?, cwd = ?, model = ?,
-        reasoning = ?, status = ?, created_at = ?, updated_at = ?
+        project_id = ?, provider = ?, provider_thread_id = ?, cwd = ?,
+        model = ?, reasoning = ?, status = ?, created_at = ?, updated_at = ?
       WHERE conversation_id = ?`,
     ).run(
+      value.projectId,
       value.provider,
       value.providerThreadId ?? null,
       value.cwd,
@@ -333,12 +422,22 @@ export class ConversationStore {
 
 interface ConversationRow {
   readonly conversation_id: string
+  readonly project_id: string
   readonly provider: string
   readonly provider_thread_id: string | null
   readonly cwd: string
   readonly model: string | null
   readonly reasoning: string | null
   readonly status: string
+  readonly created_at: string
+  readonly updated_at: string
+}
+
+interface ProjectRow {
+  readonly project_id: string
+  readonly name: string
+  readonly root_path: string
+  readonly root_path_key: string
   readonly created_at: string
   readonly updated_at: string
 }
@@ -355,9 +454,27 @@ interface TurnRow {
   readonly snapshot_json: string
 }
 
+function parseProject(value: DurableProject): DurableProject {
+  const root = normalizeTrustedProjectRoot(value.rootPath)
+  const rootPathKey = parseRootPathKey(value.rootPathKey)
+  if (root.rootPathKey !== rootPathKey) {
+    throw new Error(
+      'Project root path key does not match its trusted root path',
+    )
+  }
+  return {
+    projectId: ProjectIdSchema.parse(value.projectId),
+    name: parseBoundedText(value.name, 'Project name', 240),
+    rootPath: root.rootPath,
+    rootPathKey,
+    createdAt: TimestampSchema.parse(value.createdAt),
+    updatedAt: TimestampSchema.parse(value.updatedAt),
+  }
+}
+
 function parseConversation(value: DurableConversation): DurableConversation {
   if (value.provider !== 'codex') throw new Error('Provider must be codex')
-  assertBoundedText(value.cwd, 'Conversation cwd', 4096)
+  const cwd = normalizeTrustedProjectRoot(value.cwd).rootPath
   assertOptionalBoundedText(value.providerThreadId, 'Provider Thread ID', 4096)
   assertOptionalBoundedText(value.model, 'Conversation model', 240)
   assertOptionalBoundedText(value.reasoning, 'Conversation reasoning', 120)
@@ -366,11 +483,12 @@ function parseConversation(value: DurableConversation): DurableConversation {
   }
   return {
     conversationId: ConversationIdSchema.parse(value.conversationId),
+    projectId: ProjectIdSchema.parse(value.projectId),
     provider: 'codex',
     ...(value.providerThreadId === undefined
       ? {}
       : { providerThreadId: value.providerThreadId.trim() }),
-    cwd: value.cwd.trim(),
+    cwd,
     ...(value.model === undefined ? {} : { model: value.model.trim() }),
     ...(value.reasoning === undefined
       ? {}
@@ -379,6 +497,17 @@ function parseConversation(value: DurableConversation): DurableConversation {
     createdAt: TimestampSchema.parse(value.createdAt),
     updatedAt: TimestampSchema.parse(value.updatedAt),
   }
+}
+
+function projectFromRow(row: ProjectRow): DurableProject {
+  return parseProject({
+    projectId: ProjectIdSchema.parse(row.project_id),
+    name: row.name,
+    rootPath: row.root_path,
+    rootPathKey: row.root_path_key,
+    createdAt: TimestampSchema.parse(row.created_at),
+    updatedAt: TimestampSchema.parse(row.updated_at),
+  })
 }
 
 function parseTurn(value: DurableTurnSnapshot): DurableTurnSnapshot {
@@ -414,6 +543,7 @@ function parseTurn(value: DurableTurnSnapshot): DurableTurnSnapshot {
 function conversationFromRow(row: ConversationRow): DurableConversation {
   return parseConversation({
     conversationId: ConversationIdSchema.parse(row.conversation_id),
+    projectId: ProjectIdSchema.parse(row.project_id),
     provider: parseProvider(row.provider),
     ...(row.provider_thread_id === null
       ? {}
@@ -478,6 +608,9 @@ function assertDatabaseIntegrity(database: DatabaseSync): void {
   if (result === undefined || Object.values(result)[0] !== 'ok') {
     throw new Error('SQLite integrity check failed')
   }
+  if (database.prepare('PRAGMA foreign_key_check').all().length > 0) {
+    throw new Error('SQLite foreign key integrity check failed')
+  }
 }
 
 function parseProvider(value: string): 'codex' {
@@ -523,4 +656,25 @@ function assertBoundedText(
   if (trimmed.length === 0 || trimmed.length > maxLength) {
     throw new Error(`${label} must contain 1-${String(maxLength)} characters`)
   }
+}
+
+function parseBoundedText(
+  value: string,
+  label: string,
+  maxLength: number,
+): string {
+  assertBoundedText(value, label, maxLength)
+  return value.trim()
+}
+
+function parseRootPathKey(value: string): string {
+  if (value.length === 0 || value.length > 4096 || value.trim() !== value) {
+    throw new Error(
+      'Project root path key must contain 1-4096 unpadded characters',
+    )
+  }
+  if (value.includes('\0')) {
+    throw new Error('Project root path key must not contain NUL')
+  }
+  return value
 }

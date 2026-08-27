@@ -6,7 +6,7 @@ CodeTether is a planned desktop and mobile workspace for supervising and control
 
 Phase 1 is accepted and frozen as **CodeTether V2 Frontend Core v1**, the accepted local runtime is frozen as **Phase 2A Codex Runtime v1**, and Phase 2B is accepted as the development-only Protocol v1 loopback HTTP/SSE boundary. The complete read path is frozen as **Live Conversation Read Model v1**. Phase 2C.2 is accepted and frozen as **CodeTether Local Codex Alpha v0.1**: the existing Conversation Workspace can start real text Turns, stream results, resolve one-shot Approvals, interrupt, and continue while the Host remains canonical state owner.
 
-**Phase 3A — Minimal Durable Persistence** is implemented and validated. CodeTether Conversation identity, Codex provider Thread identity, and normalized per-Turn presentation snapshots now survive a complete Host restart. The restored Conversation can start another Turn through a lazy `thread/resume`, and a real isolated run confirmed that Codex retained pre-restart context. Demo, Inbox, and Conversations remain Mock data; there is still no Tauri shell, authentication, remote access, Project management, or non-Codex provider.
+**Phase 3B.1 — Durable Project Identity & Local Workspace Authorization** is implemented and validated. A Project is now a durable authorized local workspace with a CodeTether-owned `proj_*` identity. Conversations reference that Project while retaining a contained working directory, and every new Turn revalidates the saved canonical root before Codex runs. Project registration survives Host restart; a missing workspace keeps durable history readable but returns `project_unavailable` for workspace-dependent control. Demo, Inbox, Conversations, and the Projects page remain frozen Mock UI; there is still no Tauri shell, authentication, remote access, or non-Codex provider.
 
 ## Current Alpha capabilities
 
@@ -18,6 +18,8 @@ Phase 1 is accepted and frozen as **CodeTether V2 Frontend Core v1**, the accept
 - Rebuild bounded retained history after browser refresh, replay, or `stream.reset`, and reconstruct recent runtime history from SQLite after Host restart.
 - Observe the same ordered events from multiple local clients.
 - Preserve the CodeTether Conversation ID and private Codex provider Thread ID across Host processes, with provider resume deferred until the next Turn.
+- Register, list, inspect, and remove durable local Project registrations through Protocol v1 without granting filesystem access outside canonical authorized roots.
+- Bind each durable Conversation to one Project while allowing its `cwd` to remain a real-path-validated directory contained by that Project root.
 
 ## Repository layout
 
@@ -26,7 +28,7 @@ codetether-v2/
 ├── apps/
 │   ├── web/                 # Frozen UI plus live Conversation read model
 │   ├── desktop/             # Future Tauri 2 shell (placeholder)
-│   └── host/                # Local Host API, Codex runtime, and SQLite persistence
+│   └── host/                # Local Host API, Project registry, Codex runtime, and SQLite
 ├── packages/
 │   ├── ui/                  # Shared design-system foundation (active)
 │   ├── protocol/            # Client-to-Host Protocol v1
@@ -96,7 +98,24 @@ pnpm host:control
 
 Do not point this variable at the CodeTether repository and do not commit a real database. SQLite uses foreign keys, WAL mode, a five-second busy timeout, an integrity check at open, and a minimal versioned migration table. A database open, migration, integrity, or required write failure is fatal; CodeTether never deletes or silently replaces the user's database.
 
-The development Host accepts only absolute existing directories contained by an explicitly configured workspace root after real-path resolution. It binds to `127.0.0.1`, uses an exact Origin allowlist, and disables local Codex hooks by default so approval decisions stay on the CodeTether control path. Use only an ignored disposable workspace for real-agent development checks.
+The development Host registers only absolute existing directories after real-path resolution. When one or more `--workspace` roots are configured, new registrations must be contained by those roots. Every Conversation working directory must remain contained by its saved Project root. The Host binds to `127.0.0.1`, uses an exact Origin allowlist, and disables local Codex hooks by default so approval decisions stay on the CodeTether control path. Use only an ignored disposable workspace for real-agent development checks.
+
+### Local Projects
+
+Protocol v1 exposes the durable Project boundary through:
+
+```text
+GET    /api/v1/projects
+POST   /api/v1/projects
+GET    /api/v1/projects/:projectId
+DELETE /api/v1/projects/:projectId
+```
+
+Create Project accepts an absolute `path`, an `actionId`, and an optional display `name` (the Host otherwise uses the directory name). The Host resolves and validates the directory before storing its canonical root. Registering the same canonical root again returns the existing Project with `created: false`; it does not create a duplicate identity.
+
+New Conversation callers use `projectId`. The deprecated Protocol v1 `cwd` form exists only for compatibility and succeeds only when that directory is already contained by a registered, available Project. The `--workspace <absolute-path>` Host option remains an assembly helper that registers the explicit root; it is not a filesystem discovery or product import flow.
+
+Deleting a Project removes only its CodeTether registration. It never deletes or changes files and never cascades Conversation history. The Host rejects deletion while any durable or runtime Conversation references the Project, including while a Conversation creation has reserved that Project.
 
 ## Known Alpha limitations
 
@@ -109,7 +128,8 @@ The development Host accepts only absolute existing directories contained by an 
 - If Codex can no longer resume the stored provider Thread, local durable history remains readable but new controls return `provider_conversation_unavailable`.
 - Only Codex, text Turn start, one-shot command Approval, and Turn interrupt are connected.
 - Inbox and Conversations are still product-quality Mock surfaces rather than live Host projections.
-- Stop/terminate, queue/steer, attachments, Project management, Tauri packaging, remote access, authentication, and other providers are not implemented.
+- The durable Project API is implemented, but Projects UI, project discovery/import, multiple Machine locations, and live Project-aware Inbox/Conversations pages are not.
+- Stop/terminate, queue/steer, attachments, Tauri packaging, remote access, authentication, and other providers are not implemented.
 - File-change and permissions Approval variants have fixture/schema coverage but have not been observed in a real Codex run.
 - Physical Windows Chinese IME input has not been manually validated; automated composition-event coverage exists.
 - The Host assumes one primary writer process for a data directory; a second-Host ownership/lease mechanism is not implemented yet.
@@ -123,4 +143,4 @@ The development Host accepts only absolute existing directories contained by an 
 
 ## Status
 
-**CodeTether Local Codex Alpha v0.1** is accepted and tagged. **Phase 3A — Minimal Durable Persistence** is complete: fixture gates and a real multi-Turn Host restart, Snapshot reconstruction, lazy provider Thread resume, and context-retention walkthrough all passed. Phase 3B has not started. Do not add live data to Inbox or Conversations, Project management, desktop packaging, remote exposure, or another provider without a separately approved phase. See the roadmap for ordered gates.
+**CodeTether Local Codex Alpha v0.1** remains the frozen UI/runtime baseline. **Phase 3A — Minimal Durable Persistence** and **Phase 3B.1 — Durable Project Identity & Local Workspace Authorization** are implemented and validated. Project registration, Conversation ownership, restart authorization, and unavailable-workspace behavior are now durable Host capabilities. Phase 3B.2 is not authorized: do not add a Projects product surface, live Inbox/Conversations data, desktop packaging, remote exposure, or another provider. See the roadmap for ordered gates.

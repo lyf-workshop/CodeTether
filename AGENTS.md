@@ -27,29 +27,30 @@ If sources conflict, stop and resolve the conflict instead of inventing a compro
 
 ## Current Scope
 
-**Phase 3A — Minimal Durable Persistence** is implemented and validated. The accepted frontend remains frozen as **CodeTether V2 Frontend Core v1**, the accepted local runtime remains frozen as **Phase 2A Codex Runtime v1**, Protocol v1 remains the accepted **Phase 2B Client ↔ Host Protocol** boundary, the complete read path remains frozen as **Live Conversation Read Model v1**, and the product baseline now includes durable local Conversation history and lazy Codex Thread resume. Phase 3B has not been authorized. Until another phase is explicitly approved, work is limited to clear bugs, documentation corrections, and maintenance of this frozen boundary:
+**Phase 3B.1 — Durable Project Identity & Local Workspace Authorization** is implemented and validated. The accepted frontend remains frozen as **CodeTether V2 Frontend Core v1**, the accepted local runtime remains frozen as **Phase 2A Codex Runtime v1**, Protocol v1 remains the accepted **Phase 2B Client ↔ Host Protocol** boundary, the complete read path remains frozen as **Live Conversation Read Model v1**, and Phase 3A durable Conversation history remains the persistence baseline. The current product boundary now also includes:
 
-- Using Node's standard `node:sqlite` API to persist CodeTether Conversation identity, provider Thread identity, and normalized per-Turn presentation snapshots.
-- Keeping SQLite outside the repository, with `CODETETHER_DATA_DIR` as the explicit development/test override and OS-appropriate user-data directories as defaults.
-- Maintaining a minimal versioned migration system and only the `schema_migrations`, `conversations`, and `turns` tables required by this phase.
-- Persisting canonical User input before provider execution, throttling intermediate normalized snapshots, and synchronously flushing terminal Turn state and graceful shutdown state.
-- Reconstructing the existing bounded runtime Snapshot from SQLite after Host restart without changing the frozen frontend contract or visual structure.
-- Recovering incomplete Turns as interrupted by `host_restart`, expiring pre-restart Approvals, and lazily resuming the stored Codex provider Thread only when the user starts another Turn.
-- Failing safely on database open, migration, integrity, or write errors without deleting history or starting provider work that was not durably recorded.
-- Adding focused migration, restart, reconstruction, recovery, lazy-resume, failure, bound, and real isolated integration coverage.
+- A Project as a durable, authorized local workspace with a CodeTether-owned `proj_*` identity, name, canonical root path, timestamps, and availability computed from the filesystem rather than stored as durable truth.
+- SQLite migration 002 (`projects`), which adds the `projects` table and binds every durable Conversation to one Project through a non-null `project_id` foreign key. The Conversation `cwd` remains a contained working directory, not a second Project identity.
+- Protocol v1 Project list, read, create, and delete commands plus Project-aware Conversation creation by `projectId`.
+- Idempotent Project registration by canonical root: creating the same authorized root returns the existing Project instead of duplicating it.
+- Real-path authorization at registration and again before every new Turn or provider resume. A missing, moved, or identity-changed root leaves durable history readable but makes workspace-dependent control fail with `project_unavailable`.
+- Durable authorization across Host restarts and lazy Codex Thread resume only after the saved Project root and Conversation working directory are revalidated.
+- Registration-only deletion: CodeTether never deletes workspace files, never cascades Conversation history, and rejects Project deletion while any durable/runtime Conversation references it or a Conversation creation has reserved it.
+- A deprecated Protocol v1 `cwd` compatibility request that may resolve only to an already registered, available Project; it cannot create a Project or expand the Host's trusted roots.
 
-The verified Phase 3A boundary stops at durable local Conversation history and provider-context resume. Do not begin Project management, live Inbox/Conversations data, desktop packaging, remote access, or Phase 3B without explicit approval.
+Phase 3B.1 stops at the Host, Protocol, client, durable identity, and local authorization boundary. Phase 3B.2 is not authorized.
 
 ## Out of Scope
 
-After Phase 3A, do not implement without a separately approved phase:
+After Phase 3B.1, do not implement without a separately approved phase:
 
-- Visual redesigns or unrelated refactors to the frozen Design System, AppShell, Inbox, Conversations, or Conversation Workspace. Phase 3A does not authorize a product UI change.
+- Visual redesigns or unrelated refactors to the frozen Design System, AppShell, Inbox, Conversations, or Conversation Workspace. Phase 3B.1 does not authorize a product UI change.
 - Activity, Projects, Machines, Agents, Settings, New Conversation, or any other new product-page content or flow.
 - Live Host data in Inbox, Conversations, or another frozen page.
 - A generic WebSocket RPC transport or interactive PTY transport.
 - Tauri or desktop-shell functionality.
-- Machine management, project management, remote access, relay, authentication, or production Host services.
+- A Projects UI, project discovery/browser, multiple Project locations, Machine management, remote access, relay, authentication, or production Host services.
+- Filesystem deletion, recursive cleanup, cascading Project deletion, or automatic reassignment of existing Conversations to another Project.
 - Stop/thread termination, Turn queueing, steering, retry-Turn, attachments, images, voice, Skill upload, or another React write path beyond text Turn start, one-shot Approval resolution, and interrupt.
 - Actionable Approval recovery across restart, `Always Allow`, automatic approval, or a production permission-policy system. Expired Approval history may be retained only to explain what happened.
 - Claude Code or OpenCode adapters, speculative provider implementations, or cross-agent conversation handoff.
@@ -63,7 +64,7 @@ Do not install dependencies for an out-of-scope runtime merely because its direc
 
 ### Project
 
-A local codebase or workspace in which an agent operates.
+A durable, authorized local workspace in which an agent operates. In Phase 3B.1 it has one canonical local root and computed availability; it does not yet model multiple Machine locations.
 
 ### Conversation
 

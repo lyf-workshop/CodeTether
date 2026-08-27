@@ -405,6 +405,7 @@ function restoreConversation(
 
   const record = ConversationRecordSchema.parse({
     conversationId: conversation.conversationId,
+    projectId: conversation.projectId,
     provider: conversation.provider,
     cwd: conversation.cwd,
     ...(conversation.model === undefined ? {} : { model: conversation.model }),

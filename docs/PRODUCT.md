@@ -41,7 +41,7 @@ CodeTether provides one interaction model for those responsibilities while prese
 
 ### Project
 
-A local codebase or workspace known to CodeTether. A project has an identity, one or more machine locations over time, and conversations that operate on it.
+A durable, authorized local workspace known to CodeTether. In the current local model it has a CodeTether-owned identity, display name, one canonical root path, creation/update timestamps, and availability derived from the current filesystem. Conversations operate inside that root. Multiple Machine locations remain a future product capability rather than part of the current record.
 
 ### Conversation
 
@@ -96,7 +96,7 @@ Dense code review, project setup, and complex configuration remain desktop-first
 
 ### Projects
 
-Projects organize local codebases and provide the stable context for conversations. Users should be able to understand where a project exists and see its related work. Project management will eventually come from the machine host rather than client-only state.
+Projects organize local codebases and provide the stable authorization context for Conversations. The local Host now owns durable Project identity and root authorization; a Conversation references one Project and may use a working directory contained within its canonical root. Filesystem availability can change independently of the durable record, so an unavailable Project keeps its history but cannot start or control Agent work until its saved root is valid again. The Projects product surface and multiple-Machine location management remain future work.
 
 ### Conversations
 
@@ -173,4 +173,8 @@ Phase 1 Frontend Experience is accepted and frozen as **CodeTether V2 Frontend C
 
 Phase 3A does not make all product data durable and does not add a general history browser. Older durable Turns may remain on disk beyond the bounded runtime window, but no pagination UI exists. If the provider Thread cannot be resumed, the local Timeline remains readable and the control path reports that the provider Conversation is unavailable. Action idempotency and SSE replay remain process-local, so a client must reconcile through the new Host epoch and Snapshot rather than replaying an uncertain old mutation. A real isolated multi-Turn restart verified Timeline reconstruction and retained Codex context through the exact saved provider Thread.
 
-`/conversations/demo`, Inbox, and Conversations continue to use Mock data. There is no Tauri functionality, remote access, authentication, Project management, live Conversation listing, or non-Codex provider integration. See [`ROADMAP.md`](ROADMAP.md) for phase gates and verified constraints.
+**Phase 3B.1 — Durable Project Identity & Local Workspace Authorization** is implemented and validated. A Project registration contains `projectId`, name, canonical root path, and timestamps; availability is computed at read time. SQLite migration 002 (`projects`) makes every durable Conversation reference one Project, while the Conversation `cwd` remains a real-path-validated working directory contained by that Project. Registration is idempotent by canonical root, survives Host restart, and is re-authorized before every new Turn and lazy provider Thread resume.
+
+Protocol v1 now supports listing, reading, creating, and deleting Project registrations. New Conversations use `projectId`. The deprecated `cwd` compatibility form can only resolve an already registered, available Project and cannot expand trust. Deleting a Project removes only the registration, never files or Conversation history, and is rejected while a Conversation references it. Missing or moved Project roots remain visible as unavailable so durable history stays readable; controls fail with `project_unavailable`.
+
+`/conversations/demo`, Inbox, Conversations, and the Projects page continue to use Mock data. Phase 3B.2 is not authorized. There is no Tauri functionality, remote access, authentication, live Project/Conversation listing, multi-Machine Project location model, or non-Codex provider integration. See [`ROADMAP.md`](ROADMAP.md) for phase gates and verified constraints.

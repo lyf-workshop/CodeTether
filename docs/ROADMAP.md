@@ -303,11 +303,37 @@ Exit gate results:
 - A real isolated Conversation completed multiple browser Turns; the Host fully stopped and restarted against the same database; the same `conversationId` and Timeline returned; and a later Turn proved that the resumed Codex Thread retained prior context.
 - Database size, write latency, flush behavior, browser console state, and the post-restart 1536 × 1024 view were recorded.
 
-### Phase 3B — Project Identity / Project Management
+### Phase 3B.1 — Durable Project Identity & Local Workspace Authorization
 
-**Status:** not started and not yet authorized. Phase 3A is complete; Phase 3B requires a separate approved specification.
+**Status:** implemented and validated. Phase 3B.2 is not authorized.
 
-Planned outcomes are intentionally deferred until durable Conversation identity is proven. They may include stable Project identity, authorized workspace locations, and real Project-aware Conversation discovery, but their exact scope requires a separate approved specification.
+Verified scope:
+
+- A durable CodeTether Project represents one authorized local workspace with a `proj_*` public identity, name, canonical root path, timestamps, and filesystem-computed availability.
+- SQLite migration 002 (`projects`) creates the Project table, backfills distinct legacy Conversation roots, and rebuilds every durable Conversation with a required Project foreign key while preserving its contained `cwd`.
+- Protocol v1 and `packages/client` support Project list, read, create, and delete. New Conversation creation uses `projectId`.
+- Registration resolves and validates the real directory and optional configured-root constraint. Re-registering the same canonical root returns the existing Project instead of duplicating it.
+- Durable Project authorization reloads after Host restart. Each Conversation creation, Turn, and lazy provider Thread resume revalidates the saved root and contained working directory before provider work starts.
+- A missing, moved, or identity-changed Project root remains visible as unavailable. Durable Conversation history stays readable, while controls fail safely with `project_unavailable`.
+- Project deletion removes only the registration, never filesystem data. It is rejected while any durable or runtime Conversation references or is being created against the Project, so concurrent creation cannot race deletion and history cannot cascade away.
+- The deprecated Protocol v1 `cwd` Conversation request may only map to an already registered, available Project and cannot create a new authorization grant.
+
+Not included:
+
+- Projects UI, filesystem browser/discovery, import UX, live Conversations/Inbox data, or a new Conversation product flow.
+- Multiple Project locations, Machine binding, filesystem generation identity, workspace relocation, or automatic repair of an unavailable root.
+- Tauri, remote access, authentication, another provider, or any Phase 3B.2 product scope.
+
+Exit gate results:
+
+- Fresh and upgraded databases preserve Project and Conversation identity with foreign-key integrity.
+- Duplicate registration, unavailable roots, containment, symlink/junction behavior, legacy request confinement, deletion safety, restart authorization, and lazy-resume authorization have focused coverage.
+- Protocol, client, Host API, persistence, and real isolated integration gates validate the Project-aware control path without changing the frozen frontend.
+- A real `codex-cli 0.149.1` Conversation survived a complete Host restart, recalled `PROJECT-BOUNDARY-8427` through the saved provider Thread, failed closed while its Project directory was temporarily unavailable, and completed another Turn after that directory was restored.
+
+### Phase 3B.2 — Next Project Milestone
+
+**Status:** not started and not authorized. Its product and engineering scope requires a separate approved specification; Phase 3B.1 does not implicitly authorize a Projects UI, live Conversations/Inbox data, Project discovery, or multiple-Machine workspace management.
 
 ## Phase 4 — Machines
 

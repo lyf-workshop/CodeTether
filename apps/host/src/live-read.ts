@@ -30,10 +30,14 @@ async function main(): Promise<void> {
   const client = new CodeTetherClient({ baseUrl: command.baseUrl })
 
   if (command.kind === 'create') {
+    const project = await client.createProject({
+      actionId: actionId(),
+      path: command.cwd,
+    })
     const request: CreateConversationRequest = {
       actionId: actionId(),
       provider: 'codex',
-      cwd: command.cwd,
+      projectId: project.data.project.projectId,
       ...(command.model === undefined ? {} : { model: command.model }),
       ...(command.reasoning === undefined
         ? {}
@@ -43,6 +47,7 @@ async function main(): Promise<void> {
     process.stdout.write(
       `${JSON.stringify({
         kind: 'conversation.created',
+        projectId: project.data.project.projectId,
         conversationId: response.data.conversation.conversationId,
         route: `/conversations/${response.data.conversation.conversationId}`,
         conversation: response.data.conversation,

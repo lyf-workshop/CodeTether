@@ -10,7 +10,7 @@ import { CodexHostRuntime } from './codex-host-runtime.js'
 import { WorkspacePolicy } from './workspace-policy.js'
 
 export interface LocalCodexHostOptions {
-  readonly allowedWorkspaceRoots: readonly string[]
+  readonly allowedWorkspaceRoots?: readonly string[]
   readonly allowedOrigins: readonly string[]
   readonly hostVersion: string
   readonly port?: number
@@ -43,7 +43,7 @@ export async function startLocalCodexHost(
   options: LocalCodexHostOptions,
 ): Promise<RunningLocalCodexHost> {
   const workspacePolicy = await WorkspacePolicy.create(
-    options.allowedWorkspaceRoots,
+    options.allowedWorkspaceRoots ?? [],
   )
   const persistence =
     options.persistence === false
@@ -111,6 +111,9 @@ export async function startLocalCodexHostWithRuntime(
         : { maxConversations: options.maxConversations }),
       ...(persistence === undefined ? {} : { persistence }),
     })
+    await service.registerInitialProjectRoots(
+      options.allowedWorkspaceRoots ?? [],
+    )
     const serverOptions: LocalHttpServerOptions = {
       service,
       allowedOrigins: options.allowedOrigins,

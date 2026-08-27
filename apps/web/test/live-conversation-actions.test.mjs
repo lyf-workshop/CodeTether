@@ -234,6 +234,30 @@ test('safe mutation errors never expose Provider diagnostics', () => {
     mutationErrorMessage(new TypeError('network details'), '发送消息'),
     '无法连接到 CodeTether Host，请检查连接后重试。',
   )
+  assert.equal(
+    mutationErrorMessage(
+      new CodeTetherResponseError(409, {
+        protocolVersion: 1,
+        actionId: 'act_control_002',
+        code: 'project_unavailable',
+        message: 'absolute path details must stay behind the Host boundary',
+      }),
+      '发送消息',
+    ),
+    '项目工作区当前不可用；本地历史仍可查看。',
+  )
+  assert.equal(
+    mutationErrorMessage(
+      new CodeTetherResponseError(409, {
+        protocolVersion: 1,
+        actionId: 'act_control_003',
+        code: 'project_has_conversations',
+        message: 'internal relation details',
+      }),
+      '移除项目',
+    ),
+    '项目仍有关联会话，无法移除。',
+  )
 })
 
 class FakeMutationClient {

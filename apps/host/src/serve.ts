@@ -70,11 +70,6 @@ function parseArguments(arguments_: readonly string[]): ServeArguments {
     }
     throw new Error(`Unknown Host argument: ${argument ?? ''}`)
   }
-  if (workspaces.length === 0) {
-    throw new Error(
-      'At least one explicit --workspace <absolute path> is required',
-    )
-  }
   if (!Number.isInteger(port) || port < 0 || port > 65_535) {
     throw new Error('--port must be an integer from 0 to 65535')
   }

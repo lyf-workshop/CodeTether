@@ -10,6 +10,12 @@ export const ConversationIdSchema = z
   .brand<'ConversationId'>()
 export type ConversationId = z.infer<typeof ConversationIdSchema>
 
+export const ProjectIdSchema = z
+  .string()
+  .regex(/^proj_[A-Za-z0-9][A-Za-z0-9_-]{5,95}$/)
+  .brand<'ProjectId'>()
+export type ProjectId = z.infer<typeof ProjectIdSchema>
+
 export const ActionIdSchema = z
   .string()
   .regex(/^act_[A-Za-z0-9][A-Za-z0-9_-]{5,95}$/)

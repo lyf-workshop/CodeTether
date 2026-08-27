@@ -9,6 +9,8 @@ export const HostErrorCodeSchema = z.enum([
   'unsupported',
   'provider_error',
   'provider_conversation_unavailable',
+  'project_unavailable',
+  'project_has_conversations',
   'runtime_unavailable',
   'timeout',
   'internal',

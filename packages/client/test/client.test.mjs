@@ -11,6 +11,7 @@ import {
 const epoch = '1e7e3ce2-4ab2-4e80-a61d-9a6a345a7200'
 const timestamp = '2026-08-26T07:00:00.000Z'
 const conversationId = 'conv_demo01'
+const projectId = 'proj_demo01'
 const turnId = 'turn_demo01'
 const approvalId = 'approval_demo01'
 
@@ -25,9 +26,19 @@ const capabilities = {
 
 const conversation = {
   conversationId,
+  projectId,
   provider: 'codex',
   cwd: 'C:\\workspace',
   status: 'idle',
+  createdAt: timestamp,
+  updatedAt: timestamp,
+}
+
+const project = {
+  projectId,
+  name: 'Demo',
+  rootPath: 'C:\\workspace',
+  availability: 'available',
   createdAt: timestamp,
   updatedAt: timestamp,
 }
@@ -162,6 +173,102 @@ test('uses the Protocol v1 HTTP routes and validates every success response', as
     actionId: 'act_allow01',
     decision: 'accept',
   })
+})
+
+test('uses Project routes, validates route identity, and sends project-based Conversation requests', async () => {
+  const calls = []
+  const responses = [
+    { protocolVersion: 1, projects: [project] },
+    { protocolVersion: 1, project },
+    {
+      protocolVersion: 1,
+      actionId: 'act_project1',
+      status: 'completed',
+      data: { project, created: true },
+    },
+    {
+      protocolVersion: 1,
+      actionId: 'act_delete01',
+      status: 'completed',
+      data: { projectId },
+    },
+    {
+      protocolVersion: 1,
+      actionId: 'act_create2',
+      status: 'completed',
+      data: { conversation },
+    },
+  ]
+  const client = new CodeTetherClient({
+    baseUrl: 'http://host.test',
+    fetch: async (input, init) => {
+      calls.push({ url: String(input), init })
+      return jsonResponse(responses.shift())
+    },
+  })
+
+  await client.listProjects()
+  await client.getProject(projectId)
+  await client.createProject({
+    actionId: 'act_project1',
+    name: 'Demo',
+    path: 'C:\\workspace',
+  })
+  await client.deleteProject(projectId, { actionId: 'act_delete01' })
+  await client.createConversation({
+    actionId: 'act_create2',
+    provider: 'codex',
+    projectId,
+  })
+
+  assert.deepEqual(
+    calls.map(({ url, init }) => [new URL(url).pathname, init.method]),
+    [
+      ['/api/v1/projects', 'GET'],
+      [`/api/v1/projects/${projectId}`, 'GET'],
+      ['/api/v1/projects', 'POST'],
+      [`/api/v1/projects/${projectId}`, 'DELETE'],
+      ['/api/v1/conversations', 'POST'],
+    ],
+  )
+  assert.deepEqual(JSON.parse(calls[2].init.body), {
+    actionId: 'act_project1',
+    name: 'Demo',
+    path: 'C:\\workspace',
+  })
+  assert.deepEqual(JSON.parse(calls[3].init.body), {
+    actionId: 'act_delete01',
+  })
+  assert.deepEqual(JSON.parse(calls[4].init.body), {
+    actionId: 'act_create2',
+    provider: 'codex',
+    projectId,
+  })
+})
+
+test('rejects Project responses whose route identity does not match', async () => {
+  const wrongProject = { ...project, projectId: 'proj_other01' }
+  const getClient = new CodeTetherClient({
+    baseUrl: 'http://host.test',
+    fetch: async () =>
+      jsonResponse({ protocolVersion: 1, project: wrongProject }),
+  })
+  await assert.rejects(getClient.getProject(projectId), CodeTetherProtocolError)
+
+  const deleteClient = new CodeTetherClient({
+    baseUrl: 'http://host.test',
+    fetch: async () =>
+      jsonResponse({
+        protocolVersion: 1,
+        actionId: 'act_delete01',
+        status: 'completed',
+        data: { projectId: wrongProject.projectId },
+      }),
+  })
+  await assert.rejects(
+    deleteClient.deleteProject(projectId, { actionId: 'act_delete01' }),
+    CodeTetherProtocolError,
+  )
 })
 
 test('validates safe HTTP errors and surfaces a typed response error', async () => {

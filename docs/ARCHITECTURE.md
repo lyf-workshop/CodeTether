@@ -8,7 +8,9 @@ Phase 2C.1 is accepted, and Phase 2C.1.1 is frozen as **Live Conversation Read M
 
 **Phase 3A — Minimal Durable Persistence** is implemented and validated. A small `node:sqlite` boundary in the local Host preserves CodeTether Conversation/provider identity and normalized per-Turn snapshots across restart, while a later Turn lazily resumes the saved Codex Thread. A real isolated restart walkthrough confirmed Timeline reconstruction and retained provider context.
 
-No Tauri shell, remote access, authentication, Project management, or production machine-host service exists yet. The Host remains a development-only loopback API; SQLite is local Host data, not a remote or multi-user service.
+**Phase 3B.1 — Durable Project Identity & Local Workspace Authorization** is implemented and validated. The Host now owns durable `proj_*` Project identities and canonical authorized local roots. Every durable Conversation references one Project, while its `cwd` remains a contained working directory. Availability is computed from the filesystem, and every new Turn re-authorizes the saved root before Codex runs.
+
+No Projects UI, Tauri shell, remote access, authentication, multiple-Machine Project model, or production machine-host service exists yet. The Host remains a development-only loopback API; SQLite is local Host data, not a remote or multi-user service.
 
 ## System Context
 
@@ -230,9 +232,9 @@ apps/host local API on 127.0.0.1
 
 ### Public Identity and State
 
-The Host creates opaque `conversationId`, `turnId`, `itemId`, and `approvalId` values. Private maps bind them to the exact Codex Thread, Turn, Item, approval request, and JSON-RPC request identities. Browser routing never uses a provider Thread ID. Numeric and string JSON-RPC request IDs remain distinct through tagged internal keys. Approval resolution revalidates the full Conversation/Turn/Item/provider-request binding, requires a still-pending record, and rejects repeated resolution.
+The Host creates opaque `projectId`, `conversationId`, `turnId`, `itemId`, and `approvalId` values. Private maps bind runtime identities to the exact Codex Thread, Turn, Item, approval request, and JSON-RPC request identities. Browser routing never uses a provider Thread ID. Numeric and string JSON-RPC request IDs remain distinct through tagged internal keys. Approval resolution revalidates the full Conversation/Turn/Item/provider-request binding, requires a still-pending record, and rejects repeated resolution.
 
-State is in memory only. `GET /api/v1/snapshot` returns the current epoch, current sequence, Conversation summaries, active Turns, and pending Approvals. A Host restart creates a new epoch and an empty snapshot; it does not recover Conversations.
+At the Phase 2B acceptance boundary state was memory-only. Phase 3A subsequently made Conversation/Turn presentation state durable, and Phase 3B.1 made Project authorization durable. `GET /api/v1/snapshot` still returns the current epoch, current sequence, Conversation summaries, active Turns, pending Approvals, and bounded runtime histories; after restart those runtime histories are reconstructed from SQLite under a new epoch.
 
 ### HTTP Commands
 
@@ -242,6 +244,10 @@ The local API implements:
 GET  /api/v1/bootstrap
 GET  /api/v1/snapshot
 GET  /api/v1/events
+GET  /api/v1/projects
+POST /api/v1/projects
+GET  /api/v1/projects/:projectId
+DELETE /api/v1/projects/:projectId
 POST /api/v1/conversations
 POST /api/v1/conversations/:conversationId/turns
 POST /api/v1/conversations/:conversationId/turns/:turnId/interrupt
@@ -250,7 +256,9 @@ POST /api/v1/approvals/:approvalId/resolve
 
 Mutations require an `actionId`. A bounded 256-entry in-memory cache returns the original Promise/result for an identical retry while that action remains retained, rejects reuse with different input, never evicts in-flight actions, and explicitly reports capacity pressure. Settled entries are eventually evicted, so this is a recent-retry guarantee rather than durable exactly-once execution; callers must use globally random action IDs and retry a lost response promptly. Mutation responses share `accepted`, `completed`, or `rejected` status semantics while retaining endpoint-specific data. Safe errors use protocol codes rather than forwarding provider JSON-RPC errors.
 
-Create Conversation currently accepts only Codex, text-only Turns, optional model/reasoning, and an absolute existing working directory contained by an explicit allowed root after real-path resolution. The API does not implement Project discovery or a general filesystem chooser.
+Project creation accepts an `actionId`, absolute local path, and optional display name. The Host resolves the path to a canonical existing directory, applies any configured registration-root constraint, and stores one durable identity per canonical root. Repeating the same root returns the existing Project with `created: false`. List/read responses compute `available` or `unavailable` from the current filesystem rather than treating availability as durable truth. Delete removes only a registration and is rejected while any runtime or durable Conversation references it; it never deletes files or cascades Conversation history.
+
+Create Conversation currently accepts only Codex, optional model/reasoning, and a registered `projectId`. Its stored `cwd` is a real-path-validated directory contained by that Project root. The deprecated Protocol v1 `cwd` request remains an additive compatibility path, but it may only map to an existing registered, available Project and cannot register a path or expand trust. The API does not implement Project discovery or a general filesystem chooser.
 
 ### SSE Ordering and Replay
 
@@ -352,11 +360,19 @@ Linux    $XDG_DATA_HOME/codetether, otherwise ~/.local/share/codetether
 
 ### Minimal Schema and Migrations
 
-The migration runner records ordered versions in `schema_migrations`, rejects an unknown or renamed applied migration, and applies each new migration in an immediate transaction. Schema version 1 contains only:
+The migration runner records ordered versions in `schema_migrations`, rejects an unknown or renamed applied migration, and applies each new migration in an immediate transaction. Migration 001 (`initial`) introduced `conversations` and `turns`. Phase 3B.1 migration 002 (`projects`) adds durable Project identity and rebuilds Conversation foreign keys without discarding existing history. The current schema contains:
 
 ```text
+projects
+  project_id            CodeTether public identity, primary key
+  name                  local display name
+  root_path             canonical authorized local root
+  root_path_key         normalized unique comparison key
+  created_at, updated_at
+
 conversations
   conversation_id       CodeTether public identity, primary key
+  project_id            required Project foreign key, delete restricted
   provider              currently constrained to codex
   provider_thread_id    private provider resume identity, nullable while creating
   cwd, model, reasoning
@@ -371,17 +387,17 @@ turns
   snapshot_version, snapshot_json
 ```
 
-Indexes cover Conversation recency and per-Conversation Turn chronology. `snapshot_json` contains only versioned CodeTether normalized/presentation state for that Turn: messages, Tools, file changes, outcome, bounded terminal tail, and Approval history. It never contains the Codex JSON-RPC stream.
+Indexes cover Project and Conversation recency, Project-scoped Conversation recency, and per-Conversation Turn chronology. Migration 002 backfills one Project for each distinct normalized legacy Conversation root and binds every existing Conversation to it. Project availability is intentionally absent from SQLite; the Host computes it by inspecting the saved canonical root. `snapshot_json` contains only versioned CodeTether normalized/presentation state for that Turn: messages, Tools, file changes, outcome, bounded terminal tail, and Approval history. It never contains the Codex JSON-RPC stream.
 
 ### State Boundaries
 
 The three state layers remain intentionally different:
 
 - **Runtime memory:** current high-frequency working state and the bounded recent projection window (20 Turns, 512 presentation entries, 128 KiB terminal tail, approximately 4 MiB per retained Conversation).
-- **SQLite:** durable Conversation identity, provider Thread identity, canonical inputs, and per-Turn normalized snapshots across Host processes. Older completed Turns are not deleted merely because they leave the runtime window.
+- **SQLite:** durable Project authorization, Conversation identity, provider Thread identity, canonical inputs, and per-Turn normalized snapshots across Host processes. Older completed Turns are not deleted merely because they leave the runtime window.
 - **SSE replay:** up to 2,048 aggregated client events / approximately 8 MiB for short reconnects within one Host epoch. It is not persistence.
 
-Startup restores at most the existing process admission limit of eight most-recent Conversations and the most recent 20 Turns per restored Conversation into runtime memory. The complete durable Turn rows remain on disk, but Phase 3A provides no pagination or live Conversations index to surface rows outside that window.
+Startup loads the durable Project registry, then restores at most the existing process admission limit of eight most-recent Conversations and the most recent 20 Turns per restored Conversation into runtime memory. The complete durable Turn rows remain on disk, but no pagination or live Conversations index currently surfaces rows outside that window.
 
 ### Write and Recovery Semantics
 
@@ -401,6 +417,30 @@ Phase 3A completed a real isolated multi-Turn run with a full Host shutdown and 
 
 On the validated Windows/Node 25 development run, the final SQLite file was 53,248 bytes for six harness-created Conversation records, four completed Turns, and 9,444 bytes of normalized Turn snapshots. A 200-write synthetic check using an approximately 8 KiB snapshot measured 0.398 ms median, 0.558 ms p95, and 1.512 ms maximum synchronous write latency. These are development observations rather than production performance guarantees; the 300 ms dirty window keeps normal streaming from writing each delta.
 
+## Phase 3B.1 Durable Project Identity and Local Authorization
+
+A Project is the Host-owned durable identity of one authorized local workspace. Its public record contains `projectId`, name, canonical `rootPath`, computed availability, and creation/update timestamps. The persistence record additionally stores an internal normalized `root_path_key` used to enforce one Project per canonical root. Phase 3B.1 deliberately does not add filesystem generation identities, multiple Project locations, Project discovery, or a Projects product surface.
+
+### Registration and Availability
+
+Registration performs absolute-path validation, filesystem real-path resolution, normalized root comparison, and directory validation. Optional Host-configured roots constrain which new roots may be registered. Duplicate registration of the same canonical root returns the existing Project rather than creating another identity. Host startup reloads Project records from SQLite, so authorization survives restart.
+
+Availability is computed, not stored. Reading a Project whose path no longer resolves returns `availability: unavailable` without deleting the durable record or its history. A moved, replaced, missing, symlink-changed, or otherwise unauthorized root cannot be used for control until its saved canonical identity is valid again.
+
+### Conversation Ownership and Working Directories
+
+Every current durable Conversation has one required Project foreign key. The Conversation keeps its own canonical `cwd` because a Turn may run in a subdirectory, but that working directory is never an independent authorization grant. Before Conversation creation, every Turn, and lazy provider Thread resume, the Host resolves both the saved Project root and candidate `cwd`, verifies that the saved root still resolves to the same canonical identity, and verifies that the working directory is the root or a contained descendant. Failure returns the safe `project_unavailable` boundary before provider work starts.
+
+Protocol v1 is extended additively: new callers create Conversations with `projectId`, while the deprecated `cwd` request shape remains only for compatibility. The compatibility path searches already registered Projects and selects the most specific available containing root. It cannot register an arbitrary directory or expand the configured trust boundary.
+
+### Project Deletion
+
+Project deletion removes only CodeTether's durable registration. It performs no filesystem operation. The Project foreign key uses restricted deletion, and the Host also checks runtime ownership plus in-flight Conversation-creation reservations; a Project referenced or reserved by any durable or in-memory Conversation returns `project_has_conversations`. The reservation begins before asynchronous workspace authorization and is released after the durable/runtime identity is established or creation fails, preventing delete/create races without a global Project lock. There is no cascade, Conversation reassignment, or history loss.
+
+### Real Validation
+
+The 2026-08-26 Windows validation used `codex-cli 0.149.1`, an ignored isolated Project, and a SQLite data directory outside the repository. One Conversation completed a Turn, the Host shut down completely, and a new Host process restored the same Project, Conversation, Timeline, and a new SSE epoch without receiving a workspace allowlist again. Its first post-restart Turn lazily resumed the saved provider Thread and recalled the exact pre-restart marker `PROJECT-BOUNDARY-8427`. Moving the Project directory made `GET /projects` report `unavailable`; the two-Turn history remained readable while a new Turn failed with `project_unavailable` before provider resume. Restoring the directory made it available again, and a third Turn completed on the same Conversation. The final database was 65,536 bytes for two Project records, two Conversation records, and three completed Turns.
+
 ## UI
 
 The UI presents projects, conversations, agents, machines, approvals, changes, terminal output, context, and notifications. Figma defines visual and interaction behavior. Phase 2C.1 through Phase 2C.2 preserve the accepted visual structure and change only the Conversation Detail data/control boundary for valid live Conversation routes.
@@ -415,9 +455,9 @@ The future Tauri 2 shell will package the web UI and supply OS-level capabilitie
 
 ## Host
 
-`apps/host` owns the development harness lifecycle, loopback HTTP/SSE server, Codex runtime, live state, and the Phase 3A SQLite boundary. It allocates public identities, maps them to private provider identities, validates actions and workspaces, reconstructs recent live Snapshots from durable Turn records, sequences client events, and performs bounded fanout/replay. It remains a development local service rather than a production machine daemon.
+`apps/host` owns the development harness lifecycle, loopback HTTP/SSE server, Codex runtime, live state, Phase 3A SQLite boundary, and Phase 3B.1 durable Project registry. It allocates public identities, maps them to private provider identities, validates actions and Project workspaces, reconstructs recent live Snapshots from durable Turn records, sequences client events, and performs bounded fanout/replay. It remains a development local service rather than a production machine daemon.
 
-Project discovery, durable action logging, full-history pagination, production lifecycle supervision, machine trust, and remote operation remain planned rather than implemented.
+Project discovery/import UX, multiple Machine locations, durable action logging, full-history pagination, production lifecycle supervision, machine trust, and remote operation remain planned rather than implemented.
 
 ## Client-to-Host Protocol
 
@@ -431,7 +471,7 @@ Provider-specific capabilities may remain Codex-specific when a natural common c
 
 ## Persistence
 
-Phase 3A uses `node:sqlite` for the minimal durable records described above. CodeTether Conversation and Turn identities, private provider identities, canonical text inputs, statuses, timestamps, and normalized per-Turn snapshots survive Host restart. Raw Codex JSON-RPC, SSE events, replay cursors, action results, and browser projection state are not stored.
+Phase 3A uses `node:sqlite` for the minimal durable records described above. CodeTether Conversation and Turn identities, private provider identities, canonical text inputs, statuses, timestamps, and normalized per-Turn snapshots survive Host restart. Phase 3B.1 adds durable Project identity, canonical root authorization metadata, and the required Conversation-to-Project relationship. Raw Codex JSON-RPC, SSE events, replay cursors, action results, computed Project availability, and browser projection state are not stored.
 
 SQLite does not replace runtime history. The active Turn is assembled and streamed in memory, with throttled normalized snapshot writes and synchronous terminal flushes. It also does not replace the Codex provider's Thread store: CodeTether persists the exact provider Thread identity and asks Codex to resume it lazily. The migration runner and Store are intentionally concrete Host modules rather than a generic persistence abstraction.
 
@@ -453,13 +493,13 @@ Phase 2C.1 adds one browser consumer for that stream. It rejects duplicate and o
 
 ## Conversation Ownership
 
-A Conversation is bound to one Project, one Agent, and the Machine executing it, plus model, reasoning, permission, and history. An existing Conversation cannot switch providers. Phase 3A makes the CodeTether `conversationId` durable and stores the corresponding private Codex provider Thread identity without exposing it as browser routing identity.
+A Conversation is bound to one Project, one Agent, and the Machine executing it, plus model, reasoning, permission, and history. An existing Conversation cannot switch providers. Phase 3A makes the CodeTether `conversationId` durable and stores the corresponding private Codex provider Thread identity without exposing it as browser routing identity. Phase 3B.1 makes Project ownership a required durable relation; `cwd` remains a contained execution location, not a competing Project identity.
 
 ## Security Boundary
 
 Agent execution can read files, run commands, and change code. The spike confines the real Turn to a dedicated ignored workspace, uses `workspace-write` and `on-request` approval settings, forbids automatic approval, and records protocol summaries without environment variables or credentials.
 
-The Phase 2B HTTP server additionally binds only `127.0.0.1`, requires the exact loopback `Host` authority, enforces an explicit Origin allowlist without a wildcard, limits JSON bodies and SSE connections, validates every wire payload, returns safe error envelopes, and real-path-checks working directories against explicit allowed roots.
+The Phase 2B HTTP server additionally binds only `127.0.0.1`, requires the exact loopback `Host` authority, enforces an explicit Origin allowlist without a wildcard, limits JSON bodies and SSE connections, validates every wire payload, and returns safe error envelopes. Phase 3B.1 turns workspace confinement into durable Project authorization: registration resolves a canonical directory under any configured roots, and every new Turn or lazy provider resume re-resolves the saved Project root and contained `cwd`. An unavailable or changed root fails closed with `project_unavailable` while history remains readable.
 
 These controls are development safeguards, not a production security model. Authentication, authorization, machine trust, durable audit, TLS, pairing, and remote transport security remain unimplemented. The server must not bind to LAN interfaces in this phase.
 
@@ -469,7 +509,7 @@ These controls are development safeguards, not a production security model. Auth
 - The Host API is a development-only loopback service with local SQLite records, not a production daemon or remote service.
 - The real integration is Codex-only and was verified against local `codex-cli 0.149.1`.
 - React can start text Turns, resolve one-shot pending Approvals, and interrupt the exact active Turn on a valid live Conversation route. Stop/thread termination, queueing, steering, attachments, configuration changes, and other write paths are not connected.
-- No Tauri shell, authentication, remote access, Project system, full-history browser, or production permission policy exists.
+- Durable local Project identity and authorization exist, but there is no Projects UI, Project discovery/import flow, multiple-Machine location model, Tauri shell, authentication, remote access, full-history browser, or production permission policy.
 - Command Allow Once and Decline were exercised through real App Server requests; file-change and permissions approvals were not observed.
 - Multi-Turn, multi-Thread, cross-process resume, interruption, and safe Tool failure were manually validated.
 - A real terminal Turn failure was not observed.
@@ -478,6 +518,8 @@ These controls are development safeguards, not a production security model. Auth
 - SSE slow-client recovery currently closes the lagging connection; clients must reconnect or fetch a snapshot after `stream.reset`.
 - The browser cursor and live Conversation projection are memory-only and rebuild from Host Snapshot on page refresh or epoch change.
 - Snapshot reconstructs the bounded recent runtime window, including after Host restart. Older Turn rows remain durable but are not currently pageable or exposed by a live Conversations page.
+- Every durable Conversation references one Project. Project deletion is registration-only and is rejected while Conversations exist; CodeTether never deletes the workspace or cascades its history.
+- Protocol v1's deprecated `cwd` Conversation request may only resolve an existing registered available Project. New callers use `projectId`.
 - Terminal projection retains only the most recent 128 KiB per Conversation.
 - Runtime history remains limited per Conversation, and the Host admits at most eight in-memory Conversations by default. Active-Turn provider Item and file-change identity maps are each capped at 1,024 entries; exceeding a bound fails explicitly rather than growing without limit.
 - An idle runtime failure changes bootstrap capabilities but has no proactive Protocol v1 capability-change event.

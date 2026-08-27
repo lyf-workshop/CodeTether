@@ -167,6 +167,7 @@ async function createFixture(t, options = {}) {
       ? {}
       : { maxConversations: options.maxConversations }),
   })
+  await service.registerInitialProjectRoots([workspace])
   const events = []
   const unsubscribe = publisher.subscribe((event) => events.push(event))
   t.after(async () => {
@@ -204,6 +205,74 @@ test('bootstrap reports only implemented runtime capabilities', async (t) => {
     diff: true,
     streaming: true,
   })
+})
+
+test('Project deletion cannot race an in-flight Conversation creation', async (t) => {
+  const fixture = await createFixture(t)
+  const project = (await fixture.service.listProjects()).projects[0]
+  assert.ok(project)
+
+  let markProviderStarted
+  const providerStarted = new Promise((resolveStarted) => {
+    markProviderStarted = resolveStarted
+  })
+  let releaseProvider
+  const providerGate = new Promise((resolveProvider) => {
+    releaseProvider = resolveProvider
+  })
+  const startConversation = fixture.runtime.startConversation.bind(
+    fixture.runtime,
+  )
+  fixture.runtime.startConversation = async (options) => {
+    markProviderStarted()
+    await providerGate
+    return await startConversation(options)
+  }
+
+  const creating = fixture.service.createConversation({
+    actionId: 'act_project_race_create',
+    provider: 'codex',
+    projectId: project.projectId,
+  })
+  await providerStarted
+
+  await assert.rejects(
+    fixture.service.deleteProject(project.projectId, {
+      actionId: 'act_project_race_delete',
+    }),
+    (error) =>
+      error instanceof HostServiceError &&
+      error.code === 'project_has_conversations',
+  )
+
+  releaseProvider()
+  const created = await creating
+  assert.equal(created.data.conversation.projectId, project.projectId)
+  assert.equal(fixture.runtime.closeCalls, 0)
+})
+
+test('a failed Conversation creation releases its Project reservation', async (t) => {
+  const fixture = await createFixture(t)
+  const project = (await fixture.service.listProjects()).projects[0]
+  assert.ok(project)
+  fixture.runtime.startConversation = async () => {
+    throw new Error('controlled provider failure')
+  }
+
+  await assert.rejects(
+    fixture.service.createConversation({
+      actionId: 'act_project_failed_create',
+      provider: 'codex',
+      projectId: project.projectId,
+    }),
+    (error) =>
+      error instanceof HostServiceError && error.code === 'provider_error',
+  )
+
+  const deleted = await fixture.service.deleteProject(project.projectId, {
+    actionId: 'act_project_delete_after_failure',
+  })
+  assert.equal(deleted.data.projectId, project.projectId)
 })
 
 test('provider Thread identities must be non-empty and globally unique', async (t) => {

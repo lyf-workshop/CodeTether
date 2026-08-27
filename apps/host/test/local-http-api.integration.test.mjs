@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { access, mkdir, mkdtemp, rename, rm } from 'node:fs/promises'
 import { request as httpRequest } from 'node:http'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import test from 'node:test'
 
 import { HostEventPublisher } from '../dist/api/host-event-publisher.js'
@@ -62,10 +62,12 @@ test('local Host assembly generates a new epoch and restores its API snapshot fr
       await WorkspacePolicy.create([workspace]),
       ConversationStore.open({ databasePath }),
     )
+    const projects = await getJson(first.baseUrl, '/api/v1/projects')
+    const projectId = projects.body.projects[0].projectId
     const created = await postJson(first.baseUrl, '/api/v1/conversations', {
       actionId: 'act_http_restart_create',
       provider: 'codex',
-      cwd: workspace,
+      projectId,
     })
     const conversationId = created.body.data.conversation.conversationId
     const started = await postJson(
@@ -116,6 +118,7 @@ test('local Host assembly generates a new epoch and restores its API snapshot fr
     assert.equal(after.status, 200)
     assert.equal(after.body.epoch, second.epoch)
     assert.equal(after.body.conversations[0].conversationId, conversationId)
+    assert.equal(after.body.conversations[0].projectId, projectId)
     assert.equal(
       after.body.conversationRuntimes[0].messages[0].text,
       'Durable API response',
@@ -130,6 +133,96 @@ test('local Host assembly generates a new epoch and restores its API snapshot fr
       maxRetries: 10,
       retryDelay: 100,
     })
+  }
+})
+
+test('restores durable Project authorization and fails safely while its root is unavailable', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'codetether-project-restart-'))
+  const workspace = join(directory, 'workspace')
+  const movedWorkspace = join(directory, 'workspace-moved')
+  const databasePath = join(directory, 'data', 'codetether.sqlite3')
+  await mkdir(workspace)
+  const options = {
+    allowedWorkspaceRoots: [workspace],
+    allowedOrigins: [],
+    hostVersion: '0.0.0-test',
+    port: 0,
+  }
+  let first
+  let second
+  let workspaceMoved = false
+  try {
+    first = await startLocalCodexHostWithRuntime(
+      options,
+      new FakeAgentRuntime(),
+      await WorkspacePolicy.create([workspace]),
+      ConversationStore.open({ databasePath }),
+    )
+    const firstClient = await getJson(first.baseUrl, '/api/v1/projects')
+    const projectId = firstClient.body.projects[0].projectId
+    const created = await postJson(first.baseUrl, '/api/v1/conversations', {
+      actionId: 'act_project_restart_create',
+      provider: 'codex',
+      projectId,
+    })
+    const conversationId = created.body.data.conversation.conversationId
+    await first.close()
+    first = undefined
+
+    await rename(workspace, movedWorkspace)
+    workspaceMoved = true
+    const secondRuntime = new FakeAgentRuntime()
+    second = await startLocalCodexHostWithRuntime(
+      { ...options, allowedWorkspaceRoots: [] },
+      secondRuntime,
+      await WorkspacePolicy.create([]),
+      ConversationStore.open({ databasePath }),
+    )
+
+    const unavailable = await getJson(second.baseUrl, '/api/v1/projects')
+    assert.equal(unavailable.body.projects[0].projectId, projectId)
+    assert.equal(unavailable.body.projects[0].availability, 'unavailable')
+    const history = await getJson(second.baseUrl, '/api/v1/snapshot')
+    assert.equal(history.body.conversations[0].conversationId, conversationId)
+    assert.equal(history.body.conversations[0].projectId, projectId)
+
+    const blocked = await postJson(
+      second.baseUrl,
+      `/api/v1/conversations/${conversationId}/turns`,
+      {
+        actionId: 'act_project_restart_blocked',
+        input: { type: 'text', text: 'Do not run while unavailable.' },
+      },
+    )
+    assert.equal(blocked.status, 409)
+    assert.equal(blocked.body.code, 'project_unavailable')
+    assert.equal(secondRuntime.resumeConversationCalls.length, 0)
+    assert.equal(secondRuntime.startTurnCalls.length, 0)
+
+    await rename(movedWorkspace, workspace)
+    workspaceMoved = false
+    const restored = await getJson(second.baseUrl, '/api/v1/projects')
+    assert.equal(restored.body.projects[0].availability, 'available')
+    const resumed = await postJson(
+      second.baseUrl,
+      `/api/v1/conversations/${conversationId}/turns`,
+      {
+        actionId: 'act_project_restart_resumed',
+        input: { type: 'text', text: 'Resume the durable Project.' },
+      },
+    )
+    assert.equal(resumed.status, 202)
+    assert.deepEqual(secondRuntime.resumeConversationCalls, [
+      { providerThreadId: 'provider-thread-1', cwd: workspace },
+    ])
+    assert.equal(secondRuntime.startTurnCalls.length, 1)
+  } finally {
+    await first?.close().catch(() => undefined)
+    await second?.close().catch(() => undefined)
+    if (workspaceMoved) {
+      await rename(movedWorkspace, workspace).catch(() => undefined)
+    }
+    await rm(directory, { force: true, recursive: true })
   }
 })
 
@@ -241,6 +334,118 @@ test('serves bootstrap, snapshot, and idempotent mutations with a fake runtime',
       snapshot.body.activeTurns[0].turnId,
       started.body.data.turn.turnId,
     )
+  } finally {
+    await harness.close()
+  }
+})
+
+test('serves durable Project identity and creates Conversations by projectId', async () => {
+  const harness = await createHarness()
+  const nested = join(harness.workspace, 'nested-project')
+  await mkdir(nested)
+  try {
+    const initial = await getJson(harness.baseUrl, '/api/v1/projects')
+    assert.equal(initial.status, 200)
+    assert.equal(initial.body.projects.length, 1)
+    const rootProject = initial.body.projects[0]
+    assert.equal(rootProject.availability, 'available')
+
+    const created = await postJson(harness.baseUrl, '/api/v1/projects', {
+      actionId: 'act_project_create01',
+      path: nested,
+    })
+    assert.equal(created.status, 201)
+    assert.equal(created.body.data.created, true)
+    assert.equal(created.body.data.project.name, 'nested-project')
+    assert.match(created.body.data.project.projectId, /^proj_/u)
+
+    const duplicate = await postJson(harness.baseUrl, '/api/v1/projects', {
+      actionId: 'act_project_create02',
+      path: `${nested}${sep}`,
+      name: 'Ignored duplicate name',
+    })
+    assert.equal(duplicate.status, 200)
+    assert.equal(duplicate.body.data.created, false)
+    assert.equal(
+      duplicate.body.data.project.projectId,
+      created.body.data.project.projectId,
+    )
+
+    const fetched = await getJson(
+      harness.baseUrl,
+      `/api/v1/projects/${created.body.data.project.projectId}`,
+    )
+    assert.equal(fetched.status, 200)
+    assert.deepEqual(fetched.body.project, created.body.data.project)
+
+    const conversation = await postJson(
+      harness.baseUrl,
+      '/api/v1/conversations',
+      {
+        actionId: 'act_project_conversation01',
+        provider: 'codex',
+        projectId: rootProject.projectId,
+      },
+    )
+    assert.equal(conversation.status, 201)
+    assert.equal(
+      conversation.body.data.conversation.projectId,
+      rootProject.projectId,
+    )
+    assert.equal(conversation.body.data.conversation.cwd, rootProject.rootPath)
+
+    const conflict = await deleteJson(
+      harness.baseUrl,
+      `/api/v1/projects/${rootProject.projectId}`,
+      { actionId: 'act_project_delete01' },
+    )
+    assert.equal(conflict.status, 409)
+    assert.equal(conflict.body.code, 'project_has_conversations')
+
+    const deleted = await deleteJson(
+      harness.baseUrl,
+      `/api/v1/projects/${created.body.data.project.projectId}`,
+      { actionId: 'act_project_delete02' },
+    )
+    assert.equal(deleted.status, 200)
+    assert.equal(
+      deleted.body.data.projectId,
+      created.body.data.project.projectId,
+    )
+    await access(nested)
+  } finally {
+    await harness.close()
+  }
+})
+
+test('rejects invalid Project paths and unknown Project identities safely', async () => {
+  const harness = await createHarness()
+  try {
+    const missing = await postJson(harness.baseUrl, '/api/v1/projects', {
+      actionId: 'act_project_missing01',
+      path: join(harness.workspace, 'missing'),
+    })
+    assert.equal(missing.status, 422)
+    assert.equal(missing.body.code, 'invalid_request')
+
+    const unknown = await getJson(
+      harness.baseUrl,
+      '/api/v1/projects/proj_unknown01',
+    )
+    assert.equal(unknown.status, 404)
+    assert.equal(unknown.body.code, 'not_found')
+
+    const invalidConversation = await postJson(
+      harness.baseUrl,
+      '/api/v1/conversations',
+      {
+        actionId: 'act_project_invalidconv01',
+        provider: 'codex',
+        projectId: 'proj_unknown01',
+      },
+    )
+    assert.equal(invalidConversation.status, 404)
+    assert.equal(invalidConversation.body.code, 'not_found')
   } finally {
     await harness.close()
   }
@@ -392,7 +597,7 @@ test('allows only configured origins and never emits wildcard CORS', async () =>
     )
     assert.equal(
       preflight.headers.get('access-control-allow-methods'),
-      'GET, POST, OPTIONS',
+      'GET, POST, DELETE, OPTIONS',
     )
 
     const denied = await getJson(harness.baseUrl, '/api/v1/bootstrap', {
@@ -725,6 +930,7 @@ async function createHarness(options = {}) {
     hostVersion: '0.0.0-test',
     now: () => new Date('2026-08-26T08:00:00.000Z'),
   })
+  await service.registerInitialProjectRoots([workspace])
   const server = new LocalHttpServer({
     service,
     allowedOrigins: options.allowedOrigins ?? ['http://localhost:5173'],
@@ -760,6 +966,14 @@ async function getJson(baseUrl, path, headers = {}) {
 async function postJson(baseUrl, path, body) {
   return await requestJson(baseUrl, path, {
     method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+}
+
+async function deleteJson(baseUrl, path, body) {
+  return await requestJson(baseUrl, path, {
+    method: 'DELETE',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })

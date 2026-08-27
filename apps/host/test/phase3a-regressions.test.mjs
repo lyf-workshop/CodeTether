@@ -9,6 +9,7 @@ import { HostSnapshotSchema } from '@codetether/protocol'
 import { HostEventPublisher } from '../dist/api/host-event-publisher.js'
 import { HostService, HostServiceError } from '../dist/api/host-service.js'
 import { WorkspacePolicy } from '../dist/api/workspace-policy.js'
+import { normalizeTrustedProjectRoot } from '../dist/project-path.js'
 import {
   ConversationStore,
   DURABLE_TURN_SNAPSHOT_VERSION,
@@ -91,8 +92,10 @@ test('durable cwd is re-authorized before Provider resume', async () => {
   const store = ConversationStore.open({
     databasePath: environment.databasePath,
   })
+  const projectId = seedProject(store, removedRoot)
   store.createConversation({
     conversationId: 'conv_regression_auth',
+    projectId,
     provider: 'codex',
     providerThreadId: 'provider-thread-regression',
     cwd: removedRoot,
@@ -100,6 +103,7 @@ test('durable cwd is re-authorized before Provider resume', async () => {
     createdAt: timestamp,
     updatedAt: timestamp,
   })
+  await rm(removedRoot, { recursive: true })
 
   const runtime = new FakeRuntime()
   const service = new HostService({
@@ -118,7 +122,7 @@ test('durable cwd is re-authorized before Provider resume', async () => {
       }),
       (error) =>
         error instanceof HostServiceError &&
-        error.code === 'provider_conversation_unavailable',
+        error.code === 'project_unavailable',
     )
     assert.equal(runtime.resumeCalls.length, 0)
     assert.equal(runtime.turnCalls.length, 0)
@@ -133,8 +137,10 @@ test('concurrent Turn starts serialize across lazy resume', async () => {
   const store = ConversationStore.open({
     databasePath: environment.databasePath,
   })
+  const projectId = seedProject(store, environment.workspace)
   store.createConversation({
     conversationId: 'conv_regression_race',
+    projectId,
     provider: 'codex',
     providerThreadId: 'provider-thread-regression',
     cwd: environment.workspace,
@@ -185,8 +191,10 @@ test('restore entry cap follows durable Turn chronology across Host epochs', asy
   const store = ConversationStore.open({
     databasePath: environment.databasePath,
   })
+  const projectId = seedProject(store, environment.workspace)
   store.createConversation({
     conversationId: 'conv_regression_order',
+    projectId,
     provider: 'codex',
     providerThreadId: 'provider-thread-regression',
     cwd: environment.workspace,
@@ -229,8 +237,10 @@ test('restored presentation order remains unique and precedes the new Host epoch
   const store = ConversationStore.open({
     databasePath: environment.databasePath,
   })
+  const projectId = seedProject(store, environment.workspace)
   store.createConversation({
     conversationId: 'conv_regression_order',
+    projectId,
     provider: 'codex',
     providerThreadId: 'provider-thread-regression',
     cwd: environment.workspace,
@@ -304,6 +314,7 @@ test('approval persistence failure keeps the fail-closed Snapshot coherent', asy
     now: () => new Date(timestamp),
   })
   try {
+    await service.registerInitialProjectRoots([environment.workspace])
     const created = await service.createConversation({
       actionId: 'act_regression_approval_create',
       provider: 'codex',
@@ -327,6 +338,20 @@ test('approval persistence failure keeps the fail-closed Snapshot coherent', asy
     await removeEnvironment(environment.directory)
   }
 })
+
+function seedProject(store, rootPath) {
+  const projectId = 'proj_phase3a_regression'
+  const canonical = normalizeTrustedProjectRoot(rootPath)
+  store.createProject({
+    projectId,
+    name: 'Phase 3A regression',
+    rootPath: canonical.rootPath,
+    rootPathKey: canonical.rootPathKey,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  })
+  return projectId
+}
 
 function publisher(epoch) {
   return new HostEventPublisher({ epoch })

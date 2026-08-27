@@ -10,6 +10,7 @@ import {
   formatLastEventId,
   HostEventSchema,
   HostEventEnvelopeSchema,
+  ProjectIdSchema,
   protocolVersion,
   TimestampSchema,
   TurnIdSchema,
@@ -22,8 +23,15 @@ import {
   type HostEvent,
   type HostEventEnvelope,
   type HostSnapshot,
+  type CreateProjectRequest,
+  type CreateProjectResponse,
+  type DeleteProjectRequest,
+  type DeleteProjectResponse,
+  type GetProjectResponse,
   type InterruptTurnRequest,
   type InterruptTurnResponse,
+  type ListProjectsResponse,
+  type ProjectId,
   type ResolveApprovalRequest,
   type ResolveApprovalResponse,
   type StartTurnRequest,
@@ -59,8 +67,13 @@ import {
 import { HostEventPublisher } from './host-event-publisher.js'
 import type { ReplayResetReason } from './host-event-replay-buffer.js'
 import type { ConversationState, TurnState } from './host-service-state.js'
+import {
+  ProjectRegistry,
+  ProjectRegistryError,
+  type ProjectConversationReservation,
+} from './project-registry.js'
 import { ProviderEventTranslator } from './provider-event-translator.js'
-import { WorkspacePolicy, WorkspacePolicyError } from './workspace-policy.js'
+import { WorkspacePolicy } from './workspace-policy.js'
 
 const MAX_PENDING_PROVIDER_EVENTS = 512
 const MAX_PENDING_PROVIDER_EVENT_BYTES = 4 * 1024 * 1024
@@ -108,6 +121,7 @@ export class HostService {
   readonly #providerEventTranslator: ProviderEventTranslator
   readonly #maxConversations: number
   readonly #persistence?: ConversationStore
+  readonly #projects: ProjectRegistry
   readonly #persistenceFlushMs: number
   readonly #dirtyTurns = new Map<TurnId, ConversationId>()
   readonly #pendingProviderEvents: AgentEvent[] = []
@@ -138,6 +152,18 @@ export class HostService {
       DEFAULT_PERSISTENCE_FLUSH_MS,
       'persistenceFlushMs',
     )
+    this.#projects = new ProjectRegistry({
+      workspacePolicy: this.#workspacePolicy,
+      ...(this.#persistence === undefined
+        ? {}
+        : { persistence: this.#persistence }),
+      now: () => TimestampSchema.parse(this.#timestamp()),
+      writeDurable: (operation) => this.#writeDurable(operation),
+      hasRuntimeConversations: (projectId) =>
+        [...this.#conversations.values()].some(
+          (conversation) => conversation.record.projectId === projectId,
+        ),
+    })
     this.#restoreDurableState()
     this.#approvalRegistry = new ApprovalRegistry({
       providerThreads: this.#providerThreads,
@@ -202,6 +228,80 @@ export class HostService {
     }
   }
 
+  /** Assembly-only compatibility path for explicit command-line roots. */
+  async registerInitialProjectRoots(roots: readonly string[]): Promise<void> {
+    await this.#projects.registerInitialRoots(roots)
+  }
+
+  async listProjects(): Promise<ListProjectsResponse> {
+    return {
+      protocolVersion,
+      projects: [...(await this.#projects.list())],
+    }
+  }
+
+  async getProject(projectId: ProjectId): Promise<GetProjectResponse> {
+    try {
+      return {
+        protocolVersion,
+        project: await this.#projects.get(ProjectIdSchema.parse(projectId)),
+      }
+    } catch (error) {
+      throw projectServiceError(error)
+    }
+  }
+
+  async createProject(
+    request: CreateProjectRequest,
+  ): Promise<CreateProjectResponse> {
+    return await this.#executeAction(
+      request.actionId,
+      'project.create',
+      request,
+      async () => {
+        try {
+          const data = await this.#projects.create(request.path, request.name)
+          return {
+            protocolVersion,
+            actionId: request.actionId,
+            status: 'completed',
+            data,
+          }
+        } catch (error) {
+          throw projectServiceError(error)
+        }
+      },
+      false,
+    )
+  }
+
+  async deleteProject(
+    projectId: ProjectId,
+    request: DeleteProjectRequest,
+  ): Promise<DeleteProjectResponse> {
+    return await this.#executeAction(
+      request.actionId,
+      `project.delete:${projectId}`,
+      { projectId, request },
+      async () => {
+        try {
+          const deletedProjectId = this.#projects.delete(
+            ProjectIdSchema.parse(projectId),
+          )
+          return {
+            protocolVersion,
+            actionId: request.actionId,
+            status: 'completed',
+            data: { projectId: deletedProjectId },
+          }
+        } catch (error) {
+          throw projectServiceError(error)
+        }
+      },
+      false,
+    )
+  }
+
   async createConversation(
     request: CreateConversationRequest,
   ): Promise<CreateConversationResponse> {
@@ -218,113 +318,113 @@ export class HostService {
             { maxConversations: this.#maxConversations },
           )
         }
-        let cwd: string
+        const workspace = await this.#reserveConversationProject(request)
         try {
-          cwd = await this.#workspacePolicy.authorize(request.cwd)
-        } catch (error) {
-          if (error instanceof WorkspacePolicyError) {
-            throw new HostServiceError('invalid_request', error.message, 422)
-          }
-          throw error
-        }
-
-        const timestamp = this.#timestamp()
-        const conversationId = newConversationId()
-        const creatingConversation: DurableConversation = {
-          conversationId,
-          provider: 'codex',
-          cwd,
-          ...(request.model === undefined ? {} : { model: request.model }),
-          ...(request.reasoning === undefined
-            ? {}
-            : { reasoning: request.reasoning }),
-          status: 'creating',
-          createdAt: timestamp,
-          updatedAt: timestamp,
-        }
-        this.#writeDurable(() => {
-          this.#persistence?.createConversation(creatingConversation)
-        })
-
-        let provider:
-          Awaited<ReturnType<AgentHostRuntime['startConversation']>> | undefined
-        try {
-          provider = await this.#runtime.startConversation({
+          const projectId = workspace.project.projectId
+          const cwd = workspace.cwd
+          const timestamp = this.#timestamp()
+          const conversationId = newConversationId()
+          const creatingConversation: DurableConversation = {
+            conversationId,
+            projectId,
+            provider: 'codex',
             cwd,
             ...(request.model === undefined ? {} : { model: request.model }),
             ...(request.reasoning === undefined
               ? {}
               : { reasoning: request.reasoning }),
-          })
-        } catch (error) {
-          this.#rollbackCreatingConversation(conversationId)
-          if (!this.#runtimeAvailable()) throw runtimeUnavailableError()
-          throw providerCommandError('create conversation', error)
-        }
-        this.#assertRuntimeAvailable()
-
-        if (
-          provider.providerThreadId.trim().length === 0 ||
-          this.#providerThreads.has(provider.providerThreadId)
-        ) {
-          this.#rollbackCreatingConversation(conversationId)
-          throw new HostServiceError(
-            'provider_error',
-            'Codex returned an invalid or reused Thread identity',
-            500,
-          )
-        }
-
-        let record
-        try {
-          record = ConversationRecordSchema.parse({
-            conversationId,
-            provider: 'codex',
-            cwd,
-            ...(provider.model === undefined && request.model === undefined
-              ? {}
-              : { model: provider.model ?? request.model }),
-            ...(request.reasoning === undefined
-              ? {}
-              : { reasoning: request.reasoning }),
-            status: 'idle',
+            status: 'creating',
             createdAt: timestamp,
             updatedAt: timestamp,
+          }
+          this.#writeDurable(() => {
+            this.#persistence?.createConversation(creatingConversation)
           })
-        } catch (error) {
-          this.#rollbackCreatingConversation(conversationId)
-          throw providerCommandError(
-            'return valid conversation metadata',
-            error,
-          )
-        }
-        const state: ConversationState = {
-          record,
-          providerThreadId: provider.providerThreadId,
-          turns: new Map(),
-          providerTurnIds: new Map(),
-          providerSession: 'ready',
-          startingTurn: false,
-        }
-        this.#writeDurable(() => {
-          this.#persistence?.updateConversation(
-            this.#durableConversation(state),
-          )
-        })
-        this.#conversations.set(conversationId, state)
-        this.#providerThreads.set(provider.providerThreadId, conversationId)
-        this.#publish({
-          conversationId,
-          timestamp,
-          type: 'conversation.started',
-          payload: { conversation: record },
-        })
-        this.#flushProviderEvents()
-        return {
-          protocolVersion,
-          actionId: request.actionId,
-          status: 'completed',
-          data: { conversation: record },
+
+          let provider:
+            | Awaited<ReturnType<AgentHostRuntime['startConversation']>>
+            | undefined
+          try {
+            provider = await this.#runtime.startConversation({
+              cwd,
+              ...(request.model === undefined ? {} : { model: request.model }),
+              ...(request.reasoning === undefined
+                ? {}
+                : { reasoning: request.reasoning }),
+            })
+          } catch (error) {
+            this.#rollbackCreatingConversation(conversationId)
+            if (!this.#runtimeAvailable()) throw runtimeUnavailableError()
+            throw providerCommandError('create conversation', error)
+          }
+          this.#assertRuntimeAvailable()
+
+          if (
+            provider.providerThreadId.trim().length === 0 ||
+            this.#providerThreads.has(provider.providerThreadId)
+          ) {
+            this.#rollbackCreatingConversation(conversationId)
+            throw new HostServiceError(
+              'provider_error',
+              'Codex returned an invalid or reused Thread identity',
+              500,
+            )
+          }
+
+          let record
+          try {
+            record = ConversationRecordSchema.parse({
+              conversationId,
+              projectId,
+              provider: 'codex',
+              cwd,
+              ...(provider.model === undefined && request.model === undefined
+                ? {}
+                : { model: provider.model ?? request.model }),
+              ...(request.reasoning === undefined
+                ? {}
+                : { reasoning: request.reasoning }),
+              status: 'idle',
+              createdAt: timestamp,
+              updatedAt: timestamp,
+            })
+          } catch (error) {
+            this.#rollbackCreatingConversation(conversationId)
+            throw providerCommandError(
+              'return valid conversation metadata',
+              error,
+            )
+          }
+          const state: ConversationState = {
+            record,
+            providerThreadId: provider.providerThreadId,
+            turns: new Map(),
+            providerTurnIds: new Map(),
+            providerSession: 'ready',
+            startingTurn: false,
+          }
+          this.#writeDurable(() => {
+            this.#persistence?.updateConversation(
+              this.#durableConversation(state),
+            )
+          })
+          this.#conversations.set(conversationId, state)
+          this.#providerThreads.set(provider.providerThreadId, conversationId)
+          this.#publish({
+            conversationId,
+            timestamp,
+            type: 'conversation.started',
+            payload: { conversation: record },
+          })
+          this.#flushProviderEvents()
+          return {
+            protocolVersion,
+            actionId: request.actionId,
+            status: 'completed',
+            data: { conversation: record },
+          }
+        } finally {
+          workspace.release()
         }
       },
     )
@@ -372,11 +472,26 @@ export class HostService {
         }
 
         conversation.startingTurn = true
+        let authorizedCwd: string
         try {
-          await this.#ensureProviderConversation(conversation)
+          const projectId = conversation.record.projectId
+          if (projectId === undefined) {
+            throw new HostServiceError(
+              'project_unavailable',
+              'Conversation has no durable Project identity',
+              409,
+            )
+          }
+          authorizedCwd = (
+            await this.#projects.authorizeConversation(
+              projectId,
+              conversation.record.cwd,
+            )
+          ).cwd
+          await this.#ensureProviderConversation(conversation, authorizedCwd)
         } catch (error) {
           conversation.startingTurn = false
-          throw error
+          throw projectServiceError(error)
         }
 
         const timestamp = this.#timestamp()
@@ -869,20 +984,13 @@ export class HostService {
 
   async #ensureProviderConversation(
     conversation: ConversationState,
+    authorizedCwd: string,
   ): Promise<void> {
     if (conversation.providerSession === 'ready') return
     if (conversation.providerSession === 'unavailable') {
       throw providerConversationUnavailableError()
     }
     try {
-      const authorizedCwd = await this.#workspacePolicy.authorize(
-        conversation.record.cwd,
-      )
-      if (authorizedCwd !== conversation.record.cwd) {
-        throw new WorkspacePolicyError(
-          'Durable workspace identity changed after it was authorized',
-        )
-      }
       const resumed = await this.#runtime.resumeConversation({
         providerThreadId: conversation.providerThreadId,
         cwd: authorizedCwd,
@@ -910,10 +1018,6 @@ export class HostService {
       }
       conversation.providerSession = 'ready'
     } catch (error) {
-      if (error instanceof WorkspacePolicyError) {
-        conversation.providerSession = 'unavailable'
-        throw providerConversationUnavailableError()
-      }
       if (error instanceof ProviderConversationUnavailableError) {
         conversation.providerSession = 'unavailable'
         throw providerConversationUnavailableError()
@@ -1076,6 +1180,7 @@ export class HostService {
   #durableConversation(conversation: ConversationState): DurableConversation {
     return {
       conversationId: conversation.record.conversationId,
+      projectId: ProjectIdSchema.parse(conversation.record.projectId),
       provider: conversation.record.provider,
       providerThreadId: conversation.providerThreadId,
       cwd: conversation.record.cwd,
@@ -1088,6 +1193,18 @@ export class HostService {
       status: conversation.record.status,
       createdAt: conversation.record.createdAt,
       updatedAt: conversation.record.updatedAt,
+    }
+  }
+
+  async #reserveConversationProject(
+    request: CreateConversationRequest,
+  ): Promise<ProjectConversationReservation> {
+    try {
+      return 'projectId' in request
+        ? await this.#projects.reserveConversationCreation(request.projectId)
+        : await this.#projects.reserveLegacyConversationCreation(request.cwd)
+    } catch (error) {
+      throw projectServiceError(error)
     }
   }
 
@@ -1142,6 +1259,7 @@ export class HostService {
     operation: string,
     input: unknown,
     action: () => Promise<T>,
+    requireRuntime = true,
   ): Promise<T> {
     try {
       return await this.#actions.execute(
@@ -1149,7 +1267,7 @@ export class HostService {
         operation,
         input,
         async () => {
-          this.#assertRuntimeAvailable()
+          if (requireRuntime) this.#assertRuntimeAvailable()
           return await action()
         },
       )
@@ -1327,6 +1445,27 @@ function providerConversationUnavailableError(): HostServiceError {
     'The Codex conversation can no longer be resumed',
     409,
   )
+}
+
+function projectServiceError(error: unknown): Error {
+  if (error instanceof HostServiceError) return error
+  if (!(error instanceof ProjectRegistryError)) {
+    return error instanceof Error ? error : new Error(String(error))
+  }
+  switch (error.code) {
+    case 'not_found':
+      return new HostServiceError('not_found', error.message, 404)
+    case 'has_conversations':
+      return new HostServiceError(
+        'project_has_conversations',
+        error.message,
+        409,
+      )
+    case 'unavailable':
+      return new HostServiceError('project_unavailable', error.message, 409)
+    case 'invalid_path':
+      return new HostServiceError('invalid_request', error.message, 422)
+  }
 }
 
 function toError(value: unknown): Error {

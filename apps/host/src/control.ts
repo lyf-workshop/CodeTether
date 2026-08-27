@@ -33,16 +33,26 @@ async function main(): Promise<void> {
 
   try {
     const client = new CodeTetherClient({ baseUrl: host.baseUrl })
+    const [generalProject, approvalProject] = await Promise.all([
+      client.createProject({
+        actionId: actionId(),
+        path: workspace.root,
+      }),
+      client.createProject({
+        actionId: actionId(),
+        path: approvalWorkspace.root,
+      }),
+    ])
     const [general, approval] = await Promise.all([
       client.createConversation({
         actionId: actionId(),
         provider: 'codex',
-        cwd: workspace.root,
+        projectId: generalProject.data.project.projectId,
       }),
       client.createConversation({
         actionId: actionId(),
         provider: 'codex',
-        cwd: approvalWorkspace.root,
+        projectId: approvalProject.data.project.projectId,
       }),
     ])
     const generalId = general.data.conversation.conversationId

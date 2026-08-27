@@ -339,6 +339,10 @@ export function mutationErrorMessage(error: unknown, fallback: string): string {
       return `Codex 未能${fallback}。`
     case 'provider_conversation_unavailable':
       return 'Codex 已无法恢复此会话；本地历史仍可查看。'
+    case 'project_unavailable':
+      return '项目工作区当前不可用；本地历史仍可查看。'
+    case 'project_has_conversations':
+      return '项目仍有关联会话，无法移除。'
     case 'internal':
       return `Host 未能${fallback}。`
   }

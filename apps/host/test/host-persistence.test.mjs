@@ -13,6 +13,7 @@ import {
   DURABLE_TURN_SNAPSHOT_VERSION,
   initialTurnPresentation,
 } from '../dist/persistence/index.js'
+import { normalizeTrustedProjectRoot } from '../dist/project-path.js'
 
 const timestamp = '2026-08-27T08:00:00.000Z'
 
@@ -124,6 +125,7 @@ async function createService(environment, epoch, runtime = new FakeRuntime()) {
     now: () => new Date(timestamp),
     persistenceFlushMs: 5,
   })
+  await service.registerInitialProjectRoots([environment.workspace])
   return { store, runtime, publisher, service }
 }
 
@@ -431,9 +433,12 @@ test('durable write failure prevents Provider Turn start', async () => {
   const environment = await createEnvironment()
   const runtime = new FakeRuntime()
   const failingStore = {
+    listProjects: () => [],
     listConversations: () => [],
     listIncompleteTurns: () => [],
     runInTransaction: (operation) => operation(),
+    createProject: () => undefined,
+    countConversationsForProject: () => 0,
     createConversation: () => undefined,
     updateConversation: () => undefined,
     deleteConversation: () => true,
@@ -454,6 +459,7 @@ test('durable write failure prevents Provider Turn start', async () => {
     now: () => new Date(timestamp),
   })
   try {
+    await service.registerInitialProjectRoots([environment.workspace])
     const created = await createConversation(
       service,
       environment.workspace,
@@ -610,6 +616,7 @@ test('graceful shutdown flushes dirty streaming state before the throttle window
       hostVersion: '0.0.0-test',
       now: () => new Date(timestamp),
     })
+    await service.registerInitialProjectRoots([environment.workspace])
     const created = await createConversation(
       service,
       environment.workspace,
@@ -680,6 +687,7 @@ test('terminal durability failure emits failure instead of a false completed eve
   const events = []
   const unsubscribe = publisher.subscribe((event) => events.push(event))
   try {
+    await service.registerInitialProjectRoots([environment.workspace])
     const created = await createConversation(
       service,
       environment.workspace,
@@ -724,8 +732,19 @@ test('startup loads only the recent runtime window while SQLite keeps full histo
       databasePath: environment.databasePath,
     })
     const conversationId = 'conv_retained_history01'
+    const projectId = 'proj_retained_history01'
+    const projectRoot = normalizeTrustedProjectRoot(environment.workspace)
+    store.createProject({
+      projectId,
+      name: 'workspace',
+      rootPath: projectRoot.rootPath,
+      rootPathKey: projectRoot.rootPathKey,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    })
     store.createConversation({
       conversationId,
+      projectId,
       provider: 'codex',
       providerThreadId: 'provider-thread-retained',
       cwd: environment.workspace,

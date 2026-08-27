@@ -76,12 +76,20 @@ async function run(): Promise<void> {
       client.connectEvents(),
       client.connectEvents(),
     ])
+    const primaryProject = await client.createProject({
+      actionId: actionId('project-primary'),
+      path: workspace.root,
+    })
+    const approvalProject = await client.createProject({
+      actionId: actionId('project-approval'),
+      path: approvalWorkspace.root,
+    })
     const firstA = collectEvents(observerA, (event) => isTerminalEvent(event))
     const firstB = collectEvents(observerB, (event) => isTerminalEvent(event))
     const conversation = await client.createConversation({
       actionId: actionId('create-primary'),
       provider: 'codex',
-      cwd: workspace.root,
+      projectId: primaryProject.data.project.projectId,
     })
     const conversationId = conversation.data.conversation.conversationId
     const firstTurn = await client.startTurn(conversationId, {
@@ -168,7 +176,7 @@ async function run(): Promise<void> {
     const approvalConversation = await client.createConversation({
       actionId: actionId('create-approval'),
       provider: 'codex',
-      cwd: approvalWorkspace.root,
+      projectId: approvalProject.data.project.projectId,
     })
     const approvalConversationId =
       approvalConversation.data.conversation.conversationId
@@ -214,7 +222,7 @@ async function run(): Promise<void> {
     const interruptConversation = await client.createConversation({
       actionId: actionId('create-interrupt'),
       provider: 'codex',
-      cwd: workspace.root,
+      projectId: primaryProject.data.project.projectId,
     })
     const interruptConversationId =
       interruptConversation.data.conversation.conversationId

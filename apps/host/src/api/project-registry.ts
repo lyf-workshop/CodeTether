@@ -1,0 +1,324 @@
+import { randomUUID } from 'node:crypto'
+import { basename, parse } from 'node:path'
+
+import {
+  ProjectIdSchema,
+  ProjectRecordSchema,
+  type ProjectId,
+  type ProjectRecord,
+  type Timestamp,
+} from '@codetether/protocol'
+
+import { ConversationStore, type DurableProject } from '../persistence/index.js'
+import { normalizeTrustedProjectRoot } from '../project-path.js'
+import { WorkspacePolicy, WorkspacePolicyError } from './workspace-policy.js'
+
+export type ProjectRegistryErrorCode =
+  'invalid_path' | 'not_found' | 'has_conversations' | 'unavailable'
+
+export class ProjectRegistryError extends Error {
+  constructor(
+    readonly code: ProjectRegistryErrorCode,
+    message: string,
+  ) {
+    super(message)
+    this.name = 'ProjectRegistryError'
+  }
+}
+
+interface ProjectRegistryOptions {
+  readonly workspacePolicy: WorkspacePolicy
+  readonly persistence?: ConversationStore
+  readonly now: () => Timestamp
+  readonly writeDurable: (operation: () => void) => void
+  readonly hasRuntimeConversations: (projectId: ProjectId) => boolean
+}
+
+export interface ProjectConversationReservation {
+  readonly project: DurableProject
+  readonly cwd: string
+  readonly release: () => void
+}
+
+export class ProjectRegistry {
+  readonly #workspacePolicy: WorkspacePolicy
+  readonly #persistence?: ConversationStore
+  readonly #now: () => Timestamp
+  readonly #writeDurable: (operation: () => void) => void
+  readonly #hasRuntimeConversations: (projectId: ProjectId) => boolean
+  readonly #projects = new Map<ProjectId, DurableProject>()
+  readonly #projectIdsByRootKey = new Map<string, ProjectId>()
+  readonly #conversationReservations = new Map<ProjectId, number>()
+
+  constructor(options: ProjectRegistryOptions) {
+    this.#workspacePolicy = options.workspacePolicy
+    this.#persistence = options.persistence
+    this.#now = options.now
+    this.#writeDurable = options.writeDurable
+    this.#hasRuntimeConversations = options.hasRuntimeConversations
+    for (const project of options.persistence?.listProjects() ?? []) {
+      this.#retain(project)
+    }
+  }
+
+  async registerInitialRoots(roots: readonly string[]): Promise<void> {
+    for (const root of roots) await this.create(root)
+  }
+
+  async create(
+    path: string,
+    name?: string,
+  ): Promise<{ readonly project: ProjectRecord; readonly created: boolean }> {
+    let rootPath: string
+    try {
+      rootPath = await this.#workspacePolicy.authorizeProjectRoot(path)
+    } catch (error) {
+      throw projectPathError(error)
+    }
+    const { rootPathKey } = normalizeTrustedProjectRoot(rootPath)
+    const existingId = this.#projectIdsByRootKey.get(rootPathKey)
+    if (existingId !== undefined) {
+      return {
+        project: await this.get(existingId),
+        created: false,
+      }
+    }
+
+    const timestamp = this.#now()
+    const project: DurableProject = {
+      projectId: newProjectId(),
+      name: normalizedProjectName(name, rootPath),
+      rootPath,
+      rootPathKey,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    }
+    this.#writeDurable(() => this.#persistence?.createProject(project))
+    this.#retain(project)
+    return {
+      project: await this.#record(project),
+      created: true,
+    }
+  }
+
+  async list(): Promise<readonly ProjectRecord[]> {
+    return await Promise.all(
+      [...this.#projects.values()]
+        .sort(
+          (left, right) =>
+            right.updatedAt.localeCompare(left.updatedAt) ||
+            left.projectId.localeCompare(right.projectId),
+        )
+        .map(async (project) => await this.#record(project)),
+    )
+  }
+
+  async get(projectId: ProjectId): Promise<ProjectRecord> {
+    return await this.#record(this.require(projectId))
+  }
+
+  require(projectId: ProjectId): DurableProject {
+    const id = ProjectIdSchema.parse(projectId)
+    const project = this.#projects.get(id)
+    if (project === undefined) {
+      throw new ProjectRegistryError('not_found', 'Project was not found')
+    }
+    return project
+  }
+
+  async authorizeConversation(
+    projectId: ProjectId,
+    cwd?: string,
+  ): Promise<{ readonly project: DurableProject; readonly cwd: string }> {
+    const project = this.require(projectId)
+    try {
+      return {
+        project,
+        cwd: await this.#workspacePolicy.authorizeProjectWorkspace(
+          project.rootPath,
+          cwd ?? project.rootPath,
+        ),
+      }
+    } catch (error) {
+      if (error instanceof WorkspacePolicyError) {
+        throw new ProjectRegistryError(
+          'unavailable',
+          'Project workspace is unavailable or no longer authorized',
+        )
+      }
+      throw error
+    }
+  }
+
+  async reserveConversationCreation(
+    projectId: ProjectId,
+    cwd?: string,
+  ): Promise<ProjectConversationReservation> {
+    const project = this.require(projectId)
+    const release = this.#reserveConversation(project)
+    try {
+      const workspace = await this.authorizeConversation(project.projectId, cwd)
+      return { ...workspace, release }
+    } catch (error) {
+      release()
+      throw error
+    }
+  }
+
+  /**
+   * Protocol v1 compatibility only. A legacy cwd may select an already
+   * registered Project, but it can never register a path or expand trust.
+   */
+  async resolveLegacyConversation(
+    cwd: string,
+  ): Promise<{ readonly project: DurableProject; readonly cwd: string }> {
+    const matches: Array<{
+      readonly project: DurableProject
+      readonly cwd: string
+    }> = []
+    for (const project of this.#projects.values()) {
+      try {
+        matches.push({
+          project,
+          cwd: await this.#workspacePolicy.authorizeProjectWorkspace(
+            project.rootPath,
+            cwd,
+          ),
+        })
+      } catch (error) {
+        if (error instanceof WorkspacePolicyError) continue
+        throw error
+      }
+    }
+    matches.sort(
+      (left, right) =>
+        right.project.rootPath.length - left.project.rootPath.length,
+    )
+    const match = matches[0]
+    if (match === undefined) {
+      throw new ProjectRegistryError(
+        'invalid_path',
+        'Legacy cwd does not belong to a registered available Project',
+      )
+    }
+    return match
+  }
+
+  async reserveLegacyConversationCreation(
+    cwd: string,
+  ): Promise<ProjectConversationReservation> {
+    const match = await this.resolveLegacyConversation(cwd)
+    const release = this.#reserveConversation(match.project)
+    try {
+      const workspace = await this.authorizeConversation(
+        match.project.projectId,
+        cwd,
+      )
+      return { ...workspace, release }
+    } catch (error) {
+      release()
+      throw error
+    }
+  }
+
+  delete(projectId: ProjectId): ProjectId {
+    const project = this.require(projectId)
+    const hasConversations =
+      (this.#conversationReservations.get(project.projectId) ?? 0) > 0 ||
+      this.#hasRuntimeConversations(project.projectId) ||
+      (this.#persistence?.countConversationsForProject(project.projectId) ??
+        0) > 0
+    if (hasConversations) {
+      throw new ProjectRegistryError(
+        'has_conversations',
+        'Project has Conversations and cannot be removed',
+      )
+    }
+    this.#writeDurable(() => {
+      if (
+        this.#persistence !== undefined &&
+        !this.#persistence.deleteProject(project.projectId)
+      ) {
+        throw new Error(`Project ${project.projectId} does not exist`)
+      }
+    })
+    this.#projects.delete(project.projectId)
+    this.#projectIdsByRootKey.delete(project.rootPathKey)
+    return project.projectId
+  }
+
+  #reserveConversation(project: DurableProject): () => void {
+    if (this.#projects.get(project.projectId) !== project) {
+      throw new ProjectRegistryError(
+        'unavailable',
+        'Project is no longer registered',
+      )
+    }
+    this.#conversationReservations.set(
+      project.projectId,
+      (this.#conversationReservations.get(project.projectId) ?? 0) + 1,
+    )
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      const remaining =
+        (this.#conversationReservations.get(project.projectId) ?? 1) - 1
+      if (remaining === 0) {
+        this.#conversationReservations.delete(project.projectId)
+      } else {
+        this.#conversationReservations.set(project.projectId, remaining)
+      }
+    }
+  }
+
+  #retain(project: DurableProject): void {
+    if (
+      this.#projects.has(project.projectId) ||
+      this.#projectIdsByRootKey.has(project.rootPathKey)
+    ) {
+      throw new Error('Durable Project identity is duplicated')
+    }
+    this.#projects.set(project.projectId, project)
+    this.#projectIdsByRootKey.set(project.rootPathKey, project.projectId)
+  }
+
+  async #record(project: DurableProject): Promise<ProjectRecord> {
+    return ProjectRecordSchema.parse({
+      projectId: project.projectId,
+      name: project.name,
+      rootPath: project.rootPath,
+      availability: await this.#workspacePolicy.inspectProjectRoot(
+        project.rootPath,
+      ),
+      createdAt: project.createdAt,
+      updatedAt: project.updatedAt,
+    })
+  }
+}
+
+function newProjectId(): ProjectId {
+  return ProjectIdSchema.parse(`proj_${randomUUID().replaceAll('-', '')}`)
+}
+
+function normalizedProjectName(
+  name: string | undefined,
+  rootPath: string,
+): string {
+  const candidate = name?.trim() || defaultProjectName(rootPath)
+  return ProjectRecordSchema.shape.name.parse(candidate)
+}
+
+function defaultProjectName(rootPath: string): string {
+  const leaf = basename(rootPath)
+  if (leaf.length > 0) return leaf
+  const volume = parse(rootPath).root.replaceAll(/[\\/:]+/gu, '')
+  return volume.length > 0 ? volume : 'Workspace'
+}
+
+function projectPathError(error: unknown): Error {
+  if (error instanceof WorkspacePolicyError) {
+    return new ProjectRegistryError('invalid_path', error.message)
+  }
+  return error instanceof Error ? error : new Error(String(error))
+}

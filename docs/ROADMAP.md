@@ -495,6 +495,23 @@ Exit gate results:
 - A canonical fixture `turn.failed` traversed the real Host HTTP/SSE/SQLite/UI boundary. Opening its Conversation did not resolve it; acknowledgement removed only Attention and the durable Conversation/Turn remained failed. Tool failure was not substituted for Turn failure.
 - 1536 × 1024 captures cover Approval, completed review, and failed work; the empty state was checked at 1280 × 900. A stable post-restart browser session produced zero console errors and warnings.
 
+### Phase 3E.1 — Approval Interaction Layout Stabilization
+
+**Status:** implemented and validated. This is a focused P1 stabilization of the accepted Conversation Detail, not a protocol or product-scope expansion.
+
+Verified scope:
+
+- Conversation Workspace rows are Header, independently scrolling Timeline, bounded conditional Pending Action Dock, and mounted Composer. The Dock does not enter Timeline content or the Inspector column.
+- Timeline Approval entries are compact history only. Every Allow Once/Decline control lives in the Dock and remains bound to its exact public `approvalId` with independent mutation state.
+- Semantic command labels keep the PowerShell wrapper out of primary Approval/Tool presentation; bounded details and Terminal retain the full normalized command.
+- One and multiple pending Approvals, long command details, 1536-pixel persistent Inspector, 1280-pixel Inspector overlay, upper-history scroll preservation, bottom anchoring, and focus recovery are covered by tests and browser measurements.
+
+Exit gate results:
+
+- A real isolated Codex command Approval completed through Allow Once; a second real Approval was declined, did not execute, and still allowed the Turn to complete. Both left the Dock only after Host events and restored the Composer when the Turn became editable.
+- The deterministic Host Protocol/SSE browser harness displayed two simultaneous Approvals, preserved exact independent identities, kept a reader's `scrollTop` unchanged through both resolutions, and bounded the Dock to 216 px with no horizontal overflow.
+- 1536 × 1024 and 1280 × 900 captures cover persistent Inspector, two Approvals, long details, overlay Inspector, and resolved state. Browser sessions reported zero errors and warnings.
+
 ## Phase 4 — Machines
 
 **Goal:** model and operate more than one trusted machine coherently.

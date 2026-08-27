@@ -578,6 +578,14 @@ Only `attention.created` and `attention.resolved` trigger low-frequency Attentio
 
 The real Inbox enriches presentation through one Projects query and at most one cached Conversation-index query per involved Project; it does not issue one request per row or deserialize Turn snapshots. Host unavailable, empty, loading, mutation error, and the 100-item bound are distinct UI states. The removed Mock semantics—question/needs-reply, unread, mark-all-read, average response, risk counts, retry, and fake provider/Machine metadata—are not inferred or replaced.
 
+## Phase 3E.1 Approval Interaction Layout Stabilization
+
+The Conversation Workspace uses four stable grid rows: Header, `minmax(0, 1fr)` Timeline, conditional Pending Action Dock, and Composer. Only the Timeline owns the main vertical scroll. The Dock is constrained to the Workspace column, caps its scrolling body at 160 px (approximately 216 px including its header and border), and keeps action buttons from shrinking; long normalized command/context text truncates in the primary row and remains available in bounded details or Terminal.
+
+Timeline Approval entries are compact, non-interactive history. The Dock consumes the same ordered plural pending-Approval projection and exact `approvalId` controller, so multiple requests retain independent mutation/error state without creating another Approval source of truth. Semantic Tool presentation unwraps safe PowerShell command wrappers for the primary title/subtitle while retaining the normalized command only in details and Terminal.
+
+Timeline scroll decisions are isolated in a pure helper. Content follows the bottom only while the user is already bottom-anchored; Approval appearance/removal and Dock-driven viewport resize preserve an upper reading position. A `ResizeObserver` re-anchors a bottom reader without coupling the Dock to Timeline content. Approval appearance moves focus only when it disables the actively focused Composer; resolution advances to the next Approval, or returns through the Timeline to the Composer once the active Turn reaches an editable terminal state.
+
 ## UI
 
 The UI presents projects, conversations, agents, machines, approvals, changes, terminal output, and context. Figma defines visual and interaction behavior. Phase 2C.1 through Phase 2C.2 preserve the accepted visual structure and change only the Conversation Detail data/control boundary for valid live Conversation routes. Phase 3B.2 replaces only the Projects placeholder with the accepted real list and overview surface. Phase 3C.2 keeps the accepted Conversations/Detail visual structures while replacing their Product data boundary with real Project and durable Conversation reads. Phase 3D.2 adapts only the accepted Inbox surface to real Attention semantics.

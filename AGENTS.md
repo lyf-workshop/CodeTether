@@ -27,7 +27,7 @@ If sources conflict, stop and resolve the conflict instead of inventing a compro
 
 ## Current Scope
 
-**Phase 3D.2 — Real Inbox UI** is implemented and validated. The accepted frontend remains frozen as **CodeTether V2 Frontend Core v1**, the accepted local runtime remains frozen as **Phase 2A Codex Runtime v1**, Protocol v1 remains the accepted **Phase 2B Client ↔ Host Protocol** boundary, the complete read path remains frozen as **Live Conversation Read Model v1**, and the durable Project/Conversation/Attention data layer remains authoritative. The current product boundary now also includes:
+**Phase 3E.1 — Approval Interaction Layout Stabilization** is implemented and validated. The accepted frontend remains frozen as **CodeTether V2 Frontend Core v1**, the accepted local runtime remains frozen as **Phase 2A Codex Runtime v1**, Protocol v1 remains the accepted **Phase 2B Client ↔ Host Protocol** boundary, the complete read path remains frozen as **Live Conversation Read Model v1**, and the durable Project/Conversation/Attention data layer remains authoritative. The current product boundary now also includes:
 
 - A Project as a durable, authorized local workspace with a CodeTether-owned `proj_*` identity, name, canonical root path, timestamps, and availability computed from the filesystem rather than stored as durable truth.
 - SQLite migration 002 (`projects`), which adds the `projects` table and binds every durable Conversation to one Project through a non-null `project_id` foreign key. The Conversation `cwd` remains a contained working directory, not a second Project identity.
@@ -50,12 +50,14 @@ If sources conflict, stop and resolve the conflict instead of inventing a compro
 - Protocol v1 `GET /api/v1/attention` and explicit review/failure resolution, plus reliable `attention.created` / `attention.resolved` SSE events. Approval Attention can only be resolved through the bound Approval endpoint; pre-restart open Approval Attention expires and never recreates a provider request.
 - A real `/inbox` global open-Attention surface backed by `packages/client` and TanStack Query, with Host-owned summary/order, exact Approval controls, explicit completed-review/failed resolution, semantic-event multi-client sync, stream-reset refetch, and a real Sidebar `totalOpen` badge.
 - The real Inbox supports only Approval, completed-review, and failed-Turn work. It contains no Mock question/needs-reply, unread, mark-all-read, fake risk/response metrics, retry, provider, or Machine semantics.
+- A Conversation Workspace with stable Header, independently scrolling Timeline, bounded Pending Action Dock, and mounted Composer rows. Actionable Approvals live in the Dock; Timeline Approval entries remain non-interactive history.
+- Pending Approval presentation uses semantic command labels, exact `approvalId` controls, bounded details, independent mutation state, bottom-follow only for a reader already at the bottom, preserved upper-history position, and deliberate focus recovery.
 
-Phase 3D.2 stops at the real durable Inbox boundary. It does not authorize read/unread state, Agent-question inference, notifications, Activity, archive/rename/delete, full-history pagination, provider selection, Project discovery, native folder picking, Tauri, or remote operation.
+Phase 3E.1 stops at Approval presentation, layout, scrolling, and focus stability. It does not authorize read/unread state, Agent-question inference, notifications, Activity, archive/rename/delete, full-history pagination, provider selection, Project discovery, native folder picking, Tauri, or remote operation.
 
 ## Out of Scope
 
-After Phase 3D.2, do not implement without a separately approved phase:
+After Phase 3E.1, do not implement without a separately approved phase:
 
 - Visual redesigns or unrelated refactors to the frozen Design System, AppShell, Inbox, Conversations, Conversation Workspace, or accepted Projects UI.
 - Activity, Machines, Agents, Settings, an advanced New Conversation flow, or any other new product-page content or flow.

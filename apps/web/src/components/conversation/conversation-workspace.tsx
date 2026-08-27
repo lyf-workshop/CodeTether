@@ -8,6 +8,7 @@ import type {
   ConversationConnectionIndicatorViewModel,
   ConversationViewModel,
 } from './conversation-view-model'
+import { PendingActionDock } from './pending-action-dock'
 
 interface ConversationWorkspaceProps {
   viewModel: ConversationViewModel
@@ -29,7 +30,7 @@ export function ConversationWorkspace({
   return (
     <section
       aria-label="会话工作区"
-      className="grid h-full min-h-0 min-w-0 grid-rows-[var(--layout-conversation-header-height)_minmax(0,1fr)_var(--layout-conversation-composer-region-height)] bg-background"
+      className="grid h-full min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)_auto_auto] bg-background"
     >
       <ConversationHeader
         conversation={viewModel}
@@ -45,7 +46,11 @@ export function ConversationWorkspace({
         timeline={viewModel.timeline}
         changes={viewModel.changes}
         pendingApprovals={viewModel.pendingApprovals}
-        approvalController={controls?.approvals}
+      />
+      <PendingActionDock
+        approvals={viewModel.pendingApprovals}
+        controller={controls?.approvals}
+        className="mx-4 mb-3"
       />
       <div className="min-h-0 px-4 pb-5">
         <Composer

@@ -139,6 +139,24 @@ test('an interrupted Turn re-enables Composer editing', () => {
   assert.equal(isComposerEditableState('unavailable'), false)
 })
 
+test('Approval resolution leaves waiting state and terminal completion re-enables Composer', () => {
+  const waiting = deriveComposerControlState('connected', 'idle', 'running', 1)
+  const resumed = deriveComposerControlState('connected', 'idle', 'running', 0)
+  const completed = deriveComposerControlState(
+    'connected',
+    'idle',
+    'completed',
+    0,
+  )
+
+  assert.equal(waiting, 'waiting')
+  assert.equal(resumed, 'running')
+  assert.equal(completed, 'idle')
+  assert.equal(isComposerEditableState(waiting), false)
+  assert.equal(isComposerEditableState(resumed), false)
+  assert.equal(isComposerEditableState(completed), true)
+})
+
 test('timeline follows only while its viewport remains near the bottom', () => {
   assert.equal(isNearTimelineBottom(452, 500, 1000), true)
   assert.equal(isNearTimelineBottom(400, 500, 1000), false)

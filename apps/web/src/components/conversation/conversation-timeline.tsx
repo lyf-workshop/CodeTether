@@ -23,12 +23,12 @@ import type {
   ConversationRunExecutionViewModel,
   ConversationTimelineViewModel,
 } from './conversation-view-model'
-import type { ApprovalController } from './conversation-controls'
 import { isNearTimelineBottom } from './conversation-controls'
 import {
-  createToolCommandSubtitle,
-  createToolPresentation,
-} from './tool-presentation'
+  decideTimelineScroll,
+  type TimelineUpdateKind,
+} from './conversation-timeline-behavior'
+import { createToolPresentation } from './tool-presentation'
 import { AgentMessage, UserMessage } from './message'
 
 interface ConversationTimelineProps {
@@ -36,7 +36,6 @@ interface ConversationTimelineProps {
   timeline: ConversationTimelineViewModel
   changes: ConversationChangesViewModel
   pendingApprovals: readonly ConversationApprovalViewModel[]
-  approvalController?: ApprovalController
 }
 
 type ToolExecution = Extract<
@@ -95,14 +94,12 @@ interface AgentRunExecutionsProps {
     ConversationChangesViewModel['files'][number]
   >
   approvalsById: ReadonlyMap<string, ConversationApprovalViewModel>
-  approvalController?: ApprovalController
 }
 
 function AgentRunExecutions({
   executions,
   changesById,
   approvalsById,
-  approvalController,
 }: AgentRunExecutionsProps) {
   return groupExecutions(executions).map((group) => {
     if (group.kind === 'tools') {
@@ -173,8 +170,6 @@ function AgentRunExecutions({
     const pendingApproval = approvalsById.get(execution.approvalId)
     if (pendingApproval === undefined) return null
 
-    const controlState = approvalController?.states[pendingApproval.id]
-    const submitting = controlState?.state === 'submitting'
     const presentation =
       pendingApproval.kind === 'command'
         ? createToolPresentation({
@@ -183,19 +178,16 @@ function AgentRunExecutions({
           })
         : undefined
     const title = presentation?.title ?? pendingApproval.title
-    const subtitle =
-      presentation === undefined
-        ? pendingApproval.summary
-        : createToolCommandSubtitle(pendingApproval.summary)
 
     return (
       <div
         key={execution.id}
-        className="mt-3 border-t border-status-waiting/25 bg-status-waiting-muted/10"
+        data-approval-history="requested"
+        className="mt-3 min-w-0 border-t border-status-waiting/20 bg-status-waiting-muted/5"
       >
         <ToolCallCard
-          title={subtitle}
-          description={title}
+          title={title}
+          description="已请求批准 · 请在下方待处理操作中确认"
           status="waiting"
           metadata={
             <span className="inline-flex max-w-48 items-center gap-2">
@@ -205,52 +197,8 @@ function AgentRunExecutions({
               <span className="shrink-0">{pendingApproval.requestedAt}</span>
             </span>
           }
-          action={
-            approvalController ? (
-              <span className="flex items-center gap-1.5">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="h-7 px-2 text-xs text-text-secondary"
-                  disabled={submitting || !approvalController.enabled}
-                  onClick={() => {
-                    void approvalController.resolve(
-                      pendingApproval.id,
-                      'decline',
-                    )
-                  }}
-                >
-                  {submitting && controlState?.decision === 'decline'
-                    ? '正在拒绝…'
-                    : '拒绝'}
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  className="h-7 px-2 text-xs"
-                  disabled={submitting || !approvalController.enabled}
-                  onClick={() => {
-                    void approvalController.resolve(
-                      pendingApproval.id,
-                      'accept',
-                    )
-                  }}
-                >
-                  {submitting && controlState?.decision === 'accept'
-                    ? '正在允许…'
-                    : '允许一次'}
-                </Button>
-              </span>
-            ) : undefined
-          }
           aria-label={`${pendingApproval.title}，等待审批`}
         />
-        {controlState?.error ? (
-          <p role="alert" className="px-8 pb-2 text-xs text-danger">
-            {controlState.error}
-          </p>
-        ) : null}
       </div>
     )
   })
@@ -269,11 +217,18 @@ export function ConversationTimeline({
   timeline,
   changes,
   pendingApprovals,
-  approvalController,
 }: ConversationTimelineProps) {
   const viewportRef = useRef<HTMLDivElement>(null)
   const followsLatest = useRef(true)
-  const frame = useRef<number | undefined>(undefined)
+  const previousTimelineState = useRef<
+    | {
+        readonly activityVersion: string
+        readonly approvalVersion: string
+      }
+    | undefined
+  >(undefined)
+  const waiting = pendingApprovals.length > 0
+  const waitingRef = useRef(waiting)
   const [showJumpToLatest, setShowJumpToLatest] = useState(false)
   const changesById = useMemo(
     () => new Map(changes.files.map((change) => [change.id, change])),
@@ -300,6 +255,10 @@ export function ConversationTimeline({
         .join('|'),
     [timeline.blocks],
   )
+  const approvalVersion = useMemo(
+    () => pendingApprovals.map((approval) => approval.id).join('|'),
+    [pendingApprovals],
+  )
 
   const scrollToLatest = useCallback(() => {
     const viewport = viewportRef.current
@@ -309,20 +268,66 @@ export function ConversationTimeline({
     setShowJumpToLatest(false)
   }, [])
 
+  const applyTimelineUpdate = useCallback(
+    (update: TimelineUpdateKind, updateWaiting: boolean) => {
+      const viewport = viewportRef.current
+      if (viewport === null) return
+      const decision = decideTimelineScroll({
+        followsLatest: followsLatest.current,
+        update,
+        waiting: updateWaiting,
+        viewport: {
+          scrollTop: viewport.scrollTop,
+          clientHeight: viewport.clientHeight,
+          scrollHeight: viewport.scrollHeight,
+        },
+      })
+
+      followsLatest.current = decision.followsLatest
+      if (decision.scrollTop !== undefined) {
+        viewport.scrollTop = decision.scrollTop
+      }
+      setShowJumpToLatest(decision.showJumpToLatest)
+    },
+    [],
+  )
+
   useLayoutEffect(() => {
-    if (!followsLatest.current) {
-      setShowJumpToLatest(true)
+    waitingRef.current = waiting
+  }, [waiting])
+
+  useLayoutEffect(() => {
+    const previous = previousTimelineState.current
+    const update: TimelineUpdateKind =
+      previous === undefined
+        ? 'initial'
+        : previous.approvalVersion !== approvalVersion
+          ? 'approval'
+          : 'content'
+
+    previousTimelineState.current = { activityVersion, approvalVersion }
+    if (update === 'content' && previous?.activityVersion === activityVersion) {
       return
     }
-    if (frame.current !== undefined) cancelAnimationFrame(frame.current)
-    frame.current = requestAnimationFrame(() => {
-      frame.current = undefined
-      scrollToLatest()
+    applyTimelineUpdate(update, waiting)
+  }, [activityVersion, approvalVersion, applyTimelineUpdate, waiting])
+
+  useLayoutEffect(() => {
+    const viewport = viewportRef.current
+    if (viewport === null || typeof ResizeObserver === 'undefined') return
+    let width = viewport.clientWidth
+    let height = viewport.clientHeight
+    const observer = new ResizeObserver(() => {
+      const nextWidth = viewport.clientWidth
+      const nextHeight = viewport.clientHeight
+      if (nextWidth === width && nextHeight === height) return
+      width = nextWidth
+      height = nextHeight
+      applyTimelineUpdate('viewport-resize', waitingRef.current)
     })
-    return () => {
-      if (frame.current !== undefined) cancelAnimationFrame(frame.current)
-    }
-  }, [activityVersion, pendingApprovals.length, scrollToLatest])
+    observer.observe(viewport)
+    return () => observer.disconnect()
+  }, [applyTimelineUpdate])
 
   const handleScroll = useCallback((event: UIEvent<HTMLDivElement>) => {
     const viewport = event.currentTarget
@@ -332,7 +337,7 @@ export function ConversationTimeline({
       viewport.scrollHeight,
     )
     followsLatest.current = nearBottom
-    if (nearBottom) setShowJumpToLatest(false)
+    setShowJumpToLatest(!nearBottom)
   }, [])
 
   return (
@@ -379,7 +384,6 @@ export function ConversationTimeline({
                           executions={block.executions}
                           changesById={changesById}
                           approvalsById={approvalsById}
-                          approvalController={approvalController}
                         />
                       ) : null}
                       {block.outcomeText ? (

@@ -8,6 +8,8 @@ Phase 1 is accepted and frozen as **CodeTether V2 Frontend Core v1**, the accept
 
 **Phase 3D.2 — Real Inbox UI** is implemented and validated. Projects, Conversations, and Attention remain durable Host-owned product records. The real `/inbox` now consumes the typed Attention API and reliable semantic events for Approval, completed-review, and failed-Turn work, including the real Sidebar count and exact Approval controls. There is still no question inference, read/unread state, notifications, archive/rename/delete, full-history pagination, native folder picker, Tauri shell, authentication, remote access, or non-Codex provider.
 
+**Phase 3E.1 — Approval Interaction Layout Stabilization** is implemented and validated. Conversation Detail now keeps actionable Approval controls in a bounded Pending Action Dock between the independently scrolling Timeline and the mounted Composer; Timeline entries are history only, long commands stay bounded, and scroll/focus remain stable through one or multiple Approval transitions.
+
 ## Current Alpha capabilities
 
 - Run one long-lived local Codex App Server behind a loopback-only Host.

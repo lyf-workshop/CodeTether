@@ -10,6 +10,7 @@ import {
 import type { ApprovalDecision, AttentionItem } from '@codetether/protocol'
 
 import type { InboxItemMetadata } from './use-inbox-metadata'
+import { createInboxItemPresentation } from './inbox-model'
 
 export type InboxMutationAction = ApprovalDecision | 'acknowledge' | 'review'
 
@@ -50,7 +51,10 @@ export function InboxItem({
   onAcknowledge,
   onReview,
 }: InboxItemProps) {
-  const presentation = itemPresentation(item, metadata)
+  const presentation = createInboxItemPresentation(
+    item,
+    metadata?.conversationTitle,
+  )
   const unavailable = metadata?.projectAvailability === 'unavailable'
 
   return (
@@ -242,38 +246,6 @@ function AttentionActions({
       </Button>
     </>
   )
-}
-
-function itemPresentation(
-  item: AttentionItem,
-  metadata?: InboxItemMetadata,
-): {
-  conversation: string
-  description: string
-  title: string
-} {
-  if (item.type === 'approval') {
-    return {
-      conversation: metadata?.conversationTitle ?? 'Codex 会话',
-      description:
-        item.payload.actionSubtitle ?? 'Codex 请求执行一项需要你确认的操作。',
-      title: item.payload.actionTitle,
-    }
-  }
-
-  if (item.type === 'completed_review') {
-    return {
-      conversation: item.payload.conversationTitle,
-      description: 'Codex 已完成本轮工作，等待你查看结果。',
-      title: item.payload.conversationTitle,
-    }
-  }
-
-  return {
-    conversation: item.payload.conversationTitle,
-    description: item.payload.error.message,
-    title: item.payload.conversationTitle,
-  }
 }
 
 function formatAttentionTime(timestamp: string): string {

@@ -39,6 +39,7 @@ import { conversationListQueryKeys } from '../../runtime/host/conversation-list-
 import { newConversationErrorMessage } from '../../runtime/host/new-conversation-actions'
 import { projectErrorMessage } from '../../runtime/host/project-actions'
 import { projectListQueryOptions } from '../../runtime/host/project-query'
+import { createProjectOptionPresentation } from './new-conversation-presentation'
 
 interface NewConversationDialogProps {
   currentProject?: ProjectRecord
@@ -193,17 +194,39 @@ export function NewConversationDialog({
                   disabled={projectsQuery.isPending || createMutation.isPending}
                 >
                   <SelectTrigger className="mt-2" aria-label="选择项目">
-                    <SelectValue placeholder="选择可用项目" />
+                    <SelectValue placeholder="选择可用项目">
+                      {selectedProject === undefined
+                        ? undefined
+                        : createProjectOptionPresentation(selectedProject)
+                            .textValue}
+                    </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
-                    {availableProjects.map((project) => (
-                      <SelectItem
-                        key={project.projectId}
-                        value={project.projectId}
-                      >
-                        {project.name}
-                      </SelectItem>
-                    ))}
+                    {availableProjects.map((project) => {
+                      const presentation =
+                        createProjectOptionPresentation(project)
+
+                      return (
+                        <SelectItem
+                          key={project.projectId}
+                          value={project.projectId}
+                          textValue={presentation.textValue}
+                          className="py-2"
+                        >
+                          <span className="grid min-w-0 gap-0.5">
+                            <span className="truncate text-text-primary">
+                              {presentation.name}
+                            </span>
+                            <span
+                              className="truncate text-xs text-text-muted"
+                              title={presentation.rootPath}
+                            >
+                              {presentation.rootPath}
+                            </span>
+                          </span>
+                        </SelectItem>
+                      )
+                    })}
                   </SelectContent>
                 </Select>
               ) : null}

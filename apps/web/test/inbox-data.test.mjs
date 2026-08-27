@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  createInboxItemPresentation,
   createInboxModel,
   filterAttentionItems,
   formatInboxAttentionBadge,
@@ -63,6 +64,42 @@ test('local Inbox filters preserve the exact Host ordering', () => {
   ])
   assert.deepEqual(filterAttentionItems(hostOrder, 'failed'), [failed])
   assert.deepEqual(hostOrder, [approval, failed, completed, approval])
+})
+
+test('command Approval presentation removes a PowerShell wrapper from the card', () => {
+  const item = {
+    ...approval,
+    payload: {
+      ...approval.payload,
+      actionTitle: '执行命令',
+      actionSubtitle:
+        '"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -NoProfile -Command \'git status --short\'',
+    },
+  }
+
+  assert.deepEqual(createInboxItemPresentation(item, '检查工作区'), {
+    conversation: '检查工作区',
+    description: 'git status --short',
+    title: 'Git 状态',
+  })
+})
+
+test('non-command Approval presentation keeps normalized Host metadata', () => {
+  const item = {
+    ...approval,
+    payload: {
+      ...approval.payload,
+      kind: 'file-change',
+      actionTitle: '修改文件',
+      actionSubtitle: 'src/example.ts',
+    },
+  }
+
+  assert.deepEqual(createInboxItemPresentation(item), {
+    conversation: 'Codex 会话',
+    description: 'src/example.ts',
+    title: '修改文件',
+  })
 })
 
 test('Inbox model retains the Host summary instead of deriving it from rows', () => {

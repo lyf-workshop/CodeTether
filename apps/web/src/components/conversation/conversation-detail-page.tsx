@@ -12,6 +12,12 @@ import type {
 } from './conversation-view-model'
 import { ConversationWorkspace } from './conversation-workspace'
 import { InspectorPanel, type InspectorTab } from './inspector-panel'
+import {
+  createConversationInspectorState,
+  openConversationInspectorTab,
+  selectConversationInspectorTab,
+  setConversationInspectorOpen,
+} from './conversation-inspector-state'
 
 export interface ConversationDetailPageProps {
   viewModel: ConversationViewModel
@@ -36,11 +42,11 @@ export function ConversationDetailPage({
   onNewConversation,
   projectId,
 }: ConversationDetailPageProps) {
-  const [inspectorOpen, setInspectorOpen] = useState(
-    () =>
-      initialInspectorTab !== 'overview' &&
-      typeof window !== 'undefined' &&
-      window.matchMedia('(max-width: 1439px)').matches,
+  const [inspector, setInspector] = useState(() =>
+    createConversationInspectorState(
+      initialInspectorTab,
+      initialInspectorTab !== 'overview' && usesInspectorDialogLayout(),
+    ),
   )
   const inspectorTriggerRef = useRef<HTMLButtonElement>(null)
 
@@ -49,11 +55,18 @@ export function ConversationDetailPage({
     changes: viewModel.changes,
     terminal: viewModel.terminal,
     context: viewModel.context,
-    initialTab: initialInspectorTab,
+    tab: inspector.tab,
+    onTabChange: (tab: InspectorTab) =>
+      setInspector((current) => selectConversationInspectorTab(current, tab)),
   } as const
 
   return (
-    <Dialog open={inspectorOpen} onOpenChange={setInspectorOpen}>
+    <Dialog
+      open={inspector.open}
+      onOpenChange={(open) =>
+        setInspector((current) => setConversationInspectorOpen(current, open))
+      }
+    >
       <div className="grid h-full min-h-0 min-w-0 grid-cols-[var(--layout-conversation-rail-compact-width)_minmax(0,1fr)] bg-background min-[1440px]:grid-cols-[var(--layout-conversation-rail-width)_minmax(0,1fr)_var(--layout-conversation-inspector-width)]">
         <ConversationRail
           groups={rail.groups}
@@ -71,7 +84,20 @@ export function ConversationDetailPage({
         <ConversationWorkspace
           viewModel={viewModel}
           connectionIndicator={connectionIndicator}
-          onOpenInspector={() => setInspectorOpen(true)}
+          onOpenInspector={() =>
+            setInspector((current) =>
+              setConversationInspectorOpen(current, true),
+            )
+          }
+          onOpenChanges={() =>
+            setInspector((current) =>
+              openConversationInspectorTab(
+                current,
+                'changes',
+                usesInspectorDialogLayout(),
+              ),
+            )
+          }
           inspectorTriggerRef={inspectorTriggerRef}
           controls={controls}
         />
@@ -92,10 +118,21 @@ export function ConversationDetailPage({
         <DialogTitle className="sr-only">会话检查器</DialogTitle>
         <InspectorPanel
           {...inspectorProps}
-          onClose={() => setInspectorOpen(false)}
+          onClose={() =>
+            setInspector((current) =>
+              setConversationInspectorOpen(current, false),
+            )
+          }
           className="border-l-0"
         />
       </DialogContent>
     </Dialog>
+  )
+}
+
+function usesInspectorDialogLayout(): boolean {
+  return (
+    typeof window !== 'undefined' &&
+    window.matchMedia('(max-width: 1439px)').matches
   )
 }

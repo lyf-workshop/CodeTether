@@ -4,12 +4,9 @@ import {
   Activity,
   Bot,
   ChevronDown,
-  Cpu,
   FolderOpen,
   Inbox,
-  Laptop,
   Monitor,
-  Server,
   Settings,
   type LucideIcon,
 } from 'lucide-react'
@@ -43,12 +40,6 @@ interface AgentPresence {
   agent: AgentId
 }
 
-interface MachinePresence {
-  name: string
-  status: ExecutionStatus
-  icon: LucideIcon
-}
-
 const primaryNavItems = [
   { label: '收件箱', to: '/inbox', icon: Inbox },
   { label: '活动', to: '/activity', icon: Activity },
@@ -68,13 +59,6 @@ const agentPresences = [
   { agent: 'claude' },
   { agent: 'opencode' },
 ] as const satisfies readonly AgentPresence[]
-
-const machinePresences = [
-  { name: '本地电脑', status: 'running', icon: Monitor },
-  { name: '开发服务器', status: 'running', icon: Server },
-  { name: 'MacBook Pro', status: 'running', icon: Laptop },
-  { name: '树莓派设备', status: 'offline', icon: Cpu },
-] as const satisfies readonly MachinePresence[]
 
 function isCurrentRoute(currentPath: string, destination: SidebarDestination) {
   return (
@@ -186,10 +170,6 @@ export function PrimarySidebar({
   'aria-label': ariaLabel = '主导航',
   ...props
 }: PrimarySidebarProps) {
-  const showMockMachines =
-    !currentPath.startsWith('/projects') &&
-    !currentPath.startsWith('/conversations/')
-
   return (
     <aside
       aria-label={ariaLabel}
@@ -321,36 +301,6 @@ export function PrimarySidebar({
               })}
             </ul>
           </section>
-
-          <Separator className="my-3" />
-
-          {showMockMachines ? (
-            <section aria-labelledby="sidebar-machines-heading">
-              <h2
-                id="sidebar-machines-heading"
-                className="px-2 text-xs font-semibold text-text-muted"
-              >
-                机器
-              </h2>
-              <ul className="mt-2 space-y-0.5">
-                {machinePresences.map(({ icon: Icon, name, status }) => (
-                  <li
-                    key={name}
-                    className="flex h-[var(--layout-sidebar-machine-item-height)] min-w-0 items-center gap-[var(--layout-sidebar-nav-gap)] pr-3 pl-2"
-                  >
-                    <Icon
-                      aria-hidden="true"
-                      className="size-4 shrink-0 text-text-secondary"
-                    />
-                    <span className="min-w-0 flex-1 truncate text-sm font-medium text-text-primary">
-                      {name}
-                    </span>
-                    <PresenceDot label={name} status={status} />
-                  </li>
-                ))}
-              </ul>
-            </section>
-          ) : null}
         </div>
 
         <div className="mt-auto pt-3">

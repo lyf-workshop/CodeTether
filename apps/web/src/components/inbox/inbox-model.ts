@@ -1,5 +1,10 @@
 import type { AttentionItem, AttentionListResponse } from '@codetether/protocol'
 
+import {
+  createToolCommandSubtitle,
+  createToolPresentation,
+} from '../conversation/tool-presentation.js'
+
 export type InboxFilter = 'all' | AttentionItem['type']
 
 export interface InboxModel {
@@ -11,6 +16,12 @@ export interface InboxModel {
 export interface InboxFocusAnchor {
   readonly attentionId: string
   readonly index: number
+}
+
+export interface InboxItemPresentation {
+  readonly conversation: string
+  readonly description: string
+  readonly title: string
 }
 
 /**
@@ -36,6 +47,48 @@ export function filterAttentionItems(
   return filter === 'all'
     ? items
     : items.filter((attention) => attention.type === filter)
+}
+
+/**
+ * Keeps raw provider command wrappers out of the compact Inbox card while
+ * reusing the same stable command labels as Conversation Detail.
+ */
+export function createInboxItemPresentation(
+  item: AttentionItem,
+  conversationTitle?: string,
+): InboxItemPresentation {
+  if (item.type === 'approval') {
+    if (item.payload.kind === 'command' && item.payload.actionSubtitle) {
+      const command = item.payload.actionSubtitle
+      const tool = createToolPresentation({ command, status: 'running' })
+      return {
+        conversation: conversationTitle ?? 'Codex 会话',
+        description: createToolCommandSubtitle(command),
+        title: tool.title,
+      }
+    }
+
+    return {
+      conversation: conversationTitle ?? 'Codex 会话',
+      description:
+        item.payload.actionSubtitle ?? 'Codex 请求执行一项需要你确认的操作。',
+      title: item.payload.actionTitle,
+    }
+  }
+
+  if (item.type === 'completed_review') {
+    return {
+      conversation: item.payload.conversationTitle,
+      description: 'Codex 已完成本轮工作，等待你查看结果。',
+      title: item.payload.conversationTitle,
+    }
+  }
+
+  return {
+    conversation: item.payload.conversationTitle,
+    description: item.payload.error.message,
+    title: item.payload.conversationTitle,
+  }
 }
 
 /** Hides zero and keeps the compact Sidebar badge bounded at 99+. */

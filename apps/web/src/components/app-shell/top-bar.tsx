@@ -46,11 +46,6 @@ interface TopBarProps extends Omit<
   newConversationButtonRef?: Ref<HTMLButtonElement>
 }
 
-const defaultProfile: TopBarProfile = {
-  initials: '演',
-  name: '演示用户',
-}
-
 /** Shared desktop header. Product actions are injected by the AppShell. */
 function TopBar({
   breadcrumbs,
@@ -62,7 +57,7 @@ function TopBar({
   onNotifications,
   onProfile,
   onSearch,
-  profile = defaultProfile,
+  profile,
   newConversationButtonRef,
   ...props
 }: TopBarProps) {
@@ -133,75 +128,87 @@ function TopBar({
             <span className="hidden md:inline">新建会话</span>
           </Button>
 
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={onSearch}
-            aria-keyshortcuts="Meta+K Control+K"
-            aria-label="搜索，快捷键 ⌘K 或 Ctrl+K"
-            className="h-9 w-9 justify-center border-border-strong bg-surface-inset px-0 text-text-secondary hover:bg-surface-muted hover:text-text-primary lg:w-44 lg:justify-start lg:px-3"
-          >
-            <Search aria-hidden="true" />
-            <span className="hidden lg:inline">搜索</span>
-            <kbd
-              aria-hidden="true"
-              className="ml-auto hidden whitespace-nowrap font-sans text-2xs text-text-muted xl:inline"
+          {onSearch === undefined ? null : (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onSearch}
+              aria-keyshortcuts="Meta+K Control+K"
+              aria-label="搜索，快捷键 ⌘K 或 Ctrl+K"
+              className="h-9 w-9 justify-center border-border-strong bg-surface-inset px-0 text-text-secondary hover:bg-surface-muted hover:text-text-primary lg:w-44 lg:justify-start lg:px-3"
             >
-              ⌘K / Ctrl+K
-            </kbd>
-          </Button>
+              <Search aria-hidden="true" />
+              <span className="hidden lg:inline">搜索</span>
+              <kbd
+                aria-hidden="true"
+                className="ml-auto hidden whitespace-nowrap font-sans text-2xs text-text-muted xl:inline"
+              >
+                ⌘K / Ctrl+K
+              </kbd>
+            </Button>
+          )}
 
-          <div className="flex items-center gap-1">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <IconButton
-                  label={notificationsLabel}
-                  size="sm"
-                  variant="ghost"
-                  onClick={onNotifications}
-                  className="relative text-text-secondary hover:text-text-primary"
-                >
-                  <Bell aria-hidden="true" />
-                  {notificationCount > 0 ? (
-                    <span className="absolute top-1 right-1 size-1.5 rounded-full bg-primary" />
-                  ) : null}
-                </IconButton>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                {notificationsLabel}
-              </TooltipContent>
-            </Tooltip>
+          {onNotifications === undefined &&
+          onHelp === undefined &&
+          (onProfile === undefined || profile === undefined) ? null : (
+            <div className="flex items-center gap-1">
+              {onNotifications === undefined ? null : (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <IconButton
+                      label={notificationsLabel}
+                      size="sm"
+                      variant="ghost"
+                      onClick={onNotifications}
+                      className="relative text-text-secondary hover:text-text-primary"
+                    >
+                      <Bell aria-hidden="true" />
+                      {notificationCount > 0 ? (
+                        <span className="absolute top-1 right-1 size-1.5 rounded-full bg-primary" />
+                      ) : null}
+                    </IconButton>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">
+                    {notificationsLabel}
+                  </TooltipContent>
+                </Tooltip>
+              )}
 
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <IconButton
-                  label="帮助"
-                  size="sm"
-                  variant="ghost"
-                  onClick={onHelp}
-                  className="text-text-secondary hover:text-text-primary"
-                >
-                  <CircleHelp aria-hidden="true" />
-                </IconButton>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">帮助</TooltipContent>
-            </Tooltip>
+              {onHelp === undefined ? null : (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <IconButton
+                      label="帮助"
+                      size="sm"
+                      variant="ghost"
+                      onClick={onHelp}
+                      className="text-text-secondary hover:text-text-primary"
+                    >
+                      <CircleHelp aria-hidden="true" />
+                    </IconButton>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">帮助</TooltipContent>
+                </Tooltip>
+              )}
 
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <IconButton
-                  label={`打开${profile.name}的个人资料`}
-                  size="sm"
-                  variant="ghost"
-                  onClick={onProfile}
-                  className="ml-1 size-[var(--layout-brand-mark-size)] rounded-full border-border-strong bg-text-secondary text-xs font-semibold text-background hover:bg-text-primary hover:text-background"
-                >
-                  <span aria-hidden="true">{profile.initials}</span>
-                </IconButton>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">{profile.name}</TooltipContent>
-            </Tooltip>
-          </div>
+              {onProfile === undefined || profile === undefined ? null : (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <IconButton
+                      label={`打开${profile.name}的个人资料`}
+                      size="sm"
+                      variant="ghost"
+                      onClick={onProfile}
+                      className="ml-1 size-[var(--layout-brand-mark-size)] rounded-full border-border-strong bg-text-secondary text-xs font-semibold text-background hover:bg-text-primary hover:text-background"
+                    >
+                      <span aria-hidden="true">{profile.initials}</span>
+                    </IconButton>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">{profile.name}</TooltipContent>
+                </Tooltip>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </header>

@@ -35,6 +35,7 @@ interface ConversationHeaderProps {
   connectionIndicator?: ConversationConnectionIndicatorViewModel
   inspectorTriggerRef?: Ref<HTMLButtonElement>
   onOpenInspector?: () => void
+  onOpenChanges?: () => void
   interruptController?: InterruptController
 }
 
@@ -44,6 +45,7 @@ export function ConversationHeader({
   connectionIndicator,
   inspectorTriggerRef,
   onOpenInspector,
+  onOpenChanges,
   interruptController,
 }: ConversationHeaderProps) {
   return (
@@ -100,6 +102,7 @@ export function ConversationHeader({
           size="sm"
           className="h-8 border-border bg-surface-muted/65 px-3 text-sm"
           aria-label="查看当前会话的变更"
+          onClick={onOpenChanges}
         >
           <span className="max-[1180px]:sr-only">查看变更</span>
         </Button>

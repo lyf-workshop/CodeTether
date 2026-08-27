@@ -28,6 +28,7 @@ import type {
   ConversationTerminalViewModel,
   ConversationViewModel,
 } from './conversation-view-model'
+import type { InspectorTab } from './conversation-inspector-state'
 
 const contextIcons = {
   file: AtSign,
@@ -299,10 +300,12 @@ export interface InspectorPanelProps extends Omit<
   terminal: ConversationTerminalViewModel
   context: readonly ConversationContextReferenceViewModel[]
   initialTab?: InspectorTab
+  tab?: InspectorTab
+  onTabChange?: (tab: InspectorTab) => void
   onClose?: () => void
 }
 
-export type InspectorTab = 'overview' | 'changes' | 'terminal' | 'context'
+export type { InspectorTab } from './conversation-inspector-state'
 
 /** Conversation Detail inspector based on the frozen Figma node 14:218. */
 export function InspectorPanel({
@@ -311,6 +314,8 @@ export function InspectorPanel({
   terminal,
   context,
   initialTab = 'overview',
+  tab,
+  onTabChange,
   onClose,
   className,
   ...props
@@ -346,8 +351,8 @@ export function InspectorPanel({
       </header>
 
       <Tabs
-        key={initialTab}
-        defaultValue={initialTab}
+        {...(tab === undefined ? { defaultValue: initialTab } : { value: tab })}
+        onValueChange={(value) => onTabChange?.(value as InspectorTab)}
         className="min-h-0 flex-1 gap-0"
       >
         <div className="shrink-0 px-4 pb-2">

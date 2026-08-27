@@ -14,6 +14,7 @@ interface ConversationWorkspaceProps {
   connectionIndicator?: ConversationConnectionIndicatorViewModel
   inspectorTriggerRef?: Ref<HTMLButtonElement>
   onOpenInspector?: () => void
+  onOpenChanges?: () => void
   controls?: ConversationControls
 }
 
@@ -22,6 +23,7 @@ export function ConversationWorkspace({
   connectionIndicator,
   inspectorTriggerRef,
   onOpenInspector,
+  onOpenChanges,
   controls,
 }: ConversationWorkspaceProps) {
   return (
@@ -35,6 +37,7 @@ export function ConversationWorkspace({
         connectionIndicator={connectionIndicator}
         inspectorTriggerRef={inspectorTriggerRef}
         onOpenInspector={onOpenInspector}
+        onOpenChanges={onOpenChanges}
         interruptController={controls?.interrupt}
       />
       <ConversationTimeline

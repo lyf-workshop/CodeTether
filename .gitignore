@@ -8,6 +8,12 @@ output/
 .tmp/
 .playwright-cli/
 *.tsbuildinfo
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3-wal
+*.sqlite3-shm
 
 .env
 .env.*

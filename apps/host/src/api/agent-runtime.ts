@@ -16,6 +16,24 @@ export interface ProviderTurnResult {
   readonly providerTurnId: string
 }
 
+/**
+ * The durable CodeTether conversation still exists, but the provider can no
+ * longer resume its backing conversation. This is an internal Host error; the
+ * HTTP boundary decides how it is represented on the wire.
+ */
+export class ProviderConversationUnavailableError extends Error {
+  override readonly name = 'ProviderConversationUnavailableError'
+  readonly code = 'provider_conversation_unavailable' as const
+
+  constructor(
+    readonly provider: AgentProvider,
+    readonly providerThreadId: string,
+    options?: ErrorOptions,
+  ) {
+    super(`The ${provider} conversation is no longer available`, options)
+  }
+}
+
 export interface ProviderApprovalRequest {
   readonly providerRequestId: ProviderRequestId
   readonly providerApprovalId: string
@@ -48,6 +66,10 @@ export interface AgentHostRuntime {
     readonly cwd: string
     readonly model?: string
     readonly reasoning?: string
+  }): Promise<ProviderConversationResult>
+  resumeConversation(options: {
+    readonly providerThreadId: string
+    readonly cwd: string
   }): Promise<ProviderConversationResult>
   startTurn(options: {
     readonly providerThreadId: string

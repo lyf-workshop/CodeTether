@@ -1,4 +1,5 @@
 import {
+  ConversationRuntimeSnapshotSchema,
   conversationRuntimeWireLimits,
   type ConversationId,
   type HostEventEnvelope,
@@ -92,6 +93,52 @@ export class ConversationRuntimeHistory {
     )
   }
 
+  get maxTurns(): number {
+    return this.#limits.maxTurns
+  }
+
+  get maxEntries(): number {
+    return this.#limits.maxEntries
+  }
+
+  restore(snapshotValue: ConversationRuntimeSnapshot): RuntimeHistoryEviction {
+    const snapshot = ConversationRuntimeSnapshotSchema.parse(snapshotValue)
+    const state: ConversationHistoryState = {
+      conversationId: snapshot.conversationId,
+      turns: new Map(snapshot.turns.map((turn) => [turn.turnId, turn])),
+      messages: new Map(
+        snapshot.messages.map((message) => [
+          itemKey(message.turnId, message.itemId),
+          message,
+        ]),
+      ),
+      tools: new Map(
+        snapshot.tools.map((tool) => [itemKey(tool.turnId, tool.itemId), tool]),
+      ),
+      changes: new Map(
+        snapshot.changes.map((change) => [
+          changeKey(change.turnId, change.itemId, change.path),
+          change,
+        ]),
+      ),
+      terminal: snapshot.terminal,
+      history: snapshot.history,
+      snapshotRevision: 0,
+    }
+    const evictedTurnIds: TurnId[] = []
+    const potentiallyEvictedItemIds = new Set<ItemId>()
+    this.#enforceBounds(state, evictedTurnIds, potentiallyEvictedItemIds)
+    this.#conversations.set(snapshot.conversationId, state)
+    return {
+      conversationId: snapshot.conversationId,
+      turnIds: evictedTurnIds,
+      itemIds: [...potentiallyEvictedItemIds].filter(
+        (itemId) => !this.#retainsItem(state, itemId),
+      ),
+      snapshotRequired: false,
+    }
+  }
+
   apply(
     event: Exclude<HostEventEnvelope, { readonly type: 'stream.reset' }>,
   ): RuntimeHistoryEviction {
@@ -181,6 +228,13 @@ export class ConversationRuntimeHistory {
     return [...this.#conversations.values()].map((state) =>
       this.#snapshot(state),
     )
+  }
+
+  snapshotFor(
+    conversationId: ConversationId,
+  ): ConversationRuntimeSnapshot | undefined {
+    const state = this.#conversations.get(conversationId)
+    return state === undefined ? undefined : this.#snapshot(state)
   }
 
   retainedItemIds(

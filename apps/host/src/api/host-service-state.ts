@@ -21,12 +21,13 @@ export interface ConversationState {
   readonly providerThreadId: string
   readonly turns: Map<TurnId, TurnState>
   readonly providerTurnIds: Map<string, TurnId>
+  providerSession: 'ready' | 'needs-resume' | 'unavailable'
   startingTurn: boolean
 }
 
 export interface TurnState {
   record: TurnRecord
-  readonly providerTurnId: string
+  providerTurnId?: string
   readonly providerItems: Map<string, ReturnType<typeof ItemIdSchema.parse>>
   interrupting: boolean
 }

@@ -5,11 +5,14 @@ import { CodeTetherResponseError } from '@codetether/client'
 
 import {
   ConversationMutationBusyError,
+  HostEpochChangedError,
   LiveConversationActions,
   mutationErrorMessage,
 } from '../.tmp/test-dist/runtime/host/live-conversation-actions.js'
 
 const timestamp = '2026-08-26T12:00:00.000Z'
+const epochA = '11111111-1111-4111-8111-111111111111'
+const epochB = '22222222-2222-4222-8222-222222222222'
 
 test('fresh logical submits receive unique valid action IDs', async () => {
   const client = new FakeMutationClient()
@@ -53,11 +56,13 @@ test('ambiguous network retry reuses actionId while a new submit does not', asyn
     },
   })
   const actions = new LiveConversationActions(client, idFactory())
+  actions.adoptHostEpoch(epochA)
 
   await assert.rejects(
     actions.startTurn('conv_control01', 'Same intent'),
     TypeError,
   )
+  actions.adoptHostEpoch(epochA)
   await actions.startTurn('conv_control01', 'Same intent')
   await actions.startTurn('conv_control01', 'Next intent')
 
@@ -69,6 +74,93 @@ test('ambiguous network retry reuses actionId while a new submit does not', asyn
     client.startCalls[1].request.actionId,
     client.startCalls[2].request.actionId,
   )
+})
+
+test('new Host epoch gives every uncertain mutation a fresh actionId', async () => {
+  const attempts = { start: 0, interrupt: 0, approval: 0 }
+  const client = new FakeMutationClient({
+    start: (call) => {
+      attempts.start += 1
+      return attempts.start === 1
+        ? Promise.reject(new TypeError('start response lost'))
+        : Promise.resolve(startResponse(call.request.actionId))
+    },
+    interrupt: (call) => {
+      attempts.interrupt += 1
+      return attempts.interrupt === 1
+        ? Promise.reject(new TypeError('interrupt response lost'))
+        : Promise.resolve(interruptResponse(call.request.actionId))
+    },
+    approval: (call) => {
+      attempts.approval += 1
+      return attempts.approval === 1
+        ? Promise.reject(new TypeError('approval response lost'))
+        : Promise.resolve(
+            approvalResponse(call.approvalId, call.request.actionId),
+          )
+    },
+  })
+  const actions = new LiveConversationActions(client, idFactory())
+  actions.adoptHostEpoch(epochA)
+
+  await assert.rejects(
+    actions.startTurn('conv_control01', 'Retry after restart'),
+    TypeError,
+  )
+  await assert.rejects(
+    actions.interruptTurn('conv_control01', 'turn_control01'),
+    TypeError,
+  )
+  await assert.rejects(
+    actions.resolveApproval('approval_control01', 'accept'),
+    TypeError,
+  )
+
+  actions.adoptHostEpoch(epochB)
+  await actions.startTurn('conv_control01', 'Retry after restart')
+  await actions.interruptTurn('conv_control01', 'turn_control01')
+  await actions.resolveApproval('approval_control01', 'accept')
+
+  assert.notEqual(
+    client.startCalls[0].request.actionId,
+    client.startCalls[1].request.actionId,
+  )
+  assert.notEqual(
+    client.interruptCalls[0].request.actionId,
+    client.interruptCalls[1].request.actionId,
+  )
+  assert.notEqual(
+    client.approvalCalls[0].request.actionId,
+    client.approvalCalls[1].request.actionId,
+  )
+})
+
+test('epoch replacement invalidates in-flight mutation state before fresh input', async () => {
+  const oldRequest = createDeferred()
+  let attempts = 0
+  const client = new FakeMutationClient({
+    start: (call) => {
+      attempts += 1
+      return attempts === 1
+        ? oldRequest.promise
+        : Promise.resolve(startResponse(call.request.actionId))
+    },
+  })
+  const actions = new LiveConversationActions(client, idFactory())
+  actions.adoptHostEpoch(epochA)
+
+  const stale = actions.startTurn('conv_control01', 'Same explicit intent')
+  actions.adoptHostEpoch(epochB)
+  await assert.rejects(stale, HostEpochChangedError)
+
+  await actions.startTurn('conv_control01', 'Same explicit intent')
+  assert.notEqual(
+    client.startCalls[0].request.actionId,
+    client.startCalls[1].request.actionId,
+  )
+
+  oldRequest.resolve(startResponse(client.startCalls[0].request.actionId))
+  await Promise.resolve()
 })
 
 test('interrupt and approvals preserve exact identities and isolate pending IDs', async () => {

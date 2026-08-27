@@ -27,32 +27,35 @@ If sources conflict, stop and resolve the conflict instead of inventing a compro
 
 ## Current Scope
 
-The current phase is **Phase 2D — Local Alpha Audit & Stabilization**. The accepted frontend is frozen as **CodeTether V2 Frontend Core v1**, the accepted local runtime is frozen as **Phase 2A Codex Runtime v1**, Protocol v1 is frozen at the accepted **Phase 2B Client ↔ Host Protocol** boundary, the complete read path is frozen as **Live Conversation Read Model v1**, and the working product baseline is tagged **CodeTether Local Codex Alpha v0.1**. Allowed work is limited to:
+**Phase 3A — Minimal Durable Persistence** is implemented and validated. The accepted frontend remains frozen as **CodeTether V2 Frontend Core v1**, the accepted local runtime remains frozen as **Phase 2A Codex Runtime v1**, Protocol v1 remains the accepted **Phase 2B Client ↔ Host Protocol** boundary, the complete read path remains frozen as **Live Conversation Read Model v1**, and the product baseline now includes durable local Conversation history and lazy Codex Thread resume. Phase 3B has not been authorized. Until another phase is explicitly approved, work is limited to clear bugs, documentation corrections, and maintenance of this frozen boundary:
 
-- Auditing repository size, dependencies, architecture direction, wire-contract ownership, runtime state ownership, and documentation truth.
-- Measuring bounded Host/browser memory, Snapshot/projection cost, streaming aggregation, test health, and development workflow.
-- Revalidating reconnect, Host/Codex failure, process cleanup, Approval identity safety, workspace confinement, safe errors, and the existing local browser control loop.
-- Recording real UX findings by severity without redesigning frozen product surfaces.
-- Fixing only a reproducible P0/P1 correctness, security, bounded-memory, or conflicting-source-of-truth defect required to keep the existing Alpha safe and correct.
-- Updating specifications with verified Alpha capabilities, limits, measurements, and audit conclusions.
+- Using Node's standard `node:sqlite` API to persist CodeTether Conversation identity, provider Thread identity, and normalized per-Turn presentation snapshots.
+- Keeping SQLite outside the repository, with `CODETETHER_DATA_DIR` as the explicit development/test override and OS-appropriate user-data directories as defaults.
+- Maintaining a minimal versioned migration system and only the `schema_migrations`, `conversations`, and `turns` tables required by this phase.
+- Persisting canonical User input before provider execution, throttling intermediate normalized snapshots, and synchronously flushing terminal Turn state and graceful shutdown state.
+- Reconstructing the existing bounded runtime Snapshot from SQLite after Host restart without changing the frozen frontend contract or visual structure.
+- Recovering incomplete Turns as interrupted by `host_restart`, expiring pre-restart Approvals, and lazily resuming the stored Codex provider Thread only when the user starts another Turn.
+- Failing safely on database open, migration, integrity, or write errors without deleting history or starting provider work that was not durably recorded.
+- Adding focused migration, restart, reconstruction, recovery, lazy-resume, failure, bound, and real isolated integration coverage.
 
-This phase stops after the Alpha audit and stabilization report. Do not begin Persistence, another product surface, another provider, desktop packaging, or remote access.
+The verified Phase 3A boundary stops at durable local Conversation history and provider-context resume. Do not begin Project management, live Inbox/Conversations data, desktop packaging, remote access, or Phase 3B without explicit approval.
 
 ## Out of Scope
 
-During Phase 2D, do not implement:
+After Phase 3A, do not implement without a separately approved phase:
 
-- Visual redesigns or unrelated refactors to the frozen Design System, AppShell, Inbox, Conversations, or Conversation Workspace. Phase 2D does not authorize a product UI change.
+- Visual redesigns or unrelated refactors to the frozen Design System, AppShell, Inbox, Conversations, or Conversation Workspace. Phase 3A does not authorize a product UI change.
 - Activity, Projects, Machines, Agents, Settings, New Conversation, or any other new product-page content or flow.
 - Live Host data in Inbox, Conversations, or another frozen page.
 - A generic WebSocket RPC transport or interactive PTY transport.
 - Tauri or desktop-shell functionality.
-- SQLite, another database, persistence, migrations, repositories, or durable event storage.
 - Machine management, project management, remote access, relay, authentication, or production Host services.
 - Stop/thread termination, Turn queueing, steering, retry-Turn, attachments, images, voice, Skill upload, or another React write path beyond text Turn start, one-shot Approval resolution, and interrupt.
-- Approval persistence, `Always Allow`, automatic approval, or a production permission-policy system.
+- Actionable Approval recovery across restart, `Always Allow`, automatic approval, or a production permission-policy system. Expired Approval history may be retained only to explain what happened.
 - Claude Code or OpenCode adapters, speculative provider implementations, or cross-agent conversation handoff.
 - Mobile screens, team, enterprise, public cloud relay, or other later-phase platform features.
+- Event sourcing, CQRS, an ORM, a repository hierarchy, a durable provider-event log, or durable exactly-once command processing.
+- Durable Approval resolution across restart. A pre-restart provider request is no longer actionable after its process dies.
 
 Do not install dependencies for an out-of-scope runtime merely because its directory exists.
 

@@ -6,7 +6,7 @@
   "description": "A control center for AI coding agents.",
   "packageManager": "pnpm@11.20.0",
   "engines": {
-    "node": ">=22.12.0",
+    "node": ">=22.13.0",
     "pnpm": ">=10"
   },
   "scripts": {

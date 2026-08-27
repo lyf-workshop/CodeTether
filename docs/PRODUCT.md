@@ -100,7 +100,7 @@ Projects organize local codebases and provide the stable context for conversatio
 
 ### Conversations
 
-Conversations organize agent sessions, history, model and reasoning choices, permission mode, current status, machine, and project. They should make live and historical work easy to follow. A single conversation never moves between agent providers in the current model.
+Conversations organize agent sessions, history, model and reasoning choices, permission mode, current status, machine, and project. They should make live and historical work easy to follow. A single conversation never moves between agent providers in the current model. CodeTether owns the durable public Conversation identity; a provider Thread ID is private Host metadata used to continue that same provider context after a restart.
 
 ### Agents
 
@@ -167,4 +167,10 @@ Phase 1 Frontend Experience is accepted and frozen as **CodeTether V2 Frontend C
 
 **Phase 2C.2 — Live Conversation Control** is accepted and frozen as **CodeTether Local Codex Alpha v0.1**. A user may submit one text Turn when no Turn is active, resolve every pending Approval with Allow Once or Decline, interrupt the exact active Turn, and continue the same Conversation afterward. Host events remain final truth: User messages are never client-only records, Approval cards remain until resolved events arrive, and interrupted state is not assumed from an HTTP acknowledgement. Unsupported quick actions, Stop, queue/steer, attachments, and model/reasoning/permission changes remain unavailable.
 
-**Phase 2D — Local Alpha Audit & Stabilization** audits that accepted capability without adding product scope. The Alpha remains a bounded, non-durable, Codex-only local boundary. Old completed Turns or presentation entries may be explicitly evicted, and a Host restart still clears all runtime history. `/conversations/demo`, Inbox, and Conversations continue to use Mock data. There is no persistence, Tauri functionality, remote access, authentication, Project management, or non-Codex provider integration. See [`ROADMAP.md`](ROADMAP.md) for phase gates and verified constraints.
+**Phase 2D — Local Alpha Audit & Stabilization** is complete with a `READY` verdict and no remaining P0/P1 blocker. It froze **CodeTether Local Codex Alpha v0.1** without redesigning its accepted product surfaces.
+
+**Phase 3A — Minimal Durable Persistence** is complete and validated. Local SQLite durability now preserves CodeTether Conversation identity, the private Codex provider Thread identity, canonical User input, and normalized per-Turn presentation state. Runtime memory remains the authority for high-frequency live work, SQLite is the restart boundary, and SSE replay remains a short-lived transport boundary. On startup, recent durable history is reconstructed for the existing Conversation Detail; incomplete Turns become interrupted because CodeTether does not pretend they survived the Host process, and pre-restart Approvals become non-actionable expired history. A later Turn lazily resumes the stored Codex Thread rather than creating a new Conversation.
+
+Phase 3A does not make all product data durable and does not add a general history browser. Older durable Turns may remain on disk beyond the bounded runtime window, but no pagination UI exists. If the provider Thread cannot be resumed, the local Timeline remains readable and the control path reports that the provider Conversation is unavailable. Action idempotency and SSE replay remain process-local, so a client must reconcile through the new Host epoch and Snapshot rather than replaying an uncertain old mutation. A real isolated multi-Turn restart verified Timeline reconstruction and retained Codex context through the exact saved provider Thread.
+
+`/conversations/demo`, Inbox, and Conversations continue to use Mock data. There is no Tauri functionality, remote access, authentication, Project management, live Conversation listing, or non-Codex provider integration. See [`ROADMAP.md`](ROADMAP.md) for phase gates and verified constraints.

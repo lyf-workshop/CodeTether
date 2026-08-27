@@ -46,6 +46,19 @@ export class HostEventPublisher {
     return this.#subscribers.size
   }
 
+  /**
+   * Places a new Host epoch after restored presentation history so new live
+   * Item order cannot collide with durable entries from an earlier epoch.
+   */
+  initializeSequence(sequence: number): void {
+    if (this.#subscribers.size !== 0) {
+      throw new HostEventSequenceError(
+        'Host event sequence cannot be initialized after subscription',
+      )
+    }
+    this.#replay.initializeSequence(sequence)
+  }
+
   publish(event: HostEvent): HostEventEnvelope {
     if (event.type === 'stream.reset') {
       throw new Error(

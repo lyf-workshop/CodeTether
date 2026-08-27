@@ -135,6 +135,44 @@ test('stream.reset fetches a fresh snapshot, replaces projection, and reconnects
   assert.equal(runtime.stats.resetRecoveries, 1)
 })
 
+test('a fresh Snapshot in a new epoch invalidates uncertain mutation identity', async (t) => {
+  const first = new ControlledStream()
+  const second = new ControlledStream()
+  const client = new FakeHostClient({
+    bootstraps: [bootstrap(epochA), bootstrap(epochB)],
+    snapshots: [
+      snapshot(epochA, 0, [conversation(conversationId)]),
+      snapshot(epochB, 0, [conversation(conversationId)]),
+    ],
+    streams: [first, second],
+    starts: [
+      new TypeError('response lost before Host restart'),
+      (call) => acceptedTurn(call.request.actionId),
+    ],
+  })
+  const runtime = new HostRuntime({
+    queryClient: createQueryClient(),
+    client,
+    reconnectDelayMs: 1,
+  })
+  t.after(async () => await runtime.stop())
+
+  runtime.start()
+  await waitFor(() => runtime.connectionState === 'connected')
+  await assert.rejects(
+    runtime.startTurn(conversationId, 'Retry only after fresh Snapshot'),
+    TypeError,
+  )
+  const previousActionId = client.startCalls[0].request.actionId
+
+  first.push(streamReset(epochB, 0))
+  await waitFor(() => client.connectCalls.length === 2)
+  await waitFor(() => runtime.connectionState === 'connected')
+  await runtime.startTurn(conversationId, 'Retry only after fresh Snapshot')
+
+  assert.notEqual(client.startCalls[1].request.actionId, previousActionId)
+})
+
 test('stream.reset replacement restores retained multi-Turn snapshot history', async (t) => {
   const first = new ControlledStream()
   const second = new ControlledStream()
@@ -292,14 +330,17 @@ class FakeHostClient {
   bootstrapCalls = 0
   snapshotCalls = 0
   connectCalls = []
+  startCalls = []
   #bootstraps
   #snapshots
   #streams
+  #starts
 
-  constructor({ bootstraps = [], snapshots = [], streams = [] }) {
+  constructor({ bootstraps = [], snapshots = [], streams = [], starts = [] }) {
     this.#bootstraps = [...bootstraps]
     this.#snapshots = [...snapshots]
     this.#streams = [...streams]
+    this.#starts = [...starts]
   }
 
   async bootstrap() {
@@ -319,6 +360,15 @@ class FakeHostClient {
         : { lastEventId: options.lastEventId }),
     })
     return resolveScripted(this.#streams, 'event stream')
+  }
+
+  async startTurn(conversationId, request) {
+    const call = { conversationId, request }
+    this.startCalls.push(call)
+    const implementation = resolveScripted(this.#starts, 'start Turn')
+    return typeof implementation === 'function'
+      ? await implementation(call)
+      : implementation
   }
 }
 
@@ -431,6 +481,27 @@ function runningSnapshot(epoch, currentSeq) {
       },
     ],
     pendingApprovals: [],
+  }
+}
+
+function acceptedTurn(actionId) {
+  return {
+    protocolVersion: 1,
+    actionId,
+    status: 'accepted',
+    data: {
+      turn: {
+        turnId,
+        conversationId,
+        status: 'running',
+        input: {
+          type: 'text',
+          text: 'Retry only after fresh Snapshot',
+          timestamp,
+        },
+        startedAt: timestamp,
+      },
+    },
   }
 }
 

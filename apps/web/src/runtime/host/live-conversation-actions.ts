@@ -8,6 +8,7 @@ import {
   type ApprovalDecision,
   type ApprovalId,
   type ConversationId,
+  type EpochId,
   type InterruptTurnResponse,
   type ResolveApprovalResponse,
   type StartTurnResponse,
@@ -68,6 +69,14 @@ export class ConversationMutationBusyError extends Error {
   }
 }
 
+/** The Host restarted before a mutation received a definitive result. */
+export class HostEpochChangedError extends Error {
+  constructor() {
+    super('The CodeTether Host restarted before the operation completed')
+    this.name = 'HostEpochChangedError'
+  }
+}
+
 /**
  * Owns one logical action identity across duplicate UI calls and ambiguous
  * network retries. It never writes to the Conversation projection.
@@ -81,6 +90,9 @@ export class LiveConversationActions {
   readonly #interruptRetries = new Map<string, RetryIntent<true>>()
   readonly #approvals = new Map<string, ApprovalAttempt>()
   readonly #approvalRetries = new Map<string, RetryIntent<ApprovalDecision>>()
+  #hostEpoch?: EpochId
+  #epochGeneration = 0
+  #epochAbortController = new AbortController()
 
   constructor(
     client: LiveConversationMutationClient,
@@ -88,6 +100,26 @@ export class LiveConversationActions {
   ) {
     this.#client = client
     this.#createActionId = createActionId
+  }
+
+  /**
+   * Adopts the epoch from a successfully installed Host Snapshot. Mutations
+   * with an uncertain result are only retryable within that exact Host epoch.
+   */
+  adoptHostEpoch(epoch: EpochId): void {
+    if (this.#hostEpoch === epoch) return
+
+    const previousEpoch = this.#epochAbortController
+    this.#hostEpoch = epoch
+    this.#epochGeneration += 1
+    this.#epochAbortController = new AbortController()
+    this.#starts.clear()
+    this.#startRetries.clear()
+    this.#interrupts.clear()
+    this.#interruptRetries.clear()
+    this.#approvals.clear()
+    this.#approvalRetries.clear()
+    previousEpoch.abort(new HostEpochChangedError())
   }
 
   startTurn(conversationId: string, text: string): Promise<StartTurnResponse> {
@@ -101,22 +133,29 @@ export class LiveConversationActions {
     const retry = this.#startRetries.get(conversation)
     const actionId =
       retry?.identity === text ? retry.actionId : this.#createActionId()
-    const promise = this.#client
-      .startTurn(conversation, {
+    const epochGeneration = this.#epochGeneration
+    const promise = rejectOnEpochChange(
+      this.#client.startTurn(conversation, {
         actionId,
         input: { type: 'text', text },
-      })
+      }),
+      this.#epochAbortController.signal,
+    )
       .then((response) => {
-        this.#startRetries.delete(conversation)
+        if (this.#epochGeneration === epochGeneration) {
+          this.#startRetries.delete(conversation)
+        }
         return response
       })
       .catch((error: unknown) => {
-        this.#rememberAmbiguousRetry(
-          this.#startRetries,
-          conversation,
-          { identity: text, actionId },
-          error,
-        )
+        if (this.#epochGeneration === epochGeneration) {
+          this.#rememberAmbiguousRetry(
+            this.#startRetries,
+            conversation,
+            { identity: text, actionId },
+            error,
+          )
+        }
         throw error
       })
       .finally(() => {
@@ -140,19 +179,26 @@ export class LiveConversationActions {
 
     const retry = this.#interruptRetries.get(key)
     const actionId = retry?.actionId ?? this.#createActionId()
-    const promise = this.#client
-      .interruptTurn(conversation, turn, { actionId })
+    const epochGeneration = this.#epochGeneration
+    const promise = rejectOnEpochChange(
+      this.#client.interruptTurn(conversation, turn, { actionId }),
+      this.#epochAbortController.signal,
+    )
       .then((response) => {
-        this.#interruptRetries.delete(key)
+        if (this.#epochGeneration === epochGeneration) {
+          this.#interruptRetries.delete(key)
+        }
         return response
       })
       .catch((error: unknown) => {
-        this.#rememberAmbiguousRetry(
-          this.#interruptRetries,
-          key,
-          { identity: true, actionId },
-          error,
-        )
+        if (this.#epochGeneration === epochGeneration) {
+          this.#rememberAmbiguousRetry(
+            this.#interruptRetries,
+            key,
+            { identity: true, actionId },
+            error,
+          )
+        }
         throw error
       })
       .finally(() => {
@@ -180,19 +226,26 @@ export class LiveConversationActions {
     const retry = this.#approvalRetries.get(approval)
     const actionId =
       retry?.identity === decision ? retry.actionId : this.#createActionId()
-    const promise = this.#client
-      .resolveApproval(approval, { actionId, decision })
+    const epochGeneration = this.#epochGeneration
+    const promise = rejectOnEpochChange(
+      this.#client.resolveApproval(approval, { actionId, decision }),
+      this.#epochAbortController.signal,
+    )
       .then((response) => {
-        this.#approvalRetries.delete(approval)
+        if (this.#epochGeneration === epochGeneration) {
+          this.#approvalRetries.delete(approval)
+        }
         return response
       })
       .catch((error: unknown) => {
-        this.#rememberAmbiguousRetry(
-          this.#approvalRetries,
-          approval,
-          { identity: decision, actionId },
-          error,
-        )
+        if (this.#epochGeneration === epochGeneration) {
+          this.#rememberAmbiguousRetry(
+            this.#approvalRetries,
+            approval,
+            { identity: decision, actionId },
+            error,
+          )
+        }
         throw error
       })
       .finally(() => {
@@ -223,10 +276,47 @@ export function createBrowserActionId(): ActionId {
   return ActionIdSchema.parse(`act_${randomUUID.call(globalThis.crypto)}`)
 }
 
+function rejectOnEpochChange<T>(
+  request: Promise<T>,
+  signal: AbortSignal,
+): Promise<T> {
+  if (signal.aborted) {
+    return Promise.reject(epochChangeReason(signal))
+  }
+
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => {
+      cleanup()
+      reject(epochChangeReason(signal))
+    }
+    const cleanup = (): void => signal.removeEventListener('abort', onAbort)
+    signal.addEventListener('abort', onAbort, { once: true })
+    void request.then(
+      (value) => {
+        cleanup()
+        resolve(value)
+      },
+      (error: unknown) => {
+        cleanup()
+        reject(error)
+      },
+    )
+  })
+}
+
+function epochChangeReason(signal: AbortSignal): HostEpochChangedError {
+  return signal.reason instanceof HostEpochChangedError
+    ? signal.reason
+    : new HostEpochChangedError()
+}
+
 /** Safe, concise product copy; Provider payloads never cross this boundary. */
 export function mutationErrorMessage(error: unknown, fallback: string): string {
   if (error instanceof ConversationMutationBusyError) {
     return '已有操作正在提交，请稍候。'
+  }
+  if (error instanceof HostEpochChangedError) {
+    return 'CodeTether Host 已重启。请确认恢复后的会话状态，再重新操作。'
   }
   if (!(error instanceof CodeTetherResponseError)) {
     return '无法连接到 CodeTether Host，请检查连接后重试。'
@@ -247,6 +337,8 @@ export function mutationErrorMessage(error: unknown, fallback: string): string {
       return '操作等待超时，请重试。'
     case 'provider_error':
       return `Codex 未能${fallback}。`
+    case 'provider_conversation_unavailable':
+      return 'Codex 已无法恢复此会话；本地历史仍可查看。'
     case 'internal':
       return `Host 未能${fallback}。`
   }

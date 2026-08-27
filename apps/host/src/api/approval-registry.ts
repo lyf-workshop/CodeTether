@@ -64,6 +64,18 @@ export class ApprovalRegistry {
       .map((state) => state.record)
   }
 
+  recordsForTurn(
+    conversationId: ConversationId,
+    turnId: TurnId,
+  ): readonly ApprovalRecord[] {
+    return [...this.#approvals.values()]
+      .map((state) => state.record)
+      .filter(
+        (record) =>
+          record.conversationId === conversationId && record.turnId === turnId,
+      )
+  }
+
   request(request: ProviderApprovalRequest): void {
     const conversationId = this.#options.providerThreads.get(
       request.providerThreadId,
@@ -159,7 +171,13 @@ export class ApprovalRegistry {
     } catch (error) {
       this.#approvals.delete(approvalId)
       this.#providerApprovals.delete(providerKey)
-      conversation.record = previousConversation
+      if (
+        conversation.record.status === 'waiting' &&
+        conversation.record.activeTurnId === turnId &&
+        conversation.record.updatedAt === timestamp
+      ) {
+        conversation.record = previousConversation
+      }
       if (
         !hadProviderItem &&
         request.providerItemId !== undefined &&

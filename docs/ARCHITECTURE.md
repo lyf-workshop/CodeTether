@@ -6,7 +6,9 @@ Phase 1 Frontend Experience is accepted and frozen as **CodeTether V2 Frontend C
 
 Phase 2C.1 is accepted, and Phase 2C.1.1 is frozen as **Live Conversation Read Model v1**: one application-scoped Web runtime connects the frozen Conversation Detail to Protocol v1, while bounded Host-owned history reconstructs the same retained multi-Turn view after initial load, refresh, reconnect reset, or live event application. Phase 2C.2 is accepted and frozen as **CodeTether Local Codex Alpha v0.1**, connecting only the existing text Composer, one-shot Approval actions, and Interrupt control. Phase 2D audited and stabilized this boundary without adding product scope. Demo, Inbox, and Conversations remain Mock-only.
 
-No Tauri shell, database, persistence, remote access, authentication, or production machine-host service exists yet. The Phase 2B server is a development-only loopback API.
+**Phase 3A — Minimal Durable Persistence** is implemented and validated. A small `node:sqlite` boundary in the local Host preserves CodeTether Conversation/provider identity and normalized per-Turn snapshots across restart, while a later Turn lazily resumes the saved Codex Thread. A real isolated restart walkthrough confirmed Timeline reconstruction and retained provider context.
+
+No Tauri shell, remote access, authentication, Project management, or production machine-host service exists yet. The Host remains a development-only loopback API; SQLite is local Host data, not a remote or multi-user service.
 
 ## System Context
 
@@ -41,7 +43,7 @@ The future Machine Host will be the runtime authority. Clients must render norma
 ```text
 apps/web                   Frozen React UI plus live Conversation read/control boundary
 apps/desktop               Future Tauri 2 desktop shell placeholder
-apps/host                  Codex runtime harnesses and Phase 2B local Host API
+apps/host                  Codex runtime, loopback Host API, and minimal SQLite persistence
 
 packages/ui                Shared design system
 packages/protocol          Client-to-Host Protocol v1 and Zod wire contracts
@@ -330,7 +332,74 @@ The Alpha audit found no React/provider dependency leak and no competing authori
 
 An ordinary synthetic retained Conversation with 20 Turns, 40 Agent messages, 40 Tools, 20 changes, and 9,020 terminal bytes produced a 389,041-byte Snapshot. Warm schema validation measured 0.210 ms median / 0.460 ms p95, and projection reconstruction measured 0.547 ms median / 0.935 ms p95 on the audit machine. At a near-cap 3.90 MiB history, each additional delta cost approximately 14.429 ms median / 15.002 ms p95 because retention enforcement serializes the full runtime; this is measured P2 performance debt, not a correctness blocker for the local Alpha.
 
-The stabilized process-level lower bound is approximately 32 MiB of encoded retained Conversation history plus the 8 MiB replay buffer, 4 MiB provider-binding buffer, 1 MiB provider queue, bounded approval/action/identity maps, and temporary Snapshot/SSE serialization. Actual JavaScript heap and the Codex child process are higher. All state remains process-local and disappears on Host restart.
+At the Phase 2D audit boundary, the stabilized process-level lower bound was approximately 32 MiB of encoded retained Conversation history plus the 8 MiB replay buffer, 4 MiB provider-binding buffer, 1 MiB provider queue, bounded approval/action/identity maps, and temporary Snapshot/SSE serialization. Actual JavaScript heap and the Codex child process were higher. Phase 3A retains these runtime limits while adding the distinct durable boundary below.
+
+## Phase 3A Minimal Durable Persistence
+
+Phase 3A adds one deliberately narrow storage boundary under `apps/host/src/persistence`. It uses the standard synchronous `node:sqlite` API available without an experimental flag from the repository's Node.js 22.13 minimum. No ORM, event store, CQRS layer, repository hierarchy, or raw provider-event table is introduced.
+
+### Data Location and Database Configuration
+
+The database file is `codetether.sqlite3` under an OS-appropriate user-data directory, never the repository:
+
+```text
+Windows  %LOCALAPPDATA%\CodeTether
+macOS    ~/Library/Application Support/CodeTether
+Linux    $XDG_DATA_HOME/codetether, otherwise ~/.local/share/codetether
+```
+
+`CODETETHER_DATA_DIR` overrides the directory for development and tests and must be absolute. Tests use independent temporary directories. The Store enables foreign keys, WAL journaling, a 5,000 ms busy timeout, and `PRAGMA quick_check` on open. An open, migration, or integrity failure preserves the database and prevents the Host from starting; CodeTether never deletes or replaces a failed database automatically.
+
+### Minimal Schema and Migrations
+
+The migration runner records ordered versions in `schema_migrations`, rejects an unknown or renamed applied migration, and applies each new migration in an immediate transaction. Schema version 1 contains only:
+
+```text
+conversations
+  conversation_id       CodeTether public identity, primary key
+  provider              currently constrained to codex
+  provider_thread_id    private provider resume identity, nullable while creating
+  cwd, model, reasoning
+  status, created_at, updated_at
+
+turns
+  turn_id               CodeTether public identity, primary key
+  conversation_id       foreign key with cascade delete
+  provider_turn_id      private provider identity when available
+  input                  canonical text input JSON
+  status, started_at, completed_at
+  snapshot_version, snapshot_json
+```
+
+Indexes cover Conversation recency and per-Conversation Turn chronology. `snapshot_json` contains only versioned CodeTether normalized/presentation state for that Turn: messages, Tools, file changes, outcome, bounded terminal tail, and Approval history. It never contains the Codex JSON-RPC stream.
+
+### State Boundaries
+
+The three state layers remain intentionally different:
+
+- **Runtime memory:** current high-frequency working state and the bounded recent projection window (20 Turns, 512 presentation entries, 128 KiB terminal tail, approximately 4 MiB per retained Conversation).
+- **SQLite:** durable Conversation identity, provider Thread identity, canonical inputs, and per-Turn normalized snapshots across Host processes. Older completed Turns are not deleted merely because they leave the runtime window.
+- **SSE replay:** up to 2,048 aggregated client events / approximately 8 MiB for short reconnects within one Host epoch. It is not persistence.
+
+Startup restores at most the existing process admission limit of eight most-recent Conversations and the most recent 20 Turns per restored Conversation into runtime memory. The complete durable Turn rows remain on disk, but Phase 3A provides no pagination or live Conversations index to surface rows outside that window.
+
+### Write and Recovery Semantics
+
+Conversation creation first inserts a local `creating` record, then creates the provider Thread, then durably records the provider identity and ready state before publishing the Conversation. Provider creation failure rolls back the incomplete local record. A final local write failure fails the runtime closed rather than presenting an undurable ready Conversation.
+
+Turn start first creates a durable `starting` Turn with canonical User input. Provider execution is not started if that write fails. Once Codex returns its Turn identity, the Host binds and persists it before publishing `turn.started`. Streaming remains memory-first: dirty Turn snapshots flush on a 300 ms throttle rather than on every delta. `turn.started`, Approval requested/resolved, completed, failed, and interrupted boundaries flush synchronously; graceful shutdown flushes all remaining dirty Turns and checkpoints WAL.
+
+A database failure during an intermediate flush moves the Host to an explicit unavailable/fail-closed state. A terminal durability failure cannot be advertised as a durable successful completion. Provider errors remain behind safe Protocol errors.
+
+At startup, `starting`, `running`, or `waiting` Turns cannot still be live. They are durably reconciled to `interrupted` with `host_restart`; running messages/Tools become interrupted and the Conversation becomes idle. Any pending Approval becomes expired historical state with the same reason and is never inserted into the new process's actionable Approval registry. A `creating` Conversation without a provider Thread becomes failed rather than masquerading as ready.
+
+Restored Conversations retain their CodeTether `conversationId` and private provider Thread ID, but the Host does not resume every Codex Thread at startup. On the first new Turn it calls `thread/resume` with the exact saved provider Thread and authorized `cwd`, then starts the new provider Turn. If Codex cannot resume that Thread, durable local history remains available while controls fail safely with `provider_conversation_unavailable`; Phase 3A does not fork or replace it automatically.
+
+A Host restart always generates a new, non-persistent SSE epoch. Replay and action-idempotency caches remain process-local. The Web runtime must replace from the new Snapshot and reject ambiguous in-flight mutations from the previous epoch; it must not automatically replay them as though the old result were known. Restored presentation entries preserve their stable order when already unique; legacy/cross-epoch collisions are deterministically rebased in Turn chronology, and the new epoch's event sequence starts after the largest restored presentation order.
+
+Phase 3A completed a real isolated multi-Turn run with a full Host shutdown and no residual Codex child process. The same CodeTether `conversationId`, User/Agent messages, Tools, Diff, and terminal summary returned from SQLite after restart. The next Turn lazily resumed the exact stored provider Thread and correctly recalled the pre-restart marker `PERSIST-ORBIT-731`; a subsequent restart also verified repaired cross-epoch presentation ordering.
+
+On the validated Windows/Node 25 development run, the final SQLite file was 53,248 bytes for six harness-created Conversation records, four completed Turns, and 9,444 bytes of normalized Turn snapshots. A 200-write synthetic check using an approximately 8 KiB snapshot measured 0.398 ms median, 0.558 ms p95, and 1.512 ms maximum synchronous write latency. These are development observations rather than production performance guarantees; the 300 ms dirty window keeps normal streaming from writing each delta.
 
 ## UI
 
@@ -346,9 +415,9 @@ The future Tauri 2 shell will package the web UI and supply OS-level capabilitie
 
 ## Host
 
-`apps/host` owns the development harness lifecycle plus the Phase 2B in-memory Host service and loopback HTTP/SSE server. It allocates public identities, maps them to provider identities, validates actions and workspaces, owns live snapshot state, sequences client events, and performs bounded fanout/replay. It remains a development local service rather than a durable production machine host.
+`apps/host` owns the development harness lifecycle, loopback HTTP/SSE server, Codex runtime, live state, and the Phase 3A SQLite boundary. It allocates public identities, maps them to private provider identities, validates actions and workspaces, reconstructs recent live Snapshots from durable Turn records, sequences client events, and performs bounded fanout/replay. It remains a development local service rather than a production machine daemon.
 
-The future Host is expected to coordinate project discovery, conversation lifecycle, execution commands, persistence, recovery, live event delivery, and remote trust. Those responsibilities remain planned rather than implemented.
+Project discovery, durable action logging, full-history pagination, production lifecycle supervision, machine trust, and remote operation remain planned rather than implemented.
 
 ## Client-to-Host Protocol
 
@@ -362,7 +431,9 @@ Provider-specific capabilities may remain Codex-specific when a natural common c
 
 ## Persistence
 
-There is no CodeTether database, durable event store, repository abstraction, or migration in Phase 2A through Phase 2C.2. Public/provider identity maps, bounded Conversation runtime history, snapshots, replay events, action results, and the browser Conversation projection exist only in memory. Codex itself owns its resumable Thread record; CodeTether persistence and application-restart recovery remain deferred.
+Phase 3A uses `node:sqlite` for the minimal durable records described above. CodeTether Conversation and Turn identities, private provider identities, canonical text inputs, statuses, timestamps, and normalized per-Turn snapshots survive Host restart. Raw Codex JSON-RPC, SSE events, replay cursors, action results, and browser projection state are not stored.
+
+SQLite does not replace runtime history. The active Turn is assembled and streamed in memory, with throttled normalized snapshot writes and synchronous terminal flushes. It also does not replace the Codex provider's Thread store: CodeTether persists the exact provider Thread identity and asks Codex to resume it lazily. The migration runner and Store are intentionally concrete Host modules rather than a generic persistence abstraction.
 
 ## Event Streaming
 
@@ -376,13 +447,13 @@ It uses no polling or database scan. The adapter does not intentionally coalesce
 
 The final two-Turn validation observed 171 raw message/tool delta events and delivered 118 aggregated events, a 31.0% reduction, with exact raw-to-delivered integrity for both message text and tool output, canonical final-message integrity, and zero dropped deltas. The flush/coalescing parameters are experimental rather than a finalized client protocol.
 
-Phase 2B adds non-durable Host-global ordering, bounded replay, explicit reconnect reset, and isolated multi-client observation at the client boundary. These guarantees apply only within one in-memory Host epoch; durable replay remains deferred.
+Phase 2B adds non-durable Host-global ordering, bounded replay, explicit reconnect reset, and isolated multi-client observation at the client boundary. These guarantees apply only within one Host epoch. Phase 3A persists Conversation state but deliberately does not persist replay events or epochs; a restarted Host creates a new epoch and serves a fresh durable Snapshot.
 
 Phase 2C.1 adds one browser consumer for that stream. It rejects duplicate and out-of-order events before updating the TanStack Query projection. Phase 2C.1.1 makes the Snapshot replacement complete for all retained runtime history, so a reset or unrecoverable cursor condition reconstructs the same retained Timeline rather than merging across incompatible epochs. The guarantee ends at the explicit in-memory eviction boundary and at Host restart.
 
 ## Conversation Ownership
 
-A Conversation is bound to one Project, one Agent, and the Machine executing it, plus model, reasoning, permission, and history. An existing Conversation cannot switch providers. Phase 2A maps one Codex Thread to one continuing Codex conversation concept but does not persist a CodeTether Conversation record.
+A Conversation is bound to one Project, one Agent, and the Machine executing it, plus model, reasoning, permission, and history. An existing Conversation cannot switch providers. Phase 3A makes the CodeTether `conversationId` durable and stores the corresponding private Codex provider Thread identity without exposing it as browser routing identity.
 
 ## Security Boundary
 
@@ -395,22 +466,25 @@ These controls are development safeguards, not a production security model. Auth
 ## Current Architectural Constraints
 
 - Only valid live Conversation Detail routes are connected to the runtime; Demo, Inbox, and Conversations remain Mock data.
-- The Host API is a development-only loopback service, not a durable daemon or remote service.
+- The Host API is a development-only loopback service with local SQLite records, not a production daemon or remote service.
 - The real integration is Codex-only and was verified against local `codex-cli 0.149.1`.
 - React can start text Turns, resolve one-shot pending Approvals, and interrupt the exact active Turn on a valid live Conversation route. Stop/thread termination, queueing, steering, attachments, configuration changes, and other write paths are not connected.
-- No Tauri shell, database, persistence, authentication, remote access, or production permission policy exists.
+- No Tauri shell, authentication, remote access, Project system, full-history browser, or production permission policy exists.
 - Command Allow Once and Decline were exercised through real App Server requests; file-change and permissions approvals were not observed.
 - Multi-Turn, multi-Thread, cross-process resume, interruption, and safe Tool failure were manually validated.
 - A real terminal Turn failure was not observed.
-- Protocol v1 replay, action idempotency, public identities, and snapshot state are process-local and reset on Host restart.
+- Protocol v1 replay, action idempotency, epoch/sequence state, and browser projection state are process-local and reset on Host restart. Conversation/Turn identity and normalized snapshots are durable.
 - Action idempotency is bounded to the recent 256 retained actions, not durable exactly-once execution.
 - SSE slow-client recovery currently closes the lagging connection; clients must reconnect or fetch a snapshot after `stream.reset`.
-- The browser cursor and live Conversation projection are memory-only and reset on page refresh.
-- Snapshot reconstructs only the bounded in-memory history retained by the current Host process; evicted records and all state from a previous Host process are intentionally unavailable.
+- The browser cursor and live Conversation projection are memory-only and rebuild from Host Snapshot on page refresh or epoch change.
+- Snapshot reconstructs the bounded recent runtime window, including after Host restart. Older Turn rows remain durable but are not currently pageable or exposed by a live Conversations page.
 - Terminal projection retains only the most recent 128 KiB per Conversation.
 - Runtime history remains limited per Conversation, and the Host admits at most eight in-memory Conversations by default. Active-Turn provider Item and file-change identity maps are each capped at 1,024 entries; exceeding a bound fails explicitly rather than growing without limit.
 - An idle runtime failure changes bootstrap capabilities but has no proactive Protocol v1 capability-change event.
 - Local Host launch paths disable Codex hooks by default so user hooks cannot pre-resolve escalation ahead of CodeTether Approval handling.
 - Protocol v1 Approval presentation does not yet expose a trusted structured risk or provider reason field, so the live UI shows kind, semantic command/action, workspace context, and identity without fabricating risk.
+- Approvals do not survive as actionable requests across a Host restart; pending records are expired with `host_restart` because their provider request handles belong to the old process.
+- A stored provider Thread is resumed lazily on the next Turn. If resume fails because that provider Thread is missing, local history remains readable and controls return `provider_conversation_unavailable`; automatic fork/replacement is not implemented.
+- SQLite retains normalized per-Turn snapshots without a disk retention policy in this phase, so database size grows with durable history until a later archive/retention design.
 - Generated protocol artifacts and real-agent workspace files remain ignored under `.tmp/`.
 - Legacy CodeTether code and structure are not architectural inputs.

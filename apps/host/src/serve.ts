@@ -22,6 +22,7 @@ async function main(): Promise<void> {
       host: '127.0.0.1',
       baseUrl: host.baseUrl,
       epoch: host.epoch,
+      databasePath: host.databasePath,
       allowedWorkspaceRoots: arguments_.workspaces,
       allowedOrigins: arguments_.origins,
     })}\n`,

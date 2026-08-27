@@ -254,7 +254,7 @@ Exit gate:
 
 ### Phase 2D — Local Alpha Audit & Stabilization
 
-**Status:** complete. No next product phase is authorized by this audit.
+**Status:** complete with a `READY` verdict. The audited Alpha is frozen; Phase 3A was subsequently authorized as the next isolated scope.
 
 Verified outcomes:
 
@@ -272,18 +272,42 @@ Exit gate:
 - Full typecheck, lint, format, build, fixture test, diff, and real isolated integration gates pass.
 - The final audit report records remaining P2/P3 debt and recommends—but does not begin—the next phase.
 
-## Phase 3 — Conversation Management
+## Phase 3 — Durable Conversation Management
 
-**Goal:** make conversations durable and manageable beyond a single live run.
+**Goal:** make conversations durable and manageable beyond one Host process without expanding prematurely into an event-store or general project platform.
 
-Planned outcomes:
+### Phase 3A — Minimal Durable Persistence
 
-- Persistence and schema migration strategy.
-- Conversation creation, listing, history, resume, interruption, termination, and failure recovery.
-- Project association, model/reasoning/permission metadata, changes, and relevant activity history.
-- Reconnection behavior without duplicate execution.
+**Status:** complete. Automated durability gates and the real isolated restart/context-retention walkthrough passed.
 
-Exit gate: supported Codex conversations survive application/host restarts and can be found, inspected, and resumed reliably.
+Verified scope:
+
+- Standard Node `node:sqlite` storage outside the repository, with `CODETETHER_DATA_DIR` for absolute-path development/test isolation and OS user-data defaults otherwise.
+- A minimal transactional migration runner and only `schema_migrations`, `conversations`, and `turns` in schema version 1.
+- Durable CodeTether Conversation/Turn identities, private Codex provider Thread/Turn identities, canonical text input, status/timestamps, and versioned normalized per-Turn presentation snapshots.
+- Memory-first streaming with a 300 ms dirty-snapshot flush window, synchronous lifecycle/Approval flushes, final flush on graceful shutdown, WAL checkpointing, and fail-closed database error behavior.
+- Startup reconstruction of the bounded recent runtime window while retaining older durable Turn rows for a later history interface.
+- Restart reconciliation: incomplete Turns become `interrupted` with `host_restart`, Conversations return to idle, and old pending Approvals become expired, non-actionable history.
+- Lazy `thread/resume` on the first post-restart Turn. Missing provider history preserves local display history and returns `provider_conversation_unavailable` instead of silently creating a different Thread.
+- A new Host epoch after restart; SSE replay and action idempotency remain intentionally process-local, and the Web runtime does not automatically retry an uncertain mutation from the prior epoch.
+
+Not included:
+
+- Raw provider-event persistence, an event store, CQRS, ORM, durable exactly-once commands, or automatic active-Turn recovery.
+- Full-history pagination, retention/archive policy, real Conversations/Inbox data, Project management, Tauri, remote access, or another provider.
+
+Exit gate results:
+
+- Fresh/existing migrations, restart reconstruction, write/open/migration failure behavior, bounds, expired Approval recovery, new epoch, missing provider Thread, and lazy resume have fixture coverage without launching Codex during `pnpm test`.
+- `pnpm typecheck`, `pnpm lint`, `pnpm format:check`, `pnpm build`, `pnpm test`, and `git diff --check` pass.
+- A real isolated Conversation completed multiple browser Turns; the Host fully stopped and restarted against the same database; the same `conversationId` and Timeline returned; and a later Turn proved that the resumed Codex Thread retained prior context.
+- Database size, write latency, flush behavior, browser console state, and the post-restart 1536 × 1024 view were recorded.
+
+### Phase 3B — Project Identity / Project Management
+
+**Status:** not started and not yet authorized. Phase 3A is complete; Phase 3B requires a separate approved specification.
+
+Planned outcomes are intentionally deferred until durable Conversation identity is proven. They may include stable Project identity, authorized workspace locations, and real Project-aware Conversation discovery, but their exact scope requires a separate approved specification.
 
 ## Phase 4 — Machines
 

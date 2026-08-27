@@ -95,6 +95,16 @@ export class HostEventReplayBuffer {
     return this.#entries[0]?.envelope.seq ?? this.#currentSeq + 1
   }
 
+  initializeSequence(sequence: number): void {
+    nonNegativeInteger(sequence, 'sequence')
+    if (this.#currentSeq !== 0 || this.#entries.length !== 0) {
+      throw new HostEventSequenceError(
+        'Host event sequence can only be initialized before publication',
+      )
+    }
+    this.#currentSeq = sequence
+  }
+
   append(envelope: HostEventEnvelope): void {
     const expectedSeq = this.#currentSeq + 1
     if (!Number.isSafeInteger(expectedSeq)) {

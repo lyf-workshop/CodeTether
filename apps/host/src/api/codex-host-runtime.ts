@@ -1,6 +1,7 @@
 import type { AgentEvent } from '@codetether/agent-core'
 import {
   CodexAppServerClient,
+  JsonRpcRemoteError,
   type ApprovalDecision,
   type ApprovalPrompt,
   type ApprovalResolution,
@@ -9,6 +10,7 @@ import {
 
 import { BoundedAgentEventQueue } from '../runtime/bounded-agent-event-queue.js'
 import { IncrementalDeltaIntegrityTracker } from '../runtime/delta-integrity-tracker.js'
+import { ProviderConversationUnavailableError } from './agent-runtime.js'
 import type {
   AgentHostRuntime,
   ProviderApprovalRequest,
@@ -160,6 +162,14 @@ export class CodexHostRuntime implements AgentHostRuntime {
       providerThreadId: result.thread.id,
       model: result.model,
     }
+  }
+
+  async resumeConversation(options: {
+    readonly providerThreadId: string
+    readonly cwd: string
+  }): Promise<ProviderConversationResult> {
+    this.#assertHealthy()
+    return await resumeCodexConversation(this.#client, options)
   }
 
   async startTurn(options: {
@@ -333,6 +343,46 @@ export class CodexHostRuntime implements AgentHostRuntime {
         `[codetether:runtime-failure-listener] ${redactDiagnostic(toError(listenerError).message)}\n`,
       )
     }
+  }
+}
+
+interface CodexThreadResumer {
+  resumeThread(
+    options: Parameters<CodexAppServerClient['resumeThread']>[0],
+  ): ReturnType<CodexAppServerClient['resumeThread']>
+}
+
+/** Provider glue kept separately testable without spawning a Codex process. */
+export async function resumeCodexConversation(
+  client: CodexThreadResumer,
+  options: {
+    readonly providerThreadId: string
+    readonly cwd: string
+  },
+): Promise<ProviderConversationResult> {
+  try {
+    const result = await client.resumeThread({
+      threadId: options.providerThreadId,
+      cwd: options.cwd,
+      approvalPolicy: 'on-request',
+      sandbox: 'workspace-write',
+    })
+    return {
+      providerThreadId: result.thread.id,
+      model: result.model,
+    }
+  } catch (error) {
+    if (
+      error instanceof JsonRpcRemoteError &&
+      error.method === 'thread/resume'
+    ) {
+      throw new ProviderConversationUnavailableError(
+        'codex',
+        options.providerThreadId,
+        { cause: error },
+      )
+    }
+    throw error
   }
 }
 

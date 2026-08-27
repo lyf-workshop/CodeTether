@@ -28,7 +28,6 @@ async function main(): Promise<void> {
     hostVersion,
     executable: process.env.CODETETHER_CODEX_PATH ?? 'codex',
     disableHooks: true,
-    ephemeralThreads: true,
     port: 4317,
   })
 
@@ -53,6 +52,7 @@ async function main(): Promise<void> {
         kind: 'browser-control.ready',
         baseUrl: host.baseUrl,
         epoch: host.epoch,
+        databasePath: host.databasePath,
         generalWorkspace: workspace.root,
         approvalWorkspace: approvalWorkspace.root,
         generalConversationId: generalId,

@@ -10,6 +10,7 @@ import { HostService } from '../dist/api/host-service.js'
 import { startLocalCodexHostWithRuntime } from '../dist/api/local-codex-host.js'
 import { LocalHttpServer } from '../dist/api/local-http-server.js'
 import { WorkspacePolicy } from '../dist/api/workspace-policy.js'
+import { ConversationStore } from '../dist/persistence/index.js'
 
 const epoch = '11111111-1111-4111-8111-111111111111'
 const wrongEpoch = '22222222-2222-4222-8222-222222222222'
@@ -35,6 +36,100 @@ test('closes an already-launched Runtime when Host assembly fails', async () => 
     assert.equal(runtime.closeCalls, 1)
   } finally {
     await rm(workspace, { force: true, recursive: true })
+  }
+})
+
+test('local Host assembly generates a new epoch and restores its API snapshot from SQLite', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'codetether-http-restart-'))
+  const workspace = join(directory, 'workspace')
+  const databasePath = join(directory, 'data', 'codetether.sqlite3')
+  await import('node:fs/promises').then(({ mkdir }) =>
+    mkdir(workspace, { recursive: true }),
+  )
+  const options = {
+    allowedWorkspaceRoots: [workspace],
+    allowedOrigins: ['http://localhost:5173'],
+    hostVersion: '0.0.0-test',
+    port: 0,
+  }
+  let first
+  let second
+  try {
+    const firstRuntime = new FakeAgentRuntime()
+    first = await startLocalCodexHostWithRuntime(
+      options,
+      firstRuntime,
+      await WorkspacePolicy.create([workspace]),
+      ConversationStore.open({ databasePath }),
+    )
+    const created = await postJson(first.baseUrl, '/api/v1/conversations', {
+      actionId: 'act_http_restart_create',
+      provider: 'codex',
+      cwd: workspace,
+    })
+    const conversationId = created.body.data.conversation.conversationId
+    const started = await postJson(
+      first.baseUrl,
+      `/api/v1/conversations/${conversationId}/turns`,
+      {
+        actionId: 'act_http_restart_turn',
+        input: { type: 'text', text: 'Persist through local Host assembly' },
+      },
+    )
+    firstRuntime.emit({
+      type: 'message.completed',
+      provider: 'codex',
+      threadId: 'provider-thread-1',
+      turnId: 'provider-turn-1',
+      itemId: 'provider-message-1',
+      message: 'Durable API response',
+      timestamp: '2026-08-26T08:00:01.000Z',
+    })
+    firstRuntime.emit({
+      type: 'turn.completed',
+      provider: 'codex',
+      threadId: 'provider-thread-1',
+      turnId: 'provider-turn-1',
+      finalMessage: 'Durable API response',
+      timestamp: '2026-08-26T08:00:02.000Z',
+    })
+    const before = await getJson(first.baseUrl, '/api/v1/snapshot')
+    assert.equal(before.status, 200)
+    assert.equal(before.body.conversations[0].conversationId, conversationId)
+    assert.equal(
+      before.body.conversationRuntimes[0].turns[0].turnId,
+      started.body.data.turn.turnId,
+    )
+    const firstEpoch = first.epoch
+    await first.close()
+    first = undefined
+
+    const secondRuntime = new FakeAgentRuntime()
+    second = await startLocalCodexHostWithRuntime(
+      options,
+      secondRuntime,
+      await WorkspacePolicy.create([workspace]),
+      ConversationStore.open({ databasePath }),
+    )
+    assert.notEqual(second.epoch, firstEpoch)
+    const after = await getJson(second.baseUrl, '/api/v1/snapshot')
+    assert.equal(after.status, 200)
+    assert.equal(after.body.epoch, second.epoch)
+    assert.equal(after.body.conversations[0].conversationId, conversationId)
+    assert.equal(
+      after.body.conversationRuntimes[0].messages[0].text,
+      'Durable API response',
+    )
+    assert.equal(secondRuntime.resumeConversationCalls.length, 0)
+  } finally {
+    await first?.close().catch(() => undefined)
+    await second?.close().catch(() => undefined)
+    await rm(directory, {
+      force: true,
+      recursive: true,
+      maxRetries: 10,
+      retryDelay: 100,
+    })
   }
 })
 
@@ -540,6 +635,7 @@ test('returns safe runtime_unavailable responses after a fatal runtime signal', 
 class FakeAgentRuntime {
   provider = 'codex'
   startConversationCalls = []
+  resumeConversationCalls = []
   startTurnCalls = []
   interruptTurnCalls = []
   closeCalls = 0
@@ -575,6 +671,10 @@ class FakeAgentRuntime {
     }
   }
 
+  emit(event) {
+    for (const listener of this.#eventListeners) listener(event)
+  }
+
   fail(error) {
     for (const listener of this.#failureListeners) listener(error)
   }
@@ -584,6 +684,13 @@ class FakeAgentRuntime {
     return {
       providerThreadId: `provider-thread-${String(this.startConversationCalls.length)}`,
       ...(options.model === undefined ? {} : { model: options.model }),
+    }
+  }
+
+  async resumeConversation(options) {
+    this.resumeConversationCalls.push(options)
+    return {
+      providerThreadId: options.providerThreadId,
     }
   }
 

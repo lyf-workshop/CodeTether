@@ -341,6 +341,7 @@ export class HostRuntime {
       throw new Error('Host snapshot epoch does not match bootstrap epoch')
     }
     replaceHostProjection(this.#queryClient, projectSnapshot(snapshot))
+    this.#actions.adoptHostEpoch(snapshot.epoch)
     this.#increment('snapshotReplacements')
     return snapshotCursor(snapshot)
   }

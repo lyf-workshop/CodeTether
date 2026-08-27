@@ -52,6 +52,7 @@ async function run(): Promise<void> {
     executable,
     disableHooks: true,
     ephemeralThreads: true,
+    persistence: false,
     replayMaxEvents: 64,
   })
   const firstEpoch = host.epoch
@@ -268,6 +269,7 @@ async function run(): Promise<void> {
       executable,
       disableHooks: true,
       ephemeralThreads: true,
+      persistence: false,
     })
     host = restarted
     const restartedBootstrap = await new CodeTetherClient({

@@ -487,6 +487,13 @@ test('separates mutation success and safe HTTP error envelopes', () => {
   }
   assert.deepEqual(SafeErrorEnvelopeSchema.parse(safeError), safeError)
   assert.equal(
+    SafeErrorEnvelopeSchema.safeParse({
+      ...safeError,
+      code: 'provider_conversation_unavailable',
+    }).success,
+    true,
+  )
+  assert.equal(
     SafeErrorEnvelopeSchema.safeParse({ ...safeError, stack: 'secret stack' })
       .success,
     false,

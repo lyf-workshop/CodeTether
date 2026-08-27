@@ -1,4 +1,5 @@
 import { HostEventPublisher } from './host-event-publisher.js'
+import { ConversationStore } from '../persistence/index.js'
 import type { AgentHostRuntime } from './agent-runtime.js'
 import { HostService, newEpoch } from './host-service.js'
 import {
@@ -25,12 +26,16 @@ export interface LocalCodexHostOptions {
   readonly heartbeatMs?: number
   readonly bodyLimitBytes?: number
   readonly maxConversations?: number
+  /** Tests and non-durable transport harnesses may explicitly opt out. */
+  readonly persistence?: boolean
+  readonly databasePath?: string
 }
 
 export interface RunningLocalCodexHost {
   readonly baseUrl: string
   readonly epoch: string
   readonly service: HostService
+  readonly databasePath?: string
   close(): Promise<void>
 }
 
@@ -40,19 +45,41 @@ export async function startLocalCodexHost(
   const workspacePolicy = await WorkspacePolicy.create(
     options.allowedWorkspaceRoots,
   )
-  const runtime = await CodexHostRuntime.launch({
-    version: options.hostVersion,
-    ...(options.executable === undefined
-      ? {}
-      : { executable: options.executable }),
-    ...(options.disableHooks === undefined
-      ? {}
-      : { disableHooks: options.disableHooks }),
-    ...(options.ephemeralThreads === undefined
-      ? {}
-      : { ephemeralThreads: options.ephemeralThreads }),
-  })
-  return await startLocalCodexHostWithRuntime(options, runtime, workspacePolicy)
+  const persistence =
+    options.persistence === false
+      ? undefined
+      : ConversationStore.open({
+          ...(options.databasePath === undefined
+            ? {}
+            : { databasePath: options.databasePath }),
+        })
+  try {
+    const runtime = await CodexHostRuntime.launch({
+      version: options.hostVersion,
+      ...(options.executable === undefined
+        ? {}
+        : { executable: options.executable }),
+      ...(options.disableHooks === undefined
+        ? {}
+        : { disableHooks: options.disableHooks }),
+      ...(options.ephemeralThreads === undefined
+        ? {}
+        : { ephemeralThreads: options.ephemeralThreads }),
+    })
+    return await startLocalCodexHostWithRuntime(
+      options,
+      runtime,
+      workspacePolicy,
+      persistence,
+    )
+  } catch (error) {
+    try {
+      persistence?.close()
+    } catch {
+      // Preserve the launch/assembly failure.
+    }
+    throw error
+  }
 }
 
 /** Testable assembly boundary that owns Runtime cleanup after launch. */
@@ -60,6 +87,7 @@ export async function startLocalCodexHostWithRuntime(
   options: LocalCodexHostOptions,
   runtime: AgentHostRuntime,
   workspacePolicy: WorkspacePolicy,
+  persistence?: ConversationStore,
 ): Promise<RunningLocalCodexHost> {
   let service: HostService | undefined
   let server: LocalHttpServer | undefined
@@ -81,6 +109,7 @@ export async function startLocalCodexHostWithRuntime(
       ...(options.maxConversations === undefined
         ? {}
         : { maxConversations: options.maxConversations }),
+      ...(persistence === undefined ? {} : { persistence }),
     })
     const serverOptions: LocalHttpServerOptions = {
       service,
@@ -111,16 +140,24 @@ export async function startLocalCodexHostWithRuntime(
       baseUrl,
       epoch: publisher.epoch,
       service,
+      ...(persistence === undefined
+        ? {}
+        : { databasePath: persistence.databasePath }),
       close: async () => await localServer.close(),
     }
   } catch (error) {
-    const cleanup =
-      server === undefined
-        ? service === undefined
-          ? runtime.close()
-          : service.close()
-        : server.close()
-    await cleanup.catch(() => undefined)
+    if (server !== undefined) {
+      await server.close().catch(() => undefined)
+    } else if (service !== undefined) {
+      await service.close().catch(() => undefined)
+    } else {
+      await runtime.close().catch(() => undefined)
+      try {
+        persistence?.close()
+      } catch {
+        // Preserve the assembly failure.
+      }
+    }
     throw error
   }
 }

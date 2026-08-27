@@ -7,6 +7,15 @@ import {
   type TurnRecord,
 } from '@codetether/protocol'
 
+export const MAX_PROVIDER_ITEMS_PER_TURN = 1024
+
+export class ProviderItemCapacityError extends Error {
+  constructor(readonly maxItems: number) {
+    super(`Provider Item identity limit of ${String(maxItems)} was reached`)
+    this.name = 'ProviderItemCapacityError'
+  }
+}
+
 export interface ConversationState {
   record: ConversationRecord
   readonly providerThreadId: string
@@ -28,6 +37,9 @@ export function publicItemId(
 ): ReturnType<typeof ItemIdSchema.parse> {
   const existing = turn.providerItems.get(providerItemId)
   if (existing !== undefined) return existing
+  if (turn.providerItems.size >= MAX_PROVIDER_ITEMS_PER_TURN) {
+    throw new ProviderItemCapacityError(MAX_PROVIDER_ITEMS_PER_TURN)
+  }
   const itemId = ItemIdSchema.parse(`item_${randomUUID().replaceAll('-', '')}`)
   turn.providerItems.set(providerItemId, itemId)
   return itemId

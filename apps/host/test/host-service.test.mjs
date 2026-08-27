@@ -7,6 +7,7 @@ import test from 'node:test'
 import { HostSnapshotSchema } from '@codetether/protocol'
 
 import { MAX_CANONICAL_TURN_INPUT_BYTES } from '../dist/api/conversation-runtime-history.js'
+import { MAX_PENDING_APPROVALS } from '../dist/api/approval-registry.js'
 import { HostEventPublisher } from '../dist/api/host-event-publisher.js'
 import { HostService, HostServiceError } from '../dist/api/host-service.js'
 import { WorkspacePolicy } from '../dist/api/workspace-policy.js'
@@ -162,6 +163,9 @@ async function createFixture(t, options = {}) {
     ...(options.historyLimits === undefined
       ? {}
       : { historyLimits: options.historyLimits }),
+    ...(options.maxConversations === undefined
+      ? {}
+      : { maxConversations: options.maxConversations }),
   })
   const events = []
   const unsubscribe = publisher.subscribe((event) => events.push(event))
@@ -220,6 +224,25 @@ test('provider Thread identities must be non-empty and globally unique', async (
   )
 
   assert.equal(fixture.service.snapshot().conversations.length, 1)
+})
+
+test('bounds process-local Conversation admission before starting another provider Thread', async (t) => {
+  const fixture = await createFixture(t, { maxConversations: 2 })
+  await createConversation(fixture, 'act_capacity_create01')
+  await createConversation(fixture, 'act_capacity_create02')
+
+  await assert.rejects(
+    createConversation(fixture, 'act_capacity_create03'),
+    (error) => {
+      assert.ok(error instanceof HostServiceError)
+      assert.equal(error.code, 'runtime_unavailable')
+      assert.equal(error.httpStatus, 503)
+      assert.deepEqual(error.details, { maxConversations: 2 })
+      return true
+    },
+  )
+  assert.equal(fixture.runtime.conversationCalls.length, 2)
+  assert.equal(fixture.service.snapshot().conversations.length, 2)
 })
 
 test('validates provider conversation metadata before committing state', async (t) => {
@@ -599,6 +622,42 @@ test('a Conversation remains waiting until every Turn approval resolves', async 
   snapshot = fixture.service.snapshot()
   assert.equal(snapshot.pendingApprovals.length, 0)
   assert.equal(snapshot.conversations[0].status, 'running')
+})
+
+test('declines approval overflow without allocating an unbounded pending binding', async (t) => {
+  const fixture = await createFixture(t)
+  const created = await createConversation(
+    fixture,
+    'act_approval_capacity_create',
+  )
+  await startTurn(
+    fixture,
+    created.data.conversation.conversationId,
+    'act_approval_capacity_turn',
+  )
+
+  for (let index = 0; index <= MAX_PENDING_APPROVALS; index += 1) {
+    fixture.runtime.requestApproval({
+      providerRequestId: index,
+      providerApprovalId: `provider-approval-capacity-${String(index)}`,
+      providerThreadId: 'provider-thread-secret-1',
+      providerTurnId: 'provider-turn-secret-1',
+      providerItemId: `provider-item-capacity-${String(index)}`,
+    })
+  }
+
+  assert.equal(
+    fixture.service.snapshot().pendingApprovals.length,
+    MAX_PENDING_APPROVALS,
+  )
+  assert.deepEqual(fixture.runtime.approvalDecisions, [
+    { providerRequestId: MAX_PENDING_APPROVALS, decision: 'decline' },
+  ])
+  assert.equal(
+    fixture.events.filter((event) => event.type === 'approval.requested')
+      .length,
+    MAX_PENDING_APPROVALS,
+  )
 })
 
 test('a terminal Turn declines and resolves its pending approvals', async (t) => {
@@ -1555,6 +1614,38 @@ test('bounds active presentation entries and UTF-8 terminal tail explicitly', as
   assert.equal(runtime.terminal.stream, 'stderr')
   assert.equal(runtime.terminal.truncated, true)
   assert.equal(runtime.history.evictedMessages, 2)
+  assert.equal(runtime.history.truncated, true)
+})
+
+test('publishes one Snapshot boundary when streamed presentation text first truncates', async (t) => {
+  const fixture = await createFixture(t, {
+    historyLimits: { maxPresentationTextBytes: 8 },
+  })
+  const created = await createConversation(fixture, 'act_history_create_stream')
+  const conversationId = created.data.conversation.conversationId
+  await startTurn(fixture, conversationId, 'act_history_start_stream')
+
+  for (let index = 0; index < 6; index += 1) {
+    fixture.runtime.emitEvent({
+      provider: 'codex',
+      timestamp,
+      threadId: 'provider-thread-secret-1',
+      turnId: 'provider-turn-secret-1',
+      itemId: 'provider-message-stream-bound',
+      type: 'message.delta',
+      delta: 'abcdefgh',
+    })
+  }
+
+  const resets = fixture.events.filter(
+    (event) =>
+      event.type === 'stream.reset' &&
+      event.payload.reason === 'history_evicted',
+  )
+  assert.equal(resets.length, 1)
+  const runtime = HostSnapshotSchema.parse(fixture.service.snapshot())
+    .conversationRuntimes[0]
+  assert.equal(runtime.messages[0].text, 'abcdefgh')
   assert.equal(runtime.history.truncated, true)
 })
 

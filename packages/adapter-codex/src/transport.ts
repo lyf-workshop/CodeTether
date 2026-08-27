@@ -27,6 +27,7 @@ interface PendingRequest {
 
 export interface JsonRpcTransportOptions {
   readonly requestTimeoutMs?: number
+  readonly maxLineBytes?: number
   readonly logger?: ProtocolLogger
   readonly onStderr?: (text: string) => void
 }
@@ -38,7 +39,7 @@ type UnknownResponseListener = (id: JsonRpcId) => void
 
 /** Owns line framing, request correlation, and process failure propagation. */
 export class JsonRpcTransport {
-  readonly #decoder = new JsonRpcLineDecoder()
+  readonly #decoder: JsonRpcLineDecoder
   readonly #pending = new Map<JsonRpcId, PendingRequest>()
   readonly #notificationListeners = new Set<NotificationListener>()
   readonly #serverRequestListeners = new Set<ServerRequestListener>()
@@ -56,12 +57,17 @@ export class JsonRpcTransport {
   ) {
     this.#requestTimeoutMs = options.requestTimeoutMs ?? 30_000
     this.#logger = options.logger
+    this.#decoder = new JsonRpcLineDecoder({
+      ...(options.maxLineBytes === undefined
+        ? {}
+        : { maxLineBytes: options.maxLineBytes }),
+    })
 
     process.stdout.on('data', (chunk: Buffer) => {
-      for (const line of this.#decoder.push(chunk)) this.#consumeLine(line)
+      this.#consumeChunk(chunk)
     })
     process.stdout.on('end', () => {
-      for (const line of this.#decoder.end()) this.#consumeLine(line)
+      this.#finishDecoder()
     })
     process.stderr.on('data', (chunk: Buffer) => {
       options.onStderr?.(chunk.toString('utf8'))
@@ -169,6 +175,24 @@ export class JsonRpcTransport {
 
   beginShutdown(): void {
     this.#closing = true
+  }
+
+  #consumeChunk(chunk: Buffer): void {
+    if (this.#failure !== undefined) return
+    try {
+      for (const line of this.#decoder.push(chunk)) this.#consumeLine(line)
+    } catch (error) {
+      this.#fail(toProtocolFramingError(error))
+    }
+  }
+
+  #finishDecoder(): void {
+    if (this.#failure !== undefined) return
+    try {
+      for (const line of this.#decoder.end()) this.#consumeLine(line)
+    } catch (error) {
+      this.#fail(toProtocolFramingError(error))
+    }
   }
 
   #consumeLine(line: string): void {
@@ -294,4 +318,11 @@ export class JsonRpcTransport {
 
 function toError(value: unknown): Error {
   return value instanceof Error ? value : new Error(String(value))
+}
+
+function toProtocolFramingError(value: unknown): CodexProtocolError {
+  if (value instanceof CodexProtocolError) return value
+  return new CodexProtocolError('Unable to frame Codex protocol output', {
+    cause: toError(value),
+  })
 }

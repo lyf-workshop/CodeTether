@@ -7,11 +7,36 @@ import test from 'node:test'
 
 import { HostEventPublisher } from '../dist/api/host-event-publisher.js'
 import { HostService } from '../dist/api/host-service.js'
+import { startLocalCodexHostWithRuntime } from '../dist/api/local-codex-host.js'
 import { LocalHttpServer } from '../dist/api/local-http-server.js'
 import { WorkspacePolicy } from '../dist/api/workspace-policy.js'
 
 const epoch = '11111111-1111-4111-8111-111111111111'
 const wrongEpoch = '22222222-2222-4222-8222-222222222222'
+
+test('closes an already-launched Runtime when Host assembly fails', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'codetether-assembly-test-'))
+  const runtime = new FakeAgentRuntime()
+  try {
+    const workspacePolicy = await WorkspacePolicy.create([workspace])
+    await assert.rejects(
+      startLocalCodexHostWithRuntime(
+        {
+          allowedWorkspaceRoots: [workspace],
+          allowedOrigins: ['http://localhost:5173'],
+          hostVersion: '0.0.0-test',
+          maxClients: 0,
+        },
+        runtime,
+        workspacePolicy,
+      ),
+      /maxClients must be a positive integer/,
+    )
+    assert.equal(runtime.closeCalls, 1)
+  } finally {
+    await rm(workspace, { force: true, recursive: true })
+  }
+})
 
 test('serves bootstrap, snapshot, and idempotent mutations with a fake runtime', async () => {
   const harness = await createHarness()

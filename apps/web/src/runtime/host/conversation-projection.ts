@@ -9,6 +9,7 @@ import type {
 } from '@codetether/protocol'
 
 export const TERMINAL_OUTPUT_MAX_BYTES = 128 * 1024
+export const MESSAGE_OUTPUT_MAX_BYTES = 512 * 1024
 
 const TOOL_OUTPUT_SUMMARY_MAX_CHARACTERS = 512
 const USER_INPUT_ORDER = -1
@@ -291,7 +292,8 @@ export function applyHostEvent(
             turnId,
             itemId,
             author: 'agent',
-            body: event.payload.delta,
+            body: retainUtf8Head(event.payload.delta, MESSAGE_OUTPUT_MAX_BYTES)
+              .text,
             status: 'running',
             timestamp: event.timestamp,
             order: event.seq,
@@ -308,7 +310,10 @@ export function applyHostEvent(
         }
         messages = replaceAt(conversation.messages, index, {
           ...current,
-          body: `${current.body}${event.payload.delta}`,
+          body: retainUtf8Head(
+            `${current.body}${event.payload.delta}`,
+            MESSAGE_OUTPUT_MAX_BYTES,
+          ).text,
           timestamp: event.timestamp,
         })
       }
@@ -334,7 +339,8 @@ export function applyHostEvent(
         turnId,
         itemId,
         author: 'agent',
-        body: event.payload.message,
+        body: retainUtf8Head(event.payload.message, MESSAGE_OUTPUT_MAX_BYTES)
+          .text,
         status: 'completed',
         timestamp: event.timestamp,
         order:
@@ -517,7 +523,11 @@ export function applyHostEvent(
       const turnId = String(event.turnId)
       const itemId =
         event.itemId === undefined ? undefined : String(event.itemId)
-      const parsed = parseUnifiedDiff(event.payload.diff)
+      const boundedDiff =
+        event.payload.diff === undefined
+          ? undefined
+          : retainUtf8Head(event.payload.diff, MESSAGE_OUTPUT_MAX_BYTES).text
+      const parsed = parseUnifiedDiff(boundedDiff)
       const id = changeKey(turnId, itemId, event.payload.path)
       const index = conversation.changes.findIndex((change) => change.id === id)
       const change: FileChangeReadModel = {
@@ -1132,6 +1142,21 @@ function retainUtf8Tail(
   }
   return {
     text: decoder.decode(bytes.subarray(start)),
+    truncated: true,
+  }
+}
+
+function retainUtf8Head(
+  text: string,
+  maxBytes: number,
+): { readonly text: string; readonly truncated: boolean } {
+  const bytes = encoder.encode(text)
+  if (bytes.byteLength <= maxBytes) return { text, truncated: false }
+
+  let end = maxBytes
+  while (end > 0 && isUtf8ContinuationByte(bytes[end])) end -= 1
+  return {
+    text: decoder.decode(bytes.subarray(0, end)),
     truncated: true,
   }
 }

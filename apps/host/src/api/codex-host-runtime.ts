@@ -55,7 +55,9 @@ export class CodexHostRuntime implements AgentHostRuntime {
     this.#pump.catch((error: unknown) => this.#fail(toError(error)))
 
     const child = spawnCodexAppServer(options.executable, {
-      disableHooks: options.disableHooks ?? false,
+      // CodeTether must remain the approval authority for every Alpha Host
+      // launch path. Callers may opt back in only as an explicit decision.
+      disableHooks: options.disableHooks ?? true,
     })
     this.#client = new CodexAppServerClient(child, {
       requestTimeoutMs: 30_000,
@@ -314,6 +316,10 @@ export class CodexHostRuntime implements AgentHostRuntime {
       deferred.resolve('deny')
     }
     this.#approvalDeferreds.clear()
+    // Losing the reliable event/control path must also stop the provider. A
+    // live child must never continue executing after the Host can no longer
+    // observe or control it.
+    void this.close().catch(() => undefined)
   }
 
   #notifyFailureListener(

@@ -49,6 +49,7 @@ import { WorkspacePolicy, WorkspacePolicyError } from './workspace-policy.js'
 
 const MAX_PENDING_PROVIDER_EVENTS = 512
 const MAX_PENDING_PROVIDER_EVENT_BYTES = 4 * 1024 * 1024
+export const DEFAULT_MAX_CONVERSATIONS = 8
 
 export class HostServiceError extends Error {
   constructor(
@@ -71,6 +72,7 @@ export interface HostServiceOptions {
   readonly hostVersion: string
   readonly now?: () => Date
   readonly historyLimits?: ConversationRuntimeHistoryLimits
+  readonly maxConversations?: number
 }
 
 /** In-memory authority for CodeTether Protocol identities and live state. */
@@ -86,6 +88,7 @@ export class HostService {
   readonly #approvalRegistry: ApprovalRegistry
   readonly #runtimeHistory: ConversationRuntimeHistory
   readonly #providerEventTranslator: ProviderEventTranslator
+  readonly #maxConversations: number
   readonly #pendingProviderEvents: AgentEvent[] = []
   #pendingProviderEventBytes = 0
   readonly #unsubscribeEvents: () => void
@@ -100,6 +103,11 @@ export class HostService {
     this.publisher = options.publisher
     this.#hostVersion = options.hostVersion
     this.#now = options.now ?? (() => new Date())
+    this.#maxConversations = positiveInteger(
+      options.maxConversations,
+      DEFAULT_MAX_CONVERSATIONS,
+      'maxConversations',
+    )
     this.#runtimeHistory = new ConversationRuntimeHistory(options.historyLimits)
     this.#approvalRegistry = new ApprovalRegistry({
       providerThreads: this.#providerThreads,
@@ -172,6 +180,14 @@ export class HostService {
       'conversation.create',
       request,
       async () => {
+        if (this.#conversations.size >= this.#maxConversations) {
+          throw new HostServiceError(
+            'runtime_unavailable',
+            'Host conversation capacity is temporarily exhausted',
+            503,
+            { maxConversations: this.#maxConversations },
+          )
+        }
         let cwd: string
         try {
           cwd = await this.#workspacePolicy.authorize(request.cwd)
@@ -716,6 +732,18 @@ export function newEpoch(): ReturnType<typeof EpochIdSchema.parse> {
 
 function compactUuid(): string {
   return randomUUID().replaceAll('-', '')
+}
+
+function positiveInteger(
+  value: number | undefined,
+  fallback: number,
+  name: string,
+): number {
+  const resolved = value ?? fallback
+  if (!Number.isSafeInteger(resolved) || resolved <= 0) {
+    throw new TypeError(`${name} must be a positive safe integer`)
+  }
+  return resolved
 }
 
 function providerCommandError(

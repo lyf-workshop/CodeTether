@@ -1,4 +1,5 @@
 import { HostEventPublisher } from './host-event-publisher.js'
+import type { AgentHostRuntime } from './agent-runtime.js'
 import { HostService, newEpoch } from './host-service.js'
 import {
   LocalHttpServer,
@@ -23,6 +24,7 @@ export interface LocalCodexHostOptions {
   readonly maxFrameBytes?: number
   readonly heartbeatMs?: number
   readonly bodyLimitBytes?: number
+  readonly maxConversations?: number
 }
 
 export interface RunningLocalCodexHost {
@@ -50,54 +52,75 @@ export async function startLocalCodexHost(
       ? {}
       : { ephemeralThreads: options.ephemeralThreads }),
   })
-  const publisher = new HostEventPublisher({
-    epoch: newEpoch(),
-    ...(options.replayMaxEvents === undefined
-      ? {}
-      : { maxEvents: options.replayMaxEvents }),
-    ...(options.replayMaxBytes === undefined
-      ? {}
-      : { maxBytes: options.replayMaxBytes }),
-  })
-  const service = new HostService({
-    runtime,
-    workspacePolicy,
-    publisher,
-    hostVersion: options.hostVersion,
-  })
-  const serverOptions: LocalHttpServerOptions = {
-    service,
-    allowedOrigins: options.allowedOrigins,
-    ...(options.maxClients === undefined
-      ? {}
-      : { maxClients: options.maxClients }),
-    ...(options.maxQueuedEvents === undefined
-      ? {}
-      : { maxQueuedEvents: options.maxQueuedEvents }),
-    ...(options.maxQueuedBytes === undefined
-      ? {}
-      : { maxQueuedBytes: options.maxQueuedBytes }),
-    ...(options.maxFrameBytes === undefined
-      ? {}
-      : { maxFrameBytes: options.maxFrameBytes }),
-    ...(options.heartbeatMs === undefined
-      ? {}
-      : { heartbeatMs: options.heartbeatMs }),
-    ...(options.bodyLimitBytes === undefined
-      ? {}
-      : { bodyLimitBytes: options.bodyLimitBytes }),
-  }
-  const server = new LocalHttpServer(serverOptions)
+  return await startLocalCodexHostWithRuntime(options, runtime, workspacePolicy)
+}
+
+/** Testable assembly boundary that owns Runtime cleanup after launch. */
+export async function startLocalCodexHostWithRuntime(
+  options: LocalCodexHostOptions,
+  runtime: AgentHostRuntime,
+  workspacePolicy: WorkspacePolicy,
+): Promise<RunningLocalCodexHost> {
+  let service: HostService | undefined
+  let server: LocalHttpServer | undefined
   try {
-    const baseUrl = await server.start(options.port)
+    const publisher = new HostEventPublisher({
+      epoch: newEpoch(),
+      ...(options.replayMaxEvents === undefined
+        ? {}
+        : { maxEvents: options.replayMaxEvents }),
+      ...(options.replayMaxBytes === undefined
+        ? {}
+        : { maxBytes: options.replayMaxBytes }),
+    })
+    service = new HostService({
+      runtime,
+      workspacePolicy,
+      publisher,
+      hostVersion: options.hostVersion,
+      ...(options.maxConversations === undefined
+        ? {}
+        : { maxConversations: options.maxConversations }),
+    })
+    const serverOptions: LocalHttpServerOptions = {
+      service,
+      allowedOrigins: options.allowedOrigins,
+      ...(options.maxClients === undefined
+        ? {}
+        : { maxClients: options.maxClients }),
+      ...(options.maxQueuedEvents === undefined
+        ? {}
+        : { maxQueuedEvents: options.maxQueuedEvents }),
+      ...(options.maxQueuedBytes === undefined
+        ? {}
+        : { maxQueuedBytes: options.maxQueuedBytes }),
+      ...(options.maxFrameBytes === undefined
+        ? {}
+        : { maxFrameBytes: options.maxFrameBytes }),
+      ...(options.heartbeatMs === undefined
+        ? {}
+        : { heartbeatMs: options.heartbeatMs }),
+      ...(options.bodyLimitBytes === undefined
+        ? {}
+        : { bodyLimitBytes: options.bodyLimitBytes }),
+    }
+    const localServer = new LocalHttpServer(serverOptions)
+    server = localServer
+    const baseUrl = await localServer.start(options.port)
     return {
       baseUrl,
       epoch: publisher.epoch,
       service,
-      close: async () => await server.close(),
+      close: async () => await localServer.close(),
     }
   } catch (error) {
-    await server.close().catch(() => undefined)
+    const cleanup =
+      server === undefined
+        ? service === undefined
+          ? runtime.close()
+          : service.close()
+        : server.close()
+    await cleanup.catch(() => undefined)
     throw error
   }
 }

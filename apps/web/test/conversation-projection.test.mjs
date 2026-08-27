@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  MESSAGE_OUTPUT_MAX_BYTES,
   TERMINAL_OUTPUT_MAX_BYTES,
   applyHostEvent,
   projectSnapshot,
@@ -502,6 +503,41 @@ test('merges deltas by Turn and Item and completion replaces without duplicating
   const duplicate = applyHostEvent(projection, completed)
   assert.equal(duplicate.kind, 'duplicate')
   assert.strictEqual(duplicate.projection, projection)
+})
+
+test('bounds streamed and completed Agent messages without breaking UTF-8', () => {
+  let projection = projectSnapshot(snapshot())
+  projection = apply(
+    projection,
+    envelope(1, 'message.delta', {
+      delta: `${'x'.repeat(MESSAGE_OUTPUT_MAX_BYTES - 1)}浣?`,
+    }),
+  )
+  projection = apply(
+    projection,
+    envelope(2, 'message.delta', { delta: 'ignored tail' }),
+  )
+
+  let message = projection.conversations[conversationId].messages[0]
+  assert.ok(
+    new TextEncoder().encode(message.body).byteLength <=
+      MESSAGE_OUTPUT_MAX_BYTES,
+  )
+  assert.equal(message.body.includes('\uFFFD'), false)
+
+  projection = apply(
+    projection,
+    envelope(3, 'message.completed', {
+      message: `${'y'.repeat(MESSAGE_OUTPUT_MAX_BYTES - 1)}鐣?`,
+    }),
+  )
+  message = projection.conversations[conversationId].messages[0]
+  assert.ok(
+    new TextEncoder().encode(message.body).byteLength <=
+      MESSAGE_OUTPUT_MAX_BYTES,
+  )
+  assert.equal(message.body.includes('\uFFFD'), false)
+  assert.equal(message.status, 'completed')
 })
 
 test('projects Tool lifecycle and retains only a bounded UTF-8 terminal tail', () => {

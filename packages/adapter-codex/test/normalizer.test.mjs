@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { CodexEventNormalizer } from '../dist/index.js'
+import {
+  CodexEventNormalizer,
+  MAX_FILE_CHANGES_PER_TURN,
+} from '../dist/index.js'
 
 const timestamp = '2026-08-25T12:00:00.000Z'
 const threadId = 'thread-1'
@@ -162,6 +165,42 @@ test('normalizes and de-duplicates file patch fixtures', () => {
     },
   ])
   assert.deepEqual(duplicate.events, [])
+})
+
+test('bounds hashed file-change identities for one active Turn', () => {
+  const normalizer = new CodexEventNormalizer()
+  for (let index = 0; index < MAX_FILE_CHANGES_PER_TURN; index += 1) {
+    const result = normalize(normalizer, 'item/fileChange/patchUpdated', {
+      threadId,
+      turnId,
+      itemId: `file-${String(index)}`,
+      changes: [
+        {
+          path: `src/file-${String(index)}.ts`,
+          kind: { type: 'update', move_path: null },
+          diff: `change-${String(index)}`,
+        },
+      ],
+    })
+    assert.equal(result.events.length, 1)
+  }
+
+  assert.throws(
+    () =>
+      normalize(normalizer, 'item/fileChange/patchUpdated', {
+        threadId,
+        turnId,
+        itemId: 'file-overflow',
+        changes: [
+          {
+            path: 'src/overflow.ts',
+            kind: { type: 'update', move_path: null },
+            diff: 'overflow',
+          },
+        ],
+      }),
+    /File-change identity limit/,
+  )
 })
 
 test('normalizes successful and failed turn completion fixtures', () => {

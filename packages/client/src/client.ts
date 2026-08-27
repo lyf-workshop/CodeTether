@@ -72,7 +72,7 @@ export class CodeTetherClient {
     this.#fetch = fetchImplementation.bind(globalThis)
     this.#maxResponseBytes = positiveInteger(
       options.maxResponseBytes,
-      16 * 1024 * 1024,
+      64 * 1024 * 1024,
       'maxResponseBytes',
     )
     this.#maxEventFrameBytes = positiveInteger(

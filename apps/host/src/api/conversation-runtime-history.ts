@@ -725,9 +725,8 @@ export class ConversationRuntimeHistory {
   }
 
   #markTruncated(state: ConversationHistoryState): void {
-    if (!state.history.truncated) {
-      state.history = { ...state.history, truncated: true }
-    }
+    if (state.history.truncated) return
+    state.history = { ...state.history, truncated: true }
     state.snapshotRevision += 1
   }
 

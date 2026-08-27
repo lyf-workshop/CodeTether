@@ -27,24 +27,22 @@ If sources conflict, stop and resolve the conflict instead of inventing a compro
 
 ## Current Scope
 
-The current phase is **Phase 2C.2 — Live Conversation Control**. The accepted frontend is frozen as **CodeTether V2 Frontend Core v1**, the accepted local Codex runtime is frozen as **Phase 2A Codex Runtime v1**, Protocol v1 is frozen at the accepted **Phase 2B Client ↔ Host Protocol** boundary, and the complete read path is frozen as **Live Conversation Read Model v1**. Allowed work is limited to:
+The current phase is **Phase 2D — Local Alpha Audit & Stabilization**. The accepted frontend is frozen as **CodeTether V2 Frontend Core v1**, the accepted local runtime is frozen as **Phase 2A Codex Runtime v1**, Protocol v1 is frozen at the accepted **Phase 2B Client ↔ Host Protocol** boundary, the complete read path is frozen as **Live Conversation Read Model v1**, and the working product baseline is tagged **CodeTether Local Codex Alpha v0.1**. Allowed work is limited to:
 
-- Connecting the existing Composer on a live `conv_*` route to the Protocol v1 text Turn command without creating an optimistic canonical User message.
-- Resolving each Host-owned pending Approval by its exact `approvalId`, with one-shot `accept` and `decline` decisions only.
-- Connecting the existing interrupt control to the exact active Conversation and Turn while waiting for Host terminal events as final truth.
-- Generating a fresh `actionId` for each logical mutation, preventing duplicate submissions, and safely retrying ambiguous requests through Host idempotency.
-- Gating controls by Bootstrap capabilities, Host connection state, and active-Turn state; queueing, steering, and thread termination remain unsupported.
-- Preserving the frozen Conversation Detail component tree while supporting Mock and live control modes through one typed controller boundary.
-- Keeping multiple pending Approvals visible and independently actionable, retaining drafts on errors, handling IME safely, and providing restrained Timeline auto-follow behavior.
-- Running real Codex control validation only in ignored isolated workspaces and recording verified behavior and remaining gaps.
+- Auditing repository size, dependencies, architecture direction, wire-contract ownership, runtime state ownership, and documentation truth.
+- Measuring bounded Host/browser memory, Snapshot/projection cost, streaming aggregation, test health, and development workflow.
+- Revalidating reconnect, Host/Codex failure, process cleanup, Approval identity safety, workspace confinement, safe errors, and the existing local browser control loop.
+- Recording real UX findings by severity without redesigning frozen product surfaces.
+- Fixing only a reproducible P0/P1 correctness, security, bounded-memory, or conflicting-source-of-truth defect required to keep the existing Alpha safe and correct.
+- Updating specifications with verified Alpha capabilities, limits, measurements, and audit conclusions.
 
-This phase stops after browser-controlled text Turns, one-shot Approval resolution, interruption, and subsequent continuation are validated. Do not connect another page to live Host data or begin Phase 3.
+This phase stops after the Alpha audit and stabilization report. Do not begin Persistence, another product surface, another provider, desktop packaging, or remote access.
 
 ## Out of Scope
 
-During Phase 2C.2, do not implement:
+During Phase 2D, do not implement:
 
-- Visual redesigns or unrelated refactors to the frozen Design System, AppShell, Inbox, Conversations, or Conversation Workspace; only the existing Conversation Detail control boundary may change.
+- Visual redesigns or unrelated refactors to the frozen Design System, AppShell, Inbox, Conversations, or Conversation Workspace. Phase 2D does not authorize a product UI change.
 - Activity, Projects, Machines, Agents, Settings, New Conversation, or any other new product-page content or flow.
 - Live Host data in Inbox, Conversations, or another frozen page.
 - A generic WebSocket RPC transport or interactive PTY transport.

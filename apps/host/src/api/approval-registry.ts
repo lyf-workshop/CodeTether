@@ -19,6 +19,7 @@ import type {
 import { publicItemId, type ConversationState } from './host-service-state.js'
 
 const MAX_RESOLVED_APPROVALS = 256
+export const MAX_PENDING_APPROVALS = 32
 
 interface ApprovalState {
   record: ApprovalRecord
@@ -93,6 +94,14 @@ export class ApprovalRegistry {
     if (this.#providerApprovals.has(providerKey)) {
       request.respond('decline')
       throw new Error('Provider reused an active approval request identity')
+    }
+    if (this.pendingRecords().length >= MAX_PENDING_APPROVALS) {
+      // Fail closed before allocating another public/provider binding. The
+      // provider may later report this automatic decline as an unknown
+      // resolution, which deliberately fails the Runtime rather than risking
+      // an approval that CodeTether cannot track.
+      request.respond('decline')
+      return
     }
 
     const approvalId = newApprovalId()

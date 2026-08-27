@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto'
+
 import type {
   AgentEvent,
   ApprovalKind,
@@ -12,6 +14,8 @@ export interface NormalizationResult {
   readonly recognized: boolean
   readonly events: readonly AgentEvent[]
 }
+
+export const MAX_FILE_CHANGES_PER_TURN = 1024
 
 /** Translates only the lifecycle and item shapes required by the Phase 2A spike. */
 export class CodexEventNormalizer {
@@ -232,10 +236,15 @@ export class CodexEventNormalizer {
       const path = requireString(change, 'path', raw.method)
       const diff = readString(change, 'diff')
       const kind = normalizeChangeKind(change.kind)
-      const key = `${threadId}\u0000${turnId}\u0000${itemId ?? ''}\u0000${path}\u0000${kind}\u0000${diff ?? ''}`
+      const key = fileChangeIdentity(itemId, path, kind, diff)
       const seenForTurn = this.#seenFileChanges.get(turnKey(threadId, turnId))
       if (seenForTurn?.has(key) === true) return []
       const seen = seenForTurn ?? new Set<string>()
+      if (seen.size >= MAX_FILE_CHANGES_PER_TURN) {
+        throw new CodexProtocolError(
+          `File-change identity limit of ${String(MAX_FILE_CHANGES_PER_TURN)} was reached for one Turn`,
+        )
+      }
       seen.add(key)
       this.#seenFileChanges.set(turnKey(threadId, turnId), seen)
       return [
@@ -320,6 +329,23 @@ export class CodexEventNormalizer {
       ],
     }
   }
+}
+
+function fileChangeIdentity(
+  itemId: string | undefined,
+  path: string,
+  kind: FileChangeKind,
+  diff: string | undefined,
+): string {
+  return createHash('sha256')
+    .update(itemId ?? '', 'utf8')
+    .update('\u0000', 'utf8')
+    .update(path, 'utf8')
+    .update('\u0000', 'utf8')
+    .update(kind, 'utf8')
+    .update('\u0000', 'utf8')
+    .update(diff ?? '', 'utf8')
+    .digest('hex')
 }
 
 function turnKey(threadId: string, turnId: string): string {

@@ -219,7 +219,7 @@ Verified result:
 
 ### Phase 2C.2 — Live Conversation Control
 
-**Status:** implementation, automated validation, and real browser-control validation are complete; awaiting review.
+**Status:** accepted and frozen as **CodeTether Local Codex Alpha v0.1**.
 
 Implemented scope:
 
@@ -251,6 +251,26 @@ Exit gate:
 - Tests cover Composer intent, action identity and duplicate suppression, IME keys, draft retention, connection/capability gating, interrupt identity, independent Approval identity, safe mutation errors, auto-scroll decisions, and stable Tool presentation.
 - `pnpm typecheck`, `pnpm lint`, `pnpm format:check`, `pnpm build`, and `pnpm test` pass.
 - Real browser validation completes Send, multi-Turn context, Approval Allow/Decline, Interrupt, and Continue in ignored isolated workspaces with no browser console errors or warnings.
+
+### Phase 2D — Local Alpha Audit & Stabilization
+
+**Status:** complete. No next product phase is authorized by this audit.
+
+Verified outcomes:
+
+- Repository, dependency, architectural-boundary, wire-contract, state-ownership, memory, failure, security, UX, test, developer-experience, and documentation audits were completed against the tagged Alpha baseline.
+- No P0 defect or layer-boundary leak was found. Protocol v1 remains the only Client-to-Host wire source of truth, and provider identities remain behind the Host/adapter boundary.
+- P1 stabilization bounded process-wide Conversation admission, pending Approvals, active-Turn provider/file identities, JSON-RPC line framing, and browser message projection. Repeated history truncation now emits one reset boundary instead of a reset storm.
+- Losing the reliable runtime control path now closes the Codex child, and partial local-Host assembly failures clean up the already-started runtime.
+- Ordinary 20-Turn Snapshot reconstruction remained fast; near-cap history serialization and some browser-lifetime retry state remain measured technical debt rather than correctness blockers.
+- Real isolated Codex and browser runs revalidated multi-Turn context, Approval Allow/Decline, Interrupt/Continue, refresh recovery, and 1280-pixel layout without console errors or warnings.
+- Physical Windows Chinese IME behavior and destructive hard-kill/orphan scenarios were not manually claimed as passing.
+
+Exit gate:
+
+- All P1 findings required for a bounded and safe local Alpha are fixed with focused regression tests.
+- Full typecheck, lint, format, build, fixture test, diff, and real isolated integration gates pass.
+- The final audit report records remaining P2/P3 debt and recommends—but does not begin—the next phase.
 
 ## Phase 3 — Conversation Management
 

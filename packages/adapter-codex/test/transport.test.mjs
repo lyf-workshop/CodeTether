@@ -6,6 +6,7 @@ import test from 'node:test'
 import {
   CodexProcessExitError,
   CodexProtocolError,
+  JsonRpcLineTooLongError,
   JsonRpcRemoteError,
   JsonRpcTransport,
 } from '../dist/index.js'
@@ -121,6 +122,24 @@ test('surfaces invalid JSON and rejects later requests with the same failure', a
     assert.equal(requestError, error)
     return true
   })
+})
+
+test('routes line overflow through transport failure and rejects pending requests', async () => {
+  const { child, transport } = createHarness({ maxLineBytes: 16 })
+  const errorPromise = once(transportErrorEmitter(transport), 'error')
+  const pending = transport.request('initialize')
+
+  child.stdout.write('x'.repeat(17))
+
+  const [error] = await errorPromise
+  assert.ok(error instanceof JsonRpcLineTooLongError)
+  assert.equal(error.maxLineBytes, 16)
+  assert.equal(error.observedLineBytes, 17)
+  await assert.rejects(pending, (requestError) => {
+    assert.equal(requestError, error)
+    return true
+  })
+  assert.equal(transport.pendingRequestCount, 0)
 })
 
 test('rejects every pending request when the process exits unexpectedly', async () => {

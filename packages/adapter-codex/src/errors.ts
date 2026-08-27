@@ -23,6 +23,19 @@ export class CodexProtocolError extends Error {
   override readonly name: string = 'CodexProtocolError'
 }
 
+export class JsonRpcLineTooLongError extends CodexProtocolError {
+  override readonly name: string = 'JsonRpcLineTooLongError'
+
+  constructor(
+    readonly maxLineBytes: number,
+    readonly observedLineBytes: number,
+  ) {
+    super(
+      `Codex App Server emitted a JSON-RPC line larger than ${String(maxLineBytes)} bytes (observed ${String(observedLineBytes)} bytes)`,
+    )
+  }
+}
+
 export class JsonRpcRemoteError extends CodexProtocolError {
   override readonly name: string = 'JsonRpcRemoteError'
 

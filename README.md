@@ -4,7 +4,17 @@
 
 CodeTether is a planned desktop and mobile workspace for supervising and controlling coding agents across projects and machines. V1 is Codex-first, with provider-neutral boundaries for later Claude Code and OpenCode support.
 
-Phase 1 is accepted and frozen as **CodeTether V2 Frontend Core v1**, the accepted local runtime is frozen as **Phase 2A Codex Runtime v1**, and Phase 2B is accepted as the development-only Protocol v1 loopback HTTP/SSE boundary. The complete read path is frozen as **Live Conversation Read Model v1**. Phase 2C.2 connects the existing live Conversation Composer, one-shot Approval actions, and Interrupt control to that boundary while the Host remains canonical state owner. Demo, Inbox, and Conversations remain Mock data; there is still no persistence, Tauri shell, authentication, remote access, or non-Codex provider.
+Phase 1 is accepted and frozen as **CodeTether V2 Frontend Core v1**, the accepted local runtime is frozen as **Phase 2A Codex Runtime v1**, and Phase 2B is accepted as the development-only Protocol v1 loopback HTTP/SSE boundary. The complete read path is frozen as **Live Conversation Read Model v1**. Phase 2C.2 is accepted and frozen as **CodeTether Local Codex Alpha v0.1**: the existing Conversation Workspace can start real text Turns, stream results, resolve one-shot Approvals, interrupt, and continue while the Host remains canonical state owner. Demo, Inbox, and Conversations remain Mock data; there is still no persistence, Tauri shell, authentication, remote access, or non-Codex provider.
+
+## Current Alpha capabilities
+
+- Run one long-lived local Codex App Server behind a loopback-only Host.
+- Create in-memory Codex Conversations and complete multiple browser-controlled Turns.
+- Stream Agent messages, Tool output, file changes, Diff, and terminal summaries through Protocol v1 HTTP/SSE.
+- Resolve exact bound command Approvals with Allow Once or Decline.
+- Interrupt an active Turn and continue the same Codex Thread afterward.
+- Rebuild bounded retained history after browser refresh, replay, or `stream.reset` within the same Host process.
+- Observe the same ordered events from multiple local clients.
 
 ## Repository layout
 
@@ -66,6 +76,17 @@ pnpm host:observe -- turn --conversation <conv_id> --input <text>  # Start a dev
 
 For an end-to-end local browser-control check, run `pnpm host:control` and `pnpm dev`, then open one of the printed `/conversations/conv_*` routes. The general isolated Conversation supports text Turns and interruption; the linked Git fixture supports safe command-Approval checks. The Host records canonical User input and publishes final mutation state through Protocol events, so refresh and `stream.reset` reconstruct the same retained Timeline. History remains process-local and bounded; a Host restart still clears it.
 
+The development Host accepts only absolute existing directories contained by an explicitly configured workspace root after real-path resolution. It binds to `127.0.0.1`, uses an exact Origin allowlist, and disables local Codex hooks by default so approval decisions stay on the CodeTether control path. Use only an ignored disposable workspace for real-agent development checks.
+
+## Known Alpha limitations
+
+- Host restart loses CodeTether Conversation identity and retained history; there is no database or recovery layer.
+- Only Codex, text Turn start, one-shot command Approval, and Turn interrupt are connected.
+- Inbox and Conversations are still product-quality Mock surfaces rather than live Host projections.
+- Stop/terminate, queue/steer, attachments, Project management, Tauri packaging, remote access, authentication, and other providers are not implemented.
+- File-change and permissions Approval variants have fixture/schema coverage but have not been observed in a real Codex run.
+- Physical Windows Chinese IME input has not been manually validated; automated composition-event coverage exists.
+
 ## Documentation
 
 - [Product specification](docs/PRODUCT.md)
@@ -75,4 +96,4 @@ For an end-to-end local browser-control check, run `pnpm host:control` and `pnpm
 
 ## Status
 
-Phase 2C.2 live Conversation control is implemented and validated, and is awaiting review. Do not add live data to Inbox or Conversations, add persistence or remote exposure, begin Phase 3, or redesign the frozen frontend. See the roadmap for ordered gates.
+**CodeTether Local Codex Alpha v0.1** is accepted and tagged. Phase 2D audited and stabilized the current local Alpha without selecting or starting a next product phase. Do not add live data to Inbox or Conversations, persistence, desktop packaging, remote exposure, or another provider without an explicit next-phase decision. See the roadmap for ordered gates.

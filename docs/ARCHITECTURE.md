@@ -4,7 +4,7 @@
 
 Phase 1 Frontend Experience is accepted and frozen as **CodeTether V2 Frontend Core v1**. Phase 2A and Phase 2A.1 are accepted and frozen as **Phase 2A Codex Runtime v1**. Phase 2B is accepted as the versioned local Client-to-Host boundary: HTTP commands, an SSE event stream, CodeTether-owned public identities, in-memory snapshot/replay, and a non-React client.
 
-Phase 2C.1 is accepted, and Phase 2C.1.1 is frozen as **Live Conversation Read Model v1**: one application-scoped Web runtime connects the frozen Conversation Detail to Protocol v1, while bounded Host-owned history reconstructs the same retained multi-Turn view after initial load, refresh, reconnect reset, or live event application. Phase 2C.2 connects only the existing text Composer, one-shot Approval actions, and Interrupt control. Demo, Inbox, and Conversations remain Mock-only.
+Phase 2C.1 is accepted, and Phase 2C.1.1 is frozen as **Live Conversation Read Model v1**: one application-scoped Web runtime connects the frozen Conversation Detail to Protocol v1, while bounded Host-owned history reconstructs the same retained multi-Turn view after initial load, refresh, reconnect reset, or live event application. Phase 2C.2 is accepted and frozen as **CodeTether Local Codex Alpha v0.1**, connecting only the existing text Composer, one-shot Approval actions, and Interrupt control. Phase 2D audited and stabilized this boundary without adding product scope. Demo, Inbox, and Conversations remain Mock-only.
 
 No Tauri shell, database, persistence, remote access, authentication, or production machine-host service exists yet. The Phase 2B server is a development-only loopback API.
 
@@ -171,7 +171,7 @@ Phase 2A.1 observed a real command approval end to end with Codex 0.149.1. The s
 
 The generated `item/permissions/requestApproval` schema still has no explicit deny response variant. CodeTether does not infer one. File-change and permissions approvals remain schema-supported but not manually observed.
 
-The local Codex installation also has a user `PermissionRequest` hook capable of pre-resolving escalation before an App Server request reaches CodeTether. The Phase 2A.1 semantics runner starts App Server with hooks disabled only for its disposable protocol-validation scenarios. The default adapter launcher continues to respect user configuration. Hook coexistence and precedence require an explicit product decision in a later phase.
+The local Codex installation also has a user `PermissionRequest` hook capable of pre-resolving escalation before an App Server request reaches CodeTether. Local CodeTether Host launch paths disable Codex hooks by default so an Approval cannot bypass the CodeTether control path; an explicit adapter caller may opt back into its own provider configuration. Hook coexistence and precedence still require a later production policy decision.
 
 ## Verified Phase 2A.1 Runtime Semantics
 
@@ -256,7 +256,7 @@ Every Host process generates one non-persistent UUID `epoch`. A Host-global posi
 
 The replay buffer holds aggregated client events, not raw Codex deltas. It is bounded to 2,048 events and approximately 8 MiB by default, evicting oldest events by count or encoded size. `Last-Event-ID` reconnect replays the subsequent retained sequence. An epoch mismatch, evicted cursor, or future cursor produces a connection-local `stream.reset` control carrying the current `<epoch>:<currentSeq>` boundary; it is sent first and the recovery stream closes without allocating a sequence or entering replay. Runtime-history compaction is a different reset cause: after applying the triggering event, the Host publishes a sequenced and replayable `stream.reset` with reason `history_evicted`. That boundary reaches current observers and reconnecting observers alike, forcing all projections to replace from the newly compacted Snapshot. Heartbeats are SSE comments and do not consume sequence numbers.
 
-Two live clients received identical event IDs and sequence values in tests and in the real integration path. Disconnecting one observer does not affect another. Replay is written directly with HTTP backpressure rather than being copied into the live queue. Each live connection defaults to 256 queued frames and approximately 1 MiB, while one standalone valid frame may be as large as 9 MiB. Heartbeats may coalesce or drop; reliable overflow closes only the slow connection so it can reconnect or fetch a snapshot. Approval and terminal events are never silently discarded. The non-React client independently caps an SSE frame at 10 MiB and an HTTP JSON body at 16 MiB.
+Two live clients received identical event IDs and sequence values in tests and in the real integration path. Disconnecting one observer does not affect another. Replay is written directly with HTTP backpressure rather than being copied into the live queue. Each live connection defaults to 256 queued frames and approximately 1 MiB, while one standalone valid frame may be as large as 9 MiB. Heartbeats may coalesce or drop; reliable overflow closes only the slow connection so it can reconnect or fetch a snapshot. Approval and terminal events are never silently discarded. The non-React client independently caps an SSE frame at 10 MiB and an HTTP JSON body at 64 MiB, which covers the bounded aggregate Alpha Snapshot.
 
 A fatal Codex runtime signal terminates active public Turns with a safe `runtime_unavailable` error, resolves pending Approvals as declined, clears Turn-scoped buffers, disables the affected bootstrap capabilities, and makes new mutations return HTTP 503. Provider error text never crosses the client boundary. If failure occurs while idle, clients learn the capability change on their next bootstrap or mutation because Protocol v1 does not yet define a capability-change event.
 
@@ -315,6 +315,22 @@ Pending Approvals stay as an ordered plural projection. Each visible row uses it
 Timeline auto-follow is presentation-only state. New activity follows the bottom only while the user remains near it; scrolling upward freezes position and exposes a restrained “跳到最新” action. Tool rows use deterministic semantic titles and bounded wrapper-free subtitles, workspace file changes display paths relative to the authorized `cwd`, and complete command/error output remains in the bounded Terminal projection.
 
 The 2026-08-26 browser validation used only the ignored `.tmp/codetether-codex-semantics-browser-control/` and linked approval workspaces. One real Conversation completed multiple browser-submitted Turns, retained prior context, was interrupted during a bounded 20-second sleep, then completed a following Turn on the same Thread. Separate real command Approvals verified Allow Once and Decline: Allow executed `git status --short` and completed; Decline did not execute it and the Provider still completed the Turn. A longer read-only result caused no horizontal overflow at 1536 x 1024 or 1280 x 900. Synthetic browser composition events plus pure keyboard tests verified that an IME Enter does not submit; a physical Windows IME session remains a human acceptance check.
+
+## Phase 2D Alpha Stabilization
+
+The Alpha audit found no React/provider dependency leak and no competing authoritative Conversation state. It did identify several P1 boundedness and lifecycle gaps, fixed without expanding product scope:
+
+- The Host admits at most eight in-memory Conversations per process by default. With the approximately 4 MiB per-Conversation history budget, retained history is therefore bounded to approximately 32 MiB of encoded data before JavaScript object and temporary serialization overhead.
+- One active Turn admits at most 1,024 provider Item identities and 1,024 normalized file-change identities. The normalizer stores fixed-size SHA-256 dedupe keys rather than complete diff text.
+- At most 32 Approvals may remain pending; overflow is declined fail-closed before a public record is allocated. Resolved Approval history remains capped at 256.
+- JSON-RPC stdout framing has a 16 MiB UTF-8 line ceiling. Overflow rejects pending requests and fails the transport instead of retaining an unbounded partial line.
+- Browser Agent-message projection retains at most 512 KiB per message field, while terminal projection retains the existing 128 KiB tail.
+- History truncation changes revision only on its first transition to truncated, preventing every later delta from publishing another `stream.reset`.
+- Failure of the reliable runtime event/control path initiates idempotent runtime close, so a live Codex child cannot continue unobserved. Local Host assembly also closes an already-started runtime if a later construction or listen step fails.
+
+An ordinary synthetic retained Conversation with 20 Turns, 40 Agent messages, 40 Tools, 20 changes, and 9,020 terminal bytes produced a 389,041-byte Snapshot. Warm schema validation measured 0.210 ms median / 0.460 ms p95, and projection reconstruction measured 0.547 ms median / 0.935 ms p95 on the audit machine. At a near-cap 3.90 MiB history, each additional delta cost approximately 14.429 ms median / 15.002 ms p95 because retention enforcement serializes the full runtime; this is measured P2 performance debt, not a correctness blocker for the local Alpha.
+
+The stabilized process-level lower bound is approximately 32 MiB of encoded retained Conversation history plus the 8 MiB replay buffer, 4 MiB provider-binding buffer, 1 MiB provider queue, bounded approval/action/identity maps, and temporary Snapshot/SSE serialization. Actual JavaScript heap and the Codex child process are higher. All state remains process-local and disappears on Host restart.
 
 ## UI
 
@@ -392,9 +408,9 @@ These controls are development safeguards, not a production security model. Auth
 - The browser cursor and live Conversation projection are memory-only and reset on page refresh.
 - Snapshot reconstructs only the bounded in-memory history retained by the current Host process; evicted records and all state from a previous Host process are intentionally unavailable.
 - Terminal projection retains only the most recent 128 KiB per Conversation.
-- Runtime-history limits are per Conversation. The Host does not yet have a process-wide Conversation-count or aggregate Snapshot-memory admission limit. Provider Item bindings for an active Turn remain stable until that Turn becomes terminal, then unretained bindings are swept; the active binding map has no separate hard item-count limit yet.
+- Runtime history remains limited per Conversation, and the Host admits at most eight in-memory Conversations by default. Active-Turn provider Item and file-change identity maps are each capped at 1,024 entries; exceeding a bound fails explicitly rather than growing without limit.
 - An idle runtime failure changes bootstrap capabilities but has no proactive Protocol v1 capability-change event.
-- User approval hooks can pre-resolve escalation; the validation runner disables hooks only in disposable semantics scenarios.
+- Local Host launch paths disable Codex hooks by default so user hooks cannot pre-resolve escalation ahead of CodeTether Approval handling.
 - Protocol v1 Approval presentation does not yet expose a trusted structured risk or provider reason field, so the live UI shows kind, semantic command/action, workspace context, and identity without fabricating risk.
 - Generated protocol artifacts and real-agent workspace files remain ignored under `.tmp/`.
 - Legacy CodeTether code and structure are not architectural inputs.

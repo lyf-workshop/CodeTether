@@ -305,7 +305,7 @@ Exit gate results:
 
 ### Phase 3B.1 — Durable Project Identity & Local Workspace Authorization
 
-**Status:** implemented and validated. Phase 3B.2 is not authorized.
+**Status:** implemented and validated.
 
 Verified scope:
 
@@ -322,7 +322,7 @@ Not included:
 
 - Projects UI, filesystem browser/discovery, import UX, live Conversations/Inbox data, or a new Conversation product flow.
 - Multiple Project locations, Machine binding, filesystem generation identity, workspace relocation, or automatic repair of an unavailable root.
-- Tauri, remote access, authentication, another provider, or any Phase 3B.2 product scope.
+- Tauri, remote access, authentication, or another provider.
 
 Exit gate results:
 
@@ -331,9 +331,169 @@ Exit gate results:
 - Protocol, client, Host API, persistence, and real isolated integration gates validate the Project-aware control path without changing the frozen frontend.
 - A real `codex-cli 0.149.1` Conversation survived a complete Host restart, recalled `PROJECT-BOUNDARY-8427` through the saved provider Thread, failed closed while its Project directory was temporarily unavailable, and completed another Turn after that directory was restored.
 
-### Phase 3B.2 — Next Project Milestone
+### Phase 3B.2 — Real Projects UI
 
-**Status:** not started and not authorized. Its product and engineering scope requires a separate approved specification; Phase 3B.1 does not implicitly authorize a Projects UI, live Conversations/Inbox data, Project discovery, or multiple-Machine workspace management.
+**Status:** implemented and validated. The accepted scope stops at real local Project list/add/detail/remove.
+
+Verified scope:
+
+- `/projects` lists real Host-owned Project records and distinguishes loading, empty, and Host-unavailable states.
+- `/projects/:projectId` independently reads and presents the real name, canonical root path, availability, and timestamps without Mock analytics, Git data, or Conversation counts.
+- A keyboard-accessible add dialog accepts a manual absolute path and optional name. The Host remains authoritative for path validation, canonicalization, authorization, duplicate detection, and safe errors.
+- Duplicate canonical registration returns and opens the existing Project without creating a second list entry.
+- Unavailable Project roots remain inspectable with durable metadata and a restrained unavailable state.
+- Removal requires explicit confirmation that no filesystem data is deleted. A referenced Project reports `project_has_conversations`; there is no cascade or force delete.
+- TanStack Query owns Project server-state caching and mutation refresh, while React uses the typed `packages/client` boundary rather than direct fetch calls or a duplicate Project store.
+
+Not included:
+
+- Native folder selection, filesystem scanning/discovery, import automation, rename, relocation, or automatic repair of an unavailable root.
+- Real Conversations or Inbox data, a New Conversation flow, Project Conversation counts, Git status/management, or repository indexing.
+- Tauri, Machine management, remote access, authentication, another provider, or mobile UI.
+
+Exit gate results:
+
+- Real browser flows validated empty state, registration, duplicate handling, detail read, Host restart persistence, unavailable/recovered roots, registration-only removal, and the referenced-Project conflict without deleting either test directory.
+- Projects list and detail were reviewed at 1536 × 1024 and 1280 × 900 without horizontal overflow, and the unavailable state was captured separately.
+- Focus behavior, Dialog Escape restoration, safe Host errors, query updates, and focused Project UI/data tests passed alongside the repository typecheck, lint, format, build, test, and diff gates.
+- Inbox, Conversations, Conversation Detail, AppShell, and the Design System retain their accepted visual and data boundaries.
+
+### Phase 3C.1 — Durable Conversation Index & Title
+
+**Status:** implemented and validated. The accepted scope stops at the durable history index and typed non-React client.
+
+Verified scope:
+
+- SQLite migration 003 adds a required canonical title and a distinct `last_activity_at` activity clock to every Conversation without changing its Project, provider Thread, Turn, or normalized Timeline identity.
+- Existing rows use their first durable text input for deterministic title backfill; rows without a Turn remain `新会话`.
+- New Conversations start as `新会话`. The first Host-recorded text input generates one local title before provider execution; later Turns and provider resume do not rewrite it.
+- Title generation normalizes Unicode/whitespace, uses the opening sentence or clause, removes only a small stable set of request prefixes, and truncates safely to 48 graphemes within the wire bound. It never calls a model.
+- `GET /api/v1/projects/:projectId/conversations` queries only durable Conversation summary columns, is scoped to one Project, sorts by last activity descending, defaults to 50 rows, and rejects limits above 100.
+- Optional canonical provider/status filters are validated at the Protocol boundary. Unavailable Projects remain readable; unknown Projects return `not_found`.
+- `ConversationSummary` exposes product identity, title, provider/model/reasoning, canonical status, and timestamps while keeping `cwd`, provider Thread identity, and SQLite details private.
+- `packages/client` provides the matching typed list method without connecting the frozen Conversations UI.
+
+Not included:
+
+- Real Conversations UI, real Conversation Rail, New Conversation UI, current-Project frontend integration, Inbox data, or search indexing.
+- Cursor pagination. V1 returns a bounded first page only; a later history surface must define continuation before assuming more than 100 rows are visible.
+- AI title generation, rename UI, or a title-rewrite subsystem.
+- At the Phase 3C.1 exit boundary, cold Conversations beyond the eight-Conversation runtime admission window did not yet hydrate for control; Phase 3C.1.1 subsequently closes that runtime gap without connecting React.
+
+Exit gate results:
+
+- Fresh and migrated databases, Unicode/title bounds, no-Turn fallback, first-input ownership, second-Turn stability, Project isolation, canonical status, last-activity ordering, restart restore, query bounds, and private-provider-field exclusion have focused coverage.
+- A 100-row fixture query reads only `conversations` summary columns and completed in approximately 2–3 ms on the validation machine; corrupt Turn snapshot JSON does not affect the index query.
+- A real isolated Codex run retained deterministic titles over multiple Turns, returned two Project Conversations in activity order, preserved that order through a full Host restart, and lazily resumed the original provider Thread to recall `INDEX-TITLE-731`.
+- The frozen React product surfaces remain unchanged.
+
+### Phase 3C.1.1 — Durable Conversation Detail & Bounded Runtime Hydration
+
+**Status:** implemented and validated. The accepted scope stops at the provider-independent durable detail read and internal cold-control hydration path.
+
+Verified scope:
+
+- Product history, the Host runtime working set, and the Codex provider session are separate layers: SQLite owns durable identity/history; at most eight Conversations are admitted to live memory by default; Codex owns Thread context and is resumed only for control.
+- `GET /api/v1/conversations/:conversationId` reconstructs the most recent 20 durable Turns by default using the existing normalized `ConversationRuntimeSnapshot`, with `hasOlderHistory`, retained/total Turn counts, actionable pending Approvals, and bounded resolved/expired Approval history.
+- Cold detail reads do not hydrate runtime state, start or resume Codex, advance SSE sequence, mutate durable state, or require an available Project/provider Thread.
+- Starting a Turn on a cold Conversation deduplicates internal hydration, reserves bounded runtime capacity, restores durable presentation/identity state, revalidates the workspace, and lazily resumes the saved provider Thread before starting provider work.
+- Runtime capacity uses least-recently-used eviction only for safe idle, clean, unpinned Conversations. Active, starting, interrupting, hydrating, dirty, or Approval-waiting Conversations are protected; capacity pressure without a safe victim returns `runtime_unavailable`.
+- Cold presentation order is compacted, while already-hot restored order stays stable when it is unambiguous. The Host event sequence starts above the possible durable order range when cold provider Conversations exist, preventing a new live Item from colliding with cold history. Durable publication still checks that preview and published sequence agree.
+- If Codex launch fails, the loopback Host remains available for durable Project/index/detail reads with provider capabilities disabled; provider-dependent mutations fail closed.
+- Protocol v1 and `packages/client.getConversation()` expose only CodeTether summary/runtime/history contracts. Provider Thread identity, raw provider data, SQLite details, workspace routing, and internal hydration state remain private.
+
+Not included:
+
+- Real Conversations UI, real Conversation Rail, current-Project frontend integration, New Conversation UI, or Inbox data.
+- Full-history pagination or a browser history-loading flow. The detail response is a bounded recent window and reports older durable history explicitly.
+- New persistence tables, an event store, durable runtime admission/LRU state, provider-event persistence, durable SSE replay, or durable action idempotency.
+- Tauri, remote access, another provider, queue/steer, attachments, or a production Host lifecycle supervisor.
+
+Exit gate results:
+
+- Fixture coverage verifies cold read purity, recent-20/older-history metadata, User/Agent/Tool/Change/Terminal reconstruction, pending/resolved/expired Approval semantics, eight-runtime startup admission, single hydration/resume, safe LRU eviction, protected active state, concurrent-control deduplication, and private-field exclusion.
+- HTTP integration verifies strict single-Conversation reads, unknown/query rejection, provider-independent unavailable history, and read-only Host startup when the Codex executable cannot launch.
+- A real Codex integration created 12 durable Conversations, restarted the Host with exactly eight hydrated and zero active Conversations, read an older Conversation without hydrating it, then lazily hydrated/resumed its original Thread and completed a second Turn that recalled the pre-restart marker. In the final run, the cold SQLite read took 1.368 ms, runtime hydration before provider resume 1.729 ms, provider lazy resume 120.790 ms, and provider Turn start 42.111 ms.
+- Cold reconstruction and subsequent live events preserve unique presentation order and strict Host-global sequence without publishing a synthetic hydration event.
+- The accepted frontend remains unchanged; Real Conversations and history pagination remain separately authorized future work.
+
+### Phase 3C.2 — Real Conversations Experience
+
+**Status:** implemented and validated. The accepted scope stops at the real Project-scoped Conversation list/Rail/context and minimal Codex Conversation creation.
+
+Verified scope:
+
+- `/projects/:projectId/conversations` reads up to the latest 100 durable summaries through `packages/client` and TanStack Query, preserves Host activity order, and distinguishes loading, empty, unavailable Project, Host-unavailable, and local no-result states.
+- The accepted Conversations visual structure now presents only real Project, title, provider, model, canonical status, and activity fields. Provider groups are data-driven, so current real data shows Codex only; fake Machine, Git, archive, Claude Code, and OpenCode Conversation data are absent.
+- `/conversations/:conversationId` reads cold or live normalized detail through one ViewModel. Its Rail queries the owning Project's durable index, selects by `conversationId`, scrolls beyond eight Conversations, and does not resume Codex merely to show history.
+- Current Project context and breadcrumbs derive from the route/detail `projectId`; there is no persisted last-Project store. `/conversations` redirects to `/projects`, while `/conversations/demo` remains a development-only fixture outside real navigation.
+- Project Detail can open the real history or the minimal New Conversation dialog. Project context is locked when known; global entry queries available Projects; Agent is locked to Codex; model/reasoning use Host defaults; mutation identity is random and duplicate in-flight submission is suppressed.
+- A zero-Turn Conversation renders a real empty Timeline and enabled Composer. The first Host-owned input updates the durable title, and low-frequency lifecycle events refresh the header, breadcrumb, Rail, and index without refetching on message or Tool deltas.
+- Unavailable Project history remains readable while create/control paths are disabled. Host failure is not presented as an empty list and exposes an explicit retry.
+- Bootstrap capability state is retained by the application Host Runtime rather than relying on an unobserved Query cache lifetime, preserving controls during long-running sessions.
+
+Not included:
+
+- Real Inbox, Activity, Conversation archive/rename/delete, older-history pagination UI, full-text search, Project discovery, native folder selection, or Git management.
+- Provider selection, Claude Code, OpenCode, Machine management, Tauri, remote access, authentication, queue/steer, or attachments.
+- A persistent Current Project preference or global Project store.
+
+Exit gate results:
+
+- A real browser flow registered one isolated Project, created a Conversation, completed a file-changing Codex Turn, observed its durable title in Detail/List/Rail, and continued the same Thread after cold hydration.
+- Twelve durable Conversations remained listable and Rail-accessible while the Host working set stayed bounded. Opening the oldest history did not require provider execution; starting the next Turn lazily resumed it and recalled `PHASE3C2-ALPHA-731`.
+- After a full Host restart and new epoch, the same 12 Conversations and three-Turn Timeline were restored; the original provider Thread resumed and recalled the same marker. Temporarily moving the Project left List/Detail readable and disabled create/control until the directory was restored.
+- 1536 × 1024 screenshots cover real List, real Detail/Rail, New Conversation, empty Conversation, and 12+ history. List/Detail/Dialog were also checked at 1280 × 900 with no document overflow and correct Dialog Escape focus restoration.
+- The final stable browser walkthrough produced zero console errors and warnings, and the repository typecheck, lint, format, build, tests, and diff checks passed.
+
+### Phase 3D.1 — Durable Attention Model
+
+**Status:** implemented and validated. The accepted scope stops at the durable Host/Protocol/Client Attention boundary; the frozen Inbox UI remains Mock-backed.
+
+Verified scope:
+
+- SQLite migration 004 adds `attention_items` with CodeTether `attn_*` identity, exact Project/Conversation/Turn foreign keys, a stable unique semantic source key, bounded normalized payload JSON, and open/resolved/expired lifecycle.
+- Reliable current semantics create only Approval, completed-review, and failed-Turn Attention. Tool failure, user interrupt, and restart interruption do not create failed items. There is no question detection because no structured provider signal exists.
+- `GET /api/v1/attention` provides bounded global or Project-scoped reads, Host-owned priority ordering, and open counts. It reads the Attention index rather than Runtime Snapshot or Turn snapshot JSON.
+- `POST /api/v1/attention/:attentionId/resolve` explicitly acknowledges completed-review or failed items with normal action idempotency. Approval Attention can only resolve through the exact bound Approval endpoint.
+- Durable Turn finalization and Approval lifecycle writes share the relevant SQLite transaction with Attention creation/resolution. Stable source keys make Provider replay and restart idempotent.
+- `attention.created` and `attention.resolved` are reliable, sequenced SSE events. Replay is process-local; `stream.reset` recovery queries the durable Attention list.
+- Host restart preserves completed-review and failed items while expiring open Approval Attention with `host_restart`; it never reconstructs an actionable provider request. Migration does not backfill pre-004 Turn history.
+- `packages/client` exposes typed `listAttention()` and `resolveAttention()` methods. Existing Web runtime projection treats Attention events as cursor-only and does not connect them to Inbox or Conversation state.
+
+Not included:
+
+- Real Inbox UI, read/unread, questions/needs-reply, Activity, Notifications, or delivery badges.
+- Retry, queue/steer, provider expansion, Tauri, remote access, authentication, or persistence of provider requests/SSE/action caches.
+
+Exit gate results:
+
+- Fixture integration covers Approval allow/decline, exact binding, duplicate prevention, two-client fanout, replay/reset reconstruction, completed/failed restart survival, Approval restart expiry, explicit resolution, unavailable Project reads, and safe public payloads.
+- A real isolated Codex run produced an Approval Attention, resolved it through Allow Once, completed the Turn, survived a full Host restart with the completed-review item intact, and explicitly marked that review resolved. A real `turn.failed` was not observed and remains fixture-validated; Tool failure was not substituted for it.
+- Attention list fixtures measured approximately 1.3 ms for 100 rows and 4.6 ms for 500 rows on the validation machine; these are development observations, not production guarantees.
+
+### Phase 3D.2 — Real Inbox UI
+
+**Status:** implemented and validated. The accepted Desktop Inbox now consumes the durable Attention boundary without changing the frozen Conversation, Project, AppShell, or Design System structures.
+
+Verified scope:
+
+- `/inbox` queries up to 100 open Attention items through `packages/client` and TanStack Query, preserves Host priority order, and displays the Host-owned total/Approval/completed-review/failed summary.
+- Approval items use the exact bound Approval ID and one-shot accept/decline endpoint. Completed review resolves durably before navigation; failed acknowledgement resolves only Attention, while opening a failed Conversation leaves it open and the Turn failed.
+- The Primary Sidebar badge uses `summary.totalOpen`, hides at zero, and caps presentation at `99+` without deriving its value from the bounded item page.
+- `attention.created` and `attention.resolved` synchronize the Inbox and badge across clients. High-frequency Conversation/Tool events do not invalidate the query; `stream.reset` and epoch replacement refetch durable Attention after Snapshot recovery.
+- Loading, empty, Host-unavailable, mutation error, unavailable-Project, and 100-item-bound states are distinct. The real route contains no Mock Inbox context, question/needs-reply, unread, mark-all-read, fake risk/response metrics, retry action, provider group, or Machine metadata.
+
+Not included:
+
+- Structured questions/needs-reply, read/unread or processed-history UI, Activity, Notifications, Browser Push, retry-Turn, or pagination.
+- Provider expansion, Tauri, remote access, authentication, queue/steer, or attachments.
+
+Exit gate results:
+
+- A real isolated Codex Approval appeared in two browser clients, changed the shared Sidebar count, completed both Allow Once and Decline paths, and disappeared only after the semantic resolution. The resulting completed review survived a full Host restart, resolved durably before navigation, and disappeared from the other client without refresh.
+- A canonical fixture `turn.failed` traversed the real Host HTTP/SSE/SQLite/UI boundary. Opening its Conversation did not resolve it; acknowledgement removed only Attention and the durable Conversation/Turn remained failed. Tool failure was not substituted for Turn failure.
+- 1536 × 1024 captures cover Approval, completed review, and failed work; the empty state was checked at 1280 × 900. A stable post-restart browser session produced zero console errors and warnings.
 
 ## Phase 4 — Machines
 

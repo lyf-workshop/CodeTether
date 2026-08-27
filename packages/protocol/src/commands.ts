@@ -8,7 +8,12 @@ import {
 import {
   ApprovalDecisionSchema,
   ApprovalRecordSchema,
+  AttentionStatusSchema,
+  AttentionItemSchema,
+  AttentionTypeSchema,
   ConversationRecordSchema,
+  ConversationStatusSchema,
+  ConversationSummarySchema,
   ProjectRecordSchema,
   TurnInputSchema,
   TurnRecordSchema,
@@ -77,6 +82,105 @@ export const GetProjectResponseSchema = z
   .strict()
 export type GetProjectResponse = z.infer<typeof GetProjectResponseSchema>
 
+export const conversationListLimits = {
+  default: 50,
+  maximum: 100,
+} as const
+
+/** Bounded filters for the durable Project-scoped Conversation index. */
+export const ListProjectConversationsQuerySchema = z
+  .object({
+    provider: z.literal('codex').optional(),
+    status: ConversationStatusSchema.optional(),
+    limit: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(conversationListLimits.maximum)
+      .default(conversationListLimits.default),
+  })
+  .strict()
+export type ListProjectConversationsQueryInput = z.input<
+  typeof ListProjectConversationsQuerySchema
+>
+export type ListProjectConversationsQuery = z.output<
+  typeof ListProjectConversationsQuerySchema
+>
+
+export const ConversationListResponseSchema = z
+  .object({
+    protocolVersion: ProtocolVersionSchema,
+    conversations: z
+      .array(ConversationSummarySchema)
+      .max(conversationListLimits.maximum),
+  })
+  .strict()
+export type ConversationListResponse = z.infer<
+  typeof ConversationListResponseSchema
+>
+
+export const attentionListLimits = {
+  default: 50,
+  maximum: 100,
+} as const
+
+/** Bounded filters for the durable global Attention source. */
+export const ListAttentionQuerySchema = z
+  .object({
+    projectId: ProjectIdSchema.optional(),
+    type: AttentionTypeSchema.optional(),
+    status: AttentionStatusSchema.default('open'),
+    limit: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(attentionListLimits.maximum)
+      .default(attentionListLimits.default),
+  })
+  .strict()
+export type ListAttentionQueryInput = z.input<typeof ListAttentionQuerySchema>
+export type ListAttentionQuery = z.output<typeof ListAttentionQuerySchema>
+
+export const AttentionListResponseSchema = z
+  .object({
+    protocolVersion: ProtocolVersionSchema,
+    items: z.array(AttentionItemSchema).max(attentionListLimits.maximum),
+    summary: z
+      .object({
+        totalOpen: z.number().int().nonnegative().safe(),
+        approvalOpen: z.number().int().nonnegative().safe(),
+        completedReviewOpen: z.number().int().nonnegative().safe(),
+        failedOpen: z.number().int().nonnegative().safe(),
+      })
+      .strict(),
+  })
+  .strict()
+  .superRefine((response, context) => {
+    const ids = new Set<string>()
+    for (const [index, attention] of response.items.entries()) {
+      if (ids.has(String(attention.attentionId))) {
+        context.addIssue({
+          code: 'custom',
+          message: 'Attention list cannot contain duplicate identities',
+          path: ['items', index, 'attentionId'],
+        })
+      }
+      ids.add(String(attention.attentionId))
+    }
+    const categorizedTotal =
+      response.summary.approvalOpen +
+      response.summary.completedReviewOpen +
+      response.summary.failedOpen
+    if (response.summary.totalOpen !== categorizedTotal) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Attention summary total must equal its type counts',
+        path: ['summary', 'totalOpen'],
+      })
+    }
+  })
+export type AttentionListResponse = z.infer<typeof AttentionListResponseSchema>
+
 export const StartTurnRequestSchema = z
   .object({
     actionId: ActionIdSchema,
@@ -102,6 +206,13 @@ export type ResolveApprovalRequest = z.infer<
   typeof ResolveApprovalRequestSchema
 >
 
+export const ResolveAttentionRequestSchema = z
+  .object({ actionId: ActionIdSchema })
+  .strict()
+export type ResolveAttentionRequest = z.infer<
+  typeof ResolveAttentionRequestSchema
+>
+
 export const CreateConversationDataSchema = z
   .object({ conversation: ConversationRecordSchema })
   .strict()
@@ -121,6 +232,17 @@ export const ResolveApprovalDataSchema = z
   .object({ approval: ApprovalRecordSchema })
   .strict()
 export type ResolveApprovalData = z.infer<typeof ResolveApprovalDataSchema>
+
+export const ResolveAttentionDataSchema = z
+  .object({
+    attention: AttentionItemSchema.refine(
+      (attention) =>
+        attention.status === 'resolved' && attention.type !== 'approval',
+      'Generic Attention resolution requires a resolved review or failure',
+    ),
+  })
+  .strict()
+export type ResolveAttentionData = z.infer<typeof ResolveAttentionDataSchema>
 
 export const CreateProjectDataSchema = z
   .object({ project: ProjectRecordSchema, created: z.boolean() })
@@ -171,6 +293,13 @@ export const ResolveApprovalResponseSchema = mutationResponseSchema(
 )
 export type ResolveApprovalResponse = z.infer<
   typeof ResolveApprovalResponseSchema
+>
+
+export const ResolveAttentionResponseSchema = mutationResponseSchema(
+  ResolveAttentionDataSchema,
+)
+export type ResolveAttentionResponse = z.infer<
+  typeof ResolveAttentionResponseSchema
 >
 
 export const CreateProjectResponseSchema = mutationResponseSchema(

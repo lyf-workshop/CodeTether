@@ -5,10 +5,13 @@ import {
 import {
   formatLastEventId,
   type ApprovalDecision,
+  type AttentionId,
   type Bootstrap,
+  type ConversationId,
   type HostEventEnvelope,
   type HostSnapshot,
   type LastEventId,
+  type ProjectId,
 } from '@codetether/protocol'
 import type { QueryClient } from '@tanstack/react-query'
 
@@ -30,6 +33,27 @@ import {
   LiveConversationActions,
   type LiveConversationMutationClient,
 } from './live-conversation-actions.js'
+import type { ConversationDetailReadClient } from './conversation-detail-query.js'
+import { invalidateConversationProductQueries } from './conversation-index-sync.js'
+import type { ConversationListReadClient } from './conversation-list-query.js'
+import {
+  NewConversationActions,
+  type NewConversationMutationClient,
+} from './new-conversation-actions.js'
+import {
+  ProjectActions,
+  type ProjectMutationClient,
+} from './project-actions.js'
+import type { ProjectReadClient } from './project-query.js'
+import {
+  AttentionActions,
+  type AttentionMutationClient,
+} from './attention-actions.js'
+import {
+  invalidateAttentionQueries,
+  shouldRefreshAttention,
+  type AttentionReadClient,
+} from './attention-query.js'
 
 export type HostConnectionState =
   'connecting' | 'connected' | 'reconnecting' | 'unavailable' | 'incompatible'
@@ -40,7 +64,16 @@ export interface HostEventStream extends AsyncIterable<HostEventEnvelope> {
 }
 
 export interface HostRuntimeClient
-  extends HostReadClient, LiveConversationMutationClient {
+  extends
+    HostReadClient,
+    LiveConversationMutationClient,
+    ProjectReadClient,
+    ProjectMutationClient,
+    ConversationDetailReadClient,
+    ConversationListReadClient,
+    NewConversationMutationClient,
+    AttentionReadClient,
+    AttentionMutationClient {
   connectEvents(options?: {
     readonly lastEventId?: LastEventId
     readonly signal?: AbortSignal
@@ -77,6 +110,9 @@ export class HostRuntime {
   readonly #reconnectDelayMs: number
   readonly #listeners = new Set<ConnectionListener>()
   readonly #actions: LiveConversationActions
+  readonly #projectActions: ProjectActions
+  readonly #newConversationActions: NewConversationActions
+  readonly #attentionActions: AttentionActions
   #connectionState: HostConnectionState = 'connecting'
   #lastError: unknown
   #started = false
@@ -84,6 +120,7 @@ export class HostRuntime {
   #abortController?: AbortController
   #runPromise?: Promise<void>
   #stream?: HostEventStream
+  #bootstrap?: Bootstrap
   #retainers = 0
   #stopTimer?: ReturnType<typeof setTimeout>
   #stats: HostRuntimeStats = emptyStats()
@@ -94,6 +131,9 @@ export class HostRuntime {
       options.client ??
       new CodeTetherClient({ baseUrl: options.baseUrl ?? hostBaseUrl })
     this.#actions = new LiveConversationActions(this.#client)
+    this.#projectActions = new ProjectActions(this.#client)
+    this.#newConversationActions = new NewConversationActions(this.#client)
+    this.#attentionActions = new AttentionActions(this.#client)
     this.#reconnectDelayMs = nonNegativeInteger(
       options.reconnectDelayMs,
       500,
@@ -118,7 +158,7 @@ export class HostRuntime {
   }
 
   get bootstrap(): Bootstrap | undefined {
-    return this.#queryClient.getQueryData<Bootstrap>(hostQueryKeys.bootstrap)
+    return this.#bootstrap
   }
 
   readonly subscribe = (listener: ConnectionListener): (() => void) => {
@@ -138,6 +178,53 @@ export class HostRuntime {
 
   resolveApproval(approvalId: string, decision: ApprovalDecision) {
     return this.#actions.resolveApproval(approvalId, decision)
+  }
+
+  listAttention(options?: Parameters<AttentionReadClient['listAttention']>[0]) {
+    return this.#client.listAttention(options)
+  }
+
+  resolveAttention(attentionId: AttentionId | string) {
+    return this.#attentionActions.resolveAttention(attentionId)
+  }
+
+  listProjects(options?: { readonly signal?: AbortSignal }) {
+    return this.#client.listProjects(options)
+  }
+
+  getProject(
+    projectId: ProjectId,
+    options?: { readonly signal?: AbortSignal },
+  ) {
+    return this.#client.getProject(projectId, options)
+  }
+
+  listProjectConversations(
+    projectId: ProjectId,
+    options?: Parameters<
+      ConversationListReadClient['listProjectConversations']
+    >[1],
+  ) {
+    return this.#client.listProjectConversations(projectId, options)
+  }
+
+  getConversation(
+    conversationId: ConversationId,
+    options?: { readonly signal?: AbortSignal },
+  ) {
+    return this.#client.getConversation(conversationId, options)
+  }
+
+  createConversation(projectId: ProjectId | string) {
+    return this.#newConversationActions.createConversation(projectId)
+  }
+
+  createProject(path: string, name?: string) {
+    return this.#projectActions.createProject(path, name)
+  }
+
+  deleteProject(projectId: ProjectId | string) {
+    return this.#projectActions.deleteProject(projectId)
   }
 
   start(): void {
@@ -293,6 +380,10 @@ export class HostRuntime {
             }
 
             replaceHostProjection(this.#queryClient, result.projection)
+            invalidateConversationProductQueries(this.#queryClient, event)
+            if (shouldRefreshAttention(event.type)) {
+              void invalidateAttentionQueries(this.#queryClient)
+            }
             this.#increment('projectionUpdates')
             cursor = formatLastEventId(result.projection.cursor)
           }
@@ -323,9 +414,11 @@ export class HostRuntime {
 
   async #fetchBootstrap(): Promise<Bootstrap> {
     this.#increment('bootstrapRequests')
-    return await this.#queryClient.fetchQuery(
+    const bootstrap = await this.#queryClient.fetchQuery(
       hostBootstrapQueryOptions(this.#client),
     )
+    this.#bootstrap = bootstrap
+    return bootstrap
   }
 
   async #fetchAndReplaceSnapshot(
@@ -342,6 +435,10 @@ export class HostRuntime {
     }
     replaceHostProjection(this.#queryClient, projectSnapshot(snapshot))
     this.#actions.adoptHostEpoch(snapshot.epoch)
+    this.#attentionActions.adoptHostEpoch(snapshot.epoch)
+    if (this.#stats.snapshotReplacements > 0) {
+      void invalidateAttentionQueries(this.#queryClient)
+    }
     this.#increment('snapshotReplacements')
     return snapshotCursor(snapshot)
   }

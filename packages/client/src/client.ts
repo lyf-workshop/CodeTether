@@ -1,7 +1,11 @@
 import {
+  ActionIdSchema,
+  AttentionIdSchema,
+  AttentionListResponseSchema,
   BootstrapSchema,
   ApprovalIdSchema,
   ConversationIdSchema,
+  ConversationListResponseSchema,
   CreateConversationRequestSchema,
   CreateConversationResponseSchema,
   CreateProjectRequestSchema,
@@ -9,21 +13,30 @@ import {
   DeleteProjectRequestSchema,
   DeleteProjectResponseSchema,
   GetProjectResponseSchema,
+  GetConversationResponseSchema,
   HostSnapshotSchema,
   InterruptTurnRequestSchema,
   InterruptTurnResponseSchema,
   LastEventIdSchema,
+  ListAttentionQuerySchema,
   ListProjectsResponseSchema,
+  ListProjectConversationsQuerySchema,
   ProjectIdSchema,
   ResolveApprovalRequestSchema,
   ResolveApprovalResponseSchema,
+  ResolveAttentionRequestSchema,
+  ResolveAttentionResponseSchema,
   SafeErrorEnvelopeSchema,
   StartTurnRequestSchema,
   StartTurnResponseSchema,
   TurnIdSchema,
+  type ActionId,
   type ApprovalId,
+  type AttentionId,
+  type AttentionListResponse,
   type Bootstrap,
   type ConversationId,
+  type ConversationListResponse,
   type CreateConversationRequest,
   type CreateConversationResponse,
   type CreateProjectRequest,
@@ -31,14 +44,18 @@ import {
   type DeleteProjectRequest,
   type DeleteProjectResponse,
   type GetProjectResponse,
+  type GetConversationResponse,
   type HostSnapshot,
   type InterruptTurnRequest,
   type InterruptTurnResponse,
   type LastEventId,
+  type ListAttentionQuery,
   type ListProjectsResponse,
+  type ListProjectConversationsQuery,
   type ProjectId,
   type ResolveApprovalRequest,
   type ResolveApprovalResponse,
+  type ResolveAttentionResponse,
   type StartTurnRequest,
   type StartTurnResponse,
   type TurnId,
@@ -69,6 +86,19 @@ export interface RequestOptions {
 
 export interface ConnectEventsOptions extends RequestOptions {
   readonly lastEventId?: LastEventId
+}
+
+export interface ListProjectConversationsOptions extends RequestOptions {
+  readonly provider?: ListProjectConversationsQuery['provider']
+  readonly status?: ListProjectConversationsQuery['status']
+  readonly limit?: ListProjectConversationsQuery['limit']
+}
+
+export interface ListAttentionOptions extends RequestOptions {
+  readonly projectId?: ListAttentionQuery['projectId']
+  readonly type?: ListAttentionQuery['type']
+  readonly status?: ListAttentionQuery['status']
+  readonly limit?: ListAttentionQuery['limit']
 }
 
 export class CodeTetherClient {
@@ -142,6 +172,112 @@ export class CodeTetherClient {
       response.project.projectId === project,
       'Project response does not match the requested Project',
     )
+    return response
+  }
+
+  async listProjectConversations(
+    projectId: ProjectId,
+    options: ListProjectConversationsOptions = {},
+  ): Promise<ConversationListResponse> {
+    const project = parseProtocol(
+      ProjectIdSchema,
+      projectId,
+      'list-project-conversations project id',
+    )
+    const query = parseProtocol(
+      ListProjectConversationsQuerySchema,
+      {
+        ...(options.provider === undefined
+          ? {}
+          : { provider: options.provider }),
+        ...(options.status === undefined ? {} : { status: options.status }),
+        ...(options.limit === undefined ? {} : { limit: options.limit }),
+      },
+      'list-project-conversations query',
+    )
+    const search = new URLSearchParams({ limit: String(query.limit) })
+    if (query.provider !== undefined) search.set('provider', query.provider)
+    if (query.status !== undefined) search.set('status', query.status)
+
+    const response = await this.#request(
+      `/api/v1/projects/${encodeURIComponent(project)}/conversations?${search.toString()}`,
+      ConversationListResponseSchema,
+      {
+        method: 'GET',
+        signal: options.signal,
+      },
+    )
+    assertProtocolIdentity(
+      response.conversations.every(
+        (conversation) => conversation.projectId === project,
+      ),
+      'Conversation list contains a Conversation from another Project',
+    )
+    return response
+  }
+
+  async getConversation(
+    conversationId: ConversationId,
+    options: RequestOptions = {},
+  ): Promise<GetConversationResponse> {
+    const conversation = parseProtocol(
+      ConversationIdSchema,
+      conversationId,
+      'get-conversation id',
+    )
+    const response = await this.#request(
+      `/api/v1/conversations/${encodeURIComponent(conversation)}`,
+      GetConversationResponseSchema,
+      {
+        method: 'GET',
+        signal: options.signal,
+      },
+    )
+    assertProtocolIdentity(
+      response.conversation.conversationId === conversation,
+      'Conversation response does not match the requested Conversation',
+    )
+    return response
+  }
+
+  async listAttention(
+    options: ListAttentionOptions = {},
+  ): Promise<AttentionListResponse> {
+    const query = parseProtocol(
+      ListAttentionQuerySchema,
+      {
+        ...(options.projectId === undefined
+          ? {}
+          : { projectId: options.projectId }),
+        ...(options.type === undefined ? {} : { type: options.type }),
+        ...(options.status === undefined ? {} : { status: options.status }),
+        ...(options.limit === undefined ? {} : { limit: options.limit }),
+      },
+      'list-attention query',
+    )
+    const search = new URLSearchParams({
+      status: query.status,
+      limit: String(query.limit),
+    })
+    if (query.projectId !== undefined) {
+      search.set('projectId', query.projectId)
+    }
+    if (query.type !== undefined) search.set('type', query.type)
+
+    const response = await this.#request(
+      `/api/v1/attention?${search.toString()}`,
+      AttentionListResponseSchema,
+      {
+        method: 'GET',
+        signal: options.signal,
+      },
+    )
+    if (query.projectId !== undefined) {
+      assertProtocolIdentity(
+        response.items.every((item) => item.projectId === query.projectId),
+        'Attention list contains an item from another Project',
+      )
+    }
     return response
   }
 
@@ -293,6 +429,40 @@ export class CodeTetherClient {
     assertProtocolIdentity(
       response.data.approval.approvalId === approval,
       'Approval response does not match the requested Approval',
+    )
+    return response
+  }
+
+  async resolveAttention(
+    attentionId: AttentionId,
+    actionId: ActionId,
+    options: RequestOptions = {},
+  ): Promise<ResolveAttentionResponse> {
+    const attention = parseProtocol(
+      AttentionIdSchema,
+      attentionId,
+      'resolve-attention id',
+    )
+    const request = parseProtocol(
+      ResolveAttentionRequestSchema,
+      {
+        actionId: parseProtocol(
+          ActionIdSchema,
+          actionId,
+          'resolve-attention action id',
+        ),
+      },
+      'resolve-attention request',
+    )
+    const response = await this.#request(
+      `/api/v1/attention/${encodeURIComponent(attention)}/resolve`,
+      ResolveAttentionResponseSchema,
+      jsonRequest(request, options.signal),
+      request.actionId,
+    )
+    assertProtocolIdentity(
+      response.data.attention.attentionId === attention,
+      'Attention response does not match the requested Attention item',
     )
     return response
   }

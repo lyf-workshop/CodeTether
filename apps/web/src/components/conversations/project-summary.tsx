@@ -1,15 +1,13 @@
-import { Check, GitBranch } from 'lucide-react'
+import { CircleCheck, TriangleAlert } from 'lucide-react'
 
 import { Badge, cn } from '@codetether/ui'
+import type { ProjectRecord } from '@codetether/protocol'
 
-import type {
-  ConversationListSummaryMock,
-  ConversationsProjectMock,
-} from '../../mocks/conversations'
+import type { ConversationStatusCounts } from './conversation-list-model'
 
 interface ProjectSummaryProps {
-  project: ConversationsProjectMock
-  summary: ConversationListSummaryMock
+  project: ProjectRecord
+  summary: ConversationStatusCounts
 }
 
 interface SummaryMetricProps {
@@ -35,10 +33,13 @@ function SummaryMetric({ label, tone = 'default', value }: SummaryMetricProps) {
 }
 
 export function ProjectSummary({ project, summary }: ProjectSummaryProps) {
+  const available = project.availability === 'available'
+  const AvailabilityIcon = available ? CircleCheck : TriangleAlert
+
   return (
     <section
       aria-labelledby="conversations-project-heading"
-      className="grid min-h-[var(--layout-conversations-summary-height)] grid-cols-[minmax(11rem,1.25fr)_repeat(3,minmax(4.75rem,0.5fr))_minmax(9rem,1fr)_auto] items-center gap-4 rounded-md border border-border bg-surface/65 px-4"
+      className="grid min-h-[var(--layout-conversations-summary-height)] grid-cols-[minmax(12rem,1.5fr)_repeat(4,minmax(4.75rem,0.5fr))_auto] items-center gap-4 rounded-md border border-border bg-surface/65 px-4"
     >
       <div className="min-w-0">
         <h2
@@ -47,44 +48,32 @@ export function ProjectSummary({ project, summary }: ProjectSummaryProps) {
         >
           {project.name}
         </h2>
-        <p className="mt-1 truncate font-mono text-xs font-regular text-text-secondary">
-          {project.path}
+        <p
+          title={project.rootPath}
+          className="mt-1 truncate font-mono text-xs font-regular text-text-secondary"
+        >
+          {project.rootPath}
         </p>
       </div>
 
       <dl className="contents">
-        <SummaryMetric label="活跃会话" value={summary.running} />
+        <SummaryMetric label="全部会话" value={summary.total} />
+        <SummaryMetric label="运行中" value={summary.running} />
         <SummaryMetric
           label="需要处理"
-          value={summary.waiting}
+          value={summary.waiting + summary.failed}
           tone="warning"
         />
-        <SummaryMetric label="本周完成" value={summary.completedThisWeek} />
+        <SummaryMetric label="已完成" value={summary.completed} />
       </dl>
 
-      <div className="min-w-0">
-        <p className="text-xs font-regular text-text-muted">最近活动</p>
-        <p className="mt-1 truncate text-sm font-regular text-text-primary">
-          {project.recentActivity}
-        </p>
-      </div>
-
-      <div className="flex shrink-0 items-center gap-2">
-        <Badge
-          variant="outline"
-          className="h-7 rounded-sm bg-surface-elevated px-2.5 font-mono text-xs font-regular"
-        >
-          <GitBranch aria-hidden="true" />
-          {project.branch}
-        </Badge>
-        <Badge
-          variant="success"
-          className="h-7 rounded-sm px-2.5 text-xs font-medium"
-        >
-          <Check aria-hidden="true" />
-          {project.gitStatus}
-        </Badge>
-      </div>
+      <Badge
+        variant={available ? 'success' : 'warning'}
+        className="h-7 rounded-sm px-2.5 text-xs font-medium"
+      >
+        <AvailabilityIcon aria-hidden="true" />
+        {available ? '可用' : '不可用'}
+      </Badge>
     </section>
   )
 }

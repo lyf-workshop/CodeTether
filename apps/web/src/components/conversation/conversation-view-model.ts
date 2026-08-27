@@ -154,7 +154,8 @@ export interface ConversationRailGroupViewModel {
 
 export interface ConversationRailViewModel {
   readonly groups: readonly ConversationRailGroupViewModel[]
-  readonly archivedCount: number
+  /** Omitted when the real durable index has no archive contract. */
+  readonly archivedCount?: number
 }
 
 export type ConversationConnectionState =

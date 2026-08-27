@@ -1,9 +1,9 @@
 import { Link } from '@tanstack/react-router'
-import { CheckCircle2, ListFilter, MessagesSquare } from 'lucide-react'
+import { CheckCircle2, FolderOpen, ListFilter } from 'lucide-react'
 
 import { Button } from '@codetether/ui'
 
-import type { InboxFilter } from './inbox-filters'
+import type { InboxFilter } from './inbox-model'
 
 interface InboxEmptyStateProps {
   activeFilter: InboxFilter
@@ -26,14 +26,12 @@ export function InboxEmptyState({
           <CheckCircle2 className="size-5" />
         </span>
         <h2 className="mt-3 text-base font-semibold text-text-primary">
-          {isFiltered
-            ? '当前筛选下没有需要处理的事项'
-            : '暂时没有需要你处理的事项'}
+          {isFiltered ? '当前筛选下没有待处理事项' : '暂无待处理事项'}
         </h2>
         <p className="mt-1 text-sm font-regular text-text-secondary">
           {isFiltered
-            ? '可以切换筛选条件，查看其他需要关注的智能体事项。'
-            : '所有智能体都可以继续工作。'}
+            ? '可以切换筛选条件，查看其他需要关注的 Agent 事项。'
+            : '当前没有需要你审批、查看或确认的 Agent 事项。'}
         </p>
         <div className="mt-4 flex items-center justify-center gap-2">
           {isFiltered ? (
@@ -43,9 +41,9 @@ export function InboxEmptyState({
             </Button>
           ) : null}
           <Button asChild size="sm" variant={isFiltered ? 'ghost' : 'outline'}>
-            <Link to="/conversations">
-              <MessagesSquare aria-hidden="true" />
-              打开会话
+            <Link to="/projects">
+              <FolderOpen aria-hidden="true" />
+              查看会话
             </Link>
           </Button>
         </div>

@@ -141,6 +141,33 @@ export class HttpBoundary {
     return parsed.data
   }
 
+  parseValidatedQuery<T>(
+    parameters: URLSearchParams,
+    schema: ParseSchema<T>,
+  ): T {
+    const value: Record<string, string> = {}
+    for (const [name, entry] of parameters) {
+      if (Object.hasOwn(value, name)) {
+        throw new HttpBoundaryError(
+          'invalid_request',
+          `Query parameter ${name} must not be repeated`,
+          400,
+        )
+      }
+      value[name] = entry
+    }
+    const parsed = schema.safeParse(value)
+    if (!parsed.success) {
+      throw new HttpBoundaryError(
+        'invalid_request',
+        'Query parameters do not match Protocol v1',
+        400,
+        { issueCount: parsed.error.issues.length },
+      )
+    }
+    return parsed.data
+  }
+
   async readValidatedBody<T>(
     request: IncomingMessage,
     schema: ParseSchema<T>,

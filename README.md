@@ -6,7 +6,7 @@ CodeTether is a planned desktop and mobile workspace for supervising and control
 
 Phase 1 is accepted and frozen as **CodeTether V2 Frontend Core v1**, the accepted local runtime is frozen as **Phase 2A Codex Runtime v1**, and Phase 2B is accepted as the development-only Protocol v1 loopback HTTP/SSE boundary. The complete read path is frozen as **Live Conversation Read Model v1**. Phase 2C.2 is accepted and frozen as **CodeTether Local Codex Alpha v0.1**: the existing Conversation Workspace can start real text Turns, stream results, resolve one-shot Approvals, interrupt, and continue while the Host remains canonical state owner.
 
-**Phase 3B.1 — Durable Project Identity & Local Workspace Authorization** is implemented and validated. A Project is now a durable authorized local workspace with a CodeTether-owned `proj_*` identity. Conversations reference that Project while retaining a contained working directory, and every new Turn revalidates the saved canonical root before Codex runs. Project registration survives Host restart; a missing workspace keeps durable history readable but returns `project_unavailable` for workspace-dependent control. Demo, Inbox, Conversations, and the Projects page remain frozen Mock UI; there is still no Tauri shell, authentication, remote access, or non-Codex provider.
+**Phase 3D.2 — Real Inbox UI** is implemented and validated. Projects, Conversations, and Attention remain durable Host-owned product records. The real `/inbox` now consumes the typed Attention API and reliable semantic events for Approval, completed-review, and failed-Turn work, including the real Sidebar count and exact Approval controls. There is still no question inference, read/unread state, notifications, archive/rename/delete, full-history pagination, native folder picker, Tauri shell, authentication, remote access, or non-Codex provider.
 
 ## Current Alpha capabilities
 
@@ -19,7 +19,12 @@ Phase 1 is accepted and frozen as **CodeTether V2 Frontend Core v1**, the accept
 - Observe the same ordered events from multiple local clients.
 - Preserve the CodeTether Conversation ID and private Codex provider Thread ID across Host processes, with provider resume deferred until the next Turn.
 - Register, list, inspect, and remove durable local Project registrations through Protocol v1 without granting filesystem access outside canonical authorized roots.
+- Manage those Project registrations through the real desktop Projects list, manual add dialog, Project overview, unavailable state, and registration-only remove confirmation.
 - Bind each durable Conversation to one Project while allowing its `cwd` to remain a real-path-validated directory contained by that Project root.
+- Browse the real Project-scoped durable Conversation index, open cold history through the same frozen Conversation Detail, and continue it through bounded Host hydration and lazy provider resume.
+- Create a minimal real Codex Conversation from Project or global context, then observe its Host-owned title, status, and activity update in the header, breadcrumb, Rail, and list.
+- List durable open Attention globally or by Project, resolve completed-review and failed items explicitly, and keep Approval Attention synchronized only through its exact bound Approval command.
+- Use the real Inbox to review that global Attention queue, filter its three supported types, act on exact Approvals, and keep multiple browser clients synchronized through semantic SSE events.
 
 ## Repository layout
 
@@ -57,7 +62,7 @@ pnpm install
 pnpm dev
 ```
 
-The web app renders the shared desktop AppShell and the frozen Mock Conversation Detail at `/conversations/demo`. When the loopback Host is running, a valid `/conversations/conv_*` route reads the corresponding Host Conversation. During development, `/__ui` continues to present the shared component showcase; later product UI must follow Figma.
+The web app renders the shared desktop AppShell. When the loopback Host is running, `/projects` manages real durable Project registrations, `/projects/:projectId/conversations` lists a Project's durable Conversations, `/conversations/conv_*` reads or controls the selected Conversation, and `/inbox` presents durable open Attention. `/conversations` redirects to Project selection. `/conversations/demo` remains only a development visual fixture, and `/__ui` presents the shared component showcase.
 
 ## Commands
 
@@ -79,7 +84,7 @@ pnpm host:observe -- turn --conversation <conv_id> --input <text>  # Start a dev
 
 `pnpm codex:spike` uses only the ignored `.tmp/codetether-codex-spike/` workspace. It must never target the CodeTether source repository.
 
-For an end-to-end local browser-control check, run `pnpm host:control` and `pnpm dev`, then open one of the printed `/conversations/conv_*` routes. The general isolated Conversation supports text Turns and interruption; the linked Git fixture supports safe command-Approval checks. The Host prints its `databasePath`, records canonical User input before provider execution, and publishes final mutation state through Protocol events. Refresh and `stream.reset` reconstruct the retained Timeline; after a Host restart, SQLite reconstructs the recent runtime Snapshot and the next Turn lazily resumes the saved Codex Thread.
+For the normal local product flow, set an isolated `CODETETHER_DATA_DIR`, run `pnpm host:serve -- --workspace <absolute-path>` and `pnpm dev`, then open `/projects`. From the real Project overview, open its Conversations page and create a Codex Conversation in the browser. `pnpm host:control` remains a focused integration harness for interruption and safe command-Approval checks. The Host prints its `databasePath`, records canonical User input before provider execution, and publishes final mutation state through Protocol events. Refresh and `stream.reset` reconstruct the retained Timeline; after a Host restart, SQLite restores durable history and the next Turn lazily resumes the saved Codex Thread.
 
 ### Local data
 
@@ -117,18 +122,46 @@ New Conversation callers use `projectId`. The deprecated Protocol v1 `cwd` form 
 
 Deleting a Project removes only its CodeTether registration. It never deletes or changes files and never cascades Conversation history. The Host rejects deletion while any durable or runtime Conversation references the Project, including while a Conversation creation has reserved that Project.
 
+The desktop Projects UI uses these endpoints through `packages/client` and TanStack Query. The add dialog accepts a manually entered absolute path and optional display name; path canonicalization and authorization remain entirely Host-owned. Duplicate registration opens the existing Project instead of adding another row. Unavailable roots remain inspectable, and removal requires explicit confirmation that local source files and Git data are untouched. Native folder selection, workspace scanning, rename, and relocation are not implemented.
+
+### Local Conversations
+
+The durable product-history boundary is separate from Runtime Snapshot reconnect state:
+
+```text
+GET  /api/v1/projects/:projectId/conversations
+GET  /api/v1/conversations/:conversationId
+POST /api/v1/conversations
+```
+
+The real Conversations page and Rail use the Project-scoped index through `packages/client` and TanStack Query. Search is local to the returned maximum of 100 recent summaries. Opening a cold Conversation reads normalized SQLite history without starting Codex; sending a new Turn lets the Host hydrate its bounded working set and lazily resume the private provider Thread. New Conversation currently locks Agent to Codex and uses Host defaults for model and reasoning.
+
+### Local Attention
+
+The durable Attention boundary is separate from Runtime Snapshot. The real Inbox consumes this boundary through `packages/client` and TanStack Query:
+
+```text
+GET  /api/v1/attention
+POST /api/v1/attention/:attentionId/resolve
+POST /api/v1/approvals/:approvalId/resolve
+```
+
+`GET /attention` defaults to open work, supports Project/type/status/limit filters, and returns open counts. Generic Attention resolution only acknowledges completed-review or failed items; Approval must remain bound to its existing one-shot accept/decline endpoint. `attention.created` and `attention.resolved` are reliable SSE events, while the durable list is the source of truth after replay reset or Host restart.
+
+The Inbox requests up to 100 open items in Host-owned priority order. It shows only Approval, completed-review, and failed-Turn work, uses the returned summary for its cards and Sidebar badge, and refreshes only on Attention semantic events or stream reset. Opening a failed Conversation does not acknowledge it; reviewing completed work and acknowledging a failed item are explicit durable mutations.
+
 ## Known Alpha limitations
 
 - Phase 3A persists normalized Conversation/Turn snapshots, not raw Codex JSON-RPC events; it is intentionally not an event store.
 - The Host restores only the bounded recent runtime window (20 Turns by default) into memory. Older durable Turns remain in SQLite, but no history-pagination UI exists yet.
-- Startup currently admits the eight most-recent durable Conversations into runtime memory; a live durable Conversations index and lazy loading are deferred.
+- Startup admits at most the eight most-recent durable Conversations into runtime memory; older indexed Conversations are cold-read and hydrated on control with safe idle-LRU eviction.
 - A Turn that was `starting`, `running`, or `waiting` at restart becomes `interrupted` with reason `host_restart`. It is not resumed automatically.
 - A pending Approval from a previous Host process is retained only as expired history and cannot be resolved after restart.
 - Action idempotency and SSE replay remain process-local. A new Host epoch must fetch a fresh Snapshot and must not automatically replay an uncertain mutation from the previous epoch.
 - If Codex can no longer resume the stored provider Thread, local durable history remains readable but new controls return `provider_conversation_unavailable`.
 - Only Codex, text Turn start, one-shot command Approval, and Turn interrupt are connected.
-- Inbox and Conversations are still product-quality Mock surfaces rather than live Host projections.
-- The durable Project API is implemented, but Projects UI, project discovery/import, multiple Machine locations, and live Project-aware Inbox/Conversations pages are not.
+- Attention currently models only structured Approval, completed-review, and failed-Turn semantics. Structured Agent questions, read/unread, notifications, and Activity are not implemented.
+- Projects and Conversations are real local surfaces, but native folder picking, project discovery/import, rename/relocate, Conversation rename/archive/delete, history pagination, and multiple Machine locations are not implemented.
 - Stop/terminate, queue/steer, attachments, Tauri packaging, remote access, authentication, and other providers are not implemented.
 - File-change and permissions Approval variants have fixture/schema coverage but have not been observed in a real Codex run.
 - Physical Windows Chinese IME input has not been manually validated; automated composition-event coverage exists.
@@ -143,4 +176,4 @@ Deleting a Project removes only its CodeTether registration. It never deletes or
 
 ## Status
 
-**CodeTether Local Codex Alpha v0.1** remains the frozen UI/runtime baseline. **Phase 3A — Minimal Durable Persistence** and **Phase 3B.1 — Durable Project Identity & Local Workspace Authorization** are implemented and validated. Project registration, Conversation ownership, restart authorization, and unavailable-workspace behavior are now durable Host capabilities. Phase 3B.2 is not authorized: do not add a Projects product surface, live Inbox/Conversations data, desktop packaging, remote exposure, or another provider. See the roadmap for ordered gates.
+**CodeTether Local Codex Alpha v0.1** remains the frozen runtime baseline. Phase 3A through **Phase 3D.2 — Real Inbox UI** are implemented and validated: durable Projects, durable Conversation history/title/index, cold reads, bounded hydration, real Project/Conversation navigation, minimal Codex Conversation creation, durable Attention, and the real Inbox are accepted capabilities. Do not extend this into question inference, read/unread state, notifications, Activity, archive/rename/delete, pagination, discovery, native folder selection, desktop packaging, remote exposure, or another provider without a separately approved phase. See the roadmap for ordered gates.

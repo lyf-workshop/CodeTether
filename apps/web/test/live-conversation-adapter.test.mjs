@@ -137,6 +137,34 @@ test('presents workspace file changes without leaking an absolute local path', (
   assert.equal(viewModel.context[0]?.label, 'src/example.ts')
 })
 
+test('uses the queried Project root to present cold durable file paths', () => {
+  const viewModel = createLiveConversationViewModel(
+    conversation({
+      cwd: undefined,
+      changes: [
+        {
+          id: 'cold-absolute-change',
+          turnId: 'turn_live01',
+          itemId: 'item_change_cold',
+          path: 'E:\\spikes\\live-workspace\\src\\cold.ts',
+          kind: 'modified',
+          additions: 1,
+          deletions: 0,
+          diffLines: [],
+          timestamp,
+          order: 4,
+        },
+      ],
+    }),
+    undefined,
+    'connected',
+    'E:\\spikes\\live-workspace',
+  )
+
+  assert.equal(viewModel.changes.files[0]?.path, 'src/cold.ts')
+  assert.equal(viewModel.context[0]?.label, 'src/cold.ts')
+})
+
 test('keeps two retained Turns in user/agent order', () => {
   const secondTurn = {
     id: 'turn_live02',
@@ -227,24 +255,24 @@ test('uses semantic Tool titles and keeps failure output out of the row title', 
   assert.equal(viewModel.terminal.lines.join('\n'), fullFailure)
 })
 
-test('builds live rail and connection indicator from the shared projection', () => {
+test('builds the live rail from durable Host summaries without fake metadata', () => {
   const selected = conversation({ updatedAt: '2026-08-26T12:10:00.000Z' })
-  const older = conversation({
-    id: 'conv_live02',
-    title: 'another-workspace',
-    updatedAt: timestamp,
-  })
-  const projection = {
-    cursor: {
-      epoch: '11111111-1111-4111-8111-111111111111',
-      seq: 8,
-    },
-    conversations: { [selected.id]: selected, [older.id]: older },
-  }
+  const summaries = [
+    summary({
+      conversationId: 'conv_live01',
+      title: 'Host-owned title',
+      lastActivityAt: '2026-08-26T12:10:00.000Z',
+    }),
+    summary({
+      conversationId: 'conv_live02',
+      title: 'Older durable Conversation',
+      status: 'completed',
+    }),
+  ]
 
   const source = createLiveConversationDetailSource(
-    selected,
-    projection,
+    { ...selected, title: 'Host-owned title' },
+    summaries,
     'reconnecting',
   )
 
@@ -252,10 +280,52 @@ test('builds live rail and connection indicator from the shared projection', () 
     source.rail.groups[0]?.conversations.map((item) => item.id),
     ['conv_live01', 'conv_live02'],
   )
+  assert.deepEqual(
+    source.rail.groups[0]?.conversations.map((item) => [
+      item.title,
+      item.status,
+      item.machine,
+    ]),
+    [
+      ['Host-owned title', 'running', undefined],
+      ['Older durable Conversation', 'completed', undefined],
+    ],
+  )
+  assert.equal(source.rail.archivedCount, undefined)
+  assert.equal(source.conversation.title, 'Host-owned title')
   assert.deepEqual(source.connectionIndicator, {
     state: 'reconnecting',
     label: '正在重新连接',
   })
+})
+
+test('keeps unavailable Project history visible while disabling controls', () => {
+  const source = createLiveConversationDetailSource(
+    conversation({ turns: [], currentTurn: undefined }),
+    [summary()],
+    'connected',
+    {
+      codex: true,
+      approvals: true,
+      interrupt: true,
+      resume: true,
+      diff: true,
+      streaming: true,
+    },
+    'unavailable',
+  )
+
+  assert.deepEqual(source.conversation.capabilities, {
+    canCompose: false,
+    canInterrupt: false,
+    canStop: false,
+    canResolveApproval: false,
+  })
+  assert.deepEqual(source.connectionIndicator, {
+    state: 'unavailable',
+    label: '项目不可用',
+  })
+  assert.deepEqual(source.conversation.timeline.blocks, [])
 })
 
 function conversation(fields = {}) {
@@ -282,6 +352,22 @@ function conversation(fields = {}) {
     changes: [],
     terminal: { text: '', truncated: false },
     pendingApprovals: [],
+    ...fields,
+  }
+}
+
+function summary(fields = {}) {
+  return {
+    conversationId: 'conv_live01',
+    projectId: 'proj_live01',
+    title: 'live-workspace',
+    provider: 'codex',
+    model: 'gpt-5.3-codex',
+    reasoning: 'high',
+    status: 'running',
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    lastActivityAt: timestamp,
     ...fields,
   }
 }

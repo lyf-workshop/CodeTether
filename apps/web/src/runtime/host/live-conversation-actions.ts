@@ -1,6 +1,5 @@
 import { CodeTetherResponseError } from '@codetether/client'
 import {
-  ActionIdSchema,
   ApprovalIdSchema,
   ConversationIdSchema,
   TurnIdSchema,
@@ -14,6 +13,8 @@ import {
   type StartTurnResponse,
   type TurnId,
 } from '@codetether/protocol'
+
+import { createBrowserActionId, type ActionIdFactory } from './action-id.js'
 
 export interface LiveConversationMutationClient {
   startTurn(
@@ -36,8 +37,6 @@ export interface LiveConversationMutationClient {
     },
   ): Promise<ResolveApprovalResponse>
 }
-
-export type ActionIdFactory = () => ActionId
 
 interface StartAttempt {
   readonly text: string
@@ -266,14 +265,6 @@ export class LiveConversationActions {
     if (error instanceof CodeTetherResponseError) retries.delete(key)
     else retries.set(key, retry)
   }
-}
-
-export function createBrowserActionId(): ActionId {
-  const randomUUID = globalThis.crypto?.randomUUID
-  if (randomUUID === undefined) {
-    throw new Error('Secure random action IDs are unavailable')
-  }
-  return ActionIdSchema.parse(`act_${randomUUID.call(globalThis.crypto)}`)
 }
 
 function rejectOnEpochChange<T>(

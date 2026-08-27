@@ -2,6 +2,7 @@ import type {
   ApprovalKind,
   EventCursor,
   FileChangeKind,
+  GetConversationResponse,
   HostEventEnvelope,
   HostSnapshot,
   StreamResetReason,
@@ -119,7 +120,8 @@ export interface ConversationHistoryReadModel {
 
 export interface ConversationReadModel {
   readonly id: string
-  readonly cwd: string
+  /** Available for hot runtime snapshots only; durable product reads keep paths private. */
+  readonly cwd?: string
   readonly title: string
   readonly status: CanonicalConversationStatus
   readonly agent: 'codex'
@@ -211,6 +213,50 @@ export function projectSnapshot(
   }
 }
 
+/** Projects one provider-independent durable detail without hydrating Host runtime state. */
+export function projectConversationDetail(
+  detail: GetConversationResponse,
+): ConversationReadModel {
+  const activeTurn = detail.runtime.turns.find(
+    (turn) => turn.status === 'running',
+  )
+  return projectConversationRecord(
+    {
+      ...detail.conversation,
+      ...(activeTurn === undefined ? {} : { activeTurnId: activeTurn.turnId }),
+    },
+    detail.runtime,
+    activeTurn,
+    detail.pendingApprovals.map(projectPendingApproval),
+  )
+}
+
+/** Adds a cold durable detail only when live runtime state does not already own it. */
+export function includeConversationDetail(
+  projection: ConversationProjection,
+  detail: GetConversationResponse,
+): ConversationProjection {
+  const conversationId = String(detail.conversation.conversationId)
+  const existing = projection.conversations[conversationId]
+  if (existing !== undefined) {
+    if (existing.title === detail.conversation.title) return projection
+    return {
+      ...projection,
+      conversations: {
+        ...projection.conversations,
+        [conversationId]: { ...existing, title: detail.conversation.title },
+      },
+    }
+  }
+  return {
+    ...projection,
+    conversations: {
+      ...projection.conversations,
+      [conversationId]: projectConversationDetail(detail),
+    },
+  }
+}
+
 /**
  * Applies one validated Host envelope. Ordering failures never mutate or advance
  * the projection; the HostRuntime must reconnect or replace from a snapshot.
@@ -234,6 +280,13 @@ export function applyHostEvent(
   }
   if (event.seq !== projection.cursor.seq + 1) {
     return resetRequired(projection, 'sequence-gap')
+  }
+
+  if (
+    event.type === 'attention.created' ||
+    event.type === 'attention.resolved'
+  ) {
+    return appliedCursorOnly(projection, event)
   }
 
   if (event.type === 'conversation.started') {
@@ -722,9 +775,13 @@ export function applyHostEvent(
 
 type SnapshotRuntime = NonNullable<HostSnapshot['conversationRuntimes']>[number]
 type SnapshotTurn = HostSnapshot['activeTurns'][number]
+type ProjectionConversationRecord = Omit<
+  HostSnapshot['conversations'][number],
+  'cwd'
+> & { readonly cwd?: string }
 
 function projectConversationRecord(
-  record: HostSnapshot['conversations'][number],
+  record: ProjectionConversationRecord,
   runtime: SnapshotRuntime | undefined,
   activeTurn: SnapshotTurn | undefined,
   pendingApprovals: readonly PendingApprovalReadModel[],
@@ -744,8 +801,8 @@ function projectConversationRecord(
 
   return {
     id: String(record.conversationId),
-    cwd: record.cwd,
-    title: titleFromCwd(record.cwd),
+    ...(record.cwd === undefined ? {} : { cwd: record.cwd }),
+    title: record.title ?? titleFromCwd(record.cwd ?? ''),
     status: record.status,
     agent: 'codex',
     ...(record.model === undefined ? {} : { model: record.model }),
@@ -978,6 +1035,19 @@ function applied(
         ...projection.conversations,
         [String(event.conversationId)]: conversation,
       },
+    },
+  }
+}
+
+function appliedCursorOnly(
+  projection: ConversationProjection,
+  event: Exclude<HostEventEnvelope, { readonly type: 'stream.reset' }>,
+): ApplyHostEventResult {
+  return {
+    kind: 'applied',
+    projection: {
+      cursor: { epoch: event.epoch, seq: event.seq },
+      conversations: projection.conversations,
     },
   }
 }

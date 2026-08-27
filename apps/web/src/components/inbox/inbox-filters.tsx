@@ -1,42 +1,32 @@
 import { Button, cn } from '@codetether/ui'
+import type { AttentionListResponse } from '@codetether/protocol'
 
-import type { InboxSummaryMock } from '../../mocks/inbox'
-
-export type InboxFilter =
-  'all' | 'approval' | 'question' | 'completed' | 'failed' | 'unread'
+import type { InboxFilter } from './inbox-model'
 
 interface InboxFiltersProps {
   activeFilter: InboxFilter
   onFilterChange: (filter: InboxFilter) => void
-  summary: InboxSummaryMock
-  unreadCount: number
+  summary: AttentionListResponse['summary']
 }
 
 export function InboxFilters({
   activeFilter,
   onFilterChange,
   summary,
-  unreadCount,
 }: InboxFiltersProps) {
   const filters: readonly {
     count: number
     label: string
     value: InboxFilter
   }[] = [
+    { count: summary.totalOpen, label: '全部', value: 'all' },
+    { count: summary.approvalOpen, label: '审批', value: 'approval' },
     {
-      count:
-        summary.approvals +
-        summary.replies +
-        summary.completed +
-        summary.failed,
-      label: '全部',
-      value: 'all',
+      count: summary.completedReviewOpen,
+      label: '完成',
+      value: 'completed_review',
     },
-    { count: summary.approvals, label: '审批', value: 'approval' },
-    { count: summary.replies, label: '回复', value: 'question' },
-    { count: summary.completed, label: '完成', value: 'completed' },
-    { count: summary.failed, label: '失败', value: 'failed' },
-    { count: unreadCount, label: '未读', value: 'unread' },
+    { count: summary.failedOpen, label: '失败', value: 'failed' },
   ]
 
   return (

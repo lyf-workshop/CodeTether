@@ -1,6 +1,13 @@
-import { useId, useMemo, useState, type ComponentPropsWithoutRef } from 'react'
+import {
+  useId,
+  useMemo,
+  useState,
+  type ComponentPropsWithoutRef,
+  type Ref,
+} from 'react'
 import { Link } from '@tanstack/react-router'
 import { Archive, MoreHorizontal, Plus } from 'lucide-react'
+import type { ProjectId } from '@codetether/protocol'
 
 import {
   AgentIdentityMark,
@@ -158,9 +165,13 @@ export interface ConversationRailProps extends Omit<
   ComponentPropsWithoutRef<'aside'>,
   'children'
 > {
-  archivedCount: number
+  archivedCount?: number
   currentConversationId: string
   groups: readonly ConversationRailGroupViewModel[]
+  newConversationButtonRef?: Ref<HTMLButtonElement>
+  newConversationDisabled?: boolean
+  onNewConversation?: () => void
+  projectId?: ProjectId
 }
 
 /** Frozen conversation navigation presentation for the desktop workspace. */
@@ -169,6 +180,10 @@ export function ConversationRail({
   className,
   currentConversationId,
   groups,
+  newConversationButtonRef,
+  newConversationDisabled = false,
+  onNewConversation,
+  projectId,
   ...props
 }: ConversationRailProps) {
   const headingId = useId()
@@ -207,12 +222,27 @@ export function ConversationRail({
     >
       <div className="flex items-center justify-between pr-4 pl-5 pt-3.5">
         <h2 id={headingId} className="text-section font-semibold">
-          会话
+          {projectId === undefined ? (
+            '会话'
+          ) : (
+            <Link
+              to="/projects/$projectId/conversations"
+              params={{ projectId }}
+              className="rounded-xs outline-none hover:text-primary focus-visible:ring-2 focus-visible:ring-ring/50"
+            >
+              会话
+            </Link>
+          )}
         </h2>
         <IconButton
-          label="新建会话"
+          ref={newConversationButtonRef}
+          label={
+            newConversationDisabled ? '项目不可用，无法新建会话' : '新建会话'
+          }
           size="sm"
           variant="secondary"
+          disabled={newConversationDisabled}
+          onClick={onNewConversation}
           className="h-[var(--layout-brand-mark-size)] w-[var(--layout-sidebar-mark-size)]"
         >
           <Plus aria-hidden="true" />
@@ -308,22 +338,24 @@ export function ConversationRail({
             </p>
           )}
 
-          <Button
-            variant="ghost"
-            className="mt-4 h-[var(--layout-sidebar-context-item-height)] w-full justify-start gap-2.5 border-transparent bg-transparent px-3 text-sm text-text-secondary hover:bg-surface-muted/60 hover:text-text-primary"
-          >
-            <Archive aria-hidden="true" />
-            <span className="min-w-0 flex-1 truncate text-left">
-              已归档会话
-            </span>
-            <Badge
-              variant="secondary"
-              aria-label={`${archivedCount} 个已归档会话`}
-              className="h-6 min-w-6 border-transparent bg-surface-muted/70 px-2 text-xs tabular-nums"
+          {archivedCount === undefined ? null : (
+            <Button
+              variant="ghost"
+              className="mt-4 h-[var(--layout-sidebar-context-item-height)] w-full justify-start gap-2.5 border-transparent bg-transparent px-3 text-sm text-text-secondary hover:bg-surface-muted/60 hover:text-text-primary"
             >
-              {archivedCount}
-            </Badge>
-          </Button>
+              <Archive aria-hidden="true" />
+              <span className="min-w-0 flex-1 truncate text-left">
+                已归档会话
+              </span>
+              <Badge
+                variant="secondary"
+                aria-label={`${archivedCount} 个已归档会话`}
+                className="h-6 min-w-6 border-transparent bg-surface-muted/70 px-2 text-xs tabular-nums"
+              >
+                {archivedCount}
+              </Badge>
+            </Button>
+          )}
         </nav>
       </ScrollArea>
     </aside>

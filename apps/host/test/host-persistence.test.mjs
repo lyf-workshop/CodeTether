@@ -221,6 +221,8 @@ test('Conversation identity, rich multi-Turn history, and Provider identity surv
       environment.workspace,
     )
     const conversationId = created.data.conversation.conversationId
+    assert.equal(created.data.conversation.title, '新会话')
+    assert.equal(first.store.getConversation(conversationId).title, '新会话')
     const providerThreadId = first.runtime.conversationCalls[0]
       ? 'provider-thread-1'
       : undefined
@@ -231,6 +233,12 @@ test('Conversation identity, rich multi-Turn history, and Provider identity surv
       conversationId,
       'act_persist_turn001',
       'Remember marker DURABLE-ALPHA',
+    )
+    const titleAfterFirstInput = first.store.getConversation(conversationId)
+    assert.equal(titleAfterFirstInput.title, 'Remember marker DURABLE-ALPHA')
+    assert.equal(
+      first.service.snapshot().conversations[0].title,
+      titleAfterFirstInput.title,
     )
     completeRichTurn(
       first.runtime,
@@ -243,6 +251,10 @@ test('Conversation identity, rich multi-Turn history, and Provider identity surv
       conversationId,
       'act_persist_turn002',
       'Use the marker from Turn 1',
+    )
+    assert.equal(
+      first.store.getConversation(conversationId).title,
+      titleAfterFirstInput.title,
     )
     completeRichTurn(
       first.runtime,
@@ -272,6 +284,11 @@ test('Conversation identity, rich multi-Turn history, and Provider identity surv
     const after = second.service.snapshot()
     assert.equal(after.epoch, '22222222-2222-4222-8222-222222222222')
     assert.equal(after.conversations[0].conversationId, conversationId)
+    assert.equal(after.conversations[0].title, titleAfterFirstInput.title)
+    assert.equal(
+      second.store.getConversation(conversationId).title,
+      titleAfterFirstInput.title,
+    )
     assert.deepEqual(after.conversationRuntimes, before.conversationRuntimes)
     assert.equal(after.activeTurns.length, 0)
     assert.equal(after.pendingApprovals.length, 0)
@@ -437,6 +454,7 @@ test('durable write failure prevents Provider Turn start', async () => {
     listConversations: () => [],
     listIncompleteTurns: () => [],
     runInTransaction: (operation) => operation(),
+    expireOpenApprovalAttentionItems: () => 0,
     createProject: () => undefined,
     countConversationsForProject: () => 0,
     createConversation: () => undefined,
@@ -745,12 +763,14 @@ test('startup loads only the recent runtime window while SQLite keeps full histo
     store.createConversation({
       conversationId,
       projectId,
+      title: '新会话',
       provider: 'codex',
       providerThreadId: 'provider-thread-retained',
       cwd: environment.workspace,
       status: 'completed',
       createdAt: timestamp,
       updatedAt: timestamp,
+      lastActivityAt: timestamp,
     })
     for (let index = 0; index < 25; index += 1) {
       const turnId = `turn_retained_${String(index).padStart(3, '0')}`

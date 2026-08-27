@@ -1,371 +1,331 @@
-import { useMemo, useRef, useState } from 'react'
-import { Link } from '@tanstack/react-router'
-import { Send } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import { useNavigate } from '@tanstack/react-router'
 
-import {
-  Button,
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-  Textarea,
-  agentDefinitions,
-} from '@codetether/ui'
+import type { ApprovalDecision, AttentionItem } from '@codetether/protocol'
 
+import { attentionListQueryOptions } from '../../runtime/host/attention-query'
 import {
-  inboxMock,
-  type InboxItemMock,
-  type InboxItemType,
-  type InboxQuestionItemMock,
-} from '../../mocks/inbox'
-import { useDemoState } from '../../state/demo-state-context'
+  useHostConnectionState,
+  useHostRuntime,
+} from '../../runtime/host/host-runtime-hooks'
+import { attentionErrorMessage } from '../../runtime/host/attention-actions'
+import { mutationErrorMessage } from '../../runtime/host/live-conversation-actions'
+import {
+  acknowledgeFailedAttention,
+  resolveInboxApproval,
+  reviewCompletedAttention,
+} from './inbox-actions'
 import { InboxEmptyState } from './inbox-empty-state'
-import { InboxFilters, type InboxFilter } from './inbox-filters'
-import { InboxItem } from './inbox-item'
+import { InboxFilters } from './inbox-filters'
+import {
+  InboxItem,
+  type InboxItemMutationState,
+  type InboxMutationAction,
+} from './inbox-item'
+import {
+  createInboxModel,
+  getInboxFocusRecoveryTarget,
+  type InboxFilter,
+  type InboxFocusAnchor,
+} from './inbox-model'
+import { InboxErrorState, InboxLoadingState } from './inbox-page-states'
 import { InboxSummary } from './inbox-summary'
+import { useInboxMetadata } from './use-inbox-metadata'
 
-const itemPriority = {
-  approval: 0,
-  question: 0,
-  failed: 1,
-  completed: 2,
-} satisfies Record<InboxItemType, number>
+const emptyMutationStates: Readonly<Record<string, InboxItemMutationState>> = {}
+const emptyAttentionItems: readonly AttentionItem[] = []
 
 export function InboxPage() {
+  const runtime = useHostRuntime()
+  const connectionState = useHostConnectionState()
+  const navigate = useNavigate()
   const [activeFilter, setActiveFilter] = useState<InboxFilter>('all')
-  const [contextTargetId, setContextTargetId] = useState<string | null>(null)
-  const [liveMessage, setLiveMessage] = useState('')
-  const [replyTargetId, setReplyTargetId] = useState<string | null>(null)
-  const [replyText, setReplyText] = useState('')
-  const filtersRef = useRef<HTMLDivElement>(null)
-  const {
-    inboxItems: items,
-    markAllInboxItemsRead,
-    markInboxItemRead,
-    resolveInboxItem,
-  } = useDemoState()
-
-  const contextTarget = items.find(
-    (item): item is InboxQuestionItemMock =>
-      item.id === contextTargetId && item.type === 'question',
-  )
-  const replyTarget = items.find(
-    (item): item is InboxQuestionItemMock =>
-      item.id === replyTargetId && item.type === 'question',
-  )
-  const summary = useMemo(
-    () => ({
-      approvals: items.filter((item) => item.type === 'approval').length,
-      replies: items.filter((item) => item.type === 'question').length,
-      completed: items.filter((item) => item.type === 'completed').length,
-      failed: items.filter((item) => item.type === 'failed').length,
-    }),
-    [items],
-  )
-  const unreadCount = items.filter((item) => item.unread).length
-  const todayOverview = {
-    ...inboxMock.todayOverview,
-    highRisk: items.filter((item) => item.risk === 'high').length,
-    pending: items.length,
-  }
-
-  const visibleItems = useMemo(
-    () =>
-      items
-        .filter((item) => {
-          if (activeFilter === 'all') return true
-          if (activeFilter === 'unread') return item.unread
-          return item.type === activeFilter
-        })
-        .toSorted((left, right) => {
-          const priority = itemPriority[left.type] - itemPriority[right.type]
-
-          if (priority !== 0) return priority
-          return right.createdAt.localeCompare(left.createdAt)
-        }),
-    [activeFilter, items],
-  )
-
-  function focusActiveFilter() {
-    filtersRef.current
-      ?.querySelector<HTMLButtonElement>('[aria-pressed="true"]')
-      ?.focus()
-  }
-
-  function resolveItem(item: InboxItemMock, message: string) {
-    resolveInboxItem(item.id)
-    setLiveMessage(message)
-    requestAnimationFrame(focusActiveFilter)
-  }
-
-  function handleMarkAllRead() {
-    markAllInboxItemsRead()
-    setLiveMessage('所有收件箱事项已标为已读。')
-  }
-
-  function handleReplySubmit() {
-    if (!replyTarget || replyText.trim().length === 0) return
-
-    resolveItem(
-      replyTarget,
-      `已回复 ${agentDefinitions[replyTarget.agent].name}。`,
+  const [mutationStates, setMutationStates] =
+    useState<Readonly<Record<string, InboxItemMutationState>>>(
+      emptyMutationStates,
     )
-    setReplyTargetId(null)
-    setReplyText('')
+  const mutationGuards = useRef(new Set<string>())
+  const rowRefs = useRef(new Map<string, HTMLLIElement>())
+  const focusedItem = useRef<InboxFocusAnchor | undefined>(undefined)
+  const filtersRef = useRef<HTMLDivElement>(null)
+
+  const attentionQuery = useQuery({
+    ...attentionListQueryOptions(runtime),
+    enabled: connectionState === 'connected',
+  })
+  const response = attentionQuery.data
+  const model = useMemo(
+    () =>
+      response === undefined
+        ? undefined
+        : createInboxModel(response, activeFilter),
+    [activeFilter, response],
+  )
+  const allItems = response?.items ?? emptyAttentionItems
+  const metadata = useInboxMetadata(
+    runtime,
+    allItems,
+    connectionState === 'connected',
+  )
+  const controlsEnabled = connectionState === 'connected'
+  const approvalEnabled =
+    controlsEnabled && runtime.bootstrap?.capabilities.approvals === true
+
+  useEffect(() => {
+    const openIds = new Set(allItems.map((item) => String(item.attentionId)))
+    for (const attentionId of mutationGuards.current) {
+      if (!openIds.has(attentionId)) mutationGuards.current.delete(attentionId)
+    }
+  }, [allItems])
+
+  useEffect(() => {
+    function trackFocusedAttention(event: FocusEvent) {
+      const target = event.target
+      if (!(target instanceof Element)) return
+      const row = target.closest<HTMLElement>('[data-inbox-attention-id]')
+      if (row !== null) {
+        const attentionId = row.dataset.inboxAttentionId
+        const index = Number(row.dataset.inboxIndex)
+        if (attentionId !== undefined && Number.isSafeInteger(index)) {
+          focusedItem.current = { attentionId, index }
+        }
+        return
+      }
+
+      // Removing a focused row may return focus to body without a useful
+      // target. Preserve that anchor so the next render can restore focus.
+      if (target !== document.body) focusedItem.current = undefined
+    }
+
+    document.addEventListener('focusin', trackFocusedAttention)
+    return () => document.removeEventListener('focusin', trackFocusedAttention)
+  }, [])
+
+  useEffect(() => {
+    const anchor = focusedItem.current
+    if (anchor === undefined || model === undefined) return
+    const target = getInboxFocusRecoveryTarget(anchor, allItems, model.items)
+    if (target === undefined) return
+
+    focusedItem.current = undefined
+    const frame = requestAnimationFrame(() => {
+      mutationGuards.current.delete(anchor.attentionId)
+      setMutationStates((current) => {
+        if (current[anchor.attentionId] === undefined) return current
+        return Object.fromEntries(
+          Object.entries(current).filter(
+            ([attentionId]) => attentionId !== anchor.attentionId,
+          ),
+        )
+      })
+      if (target !== null) {
+        rowRefs.current.get(target)?.focus()
+      } else {
+        filtersRef.current
+          ?.querySelector<HTMLButtonElement>('[aria-pressed="true"]')
+          ?.focus()
+      }
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [allItems, model])
+
+  function setMutation(attentionId: string, state: InboxItemMutationState) {
+    setMutationStates((current) => ({ ...current, [attentionId]: state }))
   }
+
+  async function resolveApproval(
+    item: Extract<AttentionItem, { type: 'approval' }>,
+    decision: ApprovalDecision,
+  ) {
+    const attentionId = String(item.attentionId)
+    if (!approvalEnabled || mutationGuards.current.has(attentionId)) {
+      return
+    }
+
+    mutationGuards.current.add(attentionId)
+    setMutation(attentionId, { pending: true, action: decision })
+    try {
+      await resolveInboxApproval(runtime, item, decision)
+      // The bound approval.resolved/attention.resolved events own removal.
+    } catch (error) {
+      mutationGuards.current.delete(attentionId)
+      setMutation(attentionId, {
+        pending: false,
+        action: decision,
+        error: mutationErrorMessage(error, '处理审批'),
+      })
+    }
+  }
+
+  async function resolveGenericAttention(
+    item: Extract<AttentionItem, { type: 'completed_review' | 'failed' }>,
+    action: Extract<InboxMutationAction, 'acknowledge' | 'review'>,
+  ) {
+    const attentionId = String(item.attentionId)
+    if (!controlsEnabled || mutationGuards.current.has(attentionId)) {
+      return
+    }
+
+    mutationGuards.current.add(attentionId)
+    setMutation(attentionId, { pending: true, action })
+    try {
+      if (item.type === 'completed_review') {
+        await reviewCompletedAttention(
+          runtime,
+          item,
+          async (conversationId) =>
+            await navigate({
+              to: '/conversations/$conversationId',
+              params: { conversationId },
+              search: {},
+            }),
+        )
+      } else {
+        await acknowledgeFailedAttention(runtime, item)
+      }
+      // Failed Attention remains visible until attention.resolved is observed.
+    } catch (error) {
+      mutationGuards.current.delete(attentionId)
+      setMutation(attentionId, {
+        pending: false,
+        action,
+        error: attentionErrorMessage(error),
+      })
+    }
+  }
+
+  function handleRetry() {
+    runtime.retry()
+    if (connectionState === 'connected') void attentionQuery.refetch()
+  }
+
+  const connectionUnavailable =
+    connectionState === 'unavailable' || connectionState === 'incompatible'
+  const loading =
+    response === undefined &&
+    !connectionUnavailable &&
+    (attentionQuery.isPending ||
+      connectionState === 'connecting' ||
+      connectionState === 'reconnecting')
 
   return (
     <div className="flex min-h-full min-w-0 flex-col px-[var(--layout-content-inline-padding)] py-[var(--layout-inbox-page-block-padding)]">
       <header className="flex min-h-[var(--layout-inbox-header-height)] min-w-0 items-start justify-between gap-6">
         <div className="min-w-0">
           <h1 className="text-page font-semibold text-text-primary">收件箱</h1>
-          <p className="mt-0.5 truncate text-sm font-regular text-text-secondary">
-            所有需要你决策、回复或检查的智能体事项。
+          <p className="mt-0.5 text-sm font-regular text-text-secondary">
+            所有需要你处理或查看的智能体事项。
           </p>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <Button
-            size="sm"
-            variant="outline"
-            aria-controls="inbox-filter-controls"
-            onClick={focusActiveFilter}
-            className="h-9 min-w-22 px-3 text-sm"
+        {connectionState === 'reconnecting' && response !== undefined ? (
+          <p
+            role="status"
+            className="shrink-0 rounded-full border border-warning/30 bg-warning-muted px-3 py-1 text-xs text-warning"
           >
-            筛选
-          </Button>
-          <Button
-            size="sm"
-            variant="secondary"
-            disabled={unreadCount === 0}
-            onClick={handleMarkAllRead}
-            className="h-9 px-3 text-sm"
-          >
-            全部标为已读
-          </Button>
-        </div>
+            正在重新连接
+          </p>
+        ) : null}
       </header>
 
       <div className="mt-[var(--layout-inbox-header-summary-gap)]">
-        <InboxSummary
-          activeFilter={activeFilter}
-          onFilterChange={setActiveFilter}
-          summary={summary}
-          todayOverview={todayOverview}
-        />
-      </div>
-
-      <div
-        ref={filtersRef}
-        id="inbox-filter-controls"
-        className="mt-[var(--layout-inbox-summary-filter-gap)] flex h-7 min-w-0 items-center justify-between gap-4"
-      >
-        <InboxFilters
-          activeFilter={activeFilter}
-          onFilterChange={setActiveFilter}
-          summary={summary}
-          unreadCount={unreadCount}
-        />
-        <p className="shrink-0 text-xs font-regular text-text-muted">
-          按处理优先级排序
-        </p>
-      </div>
-
-      <section
-        aria-label="需要你处理的事项"
-        className="mt-[var(--layout-inbox-filter-list-gap)]"
-      >
-        {visibleItems.length > 0 ? (
-          <ol className="space-y-[var(--layout-inbox-item-gap)]">
-            {visibleItems.map((item) => (
-              <li key={item.id}>
-                <InboxItem
-                  item={item}
-                  onApprove={(currentItem) =>
-                    resolveItem(
-                      currentItem,
-                      `已允许 ${currentItem.command} 执行一次。`,
-                    )
-                  }
-                  onContext={(currentItem) => {
-                    markInboxItemRead(currentItem.id)
-                    setContextTargetId(currentItem.id)
-                    setLiveMessage(`已打开“${currentItem.title}”的上下文。`)
-                  }}
-                  onReject={(currentItem) =>
-                    resolveItem(currentItem, `已拒绝“${currentItem.title}”。`)
-                  }
-                  onReply={(currentItem) => {
-                    markInboxItemRead(currentItem.id)
-                    setReplyTargetId(currentItem.id)
-                  }}
-                  onRetry={(currentItem) =>
-                    resolveItem(
-                      currentItem,
-                      `已在本地标记重试“${currentItem.title}”。`,
-                    )
-                  }
-                  onVisit={(currentItem, destination) => {
-                    if (currentItem.type === 'completed') {
-                      resolveInboxItem(currentItem.id)
-                    } else {
-                      markInboxItemRead(currentItem.id)
-                    }
-                    setLiveMessage(`正在打开${destination}。`)
-                  }}
-                />
-              </li>
-            ))}
-          </ol>
-        ) : (
-          <InboxEmptyState
-            activeFilter={activeFilter}
-            onReset={() => setActiveFilter('all')}
+        {connectionUnavailable ? (
+          <InboxErrorState
+            incompatible={connectionState === 'incompatible'}
+            onRetry={handleRetry}
           />
-        )}
-      </section>
+        ) : loading ? (
+          <InboxLoadingState />
+        ) : response === undefined ? (
+          <InboxErrorState title="无法读取收件箱" onRetry={handleRetry} />
+        ) : model === undefined ? null : (
+          <>
+            <InboxSummary
+              activeFilter={activeFilter}
+              onFilterChange={setActiveFilter}
+              summary={model.summary}
+            />
 
-      <aside className="mt-[var(--layout-inbox-list-guidance-gap)] flex min-h-[var(--layout-inbox-guidance-height)] min-w-0 items-center gap-3 rounded-md border border-border bg-surface/35 px-4">
-        <div className="min-w-0">
-          <h2 className="text-md font-semibold text-text-primary">审批建议</h2>
-          <p className="mt-0.5 truncate text-xs font-regular text-text-muted">
-            可在设置中为可信项目配置低风险操作的默认权限，减少重复审批。
-          </p>
-        </div>
-        <Button
-          asChild
-          size="sm"
-          variant="outline"
-          className="ml-auto h-9 shrink-0 px-4 text-sm"
-        >
-          <Link to="/settings">打开权限设置</Link>
-        </Button>
-      </aside>
-
-      <Dialog
-        open={Boolean(contextTarget)}
-        onOpenChange={(open) => {
-          if (!open) setContextTargetId(null)
-        }}
-      >
-        <DialogContent
-          closeLabel="关闭问题上下文"
-          onCloseAutoFocus={(event) => {
-            event.preventDefault()
-            focusActiveFilter()
-          }}
-          className="max-w-md"
-        >
-          <DialogHeader>
-            <DialogTitle>问题上下文</DialogTitle>
-            <DialogDescription>
-              此处仅展示智能体提问所关联的本地演示信息。
-            </DialogDescription>
-          </DialogHeader>
-          <div className="rounded-md border border-border bg-surface/70 px-3.5 py-3">
-            <p className="text-sm font-medium text-text-primary">
-              {contextTarget?.title}
-            </p>
-            <p className="mt-1 text-sm font-regular text-text-secondary">
-              {contextTarget?.questionPrompt}
-            </p>
-          </div>
-          <dl className="grid grid-cols-[4rem_minmax(0,1fr)] gap-x-4 gap-y-2 border-y border-border py-3 text-sm">
-            <dt className="text-text-muted">智能体</dt>
-            <dd className="text-text-secondary">
-              {contextTarget
-                ? agentDefinitions[contextTarget.agent].name
-                : null}
-            </dd>
-            <dt className="text-text-muted">项目</dt>
-            <dd className="text-text-secondary">{contextTarget?.project}</dd>
-            <dt className="text-text-muted">机器</dt>
-            <dd className="text-text-secondary">{contextTarget?.machine}</dd>
-          </dl>
-          <DialogFooter>
-            <DialogClose asChild>
-              <Button size="sm">知道了</Button>
-            </DialogClose>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog
-        open={Boolean(replyTarget)}
-        onOpenChange={(open) => {
-          if (!open) {
-            setReplyTargetId(null)
-            setReplyText('')
-          }
-        }}
-      >
-        <DialogContent
-          closeLabel="关闭回复窗口"
-          onCloseAutoFocus={(event) => {
-            event.preventDefault()
-            focusActiveFilter()
-          }}
-          className="max-w-lg"
-        >
-          <form
-            onSubmit={(event) => {
-              event.preventDefault()
-              handleReplySubmit()
-            }}
-            className="grid gap-4"
-          >
-            <DialogHeader>
-              <DialogTitle>回复智能体</DialogTitle>
-              <DialogDescription>
-                {replyTarget
-                  ? `${agentDefinitions[replyTarget.agent].name} 正在等待你的决定。`
-                  : '智能体正在等待你的决定。'}
-              </DialogDescription>
-            </DialogHeader>
-            <div className="rounded-md border border-border bg-surface/70 px-3.5 py-3">
-              <p className="text-sm font-medium text-text-primary">
-                {replyTarget?.title}
-              </p>
-              <p className="mt-1 text-sm font-regular text-text-secondary">
-                {replyTarget?.questionPrompt ?? replyTarget?.description}
+            <div
+              ref={filtersRef}
+              id="inbox-filter-controls"
+              className="mt-[var(--layout-inbox-summary-filter-gap)] flex min-h-7 min-w-0 items-center justify-between gap-4"
+            >
+              <InboxFilters
+                activeFilter={activeFilter}
+                onFilterChange={setActiveFilter}
+                summary={model.summary}
+              />
+              <p className="shrink-0 text-xs font-regular text-text-muted">
+                Host 按处理优先级排序
               </p>
             </div>
-            <label className="grid gap-2 text-sm font-medium text-text-secondary">
-              回复内容
-              <Textarea
-                autoFocus
-                value={replyText}
-                onChange={(event) => setReplyText(event.target.value)}
-                placeholder="输入你的决定或补充信息…"
-                aria-describedby="reply-help"
-              />
-            </label>
-            <p id="reply-help" className="text-xs font-regular text-text-muted">
-              此操作仅更新本地演示状态，不会发送给真实智能体。
-            </p>
-            <DialogFooter>
-              <DialogClose asChild>
-                <Button size="sm" variant="outline">
-                  取消
-                </Button>
-              </DialogClose>
-              <Button
-                type="submit"
-                size="sm"
-                disabled={replyText.trim().length === 0}
+
+            {model.showsLimitNotice ? (
+              <p
+                className="mt-3 text-xs font-regular text-text-muted"
+                role="note"
               >
-                <Send aria-hidden="true" />
-                回复
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
+                当前显示最近 {response.items.length} 个待处理事项，共{' '}
+                {model.summary.totalOpen} 个。
+              </p>
+            ) : null}
+
+            <section
+              aria-label="需要你处理的事项"
+              className="mt-[var(--layout-inbox-filter-list-gap)]"
+            >
+              {model.items.length > 0 ? (
+                <ol className="space-y-[var(--layout-inbox-item-gap)]">
+                  {model.items.map((item, index) => {
+                    const attentionId = String(item.attentionId)
+                    return (
+                      <li
+                        key={attentionId}
+                        data-inbox-attention-id={attentionId}
+                        data-inbox-index={index}
+                        ref={(node) => {
+                          if (node === null) rowRefs.current.delete(attentionId)
+                          else rowRefs.current.set(attentionId, node)
+                        }}
+                        tabIndex={-1}
+                        className="rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                      >
+                        <InboxItem
+                          approvalEnabled={approvalEnabled}
+                          controlsEnabled={controlsEnabled}
+                          item={item}
+                          metadata={metadata.get(attentionId)}
+                          mutation={mutationStates[attentionId]}
+                          onApproval={(current, decision) => {
+                            void resolveApproval(current, decision)
+                          }}
+                          onAcknowledge={(current) => {
+                            void resolveGenericAttention(current, 'acknowledge')
+                          }}
+                          onReview={(current) => {
+                            void resolveGenericAttention(current, 'review')
+                          }}
+                        />
+                      </li>
+                    )
+                  })}
+                </ol>
+              ) : (
+                <InboxEmptyState
+                  activeFilter={activeFilter}
+                  onReset={() => setActiveFilter('all')}
+                />
+              )}
+            </section>
+          </>
+        )}
+      </div>
 
       <p className="sr-only" role="status" aria-live="polite">
-        {liveMessage || `当前显示 ${visibleItems.length} 个待处理事项`}
+        {model === undefined
+          ? '正在读取收件箱'
+          : `当前显示 ${model.items.length} 个待处理事项`}
       </p>
     </div>
   )

@@ -26,6 +26,9 @@ import {
   type AgentId,
   type ExecutionStatus,
 } from '@codetether/ui'
+import type { ProjectRecord } from '@codetether/protocol'
+
+import { formatInboxAttentionBadge } from '../inbox/inbox-model'
 
 type SidebarDestination =
   '/inbox' | '/activity' | '/projects' | '/agents' | '/machines' | '/settings'
@@ -38,7 +41,6 @@ interface SidebarNavItem {
 
 interface AgentPresence {
   agent: AgentId
-  status: ExecutionStatus
 }
 
 interface MachinePresence {
@@ -62,9 +64,9 @@ const settingsNavItem = {
 } as const satisfies SidebarNavItem
 
 const agentPresences = [
-  { agent: 'codex', status: 'running' },
-  { agent: 'claude', status: 'running' },
-  { agent: 'opencode', status: 'running' },
+  { agent: 'codex' },
+  { agent: 'claude' },
+  { agent: 'opencode' },
 ] as const satisfies readonly AgentPresence[]
 
 const machinePresences = [
@@ -82,16 +84,17 @@ function isCurrentRoute(currentPath: string, destination: SidebarDestination) {
 
 interface PresenceDotProps {
   label: string
+  stateLabel?: string
   status: ExecutionStatus
 }
 
-function PresenceDot({ label, status }: PresenceDotProps) {
+function PresenceDot({ label, stateLabel, status }: PresenceDotProps) {
   const definition = statusDefinitions[status]
 
   return (
     <span
       role="img"
-      aria-label={`${label}：${definition.label}`}
+      aria-label={`${label}：${stateLabel ?? definition.label}`}
       data-status={status}
       className={cn(
         'size-2 shrink-0 rounded-full bg-current',
@@ -119,6 +122,7 @@ function SidebarLink({
     attentionCount > 0
       ? `${item.label}，${attentionCount} 项待处理`
       : item.label
+  const attentionLabel = formatInboxAttentionBadge(attentionCount)
 
   return (
     <Tooltip>
@@ -145,12 +149,12 @@ function SidebarLink({
           <span className="hidden min-w-0 flex-1 truncate lg:block">
             {item.label}
           </span>
-          {attentionCount > 0 ? (
+          {attentionLabel !== undefined ? (
             <span
               aria-hidden="true"
               className="absolute top-1 right-1 grid h-4 min-w-4 place-items-center rounded-full border border-primary/30 bg-primary-muted px-1 text-2xs font-semibold tabular-nums text-primary lg:static lg:h-5 lg:min-w-5"
             >
-              {attentionCount}
+              {attentionLabel}
             </span>
           ) : null}
         </Link>
@@ -167,17 +171,25 @@ export interface PrimarySidebarProps extends Omit<
   'children'
 > {
   currentPath: string
+  currentProject?: Pick<ProjectRecord, 'name' | 'projectId'>
+  codexAvailable?: boolean
   inboxAttentionCount?: number
 }
 
-/** Desktop-primary navigation and mock availability summary for Phase 1B. */
+/** Shared desktop navigation with capability-backed Agent availability. */
 export function PrimarySidebar({
   currentPath,
+  currentProject,
+  codexAvailable = false,
   inboxAttentionCount = 0,
   className,
   'aria-label': ariaLabel = '主导航',
   ...props
 }: PrimarySidebarProps) {
+  const showMockMachines =
+    !currentPath.startsWith('/projects') &&
+    !currentPath.startsWith('/conversations/')
+
   return (
     <aside
       aria-label={ariaLabel}
@@ -225,10 +237,26 @@ export function PrimarySidebar({
               className="mt-2 h-[var(--layout-sidebar-context-item-height)] w-full justify-start rounded-sm border-border-strong bg-primary-muted/40 px-2 text-left hover:bg-primary-muted/60"
             >
               <Link
-                to="/conversations"
-                aria-label="打开 MyProject 的会话"
+                to={
+                  currentProject === undefined
+                    ? '/projects'
+                    : '/projects/$projectId'
+                }
+                params={
+                  currentProject === undefined
+                    ? undefined
+                    : { projectId: currentProject.projectId }
+                }
+                aria-label={
+                  currentProject === undefined
+                    ? '选择项目'
+                    : `打开 ${currentProject.name} 项目详情`
+                }
                 aria-current={
-                  currentPath.startsWith('/conversations') ? 'page' : undefined
+                  currentProject !== undefined &&
+                  currentPath === `/projects/${currentProject.projectId}`
+                    ? 'page'
+                    : undefined
                 }
               >
                 <FolderOpen
@@ -236,7 +264,7 @@ export function PrimarySidebar({
                   className="size-4 shrink-0 text-primary"
                 />
                 <span className="min-w-0 flex-1 truncate text-md font-semibold text-text-primary">
-                  MyProject
+                  {currentProject?.name ?? '选择项目'}
                 </span>
                 <ChevronDown
                   aria-hidden="true"
@@ -256,8 +284,12 @@ export function PrimarySidebar({
               智能体
             </h2>
             <ul className="mt-2 space-y-0.5">
-              {agentPresences.map(({ agent, status }) => {
+              {agentPresences.map(({ agent }) => {
                 const definition = agentDefinitions[agent]
+                const connected = agent === 'codex' && codexAvailable
+                const status: ExecutionStatus = connected ? 'idle' : 'offline'
+                const stateLabel =
+                  agent === 'codex' ? (connected ? '可用' : '不可用') : '未接入'
 
                 return (
                   <li
@@ -276,7 +308,14 @@ export function PrimarySidebar({
                     <span className="min-w-0 flex-1 truncate text-md font-medium text-text-primary">
                       {definition.name}
                     </span>
-                    <PresenceDot label={definition.name} status={status} />
+                    <span className="text-2xs text-text-muted">
+                      {stateLabel}
+                    </span>
+                    <PresenceDot
+                      label={definition.name}
+                      stateLabel={stateLabel}
+                      status={status}
+                    />
                   </li>
                 )
               })}
@@ -285,31 +324,33 @@ export function PrimarySidebar({
 
           <Separator className="my-3" />
 
-          <section aria-labelledby="sidebar-machines-heading">
-            <h2
-              id="sidebar-machines-heading"
-              className="px-2 text-xs font-semibold text-text-muted"
-            >
-              机器
-            </h2>
-            <ul className="mt-2 space-y-0.5">
-              {machinePresences.map(({ icon: Icon, name, status }) => (
-                <li
-                  key={name}
-                  className="flex h-[var(--layout-sidebar-machine-item-height)] min-w-0 items-center gap-[var(--layout-sidebar-nav-gap)] pr-3 pl-2"
-                >
-                  <Icon
-                    aria-hidden="true"
-                    className="size-4 shrink-0 text-text-secondary"
-                  />
-                  <span className="min-w-0 flex-1 truncate text-sm font-medium text-text-primary">
-                    {name}
-                  </span>
-                  <PresenceDot label={name} status={status} />
-                </li>
-              ))}
-            </ul>
-          </section>
+          {showMockMachines ? (
+            <section aria-labelledby="sidebar-machines-heading">
+              <h2
+                id="sidebar-machines-heading"
+                className="px-2 text-xs font-semibold text-text-muted"
+              >
+                机器
+              </h2>
+              <ul className="mt-2 space-y-0.5">
+                {machinePresences.map(({ icon: Icon, name, status }) => (
+                  <li
+                    key={name}
+                    className="flex h-[var(--layout-sidebar-machine-item-height)] min-w-0 items-center gap-[var(--layout-sidebar-nav-gap)] pr-3 pl-2"
+                  >
+                    <Icon
+                      aria-hidden="true"
+                      className="size-4 shrink-0 text-text-secondary"
+                    />
+                    <span className="min-w-0 flex-1 truncate text-sm font-medium text-text-primary">
+                      {name}
+                    </span>
+                    <PresenceDot label={name} status={status} />
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
         </div>
 
         <div className="mt-auto pt-3">

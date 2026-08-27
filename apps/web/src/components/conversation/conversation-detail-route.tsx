@@ -1,8 +1,14 @@
+import { useEffect, useRef, useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useParams, useSearch } from '@tanstack/react-router'
 
 import {
   ConversationIdSchema,
+  type ConversationId,
+  type ConversationSummary,
+  type GetConversationResponse,
   type HostCapabilities,
+  type ProjectRecord,
 } from '@codetether/protocol'
 import { Button } from '@codetether/ui'
 
@@ -11,14 +17,22 @@ import {
   useHostProjection,
   useHostRuntime,
 } from '../../runtime/host/host-runtime-hooks'
+import { conversationDetailQueryOptions } from '../../runtime/host/conversation-detail-query'
+import { conversationListQueryOptions } from '../../runtime/host/conversation-list-query'
+import {
+  includeConversationDetail,
+  type ConversationReadModel,
+} from '../../runtime/host/conversation-projection'
+import {
+  readHostProjection,
+  replaceHostProjection,
+} from '../../runtime/host/host-query'
+import { projectDetailQueryOptions } from '../../runtime/host/project-query'
 import { ConversationDetailPage } from './conversation-detail-page'
+import { NewConversationDialog } from '../conversations/new-conversation-dialog'
 import { createDemoConversationDetailSource } from './demo-conversation-adapter'
 import { createLiveConversationDetailSource } from './live-conversation-adapter'
 import { useLiveConversationControls } from './use-live-conversation-controls'
-import type {
-  ConversationProjection,
-  ConversationReadModel,
-} from '../../runtime/host/conversation-projection'
 
 export function ConversationDetailRoute() {
   const { conversationId } = useParams({
@@ -49,7 +63,7 @@ export function ConversationDetailRoute() {
 }
 
 interface LiveConversationDetailRouteProps {
-  readonly conversationId: string
+  readonly conversationId: ConversationId
   readonly initialInspectorTab?: 'changes'
 }
 
@@ -59,11 +73,70 @@ function LiveConversationDetailRoute({
 }: LiveConversationDetailRouteProps) {
   const runtime = useHostRuntime()
   const connectionState = useHostConnectionState()
-  const bootstrap = runtime.bootstrap
-  const projection = useHostProjection()
-  const conversation = projection?.conversations[conversationId]
+  const detailQuery = useQuery({
+    ...conversationDetailQueryOptions(runtime, conversationId),
+    enabled: connectionState === 'connected',
+  })
 
-  if (conversation === undefined || projection === undefined) {
+  if (detailQuery.data === undefined) {
+    return (
+      <LiveConversationBoundary
+        state={connectionState}
+        conversationId={conversationId}
+        readFailed={detailQuery.isError}
+        onRetry={() => {
+          runtime.retry()
+          if (connectionState === 'connected') void detailQuery.refetch()
+        }}
+      />
+    )
+  }
+
+  return (
+    <LoadedLiveConversationDetail
+      detail={detailQuery.data}
+      connectionState={connectionState}
+      initialInspectorTab={initialInspectorTab}
+    />
+  )
+}
+
+interface LoadedLiveConversationDetailProps {
+  readonly detail: GetConversationResponse
+  readonly connectionState: ReturnType<typeof useHostConnectionState>
+  readonly initialInspectorTab?: 'changes'
+}
+
+function LoadedLiveConversationDetail({
+  detail,
+  connectionState,
+  initialInspectorTab,
+}: LoadedLiveConversationDetailProps) {
+  const runtime = useHostRuntime()
+  const queryClient = useQueryClient()
+  const projection = useHostProjection()
+  const conversationId = detail.conversation.conversationId
+  const projectId = detail.conversation.projectId
+  const hasProjectedConversation =
+    projection?.conversations[conversationId] !== undefined
+  const projectQuery = useQuery({
+    ...projectDetailQueryOptions(runtime, projectId),
+    enabled: connectionState === 'connected',
+  })
+  const railQuery = useQuery({
+    ...conversationListQueryOptions(runtime, projectId),
+    enabled: connectionState === 'connected',
+  })
+
+  useEffect(() => {
+    const current = readHostProjection(queryClient)
+    if (current === undefined) return
+    const next = includeConversationDetail(current, detail)
+    if (next !== current) replaceHostProjection(queryClient, next)
+  }, [detail, hasProjectedConversation, projection?.cursor.epoch, queryClient])
+
+  const conversation = projection?.conversations[conversationId]
+  if (conversation === undefined) {
     return (
       <LiveConversationBoundary
         state={connectionState}
@@ -73,12 +146,29 @@ function LiveConversationDetailRoute({
     )
   }
 
+  if (projectQuery.data === undefined && !projectQuery.isError) {
+    return (
+      <LiveConversationBoundary
+        state={connectionState}
+        conversationId={conversationId}
+        onRetry={() => runtime.retry()}
+      />
+    )
+  }
+
+  const summaries = includeCurrentSummary(
+    railQuery.data ?? [],
+    detail.conversation,
+  )
+
   return (
     <ConnectedLiveConversationDetail
       conversation={conversation}
-      projection={projection}
+      summaries={summaries}
       connectionState={connectionState}
-      capabilities={bootstrap?.capabilities}
+      capabilities={runtime.bootstrap?.capabilities}
+      project={projectQuery.data}
+      projectAvailability={projectQuery.data?.availability ?? 'unavailable'}
       initialInspectorTab={initialInspectorTab}
     />
   )
@@ -86,24 +176,32 @@ function LiveConversationDetailRoute({
 
 interface ConnectedLiveConversationDetailProps {
   readonly conversation: ConversationReadModel
-  readonly projection: ConversationProjection
+  readonly summaries: readonly ConversationSummary[]
   readonly connectionState: ReturnType<typeof useHostConnectionState>
   readonly capabilities: HostCapabilities | undefined
+  readonly project: ProjectRecord | undefined
+  readonly projectAvailability: 'available' | 'unavailable'
   readonly initialInspectorTab?: 'changes'
 }
 
 function ConnectedLiveConversationDetail({
   conversation,
-  projection,
+  summaries,
   connectionState,
   capabilities,
+  project,
+  projectAvailability,
   initialInspectorTab,
 }: ConnectedLiveConversationDetailProps) {
+  const newConversationButtonRef = useRef<HTMLButtonElement>(null)
+  const [newConversationOpen, setNewConversationOpen] = useState(false)
   const source = createLiveConversationDetailSource(
     conversation,
-    projection,
+    summaries,
     connectionState,
     capabilities,
+    projectAvailability,
+    project?.rootPath,
   )
   const controls = useLiveConversationControls(
     conversation,
@@ -111,13 +209,31 @@ function ConnectedLiveConversationDetail({
   )
 
   return (
-    <ConversationDetailPage
-      viewModel={source.conversation}
-      rail={source.rail}
-      connectionIndicator={source.connectionIndicator}
-      controls={controls}
-      initialInspectorTab={initialInspectorTab}
-    />
+    <>
+      <ConversationDetailPage
+        viewModel={source.conversation}
+        rail={source.rail}
+        connectionIndicator={source.connectionIndicator}
+        controls={controls}
+        initialInspectorTab={initialInspectorTab}
+        newConversationButtonRef={newConversationButtonRef}
+        newConversationDisabled={projectAvailability === 'unavailable'}
+        {...(project === undefined
+          ? {}
+          : {
+              projectId: project.projectId,
+              onNewConversation: () => setNewConversationOpen(true),
+            })}
+      />
+      {project === undefined ? null : (
+        <NewConversationDialog
+          currentProject={project}
+          open={newConversationOpen}
+          onOpenChange={setNewConversationOpen}
+          returnFocusRef={newConversationButtonRef}
+        />
+      )}
+    </>
   )
 }
 
@@ -125,12 +241,14 @@ interface LiveConversationBoundaryProps {
   readonly state:
     'connecting' | 'connected' | 'reconnecting' | 'unavailable' | 'incompatible'
   readonly conversationId: string
+  readonly readFailed?: boolean
   readonly onRetry: () => void
 }
 
 function LiveConversationBoundary({
   state,
   conversationId,
+  readFailed = false,
   onRetry,
 }: LiveConversationBoundaryProps) {
   const content = {
@@ -151,12 +269,15 @@ function LiveConversationBoundary({
       description: 'Web Client 需要 CodeTether Protocol v1。',
     },
     connected: {
-      title: 'Host 中暂时没有这个会话',
-      description: `正在等待会话 ${conversationId} 出现在实时事件中。`,
+      title: readFailed ? '无法读取会话' : '正在读取会话历史',
+      description: readFailed
+        ? 'CodeTether Host 无法返回这个会话，请重试。'
+        : `正在从 Host 读取会话 ${conversationId}。`,
     },
   } as const
   const current = content[state]
-  const canRetry = state === 'unavailable' || state === 'incompatible'
+  const canRetry =
+    state === 'unavailable' || state === 'incompatible' || readFailed
 
   return (
     <section
@@ -183,4 +304,15 @@ function LiveConversationBoundary({
       </div>
     </section>
   )
+}
+
+function includeCurrentSummary(
+  summaries: readonly ConversationSummary[],
+  current: ConversationSummary,
+): readonly ConversationSummary[] {
+  return summaries.some(
+    (summary) => summary.conversationId === current.conversationId,
+  )
+    ? summaries
+    : [current, ...summaries]
 }

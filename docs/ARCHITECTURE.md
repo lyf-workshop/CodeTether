@@ -4,13 +4,23 @@
 
 Phase 1 Frontend Experience is accepted and frozen as **CodeTether V2 Frontend Core v1**. Phase 2A and Phase 2A.1 are accepted and frozen as **Phase 2A Codex Runtime v1**. Phase 2B is accepted as the versioned local Client-to-Host boundary: HTTP commands, an SSE event stream, CodeTether-owned public identities, in-memory snapshot/replay, and a non-React client.
 
-Phase 2C.1 is accepted, and Phase 2C.1.1 is frozen as **Live Conversation Read Model v1**: one application-scoped Web runtime connects the frozen Conversation Detail to Protocol v1, while bounded Host-owned history reconstructs the same retained multi-Turn view after initial load, refresh, reconnect reset, or live event application. Phase 2C.2 is accepted and frozen as **CodeTether Local Codex Alpha v0.1**, connecting only the existing text Composer, one-shot Approval actions, and Interrupt control. Phase 2D audited and stabilized this boundary without adding product scope. Demo, Inbox, and Conversations remain Mock-only.
+Phase 2C.1 is accepted, and Phase 2C.1.1 is frozen as **Live Conversation Read Model v1**: one application-scoped Web runtime connects the frozen Conversation Detail to Protocol v1, while bounded Host-owned history reconstructs the same retained multi-Turn view after initial load, refresh, reconnect reset, or live event application. Phase 2C.2 is accepted and frozen as **CodeTether Local Codex Alpha v0.1**, connecting only the existing text Composer, one-shot Approval actions, and Interrupt control. Phase 2D audited and stabilized this boundary without adding product scope.
 
 **Phase 3A — Minimal Durable Persistence** is implemented and validated. A small `node:sqlite` boundary in the local Host preserves CodeTether Conversation/provider identity and normalized per-Turn snapshots across restart, while a later Turn lazily resumes the saved Codex Thread. A real isolated restart walkthrough confirmed Timeline reconstruction and retained provider context.
 
 **Phase 3B.1 — Durable Project Identity & Local Workspace Authorization** is implemented and validated. The Host now owns durable `proj_*` Project identities and canonical authorized local roots. Every durable Conversation references one Project, while its `cwd` remains a contained working directory. Availability is computed from the filesystem, and every new Turn re-authorizes the saved root before Codex runs.
 
-No Projects UI, Tauri shell, remote access, authentication, multiple-Machine Project model, or production machine-host service exists yet. The Host remains a development-only loopback API; SQLite is local Host data, not a remote or multi-user service.
+**Phase 3B.2 — Real Projects UI** is implemented and validated. The Web app reads and mutates the existing Project API through `packages/client` and TanStack Query. It provides real Project list/add/detail/remove routes while the Host remains the sole authority for Project records, path authorization, availability, duplicate registration, and deletion conflicts.
+
+**Phase 3C.1 — Durable Conversation Index & Title** is implemented and validated. SQLite now owns a Project-scoped product-history index distinct from the bounded Runtime Snapshot. Every Conversation has one durable deterministic title and a dedicated activity clock, and Protocol v1 exposes bounded summary reads without provider Thread or workspace-routing metadata.
+
+**Phase 3C.1.1 — Durable Conversation Detail & Bounded Runtime Hydration** is implemented and validated. A single-Conversation durable read now reconstructs a bounded recent Timeline independently of runtime admission or Codex availability. Control of a cold Conversation hydrates that durable state into the bounded Host working set and resumes its saved provider Thread only when a new Turn actually starts.
+
+**Phase 3C.2 — Real Conversations Experience** is implemented and validated. The real Project-scoped Conversations page, Conversation Rail, Current Project context, breadcrumbs, and minimal Codex-only New Conversation flow now consume the durable Project/Conversation APIs through `packages/client` and TanStack Query. Cold and live Conversation routes still converge on one normalized Conversation ViewModel; React does not learn hydration or provider identity.
+
+**Phase 3D.2 — Real Inbox UI** is implemented and validated. SQLite owns a low-frequency, Conversation-linked index of real Approval, completed-review, and failed-Turn Attention. Protocol v1 exposes typed list/resolve commands and reliable semantic SSE transitions without exposing provider requests or turning Runtime Snapshot into Inbox storage. The real Inbox and Sidebar count now consume that boundary through `packages/client` and TanStack Query.
+
+No native folder picker, Project discovery/scanning, rename/relocate, read/unread Inbox history, archive/delete/history pagination, Tauri shell, remote access, authentication, multiple-Machine Project model, or production machine-host service exists yet. The Host remains a development-only loopback API; SQLite is local Host data, not a remote or multi-user service.
 
 ## System Context
 
@@ -43,7 +53,7 @@ The future Machine Host will be the runtime authority. Clients must render norma
 ## Monorepo Boundaries
 
 ```text
-apps/web                   Frozen React UI plus live Conversation read/control boundary
+apps/web                   Frozen core UI, live Conversation boundary, and real Projects UI
 apps/desktop               Future Tauri 2 desktop shell placeholder
 apps/host                  Codex runtime, loopback Host API, and minimal SQLite persistence
 
@@ -360,7 +370,7 @@ Linux    $XDG_DATA_HOME/codetether, otherwise ~/.local/share/codetether
 
 ### Minimal Schema and Migrations
 
-The migration runner records ordered versions in `schema_migrations`, rejects an unknown or renamed applied migration, and applies each new migration in an immediate transaction. Migration 001 (`initial`) introduced `conversations` and `turns`. Phase 3B.1 migration 002 (`projects`) adds durable Project identity and rebuilds Conversation foreign keys without discarding existing history. The current schema contains:
+The migration runner records ordered versions in `schema_migrations`, rejects an unknown or renamed applied migration, and applies each new migration in an immediate transaction. Migration 001 (`initial`) introduced `conversations` and `turns`. Phase 3B.1 migration 002 (`projects`) adds durable Project identity and rebuilds Conversation foreign keys without discarding existing history. Phase 3C.1 migration 003 (`conversation_title`) adds durable titles and a separate last-activity clock, backfilling existing rows transactionally from their first canonical text input. Phase 3D.1 migration 004 (`attention`) adds the durable Attention index without retroactively creating work from older completed Turns. The current schema contains:
 
 ```text
 projects
@@ -373,10 +383,11 @@ projects
 conversations
   conversation_id       CodeTether public identity, primary key
   project_id            required Project foreign key, delete restricted
+  title                 canonical product title
   provider              currently constrained to codex
   provider_thread_id    private provider resume identity, nullable while creating
   cwd, model, reasoning
-  status, created_at, updated_at
+  status, created_at, updated_at, last_activity_at
 
 turns
   turn_id               CodeTether public identity, primary key
@@ -385,19 +396,29 @@ turns
   input                  canonical text input JSON
   status, started_at, completed_at
   snapshot_version, snapshot_json
+
+attention_items
+  attention_id           CodeTether attn_* public identity, primary key
+  source_key             stable semantic identity, unique
+  project_id             required Project foreign key, delete restricted
+  conversation_id        required Conversation foreign key, delete restricted
+  turn_id                optional exact Turn foreign key, delete restricted
+  type, status            approval/completed_review/failed; open/resolved/expired
+  payload_json            bounded normalized presentation metadata
+  created_at, updated_at, resolved_at
 ```
 
-Indexes cover Project and Conversation recency, Project-scoped Conversation recency, and per-Conversation Turn chronology. Migration 002 backfills one Project for each distinct normalized legacy Conversation root and binds every existing Conversation to it. Project availability is intentionally absent from SQLite; the Host computes it by inspecting the saved canonical root. `snapshot_json` contains only versioned CodeTether normalized/presentation state for that Turn: messages, Tools, file changes, outcome, bounded terminal tail, and Approval history. It never contains the Codex JSON-RPC stream.
+Indexes cover Project and Conversation recency, Project-scoped Conversation recency, per-Conversation Turn chronology, and Attention status/priority lookup. Migration 002 backfills one Project for each distinct normalized legacy Conversation root and binds every existing Conversation to it. Project availability is intentionally absent from SQLite; the Host computes it by inspecting the saved canonical root. `snapshot_json` contains only versioned CodeTether normalized/presentation state for that Turn: messages, Tools, file changes, outcome, bounded terminal tail, and Approval history. It never contains the Codex JSON-RPC stream. `attention_items.payload_json` is capped at 256 KiB and contains only normalized presentation metadata, never a Conversation snapshot or provider request.
 
 ### State Boundaries
 
 The three state layers remain intentionally different:
 
 - **Runtime memory:** current high-frequency working state and the bounded recent projection window (20 Turns, 512 presentation entries, 128 KiB terminal tail, approximately 4 MiB per retained Conversation).
-- **SQLite:** durable Project authorization, Conversation identity, provider Thread identity, canonical inputs, and per-Turn normalized snapshots across Host processes. Older completed Turns are not deleted merely because they leave the runtime window.
+- **SQLite:** durable Project authorization, Conversation identity, provider Thread identity, canonical inputs, per-Turn normalized snapshots, and Attention state across Host processes. Older completed Turns are not deleted merely because they leave the runtime window.
 - **SSE replay:** up to 2,048 aggregated client events / approximately 8 MiB for short reconnects within one Host epoch. It is not persistence.
 
-Startup loads the durable Project registry, then restores at most the existing process admission limit of eight most-recent Conversations and the most recent 20 Turns per restored Conversation into runtime memory. The complete durable Turn rows remain on disk, but no pagination or live Conversations index currently surfaces rows outside that window.
+Startup loads the durable Project registry, then restores at most the existing process admission limit of eight most-recent Conversations and the most recent 20 Turns per restored Conversation into runtime memory. Complete durable Turn rows remain on disk. The single-Conversation read exposes a recent 20-Turn window plus older-history metadata, but pagination for the older rows is not implemented.
 
 ### Write and Recovery Semantics
 
@@ -441,13 +462,129 @@ Project deletion removes only CodeTether's durable registration. It performs no 
 
 The 2026-08-26 Windows validation used `codex-cli 0.149.1`, an ignored isolated Project, and a SQLite data directory outside the repository. One Conversation completed a Turn, the Host shut down completely, and a new Host process restored the same Project, Conversation, Timeline, and a new SSE epoch without receiving a workspace allowlist again. Its first post-restart Turn lazily resumed the saved provider Thread and recalled the exact pre-restart marker `PROJECT-BOUNDARY-8427`. Moving the Project directory made `GET /projects` report `unavailable`; the two-Turn history remained readable while a new Turn failed with `project_unavailable` before provider resume. Restoring the directory made it available again, and a third Turn completed on the same Conversation. The final database was 65,536 bytes for two Project records, two Conversation records, and three completed Turns.
 
+## Phase 3B.2 Real Projects UI
+
+The real Project frontend keeps the accepted application boundaries intact:
+
+```text
+Projects React routes
+      -> TanStack Query
+      -> application HostRuntime
+      -> packages/client
+      -> Protocol v1 Project API
+      -> Host-owned Project registry and SQLite
+```
+
+`/projects` lists only real Project fields returned by the Host: name, canonical root path, availability, and update time. `/projects/:projectId` performs its own Project read and displays the same record plus creation time. Loading, empty, Host-unavailable, not-found, available, and unavailable views are distinct; an unavailable Project remains inspectable because the durable record still exists.
+
+The add dialog accepts a manually entered absolute path and optional name. Browser validation is intentionally limited to required-form checks. The client sends the request through the typed Project API, while the Host owns real-path resolution, configured-root authorization, canonical duplicate detection, and safe error semantics. A duplicate root returns the existing Project and the UI routes to that identity without adding a second cached row.
+
+Removal is registration-only. The UI requires confirmation that local files, Git data, and source code are untouched, then calls the existing delete endpoint. A referenced Project keeps its record and displays the specific `project_has_conversations` conflict; there is no cascade or force-delete path. Successful mutation results update or invalidate the shared Project query keys instead of storing a second Project registry in React or Zustand.
+
+This phase adds no Host endpoint, filesystem scanner, browser or native folder picker, rename/relocate operation, Git model, Project Conversation projection, or New Conversation flow. The existing Sidebar project context is not promoted into a new global Project store; that integration waits for a separately approved live Conversations phase.
+
+## Phase 3C.1 Durable Conversation Index and Title
+
+The durable Conversation index and Runtime Snapshot serve different responsibilities:
+
+```text
+SQLite Conversation index
+  = complete bounded product-history query for a Project
+
+Runtime Snapshot
+  = reconnect/rebuild boundary for the recent in-memory live Timeline
+```
+
+`GET /api/v1/projects/:projectId/conversations` always queries SQLite through the concrete Host Store. It never falls back to the runtime map and never parses `turns.snapshot_json`. The query selects only summary columns, excludes transient `creating` rows, scopes every row to the requested Project, and sorts by `last_activity_at DESC, conversation_id ASC`. The default limit is 50 and the maximum is 100; provider and canonical status filters are optional. A missing Project returns `not_found`, while an unavailable Project remains readable because history access does not authorize a new workspace operation.
+
+`ConversationSummary` contains `conversationId`, `projectId`, title, provider, optional model/reasoning, canonical status, creation/update timestamps, and `lastActivityAt`. It deliberately excludes `providerThreadId`, `cwd`, SQLite row details, and provider payloads. `packages/protocol` remains the single wire definition, and `packages/client.listProjectConversations()` is the typed non-React consumer.
+
+New Conversations are persisted with `新会话`. Before the provider starts the first Turn, the Host records canonical User input and—within the same SQLite transaction—replaces that default with a deterministic local title. The title generator normalizes NFC and whitespace, selects the opening sentence/clause, strips only a small fixed request-prefix set, and truncates to at most 48 graphemes while respecting the 240-code-unit wire bound. Once a Conversation has a recorded Turn, subsequent Turns and provider resume do not change its title. Migration 003 applies the same function to the first durable text input of existing Conversations; rows without a Turn retain the default.
+
+`updated_at` remains the general record modification timestamp. `last_activity_at` is separate so metadata-only provider resume changes cannot reorder old history. Conversation creation, canonical Turn input/start, Approval request/resolution, terminal Turn outcomes, and restart interruption advance activity. Project metadata does not. Runtime records carry the same current title/activity values so live Snapshot state and SQLite summaries remain consistent.
+
+The index is bounded but not paginated. A later real history UI must define continuation for Projects with more than 100 Conversations. The Host restores at most eight Conversations into runtime memory by default, but Phase 3C.1.1 makes older durable Conversations independently readable and internally hydratable for control without making the product list depend on that working-set limit.
+
+## Phase 3C.1.1 Durable Conversation Detail and Working-Set Hydration
+
+Conversation history now has three deliberately separate layers:
+
+```text
+SQLite Conversation index and normalized Turn snapshots
+  = durable product identity and history across Host processes
+
+Host runtime working set (eight Conversations by default)
+  = bounded live state, active control bindings, and current SSE projection
+
+Codex provider session
+  = provider-owned Thread context, resumed only when control needs it
+```
+
+`GET /api/v1/conversations/:conversationId` reads a durable Conversation without admitting it to the runtime working set. It returns the existing `ConversationSummary` and `ConversationRuntimeSnapshot` contracts, reconstructed from the most recent 20 durable Turns by default, plus `hasOlderHistory`, `retainedTurnCount`, and `totalTurnCount`. It also distinguishes currently actionable pending Approvals from bounded non-actionable resolved or `host_restart`-expired Approval history. The response excludes provider Thread identity, raw Codex data, SQLite details, workspace-routing fields, and internal hydration state.
+
+A cold detail read is provider-independent: it neither starts Codex nor resumes a Thread, emits an SSE event, mutates durable status, nor consumes one of the eight runtime slots. This remains true when the Project directory is unavailable or the saved provider Thread is missing, so local history stays readable even when future control must fail closed.
+
+Starting a Turn on a cold Conversation is a separate internal control path. The Host deduplicates concurrent hydration, reserves a working-set slot, reconstructs the same bounded durable projection, installs provider/public Turn identity mappings, revalidates the Project workspace, lazily calls provider Thread resume, and only then starts the new Turn. Action idempotency continues to wrap the whole operation. Hydration is not a public command or query option.
+
+Working-set admission uses safe least-recently-used eviction. Only an idle, clean, unpinned Conversation with no active/starting/interrupting Turn, hydration, or pending Approval may leave memory. Eviction removes process-local state and provider bindings only; SQLite history and the provider-owned Thread remain intact. If every candidate is protected, control returns explicit `runtime_unavailable` rather than evicting active state or exceeding the bound.
+
+Cold reconstruction compacts retained presentation order into one unique monotonic window. At startup the Host initializes its process-global event sequence above restored presentation order—and reserves the full runtime-entry range when cold provider Conversations exist—so later live Items cannot collide with durable Item order. A read-only cold GET does not advance sequence; new events still pass the existing preview/durable-publication sequence check before fanout.
+
+If the Codex executable cannot launch, the local loopback Host can still start with its durable API in read-only mode. Bootstrap reports Codex/resume capabilities unavailable; Project, index, and Conversation-detail reads continue from SQLite, while provider-dependent mutations return `runtime_unavailable`. This fallback does not invent a provider session or weaken workspace/history safety.
+
+Phase 3C.1.1 adds no database table, event store, provider-event persistence, durable LRU state, or durable SSE/action state. It does not add full-history pagination, a history-loading UI, Real Conversations/Conversation Rail data, or another provider. The durable detail intentionally exposes only its bounded recent window; `hasOlderHistory` is the explicit boundary for future pagination work.
+
+## Phase 3C.2 Real Conversations Experience
+
+The route hierarchy supplies Product context without a global Project store. `/projects/:projectId/conversations` queries the real Project and the latest 100 SQLite-backed Conversation summaries. `/conversations/:conversationId` first reads the durable detail contract, obtains its `projectId`, then queries the same Project and Project-scoped summary list for breadcrumbs, Sidebar context, and Rail presentation. `/conversations` redirects to `/projects`; the Demo route remains a development fixture and is not linked by real product navigation.
+
+The list and Rail use the same `listProjectConversations()` Client boundary and preserve Host `lastActivityAt DESC` order by default. Local search/filter/sort operates only on that bounded response. Provider groups are data-driven; the current real surface therefore shows only Codex. Unsupported Machine, Git, archive, rename, and delete fields/actions are omitted instead of populated with Mock values.
+
+New Conversation remains intentionally minimal. The current Project is locked when route context supplies one; otherwise the dialog queries available Projects and requires an explicit selection. Agent is locked to Codex, model and reasoning use Host defaults, each create intent receives one random `actionId`, and successful creation invalidates the exact Project index before navigating to the new empty durable Conversation. The Host records the first User input and owns the deterministic title update.
+
+The application-scoped Host Runtime continues to own one SSE stream and one live Conversation projection. Only semantic lifecycle events—`conversation.started`, `turn.started`, Approval requested/resolved, and terminal Turn outcomes—invalidate product-summary queries. `message.delta` and `tool.output` never trigger index refetches. The Runtime retains Bootstrap capabilities independently of Query cache garbage collection so long-running or cold-conversation controls cannot become disabled merely because an unobserved query aged out.
+
+Project unavailability is presentation and authorization state, not history deletion: list, Rail, and detail remain readable while new Conversation and existing controls are disabled. Host unavailability is distinct from an empty index and exposes an explicit retry path. At 1280 px the accepted Detail hides the persistent Inspector behind its existing overlay toggle; no Conversation surface introduces horizontal document overflow.
+
+## Phase 3D.1 Durable Attention Model
+
+Attention is a durable view of Conversation work that still needs explicit user action or review; it is not a new top-level product entity, an Activity log, or a Notification delivery system. Migration 004 adds one `attention_items` row per stable semantic source. The unique source keys are derived from the exact Approval or terminal Turn identity, so Provider replay, SSE replay, and Host restart cannot create duplicates.
+
+Protocol v1 supports `GET /api/v1/attention` with optional Project, type, status, and bounded-limit filters. The response contains presentation-safe `AttentionItem` records and an open summary (`totalOpen`, `approvalOpen`, `completedReviewOpen`, `failedOpen`). Ordering is Host-owned: Approval first, failed Turn second, completed review third, then newest creation first. The query reads only `attention_items` and never deserializes Turn snapshots. `packages/client` exposes the same boundary through `listAttention()`.
+
+Only three types have reliable semantics in the current Runtime:
+
+- `approval` is created from a bound `approval.requested`; only the existing exact Approval endpoint may accept or decline it. The matching `approval.resolved` records the decision and resolves Attention.
+- `completed_review` is created once after a durable `turn.completed` and remains open until an explicit review acknowledgement.
+- `failed` is created only from canonical `turn.failed` and remains open until acknowledgement. A failed Tool, user interrupt, or `host_restart` interruption does not manufacture failed Attention.
+
+`POST /api/v1/attention/:attentionId/resolve` is therefore limited to completed-review and failed items. It carries the normal bounded process-local `actionId`, returns the original successful result for the same action, rejects a new operation against an already terminal item, and never changes the underlying Turn result. Generic resolution of Approval Attention is rejected so the UI cannot hide an item while its provider request still waits.
+
+Approval request/resolution and completed/failed Turn finalization write their normalized Turn/Conversation boundary and Attention transition in one SQLite transaction. Only after that transaction succeeds does the Host publish the original lifecycle event followed by reliable `attention.created` or `attention.resolved`. Those events use normal Host-global sequence/replay and cannot silently drop; after `stream.reset`, clients rebuild from the durable list rather than deriving Attention from high-frequency Conversation events.
+
+Provider Approval handles remain process-local. During restart reconciliation, any open Approval Attention becomes `expired` with `host_restart` inside the same reconciliation transaction and is never restored to the actionable registry. Completed-review and failed items remain durable. Migration deliberately does not backfill Attention for pre-004 Turn history, avoiding a synthetic backlog the user never received.
+
+There is no `question` / needs-reply Attention because Codex does not currently expose a reliable structured Agent-question signal. Text punctuation, content heuristics, and extra LLM classification are intentionally not used. Read/unread, Notifications, and Activity remain separate future work.
+
+The real isolated validation observed the exact sequence `approval.requested` → `attention.created` → `approval.resolved` → `attention.resolved`, followed by `turn.completed` → a second `attention.created`. Allow Once took 6.075 ms at the local HTTP boundary; after a full Host restart, the durable list read took 3.398 ms and explicit review resolution took 4.739 ms. The 98,304-byte temporary database was removed after validation, and the disposable workspace remained unchanged. A real Codex `turn.failed` was not observed; failed Attention remains fixture-validated and is not inferred from Tool failure.
+
+## Phase 3D.2 Real Inbox UI
+
+The application owns one canonical open-Attention TanStack Query. It requests the Host's bounded `limit=100` list, preserves Host ordering, and renders the response summary directly rather than deriving global counts from the returned page. The Inbox and Primary Sidebar consume the same cache; no Inbox record is copied into Zustand or a second React context.
+
+The UI has three exact action paths. Approval cards call `resolveApproval(approvalId, decision)` and remain visible until the semantic resolution arrives. Completed review calls `resolveAttention` before navigating to the durable Conversation. Failed work offers navigation without resolution plus an explicit acknowledgement that resolves only Attention and leaves the Turn failed. Every item has independent in-flight/error state, and the browser never uses command text or list position as approval identity.
+
+Only `attention.created` and `attention.resolved` trigger low-frequency Attention query synchronization. Conversation deltas and Tool output do not invalidate the Inbox. After `stream.reset` or a Host epoch replacement, Snapshot recovery completes first and then the durable Attention list is fetched again. This gives all local browser clients the same queue without treating process-local SSE replay as permanent Inbox storage.
+
+The real Inbox enriches presentation through one Projects query and at most one cached Conversation-index query per involved Project; it does not issue one request per row or deserialize Turn snapshots. Host unavailable, empty, loading, mutation error, and the 100-item bound are distinct UI states. The removed Mock semantics—question/needs-reply, unread, mark-all-read, average response, risk counts, retry, and fake provider/Machine metadata—are not inferred or replaced.
+
 ## UI
 
-The UI presents projects, conversations, agents, machines, approvals, changes, terminal output, context, and notifications. Figma defines visual and interaction behavior. Phase 2C.1 through Phase 2C.2 preserve the accepted visual structure and change only the Conversation Detail data/control boundary for valid live Conversation routes.
+The UI presents projects, conversations, agents, machines, approvals, changes, terminal output, and context. Figma defines visual and interaction behavior. Phase 2C.1 through Phase 2C.2 preserve the accepted visual structure and change only the Conversation Detail data/control boundary for valid live Conversation routes. Phase 3B.2 replaces only the Projects placeholder with the accepted real list and overview surface. Phase 3C.2 keeps the accepted Conversations/Detail visual structures while replacing their Product data boundary with real Project and durable Conversation reads. Phase 3D.2 adapts only the accepted Inbox surface to real Attention semantics.
 
-The client owns ephemeral presentation state only. TanStack Query stores bootstrap, Snapshot, and Conversation projection state; Zustand remains limited to UI state. Project, Conversation, Agent, Machine, and retained Timeline records must not be duplicated into a client store as a second runtime authority.
+The client owns ephemeral presentation state only. TanStack Query stores bootstrap, Snapshot, Conversation projection, Project queries, Conversation indexes, and Attention queries; Zustand remains limited to UI state. Project, Conversation, Attention, Agent, Machine, and retained Timeline records must not be duplicated into a client store as a second runtime authority. The Host remains the product-state source of truth.
 
-The live Conversation path consumes Protocol v1 through `packages/client`, never Codex wire messages or `packages/adapter-codex` directly. Inbox and Conversations remain Mock data. Phase 2C.2 sends only text Turn start, one-shot Approval resolution, and exact-Turn interrupt commands; no other React write path is connected.
+The live Conversation, Conversation index, Project, and Inbox paths consume Protocol v1 through `packages/client`, never Codex wire messages or `packages/adapter-codex` directly. Phase 2C.2 sends only text Turn start, one-shot Approval resolution, and exact-Turn interrupt commands; Project/Conversation product surfaces add only the existing list/read/create/delete Project operations, durable Conversation reads, and minimal Conversation creation. Phase 3D.2 adds explicit completed-review/failed Attention resolution while preserving the exact Approval endpoint safety boundary.
 
 ## Desktop Shell
 
@@ -455,13 +592,13 @@ The future Tauri 2 shell will package the web UI and supply OS-level capabilitie
 
 ## Host
 
-`apps/host` owns the development harness lifecycle, loopback HTTP/SSE server, Codex runtime, live state, Phase 3A SQLite boundary, and Phase 3B.1 durable Project registry. It allocates public identities, maps them to private provider identities, validates actions and Project workspaces, reconstructs recent live Snapshots from durable Turn records, sequences client events, and performs bounded fanout/replay. It remains a development local service rather than a production machine daemon.
+`apps/host` owns the development harness lifecycle, loopback HTTP/SSE server, Codex runtime, live state, Phase 3A SQLite boundary, Phase 3B.1 durable Project registry, Phase 3C.1 durable Conversation index/title rules, Phase 3C.1.1 cold detail/hydration boundary, and Phase 3D.1 durable Attention projection. It allocates public identities, maps them to private provider identities, validates actions and Project workspaces, reconstructs bounded live or cold views from durable Turn records, hydrates control state on demand, sequences client events, and performs bounded fanout/replay. It remains a development local service rather than a production machine daemon.
 
 Project discovery/import UX, multiple Machine locations, durable action logging, full-history pagination, production lifecycle supervision, machine trust, and remote operation remain planned rather than implemented.
 
 ## Client-to-Host Protocol
 
-`packages/protocol` defines Protocol v1 identifiers, commands, records, events, safe errors, capabilities, ordering, and reconnect cursors with TypeScript and Zod. `packages/client` implements the matching HTTP/SSE consumer without React. Provider wire payloads remain behind adapters, and unknown provider notifications are diagnostics rather than public events.
+`packages/protocol` defines Protocol v1 identifiers, commands, records, events, safe errors, capabilities, ordering, reconnect cursors, the strict Project-scoped `ConversationSummary`, bounded durable Conversation-detail response, and durable Attention contracts with TypeScript and Zod. `packages/client` implements the matching HTTP/SSE consumer—including Conversation and Attention reads/mutations—without React. Provider wire payloads remain behind adapters, and unknown provider notifications are diagnostics rather than public events.
 
 ## Agent Adapter Boundary
 
@@ -471,7 +608,7 @@ Provider-specific capabilities may remain Codex-specific when a natural common c
 
 ## Persistence
 
-Phase 3A uses `node:sqlite` for the minimal durable records described above. CodeTether Conversation and Turn identities, private provider identities, canonical text inputs, statuses, timestamps, and normalized per-Turn snapshots survive Host restart. Phase 3B.1 adds durable Project identity, canonical root authorization metadata, and the required Conversation-to-Project relationship. Raw Codex JSON-RPC, SSE events, replay cursors, action results, computed Project availability, and browser projection state are not stored.
+Phase 3A uses `node:sqlite` for the minimal durable records described above. CodeTether Conversation and Turn identities, private provider identities, canonical text inputs, statuses, timestamps, and normalized per-Turn snapshots survive Host restart. Phase 3B.1 adds durable Project identity, canonical root authorization metadata, and the required Conversation-to-Project relationship. Phase 3C.1 adds the canonical title and last-activity index fields needed for product history without introducing an event table. Phase 3C.1.1 adds read-through reconstruction and runtime admission rules only. Phase 3D.1 adds normalized Attention state without persisting provider requests or SSE history. Raw Codex JSON-RPC, SSE events, replay cursors, action results, computed Project availability, LRU state, hydration state, provider-session state, and browser projection state are not stored.
 
 SQLite does not replace runtime history. The active Turn is assembled and streamed in memory, with throttled normalized snapshot writes and synchronous terminal flushes. It also does not replace the Codex provider's Thread store: CodeTether persists the exact provider Thread identity and asks Codex to resume it lazily. The migration runner and Store are intentionally concrete Host modules rather than a generic persistence abstraction.
 
@@ -487,13 +624,13 @@ It uses no polling or database scan. The adapter does not intentionally coalesce
 
 The final two-Turn validation observed 171 raw message/tool delta events and delivered 118 aggregated events, a 31.0% reduction, with exact raw-to-delivered integrity for both message text and tool output, canonical final-message integrity, and zero dropped deltas. The flush/coalescing parameters are experimental rather than a finalized client protocol.
 
-Phase 2B adds non-durable Host-global ordering, bounded replay, explicit reconnect reset, and isolated multi-client observation at the client boundary. These guarantees apply only within one Host epoch. Phase 3A persists Conversation state but deliberately does not persist replay events or epochs; a restarted Host creates a new epoch and serves a fresh durable Snapshot.
+Phase 2B adds non-durable Host-global ordering, bounded replay, explicit reconnect reset, and isolated multi-client observation at the client boundary. These guarantees apply only within one Host epoch. Phase 3A persists Conversation state but deliberately does not persist replay events or epochs; a restarted Host creates a new epoch and serves a fresh durable Snapshot. Phase 3D.1 Attention transitions use the same replay while the durable Attention list remains the reset/restart source of truth.
 
 Phase 2C.1 adds one browser consumer for that stream. It rejects duplicate and out-of-order events before updating the TanStack Query projection. Phase 2C.1.1 makes the Snapshot replacement complete for all retained runtime history, so a reset or unrecoverable cursor condition reconstructs the same retained Timeline rather than merging across incompatible epochs. The guarantee ends at the explicit in-memory eviction boundary and at Host restart.
 
 ## Conversation Ownership
 
-A Conversation is bound to one Project, one Agent, and the Machine executing it, plus model, reasoning, permission, and history. An existing Conversation cannot switch providers. Phase 3A makes the CodeTether `conversationId` durable and stores the corresponding private Codex provider Thread identity without exposing it as browser routing identity. Phase 3B.1 makes Project ownership a required durable relation; `cwd` remains a contained execution location, not a competing Project identity.
+A Conversation is bound to one Project, one Agent, and the Machine executing it, plus model, reasoning, permission, title, and history. An existing Conversation cannot switch providers. Phase 3A makes the CodeTether `conversationId` durable and stores the corresponding private Codex provider Thread identity without exposing it as browser routing identity. Phase 3B.1 makes Project ownership a required durable relation; `cwd` remains a contained execution location, not a competing Project identity. Phase 3C.1 makes title and last activity Host-owned durable product facts rather than React or Runtime-Snapshot inventions. Phase 3C.1.1 keeps durable identity/history, bounded live working state, and the provider-owned session separate so a product read cannot accidentally become provider control.
 
 ## Security Boundary
 
@@ -505,11 +642,11 @@ These controls are development safeguards, not a production security model. Auth
 
 ## Current Architectural Constraints
 
-- Only valid live Conversation Detail routes are connected to the runtime; Demo, Inbox, and Conversations remain Mock data.
+- Valid live Conversation Detail, Project list/detail, Project-scoped Conversations, real Conversation Rail, and global real Inbox routes are connected to the Host. Demo remains a development fixture absent from real navigation.
 - The Host API is a development-only loopback service with local SQLite records, not a production daemon or remote service.
 - The real integration is Codex-only and was verified against local `codex-cli 0.149.1`.
 - React can start text Turns, resolve one-shot pending Approvals, and interrupt the exact active Turn on a valid live Conversation route. Stop/thread termination, queueing, steering, attachments, configuration changes, and other write paths are not connected.
-- Durable local Project identity and authorization exist, but there is no Projects UI, Project discovery/import flow, multiple-Machine location model, Tauri shell, authentication, remote access, full-history browser, or production permission policy.
+- Durable local Project identity, authorization, real list/add/detail/remove UI, Project-aware Conversation history/create flows, and the real open Attention queue exist. There is no native folder picker, Project discovery/import, rename/relocate, Inbox history/read state, multiple-Machine location model, Tauri shell, authentication, remote access, full-history pagination, or production permission policy.
 - Command Allow Once and Decline were exercised through real App Server requests; file-change and permissions approvals were not observed.
 - Multi-Turn, multi-Thread, cross-process resume, interruption, and safe Tool failure were manually validated.
 - A real terminal Turn failure was not observed.
@@ -517,11 +654,11 @@ These controls are development safeguards, not a production security model. Auth
 - Action idempotency is bounded to the recent 256 retained actions, not durable exactly-once execution.
 - SSE slow-client recovery currently closes the lagging connection; clients must reconnect or fetch a snapshot after `stream.reset`.
 - The browser cursor and live Conversation projection are memory-only and rebuild from Host Snapshot on page refresh or epoch change.
-- Snapshot reconstructs the bounded recent runtime window, including after Host restart. Older Turn rows remain durable but are not currently pageable or exposed by a live Conversations page.
+- Snapshot reconstructs the bounded recent hot-runtime window, including after Host restart. The Project-scoped index separately lists durable summaries, and single-Conversation GET reconstructs a recent 20-Turn durable view without hydration. The real list/Rail/detail consume these reads, but older Turn rows are not pageable.
 - Every durable Conversation references one Project. Project deletion is registration-only and is rejected while Conversations exist; CodeTether never deletes the workspace or cascades its history.
 - Protocol v1's deprecated `cwd` Conversation request may only resolve an existing registered available Project. New callers use `projectId`.
 - Terminal projection retains only the most recent 128 KiB per Conversation.
-- Runtime history remains limited per Conversation, and the Host admits at most eight in-memory Conversations by default. Active-Turn provider Item and file-change identity maps are each capped at 1,024 entries; exceeding a bound fails explicitly rather than growing without limit.
+- Runtime history remains limited per Conversation, and the Host restores/admits at most eight in-memory Conversations by default. Older Conversations remain cold-readable through the real Detail/Rail path, and Start Turn hydrates them internally with safe idle-LRU eviction plus lazy provider resume. Active-Turn provider Item and file-change identity maps are each capped at 1,024 entries; exceeding a bound fails explicitly rather than growing without limit.
 - An idle runtime failure changes bootstrap capabilities but has no proactive Protocol v1 capability-change event.
 - Local Host launch paths disable Codex hooks by default so user hooks cannot pre-resolve escalation ahead of CodeTether Approval handling.
 - Protocol v1 Approval presentation does not yet expose a trusted structured risk or provider reason field, so the live UI shows kind, semantic command/action, workspace context, and identity without fabricating risk.

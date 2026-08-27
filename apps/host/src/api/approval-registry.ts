@@ -76,6 +76,22 @@ export class ApprovalRegistry {
       )
   }
 
+  recordsForConversation(
+    conversationId: ConversationId,
+  ): readonly ApprovalRecord[] {
+    return [...this.#approvals.values()]
+      .map((state) => state.record)
+      .filter((record) => record.conversationId === conversationId)
+  }
+
+  hasPendingForConversation(conversationId: ConversationId): boolean {
+    return [...this.#approvals.values()].some(
+      (state) =>
+        state.record.conversationId === conversationId &&
+        state.record.status === 'pending',
+    )
+  }
+
   request(request: ProviderApprovalRequest): void {
     const conversationId = this.#options.providerThreads.get(
       request.providerThreadId,
@@ -158,6 +174,7 @@ export class ApprovalRegistry {
       ...conversation.record,
       status: 'waiting',
       updatedAt: timestamp,
+      lastActivityAt: timestamp,
     }
     try {
       this.#options.publish({
@@ -389,6 +406,7 @@ export class ApprovalRegistry {
         ...conversation.record,
         status: 'running',
         updatedAt: resolvedAt,
+        lastActivityAt: resolvedAt,
       }
     }
     this.#options.publish({

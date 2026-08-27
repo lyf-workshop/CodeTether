@@ -1,6 +1,7 @@
-import { useRef, useState } from 'react'
+import { useRef, useState, type Ref } from 'react'
 
 import { Dialog, DialogContent, DialogTitle } from '@codetether/ui'
+import type { ProjectId } from '@codetether/protocol'
 
 import { ConversationRail } from './conversation-rail'
 import type { ConversationControls } from './conversation-controls'
@@ -18,6 +19,10 @@ export interface ConversationDetailPageProps {
   connectionIndicator?: ConversationConnectionIndicatorViewModel
   initialInspectorTab?: InspectorTab
   controls?: ConversationControls
+  newConversationButtonRef?: Ref<HTMLButtonElement>
+  newConversationDisabled?: boolean
+  onNewConversation?: () => void
+  projectId?: ProjectId
 }
 
 export function ConversationDetailPage({
@@ -26,6 +31,10 @@ export function ConversationDetailPage({
   connectionIndicator,
   initialInspectorTab = 'overview',
   controls,
+  newConversationButtonRef,
+  newConversationDisabled = false,
+  onNewConversation,
+  projectId,
 }: ConversationDetailPageProps) {
   const [inspectorOpen, setInspectorOpen] = useState(
     () =>
@@ -48,8 +57,16 @@ export function ConversationDetailPage({
       <div className="grid h-full min-h-0 min-w-0 grid-cols-[var(--layout-conversation-rail-compact-width)_minmax(0,1fr)] bg-background min-[1440px]:grid-cols-[var(--layout-conversation-rail-width)_minmax(0,1fr)_var(--layout-conversation-inspector-width)]">
         <ConversationRail
           groups={rail.groups}
-          archivedCount={rail.archivedCount}
           currentConversationId={viewModel.id}
+          {...(rail.archivedCount === undefined
+            ? {}
+            : { archivedCount: rail.archivedCount })}
+          newConversationDisabled={newConversationDisabled}
+          {...(newConversationButtonRef === undefined
+            ? {}
+            : { newConversationButtonRef })}
+          {...(onNewConversation === undefined ? {} : { onNewConversation })}
+          {...(projectId === undefined ? {} : { projectId })}
         />
         <ConversationWorkspace
           viewModel={viewModel}

@@ -43,6 +43,12 @@ export const ApprovalIdSchema = z
   .brand<'ApprovalId'>()
 export type ApprovalId = z.infer<typeof ApprovalIdSchema>
 
+export const AttentionIdSchema = z
+  .string()
+  .regex(/^attn_[A-Za-z0-9][A-Za-z0-9_-]{5,95}$/)
+  .brand<'AttentionId'>()
+export type AttentionId = z.infer<typeof AttentionIdSchema>
+
 export const TimestampSchema = z.iso.datetime({ offset: true })
 export type Timestamp = z.infer<typeof TimestampSchema>
 

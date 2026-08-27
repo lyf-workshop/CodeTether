@@ -4,6 +4,10 @@ import type { DatabaseSync } from 'node:sqlite'
 
 import { ProjectIdSchema } from '@codetether/protocol'
 
+import {
+  DEFAULT_CONVERSATION_TITLE,
+  generateConversationTitle,
+} from '../conversation-title.js'
 import { normalizeTrustedProjectRoot } from '../project-path.js'
 
 interface Migration {
@@ -57,6 +61,16 @@ const migrations: readonly Migration[] = [
     version: 2,
     name: 'projects',
     up: migrateProjects,
+  },
+  {
+    version: 3,
+    name: 'conversation_title',
+    up: migrateConversationTitle,
+  },
+  {
+    version: 4,
+    name: 'attention',
+    up: migrateAttention,
   },
 ]
 
@@ -298,6 +312,146 @@ function migrateProjects(database: DatabaseSync): void {
     CREATE INDEX idx_turns_conversation_chronology
       ON turns(conversation_id, started_at, turn_id);
   `)
+}
+
+interface LegacyConversationInputRow {
+  readonly conversation_id: string
+  readonly input: string | null
+}
+
+function migrateConversationTitle(database: DatabaseSync): void {
+  database.exec(`
+    ALTER TABLE conversations ADD COLUMN title TEXT NOT NULL
+      DEFAULT '${DEFAULT_CONVERSATION_TITLE}'
+      CHECK (length(title) BETWEEN 1 AND 240 AND title = trim(title));
+
+    ALTER TABLE conversations ADD COLUMN last_activity_at TEXT NOT NULL
+      DEFAULT '1970-01-01T00:00:00.000Z';
+
+    UPDATE conversations SET last_activity_at = updated_at;
+
+    DROP INDEX idx_conversations_project_updated_at;
+    CREATE INDEX idx_conversations_project_last_activity
+      ON conversations(project_id, last_activity_at DESC, conversation_id ASC);
+  `)
+
+  const conversations = database
+    .prepare(
+      `SELECT
+         conversations.conversation_id,
+         first_turn.input
+       FROM conversations
+       LEFT JOIN turns AS first_turn
+         ON first_turn.rowid = (
+           SELECT turns.rowid
+           FROM turns
+           WHERE turns.conversation_id = conversations.conversation_id
+           ORDER BY turns.started_at ASC, turns.rowid ASC
+           LIMIT 1
+         )
+       ORDER BY conversations.rowid ASC`,
+    )
+    .all() as unknown as LegacyConversationInputRow[]
+  const updateTitle = database.prepare(
+    'UPDATE conversations SET title = ? WHERE conversation_id = ?',
+  )
+
+  for (const conversation of conversations) {
+    if (conversation.input === null) continue
+    const input = parseLegacyTextInput(
+      conversation.input,
+      conversation.conversation_id,
+    )
+    updateTitle.run(
+      generateConversationTitle(input),
+      conversation.conversation_id,
+    )
+  }
+}
+
+function migrateAttention(database: DatabaseSync): void {
+  database.exec(`
+    CREATE UNIQUE INDEX idx_conversations_attention_identity
+      ON conversations(conversation_id, project_id);
+
+    CREATE UNIQUE INDEX idx_turns_attention_identity
+      ON turns(turn_id, conversation_id);
+
+    CREATE TABLE attention_items (
+      attention_id TEXT PRIMARY KEY
+        CHECK (
+          length(attention_id) BETWEEN 11 AND 128 AND
+          substr(attention_id, 1, 5) = 'attn_' AND
+          attention_id = trim(attention_id)
+        ),
+      source_key TEXT NOT NULL UNIQUE
+        CHECK (
+          length(source_key) BETWEEN 1 AND 512 AND
+          source_key = trim(source_key)
+        ),
+      project_id TEXT NOT NULL,
+      conversation_id TEXT NOT NULL,
+      turn_id TEXT,
+      type TEXT NOT NULL
+        CHECK (type IN ('approval', 'completed_review', 'failed')),
+      status TEXT NOT NULL
+        CHECK (status IN ('open', 'resolved', 'expired')),
+      payload_json TEXT NOT NULL CHECK (json_valid(payload_json)),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      resolved_at TEXT,
+      CHECK (
+        (status = 'open' AND resolved_at IS NULL) OR
+        (status IN ('resolved', 'expired') AND resolved_at IS NOT NULL)
+      ),
+      CHECK (status <> 'expired' OR type = 'approval'),
+      FOREIGN KEY (project_id)
+        REFERENCES projects(project_id)
+        ON DELETE RESTRICT,
+      FOREIGN KEY (conversation_id, project_id)
+        REFERENCES conversations(conversation_id, project_id)
+        ON DELETE RESTRICT,
+      FOREIGN KEY (turn_id, conversation_id)
+        REFERENCES turns(turn_id, conversation_id)
+        ON DELETE RESTRICT
+    ) STRICT;
+
+    CREATE INDEX idx_attention_status_priority
+      ON attention_items(status, type, created_at DESC, attention_id ASC);
+
+    CREATE INDEX idx_attention_project_status_priority
+      ON attention_items(
+        project_id, status, type, created_at DESC, attention_id ASC
+      );
+
+    CREATE INDEX idx_attention_conversation_order
+      ON attention_items(conversation_id, created_at DESC, attention_id ASC);
+  `)
+}
+
+function parseLegacyTextInput(value: string, conversationId: string): string {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(value) as unknown
+  } catch (error) {
+    throw new Error(
+      `Legacy Conversation ${conversationId} has invalid Turn input JSON`,
+      { cause: error },
+    )
+  }
+  if (
+    typeof parsed !== 'object' ||
+    parsed === null ||
+    !('type' in parsed) ||
+    parsed.type !== 'text' ||
+    !('text' in parsed) ||
+    typeof parsed.text !== 'string'
+  ) {
+    throw new Error(
+      `Legacy Conversation ${conversationId} has unsupported Turn input`,
+    )
+  }
+  return parsed.text
 }
 
 function defaultProjectName(rootPath: string): string {

@@ -27,7 +27,7 @@ If sources conflict, stop and resolve the conflict instead of inventing a compro
 
 ## Current Scope
 
-**Phase 3B.1 — Durable Project Identity & Local Workspace Authorization** is implemented and validated. The accepted frontend remains frozen as **CodeTether V2 Frontend Core v1**, the accepted local runtime remains frozen as **Phase 2A Codex Runtime v1**, Protocol v1 remains the accepted **Phase 2B Client ↔ Host Protocol** boundary, the complete read path remains frozen as **Live Conversation Read Model v1**, and Phase 3A durable Conversation history remains the persistence baseline. The current product boundary now also includes:
+**Phase 3D.2 — Real Inbox UI** is implemented and validated. The accepted frontend remains frozen as **CodeTether V2 Frontend Core v1**, the accepted local runtime remains frozen as **Phase 2A Codex Runtime v1**, Protocol v1 remains the accepted **Phase 2B Client ↔ Host Protocol** boundary, the complete read path remains frozen as **Live Conversation Read Model v1**, and the durable Project/Conversation/Attention data layer remains authoritative. The current product boundary now also includes:
 
 - A Project as a durable, authorized local workspace with a CodeTether-owned `proj_*` identity, name, canonical root path, timestamps, and availability computed from the filesystem rather than stored as durable truth.
 - SQLite migration 002 (`projects`), which adds the `projects` table and binds every durable Conversation to one Project through a non-null `project_id` foreign key. The Conversation `cwd` remains a contained working directory, not a second Project identity.
@@ -37,21 +37,34 @@ If sources conflict, stop and resolve the conflict instead of inventing a compro
 - Durable authorization across Host restarts and lazy Codex Thread resume only after the saved Project root and Conversation working directory are revalidated.
 - Registration-only deletion: CodeTether never deletes workspace files, never cascades Conversation history, and rejects Project deletion while any durable/runtime Conversation references it or a Conversation creation has reserved it.
 - A deprecated Protocol v1 `cwd` compatibility request that may resolve only to an already registered, available Project; it cannot create a Project or expand the Host's trusted roots.
+- A real `/projects` list and `/projects/:projectId` overview backed by the existing Host Project API through `packages/client` and TanStack Query.
+- Manual absolute-path Project registration with an optional name. The browser performs only basic form validation; the Host remains the source of truth for canonicalization, authorization, availability, duplicate detection, and safe errors.
+- Registration-only removal with an explicit confirmation, a specific `project_has_conversations` conflict state, and no filesystem deletion.
+- Distinct loading, empty, Host-unavailable, not-found, available, and unavailable Project views using only real Project fields.
+- A durable deterministic Conversation title and Project-scoped SQLite index, plus provider-independent single-Conversation reads and bounded lazy runtime hydration for cold history.
+- A real `/projects/:projectId/conversations` product history surface, real Project-derived Current Project context and breadcrumbs, and a real Conversation Rail driven by the durable index rather than Runtime Snapshot or Mock data.
+- A minimal Codex-only New Conversation dialog through the typed Client boundary. A Project route locks its real Project; global entry requires selection of one available Project and uses Host-owned model/reasoning defaults.
+- Real `/conversations/conv_*` routes read cold or live normalized history through one ViewModel, keep title/status/activity synchronized through low-frequency lifecycle events, and rely on Host-owned hydration and provider resume only when control begins.
+- `/conversations` redirects to `/projects`; `/conversations/demo` remains a development-only visual fixture and is absent from real Project, list, Rail, Inbox, and TopBar navigation.
+- SQLite migration 004 (`attention`) and a durable, Conversation-linked Attention index for exact Approval requests, completed Turns awaiting review, and failed Turns awaiting acknowledgement. Stable source keys prevent replay/restart duplication.
+- Protocol v1 `GET /api/v1/attention` and explicit review/failure resolution, plus reliable `attention.created` / `attention.resolved` SSE events. Approval Attention can only be resolved through the bound Approval endpoint; pre-restart open Approval Attention expires and never recreates a provider request.
+- A real `/inbox` global open-Attention surface backed by `packages/client` and TanStack Query, with Host-owned summary/order, exact Approval controls, explicit completed-review/failed resolution, semantic-event multi-client sync, stream-reset refetch, and a real Sidebar `totalOpen` badge.
+- The real Inbox supports only Approval, completed-review, and failed-Turn work. It contains no Mock question/needs-reply, unread, mark-all-read, fake risk/response metrics, retry, provider, or Machine semantics.
 
-Phase 3B.1 stops at the Host, Protocol, client, durable identity, and local authorization boundary. Phase 3B.2 is not authorized.
+Phase 3D.2 stops at the real durable Inbox boundary. It does not authorize read/unread state, Agent-question inference, notifications, Activity, archive/rename/delete, full-history pagination, provider selection, Project discovery, native folder picking, Tauri, or remote operation.
 
 ## Out of Scope
 
-After Phase 3B.1, do not implement without a separately approved phase:
+After Phase 3D.2, do not implement without a separately approved phase:
 
-- Visual redesigns or unrelated refactors to the frozen Design System, AppShell, Inbox, Conversations, or Conversation Workspace. Phase 3B.1 does not authorize a product UI change.
-- Activity, Projects, Machines, Agents, Settings, New Conversation, or any other new product-page content or flow.
-- Live Host data in Inbox, Conversations, or another frozen page.
+- Visual redesigns or unrelated refactors to the frozen Design System, AppShell, Inbox, Conversations, Conversation Workspace, or accepted Projects UI.
+- Activity, Machines, Agents, Settings, an advanced New Conversation flow, or any other new product-page content or flow.
+- Live Host data in another frozen page.
 - A generic WebSocket RPC transport or interactive PTY transport.
 - Tauri or desktop-shell functionality.
-- A Projects UI, project discovery/browser, multiple Project locations, Machine management, remote access, relay, authentication, or production Host services.
+- Project discovery/scanning, a native folder picker, rename/relocate, multiple Project locations, Machine management, remote access, relay, authentication, or production Host services.
 - Filesystem deletion, recursive cleanup, cascading Project deletion, or automatic reassignment of existing Conversations to another Project.
-- Stop/thread termination, Turn queueing, steering, retry-Turn, attachments, images, voice, Skill upload, or another React write path beyond text Turn start, one-shot Approval resolution, and interrupt.
+- Stop/thread termination, Turn queueing, steering, retry-Turn, attachments, images, voice, Skill upload, or another React write path beyond minimal Codex Conversation creation, text Turn start, one-shot Approval resolution, and interrupt.
 - Actionable Approval recovery across restart, `Always Allow`, automatic approval, or a production permission-policy system. Expired Approval history may be retained only to explain what happened.
 - Claude Code or OpenCode adapters, speculative provider implementations, or cross-agent conversation handoff.
 - Mobile screens, team, enterprise, public cloud relay, or other later-phase platform features.
@@ -64,7 +77,7 @@ Do not install dependencies for an out-of-scope runtime merely because its direc
 
 ### Project
 
-A durable, authorized local workspace in which an agent operates. In Phase 3B.1 it has one canonical local root and computed availability; it does not yet model multiple Machine locations.
+A durable, authorized local workspace in which an agent operates. It has one canonical local root and computed availability, and its real list/add/detail/remove UI is backed by the Host-owned record. It does not yet support discovery, relocation, or multiple Machine locations.
 
 ### Conversation
 
@@ -98,7 +111,7 @@ A computer capable of hosting projects and running agent sessions. A conversatio
 - Avoid inline styles, magic numbers, broad CSS overrides, and one-off foundational colors.
 - Never use `!important` to patch a design-system problem; correct the token, primitive, or composition.
 - Use Tailwind CSS and shadcn/ui consistently, with Lucide for interface icons.
-- Use TanStack Query for future server/host state.
+- Use TanStack Query for server/host state.
 - Use Zustand only for UI state such as sidebar collapse, inspector visibility/tab, command palette, and mobile navigation.
 - Do not copy Project, Conversation, Agent, Machine, or other host-owned records into Zustand as a second source of truth.
 - Honor accessibility, keyboard navigation, focus behavior, reduced motion, responsive behavior, empty states, loading states, and error states.

@@ -1,26 +1,35 @@
-import type { ReactNode } from 'react'
+import { useRef, useState, type ReactNode } from 'react'
 
 import { TooltipProvider } from '@codetether/ui'
+import type { ProjectRecord } from '@codetether/protocol'
 
+import { NewConversationDialog } from '../conversations/new-conversation-dialog'
 import { MainContent } from './main-content'
 import { PrimarySidebar } from './primary-sidebar'
-import { TopBar } from './top-bar'
+import { TopBar, type TopBarBreadcrumb } from './top-bar'
 
 interface AppShellProps {
   children: ReactNode
+  breadcrumbs?: readonly TopBarBreadcrumb[]
   currentPage: string
   currentPath: string
-  currentProject?: string
+  currentProject?: ProjectRecord
+  codexAvailable?: boolean
   inboxAttentionCount?: number
 }
 
 export function AppShell({
+  breadcrumbs,
   children,
   currentPage,
   currentPath,
-  currentProject = 'MyProject',
+  currentProject,
+  codexAvailable = false,
   inboxAttentionCount = 0,
 }: AppShellProps) {
+  const newConversationButtonRef = useRef<HTMLButtonElement>(null)
+  const [newConversationOpen, setNewConversationOpen] = useState(false)
+
   return (
     <TooltipProvider>
       <div className="grid h-dvh grid-rows-[var(--layout-topbar-height)_minmax(0,1fr)] overflow-hidden bg-background text-text-primary">
@@ -30,14 +39,27 @@ export function AppShell({
         >
           跳到主要内容
         </a>
-        <TopBar currentPage={currentPage} currentProject={currentProject} />
+        <TopBar
+          breadcrumbs={breadcrumbs}
+          currentPage={currentPage}
+          newConversationButtonRef={newConversationButtonRef}
+          onNewConversation={() => setNewConversationOpen(true)}
+        />
         <div className="grid min-h-0 grid-cols-[var(--layout-sidebar-current-width)_minmax(0,1fr)]">
           <PrimarySidebar
             currentPath={currentPath}
+            currentProject={currentProject}
+            codexAvailable={codexAvailable}
             inboxAttentionCount={inboxAttentionCount}
           />
           <MainContent>{children}</MainContent>
         </div>
+        <NewConversationDialog
+          currentProject={currentProject}
+          open={newConversationOpen}
+          onOpenChange={setNewConversationOpen}
+          returnFocusRef={newConversationButtonRef}
+        />
       </div>
     </TooltipProvider>
   )

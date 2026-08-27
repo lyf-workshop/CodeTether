@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { HostErrorSchema } from './errors.js'
 import {
   ApprovalIdSchema,
+  AttentionIdSchema,
   ConversationIdSchema,
   EpochIdSchema,
   ItemIdSchema,
@@ -39,6 +40,9 @@ export type ConversationStatus = z.infer<typeof ConversationStatusSchema>
 export const ProjectAvailabilitySchema = z.enum(['available', 'unavailable'])
 export type ProjectAvailability = z.infer<typeof ProjectAvailabilitySchema>
 
+export const ConversationTitleSchema = z.string().trim().min(1).max(240)
+export type ConversationTitle = z.infer<typeof ConversationTitleSchema>
+
 export const ProjectRecordSchema = z
   .object({
     projectId: ProjectIdSchema,
@@ -59,6 +63,8 @@ export const ConversationRecordSchema = z
      * Current Project-aware Hosts populate this for every Conversation.
      */
     projectId: ProjectIdSchema.optional(),
+    /** Additive in Protocol v1; current title-aware Hosts always populate it. */
+    title: ConversationTitleSchema.optional(),
     provider: z.literal('codex'),
     cwd: z.string().trim().min(1).max(4096),
     model: z.string().trim().min(1).max(240).optional(),
@@ -67,6 +73,8 @@ export const ConversationRecordSchema = z
     activeTurnId: TurnIdSchema.optional(),
     createdAt: TimestampSchema,
     updatedAt: TimestampSchema,
+    /** Product activity clock; metadata-only updates must not advance it. */
+    lastActivityAt: TimestampSchema.optional(),
   })
   .strict()
   .superRefine((conversation, context) => {
@@ -81,6 +89,27 @@ export const ConversationRecordSchema = z
     }
   })
 export type ConversationRecord = z.infer<typeof ConversationRecordSchema>
+
+/**
+ * Durable product-history record returned by the Project-scoped Conversation
+ * index. Provider routing and workspace authorization metadata intentionally
+ * remain private to the Host.
+ */
+export const ConversationSummarySchema = z
+  .object({
+    conversationId: ConversationIdSchema,
+    projectId: ProjectIdSchema,
+    title: ConversationTitleSchema,
+    provider: z.literal('codex'),
+    model: z.string().trim().min(1).max(240).optional(),
+    reasoning: z.string().trim().min(1).max(120).optional(),
+    status: ConversationStatusSchema,
+    createdAt: TimestampSchema,
+    updatedAt: TimestampSchema,
+    lastActivityAt: TimestampSchema,
+  })
+  .strict()
+export type ConversationSummary = z.infer<typeof ConversationSummarySchema>
 
 export const TurnStatusSchema = z.enum([
   'running',
@@ -198,6 +227,130 @@ export const ApprovalRecordSchema = z
     }
   })
 export type ApprovalRecord = z.infer<typeof ApprovalRecordSchema>
+
+export const AttentionTypeSchema = z.enum([
+  'approval',
+  'completed_review',
+  'failed',
+])
+export type AttentionType = z.infer<typeof AttentionTypeSchema>
+
+export const AttentionStatusSchema = z.enum(['open', 'resolved', 'expired'])
+export type AttentionStatus = z.infer<typeof AttentionStatusSchema>
+
+export const ApprovalAttentionPayloadSchema = z
+  .object({
+    approvalId: ApprovalIdSchema,
+    kind: ApprovalKindSchema,
+    actionTitle: z.string().trim().min(1).max(240),
+    actionSubtitle: z.string().trim().min(1).max(4096).optional(),
+    decision: ApprovalDecisionSchema.optional(),
+    expirationReason: z.literal('host_restart').optional(),
+  })
+  .strict()
+export type ApprovalAttentionPayload = z.infer<
+  typeof ApprovalAttentionPayloadSchema
+>
+
+export const CompletedReviewAttentionPayloadSchema = z
+  .object({
+    conversationTitle: ConversationTitleSchema,
+  })
+  .strict()
+export type CompletedReviewAttentionPayload = z.infer<
+  typeof CompletedReviewAttentionPayloadSchema
+>
+
+/** Safe terminal failure presentation without raw Provider diagnostics. */
+export const FailedAttentionPayloadSchema = z
+  .object({
+    conversationTitle: ConversationTitleSchema,
+    error: HostErrorSchema,
+  })
+  .strict()
+export type FailedAttentionPayload = z.infer<
+  typeof FailedAttentionPayloadSchema
+>
+
+const attentionBaseShape = {
+  attentionId: AttentionIdSchema,
+  projectId: ProjectIdSchema,
+  conversationId: ConversationIdSchema,
+  turnId: TurnIdSchema.optional(),
+  status: AttentionStatusSchema,
+  createdAt: TimestampSchema,
+  updatedAt: TimestampSchema,
+  resolvedAt: TimestampSchema.optional(),
+}
+
+/** Durable, presentation-safe Inbox source owned by the Host. */
+export const AttentionItemSchema = z
+  .discriminatedUnion('type', [
+    z
+      .object({
+        ...attentionBaseShape,
+        type: z.literal('approval'),
+        payload: ApprovalAttentionPayloadSchema,
+      })
+      .strict(),
+    z
+      .object({
+        ...attentionBaseShape,
+        type: z.literal('completed_review'),
+        payload: CompletedReviewAttentionPayloadSchema,
+      })
+      .strict(),
+    z
+      .object({
+        ...attentionBaseShape,
+        type: z.literal('failed'),
+        payload: FailedAttentionPayloadSchema,
+      })
+      .strict(),
+  ])
+  .superRefine((attention, context) => {
+    if (attention.type !== 'approval' && attention.status === 'expired') {
+      context.addIssue({
+        code: 'custom',
+        message: 'Only Approval Attention may expire in Protocol v1',
+        path: ['status'],
+      })
+    }
+    const isTerminal = attention.status !== 'open'
+    if (isTerminal !== (attention.resolvedAt !== undefined)) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Terminal Attention requires resolvedAt',
+        path: ['resolvedAt'],
+      })
+    }
+    if (attention.type !== 'approval') return
+
+    const hasDecision = attention.payload.decision !== undefined
+    const hasExpiration = attention.payload.expirationReason !== undefined
+    if (attention.status === 'open' && (hasDecision || hasExpiration)) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Open Approval Attention cannot contain a terminal outcome',
+        path: ['payload'],
+      })
+    }
+    if (attention.status === 'resolved' && (!hasDecision || hasExpiration)) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Resolved Approval Attention requires only a decision',
+        path: ['payload'],
+      })
+    }
+    if (attention.status === 'expired' && (hasDecision || !hasExpiration)) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Expired Approval Attention requires only expirationReason',
+        path: ['payload'],
+      })
+    }
+  })
+export type AttentionItem = z.infer<typeof AttentionItemSchema>
 
 export const BootstrapSchema = z
   .object({

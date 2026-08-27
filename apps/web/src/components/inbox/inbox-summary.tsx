@@ -1,29 +1,25 @@
 import type { LucideIcon } from 'lucide-react'
 import {
   CircleCheck,
-  MessageCircleQuestion,
+  ListTodo,
   ShieldQuestion,
   TriangleAlert,
 } from 'lucide-react'
 
-import { Badge, cn } from '@codetether/ui'
+import { cn } from '@codetether/ui'
+import type { AttentionListResponse } from '@codetether/protocol'
 
-import type {
-  InboxSummaryMock,
-  InboxTodayOverviewMock,
-} from '../../mocks/inbox'
-import type { InboxFilter } from './inbox-filters'
+import type { InboxFilter } from './inbox-model'
 
 interface InboxSummaryProps {
   activeFilter: InboxFilter
   onFilterChange: (filter: InboxFilter) => void
-  summary: InboxSummaryMock
-  todayOverview: InboxTodayOverviewMock
+  summary: AttentionListResponse['summary']
 }
 
 interface SummaryItem {
   caption: string
-  filter: Exclude<InboxFilter, 'all' | 'unread'>
+  filter: InboxFilter
   icon: LucideIcon
   label: string
   tone: string
@@ -34,47 +30,46 @@ export function InboxSummary({
   activeFilter,
   onFilterChange,
   summary,
-  todayOverview,
 }: InboxSummaryProps) {
   const items: readonly SummaryItem[] = [
     {
-      caption: 'Shell、文件与网络权限',
+      caption: '当前所有需要处理或查看的事项',
+      filter: 'all',
+      icon: ListTodo,
+      label: '待处理总数',
+      tone: 'bg-primary-muted text-primary',
+      value: summary.totalOpen,
+    },
+    {
+      caption: '等待你的明确允许或拒绝',
       filter: 'approval',
       icon: ShieldQuestion,
       label: '需要审批',
       tone: 'bg-warning-muted text-warning',
-      value: summary.approvals,
+      value: summary.approvalOpen,
     },
     {
-      caption: '智能体等待你的输入',
-      filter: 'question',
-      icon: MessageCircleQuestion,
-      label: '需要回复',
-      tone: 'bg-info-muted text-info',
-      value: summary.replies,
-    },
-    {
-      caption: '任务完成，等待检查',
-      filter: 'completed',
+      caption: 'Agent 已完成，等待查看结果',
+      filter: 'completed_review',
       icon: CircleCheck,
       label: '完成待查看',
       tone: 'bg-success-muted text-success',
-      value: summary.completed,
+      value: summary.completedReviewOpen,
     },
     {
-      caption: '执行失败或机器离线',
+      caption: 'Turn 失败，等待确认',
       filter: 'failed',
       icon: TriangleAlert,
-      label: '失败任务',
+      label: '失败',
       tone: 'bg-danger-muted text-danger',
-      value: summary.failed,
+      value: summary.failedOpen,
     },
   ]
 
   return (
     <section
       aria-label="收件箱摘要"
-      className="grid min-w-0 grid-cols-[repeat(4,minmax(0,12.75rem))_minmax(17.5rem,1fr)] gap-4"
+      className="grid min-w-0 grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4"
     >
       {items.map((item) => {
         const Icon = item.icon
@@ -119,50 +114,6 @@ export function InboxSummary({
           </button>
         )
       })}
-
-      <div className="ml-6 flex h-[var(--layout-inbox-summary-height)] min-w-0 items-center rounded-md border border-border bg-surface/45 px-4">
-        <div className="w-full min-w-0">
-          <p className="text-md font-semibold text-text-primary">今日概览</p>
-          <div className="mt-3 flex min-w-0 items-center gap-4">
-            <OverviewMetric label="待处理" value={todayOverview.pending} />
-            <OverviewMetric
-              label="平均响应"
-              labelClassName="hidden min-[1360px]:inline"
-              value={todayOverview.averageResponseTime}
-            />
-            <Badge
-              variant={todayOverview.highRisk > 0 ? 'danger' : 'secondary'}
-              className="ml-auto h-6 rounded-full border-transparent px-2.5 text-xs"
-            >
-              {todayOverview.highRisk} 高风险
-            </Badge>
-          </div>
-        </div>
-      </div>
     </section>
-  )
-}
-
-interface OverviewMetricProps {
-  label: string
-  labelClassName?: string
-  value: number | string
-}
-
-function OverviewMetric({ label, labelClassName, value }: OverviewMetricProps) {
-  return (
-    <span className="flex min-w-0 shrink-0 items-baseline gap-2">
-      <span className="truncate text-base font-semibold tabular-nums text-text-primary">
-        {value}
-      </span>
-      <span
-        className={cn(
-          'truncate text-xs font-regular text-text-muted',
-          labelClassName,
-        )}
-      >
-        {label}
-      </span>
-    </span>
   )
 }

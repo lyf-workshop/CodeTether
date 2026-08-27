@@ -5,6 +5,8 @@ import {
   MESSAGE_OUTPUT_MAX_BYTES,
   TERMINAL_OUTPUT_MAX_BYTES,
   applyHostEvent,
+  includeConversationDetail,
+  projectConversationDetail,
   projectSnapshot,
 } from '../.tmp/test-dist/runtime/host/conversation-projection.js'
 
@@ -167,6 +169,106 @@ function resolvedApproval(id, decision = 'accept') {
     resolvedAt: timestamp,
   }
 }
+
+function coldDetail(title = 'Host-owned durable title') {
+  return {
+    protocolVersion: 1,
+    conversation: {
+      conversationId: 'conv_cold01',
+      projectId: 'proj_cold01',
+      title,
+      provider: 'codex',
+      status: 'idle',
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      lastActivityAt: timestamp,
+    },
+    runtime: {
+      conversationId: 'conv_cold01',
+      turns: [],
+      messages: [],
+      tools: [],
+      changes: [],
+      terminal: { text: '', truncated: false },
+      history: {
+        evictedTurns: 0,
+        evictedMessages: 0,
+        evictedTools: 0,
+        evictedChanges: 0,
+        truncated: false,
+      },
+    },
+    history: {
+      hasOlderHistory: false,
+      retainedTurnCount: 0,
+      totalTurnCount: 0,
+    },
+    pendingApprovals: [],
+    approvalHistory: [],
+  }
+}
+
+test('projects the Host-owned title instead of deriving it from cwd', () => {
+  const hostSnapshot = snapshot()
+  hostSnapshot.conversations[0].title = 'Host canonical title'
+
+  assert.equal(
+    projectSnapshot(hostSnapshot).conversations[conversationId].title,
+    'Host canonical title',
+  )
+})
+
+test('projects and injects a zero-Turn cold durable detail without a cwd', () => {
+  const detail = coldDetail()
+  const conversation = projectConversationDetail(detail)
+  assert.equal(conversation.title, 'Host-owned durable title')
+  assert.equal(conversation.cwd, undefined)
+  assert.deepEqual(conversation.turns, [])
+  assert.deepEqual(conversation.messages, [])
+
+  const projection = {
+    cursor: { epoch, seq: 17 },
+    conversations: {},
+  }
+  const included = includeConversationDetail(projection, detail)
+  assert.equal(included.cursor, projection.cursor)
+  assert.equal(
+    included.conversations.conv_cold01.title,
+    'Host-owned durable title',
+  )
+})
+
+test('refreshes a first-Turn Host title without replacing live Timeline state', () => {
+  const projection = projectSnapshot(snapshotWithRuntime())
+  const existing = projection.conversations[conversationId]
+  const detail = {
+    ...coldDetail('实现 WebSocket 自动重连'),
+    conversation: {
+      ...coldDetail().conversation,
+      conversationId,
+      projectId: 'proj_demo01',
+      title: '实现 WebSocket 自动重连',
+    },
+    runtime: {
+      ...coldDetail().runtime,
+      conversationId,
+    },
+  }
+  const updated = includeConversationDetail(projection, detail)
+
+  assert.equal(
+    updated.conversations[conversationId].title,
+    '实现 WebSocket 自动重连',
+  )
+  assert.strictEqual(
+    updated.conversations[conversationId].turns,
+    existing.turns,
+  )
+  assert.strictEqual(
+    updated.conversations[conversationId].messages,
+    existing.messages,
+  )
+})
 
 test('projects snapshot metadata, active Turn, and multiple approvals', () => {
   const projection = projectSnapshot(
@@ -914,6 +1016,76 @@ test('returns explicit reset results for stream reset and strict ordering failur
   assert.equal(reset.reason, 'stream-reset')
   assert.equal(reset.streamReason, 'epoch_mismatch')
   assert.strictEqual(reset.projection, projection)
+})
+
+test('Attention events advance the cursor without changing Conversation state', () => {
+  const projection = projectSnapshot(snapshot())
+  const conversations = projection.conversations
+  const conversation = conversations[conversationId]
+  const attentionConversationId = 'conv_coldattention01'
+  const attentionTurnId = 'turn_coldattention01'
+  const attentionBase = {
+    attentionId: 'attn_demo01',
+    projectId: 'proj_demo01',
+    conversationId: attentionConversationId,
+    turnId: attentionTurnId,
+    type: 'completed_review',
+    status: 'open',
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    payload: { conversationTitle: 'Durable cold Conversation' },
+  }
+
+  const created = applyHostEvent(
+    projection,
+    envelope(
+      1,
+      'attention.created',
+      { attention: attentionBase },
+      {
+        conversationId: attentionConversationId,
+        turnId: attentionTurnId,
+        itemId: undefined,
+      },
+    ),
+  )
+  assert.equal(created.kind, 'applied')
+  assert.deepEqual(created.projection.cursor, { epoch, seq: 1 })
+  assert.strictEqual(created.projection.conversations, conversations)
+  assert.strictEqual(
+    created.projection.conversations[conversationId],
+    conversation,
+  )
+
+  const resolvedAt = '2026-08-26T07:01:00.000Z'
+  const resolved = applyHostEvent(
+    created.projection,
+    envelope(
+      2,
+      'attention.resolved',
+      {
+        attention: {
+          ...attentionBase,
+          status: 'resolved',
+          updatedAt: resolvedAt,
+          resolvedAt,
+        },
+      },
+      {
+        conversationId: attentionConversationId,
+        turnId: attentionTurnId,
+        itemId: undefined,
+        timestamp: resolvedAt,
+      },
+    ),
+  )
+  assert.equal(resolved.kind, 'applied')
+  assert.deepEqual(resolved.projection.cursor, { epoch, seq: 2 })
+  assert.strictEqual(resolved.projection.conversations, conversations)
+  assert.strictEqual(
+    resolved.projection.conversations[conversationId],
+    conversation,
+  )
 })
 
 test('rejects a validly sequenced event that violates projection lifecycle', () => {

@@ -4,19 +4,33 @@ import type { AgentEvent } from '@codetether/agent-core'
 import {
   ActionIdSchema,
   ApprovalIdSchema,
+  AttentionIdSchema,
+  AttentionListResponseSchema,
   ConversationIdSchema,
+  ConversationListResponseSchema,
   ConversationRecordSchema,
+  ConversationSummarySchema,
   EpochIdSchema,
   formatLastEventId,
+  GetConversationResponseSchema,
   HostEventSchema,
   HostEventEnvelopeSchema,
+  ListAttentionQuerySchema,
   ProjectIdSchema,
+  ListProjectConversationsQuerySchema,
   protocolVersion,
   TimestampSchema,
   TurnIdSchema,
   type BootstrapResponse,
+  type ApprovalRecord,
+  type AttentionId,
+  type AttentionListResponse,
   type ConversationId,
+  type ConversationApprovalHistoryRecord,
+  type ConversationListResponse,
   type ConversationRecord,
+  type ConversationRuntimeSnapshot,
+  type ConversationSummary,
   type CreateConversationRequest,
   type CreateConversationResponse,
   type HostErrorCode,
@@ -28,12 +42,17 @@ import {
   type DeleteProjectRequest,
   type DeleteProjectResponse,
   type GetProjectResponse,
+  type GetConversationResponse,
   type InterruptTurnRequest,
   type InterruptTurnResponse,
   type ListProjectsResponse,
+  type ListAttentionQuery,
+  type ListProjectConversationsQuery,
   type ProjectId,
   type ResolveApprovalRequest,
   type ResolveApprovalResponse,
+  type ResolveAttentionRequest,
+  type ResolveAttentionResponse,
   type StartTurnRequest,
   type StartTurnResponse,
   type TurnId,
@@ -41,12 +60,19 @@ import {
 } from '@codetether/protocol'
 
 import {
+  DEFAULT_CONVERSATION_TITLE,
+  generateConversationTitle,
+} from '../conversation-title.js'
+import {
   ConversationStore,
   DURABLE_TURN_SNAPSHOT_VERSION,
   captureTurnPresentation,
   initialTurnPresentation,
+  readDurableConversationDetail,
   restoreDurableConversations,
+  type DurableApprovalHistoryRecord,
   type DurableConversation,
+  type RestoredDurableConversation,
   type DurableTurnSnapshot,
 } from '../persistence/index.js'
 
@@ -60,6 +86,13 @@ import {
   type AgentHostRuntime,
 } from './agent-runtime.js'
 import { ApprovalRegistry } from './approval-registry.js'
+import {
+  listAttention,
+  recordAttention,
+  resolveAttention as resolveDurableAttention,
+  type AttentionSourceEvent,
+  type AttentionTransition,
+} from './attention-service.js'
 import {
   ConversationRuntimeHistory,
   type ConversationRuntimeHistoryLimits,
@@ -124,7 +157,12 @@ export class HostService {
   readonly #projects: ProjectRegistry
   readonly #persistenceFlushMs: number
   readonly #dirtyTurns = new Map<TurnId, ConversationId>()
+  readonly #hydrations = new Map<ConversationId, Promise<ConversationState>>()
+  readonly #runtimeAccess = new Map<ConversationId, number>()
+  readonly #runtimePins = new Map<ConversationId, number>()
   readonly #pendingProviderEvents: AgentEvent[] = []
+  #runtimeAccessSequence = 0
+  #runtimeReservations = 0
   #pendingProviderEventBytes = 0
   #persistenceTimer?: ReturnType<typeof setTimeout>
   #persistenceFailure?: Error
@@ -251,6 +289,154 @@ export class HostService {
     }
   }
 
+  async listProjectConversations(
+    projectId: ProjectId,
+    query: ListProjectConversationsQuery,
+  ): Promise<ConversationListResponse> {
+    if (this.#persistence === undefined) {
+      throw new HostServiceError(
+        'runtime_unavailable',
+        'Durable Conversation index is unavailable',
+        503,
+      )
+    }
+    const id = ProjectIdSchema.parse(projectId)
+    const options = ListProjectConversationsQuerySchema.parse(query)
+    try {
+      await this.#projects.get(id)
+    } catch (error) {
+      throw projectServiceError(error)
+    }
+    return ConversationListResponseSchema.parse({
+      protocolVersion,
+      conversations: this.#persistence.listProjectConversations(id, options),
+    })
+  }
+
+  getConversation(conversationId: ConversationId): GetConversationResponse {
+    if (this.#persistence === undefined) {
+      throw new HostServiceError(
+        'runtime_unavailable',
+        'Durable Conversation history is unavailable',
+        503,
+      )
+    }
+    const id = ConversationIdSchema.parse(conversationId)
+    const durable = readDurableConversationDetail(this.#persistence, id, {
+      maxTurns: this.#runtimeHistory.maxTurns,
+      maxEntries: this.#runtimeHistory.maxEntries,
+    })
+    if (durable === undefined) {
+      throw new HostServiceError('not_found', 'Conversation was not found', 404)
+    }
+
+    const hydrated = this.#conversations.get(id)
+    const runtime =
+      hydrated === undefined
+        ? durable.runtime
+        : (this.#runtimeHistory.snapshotFor(id) ?? durable.runtime)
+    const record = hydrated?.record ?? durable.record
+    if (hydrated !== undefined) this.#touchConversation(id)
+
+    const currentApprovals =
+      hydrated === undefined
+        ? []
+        : this.#approvalRegistry.recordsForConversation(id)
+    const pendingApprovals = this.#approvalRegistry
+      .pendingRecords()
+      .filter((approval) => approval.conversationId === id)
+    const approvalHistory = this.#conversationApprovalHistory(
+      durable.approvals,
+      currentApprovals,
+      runtime,
+    )
+    const totalTurnCount = durable.history.totalTurns
+
+    return GetConversationResponseSchema.parse({
+      protocolVersion,
+      conversation: conversationSummary(record),
+      runtime,
+      history: {
+        hasOlderHistory: totalTurnCount > runtime.turns.length,
+        retainedTurnCount: runtime.turns.length,
+        totalTurnCount,
+      },
+      pendingApprovals,
+      approvalHistory,
+    })
+  }
+
+  listAttention(query: ListAttentionQuery): AttentionListResponse {
+    const store = this.#requireAttentionStore()
+    const options = ListAttentionQuerySchema.parse(query)
+    if (options.projectId !== undefined) {
+      try {
+        // Durable Attention remains readable when the registered workspace is
+        // unavailable, so validate identity without probing the filesystem.
+        this.#projects.require(options.projectId)
+      } catch (error) {
+        throw projectServiceError(error)
+      }
+    }
+    return AttentionListResponseSchema.parse(listAttention(store, options))
+  }
+
+  async resolveAttention(
+    attentionId: AttentionId,
+    request: ResolveAttentionRequest,
+  ): Promise<ResolveAttentionResponse> {
+    return await this.#executeAction(
+      request.actionId,
+      `attention.resolve:${attentionId}`,
+      { attentionId, request },
+      async () => {
+        const store = this.#requireAttentionStore()
+        const id = AttentionIdSchema.parse(attentionId)
+        const existing = store.getAttentionItem(id)
+        if (existing === undefined) {
+          throw new HostServiceError(
+            'not_found',
+            'Attention item was not found',
+            404,
+          )
+        }
+        if (existing.type === 'approval') {
+          throw new HostServiceError(
+            'unsupported',
+            'Approval Attention must be resolved through the Approval endpoint',
+            422,
+          )
+        }
+        if (existing.status !== 'open') {
+          throw new HostServiceError(
+            'conflict',
+            'Attention item is no longer open',
+            409,
+          )
+        }
+        const result = this.#writeDurableResult(() =>
+          resolveDurableAttention(store, id, this.#timestamp()),
+        )
+        if (result === undefined) {
+          throw new Error('Durable Attention disappeared during resolution')
+        }
+        if (result.changed) {
+          this.#publishAttention({
+            type: 'attention.resolved',
+            attention: result.attention,
+          })
+        }
+        return {
+          protocolVersion,
+          actionId: request.actionId,
+          status: 'completed',
+          data: { attention: result.attention },
+        }
+      },
+      false,
+    )
+  }
+
   async createProject(
     request: CreateProjectRequest,
   ): Promise<CreateProjectResponse> {
@@ -310,118 +496,128 @@ export class HostService {
       'conversation.create',
       request,
       async () => {
-        if (this.#conversations.size >= this.#maxConversations) {
-          throw new HostServiceError(
-            'runtime_unavailable',
-            'Host conversation capacity is temporarily exhausted',
-            503,
-            { maxConversations: this.#maxConversations },
-          )
-        }
         const workspace = await this.#reserveConversationProject(request)
         try {
-          const projectId = workspace.project.projectId
-          const cwd = workspace.cwd
-          const timestamp = this.#timestamp()
-          const conversationId = newConversationId()
-          const creatingConversation: DurableConversation = {
-            conversationId,
-            projectId,
-            provider: 'codex',
-            cwd,
-            ...(request.model === undefined ? {} : { model: request.model }),
-            ...(request.reasoning === undefined
-              ? {}
-              : { reasoning: request.reasoning }),
-            status: 'creating',
-            createdAt: timestamp,
-            updatedAt: timestamp,
-          }
-          this.#writeDurable(() => {
-            this.#persistence?.createConversation(creatingConversation)
-          })
-
-          let provider:
-            | Awaited<ReturnType<AgentHostRuntime['startConversation']>>
-            | undefined
+          const releaseRuntimeSlot = this.#reserveRuntimeSlot()
           try {
-            provider = await this.#runtime.startConversation({
+            const projectId = workspace.project.projectId
+            const cwd = workspace.cwd
+            const timestamp = this.#timestamp()
+            const conversationId = newConversationId()
+            const creatingConversation: DurableConversation = {
+              conversationId,
+              projectId,
+              title: DEFAULT_CONVERSATION_TITLE,
+              provider: 'codex',
               cwd,
               ...(request.model === undefined ? {} : { model: request.model }),
               ...(request.reasoning === undefined
                 ? {}
                 : { reasoning: request.reasoning }),
-            })
-          } catch (error) {
-            this.#rollbackCreatingConversation(conversationId)
-            if (!this.#runtimeAvailable()) throw runtimeUnavailableError()
-            throw providerCommandError('create conversation', error)
-          }
-          this.#assertRuntimeAvailable()
-
-          if (
-            provider.providerThreadId.trim().length === 0 ||
-            this.#providerThreads.has(provider.providerThreadId)
-          ) {
-            this.#rollbackCreatingConversation(conversationId)
-            throw new HostServiceError(
-              'provider_error',
-              'Codex returned an invalid or reused Thread identity',
-              500,
-            )
-          }
-
-          let record
-          try {
-            record = ConversationRecordSchema.parse({
-              conversationId,
-              projectId,
-              provider: 'codex',
-              cwd,
-              ...(provider.model === undefined && request.model === undefined
-                ? {}
-                : { model: provider.model ?? request.model }),
-              ...(request.reasoning === undefined
-                ? {}
-                : { reasoning: request.reasoning }),
-              status: 'idle',
+              status: 'creating',
               createdAt: timestamp,
               updatedAt: timestamp,
+              lastActivityAt: timestamp,
+            }
+            this.#writeDurable(() => {
+              this.#persistence?.createConversation(creatingConversation)
             })
-          } catch (error) {
-            this.#rollbackCreatingConversation(conversationId)
-            throw providerCommandError(
-              'return valid conversation metadata',
-              error,
-            )
-          }
-          const state: ConversationState = {
-            record,
-            providerThreadId: provider.providerThreadId,
-            turns: new Map(),
-            providerTurnIds: new Map(),
-            providerSession: 'ready',
-            startingTurn: false,
-          }
-          this.#writeDurable(() => {
-            this.#persistence?.updateConversation(
-              this.#durableConversation(state),
-            )
-          })
-          this.#conversations.set(conversationId, state)
-          this.#providerThreads.set(provider.providerThreadId, conversationId)
-          this.#publish({
-            conversationId,
-            timestamp,
-            type: 'conversation.started',
-            payload: { conversation: record },
-          })
-          this.#flushProviderEvents()
-          return {
-            protocolVersion,
-            actionId: request.actionId,
-            status: 'completed',
-            data: { conversation: record },
+
+            let provider:
+              | Awaited<ReturnType<AgentHostRuntime['startConversation']>>
+              | undefined
+            try {
+              provider = await this.#runtime.startConversation({
+                cwd,
+                ...(request.model === undefined
+                  ? {}
+                  : { model: request.model }),
+                ...(request.reasoning === undefined
+                  ? {}
+                  : { reasoning: request.reasoning }),
+              })
+            } catch (error) {
+              this.#rollbackCreatingConversation(conversationId)
+              if (!this.#runtimeAvailable()) throw runtimeUnavailableError()
+              throw providerCommandError('create conversation', error)
+            }
+            this.#assertRuntimeAvailable()
+
+            if (
+              provider.providerThreadId.trim().length === 0 ||
+              this.#providerThreads.has(provider.providerThreadId) ||
+              this.#persistence
+                ?.listConversations()
+                .some(
+                  (conversation) =>
+                    conversation.providerThreadId === provider.providerThreadId,
+                ) === true
+            ) {
+              this.#rollbackCreatingConversation(conversationId)
+              throw new HostServiceError(
+                'provider_error',
+                'Codex returned an invalid or reused Thread identity',
+                500,
+              )
+            }
+
+            let record
+            try {
+              record = ConversationRecordSchema.parse({
+                conversationId,
+                projectId,
+                title: DEFAULT_CONVERSATION_TITLE,
+                provider: 'codex',
+                cwd,
+                ...(provider.model === undefined && request.model === undefined
+                  ? {}
+                  : { model: provider.model ?? request.model }),
+                ...(request.reasoning === undefined
+                  ? {}
+                  : { reasoning: request.reasoning }),
+                status: 'idle',
+                createdAt: timestamp,
+                updatedAt: timestamp,
+                lastActivityAt: timestamp,
+              })
+            } catch (error) {
+              this.#rollbackCreatingConversation(conversationId)
+              throw providerCommandError(
+                'return valid conversation metadata',
+                error,
+              )
+            }
+            const state: ConversationState = {
+              record,
+              providerThreadId: provider.providerThreadId,
+              turns: new Map(),
+              providerTurnIds: new Map(),
+              providerSession: 'ready',
+              startingTurn: false,
+            }
+            this.#writeDurable(() => {
+              this.#persistence?.updateConversation(
+                this.#durableConversation(state),
+              )
+            })
+            this.#conversations.set(conversationId, state)
+            this.#providerThreads.set(provider.providerThreadId, conversationId)
+            this.#publish({
+              conversationId,
+              timestamp,
+              type: 'conversation.started',
+              payload: { conversation: record },
+            })
+            this.#flushProviderEvents()
+            this.#touchConversation(conversationId)
+            return {
+              protocolVersion,
+              actionId: request.actionId,
+              status: 'completed',
+              data: { conversation: record },
+            }
+          } finally {
+            releaseRuntimeSlot()
           }
         } finally {
           workspace.release()
@@ -459,19 +655,28 @@ export class HostService {
             },
           )
         }
-        const conversation = this.#requireConversation(conversationId)
-        if (
-          conversation.startingTurn ||
-          conversation.record.activeTurnId !== undefined
-        ) {
-          throw new HostServiceError(
-            'conflict',
-            'Conversation already has an active Turn',
-            409,
-          )
+        const parsedConversationId = ConversationIdSchema.parse(conversationId)
+        const releaseRuntimePin =
+          this.#pinRuntimeConversation(parsedConversationId)
+        let conversation: ConversationState
+        try {
+          conversation =
+            await this.#ensureConversationHydrated(parsedConversationId)
+          if (
+            conversation.startingTurn ||
+            conversation.record.activeTurnId !== undefined
+          ) {
+            throw new HostServiceError(
+              'conflict',
+              'Conversation already has an active Turn',
+              409,
+            )
+          }
+          conversation.startingTurn = true
+        } finally {
+          releaseRuntimePin()
         }
-
-        conversation.startingTurn = true
+        this.#touchConversation(conversation.record.conversationId)
         let authorizedCwd: string
         try {
           const projectId = conversation.record.projectId
@@ -506,18 +711,38 @@ export class HostService {
           },
           startedAt: timestamp,
         }
+        const nextConversationRecord = ConversationRecordSchema.parse({
+          ...conversation.record,
+          ...(shouldGenerateConversationTitle(conversation)
+            ? { title: generateConversationTitle(request.input.text) }
+            : {}),
+          updatedAt: timestamp,
+          lastActivityAt: timestamp,
+        })
         try {
           this.#writeDurable(() => {
-            this.#persistence?.createTurn({
-              turnId,
-              conversationId,
-              input: record.input!,
-              status: 'starting',
-              startedAt: timestamp,
-              snapshotVersion: DURABLE_TURN_SNAPSHOT_VERSION,
-              snapshot: initialTurnPresentation(record),
+            this.#persistence?.runInTransaction(() => {
+              this.#persistence?.createTurn({
+                turnId,
+                conversationId,
+                input: record.input!,
+                status: 'starting',
+                startedAt: timestamp,
+                snapshotVersion: DURABLE_TURN_SNAPSHOT_VERSION,
+                snapshot: initialTurnPresentation(record),
+              })
+              this.#persistence?.updateConversation({
+                ...this.#durableConversation(conversation),
+                title:
+                  nextConversationRecord.title ?? DEFAULT_CONVERSATION_TITLE,
+                updatedAt: nextConversationRecord.updatedAt,
+                lastActivityAt:
+                  nextConversationRecord.lastActivityAt ??
+                  nextConversationRecord.updatedAt,
+              })
             })
           })
+          conversation.record = nextConversationRecord
         } catch (error) {
           conversation.startingTurn = false
           throw error
@@ -636,34 +861,44 @@ export class HostService {
       `turn.interrupt:${conversationId}:${turnId}`,
       { conversationId, turnId, request },
       async () => {
-        const conversation = this.#requireConversation(conversationId)
-        const turn = this.#requireTurn(conversation, turnId)
-        if (
-          turn.record.status !== 'running' ||
-          conversation.record.activeTurnId !== turnId
-        ) {
-          throw new HostServiceError(
-            'conflict',
-            'Turn is not active and cannot be interrupted',
-            409,
-          )
+        const parsedConversationId = ConversationIdSchema.parse(conversationId)
+        const releaseRuntimePin =
+          this.#pinRuntimeConversation(parsedConversationId)
+        let conversation: ConversationState
+        let turn: TurnState
+        try {
+          conversation =
+            await this.#ensureConversationHydrated(parsedConversationId)
+          turn = this.#requireTurn(conversation, turnId)
+          if (
+            turn.record.status !== 'running' ||
+            conversation.record.activeTurnId !== turnId
+          ) {
+            throw new HostServiceError(
+              'conflict',
+              'Turn is not active and cannot be interrupted',
+              409,
+            )
+          }
+          if (turn.interrupting) {
+            throw new HostServiceError(
+              'conflict',
+              'Turn interruption is already pending',
+              409,
+            )
+          }
+          if (turn.providerTurnId === undefined) {
+            throw new HostServiceError(
+              'conflict',
+              'Turn has no active Provider identity',
+              409,
+            )
+          }
+          turn.interrupting = true
+        } finally {
+          releaseRuntimePin()
         }
-        if (turn.interrupting) {
-          throw new HostServiceError(
-            'conflict',
-            'Turn interruption is already pending',
-            409,
-          )
-        }
-        if (turn.providerTurnId === undefined) {
-          throw new HostServiceError(
-            'conflict',
-            'Turn has no active Provider identity',
-            409,
-          )
-        }
-
-        turn.interrupting = true
+        this.#touchConversation(conversation.record.conversationId)
         try {
           await this.#runtime.interruptTurn({
             providerThreadId: conversation.providerThreadId,
@@ -698,6 +933,7 @@ export class HostService {
           approvalId,
           request.decision,
         )
+        this.#touchConversation(approval.conversationId)
         return {
           protocolVersion,
           actionId: request.actionId,
@@ -773,6 +1009,7 @@ export class HostService {
             ? 'idle'
             : 'completed',
       updatedAt: completedAt,
+      lastActivityAt: completedAt,
     }
     const withoutActive = { ...conversation.record }
     Reflect.deleteProperty(withoutActive, 'activeTurnId')
@@ -795,6 +1032,7 @@ export class HostService {
     if (parsed.type === 'stream.reset') {
       throw new Error('stream.reset cannot enter runtime history')
     }
+    this.#touchConversation(parsed.conversationId)
     const nextSeq = this.publisher.currentSeq + 1
     const preview = HostEventEnvelopeSchema.parse({
       ...parsed,
@@ -809,21 +1047,44 @@ export class HostService {
     if (preview.type === 'stream.reset') {
       throw new Error('stream.reset cannot enter runtime history')
     }
+    const previousRuntime = this.#runtimeHistory.snapshotFor(
+      parsed.conversationId,
+    )
     const eviction = this.#runtimeHistory.apply(preview)
-    this.#pruneEvictedRuntimeIdentity(eviction)
+    let attention: AttentionTransition | undefined
     try {
-      this.#recordDurableEvent(parsed)
+      attention = this.#recordDurableEvent(parsed)
     } catch (error) {
+      if (previousRuntime === undefined) {
+        this.#runtimeHistory.delete(parsed.conversationId)
+      } else {
+        this.#runtimeHistory.restore(previousRuntime)
+      }
       this.#publishDurabilityFailureForTerminal(parsed)
       throw error
     }
+    this.#pruneEvictedRuntimeIdentity(eviction)
     const envelope = this.publisher.publish(parsed)
     if (envelope.eventId !== preview.eventId) {
       throw new Error('Host event sequence changed during durable publication')
     }
+    if (attention !== undefined) this.#publishAttention(attention)
     if (eviction.snapshotRequired) {
       this.publisher.publishSnapshotBoundary(event.timestamp)
     }
+  }
+
+  #publishAttention(transition: AttentionTransition): void {
+    const attention = transition.attention
+    this.publisher.publish(
+      HostEventSchema.parse({
+        conversationId: attention.conversationId,
+        ...(attention.turnId === undefined ? {} : { turnId: attention.turnId }),
+        timestamp: attention.updatedAt,
+        type: transition.type,
+        payload: { attention },
+      }),
+    )
   }
 
   #publishDurabilityFailureForTerminal(
@@ -857,6 +1118,7 @@ export class HostService {
       ...conversation.record,
       status: 'failed',
       updatedAt: completedAt,
+      lastActivityAt: completedAt,
     }
     Reflect.deleteProperty(failedConversation, 'activeTurnId')
     conversation.record = failedConversation
@@ -931,43 +1193,7 @@ export class HostService {
     })
     let restoredPresentationOrder = 0
     for (const durable of restored) {
-      this.#runtimeHistory.restore(durable.runtime)
-      const runtime = this.#runtimeHistory.snapshotFor(
-        durable.record.conversationId,
-      )
-      if (runtime === undefined) {
-        throw new Error('Restored Conversation runtime was not retained')
-      }
-      const providerTurns = new Map(
-        durable.providerTurns.map((turn) => [turn.turnId, turn.providerTurnId]),
-      )
-      const turns = new Map<TurnId, TurnState>()
-      const providerTurnIds = new Map<string, TurnId>()
-      for (const record of runtime.turns) {
-        const providerTurnId = providerTurns.get(record.turnId)
-        turns.set(record.turnId, {
-          record,
-          ...(providerTurnId === undefined ? {} : { providerTurnId }),
-          providerItems: new Map(),
-          interrupting: false,
-        })
-        if (providerTurnId !== undefined) {
-          providerTurnIds.set(providerTurnId, record.turnId)
-        }
-      }
-      const state: ConversationState = {
-        record: durable.record,
-        providerThreadId: durable.providerThreadId,
-        turns,
-        providerTurnIds,
-        providerSession: 'needs-resume',
-        startingTurn: false,
-      }
-      this.#conversations.set(durable.record.conversationId, state)
-      this.#providerThreads.set(
-        durable.providerThreadId,
-        durable.record.conversationId,
-      )
+      const runtime = this.#installRestoredConversation(durable)
       for (const entry of [
         ...runtime.messages,
         ...runtime.tools,
@@ -979,7 +1205,330 @@ export class HostService {
         )
       }
     }
-    this.publisher.initializeSequence(restoredPresentationOrder)
+    for (const durable of [...restored].reverse()) {
+      this.#touchConversation(durable.record.conversationId)
+    }
+    const restoredIds = new Set(
+      restored.map((durable) => durable.record.conversationId),
+    )
+    const hasColdProviderConversation = this.#persistence
+      .listConversations()
+      .some(
+        (conversation) =>
+          conversation.status !== 'creating' &&
+          conversation.providerThreadId !== undefined &&
+          !restoredIds.has(conversation.conversationId),
+      )
+    this.publisher.initializeSequence(
+      hasColdProviderConversation
+        ? Math.max(restoredPresentationOrder, this.#runtimeHistory.maxEntries)
+        : restoredPresentationOrder,
+    )
+  }
+
+  #installRestoredConversation(
+    durable: RestoredDurableConversation,
+  ): ConversationRuntimeSnapshot {
+    const providerOwner = this.#providerThreads.get(durable.providerThreadId)
+    if (
+      providerOwner !== undefined &&
+      providerOwner !== durable.record.conversationId
+    ) {
+      throw new Error('Durable Provider Conversation identity is not unique')
+    }
+    this.#runtimeHistory.restore(durable.runtime)
+    const runtime = this.#runtimeHistory.snapshotFor(
+      durable.record.conversationId,
+    )
+    if (runtime === undefined) {
+      throw new Error('Restored Conversation runtime was not retained')
+    }
+    const providerTurns = new Map(
+      durable.providerTurns.map((turn) => [turn.turnId, turn.providerTurnId]),
+    )
+    const turns = new Map<TurnId, TurnState>()
+    const providerTurnIds = new Map<string, TurnId>()
+    for (const record of runtime.turns) {
+      const providerTurnId = providerTurns.get(record.turnId)
+      turns.set(record.turnId, {
+        record,
+        ...(providerTurnId === undefined ? {} : { providerTurnId }),
+        providerItems: new Map(),
+        interrupting: false,
+      })
+      if (providerTurnId !== undefined) {
+        providerTurnIds.set(providerTurnId, record.turnId)
+      }
+    }
+    const state: ConversationState = {
+      record: durable.record,
+      providerThreadId: durable.providerThreadId,
+      turns,
+      providerTurnIds,
+      providerSession: 'needs-resume',
+      startingTurn: false,
+    }
+    this.#conversations.set(durable.record.conversationId, state)
+    this.#providerThreads.set(
+      durable.providerThreadId,
+      durable.record.conversationId,
+    )
+    return runtime
+  }
+
+  async #ensureConversationHydrated(
+    conversationId: ConversationId,
+  ): Promise<ConversationState> {
+    const existing = this.#conversations.get(conversationId)
+    if (existing !== undefined) return existing
+
+    const pending = this.#hydrations.get(conversationId)
+    if (pending !== undefined) return await pending
+
+    const hydration = this.#hydrateConversation(conversationId)
+    this.#hydrations.set(conversationId, hydration)
+    try {
+      return await hydration
+    } finally {
+      if (this.#hydrations.get(conversationId) === hydration) {
+        this.#hydrations.delete(conversationId)
+      }
+    }
+  }
+
+  async #hydrateConversation(
+    conversationId: ConversationId,
+  ): Promise<ConversationState> {
+    if (this.#persistence === undefined) {
+      throw new HostServiceError('not_found', 'Conversation was not found', 404)
+    }
+    const durableConversation =
+      this.#persistence.getConversation(conversationId)
+    if (
+      durableConversation === undefined ||
+      durableConversation.status === 'creating'
+    ) {
+      throw new HostServiceError('not_found', 'Conversation was not found', 404)
+    }
+    if (durableConversation.providerThreadId === undefined) {
+      throw providerConversationUnavailableError()
+    }
+    const durable = readDurableConversationDetail(
+      this.#persistence,
+      conversationId,
+      {
+        maxTurns: this.#runtimeHistory.maxTurns,
+        maxEntries: this.#runtimeHistory.maxEntries,
+      },
+    )
+    if (durable === undefined) {
+      throw new HostServiceError('not_found', 'Conversation was not found', 404)
+    }
+    const releaseRuntimeSlot = this.#reserveRuntimeSlot(conversationId)
+    try {
+      const alreadyHydrated = this.#conversations.get(conversationId)
+      if (alreadyHydrated !== undefined) return alreadyHydrated
+      const providerOwner = this.#providerThreads.get(
+        durableConversation.providerThreadId,
+      )
+      if (providerOwner !== undefined && providerOwner !== conversationId) {
+        throw new HostServiceError(
+          'provider_error',
+          'Durable Provider Conversation identity is not unique',
+          500,
+        )
+      }
+      this.#installRestoredConversation({
+        record: durable.record,
+        providerThreadId: durableConversation.providerThreadId,
+        runtime: durable.runtime,
+        providerTurns: this.#persistence
+          .listRecentTurns(conversationId, this.#runtimeHistory.maxTurns)
+          .flatMap((turn) =>
+            turn.providerTurnId === undefined
+              ? []
+              : [
+                  {
+                    turnId: turn.turnId,
+                    providerTurnId: turn.providerTurnId,
+                  },
+                ],
+          ),
+        expiredApprovals: durable.approvals.filter(
+          (approval) => approval.lifecycle === 'expired',
+        ).length,
+      })
+      const hydrated = this.#conversations.get(conversationId)
+      if (hydrated === undefined) {
+        throw new Error('Hydrated Conversation runtime was not retained')
+      }
+      this.#touchConversation(conversationId)
+      return hydrated
+    } finally {
+      releaseRuntimeSlot()
+    }
+  }
+
+  #reserveRuntimeSlot(protectedConversationId?: ConversationId): () => void {
+    while (
+      this.#conversations.size + this.#runtimeReservations >=
+      this.#maxConversations
+    ) {
+      if (this.#persistence === undefined) {
+        throw new HostServiceError(
+          'runtime_unavailable',
+          'Host Conversation capacity is temporarily exhausted',
+          503,
+          { maxConversations: this.#maxConversations },
+        )
+      }
+      const candidate = this.#runtimeEvictionCandidate(protectedConversationId)
+      if (candidate === undefined) {
+        throw new HostServiceError(
+          'runtime_unavailable',
+          'Host Conversation working set is temporarily exhausted',
+          503,
+          { maxConversations: this.#maxConversations },
+        )
+      }
+      this.#evictRuntimeConversation(candidate)
+    }
+
+    this.#runtimeReservations += 1
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      this.#runtimeReservations -= 1
+    }
+  }
+
+  #runtimeEvictionCandidate(
+    protectedConversationId?: ConversationId,
+  ): ConversationId | undefined {
+    let candidate: ConversationId | undefined
+    let oldestAccess = Number.POSITIVE_INFINITY
+    for (const [conversationId, conversation] of this.#conversations) {
+      if (
+        conversationId === protectedConversationId ||
+        this.#hydrations.has(conversationId) ||
+        (this.#runtimePins.get(conversationId) ?? 0) > 0 ||
+        !this.#canEvictRuntimeConversation(conversationId, conversation)
+      ) {
+        continue
+      }
+      const access = this.#runtimeAccess.get(conversationId) ?? 0
+      if (access < oldestAccess) {
+        candidate = conversationId
+        oldestAccess = access
+      }
+    }
+    return candidate
+  }
+
+  #canEvictRuntimeConversation(
+    conversationId: ConversationId,
+    conversation: ConversationState,
+  ): boolean {
+    if (
+      conversation.startingTurn ||
+      (this.#runtimePins.get(conversationId) ?? 0) > 0 ||
+      conversation.record.activeTurnId !== undefined ||
+      conversation.record.status === 'running' ||
+      conversation.record.status === 'waiting' ||
+      this.#approvalRegistry.hasPendingForConversation(conversationId)
+    ) {
+      return false
+    }
+    if ([...conversation.turns.values()].some((turn) => turn.interrupting)) {
+      return false
+    }
+    return ![...this.#dirtyTurns.values()].includes(conversationId)
+  }
+
+  #evictRuntimeConversation(conversationId: ConversationId): void {
+    const conversation = this.#conversations.get(conversationId)
+    if (conversation === undefined) return
+    if (!this.#canEvictRuntimeConversation(conversationId, conversation)) {
+      throw new Error('Attempted to evict a protected Conversation runtime')
+    }
+    this.#conversations.delete(conversationId)
+    if (
+      this.#providerThreads.get(conversation.providerThreadId) ===
+      conversationId
+    ) {
+      this.#providerThreads.delete(conversation.providerThreadId)
+    }
+    this.#runtimeHistory.delete(conversationId)
+    this.#runtimeAccess.delete(conversationId)
+  }
+
+  #touchConversation(conversationId: ConversationId): void {
+    if (!this.#conversations.has(conversationId)) return
+    this.#runtimeAccessSequence += 1
+    this.#runtimeAccess.set(conversationId, this.#runtimeAccessSequence)
+  }
+
+  #pinRuntimeConversation(conversationId: ConversationId): () => void {
+    this.#runtimePins.set(
+      conversationId,
+      (this.#runtimePins.get(conversationId) ?? 0) + 1,
+    )
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      const remaining = (this.#runtimePins.get(conversationId) ?? 1) - 1
+      if (remaining <= 0) this.#runtimePins.delete(conversationId)
+      else this.#runtimePins.set(conversationId, remaining)
+    }
+  }
+
+  #conversationApprovalHistory(
+    durableApprovals: readonly DurableApprovalHistoryRecord[],
+    currentApprovals: readonly ApprovalRecord[],
+    runtime: ConversationRuntimeSnapshot,
+  ): ConversationApprovalHistoryRecord[] {
+    const retainedTurns = new Set(runtime.turns.map((turn) => turn.turnId))
+    const history = new Map<string, ConversationApprovalHistoryRecord>()
+    for (const approval of durableApprovals) {
+      if (
+        approval.lifecycle === 'pending' ||
+        !retainedTurns.has(approval.record.turnId)
+      ) {
+        continue
+      }
+      if (approval.lifecycle === 'resolved') {
+        history.set(approval.record.approvalId, {
+          lifecycle: 'resolved',
+          approval: approval.record,
+        })
+        continue
+      }
+      if (approval.expiredAt === undefined) {
+        throw new Error('Expired durable Approval has no expiration time')
+      }
+      history.set(approval.record.approvalId, {
+        lifecycle: 'expired',
+        approval: approval.record,
+        expiredAt: approval.expiredAt,
+        reason: 'host_restart',
+      })
+    }
+    for (const approval of currentApprovals) {
+      if (
+        approval.status === 'resolved' &&
+        retainedTurns.has(approval.turnId)
+      ) {
+        history.set(approval.approvalId, {
+          lifecycle: 'resolved',
+          approval,
+        })
+      }
+    }
+    return [...history.values()].sort((left, right) =>
+      left.approval.requestedAt.localeCompare(right.approval.requestedAt),
+    )
   }
 
   async #ensureProviderConversation(
@@ -1066,13 +1615,13 @@ export class HostService {
 
   #recordDurableEvent(
     event: Exclude<HostEvent, { type: 'stream.reset' }>,
-  ): void {
+  ): AttentionTransition | undefined {
     if (
       this.#persistence === undefined ||
       this.#persistenceFailure !== undefined ||
       event.turnId === undefined
     ) {
-      return
+      return undefined
     }
     this.#dirtyTurns.set(event.turnId, event.conversationId)
     if (
@@ -1083,11 +1632,16 @@ export class HostService {
       event.type === 'turn.failed' ||
       event.type === 'turn.interrupted'
     ) {
-      this.#flushDurableTurn(event.conversationId, event.turnId)
+      const attention = this.#flushDurableTurn(
+        event.conversationId,
+        event.turnId,
+        isAttentionSourceEvent(event) ? event : undefined,
+      )
       this.#dirtyTurns.delete(event.turnId)
-      return
+      return attention
     }
     this.#schedulePersistenceFlush()
+    return undefined
   }
 
   #schedulePersistenceFlush(): void {
@@ -1128,7 +1682,11 @@ export class HostService {
     }
   }
 
-  #flushDurableTurn(conversationId: ConversationId, turnId: TurnId): void {
+  #flushDurableTurn(
+    conversationId: ConversationId,
+    turnId: TurnId,
+    attentionEvent?: AttentionSourceEvent,
+  ): AttentionTransition | undefined {
     const conversation = this.#conversations.get(conversationId)
     const turn = conversation?.turns.get(turnId)
     const runtime = this.#runtimeHistory.snapshotFor(conversationId)
@@ -1137,7 +1695,7 @@ export class HostService {
       turn === undefined ||
       runtime === undefined
     ) {
-      return
+      return undefined
     }
     if (turn.record.input === undefined) {
       throw new Error('A durable Turn requires canonical input')
@@ -1167,20 +1725,30 @@ export class HostService {
         this.#approvalRegistry.recordsForTurn(conversationId, turnId),
       ),
     }
+    let attention: AttentionTransition | undefined
     this.#writeDurable(() => {
       this.#persistence?.runInTransaction(() => {
         this.#persistence?.updateTurn(durableTurn)
         this.#persistence?.updateConversation(
           this.#durableConversation(conversation),
         )
+        if (attentionEvent !== undefined && this.#persistence !== undefined) {
+          attention = recordAttention(
+            this.#persistence,
+            attentionEvent,
+            conversation.record,
+          )
+        }
       })
     })
+    return attention
   }
 
   #durableConversation(conversation: ConversationState): DurableConversation {
     return {
       conversationId: conversation.record.conversationId,
       projectId: ProjectIdSchema.parse(conversation.record.projectId),
+      title: conversation.record.title ?? DEFAULT_CONVERSATION_TITLE,
       provider: conversation.record.provider,
       providerThreadId: conversation.providerThreadId,
       cwd: conversation.record.cwd,
@@ -1193,6 +1761,8 @@ export class HostService {
       status: conversation.record.status,
       createdAt: conversation.record.createdAt,
       updatedAt: conversation.record.updatedAt,
+      lastActivityAt:
+        conversation.record.lastActivityAt ?? conversation.record.updatedAt,
     }
   }
 
@@ -1214,6 +1784,20 @@ export class HostService {
     })
   }
 
+  #requireAttentionStore(): ConversationStore {
+    if (
+      this.#persistence === undefined ||
+      this.#persistenceFailure !== undefined
+    ) {
+      throw new HostServiceError(
+        'runtime_unavailable',
+        'Durable Attention index is unavailable',
+        503,
+      )
+    }
+    return this.#persistence
+  }
+
   #writeDurable(operation: () => void): void {
     if (this.#persistence === undefined) return
     try {
@@ -1222,6 +1806,14 @@ export class HostService {
       this.#handlePersistenceFailure(toError(error))
       throw runtimeUnavailableError('Conversation durability is unavailable')
     }
+  }
+
+  #writeDurableResult<T>(operation: () => T): T {
+    let result!: T
+    this.#writeDurable(() => {
+      result = operation()
+    })
+    return result
   }
 
   #handlePersistenceFailure(error: Error): void {
@@ -1236,14 +1828,6 @@ export class HostService {
       new Error('Conversation durability became unavailable', { cause: error }),
     )
     void this.#runtime.close().catch(() => undefined)
-  }
-
-  #requireConversation(conversationId: ConversationId): ConversationState {
-    const conversation = this.#conversations.get(conversationId)
-    if (conversation === undefined) {
-      throw new HostServiceError('not_found', 'Conversation was not found', 404)
-    }
-    return conversation
   }
 
   #requireTurn(conversation: ConversationState, turnId: TurnId): TurnState {
@@ -1314,6 +1898,9 @@ export class HostService {
       this.#unsubscribeApprovals()
       this.#unsubscribeFailures()
       this.#actions.clear()
+      this.#hydrations.clear()
+      this.#runtimeAccess.clear()
+      this.#runtimePins.clear()
       this.#pendingProviderEvents.length = 0
       this.#pendingProviderEventBytes = 0
     }
@@ -1364,6 +1951,7 @@ export class HostService {
 
   #runtimeAvailable(): boolean {
     return (
+      this.#runtime.available !== false &&
       this.#runtimeFailure === undefined &&
       this.#persistenceFailure === undefined &&
       this.#closePromise === undefined
@@ -1373,6 +1961,49 @@ export class HostService {
   #assertRuntimeAvailable(): void {
     if (!this.#runtimeAvailable()) throw runtimeUnavailableError()
   }
+}
+
+function shouldGenerateConversationTitle(
+  conversation: ConversationState,
+): boolean {
+  return (
+    conversation.record.title === undefined ||
+    (conversation.record.title === DEFAULT_CONVERSATION_TITLE &&
+      conversation.turns.size === 0)
+  )
+}
+
+function isAttentionSourceEvent(
+  event: Exclude<HostEvent, { type: 'stream.reset' }>,
+): event is AttentionSourceEvent {
+  return (
+    event.type === 'approval.requested' ||
+    event.type === 'approval.resolved' ||
+    event.type === 'turn.completed' ||
+    event.type === 'turn.failed'
+  )
+}
+
+function conversationSummary(record: ConversationRecord): ConversationSummary {
+  if (
+    record.projectId === undefined ||
+    record.title === undefined ||
+    record.lastActivityAt === undefined
+  ) {
+    throw new Error('Durable Conversation summary metadata is incomplete')
+  }
+  return ConversationSummarySchema.parse({
+    conversationId: record.conversationId,
+    projectId: record.projectId,
+    title: record.title,
+    provider: record.provider,
+    ...(record.model === undefined ? {} : { model: record.model }),
+    ...(record.reasoning === undefined ? {} : { reasoning: record.reasoning }),
+    status: record.status,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+    lastActivityAt: record.lastActivityAt,
+  })
 }
 
 function newConversationId(): ReturnType<typeof ConversationIdSchema.parse> {

@@ -237,6 +237,11 @@ export class ConversationRuntimeHistory {
     return state === undefined ? undefined : this.#snapshot(state)
   }
 
+  /** Releases only process-local presentation state; durable history is untouched. */
+  delete(conversationId: ConversationId): boolean {
+    return this.#conversations.delete(conversationId)
+  }
+
   retainedItemIds(
     conversationId: ConversationId,
     turnId: TurnId,

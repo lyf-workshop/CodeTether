@@ -7,21 +7,29 @@ import type { AddressInfo } from 'node:net'
 
 import {
   ApprovalIdSchema,
+  AttentionIdSchema,
+  AttentionListResponseSchema,
   BootstrapResponseSchema,
   ConversationIdSchema,
+  ConversationListResponseSchema,
   CreateConversationRequestSchema,
   CreateConversationResponseSchema,
   CreateProjectRequestSchema,
   CreateProjectResponseSchema,
   DeleteProjectRequestSchema,
   DeleteProjectResponseSchema,
+  GetConversationResponseSchema,
   GetProjectResponseSchema,
   HostSnapshotSchema,
   InterruptTurnRequestSchema,
   InterruptTurnResponseSchema,
+  ListAttentionQuerySchema,
   ResolveApprovalRequestSchema,
   ResolveApprovalResponseSchema,
+  ResolveAttentionRequestSchema,
+  ResolveAttentionResponseSchema,
   ListProjectsResponseSchema,
+  ListProjectConversationsQuerySchema,
   ProjectIdSchema,
   StartTurnRequestSchema,
   StartTurnResponseSchema,
@@ -140,7 +148,15 @@ export class LocalHttpServer {
         request.url ?? '/',
         this.#baseUrl ?? 'http://local',
       )
-      if (url.search !== '') {
+      const projectConversationsRoute = this.#http.matchPath(
+        url.pathname,
+        /^\/api\/v1\/projects\/([^/]+)\/conversations$/u,
+      )
+      const acceptsQuery =
+        request.method === 'GET' &&
+        (projectConversationsRoute !== undefined ||
+          url.pathname === '/api/v1/attention')
+      if (url.search !== '' && !acceptsQuery) {
         throw new HttpBoundaryError(
           'invalid_request',
           'Query parameters are not supported for this endpoint',
@@ -185,6 +201,19 @@ export class LocalHttpServer {
         )
         return
       }
+      if (request.method === 'GET' && url.pathname === '/api/v1/attention') {
+        const query = this.#http.parseValidatedQuery(
+          url.searchParams,
+          ListAttentionQuerySchema,
+        )
+        this.#http.writeJson(
+          response,
+          200,
+          AttentionListResponseSchema.parse(this.#service.listAttention(query)),
+          context.allowedOrigin,
+        )
+        return
+      }
       if (request.method === 'POST' && url.pathname === '/api/v1/projects') {
         const body = await this.#http.readValidatedBody(
           request,
@@ -196,6 +225,27 @@ export class LocalHttpServer {
           response,
           result.data.created ? 201 : 200,
           CreateProjectResponseSchema.parse(result),
+          context.allowedOrigin,
+        )
+        return
+      }
+
+      if (request.method === 'GET' && projectConversationsRoute !== undefined) {
+        const projectId = this.#http.parseRouteId(
+          ProjectIdSchema,
+          projectConversationsRoute[0],
+          'projectId',
+        )
+        const query = this.#http.parseValidatedQuery(
+          url.searchParams,
+          ListProjectConversationsQuerySchema,
+        )
+        this.#http.writeJson(
+          response,
+          200,
+          ConversationListResponseSchema.parse(
+            await this.#service.listProjectConversations(projectId, query),
+          ),
           context.allowedOrigin,
         )
         return
@@ -253,6 +303,27 @@ export class LocalHttpServer {
           response,
           201,
           CreateConversationResponseSchema.parse(result),
+          context.allowedOrigin,
+        )
+        return
+      }
+
+      const conversationRoute = this.#http.matchPath(
+        url.pathname,
+        /^\/api\/v1\/conversations\/([^/]+)$/u,
+      )
+      if (request.method === 'GET' && conversationRoute !== undefined) {
+        const conversationId = this.#http.parseRouteId(
+          ConversationIdSchema,
+          conversationRoute[0],
+          'conversationId',
+        )
+        this.#http.writeJson(
+          response,
+          200,
+          GetConversationResponseSchema.parse(
+            this.#service.getConversation(conversationId),
+          ),
           context.allowedOrigin,
         )
         return
@@ -337,6 +408,31 @@ export class LocalHttpServer {
           response,
           202,
           ResolveApprovalResponseSchema.parse(result),
+          context.allowedOrigin,
+        )
+        return
+      }
+
+      const attentionResolve = this.#http.matchPath(
+        url.pathname,
+        /^\/api\/v1\/attention\/([^/]+)\/resolve$/u,
+      )
+      if (request.method === 'POST' && attentionResolve !== undefined) {
+        const attentionId = this.#http.parseRouteId(
+          AttentionIdSchema,
+          attentionResolve[0],
+          'attentionId',
+        )
+        const body = await this.#http.readValidatedBody(
+          request,
+          ResolveAttentionRequestSchema,
+        )
+        context.actionId = body.actionId
+        const result = await this.#service.resolveAttention(attentionId, body)
+        this.#http.writeJson(
+          response,
+          200,
+          ResolveAttentionResponseSchema.parse(result),
           context.allowedOrigin,
         )
         return

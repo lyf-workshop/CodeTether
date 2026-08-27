@@ -23,9 +23,26 @@
     "src/components/conversation/conversation-controls.ts",
     "src/components/conversation/live-conversation-adapter.ts",
     "src/components/conversation/tool-presentation.ts",
+    "src/components/conversations/conversation-list-model.ts",
+    "src/components/inbox/inbox-actions.ts",
+    "src/components/inbox/inbox-model.ts",
+    "src/runtime/host/action-id.ts",
+    "src/runtime/host/attention-actions.ts",
+    "src/runtime/host/attention-query.ts",
     "src/runtime/host/conversation-projection.ts",
+    "src/runtime/host/conversation-detail-query.ts",
+    "src/runtime/host/conversation-index-sync.ts",
+    "src/runtime/host/conversation-list-query.ts",
+    "src/runtime/host/conversation-list-view-state.ts",
+    "src/runtime/host/conversation-detail-query.ts",
+    "src/runtime/host/conversation-list-query.ts",
+    "src/runtime/host/conversation-list-view-state.ts",
     "src/runtime/host/host-query.ts",
     "src/runtime/host/host-runtime.ts",
-    "src/runtime/host/live-conversation-actions.ts"
+    "src/runtime/host/live-conversation-actions.ts",
+    "src/runtime/host/new-conversation-actions.ts",
+    "src/runtime/host/project-actions.ts",
+    "src/runtime/host/project-query.ts",
+    "src/runtime/host/project-view-state.ts"
   ]
 }

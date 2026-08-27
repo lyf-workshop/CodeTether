@@ -3,12 +3,15 @@ import { dirname, isAbsolute, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
 import {
+  conversationListLimits,
   ConversationIdSchema,
+  ConversationSummarySchema,
   ProjectIdSchema,
   TimestampSchema,
   TurnIdSchema,
   TurnInputRecordSchema,
   type ConversationId,
+  type ConversationSummary,
   type ProjectId,
   type Timestamp,
   type TurnId,
@@ -17,6 +20,23 @@ import {
 
 import { normalizeTrustedProjectRoot } from '../project-path.js'
 
+import {
+  attentionFromRow,
+  parseAttentionId,
+  parseAttentionListLimit,
+  parseAttentionStatus,
+  parseAttentionType,
+  parseNewAttentionItem,
+  serializeAttentionPayload,
+  type AttentionRow,
+  type DurableAttentionItem,
+  type DurableAttentionResolveResult,
+  type DurableAttentionSummary,
+  type DurableAttentionUpsertResult,
+  type ListAttentionItemsOptions,
+  type NewDurableAttentionItem,
+  type SummarizeAttentionItemsOptions,
+} from './attention-records.js'
 import {
   resolveCodeTetherDatabasePath,
   type DataDirectoryOptions,
@@ -58,6 +78,7 @@ export interface DurableProject {
 export interface DurableConversation {
   readonly conversationId: ConversationId
   readonly projectId: ProjectId
+  readonly title: string
   readonly provider: 'codex'
   readonly providerThreadId?: string
   readonly cwd: string
@@ -66,6 +87,15 @@ export interface DurableConversation {
   readonly status: DurableConversationStatus
   readonly createdAt: Timestamp
   readonly updatedAt: Timestamp
+  readonly lastActivityAt: Timestamp
+}
+
+export type DurableConversationSummary = ConversationSummary
+
+export interface ListProjectConversationsOptions {
+  readonly provider?: 'codex'
+  readonly status?: ConversationSummary['status']
+  readonly limit?: number
 }
 
 export interface DurableTurnSnapshot {
@@ -210,12 +240,13 @@ export class ConversationStore {
     const value = parseConversation(conversation)
     this.#statement(
       `INSERT INTO conversations (
-        conversation_id, project_id, provider, provider_thread_id, cwd, model,
-        reasoning, status, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        conversation_id, project_id, title, provider, provider_thread_id, cwd,
+        model, reasoning, status, created_at, updated_at, last_activity_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       value.conversationId,
       value.projectId,
+      value.title,
       value.provider,
       value.providerThreadId ?? null,
       value.cwd,
@@ -224,6 +255,7 @@ export class ConversationStore {
       value.status,
       value.createdAt,
       value.updatedAt,
+      value.lastActivityAt,
     )
   }
 
@@ -231,11 +263,13 @@ export class ConversationStore {
     const value = parseConversation(conversation)
     const result = this.#statement(
       `UPDATE conversations SET
-        project_id = ?, provider = ?, provider_thread_id = ?, cwd = ?,
-        model = ?, reasoning = ?, status = ?, created_at = ?, updated_at = ?
+        project_id = ?, title = ?, provider = ?, provider_thread_id = ?,
+        cwd = ?, model = ?, reasoning = ?, status = ?, created_at = ?,
+        updated_at = ?, last_activity_at = ?
       WHERE conversation_id = ?`,
     ).run(
       value.projectId,
+      value.title,
       value.provider,
       value.providerThreadId ?? null,
       value.cwd,
@@ -244,6 +278,7 @@ export class ConversationStore {
       value.status,
       value.createdAt,
       value.updatedAt,
+      value.lastActivityAt,
       value.conversationId,
     )
     assertChanged(result.changes, 'Conversation', value.conversationId)
@@ -261,9 +296,268 @@ export class ConversationStore {
 
   listConversations(): DurableConversation[] {
     const rows = this.#statement(
-      'SELECT * FROM conversations ORDER BY updated_at DESC, conversation_id ASC',
+      'SELECT * FROM conversations ORDER BY last_activity_at DESC, conversation_id ASC',
     ).all() as unknown as ConversationRow[]
     return rows.map(conversationFromRow)
+  }
+
+  listProjectConversations(
+    projectId: ProjectId,
+    options: ListProjectConversationsOptions = {},
+  ): DurableConversationSummary[] {
+    const id = ProjectIdSchema.parse(projectId)
+    const limit = parseConversationListLimit(options.limit)
+    if (options.provider !== undefined && options.provider !== 'codex') {
+      throw new Error(`Unsupported Provider: ${String(options.provider)}`)
+    }
+    if (
+      options.status !== undefined &&
+      !isOneOf(options.status, durableConversationStatuses)
+    ) {
+      throw new Error(
+        `Unsupported durable Conversation status: ${String(options.status)}`,
+      )
+    }
+
+    const filters = ['project_id = ?', "status <> 'creating'"]
+    const parameters: Array<string | number> = [id]
+    if (options.provider !== undefined) {
+      filters.push('provider = ?')
+      parameters.push(options.provider)
+    }
+    if (options.status !== undefined) {
+      filters.push('status = ?')
+      parameters.push(options.status)
+    }
+    parameters.push(limit)
+
+    const rows = this.#statement(
+      `SELECT
+         conversation_id, project_id, title, provider, model, reasoning,
+         status, created_at, updated_at, last_activity_at
+       FROM conversations
+       WHERE ${filters.join(' AND ')}
+       ORDER BY last_activity_at DESC, conversation_id ASC
+       LIMIT ?`,
+    ).all(...parameters) as unknown as ConversationSummaryRow[]
+    return rows.map(conversationSummaryFromRow)
+  }
+
+  createAttentionItem(
+    attention: NewDurableAttentionItem,
+  ): DurableAttentionItem {
+    const value = parseNewAttentionItem(attention)
+    this.#statement(
+      `INSERT INTO attention_items (
+        attention_id, source_key, project_id, conversation_id, turn_id, type,
+        status, payload_json, created_at, updated_at, resolved_at
+      ) VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, NULL)`,
+    ).run(
+      value.attentionId,
+      value.sourceKey,
+      value.projectId,
+      value.conversationId,
+      value.turnId ?? null,
+      value.type,
+      serializeAttentionPayload(value.payload),
+      value.createdAt,
+      value.updatedAt,
+    )
+    return { ...value, status: 'open' }
+  }
+
+  upsertAttentionItem(
+    attention: NewDurableAttentionItem,
+  ): DurableAttentionUpsertResult {
+    const value = parseNewAttentionItem(attention)
+    const existing = this.getAttentionItemBySourceKey(value.sourceKey)
+    if (existing === undefined) {
+      return { item: this.createAttentionItem(value), created: true }
+    }
+    assertSameAttentionBinding(existing, value)
+    if (
+      existing.status !== 'open' ||
+      Date.parse(value.updatedAt) <= Date.parse(existing.updatedAt)
+    ) {
+      return { item: existing, created: false }
+    }
+    this.#statement(
+      `UPDATE attention_items SET payload_json = ?, updated_at = ?
+       WHERE attention_id = ? AND status = 'open'`,
+    ).run(
+      serializeAttentionPayload(value.payload),
+      value.updatedAt,
+      existing.attentionId,
+    )
+    return {
+      item: requireAttentionItem(
+        this.getAttentionItem(existing.attentionId),
+        existing.attentionId,
+      ),
+      created: false,
+    }
+  }
+
+  getAttentionItem(attentionId: string): DurableAttentionItem | undefined {
+    const id = parseAttentionId(attentionId)
+    const row = this.#statement(
+      'SELECT * FROM attention_items WHERE attention_id = ?',
+    ).get(id) as AttentionRow | undefined
+    return row === undefined ? undefined : attentionFromRow(row)
+  }
+
+  getAttentionItemBySourceKey(
+    sourceKey: string,
+  ): DurableAttentionItem | undefined {
+    const key = parseBoundedText(sourceKey, 'Attention source key', 512)
+    const row = this.#statement(
+      'SELECT * FROM attention_items WHERE source_key = ?',
+    ).get(key) as AttentionRow | undefined
+    return row === undefined ? undefined : attentionFromRow(row)
+  }
+
+  listAttentionItems(
+    options: ListAttentionItemsOptions = {},
+  ): DurableAttentionItem[] {
+    const limit = parseAttentionListLimit(options.limit)
+    const filters: string[] = []
+    const parameters: Array<string | number> = []
+    if (options.projectId !== undefined) {
+      filters.push('project_id = ?')
+      parameters.push(ProjectIdSchema.parse(options.projectId))
+    }
+    if (options.conversationId !== undefined) {
+      filters.push('conversation_id = ?')
+      parameters.push(ConversationIdSchema.parse(options.conversationId))
+    }
+    if (options.turnId !== undefined) {
+      filters.push('turn_id = ?')
+      parameters.push(TurnIdSchema.parse(options.turnId))
+    }
+    if (options.type !== undefined) {
+      filters.push('type = ?')
+      parameters.push(parseAttentionType(options.type))
+    }
+    if (options.status !== undefined) {
+      filters.push('status = ?')
+      parameters.push(parseAttentionStatus(options.status))
+    }
+    parameters.push(limit)
+    const where = filters.length === 0 ? '' : `WHERE ${filters.join(' AND ')}`
+    const rows = this.#statement(
+      `SELECT * FROM attention_items
+       ${where}
+       ORDER BY
+         CASE type
+           WHEN 'approval' THEN 0
+           WHEN 'failed' THEN 1
+           ELSE 2
+         END,
+         created_at DESC,
+         attention_id ASC
+       LIMIT ?`,
+    ).all(...parameters) as unknown as AttentionRow[]
+    return rows.map(attentionFromRow)
+  }
+
+  summarizeAttentionItems(
+    options: SummarizeAttentionItemsOptions = {},
+  ): DurableAttentionSummary {
+    const filters: string[] = []
+    const parameters: string[] = []
+    if (options.projectId !== undefined) {
+      filters.push('project_id = ?')
+      parameters.push(ProjectIdSchema.parse(options.projectId))
+    }
+    if (options.conversationId !== undefined) {
+      filters.push('conversation_id = ?')
+      parameters.push(ConversationIdSchema.parse(options.conversationId))
+    }
+    const where = filters.length === 0 ? '' : `WHERE ${filters.join(' AND ')}`
+    const row = this.#statement(
+      `SELECT
+         COUNT(*) AS total,
+         COALESCE(SUM(CASE WHEN status = 'open' THEN 1 ELSE 0 END), 0) AS open,
+         COALESCE(SUM(CASE WHEN status = 'resolved' THEN 1 ELSE 0 END), 0)
+           AS resolved,
+         COALESCE(SUM(CASE WHEN status = 'expired' THEN 1 ELSE 0 END), 0)
+           AS expired,
+         COALESCE(SUM(CASE WHEN status = 'open' AND type = 'approval'
+           THEN 1 ELSE 0 END), 0)
+           AS open_approval,
+         COALESCE(SUM(CASE WHEN status = 'open' AND type = 'completed_review'
+           THEN 1 ELSE 0 END), 0) AS open_completed_review,
+         COALESCE(SUM(CASE WHEN status = 'open' AND type = 'failed'
+           THEN 1 ELSE 0 END), 0)
+           AS open_failed
+       FROM attention_items
+       ${where}`,
+    ).get(...parameters) as unknown as AttentionSummaryRow
+    return {
+      total: row.total,
+      open: row.open,
+      resolved: row.resolved,
+      expired: row.expired,
+      openApproval: row.open_approval,
+      openCompletedReview: row.open_completed_review,
+      openFailed: row.open_failed,
+    }
+  }
+
+  resolveAttentionItem(
+    attentionId: string,
+    resolvedAt: Timestamp,
+    payloadPatch: Readonly<Record<string, unknown>> = {},
+  ): DurableAttentionResolveResult | undefined {
+    const existing = this.getAttentionItem(attentionId)
+    if (existing === undefined) return undefined
+    if (existing.status !== 'open') {
+      return { item: existing, changed: false }
+    }
+    const timestamp = TimestampSchema.parse(resolvedAt)
+    if (Date.parse(timestamp) < Date.parse(existing.createdAt)) {
+      throw new Error('Attention resolvedAt must not precede createdAt')
+    }
+    const payload = { ...existing.payload, ...payloadPatch }
+    const result = this.#statement(
+      `UPDATE attention_items SET
+         status = 'resolved', payload_json = ?, updated_at = ?, resolved_at = ?
+       WHERE attention_id = ? AND status = 'open'`,
+    ).run(
+      serializeAttentionPayload(payload),
+      timestamp,
+      timestamp,
+      existing.attentionId,
+    )
+    if (result.changes === 0 || result.changes === 0n) {
+      const current = requireAttentionItem(
+        this.getAttentionItem(existing.attentionId),
+        existing.attentionId,
+      )
+      return { item: current, changed: false }
+    }
+    return {
+      item: requireAttentionItem(
+        this.getAttentionItem(existing.attentionId),
+        existing.attentionId,
+      ),
+      changed: true,
+    }
+  }
+
+  expireOpenApprovalAttentionItems(expiredAt: Timestamp): number {
+    const timestamp = TimestampSchema.parse(expiredAt)
+    const result = this.#statement(
+      `UPDATE attention_items SET
+         status = 'expired',
+         payload_json = json_set(
+           payload_json, '$.expirationReason', 'host_restart'
+         ),
+         updated_at = ?,
+         resolved_at = ?
+       WHERE type = 'approval' AND status = 'open'`,
+    ).run(timestamp, timestamp)
+    return Number(result.changes)
   }
 
   deleteConversation(conversationId: ConversationId): boolean {
@@ -423,6 +717,7 @@ export class ConversationStore {
 interface ConversationRow {
   readonly conversation_id: string
   readonly project_id: string
+  readonly title: string
   readonly provider: string
   readonly provider_thread_id: string | null
   readonly cwd: string
@@ -431,6 +726,20 @@ interface ConversationRow {
   readonly status: string
   readonly created_at: string
   readonly updated_at: string
+  readonly last_activity_at: string
+}
+
+interface ConversationSummaryRow {
+  readonly conversation_id: string
+  readonly project_id: string
+  readonly title: string
+  readonly provider: string
+  readonly model: string | null
+  readonly reasoning: string | null
+  readonly status: string
+  readonly created_at: string
+  readonly updated_at: string
+  readonly last_activity_at: string
 }
 
 interface ProjectRow {
@@ -452,6 +761,16 @@ interface TurnRow {
   readonly completed_at: string | null
   readonly snapshot_version: number
   readonly snapshot_json: string
+}
+
+interface AttentionSummaryRow {
+  readonly total: number
+  readonly open: number
+  readonly resolved: number
+  readonly expired: number
+  readonly open_approval: number
+  readonly open_completed_review: number
+  readonly open_failed: number
 }
 
 function parseProject(value: DurableProject): DurableProject {
@@ -484,6 +803,7 @@ function parseConversation(value: DurableConversation): DurableConversation {
   return {
     conversationId: ConversationIdSchema.parse(value.conversationId),
     projectId: ProjectIdSchema.parse(value.projectId),
+    title: parseBoundedText(value.title, 'Conversation title', 240),
     provider: 'codex',
     ...(value.providerThreadId === undefined
       ? {}
@@ -496,6 +816,7 @@ function parseConversation(value: DurableConversation): DurableConversation {
     status: value.status,
     createdAt: TimestampSchema.parse(value.createdAt),
     updatedAt: TimestampSchema.parse(value.updatedAt),
+    lastActivityAt: TimestampSchema.parse(value.lastActivityAt),
   }
 }
 
@@ -544,6 +865,7 @@ function conversationFromRow(row: ConversationRow): DurableConversation {
   return parseConversation({
     conversationId: ConversationIdSchema.parse(row.conversation_id),
     projectId: ProjectIdSchema.parse(row.project_id),
+    title: row.title,
     provider: parseProvider(row.provider),
     ...(row.provider_thread_id === null
       ? {}
@@ -554,6 +876,24 @@ function conversationFromRow(row: ConversationRow): DurableConversation {
     status: parseConversationStatus(row.status),
     createdAt: TimestampSchema.parse(row.created_at),
     updatedAt: TimestampSchema.parse(row.updated_at),
+    lastActivityAt: TimestampSchema.parse(row.last_activity_at),
+  })
+}
+
+function conversationSummaryFromRow(
+  row: ConversationSummaryRow,
+): DurableConversationSummary {
+  return ConversationSummarySchema.parse({
+    conversationId: row.conversation_id,
+    projectId: row.project_id,
+    title: row.title,
+    provider: parseProvider(row.provider),
+    ...(row.model === null ? {} : { model: row.model }),
+    ...(row.reasoning === null ? {} : { reasoning: row.reasoning }),
+    status: parseConversationStatus(row.status),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    lastActivityAt: row.last_activity_at,
   })
 }
 
@@ -600,6 +940,32 @@ function assertChanged(
   if (changes === 0 || changes === 0n) {
     throw new Error(`${recordKind} ${recordId} does not exist`)
   }
+}
+
+function assertSameAttentionBinding(
+  existing: DurableAttentionItem,
+  candidate: NewDurableAttentionItem,
+): void {
+  if (
+    existing.projectId !== candidate.projectId ||
+    existing.conversationId !== candidate.conversationId ||
+    existing.turnId !== candidate.turnId ||
+    existing.type !== candidate.type
+  ) {
+    throw new Error(
+      `Attention source key ${candidate.sourceKey} is already bound to another source`,
+    )
+  }
+}
+
+function requireAttentionItem(
+  item: DurableAttentionItem | undefined,
+  attentionId: string,
+): DurableAttentionItem {
+  if (item === undefined) {
+    throw new Error(`Attention ${attentionId} does not exist`)
+  }
+  return item
 }
 
 function assertDatabaseIntegrity(database: DatabaseSync): void {
@@ -677,4 +1043,18 @@ function parseRootPathKey(value: string): string {
     throw new Error('Project root path key must not contain NUL')
   }
   return value
+}
+
+function parseConversationListLimit(value: number | undefined): number {
+  const limit = value ?? conversationListLimits.default
+  if (
+    !Number.isSafeInteger(limit) ||
+    limit <= 0 ||
+    limit > conversationListLimits.maximum
+  ) {
+    throw new Error(
+      `Conversation list limit must be an integer between 1 and ${String(conversationListLimits.maximum)}`,
+    )
+  }
+  return limit
 }

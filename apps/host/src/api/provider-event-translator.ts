@@ -48,9 +48,12 @@ export class ProviderEventTranslator {
     }
 
     const conversationId = this.#options.providerThreads.get(event.threadId)
-    if (conversationId === undefined) return false
+    // An event for a cold/evicted or unknown Provider Thread cannot acquire a
+    // public binding. Consume it as diagnostics instead of filling the short
+    // startTurn binding buffer; durable history remains authoritative.
+    if (conversationId === undefined) return true
     const conversation = this.#options.conversations.get(conversationId)
-    if (conversation === undefined) return false
+    if (conversation === undefined) return true
     const turnId = conversation.providerTurnIds.get(event.turnId)
     if (turnId === undefined) {
       // Provider events observed while startTurn is in flight must wait for the

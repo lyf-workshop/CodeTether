@@ -15,6 +15,7 @@ import {
 } from './ids.js'
 import {
   ApprovalRecordSchema,
+  AttentionItemSchema,
   ConversationRecordSchema,
   TurnRecordSchema,
 } from './records.js'
@@ -30,6 +31,8 @@ export const hostEventTypes = [
   'file.changed',
   'approval.requested',
   'approval.resolved',
+  'attention.created',
+  'attention.resolved',
   'turn.completed',
   'turn.failed',
   'turn.interrupted',
@@ -152,6 +155,30 @@ export type ApprovalResolvedPayload = z.infer<
   typeof ApprovalResolvedPayloadSchema
 >
 
+export const AttentionCreatedPayloadSchema = z
+  .object({
+    attention: AttentionItemSchema.refine(
+      (attention) => attention.status === 'open',
+      { message: 'attention.created requires an open Attention record' },
+    ),
+  })
+  .strict()
+export type AttentionCreatedPayload = z.infer<
+  typeof AttentionCreatedPayloadSchema
+>
+
+export const AttentionResolvedPayloadSchema = z
+  .object({
+    attention: AttentionItemSchema.refine(
+      (attention) => attention.status === 'resolved',
+      { message: 'attention.resolved requires a resolved Attention record' },
+    ),
+  })
+  .strict()
+export type AttentionResolvedPayload = z.infer<
+  typeof AttentionResolvedPayloadSchema
+>
+
 export const TurnCompletedPayloadSchema = z
   .object({
     finalMessage: z
@@ -211,6 +238,12 @@ const optionalItemIdentityShape = {
   turnId: TurnIdSchema,
   itemId: ItemIdSchema.optional(),
 }
+const attentionIdentityShape = {
+  ...eventBaseShape,
+  conversationId: ConversationIdSchema,
+  turnId: TurnIdSchema.optional(),
+  itemId: z.never().optional(),
+}
 const resetIdentityShape = {
   ...eventBaseShape,
   conversationId: z.null(),
@@ -268,6 +301,16 @@ const approvalResolvedEventSchema = eventSchema(
   'approval.resolved',
   ApprovalResolvedPayloadSchema,
 )
+const attentionCreatedEventSchema = eventSchema(
+  attentionIdentityShape,
+  'attention.created',
+  AttentionCreatedPayloadSchema,
+)
+const attentionResolvedEventSchema = eventSchema(
+  attentionIdentityShape,
+  'attention.resolved',
+  AttentionResolvedPayloadSchema,
+)
 const turnCompletedEventSchema = eventSchema(
   turnIdentityShape,
   'turn.completed',
@@ -300,6 +343,8 @@ const hostEventOptions = [
   fileChangedEventSchema,
   approvalRequestedEventSchema,
   approvalResolvedEventSchema,
+  attentionCreatedEventSchema,
+  attentionResolvedEventSchema,
   turnCompletedEventSchema,
   turnFailedEventSchema,
   turnInterruptedEventSchema,
@@ -331,6 +376,8 @@ const sequencedHostEventEnvelopeOptions = [
   fileChangedEventSchema.extend(sequencingShape),
   approvalRequestedEventSchema.extend(sequencingShape),
   approvalResolvedEventSchema.extend(sequencingShape),
+  attentionCreatedEventSchema.extend(sequencingShape),
+  attentionResolvedEventSchema.extend(sequencingShape),
   turnCompletedEventSchema.extend(sequencingShape),
   turnFailedEventSchema.extend(sequencingShape),
   turnInterruptedEventSchema.extend(sequencingShape),
@@ -402,6 +449,18 @@ function validatePayloadIdentity(
     }
     if (approval.itemId !== event.itemId) {
       addIdentityIssue(context, ['payload', 'approval', 'itemId'])
+    }
+  }
+  if (
+    event.type === 'attention.created' ||
+    event.type === 'attention.resolved'
+  ) {
+    const attention = event.payload.attention
+    if (attention.conversationId !== event.conversationId) {
+      addIdentityIssue(context, ['payload', 'attention', 'conversationId'])
+    }
+    if (attention.turnId !== event.turnId) {
+      addIdentityIssue(context, ['payload', 'attention', 'turnId'])
     }
   }
 }

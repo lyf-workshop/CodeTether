@@ -44,6 +44,11 @@ test('bootstraps and snapshots through QueryClient before opening one stream', a
   assert.equal(client.snapshotCalls, 1)
   assert.deepEqual(client.connectCalls, [{ lastEventId: `${epochA}:0` }])
   assert.equal(queryClient.getQueryData(hostQueryKeys.bootstrap)?.epoch, epochA)
+  queryClient.removeQueries({
+    queryKey: hostQueryKeys.bootstrap,
+    exact: true,
+  })
+  assert.equal(runtime.bootstrap?.epoch, epochA)
   assert.equal(queryClient.getQueryData(hostQueryKeys.snapshot)?.currentSeq, 0)
   assert.equal(readHostProjection(queryClient)?.cursor.seq, 0)
   assert.deepEqual(runtime.stats, {

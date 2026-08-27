@@ -406,7 +406,7 @@ export function ConversationTimeline({
               role="status"
               className="rounded-sm bg-surface-muted/25 px-4 py-8 text-center text-sm text-text-muted"
             >
-              暂无会话活动。
+              开始新会话
             </p>
           )}
         </div>

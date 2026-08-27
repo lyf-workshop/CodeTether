@@ -108,7 +108,7 @@ test('migration 002 backfills shared Projects and preserves v1 Conversation and 
     createV1Database(databasePath, { conversations, turns })
 
     const store = ConversationStore.open({ databasePath })
-    assert.equal(store.schemaVersion, 2)
+    assert.equal(store.schemaVersion, currentSchemaVersion)
     const projects = store.listProjects()
     assert.equal(projects.length, 2)
     assert.ok(
@@ -527,6 +527,7 @@ function conversation(overrides = {}) {
   return {
     conversationId,
     projectId,
+    title: '新会话',
     provider: 'codex',
     providerThreadId: 'provider-thread-persistence',
     cwd: workspaceRoot,
@@ -535,6 +536,7 @@ function conversation(overrides = {}) {
     status: 'idle',
     createdAt: timestamp,
     updatedAt: timestamp,
+    lastActivityAt: timestamp,
     ...overrides,
   }
 }

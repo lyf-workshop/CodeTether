@@ -1,0 +1,43 @@
+import type { HostEventEnvelope } from '@codetether/protocol'
+import type { QueryClient } from '@tanstack/react-query'
+
+import { conversationDetailQueryKeys } from './conversation-detail-query.js'
+import { conversationListQueryKeys } from './conversation-list-query.js'
+
+const conversationIndexRefreshEvents = new Set<HostEventEnvelope['type']>([
+  'conversation.started',
+  'turn.started',
+  'approval.requested',
+  'approval.resolved',
+  'turn.completed',
+  'turn.failed',
+  'turn.interrupted',
+])
+
+/**
+ * Keeps durable product summaries fresh without feeding provider-frequency
+ * message or Tool output through React Query's network path.
+ */
+export function shouldRefreshConversationIndex(
+  eventType: HostEventEnvelope['type'],
+): boolean {
+  return conversationIndexRefreshEvents.has(eventType)
+}
+
+export function invalidateConversationProductQueries(
+  queryClient: QueryClient,
+  event: Pick<HostEventEnvelope, 'conversationId' | 'type'>,
+): void {
+  if (!shouldRefreshConversationIndex(event.type)) return
+
+  void queryClient.invalidateQueries({
+    queryKey: conversationListQueryKeys.all,
+  })
+
+  if (event.conversationId !== null) {
+    void queryClient.invalidateQueries({
+      queryKey: conversationDetailQueryKeys.detail(event.conversationId),
+      exact: true,
+    })
+  }
+}

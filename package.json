@@ -28,7 +28,9 @@
     "host:serve": "pnpm -r --workspace-concurrency=1 --filter @codetether/host... build && node apps/host/dist/serve.js",
     "host:observe": "pnpm -r --workspace-concurrency=1 --filter @codetether/host... build && node apps/host/dist/live-read.js",
     "host:control": "pnpm -r --workspace-concurrency=1 --filter @codetether/host... build && node apps/host/dist/control.js",
-    "host:integration": "pnpm -r --workspace-concurrency=1 --filter @codetether/host... build && node apps/host/dist/integration.js"
+    "host:integration": "pnpm -r --workspace-concurrency=1 --filter @codetether/host... build && node apps/host/dist/integration.js",
+    "host:conversation-hydration": "pnpm -r --workspace-concurrency=1 --filter @codetether/host... build && node apps/host/dist/conversation-hydration-integration.js",
+    "host:attention-integration": "pnpm -r --workspace-concurrency=1 --filter @codetether/host... build && node apps/host/dist/attention-integration.js"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

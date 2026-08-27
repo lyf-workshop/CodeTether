@@ -96,7 +96,7 @@ Dense code review, project setup, and complex configuration remain desktop-first
 
 ### Projects
 
-Projects organize local codebases and provide the stable authorization context for Conversations. The local Host now owns durable Project identity and root authorization; a Conversation references one Project and may use a working directory contained within its canonical root. Filesystem availability can change independently of the durable record, so an unavailable Project keeps its history but cannot start or control Agent work until its saved root is valid again. The Projects product surface and multiple-Machine location management remain future work.
+Projects organize local codebases and provide the stable authorization context for Conversations. The local Host owns durable Project identity, canonical root authorization, availability, and mutation results; the browser renders those records and never becomes a competing Project authority. The desktop Projects surface lists real registrations, adds an absolute local path with an optional display name, shows the real Project overview and unavailable state, and removes only an unreferenced CodeTether registration after explicit confirmation. A Conversation references one Project and may use a working directory contained within its canonical root. Filesystem availability can change independently of the durable record, so an unavailable Project keeps its history but cannot start or control Agent work until its saved root is valid again. Native folder selection, discovery/scanning, rename/relocate, live Project Conversations, and multiple-Machine location management remain future work.
 
 ### Conversations
 
@@ -113,6 +113,8 @@ Machines show where projects and agents can run, whether a host is reachable, an
 ### Inbox
 
 Inbox is an action-oriented queue for items that need the user's attention, such as approvals, questions, failures, and important completions. It is not a general activity log.
+
+The current durable backend supports only semantics the Runtime can identify structurally: Approval, completed review, and failed Turn. Question / needs-reply remains a future Inbox capability until an Agent exposes a reliable structured question signal; punctuation, text heuristics, and extra LLM classification must not invent it.
 
 ### Activity
 
@@ -177,4 +179,20 @@ Phase 3A does not make all product data durable and does not add a general histo
 
 Protocol v1 now supports listing, reading, creating, and deleting Project registrations. New Conversations use `projectId`. The deprecated `cwd` compatibility form can only resolve an already registered, available Project and cannot expand trust. Deleting a Project removes only the registration, never files or Conversation history, and is rejected while a Conversation references it. Missing or moved Project roots remain visible as unavailable so durable history stays readable; controls fail with `project_unavailable`.
 
-`/conversations/demo`, Inbox, Conversations, and the Projects page continue to use Mock data. Phase 3B.2 is not authorized. There is no Tauri functionality, remote access, authentication, live Project/Conversation listing, multi-Machine Project location model, or non-Codex provider integration. See [`ROADMAP.md`](ROADMAP.md) for phase gates and verified constraints.
+**Phase 3B.2 — Real Projects UI** is implemented and validated. `/projects` lists Host-owned Project records and distinguishes loading, empty, and Host-unavailable states. `/projects/:projectId` reads the Project independently and shows only its real name, root path, availability, and timestamps. The add dialog uses manual absolute-path entry because no native shell exists; Host validation remains authoritative. Duplicate canonical roots open the existing Project, unavailable roots remain inspectable, and removal never touches the filesystem or bypasses `project_has_conversations`.
+
+**Phase 3C.1 — Durable Conversation Index & Title** is implemented and validated. Every Conversation now owns a durable deterministic title. It starts as `新会话`; the first canonical text input replaces that default with a locally generated, Unicode-safe title and later Turns do not rewrite it. SQLite is the source of truth for the Project-scoped Conversation history index, independently of the bounded Runtime Snapshot.
+
+Protocol v1 now exposes a bounded `GET /api/v1/projects/:projectId/conversations` history read with canonical status and last-activity ordering. The public summary omits private provider Thread identity and workspace routing metadata. Project history remains readable while its root is unavailable, and Host restart preserves title, status, Project ownership, and ordering.
+
+**Phase 3C.1.1 — Durable Conversation Access & Lazy Hydration** is implemented and validated. Any Conversation returned by the durable index can be read from SQLite independently of Runtime admission and Codex availability. Control hydrates only the bounded recent working state and lazily resumes the saved provider Thread; safe idle-LRU eviction keeps the Runtime working set bounded.
+
+**Phase 3C.2 — Real Conversations Experience** is implemented and validated. `/projects/:projectId/conversations` presents the real durable Project history, `/conversations/:conversationId` uses the same frozen Detail for hot or cold normalized state, and the Rail reads the owning Project's real index. Current Project context is route-derived, and Project Detail can open the real history or the minimal Codex-only New Conversation flow. The Host remains the source of truth for User messages, title, status, activity, workspace availability, hydration, and provider resume.
+
+The real list shows only supported providers and known metadata. It performs local title/provider search over at most the latest 100 summaries and has no archive, rename, delete, or older-history pagination UI. `/conversations/demo` remains a development-only visual fixture. There is no Project discovery/scanning, native folder picker, rename/relocate, Tauri functionality, remote access, authentication, multi-Machine Project location model, or non-Codex provider integration. See [`ROADMAP.md`](ROADMAP.md) for phase gates and verified constraints.
+
+**Phase 3D.1 — Durable Attention Model** is implemented and validated. Attention is not a new core product entity: it is the durable, user-facing actionable/review state produced by a Project Conversation. The Host creates exact Approval Attention from `approval.requested`, completed-review Attention from `turn.completed`, and failed Attention only from `turn.failed`. Tool failure and interruption do not imply failed work.
+
+Approval Attention resolves only when the bound provider Approval is actually accepted or declined. Completed-review and failed items require an explicit review/acknowledgement mutation; reading or preloading a Conversation does not resolve them, and acknowledgement never changes the underlying Turn outcome. Host restart preserves review/failure work while expiring open Approval Attention because its provider request handle is no longer live.
+
+**Phase 3D.2 — Real Inbox UI** is implemented and validated. `/inbox` is the global open Attention queue and uses Host summary counts, Host priority ordering, and only the three structurally supported types. Approval actions call the exact bound Approval endpoint; viewing completed work resolves review before navigation, while opening a failed Conversation does not acknowledge it. The Sidebar badge uses `summary.totalOpen`, and `attention.created` / `attention.resolved` keep browser clients synchronized. Read/unread, Activity, Notifications, and structured questions remain unimplemented.

@@ -14,6 +14,7 @@ const conversationId = 'conv_demo01'
 const projectId = 'proj_demo01'
 const turnId = 'turn_demo01'
 const approvalId = 'approval_demo01'
+const attentionId = 'attn_demo01'
 
 const capabilities = {
   codex: true,
@@ -43,6 +44,19 @@ const project = {
   updatedAt: timestamp,
 }
 
+const conversationSummary = {
+  conversationId,
+  projectId,
+  title: 'Inspect the workspace',
+  provider: 'codex',
+  model: 'gpt-5',
+  reasoning: 'high',
+  status: 'completed',
+  createdAt: timestamp,
+  updatedAt: timestamp,
+  lastActivityAt: timestamp,
+}
+
 const turn = {
   turnId,
   conversationId,
@@ -60,6 +74,71 @@ const approval = {
   decision: 'accept',
   requestedAt: timestamp,
   resolvedAt: timestamp,
+}
+
+const completedTurn = {
+  turnId,
+  conversationId,
+  status: 'completed',
+  input: {
+    type: 'text',
+    text: 'Inspect the workspace.',
+    timestamp,
+  },
+  startedAt: timestamp,
+  completedAt: timestamp,
+}
+
+const conversationDetail = {
+  protocolVersion: 1,
+  conversation: conversationSummary,
+  runtime: {
+    conversationId,
+    turns: [completedTurn],
+    messages: [],
+    tools: [],
+    changes: [],
+    terminal: { text: '', truncated: false },
+    history: {
+      evictedTurns: 0,
+      evictedMessages: 0,
+      evictedTools: 0,
+      evictedChanges: 0,
+      truncated: false,
+    },
+  },
+  history: {
+    hasOlderHistory: false,
+    retainedTurnCount: 1,
+    totalTurnCount: 1,
+  },
+  pendingApprovals: [],
+  approvalHistory: [],
+}
+
+const openAttention = {
+  attentionId,
+  projectId,
+  conversationId,
+  turnId,
+  type: 'completed_review',
+  status: 'open',
+  createdAt: timestamp,
+  updatedAt: timestamp,
+  payload: { conversationTitle: 'Inspect the workspace' },
+}
+
+const resolvedAttention = {
+  ...openAttention,
+  status: 'resolved',
+  resolvedAt: timestamp,
+}
+
+const attentionSummary = {
+  totalOpen: 1,
+  approvalOpen: 0,
+  completedReviewOpen: 1,
+  failedOpen: 0,
 }
 
 function jsonResponse(body, init = {}) {
@@ -267,6 +346,295 @@ test('rejects Project responses whose route identity does not match', async () =
   })
   await assert.rejects(
     deleteClient.deleteProject(projectId, { actionId: 'act_delete01' }),
+    CodeTetherProtocolError,
+  )
+})
+
+test('lists bounded Project Conversations with typed filters', async () => {
+  const calls = []
+  const client = new CodeTetherClient({
+    baseUrl: 'http://host.test',
+    fetch: async (input, init) => {
+      calls.push({ url: String(input), init })
+      return jsonResponse({
+        protocolVersion: 1,
+        conversations: [conversationSummary],
+      })
+    },
+  })
+
+  const response = await client.listProjectConversations(projectId, {
+    provider: 'codex',
+    status: 'completed',
+    limit: 25,
+  })
+
+  assert.deepEqual(response.conversations, [conversationSummary])
+  assert.equal(calls.length, 1)
+  const request = new URL(calls[0].url)
+  assert.equal(request.pathname, `/api/v1/projects/${projectId}/conversations`)
+  assert.deepEqual(Object.fromEntries(request.searchParams), {
+    limit: '25',
+    provider: 'codex',
+    status: 'completed',
+  })
+  assert.equal(calls[0].init.method, 'GET')
+})
+
+test('uses the default Conversation list bound and rejects invalid options', async () => {
+  let requestedUrl
+  const client = new CodeTetherClient({
+    baseUrl: 'http://host.test',
+    fetch: async (input) => {
+      requestedUrl = String(input)
+      return jsonResponse({ protocolVersion: 1, conversations: [] })
+    },
+  })
+
+  await client.listProjectConversations(projectId)
+  assert.equal(new URL(requestedUrl).searchParams.get('limit'), '50')
+  await assert.rejects(
+    client.listProjectConversations(projectId, { limit: 101 }),
+    CodeTetherProtocolError,
+  )
+})
+
+test('rejects a Project Conversation list containing another Project', async () => {
+  const client = new CodeTetherClient({
+    baseUrl: 'http://host.test',
+    fetch: async () =>
+      jsonResponse({
+        protocolVersion: 1,
+        conversations: [{ ...conversationSummary, projectId: 'proj_other01' }],
+      }),
+  })
+
+  await assert.rejects(
+    client.listProjectConversations(projectId),
+    CodeTetherProtocolError,
+  )
+})
+
+test('lists Attention with bounded filters and forwards AbortSignal', async () => {
+  const calls = []
+  const controller = new AbortController()
+  const client = new CodeTetherClient({
+    baseUrl: 'http://host.test',
+    fetch: async (input, init) => {
+      calls.push({ url: String(input), init })
+      return jsonResponse({
+        protocolVersion: 1,
+        items: [openAttention],
+        summary: attentionSummary,
+      })
+    },
+  })
+
+  const response = await client.listAttention({
+    projectId,
+    type: 'completed_review',
+    status: 'open',
+    limit: 25,
+    signal: controller.signal,
+  })
+
+  assert.deepEqual(response.items, [openAttention])
+  const request = new URL(calls[0].url)
+  assert.equal(request.pathname, '/api/v1/attention')
+  assert.deepEqual(Object.fromEntries(request.searchParams), {
+    status: 'open',
+    limit: '25',
+    projectId,
+    type: 'completed_review',
+  })
+  assert.equal(calls[0].init.method, 'GET')
+  assert.equal(calls[0].init.signal, controller.signal)
+})
+
+test('uses default Attention filters and rejects invalid or cross-Project data', async () => {
+  let requestedUrl
+  const defaultClient = new CodeTetherClient({
+    baseUrl: 'http://host.test',
+    fetch: async (input) => {
+      requestedUrl = String(input)
+      return jsonResponse({
+        protocolVersion: 1,
+        items: [],
+        summary: {
+          totalOpen: 0,
+          approvalOpen: 0,
+          completedReviewOpen: 0,
+          failedOpen: 0,
+        },
+      })
+    },
+  })
+  await defaultClient.listAttention()
+  assert.deepEqual(Object.fromEntries(new URL(requestedUrl).searchParams), {
+    status: 'open',
+    limit: '50',
+  })
+  await assert.rejects(
+    defaultClient.listAttention({ limit: 101 }),
+    CodeTetherProtocolError,
+  )
+
+  const crossProjectClient = new CodeTetherClient({
+    baseUrl: 'http://host.test',
+    fetch: async () =>
+      jsonResponse({
+        protocolVersion: 1,
+        items: [{ ...openAttention, projectId: 'proj_other01' }],
+        summary: attentionSummary,
+      }),
+  })
+  await assert.rejects(
+    crossProjectClient.listAttention({ projectId }),
+    CodeTetherProtocolError,
+  )
+})
+
+test('resolves non-Approval Attention with route identity and idempotency', async () => {
+  const calls = []
+  const controller = new AbortController()
+  const client = new CodeTetherClient({
+    baseUrl: 'http://host.test',
+    fetch: async (input, init) => {
+      calls.push({ url: String(input), init })
+      return jsonResponse({
+        protocolVersion: 1,
+        actionId: 'act_review01',
+        status: 'completed',
+        data: { attention: resolvedAttention },
+      })
+    },
+  })
+
+  const response = await client.resolveAttention(attentionId, 'act_review01', {
+    signal: controller.signal,
+  })
+
+  assert.deepEqual(response.data.attention, resolvedAttention)
+  assert.equal(
+    new URL(calls[0].url).pathname,
+    `/api/v1/attention/${attentionId}/resolve`,
+  )
+  assert.equal(calls[0].init.method, 'POST')
+  assert.equal(calls[0].init.signal, controller.signal)
+  assert.deepEqual(JSON.parse(calls[0].init.body), {
+    actionId: 'act_review01',
+  })
+})
+
+test('rejects mismatched or Approval responses from generic Attention resolution', async () => {
+  const mismatchClient = new CodeTetherClient({
+    baseUrl: 'http://host.test',
+    fetch: async () =>
+      jsonResponse({
+        protocolVersion: 1,
+        actionId: 'act_review01',
+        status: 'completed',
+        data: {
+          attention: {
+            ...resolvedAttention,
+            attentionId: 'attn_other01',
+          },
+        },
+      }),
+  })
+  await assert.rejects(
+    mismatchClient.resolveAttention(attentionId, 'act_review01'),
+    CodeTetherProtocolError,
+  )
+
+  const approvalClient = new CodeTetherClient({
+    baseUrl: 'http://host.test',
+    fetch: async () =>
+      jsonResponse({
+        protocolVersion: 1,
+        actionId: 'act_review01',
+        status: 'completed',
+        data: {
+          attention: {
+            ...resolvedAttention,
+            type: 'approval',
+            payload: {
+              approvalId,
+              kind: 'command',
+              actionTitle: '运行命令',
+              decision: 'accept',
+            },
+          },
+        },
+      }),
+  })
+  await assert.rejects(
+    approvalClient.resolveAttention(attentionId, 'act_review01'),
+    CodeTetherProtocolError,
+  )
+})
+
+test('gets one durable Conversation detail and forwards AbortSignal', async () => {
+  const calls = []
+  const controller = new AbortController()
+  const client = new CodeTetherClient({
+    baseUrl: 'http://host.test',
+    fetch: async (input, init) => {
+      calls.push({ url: String(input), init })
+      return jsonResponse(conversationDetail)
+    },
+  })
+
+  const response = await client.getConversation(conversationId, {
+    signal: controller.signal,
+  })
+
+  assert.deepEqual(response, conversationDetail)
+  assert.equal(calls.length, 1)
+  assert.equal(
+    new URL(calls[0].url).pathname,
+    `/api/v1/conversations/${conversationId}`,
+  )
+  assert.equal(calls[0].init.method, 'GET')
+  assert.equal(calls[0].init.signal, controller.signal)
+})
+
+test('rejects a durable Conversation detail for another route identity', async () => {
+  const client = new CodeTetherClient({
+    baseUrl: 'http://host.test',
+    fetch: async () =>
+      jsonResponse({
+        ...conversationDetail,
+        conversation: {
+          ...conversationDetail.conversation,
+          conversationId: 'conv_other01',
+        },
+        runtime: {
+          ...conversationDetail.runtime,
+          conversationId: 'conv_other01',
+          turns: conversationDetail.runtime.turns.map((entry) => ({
+            ...entry,
+            conversationId: 'conv_other01',
+          })),
+        },
+      }),
+  })
+
+  await assert.rejects(
+    client.getConversation(conversationId),
+    CodeTetherProtocolError,
+  )
+})
+
+test('strictly rejects private fields in durable Conversation detail', async () => {
+  const client = new CodeTetherClient({
+    baseUrl: 'http://host.test',
+    fetch: async () =>
+      jsonResponse({ ...conversationDetail, providerThreadId: 'private' }),
+  })
+
+  await assert.rejects(
+    client.getConversation(conversationId),
     CodeTetherProtocolError,
   )
 })

@@ -1,8 +1,11 @@
 import type { ExecutionStatus } from '@codetether/ui'
-import type { HostCapabilities } from '@codetether/protocol'
+import type {
+  ConversationSummary,
+  HostCapabilities,
+  ProjectAvailability,
+} from '@codetether/protocol'
 
 import type {
-  ConversationProjection,
   ConversationReadModel,
   ConversationTurnReadModel,
   FileChangeReadModel,
@@ -46,36 +49,51 @@ type OrderedActivity =
 
 export function createLiveConversationDetailSource(
   model: ConversationReadModel,
-  projection: ConversationProjection,
+  summaries: readonly ConversationSummary[],
   connectionState: HostConnectionState,
   hostCapabilities?: HostCapabilities,
+  projectAvailability: ProjectAvailability = 'available',
+  projectRootPath?: string,
 ): ConversationDetailSourceViewModel {
+  const controlConnectionState =
+    projectAvailability === 'available' ? connectionState : 'unavailable'
   return {
     conversation: createLiveConversationViewModel(
       model,
       hostCapabilities,
-      connectionState,
+      controlConnectionState,
+      projectRootPath,
     ),
-    rail: {
-      groups: [
-        {
-          agent: 'codex',
-          conversations: Object.values(projection.conversations)
-            .sort((left, right) =>
-              right.updatedAt.localeCompare(left.updatedAt),
-            )
-            .map((conversation) => ({
-              id: conversation.id,
-              title: 'Codex 实时会话',
-              status: conversation.status,
-              lastActivity: formatActivityTime(conversation.updatedAt),
-              machine: '本地电脑',
-            })),
-        },
-      ],
-      archivedCount: 0,
-    },
-    connectionIndicator: connectionIndicator(connectionState),
+    rail: createLiveConversationRailViewModel(summaries, model),
+    connectionIndicator:
+      projectAvailability === 'available'
+        ? connectionIndicator(connectionState)
+        : { state: 'unavailable', label: '项目不可用' },
+  }
+}
+
+export function createLiveConversationRailViewModel(
+  summaries: readonly ConversationSummary[],
+  current: ConversationReadModel,
+): ConversationDetailSourceViewModel['rail'] {
+  return {
+    groups:
+      summaries.length === 0
+        ? []
+        : [
+            {
+              agent: 'codex',
+              conversations: summaries.map((summary) => {
+                const selected = summary.conversationId === current.id
+                return {
+                  id: summary.conversationId,
+                  title: selected ? current.title : summary.title,
+                  status: selected ? current.status : summary.status,
+                  lastActivity: formatActivityTime(summary.lastActivityAt),
+                }
+              }),
+            },
+          ],
   }
 }
 
@@ -83,9 +101,11 @@ export function createLiveConversationViewModel(
   model: ConversationReadModel,
   hostCapabilities?: HostCapabilities,
   connectionState: HostConnectionState = 'unavailable',
+  projectRootPath?: string,
 ): ConversationViewModel {
+  const presentationRoot = model.cwd ?? projectRootPath
   const files = model.changes.map((change) =>
-    projectFileChange(change, model.cwd),
+    projectFileChange(change, presentationRoot),
   )
   const totals = files.reduce(
     (summary, file) => ({
@@ -100,12 +120,12 @@ export function createLiveConversationViewModel(
     title: approvalTitle(approval.kind),
     summary: approval.summary,
     requestedAt: formatActivityTime(approval.requestedAt),
-    context: model.cwd,
+    ...(presentationRoot === undefined ? {} : { context: presentationRoot }),
   }))
 
   return {
     id: model.id,
-    title: 'Codex 实时会话',
+    title: model.title,
     status: model.status,
     agent: model.agent,
     model: model.model ?? '默认模型',
@@ -323,7 +343,7 @@ function projectTurnTimeline(
 
 function projectFileChange(
   change: FileChangeReadModel,
-  cwd: string,
+  cwd: string | undefined,
 ): ConversationFileChangeViewModel {
   const path = workspaceRelativePath(change.path, cwd)
   return {
@@ -337,8 +357,9 @@ function projectFileChange(
   }
 }
 
-function workspaceRelativePath(path: string, cwd: string): string {
+function workspaceRelativePath(path: string, cwd: string | undefined): string {
   const normalizedPath = path.replace(/\\/gu, '/').replace(/^\.\//u, '')
+  if (cwd === undefined) return normalizedPath
   const normalizedCwd = cwd.replace(/\\/gu, '/').replace(/\/+$/u, '')
   const caseInsensitive = /^[A-Za-z]:\//u.test(normalizedPath)
   const comparablePath = caseInsensitive

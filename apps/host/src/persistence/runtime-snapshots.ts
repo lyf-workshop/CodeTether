@@ -1,6 +1,7 @@
 import {
   ApprovalRecordSchema,
   ConversationFileChangeRecordSchema,
+  conversationRuntimeWireLimits,
   ConversationMessageRecordSchema,
   ConversationRecordSchema,
   ConversationRuntimeSnapshotSchema,
@@ -9,6 +10,7 @@ import {
   TimestampSchema,
   TurnRecordSchema,
   type ApprovalRecord,
+  type ConversationId,
   type ConversationRecord,
   type ConversationRuntimeSnapshot,
   type Timestamp,
@@ -51,6 +53,25 @@ export interface RestoredDurableConversation {
     readonly providerTurnId: string
   }>
   readonly expiredApprovals: number
+}
+
+export const DURABLE_CONVERSATION_DETAIL_DEFAULT_TURNS = 20
+export const DURABLE_CONVERSATION_DETAIL_DEFAULT_ENTRIES = 512
+
+export interface DurableConversationDetailOptions {
+  readonly maxTurns?: number
+  readonly maxEntries?: number
+}
+
+export interface DurableConversationDetail {
+  readonly record: ConversationRecord
+  readonly runtime: ConversationRuntimeSnapshot
+  readonly approvals: readonly DurableApprovalHistoryRecord[]
+  readonly history: {
+    readonly totalTurns: number
+    readonly retainedTurns: number
+    readonly hasOlder: boolean
+  }
 }
 
 export interface RestoreDurableOptions {
@@ -166,6 +187,7 @@ export function reconcileHostRestart(
 ): void {
   const now = TimestampSchema.parse(nowValue)
   store.runInTransaction(() => {
+    store.expireOpenApprovalAttentionItems(now)
     const affectedConversations = new Set<string>()
     for (const durable of store.listIncompleteTurns()) {
       const presentation = parseSnapshot(durable)
@@ -226,6 +248,7 @@ export function reconcileHostRestart(
           ...conversation,
           status: 'failed',
           updatedAt: now,
+          lastActivityAt: now,
         })
         continue
       }
@@ -238,6 +261,7 @@ export function reconcileHostRestart(
           ...conversation,
           status: 'idle',
           updatedAt: now,
+          lastActivityAt: now,
         })
       }
     }
@@ -268,11 +292,94 @@ export function restoreDurableConversations(
     .map((conversation) => restoreConversation(store, conversation, options))
 }
 
+/**
+ * Rebuilds one bounded normalized Conversation view directly from durable
+ * state. This is a read-only history boundary and never resumes a Provider.
+ */
+export function readDurableConversationDetail(
+  store: ConversationStore,
+  conversationId: ConversationId,
+  options: DurableConversationDetailOptions = {},
+): DurableConversationDetail | undefined {
+  const maxTurns = options.maxTurns ?? DURABLE_CONVERSATION_DETAIL_DEFAULT_TURNS
+  const maxEntries =
+    options.maxEntries ?? DURABLE_CONVERSATION_DETAIL_DEFAULT_ENTRIES
+  assertBoundedPositiveInteger(
+    maxTurns,
+    conversationRuntimeWireLimits.turns,
+    'maxTurns',
+  )
+  assertBoundedPositiveInteger(
+    maxEntries,
+    Math.min(
+      conversationRuntimeWireLimits.messages,
+      conversationRuntimeWireLimits.tools,
+      conversationRuntimeWireLimits.changes,
+    ),
+    'maxEntries',
+  )
+
+  const conversation = store.getConversation(conversationId)
+  if (conversation === undefined) return undefined
+  if (conversation.status === 'creating') {
+    throw new Error(
+      `Durable Conversation ${String(conversationId)} is not ready`,
+    )
+  }
+
+  const reconstructed = reconstructDurableConversation(store, conversation, {
+    maxTurns,
+    maxEntries,
+    compactOrders: true,
+  })
+  return {
+    record: reconstructed.record,
+    runtime: reconstructed.runtime,
+    approvals: reconstructed.approvals,
+    history: {
+      totalTurns: reconstructed.totalTurns,
+      retainedTurns: reconstructed.runtime.turns.length,
+      hasOlder: reconstructed.totalTurns > reconstructed.runtime.turns.length,
+    },
+  }
+}
+
 function restoreConversation(
   store: ConversationStore,
   conversation: DurableConversation & { readonly providerThreadId: string },
   options: RestoreDurableOptions,
 ): RestoredDurableConversation {
+  const reconstructed = reconstructDurableConversation(
+    store,
+    conversation,
+    options,
+  )
+  return {
+    record: reconstructed.record,
+    providerThreadId: conversation.providerThreadId,
+    runtime: reconstructed.runtime,
+    providerTurns: reconstructed.providerTurns,
+    expiredApprovals: reconstructed.approvals.filter(
+      (approval) => approval.lifecycle === 'expired',
+    ).length,
+  }
+}
+
+interface ReconstructedDurableConversation {
+  readonly record: ConversationRecord
+  readonly runtime: ConversationRuntimeSnapshot
+  readonly providerTurns: RestoredDurableConversation['providerTurns']
+  readonly approvals: readonly DurableApprovalHistoryRecord[]
+  readonly totalTurns: number
+}
+
+function reconstructDurableConversation(
+  store: ConversationStore,
+  conversation: DurableConversation,
+  options: Pick<RestoreDurableOptions, 'maxTurns' | 'maxEntries'> & {
+    readonly compactOrders?: boolean
+  },
+): ReconstructedDurableConversation {
   const durableTurns = store.listRecentTurns(
     conversation.conversationId,
     options.maxTurns,
@@ -285,7 +392,7 @@ function restoreConversation(
     if (
       presentation.turn.turnId !== durable.turnId ||
       presentation.turn.conversationId !== conversation.conversationId ||
-      presentation.turn.status !== durable.status
+      !durableTurnStatusMatchesPresentation(durable, presentation.turn)
     ) {
       throw new Error(`Durable Turn ${String(durable.turnId)} is inconsistent`)
     }
@@ -322,7 +429,9 @@ function restoreConversation(
   const retainedEntryOrders = new Map(
     retainedEntries.map((entry, index) => [
       runtimeEntryKey(entry.kind, entry.value),
-      hasDuplicateOrder ? index + 1 : entry.value.order,
+      options.compactOrders === true || hasDuplicateOrder
+        ? index + 1
+        : entry.value.order,
     ]),
   )
   const messages = presentations.flatMap(({ presentation }) =>
@@ -406,6 +515,7 @@ function restoreConversation(
   const record = ConversationRecordSchema.parse({
     conversationId: conversation.conversationId,
     projectId: conversation.projectId,
+    title: conversation.title,
     provider: conversation.provider,
     cwd: conversation.cwd,
     ...(conversation.model === undefined ? {} : { model: conversation.model }),
@@ -413,27 +523,44 @@ function restoreConversation(
       ? {}
       : { reasoning: conversation.reasoning }),
     status: conversation.status,
+    ...(conversation.status === 'running' || conversation.status === 'waiting'
+      ? {
+          activeTurnId: [...turns]
+            .reverse()
+            .find((turn) => turn.status === 'running')?.turnId,
+        }
+      : {}),
     createdAt: conversation.createdAt,
     updatedAt: conversation.updatedAt,
+    lastActivityAt: conversation.lastActivityAt,
   })
   return {
     record,
-    providerThreadId: conversation.providerThreadId,
     runtime,
     providerTurns: durableTurns.flatMap((turn) =>
       turn.providerTurnId === undefined
         ? []
         : [{ turnId: turn.turnId, providerTurnId: turn.providerTurnId }],
     ),
-    expiredApprovals: presentations.reduce(
-      (count, { presentation }) =>
-        count +
-        presentation.approvals.filter(
-          (approval) => approval.lifecycle === 'expired',
-        ).length,
-      0,
+    approvals: presentations.flatMap(
+      ({ presentation }) => presentation.approvals,
     ),
+    totalTurns,
   }
+}
+
+function durableTurnStatusMatchesPresentation(
+  durable: DurableTurnSnapshot,
+  presentation: TurnRecord,
+): boolean {
+  if (
+    durable.status === 'starting' ||
+    durable.status === 'running' ||
+    durable.status === 'waiting'
+  ) {
+    return presentation.status === 'running'
+  }
+  return durable.status === presentation.status
 }
 
 function parseSnapshot(turn: DurableTurnSnapshot): DurableTurnPresentationV1 {
@@ -507,6 +634,17 @@ function assertKnownKeys(
 function assertPositiveInteger(value: number, name: string): void {
   if (!Number.isSafeInteger(value) || value <= 0) {
     throw new Error(`${name} must be a positive safe integer`)
+  }
+}
+
+function assertBoundedPositiveInteger(
+  value: number,
+  maximum: number,
+  name: string,
+): void {
+  assertPositiveInteger(value, name)
+  if (value > maximum) {
+    throw new Error(`${name} must not exceed ${String(maximum)}`)
   }
 }
 

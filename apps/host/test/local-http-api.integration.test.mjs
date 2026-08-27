@@ -7,7 +7,10 @@ import test from 'node:test'
 
 import { HostEventPublisher } from '../dist/api/host-event-publisher.js'
 import { HostService } from '../dist/api/host-service.js'
-import { startLocalCodexHostWithRuntime } from '../dist/api/local-codex-host.js'
+import {
+  startLocalCodexHost,
+  startLocalCodexHostWithRuntime,
+} from '../dist/api/local-codex-host.js'
 import { LocalHttpServer } from '../dist/api/local-http-server.js'
 import { WorkspacePolicy } from '../dist/api/workspace-policy.js'
 import { ConversationStore } from '../dist/persistence/index.js'
@@ -133,6 +136,70 @@ test('local Host assembly generates a new epoch and restores its API snapshot fr
       maxRetries: 10,
       retryDelay: 100,
     })
+  }
+})
+
+test('starts a read-only durable API when the Codex executable is unavailable', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'codetether-read-only-host-'))
+  const workspace = join(directory, 'workspace')
+  const databasePath = join(directory, 'data', 'codetether.sqlite3')
+  await mkdir(workspace, { recursive: true })
+  const options = {
+    allowedWorkspaceRoots: [workspace],
+    allowedOrigins: ['http://localhost:5173'],
+    hostVersion: '0.0.0-test',
+    port: 0,
+    databasePath,
+  }
+  let seeded
+  let readOnly
+  try {
+    seeded = await startLocalCodexHostWithRuntime(
+      options,
+      new FakeAgentRuntime(),
+      await WorkspacePolicy.create([workspace]),
+      ConversationStore.open({ databasePath }),
+    )
+    const projects = await getJson(seeded.baseUrl, '/api/v1/projects')
+    const created = await postJson(seeded.baseUrl, '/api/v1/conversations', {
+      actionId: 'act_readonly_seed01',
+      provider: 'codex',
+      projectId: projects.body.projects[0].projectId,
+    })
+    const conversationId = created.body.data.conversation.conversationId
+    await seeded.close()
+    seeded = undefined
+
+    readOnly = await startLocalCodexHost({
+      ...options,
+      executable: join(directory, 'missing-codex-executable'),
+    })
+    const bootstrap = await getJson(readOnly.baseUrl, '/api/v1/bootstrap')
+    assert.equal(bootstrap.status, 200)
+    assert.equal(bootstrap.body.capabilities.codex, false)
+    assert.equal(bootstrap.body.capabilities.resume, false)
+
+    const detail = await getJson(
+      readOnly.baseUrl,
+      `/api/v1/conversations/${conversationId}`,
+    )
+    assert.equal(detail.status, 200)
+    assert.equal(detail.body.conversation.conversationId, conversationId)
+
+    const mutation = await postJson(
+      readOnly.baseUrl,
+      `/api/v1/conversations/${conversationId}/turns`,
+      {
+        actionId: 'act_readonly_turn001',
+        input: { type: 'text', text: 'This must fail closed.' },
+      },
+    )
+    assert.equal(mutation.status, 503)
+    assert.equal(mutation.body.code, 'runtime_unavailable')
+  } finally {
+    await seeded?.close().catch(() => undefined)
+    await readOnly?.close().catch(() => undefined)
+    await rm(directory, { force: true, recursive: true })
   }
 })
 
@@ -413,6 +480,195 @@ test('serves durable Project identity and creates Conversations by projectId', a
       created.body.data.project.projectId,
     )
     await access(nested)
+  } finally {
+    await harness.close()
+  }
+})
+
+test('serves a strict Project-scoped durable Conversation index', async () => {
+  const harness = await createHarness({ persistence: true })
+  const movedWorkspace = `${harness.workspace}-moved`
+  let workspaceMoved = false
+  try {
+    const projects = await getJson(harness.baseUrl, '/api/v1/projects')
+    const projectId = projects.body.projects[0].projectId
+    const created = await postJson(harness.baseUrl, '/api/v1/conversations', {
+      actionId: 'act_index_create01',
+      provider: 'codex',
+      projectId,
+    })
+    const conversationId = created.body.data.conversation.conversationId
+
+    const listed = await getJson(
+      harness.baseUrl,
+      `/api/v1/projects/${projectId}/conversations`,
+    )
+    assert.equal(listed.status, 200)
+    assert.equal(listed.body.protocolVersion, 1)
+    assert.equal(listed.body.conversations.length, 1)
+    assert.equal(listed.body.conversations[0].conversationId, conversationId)
+    assert.equal(listed.body.conversations[0].projectId, projectId)
+    assert.equal(listed.body.conversations[0].title, '新会话')
+    assert.equal('cwd' in listed.body.conversations[0], false)
+    assert.equal('providerThreadId' in listed.body.conversations[0], false)
+
+    const filtered = await getJson(
+      harness.baseUrl,
+      `/api/v1/projects/${projectId}/conversations?provider=codex&status=idle&limit=1`,
+    )
+    assert.equal(filtered.status, 200)
+    assert.equal(filtered.body.conversations.length, 1)
+
+    const excluded = await getJson(
+      harness.baseUrl,
+      `/api/v1/projects/${projectId}/conversations?status=failed`,
+    )
+    assert.equal(excluded.status, 200)
+    assert.deepEqual(excluded.body.conversations, [])
+
+    await rename(harness.workspace, movedWorkspace)
+    workspaceMoved = true
+    const unavailableHistory = await getJson(
+      harness.baseUrl,
+      `/api/v1/projects/${projectId}/conversations`,
+    )
+    assert.equal(unavailableHistory.status, 200)
+    assert.equal(unavailableHistory.body.conversations.length, 1)
+
+    for (const query of [
+      'unknown=value',
+      'limit=1&limit=2',
+      'limit=0',
+      'limit=101',
+      'provider=claude',
+      'status=active',
+    ]) {
+      const rejected = await getJson(
+        harness.baseUrl,
+        `/api/v1/projects/${projectId}/conversations?${query}`,
+      )
+      assert.equal(rejected.status, 400, query)
+      assert.equal(rejected.body.code, 'invalid_request', query)
+    }
+
+    const unknownProject = await getJson(
+      harness.baseUrl,
+      '/api/v1/projects/proj_unknown01/conversations',
+    )
+    assert.equal(unknownProject.status, 404)
+    assert.equal(unknownProject.body.code, 'not_found')
+
+    const queryOnAnotherEndpoint = await getJson(
+      harness.baseUrl,
+      '/api/v1/projects?limit=1',
+    )
+    assert.equal(queryOnAnotherEndpoint.status, 400)
+    assert.equal(queryOnAnotherEndpoint.body.code, 'invalid_request')
+  } finally {
+    if (workspaceMoved) await rename(movedWorkspace, harness.workspace)
+    await harness.close()
+  }
+})
+
+test('serves one durable Conversation detail without exposing Provider state', async () => {
+  const harness = await createHarness({ persistence: true })
+  try {
+    const projects = await getJson(harness.baseUrl, '/api/v1/projects')
+    const projectId = projects.body.projects[0].projectId
+    const created = await postJson(harness.baseUrl, '/api/v1/conversations', {
+      actionId: 'act_detail_create01',
+      provider: 'codex',
+      projectId,
+    })
+    const conversationId = created.body.data.conversation.conversationId
+    await postJson(
+      harness.baseUrl,
+      `/api/v1/conversations/${conversationId}/turns`,
+      {
+        actionId: 'act_detail_turn001',
+        input: { type: 'text', text: 'Remember durable detail history' },
+      },
+    )
+    const eventBase = {
+      provider: 'codex',
+      threadId: 'provider-thread-1',
+      turnId: 'provider-turn-1',
+      timestamp: '2026-08-27T08:00:01.000Z',
+    }
+    harness.runtime.emit({
+      ...eventBase,
+      type: 'message.completed',
+      itemId: 'provider-message-detail',
+      message: 'Durable response',
+    })
+    harness.runtime.emit({
+      ...eventBase,
+      type: 'turn.completed',
+      finalMessage: 'Durable response',
+    })
+
+    const detail = await getJson(
+      harness.baseUrl,
+      `/api/v1/conversations/${conversationId}`,
+    )
+    assert.equal(detail.status, 200)
+    assert.equal(detail.body.conversation.conversationId, conversationId)
+    assert.equal(detail.body.conversation.projectId, projectId)
+    assert.equal(detail.body.runtime.turns.length, 1)
+    assert.equal(
+      detail.body.runtime.turns[0].input.text,
+      'Remember durable detail history',
+    )
+    assert.equal(detail.body.runtime.messages[0].text, 'Durable response')
+    assert.deepEqual(detail.body.history, {
+      hasOlderHistory: false,
+      retainedTurnCount: 1,
+      totalTurnCount: 1,
+    })
+    assert.equal(JSON.stringify(detail.body).includes('provider-thread'), false)
+    assert.equal(JSON.stringify(detail.body).includes('providerTurnId'), false)
+    assert.equal(Object.hasOwn(detail.body.conversation, 'cwd'), false)
+
+    harness.runtime.fail(new Error('Codex stopped after history was durable'))
+    const whileUnavailable = await getJson(
+      harness.baseUrl,
+      `/api/v1/conversations/${conversationId}`,
+    )
+    assert.equal(whileUnavailable.status, 200)
+    assert.equal(
+      whileUnavailable.body.runtime.messages[0].text,
+      'Durable response',
+    )
+
+    const unknown = await getJson(
+      harness.baseUrl,
+      '/api/v1/conversations/conv_missing_detail',
+    )
+    assert.equal(unknown.status, 404)
+    assert.equal(unknown.body.code, 'not_found')
+
+    const badQuery = await getJson(
+      harness.baseUrl,
+      `/api/v1/conversations/${conversationId}?hydrate=true`,
+    )
+    assert.equal(badQuery.status, 400)
+    assert.equal(badQuery.body.code, 'invalid_request')
+  } finally {
+    await harness.close()
+  }
+})
+
+test('requires durable persistence for the Conversation index', async () => {
+  const harness = await createHarness()
+  try {
+    const projects = await getJson(harness.baseUrl, '/api/v1/projects')
+    const projectId = projects.body.projects[0].projectId
+    const response = await getJson(
+      harness.baseUrl,
+      `/api/v1/projects/${projectId}/conversations`,
+    )
+    assert.equal(response.status, 503)
+    assert.equal(response.body.code, 'runtime_unavailable')
   } finally {
     await harness.close()
   }
@@ -920,6 +1176,10 @@ class FakeAgentRuntime {
 
 async function createHarness(options = {}) {
   const workspace = await mkdtemp(join(tmpdir(), 'codetether-http-test-'))
+  const dataDirectory =
+    options.persistence === true
+      ? await mkdtemp(join(tmpdir(), 'codetether-http-data-'))
+      : undefined
   const runtime = new FakeAgentRuntime()
   const workspacePolicy = await WorkspacePolicy.create([workspace])
   const publisher = new HostEventPublisher({ epoch })
@@ -929,6 +1189,13 @@ async function createHarness(options = {}) {
     publisher,
     hostVersion: '0.0.0-test',
     now: () => new Date('2026-08-26T08:00:00.000Z'),
+    ...(dataDirectory === undefined
+      ? {}
+      : {
+          persistence: ConversationStore.open({
+            databasePath: join(dataDirectory, 'codetether.sqlite3'),
+          }),
+        }),
   })
   await service.registerInitialProjectRoots([workspace])
   const server = new LocalHttpServer({
@@ -955,6 +1222,9 @@ async function createHarness(options = {}) {
       closed = true
       await server.close()
       await rm(workspace, { force: true, recursive: true })
+      if (dataDirectory !== undefined) {
+        await rm(dataDirectory, { force: true, recursive: true })
+      }
     },
   }
 }

@@ -2,10 +2,16 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  AttentionIdSchema,
+  AttentionItemSchema,
+  AttentionListResponseSchema,
   BootstrapSchema,
   ConversationIdSchema,
+  ConversationListResponseSchema,
   ConversationRecordSchema,
   ConversationRuntimeSnapshotSchema,
+  ConversationSummarySchema,
+  ConversationApprovalHistoryRecordSchema,
   CreateConversationRequestSchema,
   CreateConversationResponseSchema,
   CreateProjectRequestSchema,
@@ -14,22 +20,30 @@ import {
   DeleteProjectResponseSchema,
   EventIdSchema,
   GetProjectResponseSchema,
+  GetConversationResponseSchema,
   HostEventEnvelopeSchema,
   HostEventSchema,
   HostSnapshotSchema,
   InterruptTurnRequestSchema,
+  ListAttentionQuerySchema,
   ListProjectsResponseSchema,
+  ListProjectConversationsQuerySchema,
   ProjectIdSchema,
   ProjectRecordSchema,
   ResolveApprovalRequestSchema,
+  ResolveAttentionRequestSchema,
+  ResolveAttentionResponseSchema,
   SafeErrorEnvelopeSchema,
   StartTurnRequestSchema,
   TurnRecordSchema,
   conversationRuntimeWireLimits,
+  attentionListLimits,
+  conversationDetailWireLimits,
   formatLastEventId,
   hostEventTypes,
   parseLastEventId,
   protocolVersion,
+  conversationListLimits,
 } from '../dist/index.js'
 
 const epoch = '11111111-1111-4111-8111-111111111111'
@@ -39,6 +53,7 @@ const actionId = 'act_action01'
 const turnId = 'turn_demo01'
 const itemId = 'item_demo01'
 const approvalId = 'approval_demo01'
+const attentionId = 'attn_demo01'
 const timestamp = '2026-08-26T08:00:00.000Z'
 
 const project = {
@@ -60,6 +75,19 @@ const conversation = {
   activeTurnId: turnId,
   createdAt: timestamp,
   updatedAt: timestamp,
+}
+
+const conversationSummary = {
+  conversationId,
+  projectId,
+  title: 'Inspect the workspace',
+  provider: 'codex',
+  model: 'gpt-5',
+  reasoning: 'high',
+  status: 'running',
+  createdAt: timestamp,
+  updatedAt: timestamp,
+  lastActivityAt: timestamp,
 }
 
 const runningTurn = {
@@ -154,6 +182,61 @@ const resolvedApproval = {
   resolvedAt: timestamp,
 }
 
+const openApprovalAttention = {
+  attentionId,
+  projectId,
+  conversationId,
+  turnId,
+  type: 'approval',
+  status: 'open',
+  createdAt: timestamp,
+  updatedAt: timestamp,
+  payload: {
+    approvalId,
+    kind: 'command',
+    actionTitle: '运行命令',
+    actionSubtitle: 'pnpm test',
+  },
+}
+
+const openCompletedReviewAttention = {
+  attentionId: 'attn_review01',
+  projectId,
+  conversationId,
+  turnId,
+  type: 'completed_review',
+  status: 'open',
+  createdAt: timestamp,
+  updatedAt: timestamp,
+  payload: { conversationTitle: '检查工作区' },
+}
+
+const openFailedAttention = {
+  attentionId: 'attn_failed01',
+  projectId,
+  conversationId,
+  turnId,
+  type: 'failed',
+  status: 'open',
+  createdAt: timestamp,
+  updatedAt: timestamp,
+  payload: {
+    conversationTitle: '运行测试',
+    error: {
+      code: 'provider_error',
+      message: '测试命令失败',
+      details: { exitCode: 1 },
+    },
+  },
+}
+
+const resolvedCompletedReviewAttention = {
+  ...openCompletedReviewAttention,
+  status: 'resolved',
+  updatedAt: timestamp,
+  resolvedAt: timestamp,
+}
+
 test('accepts only CodeTether Conversation IDs and excludes provider IDs', () => {
   assert.equal(ConversationIdSchema.safeParse(conversationId).success, true)
   assert.equal(
@@ -187,9 +270,402 @@ test('validates bounded Project identity and records', () => {
     true,
   )
   assert.equal(
+    ConversationRecordSchema.safeParse({
+      ...conversation,
+      projectId,
+      title: conversationSummary.title,
+    }).success,
+    true,
+  )
+  assert.equal(
     ConversationRecordSchema.safeParse(conversation).success,
     true,
     'legacy v1 Conversation records remain valid without projectId',
+  )
+})
+
+test('validates the durable Conversation summary without provider internals', () => {
+  assert.deepEqual(
+    ConversationSummarySchema.parse(conversationSummary),
+    conversationSummary,
+  )
+  for (const privateField of [
+    ['providerThreadId', 'thread_provider01'],
+    ['cwd', 'C:\\workspace\\demo'],
+  ]) {
+    assert.equal(
+      ConversationSummarySchema.safeParse({
+        ...conversationSummary,
+        [privateField[0]]: privateField[1],
+      }).success,
+      false,
+    )
+  }
+})
+
+test('validates bounded Project Conversation list queries and responses', () => {
+  assert.deepEqual(ListProjectConversationsQuerySchema.parse({}), {
+    limit: conversationListLimits.default,
+  })
+  assert.deepEqual(
+    ListProjectConversationsQuerySchema.parse({
+      provider: 'codex',
+      status: 'completed',
+      limit: '25',
+    }),
+    { provider: 'codex', status: 'completed', limit: 25 },
+  )
+  for (const limit of [0, conversationListLimits.maximum + 1, 1.5]) {
+    assert.equal(
+      ListProjectConversationsQuerySchema.safeParse({ limit }).success,
+      false,
+    )
+  }
+  assert.equal(
+    ListProjectConversationsQuerySchema.safeParse({ provider: 'claude' })
+      .success,
+    false,
+  )
+  assert.equal(
+    ListProjectConversationsQuerySchema.safeParse({ status: 'active' }).success,
+    false,
+  )
+
+  const response = {
+    protocolVersion,
+    conversations: [conversationSummary],
+  }
+  assert.deepEqual(ConversationListResponseSchema.parse(response), response)
+  assert.equal(
+    ConversationListResponseSchema.safeParse({
+      ...response,
+      conversations: Array.from(
+        { length: conversationListLimits.maximum + 1 },
+        () => conversationSummary,
+      ),
+    }).success,
+    false,
+  )
+})
+
+test('validates durable Attention identities and safe discriminated payloads', () => {
+  assert.equal(AttentionIdSchema.safeParse(attentionId).success, true)
+  assert.equal(AttentionIdSchema.safeParse('approval_demo01').success, false)
+
+  for (const item of [
+    openApprovalAttention,
+    openCompletedReviewAttention,
+    openFailedAttention,
+  ]) {
+    assert.deepEqual(AttentionItemSchema.parse(item), item)
+  }
+
+  for (const privateField of [
+    ['providerThreadId', 'thread_private01'],
+    ['providerRequestId', 42],
+    ['rawProviderPayload', { command: 'secret' }],
+  ]) {
+    assert.equal(
+      AttentionItemSchema.safeParse({
+        ...openApprovalAttention,
+        [privateField[0]]: privateField[1],
+      }).success,
+      false,
+    )
+  }
+  assert.equal(
+    AttentionItemSchema.safeParse({
+      ...openCompletedReviewAttention,
+      payload: {
+        ...openCompletedReviewAttention.payload,
+        changedFileCount: 3,
+      },
+    }).success,
+    false,
+  )
+  assert.equal(
+    AttentionItemSchema.safeParse({
+      ...openFailedAttention,
+      payload: {
+        ...openFailedAttention.payload,
+        error: {
+          ...openFailedAttention.payload.error,
+          stack: 'private stack',
+        },
+      },
+    }).success,
+    false,
+  )
+})
+
+test('enforces Attention lifecycle outcomes without making expired items actionable', () => {
+  const resolvedApprovalAttention = {
+    ...openApprovalAttention,
+    status: 'resolved',
+    resolvedAt: timestamp,
+    payload: { ...openApprovalAttention.payload, decision: 'accept' },
+  }
+  const expiredApprovalAttention = {
+    ...openApprovalAttention,
+    status: 'expired',
+    resolvedAt: timestamp,
+    payload: {
+      ...openApprovalAttention.payload,
+      expirationReason: 'host_restart',
+    },
+  }
+  assert.deepEqual(
+    AttentionItemSchema.parse(resolvedApprovalAttention),
+    resolvedApprovalAttention,
+  )
+  assert.deepEqual(
+    AttentionItemSchema.parse(expiredApprovalAttention),
+    expiredApprovalAttention,
+  )
+  assert.equal(
+    AttentionItemSchema.safeParse({
+      ...openApprovalAttention,
+      payload: { ...openApprovalAttention.payload, decision: 'decline' },
+    }).success,
+    false,
+  )
+  assert.equal(
+    AttentionItemSchema.safeParse({
+      ...resolvedApprovalAttention,
+      payload: openApprovalAttention.payload,
+    }).success,
+    false,
+  )
+  assert.equal(
+    AttentionItemSchema.safeParse({
+      ...openCompletedReviewAttention,
+      status: 'expired',
+      resolvedAt: timestamp,
+    }).success,
+    false,
+  )
+  assert.equal(
+    AttentionItemSchema.safeParse({
+      ...openFailedAttention,
+      status: 'resolved',
+    }).success,
+    false,
+  )
+})
+
+test('validates bounded Attention filters, summaries, and generic resolution', () => {
+  assert.deepEqual(ListAttentionQuerySchema.parse({}), {
+    status: 'open',
+    limit: attentionListLimits.default,
+  })
+  assert.deepEqual(
+    ListAttentionQuerySchema.parse({
+      projectId,
+      type: 'failed',
+      status: 'resolved',
+      limit: '25',
+    }),
+    { projectId, type: 'failed', status: 'resolved', limit: 25 },
+  )
+  for (const input of [
+    { limit: 0 },
+    { limit: attentionListLimits.maximum + 1 },
+    { type: 'question' },
+    { status: 'pending' },
+    { unknown: true },
+  ]) {
+    assert.equal(ListAttentionQuerySchema.safeParse(input).success, false)
+  }
+
+  const response = {
+    protocolVersion,
+    items: [openCompletedReviewAttention],
+    summary: {
+      totalOpen: 3,
+      approvalOpen: 1,
+      completedReviewOpen: 1,
+      failedOpen: 1,
+    },
+  }
+  assert.deepEqual(AttentionListResponseSchema.parse(response), response)
+  assert.equal(
+    AttentionListResponseSchema.safeParse({
+      ...response,
+      items: [openCompletedReviewAttention, openCompletedReviewAttention],
+    }).success,
+    false,
+  )
+  assert.equal(
+    AttentionListResponseSchema.safeParse({
+      ...response,
+      summary: { ...response.summary, totalOpen: 4 },
+    }).success,
+    false,
+  )
+
+  assert.deepEqual(ResolveAttentionRequestSchema.parse({ actionId }), {
+    actionId,
+  })
+  assert.equal(
+    ResolveAttentionRequestSchema.safeParse({ actionId, decision: 'accept' })
+      .success,
+    false,
+  )
+  const resolvedResponse = {
+    protocolVersion,
+    actionId,
+    status: 'completed',
+    data: { attention: resolvedCompletedReviewAttention },
+  }
+  assert.deepEqual(
+    ResolveAttentionResponseSchema.parse(resolvedResponse),
+    resolvedResponse,
+  )
+  assert.equal(
+    ResolveAttentionResponseSchema.safeParse({
+      ...resolvedResponse,
+      data: {
+        attention: {
+          ...openApprovalAttention,
+          status: 'resolved',
+          resolvedAt: timestamp,
+          payload: { ...openApprovalAttention.payload, decision: 'accept' },
+        },
+      },
+    }).success,
+    false,
+  )
+})
+
+test('validates one durable Conversation detail without a second Timeline model', () => {
+  const response = {
+    protocolVersion,
+    conversation: { ...conversationSummary, status: 'waiting' },
+    runtime: conversationRuntime,
+    history: {
+      hasOlderHistory: false,
+      retainedTurnCount: 1,
+      totalTurnCount: 1,
+    },
+    pendingApprovals: [pendingApproval],
+    approvalHistory: [],
+  }
+  assert.deepEqual(GetConversationResponseSchema.parse(response), response)
+  assert.equal(response.runtime, conversationRuntime)
+
+  for (const field of [
+    ['providerThreadId', 'provider-thread-secret'],
+    ['cwd', 'C:\\private\\workspace'],
+    ['hydrated', true],
+  ]) {
+    assert.equal(
+      GetConversationResponseSchema.safeParse({
+        ...response,
+        [field[0]]: field[1],
+      }).success,
+      false,
+    )
+  }
+})
+
+test('expresses resolved and expired Approvals as non-actionable history', () => {
+  const resolvedHistory = {
+    lifecycle: 'resolved',
+    approval: resolvedApproval,
+  }
+  const expiredHistory = {
+    lifecycle: 'expired',
+    approval: {
+      ...pendingApproval,
+      approvalId: 'approval_expired01',
+    },
+    expiredAt: timestamp,
+    reason: 'host_restart',
+  }
+  assert.deepEqual(
+    ConversationApprovalHistoryRecordSchema.parse(resolvedHistory),
+    resolvedHistory,
+  )
+  assert.deepEqual(
+    ConversationApprovalHistoryRecordSchema.parse(expiredHistory),
+    expiredHistory,
+  )
+  assert.equal(
+    ConversationApprovalHistoryRecordSchema.safeParse({
+      lifecycle: 'resolved',
+      approval: pendingApproval,
+    }).success,
+    false,
+  )
+  assert.equal(
+    ConversationApprovalHistoryRecordSchema.safeParse({
+      ...expiredHistory,
+      reason: 'provider_exit',
+    }).success,
+    false,
+  )
+})
+
+test('enforces durable detail history counts and Approval identity', () => {
+  const response = {
+    protocolVersion,
+    conversation: { ...conversationSummary, status: 'waiting' },
+    runtime: conversationRuntime,
+    history: {
+      hasOlderHistory: false,
+      retainedTurnCount: 1,
+      totalTurnCount: 1,
+    },
+    pendingApprovals: [pendingApproval],
+    approvalHistory: [],
+  }
+  for (const history of [
+    { hasOlderHistory: false, retainedTurnCount: 0, totalTurnCount: 1 },
+    { hasOlderHistory: false, retainedTurnCount: 1, totalTurnCount: 2 },
+    { hasOlderHistory: true, retainedTurnCount: 1, totalTurnCount: 1 },
+    { hasOlderHistory: false, retainedTurnCount: 2, totalTurnCount: 1 },
+  ]) {
+    assert.equal(
+      GetConversationResponseSchema.safeParse({ ...response, history }).success,
+      false,
+    )
+  }
+  assert.equal(
+    GetConversationResponseSchema.safeParse({
+      ...response,
+      runtime: { ...conversationRuntime, conversationId: 'conv_other01' },
+    }).success,
+    false,
+  )
+  assert.equal(
+    GetConversationResponseSchema.safeParse({
+      ...response,
+      pendingApprovals: [
+        { ...pendingApproval, conversationId: 'conv_other01' },
+      ],
+    }).success,
+    false,
+  )
+  assert.equal(
+    GetConversationResponseSchema.safeParse({
+      ...response,
+      approvalHistory: [{ lifecycle: 'resolved', approval: resolvedApproval }],
+    }).success,
+    false,
+    'current and historical Approval IDs must not overlap',
+  )
+  assert.equal(
+    GetConversationResponseSchema.safeParse({
+      ...response,
+      pendingApprovals: Array.from(
+        { length: conversationDetailWireLimits.pendingApprovals + 1 },
+        (_, index) => ({
+          ...pendingApproval,
+          approvalId: `approval_pending${String(index).padStart(3, '0')}`,
+        }),
+      ),
+    }).success,
+    false,
   )
 })
 
@@ -733,6 +1209,37 @@ test('validates envelope identity and deterministic event IDs', () => {
     }).success,
     false,
   )
+
+  const attention = events.find((event) => event.type === 'attention.created')
+  assert.notEqual(attention, undefined)
+  assert.equal(
+    HostEventEnvelopeSchema.safeParse({
+      ...attention,
+      payload: {
+        attention: {
+          ...attention.payload.attention,
+          conversationId: 'conv_other01',
+        },
+      },
+      protocolVersion,
+      epoch,
+      seq: 15,
+      eventId: `${epoch}:15`,
+    }).success,
+    false,
+  )
+  assert.equal(
+    HostEventSchema.safeParse({
+      ...attention,
+      payload: {
+        attention: {
+          ...attention.payload.attention,
+          rawProviderPayload: { private: true },
+        },
+      },
+    }).success,
+    false,
+  )
 })
 
 function createHostEventFixtures() {
@@ -789,6 +1296,16 @@ function createHostEventFixtures() {
       ...itemIdentity,
       type: 'approval.resolved',
       payload: { approval: resolvedApproval },
+    },
+    {
+      ...turnIdentity,
+      type: 'attention.created',
+      payload: { attention: openCompletedReviewAttention },
+    },
+    {
+      ...turnIdentity,
+      type: 'attention.resolved',
+      payload: { attention: resolvedCompletedReviewAttention },
     },
     {
       ...turnIdentity,

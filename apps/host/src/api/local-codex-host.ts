@@ -7,6 +7,7 @@ import {
   type LocalHttpServerOptions,
 } from './local-http-server.js'
 import { CodexHostRuntime } from './codex-host-runtime.js'
+import { UnavailableAgentRuntime } from './unavailable-agent-runtime.js'
 import { WorkspacePolicy } from './workspace-policy.js'
 
 export interface LocalCodexHostOptions {
@@ -53,8 +54,9 @@ export async function startLocalCodexHost(
             ? {}
             : { databasePath: options.databasePath }),
         })
+  let runtime: AgentHostRuntime
   try {
-    const runtime = await CodexHostRuntime.launch({
+    runtime = await CodexHostRuntime.launch({
       version: options.hostVersion,
       ...(options.executable === undefined
         ? {}
@@ -66,6 +68,13 @@ export async function startLocalCodexHost(
         ? {}
         : { ephemeralThreads: options.ephemeralThreads }),
     })
+  } catch (error) {
+    runtime = new UnavailableAgentRuntime()
+    process.stderr.write(
+      `[codetether:runtime-unavailable] Codex launch failed (${safeErrorName(error)}); durable APIs remain read-only\n`,
+    )
+  }
+  try {
     return await startLocalCodexHostWithRuntime(
       options,
       runtime,
@@ -80,6 +89,12 @@ export async function startLocalCodexHost(
     }
     throw error
   }
+}
+
+function safeErrorName(error: unknown): string {
+  return error instanceof Error && error.name.trim().length > 0
+    ? error.name
+    : 'Error'
 }
 
 /** Testable assembly boundary that owns Runtime cleanup after launch. */

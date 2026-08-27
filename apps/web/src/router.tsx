@@ -8,8 +8,9 @@ import {
 import { RootLayout } from './components/app-shell/root-layout'
 import { RoutePlaceholder } from './components/app-shell/route-placeholder'
 import { ConversationDetailRoute } from './components/conversation/conversation-detail-route'
-import { ConversationsPage } from './components/conversations'
+import { ProjectConversationsRoute } from './components/conversations'
 import { InboxPage } from './components/inbox'
+import { ProjectDetailRoute, ProjectsPage } from './components/projects'
 
 const rootRoute = createRootRoute({ component: RootLayout })
 
@@ -31,7 +32,12 @@ const homeRoute = createRoute({
 const conversationsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/conversations',
-  component: ConversationsPage,
+  beforeLoad: () => {
+    throw redirect({
+      to: '/projects',
+      replace: true,
+    })
+  },
 })
 
 const conversationRoute = createRoute({
@@ -58,7 +64,19 @@ const activityRoute = createRoute({
 const projectsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/projects',
-  component: () => <RoutePlaceholder title="项目" />,
+  component: ProjectsPage,
+})
+
+const projectDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/projects/$projectId',
+  component: ProjectDetailRoute,
+})
+
+const projectConversationsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/projects/$projectId/conversations',
+  component: ProjectConversationsRoute,
 })
 
 const agentsRoute = createRoute({
@@ -86,6 +104,8 @@ const routeTree = rootRoute.addChildren([
   inboxRoute,
   activityRoute,
   projectsRoute,
+  projectDetailRoute,
+  projectConversationsRoute,
   agentsRoute,
   machinesRoute,
   settingsRoute,

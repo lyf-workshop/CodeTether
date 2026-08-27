@@ -96,12 +96,14 @@ test('durable cwd is re-authorized before Provider resume', async () => {
   store.createConversation({
     conversationId: 'conv_regression_auth',
     projectId,
+    title: '新会话',
     provider: 'codex',
     providerThreadId: 'provider-thread-regression',
     cwd: removedRoot,
     status: 'completed',
     createdAt: timestamp,
     updatedAt: timestamp,
+    lastActivityAt: timestamp,
   })
   await rm(removedRoot, { recursive: true })
 
@@ -141,12 +143,14 @@ test('concurrent Turn starts serialize across lazy resume', async () => {
   store.createConversation({
     conversationId: 'conv_regression_race',
     projectId,
+    title: '新会话',
     provider: 'codex',
     providerThreadId: 'provider-thread-regression',
     cwd: environment.workspace,
     status: 'completed',
     createdAt: timestamp,
     updatedAt: timestamp,
+    lastActivityAt: timestamp,
   })
   const runtime = new FakeRuntime()
   runtime.resumeDelayMs = 20
@@ -195,12 +199,14 @@ test('restore entry cap follows durable Turn chronology across Host epochs', asy
   store.createConversation({
     conversationId: 'conv_regression_order',
     projectId,
+    title: '新会话',
     provider: 'codex',
     providerThreadId: 'provider-thread-regression',
     cwd: environment.workspace,
     status: 'completed',
     createdAt: timestamp,
     updatedAt: '2026-08-27T08:02:00.000Z',
+    lastActivityAt: '2026-08-27T08:02:00.000Z',
   })
   store.createTurn(
     durableTurn('turn_regression_old', '2026-08-27T08:00:00.000Z', [
@@ -241,12 +247,14 @@ test('restored presentation order remains unique and precedes the new Host epoch
   store.createConversation({
     conversationId: 'conv_regression_order',
     projectId,
+    title: '新会话',
     provider: 'codex',
     providerThreadId: 'provider-thread-regression',
     cwd: environment.workspace,
     status: 'completed',
     createdAt: timestamp,
     updatedAt: '2026-08-27T08:02:00.000Z',
+    lastActivityAt: '2026-08-27T08:02:00.000Z',
   })
   store.createTurn(
     durableTurn('turn_regression_epoch_a', '2026-08-27T08:00:00.000Z', [

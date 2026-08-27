@@ -36,7 +36,6 @@ async function renderApp() {
     import('./router'),
     import('./runtime/host/host-runtime-provider'),
   ])
-  const { DemoStateProvider } = await import('./state/demo-state-provider')
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -47,9 +46,7 @@ async function renderApp() {
     <StrictMode>
       <QueryClientProvider client={queryClient}>
         <HostRuntimeProvider>
-          <DemoStateProvider>
-            <RouterProvider router={router} />
-          </DemoStateProvider>
+          <RouterProvider router={router} />
         </HostRuntimeProvider>
       </QueryClientProvider>
     </StrictMode>,

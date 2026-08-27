@@ -56,6 +56,8 @@ export interface ProviderApprovalResolution {
 
 export interface AgentHostRuntime {
   readonly provider: AgentProvider
+  /** False for the read-only Host fallback when the Provider cannot launch. */
+  readonly available?: boolean
   subscribeEvents(listener: (event: AgentEvent) => void): () => void
   subscribeFailures(listener: (failure: Error) => void): () => void
   subscribeApprovals(

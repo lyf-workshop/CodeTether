@@ -1,0 +1,322 @@
+import {
+  useState,
+  type FormEvent,
+  type ReactElement,
+  type RefObject,
+} from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Link, useNavigate } from '@tanstack/react-router'
+import { FolderOpen, LockKeyhole, Plus } from 'lucide-react'
+
+import {
+  AgentBadge,
+  Button,
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@codetether/ui'
+import {
+  ProjectIdSchema,
+  type ProjectId,
+  type ProjectRecord,
+} from '@codetether/protocol'
+
+import {
+  useHostConnectionState,
+  useHostRuntime,
+} from '../../runtime/host/host-runtime-hooks'
+import { conversationListQueryKeys } from '../../runtime/host/conversation-list-query'
+import { newConversationErrorMessage } from '../../runtime/host/new-conversation-actions'
+import { projectErrorMessage } from '../../runtime/host/project-actions'
+import { projectListQueryOptions } from '../../runtime/host/project-query'
+
+interface NewConversationDialogProps {
+  currentProject?: ProjectRecord
+  onOpenChange?: (open: boolean) => void
+  open?: boolean
+  returnFocusRef?: RefObject<HTMLButtonElement | null>
+  trigger?: ReactElement
+}
+
+/** Minimal real create flow: Project + Codex, with Host-owned defaults. */
+export function NewConversationDialog({
+  currentProject,
+  onOpenChange,
+  open: controlledOpen,
+  returnFocusRef,
+  trigger,
+}: NewConversationDialogProps) {
+  const navigate = useNavigate()
+  const queryClient = useQueryClient()
+  const runtime = useHostRuntime()
+  const connectionState = useHostConnectionState()
+  const [internalOpen, setInternalOpen] = useState(false)
+  const [selectedProjectId, setSelectedProjectId] = useState<
+    ProjectId | undefined
+  >()
+  const open = controlledOpen ?? internalOpen
+  const projectsQuery = useQuery({
+    ...projectListQueryOptions(runtime),
+    enabled:
+      open && currentProject === undefined && connectionState === 'connected',
+  })
+  const availableProjects = (projectsQuery.data ?? []).filter(
+    (project) => project.availability === 'available',
+  )
+
+  const createMutation = useMutation({
+    mutationFn: (projectId: ProjectId) => runtime.createConversation(projectId),
+    onSuccess: async (response) => {
+      const projectId = response.data.conversation.projectId
+      if (projectId !== undefined) {
+        await queryClient.invalidateQueries({
+          queryKey: conversationListQueryKeys.project(projectId),
+          exact: true,
+        })
+      }
+      closeAfterSuccess()
+      await navigate({
+        to: '/conversations/$conversationId',
+        params: {
+          conversationId: response.data.conversation.conversationId,
+        },
+      })
+    },
+  })
+
+  const effectiveSelectedProjectId =
+    selectedProjectId ?? availableProjects[0]?.projectId
+  const selectedProject =
+    currentProject ??
+    availableProjects.find(
+      (project) => project.projectId === effectiveSelectedProjectId,
+    )
+  const hostUnavailable =
+    connectionState === 'unavailable' || connectionState === 'incompatible'
+  const projectUnavailable = selectedProject?.availability === 'unavailable'
+  const noAvailableProjects =
+    currentProject === undefined &&
+    projectsQuery.isSuccess &&
+    availableProjects.length === 0
+  const canSubmit =
+    connectionState === 'connected' &&
+    runtime.bootstrap?.capabilities.codex === true &&
+    selectedProject !== undefined &&
+    !projectUnavailable &&
+    !createMutation.isPending
+
+  function setDialogOpen(nextOpen: boolean) {
+    if (!nextOpen && createMutation.isPending) return
+    if (controlledOpen === undefined) setInternalOpen(nextOpen)
+    onOpenChange?.(nextOpen)
+    if (nextOpen) {
+      createMutation.reset()
+      setSelectedProjectId(currentProject?.projectId)
+      return
+    }
+    createMutation.reset()
+    setSelectedProjectId(undefined)
+  }
+
+  function closeAfterSuccess() {
+    if (controlledOpen === undefined) setInternalOpen(false)
+    onOpenChange?.(false)
+    setSelectedProjectId(undefined)
+  }
+
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!canSubmit) return
+    createMutation.mutate(selectedProject.projectId)
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={setDialogOpen}>
+      {trigger ? <DialogTrigger asChild>{trigger}</DialogTrigger> : null}
+      <DialogContent
+        closeLabel="关闭新建会话对话框"
+        className="max-w-lg"
+        onCloseAutoFocus={(event) => {
+          if (returnFocusRef?.current === undefined) return
+          event.preventDefault()
+          returnFocusRef.current?.focus()
+        }}
+      >
+        <form onSubmit={handleSubmit}>
+          <DialogHeader>
+            <span
+              aria-hidden="true"
+              className="grid size-10 place-items-center rounded-md border border-primary/30 bg-primary-muted text-primary"
+            >
+              <Plus className="size-5" />
+            </span>
+            <DialogTitle>新建会话</DialogTitle>
+            <DialogDescription>
+              在已授权项目中创建一个 Codex 会话。模型与推理设置使用 Host
+              默认值。
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="mt-5 space-y-4">
+            <div>
+              <p className="text-sm font-medium text-text-primary">项目</p>
+              {currentProject ? (
+                <div className="mt-2 flex min-w-0 items-center gap-2.5 rounded-sm border border-border-strong bg-surface-muted px-3 py-2.5">
+                  <FolderOpen
+                    aria-hidden="true"
+                    className="size-4 shrink-0 text-primary"
+                  />
+                  <span className="min-w-0 flex-1 truncate text-sm text-text-primary">
+                    {currentProject.name}
+                  </span>
+                  <LockKeyhole
+                    aria-label="当前项目已锁定"
+                    className="size-3.5 shrink-0 text-text-muted"
+                  />
+                </div>
+              ) : connectionState === 'connected' && !noAvailableProjects ? (
+                <Select
+                  value={effectiveSelectedProjectId}
+                  onValueChange={(value) =>
+                    setSelectedProjectId(ProjectIdSchema.parse(value))
+                  }
+                  disabled={projectsQuery.isPending || createMutation.isPending}
+                >
+                  <SelectTrigger className="mt-2" aria-label="选择项目">
+                    <SelectValue placeholder="选择可用项目" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {availableProjects.map((project) => (
+                      <SelectItem
+                        key={project.projectId}
+                        value={project.projectId}
+                      >
+                        {project.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : null}
+            </div>
+
+            <dl className="grid grid-cols-3 gap-3 rounded-sm border border-border bg-surface/55 px-3 py-3 text-sm">
+              <LockedSetting
+                label="智能体"
+                value={
+                  <span className="flex items-center gap-1.5">
+                    <AgentBadge agent="codex" variant="compact" />
+                    <LockKeyhole
+                      aria-label="Codex 已锁定"
+                      className="size-3.5 text-text-muted"
+                    />
+                  </span>
+                }
+              />
+              <LockedSetting label="模型" value="Host 默认" />
+              <LockedSetting label="推理" value="Host 默认" />
+            </dl>
+
+            {projectUnavailable ? (
+              <InlineNotice>
+                项目目录当前不可用；恢复原目录后才能创建会话。
+              </InlineNotice>
+            ) : null}
+            {hostUnavailable ? (
+              <InlineNotice>
+                {connectionState === 'incompatible'
+                  ? 'CodeTether Host 版本不兼容。'
+                  : '无法连接到 CodeTether Host。'}
+              </InlineNotice>
+            ) : null}
+            {connectionState === 'connected' &&
+            runtime.bootstrap?.capabilities.codex !== true ? (
+              <InlineNotice>Codex Runtime 当前不可用。</InlineNotice>
+            ) : null}
+            {noAvailableProjects ? (
+              <InlineNotice>
+                还没有可用项目。请先添加或恢复一个本地工作区。
+              </InlineNotice>
+            ) : null}
+            {projectsQuery.isError ? (
+              <p
+                role="alert"
+                className="rounded-sm border border-danger/30 bg-danger-muted px-3 py-2 text-sm text-danger"
+              >
+                {projectErrorMessage(projectsQuery.error, 'load')}
+              </p>
+            ) : null}
+            {createMutation.isError ? (
+              <p
+                role="alert"
+                className="rounded-sm border border-danger/30 bg-danger-muted px-3 py-2 text-sm text-danger"
+              >
+                {newConversationErrorMessage(createMutation.error)}
+              </p>
+            ) : null}
+          </div>
+
+          <DialogFooter className="mt-6">
+            <DialogClose asChild>
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={createMutation.isPending}
+              >
+                取消
+              </Button>
+            </DialogClose>
+            {noAvailableProjects ? (
+              <DialogClose asChild>
+                <Button asChild size="sm">
+                  <Link to="/projects">添加项目</Link>
+                </Button>
+              </DialogClose>
+            ) : (
+              <Button type="submit" size="sm" disabled={!canSubmit}>
+                {createMutation.isPending ? '正在创建…' : '创建会话'}
+              </Button>
+            )}
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function LockedSetting({
+  label,
+  value,
+}: {
+  label: string
+  value: ReactElement | string
+}) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-xs text-text-muted">{label}</dt>
+      <dd className="mt-1 flex min-h-7 items-center truncate font-medium text-text-primary">
+        {value}
+      </dd>
+    </div>
+  )
+}
+
+function InlineNotice({ children }: { children: string }) {
+  return (
+    <p
+      role="status"
+      className="rounded-sm border border-warning/30 bg-warning-muted/35 px-3 py-2 text-sm text-text-secondary"
+    >
+      {children}
+    </p>
+  )
+}

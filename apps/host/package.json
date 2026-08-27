@@ -13,7 +13,9 @@
     "serve": "node dist/serve.js",
     "observe": "node dist/live-read.js",
     "control": "node dist/control.js",
-    "integration": "node dist/integration.js"
+    "integration": "node dist/integration.js",
+    "conversation-hydration": "node dist/conversation-hydration-integration.js",
+    "attention-integration": "node dist/attention-integration.js"
   },
   "dependencies": {
     "@codetether/adapter-codex": "workspace:*",

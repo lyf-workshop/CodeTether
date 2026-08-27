@@ -1,4 +1,4 @@
-import type { ComponentPropsWithoutRef, MouseEventHandler } from 'react'
+import type { ComponentPropsWithoutRef, MouseEventHandler, Ref } from 'react'
 import { Link } from '@tanstack/react-router'
 import { Bell, CircleHelp, Plus, Search } from 'lucide-react'
 
@@ -16,12 +16,26 @@ interface TopBarProfile {
   name: string
 }
 
+type TopBarBreadcrumb =
+  | { label: string; to?: undefined }
+  | { label: string; to: '/projects' }
+  | {
+      label: string
+      params: { projectId: string }
+      to: '/projects/$projectId'
+    }
+  | {
+      label: string
+      params: { projectId: string }
+      to: '/projects/$projectId/conversations'
+    }
+
 interface TopBarProps extends Omit<
   ComponentPropsWithoutRef<'header'>,
   'children'
 > {
   currentPage: string
-  currentProject: string
+  breadcrumbs?: readonly TopBarBreadcrumb[]
   notificationCount?: number
   onHelp?: MouseEventHandler<HTMLButtonElement>
   onNewConversation?: MouseEventHandler<HTMLButtonElement>
@@ -29,6 +43,7 @@ interface TopBarProps extends Omit<
   onProfile?: MouseEventHandler<HTMLButtonElement>
   onSearch?: MouseEventHandler<HTMLButtonElement>
   profile?: TopBarProfile
+  newConversationButtonRef?: Ref<HTMLButtonElement>
 }
 
 const defaultProfile: TopBarProfile = {
@@ -36,11 +51,11 @@ const defaultProfile: TopBarProfile = {
   name: '演示用户',
 }
 
-/** Shared desktop header. Actions remain callback-driven until product flows exist. */
+/** Shared desktop header. Product actions are injected by the AppShell. */
 function TopBar({
+  breadcrumbs,
   className,
   currentPage,
-  currentProject,
   notificationCount = 0,
   onHelp,
   onNewConversation,
@@ -48,10 +63,12 @@ function TopBar({
   onProfile,
   onSearch,
   profile = defaultProfile,
+  newConversationButtonRef,
   ...props
 }: TopBarProps) {
   const notificationsLabel =
     notificationCount > 0 ? `通知，${notificationCount} 条未读` : '通知'
+  const resolvedBreadcrumbs = breadcrumbs ?? [{ label: currentPage }]
 
   return (
     <header
@@ -77,28 +94,36 @@ function TopBar({
       <div className="flex min-w-0 flex-1 items-center gap-4 pr-[var(--layout-topbar-inline-padding)] pl-[var(--layout-content-inline-padding)]">
         <nav aria-label="当前位置" className="min-w-0 flex-1 overflow-hidden">
           <ol className="flex min-w-0 items-center gap-3 text-md font-medium">
-            <li className="min-w-0 shrink truncate">
-              <Link
-                to="/conversations"
-                className="rounded-xs text-text-primary outline-none transition-colors hover:text-primary focus-visible:ring-2 focus-visible:ring-ring/60 motion-reduce:transition-none"
-              >
-                {currentProject}
-              </Link>
-            </li>
-            <li aria-hidden="true" className="shrink-0 text-lg text-text-muted">
-              ›
-            </li>
-            <li
-              aria-current="page"
-              className="hidden min-w-0 truncate text-text-primary sm:block"
-            >
-              {currentPage}
-            </li>
+            {resolvedBreadcrumbs.map((breadcrumb, index) => {
+              const isCurrent = index === resolvedBreadcrumbs.length - 1
+
+              return (
+                <li
+                  key={`${breadcrumb.label}-${index}`}
+                  aria-current={isCurrent ? 'page' : undefined}
+                  className="flex min-w-0 items-center gap-3"
+                >
+                  {index > 0 ? (
+                    <span
+                      aria-hidden="true"
+                      className="shrink-0 text-lg text-text-muted"
+                    >
+                      ›
+                    </span>
+                  ) : null}
+                  <BreadcrumbContent
+                    breadcrumb={breadcrumb}
+                    isCurrent={isCurrent}
+                  />
+                </li>
+              )
+            })}
           </ol>
         </nav>
 
         <div className="flex shrink-0 items-center gap-4">
           <Button
+            ref={newConversationButtonRef}
             size="sm"
             onClick={onNewConversation}
             aria-label="新建会话"
@@ -183,4 +208,56 @@ function TopBar({
   )
 }
 
-export { TopBar, type TopBarProfile, type TopBarProps }
+function BreadcrumbContent({
+  breadcrumb,
+  isCurrent,
+}: {
+  breadcrumb: TopBarBreadcrumb
+  isCurrent: boolean
+}) {
+  const className =
+    'min-w-0 truncate rounded-xs text-text-primary outline-none transition-colors hover:text-primary focus-visible:ring-2 focus-visible:ring-ring/60 motion-reduce:transition-none'
+
+  if (breadcrumb.to === undefined) {
+    return (
+      <span
+        className={
+          isCurrent
+            ? 'hidden min-w-0 truncate text-text-primary sm:block'
+            : 'min-w-0 truncate text-text-primary'
+        }
+      >
+        {breadcrumb.label}
+      </span>
+    )
+  }
+  if (breadcrumb.to === '/projects') {
+    return (
+      <Link to="/projects" className={className}>
+        {breadcrumb.label}
+      </Link>
+    )
+  }
+  if (breadcrumb.to === '/projects/$projectId') {
+    return (
+      <Link
+        to="/projects/$projectId"
+        params={breadcrumb.params}
+        className={className}
+      >
+        {breadcrumb.label}
+      </Link>
+    )
+  }
+  return (
+    <Link
+      to="/projects/$projectId/conversations"
+      params={breadcrumb.params}
+      className={className}
+    >
+      {breadcrumb.label}
+    </Link>
+  )
+}
+
+export { TopBar, type TopBarBreadcrumb, type TopBarProfile, type TopBarProps }

@@ -3,4 +3,9 @@ export { MainContent } from './main-content'
 export { PrimarySidebar, type PrimarySidebarProps } from './primary-sidebar'
 export { RoutePlaceholder } from './route-placeholder'
 export { RootLayout } from './root-layout'
-export { TopBar, type TopBarProfile, type TopBarProps } from './top-bar'
+export {
+  TopBar,
+  type TopBarBreadcrumb,
+  type TopBarProfile,
+  type TopBarProps,
+} from './top-bar'

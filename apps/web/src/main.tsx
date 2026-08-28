@@ -30,22 +30,92 @@ async function renderApp() {
     { RouterProvider },
     { router },
     { HostRuntimeProvider },
+    { getHostRuntime },
+    { AttentionNotificationCoordinator },
+    { notificationSurfaceFromPathname },
+    { nativeCapabilities },
+    {
+      readDesktopNotificationPreferences,
+      resolveNotificationPreferenceStorage,
+    },
+    { projectDetailQueryOptions },
+    { conversationListQueryOptions },
   ] = await Promise.all([
     import('@tanstack/react-query'),
     import('@tanstack/react-router'),
     import('./router'),
     import('./runtime/host/host-runtime-provider'),
+    import('./runtime/host/host-runtime'),
+    import('./runtime/notifications/attention-notification-coordinator'),
+    import('./runtime/notifications/desktop-notification-model'),
+    import('./runtime/native/native-capabilities'),
+    import('./runtime/native/notification-preferences'),
+    import('./runtime/host/project-query'),
+    import('./runtime/host/conversation-list-query'),
   ])
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
     },
   })
+  const runtime = getHostRuntime(queryClient)
+  const notificationStorage = resolveNotificationPreferenceStorage()
+  const notificationCoordinator = new AttentionNotificationCoordinator({
+    adapter: nativeCapabilities.notifications,
+    eventSource: runtime,
+    readPreferences: () =>
+      readDesktopNotificationPreferences(notificationStorage),
+    readSurface: () =>
+      notificationSurfaceFromPathname(router.state.location.pathname),
+    resolveMetadata: async (attention) => {
+      const projectPromise = queryClient.fetchQuery(
+        projectDetailQueryOptions(runtime, attention.projectId),
+      )
+      const conversationTitlePromise =
+        attention.type === 'approval'
+          ? queryClient
+              .fetchQuery(
+                conversationListQueryOptions(runtime, attention.projectId),
+              )
+              .then((conversations) => {
+                const conversation = conversations.find(
+                  (candidate) =>
+                    candidate.conversationId === attention.conversationId,
+                )
+                if (conversation === undefined) {
+                  throw new Error(
+                    'Attention Conversation is missing from its Project index.',
+                  )
+                }
+                return conversation.title
+              })
+          : Promise.resolve(attention.payload.conversationTitle)
+      const [project, conversationTitle] = await Promise.all([
+        projectPromise,
+        conversationTitlePromise,
+      ])
+      return { projectName: project.name, conversationTitle }
+    },
+    navigate: async (intent) => {
+      await router.navigate({
+        to: '/conversations/$conversationId',
+        params: { conversationId: intent.conversationId },
+      })
+    },
+  })
+  notificationCoordinator.start()
+  window.addEventListener(
+    'pagehide',
+    () => {
+      void notificationCoordinator.stop()
+    },
+    { once: true },
+  )
 
   createRoot(appRoot).render(
     <StrictMode>
       <QueryClientProvider client={queryClient}>
-        <HostRuntimeProvider>
+        <HostRuntimeProvider runtime={runtime}>
           <RouterProvider router={router} />
         </HostRuntimeProvider>
       </QueryClientProvider>

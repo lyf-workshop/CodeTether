@@ -5,6 +5,8 @@ import test from 'node:test'
 
 import {
   assertOwnedTemporaryRoot,
+  assertInstalledShortcuts,
+  installerArguments,
   InstallerSmokeCleanupUnsafeError,
   normalizeRegistryPath,
   parseInstallerSmokeMode,
@@ -81,6 +83,37 @@ test('quoted NSIS registry paths normalize without shell parsing', () => {
   assert.equal(
     normalizeRegistryPath('C:\\Temp\\CodeTether App'),
     'C:\\Temp\\CodeTether App',
+  )
+})
+
+test('installer smoke keeps shortcut registration enabled', () => {
+  assert.deepEqual(installerArguments(join(root, 'app')), [
+    '/S',
+    `/D=${join(root, 'app')}`,
+  ])
+  assert.equal(installerArguments(join(root, 'app')).includes('/NS'), false)
+})
+
+test('installed shortcuts must target the isolated Desktop executable', () => {
+  const executable = join(root, 'app', 'codetether-desktop.exe')
+  const shortcut = {
+    path: join(
+      'C:\\Users\\Administrator\\AppData\\Roaming',
+      'Microsoft',
+      'Windows',
+      'Start Menu',
+      'Programs',
+      'CodeTether.lnk',
+    ),
+    target: executable,
+  }
+  assert.deepEqual(assertInstalledShortcuts([shortcut], executable), [shortcut])
+  assert.throws(() => assertInstalledShortcuts([], executable))
+  assert.throws(() =>
+    assertInstalledShortcuts(
+      [{ ...shortcut, target: 'C:\\Program Files\\Other\\other.exe' }],
+      executable,
+    ),
   )
 })
 

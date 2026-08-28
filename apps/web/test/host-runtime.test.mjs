@@ -116,7 +116,14 @@ test('stream.reset fetches a fresh snapshot, replaces projection, and reconnects
     client,
     reconnectDelayMs: 1,
   })
-  t.after(async () => await runtime.stop())
+  const appliedEvents = []
+  const unsubscribeEvents = runtime.subscribeAppliedEvents((event) => {
+    appliedEvents.push(event)
+  })
+  t.after(async () => {
+    unsubscribeEvents()
+    await runtime.stop()
+  })
 
   runtime.start()
   await waitFor(() => runtime.connectionState === 'connected')
@@ -138,6 +145,7 @@ test('stream.reset fetches a fresh snapshot, replaces projection, and reconnects
   assert.equal(runtime.stats.projectionUpdates, 0)
   assert.equal(runtime.stats.snapshotReplacements, 2)
   assert.equal(runtime.stats.resetRecoveries, 1)
+  assert.deepEqual(appliedEvents, [])
 })
 
 test('a fresh Snapshot in a new epoch invalidates uncertain mutation identity', async (t) => {
@@ -243,8 +251,13 @@ test('temporary stream failure keeps projection and reconnects from the last eve
   const unsubscribe = runtime.subscribe(() => {
     states.push(runtime.connectionState)
   })
+  const appliedEvents = []
+  const unsubscribeEvents = runtime.subscribeAppliedEvents((event) => {
+    appliedEvents.push(event)
+  })
   t.after(async () => {
     unsubscribe()
+    unsubscribeEvents()
     await runtime.stop()
   })
 
@@ -256,6 +269,10 @@ test('temporary stream failure keeps projection and reconnects from the last eve
   assert.equal(
     beforeFailure?.conversations[conversationId]?.messages[0]?.body,
     'Live text',
+  )
+  assert.deepEqual(
+    appliedEvents.map((event) => event.eventId),
+    [`${epochA}:3`],
   )
 
   first.fail(new Error('temporary disconnect'))
@@ -281,7 +298,14 @@ test('duplicates are ignored and a sequence gap forces snapshot recovery', async
     client,
     reconnectDelayMs: 1,
   })
-  t.after(async () => await runtime.stop())
+  const appliedEvents = []
+  const unsubscribeEvents = runtime.subscribeAppliedEvents((event) => {
+    appliedEvents.push(event)
+  })
+  t.after(async () => {
+    unsubscribeEvents()
+    await runtime.stop()
+  })
 
   runtime.start()
   await waitFor(() => runtime.connectionState === 'connected')
@@ -293,6 +317,7 @@ test('duplicates are ignored and a sequence gap forces snapshot recovery', async
   assert.equal(runtime.stats.duplicateEvents, 1)
   assert.equal(runtime.stats.resetRecoveries, 1)
   assert.equal(runtime.stats.projectionUpdates, 0)
+  assert.deepEqual(appliedEvents, [])
   assert.notStrictEqual(readHostProjection(queryClient), initialProjection)
   assert.equal(client.connectCalls[1]?.lastEventId, `${epochA}:4`)
 })

@@ -14,7 +14,8 @@ Tauri v2 shell
   ├─ single-instance enforcement
   ├─ fixed Host sidecar spawn/readiness/exit supervision
   ├─ private owned-child shutdown channel
-  └─ exact Project directory picker
+  ├─ exact Project directory picker
+  └─ bounded Attention notification delivery / click activation
              │
              ▼
 existing apps/web build
@@ -26,7 +27,7 @@ Node SEA apps/host sidecar on 127.0.0.1:4317
 existing Agent Core / Codex Adapter / Codex App Server
 ```
 
-Tauri does not expose business commands to React. The WebView continues to use `packages/client` over HTTP/SSE, exactly as Browser mode does. The one native `pick_project_directory` command only acquires a user-selected path before the existing Host Project mutation runs.
+Tauri does not expose business commands to React. The WebView continues to use `packages/client` over HTTP/SSE, exactly as Browser mode does. The native Project command only acquires a user-selected path before the existing Host Project mutation runs. Notification commands accept only a bounded public intent and never query or mutate Attention.
 
 ## Prerequisites
 
@@ -162,7 +163,9 @@ Production CSP permits `connect-src` only to the loopback Host. Development adds
 
 ## Native Capability Boundary
 
-The Desktop currently pins Tauri 2.11.x and the official Rust Dialog plugin 2.7.2. `withGlobalTauri` remains disabled. `capabilities/main.json` grants the `main` WebView exactly one application permission, `allow-project-directory-picker`, which maps only to the command `pick_project_directory`. It does not grant a Dialog-plugin wildcard or any shell, process, or filesystem permission. Tauri also generates the lower-level `allow-pick-project-directory` command permission during the build, but the main capability deliberately grants only the reviewed application permission.
+The Desktop pins Tauri 2.11.5, the official Rust Dialog plugin 2.7.2, the official Rust/JavaScript Notification plugin 2.3.3, and the Windows activation helper `tauri-winrt-notification` 0.7.3. `withGlobalTauri` remains disabled. `capabilities/main.json` grants the `main` WebView only the reviewed Project-picker and Attention-notification application permissions; event listen/unlisten; focused/minimized/visible window reads; and the Notification plugin's permission-check/request commands. It does not grant `notification:default`, `notification:allow-notify`, a Dialog wildcard, or any shell, process, filesystem, clipboard, or global-shortcut permission.
+
+Production keeps `removeUnusedCommands` enabled. `build.rs` explicitly enumerates `pick_project_directory`, `deliver_attention_notification`, and `take_pending_notification_intent` in the Tauri application manifest, and the generated release allow-list contains exactly those three application commands. The Web adapter's Tauri modules remain dynamic imports: Browser mode never executes them, while production packages them as same-origin chunks allowed by `script-src 'self'` without enabling remote scripts or `'unsafe-eval'`.
 
 React can receive only the selected path string or cancellation from that command. It cannot:
 
@@ -193,7 +196,17 @@ Desktop presents the selected directory basename first and a truncated full path
 
 Standalone Browser mode uses the same `AddProjectDialog`, but its native capability is unavailable and the existing absolute-path input is shown instead. The Tauri core module is lazy-loaded only after the centralized adapter detects a real Tauri runtime. The Projects page, Projects empty state, and global New Conversation handoff do not maintain separate Desktop and Browser forms.
 
-Phase 4B does not add Project discovery, relocation, multiple roots, drag-and-drop, recent folders, Open in Explorer, or a file picker. Notifications, tray, updater, custom window chrome, and remote networking also remain separate phases.
+Phase 4B does not add Project discovery, relocation, multiple roots, drag-and-drop, recent folders, Open in Explorer, or a file picker. Tray, updater, custom window chrome, and remote networking remain separate phases.
+
+## Desktop Attention Notifications
+
+Only a newly accepted `attention.created` event can request native delivery. The application-scoped coordinator never derives notifications from Turn events, Agent text, Snapshot/query reconstruction, `stream.reset`, or Host restart. It maps Approval, completed review, and failed Turn to fixed privacy-safe copy containing only a clamped Project name and Conversation title.
+
+The Desktop suppresses a notification only when its focused, visible, non-minimized window already presents the Inbox or the exact affected Conversation. Preferences for the three supported types default on and persist as one versioned record in the installed WebView origin's `localStorage`, outside Project SQLite. Browser mode never loads the native adapter and continues to use the durable Inbox alone.
+
+The official Notification plugin owns the platform permission check. Its current Windows desktop API does not expose notification activation, so a narrow Rust bridge displays the toast with the installed `com.codetether.desktop` AUMID, accepts only the validated public `NotificationIntent`, and queues a click for Web navigation. A click unminimizes, shows, and focuses the existing single-instance window; it never approves, resolves, acknowledges, or retries Attention. Dedupe is process-scoped by `attentionId`, and all native delivery failures remain best-effort.
+
+Windows WebView2 can suspend a minimized document and pause its SSE consumer. While the Desktop click-intent subscription is active, the adapter holds a shared `navigator.locks` lease using the Wry/WebView2 background-execution workaround and releases it during teardown. Environments without Web Locks safely no-op. A bounded native queue plus the Tauri event and focus/page-show/visibility wakeups recover clicks missed during suspension without polling or creating another Attention projection.
 
 ## Validation Commands
 
@@ -210,15 +223,18 @@ pnpm desktop:installer-smoke:cleanup # Remove only that held smoke installation
 
 The package smoke argument is internal test plumbing. It starts the release application against an isolated `CODETETHER_DATA_DIR`, waits for a verified Host, requests owned graceful shutdown, and expects exit code zero.
 
-The required Phase 4B validation has completed in development, raw production, and an isolated installed NSIS application. The real Windows picker passed cancellation, selection, main-window ownership, Unicode/space paths, Project registration, TopBar New Conversation handoff, and a real Codex Conversation. Graceful close removed the owned Desktop/Host/Codex process tree and released port 4317; uninstall removed the exact smoke installation, registry identity, and state. Phase acceptance remains an Owner decision.
+The required Phase 4B validation completed in development, raw production, and an isolated installed NSIS application. The real Windows picker passed cancellation, selection, main-window ownership, Unicode/space paths, Project registration, TopBar New Conversation handoff, and a real Codex Conversation. Graceful close removed the owned Desktop/Host/Codex process tree and released port 4317; uninstall removed the exact smoke installation, registry identity, and state. Phase 4B is accepted and frozen.
+
+The required Phase 4C Windows validation also completed in development, the raw production executable, and an isolated installed NSIS application. It covered real Approval and completed-review delivery, the canonical failed fixture, exact-Conversation foreground suppression, background/minimized and other-Conversation delivery, click restoration/focus/navigation, replay/reset/restart deduplication, preferences, Unicode/long-title copy, Browser fallback, CodeTether installed branding, and graceful lifecycle cleanup. Clicks did not approve, review, acknowledge, retry, or resolve Attention. Owner acceptance remains pending, so Phase 4C is not accepted or frozen.
 
 ## Known Limitations
 
-- Phase 4B remains Windows-first. macOS/Linux packaging, native dialog, and process-tree behavior have not been accepted.
+- Desktop packaging, native folder selection, process-tree behavior, and notification delivery remain Windows-first. macOS/Linux have not been validated.
 - The Host uses fixed port 4317. Dynamic-port negotiation is not implemented.
 - A running external CodeTether Host is reported rather than adopted.
 - Host crash recovery is visible but not automatically retried.
 - Native decorations are retained; custom Desktop chrome is future polish.
 - Builds/installers are unsigned local Alpha artifacts. Signing, updater, and release channels are not implemented.
 - The current application icon is a minimal Alpha asset; final brand artwork is still pending.
-- Drag-and-drop folders, recent-folder persistence, Project relocation/multi-root, Open in Explorer, Desktop notifications, tray, remote access, Machine management, and additional Agent providers remain out of scope.
+- Notification click activation exists only while the Desktop process is running. Full-exit delivery, Tray, notification history, push, custom sounds, and quiet-hour rules are not implemented.
+- Drag-and-drop folders, recent-folder persistence, Project relocation/multi-root, Open in Explorer, remote access, Machine management, and additional Agent providers remain out of scope.

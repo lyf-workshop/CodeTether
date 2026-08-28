@@ -50,6 +50,9 @@
     "src/runtime/host/project-actions.ts",
     "src/runtime/host/project-query.ts",
     "src/runtime/host/project-view-state.ts",
-    "src/runtime/native/native-capabilities.ts"
+    "src/runtime/native/native-capabilities.ts",
+    "src/runtime/native/notification-preferences.ts",
+    "src/runtime/notifications/attention-notification-coordinator.ts",
+    "src/runtime/notifications/desktop-notification-model.ts"
   ]
 }

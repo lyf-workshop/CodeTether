@@ -11,6 +11,7 @@ import { ConversationDetailRoute } from './components/conversation/conversation-
 import { ProjectConversationsRoute } from './components/conversations'
 import { InboxPage } from './components/inbox'
 import { ProjectDetailRoute, ProjectsPage } from './components/projects'
+import { DesktopNotificationSettings } from './components/settings'
 
 const rootRoute = createRootRoute({ component: RootLayout })
 
@@ -94,7 +95,7 @@ const machinesRoute = createRoute({
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/settings',
-  component: () => <RoutePlaceholder title="设置" />,
+  component: DesktopNotificationSettings,
 })
 
 const routeTree = rootRoute.addChildren([

@@ -518,7 +518,7 @@ Exit gate results:
 
 ### Phase 4A — Tauri Desktop Shell Foundation
 
-**Status:** implemented and validated. This lifecycle foundation remains frozen while Phase 4B adds only native directory acquisition.
+**Status:** implemented, validated, accepted, and frozen. Phase 4B and Phase 4C add only their separately authorized native capabilities on this lifecycle foundation.
 
 Authorized scope:
 
@@ -557,7 +557,7 @@ Exit gate results:
 
 ### Phase 4B — Native Folder Picker
 
-**Status:** implemented and required validation complete; Owner acceptance is pending. Do not mark this phase accepted or frozen until Owner review.
+**Status:** implemented, validated, accepted, and frozen.
 
 Implemented scope:
 
@@ -579,6 +579,38 @@ Exit gate results:
 - Production `pnpm desktop:build` emits the raw Desktop executable and NSIS package. The raw package cold-starts without Vite or an external Host, and the Phase 4A lifecycle/single-instance/port-ownership suite remains green.
 - The generated NSIS package installs to an isolated per-user location, launches its bundled Host/Web assets, opens the real native picker, registers a real Project, completes a real Codex Conversation, exits gracefully with no owned process or 4317 listener, uninstalls, and removes its exact test state.
 - Registering the same canonical directory returns the same Project identity and does not add a row. Standalone Browser manual-path registration remains functional with zero browser console errors or warnings and no Tauri runtime execution.
+
+### Phase 4C — Desktop Notifications
+
+**Status:** implemented; required Windows development, production, and installed-NSIS validation is complete. Owner acceptance is pending, so do not mark this phase accepted or frozen.
+
+Implemented scope:
+
+- Existing durable Attention remains the only notification source of truth. The Desktop delivery path consumes only new `attention.created` events for Approval, completed review, and failed Turn; it never derives user need from Agent text or from `approval.requested`, `turn.completed`, or `turn.failed` separately.
+- A centralized Browser-safe native notification adapter handles availability, permission, delivery, click callbacks, and the minimal focused/visible/minimized window state. Standalone Browser mode never imports or invokes native notification/window APIs and continues to use Inbox only.
+- A shared Web Lock keeps the accepted HostRuntime SSE consumer eligible to run while Windows WebView2 is minimized and is released with the Desktop subscription. The native queue plus event/focus/page-show/visibility wake paths recover click intents without polling or moving Attention truth into Tauri.
+- Notification intents carry only CodeTether `attentionId`, type, `projectId`, and `conversationId`, plus privacy-bounded copy derived from a clamped Project name and Conversation title. They contain no prompt, command, path, output, diff, Agent message, raw error, provider payload, or provider identity.
+- A pure V1 suppression rule omits native delivery when the focused, visible, non-minimized Desktop already presents the global Inbox or exact affected Conversation. Background, minimized, other-Project, and other-Conversation work remains eligible.
+- One running Desktop process deduplicates by `attentionId`, covering SSE replay, reconnect, StrictMode, and remount. Snapshot/query reconstruction, `stream.reset`, epoch replacement, and Host/Desktop restart do not replay the durable open-Attention backlog as new notifications.
+- A click restores, unminimizes, and focuses the existing single-instance main window, then hands a validated public `NotificationIntent` to the Web navigation boundary. The Web opens the durable Conversation and never treats the click as Approval, review, acknowledgement, retry, or resolution.
+- `/settings` contains only three Desktop notification preferences—Approval, work completed, and execution failed—and defaults all three on. The complete versioned record is written immediately to the installed WebView origin's `localStorage`, outside Project SQLite. Browser mode reports the Desktop capability unavailable rather than presenting fake delivery.
+- Notification failure or denied/unavailable permission is best-effort and cannot fail the Host, Agent, Conversation, Attention, Inbox, or application. Delivery subscribes only to low-frequency semantic Attention events and does not observe message or Tool streaming.
+- Tauri 2.11.5 pins the official notification plugin 2.3.3 and `tauri-winrt-notification` 0.7.3. The main capability grants only the two bounded application permissions, event listen/unlisten, focused/minimized/visible window reads, and notification permission check/request; generic notification send and unrelated native powers remain denied. Production same-origin dynamic chunks run under `script-src 'self'`, while the explicit Rust application manifest and generated allow-list retain exactly the three reviewed application commands with `removeUnusedCommands` enabled.
+
+Not included:
+
+- System tray, minimize-to-tray, changed close semantics, notification history/center UI, or notifications after full application exit.
+- Push server, remote/mobile/browser push, email, Slack or other chat delivery, Activity, Search, or a second Alert/unread database.
+- Custom sounds, volume, quiet hours, Do Not Disturb scheduling, notification aggregation, priority manipulation, or a rules engine.
+- Custom window chrome, updater/signing/release channels, Machine backend, LAN/remote access, Tailscale, authentication, Claude Code, or OpenCode.
+
+Exit gate results:
+
+- Full Node/Web and Rust quality gates passed, including notification mapping, privacy clamp, foreground suppression, other-Conversation delivery, preference persistence, Browser unavailability, adapter failure, click validation/navigation, window focus, replay/reset/restart, deduplication, and listener lifecycle coverage.
+- Windows development validation exercised real Approval and completed-review Attention plus the canonical failed fixture while CodeTether was backgrounded/minimized. Clicks returned to the exact Conversation; exact-Conversation foreground Approval produced only the Approval Dock, and click never resolved durable Attention.
+- Replay, `stream.reset`, restart reconstruction, rapid distinct Attention, resolved-before-click, unavailable Project, Unicode, and long-title paths retained durable truth without duplicate delivery or accidental resolution.
+- `pnpm desktop:build`, the raw release executable, and an isolated installed NSIS application verified CodeTether branding, notification display/click, single-instance restoration/focus, restart behavior, graceful close, and no residual owned processes. Standalone Browser regression remained free of Tauri execution and native errors.
+- Phase 4C remains implemented and validated but not accepted or frozen until Owner review.
 
 ## Phase 5 — Machines
 

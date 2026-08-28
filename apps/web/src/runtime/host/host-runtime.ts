@@ -100,6 +100,11 @@ export interface HostRuntimeOptions {
 }
 
 type ConnectionListener = () => void
+export type AppliedHostEvent = Exclude<
+  HostEventEnvelope,
+  { readonly type: 'stream.reset' }
+>
+export type AppliedHostEventListener = (event: AppliedHostEvent) => void
 
 const runtimesByQueryClient = new WeakMap<QueryClient, HostRuntime>()
 const RELEASE_GRACE_MS = 100
@@ -109,6 +114,7 @@ export class HostRuntime {
   readonly #client: HostRuntimeClient
   readonly #reconnectDelayMs: number
   readonly #listeners = new Set<ConnectionListener>()
+  readonly #appliedEventListeners = new Set<AppliedHostEventListener>()
   readonly #actions: LiveConversationActions
   readonly #projectActions: ProjectActions
   readonly #newConversationActions: NewConversationActions
@@ -167,6 +173,18 @@ export class HostRuntime {
   }
 
   readonly getConnectionState = (): HostConnectionState => this.#connectionState
+
+  /**
+   * Observes only envelopes that passed epoch/sequence validation and advanced
+   * the canonical projection cursor. Snapshot recovery and stream resets are
+   * deliberately not application events.
+   */
+  readonly subscribeAppliedEvents = (
+    listener: AppliedHostEventListener,
+  ): (() => void) => {
+    this.#appliedEventListeners.add(listener)
+    return () => this.#appliedEventListeners.delete(listener)
+  }
 
   startTurn(conversationId: string, text: string) {
     return this.#actions.startTurn(conversationId, text)
@@ -380,6 +398,7 @@ export class HostRuntime {
             }
 
             replaceHostProjection(this.#queryClient, result.projection)
+            this.#publishAppliedEvent(event)
             invalidateConversationProductQueries(this.#queryClient, event)
             if (shouldRefreshAttention(event.type)) {
               void invalidateAttentionQueries(this.#queryClient)
@@ -455,6 +474,16 @@ export class HostRuntime {
         listener()
       } catch {
         // A view subscriber cannot stop the connection runtime.
+      }
+    }
+  }
+
+  #publishAppliedEvent(event: AppliedHostEvent): void {
+    for (const listener of this.#appliedEventListeners) {
+      try {
+        listener(event)
+      } catch {
+        // A best-effort application observer cannot stop Host streaming.
       }
     }
   }

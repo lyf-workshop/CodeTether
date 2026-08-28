@@ -65,6 +65,30 @@ export function normalizeRegistryPath(value) {
   return resolve(trimmed)
 }
 
+export function installerArguments(installRoot) {
+  return ['/S', `/D=${installRoot}`]
+}
+
+export function assertInstalledShortcuts(shortcuts, expectedExecutable) {
+  ensure(
+    Array.isArray(shortcuts) && shortcuts.length > 0,
+    'NSIS installer did not create a CodeTether shortcut',
+  )
+  for (const shortcut of shortcuts) {
+    ensure(
+      shortcut !== null &&
+        typeof shortcut === 'object' &&
+        typeof shortcut.path === 'string' &&
+        basename(shortcut.path).toLocaleLowerCase('en-US') ===
+          `${PRODUCT_NAME}.lnk`.toLocaleLowerCase('en-US') &&
+        typeof shortcut.target === 'string' &&
+        sameWindowsPath(shortcut.target, expectedExecutable),
+      `Installer registered an unexpected shortcut: ${JSON.stringify(shortcut)}`,
+    )
+  }
+  return shortcuts
+}
+
 export function assertOwnedTemporaryRoot(
   directory,
   temporaryDirectory = tmpdir(),
@@ -350,7 +374,7 @@ async function assertSafePreflight(configuration) {
 async function installApplication(session, configuration) {
   await runProcess(
     session.installerPath,
-    ['/S', '/NS', `/D=${session.installRoot}`],
+    installerArguments(session.installRoot),
     PROCESS_TIMEOUT_MS,
     'NSIS installer',
   )
@@ -358,7 +382,10 @@ async function installApplication(session, configuration) {
 }
 
 async function assertInstalledIdentity(session, configuration) {
-  const registry = await readInstallerRegistry(configuration)
+  const [registry, shortcuts] = await Promise.all([
+    readInstallerRegistry(configuration),
+    readInstallerShortcuts(configuration),
+  ])
   ensure(
     registry.exists === true,
     'NSIS installer did not create its registry identity',
@@ -386,7 +413,8 @@ async function assertInstalledIdentity(session, configuration) {
     stat(session.hostExecutable),
     stat(session.uninstallExecutable),
   ])
-  return registry
+  assertInstalledShortcuts(shortcuts, session.desktopExecutable)
+  return { ...registry, shortcuts }
 }
 
 async function cleanupSession(sessionValue, configuration, options) {
@@ -451,11 +479,21 @@ async function cleanupSession(sessionValue, configuration, options) {
     await removeExactInstallerRegistration(session, configuration)
   }
 
+  // NSIS can leave its Desktop shortcut behind briefly (notably when the
+  // Desktop folder is OneDrive-backed). Cleanup is allowed to remove only the
+  // two known CodeTether shortcut locations and only when their target is this
+  // exact owned smoke executable.
+  const removedShortcuts = await removeOwnedInstallerShortcuts(
+    session,
+    configuration,
+  )
+
   const registryAfterUninstall = await readInstallerRegistry(configuration)
   ensure(
     registryAfterUninstall.exists === false,
     'NSIS uninstall registration remains',
   )
+  await assertNoInstallerShortcuts(configuration)
   await cleanupExactManufacturerKey(session, configuration)
   await assertNoInstalledFiles(session)
 
@@ -464,6 +502,7 @@ async function cleanupSession(sessionValue, configuration, options) {
   return {
     ...closeReport,
     externalPortOccupied,
+    removedShortcuts,
     uninstalled: true,
     rootCleaned: true,
     stateCleaned: true,
@@ -502,6 +541,41 @@ async function waitForUninstall(session, configuration, timeoutMs) {
     await delay(100)
   }
   throw new Error('NSIS uninstall did not release its owned files and registry')
+}
+
+async function removeOwnedInstallerShortcuts(session, configuration) {
+  const shortcuts = await readInstallerShortcuts(configuration)
+  for (const shortcut of shortcuts) {
+    if (
+      shortcut === null ||
+      typeof shortcut !== 'object' ||
+      typeof shortcut.target !== 'string' ||
+      !sameWindowsPath(shortcut.target, session.desktopExecutable)
+    ) {
+      throw new InstallerSmokeCleanupUnsafeError(
+        `Refusing to remove a CodeTether shortcut outside the owned smoke install: ${JSON.stringify(shortcut)}`,
+      )
+    }
+  }
+  if (shortcuts.length === 0) return []
+
+  const result = await runPowerShellJson(removeShortcutsPowerShell(), {
+    CODETETHER_SMOKE_EXPECTED_EXE: session.desktopExecutable,
+    CODETETHER_SMOKE_PRODUCT: configuration.productName,
+  })
+  ensure(
+    Array.isArray(result.removed) && result.removed.length === shortcuts.length,
+    'Owned installer shortcut cleanup was not confirmed',
+  )
+  return result.removed
+}
+
+async function assertNoInstallerShortcuts(configuration) {
+  const shortcuts = await readInstallerShortcuts(configuration)
+  ensure(
+    shortcuts.length === 0,
+    `NSIS uninstall left a CodeTether shortcut: ${JSON.stringify(shortcuts)}`,
+  )
 }
 
 async function assertNoInstalledFiles(session) {
@@ -546,6 +620,17 @@ async function readInstallerRegistry(configuration) {
     CODETETHER_SMOKE_MANUFACTURER: configuration.manufacturer,
     CODETETHER_SMOKE_PRODUCT: configuration.productName,
   })
+}
+
+async function readInstallerShortcuts(configuration) {
+  const result = await runPowerShellJson(readShortcutsPowerShell(), {
+    CODETETHER_SMOKE_PRODUCT: configuration.productName,
+  })
+  ensure(
+    Array.isArray(result.shortcuts),
+    'Installer shortcut inspection returned an invalid result',
+  )
+  return result.shortcuts
 }
 
 async function readProcessIdentity(processId) {
@@ -964,6 +1049,68 @@ $properties = Get-ItemProperty -LiteralPath $keyPath -ErrorAction Stop
   mainBinaryName = [string]$properties.MainBinaryName
   uninstallString = [string]$properties.UninstallString
 } | ConvertTo-Json -Compress
+`
+}
+
+function readShortcutsPowerShell() {
+  return String.raw`
+$ErrorActionPreference = 'Stop'
+$product = $env:CODETETHER_SMOKE_PRODUCT
+$shortcutPaths = @(
+  (Join-Path ([Environment]::GetFolderPath('Desktop')) "$product.lnk"),
+  (Join-Path ([Environment]::GetFolderPath('Programs')) "$product.lnk")
+)
+$shell = New-Object -ComObject WScript.Shell
+$shortcuts = New-Object 'System.Collections.Generic.List[object]'
+foreach ($path in $shortcutPaths) {
+  if (!(Test-Path -LiteralPath $path)) { continue }
+  $shortcut = $shell.CreateShortcut($path)
+  $target = [string]$shortcut.TargetPath
+  [void]$shortcuts.Add([pscustomobject]@{
+    path = [IO.Path]::GetFullPath($path)
+    target = if ([string]::IsNullOrWhiteSpace($target)) {
+      $target
+    }
+    else {
+      [IO.Path]::GetFullPath($target)
+    }
+  })
+}
+[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell)
+[pscustomobject]@{ shortcuts = @($shortcuts.ToArray()) } | ConvertTo-Json -Compress -Depth 4
+`
+}
+
+function removeShortcutsPowerShell() {
+  return String.raw`
+$ErrorActionPreference = 'Stop'
+$expectedExecutable = [IO.Path]::GetFullPath($env:CODETETHER_SMOKE_EXPECTED_EXE)
+$product = $env:CODETETHER_SMOKE_PRODUCT
+$shortcutPaths = @(
+  (Join-Path ([Environment]::GetFolderPath('Desktop')) "$product.lnk"),
+  (Join-Path ([Environment]::GetFolderPath('Programs')) "$product.lnk")
+)
+$shell = New-Object -ComObject WScript.Shell
+$removed = New-Object 'System.Collections.Generic.List[string]'
+foreach ($path in $shortcutPaths) {
+  if (!(Test-Path -LiteralPath $path)) { continue }
+  $shortcut = $shell.CreateShortcut($path)
+  $target = [string]$shortcut.TargetPath
+  if (
+    [string]::IsNullOrWhiteSpace($target) -or
+    ![string]::Equals(
+      [IO.Path]::GetFullPath($target),
+      $expectedExecutable,
+      [StringComparison]::OrdinalIgnoreCase
+    )
+  ) {
+    throw "Refusing to remove a shortcut that is not owned by this smoke install: $path"
+  }
+  Remove-Item -LiteralPath $path -Force
+  [void]$removed.Add([IO.Path]::GetFullPath($path))
+}
+[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell)
+[pscustomobject]@{ removed = @($removed.ToArray()) } | ConvertTo-Json -Compress -Depth 4
 `
 }
 

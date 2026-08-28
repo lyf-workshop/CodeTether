@@ -20,7 +20,10 @@ use tauri_plugin_shell::{
 };
 
 use self::process_tree::ProcessTreeGuard;
-use crate::startup_error::{self, StartupFailureKind};
+use crate::{
+    attention_notifications::AttentionNotificationState,
+    startup_error::{self, StartupFailureKind},
+};
 
 const HOST_ADDRESS: &str = "127.0.0.1:4317";
 const HOST_URL: &str = "http://127.0.0.1:4317";
@@ -558,10 +561,13 @@ pub fn run_desktop() {
                 let _ = window.set_focus();
             }
         }))
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
-            crate::project_directory_picker::pick_project_directory
+            crate::project_directory_picker::pick_project_directory,
+            crate::attention_notifications::deliver_attention_notification,
+            crate::attention_notifications::take_pending_notification_intent
         ])
         .setup(|app| {
             let host = match HostSupervisor::start(app.handle()) {
@@ -579,6 +585,7 @@ pub fn run_desktop() {
             let observation = host.observation();
             let state = DesktopState::new(host);
             app.manage(state.clone());
+            app.manage(AttentionNotificationState::default());
 
             let app_handle = app.handle().clone();
             let smoke_exit_delay = smoke_exit_delay(std::env::args());

@@ -24,9 +24,11 @@ Phase 2C.1 is accepted, and Phase 2C.1.1 is frozen as **Live Conversation Read M
 
 **Phase 4A — Tauri Desktop Shell Foundation** is implemented and validated. `apps/desktop` packages the existing Web application and supervises a revision-coupled Node SEA build of the existing Host. It adds native application/window/process lifecycle without moving Project, Conversation, Attention, persistence, Agent, Protocol, or projection logic into Rust.
 
-**Phase 4B — Native Folder Picker** is implemented and its required Windows development, production, Browser, real Project/Conversation, and installed-NSIS validation has completed; Owner acceptance is pending. Tauri 2.11.x and the official Rust dialog plugin 2.7.2 expose one directory-only `pick_project_directory` command with an exact main-window capability. React receives only the selected path string; the existing Host Project API still owns canonicalization, authorization, duplicate identity, persistence, and safe errors.
+**Phase 4B — Native Folder Picker** is accepted and frozen. Tauri 2.11.x and the official Rust dialog plugin 2.7.2 expose one directory-only `pick_project_directory` command with an exact main-window capability. React receives only the selected path string; the existing Host Project API still owns canonicalization, authorization, duplicate identity, persistence, and safe errors.
 
-No Project discovery/scanning, rename/relocate, read/unread Inbox history, archive/delete/history pagination, remote access, authentication, multiple-Machine Project model, notification delivery, tray, updater, or general filesystem bridge exists. SQLite remains local Host data, not a remote or multi-user service.
+**Phase 4C — Desktop Notifications** is implemented, and its required Windows development, production, and installed-NSIS validation has completed; Owner acceptance is pending. New `attention.created` events are the sole arrival trigger for privacy-bounded Approval, completed-review, and failed-Turn notifications. A centralized Desktop adapter, pure foreground suppression, process-scoped Attention-ID deduplication, validated click intents, and three persisted application preferences add delivery without moving Attention truth into Tauri. This phase is not accepted or frozen until Owner review.
+
+No Project discovery/scanning, rename/relocate, read/unread Inbox history, archive/delete/history pagination, remote access, authentication, multiple-Machine Project model, tray, closed-app notification delivery, updater, or general filesystem bridge exists. SQLite remains local Host data, not a remote or multi-user service.
 
 ## System Context
 
@@ -36,7 +38,8 @@ The local Desktop path is:
 Tauri Desktop Shell
     ├── window / application lifecycle
     ├── owned Host sidecar supervision
-    └── exact Project directory picker capability
+    ├── exact Project directory picker capability
+    └── bounded Attention notification delivery / click activation
               │
               ▼
 Existing Web UI
@@ -60,13 +63,13 @@ Mobile / Web
  Machine Host
 ```
 
-The Host remains the runtime and durable product-state authority. Clients render normalized data and send explicit Protocol v1 commands rather than operating provider protocols directly. Tauri does not introduce a second business API: its private parent/child pipe is only a lifecycle channel, and its single Project-directory command only acquires an explicit user selection before the existing typed Client/Host registration flow runs.
+The Host remains the runtime and durable product-state authority. Clients render normalized data and send explicit Protocol v1 commands rather than operating provider protocols directly. Tauri does not introduce a second business API: its private parent/child pipe is only a lifecycle channel, its Project-directory command only acquires an explicit user selection, and its notification commands accept and return only a bounded public `NotificationIntent`. Native code never queries, creates, resolves, or routes Attention.
 
 ## Monorepo Boundaries
 
 ```text
 apps/web                   Frozen product UI and HostRuntime/Protocol consumer
-apps/desktop               Tauri v2 window, packaging, owned Host supervision, and exact native directory picker
+apps/desktop               Tauri v2 window, packaging, owned Host supervision, exact directory picker, and bounded notification delivery
 apps/host                  Codex runtime, loopback Host API, and SQLite persistence
 
 packages/ui                Shared design system
@@ -576,7 +579,7 @@ Approval request/resolution and completed/failed Turn finalization write their n
 
 Provider Approval handles remain process-local. During restart reconciliation, any open Approval Attention becomes `expired` with `host_restart` inside the same reconciliation transaction and is never restored to the actionable registry. Completed-review and failed items remain durable. Migration deliberately does not backfill Attention for pre-004 Turn history, avoiding a synthetic backlog the user never received.
 
-There is no `question` / needs-reply Attention because Codex does not currently expose a reliable structured Agent-question signal. Text punctuation, content heuristics, and extra LLM classification are intentionally not used. Read/unread, Notifications, and Activity remain separate future work.
+There is no `question` / needs-reply Attention because Codex does not currently expose a reliable structured Agent-question signal. Text punctuation, content heuristics, and extra LLM classification are intentionally not used. Read/unread and Activity remain separate future work. Phase 4C consumes only the existing `attention.created` semantic event for Desktop delivery and does not extend this model.
 
 The real isolated validation observed the exact sequence `approval.requested` → `attention.created` → `approval.resolved` → `attention.resolved`, followed by `turn.completed` → a second `attention.created`. Allow Once took 6.075 ms at the local HTTP boundary; after a full Host restart, the durable list read took 3.398 ms and explicit review resolution took 4.739 ms. The 98,304-byte temporary database was removed after validation, and the disposable workspace remained unchanged. A real Codex `turn.failed` was not observed; failed Attention remains fixture-validated and is not inferred from Tool failure.
 
@@ -600,7 +603,7 @@ Timeline scroll decisions are isolated in a pure helper. Content follows the bot
 
 ## UI
 
-The UI presents projects, conversations, agents, machines, approvals, changes, terminal output, and context. Figma defines visual and interaction behavior. Phase 2C.1 through Phase 2C.2 preserve the accepted visual structure and change only the Conversation Detail data/control boundary for valid live Conversation routes. Phase 3B.2 replaces only the Projects placeholder with the accepted real list and overview surface. Phase 3C.2 keeps the accepted Conversations/Detail visual structures while replacing their Product data boundary with real Project and durable Conversation reads. Phase 3D.2 adapts only the accepted Inbox surface to real Attention semantics.
+The UI presents projects, conversations, agents, machines, approvals, changes, terminal output, and context. Figma defines visual and interaction behavior. Phase 2C.1 through Phase 2C.2 preserve the accepted visual structure and change only the Conversation Detail data/control boundary for valid live Conversation routes. Phase 3B.2 replaces only the Projects placeholder with the accepted real list and overview surface. Phase 3C.2 keeps the accepted Conversations/Detail visual structures while replacing their Product data boundary with real Project and durable Conversation reads. Phase 3D.2 adapts only the accepted Inbox surface to real Attention semantics. Phase 4C replaces only the Settings placeholder with one small Desktop-notification preference section.
 
 The client owns ephemeral presentation state only. TanStack Query stores bootstrap, Snapshot, Conversation projection, Project queries, Conversation indexes, and Attention queries; Zustand remains limited to UI state. Project, Conversation, Attention, Agent, Machine, and retained Timeline records must not be duplicated into a client store as a second runtime authority. The Host remains the product-state source of truth.
 
@@ -610,7 +613,19 @@ The live Conversation, Conversation index, Project, and Inbox paths consume Prot
 
 `apps/desktop` is a Windows-first Tauri 2.11.x shell around the existing Web/Host system. It creates one native-decorated `main` window, uses the stable `com.codetether.desktop` bundle identifier, and loads the same `apps/web` build used by Browser mode. Production loads packaged Web assets; development lets the Tauri CLI own the Vite process. There is no `DesktopConversationPage`, Desktop-only React tree, or Tauri business command layer.
 
-The Rust layer owns application/window lifecycle, single-instance behavior, Host process supervision, startup diagnostics, packaging, and one explicit Project directory picker. The official single-instance plugin is registered before other plugins; a second launch invokes restore/focus on the first ready window and does not start a second Host. The main window starts hidden against the application's dark background and is shown only after bootstrap readiness plus Protocol/build identity validation, avoiding an unstyled white surface. Native window decorations remain intentionally unchanged.
+The Rust layer owns application/window lifecycle, single-instance behavior, Host process supervision, startup diagnostics, packaging, one explicit Project directory picker, and bounded Windows notification display/click activation. The official single-instance plugin is registered before other plugins; a second launch invokes restore/focus on the first ready window and does not start a second Host. The main window starts hidden against the application's dark background and is shown only after bootstrap readiness plus Protocol/build identity validation, avoiding an unstyled white surface. Native window decorations and close semantics remain intentionally unchanged.
+
+### Desktop Attention Notifications
+
+`HostRuntime` publishes a low-frequency applied-event observer only after an SSE envelope passes epoch/sequence validation and advances the canonical projection. The application-scoped notification coordinator subscribes once and considers only `attention.created`; duplicate/out-of-order envelopes, `stream.reset`, Snapshot replacement, Attention-query refetch, and Host restart reconstruction are not arrivals. The coordinator claims each `attentionId` synchronously before asynchronous preference, window, metadata, permission, and delivery work, while the Rust boundary independently retains a bounded process-local delivered-ID set.
+
+Windows WebView2 may suspend a minimized document and pause its SSE consumer. For the lifetime of the Desktop click-intent subscription, the adapter therefore holds a shared `navigator.locks` lease using the Wry/WebView2 background-execution workaround and releases it during teardown; environments without Web Locks safely no-op. This preserves the existing Web-owned Host stream rather than adding native polling, a second Attention projection, a daemon, or changed close semantics. Native intent queuing plus focus, page-show, and visibility wakeups safely recover a click event missed while the WebView was suspended.
+
+The pure product model maps the three `AttentionType` values to fixed copy, truncates Project names at 24 graphemes and Conversation titles at 36 graphemes, and creates a minimal intent containing `attentionId`, type, `projectId`, `conversationId`, title, and two-line body. It suppresses only when the main window is focused, visible, non-minimized, and the current Web surface is the Inbox or exact affected Conversation. Reading preferences, metadata resolution, permission, native delivery, diagnostics, and navigation are all best-effort and cannot interrupt Host streaming or mutate Attention.
+
+Notification click activation is process-local. Rust queues a validated intent, unminimizes, shows, and focuses the existing `main` window, then emits one signal for the Web adapter to drain the bounded FIFO. Web revalidates the public intent and owns the Conversation route. Clicking never resolves an Approval, completed review, or failure; a stale click simply opens the current durable Conversation state. Fully closing Desktop still performs Phase 4A graceful shutdown, so there is no tray daemon or closed-app callback.
+
+The three default-on booleans are the only Phase 4C application preferences. Settings and delivery share a versioned, complete record under the installed WebView's origin-scoped `localStorage`; every successful toggle uses synchronous `setItem`, and missing, malformed, partial, inaccessible, or future-version data falls back safely. This file-free WebView preference boundary is separate from Project SQLite and from durable Attention. Browser has a different origin and an unavailable native adapter, so it exposes only an honest unavailable state and Inbox remains its notification surface.
 
 ### Host Sidecar and Revision Coupling
 
@@ -632,13 +647,15 @@ In Desktop-managed mode, stdin EOF or channel error also requests the same grace
 
 ### Native Security Boundary
 
-`withGlobalTauri` remains disabled. The `main` WebView capability contains exactly `allow-project-directory-picker`, an application permission that allows only `pick_project_directory`; it contains no Dialog-plugin wildcard, shell, process, or filesystem permission. Tauri generates the lower-level `allow-pick-project-directory` command permission from the command manifest, but the main window is granted only the reviewed application permission. The React native-capability adapter lazily imports only Tauri core invocation after detecting a real Tauri runtime. Browser mode exposes an unavailable picker and never executes that import.
+`withGlobalTauri` remains disabled. The `main` WebView capability contains only the reviewed application permissions for `allow-project-directory-picker` and `allow-attention-notifications`; `core:event:allow-listen` / `allow-unlisten`; the three focused, minimized, and visible window-state reads; and `notification:allow-is-permission-granted` / `allow-request-permission`. The application permissions expose only `pick_project_directory`, `deliver_attention_notification`, and `take_pending_notification_intent`. There is no `notification:default`, `notification:allow-notify`, plugin wildcard, shell, process, filesystem, clipboard, global-shortcut, or generic native command permission. Browser mode receives unavailable native capabilities and never executes the dynamically imported Tauri core, event, window, or notification modules.
 
 The command uses the official Rust `tauri-plugin-dialog` 2.7.2 API to open one folder-only, single-selection dialog parented to the CodeTether main window. It accepts no frontend path or options and returns only `Option<String>`: a selected Unicode path or cancellation. It does not enumerate, read, write, canonicalize, authorize, or register that directory. The same `AddProjectDialog` then sends the selected string through `HostRuntime` and `packages/client` to the existing Project API. Host real-path and workspace policy remain the authorization boundary.
 
-There is no `invoke("run_command")`, generic `invoke("native_action")`, arbitrary shell argument bridge, or filesystem grant to Web content. Tauri's folder dialog is directory acquisition, not a filesystem capability grant or a second Client-to-Host protocol.
+Tauri 2.11.5 registers the official Rust and JavaScript notification plugin 2.3.3 for the platform permission check. Windows display/click behavior uses the reviewed `tauri-winrt-notification` 0.7.3 boundary because the intent must restore the existing window and return exact public identities. Rust denies unknown fields, private/malformed identities, control characters, overlong content, and more than two body lines before delivery. Its queue and dedupe sets are bounded, and failure returns a safe error while logging only a Desktop diagnostic.
 
-Production CSP allows HTTP/SSE connection only to `http://127.0.0.1:4317`; scripts and assets remain self-hosted, and wildcard source directives are absent. Development adds only the explicit Vite HTTP/WebSocket endpoints. The Host still binds loopback only and retains strict Host/Origin validation; Desktop-managed startup allowlists only its explicit WebView Origin rather than weakening CORS.
+There is no `invoke("run_command")`, generic `invoke("native_action")`, arbitrary shell argument bridge, or filesystem grant to Web content. Tauri's folder dialog is directory acquisition, and native notifications are best-effort Attention delivery; neither is a second Client-to-Host protocol.
+
+Production CSP allows HTTP/SSE connection only to `http://127.0.0.1:4317`; `script-src 'self'` permits only packaged same-origin entry and dynamic-import chunks, without remote scripts or `'unsafe-eval'`, and wildcard source directives are absent. `removeUnusedCommands` remains enabled. The Rust build manifest explicitly enumerates the three application commands, and the generated release allow-list contains exactly those commands even though the Browser-safe adapter is code-split. Development adds only the explicit Vite HTTP/WebSocket endpoints and its required eval allowance. The Host still binds loopback only and retains strict Host/Origin validation; Desktop-managed startup allowlists only its explicit WebView Origin rather than weakening CORS.
 
 ## Host
 
@@ -658,7 +675,7 @@ Provider-specific capabilities may remain Codex-specific when a natural common c
 
 ## Persistence
 
-Phase 3A uses `node:sqlite` for the minimal durable records described above. CodeTether Conversation and Turn identities, private provider identities, canonical text inputs, statuses, timestamps, and normalized per-Turn snapshots survive Host restart. Phase 3B.1 adds durable Project identity, canonical root authorization metadata, and the required Conversation-to-Project relationship. Phase 3C.1 adds the canonical title and last-activity index fields needed for product history without introducing an event table. Phase 3C.1.1 adds read-through reconstruction and runtime admission rules only. Phase 3D.1 adds normalized Attention state without persisting provider requests or SSE history. Raw Codex JSON-RPC, SSE events, replay cursors, action results, computed Project availability, LRU state, hydration state, provider-session state, and browser projection state are not stored.
+Phase 3A uses `node:sqlite` for the minimal durable records described above. CodeTether Conversation and Turn identities, private provider identities, canonical text inputs, statuses, timestamps, and normalized per-Turn snapshots survive Host restart. Phase 3B.1 adds durable Project identity, canonical root authorization metadata, and the required Conversation-to-Project relationship. Phase 3C.1 adds the canonical title and last-activity index fields needed for product history without introducing an event table. Phase 3C.1.1 adds read-through reconstruction and runtime admission rules only. Phase 3D.1 adds normalized Attention state without persisting provider requests or SSE history. Phase 4C stores only three versioned notification booleans in Desktop WebView `localStorage`; delivered-ID and click queues remain bounded process memory. Raw Codex JSON-RPC, SSE events, replay cursors, notification history, action results, computed Project availability, LRU state, hydration state, provider-session state, and browser projection state are not stored.
 
 SQLite does not replace runtime history. The active Turn is assembled and streamed in memory, with throttled normalized snapshot writes and synchronous terminal flushes. It also does not replace the Codex provider's Thread store: CodeTether persists the exact provider Thread identity and asks Codex to resume it lazily. The migration runner and Store are intentionally concrete Host modules rather than a generic persistence abstraction.
 
@@ -678,6 +695,8 @@ Phase 2B adds non-durable Host-global ordering, bounded replay, explicit reconne
 
 Phase 2C.1 adds one browser consumer for that stream. It rejects duplicate and out-of-order events before updating the TanStack Query projection. Phase 2C.1.1 makes the Snapshot replacement complete for all retained runtime history, so a reset or unrecoverable cursor condition reconstructs the same retained Timeline rather than merging across incompatible epochs. The guarantee ends at the explicit in-memory eviction boundary and at Host restart.
 
+Phase 4C observes only accepted applied envelopes after that validation boundary. It never subscribes to `message.delta` or `tool.output` for delivery and never polls Attention. A reset or new epoch refetches durable Attention for Inbox truth but publishes no notification arrival, preventing historical open review/failure work from firing on application restart.
+
 ## Conversation Ownership
 
 A Conversation is bound to one Project, one Agent, and the Machine executing it, plus model, reasoning, permission, title, and history. An existing Conversation cannot switch providers. Phase 3A makes the CodeTether `conversationId` durable and stores the corresponding private Codex provider Thread identity without exposing it as browser routing identity. Phase 3B.1 makes Project ownership a required durable relation; `cwd` remains a contained execution location, not a competing Project identity. Phase 3C.1 makes title and last activity Host-owned durable product facts rather than React or Runtime-Snapshot inventions. Phase 3C.1.1 keeps durable identity/history, bounded live working state, and the provider-owned session separate so a product read cannot accidentally become provider control.
@@ -688,7 +707,7 @@ Agent execution can read files, run commands, and change code. The spike confine
 
 The Phase 2B HTTP server additionally binds only `127.0.0.1`, requires the exact loopback `Host` authority, enforces an explicit Origin allowlist without a wildcard, limits JSON bodies and SSE connections, validates every wire payload, and returns safe error envelopes. Browser development retains its two explicit Vite Origins. Desktop-managed startup supplies only the verified Tauri Origin (`http://tauri.localhost` in the production Windows WebView) or its explicit development Vite Origin; it does not enable wildcard CORS. Phase 3B.1 turns workspace confinement into durable Project authorization: registration resolves a canonical directory under any configured roots, and every new Turn or lazy provider resume re-resolves the saved Project root and contained `cwd`. An unavailable or changed root fails closed with `project_unavailable` while history remains readable.
 
-The Tauri capability boundary exposes exactly one directory-picker command to React and no generic native command surface. Production CSP is explicit and loopback-only, while Rust owns the fixed Host sidecar command and private lifecycle pipe. A selected path still crosses the existing Project API before it becomes an authorized workspace. This does not make the loopback API a remote security model: authentication, machine trust, durable audit, TLS, pairing, and remote transport security remain unimplemented. The server must not bind to LAN interfaces in this phase.
+The Tauri capability boundary exposes only the exact directory-picker and bounded Attention-notification commands to React and no generic native command surface. Production CSP is explicit and loopback-only, while Rust owns the fixed Host sidecar command and private lifecycle pipe. A selected path still crosses the existing Project API before it becomes an authorized workspace; a notification intent can only display safe copy and later return public routing identities. This does not make the loopback API a remote security model: authentication, machine trust, durable audit, TLS, pairing, and remote transport security remain unimplemented. The server must not bind to LAN interfaces in this phase.
 
 ## Current Architectural Constraints
 
@@ -696,7 +715,7 @@ The Tauri capability boundary exposes exactly one directory-picker command to Re
 - The Host API is a loopback-only service with local SQLite records. Browser development may launch it separately; CodeTether Desktop packages and owns the same Host as a revision-coupled sidecar. It is not a LAN daemon or remote service.
 - The real integration is Codex-only and was verified against local `codex-cli 0.149.1`.
 - React can start text Turns, resolve one-shot pending Approvals, and interrupt the exact active Turn on a valid live Conversation route. Stop/thread termination, queueing, steering, attachments, configuration changes, and other write paths are not connected.
-- Durable local Project identity, authorization, real list/add/detail/remove UI, Desktop native directory acquisition, Browser manual-path fallback, Project-aware Conversation history/create flows, the real open Attention queue, and the Tauri Desktop lifecycle shell exist. There is no Project discovery/import, rename/relocate, Inbox history/read state, multiple-Machine location model, authentication, remote access, full-history pagination, notification delivery, tray, updater, or production permission policy.
+- Durable local Project identity, authorization, real list/add/detail/remove UI, Desktop native directory acquisition, Browser manual-path fallback, Project-aware Conversation history/create flows, the real open Attention queue, running-Desktop Attention notifications, and the Tauri Desktop lifecycle shell exist. There is no Project discovery/import, rename/relocate, Inbox history/read state, multiple-Machine location model, authentication, remote access, full-history pagination, tray, closed-app delivery, updater, or general production permission-policy system.
 - The Desktop owns only the Host process it starts. A pre-existing CodeTether Host or unknown service on port 4317 is reported and left untouched; the accepted Phase 4A lifecycle does not attach, replace, or kill by port.
 - The production Desktop build embeds `apps/web` assets and a Node SEA Host executable. Runtime use does not depend on Vite, pnpm, or a system Node.js installation; building the current SEA requires Node 25.5+ plus the Windows Rust/MSVC/WebView2 prerequisites.
 - Command Allow Once and Decline were exercised through real App Server requests; file-change and permissions approvals were not observed.

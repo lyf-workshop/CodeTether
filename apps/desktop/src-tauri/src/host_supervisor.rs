@@ -558,7 +558,11 @@ pub fn run_desktop() {
                 let _ = window.set_focus();
             }
         }))
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
+        .invoke_handler(tauri::generate_handler![
+            crate::project_directory_picker::pick_project_directory
+        ])
         .setup(|app| {
             let host = match HostSupervisor::start(app.handle()) {
                 Ok(host) => host,

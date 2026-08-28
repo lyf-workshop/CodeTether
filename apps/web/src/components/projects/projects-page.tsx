@@ -11,7 +11,9 @@ import {
 } from '../../runtime/host/host-runtime-hooks'
 import { projectListQueryOptions } from '../../runtime/host/project-query'
 import { projectListViewState } from '../../runtime/host/project-view-state'
+import { nativeCapabilities } from '../../runtime/native/native-capabilities'
 import { AddProjectDialog } from './add-project-dialog'
+import { projectAddActionLabel } from './add-project-presentation'
 import {
   ProjectsEmptyState,
   ProjectsErrorState,
@@ -103,7 +105,9 @@ export function ProjectsPage() {
                 trigger={
                   <Button>
                     <FolderPlus aria-hidden="true" />
-                    添加项目
+                    {projectAddActionLabel(
+                      nativeCapabilities.directoryPicker.available,
+                    )}
                   </Button>
                 }
               />

@@ -35,7 +35,10 @@
     "desktop:dev": "pnpm desktop:sidecar && pnpm --dir apps/desktop dev",
     "desktop:build": "pnpm desktop:sidecar && pnpm --dir apps/desktop tauri:build",
     "desktop:check": "pnpm desktop:sidecar && pnpm --dir apps/desktop check",
-    "desktop:package-smoke": "pnpm desktop:build && pnpm --dir apps/desktop package:smoke"
+    "desktop:package-smoke": "pnpm desktop:build && pnpm --dir apps/desktop package:smoke",
+    "desktop:installer-smoke": "pnpm desktop:build && pnpm --dir apps/desktop installer:smoke",
+    "desktop:installer-smoke:hold": "pnpm desktop:build && pnpm --dir apps/desktop installer:smoke:hold",
+    "desktop:installer-smoke:cleanup": "pnpm --dir apps/desktop installer:smoke:cleanup"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

@@ -5,7 +5,7 @@ import {
   type RefObject,
 } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link, useNavigate } from '@tanstack/react-router'
+import { useNavigate } from '@tanstack/react-router'
 import { FolderOpen, LockKeyhole, Plus } from 'lucide-react'
 
 import {
@@ -43,6 +43,7 @@ import { createProjectOptionPresentation } from './new-conversation-presentation
 
 interface NewConversationDialogProps {
   currentProject?: ProjectRecord
+  onAddProject?: () => void
   onOpenChange?: (open: boolean) => void
   open?: boolean
   returnFocusRef?: RefObject<HTMLButtonElement | null>
@@ -52,6 +53,7 @@ interface NewConversationDialogProps {
 /** Minimal real create flow: Project + Codex, with Host-owned defaults. */
 export function NewConversationDialog({
   currentProject,
+  onAddProject,
   onOpenChange,
   open: controlledOpen,
   returnFocusRef,
@@ -299,11 +301,14 @@ export function NewConversationDialog({
               </Button>
             </DialogClose>
             {noAvailableProjects ? (
-              <DialogClose asChild>
-                <Button asChild size="sm">
-                  <Link to="/projects">添加项目</Link>
-                </Button>
-              </DialogClose>
+              <Button
+                type="button"
+                size="sm"
+                disabled={onAddProject === undefined}
+                onClick={onAddProject}
+              >
+                添加项目
+              </Button>
             ) : (
               <Button type="submit" size="sm" disabled={!canSubmit}>
                 {createMutation.isPending ? '正在创建…' : '创建会话'}

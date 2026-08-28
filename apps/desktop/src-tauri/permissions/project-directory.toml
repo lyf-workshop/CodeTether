@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-project-directory-picker"
+description = "Allows the main CodeTether window to open one directory-only Project picker."
+commands.allow = ["pick_project_directory"]

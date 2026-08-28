@@ -22,9 +22,11 @@ Phase 2C.1 is accepted, and Phase 2C.1.1 is frozen as **Live Conversation Read M
 
 **Phase 3E.1 — Approval Interaction Layout Stabilization** is implemented and validated. Actionable Approvals now occupy a bounded Pending Action Dock outside the independently scrolling Timeline, with stable Inspector/Composer layout, exact identities, and deliberate scroll/focus behavior.
 
-**Phase 4A — Tauri Desktop Shell Foundation** is implemented and validated. `apps/desktop` packages the existing Web application and supervises a revision-coupled Node SEA build of the existing Host. It adds native application/window/process lifecycle only; it does not move Project, Conversation, Attention, persistence, Agent, Protocol, or projection logic into Rust. Phase 4B is not authorized.
+**Phase 4A — Tauri Desktop Shell Foundation** is implemented and validated. `apps/desktop` packages the existing Web application and supervises a revision-coupled Node SEA build of the existing Host. It adds native application/window/process lifecycle without moving Project, Conversation, Attention, persistence, Agent, Protocol, or projection logic into Rust.
 
-No native folder picker, Project discovery/scanning, rename/relocate, read/unread Inbox history, archive/delete/history pagination, remote access, authentication, multiple-Machine Project model, notification delivery, tray, or updater exists yet. SQLite remains local Host data, not a remote or multi-user service.
+**Phase 4B — Native Folder Picker** is implemented and its required Windows development, production, Browser, real Project/Conversation, and installed-NSIS validation has completed; Owner acceptance is pending. Tauri 2.11.x and the official Rust dialog plugin 2.7.2 expose one directory-only `pick_project_directory` command with an exact main-window capability. React receives only the selected path string; the existing Host Project API still owns canonicalization, authorization, duplicate identity, persistence, and safe errors.
+
+No Project discovery/scanning, rename/relocate, read/unread Inbox history, archive/delete/history pagination, remote access, authentication, multiple-Machine Project model, notification delivery, tray, updater, or general filesystem bridge exists. SQLite remains local Host data, not a remote or multi-user service.
 
 ## System Context
 
@@ -34,7 +36,7 @@ The local Desktop path is:
 Tauri Desktop Shell
     ├── window / application lifecycle
     ├── owned Host sidecar supervision
-    └── native capability boundary
+    └── exact Project directory picker capability
               │
               ▼
 Existing Web UI
@@ -58,13 +60,13 @@ Mobile / Web
  Machine Host
 ```
 
-The Host remains the runtime and durable product-state authority. Clients render normalized data and send explicit Protocol v1 commands rather than operating provider protocols directly. Tauri does not introduce a second application API: its private parent/child pipe is only a lifecycle channel.
+The Host remains the runtime and durable product-state authority. Clients render normalized data and send explicit Protocol v1 commands rather than operating provider protocols directly. Tauri does not introduce a second business API: its private parent/child pipe is only a lifecycle channel, and its single Project-directory command only acquires an explicit user selection before the existing typed Client/Host registration flow runs.
 
 ## Monorepo Boundaries
 
 ```text
 apps/web                   Frozen product UI and HostRuntime/Protocol consumer
-apps/desktop               Tauri v2 window, packaging, and owned Host supervision
+apps/desktop               Tauri v2 window, packaging, owned Host supervision, and exact native directory picker
 apps/host                  Codex runtime, loopback Host API, and SQLite persistence
 
 packages/ui                Shared design system
@@ -487,11 +489,11 @@ Projects React routes
 
 `/projects` lists only real Project fields returned by the Host: name, canonical root path, availability, and update time. `/projects/:projectId` performs its own Project read and displays the same record plus creation time. Loading, empty, Host-unavailable, not-found, available, and unavailable views are distinct; an unavailable Project remains inspectable because the durable record still exists.
 
-The add dialog accepts a manually entered absolute path and optional name. Browser validation is intentionally limited to required-form checks. The client sends the request through the typed Project API, while the Host owns real-path resolution, configured-root authorization, canonical duplicate detection, and safe error semantics. A duplicate root returns the existing Project and the UI routes to that identity without adding a second cached row.
+The Phase 3B.2 add dialog accepted a manually entered absolute path and optional name. Phase 4B retains that Browser behavior and lets Desktop fill the same form through one native directory selection. Client validation remains intentionally limited to required-form checks. The client sends the request through the typed Project API, while the Host owns real-path resolution, configured-root authorization, canonical duplicate detection, and safe error semantics. A duplicate root returns the existing Project and the UI routes to that identity without adding a second cached row.
 
 Removal is registration-only. The UI requires confirmation that local files, Git data, and source code are untouched, then calls the existing delete endpoint. A referenced Project keeps its record and displays the specific `project_has_conversations` conflict; there is no cascade or force-delete path. Successful mutation results update or invalidate the shared Project query keys instead of storing a second Project registry in React or Zustand.
 
-This phase adds no Host endpoint, filesystem scanner, browser or native folder picker, rename/relocate operation, Git model, Project Conversation projection, or New Conversation flow. The existing Sidebar project context is not promoted into a new global Project store; that integration waits for a separately approved live Conversations phase.
+Phase 3B.2 added no Host endpoint, filesystem scanner, native folder picker, rename/relocate operation, Git model, Project Conversation projection, or New Conversation flow. Later accepted phases added the real Conversation flow, and Phase 4B added only native directory acquisition; no Project scanner, relocation, or second Project store was introduced.
 
 ## Phase 3C.1 Durable Conversation Index and Title
 
@@ -606,9 +608,9 @@ The live Conversation, Conversation index, Project, and Inbox paths consume Prot
 
 ## Desktop Shell
 
-`apps/desktop` is a Windows-first Tauri v2 shell around the existing Web/Host system. It creates one native-decorated `main` window, uses the stable `com.codetether.desktop` bundle identifier, and loads the same `apps/web` build used by Browser mode. Production loads packaged Web assets; development lets the Tauri CLI own the Vite process. There is no `DesktopConversationPage`, Desktop-only React tree, or Tauri business command layer.
+`apps/desktop` is a Windows-first Tauri 2.11.x shell around the existing Web/Host system. It creates one native-decorated `main` window, uses the stable `com.codetether.desktop` bundle identifier, and loads the same `apps/web` build used by Browser mode. Production loads packaged Web assets; development lets the Tauri CLI own the Vite process. There is no `DesktopConversationPage`, Desktop-only React tree, or Tauri business command layer.
 
-The Rust layer owns only application/window lifecycle, single-instance behavior, Host process supervision, startup diagnostics, and packaging. The official single-instance plugin is registered before other plugins; a second launch invokes restore/focus on the first ready window and does not start a second Host. The main window starts hidden against the application's dark background and is shown only after bootstrap readiness plus Protocol/build identity validation, avoiding an unstyled white surface. Native window decorations remain intentionally unchanged.
+The Rust layer owns application/window lifecycle, single-instance behavior, Host process supervision, startup diagnostics, packaging, and one explicit Project directory picker. The official single-instance plugin is registered before other plugins; a second launch invokes restore/focus on the first ready window and does not start a second Host. The main window starts hidden against the application's dark background and is shown only after bootstrap readiness plus Protocol/build identity validation, avoiding an unstyled white surface. Native window decorations remain intentionally unchanged.
 
 ### Host Sidecar and Revision Coupling
 
@@ -630,7 +632,11 @@ In Desktop-managed mode, stdin EOF or channel error also requests the same grace
 
 ### Native Security Boundary
 
-The WebView capability file contains no permissions. `withGlobalTauri` is disabled, and the React application imports no Tauri API. The shell plugin is used only from trusted Rust code to launch the fixed bundled sidecar; there is no `invoke("run_command")`, arbitrary shell argument bridge, or filesystem grant to Web content.
+`withGlobalTauri` remains disabled. The `main` WebView capability contains exactly `allow-project-directory-picker`, an application permission that allows only `pick_project_directory`; it contains no Dialog-plugin wildcard, shell, process, or filesystem permission. Tauri generates the lower-level `allow-pick-project-directory` command permission from the command manifest, but the main window is granted only the reviewed application permission. The React native-capability adapter lazily imports only Tauri core invocation after detecting a real Tauri runtime. Browser mode exposes an unavailable picker and never executes that import.
+
+The command uses the official Rust `tauri-plugin-dialog` 2.7.2 API to open one folder-only, single-selection dialog parented to the CodeTether main window. It accepts no frontend path or options and returns only `Option<String>`: a selected Unicode path or cancellation. It does not enumerate, read, write, canonicalize, authorize, or register that directory. The same `AddProjectDialog` then sends the selected string through `HostRuntime` and `packages/client` to the existing Project API. Host real-path and workspace policy remain the authorization boundary.
+
+There is no `invoke("run_command")`, generic `invoke("native_action")`, arbitrary shell argument bridge, or filesystem grant to Web content. Tauri's folder dialog is directory acquisition, not a filesystem capability grant or a second Client-to-Host protocol.
 
 Production CSP allows HTTP/SSE connection only to `http://127.0.0.1:4317`; scripts and assets remain self-hosted, and wildcard source directives are absent. Development adds only the explicit Vite HTTP/WebSocket endpoints. The Host still binds loopback only and retains strict Host/Origin validation; Desktop-managed startup allowlists only its explicit WebView Origin rather than weakening CORS.
 
@@ -682,7 +688,7 @@ Agent execution can read files, run commands, and change code. The spike confine
 
 The Phase 2B HTTP server additionally binds only `127.0.0.1`, requires the exact loopback `Host` authority, enforces an explicit Origin allowlist without a wildcard, limits JSON bodies and SSE connections, validates every wire payload, and returns safe error envelopes. Browser development retains its two explicit Vite Origins. Desktop-managed startup supplies only the verified Tauri Origin (`http://tauri.localhost` in the production Windows WebView) or its explicit development Vite Origin; it does not enable wildcard CORS. Phase 3B.1 turns workspace confinement into durable Project authorization: registration resolves a canonical directory under any configured roots, and every new Turn or lazy provider resume re-resolves the saved Project root and contained `cwd`. An unavailable or changed root fails closed with `project_unavailable` while history remains readable.
 
-The Tauri capability boundary exposes no native command to React. Production CSP is explicit and loopback-only, while Rust owns the fixed Host sidecar command and private lifecycle pipe. This does not make the loopback API a remote security model: authentication, machine trust, durable audit, TLS, pairing, and remote transport security remain unimplemented. The server must not bind to LAN interfaces in this phase.
+The Tauri capability boundary exposes exactly one directory-picker command to React and no generic native command surface. Production CSP is explicit and loopback-only, while Rust owns the fixed Host sidecar command and private lifecycle pipe. A selected path still crosses the existing Project API before it becomes an authorized workspace. This does not make the loopback API a remote security model: authentication, machine trust, durable audit, TLS, pairing, and remote transport security remain unimplemented. The server must not bind to LAN interfaces in this phase.
 
 ## Current Architectural Constraints
 
@@ -690,8 +696,8 @@ The Tauri capability boundary exposes no native command to React. Production CSP
 - The Host API is a loopback-only service with local SQLite records. Browser development may launch it separately; CodeTether Desktop packages and owns the same Host as a revision-coupled sidecar. It is not a LAN daemon or remote service.
 - The real integration is Codex-only and was verified against local `codex-cli 0.149.1`.
 - React can start text Turns, resolve one-shot pending Approvals, and interrupt the exact active Turn on a valid live Conversation route. Stop/thread termination, queueing, steering, attachments, configuration changes, and other write paths are not connected.
-- Durable local Project identity, authorization, real list/add/detail/remove UI, Project-aware Conversation history/create flows, the real open Attention queue, and the Tauri Desktop lifecycle shell exist. There is no native folder picker, Project discovery/import, rename/relocate, Inbox history/read state, multiple-Machine location model, authentication, remote access, full-history pagination, notification delivery, tray, updater, or production permission policy.
-- The Desktop owns only the Host process it starts. A pre-existing CodeTether Host or unknown service on port 4317 is reported and left untouched; Phase 4A does not attach, replace, or kill by port.
+- Durable local Project identity, authorization, real list/add/detail/remove UI, Desktop native directory acquisition, Browser manual-path fallback, Project-aware Conversation history/create flows, the real open Attention queue, and the Tauri Desktop lifecycle shell exist. There is no Project discovery/import, rename/relocate, Inbox history/read state, multiple-Machine location model, authentication, remote access, full-history pagination, notification delivery, tray, updater, or production permission policy.
+- The Desktop owns only the Host process it starts. A pre-existing CodeTether Host or unknown service on port 4317 is reported and left untouched; the accepted Phase 4A lifecycle does not attach, replace, or kill by port.
 - The production Desktop build embeds `apps/web` assets and a Node SEA Host executable. Runtime use does not depend on Vite, pnpm, or a system Node.js installation; building the current SEA requires Node 25.5+ plus the Windows Rust/MSVC/WebView2 prerequisites.
 - Command Allow Once and Decline were exercised through real App Server requests; file-change and permissions approvals were not observed.
 - Multi-Turn, multi-Thread, cross-process resume, interruption, and safe Tool failure were manually validated.

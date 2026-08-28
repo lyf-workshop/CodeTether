@@ -4,6 +4,7 @@ import { TooltipProvider } from '@codetether/ui'
 import type { ProjectRecord } from '@codetether/protocol'
 
 import { NewConversationDialog } from '../conversations/new-conversation-dialog'
+import { AddProjectDialog } from '../projects/add-project-dialog'
 import { MainContent } from './main-content'
 import { PrimarySidebar } from './primary-sidebar'
 import { TopBar, type TopBarBreadcrumb } from './top-bar'
@@ -28,7 +29,9 @@ export function AppShell({
   inboxAttentionCount = 0,
 }: AppShellProps) {
   const newConversationButtonRef = useRef<HTMLButtonElement>(null)
-  const [newConversationOpen, setNewConversationOpen] = useState(false)
+  const [globalDialog, setGlobalDialog] = useState<
+    'add-project' | 'new-conversation' | null
+  >(null)
 
   return (
     <TooltipProvider>
@@ -43,7 +46,7 @@ export function AppShell({
           breadcrumbs={breadcrumbs}
           currentPage={currentPage}
           newConversationButtonRef={newConversationButtonRef}
-          onNewConversation={() => setNewConversationOpen(true)}
+          onNewConversation={() => setGlobalDialog('new-conversation')}
         />
         <div className="grid min-h-0 grid-cols-[var(--layout-sidebar-current-width)_minmax(0,1fr)]">
           <PrimarySidebar
@@ -56,9 +59,19 @@ export function AppShell({
         </div>
         <NewConversationDialog
           currentProject={currentProject}
-          open={newConversationOpen}
-          onOpenChange={setNewConversationOpen}
+          open={globalDialog === 'new-conversation'}
+          onAddProject={() => setGlobalDialog('add-project')}
+          onOpenChange={(open) =>
+            setGlobalDialog(open ? 'new-conversation' : null)
+          }
           returnFocusRef={newConversationButtonRef}
+        />
+        <AddProjectDialog
+          open={globalDialog === 'add-project'}
+          onOpenChange={(open) =>
+            setGlobalDialog(open ? 'add-project' : 'new-conversation')
+          }
+          onProjectCreated={() => setGlobalDialog('new-conversation')}
         />
       </div>
     </TooltipProvider>

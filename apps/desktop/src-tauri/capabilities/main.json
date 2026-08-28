@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main",
-  "description": "The CodeTether Web UI receives no native shell or filesystem commands.",
+  "description": "The CodeTether Web UI can select one Project directory and receives no shell or filesystem access.",
   "windows": ["main"],
-  "permissions": []
+  "permissions": ["allow-project-directory-picker"]
 }

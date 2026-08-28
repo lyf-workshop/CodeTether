@@ -27,7 +27,7 @@ If sources conflict, stop and resolve the conflict instead of inventing a compro
 
 ## Current Scope
 
-**Phase 4A — Tauri Desktop Shell Foundation** is implemented and validated. Phase 3E.1 and the **CodeTether Local Workspace Alpha** remain frozen: the accepted frontend is still **CodeTether V2 Frontend Core v1**, the accepted local runtime is still **Phase 2A Codex Runtime v1**, Protocol v1 remains the **Phase 2B Client ↔ Host Protocol** boundary, and the durable Project/Conversation/Attention data layer remains authoritative. Phase 4A adds only the native shell and lifecycle boundary around those accepted layers. Phase 4B is not authorized. The current product boundary includes:
+**Phase 4B — Native Folder Picker** is implemented and its required Windows development, production, Browser, real Project/Conversation, and installed-NSIS validation has completed; Owner acceptance is pending. Phase 4A remains accepted and frozen, as do Phase 3E.1 and the **CodeTether Local Workspace Alpha**: the accepted frontend is still **CodeTether V2 Frontend Core v1**, the accepted local runtime is still **Phase 2A Codex Runtime v1**, Protocol v1 remains the **Phase 2B Client ↔ Host Protocol** boundary, and the durable Project/Conversation/Attention data layer remains authoritative. Phase 4B adds only explicit native directory acquisition to the accepted Desktop shell and Project flow; it does not move Project authority into Tauri. The current product boundary includes:
 
 - A Project as a durable, authorized local workspace with a CodeTether-owned `proj_*` identity, name, canonical root path, timestamps, and availability computed from the filesystem rather than stored as durable truth.
 - SQLite migration 002 (`projects`), which adds the `projects` table and binds every durable Conversation to one Project through a non-null `project_id` foreign key. The Conversation `cwd` remains a contained working directory, not a second Project identity.
@@ -38,7 +38,7 @@ If sources conflict, stop and resolve the conflict instead of inventing a compro
 - Registration-only deletion: CodeTether never deletes workspace files, never cascades Conversation history, and rejects Project deletion while any durable/runtime Conversation references it or a Conversation creation has reserved it.
 - A deprecated Protocol v1 `cwd` compatibility request that may resolve only to an already registered, available Project; it cannot create a Project or expand the Host's trusted roots.
 - A real `/projects` list and `/projects/:projectId` overview backed by the existing Host Project API through `packages/client` and TanStack Query.
-- Manual absolute-path Project registration with an optional name. The browser performs only basic form validation; the Host remains the source of truth for canonicalization, authorization, availability, duplicate detection, and safe errors.
+- One shared Add Project flow with an optional name. CodeTether Desktop can acquire one directory path through the Windows native folder picker; standalone Browser mode retains manual absolute-path entry. Both paths submit the same typed Project mutation, and the Host remains the source of truth for canonicalization, authorization, availability, duplicate detection, and safe errors.
 - Registration-only removal with an explicit confirmation, a specific `project_has_conversations` conflict state, and no filesystem deletion.
 - Distinct loading, empty, Host-unavailable, not-found, available, and unavailable Project views using only real Project fields.
 - A durable deterministic Conversation title and Project-scoped SQLite index, plus provider-independent single-Conversation reads and bounded lazy runtime hydration for cold history.
@@ -57,19 +57,21 @@ If sources conflict, stop and resolve the conflict instead of inventing a compro
 - A private Desktop-managed lifecycle mode. The Host waits for Rust's `start` activation before runtime initialization, so the supervisor can establish owned process-tree containment first. Rust requests normal graceful shutdown through a piped `shutdown` line and waits for Host persistence and Codex cleanup. The managed Host treats parent stdin EOF as another graceful-shutdown request; on abnormal Windows parent death, a Job Object guarantees owned process-tree cleanup but may win the EOF race before a full flush grace period.
 - Single-instance Desktop startup, explicit `127.0.0.1:4317` conflict handling, `/api/v1/bootstrap` readiness/version checks, and no silent attachment to or termination of an external process.
 - Production Web assets loaded from the Tauri package, while the standalone Browser/Web workflow remains supported. Business traffic continues through Protocol v1 HTTP/SSE on loopback.
-- A minimal native security boundary: the WebView receives no shell or filesystem commands, production CSP permits network access only to the loopback Host, and the Host explicitly allows the verified Tauri production Origin without wildcard CORS.
+- A minimal native security boundary: Tauri 2.11.x with the official Rust dialog plugin 2.7.2 exposes only the exact `pick_project_directory` command to the `main` window. React receives only a selected path string and receives no filesystem traversal/read/write, shell, or process permission. Production CSP still permits network access only to the loopback Host, and the Host explicitly allows the verified Tauri production Origin without wildcard CORS.
+- A centralized Browser-safe native capability adapter. Desktop uses the narrow directory picker; Browser mode never executes the Tauri adapter and continues to accept a manual absolute path.
+- One controlled Add Project dialog shared by the Projects page, its empty state, and the global New Conversation handoff. When no available Project exists, the TopBar flow can add one and return to New Conversation without nesting modal dialogs or inventing a second Project creation path.
 
-Phase 4A stops at the Desktop shell, packaging, and owned local process lifecycle. It does not authorize native folder picking, notifications, tray behavior, custom window chrome, updating/signing infrastructure, Activity, archive/rename/delete, Machine management, remote operation, or another provider.
+Phase 4B stops at native selection of one Project directory and its existing registration flow. Its required real Windows picker, production build, installed NSIS, Browser fallback, and Project/Conversation smoke paths have completed; do not describe the phase as accepted or frozen until Owner review. It does not authorize notifications, tray behavior, custom window chrome, updating/signing infrastructure, drag-and-drop, recent folders, Open in Explorer, Project discovery/relocation, Activity, archive/rename/delete, Machine management, remote operation, or another provider.
 
 ## Out of Scope
 
-During and after Phase 4A, do not implement without a separately approved phase:
+During and after Phase 4B, do not implement without a separately approved phase:
 
 - Visual redesigns or unrelated refactors to the frozen Design System, AppShell, Inbox, Conversations, Conversation Workspace, or accepted Projects UI.
 - Activity, Machines, Agents, Settings, an advanced New Conversation flow, or any other new product-page content or flow.
 - Live Host data in another frozen page.
 - A generic WebSocket RPC transport or interactive PTY transport.
-- Native folder picking, Desktop notifications, system tray behavior, custom window chrome, auto-update, signing/release channels, or any other native product feature beyond the Phase 4A shell lifecycle.
+- Desktop notifications, system tray behavior, custom window chrome, auto-update, signing/release channels, drag-and-drop folders, recent-folder menus, Open in Explorer, or any other native product feature beyond the exact Phase 4B directory picker.
 - A generic Tauri command runner, arbitrary shell bridge, arbitrary filesystem capability, or a second Client-to-Host business protocol.
 - Project discovery/scanning, rename/relocate, multiple Project locations, Machine management, remote access, relay, or authentication.
 - Filesystem deletion, recursive cleanup, cascading Project deletion, or automatic reassignment of existing Conversations to another Project.

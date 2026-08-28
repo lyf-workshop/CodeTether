@@ -6,11 +6,13 @@ CodeTether is a Windows-first desktop workspace for supervising and controlling 
 
 Phase 1 is accepted and frozen as **CodeTether V2 Frontend Core v1**, the accepted local runtime is frozen as **Phase 2A Codex Runtime v1**, and Phase 2B is accepted as the local-only Protocol v1 loopback HTTP/SSE boundary shared by Browser and Desktop clients. The complete read path is frozen as **Live Conversation Read Model v1**. Phase 2C.2 is accepted and frozen as **CodeTether Local Codex Alpha v0.1**: the existing Conversation Workspace can start real text Turns, stream results, resolve one-shot Approvals, interrupt, and continue while the Host remains canonical state owner.
 
-**Phase 3D.2 — Real Inbox UI** is implemented and validated. Projects, Conversations, and Attention remain durable Host-owned product records. The real `/inbox` consumes the typed Attention API and reliable semantic events for Approval, completed-review, and failed-Turn work, including the real Sidebar count and exact Approval controls. There is still no question inference, read/unread state, notifications, archive/rename/delete, full-history pagination, native folder picker, authentication, remote access, or non-Codex provider.
+**Phase 3D.2 — Real Inbox UI** is implemented and validated. Projects, Conversations, and Attention remain durable Host-owned product records. The real `/inbox` consumes the typed Attention API and reliable semantic events for Approval, completed-review, and failed-Turn work, including the real Sidebar count and exact Approval controls. There is still no question inference, read/unread state, notifications, archive/rename/delete, full-history pagination, authentication, remote access, or non-Codex provider.
 
 **Phase 3E.1 — Approval Interaction Layout Stabilization** is implemented and validated. Conversation Detail now keeps actionable Approval controls in a bounded Pending Action Dock between the independently scrolling Timeline and the mounted Composer; Timeline entries are history only, long commands stay bounded, and scroll/focus remain stable through one or multiple Approval transitions.
 
-**Phase 4A — Tauri Desktop Shell Foundation** is implemented and validated. `apps/desktop` packages the existing Web UI and a revision-coupled Node SEA build of the existing Host into one Windows-first Tauri v2 application. Tauri owns window and owned-process lifecycle only; all Project, Conversation, Attention, Codex, persistence, and Protocol behavior remains in the accepted Web/Host layers. Phase 4B is not authorized.
+**Phase 4A — Tauri Desktop Shell Foundation** is implemented and validated. `apps/desktop` packages the existing Web UI and a revision-coupled Node SEA build of the existing Host into one Windows-first Tauri v2 application. Tauri owns window and owned-process lifecycle only; all Project, Conversation, Attention, Codex, persistence, and Protocol behavior remains in the accepted Web/Host layers.
+
+**Phase 4B — Native Folder Picker** adds one narrow native capability: Desktop users select one directory through the Windows folder picker, then the existing typed Project mutation sends that path to the Host. Browser mode retains manual absolute-path entry. Tauri does not canonicalize, authorize, inspect, or persist the directory; the Host remains the sole Project authority.
 
 ## Current Alpha capabilities
 
@@ -100,6 +102,9 @@ pnpm desktop:sidecar         # Build the revision-coupled Node SEA Host executab
 pnpm desktop:check           # Run Rust fmt/check/clippy/test gates
 pnpm desktop:build           # Build Web assets, Desktop binary, sidecar, and NSIS bundle
 pnpm desktop:package-smoke   # Build and cold-start the packaged executable against temp data
+pnpm desktop:installer-smoke # Install, launch, verify, close, and remove the NSIS artifact
+pnpm desktop:installer-smoke:hold     # Keep an isolated installed app open for manual UI smoke
+pnpm desktop:installer-smoke:cleanup  # Remove only the exact held smoke installation
 ```
 
 `pnpm codex:spike` uses only the ignored `.tmp/codetether-codex-spike/` workspace. It must never target the CodeTether source repository.
@@ -142,7 +147,7 @@ New Conversation callers use `projectId`. The deprecated Protocol v1 `cwd` form 
 
 Deleting a Project removes only its CodeTether registration. It never deletes or changes files and never cascades Conversation history. The Host rejects deletion while any durable or runtime Conversation references the Project, including while a Conversation creation has reserved that Project.
 
-The desktop Projects UI uses these endpoints through `packages/client` and TanStack Query. The add dialog accepts a manually entered absolute path and optional display name; path canonicalization and authorization remain entirely Host-owned. Duplicate registration opens the existing Project instead of adding another row. Unavailable roots remain inspectable, and removal requires explicit confirmation that local source files and Git data are untouched. Native folder selection, workspace scanning, rename, and relocation are not implemented.
+The Projects UI uses these endpoints through `packages/client` and TanStack Query. One shared Add Project dialog accepts an optional display name. Desktop acquires its path through a single-directory native picker; Browser mode retains manual absolute-path entry. In both modes the selected or entered path is only an input to the same Host mutation, so canonicalization and authorization remain entirely Host-owned. Duplicate registration opens the existing Project instead of adding another row. Unavailable roots remain inspectable, and removal requires explicit confirmation that local source files and Git data are untouched. Workspace scanning, rename, and relocation are not implemented.
 
 ### Local Conversations
 
@@ -181,9 +186,9 @@ The Inbox requests up to 100 open items in Host-owned priority order. It shows o
 - If Codex can no longer resume the stored provider Thread, local durable history remains readable but new controls return `provider_conversation_unavailable`.
 - Only Codex, text Turn start, one-shot command Approval, and Turn interrupt are connected.
 - Attention currently models only structured Approval, completed-review, and failed-Turn semantics. Structured Agent questions, read/unread, notifications, and Activity are not implemented.
-- Projects and Conversations are real local surfaces, but native folder picking, project discovery/import, rename/relocate, Conversation rename/archive/delete, history pagination, and multiple Machine locations are not implemented.
+- Projects and Conversations are real local surfaces, and Desktop supports explicit single-directory native selection. Project discovery/import, drag-and-drop, recent folders, rename/relocate, Conversation rename/archive/delete, history pagination, and multiple Machine locations are not implemented.
 - Stop/terminate, queue/steer, attachments, Desktop notifications, tray behavior, updater/signing, remote access, authentication, and other providers are not implemented.
-- Phase 4A is Windows-first. macOS/Linux packaging, signing, distribution, and process-tree validation remain future work.
+- Phase 4B remains Windows-first. macOS/Linux packaging, native dialog, signing, distribution, and process-tree validation remain future work.
 - CodeTether Desktop uses the fixed loopback port 4317. It reports and leaves any existing CodeTether Host or unknown occupant untouched rather than attaching or killing by port.
 - The packaged Host does not need a system Node.js runtime, but the current Desktop build pipeline requires Node 25.5+ to produce the official SEA executable. Real Codex work still requires a compatible local Codex installation.
 - The current Desktop icon is a minimal Alpha asset; final brand artwork is still pending.
@@ -200,4 +205,4 @@ The Inbox requests up to 100 open items in Host-owned priority order. It shows o
 
 ## Status
 
-**CodeTether Local Workspace Alpha** remains the frozen product/runtime baseline, and **Phase 4A — Tauri Desktop Shell Foundation** is implemented and validated around it. Phase 4B remains unauthorized. Do not extend this into question inference, read/unread state, notifications, Activity, archive/rename/delete, pagination, discovery, native folder selection, tray/updater behavior, remote exposure, or another provider without a separately approved phase. See the roadmap for ordered gates.
+**CodeTether Local Workspace Alpha** remains the frozen product/runtime baseline, **Phase 4A — Tauri Desktop Shell Foundation** is implemented and validated around it, and **Phase 4B — Native Folder Picker** is limited to explicit directory acquisition through the existing Project flow. Do not extend this into question inference, read/unread state, notifications, Activity, archive/rename/delete, pagination, discovery, drag-and-drop, tray/updater behavior, remote exposure, or another provider without a separately approved phase. See the roadmap for ordered gates.

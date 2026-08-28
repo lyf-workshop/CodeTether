@@ -19,8 +19,25 @@ test('production Desktop CSP and capabilities stay loopback-only and non-wildcar
       'utf8',
     ),
   )
+  const projectDirectoryPermission = await readFile(
+    resolve(
+      desktopDirectory,
+      'src-tauri',
+      'permissions',
+      'project-directory.toml',
+    ),
+    'utf8',
+  )
 
-  assert.deepEqual(capability.permissions, [])
+  assert.deepEqual(capability.permissions, ['allow-project-directory-picker'])
+  assert.match(
+    projectDirectoryPermission,
+    /commands\.allow = \["pick_project_directory"\]/u,
+  )
+  assert.doesNotMatch(
+    projectDirectoryPermission,
+    /filesystem|shell|run_command|native_action/iu,
+  )
   assert.deepEqual(config.bundle.externalBin, ['binaries/codetether-host'])
   assert.equal(config.app.windows[0].visible, false)
   assert.equal(config.app.windows[0].center, true)
@@ -40,7 +57,7 @@ test('production Desktop CSP and capabilities stay loopback-only and non-wildcar
   assert.equal(config.app.withGlobalTauri, false)
 })
 
-test('Web UI has no native shell bridge or Desktop-only component fork', async () => {
+test('Web UI exposes only the narrow project directory picker command', async () => {
   const webPackage = JSON.parse(
     await readFile(
       resolve(repositoryDirectory, 'apps', 'web', 'package.json'),
@@ -48,6 +65,10 @@ test('Web UI has no native shell bridge or Desktop-only component fork', async (
     ),
   )
   const desktopRustDirectory = resolve(desktopDirectory, 'src-tauri', 'src')
+  const buildScript = await readFile(
+    resolve(desktopDirectory, 'src-tauri', 'build.rs'),
+    'utf8',
+  )
   const rustFiles = (
     await readdir(desktopRustDirectory, {
       recursive: true,
@@ -62,8 +83,26 @@ test('Web UI has no native shell bridge or Desktop-only component fork', async (
     )
   ).join('\n')
 
-  assert.equal(webPackage.dependencies?.['@tauri-apps/api'], undefined)
-  assert.doesNotMatch(desktopRust, /run_command|invoke_handler/u)
+  assert.equal(webPackage.dependencies?.['@tauri-apps/api'], '2.11.1')
+  assert.equal(
+    webPackage.dependencies?.['@tauri-apps/plugin-dialog'],
+    undefined,
+  )
+  assert.match(desktopRust, /pick_project_directory/u)
+  assert.match(desktopRust, /blocking_pick_folder/u)
+  assert.match(desktopRust, /set_parent\(&window\)/u)
+  assert.match(desktopRust, /tauri_plugin_dialog::init/u)
+  assert.match(desktopRust, /invoke_handler/u)
+  assert.match(
+    buildScript,
+    /AppManifest::new\(\)\.commands\(&\["pick_project_directory"\]\)/u,
+  )
+  assert.match(buildScript, /tauri_build::try_build/u)
+  assert.doesNotMatch(buildScript, /tauri_build::build\(\)/u)
+  assert.doesNotMatch(
+    desktopRust,
+    /run_command|native_action|tauri_plugin_fs::init/u,
+  )
   assert.match(desktopRust, /CODETETHER_DESKTOP_MANAGED/u)
   assert.match(desktopRust, /http:\/\/tauri\.localhost/u)
 })

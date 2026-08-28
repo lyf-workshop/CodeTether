@@ -11,5 +11,8 @@ fn main() {
     assert!(!build_id.is_empty(), "Desktop build ID must not be empty");
     println!("cargo:rustc-env=CODETETHER_BUILD_ID={build_id}");
 
-    tauri_build::build()
+    let attributes = tauri_build::Attributes::new()
+        .app_manifest(tauri_build::AppManifest::new().commands(&["pick_project_directory"]));
+
+    tauri_build::try_build(attributes).expect("failed to run CodeTether desktop build script")
 }

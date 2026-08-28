@@ -518,7 +518,7 @@ Exit gate results:
 
 ### Phase 4A — Tauri Desktop Shell Foundation
 
-**Status:** implemented and validated. Phase 4B remains a candidate only and is not authorized.
+**Status:** implemented and validated. This lifecycle foundation remains frozen while Phase 4B adds only native directory acquisition.
 
 Authorized scope:
 
@@ -557,9 +557,28 @@ Exit gate results:
 
 ### Phase 4B — Native Folder Picker
 
-**Status:** candidate next phase only. It is not authorized by Phase 4A.
+**Status:** implemented and required validation complete; Owner acceptance is pending. Do not mark this phase accepted or frozen until Owner review.
 
-Planned outcome: replace manual absolute-path Project registration friction with an explicitly scoped native directory selection flow while preserving Host canonicalization and workspace authorization. Notifications, tray behavior, remote access, and other native features remain separate decisions.
+Implemented scope:
+
+- Tauri 2.11.x registers the official Rust Dialog plugin 2.7.2 and one narrow `pick_project_directory` command. The main-window capability allows only that command; there is no Dialog wildcard, filesystem, shell, or process permission.
+- The native command opens one directory-only, single-selection picker owned by the CodeTether main window and returns only the selected Unicode path string or cancellation. It accepts no arbitrary native action, path, command, or filesystem operation from React.
+- A centralized Browser-safe native-capability adapter detects Tauri in one place and lazy-loads the core invoke API. Standalone Browser mode does not execute Tauri code and retains manual absolute-path Project entry.
+- One `AddProjectDialog` owns both acquisition modes, optional Project name, `idle` / `picking` / `registering` states, duplicate-click protection, safe picker/Host errors, and selected basename/path presentation. The existing Host Project API remains the sole canonicalization, authorization, duplicate, and persistence boundary.
+- The Projects header and empty state reuse that dialog. The global New Conversation flow hands off to the same controlled dialog when no available Project exists, then returns to Project selection without nested modal focus scopes.
+
+Not included:
+
+- Filesystem enumeration/read/write permissions, generic Tauri invoke/shell bridges, Project discovery/scanning, path canonicalization in React/Rust, relocation, multi-root Projects, drag-and-drop, recent folders, Open in Explorer, or a file picker.
+- Notifications, system tray, custom window chrome, updater/signing, Activity, Search, Machine management, LAN/remote access, authentication, or another provider.
+
+Exit gate results:
+
+- Full Node/Web and Rust quality gates pass, including exact capability/security regression checks and Browser fallback tests.
+- Real Windows native picker behavior passes in `pnpm desktop:dev`: the picker is main-window-owned, cancellation leaves the shared dialog open, focus returns deliberately, and long Unicode paths containing spaces and parentheses stay bounded.
+- Production `pnpm desktop:build` emits the raw Desktop executable and NSIS package. The raw package cold-starts without Vite or an external Host, and the Phase 4A lifecycle/single-instance/port-ownership suite remains green.
+- The generated NSIS package installs to an isolated per-user location, launches its bundled Host/Web assets, opens the real native picker, registers a real Project, completes a real Codex Conversation, exits gracefully with no owned process or 4317 listener, uninstalls, and removes its exact test state.
+- Registering the same canonical directory returns the same Project identity and does not add a row. Standalone Browser manual-path registration remains functional with zero browser console errors or warnings and no Tauri runtime execution.
 
 ## Phase 5 — Machines
 

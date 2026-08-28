@@ -20,23 +20,33 @@ Phase 2C.1 is accepted, and Phase 2C.1.1 is frozen as **Live Conversation Read M
 
 **Phase 3D.2 — Real Inbox UI** is implemented and validated. SQLite owns a low-frequency, Conversation-linked index of real Approval, completed-review, and failed-Turn Attention. Protocol v1 exposes typed list/resolve commands and reliable semantic SSE transitions without exposing provider requests or turning Runtime Snapshot into Inbox storage. The real Inbox and Sidebar count now consume that boundary through `packages/client` and TanStack Query.
 
-No native folder picker, Project discovery/scanning, rename/relocate, read/unread Inbox history, archive/delete/history pagination, Tauri shell, remote access, authentication, multiple-Machine Project model, or production machine-host service exists yet. The Host remains a development-only loopback API; SQLite is local Host data, not a remote or multi-user service.
+**Phase 3E.1 — Approval Interaction Layout Stabilization** is implemented and validated. Actionable Approvals now occupy a bounded Pending Action Dock outside the independently scrolling Timeline, with stable Inspector/Composer layout, exact identities, and deliberate scroll/focus behavior.
+
+**Phase 4A — Tauri Desktop Shell Foundation** is implemented and validated. `apps/desktop` packages the existing Web application and supervises a revision-coupled Node SEA build of the existing Host. It adds native application/window/process lifecycle only; it does not move Project, Conversation, Attention, persistence, Agent, Protocol, or projection logic into Rust. Phase 4B is not authorized.
+
+No native folder picker, Project discovery/scanning, rename/relocate, read/unread Inbox history, archive/delete/history pagination, remote access, authentication, multiple-Machine Project model, notification delivery, tray, or updater exists yet. SQLite remains local Host data, not a remote or multi-user service.
 
 ## System Context
 
-The intended local desktop path remains:
+The local Desktop path is:
 
 ```text
-Desktop UI
-    │
-    ▼
-Machine Host
-    │
-    ▼
+Tauri Desktop Shell
+    ├── window / application lifecycle
+    ├── owned Host sidecar supervision
+    └── native capability boundary
+              │
+              ▼
+Existing Web UI
+              │ Protocol v1 HTTP + SSE
+              ▼
+Local Host on 127.0.0.1
+              │
+              ▼
 Agent Adapter
-    │
-    ▼
-Coding Agent
+              │
+              ▼
+Codex App Server
 ```
 
 Future web and mobile clients use the same host boundary:
@@ -48,14 +58,14 @@ Mobile / Web
  Machine Host
 ```
 
-The future Machine Host will be the runtime authority. Clients must render normalized data and send explicit commands rather than operate provider protocols directly. Phase 2A and Phase 2A.1 validate only the lower Host-to-Codex portion of this model.
+The Host remains the runtime and durable product-state authority. Clients render normalized data and send explicit Protocol v1 commands rather than operating provider protocols directly. Tauri does not introduce a second application API: its private parent/child pipe is only a lifecycle channel.
 
 ## Monorepo Boundaries
 
 ```text
-apps/web                   Frozen core UI, live Conversation boundary, and real Projects UI
-apps/desktop               Future Tauri 2 desktop shell placeholder
-apps/host                  Codex runtime, loopback Host API, and minimal SQLite persistence
+apps/web                   Frozen product UI and HostRuntime/Protocol consumer
+apps/desktop               Tauri v2 window, packaging, and owned Host supervision
+apps/host                  Codex runtime, loopback Host API, and SQLite persistence
 
 packages/ui                Shared design system
 packages/protocol          Client-to-Host Protocol v1 and Zod wire contracts
@@ -596,13 +606,39 @@ The live Conversation, Conversation index, Project, and Inbox paths consume Prot
 
 ## Desktop Shell
 
-The future Tauri 2 shell will package the web UI and supply OS-level capabilities that truly require a native boundary. It remains unimplemented. Business rules, agent execution, and durable data must not be moved into UI-specific Tauri commands.
+`apps/desktop` is a Windows-first Tauri v2 shell around the existing Web/Host system. It creates one native-decorated `main` window, uses the stable `com.codetether.desktop` bundle identifier, and loads the same `apps/web` build used by Browser mode. Production loads packaged Web assets; development lets the Tauri CLI own the Vite process. There is no `DesktopConversationPage`, Desktop-only React tree, or Tauri business command layer.
+
+The Rust layer owns only application/window lifecycle, single-instance behavior, Host process supervision, startup diagnostics, and packaging. The official single-instance plugin is registered before other plugins; a second launch invokes restore/focus on the first ready window and does not start a second Host. The main window starts hidden against the application's dark background and is shown only after bootstrap readiness plus Protocol/build identity validation, avoiding an unstyled white surface. Native window decorations remain intentionally unchanged.
+
+### Host Sidecar and Revision Coupling
+
+The production Host is still the TypeScript/Node Host. `desktop:sidecar` bundles its production entry and dependencies with esbuild while leaving Node built-ins external, then uses Node's official `--build-sea` flow to emit a target-triple-named executable under `apps/desktop/src-tauri/binaries`. The current direct SEA builder requires Node 25.5 or newer at build time. The packaged application does not require a separately installed Node.js runtime.
+
+The build embeds one `git-<12-character-revision>` identity, with a `-dirty` suffix when applicable, into both the Host bootstrap and Rust shell. Desktop readiness accepts only Protocol v1 plus that exact build identity, preventing a shell from silently operating an unrelated bundled Host revision.
+
+### Startup and Ownership
+
+Desktop preflights `127.0.0.1:4317` before spawn. An existing CodeTether-shaped service and an unknown port occupant are distinct startup failures; neither is attached, stopped, or replaced. If the port is free, Tauri starts exactly one external binary with `CODETETHER_DESKTOP_MANAGED=1`, pipes its standard input, and passes one explicit Origin: `http://tauri.localhost` in production or the Vite Origin in development.
+
+The managed Host installs its stdin/EOF watcher and waits for a private `start` activation before initializing the runtime. Rust sends that activation only after assigning the sidecar to its owned Windows Job Object, closing the spawn-to-ownership window in which a Codex descendant could otherwise escape the Job. Readiness then polls `GET /api/v1/bootstrap` instead of sleeping for a fixed interval. Startup has a 15-second ceiling and distinguishes a missing binary, spawn failure, existing Host, unknown port conflict, early Host exit, timeout, and Protocol/build incompatibility. An unexpected exit after readiness reports a native Desktop failure; after acknowledgement, Desktop exits and releases its owned Job/process tree without entering an automatic restart loop.
+
+### Shutdown and Parent Loss
+
+Normal Desktop exit writes the private line `shutdown\n` to the owned Host, waits up to 12 seconds for the existing Host graceful-close path, and only then terminates its own process tree on timeout. The Host stops new HTTP action admission, drains admitted mutations before Runtime/SQLite teardown, finalizes dirty SQLite state, closes HTTP/SSE, releases process-local Approval requests for restart-time durable expiry, and shuts down the Codex App Server through the established adapter lifecycle.
+
+In Desktop-managed mode, stdin EOF or channel error also requests the same graceful Host shutdown path. Windows additionally assigns the owned Host to a `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` Job Object. On abnormal parent death, stdin EOF and kernel Job teardown race: graceful close is attempted, while the Job guarantees no orphaned owned process even when it wins before SQLite can receive a full grace period. Existing restart reconciliation handles that crash boundary. This is a last-resort ownership safeguard, not authority to terminate a process discovered by port number. Non-Windows packaging remains future validation; the portable EOF protocol is isolated from the Windows Job Object implementation.
+
+### Native Security Boundary
+
+The WebView capability file contains no permissions. `withGlobalTauri` is disabled, and the React application imports no Tauri API. The shell plugin is used only from trusted Rust code to launch the fixed bundled sidecar; there is no `invoke("run_command")`, arbitrary shell argument bridge, or filesystem grant to Web content.
+
+Production CSP allows HTTP/SSE connection only to `http://127.0.0.1:4317`; scripts and assets remain self-hosted, and wildcard source directives are absent. Development adds only the explicit Vite HTTP/WebSocket endpoints. The Host still binds loopback only and retains strict Host/Origin validation; Desktop-managed startup allowlists only its explicit WebView Origin rather than weakening CORS.
 
 ## Host
 
-`apps/host` owns the development harness lifecycle, loopback HTTP/SSE server, Codex runtime, live state, Phase 3A SQLite boundary, Phase 3B.1 durable Project registry, Phase 3C.1 durable Conversation index/title rules, Phase 3C.1.1 cold detail/hydration boundary, and Phase 3D.1 durable Attention projection. It allocates public identities, maps them to private provider identities, validates actions and Project workspaces, reconstructs bounded live or cold views from durable Turn records, hydrates control state on demand, sequences client events, and performs bounded fanout/replay. It remains a development local service rather than a production machine daemon.
+`apps/host` owns the loopback HTTP/SSE server, Codex runtime, live state, Phase 3A SQLite boundary, Phase 3B.1 durable Project registry, Phase 3C.1 durable Conversation index/title rules, Phase 3C.1.1 cold detail/hydration boundary, and Phase 3D.1 durable Attention projection. It allocates public identities, maps them to private provider identities, validates actions and Project workspaces, reconstructs bounded live or cold views from durable Turn records, hydrates control state on demand, sequences client events, and performs bounded fanout/replay. The same Host entry supports standalone Browser development and the production Desktop sidecar; Desktop-managed mode changes lifecycle wiring and Origin input, not business behavior.
 
-Project discovery/import UX, multiple Machine locations, durable action logging, full-history pagination, production lifecycle supervision, machine trust, and remote operation remain planned rather than implemented.
+Project discovery/import UX, multiple Machine locations, durable action logging, full-history pagination, machine trust, and remote operation remain planned rather than implemented.
 
 ## Client-to-Host Protocol
 
@@ -644,17 +680,19 @@ A Conversation is bound to one Project, one Agent, and the Machine executing it,
 
 Agent execution can read files, run commands, and change code. The spike confines the real Turn to a dedicated ignored workspace, uses `workspace-write` and `on-request` approval settings, forbids automatic approval, and records protocol summaries without environment variables or credentials.
 
-The Phase 2B HTTP server additionally binds only `127.0.0.1`, requires the exact loopback `Host` authority, enforces an explicit Origin allowlist without a wildcard, limits JSON bodies and SSE connections, validates every wire payload, and returns safe error envelopes. Phase 3B.1 turns workspace confinement into durable Project authorization: registration resolves a canonical directory under any configured roots, and every new Turn or lazy provider resume re-resolves the saved Project root and contained `cwd`. An unavailable or changed root fails closed with `project_unavailable` while history remains readable.
+The Phase 2B HTTP server additionally binds only `127.0.0.1`, requires the exact loopback `Host` authority, enforces an explicit Origin allowlist without a wildcard, limits JSON bodies and SSE connections, validates every wire payload, and returns safe error envelopes. Browser development retains its two explicit Vite Origins. Desktop-managed startup supplies only the verified Tauri Origin (`http://tauri.localhost` in the production Windows WebView) or its explicit development Vite Origin; it does not enable wildcard CORS. Phase 3B.1 turns workspace confinement into durable Project authorization: registration resolves a canonical directory under any configured roots, and every new Turn or lazy provider resume re-resolves the saved Project root and contained `cwd`. An unavailable or changed root fails closed with `project_unavailable` while history remains readable.
 
-These controls are development safeguards, not a production security model. Authentication, authorization, machine trust, durable audit, TLS, pairing, and remote transport security remain unimplemented. The server must not bind to LAN interfaces in this phase.
+The Tauri capability boundary exposes no native command to React. Production CSP is explicit and loopback-only, while Rust owns the fixed Host sidecar command and private lifecycle pipe. This does not make the loopback API a remote security model: authentication, machine trust, durable audit, TLS, pairing, and remote transport security remain unimplemented. The server must not bind to LAN interfaces in this phase.
 
 ## Current Architectural Constraints
 
 - Valid live Conversation Detail, Project list/detail, Project-scoped Conversations, real Conversation Rail, and global real Inbox routes are connected to the Host. Demo remains a development fixture absent from real navigation.
-- The Host API is a development-only loopback service with local SQLite records, not a production daemon or remote service.
+- The Host API is a loopback-only service with local SQLite records. Browser development may launch it separately; CodeTether Desktop packages and owns the same Host as a revision-coupled sidecar. It is not a LAN daemon or remote service.
 - The real integration is Codex-only and was verified against local `codex-cli 0.149.1`.
 - React can start text Turns, resolve one-shot pending Approvals, and interrupt the exact active Turn on a valid live Conversation route. Stop/thread termination, queueing, steering, attachments, configuration changes, and other write paths are not connected.
-- Durable local Project identity, authorization, real list/add/detail/remove UI, Project-aware Conversation history/create flows, and the real open Attention queue exist. There is no native folder picker, Project discovery/import, rename/relocate, Inbox history/read state, multiple-Machine location model, Tauri shell, authentication, remote access, full-history pagination, or production permission policy.
+- Durable local Project identity, authorization, real list/add/detail/remove UI, Project-aware Conversation history/create flows, the real open Attention queue, and the Tauri Desktop lifecycle shell exist. There is no native folder picker, Project discovery/import, rename/relocate, Inbox history/read state, multiple-Machine location model, authentication, remote access, full-history pagination, notification delivery, tray, updater, or production permission policy.
+- The Desktop owns only the Host process it starts. A pre-existing CodeTether Host or unknown service on port 4317 is reported and left untouched; Phase 4A does not attach, replace, or kill by port.
+- The production Desktop build embeds `apps/web` assets and a Node SEA Host executable. Runtime use does not depend on Vite, pnpm, or a system Node.js installation; building the current SEA requires Node 25.5+ plus the Windows Rust/MSVC/WebView2 prerequisites.
 - Command Allow Once and Decline were exercised through real App Server requests; file-change and permissions approvals were not observed.
 - Multi-Turn, multi-Thread, cross-process resume, interruption, and safe Tool failure were manually validated.
 - A real terminal Turn failure was not observed.

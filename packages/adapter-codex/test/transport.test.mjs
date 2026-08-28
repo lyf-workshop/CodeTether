@@ -161,6 +161,23 @@ test('rejects every pending request when the process exits unexpectedly', async 
   assert.equal(transport.pendingRequestCount, 0)
 })
 
+test('rejects writes and absorbs provider stdin errors after shutdown begins', async () => {
+  const { child, transport } = createHarness()
+
+  transport.beginShutdown()
+  child.stdin.emit(
+    'error',
+    Object.assign(new Error('write after end'), {
+      code: 'ERR_STREAM_WRITE_AFTER_END',
+    }),
+  )
+
+  await assert.rejects(
+    transport.respond(72, { decision: 'decline' }),
+    /protocol is closing/,
+  )
+})
+
 function transportErrorEmitter(transport) {
   const emitter = new EventEmitter()
   transport.onError((error) => emitter.emit('error', error))

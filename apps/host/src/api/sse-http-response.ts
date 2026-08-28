@@ -10,6 +10,7 @@ import {
   SseClientLimitError,
   SseConnection,
   SseConnectionPool,
+  SseConnectionPoolClosedError,
 } from './sse-connections.js'
 
 interface ServeSseResponseOptions {
@@ -102,7 +103,10 @@ function connect(connections: SseConnectionPool): SseConnection {
   try {
     return connections.connect(`sse_${randomUUID()}`)
   } catch (error) {
-    if (error instanceof SseClientLimitError) {
+    if (
+      error instanceof SseClientLimitError ||
+      error instanceof SseConnectionPoolClosedError
+    ) {
       throw new HttpBoundaryError(
         'runtime_unavailable',
         'SSE connection limit reached',

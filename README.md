@@ -2,18 +2,20 @@
 
 > A control center for AI coding agents.
 
-CodeTether is a planned desktop and mobile workspace for supervising and controlling coding agents across projects and machines. V1 is Codex-first, with provider-neutral boundaries for later Claude Code and OpenCode support.
+CodeTether is a Windows-first desktop workspace for supervising and controlling coding agents across projects, with a focused mobile companion planned for later. V1 is Codex-first, with provider-neutral boundaries for later Claude Code and OpenCode support.
 
-Phase 1 is accepted and frozen as **CodeTether V2 Frontend Core v1**, the accepted local runtime is frozen as **Phase 2A Codex Runtime v1**, and Phase 2B is accepted as the development-only Protocol v1 loopback HTTP/SSE boundary. The complete read path is frozen as **Live Conversation Read Model v1**. Phase 2C.2 is accepted and frozen as **CodeTether Local Codex Alpha v0.1**: the existing Conversation Workspace can start real text Turns, stream results, resolve one-shot Approvals, interrupt, and continue while the Host remains canonical state owner.
+Phase 1 is accepted and frozen as **CodeTether V2 Frontend Core v1**, the accepted local runtime is frozen as **Phase 2A Codex Runtime v1**, and Phase 2B is accepted as the local-only Protocol v1 loopback HTTP/SSE boundary shared by Browser and Desktop clients. The complete read path is frozen as **Live Conversation Read Model v1**. Phase 2C.2 is accepted and frozen as **CodeTether Local Codex Alpha v0.1**: the existing Conversation Workspace can start real text Turns, stream results, resolve one-shot Approvals, interrupt, and continue while the Host remains canonical state owner.
 
-**Phase 3D.2 — Real Inbox UI** is implemented and validated. Projects, Conversations, and Attention remain durable Host-owned product records. The real `/inbox` now consumes the typed Attention API and reliable semantic events for Approval, completed-review, and failed-Turn work, including the real Sidebar count and exact Approval controls. There is still no question inference, read/unread state, notifications, archive/rename/delete, full-history pagination, native folder picker, Tauri shell, authentication, remote access, or non-Codex provider.
+**Phase 3D.2 — Real Inbox UI** is implemented and validated. Projects, Conversations, and Attention remain durable Host-owned product records. The real `/inbox` consumes the typed Attention API and reliable semantic events for Approval, completed-review, and failed-Turn work, including the real Sidebar count and exact Approval controls. There is still no question inference, read/unread state, notifications, archive/rename/delete, full-history pagination, native folder picker, authentication, remote access, or non-Codex provider.
 
 **Phase 3E.1 — Approval Interaction Layout Stabilization** is implemented and validated. Conversation Detail now keeps actionable Approval controls in a bounded Pending Action Dock between the independently scrolling Timeline and the mounted Composer; Timeline entries are history only, long commands stay bounded, and scroll/focus remain stable through one or multiple Approval transitions.
+
+**Phase 4A — Tauri Desktop Shell Foundation** is implemented and validated. `apps/desktop` packages the existing Web UI and a revision-coupled Node SEA build of the existing Host into one Windows-first Tauri v2 application. Tauri owns window and owned-process lifecycle only; all Project, Conversation, Attention, Codex, persistence, and Protocol behavior remains in the accepted Web/Host layers. Phase 4B is not authorized.
 
 ## Current Alpha capabilities
 
 - Run one long-lived local Codex App Server behind a loopback-only Host.
-- Create durable local Codex Conversations and complete multiple browser-controlled Turns.
+- Create durable local Codex Conversations and complete multiple UI-controlled Turns in Browser or Desktop.
 - Stream Agent messages, Tool output, file changes, Diff, and terminal summaries through Protocol v1 HTTP/SSE.
 - Resolve exact bound command Approvals with Allow Once or Decline.
 - Interrupt an active Turn and continue the same Codex Thread afterward.
@@ -27,6 +29,7 @@ Phase 1 is accepted and frozen as **CodeTether V2 Frontend Core v1**, the accept
 - Create a minimal real Codex Conversation from Project or global context, then observe its Host-owned title, status, and activity update in the header, breadcrumb, Rail, and list.
 - List durable open Attention globally or by Project, resolve completed-review and failed items explicitly, and keep Approval Attention synchronized only through its exact bound Approval command.
 - Use the real Inbox to review that global Attention queue, filter its three supported types, act on exact Approvals, and keep multiple browser clients synchronized through semantic SSE events.
+- Launch the same local workspace through a single-instance Desktop shell that owns its packaged loopback Host, while retaining the standalone Browser development workflow.
 
 ## Repository layout
 
@@ -34,7 +37,7 @@ Phase 1 is accepted and frozen as **CodeTether V2 Frontend Core v1**, the accept
 codetether-v2/
 ├── apps/
 │   ├── web/                 # Frozen UI plus live Conversation read model
-│   ├── desktop/             # Future Tauri 2 shell (placeholder)
+│   ├── desktop/             # Tauri v2 shell and Host sidecar packaging
 │   └── host/                # Local Host API, Project registry, Codex runtime, and SQLite
 ├── packages/
 │   ├── ui/                  # Shared design-system foundation (active)
@@ -57,6 +60,14 @@ codetether-v2/
 - Node.js 22.13 or newer (`node:sqlite` must be available without the experimental flag)
 - pnpm 10 or newer (the repository records the exact package-manager version)
 
+Desktop sidecar builds have additional Windows-first prerequisites:
+
+- Node.js 25.5 or newer for the official direct `--build-sea` pipeline
+- Rust 1.85 or newer with the MSVC target
+- Microsoft C++ Build Tools and the Windows SDK
+- Microsoft Edge WebView2 Runtime
+- A locally available Codex executable for real Agent execution (durable reads can still operate when Codex is unavailable)
+
 ## Setup
 
 ```bash
@@ -64,7 +75,9 @@ pnpm install
 pnpm dev
 ```
 
-The web app renders the shared desktop AppShell. When the loopback Host is running, `/projects` manages real durable Project registrations, `/projects/:projectId/conversations` lists a Project's durable Conversations, `/conversations/conv_*` reads or controls the selected Conversation, and `/inbox` presents durable open Attention. `/conversations` redirects to Project selection. `/conversations/demo` remains only a development visual fixture, and `/__ui` presents the shared component showcase.
+`pnpm dev` preserves the standalone Browser workflow and starts only the Web application; launch the Host separately for that mode. For the single-command Desktop development workflow, use `pnpm desktop:dev`. It builds the Host sidecar, starts the Vite process through Tauri, launches one Desktop window, and supervises the owned Host.
+
+The shared Web app renders the same AppShell in both modes. `/projects` manages real durable Project registrations, `/projects/:projectId/conversations` lists a Project's durable Conversations, `/conversations/conv_*` reads or controls the selected Conversation, and `/inbox` presents durable open Attention. `/conversations` redirects to Project selection. `/conversations/demo` remains only a development visual fixture, and `/__ui` presents the shared component showcase.
 
 ## Commands
 
@@ -82,11 +95,16 @@ pnpm host:integration                          # Run real HTTP/SSE integration
 pnpm host:control                              # Run the isolated browser-control harness
 pnpm host:observe -- create --cwd <absolute-path>  # Create a live dev Conversation
 pnpm host:observe -- turn --conversation <conv_id> --input <text>  # Start a dev Turn
+pnpm desktop:dev             # Build the Host sidecar, start Vite, and launch Tauri
+pnpm desktop:sidecar         # Build the revision-coupled Node SEA Host executable
+pnpm desktop:check           # Run Rust fmt/check/clippy/test gates
+pnpm desktop:build           # Build Web assets, Desktop binary, sidecar, and NSIS bundle
+pnpm desktop:package-smoke   # Build and cold-start the packaged executable against temp data
 ```
 
 `pnpm codex:spike` uses only the ignored `.tmp/codetether-codex-spike/` workspace. It must never target the CodeTether source repository.
 
-For the normal local product flow, set an isolated `CODETETHER_DATA_DIR`, run `pnpm host:serve -- --workspace <absolute-path>` and `pnpm dev`, then open `/projects`. From the real Project overview, open its Conversations page and create a Codex Conversation in the browser. `pnpm host:control` remains a focused integration harness for interruption and safe command-Approval checks. The Host prints its `databasePath`, records canonical User input before provider execution, and publishes final mutation state through Protocol events. Refresh and `stream.reset` reconstruct the retained Timeline; after a Host restart, SQLite restores durable history and the next Turn lazily resumes the saved Codex Thread.
+For Desktop development, set an isolated absolute `CODETETHER_DATA_DIR` when desired and run only `pnpm desktop:dev`; do not start a second Host. For Browser development, run `pnpm host:serve -- --workspace <absolute-path>` and `pnpm dev`, then open `/projects`. From the real Project overview, open its Conversations page and create a Codex Conversation. `pnpm host:control` remains a focused integration harness for interruption and safe command-Approval checks. The Host records canonical User input before provider execution and publishes final mutation state through Protocol events. Refresh and `stream.reset` reconstruct the retained Timeline; after a Host restart, SQLite restores durable history and the next Turn lazily resumes the saved Codex Thread.
 
 ### Local data
 
@@ -164,7 +182,11 @@ The Inbox requests up to 100 open items in Host-owned priority order. It shows o
 - Only Codex, text Turn start, one-shot command Approval, and Turn interrupt are connected.
 - Attention currently models only structured Approval, completed-review, and failed-Turn semantics. Structured Agent questions, read/unread, notifications, and Activity are not implemented.
 - Projects and Conversations are real local surfaces, but native folder picking, project discovery/import, rename/relocate, Conversation rename/archive/delete, history pagination, and multiple Machine locations are not implemented.
-- Stop/terminate, queue/steer, attachments, Tauri packaging, remote access, authentication, and other providers are not implemented.
+- Stop/terminate, queue/steer, attachments, Desktop notifications, tray behavior, updater/signing, remote access, authentication, and other providers are not implemented.
+- Phase 4A is Windows-first. macOS/Linux packaging, signing, distribution, and process-tree validation remain future work.
+- CodeTether Desktop uses the fixed loopback port 4317. It reports and leaves any existing CodeTether Host or unknown occupant untouched rather than attaching or killing by port.
+- The packaged Host does not need a system Node.js runtime, but the current Desktop build pipeline requires Node 25.5+ to produce the official SEA executable. Real Codex work still requires a compatible local Codex installation.
+- The current Desktop icon is a minimal Alpha asset; final brand artwork is still pending.
 - File-change and permissions Approval variants have fixture/schema coverage but have not been observed in a real Codex run.
 - Physical Windows Chinese IME input has not been manually validated; automated composition-event coverage exists.
 - The Host assumes one primary writer process for a data directory; a second-Host ownership/lease mechanism is not implemented yet.
@@ -178,4 +200,4 @@ The Inbox requests up to 100 open items in Host-owned priority order. It shows o
 
 ## Status
 
-**CodeTether Local Codex Alpha v0.1** remains the frozen runtime baseline. Phase 3A through **Phase 3D.2 — Real Inbox UI** are implemented and validated: durable Projects, durable Conversation history/title/index, cold reads, bounded hydration, real Project/Conversation navigation, minimal Codex Conversation creation, durable Attention, and the real Inbox are accepted capabilities. Do not extend this into question inference, read/unread state, notifications, Activity, archive/rename/delete, pagination, discovery, native folder selection, desktop packaging, remote exposure, or another provider without a separately approved phase. See the roadmap for ordered gates.
+**CodeTether Local Workspace Alpha** remains the frozen product/runtime baseline, and **Phase 4A — Tauri Desktop Shell Foundation** is implemented and validated around it. Phase 4B remains unauthorized. Do not extend this into question inference, read/unread state, notifications, Activity, archive/rename/delete, pagination, discovery, native folder selection, tray/updater behavior, remote exposure, or another provider without a separately approved phase. See the roadmap for ordered gates.

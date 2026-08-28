@@ -216,6 +216,50 @@ test('rejects pending turn waiters immediately during clean shutdown', async () 
   await assert.rejects(terminal, /Codex App Server closed/)
 })
 
+test('drains a shutdown-only approval decision before closing provider stdin', async () => {
+  let releaseApproval
+  const approvalDecision = new Promise((resolve) => {
+    releaseApproval = resolve
+  })
+  const diagnostics = []
+  const { child, client, written } = createHarness({
+    approvalHandler: async () => await approvalDecision,
+    onError: (error) => diagnostics.push(error.message),
+  })
+  child.stdin.once('finish', () => {
+    child.exitCode = 0
+    child.emit('exit', 0, null)
+    child.emit('close', 0, null)
+  })
+
+  child.stdout.write(
+    `${JSON.stringify({
+      id: 71,
+      method: 'item/commandExecution/requestApproval',
+      params: {
+        threadId: 'thread-a',
+        turnId: 'turn-a',
+        itemId: 'command-a',
+        startedAtMs: 1_777_777_777_000,
+        environmentId: null,
+        command: 'git status --short',
+      },
+    })}\n`,
+  )
+  await nextTurn()
+
+  releaseApproval('deny')
+  await client.shutdown()
+
+  assert.deepEqual(written, [
+    {
+      id: 71,
+      result: { decision: 'decline' },
+    },
+  ])
+  assert.deepEqual(diagnostics, [])
+})
+
 test('sends schema-shaped resume and interrupt requests', async () => {
   const { child, client, written } = createHarness()
   const resumed = client.resumeThread({

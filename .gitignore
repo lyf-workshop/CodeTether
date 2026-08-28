@@ -7,6 +7,12 @@ coverage/
 output/
 .tmp/
 .playwright-cli/
+target/
+apps/desktop/src-tauri/gen/
+apps/desktop/src-tauri/binaries/*
+!apps/desktop/src-tauri/binaries/.gitkeep
+apps/desktop/src-tauri/icons/*
+!apps/desktop/src-tauri/icons/icon.ico
 *.tsbuildinfo
 *.sqlite
 *.sqlite3

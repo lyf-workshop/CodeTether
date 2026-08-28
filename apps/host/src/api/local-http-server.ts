@@ -64,12 +64,14 @@ export class LocalHttpServer {
   readonly #heartbeatMs: number
   readonly #sse: SseConnectionPool
   readonly #server = createServer((request, response) => {
-    void this.#handle(request, response)
+    this.#acceptRequest(request, response)
   })
+  readonly #inFlightRequests = new Set<Promise<void>>()
   #stopHeartbeat?: () => void
   #unsubscribePublisher?: () => void
   #baseUrl?: string
   #closePromise?: Promise<void>
+  #closing = false
 
   constructor(options: LocalHttpServerOptions) {
     this.#service = options.service
@@ -130,6 +132,28 @@ export class LocalHttpServer {
   async close(): Promise<void> {
     this.#closePromise ??= this.#close()
     await this.#closePromise
+  }
+
+  #acceptRequest(request: IncomingMessage, response: ServerResponse): void {
+    if (this.#closing) {
+      response.destroy()
+      return
+    }
+    const task = this.#handle(request, response)
+    this.#inFlightRequests.add(task)
+    void task
+      .catch((error: unknown) => {
+        if (!response.destroyed) {
+          response.destroy(
+            error instanceof Error
+              ? error
+              : new Error('Local HTTP request failed', { cause: error }),
+          )
+        }
+      })
+      .finally(() => {
+        this.#inFlightRequests.delete(task)
+      })
   }
 
   async #handle(
@@ -453,27 +477,60 @@ export class LocalHttpServer {
   }
 
   async #close(): Promise<void> {
+    this.#closing = true
+    const traceManagedShutdown = process.env.CODETETHER_DESKTOP_MANAGED === '1'
+    const shutdownStartedAt = performance.now()
+    const trace = (phase: string): void => {
+      if (!traceManagedShutdown) return
+      process.stderr.write(
+        `[codetether:host] shutdown ${phase} (${String(Math.round(performance.now() - shutdownStartedAt))} ms)\n`,
+      )
+    }
+    trace('transport-start')
     this.#stopHeartbeat?.()
     this.#unsubscribePublisher?.()
-    this.#sse.close()
     const failures: unknown[] = []
-    if (this.#server.listening) {
-      try {
-        await new Promise<void>((resolve, reject) => {
+    const wasListening = this.#server.listening
+    const stopAccepting = wasListening
+      ? new Promise<void>((resolve, reject) => {
+          // Stop accepting before closing live SSE responses. Otherwise an
+          // EventSource reconnect can be accepted between those two actions
+          // and keep graceful Desktop shutdown open indefinitely.
           this.#server.close((error) => {
             if (error === undefined) resolve()
             else reject(error)
           })
         })
+      : Promise.resolve()
+    // The close callback should not fail for a listening server, but attach a
+    // handler immediately so even an unusual synchronous transport failure
+    // cannot become an unhandled rejection while admitted requests drain.
+    void stopAccepting.catch(() => undefined)
+    this.#sse.close()
+    // Requests admitted before shutdown own real Host operations. Drain them
+    // before Runtime and SQLite teardown so an accepted mutation cannot finish
+    // against already-closed state. The Desktop supervisor supplies the outer
+    // bounded timeout and terminates only its owned process tree if one stalls.
+    await Promise.allSettled([...this.#inFlightRequests])
+    trace('requests-complete')
+    // WebView fetch/EventSource sockets can remain active after their logical
+    // work has settled. No new HTTP work is accepted now, so release any final
+    // keep-alive transport before waiting for Node's close callback.
+    this.#server.closeAllConnections()
+    if (wasListening) {
+      try {
+        await stopAccepting
       } catch (error) {
         failures.push(error)
       }
     }
+    trace('transport-complete')
     try {
       await this.#service.close()
     } catch (error) {
       failures.push(error)
     }
+    trace('runtime-complete')
     if (failures.length === 1) throw failures[0]
     if (failures.length > 1) {
       throw new AggregateError(failures, 'Local Host shutdown failed')

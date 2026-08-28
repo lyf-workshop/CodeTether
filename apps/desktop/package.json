@@ -1,0 +1,19 @@
+{
+  "name": "@codetether/desktop",
+  "version": "0.1.0-alpha.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "sidecar": "node scripts/build-sidecar.mjs",
+    "dev": "node scripts/run-tauri.mjs dev --config src-tauri/tauri.dev.conf.json",
+    "tauri:build": "node scripts/run-tauri.mjs build",
+    "check": "node scripts/cargo-check.mjs",
+    "package:smoke": "node scripts/package-smoke.mjs && node scripts/lifecycle-smoke.mjs",
+    "typecheck": "node --check scripts/build-sidecar.mjs && node --check scripts/cargo-check.mjs && node --check scripts/package-smoke.mjs && node --check scripts/lifecycle-smoke.mjs && node --check scripts/run-tauri.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.11.4",
+    "esbuild": "0.28.2"
+  }
+}

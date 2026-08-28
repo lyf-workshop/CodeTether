@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "The CodeTether Web UI receives no native shell or filesystem commands.",
+  "windows": ["main"],
+  "permissions": []
+}

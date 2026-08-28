@@ -86,6 +86,8 @@ export interface LaunchCodexClientOptions extends CodexAppServerClientOptions {
   }
 }
 
+const SERVER_REQUEST_DRAIN_TIMEOUT_MS = 2_000
+
 /** Coordinates the App Server handshake and the small Thread/Turn spike API. */
 export class CodexAppServerClient {
   readonly #transport: JsonRpcTransport
@@ -95,6 +97,7 @@ export class CodexAppServerClient {
   )
   readonly #options: CodexAppServerClientOptions
   readonly #observedMethods = new Set<string>()
+  readonly #serverRequestTasks = new Set<Promise<void>>()
   #closing = false
   #shutdownPromise?: Promise<void>
 
@@ -112,9 +115,16 @@ export class CodexAppServerClient {
       this.#handleNotification(notification)
     })
     this.#transport.onServerRequest((request) => {
-      void this.#handleServerRequest(request).catch((error: unknown) => {
-        this.#fail(toError(error))
-      })
+      if (this.#closing) return
+      const task = this.#handleServerRequest(request)
+      this.#serverRequestTasks.add(task)
+      void task
+        .catch((error: unknown) => {
+          this.#fail(toError(error))
+        })
+        .finally(() => {
+          this.#serverRequestTasks.delete(task)
+        })
     })
     this.#transport.onUnknownResponse((id) => {
       try {
@@ -547,8 +557,26 @@ export class CodexAppServerClient {
   async #shutdown(): Promise<void> {
     this.#closing = true
     this.#lifecycle.failAll(new CodexProcessError('Codex App Server closed'))
+    await this.#drainServerRequests()
     this.#transport.beginShutdown()
     await stopCodexAppServer(this.process)
+  }
+
+  async #drainServerRequests(): Promise<void> {
+    const tasks = [...this.#serverRequestTasks]
+    if (tasks.length === 0) return
+
+    let timer: NodeJS.Timeout | undefined
+    try {
+      await Promise.race([
+        Promise.allSettled(tasks),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, SERVER_REQUEST_DRAIN_TIMEOUT_MS)
+        }),
+      ])
+    } finally {
+      if (timer !== undefined) clearTimeout(timer)
+    }
   }
 }
 

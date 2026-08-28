@@ -1043,6 +1043,7 @@ test('close declines pending approvals, closes runtime once, and unsubscribes', 
     providerApprovalId: 'provider-approval-cleanup',
     providerThreadId: 'provider-thread-secret-1',
     providerTurnId: 'provider-turn-secret-1',
+    autoResolve: true,
   })
   const eventCount = fixture.events.length
 
@@ -1054,10 +1055,10 @@ test('close declines pending approvals, closes runtime once, and unsubscribes', 
     { providerRequestId: 'provider-request-cleanup', decision: 'decline' },
   ])
   assert.deepEqual(fixture.runtime.lifecycle, [
+    'unsubscribe-approvals',
     'approval:decline',
     'runtime-close',
     'unsubscribe-events',
-    'unsubscribe-approvals',
     'unsubscribe-failures',
   ])
 
@@ -1071,6 +1072,61 @@ test('close declines pending approvals, closes runtime once, and unsubscribes', 
     delta: 'must not publish',
   })
   assert.equal(fixture.events.length, eventCount)
+})
+
+test('close drains an accepted action and rejects new mutations before runtime teardown', async (t) => {
+  const fixture = await createFixture(t)
+  const project = (await fixture.service.listProjects()).projects[0]
+  assert.ok(project)
+
+  let markProviderStarted
+  const providerStarted = new Promise((resolveStarted) => {
+    markProviderStarted = resolveStarted
+  })
+  let releaseProvider
+  const providerGate = new Promise((resolveProvider) => {
+    releaseProvider = resolveProvider
+  })
+  const startConversation = fixture.runtime.startConversation.bind(
+    fixture.runtime,
+  )
+  fixture.runtime.startConversation = async (options) => {
+    markProviderStarted()
+    await providerGate
+    return await startConversation(options)
+  }
+
+  const creating = fixture.service.createConversation({
+    actionId: 'act_close_drain_create',
+    provider: 'codex',
+    projectId: project.projectId,
+  })
+  await providerStarted
+
+  let closeSettled = false
+  const closing = fixture.service.close().then(() => {
+    closeSettled = true
+  })
+  await new Promise((resolveTurn) => setImmediate(resolveTurn))
+  assert.equal(closeSettled, false)
+  assert.equal(fixture.runtime.closeCalls, 0)
+  await assert.rejects(
+    fixture.service.createProject({
+      actionId: 'act_close_reject_project',
+      path: fixture.workspace,
+    }),
+    (error) =>
+      error instanceof HostServiceError &&
+      error.code === 'runtime_unavailable' &&
+      error.httpStatus === 503,
+  )
+
+  releaseProvider()
+  const created = await creating
+  await closing
+
+  assert.equal(created.data.conversation.projectId, project.projectId)
+  assert.equal(fixture.runtime.closeCalls, 1)
 })
 
 test('close still unsubscribes and clears listeners when runtime close rejects', async (t) => {
@@ -1104,10 +1160,10 @@ test('close still unsubscribes and clears listeners when runtime close rejects',
     },
   ])
   assert.deepEqual(fixture.runtime.lifecycle, [
+    'unsubscribe-approvals',
     'approval:decline',
     'runtime-close',
     'unsubscribe-events',
-    'unsubscribe-approvals',
     'unsubscribe-failures',
   ])
 })

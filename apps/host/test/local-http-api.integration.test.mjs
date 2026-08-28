@@ -1093,6 +1093,62 @@ test('returns safe runtime_unavailable responses after a fatal runtime signal', 
   }
 })
 
+test('server shutdown drains an admitted mutation before closing Host state', async () => {
+  const harness = await createHarness({ persistence: true })
+  let releaseProvider
+  let closing
+  let mutation
+  try {
+    const projects = await getJson(harness.baseUrl, '/api/v1/projects')
+    const projectId = projects.body.projects[0].projectId
+    let markProviderStarted
+    const providerStarted = new Promise((resolveStarted) => {
+      markProviderStarted = resolveStarted
+    })
+    const providerGate = new Promise((resolveProvider) => {
+      releaseProvider = resolveProvider
+    })
+    const startConversation = harness.runtime.startConversation.bind(
+      harness.runtime,
+    )
+    harness.runtime.startConversation = async (options) => {
+      markProviderStarted()
+      await providerGate
+      return await startConversation(options)
+    }
+
+    mutation = postJson(harness.baseUrl, '/api/v1/conversations', {
+      actionId: 'act_http_shutdown_drain',
+      provider: 'codex',
+      projectId,
+    })
+    await providerStarted
+
+    let closeSettled = false
+    closing = harness.close().then(() => {
+      closeSettled = true
+    })
+    await new Promise((resolveTurn) => setImmediate(resolveTurn))
+    assert.equal(closeSettled, false)
+    assert.equal(harness.runtime.closeCalls, 0)
+
+    releaseProvider()
+    const response = await mutation
+    await closing
+
+    assert.equal(response.status, 201)
+    assert.equal(response.body.status, 'completed')
+    assert.equal(response.body.data.conversation.projectId, projectId)
+    assert.equal(harness.runtime.startConversationCalls.length, 1)
+    assert.equal(harness.runtime.closeCalls, 1)
+  } finally {
+    releaseProvider?.()
+    await mutation?.catch(() => undefined)
+    if (closing === undefined) await harness.close()
+    else await closing.catch(() => undefined)
+  }
+})
+
 class FakeAgentRuntime {
   provider = 'codex'
   startConversationCalls = []

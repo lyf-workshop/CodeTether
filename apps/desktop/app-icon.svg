@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="CodeTether">
+  <rect width="512" height="512" rx="112" fill="#07111f" />
+  <rect x="48" y="48" width="416" height="416" rx="88" fill="#37b8ff" />
+  <path
+    d="M348 183c-24-22-52-33-84-33-62 0-108 45-108 106s46 106 108 106c32 0 60-11 84-33l-36-40c-14 13-29 19-47 19-29 0-50-21-50-52s21-52 50-52c18 0 33 6 47 19l36-40Z"
+    fill="#07111f"
+  />
+</svg>

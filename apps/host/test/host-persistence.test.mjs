@@ -94,8 +94,26 @@ class FakeRuntime {
         providerItemId: options.providerItemId,
         kind: 'command',
         summary: 'Run a safe command',
-        respond: (decision) => this.approvalDecisions.push(decision),
+        respond: (decision) => {
+          this.approvalDecisions.push(decision)
+          if (options.autoResolve === true) {
+            this.resolveApproval({
+              providerRequestId: options.providerRequestId,
+              providerApprovalId: options.providerApprovalId,
+              providerThreadId: options.providerThreadId,
+              providerTurnId: options.providerTurnId,
+              providerItemId: options.providerItemId,
+              decision,
+            })
+          }
+        },
       })
+    }
+  }
+
+  resolveApproval(resolution) {
+    for (const listeners of this.#approvalListeners) {
+      listeners.onResolved(resolution)
     }
   }
 }
@@ -323,7 +341,7 @@ test('Conversation identity, rich multi-Turn history, and Provider identity surv
   }
 })
 
-test('active Turn and pending Approval become interrupted and non-actionable after restart', async () => {
+test('graceful close declines Provider but expires pending Approval only on restart', async () => {
   const environment = await createEnvironment()
   try {
     const first = await createService(
@@ -348,10 +366,21 @@ test('active Turn and pending Approval become interrupted and non-actionable aft
       providerThreadId: 'provider-thread-1',
       providerTurnId: 'provider-turn-1',
       providerItemId: 'provider-tool-approval',
+      autoResolve: true,
     })
     const pendingApproval = first.service.snapshot().pendingApprovals[0]
     assert.ok(pendingApproval)
+    const openAttention = first.store.listAttentionItems({
+      type: 'approval',
+      status: 'open',
+    })
+    assert.equal(openAttention.length, 1)
+    assert.equal(
+      openAttention[0].payload.approvalId,
+      pendingApproval.approvalId,
+    )
     await first.service.close()
+    assert.deepEqual(first.runtime.approvalDecisions, ['decline'])
 
     const second = await createService(
       environment,
@@ -370,6 +399,19 @@ test('active Turn and pending Approval become interrupted and non-actionable aft
     assert.equal(durable.snapshot.interruptionReason, 'host_restart')
     assert.equal(durable.snapshot.approvals[0].lifecycle, 'expired')
     assert.equal(durable.snapshot.approvals[0].reason, 'host_restart')
+    const expiredAttention = second.store.getAttentionItem(
+      openAttention[0].attentionId,
+    )
+    assert.equal(expiredAttention.status, 'expired')
+    assert.equal(expiredAttention.payload.decision, undefined)
+    assert.equal(expiredAttention.payload.expirationReason, 'host_restart')
+    assert.equal(
+      second.store.listAttentionItems({
+        type: 'approval',
+        status: 'resolved',
+      }).length,
+      0,
+    )
     await assert.rejects(
       second.service.resolveApproval(pendingApproval.approvalId, {
         actionId: 'act_expired_approval01',

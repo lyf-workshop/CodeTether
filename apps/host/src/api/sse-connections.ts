@@ -57,6 +57,13 @@ export class SseClientLimitError extends Error {
   }
 }
 
+export class SseConnectionPoolClosedError extends Error {
+  constructor() {
+    super('SSE connection pool is closed')
+    this.name = 'SseConnectionPoolClosedError'
+  }
+}
+
 /** A single-client reliable SSE queue. Overflow closes only this client. */
 export class SseConnection {
   readonly #maxQueuedEvents: number
@@ -262,6 +269,7 @@ export class SseConnectionPool {
   readonly #connectionLimits: SseConnectionLimits
   readonly #connections = new Map<string, SseConnection>()
   readonly #heartbeatTimers = new Set<NodeJS.Timeout>()
+  #closed = false
 
   constructor(options: SseConnectionPoolOptions = {}) {
     this.#maxClients = positiveInteger(
@@ -281,6 +289,7 @@ export class SseConnectionPool {
   }
 
   connect(clientId: string): SseConnection {
+    if (this.#closed) throw new SseConnectionPoolClosedError()
     if (this.#connections.has(clientId)) {
       throw new Error(`SSE client ${clientId} is already connected`)
     }
@@ -331,6 +340,8 @@ export class SseConnectionPool {
   }
 
   close(): void {
+    if (this.#closed) return
+    this.#closed = true
     for (const timer of this.#heartbeatTimers) clearInterval(timer)
     this.#heartbeatTimers.clear()
     for (const connection of [...this.#connections.values()]) {

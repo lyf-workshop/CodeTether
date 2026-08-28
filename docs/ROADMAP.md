@@ -512,7 +512,56 @@ Exit gate results:
 - The deterministic Host Protocol/SSE browser harness displayed two simultaneous Approvals, preserved exact independent identities, kept a reader's `scrollTop` unchanged through both resolutions, and bounded the Dock to 216 px with no horizontal overflow.
 - 1536 × 1024 and 1280 × 900 captures cover persistent Inspector, two Approvals, long details, overlay Inspector, and resolved state. Browser sessions reported zero errors and warnings.
 
-## Phase 4 — Machines
+## Phase 4 — Desktop Productization
+
+**Goal:** turn the accepted local Web + Host workspace into one owned desktop application before adding new workspace features or remote operation.
+
+### Phase 4A — Tauri Desktop Shell Foundation
+
+**Status:** implemented and validated. Phase 4B remains a candidate only and is not authorized.
+
+Authorized scope:
+
+- A Windows-first Tauri v2 application in `apps/desktop` with one native-decorated CodeTether window and the existing `apps/web` production build as its only product UI.
+- A revision-coupled Host sidecar built from the existing TypeScript Host with Node's official Single Executable Application pipeline. Production runtime must not require a system Node.js, Vite server, or pnpm.
+- One root development command (`pnpm desktop:dev`), one production build command (`pnpm desktop:build`), Rust validation (`pnpm desktop:check`), and a packaged-sidecar smoke path.
+- Desktop-owned Host supervision on `127.0.0.1:4317`: explicit port preflight, spawn, `/api/v1/bootstrap` readiness/version validation, unexpected-exit observation, and no automatic crash-restart loop.
+- A private managed-process channel: Rust sends `start` only after Windows process-tree ownership is established; `shutdown` over piped stdin requests the existing graceful Host close; parent EOF requests the same close; a Windows owned-process Job Object is the no-orphan timeout/parent-loss fallback.
+- Single-instance behavior that restores/focuses the first window and never starts a second Host or SQLite writer.
+- Exact production/development Origin allowlists, loopback-only Host binding, minimal CSP, and a Tauri capability file with no React shell/filesystem permission or generic command bridge.
+- Existing OS data-directory semantics and `CODETETHER_DATA_DIR` test isolation; Tauri must not create a second database or product-state owner.
+
+Not included:
+
+- Native folder picker, notifications, system tray, custom window chrome, updater/signing/release channels, or multiple windows.
+- Activity, Search, rename/archive/pin, queue/steer, attachments, Machine backend, LAN/remote access, authentication, or another provider.
+- Rewriting the Host in Rust, copying business state into Tauri, changing Protocol v1, or forking Desktop-specific React product pages.
+
+Exit gate:
+
+- Existing Node/Web tests and type/lint/format/build checks pass, together with `cargo fmt --check`, `cargo check`, `cargo clippy`, and `cargo test`.
+- A real Windows `pnpm desktop:build` produces a launchable Desktop artifact with packaged Web assets and the Node SEA Host sidecar.
+- Cold launch works without a manually running Host, Vite, or Web server; the shell reports missing binary, spawn failure, port conflict, early exit, timeout, and incompatible bootstrap distinctly.
+- Real Project/Conversation/Codex streaming, Tool/Diff, Approval Dock, Inbox, persistence, full exit/relaunch, lazy provider resume, running-Turn exit, and pending-Approval exit preserve their previously accepted semantics.
+- Closing Desktop gracefully drains its owned Host/Codex tree; no listener or child remains. An external port occupant remains alive, and a second Desktop launch starts no second Host.
+- Browser mode continues to operate against a separately launched Host with no Tauri import or product behavior fork.
+
+Exit gate results:
+
+- `pnpm desktop:build` produced the Windows release executable and unsigned NSIS artifact with packaged `apps/web` assets plus the revision-coupled Node SEA Host. The release executable, not an installed NSIS copy, passed isolated cold-start package smoke without a manual Host, Vite, pnpm, or system Node runtime.
+- Packaged lifecycle smoke verified real `WM_CLOSE` graceful ownership cleanup, unexpected Host-exit detection, one Host for two Desktop launches, and safe refusal of both an unknown 4317 listener and an externally started CodeTether Host. No tested external process was killed or adopted, and owned process trees plus port 4317 were released.
+- One-command `pnpm desktop:dev` launched Vite, Desktop, and its managed Host with no second terminal. The standalone Browser path also traversed real Projects, Conversations, durable history, and Inbox with zero browser errors or warnings and no Tauri import.
+- An isolated real Codex workflow exercised Project/Conversation creation, streaming, Tools, Diff, a real command Approval through the Phase 3E.1 Dock, completed-review Inbox state, Desktop exit/relaunch, durable history, and lazy provider resume with retained context.
+- Closing during a running Turn preserved durable history and restored the Turn as interrupted/idle. Closing with a pending Approval restored it only as expired `host_restart` history; it was not actionable. Normal exit left no owned Host, Codex App Server, WebView child, or 4317 listener.
+- Node/TypeScript/Web validation, Rust fmt/check/clippy/test, Desktop security tests, SEA path-leak check, release packaging, and lifecycle smoke passed. Parent EOF requests graceful shutdown; abnormal parent death guarantees no orphan through the Windows Job Object but does not claim a full flush grace period.
+
+### Phase 4B — Native Folder Picker
+
+**Status:** candidate next phase only. It is not authorized by Phase 4A.
+
+Planned outcome: replace manual absolute-path Project registration friction with an explicitly scoped native directory selection flow while preserving Host canonicalization and workspace authorization. Notifications, tray behavior, remote access, and other native features remain separate decisions.
+
+## Phase 5 — Machines
 
 **Goal:** model and operate more than one trusted machine coherently.
 
@@ -525,7 +574,7 @@ Planned outcomes:
 
 Exit gate: users can understand which trusted machine owns a project or conversation and safely target supported operations.
 
-## Phase 5 — Remote LAN / Tailscale
+## Phase 6 — Remote LAN / Tailscale
 
 **Goal:** securely monitor and control a machine host from another device over a user-managed trusted network.
 
@@ -538,7 +587,7 @@ Planned outcomes:
 
 Exit gate: a remote web/mobile client can safely operate the supported loop without a public cloud relay.
 
-## Phase 6 — Claude Code
+## Phase 7 — Claude Code
 
 **Goal:** validate that the provider-neutral architecture supports a second agent.
 
@@ -550,7 +599,7 @@ Planned outcomes:
 
 Exit gate: supported Claude Code conversations work through the same core product model. Cross-agent handoff remains prohibited.
 
-## Phase 7 — OpenCode
+## Phase 8 — OpenCode
 
 **Goal:** add OpenCode through the established adapter model.
 
@@ -562,7 +611,7 @@ Planned outcomes:
 
 Exit gate: OpenCode passes the shared adapter contract and core conversation workflows without weakening existing providers.
 
-## Phase 8 — Mobile Polish
+## Phase 9 — Mobile Polish
 
 **Goal:** make the remote companion exceptional for short, high-value interventions.
 

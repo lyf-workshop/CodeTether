@@ -147,6 +147,7 @@ export class HostService {
   readonly #hostVersion: string
   readonly #now: () => Date
   readonly #actions = new ActionIdempotencyCache()
+  readonly #inFlightActions = new Set<Promise<unknown>>()
   readonly #conversations = new Map<ConversationId, ConversationState>()
   readonly #providerThreads = new Map<string, ConversationId>()
   readonly #approvalRegistry: ApprovalRegistry
@@ -171,6 +172,8 @@ export class HostService {
   readonly #unsubscribeFailures: () => void
   #runtimeFailure?: Error
   #closePromise?: Promise<void>
+  #acceptingActions = true
+  #closingRuntime = false
 
   constructor(options: HostServiceOptions) {
     this.#runtime = options.runtime
@@ -959,7 +962,12 @@ export class HostService {
   }
 
   async close(): Promise<void> {
-    this.#closePromise ??= this.#close()
+    if (this.#closePromise === undefined) {
+      // Stop new action admission synchronously, but keep the Runtime usable
+      // until every action already admitted has reached its durable boundary.
+      this.#acceptingActions = false
+      this.#closePromise = this.#close()
+    }
     await this.#closePromise
   }
 
@@ -1846,15 +1854,24 @@ export class HostService {
     requireRuntime = true,
   ): Promise<T> {
     try {
-      return await this.#actions.execute(
+      this.#assertAcceptingActions()
+      const task = this.#actions.execute(
         actionId,
         operation,
         input,
         async () => {
+          this.#assertAcceptingActions()
           if (requireRuntime) this.#assertRuntimeAvailable()
           return await action()
         },
       )
+      this.#inFlightActions.add(task)
+      void task
+        .finally(() => {
+          this.#inFlightActions.delete(task)
+        })
+        .catch(() => undefined)
+      return await task
     } catch (error) {
       if (error instanceof ActionIdConflictError) {
         throw new HostServiceError('conflict', error.message, 409)
@@ -1871,6 +1888,13 @@ export class HostService {
   }
 
   async #close(): Promise<void> {
+    await Promise.allSettled([...this.#inFlightActions])
+    this.#closingRuntime = true
+    // A shutdown-only decline releases the live Provider request, but it is
+    // not a user decision. Stop consuming Provider resolution callbacks first
+    // so the pending durable Approval remains the restart reconciliation
+    // authority and becomes host_restart/expired on the next Host open.
+    this.#unsubscribeApprovals()
     this.#approvalRegistry.declineAll()
     const failures: unknown[] = []
     try {
@@ -1895,7 +1919,6 @@ export class HostService {
         this.#persistenceTimer = undefined
       }
       this.#unsubscribeEvents()
-      this.#unsubscribeApprovals()
       this.#unsubscribeFailures()
       this.#actions.clear()
       this.#hydrations.clear()
@@ -1954,12 +1977,18 @@ export class HostService {
       this.#runtime.available !== false &&
       this.#runtimeFailure === undefined &&
       this.#persistenceFailure === undefined &&
-      this.#closePromise === undefined
+      !this.#closingRuntime
     )
   }
 
   #assertRuntimeAvailable(): void {
     if (!this.#runtimeAvailable()) throw runtimeUnavailableError()
+  }
+
+  #assertAcceptingActions(): void {
+    if (!this.#acceptingActions) {
+      throw runtimeUnavailableError('Host is shutting down')
+    }
   }
 }
 

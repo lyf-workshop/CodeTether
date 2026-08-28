@@ -27,7 +27,7 @@ If sources conflict, stop and resolve the conflict instead of inventing a compro
 
 ## Current Scope
 
-**Phase 3E.1 — Approval Interaction Layout Stabilization** is implemented and validated. The accepted frontend remains frozen as **CodeTether V2 Frontend Core v1**, the accepted local runtime remains frozen as **Phase 2A Codex Runtime v1**, Protocol v1 remains the accepted **Phase 2B Client ↔ Host Protocol** boundary, the complete read path remains frozen as **Live Conversation Read Model v1**, and the durable Project/Conversation/Attention data layer remains authoritative. The current product boundary now also includes:
+**Phase 4A — Tauri Desktop Shell Foundation** is implemented and validated. Phase 3E.1 and the **CodeTether Local Workspace Alpha** remain frozen: the accepted frontend is still **CodeTether V2 Frontend Core v1**, the accepted local runtime is still **Phase 2A Codex Runtime v1**, Protocol v1 remains the **Phase 2B Client ↔ Host Protocol** boundary, and the durable Project/Conversation/Attention data layer remains authoritative. Phase 4A adds only the native shell and lifecycle boundary around those accepted layers. Phase 4B is not authorized. The current product boundary includes:
 
 - A Project as a durable, authorized local workspace with a CodeTether-owned `proj_*` identity, name, canonical root path, timestamps, and availability computed from the filesystem rather than stored as durable truth.
 - SQLite migration 002 (`projects`), which adds the `projects` table and binds every durable Conversation to one Project through a non-null `project_id` foreign key. The Conversation `cwd` remains a contained working directory, not a second Project identity.
@@ -52,19 +52,26 @@ If sources conflict, stop and resolve the conflict instead of inventing a compro
 - The real Inbox supports only Approval, completed-review, and failed-Turn work. It contains no Mock question/needs-reply, unread, mark-all-read, fake risk/response metrics, retry, provider, or Machine semantics.
 - A Conversation Workspace with stable Header, independently scrolling Timeline, bounded Pending Action Dock, and mounted Composer rows. Actionable Approvals live in the Dock; Timeline Approval entries remain non-interactive history.
 - Pending Approval presentation uses semantic command labels, exact `approvalId` controls, bounded details, independent mutation state, bottom-follow only for a reader already at the bottom, preserved upper-history position, and deliberate focus recovery.
+- A Windows-first Tauri v2 application in `apps/desktop` that loads the existing `apps/web` component tree; Tauri is not a second product UI or business backend.
+- One Desktop-owned Host sidecar built from the existing Node Host with the official Node Single Executable Application pipeline. The packaged Host carries the same revision-derived build identity as the Rust shell and does not require a system Node.js installation at runtime.
+- A private Desktop-managed lifecycle mode. The Host waits for Rust's `start` activation before runtime initialization, so the supervisor can establish owned process-tree containment first. Rust requests normal graceful shutdown through a piped `shutdown` line and waits for Host persistence and Codex cleanup. The managed Host treats parent stdin EOF as another graceful-shutdown request; on abnormal Windows parent death, a Job Object guarantees owned process-tree cleanup but may win the EOF race before a full flush grace period.
+- Single-instance Desktop startup, explicit `127.0.0.1:4317` conflict handling, `/api/v1/bootstrap` readiness/version checks, and no silent attachment to or termination of an external process.
+- Production Web assets loaded from the Tauri package, while the standalone Browser/Web workflow remains supported. Business traffic continues through Protocol v1 HTTP/SSE on loopback.
+- A minimal native security boundary: the WebView receives no shell or filesystem commands, production CSP permits network access only to the loopback Host, and the Host explicitly allows the verified Tauri production Origin without wildcard CORS.
 
-Phase 3E.1 stops at Approval presentation, layout, scrolling, and focus stability. It does not authorize read/unread state, Agent-question inference, notifications, Activity, archive/rename/delete, full-history pagination, provider selection, Project discovery, native folder picking, Tauri, or remote operation.
+Phase 4A stops at the Desktop shell, packaging, and owned local process lifecycle. It does not authorize native folder picking, notifications, tray behavior, custom window chrome, updating/signing infrastructure, Activity, archive/rename/delete, Machine management, remote operation, or another provider.
 
 ## Out of Scope
 
-After Phase 3E.1, do not implement without a separately approved phase:
+During and after Phase 4A, do not implement without a separately approved phase:
 
 - Visual redesigns or unrelated refactors to the frozen Design System, AppShell, Inbox, Conversations, Conversation Workspace, or accepted Projects UI.
 - Activity, Machines, Agents, Settings, an advanced New Conversation flow, or any other new product-page content or flow.
 - Live Host data in another frozen page.
 - A generic WebSocket RPC transport or interactive PTY transport.
-- Tauri or desktop-shell functionality.
-- Project discovery/scanning, a native folder picker, rename/relocate, multiple Project locations, Machine management, remote access, relay, authentication, or production Host services.
+- Native folder picking, Desktop notifications, system tray behavior, custom window chrome, auto-update, signing/release channels, or any other native product feature beyond the Phase 4A shell lifecycle.
+- A generic Tauri command runner, arbitrary shell bridge, arbitrary filesystem capability, or a second Client-to-Host business protocol.
+- Project discovery/scanning, rename/relocate, multiple Project locations, Machine management, remote access, relay, or authentication.
 - Filesystem deletion, recursive cleanup, cascading Project deletion, or automatic reassignment of existing Conversations to another Project.
 - Stop/thread termination, Turn queueing, steering, retry-Turn, attachments, images, voice, Skill upload, or another React write path beyond minimal Codex Conversation creation, text Turn start, one-shot Approval resolution, and interrupt.
 - Actionable Approval recovery across restart, `Always Allow`, automatic approval, or a production permission-policy system. Expired Approval history may be retained only to explain what happened.

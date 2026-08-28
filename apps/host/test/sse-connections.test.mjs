@@ -4,11 +4,21 @@ import test from 'node:test'
 import {
   HostEventPublisher,
   SseClientLimitError,
+  SseConnectionPoolClosedError,
   SseConnectionPool,
   SseSlowClientError,
 } from '../dist/api/index.js'
 
 const epoch = '11111111-1111-4111-8111-111111111111'
+
+test('closed pool rejects an EventSource reconnect', () => {
+  const clients = new SseConnectionPool()
+  clients.close()
+  assert.throws(
+    () => clients.connect('late-client'),
+    SseConnectionPoolClosedError,
+  )
+})
 
 test('fans out the same event identity to two SSE clients', async () => {
   const publisher = new HostEventPublisher({ epoch })

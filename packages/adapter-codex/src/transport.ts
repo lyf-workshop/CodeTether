@@ -72,6 +72,15 @@ export class JsonRpcTransport {
     process.stderr.on('data', (chunk: Buffer) => {
       options.onStderr?.(chunk.toString('utf8'))
     })
+    process.stdin.on('error', (error) => {
+      if (this.#closing) return
+      this.#fail(
+        new CodexProcessError(
+          `Unable to write protocol message: ${error.message}`,
+          { cause: error },
+        ),
+      )
+    })
     process.once('error', (error) => {
       this.#fail(
         new CodexProcessError(
@@ -276,6 +285,13 @@ export class JsonRpcTransport {
     message: JsonRpcIncoming | JsonRpcRequest | JsonRpcNotification,
   ): Promise<void> {
     if (this.#failure !== undefined) throw this.#failure
+    if (
+      this.#closing ||
+      this.process.stdin.destroyed ||
+      this.process.stdin.writableEnded
+    ) {
+      throw new CodexProcessError('Codex App Server protocol is closing')
+    }
     this.#safeLog(protocolLogEntry('send', message))
     const line = `${JSON.stringify(message)}\n`
 

@@ -7,6 +7,7 @@ import { DatabaseSync } from 'node:sqlite'
 import test from 'node:test'
 
 import { HostEventPublisher } from '../dist/api/host-event-publisher.js'
+import { ConversationRuntimeHistory } from '../dist/api/conversation-runtime-history.js'
 import { HostService, HostServiceError } from '../dist/api/host-service.js'
 import { WorkspacePolicy } from '../dist/api/workspace-policy.js'
 import {
@@ -202,6 +203,341 @@ test('keeps a 50 Conversation index summary-only while cold detail reads preserv
   )
   assert.deepEqual(hotConversationIds(fixture.service), initialHot)
   assert.equal(fixture.service.snapshot().conversations.length, 8)
+  assert.equal(fixture.runtime.resumeCalls.length, 0)
+  assert.equal(fixture.runtime.turnCalls.length, 0)
+})
+
+test('organizes a cold Conversation without hydration, Provider calls, or duplicate metadata events', async (t) => {
+  const fixture = await createFixture(t, {
+    conversationCount: 12,
+    maxConversations: 8,
+  })
+  const coldId = conversationId(0)
+  const initialHot = hotConversationIds(fixture.service)
+  const initial = fixture.store.getConversation(coldId)
+  const beforeSeq = fixture.publisher.currentSeq
+
+  const renameRequest = {
+    actionId: 'act_organization_cold_rename',
+    title: '重构登录模块',
+  }
+  const renamed = await fixture.service.renameConversation(
+    coldId,
+    renameRequest,
+  )
+  const duplicateRename = await fixture.service.renameConversation(coldId, {
+    ...renameRequest,
+  })
+  assert.deepEqual(duplicateRename, renamed)
+  assert.equal(renamed.data.conversation.title, '重构登录模块')
+  assert.equal(renamed.data.conversation.titleSource, 'manual')
+  assert.equal(renamed.data.conversation.lastActivityAt, initial.lastActivityAt)
+
+  const pinned = await fixture.service.pinConversation(coldId, {
+    actionId: 'act_organization_cold_pin',
+  })
+  assert.equal(pinned.data.conversation.pinnedAt, hostNow)
+  assert.equal(pinned.data.conversation.lastActivityAt, initial.lastActivityAt)
+  const repeatedPin = await fixture.service.pinConversation(coldId, {
+    actionId: 'act_organization_cold_pin_repeat',
+  })
+  assert.equal(
+    repeatedPin.data.conversation.pinnedAt,
+    pinned.data.conversation.pinnedAt,
+  )
+
+  const archived = await fixture.service.archiveConversation(coldId, {
+    actionId: 'act_organization_cold_archive',
+  })
+  assert.equal(archived.data.conversation.archivedAt, hostNow)
+  assert.equal(archived.data.conversation.pinnedAt, undefined)
+  assert.equal(
+    archived.data.conversation.lastActivityAt,
+    initial.lastActivityAt,
+  )
+
+  assert.deepEqual(hotConversationIds(fixture.service), initialHot)
+  assert.equal(fixture.runtime.resumeCalls.length, 0)
+  assert.equal(fixture.runtime.turnCalls.length, 0)
+  assert.equal(
+    (
+      await fixture.service.listProjectConversations(projectId, {
+        archived: 'false',
+        limit: 50,
+      })
+    ).conversations.some(
+      (conversation) => conversation.conversationId === coldId,
+    ),
+    false,
+  )
+  assert.deepEqual(
+    (
+      await fixture.service.listProjectConversations(projectId, {
+        archived: 'true',
+        limit: 50,
+      })
+    ).conversations.map((conversation) => conversation.conversationId),
+    [coldId],
+  )
+
+  await assert.rejects(
+    startTurn(fixture.service, coldId, 'act_organization_archived_start'),
+    (error) => {
+      assert.ok(error instanceof HostServiceError)
+      assert.equal(error.code, 'conversation_archived')
+      assert.equal(error.httpStatus, 409)
+      return true
+    },
+  )
+  assert.deepEqual(hotConversationIds(fixture.service), initialHot)
+  assert.equal(fixture.runtime.resumeCalls.length, 0)
+  assert.equal(fixture.runtime.turnCalls.length, 0)
+
+  const unarchived = await fixture.service.unarchiveConversation(coldId, {
+    actionId: 'act_organization_cold_unarchive',
+  })
+  assert.equal(unarchived.data.conversation.archivedAt, undefined)
+  assert.equal(
+    unarchived.data.conversation.lastActivityAt,
+    initial.lastActivityAt,
+  )
+  assert.deepEqual(hotConversationIds(fixture.service), initialHot)
+
+  await assert.rejects(
+    fixture.service.pinConversation(coldId, {
+      actionId: renameRequest.actionId,
+    }),
+    (error) => {
+      assert.ok(error instanceof HostServiceError)
+      assert.equal(error.code, 'conflict')
+      return true
+    },
+  )
+
+  const replay = fixture.publisher.replayAfter({
+    epoch: fixture.publisher.epoch,
+    seq: beforeSeq,
+  })
+  assert.equal(replay.kind, 'replay')
+  assert.deepEqual(
+    replay.events.map((event) => event.type),
+    [
+      'conversation.updated',
+      'conversation.updated',
+      'conversation.updated',
+      'conversation.updated',
+    ],
+  )
+  assert.ok(
+    replay.events.every(
+      (event) =>
+        event.conversationId === coldId &&
+        !('providerThreadId' in event.payload.conversation),
+    ),
+  )
+})
+
+test('rejects metadata-only events before they can admit a runtime history entry', () => {
+  const history = new ConversationRuntimeHistory()
+  assert.throws(
+    () =>
+      history.apply({
+        protocolVersion: 1,
+        epoch: '88888888-8888-4888-8888-888888888888',
+        seq: 1,
+        eventId: '88888888-8888-4888-8888-888888888888:1',
+        conversationId: 'conv_organization_history_guard',
+        timestamp: hostNow,
+        type: 'conversation.updated',
+        payload: {
+          conversation: {
+            conversationId: 'conv_organization_history_guard',
+            projectId,
+            title: '重构登录模块',
+            titleSource: 'manual',
+            provider: 'codex',
+            status: 'completed',
+            createdAt: hostNow,
+            updatedAt: hostNow,
+            lastActivityAt: hostNow,
+          },
+        },
+      }),
+    /must not enter runtime history/,
+  )
+  assert.deepEqual(history.snapshots(), [])
+})
+
+test('keeps manual title authority before the first Turn while generated titles remain compatible', async (t) => {
+  const fixture = await createFixture(t, {
+    conversationCount: 2,
+    maxConversations: 1,
+  })
+  const manualId = conversationId(0)
+  const generatedId = conversationId(1)
+  const providerIdentity =
+    fixture.store.getConversation(manualId).providerThreadId
+
+  await fixture.service.renameConversation(manualId, {
+    actionId: 'act_organization_manual_before_turn',
+    title: '重构登录模块',
+  })
+  await startTurn(
+    fixture.service,
+    manualId,
+    'act_organization_manual_first_turn',
+  )
+  const manual = fixture.service.getConversation(manualId).conversation
+  assert.equal(manual.title, '重构登录模块')
+  assert.equal(manual.titleSource, 'manual')
+  assert.equal(
+    fixture.store.getConversation(manualId).providerThreadId,
+    providerIdentity,
+  )
+  completeTurn(fixture.runtime, 0, fixture.runtime.turnCalls[0], 'Manual')
+
+  await startTurn(
+    fixture.service,
+    generatedId,
+    'act_organization_generated_first_turn',
+  )
+  const generated = fixture.service.getConversation(generatedId).conversation
+  assert.equal(generated.title, 'Continue conv_hydration_01')
+  assert.equal(generated.titleSource, 'generated')
+})
+
+test('rejects archive for running and waiting Approval state without disturbing the Turn', async (t) => {
+  const fixture = await createFixture(t, {
+    conversationCount: 1,
+    maxConversations: 1,
+  })
+  const id = conversationId(0)
+  await startTurn(fixture.service, id, 'act_organization_active_turn')
+
+  await assert.rejects(
+    fixture.service.archiveConversation(id, {
+      actionId: 'act_organization_archive_running',
+    }),
+    (error) => {
+      assert.ok(error instanceof HostServiceError)
+      assert.equal(error.code, 'conflict')
+      assert.equal(error.httpStatus, 409)
+      return true
+    },
+  )
+  assert.equal(
+    fixture.service.getConversation(id).conversation.status,
+    'running',
+  )
+  assert.equal(fixture.store.getConversation(id).archivedAt, undefined)
+
+  const providerTurnId = fixture.runtime.turnCalls[0].providerTurnId
+  fixture.runtime.requestApproval({
+    providerRequestId: 'provider-request-organization-waiting',
+    providerApprovalId: 'provider-approval-organization-waiting',
+    providerThreadId: providerThreadId(0),
+    providerTurnId,
+    providerItemId: 'provider-item-organization-waiting',
+  })
+  assert.equal(
+    fixture.service.getConversation(id).conversation.status,
+    'waiting',
+  )
+  assert.equal(fixture.service.snapshot().pendingApprovals.length, 1)
+  assert.equal(fixture.store.hasOpenApprovalAttention(id), true)
+
+  await assert.rejects(
+    fixture.service.archiveConversation(id, {
+      actionId: 'act_organization_archive_waiting',
+    }),
+    (error) => {
+      assert.ok(error instanceof HostServiceError)
+      assert.equal(error.code, 'conflict')
+      assert.equal(error.httpStatus, 409)
+      return true
+    },
+  )
+  assert.equal(
+    fixture.service.getConversation(id).conversation.status,
+    'waiting',
+  )
+  assert.equal(fixture.service.snapshot().pendingApprovals.length, 1)
+  assert.equal(fixture.runtime.approvalDecisions.length, 0)
+  assert.equal(fixture.store.getConversation(id).archivedAt, undefined)
+})
+
+test('an archive interleaving with cold hydration wins before Provider resume', async (t) => {
+  const fixture = await createFixture(t, {
+    conversationCount: 2,
+    maxConversations: 1,
+  })
+  const coldId = conversationId(0)
+
+  const starting = startTurn(
+    fixture.service,
+    coldId,
+    'act_organization_hydration_race_start',
+  )
+  const archiving = fixture.service.archiveConversation(coldId, {
+    actionId: 'act_organization_hydration_race_archive',
+  })
+  const [startResult, archiveResult] = await Promise.allSettled([
+    starting,
+    archiving,
+  ])
+
+  assert.equal(archiveResult.status, 'fulfilled')
+  assert.equal(archiveResult.value.data.conversation.archivedAt, hostNow)
+  assert.equal(startResult.status, 'rejected')
+  assert.ok(startResult.reason instanceof HostServiceError)
+  assert.equal(startResult.reason.code, 'conversation_archived')
+  assert.equal(fixture.runtime.resumeCalls.length, 0)
+  assert.equal(fixture.runtime.turnCalls.length, 0)
+  assert.equal(fixture.service.snapshot().conversations.length, 1)
+})
+
+test('a durable cold Approval blocks archive without poisoning persistence', async (t) => {
+  const fixture = await createFixture(t, {
+    conversationCount: 2,
+    maxConversations: 1,
+    turnCounts: new Map([[0, 1]]),
+  })
+  const coldId = conversationId(0)
+  fixture.store.createAttentionItem({
+    attentionId: 'attn_organization_cold_approval',
+    sourceKey: 'approval:approval_organization_cold',
+    projectId,
+    conversationId: coldId,
+    turnId: turnId(0, 0),
+    type: 'approval',
+    payload: {
+      approvalId: 'approval_organization_cold',
+      kind: 'command',
+      actionTitle: '执行命令',
+    },
+    createdAt: hostNow,
+    updatedAt: hostNow,
+  })
+
+  await assert.rejects(
+    fixture.service.archiveConversation(coldId, {
+      actionId: 'act_organization_archive_cold_approval',
+    }),
+    (error) => {
+      assert.ok(error instanceof HostServiceError)
+      assert.equal(error.code, 'conflict')
+      assert.equal(error.httpStatus, 409)
+      return true
+    },
+  )
+  assert.equal(fixture.store.getConversation(coldId).archivedAt, undefined)
+  assert.equal(fixture.store.hasOpenApprovalAttention(coldId), true)
+
+  const renamed = await fixture.service.renameConversation(coldId, {
+    actionId: 'act_organization_rename_after_archive_conflict',
+    title: '审批后仍可管理',
+  })
+  assert.equal(renamed.data.conversation.title, '审批后仍可管理')
   assert.equal(fixture.runtime.resumeCalls.length, 0)
   assert.equal(fixture.runtime.turnCalls.length, 0)
 })
@@ -517,7 +853,15 @@ async function createFixture(t, options) {
       ? {}
       : { maxConversations: options.maxConversations }),
   })
-  return { directory, workspace, databasePath, store, runtime, service }
+  return {
+    directory,
+    workspace,
+    databasePath,
+    store,
+    runtime,
+    publisher,
+    service,
+  }
 }
 
 function seedProject(store, workspace) {

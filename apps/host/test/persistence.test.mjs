@@ -528,6 +528,7 @@ function conversation(overrides = {}) {
     conversationId,
     projectId,
     title: '新会话',
+    titleSource: 'generated',
     provider: 'codex',
     providerThreadId: 'provider-thread-persistence',
     cwd: workspaceRoot,

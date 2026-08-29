@@ -48,6 +48,7 @@ const conversationSummary = {
   conversationId,
   projectId,
   title: 'Inspect the workspace',
+  titleSource: 'generated',
   provider: 'codex',
   model: 'gpt-5',
   reasoning: 'high',
@@ -366,6 +367,7 @@ test('lists bounded Project Conversations with typed filters', async () => {
   const response = await client.listProjectConversations(projectId, {
     provider: 'codex',
     status: 'completed',
+    archived: 'all',
     limit: 25,
   })
 
@@ -377,6 +379,7 @@ test('lists bounded Project Conversations with typed filters', async () => {
     limit: '25',
     provider: 'codex',
     status: 'completed',
+    archived: 'all',
   })
   assert.equal(calls[0].init.method, 'GET')
 })
@@ -393,8 +396,40 @@ test('uses the default Conversation list bound and rejects invalid options', asy
 
   await client.listProjectConversations(projectId)
   assert.equal(new URL(requestedUrl).searchParams.get('limit'), '50')
+  assert.equal(new URL(requestedUrl).searchParams.get('archived'), 'false')
   await assert.rejects(
     client.listProjectConversations(projectId, { limit: 101 }),
+    CodeTetherProtocolError,
+  )
+  await assert.rejects(
+    client.listProjectConversations(projectId, { archived: 'invalid' }),
+    CodeTetherProtocolError,
+  )
+})
+
+test('encodes strict archive filters and validates the returned partition', async () => {
+  const calls = []
+  const archivedSummary = { ...conversationSummary, archivedAt: timestamp }
+  const client = new CodeTetherClient({
+    baseUrl: 'http://host.test',
+    fetch: async (input) => {
+      calls.push(String(input))
+      return jsonResponse({
+        protocolVersion: 1,
+        conversations: [archivedSummary],
+      })
+    },
+  })
+
+  assert.deepEqual(
+    (await client.listProjectConversations(projectId, { archived: true }))
+      .conversations,
+    [archivedSummary],
+  )
+  assert.equal(new URL(calls[0]).searchParams.get('archived'), 'true')
+
+  await assert.rejects(
+    client.listProjectConversations(projectId, { archived: false }),
     CodeTetherProtocolError,
   )
 })
@@ -411,6 +446,128 @@ test('rejects a Project Conversation list containing another Project', async () 
 
   await assert.rejects(
     client.listProjectConversations(projectId),
+    CodeTetherProtocolError,
+  )
+})
+
+test('uses typed Conversation organization mutations and forwards AbortSignal', async () => {
+  const calls = []
+  const controller = new AbortController()
+  const operations = [
+    {
+      actionId: 'act_rename01',
+      call: (client) =>
+        client.renameConversation(
+          conversationId,
+          { actionId: 'act_rename01', title: '  Re\u0301sume\t work  ' },
+          { signal: controller.signal },
+        ),
+      method: 'PATCH',
+      suffix: '',
+      summary: {
+        ...conversationSummary,
+        title: 'Résume work',
+        titleSource: 'manual',
+      },
+      body: { actionId: 'act_rename01', title: 'Résume work' },
+    },
+    {
+      actionId: 'act_pin0001',
+      call: (client) =>
+        client.pinConversation(conversationId, { actionId: 'act_pin0001' }),
+      method: 'POST',
+      suffix: '/pin',
+      summary: { ...conversationSummary, pinnedAt: timestamp },
+      body: { actionId: 'act_pin0001' },
+    },
+    {
+      actionId: 'act_unpin01',
+      call: (client) =>
+        client.unpinConversation(conversationId, {
+          actionId: 'act_unpin01',
+        }),
+      method: 'POST',
+      suffix: '/unpin',
+      summary: conversationSummary,
+      body: { actionId: 'act_unpin01' },
+    },
+    {
+      actionId: 'act_archive1',
+      call: (client) =>
+        client.archiveConversation(conversationId, {
+          actionId: 'act_archive1',
+        }),
+      method: 'POST',
+      suffix: '/archive',
+      summary: { ...conversationSummary, archivedAt: timestamp },
+      body: { actionId: 'act_archive1' },
+    },
+    {
+      actionId: 'act_unarch01',
+      call: (client) =>
+        client.unarchiveConversation(conversationId, {
+          actionId: 'act_unarch01',
+        }),
+      method: 'POST',
+      suffix: '/unarchive',
+      summary: conversationSummary,
+      body: { actionId: 'act_unarch01' },
+    },
+  ]
+  const responses = operations.map((operation) => ({
+    protocolVersion: 1,
+    actionId: operation.actionId,
+    status: 'completed',
+    data: { conversation: operation.summary },
+  }))
+  const client = new CodeTetherClient({
+    baseUrl: 'http://host.test',
+    fetch: async (input, init) => {
+      calls.push({ url: String(input), init })
+      return jsonResponse(responses.shift())
+    },
+  })
+
+  for (const operation of operations) await operation.call(client)
+
+  assert.deepEqual(
+    calls.map(({ url, init }) => ({
+      method: init.method,
+      path: new URL(url).pathname,
+      body: JSON.parse(init.body),
+    })),
+    operations.map((operation) => ({
+      method: operation.method,
+      path: `/api/v1/conversations/${conversationId}${operation.suffix}`,
+      body: operation.body,
+    })),
+  )
+  assert.equal(calls[0].init.signal, controller.signal)
+})
+
+test('rejects Conversation organization responses for another identity', async () => {
+  const client = new CodeTetherClient({
+    baseUrl: 'http://host.test',
+    fetch: async () =>
+      jsonResponse({
+        protocolVersion: 1,
+        actionId: 'act_rename01',
+        status: 'completed',
+        data: {
+          conversation: {
+            ...conversationSummary,
+            conversationId: 'conv_other01',
+            titleSource: 'manual',
+          },
+        },
+      }),
+  })
+
+  await assert.rejects(
+    client.renameConversation(conversationId, {
+      actionId: 'act_rename01',
+      title: 'Manual title',
+    }),
     CodeTetherProtocolError,
   )
 })

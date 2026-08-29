@@ -230,6 +230,7 @@ test('lists bounded Project-scoped summaries in last-activity order', (context) 
         conversationId: isolated.conversationId,
         projectId: otherProjectId,
         title: isolated.title,
+        titleSource: 'generated',
         provider: 'codex',
         model: isolated.model,
         reasoning: isolated.reasoning,
@@ -363,6 +364,7 @@ function conversation(index, idProject, cwd, overrides = {}) {
       index === 0
         ? DEFAULT_CONVERSATION_TITLE
         : `Conversation ${String(index)}`,
+    titleSource: 'generated',
     provider: 'codex',
     providerThreadId: `provider-thread-${String(index)}`,
     cwd,

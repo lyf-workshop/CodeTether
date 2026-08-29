@@ -43,6 +43,39 @@ export type ProjectAvailability = z.infer<typeof ProjectAvailabilitySchema>
 export const ConversationTitleSchema = z.string().trim().min(1).max(240)
 export type ConversationTitle = z.infer<typeof ConversationTitleSchema>
 
+export const manualConversationTitleLimits = {
+  codeUnits: 240,
+  graphemes: 160,
+} as const
+
+/**
+ * Manual title input is canonicalized once at the Protocol boundary. It never
+ * truncates: callers receive `invalid_request` when either public wire bound is
+ * exceeded.
+ */
+export const ManualConversationTitleSchema = z
+  .string()
+  .transform((value) => value.normalize('NFC').replace(/\s+/gu, ' ').trim())
+  .pipe(
+    z
+      .string()
+      .min(1)
+      .max(manualConversationTitleLimits.codeUnits)
+      .refine(
+        (value) =>
+          countGraphemes(value) <= manualConversationTitleLimits.graphemes,
+        `Conversation title cannot exceed ${String(manualConversationTitleLimits.graphemes)} graphemes`,
+      ),
+  )
+export type ManualConversationTitle = z.infer<
+  typeof ManualConversationTitleSchema
+>
+
+export const ConversationTitleSourceSchema = z.enum(['generated', 'manual'])
+export type ConversationTitleSource = z.infer<
+  typeof ConversationTitleSourceSchema
+>
+
 export const ProjectRecordSchema = z
   .object({
     projectId: ProjectIdSchema,
@@ -65,6 +98,12 @@ export const ConversationRecordSchema = z
     projectId: ProjectIdSchema.optional(),
     /** Additive in Protocol v1; current title-aware Hosts always populate it. */
     title: ConversationTitleSchema.optional(),
+    /** Additive organization metadata; current organization-aware Hosts populate it. */
+    titleSource: ConversationTitleSourceSchema.optional(),
+    /** Product organization metadata; absence means the Conversation is not pinned. */
+    pinnedAt: TimestampSchema.optional(),
+    /** Product organization metadata; absence means the Conversation is active. */
+    archivedAt: TimestampSchema.optional(),
     provider: z.literal('codex'),
     cwd: z.string().trim().min(1).max(4096),
     model: z.string().trim().min(1).max(240).optional(),
@@ -78,6 +117,26 @@ export const ConversationRecordSchema = z
   })
   .strict()
   .superRefine((conversation, context) => {
+    if (
+      conversation.titleSource !== undefined &&
+      conversation.title === undefined
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'A Conversation title source requires a title',
+        path: ['titleSource'],
+      })
+    }
+    if (
+      conversation.pinnedAt !== undefined &&
+      conversation.archivedAt !== undefined
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'An archived Conversation cannot remain pinned',
+        path: ['pinnedAt'],
+      })
+    }
     const needsActiveTurn =
       conversation.status === 'running' || conversation.status === 'waiting'
     if (needsActiveTurn !== (conversation.activeTurnId !== undefined)) {
@@ -100,6 +159,9 @@ export const ConversationSummarySchema = z
     conversationId: ConversationIdSchema,
     projectId: ProjectIdSchema,
     title: ConversationTitleSchema,
+    titleSource: ConversationTitleSourceSchema,
+    pinnedAt: TimestampSchema.optional(),
+    archivedAt: TimestampSchema.optional(),
     provider: z.literal('codex'),
     model: z.string().trim().min(1).max(240).optional(),
     reasoning: z.string().trim().min(1).max(120).optional(),
@@ -109,6 +171,15 @@ export const ConversationSummarySchema = z
     lastActivityAt: TimestampSchema,
   })
   .strict()
+  .refine(
+    (conversation) =>
+      conversation.pinnedAt === undefined ||
+      conversation.archivedAt === undefined,
+    {
+      message: 'An archived Conversation cannot remain pinned',
+      path: ['pinnedAt'],
+    },
+  )
 export type ConversationSummary = z.infer<typeof ConversationSummarySchema>
 
 export const TurnStatusSchema = z.enum([
@@ -364,3 +435,9 @@ export type Bootstrap = z.infer<typeof BootstrapSchema>
 
 export const BootstrapResponseSchema = BootstrapSchema
 export type BootstrapResponse = Bootstrap
+
+function countGraphemes(value: string): number {
+  return [
+    ...new Intl.Segmenter('und', { granularity: 'grapheme' }).segment(value),
+  ].length
+}

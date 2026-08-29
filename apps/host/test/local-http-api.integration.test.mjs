@@ -499,6 +499,113 @@ test('serves a strict Project-scoped durable Conversation index', async () => {
     })
     const conversationId = created.body.data.conversation.conversationId
 
+    const invalidRename = await patchJson(
+      harness.baseUrl,
+      `/api/v1/conversations/${conversationId}`,
+      { actionId: 'act_index_invalid_rename01', title: '   ' },
+    )
+    assert.equal(invalidRename.status, 422)
+    assert.equal(invalidRename.body.code, 'invalid_request')
+
+    const renamed = await patchJson(
+      harness.baseUrl,
+      `/api/v1/conversations/${conversationId}`,
+      {
+        actionId: 'act_index_rename01',
+        title: '  重构  e\u0301  登录  ',
+      },
+    )
+    assert.equal(renamed.status, 200)
+    assert.equal(renamed.body.data.conversation.title, '重构 é 登录')
+    assert.equal(renamed.body.data.conversation.titleSource, 'manual')
+
+    const pinned = await postJson(
+      harness.baseUrl,
+      `/api/v1/conversations/${conversationId}/pin`,
+      { actionId: 'act_index_pin01' },
+    )
+    assert.equal(pinned.status, 200)
+    assert.equal(typeof pinned.body.data.conversation.pinnedAt, 'string')
+    const pinnedSnapshot = await getJson(harness.baseUrl, '/api/v1/snapshot')
+    assert.equal(pinnedSnapshot.body.conversations[0].titleSource, 'manual')
+    assert.equal(
+      pinnedSnapshot.body.conversations[0].pinnedAt,
+      pinned.body.data.conversation.pinnedAt,
+    )
+
+    const archived = await postJson(
+      harness.baseUrl,
+      `/api/v1/conversations/${conversationId}/archive`,
+      { actionId: 'act_index_archive01' },
+    )
+    assert.equal(archived.status, 200)
+    assert.equal(typeof archived.body.data.conversation.archivedAt, 'string')
+    assert.equal(archived.body.data.conversation.pinnedAt, undefined)
+    const archivedPin = await postJson(
+      harness.baseUrl,
+      `/api/v1/conversations/${conversationId}/pin`,
+      { actionId: 'act_index_archived_pin01' },
+    )
+    assert.equal(archivedPin.status, 409)
+    assert.equal(archivedPin.body.code, 'conversation_archived')
+    const archivedSnapshot = await getJson(harness.baseUrl, '/api/v1/snapshot')
+    assert.equal(
+      archivedSnapshot.body.conversations[0].archivedAt,
+      archived.body.data.conversation.archivedAt,
+    )
+    assert.equal(archivedSnapshot.body.conversations[0].pinnedAt, undefined)
+
+    const archivedStart = await postJson(
+      harness.baseUrl,
+      `/api/v1/conversations/${conversationId}/turns`,
+      {
+        actionId: 'act_index_archived_turn01',
+        input: { type: 'text', text: 'Do not resume an archived thread' },
+      },
+    )
+    assert.equal(archivedStart.status, 409)
+    assert.equal(archivedStart.body.code, 'conversation_archived')
+    assert.equal(harness.runtime.resumeConversationCalls.length, 0)
+    assert.equal(harness.runtime.startTurnCalls.length, 0)
+
+    const activeWhileArchived = await getJson(
+      harness.baseUrl,
+      `/api/v1/projects/${projectId}/conversations`,
+    )
+    assert.deepEqual(activeWhileArchived.body.conversations, [])
+    const archivedList = await getJson(
+      harness.baseUrl,
+      `/api/v1/projects/${projectId}/conversations?archived=true`,
+    )
+    assert.deepEqual(
+      archivedList.body.conversations.map(
+        (conversation) => conversation.conversationId,
+      ),
+      [conversationId],
+    )
+
+    const unarchived = await postJson(
+      harness.baseUrl,
+      `/api/v1/conversations/${conversationId}/unarchive`,
+      { actionId: 'act_index_unarchive01' },
+    )
+    assert.equal(unarchived.status, 200)
+    assert.equal(unarchived.body.data.conversation.archivedAt, undefined)
+
+    const repinned = await postJson(
+      harness.baseUrl,
+      `/api/v1/conversations/${conversationId}/pin`,
+      { actionId: 'act_index_repin01' },
+    )
+    assert.equal(repinned.status, 200)
+    const unpinned = await postJson(
+      harness.baseUrl,
+      `/api/v1/conversations/${conversationId}/unpin`,
+      { actionId: 'act_index_unpin01' },
+    )
+    assert.equal(unpinned.status, 200)
+    assert.equal(unpinned.body.data.conversation.pinnedAt, undefined)
+
     const listed = await getJson(
       harness.baseUrl,
       `/api/v1/projects/${projectId}/conversations`,
@@ -508,7 +615,8 @@ test('serves a strict Project-scoped durable Conversation index', async () => {
     assert.equal(listed.body.conversations.length, 1)
     assert.equal(listed.body.conversations[0].conversationId, conversationId)
     assert.equal(listed.body.conversations[0].projectId, projectId)
-    assert.equal(listed.body.conversations[0].title, '新会话')
+    assert.equal(listed.body.conversations[0].title, '重构 é 登录')
+    assert.equal(listed.body.conversations[0].titleSource, 'manual')
     assert.equal('cwd' in listed.body.conversations[0], false)
     assert.equal('providerThreadId' in listed.body.conversations[0], false)
 
@@ -542,6 +650,8 @@ test('serves a strict Project-scoped durable Conversation index', async () => {
       'limit=101',
       'provider=claude',
       'status=active',
+      'archived=active',
+      'archived=false&archived=true',
     ]) {
       const rejected = await getJson(
         harness.baseUrl,
@@ -853,7 +963,7 @@ test('allows only configured origins and never emits wildcard CORS', async () =>
     )
     assert.equal(
       preflight.headers.get('access-control-allow-methods'),
-      'GET, POST, DELETE, OPTIONS',
+      'GET, POST, PATCH, DELETE, OPTIONS',
     )
 
     const denied = await getJson(harness.baseUrl, '/api/v1/bootstrap', {
@@ -1292,6 +1402,14 @@ async function getJson(baseUrl, path, headers = {}) {
 async function postJson(baseUrl, path, body) {
   return await requestJson(baseUrl, path, {
     method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+}
+
+async function patchJson(baseUrl, path, body) {
+  return await requestJson(baseUrl, path, {
+    method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })

@@ -1,5 +1,7 @@
 import type {
   ApprovalKind,
+  ConversationSummary,
+  ConversationTitleSource,
   EventCursor,
   FileChangeKind,
   GetConversationResponse,
@@ -123,12 +125,16 @@ export interface ConversationReadModel {
   /** Available for hot runtime snapshots only; durable product reads keep paths private. */
   readonly cwd?: string
   readonly title: string
+  readonly titleSource: ConversationTitleSource
+  readonly pinnedAt?: string
+  readonly archivedAt?: string
   readonly status: CanonicalConversationStatus
   readonly agent: 'codex'
   readonly model?: string
   readonly reasoning?: string
   readonly createdAt: string
   readonly updatedAt: string
+  readonly lastActivityAt: string
   readonly turns: readonly ConversationTurnReadModel[]
   /** Latest retained Turn. It remains available after terminal completion. */
   readonly currentTurn?: CurrentTurnReadModel
@@ -239,12 +245,13 @@ export function includeConversationDetail(
   const conversationId = String(detail.conversation.conversationId)
   const existing = projection.conversations[conversationId]
   if (existing !== undefined) {
-    if (existing.title === detail.conversation.title) return projection
+    const next = mergeConversationSummary(existing, detail.conversation)
+    if (sameConversationMetadata(existing, next)) return projection
     return {
       ...projection,
       conversations: {
         ...projection.conversations,
-        [conversationId]: { ...existing, title: detail.conversation.title },
+        [conversationId]: next,
       },
     }
   }
@@ -287,6 +294,19 @@ export function applyHostEvent(
     event.type === 'attention.resolved'
   ) {
     return appliedCursorOnly(projection, event)
+  }
+
+  if (event.type === 'conversation.updated') {
+    const existing =
+      projection.conversations[
+        String(event.payload.conversation.conversationId)
+      ]
+    if (existing === undefined) return appliedCursorOnly(projection, event)
+    return applied(
+      projection,
+      event,
+      mergeConversationSummary(existing, event.payload.conversation),
+    )
   }
 
   if (event.type === 'conversation.started') {
@@ -803,12 +823,18 @@ function projectConversationRecord(
     id: String(record.conversationId),
     ...(record.cwd === undefined ? {} : { cwd: record.cwd }),
     title: record.title ?? titleFromCwd(record.cwd ?? ''),
+    titleSource: record.titleSource ?? 'generated',
+    ...(record.pinnedAt === undefined ? {} : { pinnedAt: record.pinnedAt }),
+    ...(record.archivedAt === undefined
+      ? {}
+      : { archivedAt: record.archivedAt }),
     status: record.status,
     agent: 'codex',
     ...(record.model === undefined ? {} : { model: record.model }),
     ...(record.reasoning === undefined ? {} : { reasoning: record.reasoning }),
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
+    lastActivityAt: record.lastActivityAt ?? record.updatedAt,
     turns,
     ...(currentTurn === undefined ? {} : { currentTurn }),
     messages,
@@ -818,6 +844,55 @@ function projectConversationRecord(
     history: runtime?.history ?? emptyHistory(),
     pendingApprovals,
   }
+}
+
+function mergeConversationSummary(
+  conversation: ConversationReadModel,
+  summary: ConversationSummary,
+): ConversationReadModel {
+  const next: ConversationReadModel = {
+    ...conversation,
+    title: summary.title,
+    titleSource: summary.titleSource,
+    ...(summary.pinnedAt === undefined ? {} : { pinnedAt: summary.pinnedAt }),
+    ...(summary.archivedAt === undefined
+      ? {}
+      : { archivedAt: summary.archivedAt }),
+    status: summary.status,
+    ...(summary.model === undefined ? {} : { model: summary.model }),
+    ...(summary.reasoning === undefined
+      ? {}
+      : { reasoning: summary.reasoning }),
+    createdAt: summary.createdAt,
+    updatedAt: summary.updatedAt,
+    lastActivityAt: summary.lastActivityAt,
+  }
+
+  const mutableOrganization = next as {
+    pinnedAt?: string
+    archivedAt?: string
+  }
+  if (summary.pinnedAt === undefined) delete mutableOrganization.pinnedAt
+  if (summary.archivedAt === undefined) delete mutableOrganization.archivedAt
+  return next
+}
+
+function sameConversationMetadata(
+  left: ConversationReadModel,
+  right: ConversationReadModel,
+): boolean {
+  return (
+    left.title === right.title &&
+    left.titleSource === right.titleSource &&
+    left.pinnedAt === right.pinnedAt &&
+    left.archivedAt === right.archivedAt &&
+    left.status === right.status &&
+    left.model === right.model &&
+    left.reasoning === right.reasoning &&
+    left.createdAt === right.createdAt &&
+    left.updatedAt === right.updatedAt &&
+    left.lastActivityAt === right.lastActivityAt
+  )
 }
 
 function emptyHistory(): ConversationHistoryReadModel {

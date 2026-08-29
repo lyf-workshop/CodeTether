@@ -11,6 +11,7 @@ export const HostErrorCodeSchema = z.enum([
   'provider_conversation_unavailable',
   'project_unavailable',
   'project_has_conversations',
+  'conversation_archived',
   'runtime_unavailable',
   'timeout',
   'internal',

@@ -121,6 +121,24 @@ async function run(): Promise<void> {
     requireCompletedTurn(seedObservation.terminal, seedTurn.data.turn.turnId)
     const seedDetail = await client.getConversation(markerConversationId)
     assert.match(conversationText(seedDetail), new RegExp(marker, 'u'))
+    const seedLastActivityAt = seedDetail.conversation.lastActivityAt
+
+    const renamed = await client.renameConversation(markerConversationId, {
+      actionId: actionId('marker-rename'),
+      title: '重构登录模块',
+    })
+    assert.equal(renamed.data.conversation.title, '重构登录模块')
+    assert.equal(renamed.data.conversation.titleSource, 'manual')
+    assert.equal(renamed.data.conversation.lastActivityAt, seedLastActivityAt)
+    const pinnedBeforeArchive = await client.pinConversation(
+      markerConversationId,
+      { actionId: actionId('marker-pin-before-archive') },
+    )
+    assert.ok(pinnedBeforeArchive.data.conversation.pinnedAt !== undefined)
+    assert.equal(
+      pinnedBeforeArchive.data.conversation.lastActivityAt,
+      seedLastActivityAt,
+    )
 
     // Ensure the marker Conversation activity is strictly older than every
     // empty Conversation created below, so it deterministically becomes cold.
@@ -133,8 +151,33 @@ async function run(): Promise<void> {
       })
     }
 
-    const beforeRestartList = await listAllConversations(client, projectId)
+    const archived = await client.archiveConversation(markerConversationId, {
+      actionId: actionId('marker-archive'),
+    })
+    assert.equal(archived.data.conversation.title, '重构登录模块')
+    assert.equal(archived.data.conversation.titleSource, 'manual')
+    assert.ok(archived.data.conversation.archivedAt !== undefined)
+    assert.equal(archived.data.conversation.pinnedAt, undefined)
+    assert.equal(archived.data.conversation.lastActivityAt, seedLastActivityAt)
+
+    const beforeRestartList = await listAllConversations(
+      client,
+      projectId,
+      'all',
+    )
     assert.equal(beforeRestartList.length, totalConversations)
+    assert.equal(
+      (await listAllConversations(client, projectId)).some(
+        (conversation) => conversation.conversationId === markerConversationId,
+      ),
+      false,
+    )
+    assert.deepEqual(
+      (await listAllConversations(client, projectId, true)).map(
+        (conversation) => conversation.conversationId,
+      ),
+      [markerConversationId],
+    )
     assert.ok(
       (await client.snapshot()).conversations.length <=
         maximumHydratedConversations,
@@ -153,7 +196,11 @@ async function run(): Promise<void> {
     assert.notEqual(host.epoch, firstEpoch)
     client = await requireLiveClient(host)
 
-    const durableAfterRestart = await listAllConversations(client, projectId)
+    const durableAfterRestart = await listAllConversations(
+      client,
+      projectId,
+      'all',
+    )
     const startupSnapshot = await client.snapshot()
     const startupHydratedIds = hydratedIds(startupSnapshot)
     assert.equal(durableAfterRestart.length, totalConversations)
@@ -178,6 +225,26 @@ async function run(): Promise<void> {
     assert.equal(coldDetail.history.totalTurnCount, 1)
     assert.equal(coldDetail.history.retainedTurnCount, 1)
     assert.match(conversationText(coldDetail), new RegExp(marker, 'u'))
+    assert.equal(coldDetail.conversation.title, '重构登录模块')
+    assert.equal(coldDetail.conversation.titleSource, 'manual')
+    assert.ok(coldDetail.conversation.archivedAt !== undefined)
+    assert.equal(coldDetail.conversation.pinnedAt, undefined)
+
+    const unarchived = await client.unarchiveConversation(
+      markerConversationId,
+      { actionId: actionId('marker-unarchive-after-restart') },
+    )
+    assert.equal(unarchived.data.conversation.archivedAt, undefined)
+    assert.equal(
+      unarchived.data.conversation.lastActivityAt,
+      seedLastActivityAt,
+    )
+    const pinnedAfterRestart = await client.pinConversation(
+      markerConversationId,
+      { actionId: actionId('marker-pin-after-restart') },
+    )
+    assert.ok(pinnedAfterRestart.data.conversation.pinnedAt !== undefined)
+    assert.deepEqual(hydratedIds(await client.snapshot()), startupHydratedIds)
 
     const resumedStream = await client.connectEvents()
     const resumedTerminalPromise = waitForTerminal(
@@ -230,6 +297,10 @@ async function run(): Promise<void> {
       (turn) => turn.turnId === resumedTurn.data.turn.turnId,
     )
     assert.equal(finalDetail.history.totalTurnCount, 2)
+    assert.equal(finalDetail.conversation.title, '重构登录模块')
+    assert.equal(finalDetail.conversation.titleSource, 'manual')
+    assert.ok(finalDetail.conversation.pinnedAt !== undefined)
+    assert.equal(finalDetail.conversation.archivedAt, undefined)
     assert.ok(
       resumedRuntimeTurn?.finalMessage?.includes(marker) === true,
       'The resumed provider Thread did not recall the pre-restart marker',
@@ -239,13 +310,19 @@ async function run(): Promise<void> {
       finalSnapshot.conversations.length <= maximumHydratedConversations,
     )
     assert.equal(finalDurable.length, totalConversations)
+    assert.equal(
+      finalDurable[0]?.conversationId,
+      markerConversationId,
+      'The re-pinned Conversation must lead the active Project index',
+    )
+    assert.deepEqual(await listAllConversations(client, projectId, true), [])
     await assertMarkerIsNotInWorkspace(workspace.root, marker)
 
     process.stdout.write(
       `${JSON.stringify(
         {
           integration: 'passed',
-          scenario: 'durable-cold-conversation-hydration',
+          scenario: 'durable-cold-conversation-hydration-and-organization',
           marker,
           conversationId: markerConversationId,
           projectId,
@@ -268,6 +345,23 @@ async function run(): Promise<void> {
               retainedTurns: coldDetail.history.retainedTurnCount,
               totalTurns: coldDetail.history.totalTurnCount,
               remainedCold: true,
+            },
+            organization: {
+              title: finalDetail.conversation.title,
+              titleSource: finalDetail.conversation.titleSource,
+              pinnedBeforeArchive:
+                pinnedBeforeArchive.data.conversation.pinnedAt !== undefined,
+              archiveClearedPin:
+                archived.data.conversation.pinnedAt === undefined,
+              archivedAcrossRestart:
+                coldDetail.conversation.archivedAt !== undefined,
+              unarchivedBeforeResume:
+                unarchived.data.conversation.archivedAt === undefined,
+              pinnedAfterRestart:
+                finalDetail.conversation.pinnedAt !== undefined,
+              activityUnchangedByOrganization:
+                unarchived.data.conversation.lastActivityAt ===
+                seedLastActivityAt,
             },
             afterHydrateAndStart: {
               hydrated: afterStartSnapshot.conversations.length,
@@ -442,9 +536,11 @@ async function requireLiveClient(
 async function listAllConversations(
   client: CodeTetherClient,
   projectId: ProjectId,
+  archived: boolean | 'all' = false,
 ) {
   return (
     await client.listProjectConversations(projectId, {
+      archived,
       limit: 100,
     })
   ).conversations

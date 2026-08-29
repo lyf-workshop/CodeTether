@@ -27,7 +27,7 @@ If sources conflict, stop and resolve the conflict instead of inventing a compro
 
 ## Current Scope
 
-**Phase 4D — Desktop Product Polish & Dogfooding** is implemented; Owner acceptance is pending. Phase 4C is accepted and frozen, as are Phase 4B, Phase 4A, Phase 3E.1, and the **CodeTether Local Workspace Alpha**: the accepted frontend is still **CodeTether V2 Frontend Core v1**, the accepted local runtime is still **Phase 2A Codex Runtime v1**, Protocol v1 remains the **Phase 2B Client ↔ Host Protocol** boundary, and the durable Project/Conversation/Attention data layer remains authoritative. Phase 4D changes presentation, navigation, information hierarchy, density, and product wording only; it does not create another product entity, persistence boundary, native capability, or business protocol. The current product boundary includes:
+**Phase 4E.1 — Durable Conversation Organization Model** is implemented; Owner acceptance is pending. Phase 4D is accepted and frozen, as are Phase 4C, Phase 4B, Phase 4A, Phase 3E.1, and the **CodeTether Local Workspace Alpha**: the accepted frontend is still **CodeTether V2 Frontend Core v1**, the accepted local runtime is still **Phase 2A Codex Runtime v1**, Protocol v1 remains the **Phase 2B Client ↔ Host Protocol** boundary, and the durable Project/Conversation/Attention data layer remains authoritative. Phase 4E.1 adds only durable Conversation organization metadata and its Host/Protocol/Client boundary; it does not connect organization controls to React or add Search. The current product boundary includes:
 
 - A Project as a durable, authorized local workspace with a CodeTether-owned `proj_*` identity, name, canonical root path, timestamps, and availability computed from the filesystem rather than stored as durable truth.
 - SQLite migration 002 (`projects`), which adds the `projects` table and binds every durable Conversation to one Project through a non-null `project_id` foreign key. The Conversation `cwd` remains a contained working directory, not a second Project identity.
@@ -42,6 +42,11 @@ If sources conflict, stop and resolve the conflict instead of inventing a compro
 - Registration-only removal with an explicit confirmation, a specific `project_has_conversations` conflict state, and no filesystem deletion.
 - Distinct loading, empty, Host-unavailable, not-found, available, and unavailable Project views using only real Project fields.
 - A durable deterministic Conversation title and Project-scoped SQLite index, plus provider-independent single-Conversation reads and bounded lazy runtime hydration for cold history.
+- SQLite migration 005 (`conversation_organization`), which adds required `title_source` plus nullable `pinned_at` and `archived_at` metadata and active/archived/title indexes without changing Conversation, Project, Turn, Attention, or private provider identity. Existing titles backfill as `generated`; no FTS/search service is introduced.
+- Durable manual Rename, Pin/Unpin, and Archive/Unarchive Host mutations through additive Protocol v1 contracts and typed `packages/client` methods. Manual titles normalize NFC/whitespace and fail rather than truncate outside their wire/grapheme bounds; a manual title is never overwritten by first-input generation.
+- Active Conversation ordering is pinned first (`pinnedAt DESC`), then `lastActivityAt DESC` and `conversationId ASC`; archived history is ordered by `archivedAt DESC` and identity. Archive atomically clears Pin and never advances `lastActivityAt`.
+- Archived Conversation history and completed/failed Attention remain readable, but new Turn control fails with `conversation_archived` until explicit Unarchive. Running, starting, waiting, or open-Approval Conversations cannot be archived.
+- Reliable low-frequency `conversation.updated` events carry only the public `ConversationSummary` after changed organization mutations. Cold organization writes update SQLite/public runtime metadata without hydrating or resuming Codex.
 - A real `/projects/:projectId/conversations` product history surface, real Project-derived Current Project context and breadcrumbs, and a real Conversation Rail driven by the durable index rather than Runtime Snapshot or Mock data.
 - A minimal Codex-only New Conversation dialog through the typed Client boundary. A Project route locks its real Project; global entry requires selection of one available Project and uses Host-owned model/reasoning defaults.
 - Real `/conversations/conv_*` routes read cold or live normalized history through one ViewModel, keep title/status/activity synchronized through low-frequency lifecycle events, and rely on Host-owned hydration and provider resume only when control begins.
@@ -71,11 +76,11 @@ If sources conflict, stop and resolve the conflict instead of inventing a compro
 - Public Turn anchors shared by Inbox and notification navigation, plus Inspector Changes selection that locates the matching Timeline Diff. These are routing and presentation concerns, not new Conversation or Attention state.
 - A denser truthful Desktop surface: placeholder Activity/Agents/Machines navigation is absent from the primary Sidebar, unsupported Composer actions are hidden, long titles/paths are bounded with full-text affordances, Project IDs leave the primary overview, and user copy avoids exposing Host/Runtime implementation terms.
 
-Phase 4C remains bounded to best-effort native delivery while the Desktop process and its owned Host are running. Phase 4D is implemented but must not be described as accepted or frozen until Owner review. Neither phase authorizes Rename, Archive, Search, tray behavior, closed-app notifications, a Notification Center/history, push infrastructure, custom window chrome, updating/signing infrastructure, Activity, Machine management, remote operation, or another provider.
+Phase 4C remains bounded to best-effort native delivery while the Desktop process and its owned Host are running. Phase 4D is accepted and frozen. Phase 4E.1 is implemented but must not be described as accepted or frozen until Owner review. It authorizes only the durable organization model and non-React boundary: Rename/Pin/Archive UI, archived-list UI, Search, tray behavior, closed-app notifications, a Notification Center/history, push infrastructure, custom window chrome, updating/signing infrastructure, Activity, Machine management, remote operation, and another provider remain unauthorized.
 
 ## Out of Scope
 
-During and after Phase 4D, do not implement without a separately approved phase:
+During and after Phase 4E.1, do not implement without a separately approved phase:
 
 - Visual redesigns or unrelated refactors to the frozen Design System, AppShell, Inbox, Conversations, Conversation Workspace, or accepted Projects UI.
 - Activity, Machines, Agents, a broader Settings redesign, an advanced New Conversation flow, or any other new product-page content or flow beyond the exact notification preferences.
@@ -84,7 +89,7 @@ During and after Phase 4D, do not implement without a separately approved phase:
 - System tray behavior, notifications after full application exit, notification-history UI, push/email/chat delivery, custom sounds or schedules, custom window chrome, auto-update, signing/release channels, drag-and-drop folders, recent-folder menus, Open in Explorer, or any other native product feature beyond the exact Phase 4B picker and Phase 4C notification delivery.
 - A generic Tauri command runner, arbitrary shell bridge, arbitrary filesystem capability, or a second Client-to-Host business protocol.
 - Project discovery/scanning, rename/relocate, multiple Project locations, Machine management, remote access, relay, or authentication.
-- Conversation rename, archive, pin, delete, or Search. Phase 4D adds no fake frontend-only organization controls.
+- Conversation Rename, Pin, Archive, or archived-history UI; Search, Delete, bulk organization, tags, folders, or groups. Phase 4E.1 exposes no frontend controls and Phase 4E.2 has not started.
 - Filesystem deletion, recursive cleanup, cascading Project deletion, or automatic reassignment of existing Conversations to another Project.
 - Stop/thread termination, Turn queueing, steering, retry-Turn, attachments, images, voice, Skill upload, or another React write path beyond minimal Codex Conversation creation, text Turn start, one-shot Approval resolution, and interrupt.
 - Actionable Approval recovery across restart, `Always Allow`, automatic approval, or a production permission-policy system. Expired Approval history may be retained only to explain what happened.

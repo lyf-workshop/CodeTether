@@ -6,12 +6,15 @@ import {
   conversationListLimits,
   ConversationIdSchema,
   ConversationSummarySchema,
+  ConversationTitleSourceSchema,
+  ManualConversationTitleSchema,
   ProjectIdSchema,
   TimestampSchema,
   TurnIdSchema,
   TurnInputRecordSchema,
   type ConversationId,
   type ConversationSummary,
+  type ConversationTitleSource,
   type ProjectId,
   type Timestamp,
   type TurnId,
@@ -56,6 +59,23 @@ const durableConversationStatuses = [
 export type DurableConversationStatus =
   (typeof durableConversationStatuses)[number]
 
+export const conversationArchiveFilters = ['active', 'archived', 'all'] as const
+export type ConversationArchiveFilter =
+  (typeof conversationArchiveFilters)[number]
+
+export type ConversationOrganizationConflictReason =
+  'active' | 'archived' | 'open_approval'
+
+export class ConversationOrganizationConflictError extends Error {
+  readonly reason: ConversationOrganizationConflictReason
+
+  constructor(reason: ConversationOrganizationConflictReason, message: string) {
+    super(message)
+    this.name = 'ConversationOrganizationConflictError'
+    this.reason = reason
+  }
+}
+
 const durableTurnStatuses = [
   'starting',
   'running',
@@ -79,6 +99,9 @@ export interface DurableConversation {
   readonly conversationId: ConversationId
   readonly projectId: ProjectId
   readonly title: string
+  readonly titleSource: ConversationTitleSource
+  readonly pinnedAt?: Timestamp
+  readonly archivedAt?: Timestamp
   readonly provider: 'codex'
   readonly providerThreadId?: string
   readonly cwd: string
@@ -90,11 +113,23 @@ export interface DurableConversation {
   readonly lastActivityAt: Timestamp
 }
 
+export type NewDurableConversation = Omit<
+  DurableConversation,
+  'titleSource' | 'pinnedAt' | 'archivedAt'
+> &
+  Partial<Pick<DurableConversation, 'titleSource' | 'pinnedAt' | 'archivedAt'>>
+
 export type DurableConversationSummary = ConversationSummary
+
+export interface DurableConversationMutationResult {
+  readonly conversation: DurableConversation
+  readonly changed: boolean
+}
 
 export interface ListProjectConversationsOptions {
   readonly provider?: 'codex'
   readonly status?: ConversationSummary['status']
+  readonly archived?: ConversationArchiveFilter
   readonly limit?: number
 }
 
@@ -236,17 +271,21 @@ export class ConversationStore {
     )
   }
 
-  createConversation(conversation: DurableConversation): void {
+  createConversation(conversation: NewDurableConversation): void {
     const value = parseConversation(conversation)
     this.#statement(
       `INSERT INTO conversations (
-        conversation_id, project_id, title, provider, provider_thread_id, cwd,
-        model, reasoning, status, created_at, updated_at, last_activity_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        conversation_id, project_id, title, title_source, pinned_at,
+        archived_at, provider, provider_thread_id, cwd, model, reasoning,
+        status, created_at, updated_at, last_activity_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       value.conversationId,
       value.projectId,
       value.title,
+      value.titleSource,
+      value.pinnedAt ?? null,
+      value.archivedAt ?? null,
       value.provider,
       value.providerThreadId ?? null,
       value.cwd,
@@ -263,13 +302,17 @@ export class ConversationStore {
     const value = parseConversation(conversation)
     const result = this.#statement(
       `UPDATE conversations SET
-        project_id = ?, title = ?, provider = ?, provider_thread_id = ?,
-        cwd = ?, model = ?, reasoning = ?, status = ?, created_at = ?,
-        updated_at = ?, last_activity_at = ?
+        project_id = ?, title = ?, title_source = ?, pinned_at = ?,
+        archived_at = ?, provider = ?, provider_thread_id = ?, cwd = ?,
+        model = ?, reasoning = ?, status = ?, created_at = ?, updated_at = ?,
+        last_activity_at = ?
       WHERE conversation_id = ?`,
     ).run(
       value.projectId,
       value.title,
+      value.titleSource,
+      value.pinnedAt ?? null,
+      value.archivedAt ?? null,
       value.provider,
       value.providerThreadId ?? null,
       value.cwd,
@@ -301,12 +344,171 @@ export class ConversationStore {
     return rows.map(conversationFromRow)
   }
 
+  renameConversation(
+    conversationId: ConversationId,
+    title: string,
+    updatedAt: Timestamp,
+  ): DurableConversationMutationResult {
+    const id = ConversationIdSchema.parse(conversationId)
+    const normalizedTitle = normalizeManualConversationTitle(title)
+    const timestamp = TimestampSchema.parse(updatedAt)
+    const existing = requireConversation(this.getConversation(id), id)
+    if (
+      existing.title === normalizedTitle &&
+      existing.titleSource === 'manual'
+    ) {
+      return { conversation: existing, changed: false }
+    }
+    assertChanged(
+      this.#statement(
+        `UPDATE conversations SET
+           title = ?, title_source = 'manual', updated_at = ?
+         WHERE conversation_id = ?`,
+      ).run(normalizedTitle, timestamp, id).changes,
+      'Conversation',
+      id,
+    )
+    return {
+      conversation: requireConversation(this.getConversation(id), id),
+      changed: true,
+    }
+  }
+
+  pinConversation(
+    conversationId: ConversationId,
+    pinnedAt: Timestamp,
+  ): DurableConversationMutationResult {
+    const id = ConversationIdSchema.parse(conversationId)
+    const timestamp = TimestampSchema.parse(pinnedAt)
+    const existing = requireConversation(this.getConversation(id), id)
+    if (existing.archivedAt !== undefined) {
+      throw new ConversationOrganizationConflictError(
+        'archived',
+        `Conversation ${String(id)} is archived`,
+      )
+    }
+    if (existing.pinnedAt !== undefined) {
+      return { conversation: existing, changed: false }
+    }
+    assertChanged(
+      this.#statement(
+        `UPDATE conversations SET pinned_at = ?, updated_at = ?
+         WHERE conversation_id = ? AND archived_at IS NULL`,
+      ).run(timestamp, timestamp, id).changes,
+      'Conversation',
+      id,
+    )
+    return {
+      conversation: requireConversation(this.getConversation(id), id),
+      changed: true,
+    }
+  }
+
+  unpinConversation(
+    conversationId: ConversationId,
+    updatedAt: Timestamp,
+  ): DurableConversationMutationResult {
+    const id = ConversationIdSchema.parse(conversationId)
+    const timestamp = TimestampSchema.parse(updatedAt)
+    const existing = requireConversation(this.getConversation(id), id)
+    if (existing.pinnedAt === undefined) {
+      return { conversation: existing, changed: false }
+    }
+    assertChanged(
+      this.#statement(
+        `UPDATE conversations SET pinned_at = NULL, updated_at = ?
+         WHERE conversation_id = ?`,
+      ).run(timestamp, id).changes,
+      'Conversation',
+      id,
+    )
+    return {
+      conversation: requireConversation(this.getConversation(id), id),
+      changed: true,
+    }
+  }
+
+  archiveConversation(
+    conversationId: ConversationId,
+    archivedAt: Timestamp,
+  ): DurableConversationMutationResult {
+    const id = ConversationIdSchema.parse(conversationId)
+    const timestamp = TimestampSchema.parse(archivedAt)
+    return this.runInTransaction(() => {
+      const existing = requireConversation(this.getConversation(id), id)
+      if (existing.archivedAt !== undefined) {
+        return { conversation: existing, changed: false }
+      }
+      if (existing.status === 'running' || existing.status === 'waiting') {
+        throw new ConversationOrganizationConflictError(
+          'active',
+          `Conversation ${String(id)} is active`,
+        )
+      }
+      if (this.hasOpenApprovalAttention(id)) {
+        throw new ConversationOrganizationConflictError(
+          'open_approval',
+          `Conversation ${String(id)} has a pending Approval`,
+        )
+      }
+      assertChanged(
+        this.#statement(
+          `UPDATE conversations SET
+             archived_at = ?, pinned_at = NULL, updated_at = ?
+           WHERE conversation_id = ?`,
+        ).run(timestamp, timestamp, id).changes,
+        'Conversation',
+        id,
+      )
+      return {
+        conversation: requireConversation(this.getConversation(id), id),
+        changed: true,
+      }
+    })
+  }
+
+  unarchiveConversation(
+    conversationId: ConversationId,
+    updatedAt: Timestamp,
+  ): DurableConversationMutationResult {
+    const id = ConversationIdSchema.parse(conversationId)
+    const timestamp = TimestampSchema.parse(updatedAt)
+    const existing = requireConversation(this.getConversation(id), id)
+    if (existing.archivedAt === undefined) {
+      return { conversation: existing, changed: false }
+    }
+    assertChanged(
+      this.#statement(
+        `UPDATE conversations SET archived_at = NULL, updated_at = ?
+         WHERE conversation_id = ?`,
+      ).run(timestamp, id).changes,
+      'Conversation',
+      id,
+    )
+    return {
+      conversation: requireConversation(this.getConversation(id), id),
+      changed: true,
+    }
+  }
+
+  hasOpenApprovalAttention(conversationId: ConversationId): boolean {
+    const id = ConversationIdSchema.parse(conversationId)
+    const row = this.#statement(
+      `SELECT EXISTS(
+         SELECT 1 FROM attention_items
+         WHERE conversation_id = ? AND type = 'approval' AND status = 'open'
+       ) AS present`,
+    ).get(id) as { readonly present: number }
+    return row.present === 1
+  }
+
   listProjectConversations(
     projectId: ProjectId,
     options: ListProjectConversationsOptions = {},
   ): DurableConversationSummary[] {
     const id = ProjectIdSchema.parse(projectId)
     const limit = parseConversationListLimit(options.limit)
+    const archived = parseConversationArchiveFilter(options.archived)
     if (options.provider !== undefined && options.provider !== 'codex') {
       throw new Error(`Unsupported Provider: ${String(options.provider)}`)
     }
@@ -318,7 +520,6 @@ export class ConversationStore {
         `Unsupported durable Conversation status: ${String(options.status)}`,
       )
     }
-
     const filters = ['project_id = ?', "status <> 'creating'"]
     const parameters: Array<string | number> = [id]
     if (options.provider !== undefined) {
@@ -329,15 +530,32 @@ export class ConversationStore {
       filters.push('status = ?')
       parameters.push(options.status)
     }
+    if (archived === 'active') filters.push('archived_at IS NULL')
+    if (archived === 'archived') filters.push('archived_at IS NOT NULL')
     parameters.push(limit)
+
+    const orderBy =
+      archived === 'archived'
+        ? 'archived_at DESC, conversation_id ASC'
+        : archived === 'active'
+          ? `(pinned_at IS NULL) ASC, pinned_at DESC,
+             last_activity_at DESC, conversation_id ASC`
+          : `CASE WHEN archived_at IS NULL THEN 0 ELSE 1 END ASC,
+             CASE WHEN archived_at IS NULL AND pinned_at IS NOT NULL
+               THEN 0 ELSE 1 END ASC,
+             CASE WHEN archived_at IS NULL THEN pinned_at END DESC,
+             CASE WHEN archived_at IS NULL THEN last_activity_at END DESC,
+             CASE WHEN archived_at IS NOT NULL THEN archived_at END DESC,
+             conversation_id ASC`
 
     const rows = this.#statement(
       `SELECT
-         conversation_id, project_id, title, provider, model, reasoning,
-         status, created_at, updated_at, last_activity_at
+         conversation_id, project_id, title, title_source, pinned_at,
+         archived_at, provider, model, reasoning, status, created_at,
+         updated_at, last_activity_at
        FROM conversations
        WHERE ${filters.join(' AND ')}
-       ORDER BY last_activity_at DESC, conversation_id ASC
+       ORDER BY ${orderBy}
        LIMIT ?`,
     ).all(...parameters) as unknown as ConversationSummaryRow[]
     return rows.map(conversationSummaryFromRow)
@@ -718,6 +936,9 @@ interface ConversationRow {
   readonly conversation_id: string
   readonly project_id: string
   readonly title: string
+  readonly title_source: string
+  readonly pinned_at: string | null
+  readonly archived_at: string | null
   readonly provider: string
   readonly provider_thread_id: string | null
   readonly cwd: string
@@ -733,6 +954,9 @@ interface ConversationSummaryRow {
   readonly conversation_id: string
   readonly project_id: string
   readonly title: string
+  readonly title_source: string
+  readonly pinned_at: string | null
+  readonly archived_at: string | null
   readonly provider: string
   readonly model: string | null
   readonly reasoning: string | null
@@ -791,7 +1015,9 @@ function parseProject(value: DurableProject): DurableProject {
   }
 }
 
-function parseConversation(value: DurableConversation): DurableConversation {
+function parseConversation(
+  value: DurableConversation | NewDurableConversation,
+): DurableConversation {
   if (value.provider !== 'codex') throw new Error('Provider must be codex')
   const cwd = normalizeTrustedProjectRoot(value.cwd).rootPath
   assertOptionalBoundedText(value.providerThreadId, 'Provider Thread ID', 4096)
@@ -800,10 +1026,27 @@ function parseConversation(value: DurableConversation): DurableConversation {
   if (!isOneOf(value.status, durableConversationStatuses)) {
     throw new Error(`Unsupported durable Conversation status: ${value.status}`)
   }
+  const titleSource = ConversationTitleSourceSchema.parse(
+    value.titleSource ?? 'generated',
+  )
+  const pinnedAt =
+    value.pinnedAt === undefined
+      ? undefined
+      : TimestampSchema.parse(value.pinnedAt)
+  const archivedAt =
+    value.archivedAt === undefined
+      ? undefined
+      : TimestampSchema.parse(value.archivedAt)
+  if (pinnedAt !== undefined && archivedAt !== undefined) {
+    throw new Error('Archived Conversations cannot be pinned')
+  }
   return {
     conversationId: ConversationIdSchema.parse(value.conversationId),
     projectId: ProjectIdSchema.parse(value.projectId),
     title: parseBoundedText(value.title, 'Conversation title', 240),
+    titleSource,
+    ...(pinnedAt === undefined ? {} : { pinnedAt }),
+    ...(archivedAt === undefined ? {} : { archivedAt }),
     provider: 'codex',
     ...(value.providerThreadId === undefined
       ? {}
@@ -866,6 +1109,13 @@ function conversationFromRow(row: ConversationRow): DurableConversation {
     conversationId: ConversationIdSchema.parse(row.conversation_id),
     projectId: ProjectIdSchema.parse(row.project_id),
     title: row.title,
+    titleSource: parseConversationTitleSource(row.title_source),
+    ...(row.pinned_at === null
+      ? {}
+      : { pinnedAt: TimestampSchema.parse(row.pinned_at) }),
+    ...(row.archived_at === null
+      ? {}
+      : { archivedAt: TimestampSchema.parse(row.archived_at) }),
     provider: parseProvider(row.provider),
     ...(row.provider_thread_id === null
       ? {}
@@ -887,6 +1137,9 @@ function conversationSummaryFromRow(
     conversationId: row.conversation_id,
     projectId: row.project_id,
     title: row.title,
+    titleSource: parseConversationTitleSource(row.title_source),
+    ...(row.pinned_at === null ? {} : { pinnedAt: row.pinned_at }),
+    ...(row.archived_at === null ? {} : { archivedAt: row.archived_at }),
     provider: parseProvider(row.provider),
     ...(row.model === null ? {} : { model: row.model }),
     ...(row.reasoning === null ? {} : { reasoning: row.reasoning }),
@@ -991,6 +1244,10 @@ function parseConversationStatus(value: string): DurableConversationStatus {
   return value
 }
 
+function parseConversationTitleSource(value: string): ConversationTitleSource {
+  return ConversationTitleSourceSchema.parse(value)
+}
+
 function parseTurnStatus(value: string): DurableTurnStatus {
   if (!isOneOf(value, durableTurnStatuses)) {
     throw new Error(`Unsupported durable Turn status: ${value}`)
@@ -1045,6 +1302,14 @@ function parseRootPathKey(value: string): string {
   return value
 }
 
+function parseConversationArchiveFilter(
+  value: ConversationArchiveFilter | undefined,
+): ConversationArchiveFilter {
+  if (value === undefined) return 'active'
+  if (isOneOf(value, conversationArchiveFilters)) return value
+  throw new Error(`Unsupported Conversation archive filter: ${String(value)}`)
+}
+
 function parseConversationListLimit(value: number | undefined): number {
   const limit = value ?? conversationListLimits.default
   if (
@@ -1057,4 +1322,18 @@ function parseConversationListLimit(value: number | undefined): number {
     )
   }
   return limit
+}
+
+export function normalizeManualConversationTitle(value: string): string {
+  return ManualConversationTitleSchema.parse(value)
+}
+
+function requireConversation(
+  conversation: DurableConversation | undefined,
+  conversationId: ConversationId,
+): DurableConversation {
+  if (conversation === undefined) {
+    throw new Error(`Conversation ${String(conversationId)} does not exist`)
+  }
+  return conversation
 }

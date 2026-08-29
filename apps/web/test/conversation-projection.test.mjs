@@ -177,6 +177,7 @@ function coldDetail(title = 'Host-owned durable title') {
       conversationId: 'conv_cold01',
       projectId: 'proj_cold01',
       title,
+      titleSource: 'generated',
       provider: 'codex',
       status: 'idle',
       createdAt: timestamp,
@@ -268,6 +269,82 @@ test('refreshes a first-Turn Host title without replacing live Timeline state', 
     updated.conversations[conversationId].messages,
     existing.messages,
   )
+})
+
+test('projects and refreshes durable organization metadata without replacing live history', () => {
+  const projection = projectSnapshot(snapshotWithRuntime())
+  const existing = projection.conversations[conversationId]
+  const updatedAt = '2026-08-26T07:05:00.000Z'
+  const lastActivityAt = '2026-08-26T07:01:00.000Z'
+
+  const next = apply(
+    projection,
+    envelope(
+      1,
+      'conversation.updated',
+      {
+        conversation: {
+          conversationId,
+          projectId: 'proj_demo01',
+          title: 'Manual organization title',
+          titleSource: 'manual',
+          pinnedAt: updatedAt,
+          provider: 'codex',
+          model: 'gpt-5',
+          reasoning: 'high',
+          status: 'idle',
+          createdAt: timestamp,
+          updatedAt,
+          lastActivityAt,
+        },
+      },
+      { turnId: null, itemId: null },
+    ),
+  )
+  const conversation = next.conversations[conversationId]
+
+  assert.equal(conversation.title, 'Manual organization title')
+  assert.equal(conversation.titleSource, 'manual')
+  assert.equal(conversation.pinnedAt, updatedAt)
+  assert.equal(conversation.archivedAt, undefined)
+  assert.equal(conversation.updatedAt, updatedAt)
+  assert.equal(conversation.lastActivityAt, lastActivityAt)
+  assert.strictEqual(conversation.turns, existing.turns)
+  assert.strictEqual(conversation.messages, existing.messages)
+  assert.strictEqual(conversation.tools, existing.tools)
+})
+
+test('applies cold conversation.updated as cursor-only without inventing runtime state', () => {
+  const projection = {
+    cursor: { epoch, seq: 0 },
+    conversations: {},
+  }
+  const result = applyHostEvent(
+    projection,
+    envelope(
+      1,
+      'conversation.updated',
+      {
+        conversation: {
+          conversationId,
+          projectId: 'proj_demo01',
+          title: 'Cold renamed conversation',
+          titleSource: 'manual',
+          archivedAt: '2026-08-26T07:06:00.000Z',
+          provider: 'codex',
+          status: 'completed',
+          createdAt: timestamp,
+          updatedAt: '2026-08-26T07:06:00.000Z',
+          lastActivityAt: timestamp,
+        },
+      },
+      { turnId: null, itemId: null },
+    ),
+  )
+
+  assert.equal(result.kind, 'applied')
+  assert.deepEqual(result.projection.cursor, { epoch, seq: 1 })
+  assert.deepEqual(result.projection.conversations, {})
 })
 
 test('projects snapshot metadata, active Turn, and multiple approvals', () => {

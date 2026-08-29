@@ -28,9 +28,11 @@ Phase 2C.1 is accepted, and Phase 2C.1.1 is frozen as **Live Conversation Read M
 
 **Phase 4C — Desktop Notifications** is implemented, validated, accepted, and frozen. New `attention.created` events are the sole arrival trigger for privacy-bounded Approval, completed-review, and failed-Turn notifications. A centralized Desktop adapter, pure foreground suppression, process-scoped Attention-ID deduplication, validated click intents, and three persisted application preferences add delivery without moving Attention truth into Tauri.
 
-**Phase 4D — Desktop Product Polish & Dogfooding** is implemented; Owner acceptance is pending. Its changes remain inside the shared Web presentation layer: deterministic Tool disclosure, safe Agent-message Markdown, display-only contained-path shortening, public Turn/Diff anchors, and denser truthful product surfaces. Durable records, Runtime projection, Protocol v1, Host ownership, native capabilities, and Browser/Desktop component identity are unchanged.
+**Phase 4D — Desktop Product Polish & Dogfooding** is implemented, validated, accepted, and frozen. Its changes remain inside the shared Web presentation layer: deterministic Tool disclosure, safe Agent-message Markdown, display-only contained-path shortening, public Turn/Diff anchors, and denser truthful product surfaces. Durable records, Runtime projection, Protocol v1, Host ownership, native capabilities, and Browser/Desktop component identity are unchanged.
 
-No Project discovery/scanning, rename/relocate, Conversation rename/archive/delete/Search/history pagination, read/unread Inbox history, remote access, authentication, multiple-Machine Project model, tray, closed-app notification delivery, updater, additional provider, or general filesystem bridge exists. SQLite remains local Host data, not a remote or multi-user service.
+**Phase 4E.1 — Durable Conversation Organization Model** is implemented; Owner acceptance is pending. SQLite migration 005 and additive Protocol v1/Client contracts make manual title ownership, Pin, and Archive durable without changing provider identity, history, Attention truth, or `lastActivityAt`. Organization writes are Provider-independent, and the frozen React product surfaces do not yet expose them.
+
+No Project discovery/scanning or rename/relocate, Conversation organization UI/Search/delete/history pagination, read/unread Inbox history, remote access, authentication, multiple-Machine Project model, tray, closed-app notification delivery, updater, additional provider, or general filesystem bridge exists. SQLite remains local Host data, not a remote or multi-user service.
 
 ## System Context
 
@@ -401,6 +403,9 @@ conversations
   conversation_id       CodeTether public identity, primary key
   project_id            required Project foreign key, delete restricted
   title                 canonical product title
+  title_source          generated or manual title ownership
+  pinned_at             nullable Project-ordering timestamp
+  archived_at           nullable organization timestamp; excludes Pin
   provider              currently constrained to codex
   provider_thread_id    private provider resume identity, nullable while creating
   cwd, model, reasoning
@@ -425,7 +430,7 @@ attention_items
   created_at, updated_at, resolved_at
 ```
 
-Indexes cover Project and Conversation recency, Project-scoped Conversation recency, per-Conversation Turn chronology, and Attention status/priority lookup. Migration 002 backfills one Project for each distinct normalized legacy Conversation root and binds every existing Conversation to it. Project availability is intentionally absent from SQLite; the Host computes it by inspecting the saved canonical root. `snapshot_json` contains only versioned CodeTether normalized/presentation state for that Turn: messages, Tools, file changes, outcome, bounded terminal tail, and Approval history. It never contains the Codex JSON-RPC stream. `attention_items.payload_json` is capped at 256 KiB and contains only normalized presentation metadata, never a Conversation snapshot or provider request.
+Indexes cover Project identity, active/archived Conversation ordering, lightweight Project/title lookup, per-Conversation Turn chronology, and Attention status/priority lookup. Migration 002 backfills one Project for each distinct normalized legacy Conversation root and binds every existing Conversation to it. Project availability is intentionally absent from SQLite; the Host computes it by inspecting the saved canonical root. `snapshot_json` contains only versioned CodeTether normalized/presentation state for that Turn: messages, Tools, file changes, outcome, bounded terminal tail, and Approval history. It never contains the Codex JSON-RPC stream. `attention_items.payload_json` is capped at 256 KiB and contains only normalized presentation metadata, never a Conversation snapshot or provider request.
 
 ### State Boundaries
 
@@ -623,6 +628,18 @@ Phase 4D keeps durable and live normalized data intact and derives only render-t
 
 Long titles and paths are constrained with truncation and full-text affordances; unsupported Composer and primary-navigation controls are hidden rather than simulated. Product copy uses CodeTether/user language, while Host, Runtime, projection, and provider terms remain valid internal architecture vocabulary.
 
+## Phase 4E.1 Durable Conversation Organization
+
+Migration 005 extends the existing `conversations` table with `title_source`, `pinned_at`, and `archived_at`, replaces the old Project/activity index with partial active/archived ordering indexes, and adds a lightweight Project/title index for later bounded title lookup. Existing titles backfill as `generated`; no historical Turn is scanned and no provider identity, snapshot, Attention row, activity timestamp, or Project relationship is rewritten. `titleSource` is either `generated` or `manual`; nullable timestamps are the sole Pin and Archive truth, and Archive atomically clears Pin. There is no FTS or Search service.
+
+Manual Rename is a narrow `PATCH /api/v1/conversations/:conversationId` mutation. The Protocol boundary normalizes NFC, trims and collapses Unicode whitespace, rejects empty titles, and rejects rather than truncates values beyond 240 UTF-16 code units or 160 graphemes. Rename sets `titleSource=manual`; first-input deterministic generation runs only while the source remains `generated`, so pre-Turn manual names survive provider execution. Pin/Unpin and Archive/Unarchive use explicit POST subresources. Every mutation carries `actionId`, returns the public `ConversationSummary`, updates `updatedAt` only when metadata changes, and leaves `lastActivityAt` unchanged.
+
+The Project index accepts a strict `archived=false|true|all` filter and defaults to active history. Active rows order by Pin presence, `pinnedAt DESC`, `lastActivityAt DESC`, then `conversationId ASC`; archived rows order by `archivedAt DESC`, then identity. These indexed queries read Conversation metadata only and never parse Turn snapshots.
+
+Archive is organization state, not execution status. The Host rejects Archive while a Conversation is starting, running, waiting, or owns a process-live/open Approval. Archived detail and completed-review/failed Attention remain readable and navigable, Project deletion remains blocked by the durable Conversation, and Start Turn returns `conversation_archived` until explicit Unarchive. No mutation starts Codex, resumes a provider Thread, or hydrates a cold Conversation; already-hydrated records receive only the changed public metadata.
+
+Changed writes publish one reliable, sequenced `conversation.updated` event containing a presentation-safe `ConversationSummary`; logical no-ops return their idempotent result without fabricating another change event. The summary/detail/Snapshot contracts carry current organization metadata while continuing to exclude provider Thread identity and SQLite details. `packages/client` exposes typed Rename, Pin/Unpin, Archive/Unarchive methods with response and route-identity validation. Phase 4E.1 adds no React action, archived page, Search/FTS, pagination, Delete, tags, folders, groups, or bulk operations.
+
 ## Desktop Shell
 
 `apps/desktop` is a Windows-first Tauri 2.11.x shell around the existing Web/Host system. It creates one native-decorated `main` window, uses the stable `com.codetether.desktop` bundle identifier, and loads the same `apps/web` build used by Browser mode. Production loads packaged Web assets; development lets the Tauri CLI own the Vite process. There is no `DesktopConversationPage`, Desktop-only React tree, or Tauri business command layer.
@@ -673,13 +690,13 @@ Production CSP allows HTTP/SSE connection only to `http://127.0.0.1:4317`; `scri
 
 ## Host
 
-`apps/host` owns the loopback HTTP/SSE server, Codex runtime, live state, Phase 3A SQLite boundary, Phase 3B.1 durable Project registry, Phase 3C.1 durable Conversation index/title rules, Phase 3C.1.1 cold detail/hydration boundary, and Phase 3D.1 durable Attention projection. It allocates public identities, maps them to private provider identities, validates actions and Project workspaces, reconstructs bounded live or cold views from durable Turn records, hydrates control state on demand, sequences client events, and performs bounded fanout/replay. The same Host entry supports standalone Browser development and the production Desktop sidecar; Desktop-managed mode changes lifecycle wiring and Origin input, not business behavior.
+`apps/host` owns the loopback HTTP/SSE server, Codex runtime, live state, Phase 3A SQLite boundary, Phase 3B.1 durable Project registry, Phase 3C.1 durable Conversation index/title rules, Phase 3C.1.1 cold detail/hydration boundary, Phase 3D.1 durable Attention projection, and Phase 4E.1 Conversation organization model. It allocates public identities, maps them to private provider identities, validates actions and Project workspaces, reconstructs bounded live or cold views from durable Turn records, applies Provider-independent organization writes, hydrates control state on demand, sequences client events, and performs bounded fanout/replay. The same Host entry supports standalone Browser development and the production Desktop sidecar; Desktop-managed mode changes lifecycle wiring and Origin input, not business behavior.
 
 Project discovery/import UX, multiple Machine locations, durable action logging, full-history pagination, machine trust, and remote operation remain planned rather than implemented.
 
 ## Client-to-Host Protocol
 
-`packages/protocol` defines Protocol v1 identifiers, commands, records, events, safe errors, capabilities, ordering, reconnect cursors, the strict Project-scoped `ConversationSummary`, bounded durable Conversation-detail response, and durable Attention contracts with TypeScript and Zod. `packages/client` implements the matching HTTP/SSE consumer—including Conversation and Attention reads/mutations—without React. Provider wire payloads remain behind adapters, and unknown provider notifications are diagnostics rather than public events.
+`packages/protocol` defines Protocol v1 identifiers, commands, records, events, safe errors, capabilities, ordering, reconnect cursors, the strict Project-scoped `ConversationSummary`, bounded durable Conversation-detail response, Conversation organization mutations, and durable Attention contracts with TypeScript and Zod. `packages/client` implements the matching HTTP/SSE consumer—including Conversation organization and Attention reads/mutations—without React. Provider wire payloads remain behind adapters, and unknown provider notifications are diagnostics rather than public events.
 
 ## Agent Adapter Boundary
 
@@ -689,7 +706,7 @@ Provider-specific capabilities may remain Codex-specific when a natural common c
 
 ## Persistence
 
-Phase 3A uses `node:sqlite` for the minimal durable records described above. CodeTether Conversation and Turn identities, private provider identities, canonical text inputs, statuses, timestamps, and normalized per-Turn snapshots survive Host restart. Phase 3B.1 adds durable Project identity, canonical root authorization metadata, and the required Conversation-to-Project relationship. Phase 3C.1 adds the canonical title and last-activity index fields needed for product history without introducing an event table. Phase 3C.1.1 adds read-through reconstruction and runtime admission rules only. Phase 3D.1 adds normalized Attention state without persisting provider requests or SSE history. Phase 4C stores only three versioned notification booleans in Desktop WebView `localStorage`; delivered-ID and click queues remain bounded process memory. Raw Codex JSON-RPC, SSE events, replay cursors, notification history, action results, computed Project availability, LRU state, hydration state, provider-session state, and browser projection state are not stored.
+Phase 3A uses `node:sqlite` for the minimal durable records described above. CodeTether Conversation and Turn identities, private provider identities, canonical text inputs, statuses, timestamps, and normalized per-Turn snapshots survive Host restart. Phase 3B.1 adds durable Project identity, canonical root authorization metadata, and the required Conversation-to-Project relationship. Phase 3C.1 adds the canonical title and last-activity index fields needed for product history without introducing an event table. Phase 3C.1.1 adds read-through reconstruction and runtime admission rules only. Phase 3D.1 adds normalized Attention state without persisting provider requests or SSE history. Phase 4E.1 adds title ownership and nullable Pin/Archive timestamps to the same Conversation row; it adds no organization table or durable event/action log. Phase 4C stores only three versioned notification booleans in Desktop WebView `localStorage`; delivered-ID and click queues remain bounded process memory. Raw Codex JSON-RPC, SSE events, replay cursors, notification history, action results, computed Project availability, LRU state, hydration state, provider-session state, and browser projection state are not stored.
 
 SQLite does not replace runtime history. The active Turn is assembled and streamed in memory, with throttled normalized snapshot writes and synchronous terminal flushes. It also does not replace the Codex provider's Thread store: CodeTether persists the exact provider Thread identity and asks Codex to resume it lazily. The migration runner and Store are intentionally concrete Host modules rather than a generic persistence abstraction.
 
@@ -705,7 +722,7 @@ It uses no polling or database scan. The adapter does not intentionally coalesce
 
 The final two-Turn validation observed 171 raw message/tool delta events and delivered 118 aggregated events, a 31.0% reduction, with exact raw-to-delivered integrity for both message text and tool output, canonical final-message integrity, and zero dropped deltas. The flush/coalescing parameters are experimental rather than a finalized client protocol.
 
-Phase 2B adds non-durable Host-global ordering, bounded replay, explicit reconnect reset, and isolated multi-client observation at the client boundary. These guarantees apply only within one Host epoch. Phase 3A persists Conversation state but deliberately does not persist replay events or epochs; a restarted Host creates a new epoch and serves a fresh durable Snapshot. Phase 3D.1 Attention transitions use the same replay while the durable Attention list remains the reset/restart source of truth.
+Phase 2B adds non-durable Host-global ordering, bounded replay, explicit reconnect reset, and isolated multi-client observation at the client boundary. These guarantees apply only within one Host epoch. Phase 3A persists Conversation state but deliberately does not persist replay events or epochs; a restarted Host creates a new epoch and serves a fresh durable Snapshot. Phase 3D.1 Attention transitions and Phase 4E.1 `conversation.updated` metadata transitions use the same replay, while durable Attention and Conversation reads remain reset/restart truth.
 
 Phase 2C.1 adds one browser consumer for that stream. It rejects duplicate and out-of-order events before updating the TanStack Query projection. Phase 2C.1.1 makes the Snapshot replacement complete for all retained runtime history, so a reset or unrecoverable cursor condition reconstructs the same retained Timeline rather than merging across incompatible epochs. The guarantee ends at the explicit in-memory eviction boundary and at Host restart.
 
@@ -713,7 +730,7 @@ Phase 4C observes only accepted applied envelopes after that validation boundary
 
 ## Conversation Ownership
 
-A Conversation is bound to one Project, one Agent, and the Machine executing it, plus model, reasoning, permission, title, and history. An existing Conversation cannot switch providers. Phase 3A makes the CodeTether `conversationId` durable and stores the corresponding private Codex provider Thread identity without exposing it as browser routing identity. Phase 3B.1 makes Project ownership a required durable relation; `cwd` remains a contained execution location, not a competing Project identity. Phase 3C.1 makes title and last activity Host-owned durable product facts rather than React or Runtime-Snapshot inventions. Phase 3C.1.1 keeps durable identity/history, bounded live working state, and the provider-owned session separate so a product read cannot accidentally become provider control.
+A Conversation is bound to one Project, one Agent, and the Machine executing it, plus model, reasoning, permission, title, organization metadata, and history. An existing Conversation cannot switch providers. Phase 3A makes the CodeTether `conversationId` durable and stores the corresponding private Codex provider Thread identity without exposing it as browser routing identity. Phase 3B.1 makes Project ownership a required durable relation; `cwd` remains a contained execution location, not a competing Project identity. Phase 3C.1 makes title and last activity Host-owned durable product facts rather than React or Runtime-Snapshot inventions. Phase 4E.1 distinguishes generated/manual title ownership and adds Pin/Archive without changing execution status or activity. Phase 3C.1.1 keeps durable identity/history, bounded live working state, and the provider-owned session separate so a product read or organization write cannot accidentally become provider control.
 
 ## Security Boundary
 

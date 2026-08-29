@@ -60,6 +60,7 @@ test('non-Conversation events never invalidate the durable index path', () => {
 test('all accepted low-frequency lifecycle events refresh the index', () => {
   for (const type of [
     'conversation.started',
+    'conversation.updated',
     'turn.started',
     'approval.requested',
     'approval.resolved',

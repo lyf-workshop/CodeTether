@@ -154,6 +154,7 @@ export function attentionErrorMessage(error: unknown): string {
     case 'provider_conversation_unavailable':
       return 'Codex 已无法恢复此会话；本地历史仍可查看。'
     case 'provider_error':
+    case 'conversation_archived':
     case 'project_has_conversations':
     case 'internal':
       return 'CodeTether 未能处理该事项。'

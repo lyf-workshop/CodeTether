@@ -6,6 +6,7 @@ import { conversationListQueryKeys } from './conversation-list-query.js'
 
 const conversationIndexRefreshEvents = new Set<HostEventEnvelope['type']>([
   'conversation.started',
+  'conversation.updated',
   'turn.started',
   'approval.requested',
   'approval.resolved',

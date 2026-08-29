@@ -516,6 +516,13 @@ function reconstructDurableConversation(
     conversationId: conversation.conversationId,
     projectId: conversation.projectId,
     title: conversation.title,
+    titleSource: conversation.titleSource,
+    ...(conversation.pinnedAt === undefined
+      ? {}
+      : { pinnedAt: conversation.pinnedAt }),
+    ...(conversation.archivedAt === undefined
+      ? {}
+      : { archivedAt: conversation.archivedAt }),
     provider: conversation.provider,
     cwd: conversation.cwd,
     ...(conversation.model === undefined ? {} : { model: conversation.model }),

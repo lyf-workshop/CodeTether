@@ -25,6 +25,8 @@ import {
   type ApprovalRecord,
   type AttentionId,
   type AttentionListResponse,
+  type ArchiveConversationRequest,
+  type ArchiveConversationResponse,
   type ConversationId,
   type ConversationApprovalHistoryRecord,
   type ConversationListResponse,
@@ -48,7 +50,11 @@ import {
   type ListProjectsResponse,
   type ListAttentionQuery,
   type ListProjectConversationsQuery,
+  type PinConversationRequest,
+  type PinConversationResponse,
   type ProjectId,
+  type RenameConversationRequest,
+  type RenameConversationResponse,
   type ResolveApprovalRequest,
   type ResolveApprovalResponse,
   type ResolveAttentionRequest,
@@ -57,6 +63,10 @@ import {
   type StartTurnResponse,
   type TurnId,
   type TurnRecord,
+  type UnarchiveConversationRequest,
+  type UnarchiveConversationResponse,
+  type UnpinConversationRequest,
+  type UnpinConversationResponse,
 } from '@codetether/protocol'
 
 import {
@@ -65,6 +75,7 @@ import {
 } from '../conversation-title.js'
 import {
   ConversationStore,
+  ConversationOrganizationConflictError,
   DURABLE_TURN_SNAPSHOT_VERSION,
   captureTurnPresentation,
   initialTurnPresentation,
@@ -72,6 +83,7 @@ import {
   restoreDurableConversations,
   type DurableApprovalHistoryRecord,
   type DurableConversation,
+  type DurableConversationMutationResult,
   type RestoredDurableConversation,
   type DurableTurnSnapshot,
 } from '../persistence/index.js'
@@ -312,7 +324,10 @@ export class HostService {
     }
     return ConversationListResponseSchema.parse({
       protocolVersion,
-      conversations: this.#persistence.listProjectConversations(id, options),
+      conversations: this.#persistence.listProjectConversations(id, {
+        ...options,
+        archived: archiveFilterForStore(options.archived),
+      }),
     })
   }
 
@@ -367,6 +382,113 @@ export class HostService {
       pendingApprovals,
       approvalHistory,
     })
+  }
+
+  async renameConversation(
+    conversationId: ConversationId,
+    request: RenameConversationRequest,
+  ): Promise<RenameConversationResponse> {
+    const id = ConversationIdSchema.parse(conversationId)
+    return await this.#executeAction(
+      request.actionId,
+      `conversation.rename:${id}`,
+      { conversationId: id, request },
+      async () =>
+        this.#organizationMutationResponse(
+          id,
+          request.actionId,
+          (store, timestamp) =>
+            store.renameConversation(id, request.title, timestamp),
+        ),
+      false,
+    )
+  }
+
+  async pinConversation(
+    conversationId: ConversationId,
+    request: PinConversationRequest,
+  ): Promise<PinConversationResponse> {
+    const id = ConversationIdSchema.parse(conversationId)
+    return await this.#executeAction(
+      request.actionId,
+      `conversation.pin:${id}`,
+      { conversationId: id, request },
+      async () =>
+        this.#organizationMutationResponse(
+          id,
+          request.actionId,
+          (store, timestamp) => store.pinConversation(id, timestamp),
+        ),
+      false,
+    )
+  }
+
+  async unpinConversation(
+    conversationId: ConversationId,
+    request: UnpinConversationRequest,
+  ): Promise<UnpinConversationResponse> {
+    const id = ConversationIdSchema.parse(conversationId)
+    return await this.#executeAction(
+      request.actionId,
+      `conversation.unpin:${id}`,
+      { conversationId: id, request },
+      async () =>
+        this.#organizationMutationResponse(
+          id,
+          request.actionId,
+          (store, timestamp) => store.unpinConversation(id, timestamp),
+        ),
+      false,
+    )
+  }
+
+  async archiveConversation(
+    conversationId: ConversationId,
+    request: ArchiveConversationRequest,
+  ): Promise<ArchiveConversationResponse> {
+    const id = ConversationIdSchema.parse(conversationId)
+    return await this.#executeAction(
+      request.actionId,
+      `conversation.archive:${id}`,
+      { conversationId: id, request },
+      async () => {
+        const runtime = this.#conversations.get(id)
+        if (
+          runtime?.startingTurn === true ||
+          runtime?.record.activeTurnId !== undefined ||
+          runtime?.record.status === 'running' ||
+          runtime?.record.status === 'waiting' ||
+          this.#approvalRegistry.hasPendingForConversation(id)
+        ) {
+          throw activeConversationArchiveError()
+        }
+        return this.#organizationMutationResponse(
+          id,
+          request.actionId,
+          (store, timestamp) => store.archiveConversation(id, timestamp),
+        )
+      },
+      false,
+    )
+  }
+
+  async unarchiveConversation(
+    conversationId: ConversationId,
+    request: UnarchiveConversationRequest,
+  ): Promise<UnarchiveConversationResponse> {
+    const id = ConversationIdSchema.parse(conversationId)
+    return await this.#executeAction(
+      request.actionId,
+      `conversation.unarchive:${id}`,
+      { conversationId: id, request },
+      async () =>
+        this.#organizationMutationResponse(
+          id,
+          request.actionId,
+          (store, timestamp) => store.unarchiveConversation(id, timestamp),
+        ),
+      false,
+    )
   }
 
   listAttention(query: ListAttentionQuery): AttentionListResponse {
@@ -511,6 +633,7 @@ export class HostService {
               conversationId,
               projectId,
               title: DEFAULT_CONVERSATION_TITLE,
+              titleSource: 'generated',
               provider: 'codex',
               cwd,
               ...(request.model === undefined ? {} : { model: request.model }),
@@ -570,6 +693,7 @@ export class HostService {
                 conversationId,
                 projectId,
                 title: DEFAULT_CONVERSATION_TITLE,
+                titleSource: 'generated',
                 provider: 'codex',
                 cwd,
                 ...(provider.model === undefined && request.model === undefined
@@ -659,12 +783,39 @@ export class HostService {
           )
         }
         const parsedConversationId = ConversationIdSchema.parse(conversationId)
+        const runtimeConversation =
+          this.#conversations.get(parsedConversationId)?.record
+        const durableConversation =
+          runtimeConversation === undefined
+            ? this.#persistence?.getConversation(parsedConversationId)
+            : undefined
+        if (
+          (durableConversation === undefined &&
+            runtimeConversation === undefined) ||
+          durableConversation?.status === 'creating'
+        ) {
+          throw new HostServiceError(
+            'not_found',
+            'Conversation was not found',
+            404,
+          )
+        }
+        if (
+          durableConversation?.archivedAt !== undefined ||
+          runtimeConversation?.archivedAt !== undefined
+        ) {
+          throw archivedConversationControlError()
+        }
+        this.#assertRuntimeAvailable()
         const releaseRuntimePin =
           this.#pinRuntimeConversation(parsedConversationId)
         let conversation: ConversationState
         try {
           conversation =
             await this.#ensureConversationHydrated(parsedConversationId)
+          if (conversation.record.archivedAt !== undefined) {
+            throw archivedConversationControlError()
+          }
           if (
             conversation.startingTurn ||
             conversation.record.activeTurnId !== undefined
@@ -717,7 +868,10 @@ export class HostService {
         const nextConversationRecord = ConversationRecordSchema.parse({
           ...conversation.record,
           ...(shouldGenerateConversationTitle(conversation)
-            ? { title: generateConversationTitle(request.input.text) }
+            ? {
+                title: generateConversationTitle(request.input.text),
+                titleSource: 'generated' as const,
+              }
             : {}),
           updatedAt: timestamp,
           lastActivityAt: timestamp,
@@ -851,6 +1005,7 @@ export class HostService {
           data: { turn: record },
         }
       },
+      false,
     )
   }
 
@@ -1757,6 +1912,13 @@ export class HostService {
       conversationId: conversation.record.conversationId,
       projectId: ProjectIdSchema.parse(conversation.record.projectId),
       title: conversation.record.title ?? DEFAULT_CONVERSATION_TITLE,
+      titleSource: conversation.record.titleSource ?? 'generated',
+      ...(conversation.record.pinnedAt === undefined
+        ? {}
+        : { pinnedAt: conversation.record.pinnedAt }),
+      ...(conversation.record.archivedAt === undefined
+        ? {}
+        : { archivedAt: conversation.record.archivedAt }),
       provider: conversation.record.provider,
       providerThreadId: conversation.providerThreadId,
       cwd: conversation.record.cwd,
@@ -1772,6 +1934,83 @@ export class HostService {
       lastActivityAt:
         conversation.record.lastActivityAt ?? conversation.record.updatedAt,
     }
+  }
+
+  #organizationMutationResponse(
+    conversationId: ConversationId,
+    actionId: ReturnType<typeof ActionIdSchema.parse>,
+    mutation: (
+      store: ConversationStore,
+      timestamp: ReturnType<typeof TimestampSchema.parse>,
+    ) => DurableConversationMutationResult,
+  ): RenameConversationResponse {
+    const store = this.#requireConversationOrganizationStore()
+    const existing = store.getConversation(conversationId)
+    if (existing === undefined || existing.status === 'creating') {
+      throw new HostServiceError('not_found', 'Conversation was not found', 404)
+    }
+
+    let result: DurableConversationMutationResult
+    try {
+      result = mutation(store, TimestampSchema.parse(this.#timestamp()))
+    } catch (error) {
+      if (error instanceof ConversationOrganizationConflictError) {
+        throw conversationOrganizationServiceError(error)
+      }
+      this.#handlePersistenceFailure(toError(error))
+      throw runtimeUnavailableError('Conversation durability is unavailable')
+    }
+
+    this.#syncRuntimeOrganization(result.conversation)
+    const summary = conversationSummary(result.conversation)
+    if (result.changed) this.#publishConversationUpdated(summary)
+    return {
+      protocolVersion,
+      actionId,
+      status: 'completed',
+      data: { conversation: summary },
+    }
+  }
+
+  #syncRuntimeOrganization(durable: DurableConversation): void {
+    const runtime = this.#conversations.get(durable.conversationId)
+    if (runtime === undefined) return
+    const record: Record<string, unknown> = {
+      ...runtime.record,
+      title: durable.title,
+      titleSource: durable.titleSource,
+      updatedAt: durable.updatedAt,
+    }
+    if (durable.pinnedAt === undefined) delete record.pinnedAt
+    else record.pinnedAt = durable.pinnedAt
+    if (durable.archivedAt === undefined) delete record.archivedAt
+    else record.archivedAt = durable.archivedAt
+    runtime.record = ConversationRecordSchema.parse(record)
+  }
+
+  #publishConversationUpdated(conversation: ConversationSummary): void {
+    this.publisher.publish(
+      HostEventSchema.parse({
+        conversationId: conversation.conversationId,
+        timestamp: conversation.updatedAt,
+        type: 'conversation.updated',
+        payload: { conversation },
+      }),
+    )
+  }
+
+  #requireConversationOrganizationStore(): ConversationStore {
+    if (
+      this.#persistence === undefined ||
+      this.#persistenceFailure !== undefined
+    ) {
+      throw new HostServiceError(
+        'runtime_unavailable',
+        'Durable Conversation organization is unavailable',
+        503,
+      )
+    }
+    return this.#persistence
   }
 
   async #reserveConversationProject(
@@ -1996,9 +2235,8 @@ function shouldGenerateConversationTitle(
   conversation: ConversationState,
 ): boolean {
   return (
-    conversation.record.title === undefined ||
-    (conversation.record.title === DEFAULT_CONVERSATION_TITLE &&
-      conversation.turns.size === 0)
+    conversation.record.titleSource === 'generated' &&
+    conversation.turns.size === 0
   )
 }
 
@@ -2013,10 +2251,13 @@ function isAttentionSourceEvent(
   )
 }
 
-function conversationSummary(record: ConversationRecord): ConversationSummary {
+function conversationSummary(
+  record: ConversationRecord | DurableConversation,
+): ConversationSummary {
   if (
     record.projectId === undefined ||
     record.title === undefined ||
+    record.titleSource === undefined ||
     record.lastActivityAt === undefined
   ) {
     throw new Error('Durable Conversation summary metadata is incomplete')
@@ -2025,6 +2266,11 @@ function conversationSummary(record: ConversationRecord): ConversationSummary {
     conversationId: record.conversationId,
     projectId: record.projectId,
     title: record.title,
+    titleSource: record.titleSource,
+    ...(record.pinnedAt === undefined ? {} : { pinnedAt: record.pinnedAt }),
+    ...(record.archivedAt === undefined
+      ? {}
+      : { archivedAt: record.archivedAt }),
     provider: record.provider,
     ...(record.model === undefined ? {} : { model: record.model }),
     ...(record.reasoning === undefined ? {} : { reasoning: record.reasoning }),
@@ -2033,6 +2279,52 @@ function conversationSummary(record: ConversationRecord): ConversationSummary {
     updatedAt: record.updatedAt,
     lastActivityAt: record.lastActivityAt,
   })
+}
+
+function archiveFilterForStore(
+  archived: ListProjectConversationsQuery['archived'],
+): 'active' | 'archived' | 'all' {
+  switch (archived) {
+    case 'false':
+      return 'active'
+    case 'true':
+      return 'archived'
+    case 'all':
+      return 'all'
+  }
+}
+
+function activeConversationArchiveError(): HostServiceError {
+  return new HostServiceError(
+    'conflict',
+    'An active Conversation cannot be archived',
+    409,
+  )
+}
+
+function archivedConversationControlError(): HostServiceError {
+  return new HostServiceError(
+    'conversation_archived',
+    'Archived Conversations must be unarchived before starting a Turn',
+    409,
+  )
+}
+
+function conversationOrganizationServiceError(
+  error: ConversationOrganizationConflictError,
+): HostServiceError {
+  switch (error.reason) {
+    case 'archived':
+      return archivedConversationControlError()
+    case 'active':
+      return activeConversationArchiveError()
+    case 'open_approval':
+      return new HostServiceError(
+        'conflict',
+        'A Conversation with an open Approval cannot be archived',
+        409,
+      )
+  }
 }
 
 function newConversationId(): ReturnType<typeof ConversationIdSchema.parse> {

@@ -614,7 +614,7 @@ Exit gate results:
 
 ### Phase 4D — Desktop Product Polish & Dogfooding
 
-**Status:** implemented; Owner acceptance is pending.
+**Status:** implemented, validated, accepted, and frozen.
 
 Implemented scope:
 
@@ -626,7 +626,7 @@ Implemented scope:
 
 Not included:
 
-- Conversation Rename, Archive, Pin, Delete, Search, or new organization state.
+- Conversation organization was outside this presentation-only phase; Phase 4E.1 below later adds its durable non-React model.
 - Tray/background-after-close behavior, notification history, custom window chrome, updater, remote access, or additional native capability.
 - Claude Code, OpenCode, another provider, or changes to Agent/Conversation ownership.
 - Persistence, Protocol v1, Host Runtime, Attention semantics, normalized event history, or a Desktop-specific React product tree.
@@ -635,7 +635,32 @@ Exit gate:
 
 - Focused presentation tests cover Tool grouping, Markdown and safe links, contained-path display, Turn/Diff navigation, Composer autofocus, long titles and paths, minimum-window density, and product truthfulness.
 - Existing Browser and Desktop product flows continue to use one shared Web UI and the frozen Host/Protocol boundaries.
-- Owner dogfooding must accept the resulting sustained-use experience before Phase 4D is described as accepted or frozen.
+- Owner dogfooding accepted the sustained-use experience; Phase 4D is frozen at commit `f0ebf69`.
+
+### Phase 4E.1 — Durable Conversation Organization Model
+
+**Status:** implemented; Owner acceptance is pending. Phase 4E.2 product UI has not started.
+
+Implemented scope:
+
+- SQLite migration 005 extends each durable Conversation with required `title_source` and nullable `pinned_at` / `archived_at` fields, active/archived ordering indexes, and a lightweight Project/title index. Existing titles backfill as `generated`; Project, Turn, Attention, provider Thread/Turn identities, snapshots, and `last_activity_at` remain intact. No FTS/Search service is added.
+- `titleSource` distinguishes `generated` and `manual`. Manual Rename normalizes NFC and whitespace, rejects empty or over-bound titles without truncation, sets the source to `manual`, and prevents the first canonical User input from overwriting it. Unrenamed Conversations retain deterministic generated-title behavior.
+- Pin/Unpin use `pinnedAt` as their only source of truth. Active history orders pinned Conversations first by `pinnedAt DESC`, then all rows by `lastActivityAt DESC` and `conversationId ASC`.
+- Archive/Unarchive use `archivedAt` independently of execution status. Archive atomically clears Pin and is rejected for starting/running/waiting or open-Approval Conversations. Archived detail and completed-review/failed Attention remain readable; Start Turn returns `conversation_archived` until explicit Unarchive.
+- The Project list query defaults to `archived=false`, strictly accepts `false`, `true`, or `all`, and orders archived history by `archivedAt DESC` plus identity. Organization writes update `updatedAt` but never `lastActivityAt`.
+- Protocol v1 adds exact Rename, Pin/Unpin, and Archive/Unarchive request/response contracts plus the presentation-safe `conversation.updated` SSE event. `packages/client` implements all five methods with `actionId`, `AbortSignal`, response validation, and route-identity checks.
+- Cold Rename/Pin/Archive writes operate on SQLite and synchronize public metadata only if a runtime record already exists. They never admit a Conversation to the bounded working set, start Codex, resume a provider Thread, or change private provider identity.
+
+Not included:
+
+- Rename, Pin, Archive, or archived-history React UI. No real navigation or action advertises these capabilities before Phase 4E.2.
+- Search UI/backend, FTS/semantic indexing, pagination, tags, folders, groups, bulk actions, or Conversation Delete.
+- Runtime refactoring, provider lifecycle changes, Attention redesign, Activity, tray/background runtime, remote operation, or another provider.
+
+Acceptance boundary:
+
+- Owner review must confirm migration safety, title ownership, stable active/archived ordering, archive control/Attention safety, restart durability, cold Provider isolation, typed Client behavior, and real Codex context resume before Phase 4E.1 is accepted or frozen.
+- Phase 4E.2 remains separately authorized and must not begin from this implementation status alone.
 
 ## Phase 5 — Machines
 

@@ -235,7 +235,7 @@ export class HttpBoundary {
     response.writeHead(204, {
       ...this.baseHeaders(allowedOrigin),
       'Access-Control-Allow-Headers': 'Content-Type, Last-Event-ID',
-      'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
+      'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
       'Access-Control-Max-Age': '600',
     })
     response.end()

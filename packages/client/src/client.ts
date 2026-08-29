@@ -2,6 +2,8 @@ import {
   ActionIdSchema,
   AttentionIdSchema,
   AttentionListResponseSchema,
+  ArchiveConversationRequestSchema,
+  ArchiveConversationResponseSchema,
   BootstrapSchema,
   ApprovalIdSchema,
   ConversationIdSchema,
@@ -21,19 +23,29 @@ import {
   ListAttentionQuerySchema,
   ListProjectsResponseSchema,
   ListProjectConversationsQuerySchema,
+  PinConversationRequestSchema,
+  PinConversationResponseSchema,
   ProjectIdSchema,
   ResolveApprovalRequestSchema,
   ResolveApprovalResponseSchema,
   ResolveAttentionRequestSchema,
   ResolveAttentionResponseSchema,
+  RenameConversationRequestSchema,
+  RenameConversationResponseSchema,
   SafeErrorEnvelopeSchema,
   StartTurnRequestSchema,
   StartTurnResponseSchema,
   TurnIdSchema,
+  UnarchiveConversationRequestSchema,
+  UnarchiveConversationResponseSchema,
+  UnpinConversationRequestSchema,
+  UnpinConversationResponseSchema,
   type ActionId,
   type ApprovalId,
   type AttentionId,
   type AttentionListResponse,
+  type ArchiveConversationRequest,
+  type ArchiveConversationResponse,
   type Bootstrap,
   type ConversationId,
   type ConversationListResponse,
@@ -53,12 +65,20 @@ import {
   type ListProjectsResponse,
   type ListProjectConversationsQuery,
   type ProjectId,
+  type PinConversationRequest,
+  type PinConversationResponse,
   type ResolveApprovalRequest,
   type ResolveApprovalResponse,
   type ResolveAttentionResponse,
+  type RenameConversationRequest,
+  type RenameConversationResponse,
   type StartTurnRequest,
   type StartTurnResponse,
   type TurnId,
+  type UnarchiveConversationRequest,
+  type UnarchiveConversationResponse,
+  type UnpinConversationRequest,
+  type UnpinConversationResponse,
   protocolVersion,
 } from '@codetether/protocol'
 
@@ -91,6 +111,7 @@ export interface ConnectEventsOptions extends RequestOptions {
 export interface ListProjectConversationsOptions extends RequestOptions {
   readonly provider?: ListProjectConversationsQuery['provider']
   readonly status?: ListProjectConversationsQuery['status']
+  readonly archived?: boolean | 'all'
   readonly limit?: ListProjectConversationsQuery['limit']
 }
 
@@ -191,6 +212,9 @@ export class CodeTetherClient {
           ? {}
           : { provider: options.provider }),
         ...(options.status === undefined ? {} : { status: options.status }),
+        ...(options.archived === undefined
+          ? {}
+          : { archived: String(options.archived) }),
         ...(options.limit === undefined ? {} : { limit: options.limit }),
       },
       'list-project-conversations query',
@@ -198,6 +222,7 @@ export class CodeTetherClient {
     const search = new URLSearchParams({ limit: String(query.limit) })
     if (query.provider !== undefined) search.set('provider', query.provider)
     if (query.status !== undefined) search.set('status', query.status)
+    search.set('archived', query.archived)
 
     const response = await this.#request(
       `/api/v1/projects/${encodeURIComponent(project)}/conversations?${search.toString()}`,
@@ -212,6 +237,15 @@ export class CodeTetherClient {
         (conversation) => conversation.projectId === project,
       ),
       'Conversation list contains a Conversation from another Project',
+    )
+    assertProtocolIdentity(
+      query.archived === 'all' ||
+        response.conversations.every(
+          (conversation) =>
+            (conversation.archivedAt !== undefined) ===
+            (query.archived === 'true'),
+        ),
+      'Conversation list contains a Conversation outside the requested archive filter',
     )
     return response
   }
@@ -343,6 +377,91 @@ export class CodeTetherClient {
       CreateConversationResponseSchema,
       jsonRequest(request, options.signal),
       request.actionId,
+    )
+  }
+
+  async renameConversation(
+    conversationId: ConversationId,
+    input: RenameConversationRequest,
+    options: RequestOptions = {},
+  ): Promise<RenameConversationResponse> {
+    return await this.#mutateConversationOrganization(
+      conversationId,
+      input,
+      RenameConversationRequestSchema,
+      RenameConversationResponseSchema,
+      '',
+      'PATCH',
+      'rename-conversation',
+      options,
+    )
+  }
+
+  async pinConversation(
+    conversationId: ConversationId,
+    input: PinConversationRequest,
+    options: RequestOptions = {},
+  ): Promise<PinConversationResponse> {
+    return await this.#mutateConversationOrganization(
+      conversationId,
+      input,
+      PinConversationRequestSchema,
+      PinConversationResponseSchema,
+      '/pin',
+      'POST',
+      'pin-conversation',
+      options,
+    )
+  }
+
+  async unpinConversation(
+    conversationId: ConversationId,
+    input: UnpinConversationRequest,
+    options: RequestOptions = {},
+  ): Promise<UnpinConversationResponse> {
+    return await this.#mutateConversationOrganization(
+      conversationId,
+      input,
+      UnpinConversationRequestSchema,
+      UnpinConversationResponseSchema,
+      '/unpin',
+      'POST',
+      'unpin-conversation',
+      options,
+    )
+  }
+
+  async archiveConversation(
+    conversationId: ConversationId,
+    input: ArchiveConversationRequest,
+    options: RequestOptions = {},
+  ): Promise<ArchiveConversationResponse> {
+    return await this.#mutateConversationOrganization(
+      conversationId,
+      input,
+      ArchiveConversationRequestSchema,
+      ArchiveConversationResponseSchema,
+      '/archive',
+      'POST',
+      'archive-conversation',
+      options,
+    )
+  }
+
+  async unarchiveConversation(
+    conversationId: ConversationId,
+    input: UnarchiveConversationRequest,
+    options: RequestOptions = {},
+  ): Promise<UnarchiveConversationResponse> {
+    return await this.#mutateConversationOrganization(
+      conversationId,
+      input,
+      UnarchiveConversationRequestSchema,
+      UnarchiveConversationResponseSchema,
+      '/unarchive',
+      'POST',
+      'unarchive-conversation',
+      options,
     )
   }
 
@@ -524,11 +643,45 @@ export class CodeTetherClient {
     )
   }
 
+  async #mutateConversationOrganization<
+    TRequest extends { actionId: ActionId },
+    TResponse extends {
+      data: { conversation: { conversationId: ConversationId } }
+    },
+  >(
+    conversationId: ConversationId,
+    input: TRequest,
+    requestSchema: RuntimeSchema<TRequest>,
+    responseSchema: RuntimeSchema<TResponse>,
+    suffix: string,
+    method: 'PATCH' | 'POST',
+    operation: string,
+    options: RequestOptions,
+  ): Promise<TResponse> {
+    const conversation = parseProtocol(
+      ConversationIdSchema,
+      conversationId,
+      `${operation} id`,
+    )
+    const request = parseProtocol(requestSchema, input, `${operation} request`)
+    const response = await this.#request(
+      `/api/v1/conversations/${encodeURIComponent(conversation)}${suffix}`,
+      responseSchema,
+      { ...jsonRequest(request, options.signal), method },
+      request.actionId,
+    )
+    assertProtocolIdentity(
+      response.data.conversation.conversationId === conversation,
+      'Conversation organization response does not match the requested Conversation',
+    )
+    return response
+  }
+
   async #request<T>(
     path: string,
     schema: RuntimeSchema<T>,
     init: RequestInit,
-    expectedActionId?: CreateConversationRequest['actionId'],
+    expectedActionId?: ActionId,
     inspectPayload?: (value: unknown) => void,
   ): Promise<T> {
     const response = await this.#fetch(this.#url(path), {
@@ -585,7 +738,7 @@ function jsonRequest(body: unknown, signal?: AbortSignal): RequestInit {
 async function responseError(
   response: Response,
   maxResponseBytes: number,
-  expectedActionId?: CreateConversationRequest['actionId'],
+  expectedActionId?: ActionId,
 ): Promise<Error> {
   const payload = await readJson(response, maxResponseBytes)
   const envelope = parseProtocol(

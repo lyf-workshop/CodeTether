@@ -14,6 +14,7 @@ import {
   ConversationRecordSchema,
   ConversationStatusSchema,
   ConversationSummarySchema,
+  ManualConversationTitleSchema,
   ProjectRecordSchema,
   TurnInputSchema,
   TurnRecordSchema,
@@ -87,11 +88,17 @@ export const conversationListLimits = {
   maximum: 100,
 } as const
 
+export const ConversationArchiveFilterSchema = z.enum(['false', 'true', 'all'])
+export type ConversationArchiveFilter = z.infer<
+  typeof ConversationArchiveFilterSchema
+>
+
 /** Bounded filters for the durable Project-scoped Conversation index. */
 export const ListProjectConversationsQuerySchema = z
   .object({
     provider: z.literal('codex').optional(),
     status: ConversationStatusSchema.optional(),
+    archived: ConversationArchiveFilterSchema.default('false'),
     limit: z.coerce
       .number()
       .int()
@@ -105,6 +112,44 @@ export type ListProjectConversationsQueryInput = z.input<
 >
 export type ListProjectConversationsQuery = z.output<
   typeof ListProjectConversationsQuerySchema
+>
+
+export const RenameConversationRequestSchema = z
+  .object({
+    actionId: ActionIdSchema,
+    title: ManualConversationTitleSchema,
+  })
+  .strict()
+export type RenameConversationRequest = z.infer<
+  typeof RenameConversationRequestSchema
+>
+
+export const PinConversationRequestSchema = z
+  .object({ actionId: ActionIdSchema })
+  .strict()
+export type PinConversationRequest = z.infer<
+  typeof PinConversationRequestSchema
+>
+
+export const UnpinConversationRequestSchema = z
+  .object({ actionId: ActionIdSchema })
+  .strict()
+export type UnpinConversationRequest = z.infer<
+  typeof UnpinConversationRequestSchema
+>
+
+export const ArchiveConversationRequestSchema = z
+  .object({ actionId: ActionIdSchema })
+  .strict()
+export type ArchiveConversationRequest = z.infer<
+  typeof ArchiveConversationRequestSchema
+>
+
+export const UnarchiveConversationRequestSchema = z
+  .object({ actionId: ActionIdSchema })
+  .strict()
+export type UnarchiveConversationRequest = z.infer<
+  typeof UnarchiveConversationRequestSchema
 >
 
 export const ConversationListResponseSchema = z
@@ -254,6 +299,13 @@ export const DeleteProjectDataSchema = z
   .strict()
 export type DeleteProjectData = z.infer<typeof DeleteProjectDataSchema>
 
+export const ConversationOrganizationDataSchema = z
+  .object({ conversation: ConversationSummarySchema })
+  .strict()
+export type ConversationOrganizationData = z.infer<
+  typeof ConversationOrganizationDataSchema
+>
+
 export const MutationStatusSchema = z.enum([
   'accepted',
   'completed',
@@ -311,3 +363,38 @@ export const DeleteProjectResponseSchema = mutationResponseSchema(
   DeleteProjectDataSchema,
 )
 export type DeleteProjectResponse = z.infer<typeof DeleteProjectResponseSchema>
+
+export const RenameConversationResponseSchema = mutationResponseSchema(
+  ConversationOrganizationDataSchema,
+)
+export type RenameConversationResponse = z.infer<
+  typeof RenameConversationResponseSchema
+>
+
+export const PinConversationResponseSchema = mutationResponseSchema(
+  ConversationOrganizationDataSchema,
+)
+export type PinConversationResponse = z.infer<
+  typeof PinConversationResponseSchema
+>
+
+export const UnpinConversationResponseSchema = mutationResponseSchema(
+  ConversationOrganizationDataSchema,
+)
+export type UnpinConversationResponse = z.infer<
+  typeof UnpinConversationResponseSchema
+>
+
+export const ArchiveConversationResponseSchema = mutationResponseSchema(
+  ConversationOrganizationDataSchema,
+)
+export type ArchiveConversationResponse = z.infer<
+  typeof ArchiveConversationResponseSchema
+>
+
+export const UnarchiveConversationResponseSchema = mutationResponseSchema(
+  ConversationOrganizationDataSchema,
+)
+export type UnarchiveConversationResponse = z.infer<
+  typeof UnarchiveConversationResponseSchema
+>

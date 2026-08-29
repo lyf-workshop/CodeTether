@@ -5,6 +5,8 @@ import {
   AttentionIdSchema,
   AttentionItemSchema,
   AttentionListResponseSchema,
+  ArchiveConversationRequestSchema,
+  ArchiveConversationResponseSchema,
   BootstrapSchema,
   ConversationIdSchema,
   ConversationListResponseSchema,
@@ -28,19 +30,29 @@ import {
   ListAttentionQuerySchema,
   ListProjectsResponseSchema,
   ListProjectConversationsQuerySchema,
+  ManualConversationTitleSchema,
+  PinConversationRequestSchema,
+  PinConversationResponseSchema,
   ProjectIdSchema,
   ProjectRecordSchema,
   ResolveApprovalRequestSchema,
   ResolveAttentionRequestSchema,
   ResolveAttentionResponseSchema,
+  RenameConversationRequestSchema,
+  RenameConversationResponseSchema,
   SafeErrorEnvelopeSchema,
   StartTurnRequestSchema,
   TurnRecordSchema,
+  UnarchiveConversationRequestSchema,
+  UnarchiveConversationResponseSchema,
+  UnpinConversationRequestSchema,
+  UnpinConversationResponseSchema,
   conversationRuntimeWireLimits,
   attentionListLimits,
   conversationDetailWireLimits,
   formatLastEventId,
   hostEventTypes,
+  manualConversationTitleLimits,
   parseLastEventId,
   protocolVersion,
   conversationListLimits,
@@ -81,6 +93,7 @@ const conversationSummary = {
   conversationId,
   projectId,
   title: 'Inspect the workspace',
+  titleSource: 'generated',
   provider: 'codex',
   model: 'gpt-5',
   reasoning: 'high',
@@ -274,8 +287,29 @@ test('validates bounded Project identity and records', () => {
       ...conversation,
       projectId,
       title: conversationSummary.title,
+      titleSource: conversationSummary.titleSource,
+      pinnedAt: timestamp,
     }).success,
     true,
+  )
+  assert.equal(
+    ConversationRecordSchema.safeParse({
+      ...conversation,
+      projectId,
+      title: conversationSummary.title,
+      titleSource: conversationSummary.titleSource,
+      pinnedAt: timestamp,
+      archivedAt: timestamp,
+    }).success,
+    false,
+  )
+  assert.equal(
+    ConversationRecordSchema.safeParse({
+      ...conversation,
+      titleSource: conversationSummary.titleSource,
+    }).success,
+    false,
+    'a title source cannot exist without its public title',
   )
   assert.equal(
     ConversationRecordSchema.safeParse(conversation).success,
@@ -301,10 +335,44 @@ test('validates the durable Conversation summary without provider internals', ()
       false,
     )
   }
+  assert.equal(
+    ConversationSummarySchema.safeParse({
+      ...conversationSummary,
+      pinnedAt: timestamp,
+      archivedAt: timestamp,
+    }).success,
+    false,
+    'an archived Conversation cannot remain pinned',
+  )
+})
+
+test('normalizes and strictly bounds manual Conversation titles', () => {
+  assert.equal(
+    ManualConversationTitleSchema.parse('  Re\u0301sume\t  登录模块  '),
+    'Résume 登录模块',
+  )
+  assert.equal(
+    RenameConversationRequestSchema.parse({
+      actionId,
+      title: '  Manual\n\n title  ',
+    }).title,
+    'Manual title',
+  )
+  for (const title of [
+    '   ',
+    'x'.repeat(manualConversationTitleLimits.codeUnits + 1),
+    `${'x'.repeat(manualConversationTitleLimits.graphemes)}😀`,
+  ]) {
+    assert.equal(
+      RenameConversationRequestSchema.safeParse({ actionId, title }).success,
+      false,
+    )
+  }
 })
 
 test('validates bounded Project Conversation list queries and responses', () => {
   assert.deepEqual(ListProjectConversationsQuerySchema.parse({}), {
+    archived: 'false',
     limit: conversationListLimits.default,
   })
   assert.deepEqual(
@@ -313,8 +381,19 @@ test('validates bounded Project Conversation list queries and responses', () => 
       status: 'completed',
       limit: '25',
     }),
-    { provider: 'codex', status: 'completed', limit: 25 },
+    {
+      provider: 'codex',
+      status: 'completed',
+      archived: 'false',
+      limit: 25,
+    },
   )
+  for (const archived of ['false', 'true', 'all']) {
+    assert.equal(
+      ListProjectConversationsQuerySchema.parse({ archived }).archived,
+      archived,
+    )
+  }
   for (const limit of [0, conversationListLimits.maximum + 1, 1.5]) {
     assert.equal(
       ListProjectConversationsQuerySchema.safeParse({ limit }).success,
@@ -325,6 +404,11 @@ test('validates bounded Project Conversation list queries and responses', () => 
     ListProjectConversationsQuerySchema.safeParse({ provider: 'claude' })
       .success,
     false,
+  )
+  assert.equal(
+    ListProjectConversationsQuerySchema.safeParse({ archived: false }).success,
+    false,
+    'wire archive filters are strict URL enum strings',
   )
   assert.equal(
     ListProjectConversationsQuerySchema.safeParse({ status: 'active' }).success,
@@ -346,6 +430,54 @@ test('validates bounded Project Conversation list queries and responses', () => 
     }).success,
     false,
   )
+})
+
+test('validates explicit Conversation organization mutation envelopes', () => {
+  const requests = [
+    RenameConversationRequestSchema.parse({ actionId, title: 'Manual title' }),
+    PinConversationRequestSchema.parse({ actionId }),
+    UnpinConversationRequestSchema.parse({ actionId }),
+    ArchiveConversationRequestSchema.parse({ actionId }),
+    UnarchiveConversationRequestSchema.parse({ actionId }),
+  ]
+  assert.deepEqual(requests[0], { actionId, title: 'Manual title' })
+  for (const request of requests.slice(1)) {
+    assert.deepEqual(request, { actionId })
+  }
+
+  const response = {
+    protocolVersion,
+    actionId,
+    status: 'completed',
+    data: {
+      conversation: {
+        ...conversationSummary,
+        title: 'Manual title',
+        titleSource: 'manual',
+      },
+    },
+  }
+  for (const schema of [
+    RenameConversationResponseSchema,
+    PinConversationResponseSchema,
+    UnpinConversationResponseSchema,
+    ArchiveConversationResponseSchema,
+    UnarchiveConversationResponseSchema,
+  ]) {
+    assert.deepEqual(schema.parse(response), response)
+    assert.equal(
+      schema.safeParse({
+        ...response,
+        data: {
+          conversation: {
+            ...response.data.conversation,
+            providerThreadId: 'private',
+          },
+        },
+      }).success,
+      false,
+    )
+  }
 })
 
 test('validates durable Attention identities and safe discriminated payloads', () => {
@@ -1251,6 +1383,12 @@ function createHostEventFixtures() {
       timestamp,
       type: 'conversation.started',
       payload: { conversation },
+    },
+    {
+      conversationId,
+      timestamp,
+      type: 'conversation.updated',
+      payload: { conversation: conversationSummary },
     },
     {
       ...turnIdentity,

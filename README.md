@@ -186,8 +186,8 @@ The Inbox requests up to 100 open items in Host-owned priority order. It shows o
 - If Codex can no longer resume the stored provider Thread, local durable history remains readable but new controls return `provider_conversation_unavailable`.
 - Only Codex, text Turn start, one-shot command Approval, and Turn interrupt are connected.
 - Attention currently models only structured Approval, completed-review, and failed-Turn semantics. Structured Agent questions, read/unread, notifications, and Activity are not implemented.
-- Projects and Conversations are real local surfaces, and Desktop supports explicit single-directory native selection. Project discovery/import, drag-and-drop, recent folders, rename/relocate, Conversation rename/archive/delete, history pagination, and multiple Machine locations are not implemented.
-- Stop/terminate, queue/steer, attachments, Desktop notifications, tray behavior, updater/signing, remote access, authentication, and other providers are not implemented.
+- Projects and Conversations are real local surfaces, and Desktop supports explicit single-directory native selection. Project discovery/import, drag-and-drop, recent folders, Project rename/relocate, Conversation organization UI/delete, history pagination, and multiple Machine locations are not implemented; durable Conversation Rename/Pin/Archive APIs exist but are not yet exposed in React.
+- Stop/terminate, queue/steer, attachments, tray/closed-app notification behavior, updater/signing, remote access, authentication, and other providers are not implemented.
 - Phase 4B remains Windows-first. macOS/Linux packaging, native dialog, signing, distribution, and process-tree validation remain future work.
 - CodeTether Desktop uses the fixed loopback port 4317. It reports and leaves any existing CodeTether Host or unknown occupant untouched rather than attaching or killing by port.
 - The packaged Host does not need a system Node.js runtime, but the current Desktop build pipeline requires Node 25.5+ to produce the official SEA executable. Real Codex work still requires a compatible local Codex installation.

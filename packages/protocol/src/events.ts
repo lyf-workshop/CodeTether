@@ -17,11 +17,13 @@ import {
   ApprovalRecordSchema,
   AttentionItemSchema,
   ConversationRecordSchema,
+  ConversationSummarySchema,
   TurnRecordSchema,
 } from './records.js'
 
 export const hostEventTypes = [
   'conversation.started',
+  'conversation.updated',
   'turn.started',
   'message.delta',
   'message.completed',
@@ -47,6 +49,13 @@ export const ConversationStartedPayloadSchema = z
   .strict()
 export type ConversationStartedPayload = z.infer<
   typeof ConversationStartedPayloadSchema
+>
+
+export const ConversationUpdatedPayloadSchema = z
+  .object({ conversation: ConversationSummarySchema })
+  .strict()
+export type ConversationUpdatedPayload = z.infer<
+  typeof ConversationUpdatedPayloadSchema
 >
 
 export const TurnStartedPayloadSchema = z
@@ -256,6 +265,11 @@ const conversationStartedEventSchema = eventSchema(
   'conversation.started',
   ConversationStartedPayloadSchema,
 )
+const conversationUpdatedEventSchema = eventSchema(
+  noTurnIdentityShape,
+  'conversation.updated',
+  ConversationUpdatedPayloadSchema,
+)
 const turnStartedEventSchema = eventSchema(
   turnIdentityShape,
   'turn.started',
@@ -334,6 +348,7 @@ const streamResetEventSchema = eventSchema(
 
 const hostEventOptions = [
   conversationStartedEventSchema,
+  conversationUpdatedEventSchema,
   turnStartedEventSchema,
   messageDeltaEventSchema,
   messageCompletedEventSchema,
@@ -367,6 +382,7 @@ const sequencingShape = {
 }
 const sequencedHostEventEnvelopeOptions = [
   conversationStartedEventSchema.extend(sequencingShape),
+  conversationUpdatedEventSchema.extend(sequencingShape),
   turnStartedEventSchema.extend(sequencingShape),
   messageDeltaEventSchema.extend(sequencingShape),
   messageCompletedEventSchema.extend(sequencingShape),
@@ -424,6 +440,12 @@ function validatePayloadIdentity(
 ): void {
   if (
     event.type === 'conversation.started' &&
+    event.payload.conversation.conversationId !== event.conversationId
+  ) {
+    addIdentityIssue(context, ['payload', 'conversation', 'conversationId'])
+  }
+  if (
+    event.type === 'conversation.updated' &&
     event.payload.conversation.conversationId !== event.conversationId
   ) {
     addIdentityIssue(context, ['payload', 'conversation', 'conversationId'])

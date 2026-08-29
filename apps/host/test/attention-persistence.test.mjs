@@ -28,10 +28,18 @@ test('migration 004 creates an empty Attention index without backfilling durable
 
     const v3 = new DatabaseSync(databasePath)
     v3.exec(`
+      DROP INDEX idx_conversations_project_title;
+      DROP INDEX idx_conversations_project_archived_order;
+      DROP INDEX idx_conversations_project_active_order;
+      CREATE INDEX idx_conversations_project_last_activity
+        ON conversations(project_id, last_activity_at DESC, conversation_id ASC);
+      ALTER TABLE conversations DROP COLUMN archived_at;
+      ALTER TABLE conversations DROP COLUMN pinned_at;
+      ALTER TABLE conversations DROP COLUMN title_source;
       DROP TABLE attention_items;
       DROP INDEX idx_conversations_attention_identity;
       DROP INDEX idx_turns_attention_identity;
-      DELETE FROM schema_migrations WHERE version = 4;
+      DELETE FROM schema_migrations WHERE version IN (4, 5);
     `)
     assert.equal(
       v3.prepare('SELECT MAX(version) AS version FROM schema_migrations').get()
@@ -42,13 +50,14 @@ test('migration 004 creates an empty Attention index without backfilling durable
 
     const migrated = ConversationStore.open({ databasePath })
     assert.equal(migrated.schemaVersion, currentSchemaVersion)
-    assert.equal(currentSchemaVersion, 4)
+    assert.equal(currentSchemaVersion, 5)
     assert.equal(migrated.listProjects().length, 1)
     assert.equal(migrated.listConversations().length, 1)
     assert.equal(migrated.countTurns(conversationId), 1)
     const conversation = migrated.getConversation(conversationId)
     assert.equal(conversation.projectId, projectId)
     assert.equal(conversation.title, 'Attention')
+    assert.equal(conversation.titleSource, 'generated')
     assert.equal(conversation.providerThreadId, `provider-${conversationId}`)
     const retainedTurn = migrated.getTurn(turnId)
     assert.equal(retainedTurn.providerTurnId, `provider-${turnId}`)

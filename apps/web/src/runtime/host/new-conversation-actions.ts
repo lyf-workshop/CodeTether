@@ -112,6 +112,7 @@ export function newConversationErrorMessage(error: unknown): string {
     case 'provider_error':
     case 'provider_conversation_unavailable':
       return 'Codex 未能创建会话。'
+    case 'conversation_archived':
     case 'project_has_conversations':
     case 'internal':
       return 'CodeTether 未能创建会话。'

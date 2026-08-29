@@ -156,6 +156,7 @@ export function projectErrorMessage(
       return 'CodeTether 本地服务暂时不可用。'
     case 'provider_error':
     case 'provider_conversation_unavailable':
+    case 'conversation_archived':
     case 'internal':
       return operation === 'load'
         ? 'CodeTether 未能读取项目。'

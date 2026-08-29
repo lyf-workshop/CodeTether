@@ -72,6 +72,11 @@ const migrations: readonly Migration[] = [
     name: 'attention',
     up: migrateAttention,
   },
+  {
+    version: 5,
+    name: 'conversation_organization',
+    up: migrateConversationOrganization,
+  },
 ]
 
 export const currentSchemaVersion = migrations.at(-1)?.version ?? 0
@@ -426,6 +431,38 @@ function migrateAttention(database: DatabaseSync): void {
 
     CREATE INDEX idx_attention_conversation_order
       ON attention_items(conversation_id, created_at DESC, attention_id ASC);
+  `)
+}
+
+function migrateConversationOrganization(database: DatabaseSync): void {
+  database.exec(`
+    ALTER TABLE conversations ADD COLUMN title_source TEXT NOT NULL
+      DEFAULT 'generated'
+      CHECK (title_source IN ('generated', 'manual'));
+
+    ALTER TABLE conversations ADD COLUMN pinned_at TEXT;
+
+    ALTER TABLE conversations ADD COLUMN archived_at TEXT
+      CHECK (archived_at IS NULL OR pinned_at IS NULL);
+
+    DROP INDEX idx_conversations_project_last_activity;
+
+    CREATE INDEX idx_conversations_project_active_order
+      ON conversations(
+        project_id,
+        (pinned_at IS NULL),
+        pinned_at DESC,
+        last_activity_at DESC,
+        conversation_id ASC
+      )
+      WHERE archived_at IS NULL AND status <> 'creating';
+
+    CREATE INDEX idx_conversations_project_archived_order
+      ON conversations(project_id, archived_at DESC, conversation_id ASC)
+      WHERE archived_at IS NOT NULL AND status <> 'creating';
+
+    CREATE INDEX idx_conversations_project_title
+      ON conversations(project_id, title, conversation_id ASC);
   `)
 }
 

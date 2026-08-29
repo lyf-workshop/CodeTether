@@ -142,6 +142,11 @@ export class ConversationRuntimeHistory {
   apply(
     event: Exclude<HostEventEnvelope, { readonly type: 'stream.reset' }>,
   ): RuntimeHistoryEviction {
+    if (event.type === 'conversation.updated') {
+      throw new Error(
+        'Conversation metadata events must not enter runtime history',
+      )
+    }
     const state = this.#stateFor(event)
     const snapshotRevision = state.snapshotRevision
     const evictedTurnIds: TurnId[] = []

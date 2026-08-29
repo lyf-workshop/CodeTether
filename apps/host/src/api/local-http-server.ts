@@ -9,6 +9,8 @@ import {
   ApprovalIdSchema,
   AttentionIdSchema,
   AttentionListResponseSchema,
+  ArchiveConversationRequestSchema,
+  ArchiveConversationResponseSchema,
   BootstrapResponseSchema,
   ConversationIdSchema,
   ConversationListResponseSchema,
@@ -30,10 +32,18 @@ import {
   ResolveAttentionResponseSchema,
   ListProjectsResponseSchema,
   ListProjectConversationsQuerySchema,
+  PinConversationRequestSchema,
+  PinConversationResponseSchema,
   ProjectIdSchema,
+  RenameConversationRequestSchema,
+  RenameConversationResponseSchema,
   StartTurnRequestSchema,
   StartTurnResponseSchema,
   TurnIdSchema,
+  UnarchiveConversationRequestSchema,
+  UnarchiveConversationResponseSchema,
+  UnpinConversationRequestSchema,
+  UnpinConversationResponseSchema,
 } from '@codetether/protocol'
 
 import { HostService } from './host-service.js'
@@ -336,17 +346,139 @@ export class LocalHttpServer {
         url.pathname,
         /^\/api\/v1\/conversations\/([^/]+)$/u,
       )
-      if (request.method === 'GET' && conversationRoute !== undefined) {
+      if (conversationRoute !== undefined) {
         const conversationId = this.#http.parseRouteId(
           ConversationIdSchema,
           conversationRoute[0],
           'conversationId',
         )
+        if (request.method === 'GET') {
+          this.#http.writeJson(
+            response,
+            200,
+            GetConversationResponseSchema.parse(
+              this.#service.getConversation(conversationId),
+            ),
+            context.allowedOrigin,
+          )
+          return
+        }
+        if (request.method === 'PATCH') {
+          const body = await this.#http.readValidatedBody(
+            request,
+            RenameConversationRequestSchema,
+          )
+          context.actionId = body.actionId
+          this.#http.writeJson(
+            response,
+            200,
+            RenameConversationResponseSchema.parse(
+              await this.#service.renameConversation(conversationId, body),
+            ),
+            context.allowedOrigin,
+          )
+          return
+        }
+      }
+
+      const conversationPin = this.#http.matchPath(
+        url.pathname,
+        /^\/api\/v1\/conversations\/([^/]+)\/pin$/u,
+      )
+      if (request.method === 'POST' && conversationPin !== undefined) {
+        const conversationId = this.#http.parseRouteId(
+          ConversationIdSchema,
+          conversationPin[0],
+          'conversationId',
+        )
+        const body = await this.#http.readValidatedBody(
+          request,
+          PinConversationRequestSchema,
+        )
+        context.actionId = body.actionId
         this.#http.writeJson(
           response,
           200,
-          GetConversationResponseSchema.parse(
-            this.#service.getConversation(conversationId),
+          PinConversationResponseSchema.parse(
+            await this.#service.pinConversation(conversationId, body),
+          ),
+          context.allowedOrigin,
+        )
+        return
+      }
+
+      const conversationUnpin = this.#http.matchPath(
+        url.pathname,
+        /^\/api\/v1\/conversations\/([^/]+)\/unpin$/u,
+      )
+      if (request.method === 'POST' && conversationUnpin !== undefined) {
+        const conversationId = this.#http.parseRouteId(
+          ConversationIdSchema,
+          conversationUnpin[0],
+          'conversationId',
+        )
+        const body = await this.#http.readValidatedBody(
+          request,
+          UnpinConversationRequestSchema,
+        )
+        context.actionId = body.actionId
+        this.#http.writeJson(
+          response,
+          200,
+          UnpinConversationResponseSchema.parse(
+            await this.#service.unpinConversation(conversationId, body),
+          ),
+          context.allowedOrigin,
+        )
+        return
+      }
+
+      const conversationArchive = this.#http.matchPath(
+        url.pathname,
+        /^\/api\/v1\/conversations\/([^/]+)\/archive$/u,
+      )
+      if (request.method === 'POST' && conversationArchive !== undefined) {
+        const conversationId = this.#http.parseRouteId(
+          ConversationIdSchema,
+          conversationArchive[0],
+          'conversationId',
+        )
+        const body = await this.#http.readValidatedBody(
+          request,
+          ArchiveConversationRequestSchema,
+        )
+        context.actionId = body.actionId
+        this.#http.writeJson(
+          response,
+          200,
+          ArchiveConversationResponseSchema.parse(
+            await this.#service.archiveConversation(conversationId, body),
+          ),
+          context.allowedOrigin,
+        )
+        return
+      }
+
+      const conversationUnarchive = this.#http.matchPath(
+        url.pathname,
+        /^\/api\/v1\/conversations\/([^/]+)\/unarchive$/u,
+      )
+      if (request.method === 'POST' && conversationUnarchive !== undefined) {
+        const conversationId = this.#http.parseRouteId(
+          ConversationIdSchema,
+          conversationUnarchive[0],
+          'conversationId',
+        )
+        const body = await this.#http.readValidatedBody(
+          request,
+          UnarchiveConversationRequestSchema,
+        )
+        context.actionId = body.actionId
+        this.#http.writeJson(
+          response,
+          200,
+          UnarchiveConversationResponseSchema.parse(
+            await this.#service.unarchiveConversation(conversationId, body),
           ),
           context.allowedOrigin,
         )

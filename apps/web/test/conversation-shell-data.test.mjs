@@ -188,10 +188,7 @@ test('new Conversation errors use safe product copy', () => {
     newConversationErrorMessage(unavailable),
     '项目目录当前不可用，暂时不能创建会话。',
   )
-  assert.equal(
-    newConversationErrorMessage(runtime),
-    'Codex Runtime 当前不可用。',
-  )
+  assert.equal(newConversationErrorMessage(runtime), 'Codex 当前不可用。')
   assert.equal(
     newConversationErrorMessage(unavailable).includes('private'),
     false,

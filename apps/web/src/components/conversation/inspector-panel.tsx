@@ -120,9 +120,15 @@ function ConversationInfo({ conversation }: ConversationInfoProps) {
 
 interface ChangesSummaryProps {
   changes: ConversationChangesViewModel
+  onChangeSelect?: (changeId: string) => void
+  selectedChangeId?: string
 }
 
-function ChangesSummary({ changes }: ChangesSummaryProps) {
+function ChangesSummary({
+  changes,
+  onChangeSelect,
+  selectedChangeId,
+}: ChangesSummaryProps) {
   const { files, totals } = changes
   const totalsSummary = (
     <div
@@ -149,36 +155,50 @@ function ChangesSummary({ changes }: ChangesSummaryProps) {
       {files.length > 0 ? (
         <ul aria-label={`${files.length} 个变更文件`} className="space-y-0.5">
           {files.map((change) => (
-            <li
-              key={change.id}
-              className="flex min-h-7 min-w-0 items-center gap-2 text-sm"
-            >
-              <FileCode2
-                aria-hidden="true"
-                className="size-3.5 shrink-0 text-text-muted"
-              />
-              <span
-                className="min-w-0 flex-1 truncate font-regular text-text-primary"
-                title={change.name}
+            <li key={change.id} className="min-w-0">
+              <button
+                type="button"
+                aria-current={
+                  selectedChangeId === change.id ? 'location' : undefined
+                }
+                disabled={onChangeSelect === undefined}
+                onClick={() => onChangeSelect?.(change.id)}
+                className={cn(
+                  'flex min-h-8 w-full min-w-0 items-center gap-2 rounded-sm px-1.5 text-left text-sm outline-none transition-colors motion-reduce:transition-none',
+                  onChangeSelect === undefined
+                    ? 'cursor-default'
+                    : 'hover:bg-surface-muted/55 focus-visible:ring-2 focus-visible:ring-ring/60',
+                  selectedChangeId === change.id &&
+                    'bg-primary-muted/45 text-text-primary',
+                )}
               >
-                {change.name}
-              </span>
-              <span
-                aria-label={`新增 ${change.additions} 行`}
-                className="shrink-0 font-medium tabular-nums text-success/90"
-              >
-                +{change.additions}
-              </span>
-              {change.deletions > 0 ? (
+                <FileCode2
+                  aria-hidden="true"
+                  className="size-3.5 shrink-0 text-text-muted"
+                />
                 <span
-                  aria-label={`删除 ${change.deletions} 行`}
-                  className="w-5 shrink-0 font-medium tabular-nums text-danger/90"
+                  className="min-w-0 flex-1 truncate font-regular text-text-primary"
+                  title={change.path}
                 >
-                  -{change.deletions}
+                  {change.name}
                 </span>
-              ) : (
-                <span aria-hidden="true" className="w-5 shrink-0" />
-              )}
+                <span
+                  aria-label={`新增 ${change.additions} 行`}
+                  className="shrink-0 font-medium tabular-nums text-success/90"
+                >
+                  +{change.additions}
+                </span>
+                {change.deletions > 0 ? (
+                  <span
+                    aria-label={`删除 ${change.deletions} 行`}
+                    className="w-5 shrink-0 font-medium tabular-nums text-danger/90"
+                  >
+                    -{change.deletions}
+                  </span>
+                ) : (
+                  <span aria-hidden="true" className="w-5 shrink-0" />
+                )}
+              </button>
             </li>
           ))}
         </ul>
@@ -272,7 +292,12 @@ function ContextSummary({ context, visibleCount }: ContextSummaryProps) {
 
 type OverviewPaneProps = Pick<
   InspectorPanelProps,
-  'conversation' | 'changes' | 'terminal' | 'context'
+  | 'conversation'
+  | 'changes'
+  | 'terminal'
+  | 'context'
+  | 'onChangeSelect'
+  | 'selectedChangeId'
 >
 
 function OverviewPane({
@@ -280,11 +305,17 @@ function OverviewPane({
   changes,
   terminal,
   context,
+  onChangeSelect,
+  selectedChangeId,
 }: OverviewPaneProps) {
   return (
     <div className="px-4 pb-4">
       <ConversationInfo conversation={conversation} />
-      <ChangesSummary changes={changes} />
+      <ChangesSummary
+        changes={changes}
+        onChangeSelect={onChangeSelect}
+        selectedChangeId={selectedChangeId}
+      />
       <TerminalSummary terminal={terminal} />
       <ContextSummary context={context} visibleCount={3} />
     </div>
@@ -302,7 +333,9 @@ export interface InspectorPanelProps extends Omit<
   initialTab?: InspectorTab
   tab?: InspectorTab
   onTabChange?: (tab: InspectorTab) => void
+  onChangeSelect?: (changeId: string) => void
   onClose?: () => void
+  selectedChangeId?: string
 }
 
 export type { InspectorTab } from './conversation-inspector-state'
@@ -316,7 +349,9 @@ export function InspectorPanel({
   initialTab = 'overview',
   tab,
   onTabChange,
+  onChangeSelect,
   onClose,
+  selectedChangeId,
   className,
   ...props
 }: InspectorPanelProps) {
@@ -395,6 +430,8 @@ export function InspectorPanel({
               changes={changes}
               terminal={terminal}
               context={context}
+              onChangeSelect={onChangeSelect}
+              selectedChangeId={selectedChangeId}
             />
           </ScrollArea>
         </TabsContent>
@@ -402,7 +439,11 @@ export function InspectorPanel({
         <TabsContent value="changes" className="min-h-0 overflow-hidden">
           <ScrollArea className="h-full">
             <div className="px-4 pb-4">
-              <ChangesSummary changes={changes} />
+              <ChangesSummary
+                changes={changes}
+                onChangeSelect={onChangeSelect}
+                selectedChangeId={selectedChangeId}
+              />
             </div>
           </ScrollArea>
         </TabsContent>

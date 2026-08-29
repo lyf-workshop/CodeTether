@@ -208,6 +208,18 @@ The official Notification plugin owns the platform permission check. Its current
 
 Windows WebView2 can suspend a minimized document and pause its SSE consumer. While the Desktop click-intent subscription is active, the adapter holds a shared `navigator.locks` lease using the Wry/WebView2 background-execution workaround and releases it during teardown. Environments without Web Locks safely no-op. A bounded native queue plus the Tauri event and focus/page-show/visibility wakeups recover clicks missed during suspension without polling or creating another Attention projection.
 
+## Desktop Product Polish
+
+Phase 4D refines the existing shared Web product tree for sustained Desktop use; it does not add a Desktop-only Conversation page or another native/business boundary.
+
+- Adjacent runs of at least three routine completed Tool executions use deterministic, expandable presentation grouping. Failures, active work, tests, Approvals, and Diff-producing Tools remain individually visible, and the normalized Timeline is unchanged.
+- Agent messages render a small safe Markdown subset through typed React elements. Raw HTML, remote images, unsafe URLs, iframe/script execution, and `dangerouslySetInnerHTML` are not used.
+- Project-contained absolute paths may be shortened for display only. Durable message text, canonical roots, Terminal content, and Host authorization inputs are not rewritten.
+- Inbox and notification navigation may target an existing public Turn; Inspector file selection locates the matching Timeline Diff. Neither path creates durable navigation state or changes Attention resolution.
+- Long titles and paths are bounded with full-text affordances, dense Rail and Settings surfaces remain usable at the Desktop minimum size, unsupported controls are hidden, and normal product copy avoids exposing Host/Runtime internals.
+
+Phase 4D changes no Tauri capability, sidecar lifecycle, Project/Conversation/Attention persistence, Protocol v1 contract, or Browser/Desktop component identity. Its implementation is complete, with Owner acceptance pending. Rename, Archive, Search, Tray/background-after-close behavior, and additional providers remain separate phases.
+
 ## Validation Commands
 
 ```text
@@ -225,7 +237,7 @@ The package smoke argument is internal test plumbing. It starts the release appl
 
 The required Phase 4B validation completed in development, raw production, and an isolated installed NSIS application. The real Windows picker passed cancellation, selection, main-window ownership, Unicode/space paths, Project registration, TopBar New Conversation handoff, and a real Codex Conversation. Graceful close removed the owned Desktop/Host/Codex process tree and released port 4317; uninstall removed the exact smoke installation, registry identity, and state. Phase 4B is accepted and frozen.
 
-The required Phase 4C Windows validation also completed in development, the raw production executable, and an isolated installed NSIS application. It covered real Approval and completed-review delivery, the canonical failed fixture, exact-Conversation foreground suppression, background/minimized and other-Conversation delivery, click restoration/focus/navigation, replay/reset/restart deduplication, preferences, Unicode/long-title copy, Browser fallback, CodeTether installed branding, and graceful lifecycle cleanup. Clicks did not approve, review, acknowledge, retry, or resolve Attention. Owner acceptance remains pending, so Phase 4C is not accepted or frozen.
+The required Phase 4C Windows validation also completed in development, the raw production executable, and an isolated installed NSIS application. It covered real Approval and completed-review delivery, the canonical failed fixture, exact-Conversation foreground suppression, background/minimized and other-Conversation delivery, click restoration/focus/navigation, replay/reset/restart deduplication, preferences, Unicode/long-title copy, Browser fallback, CodeTether installed branding, and graceful lifecycle cleanup. Clicks did not approve, review, acknowledge, retry, or resolve Attention. Phase 4C is accepted and frozen.
 
 ## Known Limitations
 
@@ -238,3 +250,4 @@ The required Phase 4C Windows validation also completed in development, the raw 
 - The current application icon is a minimal Alpha asset; final brand artwork is still pending.
 - Notification click activation exists only while the Desktop process is running. Full-exit delivery, Tray, notification history, push, custom sounds, and quiet-hour rules are not implemented.
 - Drag-and-drop folders, recent-folder persistence, Project relocation/multi-root, Open in Explorer, remote access, Machine management, and additional Agent providers remain out of scope.
+- Conversation Rename, Archive, Pin, Delete, and Search remain out of scope; Phase 4D adds no frontend-only organization state.

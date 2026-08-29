@@ -307,10 +307,10 @@ export function mutationErrorMessage(error: unknown, fallback: string): string {
     return '已有操作正在提交，请稍候。'
   }
   if (error instanceof HostEpochChangedError) {
-    return 'CodeTether Host 已重启。请确认恢复后的会话状态，再重新操作。'
+    return 'CodeTether 已重新连接。请确认恢复后的会话状态，再重新操作。'
   }
   if (!(error instanceof CodeTetherResponseError)) {
-    return '无法连接到 CodeTether Host，请检查连接后重试。'
+    return 'CodeTether 暂时无法连接，请重试。'
   }
 
   switch (error.envelope.code) {
@@ -321,9 +321,9 @@ export function mutationErrorMessage(error: unknown, fallback: string): string {
     case 'conflict':
       return '会话状态已经变化，请刷新后重试。'
     case 'unsupported':
-      return '当前 Host 不支持此操作。'
+      return '当前 CodeTether 版本不支持此操作。'
     case 'runtime_unavailable':
-      return 'Codex Runtime 当前不可用。'
+      return 'Codex 当前不可用。'
     case 'timeout':
       return '操作等待超时，请重试。'
     case 'provider_error':
@@ -335,6 +335,6 @@ export function mutationErrorMessage(error: unknown, fallback: string): string {
     case 'project_has_conversations':
       return '项目仍有关联会话，无法移除。'
     case 'internal':
-      return `Host 未能${fallback}。`
+      return `CodeTether 未能${fallback}。`
   }
 }

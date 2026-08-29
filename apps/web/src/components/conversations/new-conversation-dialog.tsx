@@ -1,4 +1,5 @@
 import {
+  useRef,
   useState,
   type FormEvent,
   type ReactElement,
@@ -50,7 +51,7 @@ interface NewConversationDialogProps {
   trigger?: ReactElement
 }
 
-/** Minimal real create flow: Project + Codex, with Host-owned defaults. */
+/** Minimal real create flow: Project + Codex, with CodeTether-owned defaults. */
 export function NewConversationDialog({
   currentProject,
   onAddProject,
@@ -67,6 +68,7 @@ export function NewConversationDialog({
   const [selectedProjectId, setSelectedProjectId] = useState<
     ProjectId | undefined
   >()
+  const skipCloseFocusRestore = useRef(false)
   const open = controlledOpen ?? internalOpen
   const projectsQuery = useQuery({
     ...projectListQueryOptions(runtime),
@@ -87,13 +89,15 @@ export function NewConversationDialog({
           exact: true,
         })
       }
-      closeAfterSuccess()
+      skipCloseFocusRestore.current = true
       await navigate({
         to: '/conversations/$conversationId',
         params: {
           conversationId: response.data.conversation.conversationId,
         },
+        search: { focus: 'composer' },
       })
+      closeAfterSuccess()
     },
   })
 
@@ -123,6 +127,7 @@ export function NewConversationDialog({
     if (controlledOpen === undefined) setInternalOpen(nextOpen)
     onOpenChange?.(nextOpen)
     if (nextOpen) {
+      skipCloseFocusRestore.current = false
       createMutation.reset()
       setSelectedProjectId(currentProject?.projectId)
       return
@@ -150,6 +155,11 @@ export function NewConversationDialog({
         closeLabel="关闭新建会话对话框"
         className="max-w-lg"
         onCloseAutoFocus={(event) => {
+          if (skipCloseFocusRestore.current) {
+            skipCloseFocusRestore.current = false
+            event.preventDefault()
+            return
+          }
           if (returnFocusRef?.current === undefined) return
           event.preventDefault()
           returnFocusRef.current?.focus()
@@ -165,8 +175,8 @@ export function NewConversationDialog({
             </span>
             <DialogTitle>新建会话</DialogTitle>
             <DialogDescription>
-              在已授权项目中创建一个 Codex 会话。模型与推理设置使用 Host
-              默认值。
+              在已授权项目中创建一个 Codex 会话。模型与推理设置由 CodeTether
+              管理。
             </DialogDescription>
           </DialogHeader>
 
@@ -247,8 +257,8 @@ export function NewConversationDialog({
                   </span>
                 }
               />
-              <LockedSetting label="模型" value="Host 默认" />
-              <LockedSetting label="推理" value="Host 默认" />
+              <LockedSetting label="模型" value="默认" />
+              <LockedSetting label="推理" value="默认" />
             </dl>
 
             {projectUnavailable ? (
@@ -259,13 +269,13 @@ export function NewConversationDialog({
             {hostUnavailable ? (
               <InlineNotice>
                 {connectionState === 'incompatible'
-                  ? 'CodeTether Host 版本不兼容。'
-                  : '无法连接到 CodeTether Host。'}
+                  ? '当前 CodeTether 版本不兼容。'
+                  : 'CodeTether 暂时无法连接。'}
               </InlineNotice>
             ) : null}
             {connectionState === 'connected' &&
             runtime.bootstrap?.capabilities.codex !== true ? (
-              <InlineNotice>Codex Runtime 当前不可用。</InlineNotice>
+              <InlineNotice>Codex 当前不可用。</InlineNotice>
             ) : null}
             {noAvailableProjects ? (
               <InlineNotice>

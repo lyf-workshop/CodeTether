@@ -13,6 +13,22 @@ export interface TimelineScrollDecision {
   readonly scrollTop?: number
 }
 
+/** One product target may be requested repeatedly by distinct navigations. */
+export function createTimelineAnchorRequestKey(
+  identity: string | undefined,
+  requestIdentity: string | number | undefined,
+): string | undefined {
+  if (identity === undefined) return undefined
+  return `${requestIdentity ?? 'direct'}:${identity}`
+}
+
+export function timelineContainsTurn(
+  blocks: readonly { readonly turnId: string }[],
+  turnId: string | undefined,
+): boolean {
+  return turnId === undefined || blocks.some((block) => block.turnId === turnId)
+}
+
 export function decideTimelineScroll({
   followsLatest,
   viewport,

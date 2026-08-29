@@ -3,6 +3,7 @@ import type {
   AttentionId,
   AttentionItem,
   ConversationId,
+  TurnId,
 } from '@codetether/protocol'
 
 export type ApprovalAttentionItem = Extract<AttentionItem, { type: 'approval' }>
@@ -33,10 +34,13 @@ export async function resolveInboxApproval(
 export async function reviewCompletedAttention(
   client: InboxActionClient,
   item: CompletedAttentionItem,
-  navigate: (conversationId: ConversationId) => void | Promise<void>,
+  navigate: (
+    conversationId: ConversationId,
+    turnId: TurnId | undefined,
+  ) => void | Promise<void>,
 ): Promise<void> {
   await client.resolveAttention(item.attentionId)
-  await navigate(item.conversationId)
+  await navigate(item.conversationId, item.turnId)
 }
 
 /** A failed acknowledgement changes only Attention, never the Turn outcome. */

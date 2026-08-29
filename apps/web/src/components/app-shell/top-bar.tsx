@@ -62,7 +62,9 @@ function TopBar({
   ...props
 }: TopBarProps) {
   const notificationsLabel =
-    notificationCount > 0 ? `通知，${notificationCount} 条未读` : '通知'
+    notificationCount > 0
+      ? `收件箱，${notificationCount} 个待处理事项`
+      : '收件箱'
   const resolvedBreadcrumbs = breadcrumbs ?? [{ label: currentPage }]
 
   return (
@@ -228,6 +230,7 @@ function BreadcrumbContent({
   if (breadcrumb.to === undefined) {
     return (
       <span
+        title={breadcrumb.label}
         className={
           isCurrent
             ? 'hidden min-w-0 truncate text-text-primary sm:block'
@@ -240,7 +243,7 @@ function BreadcrumbContent({
   }
   if (breadcrumb.to === '/projects') {
     return (
-      <Link to="/projects" className={className}>
+      <Link to="/projects" className={className} title={breadcrumb.label}>
         {breadcrumb.label}
       </Link>
     )
@@ -251,6 +254,7 @@ function BreadcrumbContent({
         to="/projects/$projectId"
         params={breadcrumb.params}
         className={className}
+        title={breadcrumb.label}
       >
         {breadcrumb.label}
       </Link>
@@ -261,6 +265,7 @@ function BreadcrumbContent({
       to="/projects/$projectId/conversations"
       params={breadcrumb.params}
       className={className}
+      title={breadcrumb.label}
     >
       {breadcrumb.label}
     </Link>

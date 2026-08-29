@@ -22,6 +22,7 @@ import type {
   ConversationTimelineBlockViewModel,
   ConversationViewModel,
 } from './conversation-view-model.js'
+import { presentProjectPaths } from './message-presentation.js'
 import { createToolPresentation } from './tool-presentation.js'
 import { deriveLiveControlAvailability } from './conversation-controls.js'
 
@@ -130,13 +131,15 @@ export function createLiveConversationViewModel(
     agent: model.agent,
     model: model.model ?? '默认模型',
     reasoning: model.reasoning ?? '默认',
-    permission: pendingApprovals.length === 0 ? '由 Host 管理' : '等待审批',
+    permission:
+      pendingApprovals.length === 0 ? '由 CodeTether 管理' : '等待审批',
     machine: '本地电脑',
     branch: '未提供',
     duration: formatDuration(
       model.currentTurn?.startedAt,
       model.currentTurn?.completedAt ?? model.updatedAt,
     ),
+    ...(projectRootPath === undefined ? {} : { projectRootPath }),
     timeline: {
       dayLabel: formatDayLabel(
         model.turns[0]?.startedAt ??
@@ -226,6 +229,7 @@ function projectTurnTimeline(
     blocks.push({
       kind: 'agent-run',
       id: `agent-run:${turn.id}:${executionBlockOrder}`,
+      turnId: turn.id,
       time: formatActivityTime(executionTime ?? turn.startedAt),
       status: runStatus(turn, pendingApprovals.length > 0),
       executions,
@@ -241,6 +245,7 @@ function projectTurnTimeline(
       blocks.push({
         kind: 'message',
         id: activity.message.id,
+        turnId: turn.id,
         message: {
           id: activity.message.id,
           author: activity.message.author,
@@ -252,8 +257,12 @@ function projectTurnTimeline(
       continue
     }
     if (activity.kind === 'tool') {
+      const displayCommand = presentProjectPaths(
+        activity.tool.command ?? activity.tool.name,
+        model.cwd,
+      )
       const presentation = createToolPresentation({
-        command: activity.tool.command ?? activity.tool.name,
+        command: displayCommand,
         status: activity.tool.status,
         ...(activity.tool.outputSummary === undefined
           ? {}
@@ -267,6 +276,7 @@ function projectTurnTimeline(
         id: `execution:${activity.tool.id}`,
         tool: {
           id: activity.tool.id,
+          presentationKind: presentation.kind,
           title:
             activity.tool.status === 'failed'
               ? presentation.title
@@ -311,6 +321,7 @@ function projectTurnTimeline(
     blocks.push({
       kind: 'agent-run',
       id: `agent-run:${turn.id}:waiting-for-events`,
+      turnId: turn.id,
       time: formatActivityTime(turn.startedAt),
       status: pendingApprovals.length > 0 ? 'waiting' : 'running',
       executions: [],
@@ -330,6 +341,7 @@ function projectTurnTimeline(
       blocks.push({
         kind: 'agent-run',
         id: `agent-run:${turn.id}:outcome`,
+        turnId: turn.id,
         time: formatActivityTime(turn.completedAt ?? turn.startedAt),
         status: runStatus(turn, pendingApprovals.length > 0),
         executions: [],
@@ -411,11 +423,11 @@ function connectionIndicator(
   state: HostConnectionState,
 ): ConversationConnectionIndicatorViewModel | undefined {
   const labels = {
-    connecting: '正在连接 Host',
-    connected: 'Host 已连接',
+    connecting: '正在连接',
+    connected: '已连接',
     reconnecting: '正在重新连接',
-    unavailable: 'Host 不可用',
-    incompatible: 'Host 版本不兼容',
+    unavailable: '暂时无法连接',
+    incompatible: '版本不兼容',
   } as const
   return { state, label: labels[state] }
 }

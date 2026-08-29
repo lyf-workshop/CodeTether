@@ -231,7 +231,7 @@ function AttentionActions({
         <Link
           to="/conversations/$conversationId"
           params={{ conversationId: item.conversationId }}
-          search={{}}
+          search={item.turnId === undefined ? {} : { turn: item.turnId }}
         >
           打开会话
         </Link>

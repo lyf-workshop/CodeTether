@@ -126,13 +126,13 @@ export function projectErrorMessage(
     return '已有项目操作正在提交，请稍候。'
   }
   if (error instanceof CodeTetherIncompatibleProtocolError) {
-    return 'CodeTether Host 版本不兼容，请更新后重试。'
+    return '当前 CodeTether 版本不兼容，请更新应用后重试。'
   }
   if (error instanceof CodeTetherProtocolError) {
-    return 'CodeTether Host 返回了无法识别的数据。'
+    return 'CodeTether 暂时无法读取数据，请重试。'
   }
   if (!(error instanceof CodeTetherResponseError)) {
-    return '无法连接到 CodeTether Host，请检查连接后重试。'
+    return 'CodeTether 暂时无法连接，请重试。'
   }
 
   switch (error.envelope.code) {
@@ -149,18 +149,18 @@ export function projectErrorMessage(
     case 'project_has_conversations':
       return '此项目仍有关联会话，当前不能移除。'
     case 'unsupported':
-      return '当前 Host 不支持此项目操作。'
+      return '当前 CodeTether 版本不支持此项目操作。'
     case 'timeout':
       return '项目操作等待超时，请重试。'
     case 'runtime_unavailable':
-      return 'CodeTether Host 当前不可用。'
+      return 'CodeTether 本地服务暂时不可用。'
     case 'provider_error':
     case 'provider_conversation_unavailable':
     case 'internal':
       return operation === 'load'
-        ? 'Host 未能读取项目。'
+        ? 'CodeTether 未能读取项目。'
         : operation === 'create'
-          ? 'Host 未能添加项目。'
-          : 'Host 未能移除项目。'
+          ? 'CodeTether 未能添加项目。'
+          : 'CodeTether 未能移除项目。'
   }
 }

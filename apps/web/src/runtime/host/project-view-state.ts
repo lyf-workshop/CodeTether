@@ -64,7 +64,7 @@ export function projectDetailViewState(
   if (query.data === undefined) {
     return {
       kind: 'host-unavailable',
-      message: 'CodeTether Host 返回了不完整的项目数据。',
+      message: 'CodeTether 暂时无法读取项目数据，请重试。',
     }
   }
   return query.data.availability === 'available'

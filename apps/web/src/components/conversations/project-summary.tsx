@@ -4,6 +4,10 @@ import { Badge, cn } from '@codetether/ui'
 import type { ProjectRecord } from '@codetether/protocol'
 
 import type { ConversationStatusCounts } from './conversation-list-model'
+import {
+  compactProjectPath,
+  projectFolderName,
+} from '../projects/project-format'
 
 interface ProjectSummaryProps {
   project: ProjectRecord
@@ -44,15 +48,21 @@ export function ProjectSummary({ project, summary }: ProjectSummaryProps) {
       <div className="min-w-0">
         <h2
           id="conversations-project-heading"
+          title={project.name}
           className="truncate text-base font-semibold text-text-primary"
         >
           {project.name}
         </h2>
         <p
           title={project.rootPath}
-          className="mt-1 truncate font-mono text-xs font-regular text-text-secondary"
+          className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-text-secondary"
         >
-          {project.rootPath}
+          <span className="shrink-0 font-medium text-text-primary">
+            {projectFolderName(project.rootPath)}
+          </span>
+          <span className="min-w-0 truncate font-mono">
+            {compactProjectPath(project.rootPath)}
+          </span>
         </p>
       </div>
 

@@ -1,3 +1,5 @@
+import { TurnIdSchema } from '@codetether/protocol'
+
 import type {
   DesktopWindowState,
   NotificationIntent,
@@ -368,11 +370,14 @@ function parseNotificationIntent(value: unknown): NotificationIntent {
     throw new Error('Native notification intent is invalid.')
   }
   const record = value as Record<string, unknown>
+  const turnId =
+    record.turnId === undefined ? undefined : TurnIdSchema.parse(record.turnId)
   const intent = {
     attentionId: requiredString(record.attentionId, 160),
     type: notificationType(record.type),
     projectId: requiredString(record.projectId, 160),
     conversationId: requiredString(record.conversationId, 160),
+    ...(turnId === undefined ? {} : { turnId }),
     title: requiredString(record.title, 120),
     body: requiredString(record.body, 512),
   } as NotificationIntent
@@ -385,6 +390,7 @@ function assertNotificationIntent(intent: NotificationIntent): void {
   notificationType(intent.type)
   requiredString(intent.projectId, 160)
   requiredString(intent.conversationId, 160)
+  if (intent.turnId !== undefined) TurnIdSchema.parse(intent.turnId)
   requiredString(intent.title, 120)
   requiredString(intent.body, 512)
 }

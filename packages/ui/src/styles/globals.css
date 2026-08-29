@@ -96,7 +96,7 @@
   --avatar-size-md: 2.625rem;
 
   /* Shared desktop shell geometry — Figma desktop references */
-  --layout-topbar-height: 4rem;
+  --layout-topbar-height: 3.5rem;
   --layout-sidebar-width: 12.5rem;
   --layout-sidebar-collapsed-width: 4.5rem;
   --layout-sidebar-current-width: var(--layout-sidebar-width);
@@ -117,10 +117,10 @@
   --layout-conversation-rail-width: 18rem;
   --layout-conversation-rail-compact-width: 17rem;
   --layout-conversation-inspector-width: 21.75rem;
-  --layout-conversation-header-height: 5.375rem;
+  --layout-conversation-header-height: 4.75rem;
   --layout-conversation-day-marker-height: 2.875rem;
-  --layout-conversation-composer-height: 9.375rem;
-  --layout-conversation-composer-region-height: 10.625rem;
+  --layout-conversation-composer-height: 7.25rem;
+  --layout-conversation-composer-region-height: 8.5rem;
 
   /* Conversations list geometry — Figma 06 Desktop at 1536 × 1024 */
   --layout-conversations-search-width: 33.125rem;

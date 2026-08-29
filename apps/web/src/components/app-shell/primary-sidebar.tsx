@@ -1,12 +1,9 @@
 import type { ComponentPropsWithoutRef } from 'react'
 import { Link } from '@tanstack/react-router'
 import {
-  Activity,
-  Bot,
   ChevronDown,
   FolderOpen,
   Inbox,
-  Monitor,
   Settings,
   type LucideIcon,
 } from 'lucide-react'
@@ -20,15 +17,12 @@ import {
   agentDefinitions,
   cn,
   statusDefinitions,
-  type AgentId,
-  type ExecutionStatus,
 } from '@codetether/ui'
 import type { ProjectRecord } from '@codetether/protocol'
 
 import { formatInboxAttentionBadge } from '../inbox/inbox-model'
 
-type SidebarDestination =
-  '/inbox' | '/activity' | '/projects' | '/agents' | '/machines' | '/settings'
+type SidebarDestination = '/inbox' | '/projects' | '/settings'
 
 interface SidebarNavItem {
   label: string
@@ -36,16 +30,9 @@ interface SidebarNavItem {
   icon: LucideIcon
 }
 
-interface AgentPresence {
-  agent: AgentId
-}
-
 const primaryNavItems = [
-  { label: '收件箱', to: '/inbox', icon: Inbox },
-  { label: '活动', to: '/activity', icon: Activity },
   { label: '项目', to: '/projects', icon: FolderOpen },
-  { label: '智能体', to: '/agents', icon: Bot },
-  { label: '机器', to: '/machines', icon: Monitor },
+  { label: '收件箱', to: '/inbox', icon: Inbox },
 ] as const satisfies readonly SidebarNavItem[]
 
 const settingsNavItem = {
@@ -54,38 +41,9 @@ const settingsNavItem = {
   icon: Settings,
 } as const satisfies SidebarNavItem
 
-const agentPresences = [
-  { agent: 'codex' },
-  { agent: 'claude' },
-  { agent: 'opencode' },
-] as const satisfies readonly AgentPresence[]
-
 function isCurrentRoute(currentPath: string, destination: SidebarDestination) {
   return (
     currentPath === destination || currentPath.startsWith(`${destination}/`)
-  )
-}
-
-interface PresenceDotProps {
-  label: string
-  stateLabel?: string
-  status: ExecutionStatus
-}
-
-function PresenceDot({ label, stateLabel, status }: PresenceDotProps) {
-  const definition = statusDefinitions[status]
-
-  return (
-    <span
-      role="img"
-      aria-label={`${label}：${stateLabel ?? definition.label}`}
-      data-status={status}
-      className={cn(
-        'size-2 shrink-0 rounded-full bg-current',
-        definition.iconClassName,
-        'motion-safe:animate-none',
-      )}
-    />
   )
 }
 
@@ -238,6 +196,7 @@ export function PrimarySidebar({
                     ? 'page'
                     : undefined
                 }
+                title={currentProject?.name}
               >
                 <FolderOpen
                   aria-hidden="true"
@@ -264,42 +223,37 @@ export function PrimarySidebar({
               智能体
             </h2>
             <ul className="mt-2 space-y-0.5">
-              {agentPresences.map(({ agent }) => {
-                const definition = agentDefinitions[agent]
-                const connected = agent === 'codex' && codexAvailable
-                const status: ExecutionStatus = connected ? 'idle' : 'offline'
-                const stateLabel =
-                  agent === 'codex' ? (connected ? '可用' : '不可用') : '未接入'
-
-                return (
-                  <li
-                    key={agent}
-                    className="flex h-[var(--layout-sidebar-presence-item-height)] min-w-0 items-center gap-1 pr-3 pl-2"
-                  >
-                    <span
-                      aria-hidden="true"
-                      className={cn(
-                        'grid size-[var(--layout-sidebar-mark-size)] shrink-0 place-items-center rounded-md border text-sm font-semibold',
-                        definition.accentClassName,
-                      )}
-                    >
-                      {definition.icon}
-                    </span>
-                    <span className="min-w-0 flex-1 truncate text-md font-medium text-text-primary">
-                      {definition.name}
-                    </span>
-                    <span className="text-2xs text-text-muted">
-                      {stateLabel}
-                    </span>
-                    <PresenceDot
-                      label={definition.name}
-                      stateLabel={stateLabel}
-                      status={status}
-                    />
-                  </li>
-                )
-              })}
+              <li className="flex h-[var(--layout-sidebar-presence-item-height)] min-w-0 items-center gap-1 pr-3 pl-2">
+                <span
+                  aria-hidden="true"
+                  className={cn(
+                    'grid size-[var(--layout-sidebar-mark-size)] shrink-0 place-items-center rounded-md border text-sm font-semibold',
+                    agentDefinitions.codex.accentClassName,
+                  )}
+                >
+                  {agentDefinitions.codex.icon}
+                </span>
+                <span className="min-w-0 flex-1 truncate text-md font-medium text-text-primary">
+                  {agentDefinitions.codex.name}
+                </span>
+                <span className="text-2xs text-text-muted">
+                  {codexAvailable ? '可用' : '不可用'}
+                </span>
+                <span
+                  role="img"
+                  aria-label={`Codex：${codexAvailable ? '可用' : '不可用'}`}
+                  data-status={codexAvailable ? 'idle' : 'offline'}
+                  className={cn(
+                    'size-2 shrink-0 rounded-full bg-current motion-safe:animate-none',
+                    statusDefinitions[codexAvailable ? 'idle' : 'offline']
+                      .iconClassName,
+                  )}
+                />
+              </li>
             </ul>
+            <p className="px-2 pt-1 text-2xs text-text-muted">
+              其他智能体 · 即将支持
+            </p>
           </section>
         </div>
 

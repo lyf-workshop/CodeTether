@@ -6,6 +6,7 @@ import {
   useState,
   type UIEvent,
 } from 'react'
+import { CheckCircle2, ChevronDown } from 'lucide-react'
 
 import {
   DiffCard,
@@ -25,17 +26,26 @@ import type {
 } from './conversation-view-model'
 import { isNearTimelineBottom } from './conversation-controls'
 import {
+  createTimelineAnchorRequestKey,
   decideTimelineScroll,
+  timelineContainsTurn,
   type TimelineUpdateKind,
 } from './conversation-timeline-behavior'
 import { createToolPresentation } from './tool-presentation'
+import { groupRunExecutions } from './tool-grouping'
+import { presentProjectPaths } from './message-presentation'
 import { AgentMessage, UserMessage } from './message'
 
 interface ConversationTimelineProps {
+  anchorRequestKey?: string
   agent: AgentId
   timeline: ConversationTimelineViewModel
   changes: ConversationChangesViewModel
   pendingApprovals: readonly ConversationApprovalViewModel[]
+  projectRootPath?: string
+  targetChangeId?: string
+  targetChangeRequestKey?: number
+  targetTurnId?: string
 }
 
 type ToolExecution = Extract<
@@ -43,48 +53,95 @@ type ToolExecution = Extract<
   { readonly kind: 'tool' }
 >
 
-type ExecutionGroup =
-  | {
-      readonly kind: 'tools'
-      readonly id: string
-      readonly executions: readonly ToolExecution[]
-    }
-  | {
-      readonly kind: 'single'
-      readonly execution: Exclude<
-        ConversationRunExecutionViewModel,
-        ToolExecution
-      >
-    }
-
-function groupExecutions(
-  executions: readonly ConversationRunExecutionViewModel[],
-): readonly ExecutionGroup[] {
-  const groups: ExecutionGroup[] = []
-
-  for (const execution of executions) {
-    if (execution.kind !== 'tool') {
-      groups.push({ kind: 'single', execution })
-      continue
-    }
-
-    const lastGroup = groups.at(-1)
-    if (lastGroup?.kind === 'tools') {
-      groups[groups.length - 1] = {
-        ...lastGroup,
-        executions: [...lastGroup.executions, execution],
+function ToolExecutionRow({
+  execution,
+  projectRootPath,
+}: {
+  readonly execution: ToolExecution
+  readonly projectRootPath?: string
+}) {
+  const { tool } = execution
+  return (
+    <ToolCallCard
+      title={presentProjectPaths(tool.title, projectRootPath)}
+      status={tool.status}
+      description={
+        tool.description === undefined
+          ? undefined
+          : presentProjectPaths(tool.description, projectRootPath)
       }
-      continue
-    }
+      metadata={
+        tool.outputSummary === undefined
+          ? undefined
+          : presentProjectPaths(tool.outputSummary, projectRootPath)
+      }
+      delta={tool.delta}
+      action={
+        tool.actionLabel ? (
+          <button
+            type="button"
+            className="rounded-xs text-sm font-medium text-primary outline-none hover:text-primary-hover hover:underline focus-visible:ring-2 focus-visible:ring-ring/50"
+          >
+            {tool.actionLabel}
+          </button>
+        ) : undefined
+      }
+    />
+  )
+}
 
-    groups.push({
-      kind: 'tools',
-      id: `tools-${execution.id}`,
-      executions: [execution],
-    })
-  }
+function RoutineToolGroup({
+  executions,
+  projectRootPath,
+}: {
+  readonly executions: readonly ToolExecution[]
+  readonly projectRootPath?: string
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const label = `已完成 ${executions.length} 个操作`
 
-  return groups
+  return (
+    <section
+      aria-label={label}
+      data-tool-group="routine"
+      data-tool-group-count={executions.length}
+      className="min-w-0 border-t border-border/50"
+    >
+      <button
+        type="button"
+        aria-expanded={expanded}
+        className="flex min-h-11 w-full min-w-0 items-center gap-2 rounded-xs px-1 text-left text-sm text-text-secondary outline-none transition-colors hover:bg-surface-muted/35 hover:text-text-primary focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60 motion-reduce:transition-none"
+        onClick={() => setExpanded((current) => !current)}
+      >
+        <CheckCircle2
+          aria-hidden="true"
+          className="size-4 shrink-0 text-success"
+        />
+        <span className="min-w-0 flex-1 truncate font-medium">{label}</span>
+        <span className="shrink-0 text-xs text-text-muted">
+          {expanded ? '收起' : '展开'}
+        </span>
+        <ChevronDown
+          aria-hidden="true"
+          className={`size-4 shrink-0 transition-transform motion-reduce:transition-none ${expanded ? 'rotate-180' : ''}`}
+        />
+      </button>
+      {expanded ? (
+        <div
+          data-tool-group-items="mounted"
+          className="border-t border-border/40"
+        >
+          {executions.map((execution) => (
+            <ToolExecutionRow
+              key={execution.id}
+              execution={execution}
+              projectRootPath={projectRootPath}
+            />
+          ))}
+        </div>
+      ) : null}
+    </section>
+  )
 }
 
 interface AgentRunExecutionsProps {
@@ -94,63 +151,71 @@ interface AgentRunExecutionsProps {
     ConversationChangesViewModel['files'][number]
   >
   approvalsById: ReadonlyMap<string, ConversationApprovalViewModel>
+  projectRootPath?: string
+  selectedChangeId?: string
 }
 
 function AgentRunExecutions({
   executions,
   changesById,
   approvalsById,
+  projectRootPath,
+  selectedChangeId,
 }: AgentRunExecutionsProps) {
-  return groupExecutions(executions).map((group) => {
-    if (group.kind === 'tools') {
+  return groupRunExecutions(executions).map((group) => {
+    if (group.kind === 'routine-tools') {
       return (
-        <div key={group.id} className="border-t border-border/50">
-          {group.executions.map(({ id, tool }) => (
-            <ToolCallCard
-              key={id}
-              title={tool.title}
-              status={tool.status}
-              description={tool.description}
-              metadata={tool.outputSummary}
-              delta={tool.delta}
-              action={
-                tool.actionLabel ? (
-                  <button
-                    type="button"
-                    className="rounded-xs text-sm font-medium text-primary outline-none hover:text-primary-hover hover:underline focus-visible:ring-2 focus-visible:ring-ring/50"
-                  >
-                    {tool.actionLabel}
-                  </button>
-                ) : undefined
-              }
-            />
-          ))}
-        </div>
+        <RoutineToolGroup
+          key={group.id}
+          executions={group.executions}
+          projectRootPath={projectRootPath}
+        />
       )
     }
 
     const { execution } = group
+    if (execution.kind === 'tool') {
+      return (
+        <div key={execution.id} className="border-t border-border/50">
+          <ToolExecutionRow
+            execution={execution}
+            projectRootPath={projectRootPath}
+          />
+        </div>
+      )
+    }
     if (execution.kind === 'diff') {
       const change = changesById.get(execution.changeId)
       if (!change) return null
-      return change.lines.length > 0 ? (
-        <DiffCard
+      return (
+        <div
           key={execution.id}
-          className="mt-3"
-          fileName={change.path}
-          lines={change.lines}
-        />
-      ) : (
-        <div key={execution.id} className="mt-3 border-t border-border/50">
-          <ToolCallCard
-            title={change.path}
-            description="文件已变更，Host 未提供可展示的 Diff"
-            status="completed"
-            delta={{
-              additions: change.additions,
-              deletions: change.deletions,
-            }}
-          />
+          data-change-anchor={change.id}
+          data-selected={selectedChangeId === change.id || undefined}
+          role="group"
+          tabIndex={-1}
+          aria-label={`变更详情：${change.path}`}
+          className="min-w-0 rounded-sm outline-none data-[selected=true]:ring-1 data-[selected=true]:ring-primary/45 focus-visible:ring-2 focus-visible:ring-ring/60"
+        >
+          {change.lines.length > 0 ? (
+            <DiffCard
+              className="mt-3"
+              fileName={change.path}
+              lines={change.lines}
+            />
+          ) : (
+            <div className="mt-3 border-t border-border/50">
+              <ToolCallCard
+                title={change.path}
+                description="文件已变更，CodeTether 未提供可展示的 Diff"
+                status="completed"
+                delta={{
+                  additions: change.additions,
+                  deletions: change.deletions,
+                }}
+              />
+            </div>
+          )}
         </div>
       )
     }
@@ -213,10 +278,15 @@ function emptyRunMessage(
 }
 
 export function ConversationTimeline({
+  anchorRequestKey,
   agent,
   timeline,
   changes,
   pendingApprovals,
+  projectRootPath,
+  targetChangeId,
+  targetChangeRequestKey,
+  targetTurnId,
 }: ConversationTimelineProps) {
   const viewportRef = useRef<HTMLDivElement>(null)
   const followsLatest = useRef(true)
@@ -227,9 +297,14 @@ export function ConversationTimeline({
       }
     | undefined
   >(undefined)
+  const lastFocusedChangeRequest = useRef<string | undefined>(undefined)
+  const lastFocusedTurnRequest = useRef<string | undefined>(undefined)
   const waiting = pendingApprovals.length > 0
   const waitingRef = useRef(waiting)
   const [showJumpToLatest, setShowJumpToLatest] = useState(false)
+  const missingTurnTarget =
+    targetTurnId !== undefined &&
+    !timelineContainsTurn(timeline.blocks, targetTurnId)
   const changesById = useMemo(
     () => new Map(changes.files.map((change) => [change.id, change])),
     [changes.files],
@@ -329,6 +404,44 @@ export function ConversationTimeline({
     return () => observer.disconnect()
   }, [applyTimelineUpdate])
 
+  useLayoutEffect(() => {
+    if (targetTurnId === undefined) {
+      lastFocusedTurnRequest.current = undefined
+      return
+    }
+    const requestKey = createTimelineAnchorRequestKey(
+      targetTurnId,
+      anchorRequestKey,
+    )
+    if (requestKey === undefined) return
+    if (lastFocusedTurnRequest.current === requestKey) return
+    const viewport = viewportRef.current
+    if (viewport === null) return
+    const target = findTimelineAnchor(viewport, 'turnAnchor', targetTurnId)
+    if (target === undefined) return
+    lastFocusedTurnRequest.current = requestKey
+    focusTimelineAnchor(viewport, target, followsLatest, setShowJumpToLatest)
+  }, [activityVersion, anchorRequestKey, targetTurnId])
+
+  useLayoutEffect(() => {
+    if (targetChangeId === undefined) {
+      lastFocusedChangeRequest.current = undefined
+      return
+    }
+    const requestKey = createTimelineAnchorRequestKey(
+      targetChangeId,
+      targetChangeRequestKey,
+    )
+    if (requestKey === undefined) return
+    if (lastFocusedChangeRequest.current === requestKey) return
+    const viewport = viewportRef.current
+    if (viewport === null) return
+    const target = findTimelineAnchor(viewport, 'changeAnchor', targetChangeId)
+    if (target === undefined) return
+    lastFocusedChangeRequest.current = requestKey
+    focusTimelineAnchor(viewport, target, followsLatest, setShowJumpToLatest)
+  }, [activityVersion, targetChangeId, targetChangeRequestKey])
+
   const handleScroll = useCallback((event: UIEvent<HTMLDivElement>) => {
     const viewport = event.currentTarget
     const nearBottom = isNearTimelineBottom(
@@ -341,7 +454,15 @@ export function ConversationTimeline({
   }, [])
 
   return (
-    <div className="relative min-h-0 bg-background">
+    <div className="relative min-h-0 min-w-0 overflow-hidden bg-background">
+      {missingTurnTarget ? (
+        <p
+          role="status"
+          className="absolute top-3 right-5 z-10 max-w-sm rounded-sm border border-border-strong bg-surface-elevated/95 px-3 py-2 text-xs text-text-secondary shadow-sm"
+        >
+          该轮次不在当前保留的历史中，已显示最近记录。
+        </p>
+      ) : null}
       <ScrollArea
         aria-label="会话执行时间线"
         className="h-full"
@@ -355,53 +476,84 @@ export function ConversationTimeline({
 
           {timeline.blocks.length > 0 ? (
             <div className="space-y-3">
-              {timeline.blocks.map((block) => {
+              {timeline.blocks.map((block, index) => {
+                const firstBlockForTurn =
+                  index === 0 ||
+                  timeline.blocks[index - 1]?.turnId !== block.turnId
+                let content
                 if (block.kind === 'message') {
-                  return block.message.author === 'user' ? (
-                    <UserMessage
-                      key={block.id}
-                      message={block.message}
-                      className="min-h-19"
-                    />
-                  ) : (
+                  content =
+                    block.message.author === 'user' ? (
+                      <UserMessage
+                        message={block.message}
+                        className="min-h-19"
+                      />
+                    ) : (
+                      <AgentMessage
+                        agent={agent}
+                        message={block.message}
+                        className="py-2"
+                        projectRootPath={projectRootPath}
+                      />
+                    )
+                } else {
+                  const message =
+                    block.message ??
+                    emptyRunMessage(block.id, block.time, block.status)
+                  const runContent =
+                    block.executions.length > 0 || block.outcomeText ? (
+                      <>
+                        {block.executions.length > 0 ? (
+                          <AgentRunExecutions
+                            executions={block.executions}
+                            changesById={changesById}
+                            approvalsById={approvalsById}
+                            projectRootPath={projectRootPath}
+                            selectedChangeId={targetChangeId}
+                          />
+                        ) : null}
+                        {block.outcomeText ? (
+                          <p
+                            role="status"
+                            data-outcome={block.outcome}
+                            className="mt-3 text-sm font-regular text-text-secondary"
+                          >
+                            {block.outcomeText}
+                          </p>
+                        ) : null}
+                      </>
+                    ) : undefined
+
+                  content = (
                     <AgentMessage
-                      key={block.id}
                       agent={agent}
-                      message={block.message}
-                      className="py-2"
-                    />
+                      message={message}
+                      projectRootPath={projectRootPath}
+                    >
+                      {runContent}
+                    </AgentMessage>
                   )
                 }
 
-                const message =
-                  block.message ??
-                  emptyRunMessage(block.id, block.time, block.status)
-                const runContent =
-                  block.executions.length > 0 || block.outcomeText ? (
-                    <>
-                      {block.executions.length > 0 ? (
-                        <AgentRunExecutions
-                          executions={block.executions}
-                          changesById={changesById}
-                          approvalsById={approvalsById}
-                        />
-                      ) : null}
-                      {block.outcomeText ? (
-                        <p
-                          role="status"
-                          data-outcome={block.outcome}
-                          className="mt-3 text-sm font-regular text-text-secondary"
-                        >
-                          {block.outcomeText}
-                        </p>
-                      ) : null}
-                    </>
-                  ) : undefined
-
                 return (
-                  <AgentMessage key={block.id} agent={agent} message={message}>
-                    {runContent}
-                  </AgentMessage>
+                  <div
+                    key={block.id}
+                    {...(firstBlockForTurn
+                      ? {
+                          'data-turn-anchor': block.turnId,
+                          role: 'group',
+                          tabIndex: -1,
+                          'aria-label': `会话轮次：${
+                            block.kind === 'message'
+                              ? block.message.time
+                              : block.time
+                          }`,
+                        }
+                      : {})}
+                    className="min-w-0 scroll-mt-4 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+                  >
+                    {content}
+                  </div>
                 )
               })}
             </div>
@@ -430,8 +582,37 @@ export function ConversationTimeline({
   )
 }
 
+function findTimelineAnchor(
+  viewport: HTMLElement,
+  datasetKey: 'changeAnchor' | 'turnAnchor',
+  identity: string,
+): HTMLElement | undefined {
+  return [
+    ...viewport.querySelectorAll<HTMLElement>(
+      '[data-turn-anchor], [data-change-anchor]',
+    ),
+  ].find((candidate) => candidate.dataset[datasetKey] === identity)
+}
+
+function focusTimelineAnchor(
+  viewport: HTMLElement,
+  target: HTMLElement,
+  followsLatest: { current: boolean },
+  setShowJumpToLatest: (show: boolean) => void,
+): void {
+  target.scrollIntoView({ behavior: 'instant', block: 'center' })
+  target.focus({ preventScroll: true })
+  const nearBottom = isNearTimelineBottom(
+    viewport.scrollTop,
+    viewport.clientHeight,
+    viewport.scrollHeight,
+  )
+  followsLatest.current = nearBottom
+  setShowJumpToLatest(!nearBottom)
+}
+
 function compactContext(value: string | undefined): string {
-  if (value === undefined) return 'Host 管理'
+  if (value === undefined) return '由 CodeTether 管理'
   const segments = value.replace(/\\/gu, '/').split('/').filter(Boolean)
   return segments.slice(-2).join('/') || value
 }

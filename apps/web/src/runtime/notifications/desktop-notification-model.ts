@@ -4,6 +4,7 @@ import type {
   AttentionType,
   ConversationId,
   ProjectId,
+  TurnId,
 } from '@codetether/protocol'
 
 const PROJECT_NAME_GRAPHEME_LIMIT = 24
@@ -29,6 +30,7 @@ export interface NotificationIntent {
   readonly type: AttentionType
   readonly projectId: ProjectId
   readonly conversationId: ConversationId
+  readonly turnId?: TurnId
   readonly title: string
   readonly body: string
 }
@@ -79,6 +81,7 @@ export function createNotificationIntent(
     type: attention.type,
     projectId: attention.projectId,
     conversationId: attention.conversationId,
+    ...(attention.turnId === undefined ? {} : { turnId: attention.turnId }),
     title: copy.title,
     body: `${projectName} · ${conversationTitle}\n${copy.detail}`,
   }

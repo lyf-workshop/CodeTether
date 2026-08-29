@@ -69,6 +69,7 @@ export function ConversationGroup({
                       conversationId: conversation.conversationId,
                     }}
                     aria-label={`打开会话：${conversation.title}`}
+                    title={conversation.title}
                     className="absolute inset-0 z-0 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
                   />
                 }

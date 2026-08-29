@@ -42,13 +42,13 @@ test('completed review resolves durably before real Conversation navigation', as
   const client = actionClient(calls)
   const item = completedItem()
 
-  await reviewCompletedAttention(client, item, (conversationId) => {
-    calls.push(['navigate', conversationId])
+  await reviewCompletedAttention(client, item, (conversationId, turnId) => {
+    calls.push(['navigate', conversationId, turnId])
   })
 
   assert.deepEqual(calls, [
     ['attention', 'attn_completed01'],
-    ['navigate', 'conv_inbox02'],
+    ['navigate', 'conv_inbox02', 'turn_inbox02'],
   ])
 })
 
@@ -57,9 +57,13 @@ test('completed review failure keeps navigation closed', async () => {
   const client = actionClient(calls, new Error('Host unavailable'))
 
   await assert.rejects(
-    reviewCompletedAttention(client, completedItem(), (conversationId) => {
-      calls.push(['navigate', conversationId])
-    }),
+    reviewCompletedAttention(
+      client,
+      completedItem(),
+      (conversationId, turnId) => {
+        calls.push(['navigate', conversationId, turnId])
+      },
+    ),
     /Host unavailable/,
   )
   assert.deepEqual(calls, [['attention', 'attn_completed01']])

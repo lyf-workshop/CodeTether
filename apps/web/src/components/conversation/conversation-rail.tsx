@@ -6,7 +6,7 @@ import {
   type Ref,
 } from 'react'
 import { Link } from '@tanstack/react-router'
-import { Archive, MoreHorizontal, Plus } from 'lucide-react'
+import { Archive, Plus } from 'lucide-react'
 import type { ProjectId } from '@codetether/protocol'
 
 import {
@@ -121,6 +121,7 @@ function ConversationRailRow({
 
           <span className="min-w-0 flex-1 self-stretch py-2">
             <span
+              title={conversation.title}
               className={cn(
                 'block truncate text-md',
                 selected ? 'font-semibold' : 'font-medium',
@@ -141,19 +142,10 @@ function ConversationRailRow({
             </span>
           </span>
 
-          <span className="flex h-full shrink-0 flex-col items-end justify-between py-2 text-text-muted">
+          <span className="flex h-full shrink-0 items-center py-2 text-text-muted">
             <span className="text-xs font-regular tabular-nums">
               {conversation.lastActivity}
             </span>
-            <MoreHorizontal
-              aria-hidden="true"
-              className={cn(
-                'size-4 transition-opacity duration-150 motion-reduce:transition-none',
-                selected
-                  ? 'opacity-60 group-hover:opacity-100'
-                  : 'opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100',
-              )}
-            />
           </span>
         </Link>
       </Button>

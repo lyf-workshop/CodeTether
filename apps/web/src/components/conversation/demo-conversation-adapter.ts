@@ -93,11 +93,13 @@ function createDemoConversation(conversationId: string): ConversationViewModel {
         {
           kind: 'message',
           id: data.timeline.userMessage.id,
+          turnId: 'turn_demo_initial',
           message: data.timeline.userMessage,
         },
         {
           kind: 'agent-run',
           id: 'agent-run-demo',
+          turnId: 'turn_demo_initial',
           time: data.timeline.agentRun.message.time,
           status: data.timeline.agentRun.message.status ?? conversation.status,
           message: data.timeline.agentRun.message,
@@ -106,6 +108,7 @@ function createDemoConversation(conversationId: string): ConversationViewModel {
         {
           kind: 'message',
           id: data.timeline.followUp.id,
+          turnId: 'turn_demo_follow_up',
           message: data.timeline.followUp,
         },
       ],

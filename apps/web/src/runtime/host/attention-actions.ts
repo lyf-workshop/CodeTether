@@ -124,16 +124,16 @@ function epochChangeReason(signal: AbortSignal): HostEpochChangedError {
 /** Stable product copy; Host and Provider diagnostics remain private. */
 export function attentionErrorMessage(error: unknown): string {
   if (error instanceof HostEpochChangedError) {
-    return 'CodeTether Host 已重启，请确认当前待处理状态后重试。'
+    return 'CodeTether 已重新连接，请确认当前待处理状态后重试。'
   }
   if (error instanceof CodeTetherIncompatibleProtocolError) {
-    return 'CodeTether Host 版本不兼容，请更新后重试。'
+    return '当前 CodeTether 版本不兼容，请更新应用后重试。'
   }
   if (error instanceof CodeTetherProtocolError) {
-    return 'CodeTether Host 返回了无法识别的数据。'
+    return 'CodeTether 暂时无法读取数据，请重试。'
   }
   if (!(error instanceof CodeTetherResponseError)) {
-    return '无法连接到 CodeTether Host，请检查连接后重试。'
+    return 'CodeTether 暂时无法连接，请重试。'
   }
 
   switch (error.envelope.code) {
@@ -148,7 +148,7 @@ export function attentionErrorMessage(error: unknown): string {
     case 'project_unavailable':
       return '项目目录当前不可用，但历史仍可查看。'
     case 'runtime_unavailable':
-      return 'Codex Runtime 当前不可用。'
+      return 'Codex 当前不可用。'
     case 'invalid_request':
       return '请求无效，请刷新后重试。'
     case 'provider_conversation_unavailable':
@@ -156,6 +156,6 @@ export function attentionErrorMessage(error: unknown): string {
     case 'provider_error':
     case 'project_has_conversations':
     case 'internal':
-      return 'Host 未能处理该事项。'
+      return 'CodeTether 未能处理该事项。'
   }
 }

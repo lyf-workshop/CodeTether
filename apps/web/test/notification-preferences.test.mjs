@@ -118,8 +118,8 @@ test('Settings exposes only the three real Desktop types and a truthful Browser 
   assert.match(source, /type: 'approval'/u)
   assert.match(source, /type: 'completed_review'/u)
   assert.match(source, /type: 'failed'/u)
-  assert.match(source, /桌面通知在此环境中不可用/u)
-  assert.match(source, /Browser\s+模式仍会在收件箱中显示/u)
+  assert.match(source, /桌面通知需要 CodeTether Desktop/u)
+  assert.match(source, /浏览器中仍可通过收件箱查看/u)
   assert.doesNotMatch(source, /__TAURI__|isTauri|plugin-notification/u)
 })
 

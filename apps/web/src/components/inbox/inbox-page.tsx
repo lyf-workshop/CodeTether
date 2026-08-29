@@ -174,11 +174,11 @@ export function InboxPage() {
         await reviewCompletedAttention(
           runtime,
           item,
-          async (conversationId) =>
+          async (conversationId, turnId) =>
             await navigate({
               to: '/conversations/$conversationId',
               params: { conversationId },
-              search: {},
+              search: turnId === undefined ? {} : { turn: turnId },
             }),
         )
       } else {
@@ -257,7 +257,7 @@ export function InboxPage() {
                 summary={model.summary}
               />
               <p className="shrink-0 text-xs font-regular text-text-muted">
-                Host 按处理优先级排序
+                按处理优先级排序
               </p>
             </div>
 

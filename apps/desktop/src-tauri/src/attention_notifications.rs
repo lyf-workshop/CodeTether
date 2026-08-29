@@ -30,6 +30,8 @@ pub struct NotificationIntent {
     attention_type: AttentionNotificationType,
     project_id: String,
     conversation_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    turn_id: Option<String>,
     title: String,
     body: String,
 }
@@ -44,6 +46,13 @@ impl NotificationIntent {
         }
         if !is_public_id(&self.conversation_id, "conv_") {
             return Err("conversationId is not a CodeTether Conversation identity");
+        }
+        if self
+            .turn_id
+            .as_deref()
+            .is_some_and(|turn_id| !is_public_id(turn_id, "turn_"))
+        {
+            return Err("turnId is not a CodeTether Turn identity");
         }
         validate_text(&self.title, MAX_TITLE_CHARACTERS, false, "title")?;
         validate_text(&self.body, MAX_BODY_CHARACTERS, true, "body")?;
@@ -504,6 +513,7 @@ mod tests {
             attention_type: AttentionNotificationType::CompletedReview,
             project_id: "proj_123456".to_owned(),
             conversation_id: "conv_123456".to_owned(),
+            turn_id: Some("turn_123456".to_owned()),
             title: "CodeTether · 工作已完成".to_owned(),
             body: "中文项目 · 修复 Windows 登录问题 🚀\nCodex 已完成本轮工作".to_owned(),
         }
@@ -521,6 +531,7 @@ mod tests {
         let json = serde_json::to_value(value).unwrap();
         assert_eq!(json["type"], "completed_review");
         assert_eq!(json["attentionId"], "attn_123456");
+        assert_eq!(json["turnId"], "turn_123456");
         assert!(json.get("providerThreadId").is_none());
     }
 
@@ -528,6 +539,13 @@ mod tests {
     fn intent_rejects_private_or_unbounded_values() {
         let mut value = intent("provider_request_123456");
         assert!(value.validate().is_err());
+
+        value = intent("attn_123456");
+        value.turn_id = Some("provider_turn_123456".to_owned());
+        assert_eq!(
+            value.validate(),
+            Err("turnId is not a CodeTether Turn identity")
+        );
 
         value = intent("attn_123456");
         value.title = "x".repeat(MAX_TITLE_CHARACTERS + 1);
@@ -543,6 +561,17 @@ mod tests {
         let mut json = serde_json::to_value(intent("attn_123456")).unwrap();
         json["providerThreadId"] = serde_json::json!("thread_private");
         assert!(serde_json::from_value::<NotificationIntent>(json).is_err());
+    }
+
+    #[test]
+    fn intent_keeps_legacy_turn_identity_optional() {
+        let mut json = serde_json::to_value(intent("attn_123456")).unwrap();
+        json.as_object_mut().unwrap().remove("turnId");
+
+        let value = serde_json::from_value::<NotificationIntent>(json).unwrap();
+        assert_eq!(value.turn_id, None);
+        let encoded = serde_json::to_value(value).unwrap();
+        assert!(encoded.get("turnId").is_none());
     }
 
     #[test]

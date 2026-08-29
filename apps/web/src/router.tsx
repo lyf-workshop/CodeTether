@@ -4,6 +4,7 @@ import {
   createRouter,
   redirect,
 } from '@tanstack/react-router'
+import { TurnIdSchema, type TurnId } from '@codetether/protocol'
 
 import { RootLayout } from './components/app-shell/root-layout'
 import { RoutePlaceholder } from './components/app-shell/route-placeholder'
@@ -16,7 +17,9 @@ import { DesktopNotificationSettings } from './components/settings'
 const rootRoute = createRootRoute({ component: RootLayout })
 
 interface ConversationSearch {
+  focus?: 'composer'
   panel?: 'changes'
+  turn?: TurnId
 }
 
 const homeRoute = createRoute({
@@ -44,9 +47,15 @@ const conversationsRoute = createRoute({
 const conversationRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/conversations/$conversationId',
-  validateSearch: (search: Record<string, unknown>): ConversationSearch => ({
-    panel: search.panel === 'changes' ? 'changes' : undefined,
-  }),
+  remountDeps: ({ params }) => params.conversationId,
+  validateSearch: (search: Record<string, unknown>): ConversationSearch => {
+    const turn = TurnIdSchema.safeParse(search.turn)
+    return {
+      focus: search.focus === 'composer' ? 'composer' : undefined,
+      panel: search.panel === 'changes' ? 'changes' : undefined,
+      ...(turn.success ? { turn: turn.data } : {}),
+    }
+  },
   component: ConversationDetailRoute,
 })
 

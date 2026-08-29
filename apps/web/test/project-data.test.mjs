@@ -263,7 +263,7 @@ test('Project errors use stable safe copy and never expose Host diagnostics', ()
   )
   assert.equal(
     projectErrorMessage(new TypeError('fetch internals'), 'load'),
-    '无法连接到 CodeTether Host，请检查连接后重试。',
+    'CodeTether 暂时无法连接，请重试。',
   )
   for (const message of [
     projectErrorMessage(invalid, 'create'),

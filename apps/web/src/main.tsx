@@ -59,6 +59,7 @@ async function renderApp() {
     },
   })
   const runtime = getHostRuntime(queryClient)
+  let notificationNavigationSequence = 0
   const notificationStorage = resolveNotificationPreferenceStorage()
   const notificationCoordinator = new AttentionNotificationCoordinator({
     adapter: nativeCapabilities.notifications,
@@ -97,9 +98,12 @@ async function renderApp() {
       return { projectName: project.name, conversationTitle }
     },
     navigate: async (intent) => {
+      notificationNavigationSequence += 1
       await router.navigate({
         to: '/conversations/$conversationId',
         params: { conversationId: intent.conversationId },
+        search: intent.turnId === undefined ? {} : { turn: intent.turnId },
+        hash: `notification-${notificationNavigationSequence}`,
       })
     },
   })

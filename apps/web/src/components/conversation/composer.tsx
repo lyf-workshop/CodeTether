@@ -1,29 +1,9 @@
 import { useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
-import {
-  AtSign,
-  Hash,
-  LoaderCircle,
-  LockKeyhole,
-  Paperclip,
-  Send,
-  Zap,
-} from 'lucide-react'
+import { LoaderCircle, Send } from 'lucide-react'
 
-import {
-  Button,
-  IconButton,
-  Separator,
-  Textarea,
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-  agentDefinitions,
-} from '@codetether/ui'
+import { IconButton, Separator, Textarea } from '@codetether/ui'
 
-import type {
-  ConversationCapabilitiesViewModel,
-  ConversationViewModel,
-} from './conversation-view-model'
+import type { ConversationCapabilitiesViewModel } from './conversation-view-model'
 import {
   draftAfterSubmit,
   isComposerEditableState,
@@ -32,19 +12,10 @@ import {
 } from './conversation-controls'
 
 interface ComposerProps {
-  conversation: ConversationViewModel
   capabilities: ConversationCapabilitiesViewModel
   controller?: ComposerController
   externalError?: string
 }
-
-const quickActions = [
-  { label: '/ 命令', accessibleLabel: '/ 命令', icon: null },
-  { label: '引用', accessibleLabel: '@ 引用', icon: AtSign },
-  { label: '! 终端', accessibleLabel: '! 终端', icon: null },
-  { label: '技能', accessibleLabel: '# 技能', icon: Hash },
-  { label: '附件', accessibleLabel: '附件', icon: Paperclip },
-] as const
 
 const composerStateLabels = {
   idle: 'Enter 发送 · Shift + Enter 换行',
@@ -52,11 +23,10 @@ const composerStateLabels = {
   running: 'Codex 正在运行',
   waiting: 'Codex 正在等待审批',
   interrupted: '已中断，可以继续发送',
-  unavailable: 'CodeTether Host 当前不可用',
+  unavailable: 'CodeTether 暂时无法连接',
 } as const
 
 export function Composer({
-  conversation,
   capabilities,
   controller,
   externalError,
@@ -69,7 +39,6 @@ export function Composer({
     capabilities.canCompose && isComposerEditableState(controlState)
   const canSend = canEdit && value.trim().length > 0
   const isLive = controller !== undefined
-  const agentName = agentDefinitions[conversation.agent].name
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -109,24 +78,7 @@ export function Composer({
       onSubmit={handleSubmit}
       className="flex h-[var(--layout-conversation-composer-height)] min-w-0 flex-col overflow-hidden rounded-md border border-border-strong bg-surface/70 transition-[border-color,box-shadow] duration-150 focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/25 motion-reduce:transition-none"
     >
-      <div className="flex min-w-0 items-center gap-0.5 overflow-x-auto px-2 pt-2">
-        {quickActions.map(({ label, accessibleLabel, icon: Icon }) => (
-          <Button
-            key={label}
-            type="button"
-            variant="ghost"
-            size="sm"
-            disabled={isLive || !capabilities.canCompose}
-            className="h-7 gap-1.5 px-2 text-sm text-text-muted hover:bg-surface-muted/70 hover:text-text-primary"
-            aria-label={`${accessibleLabel}（演示）`}
-          >
-            {Icon ? <Icon aria-hidden="true" className="size-3.5" /> : null}
-            {label}
-          </Button>
-        ))}
-      </div>
-
-      <div className="flex min-h-0 flex-1 items-start gap-2 px-3 py-1">
+      <div className="flex min-h-0 flex-1 items-start gap-2 px-3 py-2">
         <label htmlFor="conversation-composer" className="sr-only">
           输入消息
         </label>
@@ -166,77 +118,7 @@ export function Composer({
 
       <Separator className="bg-border/65" />
 
-      <div className="flex min-w-0 items-center gap-0.5 overflow-x-auto px-2 py-2">
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <div
-              tabIndex={0}
-              role="note"
-              aria-label={`智能体 ${conversation.agent}，已锁定`}
-              className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-sm px-2 text-sm font-regular text-text-secondary outline-none hover:bg-surface-muted/70 focus-visible:ring-2 focus-visible:ring-ring/50"
-            >
-              <LockKeyhole
-                aria-hidden="true"
-                className="size-3 text-text-muted"
-              />
-              <span className="text-text-muted">智能体</span>
-              <span>{agentName}</span>
-            </div>
-          </TooltipTrigger>
-          <TooltipContent side="top" className="max-w-72">
-            此会话由 {agentName} 创建。如需使用其他智能体，请新建会话。
-          </TooltipContent>
-        </Tooltip>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          disabled={isLive || !capabilities.canCompose}
-          className="h-7 gap-1.5 px-2 text-sm text-text-secondary hover:bg-surface-muted/70"
-        >
-          <span className="text-text-muted">模型</span>
-          {conversation.model}
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          disabled={isLive || !capabilities.canCompose}
-          className="h-7 gap-1.5 px-2 text-sm text-text-secondary hover:bg-surface-muted/70"
-        >
-          <span className="text-text-muted">推理</span>
-          {conversation.reasoning}
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          disabled={isLive || !capabilities.canCompose}
-          className="h-7 gap-1.5 px-2 text-sm text-text-secondary hover:bg-surface-muted/70"
-        >
-          <span className="text-text-muted">权限</span>
-          {conversation.permission}
-        </Button>
-        <IconButton
-          type="button"
-          label="添加上下文（演示）"
-          variant="ghost"
-          size="sm"
-          disabled={isLive || !capabilities.canCompose}
-          className="size-7 text-text-muted hover:bg-surface-muted/70 hover:text-text-primary"
-        >
-          <Hash aria-hidden="true" />
-        </IconButton>
-        <IconButton
-          type="button"
-          label="快速操作（演示）"
-          variant="ghost"
-          size="sm"
-          disabled={isLive || !capabilities.canCompose}
-          className="size-7 text-text-muted hover:bg-surface-muted/70 hover:text-text-primary"
-        >
-          <Zap aria-hidden="true" />
-        </IconButton>
+      <div className="flex min-w-0 items-center px-3 py-2">
         {feedback ? (
           <span
             role="alert"

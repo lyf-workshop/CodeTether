@@ -582,7 +582,7 @@ Exit gate results:
 
 ### Phase 4C — Desktop Notifications
 
-**Status:** implemented; required Windows development, production, and installed-NSIS validation is complete. Owner acceptance is pending, so do not mark this phase accepted or frozen.
+**Status:** implemented, validated, accepted, and frozen.
 
 Implemented scope:
 
@@ -610,7 +610,32 @@ Exit gate results:
 - Windows development validation exercised real Approval and completed-review Attention plus the canonical failed fixture while CodeTether was backgrounded/minimized. Clicks returned to the exact Conversation; exact-Conversation foreground Approval produced only the Approval Dock, and click never resolved durable Attention.
 - Replay, `stream.reset`, restart reconstruction, rapid distinct Attention, resolved-before-click, unavailable Project, Unicode, and long-title paths retained durable truth without duplicate delivery or accidental resolution.
 - `pnpm desktop:build`, the raw release executable, and an isolated installed NSIS application verified CodeTether branding, notification display/click, single-instance restoration/focus, restart behavior, graceful close, and no residual owned processes. Standalone Browser regression remained free of Tauri execution and native errors.
-- Phase 4C remains implemented and validated but not accepted or frozen until Owner review.
+- Owner acceptance is complete. Phase 4C remains bounded to best-effort delivery while the owned Desktop process and Host are running; it does not add tray or closed-app behavior.
+
+### Phase 4D — Desktop Product Polish & Dogfooding
+
+**Status:** implemented; Owner acceptance is pending.
+
+Implemented scope:
+
+- A deterministic presentation pass groups runs of at least three adjacent routine completed Tool executions. Failed, active, test, Approval-linked, and Diff-producing work remains independently visible, and expansion restores every original normalized Tool row.
+- Agent messages render a deliberately small safe Markdown subset: headings, paragraphs, ordered and unordered lists, bold text, inline code, fenced code, and allowed `http`, `https`, and `mailto` links. Raw HTML, remote images, script/iframe execution, unsafe URLs, and HTML injection remain unsupported.
+- Reliably Project-contained absolute paths may be shortened in presentation only. Canonical Project roots, durable Agent messages, terminal output, and normalized change data remain unchanged; ambiguous or outside-root paths remain verbatim.
+- Inbox and notification navigation can carry an existing public Turn identity through `?turn=<turnId>`. Conversation Detail focuses the corresponding Turn without resolving Attention. Selecting an Inspector Changes file locates the matching Timeline Diff without creating another Diff model.
+- Desktop surfaces use denser, bounded titles, paths, Rail rows, Project metadata, Composer controls, and Settings rows. Placeholder Activity/Agents/Machines navigation and unsupported Composer actions are hidden, while user-facing errors and status copy avoid exposing Host/Runtime implementation terms.
+
+Not included:
+
+- Conversation Rename, Archive, Pin, Delete, Search, or new organization state.
+- Tray/background-after-close behavior, notification history, custom window chrome, updater, remote access, or additional native capability.
+- Claude Code, OpenCode, another provider, or changes to Agent/Conversation ownership.
+- Persistence, Protocol v1, Host Runtime, Attention semantics, normalized event history, or a Desktop-specific React product tree.
+
+Exit gate:
+
+- Focused presentation tests cover Tool grouping, Markdown and safe links, contained-path display, Turn/Diff navigation, Composer autofocus, long titles and paths, minimum-window density, and product truthfulness.
+- Existing Browser and Desktop product flows continue to use one shared Web UI and the frozen Host/Protocol boundaries.
+- Owner dogfooding must accept the resulting sustained-use experience before Phase 4D is described as accepted or frozen.
 
 ## Phase 5 — Machines
 

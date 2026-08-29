@@ -197,12 +197,12 @@ test('keeps two retained Turns in user/agent order', () => {
   assert.deepEqual(
     viewModel.timeline.blocks
       .filter((block) => block.kind === 'message')
-      .map((block) => [block.message.author, block.message.body]),
+      .map((block) => [block.turnId, block.message.author, block.message.body]),
     [
-      ['user', 'First prompt'],
-      ['agent', 'First answer'],
-      ['user', 'Second prompt'],
-      ['agent', 'Streaming answer'],
+      ['turn_live01', 'user', 'First prompt'],
+      ['turn_live01', 'agent', 'First answer'],
+      ['turn_live02', 'user', 'Second prompt'],
+      ['turn_live02', 'agent', 'Streaming answer'],
     ],
   )
 })

@@ -35,6 +35,7 @@ test('maps only durable Attention type and safe product metadata to notification
     type: 'approval',
     projectId,
     conversationId,
+    turnId,
     title: 'CodeTether · 需要批准',
     body: '中文项目 · 修复 Windows 登录后的自动重连问题 🚀\nCodex 正在等待你的确认',
   })

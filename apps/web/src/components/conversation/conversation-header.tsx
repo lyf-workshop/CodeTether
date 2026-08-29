@@ -1,5 +1,5 @@
 import type { Ref } from 'react'
-import { LoaderCircle, PanelRightOpen, Pause, Square } from 'lucide-react'
+import { FileDiff, LoaderCircle, PanelRightOpen, Pause } from 'lucide-react'
 
 import {
   AgentBadge,
@@ -51,7 +51,10 @@ export function ConversationHeader({
   return (
     <header className="flex h-[var(--layout-conversation-header-height)] min-w-0 items-start justify-between gap-4 border-b border-border px-5 py-4">
       <div className="min-w-0">
-        <h1 className="truncate text-lg font-semibold text-text-primary">
+        <h1
+          title={conversation.title}
+          className="truncate text-lg font-semibold text-text-primary"
+        >
           {conversation.title}
         </h1>
         <div className="mt-2 flex min-w-0 items-center gap-2 overflow-hidden">
@@ -64,17 +67,20 @@ export function ConversationHeader({
             variant="compact"
             className="h-6"
           />
-          <Badge variant="outline" className="h-6 rounded-sm px-2 font-regular">
-            {conversation.model}
-          </Badge>
-          <Badge variant="outline" className="h-6 rounded-sm px-2 font-regular">
-            {conversation.reasoning}
-          </Badge>
+          {conversation.model === '默认模型' ? null : (
+            <Badge
+              variant="outline"
+              className="h-6 max-w-44 truncate rounded-sm px-2 font-regular"
+              title={conversation.model}
+            >
+              {conversation.model}
+            </Badge>
+          )}
           <MachineBadge
             name={conversation.machine}
             className="h-6 font-regular"
           />
-          {connectionIndicator ? (
+          {connectionIndicator && connectionIndicator.state !== 'connected' ? (
             <Badge
               variant={connectionBadgeVariants[connectionIndicator.state]}
               className="h-6 rounded-sm px-2 font-regular"
@@ -104,6 +110,7 @@ export function ConversationHeader({
           aria-label="查看当前会话的变更"
           onClick={onOpenChanges}
         >
+          <FileDiff aria-hidden="true" />
           <span className="max-[1180px]:sr-only">查看变更</span>
         </Button>
         <IconButton
@@ -128,15 +135,6 @@ export function ConversationHeader({
           ) : (
             <Pause aria-hidden="true" />
           )}
-        </IconButton>
-        <IconButton
-          label="停止当前会话"
-          variant="ghost"
-          size="sm"
-          className="size-8 text-danger hover:bg-danger-muted/60 hover:text-danger active:bg-danger-muted"
-          disabled={!capabilities.canStop}
-        >
-          <Square aria-hidden="true" className="size-3.5 fill-current" />
         </IconButton>
       </div>
     </header>

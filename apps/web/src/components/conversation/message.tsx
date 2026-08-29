@@ -10,6 +10,7 @@ import {
 } from '@codetether/ui'
 
 import type { ConversationMessageViewModel } from './conversation-view-model'
+import { MessageMarkdown } from './message-markdown'
 
 interface MessageProps {
   message: ConversationMessageViewModel
@@ -19,6 +20,7 @@ interface MessageProps {
 
 interface AgentMessageProps extends MessageProps {
   agent: AgentId
+  projectRootPath?: string
 }
 
 export function UserMessage({ message, className }: MessageProps) {
@@ -53,6 +55,7 @@ export function AgentMessage({
   message,
   children,
   className,
+  projectRootPath,
 }: AgentMessageProps) {
   const agentDefinition = agentDefinitions[agent]
   const hasExecution = Boolean(children)
@@ -87,9 +90,9 @@ export function AgentMessage({
           </time>
         </header>
         {message.body.length > 0 ? (
-          <p className="mt-2 whitespace-pre-wrap break-words text-base font-regular leading-normal text-text-primary">
+          <MessageMarkdown projectRootPath={projectRootPath}>
             {message.body}
-          </p>
+          </MessageMarkdown>
         ) : null}
         {children ? (
           <div className="mt-3 min-w-0 overflow-hidden">{children}</div>

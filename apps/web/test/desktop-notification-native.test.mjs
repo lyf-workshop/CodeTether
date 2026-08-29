@@ -8,6 +8,7 @@ const intent = {
   type: 'completed_review',
   projectId: 'proj_123456',
   conversationId: 'conv_123456',
+  turnId: 'turn_123456',
   title: 'CodeTether · 工作已完成',
   body: '中文项目 · 修复自动重连\nCodex 已完成本轮工作',
 }
@@ -346,7 +347,51 @@ test('Desktop adapter rejects malformed notification intent before native delive
     capabilities.notifications.deliver({ ...intent, title: '' }),
     /invalid/u,
   )
+  await assert.rejects(
+    capabilities.notifications.deliver({
+      ...intent,
+      turnId: 'provider_turn_private01',
+    }),
+    /invalid/u,
+  )
   assert.equal(coreLoads, 0)
+})
+
+test('Notification click rejects a malformed optional Turn identity', async () => {
+  const received = []
+  let eventListener
+  const originalWarn = console.warn
+  const warnings = []
+  console.warn = (...values) => warnings.push(values)
+
+  try {
+    const capabilities = createNativeCapabilities({
+      tauriAvailable: true,
+      loadTauriCore: async () => ({
+        invoke: async () => null,
+      }),
+      loadTauriEvent: async () => ({
+        listen: async (_event, listener) => {
+          eventListener = listener
+          return () => undefined
+        },
+      }),
+    })
+    const unsubscribe = await capabilities.notifications.subscribeToIntents(
+      (value) => received.push(value),
+    )
+
+    eventListener({
+      payload: { ...intent, turnId: 'provider_turn_private01' },
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    assert.deepEqual(received, [])
+    assert.equal(warnings.length, 1)
+    unsubscribe()
+  } finally {
+    console.warn = originalWarn
+  }
 })
 
 function deferred() {

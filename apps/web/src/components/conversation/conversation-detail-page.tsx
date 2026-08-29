@@ -1,7 +1,7 @@
 import { useRef, useState, type Ref } from 'react'
 
 import { Dialog, DialogContent, DialogTitle } from '@codetether/ui'
-import type { ProjectId } from '@codetether/protocol'
+import type { ProjectId, TurnId } from '@codetether/protocol'
 
 import { ConversationRail } from './conversation-rail'
 import type { ConversationControls } from './conversation-controls'
@@ -20,6 +20,7 @@ import {
 } from './conversation-inspector-state'
 
 export interface ConversationDetailPageProps {
+  anchorRequestKey?: string
   viewModel: ConversationViewModel
   rail: ConversationRailViewModel
   connectionIndicator?: ConversationConnectionIndicatorViewModel
@@ -29,9 +30,11 @@ export interface ConversationDetailPageProps {
   newConversationDisabled?: boolean
   onNewConversation?: () => void
   projectId?: ProjectId
+  targetTurnId?: TurnId
 }
 
 export function ConversationDetailPage({
+  anchorRequestKey,
   viewModel,
   rail,
   connectionIndicator,
@@ -41,6 +44,7 @@ export function ConversationDetailPage({
   newConversationDisabled = false,
   onNewConversation,
   projectId,
+  targetTurnId,
 }: ConversationDetailPageProps) {
   const [inspector, setInspector] = useState(() =>
     createConversationInspectorState(
@@ -48,7 +52,26 @@ export function ConversationDetailPage({
       initialInspectorTab !== 'overview' && usesInspectorDialogLayout(),
     ),
   )
+  const [selectedChangeId, setSelectedChangeId] = useState<string | undefined>(
+    undefined,
+  )
+  const [changeNavigationRequest, setChangeNavigationRequest] = useState(0)
   const inspectorTriggerRef = useRef<HTMLButtonElement>(null)
+  const pendingChangeNavigationRef = useRef<string | undefined>(undefined)
+
+  const commitChangeNavigation = (changeId: string) => {
+    setSelectedChangeId(changeId)
+    setChangeNavigationRequest((current) => current + 1)
+  }
+
+  const selectChange = (changeId: string) => {
+    if (usesInspectorDialogLayout()) {
+      pendingChangeNavigationRef.current = changeId
+      setInspector((current) => setConversationInspectorOpen(current, false))
+      return
+    }
+    commitChangeNavigation(changeId)
+  }
 
   const inspectorProps = {
     conversation: viewModel,
@@ -58,6 +81,8 @@ export function ConversationDetailPage({
     tab: inspector.tab,
     onTabChange: (tab: InspectorTab) =>
       setInspector((current) => selectConversationInspectorTab(current, tab)),
+    onChangeSelect: selectChange,
+    selectedChangeId,
   } as const
 
   return (
@@ -82,6 +107,7 @@ export function ConversationDetailPage({
           {...(projectId === undefined ? {} : { projectId })}
         />
         <ConversationWorkspace
+          anchorRequestKey={anchorRequestKey}
           viewModel={viewModel}
           connectionIndicator={connectionIndicator}
           onOpenInspector={() =>
@@ -100,6 +126,9 @@ export function ConversationDetailPage({
           }
           inspectorTriggerRef={inspectorTriggerRef}
           controls={controls}
+          targetChangeId={selectedChangeId}
+          targetChangeRequestKey={changeNavigationRequest}
+          targetTurnId={targetTurnId}
         />
         <div className="hidden min-h-0 min-w-0 min-[1440px]:block">
           <InspectorPanel {...inspectorProps} />
@@ -111,6 +140,12 @@ export function ConversationDetailPage({
         aria-describedby={undefined}
         onCloseAutoFocus={(event) => {
           event.preventDefault()
+          const pendingChangeId = pendingChangeNavigationRef.current
+          if (pendingChangeId !== undefined) {
+            pendingChangeNavigationRef.current = undefined
+            commitChangeNavigation(pendingChangeId)
+            return
+          }
           inspectorTriggerRef.current?.focus()
         }}
         className="top-[var(--layout-topbar-height)] right-0 bottom-0 left-auto block h-[calc(100dvh-var(--layout-topbar-height))] max-h-none w-[var(--layout-conversation-inspector-width)] max-w-[calc(100vw-var(--layout-sidebar-current-width))] translate-x-0 translate-y-0 gap-0 overflow-hidden rounded-none border-y-0 border-r-0 bg-surface-inset p-0 duration-200 data-[state=closed]:translate-x-full data-[state=closed]:scale-100 data-[state=open]:scale-100 motion-reduce:transition-none"

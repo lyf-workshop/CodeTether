@@ -85,13 +85,13 @@ export function newConversationErrorMessage(error: unknown): string {
     return '已有会话正在创建，请稍候。'
   }
   if (error instanceof CodeTetherIncompatibleProtocolError) {
-    return 'CodeTether Host 版本不兼容，请更新后重试。'
+    return '当前 CodeTether 版本不兼容，请更新应用后重试。'
   }
   if (error instanceof CodeTetherProtocolError) {
-    return 'CodeTether Host 返回了无法识别的数据。'
+    return 'CodeTether 暂时无法读取数据，请重试。'
   }
   if (!(error instanceof CodeTetherResponseError)) {
-    return '无法连接到 CodeTether Host，请检查连接后重试。'
+    return 'CodeTether 暂时无法连接，请重试。'
   }
 
   switch (error.envelope.code) {
@@ -104,9 +104,9 @@ export function newConversationErrorMessage(error: unknown): string {
     case 'project_unavailable':
       return '项目目录当前不可用，暂时不能创建会话。'
     case 'runtime_unavailable':
-      return 'Codex Runtime 当前不可用。'
+      return 'Codex 当前不可用。'
     case 'unsupported':
-      return '当前 Host 不支持创建 Codex 会话。'
+      return '当前 CodeTether 版本不支持创建 Codex 会话。'
     case 'timeout':
       return '创建会话等待超时，请重试。'
     case 'provider_error':
@@ -114,6 +114,6 @@ export function newConversationErrorMessage(error: unknown): string {
       return 'Codex 未能创建会话。'
     case 'project_has_conversations':
     case 'internal':
-      return 'Host 未能创建会话。'
+      return 'CodeTether 未能创建会话。'
   }
 }

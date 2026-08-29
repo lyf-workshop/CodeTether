@@ -1,5 +1,7 @@
 import type { AgentId, DiffLine, ExecutionStatus } from '@codetether/ui'
 
+import type { ToolPresentationKind } from './tool-presentation.js'
+
 export type ConversationRailFilter = 'all' | 'running' | 'waiting' | 'completed'
 
 export interface ConversationMessageViewModel {
@@ -14,6 +16,7 @@ export interface ConversationToolViewModel {
   readonly id: string
   readonly title: string
   readonly status: ExecutionStatus
+  readonly presentationKind?: ToolPresentationKind
   readonly description?: string
   readonly outputSummary?: string
   readonly actionLabel?: string
@@ -83,11 +86,13 @@ export type ConversationTimelineBlockViewModel =
   | {
       readonly kind: 'message'
       readonly id: string
+      readonly turnId: string
       readonly message: ConversationMessageViewModel
     }
   | {
       readonly kind: 'agent-run'
       readonly id: string
+      readonly turnId: string
       readonly time: string
       readonly status: ExecutionStatus
       readonly message?: ConversationMessageViewModel
@@ -131,6 +136,8 @@ export interface ConversationViewModel {
   readonly machine: string
   readonly branch: string
   readonly duration: string
+  /** Presentation-only workspace context; never mutates durable message text. */
+  readonly projectRootPath?: string
   readonly timeline: ConversationTimelineViewModel
   readonly changes: ConversationChangesViewModel
   readonly terminal: ConversationTerminalViewModel

@@ -53,7 +53,7 @@ export function conversationListPageViewState(
 }
 
 export function conversationListErrorMessage(): string {
-  return '无法读取会话。请确认 CodeTether Host 正在运行，然后重试。'
+  return 'CodeTether 暂时无法读取会话，请重试。'
 }
 
 function isNotFound(error: unknown): boolean {

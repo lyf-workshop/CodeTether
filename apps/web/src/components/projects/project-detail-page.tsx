@@ -4,7 +4,8 @@ import { Link, useParams } from '@tanstack/react-router'
 import {
   ArrowLeft,
   CalendarDays,
-  Fingerprint,
+  Check,
+  Copy,
   FolderOpen,
   MessageSquare,
   Plus,
@@ -14,7 +15,7 @@ import {
   TriangleAlert,
 } from 'lucide-react'
 
-import { Button, Separator, cn } from '@codetether/ui'
+import { Button, IconButton, Separator, cn } from '@codetether/ui'
 import {
   ProjectIdSchema,
   type ProjectId,
@@ -29,7 +30,11 @@ import { projectDetailQueryOptions } from '../../runtime/host/project-query'
 import { projectDetailViewState } from '../../runtime/host/project-view-state'
 import { ProjectAvailabilityBadge } from './project-availability-badge'
 import { ProjectsErrorState, ProjectsLoadingState } from './project-page-states'
-import { formatProjectTime } from './project-format'
+import {
+  compactProjectPath,
+  formatProjectTime,
+  projectFolderName,
+} from './project-format'
 import { RemoveProjectDialog } from './remove-project-dialog'
 import { NewConversationDialog } from '../conversations/new-conversation-dialog'
 
@@ -52,6 +57,9 @@ function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
   const connectionState = useHostConnectionState()
   const removeButtonRef = useRef<HTMLButtonElement>(null)
   const [removeOpen, setRemoveOpen] = useState(false)
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>(
+    'idle',
+  )
   const projectQuery = useQuery({
     ...projectDetailQueryOptions(runtime, projectId),
     enabled: connectionState === 'connected',
@@ -106,6 +114,16 @@ function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
     }
   }
 
+  async function handleCopyRootPath() {
+    try {
+      if (navigator.clipboard === undefined) throw new Error('unavailable')
+      await navigator.clipboard.writeText(project.rootPath)
+      setCopyState('copied')
+    } catch {
+      setCopyState('failed')
+    }
+  }
+
   return (
     <div className="flex min-h-full min-w-0 flex-col px-[var(--layout-content-inline-padding)] py-[var(--layout-content-block-padding)]">
       <Link
@@ -117,19 +135,47 @@ function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
       </Link>
 
       <header className="flex min-w-0 flex-wrap items-start justify-between gap-5">
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <div className="flex min-w-0 flex-wrap items-center gap-3">
-            <h1 className="min-w-0 truncate text-page font-semibold text-text-primary">
+            <h1
+              title={project.name}
+              className="min-w-0 truncate text-page font-semibold text-text-primary"
+            >
               {project.name}
             </h1>
             <ProjectAvailabilityBadge availability={project.availability} />
           </div>
-          <p
-            title={project.rootPath}
-            className="mt-1 break-all font-mono text-sm font-regular text-text-secondary"
-          >
-            {project.rootPath}
-          </p>
+          <div className="mt-1 flex min-w-0 max-w-2xl items-center gap-2 text-sm text-text-secondary">
+            <FolderOpen aria-hidden="true" className="size-3.5 shrink-0" />
+            <span className="shrink-0 font-medium text-text-primary">
+              {projectFolderName(project.rootPath)}
+            </span>
+            <span
+              title={project.rootPath}
+              className="min-w-0 truncate font-mono text-xs"
+            >
+              {compactProjectPath(project.rootPath)}
+            </span>
+            <IconButton
+              type="button"
+              variant="ghost"
+              size="sm"
+              label={copyState === 'copied' ? '路径已复制' : '复制完整路径'}
+              className="size-7 shrink-0 text-text-muted hover:text-text-primary"
+              onClick={() => void handleCopyRootPath()}
+            >
+              {copyState === 'copied' ? (
+                <Check aria-hidden="true" />
+              ) : (
+                <Copy aria-hidden="true" />
+              )}
+            </IconButton>
+            {copyState === 'failed' ? (
+              <span role="alert" className="shrink-0 text-xs text-danger">
+                复制失败
+              </span>
+            ) : null}
+          </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -208,7 +254,7 @@ function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
             aria-hidden="true"
             className="size-3.5 animate-spin motion-reduce:animate-none"
           />
-          正在重新连接 Host，当前显示最近读取的项目数据。
+          正在重新连接，当前显示最近读取的项目数据。
         </p>
       ) : null}
 
@@ -236,7 +282,7 @@ function WorkspaceInformation({ project }: { project: ProjectRecord }) {
             工作区信息
           </h2>
           <p className="mt-0.5 text-sm font-regular text-text-secondary">
-            CodeTether 已持久保存的本地工作区身份。
+            项目目录与最近使用信息。
           </p>
         </div>
       </div>
@@ -246,14 +292,9 @@ function WorkspaceInformation({ project }: { project: ProjectRecord }) {
       <dl className="grid min-w-0 gap-x-6 gap-y-5 md:grid-cols-2">
         <MetadataItem label="项目名称" value={project.name} />
         <MetadataItem
-          label="项目标识"
-          value={project.projectId}
-          mono
-          icon={<Fingerprint aria-hidden="true" />}
-        />
-        <MetadataItem
           label="根目录"
-          value={project.rootPath}
+          value={compactProjectPath(project.rootPath)}
+          title={project.rootPath}
           mono
           wide
           icon={<FolderOpen aria-hidden="true" />}
@@ -286,7 +327,7 @@ function ProjectAvailabilityPanel({ project }: { project: ProjectRecord }) {
       </div>
       <p className="mt-3 text-sm font-regular text-text-secondary">
         {available
-          ? 'Host 已验证该目录，可以在此工作区中启动会话。'
+          ? 'CodeTether 已验证该目录，可以在此工作区中启动会话。'
           : '持久项目记录仍可查看，但工作区相关操作会安全失败。'}
       </p>
       <Separator className="my-5" />
@@ -312,6 +353,7 @@ interface MetadataItemProps {
   icon?: ReactNode
   label: string
   mono?: boolean
+  title?: string
   value: string
   wide?: boolean
 }
@@ -320,6 +362,7 @@ function MetadataItem({
   icon,
   label,
   mono = false,
+  title,
   value,
   wide,
 }: MetadataItemProps) {
@@ -330,8 +373,9 @@ function MetadataItem({
         {label}
       </dt>
       <dd
+        title={title}
         className={cn(
-          'mt-1.5 break-all text-base font-regular text-text-primary',
+          'mt-1.5 truncate text-base font-regular text-text-primary',
           mono && 'font-mono text-sm',
         )}
       >

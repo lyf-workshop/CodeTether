@@ -470,6 +470,7 @@ function notificationIntent(attentionId) {
     type: 'failed',
     projectId,
     conversationId,
+    turnId,
     title: 'CodeTether · 执行失败',
     body: '中文项目 · 修复 Windows 登录后的自动重连问题\n需要你查看执行结果',
   }

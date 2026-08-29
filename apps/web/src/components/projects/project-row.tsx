@@ -18,7 +18,11 @@ import {
 import type { ProjectRecord } from '@codetether/protocol'
 
 import { ProjectAvailabilityBadge } from './project-availability-badge'
-import { formatProjectTime } from './project-format'
+import {
+  compactProjectPath,
+  formatProjectTime,
+  projectFolderName,
+} from './project-format'
 
 interface ProjectRowProps {
   onRemove: (
@@ -61,8 +65,13 @@ export function ProjectRow({ onRemove, project }: ProjectRowProps) {
         </div>
         <Tooltip>
           <TooltipTrigger asChild>
-            <p className="mt-1.5 truncate font-mono text-sm font-regular text-text-secondary">
-              {project.rootPath}
+            <p className="mt-1.5 flex min-w-0 items-center gap-2 text-sm text-text-secondary">
+              <span className="shrink-0 font-medium text-text-primary">
+                {projectFolderName(project.rootPath)}
+              </span>
+              <span className="min-w-0 truncate font-mono text-xs">
+                {compactProjectPath(project.rootPath)}
+              </span>
             </p>
           </TooltipTrigger>
           <TooltipContent

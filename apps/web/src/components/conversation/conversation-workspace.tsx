@@ -11,21 +11,29 @@ import type {
 import { PendingActionDock } from './pending-action-dock'
 
 interface ConversationWorkspaceProps {
+  anchorRequestKey?: string
   viewModel: ConversationViewModel
   connectionIndicator?: ConversationConnectionIndicatorViewModel
   inspectorTriggerRef?: Ref<HTMLButtonElement>
   onOpenInspector?: () => void
   onOpenChanges?: () => void
   controls?: ConversationControls
+  targetChangeId?: string
+  targetChangeRequestKey?: number
+  targetTurnId?: string
 }
 
 export function ConversationWorkspace({
+  anchorRequestKey,
   viewModel,
   connectionIndicator,
   inspectorTriggerRef,
   onOpenInspector,
   onOpenChanges,
   controls,
+  targetChangeId,
+  targetChangeRequestKey,
+  targetTurnId,
 }: ConversationWorkspaceProps) {
   return (
     <section
@@ -42,10 +50,15 @@ export function ConversationWorkspace({
         interruptController={controls?.interrupt}
       />
       <ConversationTimeline
+        anchorRequestKey={anchorRequestKey}
         agent={viewModel.agent}
         timeline={viewModel.timeline}
         changes={viewModel.changes}
         pendingApprovals={viewModel.pendingApprovals}
+        projectRootPath={viewModel.projectRootPath}
+        targetChangeId={targetChangeId}
+        targetChangeRequestKey={targetChangeRequestKey}
+        targetTurnId={targetTurnId}
       />
       <PendingActionDock
         approvals={viewModel.pendingApprovals}
@@ -54,7 +67,6 @@ export function ConversationWorkspace({
       />
       <div className="min-h-0 px-4 pb-5">
         <Composer
-          conversation={viewModel}
           capabilities={viewModel.capabilities}
           controller={controls?.composer}
           externalError={controls?.interrupt.error}

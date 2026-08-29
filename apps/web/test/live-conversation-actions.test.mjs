@@ -232,7 +232,7 @@ test('safe mutation errors never expose Provider diagnostics', () => {
   assert.equal(message.includes('JSON-RPC'), false)
   assert.equal(
     mutationErrorMessage(new TypeError('network details'), '发送消息'),
-    '无法连接到 CodeTether Host，请检查连接后重试。',
+    'CodeTether 暂时无法连接，请重试。',
   )
   assert.equal(
     mutationErrorMessage(

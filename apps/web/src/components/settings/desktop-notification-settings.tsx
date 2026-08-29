@@ -75,7 +75,7 @@ export function DesktopNotificationSettings({
   return (
     <section
       aria-labelledby="settings-heading"
-      className="mx-auto w-full max-w-2xl px-[var(--layout-content-inline-padding)] py-[var(--layout-content-block-padding)]"
+      className="mx-auto w-full max-w-xl px-[var(--layout-content-inline-padding)] py-[var(--layout-content-block-padding)]"
     >
       <h1
         id="settings-heading"
@@ -83,18 +83,18 @@ export function DesktopNotificationSettings({
       >
         设置
       </h1>
-      <p className="mt-1 text-base text-text-secondary">
-        管理 CodeTether Desktop 的应用偏好。
+      <p className="mt-1 text-sm text-text-secondary">
+        管理需要在后台提醒你的事项。
       </p>
 
-      <Card className="mt-6">
-        <CardHeader>
+      <Card className="mt-5">
+        <CardHeader className="pb-3">
           <CardTitle id="desktop-notifications-heading">桌面通知</CardTitle>
           <CardDescription>
             仅在真正需要你处理或查看工作时发送系统通知。
           </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="pt-0">
           {notificationAvailable && preferenceStorage !== undefined ? (
             <fieldset aria-labelledby="desktop-notifications-heading">
               <legend className="sr-only">桌面通知类型</legend>
@@ -102,7 +102,7 @@ export function DesktopNotificationSettings({
                 {notificationOptions.map((option) => (
                   <label
                     key={option.type}
-                    className="flex min-h-16 cursor-pointer items-center gap-4 py-3"
+                    className="flex min-h-14 cursor-pointer items-center gap-4 py-2.5"
                   >
                     <span className="min-w-0 flex-1">
                       <span className="block text-base font-medium text-text-primary">
@@ -133,13 +133,12 @@ export function DesktopNotificationSettings({
               ) : null}
             </fieldset>
           ) : (
-            <div role="status" className="rounded-sm bg-surface-muted p-3">
+            <div role="status" className="border-t border-border py-3">
               <p className="text-base font-medium text-text-primary">
-                桌面通知在此环境中不可用
+                桌面通知需要 CodeTether Desktop
               </p>
               <p className="mt-1 text-sm text-text-secondary">
-                请使用已安装的 CodeTether Desktop。Browser
-                模式仍会在收件箱中显示所有待处理事项。
+                浏览器中仍可通过收件箱查看所有待处理事项。
               </p>
             </div>
           )}

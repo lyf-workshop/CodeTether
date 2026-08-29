@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useParams, useSearch } from '@tanstack/react-router'
+import {
+  useNavigate,
+  useParams,
+  useRouterState,
+  useSearch,
+} from '@tanstack/react-router'
 
 import {
   ConversationIdSchema,
@@ -9,6 +14,7 @@ import {
   type GetConversationResponse,
   type HostCapabilities,
   type ProjectRecord,
+  type TurnId,
 } from '@codetether/protocol'
 import { Button } from '@codetether/ui'
 
@@ -32,20 +38,76 @@ import { ConversationDetailPage } from './conversation-detail-page'
 import { NewConversationDialog } from '../conversations/new-conversation-dialog'
 import { createDemoConversationDetailSource } from './demo-conversation-adapter'
 import { createLiveConversationDetailSource } from './live-conversation-adapter'
+import { startComposerFocusHandoff } from './composer-focus-handoff'
 import { useLiveConversationControls } from './use-live-conversation-controls'
 
 export function ConversationDetailRoute() {
   const { conversationId } = useParams({
     from: '/conversations/$conversationId',
   })
-  const { panel } = useSearch({ from: '/conversations/$conversationId' })
+  const { focus, panel, turn } = useSearch({
+    from: '/conversations/$conversationId',
+  })
+  const navigate = useNavigate({ from: '/conversations/$conversationId' })
+  const anchorRequestKey = useRouterState({
+    select: (state) => state.location.state.__TSR_key ?? state.location.href,
+  })
   const liveConversationId = ConversationIdSchema.safeParse(conversationId)
+  const handledFocusRequestRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (focus !== 'composer') return
+
+    const focusRequestKey = `${conversationId}:${anchorRequestKey}`
+    const clearIntent = () => {
+      void navigate({
+        replace: true,
+        to: '/conversations/$conversationId',
+        params: { conversationId },
+        search: {
+          ...(panel === undefined ? {} : { panel }),
+          ...(turn === undefined ? {} : { turn }),
+        },
+      })
+    }
+
+    const handoff = startComposerFocusHandoff({
+      isBlocked: () => document.querySelector('[role="dialog"]') !== null,
+      getTarget: () => {
+        const composer = document.getElementById('conversation-composer')
+        return composer instanceof HTMLTextAreaElement ? composer : null
+      },
+      claim: () => {
+        if (handledFocusRequestRef.current === focusRequestKey) return false
+        handledFocusRequestRef.current = focusRequestKey
+        return true
+      },
+      clearIntent,
+      observe: (onChange) => {
+        const observer = new MutationObserver(onChange)
+        observer.observe(document.body, {
+          attributeFilter: ['data-state'],
+          attributes: true,
+          childList: true,
+          subtree: true,
+        })
+        return () => observer.disconnect()
+      },
+      scheduleTimeout: (onTimeout, timeoutMs) => {
+        const timeoutId = window.setTimeout(onTimeout, timeoutMs)
+        return () => window.clearTimeout(timeoutId)
+      },
+    })
+    return () => handoff.dispose()
+  }, [anchorRequestKey, conversationId, focus, navigate, panel, turn])
 
   if (liveConversationId.success) {
     return (
       <LiveConversationDetailRoute
+        anchorRequestKey={anchorRequestKey}
         conversationId={liveConversationId.data}
         initialInspectorTab={panel}
+        targetTurnId={turn}
       />
     )
   }
@@ -54,22 +116,28 @@ export function ConversationDetailRoute() {
 
   return (
     <ConversationDetailPage
+      anchorRequestKey={anchorRequestKey}
       viewModel={source.conversation}
       rail={source.rail}
       connectionIndicator={source.connectionIndicator}
       initialInspectorTab={panel}
+      targetTurnId={turn}
     />
   )
 }
 
 interface LiveConversationDetailRouteProps {
+  readonly anchorRequestKey: string
   readonly conversationId: ConversationId
   readonly initialInspectorTab?: 'changes'
+  readonly targetTurnId?: TurnId
 }
 
 function LiveConversationDetailRoute({
+  anchorRequestKey,
   conversationId,
   initialInspectorTab,
+  targetTurnId,
 }: LiveConversationDetailRouteProps) {
   const runtime = useHostRuntime()
   const connectionState = useHostConnectionState()
@@ -94,23 +162,29 @@ function LiveConversationDetailRoute({
 
   return (
     <LoadedLiveConversationDetail
+      anchorRequestKey={anchorRequestKey}
       detail={detailQuery.data}
       connectionState={connectionState}
       initialInspectorTab={initialInspectorTab}
+      targetTurnId={targetTurnId}
     />
   )
 }
 
 interface LoadedLiveConversationDetailProps {
+  readonly anchorRequestKey: string
   readonly detail: GetConversationResponse
   readonly connectionState: ReturnType<typeof useHostConnectionState>
   readonly initialInspectorTab?: 'changes'
+  readonly targetTurnId?: TurnId
 }
 
 function LoadedLiveConversationDetail({
+  anchorRequestKey,
   detail,
   connectionState,
   initialInspectorTab,
+  targetTurnId,
 }: LoadedLiveConversationDetailProps) {
   const runtime = useHostRuntime()
   const queryClient = useQueryClient()
@@ -163,6 +237,7 @@ function LoadedLiveConversationDetail({
 
   return (
     <ConnectedLiveConversationDetail
+      anchorRequestKey={anchorRequestKey}
       conversation={conversation}
       summaries={summaries}
       connectionState={connectionState}
@@ -170,11 +245,13 @@ function LoadedLiveConversationDetail({
       project={projectQuery.data}
       projectAvailability={projectQuery.data?.availability ?? 'unavailable'}
       initialInspectorTab={initialInspectorTab}
+      targetTurnId={targetTurnId}
     />
   )
 }
 
 interface ConnectedLiveConversationDetailProps {
+  readonly anchorRequestKey: string
   readonly conversation: ConversationReadModel
   readonly summaries: readonly ConversationSummary[]
   readonly connectionState: ReturnType<typeof useHostConnectionState>
@@ -182,9 +259,11 @@ interface ConnectedLiveConversationDetailProps {
   readonly project: ProjectRecord | undefined
   readonly projectAvailability: 'available' | 'unavailable'
   readonly initialInspectorTab?: 'changes'
+  readonly targetTurnId?: TurnId
 }
 
 function ConnectedLiveConversationDetail({
+  anchorRequestKey,
   conversation,
   summaries,
   connectionState,
@@ -192,6 +271,7 @@ function ConnectedLiveConversationDetail({
   project,
   projectAvailability,
   initialInspectorTab,
+  targetTurnId,
 }: ConnectedLiveConversationDetailProps) {
   const newConversationButtonRef = useRef<HTMLButtonElement>(null)
   const [newConversationOpen, setNewConversationOpen] = useState(false)
@@ -211,11 +291,13 @@ function ConnectedLiveConversationDetail({
   return (
     <>
       <ConversationDetailPage
+        anchorRequestKey={anchorRequestKey}
         viewModel={source.conversation}
         rail={source.rail}
         connectionIndicator={source.connectionIndicator}
         controls={controls}
         initialInspectorTab={initialInspectorTab}
+        targetTurnId={targetTurnId}
         newConversationButtonRef={newConversationButtonRef}
         newConversationDisabled={projectAvailability === 'unavailable'}
         {...(project === undefined
@@ -247,32 +329,31 @@ interface LiveConversationBoundaryProps {
 
 function LiveConversationBoundary({
   state,
-  conversationId,
   readFailed = false,
   onRetry,
 }: LiveConversationBoundaryProps) {
   const content = {
     connecting: {
-      title: '正在连接 CodeTether Host',
-      description: '正在读取 Bootstrap 和会话快照。',
+      title: '正在连接 CodeTether',
+      description: '正在读取会话。',
     },
     reconnecting: {
-      title: '正在重新连接 CodeTether Host',
+      title: '正在重新连接 CodeTether',
       description: '连接恢复后会继续显示实时会话。',
     },
     unavailable: {
-      title: '无法连接到 CodeTether Host',
-      description: '请确认本地 Host 已启动，然后重试。',
+      title: 'CodeTether 暂时无法连接',
+      description: '本地服务暂时不可用，请稍后重试。',
     },
     incompatible: {
-      title: 'Host 版本不兼容',
-      description: 'Web Client 需要 CodeTether Protocol v1。',
+      title: 'CodeTether 版本不兼容',
+      description: '当前应用与本地服务版本不匹配。',
     },
     connected: {
       title: readFailed ? '无法读取会话' : '正在读取会话历史',
       description: readFailed
-        ? 'CodeTether Host 无法返回这个会话，请重试。'
-        : `正在从 Host 读取会话 ${conversationId}。`,
+        ? 'CodeTether 暂时无法读取这个会话，请重试。'
+        : '正在读取会话…',
     },
   } as const
   const current = content[state]

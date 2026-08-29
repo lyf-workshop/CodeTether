@@ -48,12 +48,14 @@ export function ConversationsErrorState({
         </span>
         <h2 className="mt-4 text-section font-semibold text-text-primary">
           {title ??
-            (incompatible ? 'Host 版本不兼容' : '无法连接到 CodeTether Host')}
+            (incompatible
+              ? 'CodeTether 版本不兼容'
+              : 'CodeTether 暂时无法连接')}
         </h2>
         <p className="mt-1.5 text-base font-regular text-text-secondary">
           {incompatible
-            ? '当前 Web 客户端与本机 Host 使用了不兼容的协议版本。'
-            : '请确认本机 Host 已启动，然后重试连接。'}
+            ? '当前应用与本地服务版本不兼容，请更新 CodeTether 后重试。'
+            : '本地服务暂时不可用，请稍后重试。'}
         </p>
         <Button variant="secondary" className="mt-5" onClick={onRetry}>
           <RefreshCw aria-hidden="true" />

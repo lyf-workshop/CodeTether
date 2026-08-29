@@ -215,6 +215,25 @@ async function run(): Promise<void> {
       'The old marker Conversation must start cold',
     )
 
+    const searchStartedAt = performance.now()
+    const markerSearch = await client.searchProjectConversations(projectId, {
+      query: marker,
+      archive: 'all',
+    })
+    const searchMs = performance.now() - searchStartedAt
+    assert.equal(markerSearch.results.length, 1)
+    const markerMatch = markerSearch.results[0]
+    assert.ok(markerMatch !== undefined)
+    assert.equal(markerMatch.conversation.conversationId, markerConversationId)
+    assert.equal(markerMatch.matchedField, 'user_input')
+    if (markerMatch.matchedField !== 'user_input') {
+      throw new Error('The marker Search must match canonical User input')
+    }
+    assert.equal(markerMatch.matchedTurnId, seedTurn.data.turn.turnId)
+    assert.match(markerMatch.matchPreview, new RegExp(marker, 'u'))
+    assert.equal(markerSearch.hasMore, false)
+    assert.deepEqual(hydratedIds(await client.snapshot()), startupHydratedIds)
+
     const coldReadStartedAt = performance.now()
     const coldDetail = await client.getConversation(markerConversationId)
     const coldReadMs = performance.now() - coldReadStartedAt
@@ -322,7 +341,8 @@ async function run(): Promise<void> {
       `${JSON.stringify(
         {
           integration: 'passed',
-          scenario: 'durable-cold-conversation-hydration-and-organization',
+          scenario:
+            'durable-search-cold-conversation-hydration-and-organization',
           marker,
           conversationId: markerConversationId,
           projectId,
@@ -344,6 +364,11 @@ async function run(): Promise<void> {
             coldRead: {
               retainedTurns: coldDetail.history.retainedTurnCount,
               totalTurns: coldDetail.history.totalTurnCount,
+              remainedCold: true,
+            },
+            durableSearch: {
+              matchedField: markerMatch.matchedField,
+              matchedTurnId: markerMatch.matchedTurnId,
               remainedCold: true,
             },
             organization: {
@@ -375,6 +400,7 @@ async function run(): Promise<void> {
             },
           },
           timingsMs: {
+            durableSearch: milliseconds(searchMs),
             coldRead: milliseconds(coldReadMs),
             runtimeHydrationBeforeProviderResume: milliseconds(
               runtimeHydrationBeforeResumeMs,

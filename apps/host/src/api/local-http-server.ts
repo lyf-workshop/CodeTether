@@ -14,6 +14,8 @@ import {
   BootstrapResponseSchema,
   ConversationIdSchema,
   ConversationListResponseSchema,
+  ConversationSearchQuerySchema,
+  ConversationSearchResponseSchema,
   CreateConversationRequestSchema,
   CreateConversationResponseSchema,
   CreateProjectRequestSchema,
@@ -186,9 +188,14 @@ export class LocalHttpServer {
         url.pathname,
         /^\/api\/v1\/projects\/([^/]+)\/conversations$/u,
       )
+      const projectConversationSearchRoute = this.#http.matchPath(
+        url.pathname,
+        /^\/api\/v1\/projects\/([^/]+)\/conversations\/search$/u,
+      )
       const acceptsQuery =
         request.method === 'GET' &&
         (projectConversationsRoute !== undefined ||
+          projectConversationSearchRoute !== undefined ||
           url.pathname === '/api/v1/attention')
       if (url.search !== '' && !acceptsQuery) {
         throw new HttpBoundaryError(
@@ -259,6 +266,30 @@ export class LocalHttpServer {
           response,
           result.data.created ? 201 : 200,
           CreateProjectResponseSchema.parse(result),
+          context.allowedOrigin,
+        )
+        return
+      }
+
+      if (
+        request.method === 'GET' &&
+        projectConversationSearchRoute !== undefined
+      ) {
+        const projectId = this.#http.parseRouteId(
+          ProjectIdSchema,
+          projectConversationSearchRoute[0],
+          'projectId',
+        )
+        const query = this.#http.parseValidatedQuery(
+          url.searchParams,
+          ConversationSearchQuerySchema,
+        )
+        this.#http.writeJson(
+          response,
+          200,
+          ConversationSearchResponseSchema.parse(
+            await this.#service.searchProjectConversations(projectId, query),
+          ),
           context.allowedOrigin,
         )
         return

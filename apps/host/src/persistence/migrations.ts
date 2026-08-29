@@ -77,6 +77,11 @@ const migrations: readonly Migration[] = [
     name: 'conversation_organization',
     up: migrateConversationOrganization,
   },
+  {
+    version: 6,
+    name: 'conversation_search',
+    up: migrateConversationSearch,
+  },
 ]
 
 export const currentSchemaVersion = migrations.at(-1)?.version ?? 0
@@ -463,6 +468,119 @@ function migrateConversationOrganization(database: DatabaseSync): void {
 
     CREATE INDEX idx_conversations_project_title
       ON conversations(project_id, title, conversation_id ASC);
+  `)
+}
+
+/**
+ * Search intentionally uses a small normalized projection instead of FTS5.
+ * The production Node SEA includes FTS5, but its unicode61 token boundaries do
+ * not provide predictable substring matching for short CJK queries. Keeping
+ * one title document and one canonical-input document per Turn gives SQLite a
+ * bounded, Project-scoped source that never inspects snapshot_json.
+ *
+ * `codetether_search_normalize` is a deterministic function registered by the
+ * ConversationStore before migrations run. Triggers keep the projection in
+ * the same transaction as every durable source mutation.
+ */
+function migrateConversationSearch(database: DatabaseSync): void {
+  database.exec(`
+    CREATE TABLE conversation_search_documents (
+      document_key TEXT PRIMARY KEY
+        CHECK (
+          length(document_key) BETWEEN 1 AND 300 AND
+          document_key = trim(document_key)
+        ),
+      conversation_id TEXT NOT NULL,
+      turn_id TEXT,
+      field TEXT NOT NULL CHECK (field IN ('title', 'user_input')),
+      normalized_text TEXT NOT NULL,
+      CHECK (
+        (field = 'title' AND turn_id IS NULL) OR
+        (field = 'user_input' AND turn_id IS NOT NULL)
+      ),
+      FOREIGN KEY (conversation_id)
+        REFERENCES conversations(conversation_id)
+        ON DELETE CASCADE,
+      FOREIGN KEY (turn_id, conversation_id)
+        REFERENCES turns(turn_id, conversation_id)
+        ON DELETE CASCADE
+    ) STRICT;
+
+    CREATE INDEX idx_conversation_search_documents_owner
+      ON conversation_search_documents(conversation_id, field, turn_id);
+
+    INSERT INTO conversation_search_documents (
+      document_key, conversation_id, turn_id, field, normalized_text
+    )
+    SELECT
+      'conversation:' || conversation_id,
+      conversation_id,
+      NULL,
+      'title',
+      codetether_search_normalize(title)
+    FROM conversations;
+
+    INSERT INTO conversation_search_documents (
+      document_key, conversation_id, turn_id, field, normalized_text
+    )
+    SELECT
+      'turn:' || turn_id,
+      conversation_id,
+      turn_id,
+      'user_input',
+      codetether_search_normalize(json_extract(input, '$.text'))
+    FROM turns;
+
+    CREATE TRIGGER trg_conversation_search_title_insert
+    AFTER INSERT ON conversations
+    BEGIN
+      INSERT INTO conversation_search_documents (
+        document_key, conversation_id, turn_id, field, normalized_text
+      ) VALUES (
+        'conversation:' || NEW.conversation_id,
+        NEW.conversation_id,
+        NULL,
+        'title',
+        codetether_search_normalize(NEW.title)
+      );
+    END;
+
+    CREATE TRIGGER trg_conversation_search_title_update
+    AFTER UPDATE OF title ON conversations
+    WHEN OLD.title IS NOT NEW.title
+    BEGIN
+      UPDATE conversation_search_documents
+      SET normalized_text = codetether_search_normalize(NEW.title)
+      WHERE document_key = 'conversation:' || NEW.conversation_id;
+    END;
+
+    CREATE TRIGGER trg_conversation_search_input_insert
+    AFTER INSERT ON turns
+    BEGIN
+      INSERT INTO conversation_search_documents (
+        document_key, conversation_id, turn_id, field, normalized_text
+      ) VALUES (
+        'turn:' || NEW.turn_id,
+        NEW.conversation_id,
+        NEW.turn_id,
+        'user_input',
+        codetether_search_normalize(json_extract(NEW.input, '$.text'))
+      );
+    END;
+
+    CREATE TRIGGER trg_conversation_search_input_update
+    AFTER UPDATE OF input, conversation_id ON turns
+    WHEN OLD.input IS NOT NEW.input OR OLD.conversation_id IS NOT NEW.conversation_id
+    BEGIN
+      UPDATE conversation_search_documents
+      SET
+        conversation_id = NEW.conversation_id,
+        turn_id = NEW.turn_id,
+        normalized_text = codetether_search_normalize(
+          json_extract(NEW.input, '$.text')
+        )
+      WHERE document_key = 'turn:' || OLD.turn_id;
+    END;
   `)
 }
 

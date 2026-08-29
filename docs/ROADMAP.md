@@ -662,7 +662,7 @@ Acceptance boundary:
 
 ### Phase 4E.2 — Conversation Organization UI
 
-**Status:** implemented; Owner acceptance is pending.
+**Status:** accepted and frozen at commit `84de855`.
 
 Implemented scope:
 
@@ -681,8 +681,32 @@ Not included:
 
 Acceptance boundary:
 
-- Owner review must confirm active/archived URL navigation, Host ordering, Rename/Pin/Archive/Unarchive behavior, archived Detail/Composer safety, active/current-archived Rail context, multi-client `conversation.updated` synchronization, cold Provider isolation, responsive/focus behavior, restart durability, and real Codex context resume before Phase 4E.2 is accepted or frozen.
-- Phase 4E.2 does not select or authorize Search, background runtime, or another provider as the next phase.
+- Owner review confirmed active/archived URL navigation, Host ordering, Rename/Pin/Archive/Unarchive behavior, archived Detail/Composer safety, active/current-archived Rail context, multi-client `conversation.updated` synchronization, cold Provider isolation, responsive/focus behavior, restart durability, and real Codex context resume. Phase 4E.2 is frozen at `84de855`.
+- Phase 4E.2 did not itself authorize a Search UI, background runtime, or another provider.
+
+### Phase 4F.1 — Durable Conversation Search Model & API
+
+**Status:** implemented; Owner acceptance is pending.
+
+Implemented scope:
+
+- SQLite migration 006 transactionally creates and backfills a small normalized projection over the current durable Conversation title and every canonical Turn User input. Source-table triggers update title/input documents in the same write transaction. Search never indexes `snapshot_json`, Agent output, Tool/Terminal output, Diffs, Approvals, or provider payloads.
+- The runtime audit confirmed SQLite 3.52 and FTS5 in the development Node 25.8.2 runtime used to build the official SEA. V1 nevertheless uses a normalized SQLite projection plus parameter-bound `instr` queries because FTS token boundaries are not predictable for short CJK substring queries. Search remains production-safe without an extension or runtime-specific tokenizer assumption.
+- Protocol v1 adds a strict Project-scoped Search query/result model and `GET /api/v1/projects/:projectId/conversations/search`. It supports active/archived/all, the real provider/status filters, default-25/max-100 cursor pagination, public match metadata, and bounded plain-text User-input previews.
+- Ranking is deterministic: exact title, title prefix, title substring, then canonical User input; one representative match is returned per Conversation. Active ties prefer Pin and activity, archived ties use archive time, and public Conversation identity is the final tie-breaker.
+- Opaque cursors bind Project, normalized query, and filters. Search remains available for an unavailable Project, does not touch Attention, does not read presentation snapshots, and does not hydrate, launch, or resume a provider runtime.
+- `packages/client` exposes typed `searchProjectConversations()` with AbortSignal, response validation, route/filter identity checks, and cursor-progress validation. The existing bounded loaded-index Search field is intentionally unchanged and is not presented as full-history Search.
+
+Not included:
+
+- Formal durable Search UI, cross-Project/global Search, Agent-response/Tool/Terminal/Diff/Approval search, semantic Search, embeddings, or FTS product behavior.
+- History Turn pagination, Delete, bulk actions, tags/folders/groups, Activity, tray/background runtime, remote operation, or another provider.
+- Runtime, provider, Attention, Desktop native-capability, or Conversation execution-status changes.
+
+Acceptance boundary:
+
+- Owner review must confirm migration/backfill integrity, exact matching/ranking/filter behavior, cursor safety, Project isolation, cold/provider isolation, restart behavior, production runtime compatibility, performance/storage evidence, typed Client behavior, and the real Codex restart/Search/lazy-resume path before Phase 4F.1 is accepted or frozen.
+- Phase 4F.1 does not authorize its UI follow-up or select background runtime/another provider.
 
 ## Phase 5 — Machines
 

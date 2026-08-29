@@ -1,5 +1,6 @@
 export * from './commands.js'
 export * from './conversation-detail.js'
+export * from './conversation-search.js'
 export * from './cursor.js'
 export * from './errors.js'
 export * from './events.js'

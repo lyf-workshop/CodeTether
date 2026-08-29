@@ -3,6 +3,7 @@ import { dirname, isAbsolute, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
 import {
+  conversationSearchLimits,
   conversationListLimits,
   ConversationIdSchema,
   ConversationSummarySchema,
@@ -44,6 +45,14 @@ import {
   resolveCodeTetherDatabasePath,
   type DataDirectoryOptions,
 } from './data-directory.js'
+import {
+  conversationSearchPreview,
+  decodeConversationSearchCursor,
+  encodeConversationSearchCursor,
+  normalizeConversationSearchQuery,
+  normalizeConversationSearchText,
+  type ConversationSearchCursorContext,
+} from './conversation-search.js'
 import { currentSchemaVersion, migrateDatabase } from './migrations.js'
 
 const DEFAULT_BUSY_TIMEOUT_MS = 5_000
@@ -58,6 +67,14 @@ const durableConversationStatuses = [
 ] as const
 export type DurableConversationStatus =
   (typeof durableConversationStatuses)[number]
+
+const searchableConversationStatuses = [
+  'idle',
+  'running',
+  'waiting',
+  'completed',
+  'failed',
+] as const
 
 export const conversationArchiveFilters = ['active', 'archived', 'all'] as const
 export type ConversationArchiveFilter =
@@ -133,6 +150,28 @@ export interface ListProjectConversationsOptions {
   readonly limit?: number
 }
 
+export interface SearchProjectConversationsOptions {
+  readonly query: string
+  readonly provider?: 'codex'
+  readonly status?: ConversationSummary['status']
+  readonly archive?: ConversationArchiveFilter
+  readonly limit?: number
+  readonly cursor?: string
+}
+
+export interface DurableConversationSearchResult {
+  readonly conversation: DurableConversationSummary
+  readonly matchedField: 'title' | 'user_input'
+  readonly matchPreview?: string
+  readonly matchedTurnId?: TurnId
+}
+
+export interface DurableConversationSearchResponse {
+  readonly results: readonly DurableConversationSearchResult[]
+  readonly nextCursor?: string
+  readonly hasMore: boolean
+}
+
 export interface DurableTurnSnapshot {
   readonly turnId: TurnId
   readonly conversationId: ConversationId
@@ -185,6 +224,16 @@ export class ConversationStore {
       database.exec('PRAGMA foreign_keys = ON')
       database.exec(`PRAGMA busy_timeout = ${String(busyTimeoutMs)}`)
       database.exec('PRAGMA journal_mode = WAL')
+      database.function(
+        'codetether_search_normalize',
+        { deterministic: true },
+        (value) => {
+          if (typeof value !== 'string') {
+            throw new Error('Conversation search source must be text')
+          }
+          return normalizeConversationSearchText(value)
+        },
+      )
       migrateDatabase(database)
       assertDatabaseIntegrity(database)
       return new ConversationStore(database, databasePath)
@@ -559,6 +608,209 @@ export class ConversationStore {
        LIMIT ?`,
     ).all(...parameters) as unknown as ConversationSummaryRow[]
     return rows.map(conversationSummaryFromRow)
+  }
+
+  searchProjectConversations(
+    projectId: ProjectId,
+    options: SearchProjectConversationsOptions,
+  ): DurableConversationSearchResponse {
+    const id = ProjectIdSchema.parse(projectId)
+    const normalizedQuery = normalizeConversationSearchQuery(options.query)
+    const archive = parseConversationArchiveFilter(options.archive)
+    const limit = parseConversationSearchLimit(options.limit)
+    if (options.provider !== undefined && options.provider !== 'codex') {
+      throw new Error(`Unsupported Provider: ${String(options.provider)}`)
+    }
+    if (
+      options.status !== undefined &&
+      !isOneOf(options.status, searchableConversationStatuses)
+    ) {
+      throw new Error(
+        `Unsupported searchable Conversation status: ${String(options.status)}`,
+      )
+    }
+
+    const cursorContext: ConversationSearchCursorContext = {
+      projectId: id,
+      query: normalizedQuery,
+      archive,
+      ...(options.provider === undefined ? {} : { provider: options.provider }),
+      ...(options.status === undefined ? {} : { status: options.status }),
+    }
+    const cursor =
+      options.cursor === undefined
+        ? undefined
+        : decodeConversationSearchCursor(options.cursor, cursorContext)
+    const filters = ['c.project_id = ?', "c.status <> 'creating'"]
+    const parameters: Array<string | number> = [normalizedQuery]
+    if (cursor !== undefined) {
+      parameters.push(
+        cursor.matchRank,
+        cursor.archiveBucket,
+        cursor.pinnedBucket,
+        cursor.primaryTime,
+        cursor.conversationId,
+      )
+    }
+    parameters.push(id)
+    if (options.provider !== undefined) {
+      filters.push('c.provider = ?')
+      parameters.push(options.provider)
+    }
+    if (options.status !== undefined) {
+      filters.push('c.status = ?')
+      parameters.push(options.status)
+    }
+    if (archive === 'active') filters.push('c.archived_at IS NULL')
+    if (archive === 'archived') filters.push('c.archived_at IS NOT NULL')
+    parameters.push(limit + 1)
+
+    const cursorCte =
+      cursor === undefined
+        ? ''
+        : `,
+        cursor_value(
+          match_rank, archive_bucket, pinned_bucket, primary_time,
+          conversation_id
+        ) AS (VALUES (?, ?, ?, ?, ?))`
+    const cursorFilter =
+      cursor === undefined
+        ? ''
+        : `AND (
+          best.match_rank > cursor_value.match_rank OR
+          (
+            best.match_rank = cursor_value.match_rank AND
+            best.archive_bucket > cursor_value.archive_bucket
+          ) OR
+          (
+            best.match_rank = cursor_value.match_rank AND
+            best.archive_bucket = cursor_value.archive_bucket AND
+            best.pinned_bucket > cursor_value.pinned_bucket
+          ) OR
+          (
+            best.match_rank = cursor_value.match_rank AND
+            best.archive_bucket = cursor_value.archive_bucket AND
+            best.pinned_bucket = cursor_value.pinned_bucket AND
+            best.primary_time < cursor_value.primary_time
+          ) OR
+          (
+            best.match_rank = cursor_value.match_rank AND
+            best.archive_bucket = cursor_value.archive_bucket AND
+            best.pinned_bucket = cursor_value.pinned_bucket AND
+            best.primary_time = cursor_value.primary_time AND
+            best.conversation_id > cursor_value.conversation_id
+          )
+        )`
+    const cursorJoin = cursor === undefined ? '' : 'CROSS JOIN cursor_value'
+    const rows = this.#statement(
+      `WITH
+        search_input(normalized_query) AS (VALUES (?))
+        ${cursorCte},
+        candidate_matches AS (
+          SELECT
+            c.conversation_id,
+            c.project_id,
+            c.title,
+            c.title_source,
+            c.pinned_at,
+            c.archived_at,
+            c.provider,
+            c.model,
+            c.reasoning,
+            c.status,
+            c.created_at,
+            c.updated_at,
+            c.last_activity_at,
+            d.field AS matched_field,
+            d.turn_id AS matched_turn_id,
+            CASE
+              WHEN d.field = 'title' THEN c.title
+              ELSE json_extract(t.input, '$.text')
+            END AS match_source,
+            CASE
+              WHEN d.field = 'title' AND
+                   d.normalized_text = search_input.normalized_query THEN 0
+              WHEN d.field = 'title' AND
+                   instr(d.normalized_text, search_input.normalized_query) = 1
+                THEN 1
+              WHEN d.field = 'title' THEN 2
+              ELSE 3
+            END AS match_rank,
+            CASE WHEN c.archived_at IS NULL THEN 0 ELSE 1 END
+              AS archive_bucket,
+            CASE
+              WHEN c.archived_at IS NULL AND c.pinned_at IS NOT NULL THEN 0
+              ELSE 1
+            END AS pinned_bucket,
+            CASE
+              WHEN c.archived_at IS NULL THEN c.last_activity_at
+              ELSE c.archived_at
+            END AS primary_time,
+            ROW_NUMBER() OVER (
+              PARTITION BY c.conversation_id
+              ORDER BY
+                CASE
+                  WHEN d.field = 'title' AND
+                       d.normalized_text = search_input.normalized_query THEN 0
+                  WHEN d.field = 'title' AND
+                       instr(
+                         d.normalized_text,
+                         search_input.normalized_query
+                       ) = 1 THEN 1
+                  WHEN d.field = 'title' THEN 2
+                  ELSE 3
+                END ASC,
+                CASE WHEN d.field = 'user_input' THEN t.started_at END DESC,
+                d.turn_id ASC
+            ) AS match_choice
+          FROM conversations AS c
+          JOIN conversation_search_documents AS d
+            ON d.conversation_id = c.conversation_id
+          LEFT JOIN turns AS t
+            ON t.turn_id = d.turn_id AND
+               t.conversation_id = c.conversation_id
+          CROSS JOIN search_input
+          WHERE ${filters.join(' AND ')}
+            AND instr(d.normalized_text, search_input.normalized_query) > 0
+        ),
+        best AS (
+          SELECT * FROM candidate_matches WHERE match_choice = 1
+        )
+      SELECT best.*
+      FROM best
+      ${cursorJoin}
+      WHERE 1 = 1
+        ${cursorFilter}
+      ORDER BY
+        best.match_rank ASC,
+        best.archive_bucket ASC,
+        best.pinned_bucket ASC,
+        best.primary_time DESC,
+        best.conversation_id ASC
+      LIMIT ?`,
+    ).all(...parameters) as unknown as ConversationSearchRow[]
+
+    const hasMore = rows.length > limit
+    const pageRows = hasMore ? rows.slice(0, limit) : rows
+    const results = pageRows.map((row) =>
+      conversationSearchResultFromRow(row, normalizedQuery),
+    )
+    const last = pageRows.at(-1)
+    return {
+      results,
+      ...(hasMore && last !== undefined
+        ? {
+            nextCursor: encodeConversationSearchCursor(cursorContext, {
+              matchRank: last.match_rank,
+              archiveBucket: last.archive_bucket,
+              pinnedBucket: last.pinned_bucket,
+              primaryTime: last.primary_time,
+              conversationId: last.conversation_id,
+            }),
+          }
+        : {}),
+      hasMore,
+    }
   }
 
   createAttentionItem(
@@ -966,6 +1218,16 @@ interface ConversationSummaryRow {
   readonly last_activity_at: string
 }
 
+interface ConversationSearchRow extends ConversationSummaryRow {
+  readonly matched_field: 'title' | 'user_input'
+  readonly matched_turn_id: string | null
+  readonly match_source: string
+  readonly match_rank: number
+  readonly archive_bucket: number
+  readonly pinned_bucket: number
+  readonly primary_time: string
+}
+
 interface ProjectRow {
   readonly project_id: string
   readonly name: string
@@ -1150,6 +1412,25 @@ function conversationSummaryFromRow(
   })
 }
 
+function conversationSearchResultFromRow(
+  row: ConversationSearchRow,
+  normalizedQuery: string,
+): DurableConversationSearchResult {
+  const conversation = conversationSummaryFromRow(row)
+  if (row.matched_field === 'title') {
+    return { conversation, matchedField: 'title' }
+  }
+  if (row.matched_turn_id === null) {
+    throw new Error('A User input search match requires a Turn identity')
+  }
+  return {
+    conversation,
+    matchedField: 'user_input',
+    matchPreview: conversationSearchPreview(row.match_source, normalizedQuery),
+    matchedTurnId: TurnIdSchema.parse(row.matched_turn_id),
+  }
+}
+
 function turnFromRow(row: TurnRow): DurableTurnSnapshot {
   return parseTurn({
     turnId: TurnIdSchema.parse(row.turn_id),
@@ -1319,6 +1600,20 @@ function parseConversationListLimit(value: number | undefined): number {
   ) {
     throw new Error(
       `Conversation list limit must be an integer between 1 and ${String(conversationListLimits.maximum)}`,
+    )
+  }
+  return limit
+}
+
+function parseConversationSearchLimit(value: number | undefined): number {
+  const limit = value ?? conversationSearchLimits.default
+  if (
+    !Number.isSafeInteger(limit) ||
+    limit <= 0 ||
+    limit > conversationSearchLimits.maximum
+  ) {
+    throw new Error(
+      `Conversation search limit must be an integer between 1 and ${String(conversationSearchLimits.maximum)}`,
     )
   }
   return limit

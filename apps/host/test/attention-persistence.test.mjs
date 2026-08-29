@@ -39,7 +39,12 @@ test('migration 004 creates an empty Attention index without backfilling durable
       DROP TABLE attention_items;
       DROP INDEX idx_conversations_attention_identity;
       DROP INDEX idx_turns_attention_identity;
-      DELETE FROM schema_migrations WHERE version IN (4, 5);
+      DROP TRIGGER trg_conversation_search_input_update;
+      DROP TRIGGER trg_conversation_search_input_insert;
+      DROP TRIGGER trg_conversation_search_title_update;
+      DROP TRIGGER trg_conversation_search_title_insert;
+      DROP TABLE conversation_search_documents;
+      DELETE FROM schema_migrations WHERE version IN (4, 5, 6);
     `)
     assert.equal(
       v3.prepare('SELECT MAX(version) AS version FROM schema_migrations').get()
@@ -50,7 +55,7 @@ test('migration 004 creates an empty Attention index without backfilling durable
 
     const migrated = ConversationStore.open({ databasePath })
     assert.equal(migrated.schemaVersion, currentSchemaVersion)
-    assert.equal(currentSchemaVersion, 5)
+    assert.equal(currentSchemaVersion, 6)
     assert.equal(migrated.listProjects().length, 1)
     assert.equal(migrated.listConversations().length, 1)
     assert.equal(migrated.countTurns(conversationId), 1)

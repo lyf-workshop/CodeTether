@@ -161,10 +161,11 @@ test('starts a read-only durable API when the Codex executable is unavailable', 
       ConversationStore.open({ databasePath }),
     )
     const projects = await getJson(seeded.baseUrl, '/api/v1/projects')
+    const projectId = projects.body.projects[0].projectId
     const created = await postJson(seeded.baseUrl, '/api/v1/conversations', {
       actionId: 'act_readonly_seed01',
       provider: 'codex',
-      projectId: projects.body.projects[0].projectId,
+      projectId,
     })
     const conversationId = created.body.data.conversation.conversationId
     await seeded.close()
@@ -185,6 +186,18 @@ test('starts a read-only durable API when the Codex executable is unavailable', 
     )
     assert.equal(detail.status, 200)
     assert.equal(detail.body.conversation.conversationId, conversationId)
+
+    const search = await getJson(
+      readOnly.baseUrl,
+      `/api/v1/projects/${projectId}/conversations/search?q=${encodeURIComponent('新会话')}`,
+    )
+    assert.equal(search.status, 200)
+    assert.equal(search.body.results.length, 1)
+    assert.equal(
+      search.body.results[0].conversation.conversationId,
+      conversationId,
+    )
+    assert.equal(search.body.results[0].matchedField, 'title')
 
     const mutation = await postJson(
       readOnly.baseUrl,
@@ -676,6 +689,300 @@ test('serves a strict Project-scoped durable Conversation index', async () => {
     assert.equal(queryOnAnotherEndpoint.body.code, 'invalid_request')
   } finally {
     if (workspaceMoved) await rename(movedWorkspace, harness.workspace)
+    await harness.close()
+  }
+})
+
+test('serves strict Project-scoped durable Conversation search without provider activity', async () => {
+  const harness = await createHarness({ persistence: true })
+  const movedWorkspace = `${harness.workspace}-search-moved`
+  let workspaceMoved = false
+  try {
+    const projects = await getJson(harness.baseUrl, '/api/v1/projects')
+    const projectId = projects.body.projects[0].projectId
+
+    const inputMatch = await postJson(
+      harness.baseUrl,
+      '/api/v1/conversations',
+      {
+        actionId: 'act_search_input_create01',
+        provider: 'codex',
+        projectId,
+      },
+    )
+    const inputConversationId = inputMatch.body.data.conversation.conversationId
+    await patchJson(
+      harness.baseUrl,
+      `/api/v1/conversations/${inputConversationId}`,
+      {
+        actionId: 'act_search_input_rename01',
+        title: '\u767b\u5f55\u6a21\u5757\u91cd\u6784',
+      },
+    )
+    const inputTurn = await postJson(
+      harness.baseUrl,
+      `/api/v1/conversations/${inputConversationId}/turns`,
+      {
+        actionId: 'act_search_input_turn001',
+        input: {
+          type: 'text',
+          text: '\u8bf7\u68c0\u67e5 Windows \u767b\u5f55\u540e\u81ea\u52a8 reconnect \u903b\u8f91\u3002',
+        },
+      },
+    )
+
+    const titleMatch = await postJson(
+      harness.baseUrl,
+      '/api/v1/conversations',
+      {
+        actionId: 'act_search_title_create01',
+        provider: 'codex',
+        projectId,
+      },
+    )
+    const titleConversationId = titleMatch.body.data.conversation.conversationId
+    await patchJson(
+      harness.baseUrl,
+      `/api/v1/conversations/${titleConversationId}`,
+      {
+        actionId: 'act_search_title_rename01',
+        title: 'WebSocket reconnect',
+      },
+    )
+
+    const archivedMatch = await postJson(
+      harness.baseUrl,
+      '/api/v1/conversations',
+      {
+        actionId: 'act_search_archive_create01',
+        provider: 'codex',
+        projectId,
+      },
+    )
+    const archivedConversationId =
+      archivedMatch.body.data.conversation.conversationId
+    await patchJson(
+      harness.baseUrl,
+      `/api/v1/conversations/${archivedConversationId}`,
+      {
+        actionId: 'act_search_archive_rename01',
+        title: '\u65e7\u7248 reconnect \u5b9e\u9a8c',
+      },
+    )
+    await postJson(
+      harness.baseUrl,
+      `/api/v1/conversations/${archivedConversationId}/archive`,
+      { actionId: 'act_search_archive01' },
+    )
+
+    const otherRoot = join(harness.workspace, 'other-project')
+    await mkdir(otherRoot, { recursive: true })
+    const otherProject = await postJson(harness.baseUrl, '/api/v1/projects', {
+      actionId: 'act_search_other_project01',
+      name: 'Other project',
+      path: otherRoot,
+    })
+    const otherConversation = await postJson(
+      harness.baseUrl,
+      '/api/v1/conversations',
+      {
+        actionId: 'act_search_other_create01',
+        provider: 'codex',
+        projectId: otherProject.body.data.project.projectId,
+      },
+    )
+    await patchJson(
+      harness.baseUrl,
+      `/api/v1/conversations/${otherConversation.body.data.conversation.conversationId}`,
+      {
+        actionId: 'act_search_other_rename01',
+        title: 'WebSocket reconnect private other Project',
+      },
+    )
+
+    const runtimeCallsBeforeSearch = {
+      startConversation: harness.runtime.startConversationCalls.length,
+      resumeConversation: harness.runtime.resumeConversationCalls.length,
+      startTurn: harness.runtime.startTurnCalls.length,
+    }
+    const runtimeConversationIdsBeforeSearch = harness.service
+      .snapshot()
+      .conversations.map((conversation) => conversation.conversationId)
+
+    const byInput = await getJson(
+      harness.baseUrl,
+      `/api/v1/projects/${projectId}/conversations/search?q=Windows`,
+    )
+    assert.equal(byInput.status, 200)
+    assert.equal(byInput.body.protocolVersion, 1)
+    assert.equal(byInput.body.results.length, 1)
+    assert.equal(
+      byInput.body.results[0].conversation.conversationId,
+      inputConversationId,
+    )
+    assert.equal(byInput.body.results[0].matchedField, 'user_input')
+    assert.equal(
+      byInput.body.results[0].matchedTurnId,
+      inputTurn.body.data.turn.turnId,
+    )
+    assert.match(byInput.body.results[0].matchPreview, /Windows/u)
+    assert.equal(
+      'providerThreadId' in byInput.body.results[0].conversation,
+      false,
+    )
+    assert.equal('cwd' in byInput.body.results[0].conversation, false)
+    assert.equal('input' in byInput.body.results[0], false)
+
+    const byExactTitle = await getJson(
+      harness.baseUrl,
+      `/api/v1/projects/${projectId}/conversations/search?q=WEBSOCKET%20RECONNECT`,
+    )
+    assert.equal(byExactTitle.status, 200)
+    assert.equal(byExactTitle.body.results[0].matchedField, 'title')
+    assert.equal(
+      byExactTitle.body.results[0].conversation.conversationId,
+      titleConversationId,
+    )
+    assert.equal(
+      byExactTitle.body.results.some(
+        (result) =>
+          result.conversation.projectId !== projectId ||
+          result.conversation.conversationId ===
+            otherConversation.body.data.conversation.conversationId,
+      ),
+      false,
+    )
+
+    const active = await getJson(
+      harness.baseUrl,
+      `/api/v1/projects/${projectId}/conversations/search?q=reconnect`,
+    )
+    assert.deepEqual(
+      new Set(
+        active.body.results.map((result) => result.conversation.conversationId),
+      ),
+      new Set([inputConversationId, titleConversationId]),
+    )
+    const archived = await getJson(
+      harness.baseUrl,
+      `/api/v1/projects/${projectId}/conversations/search?q=reconnect&archive=archived`,
+    )
+    assert.deepEqual(
+      archived.body.results.map((result) => result.conversation.conversationId),
+      [archivedConversationId],
+    )
+    const all = await getJson(
+      harness.baseUrl,
+      `/api/v1/projects/${projectId}/conversations/search?q=reconnect&archive=all`,
+    )
+    assert.equal(all.body.results.length, 3)
+
+    const idle = await getJson(
+      harness.baseUrl,
+      `/api/v1/projects/${projectId}/conversations/search?q=reconnect&status=idle&provider=codex`,
+    )
+    assert.deepEqual(
+      idle.body.results.map((result) => result.conversation.conversationId),
+      [titleConversationId],
+    )
+
+    const pageOne = await getJson(
+      harness.baseUrl,
+      `/api/v1/projects/${projectId}/conversations/search?q=reconnect&limit=1`,
+    )
+    assert.equal(pageOne.status, 200)
+    assert.equal(pageOne.body.results.length, 1)
+    assert.equal(pageOne.body.hasMore, true)
+    assert.match(pageOne.body.nextCursor, /^csc_/u)
+    const pageTwo = await getJson(
+      harness.baseUrl,
+      `/api/v1/projects/${projectId}/conversations/search?q=reconnect&limit=1&cursor=${encodeURIComponent(pageOne.body.nextCursor)}`,
+    )
+    assert.equal(pageTwo.status, 200)
+    assert.equal(pageTwo.body.results.length, 1)
+    assert.notEqual(
+      pageTwo.body.results[0].conversation.conversationId,
+      pageOne.body.results[0].conversation.conversationId,
+    )
+    const cursorForDifferentQuery = await getJson(
+      harness.baseUrl,
+      `/api/v1/projects/${projectId}/conversations/search?q=Windows&limit=1&cursor=${encodeURIComponent(pageOne.body.nextCursor)}`,
+    )
+    assert.equal(cursorForDifferentQuery.status, 400)
+    assert.equal(cursorForDifferentQuery.body.code, 'invalid_request')
+
+    await rename(harness.workspace, movedWorkspace)
+    workspaceMoved = true
+    const unavailableHistory = await getJson(
+      harness.baseUrl,
+      `/api/v1/projects/${projectId}/conversations/search?q=Windows`,
+    )
+    assert.equal(unavailableHistory.status, 200)
+    assert.equal(unavailableHistory.body.results.length, 1)
+
+    assert.deepEqual(
+      {
+        startConversation: harness.runtime.startConversationCalls.length,
+        resumeConversation: harness.runtime.resumeConversationCalls.length,
+        startTurn: harness.runtime.startTurnCalls.length,
+      },
+      runtimeCallsBeforeSearch,
+    )
+    assert.deepEqual(
+      harness.service
+        .snapshot()
+        .conversations.map((conversation) => conversation.conversationId),
+      runtimeConversationIdsBeforeSearch,
+    )
+
+    const largeQuery = encodeURIComponent('a'.repeat(257))
+    for (const query of [
+      '',
+      'q=',
+      'q=%20%20',
+      'q=one&q=two',
+      'q=test&unknown=value',
+      'q=test&archive=true',
+      'q=test&provider=claude',
+      'q=test&status=active',
+      'q=test&limit=0',
+      'q=test&limit=101',
+      'q=test&cursor=csc_short',
+      'q=test&cursor=csc_AAAAAAAAAAAAAAAA',
+      `q=${largeQuery}`,
+    ]) {
+      const separator = query.length === 0 ? '' : `?${query}`
+      const rejected = await getJson(
+        harness.baseUrl,
+        `/api/v1/projects/${projectId}/conversations/search${separator}`,
+      )
+      assert.equal(rejected.status, 400, query)
+      assert.equal(rejected.body.code, 'invalid_request', query)
+    }
+
+    const unknownProject = await getJson(
+      harness.baseUrl,
+      '/api/v1/projects/proj_unknown01/conversations/search?q=test',
+    )
+    assert.equal(unknownProject.status, 404)
+    assert.equal(unknownProject.body.code, 'not_found')
+  } finally {
+    if (workspaceMoved) await rename(movedWorkspace, harness.workspace)
+    await harness.close()
+  }
+})
+
+test('reports durable Conversation search unavailable without persistence', async () => {
+  const harness = await createHarness()
+  try {
+    const projects = await getJson(harness.baseUrl, '/api/v1/projects')
+    const response = await getJson(
+      harness.baseUrl,
+      `/api/v1/projects/${projects.body.projects[0].projectId}/conversations/search?q=test`,
+    )
+    assert.equal(response.status, 503)
+    assert.equal(response.body.code, 'runtime_unavailable')
+  } finally {
     await harness.close()
   }
 })

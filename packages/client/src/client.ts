@@ -8,6 +8,8 @@ import {
   ApprovalIdSchema,
   ConversationIdSchema,
   ConversationListResponseSchema,
+  ConversationSearchQuerySchema,
+  ConversationSearchResponseSchema,
   CreateConversationRequestSchema,
   CreateConversationResponseSchema,
   CreateProjectRequestSchema,
@@ -49,6 +51,8 @@ import {
   type Bootstrap,
   type ConversationId,
   type ConversationListResponse,
+  type ConversationSearchQuery,
+  type ConversationSearchResponse,
   type CreateConversationRequest,
   type CreateConversationResponse,
   type CreateProjectRequest,
@@ -113,6 +117,15 @@ export interface ListProjectConversationsOptions extends RequestOptions {
   readonly status?: ListProjectConversationsQuery['status']
   readonly archived?: boolean | 'all'
   readonly limit?: ListProjectConversationsQuery['limit']
+}
+
+export interface SearchProjectConversationsOptions extends RequestOptions {
+  readonly query: ConversationSearchQuery['q']
+  readonly archive?: ConversationSearchQuery['archive']
+  readonly provider?: ConversationSearchQuery['provider']
+  readonly status?: ConversationSearchQuery['status']
+  readonly limit?: ConversationSearchQuery['limit']
+  readonly cursor?: ConversationSearchQuery['cursor']
 }
 
 export interface ListAttentionOptions extends RequestOptions {
@@ -247,6 +260,87 @@ export class CodeTetherClient {
         ),
       'Conversation list contains a Conversation outside the requested archive filter',
     )
+    return response
+  }
+
+  async searchProjectConversations(
+    projectId: ProjectId,
+    options: SearchProjectConversationsOptions,
+  ): Promise<ConversationSearchResponse> {
+    const project = parseProtocol(
+      ProjectIdSchema,
+      projectId,
+      'search-project-conversations project id',
+    )
+    const query = parseProtocol(
+      ConversationSearchQuerySchema,
+      {
+        q: options.query,
+        ...(options.archive === undefined ? {} : { archive: options.archive }),
+        ...(options.provider === undefined
+          ? {}
+          : { provider: options.provider }),
+        ...(options.status === undefined ? {} : { status: options.status }),
+        ...(options.limit === undefined ? {} : { limit: options.limit }),
+        ...(options.cursor === undefined ? {} : { cursor: options.cursor }),
+      },
+      'search-project-conversations query',
+    )
+    const search = new URLSearchParams({
+      q: query.q,
+      archive: query.archive,
+      limit: String(query.limit),
+    })
+    if (query.provider !== undefined) search.set('provider', query.provider)
+    if (query.status !== undefined) search.set('status', query.status)
+    if (query.cursor !== undefined) search.set('cursor', query.cursor)
+
+    const response = await this.#request(
+      `/api/v1/projects/${encodeURIComponent(project)}/conversations/search?${search.toString()}`,
+      ConversationSearchResponseSchema,
+      {
+        method: 'GET',
+        signal: options.signal,
+      },
+    )
+    assertProtocolIdentity(
+      response.results.every(
+        (result) => result.conversation.projectId === project,
+      ),
+      'Conversation search contains a Conversation from another Project',
+    )
+    assertProtocolIdentity(
+      response.results.every((result) => {
+        const isArchived = result.conversation.archivedAt !== undefined
+        return (
+          query.archive === 'all' ||
+          (query.archive === 'archived' ? isArchived : !isArchived)
+        )
+      }),
+      'Conversation search contains a Conversation outside the requested archive filter',
+    )
+    if (query.provider !== undefined) {
+      assertProtocolIdentity(
+        response.results.every(
+          (result) => result.conversation.provider === query.provider,
+        ),
+        'Conversation search contains a Conversation outside the requested provider filter',
+      )
+    }
+    if (query.status !== undefined) {
+      assertProtocolIdentity(
+        response.results.every(
+          (result) => result.conversation.status === query.status,
+        ),
+        'Conversation search contains a Conversation outside the requested status filter',
+      )
+    }
+    if (query.cursor !== undefined && response.nextCursor !== undefined) {
+      assertProtocolIdentity(
+        response.nextCursor !== query.cursor,
+        'Conversation search returned the same pagination cursor',
+      )
+    }
     return response
   }
 

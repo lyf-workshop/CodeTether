@@ -1,5 +1,6 @@
 export * from './attention-records.js'
 export * from './conversation-store.js'
+export * from './conversation-search.js'
 export * from './data-directory.js'
 export * from './runtime-snapshots.js'
 export { currentSchemaVersion } from './migrations.js'

@@ -450,6 +450,151 @@ test('rejects a Project Conversation list containing another Project', async () 
   )
 })
 
+test('searches durable Project Conversations with normalized typed filters', async () => {
+  const calls = []
+  const controller = new AbortController()
+  const cursor = 'csc_abcdefghijklmnop'
+  const nextCursor = 'csc_qrstuvwxyzABCDEF'
+  const client = new CodeTetherClient({
+    baseUrl: 'http://host.test',
+    fetch: async (input, init) => {
+      calls.push({ url: String(input), init })
+      return jsonResponse({
+        protocolVersion: 1,
+        results: [
+          {
+            conversation: conversationSummary,
+            matchedField: 'user_input',
+            matchPreview: '…Windows login reconnect…',
+            matchedTurnId: turnId,
+          },
+        ],
+        hasMore: true,
+        nextCursor,
+      })
+    },
+  })
+
+  const response = await client.searchProjectConversations(projectId, {
+    query: '  Re\u0301connect  ',
+    archive: 'all',
+    provider: 'codex',
+    status: 'completed',
+    limit: 25,
+    cursor,
+    signal: controller.signal,
+  })
+
+  assert.equal(response.nextCursor, nextCursor)
+  assert.equal(calls.length, 1)
+  const request = new URL(calls[0].url)
+  assert.equal(
+    request.pathname,
+    `/api/v1/projects/${projectId}/conversations/search`,
+  )
+  assert.deepEqual(Object.fromEntries(request.searchParams), {
+    q: 'Réconnect',
+    archive: 'all',
+    limit: '25',
+    provider: 'codex',
+    status: 'completed',
+    cursor,
+  })
+  assert.equal(calls[0].init.method, 'GET')
+  assert.equal(calls[0].init.signal, controller.signal)
+})
+
+test('uses safe Conversation search defaults and rejects malformed options', async () => {
+  let requestedUrl
+  const client = new CodeTetherClient({
+    baseUrl: 'http://host.test',
+    fetch: async (input) => {
+      requestedUrl = String(input)
+      return jsonResponse({
+        protocolVersion: 1,
+        results: [],
+        hasMore: false,
+      })
+    },
+  })
+
+  await client.searchProjectConversations(projectId, { query: '登录' })
+  assert.deepEqual(Object.fromEntries(new URL(requestedUrl).searchParams), {
+    q: '登录',
+    archive: 'active',
+    limit: '25',
+  })
+
+  for (const options of [
+    { query: '' },
+    { query: 'ok', archive: 'false' },
+    { query: 'ok', provider: 'claude' },
+    { query: 'ok', status: 'archived' },
+    { query: 'ok', limit: 101 },
+    { query: 'ok', cursor: 'invalid' },
+  ]) {
+    await assert.rejects(
+      client.searchProjectConversations(projectId, options),
+      CodeTetherProtocolError,
+    )
+  }
+})
+
+test('validates Conversation search identity, filters, and cursor progress', async () => {
+  const cursor = 'csc_abcdefghijklmnop'
+  const cases = [
+    {
+      response: {
+        ...conversationSummary,
+        projectId: 'proj_other01',
+      },
+      options: { query: 'workspace' },
+    },
+    {
+      response: { ...conversationSummary, archivedAt: timestamp },
+      options: { query: 'workspace', archive: 'active' },
+    },
+    {
+      response: { ...conversationSummary, status: 'failed' },
+      options: { query: 'workspace', status: 'completed' },
+    },
+  ]
+
+  for (const testCase of cases) {
+    const client = new CodeTetherClient({
+      baseUrl: 'http://host.test',
+      fetch: async () =>
+        jsonResponse({
+          protocolVersion: 1,
+          results: [{ conversation: testCase.response, matchedField: 'title' }],
+          hasMore: false,
+        }),
+    })
+    await assert.rejects(
+      client.searchProjectConversations(projectId, testCase.options),
+      CodeTetherProtocolError,
+    )
+  }
+
+  const cursorClient = new CodeTetherClient({
+    baseUrl: 'http://host.test',
+    fetch: async () =>
+      jsonResponse({
+        protocolVersion: 1,
+        results: [],
+        hasMore: true,
+        nextCursor: cursor,
+      }),
+  })
+  await assert.rejects(
+    cursorClient.searchProjectConversations(projectId, {
+      query: 'workspace',
+      cursor,
+    }),
+    CodeTetherProtocolError,
+  )
+})
+
 test('uses typed Conversation organization mutations and forwards AbortSignal', async () => {
   const calls = []
   const controller = new AbortController()

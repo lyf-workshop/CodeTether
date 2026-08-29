@@ -9,6 +9,8 @@ import {
   ConversationIdSchema,
   ConversationListResponseSchema,
   ConversationRecordSchema,
+  ConversationSearchQuerySchema,
+  ConversationSearchResponseSchema,
   ConversationSummarySchema,
   EpochIdSchema,
   formatLastEventId,
@@ -31,6 +33,8 @@ import {
   type ConversationApprovalHistoryRecord,
   type ConversationListResponse,
   type ConversationRecord,
+  type ConversationSearchQuery,
+  type ConversationSearchResponse,
   type ConversationRuntimeSnapshot,
   type ConversationSummary,
   type CreateConversationRequest,
@@ -76,6 +80,7 @@ import {
 import {
   ConversationStore,
   ConversationOrganizationConflictError,
+  ConversationSearchCursorError,
   DURABLE_TURN_SNAPSHOT_VERSION,
   captureTurnPresentation,
   initialTurnPresentation,
@@ -329,6 +334,51 @@ export class HostService {
         archived: archiveFilterForStore(options.archived),
       }),
     })
+  }
+
+  async searchProjectConversations(
+    projectId: ProjectId,
+    query: ConversationSearchQuery,
+  ): Promise<ConversationSearchResponse> {
+    if (this.#persistence === undefined) {
+      throw new HostServiceError(
+        'runtime_unavailable',
+        'Durable Conversation search is unavailable',
+        503,
+      )
+    }
+    const id = ProjectIdSchema.parse(projectId)
+    const options = ConversationSearchQuerySchema.parse(query)
+    try {
+      await this.#projects.get(id)
+    } catch (error) {
+      throw projectServiceError(error)
+    }
+
+    try {
+      return ConversationSearchResponseSchema.parse({
+        protocolVersion,
+        ...this.#persistence.searchProjectConversations(id, {
+          query: options.q,
+          archive: options.archive,
+          ...(options.provider === undefined
+            ? {}
+            : { provider: options.provider }),
+          ...(options.status === undefined ? {} : { status: options.status }),
+          limit: options.limit,
+          ...(options.cursor === undefined ? {} : { cursor: options.cursor }),
+        }),
+      })
+    } catch (error) {
+      if (error instanceof ConversationSearchCursorError) {
+        throw new HostServiceError(
+          'invalid_request',
+          'Conversation search cursor is invalid',
+          400,
+        )
+      }
+      throw error
+    }
   }
 
   getConversation(conversationId: ConversationId): GetConversationResponse {

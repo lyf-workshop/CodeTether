@@ -12,6 +12,9 @@ import {
   ConversationListResponseSchema,
   ConversationRecordSchema,
   ConversationRuntimeSnapshotSchema,
+  ConversationSearchCursorSchema,
+  ConversationSearchQuerySchema,
+  ConversationSearchResponseSchema,
   ConversationSummarySchema,
   ConversationApprovalHistoryRecordSchema,
   CreateConversationRequestSchema,
@@ -50,6 +53,7 @@ import {
   conversationRuntimeWireLimits,
   attentionListLimits,
   conversationDetailWireLimits,
+  conversationSearchLimits,
   formatLastEventId,
   hostEventTypes,
   manualConversationTitleLimits,
@@ -430,6 +434,114 @@ test('validates bounded Project Conversation list queries and responses', () => 
     }).success,
     false,
   )
+})
+
+test('normalizes and strictly validates durable Conversation search queries', () => {
+  const cursor = ConversationSearchCursorSchema.parse('csc_abcdefghijklmnop')
+  assert.deepEqual(
+    ConversationSearchQuerySchema.parse({ q: '  Cafe\u0301 reconnect  ' }),
+    {
+      q: 'Café reconnect',
+      archive: 'active',
+      limit: conversationSearchLimits.default,
+    },
+  )
+  assert.deepEqual(
+    ConversationSearchQuerySchema.parse({
+      q: '登录',
+      archive: 'all',
+      provider: 'codex',
+      status: 'failed',
+      limit: '100',
+      cursor,
+    }),
+    {
+      q: '登录',
+      archive: 'all',
+      provider: 'codex',
+      status: 'failed',
+      limit: conversationSearchLimits.maximum,
+      cursor,
+    },
+  )
+
+  for (const query of [
+    { q: '' },
+    { q: '   ' },
+    { q: 'x'.repeat(conversationSearchLimits.queryCodeUnits + 1) },
+    { q: 'é'.repeat(conversationSearchLimits.queryGraphemes + 1) },
+    { q: 'ok', archive: 'false' },
+    { q: 'ok', provider: 'claude' },
+    { q: 'ok', status: 'archived' },
+    { q: 'ok', limit: 0 },
+    { q: 'ok', limit: conversationSearchLimits.maximum + 1 },
+    { q: 'ok', cursor: 'cursor-without-public-format' },
+    { q: 'ok', unknown: true },
+  ]) {
+    assert.equal(ConversationSearchQuerySchema.safeParse(query).success, false)
+  }
+})
+
+test('bounds and de-duplicates privacy-safe Conversation search results', () => {
+  const cursor = ConversationSearchCursorSchema.parse('csc_abcdefghijklmnop')
+  const titleResult = {
+    conversation: conversationSummary,
+    matchedField: 'title',
+  }
+  const inputResult = {
+    conversation: {
+      ...conversationSummary,
+      conversationId: 'conv_search02',
+    },
+    matchedField: 'user_input',
+    matchPreview: '…Windows 登录后自动 reconnect…',
+    matchedTurnId: turnId,
+  }
+  const response = {
+    protocolVersion,
+    results: [titleResult, inputResult],
+    hasMore: true,
+    nextCursor: cursor,
+  }
+  assert.deepEqual(ConversationSearchResponseSchema.parse(response), response)
+
+  for (const invalidResponse of [
+    { ...response, results: [titleResult, titleResult] },
+    { ...response, hasMore: false },
+    { ...response, nextCursor: undefined },
+    { ...response, results: [] },
+    {
+      ...response,
+      results: [{ ...titleResult, matchPreview: 'must not accompany title' }],
+    },
+    {
+      ...response,
+      results: [
+        {
+          conversation: inputResult.conversation,
+          matchedField: 'user_input',
+          matchPreview: 'missing public Turn identity',
+        },
+      ],
+    },
+    {
+      ...response,
+      results: [
+        {
+          ...titleResult,
+          conversation: {
+            ...conversationSummary,
+            providerThreadId: 'private-thread',
+          },
+        },
+      ],
+    },
+  ]) {
+    assert.equal(
+      ConversationSearchResponseSchema.safeParse(invalidResponse).success,
+      false,
+    )
+  }
 })
 
 test('validates explicit Conversation organization mutation envelopes', () => {

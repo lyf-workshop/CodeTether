@@ -13,7 +13,7 @@ use std::{
 };
 
 use serde::Deserialize;
-use tauri::{Manager, RunEvent, WindowEvent};
+use tauri::{AppHandle, Manager, RunEvent, WindowEvent};
 use tauri_plugin_shell::{
     ShellExt,
     process::{CommandChild, CommandEvent},
@@ -23,6 +23,7 @@ use self::process_tree::ProcessTreeGuard;
 use crate::{
     attention_notifications::AttentionNotificationState,
     startup_error::{self, StartupFailureKind},
+    system_tray,
 };
 
 const HOST_ADDRESS: &str = "127.0.0.1:4317";
@@ -43,14 +44,16 @@ struct DesktopState {
     host: Arc<Mutex<Option<HostSupervisor>>>,
     lifecycle: Arc<AtomicU8>,
     ready: Arc<AtomicBool>,
+    background_education_shown: Arc<AtomicBool>,
 }
 
 impl DesktopState {
-    fn new(host: HostSupervisor) -> Self {
+    fn new(host: HostSupervisor, background_education_shown: bool) -> Self {
         Self {
             host: Arc::new(Mutex::new(Some(host))),
             lifecycle: Arc::new(AtomicU8::new(LIFECYCLE_RUNNING)),
             ready: Arc::new(AtomicBool::new(false)),
+            background_education_shown: Arc::new(AtomicBool::new(background_education_shown)),
         }
     }
 
@@ -77,6 +80,24 @@ impl DesktopState {
         self.lifecycle.load(Ordering::Acquire) != LIFECYCLE_RUNNING
     }
 
+    fn can_restore_main_window(&self) -> bool {
+        self.is_ready() && self.lifecycle.load(Ordering::Acquire) == LIFECYCLE_RUNNING
+    }
+
+    fn main_window_close_action(&self) -> MainWindowCloseAction {
+        match self.lifecycle.load(Ordering::Acquire) {
+            LIFECYCLE_RUNNING => MainWindowCloseAction::Hide,
+            LIFECYCLE_STOPPING => MainWindowCloseAction::Prevent,
+            _ => MainWindowCloseAction::Allow,
+        }
+    }
+
+    fn claim_background_education(&self) -> bool {
+        self.background_education_shown
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
     fn should_prevent_exit(&self) -> bool {
         self.lifecycle.load(Ordering::Acquire) != LIFECYCLE_EXIT_ALLOWED
     }
@@ -92,6 +113,13 @@ impl DesktopState {
         }
         ShutdownOutcome::Clean
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MainWindowCloseAction {
+    Hide,
+    Prevent,
+    Allow,
 }
 
 #[derive(Clone)]
@@ -220,8 +248,15 @@ impl HostSupervisor {
                                 "[codetether:desktop] owned Host exited unexpectedly ({:?})",
                                 payload.code
                             );
-                            startup_error::show(StartupFailureKind::HostExited);
-                            monitor_app.exit(1);
+                            let failure_app = monitor_app.clone();
+                            if let Err(error) = monitor_app.run_on_main_thread(move || {
+                                handle_unexpected_host_exit(failure_app);
+                            }) {
+                                eprintln!(
+                                    "[codetether:desktop] could not schedule the Host failure surface: {error}"
+                                );
+                                emergency_shutdown_after_event_loop_failure(&monitor_app, 1);
+                            }
                         }
                     }
                     _ => {}
@@ -510,7 +545,7 @@ fn smoke_exit_delay(arguments: impl IntoIterator<Item = String>) -> Option<Durat
     None
 }
 
-fn finish_owned_shutdown(state: DesktopState, code: i32) -> ! {
+fn finish_owned_shutdown(state: DesktopState, app: AppHandle, code: i32) -> ! {
     // This is a final process-level guard around the normal bounded Host
     // shutdown. If a platform process primitive itself stalls, exiting the
     // Desktop closes the Windows Job handle and still prevents an orphaned
@@ -532,6 +567,7 @@ fn finish_owned_shutdown(state: DesktopState, code: i32) -> ! {
     }
     let exit_code = shutdown_exit_code(outcome, code);
     state.allow_exit();
+    system_tray::remove(&app);
     // The Host and its owned process tree are fully drained at this point.
     // Exiting directly avoids a Windows/Tauri edge case where re-requesting
     // exit after preventing the original window-close event can leave a
@@ -539,6 +575,169 @@ fn finish_owned_shutdown(state: DesktopState, code: i32) -> ! {
     // open a blocking modal here: the visible product window is already
     // closing and an unowned MessageBox can itself orphan the Desktop process.
     std::process::exit(exit_code);
+}
+
+fn finish_unpreventable_shutdown(state: &DesktopState) {
+    if !state.begin_shutdown() {
+        return;
+    }
+    let outcome = state.shutdown_owned_host();
+    if outcome != ShutdownOutcome::Clean {
+        eprintln!(
+            "[codetether:desktop] unpreventable exit did not confirm a clean Host shutdown ({outcome:?})"
+        );
+    }
+    state.allow_exit();
+}
+
+pub(crate) fn request_app_quit(app: &AppHandle, code: i32) {
+    let quit_app = app.clone();
+    if let Err(error) = app.run_on_main_thread(move || {
+        let Some(state) = quit_app.try_state::<DesktopState>() else {
+            quit_app.exit(code);
+            return;
+        };
+        if !state.begin_shutdown() {
+            return;
+        }
+        let state = state.inner().clone();
+        thread::spawn(move || finish_owned_shutdown(state, quit_app, code));
+    }) {
+        eprintln!("[codetether:desktop] could not schedule explicit quit: {error}");
+        emergency_shutdown_after_event_loop_failure(app, code);
+    }
+}
+
+pub(crate) fn show_main_window(app: &AppHandle) -> Result<bool, String> {
+    let Some(state) = app.try_state::<DesktopState>() else {
+        return Ok(false);
+    };
+    if !state.can_restore_main_window() {
+        return Ok(false);
+    }
+    let restore_app = app.clone();
+    app.run_on_main_thread(move || {
+        let Some(state) = restore_app.try_state::<DesktopState>() else {
+            return;
+        };
+        // This effect-time check runs on the same main event loop as Quit,
+        // CloseRequested, tray callbacks, and second-instance activation. A
+        // queued background notification therefore cannot reveal the window
+        // after a previously handled Quit transition.
+        if !state.can_restore_main_window() {
+            return;
+        }
+        let result = (|| {
+            let window = restore_app
+                .get_webview_window("main")
+                .ok_or_else(|| "the configured main window is unavailable".to_owned())?;
+            window.unminimize().map_err(|error| error.to_string())?;
+            window.show().map_err(|error| error.to_string())?;
+            window.set_focus().map_err(|error| error.to_string())?;
+            Ok::<(), String>(())
+        })();
+        if let Err(error) = result {
+            eprintln!("[codetether:desktop] could not restore the main window: {error}");
+        }
+    })
+    .map_err(|error| error.to_string())?;
+    Ok(true)
+}
+
+fn emergency_shutdown_after_event_loop_failure(app: &AppHandle, code: i32) {
+    let Some(state) = app.try_state::<DesktopState>() else {
+        std::process::exit(code);
+    };
+    if !state.begin_shutdown() {
+        return;
+    }
+    let state = state.inner().clone();
+    let app = app.clone();
+    thread::spawn(move || finish_owned_shutdown(state, app, code));
+}
+
+fn handle_unexpected_host_exit(app: AppHandle) {
+    let Some(state) = app.try_state::<DesktopState>() else {
+        startup_error::show(StartupFailureKind::HostExited);
+        std::process::exit(1);
+    };
+    if !state.begin_shutdown() {
+        return;
+    }
+    show_main_window_for_failure(&app);
+    show_runtime_failure(&app, StartupFailureKind::HostExited);
+    let state = state.inner().clone();
+    thread::spawn(move || finish_owned_shutdown(state, app, 1));
+}
+
+fn finish_desktop_initialization(
+    app: AppHandle,
+    state: DesktopState,
+    smoke_exit_delay: Option<Duration>,
+) {
+    if state.is_shutting_down() {
+        return;
+    }
+    let initialization = (|| {
+        system_tray::create(&app).map_err(|error| (StartupFailureKind::TrayUnavailable, error))?;
+        let window = app.get_webview_window("main").ok_or_else(|| {
+            (
+                StartupFailureKind::HostSpawnFailed,
+                "the configured main window is missing".to_owned(),
+            )
+        })?;
+        window
+            .show()
+            .map_err(|error| (StartupFailureKind::HostSpawnFailed, error.to_string()))?;
+        state.mark_ready();
+        Ok::<(), (StartupFailureKind, String)>(())
+    })();
+    if let Err((failure, error)) = initialization {
+        system_tray::remove(&app);
+        eprintln!("[codetether:desktop] could not initialize the Desktop window/tray: {error}");
+        startup_error::show(failure);
+        if state.begin_shutdown() {
+            thread::spawn(move || finish_owned_shutdown(state, app, 1));
+        }
+        return;
+    }
+    if let Some(delay) = smoke_exit_delay {
+        thread::spawn(move || {
+            thread::sleep(delay);
+            request_app_quit(&app, 0);
+        });
+    }
+}
+
+fn finish_startup_failure(app: AppHandle, state: DesktopState, failure: StartupFailureKind) {
+    if !state.begin_shutdown() {
+        return;
+    }
+    startup_error::show(failure);
+    thread::spawn(move || finish_owned_shutdown(state, app, 1));
+}
+
+fn show_main_window_for_failure(app: &AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    if let Err(error) = window.unminimize() {
+        eprintln!("[codetether:desktop] could not unminimize the failed Desktop window: {error}");
+    }
+    if let Err(error) = window.show() {
+        eprintln!("[codetether:desktop] could not reveal the failed Desktop window: {error}");
+    }
+    if let Err(error) = window.set_focus() {
+        eprintln!("[codetether:desktop] could not focus the failed Desktop window: {error}");
+    }
+}
+
+fn show_runtime_failure(app: &AppHandle, failure: StartupFailureKind) {
+    if let Some(window) = app.get_webview_window("main") {
+        startup_error::show_for_window(failure, &window);
+    } else {
+        startup_error::show(failure);
+    }
 }
 
 fn shutdown_exit_code(outcome: ShutdownOutcome, requested_code: i32) -> i32 {
@@ -551,14 +750,10 @@ fn shutdown_exit_code(outcome: ShutdownOutcome, requested_code: i32) -> i32 {
 pub fn run_desktop() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            if app
-                .try_state::<DesktopState>()
-                .is_some_and(|state| state.is_ready())
-                && let Some(window) = app.get_webview_window("main")
-            {
-                let _ = window.unminimize();
-                let _ = window.show();
-                let _ = window.set_focus();
+            if let Err(error) = show_main_window(app) {
+                eprintln!(
+                    "[codetether:desktop] could not restore the main window for a second launch: {error}"
+                );
             }
         }))
         .plugin(tauri_plugin_notification::init())
@@ -583,7 +778,10 @@ pub fn run_desktop() {
                 }
             };
             let observation = host.observation();
-            let state = DesktopState::new(host);
+            let state = DesktopState::new(
+                host,
+                system_tray::background_education_was_shown(app.handle()),
+            );
             app.manage(state.clone());
             app.manage(AttentionNotificationState::default());
 
@@ -597,56 +795,31 @@ pub fn run_desktop() {
                             "[codetether:desktop] Host ready at {HOST_URL} in {} ms",
                             elapsed.as_millis()
                         );
-                        match app_handle.get_webview_window("main") {
-                            Some(window) => {
-                                if let Err(error) = window.show() {
-                                    eprintln!(
-                                        "[codetether:desktop] could not reveal the main window: {error}"
-                                    );
-                                    if state.begin_shutdown() {
-                                        finish_owned_shutdown(state, 1);
-                                    }
-                                    return;
-                                }
-                                state.mark_ready();
-                            }
-                            None => {
-                                eprintln!(
-                                    "[codetether:desktop] the configured main window is missing"
-                                );
-                                if state.begin_shutdown() {
-                                    finish_owned_shutdown(state, 1);
-                                }
-                                return;
-                            }
-                        }
-                        if let Some(delay) = smoke_exit_delay {
-                            thread::sleep(delay);
-                            if let Some(window) = app_handle.get_webview_window("main") {
-                                if let Err(error) = window.close() {
-                                    eprintln!(
-                                        "[codetether:desktop] could not close the smoke window: {error}"
-                                    );
-                                    if state.begin_shutdown() {
-                                        finish_owned_shutdown(state, 1);
-                                    }
-                                }
-                            } else if state.begin_shutdown() {
-                                finish_owned_shutdown(state, 1);
-                            }
+                        let initialization_app = app_handle.clone();
+                        let initialization_state = state.clone();
+                        if let Err(error) = app_handle.run_on_main_thread(move || {
+                            finish_desktop_initialization(
+                                initialization_app,
+                                initialization_state,
+                                smoke_exit_delay,
+                            );
+                        }) {
+                            eprintln!(
+                                "[codetether:desktop] could not schedule Desktop initialization: {error}"
+                            );
+                            emergency_shutdown_after_event_loop_failure(&app_handle, 1);
                         }
                     }
-                    Err(failure) if !state.is_shutting_down() && state.begin_shutdown() => {
-                        startup_error::show(failure);
-                        let _ = state.shutdown_owned_host();
-                        state.allow_exit();
-                        std::process::exit(1);
-                    }
-                    Err(_) => {
-                        if state.begin_shutdown() {
-                            let _ = state.shutdown_owned_host();
-                            state.allow_exit();
-                            std::process::exit(1);
+                    Err(failure) => {
+                        let failure_app = app_handle.clone();
+                        let failure_state = state.clone();
+                        if let Err(error) = app_handle.run_on_main_thread(move || {
+                            finish_startup_failure(failure_app, failure_state, failure);
+                        }) {
+                            eprintln!(
+                                "[codetether:desktop] could not schedule startup failure handling: {error}"
+                            );
+                            emergency_shutdown_after_event_loop_failure(&app_handle, 1);
                         }
                     }
                 }
@@ -662,18 +835,30 @@ pub fn run_desktop() {
             event: WindowEvent::CloseRequested { api, .. },
             ..
         } if label == "main" => {
-            if let Some(state) = app_handle.try_state::<DesktopState>()
-                && state.should_prevent_exit()
-            {
-                // The single-instance plugin owns a hidden helper window on
-                // Windows, so closing the visible main window is not always
-                // followed by an application-level ExitRequested event.
-                // Intercept the product window directly: close means exit,
-                // and owned Host teardown must happen before that exit.
-                api.prevent_close();
-                if state.begin_shutdown() {
-                    let state = state.inner().clone();
-                    thread::spawn(move || finish_owned_shutdown(state, 0));
+            if let Some(state) = app_handle.try_state::<DesktopState>() {
+                match state.main_window_close_action() {
+                    MainWindowCloseAction::Hide => {
+                        api.prevent_close();
+                        if let Some(window) = app_handle.get_webview_window("main") {
+                            match window.hide() {
+                                Ok(()) => {
+                                    eprintln!(
+                                        "[codetether:desktop] main window hidden; runtime remains active"
+                                    );
+                                    if state.claim_background_education() {
+                                        system_tray::persist_and_show_background_education(
+                                            app_handle,
+                                        );
+                                    }
+                                }
+                                Err(error) => eprintln!(
+                                    "[codetether:desktop] could not hide the main window: {error}"
+                                ),
+                            }
+                        }
+                    }
+                    MainWindowCloseAction::Prevent => api.prevent_close(),
+                    MainWindowCloseAction::Allow => {}
                 }
             }
         }
@@ -682,10 +867,12 @@ pub fn run_desktop() {
                 && state.should_prevent_exit()
             {
                 api.prevent_exit();
-                if state.begin_shutdown() {
-                    let state = state.inner().clone();
-                    thread::spawn(move || finish_owned_shutdown(state, code.unwrap_or(0)));
-                }
+                request_app_quit(app_handle, code.unwrap_or(0));
+            }
+        }
+        RunEvent::Exit => {
+            if let Some(state) = app_handle.try_state::<DesktopState>() {
+                finish_unpreventable_shutdown(&state);
             }
         }
         _ => {}
@@ -695,6 +882,15 @@ pub fn run_desktop() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn desktop_state() -> DesktopState {
+        DesktopState {
+            host: Arc::new(Mutex::new(None)),
+            lifecycle: Arc::new(AtomicU8::new(LIFECYCLE_RUNNING)),
+            ready: Arc::new(AtomicBool::new(false)),
+            background_education_shown: Arc::new(AtomicBool::new(false)),
+        }
+    }
 
     #[test]
     fn packaged_sidecar_is_resolved_next_to_the_desktop_binary() {
@@ -729,11 +925,7 @@ mod tests {
 
     #[test]
     fn every_exit_is_blocked_until_the_single_shutdown_worker_finishes() {
-        let state = DesktopState {
-            host: Arc::new(Mutex::new(None)),
-            lifecycle: Arc::new(AtomicU8::new(LIFECYCLE_RUNNING)),
-            ready: Arc::new(AtomicBool::new(false)),
-        };
+        let state = desktop_state();
         assert!(state.should_prevent_exit());
         assert!(state.begin_shutdown());
         assert!(state.should_prevent_exit());
@@ -745,14 +937,56 @@ mod tests {
 
     #[test]
     fn second_launch_cannot_reveal_the_window_before_readiness() {
-        let state = DesktopState {
-            host: Arc::new(Mutex::new(None)),
-            lifecycle: Arc::new(AtomicU8::new(LIFECYCLE_RUNNING)),
-            ready: Arc::new(AtomicBool::new(false)),
-        };
+        let state = desktop_state();
         assert!(!state.is_ready());
+        assert!(!state.can_restore_main_window());
         state.mark_ready();
         assert!(state.is_ready());
+        assert!(state.can_restore_main_window());
+    }
+
+    #[test]
+    fn window_close_hides_only_while_the_runtime_is_running() {
+        let state = desktop_state();
+        assert_eq!(
+            state.main_window_close_action(),
+            MainWindowCloseAction::Hide
+        );
+        assert!(state.begin_shutdown());
+        assert_eq!(
+            state.main_window_close_action(),
+            MainWindowCloseAction::Prevent
+        );
+        assert!(!state.can_restore_main_window());
+        state.allow_exit();
+        assert_eq!(
+            state.main_window_close_action(),
+            MainWindowCloseAction::Allow
+        );
+    }
+
+    #[test]
+    fn restore_effect_is_rejected_after_quit_transition() {
+        let state = desktop_state();
+        state.mark_ready();
+        assert!(state.can_restore_main_window());
+        assert!(state.begin_shutdown());
+        assert!(!state.can_restore_main_window());
+    }
+
+    #[test]
+    fn readiness_side_effects_are_skipped_after_shutdown_begins() {
+        let state = desktop_state();
+        assert!(state.begin_shutdown());
+        assert!(state.is_shutting_down());
+        assert!(!state.is_ready());
+    }
+
+    #[test]
+    fn background_education_is_claimed_at_most_once_per_process() {
+        let state = desktop_state();
+        assert!(state.claim_background_education());
+        assert!(!state.claim_background_education());
     }
 
     #[test]

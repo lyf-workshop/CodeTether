@@ -710,7 +710,7 @@ Acceptance boundary:
 
 ### Phase 4F.2 — Search UI & History Discovery
 
-**Status:** implemented; Owner acceptance is pending.
+**Status:** accepted and frozen at `545db8c`.
 
 Implemented scope:
 
@@ -730,8 +730,34 @@ Not included:
 
 Acceptance boundary:
 
-- Owner review must confirm URL Browse/Search navigation, truthful match explanations, stale-request safety, cursor Load More, active/archived/status behavior, List/Rail density, public Turn focus and older-history boundary, organization actions, multi-client invalidation, cold/provider isolation, Browser/Desktop parity, responsive/focus behavior, restart, and the real Codex Search-to-lazy-resume path before Phase 4F.2 is accepted or frozen.
-- Phase 4F.2 does not authorize System Tray/background runtime, global/semantic Search, another provider, or any other next phase.
+- Owner review confirmed URL Browse/Search navigation, truthful match explanations, stale-request safety, cursor Load More, active/archived/status behavior, List/Rail density, public Turn focus and older-history boundary, organization actions, multi-client invalidation, cold/provider isolation, Browser/Desktop parity, responsive/focus behavior, restart, and the real Codex Search-to-lazy-resume path. Phase 4F.2 is frozen at `545db8c`.
+- Phase 4F.2 did not itself authorize System Tray/background runtime, global/semantic Search, another provider, or any other next phase.
+
+### Phase 4G.1 — System Tray & Background Runtime Foundation
+
+**Status:** implemented; Owner acceptance is pending.
+
+Implemented scope:
+
+- The native-decorated main window is no longer the application lifetime boundary. X and Alt+F4 prevent main-window destruction and hide the existing WebView to the Windows System Tray, while ordinary minimize remains a normal Windows minimize and the Desktop-owned Host/Codex process tree continues running.
+- Rust creates exactly one tray after the Host passes Protocol/build readiness and before the first window reveal. It uses the configured CodeTether icon and tooltip, restores on completed left click, and exposes only `打开 CodeTether` plus `退出 CodeTether`; tray-creation failure drains the owned Host and exits instead of leaving a nonfunctional shell.
+- Tray click, Tray Open, notification activation, and single-instance activation call one ready/not-quitting `show_main_window` boundary that unminimizes, shows, and focuses the same main window. Hidden second-instance activation never starts another Host or SQLite writer, and hide/show does not navigate or remount the shared React application.
+- Explicit Tray Quit is guarded as a one-way/idempotent lifecycle transition and reuses the Phase 4A bounded graceful Host/SQLite/Codex shutdown before removing the tray and exiting. Window hide does not invoke restart reconciliation; explicit Quit and abnormal process loss retain the established interrupted-Turn and expired-Approval safety semantics.
+- The first successful hide atomically persists one versioned Desktop-owned education marker outside Project SQLite and attempts one native “still running” explanation. Shared Settings receives only a Browser-safe read-only `backgroundRuntime.available` capability and a compact Desktop explanation with no behavior toggle; Browser mode exposes neither tray controls nor lifecycle changes.
+- The Tauri built-in `tray-icon` feature is Rust-owned. Phase 4G.1 adds no Web app-exit command, generic native invoke, shell/process/filesystem capability, notification database, Attention store, Host API, provider control, or second Runtime projection.
+- The unpreventable Tauri exit path performs a best-effort synchronous Host drain and the Windows Job Object still guarantees no owned orphan after parent loss. The current Tao event loop does not expose `WM_QUERYENDSESSION`, so forced Windows logoff/shutdown does not yet have a guaranteed full bounded graceful interval.
+
+Not included:
+
+- Start with Windows, a close-behavior setting, tray badges/dynamic Attention counts, recent Project/Conversation menus, inline tray Approval actions, multiple windows, or minimize-to-tray.
+- Notifications after explicit application exit, a notification-history center, application DND/sound controls, remote/mobile/browser push, email/chat delivery, or an OS background daemon.
+- Automatic Host restart, updater/signing, custom window chrome, remote access, global/semantic Search, Activity, Machine management, or another provider.
+- A stronger Windows session-ending contract, sleep/wake recovery policy, or macOS/Linux tray validation.
+
+Acceptance boundary:
+
+- Owner review must confirm real X and Alt+F4 hide behavior, one tray and process tree, Host/epoch preservation, hidden second-instance restore, route/scroll/Approval preservation, background SSE and Approval/completed/failed notification delivery, exact notification navigation, running Turn and pending Approval continuity, idempotent explicit Quit, unexpected-Host/startup failure behavior, Browser isolation, raw release/installed NSIS behavior, process/port cleanup, and real Codex background flows before Phase 4G.1 is accepted or frozen.
+- Phase 4G.1 does not authorize Phase 4G.2 Windows session/background reliability, Start with Windows, notification-history work, or another provider.
 
 ## Phase 5 — Machines
 

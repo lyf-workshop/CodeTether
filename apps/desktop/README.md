@@ -10,12 +10,13 @@ It is deliberately not a second application backend. Project, Conversation, Atte
 
 ```text
 Tauri v2 shell
-  ├─ single main-window lifecycle
+  ├─ single main-window / System Tray lifecycle
   ├─ single-instance enforcement
   ├─ fixed Host sidecar spawn/readiness/exit supervision
   ├─ private owned-child shutdown channel
   ├─ exact Project directory picker
-  └─ bounded Attention notification delivery / click activation
+  ├─ bounded Attention notification delivery / click activation
+  └─ explicit Tray Quit / bounded Host drain
              │
              ▼
 existing apps/web build
@@ -110,6 +111,8 @@ Desktop startup follows this order:
 5. Rust writes the private `start` activation only after process-tree ownership is established, so startup cannot spawn Codex outside the owned Job.
 6. Readiness polls `GET /api/v1/bootstrap` for up to 15 seconds.
 7. Protocol v1 and the revision-coupled Host identity must both match.
+8. Rust creates the single CodeTether tray.
+9. The main window is revealed only after Host readiness and tray creation succeed.
 
 Startup distinguishes these safe failures:
 
@@ -120,22 +123,23 @@ Startup distinguishes these safe failures:
 - Host exit during startup.
 - Bootstrap timeout.
 - Protocol or bundled Host identity incompatibility.
+- Tray creation failure.
 
 Desktop never kills, replaces, or silently attaches to a process discovered through the port check.
 
 ## Host Ownership and Shutdown
 
-Only the Host child started by the current Desktop process is owned. Closing CodeTether exits the application; there is no tray behavior.
+Only the Host child started by the current Desktop process is owned. X and Alt+F4 no longer exit the application: Rust prevents destruction of the `main` window and hides it to the System Tray. The same Desktop, Host, WebView, route, running Turn, process-live Approval, Attention stream, and notification coordinator remain alive. Ordinary minimize remains ordinary minimize.
 
-Normal shutdown writes the private line below to the owned Host's piped stdin:
+Only the tray item `退出 CodeTether` initiates normal product shutdown. It writes the private line below to the owned Host's piped stdin:
 
 ```text
 shutdown
 ```
 
-The Host then enters its graceful close path: it stops HTTP/SSE acceptance, drains admitted mutations to their durable boundary, releases process-local Approval requests, flushes dirty durable Turn state, checkpoints/closes SQLite, and shuts down the Codex App Server. Durable Approval expiry remains the established restart reconciliation. Desktop waits up to 12 seconds before terminating only its own process tree.
+The Host then enters its graceful close path: it stops HTTP/SSE acceptance, drains admitted mutations to their durable boundary, releases process-local Approval requests, flushes dirty durable Turn state, checkpoints/closes SQLite, and shuts down the Codex App Server. Durable Approval expiry remains the established restart reconciliation. Desktop waits up to 12 seconds before terminating only its own process tree. An atomic lifecycle guard makes repeated Quit requests and simultaneous restore attempts no-ops; the tray is removed after the owned Host drain.
 
-In managed mode, stdin EOF or a channel error requests the same graceful close. On abnormal Windows parent death, EOF handling races the kernel closing the Job Object: CodeTether attempts the graceful path, while `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` guarantees process-tree cleanup even when no flush grace period remains. Restart reconciliation remains the durability boundary. The Job is never used as authority over an external port occupant.
+In managed mode, stdin EOF or a channel error requests the same graceful close. On abnormal Windows parent death, EOF handling races the kernel closing the Job Object: CodeTether attempts the graceful path, while `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` guarantees process-tree cleanup even when no flush grace period remains. Tauri's unpreventable exit callback also attempts a synchronous drain. The current Tao Windows loop does not expose `WM_QUERYENDSESSION`, so forced logoff/shutdown is best-effort rather than guaranteed to receive the complete 12-second grace period. Restart reconciliation remains the durability boundary. The Job is never used as authority over an external port occupant.
 
 An unexpected Host exit reports a specific native Desktop failure. After acknowledgement, Desktop exits and releases its owned Job/process tree instead of pretending the workspace is healthy. Phase 4A does not run an automatic restart loop.
 
@@ -163,7 +167,7 @@ Production CSP permits `connect-src` only to the loopback Host. Development adds
 
 ## Native Capability Boundary
 
-The Desktop pins Tauri 2.11.5, the official Rust Dialog plugin 2.7.2, the official Rust/JavaScript Notification plugin 2.3.3, and the Windows activation helper `tauri-winrt-notification` 0.7.3. `withGlobalTauri` remains disabled. `capabilities/main.json` grants the `main` WebView only the reviewed Project-picker and Attention-notification application permissions; event listen/unlisten; focused/minimized/visible window reads; and the Notification plugin's permission-check/request commands. It does not grant `notification:default`, `notification:allow-notify`, a Dialog wildcard, or any shell, process, filesystem, clipboard, or global-shortcut permission.
+The Desktop pins Tauri 2.11.5 with its built-in `tray-icon` feature, the official Rust Dialog plugin 2.7.2, the official Rust/JavaScript Notification plugin 2.3.3, and the Windows activation helper `tauri-winrt-notification` 0.7.3. `withGlobalTauri` remains disabled. Tray creation, events, and Quit stay entirely inside trusted Rust. `capabilities/main.json` grants the `main` WebView only the reviewed Project-picker and Attention-notification application permissions; event listen/unlisten; focused/minimized/visible window reads; and the Notification plugin's permission-check/request commands. It does not grant app exit, `notification:default`, `notification:allow-notify`, a Dialog wildcard, or any shell, process, filesystem, clipboard, or global-shortcut permission.
 
 Production keeps `removeUnusedCommands` enabled. `build.rs` explicitly enumerates `pick_project_directory`, `deliver_attention_notification`, and `take_pending_notification_intent` in the Tauri application manifest, and the generated release allow-list contains exactly those three application commands. The Web adapter's Tauri modules remain dynamic imports: Browser mode never executes them, while production packages them as same-origin chunks allowed by `script-src 'self'` without enabling remote scripts or `'unsafe-eval'`.
 
@@ -196,17 +200,33 @@ Desktop presents the selected directory basename first and a truncated full path
 
 Standalone Browser mode uses the same `AddProjectDialog`, but its native capability is unavailable and the existing absolute-path input is shown instead. The Tauri core module is lazy-loaded only after the centralized adapter detects a real Tauri runtime. The Projects page, Projects empty state, and global New Conversation handoff do not maintain separate Desktop and Browser forms.
 
-Phase 4B does not add Project discovery, relocation, multiple roots, drag-and-drop, recent folders, Open in Explorer, or a file picker. Tray, updater, custom window chrome, and remote networking remain separate phases.
+Phase 4B does not add Project discovery, relocation, multiple roots, drag-and-drop, recent folders, Open in Explorer, or a file picker. The later Phase 4G.1 tray remains a lifecycle surface only; updater, custom window chrome, and remote networking remain separate phases.
 
 ## Desktop Attention Notifications
 
 Only a newly accepted `attention.created` event can request native delivery. The application-scoped coordinator never derives notifications from Turn events, Agent text, Snapshot/query reconstruction, `stream.reset`, or Host restart. It maps Approval, completed review, and failed Turn to fixed privacy-safe copy containing only a clamped Project name and Conversation title.
 
-The Desktop suppresses a notification only when its focused, visible, non-minimized window already presents the Inbox or the exact affected Conversation. Preferences for the three supported types default on and persist as one versioned record in the installed WebView origin's `localStorage`, outside Project SQLite. Browser mode never loads the native adapter and continues to use the durable Inbox alone.
+The Desktop suppresses a notification only when its focused, visible, non-minimized window already presents the Inbox or the exact affected Conversation. A hidden-to-tray, minimized, or unfocused window is background and remains eligible. Preferences for the three supported types default on and persist as one versioned record in the installed WebView origin's `localStorage`, outside Project SQLite. Browser mode never loads the native adapter and continues to use the durable Inbox alone.
 
-The official Notification plugin owns the platform permission check. Its current Windows desktop API does not expose notification activation, so a narrow Rust bridge displays the toast with the installed `com.codetether.desktop` AUMID, accepts only the validated public `NotificationIntent`, and queues a click for Web navigation. A click unminimizes, shows, and focuses the existing single-instance window; it never approves, resolves, acknowledges, or retries Attention. Dedupe is process-scoped by `attentionId`, and all native delivery failures remain best-effort.
+The official Notification plugin owns the platform permission check. Its current Windows desktop API does not expose notification activation, so a narrow Rust bridge displays the toast with the installed `com.codetether.desktop` AUMID, accepts only the validated public `NotificationIntent`, and queues a click for Web navigation. A click calls the same ready/not-quitting window restoration path as Tray and single-instance activation; it never approves, resolves, acknowledges, or retries Attention. Dedupe is process-scoped by `attentionId`, and all native delivery failures remain best-effort.
 
 Windows WebView2 can suspend a minimized document and pause its SSE consumer. While the Desktop click-intent subscription is active, the adapter holds a shared `navigator.locks` lease using the Wry/WebView2 background-execution workaround and releases it during teardown. Environments without Web Locks safely no-op. A bounded native queue plus the Tauri event and focus/page-show/visibility wakeups recover clicks missed during suspension without polling or creating another Attention projection.
+
+## System Tray and Background Runtime
+
+The System Tray is created exactly once, after Host readiness and before the first window reveal. It uses the configured CodeTether application icon, the `CodeTether` tooltip, a completed left-click restore action, and only these menu items:
+
+```text
+打开 CodeTether
+──────────────
+退出 CodeTether
+```
+
+Tray click, Tray Open, notification click, and hidden second-instance launch all call the same Rust `show_main_window` path. That path restores only the existing ready window, unminimizes it when necessary, shows it, and requests focus. Once Quit begins it refuses restoration, so a notification, tray click, or second launch cannot reopen the application during shutdown.
+
+On the first successful close-to-tray, Rust atomically creates the versioned marker `background-runtime-education-v1` under Desktop application-local data. Isolated smoke runs place it beneath their absolute `CODETETHER_DATA_DIR`. Only the first writer attempts the native “CodeTether 仍在后台运行” explanation. This Desktop preference is not Project/Attention data. The shared native-capabilities adapter exposes a read-only `backgroundRuntime.available` value so Settings can show a compact Desktop explanation; Browser mode reports `false`, displays no background-runtime surface, and receives no native lifecycle command.
+
+Phase 4G.1 does not add Start with Windows, minimize-to-tray, a close-behavior toggle, tray Attention counts/badges, recent Projects/Conversations, inline Approval actions, notifications after explicit Quit, an OS daemon, or automatic Host restart.
 
 ## Desktop Product Polish
 
@@ -218,7 +238,7 @@ Phase 4D refines the existing shared Web product tree for sustained Desktop use;
 - Inbox and notification navigation may target an existing public Turn; Inspector file selection locates the matching Timeline Diff. Neither path creates durable navigation state or changes Attention resolution.
 - Long titles and paths are bounded with full-text affordances, dense Rail and Settings surfaces remain usable at the Desktop minimum size, unsupported controls are hidden, and normal product copy avoids exposing Host/Runtime internals.
 
-Phase 4D changes no Tauri capability, sidecar lifecycle, Project/Conversation/Attention persistence, Protocol v1 contract, or Browser/Desktop component identity. Its implementation is complete, with Owner acceptance pending. Rename, Archive, Search, Tray/background-after-close behavior, and additional providers remain separate phases.
+Phase 4D changed no Tauri capability, sidecar lifecycle, Project/Conversation/Attention persistence, Protocol v1 contract, or Browser/Desktop component identity. It is accepted and frozen. Durable organization and Search were added in their later accepted phases; Phase 4G.1 adds only the tray/background lifecycle described above. Additional providers remain separate phases.
 
 ## Validation Commands
 
@@ -233,7 +253,7 @@ pnpm desktop:installer-smoke:hold # Keep the exact isolated install open for UI 
 pnpm desktop:installer-smoke:cleanup # Remove only that held smoke installation
 ```
 
-The package smoke argument is internal test plumbing. It starts the release application against an isolated `CODETETHER_DATA_DIR`, waits for a verified Host, requests owned graceful shutdown, and expects exit code zero.
+The package smoke argument is internal test plumbing. It starts the release application against an isolated `CODETETHER_DATA_DIR`, waits for a verified Host, requests the same owned explicit-Quit path used by the tray, and expects exit code zero. The lifecycle smoke additionally exercises real WM_CLOSE/Alt+F4 hiding and hidden single-instance restoration without treating window close as shutdown.
 
 The required Phase 4B validation completed in development, raw production, and an isolated installed NSIS application. The real Windows picker passed cancellation, selection, main-window ownership, Unicode/space paths, Project registration, TopBar New Conversation handoff, and a real Codex Conversation. Graceful close removed the owned Desktop/Host/Codex process tree and released port 4317; uninstall removed the exact smoke installation, registry identity, and state. Phase 4B is accepted and frozen.
 
@@ -248,6 +268,8 @@ The required Phase 4C Windows validation also completed in development, the raw 
 - Native decorations are retained; custom Desktop chrome is future polish.
 - Builds/installers are unsigned local Alpha artifacts. Signing, updater, and release channels are not implemented.
 - The current application icon is a minimal Alpha asset; final brand artwork is still pending.
-- Notification click activation exists only while the Desktop process is running. Full-exit delivery, Tray, notification history, push, custom sounds, and quiet-hour rules are not implemented.
+- Notification click activation exists while the Desktop process is running, including hidden-to-tray state. Delivery after explicit Quit, notification history, push, custom sounds, and quiet-hour rules are not implemented.
+- Start with Windows, tray Attention badges/counts, recent-item tray menus, a close-behavior preference, sleep/wake policy, and macOS/Linux tray validation are not implemented.
+- Windows forced logoff/shutdown reaches only the event loop's best-effort unpreventable-exit drain; a complete bounded `WM_QUERYENDSESSION` lifecycle is not available through the current Tao boundary.
 - Drag-and-drop folders, recent-folder persistence, Project relocation/multi-root, Open in Explorer, remote access, Machine management, and additional Agent providers remain out of scope.
-- Conversation Rename, Archive, Pin, Delete, and Search remain out of scope; Phase 4D adds no frontend-only organization state.
+- Conversation Delete, bulk organization, tags/folders/groups, global/semantic Search, and old-Turn pagination remain out of scope.

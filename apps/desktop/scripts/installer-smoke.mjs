@@ -28,6 +28,8 @@ const STATE_SCHEMA_VERSION = 1
 const READY_TIMEOUT_MS = 20_000
 const PROCESS_TIMEOUT_MS = 45_000
 const RELEASE_TIMEOUT_MS = 15_000
+const TRAY_UI_TIMEOUT_MS = 10_000
+const TRAY_QUIT_LABEL = '退出 CodeTether'
 const MAX_DIAGNOSTIC_BYTES = 64 * 1024
 
 export class InstallerSmokeCleanupUnsafeError extends Error {
@@ -87,6 +89,25 @@ export function assertInstalledShortcuts(shortcuts, expectedExecutable) {
     )
   }
   return shortcuts
+}
+
+export function assertTrayQuitResult(result, expectedDesktopPid) {
+  ensure(
+    result !== null &&
+      typeof result === 'object' &&
+      result.quitRequested === true &&
+      result.desktopPid === expectedDesktopPid &&
+      result.trayTooltip === PRODUCT_NAME &&
+      result.menuItem === TRAY_QUIT_LABEL &&
+      result.selectionMethod === 'uia-owned-popup-exact-label' &&
+      Array.isArray(result.processIds) &&
+      result.processIds.includes(expectedDesktopPid) &&
+      result.processIds.every(
+        (processId) => Number.isSafeInteger(processId) && processId > 0,
+      ),
+    'Tray quit helper returned an invalid owned process identity',
+  )
+  return result
 }
 
 export function assertOwnedTemporaryRoot(
@@ -153,6 +174,7 @@ async function main() {
   if (mode === 'cleanup') {
     const session = await readSession(defaultStatePath)
     const report = await cleanupSession(session, configuration, {
+      requireHide: false,
       strictUninstall: true,
     })
     process.stdout.write(`${JSON.stringify({ mode, ok: true, ...report })}\n`)
@@ -250,6 +272,7 @@ async function main() {
     }
 
     const report = await cleanupSession(session, configuration, {
+      requireHide: true,
       strictUninstall: true,
     })
     process.stdout.write(
@@ -269,7 +292,10 @@ async function main() {
     const cleanupSafe = !(error instanceof InstallerSmokeCleanupUnsafeError)
     if (!retained && cleanupSafe) {
       try {
-        await cleanupSession(session, configuration, { strictUninstall: false })
+        await cleanupSession(session, configuration, {
+          requireHide: false,
+          strictUninstall: false,
+        })
       } catch (caught) {
         cleanupError = caught
       }
@@ -430,18 +456,43 @@ async function cleanupSession(sessionValue, configuration, options) {
         sameWindowsPath(identity.executablePath, session.desktopExecutable),
         `Refusing to close reused/foreign PID ${String(session.desktopPid)}`,
       )
-      const closeResult = await closeOwnedDesktop(
+      const hideStartedAt = performance.now()
+      let hideResult
+      try {
+        hideResult = await hideOwnedDesktopWindow(
+          session.desktopPid,
+          session.desktopExecutable,
+        )
+      } catch (error) {
+        if (options.requireHide) throw error
+        hideResult = {
+          hidden: false,
+          recoveryReason:
+            error instanceof Error ? error.message : String(error),
+        }
+      }
+      const hideMs = elapsed(hideStartedAt)
+      const trayQuitStartedAt = performance.now()
+      const quitResult = await quitOwnedDesktopFromTray(
         session.desktopPid,
         session.desktopExecutable,
       )
       await Promise.all([
-        waitUntilProcessesExit(closeResult.processIds, RELEASE_TIMEOUT_MS),
+        waitUntilProcessesExit(quitResult.processIds, RELEASE_TIMEOUT_MS),
         waitUntilNotListening(RELEASE_TIMEOUT_MS),
       ])
+      const trayQuitMs = elapsed(trayQuitStartedAt)
       closeReport = {
         desktopWasRunning: true,
         gracefulClose: true,
-        closedProcessIds: closeResult.processIds,
+        hiddenBeforeQuit: hideResult.hidden === true,
+        hideRecoveryReason: hideResult.recoveryReason,
+        trayQuit: true,
+        trayMenuItem: quitResult.menuItem,
+        traySelectionMethod: quitResult.selectionMethod,
+        hideMs,
+        trayQuitMs,
+        closedProcessIds: quitResult.processIds,
       }
     }
   }
@@ -639,17 +690,42 @@ async function readProcessIdentity(processId) {
   })
 }
 
-async function closeOwnedDesktop(processId, expectedExecutable) {
-  const result = await runPowerShellJson(closeWindowPowerShell(), {
+async function hideOwnedDesktopWindow(processId, expectedExecutable) {
+  const result = await runPowerShellJson(hideWindowPowerShell(), {
     CODETETHER_SMOKE_EXPECTED_EXE: expectedExecutable,
     CODETETHER_SMOKE_PID: String(processId),
   })
-  ensure(result.closed === true, 'WM_CLOSE was not posted to the owned Desktop')
+  ensure(
+    result.hidden === true &&
+      result.desktopPid === processId &&
+      typeof result.hwnd === 'string' &&
+      /^\d+$/u.test(result.hwnd),
+    'Owned Desktop main window was not confirmed hidden',
+  )
   ensure(
     Array.isArray(result.processIds),
     'Owned process tree result is invalid',
   )
   return result
+}
+
+async function quitOwnedDesktopFromTray(processId, expectedExecutable) {
+  let result
+  try {
+    result = await runPowerShellJson(trayQuitPowerShell(), {
+      CODETETHER_SMOKE_EXPECTED_EXE: expectedExecutable,
+      CODETETHER_SMOKE_PID: String(processId),
+      CODETETHER_SMOKE_PRODUCT: PRODUCT_NAME,
+      CODETETHER_SMOKE_QUIT_LABEL: TRAY_QUIT_LABEL,
+      CODETETHER_SMOKE_TRAY_TIMEOUT_MS: String(TRAY_UI_TIMEOUT_MS),
+    })
+  } catch (error) {
+    throw new InstallerSmokeCleanupUnsafeError(
+      'Could not invoke the exact CodeTether tray Quit action; installed smoke state was retained for bounded manual cleanup',
+      { cause: error },
+    )
+  }
+  return assertTrayQuitResult(result, processId)
 }
 
 async function readSession(path) {
@@ -949,7 +1025,13 @@ async function runPowerShellJson(script, extraEnvironment = {}) {
   )
   const child = spawn(
     powershell,
-    ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script],
+    [
+      '-NoLogo',
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      `[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)\n${script}`,
+    ],
     {
       env: { ...process.env, ...extraEnvironment },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -1130,7 +1212,7 @@ if ($matches.Count -ne 1) { throw 'Process identity is ambiguous' }
 `
 }
 
-function closeWindowPowerShell() {
+function hideWindowPowerShell() {
   return String.raw`
 $ErrorActionPreference = 'Stop'
 Add-Type -TypeDefinition @'
@@ -1142,7 +1224,7 @@ public static class CodeTetherInstalledSmokeWindow {
   [DllImport("user32.dll")][return: MarshalAs(UnmanagedType.Bool)]
   private static extern bool EnumWindows(EnumWindowsCallback callback, IntPtr state);
   [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
-  [DllImport("user32.dll")][return: MarshalAs(UnmanagedType.Bool)] private static extern bool IsWindowVisible(IntPtr window);
+  [DllImport("user32.dll")][return: MarshalAs(UnmanagedType.Bool)] public static extern bool IsWindowVisible(IntPtr window);
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowTextLengthW(IntPtr window);
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowTextW(IntPtr window, StringBuilder text, int capacity);
   [DllImport("user32.dll", SetLastError = true)][return: MarshalAs(UnmanagedType.Bool)]
@@ -1157,7 +1239,7 @@ public static class CodeTetherInstalledSmokeWindow {
     IntPtr found = IntPtr.Zero;
     EnumWindows(delegate(IntPtr window, IntPtr state) {
       uint candidate; GetWindowThreadProcessId(window, out candidate);
-      if (candidate == pid && IsWindowVisible(window) && String.Equals(Title(window), title, StringComparison.Ordinal)) {
+      if (candidate == pid && String.Equals(Title(window), title, StringComparison.Ordinal)) {
         found = window; return false;
       }
       return true;
@@ -1187,16 +1269,239 @@ do {
     }
   }
 } while ($added)
-$deadline = [DateTime]::UtcNow.AddSeconds(5)
+$windowDeadline = [DateTime]::UtcNow.AddSeconds(5)
 $window = [IntPtr]::Zero
 do {
   $window = [CodeTetherInstalledSmokeWindow]::Find($expectedPid, '${PRODUCT_NAME}')
   if ($window -ne [IntPtr]::Zero) { break }
   Start-Sleep -Milliseconds 50
-} while ([DateTime]::UtcNow -lt $deadline)
+} while ([DateTime]::UtcNow -lt $windowDeadline)
 if ($window -eq [IntPtr]::Zero) { throw 'Exact installed Desktop main window was not found' }
-if (![CodeTetherInstalledSmokeWindow]::Close($window)) { throw 'WM_CLOSE failed' }
-[pscustomobject]@{ closed = $true; processIds = @($known) } | ConvertTo-Json -Compress -Depth 4
+$wasVisible = [CodeTetherInstalledSmokeWindow]::IsWindowVisible($window)
+if ($wasVisible) {
+  if (![CodeTetherInstalledSmokeWindow]::Close($window)) { throw 'WM_CLOSE failed' }
+  $hideDeadline = [DateTime]::UtcNow.AddSeconds(5)
+  do {
+    if (![CodeTetherInstalledSmokeWindow]::IsWindowVisible($window)) { break }
+    Start-Sleep -Milliseconds 50
+  } while ([DateTime]::UtcNow -lt $hideDeadline)
+}
+if ([CodeTetherInstalledSmokeWindow]::IsWindowVisible($window)) {
+  throw 'Installed Desktop did not hide after WM_CLOSE'
+}
+[pscustomobject]@{
+  desktopPid = [int]$expectedPid
+  hwnd = [string]$window.ToInt64()
+  wasVisible = [bool]$wasVisible
+  hidden = $true
+  processIds = @($known)
+} | ConvertTo-Json -Compress -Depth 4
+`
+}
+
+function trayQuitPowerShell() {
+  return String.raw`
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+Add-Type -AssemblyName WindowsBase
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class CodeTetherInstalledSmokeMouse {
+  [DllImport("user32.dll")][return: MarshalAs(UnmanagedType.Bool)]
+  public static extern bool SetCursorPos(int x, int y);
+  [DllImport("user32.dll")]
+  public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extraInfo);
+  public static void RightClick(int x, int y) {
+    if (!SetCursorPos(x, y)) throw new InvalidOperationException("Could not position the pointer on the tray icon");
+    mouse_event(0x0008, 0, 0, 0, UIntPtr.Zero);
+    mouse_event(0x0010, 0, 0, 0, UIntPtr.Zero);
+  }
+  public static void LeftClick(int x, int y) {
+    if (!SetCursorPos(x, y)) throw new InvalidOperationException("Could not position the pointer on the tray menu item");
+    mouse_event(0x0002, 0, 0, 0, UIntPtr.Zero);
+    mouse_event(0x0004, 0, 0, 0, UIntPtr.Zero);
+  }
+  [DllImport("user32.dll")]
+  public static extern IntPtr GetShellWindow();
+  [DllImport("user32.dll")]
+  public static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+  private static extern int GetClassNameW(IntPtr window, System.Text.StringBuilder className, int maximumCount);
+  public static uint WindowProcessId(IntPtr window) {
+    uint processId;
+    GetWindowThreadProcessId(window, out processId);
+    return processId;
+  }
+  public static string WindowClass(IntPtr window) {
+    var className = new System.Text.StringBuilder(256);
+    return GetClassNameW(window, className, className.Capacity) > 0 ? className.ToString() : String.Empty;
+  }
+}
+'@
+
+$expectedPid = [uint32]$env:CODETETHER_SMOKE_PID
+$expectedExe = [IO.Path]::GetFullPath($env:CODETETHER_SMOKE_EXPECTED_EXE)
+$product = $env:CODETETHER_SMOKE_PRODUCT
+$quitLabel = $env:CODETETHER_SMOKE_QUIT_LABEL
+$timeoutMs = [int]$env:CODETETHER_SMOKE_TRAY_TIMEOUT_MS
+if ($timeoutMs -lt 1000 -or $timeoutMs -gt 30000) { throw 'Tray UI timeout is outside the bounded range' }
+$desktop = @(Get-CimInstance Win32_Process -Filter "ProcessId = $expectedPid")
+if ($desktop.Count -ne 1) { throw 'Exact installed Desktop process was not found for tray quit' }
+$actualExe = [IO.Path]::GetFullPath([string]$desktop[0].ExecutablePath)
+if (![string]::Equals($actualExe, $expectedExe, [StringComparison]::OrdinalIgnoreCase)) {
+  throw 'Installed Desktop PID does not belong to the smoke install root'
+}
+$shellWindow = [CodeTetherInstalledSmokeMouse]::GetShellWindow()
+if ($shellWindow -eq [IntPtr]::Zero) { throw 'Windows shell window is unavailable' }
+$shellPid = [CodeTetherInstalledSmokeMouse]::WindowProcessId($shellWindow)
+if ($shellPid -eq 0) { throw 'Windows shell process identity is unavailable' }
+
+$all = @(Get-CimInstance Win32_Process)
+$known = New-Object 'System.Collections.Generic.HashSet[uint32]'
+[void]$known.Add($expectedPid)
+do {
+  $added = $false
+  foreach ($candidate in $all) {
+    $candidateId = [uint32]$candidate.ProcessId
+    if (!$known.Contains($candidateId) -and $known.Contains([uint32]$candidate.ParentProcessId)) {
+      [void]$known.Add($candidateId); $added = $true
+    }
+  }
+} while ($added)
+
+function Test-NotificationAreaElement($element) {
+  $walker = [System.Windows.Automation.TreeWalker]::RawViewWalker
+  $current = $element
+  for ($depth = 0; $depth -lt 64 -and $null -ne $current; $depth++) {
+    try {
+      $handle = [IntPtr]::new([long]$current.Current.NativeWindowHandle)
+      if ($handle -ne [IntPtr]::Zero) {
+        $className = [CodeTetherInstalledSmokeMouse]::WindowClass($handle)
+        $ownerPid = [CodeTetherInstalledSmokeMouse]::WindowProcessId($handle)
+        if (
+          $ownerPid -eq $shellPid -and
+          $className -in @('Shell_TrayWnd', 'NotifyIconOverflowWindow', 'TopLevelWindowForOverflowXamlIsland')
+        ) {
+          return $true
+        }
+      }
+      $current = $walker.GetParent($current)
+    } catch {
+      return $false
+    }
+  }
+  return $false
+}
+
+function Test-OwnedPopupMenuItem($element) {
+  $walker = [System.Windows.Automation.TreeWalker]::RawViewWalker
+  $current = $element
+  for ($depth = 0; $depth -lt 32 -and $null -ne $current; $depth++) {
+    try {
+      $handle = [IntPtr]::new([long]$current.Current.NativeWindowHandle)
+      if (
+        $handle -ne [IntPtr]::Zero -and
+        [CodeTetherInstalledSmokeMouse]::WindowClass($handle) -eq '#32768' -and
+        [CodeTetherInstalledSmokeMouse]::WindowProcessId($handle) -eq $expectedPid
+      ) {
+        return $true
+      }
+      $current = $walker.GetParent($current)
+    } catch {
+      return $false
+    }
+  }
+  return $false
+}
+
+function Find-ExactVisibleAutomationElement([string]$name, $controlType, [scriptblock]$identityCheck) {
+  $nameCondition = New-Object System.Windows.Automation.PropertyCondition(
+    [System.Windows.Automation.AutomationElement]::NameProperty,
+    $name
+  )
+  $elements = [System.Windows.Automation.AutomationElement]::RootElement.FindAll(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    $nameCondition
+  )
+  $matches = New-Object 'System.Collections.Generic.List[object]'
+  foreach ($element in $elements) {
+    try {
+      if (
+        $element.Current.ControlType -eq $controlType -and
+        !$element.Current.IsOffscreen -and
+        $element.Current.IsEnabled -and
+        (& $identityCheck $element)
+      ) {
+        [void]$matches.Add($element)
+      }
+    } catch { }
+  }
+  if ($matches.Count -gt 1) { throw "Automation identity is ambiguous for: $name" }
+  if ($matches.Count -eq 1) { return $matches[0] }
+  return $null
+}
+
+function Invoke-AutomationElement($element, [bool]$rightClick) {
+  $rectangle = $element.Current.BoundingRectangle
+  if ($rectangle.Width -le 0 -or $rectangle.Height -le 0) {
+    throw 'Automation element has no clickable rectangle'
+  }
+  $x = [int]($rectangle.Left + ($rectangle.Width / 2))
+  $y = [int]($rectangle.Top + ($rectangle.Height / 2))
+  if ($rightClick) {
+    [CodeTetherInstalledSmokeMouse]::RightClick($x, $y)
+  } else {
+    try {
+      $pattern = $element.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+      ([System.Windows.Automation.InvokePattern]$pattern).Invoke()
+    } catch {
+      [CodeTetherInstalledSmokeMouse]::LeftClick($x, $y)
+    }
+  }
+}
+
+$deadline = [DateTime]::UtcNow.AddMilliseconds($timeoutMs)
+$trayIcon = $null
+do {
+  $trayIcon = Find-ExactVisibleAutomationElement $product ([System.Windows.Automation.ControlType]::Button) { param($candidate) Test-NotificationAreaElement $candidate }
+  if ($null -ne $trayIcon) { break }
+
+  foreach ($chevronName in @('Show hidden icons', '显示隐藏的图标')) {
+    $chevron = Find-ExactVisibleAutomationElement $chevronName ([System.Windows.Automation.ControlType]::Button) { param($candidate) Test-NotificationAreaElement $candidate }
+    if ($null -ne $chevron) {
+      Invoke-AutomationElement $chevron $false
+      Start-Sleep -Milliseconds 150
+      break
+    }
+  }
+  Start-Sleep -Milliseconds 75
+} while ([DateTime]::UtcNow -lt $deadline)
+if ($null -eq $trayIcon) { throw 'Exact CodeTether tray icon was not found' }
+
+Invoke-AutomationElement $trayIcon $true
+$deadline = [DateTime]::UtcNow.AddMilliseconds($timeoutMs)
+$quitItem = $null
+do {
+  $quitItem = Find-ExactVisibleAutomationElement $quitLabel ([System.Windows.Automation.ControlType]::MenuItem) { param($candidate) Test-OwnedPopupMenuItem $candidate }
+  if ($null -ne $quitItem) { break }
+  Start-Sleep -Milliseconds 50
+} while ([DateTime]::UtcNow -lt $deadline)
+if ($null -eq $quitItem) {
+  throw 'The exact owned CodeTether tray Quit menu item was not exposed through UI Automation'
+}
+$selectionMethod = 'uia-owned-popup-exact-label'
+Invoke-AutomationElement $quitItem $false
+
+[pscustomobject]@{
+  quitRequested = $true
+  desktopPid = [int]$expectedPid
+  trayTooltip = $product
+  menuItem = $quitLabel
+  selectionMethod = $selectionMethod
+  processIds = @($known)
+} | ConvertTo-Json -Compress -Depth 4
 `
 }
 

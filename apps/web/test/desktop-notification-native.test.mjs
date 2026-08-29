@@ -36,6 +36,7 @@ test('Browser notifications stay unavailable without loading Tauri modules', asy
   })
 
   assert.equal(capabilities.notifications.available, false)
+  assert.equal(capabilities.backgroundRuntime.available, false)
   assert.equal(await capabilities.notifications.ensurePermission(), false)
   assert.deepEqual(capabilities.notifications.getWindowState(), {
     focused: false,
@@ -51,6 +52,20 @@ test('Browser notifications stay unavailable without loading Tauri modules', asy
     /unavailable/u,
   )
   assert.equal(loads, 0)
+})
+
+test('Desktop exposes background runtime as a read-only capability without invoking native code', () => {
+  let coreLoads = 0
+  const capabilities = createNativeCapabilities({
+    tauriAvailable: true,
+    loadTauriCore: async () => {
+      coreLoads += 1
+      throw new Error('Capability detection must not invoke native code')
+    },
+  })
+
+  assert.deepEqual(capabilities.backgroundRuntime, { available: true })
+  assert.equal(coreLoads, 0)
 })
 
 test('Desktop window state uses native getters instead of stale WebView state', async () => {

@@ -7,6 +7,7 @@ pub enum StartupFailureKind {
     HostExited,
     ReadinessTimeout,
     ProtocolIncompatible,
+    TrayUnavailable,
 }
 
 impl StartupFailureKind {
@@ -27,11 +28,33 @@ impl StartupFailureKind {
             Self::ProtocolIncompatible => {
                 "桌面程序与本地服务版本不兼容。请重新安装同一版本的 CodeTether。"
             }
+            Self::TrayUnavailable => "无法创建 CodeTether 系统托盘入口。请重新启动 CodeTether。",
         }
     }
 }
 
 pub fn show(kind: StartupFailureKind) {
+    show_with_optional_owner(kind, None);
+}
+
+pub fn show_for_window<R: tauri::Runtime>(
+    kind: StartupFailureKind,
+    window: &tauri::WebviewWindow<R>,
+) {
+    #[cfg(windows)]
+    let owner = window.hwnd().ok().map(|handle| handle.0);
+    #[cfg(not(windows))]
+    let owner = None;
+    show_with_optional_owner(kind, owner);
+}
+
+#[cfg(windows)]
+type NativeWindow = windows_sys::Win32::Foundation::HWND;
+
+#[cfg(not(windows))]
+type NativeWindow = *mut std::ffi::c_void;
+
+fn show_with_optional_owner(kind: StartupFailureKind, owner: Option<NativeWindow>) {
     eprintln!("[codetether:desktop] {}: {}", kind.title(), kind.message());
     if std::env::var_os("CODETETHER_DESKTOP_TEST_SUPPRESS_DIALOG").is_some() {
         return;
@@ -53,7 +76,7 @@ pub fn show(kind: StartupFailureKind) {
             .chain(iter::once(0))
             .collect::<Vec<_>>();
         MessageBoxW(
-            std::ptr::null_mut(),
+            owner.unwrap_or(std::ptr::null_mut()),
             message.as_ptr(),
             title.as_ptr(),
             MB_OK | MB_ICONERROR,
@@ -75,10 +98,11 @@ mod tests {
             StartupFailureKind::HostExited,
             StartupFailureKind::ReadinessTimeout,
             StartupFailureKind::ProtocolIncompatible,
+            StartupFailureKind::TrayUnavailable,
         ]
         .map(StartupFailureKind::message);
 
-        assert_eq!(messages.len(), 7);
+        assert_eq!(messages.len(), 8);
         assert!(messages.iter().all(|message| !message.is_empty()));
         assert!(messages.iter().all(|message| !message.contains("JSON-RPC")));
     }

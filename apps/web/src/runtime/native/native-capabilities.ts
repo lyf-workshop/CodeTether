@@ -20,9 +20,14 @@ export interface DesktopNotifications {
   ): Promise<() => void>
 }
 
+export interface BackgroundRuntimeCapability {
+  readonly available: boolean
+}
+
 export interface NativeCapabilities {
   readonly directoryPicker: DirectoryPicker
   readonly notifications: DesktopNotifications
+  readonly backgroundRuntime: BackgroundRuntimeCapability
 }
 
 interface TauriCoreModule {
@@ -97,6 +102,10 @@ const unavailableDesktopNotifications: DesktopNotifications = {
   subscribeToIntents: () => Promise.resolve(() => undefined),
 }
 
+const unavailableBackgroundRuntime: BackgroundRuntimeCapability = {
+  available: false,
+}
+
 /** Tauri v2 exposes this public marker even when `withGlobalTauri` is off. */
 export function hasTauriRuntime(scope: unknown = globalThis): boolean {
   return (
@@ -115,6 +124,7 @@ export function createNativeCapabilities(
     return {
       directoryPicker: unavailableDirectoryPicker,
       notifications: unavailableDesktopNotifications,
+      backgroundRuntime: unavailableBackgroundRuntime,
     }
   }
 
@@ -300,7 +310,11 @@ export function createNativeCapabilities(
     },
   }
 
-  return { directoryPicker, notifications }
+  return {
+    directoryPicker,
+    notifications,
+    backgroundRuntime: { available: true },
+  }
 }
 
 export const nativeCapabilities = createNativeCapabilities()

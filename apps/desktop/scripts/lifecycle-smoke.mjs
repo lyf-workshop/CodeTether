@@ -14,6 +14,8 @@ const SECOND_INSTANCE_TIMEOUT_MS = 5_000
 const READY_TIMEOUT_MS = 15_000
 const RELEASE_TIMEOUT_MS = 12_000
 const WINDOW_CLOSE_TIMEOUT_MS = 15_000
+const WINDOW_STATE_TIMEOUT_MS = 8_000
+const SMOKE_EXPLICIT_QUIT_DELAY_MS = 20_000
 const WINDOW_TITLE = 'CodeTether'
 const MAX_DIAGNOSTIC_BYTES = 64 * 1024
 
@@ -55,6 +57,7 @@ try {
   report.results.windowClose = await testWindowClose(
     join(dataRoot, 'window-close'),
   )
+  report.results.altF4 = await testAltF4(join(dataRoot, 'alt-f4'))
   report.results.unexpectedHostExit = await testUnexpectedHostExit(
     join(dataRoot, 'unexpected-host-exit'),
   )
@@ -90,7 +93,9 @@ async function testWindowClose(dataDirectory) {
   const desktop = spawnTracked(
     'Desktop WM_CLOSE instance',
     desktopExecutable,
-    [],
+    [
+      `--desktop-smoke-exit-after-ready-ms=${String(SMOKE_EXPLICIT_QUIT_DELAY_MS)}`,
+    ],
     desktopEnvironmentWithoutSuppressedDialogs(dataDirectory),
   )
   let passed = false
@@ -104,6 +109,13 @@ async function testWindowClose(dataDirectory) {
       'Desktop WM_CLOSE instance has no process ID',
     )
 
+    const initialWindow = await waitForExactWindowVisibility(
+      desktopPid,
+      true,
+      WINDOW_STATE_TIMEOUT_MS,
+      undefined,
+      desktop,
+    )
     const closeStartedAt = performance.now()
     const closeResult = await postWindowClose(desktopPid)
     const descendants = Array.isArray(closeResult.descendants)
@@ -130,15 +142,50 @@ async function testWindowClose(dataDirectory) {
       'Desktop process tree contained an invalid process ID',
     )
 
-    const desktopExit = await waitForExit(desktop, WINDOW_CLOSE_TIMEOUT_MS)
+    ensure(
+      closeResult.hwnd === initialWindow.hwnd,
+      'WM_CLOSE targeted a different Desktop window',
+    )
+    const hiddenWindow = await waitForExactWindowVisibility(
+      desktopPid,
+      false,
+      WINDOW_STATE_TIMEOUT_MS,
+      closeResult.hwnd,
+      desktop,
+    )
+    const hideMs = elapsed(closeStartedAt)
+    ensure(
+      isRunning(desktop),
+      'WM_CLOSE exited the Desktop instead of hiding it',
+    )
+    const hiddenBootstrap = await readBootstrap()
+    ensure(
+      sameHost(bootstrap, hiddenBootstrap),
+      'WM_CLOSE replaced the owned Host or changed its epoch',
+    )
+    const hiddenTree = await readDesktopProcessTree(desktopPid)
+    const hiddenDescendants = Array.isArray(hiddenTree.descendants)
+      ? hiddenTree.descendants
+      : [hiddenTree.descendants]
+    const initialHost = descendants.find(isHostProcess)
+    const hiddenHost = hiddenDescendants.find(isHostProcess)
+    ensure(
+      initialHost !== undefined &&
+        hiddenHost !== undefined &&
+        initialHost.pid === hiddenHost.pid,
+      'WM_CLOSE did not preserve the exact owned Host process',
+    )
+
+    const scheduledQuitWaitStartedAt = performance.now()
+    const desktopExit = await waitForExit(desktop, PROCESS_TIMEOUT_MS)
     ensureCleanExit(desktop, desktopExit)
     ensure(
       !/shutdown timed out|did not confirm a clean shutdown/u.test(
         desktop.diagnostics(),
       ),
-      `WM_CLOSE did not complete graceful Host shutdown${diagnosticSuffix(desktop)}`,
+      `Explicit smoke quit did not complete graceful Host shutdown${diagnosticSuffix(desktop)}`,
     )
-    const desktopExitMs = elapsed(closeStartedAt)
+    const hiddenUntilScheduledQuitMs = elapsed(scheduledQuitWaitStartedAt)
     const releaseStartedAt = performance.now()
     await Promise.all([
       waitUntilNotListening(RELEASE_TIMEOUT_MS),
@@ -154,9 +201,126 @@ async function testWindowClose(dataDirectory) {
       desktopPid,
       hwnd: closeResult.hwnd,
       title: closeResult.title,
+      windowHidden: hiddenWindow.visible === false,
+      hideMs,
+      hostPidPreserved: hiddenHost.pid,
+      hostEpochPreserved: hiddenBootstrap.epoch,
       descendantProcesses: descendants,
-      desktopExitMs,
+      hiddenUntilScheduledQuitMs,
       desktopExitCode: desktopExit.code,
+      explicitQuitConfirmed: true,
+      portReleased: true,
+      processTreeReleased: true,
+      releaseMs,
+    }
+  } finally {
+    if (!passed) killIfRunning(desktop)
+  }
+}
+
+async function testAltF4(dataDirectory) {
+  await mkdir(dataDirectory, { recursive: true })
+  await assertPortFree('Alt+F4 test')
+  const startedAt = performance.now()
+  const desktop = spawnTracked(
+    'Desktop Alt+F4 instance',
+    desktopExecutable,
+    [
+      `--desktop-smoke-exit-after-ready-ms=${String(SMOKE_EXPLICIT_QUIT_DELAY_MS)}`,
+    ],
+    desktopEnvironment(dataDirectory),
+  )
+  let passed = false
+
+  try {
+    const bootstrap = await waitForBootstrap(READY_TIMEOUT_MS, desktop)
+    const readyMs = elapsed(startedAt)
+    const desktopPid = desktop.child.pid
+    ensure(
+      Number.isSafeInteger(desktopPid) && desktopPid > 0,
+      'Desktop Alt+F4 instance has no process ID',
+    )
+    const initialWindow = await waitForExactWindowVisibility(
+      desktopPid,
+      true,
+      WINDOW_STATE_TIMEOUT_MS,
+      undefined,
+      desktop,
+    )
+    const initialTree = await readDesktopProcessTree(desktopPid)
+    const initialDescendants = Array.isArray(initialTree.descendants)
+      ? initialTree.descendants
+      : [initialTree.descendants]
+    const initialHost = initialDescendants.find(isHostProcess)
+    ensure(initialHost !== undefined, 'Alt+F4 Desktop does not own a Host')
+    const ownedProcessIds = [
+      desktopPid,
+      ...initialDescendants.map((process_) => process_.pid),
+    ]
+
+    const hideStartedAt = performance.now()
+    const altF4Result = await sendAltF4(desktopPid)
+    ensure(
+      altF4Result.hwnd === initialWindow.hwnd,
+      'Alt+F4 targeted a different Desktop window',
+    )
+    const hiddenWindow = await waitForExactWindowVisibility(
+      desktopPid,
+      false,
+      WINDOW_STATE_TIMEOUT_MS,
+      initialWindow.hwnd,
+      desktop,
+    )
+    const hideMs = elapsed(hideStartedAt)
+    ensure(isRunning(desktop), 'Alt+F4 exited the Desktop instead of hiding it')
+    const hiddenBootstrap = await readBootstrap()
+    ensure(
+      sameHost(bootstrap, hiddenBootstrap),
+      'Alt+F4 replaced the owned Host or changed its epoch',
+    )
+    const hiddenTree = await readDesktopProcessTree(desktopPid)
+    const hiddenDescendants = Array.isArray(hiddenTree.descendants)
+      ? hiddenTree.descendants
+      : [hiddenTree.descendants]
+    const hiddenHost = hiddenDescendants.find(isHostProcess)
+    ensure(
+      hiddenHost !== undefined && hiddenHost.pid === initialHost.pid,
+      'Alt+F4 did not preserve the exact owned Host process',
+    )
+
+    const scheduledQuitWaitStartedAt = performance.now()
+    const desktopExit = await waitForExit(desktop, PROCESS_TIMEOUT_MS)
+    ensureCleanExit(desktop, desktopExit)
+    ensure(
+      !/shutdown timed out|did not confirm a clean shutdown/u.test(
+        desktop.diagnostics(),
+      ),
+      `Alt+F4 explicit smoke quit did not complete graceful Host shutdown${diagnosticSuffix(desktop)}`,
+    )
+    const hiddenUntilScheduledQuitMs = elapsed(scheduledQuitWaitStartedAt)
+    const releaseStartedAt = performance.now()
+    await Promise.all([
+      waitUntilNotListening(RELEASE_TIMEOUT_MS),
+      waitUntilProcessesExit(ownedProcessIds, RELEASE_TIMEOUT_MS),
+    ])
+    const releaseMs = elapsed(releaseStartedAt)
+    passed = true
+
+    return {
+      passed: true,
+      readyMs,
+      bootstrapHostVersion: bootstrap.hostVersion,
+      desktopPid,
+      hwnd: altF4Result.hwnd,
+      title: altF4Result.title,
+      systemKeyTargeted: altF4Result.systemKeyTargeted,
+      windowHidden: hiddenWindow.visible === false,
+      hideMs,
+      hostPidPreserved: hiddenHost.pid,
+      hostEpochPreserved: hiddenBootstrap.epoch,
+      hiddenUntilScheduledQuitMs,
+      desktopExitCode: desktopExit.code,
+      explicitQuitConfirmed: true,
       portReleased: true,
       processTreeReleased: true,
       releaseMs,
@@ -214,6 +378,35 @@ async function testUnexpectedHostExit(dataDirectory) {
       'Unexpected Host exit process tree contained an invalid process ID',
     )
 
+    const initialWindow = await waitForExactWindowVisibility(
+      desktopPid,
+      true,
+      WINDOW_STATE_TIMEOUT_MS,
+      undefined,
+      desktop,
+    )
+    const closeResult = await postWindowClose(desktopPid)
+    ensure(
+      closeResult.hwnd === initialWindow.hwnd,
+      'Unexpected Host exit test did not hide the exact main window',
+    )
+    const hiddenWindow = await waitForExactWindowVisibility(
+      desktopPid,
+      false,
+      WINDOW_STATE_TIMEOUT_MS,
+      initialWindow.hwnd,
+      desktop,
+    )
+    ensure(
+      isRunning(desktop),
+      'Desktop exited instead of entering the hidden background state before Host failure',
+    )
+    const hiddenBootstrap = await readBootstrap()
+    ensure(
+      sameHost(bootstrap, hiddenBootstrap),
+      'Hiding the window changed the Host before the unexpected-exit action',
+    )
+
     const terminationStartedAt = performance.now()
     ensure(
       isProcessAlive(ownedHostPid),
@@ -244,6 +437,9 @@ async function testUnexpectedHostExit(dataDirectory) {
       readyMs,
       bootstrapHostVersion: bootstrap.hostVersion,
       desktopPid,
+      hwnd: initialWindow.hwnd,
+      windowHiddenBeforeFailure: hiddenWindow.visible === false,
+      hostEpochPreservedWhileHidden: hiddenBootstrap.epoch,
       terminatedHostPid: ownedHostPid,
       descendantProcesses: descendants,
       desktopExitMs,
@@ -265,7 +461,9 @@ async function testSingleInstance(dataDirectory) {
   const first = spawnTracked(
     'first Desktop instance',
     desktopExecutable,
-    ['--desktop-smoke-exit-after-ready-ms=5000'],
+    [
+      `--desktop-smoke-exit-after-ready-ms=${String(SMOKE_EXPLICIT_QUIT_DELAY_MS)}`,
+    ],
     desktopEnvironment(dataDirectory),
   )
   let second
@@ -275,6 +473,37 @@ async function testSingleInstance(dataDirectory) {
     const initialBootstrap = await waitForBootstrap(READY_TIMEOUT_MS, first)
     const firstReadyMs = elapsed(startedAt)
     ensure(isRunning(first), 'First Desktop exited before the second launch')
+    const firstPid = first.child.pid
+    ensure(
+      Number.isSafeInteger(firstPid) && firstPid > 0,
+      'First Desktop has no process ID',
+    )
+    const initialWindow = await waitForExactWindowVisibility(
+      firstPid,
+      true,
+      WINDOW_STATE_TIMEOUT_MS,
+      undefined,
+      first,
+    )
+    const initialTree = await readDesktopProcessTree(firstPid)
+    const initialDescendants = Array.isArray(initialTree.descendants)
+      ? initialTree.descendants
+      : [initialTree.descendants]
+    const initialHost = initialDescendants.find(isHostProcess)
+    ensure(initialHost !== undefined, 'First Desktop does not own a Host')
+    const ownedProcessIds = [
+      firstPid,
+      ...initialDescendants.map((process_) => process_.pid),
+    ]
+    await postWindowClose(firstPid)
+    await waitForExactWindowVisibility(
+      firstPid,
+      false,
+      WINDOW_STATE_TIMEOUT_MS,
+      initialWindow.hwnd,
+      first,
+    )
+    ensure(isRunning(first), 'Hidden first Desktop exited before second launch')
 
     const secondStartedAt = performance.now()
     second = spawnTracked(
@@ -288,10 +517,31 @@ async function testSingleInstance(dataDirectory) {
     ensureCleanExit(second, secondExit)
     ensure(isRunning(first), 'Second launch terminated the first Desktop')
 
+    const restoredWindow = await waitForExactWindowVisibility(
+      firstPid,
+      true,
+      WINDOW_STATE_TIMEOUT_MS,
+      initialWindow.hwnd,
+      first,
+    )
+    ensure(
+      restoredWindow.hwnd === initialWindow.hwnd,
+      'Second launch restored a different main window',
+    )
+
     const preservedBootstrap = await readBootstrap()
     ensure(
       sameHost(initialBootstrap, preservedBootstrap),
       'The first Desktop Host changed after the second launch',
+    )
+    const restoredTree = await readDesktopProcessTree(firstPid)
+    const restoredDescendants = Array.isArray(restoredTree.descendants)
+      ? restoredTree.descendants
+      : [restoredTree.descendants]
+    const restoredHost = restoredDescendants.find(isHostProcess)
+    ensure(
+      restoredHost !== undefined && restoredHost.pid === initialHost.pid,
+      'Second launch replaced the hidden Desktop owned Host process',
     )
 
     const firstExit = await waitForExit(first, PROCESS_TIMEOUT_MS)
@@ -302,9 +552,12 @@ async function testSingleInstance(dataDirectory) {
       ),
       `First Desktop did not complete graceful Host shutdown${diagnosticSuffix(first)}`,
     )
-    const portReleaseStartedAt = performance.now()
-    await waitUntilNotListening(RELEASE_TIMEOUT_MS)
-    const portReleaseMs = elapsed(portReleaseStartedAt)
+    const releaseStartedAt = performance.now()
+    await Promise.all([
+      waitUntilNotListening(RELEASE_TIMEOUT_MS),
+      waitUntilProcessesExit(ownedProcessIds, RELEASE_TIMEOUT_MS),
+    ])
+    const releaseMs = elapsed(releaseStartedAt)
     passed = true
 
     return {
@@ -312,11 +565,17 @@ async function testSingleInstance(dataDirectory) {
       firstReadyMs,
       secondExitMs,
       secondExitCode: secondExit.code,
+      hiddenWindowRestored: true,
+      restoredHwnd: restoredWindow.hwnd,
       firstHostPreserved: true,
+      preservedHostPid: restoredHost.pid,
+      preservedHostEpoch: preservedBootstrap.epoch,
       firstExitMs: elapsed(startedAt),
       firstExitCode: firstExit.code,
       gracefulExitConfirmed: true,
-      portReleaseMs,
+      portReleased: true,
+      processTreeReleased: true,
+      releaseMs,
     }
   } finally {
     if (!passed) {
@@ -550,6 +809,130 @@ async function postWindowClose(desktopPid) {
   }
 }
 
+async function sendAltF4(desktopPid) {
+  const helper = spawnTracked(
+    'Alt+F4 Win32 helper',
+    powershellExecutable,
+    [
+      '-NoLogo',
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      windowsAltF4Script(desktopPid),
+    ],
+    process.env,
+  )
+  const outcome = await waitForExit(helper, 15_000)
+  ensureCleanExit(helper, outcome)
+  const output = helper.standardOutput()
+  ensure(output.length > 0, 'Alt+F4 Win32 helper returned no result')
+  try {
+    const result = JSON.parse(output)
+    ensure(
+      result !== null &&
+        typeof result === 'object' &&
+        result.desktopPid === desktopPid &&
+        result.title === WINDOW_TITLE &&
+        typeof result.hwnd === 'string' &&
+        /^\d+$/u.test(result.hwnd) &&
+        result.systemKeyTargeted === true,
+      'Alt+F4 Win32 helper returned an invalid window identity',
+    )
+    return result
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    throw new Error(
+      `Could not parse Alt+F4 helper result: ${message}\n${output}`,
+      { cause: error },
+    )
+  }
+}
+
+async function waitForExactWindowVisibility(
+  desktopPid,
+  visible,
+  timeoutMs,
+  expectedHwnd,
+  owner,
+) {
+  const deadline = performance.now() + timeoutMs
+  let lastState
+  let lastError
+  while (performance.now() < deadline) {
+    if (owner !== undefined && !isRunning(owner)) {
+      throw new Error(
+        `${owner.label} exited while waiting for its main window${diagnosticSuffix(owner)}`,
+      )
+    }
+    try {
+      const state = await readExactWindowState(desktopPid, expectedHwnd)
+      lastState = state
+      if (state.visible === visible) return state
+    } catch (error) {
+      lastError = error
+    }
+    await delay(75)
+  }
+  const detail =
+    lastState === undefined
+      ? lastError instanceof Error
+        ? `: ${lastError.message}`
+        : ''
+      : `: last state ${JSON.stringify(lastState)}`
+  throw new Error(
+    `Exact Desktop window did not become ${visible ? 'visible' : 'hidden'} within ${String(timeoutMs)} ms${detail}`,
+  )
+}
+
+async function readExactWindowState(desktopPid, expectedHwnd) {
+  ensure(
+    Number.isSafeInteger(desktopPid) && desktopPid > 0,
+    'Exact window probe requires a valid Desktop PID',
+  )
+  ensure(
+    expectedHwnd === undefined || /^\d+$/u.test(expectedHwnd),
+    'Exact window probe requires a valid HWND',
+  )
+  const helper = spawnTracked(
+    'Desktop exact window state helper',
+    powershellExecutable,
+    [
+      '-NoLogo',
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      windowsWindowStateScript(desktopPid, expectedHwnd),
+    ],
+    process.env,
+  )
+  const outcome = await waitForExit(helper, 15_000)
+  ensureCleanExit(helper, outcome)
+  const output = helper.standardOutput()
+  ensure(output.length > 0, 'Exact window state helper returned no result')
+  try {
+    const result = JSON.parse(output)
+    ensure(
+      result !== null &&
+        typeof result === 'object' &&
+        result.desktopPid === desktopPid &&
+        result.title === WINDOW_TITLE &&
+        typeof result.hwnd === 'string' &&
+        /^\d+$/u.test(result.hwnd) &&
+        typeof result.visible === 'boolean' &&
+        typeof result.minimized === 'boolean' &&
+        (expectedHwnd === undefined || result.hwnd === expectedHwnd),
+      'Exact window state helper returned an invalid window identity',
+    )
+    return result
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    throw new Error(
+      `Could not parse exact window state result: ${message}\n${output}`,
+      { cause: error },
+    )
+  }
+}
+
 async function readDesktopProcessTree(desktopPid) {
   const helper = spawnTracked(
     'Desktop process tree helper',
@@ -624,6 +1007,189 @@ $result = @{
   descendants = @($descendants.ToArray())
 }
 $result | ConvertTo-Json -Compress -Depth 5
+`
+}
+
+function windowsWindowStateScript(desktopPid, expectedHwnd) {
+  const hwndValue = expectedHwnd ?? '0'
+  return String.raw`
+$ErrorActionPreference = 'Stop'
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+
+public static class CodeTetherExactWindowProbe
+{
+    private delegate bool EnumWindowsCallback(IntPtr window, IntPtr state);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool EnumWindows(EnumWindowsCallback callback, IntPtr state);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool IsWindow(IntPtr window);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool IsWindowVisible(IntPtr window);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool IsIconic(IntPtr window);
+
+    [DllImport("user32.dll")]
+    public static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetWindowTextLengthW(IntPtr window);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetWindowTextW(IntPtr window, StringBuilder text, int capacity);
+
+    public static string Title(IntPtr window)
+    {
+        int length = GetWindowTextLengthW(window);
+        StringBuilder text = new StringBuilder(length + 1);
+        GetWindowTextW(window, text, text.Capacity);
+        return text.ToString();
+    }
+
+    public static IntPtr Find(uint expectedProcessId, string expectedTitle)
+    {
+        IntPtr found = IntPtr.Zero;
+        EnumWindows(delegate(IntPtr window, IntPtr state)
+        {
+            uint processId;
+            GetWindowThreadProcessId(window, out processId);
+            if (processId == expectedProcessId && String.Equals(Title(window), expectedTitle, StringComparison.Ordinal))
+            {
+                found = window;
+                return false;
+            }
+            return true;
+        }, IntPtr.Zero);
+        return found;
+    }
+}
+'@
+
+$expectedPid = [uint32]${String(desktopPid)}
+$expectedTitle = '${WINDOW_TITLE}'
+$window = [IntPtr]::new([int64]${hwndValue})
+if ($window -eq [IntPtr]::Zero) {
+  $window = [CodeTetherExactWindowProbe]::Find($expectedPid, $expectedTitle)
+}
+if ($window -eq [IntPtr]::Zero -or ![CodeTetherExactWindowProbe]::IsWindow($window)) {
+  throw 'Exact Desktop main window was not found'
+}
+$windowPid = [uint32]0
+[void][CodeTetherExactWindowProbe]::GetWindowThreadProcessId($window, [ref]$windowPid)
+$windowTitle = [CodeTetherExactWindowProbe]::Title($window)
+if ($windowPid -ne $expectedPid -or $windowTitle -cne $expectedTitle) {
+  throw 'Exact Desktop main window identity does not match the expected PID and title'
+}
+[pscustomobject]@{
+  desktopPid = [int]$expectedPid
+  hwnd = [string]$window.ToInt64()
+  title = $windowTitle
+  visible = [CodeTetherExactWindowProbe]::IsWindowVisible($window)
+  minimized = [CodeTetherExactWindowProbe]::IsIconic($window)
+} | ConvertTo-Json -Compress
+`
+}
+
+function windowsAltF4Script(desktopPid) {
+  return String.raw`
+$ErrorActionPreference = 'Stop'
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+
+public static class CodeTetherAltF4Probe
+{
+    private delegate bool EnumWindowsCallback(IntPtr window, IntPtr state);
+    private const uint WM_SYSKEYDOWN = 0x0104;
+    private const uint WM_SYSKEYUP = 0x0105;
+    private const UInt32 VK_F4 = 0x73;
+    private const Int64 F4_DOWN = 1L | (0x3EL << 16) | (1L << 29);
+    private const Int64 F4_UP = F4_DOWN | (1L << 30) | (1L << 31);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool EnumWindows(EnumWindowsCallback callback, IntPtr state);
+    [DllImport("user32.dll")]
+    public static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetWindowTextLengthW(IntPtr window);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetWindowTextW(IntPtr window, StringBuilder text, int capacity);
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool PostMessageW(IntPtr window, uint message, UIntPtr wParam, IntPtr lParam);
+
+    public static string Title(IntPtr window)
+    {
+        int length = GetWindowTextLengthW(window);
+        StringBuilder text = new StringBuilder(length + 1);
+        GetWindowTextW(window, text, text.Capacity);
+        return text.ToString();
+    }
+
+    public static IntPtr Find(uint expectedProcessId, string expectedTitle)
+    {
+        IntPtr found = IntPtr.Zero;
+        EnumWindows(delegate(IntPtr window, IntPtr state)
+        {
+            uint processId;
+            GetWindowThreadProcessId(window, out processId);
+            if (processId == expectedProcessId && String.Equals(Title(window), expectedTitle, StringComparison.Ordinal))
+            {
+                found = window;
+                return false;
+            }
+            return true;
+        }, IntPtr.Zero);
+        return found;
+    }
+
+    public static bool Send(uint expectedProcessId, IntPtr window)
+    {
+      uint actualProcessId;
+      uint targetThread = GetWindowThreadProcessId(window, out actualProcessId);
+      if (actualProcessId != expectedProcessId || targetThread == 0) return false;
+      bool down = PostMessageW(window, WM_SYSKEYDOWN, new UIntPtr(VK_F4), new IntPtr(F4_DOWN));
+      bool up = PostMessageW(window, WM_SYSKEYUP, new UIntPtr(VK_F4), new IntPtr(F4_UP));
+      return down && up;
+    }
+}
+'@
+
+$expectedPid = [uint32]${String(desktopPid)}
+$expectedTitle = '${WINDOW_TITLE}'
+$desktop = @(Get-CimInstance Win32_Process -Filter "ProcessId = ${String(desktopPid)}")
+if ($desktop.Count -ne 1 -or $desktop[0].Name -ine 'codetether-desktop.exe') {
+  throw 'Exact Desktop process was not found for Alt+F4'
+}
+$deadline = [DateTime]::UtcNow.AddSeconds(5)
+$window = [IntPtr]::Zero
+do {
+  $window = [CodeTetherAltF4Probe]::Find($expectedPid, $expectedTitle)
+  if ($window -ne [IntPtr]::Zero) { break }
+  Start-Sleep -Milliseconds 50
+} while ([DateTime]::UtcNow -lt $deadline)
+if ($window -eq [IntPtr]::Zero) { throw 'Exact Desktop main window was not found for Alt+F4' }
+if (![CodeTetherAltF4Probe]::Send($expectedPid, $window)) {
+  throw 'Could not send Alt+F4 system-key messages to the exact Desktop main window'
+}
+[pscustomobject]@{
+  desktopPid = [int]$expectedPid
+  hwnd = [string]$window.ToInt64()
+  title = [CodeTetherAltF4Probe]::Title($window)
+  systemKeyTargeted = $true
+} | ConvertTo-Json -Compress
 `
 }
 
@@ -846,6 +1412,15 @@ function sameHost(left, right) {
     left.protocolVersion === right.protocolVersion &&
     left.hostVersion === right.hostVersion &&
     left.epoch === right.epoch
+  )
+}
+
+function isHostProcess(process_) {
+  return (
+    process_ !== null &&
+    typeof process_ === 'object' &&
+    typeof process_.name === 'string' &&
+    process_.name.toLowerCase() === 'codetether-host.exe'
   )
 }
 

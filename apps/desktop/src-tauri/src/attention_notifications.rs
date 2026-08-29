@@ -4,7 +4,9 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, State};
+
+use crate::host_supervisor::show_main_window;
 
 const NOTIFICATION_INTENT_EVENT: &str = "codetether://notification-intent";
 const MAX_DELIVERED_ATTENTION_IDS: usize = 2_048;
@@ -425,18 +427,15 @@ fn activate_notification(
     // its Tauri event listener was suspended while the window was minimized.
     state.enqueue_intent(intent.clone());
 
-    if let Some(window) = app.get_webview_window("main") {
-        if let Err(error) = window.unminimize() {
-            eprintln!("[codetether:desktop] could not unminimize notification target: {error}");
+    match show_main_window(app) {
+        Ok(true) => {}
+        Ok(false) => return,
+        Err(error) => {
+            eprintln!(
+                "[codetether:desktop] could not restore the notification target window: {error}"
+            );
+            return;
         }
-        if let Err(error) = window.show() {
-            eprintln!("[codetether:desktop] could not show notification target: {error}");
-        }
-        if let Err(error) = window.set_focus() {
-            eprintln!("[codetether:desktop] could not focus notification target: {error}");
-        }
-    } else {
-        eprintln!("[codetether:desktop] notification target window is unavailable");
     }
 
     // The payload is a low-latency path for an already-awake WebView. The

@@ -6,6 +6,7 @@ import test from 'node:test'
 import {
   assertOwnedTemporaryRoot,
   assertInstalledShortcuts,
+  assertTrayQuitResult,
   installerArguments,
   InstallerSmokeCleanupUnsafeError,
   normalizeRegistryPath,
@@ -114,6 +115,28 @@ test('installed shortcuts must target the isolated Desktop executable', () => {
       [{ ...shortcut, target: 'C:\\Program Files\\Other\\other.exe' }],
       executable,
     ),
+  )
+})
+
+test('tray quit confirmation is bound to the exact owned Desktop identity', () => {
+  const result = {
+    quitRequested: true,
+    desktopPid: 1234,
+    trayTooltip: 'CodeTether',
+    menuItem: '退出 CodeTether',
+    selectionMethod: 'uia-owned-popup-exact-label',
+    processIds: [1234, 5678],
+  }
+  assert.equal(assertTrayQuitResult(result, 1234), result)
+  assert.throws(() => assertTrayQuitResult(result, 4321))
+  assert.throws(() =>
+    assertTrayQuitResult({ ...result, menuItem: 'Exit' }, 1234),
+  )
+  assert.throws(() =>
+    assertTrayQuitResult({ ...result, processIds: [5678] }, 1234),
+  )
+  assert.throws(() =>
+    assertTrayQuitResult({ ...result, selectionMethod: 'keyboard' }, 1234),
   )
 })
 

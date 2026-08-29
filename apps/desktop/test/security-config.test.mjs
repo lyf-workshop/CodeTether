@@ -100,6 +100,10 @@ test('Web UI exposes only the narrow Project picker and Attention notification c
     resolve(desktopDirectory, 'src-tauri', 'build.rs'),
     'utf8',
   )
+  const installerSmoke = await readFile(
+    resolve(desktopDirectory, 'scripts', 'installer-smoke.mjs'),
+    'utf8',
+  )
   const rustFiles = (
     await readdir(desktopRustDirectory, {
       recursive: true,
@@ -127,6 +131,10 @@ test('Web UI exposes only the narrow Project picker and Attention notification c
     resolve(desktopDirectory, 'src-tauri', 'Cargo.toml'),
     'utf8',
   )
+  assert.match(
+    desktopCargo,
+    /tauri = \{ version = "=2\.11\.5", features = \["tray-icon"\] \}/u,
+  )
   assert.match(desktopCargo, /tauri-plugin-notification = "=2\.3\.3"/u)
   assert.match(desktopCargo, /tauri-winrt-notification = "=0\.7\.3"/u)
   assert.match(desktopRust, /pick_project_directory/u)
@@ -140,6 +148,17 @@ test('Web UI exposes only the narrow Project picker and Attention notification c
   assert.match(desktopRust, /window\.unminimize\(\)/u)
   assert.match(desktopRust, /window\.show\(\)/u)
   assert.match(desktopRust, /window\.set_focus\(\)/u)
+  assert.match(desktopRust, /TrayIconBuilder::with_id/u)
+  assert.match(desktopRust, /\.show_menu_on_left_click\(false\)/u)
+  assert.match(desktopRust, /"打开 CodeTether"/u)
+  assert.match(desktopRust, /"退出 CodeTether"/u)
+  assert.match(desktopRust, /window\.hide\(\)/u)
+  assert.match(desktopRust, /request_app_quit/u)
+  assert.match(installerSmoke, /Test-NotificationAreaElement/u)
+  assert.match(installerSmoke, /Test-OwnedPopupMenuItem/u)
+  assert.match(installerSmoke, /TopLevelWindowForOverflowXamlIsland/u)
+  assert.match(installerSmoke, /WindowProcessId\(\$handle\) -eq \$expectedPid/u)
+  assert.doesNotMatch(installerSmoke, /SendKeys|bounded-last-menu-item/u)
   assert.match(desktopRust, /invoke_handler/u)
   assert.match(
     buildScript,
@@ -149,7 +168,7 @@ test('Web UI exposes only the narrow Project picker and Attention notification c
   assert.doesNotMatch(buildScript, /tauri_build::build\(\)/u)
   assert.doesNotMatch(
     desktopRust,
-    /run_command|native_action|tauri_plugin_fs::init|tauri_plugin_process::init|tauri_plugin_clipboard/iu,
+    /run_command|native_action|#\[tauri::command\][\s\S]{0,160}request_app_quit|tauri_plugin_fs::init|tauri_plugin_process::init|tauri_plugin_clipboard/iu,
   )
   assert.match(desktopRust, /CODETETHER_DESKTOP_MANAGED/u)
   assert.match(desktopRust, /http:\/\/tauri\.localhost/u)

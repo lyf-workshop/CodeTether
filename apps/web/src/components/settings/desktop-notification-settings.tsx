@@ -43,11 +43,13 @@ const notificationOptions = [
 
 export interface DesktopNotificationSettingsProps {
   readonly notificationAvailable?: boolean
+  readonly backgroundRuntimeAvailable?: boolean
   readonly storage?: NotificationPreferenceStorage
 }
 
 export function DesktopNotificationSettings({
   notificationAvailable = nativeCapabilities.notifications.available,
+  backgroundRuntimeAvailable = nativeCapabilities.backgroundRuntime.available,
   storage,
 }: DesktopNotificationSettingsProps) {
   const preferenceStorage = useMemo(
@@ -144,6 +146,18 @@ export function DesktopNotificationSettings({
           )}
         </CardContent>
       </Card>
+
+      {backgroundRuntimeAvailable ? (
+        <Card className="mt-4">
+          <CardHeader>
+            <CardTitle id="background-runtime-heading">后台运行</CardTitle>
+            <CardDescription>
+              关闭窗口后，CodeTether
+              将继续在系统托盘运行，以便任务、审批和通知继续工作。
+            </CardDescription>
+          </CardHeader>
+        </Card>
+      ) : null}
     </section>
   )
 }

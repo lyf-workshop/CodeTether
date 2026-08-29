@@ -11,6 +11,7 @@ import {
 } from '../.tmp/test-dist/runtime/host/conversation-organization-actions.js'
 import { conversationDetailQueryKeys } from '../.tmp/test-dist/runtime/host/conversation-detail-query.js'
 import { conversationListQueryKeys } from '../.tmp/test-dist/runtime/host/conversation-list-query.js'
+import { conversationSearchQueryKeys } from '../.tmp/test-dist/runtime/host/conversation-search-query.js'
 import { HostRuntime } from '../.tmp/test-dist/runtime/host/host-runtime.js'
 
 const projectId = 'proj_organization_ui'
@@ -65,9 +66,17 @@ test('accepted mutation updates durable detail and invalidates active and archiv
   const queryClient = createQueryClient()
   const activeKey = conversationListQueryKeys.project(projectId, 'active')
   const archivedKey = conversationListQueryKeys.project(projectId, 'archived')
+  const searchKey = conversationSearchQueryKeys.project(projectId, {
+    query: 'durable title',
+    archive: 'all',
+    provider: null,
+    status: null,
+    limit: 25,
+  })
   const detailKey = conversationDetailQueryKeys.detail(conversationId)
   queryClient.setQueryData(activeKey, [summary()])
   queryClient.setQueryData(archivedKey, [])
+  queryClient.setQueryData(searchKey, { pages: [], pageParams: [] })
   queryClient.setQueryData(detailKey, detail(summary()))
 
   const client = new FakeOrganizationClient()
@@ -85,6 +94,7 @@ test('accepted mutation updates durable detail and invalidates active and archiv
   )
   assert.equal(queryClient.getQueryState(activeKey)?.isInvalidated, true)
   assert.equal(queryClient.getQueryState(archivedKey)?.isInvalidated, true)
+  assert.equal(queryClient.getQueryState(searchKey)?.isInvalidated, true)
 
   // Membership and ordering are not optimistically rewritten by React.
   assert.equal(queryClient.getQueryData(activeKey).length, 1)

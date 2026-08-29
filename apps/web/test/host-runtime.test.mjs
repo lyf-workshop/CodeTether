@@ -12,6 +12,8 @@ import {
   hostQueryKeys,
   readHostProjection,
 } from '../.tmp/test-dist/runtime/host/host-query.js'
+import { conversationListQueryKeys } from '../.tmp/test-dist/runtime/host/conversation-list-query.js'
+import { conversationSearchQueryKeys } from '../.tmp/test-dist/runtime/host/conversation-search-query.js'
 
 const epochA = '11111111-1111-4111-8111-111111111111'
 const epochB = '22222222-2222-4222-8222-222222222222'
@@ -111,6 +113,16 @@ test('stream.reset fetches a fresh snapshot, replaces projection, and reconnects
     streams: [first, second],
   })
   const queryClient = createQueryClient()
+  const listKey = conversationListQueryKeys.project('proj_runtime_search')
+  const searchKey = conversationSearchQueryKeys.project('proj_runtime_search', {
+    query: 'reconnect',
+    archive: 'active',
+    provider: null,
+    status: null,
+    limit: 25,
+  })
+  queryClient.setQueryData(listKey, [])
+  queryClient.setQueryData(searchKey, { pages: [], pageParams: [] })
   const runtime = new HostRuntime({
     queryClient,
     client,
@@ -146,6 +158,8 @@ test('stream.reset fetches a fresh snapshot, replaces projection, and reconnects
   assert.equal(runtime.stats.snapshotReplacements, 2)
   assert.equal(runtime.stats.resetRecoveries, 1)
   assert.deepEqual(appliedEvents, [])
+  assert.equal(queryClient.getQueryState(listKey)?.isInvalidated, true)
+  assert.equal(queryClient.getQueryState(searchKey)?.isInvalidated, true)
 })
 
 test('a fresh Snapshot in a new epoch invalidates uncertain mutation identity', async (t) => {

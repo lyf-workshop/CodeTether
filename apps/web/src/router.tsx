@@ -4,7 +4,11 @@ import {
   createRouter,
   redirect,
 } from '@tanstack/react-router'
-import { TurnIdSchema, type TurnId } from '@codetether/protocol'
+import {
+  ConversationSearchQueryTextSchema,
+  TurnIdSchema,
+  type TurnId,
+} from '@codetether/protocol'
 
 import { RootLayout } from './components/app-shell/root-layout'
 import { RoutePlaceholder } from './components/app-shell/route-placeholder'
@@ -23,6 +27,7 @@ interface ConversationSearch {
 }
 
 interface ProjectConversationsSearch {
+  q?: string
   view?: 'archived'
 }
 
@@ -92,9 +97,13 @@ const projectConversationsRoute = createRoute({
   path: '/projects/$projectId/conversations',
   validateSearch: (
     search: Record<string, unknown>,
-  ): ProjectConversationsSearch => ({
-    ...(search.view === 'archived' ? { view: 'archived' as const } : {}),
-  }),
+  ): ProjectConversationsSearch => {
+    const query = ConversationSearchQueryTextSchema.safeParse(search.q)
+    return {
+      ...(query.success ? { q: query.data } : {}),
+      ...(search.view === 'archived' ? { view: 'archived' as const } : {}),
+    }
+  },
   component: ProjectConversationsRoute,
 })
 

@@ -4,7 +4,11 @@ import {
   useState,
   type ComponentPropsWithoutRef,
 } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import {
+  useInfiniteQuery,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query'
 import { useNavigate, useSearch } from '@tanstack/react-router'
 import { Archive, Filter, MessageSquare, Plus, RefreshCw } from 'lucide-react'
 
@@ -21,6 +25,7 @@ import {
   cn,
 } from '@codetether/ui'
 import type {
+  ConversationSearchResult,
   ConversationSummary,
   ProjectId,
   ProjectRecord,
@@ -34,9 +39,15 @@ import {
   conversationListQueryOptions,
   type ConversationArchiveView,
 } from '../../runtime/host/conversation-list-query'
+import {
+  conversationSearchInfiniteQueryOptions,
+  flattenConversationSearchPages,
+} from '../../runtime/host/conversation-search-query'
 import { conversationListPageViewState } from '../../runtime/host/conversation-list-view-state'
 import { projectDetailQueryOptions } from '../../runtime/host/project-query'
 import { ConversationGroup } from './conversation-group'
+import { isConversationSearchMode } from './conversation-search-presentation'
+import { ConversationSearchResults } from './conversation-search-results'
 import {
   conversationStatusCounts,
   groupProjectConversations,
@@ -55,6 +66,7 @@ import {
 } from './conversation-page-states'
 import { NewConversationDialog } from './new-conversation-dialog'
 import { ProjectSummary } from './project-summary'
+import { useDebouncedSearchQuery } from './use-debounced-search-query'
 
 interface ConversationsPageProps {
   projectId: ProjectId
@@ -63,21 +75,25 @@ interface ConversationsPageProps {
 interface StatusFilterOption {
   label: string
   value: ConversationStatusFilter
-  count: number
+  count?: number
 }
 
 const emptyConversations: readonly ConversationSummary[] = []
 
 export function ConversationsPage({ projectId }: ConversationsPageProps) {
   const runtime = useHostRuntime()
+  const queryClient = useQueryClient()
   const connectionState = useHostConnectionState()
   const navigate = useNavigate({ from: '/projects/$projectId/conversations' })
   const search = useSearch({ from: '/projects/$projectId/conversations' })
   const archiveView: ConversationArchiveView =
     search.view === 'archived' ? 'archived' : 'active'
+  const query = search.q ?? ''
+  const searchMode = isConversationSearchMode(query)
+  const debouncedQuery = useDebouncedSearchQuery(query)
+  const searchPending = searchMode && debouncedQuery !== query.trim()
   const [providerFilter, setProviderFilter] =
     useState<ConversationProviderFilter>('all')
-  const [query, setQuery] = useState('')
   const [statusFilter, setStatusFilter] =
     useState<ConversationStatusFilter>('all')
 
@@ -97,6 +113,27 @@ export function ConversationsPage({ projectId }: ConversationsPageProps) {
     archiveView === 'archived'
       ? archivedConversationsQuery
       : activeConversationsQuery
+  const searchQueryOptions = conversationSearchInfiniteQueryOptions(
+    runtime,
+    projectId,
+    {
+      query: debouncedQuery.length > 0 ? debouncedQuery : 'search-disabled',
+      archive: archiveView,
+      ...(providerFilter === 'all' ? {} : { provider: providerFilter }),
+      ...(statusFilter === 'all' ? {} : { status: statusFilter }),
+    },
+  )
+  const durableSearchQuery = useInfiniteQuery({
+    ...searchQueryOptions,
+    enabled:
+      connectionState === 'connected' &&
+      searchMode &&
+      debouncedQuery.length > 0,
+  })
+  const searchResults = useMemo(
+    () => flattenConversationSearchPages(durableSearchQuery.data?.pages ?? []),
+    [durableSearchQuery.data?.pages],
+  )
   const viewState = conversationListPageViewState(
     projectQuery,
     conversationsQuery,
@@ -107,18 +144,25 @@ export function ConversationsPage({ projectId }: ConversationsPageProps) {
     () => conversationStatusCounts(conversations),
     [conversations],
   )
+  const knownConversations = useMemo(
+    () => [
+      ...(activeConversationsQuery.data ?? []),
+      ...(archivedConversationsQuery.data ?? []),
+    ],
+    [activeConversationsQuery.data, archivedConversationsQuery.data],
+  )
   const providers = useMemo(
-    () => uniqueProviders(conversations),
-    [conversations],
+    () => uniqueProviders(knownConversations),
+    [knownConversations],
   )
   const visibleConversations = useMemo(
     () =>
       visibleProjectConversations(conversations, {
         provider: providerFilter,
-        query,
+        query: '',
         status: statusFilter,
       }),
-    [conversations, providerFilter, query, statusFilter],
+    [conversations, providerFilter, statusFilter],
   )
   const groupedConversations = useMemo(
     () => groupProjectConversations(visibleConversations),
@@ -126,23 +170,36 @@ export function ConversationsPage({ projectId }: ConversationsPageProps) {
   )
   const statusFilters = useMemo<readonly StatusFilterOption[]>(
     () => [
-      { label: '全部', value: 'all', count: summary.total },
-      { label: '运行中', value: 'running', count: summary.running },
-      { label: '等待', value: 'waiting', count: summary.waiting },
-      { label: '完成', value: 'completed', count: summary.completed },
+      {
+        label: '全部',
+        value: 'all',
+        ...(searchMode ? {} : { count: summary.total }),
+      },
+      {
+        label: '运行中',
+        value: 'running',
+        ...(searchMode ? {} : { count: summary.running }),
+      },
+      {
+        label: '等待',
+        value: 'waiting',
+        ...(searchMode ? {} : { count: summary.waiting }),
+      },
+      {
+        label: '完成',
+        value: 'completed',
+        ...(searchMode ? {} : { count: summary.completed }),
+      },
     ],
-    [summary],
+    [searchMode, summary],
   )
   const connectionUnavailable =
     connectionState === 'unavailable' || connectionState === 'incompatible'
-  const loading =
+  const loadingProject =
     !connectionUnavailable &&
-    (viewState.kind === 'loading' ||
+    (projectQuery.isPending ||
       (connectionState !== 'connected' && projectQuery.data === undefined))
-  const project =
-    viewState.kind === 'ready' || viewState.kind === 'empty'
-      ? viewState.project
-      : undefined
+  const project = projectQuery.data
 
   function handleRetry() {
     runtime.retry()
@@ -151,6 +208,7 @@ export function ConversationsPage({ projectId }: ConversationsPageProps) {
         projectQuery.refetch(),
         activeConversationsQuery.refetch(),
         archivedConversationsQuery.refetch(),
+        ...(searchMode ? [durableSearchQuery.refetch()] : []),
       ])
     }
   }
@@ -158,7 +216,23 @@ export function ConversationsPage({ projectId }: ConversationsPageProps) {
   function selectArchiveView(nextView: ConversationArchiveView) {
     void navigate({
       params: { projectId },
-      search: nextView === 'archived' ? { view: 'archived' } : {},
+      search: {
+        ...(nextView === 'archived' ? { view: 'archived' as const } : {}),
+        ...(query.length > 0 ? { q: query } : {}),
+      },
+    })
+  }
+
+  function updateSearchQuery(nextQuery: string) {
+    const nextSearchMode = isConversationSearchMode(nextQuery)
+    void navigate({
+      params: { projectId },
+      replace: searchMode === nextSearchMode,
+      resetScroll: false,
+      search: {
+        ...(archiveView === 'archived' ? { view: 'archived' as const } : {}),
+        ...(nextQuery.length > 0 ? { q: nextQuery } : {}),
+      },
     })
   }
 
@@ -186,8 +260,73 @@ export function ConversationsPage({ projectId }: ConversationsPageProps) {
             incompatible={connectionState === 'incompatible'}
             onRetry={handleRetry}
           />
-        ) : loading ? (
+        ) : loadingProject ? (
           <ConversationsLoadingState />
+        ) : projectQuery.isError ? (
+          viewState.kind === 'not-found' ? (
+            <ConversationsNotFoundState />
+          ) : (
+            <ConversationsErrorState
+              title="无法读取项目"
+              onRetry={handleRetry}
+            />
+          )
+        ) : searchMode && project !== undefined ? (
+          <ConversationSearchReadyContent
+            archiveView={archiveView}
+            connectionState={connectionState}
+            error={
+              durableSearchQuery.isError &&
+              durableSearchQuery.data === undefined
+                ? conversationSearchErrorMessage()
+                : undefined
+            }
+            fetchNextError={
+              durableSearchQuery.isFetchNextPageError
+                ? conversationSearchErrorMessage()
+                : undefined
+            }
+            refreshError={
+              durableSearchQuery.isRefetchError &&
+              !durableSearchQuery.isFetchNextPageError
+                ? '无法刷新搜索结果；当前仍显示上一次读取的内容。'
+                : undefined
+            }
+            hasNextPage={durableSearchQuery.hasNextPage === true}
+            hasArchivedConversations={
+              (archivedConversationsQuery.data?.length ?? 0) > 0
+            }
+            isFetchingNextPage={durableSearchQuery.isFetchingNextPage}
+            loading={durableSearchQuery.isPending}
+            project={project}
+            providerFilter={providerFilter}
+            providers={providers}
+            query={query}
+            results={searchResults}
+            searchPending={
+              searchPending ||
+              (durableSearchQuery.isFetching &&
+                !durableSearchQuery.isFetchingNextPage)
+            }
+            statusFilter={statusFilter}
+            statusFilters={statusFilters}
+            onArchiveViewChange={selectArchiveView}
+            onClearSearch={() => updateSearchQuery('')}
+            onLoadMore={() => void durableSearchQuery.fetchNextPage()}
+            onRefreshMembership={async () => {
+              await durableSearchQuery.refetch({ cancelRefetch: false })
+            }}
+            onProviderFilterChange={setProviderFilter}
+            onQueryChange={updateSearchQuery}
+            onResetPagination={() => {
+              void queryClient.resetQueries({
+                queryKey: searchQueryOptions.queryKey,
+                exact: true,
+              })
+            }}
+            onRetry={() => void durableSearchQuery.refetch()}
+            onStatusFilterChange={setStatusFilter}
+          />
         ) : viewState.kind === 'loading' ? (
           <ConversationsLoadingState />
         ) : viewState.kind === 'not-found' ? (
@@ -213,12 +352,160 @@ export function ConversationsPage({ projectId }: ConversationsPageProps) {
             connectionState={connectionState}
             onArchiveViewChange={selectArchiveView}
             onProviderFilterChange={setProviderFilter}
-            onQueryChange={setQuery}
+            onQueryChange={updateSearchQuery}
             onStatusFilterChange={setStatusFilter}
           />
         )}
       </div>
     </div>
+  )
+}
+
+interface ConversationSearchReadyContentProps {
+  archiveView: ConversationArchiveView
+  connectionState: ReturnType<typeof useHostConnectionState>
+  error?: string
+  fetchNextError?: string
+  hasArchivedConversations: boolean
+  hasNextPage: boolean
+  isFetchingNextPage: boolean
+  loading: boolean
+  project: ProjectRecord
+  providerFilter: ConversationProviderFilter
+  providers: readonly Exclude<ConversationProviderFilter, 'all'>[]
+  query: string
+  refreshError?: string
+  results: readonly ConversationSearchResult[]
+  searchPending: boolean
+  statusFilter: ConversationStatusFilter
+  statusFilters: readonly StatusFilterOption[]
+  onArchiveViewChange: (view: ConversationArchiveView) => void
+  onClearSearch: () => void
+  onLoadMore: () => void
+  onRefreshMembership: () => Promise<unknown>
+  onProviderFilterChange: (provider: ConversationProviderFilter) => void
+  onQueryChange: (query: string) => void
+  onResetPagination: () => void
+  onRetry: () => void
+  onStatusFilterChange: (status: ConversationStatusFilter) => void
+}
+
+function ConversationSearchReadyContent({
+  archiveView,
+  connectionState,
+  error,
+  fetchNextError,
+  hasArchivedConversations,
+  hasNextPage,
+  isFetchingNextPage,
+  loading,
+  project,
+  providerFilter,
+  providers,
+  query,
+  refreshError,
+  results,
+  searchPending,
+  statusFilter,
+  statusFilters,
+  onArchiveViewChange,
+  onClearSearch,
+  onLoadMore,
+  onRefreshMembership,
+  onProviderFilterChange,
+  onQueryChange,
+  onResetPagination,
+  onRetry,
+  onStatusFilterChange,
+}: ConversationSearchReadyContentProps) {
+  return (
+    <>
+      <ConversationToolbar
+        providerFilter={providerFilter}
+        providers={providers}
+        query={query}
+        statusFilter={statusFilter}
+        statusFilters={statusFilters}
+        project={project}
+        onProviderFilterChange={onProviderFilterChange}
+        onQueryChange={onQueryChange}
+        onStatusFilterChange={onStatusFilterChange}
+      />
+
+      <div className="mt-4 flex min-w-0 items-start justify-between gap-3 border-b border-border pb-3">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-medium text-text-primary">
+            在 {project.name} 中搜索“{query.trim()}”
+          </p>
+          <p className="mt-0.5 text-xs text-text-muted">
+            搜索会话标题和你发送过的历史提问
+          </p>
+        </div>
+        {searchPending ? (
+          <p
+            role="status"
+            className="inline-flex shrink-0 items-center gap-1.5 text-xs text-text-muted"
+          >
+            <RefreshCw
+              aria-hidden="true"
+              className="size-3.5 animate-spin motion-reduce:animate-none"
+            />
+            正在搜索…
+          </p>
+        ) : null}
+      </div>
+
+      {project.availability === 'unavailable' ? (
+        <ProjectUnavailableNotice />
+      ) : null}
+
+      {connectionState === 'reconnecting' ? (
+        <p role="status" className="mt-3 text-xs text-text-muted">
+          正在重新连接，已显示最近一次搜索结果。
+        </p>
+      ) : null}
+
+      {refreshError === undefined ? null : (
+        <div
+          role="alert"
+          className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-sm border border-danger/30 bg-danger-muted px-3 py-2 text-sm text-danger"
+        >
+          <span>{refreshError}</span>
+          <Button size="sm" variant="secondary" onClick={onRetry}>
+            重试
+          </Button>
+        </div>
+      )}
+
+      <div className="mt-4 min-w-0" aria-busy={searchPending || loading}>
+        {error !== undefined ? (
+          <SearchErrorState message={error} onRetry={onRetry} />
+        ) : loading && results.length === 0 ? (
+          <SearchResultsLoading />
+        ) : results.length > 0 ? (
+          <ConversationSearchResults
+            archiveView={archiveView}
+            fetchNextError={fetchNextError}
+            hasNextPage={hasNextPage}
+            isFetchingNextPage={isFetchingNextPage}
+            onLoadMore={onLoadMore}
+            onRefreshMembership={onRefreshMembership}
+            onResetPagination={onResetPagination}
+            results={results}
+          />
+        ) : searchPending ? (
+          <SearchResultsLoading />
+        ) : (
+          <SearchNoResults
+            archiveView={archiveView}
+            hasArchivedConversations={hasArchivedConversations}
+            query={query.trim()}
+            onArchiveViewChange={onArchiveViewChange}
+            onClearSearch={onClearSearch}
+          />
+        )}
+      </div>
+    </>
   )
 }
 
@@ -265,21 +552,19 @@ function ConversationReadyContent({
 
   return (
     <>
-      {empty ? null : (
-        <ConversationToolbar
-          providerFilter={providerFilter}
-          providers={providers}
-          query={query}
-          statusFilter={statusFilter}
-          statusFilters={statusFilters}
-          project={project}
-          onProviderFilterChange={onProviderFilterChange}
-          onQueryChange={onQueryChange}
-          onStatusFilterChange={onStatusFilterChange}
-        />
-      )}
+      <ConversationToolbar
+        providerFilter={providerFilter}
+        providers={providers}
+        query={query}
+        statusFilter={statusFilter}
+        statusFilters={statusFilters}
+        project={project}
+        onProviderFilterChange={onProviderFilterChange}
+        onQueryChange={onQueryChange}
+        onStatusFilterChange={onStatusFilterChange}
+      />
 
-      <div className={cn(empty ? undefined : 'mt-4')}>
+      <div className="mt-4">
         <ProjectSummary
           project={project}
           summary={summary}
@@ -411,10 +696,15 @@ function ConversationToolbar({
   return (
     <div className="grid min-w-0 gap-3 2xl:grid-cols-[var(--layout-conversations-search-width)_minmax(0,1fr)] 2xl:items-center 2xl:gap-5">
       <SearchInput
+        id="project-conversation-search"
+        data-conversation-search-input
         value={query}
         onChange={(event) => onQueryChange(event.target.value)}
-        aria-label="搜索会话标题或智能体"
-        placeholder="搜索会话标题或智能体…"
+        aria-label="搜索会话标题或你说过的内容"
+        placeholder="搜索标题或历史提问…"
+        autoComplete="off"
+        maxLength={256}
+        spellCheck={false}
         className="h-10 bg-surface-inset text-sm"
       />
 
@@ -440,7 +730,8 @@ function ConversationToolbar({
                     : 'border-border bg-surface-muted/70 text-text-secondary hover:border-border-strong hover:bg-surface-muted',
                 )}
               >
-                {filter.label} {filter.count}
+                {filter.label}
+                {filter.count === undefined ? null : ` ${filter.count}`}
               </Button>
             )
           })}
@@ -598,6 +889,99 @@ function NoConversationResults() {
       </div>
     </div>
   )
+}
+
+function SearchResultsLoading() {
+  return (
+    <div role="status" aria-label="正在搜索历史" className="space-y-2">
+      {Array.from({ length: 4 }, (_, index) => (
+        <div
+          key={index}
+          className="h-[4.5rem] animate-pulse rounded-md border border-border bg-surface-muted/45 motion-reduce:animate-none"
+        />
+      ))}
+    </div>
+  )
+}
+
+interface SearchErrorStateProps {
+  message: string
+  onRetry: () => void
+}
+
+function SearchErrorState({ message, onRetry }: SearchErrorStateProps) {
+  return (
+    <section className="grid min-h-48 place-items-center rounded-md border border-border bg-surface/35 px-6 text-center">
+      <div className="max-w-sm">
+        <h2 className="text-base font-semibold text-text-primary">
+          无法搜索历史
+        </h2>
+        <p className="mt-1.5 text-sm text-text-secondary">{message}</p>
+        <Button
+          className="mt-4"
+          size="sm"
+          variant="secondary"
+          onClick={onRetry}
+        >
+          重试
+        </Button>
+      </div>
+    </section>
+  )
+}
+
+interface SearchNoResultsProps {
+  archiveView: ConversationArchiveView
+  hasArchivedConversations: boolean
+  query: string
+  onArchiveViewChange: (view: ConversationArchiveView) => void
+  onClearSearch: () => void
+}
+
+function SearchNoResults({
+  archiveView,
+  hasArchivedConversations,
+  query,
+  onArchiveViewChange,
+  onClearSearch,
+}: SearchNoResultsProps) {
+  const canSearchOtherView =
+    archiveView === 'archived' || hasArchivedConversations
+  return (
+    <section className="grid min-h-52 place-items-center rounded-md border border-dashed border-border bg-surface/35 px-6 py-8 text-center">
+      <div className="max-w-md min-w-0">
+        <h2 className="text-base font-semibold text-text-primary">
+          没有找到匹配的会话
+        </h2>
+        <p className="mt-1.5 break-words text-sm text-text-secondary">
+          当前{archiveView === 'archived' ? '已归档' : '活跃'}会话中没有匹配“
+          {query}”的标题或历史提问。
+        </p>
+        <div className="mt-4 flex flex-wrap justify-center gap-2">
+          <Button size="sm" variant="secondary" onClick={onClearSearch}>
+            清除搜索
+          </Button>
+          {canSearchOtherView ? (
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() =>
+                onArchiveViewChange(
+                  archiveView === 'archived' ? 'active' : 'archived',
+                )
+              }
+            >
+              在{archiveView === 'archived' ? '活跃会话' : '已归档'}中搜索
+            </Button>
+          ) : null}
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function conversationSearchErrorMessage(): string {
+  return 'CodeTether 暂时无法搜索历史，请重试。'
 }
 
 export type { ConversationsPageProps }

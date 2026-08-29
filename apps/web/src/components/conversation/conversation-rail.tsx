@@ -13,6 +13,7 @@ import {
   ConversationIdSchema,
   type ConversationSummary,
   type ProjectId,
+  type TurnId,
 } from '@codetether/protocol'
 
 import {
@@ -34,7 +35,12 @@ import type {
   ConversationRailItemViewModel,
 } from './conversation-view-model'
 import { organizationConversationStatus } from './conversation-view-model'
+import {
+  ConversationRailSearchResults,
+  RailSearchStatus,
+} from './conversation-rail-search'
 import { ConversationOrganizationMenu } from '../conversations/conversation-organization-controls'
+import { useDebouncedSearchQuery } from '../conversations/use-debounced-search-query'
 
 const railFilters = [
   { label: '全部', value: 'all' },
@@ -87,9 +93,11 @@ function StatusDot({ status }: StatusDotProps) {
 
 interface ConversationRailRowProps {
   conversation: ConversationRailItemViewModel
+  matchDescription?: string
   selected: boolean
   projectId?: ProjectId
   rowRef?: Ref<HTMLLIElement>
+  targetTurnId?: TurnId
   onArchived?: (conversation: ConversationSummary) => void
   onMembershipChanged?: (conversationId: string) => void
   onUnarchived?: (conversation: ConversationSummary) => void
@@ -97,9 +105,11 @@ interface ConversationRailRowProps {
 
 function ConversationRailRow({
   conversation,
+  matchDescription,
   selected,
   projectId,
   rowRef,
+  targetTurnId,
   onArchived,
   onMembershipChanged,
   onUnarchived,
@@ -136,7 +146,7 @@ function ConversationRailRow({
         <Link
           to="/conversations/$conversationId"
           params={{ conversationId: conversation.id }}
-          search={{}}
+          search={targetTurnId === undefined ? {} : { turn: targetTurnId }}
           aria-current={selected ? 'page' : undefined}
           data-selected={selected || undefined}
           data-conversation-rail-primary-action
@@ -164,13 +174,28 @@ function ConversationRailRow({
                 <span className="truncate">{conversation.title}</span>
               </span>
             </span>
-            <span
-              className={cn(
-                'mt-1 block truncate text-xs font-regular',
-                statusTextColorClasses[conversation.status],
+            <span className="mt-1 flex min-w-0 items-center gap-1 text-xs font-regular">
+              <span
+                className={cn(
+                  'shrink-0',
+                  statusTextColorClasses[conversation.status],
+                )}
+              >
+                {statusSummary}
+              </span>
+              {matchDescription === undefined ? null : (
+                <>
+                  <span aria-hidden="true" className="shrink-0 text-text-muted">
+                    ·
+                  </span>
+                  <span
+                    title={matchDescription}
+                    className="min-w-0 truncate text-text-secondary"
+                  >
+                    {matchDescription}
+                  </span>
+                </>
               )}
-            >
-              {statusSummary}
             </span>
           </span>
 
@@ -201,6 +226,9 @@ function ConversationRailRow({
             if (!selected) onMembershipChanged?.(conversation.id)
             onArchived?.(updated)
           }}
+          onRenamed={(updated) => {
+            onMembershipChanged?.(updated.conversationId)
+          }}
           onUnarchived={(updated) => {
             if (!selected) onMembershipChanged?.(conversation.id)
             onUnarchived?.(updated)
@@ -211,6 +239,7 @@ function ConversationRailRow({
               variant="ghost"
               size="sm"
               className="absolute top-1/2 right-1 z-10 size-8 -translate-y-1/2 text-text-secondary opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100 data-[state=open]:opacity-100"
+              data-conversation-rail-organization-trigger
             >
               <MoreHorizontal aria-hidden="true" />
             </IconButton>
@@ -251,12 +280,15 @@ export function ConversationRail({
   const headingId = useId()
   const [filter, setFilter] = useState<ConversationRailFilter>('all')
   const [query, setQuery] = useState('')
+  const trimmedQuery = query.trim()
+  const debouncedQuery = useDebouncedSearchQuery(query)
   const selectedRowRef = useRef<HTMLLIElement>(null)
   const railNavigationRef = useRef<HTMLElement>(null)
   const previousSelectedPinRef = useRef<string | null | undefined>(undefined)
 
   const visibleGroups = useMemo(() => {
-    const normalizedQuery = query.trim().toLowerCase()
+    const normalizedQuery =
+      projectId === undefined ? query.trim().toLowerCase() : ''
 
     return groups
       .map((group) => ({
@@ -273,7 +305,18 @@ export function ConversationRail({
         }),
       }))
       .filter((group) => group.conversations.length > 0)
-  }, [filter, groups, query])
+  }, [filter, groups, projectId, query])
+
+  const currentConversation = useMemo(
+    () =>
+      groups
+        .flatMap((group) => group.conversations)
+        .find((conversation) => conversation.id === currentConversationId),
+    [currentConversationId, groups],
+  )
+  const durableSearchActive = projectId !== undefined && trimmedQuery.length > 0
+  const durableSearchPending =
+    durableSearchActive && debouncedQuery !== trimmedQuery
 
   const selectedPinnedAt = groups
     .flatMap((group) => group.conversations)
@@ -355,10 +398,14 @@ export function ConversationRail({
       <SearchInput
         value={query}
         onChange={(event) => setQuery(event.target.value)}
-        aria-label="搜索会话"
-        placeholder="搜索会话"
+        aria-label="搜索会话标题或你说过的内容"
+        placeholder="搜索标题或历史提问"
+        autoComplete="off"
+        maxLength={256}
+        spellCheck={false}
         containerClassName="mt-1.5 px-4"
         className="h-9 bg-surface-inset text-sm"
+        data-conversation-rail-search-input
       />
 
       <div
@@ -419,7 +466,37 @@ export function ConversationRail({
               </ul>
             </section>
           )}
-          {visibleGroups.length > 0 ? (
+          {durableSearchActive ? (
+            durableSearchPending ? (
+              <RailSearchStatus>正在搜索完整会话历史…</RailSearchStatus>
+            ) : (
+              <ConversationRailSearchResults
+                currentConversation={currentConversation}
+                currentConversationId={currentConversationId}
+                filter={filter}
+                headingId={headingId}
+                projectId={projectId}
+                query={debouncedQuery}
+                renderItem={(item) => (
+                  <ConversationRailRow
+                    key={item.conversation.id}
+                    conversation={item.conversation}
+                    matchDescription={item.matchDescription}
+                    selected={item.selected}
+                    projectId={projectId}
+                    rowRef={item.selected ? selectedRowRef : undefined}
+                    targetTurnId={item.targetTurnId}
+                    onArchived={(updated) => {
+                      if (updated.conversationId === currentConversationId) {
+                        onArchived?.(updated)
+                      }
+                    }}
+                    onMembershipChanged={item.onMembershipChanged}
+                  />
+                )}
+              />
+            )
+          ) : visibleGroups.length > 0 ? (
             <div className="space-y-4">
               {visibleGroups.map((group) => {
                 const agent = agentDefinitions[group.agent]

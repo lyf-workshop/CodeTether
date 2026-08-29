@@ -3,6 +3,7 @@ import type { QueryClient } from '@tanstack/react-query'
 
 import { conversationDetailQueryKeys } from './conversation-detail-query.js'
 import { conversationListQueryKeys } from './conversation-list-query.js'
+import { conversationSearchQueryKeys } from './conversation-search-query.js'
 
 const conversationIndexRefreshEvents = new Set<HostEventEnvelope['type']>([
   'conversation.started',
@@ -31,9 +32,7 @@ export function invalidateConversationProductQueries(
 ): void {
   if (!shouldRefreshConversationIndex(event.type)) return
 
-  void queryClient.invalidateQueries({
-    queryKey: conversationListQueryKeys.all,
-  })
+  invalidateConversationDurableQueries(queryClient)
 
   if (event.conversationId !== null) {
     void queryClient.invalidateQueries({
@@ -41,4 +40,16 @@ export function invalidateConversationProductQueries(
       exact: true,
     })
   }
+}
+
+/** Invalidates SQLite-backed Conversation discovery after Snapshot recovery. */
+export function invalidateConversationDurableQueries(
+  queryClient: QueryClient,
+): void {
+  void queryClient.invalidateQueries({
+    queryKey: conversationListQueryKeys.all,
+  })
+  void queryClient.invalidateQueries({
+    queryKey: conversationSearchQueryKeys.all,
+  })
 }

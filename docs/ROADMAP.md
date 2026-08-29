@@ -686,7 +686,7 @@ Acceptance boundary:
 
 ### Phase 4F.1 — Durable Conversation Search Model & API
 
-**Status:** implemented; Owner acceptance is pending.
+**Status:** accepted and frozen at commit `38481ad`.
 
 Implemented scope:
 
@@ -695,7 +695,7 @@ Implemented scope:
 - Protocol v1 adds a strict Project-scoped Search query/result model and `GET /api/v1/projects/:projectId/conversations/search`. It supports active/archived/all, the real provider/status filters, default-25/max-100 cursor pagination, public match metadata, and bounded plain-text User-input previews.
 - Ranking is deterministic: exact title, title prefix, title substring, then canonical User input; one representative match is returned per Conversation. Active ties prefer Pin and activity, archived ties use archive time, and public Conversation identity is the final tie-breaker.
 - Opaque cursors bind Project, normalized query, and filters. Search remains available for an unavailable Project, does not touch Attention, does not read presentation snapshots, and does not hydrate, launch, or resume a provider runtime.
-- `packages/client` exposes typed `searchProjectConversations()` with AbortSignal, response validation, route/filter identity checks, and cursor-progress validation. The existing bounded loaded-index Search field is intentionally unchanged and is not presented as full-history Search.
+- `packages/client` exposes typed `searchProjectConversations()` with AbortSignal, response validation, route/filter identity checks, and cursor-progress validation. At the frozen 4F.1 boundary, the existing bounded loaded-index Search field remained unchanged and was not presented as full-history Search.
 
 Not included:
 
@@ -705,8 +705,33 @@ Not included:
 
 Acceptance boundary:
 
-- Owner review must confirm migration/backfill integrity, exact matching/ranking/filter behavior, cursor safety, Project isolation, cold/provider isolation, restart behavior, production runtime compatibility, performance/storage evidence, typed Client behavior, and the real Codex restart/Search/lazy-resume path before Phase 4F.1 is accepted or frozen.
-- Phase 4F.1 does not authorize its UI follow-up or select background runtime/another provider.
+- Owner review confirmed migration/backfill integrity, exact matching/ranking/filter behavior, cursor safety, Project isolation, cold/provider isolation, restart behavior, production runtime compatibility, performance/storage evidence, typed Client behavior, and the real Codex restart/Search/lazy-resume path. Phase 4F.1 is frozen at `38481ad`.
+- Phase 4F.1 did not itself authorize a formal Search UI, background runtime, or another provider.
+
+### Phase 4F.2 — Search UI & History Discovery
+
+**Status:** implemented; Owner acceptance is pending.
+
+Implemented scope:
+
+- The existing Project Conversation List and real Conversation Rail enter durable Search mode for a nonblank query and remain ordinary Browse mode when it is blank. The URL carries `q` together with the existing active/archived `view`, preserving refresh, Back/Forward, and deep-link state without `localStorage` or another Search store.
+- Search input is truthful about title and prior User-input scope. A 250 ms debounce plus TanStack Query identity and `AbortSignal` prevent stale requests from replacing newer text; clearing the input returns immediately to the normal archive-aware index rather than filtering a Search page or the loaded 100 summaries.
+- Search uses distinct infinite-query keys for Project, normalized request identity, archive, provider, and status. It asks for 25 Host-ranked results initially and appends one opaque-cursor page only through explicit Load More; it does not auto-fetch all history, fabricate a total, re-rank results, or apply execution filters only after retrieval.
+- List rows show the real Conversation summary, Pin/Archive/execution state, and an honest title or bounded canonical-User-input match explanation. The denser Rail uses the same durable API for active history with a one-line clue and keeps the current nonmatching or archived Conversation as separate orientation rather than mixing it into results.
+- Canonical-User-input results reuse the existing public Turn focus hint. A retained Turn is focused; a match older than the bounded detail window opens the real Conversation and presents the established older-history boundary without hydrating a provider, parsing `snapshot_json`, or inventing history pagination.
+- Rename, Pin, Archive, and Unarchive remain Host-owned organization mutations. Mutation completion and low-frequency `conversation.updated`/durable lifecycle invalidation refresh matching Search partitions so multi-client results enter, leave, rerank, archive, or restore from Host truth without subscribing Search to message/tool deltas.
+- Browser and Desktop use the same Web/Client implementation. Phase 4F.2 introduces no Rust/Tauri change or native capability, and searching or opening a cold Conversation remains Provider-independent until a real Start Turn requests lazy resume.
+
+Not included:
+
+- Cross-Project/global Search, Agent-response/Tool/Terminal/Diff/Approval Search, semantic/fuzzy Search, embeddings, Search history/analytics, or a TopBar command palette.
+- Old-Turn history pagination, Search total count, Conversation Delete, bulk actions, tags/folders/groups, Activity, tray/background runtime, remote operation, or another provider.
+- A new Protocol route, SQLite projection, Search SSE event, client-owned organization state, Desktop command, or native capability.
+
+Acceptance boundary:
+
+- Owner review must confirm URL Browse/Search navigation, truthful match explanations, stale-request safety, cursor Load More, active/archived/status behavior, List/Rail density, public Turn focus and older-history boundary, organization actions, multi-client invalidation, cold/provider isolation, Browser/Desktop parity, responsive/focus behavior, restart, and the real Codex Search-to-lazy-resume path before Phase 4F.2 is accepted or frozen.
+- Phase 4F.2 does not authorize System Tray/background runtime, global/semantic Search, another provider, or any other next phase.
 
 ## Phase 5 — Machines
 

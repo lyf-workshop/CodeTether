@@ -24,6 +24,7 @@ import type { QueryClient } from '@tanstack/react-query'
 import { createBrowserActionId, type ActionIdFactory } from './action-id.js'
 import { conversationDetailQueryKeys } from './conversation-detail-query.js'
 import { conversationListQueryKeys } from './conversation-list-query.js'
+import { conversationSearchQueryKeys } from './conversation-search-query.js'
 
 export interface ConversationOrganizationMutationClient {
   renameConversation(
@@ -194,6 +195,9 @@ export class ConversationOrganizationActions {
     // after the Host accepts a mutation so ordering and membership stay Host-owned.
     void this.#queryClient.invalidateQueries({
       queryKey: conversationListQueryKeys.projectScope(summary.projectId),
+    })
+    void this.#queryClient.invalidateQueries({
+      queryKey: conversationSearchQueryKeys.projectScope(summary.projectId),
     })
   }
 }

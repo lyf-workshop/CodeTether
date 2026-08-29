@@ -80,8 +80,8 @@ test('new Conversation request is Codex-only, Project-scoped, and uses Host defa
   assert.equal(second.data.conversation.projectId, projectId)
 })
 
-test('HostRuntime exposes thin durable index reads and owns create identity', async () => {
-  const calls = { create: [], detail: [], list: [] }
+test('HostRuntime exposes thin durable index and Search reads and owns create identity', async () => {
+  const calls = { create: [], detail: [], list: [], search: [] }
   const client = {
     async listProjectConversations(id, options) {
       calls.list.push({ id, options })
@@ -93,6 +93,14 @@ test('HostRuntime exposes thin durable index reads and owns create identity', as
     async getConversation(id, options) {
       calls.detail.push({ id, options })
       return detail(id)
+    },
+    async searchProjectConversations(id, options) {
+      calls.search.push({ id, options })
+      return {
+        protocolVersion: 1,
+        results: [],
+        hasMore: false,
+      }
     },
     async createConversation(request) {
       calls.create.push(request)
@@ -110,6 +118,11 @@ test('HostRuntime exposes thin durable index reads and owns create identity', as
     status: 'idle',
   })
   await runtime.getConversation(conversationId)
+  await runtime.searchProjectConversations(projectId, {
+    query: 'reconnect',
+    archive: 'all',
+    limit: 25,
+  })
   await runtime.createConversation(projectId)
 
   assert.deepEqual(calls.list, [
@@ -119,6 +132,12 @@ test('HostRuntime exposes thin durable index reads and owns create identity', as
     },
   ])
   assert.equal(calls.detail[0].id, conversationId)
+  assert.deepEqual(calls.search, [
+    {
+      id: projectId,
+      options: { query: 'reconnect', archive: 'all', limit: 25 },
+    },
+  ])
   assert.deepEqual(calls.create[0], {
     actionId: calls.create[0].actionId,
     provider: 'codex',

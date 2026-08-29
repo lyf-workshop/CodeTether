@@ -12,6 +12,7 @@ export default tseslint.config(
       '**/coverage/**',
       '**/.tmp/**',
       '**/target/**',
+      'output/**',
     ],
   },
   js.configs.recommended,

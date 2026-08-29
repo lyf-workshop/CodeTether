@@ -38,8 +38,12 @@ import {
   ConversationOrganizationActions,
   type ConversationOrganizationMutationClient,
 } from './conversation-organization-actions.js'
-import { invalidateConversationProductQueries } from './conversation-index-sync.js'
+import {
+  invalidateConversationDurableQueries,
+  invalidateConversationProductQueries,
+} from './conversation-index-sync.js'
 import type { ConversationListReadClient } from './conversation-list-query.js'
+import type { ConversationSearchReadClient } from './conversation-search-query.js'
 import {
   NewConversationActions,
   type NewConversationMutationClient,
@@ -75,6 +79,7 @@ export interface HostRuntimeClient
     ProjectMutationClient,
     ConversationDetailReadClient,
     ConversationListReadClient,
+    ConversationSearchReadClient,
     ConversationOrganizationMutationClient,
     NewConversationMutationClient,
     AttentionReadClient,
@@ -234,6 +239,15 @@ export class HostRuntime {
     >[1],
   ) {
     return this.#client.listProjectConversations(projectId, options)
+  }
+
+  searchProjectConversations(
+    projectId: ProjectId,
+    options: Parameters<
+      ConversationSearchReadClient['searchProjectConversations']
+    >[1],
+  ) {
+    return this.#client.searchProjectConversations(projectId, options)
   }
 
   getConversation(
@@ -496,6 +510,7 @@ export class HostRuntime {
     this.#attentionActions.adoptHostEpoch(snapshot.epoch)
     if (this.#stats.snapshotReplacements > 0) {
       void invalidateAttentionQueries(this.#queryClient)
+      invalidateConversationDurableQueries(this.#queryClient)
     }
     this.#increment('snapshotReplacements')
     return snapshotCursor(snapshot)

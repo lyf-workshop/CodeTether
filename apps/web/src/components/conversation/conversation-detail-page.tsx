@@ -2,6 +2,7 @@ import { useRef, useState, type Ref } from 'react'
 
 import { Dialog, DialogContent, DialogTitle } from '@codetether/ui'
 import type { ProjectId, TurnId } from '@codetether/protocol'
+import type { ConversationSummary } from '@codetether/protocol'
 
 import { ConversationRail } from './conversation-rail'
 import type { ConversationControls } from './conversation-controls'
@@ -31,6 +32,7 @@ export interface ConversationDetailPageProps {
   onNewConversation?: () => void
   projectId?: ProjectId
   targetTurnId?: TurnId
+  onArchived?: (conversation: ConversationSummary) => void
 }
 
 export function ConversationDetailPage({
@@ -45,6 +47,7 @@ export function ConversationDetailPage({
   onNewConversation,
   projectId,
   targetTurnId,
+  onArchived,
 }: ConversationDetailPageProps) {
   const [inspector, setInspector] = useState(() =>
     createConversationInspectorState(
@@ -96,15 +99,18 @@ export function ConversationDetailPage({
         <ConversationRail
           groups={rail.groups}
           currentConversationId={viewModel.id}
-          {...(rail.archivedCount === undefined
+          {...(rail.currentArchivedConversation === undefined
             ? {}
-            : { archivedCount: rail.archivedCount })}
+            : {
+                currentArchivedConversation: rail.currentArchivedConversation,
+              })}
           newConversationDisabled={newConversationDisabled}
           {...(newConversationButtonRef === undefined
             ? {}
             : { newConversationButtonRef })}
           {...(onNewConversation === undefined ? {} : { onNewConversation })}
           {...(projectId === undefined ? {} : { projectId })}
+          onArchived={onArchived}
         />
         <ConversationWorkspace
           anchorRequestKey={anchorRequestKey}
@@ -129,6 +135,8 @@ export function ConversationDetailPage({
           targetChangeId={selectedChangeId}
           targetChangeRequestKey={changeNavigationRequest}
           targetTurnId={targetTurnId}
+          projectId={projectId}
+          onArchived={onArchived}
         />
         <div className="hidden min-h-0 min-w-0 min-[1440px]:block">
           <InspectorPanel {...inspectorProps} />

@@ -1,17 +1,24 @@
 import { queryOptions } from '@tanstack/react-query'
+import type { ListProjectConversationsOptions } from '@codetether/client'
 import type { ConversationListResponse, ProjectId } from '@codetether/protocol'
 
 export interface ConversationListReadClient {
   listProjectConversations(
     projectId: ProjectId,
-    options?: { readonly limit?: number; readonly signal?: AbortSignal },
+    options?: ListProjectConversationsOptions,
   ): Promise<ConversationListResponse>
 }
 
+export type ConversationArchiveView = 'active' | 'archived'
+
 export const conversationListQueryKeys = {
   all: ['host', 'project-conversations'] as const,
-  project: (projectId: ProjectId) =>
+  projectScope: (projectId: ProjectId) =>
     ['host', 'project-conversations', projectId] as const,
+  project: (
+    projectId: ProjectId,
+    archiveView: ConversationArchiveView = 'active',
+  ) => ['host', 'project-conversations', projectId, archiveView] as const,
 }
 
 /**
@@ -22,12 +29,18 @@ export const conversationListQueryKeys = {
 export function conversationListQueryOptions(
   client: ConversationListReadClient,
   projectId: ProjectId,
+  archiveView: ConversationArchiveView = 'active',
 ) {
   return queryOptions({
-    queryKey: conversationListQueryKeys.project(projectId),
+    queryKey: conversationListQueryKeys.project(projectId, archiveView),
     queryFn: async ({ signal }) =>
-      (await client.listProjectConversations(projectId, { limit: 100, signal }))
-        .conversations,
+      (
+        await client.listProjectConversations(projectId, {
+          archived: archiveView === 'archived',
+          limit: 100,
+          signal,
+        })
+      ).conversations,
     retry: false,
     staleTime: 0,
   })

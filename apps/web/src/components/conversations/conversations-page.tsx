@@ -5,7 +5,8 @@ import {
   type ComponentPropsWithoutRef,
 } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Filter, Plus, RefreshCw, SortAsc } from 'lucide-react'
+import { useNavigate, useSearch } from '@tanstack/react-router'
+import { Archive, Filter, MessageSquare, Plus, RefreshCw } from 'lucide-react'
 
 import {
   Badge,
@@ -29,7 +30,10 @@ import {
   useHostConnectionState,
   useHostRuntime,
 } from '../../runtime/host/host-runtime-hooks'
-import { conversationListQueryOptions } from '../../runtime/host/conversation-list-query'
+import {
+  conversationListQueryOptions,
+  type ConversationArchiveView,
+} from '../../runtime/host/conversation-list-query'
 import { conversationListPageViewState } from '../../runtime/host/conversation-list-view-state'
 import { projectDetailQueryOptions } from '../../runtime/host/project-query'
 import { ConversationGroup } from './conversation-group'
@@ -40,12 +44,10 @@ import {
   uniqueProviders,
   visibleProjectConversations,
   type ConversationProviderFilter,
-  type ConversationSortOption,
   type ConversationStatusFilter,
 } from './conversation-list-model'
 import {
   ConversationLimitNotice,
-  ConversationsEmptyState,
   ConversationsErrorState,
   ConversationsLoadingState,
   ConversationsNotFoundState,
@@ -64,21 +66,18 @@ interface StatusFilterOption {
   count: number
 }
 
-const sortLabels = {
-  recent: '最近活动',
-  oldest: '最早活动',
-  title: '会话标题',
-} satisfies Record<ConversationSortOption, string>
-
 const emptyConversations: readonly ConversationSummary[] = []
 
 export function ConversationsPage({ projectId }: ConversationsPageProps) {
   const runtime = useHostRuntime()
   const connectionState = useHostConnectionState()
+  const navigate = useNavigate({ from: '/projects/$projectId/conversations' })
+  const search = useSearch({ from: '/projects/$projectId/conversations' })
+  const archiveView: ConversationArchiveView =
+    search.view === 'archived' ? 'archived' : 'active'
   const [providerFilter, setProviderFilter] =
     useState<ConversationProviderFilter>('all')
   const [query, setQuery] = useState('')
-  const [sort, setSort] = useState<ConversationSortOption>('recent')
   const [statusFilter, setStatusFilter] =
     useState<ConversationStatusFilter>('all')
 
@@ -86,10 +85,18 @@ export function ConversationsPage({ projectId }: ConversationsPageProps) {
     ...projectDetailQueryOptions(runtime, projectId),
     enabled: connectionState === 'connected',
   })
-  const conversationsQuery = useQuery({
-    ...conversationListQueryOptions(runtime, projectId),
+  const activeConversationsQuery = useQuery({
+    ...conversationListQueryOptions(runtime, projectId, 'active'),
     enabled: connectionState === 'connected',
   })
+  const archivedConversationsQuery = useQuery({
+    ...conversationListQueryOptions(runtime, projectId, 'archived'),
+    enabled: connectionState === 'connected',
+  })
+  const conversationsQuery =
+    archiveView === 'archived'
+      ? archivedConversationsQuery
+      : activeConversationsQuery
   const viewState = conversationListPageViewState(
     projectQuery,
     conversationsQuery,
@@ -109,10 +116,9 @@ export function ConversationsPage({ projectId }: ConversationsPageProps) {
       visibleProjectConversations(conversations, {
         provider: providerFilter,
         query,
-        sort,
         status: statusFilter,
       }),
-    [conversations, providerFilter, query, sort, statusFilter],
+    [conversations, providerFilter, query, statusFilter],
   )
   const groupedConversations = useMemo(
     () => groupProjectConversations(visibleConversations),
@@ -133,18 +139,28 @@ export function ConversationsPage({ projectId }: ConversationsPageProps) {
     !connectionUnavailable &&
     (viewState.kind === 'loading' ||
       (connectionState !== 'connected' && projectQuery.data === undefined))
-
-  function handleRetry() {
-    runtime.retry()
-    if (connectionState === 'connected') {
-      void Promise.all([projectQuery.refetch(), conversationsQuery.refetch()])
-    }
-  }
-
   const project =
     viewState.kind === 'ready' || viewState.kind === 'empty'
       ? viewState.project
       : undefined
+
+  function handleRetry() {
+    runtime.retry()
+    if (connectionState === 'connected') {
+      void Promise.all([
+        projectQuery.refetch(),
+        activeConversationsQuery.refetch(),
+        archivedConversationsQuery.refetch(),
+      ])
+    }
+  }
+
+  function selectArchiveView(nextView: ConversationArchiveView) {
+    void navigate({
+      params: { projectId },
+      search: nextView === 'archived' ? { view: 'archived' } : {},
+    })
+  }
 
   return (
     <div className="flex min-h-full min-w-0 flex-col px-[var(--layout-content-inline-padding)] py-[var(--layout-content-block-padding)]">
@@ -157,7 +173,14 @@ export function ConversationsPage({ projectId }: ConversationsPageProps) {
         </p>
       </header>
 
-      <div className="mt-6 min-w-0 flex-1">
+      <div className="mt-4 flex min-w-0 items-center">
+        <ConversationArchiveViewControl
+          value={archiveView}
+          onChange={selectArchiveView}
+        />
+      </div>
+
+      <div className="mt-4 min-w-0 flex-1">
         {connectionUnavailable ? (
           <ConversationsErrorState
             incompatible={connectionState === 'incompatible'}
@@ -171,87 +194,188 @@ export function ConversationsPage({ projectId }: ConversationsPageProps) {
           <ConversationsNotFoundState />
         ) : viewState.kind === 'error' ? (
           <ConversationsErrorState title="无法读取会话" onRetry={handleRetry} />
-        ) : viewState.kind === 'empty' ? (
-          <>
-            <ProjectSummary project={viewState.project} summary={summary} />
-            {viewState.project.availability === 'unavailable' ? (
-              <ProjectUnavailableNotice />
-            ) : null}
-            <div className="mt-4">
-              <ConversationsEmptyState
-                action={
-                  viewState.project.availability ===
-                  'unavailable' ? undefined : (
-                    <NewConversationDialog
-                      currentProject={viewState.project}
-                      trigger={<NewConversationButton />}
-                    />
-                  )
-                }
-              />
-            </div>
-          </>
         ) : (
-          <>
-            <ConversationToolbar
-              providerFilter={providerFilter}
-              providers={providers}
-              query={query}
-              sort={sort}
-              statusFilter={statusFilter}
-              statusFilters={statusFilters}
-              project={viewState.project}
-              onProviderFilterChange={setProviderFilter}
-              onQueryChange={setQuery}
-              onSortChange={setSort}
-              onStatusFilterChange={setStatusFilter}
-            />
-
-            <div className="mt-4">
-              <ProjectSummary project={viewState.project} summary={summary} />
-            </div>
-
-            {viewState.project.availability === 'unavailable' ? (
-              <ProjectUnavailableNotice />
-            ) : null}
-
-            {connectionState === 'reconnecting' ? (
-              <p
-                role="status"
-                className="mt-3 inline-flex items-center gap-1.5 text-xs font-regular text-text-muted"
-              >
-                <RefreshCw
-                  aria-hidden="true"
-                  className="size-3.5 animate-spin motion-reduce:animate-none"
-                />
-                正在重新连接，当前显示最近读取的会话。
-              </p>
-            ) : null}
-
-            <div className="mt-4 min-w-0">
-              {groupedConversations.length > 0 ? (
-                <div className="space-y-5" aria-label="按智能体分组的会话">
-                  {groupedConversations.map((group) => (
-                    <ConversationGroup
-                      key={group.provider}
-                      provider={group.provider}
-                      conversations={group.conversations}
-                    />
-                  ))}
-                </div>
-              ) : (
-                <NoConversationResults />
-              )}
-            </div>
-
-            {conversations.length === 100 ? <ConversationLimitNotice /> : null}
-
-            <p className="sr-only" role="status" aria-live="polite">
-              当前显示 {visibleConversations.length} 个会话
-            </p>
-          </>
+          <ConversationReadyContent
+            archiveView={archiveView}
+            conversations={conversations}
+            groupedConversations={groupedConversations}
+            hasArchivedConversations={
+              (archivedConversationsQuery.data?.length ?? 0) > 0
+            }
+            project={viewState.project}
+            providerFilter={providerFilter}
+            providers={providers}
+            query={query}
+            statusFilter={statusFilter}
+            statusFilters={statusFilters}
+            summary={summary}
+            visibleConversationCount={visibleConversations.length}
+            connectionState={connectionState}
+            onArchiveViewChange={selectArchiveView}
+            onProviderFilterChange={setProviderFilter}
+            onQueryChange={setQuery}
+            onStatusFilterChange={setStatusFilter}
+          />
         )}
       </div>
+    </div>
+  )
+}
+
+interface ConversationReadyContentProps {
+  archiveView: ConversationArchiveView
+  connectionState: ReturnType<typeof useHostConnectionState>
+  conversations: readonly ConversationSummary[]
+  groupedConversations: ReturnType<typeof groupProjectConversations>
+  hasArchivedConversations: boolean
+  project: ProjectRecord
+  providerFilter: ConversationProviderFilter
+  providers: readonly Exclude<ConversationProviderFilter, 'all'>[]
+  query: string
+  statusFilter: ConversationStatusFilter
+  statusFilters: readonly StatusFilterOption[]
+  summary: ReturnType<typeof conversationStatusCounts>
+  visibleConversationCount: number
+  onArchiveViewChange: (view: ConversationArchiveView) => void
+  onProviderFilterChange: (provider: ConversationProviderFilter) => void
+  onQueryChange: (query: string) => void
+  onStatusFilterChange: (status: ConversationStatusFilter) => void
+}
+
+function ConversationReadyContent({
+  archiveView,
+  connectionState,
+  conversations,
+  groupedConversations,
+  hasArchivedConversations,
+  project,
+  providerFilter,
+  providers,
+  query,
+  statusFilter,
+  statusFilters,
+  summary,
+  visibleConversationCount,
+  onArchiveViewChange,
+  onProviderFilterChange,
+  onQueryChange,
+  onStatusFilterChange,
+}: ConversationReadyContentProps) {
+  const empty = conversations.length === 0
+
+  return (
+    <>
+      {empty ? null : (
+        <ConversationToolbar
+          providerFilter={providerFilter}
+          providers={providers}
+          query={query}
+          statusFilter={statusFilter}
+          statusFilters={statusFilters}
+          project={project}
+          onProviderFilterChange={onProviderFilterChange}
+          onQueryChange={onQueryChange}
+          onStatusFilterChange={onStatusFilterChange}
+        />
+      )}
+
+      <div className={cn(empty ? undefined : 'mt-4')}>
+        <ProjectSummary
+          project={project}
+          summary={summary}
+          totalLabel={archiveView === 'archived' ? '已归档' : '活跃会话'}
+        />
+      </div>
+
+      {project.availability === 'unavailable' ? (
+        <ProjectUnavailableNotice />
+      ) : null}
+
+      {connectionState === 'reconnecting' ? (
+        <p
+          role="status"
+          className="mt-3 inline-flex items-center gap-1.5 text-xs font-regular text-text-muted"
+        >
+          <RefreshCw
+            aria-hidden="true"
+            className="size-3.5 animate-spin motion-reduce:animate-none"
+          />
+          正在重新连接，当前显示最近读取的会话。
+        </p>
+      ) : null}
+
+      <div className="mt-4 min-w-0">
+        {empty ? (
+          <ConversationOrganizationEmptyState
+            archiveView={archiveView}
+            hasArchivedConversations={hasArchivedConversations}
+            project={project}
+            onArchiveViewChange={onArchiveViewChange}
+          />
+        ) : groupedConversations.length > 0 ? (
+          <div className="space-y-5" aria-label="按智能体分组的会话">
+            {groupedConversations.map((group) => (
+              <ConversationGroup
+                key={group.provider}
+                archiveView={archiveView}
+                provider={group.provider}
+                conversations={group.conversations}
+              />
+            ))}
+          </div>
+        ) : (
+          <NoConversationResults />
+        )}
+      </div>
+
+      {conversations.length === 100 ? <ConversationLimitNotice /> : null}
+
+      <p className="sr-only" role="status" aria-live="polite">
+        当前显示 {visibleConversationCount} 个会话
+      </p>
+    </>
+  )
+}
+
+interface ConversationArchiveViewControlProps {
+  onChange: (view: ConversationArchiveView) => void
+  value: ConversationArchiveView
+}
+
+function ConversationArchiveViewControl({
+  onChange,
+  value,
+}: ConversationArchiveViewControlProps) {
+  return (
+    <div
+      role="group"
+      aria-label="会话组织视图"
+      className="inline-flex rounded-sm border border-border bg-surface-muted/70 p-0.5"
+    >
+      {(
+        [
+          ['active', '活跃'],
+          ['archived', '已归档'],
+        ] as const
+      ).map(([view, label]) => (
+        <Button
+          key={view}
+          type="button"
+          size="sm"
+          variant="ghost"
+          data-conversation-view-control
+          aria-pressed={value === view}
+          onClick={() => onChange(view)}
+          className={cn(
+            'h-7 min-w-20 border-0 px-3 text-xs',
+            value === view
+              ? 'bg-surface-elevated text-text-primary shadow-sm hover:bg-surface-elevated'
+              : 'text-text-secondary',
+          )}
+        >
+          {label}
+        </Button>
+      ))}
     </div>
   )
 }
@@ -261,12 +385,10 @@ interface ConversationToolbarProps {
   providerFilter: ConversationProviderFilter
   providers: readonly Exclude<ConversationProviderFilter, 'all'>[]
   query: string
-  sort: ConversationSortOption
   statusFilter: ConversationStatusFilter
   statusFilters: readonly StatusFilterOption[]
   onProviderFilterChange: (provider: ConversationProviderFilter) => void
   onQueryChange: (query: string) => void
-  onSortChange: (sort: ConversationSortOption) => void
   onStatusFilterChange: (status: ConversationStatusFilter) => void
 }
 
@@ -275,12 +397,10 @@ function ConversationToolbar({
   providerFilter,
   providers,
   query,
-  sort,
   statusFilter,
   statusFilters,
   onProviderFilterChange,
   onQueryChange,
-  onSortChange,
   onStatusFilterChange,
 }: ConversationToolbarProps) {
   const currentProviderLabel =
@@ -306,7 +426,6 @@ function ConversationToolbar({
         >
           {statusFilters.map((filter) => {
             const selected = filter.value === statusFilter
-
             return (
               <Button
                 key={filter.value}
@@ -365,40 +484,6 @@ function ConversationToolbar({
             </DropdownMenuContent>
           </DropdownMenu>
 
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                size="sm"
-                variant="outline"
-                aria-label={`排序，当前：${sortLabels[sort]}`}
-                className="h-9 rounded-sm bg-surface-inset px-3 text-sm"
-              >
-                <SortAsc aria-hidden="true" />
-                排序
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuLabel>排序方式</DropdownMenuLabel>
-              <DropdownMenuRadioGroup
-                value={sort}
-                onValueChange={(value) =>
-                  onSortChange(value as ConversationSortOption)
-                }
-              >
-                {(
-                  Object.entries(sortLabels) as [
-                    ConversationSortOption,
-                    string,
-                  ][]
-                ).map(([value, label]) => (
-                  <DropdownMenuRadioItem key={value} value={value}>
-                    {label}
-                  </DropdownMenuRadioItem>
-                ))}
-              </DropdownMenuRadioGroup>
-            </DropdownMenuContent>
-          </DropdownMenu>
-
           <NewConversationDialog
             currentProject={project}
             trigger={
@@ -410,6 +495,71 @@ function ConversationToolbar({
         </div>
       </div>
     </div>
+  )
+}
+
+interface ConversationOrganizationEmptyStateProps {
+  archiveView: ConversationArchiveView
+  hasArchivedConversations: boolean
+  onArchiveViewChange: (view: ConversationArchiveView) => void
+  project: ProjectRecord
+}
+
+function ConversationOrganizationEmptyState({
+  archiveView,
+  hasArchivedConversations,
+  onArchiveViewChange,
+  project,
+}: ConversationOrganizationEmptyStateProps) {
+  const archived = archiveView === 'archived'
+  return (
+    <section className="grid min-h-64 place-items-center rounded-md border border-dashed border-border bg-surface/35 px-6 py-10 text-center">
+      <div className="max-w-sm">
+        <span
+          aria-hidden="true"
+          className="mx-auto grid size-11 place-items-center rounded-md border border-border bg-surface-muted text-text-secondary"
+        >
+          {archived ? (
+            <Archive className="size-5" />
+          ) : (
+            <MessageSquare className="size-5" />
+          )}
+        </span>
+        <h2 className="mt-4 text-section font-semibold text-text-primary">
+          {archived ? '暂无已归档会话' : '还没有活跃会话'}
+        </h2>
+        <p className="mt-1.5 text-base text-text-secondary">
+          {archived
+            ? '归档可以帮助你整理暂时不需要的历史会话。'
+            : '新建一个 Codex 会话，即可在这个项目中开始工作。'}
+        </p>
+        <div className="mt-5 flex flex-wrap justify-center gap-2">
+          {archived ? (
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => onArchiveViewChange('active')}
+            >
+              返回活跃会话
+            </Button>
+          ) : project.availability === 'available' ? (
+            <NewConversationDialog
+              currentProject={project}
+              trigger={<NewConversationButton />}
+            />
+          ) : null}
+          {!archived && hasArchivedConversations ? (
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => onArchiveViewChange('archived')}
+            >
+              查看已归档
+            </Button>
+          ) : null}
+        </div>
+      </div>
+    </section>
   )
 }
 

@@ -133,7 +133,7 @@ export function ProjectUnavailableNotice() {
 export function ConversationLimitNotice() {
   return (
     <p className="mt-3 text-xs font-regular text-text-muted" role="status">
-      当前显示最近 100 个会话。更早的历史将在后续分页能力中提供。
+      当前显示前 100 个会话。其余历史将在后续分页能力中提供。
     </p>
   )
 }

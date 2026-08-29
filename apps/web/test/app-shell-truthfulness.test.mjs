@@ -59,7 +59,8 @@ test('Conversation shell hides unsupported controls and keeps long identities bo
   assert.match(header, /connectionIndicator\.state !== 'connected'/u)
   assert.match(rail, /h-16 w-full/u)
   assert.match(rail, /title=\{conversation\.title\}/u)
-  assert.doesNotMatch(rail, /MoreHorizontal/u)
+  assert.match(rail, /ConversationOrganizationMenu/u)
+  assert.doesNotMatch(rail, /删除|分享|导出|复制会话|移动会话/u)
 
   const timeline = await readFile(
     new URL('conversation-timeline.tsx', componentDirectory),

@@ -1,5 +1,16 @@
 import type { Ref } from 'react'
-import { FileDiff, LoaderCircle, PanelRightOpen, Pause } from 'lucide-react'
+import {
+  FileDiff,
+  LoaderCircle,
+  MoreHorizontal,
+  PanelRightOpen,
+  Pause,
+} from 'lucide-react'
+import {
+  ConversationIdSchema,
+  type ConversationSummary,
+  type ProjectId,
+} from '@codetether/protocol'
 
 import {
   AgentBadge,
@@ -16,7 +27,9 @@ import type {
   ConversationConnectionState,
   ConversationViewModel,
 } from './conversation-view-model'
+import { organizationConversationStatus } from './conversation-view-model'
 import type { InterruptController } from './conversation-controls'
+import { ConversationOrganizationMenu } from '../conversations/conversation-organization-controls'
 
 const connectionBadgeVariants = {
   connecting: 'info',
@@ -37,6 +50,8 @@ interface ConversationHeaderProps {
   onOpenInspector?: () => void
   onOpenChanges?: () => void
   interruptController?: InterruptController
+  projectId?: ProjectId
+  onArchived?: (conversation: ConversationSummary) => void
 }
 
 export function ConversationHeader({
@@ -47,7 +62,11 @@ export function ConversationHeader({
   onOpenInspector,
   onOpenChanges,
   interruptController,
+  projectId,
+  onArchived,
 }: ConversationHeaderProps) {
+  const conversationId = ConversationIdSchema.safeParse(conversation.id)
+
   return (
     <header className="flex h-[var(--layout-conversation-header-height)] min-w-0 items-start justify-between gap-4 border-b border-border px-5 py-4">
       <div className="min-w-0">
@@ -136,6 +155,35 @@ export function ConversationHeader({
             <Pause aria-hidden="true" />
           )}
         </IconButton>
+        {projectId === undefined || !conversationId.success ? null : (
+          <ConversationOrganizationMenu
+            conversation={{
+              conversationId: conversationId.data,
+              projectId,
+              title: conversation.title,
+              titleSource: conversation.titleSource,
+              status: organizationConversationStatus(conversation.status),
+              ...(conversation.pinnedAt === undefined
+                ? {}
+                : { pinnedAt: conversation.pinnedAt }),
+              ...(conversation.archivedAt === undefined
+                ? {}
+                : { archivedAt: conversation.archivedAt }),
+            }}
+            align="end"
+            onArchived={onArchived}
+            trigger={
+              <IconButton
+                label="管理会话"
+                variant="ghost"
+                size="sm"
+                className="size-8 text-text-secondary"
+              >
+                <MoreHorizontal aria-hidden="true" />
+              </IconButton>
+            }
+          />
+        )}
       </div>
     </header>
   )

@@ -233,6 +233,7 @@ function LoadedLiveConversationDetail({
   const summaries = includeCurrentSummary(
     railQuery.data ?? [],
     detail.conversation,
+    conversation,
   )
 
   return (
@@ -273,6 +274,7 @@ function ConnectedLiveConversationDetail({
   initialInspectorTab,
   targetTurnId,
 }: ConnectedLiveConversationDetailProps) {
+  const navigate = useNavigate()
   const newConversationButtonRef = useRef<HTMLButtonElement>(null)
   const [newConversationOpen, setNewConversationOpen] = useState(false)
   const source = createLiveConversationDetailSource(
@@ -305,6 +307,21 @@ function ConnectedLiveConversationDetail({
           : {
               projectId: project.projectId,
               onNewConversation: () => setNewConversationOpen(true),
+              onArchived: () => {
+                void navigate({
+                  to: '/projects/$projectId/conversations',
+                  params: { projectId: project.projectId },
+                  search: { view: 'archived' },
+                }).then(() => {
+                  window.requestAnimationFrame(() => {
+                    document
+                      .querySelector<HTMLElement>(
+                        '[data-conversation-view-control][aria-pressed="true"]',
+                      )
+                      ?.focus()
+                  })
+                })
+              },
             })}
       />
       {project === undefined ? null : (
@@ -389,11 +406,34 @@ function LiveConversationBoundary({
 
 function includeCurrentSummary(
   summaries: readonly ConversationSummary[],
-  current: ConversationSummary,
+  durable: ConversationSummary,
+  current: ConversationReadModel,
 ): readonly ConversationSummary[] {
-  return summaries.some(
-    (summary) => summary.conversationId === current.conversationId,
+  if (current.archivedAt !== undefined) {
+    return summaries.filter((summary) => summary.conversationId !== current.id)
+  }
+
+  const currentSummary: ConversationSummary = {
+    conversationId: durable.conversationId,
+    projectId: durable.projectId,
+    title: current.title,
+    titleSource: current.titleSource,
+    provider: durable.provider,
+    ...(durable.model === undefined ? {} : { model: durable.model }),
+    ...(durable.reasoning === undefined
+      ? {}
+      : { reasoning: durable.reasoning }),
+    status: durable.status,
+    createdAt: durable.createdAt,
+    updatedAt: current.updatedAt,
+    lastActivityAt: current.lastActivityAt,
+    ...(current.pinnedAt === undefined ? {} : { pinnedAt: current.pinnedAt }),
+  }
+  const existingIndex = summaries.findIndex(
+    (summary) => summary.conversationId === current.id,
   )
-    ? summaries
-    : [current, ...summaries]
+  if (existingIndex < 0) return [currentSummary, ...summaries]
+  return summaries.map((summary, index) =>
+    index === existingIndex ? currentSummary : summary,
+  )
 }

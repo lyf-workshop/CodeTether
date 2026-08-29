@@ -22,6 +22,10 @@ interface ConversationSearch {
   turn?: TurnId
 }
 
+interface ProjectConversationsSearch {
+  view?: 'archived'
+}
+
 const homeRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/',
@@ -86,6 +90,11 @@ const projectDetailRoute = createRoute({
 const projectConversationsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/projects/$projectId/conversations',
+  validateSearch: (
+    search: Record<string, unknown>,
+  ): ProjectConversationsSearch => ({
+    ...(search.view === 'archived' ? { view: 'archived' as const } : {}),
+  }),
   component: ProjectConversationsRoute,
 })
 

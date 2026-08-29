@@ -639,7 +639,7 @@ Exit gate:
 
 ### Phase 4E.1 — Durable Conversation Organization Model
 
-**Status:** implemented; Owner acceptance is pending. Phase 4E.2 product UI has not started.
+**Status:** accepted and frozen at commit `afac51a`.
 
 Implemented scope:
 
@@ -653,14 +653,36 @@ Implemented scope:
 
 Not included:
 
-- Rename, Pin, Archive, or archived-history React UI. No real navigation or action advertises these capabilities before Phase 4E.2.
 - Search UI/backend, FTS/semantic indexing, pagination, tags, folders, groups, bulk actions, or Conversation Delete.
 - Runtime refactoring, provider lifecycle changes, Attention redesign, Activity, tray/background runtime, remote operation, or another provider.
 
 Acceptance boundary:
 
-- Owner review must confirm migration safety, title ownership, stable active/archived ordering, archive control/Attention safety, restart durability, cold Provider isolation, typed Client behavior, and real Codex context resume before Phase 4E.1 is accepted or frozen.
-- Phase 4E.2 remains separately authorized and must not begin from this implementation status alone.
+- Owner review confirmed migration safety, title ownership, stable active/archived ordering, archive control/Attention safety, restart durability, cold Provider isolation, typed Client behavior, and real Codex context resume. Phase 4E.1 is the frozen organization source of truth for Phase 4E.2.
+
+### Phase 4E.2 — Conversation Organization UI
+
+**Status:** implemented; Owner acceptance is pending.
+
+Implemented scope:
+
+- `/projects/:projectId/conversations` has an active/archived organization dimension expressed by the URL. The default active view queries `archived=false`; `?view=archived` queries `archived=true`. Both use distinct TanStack Query keys and preserve Host ordering instead of re-sorting Pin, activity, or archive timestamps in React.
+- Active rows expose exact Rename, Pin/Unpin, and confirmed Archive actions; archived rows expose Rename and Restore. Rename errors remain inline, Archive is disabled for visibly running/waiting work and remains Host-authoritative against races, and mutations affect only the relevant Conversation controls rather than locking the page.
+- Conversation Detail exposes the same compact organization controls. Archived history remains readable in the existing Timeline/Inspector tree, shows Archive separately from execution status, and replaces Turn composition with an explicit Restore action. Successful Detail Archive navigates to the archived Project view instead of implying deletion.
+- The active Conversation Rail preserves Host order and Pin markers. When a public deep link, Inbox item, or notification opens an archived Conversation, the Rail includes only that current archived item as context above active history; it does not load every archived row.
+- Rename, Pin, Archive, and Unarchive use the Phase 4E.1 typed Client boundary and TanStack Query as the only frontend server-state owner. Low-frequency `conversation.updated` invalidates archive-aware indexes and detail so List, Rail, Header, Breadcrumb, archived state, and Composer controls synchronize across clients without subscribing organization queries to streaming deltas.
+- Cold reads and organization mutations remain Provider-isolated. No List, Rail, Detail read, Rename, Pin, Archive, or Unarchive action starts Codex, resumes a Thread, or expands the hydrated working set; only a later Start Turn may do so.
+
+Not included:
+
+- Full-history/global Search, Search backend, FTS/semantic indexing, pagination, Conversation Delete, bulk actions, tags, folders, groups, or drag ordering.
+- Runtime or persistence changes, provider lifecycle changes, Attention/notification redesign, Activity, tray/background runtime, remote operation, or another provider.
+- A Desktop-only Conversation component tree or another local organization source of truth.
+
+Acceptance boundary:
+
+- Owner review must confirm active/archived URL navigation, Host ordering, Rename/Pin/Archive/Unarchive behavior, archived Detail/Composer safety, active/current-archived Rail context, multi-client `conversation.updated` synchronization, cold Provider isolation, responsive/focus behavior, restart durability, and real Codex context resume before Phase 4E.2 is accepted or frozen.
+- Phase 4E.2 does not select or authorize Search, background runtime, or another provider as the next phase.
 
 ## Phase 5 — Machines
 

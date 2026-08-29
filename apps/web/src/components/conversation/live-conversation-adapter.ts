@@ -77,24 +77,54 @@ export function createLiveConversationRailViewModel(
   summaries: readonly ConversationSummary[],
   current: ConversationReadModel,
 ): ConversationDetailSourceViewModel['rail'] {
+  const activeSummaries = summaries.filter(
+    (summary) =>
+      summary.archivedAt === undefined &&
+      (current.archivedAt === undefined ||
+        summary.conversationId !== current.id),
+  )
+  const currentArchivedConversation =
+    current.archivedAt === undefined
+      ? undefined
+      : {
+          id: current.id,
+          title: current.title,
+          titleSource: current.titleSource,
+          archivedAt: current.archivedAt,
+          status: current.status,
+          lastActivity: formatActivityTime(current.lastActivityAt),
+        }
+
   return {
     groups:
-      summaries.length === 0
+      activeSummaries.length === 0
         ? []
         : [
             {
               agent: 'codex',
-              conversations: summaries.map((summary) => {
+              conversations: activeSummaries.map((summary) => {
                 const selected = summary.conversationId === current.id
                 return {
                   id: summary.conversationId,
                   title: selected ? current.title : summary.title,
+                  titleSource: selected
+                    ? current.titleSource
+                    : summary.titleSource,
+                  ...(summary.pinnedAt === undefined
+                    ? {}
+                    : { pinnedAt: summary.pinnedAt }),
+                  ...(summary.archivedAt === undefined
+                    ? {}
+                    : { archivedAt: summary.archivedAt }),
                   status: selected ? current.status : summary.status,
                   lastActivity: formatActivityTime(summary.lastActivityAt),
                 }
               }),
             },
           ],
+    ...(currentArchivedConversation === undefined
+      ? {}
+      : { currentArchivedConversation }),
   }
 }
 
@@ -127,6 +157,9 @@ export function createLiveConversationViewModel(
   return {
     id: model.id,
     title: model.title,
+    titleSource: model.titleSource,
+    ...(model.pinnedAt === undefined ? {} : { pinnedAt: model.pinnedAt }),
+    ...(model.archivedAt === undefined ? {} : { archivedAt: model.archivedAt }),
     status: model.status,
     agent: model.agent,
     model: model.model ?? '默认模型',

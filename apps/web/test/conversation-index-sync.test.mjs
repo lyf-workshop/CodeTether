@@ -31,6 +31,24 @@ test('refreshes index and durable detail only for semantic lifecycle events', ()
   assert.equal(queryClient.getQueryState(detailKey)?.isInvalidated, true)
 })
 
+test('conversation.updated invalidates both active and archived Project indexes', () => {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  const activeKey = conversationListQueryKeys.project(projectId, 'active')
+  const archivedKey = conversationListQueryKeys.project(projectId, 'archived')
+  queryClient.setQueryData(activeKey, [])
+  queryClient.setQueryData(archivedKey, [])
+
+  invalidateConversationProductQueries(queryClient, {
+    conversationId,
+    type: 'conversation.updated',
+  })
+
+  assert.equal(queryClient.getQueryState(activeKey)?.isInvalidated, true)
+  assert.equal(queryClient.getQueryState(archivedKey)?.isInvalidated, true)
+})
+
 test('non-Conversation events never invalidate the durable index path', () => {
   for (const type of [
     'message.delta',

@@ -45,6 +45,7 @@
     "src/runtime/host/conversation-index-sync.ts",
     "src/runtime/host/conversation-list-query.ts",
     "src/runtime/host/conversation-list-view-state.ts",
+    "src/runtime/host/conversation-organization-actions.ts",
     "src/runtime/host/conversation-detail-query.ts",
     "src/runtime/host/conversation-list-query.ts",
     "src/runtime/host/conversation-list-view-state.ts",

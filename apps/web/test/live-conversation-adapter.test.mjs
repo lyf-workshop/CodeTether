@@ -292,11 +292,98 @@ test('builds the live rail from durable Host summaries without fake metadata', (
     ],
   )
   assert.equal(source.rail.archivedCount, undefined)
+  assert.equal(source.rail.currentArchivedConversation, undefined)
   assert.equal(source.conversation.title, 'Host-owned title')
   assert.deepEqual(source.connectionIndicator, {
     state: 'reconnecting',
     label: '正在重新连接',
   })
+})
+
+test('projects durable organization metadata into Detail and active Rail without reordering', () => {
+  const source = createLiveConversationDetailSource(
+    conversation({
+      title: 'Pinned manual title',
+      titleSource: 'manual',
+      pinnedAt: '2026-08-26T12:09:00.000Z',
+    }),
+    [
+      summary({
+        title: 'Pinned manual title',
+        titleSource: 'manual',
+        pinnedAt: '2026-08-26T12:09:00.000Z',
+      }),
+      summary({
+        conversationId: 'conv_live02',
+        title: 'Host second',
+      }),
+    ],
+    'connected',
+  )
+
+  assert.equal(source.conversation.titleSource, 'manual')
+  assert.equal(source.conversation.pinnedAt, '2026-08-26T12:09:00.000Z')
+  assert.deepEqual(
+    source.rail.groups[0].conversations.map((item) => [item.id, item.pinnedAt]),
+    [
+      ['conv_live01', '2026-08-26T12:09:00.000Z'],
+      ['conv_live02', undefined],
+    ],
+  )
+})
+
+test('isolates only the current archived Conversation above the active Rail', () => {
+  const archivedAt = '2026-08-26T12:20:00.000Z'
+  const source = createLiveConversationDetailSource(
+    conversation({
+      title: 'Archived history',
+      titleSource: 'manual',
+      archivedAt,
+      status: 'completed',
+      currentTurn: undefined,
+      turns: [],
+    }),
+    [
+      // A stale active-index copy must not duplicate the current archived item.
+      summary({ title: 'Stale active title' }),
+      summary({
+        conversationId: 'conv_live02',
+        title: 'Active history',
+        status: 'completed',
+      }),
+      summary({
+        conversationId: 'conv_live03',
+        title: 'Unexpected archived result',
+        status: 'completed',
+        archivedAt,
+      }),
+    ],
+    'connected',
+  )
+
+  assert.deepEqual(
+    {
+      ...source.rail.currentArchivedConversation,
+      lastActivity: undefined,
+    },
+    {
+      id: 'conv_live01',
+      title: 'Archived history',
+      titleSource: 'manual',
+      archivedAt,
+      status: 'completed',
+      lastActivity: undefined,
+    },
+  )
+  assert.match(
+    source.rail.currentArchivedConversation.lastActivity,
+    /^\d{2}:\d{2}$/u,
+  )
+  assert.deepEqual(
+    source.rail.groups[0].conversations.map((item) => item.id),
+    ['conv_live02'],
+  )
+  assert.equal(source.conversation.archivedAt, archivedAt)
 })
 
 test('keeps unavailable Project history visible while disabling controls', () => {
@@ -339,12 +426,14 @@ function conversation(fields = {}) {
     id: 'conv_live01',
     cwd: 'E:\\spikes\\live-workspace',
     title: 'live-workspace',
+    titleSource: 'generated',
     status: 'running',
     agent: 'codex',
     model: 'gpt-5.3-codex',
     reasoning: 'high',
     createdAt: timestamp,
     updatedAt: timestamp,
+    lastActivityAt: timestamp,
     turns: fields.turns ?? [currentTurn],
     currentTurn,
     messages: [],
@@ -361,6 +450,7 @@ function summary(fields = {}) {
     conversationId: 'conv_live01',
     projectId: 'proj_live01',
     title: 'live-workspace',
+    titleSource: 'generated',
     provider: 'codex',
     model: 'gpt-5.3-codex',
     reasoning: 'high',

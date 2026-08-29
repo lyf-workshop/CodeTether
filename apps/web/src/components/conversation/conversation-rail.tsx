@@ -1,13 +1,19 @@
 import {
+  useEffect,
   useId,
   useMemo,
+  useRef,
   useState,
   type ComponentPropsWithoutRef,
   type Ref,
 } from 'react'
 import { Link } from '@tanstack/react-router'
-import { Archive, Plus } from 'lucide-react'
-import type { ProjectId } from '@codetether/protocol'
+import { Archive, MoreHorizontal, Pin, Plus } from 'lucide-react'
+import {
+  ConversationIdSchema,
+  type ConversationSummary,
+  type ProjectId,
+} from '@codetether/protocol'
 
 import {
   AgentIdentityMark,
@@ -27,6 +33,8 @@ import type {
   ConversationRailGroupViewModel,
   ConversationRailItemViewModel,
 } from './conversation-view-model'
+import { organizationConversationStatus } from './conversation-view-model'
+import { ConversationOrganizationMenu } from '../conversations/conversation-organization-controls'
 
 const railFilters = [
   { label: '全部', value: 'all' },
@@ -80,12 +88,23 @@ function StatusDot({ status }: StatusDotProps) {
 interface ConversationRailRowProps {
   conversation: ConversationRailItemViewModel
   selected: boolean
+  projectId?: ProjectId
+  rowRef?: Ref<HTMLLIElement>
+  onArchived?: (conversation: ConversationSummary) => void
+  onMembershipChanged?: (conversationId: string) => void
+  onUnarchived?: (conversation: ConversationSummary) => void
 }
 
 function ConversationRailRow({
   conversation,
   selected,
+  projectId,
+  rowRef,
+  onArchived,
+  onMembershipChanged,
+  onUnarchived,
 }: ConversationRailRowProps) {
+  const conversationId = ConversationIdSchema.safeParse(conversation.id)
   const status = statusDefinitions[conversation.status]
   const statusSummary = conversation.machine
     ? `${status.label} · ${conversation.machine}`
@@ -98,7 +117,11 @@ function ConversationRailRow({
         : null
 
   return (
-    <li>
+    <li
+      ref={rowRef}
+      className="group/row relative min-w-0"
+      data-conversation-rail-row={conversation.id}
+    >
       <Button
         asChild
         variant="ghost"
@@ -116,6 +139,7 @@ function ConversationRailRow({
           search={{}}
           aria-current={selected ? 'page' : undefined}
           data-selected={selected || undefined}
+          data-conversation-rail-primary-action
         >
           <StatusDot status={conversation.status} />
 
@@ -130,7 +154,15 @@ function ConversationRailRow({
                   : 'text-text-primary',
               )}
             >
-              {conversation.title}
+              <span className="flex min-w-0 items-center gap-1.5">
+                {conversation.pinnedAt === undefined ? null : (
+                  <Pin
+                    aria-label="已置顶"
+                    className="size-3 shrink-0 text-text-muted"
+                  />
+                )}
+                <span className="truncate">{conversation.title}</span>
+              </span>
             </span>
             <span
               className={cn(
@@ -142,13 +174,49 @@ function ConversationRailRow({
             </span>
           </span>
 
-          <span className="flex h-full shrink-0 items-center py-2 text-text-muted">
+          <span className="flex h-full shrink-0 items-center py-2 pr-7 text-text-muted group-hover/row:opacity-0 group-focus-within/row:opacity-0">
             <span className="text-xs font-regular tabular-nums">
               {conversation.lastActivity}
             </span>
           </span>
         </Link>
       </Button>
+      {projectId === undefined || !conversationId.success ? null : (
+        <ConversationOrganizationMenu
+          conversation={{
+            conversationId: conversationId.data,
+            projectId,
+            title: conversation.title,
+            titleSource: conversation.titleSource,
+            status: organizationConversationStatus(conversation.status),
+            ...(conversation.pinnedAt === undefined
+              ? {}
+              : { pinnedAt: conversation.pinnedAt }),
+            ...(conversation.archivedAt === undefined
+              ? {}
+              : { archivedAt: conversation.archivedAt }),
+          }}
+          align="end"
+          onArchived={(updated) => {
+            if (!selected) onMembershipChanged?.(conversation.id)
+            onArchived?.(updated)
+          }}
+          onUnarchived={(updated) => {
+            if (!selected) onMembershipChanged?.(conversation.id)
+            onUnarchived?.(updated)
+          }}
+          trigger={
+            <IconButton
+              label={`管理会话：${conversation.title}`}
+              variant="ghost"
+              size="sm"
+              className="absolute top-1/2 right-1 z-10 size-8 -translate-y-1/2 text-text-secondary opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100 data-[state=open]:opacity-100"
+            >
+              <MoreHorizontal aria-hidden="true" />
+            </IconButton>
+          }
+        />
+      )}
     </li>
   )
 }
@@ -157,30 +225,35 @@ export interface ConversationRailProps extends Omit<
   ComponentPropsWithoutRef<'aside'>,
   'children'
 > {
-  archivedCount?: number
+  currentArchivedConversation?: ConversationRailItemViewModel
   currentConversationId: string
   groups: readonly ConversationRailGroupViewModel[]
   newConversationButtonRef?: Ref<HTMLButtonElement>
   newConversationDisabled?: boolean
   onNewConversation?: () => void
   projectId?: ProjectId
+  onArchived?: (conversation: ConversationSummary) => void
 }
 
 /** Frozen conversation navigation presentation for the desktop workspace. */
 export function ConversationRail({
-  archivedCount,
   className,
   currentConversationId,
+  currentArchivedConversation,
   groups,
   newConversationButtonRef,
   newConversationDisabled = false,
   onNewConversation,
   projectId,
+  onArchived,
   ...props
 }: ConversationRailProps) {
   const headingId = useId()
   const [filter, setFilter] = useState<ConversationRailFilter>('all')
   const [query, setQuery] = useState('')
+  const selectedRowRef = useRef<HTMLLIElement>(null)
+  const railNavigationRef = useRef<HTMLElement>(null)
+  const previousSelectedPinRef = useRef<string | null | undefined>(undefined)
 
   const visibleGroups = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase()
@@ -201,6 +274,44 @@ export function ConversationRail({
       }))
       .filter((group) => group.conversations.length > 0)
   }, [filter, groups, query])
+
+  const selectedPinnedAt = groups
+    .flatMap((group) => group.conversations)
+    .find((conversation) => conversation.id === currentConversationId)?.pinnedAt
+
+  useEffect(() => {
+    const next = selectedPinnedAt ?? null
+    const previous = previousSelectedPinRef.current
+    previousSelectedPinRef.current = next
+    if (previous === undefined || previous === next) return
+    selectedRowRef.current?.scrollIntoView({ block: 'nearest' })
+  }, [selectedPinnedAt])
+
+  function focusAfterMembershipChange(conversationId: string) {
+    const navigation = railNavigationRef.current
+    if (navigation === null) return
+    const rows = Array.from(
+      navigation.querySelectorAll<HTMLElement>('[data-conversation-rail-row]'),
+    )
+    const changedIndex = rows.findIndex(
+      (row) => row.dataset.conversationRailRow === conversationId,
+    )
+    const candidateRows =
+      changedIndex < 0 ? [] : [rows[changedIndex + 1], rows[changedIndex - 1]]
+    const target = candidateRows
+      .filter((row): row is HTMLElement => row !== undefined)
+      .map((row) =>
+        row.querySelector<HTMLElement>(
+          '[data-conversation-rail-primary-action]',
+        ),
+      )
+      .find((action): action is HTMLElement => action !== null)
+
+    window.requestAnimationFrame(() => {
+      if (target?.isConnected) target.focus()
+      else navigation.focus()
+    })
+  }
 
   return (
     <aside
@@ -279,7 +390,35 @@ export function ConversationRail({
       </div>
 
       <ScrollArea className="mt-4 min-h-0 flex-1">
-        <nav aria-label="会话历史" className="px-3 pb-3">
+        <nav
+          ref={railNavigationRef}
+          aria-label="会话历史"
+          className="px-3 pb-3"
+          tabIndex={-1}
+        >
+          {currentArchivedConversation === undefined ? null : (
+            <section aria-labelledby={`${headingId}-archived-current`}>
+              <div className="flex h-7 items-center gap-2 px-1 text-text-secondary">
+                <Archive aria-hidden="true" className="size-4" />
+                <h3
+                  id={`${headingId}-archived-current`}
+                  className="text-xs font-medium"
+                >
+                  已归档
+                </h3>
+              </div>
+              <ul className="mt-2 mb-4">
+                <ConversationRailRow
+                  conversation={currentArchivedConversation}
+                  selected
+                  projectId={projectId}
+                  rowRef={selectedRowRef}
+                  onMembershipChanged={focusAfterMembershipChange}
+                  onUnarchived={() => undefined}
+                />
+              </ul>
+            </section>
+          )}
           {visibleGroups.length > 0 ? (
             <div className="space-y-4">
               {visibleGroups.map((group) => {
@@ -314,6 +453,20 @@ export function ConversationRail({
                           key={conversation.id}
                           conversation={conversation}
                           selected={conversation.id === currentConversationId}
+                          projectId={projectId}
+                          rowRef={
+                            conversation.id === currentConversationId
+                              ? selectedRowRef
+                              : undefined
+                          }
+                          onArchived={(updated) => {
+                            if (
+                              updated.conversationId === currentConversationId
+                            ) {
+                              onArchived?.(updated)
+                            }
+                          }}
+                          onMembershipChanged={focusAfterMembershipChange}
                         />
                       ))}
                     </ul>
@@ -330,22 +483,22 @@ export function ConversationRail({
             </p>
           )}
 
-          {archivedCount === undefined ? null : (
+          {projectId === undefined ? null : (
             <Button
+              asChild
               variant="ghost"
               className="mt-4 h-[var(--layout-sidebar-context-item-height)] w-full justify-start gap-2.5 border-transparent bg-transparent px-3 text-sm text-text-secondary hover:bg-surface-muted/60 hover:text-text-primary"
             >
-              <Archive aria-hidden="true" />
-              <span className="min-w-0 flex-1 truncate text-left">
-                已归档会话
-              </span>
-              <Badge
-                variant="secondary"
-                aria-label={`${archivedCount} 个已归档会话`}
-                className="h-6 min-w-6 border-transparent bg-surface-muted/70 px-2 text-xs tabular-nums"
+              <Link
+                to="/projects/$projectId/conversations"
+                params={{ projectId }}
+                search={{ view: 'archived' }}
               >
-                {archivedCount}
-              </Badge>
+                <Archive aria-hidden="true" />
+                <span className="min-w-0 flex-1 truncate text-left">
+                  查看已归档会话
+                </span>
+              </Link>
             </Button>
           )}
         </nav>

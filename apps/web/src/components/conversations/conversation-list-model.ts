@@ -6,7 +6,6 @@ import type {
 export type ConversationStatusFilter =
   'all' | 'running' | 'waiting' | 'completed'
 export type ConversationProviderFilter = 'all' | ConversationSummary['provider']
-export type ConversationSortOption = 'recent' | 'oldest' | 'title'
 
 export interface ConversationStatusCounts {
   readonly total: number
@@ -25,7 +24,6 @@ export interface ConversationProviderGroup {
 export interface ConversationListControls {
   readonly provider: ConversationProviderFilter
   readonly query: string
-  readonly sort: ConversationSortOption
   readonly status: ConversationStatusFilter
 }
 
@@ -41,13 +39,13 @@ const activityFormatter = new Intl.DateTimeFormat('zh-CN', {
   hour12: false,
 })
 
-/** Preserves Host activity ordering unless the user explicitly changes it. */
+/** Filters the bounded index without changing the Host-owned organization order. */
 export function visibleProjectConversations(
   conversations: readonly ConversationSummary[],
   controls: ConversationListControls,
 ): readonly ConversationSummary[] {
   const normalizedQuery = controls.query.trim().toLocaleLowerCase('zh-CN')
-  const filtered = conversations.filter((conversation) => {
+  return conversations.filter((conversation) => {
     if (controls.status !== 'all' && conversation.status !== controls.status) {
       return false
     }
@@ -63,12 +61,6 @@ export function visibleProjectConversations(
       )
     return searchable.includes(normalizedQuery)
   })
-
-  if (controls.sort === 'recent') return filtered
-  if (controls.sort === 'oldest') return [...filtered].reverse()
-  return [...filtered].sort((left, right) =>
-    left.title.localeCompare(right.title, 'zh-CN'),
-  )
 }
 
 export function groupProjectConversations(
@@ -112,5 +104,9 @@ export function providerDisplayName(
 }
 
 export function formatConversationActivity(timestamp: string): string {
+  return activityFormatter.format(new Date(timestamp))
+}
+
+export function formatConversationArchivedAt(timestamp: string): string {
   return activityFormatter.format(new Date(timestamp))
 }

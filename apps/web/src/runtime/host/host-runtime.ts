@@ -34,6 +34,10 @@ import {
   type LiveConversationMutationClient,
 } from './live-conversation-actions.js'
 import type { ConversationDetailReadClient } from './conversation-detail-query.js'
+import {
+  ConversationOrganizationActions,
+  type ConversationOrganizationMutationClient,
+} from './conversation-organization-actions.js'
 import { invalidateConversationProductQueries } from './conversation-index-sync.js'
 import type { ConversationListReadClient } from './conversation-list-query.js'
 import {
@@ -71,6 +75,7 @@ export interface HostRuntimeClient
     ProjectMutationClient,
     ConversationDetailReadClient,
     ConversationListReadClient,
+    ConversationOrganizationMutationClient,
     NewConversationMutationClient,
     AttentionReadClient,
     AttentionMutationClient {
@@ -119,6 +124,7 @@ export class HostRuntime {
   readonly #projectActions: ProjectActions
   readonly #newConversationActions: NewConversationActions
   readonly #attentionActions: AttentionActions
+  readonly #conversationOrganizationActions: ConversationOrganizationActions
   #connectionState: HostConnectionState = 'connecting'
   #lastError: unknown
   #started = false
@@ -140,6 +146,10 @@ export class HostRuntime {
     this.#projectActions = new ProjectActions(this.#client)
     this.#newConversationActions = new NewConversationActions(this.#client)
     this.#attentionActions = new AttentionActions(this.#client)
+    this.#conversationOrganizationActions = new ConversationOrganizationActions(
+      this.#client,
+      this.#queryClient,
+    )
     this.#reconnectDelayMs = nonNegativeInteger(
       options.reconnectDelayMs,
       500,
@@ -231,6 +241,35 @@ export class HostRuntime {
     options?: { readonly signal?: AbortSignal },
   ) {
     return this.#client.getConversation(conversationId, options)
+  }
+
+  renameConversation(conversationId: ConversationId | string, title: string) {
+    return this.#conversationOrganizationActions.renameConversation(
+      conversationId,
+      title,
+    )
+  }
+
+  pinConversation(conversationId: ConversationId | string) {
+    return this.#conversationOrganizationActions.pinConversation(conversationId)
+  }
+
+  unpinConversation(conversationId: ConversationId | string) {
+    return this.#conversationOrganizationActions.unpinConversation(
+      conversationId,
+    )
+  }
+
+  archiveConversation(conversationId: ConversationId | string) {
+    return this.#conversationOrganizationActions.archiveConversation(
+      conversationId,
+    )
+  }
+
+  unarchiveConversation(conversationId: ConversationId | string) {
+    return this.#conversationOrganizationActions.unarchiveConversation(
+      conversationId,
+    )
   }
 
   createConversation(projectId: ProjectId | string) {

@@ -87,6 +87,7 @@ function createDemoConversation(conversationId: string): ConversationViewModel {
 
   return {
     ...conversation,
+    titleSource: 'generated',
     timeline: {
       dayLabel: data.timeline.dayLabel,
       blocks: [
@@ -141,6 +142,14 @@ export function createDemoConversationDetailSource(
 ): ConversationDetailSourceViewModel {
   return {
     conversation: createDemoConversation(conversationId),
-    rail: conversationDetailMock.rail,
+    rail: {
+      groups: conversationDetailMock.rail.groups.map((group) => ({
+        ...group,
+        conversations: group.conversations.map((conversation) => ({
+          ...conversation,
+          titleSource: 'generated' as const,
+        })),
+      })),
+    },
   }
 }

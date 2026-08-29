@@ -1,3 +1,7 @@
+import type {
+  ConversationStatus,
+  ConversationTitleSource,
+} from '@codetether/protocol'
 import type { AgentId, DiffLine, ExecutionStatus } from '@codetether/ui'
 
 import type { ToolPresentationKind } from './tool-presentation.js'
@@ -128,6 +132,9 @@ export interface ConversationCapabilitiesViewModel {
 export interface ConversationViewModel {
   readonly id: string
   readonly title: string
+  readonly titleSource: ConversationTitleSource
+  readonly pinnedAt?: string
+  readonly archivedAt?: string
   readonly status: ExecutionStatus
   readonly agent: AgentId
   readonly model: string
@@ -149,6 +156,9 @@ export interface ConversationViewModel {
 export interface ConversationRailItemViewModel {
   readonly id: string
   readonly title: string
+  readonly titleSource: ConversationTitleSource
+  readonly pinnedAt?: string
+  readonly archivedAt?: string
   readonly status: ExecutionStatus
   readonly lastActivity: string
   readonly machine?: string
@@ -161,8 +171,8 @@ export interface ConversationRailGroupViewModel {
 
 export interface ConversationRailViewModel {
   readonly groups: readonly ConversationRailGroupViewModel[]
-  /** Omitted when the real durable index has no archive contract. */
-  readonly archivedCount?: number
+  /** The one archived Conversation currently open in Detail; never the archive index. */
+  readonly currentArchivedConversation?: ConversationRailItemViewModel
 }
 
 export type ConversationConnectionState =
@@ -177,4 +187,13 @@ export interface ConversationDetailSourceViewModel {
   readonly conversation: ConversationViewModel
   readonly rail: ConversationRailViewModel
   readonly connectionIndicator?: ConversationConnectionIndicatorViewModel
+}
+
+/** Maps transient presentation states back to the durable organization API status. */
+export function organizationConversationStatus(
+  status: ExecutionStatus,
+): ConversationStatus {
+  if (status === 'thinking') return 'running'
+  if (status === 'offline') return 'idle'
+  return status
 }

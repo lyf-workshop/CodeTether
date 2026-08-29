@@ -52,15 +52,38 @@ test('Conversation query requests the bounded 100-row Host index and preserves H
   )
   assert.equal(client.calls.length, 1)
   assert.equal(client.calls[0].projectId, projectId)
+  assert.equal(client.calls[0].options.archived, false)
   assert.equal(client.calls[0].options.limit, 100)
   assert.ok(client.calls[0].options.signal instanceof AbortSignal)
 })
 
-test('Conversation query cache is isolated by Project identity', () => {
+test('Conversation query cache is isolated by Project identity and archive view', () => {
   assert.notDeepEqual(
     conversationListQueryKeys.project(projectId),
     conversationListQueryKeys.project('proj_conversations_other'),
   )
+  assert.notDeepEqual(
+    conversationListQueryKeys.project(projectId, 'active'),
+    conversationListQueryKeys.project(projectId, 'archived'),
+  )
+})
+
+test('Archived Conversation query requests only the Host archived index', async () => {
+  const client = new FakeConversationListClient([completed])
+  const queryClient = createQueryClient()
+
+  await queryClient.fetchQuery(
+    conversationListQueryOptions(client, projectId, 'archived'),
+  )
+
+  assert.equal(client.calls.length, 1)
+  assert.equal(client.calls[0].options.archived, true)
+  assert.deepEqual(conversationListQueryKeys.project(projectId, 'archived'), [
+    'host',
+    'project-conversations',
+    projectId,
+    'archived',
+  ])
 })
 
 test('local search matches only real title/provider fields and keeps Host ordering by default', () => {
@@ -96,7 +119,7 @@ test('local search matches only real title/provider fields and keeps Host orderi
   )
 })
 
-test('status/provider filters and explicit sort do not mutate the Host-owned array', () => {
+test('status/provider filters preserve Host organization order and do not mutate the source', () => {
   const source = [waiting, running, completed]
   const original = [...source]
 
@@ -113,13 +136,6 @@ test('status/provider filters and explicit sort do not mutate the Host-owned arr
       provider: 'codex',
     }),
     source,
-  )
-  assert.deepEqual(
-    visibleProjectConversations(source, {
-      ...controls(),
-      sort: 'oldest',
-    }),
-    [completed, running, waiting],
   )
   assert.deepEqual(source, original)
 })
@@ -139,6 +155,31 @@ test('real provider groups and summary counts contain no speculative agents or m
     completed: 1,
     failed: 0,
   })
+})
+
+test('50 Conversation fixture keeps the complete Host organization order while filtering', () => {
+  const source = Array.from({ length: 50 }, (_, index) =>
+    conversation(
+      `conv_stress_${String(index).padStart(2, '0')}`,
+      index % 5 === 0 ? `置顶会话 ${index}` : `会话 ${index}`,
+      index % 7 === 0 ? 'waiting' : 'completed',
+      50 - index,
+    ),
+  )
+
+  assert.deepEqual(
+    visibleProjectConversations(source, controls()).map(
+      (entry) => entry.conversationId,
+    ),
+    source.map((entry) => entry.conversationId),
+  )
+  assert.equal(
+    visibleProjectConversations(source, {
+      ...controls(),
+      query: '置顶会话',
+    }).length,
+    10,
+  )
 })
 
 test('view state distinguishes loading, empty, ready, unavailable Project, and not found', () => {
@@ -211,7 +252,7 @@ function conversation(conversationId, title, status, activityOffset) {
 }
 
 function controls() {
-  return { provider: 'all', query: '', sort: 'recent', status: 'all' }
+  return { provider: 'all', query: '', status: 'all' }
 }
 
 function pending() {

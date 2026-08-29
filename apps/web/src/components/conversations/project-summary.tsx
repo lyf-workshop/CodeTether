@@ -12,6 +12,7 @@ import {
 interface ProjectSummaryProps {
   project: ProjectRecord
   summary: ConversationStatusCounts
+  totalLabel?: string
 }
 
 interface SummaryMetricProps {
@@ -36,7 +37,11 @@ function SummaryMetric({ label, tone = 'default', value }: SummaryMetricProps) {
   )
 }
 
-export function ProjectSummary({ project, summary }: ProjectSummaryProps) {
+export function ProjectSummary({
+  project,
+  summary,
+  totalLabel = '全部会话',
+}: ProjectSummaryProps) {
   const available = project.availability === 'available'
   const AvailabilityIcon = available ? CircleCheck : TriangleAlert
 
@@ -67,7 +72,7 @@ export function ProjectSummary({ project, summary }: ProjectSummaryProps) {
       </div>
 
       <dl className="contents">
-        <SummaryMetric label="全部会话" value={summary.total} />
+        <SummaryMetric label={totalLabel} value={summary.total} />
         <SummaryMetric label="运行中" value={summary.running} />
         <SummaryMetric
           label="需要处理"

@@ -24,6 +24,10 @@ const launcher = {
   prefixArguments: [fixture],
   sourcePath: process.execPath,
 }
+const fixtureLauncher = (...prefixArguments) => ({
+  ...launcher,
+  prefixArguments: [fixture, ...prefixArguments],
+})
 const sessionId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
 
 test('builds the locked-down argv and never places a prompt in it', () => {
@@ -50,17 +54,48 @@ test('builds the locked-down argv and never places a prompt in it', () => {
     '--disable-slash-commands',
   ])
   assert.ok(!arguments_.some((argument) => argument.includes('secret prompt')))
+
+  const lowEffort = buildClaudeCodeArguments({
+    sessionId,
+    resume: true,
+    effort: 'low',
+  })
+  assert.deepEqual(
+    lowEffort.slice(
+      lowEffort.indexOf('--effort'),
+      lowEffort.indexOf('--effort') + 2,
+    ),
+    ['--effort', 'low'],
+  )
+  assert.throws(
+    () =>
+      buildClaudeCodeArguments({
+        sessionId,
+        resume: false,
+        effort: 'unsupported',
+      }),
+    /supported Claude Code level/u,
+  )
 })
 
-test('sanitizes parent Claude control state while preserving auth inputs', () => {
+test('admits only bounded Claude runtime context and explicit auth inputs', () => {
   assert.deepEqual(
     sanitizeClaudeChildEnvironment({
       Path: 'runtime-path',
       ANTHROPIC_API_KEY: 'fixture-auth',
+      HTTPS_PROXY: 'https://proxy.invalid',
       CLAUDECODE: '1',
       claude_code_session_id: 'parent-session',
+      GITHUB_TOKEN: 'must-not-cross',
+      AWS_SECRET_ACCESS_KEY: 'must-not-cross',
+      NODE_OPTIONS: '--require=must-not-cross',
+      CODETETHER_AUDIT_SECRET: 'must-not-cross',
     }),
-    { Path: 'runtime-path', ANTHROPIC_API_KEY: 'fixture-auth' },
+    {
+      Path: 'runtime-path',
+      ANTHROPIC_API_KEY: 'fixture-auth',
+      HTTPS_PROXY: 'https://proxy.invalid',
+    },
   )
 })
 
@@ -73,12 +108,11 @@ test('creates cold, streams one child per turn, then resumes the exact session',
     )
   })
   const runtime = ClaudeCodeSessionRuntime.createSession({
-    launcher,
+    launcher: fixtureLauncher('--fixture-capture=capture.jsonl'),
     sessionId,
     cwd,
     environment: {
       ...process.env,
-      FAKE_CLAUDE_CAPTURE_PATH: capturePath,
       ANTHROPIC_API_KEY: 'fixture-auth',
       CLAUDECODE: '1',
       CLAUDE_CODE_SESSION_ID: 'parent-session',
@@ -90,10 +124,12 @@ test('creates cold, streams one child per turn, then resumes the exact session',
   const first = await runtime.startTurn({
     turnId: 'turn_first',
     prompt: 'secret prompt first',
+    effort: 'low',
   })
   const second = await runtime.startTurn({
     turnId: 'turn_second',
     prompt: 'secret prompt second',
+    effort: 'low',
   })
   await runtime.close()
 
@@ -119,6 +155,13 @@ test('creates cold, streams one child per turn, then resumes the exact session',
   assert.equal(captures[0].inheritedControl, false)
   assert.equal(captures[0].preservedAuth, true)
   assert.ok(captures[0].arguments.includes('--session-id'))
+  assert.deepEqual(
+    captures[0].arguments.slice(
+      captures[0].arguments.indexOf('--effort'),
+      captures[0].arguments.indexOf('--effort') + 2,
+    ),
+    ['--effort', 'low'],
+  )
   assert.ok(
     !captures[0].arguments.some((value) => value.includes('secret prompt')),
   )
@@ -140,12 +183,11 @@ test('resumeSession uses native resume on its first lazy turn', async (t) => {
     )
   })
   const runtime = ClaudeCodeSessionRuntime.resumeSession({
-    launcher,
+    launcher: fixtureLauncher('--fixture-capture=capture.jsonl'),
     sessionId,
     cwd,
     environment: {
       ...process.env,
-      FAKE_CLAUDE_CAPTURE_PATH: capturePath,
     },
   })
   await runtime.startTurn({ turnId: 'turn_resume', prompt: 'resume input' })
@@ -162,12 +204,11 @@ test('suppresses expired OAuth assistant diagnostics from canonical events', asy
     )
   })
   const runtime = ClaudeCodeSessionRuntime.createSession({
-    launcher,
+    launcher: fixtureLauncher('--fixture-scenario=auth-error'),
     sessionId,
     cwd,
     environment: {
       ...process.env,
-      FAKE_CLAUDE_SCENARIO: 'auth-error',
     },
   })
   const failures = []
@@ -204,12 +245,11 @@ test('reports malformed provider output as a safe start failure', async (t) => {
     )
   })
   const runtime = ClaudeCodeSessionRuntime.createSession({
-    launcher,
+    launcher: fixtureLauncher('--fixture-scenario=malformed'),
     sessionId,
     cwd,
     environment: {
       ...process.env,
-      FAKE_CLAUDE_SCENARIO: 'malformed',
     },
   })
   const failures = []
@@ -239,10 +279,10 @@ test('owner close emits interrupted without reporting a Provider failure', async
     )
   })
   const runtime = ClaudeCodeSessionRuntime.createSession({
-    launcher,
+    launcher: fixtureLauncher('--fixture-scenario=hang'),
     sessionId,
     cwd,
-    environment: { ...process.env, FAKE_CLAUDE_SCENARIO: 'hang' },
+    environment: { ...process.env },
   })
   const events = []
   const failures = []

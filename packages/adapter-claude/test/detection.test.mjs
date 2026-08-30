@@ -35,7 +35,7 @@ test('detects the exact tested version and caches the probe', async (t) => {
     environment: {
       ...process.env,
       FAKE_CLAUDE_COUNT_PATH: countPath,
-      FAKE_CLAUDE_VERSION: '2.1.250',
+      FAKE_CLAUDE_VERSION: '2.1.251',
     },
   })
 
@@ -45,7 +45,7 @@ test('detects the exact tested version and caches the probe', async (t) => {
   ])
   assert.equal(first, second)
   assert.equal(first.status, 'available')
-  assert.equal(first.version, '2.1.250')
+  assert.equal(first.version, '2.1.251')
   assert.equal(first.executablePath, process.execPath)
   assert.equal((await readFile(countPath, 'utf8')).trim(), 'version\nauth')
 })
@@ -60,6 +60,20 @@ test('marks an unknown version unsupported instead of available', async () => {
   })
   assert.equal(result.status, 'unsupportedVersion')
   assert.equal(result.version, '2.2.0')
+})
+
+test('keeps both accepted and current verified Claude versions available', async () => {
+  for (const version of ['2.1.250', '2.1.251']) {
+    const result = await detectClaudeCode({
+      launcher,
+      environment: {
+        ...process.env,
+        FAKE_CLAUDE_VERSION: version,
+      },
+    })
+    assert.equal(result.status, 'available')
+    assert.equal(result.version, version)
+  }
 })
 
 test('maps invalid output and a missing executable to distinct states', async () => {
@@ -128,7 +142,11 @@ test('prepares restricted turns with only allowlisted user configuration', async
     settingsPath,
     environment: {
       ...process.env,
-      FAKE_CLAUDE_VERSION: '2.1.250',
+      FAKE_CLAUDE_VERSION: '2.1.251',
+      GITHUB_TOKEN: 'must-not-cross',
+      AWS_SECRET_ACCESS_KEY: 'must-not-cross',
+      NODE_OPTIONS: '--require=must-not-cross',
+      CODETETHER_AUDIT_SECRET: 'must-not-cross',
     },
   })
   assert.equal(preparation.detection.status, 'available')
@@ -137,6 +155,10 @@ test('prepares restricted turns with only allowlisted user configuration', async
   assert.equal(environment.ANTHROPIC_BASE_URL, 'https://example.invalid')
   assert.equal(environment.UNSAFE_ARBITRARY_VALUE, undefined)
   assert.equal(environment.CLAUDE_CODE_ENTRYPOINT, undefined)
+  assert.equal(environment.GITHUB_TOKEN, undefined)
+  assert.equal(environment.AWS_SECRET_ACCESS_KEY, undefined)
+  assert.equal(environment.NODE_OPTIONS, undefined)
+  assert.equal(environment.CODETETHER_AUDIT_SECRET, undefined)
   assert.doesNotMatch(JSON.stringify(preparation), /fixture-auth-token/)
   assert.doesNotMatch(JSON.stringify(preparation), /must-not-load/)
 })

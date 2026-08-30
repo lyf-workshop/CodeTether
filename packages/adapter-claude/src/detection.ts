@@ -1,7 +1,10 @@
 import { spawn } from 'node:child_process'
 
 import { ClaudeCodeError, ClaudeCodeNotInstalledError } from './errors.js'
-import { resolveClaudeCodeRestrictedEnvironment } from './configuration.js'
+import {
+  resolveClaudeCodeRestrictedEnvironment,
+  restrictClaudeCodeProcessEnvironment,
+} from './configuration.js'
 import {
   resolveClaudeCodeLauncher,
   type ClaudeCodeResolutionOptions,
@@ -9,7 +12,7 @@ import {
 import {
   CLAUDE_CODE_CAPABILITIES,
   CLAUDE_CODE_PROVIDER,
-  CLAUDE_CODE_TESTED_VERSION,
+  isClaudeCodeTestedVersion,
   type ClaudeCodeDetection,
   type ClaudeCodeLauncher,
 } from './types.js'
@@ -72,9 +75,11 @@ export class ClaudeCodeDetector {
         return unavailable('misconfigured', 'version_output_invalid', startedAt)
       }
       const version = match[1]
-      const testedVersion =
-        this.#options.testedVersion ?? CLAUDE_CODE_TESTED_VERSION
-      if (version !== testedVersion) {
+      const versionSupported =
+        this.#options.testedVersion === undefined
+          ? isClaudeCodeTestedVersion(version)
+          : version === this.#options.testedVersion
+      if (!versionSupported) {
         return {
           provider: CLAUDE_CODE_PROVIDER,
           status: 'unsupportedVersion',
@@ -149,9 +154,18 @@ export async function prepareClaudeCode(
   } catch (error) {
     const diagnosticCode =
       error instanceof ClaudeCodeError ? error.code : 'configuration_invalid'
+    let fallbackEnvironment: NodeJS.ProcessEnv = {}
+    try {
+      fallbackEnvironment = restrictClaudeCodeProcessEnvironment(
+        options.environment ?? process.env,
+      )
+    } catch {
+      // A malformed optional environment remains unavailable and crosses no
+      // values into a later child process.
+    }
     return {
       detection: unavailable('misconfigured', diagnosticCode, startedAt),
-      runtimeEnvironment: () => ({ ...(options.environment ?? process.env) }),
+      runtimeEnvironment: () => ({ ...fallbackEnvironment }),
     }
   }
 }
@@ -220,7 +234,9 @@ function probeCommand(
       launcher.executable,
       [...launcher.prefixArguments, ...arguments_],
       {
-        env: options.environment ?? process.env,
+        env:
+          options.environment ??
+          restrictClaudeCodeProcessEnvironment(process.env),
         shell: false,
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,

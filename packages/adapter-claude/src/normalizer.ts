@@ -1,4 +1,4 @@
-import { resolve } from 'node:path'
+import { isAbsolute, relative, resolve, sep } from 'node:path'
 
 import type { AgentEvent, ToolKind } from '@codetether/agent-core'
 
@@ -10,7 +10,7 @@ import {
 } from './errors.js'
 import {
   CLAUDE_CODE_PROVIDER,
-  CLAUDE_CODE_TESTED_VERSION,
+  isClaudeCodeTestedVersion,
   type CanonicalClaudeToolName,
   type ClaudeCodeTurnResult,
 } from './types.js'
@@ -18,6 +18,8 @@ import {
 export const MAX_CLAUDE_MESSAGE_BYTES = 256 * 1024
 export const MAX_CLAUDE_DELTA_BYTES = 32 * 1024
 export const MAX_CLAUDE_TOOL_OUTPUT_BYTES = 64 * 1024
+export const MAX_CLAUDE_TOOL_COMMAND_BYTES = 32 * 1024
+export const MAX_CLAUDE_TOOL_SUMMARY_BYTES = 4 * 1024
 
 export interface ClaudeStreamNormalizerOptions {
   readonly sessionId: string
@@ -32,10 +34,13 @@ interface NormalizedTool {
   readonly name: CanonicalClaudeToolName
   readonly kind: ToolKind
   readonly summary: string
+  readonly command?: string
 }
 
 interface ToolState extends NormalizedTool {
   readonly itemId: string
+  readonly providerName: string
+  started: boolean
   completed: boolean
 }
 
@@ -43,7 +48,7 @@ export class ClaudeStreamNormalizer {
   readonly #sessionId: string
   readonly #turnId: string
   readonly #cwd: string
-  readonly #testedVersion: string
+  readonly #testedVersion?: string
   readonly #platform: NodeJS.Platform
   readonly #now: () => string
   readonly #tools = new Map<string, ToolState>()
@@ -62,7 +67,7 @@ export class ClaudeStreamNormalizer {
     this.#sessionId = options.sessionId
     this.#turnId = options.turnId
     this.#cwd = options.cwd
-    this.#testedVersion = options.testedVersion ?? CLAUDE_CODE_TESTED_VERSION
+    this.#testedVersion = options.testedVersion
     this.#platform = options.platform ?? process.platform
     this.#now = options.now ?? (() => new Date().toISOString())
   }
@@ -132,7 +137,12 @@ export class ClaudeStreamNormalizer {
     if (this.#initialized) return []
 
     const version = readString(message, 'claude_code_version')
-    if (version !== this.#testedVersion) {
+    if (
+      version === undefined ||
+      (this.#testedVersion === undefined
+        ? !isClaudeCodeTestedVersion(version)
+        : version !== this.#testedVersion)
+    ) {
       throw new ClaudeCodeVersionUnsupportedError(version ?? 'unknown')
     }
     const cwd = readString(message, 'cwd')
@@ -179,7 +189,12 @@ export class ClaudeStreamNormalizer {
       if (providerToolId === undefined || providerToolName === undefined) {
         throw new ClaudeCodeProtocolError()
       }
-      return this.#ensureToolStarted(providerToolId, providerToolName)
+      const input = readRecord(block, 'input')
+      if (input !== undefined && Object.keys(input).length > 0) {
+        return this.#ensureToolStarted(providerToolId, providerToolName, input)
+      }
+      this.#registerTool(providerToolId, providerToolName)
+      return []
     }
 
     if (eventType !== 'content_block_delta') return []
@@ -260,7 +275,13 @@ export class ClaudeStreamNormalizer {
         throw new ClaudeCodeProtocolError()
       }
       hasCanonicalContent = true
-      events.push(...this.#ensureToolStarted(providerToolId, providerToolName))
+      events.push(
+        ...this.#ensureToolStarted(
+          providerToolId,
+          providerToolName,
+          readRecord(block, 'input'),
+        ),
+      )
     }
 
     // Claude may emit a thinking-only assistant snapshot and later emit the
@@ -287,11 +308,16 @@ export class ClaudeStreamNormalizer {
       if (tool === undefined) {
         events.push(...this.#ensureToolStarted(providerToolId, 'unknown'))
         tool = this.#tools.get(providerToolId)
+      } else if (!tool.started) {
+        events.push(
+          ...this.#ensureToolStarted(providerToolId, tool.providerName),
+        )
+        tool = this.#tools.get(providerToolId)
       }
       if (tool === undefined || tool.completed) continue
 
       const output = extractToolResultText(block.content)
-      if (output.length > 0) {
+      if (output.length > 0 && !isUnavailableShellTool(tool.providerName)) {
         events.push({
           type: 'tool.output',
           provider: CLAUDE_CODE_PROVIDER,
@@ -314,8 +340,11 @@ export class ClaudeStreamNormalizer {
         itemId: tool.itemId,
         kind: tool.kind,
         name: tool.name,
+        ...(tool.command === undefined ? {} : { command: tool.command }),
         success,
-        summary: success ? tool.summary : `${tool.summary} failed`,
+        summary: success
+          ? tool.summary
+          : boundUtf8(`${tool.summary} failed`, MAX_CLAUDE_TOOL_SUMMARY_BYTES),
       })
     }
     return events
@@ -357,15 +386,11 @@ export class ClaudeStreamNormalizer {
   #ensureToolStarted(
     providerToolId: string,
     providerToolName: string,
+    input?: Record<string, unknown>,
   ): AgentEvent[] {
-    if (this.#tools.has(providerToolId)) return []
-    const normalized = normalizeClaudeTool(providerToolName)
-    const state: ToolState = {
-      ...normalized,
-      itemId: this.#nextItemId(),
-      completed: false,
-    }
-    this.#tools.set(providerToolId, state)
+    const state = this.#registerTool(providerToolId, providerToolName, input)
+    if (state.started) return []
+    state.started = true
     return [
       {
         type: 'tool.started',
@@ -376,9 +401,42 @@ export class ClaudeStreamNormalizer {
         itemId: state.itemId,
         kind: state.kind,
         name: state.name,
+        ...(state.command === undefined ? {} : { command: state.command }),
         summary: state.summary,
       },
     ]
+  }
+
+  #registerTool(
+    providerToolId: string,
+    providerToolName: string,
+    input?: Record<string, unknown>,
+  ): ToolState {
+    const existing = this.#tools.get(providerToolId)
+    if (existing !== undefined) {
+      if (existing.providerName !== providerToolName) {
+        throw new ClaudeCodeProtocolError()
+      }
+      if (!existing.started && input !== undefined) {
+        const normalized = normalizeClaudeTool(
+          providerToolName,
+          input,
+          this.#cwd,
+        )
+        Object.assign(existing, normalized)
+      }
+      return existing
+    }
+    const normalized = normalizeClaudeTool(providerToolName, input, this.#cwd)
+    const state: ToolState = {
+      ...normalized,
+      itemId: this.#nextItemId(),
+      providerName: providerToolName,
+      started: false,
+      completed: false,
+    }
+    this.#tools.set(providerToolId, state)
+    return state
   }
 
   #startMessage(providerMessageId?: string): void {
@@ -425,19 +483,48 @@ export class ClaudeStreamNormalizer {
   }
 }
 
-export function normalizeClaudeTool(providerName: string): NormalizedTool {
+export function normalizeClaudeTool(
+  providerName: string,
+  input?: Record<string, unknown>,
+  cwd?: string,
+): NormalizedTool {
   switch (providerName) {
     case 'Read':
-      return { name: 'Read', kind: 'read', summary: 'Read file' }
+      return withSafePath(
+        { name: 'Read', kind: 'read', summary: 'Read file' },
+        'Read',
+        readString(input, 'file_path'),
+        cwd,
+      )
     case 'Edit':
     case 'Write':
-      return { name: 'Edit', kind: 'edit', summary: 'Edit file' }
+      return withSafePath(
+        { name: 'Edit', kind: 'edit', summary: 'Edit file' },
+        providerName,
+        readString(input, 'file_path'),
+        cwd,
+      )
     case 'Bash':
     case 'PowerShell':
-      return { name: 'Shell', kind: 'shell', summary: 'Run shell command' }
+      return {
+        name: 'Generic Tool',
+        kind: 'generic',
+        summary: 'Run unavailable tool',
+      }
     case 'Glob':
+      return normalizeSearchTool(
+        'Glob',
+        readString(input, 'pattern'),
+        readString(input, 'path'),
+        cwd,
+      )
     case 'Grep':
-      return { name: 'Search', kind: 'search', summary: 'Search workspace' }
+      return normalizeSearchTool(
+        'Grep',
+        readString(input, 'pattern'),
+        readString(input, 'path'),
+        cwd,
+      )
     default:
       return {
         name: 'Generic Tool',
@@ -445,6 +532,80 @@ export function normalizeClaudeTool(providerName: string): NormalizedTool {
         summary: 'Run tool',
       }
   }
+}
+
+function isUnavailableShellTool(providerName: string): boolean {
+  return providerName === 'Bash' || providerName === 'PowerShell'
+}
+
+function normalizeSearchTool(
+  providerName: 'Glob' | 'Grep',
+  rawPattern: string | undefined,
+  rawPath: string | undefined,
+  cwd: string | undefined,
+): NormalizedTool {
+  const pattern = boundedInputText(rawPattern)
+  const path = safeProjectRelativePath(rawPath, cwd)
+  const parts = [
+    providerName,
+    pattern,
+    path === undefined ? undefined : `in ${path}`,
+  ]
+    .filter((value): value is string => value !== undefined)
+    .join(' ')
+  return {
+    name: 'Search',
+    kind: 'search',
+    summary: 'Search workspace',
+    ...(parts === providerName
+      ? {}
+      : { command: boundUtf8(parts, MAX_CLAUDE_TOOL_COMMAND_BYTES) }),
+  }
+}
+
+function withSafePath(
+  fallback: NormalizedTool,
+  providerName: 'Read' | 'Edit' | 'Write',
+  rawPath: string | undefined,
+  cwd: string | undefined,
+): NormalizedTool {
+  const path = safeProjectRelativePath(rawPath, cwd)
+  if (path === undefined) return fallback
+  const command = boundUtf8(
+    `${providerName} ${path}`,
+    MAX_CLAUDE_TOOL_COMMAND_BYTES,
+  )
+  return {
+    ...fallback,
+    command,
+    summary: boundUtf8(command, MAX_CLAUDE_TOOL_SUMMARY_BYTES),
+  }
+}
+
+function safeProjectRelativePath(
+  rawPath: string | undefined,
+  cwd: string | undefined,
+): string | undefined {
+  const path = boundedInputText(rawPath)
+  if (path === undefined || cwd === undefined) return undefined
+  const root = resolve(cwd)
+  const target = resolve(root, path)
+  const relation = relative(root, target)
+  if (
+    relation === '..' ||
+    relation.startsWith(`..${sep}`) ||
+    isAbsolute(relation)
+  ) {
+    return undefined
+  }
+  return relation.length === 0 ? '.' : relation.split(sep).join('/')
+}
+
+function boundedInputText(value: string | undefined): string | undefined {
+  if (value === undefined || value.length === 0 || value.includes('\0')) {
+    return undefined
+  }
+  return boundUtf8(value, MAX_CLAUDE_TOOL_COMMAND_BYTES)
 }
 
 export function boundUtf8(value: string, maxBytes: number): string {

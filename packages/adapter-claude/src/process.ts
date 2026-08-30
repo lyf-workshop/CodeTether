@@ -3,6 +3,7 @@ import { isAbsolute } from 'node:path'
 
 import type { AgentEvent } from '@codetether/agent-core'
 
+import { restrictClaudeCodeProcessEnvironment } from './configuration.js'
 import {
   asClaudeCodeError,
   ClaudeCodeError,
@@ -13,7 +14,12 @@ import {
 } from './errors.js'
 import { ClaudeJsonLineDecoder, parseClaudeJsonLine } from './jsonl.js'
 import { ClaudeStreamNormalizer } from './normalizer.js'
-import type { ClaudeCodeLauncher, ClaudeCodeTurnResult } from './types.js'
+import {
+  CLAUDE_CODE_EFFORT_LEVELS,
+  type ClaudeCodeEffort,
+  type ClaudeCodeLauncher,
+  type ClaudeCodeTurnResult,
+} from './types.js'
 
 export const MAX_CLAUDE_PROMPT_BYTES = 1024 * 1024
 const DEFAULT_CLOSE_GRACE_MS = 2000
@@ -41,6 +47,7 @@ export interface ClaudeCodeTurnProcessOptions {
   readonly cwd: string
   readonly prompt: string
   readonly resume: boolean
+  readonly effort?: ClaudeCodeEffort
   readonly environment?: NodeJS.ProcessEnv
   readonly testedVersion?: string
   readonly onEvent: (event: AgentEvent) => void | Promise<void>
@@ -55,8 +62,10 @@ export interface ClaudeCodeTurnProcessHandle {
 export function buildClaudeCodeArguments(options: {
   readonly sessionId: string
   readonly resume: boolean
+  readonly effort?: ClaudeCodeEffort
 }): string[] {
   validateSessionId(options.sessionId)
+  validateEffort(options.effort)
   return [
     '--print',
     '--input-format',
@@ -75,6 +84,7 @@ export function buildClaudeCodeArguments(options: {
     'Read,Glob,Grep',
     '--permission-mode',
     'dontAsk',
+    ...(options.effort === undefined ? [] : ['--effort', options.effort]),
     '--no-chrome',
     '--disable-slash-commands',
   ]
@@ -97,8 +107,9 @@ export function encodeClaudeUserMessage(prompt: string): string {
 export function sanitizeClaudeChildEnvironment(
   environment: NodeJS.ProcessEnv,
 ): NodeJS.ProcessEnv {
+  const restricted = restrictClaudeCodeProcessEnvironment(environment)
   return Object.fromEntries(
-    Object.entries(environment).filter(
+    Object.entries(restricted).filter(
       ([name]) => !PARENT_CLAUDE_CONTROL_VARIABLES.has(name.toUpperCase()),
     ),
   )
@@ -256,11 +267,21 @@ export async function closeOwnedClaudeProcess(
 
 function validateTurnOptions(options: ClaudeCodeTurnProcessOptions): void {
   validateSessionId(options.sessionId)
+  validateEffort(options.effort)
   if (!isAbsolute(options.cwd)) throw new TypeError('cwd must be absolute')
   if (options.turnId.length === 0 || options.turnId.length > 128) {
     throw new RangeError('turnId must contain between 1 and 128 characters')
   }
   encodeClaudeUserMessage(options.prompt)
+}
+
+function validateEffort(effort: string | undefined): void {
+  if (
+    effort !== undefined &&
+    !(CLAUDE_CODE_EFFORT_LEVELS as readonly string[]).includes(effort)
+  ) {
+    throw new TypeError('effort must be a supported Claude Code level')
+  }
 }
 
 function validateSessionId(sessionId: string): void {

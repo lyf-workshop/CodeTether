@@ -45,9 +45,15 @@ import { projectListQueryOptions } from '../../runtime/host/project-query'
 import {
   providerPresentation,
   providerPresentations,
-  type ProviderPresentation,
 } from '../../provider/provider-presentation'
 import { createProjectOptionPresentation } from './new-conversation-presentation'
+import {
+  defaultProviderControls,
+  defaultProviderModel,
+  effectiveProviderReasoning,
+  providerDefaultReasoningSelection,
+  providerReasoningFromControl,
+} from './new-conversation-provider-selection'
 
 interface NewConversationDialogProps {
   currentProject?: ProjectRecord
@@ -77,6 +83,7 @@ export function NewConversationDialog({
   >()
   const [selectedProvider, setSelectedProvider] = useState<ProviderId>('codex')
   const [selectedModel, setSelectedModel] = useState<string>()
+  const [selectedReasoning, setSelectedReasoning] = useState<string>()
   const skipCloseFocusRestore = useRef(false)
   const open = controlledOpen ?? internalOpen
   const projectsQuery = useQuery({
@@ -93,10 +100,14 @@ export function NewConversationDialog({
       readonly projectId: ProjectId
       readonly provider: ProviderId
       readonly model?: string
+      readonly reasoning?: string
     }) =>
       runtime.createConversation(selection.projectId, {
         provider: selection.provider,
         ...(selection.model === undefined ? {} : { model: selection.model }),
+        ...(selection.reasoning === undefined
+          ? {}
+          : { reasoning: selection.reasoning }),
       }),
     onSuccess: async (response) => {
       const projectId = response.data.conversation.projectId
@@ -135,6 +146,15 @@ export function NewConversationDialog({
     selectedProviderPresentation.models.length > 0
   const showsReasoning =
     selectedProviderPresentation.capabilities.reasoningControl
+  const supportsReasoningSelection =
+    showsReasoning && selectedProviderPresentation.reasoningOptions.length > 0
+  const effectiveSelectedReasoning = effectiveProviderReasoning(
+    selectedReasoning,
+    selectedProviderPresentation,
+  )
+  const defaultReasoningSelection = providerDefaultReasoningSelection(
+    selectedProviderPresentation,
+  )
   const effectiveSelectedModel =
     selectedModel ?? defaultProviderModel(selectedProviderPresentation)
   const settingCount = 1 + Number(showsModelSelection) + Number(showsReasoning)
@@ -162,15 +182,18 @@ export function NewConversationDialog({
       createMutation.reset()
       setSelectedProjectId(currentProject?.projectId)
       setSelectedProvider('codex')
-      setSelectedModel(
-        defaultProviderModel(providerPresentation(runtime.bootstrap, 'codex')),
+      const defaults = defaultProviderControls(
+        providerPresentation(runtime.bootstrap, 'codex'),
       )
+      setSelectedModel(defaults.model)
+      setSelectedReasoning(defaults.reasoning)
       return
     }
     createMutation.reset()
     setSelectedProjectId(undefined)
     setSelectedProvider('codex')
     setSelectedModel(undefined)
+    setSelectedReasoning(undefined)
   }
 
   function closeAfterSuccess() {
@@ -179,6 +202,7 @@ export function NewConversationDialog({
     setSelectedProjectId(undefined)
     setSelectedProvider('codex')
     setSelectedModel(undefined)
+    setSelectedReasoning(undefined)
   }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -190,14 +214,19 @@ export function NewConversationDialog({
       ...(showsModelSelection && effectiveSelectedModel !== undefined
         ? { model: effectiveSelectedModel }
         : {}),
+      ...(supportsReasoningSelection && effectiveSelectedReasoning !== undefined
+        ? { reasoning: effectiveSelectedReasoning }
+        : {}),
     })
   }
 
   function handleProviderChange(value: string) {
     const provider = value as ProviderId
     const presentation = providerPresentation(runtime.bootstrap, provider)
+    const defaults = defaultProviderControls(presentation)
     setSelectedProvider(provider)
-    setSelectedModel(defaultProviderModel(presentation))
+    setSelectedModel(defaults.model)
+    setSelectedReasoning(defaults.reasoning)
     createMutation.reset()
   }
 
@@ -251,10 +280,11 @@ export function NewConversationDialog({
                 </div>
               ) : connectionState === 'connected' && !noAvailableProjects ? (
                 <Select
-                  value={effectiveSelectedProjectId}
-                  onValueChange={(value) =>
-                    setSelectedProjectId(ProjectIdSchema.parse(value))
-                  }
+                  value={effectiveSelectedProjectId ?? ''}
+                  onValueChange={(value) => {
+                    const projectId = ProjectIdSchema.safeParse(value)
+                    if (projectId.success) setSelectedProjectId(projectId.data)
+                  }}
                   disabled={projectsQuery.isPending || createMutation.isPending}
                 >
                   <SelectTrigger className="mt-2" aria-label="选择项目">
@@ -387,7 +417,53 @@ export function NewConversationDialog({
                 />
               ) : null}
               {showsReasoning ? (
-                <LockedSetting label="推理" value="默认" />
+                <LockedSetting
+                  label={selectedProviderPresentation.reasoningLabel}
+                  value={
+                    supportsReasoningSelection ? (
+                      <Select
+                        value={
+                          effectiveSelectedReasoning ??
+                          defaultReasoningSelection
+                        }
+                        onValueChange={(value) =>
+                          setSelectedReasoning(
+                            providerReasoningFromControl(
+                              value,
+                              selectedProviderPresentation,
+                            ),
+                          )
+                        }
+                        disabled={createMutation.isPending}
+                      >
+                        <SelectTrigger
+                          size="sm"
+                          aria-label={`选择${selectedProviderPresentation.reasoningLabel}`}
+                        >
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value={defaultReasoningSelection}>
+                            默认
+                          </SelectItem>
+                          {selectedProviderPresentation.reasoningOptions.map(
+                            (option) => (
+                              <SelectItem
+                                key={option.id}
+                                value={option.id}
+                                textValue={option.label}
+                              >
+                                {option.label}
+                              </SelectItem>
+                            ),
+                          )}
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      '默认'
+                    )
+                  }
+                />
               ) : null}
             </dl>
 
@@ -471,15 +547,6 @@ export function NewConversationDialog({
       </DialogContent>
     </Dialog>
   )
-}
-
-function defaultProviderModel(
-  provider: ProviderPresentation,
-): string | undefined {
-  return (
-    provider.models.find((model) => model.isDefault === true) ??
-    provider.models[0]
-  )?.id
 }
 
 function LockedSetting({

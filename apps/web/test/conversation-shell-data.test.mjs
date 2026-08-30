@@ -95,6 +95,7 @@ test('new Conversation request carries the selected durable Provider and model',
   await actions.createConversation(projectId, {
     provider: 'claude-code',
     model: 'claude-sonnet-real',
+    reasoning: 'low',
   })
 
   assert.deepEqual(calls, [
@@ -103,6 +104,7 @@ test('new Conversation request carries the selected durable Provider and model',
       provider: 'claude-code',
       projectId,
       model: 'claude-sonnet-real',
+      reasoning: 'low',
     },
   ])
 })

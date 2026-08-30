@@ -1,5 +1,18 @@
 export const CLAUDE_CODE_PROVIDER = 'claude-code' as const
-export const CLAUDE_CODE_TESTED_VERSION = '2.1.250' as const
+export const CLAUDE_CODE_TESTED_VERSION = '2.1.251' as const
+export const CLAUDE_CODE_TESTED_VERSIONS = ['2.1.250', '2.1.251'] as const
+export const CLAUDE_CODE_EFFORT_LEVELS = [
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+] as const
+export type ClaudeCodeEffort = (typeof CLAUDE_CODE_EFFORT_LEVELS)[number]
+
+export function isClaudeCodeTestedVersion(version: string): boolean {
+  return (CLAUDE_CODE_TESTED_VERSIONS as readonly string[]).includes(version)
+}
 
 export interface ClaudeCodeCapabilities {
   readonly streaming: boolean
@@ -28,7 +41,7 @@ export const CLAUDE_CODE_CAPABILITIES: ClaudeCodeCapabilities = Object.freeze({
   diff: false,
   toolEvents: true,
   modelSelection: false,
-  reasoningControl: false,
+  reasoningControl: true,
 })
 
 export type ClaudeCodeDetectionStatus =

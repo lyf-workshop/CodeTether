@@ -51,6 +51,8 @@ export interface ToolStartedEvent extends ItemEventBase<'tool.started'> {
   /** Canonical presentation kind; omitted by legacy adapters. */
   readonly kind?: ToolKind
   readonly name: string
+  /** Provider-neutral command/path clue when the Provider supplies one safely. */
+  readonly command?: string
   readonly summary?: string
 }
 
@@ -65,6 +67,8 @@ export interface ToolCompletedEvent extends ItemEventBase<'tool.completed'> {
   /** Canonical presentation kind; omitted by legacy adapters. */
   readonly kind?: ToolKind
   readonly name: string
+  /** Provider-neutral command/path clue when the Provider supplies one safely. */
+  readonly command?: string
   readonly success?: boolean
   readonly summary?: string
 }

@@ -1,8 +1,26 @@
 import { appendFile } from 'node:fs/promises'
+import { resolve } from 'node:path'
 
-const arguments_ = process.argv.slice(2)
-const scenario = process.env.FAKE_CLAUDE_SCENARIO ?? 'happy'
-const version = process.env.FAKE_CLAUDE_VERSION ?? '2.1.250'
+const rawArguments = process.argv.slice(2)
+const fixtureOptions = Object.fromEntries(
+  rawArguments
+    .filter((argument) => argument.startsWith('--fixture-'))
+    .map((argument) => {
+      const separator = argument.indexOf('=')
+      return separator < 0
+        ? [argument.slice('--fixture-'.length), '']
+        : [
+            argument.slice('--fixture-'.length, separator),
+            argument.slice(separator + 1),
+          ]
+    }),
+)
+const arguments_ = rawArguments.filter(
+  (argument) => !argument.startsWith('--fixture-'),
+)
+const scenario =
+  fixtureOptions.scenario ?? process.env.FAKE_CLAUDE_SCENARIO ?? 'happy'
+const version = process.env.FAKE_CLAUDE_VERSION ?? '2.1.251'
 
 if (arguments_.includes('--version')) {
   if (process.env.FAKE_CLAUDE_COUNT_PATH) {
@@ -48,9 +66,13 @@ if (arguments_.includes('--version')) {
   const sessionId = arguments_[sessionIndex + 1]
   if (!sessionId) throw new Error('missing fixture session ID')
 
-  if (process.env.FAKE_CLAUDE_CAPTURE_PATH) {
+  const capturePath =
+    fixtureOptions.capture === undefined
+      ? process.env.FAKE_CLAUDE_CAPTURE_PATH
+      : resolve(process.cwd(), fixtureOptions.capture)
+  if (capturePath) {
     await appendFile(
-      process.env.FAKE_CLAUDE_CAPTURE_PATH,
+      capturePath,
       `${JSON.stringify({
         arguments: arguments_,
         cwd: process.cwd(),

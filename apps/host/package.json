@@ -16,7 +16,8 @@
     "integration": "node dist/integration.js",
     "conversation-hydration": "node dist/conversation-hydration-integration.js",
     "attention-integration": "node dist/attention-integration.js",
-    "claude-code-integration": "node dist/claude-code-integration.js"
+    "claude-code-integration": "node dist/claude-code-integration.js",
+    "claude-code-capability-integration": "node dist/claude-code-capability-integration.js"
   },
   "dependencies": {
     "@codetether/adapter-claude": "workspace:*",

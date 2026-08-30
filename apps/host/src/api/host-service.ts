@@ -744,6 +744,11 @@ export class HostService {
       request,
       async () => {
         const runtime = this.#requireProviderRuntime(request.provider)
+        assertProviderConfiguration(
+          this.#providers.descriptor(request.provider),
+          request.model,
+          request.reasoning,
+        )
         const workspace = await this.#reserveConversationProject(request)
         try {
           const releaseRuntimeSlot = this.#reserveRuntimeSlot()
@@ -2646,6 +2651,37 @@ function providerCommandError(
     code === 'provider_session_lost' ? 409 : 500,
     { cause: safeErrorName(error) },
   )
+}
+
+function assertProviderConfiguration(
+  descriptor: ProviderDescriptor | undefined,
+  model: string | undefined,
+  reasoning: string | undefined,
+): void {
+  if (
+    model !== undefined &&
+    (descriptor?.capabilities.modelSelection !== true ||
+      (descriptor.models !== undefined &&
+        !descriptor.models.some((option) => option.id === model)))
+  ) {
+    throw new HostServiceError(
+      'invalid_request',
+      'The selected model is unavailable for this Agent',
+      400,
+    )
+  }
+  if (
+    reasoning !== undefined &&
+    (descriptor?.capabilities.reasoningControl !== true ||
+      (descriptor.reasoningOptions !== undefined &&
+        !descriptor.reasoningOptions.some((option) => option.id === reasoning)))
+  ) {
+    throw new HostServiceError(
+      'invalid_request',
+      'The selected reasoning option is unavailable for this Agent',
+      400,
+    )
+  }
 }
 
 function providerErrorCode(error: unknown): HostErrorCode {

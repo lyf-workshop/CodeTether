@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
-import { resolve } from 'node:path'
+import { join, resolve } from 'node:path'
 import test from 'node:test'
 
 import {
   boundUtf8,
+  ClaudeCodeProtocolError,
   ClaudeCodeSessionLostError,
   ClaudeStreamNormalizer,
   normalizeClaudeTool,
@@ -26,7 +27,7 @@ function init(overrides = {}) {
     type: 'system',
     subtype: 'init',
     session_id: sessionId,
-    claude_code_version: '2.1.250',
+    claude_code_version: '2.1.251',
     cwd,
     ...overrides,
   }
@@ -53,6 +54,18 @@ test('validates init identity and emits canonical lifecycle events', () => {
     () => createNormalizer().consume(init({ cwd: resolve('other') })),
     /unsupported response/,
   )
+})
+
+test('accepts the frozen Phase 5A and current Phase 5B CLI versions', () => {
+  for (const version of ['2.1.250', '2.1.251']) {
+    const normalizer = createNormalizer()
+    assert.deepEqual(
+      normalizer
+        .consume(init({ claude_code_version: version }))
+        .map((event) => event.type),
+      ['conversation.started', 'turn.started'],
+    )
+  }
 })
 
 test('streams deltas and completes from the full message without duplicating text', () => {
@@ -145,8 +158,8 @@ test('maps only exact high-confidence tool names and pairs tool results', () => 
   })
   assert.equal(normalizeClaudeTool('Write').kind, 'edit')
   assert.equal(normalizeClaudeTool('Edit').kind, 'edit')
-  assert.equal(normalizeClaudeTool('Bash').kind, 'shell')
-  assert.equal(normalizeClaudeTool('PowerShell').kind, 'shell')
+  assert.equal(normalizeClaudeTool('Bash').kind, 'generic')
+  assert.equal(normalizeClaudeTool('PowerShell').kind, 'generic')
   assert.equal(normalizeClaudeTool('Glob').kind, 'search')
   assert.equal(normalizeClaudeTool('Grep').kind, 'search')
   assert.equal(normalizeClaudeTool('ReadFile').kind, 'generic')
@@ -199,6 +212,240 @@ test('maps only exact high-confidence tool names and pairs tool results', () => 
   )
   assert.equal(completed[1].success, true)
   assert.equal(completed[1].itemId, started[0].itemId)
+})
+
+test('delays tool start until structured input can produce a safe command clue', () => {
+  const normalizer = createNormalizer()
+  normalizer.consume(init())
+  const partial = normalizer.consume({
+    type: 'stream_event',
+    session_id: sessionId,
+    event: {
+      type: 'content_block_start',
+      content_block: {
+        type: 'tool_use',
+        id: 'provider-read-private',
+        name: 'Read',
+        input: {},
+      },
+    },
+  })
+  const started = normalizer.consume({
+    type: 'assistant',
+    session_id: sessionId,
+    message: {
+      id: 'message-read',
+      content: [
+        {
+          type: 'tool_use',
+          id: 'provider-read-private',
+          name: 'Read',
+          input: { file_path: join(cwd, 'src', 'hello world.ts') },
+        },
+      ],
+    },
+  })
+
+  assert.deepEqual(partial, [])
+  assert.equal(started.length, 1)
+  assert.equal(started[0].type, 'tool.started')
+  assert.equal(started[0].kind, 'read')
+  assert.equal(started[0].command, 'Read src/hello world.ts')
+  assert.doesNotMatch(started[0].command, /fixture-workspace/u)
+})
+
+test('normalizes edit and search inputs while failing shell closed', () => {
+  assert.deepEqual(
+    normalizeClaudeTool(
+      'Write',
+      { file_path: join(cwd, 'nested', '你好 file.ts') },
+      cwd,
+    ),
+    {
+      name: 'Edit',
+      kind: 'edit',
+      summary: 'Write nested/你好 file.ts',
+      command: 'Write nested/你好 file.ts',
+    },
+  )
+  assert.deepEqual(
+    normalizeClaudeTool(
+      'Bash',
+      { command: 'pnpm test', description: 'Run the focused tests' },
+      cwd,
+    ),
+    {
+      name: 'Generic Tool',
+      kind: 'generic',
+      summary: 'Run unavailable tool',
+    },
+  )
+  assert.deepEqual(
+    normalizeClaudeTool(
+      'Grep',
+      { pattern: 'reconnect', path: join(cwd, 'src') },
+      cwd,
+    ),
+    {
+      name: 'Search',
+      kind: 'search',
+      summary: 'Search workspace',
+      command: 'Grep reconnect in src',
+    },
+  )
+
+  const outside = normalizeClaudeTool(
+    'Edit',
+    { file_path: resolve(cwd, '..', 'private', 'secret.txt') },
+    cwd,
+  )
+  assert.deepEqual(outside, {
+    name: 'Edit',
+    kind: 'edit',
+    summary: 'Edit file',
+  })
+  assert.doesNotMatch(JSON.stringify(outside), /private|secret/u)
+
+  assert.doesNotMatch(
+    JSON.stringify(
+      normalizeClaudeTool('Bash', { command: 'secret command' }, cwd),
+    ),
+    /secret command/u,
+  )
+})
+
+test('keeps one stable generic identity for an unavailable shell tool', () => {
+  const normalizer = createNormalizer()
+  normalizer.consume(init())
+  const started = normalizer.consume({
+    type: 'assistant',
+    session_id: sessionId,
+    message: {
+      id: 'message-shell',
+      content: [
+        {
+          type: 'tool_use',
+          id: 'provider-shell-private',
+          name: 'Bash',
+          input: { command: 'git status --short' },
+        },
+      ],
+    },
+  })
+  const completed = normalizer.consume({
+    type: 'user',
+    session_id: sessionId,
+    message: {
+      role: 'user',
+      content: [
+        {
+          type: 'tool_result',
+          tool_use_id: 'provider-shell-private',
+          content: 'secret shell output must not cross',
+          is_error: false,
+        },
+      ],
+    },
+  })
+
+  assert.equal(started[0].type, 'tool.started')
+  assert.equal(started[0].kind, 'generic')
+  assert.equal(started[0].command, undefined)
+  assert.deepEqual(
+    completed.map((event) => event.type),
+    ['tool.completed'],
+  )
+  assert.equal(completed[0].itemId, started[0].itemId)
+  assert.equal(completed[0].command, undefined)
+  assert.doesNotMatch(JSON.stringify([...started, ...completed]), /git status/u)
+  assert.doesNotMatch(
+    JSON.stringify([...started, ...completed]),
+    /secret shell output/u,
+  )
+  assert.doesNotMatch(
+    JSON.stringify([...started, ...completed]),
+    /provider-shell-private/u,
+  )
+})
+
+test('rejects a Provider tool identity reused with a different tool name', () => {
+  const normalizer = createNormalizer()
+  normalizer.consume(init())
+  normalizer.consume({
+    type: 'stream_event',
+    session_id: sessionId,
+    event: {
+      type: 'content_block_start',
+      content_block: {
+        type: 'tool_use',
+        id: 'provider-tool-private',
+        name: 'Read',
+        input: {},
+      },
+    },
+  })
+
+  assert.throws(
+    () =>
+      normalizer.consume({
+        type: 'assistant',
+        session_id: sessionId,
+        message: {
+          id: 'message-mismatch',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'provider-tool-private',
+              name: 'Bash',
+              input: { command: 'whoami' },
+            },
+          ],
+        },
+      }),
+    ClaudeCodeProtocolError,
+  )
+})
+
+test('emits a bounded start before a result when the full tool snapshot is absent', () => {
+  const normalizer = createNormalizer()
+  normalizer.consume(init())
+  normalizer.consume({
+    type: 'stream_event',
+    session_id: sessionId,
+    event: {
+      type: 'content_block_start',
+      content_block: {
+        type: 'tool_use',
+        id: 'provider-read-without-snapshot',
+        name: 'Read',
+        input: {},
+      },
+    },
+  })
+
+  const events = normalizer.consume({
+    type: 'user',
+    session_id: sessionId,
+    message: {
+      role: 'user',
+      content: [
+        {
+          type: 'tool_result',
+          tool_use_id: 'provider-read-without-snapshot',
+          content: 'fixture output',
+          is_error: false,
+        },
+      ],
+    },
+  })
+
+  assert.deepEqual(
+    events.map((event) => event.type),
+    ['tool.started', 'tool.output', 'tool.completed'],
+  )
+  assert.ok(events.every((event) => event.itemId === events[0].itemId))
+  assert.equal(events[0].kind, 'read')
+  assert.doesNotMatch(JSON.stringify(events), /provider-read-without-snapshot/u)
 })
 
 test('maps authentication and terminal errors to bounded safe failures', () => {

@@ -13,7 +13,11 @@ import {
   type LocalHttpServerOptions,
 } from './local-http-server.js'
 import { CodexHostRuntime } from './codex-host-runtime.js'
-import { ClaudeCodeHostRuntime } from './claude-code-host-runtime.js'
+import {
+  CLAUDE_CODE_REASONING_LABEL,
+  ClaudeCodeHostRuntime,
+  claudeCodeReasoningOptions,
+} from './claude-code-host-runtime.js'
 import { UnavailableAgentRuntime } from './unavailable-agent-runtime.js'
 import { WorkspacePolicy } from './workspace-policy.js'
 
@@ -98,6 +102,8 @@ export async function startLocalCodexHost(
       availability: claudeDetectionAvailability(claudeDetection.status),
       capabilities: claudeDetection.capabilities,
       testedVersion: CLAUDE_CODE_TESTED_VERSION,
+      reasoningLabel: CLAUDE_CODE_REASONING_LABEL,
+      reasoningOptions: claudeCodeReasoningOptions(),
       ...('version' in claudeDetection
         ? { version: claudeDetection.version }
         : {}),

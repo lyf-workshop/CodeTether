@@ -35,10 +35,10 @@ test('bridges a cold Claude session into canonical streaming Host events', async
       diff: false,
       toolEvents: true,
       modelSelection: false,
-      reasoningControl: false,
+      reasoningControl: true,
     },
     durationMs: 1,
-    version: '2.1.250',
+    version: '2.1.251',
     executablePath: process.execPath,
     launcher: {
       kind: 'native',
@@ -60,11 +60,15 @@ test('bridges a cold Claude session into canonical streaming Host events', async
   })
 
   try {
-    const session = await runtime.startConversation({ cwd })
+    const session = await runtime.startConversation({
+      cwd,
+      reasoning: 'low',
+    })
     const turn = await runtime.startTurn({
       providerThreadId: session.providerThreadId,
       cwd,
       input: 'fixture prompt',
+      reasoning: 'low',
     })
     const terminalEvent = await terminal
     assert.equal(terminalEvent.type, 'turn.completed')
@@ -81,6 +85,16 @@ test('bridges a cold Claude session into canonical streaming Host events', async
     )
     assert.equal(runtime.descriptor.capabilities.approvals, false)
     assert.equal(runtime.descriptor.capabilities.interrupt, false)
+    assert.equal(runtime.descriptor.capabilities.reasoningControl, true)
+    assert.equal(runtime.descriptor.reasoningLabel, '思考强度')
+    assert.deepEqual(
+      runtime.descriptor.reasoningOptions.map((option) => option.id),
+      ['low', 'medium', 'high', 'xhigh', 'max'],
+    )
+    await assert.rejects(
+      runtime.startConversation({ cwd, reasoning: 'unsupported' }),
+      /effort is unsupported/u,
+    )
     await runtime.disposeConversation({
       providerThreadId: session.providerThreadId,
     })
@@ -93,9 +107,7 @@ test('bridges a cold Claude session into canonical streaming Host events', async
 test('uses session creation for a restored zero-Turn Claude Conversation', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'codetether-claude-zero-turn-'))
   const capturePath = join(cwd, 'capture.jsonl')
-  const previousCapture = process.env.FAKE_CLAUDE_CAPTURE_PATH
-  process.env.FAKE_CLAUDE_CAPTURE_PATH = capturePath
-  const runtime = createRuntime()
+  const runtime = createRuntime('--fixture-capture=capture.jsonl')
   const sessionId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
   let resolveTerminal
   const terminal = new Promise((resolve) => {
@@ -123,9 +135,6 @@ test('uses session creation for a restored zero-Turn Claude Conversation', async
     assert.equal(capture.arguments.includes('--session-id'), true)
     assert.equal(capture.arguments.includes('--resume'), false)
   } finally {
-    if (previousCapture === undefined)
-      delete process.env.FAKE_CLAUDE_CAPTURE_PATH
-    else process.env.FAKE_CLAUDE_CAPTURE_PATH = previousCapture
     await runtime.close()
     await rm(cwd, { recursive: true, force: true })
   }
@@ -134,12 +143,10 @@ test('uses session creation for a restored zero-Turn Claude Conversation', async
 test('persists owner-closed running Claude Turns as interrupted, not failed', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'codetether-claude-close-'))
   const databasePath = join(cwd, 'host.sqlite')
-  const previousScenario = process.env.FAKE_CLAUDE_SCENARIO
-  process.env.FAKE_CLAUDE_SCENARIO = 'hang'
   let service
   let turnId
   try {
-    const runtime = createRuntime()
+    const runtime = createRuntime('--fixture-scenario=hang')
     let resolveStarted
     const started = new Promise((resolve) => {
       resolveStarted = resolve
@@ -183,14 +190,12 @@ test('persists owner-closed running Claude Turns as interrupted, not failed', as
       reopened.close()
     }
   } finally {
-    if (previousScenario === undefined) delete process.env.FAKE_CLAUDE_SCENARIO
-    else process.env.FAKE_CLAUDE_SCENARIO = previousScenario
     await service?.close().catch(() => undefined)
     await rm(cwd, { recursive: true, force: true })
   }
 })
 
-function createRuntime() {
+function createRuntime(...fixtureArguments) {
   return new ClaudeCodeHostRuntime({
     provider: 'claude-code',
     status: 'available',
@@ -206,15 +211,15 @@ function createRuntime() {
       diff: false,
       toolEvents: true,
       modelSelection: false,
-      reasoningControl: false,
+      reasoningControl: true,
     },
     durationMs: 1,
-    version: '2.1.250',
+    version: '2.1.251',
     executablePath: process.execPath,
     launcher: {
       kind: 'native',
       executable: process.execPath,
-      prefixArguments: [fixture],
+      prefixArguments: [fixture, ...fixtureArguments],
       sourcePath: process.execPath,
     },
   })

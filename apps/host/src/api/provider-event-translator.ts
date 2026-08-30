@@ -117,7 +117,10 @@ export class ProviderEventTranslator {
           payload: {
             kind: event.kind ?? 'generic',
             name: COMMAND_TOOL_NAME,
-            command: takeTextHead(event.name, TOOL_COMMAND_MAX_CHARACTERS),
+            command: takeTextHead(
+              event.command ?? event.name,
+              TOOL_COMMAND_MAX_CHARACTERS,
+            ),
             ...(event.summary === undefined
               ? {}
               : {
@@ -156,7 +159,10 @@ export class ProviderEventTranslator {
           payload: {
             kind: event.kind ?? 'generic',
             name: COMMAND_TOOL_NAME,
-            command: takeTextHead(event.name, TOOL_COMMAND_MAX_CHARACTERS),
+            command: takeTextHead(
+              event.command ?? event.name,
+              TOOL_COMMAND_MAX_CHARACTERS,
+            ),
             ...(event.success === undefined ? {} : { success: event.success }),
             ...(event.summary === undefined
               ? {}

@@ -152,6 +152,8 @@ class FakeRuntime {
 async function createFixture(t, options = {}) {
   const workspace = await mkdtemp(resolve(tmpdir(), 'codetether-service-'))
   const runtime = new FakeRuntime()
+  if (options.provider !== undefined) runtime.provider = options.provider
+  if (options.descriptor !== undefined) runtime.descriptor = options.descriptor
   const publisher = new HostEventPublisher({ epoch })
   const workspacePolicy = await WorkspacePolicy.create([workspace])
   const service = new HostService({
@@ -205,6 +207,66 @@ test('bootstrap reports only implemented runtime capabilities', async (t) => {
     diff: true,
     streaming: true,
   })
+})
+
+test('rejects a Provider reasoning option outside the Host-owned descriptor', async (t) => {
+  const capabilities = {
+    streaming: true,
+    resume: true,
+    interrupt: false,
+    approvals: false,
+    fileRead: true,
+    fileEdit: false,
+    shell: false,
+    search: true,
+    diff: false,
+    toolEvents: true,
+    modelSelection: false,
+    reasoningControl: true,
+  }
+  const fixture = await createFixture(t, {
+    provider: 'claude-code',
+    descriptor: {
+      provider: 'claude-code',
+      displayName: 'Claude Code',
+      availability: 'available',
+      capabilities,
+      reasoningLabel: '思考强度',
+      reasoningOptions: [
+        { id: 'low', label: '低' },
+        { id: 'high', label: '高' },
+      ],
+    },
+  })
+  const project = (await fixture.service.listProjects()).projects[0]
+  assert.ok(project)
+
+  await assert.rejects(
+    fixture.service.createConversation({
+      actionId: 'act_claude_invalid_effort',
+      provider: 'claude-code',
+      projectId: project.projectId,
+      reasoning: 'unsupported',
+    }),
+    (error) =>
+      error instanceof HostServiceError &&
+      error.code === 'invalid_request' &&
+      error.httpStatus === 400,
+  )
+  await assert.rejects(
+    fixture.service.createConversation({
+      actionId: 'act_claude_invalid_model',
+      provider: 'claude-code',
+      projectId: project.projectId,
+      model: 'fabricated-model',
+    }),
+    (error) =>
+      error instanceof HostServiceError &&
+      error.code === 'invalid_request' &&
+      error.httpStatus === 400,
+  )
+  assert.equal(fixture.runtime.conversationCalls.length, 0)
+  assert.deepEqual(fixture.service.snapshot().conversations, [])
 })
 
 test('Project deletion cannot race an in-flight Conversation creation', async (t) => {
@@ -1406,7 +1468,8 @@ test('publishes a stable Tool identity without exposing an oversized command as 
     turnId: 'provider-turn-secret-1',
     itemId: 'provider-tool-long-command',
     type: 'tool.started',
-    name: command,
+    name: 'Read',
+    command,
   })
   fixture.runtime.emitEvent({
     provider: 'codex',
@@ -1415,7 +1478,8 @@ test('publishes a stable Tool identity without exposing an oversized command as 
     turnId: 'provider-turn-secret-1',
     itemId: 'provider-tool-long-command',
     type: 'tool.completed',
-    name: command,
+    name: 'Read',
+    command,
     success: false,
     summary: `${'diagnostic '.repeat(600)}PathNotFound`,
   })

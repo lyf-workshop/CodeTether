@@ -6,6 +6,12 @@ import {
   providerPresentation,
   providerPresentations,
 } from '../.tmp/test-dist/provider/provider-presentation.js'
+import {
+  defaultProviderControls,
+  effectiveProviderReasoning,
+  providerDefaultReasoningSelection,
+  providerReasoningFromControl,
+} from '../.tmp/test-dist/components/conversations/new-conversation-provider-selection.js'
 
 const providerCapabilities = {
   streaming: true,
@@ -76,6 +82,11 @@ test('Claude Code status, version, models and capabilities remain Host-owned', (
         testedVersion: '1.0.0',
         capabilities: providerCapabilities,
         models: [{ id: 'real-model-id', label: 'CLI model', isDefault: true }],
+        reasoningLabel: '思考强度',
+        reasoningOptions: [
+          { id: 'low', label: '低' },
+          { id: 'high', label: '高' },
+        ],
       },
     ],
   }
@@ -88,10 +99,44 @@ test('Claude Code status, version, models and capabilities remain Host-owned', (
   assert.deepEqual(claude.models, [
     { id: 'real-model-id', label: 'CLI model', isDefault: true },
   ])
+  assert.equal(claude.reasoningLabel, '思考强度')
+  assert.deepEqual(claude.reasoningOptions, [
+    { id: 'low', label: '低' },
+    { id: 'high', label: '高' },
+  ])
   assert.equal(claude.capabilities.interrupt, false)
   assert.equal(claude.capabilities.approvals, false)
   assert.equal(claude.capabilities.diff, false)
   assert.equal(providerPresentation(bootstrap, 'codex').available, false)
+})
+
+test('Provider reasoning selection omits defaults and rejects stale values', () => {
+  const provider = {
+    ...providerPresentation(undefined, 'claude-code'),
+    reasoningOptions: [
+      { id: '__provider_default__', label: 'Provider value' },
+      { id: 'low', label: 'Low' },
+      { id: 'high', label: 'High' },
+    ],
+  }
+  const defaultControl = providerDefaultReasoningSelection(provider)
+  assert.equal(defaultControl, '__provider_default___')
+  assert.equal(effectiveProviderReasoning(undefined, provider), undefined)
+  assert.equal(effectiveProviderReasoning('low', provider), 'low')
+  assert.equal(effectiveProviderReasoning('stale', provider), undefined)
+  assert.equal(
+    providerReasoningFromControl(defaultControl, provider),
+    undefined,
+  )
+  assert.equal(providerReasoningFromControl('high', provider), 'high')
+  assert.equal(providerReasoningFromControl('stale', provider), undefined)
+
+  const providerSwitchDefaults = defaultProviderControls({
+    ...provider,
+    models: [{ id: 'provider-default', label: 'Default', isDefault: true }],
+  })
+  assert.deepEqual(providerSwitchDefaults, { model: 'provider-default' })
+  assert.equal(providerSwitchDefaults.reasoning, undefined)
 })
 
 test('existing UI surfaces consume Provider truth without adding a switch to Detail', async () => {
@@ -132,6 +177,9 @@ test('existing UI surfaces consume Provider truth without adding a switch to Det
   assert.match(dialog, /disabled=\{!provider\.available\}/u)
   assert.match(dialog, /capabilities\.modelSelection/u)
   assert.match(dialog, /capabilities\.reasoningControl/u)
+  assert.match(dialog, /reasoningOptions/u)
+  assert.match(dialog, /supportsReasoningSelection/u)
+  assert.match(dialog, /reasoning: effectiveSelectedReasoning/u)
   assert.match(sidebar, /provider\.availabilityLabel/u)
   assert.match(sidebar, /provider\.version/u)
   assert.match(header, /capabilities\.supportsInterrupt/u)

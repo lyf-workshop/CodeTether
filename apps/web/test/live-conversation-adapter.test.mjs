@@ -73,6 +73,25 @@ test('maps every pending Approval and enables only advertised live controls', ()
   )
 })
 
+test('presents a Provider-owned Claude effort label without changing durable identity', () => {
+  const claudeBootstrap = bootstrap('claude-code')
+  claudeBootstrap.providers[0].reasoningLabel = '思考强度'
+  claudeBootstrap.providers[0].reasoningOptions = [
+    { id: 'low', label: '低' },
+    { id: 'high', label: '高' },
+  ]
+
+  const viewModel = createLiveConversationViewModel(
+    conversation({ provider: 'claude-code', reasoning: 'low' }),
+    claudeBootstrap,
+    'connected',
+  )
+
+  assert.equal(viewModel.agent, 'claude')
+  assert.equal(viewModel.provider, 'claude-code')
+  assert.equal(viewModel.reasoning, '低')
+})
+
 test('uses one projected file change for Timeline Diff and Inspector Changes', () => {
   const viewModel = createLiveConversationViewModel(
     conversation({

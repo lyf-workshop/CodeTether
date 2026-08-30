@@ -170,7 +170,11 @@ export function createLiveConversationViewModel(
     agent: provider.agent,
     provider: model.provider,
     model: model.model ?? '默认模型',
-    reasoning: model.reasoning ?? '默认',
+    reasoning:
+      provider.reasoningOptions.find((option) => option.id === model.reasoning)
+        ?.label ??
+      model.reasoning ??
+      '默认',
     permission:
       pendingApprovals.length > 0
         ? '等待审批'

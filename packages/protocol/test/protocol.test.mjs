@@ -970,6 +970,11 @@ test('validates bootstrap and snapshot as separate wire records', () => {
       version: '1.2.3',
       testedVersion: '1.2.3',
       models: [{ id: 'model-real', label: 'Model Real', isDefault: true }],
+      reasoningLabel: 'Effort',
+      reasoningOptions: [
+        { id: 'low', label: 'Low' },
+        { id: 'high', label: 'High' },
+      ],
     },
   ]
   assert.deepEqual(
@@ -980,6 +985,21 @@ test('validates bootstrap and snapshot as separate wire records', () => {
     BootstrapSchema.safeParse({
       ...bootstrap,
       providers: [...providers, providers[0]],
+    }).success,
+    false,
+  )
+  assert.equal(
+    BootstrapSchema.safeParse({
+      ...bootstrap,
+      providers: [
+        {
+          ...providers[0],
+          reasoningOptions: [
+            { id: 'low', label: 'Low' },
+            { id: 'low', label: 'Duplicate' },
+          ],
+        },
+      ],
     }).success,
     false,
   )

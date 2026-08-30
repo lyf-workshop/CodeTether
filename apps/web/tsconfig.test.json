@@ -35,6 +35,7 @@
     "src/components/conversations/conversation-search-presentation.ts",
     "src/components/conversations/conversation-search-focus.ts",
     "src/components/conversations/new-conversation-presentation.ts",
+    "src/components/conversations/new-conversation-provider-selection.ts",
     "src/components/projects/add-project-directory-interaction.ts",
     "src/components/projects/add-project-presentation.ts",
     "src/components/projects/project-format.ts",

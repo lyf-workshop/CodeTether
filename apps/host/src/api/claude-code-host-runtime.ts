@@ -3,11 +3,24 @@ import { randomUUID } from 'node:crypto'
 import type { AgentEvent } from '@codetether/agent-core'
 import {
   CLAUDE_CODE_CAPABILITIES,
+  CLAUDE_CODE_EFFORT_LEVELS,
   CLAUDE_CODE_TESTED_VERSION,
   ClaudeCodeSessionRuntime,
   type ClaudeCodeAvailableDetection,
+  type ClaudeCodeEffort,
 } from '@codetether/adapter-claude'
 import type { ProviderDescriptor } from '@codetether/protocol'
+
+export const CLAUDE_CODE_REASONING_LABEL = '思考强度'
+
+export function claudeCodeReasoningOptions(): NonNullable<
+  ProviderDescriptor['reasoningOptions']
+> {
+  return CLAUDE_CODE_EFFORT_LEVELS.map((id) => ({
+    id,
+    label: claudeEffortLabel(id),
+  }))
+}
 
 import {
   ProviderConversationUnavailableError,
@@ -46,6 +59,8 @@ export class ClaudeCodeHostRuntime implements AgentHostRuntime {
       capabilities: CLAUDE_CODE_CAPABILITIES,
       version: detection.version,
       testedVersion: CLAUDE_CODE_TESTED_VERSION,
+      reasoningLabel: CLAUDE_CODE_REASONING_LABEL,
+      reasoningOptions: claudeCodeReasoningOptions(),
     }
   }
 
@@ -71,12 +86,13 @@ export class ClaudeCodeHostRuntime implements AgentHostRuntime {
     readonly reasoning?: string
   }): Promise<ProviderConversationResult> {
     this.#assertOpen()
-    assertNoUnsupportedControls(options)
+    assertModelUnsupported(options.model)
+    parseClaudeEffort(options.reasoning)
     const session = ClaudeCodeSessionRuntime.createSession({
       launcher: this.#detection.launcher,
       cwd: options.cwd,
       environment: this.#environment,
-      testedVersion: CLAUDE_CODE_TESTED_VERSION,
+      testedVersion: this.#detection.version,
     })
     this.#installSession(session)
     return { providerThreadId: session.sessionId }
@@ -105,7 +121,7 @@ export class ClaudeCodeHostRuntime implements AgentHostRuntime {
         cwd: options.cwd,
         environment: this.#environment,
         sessionId: options.providerThreadId,
-        testedVersion: CLAUDE_CODE_TESTED_VERSION,
+        testedVersion: this.#detection.version,
       }
       session = options.providerSessionMaterialized
         ? ClaudeCodeSessionRuntime.resumeSession(sessionOptions)
@@ -129,7 +145,8 @@ export class ClaudeCodeHostRuntime implements AgentHostRuntime {
     readonly reasoning?: string
   }): Promise<ProviderTurnResult> {
     this.#assertOpen()
-    assertNoUnsupportedControls(options)
+    assertModelUnsupported(options.model)
+    const effort = parseClaudeEffort(options.reasoning)
     const session = this.#sessions.get(options.providerThreadId)
     if (session === undefined || session.cwd !== options.cwd) {
       throw new ProviderConversationUnavailableError(
@@ -141,6 +158,7 @@ export class ClaudeCodeHostRuntime implements AgentHostRuntime {
     const completion = session.startTurn({
       turnId: providerTurnId,
       prompt: options.input,
+      ...(effort === undefined ? {} : { effort }),
     })
     void completion
       .catch((error: unknown) => {
@@ -162,7 +180,7 @@ export class ClaudeCodeHostRuntime implements AgentHostRuntime {
   }
 
   async interruptTurn(): Promise<never> {
-    throw new Error('Claude Code interruption is unsupported in Phase 5A')
+    throw new Error('Claude Code interruption is unsupported')
   }
 
   async disposeConversation(options: {
@@ -211,14 +229,34 @@ export class ClaudeCodeHostRuntime implements AgentHostRuntime {
   }
 }
 
-function assertNoUnsupportedControls(options: {
-  readonly model?: string
-  readonly reasoning?: string
-}): void {
-  if (options.model !== undefined || options.reasoning !== undefined) {
-    throw new TypeError(
-      'Claude Code model and reasoning controls are unavailable in Phase 5A',
-    )
+function assertModelUnsupported(model: string | undefined): void {
+  if (model !== undefined) {
+    throw new TypeError('Claude Code model selection is unavailable.')
+  }
+}
+
+function parseClaudeEffort(
+  reasoning: string | undefined,
+): ClaudeCodeEffort | undefined {
+  if (reasoning === undefined) return undefined
+  if (!(CLAUDE_CODE_EFFORT_LEVELS as readonly string[]).includes(reasoning)) {
+    throw new TypeError('Claude Code effort is unsupported.')
+  }
+  return reasoning as ClaudeCodeEffort
+}
+
+function claudeEffortLabel(effort: ClaudeCodeEffort): string {
+  switch (effort) {
+    case 'low':
+      return '低'
+    case 'medium':
+      return '中'
+    case 'high':
+      return '高'
+    case 'xhigh':
+      return '超高'
+    case 'max':
+      return '最大'
   }
 }
 

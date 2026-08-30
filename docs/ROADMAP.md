@@ -788,12 +788,12 @@ Validation boundary:
 
 Acceptance boundary:
 
-- Owner acceptance freezes Phase 4G.2 at `f576b05`. Further Desktop lifecycle polish is not authorized unless Phase 5A introduces a specific regression.
+- Owner acceptance freezes Phase 4G.2 at `f576b05`. Further Desktop lifecycle polish is not authorized unless a later Provider phase introduces a specific regression.
 - This acceptance does not broaden the observed-vs-simulated lifecycle claims above and does not authorize Start with Windows, automatic Host restart, or another native product surface.
 
 ## Phase 5A — Second Provider Foundation: Claude Code
 
-**Status:** current approved implementation scope; not yet accepted, frozen, or READY.
+**Status:** accepted and frozen at `a1329f2`.
 
 Implemented architecture:
 
@@ -803,7 +803,7 @@ Implemented architecture:
 - Both Providers share the existing process-wide eight-Conversation hydrated working-set limit. List, Detail, Rail, Search, Rename, Pin, Archive, and Unarchive remain cold and never spawn or resume either CLI; only real Turn control performs native Provider hydration/resume.
 - Claude Code detection safely resolves a native executable or verified npm installation and performs bounded version/authentication checks once per Host lifecycle. Public states distinguish available, not installed, unsupported version, misconfigured, and unavailable without revealing the executable path or raw diagnostic.
 - Claude session creation uses a native UUID session identity; restart continuation uses the CLI's native `--resume` contract and never re-prompts full durable history to imitate context. One active Turn owns one child process, executes in the already authorized Conversation working directory, receives bounded canonical User input through JSONL stdin, and uses structured argv with `shell: false`.
-- Claude text and high-confidence Tool events normalize into the existing semantic stream. Read, Edit/Write, Bash/PowerShell, and Glob/Grep map to canonical Tool kinds; unknown Tools remain Generic rather than relying on name heuristics. Public payloads stay bounded and presentation-safe.
+- Claude text and high-confidence Tool events normalize into the existing semantic stream. Read, Edit/Write paths, and Glob/Grep map to bounded canonical Tool fields; unavailable Bash/PowerShell and unknown Tools remain Generic rather than publishing a raw command or relying on name heuristics. Public payloads stay bounded and presentation-safe.
 - The Phase 5A Claude execution profile is intentionally restricted to Read/Glob/Grep under noninteractive `dontAsk`, strict MCP, and no permission bypass. Its descriptor advertises streaming, native resume, Read, Search, and Tool events, but not machine-readable Approval, interrupt, Edit, Shell, Diff, model selection, or Codex-style reasoning control. Shared UI hides or disables unsupported controls while Codex retains its established capability surface.
 - New Conversation can select an actually available Codex or Claude Code Agent. Provider identity remains fixed afterward; mixed-Provider Conversations share one Project index, Rail, organization model, Search projection, Inbox, Attention, and notification presentation without Provider switching or handoff.
 - Provider failures are scoped to their registry entry and map to bounded canonical errors such as not installed, unsupported version, start failure, lost session, or unavailable. One failed Provider does not fail the other's live work, and history remains readable while an executable is unavailable.
@@ -811,13 +811,38 @@ Implemented architecture:
 Not included:
 
 - Cross-Provider Conversation switching, handoff, delegation, transcript replay, Claude Agent Teams/subagents, OpenCode, Gemini, Provider marketplace, or global Provider-settings work.
-- Claude capability parity: machine-readable Approval, writable/shell permission mapping, Diff, interrupt, model/permission/reasoning controls, richer Tool fidelity, and any bypass mode remain deferred to a separately approved Phase 5B.
+- Claude capability expansion beyond the restricted foundation remains deferred to separately reviewed capability phases; no bypass mode is authorized.
 - Remote Provider execution, Mobile, MCP management UI, Queue/Steer, Attachments, or changes to the frozen Phase 4G Desktop lifecycle outside a demonstrated regression.
 
 Exit gate:
 
 - Real installed Claude Code detection, a real streamed Conversation, basic real Tool normalization, native restart/resume marker retention, mixed Codex/Claude history, durable Search/organization compatibility, cold Provider isolation, background Tray completion with no orphan, installed Desktop smoke, and clean Codex regressions must all pass.
-- Fixture parser/process tests support but cannot replace the required REAL Claude Code evidence. Phase 5A remains NOT READY until that evidence and all validation gates are complete.
+- Fixture parser/process tests supported but did not replace the required REAL Claude Code evidence. Owner acceptance froze the implementation and clean post-commit installed/background evidence at `a1329f2`.
+
+## Phase 5B — Claude Code Capability Expansion
+
+**Status:** current approved implementation scope; not yet accepted, frozen, or READY.
+
+Implementation scope:
+
+- Re-audit the installed Claude Code CLI before changing any capability. Only stable noninteractive machine-readable behavior may cross the existing Provider adapter; terminal scraping, fake parity, Provider-specific public APIs, transcript replay, and Conversation Provider switching remain forbidden.
+- Preserve the accepted Read/Glob/Grep-only production launch profile, strict MCP boundary, `dontAsk`, structured argv, JSONL stdin, and `shell: false`. Observed Edit/Write paths may be normalized defensively, while unexpected Bash/PowerShell envelopes remain Generic without exposing their commands; the corresponding product capabilities remain false until a safe permission contract is proven.
+- Enrich canonical Tool events from stable structured Tool identity with bounded presentation-safe command/path clues. Raw Claude Tool IDs, protocol objects, stderr, private session identity, absolute escaping paths, and arbitrary environment data remain private.
+- Expose the installed CLI's real `--effort` values through generic Host-owned reasoning metadata and a Provider-labelled “思考强度” control. This is not a claim that Claude effort is semantically equivalent to Codex reasoning. Unknown/stale values fail as `invalid_request` before Provider launch.
+- Keep Approval, reliable interrupt, Edit, Shell, Diff, and model selection unsupported unless real evidence proves every required safety and lifecycle property. A documented flag or interactive terminal affordance alone is insufficient.
+- Stress native resume across repeated Host restarts, cold organization/Search, background completion, and mixed Provider history. Test bounded simultaneous Claude Conversations under the existing shared eight-Conversation admission budget and verify process/event isolation and cleanup.
+- Run complete Codex, Desktop managed-Host/Tray, installed package, Search/organization, and process-ownership regressions without modifying the frozen Phase 4G lifecycle absent a demonstrated regression.
+
+Not included:
+
+- Claude Approval simulation, auto-approval, bypass permissions, terminal/ANSI scraping, generic Host shell/filesystem APIs, or CodeTether-owned command execution.
+- Provider switching/handoff/delegation, transcript replay fallback, Claude Agent Teams/subagents, MCP/plugin/hooks management, OpenCode/Gemini, remote Provider execution, or global Provider settings.
+- A Claude-specific Timeline, Diff UI, Search system, organization model, Attention store, Client endpoint, or durable Conversation schema.
+
+Exit gate:
+
+- The public capability matrix matches real installed Claude Code behavior, real effort choices and richer Tool normalization pass, unsupported capabilities have explicit evidence-based reasons, repeated resume/concurrency/mixed-Provider/background flows are truthful, Codex and installed Desktop regressions pass, all process/port cleanup succeeds, and the working tree ends clean in one coherent commit.
+- REAL, SIMULATED, UNSUPPORTED, and NOT OBSERVED evidence remain distinct. Phase 5B is not accepted or frozen until Owner review.
 
 ## Phase 6 — Machines
 

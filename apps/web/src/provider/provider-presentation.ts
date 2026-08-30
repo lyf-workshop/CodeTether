@@ -4,6 +4,7 @@ import type {
   ProviderCapabilities,
   ProviderId,
   ProviderModel,
+  ProviderReasoningOption,
 } from '@codetether/protocol'
 import type { AgentId } from '@codetether/ui'
 
@@ -25,6 +26,8 @@ export interface ProviderPresentation {
   readonly testedVersion?: string
   readonly capabilities: ProviderCapabilities
   readonly models: readonly ProviderModel[]
+  readonly reasoningLabel: string
+  readonly reasoningOptions: readonly ProviderReasoningOption[]
 }
 
 const providerAgentIds = {
@@ -83,6 +86,8 @@ export function providerPresentation(
         : { testedVersion: descriptor.testedVersion }),
       capabilities: descriptor.capabilities,
       models: descriptor.models ?? [],
+      reasoningLabel: descriptor.reasoningLabel ?? '推理',
+      reasoningOptions: descriptor.reasoningOptions ?? [],
     }
   }
 
@@ -115,6 +120,8 @@ export function providerPresentation(
           }
         : unavailableCapabilities,
     models: [],
+    reasoningLabel: '推理',
+    reasoningOptions: [],
   }
 }
 

@@ -41,6 +41,16 @@ export const ProviderModelSchema = z
   .strict()
 export type ProviderModel = z.infer<typeof ProviderModelSchema>
 
+export const ProviderReasoningOptionSchema = z
+  .object({
+    id: z.string().trim().min(1).max(120),
+    label: z.string().trim().min(1).max(120),
+  })
+  .strict()
+export type ProviderReasoningOption = z.infer<
+  typeof ProviderReasoningOptionSchema
+>
+
 /** Public Provider detection result. Executable paths and raw diagnostics stay private. */
 export const ProviderDescriptorSchema = z
   .object({
@@ -51,13 +61,14 @@ export const ProviderDescriptorSchema = z
     version: z.string().trim().min(1).max(120).optional(),
     testedVersion: z.string().trim().min(1).max(120).optional(),
     models: z.array(ProviderModelSchema).max(64).optional(),
+    reasoningLabel: z.string().trim().min(1).max(120).optional(),
+    reasoningOptions: z.array(ProviderReasoningOptionSchema).max(16).optional(),
   })
   .strict()
   .superRefine((descriptor, context) => {
-    if (descriptor.models === undefined) return
     const modelIds = new Set<string>()
     let defaultCount = 0
-    for (const [index, model] of descriptor.models.entries()) {
+    for (const [index, model] of (descriptor.models ?? []).entries()) {
       if (modelIds.has(model.id)) {
         context.addIssue({
           code: 'custom',
@@ -74,6 +85,19 @@ export const ProviderDescriptorSchema = z
         message: 'A Provider can expose at most one default model',
         path: ['models'],
       })
+    }
+    const reasoningOptionIds = new Set<string>()
+    for (const [index, option] of (
+      descriptor.reasoningOptions ?? []
+    ).entries()) {
+      if (reasoningOptionIds.has(option.id)) {
+        context.addIssue({
+          code: 'custom',
+          message: 'Provider reasoning option identities must be unique',
+          path: ['reasoningOptions', index, 'id'],
+        })
+      }
+      reasoningOptionIds.add(option.id)
     }
   })
 export type ProviderDescriptor = z.infer<typeof ProviderDescriptorSchema>

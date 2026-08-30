@@ -14,6 +14,7 @@ import {
   type ClaudeCodeTurnProcessHandle,
 } from './process.js'
 import type {
+  ClaudeCodeEffort,
   ClaudeCodeFailure,
   ClaudeCodeLauncher,
   ClaudeCodeTurnResult,
@@ -37,6 +38,7 @@ export interface ClaudeCodeResumeSessionOptions extends ClaudeCodeSessionOptions
 export interface ClaudeCodeStartTurnOptions {
   readonly turnId: string
   readonly prompt: string
+  readonly effort?: ClaudeCodeEffort
 }
 
 export type ClaudeCodeEventListener = (
@@ -117,6 +119,7 @@ export class ClaudeCodeSessionRuntime {
       cwd: this.cwd,
       prompt: options.prompt,
       resume: this.#resume,
+      ...(options.effort === undefined ? {} : { effort: options.effort }),
       ...(this.#environment === undefined
         ? {}
         : { environment: this.#environment }),

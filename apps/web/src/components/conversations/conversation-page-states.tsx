@@ -80,7 +80,7 @@ export function ConversationsEmptyState({ action }: { action?: ReactNode }) {
           还没有会话
         </h2>
         <p className="mt-1.5 text-base font-regular text-text-secondary">
-          在这个项目中创建一个 Codex 会话，即可开始工作。
+          在这个项目中创建一个智能体会话，即可开始工作。
         </p>
         {action ? (
           <div className="mt-5 flex justify-center">{action}</div>

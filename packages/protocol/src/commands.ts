@@ -19,11 +19,12 @@ import {
   TurnInputSchema,
   TurnRecordSchema,
 } from './records.js'
+import { ProviderIdSchema } from './providers.js'
 
 const CreateConversationByProjectRequestSchema = z
   .object({
     actionId: ActionIdSchema,
-    provider: z.literal('codex'),
+    provider: ProviderIdSchema,
     projectId: ProjectIdSchema,
     model: z.string().trim().min(1).max(240).optional(),
     reasoning: z.string().trim().min(1).max(120).optional(),
@@ -37,7 +38,7 @@ const CreateConversationByProjectRequestSchema = z
 const CreateConversationByLegacyCwdRequestSchema = z
   .object({
     actionId: ActionIdSchema,
-    provider: z.literal('codex'),
+    provider: ProviderIdSchema,
     cwd: z.string().trim().min(1).max(4096),
     model: z.string().trim().min(1).max(240).optional(),
     reasoning: z.string().trim().min(1).max(120).optional(),
@@ -96,7 +97,7 @@ export type ConversationArchiveFilter = z.infer<
 /** Bounded filters for the durable Project-scoped Conversation index. */
 export const ListProjectConversationsQuerySchema = z
   .object({
-    provider: z.literal('codex').optional(),
+    provider: ProviderIdSchema.optional(),
     status: ConversationStatusSchema.optional(),
     archived: ConversationArchiveFilterSchema.default('false'),
     limit: z.coerce

@@ -46,7 +46,7 @@ test('durable Conversation detail query isolates identity and forwards cancellat
   ])
 })
 
-test('new Conversation request is Codex-only, Project-scoped, and uses Host defaults', async () => {
+test('new Conversation request defaults to Codex and remains Project-scoped', async () => {
   const calls = []
   const actions = new NewConversationActions(
     {
@@ -78,6 +78,33 @@ test('new Conversation request is Codex-only, Project-scoped, and uses Host defa
   assert.equal('reasoning' in calls[0], false)
   assert.notEqual(calls[0].actionId, calls[1].actionId)
   assert.equal(second.data.conversation.projectId, projectId)
+})
+
+test('new Conversation request carries the selected durable Provider and model', async () => {
+  const calls = []
+  const actions = new NewConversationActions(
+    {
+      async createConversation(request) {
+        calls.push(request)
+        return createResponse(request.actionId, request.projectId)
+      },
+    },
+    idFactory(),
+  )
+
+  await actions.createConversation(projectId, {
+    provider: 'claude-code',
+    model: 'claude-sonnet-real',
+  })
+
+  assert.deepEqual(calls, [
+    {
+      actionId: 'act_conversation_001',
+      provider: 'claude-code',
+      projectId,
+      model: 'claude-sonnet-real',
+    },
+  ])
 })
 
 test('HostRuntime exposes thin durable index and Search reads and owns create identity', async () => {
@@ -168,6 +195,10 @@ test('double submit shares one request while a conflicting Project fails explici
     actions.createConversation('proj_second01'),
     ConversationCreationBusyError,
   )
+  await assert.rejects(
+    actions.createConversation(projectId, { provider: 'claude-code' }),
+    ConversationCreationBusyError,
+  )
   assert.equal(calls.length, 1)
 
   deferred.resolve(createResponse(calls[0].actionId, projectId))
@@ -208,6 +239,10 @@ test('new Conversation errors use safe product copy', () => {
     '项目目录当前不可用，暂时不能创建会话。',
   )
   assert.equal(newConversationErrorMessage(runtime), 'Codex 当前不可用。')
+  assert.equal(
+    newConversationErrorMessage(runtime, 'claude-code'),
+    'Claude Code 当前不可用。',
+  )
   assert.equal(
     newConversationErrorMessage(unavailable).includes('private'),
     false,

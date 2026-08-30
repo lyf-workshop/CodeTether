@@ -1,4 +1,8 @@
-import type { ApprovalDecision, HostCapabilities } from '@codetether/protocol'
+import type {
+  ApprovalDecision,
+  HostCapabilities,
+  ProviderCapabilities,
+} from '@codetether/protocol'
 
 import type { HostConnectionState } from '../../runtime/host/host-runtime.js'
 
@@ -40,6 +44,10 @@ export interface LiveControlAvailability {
   readonly canInterrupt: boolean
   readonly canStop: false
   readonly canResolveApproval: boolean
+  readonly supportsInterrupt: boolean
+  readonly supportsApprovals: boolean
+  readonly supportsDiff: boolean
+  readonly supportsReasoningControl: boolean
 }
 
 export type ComposerSubmitPhase = 'idle' | 'submitting' | 'awaiting-event'
@@ -62,22 +70,33 @@ export function deriveComposerControlState(
 
 export function deriveLiveControlAvailability(
   connectionState: HostConnectionState,
-  capabilities: HostCapabilities | undefined,
+  capabilities: HostCapabilities | ProviderCapabilities | undefined,
   currentTurnStatus:
     'running' | 'completed' | 'failed' | 'interrupted' | undefined,
 ): LiveControlAvailability {
   const connected = connectionState === 'connected'
   const hasActiveTurn = currentTurnStatus === 'running'
+  const providerAvailable =
+    capabilities !== undefined &&
+    (!('codex' in capabilities) || capabilities.codex === true)
+  const streaming = capabilities?.streaming === true
+  const supportsInterrupt = capabilities?.interrupt === true
+  const supportsApprovals = capabilities?.approvals === true
+  const supportsDiff = capabilities?.diff === true
+  const supportsReasoningControl =
+    capabilities !== undefined &&
+    ('codex' in capabilities
+      ? capabilities.codex
+      : capabilities.reasoningControl)
   return {
-    canCompose:
-      connected &&
-      capabilities?.codex === true &&
-      capabilities.streaming &&
-      !hasActiveTurn,
-    canInterrupt:
-      connected && capabilities?.interrupt === true && hasActiveTurn,
+    canCompose: connected && providerAvailable && streaming && !hasActiveTurn,
+    canInterrupt: connected && supportsInterrupt && hasActiveTurn,
     canStop: false,
-    canResolveApproval: connected && capabilities?.approvals === true,
+    canResolveApproval: connected && supportsApprovals,
+    supportsInterrupt,
+    supportsApprovals,
+    supportsDiff,
+    supportsReasoningControl,
   }
 }
 

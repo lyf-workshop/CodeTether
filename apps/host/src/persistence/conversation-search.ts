@@ -4,6 +4,7 @@ import {
   conversationSearchLimits,
   ConversationIdSchema,
   TimestampSchema,
+  type ProviderId,
   type ProjectId,
 } from '@codetether/protocol'
 
@@ -17,7 +18,7 @@ export interface ConversationSearchCursorContext {
   readonly projectId: ProjectId
   readonly query: string
   readonly archive: 'active' | 'archived' | 'all'
-  readonly provider?: 'codex'
+  readonly provider?: ProviderId
   readonly status?: 'idle' | 'running' | 'waiting' | 'completed' | 'failed'
 }
 

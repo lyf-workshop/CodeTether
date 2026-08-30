@@ -96,7 +96,7 @@ test('non-command Approval presentation keeps normalized Host metadata', () => {
   }
 
   assert.deepEqual(createInboxItemPresentation(item), {
-    conversation: 'Codex 会话',
+    conversation: '智能体会话',
     description: 'src/example.ts',
     title: '修改文件',
   })

@@ -29,6 +29,7 @@ export interface ConversationListControls {
 
 const providerLabels = {
   codex: 'Codex',
+  'claude-code': 'Claude Code',
 } satisfies Record<ConversationSummary['provider'], string>
 
 const activityFormatter = new Intl.DateTimeFormat('zh-CN', {

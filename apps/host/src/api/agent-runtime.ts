@@ -3,6 +3,7 @@ import type {
   AgentProvider,
   ApprovalKind,
 } from '@codetether/agent-core'
+import type { ProviderDescriptor } from '@codetether/protocol'
 
 export type PublicApprovalDecision = 'accept' | 'decline'
 export type ProviderRequestId = string | number
@@ -35,6 +36,7 @@ export class ProviderConversationUnavailableError extends Error {
 }
 
 export interface ProviderApprovalRequest {
+  readonly provider: AgentProvider
   readonly providerRequestId: ProviderRequestId
   readonly providerApprovalId: string
   readonly providerThreadId: string
@@ -46,6 +48,7 @@ export interface ProviderApprovalRequest {
 }
 
 export interface ProviderApprovalResolution {
+  readonly provider: AgentProvider
   readonly providerRequestId: ProviderRequestId
   readonly providerApprovalId: string
   readonly providerThreadId: string
@@ -56,6 +59,8 @@ export interface ProviderApprovalResolution {
 
 export interface AgentHostRuntime {
   readonly provider: AgentProvider
+  /** Public, presentation-safe capability result cached for this Host life. */
+  readonly descriptor?: ProviderDescriptor
   /** False for the read-only Host fallback when the Provider cannot launch. */
   readonly available?: boolean
   subscribeEvents(listener: (event: AgentEvent) => void): () => void
@@ -72,9 +77,13 @@ export interface AgentHostRuntime {
   resumeConversation(options: {
     readonly providerThreadId: string
     readonly cwd: string
+    /** True only after at least one durable Provider Turn has been created. */
+    readonly providerSessionMaterialized: boolean
   }): Promise<ProviderConversationResult>
   startTurn(options: {
     readonly providerThreadId: string
+    /** Re-authorized for every Turn; process-per-Turn Providers must use it. */
+    readonly cwd: string
     readonly input: string
     readonly model?: string
     readonly reasoning?: string
@@ -82,6 +91,10 @@ export interface AgentHostRuntime {
   interruptTurn(options: {
     readonly providerThreadId: string
     readonly providerTurnId: string
+  }): Promise<void>
+  /** Releases only process-local session state; durable Provider history remains. */
+  disposeConversation?(options: {
+    readonly providerThreadId: string
   }): Promise<void>
   close(): Promise<void>
 }

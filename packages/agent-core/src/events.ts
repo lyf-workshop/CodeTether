@@ -1,4 +1,6 @@
-export type AgentProvider = 'codex'
+export type AgentProvider = 'codex' | 'claude-code'
+
+export type ToolKind = 'read' | 'edit' | 'shell' | 'search' | 'generic'
 
 export interface RawProviderMetadata {
   /** The original provider method, such as `item/agentMessage/delta`. */
@@ -46,6 +48,8 @@ export interface MessageCompletedEvent extends ItemEventBase<'message.completed'
 }
 
 export interface ToolStartedEvent extends ItemEventBase<'tool.started'> {
+  /** Canonical presentation kind; omitted by legacy adapters. */
+  readonly kind?: ToolKind
   readonly name: string
   readonly summary?: string
 }
@@ -58,6 +62,8 @@ export interface ToolOutputEvent extends ItemEventBase<'tool.output'> {
 }
 
 export interface ToolCompletedEvent extends ItemEventBase<'tool.completed'> {
+  /** Canonical presentation kind; omitted by legacy adapters. */
+  readonly kind?: ToolKind
   readonly name: string
   readonly success?: boolean
   readonly summary?: string

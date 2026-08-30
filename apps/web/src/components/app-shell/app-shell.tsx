@@ -8,6 +8,7 @@ import { AddProjectDialog } from '../projects/add-project-dialog'
 import { MainContent } from './main-content'
 import { PrimarySidebar } from './primary-sidebar'
 import { TopBar, type TopBarBreadcrumb } from './top-bar'
+import type { ProviderPresentation } from '../../provider/provider-presentation'
 
 interface AppShellProps {
   children: ReactNode
@@ -15,7 +16,7 @@ interface AppShellProps {
   currentPage: string
   currentPath: string
   currentProject?: ProjectRecord
-  codexAvailable?: boolean
+  agentProviders?: readonly ProviderPresentation[]
   inboxAttentionCount?: number
 }
 
@@ -25,7 +26,7 @@ export function AppShell({
   currentPage,
   currentPath,
   currentProject,
-  codexAvailable = false,
+  agentProviders = [],
   inboxAttentionCount = 0,
 }: AppShellProps) {
   const newConversationButtonRef = useRef<HTMLButtonElement>(null)
@@ -52,7 +53,7 @@ export function AppShell({
           <PrimarySidebar
             currentPath={currentPath}
             currentProject={currentProject}
-            codexAvailable={codexAvailable}
+            agentProviders={agentProviders}
             inboxAttentionCount={inboxAttentionCount}
           />
           <MainContent>{children}</MainContent>

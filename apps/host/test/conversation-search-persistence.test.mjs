@@ -40,8 +40,8 @@ test('migration 006 backfills titles and canonical inputs without reading snapsh
     raw.close()
 
     const migrated = ConversationStore.open({ databasePath })
-    assert.equal(currentSchemaVersion, 6)
-    assert.equal(migrated.schemaVersion, 6)
+    assert.equal(currentSchemaVersion, 7)
+    assert.equal(migrated.schemaVersion, 7)
     assert.equal(
       migrated.searchProjectConversations(projectId, { query: '登录' })
         .results[0].matchedField,
@@ -843,7 +843,7 @@ function downgradeToV5(databasePath) {
     DROP TRIGGER trg_conversation_search_title_update;
     DROP TRIGGER trg_conversation_search_title_insert;
     DROP TABLE conversation_search_documents;
-    DELETE FROM schema_migrations WHERE version = 6;
+    DELETE FROM schema_migrations WHERE version IN (6, 7);
   `)
   database.close()
 }

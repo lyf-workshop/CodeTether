@@ -358,6 +358,7 @@ export class ConversationRuntimeHistory {
       turnId: event.turnId,
       itemId: event.itemId,
       name: event.payload.name,
+      ...(event.payload.kind === undefined ? {} : { kind: event.payload.kind }),
       ...(event.payload.command === undefined
         ? {}
         : { command: event.payload.command }),
@@ -417,6 +418,7 @@ export class ConversationRuntimeHistory {
       turnId: event.turnId,
       itemId: event.itemId,
       name: current?.name ?? 'Command execution',
+      ...(current?.kind === undefined ? {} : { kind: current.kind }),
       ...(current?.command === undefined ? {} : { command: current.command }),
       ...(current?.summary === undefined ? {} : { summary: current.summary }),
       status: 'running',
@@ -440,6 +442,9 @@ export class ConversationRuntimeHistory {
       turnId: event.turnId,
       itemId: event.itemId,
       name: event.payload.name,
+      ...(event.payload.kind === undefined && current?.kind === undefined
+        ? {}
+        : { kind: event.payload.kind ?? current?.kind }),
       ...(event.payload.command === undefined && current?.command === undefined
         ? {}
         : { command: event.payload.command ?? current?.command }),

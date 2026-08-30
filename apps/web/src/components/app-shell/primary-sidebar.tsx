@@ -21,6 +21,12 @@ import {
 import type { ProjectRecord } from '@codetether/protocol'
 
 import { formatInboxAttentionBadge } from '../inbox/inbox-model'
+import {
+  providerPresentations,
+  type ProviderPresentation,
+} from '../../provider/provider-presentation'
+
+const unavailableAgentProviders = providerPresentations(undefined)
 
 type SidebarDestination = '/inbox' | '/projects' | '/settings'
 
@@ -114,7 +120,7 @@ export interface PrimarySidebarProps extends Omit<
 > {
   currentPath: string
   currentProject?: Pick<ProjectRecord, 'name' | 'projectId'>
-  codexAvailable?: boolean
+  agentProviders?: readonly ProviderPresentation[]
   inboxAttentionCount?: number
 }
 
@@ -122,7 +128,7 @@ export interface PrimarySidebarProps extends Omit<
 export function PrimarySidebar({
   currentPath,
   currentProject,
-  codexAvailable = false,
+  agentProviders = unavailableAgentProviders,
   inboxAttentionCount = 0,
   className,
   'aria-label': ariaLabel = '主导航',
@@ -223,37 +229,52 @@ export function PrimarySidebar({
               智能体
             </h2>
             <ul className="mt-2 space-y-0.5">
-              <li className="flex h-[var(--layout-sidebar-presence-item-height)] min-w-0 items-center gap-1 pr-3 pl-2">
-                <span
-                  aria-hidden="true"
-                  className={cn(
-                    'grid size-[var(--layout-sidebar-mark-size)] shrink-0 place-items-center rounded-md border text-sm font-semibold',
-                    agentDefinitions.codex.accentClassName,
-                  )}
-                >
-                  {agentDefinitions.codex.icon}
-                </span>
-                <span className="min-w-0 flex-1 truncate text-md font-medium text-text-primary">
-                  {agentDefinitions.codex.name}
-                </span>
-                <span className="text-2xs text-text-muted">
-                  {codexAvailable ? '可用' : '不可用'}
-                </span>
-                <span
-                  role="img"
-                  aria-label={`Codex：${codexAvailable ? '可用' : '不可用'}`}
-                  data-status={codexAvailable ? 'idle' : 'offline'}
-                  className={cn(
-                    'size-2 shrink-0 rounded-full bg-current motion-safe:animate-none',
-                    statusDefinitions[codexAvailable ? 'idle' : 'offline']
-                      .iconClassName,
-                  )}
-                />
-              </li>
+              {agentProviders.map((provider) => {
+                const agent = agentDefinitions[provider.agent]
+                const status = provider.available ? 'idle' : 'offline'
+                return (
+                  <li
+                    key={provider.provider}
+                    className="flex min-h-[var(--layout-sidebar-presence-item-height)] min-w-0 items-center gap-1 py-1 pr-3 pl-2"
+                  >
+                    <span
+                      aria-hidden="true"
+                      className={cn(
+                        'grid size-[var(--layout-sidebar-mark-size)] shrink-0 place-items-center rounded-md border text-sm font-semibold',
+                        agent.accentClassName,
+                      )}
+                    >
+                      {agent.icon}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate text-md font-medium text-text-primary">
+                      {provider.displayName}
+                    </span>
+                    <span className="grid max-w-24 shrink-0 justify-items-end text-2xs leading-tight text-text-muted">
+                      <span className="truncate">
+                        {provider.availabilityLabel}
+                      </span>
+                      {provider.version === undefined ? null : (
+                        <span
+                          className="max-w-24 truncate"
+                          title={provider.version}
+                        >
+                          {provider.version}
+                        </span>
+                      )}
+                    </span>
+                    <span
+                      role="img"
+                      aria-label={`${provider.displayName}：${provider.availabilityLabel}`}
+                      data-status={status}
+                      className={cn(
+                        'size-2 shrink-0 rounded-full bg-current motion-safe:animate-none',
+                        statusDefinitions[status].iconClassName,
+                      )}
+                    />
+                  </li>
+                )
+              })}
             </ul>
-            <p className="px-2 pt-1 text-2xs text-text-muted">
-              其他智能体 · 即将支持
-            </p>
           </section>
         </div>
 

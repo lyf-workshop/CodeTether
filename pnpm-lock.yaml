@@ -47,6 +47,9 @@ importers:
 
   apps/host:
     dependencies:
+      '@codetether/adapter-claude':
+        specifier: workspace:*
+        version: link:../../packages/adapter-claude
       '@codetether/adapter-codex':
         specifier: workspace:*
         version: link:../../packages/adapter-codex
@@ -117,6 +120,12 @@ importers:
       vite:
         specifier: ^8.2.2
         version: 8.2.2(@types/node@26.2.0)(esbuild@0.28.2)(jiti@2.7.0)
+
+  packages/adapter-claude:
+    dependencies:
+      '@codetether/agent-core':
+        specifier: workspace:*
+        version: link:../agent-core
 
   packages/adapter-codex:
     dependencies:

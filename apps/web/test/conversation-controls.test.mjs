@@ -77,6 +77,10 @@ test('capabilities, connection and active Turn jointly gate controls', () => {
       canInterrupt: false,
       canStop: false,
       canResolveApproval: true,
+      supportsInterrupt: true,
+      supportsApprovals: true,
+      supportsDiff: true,
+      supportsReasoningControl: true,
     },
   )
   assert.deepEqual(
@@ -86,6 +90,10 @@ test('capabilities, connection and active Turn jointly gate controls', () => {
       canInterrupt: true,
       canStop: false,
       canResolveApproval: true,
+      supportsInterrupt: true,
+      supportsApprovals: true,
+      supportsDiff: true,
+      supportsReasoningControl: true,
     },
   )
   assert.deepEqual(
@@ -95,6 +103,10 @@ test('capabilities, connection and active Turn jointly gate controls', () => {
       canInterrupt: false,
       canStop: false,
       canResolveApproval: false,
+      supportsInterrupt: true,
+      supportsApprovals: true,
+      supportsDiff: true,
+      supportsReasoningControl: true,
     },
   )
   assert.equal(
@@ -104,6 +116,37 @@ test('capabilities, connection and active Turn jointly gate controls', () => {
       'running',
     ).canInterrupt,
     false,
+  )
+})
+
+test('Claude capabilities do not inherit unsupported Codex controls', () => {
+  const claude = {
+    streaming: true,
+    resume: true,
+    interrupt: false,
+    approvals: false,
+    fileRead: true,
+    fileEdit: true,
+    shell: true,
+    search: true,
+    diff: false,
+    toolEvents: true,
+    modelSelection: true,
+    reasoningControl: false,
+  }
+
+  assert.deepEqual(
+    deriveLiveControlAvailability('connected', claude, 'completed'),
+    {
+      canCompose: true,
+      canInterrupt: false,
+      canStop: false,
+      canResolveApproval: false,
+      supportsInterrupt: false,
+      supportsApprovals: false,
+      supportsDiff: false,
+      supportsReasoningControl: false,
+    },
   )
 })
 

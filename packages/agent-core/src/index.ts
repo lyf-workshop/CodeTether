@@ -11,6 +11,7 @@ export type {
   MessageDeltaEvent,
   RawProviderMetadata,
   ToolCompletedEvent,
+  ToolKind,
   ToolOutputEvent,
   ToolOutputStream,
   ToolStartedEvent,

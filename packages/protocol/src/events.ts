@@ -82,8 +82,19 @@ export type MessageCompletedPayload = z.infer<
 export const ToolCommandSchema = z.string().max(32 * 1024)
 export type ToolCommand = z.infer<typeof ToolCommandSchema>
 
+export const ToolKindSchema = z.enum([
+  'read',
+  'edit',
+  'shell',
+  'search',
+  'generic',
+])
+export type ToolKind = z.infer<typeof ToolKindSchema>
+
 export const ToolStartedPayloadSchema = z
   .object({
+    /** Additive for legacy Host event compatibility. */
+    kind: ToolKindSchema.optional(),
     name: z.string().trim().min(1).max(240),
     command: ToolCommandSchema.optional(),
     summary: z.string().max(4096).optional(),
@@ -109,6 +120,8 @@ export type ToolOutputPayload = z.infer<typeof ToolOutputPayloadSchema>
 
 export const ToolCompletedPayloadSchema = z
   .object({
+    /** Additive for legacy Host event compatibility. */
+    kind: ToolKindSchema.optional(),
     name: z.string().trim().min(1).max(240),
     command: ToolCommandSchema.optional(),
     success: z.boolean().optional(),

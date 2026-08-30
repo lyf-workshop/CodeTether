@@ -122,39 +122,44 @@ export function ConversationHeader({
         >
           <PanelRightOpen aria-hidden="true" />
         </IconButton>
-        <Button
-          variant="secondary"
-          size="sm"
-          className="h-8 border-border bg-surface-muted/65 px-3 text-sm"
-          aria-label="查看当前会话的变更"
-          onClick={onOpenChanges}
-        >
-          <FileDiff aria-hidden="true" />
-          <span className="max-[1180px]:sr-only">查看变更</span>
-        </Button>
-        <IconButton
-          label={
-            interruptController?.pending ? '正在中断当前运行' : '中断当前运行'
-          }
-          variant="ghost"
-          size="sm"
-          className="size-8 text-text-secondary"
-          disabled={
-            !capabilities.canInterrupt || interruptController?.pending === true
-          }
-          onClick={() => {
-            void interruptController?.execute()
-          }}
-        >
-          {interruptController?.pending ? (
-            <LoaderCircle
-              aria-hidden="true"
-              className="animate-spin motion-reduce:animate-none"
-            />
-          ) : (
-            <Pause aria-hidden="true" />
-          )}
-        </IconButton>
+        {capabilities.supportsDiff ? (
+          <Button
+            variant="secondary"
+            size="sm"
+            className="h-8 border-border bg-surface-muted/65 px-3 text-sm"
+            aria-label="查看当前会话的变更"
+            onClick={onOpenChanges}
+          >
+            <FileDiff aria-hidden="true" />
+            <span className="max-[1180px]:sr-only">查看变更</span>
+          </Button>
+        ) : null}
+        {capabilities.supportsInterrupt ? (
+          <IconButton
+            label={
+              interruptController?.pending ? '正在中断当前运行' : '中断当前运行'
+            }
+            variant="ghost"
+            size="sm"
+            className="size-8 text-text-secondary"
+            disabled={
+              !capabilities.canInterrupt ||
+              interruptController?.pending === true
+            }
+            onClick={() => {
+              void interruptController?.execute()
+            }}
+          >
+            {interruptController?.pending ? (
+              <LoaderCircle
+                aria-hidden="true"
+                className="animate-spin motion-reduce:animate-none"
+              />
+            ) : (
+              <Pause aria-hidden="true" />
+            )}
+          </IconButton>
+        ) : null}
         {projectId === undefined || !conversationId.success ? null : (
           <ConversationOrganizationMenu
             conversation={{

@@ -602,6 +602,7 @@ test('hydrates a cold Conversation once, resumes once, and evicts the least-rece
     {
       providerThreadId: providerThreadId(0),
       cwd: fixture.workspace,
+      providerSessionMaterialized: false,
     },
   ])
   assert.equal(fixture.runtime.turnCalls.length, 1)
@@ -724,7 +725,7 @@ test('keeps unavailable Projects and missing Provider Threads readable while con
     startTurn(fixture.service, missingId, 'act_hydration_provider_missing'),
     (error) => {
       assert.ok(error instanceof HostServiceError)
-      assert.equal(error.code, 'provider_conversation_unavailable')
+      assert.equal(error.code, 'provider_session_lost')
       assert.equal(error.httpStatus, 409)
       return true
     },

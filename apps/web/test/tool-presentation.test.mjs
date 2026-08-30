@@ -55,6 +55,49 @@ test('does not classify quoted text or encoded PowerShell payloads as commands',
   )
 })
 
+test('canonical Provider Tool kinds take precedence over command heuristics', () => {
+  assert.equal(
+    createToolPresentation({
+      command: 'opaque provider input',
+      kind: 'read',
+      status: 'completed',
+    }).title,
+    '读取文件',
+  )
+  assert.equal(
+    createToolPresentation({
+      command: 'cat README.md',
+      kind: 'shell',
+      status: 'completed',
+    }).kind,
+    'command',
+  )
+  assert.equal(
+    createToolPresentation({
+      command: 'opaque provider input',
+      kind: 'edit',
+      status: 'completed',
+    }).kind,
+    'edit-file',
+  )
+  assert.equal(
+    createToolPresentation({
+      command: 'opaque provider input',
+      kind: 'search',
+      status: 'completed',
+    }).kind,
+    'search',
+  )
+  assert.equal(
+    createToolPresentation({
+      command: 'opaque provider input',
+      kind: 'generic',
+      status: 'completed',
+    }).title,
+    '使用工具',
+  )
+})
+
 test('keeps raw commands and reduces failure output to a stable short subtitle', () => {
   const command = "Get-Content -LiteralPath 'missing.txt'"
   const presentation = createToolPresentation({

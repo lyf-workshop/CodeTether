@@ -10,6 +10,7 @@ import {
   type ConversationState,
   type TurnState,
 } from './host-service-state.js'
+import { providerSessionKey } from './provider-registry.js'
 
 const COMMAND_TOOL_NAME = 'command'
 const TOOL_COMMAND_MAX_CHARACTERS = 32 * 1024
@@ -47,13 +48,20 @@ export class ProviderEventTranslator {
       return true
     }
 
-    const conversationId = this.#options.providerThreads.get(event.threadId)
+    const conversationId = this.#options.providerThreads.get(
+      providerSessionKey(event.provider, event.threadId),
+    )
     // An event for a cold/evicted or unknown Provider Thread cannot acquire a
     // public binding. Consume it as diagnostics instead of filling the short
     // startTurn binding buffer; durable history remains authoritative.
     if (conversationId === undefined) return true
     const conversation = this.#options.conversations.get(conversationId)
-    if (conversation === undefined) return true
+    if (
+      conversation === undefined ||
+      conversation.record.provider !== event.provider
+    ) {
+      return true
+    }
     const turnId = conversation.providerTurnIds.get(event.turnId)
     if (turnId === undefined) {
       // Provider events observed while startTurn is in flight must wait for the
@@ -107,6 +115,7 @@ export class ProviderEventTranslator {
           timestamp: event.timestamp,
           type: event.type,
           payload: {
+            kind: event.kind ?? 'generic',
             name: COMMAND_TOOL_NAME,
             command: takeTextHead(event.name, TOOL_COMMAND_MAX_CHARACTERS),
             ...(event.summary === undefined
@@ -145,6 +154,7 @@ export class ProviderEventTranslator {
           timestamp: event.timestamp,
           type: event.type,
           payload: {
+            kind: event.kind ?? 'generic',
             name: COMMAND_TOOL_NAME,
             command: takeTextHead(event.name, TOOL_COMMAND_MAX_CHARACTERS),
             ...(event.success === undefined ? {} : { success: event.success }),
@@ -205,9 +215,15 @@ export class ProviderEventTranslator {
         return true
       }
       case 'turn.failed': {
+        const code = safeProviderFailureCode(event.error.code)
         const error = {
-          code: 'provider_error' as const,
-          message: 'Codex Turn failed',
+          code,
+          message:
+            code === 'provider_session_lost'
+              ? `The ${providerDisplayName(event.provider)} session is no longer available`
+              : code === 'provider_unavailable'
+                ? `${providerDisplayName(event.provider)} is temporarily unavailable`
+                : `${providerDisplayName(event.provider)} Turn failed`,
         }
         this.#options.completeTurn(
           conversation,
@@ -245,6 +261,31 @@ export class ProviderEventTranslator {
       default:
         return true
     }
+  }
+}
+
+function providerDisplayName(provider: AgentEvent['provider']): string {
+  return provider === 'codex' ? 'Codex' : 'Claude Code'
+}
+
+function safeProviderFailureCode(
+  code: string | undefined,
+):
+  | 'provider_error'
+  | 'provider_not_installed'
+  | 'provider_version_unsupported'
+  | 'provider_start_failed'
+  | 'provider_session_lost'
+  | 'provider_unavailable' {
+  switch (code) {
+    case 'provider_not_installed':
+    case 'provider_version_unsupported':
+    case 'provider_start_failed':
+    case 'provider_session_lost':
+    case 'provider_unavailable':
+      return code
+    default:
+      return 'provider_error'
   }
 }
 

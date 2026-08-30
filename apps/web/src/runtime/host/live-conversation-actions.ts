@@ -323,13 +323,18 @@ export function mutationErrorMessage(error: unknown, fallback: string): string {
     case 'unsupported':
       return '当前 CodeTether 版本不支持此操作。'
     case 'runtime_unavailable':
-      return 'Codex 当前不可用。'
+    case 'provider_not_installed':
+    case 'provider_version_unsupported':
+    case 'provider_unavailable':
+      return '智能体当前不可用。'
     case 'timeout':
       return '操作等待超时，请重试。'
     case 'provider_error':
-      return `Codex 未能${fallback}。`
+    case 'provider_start_failed':
+      return `智能体未能${fallback}。`
+    case 'provider_session_lost':
     case 'provider_conversation_unavailable':
-      return 'Codex 已无法恢复此会话；本地历史仍可查看。'
+      return '智能体已无法恢复此会话；本地历史仍可查看。'
     case 'project_unavailable':
       return '项目工作区当前不可用；本地历史仍可查看。'
     case 'conversation_archived':

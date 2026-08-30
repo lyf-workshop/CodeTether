@@ -7,6 +7,7 @@ import { CodeTetherResponseError } from '@codetether/client'
 import {
   conversationStatusCounts,
   groupProjectConversations,
+  providerDisplayName,
   uniqueProviders,
   visibleProjectConversations,
 } from '../.tmp/test-dist/components/conversations/conversation-list-model.js'
@@ -157,6 +158,37 @@ test('real provider groups and summary counts contain no speculative agents or m
   })
 })
 
+test('mixed Provider groups and filters preserve durable identity and Host order', () => {
+  const claude = conversation(
+    'conv_claude_ui',
+    '完成 Claude 基础链路',
+    'completed',
+    4,
+    'claude-code',
+  )
+  const source = [waiting, claude, running]
+
+  assert.deepEqual(uniqueProviders(source), ['codex', 'claude-code'])
+  assert.deepEqual(
+    groupProjectConversations(source).map((group) => [
+      group.provider,
+      group.conversations.map((item) => item.conversationId),
+    ]),
+    [
+      ['codex', [waiting.conversationId, running.conversationId]],
+      ['claude-code', [claude.conversationId]],
+    ],
+  )
+  assert.deepEqual(
+    visibleProjectConversations(source, {
+      ...controls(),
+      provider: 'claude-code',
+    }),
+    [claude],
+  )
+  assert.equal(providerDisplayName('claude-code'), 'Claude Code')
+})
+
 test('50 Conversation fixture keeps the complete Host organization order while filtering', () => {
   const source = Array.from({ length: 50 }, (_, index) =>
     conversation(
@@ -233,7 +265,13 @@ class FakeConversationListClient {
   }
 }
 
-function conversation(conversationId, title, status, activityOffset) {
+function conversation(
+  conversationId,
+  title,
+  status,
+  activityOffset,
+  provider = 'codex',
+) {
   const lastActivityAt = new Date(
     Date.parse(timestamp) + activityOffset * 60_000,
   ).toISOString()
@@ -241,7 +279,7 @@ function conversation(conversationId, title, status, activityOffset) {
     conversationId,
     projectId,
     title,
-    provider: 'codex',
+    provider,
     model: 'gpt-5.6-sol',
     reasoning: 'medium',
     status,

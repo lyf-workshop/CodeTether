@@ -1,16 +1,14 @@
 import { Link } from '@tanstack/react-router'
 
-import {
-  AgentIdentityMark,
-  Badge,
-  Button,
-  agentDefinitions,
-  cn,
-} from '@codetether/ui'
+import { AgentIdentityMark, Badge, Button, cn } from '@codetether/ui'
 import type { ApprovalDecision, AttentionItem } from '@codetether/protocol'
 
 import type { InboxItemMetadata } from './use-inbox-metadata'
 import { createInboxItemPresentation } from './inbox-model'
+import {
+  providerAgentId,
+  providerDisplayName,
+} from '../../provider/provider-presentation'
 
 export type InboxMutationAction = ApprovalDecision | 'acknowledge' | 'review'
 
@@ -56,6 +54,8 @@ export function InboxItem({
     metadata?.conversationTitle,
   )
   const unavailable = metadata?.projectAvailability === 'unavailable'
+  const provider = metadata?.provider ?? 'codex'
+  const agent = providerAgentId(provider)
 
   return (
     <article
@@ -66,7 +66,7 @@ export function InboxItem({
       )}
     >
       <AgentIdentityMark
-        agent="codex"
+        agent={agent}
         className={cn(
           'self-start mt-2',
           item.type === 'failed' &&
@@ -77,7 +77,7 @@ export function InboxItem({
       <div className="min-w-0 self-center">
         <div className="flex min-w-0 items-center gap-2 text-xs font-regular text-text-muted">
           <span className="truncate font-medium text-text-secondary">
-            {agentDefinitions.codex.name}
+            {providerDisplayName(provider)}
           </span>
           <span aria-hidden="true">·</span>
           <time dateTime={item.createdAt} className="shrink-0 tabular-nums">

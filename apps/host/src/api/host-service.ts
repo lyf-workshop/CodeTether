@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 
-import type { AgentEvent } from '@codetether/agent-core'
+import type { AgentEvent, AgentProvider } from '@codetether/agent-core'
 import {
   ActionIdSchema,
   ApprovalIdSchema,
@@ -57,6 +57,7 @@ import {
   type PinConversationRequest,
   type PinConversationResponse,
   type ProjectId,
+  type ProviderDescriptor,
   type RenameConversationRequest,
   type RenameConversationResponse,
   type ResolveApprovalRequest,
@@ -123,6 +124,7 @@ import {
   type ProjectConversationReservation,
 } from './project-registry.js'
 import { ProviderEventTranslator } from './provider-event-translator.js'
+import { ProviderRegistry, providerSessionKey } from './provider-registry.js'
 import { WorkspacePolicy } from './workspace-policy.js'
 
 const MAX_PENDING_PROVIDER_EVENTS = 512
@@ -145,7 +147,10 @@ export class HostServiceError extends Error {
 }
 
 export interface HostServiceOptions {
-  readonly runtime: AgentHostRuntime
+  /** Compatibility input for the original one-Provider Host assembly. */
+  readonly runtime?: AgentHostRuntime
+  readonly runtimes?: readonly AgentHostRuntime[]
+  readonly providerRegistry?: ProviderRegistry
   readonly workspacePolicy: WorkspacePolicy
   readonly publisher: HostEventPublisher
   readonly hostVersion: string
@@ -159,7 +164,7 @@ export interface HostServiceOptions {
 /** Runtime authority for live state, optionally backed by durable normalized snapshots. */
 export class HostService {
   readonly publisher: HostEventPublisher
-  readonly #runtime: AgentHostRuntime
+  readonly #providers: ProviderRegistry
   readonly #workspacePolicy: WorkspacePolicy
   readonly #hostVersion: string
   readonly #now: () => Date
@@ -184,16 +189,23 @@ export class HostService {
   #pendingProviderEventBytes = 0
   #persistenceTimer?: ReturnType<typeof setTimeout>
   #persistenceFailure?: Error
-  readonly #unsubscribeEvents: () => void
-  readonly #unsubscribeApprovals: () => void
-  readonly #unsubscribeFailures: () => void
-  #runtimeFailure?: Error
+  readonly #unsubscribeEvents: Array<() => void> = []
+  readonly #unsubscribeApprovals: Array<() => void> = []
+  readonly #unsubscribeFailures: Array<() => void> = []
+  readonly #runtimeFailures = new Map<AgentProvider, Error>()
   #closePromise?: Promise<void>
   #acceptingActions = true
   #closingRuntime = false
 
   constructor(options: HostServiceOptions) {
-    this.#runtime = options.runtime
+    const configuredRuntimes =
+      options.runtimes ??
+      (options.runtime === undefined ? [] : [options.runtime])
+    this.#providers =
+      options.providerRegistry ?? new ProviderRegistry(configuredRuntimes)
+    if (this.#providers.runtimes().length === 0) {
+      throw new Error('Host requires at least one Provider runtime')
+    }
     this.#workspacePolicy = options.workspacePolicy
     this.publisher = options.publisher
     this.#hostVersion = options.hostVersion
@@ -238,31 +250,91 @@ export class HostService {
       completeTurn: (conversation, turn, status, completedAt, fields) =>
         this.#completeTurn(conversation, turn, status, completedAt, fields),
     })
-    this.#unsubscribeEvents = this.#runtime.subscribeEvents((event) => {
-      this.#acceptProviderEvent(event)
-    })
-    this.#unsubscribeApprovals = this.#runtime.subscribeApprovals(
-      (request) => this.#approvalRegistry.request(request),
-      (resolution) => this.#approvalRegistry.resolveProvider(resolution),
-    )
-    this.#unsubscribeFailures = this.#runtime.subscribeFailures((failure) => {
-      this.#handleRuntimeFailure(failure)
-    })
+    for (const runtime of this.#providers.runtimes()) {
+      this.#unsubscribeEvents.push(
+        runtime.subscribeEvents((event) => {
+          if (event.provider !== runtime.provider) {
+            this.#handleRuntimeFailure(
+              runtime.provider,
+              new Error('Provider emitted an event with the wrong identity'),
+            )
+            return
+          }
+          this.#acceptProviderEvent(event)
+        }),
+      )
+      this.#unsubscribeApprovals.push(
+        runtime.subscribeApprovals(
+          (request) => {
+            if (
+              request.provider !== undefined &&
+              request.provider !== runtime.provider
+            ) {
+              request.respond('decline')
+              this.#handleRuntimeFailure(
+                runtime.provider,
+                new Error(
+                  'Provider emitted an Approval with the wrong identity',
+                ),
+              )
+              return
+            }
+            this.#approvalRegistry.request({
+              ...request,
+              provider: runtime.provider,
+            })
+          },
+          (resolution) => {
+            if (
+              resolution.provider !== undefined &&
+              resolution.provider !== runtime.provider
+            ) {
+              this.#handleRuntimeFailure(
+                runtime.provider,
+                new Error(
+                  'Provider resolved an Approval with the wrong identity',
+                ),
+              )
+              return
+            }
+            this.#approvalRegistry.resolveProvider({
+              ...resolution,
+              provider: runtime.provider,
+            })
+          },
+        ),
+      )
+      this.#unsubscribeFailures.push(
+        runtime.subscribeFailures((failure) => {
+          this.#handleRuntimeFailure(runtime.provider, failure)
+        }),
+      )
+    }
   }
 
   bootstrap(): BootstrapResponse {
+    const codex = this.#providers.descriptor('codex')
     return {
       protocolVersion,
       hostVersion: this.#hostVersion,
       epoch: this.publisher.epoch,
       capabilities: {
-        codex: this.#runtimeAvailable(),
-        approvals: this.#runtimeAvailable(),
-        interrupt: this.#runtimeAvailable(),
-        resume: this.#persistence !== undefined && this.#runtimeAvailable(),
-        diff: this.#runtimeAvailable(),
-        streaming: true,
+        codex: this.#runtimeAvailable('codex'),
+        approvals:
+          this.#runtimeAvailable('codex') &&
+          codex?.capabilities.approvals === true,
+        interrupt:
+          this.#runtimeAvailable('codex') &&
+          codex?.capabilities.interrupt === true,
+        resume:
+          this.#persistence !== undefined &&
+          this.#runtimeAvailable('codex') &&
+          codex?.capabilities.resume === true,
+        diff:
+          this.#runtimeAvailable('codex') && codex?.capabilities.diff === true,
+        streaming: codex?.capabilities.streaming ?? true,
       },
+      providers: this.#providerDescriptors(),
     }
   }
 
@@ -671,6 +743,7 @@ export class HostService {
       'conversation.create',
       request,
       async () => {
+        const runtime = this.#requireProviderRuntime(request.provider)
         const workspace = await this.#reserveConversationProject(request)
         try {
           const releaseRuntimeSlot = this.#reserveRuntimeSlot()
@@ -684,7 +757,7 @@ export class HostService {
               projectId,
               title: DEFAULT_CONVERSATION_TITLE,
               titleSource: 'generated',
-              provider: 'codex',
+              provider: request.provider,
               cwd,
               ...(request.model === undefined ? {} : { model: request.model }),
               ...(request.reasoning === undefined
@@ -703,7 +776,7 @@ export class HostService {
               | Awaited<ReturnType<AgentHostRuntime['startConversation']>>
               | undefined
             try {
-              provider = await this.#runtime.startConversation({
+              provider = await runtime.startConversation({
                 cwd,
                 ...(request.model === undefined
                   ? {}
@@ -714,25 +787,36 @@ export class HostService {
               })
             } catch (error) {
               this.#rollbackCreatingConversation(conversationId)
-              if (!this.#runtimeAvailable()) throw runtimeUnavailableError()
-              throw providerCommandError('create conversation', error)
+              if (!this.#runtimeAvailable(request.provider)) {
+                throw providerUnavailableError(request.provider)
+              }
+              throw providerCommandError(
+                request.provider,
+                'create conversation',
+                error,
+              )
             }
-            this.#assertRuntimeAvailable()
+            this.#assertRuntimeAvailable(request.provider)
 
+            const sessionKey = providerSessionKey(
+              request.provider,
+              provider.providerThreadId,
+            )
             if (
               provider.providerThreadId.trim().length === 0 ||
-              this.#providerThreads.has(provider.providerThreadId) ||
+              this.#providerThreads.has(sessionKey) ||
               this.#persistence
                 ?.listConversations()
                 .some(
                   (conversation) =>
+                    conversation.provider === request.provider &&
                     conversation.providerThreadId === provider.providerThreadId,
                 ) === true
             ) {
               this.#rollbackCreatingConversation(conversationId)
               throw new HostServiceError(
                 'provider_error',
-                'Codex returned an invalid or reused Thread identity',
+                `${providerDisplayName(request.provider)} returned an invalid or reused Session identity`,
                 500,
               )
             }
@@ -744,7 +828,7 @@ export class HostService {
                 projectId,
                 title: DEFAULT_CONVERSATION_TITLE,
                 titleSource: 'generated',
-                provider: 'codex',
+                provider: request.provider,
                 cwd,
                 ...(provider.model === undefined && request.model === undefined
                   ? {}
@@ -760,6 +844,7 @@ export class HostService {
             } catch (error) {
               this.#rollbackCreatingConversation(conversationId)
               throw providerCommandError(
+                request.provider,
                 'return valid conversation metadata',
                 error,
               )
@@ -769,6 +854,7 @@ export class HostService {
               providerThreadId: provider.providerThreadId,
               turns: new Map(),
               providerTurnIds: new Map(),
+              providerSessionMaterialized: false,
               providerSession: 'ready',
               startingTurn: false,
             }
@@ -778,7 +864,7 @@ export class HostService {
               )
             })
             this.#conversations.set(conversationId, state)
-            this.#providerThreads.set(provider.providerThreadId, conversationId)
+            this.#providerThreads.set(sessionKey, conversationId)
             this.#publish({
               conversationId,
               timestamp,
@@ -800,6 +886,7 @@ export class HostService {
           workspace.release()
         }
       },
+      false,
     )
   }
 
@@ -856,7 +943,16 @@ export class HostService {
         ) {
           throw archivedConversationControlError()
         }
-        this.#assertRuntimeAvailable()
+        const conversationProvider =
+          durableConversation?.provider ?? runtimeConversation?.provider
+        if (conversationProvider === undefined) {
+          throw new HostServiceError(
+            'not_found',
+            'Conversation was not found',
+            404,
+          )
+        }
+        this.#assertRuntimeAvailable(conversationProvider)
         const releaseRuntimePin =
           this.#pinRuntimeConversation(parsedConversationId)
         let conversation: ConversationState
@@ -882,6 +978,7 @@ export class HostService {
         }
         this.#touchConversation(conversation.record.conversationId)
         let authorizedCwd: string
+        let runtime: AgentHostRuntime
         try {
           const projectId = conversation.record.projectId
           if (projectId === undefined) {
@@ -897,6 +994,7 @@ export class HostService {
               conversation.record.cwd,
             )
           ).cwd
+          runtime = this.#requireProviderRuntime(conversation.record.provider)
           await this.#ensureProviderConversation(conversation, authorizedCwd)
         } catch (error) {
           conversation.startingTurn = false
@@ -959,8 +1057,9 @@ export class HostService {
           Awaited<ReturnType<AgentHostRuntime['startTurn']>> | undefined
         let startError: unknown
         try {
-          provider = await this.#runtime.startTurn({
+          provider = await runtime.startTurn({
             providerThreadId: conversation.providerThreadId,
+            cwd: authorizedCwd,
             input: request.input.text,
             ...(conversation.record.model === undefined
               ? {}
@@ -975,20 +1074,28 @@ export class HostService {
           conversation.startingTurn = false
         }
         if (startError !== undefined) {
-          const unavailable = !this.#runtimeAvailable()
+          const unavailable = !this.#runtimeAvailable(
+            conversation.record.provider,
+          )
           this.#recordProviderStartFailure(
             conversation,
             record,
             unavailable ? 'runtime_unavailable' : 'provider_error',
             unavailable
-              ? 'Codex runtime became unavailable'
-              : 'Codex failed to start Turn',
+              ? `${providerDisplayName(conversation.record.provider)} is unavailable`
+              : `${providerDisplayName(conversation.record.provider)} failed to start Turn`,
           )
           this.#flushProviderEvents()
-          if (unavailable) throw runtimeUnavailableError()
-          throw providerCommandError('start turn', startError)
+          if (unavailable) {
+            throw providerUnavailableError(conversation.record.provider)
+          }
+          throw providerCommandError(
+            conversation.record.provider,
+            'start turn',
+            startError,
+          )
         }
-        this.#assertRuntimeAvailable()
+        this.#assertRuntimeAvailable(conversation.record.provider)
 
         if (
           provider === undefined ||
@@ -999,12 +1106,12 @@ export class HostService {
             conversation,
             record,
             'provider_error',
-            'Codex returned an invalid Turn identity',
+            `${providerDisplayName(conversation.record.provider)} returned an invalid Turn identity`,
           )
           this.#flushProviderEvents()
           throw new HostServiceError(
             'provider_error',
-            'Codex returned an invalid or reused Turn identity',
+            `${providerDisplayName(conversation.record.provider)} returned an invalid or reused Turn identity`,
             500,
           )
         }
@@ -1017,6 +1124,7 @@ export class HostService {
         }
         conversation.turns.set(turnId, state)
         conversation.providerTurnIds.set(provider.providerTurnId, turnId)
+        conversation.providerSessionMaterialized = true
         conversation.record = {
           ...conversation.record,
           status: 'running',
@@ -1107,17 +1215,37 @@ export class HostService {
           releaseRuntimePin()
         }
         this.#touchConversation(conversation.record.conversationId)
+        const runtime = this.#requireProviderRuntime(
+          conversation.record.provider,
+        )
+        if (
+          this.#providers.descriptor(conversation.record.provider)?.capabilities
+            .interrupt !== true
+        ) {
+          turn.interrupting = false
+          throw new HostServiceError(
+            'unsupported',
+            `${providerDisplayName(conversation.record.provider)} does not support interruption in this version`,
+            409,
+          )
+        }
         try {
-          await this.#runtime.interruptTurn({
+          await runtime.interruptTurn({
             providerThreadId: conversation.providerThreadId,
             providerTurnId: turn.providerTurnId,
           })
         } catch (error) {
           turn.interrupting = false
-          if (!this.#runtimeAvailable()) throw runtimeUnavailableError()
-          throw providerCommandError('interrupt turn', error)
+          if (!this.#runtimeAvailable(conversation.record.provider)) {
+            throw providerUnavailableError(conversation.record.provider)
+          }
+          throw providerCommandError(
+            conversation.record.provider,
+            'interrupt turn',
+            error,
+          )
         }
-        this.#assertRuntimeAvailable()
+        this.#assertRuntimeAvailable(conversation.record.provider)
         return {
           protocolVersion,
           actionId: request.actionId,
@@ -1125,6 +1253,7 @@ export class HostService {
           data: { turn: turn.record },
         }
       },
+      false,
     )
   }
 
@@ -1442,7 +1571,11 @@ export class HostService {
   #installRestoredConversation(
     durable: RestoredDurableConversation,
   ): ConversationRuntimeSnapshot {
-    const providerOwner = this.#providerThreads.get(durable.providerThreadId)
+    const sessionKey = providerSessionKey(
+      durable.record.provider,
+      durable.providerThreadId,
+    )
+    const providerOwner = this.#providerThreads.get(sessionKey)
     if (
       providerOwner !== undefined &&
       providerOwner !== durable.record.conversationId
@@ -1478,14 +1611,12 @@ export class HostService {
       providerThreadId: durable.providerThreadId,
       turns,
       providerTurnIds,
+      providerSessionMaterialized: durable.providerSessionMaterialized,
       providerSession: 'needs-resume',
       startingTurn: false,
     }
     this.#conversations.set(durable.record.conversationId, state)
-    this.#providerThreads.set(
-      durable.providerThreadId,
-      durable.record.conversationId,
-    )
+    this.#providerThreads.set(sessionKey, durable.record.conversationId)
     return runtime
   }
 
@@ -1524,7 +1655,7 @@ export class HostService {
       throw new HostServiceError('not_found', 'Conversation was not found', 404)
     }
     if (durableConversation.providerThreadId === undefined) {
-      throw providerConversationUnavailableError()
+      throw providerConversationUnavailableError(durableConversation.provider)
     }
     const durable = readDurableConversationDetail(
       this.#persistence,
@@ -1542,7 +1673,10 @@ export class HostService {
       const alreadyHydrated = this.#conversations.get(conversationId)
       if (alreadyHydrated !== undefined) return alreadyHydrated
       const providerOwner = this.#providerThreads.get(
-        durableConversation.providerThreadId,
+        providerSessionKey(
+          durableConversation.provider,
+          durableConversation.providerThreadId,
+        ),
       )
       if (providerOwner !== undefined && providerOwner !== conversationId) {
         throw new HostServiceError(
@@ -1554,6 +1688,7 @@ export class HostService {
       this.#installRestoredConversation({
         record: durable.record,
         providerThreadId: durableConversation.providerThreadId,
+        providerSessionMaterialized: durable.history.totalTurns > 0,
         runtime: durable.runtime,
         providerTurns: this.#persistence
           .listRecentTurns(conversationId, this.#runtimeHistory.maxTurns)
@@ -1666,11 +1801,26 @@ export class HostService {
       throw new Error('Attempted to evict a protected Conversation runtime')
     }
     this.#conversations.delete(conversationId)
+    void this.#providers
+      .get(conversation.record.provider)
+      ?.disposeConversation?.({
+        providerThreadId: conversation.providerThreadId,
+      })
+      .catch(() => undefined)
     if (
-      this.#providerThreads.get(conversation.providerThreadId) ===
-      conversationId
+      this.#providerThreads.get(
+        providerSessionKey(
+          conversation.record.provider,
+          conversation.providerThreadId,
+        ),
+      ) === conversationId
     ) {
-      this.#providerThreads.delete(conversation.providerThreadId)
+      this.#providerThreads.delete(
+        providerSessionKey(
+          conversation.record.provider,
+          conversation.providerThreadId,
+        ),
+      )
     }
     this.#runtimeHistory.delete(conversationId)
     this.#runtimeAccess.delete(conversationId)
@@ -1750,16 +1900,18 @@ export class HostService {
   ): Promise<void> {
     if (conversation.providerSession === 'ready') return
     if (conversation.providerSession === 'unavailable') {
-      throw providerConversationUnavailableError()
+      throw providerConversationUnavailableError(conversation.record.provider)
     }
+    const runtime = this.#requireProviderRuntime(conversation.record.provider)
     try {
-      const resumed = await this.#runtime.resumeConversation({
+      const resumed = await runtime.resumeConversation({
         providerThreadId: conversation.providerThreadId,
         cwd: authorizedCwd,
+        providerSessionMaterialized: conversation.providerSessionMaterialized,
       })
       if (resumed.providerThreadId !== conversation.providerThreadId) {
         throw new ProviderConversationUnavailableError(
-          'codex',
+          conversation.record.provider,
           conversation.providerThreadId,
         )
       }
@@ -1782,10 +1934,16 @@ export class HostService {
     } catch (error) {
       if (error instanceof ProviderConversationUnavailableError) {
         conversation.providerSession = 'unavailable'
-        throw providerConversationUnavailableError()
+        throw providerConversationUnavailableError(conversation.record.provider)
       }
-      if (!this.#runtimeAvailable()) throw runtimeUnavailableError()
-      throw providerCommandError('resume conversation', error)
+      if (!this.#runtimeAvailable(conversation.record.provider)) {
+        throw providerUnavailableError(conversation.record.provider)
+      }
+      throw providerCommandError(
+        conversation.record.provider,
+        'resume conversation',
+        error,
+      )
     }
   }
 
@@ -2121,10 +2279,13 @@ export class HostService {
       clearTimeout(this.#persistenceTimer)
       this.#persistenceTimer = undefined
     }
-    this.#handleRuntimeFailure(
-      new Error('Conversation durability became unavailable', { cause: error }),
-    )
-    void this.#runtime.close().catch(() => undefined)
+    const failure = new Error('Conversation durability became unavailable', {
+      cause: error,
+    })
+    for (const runtime of this.#providers.runtimes()) {
+      this.#handleRuntimeFailure(runtime.provider, failure)
+    }
+    void this.#providers.close().catch(() => undefined)
   }
 
   #requireTurn(conversation: ConversationState, turnId: TurnId): TurnState {
@@ -2194,11 +2355,11 @@ export class HostService {
     // not a user decision. Stop consuming Provider resolution callbacks first
     // so the pending durable Approval remains the restart reconciliation
     // authority and becomes host_restart/expired on the next Host open.
-    this.#unsubscribeApprovals()
+    for (const unsubscribe of this.#unsubscribeApprovals) unsubscribe()
     this.#approvalRegistry.declineAll()
     try {
       try {
-        await this.#runtime.close()
+        await this.#providers.close()
       } catch (error) {
         failures.push(error)
       }
@@ -2217,8 +2378,8 @@ export class HostService {
         clearTimeout(this.#persistenceTimer)
         this.#persistenceTimer = undefined
       }
-      this.#unsubscribeEvents()
-      this.#unsubscribeFailures()
+      for (const unsubscribe of this.#unsubscribeEvents) unsubscribe()
+      for (const unsubscribe of this.#unsubscribeFailures) unsubscribe()
       this.#actions.clear()
       this.#hydrations.clear()
       this.#runtimeAccess.clear()
@@ -2236,25 +2397,34 @@ export class HostService {
     return this.#now().toISOString()
   }
 
-  #handleRuntimeFailure(failure: Error): void {
+  #handleRuntimeFailure(provider: AgentProvider, failure: Error): void {
     if (
-      this.#runtimeFailure !== undefined ||
+      this.#runtimeFailures.has(provider) ||
       this.#closePromise !== undefined
     ) {
       return
     }
-    this.#runtimeFailure = failure
+    this.#runtimeFailures.set(provider, failure)
+    const retainedEvents = this.#pendingProviderEvents.filter(
+      (event) => event.provider !== provider,
+    )
     this.#pendingProviderEvents.length = 0
-    this.#pendingProviderEventBytes = 0
+    this.#pendingProviderEvents.push(...retainedEvents)
+    this.#pendingProviderEventBytes = retainedEvents.reduce(
+      (total, event) =>
+        total + Buffer.byteLength(JSON.stringify(event), 'utf8'),
+      0,
+    )
     const timestamp = this.#timestamp()
     const error = {
       code: 'runtime_unavailable' as const,
       message:
         this.#persistenceFailure === undefined
-          ? 'Codex runtime became unavailable'
+          ? `${providerDisplayName(provider)} runtime became unavailable`
           : 'Conversation durability became unavailable',
     }
     for (const conversation of this.#conversations.values()) {
+      if (conversation.record.provider !== provider) continue
       const activeTurnId = conversation.record.activeTurnId
       if (activeTurnId === undefined) continue
       const turn = conversation.turns.get(activeTurnId)
@@ -2268,20 +2438,57 @@ export class HostService {
         payload: { error },
       })
     }
-    this.#approvalRegistry.resolveAllForRuntimeFailure()
+    this.#approvalRegistry.resolveAllForProviderFailure(provider)
   }
 
-  #runtimeAvailable(): boolean {
+  #runtimeAvailable(provider?: AgentProvider): boolean {
+    if (this.#persistenceFailure !== undefined || this.#closingRuntime) {
+      return false
+    }
+    if (provider === undefined) {
+      return this.#providers
+        .runtimes()
+        .some((runtime) => this.#runtimeAvailable(runtime.provider))
+    }
+    const runtime = this.#providers.get(provider)
+    const descriptor = this.#providers.descriptor(provider)
     return (
-      this.#runtime.available !== false &&
-      this.#runtimeFailure === undefined &&
-      this.#persistenceFailure === undefined &&
-      !this.#closingRuntime
+      runtime !== undefined &&
+      runtime.available !== false &&
+      descriptor?.availability === 'available' &&
+      !this.#runtimeFailures.has(provider)
     )
   }
 
-  #assertRuntimeAvailable(): void {
-    if (!this.#runtimeAvailable()) throw runtimeUnavailableError()
+  #providerDescriptors(): readonly ProviderDescriptor[] {
+    return this.#providers
+      .descriptors()
+      .map((descriptor) =>
+        descriptor.availability === 'available' &&
+        !this.#runtimeAvailable(descriptor.provider)
+          ? { ...descriptor, availability: 'unavailable' }
+          : descriptor,
+      )
+  }
+
+  #assertRuntimeAvailable(provider?: AgentProvider): void {
+    if (provider === undefined) {
+      if (!this.#runtimeAvailable()) throw runtimeUnavailableError()
+      return
+    }
+    if (!this.#runtimeAvailable(provider)) {
+      throw providerUnavailableError(
+        provider,
+        this.#providers.descriptor(provider),
+      )
+    }
+  }
+
+  #requireProviderRuntime(provider: AgentProvider): AgentHostRuntime {
+    this.#assertRuntimeAvailable(provider)
+    const runtime = this.#providers.get(provider)
+    if (runtime === undefined) throw providerUnavailableError(provider)
+    return runtime
   }
 
   #assertAcceptingActions(): void {
@@ -2428,15 +2635,31 @@ function nonNegativeInteger(
 }
 
 function providerCommandError(
+  provider: AgentProvider,
   operation: string,
   error: unknown,
 ): HostServiceError {
+  const code = providerErrorCode(error)
   return new HostServiceError(
-    'provider_error',
-    `Codex failed to ${operation}`,
-    500,
+    code,
+    `${providerDisplayName(provider)} failed to ${operation}`,
+    code === 'provider_session_lost' ? 409 : 500,
     { cause: safeErrorName(error) },
   )
+}
+
+function providerErrorCode(error: unknown): HostErrorCode {
+  if (!(error instanceof Error) || !('code' in error)) return 'provider_error'
+  switch (error.code) {
+    case 'provider_not_installed':
+    case 'provider_version_unsupported':
+    case 'provider_start_failed':
+    case 'provider_session_lost':
+    case 'provider_unavailable':
+      return error.code
+    default:
+      return 'provider_error'
+  }
 }
 
 function safeErrorName(error: unknown): string {
@@ -2451,12 +2674,43 @@ function runtimeUnavailableError(
   return new HostServiceError('runtime_unavailable', message, 503)
 }
 
-function providerConversationUnavailableError(): HostServiceError {
+function providerConversationUnavailableError(
+  provider: AgentProvider,
+): HostServiceError {
   return new HostServiceError(
-    'provider_conversation_unavailable',
-    'The Codex conversation can no longer be resumed',
+    'provider_session_lost',
+    `The ${providerDisplayName(provider)} conversation can no longer be resumed`,
     409,
   )
+}
+
+function providerUnavailableError(
+  provider: AgentProvider,
+  descriptor?: ProviderDescriptor,
+): HostServiceError {
+  const code: HostErrorCode =
+    descriptor?.availability === 'not_installed'
+      ? 'provider_not_installed'
+      : descriptor?.availability === 'unsupported_version'
+        ? 'provider_version_unsupported'
+        : 'provider_unavailable'
+  const suffix =
+    descriptor?.availability === 'misconfigured'
+      ? ' is not configured for use'
+      : descriptor?.availability === 'unsupported_version'
+        ? ' version is not supported'
+        : descriptor?.availability === 'not_installed'
+          ? ' is not installed'
+          : ' is temporarily unavailable'
+  return new HostServiceError(
+    code,
+    `${providerDisplayName(provider)}${suffix}`,
+    503,
+  )
+}
+
+function providerDisplayName(provider: AgentProvider): string {
+  return provider === 'codex' ? 'Codex' : 'Claude Code'
 }
 
 function projectServiceError(error: unknown): Error {

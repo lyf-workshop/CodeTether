@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto'
 
+import type { AgentProvider } from '@codetether/agent-core'
+
 import {
   ApprovalRecordSchema,
   ApprovalIdSchema,
@@ -17,12 +19,14 @@ import type {
   ProviderRequestId,
 } from './agent-runtime.js'
 import { publicItemId, type ConversationState } from './host-service-state.js'
+import { providerSessionKey } from './provider-registry.js'
 
 const MAX_RESOLVED_APPROVALS = 256
 export const MAX_PENDING_APPROVALS = 32
 
 interface ApprovalState {
   record: ApprovalRecord
+  readonly provider: AgentProvider
   readonly providerRequestId: ProviderRequestId
   readonly providerApprovalId: string
   readonly providerThreadId: string
@@ -94,7 +98,7 @@ export class ApprovalRegistry {
 
   request(request: ProviderApprovalRequest): void {
     const conversationId = this.#options.providerThreads.get(
-      request.providerThreadId,
+      providerSessionKey(request.provider, request.providerThreadId),
     )
     const conversation =
       conversationId === undefined
@@ -108,6 +112,7 @@ export class ApprovalRegistry {
       conversation === undefined ||
       turnId === undefined ||
       turn === undefined ||
+      conversation.record.provider !== request.provider ||
       turn.record.status !== 'running'
     ) {
       request.respond('decline')
@@ -115,6 +120,7 @@ export class ApprovalRegistry {
     }
 
     const providerKey = providerApprovalKey(
+      request.provider,
       request.providerThreadId,
       request.providerTurnId,
       request.providerRequestId,
@@ -157,6 +163,7 @@ export class ApprovalRegistry {
     }
     const state: ApprovalState = {
       record,
+      provider: request.provider,
       providerRequestId: request.providerRequestId,
       providerApprovalId: request.providerApprovalId,
       providerThreadId: request.providerThreadId,
@@ -208,6 +215,7 @@ export class ApprovalRegistry {
 
   resolveProvider(resolution: ProviderApprovalResolution): void {
     const providerKey = providerApprovalKey(
+      resolution.provider,
       resolution.providerThreadId,
       resolution.providerTurnId,
       resolution.providerRequestId,
@@ -220,6 +228,7 @@ export class ApprovalRegistry {
     }
     if (
       approval.providerApprovalId !== resolution.providerApprovalId ||
+      approval.provider !== resolution.provider ||
       approval.providerThreadId !== resolution.providerThreadId ||
       approval.providerTurnId !== resolution.providerTurnId ||
       approval.providerItemId !== resolution.providerItemId ||
@@ -301,7 +310,12 @@ export class ApprovalRegistry {
   }
 
   resolveAllForRuntimeFailure(): void {
+    this.resolveAllForProviderFailure()
+  }
+
+  resolveAllForProviderFailure(provider?: AgentProvider): void {
     for (const [approvalId, approval] of this.#approvals) {
+      if (provider !== undefined && approval.provider !== provider) continue
       if (approval.record.status !== 'pending') continue
       if (!approval.resolving) {
         approval.resolving = true
@@ -328,6 +342,7 @@ export class ApprovalRegistry {
         : turn?.providerItems.get(approval.providerItemId)
     if (
       conversation === undefined ||
+      conversation.record.provider !== approval.provider ||
       turn === undefined ||
       conversation.providerThreadId !== approval.providerThreadId ||
       turn.providerTurnId !== approval.providerTurnId ||
@@ -336,6 +351,7 @@ export class ApprovalRegistry {
       providerItem !== approval.record.itemId ||
       this.#providerApprovals.get(
         providerApprovalKey(
+          approval.provider,
           approval.providerThreadId,
           approval.providerTurnId,
           approval.providerRequestId,
@@ -385,6 +401,7 @@ export class ApprovalRegistry {
     approval.resolving = false
     this.#providerApprovals.delete(
       providerApprovalKey(
+        approval.provider,
         approval.providerThreadId,
         approval.providerTurnId,
         approval.providerRequestId,
@@ -429,11 +446,13 @@ function newApprovalId(): ApprovalId {
 }
 
 function providerApprovalKey(
+  provider: AgentProvider,
   providerThreadId: string,
   providerTurnId: string,
   providerRequestId: ProviderRequestId,
 ): string {
   return JSON.stringify([
+    provider,
     providerThreadId,
     providerTurnId,
     typeof providerRequestId === 'number'

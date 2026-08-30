@@ -8,9 +8,11 @@ import {
   type CreateConversationRequest,
   type CreateConversationResponse,
   type ProjectId,
+  type ProviderId,
 } from '@codetether/protocol'
 
 import { createBrowserActionId, type ActionIdFactory } from './action-id.js'
+import { providerDisplayName } from '../../provider/provider-presentation.js'
 
 export interface NewConversationMutationClient {
   createConversation(
@@ -21,7 +23,16 @@ export interface NewConversationMutationClient {
 
 interface CreationAttempt {
   readonly projectId: ProjectId
+  readonly provider: ProviderId
+  readonly model?: string
+  readonly reasoning?: string
   readonly promise: Promise<CreateConversationResponse>
+}
+
+export interface CreateConversationOptions {
+  readonly provider: ProviderId
+  readonly model?: string
+  readonly reasoning?: string
 }
 
 export class ConversationCreationBusyError extends Error {
@@ -47,19 +58,27 @@ export class NewConversationActions {
 
   createConversation(
     projectId: ProjectId | string,
+    options: CreateConversationOptions = { provider: 'codex' },
   ): Promise<CreateConversationResponse> {
     const project = ProjectIdSchema.parse(projectId)
     const current = this.#attempt
     if (current !== undefined) {
-      return current.projectId === project
+      return current.projectId === project &&
+        current.provider === options.provider &&
+        current.model === options.model &&
+        current.reasoning === options.reasoning
         ? current.promise
         : Promise.reject(new ConversationCreationBusyError())
     }
 
     const request: CreateConversationRequest = {
       actionId: this.#createActionId(),
-      provider: 'codex',
+      provider: options.provider,
       projectId: project,
+      ...(options.model === undefined ? {} : { model: options.model }),
+      ...(options.reasoning === undefined
+        ? {}
+        : { reasoning: options.reasoning }),
     }
     const promise = this.#client
       .createConversation(request)
@@ -74,13 +93,25 @@ export class NewConversationActions {
       .finally(() => {
         if (this.#attempt?.promise === promise) this.#attempt = undefined
       })
-    this.#attempt = { projectId: project, promise }
+    this.#attempt = {
+      projectId: project,
+      provider: options.provider,
+      ...(options.model === undefined ? {} : { model: options.model }),
+      ...(options.reasoning === undefined
+        ? {}
+        : { reasoning: options.reasoning }),
+      promise,
+    }
     return promise
   }
 }
 
 /** Stable product copy; raw Host and provider diagnostics remain private. */
-export function newConversationErrorMessage(error: unknown): string {
+export function newConversationErrorMessage(
+  error: unknown,
+  provider: ProviderId = 'codex',
+): string {
+  const providerName = providerDisplayName(provider)
   if (error instanceof ConversationCreationBusyError) {
     return '已有会话正在创建，请稍候。'
   }
@@ -104,14 +135,21 @@ export function newConversationErrorMessage(error: unknown): string {
     case 'project_unavailable':
       return '项目目录当前不可用，暂时不能创建会话。'
     case 'runtime_unavailable':
-      return 'Codex 当前不可用。'
+    case 'provider_unavailable':
+      return `${providerName} 当前不可用。`
+    case 'provider_not_installed':
+      return `${providerName} 尚未安装。`
+    case 'provider_version_unsupported':
+      return `${providerName} 版本不受支持。`
     case 'unsupported':
-      return '当前 CodeTether 版本不支持创建 Codex 会话。'
+      return `当前 CodeTether 版本不支持创建 ${providerName} 会话。`
     case 'timeout':
       return '创建会话等待超时，请重试。'
     case 'provider_error':
+    case 'provider_start_failed':
+    case 'provider_session_lost':
     case 'provider_conversation_unavailable':
-      return 'Codex 未能创建会话。'
+      return `${providerName} 未能创建会话。`
     case 'conversation_archived':
     case 'project_has_conversations':
     case 'internal':

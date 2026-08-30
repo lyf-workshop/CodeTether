@@ -228,7 +228,7 @@ test('safe mutation errors never expose Provider diagnostics', () => {
     message: 'raw JSON-RPC stack and provider payload',
   })
   const message = mutationErrorMessage(error, '发送消息')
-  assert.equal(message, 'Codex 未能发送消息。')
+  assert.equal(message, '智能体未能发送消息。')
   assert.equal(message.includes('JSON-RPC'), false)
   assert.equal(
     mutationErrorMessage(new TypeError('network details'), '发送消息'),

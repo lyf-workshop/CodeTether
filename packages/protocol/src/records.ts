@@ -12,6 +12,7 @@ import {
   TimestampSchema,
   TurnIdSchema,
 } from './ids.js'
+import { ProviderDescriptorSchema, ProviderIdSchema } from './providers.js'
 
 export const ApprovalDecisionSchema = z.enum(['accept', 'decline'])
 export type ApprovalDecision = z.infer<typeof ApprovalDecisionSchema>
@@ -104,7 +105,7 @@ export const ConversationRecordSchema = z
     pinnedAt: TimestampSchema.optional(),
     /** Product organization metadata; absence means the Conversation is active. */
     archivedAt: TimestampSchema.optional(),
-    provider: z.literal('codex'),
+    provider: ProviderIdSchema,
     cwd: z.string().trim().min(1).max(4096),
     model: z.string().trim().min(1).max(240).optional(),
     reasoning: z.string().trim().min(1).max(120).optional(),
@@ -162,7 +163,7 @@ export const ConversationSummarySchema = z
     titleSource: ConversationTitleSourceSchema,
     pinnedAt: TimestampSchema.optional(),
     archivedAt: TimestampSchema.optional(),
-    provider: z.literal('codex'),
+    provider: ProviderIdSchema,
     model: z.string().trim().min(1).max(240).optional(),
     reasoning: z.string().trim().min(1).max(120).optional(),
     status: ConversationStatusSchema,
@@ -429,8 +430,24 @@ export const BootstrapSchema = z
     hostVersion: z.string().trim().min(1).max(120),
     epoch: EpochIdSchema,
     capabilities: HostCapabilitiesSchema,
+    /** Additive Provider detection surface; legacy Protocol v1 Hosts may omit it. */
+    providers: z.array(ProviderDescriptorSchema).max(16).readonly().optional(),
   })
   .strict()
+  .superRefine((bootstrap, context) => {
+    if (bootstrap.providers === undefined) return
+    const providers = new Set<string>()
+    for (const [index, descriptor] of bootstrap.providers.entries()) {
+      if (providers.has(descriptor.provider)) {
+        context.addIssue({
+          code: 'custom',
+          message: 'Bootstrap Provider identities must be unique',
+          path: ['providers', index, 'provider'],
+        })
+      }
+      providers.add(descriptor.provider)
+    }
+  })
 export type Bootstrap = z.infer<typeof BootstrapSchema>
 
 export const BootstrapResponseSchema = BootstrapSchema

@@ -31,6 +31,7 @@
     "host:integration": "pnpm -r --workspace-concurrency=1 --filter @codetether/host... build && node apps/host/dist/integration.js",
     "host:conversation-hydration": "pnpm -r --workspace-concurrency=1 --filter @codetether/host... build && node apps/host/dist/conversation-hydration-integration.js",
     "host:attention-integration": "pnpm -r --workspace-concurrency=1 --filter @codetether/host... build && node apps/host/dist/attention-integration.js",
+    "claude:integration": "pnpm -r --workspace-concurrency=1 --filter @codetether/host... build && node apps/host/dist/claude-code-integration.js",
     "desktop:sidecar": "pnpm --dir apps/desktop sidecar",
     "desktop:dev": "pnpm desktop:sidecar && pnpm --dir apps/desktop dev",
     "desktop:build": "pnpm desktop:sidecar && pnpm --dir apps/desktop tauri:build",

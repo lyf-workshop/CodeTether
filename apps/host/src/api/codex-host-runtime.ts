@@ -167,6 +167,7 @@ export class CodexHostRuntime implements AgentHostRuntime {
   async resumeConversation(options: {
     readonly providerThreadId: string
     readonly cwd: string
+    readonly providerSessionMaterialized: boolean
   }): Promise<ProviderConversationResult> {
     this.#assertHealthy()
     return await resumeCodexConversation(this.#client, options)
@@ -174,6 +175,7 @@ export class CodexHostRuntime implements AgentHostRuntime {
 
   async startTurn(options: {
     readonly providerThreadId: string
+    readonly cwd: string
     readonly input: string
     readonly model?: string
     readonly reasoning?: string
@@ -237,6 +239,7 @@ export class CodexHostRuntime implements AgentHostRuntime {
       }
       try {
         this.#approvalRequestListener?.({
+          provider: this.provider,
           providerRequestId: prompt.request.id,
           providerApprovalId: prompt.event.approvalId,
           providerThreadId: prompt.event.threadId,
@@ -260,6 +263,7 @@ export class CodexHostRuntime implements AgentHostRuntime {
   #notifyApprovalResolved(resolution: ApprovalResolution): void {
     try {
       this.#approvalResolvedListener?.({
+        provider: this.provider,
         providerRequestId: resolution.request.id,
         providerApprovalId: resolution.event.approvalId,
         providerThreadId: resolution.event.threadId,

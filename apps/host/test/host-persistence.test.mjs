@@ -318,7 +318,11 @@ test('Conversation identity, rich multi-Turn history, and Provider identity surv
       'What marker did I ask you to remember?',
     )
     assert.deepEqual(second.runtime.resumeCalls, [
-      { providerThreadId, cwd: environment.workspace },
+      {
+        providerThreadId,
+        cwd: environment.workspace,
+        providerSessionMaterialized: true,
+      },
     ])
     assert.equal(second.runtime.turnCalls.length, 1)
     completeRichTurn(
@@ -478,7 +482,7 @@ test('missing Provider Thread preserves local history and returns a specific saf
       ),
       (error) =>
         error instanceof HostServiceError &&
-        error.code === 'provider_conversation_unavailable',
+        error.code === 'provider_session_lost',
     )
     assert.equal(runtime.turnCalls.length, 0)
     assert.deepEqual(second.service.snapshot().conversationRuntimes[0], before)

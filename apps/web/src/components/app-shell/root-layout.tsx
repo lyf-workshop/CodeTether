@@ -17,6 +17,10 @@ import {
   useHostRuntime,
 } from '../../runtime/host/host-runtime-hooks'
 import { projectDetailQueryOptions } from '../../runtime/host/project-query'
+import {
+  providerPresentations,
+  type ProviderPresentation,
+} from '../../provider/provider-presentation'
 import { AppShell } from './app-shell'
 
 const pageTitles = {
@@ -43,9 +47,9 @@ export function RootLayout() {
   const currentPath = useRouterState({
     select: (state) => state.location.pathname,
   })
-  const codexAvailable =
-    connectionState === 'connected' &&
-    runtime.bootstrap?.capabilities.codex === true
+  const agentProviders = providerPresentations(
+    connectionState === 'connected' ? runtime.bootstrap : undefined,
+  )
   const projectRoute = parseProjectRoute(currentPath)
   const conversationRoute = parseConversationRoute(currentPath)
 
@@ -53,7 +57,7 @@ export function RootLayout() {
     return (
       <AppShell
         breadcrumbs={[{ label: '项目' }]}
-        codexAvailable={codexAvailable}
+        agentProviders={agentProviders}
         currentPage="项目"
         currentPath={currentPath}
         inboxAttentionCount={inboxAttentionCount}
@@ -66,7 +70,7 @@ export function RootLayout() {
   if (projectRoute?.projectId !== undefined) {
     return (
       <ProjectShellLayout
-        codexAvailable={codexAvailable}
+        agentProviders={agentProviders}
         currentPath={currentPath}
         inboxAttentionCount={inboxAttentionCount}
         projectId={projectRoute.projectId}
@@ -84,7 +88,7 @@ export function RootLayout() {
             label: projectRoute.view === 'conversations' ? '会话' : '项目详情',
           },
         ]}
-        codexAvailable={codexAvailable}
+        agentProviders={agentProviders}
         currentPage={
           projectRoute.view === 'conversations' ? '会话' : '项目详情'
         }
@@ -99,7 +103,7 @@ export function RootLayout() {
   if (conversationRoute?.conversationId !== undefined) {
     return (
       <LiveConversationShellLayout
-        codexAvailable={codexAvailable}
+        agentProviders={agentProviders}
         connectionState={connectionState}
         conversationId={conversationRoute.conversationId}
         currentPath={currentPath}
@@ -116,7 +120,7 @@ export function RootLayout() {
     return (
       <AppShell
         breadcrumbs={[{ label: '演示数据' }, { label: fixtureTitle }]}
-        codexAvailable={codexAvailable}
+        agentProviders={agentProviders}
         currentPage={fixtureTitle}
         currentPath={currentPath}
         inboxAttentionCount={inboxAttentionCount}
@@ -131,7 +135,7 @@ export function RootLayout() {
   return (
     <AppShell
       breadcrumbs={[{ label: currentPage }]}
-      codexAvailable={codexAvailable}
+      agentProviders={agentProviders}
       currentPage={currentPage}
       currentPath={currentPath}
       inboxAttentionCount={inboxAttentionCount}
@@ -142,7 +146,7 @@ export function RootLayout() {
 }
 
 interface ProjectShellLayoutProps {
-  codexAvailable: boolean
+  agentProviders: readonly ProviderPresentation[]
   currentPath: string
   inboxAttentionCount: number
   projectId: ProjectId
@@ -150,7 +154,7 @@ interface ProjectShellLayoutProps {
 }
 
 function ProjectShellLayout({
-  codexAvailable,
+  agentProviders,
   currentPath,
   inboxAttentionCount,
   projectId,
@@ -182,7 +186,7 @@ function ProjectShellLayout({
   return (
     <AppShell
       breadcrumbs={breadcrumbs}
-      codexAvailable={codexAvailable}
+      agentProviders={agentProviders}
       currentPage={view === 'conversations' ? '会话' : projectName}
       currentPath={currentPath}
       currentProject={project}
@@ -194,7 +198,7 @@ function ProjectShellLayout({
 }
 
 interface LiveConversationShellLayoutProps {
-  codexAvailable: boolean
+  agentProviders: readonly ProviderPresentation[]
   connectionState: ReturnType<typeof useHostConnectionState>
   conversationId: ConversationId
   currentPath: string
@@ -202,7 +206,7 @@ interface LiveConversationShellLayoutProps {
 }
 
 function LiveConversationShellLayout({
-  codexAvailable,
+  agentProviders,
   connectionState,
   conversationId,
   currentPath,
@@ -218,7 +222,7 @@ function LiveConversationShellLayout({
   if (conversation !== undefined) {
     return (
       <ResolvedConversationShellLayout
-        codexAvailable={codexAvailable}
+        agentProviders={agentProviders}
         conversationTitle={conversation.title}
         currentPath={currentPath}
         inboxAttentionCount={inboxAttentionCount}
@@ -230,7 +234,7 @@ function LiveConversationShellLayout({
   return (
     <AppShell
       breadcrumbs={[{ label: '会话' }]}
-      codexAvailable={codexAvailable}
+      agentProviders={agentProviders}
       currentPage="会话"
       currentPath={currentPath}
       inboxAttentionCount={inboxAttentionCount}
@@ -241,7 +245,7 @@ function LiveConversationShellLayout({
 }
 
 interface ResolvedConversationShellLayoutProps {
-  codexAvailable: boolean
+  agentProviders: readonly ProviderPresentation[]
   conversationTitle: string
   currentPath: string
   inboxAttentionCount: number
@@ -249,7 +253,7 @@ interface ResolvedConversationShellLayoutProps {
 }
 
 function ResolvedConversationShellLayout({
-  codexAvailable,
+  agentProviders,
   conversationTitle,
   currentPath,
   inboxAttentionCount,
@@ -273,7 +277,7 @@ function ResolvedConversationShellLayout({
         },
         { label: conversationTitle },
       ]}
-      codexAvailable={codexAvailable}
+      agentProviders={agentProviders}
       currentPage={conversationTitle}
       currentPath={currentPath}
       currentProject={project}

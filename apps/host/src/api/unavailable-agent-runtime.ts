@@ -1,3 +1,6 @@
+import type { AgentProvider } from '@codetether/agent-core'
+import type { ProviderDescriptor } from '@codetether/protocol'
+
 import type { AgentHostRuntime } from './agent-runtime.js'
 
 /**
@@ -5,8 +8,17 @@ import type { AgentHostRuntime } from './agent-runtime.js'
  * available while every provider mutation fails closed through capabilities.
  */
 export class UnavailableAgentRuntime implements AgentHostRuntime {
-  readonly provider = 'codex'
+  readonly provider: AgentProvider
+  readonly descriptor?: ProviderDescriptor
   readonly available = false
+
+  constructor(
+    provider: AgentProvider = 'codex',
+    descriptor?: ProviderDescriptor,
+  ) {
+    this.provider = provider
+    this.descriptor = descriptor
+  }
 
   subscribeEvents(): () => void {
     return () => undefined
@@ -21,24 +33,26 @@ export class UnavailableAgentRuntime implements AgentHostRuntime {
   }
 
   async startConversation(): Promise<never> {
-    throw unavailableError()
+    throw unavailableError(this.provider)
   }
 
   async resumeConversation(): Promise<never> {
-    throw unavailableError()
+    throw unavailableError(this.provider)
   }
 
   async startTurn(): Promise<never> {
-    throw unavailableError()
+    throw unavailableError(this.provider)
   }
 
   async interruptTurn(): Promise<never> {
-    throw unavailableError()
+    throw unavailableError(this.provider)
   }
 
   async close(): Promise<void> {}
 }
 
-function unavailableError(): Error {
-  return new Error('Codex runtime is unavailable')
+function unavailableError(provider: AgentProvider): Error {
+  return new Error(
+    `${provider === 'codex' ? 'Codex' : 'Claude Code'} is unavailable`,
+  )
 }

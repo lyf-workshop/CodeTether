@@ -22,6 +22,10 @@ test('maps one Host read model to the frozen read-only Conversation ViewModel', 
     canInterrupt: false,
     canStop: false,
     canResolveApproval: false,
+    supportsInterrupt: false,
+    supportsApprovals: false,
+    supportsDiff: false,
+    supportsReasoningControl: false,
   })
   assert.equal(viewModel.pendingApprovals[0]?.id, 'approval_live01')
   assert.equal(
@@ -39,14 +43,7 @@ test('maps every pending Approval and enables only advertised live controls', ()
         { ...approval(), id: 'approval_live02', summary: 'Write file' },
       ],
     }),
-    {
-      codex: true,
-      approvals: true,
-      interrupt: true,
-      resume: true,
-      diff: true,
-      streaming: true,
-    },
+    bootstrap('codex'),
     'connected',
   )
 
@@ -59,6 +56,10 @@ test('maps every pending Approval and enables only advertised live controls', ()
     canInterrupt: true,
     canStop: false,
     canResolveApproval: true,
+    supportsInterrupt: true,
+    supportsApprovals: true,
+    supportsDiff: true,
+    supportsReasoningControl: true,
   })
   assert.deepEqual(
     viewModel.timeline.blocks.flatMap((block) =>
@@ -300,6 +301,48 @@ test('builds the live rail from durable Host summaries without fake metadata', (
   })
 })
 
+test('keeps Codex and Claude Code as distinct durable Rail groups', () => {
+  const selected = conversation({
+    provider: 'claude-code',
+    title: 'Claude conversation',
+  })
+  const source = createLiveConversationDetailSource(
+    selected,
+    [
+      summary({ conversationId: 'conv_codex01', title: 'Codex conversation' }),
+      summary({
+        conversationId: 'conv_live01',
+        title: 'Claude conversation',
+        provider: 'claude-code',
+      }),
+    ],
+    'connected',
+    bootstrap('claude-code', {
+      interrupt: false,
+      approvals: false,
+      diff: false,
+      reasoningControl: false,
+    }),
+  )
+
+  assert.deepEqual(
+    source.rail.groups.map((group) => [
+      group.agent,
+      group.conversations.map((item) => [item.id, item.provider]),
+    ]),
+    [
+      ['codex', [['conv_codex01', 'codex']]],
+      ['claude', [['conv_live01', 'claude-code']]],
+    ],
+  )
+  assert.equal(source.conversation.provider, 'claude-code')
+  assert.equal(source.conversation.agent, 'claude')
+  assert.equal(source.conversation.capabilities.supportsInterrupt, false)
+  assert.equal(source.conversation.capabilities.supportsApprovals, false)
+  assert.equal(source.conversation.capabilities.supportsDiff, false)
+  assert.equal(source.conversation.capabilities.supportsReasoningControl, false)
+})
+
 test('projects durable organization metadata into Detail and active Rail without reordering', () => {
   const source = createLiveConversationDetailSource(
     conversation({
@@ -373,6 +416,7 @@ test('isolates only the current archived Conversation above the active Rail', ()
       archivedAt,
       status: 'completed',
       lastActivity: undefined,
+      provider: 'codex',
     },
   )
   assert.match(
@@ -391,14 +435,7 @@ test('keeps unavailable Project history visible while disabling controls', () =>
     conversation({ turns: [], currentTurn: undefined }),
     [summary()],
     'connected',
-    {
-      codex: true,
-      approvals: true,
-      interrupt: true,
-      resume: true,
-      diff: true,
-      streaming: true,
-    },
+    bootstrap('codex'),
     'unavailable',
   )
 
@@ -407,6 +444,10 @@ test('keeps unavailable Project history visible while disabling controls', () =>
     canInterrupt: false,
     canStop: false,
     canResolveApproval: false,
+    supportsInterrupt: true,
+    supportsApprovals: true,
+    supportsDiff: true,
+    supportsReasoningControl: true,
   })
   assert.deepEqual(source.connectionIndicator, {
     state: 'unavailable',
@@ -428,7 +469,7 @@ function conversation(fields = {}) {
     title: 'live-workspace',
     titleSource: 'generated',
     status: 'running',
-    agent: 'codex',
+    provider: 'codex',
     model: 'gpt-5.3-codex',
     reasoning: 'high',
     createdAt: timestamp,
@@ -442,6 +483,45 @@ function conversation(fields = {}) {
     terminal: { text: '', truncated: false },
     pendingApprovals: [],
     ...fields,
+  }
+}
+
+function bootstrap(provider, capabilityOverrides = {}) {
+  const capabilities = {
+    streaming: true,
+    resume: true,
+    interrupt: true,
+    approvals: true,
+    fileRead: true,
+    fileEdit: true,
+    shell: true,
+    search: true,
+    diff: true,
+    toolEvents: true,
+    modelSelection: true,
+    reasoningControl: true,
+    ...capabilityOverrides,
+  }
+  return {
+    protocolVersion: 1,
+    hostVersion: 'test',
+    epoch: 'epoch_provider_test',
+    capabilities: {
+      codex: true,
+      approvals: true,
+      interrupt: true,
+      resume: true,
+      diff: true,
+      streaming: true,
+    },
+    providers: [
+      {
+        provider,
+        displayName: provider === 'codex' ? 'Codex' : 'Claude Code',
+        availability: 'available',
+        capabilities,
+      },
+    ],
   }
 }
 

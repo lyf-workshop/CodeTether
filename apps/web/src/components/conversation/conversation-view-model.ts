@@ -1,6 +1,7 @@
 import type {
   ConversationStatus,
   ConversationTitleSource,
+  ProviderId,
 } from '@codetether/protocol'
 import type { AgentId, DiffLine, ExecutionStatus } from '@codetether/ui'
 
@@ -127,6 +128,10 @@ export interface ConversationCapabilitiesViewModel {
   readonly canInterrupt: boolean
   readonly canStop: boolean
   readonly canResolveApproval: boolean
+  readonly supportsInterrupt: boolean
+  readonly supportsApprovals: boolean
+  readonly supportsDiff: boolean
+  readonly supportsReasoningControl: boolean
 }
 
 export interface ConversationViewModel {
@@ -137,6 +142,7 @@ export interface ConversationViewModel {
   readonly archivedAt?: string
   readonly status: ExecutionStatus
   readonly agent: AgentId
+  readonly provider?: ProviderId
   readonly model: string
   readonly reasoning: string
   readonly permission: string
@@ -162,6 +168,7 @@ export interface ConversationRailItemViewModel {
   readonly status: ExecutionStatus
   readonly lastActivity: string
   readonly machine?: string
+  readonly provider?: ProviderId
 }
 
 export interface ConversationRailGroupViewModel {

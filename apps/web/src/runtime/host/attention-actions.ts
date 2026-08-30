@@ -148,12 +148,17 @@ export function attentionErrorMessage(error: unknown): string {
     case 'project_unavailable':
       return '项目目录当前不可用，但历史仍可查看。'
     case 'runtime_unavailable':
-      return 'Codex 当前不可用。'
+    case 'provider_not_installed':
+    case 'provider_version_unsupported':
+    case 'provider_unavailable':
+      return '智能体当前不可用。'
     case 'invalid_request':
       return '请求无效，请刷新后重试。'
+    case 'provider_session_lost':
     case 'provider_conversation_unavailable':
-      return 'Codex 已无法恢复此会话；本地历史仍可查看。'
+      return '智能体已无法恢复此会话；本地历史仍可查看。'
     case 'provider_error':
+    case 'provider_start_failed':
     case 'conversation_archived':
     case 'project_has_conversations':
     case 'internal':

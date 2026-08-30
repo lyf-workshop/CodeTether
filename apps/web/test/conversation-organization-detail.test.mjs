@@ -11,7 +11,7 @@ test('Archived Detail keeps history visible and replaces input with explicit res
   const source = await sourceOf('conversation-workspace.tsx')
 
   assert.match(source, /此会话已归档/u)
-  assert.match(source, /历史记录仍然可查看。恢复后可以继续与 Codex 对话。/u)
+  assert.match(source, /历史记录仍然可查看。恢复后可以继续与当前智能体对话。/u)
   assert.match(source, /<ConversationTimeline/u)
   assert.match(source, /<ArchivedComposer/u)
   assert.match(source, /<ConversationRestoreButton/u)

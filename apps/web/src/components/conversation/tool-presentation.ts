@@ -1,5 +1,13 @@
+import type { ToolKind } from '@codetether/protocol'
+
 export type ToolPresentationKind =
-  'git-status' | 'read-file' | 'test' | 'command'
+  | 'git-status'
+  | 'read-file'
+  | 'edit-file'
+  | 'search'
+  | 'test'
+  | 'command'
+  | 'generic'
 
 export interface ToolPresentation {
   readonly kind: ToolPresentationKind
@@ -11,6 +19,7 @@ export interface ToolPresentation {
 
 export interface ToolPresentationInput {
   readonly command: string
+  readonly kind?: ToolKind
   readonly status: 'idle' | 'running' | 'completed' | 'failed'
   readonly outputSummary?: string
 }
@@ -23,6 +32,7 @@ const MAX_SUBTITLE_CHARACTERS = 80
  */
 export function createToolPresentation({
   command,
+  kind,
   status,
   outputSummary,
 }: ToolPresentationInput): ToolPresentation {
@@ -30,9 +40,12 @@ export function createToolPresentation({
   const inspectedCommand = unwrapPowerShellCommand(rawCommand)
   const tokens = tokenizeCommandPrefix(inspectedCommand, 6)
   const executable = normalizeExecutable(tokens[0]?.value)
-  const classification = hasCompoundCommandSyntax(inspectedCommand)
-    ? ({ kind: 'command', title: '执行命令' } as const)
-    : classifyCommand(executable, tokens)
+  const classification =
+    kind === undefined
+      ? hasCompoundCommandSyntax(inspectedCommand)
+        ? ({ kind: 'command', title: '执行命令' } as const)
+        : classifyCommand(executable, tokens)
+      : classifyCanonicalTool(kind)
   const failure =
     status === 'failed' ? summarizeToolFailure(outputSummary) : undefined
   const subtitle = failure ?? classification.subtitle
@@ -42,6 +55,21 @@ export function createToolPresentation({
     title: classification.title,
     ...(subtitle === undefined ? {} : { subtitle }),
     rawCommand,
+  }
+}
+
+function classifyCanonicalTool(kind: ToolKind): CommandClassification {
+  switch (kind) {
+    case 'read':
+      return { kind: 'read-file', title: '读取文件' }
+    case 'edit':
+      return { kind: 'edit-file', title: '编辑文件' }
+    case 'search':
+      return { kind: 'search', title: '搜索' }
+    case 'shell':
+      return { kind: 'command', title: '执行命令' }
+    case 'generic':
+      return { kind: 'generic', title: '使用工具' }
   }
 }
 

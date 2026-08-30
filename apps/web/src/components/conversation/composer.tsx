@@ -20,8 +20,8 @@ interface ComposerProps {
 const composerStateLabels = {
   idle: 'Enter 发送 · Shift + Enter 换行',
   submitting: '正在发送…',
-  running: 'Codex 正在运行',
-  waiting: 'Codex 正在等待审批',
+  running: '智能体正在运行',
+  waiting: '智能体正在等待审批',
   interrupted: '已中断，可以继续发送',
   unavailable: 'CodeTether 暂时无法连接',
 } as const

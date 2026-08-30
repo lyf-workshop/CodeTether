@@ -129,6 +129,10 @@ function createDemoConversation(conversationId: string): ConversationViewModel {
       canInterrupt: true,
       canStop: true,
       canResolveApproval: false,
+      supportsInterrupt: true,
+      supportsApprovals: false,
+      supportsDiff: true,
+      supportsReasoningControl: true,
     },
   }
 }

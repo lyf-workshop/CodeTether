@@ -7,7 +7,9 @@ import type {
   GetConversationResponse,
   HostEventEnvelope,
   HostSnapshot,
+  ProviderId,
   StreamResetReason,
+  ToolKind,
   ToolOutputStream,
 } from '@codetether/protocol'
 
@@ -63,6 +65,7 @@ export interface ToolReadModel {
   readonly turnId: string
   readonly itemId: string
   readonly name: string
+  readonly kind?: ToolKind
   readonly command?: string
   readonly description?: string
   readonly status: ProjectedItemStatus
@@ -129,7 +132,7 @@ export interface ConversationReadModel {
   readonly pinnedAt?: string
   readonly archivedAt?: string
   readonly status: CanonicalConversationStatus
-  readonly agent: 'codex'
+  readonly provider: ProviderId
   readonly model?: string
   readonly reasoning?: string
   readonly createdAt: string
@@ -445,6 +448,9 @@ export function applyHostEvent(
         turnId,
         itemId,
         name: event.payload.name,
+        ...(event.payload.kind === undefined
+          ? {}
+          : { kind: event.payload.kind }),
         ...(event.payload.command === undefined
           ? {}
           : { command: event.payload.command }),
@@ -517,6 +523,7 @@ export function applyHostEvent(
         turnId,
         itemId,
         name: currentTool?.name ?? 'Command execution',
+        ...(currentTool?.kind === undefined ? {} : { kind: currentTool.kind }),
         ...(currentTool?.command === undefined
           ? {}
           : { command: currentTool.command }),
@@ -558,6 +565,9 @@ export function applyHostEvent(
         turnId,
         itemId,
         name: event.payload.name,
+        ...(event.payload.kind === undefined && current?.kind === undefined
+          ? {}
+          : { kind: event.payload.kind ?? current?.kind }),
         ...(event.payload.command === undefined &&
         current?.command === undefined
           ? {}
@@ -829,7 +839,7 @@ function projectConversationRecord(
       ? {}
       : { archivedAt: record.archivedAt }),
     status: record.status,
-    agent: 'codex',
+    provider: record.provider,
     ...(record.model === undefined ? {} : { model: record.model }),
     ...(record.reasoning === undefined ? {} : { reasoning: record.reasoning }),
     createdAt: record.createdAt,
@@ -859,6 +869,7 @@ function mergeConversationSummary(
       ? {}
       : { archivedAt: summary.archivedAt }),
     status: summary.status,
+    provider: summary.provider,
     ...(summary.model === undefined ? {} : { model: summary.model }),
     ...(summary.reasoning === undefined
       ? {}
@@ -887,6 +898,7 @@ function sameConversationMetadata(
     left.pinnedAt === right.pinnedAt &&
     left.archivedAt === right.archivedAt &&
     left.status === right.status &&
+    left.provider === right.provider &&
     left.model === right.model &&
     left.reasoning === right.reasoning &&
     left.createdAt === right.createdAt &&
@@ -983,6 +995,7 @@ function projectSnapshotTool(
     turnId,
     itemId,
     name: tool.name,
+    ...(tool.kind === undefined ? {} : { kind: tool.kind }),
     ...(tool.command === undefined ? {} : { command: tool.command }),
     ...(tool.summary === undefined ? {} : { description: tool.summary }),
     status: projectRuntimeItemStatus(tool.status),

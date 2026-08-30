@@ -427,6 +427,7 @@ test('create, start, and interrupt route only through bound provider identities'
   })
   assert.deepEqual(fixture.runtime.turnCalls[0].options, {
     providerThreadId: 'provider-thread-secret-1',
+    cwd: fixture.workspacePolicy.allowedRoots[0],
     input: 'Explain this workspace',
     model: 'gpt-test',
     reasoning: 'deep',
@@ -1024,7 +1025,7 @@ test('projects a fatal runtime failure into terminal safe Host state', async (t)
     }),
     (error) =>
       error instanceof HostServiceError &&
-      error.code === 'runtime_unavailable' &&
+      error.code === 'provider_unavailable' &&
       error.httpStatus === 503,
   )
   assert.equal(fixture.runtime.conversationCalls.length, 1)

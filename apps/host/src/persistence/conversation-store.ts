@@ -10,6 +10,7 @@ import {
   ConversationTitleSourceSchema,
   ManualConversationTitleSchema,
   ProjectIdSchema,
+  ProviderIdSchema,
   TimestampSchema,
   TurnIdSchema,
   TurnInputRecordSchema,
@@ -17,6 +18,7 @@ import {
   type ConversationSummary,
   type ConversationTitleSource,
   type ProjectId,
+  type ProviderId,
   type Timestamp,
   type TurnId,
   type TurnInputRecord,
@@ -119,7 +121,7 @@ export interface DurableConversation {
   readonly titleSource: ConversationTitleSource
   readonly pinnedAt?: Timestamp
   readonly archivedAt?: Timestamp
-  readonly provider: 'codex'
+  readonly provider: ProviderId
   readonly providerThreadId?: string
   readonly cwd: string
   readonly model?: string
@@ -144,7 +146,7 @@ export interface DurableConversationMutationResult {
 }
 
 export interface ListProjectConversationsOptions {
-  readonly provider?: 'codex'
+  readonly provider?: ProviderId
   readonly status?: ConversationSummary['status']
   readonly archived?: ConversationArchiveFilter
   readonly limit?: number
@@ -152,7 +154,7 @@ export interface ListProjectConversationsOptions {
 
 export interface SearchProjectConversationsOptions {
   readonly query: string
-  readonly provider?: 'codex'
+  readonly provider?: ProviderId
   readonly status?: ConversationSummary['status']
   readonly archive?: ConversationArchiveFilter
   readonly limit?: number
@@ -558,9 +560,10 @@ export class ConversationStore {
     const id = ProjectIdSchema.parse(projectId)
     const limit = parseConversationListLimit(options.limit)
     const archived = parseConversationArchiveFilter(options.archived)
-    if (options.provider !== undefined && options.provider !== 'codex') {
-      throw new Error(`Unsupported Provider: ${String(options.provider)}`)
-    }
+    const provider =
+      options.provider === undefined
+        ? undefined
+        : ProviderIdSchema.parse(options.provider)
     if (
       options.status !== undefined &&
       !isOneOf(options.status, durableConversationStatuses)
@@ -571,9 +574,9 @@ export class ConversationStore {
     }
     const filters = ['project_id = ?', "status <> 'creating'"]
     const parameters: Array<string | number> = [id]
-    if (options.provider !== undefined) {
+    if (provider !== undefined) {
       filters.push('provider = ?')
-      parameters.push(options.provider)
+      parameters.push(provider)
     }
     if (options.status !== undefined) {
       filters.push('status = ?')
@@ -618,9 +621,10 @@ export class ConversationStore {
     const normalizedQuery = normalizeConversationSearchQuery(options.query)
     const archive = parseConversationArchiveFilter(options.archive)
     const limit = parseConversationSearchLimit(options.limit)
-    if (options.provider !== undefined && options.provider !== 'codex') {
-      throw new Error(`Unsupported Provider: ${String(options.provider)}`)
-    }
+    const provider =
+      options.provider === undefined
+        ? undefined
+        : ProviderIdSchema.parse(options.provider)
     if (
       options.status !== undefined &&
       !isOneOf(options.status, searchableConversationStatuses)
@@ -634,7 +638,7 @@ export class ConversationStore {
       projectId: id,
       query: normalizedQuery,
       archive,
-      ...(options.provider === undefined ? {} : { provider: options.provider }),
+      ...(provider === undefined ? {} : { provider }),
       ...(options.status === undefined ? {} : { status: options.status }),
     }
     const cursor =
@@ -653,9 +657,9 @@ export class ConversationStore {
       )
     }
     parameters.push(id)
-    if (options.provider !== undefined) {
+    if (provider !== undefined) {
       filters.push('c.provider = ?')
-      parameters.push(options.provider)
+      parameters.push(provider)
     }
     if (options.status !== undefined) {
       filters.push('c.status = ?')
@@ -1280,7 +1284,7 @@ function parseProject(value: DurableProject): DurableProject {
 function parseConversation(
   value: DurableConversation | NewDurableConversation,
 ): DurableConversation {
-  if (value.provider !== 'codex') throw new Error('Provider must be codex')
+  const provider = ProviderIdSchema.parse(value.provider)
   const cwd = normalizeTrustedProjectRoot(value.cwd).rootPath
   assertOptionalBoundedText(value.providerThreadId, 'Provider Thread ID', 4096)
   assertOptionalBoundedText(value.model, 'Conversation model', 240)
@@ -1309,7 +1313,7 @@ function parseConversation(
     titleSource,
     ...(pinnedAt === undefined ? {} : { pinnedAt }),
     ...(archivedAt === undefined ? {} : { archivedAt }),
-    provider: 'codex',
+    provider,
     ...(value.providerThreadId === undefined
       ? {}
       : { providerThreadId: value.providerThreadId.trim() }),
@@ -1513,9 +1517,8 @@ function assertDatabaseIntegrity(database: DatabaseSync): void {
   }
 }
 
-function parseProvider(value: string): 'codex' {
-  if (value !== 'codex') throw new Error(`Unsupported Provider: ${value}`)
-  return value
+function parseProvider(value: string): ProviderId {
+  return ProviderIdSchema.parse(value)
 }
 
 function parseConversationStatus(value: string): DurableConversationStatus {

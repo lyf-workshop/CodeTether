@@ -21,6 +21,7 @@ export interface ConversationState {
   readonly providerThreadId: string
   readonly turns: Map<TurnId, TurnState>
   readonly providerTurnIds: Map<string, TurnId>
+  providerSessionMaterialized: boolean
   providerSession: 'ready' | 'needs-resume' | 'unavailable'
   startingTurn: boolean
 }

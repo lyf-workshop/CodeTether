@@ -37,7 +37,7 @@ test('maps only durable Attention type and safe product metadata to notification
     conversationId,
     turnId,
     title: 'CodeTether · 需要批准',
-    body: '中文项目 · 修复 Windows 登录后的自动重连问题 🚀\nCodex 正在等待你的确认',
+    body: '中文项目 · 修复 Windows 登录后的自动重连问题 🚀\n智能体正在等待你的确认',
   })
   assert.doesNotMatch(approval.body, /secret-wrapper/u)
 
@@ -48,7 +48,7 @@ test('maps only durable Attention type and safe product metadata to notification
     metadata,
   )
   assert.equal(completed.title, 'CodeTether · 工作已完成')
-  assert.match(completed.body, /Codex 已完成本轮工作$/u)
+  assert.match(completed.body, /智能体已完成本轮工作$/u)
 
   const failed = createNotificationIntent(
     attention('failed', {

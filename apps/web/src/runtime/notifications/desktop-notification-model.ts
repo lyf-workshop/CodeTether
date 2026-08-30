@@ -176,12 +176,12 @@ function notificationCopy(type: AttentionType): {
     case 'approval':
       return {
         title: 'CodeTether · 需要批准',
-        detail: 'Codex 正在等待你的确认',
+        detail: '智能体正在等待你的确认',
       }
     case 'completed_review':
       return {
         title: 'CodeTether · 工作已完成',
-        detail: 'Codex 已完成本轮工作',
+        detail: '智能体已完成本轮工作',
       }
     case 'failed':
       return {

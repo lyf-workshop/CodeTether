@@ -1,3 +1,9 @@
+import {
+  CLAUDE_CODE_TESTED_VERSION,
+  prepareClaudeCode,
+} from '@codetether/adapter-claude'
+import type { ProviderDescriptor } from '@codetether/protocol'
+
 import { HostEventPublisher } from './host-event-publisher.js'
 import { ConversationStore } from '../persistence/index.js'
 import type { AgentHostRuntime } from './agent-runtime.js'
@@ -7,6 +13,7 @@ import {
   type LocalHttpServerOptions,
 } from './local-http-server.js'
 import { CodexHostRuntime } from './codex-host-runtime.js'
+import { ClaudeCodeHostRuntime } from './claude-code-host-runtime.js'
 import { UnavailableAgentRuntime } from './unavailable-agent-runtime.js'
 import { WorkspacePolicy } from './workspace-policy.js'
 
@@ -74,10 +81,33 @@ export async function startLocalCodexHost(
       `[codetether:runtime-unavailable] Codex launch failed (${safeErrorName(error)}); durable APIs remain read-only\n`,
     )
   }
+  const runtimes: AgentHostRuntime[] = [runtime]
+  const claudePreparation = await prepareClaudeCode()
+  const claudeDetection = claudePreparation.detection
+  if (claudeDetection.status === 'available') {
+    runtimes.push(
+      new ClaudeCodeHostRuntime(
+        claudeDetection,
+        claudePreparation.runtimeEnvironment(),
+      ),
+    )
+  } else {
+    const descriptor: ProviderDescriptor = {
+      provider: 'claude-code',
+      displayName: 'Claude Code',
+      availability: claudeDetectionAvailability(claudeDetection.status),
+      capabilities: claudeDetection.capabilities,
+      testedVersion: CLAUDE_CODE_TESTED_VERSION,
+      ...('version' in claudeDetection
+        ? { version: claudeDetection.version }
+        : {}),
+    }
+    runtimes.push(new UnavailableAgentRuntime('claude-code', descriptor))
+  }
   try {
     return await startLocalCodexHostWithRuntime(
       options,
-      runtime,
+      runtimes,
       workspacePolicy,
       persistence,
     )
@@ -97,13 +127,27 @@ function safeErrorName(error: unknown): string {
     : 'Error'
 }
 
+function claudeDetectionAvailability(
+  status: 'unsupportedVersion' | 'notInstalled' | 'misconfigured',
+): ProviderDescriptor['availability'] {
+  switch (status) {
+    case 'unsupportedVersion':
+      return 'unsupported_version'
+    case 'notInstalled':
+      return 'not_installed'
+    case 'misconfigured':
+      return 'misconfigured'
+  }
+}
+
 /** Testable assembly boundary that owns Runtime cleanup after launch. */
 export async function startLocalCodexHostWithRuntime(
   options: LocalCodexHostOptions,
-  runtime: AgentHostRuntime,
+  runtime: AgentHostRuntime | readonly AgentHostRuntime[],
   workspacePolicy: WorkspacePolicy,
   persistence?: ConversationStore,
 ): Promise<RunningLocalCodexHost> {
+  const runtimes = Array.isArray(runtime) ? runtime : [runtime]
   let service: HostService | undefined
   let server: LocalHttpServer | undefined
   try {
@@ -117,7 +161,7 @@ export async function startLocalCodexHostWithRuntime(
         : { maxBytes: options.replayMaxBytes }),
     })
     service = new HostService({
-      runtime,
+      runtimes,
       workspacePolicy,
       publisher,
       hostVersion: options.hostVersion,
@@ -169,7 +213,9 @@ export async function startLocalCodexHostWithRuntime(
     } else if (service !== undefined) {
       await service.close().catch(() => undefined)
     } else {
-      await runtime.close().catch(() => undefined)
+      await Promise.allSettled(
+        runtimes.map(async (providerRuntime) => await providerRuntime.close()),
+      )
       try {
         persistence?.close()
       } catch {

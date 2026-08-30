@@ -3,6 +3,8 @@ import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import test from 'node:test'
 
+import { presentConversationRailSearchResult } from '../.tmp/test-dist/components/conversation/conversation-rail-search-model.js'
+
 const webSource = resolve(import.meta.dirname, '../src')
 
 test('Rail Search uses the durable active Host query with debounce and server status', async () => {
@@ -45,6 +47,26 @@ test('Rail Search reuses public Turn anchors and explains user-input matches', a
   assert.match(model, /targetTurnId: result\.matchedTurnId/u)
   assert.match(search, /当前会话/u)
   assert.match(search, /!search\.isPending && !currentMatches/u)
+})
+
+test('Rail Search preserves Claude Code identity from durable results', () => {
+  const presented = presentConversationRailSearchResult({
+    conversation: {
+      conversationId: 'conv_rail_claude01',
+      projectId: 'proj_rail_claude01',
+      title: 'Claude history',
+      titleSource: 'generated',
+      provider: 'claude-code',
+      status: 'completed',
+      createdAt: '2026-08-29T12:00:00.000Z',
+      updatedAt: '2026-08-29T12:01:00.000Z',
+      lastActivityAt: '2026-08-29T12:01:00.000Z',
+    },
+    matchedField: 'title',
+  })
+
+  assert.equal(presented.conversation.provider, 'claude-code')
+  assert.equal(presented.matchDescription, '匹配标题')
 })
 
 test('Rail Search exposes bounded loading, empty, failure, and pagination states', async () => {

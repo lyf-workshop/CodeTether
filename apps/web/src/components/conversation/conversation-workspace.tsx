@@ -118,7 +118,7 @@ export function ConversationWorkspace({
                 此会话已归档
               </p>
               <p className="truncate text-xs text-text-secondary">
-                历史记录仍然可查看。恢复后可以继续与 Codex 对话。
+                历史记录仍然可查看。恢复后可以继续与当前智能体对话。
               </p>
             </div>
             <ConversationRestoreButton
@@ -139,11 +139,13 @@ export function ConversationWorkspace({
         targetChangeRequestKey={targetChangeRequestKey}
         targetTurnId={targetTurnId}
       />
-      <PendingActionDock
-        approvals={viewModel.pendingApprovals}
-        controller={controls?.approvals}
-        className="mx-4 mb-3"
-      />
+      {viewModel.capabilities.supportsApprovals ? (
+        <PendingActionDock
+          approvals={viewModel.pendingApprovals}
+          controller={controls?.approvals}
+          className="mx-4 mb-3"
+        />
+      ) : null}
       <div className="min-h-0 px-4 pb-5">
         {organizationConversation?.archivedAt === undefined ? (
           <Composer

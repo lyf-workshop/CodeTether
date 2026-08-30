@@ -208,7 +208,7 @@ test('starts a read-only durable API when the Codex executable is unavailable', 
       },
     )
     assert.equal(mutation.status, 503)
-    assert.equal(mutation.body.code, 'runtime_unavailable')
+    assert.equal(mutation.body.code, 'provider_unavailable')
   } finally {
     await seeded?.close().catch(() => undefined)
     await readOnly?.close().catch(() => undefined)
@@ -293,7 +293,11 @@ test('restores durable Project authorization and fails safely while its root is 
     )
     assert.equal(resumed.status, 202)
     assert.deepEqual(secondRuntime.resumeConversationCalls, [
-      { providerThreadId: 'provider-thread-1', cwd: workspace },
+      {
+        providerThreadId: 'provider-thread-1',
+        cwd: workspace,
+        providerSessionMaterialized: false,
+      },
     ])
     assert.equal(secondRuntime.startTurnCalls.length, 1)
   } finally {
@@ -323,6 +327,27 @@ test('serves bootstrap, snapshot, and idempotent mutations with a fake runtime',
         diff: true,
         streaming: true,
       },
+      providers: [
+        {
+          provider: 'codex',
+          displayName: 'Codex',
+          availability: 'available',
+          capabilities: {
+            streaming: true,
+            resume: true,
+            interrupt: true,
+            approvals: true,
+            fileRead: true,
+            fileEdit: true,
+            shell: true,
+            search: true,
+            diff: true,
+            toolEvents: true,
+            modelSelection: true,
+            reasoningControl: true,
+          },
+        },
+      ],
     })
 
     const emptySnapshot = await getJson(harness.baseUrl, '/api/v1/snapshot')
@@ -1484,7 +1509,7 @@ test('releases an SSE slot when reconnect setup fails before headers', async () 
   }
 })
 
-test('returns safe runtime_unavailable responses after a fatal runtime signal', async () => {
+test('returns safe provider_unavailable responses after a fatal runtime signal', async () => {
   const harness = await createHarness()
   try {
     harness.runtime.fail(
@@ -1497,7 +1522,7 @@ test('returns safe runtime_unavailable responses after a fatal runtime signal', 
     })
 
     assert.equal(response.status, 503)
-    assert.equal(response.body.code, 'runtime_unavailable')
+    assert.equal(response.body.code, 'provider_unavailable')
     assert.equal(
       JSON.stringify(response.body).includes('must-not-cross-http-boundary'),
       false,

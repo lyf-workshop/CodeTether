@@ -87,7 +87,10 @@ function ConversationInfo({ conversation }: ConversationInfoProps) {
 
         <dt className="font-regular text-text-secondary">模型</dt>
         <dd className="min-w-0 truncate font-regular text-text-primary">
-          {conversation.model} · {conversation.reasoning}
+          {conversation.model}
+          {conversation.capabilities.supportsReasoningControl
+            ? ` · ${conversation.reasoning}`
+            : ''}
         </dd>
 
         <dt className="font-regular text-text-secondary">状态</dt>
@@ -311,11 +314,13 @@ function OverviewPane({
   return (
     <div className="px-4 pb-4">
       <ConversationInfo conversation={conversation} />
-      <ChangesSummary
-        changes={changes}
-        onChangeSelect={onChangeSelect}
-        selectedChangeId={selectedChangeId}
-      />
+      {conversation.capabilities.supportsDiff ? (
+        <ChangesSummary
+          changes={changes}
+          onChangeSelect={onChangeSelect}
+          selectedChangeId={selectedChangeId}
+        />
+      ) : null}
       <TerminalSummary terminal={terminal} />
       <ContextSummary context={context} visibleCount={3} />
     </div>
@@ -355,6 +360,12 @@ export function InspectorPanel({
   className,
   ...props
 }: InspectorPanelProps) {
+  const requestedTab = tab ?? initialTab
+  const effectiveTab =
+    requestedTab === 'changes' && !conversation.capabilities.supportsDiff
+      ? 'overview'
+      : requestedTab
+
   return (
     <aside
       aria-label="会话检查器"
@@ -386,7 +397,7 @@ export function InspectorPanel({
       </header>
 
       <Tabs
-        {...(tab === undefined ? { defaultValue: initialTab } : { value: tab })}
+        value={effectiveTab}
         onValueChange={(value) => onTabChange?.(value as InspectorTab)}
         className="min-h-0 flex-1 gap-0"
       >
@@ -402,12 +413,14 @@ export function InspectorPanel({
             >
               概览
             </TabsTrigger>
-            <TabsTrigger
-              value="changes"
-              className="h-9 flex-1 px-1 text-sm font-medium data-[state=active]:text-text-primary"
-            >
-              变更
-            </TabsTrigger>
+            {conversation.capabilities.supportsDiff ? (
+              <TabsTrigger
+                value="changes"
+                className="h-9 flex-1 px-1 text-sm font-medium data-[state=active]:text-text-primary"
+              >
+                变更
+              </TabsTrigger>
+            ) : null}
             <TabsTrigger
               value="terminal"
               className="h-9 flex-1 px-1 text-sm font-medium data-[state=active]:text-text-primary"
@@ -436,17 +449,19 @@ export function InspectorPanel({
           </ScrollArea>
         </TabsContent>
 
-        <TabsContent value="changes" className="min-h-0 overflow-hidden">
-          <ScrollArea className="h-full">
-            <div className="px-4 pb-4">
-              <ChangesSummary
-                changes={changes}
-                onChangeSelect={onChangeSelect}
-                selectedChangeId={selectedChangeId}
-              />
-            </div>
-          </ScrollArea>
-        </TabsContent>
+        {conversation.capabilities.supportsDiff ? (
+          <TabsContent value="changes" className="min-h-0 overflow-hidden">
+            <ScrollArea className="h-full">
+              <div className="px-4 pb-4">
+                <ChangesSummary
+                  changes={changes}
+                  onChangeSelect={onChangeSelect}
+                  selectedChangeId={selectedChangeId}
+                />
+              </div>
+            </ScrollArea>
+          </TabsContent>
+        ) : null}
 
         <TabsContent value="terminal" className="min-h-0 overflow-hidden">
           <ScrollArea className="h-full">

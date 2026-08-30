@@ -45,3 +45,23 @@ export function conversationListQueryOptions(
     staleTime: 0,
   })
 }
+
+/** Provider-neutral cold index used only to enrich global Attention metadata. */
+export function allProjectConversationsQueryOptions(
+  client: ConversationListReadClient,
+  projectId: ProjectId,
+) {
+  return queryOptions({
+    queryKey: [...conversationListQueryKeys.projectScope(projectId), 'all'],
+    queryFn: async ({ signal }) =>
+      (
+        await client.listProjectConversations(projectId, {
+          archived: 'all',
+          limit: 100,
+          signal,
+        })
+      ).conversations,
+    retry: false,
+    staleTime: 0,
+  })
+}

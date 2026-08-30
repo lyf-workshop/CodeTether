@@ -47,6 +47,7 @@ export interface DurableTurnPresentationV1 {
 export interface RestoredDurableConversation {
   readonly record: ConversationRecord
   readonly providerThreadId: string
+  readonly providerSessionMaterialized: boolean
   readonly runtime: ConversationRuntimeSnapshot
   readonly providerTurns: ReadonlyArray<{
     readonly turnId: TurnId
@@ -357,6 +358,7 @@ function restoreConversation(
   return {
     record: reconstructed.record,
     providerThreadId: conversation.providerThreadId,
+    providerSessionMaterialized: reconstructed.totalTurns > 0,
     runtime: reconstructed.runtime,
     providerTurns: reconstructed.providerTurns,
     expiredApprovals: reconstructed.approvals.filter(

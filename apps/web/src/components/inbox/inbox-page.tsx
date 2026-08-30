@@ -32,6 +32,7 @@ import {
 import { InboxErrorState, InboxLoadingState } from './inbox-page-states'
 import { InboxSummary } from './inbox-summary'
 import { useInboxMetadata } from './use-inbox-metadata'
+import { providerPresentation } from '../../provider/provider-presentation'
 
 const emptyMutationStates: Readonly<Record<string, InboxItemMutationState>> = {}
 const emptyAttentionItems: readonly AttentionItem[] = []
@@ -69,8 +70,16 @@ export function InboxPage() {
     connectionState === 'connected',
   )
   const controlsEnabled = connectionState === 'connected'
-  const approvalEnabled =
-    controlsEnabled && runtime.bootstrap?.capabilities.approvals === true
+
+  function approvalEnabled(item: AttentionItem): boolean {
+    const provider = metadata.get(String(item.attentionId))?.provider ?? 'codex'
+    const presentation = providerPresentation(runtime.bootstrap, provider)
+    return (
+      controlsEnabled &&
+      presentation.available &&
+      presentation.capabilities.approvals
+    )
+  }
 
   useEffect(() => {
     const openIds = new Set(allItems.map((item) => String(item.attentionId)))
@@ -139,7 +148,7 @@ export function InboxPage() {
     decision: ApprovalDecision,
   ) {
     const attentionId = String(item.attentionId)
-    if (!approvalEnabled || mutationGuards.current.has(attentionId)) {
+    if (!approvalEnabled(item) || mutationGuards.current.has(attentionId)) {
       return
     }
 
@@ -292,7 +301,7 @@ export function InboxPage() {
                         className="rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
                       >
                         <InboxItem
-                          approvalEnabled={approvalEnabled}
+                          approvalEnabled={approvalEnabled(item)}
                           controlsEnabled={controlsEnabled}
                           item={item}
                           metadata={metadata.get(attentionId)}

@@ -5,6 +5,7 @@ import {
   ConversationStatusSchema,
   ConversationSummarySchema,
 } from './records.js'
+import { ProviderIdSchema } from './providers.js'
 
 export const conversationSearchLimits = {
   default: 25,
@@ -63,7 +64,7 @@ export const ConversationSearchQuerySchema = z
   .object({
     q: ConversationSearchQueryTextSchema,
     archive: ConversationSearchArchiveFilterSchema.default('active'),
-    provider: z.literal('codex').optional(),
+    provider: ProviderIdSchema.optional(),
     status: ConversationStatusSchema.optional(),
     limit: z.coerce
       .number()

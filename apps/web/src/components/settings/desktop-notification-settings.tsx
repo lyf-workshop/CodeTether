@@ -23,12 +23,12 @@ const notificationOptions = [
   {
     type: 'approval',
     label: '需要批准',
-    description: 'Codex 等待你的确认时通知。',
+    description: '智能体等待你的确认时通知。',
   },
   {
     type: 'completed_review',
     label: '工作完成',
-    description: 'Codex 完成本轮工作时通知。',
+    description: '智能体完成本轮工作时通知。',
   },
   {
     type: 'failed',

@@ -761,7 +761,7 @@ Acceptance boundary:
 
 ### Phase 4G.2 — Windows Session & Background Reliability
 
-**Status:** implemented; bounded evidence collection is complete and Owner acceptance is pending.
+**Status:** accepted and frozen at `f576b05`.
 
 Implemented scope:
 
@@ -784,20 +784,40 @@ Validation boundary:
 
 - Focused Rust lifecycle/reducer/message tests, Host/Web resume-reconnect tests, and packaged Windows lifecycle smoke cover repeated suspend/resume and lock/unlock cycles, a single check/reconnect per cycle, exact Host PID/epoch preservation, cancelled and confirmed session end, the 2-second termination budget, close-to-tray after cancellation, crash cleanup, and process/port release.
 - Real raw-release evidence covers hidden idle sleep/wake, pending Approval sleep/wake and later resolution, Explorer restart with one recovered tray, and a 30-minute background soak with real Codex Turns. Confirmed session end and repeated power/session cycles remain explicitly simulated; real logoff/shutdown, an actively executing Turn at the exact suspend instant, and a controlled provider-network change after wake have not been observed.
-- The pinned Tauri/`tray-icon` boundary remains responsible for Explorer tray recovery rather than a CodeTether re-registration loop. Final installed-NSIS baseline evidence covers install, readiness, hide, exact Tray Quit, uninstall, and cleanup. A real installed Sleep occurred but its automation-parent Job ended before post-wake runtime identity could be observed, so installed-runtime continuity is explicitly unobserved; real OS logoff/shutdown, dedicated Win+L, provider-network-change, and active-Turn-at-suspend remain separately unobserved. Owner review remains pending, and Phase 4G.2 must not be described as accepted or frozen before that review.
+- The pinned Tauri/`tray-icon` boundary remains responsible for Explorer tray recovery rather than a CodeTether re-registration loop. Final clean post-commit evidence confirmed matching Desktop/Host build identity from `f576b05` without `-dirty`, installed NSIS smoke, exact Tray Quit, zero remaining CodeTether processes, and zero port-4317 listeners. A real installed Sleep occurred but its automation-parent Job ended before post-wake runtime identity could be observed, so installed-runtime continuity is explicitly unobserved; real OS logoff/shutdown, dedicated Win+L, provider-network-change, and active-Turn-at-suspend remain separately unobserved.
 
-## Phase 5A — Second Provider Foundation
+Acceptance boundary:
 
-**Goal:** validate the provider-neutral boundary with a deliberately bounded Claude Code foundation after the Windows Desktop lifecycle is reliable.
+- Owner acceptance freezes Phase 4G.2 at `f576b05`. Further Desktop lifecycle polish is not authorized unless Phase 5A introduces a specific regression.
+- This acceptance does not broaden the observed-vs-simulated lifecycle claims above and does not authorize Start with Windows, automatic Host restart, or another native product surface.
 
-Planned outcomes:
+## Phase 5A — Second Provider Foundation: Claude Code
 
-- A reviewed provider contract and Claude Code capability detection.
-- Claude Code lifecycle, Conversation creation, streaming, and Tool/event normalization through the existing Host boundary.
-- Explicit handling for capability differences without leaking raw protocol concepts into UI.
-- Codex regression coverage without forcing unsupported Codex capabilities onto Claude Code.
+**Status:** current approved implementation scope; not yet accepted, frozen, or READY.
 
-Exit gate: one real Claude Code Conversation can be created and streamed through normalized public events with truthful capability differences. Cross-agent handoff and forced feature parity remain prohibited.
+Implemented architecture:
+
+- A narrow Provider contract now exists only at the proven Host boundary. One `ProviderRegistry` maps immutable durable `codex | claude-code` Conversation identity to the owning runtime; the existing Conversation-create, Turn, read, organization, Search, Attention, Snapshot, and SSE APIs remain Provider-neutral. There are no Provider-specific Web endpoints or Client methods.
+- Protocol v1 adds presentation-safe availability and capability descriptors, canonical Provider errors, and Read/Edit/Shell/Search/Generic Tool kinds. It never exposes executable paths, private session/Turn identities, raw Codex JSON-RPC, Claude JSONL, stderr, or ranking/runtime internals.
+- SQLite migration 007 (`provider_foundation`) transactionally widens the Conversation Provider constraint and rebuilds the dependent Turn/Attention/Search graph while preserving all Project, existing Codex Conversation/session identity, title/organization/activity, Turn/snapshot, Attention, Search-document, index, and trigger data.
+- Both Providers share the existing process-wide eight-Conversation hydrated working-set limit. List, Detail, Rail, Search, Rename, Pin, Archive, and Unarchive remain cold and never spawn or resume either CLI; only real Turn control performs native Provider hydration/resume.
+- Claude Code detection safely resolves a native executable or verified npm installation and performs bounded version/authentication checks once per Host lifecycle. Public states distinguish available, not installed, unsupported version, misconfigured, and unavailable without revealing the executable path or raw diagnostic.
+- Claude session creation uses a native UUID session identity; restart continuation uses the CLI's native `--resume` contract and never re-prompts full durable history to imitate context. One active Turn owns one child process, executes in the already authorized Conversation working directory, receives bounded canonical User input through JSONL stdin, and uses structured argv with `shell: false`.
+- Claude text and high-confidence Tool events normalize into the existing semantic stream. Read, Edit/Write, Bash/PowerShell, and Glob/Grep map to canonical Tool kinds; unknown Tools remain Generic rather than relying on name heuristics. Public payloads stay bounded and presentation-safe.
+- The Phase 5A Claude execution profile is intentionally restricted to Read/Glob/Grep under noninteractive `dontAsk`, strict MCP, and no permission bypass. Its descriptor advertises streaming, native resume, Read, Search, and Tool events, but not machine-readable Approval, interrupt, Edit, Shell, Diff, model selection, or Codex-style reasoning control. Shared UI hides or disables unsupported controls while Codex retains its established capability surface.
+- New Conversation can select an actually available Codex or Claude Code Agent. Provider identity remains fixed afterward; mixed-Provider Conversations share one Project index, Rail, organization model, Search projection, Inbox, Attention, and notification presentation without Provider switching or handoff.
+- Provider failures are scoped to their registry entry and map to bounded canonical errors such as not installed, unsupported version, start failure, lost session, or unavailable. One failed Provider does not fail the other's live work, and history remains readable while an executable is unavailable.
+
+Not included:
+
+- Cross-Provider Conversation switching, handoff, delegation, transcript replay, Claude Agent Teams/subagents, OpenCode, Gemini, Provider marketplace, or global Provider-settings work.
+- Claude capability parity: machine-readable Approval, writable/shell permission mapping, Diff, interrupt, model/permission/reasoning controls, richer Tool fidelity, and any bypass mode remain deferred to a separately approved Phase 5B.
+- Remote Provider execution, Mobile, MCP management UI, Queue/Steer, Attachments, or changes to the frozen Phase 4G Desktop lifecycle outside a demonstrated regression.
+
+Exit gate:
+
+- Real installed Claude Code detection, a real streamed Conversation, basic real Tool normalization, native restart/resume marker retention, mixed Codex/Claude history, durable Search/organization compatibility, cold Provider isolation, background Tray completion with no orphan, installed Desktop smoke, and clean Codex regressions must all pass.
+- Fixture parser/process tests support but cannot replace the required REAL Claude Code evidence. Phase 5A remains NOT READY until that evidence and all validation gates are complete.
 
 ## Phase 6 — Machines
 

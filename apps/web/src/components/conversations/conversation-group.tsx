@@ -19,6 +19,7 @@ import {
   formatConversationActivity,
   formatConversationArchivedAt,
 } from './conversation-list-model'
+import { providerAgentId } from '../../provider/provider-presentation'
 
 interface ConversationGroupProps {
   archiveView?: 'active' | 'archived'
@@ -33,7 +34,8 @@ export function ConversationGroup({
   conversations,
   selectedConversationId,
 }: ConversationGroupProps) {
-  const definition = agentDefinitions[provider]
+  const agent = providerAgentId(provider)
+  const definition = agentDefinitions[agent]
   const headingId = `conversations-agent-${provider}`
   const firstUnpinnedIndex = conversations.findIndex(
     (conversation) => conversation.pinnedAt === undefined,
@@ -44,7 +46,7 @@ export function ConversationGroup({
     <section aria-labelledby={headingId}>
       <div className="flex h-[var(--layout-conversations-group-height)] min-w-0 items-center gap-3 rounded-md border border-border bg-surface/65 px-3.5">
         <AgentIdentityMark
-          agent={provider}
+          agent={agent}
           className="size-8 rounded-sm text-sm"
         />
         <h2

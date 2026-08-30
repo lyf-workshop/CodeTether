@@ -149,6 +149,7 @@ export class CodexEventNormalizer {
           threadId: requireString(params, 'threadId', raw.method),
           turnId: requireString(params, 'turnId', raw.method),
           itemId: requireString(item, 'id', raw.method),
+          kind: 'shell',
           name: command,
           summary: readString(item, 'cwd'),
           raw,
@@ -196,6 +197,7 @@ export class CodexEventNormalizer {
             threadId,
             turnId,
             itemId,
+            kind: 'shell',
             name: requireString(item, 'command', raw.method),
             success: status === 'completed',
             ...(readString(item, 'aggregatedOutput') === undefined

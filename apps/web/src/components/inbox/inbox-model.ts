@@ -62,16 +62,16 @@ export function createInboxItemPresentation(
       const command = item.payload.actionSubtitle
       const tool = createToolPresentation({ command, status: 'running' })
       return {
-        conversation: conversationTitle ?? 'Codex 会话',
+        conversation: conversationTitle ?? '智能体会话',
         description: createToolCommandSubtitle(command),
         title: tool.title,
       }
     }
 
     return {
-      conversation: conversationTitle ?? 'Codex 会话',
+      conversation: conversationTitle ?? '智能体会话',
       description:
-        item.payload.actionSubtitle ?? 'Codex 请求执行一项需要你确认的操作。',
+        item.payload.actionSubtitle ?? '智能体请求执行一项需要你确认的操作。',
       title: item.payload.actionTitle,
     }
   }
@@ -79,7 +79,7 @@ export function createInboxItemPresentation(
   if (item.type === 'completed_review') {
     return {
       conversation: item.payload.conversationTitle,
-      description: 'Codex 已完成本轮工作，等待你查看结果。',
+      description: '智能体已完成本轮工作，等待你查看结果。',
       title: item.payload.conversationTitle,
     }
   }

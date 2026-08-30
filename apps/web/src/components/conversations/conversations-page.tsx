@@ -242,8 +242,8 @@ export function ConversationsPage({ projectId }: ConversationsPageProps) {
         <h1 className="text-page font-semibold text-text-primary">会话</h1>
         <p className="mt-0.5 text-sm font-regular text-text-secondary">
           {project === undefined
-            ? '查看项目中的 Codex 历史会话。'
-            : `在 ${project.name} 中查看 Codex 历史会话。`}
+            ? '查看项目中的智能体历史会话。'
+            : `在 ${project.name} 中查看智能体历史会话。`}
         </p>
       </header>
 
@@ -822,7 +822,7 @@ function ConversationOrganizationEmptyState({
         <p className="mt-1.5 text-base text-text-secondary">
           {archived
             ? '归档可以帮助你整理暂时不需要的历史会话。'
-            : '新建一个 Codex 会话，即可在这个项目中开始工作。'}
+            : '新建一个智能体会话，即可在这个项目中开始工作。'}
         </p>
         <div className="mt-5 flex flex-wrap justify-center gap-2">
           {archived ? (

@@ -9,7 +9,7 @@ import type {
   ProjectRecord,
 } from '@codetether/protocol'
 
-import { conversationListQueryOptions } from '../../runtime/host/conversation-list-query'
+import { allProjectConversationsQueryOptions } from '../../runtime/host/conversation-list-query'
 import type { HostRuntime } from '../../runtime/host/host-runtime'
 import { projectListQueryOptions } from '../../runtime/host/project-query'
 
@@ -22,7 +22,7 @@ export interface InboxItemMetadata {
 
 /**
  * Enriches bounded Attention rows with existing Project and Conversation
- * indexes. At most one Conversation-index query is made per involved Project.
+ * indexes. One provider-neutral active+archived index query is made per Project.
  */
 export function useInboxMetadata(
   runtime: HostRuntime,
@@ -39,7 +39,7 @@ export function useInboxMetadata(
   })
   const conversationQueries = useQueries({
     queries: projectIds.map((projectId) => ({
-      ...conversationListQueryOptions(runtime, projectId),
+      ...allProjectConversationsQueryOptions(runtime, projectId),
       enabled,
     })),
   })

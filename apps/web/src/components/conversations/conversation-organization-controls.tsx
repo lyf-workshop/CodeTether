@@ -381,7 +381,7 @@ function RenameConversationDialog({
           <DialogHeader>
             <DialogTitle>重命名会话</DialogTitle>
             <DialogDescription>
-              设置一个容易辨认的标题，历史记录与 Codex 上下文不会改变。
+              设置一个容易辨认的标题，历史记录与智能体上下文不会改变。
             </DialogDescription>
           </DialogHeader>
 

@@ -3,6 +3,7 @@ import { z } from 'zod'
 import {
   FileChangeKindSchema,
   ToolCommandSchema,
+  ToolKindSchema,
   ToolOutputStreamSchema,
 } from './events.js'
 import {
@@ -60,6 +61,8 @@ export const ConversationToolRecordSchema = z
     turnId: TurnIdSchema,
     itemId: ItemIdSchema,
     name: z.string().trim().min(1).max(240),
+    /** Optional so durable snapshots written before Provider foundation remain valid. */
+    kind: ToolKindSchema.optional(),
     command: ToolCommandSchema.optional(),
     summary: z.string().max(4096).optional(),
     status: RuntimeToolStatusSchema,

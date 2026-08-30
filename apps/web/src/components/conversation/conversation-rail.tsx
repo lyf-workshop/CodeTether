@@ -41,6 +41,7 @@ import {
 } from './conversation-rail-search'
 import { ConversationOrganizationMenu } from '../conversations/conversation-organization-controls'
 import { useDebouncedSearchQuery } from '../conversations/use-debounced-search-query'
+import { providerDisplayName } from '../../provider/provider-presentation'
 
 const railFilters = [
   { label: '全部', value: 'all' },
@@ -116,9 +117,15 @@ function ConversationRailRow({
 }: ConversationRailRowProps) {
   const conversationId = ConversationIdSchema.safeParse(conversation.id)
   const status = statusDefinitions[conversation.status]
-  const statusSummary = conversation.machine
-    ? `${status.label} · ${conversation.machine}`
-    : status.label
+  const statusSummary = [
+    conversation.provider === undefined
+      ? undefined
+      : providerDisplayName(conversation.provider),
+    status.label,
+    conversation.machine,
+  ]
+    .filter((value): value is string => value !== undefined)
+    .join(' · ')
   const attentionClass =
     conversation.status === 'waiting'
       ? 'border-status-waiting/20 bg-status-waiting-muted/25 hover:border-status-waiting/35 hover:bg-status-waiting-muted/35'

@@ -242,6 +242,11 @@ export function conversationOrganizationErrorMessage(
     case 'runtime_unavailable':
       return 'CodeTether 服务暂时不可用。'
     case 'provider_error':
+    case 'provider_not_installed':
+    case 'provider_version_unsupported':
+    case 'provider_start_failed':
+    case 'provider_session_lost':
+    case 'provider_unavailable':
     case 'provider_conversation_unavailable':
     case 'project_has_conversations':
     case 'internal':

@@ -25,11 +25,13 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
+  cn,
 } from '@codetether/ui'
 import {
   ProjectIdSchema,
   type ProjectId,
   type ProjectRecord,
+  type ProviderId,
 } from '@codetether/protocol'
 
 import {
@@ -40,6 +42,11 @@ import { conversationListQueryKeys } from '../../runtime/host/conversation-list-
 import { newConversationErrorMessage } from '../../runtime/host/new-conversation-actions'
 import { projectErrorMessage } from '../../runtime/host/project-actions'
 import { projectListQueryOptions } from '../../runtime/host/project-query'
+import {
+  providerPresentation,
+  providerPresentations,
+  type ProviderPresentation,
+} from '../../provider/provider-presentation'
 import { createProjectOptionPresentation } from './new-conversation-presentation'
 
 interface NewConversationDialogProps {
@@ -51,7 +58,7 @@ interface NewConversationDialogProps {
   trigger?: ReactElement
 }
 
-/** Minimal real create flow: Project + Codex, with CodeTether-owned defaults. */
+/** Minimal real create flow: one authorized Project and one durable Provider. */
 export function NewConversationDialog({
   currentProject,
   onAddProject,
@@ -68,6 +75,8 @@ export function NewConversationDialog({
   const [selectedProjectId, setSelectedProjectId] = useState<
     ProjectId | undefined
   >()
+  const [selectedProvider, setSelectedProvider] = useState<ProviderId>('codex')
+  const [selectedModel, setSelectedModel] = useState<string>()
   const skipCloseFocusRestore = useRef(false)
   const open = controlledOpen ?? internalOpen
   const projectsQuery = useQuery({
@@ -80,7 +89,15 @@ export function NewConversationDialog({
   )
 
   const createMutation = useMutation({
-    mutationFn: (projectId: ProjectId) => runtime.createConversation(projectId),
+    mutationFn: (selection: {
+      readonly projectId: ProjectId
+      readonly provider: ProviderId
+      readonly model?: string
+    }) =>
+      runtime.createConversation(selection.projectId, {
+        provider: selection.provider,
+        ...(selection.model === undefined ? {} : { model: selection.model }),
+      }),
     onSuccess: async (response) => {
       const projectId = response.data.conversation.projectId
       if (projectId !== undefined) {
@@ -108,6 +125,19 @@ export function NewConversationDialog({
     availableProjects.find(
       (project) => project.projectId === effectiveSelectedProjectId,
     )
+  const providers = providerPresentations(runtime.bootstrap)
+  const selectedProviderPresentation = providerPresentation(
+    runtime.bootstrap,
+    selectedProvider,
+  )
+  const showsModelSelection =
+    selectedProviderPresentation.capabilities.modelSelection &&
+    selectedProviderPresentation.models.length > 0
+  const showsReasoning =
+    selectedProviderPresentation.capabilities.reasoningControl
+  const effectiveSelectedModel =
+    selectedModel ?? defaultProviderModel(selectedProviderPresentation)
+  const settingCount = 1 + Number(showsModelSelection) + Number(showsReasoning)
   const hostUnavailable =
     connectionState === 'unavailable' || connectionState === 'incompatible'
   const projectUnavailable = selectedProject?.availability === 'unavailable'
@@ -117,7 +147,8 @@ export function NewConversationDialog({
     availableProjects.length === 0
   const canSubmit =
     connectionState === 'connected' &&
-    runtime.bootstrap?.capabilities.codex === true &&
+    selectedProviderPresentation.available &&
+    selectedProviderPresentation.capabilities.streaming &&
     selectedProject !== undefined &&
     !projectUnavailable &&
     !createMutation.isPending
@@ -130,22 +161,44 @@ export function NewConversationDialog({
       skipCloseFocusRestore.current = false
       createMutation.reset()
       setSelectedProjectId(currentProject?.projectId)
+      setSelectedProvider('codex')
+      setSelectedModel(
+        defaultProviderModel(providerPresentation(runtime.bootstrap, 'codex')),
+      )
       return
     }
     createMutation.reset()
     setSelectedProjectId(undefined)
+    setSelectedProvider('codex')
+    setSelectedModel(undefined)
   }
 
   function closeAfterSuccess() {
     if (controlledOpen === undefined) setInternalOpen(false)
     onOpenChange?.(false)
     setSelectedProjectId(undefined)
+    setSelectedProvider('codex')
+    setSelectedModel(undefined)
   }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!canSubmit) return
-    createMutation.mutate(selectedProject.projectId)
+    createMutation.mutate({
+      projectId: selectedProject.projectId,
+      provider: selectedProvider,
+      ...(showsModelSelection && effectiveSelectedModel !== undefined
+        ? { model: effectiveSelectedModel }
+        : {}),
+    })
+  }
+
+  function handleProviderChange(value: string) {
+    const provider = value as ProviderId
+    const presentation = providerPresentation(runtime.bootstrap, provider)
+    setSelectedProvider(provider)
+    setSelectedModel(defaultProviderModel(presentation))
+    createMutation.reset()
   }
 
   return (
@@ -175,8 +228,7 @@ export function NewConversationDialog({
             </span>
             <DialogTitle>新建会话</DialogTitle>
             <DialogDescription>
-              在已授权项目中创建一个 Codex 会话。模型与推理设置由 CodeTether
-              管理。
+              在已授权项目中创建一个会话。智能体创建后将保持不变。
             </DialogDescription>
           </DialogHeader>
 
@@ -244,21 +296,99 @@ export function NewConversationDialog({
               ) : null}
             </div>
 
-            <dl className="grid grid-cols-3 gap-3 rounded-sm border border-border bg-surface/55 px-3 py-3 text-sm">
+            <dl
+              className={cn(
+                'grid gap-3 rounded-sm border border-border bg-surface/55 px-3 py-3 text-sm',
+                settingCount === 3
+                  ? 'grid-cols-2 sm:grid-cols-3'
+                  : settingCount === 2
+                    ? 'grid-cols-2'
+                    : 'grid-cols-1',
+              )}
+            >
               <LockedSetting
                 label="智能体"
                 value={
-                  <span className="flex items-center gap-1.5">
-                    <AgentBadge agent="codex" variant="compact" />
-                    <LockKeyhole
-                      aria-label="Codex 已锁定"
-                      className="size-3.5 text-text-muted"
-                    />
-                  </span>
+                  <Select
+                    value={selectedProvider}
+                    onValueChange={handleProviderChange}
+                    disabled={createMutation.isPending}
+                  >
+                    <SelectTrigger size="sm" aria-label="选择智能体">
+                      <SelectValue>
+                        <span className="flex min-w-0 items-center gap-1.5">
+                          <AgentBadge
+                            agent={selectedProviderPresentation.agent}
+                            variant="compact"
+                          />
+                          <span className="truncate">
+                            {selectedProviderPresentation.displayName}
+                          </span>
+                        </span>
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      {providers.map((provider) => (
+                        <SelectItem
+                          key={provider.provider}
+                          value={provider.provider}
+                          textValue={`${provider.displayName} ${provider.availabilityLabel}`}
+                          disabled={!provider.available}
+                          className="py-2"
+                        >
+                          <span className="grid min-w-0 gap-0.5">
+                            <span className="flex min-w-0 items-center gap-1.5 text-text-primary">
+                              <AgentBadge
+                                agent={provider.agent}
+                                variant="compact"
+                              />
+                              <span className="truncate">
+                                {provider.displayName}
+                              </span>
+                            </span>
+                            <span className="truncate text-xs text-text-muted">
+                              {provider.availabilityLabel}
+                              {provider.version === undefined
+                                ? ''
+                                : ` · ${provider.version}`}
+                            </span>
+                          </span>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 }
               />
-              <LockedSetting label="模型" value="默认" />
-              <LockedSetting label="推理" value="默认" />
+              {showsModelSelection ? (
+                <LockedSetting
+                  label="模型"
+                  value={
+                    <Select
+                      value={effectiveSelectedModel}
+                      onValueChange={setSelectedModel}
+                      disabled={createMutation.isPending}
+                    >
+                      <SelectTrigger size="sm" aria-label="选择模型">
+                        <SelectValue placeholder="选择模型" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {selectedProviderPresentation.models.map((model) => (
+                          <SelectItem
+                            key={model.id}
+                            value={model.id}
+                            textValue={model.label}
+                          >
+                            {model.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  }
+                />
+              ) : null}
+              {showsReasoning ? (
+                <LockedSetting label="推理" value="默认" />
+              ) : null}
             </dl>
 
             {projectUnavailable ? (
@@ -274,8 +404,17 @@ export function NewConversationDialog({
               </InlineNotice>
             ) : null}
             {connectionState === 'connected' &&
-            runtime.bootstrap?.capabilities.codex !== true ? (
-              <InlineNotice>Codex 当前不可用。</InlineNotice>
+            !selectedProviderPresentation.available ? (
+              <InlineNotice>
+                {`${selectedProviderPresentation.displayName}：${selectedProviderPresentation.availabilityLabel}。`}
+              </InlineNotice>
+            ) : null}
+            {connectionState === 'connected' &&
+            selectedProviderPresentation.available &&
+            !selectedProviderPresentation.capabilities.streaming ? (
+              <InlineNotice>
+                {`${selectedProviderPresentation.displayName} 当前不支持通过 CodeTether 启动流式会话。`}
+              </InlineNotice>
             ) : null}
             {noAvailableProjects ? (
               <InlineNotice>
@@ -295,7 +434,10 @@ export function NewConversationDialog({
                 role="alert"
                 className="rounded-sm border border-danger/30 bg-danger-muted px-3 py-2 text-sm text-danger"
               >
-                {newConversationErrorMessage(createMutation.error)}
+                {newConversationErrorMessage(
+                  createMutation.error,
+                  selectedProvider,
+                )}
               </p>
             ) : null}
           </div>
@@ -329,6 +471,15 @@ export function NewConversationDialog({
       </DialogContent>
     </Dialog>
   )
+}
+
+function defaultProviderModel(
+  provider: ProviderPresentation,
+): string | undefined {
+  return (
+    provider.models.find((model) => model.isDefault === true) ??
+    provider.models[0]
+  )?.id
 }
 
 function LockedSetting({

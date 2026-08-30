@@ -41,6 +41,7 @@ export function presentConversationRailSearchResult(
         : { archivedAt: conversation.archivedAt }),
       status: conversation.status,
       lastActivity: formatConversationActivity(conversation.lastActivityAt),
+      provider: conversation.provider,
     },
     matchDescription:
       result.matchedField === 'title'

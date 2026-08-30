@@ -28,6 +28,7 @@ import {
   GetConversationResponseSchema,
   HostEventEnvelopeSchema,
   HostEventSchema,
+  HostErrorCodeSchema,
   HostSnapshotSchema,
   InterruptTurnRequestSchema,
   ListAttentionQuerySchema,
@@ -38,6 +39,10 @@ import {
   PinConversationResponseSchema,
   ProjectIdSchema,
   ProjectRecordSchema,
+  ProviderAvailabilitySchema,
+  ProviderCapabilitiesSchema,
+  ProviderDescriptorSchema,
+  ProviderIdSchema,
   ResolveApprovalRequestSchema,
   ResolveAttentionRequestSchema,
   ResolveAttentionResponseSchema,
@@ -46,6 +51,7 @@ import {
   SafeErrorEnvelopeSchema,
   StartTurnRequestSchema,
   TurnRecordSchema,
+  ToolKindSchema,
   UnarchiveConversationRequestSchema,
   UnarchiveConversationResponseSchema,
   UnpinConversationRequestSchema,
@@ -405,6 +411,12 @@ test('validates bounded Project Conversation list queries and responses', () => 
     )
   }
   assert.equal(
+    ListProjectConversationsQuerySchema.safeParse({
+      provider: 'claude-code',
+    }).success,
+    true,
+  )
+  assert.equal(
     ListProjectConversationsQuerySchema.safeParse({ provider: 'claude' })
       .success,
     false,
@@ -445,6 +457,13 @@ test('normalizes and strictly validates durable Conversation search queries', ()
       archive: 'active',
       limit: conversationSearchLimits.default,
     },
+  )
+  assert.equal(
+    ConversationSearchQuerySchema.safeParse({
+      q: 'marker',
+      provider: 'claude-code',
+    }).success,
+    true,
   )
   assert.deepEqual(
     ConversationSearchQuerySchema.parse({
@@ -928,6 +947,42 @@ test('validates bootstrap and snapshot as separate wire records', () => {
     },
   }
   assert.deepEqual(BootstrapSchema.parse(bootstrap), bootstrap)
+  const providerCapabilities = {
+    streaming: true,
+    resume: true,
+    interrupt: false,
+    approvals: false,
+    fileRead: true,
+    fileEdit: true,
+    shell: true,
+    search: true,
+    diff: false,
+    toolEvents: true,
+    modelSelection: true,
+    reasoningControl: false,
+  }
+  const providers = [
+    {
+      provider: 'claude-code',
+      displayName: 'Claude Code',
+      availability: 'available',
+      capabilities: providerCapabilities,
+      version: '1.2.3',
+      testedVersion: '1.2.3',
+      models: [{ id: 'model-real', label: 'Model Real', isDefault: true }],
+    },
+  ]
+  assert.deepEqual(
+    BootstrapSchema.parse({ ...bootstrap, providers }).providers,
+    providers,
+  )
+  assert.equal(
+    BootstrapSchema.safeParse({
+      ...bootstrap,
+      providers: [...providers, providers[0]],
+    }).success,
+    false,
+  )
   assert.equal(
     BootstrapSchema.safeParse({ ...bootstrap, snapshot: {} }).success,
     false,
@@ -1185,6 +1240,14 @@ test('keeps route identity out of mutation request bodies', () => {
   assert.equal(
     CreateConversationRequestSchema.safeParse({
       actionId,
+      provider: 'claude-code',
+      projectId,
+    }).success,
+    true,
+  )
+  assert.equal(
+    CreateConversationRequestSchema.safeParse({
+      actionId,
       provider: 'codex',
       projectId,
       model: 'gpt-5',
@@ -1245,6 +1308,77 @@ test('keeps route identity out of mutation request bodies', () => {
     ResolveApprovalRequestSchema.safeParse({ actionId, decision: 'decline' })
       .success,
     true,
+  )
+})
+
+test('validates strict Provider descriptors, canonical errors, and Tool kinds', () => {
+  for (const provider of ['codex', 'claude-code']) {
+    assert.equal(ProviderIdSchema.parse(provider), provider)
+  }
+  for (const availability of [
+    'available',
+    'not_installed',
+    'unsupported_version',
+    'misconfigured',
+    'unavailable',
+  ]) {
+    assert.equal(ProviderAvailabilitySchema.parse(availability), availability)
+  }
+  const capabilities = {
+    streaming: true,
+    resume: true,
+    interrupt: true,
+    approvals: false,
+    fileRead: true,
+    fileEdit: true,
+    shell: true,
+    search: true,
+    diff: false,
+    toolEvents: true,
+    modelSelection: false,
+    reasoningControl: false,
+  }
+  assert.deepEqual(ProviderCapabilitiesSchema.parse(capabilities), capabilities)
+  const descriptor = {
+    provider: 'claude-code',
+    displayName: 'Claude Code',
+    availability: 'available',
+    capabilities,
+  }
+  assert.deepEqual(ProviderDescriptorSchema.parse(descriptor), descriptor)
+  assert.equal(
+    ProviderDescriptorSchema.safeParse({
+      ...descriptor,
+      executablePath: 'C:\\private\\claude.exe',
+    }).success,
+    false,
+    'public Provider descriptors never expose executable paths',
+  )
+  for (const code of [
+    'provider_not_installed',
+    'provider_version_unsupported',
+    'provider_start_failed',
+    'provider_session_lost',
+    'provider_unavailable',
+  ]) {
+    assert.equal(HostErrorCodeSchema.parse(code), code)
+  }
+  for (const kind of ['read', 'edit', 'shell', 'search', 'generic']) {
+    assert.equal(ToolKindSchema.parse(kind), kind)
+  }
+  assert.equal(
+    ConversationRuntimeSnapshotSchema.safeParse({
+      ...conversationRuntime,
+      tools: [{ ...conversationRuntime.tools[0], kind: 'shell' }],
+    }).success,
+    true,
+  )
+  assert.equal(
+    ConversationRuntimeSnapshotSchema.safeParse({
+      ...conversationRuntime,
+      tools: [{ ...conversationRuntime.tools[0], kind: 'command' }],
+    }).success,
+    false,
   )
 })
 

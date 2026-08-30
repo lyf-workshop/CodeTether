@@ -9,10 +9,10 @@ import {
 
 import {
   ConversationIdSchema,
+  type Bootstrap,
   type ConversationId,
   type ConversationSummary,
   type GetConversationResponse,
-  type HostCapabilities,
   type ProjectRecord,
   type TurnId,
 } from '@codetether/protocol'
@@ -242,7 +242,7 @@ function LoadedLiveConversationDetail({
       conversation={conversation}
       summaries={summaries}
       connectionState={connectionState}
-      capabilities={runtime.bootstrap?.capabilities}
+      bootstrap={runtime.bootstrap}
       project={projectQuery.data}
       projectAvailability={projectQuery.data?.availability ?? 'unavailable'}
       initialInspectorTab={initialInspectorTab}
@@ -256,7 +256,7 @@ interface ConnectedLiveConversationDetailProps {
   readonly conversation: ConversationReadModel
   readonly summaries: readonly ConversationSummary[]
   readonly connectionState: ReturnType<typeof useHostConnectionState>
-  readonly capabilities: HostCapabilities | undefined
+  readonly bootstrap: Bootstrap | undefined
   readonly project: ProjectRecord | undefined
   readonly projectAvailability: 'available' | 'unavailable'
   readonly initialInspectorTab?: 'changes'
@@ -268,7 +268,7 @@ function ConnectedLiveConversationDetail({
   conversation,
   summaries,
   connectionState,
-  capabilities,
+  bootstrap,
   project,
   projectAvailability,
   initialInspectorTab,
@@ -281,7 +281,7 @@ function ConnectedLiveConversationDetail({
     conversation,
     summaries,
     connectionState,
-    capabilities,
+    bootstrap,
     projectAvailability,
     project?.rootPath,
   )

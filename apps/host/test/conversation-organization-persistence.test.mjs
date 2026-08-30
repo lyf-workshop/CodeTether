@@ -31,8 +31,8 @@ test('migration 005 backfills generated organization metadata and preserves the 
     downgradeToV4(databasePath)
 
     const migrated = ConversationStore.open({ databasePath })
-    assert.equal(currentSchemaVersion, 6)
-    assert.equal(migrated.schemaVersion, 6)
+    assert.equal(currentSchemaVersion, 7)
+    assert.equal(migrated.schemaVersion, 7)
     assert.deepEqual(migrated.getConversation(created.conversationId), {
       ...created,
       titleSource: 'generated',
@@ -505,7 +505,7 @@ function downgradeToV4(databasePath) {
     ALTER TABLE conversations DROP COLUMN archived_at;
     ALTER TABLE conversations DROP COLUMN pinned_at;
     ALTER TABLE conversations DROP COLUMN title_source;
-    DELETE FROM schema_migrations WHERE version IN (5, 6);
+    DELETE FROM schema_migrations WHERE version IN (5, 6, 7);
   `)
   database.close()
 }

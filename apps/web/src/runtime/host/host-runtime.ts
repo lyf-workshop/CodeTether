@@ -46,6 +46,7 @@ import type { ConversationListReadClient } from './conversation-list-query.js'
 import type { ConversationSearchReadClient } from './conversation-search-query.js'
 import {
   NewConversationActions,
+  type CreateConversationOptions,
   type NewConversationMutationClient,
 } from './new-conversation-actions.js'
 import {
@@ -292,8 +293,11 @@ export class HostRuntime {
     )
   }
 
-  createConversation(projectId: ProjectId | string) {
-    return this.#newConversationActions.createConversation(projectId)
+  createConversation(
+    projectId: ProjectId | string,
+    options: CreateConversationOptions = { provider: 'codex' },
+  ) {
+    return this.#newConversationActions.createConversation(projectId, options)
   }
 
   createProject(path: string, name?: string) {

@@ -9,7 +9,10 @@ import {
   ConversationOrganizationMenu,
   ConversationRestoreButton,
 } from './conversation-organization-controls'
-import { formatConversationActivity } from './conversation-list-model'
+import {
+  formatConversationActivity,
+  providerDisplayName,
+} from './conversation-list-model'
 import {
   conversationSearchMatchDescription,
   conversationSearchTurnIntent,
@@ -155,7 +158,7 @@ function ConversationSearchResultRow({
   const [restoreError, setRestoreError] = useState<string>()
   const conversation = result.conversation
   const archived = archiveView === 'archived'
-  const matchDescription = conversationSearchMatchDescription(result)
+  const matchDescription = `${providerDisplayName(conversation.provider)} · ${conversationSearchMatchDescription(result)}`
 
   const menu = (
     <ConversationOrganizationMenu

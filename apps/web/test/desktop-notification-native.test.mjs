@@ -10,7 +10,7 @@ const intent = {
   conversationId: 'conv_123456',
   turnId: 'turn_123456',
   title: 'CodeTether · 工作已完成',
-  body: '中文项目 · 修复自动重连\nCodex 已完成本轮工作',
+  body: '中文项目 · 修复自动重连\n智能体已完成本轮工作',
 }
 
 test('Browser notifications stay unavailable without loading Tauri modules', async () => {

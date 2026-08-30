@@ -1,7 +1,7 @@
 import type { ExecutionStatus } from '@codetether/ui'
 import type {
+  Bootstrap,
   ConversationSummary,
-  HostCapabilities,
   ProjectAvailability,
 } from '@codetether/protocol'
 
@@ -25,6 +25,10 @@ import type {
 import { presentProjectPaths } from './message-presentation.js'
 import { createToolPresentation } from './tool-presentation.js'
 import { deriveLiveControlAvailability } from './conversation-controls.js'
+import {
+  providerAgentId,
+  providerPresentation,
+} from '../../provider/provider-presentation.js'
 
 type OrderedActivity =
   | {
@@ -52,7 +56,7 @@ export function createLiveConversationDetailSource(
   model: ConversationReadModel,
   summaries: readonly ConversationSummary[],
   connectionState: HostConnectionState,
-  hostCapabilities?: HostCapabilities,
+  bootstrap?: Bootstrap,
   projectAvailability: ProjectAvailability = 'available',
   projectRootPath?: string,
 ): ConversationDetailSourceViewModel {
@@ -61,7 +65,7 @@ export function createLiveConversationDetailSource(
   return {
     conversation: createLiveConversationViewModel(
       model,
-      hostCapabilities,
+      bootstrap,
       controlConnectionState,
       projectRootPath,
     ),
@@ -93,35 +97,36 @@ export function createLiveConversationRailViewModel(
           archivedAt: current.archivedAt,
           status: current.status,
           lastActivity: formatActivityTime(current.lastActivityAt),
+          provider: current.provider,
         }
 
+  const providers = [
+    ...new Set(activeSummaries.map((summary) => summary.provider)),
+  ]
+
   return {
-    groups:
-      activeSummaries.length === 0
-        ? []
-        : [
-            {
-              agent: 'codex',
-              conversations: activeSummaries.map((summary) => {
-                const selected = summary.conversationId === current.id
-                return {
-                  id: summary.conversationId,
-                  title: selected ? current.title : summary.title,
-                  titleSource: selected
-                    ? current.titleSource
-                    : summary.titleSource,
-                  ...(summary.pinnedAt === undefined
-                    ? {}
-                    : { pinnedAt: summary.pinnedAt }),
-                  ...(summary.archivedAt === undefined
-                    ? {}
-                    : { archivedAt: summary.archivedAt }),
-                  status: selected ? current.status : summary.status,
-                  lastActivity: formatActivityTime(summary.lastActivityAt),
-                }
-              }),
-            },
-          ],
+    groups: providers.map((provider) => ({
+      agent: providerAgentId(provider),
+      conversations: activeSummaries
+        .filter((summary) => summary.provider === provider)
+        .map((summary) => {
+          const selected = summary.conversationId === current.id
+          return {
+            id: summary.conversationId,
+            title: selected ? current.title : summary.title,
+            titleSource: selected ? current.titleSource : summary.titleSource,
+            ...(summary.pinnedAt === undefined
+              ? {}
+              : { pinnedAt: summary.pinnedAt }),
+            ...(summary.archivedAt === undefined
+              ? {}
+              : { archivedAt: summary.archivedAt }),
+            status: selected ? current.status : summary.status,
+            lastActivity: formatActivityTime(summary.lastActivityAt),
+            provider: summary.provider,
+          }
+        }),
+    })),
     ...(currentArchivedConversation === undefined
       ? {}
       : { currentArchivedConversation }),
@@ -130,7 +135,7 @@ export function createLiveConversationRailViewModel(
 
 export function createLiveConversationViewModel(
   model: ConversationReadModel,
-  hostCapabilities?: HostCapabilities,
+  bootstrap?: Bootstrap,
   connectionState: HostConnectionState = 'unavailable',
   projectRootPath?: string,
 ): ConversationViewModel {
@@ -153,6 +158,7 @@ export function createLiveConversationViewModel(
     requestedAt: formatActivityTime(approval.requestedAt),
     ...(presentationRoot === undefined ? {} : { context: presentationRoot }),
   }))
+  const provider = providerPresentation(bootstrap, model.provider)
 
   return {
     id: model.id,
@@ -161,11 +167,16 @@ export function createLiveConversationViewModel(
     ...(model.pinnedAt === undefined ? {} : { pinnedAt: model.pinnedAt }),
     ...(model.archivedAt === undefined ? {} : { archivedAt: model.archivedAt }),
     status: model.status,
-    agent: model.agent,
+    agent: provider.agent,
+    provider: model.provider,
     model: model.model ?? '默认模型',
     reasoning: model.reasoning ?? '默认',
     permission:
-      pendingApprovals.length === 0 ? '由 CodeTether 管理' : '等待审批',
+      pendingApprovals.length > 0
+        ? '等待审批'
+        : provider.capabilities.approvals
+          ? '由 CodeTether 管理'
+          : '不支持审批',
     machine: '本地电脑',
     branch: '未提供',
     duration: formatDuration(
@@ -179,7 +190,7 @@ export function createLiveConversationViewModel(
           model.currentTurn?.startedAt ??
           model.updatedAt,
       ),
-      blocks: projectTimeline(model),
+      blocks: projectTimeline(model, provider.displayName),
     },
     changes: { files, totals },
     terminal: {
@@ -200,7 +211,7 @@ export function createLiveConversationViewModel(
     pendingApprovals,
     capabilities: deriveLiveControlAvailability(
       connectionState,
-      hostCapabilities,
+      provider.available ? provider.capabilities : undefined,
       model.currentTurn?.status,
     ),
   }
@@ -208,15 +219,17 @@ export function createLiveConversationViewModel(
 
 function projectTimeline(
   model: ConversationReadModel,
+  providerName: string,
 ): readonly ConversationTimelineBlockViewModel[] {
   return [...model.turns]
     .sort((left, right) => left.order - right.order)
-    .flatMap((turn) => projectTurnTimeline(model, turn))
+    .flatMap((turn) => projectTurnTimeline(model, turn, providerName))
 }
 
 function projectTurnTimeline(
   model: ConversationReadModel,
   turn: ConversationTurnReadModel,
+  providerName: string,
 ): readonly ConversationTimelineBlockViewModel[] {
   const activities: OrderedActivity[] = [
     ...model.messages
@@ -296,6 +309,9 @@ function projectTurnTimeline(
       )
       const presentation = createToolPresentation({
         command: displayCommand,
+        ...(activity.tool.kind === undefined
+          ? {}
+          : { kind: activity.tool.kind }),
         status: activity.tool.status,
         ...(activity.tool.outputSummary === undefined
           ? {}
@@ -360,8 +376,8 @@ function projectTurnTimeline(
       executions: [],
       outcomeText:
         pendingApprovals.length > 0
-          ? 'Codex 正在等待审批。'
-          : 'Codex 正在运行，实时活动将在这里显示。',
+          ? `${providerName} 正在等待审批。`
+          : `${providerName} 正在运行，实时活动将在这里显示。`,
     })
   }
 

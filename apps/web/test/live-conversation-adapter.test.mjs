@@ -320,6 +320,21 @@ test('builds the live rail from durable Host summaries without fake metadata', (
   })
 })
 
+test('passes the queried Machine display name through Detail and Rail', () => {
+  const source = createLiveConversationDetailSource(
+    conversation(),
+    [summary()],
+    'connected',
+    undefined,
+    'available',
+    'E:\\spikes\\live-workspace',
+    '本地电脑',
+  )
+
+  assert.equal(source.conversation.machine, '本地电脑')
+  assert.equal(source.rail.groups[0].conversations[0].machine, '本地电脑')
+})
+
 test('keeps Codex and Claude Code as distinct durable Rail groups', () => {
   const selected = conversation({
     provider: 'claude-code',

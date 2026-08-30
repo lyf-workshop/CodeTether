@@ -12,9 +12,31 @@ const epoch = '1e7e3ce2-4ab2-4e80-a61d-9a6a345a7200'
 const timestamp = '2026-08-26T07:00:00.000Z'
 const conversationId = 'conv_demo01'
 const projectId = 'proj_demo01'
+const machineId = 'machine_demo01'
 const turnId = 'turn_demo01'
 const approvalId = 'approval_demo01'
 const attentionId = 'attn_demo01'
+
+const machineCapabilities = {
+  projectAccess: true,
+  providerExecution: true,
+  backgroundRuntime: true,
+  nativeFolderPicker: true,
+  notifications: true,
+}
+
+const machine = {
+  machineId,
+  displayName: '本地电脑',
+  kind: 'local',
+  platform: 'Windows',
+  architecture: 'x86_64',
+  availability: 'available',
+  isLocal: true,
+  createdAt: timestamp,
+  lastSeenAt: timestamp,
+  capabilities: machineCapabilities,
+}
 
 const capabilities = {
   codex: true,
@@ -28,6 +50,7 @@ const capabilities = {
 const conversation = {
   conversationId,
   projectId,
+  machineId,
   provider: 'codex',
   cwd: 'C:\\workspace',
   status: 'idle',
@@ -38,8 +61,16 @@ const conversation = {
 const project = {
   projectId,
   name: 'Demo',
-  rootPath: 'C:\\workspace',
-  availability: 'available',
+  locations: [
+    {
+      projectId,
+      machineId,
+      rootPath: 'C:\\workspace',
+      availability: 'available',
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    },
+  ],
   createdAt: timestamp,
   updatedAt: timestamp,
 }
@@ -47,6 +78,7 @@ const project = {
 const conversationSummary = {
   conversationId,
   projectId,
+  machineId,
   title: 'Inspect the workspace',
   titleSource: 'generated',
   provider: 'codex',
@@ -213,6 +245,7 @@ test('uses the Protocol v1 HTTP routes and validates every success response', as
   await client.snapshot()
   await client.createConversation({
     actionId: 'act_create1',
+    machineId,
     provider: 'codex',
     cwd: 'C:\\workspace',
   })
@@ -297,6 +330,7 @@ test('uses Project routes, validates route identity, and sends project-based Con
   await client.deleteProject(projectId, { actionId: 'act_delete01' })
   await client.createConversation({
     actionId: 'act_create2',
+    machineId,
     provider: 'codex',
     projectId,
   })
@@ -321,9 +355,75 @@ test('uses Project routes, validates route identity, and sends project-based Con
   })
   assert.deepEqual(JSON.parse(calls[4].init.body), {
     actionId: 'act_create2',
+    machineId,
     provider: 'codex',
     projectId,
   })
+})
+
+test('uses Machine routes, forwards AbortSignal, and validates route identity', async () => {
+  const calls = []
+  const controller = new AbortController()
+  const responses = [
+    { protocolVersion: 1, machines: [machine] },
+    {
+      protocolVersion: 1,
+      machine,
+      providers: [],
+      projects: [project],
+      conversations: [conversationSummary],
+    },
+  ]
+  const client = new CodeTetherClient({
+    baseUrl: 'http://host.test',
+    fetch: async (input, init) => {
+      calls.push({ url: String(input), init })
+      return jsonResponse(responses.shift())
+    },
+  })
+
+  const list = await client.listMachines({ signal: controller.signal })
+  const detail = await client.getMachine(machineId, {
+    signal: controller.signal,
+  })
+
+  assert.deepEqual(list.machines, [machine])
+  assert.equal(detail.machine.machineId, machineId)
+  assert.deepEqual(
+    calls.map(({ url, init }) => [new URL(url).pathname, init.method]),
+    [
+      ['/api/v1/machines', 'GET'],
+      [`/api/v1/machines/${machineId}`, 'GET'],
+    ],
+  )
+  assert.equal(calls[0].init.signal, controller.signal)
+  assert.equal(calls[1].init.signal, controller.signal)
+
+  const otherMachineId = 'machine_other01'
+  const wrongMachine = { ...machine, machineId: otherMachineId }
+  const mismatchClient = new CodeTetherClient({
+    baseUrl: 'http://host.test',
+    fetch: async () =>
+      jsonResponse({
+        protocolVersion: 1,
+        machine: wrongMachine,
+        providers: [],
+        projects: [
+          {
+            ...project,
+            locations: project.locations.map((location) => ({
+              ...location,
+              machineId: otherMachineId,
+            })),
+          },
+        ],
+        conversations: [{ ...conversationSummary, machineId: otherMachineId }],
+      }),
+  })
+  await assert.rejects(
+    mismatchClient.getMachine(machineId),
+    CodeTetherProtocolError,
+  )
 })
 
 test('rejects Project responses whose route identity does not match', async () => {
@@ -349,6 +449,36 @@ test('rejects Project responses whose route identity does not match', async () =
     deleteClient.deleteProject(projectId, { actionId: 'act_delete01' }),
     CodeTetherProtocolError,
   )
+})
+
+test('rejects Conversation creation responses with mismatched durable bindings', async () => {
+  const mismatches = [
+    { ...conversation, machineId: 'machine_other01' },
+    { ...conversation, provider: 'claude-code' },
+    { ...conversation, projectId: 'proj_other01' },
+  ]
+
+  for (const mismatchedConversation of mismatches) {
+    const client = new CodeTetherClient({
+      baseUrl: 'http://host.test',
+      fetch: async () =>
+        jsonResponse({
+          protocolVersion: 1,
+          actionId: 'act_create2',
+          status: 'completed',
+          data: { conversation: mismatchedConversation },
+        }),
+    })
+    await assert.rejects(
+      client.createConversation({
+        actionId: 'act_create2',
+        machineId,
+        provider: 'codex',
+        projectId,
+      }),
+      CodeTetherProtocolError,
+    )
+  }
 })
 
 test('lists bounded Project Conversations with typed filters', async () => {
@@ -956,6 +1086,7 @@ test('validates safe HTTP errors and surfaces a typed response error', async () 
   await assert.rejects(
     client.createConversation({
       actionId: 'act_create1',
+      machineId,
       provider: 'codex',
       cwd: 'C:\\workspace',
     }),
@@ -1023,6 +1154,7 @@ test('rejects mutation responses and errors with another actionId', async () => 
   await assert.rejects(
     successClient.createConversation({
       actionId: 'act_create1',
+      machineId,
       provider: 'codex',
       cwd: 'C:\\workspace',
     }),
@@ -1045,6 +1177,7 @@ test('rejects mutation responses and errors with another actionId', async () => 
   await assert.rejects(
     errorClient.createConversation({
       actionId: 'act_create1',
+      machineId,
       provider: 'codex',
       cwd: 'C:\\workspace',
     }),

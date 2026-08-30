@@ -130,8 +130,8 @@ test('persists a default title and does not overwrite an initialized title', () 
   withDatabase((databasePath) => {
     const store = ConversationStore.open({ databasePath })
     const workspaceRoot = resolve(databasePath, '..', 'workspace')
-    createProjects(store, workspaceRoot)
-    const created = conversation(0, projectId, workspaceRoot)
+    const machineId = createProjects(store, workspaceRoot)
+    const created = conversation(0, projectId, machineId, workspaceRoot)
     store.createConversation(created)
     assert.equal(store.getConversation(created.conversationId).title, '新会话')
 
@@ -161,17 +161,17 @@ test('lists bounded Project-scoped summaries in last-activity order', (context) 
   withDatabase((databasePath) => {
     const store = ConversationStore.open({ databasePath })
     const workspaceRoot = resolve(databasePath, '..', 'workspace')
-    createProjects(store, workspaceRoot)
+    const machineId = createProjects(store, workspaceRoot)
 
     for (let index = 0; index < 105; index += 1) {
       store.createConversation(
-        conversation(index, projectId, workspaceRoot, {
+        conversation(index, projectId, machineId, workspaceRoot, {
           status:
             index === 104 ? 'creating' : index % 2 === 0 ? 'completed' : 'idle',
         }),
       )
     }
-    const isolated = conversation(200, otherProjectId, workspaceRoot)
+    const isolated = conversation(200, otherProjectId, machineId, workspaceRoot)
     store.createConversation(isolated)
 
     const startedAt = performance.now()
@@ -229,6 +229,7 @@ test('lists bounded Project-scoped summaries in last-activity order', (context) 
       {
         conversationId: isolated.conversationId,
         projectId: otherProjectId,
+        machineId,
         title: isolated.title,
         titleSource: 'generated',
         provider: 'codex',
@@ -272,8 +273,8 @@ test('Conversation index never parses durable Turn snapshot JSON', () => {
   withDatabase((databasePath) => {
     const store = ConversationStore.open({ databasePath })
     const workspaceRoot = resolve(databasePath, '..', 'workspace')
-    createProjects(store, workspaceRoot)
-    const created = conversation(1, projectId, workspaceRoot)
+    const machineId = createProjects(store, workspaceRoot)
+    const created = conversation(1, projectId, machineId, workspaceRoot)
     store.createConversation(created)
     store.createTurn({
       turnId: 'turn_index_corrupt_snapshot',
@@ -309,16 +310,36 @@ test('Conversation index never parses durable Turn snapshot JSON', () => {
 function createProjects(store, workspaceRoot) {
   const root = normalizeTrustedProjectRoot(workspaceRoot)
   const otherRoot = normalizeTrustedProjectRoot(`${workspaceRoot}-other`)
-  store.createProject(projectRecord(projectId, root))
-  store.createProject(projectRecord(otherProjectId, otherRoot))
+  const machineId = store.listMachines()[0].machineId
+  store.createProject(projectRecord(projectId, machineId, root))
+  store.createProject(projectRecord(otherProjectId, machineId, otherRoot))
+  return machineId
 }
 
-function projectRecord(id, root) {
+function projectRecord(id, machineIdOrRoot, currentRoot) {
+  if (currentRoot === undefined) {
+    return {
+      projectId: id,
+      name: id,
+      rootPath: machineIdOrRoot.rootPath,
+      rootPathKey: machineIdOrRoot.rootPathKey,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    }
+  }
+  const machineId = machineIdOrRoot
+  const root = currentRoot
   return {
     projectId: id,
     name: id,
-    rootPath: root.rootPath,
-    rootPathKey: root.rootPathKey,
+    location: {
+      projectId: id,
+      machineId,
+      rootPath: root.rootPath,
+      rootPathKey: root.rootPathKey,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    },
     createdAt: timestamp,
     updatedAt: timestamp,
   }
@@ -353,13 +374,14 @@ function legacyTurn(id, idConversation, startedAt, text) {
   }
 }
 
-function conversation(index, idProject, cwd, overrides = {}) {
+function conversation(index, idProject, machineId, cwd, overrides = {}) {
   const activity = new Date(
     Date.parse('2026-08-26T12:00:00.000Z') + index * 1_000,
   ).toISOString()
   return {
     conversationId: conversationId(index),
     projectId: idProject,
+    machineId,
     title:
       index === 0
         ? DEFAULT_CONVERSATION_TITLE

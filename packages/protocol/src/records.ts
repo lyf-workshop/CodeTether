@@ -7,11 +7,13 @@ import {
   ConversationIdSchema,
   EpochIdSchema,
   ItemIdSchema,
+  MachineIdSchema,
   ProjectIdSchema,
   ProtocolVersionSchema,
   TimestampSchema,
   TurnIdSchema,
 } from './ids.js'
+import { ProjectLocationSchema, machineWireLimits } from './machines.js'
 import { ProviderDescriptorSchema, ProviderIdSchema } from './providers.js'
 
 export const ApprovalDecisionSchema = z.enum(['accept', 'decline'])
@@ -81,12 +83,34 @@ export const ProjectRecordSchema = z
   .object({
     projectId: ProjectIdSchema,
     name: z.string().trim().min(1).max(240),
-    rootPath: z.string().trim().min(1).max(4096),
-    availability: ProjectAvailabilitySchema,
+    locations: z
+      .array(ProjectLocationSchema)
+      .min(1)
+      .max(machineWireLimits.projectLocations),
     createdAt: TimestampSchema,
     updatedAt: TimestampSchema,
   })
   .strict()
+  .superRefine((project, context) => {
+    const machineIds = new Set<string>()
+    for (const [index, location] of project.locations.entries()) {
+      if (location.projectId !== project.projectId) {
+        context.addIssue({
+          code: 'custom',
+          message: 'Project locations must belong to their response Project',
+          path: ['locations', index, 'projectId'],
+        })
+      }
+      if (machineIds.has(String(location.machineId))) {
+        context.addIssue({
+          code: 'custom',
+          message: 'A Project can have at most one location per Machine',
+          path: ['locations', index, 'machineId'],
+        })
+      }
+      machineIds.add(String(location.machineId))
+    }
+  })
 export type ProjectRecord = z.infer<typeof ProjectRecordSchema>
 
 export const ConversationRecordSchema = z
@@ -97,6 +121,8 @@ export const ConversationRecordSchema = z
      * Current Project-aware Hosts populate this for every Conversation.
      */
     projectId: ProjectIdSchema.optional(),
+    /** Durable execution Machine identity; current Hosts always populate it. */
+    machineId: MachineIdSchema,
     /** Additive in Protocol v1; current title-aware Hosts always populate it. */
     title: ConversationTitleSchema.optional(),
     /** Additive organization metadata; current organization-aware Hosts populate it. */
@@ -159,6 +185,7 @@ export const ConversationSummarySchema = z
   .object({
     conversationId: ConversationIdSchema,
     projectId: ProjectIdSchema,
+    machineId: MachineIdSchema,
     title: ConversationTitleSchema,
     titleSource: ConversationTitleSourceSchema,
     pinnedAt: TimestampSchema.optional(),

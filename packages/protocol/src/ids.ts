@@ -16,6 +16,12 @@ export const ProjectIdSchema = z
   .brand<'ProjectId'>()
 export type ProjectId = z.infer<typeof ProjectIdSchema>
 
+export const MachineIdSchema = z
+  .string()
+  .regex(/^machine_[A-Za-z0-9][A-Za-z0-9_-]{5,95}$/)
+  .brand<'MachineId'>()
+export type MachineId = z.infer<typeof MachineIdSchema>
+
 export const ActionIdSchema = z
   .string()
   .regex(/^act_[A-Za-z0-9][A-Za-z0-9_-]{5,95}$/)

@@ -54,6 +54,7 @@ import {
   type ProjectMutationClient,
 } from './project-actions.js'
 import type { ProjectReadClient } from './project-query.js'
+import type { MachineReadClient } from './machine-query.js'
 import {
   AttentionActions,
   type AttentionMutationClient,
@@ -77,6 +78,7 @@ export interface HostRuntimeClient
     HostReadClient,
     LiveConversationMutationClient,
     ProjectReadClient,
+    MachineReadClient,
     ProjectMutationClient,
     ConversationDetailReadClient,
     ConversationListReadClient,
@@ -232,6 +234,17 @@ export class HostRuntime {
     return this.#client.listProjects(options)
   }
 
+  listMachines(options?: { readonly signal?: AbortSignal }) {
+    return this.#client.listMachines(options)
+  }
+
+  getMachine(
+    machineId: Parameters<MachineReadClient['getMachine']>[0],
+    options?: Parameters<MachineReadClient['getMachine']>[1],
+  ) {
+    return this.#client.getMachine(machineId, options)
+  }
+
   getProject(
     projectId: ProjectId,
     options?: { readonly signal?: AbortSignal },
@@ -295,7 +308,7 @@ export class HostRuntime {
 
   createConversation(
     projectId: ProjectId | string,
-    options: CreateConversationOptions = { provider: 'codex' },
+    options: CreateConversationOptions,
   ) {
     return this.#newConversationActions.createConversation(projectId, options)
   }

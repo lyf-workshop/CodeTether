@@ -10,17 +10,21 @@ import {
   currentSchemaVersion,
 } from '../dist/persistence/index.js'
 import { normalizeTrustedProjectRoot } from '../dist/project-path.js'
+import { downgradeMachineFoundationToVersionSeven } from './fixtures/machine-foundation-v7.mjs'
 
 const timestamp = '2026-08-29T10:00:00.000Z'
 const later = '2026-08-29T10:01:00.000Z'
 
 test('migration 007 preserves Codex organization, Turns, Attention, and Search before admitting Claude Code', () => {
   withDatabase((databasePath) => {
+    const seed = ConversationStore.open({ databasePath })
+    const machineId = seed.listMachines()[0].machineId
     const root = resolve(databasePath, '..', 'provider-project')
-    const project = durableProject('proj_providerfoundation01', root)
+    const project = durableProject('proj_providerfoundation01', machineId, root)
     const codex = durableConversation({
       conversationId: 'conv_providercodex01',
       projectId: project.projectId,
+      machineId,
       provider: 'codex',
       providerThreadId: 'codex-session-private',
       cwd: root,
@@ -35,6 +39,7 @@ test('migration 007 preserves Codex organization, Turns, Attention, and Search b
     const archivedCodex = durableConversation({
       conversationId: 'conv_providercodex02',
       projectId: project.projectId,
+      machineId,
       provider: 'codex',
       providerThreadId: 'codex-archived-session-private',
       cwd: root,
@@ -55,7 +60,6 @@ test('migration 007 preserves Codex organization, Turns, Attention, and Search b
       }),
     ]
 
-    const seed = ConversationStore.open({ databasePath })
     seed.createProject(project)
     seed.createConversation(codex)
     seed.createTurn(codexTurn)
@@ -111,8 +115,9 @@ test('migration 007 preserves Codex organization, Turns, Attention, and Search b
     assertVersionSixRejectsClaude(databasePath)
 
     const migrated = ConversationStore.open({ databasePath })
-    assert.equal(migrated.schemaVersion, 7)
-    assert.equal(currentSchemaVersion, 7)
+    assert.equal(migrated.schemaVersion, 8)
+    assert.equal(currentSchemaVersion, 8)
+    const migratedMachineId = migrated.listMachines()[0].machineId
 
     const preserved = migrated.getConversation(codex.conversationId)
     assert.equal(preserved.provider, 'codex')
@@ -165,6 +170,7 @@ test('migration 007 preserves Codex organization, Turns, Attention, and Search b
     const claude = durableConversation({
       conversationId: 'conv_providerclaude01',
       projectId: project.projectId,
+      machineId: migratedMachineId,
       provider: 'claude-code',
       providerThreadId: 'claude-session-private',
       cwd: root,
@@ -203,12 +209,17 @@ test('migration 007 preserves Codex organization, Turns, Attention, and Search b
     )
 
     const otherRoot = resolve(databasePath, '..', 'other-provider-project')
-    const otherProject = durableProject('proj_providerfoundation02', otherRoot)
+    const otherProject = durableProject(
+      'proj_providerfoundation02',
+      migratedMachineId,
+      otherRoot,
+    )
     migrated.createProject(otherProject)
     migrated.createConversation(
       durableConversation({
         conversationId: 'conv_providerclaude02',
         projectId: otherProject.projectId,
+        machineId: migratedMachineId,
         provider: 'claude-code',
         providerThreadId: 'claude-session-other-private',
         cwd: otherRoot,
@@ -272,17 +283,19 @@ test('migration 007 preserves Codex organization, Turns, Attention, and Search b
 
 test('migration 007 rolls back its replacement graph and version on failure', () => {
   withDatabase((databasePath) => {
+    const seed = ConversationStore.open({ databasePath })
+    const machineId = seed.listMachines()[0].machineId
     const root = resolve(databasePath, '..', 'provider-rollback-project')
-    const project = durableProject('proj_providerrollback01', root)
+    const project = durableProject('proj_providerrollback01', machineId, root)
     const conversation = durableConversation({
       conversationId: 'conv_providerrollback01',
       projectId: project.projectId,
+      machineId,
       provider: 'codex',
       providerThreadId: 'codex-rollback-private',
       cwd: root,
       title: 'Rollback provider sentinel',
     })
-    const seed = ConversationStore.open({ databasePath })
     seed.createProject(project)
     seed.createConversation(conversation)
     seed.close()
@@ -330,6 +343,7 @@ test('migration 007 rolls back its replacement graph and version on failure', ()
 })
 
 function downgradeProviderFoundationToVersionSix(databasePath) {
+  downgradeMachineFoundationToVersionSeven(databasePath)
   const database = new DatabaseSync(databasePath)
   database.exec('PRAGMA foreign_keys = OFF')
   database.exec(`
@@ -429,13 +443,19 @@ function assertVersionSixRejectsClaude(databasePath) {
   database.close()
 }
 
-function durableProject(projectId, rootPath) {
+function durableProject(projectId, machineId, rootPath) {
   const normalized = normalizeTrustedProjectRoot(rootPath)
   return {
     projectId,
     name: basename(normalized.rootPath),
-    rootPath: normalized.rootPath,
-    rootPathKey: normalized.rootPathKey,
+    location: {
+      projectId,
+      machineId,
+      rootPath: normalized.rootPath,
+      rootPathKey: normalized.rootPathKey,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    },
     createdAt: timestamp,
     updatedAt: timestamp,
   }
@@ -444,6 +464,7 @@ function durableProject(projectId, rootPath) {
 function durableConversation({
   conversationId,
   projectId,
+  machineId,
   provider,
   providerThreadId,
   cwd,
@@ -452,6 +473,7 @@ function durableConversation({
   return {
     conversationId,
     projectId,
+    machineId,
     title,
     titleSource: 'generated',
     provider,

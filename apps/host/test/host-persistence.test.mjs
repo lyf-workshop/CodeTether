@@ -152,9 +152,12 @@ async function createConversation(
   cwd,
   actionId = 'act_persist_create01',
 ) {
+  const machine = service.listMachines().machines[0]
+  assert.ok(machine)
   return await service.createConversation({
     actionId,
     provider: 'codex',
+    machineId: machine.machineId,
     cwd,
   })
 }
@@ -495,7 +498,21 @@ test('missing Provider Thread preserves local history and returns a specific saf
 test('durable write failure prevents Provider Turn start', async () => {
   const environment = await createEnvironment()
   const runtime = new FakeRuntime()
+  const durableMachine = {
+    machineId: 'machine_writefailure01',
+    displayName: 'Local computer',
+    kind: 'local',
+    platform: 'Windows',
+    architecture: 'x64',
+    createdAt: timestamp,
+    lastSeenAt: timestamp,
+  }
   const failingStore = {
+    listMachines: () => [durableMachine],
+    updateMachineLastSeen: (_machineId, lastSeenAt) => ({
+      ...durableMachine,
+      lastSeenAt,
+    }),
     listProjects: () => [],
     listConversations: () => [],
     listIncompleteTurns: () => [],
@@ -865,17 +882,26 @@ test('startup loads only the recent runtime window while SQLite keeps full histo
     const conversationId = 'conv_retained_history01'
     const projectId = 'proj_retained_history01'
     const projectRoot = normalizeTrustedProjectRoot(environment.workspace)
+    const machine = store.listMachines()[0]
+    assert.ok(machine)
     store.createProject({
       projectId,
       name: 'workspace',
-      rootPath: projectRoot.rootPath,
-      rootPathKey: projectRoot.rootPathKey,
+      location: {
+        projectId,
+        machineId: machine.machineId,
+        rootPath: projectRoot.rootPath,
+        rootPathKey: projectRoot.rootPathKey,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
       createdAt: timestamp,
       updatedAt: timestamp,
     })
     store.createConversation({
       conversationId,
       projectId,
+      machineId: machine.machineId,
       title: '新会话',
       provider: 'codex',
       providerThreadId: 'provider-thread-retained',

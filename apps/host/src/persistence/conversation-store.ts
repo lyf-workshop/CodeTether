@@ -8,6 +8,7 @@ import {
   ConversationIdSchema,
   ConversationSummarySchema,
   ConversationTitleSourceSchema,
+  MachineIdSchema,
   ManualConversationTitleSchema,
   ProjectIdSchema,
   ProviderIdSchema,
@@ -17,6 +18,7 @@ import {
   type ConversationId,
   type ConversationSummary,
   type ConversationTitleSource,
+  type MachineId,
   type ProjectId,
   type ProviderId,
   type Timestamp,
@@ -108,15 +110,34 @@ export type DurableTurnStatus = (typeof durableTurnStatuses)[number]
 export interface DurableProject {
   readonly projectId: ProjectId
   readonly name: string
+  readonly location: DurableProjectLocation
+  readonly createdAt: Timestamp
+  readonly updatedAt: Timestamp
+}
+
+export interface DurableProjectLocation {
+  readonly projectId: ProjectId
+  readonly machineId: MachineId
   readonly rootPath: string
   readonly rootPathKey: string
   readonly createdAt: Timestamp
   readonly updatedAt: Timestamp
 }
 
+export interface DurableMachine {
+  readonly machineId: MachineId
+  readonly displayName: string
+  readonly kind: 'local'
+  readonly platform: string
+  readonly architecture: string
+  readonly createdAt: Timestamp
+  readonly lastSeenAt?: Timestamp
+}
+
 export interface DurableConversation {
   readonly conversationId: ConversationId
   readonly projectId: ProjectId
+  readonly machineId: MachineId
   readonly title: string
   readonly titleSource: ConversationTitleSource
   readonly pinnedAt?: Timestamp
@@ -249,59 +270,110 @@ export class ConversationStore {
     }
   }
 
+  listMachines(): DurableMachine[] {
+    const rows = this.#statement(
+      'SELECT * FROM machines ORDER BY created_at ASC, machine_id ASC',
+    ).all() as unknown as MachineRow[]
+    return rows.map(machineFromRow)
+  }
+
+  getMachine(machineId: MachineId): DurableMachine | undefined {
+    const id = MachineIdSchema.parse(machineId)
+    const row = this.#statement(
+      'SELECT * FROM machines WHERE machine_id = ?',
+    ).get(id) as MachineRow | undefined
+    return row === undefined ? undefined : machineFromRow(row)
+  }
+
+  updateMachineLastSeen(
+    machineId: MachineId,
+    lastSeenAt: Timestamp,
+  ): DurableMachine {
+    const id = MachineIdSchema.parse(machineId)
+    const timestamp = TimestampSchema.parse(lastSeenAt)
+    assertChanged(
+      this.#statement(
+        'UPDATE machines SET last_seen_at = ?, updated_at = ? WHERE machine_id = ?',
+      ).run(timestamp, timestamp, id).changes,
+      'Machine',
+      id,
+    )
+    const machine = this.getMachine(id)
+    if (machine === undefined) throw new Error(`Machine ${id} does not exist`)
+    return machine
+  }
+
   createProject(project: DurableProject): void {
     const value = parseProject(project)
-    this.#statement(
-      `INSERT INTO projects (
-        project_id, name, root_path, root_path_key, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?)`,
-    ).run(
-      value.projectId,
-      value.name,
-      value.rootPath,
-      value.rootPathKey,
-      value.createdAt,
-      value.updatedAt,
-    )
+    this.runInTransaction(() => {
+      this.#statement(
+        `INSERT INTO projects (
+          project_id, name, created_at, updated_at
+        ) VALUES (?, ?, ?, ?)`,
+      ).run(value.projectId, value.name, value.createdAt, value.updatedAt)
+      this.#statement(
+        `INSERT INTO project_locations (
+          project_id, machine_id, root_path, root_path_key, created_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?)`,
+      ).run(
+        value.location.projectId,
+        value.location.machineId,
+        value.location.rootPath,
+        value.location.rootPathKey,
+        value.location.createdAt,
+        value.location.updatedAt,
+      )
+    })
   }
 
   updateProject(project: DurableProject): void {
     const value = parseProject(project)
+    const existing = this.getProject(value.projectId)
+    if (existing === undefined) {
+      throw new Error(`Project ${value.projectId} does not exist`)
+    }
+    if (
+      existing.location.machineId !== value.location.machineId ||
+      existing.location.rootPath !== value.location.rootPath ||
+      existing.location.rootPathKey !== value.location.rootPathKey
+    ) {
+      throw new Error('Project location identity is immutable')
+    }
     const result = this.#statement(
-      `UPDATE projects SET
-        name = ?, root_path = ?, root_path_key = ?, created_at = ?,
-        updated_at = ?
-      WHERE project_id = ?`,
-    ).run(
-      value.name,
-      value.rootPath,
-      value.rootPathKey,
-      value.createdAt,
-      value.updatedAt,
-      value.projectId,
-    )
+      `UPDATE projects SET name = ?, created_at = ?, updated_at = ?
+       WHERE project_id = ?`,
+    ).run(value.name, value.createdAt, value.updatedAt, value.projectId)
     assertChanged(result.changes, 'Project', value.projectId)
   }
 
   getProject(projectId: ProjectId): DurableProject | undefined {
     const id = ProjectIdSchema.parse(projectId)
     const row = this.#statement(
-      'SELECT * FROM projects WHERE project_id = ?',
+      `${projectLocationSelect()}
+       WHERE projects.project_id = ?`,
     ).get(id) as ProjectRow | undefined
     return row === undefined ? undefined : projectFromRow(row)
   }
 
-  getProjectByRootPathKey(rootPathKey: string): DurableProject | undefined {
+  getProjectByRootPathKey(
+    machineId: MachineId,
+    rootPathKey: string,
+  ): DurableProject | undefined {
+    const machine = MachineIdSchema.parse(machineId)
     const key = parseRootPathKey(rootPathKey)
     const row = this.#statement(
-      'SELECT * FROM projects WHERE root_path_key = ?',
-    ).get(key) as ProjectRow | undefined
+      `${projectLocationSelect()}
+       WHERE project_locations.machine_id = ? AND
+         project_locations.root_path_key = ?`,
+    ).get(machine, key) as ProjectRow | undefined
     return row === undefined ? undefined : projectFromRow(row)
   }
 
   listProjects(): DurableProject[] {
     const rows = this.#statement(
-      'SELECT * FROM projects ORDER BY updated_at DESC, project_id ASC',
+      `${projectLocationSelect()}
+       ORDER BY projects.updated_at DESC, projects.project_id ASC`,
     ).all() as unknown as ProjectRow[]
     return rows.map(projectFromRow)
   }
@@ -326,13 +398,14 @@ export class ConversationStore {
     const value = parseConversation(conversation)
     this.#statement(
       `INSERT INTO conversations (
-        conversation_id, project_id, title, title_source, pinned_at,
-        archived_at, provider, provider_thread_id, cwd, model, reasoning,
-        status, created_at, updated_at, last_activity_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        conversation_id, project_id, machine_id, title, title_source,
+        pinned_at, archived_at, provider, provider_thread_id, cwd, model,
+        reasoning, status, created_at, updated_at, last_activity_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       value.conversationId,
       value.projectId,
+      value.machineId,
       value.title,
       value.titleSource,
       value.pinnedAt ?? null,
@@ -351,22 +424,30 @@ export class ConversationStore {
 
   updateConversation(conversation: DurableConversation): void {
     const value = parseConversation(conversation)
+    const existing = requireConversation(
+      this.getConversation(value.conversationId),
+      value.conversationId,
+    )
+    if (
+      existing.projectId !== value.projectId ||
+      existing.machineId !== value.machineId ||
+      existing.provider !== value.provider ||
+      existing.cwd !== value.cwd
+    ) {
+      throw new Error('Conversation execution binding is immutable')
+    }
     const result = this.#statement(
       `UPDATE conversations SET
-        project_id = ?, title = ?, title_source = ?, pinned_at = ?,
-        archived_at = ?, provider = ?, provider_thread_id = ?, cwd = ?,
-        model = ?, reasoning = ?, status = ?, created_at = ?, updated_at = ?,
-        last_activity_at = ?
+        title = ?, title_source = ?, pinned_at = ?, archived_at = ?,
+        provider_thread_id = ?, model = ?, reasoning = ?, status = ?,
+        created_at = ?, updated_at = ?, last_activity_at = ?
       WHERE conversation_id = ?`,
     ).run(
-      value.projectId,
       value.title,
       value.titleSource,
       value.pinnedAt ?? null,
       value.archivedAt ?? null,
-      value.provider,
       value.providerThreadId ?? null,
-      value.cwd,
       value.model ?? null,
       value.reasoning ?? null,
       value.status,
@@ -602,7 +683,7 @@ export class ConversationStore {
 
     const rows = this.#statement(
       `SELECT
-         conversation_id, project_id, title, title_source, pinned_at,
+         conversation_id, project_id, machine_id, title, title_source, pinned_at,
          archived_at, provider, model, reasoning, status, created_at,
          updated_at, last_activity_at
        FROM conversations
@@ -610,6 +691,25 @@ export class ConversationStore {
        ORDER BY ${orderBy}
        LIMIT ?`,
     ).all(...parameters) as unknown as ConversationSummaryRow[]
+    return rows.map(conversationSummaryFromRow)
+  }
+
+  listMachineConversations(
+    machineId: MachineId,
+    limit: number = conversationListLimits.default,
+  ): DurableConversationSummary[] {
+    const id = MachineIdSchema.parse(machineId)
+    const boundedLimit = parseConversationListLimit(limit)
+    const rows = this.#statement(
+      `SELECT
+         conversation_id, project_id, machine_id, title, title_source,
+         pinned_at, archived_at, provider, model, reasoning, status,
+         created_at, updated_at, last_activity_at
+       FROM conversations
+       WHERE machine_id = ? AND status <> 'creating'
+       ORDER BY last_activity_at DESC, conversation_id ASC
+       LIMIT ?`,
+    ).all(id, boundedLimit) as unknown as ConversationSummaryRow[]
     return rows.map(conversationSummaryFromRow)
   }
 
@@ -714,6 +814,7 @@ export class ConversationStore {
           SELECT
             c.conversation_id,
             c.project_id,
+            c.machine_id,
             c.title,
             c.title_source,
             c.pinned_at,
@@ -1191,6 +1292,7 @@ export class ConversationStore {
 interface ConversationRow {
   readonly conversation_id: string
   readonly project_id: string
+  readonly machine_id: string
   readonly title: string
   readonly title_source: string
   readonly pinned_at: string | null
@@ -1209,6 +1311,7 @@ interface ConversationRow {
 interface ConversationSummaryRow {
   readonly conversation_id: string
   readonly project_id: string
+  readonly machine_id: string
   readonly title: string
   readonly title_source: string
   readonly pinned_at: string | null
@@ -1235,10 +1338,24 @@ interface ConversationSearchRow extends ConversationSummaryRow {
 interface ProjectRow {
   readonly project_id: string
   readonly name: string
+  readonly project_created_at: string
+  readonly project_updated_at: string
+  readonly machine_id: string
   readonly root_path: string
   readonly root_path_key: string
+  readonly location_created_at: string
+  readonly location_updated_at: string
+}
+
+interface MachineRow {
+  readonly machine_id: string
+  readonly display_name: string
+  readonly kind: string
+  readonly platform: string
+  readonly architecture: string
   readonly created_at: string
   readonly updated_at: string
+  readonly last_seen_at: string | null
 }
 
 interface TurnRow {
@@ -1264,6 +1381,23 @@ interface AttentionSummaryRow {
 }
 
 function parseProject(value: DurableProject): DurableProject {
+  const projectId = ProjectIdSchema.parse(value.projectId)
+  const location = parseProjectLocation(value.location)
+  if (location.projectId !== projectId) {
+    throw new Error('Project location must belong to its Project')
+  }
+  return {
+    projectId,
+    name: parseBoundedText(value.name, 'Project name', 240),
+    location,
+    createdAt: TimestampSchema.parse(value.createdAt),
+    updatedAt: TimestampSchema.parse(value.updatedAt),
+  }
+}
+
+function parseProjectLocation(
+  value: DurableProjectLocation,
+): DurableProjectLocation {
   const root = normalizeTrustedProjectRoot(value.rootPath)
   const rootPathKey = parseRootPathKey(value.rootPathKey)
   if (root.rootPathKey !== rootPathKey) {
@@ -1273,11 +1407,36 @@ function parseProject(value: DurableProject): DurableProject {
   }
   return {
     projectId: ProjectIdSchema.parse(value.projectId),
-    name: parseBoundedText(value.name, 'Project name', 240),
+    machineId: MachineIdSchema.parse(value.machineId),
     rootPath: root.rootPath,
     rootPathKey,
     createdAt: TimestampSchema.parse(value.createdAt),
     updatedAt: TimestampSchema.parse(value.updatedAt),
+  }
+}
+
+function machineFromRow(row: MachineRow): DurableMachine {
+  if (row.kind !== 'local') {
+    throw new Error(`Unsupported durable Machine kind: ${row.kind}`)
+  }
+  return {
+    machineId: MachineIdSchema.parse(row.machine_id),
+    displayName: parseBoundedText(
+      row.display_name,
+      'Machine display name',
+      240,
+    ),
+    kind: 'local',
+    platform: parseBoundedText(row.platform, 'Machine platform', 64),
+    architecture: parseBoundedText(
+      row.architecture,
+      'Machine architecture',
+      64,
+    ),
+    createdAt: TimestampSchema.parse(row.created_at),
+    ...(row.last_seen_at === null
+      ? {}
+      : { lastSeenAt: TimestampSchema.parse(row.last_seen_at) }),
   }
 }
 
@@ -1309,6 +1468,7 @@ function parseConversation(
   return {
     conversationId: ConversationIdSchema.parse(value.conversationId),
     projectId: ProjectIdSchema.parse(value.projectId),
+    machineId: MachineIdSchema.parse(value.machineId),
     title: parseBoundedText(value.title, 'Conversation title', 240),
     titleSource,
     ...(pinnedAt === undefined ? {} : { pinnedAt }),
@@ -1333,11 +1493,33 @@ function projectFromRow(row: ProjectRow): DurableProject {
   return parseProject({
     projectId: ProjectIdSchema.parse(row.project_id),
     name: row.name,
-    rootPath: row.root_path,
-    rootPathKey: row.root_path_key,
-    createdAt: TimestampSchema.parse(row.created_at),
-    updatedAt: TimestampSchema.parse(row.updated_at),
+    location: {
+      projectId: ProjectIdSchema.parse(row.project_id),
+      machineId: MachineIdSchema.parse(row.machine_id),
+      rootPath: row.root_path,
+      rootPathKey: row.root_path_key,
+      createdAt: TimestampSchema.parse(row.location_created_at),
+      updatedAt: TimestampSchema.parse(row.location_updated_at),
+    },
+    createdAt: TimestampSchema.parse(row.project_created_at),
+    updatedAt: TimestampSchema.parse(row.project_updated_at),
   })
+}
+
+function projectLocationSelect(): string {
+  return `SELECT
+    projects.project_id,
+    projects.name,
+    projects.created_at AS project_created_at,
+    projects.updated_at AS project_updated_at,
+    project_locations.machine_id,
+    project_locations.root_path,
+    project_locations.root_path_key,
+    project_locations.created_at AS location_created_at,
+    project_locations.updated_at AS location_updated_at
+  FROM projects
+  INNER JOIN project_locations
+    ON project_locations.project_id = projects.project_id`
 }
 
 function parseTurn(value: DurableTurnSnapshot): DurableTurnSnapshot {
@@ -1374,6 +1556,7 @@ function conversationFromRow(row: ConversationRow): DurableConversation {
   return parseConversation({
     conversationId: ConversationIdSchema.parse(row.conversation_id),
     projectId: ProjectIdSchema.parse(row.project_id),
+    machineId: MachineIdSchema.parse(row.machine_id),
     title: row.title,
     titleSource: parseConversationTitleSource(row.title_source),
     ...(row.pinned_at === null
@@ -1402,6 +1585,7 @@ function conversationSummaryFromRow(
   return ConversationSummarySchema.parse({
     conversationId: row.conversation_id,
     projectId: row.project_id,
+    machineId: row.machine_id,
     title: row.title,
     titleSource: parseConversationTitleSource(row.title_source),
     ...(row.pinned_at === null ? {} : { pinnedAt: row.pinned_at }),
@@ -1514,6 +1698,31 @@ function assertDatabaseIntegrity(database: DatabaseSync): void {
   }
   if (database.prepare('PRAGMA foreign_key_check').all().length > 0) {
     throw new Error('SQLite foreign key integrity check failed')
+  }
+  const machines = database
+    .prepare(
+      `SELECT
+         COUNT(*) AS total,
+         SUM(CASE WHEN kind = 'local' THEN 1 ELSE 0 END) AS local
+       FROM machines`,
+    )
+    .get() as { readonly total: number; readonly local: number }
+  if (machines.total !== 1 || machines.local !== 1) {
+    throw new Error(
+      'SQLite Machine state must contain exactly one canonical local Machine',
+    )
+  }
+  const locations = database
+    .prepare(
+      `SELECT COUNT(*) AS count
+       FROM projects
+       LEFT JOIN project_locations
+         ON project_locations.project_id = projects.project_id
+       WHERE project_locations.project_id IS NULL`,
+    )
+    .get() as { readonly count: number }
+  if (locations.count !== 0) {
+    throw new Error('SQLite Projects must have a durable Machine location')
   }
 }
 

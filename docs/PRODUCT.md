@@ -41,7 +41,7 @@ CodeTether provides one interaction model for those responsibilities while prese
 
 ### Project
 
-A durable, authorized local workspace known to CodeTether. In the current local model it has a CodeTether-owned identity, display name, one canonical root path, creation/update timestamps, and availability derived from the current filesystem. Conversations operate inside that root. Multiple Machine locations remain a future product capability rather than part of the current record.
+A durable logical workspace known to CodeTether. It has a CodeTether-owned identity, display name, and creation/update timestamps. The canonical authorized root and filesystem-derived availability belong to a Project Location on a specific Machine, so a future checkout on another Machine will not require a duplicate Project identity. Phase 6A still supports exactly one truthful local Location per Project.
 
 ### Conversation
 
@@ -58,15 +58,15 @@ Conversation
 └── History
 ```
 
-A conversation belongs to exactly one agent. Codex conversations remain Codex conversations; cross-agent handoff is intentionally unsupported in the current product plan.
+A conversation belongs to exactly one Agent and one execution Machine. Codex conversations remain Codex conversations, and a Conversation created on one Machine cannot silently move to another; cross-agent handoff and Machine switching are intentionally unsupported.
 
 ### Agent
 
-A supported coding-agent runtime/provider. Codex remains the established Provider; accepted Phase 5A adds a deliberately restricted Claude Code foundation through the same product model, and current Phase 5B expands only capabilities proven through Claude's real noninteractive interface. OpenCode remains deferred.
+A supported coding-agent runtime/provider. Codex remains the established Provider; accepted Phase 5B preserves the deliberately restricted Claude Code capabilities proven through the same product model and real noninteractive interface. OpenCode remains deferred.
 
 ### Machine
 
-A computer that stores projects and runs the local host and agent processes. Machine availability and execution state are part of the user's operating context.
+A durable execution location where authorized Project workspaces and coding-agent sessions run. Phase 6A introduces exactly one real local Windows Machine with a stable random CodeTether identity, safe platform/architecture presentation, and explicit product capabilities. It is not a Host process identity or device fingerprint, and it exposes no remote transport.
 
 ## Desktop Experience
 
@@ -81,7 +81,7 @@ Desktop is the primary environment for creating, supervising, and managing work.
 
 Conversation Detail is the product's most important future screen and should receive the strongest interaction and information-design attention.
 
-Phase 4A packages the accepted local workspace as one Windows-first CodeTether Desktop application. Launching Desktop owns the local Host lifecycle and loads the same Web UI; users no longer need to understand separate Host and Vite processes for the packaged product. Phase 4B adds one explicit native convenience to that shell: Desktop users can choose a Project directory with the Windows folder picker. The accepted Phase 4C lets the same running Desktop deliver new durable Attention through Windows notifications and return the user to the exact Conversation. The accepted Phase 4D refines that shared product UI for sustained Desktop use without changing these ownership boundaries. The accepted Phase 4E.1 adds durable Conversation organization, accepted Phase 4E.2 connects that truth to the shared Desktop/Browser UI, and accepted Phase 4F.1/4F.2 add durable Project-scoped Search from Host through the shared List and Rail. Accepted Phase 4G.1 separates main-window visibility from the running Desktop/Host lifecycle through one minimal System Tray; accepted Phase 4G.2 hardens the same Windows-owned lifecycle across sleep/resume, session end, crash, and Explorer tray recovery without adding Desktop-native product-state authority. Accepted Phase 5A and current Phase 5B do not alter that frozen lifecycle: the Host owns both Provider adapters, and Claude Code children naturally remain inside the same managed process tree. The shell still does not own Project, Conversation, Approval, Inbox, Attention, organization, Search, or Provider truth and does not expose general native shell/filesystem power to the Web UI.
+Phase 4A packages the accepted local workspace as one Windows-first CodeTether Desktop application. Launching Desktop owns the local Host lifecycle and loads the same Web UI; users no longer need to understand separate Host and Vite processes for the packaged product. Phase 4B adds one explicit native convenience to that shell: Desktop users can choose a Project directory with the Windows folder picker. The accepted Phase 4C lets the same running Desktop deliver new durable Attention through Windows notifications and return the user to the exact Conversation. The accepted Phase 4D refines that shared product UI for sustained Desktop use without changing these ownership boundaries. The accepted Phase 4E.1 adds durable Conversation organization, accepted Phase 4E.2 connects that truth to the shared Desktop/Browser UI, and accepted Phase 4F.1/4F.2 add durable Project-scoped Search from Host through the shared List and Rail. Accepted Phase 4G.1 separates main-window visibility from the running Desktop/Host lifecycle through one minimal System Tray; accepted Phase 4G.2 hardens the same Windows-owned lifecycle across sleep/resume, session end, crash, and Explorer tray recovery without adding Desktop-native product-state authority. Accepted Phase 5A/5B do not alter that frozen lifecycle: the Host owns both Provider adapters, and Claude Code children naturally remain inside the same managed process tree. Phase 6A adds Host-owned durable Machine and Project Location truth without changing Rust/Tauri lifecycle behavior or adding a native command. The shell still does not own Machine, Project, Conversation, Approval, Inbox, Attention, organization, Search, or Provider truth and does not expose general native shell/filesystem power to the Web UI.
 
 ## Mobile Experience
 
@@ -98,11 +98,11 @@ Dense code review, project setup, and complex configuration remain desktop-first
 
 ### Projects
 
-Projects organize local codebases and provide the stable authorization context for Conversations. The local Host owns durable Project identity, canonical root authorization, availability, and mutation results; the Web UI renders those records and never becomes a competing Project authority. The Projects surface lists real registrations, adds a local root with an optional display name, shows the real Project overview and unavailable state, and removes only an unreferenced CodeTether registration after explicit confirmation. Desktop acquires the root through one native directory picker, while standalone Browser mode retains manual absolute-path entry. Both use the same Add Project dialog, typed Client mutation, and Host registration API. A Conversation references one Project and may use a working directory contained within its canonical root. Filesystem availability can change independently of the durable record, so an unavailable Project keeps its history but cannot start or control Agent work until its saved root is valid again. Project discovery/scanning, rename/relocate, drag-and-drop, recent folders, and multiple-Machine location management remain future work.
+Projects organize codebases and provide the stable logical authorization context for Conversations. The local Host owns durable Project identity plus its Machine-scoped Project Location, canonical root authorization, computed availability, and mutation results; the Web UI renders those records and never becomes a competing authority. The Projects surface lists real registrations, adds a local root with an optional display name, shows the real Project overview and execution Machine, and removes only an unreferenced CodeTether registration after explicit confirmation. Desktop acquires the root through one native directory picker, while standalone Browser mode retains manual absolute-path entry. Both use the same Add Project dialog, typed Client mutation, and Host registration API. A Conversation references one Project and its exact Machine, and may use a working directory contained within that Machine's authorized Location. Filesystem availability can change independently of durable identity, so unavailable history remains readable but Agent control fails closed. Project discovery/scanning, rename/relocate, drag-and-drop, recent folders, and adding another Machine Location remain future work.
 
 ### Conversations
 
-Conversations organize Agent sessions, history, supported model/reasoning/permission choices, current status, machine, and Project. They should make live and historical work easy to follow. A single Conversation never moves between Providers in the current model. CodeTether owns the durable public Conversation and Provider identity; the Codex Thread or Claude Code session identity remains private Host metadata used to continue that same Provider context after a restart.
+Conversations organize Agent sessions, history, supported model/reasoning/permission choices, current status, Machine, and Project. They should make live and historical work easy to follow. A single Conversation never moves between Providers or Machines. CodeTether owns the durable public Conversation, Machine, and Provider identity; the Codex Thread or Claude Code session identity remains private Host metadata used to continue that same Provider context after a restart.
 
 Within a Project, an empty Search field browses the ordinary active or archived Conversation index. A nonempty query searches all durable Conversation titles and canonical User inputs in that scope through the Host rather than filtering only the summaries already loaded in the browser. The query and active/archived view are URL state so refresh, Back/Forward, and deep links preserve the discovery context. Results explain whether the title or something the user previously asked matched and may show the durable public Agent; they do not expose a ranking score, full Prompt, private Provider session identity, or database detail.
 
@@ -120,7 +120,9 @@ The Claude Code execution profile remains intentionally safe and minimal. Canoni
 
 ### Machines
 
-Machines show where projects and agents can run, whether a host is reachable, and which conversations are active there. Machine identity and trust are prerequisites for later remote control.
+Machines show where Project workspaces and Agents actually execute. Phase 6A exposes exactly one real `本地电脑`: its safe Windows/architecture identity, implemented product capabilities, actual Provider availability, registered Project Locations, and recent Conversations. The identity is random and durable in the local CodeTether data root, survives ordinary restart/update/reboot, and is independent from hostname, IP, hardware identifiers, and process identity. Removing that data root is a new-install boundary and may create a new Machine identity; uninstall behavior follows whether the installed data root is retained.
+
+The Machines surface has no resource charts, SSH status, remote Terminal, ports, services, or invented remote entries. Reading it never starts Codex or Claude Code. Machine availability, Provider availability, Project Location availability, and Conversation execution status remain distinct facts. New Conversation preselects the sole eligible Machine for convenience but sends its real durable identity, filters Agents by that Machine, and never offers a Machine switch after creation.
 
 ### Inbox
 
@@ -174,7 +176,7 @@ Public cloud relay is not part of the current plan. Remote architecture must pre
 
 ## V1 Priorities and Boundaries
 
-V1 remains **Codex-first**. Accepted Phase 5A validates that the same product entities and canonical control boundary can host one deliberately restricted second Provider; Phase 5B expands only a capability that the installed Claude CLI exposes reliably.
+V1 remains **Codex-first**. Accepted Phase 5A/5B validate that the same product entities and canonical control boundary can host one deliberately restricted second Provider. Phase 6A makes the execution Machine explicit while retaining only the current local Windows machine.
 
 Explicitly deferred:
 
@@ -185,6 +187,8 @@ Explicitly deferred:
 - Enterprise administration and policy features.
 - Cross-agent conversation handoff.
 - Public cloud relay.
+- SSH, pairing, LAN discovery, remote files/Terminal/shell, file or Git synchronization, port forwarding, Wake-on-LAN, and fake remote Machines.
+- Moving an existing Conversation between Machines or adding a second Location to a Project.
 
 ## Current Phase
 
@@ -266,6 +270,8 @@ Tray Quit is guarded for idempotency and gives the existing graceful Host/SQLite
 
 **Phase 5A — Second Provider Foundation: Claude Code** is accepted and frozen at `a1329f2`. Protocol v1 models durable `codex | claude-code` Provider identity, presentation-safe detection/capabilities, provider-neutral Tool kinds, and bounded canonical Provider errors. Migration 007 safely widens existing Codex-only persistence. The Host owns one Provider registry and routes the existing create/Turn/interrupt/read/organization/Search surfaces to each Conversation's immutable Provider while preserving one shared hydration budget. The accepted Claude Code adapter safely detects the CLI, uses its native session create/resume identity, sends Prompts through JSONL stdin with structured process arguments, and normalizes text and high-confidence Tools into the existing event model.
 
-**Phase 5B — Claude Code Capability Expansion** is the current approved implementation phase; it is not yet accepted or frozen. The installed Claude Code `2.1.251` boundary provides stable structured identities for Read, Glob, Grep, Edit, Write, and Bash plus a real `--effort` option. CodeTether enriches canonical Tool presentation from those structured envelopes and exposes only the Host-owned Claude effort choices. Its production launch remains Read/Glob/Grep-only. Approval, reliable interrupt, edit, shell, Diff, and model selection stay unsupported because no safe and complete product boundary was proven; unsupported capabilities are not simulated for UI symmetry.
+**Phase 5B — Claude Code Capability Expansion** is accepted and frozen at `5dac13c`. The installed Claude Code `2.1.251` boundary provides stable structured identities for Read, Glob, Grep, Edit, Write, and Bash plus a real `--effort` option. CodeTether enriches canonical Tool presentation from those structured envelopes and exposes only the Host-owned Claude effort choices. Its production launch remains Read/Glob/Grep-only. Approval, reliable interrupt, edit, shell, Diff, and model selection stay unsupported because no safe and complete product boundary was proven; unsupported capabilities are not simulated for UI symmetry.
+
+**Phase 6A — Durable Machine Foundation** is the current approved implementation phase; it is not yet accepted or frozen. It adds one durable canonical local Machine, Machine-scoped Project Locations, required immutable Conversation `machineId`, machine-scoped Provider composition, strict Machine list/detail APIs, and real Machines/New Conversation/Project/Conversation presentation. It deliberately adds no remote transport, discovery, trust/pairing, monitoring telemetry, native capability, second Location, or Conversation migration between Machines.
 
 Start with Windows, tray Attention badges/counts, recent-item tray menus, close-behavior settings, notification delivery after explicit Quit, notification history, remote/mobile/browser push, email/chat delivery, custom sounds, schedules, updater/signing, automatic Host restart, drag-and-drop, Project discovery/relocation, remote access, Machine management, OpenCode/third Providers, cross-Provider handoff, and Claude capability parity remain unimplemented.

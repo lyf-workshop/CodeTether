@@ -31,11 +31,11 @@ test('view changes opens the Inspector and selects its Changes tab', () => {
 test('global Project choices disambiguate identical names with canonical paths', () => {
   const first = createProjectOptionPresentation({
     name: 'api',
-    rootPath: 'C:\\workspaces\\alpha\\api',
+    locations: [{ rootPath: 'C:\\workspaces\\alpha\\api' }],
   })
   const second = createProjectOptionPresentation({
     name: 'api',
-    rootPath: 'D:\\workspaces\\beta\\api',
+    locations: [{ rootPath: 'D:\\workspaces\\beta\\api' }],
   })
 
   assert.equal(first.name, second.name)

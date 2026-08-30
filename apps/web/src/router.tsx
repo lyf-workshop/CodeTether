@@ -15,6 +15,7 @@ import { RoutePlaceholder } from './components/app-shell/route-placeholder'
 import { ConversationDetailRoute } from './components/conversation/conversation-detail-route'
 import { ProjectConversationsRoute } from './components/conversations'
 import { InboxPage } from './components/inbox'
+import { MachineDetailRoute, MachinesPage } from './components/machines'
 import { ProjectDetailRoute, ProjectsPage } from './components/projects'
 import { DesktopNotificationSettings } from './components/settings'
 
@@ -116,7 +117,13 @@ const agentsRoute = createRoute({
 const machinesRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/machines',
-  component: () => <RoutePlaceholder title="机器" />,
+  component: MachinesPage,
+})
+
+const machineDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/machines/$machineId',
+  component: MachineDetailRoute,
 })
 
 const settingsRoute = createRoute({
@@ -136,6 +143,7 @@ const routeTree = rootRoute.addChildren([
   projectConversationsRoute,
   agentsRoute,
   machinesRoute,
+  machineDetailRoute,
   settingsRoute,
 ])
 

@@ -96,6 +96,7 @@ test('durable cwd is re-authorized before Provider resume', async () => {
   store.createConversation({
     conversationId: 'conv_regression_auth',
     projectId,
+    machineId: localMachineId(store),
     title: '新会话',
     provider: 'codex',
     providerThreadId: 'provider-thread-regression',
@@ -143,6 +144,7 @@ test('concurrent Turn starts serialize across lazy resume', async () => {
   store.createConversation({
     conversationId: 'conv_regression_race',
     projectId,
+    machineId: localMachineId(store),
     title: '新会话',
     provider: 'codex',
     providerThreadId: 'provider-thread-regression',
@@ -199,6 +201,7 @@ test('restore entry cap follows durable Turn chronology across Host epochs', asy
   store.createConversation({
     conversationId: 'conv_regression_order',
     projectId,
+    machineId: localMachineId(store),
     title: '新会话',
     provider: 'codex',
     providerThreadId: 'provider-thread-regression',
@@ -247,6 +250,7 @@ test('restored presentation order remains unique and precedes the new Host epoch
   store.createConversation({
     conversationId: 'conv_regression_order',
     projectId,
+    machineId: localMachineId(store),
     title: '新会话',
     provider: 'codex',
     providerThreadId: 'provider-thread-regression',
@@ -323,9 +327,12 @@ test('approval persistence failure keeps the fail-closed Snapshot coherent', asy
   })
   try {
     await service.registerInitialProjectRoots([environment.workspace])
+    const machine = service.listMachines().machines[0]
+    assert.ok(machine)
     const created = await service.createConversation({
       actionId: 'act_regression_approval_create',
       provider: 'codex',
+      machineId: machine.machineId,
       cwd: environment.workspace,
     })
     await service.startTurn(created.data.conversation.conversationId, {
@@ -350,15 +357,28 @@ test('approval persistence failure keeps the fail-closed Snapshot coherent', asy
 function seedProject(store, rootPath) {
   const projectId = 'proj_phase3a_regression'
   const canonical = normalizeTrustedProjectRoot(rootPath)
+  const machineId = localMachineId(store)
   store.createProject({
     projectId,
     name: 'Phase 3A regression',
-    rootPath: canonical.rootPath,
-    rootPathKey: canonical.rootPathKey,
+    location: {
+      projectId,
+      machineId,
+      rootPath: canonical.rootPath,
+      rootPathKey: canonical.rootPathKey,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    },
     createdAt: timestamp,
     updatedAt: timestamp,
   })
   return projectId
+}
+
+function localMachineId(store) {
+  const machine = store.listMachines()[0]
+  assert.ok(machine)
+  return machine.machineId
 }
 
 function publisher(epoch) {

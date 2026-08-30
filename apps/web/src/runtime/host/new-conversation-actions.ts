@@ -5,9 +5,11 @@ import {
 } from '@codetether/client'
 import {
   ProjectIdSchema,
+  MachineIdSchema,
   type CreateConversationRequest,
   type CreateConversationResponse,
   type ProjectId,
+  type MachineId,
   type ProviderId,
 } from '@codetether/protocol'
 
@@ -23,6 +25,7 @@ export interface NewConversationMutationClient {
 
 interface CreationAttempt {
   readonly projectId: ProjectId
+  readonly machineId: MachineId
   readonly provider: ProviderId
   readonly model?: string
   readonly reasoning?: string
@@ -30,6 +33,7 @@ interface CreationAttempt {
 }
 
 export interface CreateConversationOptions {
+  readonly machineId: MachineId
   readonly provider: ProviderId
   readonly model?: string
   readonly reasoning?: string
@@ -58,12 +62,14 @@ export class NewConversationActions {
 
   createConversation(
     projectId: ProjectId | string,
-    options: CreateConversationOptions = { provider: 'codex' },
+    options: CreateConversationOptions,
   ): Promise<CreateConversationResponse> {
     const project = ProjectIdSchema.parse(projectId)
+    const machine = MachineIdSchema.parse(options.machineId)
     const current = this.#attempt
     if (current !== undefined) {
       return current.projectId === project &&
+        current.machineId === machine &&
         current.provider === options.provider &&
         current.model === options.model &&
         current.reasoning === options.reasoning
@@ -74,6 +80,7 @@ export class NewConversationActions {
     const request: CreateConversationRequest = {
       actionId: this.#createActionId(),
       provider: options.provider,
+      machineId: machine,
       projectId: project,
       ...(options.model === undefined ? {} : { model: options.model }),
       ...(options.reasoning === undefined
@@ -88,6 +95,11 @@ export class NewConversationActions {
             'Created Conversation does not belong to the requested Project',
           )
         }
+        if (response.data.conversation.machineId !== machine) {
+          throw new CodeTetherProtocolError(
+            'Created Conversation does not belong to the requested Machine',
+          )
+        }
         return response
       })
       .finally(() => {
@@ -95,6 +107,7 @@ export class NewConversationActions {
       })
     this.#attempt = {
       projectId: project,
+      machineId: machine,
       provider: options.provider,
       ...(options.model === undefined ? {} : { model: options.model }),
       ...(options.reasoning === undefined
@@ -129,7 +142,7 @@ export function newConversationErrorMessage(
     case 'invalid_request':
       return '会话配置无效，请刷新后重试。'
     case 'not_found':
-      return '项目不存在或已被移除。'
+      return '项目或机器不存在，或已被移除。'
     case 'conflict':
       return '项目状态已经变化，请刷新后重试。'
     case 'project_unavailable':

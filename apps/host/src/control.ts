@@ -33,6 +33,11 @@ async function main(): Promise<void> {
 
   try {
     const client = new CodeTetherClient({ baseUrl: host.baseUrl })
+    const machines = (await client.listMachines()).machines
+    if (machines.length !== 1 || machines[0] === undefined) {
+      throw new Error('Expected exactly one local Machine')
+    }
+    const machineId = machines[0].machineId
     const [generalProject, approvalProject] = await Promise.all([
       client.createProject({
         actionId: actionId(),
@@ -48,11 +53,13 @@ async function main(): Promise<void> {
         actionId: actionId(),
         provider: 'codex',
         projectId: generalProject.data.project.projectId,
+        machineId,
       }),
       client.createConversation({
         actionId: actionId(),
         provider: 'codex',
         projectId: approvalProject.data.project.projectId,
+        machineId,
       }),
     ])
     const generalId = general.data.conversation.conversationId

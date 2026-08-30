@@ -3,13 +3,19 @@ import { useQuery } from '@tanstack/react-query'
 import { FolderPlus, RefreshCw } from 'lucide-react'
 
 import { Button } from '@codetether/ui'
-import type { ProjectRecord } from '@codetether/protocol'
+import type {
+  MachineId,
+  MachineSummary,
+  ProjectRecord,
+} from '@codetether/protocol'
 
 import {
   useHostConnectionState,
   useHostRuntime,
 } from '../../runtime/host/host-runtime-hooks'
 import { projectListQueryOptions } from '../../runtime/host/project-query'
+import { machineListQueryOptions } from '../../runtime/host/machine-query'
+import { soleProjectLocation } from '../../runtime/host/project-location'
 import { projectListViewState } from '../../runtime/host/project-view-state'
 import { nativeCapabilities } from '../../runtime/native/native-capabilities'
 import { AddProjectDialog } from './add-project-dialog'
@@ -31,6 +37,13 @@ export function ProjectsPage() {
     ...projectListQueryOptions(runtime),
     enabled: connectionState === 'connected',
   })
+  const machinesQuery = useQuery({
+    ...machineListQueryOptions(runtime),
+    enabled: connectionState === 'connected',
+  })
+  const machinesById = new Map<MachineId, MachineSummary>(
+    (machinesQuery.data ?? []).map((machine) => [machine.machineId, machine]),
+  )
   const viewState = projectListViewState(projectsQuery)
   const projects = viewState.kind === 'ready' ? viewState.projects : []
   const connectionUnavailable =
@@ -142,13 +155,21 @@ export function ProjectsPage() {
             </div>
 
             <div className="space-y-4">
-              {projects.map((project) => (
-                <ProjectRow
-                  key={project.projectId}
-                  project={project}
-                  onRemove={handleRemoveRequest}
-                />
-              ))}
+              {projects.map((project) => {
+                const location = soleProjectLocation(project)
+                return (
+                  <ProjectRow
+                    key={project.projectId}
+                    project={project}
+                    machine={
+                      location === undefined
+                        ? undefined
+                        : machinesById.get(location.machineId)
+                    }
+                    onRemove={handleRemoveRequest}
+                  />
+                )
+              })}
             </div>
           </section>
         )}

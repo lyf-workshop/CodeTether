@@ -2,6 +2,7 @@ import { z } from 'zod'
 
 import {
   ActionIdSchema,
+  MachineIdSchema,
   ProjectIdSchema,
   ProtocolVersionSchema,
 } from './ids.js'
@@ -19,11 +20,13 @@ import {
   TurnInputSchema,
   TurnRecordSchema,
 } from './records.js'
-import { ProviderIdSchema } from './providers.js'
+import { MachineSummarySchema, machineWireLimits } from './machines.js'
+import { ProviderDescriptorSchema, ProviderIdSchema } from './providers.js'
 
 const CreateConversationByProjectRequestSchema = z
   .object({
     actionId: ActionIdSchema,
+    machineId: MachineIdSchema,
     provider: ProviderIdSchema,
     projectId: ProjectIdSchema,
     model: z.string().trim().min(1).max(240).optional(),
@@ -38,6 +41,7 @@ const CreateConversationByProjectRequestSchema = z
 const CreateConversationByLegacyCwdRequestSchema = z
   .object({
     actionId: ActionIdSchema,
+    machineId: MachineIdSchema,
     provider: ProviderIdSchema,
     cwd: z.string().trim().min(1).max(4096),
     model: z.string().trim().min(1).max(240).optional(),
@@ -83,6 +87,103 @@ export const GetProjectResponseSchema = z
   })
   .strict()
 export type GetProjectResponse = z.infer<typeof GetProjectResponseSchema>
+
+export const ListMachinesResponseSchema = z
+  .object({
+    protocolVersion: ProtocolVersionSchema,
+    machines: z.array(MachineSummarySchema).max(machineWireLimits.machines),
+  })
+  .strict()
+  .superRefine((response, context) => {
+    const machineIds = new Set<string>()
+    for (const [index, machine] of response.machines.entries()) {
+      if (machineIds.has(String(machine.machineId))) {
+        context.addIssue({
+          code: 'custom',
+          message: 'Machine list identities must be unique',
+          path: ['machines', index, 'machineId'],
+        })
+      }
+      machineIds.add(String(machine.machineId))
+    }
+  })
+export type ListMachinesResponse = z.infer<typeof ListMachinesResponseSchema>
+
+export const GetMachineResponseSchema = z
+  .object({
+    protocolVersion: ProtocolVersionSchema,
+    machine: MachineSummarySchema,
+    providers: z
+      .array(ProviderDescriptorSchema)
+      .max(machineWireLimits.providers),
+    projects: z.array(ProjectRecordSchema).max(machineWireLimits.projects),
+    conversations: z
+      .array(ConversationSummarySchema)
+      .max(machineWireLimits.recentConversations),
+  })
+  .strict()
+  .superRefine((response, context) => {
+    const machineId = response.machine.machineId
+    const providerIds = new Set<string>()
+    for (const [index, provider] of response.providers.entries()) {
+      if (providerIds.has(provider.provider)) {
+        context.addIssue({
+          code: 'custom',
+          message: 'Machine Provider identities must be unique',
+          path: ['providers', index, 'provider'],
+        })
+      }
+      providerIds.add(provider.provider)
+    }
+
+    const projectIds = new Set<string>()
+    for (const [projectIndex, project] of response.projects.entries()) {
+      if (projectIds.has(String(project.projectId))) {
+        context.addIssue({
+          code: 'custom',
+          message: 'Machine Project identities must be unique',
+          path: ['projects', projectIndex, 'projectId'],
+        })
+      }
+      projectIds.add(String(project.projectId))
+      for (const [locationIndex, location] of project.locations.entries()) {
+        if (location.machineId !== machineId) {
+          context.addIssue({
+            code: 'custom',
+            message:
+              'Machine Projects must contain only locations on that Machine',
+            path: [
+              'projects',
+              projectIndex,
+              'locations',
+              locationIndex,
+              'machineId',
+            ],
+          })
+        }
+      }
+    }
+
+    const conversationIds = new Set<string>()
+    for (const [index, conversation] of response.conversations.entries()) {
+      if (conversation.machineId !== machineId) {
+        context.addIssue({
+          code: 'custom',
+          message: 'Machine Conversations must execute on the response Machine',
+          path: ['conversations', index, 'machineId'],
+        })
+      }
+      if (conversationIds.has(String(conversation.conversationId))) {
+        context.addIssue({
+          code: 'custom',
+          message: 'Machine Conversation identities must be unique',
+          path: ['conversations', index, 'conversationId'],
+        })
+      }
+      conversationIds.add(String(conversation.conversationId))
+    }
+  })
+export type GetMachineResponse = z.infer<typeof GetMachineResponseSchema>
 
 export const conversationListLimits = {
   default: 50,

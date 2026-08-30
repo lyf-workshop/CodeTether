@@ -27,9 +27,14 @@ If sources conflict, stop and resolve the conflict instead of inventing a compro
 
 ## Current Scope
 
-**Phase 5B — Claude Code Capability Expansion** is the current approved implementation scope; it is not yet accepted, frozen, or declared ready. Phase 5A is accepted and frozen at `a1329f2`, Phase 4G.2 is accepted and frozen at `f576b05`, Phase 4G.1 is accepted and frozen at `cee3a71`, Phase 4F.2 is accepted and frozen at `545db8c`, Phase 4F.1 is accepted and frozen at `38481ad`, Phase 4E.2 is accepted and frozen at `84de855`, Phase 4E.1 is accepted and frozen at `afac51a`, and Phase 4D, Phase 4C, Phase 4B, Phase 4A, Phase 3E.1, and the **CodeTether Local Workspace Alpha** remain frozen. Protocol v1 remains the only Client ↔ Host product boundary, and the durable Project/Conversation/Turn/Attention data layer remains authoritative. Phase 5B expands only capabilities proven through the accepted second-provider boundary without moving provider execution into React or Tauri and without changing the frozen Phase 4G Desktop lifecycle. The current implementation boundary includes:
+**Phase 6A — Durable Machine Foundation** is the current approved implementation scope; it is not yet accepted, frozen, or declared ready. Phase 5B is accepted and frozen at `5dac13c`, Phase 5A is accepted and frozen at `a1329f2`, Phase 4G.2 is accepted and frozen at `f576b05`, Phase 4G.1 is accepted and frozen at `cee3a71`, Phase 4F.2 is accepted and frozen at `545db8c`, Phase 4F.1 is accepted and frozen at `38481ad`, Phase 4E.2 is accepted and frozen at `84de855`, Phase 4E.1 is accepted and frozen at `afac51a`, and Phase 4D, Phase 4C, Phase 4B, Phase 4A, Phase 3E.1, and the **CodeTether Local Workspace Alpha** remain frozen. Protocol v1 remains the only Client ↔ Host product boundary, and durable Machine/Project-location/Conversation/Turn/Attention data remains authoritative. Phase 6A makes the one truthful local Windows Machine first-class without adding remote transport, another Provider, or changes to the frozen Phase 4G Desktop lifecycle. The current implementation boundary includes:
 
-- A Project as a durable, authorized local workspace with a CodeTether-owned `proj_*` identity, name, canonical root path, timestamps, and availability computed from the filesystem rather than stored as durable truth.
+- A Project as a durable logical workspace with a CodeTether-owned `proj_*` identity, name, and timestamps. Its authorized root and filesystem-computed availability belong to a durable Project Location on one Machine rather than to the Project identity itself.
+- One canonical durable local Machine with a random CodeTether-owned `machine_*` identity, safe display/platform/architecture metadata, product-level capabilities, and no hardware fingerprint, Host PID, username, network address, or raw operating-system identifier.
+- SQLite migration 008 (`machine_foundation`), which transactionally creates the one local Machine, moves every existing Project root into `project_locations`, and backfills every existing Conversation with the same immutable `machine_id` while preserving Provider/session identity, Turns, Attention, Search, and organization metadata.
+- Protocol v1 and `packages/client` expose strict Machine list/detail reads. Machine detail composes the real machine-scoped Provider descriptors, registered Project Locations, and bounded recent Conversations without starting or resuming either Provider.
+- Every new Conversation explicitly selects a real `machineId`, `projectId`, and immutable Provider. The selected Project must have an available authorized Location on that Machine, and the selected Provider must be available there; neither Machine nor Provider can be switched afterward.
+- A real `/machines` list and `/machines/:machineId` detail surface show only the local Machine, its implemented capabilities, actual Providers, Projects, and recent Conversations. New Conversation preselects the sole eligible Machine but still sends its durable identity, while Project and Conversation surfaces show the owning Machine without a switch control.
 - SQLite migration 002 (`projects`), which adds the `projects` table and binds every durable Conversation to one Project through a non-null `project_id` foreign key. The Conversation `cwd` remains a contained working directory, not a second Project identity.
 - Protocol v1 Project list, read, create, and delete commands plus Project-aware Conversation creation by `projectId`.
 - Idempotent Project registration by canonical root: creating the same authorized root returns the existing Project instead of duplicating it.
@@ -101,21 +106,21 @@ If sources conflict, stop and resolve the conflict instead of inventing a compro
 - Safe Agent-message Markdown for headings, paragraphs, ordered/unordered lists, bold text, inline code, fenced code, and explicitly allowed `http`, `https`, and `mailto` links. Raw HTML, image loading, iframe/script execution, `javascript:` URLs, and `dangerouslySetInnerHTML` are absent.
 - Display-only shortening of reliably Project-contained paths in Agent messages, file changes, and Project surfaces. Canonical Project paths and durable Agent text remain unchanged; ambiguous or escaping paths remain verbatim.
 - Public Turn anchors shared by Inbox and notification navigation, plus Inspector Changes selection that locates the matching Timeline Diff. These are routing and presentation concerns, not new Conversation or Attention state.
-- A denser truthful Desktop surface: placeholder Activity/Agents/Machines navigation is absent from the primary Sidebar, unsupported Composer actions are hidden, long titles/paths are bounded with full-text affordances, Project IDs leave the primary overview, and user copy avoids exposing Host/Runtime implementation terms.
+- A denser truthful Desktop surface: placeholder Activity/Agents navigation is absent while the real Machines destination is restored; unsupported Composer actions are hidden, long titles/paths are bounded with full-text affordances, Project IDs leave the primary overview, and user copy avoids exposing Host/Runtime implementation terms.
 
-Phase 4C notification delivery remains bounded to the lifetime of the Desktop process and its owned Host, which accepted Phase 4G.1 keeps running while the main window is hidden. Phase 4G.2 is accepted and frozen at `f576b05`; do not continue Desktop lifecycle work unless Phase 5B exposes a specific regression. Its evidence classifications remain accurate: real raw-release Sleep/Wake, pending-Approval continuity, and Explorer recovery do not imply real logoff/shutdown, provider-network-change, active-Turn-at-suspend, dedicated Win+L, or installed-runtime-across-Sleep validation. Confirmed Windows session end remains a 2-second best-effort termination budget, not the ordinary 12-second graceful Tray Quit guarantee. Phase 5B authorizes only the evidence-driven Claude capability expansion described above. Writable/shell execution without a safe permission contract, machine-readable Approval, Diff, reliable interrupt, fabricated model catalogues, another Provider, cross-Provider handoff, and further Windows polish remain unauthorized.
+Phase 4C notification delivery remains bounded to the lifetime of the Desktop process and its owned Host, which accepted Phase 4G.1 keeps running while the main window is hidden. Phase 4G.2 is accepted and frozen at `f576b05`; do not continue Desktop lifecycle work unless Phase 6A exposes a specific regression. Its evidence classifications remain accurate: real raw-release Sleep/Wake, pending-Approval continuity, and Explorer recovery do not imply real logoff/shutdown, provider-network-change, active-Turn-at-suspend, dedicated Win+L, or installed-runtime-across-Sleep validation. Confirmed Windows session end remains a 2-second best-effort termination budget, not the ordinary 12-second graceful Tray Quit guarantee. Phase 5B is accepted and frozen at `5dac13c`; its unsupported Claude Edit/Write, Shell, Diff, interrupt, Approval, and model-selection boundaries must not be reinterpreted. Phase 6A authorizes only the truthful local Machine foundation. Remote transport/control, another Provider, cross-Provider handoff, and further Windows polish remain unauthorized.
 
 ## Out of Scope
 
-During Phase 5B, do not implement without a separately approved phase:
+During Phase 6A, do not implement without a separately approved phase:
 
 - Visual redesigns or unrelated refactors to the frozen Design System, AppShell, Inbox, Conversations, Conversation Workspace, or accepted Projects UI.
-- Activity, Machines, a standalone Agent-management page, a broader Settings redesign, an advanced New Conversation flow beyond Provider selection/capability gating, or unrelated new product-page content.
+- Activity, a standalone Agent-management page, a broader Settings redesign, an advanced New Conversation flow beyond Machine/Provider capability gating, or unrelated new product-page content.
 - Live Host data in another frozen page.
 - A generic WebSocket RPC transport or interactive PTY transport.
 - Start with Windows, tray badges/dynamic Attention counts, recent Project/Conversation tray menus, a close-behavior preference, notifications after explicit application exit, notification-history UI, push/email/chat delivery, custom sounds or schedules, custom window chrome, auto-update, signing/release channels, drag-and-drop folders, recent-folder menus, Open in Explorer, or any other native product feature beyond the exact Phase 4B picker, Phase 4C notification delivery, Phase 4G.1 tray lifecycle, and Phase 4G.2 Windows lifecycle reliability boundary.
 - A generic Tauri command runner, arbitrary shell bridge, arbitrary filesystem capability, or a second Client-to-Host business protocol.
-- Project discovery/scanning, rename/relocate, multiple Project locations, Machine management, remote access, relay, or authentication.
+- Project discovery/scanning, rename/relocate, multiple locations for one Project, Machine add/remove/rename, remote access, SSH, pairing, LAN discovery, relay, file synchronization, or authentication.
 - Cross-Project/global Search, Agent response or Tool/Terminal/Diff/Approval search, FTS/semantic/embedding Search product behavior, old-Turn history pagination, Search history/analytics, Conversation Delete, bulk organization, tags, folders, groups, or drag reordering. Phase 4F.2 consumes only the accepted Project-scoped title/canonical-User-input backend and its typed Client boundary.
 - Filesystem deletion, recursive cleanup, cascading Project deletion, or automatic reassignment of existing Conversations to another Project.
 - Turn queueing, steering, retry-Turn, attachments, images, voice, Skill upload, or a Provider-specific React/HTTP write path. Claude Code interrupt and Approval controls remain unavailable unless a later parity phase establishes stable machine-readable semantics; existing Codex control remains unchanged.
@@ -131,7 +136,7 @@ Do not install dependencies for an out-of-scope runtime merely because its direc
 
 ### Project
 
-A durable, authorized local workspace in which an agent operates. It has one canonical local root and computed availability, and its real list/add/detail/remove UI is backed by the Host-owned record. It does not yet support discovery, relocation, or multiple Machine locations.
+A durable logical workspace in which an agent operates. Its identity and display name are independent from a durable Machine-scoped authorized Location containing the canonical root and computed availability. Phase 6A still supports exactly one local Location per Project and does not support discovery, relocation, or adding another Machine location.
 
 ### Conversation
 
@@ -139,11 +144,11 @@ The durable unit of user-agent work and history. It is associated with one Proje
 
 ### Agent
 
-A coding-agent Provider/runtime. Codex is the established full-control Provider; accepted Phase 5A adds the bounded Claude Code foundation and Phase 5B may expand only capabilities proven at its real noninteractive boundary. OpenCode and others remain future adapters.
+A coding-agent Provider/runtime. Codex is the established full-control Provider; accepted Phase 5B preserves the bounded Claude Code capability matrix proven at its real noninteractive boundary. Availability is composed for the selected Machine without merging the Provider and Machine registries. OpenCode and others remain future adapters.
 
 ### Machine
 
-A computer capable of hosting projects and running agent sessions. A conversation executes on one machine at a time.
+A durable execution location capable of hosting authorized Project Locations and Provider sessions. Phase 6A has exactly one truthful local Windows Machine with a random CodeTether identity; a Conversation executes on one immutable Machine and no remote transport exists yet.
 
 ## Architecture Principles
 

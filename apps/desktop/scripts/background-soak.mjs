@@ -223,6 +223,14 @@ process.stdout.write(`${JSON.stringify(report)}\n`)
 
 async function runRealBackgroundTurn(rootPath, sequence, expectedEpoch) {
   const marker = `PHASE4G2_SOAK_OK_${String(sequence)}`
+  const machines = await api('/api/v1/machines')
+  const machine = machines.machines?.[0]
+  if (
+    machines.machines?.length !== 1 ||
+    typeof machine?.machineId !== 'string'
+  ) {
+    throw new Error('Background soak requires exactly one local Machine')
+  }
   const project = await api('/api/v1/projects', {
     method: 'POST',
     body: {
@@ -237,6 +245,7 @@ async function runRealBackgroundTurn(rootPath, sequence, expectedEpoch) {
       actionId: actionId(`conversation-${String(sequence)}`),
       provider: 'codex',
       projectId: project.data.project.projectId,
+      machineId: machine.machineId,
     },
   })
   const conversationId = conversation.data.conversation.conversationId
@@ -264,6 +273,7 @@ async function runRealBackgroundTurn(rootPath, sequence, expectedEpoch) {
     sequence,
     marker,
     projectId: project.data.project.projectId,
+    machineId: machine.machineId,
     conversationId,
     turnId: turn.data.turn.turnId,
     status: terminal.conversation.status,

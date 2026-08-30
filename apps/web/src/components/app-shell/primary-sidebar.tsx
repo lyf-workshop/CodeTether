@@ -4,6 +4,7 @@ import {
   ChevronDown,
   FolderOpen,
   Inbox,
+  Monitor,
   Settings,
   type LucideIcon,
 } from 'lucide-react'
@@ -28,7 +29,7 @@ import {
 
 const unavailableAgentProviders = providerPresentations(undefined)
 
-type SidebarDestination = '/inbox' | '/projects' | '/settings'
+type SidebarDestination = '/inbox' | '/machines' | '/projects' | '/settings'
 
 interface SidebarNavItem {
   label: string
@@ -38,6 +39,7 @@ interface SidebarNavItem {
 
 const primaryNavItems = [
   { label: '项目', to: '/projects', icon: FolderOpen },
+  { label: '机器', to: '/machines', icon: Monitor },
   { label: '收件箱', to: '/inbox', icon: Inbox },
 ] as const satisfies readonly SidebarNavItem[]
 

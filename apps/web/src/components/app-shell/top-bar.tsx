@@ -18,6 +18,7 @@ interface TopBarProfile {
 
 type TopBarBreadcrumb =
   | { label: string; to?: undefined }
+  | { label: string; to: '/machines' }
   | { label: string; to: '/projects' }
   | {
       label: string
@@ -244,6 +245,13 @@ function BreadcrumbContent({
   if (breadcrumb.to === '/projects') {
     return (
       <Link to="/projects" className={className} title={breadcrumb.label}>
+        {breadcrumb.label}
+      </Link>
+    )
+  }
+  if (breadcrumb.to === '/machines') {
+    return (
+      <Link to="/machines" className={className} title={breadcrumb.label}>
         {breadcrumb.label}
       </Link>
     )

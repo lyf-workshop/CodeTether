@@ -2,6 +2,7 @@ import type {
   Bootstrap,
   ProviderAvailability,
   ProviderCapabilities,
+  ProviderDescriptor,
   ProviderId,
   ProviderModel,
   ProviderReasoningOption,
@@ -71,24 +72,7 @@ export function providerPresentation(
     (candidate) => candidate.provider === provider,
   )
   if (descriptor !== undefined) {
-    return {
-      provider,
-      agent: providerAgentIds[provider],
-      displayName: descriptor.displayName,
-      availability: descriptor.availability,
-      availabilityLabel: availabilityLabels[descriptor.availability],
-      available: descriptor.availability === 'available',
-      ...(descriptor.version === undefined
-        ? {}
-        : { version: descriptor.version }),
-      ...(descriptor.testedVersion === undefined
-        ? {}
-        : { testedVersion: descriptor.testedVersion }),
-      capabilities: descriptor.capabilities,
-      models: descriptor.models ?? [],
-      reasoningLabel: descriptor.reasoningLabel ?? '推理',
-      reasoningOptions: descriptor.reasoningOptions ?? [],
-    }
+    return presentProviderDescriptor(descriptor)
   }
 
   const legacyCodexAvailable =
@@ -125,6 +109,27 @@ export function providerPresentation(
   }
 }
 
+/** Presents Provider truth scoped to one Machine without falling back globally. */
+export function providerPresentationForMachine(
+  descriptors: readonly ProviderDescriptor[],
+  provider: AgentProvider,
+): ProviderPresentation {
+  const descriptor = descriptors.find(
+    (candidate) => candidate.provider === provider,
+  )
+  return descriptor === undefined
+    ? unavailableProviderPresentation(provider)
+    : presentProviderDescriptor(descriptor)
+}
+
+export function providerPresentationsForMachine(
+  descriptors: readonly ProviderDescriptor[],
+): readonly ProviderPresentation[] {
+  return supportedAgentProviders.map((provider) =>
+    providerPresentationForMachine(descriptors, provider),
+  )
+}
+
 export function providerPresentations(
   bootstrap: Bootstrap | undefined,
 ): readonly ProviderPresentation[] {
@@ -139,4 +144,45 @@ export function providerAgentId(provider: AgentProvider): AgentId {
 
 export function providerDisplayName(provider: AgentProvider): string {
   return providerFallbackNames[provider]
+}
+
+function presentProviderDescriptor(
+  descriptor: ProviderDescriptor,
+): ProviderPresentation {
+  const provider = descriptor.provider
+  return {
+    provider,
+    agent: providerAgentIds[provider],
+    displayName: descriptor.displayName,
+    availability: descriptor.availability,
+    availabilityLabel: availabilityLabels[descriptor.availability],
+    available: descriptor.availability === 'available',
+    ...(descriptor.version === undefined
+      ? {}
+      : { version: descriptor.version }),
+    ...(descriptor.testedVersion === undefined
+      ? {}
+      : { testedVersion: descriptor.testedVersion }),
+    capabilities: descriptor.capabilities,
+    models: descriptor.models ?? [],
+    reasoningLabel: descriptor.reasoningLabel ?? '推理',
+    reasoningOptions: descriptor.reasoningOptions ?? [],
+  }
+}
+
+function unavailableProviderPresentation(
+  provider: AgentProvider,
+): ProviderPresentation {
+  return {
+    provider,
+    agent: providerAgentIds[provider],
+    displayName: providerFallbackNames[provider],
+    availability: 'unavailable',
+    availabilityLabel: availabilityLabels.unavailable,
+    available: false,
+    capabilities: unavailableCapabilities,
+    models: [],
+    reasoningLabel: '推理',
+    reasoningOptions: [],
+  }
 }

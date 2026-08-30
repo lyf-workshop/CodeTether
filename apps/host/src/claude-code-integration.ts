@@ -40,12 +40,14 @@ const execFileAsync = promisify(execFile)
 const repositoryRoot = fileURLToPath(new URL('../../../', import.meta.url))
 const temporaryPrefix = 'codetether-claude-real-integration-'
 const outputEnvironmentName = 'CODETETHER_CLAUDE_INTEGRATION_OUTPUT'
+const evidencePhase = process.env.CODETETHER_INTEGRATION_PHASE ?? '5A'
 const turnTimeoutMs = 300_000
 
 type Stage =
   | 'preflight'
   | 'detection'
   | 'first_host'
+  | 'codex_turn'
   | 'exact_turn'
   | 'tool_turn'
   | 'seed_turn'
@@ -147,6 +149,12 @@ async function run(): Promise<void> {
     usedPorts.add(firstPort)
     const firstEpoch = host.epoch
     let client = await requireProviders(host)
+    const machines = (await client.listMachines()).machines
+    ensure(
+      machines.length === 1 && machines[0] !== undefined,
+      'machine_missing',
+    )
+    const machineId = machines[0].machineId
 
     const project = await client.createProject({
       actionId: actionId('project'),
@@ -158,12 +166,14 @@ async function run(): Promise<void> {
       actionId: actionId('codex-conversation'),
       provider: 'codex',
       projectId,
+      machineId,
     })
     const createClaudeStartedAt = performance.now()
     const exactConversation = await client.createConversation({
       actionId: actionId('exact-conversation'),
       provider: 'claude-code',
       projectId,
+      machineId,
     })
     const claudeConversationCreateMs = milliseconds(
       performance.now() - createClaudeStartedAt,
@@ -172,17 +182,30 @@ async function run(): Promise<void> {
       actionId: actionId('tool-conversation'),
       provider: 'claude-code',
       projectId,
+      machineId,
     })
     const memoryConversation = await client.createConversation({
       actionId: actionId('memory-conversation'),
       provider: 'claude-code',
       projectId,
+      machineId,
     })
     await assertMixedProviderReads(
       client,
       projectId,
       codexConversation.data.conversation.conversationId,
       exactConversation.data.conversation.conversationId,
+    )
+
+    stage = 'codex_turn'
+    const codex = await runObservedTurn(
+      client,
+      codexConversation.data.conversation.conversationId,
+      'Reply exactly:\nPHASE6A_CODEX_OK',
+    )
+    ensure(
+      codex.finalMessage.trim() === 'PHASE6A_CODEX_OK',
+      'codex_exact_reply_mismatch',
     )
 
     stage = 'exact_turn'
@@ -244,6 +267,12 @@ async function run(): Promise<void> {
     usedPorts.add(restartedPort)
     ensure(host.epoch !== firstEpoch, 'host_epoch_not_restarted')
     client = await requireProviders(host)
+    const restartedMachines = (await client.listMachines()).machines
+    ensure(
+      restartedMachines.length === 1 &&
+        restartedMachines[0]?.machineId === machineId,
+      'machine_identity_changed_after_restart',
+    )
     await assertMixedProviderReads(
       client,
       projectId,
@@ -253,9 +282,32 @@ async function run(): Promise<void> {
 
     stage = 'cold_organization'
     const coldStartedAt = performance.now()
-    const claudeProcessesBeforeCold = await readClaudeProcessIds()
+    const providerProcessesBeforeCold = await readProviderProcesses()
     const memoryConversationId =
       memoryConversation.data.conversation.conversationId
+    const machineDetail = await client.getMachine(machineId)
+    ensure(
+      machineDetail.machine.machineId === machineId &&
+        machineDetail.projects.some(
+          (entry) =>
+            entry.projectId === projectId &&
+            entry.locations.some(
+              (location) => location.machineId === machineId,
+            ),
+        ) &&
+        machineDetail.conversations.some(
+          (entry) =>
+            entry.conversationId ===
+              codexConversation.data.conversation.conversationId &&
+            entry.machineId === machineId,
+        ) &&
+        machineDetail.conversations.some(
+          (entry) =>
+            entry.conversationId === memoryConversationId &&
+            entry.machineId === machineId,
+        ),
+      'machine_detail_binding_missing',
+    )
     const renamed = await client.renameConversation(memoryConversationId, {
       actionId: actionId('rename'),
       title: organizationTitle,
@@ -310,11 +362,13 @@ async function run(): Promise<void> {
       'unarchive_failed',
     )
     await client.getConversation(memoryConversationId)
-    const claudeProcessesAfterCold = await readClaudeProcessIds()
+    const providerProcessesAfterCold = await readProviderProcesses()
     ensure(
-      differenceCount(claudeProcessesAfterCold, claudeProcessesBeforeCold) ===
-        0,
-      'cold_operation_started_claude',
+      newProcessCount(
+        providerProcessesBeforeCold,
+        providerProcessesAfterCold,
+      ) === 0,
+      'cold_operation_started_provider',
     )
     const coldOrganizationMs = milliseconds(performance.now() - coldStartedAt)
 
@@ -338,6 +392,12 @@ async function run(): Promise<void> {
           streamingObserved: (exact.eventCounts['message.delta'] ?? 0) > 0,
           eventCounts: exact.eventCounts,
         },
+        realCodexTurn: {
+          passed: true,
+          streamingObserved: (codex.eventCounts['message.delta'] ?? 0) > 0,
+          replyWasExact: codex.finalMessage.trim() === 'PHASE6A_CODEX_OK',
+          eventCounts: codex.eventCounts,
+        },
         toolNormalization: {
           passed: true,
           markerRead: true,
@@ -357,6 +417,9 @@ async function run(): Promise<void> {
           passed: true,
           codexReadable: true,
           claudeReadable: true,
+          sameMachine: true,
+          machineIdStableAcrossHostRestart: true,
+          machineDetailReadWithoutProviderStart: true,
         },
         coldOrganization: {
           passed: true,
@@ -371,6 +434,7 @@ async function run(): Promise<void> {
       },
       timingsMs: {
         firstHostStart: firstHostStartMs,
+        codexTurn: codex.timingsMs,
         claudeConversationCreate: claudeConversationCreateMs,
         exactTurn: exact.timingsMs,
         toolTurn: tool.timingsMs,
@@ -429,7 +493,7 @@ async function run(): Promise<void> {
   )
   const evidence = {
     schemaVersion: 1,
-    phase: '5A',
+    phase: evidencePhase,
     integration: 'real-claude-code',
     realProvider: true,
     testedAt,

@@ -170,6 +170,8 @@ async function createFixture(t, options = {}) {
       : { maxConversations: options.maxConversations }),
   })
   await service.registerInitialProjectRoots([workspace])
+  const machine = service.listMachines().machines[0]
+  assert.ok(machine)
   const events = []
   const unsubscribe = publisher.subscribe((event) => events.push(event))
   t.after(async () => {
@@ -177,13 +179,22 @@ async function createFixture(t, options = {}) {
     await service.close().catch(() => undefined)
     await rm(workspace, { recursive: true, force: true })
   })
-  return { workspace, workspacePolicy, runtime, publisher, service, events }
+  return {
+    workspace,
+    workspacePolicy,
+    runtime,
+    publisher,
+    service,
+    machineId: machine.machineId,
+    events,
+  }
 }
 
 async function createConversation(fixture, actionId, options = {}) {
   return await fixture.service.createConversation({
     actionId,
     provider: 'codex',
+    machineId: fixture.machineId,
     cwd: fixture.workspace,
     ...options,
   })
@@ -246,6 +257,7 @@ test('rejects a Provider reasoning option outside the Host-owned descriptor', as
       actionId: 'act_claude_invalid_effort',
       provider: 'claude-code',
       projectId: project.projectId,
+      machineId: fixture.machineId,
       reasoning: 'unsupported',
     }),
     (error) =>
@@ -258,6 +270,7 @@ test('rejects a Provider reasoning option outside the Host-owned descriptor', as
       actionId: 'act_claude_invalid_model',
       provider: 'claude-code',
       projectId: project.projectId,
+      machineId: fixture.machineId,
       model: 'fabricated-model',
     }),
     (error) =>
@@ -295,6 +308,7 @@ test('Project deletion cannot race an in-flight Conversation creation', async (t
     actionId: 'act_project_race_create',
     provider: 'codex',
     projectId: project.projectId,
+    machineId: fixture.machineId,
   })
   await providerStarted
 
@@ -326,6 +340,7 @@ test('a failed Conversation creation releases its Project reservation', async (t
       actionId: 'act_project_failed_create',
       provider: 'codex',
       projectId: project.projectId,
+      machineId: fixture.machineId,
     }),
     (error) =>
       error instanceof HostServiceError && error.code === 'provider_error',
@@ -516,6 +531,7 @@ test('duplicate actionId replays one result and rejects changed input or operati
   const request = {
     actionId: 'act_create02',
     provider: 'codex',
+    machineId: fixture.machineId,
     cwd: fixture.workspace,
   }
   const first = await fixture.service.createConversation(request)
@@ -1083,6 +1099,7 @@ test('projects a fatal runtime failure into terminal safe Host state', async (t)
     fixture.service.createConversation({
       actionId: 'act_afterfailure01',
       provider: 'codex',
+      machineId: fixture.machineId,
       cwd: fixture.workspace,
     }),
     (error) =>
@@ -1163,6 +1180,7 @@ test('close drains an accepted action and rejects new mutations before runtime t
     actionId: 'act_close_drain_create',
     provider: 'codex',
     projectId: project.projectId,
+    machineId: fixture.machineId,
   })
   await providerStarted
 

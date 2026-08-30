@@ -25,6 +25,7 @@ import {
 } from '../../runtime/host/host-runtime-hooks'
 import { conversationDetailQueryOptions } from '../../runtime/host/conversation-detail-query'
 import { conversationListQueryOptions } from '../../runtime/host/conversation-list-query'
+import { machineDetailQueryOptions } from '../../runtime/host/machine-query'
 import {
   includeConversationDetail,
   type ConversationReadModel,
@@ -34,6 +35,10 @@ import {
   replaceHostProjection,
 } from '../../runtime/host/host-query'
 import { projectDetailQueryOptions } from '../../runtime/host/project-query'
+import {
+  projectLocationAvailability,
+  projectLocationForMachine,
+} from '../../runtime/host/project-location'
 import { ConversationDetailPage } from './conversation-detail-page'
 import { NewConversationDialog } from '../conversations/new-conversation-dialog'
 import { createDemoConversationDetailSource } from './demo-conversation-adapter'
@@ -191,10 +196,15 @@ function LoadedLiveConversationDetail({
   const projection = useHostProjection()
   const conversationId = detail.conversation.conversationId
   const projectId = detail.conversation.projectId
+  const machineId = detail.conversation.machineId
   const hasProjectedConversation =
     projection?.conversations[conversationId] !== undefined
   const projectQuery = useQuery({
     ...projectDetailQueryOptions(runtime, projectId),
+    enabled: connectionState === 'connected',
+  })
+  const machineQuery = useQuery({
+    ...machineDetailQueryOptions(runtime, machineId),
     enabled: connectionState === 'connected',
   })
   const railQuery = useQuery({
@@ -220,7 +230,10 @@ function LoadedLiveConversationDetail({
     )
   }
 
-  if (projectQuery.data === undefined && !projectQuery.isError) {
+  if (
+    (projectQuery.data === undefined && !projectQuery.isError) ||
+    (machineQuery.data === undefined && !machineQuery.isError)
+  ) {
     return (
       <LiveConversationBoundary
         state={connectionState}
@@ -244,7 +257,17 @@ function LoadedLiveConversationDetail({
       connectionState={connectionState}
       bootstrap={runtime.bootstrap}
       project={projectQuery.data}
-      projectAvailability={projectQuery.data?.availability ?? 'unavailable'}
+      projectAvailability={
+        projectQuery.data === undefined
+          ? 'unavailable'
+          : projectLocationAvailability(projectQuery.data, machineId)
+      }
+      projectRootPath={
+        projectQuery.data === undefined
+          ? undefined
+          : projectLocationForMachine(projectQuery.data, machineId)?.rootPath
+      }
+      machineName={machineQuery.data?.machine.displayName ?? '机器'}
       initialInspectorTab={initialInspectorTab}
       targetTurnId={targetTurnId}
     />
@@ -259,6 +282,8 @@ interface ConnectedLiveConversationDetailProps {
   readonly bootstrap: Bootstrap | undefined
   readonly project: ProjectRecord | undefined
   readonly projectAvailability: 'available' | 'unavailable'
+  readonly projectRootPath?: string
+  readonly machineName: string
   readonly initialInspectorTab?: 'changes'
   readonly targetTurnId?: TurnId
 }
@@ -271,6 +296,8 @@ function ConnectedLiveConversationDetail({
   bootstrap,
   project,
   projectAvailability,
+  projectRootPath,
+  machineName,
   initialInspectorTab,
   targetTurnId,
 }: ConnectedLiveConversationDetailProps) {
@@ -283,7 +310,8 @@ function ConnectedLiveConversationDetail({
     connectionState,
     bootstrap,
     projectAvailability,
-    project?.rootPath,
+    projectRootPath,
+    machineName,
   )
   const controls = useLiveConversationControls(
     conversation,
@@ -416,6 +444,7 @@ function includeCurrentSummary(
   const currentSummary: ConversationSummary = {
     conversationId: durable.conversationId,
     projectId: durable.projectId,
+    machineId: durable.machineId,
     title: current.title,
     titleSource: current.titleSource,
     provider: durable.provider,

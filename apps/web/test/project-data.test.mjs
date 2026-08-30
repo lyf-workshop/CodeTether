@@ -374,8 +374,16 @@ function project(projectId, name, rootPath, availability = 'available') {
   return {
     projectId,
     name,
-    rootPath,
-    availability,
+    locations: [
+      {
+        projectId,
+        machineId: 'machine_local01',
+        rootPath,
+        availability,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+    ],
     createdAt: timestamp,
     updatedAt: timestamp,
   }

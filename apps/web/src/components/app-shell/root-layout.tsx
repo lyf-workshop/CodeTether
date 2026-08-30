@@ -3,8 +3,10 @@ import { Outlet, useRouterState } from '@tanstack/react-router'
 
 import {
   ConversationIdSchema,
+  MachineIdSchema,
   ProjectIdSchema,
   type ConversationId,
+  type MachineId,
   type ProjectId,
 } from '@codetether/protocol'
 
@@ -17,6 +19,7 @@ import {
   useHostRuntime,
 } from '../../runtime/host/host-runtime-hooks'
 import { projectDetailQueryOptions } from '../../runtime/host/project-query'
+import { machineDetailQueryOptions } from '../../runtime/host/machine-query'
 import {
   providerPresentations,
   type ProviderPresentation,
@@ -51,6 +54,7 @@ export function RootLayout() {
     connectionState === 'connected' ? runtime.bootstrap : undefined,
   )
   const projectRoute = parseProjectRoute(currentPath)
+  const machineRoute = parseMachineRoute(currentPath)
   const conversationRoute = parseConversationRoute(currentPath)
 
   if (currentPath === '/projects') {
@@ -100,6 +104,34 @@ export function RootLayout() {
     )
   }
 
+  if (machineRoute?.machineId !== undefined) {
+    return (
+      <MachineShellLayout
+        agentProviders={agentProviders}
+        currentPath={currentPath}
+        inboxAttentionCount={inboxAttentionCount}
+        machineId={machineRoute.machineId}
+      />
+    )
+  }
+
+  if (machineRoute !== null) {
+    return (
+      <AppShell
+        breadcrumbs={[
+          { label: '机器', to: '/machines' },
+          { label: '机器详情' },
+        ]}
+        agentProviders={agentProviders}
+        currentPage="机器详情"
+        currentPath={currentPath}
+        inboxAttentionCount={inboxAttentionCount}
+      >
+        <Outlet />
+      </AppShell>
+    )
+  }
+
   if (conversationRoute?.conversationId !== undefined) {
     return (
       <LiveConversationShellLayout
@@ -137,6 +169,40 @@ export function RootLayout() {
       breadcrumbs={[{ label: currentPage }]}
       agentProviders={agentProviders}
       currentPage={currentPage}
+      currentPath={currentPath}
+      inboxAttentionCount={inboxAttentionCount}
+    >
+      <Outlet />
+    </AppShell>
+  )
+}
+
+interface MachineShellLayoutProps {
+  agentProviders: readonly ProviderPresentation[]
+  currentPath: string
+  inboxAttentionCount: number
+  machineId: MachineId
+}
+
+function MachineShellLayout({
+  agentProviders,
+  currentPath,
+  inboxAttentionCount,
+  machineId,
+}: MachineShellLayoutProps) {
+  const runtime = useHostRuntime()
+  const connectionState = useHostConnectionState()
+  const machineQuery = useQuery({
+    ...machineDetailQueryOptions(runtime, machineId),
+    enabled: connectionState === 'connected',
+  })
+  const machineName = machineQuery.data?.machine.displayName ?? '机器'
+
+  return (
+    <AppShell
+      breadcrumbs={[{ label: '机器', to: '/machines' }, { label: machineName }]}
+      agentProviders={agentProviders}
+      currentPage={machineName}
       currentPath={currentPath}
       inboxAttentionCount={inboxAttentionCount}
     >
@@ -307,6 +373,18 @@ function parseProjectRoute(pathname: string): ParsedProjectRoute | null {
 interface ParsedConversationRoute {
   conversationId?: ConversationId
   rawId: string
+}
+
+interface ParsedMachineRoute {
+  machineId?: MachineId
+}
+
+function parseMachineRoute(pathname: string): ParsedMachineRoute | null {
+  const match = /^\/machines\/([^/]+)\/?$/u.exec(pathname)
+  if (match === null) return null
+  const rawMachineId = safeDecode(match[1] ?? '')
+  const machineId = MachineIdSchema.safeParse(rawMachineId)
+  return machineId.success ? { machineId: machineId.data } : {}
 }
 
 function parseConversationRoute(

@@ -12,6 +12,7 @@ import type {
 import { allProjectConversationsQueryOptions } from '../../runtime/host/conversation-list-query'
 import type { HostRuntime } from '../../runtime/host/host-runtime'
 import { projectListQueryOptions } from '../../runtime/host/project-query'
+import { projectLocationAvailability } from '../../runtime/host/project-location'
 
 export interface InboxItemMetadata {
   readonly conversationTitle?: string
@@ -71,7 +72,7 @@ export function useInboxMetadata(
             ...(project === undefined
               ? {}
               : {
-                  projectAvailability: project.availability,
+                  projectAvailability: projectLocationAvailability(project),
                   projectName: project.name,
                 }),
           },

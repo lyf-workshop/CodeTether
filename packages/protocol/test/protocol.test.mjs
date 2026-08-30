@@ -24,6 +24,7 @@ import {
   DeleteProjectRequestSchema,
   DeleteProjectResponseSchema,
   EventIdSchema,
+  GetMachineResponseSchema,
   GetProjectResponseSchema,
   GetConversationResponseSchema,
   HostEventEnvelopeSchema,
@@ -32,12 +33,17 @@ import {
   HostSnapshotSchema,
   InterruptTurnRequestSchema,
   ListAttentionQuerySchema,
+  ListMachinesResponseSchema,
   ListProjectsResponseSchema,
   ListProjectConversationsQuerySchema,
   ManualConversationTitleSchema,
+  MachineCapabilitiesSchema,
+  MachineIdSchema,
+  MachineSummarySchema,
   PinConversationRequestSchema,
   PinConversationResponseSchema,
   ProjectIdSchema,
+  ProjectLocationSchema,
   ProjectRecordSchema,
   ProviderAvailabilitySchema,
   ProviderCapabilitiesSchema,
@@ -63,6 +69,7 @@ import {
   formatLastEventId,
   hostEventTypes,
   manualConversationTitleLimits,
+  machineWireLimits,
   parseLastEventId,
   protocolVersion,
   conversationListLimits,
@@ -71,26 +78,78 @@ import {
 const epoch = '11111111-1111-4111-8111-111111111111'
 const conversationId = 'conv_demo01'
 const projectId = 'proj_demo01'
+const machineId = 'machine_demo01'
 const actionId = 'act_action01'
 const turnId = 'turn_demo01'
 const itemId = 'item_demo01'
 const approvalId = 'approval_demo01'
 const attentionId = 'attn_demo01'
 const timestamp = '2026-08-26T08:00:00.000Z'
+const rootPath = 'C:\\workspace\\demo'
+
+const machineCapabilities = {
+  projectAccess: true,
+  providerExecution: true,
+  backgroundRuntime: true,
+  nativeFolderPicker: true,
+  notifications: true,
+}
+
+const machine = {
+  machineId,
+  displayName: '本地电脑',
+  kind: 'local',
+  platform: 'Windows',
+  architecture: 'x86_64',
+  availability: 'available',
+  isLocal: true,
+  createdAt: timestamp,
+  lastSeenAt: timestamp,
+  capabilities: machineCapabilities,
+}
+
+const providerDescriptor = {
+  provider: 'codex',
+  displayName: 'Codex',
+  availability: 'available',
+  capabilities: {
+    streaming: true,
+    resume: true,
+    interrupt: true,
+    approvals: true,
+    fileRead: true,
+    fileEdit: true,
+    shell: true,
+    search: true,
+    diff: true,
+    toolEvents: true,
+    modelSelection: true,
+    reasoningControl: true,
+  },
+}
+
+const projectLocation = {
+  projectId,
+  machineId,
+  rootPath,
+  availability: 'available',
+  createdAt: timestamp,
+  updatedAt: timestamp,
+}
 
 const project = {
   projectId,
   name: 'Demo',
-  rootPath: 'C:\\workspace\\demo',
-  availability: 'available',
+  locations: [projectLocation],
   createdAt: timestamp,
   updatedAt: timestamp,
 }
 
 const conversation = {
   conversationId,
+  machineId,
   provider: 'codex',
-  cwd: 'C:\\workspace\\demo',
+  cwd: rootPath,
   model: 'gpt-5',
   reasoning: 'high',
   status: 'running',
@@ -102,6 +161,7 @@ const conversation = {
 const conversationSummary = {
   conversationId,
   projectId,
+  machineId,
   title: 'Inspect the workspace',
   titleSource: 'generated',
   provider: 'codex',
@@ -280,8 +340,27 @@ test('validates bounded Project identity and records', () => {
   assert.equal(ProjectIdSchema.safeParse('project-a').success, false)
   assert.deepEqual(ProjectRecordSchema.parse(project), project)
   assert.equal(
-    ProjectRecordSchema.safeParse({ ...project, availability: 'missing' })
-      .success,
+    ProjectRecordSchema.safeParse({
+      ...project,
+      locations: [{ ...projectLocation, availability: 'missing' }],
+    }).success,
+    false,
+  )
+  assert.equal(
+    ProjectRecordSchema.safeParse({
+      ...project,
+      locations: [{ ...projectLocation, projectId: 'proj_other01' }],
+    }).success,
+    false,
+  )
+  assert.equal(
+    ProjectRecordSchema.safeParse({
+      ...project,
+      locations: [
+        projectLocation,
+        { ...projectLocation, rootPath: 'D:\\demo' },
+      ],
+    }).success,
     false,
   )
   assert.equal(
@@ -326,6 +405,89 @@ test('validates bounded Project identity and records', () => {
     true,
     'legacy v1 Conversation records remain valid without projectId',
   )
+})
+
+test('validates bounded public Machine records and Machine API responses', () => {
+  assert.equal(MachineIdSchema.safeParse(machineId).success, true)
+  assert.equal(MachineIdSchema.safeParse('local-computer').success, false)
+  assert.deepEqual(
+    MachineCapabilitiesSchema.parse(machineCapabilities),
+    machineCapabilities,
+  )
+  assert.deepEqual(MachineSummarySchema.parse(machine), machine)
+  assert.deepEqual(
+    ProjectLocationSchema.parse(projectLocation),
+    projectLocation,
+  )
+  assert.equal(
+    MachineSummarySchema.safeParse({ ...machine, hostPid: 1234 }).success,
+    false,
+  )
+  assert.equal(
+    MachineCapabilitiesSchema.safeParse({
+      ...machineCapabilities,
+      remoteShell: true,
+    }).success,
+    false,
+  )
+
+  const list = { protocolVersion, machines: [machine] }
+  assert.deepEqual(ListMachinesResponseSchema.parse(list), list)
+  assert.equal(
+    ListMachinesResponseSchema.safeParse({
+      protocolVersion,
+      machines: [machine, machine],
+    }).success,
+    false,
+  )
+  assert.equal(
+    ListMachinesResponseSchema.safeParse({
+      protocolVersion,
+      machines: Array.from(
+        { length: machineWireLimits.machines + 1 },
+        (_, index) => ({ ...machine, machineId: `machine_bound${index}` }),
+      ),
+    }).success,
+    false,
+  )
+
+  const detail = {
+    protocolVersion,
+    machine,
+    providers: [providerDescriptor],
+    projects: [project],
+    conversations: [conversationSummary],
+  }
+  assert.deepEqual(GetMachineResponseSchema.parse(detail), detail)
+  assert.equal(
+    GetMachineResponseSchema.safeParse({
+      ...detail,
+      conversations: [{ ...conversationSummary, machineId: 'machine_other01' }],
+    }).success,
+    false,
+  )
+  assert.equal(
+    GetMachineResponseSchema.safeParse({
+      ...detail,
+      projects: [
+        {
+          ...project,
+          locations: [{ ...projectLocation, machineId: 'machine_other01' }],
+        },
+      ],
+    }).success,
+    false,
+  )
+  for (const duplicate of [
+    { providers: [providerDescriptor, providerDescriptor] },
+    { projects: [project, project] },
+    { conversations: [conversationSummary, conversationSummary] },
+  ]) {
+    assert.equal(
+      GetMachineResponseSchema.safeParse({ ...detail, ...duplicate }).success,
+      false,
+    )
+  }
 })
 
 test('validates the durable Conversation summary without provider internals', () => {
@@ -575,6 +737,15 @@ test('validates explicit Conversation organization mutation envelopes', () => {
   for (const request of requests.slice(1)) {
     assert.deepEqual(request, { actionId })
   }
+  assert.equal(
+    RenameConversationRequestSchema.safeParse({
+      actionId,
+      machineId: 'machine_other01',
+      title: 'Move this Conversation',
+    }).success,
+    false,
+    'organization mutations cannot switch a durable Conversation Machine',
+  )
 
   const response = {
     protocolVersion,
@@ -1250,6 +1421,7 @@ test('keeps route identity out of mutation request bodies', () => {
   assert.deepEqual(
     CreateConversationRequestSchema.parse({
       actionId,
+      machineId,
       provider: 'codex',
       cwd: 'C:\\workspace\\demo',
       model: 'gpt-5',
@@ -1260,6 +1432,7 @@ test('keeps route identity out of mutation request bodies', () => {
   assert.equal(
     CreateConversationRequestSchema.safeParse({
       actionId,
+      machineId,
       provider: 'claude-code',
       projectId,
     }).success,
@@ -1268,6 +1441,7 @@ test('keeps route identity out of mutation request bodies', () => {
   assert.equal(
     CreateConversationRequestSchema.safeParse({
       actionId,
+      machineId,
       provider: 'codex',
       projectId,
       model: 'gpt-5',
@@ -1277,6 +1451,7 @@ test('keeps route identity out of mutation request bodies', () => {
   assert.equal(
     CreateConversationRequestSchema.safeParse({
       actionId,
+      machineId,
       provider: 'codex',
       projectId,
       cwd: 'C:\\workspace\\demo',
@@ -1287,6 +1462,7 @@ test('keeps route identity out of mutation request bodies', () => {
   assert.equal(
     CreateConversationRequestSchema.safeParse({
       actionId,
+      machineId,
       provider: 'codex',
     }).success,
     false,
@@ -1294,6 +1470,16 @@ test('keeps route identity out of mutation request bodies', () => {
   assert.equal(
     CreateConversationRequestSchema.safeParse({
       actionId,
+      provider: 'codex',
+      projectId,
+    }).success,
+    false,
+    'every new Conversation requires an explicit Machine identity',
+  )
+  assert.equal(
+    CreateConversationRequestSchema.safeParse({
+      actionId,
+      machineId,
       provider: 'codex',
       cwd: 'C:\\workspace\\demo',
       title: 'Not part of v1',
@@ -1406,21 +1592,21 @@ test('validates Project HTTP records and mutation envelopes', () => {
   const createRequest = {
     actionId,
     name: project.name,
-    path: project.rootPath,
+    path: rootPath,
   }
   assert.deepEqual(
     CreateProjectRequestSchema.parse(createRequest),
     createRequest,
   )
   assert.deepEqual(
-    CreateProjectRequestSchema.parse({ actionId, path: project.rootPath }),
-    { actionId, path: project.rootPath },
+    CreateProjectRequestSchema.parse({ actionId, path: rootPath }),
+    { actionId, path: rootPath },
     'the Host may derive a default name from the canonical path basename',
   )
   assert.equal(
     CreateProjectRequestSchema.safeParse({
       ...createRequest,
-      rootPath: project.rootPath,
+      rootPath,
     }).success,
     false,
   )

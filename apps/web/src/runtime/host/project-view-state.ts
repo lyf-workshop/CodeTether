@@ -1,6 +1,7 @@
 import { CodeTetherResponseError } from '@codetether/client'
 import type { ProjectRecord } from '@codetether/protocol'
 
+import { projectLocationAvailability } from './project-location.js'
 import { projectErrorMessage } from './project-actions.js'
 
 export interface ProjectQueryState<TData> {
@@ -67,7 +68,7 @@ export function projectDetailViewState(
       message: 'CodeTether 暂时无法读取项目数据，请重试。',
     }
   }
-  return query.data.availability === 'available'
+  return projectLocationAvailability(query.data) === 'available'
     ? { kind: 'available', project: query.data }
     : {
         kind: 'unavailable',

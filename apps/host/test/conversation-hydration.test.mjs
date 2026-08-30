@@ -868,11 +868,18 @@ async function createFixture(t, options) {
 function seedProject(store, workspace) {
   const root = normalizeTrustedProjectRoot(workspace)
   const timestamp = timestampFor(0, 0)
+  const machineId = store.listMachines()[0].machineId
   store.createProject({
     projectId,
     name: 'Hydration Fixture',
-    rootPath: root.rootPath,
-    rootPathKey: root.rootPathKey,
+    location: {
+      projectId,
+      machineId,
+      rootPath: root.rootPath,
+      rootPathKey: root.rootPathKey,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    },
     createdAt: timestamp,
     updatedAt: timestamp,
   })
@@ -883,6 +890,7 @@ function seedConversation(store, workspace, options) {
   store.createConversation({
     conversationId: options.conversationId,
     projectId,
+    machineId: store.listMachines()[0].machineId,
     title: `Hydration ${String(options.index)}`,
     provider: 'codex',
     ...(options.providerThreadId === undefined && 'providerThreadId' in options

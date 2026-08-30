@@ -12,6 +12,7 @@ import {
   currentSchemaVersion,
 } from '../dist/persistence/index.js'
 import { normalizeTrustedProjectRoot } from '../dist/project-path.js'
+import { downgradeMachineFoundationToVersionSeven } from './fixtures/machine-foundation-v7.mjs'
 
 const projectId = 'proj_search_primary'
 const otherProjectId = 'proj_search_other'
@@ -40,8 +41,8 @@ test('migration 006 backfills titles and canonical inputs without reading snapsh
     raw.close()
 
     const migrated = ConversationStore.open({ databasePath })
-    assert.equal(currentSchemaVersion, 7)
-    assert.equal(migrated.schemaVersion, 7)
+    assert.equal(currentSchemaVersion, 8)
+    assert.equal(migrated.schemaVersion, 8)
     assert.equal(
       migrated.searchProjectConversations(projectId, { query: '登录' })
         .results[0].matchedField,
@@ -774,11 +775,19 @@ function withFixture(operation) {
 
 function createProject(store, id, workspace) {
   const root = normalizeTrustedProjectRoot(workspace)
+  const [machine] = store.listMachines()
+  assert.ok(machine)
   store.createProject({
     projectId: id,
     name: id,
-    rootPath: root.rootPath,
-    rootPathKey: root.rootPathKey,
+    location: {
+      projectId: id,
+      machineId: machine.machineId,
+      rootPath: root.rootPath,
+      rootPathKey: root.rootPathKey,
+      createdAt: baseTime,
+      updatedAt: baseTime,
+    },
     createdAt: baseTime,
     updatedAt: baseTime,
   })
@@ -786,9 +795,12 @@ function createProject(store, id, workspace) {
 
 function seedConversation(store, workspace, index, overrides = {}) {
   const timestamp = timeAt(index)
+  const [machine] = store.listMachines()
+  assert.ok(machine)
   const conversation = {
     conversationId: `conv_search_${String(index).padStart(5, '0')}`,
     projectId,
+    machineId: machine.machineId,
     title: `Conversation ${String(index)}`,
     titleSource: 'generated',
     provider: 'codex',
@@ -836,6 +848,7 @@ function searchIds(store, query, options = {}) {
 }
 
 function downgradeToV5(databasePath) {
+  downgradeMachineFoundationToVersionSeven(databasePath)
   const database = new DatabaseSync(databasePath)
   database.exec(`
     DROP TRIGGER trg_conversation_search_input_update;

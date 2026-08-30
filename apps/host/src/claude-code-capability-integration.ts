@@ -30,6 +30,7 @@ import {
   type ConversationId,
   type GetConversationResponse,
   type HostEventEnvelope,
+  type MachineId,
   type ProjectId,
   type ProviderCapabilities,
   type ProviderDescriptor,
@@ -172,6 +173,12 @@ async function run(): Promise<void> {
     usedPorts.add(portOf(host))
     let client = new CodeTetherClient({ baseUrl: host.baseUrl })
     let providerDescriptors = await requireCapabilities(client)
+    const machines = (await client.listMachines()).machines
+    ensure(
+      machines.length === 1 && machines[0] !== undefined,
+      'machine_missing',
+    )
+    const machineId = machines[0].machineId
     const initialEpoch = host.epoch
 
     const project = await client.createProject({
@@ -190,6 +197,7 @@ async function run(): Promise<void> {
         actionId: actionId(`effort-${effort}`),
         provider: 'claude-code',
         projectId,
+        machineId,
         reasoning: effort,
       })
       ensure(
@@ -221,18 +229,21 @@ async function run(): Promise<void> {
       actionId: actionId('glob-conversation'),
       provider: 'claude-code',
       projectId,
+      machineId,
       reasoning: 'low',
     })
     const grepConversation = await client.createConversation({
       actionId: actionId('grep-conversation'),
       provider: 'claude-code',
       projectId,
+      machineId,
       reasoning: 'low',
     })
     const toolConversation = await client.createConversation({
       actionId: actionId('read-conversation'),
       provider: 'claude-code',
       projectId,
+      machineId,
       reasoning: 'low',
     })
     const globObservation = await runObservedTurn(
@@ -288,11 +299,13 @@ async function run(): Promise<void> {
       actionId: actionId('codex-conversation'),
       provider: 'codex',
       projectId,
+      machineId,
     })
     const claudeMemoryConversation = await client.createConversation({
       actionId: actionId('memory-conversation'),
       provider: 'claude-code',
       projectId,
+      machineId,
       reasoning: 'low',
     })
     await assertMixedProviderReads(
@@ -413,6 +426,7 @@ async function run(): Promise<void> {
     const twoConversations = await createConcurrentConversations(
       client,
       projectId,
+      machineId,
       workspace,
       2,
       'two',
@@ -438,6 +452,7 @@ async function run(): Promise<void> {
       const fourConversations = await createConcurrentConversations(
         client,
         projectId,
+        machineId,
         workspace,
         4,
         'four',
@@ -832,6 +847,7 @@ async function verifyColdOrganization(
 async function createConcurrentConversations(
   client: CodeTetherClient,
   projectId: ProjectId,
+  machineId: MachineId,
   workspace: string,
   count: number,
   label: string,
@@ -845,6 +861,7 @@ async function createConcurrentConversations(
       actionId: actionId(`concurrency-${label}-${index}`),
       provider: 'claude-code',
       projectId,
+      machineId,
       reasoning: 'low',
     })
     values.push({

@@ -2,8 +2,11 @@ import { randomUUID } from 'node:crypto'
 import { basename, parse } from 'node:path'
 
 import {
+  MachineIdSchema,
   ProjectIdSchema,
+  ProjectLocationSchema,
   ProjectRecordSchema,
+  type MachineId,
   type ProjectId,
   type ProjectRecord,
   type Timestamp,
@@ -30,12 +33,14 @@ interface ProjectRegistryOptions {
   readonly workspacePolicy: WorkspacePolicy
   readonly persistence?: ConversationStore
   readonly now: () => Timestamp
+  readonly localMachineId: MachineId
   readonly writeDurable: (operation: () => void) => void
   readonly hasRuntimeConversations: (projectId: ProjectId) => boolean
 }
 
 export interface ProjectConversationReservation {
   readonly project: DurableProject
+  readonly machineId: MachineId
   readonly cwd: string
   readonly release: () => void
 }
@@ -44,16 +49,18 @@ export class ProjectRegistry {
   readonly #workspacePolicy: WorkspacePolicy
   readonly #persistence?: ConversationStore
   readonly #now: () => Timestamp
+  readonly #localMachineId: MachineId
   readonly #writeDurable: (operation: () => void) => void
   readonly #hasRuntimeConversations: (projectId: ProjectId) => boolean
   readonly #projects = new Map<ProjectId, DurableProject>()
-  readonly #projectIdsByRootKey = new Map<string, ProjectId>()
+  readonly #projectIdsByLocationKey = new Map<string, ProjectId>()
   readonly #conversationReservations = new Map<ProjectId, number>()
 
   constructor(options: ProjectRegistryOptions) {
     this.#workspacePolicy = options.workspacePolicy
     this.#persistence = options.persistence
     this.#now = options.now
+    this.#localMachineId = MachineIdSchema.parse(options.localMachineId)
     this.#writeDurable = options.writeDurable
     this.#hasRuntimeConversations = options.hasRuntimeConversations
     for (const project of options.persistence?.listProjects() ?? []) {
@@ -76,7 +83,9 @@ export class ProjectRegistry {
       throw projectPathError(error)
     }
     const { rootPathKey } = normalizeTrustedProjectRoot(rootPath)
-    const existingId = this.#projectIdsByRootKey.get(rootPathKey)
+    const existingId = this.#projectIdsByLocationKey.get(
+      locationKey(this.#localMachineId, rootPathKey),
+    )
     if (existingId !== undefined) {
       return {
         project: await this.get(existingId),
@@ -85,11 +94,18 @@ export class ProjectRegistry {
     }
 
     const timestamp = this.#now()
+    const projectId = newProjectId()
     const project: DurableProject = {
-      projectId: newProjectId(),
+      projectId,
       name: normalizedProjectName(name, rootPath),
-      rootPath,
-      rootPathKey,
+      location: {
+        projectId,
+        machineId: this.#localMachineId,
+        rootPath,
+        rootPathKey,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
       createdAt: timestamp,
       updatedAt: timestamp,
     }
@@ -104,6 +120,22 @@ export class ProjectRegistry {
   async list(): Promise<readonly ProjectRecord[]> {
     return await Promise.all(
       [...this.#projects.values()]
+        .sort(
+          (left, right) =>
+            right.updatedAt.localeCompare(left.updatedAt) ||
+            left.projectId.localeCompare(right.projectId),
+        )
+        .map(async (project) => await this.#record(project)),
+    )
+  }
+
+  async listForMachine(
+    machineId: MachineId,
+  ): Promise<readonly ProjectRecord[]> {
+    const id = MachineIdSchema.parse(machineId)
+    return await Promise.all(
+      [...this.#projects.values()]
+        .filter((project) => project.location.machineId === id)
         .sort(
           (left, right) =>
             right.updatedAt.localeCompare(left.updatedAt) ||
@@ -128,15 +160,23 @@ export class ProjectRegistry {
 
   async authorizeConversation(
     projectId: ProjectId,
+    machineId: MachineId,
     cwd?: string,
   ): Promise<{ readonly project: DurableProject; readonly cwd: string }> {
     const project = this.require(projectId)
+    const machine = MachineIdSchema.parse(machineId)
+    if (project.location.machineId !== machine) {
+      throw new ProjectRegistryError(
+        'unavailable',
+        'Project has no authorized location on the selected Machine',
+      )
+    }
     try {
       return {
         project,
         cwd: await this.#workspacePolicy.authorizeProjectWorkspace(
-          project.rootPath,
-          cwd ?? project.rootPath,
+          project.location.rootPath,
+          cwd ?? project.location.rootPath,
         ),
       }
     } catch (error) {
@@ -152,13 +192,18 @@ export class ProjectRegistry {
 
   async reserveConversationCreation(
     projectId: ProjectId,
+    machineId: MachineId,
     cwd?: string,
   ): Promise<ProjectConversationReservation> {
     const project = this.require(projectId)
     const release = this.#reserveConversation(project)
     try {
-      const workspace = await this.authorizeConversation(project.projectId, cwd)
-      return { ...workspace, release }
+      const workspace = await this.authorizeConversation(
+        project.projectId,
+        machineId,
+        cwd,
+      )
+      return { ...workspace, machineId: project.location.machineId, release }
     } catch (error) {
       release()
       throw error
@@ -171,17 +216,20 @@ export class ProjectRegistry {
    */
   async resolveLegacyConversation(
     cwd: string,
+    machineId: MachineId,
   ): Promise<{ readonly project: DurableProject; readonly cwd: string }> {
     const matches: Array<{
       readonly project: DurableProject
       readonly cwd: string
     }> = []
+    const machine = MachineIdSchema.parse(machineId)
     for (const project of this.#projects.values()) {
+      if (project.location.machineId !== machine) continue
       try {
         matches.push({
           project,
           cwd: await this.#workspacePolicy.authorizeProjectWorkspace(
-            project.rootPath,
+            project.location.rootPath,
             cwd,
           ),
         })
@@ -192,7 +240,8 @@ export class ProjectRegistry {
     }
     matches.sort(
       (left, right) =>
-        right.project.rootPath.length - left.project.rootPath.length,
+        right.project.location.rootPath.length -
+        left.project.location.rootPath.length,
     )
     const match = matches[0]
     if (match === undefined) {
@@ -206,15 +255,21 @@ export class ProjectRegistry {
 
   async reserveLegacyConversationCreation(
     cwd: string,
+    machineId: MachineId,
   ): Promise<ProjectConversationReservation> {
-    const match = await this.resolveLegacyConversation(cwd)
+    const match = await this.resolveLegacyConversation(cwd, machineId)
     const release = this.#reserveConversation(match.project)
     try {
       const workspace = await this.authorizeConversation(
         match.project.projectId,
+        machineId,
         cwd,
       )
-      return { ...workspace, release }
+      return {
+        ...workspace,
+        machineId: match.project.location.machineId,
+        release,
+      }
     } catch (error) {
       release()
       throw error
@@ -243,7 +298,9 @@ export class ProjectRegistry {
       }
     })
     this.#projects.delete(project.projectId)
-    this.#projectIdsByRootKey.delete(project.rootPathKey)
+    this.#projectIdsByLocationKey.delete(
+      locationKey(project.location.machineId, project.location.rootPathKey),
+    )
     return project.projectId
   }
 
@@ -273,28 +330,45 @@ export class ProjectRegistry {
   }
 
   #retain(project: DurableProject): void {
+    const key = locationKey(
+      project.location.machineId,
+      project.location.rootPathKey,
+    )
     if (
       this.#projects.has(project.projectId) ||
-      this.#projectIdsByRootKey.has(project.rootPathKey)
+      this.#projectIdsByLocationKey.has(key)
     ) {
       throw new Error('Durable Project identity is duplicated')
     }
     this.#projects.set(project.projectId, project)
-    this.#projectIdsByRootKey.set(project.rootPathKey, project.projectId)
+    this.#projectIdsByLocationKey.set(key, project.projectId)
   }
 
   async #record(project: DurableProject): Promise<ProjectRecord> {
+    const availability = await this.#workspacePolicy.inspectProjectRoot(
+      project.location.rootPath,
+    )
     return ProjectRecordSchema.parse({
       projectId: project.projectId,
       name: project.name,
-      rootPath: project.rootPath,
-      availability: await this.#workspacePolicy.inspectProjectRoot(
-        project.rootPath,
-      ),
+      locations: [
+        ProjectLocationSchema.parse({
+          projectId: project.projectId,
+          machineId: project.location.machineId,
+          rootPath: project.location.rootPath,
+          availability,
+          createdAt: project.location.createdAt,
+          updatedAt: project.location.updatedAt,
+        }),
+      ],
       createdAt: project.createdAt,
       updatedAt: project.updatedAt,
     })
   }
+}
+
+function locationKey(machineId: MachineId, rootPathKey: string): string {
+  return JSON.stringify([MachineIdSchema.parse(machineId), rootPathKey])
 }
 
 function newProjectId(): ProjectId {

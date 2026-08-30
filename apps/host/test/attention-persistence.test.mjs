@@ -12,6 +12,7 @@ import {
   reconcileHostRestart,
 } from '../dist/persistence/index.js'
 import { normalizeTrustedProjectRoot } from '../dist/project-path.js'
+import { downgradeMachineFoundationToVersionSeven } from './fixtures/machine-foundation-v7.mjs'
 
 const projectId = 'proj_attention01'
 const otherProjectId = 'proj_attention02'
@@ -25,6 +26,7 @@ test('migration 004 creates an empty Attention index without backfilling durable
   withFixture(({ databasePath, store, workspace }) => {
     seedConversationGraph(store, workspace)
     store.close()
+    downgradeMachineFoundationToVersionSeven(databasePath)
 
     const v3 = new DatabaseSync(databasePath)
     v3.exec(`
@@ -55,7 +57,7 @@ test('migration 004 creates an empty Attention index without backfilling durable
 
     const migrated = ConversationStore.open({ databasePath })
     assert.equal(migrated.schemaVersion, currentSchemaVersion)
-    assert.equal(currentSchemaVersion, 7)
+    assert.equal(currentSchemaVersion, 8)
     assert.equal(migrated.listProjects().length, 1)
     assert.equal(migrated.listConversations().length, 1)
     assert.equal(migrated.countTurns(conversationId), 1)
@@ -442,20 +444,31 @@ function seedConversationGraph(store, workspace, options = {}) {
 
 function createProject(store, id, rootPath) {
   const root = normalizeTrustedProjectRoot(rootPath)
+  const [machine] = store.listMachines()
+  assert.ok(machine)
   store.createProject({
     projectId: id,
     name: id,
-    rootPath: root.rootPath,
-    rootPathKey: root.rootPathKey,
+    location: {
+      projectId: id,
+      machineId: machine.machineId,
+      rootPath: root.rootPath,
+      rootPathKey: root.rootPathKey,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    },
     createdAt: timestamp,
     updatedAt: timestamp,
   })
 }
 
 function createConversation(store, id, ownerProjectId, cwd) {
+  const [machine] = store.listMachines()
+  assert.ok(machine)
   store.createConversation({
     conversationId: id,
     projectId: ownerProjectId,
+    machineId: machine.machineId,
     title: 'Attention',
     provider: 'codex',
     providerThreadId: `provider-${id}`,

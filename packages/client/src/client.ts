@@ -16,6 +16,7 @@ import {
   CreateProjectResponseSchema,
   DeleteProjectRequestSchema,
   DeleteProjectResponseSchema,
+  GetMachineResponseSchema,
   GetProjectResponseSchema,
   GetConversationResponseSchema,
   HostSnapshotSchema,
@@ -23,10 +24,12 @@ import {
   InterruptTurnResponseSchema,
   LastEventIdSchema,
   ListAttentionQuerySchema,
+  ListMachinesResponseSchema,
   ListProjectsResponseSchema,
   ListProjectConversationsQuerySchema,
   PinConversationRequestSchema,
   PinConversationResponseSchema,
+  MachineIdSchema,
   ProjectIdSchema,
   ResolveApprovalRequestSchema,
   ResolveApprovalResponseSchema,
@@ -59,6 +62,7 @@ import {
   type CreateProjectResponse,
   type DeleteProjectRequest,
   type DeleteProjectResponse,
+  type GetMachineResponse,
   type GetProjectResponse,
   type GetConversationResponse,
   type HostSnapshot,
@@ -66,8 +70,10 @@ import {
   type InterruptTurnResponse,
   type LastEventId,
   type ListAttentionQuery,
+  type ListMachinesResponse,
   type ListProjectsResponse,
   type ListProjectConversationsQuery,
+  type MachineId,
   type ProjectId,
   type PinConversationRequest,
   type PinConversationResponse,
@@ -178,6 +184,35 @@ export class CodeTetherClient {
       method: 'GET',
       signal: options.signal,
     })
+  }
+
+  async listMachines(
+    options: RequestOptions = {},
+  ): Promise<ListMachinesResponse> {
+    return await this.#request('/api/v1/machines', ListMachinesResponseSchema, {
+      method: 'GET',
+      signal: options.signal,
+    })
+  }
+
+  async getMachine(
+    machineId: MachineId,
+    options: RequestOptions = {},
+  ): Promise<GetMachineResponse> {
+    const machine = parseProtocol(MachineIdSchema, machineId, 'get-machine id')
+    const response = await this.#request(
+      `/api/v1/machines/${encodeURIComponent(machine)}`,
+      GetMachineResponseSchema,
+      {
+        method: 'GET',
+        signal: options.signal,
+      },
+    )
+    assertProtocolIdentity(
+      response.machine.machineId === machine,
+      'Machine response does not match the requested Machine',
+    )
+    return response
   }
 
   async listProjects(
@@ -466,12 +501,27 @@ export class CodeTetherClient {
       input,
       'create-conversation request',
     )
-    return await this.#request(
+    const response = await this.#request(
       '/api/v1/conversations',
       CreateConversationResponseSchema,
       jsonRequest(request, options.signal),
       request.actionId,
     )
+    assertProtocolIdentity(
+      response.data.conversation.machineId === request.machineId,
+      'Create Conversation response does not match the requested Machine',
+    )
+    assertProtocolIdentity(
+      response.data.conversation.provider === request.provider,
+      'Create Conversation response does not match the requested Provider',
+    )
+    if ('projectId' in request) {
+      assertProtocolIdentity(
+        response.data.conversation.projectId === request.projectId,
+        'Create Conversation response does not match the requested Project',
+      )
+    }
+    return response
   }
 
   async renameConversation(

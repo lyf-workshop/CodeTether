@@ -146,6 +146,10 @@ async function run(): Promise<void> {
     const firstHostLaunchMs = performance.now() - firstLaunchStartedAt
     const initialEpoch = host.epoch
     const client = await requireLiveClient(host)
+    const machines = (await client.listMachines()).machines
+    assert.equal(machines.length, 1)
+    const localMachine = machines[0]
+    assert.ok(localMachine !== undefined)
 
     const project = await client.createProject({
       actionId: actionId('project'),
@@ -156,6 +160,7 @@ async function run(): Promise<void> {
       actionId: actionId('conversation'),
       provider: 'codex',
       projectId: project.data.project.projectId,
+      machineId: localMachine.machineId,
     })
     const conversationId = conversation.data.conversation.conversationId
     const stream = await client.connectEvents()

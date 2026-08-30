@@ -8,6 +8,7 @@ import {
   Copy,
   FolderOpen,
   MessageSquare,
+  Monitor,
   Plus,
   RefreshCw,
   ShieldCheck,
@@ -15,7 +16,7 @@ import {
   TriangleAlert,
 } from 'lucide-react'
 
-import { Button, IconButton, Separator, cn } from '@codetether/ui'
+import { Button, IconButton, MachineBadge, Separator, cn } from '@codetether/ui'
 import {
   ProjectIdSchema,
   type ProjectId,
@@ -27,6 +28,8 @@ import {
   useHostRuntime,
 } from '../../runtime/host/host-runtime-hooks'
 import { projectDetailQueryOptions } from '../../runtime/host/project-query'
+import { machineListQueryOptions } from '../../runtime/host/machine-query'
+import { soleProjectLocation } from '../../runtime/host/project-location'
 import { projectDetailViewState } from '../../runtime/host/project-view-state'
 import { ProjectAvailabilityBadge } from './project-availability-badge'
 import { ProjectsErrorState, ProjectsLoadingState } from './project-page-states'
@@ -62,6 +65,10 @@ function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
   )
   const projectQuery = useQuery({
     ...projectDetailQueryOptions(runtime, projectId),
+    enabled: connectionState === 'connected',
+  })
+  const machinesQuery = useQuery({
+    ...machineListQueryOptions(runtime),
     enabled: connectionState === 'connected',
   })
   const viewState = projectDetailViewState(projectQuery)
@@ -106,6 +113,12 @@ function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
   }
 
   const project = viewState.project
+  const location = soleProjectLocation(project)
+  const availability = location?.availability ?? 'unavailable'
+  const machine = (machinesQuery.data ?? []).find(
+    (candidate) => candidate.machineId === location?.machineId,
+  )
+  const rootPath = location?.rootPath
 
   function handleRemoveOpenChange(open: boolean) {
     setRemoveOpen(open)
@@ -117,7 +130,8 @@ function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
   async function handleCopyRootPath() {
     try {
       if (navigator.clipboard === undefined) throw new Error('unavailable')
-      await navigator.clipboard.writeText(project.rootPath)
+      if (rootPath === undefined) throw new Error('unavailable')
+      await navigator.clipboard.writeText(rootPath)
       setCopyState('copied')
     } catch {
       setCopyState('failed')
@@ -143,39 +157,48 @@ function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
             >
               {project.name}
             </h1>
-            <ProjectAvailabilityBadge availability={project.availability} />
+            <ProjectAvailabilityBadge availability={availability} />
+            {machine === undefined ? null : (
+              <MachineBadge
+                name={machine.displayName}
+                title={machine.displayName}
+                className="h-6"
+              />
+            )}
           </div>
-          <div className="mt-1 flex min-w-0 max-w-2xl items-center gap-2 text-sm text-text-secondary">
-            <FolderOpen aria-hidden="true" className="size-3.5 shrink-0" />
-            <span className="shrink-0 font-medium text-text-primary">
-              {projectFolderName(project.rootPath)}
-            </span>
-            <span
-              title={project.rootPath}
-              className="min-w-0 truncate font-mono text-xs"
-            >
-              {compactProjectPath(project.rootPath)}
-            </span>
-            <IconButton
-              type="button"
-              variant="ghost"
-              size="sm"
-              label={copyState === 'copied' ? '路径已复制' : '复制完整路径'}
-              className="size-7 shrink-0 text-text-muted hover:text-text-primary"
-              onClick={() => void handleCopyRootPath()}
-            >
-              {copyState === 'copied' ? (
-                <Check aria-hidden="true" />
-              ) : (
-                <Copy aria-hidden="true" />
-              )}
-            </IconButton>
-            {copyState === 'failed' ? (
-              <span role="alert" className="shrink-0 text-xs text-danger">
-                复制失败
+          {rootPath === undefined ? null : (
+            <div className="mt-1 flex min-w-0 max-w-2xl items-center gap-2 text-sm text-text-secondary">
+              <FolderOpen aria-hidden="true" className="size-3.5 shrink-0" />
+              <span className="shrink-0 font-medium text-text-primary">
+                {projectFolderName(rootPath)}
               </span>
-            ) : null}
-          </div>
+              <span
+                title={rootPath}
+                className="min-w-0 truncate font-mono text-xs"
+              >
+                {compactProjectPath(rootPath)}
+              </span>
+              <IconButton
+                type="button"
+                variant="ghost"
+                size="sm"
+                label={copyState === 'copied' ? '路径已复制' : '复制完整路径'}
+                className="size-7 shrink-0 text-text-muted hover:text-text-primary"
+                onClick={() => void handleCopyRootPath()}
+              >
+                {copyState === 'copied' ? (
+                  <Check aria-hidden="true" />
+                ) : (
+                  <Copy aria-hidden="true" />
+                )}
+              </IconButton>
+              {copyState === 'failed' ? (
+                <span role="alert" className="shrink-0 text-xs text-danger">
+                  复制失败
+                </span>
+              ) : null}
+            </div>
+          )}
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -194,9 +217,9 @@ function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
               <Button
                 size="sm"
                 className="h-9"
-                disabled={project.availability === 'unavailable'}
+                disabled={availability === 'unavailable'}
                 title={
-                  project.availability === 'unavailable'
+                  availability === 'unavailable'
                     ? '项目目录当前不可用'
                     : undefined
                 }
@@ -219,7 +242,7 @@ function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
         </div>
       </header>
 
-      {project.availability === 'unavailable' ? (
+      {availability === 'unavailable' ? (
         <section
           role="status"
           className="mt-6 flex min-w-0 items-start gap-3 rounded-md border border-warning/30 bg-warning-muted/45 px-4 py-3.5"
@@ -241,8 +264,12 @@ function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
       ) : null}
 
       <div className="mt-6 grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_18rem]">
-        <WorkspaceInformation project={project} />
-        <ProjectAvailabilityPanel project={project} />
+        <WorkspaceInformation
+          project={project}
+          rootPath={rootPath}
+          machineName={machine?.displayName}
+        />
+        <ProjectAvailabilityPanel availability={availability} />
       </div>
 
       {connectionState === 'reconnecting' ? (
@@ -267,7 +294,15 @@ function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
   )
 }
 
-function WorkspaceInformation({ project }: { project: ProjectRecord }) {
+function WorkspaceInformation({
+  machineName,
+  project,
+  rootPath,
+}: {
+  machineName?: string
+  project: ProjectRecord
+  rootPath?: string
+}) {
   return (
     <section className="min-w-0 rounded-lg border border-border bg-surface/65 p-5">
       <div className="flex items-start gap-3">
@@ -292,13 +327,20 @@ function WorkspaceInformation({ project }: { project: ProjectRecord }) {
       <dl className="grid min-w-0 gap-x-6 gap-y-5 md:grid-cols-2">
         <MetadataItem label="项目名称" value={project.name} />
         <MetadataItem
-          label="根目录"
-          value={compactProjectPath(project.rootPath)}
-          title={project.rootPath}
-          mono
-          wide
-          icon={<FolderOpen aria-hidden="true" />}
+          label="运行位置"
+          value={machineName ?? '机器信息不可用'}
+          icon={<Monitor aria-hidden="true" />}
         />
+        {rootPath === undefined ? null : (
+          <MetadataItem
+            label="根目录"
+            value={compactProjectPath(rootPath)}
+            title={rootPath}
+            mono
+            wide
+            icon={<FolderOpen aria-hidden="true" />}
+          />
+        )}
         <MetadataItem
           label="创建时间"
           value={formatProjectTime(project.createdAt)}
@@ -314,8 +356,12 @@ function WorkspaceInformation({ project }: { project: ProjectRecord }) {
   )
 }
 
-function ProjectAvailabilityPanel({ project }: { project: ProjectRecord }) {
-  const available = project.availability === 'available'
+function ProjectAvailabilityPanel({
+  availability,
+}: {
+  availability: 'available' | 'unavailable'
+}) {
+  const available = availability === 'available'
 
   return (
     <section className="rounded-lg border border-border bg-surface/65 p-5">
@@ -323,7 +369,7 @@ function ProjectAvailabilityPanel({ project }: { project: ProjectRecord }) {
         <h2 className="text-section font-semibold text-text-primary">
           访问状态
         </h2>
-        <ProjectAvailabilityBadge availability={project.availability} />
+        <ProjectAvailabilityBadge availability={availability} />
       </div>
       <p className="mt-3 text-sm font-regular text-text-secondary">
         {available

@@ -21,8 +21,8 @@ test('rebuilds the latest bounded durable Conversation detail without Provider s
   withDatabase((databasePath) => {
     const store = ConversationStore.open({ databasePath })
     const workspace = resolve(databasePath, '..', 'workspace')
-    seedProject(store, workspace)
-    store.createConversation(conversation(conversationId, workspace))
+    const machineId = seedProject(store, workspace)
+    store.createConversation(conversation(conversationId, machineId, workspace))
 
     for (let index = 0; index < 25; index += 1) {
       store.createTurn(durableTurn(index))
@@ -108,9 +108,11 @@ test('restores an active durable Turn and pending Approval without reconciling i
   withDatabase((databasePath) => {
     const store = ConversationStore.open({ databasePath })
     const workspace = resolve(databasePath, '..', 'workspace')
-    seedProject(store, workspace)
+    const machineId = seedProject(store, workspace)
     store.createConversation(
-      conversation(waitingConversationId, workspace, { status: 'waiting' }),
+      conversation(waitingConversationId, machineId, workspace, {
+        status: 'waiting',
+      }),
     )
     const timestamp = timestampFor(0)
     const turnId = 'turn_durable_waiting'
@@ -182,10 +184,10 @@ test('keeps failed local history readable without a Provider Thread identity', (
   withDatabase((databasePath) => {
     const store = ConversationStore.open({ databasePath })
     const workspace = resolve(databasePath, '..', 'workspace')
-    seedProject(store, workspace)
+    const machineId = seedProject(store, workspace)
     const failedConversationId = 'conv_durable_no_provider'
     store.createConversation(
-      conversation(failedConversationId, workspace, {
+      conversation(failedConversationId, machineId, workspace, {
         providerThreadId: undefined,
         status: 'failed',
       }),
@@ -327,21 +329,30 @@ function expiredApproval(index, turnId, itemId, timestamp) {
 function seedProject(store, workspace) {
   const root = normalizeTrustedProjectRoot(workspace)
   const timestamp = timestampFor(0)
+  const machineId = store.listMachines()[0].machineId
   store.createProject({
     projectId,
     name: 'Durable Detail',
-    rootPath: root.rootPath,
-    rootPathKey: root.rootPathKey,
+    location: {
+      projectId,
+      machineId,
+      rootPath: root.rootPath,
+      rootPathKey: root.rootPathKey,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    },
     createdAt: timestamp,
     updatedAt: timestamp,
   })
+  return machineId
 }
 
-function conversation(id, cwd, overrides = {}) {
+function conversation(id, machineId, cwd, overrides = {}) {
   const timestamp = timestampFor(0)
   return {
     conversationId: id,
     projectId,
+    machineId,
     title: 'Durable Detail',
     provider: 'codex',
     providerThreadId: `provider-thread-${id}`,

@@ -66,6 +66,7 @@ import {
 } from './conversation-page-states'
 import { NewConversationDialog } from './new-conversation-dialog'
 import { ProjectSummary } from './project-summary'
+import { projectLocationAvailability } from '../../runtime/host/project-location'
 import { useDebouncedSearchQuery } from './use-debounced-search-query'
 
 interface ConversationsPageProps {
@@ -455,7 +456,7 @@ function ConversationSearchReadyContent({
         ) : null}
       </div>
 
-      {project.availability === 'unavailable' ? (
+      {projectLocationAvailability(project) === 'unavailable' ? (
         <ProjectUnavailableNotice />
       ) : null}
 
@@ -572,7 +573,7 @@ function ConversationReadyContent({
         />
       </div>
 
-      {project.availability === 'unavailable' ? (
+      {projectLocationAvailability(project) === 'unavailable' ? (
         <ProjectUnavailableNotice />
       ) : null}
 
@@ -779,7 +780,9 @@ function ConversationToolbar({
             currentProject={project}
             trigger={
               <NewConversationButton
-                disabled={project.availability === 'unavailable'}
+                disabled={
+                  projectLocationAvailability(project) === 'unavailable'
+                }
               />
             }
           />
@@ -833,7 +836,7 @@ function ConversationOrganizationEmptyState({
             >
               返回活跃会话
             </Button>
-          ) : project.availability === 'available' ? (
+          ) : projectLocationAvailability(project) === 'available' ? (
             <NewConversationDialog
               currentProject={project}
               trigger={<NewConversationButton />}

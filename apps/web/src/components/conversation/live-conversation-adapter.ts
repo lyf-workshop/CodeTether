@@ -59,6 +59,7 @@ export function createLiveConversationDetailSource(
   bootstrap?: Bootstrap,
   projectAvailability: ProjectAvailability = 'available',
   projectRootPath?: string,
+  machineName?: string,
 ): ConversationDetailSourceViewModel {
   const controlConnectionState =
     projectAvailability === 'available' ? connectionState : 'unavailable'
@@ -68,8 +69,9 @@ export function createLiveConversationDetailSource(
       bootstrap,
       controlConnectionState,
       projectRootPath,
+      machineName,
     ),
-    rail: createLiveConversationRailViewModel(summaries, model),
+    rail: createLiveConversationRailViewModel(summaries, model, machineName),
     connectionIndicator:
       projectAvailability === 'available'
         ? connectionIndicator(connectionState)
@@ -80,6 +82,7 @@ export function createLiveConversationDetailSource(
 export function createLiveConversationRailViewModel(
   summaries: readonly ConversationSummary[],
   current: ConversationReadModel,
+  machineName?: string,
 ): ConversationDetailSourceViewModel['rail'] {
   const activeSummaries = summaries.filter(
     (summary) =>
@@ -97,6 +100,7 @@ export function createLiveConversationRailViewModel(
           archivedAt: current.archivedAt,
           status: current.status,
           lastActivity: formatActivityTime(current.lastActivityAt),
+          ...(machineName === undefined ? {} : { machine: machineName }),
           provider: current.provider,
         }
 
@@ -123,6 +127,7 @@ export function createLiveConversationRailViewModel(
               : { archivedAt: summary.archivedAt }),
             status: selected ? current.status : summary.status,
             lastActivity: formatActivityTime(summary.lastActivityAt),
+            ...(machineName === undefined ? {} : { machine: machineName }),
             provider: summary.provider,
           }
         }),
@@ -138,6 +143,7 @@ export function createLiveConversationViewModel(
   bootstrap?: Bootstrap,
   connectionState: HostConnectionState = 'unavailable',
   projectRootPath?: string,
+  machineName = '机器',
 ): ConversationViewModel {
   const presentationRoot = model.cwd ?? projectRootPath
   const files = model.changes.map((change) =>
@@ -181,7 +187,7 @@ export function createLiveConversationViewModel(
         : provider.capabilities.approvals
           ? '由 CodeTether 管理'
           : '不支持审批',
-    machine: '本地电脑',
+    machine: machineName,
     branch: '未提供',
     duration: formatDuration(
       model.currentTurn?.startedAt,

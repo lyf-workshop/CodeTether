@@ -591,12 +591,19 @@ async function testCrashRecovery(dataDirectory) {
       typeof projectId === 'string' && projectId.startsWith('proj_'),
       'Crash recovery Project creation returned no public identity',
     )
+    const machines = await apiJson('/api/v1/machines')
+    const machine = machines.machines?.[0]
+    ensure(
+      machines.machines?.length === 1 && typeof machine?.machineId === 'string',
+      'Crash recovery requires exactly one local Machine',
+    )
     const createdConversation = await apiJson('/api/v1/conversations', {
       method: 'POST',
       body: {
         actionId: 'act_phase4g2_crash_conversation01',
         provider: 'codex',
         projectId,
+        machineId: machine.machineId,
       },
     })
     const conversationId =
@@ -651,7 +658,8 @@ async function testCrashRecovery(dataDirectory) {
     )
     ensure(
       restoredConversation.conversation?.conversationId === conversationId &&
-        restoredConversation.conversation?.projectId === projectId,
+        restoredConversation.conversation?.projectId === projectId &&
+        restoredConversation.conversation?.machineId === machine.machineId,
       'Crash recovery restart did not restore the durable Conversation',
     )
     const restartedPid = restarted.child.pid

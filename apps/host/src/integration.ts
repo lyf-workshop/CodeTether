@@ -59,6 +59,11 @@ async function run(): Promise<void> {
 
   try {
     const client = new CodeTetherClient({ baseUrl: host.baseUrl })
+    const machines = (await client.listMachines()).machines
+    assert.equal(machines.length, 1)
+    const localMachine = machines[0]
+    assert.ok(localMachine !== undefined)
+    const machineId = localMachine.machineId
     const bootstrap = await client.bootstrap()
     const initialSnapshot = await client.snapshot()
     assert.equal(bootstrap.epoch, initialSnapshot.epoch)
@@ -90,6 +95,7 @@ async function run(): Promise<void> {
       actionId: actionId('create-primary'),
       provider: 'codex',
       projectId: primaryProject.data.project.projectId,
+      machineId,
     })
     const conversationId = conversation.data.conversation.conversationId
     const firstTurn = await client.startTurn(conversationId, {
@@ -177,6 +183,7 @@ async function run(): Promise<void> {
       actionId: actionId('create-approval'),
       provider: 'codex',
       projectId: approvalProject.data.project.projectId,
+      machineId,
     })
     const approvalConversationId =
       approvalConversation.data.conversation.conversationId
@@ -223,6 +230,7 @@ async function run(): Promise<void> {
       actionId: actionId('create-interrupt'),
       provider: 'codex',
       projectId: primaryProject.data.project.projectId,
+      machineId,
     })
     const interruptConversationId =
       interruptConversation.data.conversation.conversationId

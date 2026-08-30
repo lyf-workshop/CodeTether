@@ -821,7 +821,7 @@ Exit gate:
 
 ## Phase 5B — Claude Code Capability Expansion
 
-**Status:** current approved implementation scope; not yet accepted, frozen, or READY.
+**Status:** accepted and frozen at `5dac13c`.
 
 Implementation scope:
 
@@ -842,20 +842,32 @@ Not included:
 Exit gate:
 
 - The public capability matrix matches real installed Claude Code behavior, real effort choices and richer Tool normalization pass, unsupported capabilities have explicit evidence-based reasons, repeated resume/concurrency/mixed-Provider/background flows are truthful, Codex and installed Desktop regressions pass, all process/port cleanup succeeds, and the working tree ends clean in one coherent commit.
-- REAL, SIMULATED, UNSUPPORTED, and NOT OBSERVED evidence remain distinct. Phase 5B is not accepted or frozen until Owner review.
+- REAL, SIMULATED, UNSUPPORTED, and NOT OBSERVED evidence remain distinct. Owner acceptance freezes the evidence-driven capability matrix at `5dac13c`: streaming, native resume, Read, Search/Glob/Grep, Tool events, and native effort control are supported; Edit/Write, Shell, Diff, interrupt, Approval, and model selection remain intentionally unsupported.
 
-## Phase 6 — Machines
+## Phase 6A — Durable Machine Foundation
 
-**Goal:** model and operate more than one trusted machine coherently.
+**Status:** current approved implementation scope; not yet accepted, frozen, or READY.
 
-Planned outcomes:
+**Goal:** make Machine a durable first-class execution identity while retaining exactly one truthful local Windows Machine.
 
-- Stable machine identity and capability/availability status.
-- Project locations and conversations associated with machines.
-- Clear offline, reconnecting, incompatible, and unavailable states.
-- Machine trust and authorization foundations.
+Implementation scope:
 
-Exit gate: users can understand which trusted machine owns a project or conversation and safely target supported operations.
+- SQLite migration 008 creates one random durable `machine_*` local identity, moves the existing authorized root out of the logical Project into a Machine-scoped `project_locations` row, and backfills every Conversation with the same required immutable `machine_id` without changing Provider/session, Turn, Attention, Search, or organization identity.
+- Protocol v1 and the typed Client add strict Machine list/detail reads. The public Machine record contains only a safe display name, local kind, platform, architecture, availability, timestamps, and implemented CodeTether-level capabilities; it contains no hardware fingerprint, hostname, user, network address, process identity, or command surface.
+- Machine and Provider registries remain separate. The Host composes Provider descriptors for the selected Machine, requires an available Project Location and Provider when creating a Conversation, and keeps the existing ordinary Provider-neutral create/Turn APIs.
+- Every new Conversation request supplies `projectId`, `machineId`, and Provider. Both Machine and Provider are immutable after creation. Existing data migrates to the canonical local Machine, and cold reads, Search, organization, Project reads, and Machine detail do not hydrate or resume a Provider.
+- `/machines` and `/machines/:machineId` show only real local metadata, actual Providers, registered Projects, and bounded recent Conversations. New Conversation preselects the sole eligible Machine but submits its real identity; Project and Conversation surfaces display the Machine without a switch control.
+- Machine identity survives ordinary Host/Desktop restart, Windows reboot, and update through the retained data root. Deleting the data root is explicitly a new-install identity boundary. Phase 6A adds no native capability and does not alter the accepted Phase 4G lifecycle.
+
+Not included:
+
+- SSH, remote transport/control, pairing, trust exchange, LAN/mDNS discovery, relay, incoming listener, remote filesystem/Terminal/shell, port forwarding, synchronization, Wake-on-LAN, or fake remote Machine records.
+- Machine add/remove/rename, a second Project Location, Project relocation, moving an existing Conversation between Machines, resource monitoring, heartbeat/telemetry loops, or a third Provider.
+
+Exit gate:
+
+- Exactly one stable local Machine exists after migration/restart; every Project has its preserved local Location; every existing/new Conversation has the correct immutable Machine; mixed Codex/Claude execution, native resume, Search/organization/Attention, cold isolation, and frozen background behavior remain correct.
+- The real Machines UI and explicit New Conversation binding use Host truth, the clean installed Desktop retains Machine identity and cleans up all owned processes/listeners, evidence is classified truthfully, and the working tree ends clean in one coherent commit.
 
 ## Phase 7 — Remote LAN / Tailscale
 

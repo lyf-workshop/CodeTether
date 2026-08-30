@@ -85,6 +85,11 @@ async function run(): Promise<void> {
     host = firstLaunch.host
     const firstEpoch = host.epoch
     let client = await requireLiveClient(host)
+    const machines = (await client.listMachines()).machines
+    assert.equal(machines.length, 1)
+    const localMachine = machines[0]
+    assert.ok(localMachine !== undefined)
+    const machineId = localMachine.machineId
 
     const project = await client.createProject({
       actionId: actionId('project'),
@@ -96,6 +101,7 @@ async function run(): Promise<void> {
       actionId: actionId('marker-conversation'),
       provider: 'codex',
       projectId,
+      machineId,
     })
     const markerConversationId =
       markerConversation.data.conversation.conversationId
@@ -148,6 +154,7 @@ async function run(): Promise<void> {
         actionId: actionId(`filler-${String(index)}`),
         provider: 'codex',
         projectId,
+        machineId,
       })
     }
 

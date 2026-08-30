@@ -20,6 +20,7 @@ import { HostRuntime } from '../.tmp/test-dist/runtime/host/host-runtime.js'
 
 const projectId = 'proj_shell01'
 const conversationId = 'conv_shell01'
+const machineId = 'machine_local01'
 
 test('durable Conversation detail query isolates identity and forwards cancellation', async () => {
   const calls = []
@@ -46,7 +47,7 @@ test('durable Conversation detail query isolates identity and forwards cancellat
   ])
 })
 
-test('new Conversation request defaults to Codex and remains Project-scoped', async () => {
+test('new Conversation request remains Project and Machine scoped', async () => {
   const calls = []
   const actions = new NewConversationActions(
     {
@@ -58,18 +59,21 @@ test('new Conversation request defaults to Codex and remains Project-scoped', as
     idFactory(),
   )
 
-  const first = await actions.createConversation(projectId)
-  const second = await actions.createConversation(projectId)
+  const options = { machineId, provider: 'codex' }
+  const first = await actions.createConversation(projectId, options)
+  const second = await actions.createConversation(projectId, options)
 
   assert.equal(first.data.conversation.conversationId, conversationId)
   assert.deepEqual(calls, [
     {
       actionId: 'act_conversation_001',
+      machineId,
       provider: 'codex',
       projectId,
     },
     {
       actionId: 'act_conversation_002',
+      machineId,
       provider: 'codex',
       projectId,
     },
@@ -93,6 +97,7 @@ test('new Conversation request carries the selected durable Provider and model',
   )
 
   await actions.createConversation(projectId, {
+    machineId,
     provider: 'claude-code',
     model: 'claude-sonnet-real',
     reasoning: 'low',
@@ -101,6 +106,7 @@ test('new Conversation request carries the selected durable Provider and model',
   assert.deepEqual(calls, [
     {
       actionId: 'act_conversation_001',
+      machineId,
       provider: 'claude-code',
       projectId,
       model: 'claude-sonnet-real',
@@ -152,7 +158,10 @@ test('HostRuntime exposes thin durable index and Search reads and owns create id
     archive: 'all',
     limit: 25,
   })
-  await runtime.createConversation(projectId)
+  await runtime.createConversation(projectId, {
+    machineId,
+    provider: 'codex',
+  })
 
   assert.deepEqual(calls.list, [
     {
@@ -169,6 +178,7 @@ test('HostRuntime exposes thin durable index and Search reads and owns create id
   ])
   assert.deepEqual(calls.create[0], {
     actionId: calls.create[0].actionId,
+    machineId,
     provider: 'codex',
     projectId,
   })
@@ -190,22 +200,26 @@ test('double submit shares one request while a conflicting Project fails explici
     idFactory(),
   )
 
-  const first = actions.createConversation(projectId)
-  const duplicate = actions.createConversation(projectId)
+  const options = { machineId, provider: 'codex' }
+  const first = actions.createConversation(projectId, options)
+  const duplicate = actions.createConversation(projectId, options)
   assert.strictEqual(duplicate, first)
   await assert.rejects(
-    actions.createConversation('proj_second01'),
+    actions.createConversation('proj_second01', options),
     ConversationCreationBusyError,
   )
   await assert.rejects(
-    actions.createConversation(projectId, { provider: 'claude-code' }),
+    actions.createConversation(projectId, {
+      machineId,
+      provider: 'claude-code',
+    }),
     ConversationCreationBusyError,
   )
   assert.equal(calls.length, 1)
 
   deferred.resolve(createResponse(calls[0].actionId, projectId))
   await first
-  await actions.createConversation('proj_second01')
+  await actions.createConversation('proj_second01', options)
   assert.equal(calls.length, 2)
   assert.notEqual(calls[0].actionId, calls[1].actionId)
 })
@@ -221,7 +235,23 @@ test('created Conversation identity must remain bound to the requested Project',
   )
 
   await assert.rejects(
-    actions.createConversation(projectId),
+    actions.createConversation(projectId, { machineId, provider: 'codex' }),
+    CodeTetherProtocolError,
+  )
+})
+
+test('created Conversation identity must remain bound to the requested Machine', async () => {
+  const actions = new NewConversationActions(
+    {
+      async createConversation(request) {
+        return createResponse(request.actionId, projectId, 'machine_other01')
+      },
+    },
+    idFactory(),
+  )
+
+  await assert.rejects(
+    actions.createConversation(projectId, { machineId, provider: 'codex' }),
     CodeTetherProtocolError,
   )
 })
@@ -252,7 +282,11 @@ test('new Conversation errors use safe product copy', () => {
   assert.equal(newConversationErrorMessage(runtime).includes('stderr'), false)
 })
 
-function createResponse(actionId, responseProjectId) {
+function createResponse(
+  actionId,
+  responseProjectId,
+  responseMachineId = machineId,
+) {
   const timestamp = '2026-08-27T12:00:00.000Z'
   return {
     protocolVersion: 1,
@@ -262,6 +296,7 @@ function createResponse(actionId, responseProjectId) {
       conversation: {
         conversationId,
         projectId: responseProjectId,
+        machineId: responseMachineId,
         title: '新会话',
         provider: 'codex',
         cwd: 'C:\\workspace',
@@ -281,6 +316,7 @@ function detail(id) {
     conversation: {
       conversationId: id,
       projectId,
+      machineId,
       title: '真实会话',
       provider: 'codex',
       status: 'idle',

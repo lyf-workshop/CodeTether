@@ -13,6 +13,7 @@ import {
   normalizeManualConversationTitle,
 } from '../dist/persistence/index.js'
 import { normalizeTrustedProjectRoot } from '../dist/project-path.js'
+import { downgradeMachineFoundationToVersionSeven } from './fixtures/machine-foundation-v7.mjs'
 
 const projectId = 'proj_organization01'
 const baseTime = '2026-08-28T12:00:00.000Z'
@@ -31,10 +32,12 @@ test('migration 005 backfills generated organization metadata and preserves the 
     downgradeToV4(databasePath)
 
     const migrated = ConversationStore.open({ databasePath })
-    assert.equal(currentSchemaVersion, 7)
-    assert.equal(migrated.schemaVersion, 7)
+    const migratedMachineId = migrated.listMachines()[0].machineId
+    assert.equal(currentSchemaVersion, 8)
+    assert.equal(migrated.schemaVersion, 8)
     assert.deepEqual(migrated.getConversation(created.conversationId), {
       ...created,
+      machineId: migratedMachineId,
       titleSource: 'generated',
     })
     assert.equal(migrated.countTurns(created.conversationId), 1)
@@ -429,11 +432,19 @@ function withFixture(operation) {
 
 function createProject(store, workspace) {
   const root = normalizeTrustedProjectRoot(workspace)
+  const [machine] = store.listMachines()
+  assert.ok(machine)
   store.createProject({
     projectId,
     name: 'Organization fixture',
-    rootPath: root.rootPath,
-    rootPathKey: root.rootPathKey,
+    location: {
+      projectId,
+      machineId: machine.machineId,
+      rootPath: root.rootPath,
+      rootPathKey: root.rootPathKey,
+      createdAt: baseTime,
+      updatedAt: baseTime,
+    },
     createdAt: baseTime,
     updatedAt: baseTime,
   })
@@ -441,9 +452,12 @@ function createProject(store, workspace) {
 
 function seedConversation(store, workspace, index, overrides = {}) {
   const timestamp = timeAt(index)
+  const [machine] = store.listMachines()
+  assert.ok(machine)
   const conversation = {
     conversationId: `conv_organization_${String(index).padStart(4, '0')}`,
     projectId,
+    machineId: machine.machineId,
     title: `Conversation ${String(index)}`,
     titleSource: 'generated',
     provider: 'codex',
@@ -490,6 +504,7 @@ function attention(conversationId, type, index) {
 }
 
 function downgradeToV4(databasePath) {
+  downgradeMachineFoundationToVersionSeven(databasePath)
   const database = new DatabaseSync(databasePath)
   database.exec(`
     DROP TRIGGER trg_conversation_search_input_update;

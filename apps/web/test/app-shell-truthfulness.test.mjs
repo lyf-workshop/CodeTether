@@ -7,7 +7,7 @@ const componentDirectory = new URL(
   import.meta.url,
 )
 
-test('Primary Sidebar does not present fixture Machines as live product state', async () => {
+test('Primary Sidebar presents only the real Machines route', async () => {
   const source = await readFile(
     new URL('primary-sidebar.tsx', componentDirectory),
     'utf8',
@@ -15,7 +15,8 @@ test('Primary Sidebar does not present fixture Machines as live product state', 
 
   assert.doesNotMatch(source, /machinePresences|showMockMachines/u)
   assert.doesNotMatch(source, /MacBook Pro|开发服务器|树莓派设备/u)
-  assert.doesNotMatch(source, /to: '\/(?:activity|agents|machines)'/u)
+  assert.doesNotMatch(source, /to: '\/(?:activity|agents)'/u)
+  assert.match(source, /to: '\/machines'/u)
   assert.doesNotMatch(source, /agentDefinitions\.(?:claude|opencode)/u)
   assert.match(source, /agentProviders\.map/u)
   assert.match(source, /provider\.availabilityLabel/u)
@@ -85,7 +86,8 @@ test('Project detail keeps implementation identity out of its primary surface', 
   )
 
   assert.doesNotMatch(source, /label="项目标识"/u)
-  assert.match(source, /compactProjectPath\(project\.rootPath\)/u)
-  assert.match(source, /projectFolderName\(project\.rootPath\)/u)
+  assert.match(source, /compactProjectPath\(rootPath\)/u)
+  assert.match(source, /projectFolderName\(rootPath\)/u)
+  assert.match(source, /label="运行位置"/u)
   assert.match(source, /复制完整路径/u)
 })

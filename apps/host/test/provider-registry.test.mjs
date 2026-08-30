@@ -128,16 +128,20 @@ test('routes mixed Conversations through Provider-scoped sessions and failures',
   try {
     await service.registerInitialProjectRoots([workspace])
     const project = (await service.listProjects()).projects[0]
+    const machine = service.listMachines().machines[0]
     assert.ok(project)
+    assert.ok(machine)
 
     const codexConversation = await service.createConversation({
       actionId: 'act_mixed_codex_create',
       projectId: project.projectId,
+      machineId: machine.machineId,
       provider: 'codex',
     })
     const claudeConversation = await service.createConversation({
       actionId: 'act_mixed_claude_create',
       projectId: project.projectId,
+      machineId: machine.machineId,
       provider: 'claude-code',
     })
     assert.equal(codexConversation.data.conversation.provider, 'codex')
@@ -196,6 +200,7 @@ test('routes mixed Conversations through Provider-scoped sessions and failures',
       service.createConversation({
         actionId: 'act_mixed_capacity',
         projectId: project.projectId,
+        machineId: machine.machineId,
         provider: 'codex',
       }),
       (error) =>
@@ -227,10 +232,13 @@ test('marks a restarted zero-Turn Provider session as not materialized', async (
     })
     await firstService.registerInitialProjectRoots([workspace])
     projectId = (await firstService.listProjects()).projects[0].projectId
+    const machine = firstService.listMachines().machines[0]
+    assert.ok(machine)
     conversationId = (
       await firstService.createConversation({
         actionId: 'act_zero_turn_restart_create',
         projectId,
+        machineId: machine.machineId,
         provider: 'claude-code',
       })
     ).data.conversation.conversationId
@@ -279,14 +287,18 @@ test('marks an evicted zero-Turn Provider session as not materialized', async ()
   try {
     await service.registerInitialProjectRoots([workspace])
     const projectId = (await service.listProjects()).projects[0].projectId
+    const machine = service.listMachines().machines[0]
+    assert.ok(machine)
     const first = await service.createConversation({
       actionId: 'act_zero_turn_evict_first',
       projectId,
+      machineId: machine.machineId,
       provider: 'claude-code',
     })
     await service.createConversation({
       actionId: 'act_zero_turn_evict_second',
       projectId,
+      machineId: machine.machineId,
       provider: 'claude-code',
     })
     await service.startTurn(first.data.conversation.conversationId, {

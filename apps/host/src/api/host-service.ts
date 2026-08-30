@@ -15,10 +15,13 @@ import {
   EpochIdSchema,
   formatLastEventId,
   GetConversationResponseSchema,
+  GetMachineResponseSchema,
   HostEventSchema,
   HostEventEnvelopeSchema,
   ListAttentionQuerySchema,
+  ListMachinesResponseSchema,
   ProjectIdSchema,
+  MachineIdSchema,
   ListProjectConversationsQuerySchema,
   protocolVersion,
   TimestampSchema,
@@ -48,15 +51,19 @@ import {
   type DeleteProjectRequest,
   type DeleteProjectResponse,
   type GetProjectResponse,
+  type GetMachineResponse,
   type GetConversationResponse,
   type InterruptTurnRequest,
   type InterruptTurnResponse,
   type ListProjectsResponse,
+  type ListMachinesResponse,
   type ListAttentionQuery,
   type ListProjectConversationsQuery,
+  type MachineSummary,
   type PinConversationRequest,
   type PinConversationResponse,
   type ProjectId,
+  type MachineId,
   type ProviderDescriptor,
   type RenameConversationRequest,
   type RenameConversationResponse,
@@ -118,6 +125,7 @@ import {
 import { HostEventPublisher } from './host-event-publisher.js'
 import type { ReplayResetReason } from './host-event-replay-buffer.js'
 import type { ConversationState, TurnState } from './host-service-state.js'
+import { MachineRegistry, MachineRegistryError } from './machine-registry.js'
 import {
   ProjectRegistry,
   ProjectRegistryError,
@@ -159,6 +167,8 @@ export interface HostServiceOptions {
   readonly maxConversations?: number
   readonly persistence?: ConversationStore
   readonly persistenceFlushMs?: number
+  /** True only for the Desktop-owned sidecar assembly. */
+  readonly desktopManaged?: boolean
 }
 
 /** Runtime authority for live state, optionally backed by durable normalized snapshots. */
@@ -177,6 +187,7 @@ export class HostService {
   readonly #providerEventTranslator: ProviderEventTranslator
   readonly #maxConversations: number
   readonly #persistence?: ConversationStore
+  readonly #machines: MachineRegistry
   readonly #projects: ProjectRegistry
   readonly #persistenceFlushMs: number
   readonly #dirtyTurns = new Map<TurnId, ConversationId>()
@@ -222,12 +233,26 @@ export class HostService {
       DEFAULT_PERSISTENCE_FLUSH_MS,
       'persistenceFlushMs',
     )
+    this.#machines = new MachineRegistry({
+      ...(this.#persistence === undefined
+        ? {}
+        : { persistence: this.#persistence }),
+      now: () => TimestampSchema.parse(this.#timestamp()),
+      capabilities: {
+        projectAccess: true,
+        providerExecution: true,
+        backgroundRuntime: options.desktopManaged === true,
+        nativeFolderPicker: options.desktopManaged === true,
+        notifications: options.desktopManaged === true,
+      },
+    })
     this.#projects = new ProjectRegistry({
       workspacePolicy: this.#workspacePolicy,
       ...(this.#persistence === undefined
         ? {}
         : { persistence: this.#persistence }),
       now: () => TimestampSchema.parse(this.#timestamp()),
+      localMachineId: this.#machines.localMachineId(),
       writeDurable: (operation) => this.#writeDurable(operation),
       hasRuntimeConversations: (projectId) =>
         [...this.#conversations.values()].some(
@@ -335,6 +360,46 @@ export class HostService {
         streaming: codex?.capabilities.streaming ?? true,
       },
       providers: this.#providerDescriptors(),
+    }
+  }
+
+  listMachines(): ListMachinesResponse {
+    return ListMachinesResponseSchema.parse({
+      protocolVersion,
+      machines: this.#machines.list(),
+    })
+  }
+
+  async getMachine(machineId: MachineId): Promise<GetMachineResponse> {
+    try {
+      const machine = this.#machines.get(MachineIdSchema.parse(machineId))
+      const projects = await this.#projects.listForMachine(machine.machineId)
+      const conversations =
+        this.#persistence === undefined
+          ? [...this.#conversations.values()]
+              .map((state) => state.record)
+              .filter(
+                (conversation) =>
+                  conversation.machineId === machine.machineId &&
+                  conversation.status !== undefined,
+              )
+              .map(conversationSummary)
+              .sort(
+                (left, right) =>
+                  right.lastActivityAt.localeCompare(left.lastActivityAt) ||
+                  left.conversationId.localeCompare(right.conversationId),
+              )
+              .slice(0, 100)
+          : this.#persistence.listMachineConversations(machine.machineId, 100)
+      return GetMachineResponseSchema.parse({
+        protocolVersion,
+        machine,
+        providers: this.#providerDescriptorsForMachine(machine.machineId),
+        projects,
+        conversations,
+      })
+    } catch (error) {
+      throw machineServiceError(error)
     }
   }
 
@@ -743,9 +808,24 @@ export class HostService {
       'conversation.create',
       request,
       async () => {
+        let machine: MachineSummary
+        try {
+          machine = this.#machines.requireAvailable(request.machineId)
+        } catch (error) {
+          throw machineServiceError(error)
+        }
+        const machineProvider = this.#providerDescriptorsForMachine(
+          machine.machineId,
+        ).find((descriptor) => descriptor.provider === request.provider)
+        if (
+          machineProvider === undefined ||
+          machineProvider.availability !== 'available'
+        ) {
+          throw providerUnavailableError(request.provider, machineProvider)
+        }
         const runtime = this.#requireProviderRuntime(request.provider)
         assertProviderConfiguration(
-          this.#providers.descriptor(request.provider),
+          machineProvider,
           request.model,
           request.reasoning,
         )
@@ -760,6 +840,7 @@ export class HostService {
             const creatingConversation: DurableConversation = {
               conversationId,
               projectId,
+              machineId: machine.machineId,
               title: DEFAULT_CONVERSATION_TITLE,
               titleSource: 'generated',
               provider: request.provider,
@@ -831,6 +912,7 @@ export class HostService {
               record = ConversationRecordSchema.parse({
                 conversationId,
                 projectId,
+                machineId: machine.machineId,
                 title: DEFAULT_CONVERSATION_TITLE,
                 titleSource: 'generated',
                 provider: request.provider,
@@ -950,12 +1032,26 @@ export class HostService {
         }
         const conversationProvider =
           durableConversation?.provider ?? runtimeConversation?.provider
+        const conversationMachineId =
+          durableConversation?.machineId ?? runtimeConversation?.machineId
         if (conversationProvider === undefined) {
           throw new HostServiceError(
             'not_found',
             'Conversation was not found',
             404,
           )
+        }
+        if (conversationMachineId === undefined) {
+          throw new HostServiceError(
+            'runtime_unavailable',
+            'Conversation has no durable Machine identity',
+            503,
+          )
+        }
+        try {
+          this.#machines.requireAvailable(conversationMachineId)
+        } catch (error) {
+          throw machineServiceError(error)
         }
         this.#assertRuntimeAvailable(conversationProvider)
         const releaseRuntimePin =
@@ -996,6 +1092,7 @@ export class HostService {
           authorizedCwd = (
             await this.#projects.authorizeConversation(
               projectId,
+              conversation.record.machineId,
               conversation.record.cwd,
             )
           ).cwd
@@ -2124,6 +2221,7 @@ export class HostService {
     return {
       conversationId: conversation.record.conversationId,
       projectId: ProjectIdSchema.parse(conversation.record.projectId),
+      machineId: MachineIdSchema.parse(conversation.record.machineId),
       title: conversation.record.title ?? DEFAULT_CONVERSATION_TITLE,
       titleSource: conversation.record.titleSource ?? 'generated',
       ...(conversation.record.pinnedAt === undefined
@@ -2231,8 +2329,14 @@ export class HostService {
   ): Promise<ProjectConversationReservation> {
     try {
       return 'projectId' in request
-        ? await this.#projects.reserveConversationCreation(request.projectId)
-        : await this.#projects.reserveLegacyConversationCreation(request.cwd)
+        ? await this.#projects.reserveConversationCreation(
+            request.projectId,
+            request.machineId,
+          )
+        : await this.#projects.reserveLegacyConversationCreation(
+            request.cwd,
+            request.machineId,
+          )
     } catch (error) {
       throw projectServiceError(error)
     }
@@ -2476,6 +2580,13 @@ export class HostService {
       )
   }
 
+  #providerDescriptorsForMachine(
+    machineId: MachineId,
+  ): readonly ProviderDescriptor[] {
+    this.#machines.requireAvailable(machineId)
+    return this.#providerDescriptors()
+  }
+
   #assertRuntimeAvailable(provider?: AgentProvider): void {
     if (provider === undefined) {
       if (!this.#runtimeAvailable()) throw runtimeUnavailableError()
@@ -2537,6 +2648,7 @@ function conversationSummary(
   return ConversationSummarySchema.parse({
     conversationId: record.conversationId,
     projectId: record.projectId,
+    machineId: record.machineId,
     title: record.title,
     titleSource: record.titleSource,
     ...(record.pinnedAt === undefined ? {} : { pinnedAt: record.pinnedAt }),
@@ -2747,6 +2859,16 @@ function providerUnavailableError(
 
 function providerDisplayName(provider: AgentProvider): string {
   return provider === 'codex' ? 'Codex' : 'Claude Code'
+}
+
+function machineServiceError(error: unknown): Error {
+  if (error instanceof HostServiceError) return error
+  if (!(error instanceof MachineRegistryError)) {
+    return error instanceof Error ? error : new Error(String(error))
+  }
+  return error.code === 'not_found'
+    ? new HostServiceError('not_found', error.message, 404)
+    : new HostServiceError('runtime_unavailable', error.message, 503)
 }
 
 function projectServiceError(error: unknown): Error {

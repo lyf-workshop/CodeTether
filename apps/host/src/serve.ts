@@ -24,6 +24,7 @@ async function main(): Promise<void> {
       allowedOrigins: arguments_.origins,
       hostVersion,
       port: arguments_.port,
+      desktopManaged,
     })
     if (!lifecycle.isRequested) {
       process.stdout.write(

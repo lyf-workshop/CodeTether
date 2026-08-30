@@ -23,11 +23,13 @@ import {
   DeleteProjectRequestSchema,
   DeleteProjectResponseSchema,
   GetConversationResponseSchema,
+  GetMachineResponseSchema,
   GetProjectResponseSchema,
   HostSnapshotSchema,
   InterruptTurnRequestSchema,
   InterruptTurnResponseSchema,
   ListAttentionQuerySchema,
+  ListMachinesResponseSchema,
   ResolveApprovalRequestSchema,
   ResolveApprovalResponseSchema,
   ResolveAttentionRequestSchema,
@@ -36,6 +38,7 @@ import {
   ListProjectConversationsQuerySchema,
   PinConversationRequestSchema,
   PinConversationResponseSchema,
+  MachineIdSchema,
   ProjectIdSchema,
   RenameConversationRequestSchema,
   RenameConversationResponseSchema,
@@ -242,6 +245,15 @@ export class LocalHttpServer {
         )
         return
       }
+      if (request.method === 'GET' && url.pathname === '/api/v1/machines') {
+        this.#http.writeJson(
+          response,
+          200,
+          ListMachinesResponseSchema.parse(this.#service.listMachines()),
+          context.allowedOrigin,
+        )
+        return
+      }
       if (request.method === 'GET' && url.pathname === '/api/v1/attention') {
         const query = this.#http.parseValidatedQuery(
           url.searchParams,
@@ -353,6 +365,26 @@ export class LocalHttpServer {
           )
           return
         }
+      }
+      const machineRoute = this.#http.matchPath(
+        url.pathname,
+        /^\/api\/v1\/machines\/([^/]+)$/u,
+      )
+      if (request.method === 'GET' && machineRoute !== undefined) {
+        const machineId = this.#http.parseRouteId(
+          MachineIdSchema,
+          machineRoute[0],
+          'machineId',
+        )
+        this.#http.writeJson(
+          response,
+          200,
+          GetMachineResponseSchema.parse(
+            await this.#service.getMachine(machineId),
+          ),
+          context.allowedOrigin,
+        )
+        return
       }
       if (
         request.method === 'POST' &&

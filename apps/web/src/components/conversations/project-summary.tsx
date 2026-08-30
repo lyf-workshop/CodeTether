@@ -8,6 +8,10 @@ import {
   compactProjectPath,
   projectFolderName,
 } from '../projects/project-format'
+import {
+  projectLocationAvailability,
+  projectLocationRootPath,
+} from '../../runtime/host/project-location'
 
 interface ProjectSummaryProps {
   project: ProjectRecord
@@ -42,7 +46,8 @@ export function ProjectSummary({
   summary,
   totalLabel = '全部会话',
 }: ProjectSummaryProps) {
-  const available = project.availability === 'available'
+  const available = projectLocationAvailability(project) === 'available'
+  const rootPath = projectLocationRootPath(project)
   const AvailabilityIcon = available ? CircleCheck : TriangleAlert
 
   return (
@@ -58,17 +63,19 @@ export function ProjectSummary({
         >
           {project.name}
         </h2>
-        <p
-          title={project.rootPath}
-          className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-text-secondary"
-        >
-          <span className="shrink-0 font-medium text-text-primary">
-            {projectFolderName(project.rootPath)}
-          </span>
-          <span className="min-w-0 truncate font-mono">
-            {compactProjectPath(project.rootPath)}
-          </span>
-        </p>
+        {rootPath === undefined ? null : (
+          <p
+            title={rootPath}
+            className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-text-secondary"
+          >
+            <span className="shrink-0 font-medium text-text-primary">
+              {projectFolderName(rootPath)}
+            </span>
+            <span className="min-w-0 truncate font-mono">
+              {compactProjectPath(rootPath)}
+            </span>
+          </p>
+        )}
       </div>
 
       <dl className="contents">

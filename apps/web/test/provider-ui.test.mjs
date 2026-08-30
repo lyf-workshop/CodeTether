@@ -173,7 +173,8 @@ test('existing UI surfaces consume Provider truth without adding a switch to Det
     ),
   ])
 
-  assert.match(dialog, /providerPresentations\(runtime\.bootstrap\)/u)
+  assert.match(dialog, /providerPresentationsForMachine\(/u)
+  assert.match(dialog, /machineDetailQuery\.data\?\.providers/u)
   assert.match(dialog, /disabled=\{!provider\.available\}/u)
   assert.match(dialog, /capabilities\.modelSelection/u)
   assert.match(dialog, /capabilities\.reasoningControl/u)

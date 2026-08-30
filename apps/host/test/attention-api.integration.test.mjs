@@ -646,6 +646,7 @@ async function startHarness({ workspace, databasePath }) {
   })
   await service.registerInitialProjectRoots([workspace])
   const projectId = (await service.listProjects()).projects[0].projectId
+  const machineId = (await service.listMachines()).machines[0].machineId
   const events = []
   const unsubscribe = publisher.subscribe((event) => events.push(event))
   const server = new LocalHttpServer({
@@ -659,6 +660,7 @@ async function startHarness({ workspace, databasePath }) {
     baseUrl,
     workspace,
     projectId,
+    machineId,
     runtime,
     publisher,
     service,
@@ -680,6 +682,7 @@ async function createStartedConversation(harness, suffix, text) {
     actionId: `act_attention_create_${suffix}`,
     provider: 'codex',
     projectId: harness.projectId,
+    machineId: harness.machineId,
   })
   assert.equal(created.status, 201)
   const conversationId = created.body.data.conversation.conversationId

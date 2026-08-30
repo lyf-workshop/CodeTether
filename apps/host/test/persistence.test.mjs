@@ -110,6 +110,8 @@ test('migration 002 backfills shared Projects and preserves v1 Conversation and 
     const store = ConversationStore.open({ databasePath })
     assert.equal(store.schemaVersion, currentSchemaVersion)
     const projects = store.listProjects()
+    const [machine] = store.listMachines()
+    assert.ok(machine)
     assert.equal(projects.length, 2)
     assert.ok(
       projects.every((project) =>
@@ -118,9 +120,11 @@ test('migration 002 backfills shared Projects and preserves v1 Conversation and 
     )
 
     const firstProject = store.getProjectByRootPathKey(
+      machine.machineId,
       normalizeTrustedProjectRoot(firstRoot).rootPathKey,
     )
     const secondProject = store.getProjectByRootPathKey(
+      machine.machineId,
       normalizeTrustedProjectRoot(secondRoot).rootPathKey,
     )
     assert.ok(firstProject)
@@ -181,7 +185,7 @@ test('migration 002 preserves a normalized absolute Project path that is current
 
     const store = ConversationStore.open({ databasePath })
     const [project] = store.listProjects()
-    assert.equal(project.rootPath, missingRoot)
+    assert.equal(project.location.rootPath, missingRoot)
     assert.equal(store.getConversation('conv_missingroot01').cwd, missingRoot)
     store.close()
   })
@@ -312,14 +316,17 @@ test('enables foreign keys, WAL, and the configured busy timeout', () => {
 test('persists Conversation and normalized Turn snapshots across reopen', () => {
   withDatabase((databasePath) => {
     const store = ConversationStore.open({ databasePath })
-    store.createProject(project())
-    store.createConversation(conversation())
+    store.createProject(project(store))
+    store.createConversation(conversation(store))
     store.createTurn(turn(1, { messages: [{ text: 'first answer' }] }))
     store.createTurn(turn(2, { tools: [{ title: '读取文件' }] }))
     store.close()
 
     const reopened = ConversationStore.open({ databasePath })
-    assert.deepEqual(reopened.getConversation(conversationId), conversation())
+    assert.deepEqual(
+      reopened.getConversation(conversationId),
+      conversation(reopened),
+    )
     assert.equal(reopened.countTurns(conversationId), 2)
     assert.deepEqual(reopened.listTurns(conversationId), [
       turn(1, { messages: [{ text: 'first answer' }] }),
@@ -335,11 +342,14 @@ test('persists Conversation and normalized Turn snapshots across reopen', () => 
 test('updates lifecycle records, reports incomplete Turns, and cascades deletion', () => {
   withDatabase((databasePath) => {
     const store = ConversationStore.open({ databasePath })
-    store.createProject(project())
+    store.createProject(project(store))
     store.createConversation(
-      conversation({ providerThreadId: undefined, status: 'creating' }),
+      conversation(store, {
+        providerThreadId: undefined,
+        status: 'creating',
+      }),
     )
-    store.updateConversation(conversation())
+    store.updateConversation(conversation(store))
     store.createTurn(turn(1, { phase: 'starting' }, { status: 'starting' }))
     store.createTurn(turn(2, { phase: 'done' }))
 
@@ -367,11 +377,11 @@ test('updates lifecycle records, reports incomplete Turns, and cascades deletion
 test('rolls back explicit transactions and rejects use after close', () => {
   withDatabase((databasePath) => {
     const store = ConversationStore.open({ databasePath })
-    store.createProject(project())
+    store.createProject(project(store))
     assert.throws(
       () =>
         store.runInTransaction(() => {
-          store.createConversation(conversation())
+          store.createConversation(conversation(store))
           throw new Error('rollback marker')
         }),
       /rollback marker/,
@@ -466,11 +476,14 @@ test('store connection enforces Conversation foreign keys for Turns', () => {
 test('persists Project CRUD, canonical key uniqueness, and Conversation counts', () => {
   withDatabase((databasePath) => {
     const store = ConversationStore.open({ databasePath })
-    const created = project()
+    const created = project(store)
     store.createProject(created)
     assert.deepEqual(store.getProject(projectId), created)
     assert.deepEqual(
-      store.getProjectByRootPathKey(created.rootPathKey),
+      store.getProjectByRootPathKey(
+        created.location.machineId,
+        created.location.rootPathKey,
+      ),
       created,
     )
     assert.deepEqual(store.listProjects(), [created])
@@ -488,19 +501,23 @@ test('persists Project CRUD, canonical key uniqueness, and Conversation counts',
         store.createProject({
           ...created,
           projectId: 'proj_duplicate01',
+          location: {
+            ...created.location,
+            projectId: 'proj_duplicate01',
+          },
         }),
-      /UNIQUE constraint failed: projects\.root_path_key/,
+      /UNIQUE constraint failed: project_locations\.machine_id, project_locations\.root_path_key/,
     )
     assert.throws(
       () =>
         store.createConversation({
-          ...conversation(),
+          ...conversation(store),
           projectId: 'proj_missingproject01',
         }),
       /FOREIGN KEY constraint failed/,
     )
 
-    store.createConversation(conversation())
+    store.createConversation(conversation(store))
     assert.equal(store.countConversationsForProject(projectId), 1)
     assert.throws(
       () => store.deleteProject(projectId),
@@ -523,10 +540,11 @@ test('corrupt database open fails without replacing user bytes', () => {
   })
 })
 
-function conversation(overrides = {}) {
+function conversation(store, overrides = {}) {
   return {
     conversationId,
     projectId,
+    machineId: store.listMachines()[0].machineId,
     title: '新会话',
     titleSource: 'generated',
     provider: 'codex',
@@ -542,13 +560,20 @@ function conversation(overrides = {}) {
   }
 }
 
-function project(overrides = {}) {
+function project(store, overrides = {}) {
   const root = normalizeTrustedProjectRoot(workspaceRoot)
+  const machineId = store.listMachines()[0].machineId
   return {
     projectId,
     name: basename(root.rootPath),
-    rootPath: root.rootPath,
-    rootPathKey: root.rootPathKey,
+    location: {
+      projectId,
+      machineId,
+      rootPath: root.rootPath,
+      rootPathKey: root.rootPathKey,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    },
     createdAt: timestamp,
     updatedAt: timestamp,
     ...overrides,

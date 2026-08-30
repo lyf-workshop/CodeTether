@@ -67,10 +67,12 @@ test('local Host assembly generates a new epoch and restores its API snapshot fr
     )
     const projects = await getJson(first.baseUrl, '/api/v1/projects')
     const projectId = projects.body.projects[0].projectId
+    const machineId = await getSoleMachineId(first.baseUrl)
     const created = await postJson(first.baseUrl, '/api/v1/conversations', {
       actionId: 'act_http_restart_create',
       provider: 'codex',
       projectId,
+      machineId,
     })
     const conversationId = created.body.data.conversation.conversationId
     const started = await postJson(
@@ -162,10 +164,12 @@ test('starts a read-only durable API when the Codex executable is unavailable', 
     )
     const projects = await getJson(seeded.baseUrl, '/api/v1/projects')
     const projectId = projects.body.projects[0].projectId
+    const machineId = await getSoleMachineId(seeded.baseUrl)
     const created = await postJson(seeded.baseUrl, '/api/v1/conversations', {
       actionId: 'act_readonly_seed01',
       provider: 'codex',
       projectId,
+      machineId,
     })
     const conversationId = created.body.data.conversation.conversationId
     await seeded.close()
@@ -240,10 +244,12 @@ test('restores durable Project authorization and fails safely while its root is 
     )
     const firstClient = await getJson(first.baseUrl, '/api/v1/projects')
     const projectId = firstClient.body.projects[0].projectId
+    const machineId = await getSoleMachineId(first.baseUrl)
     const created = await postJson(first.baseUrl, '/api/v1/conversations', {
       actionId: 'act_project_restart_create',
       provider: 'codex',
       projectId,
+      machineId,
     })
     const conversationId = created.body.data.conversation.conversationId
     await first.close()
@@ -261,7 +267,10 @@ test('restores durable Project authorization and fails safely while its root is 
 
     const unavailable = await getJson(second.baseUrl, '/api/v1/projects')
     assert.equal(unavailable.body.projects[0].projectId, projectId)
-    assert.equal(unavailable.body.projects[0].availability, 'unavailable')
+    assert.equal(
+      unavailable.body.projects[0].locations[0].availability,
+      'unavailable',
+    )
     const history = await getJson(second.baseUrl, '/api/v1/snapshot')
     assert.equal(history.body.conversations[0].conversationId, conversationId)
     assert.equal(history.body.conversations[0].projectId, projectId)
@@ -282,7 +291,10 @@ test('restores durable Project authorization and fails safely while its root is 
     await rename(movedWorkspace, workspace)
     workspaceMoved = false
     const restored = await getJson(second.baseUrl, '/api/v1/projects')
-    assert.equal(restored.body.projects[0].availability, 'available')
+    assert.equal(
+      restored.body.projects[0].locations[0].availability,
+      'available',
+    )
     const resumed = await postJson(
       second.baseUrl,
       `/api/v1/conversations/${conversationId}/turns`,
@@ -365,6 +377,7 @@ test('serves bootstrap, snapshot, and idempotent mutations with a fake runtime',
     const createBody = {
       actionId: 'act_create01',
       provider: 'codex',
+      machineId: harness.machineId,
       cwd: harness.workspace,
       model: 'gpt-5',
       reasoning: 'high',
@@ -453,7 +466,7 @@ test('serves durable Project identity and creates Conversations by projectId', a
     assert.equal(initial.status, 200)
     assert.equal(initial.body.projects.length, 1)
     const rootProject = initial.body.projects[0]
-    assert.equal(rootProject.availability, 'available')
+    assert.equal(rootProject.locations[0].availability, 'available')
 
     const created = await postJson(harness.baseUrl, '/api/v1/projects', {
       actionId: 'act_project_create01',
@@ -490,6 +503,7 @@ test('serves durable Project identity and creates Conversations by projectId', a
         actionId: 'act_project_conversation01',
         provider: 'codex',
         projectId: rootProject.projectId,
+        machineId: harness.machineId,
       },
     )
     assert.equal(conversation.status, 201)
@@ -497,7 +511,10 @@ test('serves durable Project identity and creates Conversations by projectId', a
       conversation.body.data.conversation.projectId,
       rootProject.projectId,
     )
-    assert.equal(conversation.body.data.conversation.cwd, rootProject.rootPath)
+    assert.equal(
+      conversation.body.data.conversation.cwd,
+      rootProject.locations[0].rootPath,
+    )
 
     const conflict = await deleteJson(
       harness.baseUrl,
@@ -534,6 +551,7 @@ test('serves a strict Project-scoped durable Conversation index', async () => {
       actionId: 'act_index_create01',
       provider: 'codex',
       projectId,
+      machineId: harness.machineId,
     })
     const conversationId = created.body.data.conversation.conversationId
 
@@ -733,6 +751,7 @@ test('serves strict Project-scoped durable Conversation search without provider 
         actionId: 'act_search_input_create01',
         provider: 'codex',
         projectId,
+        machineId: harness.machineId,
       },
     )
     const inputConversationId = inputMatch.body.data.conversation.conversationId
@@ -763,6 +782,7 @@ test('serves strict Project-scoped durable Conversation search without provider 
         actionId: 'act_search_title_create01',
         provider: 'codex',
         projectId,
+        machineId: harness.machineId,
       },
     )
     const titleConversationId = titleMatch.body.data.conversation.conversationId
@@ -782,6 +802,7 @@ test('serves strict Project-scoped durable Conversation search without provider 
         actionId: 'act_search_archive_create01',
         provider: 'codex',
         projectId,
+        machineId: harness.machineId,
       },
     )
     const archivedConversationId =
@@ -814,6 +835,7 @@ test('serves strict Project-scoped durable Conversation search without provider 
         actionId: 'act_search_other_create01',
         provider: 'codex',
         projectId: otherProject.body.data.project.projectId,
+        machineId: harness.machineId,
       },
     )
     await patchJson(
@@ -1021,6 +1043,7 @@ test('serves one durable Conversation detail without exposing Provider state', a
       actionId: 'act_detail_create01',
       provider: 'codex',
       projectId,
+      machineId: harness.machineId,
     })
     const conversationId = created.body.data.conversation.conversationId
     await postJson(
@@ -1140,6 +1163,7 @@ test('rejects invalid Project paths and unknown Project identities safely', asyn
         actionId: 'act_project_invalidconv01',
         provider: 'codex',
         projectId: 'proj_unknown01',
+        machineId: harness.machineId,
       },
     )
     assert.equal(invalidConversation.status, 404)
@@ -1156,6 +1180,7 @@ test('replays SSE, targets a wrong-epoch reset, and isolates live clients', asyn
     const created = await postJson(harness.baseUrl, '/api/v1/conversations', {
       actionId: 'act_create02',
       provider: 'codex',
+      machineId: harness.machineId,
       cwd: harness.workspace,
     })
     const conversationId = created.body.data.conversation.conversationId
@@ -1235,6 +1260,7 @@ test('uses snapshot sequence zero as a race-free initial replay cursor', async (
     await postJson(harness.baseUrl, '/api/v1/conversations', {
       actionId: 'act_seqzero01',
       provider: 'codex',
+      machineId: harness.machineId,
       cwd: harness.workspace,
     })
 
@@ -1385,6 +1411,7 @@ test('resolves a bound approval and interrupts a bound active turn', async () =>
     const created = await postJson(harness.baseUrl, '/api/v1/conversations', {
       actionId: 'act_create03',
       provider: 'codex',
+      machineId: harness.machineId,
       cwd: harness.workspace,
     })
     const conversationId = created.body.data.conversation.conversationId
@@ -1518,6 +1545,7 @@ test('returns safe provider_unavailable responses after a fatal runtime signal',
     const response = await postJson(harness.baseUrl, '/api/v1/conversations', {
       actionId: 'act_runtimefatal01',
       provider: 'codex',
+      machineId: harness.machineId,
       cwd: harness.workspace,
     })
 
@@ -1563,6 +1591,7 @@ test('server shutdown drains an admitted mutation before closing Host state', as
       actionId: 'act_http_shutdown_drain',
       provider: 'codex',
       projectId,
+      machineId: harness.machineId,
     })
     await providerStarted
 
@@ -1696,6 +1725,8 @@ async function createHarness(options = {}) {
         }),
   })
   await service.registerInitialProjectRoots([workspace])
+  const machine = service.listMachines().machines[0]
+  assert.ok(machine)
   const server = new LocalHttpServer({
     service,
     allowedOrigins: options.allowedOrigins ?? ['http://localhost:5173'],
@@ -1714,6 +1745,7 @@ async function createHarness(options = {}) {
     publisher,
     runtime,
     service,
+    machineId: machine.machineId,
     workspace,
     close: async () => {
       if (closed) return
@@ -1729,6 +1761,13 @@ async function createHarness(options = {}) {
 
 async function getJson(baseUrl, path, headers = {}) {
   return await requestJson(baseUrl, path, { headers })
+}
+
+async function getSoleMachineId(baseUrl) {
+  const response = await getJson(baseUrl, '/api/v1/machines')
+  assert.equal(response.status, 200)
+  assert.equal(response.body.machines.length, 1)
+  return response.body.machines[0].machineId
 }
 
 async function postJson(baseUrl, path, body) {

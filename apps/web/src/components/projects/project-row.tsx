@@ -10,13 +10,15 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
   IconButton,
+  MachineBadge,
   Tooltip,
   TooltipContent,
   TooltipTrigger,
   cn,
 } from '@codetether/ui'
-import type { ProjectRecord } from '@codetether/protocol'
+import type { MachineSummary, ProjectRecord } from '@codetether/protocol'
 
+import { soleProjectLocation } from '../../runtime/host/project-location'
 import { ProjectAvailabilityBadge } from './project-availability-badge'
 import {
   compactProjectPath,
@@ -30,11 +32,14 @@ interface ProjectRowProps {
     returnFocusTarget: HTMLElement | null,
   ) => void
   project: ProjectRecord
+  machine?: MachineSummary
 }
 
-export function ProjectRow({ onRemove, project }: ProjectRowProps) {
+export function ProjectRow({ machine, onRemove, project }: ProjectRowProps) {
   const menuTriggerRef = useRef<HTMLButtonElement>(null)
   const initial = Array.from(project.name)[0]?.toLocaleUpperCase('zh-CN') ?? 'P'
+  const location = soleProjectLocation(project)
+  const availability = location?.availability ?? 'unavailable'
 
   return (
     <article
@@ -48,7 +53,7 @@ export function ProjectRow({ onRemove, project }: ProjectRowProps) {
         aria-hidden="true"
         className={cn(
           'grid size-11 shrink-0 place-items-center rounded-md border text-base font-semibold',
-          project.availability === 'available'
+          availability === 'available'
             ? 'border-primary/35 bg-primary-muted text-primary'
             : 'border-border-strong bg-surface-muted text-text-muted',
         )}
@@ -61,31 +66,42 @@ export function ProjectRow({ onRemove, project }: ProjectRowProps) {
           <h2 className="min-w-0 truncate text-section font-semibold text-text-primary">
             {project.name}
           </h2>
-          <ProjectAvailabilityBadge availability={project.availability} />
+          <ProjectAvailabilityBadge availability={availability} />
         </div>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <p className="mt-1.5 flex min-w-0 items-center gap-2 text-sm text-text-secondary">
-              <span className="shrink-0 font-medium text-text-primary">
-                {projectFolderName(project.rootPath)}
-              </span>
-              <span className="min-w-0 truncate font-mono text-xs">
-                {compactProjectPath(project.rootPath)}
-              </span>
-            </p>
-          </TooltipTrigger>
-          <TooltipContent
-            side="bottom"
-            className="max-w-xl break-all font-mono"
-          >
-            {project.rootPath}
-          </TooltipContent>
-        </Tooltip>
+        {location === undefined ? (
+          <p className="mt-1.5 text-sm text-warning">工作区位置不可用</p>
+        ) : (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <p className="mt-1.5 flex min-w-0 items-center gap-2 text-sm text-text-secondary">
+                <span className="shrink-0 font-medium text-text-primary">
+                  {projectFolderName(location.rootPath)}
+                </span>
+                <span className="min-w-0 truncate font-mono text-xs">
+                  {compactProjectPath(location.rootPath)}
+                </span>
+              </p>
+            </TooltipTrigger>
+            <TooltipContent
+              side="bottom"
+              className="max-w-xl break-all font-mono"
+            >
+              {location.rootPath}
+            </TooltipContent>
+          </Tooltip>
+        )}
         <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs font-regular text-text-muted">
           <span className="inline-flex items-center gap-1.5">
             <Folder aria-hidden="true" className="size-3.5" />
-            已授权的本地工作区
+            已授权的工作区
           </span>
+          {machine === undefined ? null : (
+            <MachineBadge
+              name={machine.displayName}
+              title={machine.displayName}
+              className="h-6"
+            />
+          )}
           <time dateTime={project.updatedAt}>
             更新于 {formatProjectTime(project.updatedAt)}
           </time>

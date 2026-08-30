@@ -163,9 +163,11 @@ test('persists owner-closed running Claude Turns as interrupted, not failed', as
     })
     await service.registerInitialProjectRoots([cwd])
     const projectId = (await service.listProjects()).projects[0].projectId
+    const machineId = service.listMachines().machines[0].machineId
     const conversation = await service.createConversation({
       actionId: 'act_claude_close_create',
       projectId,
+      machineId,
       provider: 'claude-code',
     })
     const turn = await service.startTurn(

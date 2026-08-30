@@ -517,6 +517,7 @@ function reconstructDurableConversation(
   const record = ConversationRecordSchema.parse({
     conversationId: conversation.conversationId,
     projectId: conversation.projectId,
+    machineId: conversation.machineId,
     title: conversation.title,
     titleSource: conversation.titleSource,
     ...(conversation.pinnedAt === undefined

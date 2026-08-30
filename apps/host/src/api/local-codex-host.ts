@@ -41,6 +41,8 @@ export interface LocalCodexHostOptions {
   /** Tests and non-durable transport harnesses may explicitly opt out. */
   readonly persistence?: boolean
   readonly databasePath?: string
+  /** Assembly fact used only for truthful local Machine capabilities. */
+  readonly desktopManaged?: boolean
 }
 
 export interface RunningLocalCodexHost {
@@ -171,6 +173,7 @@ export async function startLocalCodexHostWithRuntime(
       workspacePolicy,
       publisher,
       hostVersion: options.hostVersion,
+      desktopManaged: options.desktopManaged === true,
       ...(options.maxConversations === undefined
         ? {}
         : { maxConversations: options.maxConversations }),

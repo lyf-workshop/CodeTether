@@ -26,11 +26,12 @@ async function renderApp() {
   }
 
   const [
-    { QueryClient, QueryClientProvider },
+    { QueryClientProvider },
     { RouterProvider },
     { router },
     { HostRuntimeProvider },
     { getHostRuntime },
+    { subscribeRuntimeToDesktopResume },
     { AttentionNotificationCoordinator },
     { notificationSurfaceFromPathname },
     { nativeCapabilities },
@@ -40,25 +41,28 @@ async function renderApp() {
     },
     { projectDetailQueryOptions },
     { conversationListQueryOptions },
+    { createHostQueryClient },
   ] = await Promise.all([
     import('@tanstack/react-query'),
     import('@tanstack/react-router'),
     import('./router'),
     import('./runtime/host/host-runtime-provider'),
     import('./runtime/host/host-runtime'),
+    import('./runtime/host/desktop-resume-subscription'),
     import('./runtime/notifications/attention-notification-coordinator'),
     import('./runtime/notifications/desktop-notification-model'),
     import('./runtime/native/native-capabilities'),
     import('./runtime/native/notification-preferences'),
     import('./runtime/host/project-query'),
     import('./runtime/host/conversation-list-query'),
+    import('./runtime/host/host-query-client'),
   ])
-  const queryClient = new QueryClient({
-    defaultOptions: {
-      queries: { retry: false },
-    },
-  })
+  const queryClient = createHostQueryClient()
   const runtime = getHostRuntime(queryClient)
+  const releaseDesktopResumeSubscription = subscribeRuntimeToDesktopResume(
+    runtime,
+    nativeCapabilities.backgroundRuntime,
+  )
   let notificationNavigationSequence = 0
   const notificationStorage = resolveNotificationPreferenceStorage()
   const notificationCoordinator = new AttentionNotificationCoordinator({
@@ -111,6 +115,7 @@ async function renderApp() {
   window.addEventListener(
     'pagehide',
     () => {
+      releaseDesktopResumeSubscription()
       void notificationCoordinator.stop()
     },
     { once: true },

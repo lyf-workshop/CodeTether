@@ -713,6 +713,73 @@ test('graceful shutdown flushes dirty streaming state before the throttle window
   }
 })
 
+test('session-ending close flushes dirty streaming state before waiting on runtime teardown', async () => {
+  const environment = await createEnvironment()
+  try {
+    const store = ConversationStore.open({
+      databasePath: environment.databasePath,
+    })
+    const runtime = new FakeRuntime()
+    let releaseRuntimeClose
+    const runtimeCloseGate = new Promise((resolveClose) => {
+      releaseRuntimeClose = resolveClose
+    })
+    runtime.close = async () => {
+      runtime.closeCalls += 1
+      await runtimeCloseGate
+    }
+    const workspacePolicy = await WorkspacePolicy.create([
+      environment.workspace,
+    ])
+    const service = new HostService({
+      runtime,
+      workspacePolicy,
+      publisher: new HostEventPublisher({
+        epoch: 'abababab-abab-4bab-8bab-abababababab',
+      }),
+      persistence: store,
+      persistenceFlushMs: 60_000,
+      hostVersion: '0.0.0-test',
+      now: () => new Date(timestamp),
+    })
+    await service.registerInitialProjectRoots([environment.workspace])
+    const created = await createConversation(
+      service,
+      environment.workspace,
+      'act_session_flush_create',
+    )
+    const started = await startTurn(
+      service,
+      created.data.conversation.conversationId,
+      'act_session_flush_turn',
+      'Flush before the bounded session-end drain',
+    )
+    runtime.emit(
+      providerEvent('message.delta', 'provider-thread-1', 'provider-turn-1', {
+        itemId: 'provider-message-session-ending',
+        delta: 'session ending durable delta',
+      }),
+    )
+    assert.equal(
+      store.getTurn(started.data.turn.turnId).snapshot.messages.length,
+      0,
+    )
+
+    const closing = service.close()
+    await new Promise((resolveTurn) => setImmediate(resolveTurn))
+    assert.equal(runtime.closeCalls, 1)
+    assert.equal(
+      store.getTurn(started.data.turn.turnId).snapshot.messages[0].text,
+      'session ending durable delta',
+    )
+
+    releaseRuntimeClose()
+    await closing
+  } finally {
+    await removeEnvironment(environment.directory)
+  }
+})
+
 test('terminal durability failure emits failure instead of a false completed event', async () => {
   const environment = await createEnvironment()
   const actualStore = ConversationStore.open({

@@ -59,6 +59,7 @@ test('bootstraps and snapshots through QueryClient before opening one stream', a
     snapshotReplacements: 1,
     streamConnections: 1,
     reconnectAttempts: 0,
+    resumeRecoveries: 0,
     hostEvents: 0,
     projectionUpdates: 0,
     duplicateEvents: 0,
@@ -298,6 +299,167 @@ test('temporary stream failure keeps projection and reconnects from the last eve
   assert.equal(runtime.stats.reconnectAttempts, 1)
 })
 
+test('duplicate Desktop resume signals close one stream and reconnect from the same cursor', async (t) => {
+  const first = new ControlledStream()
+  const second = new ControlledStream()
+  const client = new FakeHostClient({
+    bootstraps: [bootstrap(epochA), bootstrap(epochA)],
+    snapshots: [snapshot(epochA, 0)],
+    streams: [first, second],
+  })
+  const runtime = new HostRuntime({
+    queryClient: createQueryClient(),
+    client,
+    reconnectDelayMs: 60_000,
+  })
+  t.after(async () => await runtime.stop())
+
+  runtime.start()
+  await waitFor(() => runtime.connectionState === 'connected')
+  const connectionStates = []
+  const unsubscribeConnection = runtime.subscribe(() => {
+    connectionStates.push(runtime.connectionState)
+  })
+  t.after(unsubscribeConnection)
+  for (let index = 0; index < 5; index += 1) {
+    runtime.recoverAfterDesktopResume({ hostEpoch: epochA })
+  }
+
+  await waitFor(() => client.connectCalls.length === 2)
+  assert.deepEqual(client.connectCalls, [
+    { lastEventId: `${epochA}:0` },
+    { lastEventId: `${epochA}:0` },
+  ])
+  assert.equal(client.bootstrapCalls, 2)
+  assert.equal(client.snapshotCalls, 1)
+  assert.equal(runtime.stats.resumeRecoveries, 1)
+  assert.equal(runtime.stats.reconnectAttempts, 0)
+  assert.equal(runtime.connectionState, 'connected')
+  assert.equal(connectionStates.includes('reconnecting'), true)
+})
+
+test('Desktop resume aborts one half-open SSE handshake and reuses its cursor', async (t) => {
+  const connected = new ControlledStream()
+  const client = new FakeHostClient({
+    bootstraps: [bootstrap(epochA), bootstrap(epochA)],
+    snapshots: [snapshot(epochA, 0)],
+    streams: [
+      ({ signal }) =>
+        new Promise((_, reject) => {
+          signal.addEventListener(
+            'abort',
+            () => reject(signal.reason ?? new Error('aborted')),
+            { once: true },
+          )
+        }),
+      connected,
+    ],
+  })
+  const runtime = new HostRuntime({
+    queryClient: createQueryClient(),
+    client,
+    reconnectDelayMs: 60_000,
+  })
+  t.after(async () => await runtime.stop())
+
+  runtime.start()
+  await waitFor(() => client.connectCalls.length === 1)
+  runtime.recoverAfterDesktopResume({ hostEpoch: epochA })
+
+  await waitFor(() => runtime.connectionState === 'connected')
+  assert.deepEqual(client.connectCalls, [
+    { lastEventId: `${epochA}:0` },
+    { lastEventId: `${epochA}:0` },
+  ])
+  assert.equal(runtime.stats.resumeRecoveries, 1)
+  assert.equal(runtime.stats.reconnectAttempts, 0)
+})
+
+test('Desktop resume refuses a different Host epoch before reopening SSE', async (t) => {
+  const first = new ControlledStream()
+  const client = new FakeHostClient({
+    bootstraps: [bootstrap(epochA), bootstrap(epochB)],
+    snapshots: [snapshot(epochA, 0)],
+    streams: [first],
+  })
+  const queryClient = createQueryClient()
+  const runtime = new HostRuntime({
+    queryClient,
+    client,
+    reconnectDelayMs: 60_000,
+  })
+  t.after(async () => await runtime.stop())
+
+  runtime.start()
+  await waitFor(() => runtime.connectionState === 'connected')
+  runtime.recoverAfterDesktopResume({ hostEpoch: epochA })
+
+  await waitFor(() => runtime.connectionState === 'unavailable')
+  assert.equal(client.bootstrapCalls, 2)
+  assert.equal(client.snapshotCalls, 1)
+  assert.deepEqual(client.connectCalls, [{ lastEventId: `${epochA}:0` }])
+  assert.equal(readHostProjection(queryClient)?.cursor.epoch, epochA)
+  assert.equal(runtime.bootstrap?.epoch, epochA)
+})
+
+test('Desktop resume retries a transient bootstrap failure without manual recovery', async (t) => {
+  const first = new ControlledStream()
+  const second = new ControlledStream()
+  const client = new FakeHostClient({
+    bootstraps: [
+      bootstrap(epochA),
+      new Error('loopback bootstrap was temporarily unavailable'),
+      bootstrap(epochA),
+    ],
+    snapshots: [snapshot(epochA, 0)],
+    streams: [first, second],
+  })
+  const runtime = new HostRuntime({
+    queryClient: createQueryClient(),
+    client,
+    reconnectDelayMs: 1,
+  })
+  t.after(async () => await runtime.stop())
+
+  runtime.start()
+  await waitFor(() => runtime.connectionState === 'connected')
+  runtime.recoverAfterDesktopResume({ hostEpoch: epochA })
+
+  await waitFor(() => client.bootstrapCalls === 3)
+  await waitFor(() => client.connectCalls.length === 2)
+  assert.equal(runtime.connectionState, 'connected')
+  assert.equal(runtime.stats.resumeRecoveries, 1)
+  assert.equal(runtime.stats.reconnectAttempts, 1)
+  assert.deepEqual(client.connectCalls, [
+    { lastEventId: `${epochA}:0` },
+    { lastEventId: `${epochA}:0` },
+  ])
+})
+
+test('Desktop resume reports an incompatible bootstrap instead of retrying forever', async (t) => {
+  const first = new ControlledStream()
+  const client = new FakeHostClient({
+    bootstraps: [bootstrap(epochA), new CodeTetherIncompatibleProtocolError(2)],
+    snapshots: [snapshot(epochA, 0)],
+    streams: [first],
+  })
+  const runtime = new HostRuntime({
+    queryClient: createQueryClient(),
+    client,
+    reconnectDelayMs: 1,
+  })
+  t.after(async () => await runtime.stop())
+
+  runtime.start()
+  await waitFor(() => runtime.connectionState === 'connected')
+  runtime.recoverAfterDesktopResume({ hostEpoch: epochA })
+
+  await waitFor(() => runtime.connectionState === 'incompatible')
+  assert.equal(client.bootstrapCalls, 2)
+  assert.equal(runtime.stats.reconnectAttempts, 0)
+  assert.deepEqual(client.connectCalls, [{ lastEventId: `${epochA}:0` }])
+})
+
 test('duplicates are ignored and a sequence gap forces snapshot recovery', async (t) => {
   const first = new ControlledStream()
   const second = new ControlledStream()
@@ -403,7 +565,10 @@ class FakeHostClient {
         ? {}
         : { lastEventId: options.lastEventId }),
     })
-    return resolveScripted(this.#streams, 'event stream')
+    const implementation = resolveScripted(this.#streams, 'event stream')
+    return typeof implementation === 'function'
+      ? await implementation(options)
+      : implementation
   }
 
   async startTurn(conversationId, request) {

@@ -735,7 +735,7 @@ Acceptance boundary:
 
 ### Phase 4G.1 — System Tray & Background Runtime Foundation
 
-**Status:** implemented; Owner acceptance is pending.
+**Status:** accepted and frozen at `cee3a71`.
 
 Implemented scope:
 
@@ -745,9 +745,9 @@ Implemented scope:
 - Explicit Tray Quit is guarded as a one-way/idempotent lifecycle transition and reuses the Phase 4A bounded graceful Host/SQLite/Codex shutdown before removing the tray and exiting. Window hide does not invoke restart reconciliation; explicit Quit and abnormal process loss retain the established interrupted-Turn and expired-Approval safety semantics.
 - The first successful hide atomically persists one versioned Desktop-owned education marker outside Project SQLite and attempts one native “still running” explanation. Shared Settings receives only a Browser-safe read-only `backgroundRuntime.available` capability and a compact Desktop explanation with no behavior toggle; Browser mode exposes neither tray controls nor lifecycle changes.
 - The Tauri built-in `tray-icon` feature is Rust-owned. Phase 4G.1 adds no Web app-exit command, generic native invoke, shell/process/filesystem capability, notification database, Attention store, Host API, provider control, or second Runtime projection.
-- The unpreventable Tauri exit path performs a best-effort synchronous Host drain and the Windows Job Object still guarantees no owned orphan after parent loss. The current Tao event loop does not expose `WM_QUERYENDSESSION`, so forced Windows logoff/shutdown does not yet have a guaranteed full bounded graceful interval.
+- The unpreventable Tauri exit path performs a best-effort synchronous Host drain and the Windows Job Object still guarantees no owned orphan after parent loss. Exact Windows sleep/resume and session-end handling remained outside the 4G.1 boundary and is added separately in Phase 4G.2 below.
 
-Not included:
+Not included at the frozen 4G.1 boundary:
 
 - Start with Windows, a close-behavior setting, tray badges/dynamic Attention counts, recent Project/Conversation menus, inline tray Approval actions, multiple windows, or minimize-to-tray.
 - Notifications after explicit application exit, a notification-history center, application DND/sound controls, remote/mobile/browser push, email/chat delivery, or an OS background daemon.
@@ -756,10 +756,50 @@ Not included:
 
 Acceptance boundary:
 
-- Owner review must confirm real X and Alt+F4 hide behavior, one tray and process tree, Host/epoch preservation, hidden second-instance restore, route/scroll/Approval preservation, background SSE and Approval/completed/failed notification delivery, exact notification navigation, running Turn and pending Approval continuity, idempotent explicit Quit, unexpected-Host/startup failure behavior, Browser isolation, raw release/installed NSIS behavior, process/port cleanup, and real Codex background flows before Phase 4G.1 is accepted or frozen.
-- Phase 4G.1 does not authorize Phase 4G.2 Windows session/background reliability, Start with Windows, notification-history work, or another provider.
+- Owner review confirmed X and Alt+F4 hide behavior, one tray and process tree, Host/epoch preservation, hidden second-instance restore, route/scroll/Approval preservation, background SSE and Approval/completed/failed notification delivery, exact notification navigation, running Turn and pending Approval continuity, idempotent explicit Quit, unexpected-Host/startup failure behavior, Browser isolation, raw release/installed NSIS behavior, process/port cleanup, and real Codex background flows. Phase 4G.1 is frozen at `cee3a71`.
+- Phase 4G.1 did not itself authorize Windows session/background reliability, Start with Windows, notification-history work, or another provider. Phase 4G.2 below is a separately bounded lifecycle reliability scope.
 
-## Phase 5 — Machines
+### Phase 4G.2 — Windows Session & Background Reliability
+
+**Status:** implemented; bounded evidence collection is complete and Owner acceptance is pending.
+
+Implemented scope:
+
+- The accepted window/application contract is unchanged: X and Alt+F4 hide the existing main window only, while `退出 CodeTether` is the sole normal product exit and retains the idempotent 12-second graceful owned-Host/SQLite/Codex shutdown ceiling.
+- One native lifecycle reducer tracks Desktop application, window, Windows power/session, and owned-Runtime state independently. Session lock/unlock is observed without changing window visibility, Agent execution, or product truth.
+- Windows sleep records suspension and performs no Host shutdown, forced restart, provider interruption, or Approval expiry. Exactly one recovery is admitted for each resume cycle.
+- Resume performs one bounded check of the exact owned Host: the recorded child must remain live and one loopback bootstrap response must match Protocol v1, the revision-coupled build identity, and the startup Host epoch. A live but temporarily unresponsive owned child is not killed or replaced; an exited/incompatible/identity-changed child enters the existing failure cleanup boundary. No automatic restart loop is introduced.
+- After the native resume check, one process-local event carries the exact startup-owned Host epoch to the existing application HostRuntime. One application-scoped listener asks the Runtime to close or abort its possibly half-open SSE transport; the Runtime re-reads bootstrap, rejects any other epoch, and only then lets the ordinary stream loop reconnect with its current `Last-Event-ID` and accepted replay, `stream.reset`, sequence, and Snapshot replacement semantics. There is no second stream, poller, Runtime projection, or recovery protocol.
+- `WM_QUERYENDSESSION` performs only an immediate process-memory transition and returns allow without Host, filesystem, or network work. A cancelled end session restores the prior lifecycle. Confirmed `WM_ENDSESSION` receives a distinct 2-second best-effort bounded owned-Host termination attempt, then yields to Windows teardown; it does not claim the 12-second Tray Quit guarantee.
+- Abnormal Desktop/parent loss still closes the Windows Job Object and therefore the owned Host/Codex process tree. On the next launch, the accepted durable restart reconciliation marks incomplete Turns interrupted and process-live Approvals expired; Phase 4G.2 does not attempt automatic process recovery.
+- Windows Explorer tray recreation remains handled by the pinned Tauri 2.11.5 `tray-icon` feature and locked `tray-icon` 0.24.2 implementation. CodeTether adds no tray poller, duplicate tray registry, or second lifecycle owner.
+
+Not included:
+
+- Start with Windows, a close-behavior or sleep/wake setting, minimize-to-tray, automatic Host restart, an OS daemon, multiple windows, or a CodeTether-specific Explorer watcher.
+- Tray Attention badges/counts, recent Project/Conversation menus, inline Approval actions, notifications after explicit Quit, notification history, push/email/chat delivery, custom sounds/schedules, updater/signing, custom window chrome, Activity, Machine management, remote access, or another provider.
+- A Protocol v1 change, native business command, new Tauri Web permission, durable lifecycle log, provider-state copy, second Attention/Runtime projection, or macOS/Linux lifecycle claim.
+
+Validation boundary:
+
+- Focused Rust lifecycle/reducer/message tests, Host/Web resume-reconnect tests, and packaged Windows lifecycle smoke cover repeated suspend/resume and lock/unlock cycles, a single check/reconnect per cycle, exact Host PID/epoch preservation, cancelled and confirmed session end, the 2-second termination budget, close-to-tray after cancellation, crash cleanup, and process/port release.
+- Real raw-release evidence covers hidden idle sleep/wake, pending Approval sleep/wake and later resolution, Explorer restart with one recovered tray, and a 30-minute background soak with real Codex Turns. Confirmed session end and repeated power/session cycles remain explicitly simulated; real logoff/shutdown, an actively executing Turn at the exact suspend instant, and a controlled provider-network change after wake have not been observed.
+- The pinned Tauri/`tray-icon` boundary remains responsible for Explorer tray recovery rather than a CodeTether re-registration loop. Final installed-NSIS baseline evidence covers install, readiness, hide, exact Tray Quit, uninstall, and cleanup. A real installed Sleep occurred but its automation-parent Job ended before post-wake runtime identity could be observed, so installed-runtime continuity is explicitly unobserved; real OS logoff/shutdown, dedicated Win+L, provider-network-change, and active-Turn-at-suspend remain separately unobserved. Owner review remains pending, and Phase 4G.2 must not be described as accepted or frozen before that review.
+
+## Phase 5A — Second Provider Foundation
+
+**Goal:** validate the provider-neutral boundary with a deliberately bounded Claude Code foundation after the Windows Desktop lifecycle is reliable.
+
+Planned outcomes:
+
+- A reviewed provider contract and Claude Code capability detection.
+- Claude Code lifecycle, Conversation creation, streaming, and Tool/event normalization through the existing Host boundary.
+- Explicit handling for capability differences without leaking raw protocol concepts into UI.
+- Codex regression coverage without forcing unsupported Codex capabilities onto Claude Code.
+
+Exit gate: one real Claude Code Conversation can be created and streamed through normalized public events with truthful capability differences. Cross-agent handoff and forced feature parity remain prohibited.
+
+## Phase 6 — Machines
 
 **Goal:** model and operate more than one trusted machine coherently.
 
@@ -772,7 +812,7 @@ Planned outcomes:
 
 Exit gate: users can understand which trusted machine owns a project or conversation and safely target supported operations.
 
-## Phase 6 — Remote LAN / Tailscale
+## Phase 7 — Remote LAN / Tailscale
 
 **Goal:** securely monitor and control a machine host from another device over a user-managed trusted network.
 
@@ -784,18 +824,6 @@ Planned outcomes:
 - Remote monitor, approve, reply, interrupt, and resume flows.
 
 Exit gate: a remote web/mobile client can safely operate the supported loop without a public cloud relay.
-
-## Phase 7 — Claude Code
-
-**Goal:** validate that the provider-neutral architecture supports a second agent.
-
-Planned outcomes:
-
-- Claude Code detection, models/capabilities, session lifecycle, and event translation.
-- Explicit handling for capability differences without leaking raw protocol concepts into UI.
-- Regression coverage across Codex and Claude Code.
-
-Exit gate: supported Claude Code conversations work through the same core product model. Cross-agent handoff remains prohibited.
 
 ## Phase 8 — OpenCode
 

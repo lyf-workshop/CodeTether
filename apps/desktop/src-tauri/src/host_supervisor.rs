@@ -6,14 +6,15 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Condvar, Mutex,
-        atomic::{AtomicBool, AtomicU8, Ordering},
+        atomic::{AtomicBool, Ordering},
+        mpsc::{SyncSender, sync_channel},
     },
     thread,
     time::{Duration, Instant},
 };
 
-use serde::Deserialize;
-use tauri::{AppHandle, Manager, RunEvent, WindowEvent};
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Emitter, Manager, RunEvent, WindowEvent};
 use tauri_plugin_shell::{
     ShellExt,
     process::{CommandChild, CommandEvent},
@@ -22,8 +23,11 @@ use tauri_plugin_shell::{
 use self::process_tree::ProcessTreeGuard;
 use crate::{
     attention_notifications::AttentionNotificationState,
+    desktop_lifecycle::{
+        DesktopLifecycle, LifecycleSnapshot, MainWindowCloseAction, ResumeDecision, SystemState,
+    },
     startup_error::{self, StartupFailureKind},
-    system_tray,
+    system_tray, windows_lifecycle,
 };
 
 const HOST_ADDRESS: &str = "127.0.0.1:4317";
@@ -31,65 +35,72 @@ const HOST_URL: &str = "http://127.0.0.1:4317";
 const PROTOCOL_VERSION: u32 = 1;
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(15);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(12);
+const SESSION_END_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 const SHUTDOWN_WATCHDOG_TIMEOUT: Duration = Duration::from_secs(15);
+const RESUME_HEALTH_TIMEOUT: Duration = Duration::from_millis(750);
 const PROBE_INTERVAL: Duration = Duration::from_millis(100);
 const PROBE_TIMEOUT: Duration = Duration::from_millis(350);
 const MAX_BOOTSTRAP_BYTES: u64 = 64 * 1024;
-const LIFECYCLE_RUNNING: u8 = 0;
-const LIFECYCLE_STOPPING: u8 = 1;
-const LIFECYCLE_EXIT_ALLOWED: u8 = 2;
+const MAX_SMOKE_EXIT_DELAY_MS: u64 = 3_900_000;
+const DESKTOP_RESUMED_EVENT: &str = "codetether://desktop-resumed";
 
 #[derive(Clone)]
 struct DesktopState {
     host: Arc<Mutex<Option<HostSupervisor>>>,
-    lifecycle: Arc<AtomicU8>,
-    ready: Arc<AtomicBool>,
+    host_epoch: Arc<Mutex<Option<String>>>,
+    lifecycle: Arc<Mutex<DesktopLifecycle>>,
+    surface_initialized: Arc<AtomicBool>,
     background_education_shown: Arc<AtomicBool>,
+    lifecycle_log: Option<SyncSender<String>>,
 }
 
 impl DesktopState {
     fn new(host: HostSupervisor, background_education_shown: bool) -> Self {
         Self {
             host: Arc::new(Mutex::new(Some(host))),
-            lifecycle: Arc::new(AtomicU8::new(LIFECYCLE_RUNNING)),
-            ready: Arc::new(AtomicBool::new(false)),
+            host_epoch: Arc::new(Mutex::new(None)),
+            lifecycle: Arc::new(Mutex::new(DesktopLifecycle::new())),
+            surface_initialized: Arc::new(AtomicBool::new(false)),
             background_education_shown: Arc::new(AtomicBool::new(background_education_shown)),
+            lifecycle_log: create_lifecycle_log_channel(),
         }
     }
 
     fn mark_ready(&self) {
-        self.ready.store(true, Ordering::Release);
+        lock(&self.lifecycle).mark_ready();
     }
 
+    #[cfg(test)]
     fn is_ready(&self) -> bool {
-        self.ready.load(Ordering::Acquire)
+        lock(&self.lifecycle).is_ready()
     }
 
     fn begin_shutdown(&self) -> bool {
-        self.lifecycle
-            .compare_exchange(
-                LIFECYCLE_RUNNING,
-                LIFECYCLE_STOPPING,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            )
-            .is_ok()
+        let claimed = lock(&self.lifecycle).begin_shutdown();
+        if claimed && let Some(host) = lock(&self.host).as_ref() {
+            host.prepare_shutdown();
+        }
+        claimed
+    }
+
+    fn begin_failure_shutdown(&self) -> bool {
+        let claimed = lock(&self.lifecycle).begin_failure_shutdown();
+        if claimed && let Some(host) = lock(&self.host).as_ref() {
+            host.prepare_shutdown();
+        }
+        claimed
     }
 
     fn is_shutting_down(&self) -> bool {
-        self.lifecycle.load(Ordering::Acquire) != LIFECYCLE_RUNNING
+        lock(&self.lifecycle).is_shutting_down()
     }
 
     fn can_restore_main_window(&self) -> bool {
-        self.is_ready() && self.lifecycle.load(Ordering::Acquire) == LIFECYCLE_RUNNING
+        lock(&self.lifecycle).can_restore_main_window()
     }
 
     fn main_window_close_action(&self) -> MainWindowCloseAction {
-        match self.lifecycle.load(Ordering::Acquire) {
-            LIFECYCLE_RUNNING => MainWindowCloseAction::Hide,
-            LIFECYCLE_STOPPING => MainWindowCloseAction::Prevent,
-            _ => MainWindowCloseAction::Allow,
-        }
+        lock(&self.lifecycle).main_window_close_action()
     }
 
     fn claim_background_education(&self) -> bool {
@@ -99,27 +110,37 @@ impl DesktopState {
     }
 
     fn should_prevent_exit(&self) -> bool {
-        self.lifecycle.load(Ordering::Acquire) != LIFECYCLE_EXIT_ALLOWED
+        lock(&self.lifecycle).should_prevent_exit()
     }
 
     fn allow_exit(&self) {
-        self.lifecycle
-            .store(LIFECYCLE_EXIT_ALLOWED, Ordering::Release);
+        lock(&self.lifecycle).allow_exit();
     }
 
-    fn shutdown_owned_host(&self) -> ShutdownOutcome {
+    fn shutdown_owned_host(&self, timeout: Duration) -> ShutdownOutcome {
         if let Some(host) = lock(&self.host).as_mut() {
-            return host.shutdown(SHUTDOWN_TIMEOUT);
+            return host.shutdown(timeout);
         }
         ShutdownOutcome::Clean
     }
-}
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum MainWindowCloseAction {
-    Hide,
-    Prevent,
-    Allow,
+    fn snapshot(&self) -> LifecycleSnapshot {
+        lock(&self.lifecycle).snapshot()
+    }
+
+    fn host_process(&self) -> Option<(u32, ProcessObservation)> {
+        lock(&self.host)
+            .as_ref()
+            .and_then(|host| host.pid().map(|pid| (pid, host.observation())))
+    }
+
+    fn set_host_epoch(&self, epoch: String) {
+        *lock(&self.host_epoch) = Some(epoch);
+    }
+
+    fn host_epoch(&self) -> Option<String> {
+        lock(&self.host_epoch).clone()
+    }
 }
 
 #[derive(Clone)]
@@ -175,6 +196,28 @@ enum ShutdownOutcome {
     Clean,
     HostExitedUnexpectedly,
     Failed,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SessionEndReason {
+    pub(crate) critical: bool,
+    pub(crate) logoff: bool,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopResumePayload {
+    host_epoch: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ResumeHealthOutcome {
+    Ready(Duration),
+    HostExited,
+    ProtocolIncompatible,
+    IdentityChanged,
+    Unavailable,
 }
 
 impl HostSupervisor {
@@ -275,6 +318,14 @@ impl HostSupervisor {
         self.observation.clone()
     }
 
+    fn prepare_shutdown(&self) {
+        self.observation.stopping.store(true, Ordering::Release);
+    }
+
+    fn pid(&self) -> Option<u32> {
+        self.child.as_ref().map(CommandChild::pid)
+    }
+
     fn shutdown(&mut self, timeout: Duration) -> ShutdownOutcome {
         let started_at = Instant::now();
         self.observation.stopping.store(true, Ordering::Release);
@@ -360,16 +411,17 @@ enum ExistingService {
     Other,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum Readiness {
-    Ready,
+    Ready(BootstrapIdentity),
     NotReady,
     ProtocolIncompatible,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 struct BootstrapIdentity {
+    epoch: String,
     protocol_version: u32,
     host_version: String,
 }
@@ -394,7 +446,7 @@ fn wait_for_readiness(
     observation: &ProcessObservation,
     timeout: Duration,
     expected_host_version: &str,
-) -> Result<Duration, StartupFailureKind> {
+) -> Result<(Duration, BootstrapIdentity), StartupFailureKind> {
     wait_for_readiness_with_probe(observation, timeout, PROBE_INTERVAL, || {
         probe_readiness(expected_host_version)
     })
@@ -405,14 +457,14 @@ fn wait_for_readiness_with_probe(
     timeout: Duration,
     interval: Duration,
     mut probe: impl FnMut() -> Readiness,
-) -> Result<Duration, StartupFailureKind> {
+) -> Result<(Duration, BootstrapIdentity), StartupFailureKind> {
     let started_at = Instant::now();
     loop {
         if observation.termination().is_some() {
             return Err(StartupFailureKind::HostExited);
         }
         match probe() {
-            Readiness::Ready => {
+            Readiness::Ready(identity) => {
                 observation.ready.store(true, Ordering::Release);
                 // Close the gap between the pre-probe termination check and
                 // publishing readiness. If the Host exits after answering
@@ -423,7 +475,7 @@ fn wait_for_readiness_with_probe(
                 if observation.termination().is_some() {
                     return Err(StartupFailureKind::HostExited);
                 }
-                return Ok(started_at.elapsed());
+                return Ok((started_at.elapsed(), identity));
             }
             Readiness::ProtocolIncompatible => {
                 return Err(StartupFailureKind::ProtocolIncompatible);
@@ -443,7 +495,7 @@ fn probe_readiness(expected_host_version: &str) -> Readiness {
             if identity.protocol_version == PROTOCOL_VERSION
                 && identity.host_version == expected_host_version =>
         {
-            Readiness::Ready
+            Readiness::Ready(identity)
         }
         Ok(Some(_)) => Readiness::ProtocolIncompatible,
         Ok(None) | Err(_) => Readiness::NotReady,
@@ -459,26 +511,44 @@ fn read_bootstrap_at(
     address: SocketAddr,
     timeout: Duration,
 ) -> io::Result<Option<BootstrapIdentity>> {
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid bootstrap timeout"))?;
     let stream = TcpStream::connect_timeout(&address, timeout)?;
-    read_bootstrap_from_stream(stream, address, timeout)
+    read_bootstrap_from_stream(stream, address, deadline)
 }
 
 fn read_bootstrap_from_stream(
     mut stream: TcpStream,
     address: SocketAddr,
-    timeout: Duration,
+    deadline: Instant,
 ) -> io::Result<Option<BootstrapIdentity>> {
-    stream.set_read_timeout(Some(timeout))?;
-    stream.set_write_timeout(Some(timeout))?;
+    stream.set_write_timeout(Some(remaining_until(deadline)?))?;
     stream.write_all(
         format!("GET /api/v1/bootstrap HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n")
             .as_bytes(),
     )?;
     let mut response = Vec::new();
-    stream
-        .take(MAX_BOOTSTRAP_BYTES)
-        .read_to_end(&mut response)?;
+    let mut limited = stream.take(MAX_BOOTSTRAP_BYTES);
+    loop {
+        limited
+            .get_mut()
+            .set_read_timeout(Some(remaining_until(deadline)?))?;
+        let mut chunk = [0_u8; 8 * 1024];
+        let read = limited.read(&mut chunk)?;
+        if read == 0 {
+            break;
+        }
+        response.extend_from_slice(&chunk[..read]);
+    }
     Ok(parse_bootstrap_response(&response))
+}
+
+fn remaining_until(deadline: Instant) -> io::Result<Duration> {
+    deadline
+        .checked_duration_since(Instant::now())
+        .filter(|remaining| !remaining.is_zero())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "bootstrap deadline elapsed"))
 }
 
 fn desktop_origin() -> &'static str {
@@ -537,12 +607,303 @@ fn smoke_exit_delay(arguments: impl IntoIterator<Item = String>) -> Option<Durat
         }
         if let Some(value) = argument.strip_prefix("--desktop-smoke-exit-after-ready-ms=")
             && let Ok(milliseconds) = value.parse::<u64>()
-            && milliseconds <= 60_000
+            && milliseconds <= MAX_SMOKE_EXIT_DELAY_MS
         {
             return Some(Duration::from_millis(milliseconds));
         }
     }
     None
+}
+
+fn create_lifecycle_log_channel() -> Option<SyncSender<String>> {
+    let (sender, receiver) = sync_channel::<String>(256);
+    thread::Builder::new()
+        .name("codetether-lifecycle-log".into())
+        .spawn(move || {
+            while let Ok(record) = receiver.recv() {
+                eprintln!("[codetether:lifecycle] {record}");
+            }
+        })
+        .ok()
+        .map(|_| sender)
+}
+
+fn log_lifecycle_event(event: &str, state: &DesktopState, details: serde_json::Value) {
+    let record = serde_json::json!({
+        "event": event,
+        "desktopPid": std::process::id(),
+        "state": state.snapshot(),
+        "details": details,
+    });
+    if let Some(sender) = &state.lifecycle_log {
+        // Lifecycle hooks run on the native window thread. Never let a full or
+        // broken diagnostic sink block WM_QUERYENDSESSION/WM_ENDSESSION.
+        let _ = sender.try_send(record.to_string());
+    }
+}
+
+pub(crate) fn confirm_windows_suspend(app: &AppHandle) {
+    let Some(state) = app.try_state::<DesktopState>() else {
+        return;
+    };
+    let mut lifecycle = lock(&state.lifecycle);
+    lifecycle.begin_suspend();
+    lifecycle.mark_suspended();
+    drop(lifecycle);
+    log_lifecycle_event("system_suspended", &state, serde_json::json!({}));
+}
+
+pub(crate) fn handle_windows_session_change(app: &AppHandle, locked: bool) {
+    let Some(state) = app.try_state::<DesktopState>() else {
+        return;
+    };
+    lock(&state.lifecycle).mark_session_locked(locked);
+    log_lifecycle_event(
+        if locked {
+            "session_locked"
+        } else {
+            "session_unlocked"
+        },
+        &state,
+        serde_json::json!({}),
+    );
+}
+
+pub(crate) fn query_windows_session_end(app: &AppHandle, reason: SessionEndReason) {
+    let Some(state) = app.try_state::<DesktopState>() else {
+        return;
+    };
+    // WM_QUERYENDSESSION must return immediately. This in-memory transition
+    // only disables hide/restore; diagnostics and bounded I/O are deferred
+    // until WM_ENDSESSION confirms the session end.
+    lock(&state.lifecycle).query_session_end();
+    let _ = reason;
+}
+
+pub(crate) fn confirm_windows_session_end(app: &AppHandle, reason: SessionEndReason) {
+    let session_end_started_at = Instant::now();
+    let Some(state) = app.try_state::<DesktopState>() else {
+        return;
+    };
+    lock(&state.lifecycle).query_session_end();
+    log_lifecycle_event(
+        "session_ending",
+        &state,
+        serde_json::to_value(reason).unwrap_or_else(|_| serde_json::json!({})),
+    );
+    finish_unpreventable_shutdown(&state, session_end_started_at);
+    // A real Windows broadcast will also reach Tao's private lifecycle HWND,
+    // but explicitly requesting exit makes the bounded main-window hook
+    // complete correctly in message-level harnesses and unusual shell paths.
+    // The reducer guard keeps the later Tao RunEvent::Exit drain idempotent.
+    app.exit(0);
+}
+
+pub(crate) fn cancel_windows_session_end(app: &AppHandle) {
+    let Some(state) = app.try_state::<DesktopState>() else {
+        return;
+    };
+    if lock(&state.lifecycle).cancel_session_end() {
+        log_lifecycle_event("session_end_cancelled", &state, serde_json::json!({}));
+        if state.snapshot().app == crate::desktop_lifecycle::AppState::Ready
+            && !state.surface_initialized.load(Ordering::Acquire)
+        {
+            finish_desktop_initialization(app.clone(), state.inner().clone(), None);
+        }
+    }
+}
+
+pub(crate) fn resume_windows_runtime(app: &AppHandle) {
+    let Some(state) = app.try_state::<DesktopState>() else {
+        return;
+    };
+    // Windows commonly delivers both PBT_APMRESUMEAUTOMATIC and
+    // PBT_APMRESUMESUSPEND for one wake. Drop the reducer guard before the
+    // duplicate/deferred branches log a snapshot; otherwise the temporary
+    // guard from the match scrutinee can live through the selected arm and
+    // deadlock the native window thread on the second resume message.
+    let resume_decision = {
+        let mut lifecycle = lock(&state.lifecycle);
+        lifecycle.begin_resume()
+    };
+    let resume_generation = match resume_decision {
+        ResumeDecision::Ignored => {
+            log_lifecycle_event("system_resume_duplicate", &state, serde_json::json!({}));
+            return;
+        }
+        ResumeDecision::StartupDeferred => {
+            log_lifecycle_event(
+                "system_resume_startup_deferred",
+                &state,
+                serde_json::json!({}),
+            );
+            // Startup's existing readiness worker remains the only native
+            // Host validator; Web may still need to retire a half-open SSE.
+            emit_desktop_resumed(app);
+            return;
+        }
+        ResumeDecision::Reconcile(generation) => generation,
+    };
+    let Some((host_pid, observation)) = state.host_process() else {
+        if lock(&state.lifecycle).finish_resume(resume_generation, false) {
+            handle_resume_health_failure(
+                app.clone(),
+                state.inner().clone(),
+                ResumeHealthOutcome::HostExited,
+            );
+        }
+        return;
+    };
+    let Some(expected_epoch) = state.host_epoch() else {
+        if lock(&state.lifecycle).finish_resume(resume_generation, false) {
+            handle_resume_health_failure(
+                app.clone(),
+                state.inner().clone(),
+                ResumeHealthOutcome::IdentityChanged,
+            );
+        }
+        return;
+    };
+    log_lifecycle_event(
+        "system_resuming",
+        &state,
+        serde_json::json!({ "hostPid": host_pid }),
+    );
+    let resume_app = app.clone();
+    let resume_state = state.inner().clone();
+    thread::spawn(move || {
+        let outcome = wait_for_resume_health(
+            &observation,
+            RESUME_HEALTH_TIMEOUT,
+            env!("CODETETHER_BUILD_ID"),
+            &expected_epoch,
+        );
+        match outcome {
+            ResumeHealthOutcome::Ready(elapsed) => {
+                if !lock(&resume_state.lifecycle).finish_resume(resume_generation, true) {
+                    return;
+                }
+                log_lifecycle_event(
+                    "system_resumed",
+                    &resume_state,
+                    serde_json::json!({
+                        "hostPid": host_pid,
+                        "healthCheckMs": elapsed.as_millis(),
+                    }),
+                );
+                emit_desktop_resumed(&resume_app);
+            }
+            ResumeHealthOutcome::Unavailable => {
+                if !lock(&resume_state.lifecycle).finish_resume(resume_generation, false) {
+                    return;
+                }
+                log_lifecycle_event(
+                    "system_resume_unavailable",
+                    &resume_state,
+                    serde_json::json!({ "hostPid": host_pid }),
+                );
+                // The owned child is still alive. Do not restart or kill it;
+                // force the existing cursor-based Web transport to reconcile.
+                emit_desktop_resumed(&resume_app);
+            }
+            failure => {
+                if !lock(&resume_state.lifecycle).finish_resume(resume_generation, false) {
+                    return;
+                }
+                handle_resume_health_failure(resume_app, resume_state, failure);
+            }
+        }
+    });
+}
+
+fn emit_desktop_resumed(app: &AppHandle) {
+    let Some(state) = app.try_state::<DesktopState>() else {
+        return;
+    };
+    let Some(host_epoch) = state.host_epoch() else {
+        return;
+    };
+    if let Err(error) = app.emit(DESKTOP_RESUMED_EVENT, DesktopResumePayload { host_epoch }) {
+        eprintln!(
+            "[codetether:desktop] could not emit the bounded resume recovery signal: {error}"
+        );
+    }
+}
+
+fn wait_for_resume_health(
+    observation: &ProcessObservation,
+    timeout: Duration,
+    expected_host_version: &str,
+    expected_epoch: &str,
+) -> ResumeHealthOutcome {
+    wait_for_resume_health_with_probe(observation, expected_host_version, expected_epoch, || {
+        read_bootstrap(timeout)
+    })
+}
+
+fn wait_for_resume_health_with_probe(
+    observation: &ProcessObservation,
+    expected_host_version: &str,
+    expected_epoch: &str,
+    probe: impl FnOnce() -> io::Result<Option<BootstrapIdentity>>,
+) -> ResumeHealthOutcome {
+    let started_at = Instant::now();
+    if observation.termination().is_some() {
+        return ResumeHealthOutcome::HostExited;
+    }
+    let identity = match probe() {
+        Ok(Some(identity)) => identity,
+        Ok(None) | Err(_) => {
+            return if observation.termination().is_some() {
+                ResumeHealthOutcome::HostExited
+            } else {
+                ResumeHealthOutcome::Unavailable
+            };
+        }
+    };
+    if observation.termination().is_some() {
+        return ResumeHealthOutcome::HostExited;
+    }
+    if identity.protocol_version != PROTOCOL_VERSION
+        || identity.host_version != expected_host_version
+    {
+        return ResumeHealthOutcome::ProtocolIncompatible;
+    }
+    if identity.epoch != expected_epoch {
+        return ResumeHealthOutcome::IdentityChanged;
+    }
+    ResumeHealthOutcome::Ready(started_at.elapsed())
+}
+
+fn handle_resume_health_failure(app: AppHandle, state: DesktopState, failure: ResumeHealthOutcome) {
+    log_lifecycle_event(
+        "system_resume_failed",
+        &state,
+        serde_json::json!({ "reason": format!("{failure:?}") }),
+    );
+    let surface = match failure {
+        ResumeHealthOutcome::ProtocolIncompatible | ResumeHealthOutcome::IdentityChanged => {
+            StartupFailureKind::ProtocolIncompatible
+        }
+        ResumeHealthOutcome::Unavailable => StartupFailureKind::ReadinessTimeout,
+        ResumeHealthOutcome::HostExited | ResumeHealthOutcome::Ready(_) => {
+            StartupFailureKind::HostExited
+        }
+    };
+    let failure_app = app.clone();
+    if let Err(error) = app.run_on_main_thread(move || {
+        if !state.begin_failure_shutdown() {
+            return;
+        }
+        if state.snapshot().system != SystemState::SessionEnding {
+            show_main_window_for_failure(&failure_app);
+            show_runtime_failure(&failure_app, surface);
+        }
+        thread::spawn(move || finish_owned_shutdown(state, failure_app, 1));
+    }) {
+        eprintln!("[codetether:desktop] could not schedule resume failure handling: {error}");
+        emergency_shutdown_after_event_loop_failure(&app, 1);
+    }
 }
 
 fn finish_owned_shutdown(state: DesktopState, app: AppHandle, code: i32) -> ! {
@@ -555,7 +916,7 @@ fn finish_owned_shutdown(state: DesktopState, app: AppHandle, code: i32) -> ! {
         eprintln!("[codetether:desktop] shutdown watchdog forced process exit");
         std::process::exit(1);
     });
-    let outcome = state.shutdown_owned_host();
+    let outcome = state.shutdown_owned_host(SHUTDOWN_TIMEOUT);
     match outcome {
         ShutdownOutcome::Clean => {}
         ShutdownOutcome::HostExitedUnexpectedly => {
@@ -577,17 +938,42 @@ fn finish_owned_shutdown(state: DesktopState, app: AppHandle, code: i32) -> ! {
     std::process::exit(exit_code);
 }
 
-fn finish_unpreventable_shutdown(state: &DesktopState) {
+fn finish_unpreventable_shutdown(state: &DesktopState, started_at: Instant) {
+    let session_ending = state.snapshot().system == SystemState::SessionEnding;
     if !state.begin_shutdown() {
         return;
     }
-    let outcome = state.shutdown_owned_host();
-    if outcome != ShutdownOutcome::Clean {
-        eprintln!(
-            "[codetether:desktop] unpreventable exit did not confirm a clean Host shutdown ({outcome:?})"
+    // RunEvent::Exit is unpreventable. On Windows it can execute synchronously
+    // inside WM_ENDSESSION, including the narrow case where QUERY was not
+    // observed. Keep the UI thread bounded even if a pipe, process primitive,
+    // or Host cleanup step itself stalls beyond its internal timeout.
+    let deadline = started_at + SESSION_END_SHUTDOWN_TIMEOUT;
+    let worker_timeout = deadline.saturating_duration_since(Instant::now());
+    let shutdown_state = state.clone();
+    let (completed, completion) = std::sync::mpsc::sync_channel(1);
+    thread::spawn(move || {
+        let _ = completed.send(shutdown_state.shutdown_owned_host(worker_timeout));
+    });
+    let wait_timeout = deadline.saturating_duration_since(Instant::now());
+    let outcome = if wait_timeout.is_zero() {
+        None
+    } else {
+        completion.recv_timeout(wait_timeout).ok()
+    };
+    state.allow_exit();
+    if session_ending {
+        log_lifecycle_event(
+            "session_end_shutdown_finished",
+            state,
+            serde_json::json!({
+                "budgetMs": SESSION_END_SHUTDOWN_TIMEOUT.as_millis(),
+                "elapsedMs": started_at.elapsed().as_millis(),
+                "outcome": outcome
+                    .map(|value| format!("{value:?}"))
+                    .unwrap_or_else(|| "TimedOut".to_owned()),
+            }),
         );
     }
-    state.allow_exit();
 }
 
 pub(crate) fn request_app_quit(app: &AppHandle, code: i32) {
@@ -627,6 +1013,7 @@ pub(crate) fn show_main_window(app: &AppHandle) -> Result<bool, String> {
         if !state.can_restore_main_window() {
             return;
         }
+        let started_at = Instant::now();
         let result = (|| {
             let window = restore_app
                 .get_webview_window("main")
@@ -634,10 +1021,18 @@ pub(crate) fn show_main_window(app: &AppHandle) -> Result<bool, String> {
             window.unminimize().map_err(|error| error.to_string())?;
             window.show().map_err(|error| error.to_string())?;
             window.set_focus().map_err(|error| error.to_string())?;
+            lock(&state.lifecycle).mark_window_visible();
             Ok::<(), String>(())
         })();
-        if let Err(error) = result {
-            eprintln!("[codetether:desktop] could not restore the main window: {error}");
+        match result {
+            Ok(()) => log_lifecycle_event(
+                "main_window_restored",
+                &state,
+                serde_json::json!({ "nativeLatencyMs": started_at.elapsed().as_millis() }),
+            ),
+            Err(error) => {
+                eprintln!("[codetether:desktop] could not restore the main window: {error}")
+            }
         }
     })
     .map_err(|error| error.to_string())?;
@@ -648,7 +1043,7 @@ fn emergency_shutdown_after_event_loop_failure(app: &AppHandle, code: i32) {
     let Some(state) = app.try_state::<DesktopState>() else {
         std::process::exit(code);
     };
-    if !state.begin_shutdown() {
+    if !state.begin_failure_shutdown() {
         return;
     }
     let state = state.inner().clone();
@@ -661,11 +1056,13 @@ fn handle_unexpected_host_exit(app: AppHandle) {
         startup_error::show(StartupFailureKind::HostExited);
         std::process::exit(1);
     };
-    if !state.begin_shutdown() {
+    if !state.begin_failure_shutdown() {
         return;
     }
-    show_main_window_for_failure(&app);
-    show_runtime_failure(&app, StartupFailureKind::HostExited);
+    if state.snapshot().system != SystemState::SessionEnding {
+        show_main_window_for_failure(&app);
+        show_runtime_failure(&app, StartupFailureKind::HostExited);
+    }
     let state = state.inner().clone();
     thread::spawn(move || finish_owned_shutdown(state, app, 1));
 }
@@ -676,6 +1073,15 @@ fn finish_desktop_initialization(
     smoke_exit_delay: Option<Duration>,
 ) {
     if state.is_shutting_down() {
+        return;
+    }
+    state.mark_ready();
+    if state.snapshot().system == SystemState::SessionEnding {
+        log_lifecycle_event(
+            "desktop_surface_deferred_for_session_end",
+            &state,
+            serde_json::json!({}),
+        );
         return;
     }
     let initialization = (|| {
@@ -689,16 +1095,21 @@ fn finish_desktop_initialization(
         window
             .show()
             .map_err(|error| (StartupFailureKind::HostSpawnFailed, error.to_string()))?;
-        state.mark_ready();
+        state.surface_initialized.store(true, Ordering::Release);
+        lock(&state.lifecycle).mark_window_visible();
+        log_lifecycle_event("desktop_ready", &state, serde_json::json!({}));
         Ok::<(), (StartupFailureKind, String)>(())
     })();
     if let Err((failure, error)) = initialization {
         system_tray::remove(&app);
         eprintln!("[codetether:desktop] could not initialize the Desktop window/tray: {error}");
-        startup_error::show(failure);
-        if state.begin_shutdown() {
-            thread::spawn(move || finish_owned_shutdown(state, app, 1));
+        if !state.begin_failure_shutdown() {
+            return;
         }
+        if state.snapshot().system != SystemState::SessionEnding {
+            startup_error::show(failure);
+        }
+        thread::spawn(move || finish_owned_shutdown(state, app, 1));
         return;
     }
     if let Some(delay) = smoke_exit_delay {
@@ -710,10 +1121,12 @@ fn finish_desktop_initialization(
 }
 
 fn finish_startup_failure(app: AppHandle, state: DesktopState, failure: StartupFailureKind) {
-    if !state.begin_shutdown() {
+    if !state.begin_failure_shutdown() {
         return;
     }
-    startup_error::show(failure);
+    if state.snapshot().system != SystemState::SessionEnding {
+        startup_error::show(failure);
+    }
     thread::spawn(move || finish_owned_shutdown(state, app, 1));
 }
 
@@ -785,12 +1198,25 @@ pub fn run_desktop() {
             app.manage(state.clone());
             app.manage(AttentionNotificationState::default());
 
+            if let Err(error) = windows_lifecycle::install(app.handle()) {
+                eprintln!(
+                    "[codetether:desktop] could not initialize Windows lifecycle handling: {error}"
+                );
+                finish_startup_failure(
+                    app.handle().clone(),
+                    state,
+                    StartupFailureKind::LifecycleUnavailable,
+                );
+                return Ok(());
+            }
+
             let app_handle = app.handle().clone();
             let smoke_exit_delay = smoke_exit_delay(std::env::args());
             thread::spawn(move || {
                 match wait_for_readiness(&observation, STARTUP_TIMEOUT, env!("CODETETHER_BUILD_ID"))
                 {
-                    Ok(elapsed) => {
+                    Ok((elapsed, identity)) => {
+                        state.set_host_epoch(identity.epoch);
                         eprintln!(
                             "[codetether:desktop] Host ready at {HOST_URL} in {} ms",
                             elapsed.as_millis()
@@ -840,10 +1266,16 @@ pub fn run_desktop() {
                     MainWindowCloseAction::Hide => {
                         api.prevent_close();
                         if let Some(window) = app_handle.get_webview_window("main") {
+                            let started_at = Instant::now();
                             match window.hide() {
                                 Ok(()) => {
-                                    eprintln!(
-                                        "[codetether:desktop] main window hidden; runtime remains active"
+                                    lock(&state.lifecycle).mark_window_hidden();
+                                    log_lifecycle_event(
+                                        "main_window_hidden",
+                                        &state,
+                                        serde_json::json!({
+                                            "nativeLatencyMs": started_at.elapsed().as_millis(),
+                                        }),
                                     );
                                     if state.claim_background_education() {
                                         system_tray::persist_and_show_background_education(
@@ -862,6 +1294,28 @@ pub fn run_desktop() {
                 }
             }
         }
+        RunEvent::WindowEvent {
+            label,
+            event: WindowEvent::Resized(_),
+            ..
+        } if label == "main" => {
+            if let (Some(state), Some(window)) = (
+                app_handle.try_state::<DesktopState>(),
+                app_handle.get_webview_window("main"),
+            ) {
+                match window.is_minimized() {
+                    Ok(true) => lock(&state.lifecycle).mark_window_minimized(),
+                    Ok(false) => {
+                        if window.is_visible().unwrap_or(false) {
+                            lock(&state.lifecycle).mark_window_visible();
+                        }
+                    }
+                    Err(error) => eprintln!(
+                        "[codetether:desktop] could not observe the main window state: {error}"
+                    ),
+                }
+            }
+        }
         RunEvent::ExitRequested { code, api, .. } => {
             if let Some(state) = app_handle.try_state::<DesktopState>()
                 && state.should_prevent_exit()
@@ -872,7 +1326,7 @@ pub fn run_desktop() {
         }
         RunEvent::Exit => {
             if let Some(state) = app_handle.try_state::<DesktopState>() {
-                finish_unpreventable_shutdown(&state);
+                finish_unpreventable_shutdown(&state, Instant::now());
             }
         }
         _ => {}
@@ -886,9 +1340,19 @@ mod tests {
     fn desktop_state() -> DesktopState {
         DesktopState {
             host: Arc::new(Mutex::new(None)),
-            lifecycle: Arc::new(AtomicU8::new(LIFECYCLE_RUNNING)),
-            ready: Arc::new(AtomicBool::new(false)),
+            host_epoch: Arc::new(Mutex::new(None)),
+            lifecycle: Arc::new(Mutex::new(DesktopLifecycle::new())),
+            surface_initialized: Arc::new(AtomicBool::new(false)),
             background_education_shown: Arc::new(AtomicBool::new(false)),
+            lifecycle_log: None,
+        }
+    }
+
+    fn bootstrap_identity(epoch: &str) -> BootstrapIdentity {
+        BootstrapIdentity {
+            epoch: epoch.to_owned(),
+            protocol_version: PROTOCOL_VERSION,
+            host_version: "git-test".to_owned(),
         }
     }
 
@@ -930,7 +1394,10 @@ mod tests {
         assert!(state.begin_shutdown());
         assert!(state.should_prevent_exit());
         assert!(!state.begin_shutdown());
-        assert_eq!(state.shutdown_owned_host(), ShutdownOutcome::Clean);
+        assert_eq!(
+            state.shutdown_owned_host(SHUTDOWN_TIMEOUT),
+            ShutdownOutcome::Clean
+        );
         state.allow_exit();
         assert!(!state.should_prevent_exit());
     }
@@ -1003,8 +1470,9 @@ mod tests {
 
     #[test]
     fn bootstrap_parser_accepts_only_successful_normalized_identity() {
-        let valid = b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n{\"protocolVersion\":1,\"hostVersion\":\"git-abc1234\"}";
+        let valid = b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n{\"epoch\":\"11111111-1111-4111-8111-111111111111\",\"protocolVersion\":1,\"hostVersion\":\"git-abc1234\"}";
         let identity = parse_bootstrap_response(valid).unwrap();
+        assert_eq!(identity.epoch, "11111111-1111-4111-8111-111111111111");
         assert_eq!(identity.protocol_version, 1);
         assert_eq!(identity.host_version, "git-abc1234");
         assert!(parse_bootstrap_response(b"HTTP/1.1 503 Nope\r\n\r\n{}").is_none());
@@ -1037,7 +1505,7 @@ mod tests {
             Some(Duration::from_millis(2_500)),
         );
         assert_eq!(
-            smoke_exit_delay(["--desktop-smoke-exit-after-ready-ms=60001".into()]),
+            smoke_exit_delay(["--desktop-smoke-exit-after-ready-ms=3900001".into()]),
             None,
         );
     }
@@ -1045,14 +1513,15 @@ mod tests {
     #[test]
     fn readiness_succeeds_without_a_fixed_startup_sleep() {
         let observation = ProcessObservation::new();
-        let elapsed = wait_for_readiness_with_probe(
+        let (elapsed, identity) = wait_for_readiness_with_probe(
             &observation,
             Duration::from_secs(1),
             Duration::ZERO,
-            || Readiness::Ready,
+            || Readiness::Ready(bootstrap_identity("epoch-ready")),
         )
         .unwrap();
         assert!(elapsed < Duration::from_secs(1));
+        assert_eq!(identity.epoch, "epoch-ready");
         assert!(observation.ready.load(Ordering::Acquire));
     }
 
@@ -1084,7 +1553,7 @@ mod tests {
         exited.record_termination(Some(3));
         assert_eq!(
             wait_for_readiness_with_probe(&exited, Duration::from_secs(1), Duration::ZERO, || {
-                Readiness::Ready
+                Readiness::Ready(bootstrap_identity("epoch-exited"))
             },),
             Err(StartupFailureKind::HostExited),
         );
@@ -1098,11 +1567,53 @@ mod tests {
                 Duration::ZERO,
                 move || {
                     probe_observation.record_termination(Some(1));
-                    Readiness::Ready
+                    Readiness::Ready(bootstrap_identity("epoch-race"))
                 },
             ),
             Err(StartupFailureKind::HostExited),
         );
+    }
+
+    #[test]
+    fn resume_health_uses_one_probe_and_requires_the_owned_epoch() {
+        let observation = ProcessObservation::new();
+        let probe_calls = std::cell::Cell::new(0_u8);
+        let ready =
+            wait_for_resume_health_with_probe(&observation, "git-test", "epoch-owned", || {
+                probe_calls.set(probe_calls.get() + 1);
+                Ok(Some(bootstrap_identity("epoch-owned")))
+            });
+        assert!(matches!(ready, ResumeHealthOutcome::Ready(_)));
+        assert_eq!(probe_calls.get(), 1);
+
+        assert_eq!(
+            wait_for_resume_health_with_probe(&observation, "git-test", "epoch-owned", || Ok(
+                Some(bootstrap_identity("epoch-replaced"))
+            ),),
+            ResumeHealthOutcome::IdentityChanged,
+        );
+    }
+
+    #[test]
+    fn resume_health_keeps_a_live_but_unresponsive_host_owned() {
+        let observation = ProcessObservation::new();
+        assert_eq!(
+            wait_for_resume_health_with_probe(&observation, "git-test", "epoch-owned", || Ok(None),),
+            ResumeHealthOutcome::Unavailable,
+        );
+        observation.record_termination(Some(1));
+        assert_eq!(
+            wait_for_resume_health_with_probe(&observation, "git-test", "epoch-owned", || panic!(
+                "an exited Host must not be probed"
+            ),),
+            ResumeHealthOutcome::HostExited,
+        );
+    }
+
+    #[test]
+    fn session_end_budget_is_shorter_than_normal_quit_and_the_os_guard() {
+        assert!(SESSION_END_SHUTDOWN_TIMEOUT < SHUTDOWN_TIMEOUT);
+        assert!(SESSION_END_SHUTDOWN_TIMEOUT < SHUTDOWN_WATCHDOG_TIMEOUT);
     }
 
     #[test]
@@ -1116,7 +1627,7 @@ mod tests {
                 let _ = stream.read(&mut request).unwrap();
                 stream
                     .write_all(
-                        b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nconnection: close\r\n\r\n{\"protocolVersion\":1,\"hostVersion\":\"external\"}",
+                        b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nconnection: close\r\n\r\n{\"epoch\":\"99999999-9999-4999-8999-999999999999\",\"protocolVersion\":1,\"hostVersion\":\"external\"}",
                     )
                     .unwrap();
             }

@@ -2177,6 +2177,17 @@ export class HostService {
   }
 
   async #close(): Promise<void> {
+    const failures: unknown[] = []
+    // The first synchronous flush runs before waiting on Provider-backed
+    // actions. Windows session ending can terminate the process before the
+    // Provider finishes, so persist the latest normalized Turn projection at
+    // the start of every graceful close. A second flush below captures any
+    // action that reaches a later durable boundary during the normal budget.
+    try {
+      this.#flushAllDurableTurns()
+    } catch (error) {
+      failures.push(error)
+    }
     await Promise.allSettled([...this.#inFlightActions])
     this.#closingRuntime = true
     // A shutdown-only decline releases the live Provider request, but it is
@@ -2185,7 +2196,6 @@ export class HostService {
     // authority and becomes host_restart/expired on the next Host open.
     this.#unsubscribeApprovals()
     this.#approvalRegistry.declineAll()
-    const failures: unknown[] = []
     try {
       try {
         await this.#runtime.close()

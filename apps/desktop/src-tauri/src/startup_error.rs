@@ -8,6 +8,7 @@ pub enum StartupFailureKind {
     ReadinessTimeout,
     ProtocolIncompatible,
     TrayUnavailable,
+    LifecycleUnavailable,
 }
 
 impl StartupFailureKind {
@@ -29,6 +30,9 @@ impl StartupFailureKind {
                 "桌面程序与本地服务版本不兼容。请重新安装同一版本的 CodeTether。"
             }
             Self::TrayUnavailable => "无法创建 CodeTether 系统托盘入口。请重新启动 CodeTether。",
+            Self::LifecycleUnavailable => {
+                "CodeTether 无法初始化 Windows 后台运行。请重新启动 CodeTether。"
+            }
         }
     }
 }
@@ -99,10 +103,11 @@ mod tests {
             StartupFailureKind::ReadinessTimeout,
             StartupFailureKind::ProtocolIncompatible,
             StartupFailureKind::TrayUnavailable,
+            StartupFailureKind::LifecycleUnavailable,
         ]
         .map(StartupFailureKind::message);
 
-        assert_eq!(messages.len(), 8);
+        assert_eq!(messages.len(), 9);
         assert!(messages.iter().all(|message| !message.is_empty()));
         assert!(messages.iter().all(|message| !message.contains("JSON-RPC")));
     }

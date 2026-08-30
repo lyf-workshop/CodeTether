@@ -17,6 +17,7 @@ import {
 } from './desktop-notification-model.js'
 
 type MaybePromise<T> = Promise<T> | T
+const MAX_SEEN_ATTENTION_IDS = 2_048
 
 export interface AppliedHostEventSource {
   subscribeAppliedEvents(listener: AppliedHostEventListener): () => void
@@ -85,6 +86,7 @@ export class AttentionNotificationCoordinator {
     attention: AttentionItem,
   ) => Promise<AttentionNotificationMetadata>
   readonly #seenAttentionIds = new Set<AttentionId>()
+  readonly #seenAttentionOrder: AttentionId[] = []
   #generation = 0
   #started = false
   #unsubscribeEvents?: () => void
@@ -159,8 +161,16 @@ export class AttentionNotificationCoordinator {
 
     // Claim synchronously before any async work. Suppressed, disabled, denied,
     // and failed attempts must not become a later replay notification.
-    this.#seenAttentionIds.add(attention.attentionId)
+    this.#rememberAttentionId(attention.attentionId)
     void this.#deliverAttention(attention, generation)
+  }
+
+  #rememberAttentionId(attentionId: AttentionId): void {
+    this.#seenAttentionIds.add(attentionId)
+    this.#seenAttentionOrder.push(attentionId)
+    if (this.#seenAttentionOrder.length <= MAX_SEEN_ATTENTION_IDS) return
+    const expired = this.#seenAttentionOrder.shift()
+    if (expired !== undefined) this.#seenAttentionIds.delete(expired)
   }
 
   async #deliverAttention(

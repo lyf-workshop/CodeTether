@@ -96,6 +96,7 @@ export interface HostRuntimeStats {
   readonly snapshotReplacements: number
   readonly streamConnections: number
   readonly reconnectAttempts: number
+  readonly resumeRecoveries: number
   readonly hostEvents: number
   readonly projectionUpdates: number
   readonly duplicateEvents: number
@@ -119,6 +120,8 @@ export type AppliedHostEventListener = (event: AppliedHostEvent) => void
 const runtimesByQueryClient = new WeakMap<QueryClient, HostRuntime>()
 const RELEASE_GRACE_MS = 100
 
+class OwnedDesktopHostIdentityError extends Error {}
+
 export class HostRuntime {
   readonly #queryClient: QueryClient
   readonly #client: HostRuntimeClient
@@ -137,6 +140,9 @@ export class HostRuntime {
   #abortController?: AbortController
   #runPromise?: Promise<void>
   #stream?: HostEventStream
+  #streamConnectAbortController?: AbortController
+  #resumeReconnectRequested = false
+  #ownedDesktopHostEpoch?: Bootstrap['epoch']
   #bootstrap?: Bootstrap
   #retainers = 0
   #stopTimer?: ReturnType<typeof setTimeout>
@@ -329,6 +335,29 @@ export class HostRuntime {
     this.start()
   }
 
+  /**
+   * Revalidates a potentially half-open post-suspend SSE transport without
+   * replacing product state or inventing a second recovery protocol. Closing
+   * the one current stream makes the existing loop reconnect immediately with
+   * its canonical Last-Event-ID cursor.
+   */
+  recoverAfterDesktopResume(intent: {
+    readonly hostEpoch: Bootstrap['epoch']
+  }): void {
+    this.#ownedDesktopHostEpoch = intent.hostEpoch
+    if (!this.#started) {
+      if (this.#retainers > 0) this.start()
+      return
+    }
+    const stream = this.#stream
+    const pendingConnection = this.#streamConnectAbortController
+    if (this.#resumeReconnectRequested) return
+    this.#resumeReconnectRequested = true
+    this.#increment('resumeRecoveries')
+    if (stream !== undefined) void stream.close().catch(() => undefined)
+    else pendingConnection?.abort()
+  }
+
   retain(): () => void {
     this.#retainers += 1
     if (this.#stopTimer !== undefined) {
@@ -358,8 +387,11 @@ export class HostRuntime {
     if (!this.#started && this.#runPromise === undefined) return
     this.#started = false
     this.#generation += 1
+    this.#resumeReconnectRequested = false
     this.#abortController?.abort()
     this.#abortController = undefined
+    this.#streamConnectAbortController?.abort()
+    this.#streamConnectAbortController = undefined
     const stream = this.#stream
     this.#stream = undefined
     await stream?.close().catch(() => undefined)
@@ -388,6 +420,25 @@ export class HostRuntime {
       let snapshotRequired = false
 
       while (this.#isActive(generation)) {
+        if (this.#resumeReconnectRequested) {
+          this.#setConnectionState('reconnecting')
+          try {
+            bootstrap = await this.#fetchBootstrap()
+            this.#resumeReconnectRequested = false
+          } catch (error) {
+            if (!this.#isActive(generation)) return
+            if (
+              error instanceof OwnedDesktopHostIdentityError ||
+              error instanceof CodeTetherIncompatibleProtocolError
+            ) {
+              throw error
+            }
+            this.#lastError = error
+            this.#increment('reconnectAttempts')
+            await waitForDelay(this.#reconnectDelayMs, signal)
+            continue
+          }
+        }
         if (snapshotRequired) {
           this.#setConnectionState('reconnecting')
           try {
@@ -402,6 +453,12 @@ export class HostRuntime {
             snapshotRequired = false
           } catch (error) {
             if (!this.#isActive(generation)) return
+            if (
+              error instanceof OwnedDesktopHostIdentityError ||
+              error instanceof CodeTetherIncompatibleProtocolError
+            ) {
+              throw error
+            }
             this.#lastError = error
             this.#increment('reconnectAttempts')
             await waitForDelay(this.#reconnectDelayMs, signal)
@@ -409,13 +466,28 @@ export class HostRuntime {
           }
         }
 
+        // A resume event can arrive after the top-of-loop validation and
+        // before connectEvents installs its abort controller. Re-enter the
+        // loop instead of opening an unvalidated transport in that gap.
+        if (this.#resumeReconnectRequested) continue
+
         let stream: HostEventStream | undefined
+        const streamConnectAbortController = new AbortController()
+        this.#streamConnectAbortController = streamConnectAbortController
         try {
           this.#increment('streamConnections')
           stream = await this.#client.connectEvents({
             lastEventId: cursor,
-            signal,
+            signal: AbortSignal.any([
+              signal,
+              streamConnectAbortController.signal,
+            ]),
           })
+          if (
+            this.#streamConnectAbortController === streamConnectAbortController
+          ) {
+            this.#streamConnectAbortController = undefined
+          }
           if (!this.#isActive(generation)) {
             await stream.close().catch(() => undefined)
             return
@@ -463,18 +535,29 @@ export class HostRuntime {
           if (!this.#isActive(generation)) return
           this.#lastError = error
         } finally {
+          if (
+            this.#streamConnectAbortController === streamConnectAbortController
+          ) {
+            this.#streamConnectAbortController = undefined
+          }
           if (this.#stream === stream) this.#stream = undefined
           await stream?.close().catch(() => undefined)
         }
 
         if (!this.#isActive(generation)) return
-        if (snapshotRequired) continue
+        if (snapshotRequired) {
+          continue
+        }
+        if (this.#resumeReconnectRequested) {
+          continue
+        }
         this.#increment('reconnectAttempts')
         this.#setConnectionState('reconnecting')
         await waitForDelay(this.#reconnectDelayMs, signal)
       }
     } catch (error) {
       if (!this.#isActive(generation)) return
+      this.#resumeReconnectRequested = false
       this.#lastError = error
       this.#setConnectionState(
         error instanceof CodeTetherIncompatibleProtocolError
@@ -489,6 +572,14 @@ export class HostRuntime {
     const bootstrap = await this.#queryClient.fetchQuery(
       hostBootstrapQueryOptions(this.#client),
     )
+    if (
+      this.#ownedDesktopHostEpoch !== undefined &&
+      bootstrap.epoch !== this.#ownedDesktopHostEpoch
+    ) {
+      throw new OwnedDesktopHostIdentityError(
+        'Desktop Host epoch changed while the owned process was running',
+      )
+    }
     this.#bootstrap = bootstrap
     return bootstrap
   }
@@ -566,6 +657,7 @@ function emptyStats(): HostRuntimeStats {
     snapshotReplacements: 0,
     streamConnections: 0,
     reconnectAttempts: 0,
+    resumeRecoveries: 0,
     hostEvents: 0,
     projectionUpdates: 0,
     duplicateEvents: 0,

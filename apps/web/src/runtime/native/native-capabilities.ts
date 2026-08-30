@@ -1,4 +1,4 @@
-import { TurnIdSchema } from '@codetether/protocol'
+import { EpochIdSchema, TurnIdSchema, type EpochId } from '@codetether/protocol'
 
 import type {
   DesktopWindowState,
@@ -22,6 +22,13 @@ export interface DesktopNotifications {
 
 export interface BackgroundRuntimeCapability {
   readonly available: boolean
+  subscribeToResume(
+    listener: (intent: DesktopResumeIntent) => void,
+  ): Promise<() => void>
+}
+
+export interface DesktopResumeIntent {
+  readonly hostEpoch: EpochId
 }
 
 export interface NativeCapabilities {
@@ -104,6 +111,7 @@ const unavailableDesktopNotifications: DesktopNotifications = {
 
 const unavailableBackgroundRuntime: BackgroundRuntimeCapability = {
   available: false,
+  subscribeToResume: () => Promise.resolve(() => undefined),
 }
 
 /** Tauri v2 exposes this public marker even when `withGlobalTauri` is off. */
@@ -310,10 +318,27 @@ export function createNativeCapabilities(
     },
   }
 
+  const backgroundRuntime: BackgroundRuntimeCapability = {
+    available: true,
+    async subscribeToResume(listener) {
+      const { listen } = await loadEvent()
+      return await listen<unknown>(
+        'codetether://desktop-resumed',
+        ({ payload }) => {
+          try {
+            listener(parseDesktopResumeIntent(payload))
+          } catch {
+            reportResumeFailure()
+          }
+        },
+      )
+    },
+  }
+
   return {
     directoryPicker,
     notifications,
-    backgroundRuntime: { available: true },
+    backgroundRuntime,
   }
 }
 
@@ -399,6 +424,14 @@ function parseNotificationIntent(value: unknown): NotificationIntent {
   return intent
 }
 
+function parseDesktopResumeIntent(value: unknown): DesktopResumeIntent {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error('Native Desktop resume intent is invalid.')
+  }
+  const record = value as Record<string, unknown>
+  return { hostEpoch: EpochIdSchema.parse(record.hostEpoch) }
+}
+
 function assertNotificationIntent(intent: NotificationIntent): void {
   requiredString(intent.attentionId, 160)
   notificationType(intent.type)
@@ -433,4 +466,8 @@ function notificationType(value: unknown): NotificationIntent['type'] {
 
 function reportNotificationFailure(): void {
   console.warn('[CodeTether] A notification click could not be delivered.')
+}
+
+function reportResumeFailure(): void {
+  console.warn('[CodeTether] Desktop resume recovery could not be delivered.')
 }

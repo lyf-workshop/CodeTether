@@ -9,10 +9,11 @@
     "tauri:build": "node scripts/run-tauri.mjs build",
     "check": "node scripts/cargo-check.mjs",
     "package:smoke": "node scripts/package-smoke.mjs && node scripts/lifecycle-smoke.mjs",
+    "background:soak": "node scripts/background-soak.mjs",
     "installer:smoke": "node scripts/installer-smoke.mjs",
     "installer:smoke:hold": "node scripts/installer-smoke.mjs hold",
     "installer:smoke:cleanup": "node scripts/installer-smoke.mjs cleanup",
-    "typecheck": "node --check scripts/build-sidecar.mjs && node --check scripts/cargo-check.mjs && node --check scripts/package-smoke.mjs && node --check scripts/lifecycle-smoke.mjs && node --check scripts/installer-smoke.mjs && node --check scripts/run-tauri.mjs",
+    "typecheck": "node --check scripts/build-sidecar.mjs && node --check scripts/background-soak.mjs && node --check scripts/cargo-check.mjs && node --check scripts/package-smoke.mjs && node --check scripts/lifecycle-smoke.mjs && node --check scripts/installer-smoke.mjs && node --check scripts/run-tauri.mjs",
     "test": "node --test test/*.test.mjs"
   },
   "devDependencies": {

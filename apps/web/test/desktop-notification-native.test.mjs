@@ -37,6 +37,10 @@ test('Browser notifications stay unavailable without loading Tauri modules', asy
 
   assert.equal(capabilities.notifications.available, false)
   assert.equal(capabilities.backgroundRuntime.available, false)
+  assert.equal(
+    typeof (await capabilities.backgroundRuntime.subscribeToResume(() => {})),
+    'function',
+  )
   assert.equal(await capabilities.notifications.ensurePermission(), false)
   assert.deepEqual(capabilities.notifications.getWindowState(), {
     focused: false,
@@ -54,7 +58,7 @@ test('Browser notifications stay unavailable without loading Tauri modules', asy
   assert.equal(loads, 0)
 })
 
-test('Desktop exposes background runtime as a read-only capability without invoking native code', () => {
+test('Desktop detects background runtime without invoking native code', () => {
   let coreLoads = 0
   const capabilities = createNativeCapabilities({
     tauriAvailable: true,
@@ -64,8 +68,35 @@ test('Desktop exposes background runtime as a read-only capability without invok
     },
   })
 
-  assert.deepEqual(capabilities.backgroundRuntime, { available: true })
+  assert.equal(capabilities.backgroundRuntime.available, true)
   assert.equal(coreLoads, 0)
+})
+
+test('Desktop background runtime exposes only one bounded resume event', async () => {
+  const hostEpoch = '11111111-1111-4111-8111-111111111111'
+  let listener
+  let unlistenCalls = 0
+  const received = []
+  const capabilities = createNativeCapabilities({
+    tauriAvailable: true,
+    loadTauriEvent: async () => ({
+      listen: async (event, next) => {
+        assert.equal(event, 'codetether://desktop-resumed')
+        listener = next
+        return () => {
+          unlistenCalls += 1
+        }
+      },
+    }),
+  })
+
+  const unsubscribe = await capabilities.backgroundRuntime.subscribeToResume(
+    (intent) => received.push(intent.hostEpoch),
+  )
+  listener({ payload: { hostEpoch } })
+  assert.deepEqual(received, [hostEpoch])
+  unsubscribe()
+  assert.equal(unlistenCalls, 1)
 })
 
 test('Desktop window state uses native getters instead of stale WebView state', async () => {

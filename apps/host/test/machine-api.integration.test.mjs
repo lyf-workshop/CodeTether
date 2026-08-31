@@ -432,6 +432,101 @@ test('remote pairing stages private trust before publication and unpair rolls ba
     assert.equal(runtime.startConversationCalls.length, 0)
     assert.equal(runtime.resumeConversationCalls.length, 0)
 
+    const remoteRead = await requestJson(
+      baseUrl,
+      `/api/v1/machines/${coordinator.machineId}`,
+    )
+    assert.equal(remoteRead.status, 200)
+    assert.equal(remoteRead.body.connection.state, 'offline')
+    assert.equal(remoteRead.body.machine.connectionState, 'offline')
+    assert.equal(JSON.stringify(remoteRead.body).includes('endpoints'), false)
+    assert.equal(JSON.stringify(remoteRead.body).includes('trustState'), true)
+    assert.equal(
+      JSON.stringify(remoteRead.body).includes('controllerCredentialRef'),
+      false,
+    )
+
+    const retry = await requestJson(
+      baseUrl,
+      `/api/v1/machines/${coordinator.machineId}/connection/retry`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ actionId: 'act_remote_connection_retry01' }),
+      },
+    )
+    assert.equal(retry.status, 202)
+    assert.equal(retry.body.status, 'accepted')
+    assert.equal(retry.body.data.machine.connectionState, 'connecting')
+    assert.equal(retry.body.data.connection.state, 'connecting')
+    assert.equal(coordinator.retryCalls.length, 1)
+
+    const updated = await requestJson(
+      baseUrl,
+      `/api/v1/machines/${coordinator.machineId}/connection/address`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          actionId: 'act_remote_connection_address01',
+          address: { host: '192.0.2.11', port: 43_217 },
+        }),
+      },
+    )
+    assert.equal(updated.status, 200)
+    assert.equal(updated.body.status, 'completed')
+    assert.equal(updated.body.data.machine.connectionState, 'online')
+    assert.deepEqual(updated.body.data.connection.currentEndpoint, {
+      host: '192.0.2.11',
+      port: 43_217,
+    })
+    assert.equal(coordinator.addressUpdates.length, 1)
+    assert.equal(JSON.stringify(updated.body).includes('endpoints'), false)
+
+    coordinator.failAddressUpdate = true
+    const identityMismatch = await requestJson(
+      baseUrl,
+      `/api/v1/machines/${coordinator.machineId}/connection/address`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          actionId: 'act_remote_connection_address02',
+          address: { host: '192.0.2.12', port: 43_217 },
+        }),
+      },
+    )
+    assert.equal(identityMismatch.status, 409)
+    assert.equal(identityMismatch.body.code, 'machine_identity_mismatch')
+    coordinator.failAddressUpdate = false
+
+    const [localMachine] = service.listMachines().machines
+    assert.ok(localMachine)
+    const localRetry = await requestJson(
+      baseUrl,
+      `/api/v1/machines/${localMachine.machineId}/connection/retry`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ actionId: 'act_local_connection_retry01' }),
+      },
+    )
+    assert.equal(localRetry.status, 409)
+    assert.equal(localRetry.body.code, 'conflict')
+    const missingRetry = await requestJson(
+      baseUrl,
+      '/api/v1/machines/machine_missingremote01/connection/retry',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ actionId: 'act_missing_connection_retry01' }),
+      },
+    )
+    assert.equal(missingRetry.status, 404)
+    assert.equal(missingRetry.body.code, 'not_found')
+    assert.equal(runtime.startConversationCalls.length, 0)
+    assert.equal(runtime.resumeConversationCalls.length, 0)
+
     coordinator.failUnpair = true
     const failed = await requestJson(
       baseUrl,
@@ -540,6 +635,10 @@ class FakeRemoteMachineCoordinator {
     this.attemptId = 'pairing_remoteapi01'
     this.machineId = 'machine_remoteapi01'
     this.failUnpair = false
+    this.failAddressUpdate = false
+    this.connection = { state: 'offline' }
+    this.retryCalls = []
+    this.addressUpdates = []
     this.confirmed = {
       machine: {
         machineId: this.machineId,
@@ -566,7 +665,11 @@ class FakeRemoteMachineCoordinator {
   }
 
   connectionState() {
-    return 'offline'
+    return this.connection.state
+  }
+
+  connectionDetails() {
+    return this.connection
   }
 
   async beginPairing(input) {
@@ -605,6 +708,32 @@ class FakeRemoteMachineCoordinator {
         'Controlled revoke failure',
       )
     }
+  }
+
+  async retry(machine, trust) {
+    this.retryCalls.push({ machine, trust })
+    this.connection = {
+      state: 'connecting',
+      lastAttemptAt: timestamp,
+    }
+    return this.connection
+  }
+
+  async updateAddress(machine, trust, address) {
+    this.addressUpdates.push({ machine, trust, address })
+    if (this.failAddressUpdate) {
+      throw new RemoteMachineCoordinatorError(
+        'identity_mismatch',
+        'Controlled endpoint identity mismatch',
+      )
+    }
+    this.connection = {
+      state: 'online',
+      currentEndpoint: address,
+      lastAttemptAt: timestamp,
+      lastSuccessfulAt: timestamp,
+    }
+    return this.connection
   }
 
   async close() {}

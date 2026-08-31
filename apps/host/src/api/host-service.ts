@@ -67,6 +67,7 @@ import {
   type ListAttentionQuery,
   type ListProjectConversationsQuery,
   type MachineSummary,
+  type RemoteMachineConnection,
   type MachinePairingAttemptId,
   type PinConversationRequest,
   type PinConversationResponse,
@@ -85,6 +86,10 @@ import {
   type TurnRecord,
   type UnpairMachineRequest,
   type UnpairMachineResponse,
+  type RetryMachineConnectionRequest,
+  type RetryMachineConnectionResponse,
+  type UpdateMachineConnectionAddressRequest,
+  type UpdateMachineConnectionAddressResponse,
   type UnarchiveConversationRequest,
   type UnarchiveConversationResponse,
   type UnpinConversationRequest,
@@ -108,6 +113,7 @@ import {
   type DurableApprovalHistoryRecord,
   type DurableConversation,
   type DurableConversationMutationResult,
+  type DurableMachine,
   type RestoredDurableConversation,
   type DurableTurnSnapshot,
 } from '../persistence/index.js'
@@ -467,6 +473,9 @@ export class HostService {
         providers: this.#providerDescriptorsForMachine(machine.machineId),
         projects,
         conversations,
+        ...(machine.kind === 'remote'
+          ? { connection: this.#remoteConnection(machine) }
+          : {}),
       })
     } catch (error) {
       throw machineServiceError(error)
@@ -644,12 +653,18 @@ export class HostService {
             markedRevoking &&
             !(error instanceof RemoteMachineRevocationPendingError)
           ) {
-            this.#writeDurable(() => {
+            const restored = this.#writeDurableResult(() =>
               persistence.restoreRevokingTrustedMachinePeer(
                 id,
                 TimestampSchema.parse(this.#timestamp()),
-              )
-            })
+              ),
+            )
+            // The coordinator intentionally does not restart a revoking
+            // worker. Once this failed unpair restores active trust, resume
+            // ordinary bounded recovery without touching any Provider.
+            if (typeof this.#remoteMachines.retry === 'function') {
+              void this.#remoteMachines.retry(durable, restored).catch(() => {})
+            }
           }
           throw remoteMachineServiceError(error)
         }
@@ -670,6 +685,76 @@ export class HostService {
           actionId: request.actionId,
           status: 'completed',
           data: { machineId: id },
+        }
+      },
+      false,
+    )
+  }
+
+  async retryMachineConnection(
+    machineId: MachineId,
+    request: RetryMachineConnectionRequest,
+  ): Promise<RetryMachineConnectionResponse> {
+    const id = MachineIdSchema.parse(machineId)
+    return await this.#executeAction(
+      request.actionId,
+      `machine.connection.retry:${id}`,
+      { machineId: id, request },
+      async () => {
+        const { durable, trust } = this.#requireRemoteMachineTrust(id)
+        try {
+          await this.#remoteMachines.retry(durable, trust)
+          const machine = this.#refreshRemoteMachine(durable)
+          return {
+            protocolVersion,
+            actionId: request.actionId,
+            status: 'accepted',
+            data: {
+              machine,
+              connection: this.#remoteConnection(machine),
+            },
+          }
+        } catch (error) {
+          throw remoteMachineServiceError(error)
+        }
+      },
+      false,
+    )
+  }
+
+  async updateMachineConnectionAddress(
+    machineId: MachineId,
+    request: UpdateMachineConnectionAddressRequest,
+  ): Promise<UpdateMachineConnectionAddressResponse> {
+    const id = MachineIdSchema.parse(machineId)
+    return await this.#executeAction(
+      request.actionId,
+      `machine.connection.address:${id}`,
+      { machineId: id, request },
+      async () => {
+        const { durable, trust } = this.#requireRemoteMachineTrust(id)
+        try {
+          await this.#remoteMachines.updateAddress(
+            durable,
+            trust,
+            request.address,
+          )
+          const refreshed = this.#requireDurableMachineState().getMachine(id)
+          if (refreshed === undefined) {
+            throw new Error('Remote Machine disappeared during address update')
+          }
+          const machine = this.#refreshRemoteMachine(refreshed)
+          return {
+            protocolVersion,
+            actionId: request.actionId,
+            status: 'completed',
+            data: {
+              machine,
+              connection: this.#remoteConnection(machine),
+            },
+          }
+        } catch (error) {
+          throw remoteMachineServiceError(error)
         }
       },
       false,
@@ -2656,6 +2741,64 @@ export class HostService {
       )
     }
     return this.#persistence
+  }
+
+  #requireRemoteMachineTrust(machineId: MachineId) {
+    const persistence = this.#requireDurableMachineState()
+    const durable = persistence.getMachine(machineId)
+    if (durable === undefined) {
+      throw new HostServiceError('not_found', 'Machine was not found', 404)
+    }
+    if (durable.kind !== 'remote') {
+      throw new HostServiceError(
+        'conflict',
+        'The local Machine does not have a remote connection',
+        409,
+      )
+    }
+    const trust = persistence.getTrustedMachinePeer(machineId)
+    if (trust === undefined || trust.trustState !== 'active') {
+      throw new HostServiceError(
+        'conflict',
+        'Machine does not have active remote trust',
+        409,
+      )
+    }
+    return { durable, trust }
+  }
+
+  #refreshRemoteMachine(durable: DurableMachine): MachineSummary {
+    try {
+      return this.#machines.refresh(durable)
+    } catch (error) {
+      if (!(error instanceof MachineRegistryError)) throw error
+      return this.#machines.retainRemote(durable)
+    }
+  }
+
+  #remoteConnection(machine: MachineSummary): RemoteMachineConnection {
+    if (machine.kind !== 'remote' || machine.connectionState === 'local') {
+      throw new Error('Connection detail is available only for remote Machines')
+    }
+    const live = this.#remoteMachines.connectionDetails?.(machine.machineId)
+    // `machine` and connection detail are separate reads. A concurrent
+    // transport transition must not produce an internally inconsistent public
+    // response that Protocol v1 rightly rejects.
+    if (live !== undefined && live.state === machine.connectionState) {
+      return live
+    }
+    const preferred = this.#persistence
+      ?.getTrustedMachinePeer(machine.machineId)
+      ?.endpoints.find((endpoint) => endpoint.preferred)
+    return {
+      state: machine.connectionState,
+      ...(preferred?.lastSuccessfulAt === undefined
+        ? {}
+        : {
+            currentEndpoint: preferred.address,
+            lastSuccessfulAt: preferred.lastSuccessfulAt,
+          }),
+    }
   }
 
   #writeDurable(operation: () => void): void {

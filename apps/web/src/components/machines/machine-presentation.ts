@@ -52,6 +52,8 @@ export function machineConnectionStateLabel(
       return '在线'
     case 'offline':
       return '离线'
+    case 'recovery_required':
+      return '需要更新地址'
     case 'authentication_failed':
       return '身份验证失败'
     case 'incompatible':
@@ -70,6 +72,8 @@ export function machineConnectionBadgeVariant(
       return 'info'
     case 'offline':
       return 'secondary'
+    case 'recovery_required':
+      return 'warning'
     case 'authentication_failed':
       return 'danger'
     case 'incompatible':

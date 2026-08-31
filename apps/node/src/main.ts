@@ -76,56 +76,71 @@ export async function runNode(
     platform: presentationPlatform(platform()),
     architecture: arch(),
   })
-  const service = new CodeTetherNodeService({
-    state,
-    bindAddress: options.bindAddress,
-    port: options.port,
-  })
-  const address = await service.listen()
-  const buildIdentity =
-    typeof __CODETETHER_NODE_VERSION__ === 'string'
-      ? __CODETETHER_NODE_VERSION__
-      : 'development'
-  writeStatus(options.json, {
-    event: 'node.ready',
-    buildIdentity,
-    machineId: state.machine.machineId,
-    nodeId: state.machine.nodeId,
-    displayName: state.machine.displayName,
-    platform: state.machine.platform,
-    architecture: state.machine.architecture,
-    bindAddress: address.address,
-    port: address.port,
-    trustedControllerCount: state.trustedControllerCount,
-  })
-  if (options.pairing) {
-    const pairing = await service.enablePairing()
-    writeStatus(options.json, {
-      event: 'pairing.enabled',
-      code: formatPairingCode(pairing.code),
-      expiresAt: pairing.expiresAt.toISOString(),
+  let service: CodeTetherNodeService | undefined
+  try {
+    service = new CodeTetherNodeService({
+      state,
+      bindAddress: options.bindAddress,
+      port: options.port,
     })
+    const address = await service.listen()
+    const buildIdentity =
+      typeof __CODETETHER_NODE_VERSION__ === 'string'
+        ? __CODETETHER_NODE_VERSION__
+        : 'development'
+    writeStatus(options.json, {
+      event: 'node.ready',
+      buildIdentity,
+      machineId: state.machine.machineId,
+      nodeId: state.machine.nodeId,
+      displayName: state.machine.displayName,
+      platform: state.machine.platform,
+      architecture: state.machine.architecture,
+      bindAddress: address.address,
+      port: address.port,
+      trustedControllerCount: state.trustedControllerCount,
+    })
+    if (options.pairing) {
+      const pairing = await service.enablePairing()
+      writeStatus(options.json, {
+        event: 'pairing.enabled',
+        code: formatPairingCode(pairing.code),
+        expiresAt: pairing.expiresAt.toISOString(),
+      })
+    }
+    service.on('paired', () =>
+      writeStatus(options.json, {
+        event: 'pairing.completed',
+        machineId: state.machine.machineId,
+      }),
+    )
+    service.on('pairingVerification', (value: unknown) => {
+      const event = value as { readonly verificationCode: string }
+      writeStatus(options.json, {
+        event: 'pairing.verification',
+        verificationCode: formatPairingCode(event.verificationCode),
+      })
+    })
+    service.on('unpaired', () =>
+      writeStatus(options.json, {
+        event: 'trust.revoked',
+        machineId: state.machine.machineId,
+      }),
+    )
+    return service
+  } catch (error) {
+    try {
+      if (service === undefined) await state.close()
+      else await service.close()
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        'CodeTether Node startup and cleanup both failed',
+        { cause: cleanupError },
+      )
+    }
+    throw error
   }
-  service.on('paired', () =>
-    writeStatus(options.json, {
-      event: 'pairing.completed',
-      machineId: state.machine.machineId,
-    }),
-  )
-  service.on('pairingVerification', (value: unknown) => {
-    const event = value as { readonly verificationCode: string }
-    writeStatus(options.json, {
-      event: 'pairing.verification',
-      verificationCode: formatPairingCode(event.verificationCode),
-    })
-  })
-  service.on('unpaired', () =>
-    writeStatus(options.json, {
-      event: 'trust.revoked',
-      machineId: state.machine.machineId,
-    }),
-  )
-  return service
 }
 
 function requiredValue(

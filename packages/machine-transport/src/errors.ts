@@ -12,13 +12,17 @@ export type MachineTransportErrorCode =
   | 'busy'
 
 export class MachineTransportError extends Error {
+  /** True only for a protocol error received after the TLS peer was pinned. */
+  readonly peerAuthenticated: boolean
+
   constructor(
     readonly code: MachineTransportErrorCode,
     message: string,
-    options?: ErrorOptions,
+    options?: ErrorOptions & { readonly peerAuthenticated?: boolean },
   ) {
     super(message, options)
     this.name = 'MachineTransportError'
+    this.peerAuthenticated = options?.peerAuthenticated === true
   }
 }
 

@@ -72,9 +72,10 @@ test('remote rows show connection truth without querying or presenting Providers
 })
 
 test('remote detail is truthful and unpair remains explicit and remote-only', async () => {
-  const [detail, unpair] = await Promise.all([
+  const [detail, unpair, addressDialog] = await Promise.all([
     source('components/machines/machine-detail-page.tsx'),
     source('components/machines/unpair-machine-dialog.tsx'),
+    source('components/machines/update-machine-address-dialog.tsx'),
   ])
   const remote = sourceSection(
     detail,
@@ -86,8 +87,22 @@ test('remote detail is truthful and unpair remains explicit and remote-only', as
   assert.match(remote, /远程项目、智能体、会话、终端和文件操作尚未启用/u)
   assert.match(remote, /machineConnectionStateLabel/u)
   assert.match(remote, /authentication_failed/u)
+  assert.match(remote, /recovery_required/u)
   assert.match(remote, /incompatible/u)
+  assert.match(detail, /machineQuery\.data\.connection/u)
+  assert.match(remote, /connection\.currentEndpoint/u)
+  assert.match(remote, /connection\.lastSuccessfulAt/u)
+  assert.match(remote, /connection\.lastAttemptAt/u)
+  assert.match(remote, /runtime\.retryMachineConnection/u)
+  assert.match(remote, /更新连接地址/u)
+  assert.match(remote, /hostConnectionState === 'reconnecting'/u)
+  assert.match(
+    remote,
+    /hostReadyForConnectionAction = hostConnectionState === 'connected'/u,
+  )
+  assert.match(remote, /!hostReadyForConnectionAction/u)
   assert.match(remote, /<UnpairMachineDialog/u)
+  assert.match(remote, /<UpdateMachineAddressDialog/u)
   assert.doesNotMatch(
     remote,
     /providerPresentations\.map|projects\.map|conversations\.map/u,
@@ -96,9 +111,25 @@ test('remote detail is truthful and unpair remains explicit and remote-only', as
   assert.match(unpair, /if \(machine\.kind !== 'remote'\) return null/u)
   assert.match(unpair, /runtime\.unpairMachine/u)
   assert.match(unpair, /不会删除远程机器上的文件/u)
+  assert.match(unpair, /不会假装已经远程撤销/u)
   assert.match(unpair, /<DialogTitle>取消机器配对<\/DialogTitle>/u)
   assert.match(unpair, /role="alert"/u)
   assert.match(unpair, /showCloseButton=\{!unpairMutation\.isPending\}/u)
+
+  assert.match(addressDialog, /<DialogTitle>更新连接地址<\/DialogTitle>/u)
+  assert.match(addressDialog, /runtime\.updateMachineConnectionAddress/u)
+  assert.match(addressDialog, /ref=\{inputRef\}/u)
+  assert.match(addressDialog, /onOpenAutoFocus/u)
+  assert.match(addressDialog, /inputRef\.current\?\.select\(\)/u)
+  assert.match(addressDialog, /aria-errormessage/u)
+  assert.match(addressDialog, /role="alert"/u)
+  assert.match(addressDialog, /showCloseButton=\{!updateMutation\.isPending\}/u)
+  assert.match(addressDialog, /max-w-md overflow-x-hidden/u)
+  assert.match(addressDialog, /身份不匹配时，原信任关系和当前地址保持不变/u)
+  assert.doesNotMatch(
+    addressDialog,
+    /setQueryData|localStorage|sessionStorage|dangerouslySetInnerHTML/u,
+  )
 })
 
 test('New Conversation excludes identity-only remote Machines by canonical capabilities', async () => {

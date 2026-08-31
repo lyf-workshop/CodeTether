@@ -73,7 +73,9 @@ export function UnpairMachineDialog({
         </DialogHeader>
 
         <div className="rounded-sm border border-border bg-surface-muted/60 px-3 py-3 text-sm text-text-secondary">
-          取消配对后，这台机器不能再自动连接。该操作不会删除远程机器上的文件或更改本地电脑。
+          {machine.connectionState === 'online'
+            ? 'CodeTether 会先请求远程节点撤销信任，确认成功后才移除本地机器记录。该操作不会删除远程机器上的文件或更改本地电脑。'
+            : '远程节点需要可连接才能确认撤销信任。如果无法连接，CodeTether 会保留本地机器和信任记录，不会假装已经远程撤销。'}
         </div>
 
         {unpairMutation.isError ? (

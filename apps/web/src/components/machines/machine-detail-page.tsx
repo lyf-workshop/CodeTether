@@ -1,9 +1,10 @@
 import { useState, type ReactNode } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import { Link, useParams } from '@tanstack/react-router'
 import {
   ArrowLeft,
   FolderOpen,
+  MapPin,
   Monitor,
   RefreshCw,
   Server,
@@ -22,6 +23,7 @@ import {
 import {
   MachineIdSchema,
   type MachineId,
+  type RemoteMachineConnection,
   type MachineSummary,
 } from '@codetether/protocol'
 import { CodeTetherResponseError } from '@codetether/client'
@@ -30,6 +32,7 @@ import {
   useHostConnectionState,
   useHostRuntime,
 } from '../../runtime/host/host-runtime-hooks'
+import { machineErrorMessage } from '../../runtime/host/machine-actions'
 import { machineDetailQueryOptions } from '../../runtime/host/machine-query'
 import { projectLocationForMachine } from '../../runtime/host/project-location'
 import { providerPresentationsForMachine } from '../../provider/provider-presentation'
@@ -45,8 +48,10 @@ import {
   machineConnectionBadgeVariant,
   machineConnectionStateLabel,
   machinePlatformLabel,
+  remoteMachineAddressLabel,
 } from './machine-presentation'
 import { UnpairMachineDialog } from './unpair-machine-dialog'
+import { UpdateMachineAddressDialog } from './update-machine-address-dialog'
 
 export function MachineDetailRoute() {
   const { machineId: rawMachineId } = useParams({
@@ -59,25 +64,26 @@ export function MachineDetailRoute() {
 
 function MachineDetailPage({ machineId }: { machineId: MachineId }) {
   const runtime = useHostRuntime()
-  const connectionState = useHostConnectionState()
+  const hostConnectionState = useHostConnectionState()
   const [unpairOpen, setUnpairOpen] = useState(false)
   const machineQuery = useQuery({
     ...machineDetailQueryOptions(runtime, machineId),
-    enabled: connectionState === 'connected',
+    enabled: hostConnectionState === 'connected',
   })
   const connectionUnavailable =
-    connectionState === 'unavailable' || connectionState === 'incompatible'
+    hostConnectionState === 'unavailable' ||
+    hostConnectionState === 'incompatible'
 
   function retry() {
     runtime.retry()
-    if (connectionState === 'connected') void machineQuery.refetch()
+    if (hostConnectionState === 'connected') void machineQuery.refetch()
   }
 
   if (connectionUnavailable) {
     return (
       <MachinePageFrame>
         <MachinesErrorState
-          incompatible={connectionState === 'incompatible'}
+          incompatible={hostConnectionState === 'incompatible'}
           onRetry={retry}
         />
       </MachinePageFrame>
@@ -106,9 +112,18 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
 
   const { machine } = machineQuery.data
   if (machine.kind === 'remote') {
+    const remoteConnection = machineQuery.data.connection
+    if (remoteConnection === undefined) {
+      return (
+        <MachinePageFrame>
+          <MachinesErrorState onRetry={retry} />
+        </MachinePageFrame>
+      )
+    }
     return (
       <RemoteMachineDetail
-        connectionState={connectionState}
+        connection={remoteConnection}
+        hostConnectionState={hostConnectionState}
         machine={machine}
         onUnpair={() => setUnpairOpen(true)}
         unpairOpen={unpairOpen}
@@ -336,7 +351,7 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
         )}
       </section>
 
-      {connectionState === 'reconnecting' ? (
+      {hostConnectionState === 'reconnecting' ? (
         <p
           role="status"
           className="mt-4 inline-flex items-center gap-1.5 text-xs text-text-muted"
@@ -353,7 +368,8 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
 }
 
 interface RemoteMachineDetailProps {
-  connectionState: ReturnType<typeof useHostConnectionState>
+  connection: RemoteMachineConnection
+  hostConnectionState: ReturnType<typeof useHostConnectionState>
   machine: MachineSummary
   onUnpair: () => void
   onUnpairOpenChange: (open: boolean) => void
@@ -361,13 +377,24 @@ interface RemoteMachineDetailProps {
 }
 
 function RemoteMachineDetail({
-  connectionState,
+  connection,
+  hostConnectionState,
   machine,
   onUnpair,
   onUnpairOpenChange,
   unpairOpen,
 }: RemoteMachineDetailProps) {
-  const lastSeen = formatMachineLastSeen(machine.lastSeenAt)
+  const runtime = useHostRuntime()
+  const [addressOpen, setAddressOpen] = useState(false)
+  const lastSuccessful = formatMachineLastSeen(connection.lastSuccessfulAt)
+  const lastAttempt = formatMachineLastSeen(connection.lastAttemptAt)
+  const retryMutation = useMutation({
+    mutationFn: async () =>
+      await runtime.retryMachineConnection(machine.machineId),
+  })
+  const hostReadyForConnectionAction = hostConnectionState === 'connected'
+  const canRetry =
+    connection.state !== 'online' && connection.state !== 'connecting'
 
   return (
     <MachinePageFrame>
@@ -447,15 +474,68 @@ function RemoteMachineDetail({
             <div className="min-w-0">
               <p className="text-sm font-medium text-text-primary">已信任</p>
               <p className="mt-1 text-xs leading-relaxed text-text-muted">
-                {remoteConnectionDescription(machine.connectionState)}
+                {remoteConnectionDescription(connection.state)}
               </p>
-              {lastSeen === undefined ? null : (
-                <p className="mt-2 truncate text-xs text-text-muted">
-                  最近成功连接：{lastSeen}
-                </p>
-              )}
             </div>
           </div>
+          <dl className="mt-4 min-w-0 space-y-3 border-t border-border pt-4">
+            <MachineMetadata
+              label="当前连接地址"
+              value={
+                connection.currentEndpoint === undefined
+                  ? '暂无已验证地址'
+                  : remoteMachineAddressLabel(connection.currentEndpoint)
+              }
+            />
+            <MachineMetadata
+              label="最近成功连接"
+              value={lastSuccessful ?? '暂无'}
+            />
+            <MachineMetadata
+              label="最近连接尝试"
+              value={lastAttempt ?? '暂无'}
+            />
+          </dl>
+          <div className="mt-4 flex min-w-0 flex-wrap gap-2">
+            {canRetry ? (
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={
+                  retryMutation.isPending || !hostReadyForConnectionAction
+                }
+                onClick={() => retryMutation.mutate()}
+              >
+                <RefreshCw
+                  aria-hidden="true"
+                  className={cn(
+                    retryMutation.isPending &&
+                      'animate-spin motion-reduce:animate-none',
+                  )}
+                />
+                {retryMutation.isPending ? '正在重试…' : '重试'}
+              </Button>
+            ) : null}
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={
+                retryMutation.isPending || !hostReadyForConnectionAction
+              }
+              onClick={() => setAddressOpen(true)}
+            >
+              <MapPin aria-hidden="true" />
+              更新连接地址
+            </Button>
+          </div>
+          {retryMutation.isError ? (
+            <p
+              role="alert"
+              className="mt-3 break-words rounded-sm border border-danger/30 bg-danger-muted px-3 py-2 text-sm text-danger"
+            >
+              {machineErrorMessage(retryMutation.error, 'retry')}
+            </p>
+          ) : null}
         </section>
       </div>
 
@@ -468,7 +548,7 @@ function RemoteMachineDetail({
         </p>
       </section>
 
-      {connectionState === 'reconnecting' ? (
+      {hostConnectionState === 'reconnecting' ? (
         <p
           role="status"
           className="mt-4 inline-flex items-center gap-1.5 text-xs text-text-muted"
@@ -486,6 +566,12 @@ function RemoteMachineDetail({
         open={unpairOpen}
         onOpenChange={onUnpairOpenChange}
       />
+      <UpdateMachineAddressDialog
+        currentEndpoint={connection.currentEndpoint}
+        machine={machine}
+        open={addressOpen}
+        onOpenChange={setAddressOpen}
+      />
     </MachinePageFrame>
   )
 }
@@ -500,6 +586,8 @@ function remoteConnectionDescription(
       return '正在验证远程节点并建立安全连接。'
     case 'offline':
       return '远程节点当前离线；信任关系仍然保留。'
+    case 'recovery_required':
+      return '已保存的地址当前不可用；请重试或更新连接地址。'
     case 'authentication_failed':
       return '最近连接无法验证远程节点身份，CodeTether 已拒绝信任该连接。'
     case 'incompatible':

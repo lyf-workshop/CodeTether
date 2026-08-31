@@ -283,6 +283,22 @@ export class HostRuntime {
     return this.#machineActions.unpairMachine(machineId)
   }
 
+  retryMachineConnection(
+    machineId: Parameters<MachineActions['retryMachineConnection']>[0],
+  ) {
+    return this.#machineActions.retryMachineConnection(machineId)
+  }
+
+  updateMachineConnectionAddress(
+    machineId: Parameters<MachineActions['updateMachineConnectionAddress']>[0],
+    address: Parameters<MachineActions['updateMachineConnectionAddress']>[1],
+  ) {
+    return this.#machineActions.updateMachineConnectionAddress(
+      machineId,
+      address,
+    )
+  }
+
   getProject(
     projectId: ProjectId,
     options?: { readonly signal?: AbortSignal },

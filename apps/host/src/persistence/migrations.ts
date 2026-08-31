@@ -98,6 +98,11 @@ const migrations: readonly Migration[] = [
     name: 'remote_machine_trust',
     up: migrateRemoteMachineTrust,
   },
+  {
+    version: 10,
+    name: 'remote_machine_endpoints',
+    up: migrateRemoteMachineEndpoints,
+  },
 ]
 
 export const currentSchemaVersion = migrations.at(-1)?.version ?? 0
@@ -1669,6 +1674,141 @@ function migrateRemoteMachineTrust(database: DatabaseSync): void {
           json_extract(NEW.input, '$.text')
         )
       WHERE document_key = 'turn:' || OLD.turn_id;
+    END;
+  `)
+}
+
+/**
+ * Separates authenticated transport hints from cryptographic trust. A v9
+ * peer's single endpoint becomes the initial preferred pairing endpoint;
+ * future authenticated address mobility may retain at most eight hints.
+ */
+function migrateRemoteMachineEndpoints(database: DatabaseSync): void {
+  database.exec(`
+    CREATE TABLE trusted_machine_peers_v10 (
+      machine_id TEXT PRIMARY KEY,
+      node_identity TEXT NOT NULL UNIQUE
+        CHECK (
+          length(node_identity) BETWEEN 16 AND 256 AND
+          node_identity = trim(node_identity) AND
+          instr(node_identity, char(0)) = 0
+        ),
+      peer_public_key_spki BLOB NOT NULL UNIQUE
+        CHECK (length(peer_public_key_spki) BETWEEN 32 AND 4096),
+      peer_key_fingerprint TEXT NOT NULL UNIQUE
+        CHECK (
+          length(peer_key_fingerprint) BETWEEN 43 AND 128 AND
+          peer_key_fingerprint = trim(peer_key_fingerprint)
+        ),
+      controller_credential_ref TEXT NOT NULL UNIQUE
+        CHECK (
+          length(controller_credential_ref) BETWEEN 1 AND 512 AND
+          controller_credential_ref = trim(controller_credential_ref) AND
+          instr(controller_credential_ref, char(0)) = 0
+        ),
+      controller_key_fingerprint TEXT NOT NULL
+        CHECK (
+          length(controller_key_fingerprint) BETWEEN 43 AND 128 AND
+          controller_key_fingerprint = trim(controller_key_fingerprint)
+        ),
+      trust_state TEXT NOT NULL
+        CHECK (trust_state IN ('pending', 'active', 'revoking')),
+      protocol_version INTEGER NOT NULL
+        CHECK (protocol_version BETWEEN 1 AND 2147483647),
+      paired_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      last_authenticated_at TEXT,
+      FOREIGN KEY (machine_id)
+        REFERENCES machines(machine_id)
+        ON DELETE CASCADE
+    ) STRICT;
+
+    INSERT INTO trusted_machine_peers_v10 (
+      machine_id, node_identity, peer_public_key_spki,
+      peer_key_fingerprint, controller_credential_ref,
+      controller_key_fingerprint, trust_state, protocol_version,
+      paired_at, updated_at, last_authenticated_at
+    )
+    SELECT
+      machine_id, node_identity, peer_public_key_spki,
+      peer_key_fingerprint, controller_credential_ref,
+      controller_key_fingerprint, trust_state, protocol_version,
+      paired_at, updated_at, last_authenticated_at
+    FROM trusted_machine_peers
+    ORDER BY rowid ASC;
+
+    CREATE TABLE trusted_machine_endpoints_v10 (
+      machine_id TEXT NOT NULL,
+      endpoint_host TEXT NOT NULL
+        CHECK (
+          length(endpoint_host) BETWEEN 1 AND 253 AND
+          endpoint_host = trim(endpoint_host) AND
+          instr(endpoint_host, char(0)) = 0
+        ),
+      endpoint_port INTEGER NOT NULL CHECK (endpoint_port BETWEEN 1 AND 65535),
+      source TEXT NOT NULL CHECK (source IN ('pairing', 'manual')),
+      preferred INTEGER NOT NULL CHECK (preferred IN (0, 1)),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      last_successful_at TEXT,
+      last_failure_at TEXT,
+      PRIMARY KEY (machine_id, endpoint_host, endpoint_port),
+      FOREIGN KEY (machine_id)
+        REFERENCES trusted_machine_peers_v10(machine_id)
+        ON DELETE CASCADE
+    ) STRICT;
+
+    INSERT INTO trusted_machine_endpoints_v10 (
+      machine_id, endpoint_host, endpoint_port, source, preferred,
+      created_at, updated_at, last_successful_at, last_failure_at
+    )
+    SELECT
+      machine_id, endpoint_host, endpoint_port, 'pairing', 1,
+      paired_at, updated_at, last_authenticated_at, NULL
+    FROM trusted_machine_peers
+    ORDER BY rowid ASC;
+
+    DROP TABLE trusted_machine_peers;
+    ALTER TABLE trusted_machine_peers_v10 RENAME TO trusted_machine_peers;
+    ALTER TABLE trusted_machine_endpoints_v10
+      RENAME TO trusted_machine_endpoints;
+
+    CREATE TRIGGER trg_trusted_machine_peer_remote_insert
+    BEFORE INSERT ON trusted_machine_peers
+    WHEN (
+      SELECT kind FROM machines WHERE machine_id = NEW.machine_id
+    ) IS NOT 'remote'
+    BEGIN
+      SELECT RAISE(ABORT, 'Trusted peer must belong to a remote Machine');
+    END;
+
+    CREATE TRIGGER trg_trusted_machine_peer_remote_update
+    BEFORE UPDATE OF machine_id ON trusted_machine_peers
+    WHEN (
+      SELECT kind FROM machines WHERE machine_id = NEW.machine_id
+    ) IS NOT 'remote'
+    BEGIN
+      SELECT RAISE(ABORT, 'Trusted peer must belong to a remote Machine');
+    END;
+
+    CREATE UNIQUE INDEX idx_trusted_machine_endpoint_preferred
+      ON trusted_machine_endpoints(machine_id)
+      WHERE preferred = 1;
+
+    CREATE INDEX idx_trusted_machine_endpoint_order
+      ON trusted_machine_endpoints(
+        machine_id, preferred DESC, last_successful_at DESC,
+        updated_at DESC, endpoint_host ASC, endpoint_port ASC
+      );
+
+    CREATE TRIGGER trg_trusted_machine_endpoint_capacity
+    BEFORE INSERT ON trusted_machine_endpoints
+    WHEN (
+      SELECT COUNT(*) FROM trusted_machine_endpoints
+      WHERE machine_id = NEW.machine_id
+    ) >= 8
+    BEGIN
+      SELECT RAISE(ABORT, 'Trusted Machine endpoint capacity reached');
     END;
   `)
 }

@@ -49,7 +49,10 @@ import {
   ProjectLocationSchema,
   ProjectRecordSchema,
   RemoteMachineAddressSchema,
+  RemoteMachineConnectionSchema,
   RemoteMachinePairingCandidateSchema,
+  RetryMachineConnectionRequestSchema,
+  RetryMachineConnectionResponseSchema,
   ProviderAvailabilitySchema,
   ProviderCapabilitiesSchema,
   ProviderDescriptorSchema,
@@ -63,6 +66,8 @@ import {
   StartTurnRequestSchema,
   TurnRecordSchema,
   ToolKindSchema,
+  UpdateMachineConnectionAddressRequestSchema,
+  UpdateMachineConnectionAddressResponseSchema,
   UnarchiveConversationRequestSchema,
   UnarchiveConversationResponseSchema,
   UnpinConversationRequestSchema,
@@ -544,6 +549,103 @@ test('validates presentation-safe remote pairing contracts', () => {
       data: { candidate: { ...candidate, peerPublicKey: 'private' } },
     }).success,
     false,
+  )
+})
+
+test('validates bounded presentation-safe remote connection recovery contracts', () => {
+  const remoteMachine = {
+    ...machine,
+    machineId: 'machine_remote01',
+    displayName: 'Development server',
+    kind: 'remote',
+    availability: 'available',
+    connectionState: 'online',
+    trustState: 'trusted',
+    isLocal: false,
+    capabilities: {
+      projectAccess: false,
+      providerExecution: false,
+      backgroundRuntime: false,
+      nativeFolderPicker: false,
+      notifications: false,
+    },
+  }
+  const address = { host: '192.168.50.22', port: 4_318 }
+  const connection = {
+    state: 'online',
+    currentEndpoint: address,
+    lastSuccessfulAt: timestamp,
+    lastAttemptAt: timestamp,
+  }
+  assert.deepEqual(RemoteMachineConnectionSchema.parse(connection), connection)
+  assert.equal(
+    RemoteMachineConnectionSchema.safeParse({ state: 'online' }).success,
+    false,
+  )
+  assert.equal(
+    RemoteMachineConnectionSchema.safeParse({
+      ...connection,
+      knownEndpoints: [address],
+    }).success,
+    false,
+    'private endpoint history must not cross the public protocol',
+  )
+
+  const detail = {
+    protocolVersion,
+    machine: remoteMachine,
+    providers: [],
+    projects: [],
+    conversations: [],
+    connection,
+  }
+  assert.deepEqual(GetMachineResponseSchema.parse(detail), detail)
+  assert.equal(
+    GetMachineResponseSchema.safeParse({ ...detail, connection: undefined })
+      .success,
+    false,
+  )
+  assert.equal(
+    GetMachineResponseSchema.safeParse({
+      ...detail,
+      connection: { ...connection, state: 'offline' },
+    }).success,
+    false,
+    'Machine and connection state must agree',
+  )
+  assert.equal(
+    GetMachineResponseSchema.safeParse({
+      protocolVersion,
+      machine,
+      providers: [providerDescriptor],
+      projects: [project],
+      conversations: [conversationSummary],
+      connection,
+    }).success,
+    false,
+    'local Machine detail must not expose remote connection metadata',
+  )
+
+  assert.deepEqual(RetryMachineConnectionRequestSchema.parse({ actionId }), {
+    actionId,
+  })
+  assert.deepEqual(
+    UpdateMachineConnectionAddressRequestSchema.parse({ actionId, address }),
+    { actionId, address },
+  )
+  const mutation = {
+    protocolVersion,
+    actionId,
+    status: 'completed',
+    data: { machine: remoteMachine, connection },
+  }
+  assert.deepEqual(
+    RetryMachineConnectionResponseSchema.parse(mutation),
+    mutation,
+  )
+  assert.deepEqual(
+    UpdateMachineConnectionAddressResponseSchema.parse(mutation),
+    mutation,
   )
 })
 

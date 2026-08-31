@@ -18,6 +18,7 @@ export const MachineConnectionStateSchema = z.enum([
   'connecting',
   'online',
   'offline',
+  'recovery_required',
   'authentication_failed',
   'incompatible',
 ])
@@ -97,11 +98,44 @@ export const RemoteMachineAddressSchema = z
           value !== '.' &&
           value !== '..',
         'Remote Machine host must be a hostname or IP address',
-      ),
+      )
+      .refine((value) => {
+        const starts = value.startsWith('[')
+        const ends = value.endsWith(']')
+        if (starts !== ends || value.includes('%')) return false
+        if (starts && value.indexOf(']') !== value.length - 1) return false
+        const host = (starts ? value.slice(1, -1) : value).toLowerCase()
+        return !/^fe[89ab][0-9a-f]:/u.test(host)
+      }, 'IPv6 brackets must be balanced and link-local scopes are unsupported'),
     port: z.number().int().min(1).max(65_535),
   })
   .strict()
 export type RemoteMachineAddress = z.infer<typeof RemoteMachineAddressSchema>
+
+/** Presentation-safe connection state; private trust and endpoint history stay Host-owned. */
+export const RemoteMachineConnectionSchema = z
+  .object({
+    state: MachineConnectionStateSchema.exclude(['local']),
+    currentEndpoint: RemoteMachineAddressSchema.optional(),
+    lastSuccessfulAt: TimestampSchema.optional(),
+    lastAttemptAt: TimestampSchema.optional(),
+  })
+  .strict()
+  .superRefine((connection, context) => {
+    if (
+      connection.state === 'online' &&
+      connection.currentEndpoint === undefined
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'An online remote Machine must have an authenticated endpoint',
+        path: ['currentEndpoint'],
+      })
+    }
+  })
+export type RemoteMachineConnection = z.infer<
+  typeof RemoteMachineConnectionSchema
+>
 
 export const RemoteMachinePairingCodeSchema = z
   .string()
@@ -146,6 +180,7 @@ export type ProjectLocation = z.infer<typeof ProjectLocationSchema>
 
 export const machineWireLimits = {
   machines: 64,
+  rememberedEndpoints: 8,
   pairingAttempts: 8,
   projectLocations: 64,
   providers: 16,

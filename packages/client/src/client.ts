@@ -44,10 +44,14 @@ import {
   ResolveAttentionResponseSchema,
   RenameConversationRequestSchema,
   RenameConversationResponseSchema,
+  RetryMachineConnectionRequestSchema,
+  RetryMachineConnectionResponseSchema,
   SafeErrorEnvelopeSchema,
   StartTurnRequestSchema,
   StartTurnResponseSchema,
   TurnIdSchema,
+  UpdateMachineConnectionAddressRequestSchema,
+  UpdateMachineConnectionAddressResponseSchema,
   UnpairMachineRequestSchema,
   UnpairMachineResponseSchema,
   UnarchiveConversationRequestSchema,
@@ -98,9 +102,13 @@ import {
   type ResolveAttentionResponse,
   type RenameConversationRequest,
   type RenameConversationResponse,
+  type RetryMachineConnectionRequest,
+  type RetryMachineConnectionResponse,
   type StartTurnRequest,
   type StartTurnResponse,
   type TurnId,
+  type UpdateMachineConnectionAddressRequest,
+  type UpdateMachineConnectionAddressResponse,
   type UnpairMachineRequest,
   type UnpairMachineResponse,
   type UnarchiveConversationRequest,
@@ -331,6 +339,56 @@ export class CodeTetherClient {
       response.data.machineId === machine,
       'Unpair response does not match the requested Machine',
     )
+    return response
+  }
+
+  async retryMachineConnection(
+    machineId: MachineId,
+    input: RetryMachineConnectionRequest,
+    options: RequestOptions = {},
+  ): Promise<RetryMachineConnectionResponse> {
+    const machine = parseProtocol(
+      MachineIdSchema,
+      machineId,
+      'retry-machine-connection id',
+    )
+    const request = parseProtocol(
+      RetryMachineConnectionRequestSchema,
+      input,
+      'retry-machine-connection request',
+    )
+    const response = await this.#request(
+      `/api/v1/machines/${encodeURIComponent(machine)}/connection/retry`,
+      RetryMachineConnectionResponseSchema,
+      jsonRequest(request, options.signal),
+      request.actionId,
+    )
+    assertMachineConnectionMutationIdentity(response, machine)
+    return response
+  }
+
+  async updateMachineConnectionAddress(
+    machineId: MachineId,
+    input: UpdateMachineConnectionAddressRequest,
+    options: RequestOptions = {},
+  ): Promise<UpdateMachineConnectionAddressResponse> {
+    const machine = parseProtocol(
+      MachineIdSchema,
+      machineId,
+      'update-machine-connection-address id',
+    )
+    const request = parseProtocol(
+      UpdateMachineConnectionAddressRequestSchema,
+      input,
+      'update-machine-connection-address request',
+    )
+    const response = await this.#request(
+      `/api/v1/machines/${encodeURIComponent(machine)}/connection/address`,
+      UpdateMachineConnectionAddressResponseSchema,
+      { ...jsonRequest(request, options.signal), method: 'PUT' },
+      request.actionId,
+    )
+    assertMachineConnectionMutationIdentity(response, machine)
     return response
   }
 
@@ -1098,6 +1156,22 @@ function assertProtocolIdentity(
   message: string,
 ): asserts condition {
   if (!condition) throw new CodeTetherProtocolError(message)
+}
+
+function assertMachineConnectionMutationIdentity(
+  response:
+    RetryMachineConnectionResponse | UpdateMachineConnectionAddressResponse,
+  machineId: MachineId,
+): void {
+  assertProtocolIdentity(
+    response.data.machine.machineId === machineId &&
+      response.data.machine.kind === 'remote',
+    'Machine connection response does not match the requested remote Machine',
+  )
+  assertProtocolIdentity(
+    response.data.connection.state === response.data.machine.connectionState,
+    'Machine connection response state does not match the Machine summary',
+  )
 }
 
 function positiveInteger(

@@ -871,7 +871,7 @@ Exit gate:
 
 ## Phase 6B.1 — Remote Node Identity & Secure Pairing
 
-**Status:** current approved implementation scope; not accepted or frozen.
+**Status:** accepted and frozen at `30559a3`.
 
 **Goal:** establish the first trustworthy LAN relationship between the existing Desktop-owned Host and a second real Machine running a minimal CodeTether Node, without executing Projects, Conversations, or Providers remotely.
 
@@ -890,6 +890,27 @@ Exit gate:
 ### Exit gate
 
 - A separate-process Node can be explicitly paired, confirmed, authenticated, persisted, restarted/reconnected without code reuse or duplicate Machine records, shown truthfully online/offline, and explicitly unpaired; wrong identity and malformed/replayed/expired/rate-limited attempts fail closed. Local Machine, mixed Provider, Search/organization/Attention, frozen background lifecycle, process cleanup, tests, and clean build identity remain correct.
+
+## Phase 6B.2 — Secure Connection Recovery & Address Mobility
+
+**Status:** current approved implementation scope; not accepted or frozen.
+
+**Goal:** let an already trusted remote Machine recover across an ordinary LAN endpoint change without making network location an identity or requiring unnecessary re-pairing.
+
+### In scope
+
+- A transactional bounded endpoint-hint model private to the Host, with one authenticated preferred endpoint, bounded alternatives, success/failure timestamps, duplicate suppression, and deterministic eviction.
+- One cancellable reconnect worker per trusted Machine, ordered preferred/fallback attempts, capped exponential jittered backoff, explicit Retry, and a manual address update that promotes only after the accepted pinned TLS/Machine/Node identity checks succeed.
+- Truthful online/connecting/offline/authentication/recovery/incompatible presentation plus a compact Connection section. A wrong Node at a remembered or candidate endpoint fails closed without trust replacement, Machine duplication, or endpoint poisoning.
+- IPv4 and robust private IPv6 endpoint parsing. Link-local IPv6 remains unsupported until scope/interface handling is trustworthy. LAN discovery is investigated but not shipped; no unauthenticated hint establishes trust.
+
+### Out of scope
+
+- Remote Project Location, Conversation, Turn, Provider, Terminal, filesystem, Git, Diff, Approval, process execution, SSH/SFTP/SCP, sync, discovery shipment, port forwarding, Wake-on-LAN, firewall modification, relay, NAT traversal, public Internet access, or Machine switching.
+
+### Exit gate
+
+- A real trusted Node survives restart and address change as the same cryptographic Machine without re-pairing; a different Node at the same endpoint fails closed; endpoint history and workers remain bounded; installed Desktop restart, local behavior, Provider isolation, cleanup, tests, and clean build identity remain correct.
 
 ## Phase 7 — Remote LAN / Tailscale
 

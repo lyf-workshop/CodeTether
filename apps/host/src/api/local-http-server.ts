@@ -40,6 +40,8 @@ import {
   ResolveApprovalResponseSchema,
   ResolveAttentionRequestSchema,
   ResolveAttentionResponseSchema,
+  RetryMachineConnectionRequestSchema,
+  RetryMachineConnectionResponseSchema,
   ListProjectsResponseSchema,
   ListProjectConversationsQuerySchema,
   PinConversationRequestSchema,
@@ -54,6 +56,8 @@ import {
   TurnIdSchema,
   UnpairMachineRequestSchema,
   UnpairMachineResponseSchema,
+  UpdateMachineConnectionAddressRequestSchema,
+  UpdateMachineConnectionAddressResponseSchema,
   UnarchiveConversationRequestSchema,
   UnarchiveConversationResponseSchema,
   UnpinConversationRequestSchema,
@@ -467,6 +471,56 @@ export class LocalHttpServer {
           200,
           GetMachineResponseSchema.parse(
             await this.#service.getMachine(machineId),
+          ),
+          context.allowedOrigin,
+        )
+        return
+      }
+      const machineRetryRoute = this.#http.matchPath(
+        url.pathname,
+        /^\/api\/v1\/machines\/([^/]+)\/connection\/retry$/u,
+      )
+      if (request.method === 'POST' && machineRetryRoute !== undefined) {
+        const machineId = this.#http.parseRouteId(
+          MachineIdSchema,
+          machineRetryRoute[0],
+          'machineId',
+        )
+        const body = await this.#http.readValidatedBody(
+          request,
+          RetryMachineConnectionRequestSchema,
+        )
+        context.actionId = body.actionId
+        this.#http.writeJson(
+          response,
+          202,
+          RetryMachineConnectionResponseSchema.parse(
+            await this.#service.retryMachineConnection(machineId, body),
+          ),
+          context.allowedOrigin,
+        )
+        return
+      }
+      const machineAddressRoute = this.#http.matchPath(
+        url.pathname,
+        /^\/api\/v1\/machines\/([^/]+)\/connection\/address$/u,
+      )
+      if (request.method === 'PUT' && machineAddressRoute !== undefined) {
+        const machineId = this.#http.parseRouteId(
+          MachineIdSchema,
+          machineAddressRoute[0],
+          'machineId',
+        )
+        const body = await this.#http.readValidatedBody(
+          request,
+          UpdateMachineConnectionAddressRequestSchema,
+        )
+        context.actionId = body.actionId
+        this.#http.writeJson(
+          response,
+          200,
+          UpdateMachineConnectionAddressResponseSchema.parse(
+            await this.#service.updateMachineConnectionAddress(machineId, body),
           ),
           context.allowedOrigin,
         )

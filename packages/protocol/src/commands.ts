@@ -22,6 +22,7 @@ import {
   TurnRecordSchema,
 } from './records.js'
 import {
+  RemoteMachineConnectionSchema,
   MachineSummarySchema,
   RemoteMachineAddressSchema,
   RemoteMachinePairingCandidateSchema,
@@ -127,10 +128,32 @@ export const GetMachineResponseSchema = z
     conversations: z
       .array(ConversationSummarySchema)
       .max(machineWireLimits.recentConversations),
+    connection: RemoteMachineConnectionSchema.optional(),
   })
   .strict()
   .superRefine((response, context) => {
     const machineId = response.machine.machineId
+    if (
+      (response.machine.kind === 'local' &&
+        response.connection !== undefined) ||
+      (response.machine.kind === 'remote' && response.connection === undefined)
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Connection detail must be present only for remote Machines',
+        path: ['connection'],
+      })
+    }
+    if (
+      response.connection !== undefined &&
+      response.connection.state !== response.machine.connectionState
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Machine summary and connection detail states must agree',
+        path: ['connection', 'state'],
+      })
+    }
     const providerIds = new Set<string>()
     for (const [index, provider] of response.providers.entries()) {
       if (providerIds.has(provider.provider)) {
@@ -221,6 +244,23 @@ export const UnpairMachineRequestSchema = z
   .object({ actionId: ActionIdSchema })
   .strict()
 export type UnpairMachineRequest = z.infer<typeof UnpairMachineRequestSchema>
+
+export const RetryMachineConnectionRequestSchema = z
+  .object({ actionId: ActionIdSchema })
+  .strict()
+export type RetryMachineConnectionRequest = z.infer<
+  typeof RetryMachineConnectionRequestSchema
+>
+
+export const UpdateMachineConnectionAddressRequestSchema = z
+  .object({
+    actionId: ActionIdSchema,
+    address: RemoteMachineAddressSchema,
+  })
+  .strict()
+export type UpdateMachineConnectionAddressRequest = z.infer<
+  typeof UpdateMachineConnectionAddressRequestSchema
+>
 
 export const conversationListLimits = {
   default: 50,
@@ -528,6 +568,26 @@ export const UnpairMachineResponseSchema = mutationResponseSchema(
   z.object({ machineId: MachineIdSchema }).strict(),
 )
 export type UnpairMachineResponse = z.infer<typeof UnpairMachineResponseSchema>
+
+const MachineConnectionMutationDataSchema = z
+  .object({
+    machine: MachineSummarySchema,
+    connection: RemoteMachineConnectionSchema,
+  })
+  .strict()
+
+export const RetryMachineConnectionResponseSchema = mutationResponseSchema(
+  MachineConnectionMutationDataSchema,
+)
+export type RetryMachineConnectionResponse = z.infer<
+  typeof RetryMachineConnectionResponseSchema
+>
+
+export const UpdateMachineConnectionAddressResponseSchema =
+  mutationResponseSchema(MachineConnectionMutationDataSchema)
+export type UpdateMachineConnectionAddressResponse = z.infer<
+  typeof UpdateMachineConnectionAddressResponseSchema
+>
 
 export const RenameConversationResponseSchema = mutationResponseSchema(
   ConversationOrganizationDataSchema,

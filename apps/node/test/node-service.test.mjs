@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
@@ -11,7 +12,7 @@ import {
   newControllerId,
 } from '@codetether/machine-transport'
 
-import { parseNodeCli } from '../dist/main.js'
+import { parseNodeCli, runNode } from '../dist/main.js'
 import { CodeTetherNodeService } from '../dist/node-service.js'
 import { NodeStateStore } from '../dist/state-store.js'
 
@@ -332,6 +333,41 @@ test('stale lock takeover is fail-closed for every concurrent opener', async () 
       /2147483647/u,
     )
   } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('a failed network bind releases the exact Node writer lock', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'codetether-node-'))
+  const blocker = createServer()
+  let reopened
+  try {
+    await new Promise((resolve, reject) => {
+      blocker.once('error', reject)
+      blocker.listen({ host: '127.0.0.1', port: 0 }, resolve)
+    })
+    const address = blocker.address()
+    assert.ok(address !== null && typeof address !== 'string')
+    await assert.rejects(
+      runNode({
+        bindAddress: '127.0.0.1',
+        port: address.port,
+        dataDirectory: directory,
+        displayName: 'Bind Failure Node',
+        pairing: false,
+        json: true,
+      }),
+      (error) => error instanceof Error && 'code' in error,
+    )
+    reopened = await NodeStateStore.open({
+      dataDirectory: directory,
+      displayName: 'Bind Failure Node',
+      platform: 'Linux',
+      architecture: 'x64',
+    })
+  } finally {
+    await reopened?.close().catch(() => undefined)
+    await new Promise((resolve) => blocker.close(() => resolve()))
     await rm(directory, { recursive: true, force: true })
   }
 })

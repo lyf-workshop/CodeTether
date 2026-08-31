@@ -32,6 +32,7 @@ async function fixture(options = {}) {
   let beginCalls = 0
   let connectCalls = 0
   let revokeCalls = 0
+  const attemptedEndpoints = []
   const connections = []
   const transport = {
     async beginPairing(input) {
@@ -62,7 +63,11 @@ async function fixture(options = {}) {
     },
     async connectTrusted(input) {
       connectCalls += 1
+      attemptedEndpoints.push(input.peer.endpoint)
       if (options.connectError !== undefined) throw options.connectError
+      if (options.connectHandler !== undefined) {
+        await options.connectHandler(input)
+      }
       assert.equal(
         input.peer.nodeFingerprint,
         nodeIdentity.publicKeyFingerprint,
@@ -106,6 +111,7 @@ async function fixture(options = {}) {
         return revokeCalls
       },
     },
+    attemptedEndpoints,
     async close(coordinator) {
       await coordinator?.close().catch(() => undefined)
       store.close()
@@ -351,6 +357,207 @@ test('wrong pinned identity becomes a terminal authentication state without reco
   }
 })
 
+test('recovery tries the preferred endpoint before an authenticated fallback and promotes that fallback', async () => {
+  const options = {
+    async connectHandler(input) {
+      if (input.peer.endpoint.host === '172.20.1.21') {
+        throw new MachineTransportError('connection_failed', 'preferred moved')
+      }
+    },
+  }
+  const f = await fixture(options)
+  let coordinator
+  try {
+    coordinator = await SecureRemoteMachineCoordinator.create({
+      persistence: f.store,
+      transport: f.transport,
+      heartbeatIntervalMs: 1_000,
+      reconnectMaximumDelayMs: 20,
+    })
+    const candidate = await coordinator.beginPairing({
+      address: { host: '172.20.1.20', port: 4319 },
+      pairingCode: '123456',
+    })
+    const confirmed = await coordinator.confirmPairing(
+      candidate.pairingAttemptId,
+      (staged) =>
+        f.store.createRemoteMachineWithTrust(staged.machine, staged.trust),
+    )
+    f.store.activateTrustedMachinePeer(
+      confirmed.machine.machineId,
+      new Date().toISOString(),
+    )
+    f.store.recordTrustedMachineAuthentication(
+      confirmed.machine.machineId,
+      { host: '172.20.1.21', port: 4319 },
+      new Date().toISOString(),
+      'manual',
+    )
+    await coordinator.close()
+    coordinator = undefined
+    f.attemptedEndpoints.length = 0
+
+    coordinator = await SecureRemoteMachineCoordinator.create({
+      persistence: f.store,
+      transport: f.transport,
+      heartbeatIntervalMs: 1_000,
+      reconnectMaximumDelayMs: 20,
+    })
+    await waitFor(
+      () =>
+        coordinator.connectionState(confirmed.machine.machineId) === 'online',
+      'fallback connection',
+    )
+    assert.deepEqual(f.attemptedEndpoints.slice(0, 2), [
+      { host: '172.20.1.21', port: 4319 },
+      { host: '172.20.1.20', port: 4319 },
+    ])
+    const trust = f.store.getTrustedMachinePeer(confirmed.machine.machineId)
+    assert.equal(trust?.endpoints[0]?.address.host, '172.20.1.20')
+    assert.equal(trust?.endpoints[0]?.preferred, true)
+    assert.ok(
+      trust?.endpoints.find(
+        (endpoint) => endpoint.address.host === '172.20.1.21',
+      )?.lastFailureAt,
+    )
+  } finally {
+    await f.close(coordinator)
+  }
+})
+
+test('a mismatched stale fallback does not stop bounded recovery of a transient preferred endpoint', async () => {
+  let recoveryMode = false
+  let preferredAvailable = false
+  const options = {
+    async connectHandler(input) {
+      if (!recoveryMode) return
+      if (input.peer.endpoint.host === '172.20.1.21' && !preferredAvailable) {
+        throw new MachineTransportError(
+          'connection_failed',
+          'preferred endpoint is temporarily unavailable',
+        )
+      }
+      if (input.peer.endpoint.host === '172.20.1.20') {
+        throw new MachineTransportError(
+          'identity_mismatch',
+          'stale endpoint belongs to another Node',
+        )
+      }
+    },
+  }
+  const f = await fixture(options)
+  let coordinator
+  try {
+    coordinator = await SecureRemoteMachineCoordinator.create({
+      persistence: f.store,
+      transport: f.transport,
+      heartbeatIntervalMs: 1_000,
+      reconnectMaximumDelayMs: 20,
+    })
+    const candidate = await coordinator.beginPairing({
+      address: { host: '172.20.1.20', port: 4319 },
+      pairingCode: '123456',
+    })
+    const confirmed = await coordinator.confirmPairing(
+      candidate.pairingAttemptId,
+      (staged) =>
+        f.store.createRemoteMachineWithTrust(staged.machine, staged.trust),
+    )
+    f.store.activateTrustedMachinePeer(
+      confirmed.machine.machineId,
+      new Date().toISOString(),
+    )
+    f.store.recordTrustedMachineAuthentication(
+      confirmed.machine.machineId,
+      { host: '172.20.1.21', port: 4319 },
+      new Date().toISOString(),
+      'manual',
+    )
+    await coordinator.close()
+    coordinator = undefined
+    f.attemptedEndpoints.length = 0
+    recoveryMode = true
+
+    coordinator = await SecureRemoteMachineCoordinator.create({
+      persistence: f.store,
+      transport: f.transport,
+      heartbeatIntervalMs: 1_000,
+      reconnectMaximumDelayMs: 20,
+    })
+    await waitFor(
+      () =>
+        coordinator.connectionState(confirmed.machine.machineId) ===
+          'authentication_failed' && f.attemptedEndpoints.length >= 2,
+      'mismatched stale fallback state',
+    )
+    preferredAvailable = true
+    await waitFor(
+      () =>
+        coordinator.connectionState(confirmed.machine.machineId) === 'online',
+      'preferred endpoint recovery',
+    )
+
+    assert.deepEqual(f.attemptedEndpoints.slice(0, 3), [
+      { host: '172.20.1.21', port: 4319 },
+      { host: '172.20.1.20', port: 4319 },
+      { host: '172.20.1.21', port: 4319 },
+    ])
+    const trust = f.store.getTrustedMachinePeer(confirmed.machine.machineId)
+    assert.equal(trust?.endpoints[0]?.address.host, '172.20.1.21')
+    assert.equal(trust?.endpoints[0]?.preferred, true)
+  } finally {
+    await f.close(coordinator)
+  }
+})
+
+test('a wrong identity at a manual candidate endpoint cannot poison durable endpoint history', async () => {
+  const options = {
+    async connectHandler(input) {
+      if (input.peer.endpoint.host === '172.20.1.99') {
+        throw new MachineTransportError('identity_mismatch', 'untrusted peer')
+      }
+    },
+  }
+  const f = await fixture(options)
+  let coordinator
+  try {
+    coordinator = await SecureRemoteMachineCoordinator.create({
+      persistence: f.store,
+      transport: f.transport,
+      heartbeatIntervalMs: 1_000,
+      reconnectMaximumDelayMs: 20,
+    })
+    const candidate = await coordinator.beginPairing({
+      address: { host: '172.20.1.22', port: 4319 },
+      pairingCode: '123456',
+    })
+    const confirmed = await coordinator.confirmPairing(
+      candidate.pairingAttemptId,
+      (staged) =>
+        f.store.createRemoteMachineWithTrust(staged.machine, staged.trust),
+    )
+    const trust = f.store.activateTrustedMachinePeer(
+      confirmed.machine.machineId,
+      new Date().toISOString(),
+    )
+    await assert.rejects(
+      coordinator.updateAddress(confirmed.machine, trust, {
+        host: '172.20.1.99',
+        port: 4319,
+      }),
+      /identity/u,
+    )
+    const persisted = f.store.getTrustedMachinePeer(confirmed.machine.machineId)
+    assert.deepEqual(
+      persisted?.endpoints.map((endpoint) => endpoint.address),
+      [{ host: '172.20.1.22', port: 4319 }],
+    )
+    assert.equal(persisted?.endpoints[0]?.preferred, true)
+  } finally {
+    await f.close(coordinator)
+  }
+})
+
 test('startup deterministically finishes a durable revoking record', async () => {
   const f = await fixture()
   let coordinator
@@ -393,7 +600,7 @@ test('startup deterministically finishes a durable revoking record', async () =>
   }
 })
 
-test('lost revoke acknowledgement never restores an already-revoked peer to active trust', async () => {
+test('an unauthenticated failure during revocation recovery never deletes durable trust', async () => {
   const options = {}
   const f = await fixture(options)
   let coordinator
@@ -432,20 +639,18 @@ test('lost revoke acknowledgement never restores an already-revoked peer to acti
       transport: f.transport,
       reconnectMaximumDelayMs: 10,
     })
-    await waitFor(
-      () => f.store.getMachine(confirmed.machine.machineId) === undefined,
-      'local revocation recovery',
-    )
+    await waitFor(() => f.counts.connect >= 2, 'bounded revocation retry')
+    assert.ok(f.store.getMachine(confirmed.machine.machineId))
     assert.equal(
-      f.store.getTrustedMachinePeer(confirmed.machine.machineId),
-      undefined,
+      f.store.getTrustedMachinePeer(confirmed.machine.machineId).trustState,
+      'revoking',
     )
   } finally {
     await f.close(coordinator)
   }
 })
 
-test('a revoke acknowledgement lost during the live operation becomes irreversible cleanup', async () => {
+test('a Node-B identity error after a lost acknowledgement cannot prove revocation', async () => {
   const options = {}
   const f = await fixture(options)
   let coordinator
@@ -477,8 +682,60 @@ test('a revoke acknowledgement lost during the live operation becomes irreversib
       'revocation acknowledgement was lost',
     )
     options.connectErrorAfterRevoke = new MachineTransportError(
+      'identity_mismatch',
+      'a different Node answered the old endpoint',
+    )
+
+    await assert.rejects(
+      coordinator.unpair(confirmed.machine, trust),
+      (error) => error instanceof RemoteMachineRevocationPendingError,
+    )
+    await waitFor(() => f.counts.connect >= 2, 'live revocation retry')
+    assert.ok(f.store.getMachine(confirmed.machine.machineId))
+    assert.equal(
+      f.store.getTrustedMachinePeer(confirmed.machine.machineId)?.trustState,
+      'revoking',
+    )
+  } finally {
+    await f.close(coordinator)
+  }
+})
+
+test('a pinned peer authentication rejection after a lost revoke acknowledgement completes local cleanup', async () => {
+  const options = {}
+  const f = await fixture(options)
+  let coordinator
+  try {
+    coordinator = await SecureRemoteMachineCoordinator.create({
+      persistence: f.store,
+      transport: f.transport,
+      reconnectMaximumDelayMs: 10,
+    })
+    const candidate = await coordinator.beginPairing({
+      address: { host: '172.20.1.9', port: 4319 },
+      pairingCode: '123456',
+    })
+    const confirmed = await coordinator.confirmPairing(
+      candidate.pairingAttemptId,
+      (staged) =>
+        f.store.createRemoteMachineWithTrust(staged.machine, staged.trust),
+    )
+    f.store.activateTrustedMachinePeer(
+      confirmed.machine.machineId,
+      new Date().toISOString(),
+    )
+    const trust = f.store.markTrustedMachinePeerRevoking(
+      confirmed.machine.machineId,
+      new Date().toISOString(),
+    )
+    options.revokeError = new MachineTransportError(
+      'connection_failed',
+      'revocation acknowledgement was lost',
+    )
+    options.connectErrorAfterRevoke = new MachineTransportError(
       'authentication_failed',
-      'the Node already removed controller trust',
+      'the pinned Node already removed controller trust',
+      { peerAuthenticated: true },
     )
 
     await assert.rejects(
@@ -487,7 +744,7 @@ test('a revoke acknowledgement lost during the live operation becomes irreversib
     )
     await waitFor(
       () => f.store.getMachine(confirmed.machine.machineId) === undefined,
-      'live lost-ack revocation cleanup',
+      'authenticated lost-ack cleanup',
     )
     assert.equal(
       f.store.getTrustedMachinePeer(confirmed.machine.machineId),

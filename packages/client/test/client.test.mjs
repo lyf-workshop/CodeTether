@@ -460,6 +460,17 @@ test('uses bounded remote Machine pairing and trust routes', async () => {
     expiresAt: timestamp,
     verificationCode: '482 731',
   }
+  const connection = {
+    state: 'online',
+    currentEndpoint: candidate.address,
+    lastSuccessfulAt: timestamp,
+    lastAttemptAt: timestamp,
+  }
+  const onlineRemoteMachine = {
+    ...remoteMachine,
+    availability: 'available',
+    connectionState: 'online',
+  }
   const responses = [
     {
       protocolVersion: 1,
@@ -478,6 +489,24 @@ test('uses bounded remote Machine pairing and trust routes', async () => {
       actionId: 'act_pair_cancel01',
       status: 'completed',
       data: { pairingAttemptId },
+    },
+    {
+      protocolVersion: 1,
+      actionId: 'act_retry001',
+      status: 'completed',
+      data: { machine: onlineRemoteMachine, connection },
+    },
+    {
+      protocolVersion: 1,
+      actionId: 'act_address01',
+      status: 'completed',
+      data: {
+        machine: onlineRemoteMachine,
+        connection: {
+          ...connection,
+          currentEndpoint: { host: '192.0.2.11', port: 43218 },
+        },
+      },
     },
     {
       protocolVersion: 1,
@@ -505,6 +534,13 @@ test('uses bounded remote Machine pairing and trust routes', async () => {
   await client.cancelRemoteMachinePairing(pairingAttemptId, {
     actionId: 'act_pair_cancel01',
   })
+  await client.retryMachineConnection(remoteMachine.machineId, {
+    actionId: 'act_retry001',
+  })
+  await client.updateMachineConnectionAddress(remoteMachine.machineId, {
+    actionId: 'act_address01',
+    address: { host: '192.0.2.11', port: 43218 },
+  })
   await client.unpairMachine(remoteMachine.machineId, {
     actionId: 'act_unpair01',
   })
@@ -515,6 +551,8 @@ test('uses bounded remote Machine pairing and trust routes', async () => {
       ['/api/v1/machine-pairings', 'POST'],
       [`/api/v1/machine-pairings/${pairingAttemptId}/confirm`, 'POST'],
       [`/api/v1/machine-pairings/${pairingAttemptId}`, 'DELETE'],
+      [`/api/v1/machines/${remoteMachine.machineId}/connection/retry`, 'POST'],
+      [`/api/v1/machines/${remoteMachine.machineId}/connection/address`, 'PUT'],
       [`/api/v1/machines/${remoteMachine.machineId}/trust`, 'DELETE'],
     ],
   )
@@ -523,6 +561,61 @@ test('uses bounded remote Machine pairing and trust routes', async () => {
     address: candidate.address,
     pairingCode: '482731',
   })
+  assert.deepEqual(JSON.parse(calls[3].init.body), {
+    actionId: 'act_retry001',
+  })
+  assert.deepEqual(JSON.parse(calls[4].init.body), {
+    actionId: 'act_address01',
+    address: { host: '192.0.2.11', port: 43218 },
+  })
+})
+
+test('rejects connection mutation responses for another Machine or mismatched state', async () => {
+  const remoteMachine = {
+    ...machine,
+    machineId: 'machine_remote01',
+    kind: 'remote',
+    availability: 'unavailable',
+    connectionState: 'offline',
+    trustState: 'trusted',
+    isLocal: false,
+    capabilities: {
+      projectAccess: false,
+      providerExecution: false,
+      backgroundRuntime: false,
+      nativeFolderPicker: false,
+      notifications: false,
+    },
+  }
+  const cases = [
+    {
+      machine: { ...remoteMachine, machineId: 'machine_other01' },
+      connection: { state: 'offline' },
+    },
+    {
+      machine: remoteMachine,
+      connection: { state: 'connecting' },
+    },
+  ]
+
+  for (const data of cases) {
+    const client = new CodeTetherClient({
+      baseUrl: 'http://host.test',
+      fetch: async () =>
+        jsonResponse({
+          protocolVersion: 1,
+          actionId: 'act_retry001',
+          status: 'completed',
+          data,
+        }),
+    })
+    await assert.rejects(
+      client.retryMachineConnection(remoteMachine.machineId, {
+        actionId: 'act_retry001',
+      }),
+      CodeTetherProtocolError,
+    )
+  }
 })
 
 test('rejects Project responses whose route identity does not match', async () => {

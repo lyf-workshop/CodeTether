@@ -322,7 +322,7 @@ export async function connectTrustedRemoteMachine(options: {
       { signal: options.signal },
     )
     if (response.type === 'machine.error') {
-      throw remoteError(response.code, response.message)
+      throw remoteError(response.code, response.message, true)
     }
     if (
       response.nonce !== nonce ||
@@ -373,7 +373,7 @@ export class AuthenticatedRemoteMachineConnection {
       { signal, timeoutMs: machineTransportLimits.heartbeatTimeoutMs },
     )
     if (response.type === 'machine.error') {
-      throw remoteError(response.code, response.message)
+      throw remoteError(response.code, response.message, true)
     }
     if (response.nonce !== nonce) {
       throw new MachineTransportError(
@@ -397,7 +397,7 @@ export class AuthenticatedRemoteMachineConnection {
       { signal },
     )
     if (response.type === 'machine.error') {
-      throw remoteError(response.code, response.message)
+      throw remoteError(response.code, response.message, true)
     }
     if (
       response.controllerId !== this.#controllerId ||
@@ -447,6 +447,7 @@ export async function receiveCompatibleMachineMessage<T>(
 function remoteError(
   code: z.infer<typeof MachineErrorMessageSchema>['code'],
   message: string,
+  peerAuthenticated = false,
 ) {
   const mapped =
     code === 'protocol_incompatible'
@@ -466,5 +467,5 @@ function remoteError(
                   : code === 'malformed_message'
                     ? 'malformed_message'
                     : 'pairing_failed'
-  return new MachineTransportError(mapped, message)
+  return new MachineTransportError(mapped, message, { peerAuthenticated })
 }

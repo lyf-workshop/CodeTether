@@ -25,8 +25,8 @@ test('pairing input accepts bounded host/port forms and normalizes only the visu
     host: '192.168.1.42',
     port: 65_535,
   })
-  assert.deepEqual(parseRemoteMachineAddressInput('[fe80::1]:4318'), {
-    host: 'fe80::1',
+  assert.deepEqual(parseRemoteMachineAddressInput('[fd00::1]:4318'), {
+    host: 'fd00::1',
     port: 4318,
   })
   assert.equal(
@@ -36,6 +36,8 @@ test('pairing input accepts bounded host/port forms and normalizes only the visu
   assert.equal(parseRemoteMachineAddressInput('node.lan'), undefined)
   assert.equal(parseRemoteMachineAddressInput('node.lan:0'), undefined)
   assert.equal(parseRemoteMachineAddressInput('fe80::1:4318'), undefined)
+  assert.equal(parseRemoteMachineAddressInput('[fe80::1]:4318'), undefined)
+  assert.equal(parseRemoteMachineAddressInput('[fd00::1:4318'), undefined)
 
   assert.equal(normalizePairingCodeInput('４８２ ７３１'), '482731')
   assert.equal(normalizePairingCodeInput('482-731-999'), '482731')
@@ -79,6 +81,11 @@ test('Machine actions keep pairing preview ephemeral and accept only Host-confir
     ['machine_local01', 'machine_remote01'],
   )
 
+  await actions.retryMachineConnection('machine_remote01')
+  await actions.updateMachineConnectionAddress('machine_remote01', {
+    host: '192.168.1.43',
+    port: 4318,
+  })
   await actions.unpairMachine('machine_remote01')
   assert.deepEqual(
     queryClient
@@ -88,7 +95,78 @@ test('Machine actions keep pairing preview ephemeral and accept only Host-confir
   )
   assert.deepEqual(
     calls.map((call) => call.operation),
-    ['begin', 'confirm', 'unpair'],
+    ['begin', 'confirm', 'retry', 'update-address', 'unpair'],
+  )
+})
+
+test('connection retry dedupes per Machine and excludes a concurrent address mutation', async () => {
+  const pending = Promise.withResolvers()
+  let calls = 0
+  const actions = new MachineActions(
+    {
+      retryMachineConnection() {
+        calls += 1
+        return pending.promise
+      },
+      updateMachineConnectionAddress() {
+        assert.fail('address mutation must not race the active retry')
+      },
+    },
+    new QueryClient(),
+    () => 'act_machine01',
+  )
+
+  const first = actions.retryMachineConnection('machine_remote01')
+  const duplicate = actions.retryMachineConnection('machine_remote01')
+  assert.equal(first, duplicate)
+  assert.equal(calls, 1)
+  await assert.rejects(
+    actions.updateMachineConnectionAddress('machine_remote01', {
+      host: 'node-new.lan',
+      port: 4318,
+    }),
+    MachineMutationBusyError,
+  )
+  pending.resolve(connectionResponse('act_machine01'))
+  await first
+})
+
+test('address candidates remain out of Machine caches until authenticated success', async () => {
+  const pending = Promise.withResolvers()
+  const queryClient = new QueryClient()
+  queryClient.setQueryData(machineQueryKeys.list, [remoteMachine()])
+  const actions = new MachineActions(
+    {
+      updateMachineConnectionAddress(_machineId, request) {
+        assert.deepEqual(request.address, {
+          host: 'node-new.lan',
+          port: 4318,
+        })
+        return pending.promise
+      },
+    },
+    queryClient,
+    () => 'act_machine01',
+  )
+
+  const update = actions.updateMachineConnectionAddress('machine_remote01', {
+    host: 'node-new.lan',
+    port: 4318,
+  })
+  assert.doesNotMatch(
+    JSON.stringify(queryClient.getQueryData(machineQueryKeys.list)),
+    /node-new\.lan/u,
+  )
+  pending.resolve(
+    connectionResponse('act_machine01', {
+      host: 'node-new.lan',
+      port: 4318,
+    }),
+  )
+  await update
+  assert.equal(
+    queryClient.getQueryData(machineQueryKeys.list)[0].connectionState,
+    'online',
   )
 })
 
@@ -148,6 +226,10 @@ test('Machine errors expose stable actionable copy instead of transport diagnost
     '无法验证这台机器的身份。',
   )
   assert.equal(
+    machineErrorMessage(error('machine_identity_mismatch'), 'update-address'),
+    '该地址指向另一台机器；CodeTether 已拒绝连接，原信任关系未更改。',
+  )
+  assert.equal(
     machineErrorMessage(error('machine_protocol_incompatible'), 'begin'),
     '远程节点版本不兼容，请更新 CodeTether Node。',
   )
@@ -189,6 +271,34 @@ function mutationClient(calls) {
         status: 'completed',
         data: { machineId },
       }
+    },
+    async retryMachineConnection(machineId, request) {
+      calls.push({ operation: 'retry', machineId, request })
+      return connectionResponse(request.actionId)
+    },
+    async updateMachineConnectionAddress(machineId, request) {
+      calls.push({ operation: 'update-address', machineId, request })
+      return connectionResponse(request.actionId, request.address)
+    },
+  }
+}
+
+function connectionResponse(
+  actionId = 'act_machine01',
+  currentEndpoint = { host: 'node.lan', port: 4318 },
+) {
+  return {
+    protocolVersion: 1,
+    actionId,
+    status: 'completed',
+    data: {
+      machine: remoteMachine(),
+      connection: {
+        state: 'online',
+        currentEndpoint,
+        lastSuccessfulAt: timestamp,
+        lastAttemptAt: timestamp,
+      },
     },
   }
 }

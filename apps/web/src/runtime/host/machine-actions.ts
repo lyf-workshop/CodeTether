@@ -19,8 +19,12 @@ import {
   type MachinePairingAttemptId,
   type MachineSummary,
   type RemoteMachineAddress,
+  type RetryMachineConnectionRequest,
+  type RetryMachineConnectionResponse,
   type UnpairMachineRequest,
   type UnpairMachineResponse,
+  type UpdateMachineConnectionAddressRequest,
+  type UpdateMachineConnectionAddressResponse,
 } from '@codetether/protocol'
 
 import { createBrowserActionId, type ActionIdFactory } from './action-id.js'
@@ -46,9 +50,20 @@ export interface MachineMutationClient {
     request: UnpairMachineRequest,
     options?: { readonly signal?: AbortSignal },
   ): Promise<UnpairMachineResponse>
+  retryMachineConnection(
+    machineId: MachineId,
+    request: RetryMachineConnectionRequest,
+    options?: { readonly signal?: AbortSignal },
+  ): Promise<RetryMachineConnectionResponse>
+  updateMachineConnectionAddress(
+    machineId: MachineId,
+    request: UpdateMachineConnectionAddressRequest,
+    options?: { readonly signal?: AbortSignal },
+  ): Promise<UpdateMachineConnectionAddressResponse>
 }
 
-export type MachineOperation = 'begin' | 'cancel' | 'confirm' | 'unpair'
+export type MachineOperation =
+  'begin' | 'cancel' | 'confirm' | 'retry' | 'unpair' | 'update-address'
 
 interface MutationAttempt<T> {
   readonly identity: string
@@ -136,11 +151,47 @@ export class MachineActions {
 
   unpairMachine(machineId: MachineId | string): Promise<UnpairMachineResponse> {
     const machine = MachineIdSchema.parse(machineId)
-    return this.#run(`unpair:${machine}`, '', () =>
+    return this.#run(`machine:${machine}`, 'unpair', () =>
       this.#client
         .unpairMachine(machine, { actionId: this.#createActionId() })
         .then((response) => {
           this.#removeMachine(machine)
+          return response
+        }),
+    )
+  }
+
+  retryMachineConnection(
+    machineId: MachineId | string,
+  ): Promise<RetryMachineConnectionResponse> {
+    const machine = MachineIdSchema.parse(machineId)
+    return this.#run(`machine:${machine}`, 'retry', () =>
+      this.#client
+        .retryMachineConnection(machine, {
+          actionId: this.#createActionId(),
+        })
+        .then((response) => {
+          this.#acceptMachine(response.data.machine)
+          return response
+        }),
+    )
+  }
+
+  updateMachineConnectionAddress(
+    machineId: MachineId | string,
+    address: RemoteMachineAddress,
+  ): Promise<UpdateMachineConnectionAddressResponse> {
+    const machine = MachineIdSchema.parse(machineId)
+    const parsedAddress = RemoteMachineAddressSchema.parse(address)
+    const identity = `address:${JSON.stringify(parsedAddress)}`
+    return this.#run(`machine:${machine}`, identity, () =>
+      this.#client
+        .updateMachineConnectionAddress(machine, {
+          actionId: this.#createActionId(),
+          address: parsedAddress,
+        })
+        .then((response) => {
+          this.#acceptMachine(response.data.machine)
           return response
         }),
     )
@@ -253,9 +304,13 @@ export function machineErrorMessage(
     case 'machine_pairing_rate_limited':
       return '配对尝试过多，请稍后在远程节点生成新的配对码。'
     case 'machine_authentication_failed':
-      return '无法验证这台机器的身份。'
+      return operation === 'update-address'
+        ? '无法验证新地址上的机器身份；原信任关系未更改。'
+        : '无法验证这台机器的身份。'
     case 'machine_identity_mismatch':
-      return '远程机器的身份与已确认信息不一致。'
+      return operation === 'update-address'
+        ? '该地址指向另一台机器；CodeTether 已拒绝连接，原信任关系未更改。'
+        : '远程机器的身份与已确认信息不一致。'
     case 'machine_unreachable':
       return '远程机器当前不可连接，请检查地址和局域网连接。'
     case 'machine_protocol_incompatible':
@@ -265,15 +320,21 @@ export function machineErrorMessage(
     case 'invalid_request':
       return operation === 'begin'
         ? '请输入有效的节点地址和六码配对码。'
-        : '机器请求无效，请重新开始配对。'
+        : operation === 'update-address'
+          ? '请输入有效的局域网地址和端口。'
+          : '机器请求无效，请重试。'
     case 'not_found':
       return operation === 'unpair'
         ? '该远程机器已不存在或已经取消配对。'
-        : '配对请求不存在或已过期，请重新开始。'
+        : operation === 'begin' || operation === 'confirm'
+          ? '配对请求不存在或已过期，请重新开始。'
+          : '该远程机器已不存在。'
     case 'conflict':
       return operation === 'unpair'
         ? '机器状态已经变化，请返回列表后重试。'
-        : '这台机器已经配对，或配对状态已经变化。'
+        : operation === 'begin' || operation === 'confirm'
+          ? '这台机器已经配对，或配对状态已经变化。'
+          : '机器连接状态已经变化，请重试。'
     case 'timeout':
       return '机器操作等待超时，请重试。'
     case 'runtime_unavailable':
@@ -293,6 +354,8 @@ export function machineErrorMessage(
     case 'conversation_archived':
       return operation === 'unpair'
         ? 'CodeTether 未能取消机器配对。'
-        : 'CodeTether 未能完成机器配对。'
+        : operation === 'retry' || operation === 'update-address'
+          ? 'CodeTether 未能恢复机器连接。'
+          : 'CodeTether 未能完成机器配对。'
   }
 }

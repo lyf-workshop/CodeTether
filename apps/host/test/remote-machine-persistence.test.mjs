@@ -97,8 +97,8 @@ test('migration 009 preserves the v8 graph and rolls back replacement tables ato
     rolledBack.close()
 
     const migrated = ConversationStore.open({ databasePath })
-    assert.equal(currentSchemaVersion, 9)
-    assert.equal(migrated.schemaVersion, 9)
+    assert.equal(currentSchemaVersion, 10)
+    assert.equal(migrated.schemaVersion, 10)
     assert.deepEqual(
       migrated.listMachines().map((machine) => machine.machineId),
       [v8MachineId],
@@ -119,6 +119,105 @@ test('migration 009 preserves the v8 graph and rolls back replacement tables ato
       'ok',
     )
     inspect.close()
+  })
+})
+
+test('migration 010 backfills one preferred endpoint from v9 and rolls back without partial endpoint state', () => {
+  withDatabase((databasePath) => {
+    const seed = ConversationStore.open({ databasePath })
+    const [local] = seed.listMachines()
+    assert.ok(local)
+    const root = resolve(databasePath, '..', 'endpoint-v10-project')
+    const normalized = normalizeTrustedProjectRoot(root)
+    seed.createProject({
+      projectId: 'proj_endpointmigration01',
+      name: 'Endpoint migration',
+      location: {
+        projectId: 'proj_endpointmigration01',
+        machineId: local.machineId,
+        rootPath: normalized.rootPath,
+        rootPathKey: normalized.rootPathKey,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    })
+    seed.createConversation({
+      conversationId: 'conv_endpointmigration01',
+      projectId: 'proj_endpointmigration01',
+      machineId: local.machineId,
+      provider: 'codex',
+      cwd: normalized.rootPath,
+      status: 'completed',
+      title: 'Endpoint migration marker',
+      createdAt: timestamp,
+      updatedAt: later,
+      lastActivityAt: later,
+    })
+    const candidate = remoteCandidate('machine_endpointmigration01', 'e')
+    seed.createRemoteMachineWithTrust(candidate.machine, candidate.trust)
+    seed.activateTrustedMachinePeer(candidate.machine.machineId, later)
+    seed.close()
+
+    downgradeRemoteMachineEndpointsToVersionNine(databasePath)
+    const blocker = new DatabaseSync(databasePath)
+    blocker.exec(
+      'CREATE TABLE trusted_machine_endpoints (blocked INTEGER) STRICT',
+    )
+    blocker.close()
+
+    assert.throws(
+      () => ConversationStore.open({ databasePath }),
+      /trusted_machine_endpoints/u,
+    )
+    const rolledBack = new DatabaseSync(databasePath)
+    assert.equal(
+      rolledBack
+        .prepare('SELECT MAX(version) AS version FROM schema_migrations')
+        .get().version,
+      9,
+    )
+    assert.equal(tableCount(rolledBack, 'trusted_machine_peers_v10'), 0)
+    assert.equal(tableCount(rolledBack, 'trusted_machine_endpoints_v10'), 0)
+    assert.equal(
+      rolledBack
+        .prepare(
+          'SELECT endpoint_host FROM trusted_machine_peers WHERE machine_id = ?',
+        )
+        .get(candidate.machine.machineId).endpoint_host,
+      '192.0.2.10',
+    )
+    rolledBack.exec('DROP TABLE trusted_machine_endpoints')
+    rolledBack.close()
+
+    const migrated = ConversationStore.open({ databasePath })
+    assert.equal(migrated.schemaVersion, 10)
+    const trust = migrated.getTrustedMachinePeer(candidate.machine.machineId)
+    assert.deepEqual(trust?.endpoints, [
+      {
+        address: { host: '192.0.2.10', port: 43_217 },
+        source: 'pairing',
+        preferred: true,
+        createdAt: timestamp,
+        updatedAt: later,
+        lastSuccessfulAt: later,
+      },
+    ])
+    assert.equal(trust?.trustState, 'active')
+    assert.equal(
+      migrated.getConversation('conv_endpointmigration01').title,
+      'Endpoint migration marker',
+    )
+    migrated.close()
+
+    const reopened = ConversationStore.open({ databasePath })
+    assert.equal(
+      reopened.getTrustedMachinePeer(candidate.machine.machineId)?.endpoints
+        .length,
+      1,
+    )
+    reopened.close()
   })
 })
 
@@ -197,6 +296,60 @@ test('private remote trust is staged, hidden until active, durable, unique, and 
   })
 })
 
+test('authenticated endpoint history canonicalizes literal duplicates and evicts only the oldest fallback at capacity', () => {
+  withDatabase((databasePath) => {
+    const store = ConversationStore.open({ databasePath })
+    const candidate = remoteCandidate('machine_endpointhistory01', 'h')
+    store.createRemoteMachineWithTrust(candidate.machine, candidate.trust)
+    store.activateTrustedMachinePeer(candidate.machine.machineId, timestamp)
+
+    store.recordTrustedMachineAuthentication(
+      candidate.machine.machineId,
+      { host: '[FD00:0:0:0:0:0:0:1]', port: 4319 },
+      later,
+      'manual',
+    )
+    store.recordTrustedMachineAuthentication(
+      candidate.machine.machineId,
+      { host: 'fd00::1', port: 4319 },
+      '2026-08-30T12:02:00.000Z',
+      'manual',
+    )
+    let trust = store.getTrustedMachinePeer(candidate.machine.machineId)
+    assert.equal(
+      trust?.endpoints.filter((endpoint) => endpoint.address.host === 'fd00::1')
+        .length,
+      1,
+    )
+
+    for (let octet = 11; octet <= 18; octet += 1) {
+      store.recordTrustedMachineAuthentication(
+        candidate.machine.machineId,
+        { host: `172.20.1.${octet}`, port: 4319 },
+        `2026-08-30T12:${String(octet).padStart(2, '0')}:00.000Z`,
+        'manual',
+      )
+    }
+    trust = store.getTrustedMachinePeer(candidate.machine.machineId)
+    assert.equal(trust?.endpoints.length, 8)
+    assert.equal(
+      trust?.endpoints.filter((endpoint) => endpoint.preferred).length,
+      1,
+    )
+    assert.deepEqual(trust?.endpoints[0]?.address, {
+      host: '172.20.1.18',
+      port: 4319,
+    })
+    assert.equal(
+      trust?.endpoints.some(
+        (endpoint) => endpoint.address.host === '192.0.2.10',
+      ),
+      false,
+    )
+    store.close()
+  })
+})
+
 function registry(store) {
   return new MachineRegistry({
     persistence: store,
@@ -244,6 +397,67 @@ function tableCount(database, name) {
       `SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = ?`,
     )
     .get(name).count
+}
+
+function downgradeRemoteMachineEndpointsToVersionNine(databasePath) {
+  const database = new DatabaseSync(databasePath)
+  try {
+    database.exec('PRAGMA foreign_keys = OFF')
+    database.exec(`
+      BEGIN IMMEDIATE;
+      DELETE FROM schema_migrations WHERE version = 10;
+      CREATE TABLE trusted_machine_peers_v9 (
+        machine_id TEXT PRIMARY KEY,
+        node_identity TEXT NOT NULL UNIQUE,
+        peer_public_key_spki BLOB NOT NULL UNIQUE,
+        peer_key_fingerprint TEXT NOT NULL UNIQUE,
+        controller_credential_ref TEXT NOT NULL UNIQUE,
+        controller_key_fingerprint TEXT NOT NULL,
+        trust_state TEXT NOT NULL CHECK (trust_state IN ('pending', 'active', 'revoking')),
+        protocol_version INTEGER NOT NULL,
+        endpoint_host TEXT NOT NULL,
+        endpoint_port INTEGER NOT NULL,
+        paired_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        last_authenticated_at TEXT,
+        FOREIGN KEY (machine_id) REFERENCES machines(machine_id) ON DELETE CASCADE
+      ) STRICT;
+      INSERT INTO trusted_machine_peers_v9 (
+        machine_id, node_identity, peer_public_key_spki,
+        peer_key_fingerprint, controller_credential_ref,
+        controller_key_fingerprint, trust_state, protocol_version,
+        endpoint_host, endpoint_port, paired_at, updated_at,
+        last_authenticated_at
+      )
+      SELECT
+        peer.machine_id, peer.node_identity, peer.peer_public_key_spki,
+        peer.peer_key_fingerprint, peer.controller_credential_ref,
+        peer.controller_key_fingerprint, peer.trust_state, peer.protocol_version,
+        endpoint.endpoint_host, endpoint.endpoint_port, peer.paired_at,
+        peer.updated_at, peer.last_authenticated_at
+      FROM trusted_machine_peers AS peer
+      INNER JOIN trusted_machine_endpoints AS endpoint
+        ON endpoint.machine_id = peer.machine_id AND endpoint.preferred = 1;
+      DROP TABLE trusted_machine_endpoints;
+      DROP TABLE trusted_machine_peers;
+      ALTER TABLE trusted_machine_peers_v9 RENAME TO trusted_machine_peers;
+      CREATE TRIGGER trg_trusted_machine_peer_remote_insert
+      BEFORE INSERT ON trusted_machine_peers
+      WHEN (SELECT kind FROM machines WHERE machine_id = NEW.machine_id) IS NOT 'remote'
+      BEGIN
+        SELECT RAISE(ABORT, 'Trusted peer must belong to a remote Machine');
+      END;
+      CREATE TRIGGER trg_trusted_machine_peer_remote_update
+      BEFORE UPDATE OF machine_id ON trusted_machine_peers
+      WHEN (SELECT kind FROM machines WHERE machine_id = NEW.machine_id) IS NOT 'remote'
+      BEGIN
+        SELECT RAISE(ABORT, 'Trusted peer must belong to a remote Machine');
+      END;
+      COMMIT;
+    `)
+  } finally {
+    database.close()
+  }
 }
 
 function withDatabase(run) {

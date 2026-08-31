@@ -13,7 +13,9 @@ import {
   type MachineId,
   type MachinePairingAttemptId,
   type RemoteMachineAddress,
+  type RemoteMachineConnection,
   type RemoteMachinePairingCandidate,
+  type Timestamp,
 } from '@codetether/protocol'
 import {
   ControllerIdSchema,
@@ -38,6 +40,7 @@ import {
 import type {
   ConversationStore,
   DurableMachine,
+  DurableTrustedMachineEndpoint,
   DurableTrustedMachinePeer,
 } from '../persistence/index.js'
 import type { RemoteMachineStatusSource } from './machine-registry.js'
@@ -85,6 +88,7 @@ export interface ConfirmedRemoteMachine {
  * state; the Host owns durable Machine and trust records.
  */
 export interface RemoteMachineCoordinator extends RemoteMachineStatusSource {
+  connectionDetails?(machineId: MachineId): RemoteMachineConnection | undefined
   subscribeStatus?(
     listener: (
       machineId: MachineId,
@@ -105,6 +109,15 @@ export interface RemoteMachineCoordinator extends RemoteMachineStatusSource {
     machine: DurableMachine,
     trust: DurableTrustedMachinePeer,
   ): Promise<void>
+  retry(
+    machine: DurableMachine,
+    trust: DurableTrustedMachinePeer,
+  ): Promise<RemoteMachineConnection>
+  updateAddress(
+    machine: DurableMachine,
+    trust: DurableTrustedMachinePeer,
+    address: RemoteMachineAddress,
+  ): Promise<RemoteMachineConnection>
   close?(): Promise<void>
 }
 
@@ -127,6 +140,14 @@ export class UnavailableRemoteMachineCoordinator implements RemoteMachineCoordin
   }
 
   async unpair(): Promise<void> {
+    throw unavailable()
+  }
+
+  async retry(): Promise<RemoteMachineConnection> {
+    throw unavailable()
+  }
+
+  async updateAddress(): Promise<RemoteMachineConnection> {
     throw unavailable()
   }
 }
@@ -158,6 +179,7 @@ export interface SecureRemoteMachineCoordinatorOptions {
   readonly heartbeatIntervalMs?: number
   readonly reconnectMaximumDelayMs?: number
   readonly now?: () => Date
+  readonly random?: () => number
   /** Narrow deterministic seam for Host coordinator tests. */
   readonly transport?: CoordinatorTransport
   /** Narrow deterministic seam for credential-cleanup failure tests. */
@@ -172,10 +194,14 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
   readonly #heartbeatIntervalMs: number
   readonly #reconnectMaximumDelayMs: number
   readonly #now: () => Date
+  readonly #random: () => number
   readonly #transport: CoordinatorTransport
   readonly #pending = new Map<MachinePairingAttemptId, PendingPairing>()
   readonly #workers = new Map<MachineId, RemoteWorker>()
+  /** Mutating connection operations are linearized per durable Machine. */
+  readonly #machineOperations = new Map<MachineId, Promise<unknown>>()
   readonly #states = new Map<MachineId, MachineConnectionState>()
+  readonly #lastAttemptAt = new Map<MachineId, Timestamp>()
   readonly #listeners = new Set<
     (machineId: MachineId, state: MachineConnectionState) => void
   >()
@@ -202,6 +228,7 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
       'reconnect maximum delay',
     )
     this.#now = options.now ?? (() => new Date())
+    this.#random = options.random ?? Math.random
     this.#transport = options.transport ?? {
       beginPairing: beginRemoteMachinePairing,
       connectTrusted: connectTrustedRemoteMachine,
@@ -220,6 +247,27 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
 
   connectionState(machineId: MachineId): MachineConnectionState | undefined {
     return this.#states.get(MachineIdSchema.parse(machineId))
+  }
+
+  connectionDetails(machineId: MachineId): RemoteMachineConnection | undefined {
+    const id = MachineIdSchema.parse(machineId)
+    const state = this.#states.get(id)
+    if (state === undefined || state === 'local') return undefined
+    const preferred = this.#persistence
+      .getTrustedMachinePeer(id)
+      ?.endpoints.find((endpoint) => endpoint.preferred)
+    return {
+      state,
+      ...(preferred?.lastSuccessfulAt === undefined
+        ? {}
+        : {
+            currentEndpoint: preferred.address,
+            lastSuccessfulAt: preferred.lastSuccessfulAt,
+          }),
+      ...(this.#lastAttemptAt.get(id) === undefined
+        ? {}
+        : { lastAttemptAt: this.#lastAttemptAt.get(id) }),
+    }
   }
 
   subscribeStatus(
@@ -402,46 +450,148 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
     }
   }
 
+  async retry(
+    machine: DurableMachine,
+    trust: DurableTrustedMachinePeer,
+  ): Promise<RemoteMachineConnection> {
+    const id = MachineIdSchema.parse(machine.machineId)
+    return await this.#serializeMachineOperation(id, async () => {
+      const current = this.#requireCurrentActiveTrust(machine, trust)
+      await this.#stopWorker(id)
+      this.#setState(id, 'connecting')
+      // Retry acknowledges immediately with an observable fresh attempt even
+      // if loading the private controller credential has not completed yet.
+      this.#recordAttempt(id)
+      this.#startWorker(current.machine, current.trust)
+      return this.connectionDetails(id) ?? { state: 'connecting' }
+    })
+  }
+
+  async updateAddress(
+    machine: DurableMachine,
+    trust: DurableTrustedMachinePeer,
+    address: RemoteMachineAddress,
+  ): Promise<RemoteMachineConnection> {
+    const id = MachineIdSchema.parse(machine.machineId)
+    return await this.#serializeMachineOperation(id, async () => {
+      const current = this.#requireCurrentActiveTrust(machine, trust)
+      // A manual address remains an in-memory candidate until this pinned TLS
+      // connection succeeds; failed or poisoned candidates never enter SQLite.
+      const endpoint = await resolveLanEndpoint(address, this.#allowLoopback)
+      await this.#stopWorker(id)
+      this.#setState(id, 'connecting')
+      this.#recordAttempt(id)
+      let connection: AuthenticatedRemoteMachineConnection | undefined
+      try {
+        const controller = await this.#loadController(current.trust)
+        connection = await this.#transport.connectTrusted({
+          peer: trustedPeer(current.machine, current.trust, endpoint),
+          controller,
+        })
+        const authenticatedAt = TimestampSchema.parse(this.#now().toISOString())
+        this.#persistence.recordTrustedMachineAuthentication(
+          id,
+          endpoint,
+          authenticatedAt,
+          'manual',
+        )
+        this.#setState(id, 'online')
+        const result = this.connectionDetails(id) ?? {
+          state: 'online' as const,
+          currentEndpoint: endpoint,
+          lastSuccessfulAt: authenticatedAt,
+          lastAttemptAt: authenticatedAt,
+        }
+        connection.close()
+        connection = undefined
+        setTimeout(() => this.#startDurableWorker(id), 0)
+        return result
+      } catch (error) {
+        connection?.close()
+        const state = connectionStateFor(error)
+        this.#setState(id, state === 'offline' ? 'recovery_required' : state)
+        setTimeout(() => this.#startDurableWorker(id), 0)
+        throw coordinatorError(error)
+      }
+    })
+  }
+
   async unpair(
     machine: DurableMachine,
     trust: DurableTrustedMachinePeer,
   ): Promise<void> {
-    this.#assertOpen()
     const id = MachineIdSchema.parse(machine.machineId)
-    const worker = this.#workers.get(id)
-    worker?.abort.abort()
-    worker?.connection?.close()
-    await worker?.task?.catch(() => undefined)
-    this.#workers.delete(id)
-    let connection: AuthenticatedRemoteMachineConnection | undefined
-    let revocationStarted = false
-    try {
-      if (connection === undefined) {
-        const controller = await this.#loadController(trust)
-        connection = await this.#transport.connectTrusted({
-          peer: trustedPeer(machine, trust),
-          controller,
-        })
-      }
-      revocationStarted = true
-      await connection.revoke()
-      connection = undefined
+    return await this.#serializeMachineOperation(id, async () => {
+      this.#assertOpen()
+      await this.#stopWorker(id)
+      let connection: AuthenticatedRemoteMachineConnection | undefined
+      let authenticatedRevokeAttempt = false
+      let authenticatedRevokeRejected = false
       try {
-        await this.#deleteCredentialRequired(trust.controllerCredentialRef)
-      } catch {
-        this.#startRevokingWorker(machine, trust, true)
-        throw new RemoteMachineRevocationPendingError()
+        const current = this.#requireCurrentRevokingTrust(machine, trust)
+        const controller = await this.#loadController(current.trust)
+        let connectionError: unknown
+        for (const endpoint of current.trust.endpoints) {
+          try {
+            this.#recordAttempt(id)
+            connection = await this.#transport.connectTrusted({
+              peer: trustedPeer(
+                current.machine,
+                current.trust,
+                endpoint.address,
+              ),
+              controller,
+            })
+            break
+          } catch (error) {
+            connectionError = error
+            this.#persistence.recordTrustedMachineEndpointFailure(
+              id,
+              endpoint.address,
+              TimestampSchema.parse(this.#now().toISOString()),
+            )
+          }
+        }
+        if (connection === undefined) {
+          throw connectionError ?? new Error('No trusted endpoint is available')
+        }
+        try {
+          authenticatedRevokeAttempt = true
+          await connection.revoke()
+        } catch (error) {
+          // Only this response followed a successful pinned connection.
+          authenticatedRevokeRejected =
+            isAuthenticatedPeerAuthenticationFailure(error)
+          throw error
+        }
+        connection.close()
+        connection = undefined
+        try {
+          await this.#deleteCredentialRequired(
+            current.trust.controllerCredentialRef,
+          )
+        } catch {
+          this.#startRevokingWorker(current.machine, current.trust, true)
+          throw new RemoteMachineRevocationPendingError()
+        }
+        this.#setState(id, 'offline')
+      } catch (error) {
+        connection?.close()
+        if (error instanceof RemoteMachineRevocationPendingError) {
+          throw error
+        }
+        if (authenticatedRevokeAttempt) {
+          this.#startRevokingWorker(
+            machine,
+            trust,
+            authenticatedRevokeRejected,
+            true,
+          )
+          throw new RemoteMachineRevocationPendingError()
+        }
+        throw coordinatorError(error)
       }
-      this.#setState(id, 'offline')
-    } catch (error) {
-      connection?.close()
-      if (revocationStarted) {
-        this.#startRevokingWorker(machine, trust)
-        throw new RemoteMachineRevocationPendingError()
-      }
-      setTimeout(() => this.#startDurableWorker(id), 0)
-      throw coordinatorError(error)
-    }
+    })
   }
 
   async close(): Promise<void> {
@@ -502,6 +652,7 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
     machine: DurableMachine,
     trust: DurableTrustedMachinePeer,
     remoteRevocationKnown = false,
+    priorRevokeAttempt = false,
   ): void {
     if (this.#workers.has(machine.machineId)) return
     const worker: RemoteWorker = { abort: new AbortController() }
@@ -511,6 +662,7 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
       trust,
       worker,
       remoteRevocationKnown,
+      priorRevokeAttempt,
     ).finally(() => {
       if (this.#workers.get(machine.machineId) === worker) {
         this.#workers.delete(machine.machineId)
@@ -523,21 +675,51 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
     trust: DurableTrustedMachinePeer,
     worker: RemoteWorker,
     remoteRevocationKnown: boolean,
+    priorRevokeAttempt: boolean,
   ): Promise<void> {
     let delayMs = 1_000
+    // A Node can only prove that this controller has already been revoked by
+    // rejecting the revocation request on an authenticated pinned connection.
+    // Do not infer revocation from a later dial error at an old address.
     let remoteRevoked = remoteRevocationKnown
+    let revokeAttempted = priorRevokeAttempt
     while (!this.#closed && !worker.abort.signal.aborted) {
       let connection: AuthenticatedRemoteMachineConnection | undefined
       try {
         if (!remoteRevoked) {
           const controller = await this.#loadController(trust)
-          connection = await this.#transport.connectTrusted({
-            peer: trustedPeer(machine, trust),
-            controller,
-            signal: worker.abort.signal,
-          })
+          let lastError: unknown
+          for (const endpoint of trust.endpoints) {
+            try {
+              this.#recordAttempt(machine.machineId)
+              connection = await this.#transport.connectTrusted({
+                peer: trustedPeer(machine, trust, endpoint.address),
+                controller,
+                signal: worker.abort.signal,
+              })
+              break
+            } catch (error) {
+              lastError = error
+              this.#persistence.recordTrustedMachineEndpointFailure(
+                machine.machineId,
+                endpoint.address,
+                TimestampSchema.parse(this.#now().toISOString()),
+              )
+            }
+          }
+          if (connection === undefined) {
+            throw lastError ?? new Error('No trusted endpoint is available')
+          }
           worker.connection = connection
-          await connection.revoke(worker.abort.signal)
+          try {
+            revokeAttempted = true
+            await connection.revoke(worker.abort.signal)
+          } catch (error) {
+            if (isAuthenticatedPeerAuthenticationFailure(error)) {
+              remoteRevoked = true
+            }
+            throw error
+          }
           connection = undefined
           remoteRevoked = true
         }
@@ -545,10 +727,14 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
         return
       } catch (error) {
         if (worker.abort.signal.aborted || this.#closed) return
-        if (!remoteRevoked && isPermanentConnectionError(error)) {
-          // A revocation intent is irreversible. Authentication failure is
-          // also the expected recovery result when the Node committed the
-          // revoke but its acknowledgement was lost before local cleanup.
+        if (
+          !remoteRevoked &&
+          revokeAttempted &&
+          isAuthenticatedPeerAuthenticationFailure(error)
+        ) {
+          // This is an explicit protocol rejection from the pinned Node after
+          // an earlier revoke request. Local/pre-pin failures and Node-B
+          // identity errors carry no such provenance and remain retryable.
           remoteRevoked = true
         }
         this.#states.set(machine.machineId, 'offline')
@@ -556,7 +742,10 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
         connection?.close()
         worker.connection = undefined
       }
-      await abortableDelay(delayMs, worker.abort.signal).catch(() => undefined)
+      await abortableDelay(
+        jitteredDelay(delayMs, this.#random),
+        worker.abort.signal,
+      ).catch(() => undefined)
       delayMs = Math.min(delayMs * 2, this.#reconnectMaximumDelayMs)
     }
   }
@@ -603,6 +792,124 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
     this.#startWorker(machine, trust)
   }
 
+  async #stopWorker(machineId: MachineId): Promise<void> {
+    const worker = this.#workers.get(machineId)
+    worker?.abort.abort()
+    worker?.connection?.close()
+    await worker?.task?.catch(() => undefined)
+    if (this.#workers.get(machineId) === worker) {
+      this.#workers.delete(machineId)
+    }
+  }
+
+  #recordAttempt(machineId: MachineId): Timestamp {
+    const timestamp = TimestampSchema.parse(this.#now().toISOString())
+    this.#lastAttemptAt.set(machineId, timestamp)
+    return timestamp
+  }
+
+  async #serializeMachineOperation<T>(
+    machineId: MachineId,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const predecessor = this.#machineOperations.get(machineId)
+    const task = (predecessor ?? Promise.resolve()).then(operation)
+    // Keep only a fulfilled tail in the coordination map.  Callers still
+    // receive the operation's real failure, without leaving an unobserved
+    // rejected promise behind solely for cleanup bookkeeping.
+    const settled = task
+      .then(
+        () => undefined,
+        () => undefined,
+      )
+      .then(() => {
+        if (this.#machineOperations.get(machineId) === settled) {
+          this.#machineOperations.delete(machineId)
+        }
+      })
+    this.#machineOperations.set(machineId, settled)
+    return await task
+  }
+
+  #requireCurrentActiveTrust(
+    machine: DurableMachine,
+    trust: DurableTrustedMachinePeer,
+  ): {
+    readonly machine: DurableMachine
+    readonly trust: DurableTrustedMachinePeer
+  } {
+    this.#assertOpen()
+    this.#assertActiveRemoteTrust(machine, trust)
+    const currentMachine = this.#persistence.getMachine(machine.machineId)
+    const currentTrust = this.#persistence.getTrustedMachinePeer(
+      machine.machineId,
+    )
+    if (
+      currentMachine === undefined ||
+      currentMachine.kind !== 'remote' ||
+      currentTrust === undefined ||
+      currentTrust.trustState !== 'active' ||
+      currentTrust.nodeIdentity !== trust.nodeIdentity ||
+      currentTrust.peerKeyFingerprint !== trust.peerKeyFingerprint
+    ) {
+      throw new RemoteMachineCoordinatorError(
+        'conflict',
+        'Remote Machine trust changed while the connection operation waited',
+      )
+    }
+    return { machine: currentMachine, trust: currentTrust }
+  }
+
+  #requireCurrentRevokingTrust(
+    machine: DurableMachine,
+    trust: DurableTrustedMachinePeer,
+  ): {
+    readonly machine: DurableMachine
+    readonly trust: DurableTrustedMachinePeer
+  } {
+    this.#assertOpen()
+    if (machine.kind !== 'remote' || machine.machineId !== trust.machineId) {
+      throw new RemoteMachineCoordinatorError(
+        'conflict',
+        'Remote Machine trust does not match the Machine being unpaired',
+      )
+    }
+    const currentMachine = this.#persistence.getMachine(machine.machineId)
+    const currentTrust = this.#persistence.getTrustedMachinePeer(
+      machine.machineId,
+    )
+    if (
+      currentMachine === undefined ||
+      currentMachine.kind !== 'remote' ||
+      currentTrust === undefined ||
+      currentTrust.trustState !== 'revoking' ||
+      currentTrust.nodeIdentity !== trust.nodeIdentity ||
+      currentTrust.peerKeyFingerprint !== trust.peerKeyFingerprint
+    ) {
+      throw new RemoteMachineCoordinatorError(
+        'conflict',
+        'Remote Machine trust changed while unpairing',
+      )
+    }
+    return { machine: currentMachine, trust: currentTrust }
+  }
+
+  #assertActiveRemoteTrust(
+    machine: DurableMachine,
+    trust: DurableTrustedMachinePeer,
+  ): void {
+    if (
+      machine.kind !== 'remote' ||
+      machine.machineId !== trust.machineId ||
+      trust.trustState !== 'active'
+    ) {
+      throw new RemoteMachineCoordinatorError(
+        'conflict',
+        'Remote Machine does not have active durable trust',
+      )
+    }
+  }
+
   #startWorker(
     machine: DurableMachine,
     initialTrust: DurableTrustedMachinePeer,
@@ -626,13 +933,39 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
     let trust = initialTrust
     while (!this.#closed && !worker.abort.signal.aborted) {
       this.#setState(machine.machineId, 'connecting')
+      let cycleError: unknown
+      let cycleHasRetryableEndpointFailure = false
+      let authenticatedEndpoint: DurableTrustedMachineEndpoint | undefined
+      let heartbeatActive = false
       try {
         const controller = await this.#loadController(trust)
-        const connection = await this.#transport.connectTrusted({
-          peer: trustedPeer(machine, trust),
-          controller,
-          signal: worker.abort.signal,
-        })
+        let connection: AuthenticatedRemoteMachineConnection | undefined
+        for (const endpoint of trust.endpoints) {
+          try {
+            this.#recordAttempt(machine.machineId)
+            connection = await this.#transport.connectTrusted({
+              peer: trustedPeer(machine, trust, endpoint.address),
+              controller,
+              signal: worker.abort.signal,
+            })
+            authenticatedEndpoint = endpoint
+            break
+          } catch (error) {
+            cycleError = error
+            if (!isPermanentConnectionError(error)) {
+              cycleHasRetryableEndpointFailure = true
+            }
+            if (worker.abort.signal.aborted || this.#closed) return
+            this.#persistence.recordTrustedMachineEndpointFailure(
+              machine.machineId,
+              endpoint.address,
+              TimestampSchema.parse(this.#now().toISOString()),
+            )
+          }
+        }
+        if (connection === undefined || authenticatedEndpoint === undefined) {
+          throw cycleError ?? new Error('No trusted endpoint is available')
+        }
         worker.connection = connection
         const authenticatedAt = TimestampSchema.parse(this.#now().toISOString())
         if (trust.trustState === 'pending') {
@@ -643,21 +976,31 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
         } else {
           trust = this.#persistence.recordTrustedMachineAuthentication(
             machine.machineId,
-            trust.address,
+            authenticatedEndpoint.address,
             authenticatedAt,
+            authenticatedEndpoint.source,
           )
         }
+        cycleError = undefined
         this.#setState(machine.machineId, 'online')
         delayMs = 1_000
+        heartbeatActive = true
         while (!this.#closed && !worker.abort.signal.aborted) {
           await abortableDelay(this.#heartbeatIntervalMs, worker.abort.signal)
           await connection.ping(worker.abort.signal)
         }
       } catch (error) {
         if (worker.abort.signal.aborted || this.#closed) return
-        const state = connectionStateFor(error)
+        if (heartbeatActive && authenticatedEndpoint !== undefined) {
+          this.#persistence.recordTrustedMachineEndpointFailure(
+            machine.machineId,
+            authenticatedEndpoint.address,
+            TimestampSchema.parse(this.#now().toISOString()),
+          )
+        }
+        const state = connectionStateFor(cycleError ?? error)
         this.#setState(machine.machineId, state)
-        if (isPermanentConnectionError(error)) {
+        if (isPermanentConnectionError(cycleError ?? error)) {
           if (trust.trustState === 'pending') {
             try {
               await this.#discardPendingTrust(machine.machineId, trust)
@@ -667,7 +1010,7 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
               // pending record and retry bounded cleanup rather than losing
               // its only durable reference.
             }
-          } else {
+          } else if (!cycleHasRetryableEndpointFailure) {
             return
           }
         }
@@ -675,7 +1018,10 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
         worker.connection?.close()
         worker.connection = undefined
       }
-      await abortableDelay(delayMs, worker.abort.signal).catch(() => undefined)
+      await abortableDelay(
+        jitteredDelay(delayMs, this.#random),
+        worker.abort.signal,
+      ).catch(() => undefined)
       delayMs = Math.min(delayMs * 2, this.#reconnectMaximumDelayMs)
     }
   }
@@ -720,7 +1066,15 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
         controllerKeyFingerprint: attempt.controller.tls.publicKeyFingerprint,
         trustState: 'pending',
         protocolVersion: trusted.protocolVersion,
-        address: trusted.endpoint,
+        endpoints: [
+          {
+            address: trusted.endpoint,
+            source: 'pairing',
+            preferred: true,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+          },
+        ],
         pairedAt: timestamp,
         updatedAt: timestamp,
       },
@@ -832,16 +1186,15 @@ async function resolveLanEndpoint(
   allowLoopback: boolean,
 ): Promise<RemoteMachineAddress> {
   const port = address.port
-  const literal = address.host.replace(/^\[|\]$/gu, '')
-  const literalAddress = stripIpv6Scope(literal)
-  if (isIP(literalAddress) !== 0) {
+  const literal = parseEndpointHost(address.host)
+  if (isIP(literal) !== 0) {
     assertLanAddress(literal, allowLoopback)
-    return { host: literal, port }
+    return { host: canonicalIpAddress(literal), port }
   }
 
   let resolved: readonly { readonly address: string }[]
   try {
-    resolved = await boundedDnsLookup(address.host)
+    resolved = await boundedDnsLookup(literal)
   } catch {
     throw new RemoteMachineCoordinatorError(
       'connection_failed',
@@ -862,7 +1215,32 @@ async function resolveLanEndpoint(
       'Remote Machine address did not resolve',
     )
   }
-  return { host: selected, port }
+  return { host: canonicalIpAddress(selected), port }
+}
+
+function canonicalIpAddress(value: string): string {
+  if (isIP(value) !== 6) return value.toLowerCase()
+  const hostname = new URL(`http://[${value}]/`).hostname
+  return hostname.slice(1, -1).toLowerCase()
+}
+
+function parseEndpointHost(value: string): string {
+  const starts = value.startsWith('[')
+  const ends = value.endsWith(']')
+  if (starts !== ends || (starts && value.indexOf(']') !== value.length - 1)) {
+    throw new RemoteMachineCoordinatorError(
+      'connection_failed',
+      'Remote Machine address has malformed IPv6 brackets',
+    )
+  }
+  const host = starts ? value.slice(1, -1) : value
+  if (host.includes('[') || host.includes(']') || host.includes('%')) {
+    throw new RemoteMachineCoordinatorError(
+      'connection_failed',
+      'Remote Machine address uses an unsupported IPv6 scope',
+    )
+  }
+  return host
 }
 
 async function boundedDnsLookup(
@@ -894,7 +1272,7 @@ async function boundedDnsLookup(
 }
 
 function assertLanAddress(value: string, allowLoopback: boolean): void {
-  const address = stripIpv6Scope(value).toLowerCase()
+  const address = value.toLowerCase()
   if (isIpv4(address)) {
     const [first = -1, second = -1] = address
       .split('.')
@@ -910,18 +1288,12 @@ function assertLanAddress(value: string, allowLoopback: boolean): void {
     const first = Number.parseInt(address.split(':')[0] ?? '', 16)
     const loopback = address === '::1'
     const uniqueLocal = Number.isFinite(first) && (first & 0xfe00) === 0xfc00
-    const linkLocal = Number.isFinite(first) && (first & 0xffc0) === 0xfe80
-    if (uniqueLocal || linkLocal || (allowLoopback && loopback)) return
+    if (uniqueLocal || (allowLoopback && loopback)) return
   }
   throw new RemoteMachineCoordinatorError(
     'connection_failed',
     'Remote Machine address must resolve only to a private LAN address',
   )
-}
-
-function stripIpv6Scope(value: string): string {
-  const scopeIndex = value.indexOf('%')
-  return scopeIndex < 0 ? value : value.slice(0, scopeIndex)
 }
 
 function isIpv4(value: string): boolean {
@@ -935,6 +1307,7 @@ function hasCode(error: unknown, code: string): boolean {
 function trustedPeer(
   machine: DurableMachine,
   trust: DurableTrustedMachinePeer,
+  endpoint: RemoteMachineAddress,
 ): TrustedRemotePeer {
   if (trust.protocolVersion !== machineProtocolVersion) {
     throw new RemoteMachineCoordinatorError(
@@ -950,13 +1323,21 @@ function trustedPeer(
       platform: machine.platform,
       architecture: machine.architecture,
     },
-    endpoint: trust.address,
+    endpoint,
     nodeFingerprint: PublicKeyFingerprintSchema.parse(trust.peerKeyFingerprint),
     protocolVersion: machineProtocolVersion,
     controllerId: ControllerIdSchema.parse(
       basename(trust.controllerCredentialRef, '.json'),
     ),
   }
+}
+
+function jitteredDelay(milliseconds: number, random: () => number): number {
+  const sample = random()
+  const bounded = Number.isFinite(sample)
+    ? Math.min(1, Math.max(0, sample))
+    : 0.5
+  return Math.max(1, Math.round(milliseconds * (0.8 + bounded * 0.4)))
 }
 
 function coordinatorError(error: unknown): RemoteMachineCoordinatorError {
@@ -1032,6 +1413,14 @@ function isPermanentConnectionError(error: unknown): boolean {
     code === 'authentication_failed' ||
     code === 'identity_mismatch' ||
     code === 'protocol_incompatible'
+  )
+}
+
+function isAuthenticatedPeerAuthenticationFailure(error: unknown): boolean {
+  return (
+    error instanceof MachineTransportError &&
+    error.code === 'authentication_failed' &&
+    error.peerAuthenticated === true
   )
 }
 

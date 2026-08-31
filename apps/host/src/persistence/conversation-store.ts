@@ -1,4 +1,5 @@
 import { mkdirSync } from 'node:fs'
+import { isIP } from 'node:net'
 import { dirname, isAbsolute, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
@@ -14,6 +15,7 @@ import {
   ProviderIdSchema,
   RemoteMachineAddressSchema,
   TimestampSchema,
+  machineWireLimits,
   TurnIdSchema,
   TurnInputRecordSchema,
   type ConversationId,
@@ -163,10 +165,30 @@ export interface DurableTrustedMachinePeer {
   readonly controllerKeyFingerprint: string
   readonly trustState: 'pending' | 'active' | 'revoking'
   readonly protocolVersion: number
-  readonly address: RemoteMachineAddress
+  readonly endpoints: readonly DurableTrustedMachineEndpoint[]
   readonly pairedAt: Timestamp
   readonly updatedAt: Timestamp
   readonly lastAuthenticatedAt?: Timestamp
+}
+
+/** Private bounded transport hint; identity remains in DurableTrustedMachinePeer. */
+export interface DurableTrustedMachineEndpoint {
+  readonly address: RemoteMachineAddress
+  readonly source: 'pairing' | 'manual'
+  readonly preferred: boolean
+  readonly createdAt: Timestamp
+  readonly updatedAt: Timestamp
+  readonly lastSuccessfulAt?: Timestamp
+  readonly lastFailureAt?: Timestamp
+}
+
+export type NewDurableTrustedMachinePeer = Omit<
+  DurableTrustedMachinePeer,
+  'endpoints'
+> & {
+  readonly endpoints?: readonly DurableTrustedMachineEndpoint[]
+  /** v9 input compatibility for staging the initial pairing endpoint. */
+  readonly address?: RemoteMachineAddress
 }
 
 export interface DurableConversation {
@@ -341,7 +363,7 @@ export class ConversationStore {
 
   createRemoteMachineWithTrust(
     machine: DurableMachine,
-    peer: DurableTrustedMachinePeer,
+    peer: NewDurableTrustedMachinePeer,
   ): void {
     const value = parseMachine(machine)
     const trusted = parseTrustedMachinePeer(peer)
@@ -381,9 +403,8 @@ export class ConversationStore {
           machine_id, node_identity, peer_public_key_spki,
           peer_key_fingerprint, controller_credential_ref,
           controller_key_fingerprint, trust_state, protocol_version,
-          endpoint_host, endpoint_port, paired_at, updated_at,
-          last_authenticated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          paired_at, updated_at, last_authenticated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         trusted.machineId,
         trusted.nodeIdentity,
@@ -393,12 +414,29 @@ export class ConversationStore {
         trusted.controllerKeyFingerprint,
         trusted.trustState,
         trusted.protocolVersion,
-        trusted.address.host,
-        trusted.address.port,
         trusted.pairedAt,
         trusted.updatedAt,
         trusted.lastAuthenticatedAt ?? null,
       )
+      const insertEndpoint = this.#statement(
+        `INSERT INTO trusted_machine_endpoints (
+          machine_id, endpoint_host, endpoint_port, source, preferred,
+          created_at, updated_at, last_successful_at, last_failure_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      for (const endpoint of trusted.endpoints) {
+        insertEndpoint.run(
+          trusted.machineId,
+          endpoint.address.host,
+          endpoint.address.port,
+          endpoint.source,
+          endpoint.preferred ? 1 : 0,
+          endpoint.createdAt,
+          endpoint.updatedAt,
+          endpoint.lastSuccessfulAt ?? null,
+          endpoint.lastFailureAt ?? null,
+        )
+      }
     })
   }
 
@@ -409,7 +447,9 @@ export class ConversationStore {
     const row = this.#statement(
       'SELECT * FROM trusted_machine_peers WHERE machine_id = ?',
     ).get(id) as TrustedMachinePeerRow | undefined
-    return row === undefined ? undefined : trustedMachinePeerFromRow(row)
+    return row === undefined
+      ? undefined
+      : trustedMachinePeerFromRow(row, this.#listTrustedMachineEndpoints(id))
   }
 
   listTrustedMachinePeers(): DurableTrustedMachinePeer[] {
@@ -417,7 +457,13 @@ export class ConversationStore {
       `SELECT * FROM trusted_machine_peers
        ORDER BY paired_at ASC, machine_id ASC`,
     ).all() as unknown as TrustedMachinePeerRow[]
-    return rows.map(trustedMachinePeerFromRow)
+    return rows.map((row) => {
+      const machineId = MachineIdSchema.parse(row.machine_id)
+      return trustedMachinePeerFromRow(
+        row,
+        this.#listTrustedMachineEndpoints(machineId),
+      )
+    })
   }
 
   activateTrustedMachinePeer(
@@ -434,6 +480,15 @@ export class ConversationStore {
            WHERE machine_id = ? AND trust_state = 'pending'`,
         ).run(timestamp, timestamp, id).changes,
         'Pending trusted Machine peer',
+        id,
+      )
+      assertChanged(
+        this.#statement(
+          `UPDATE trusted_machine_endpoints SET
+             last_successful_at = ?, last_failure_at = NULL, updated_at = ?
+           WHERE machine_id = ? AND preferred = 1`,
+        ).run(timestamp, timestamp, id).changes,
+        'Preferred trusted Machine endpoint',
         id,
       )
       assertChanged(
@@ -500,18 +555,84 @@ export class ConversationStore {
     machineId: MachineId,
     address: RemoteMachineAddress,
     authenticatedAt: Timestamp,
+    source: DurableTrustedMachineEndpoint['source'] = 'pairing',
   ): DurableTrustedMachinePeer {
     const id = MachineIdSchema.parse(machineId)
-    const endpoint = RemoteMachineAddressSchema.parse(address)
+    const endpoint = canonicalTrustedMachineAddress(address)
     const timestamp = TimestampSchema.parse(authenticatedAt)
+    const endpointSource = parseTrustedMachineEndpointSource(source)
     this.runInTransaction(() => {
+      const exists = this.#statement(
+        `SELECT 1 FROM trusted_machine_endpoints
+         WHERE machine_id = ? AND endpoint_host = ? AND endpoint_port = ?`,
+      ).get(id, endpoint.host, endpoint.port)
+      if (exists === undefined) {
+        const count = this.#statement(
+          `SELECT COUNT(*) AS count FROM trusted_machine_endpoints
+           WHERE machine_id = ?`,
+        ).get(id) as { readonly count: number }
+        if (count.count >= machineWireLimits.rememberedEndpoints) {
+          const evicted = this.#statement(
+            `DELETE FROM trusted_machine_endpoints
+             WHERE rowid = (
+               SELECT rowid FROM trusted_machine_endpoints
+               WHERE machine_id = ? AND preferred = 0
+               ORDER BY
+                 COALESCE(last_successful_at, '') ASC,
+                 COALESCE(last_failure_at, '') ASC,
+                 updated_at ASC,
+                 endpoint_host ASC,
+                 endpoint_port ASC
+               LIMIT 1
+             )`,
+          ).run(id).changes
+          assertChanged(evicted, 'Evictable trusted Machine endpoint', id)
+        }
+      }
+      this.#statement(
+        `UPDATE trusted_machine_endpoints SET preferred = 0
+         WHERE machine_id = ? AND preferred = 1`,
+      ).run(id)
+      if (exists === undefined) {
+        this.#statement(
+          `INSERT INTO trusted_machine_endpoints (
+             machine_id, endpoint_host, endpoint_port, source, preferred,
+             created_at, updated_at, last_successful_at, last_failure_at
+           ) VALUES (?, ?, ?, ?, 1, ?, ?, ?, NULL)`,
+        ).run(
+          id,
+          endpoint.host,
+          endpoint.port,
+          endpointSource,
+          timestamp,
+          timestamp,
+          timestamp,
+        )
+      } else {
+        assertChanged(
+          this.#statement(
+            `UPDATE trusted_machine_endpoints SET
+               source = ?, preferred = 1, updated_at = ?,
+               last_successful_at = ?, last_failure_at = NULL
+             WHERE machine_id = ? AND endpoint_host = ? AND endpoint_port = ?`,
+          ).run(
+            endpointSource,
+            timestamp,
+            timestamp,
+            id,
+            endpoint.host,
+            endpoint.port,
+          ).changes,
+          'Trusted Machine endpoint',
+          id,
+        )
+      }
       assertChanged(
         this.#statement(
           `UPDATE trusted_machine_peers SET
-             endpoint_host = ?, endpoint_port = ?, updated_at = ?,
-             last_authenticated_at = ?
+             updated_at = ?, last_authenticated_at = ?
            WHERE machine_id = ?`,
-        ).run(endpoint.host, endpoint.port, timestamp, timestamp, id).changes,
+        ).run(timestamp, timestamp, id).changes,
         'Trusted Machine peer',
         id,
       )
@@ -529,6 +650,39 @@ export class ConversationStore {
       throw new Error(`Trusted Machine peer ${id} does not exist`)
     }
     return peer
+  }
+
+  recordTrustedMachineEndpointFailure(
+    machineId: MachineId,
+    address: RemoteMachineAddress,
+    failedAt: Timestamp,
+  ): boolean {
+    const id = MachineIdSchema.parse(machineId)
+    const endpoint = canonicalTrustedMachineAddress(address)
+    const timestamp = TimestampSchema.parse(failedAt)
+    return (
+      this.#statement(
+        `UPDATE trusted_machine_endpoints SET
+           last_failure_at = ?, updated_at = ?
+         WHERE machine_id = ? AND endpoint_host = ? AND endpoint_port = ?`,
+      ).run(timestamp, timestamp, id, endpoint.host, endpoint.port).changes > 0
+    )
+  }
+
+  #listTrustedMachineEndpoints(
+    machineId: MachineId,
+  ): DurableTrustedMachineEndpoint[] {
+    const rows = this.#statement(
+      `SELECT * FROM trusted_machine_endpoints
+       WHERE machine_id = ?
+       ORDER BY
+         preferred DESC,
+         last_successful_at DESC,
+         updated_at DESC,
+         endpoint_host ASC,
+         endpoint_port ASC`,
+    ).all(machineId) as unknown as TrustedMachineEndpointRow[]
+    return rows.map(trustedMachineEndpointFromRow)
   }
 
   deleteRemoteMachine(machineId: MachineId): boolean {
@@ -1658,11 +1812,21 @@ interface TrustedMachinePeerRow {
   readonly controller_key_fingerprint: string
   readonly trust_state: string
   readonly protocol_version: number
-  readonly endpoint_host: string
-  readonly endpoint_port: number
   readonly paired_at: string
   readonly updated_at: string
   readonly last_authenticated_at: string | null
+}
+
+interface TrustedMachineEndpointRow {
+  readonly machine_id: string
+  readonly endpoint_host: string
+  readonly endpoint_port: number
+  readonly source: string
+  readonly preferred: number
+  readonly created_at: string
+  readonly updated_at: string
+  readonly last_successful_at: string | null
+  readonly last_failure_at: string | null
 }
 
 interface TurnRow {
@@ -1773,7 +1937,7 @@ function parseMachine(value: DurableMachine): DurableMachine {
 }
 
 function parseTrustedMachinePeer(
-  value: DurableTrustedMachinePeer,
+  value: DurableTrustedMachinePeer | NewDurableTrustedMachinePeer,
 ): DurableTrustedMachinePeer {
   if (
     !(value.peerPublicKeySpki instanceof Uint8Array) ||
@@ -1788,6 +1952,37 @@ function parseTrustedMachinePeer(
     value.protocolVersion > 2_147_483_647
   ) {
     throw new Error('Trusted Machine protocol version is invalid')
+  }
+  const legacyAddress = 'address' in value ? value.address : undefined
+  const endpointInputs =
+    value.endpoints ??
+    (legacyAddress === undefined
+      ? []
+      : [
+          {
+            address: legacyAddress,
+            source: 'pairing' as const,
+            preferred: true,
+            createdAt: value.pairedAt,
+            updatedAt: value.updatedAt,
+          },
+        ])
+  if (
+    endpointInputs.length < 1 ||
+    endpointInputs.length > machineWireLimits.rememberedEndpoints
+  ) {
+    throw new Error('Trusted Machine endpoint count is invalid')
+  }
+  const endpoints = endpointInputs.map(parseTrustedMachineEndpoint)
+  if (endpoints.filter((endpoint) => endpoint.preferred).length !== 1) {
+    throw new Error('Trusted Machine must have exactly one preferred endpoint')
+  }
+  const keys = new Set<string>()
+  for (const endpoint of endpoints) {
+    const key = `${endpoint.address.host}\0${String(endpoint.address.port)}`
+    if (keys.has(key))
+      throw new Error('Trusted Machine endpoints must be unique')
+    keys.add(key)
   }
   return {
     machineId: MachineIdSchema.parse(value.machineId),
@@ -1817,7 +2012,7 @@ function parseTrustedMachinePeer(
     ),
     trustState: parseMachineTrustLifecycle(value.trustState),
     protocolVersion: value.protocolVersion,
-    address: RemoteMachineAddressSchema.parse(value.address),
+    endpoints,
     pairedAt: TimestampSchema.parse(value.pairedAt),
     updatedAt: TimestampSchema.parse(value.updatedAt),
     ...(value.lastAuthenticatedAt === undefined
@@ -1830,6 +2025,7 @@ function parseTrustedMachinePeer(
 
 function trustedMachinePeerFromRow(
   row: TrustedMachinePeerRow,
+  endpoints: readonly DurableTrustedMachineEndpoint[],
 ): DurableTrustedMachinePeer {
   return parseTrustedMachinePeer({
     machineId: MachineIdSchema.parse(row.machine_id),
@@ -1840,13 +2036,81 @@ function trustedMachinePeerFromRow(
     controllerKeyFingerprint: row.controller_key_fingerprint,
     trustState: parseMachineTrustLifecycle(row.trust_state),
     protocolVersion: row.protocol_version,
-    address: { host: row.endpoint_host, port: row.endpoint_port },
+    endpoints,
     pairedAt: row.paired_at,
     updatedAt: row.updated_at,
     ...(row.last_authenticated_at === null
       ? {}
       : { lastAuthenticatedAt: row.last_authenticated_at }),
   })
+}
+
+function trustedMachineEndpointFromRow(
+  row: TrustedMachineEndpointRow,
+): DurableTrustedMachineEndpoint {
+  return parseTrustedMachineEndpoint({
+    address: { host: row.endpoint_host, port: row.endpoint_port },
+    source: parseTrustedMachineEndpointSource(row.source),
+    preferred: row.preferred === 1,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    ...(row.last_successful_at === null
+      ? {}
+      : { lastSuccessfulAt: row.last_successful_at }),
+    ...(row.last_failure_at === null
+      ? {}
+      : { lastFailureAt: row.last_failure_at }),
+  })
+}
+
+function parseTrustedMachineEndpoint(
+  value: DurableTrustedMachineEndpoint,
+): DurableTrustedMachineEndpoint {
+  const address = canonicalTrustedMachineAddress(value.address)
+  return {
+    address,
+    source: parseTrustedMachineEndpointSource(value.source),
+    preferred: value.preferred,
+    createdAt: TimestampSchema.parse(value.createdAt),
+    updatedAt: TimestampSchema.parse(value.updatedAt),
+    ...(value.lastSuccessfulAt === undefined
+      ? {}
+      : { lastSuccessfulAt: TimestampSchema.parse(value.lastSuccessfulAt) }),
+    ...(value.lastFailureAt === undefined
+      ? {}
+      : { lastFailureAt: TimestampSchema.parse(value.lastFailureAt) }),
+  }
+}
+
+/**
+ * Endpoint hints are private, but their keys must still be stable.  The
+ * coordinator resolves hostnames before they enter durable trust; this keeps
+ * direct persistence callers from creating bracket/case variants of one
+ * literal endpoint.
+ */
+function canonicalTrustedMachineAddress(
+  value: RemoteMachineAddress,
+): RemoteMachineAddress {
+  const address = RemoteMachineAddressSchema.parse(value)
+  const bracketed = address.host.startsWith('[')
+  const host = bracketed ? address.host.slice(1, -1) : address.host
+  if (isIP(host) === 6) {
+    const normalized = new URL(`http://[${host}]/`).hostname
+    return {
+      host: normalized.slice(1, -1).toLowerCase(),
+      port: address.port,
+    }
+  }
+  return { host: host.toLowerCase(), port: address.port }
+}
+
+function parseTrustedMachineEndpointSource(
+  value: string,
+): DurableTrustedMachineEndpoint['source'] {
+  if (value !== 'pairing' && value !== 'manual') {
+    throw new Error(`Unsupported trusted Machine endpoint source: ${value}`)
+  }
+  return value
 }
 
 function parseConversation(
@@ -2146,6 +2410,29 @@ function assertDatabaseIntegrity(database: DatabaseSync): void {
   if (invalidTrust.count !== 0) {
     throw new Error(
       'SQLite remote Machines must have exactly one private trust binding',
+    )
+  }
+  const invalidEndpoints = database
+    .prepare(
+      `SELECT COUNT(*) AS count
+       FROM trusted_machine_peers
+       LEFT JOIN (
+         SELECT
+           machine_id,
+           COUNT(*) AS endpoint_count,
+           SUM(preferred) AS preferred_count
+         FROM trusted_machine_endpoints
+         GROUP BY machine_id
+       ) AS endpoint_summary
+         ON endpoint_summary.machine_id = trusted_machine_peers.machine_id
+       WHERE
+         COALESCE(endpoint_summary.endpoint_count, 0) NOT BETWEEN 1 AND 8
+         OR COALESCE(endpoint_summary.preferred_count, 0) <> 1`,
+    )
+    .get() as { readonly count: number }
+  if (invalidEndpoints.count !== 0) {
+    throw new Error(
+      'SQLite trusted Machines must have one preferred bounded endpoint set',
     )
   }
   const locations = database

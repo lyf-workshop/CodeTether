@@ -115,8 +115,8 @@ test('migration 007 preserves Codex organization, Turns, Attention, and Search b
     assertVersionSixRejectsClaude(databasePath)
 
     const migrated = ConversationStore.open({ databasePath })
-    assert.equal(migrated.schemaVersion, 9)
-    assert.equal(currentSchemaVersion, 9)
+    assert.equal(migrated.schemaVersion, 10)
+    assert.equal(currentSchemaVersion, 10)
     const migratedMachineId = migrated.listMachines()[0].machineId
 
     const preserved = migrated.getConversation(codex.conversationId)
@@ -347,7 +347,7 @@ function downgradeProviderFoundationToVersionSix(databasePath) {
   const database = new DatabaseSync(databasePath)
   database.exec('PRAGMA foreign_keys = OFF')
   database.exec(`
-    DELETE FROM schema_migrations WHERE version = 7;
+    DELETE FROM schema_migrations WHERE version IN (7, 8, 9, 10);
 
     CREATE TABLE conversations_v6 (
       conversation_id TEXT PRIMARY KEY,

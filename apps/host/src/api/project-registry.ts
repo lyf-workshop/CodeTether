@@ -16,6 +16,7 @@ import {
 import {
   ConversationStore,
   ProjectLocationConflictError,
+  ProjectLocationRemovalError,
   type DurableProject,
   type DurableProjectLocation,
 } from '../persistence/index.js'
@@ -28,6 +29,9 @@ export type ProjectRegistryErrorCode =
   | 'has_conversations'
   | 'unavailable'
   | 'location_conflict'
+  | 'location_not_found'
+  | 'location_has_conversations'
+  | 'local_location_required'
 
 export class ProjectRegistryError extends Error {
   constructor(
@@ -249,6 +253,50 @@ export class ProjectRegistry {
       location: result.location,
       created: result.created,
     }
+  }
+
+  async removeLocation(
+    projectId: ProjectId,
+    machineId: MachineId,
+  ): Promise<ProjectRecord> {
+    const project = this.require(projectId)
+    const machine = MachineIdSchema.parse(machineId)
+    if (this.#persistence === undefined) {
+      throw new ProjectRegistryError(
+        'unavailable',
+        'Durable Project locations are unavailable',
+      )
+    }
+    try {
+      this.#writeDurable(() => {
+        this.#persistence?.removeProjectLocation(project.projectId, machine)
+      })
+    } catch (error) {
+      if (error instanceof ProjectLocationRemovalError) {
+        switch (error.reason) {
+          case 'not_found':
+            throw new ProjectRegistryError('location_not_found', error.message)
+          case 'local_required':
+            throw new ProjectRegistryError(
+              'local_location_required',
+              error.message,
+            )
+          case 'has_conversations':
+            throw new ProjectRegistryError(
+              'location_has_conversations',
+              error.message,
+            )
+        }
+      }
+      throw error
+    }
+    this.#replace({
+      ...project,
+      locations: project.locations.filter(
+        (location) => location.machineId !== machine,
+      ),
+    })
+    return await this.get(project.projectId)
   }
 
   async authorizeConversation(

@@ -373,7 +373,7 @@ function RemoteMachineDetail({
           disabled={projects.length > 0}
           title={
             projects.length > 0
-              ? '当前版本无法在保留项目位置时取消配对'
+              ? '请先在项目详情中移除此机器上的工作区位置'
               : undefined
           }
           onClick={onUnpair}
@@ -494,7 +494,7 @@ function RemoteMachineDetail({
       {projects.length > 0 ? (
         <p role="status" className="mt-3 text-xs text-text-muted">
           这台机器仍有 {projects.length}{' '}
-          个项目位置。当前版本不支持单独移除项目位置，因此这些位置存在时不能取消配对。
+          个项目位置。请先在对应的项目详情中明确移除这些位置，再单独取消配对。
         </p>
       ) : null}
 

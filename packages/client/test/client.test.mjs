@@ -419,6 +419,75 @@ test('registers a bounded ProjectLocation with exact route identity and AbortSig
   })
 })
 
+test('removes an exact ProjectLocation through the typed route with AbortSignal', async () => {
+  const calls = []
+  const controller = new AbortController()
+  const remoteMachineId = 'machine_remote01'
+  const client = new CodeTetherClient({
+    baseUrl: 'http://host.test',
+    fetch: async (input, init) => {
+      calls.push({ url: String(input), init })
+      return jsonResponse({
+        protocolVersion: 1,
+        actionId: 'act_location_remove1',
+        status: 'completed',
+        data: { project, machineId: remoteMachineId },
+      })
+    },
+  })
+
+  const response = await client.removeProjectLocation(
+    projectId,
+    remoteMachineId,
+    { actionId: 'act_location_remove1' },
+    { signal: controller.signal },
+  )
+
+  assert.equal(response.data.machineId, remoteMachineId)
+  assert.equal(calls.length, 1)
+  assert.equal(
+    new URL(calls[0].url).pathname,
+    `/api/v1/projects/${projectId}/locations/${remoteMachineId}`,
+  )
+  assert.equal(calls[0].init.method, 'DELETE')
+  assert.equal(calls[0].init.signal, controller.signal)
+  assert.deepEqual(JSON.parse(calls[0].init.body), {
+    actionId: 'act_location_remove1',
+  })
+})
+
+test('rejects ProjectLocation removal response identity mismatches', async () => {
+  const remoteMachineId = 'machine_remote01'
+  for (const response of [
+    {
+      protocolVersion: 1,
+      actionId: 'act_location_remove1',
+      status: 'completed',
+      data: {
+        project: { ...project, projectId: 'proj_other01' },
+        machineId: remoteMachineId,
+      },
+    },
+    {
+      protocolVersion: 1,
+      actionId: 'act_location_remove1',
+      status: 'completed',
+      data: { project, machineId: 'machine_other01' },
+    },
+  ]) {
+    const client = new CodeTetherClient({
+      baseUrl: 'http://host.test',
+      fetch: async () => jsonResponse(response),
+    })
+    await assert.rejects(
+      client.removeProjectLocation(projectId, remoteMachineId, {
+        actionId: 'act_location_remove1',
+      }),
+      CodeTetherProtocolError,
+    )
+  }
+})
+
 test('rejects ProjectLocation responses with mismatched Project or Machine identity', async () => {
   const requestedMachineId = 'machine_remote01'
   const remotePath = '/home/user/projects/demo'

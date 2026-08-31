@@ -57,6 +57,8 @@ import {
   type CreateProjectResponse,
   type RegisterProjectLocationRequest,
   type RegisterProjectLocationResponse,
+  type RemoveProjectLocationRequest,
+  type RemoveProjectLocationResponse,
   type DeleteProjectRequest,
   type DeleteProjectResponse,
   type GetProjectResponse,
@@ -108,6 +110,7 @@ import {
   ConversationSearchCursorError,
   DURABLE_TURN_SNAPSHOT_VERSION,
   ProjectLocationConflictError,
+  ProjectLocationRemovalError,
   RemoteMachineTrustConflictError,
   RemoteMachineProjectLocationConflictError,
   captureTurnPresentation,
@@ -905,6 +908,34 @@ export class HostService {
             throw projectServiceError(error)
           }
           throw remoteMachineServiceError(error)
+        }
+      },
+      false,
+    )
+  }
+
+  async removeProjectLocation(
+    projectId: ProjectId,
+    machineId: MachineId,
+    request: RemoveProjectLocationRequest,
+  ): Promise<RemoveProjectLocationResponse> {
+    const project = ProjectIdSchema.parse(projectId)
+    const machine = MachineIdSchema.parse(machineId)
+    return await this.#executeAction(
+      request.actionId,
+      `project.location.remove:${project}:${machine}`,
+      { projectId: project, machineId: machine, request },
+      async () => {
+        try {
+          const updated = await this.#projects.removeLocation(project, machine)
+          return {
+            protocolVersion,
+            actionId: request.actionId,
+            status: 'completed',
+            data: { project: updated, machineId: machine },
+          }
+        } catch (error) {
+          throw projectServiceError(error)
         }
       },
       false,
@@ -2916,6 +2947,7 @@ export class HostService {
       if (
         error instanceof RemoteMachineTrustConflictError ||
         error instanceof ProjectLocationConflictError ||
+        error instanceof ProjectLocationRemovalError ||
         error instanceof RemoteMachineProjectLocationConflictError
       ) {
         throw error
@@ -3583,6 +3615,24 @@ function projectServiceError(error: unknown): Error {
     case 'location_conflict':
       return new HostServiceError(
         'project_location_conflict',
+        error.message,
+        409,
+      )
+    case 'location_not_found':
+      return new HostServiceError(
+        'project_location_not_found',
+        error.message,
+        404,
+      )
+    case 'location_has_conversations':
+      return new HostServiceError(
+        'project_location_has_conversations',
+        error.message,
+        409,
+      )
+    case 'local_location_required':
+      return new HostServiceError(
+        'project_location_local_required',
         error.message,
         409,
       )

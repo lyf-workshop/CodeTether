@@ -317,6 +317,13 @@ export class HostRuntime {
     return this.#projectActions.registerProjectLocation(projectId, input)
   }
 
+  removeProjectLocation(
+    projectId: Parameters<ProjectActions['removeProjectLocation']>[0],
+    machineId: Parameters<ProjectActions['removeProjectLocation']>[1],
+  ) {
+    return this.#projectActions.removeProjectLocation(projectId, machineId)
+  }
+
   listProjectConversations(
     projectId: ProjectId,
     options?: Parameters<

@@ -14,6 +14,8 @@ import {
   type ProjectId,
   type RegisterProjectLocationRequest,
   type RegisterProjectLocationResponse,
+  type RemoveProjectLocationRequest,
+  type RemoveProjectLocationResponse,
 } from '@codetether/protocol'
 import type { QueryClient } from '@tanstack/react-query'
 
@@ -36,10 +38,16 @@ export interface ProjectMutationClient {
     request: RegisterProjectLocationRequest,
     options?: { readonly signal?: AbortSignal },
   ): Promise<RegisterProjectLocationResponse>
+  removeProjectLocation(
+    projectId: ProjectId,
+    machineId: MachineId,
+    request: RemoveProjectLocationRequest,
+    options?: { readonly signal?: AbortSignal },
+  ): Promise<RemoveProjectLocationResponse>
 }
 
 export type ProjectOperation =
-  'load' | 'create' | 'register-location' | 'remove'
+  'load' | 'create' | 'register-location' | 'remove-location' | 'remove'
 
 interface CreateAttempt {
   readonly identity: string
@@ -76,6 +84,10 @@ export class ProjectActions {
   readonly #locationAttempts = new Map<
     string,
     Promise<RegisterProjectLocationResponse>
+  >()
+  readonly #locationRemovalAttempts = new Map<
+    string,
+    Promise<RemoveProjectLocationResponse>
   >()
 
   constructor(
@@ -134,6 +146,52 @@ export class ProjectActions {
         }
       })
     this.#locationAttempts.set(identity, promise)
+    return promise
+  }
+
+  removeProjectLocation(
+    projectId: ProjectId | string,
+    machineId: MachineId | string,
+  ): Promise<RemoveProjectLocationResponse> {
+    const project = ProjectIdSchema.parse(projectId)
+    const machine = MachineIdSchema.parse(machineId)
+    const identity = JSON.stringify([project, machine])
+    const current = this.#locationRemovalAttempts.get(identity)
+    if (current !== undefined) return current
+
+    const request: RemoveProjectLocationRequest = {
+      actionId: this.#createActionId(),
+    }
+    const promise = this.#client
+      .removeProjectLocation(project, machine, request)
+      .then((response) => {
+        if (this.#queryClient !== undefined) {
+          upsertProjectCache(this.#queryClient, response.data.project)
+          void this.#queryClient.invalidateQueries({
+            queryKey: projectQueryKeys.list,
+            exact: true,
+          })
+          void this.#queryClient.invalidateQueries({
+            queryKey: projectQueryKeys.detail(project),
+            exact: true,
+          })
+          void this.#queryClient.invalidateQueries({
+            queryKey: machineQueryKeys.list,
+            exact: true,
+          })
+          void this.#queryClient.invalidateQueries({
+            queryKey: machineQueryKeys.detail(machine),
+            exact: true,
+          })
+        }
+        return response
+      })
+      .finally(() => {
+        if (this.#locationRemovalAttempts.get(identity) === promise) {
+          this.#locationRemovalAttempts.delete(identity)
+        }
+      })
+    this.#locationRemovalAttempts.set(identity, promise)
     return promise
   }
 
@@ -223,6 +281,12 @@ export function projectErrorMessage(
       return '所选机器当前无法访问该目录。'
     case 'project_location_conflict':
       return '此项目已在所选机器上注册了工作区位置。'
+    case 'project_location_not_found':
+      return '工作区位置不存在或已被移除。'
+    case 'project_location_has_conversations':
+      return '此工作区位置仍有关联会话，当前不能移除。'
+    case 'project_location_local_required':
+      return '本地工作区位置属于当前项目授权，不能单独移除。'
     case 'machine_has_project_locations':
       return '这台机器仍有关联项目位置，当前不能取消配对。'
     case 'project_has_conversations':
@@ -254,6 +318,8 @@ export function projectErrorMessage(
         ? 'CodeTether 未能读取项目。'
         : operation === 'create'
           ? 'CodeTether 未能添加项目。'
-          : 'CodeTether 未能移除项目。'
+          : operation === 'remove-location'
+            ? 'CodeTether 未能移除工作区位置。'
+            : 'CodeTether 未能移除项目。'
   }
 }

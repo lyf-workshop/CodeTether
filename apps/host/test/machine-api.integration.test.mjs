@@ -848,6 +848,94 @@ test('remote ProjectLocation API requires active online trust, stays idempotent,
     assert.equal(blockedUnpair.body.code, 'machine_has_project_locations')
     assert.equal(blockedUnpair.body.details.locationCount, 1)
     assert.equal(coordinator.unpairCalls, 0)
+
+    const validationCountBeforeRemoval = coordinator.validationCalls.length
+    const removed = await requestJson(
+      baseUrl,
+      `/api/v1/projects/${project.projectId}/locations/${coordinator.machineId}`,
+      {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ actionId: 'act_location_remove01' }),
+      },
+    )
+    assert.equal(removed.status, 200)
+    assert.equal(removed.body.data.machineId, coordinator.machineId)
+    assert.deepEqual(
+      removed.body.data.project.locations.map((location) => location.machineId),
+      [localMachine.machineId],
+    )
+    assert.equal(
+      coordinator.validationCalls.length,
+      validationCountBeforeRemoval,
+    )
+    assert.equal(
+      service
+        .listMachines()
+        .machines.filter(
+          (machine) => machine.machineId === coordinator.machineId,
+        ).length,
+      1,
+    )
+    assert.equal(
+      (await service.getMachine(coordinator.machineId)).projects.length,
+      0,
+    )
+
+    const replayedRemoval = await requestJson(
+      baseUrl,
+      `/api/v1/projects/${project.projectId}/locations/${coordinator.machineId}`,
+      {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ actionId: 'act_location_remove01' }),
+      },
+    )
+    assert.deepEqual(replayedRemoval.body, removed.body)
+    const missingRemoval = await requestJson(
+      baseUrl,
+      `/api/v1/projects/${project.projectId}/locations/${coordinator.machineId}`,
+      {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ actionId: 'act_location_remove02' }),
+      },
+    )
+    assert.equal(missingRemoval.status, 404)
+    assert.equal(missingRemoval.body.code, 'project_location_not_found')
+
+    const localRemoval = await requestJson(
+      baseUrl,
+      `/api/v1/projects/${project.projectId}/locations/${localMachine.machineId}`,
+      {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ actionId: 'act_location_remove03' }),
+      },
+    )
+    assert.equal(localRemoval.status, 409)
+    assert.equal(localRemoval.body.code, 'project_location_local_required')
+
+    const unpaired = await requestJson(
+      baseUrl,
+      `/api/v1/machines/${coordinator.machineId}/trust`,
+      {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ actionId: 'act_location_unpair02' }),
+      },
+    )
+    assert.equal(unpaired.status, 200)
+    assert.equal(unpaired.body.data.machineId, coordinator.machineId)
+    assert.equal(coordinator.unpairCalls, 1)
+    assert.equal(
+      service
+        .listMachines()
+        .machines.some(
+          (machine) => machine.machineId === coordinator.machineId,
+        ),
+      false,
+    )
     assert.equal(runtime.startConversationCalls.length, 0)
     assert.equal(runtime.resumeConversationCalls.length, 0)
   } finally {

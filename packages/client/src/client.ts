@@ -22,6 +22,8 @@ import {
   CreateProjectResponseSchema,
   RegisterProjectLocationRequestSchema,
   RegisterProjectLocationResponseSchema,
+  RemoveProjectLocationRequestSchema,
+  RemoveProjectLocationResponseSchema,
   DeleteProjectRequestSchema,
   DeleteProjectResponseSchema,
   GetMachineResponseSchema,
@@ -83,6 +85,8 @@ import {
   type CreateProjectResponse,
   type RegisterProjectLocationRequest,
   type RegisterProjectLocationResponse,
+  type RemoveProjectLocationRequest,
+  type RemoveProjectLocationResponse,
   type DeleteProjectRequest,
   type DeleteProjectResponse,
   type GetMachineResponse,
@@ -702,6 +706,50 @@ export class CodeTetherClient {
     assertProtocolIdentity(
       response.data.location.machineId === request.machineId,
       'Register ProjectLocation response does not match the requested Machine',
+    )
+    return response
+  }
+
+  async removeProjectLocation(
+    projectId: ProjectId,
+    machineId: MachineId,
+    input: RemoveProjectLocationRequest,
+    options: RequestOptions = {},
+  ): Promise<RemoveProjectLocationResponse> {
+    const project = parseProtocol(
+      ProjectIdSchema,
+      projectId,
+      'remove-project-location project id',
+    )
+    const machine = parseProtocol(
+      MachineIdSchema,
+      machineId,
+      'remove-project-location machine id',
+    )
+    const request = parseProtocol(
+      RemoveProjectLocationRequestSchema,
+      input,
+      'remove-project-location request',
+    )
+    const response = await this.#request(
+      `/api/v1/projects/${encodeURIComponent(project)}/locations/${encodeURIComponent(machine)}`,
+      RemoveProjectLocationResponseSchema,
+      {
+        ...jsonRequest(request, options.signal),
+        method: 'DELETE',
+      },
+      request.actionId,
+    )
+    assertProtocolIdentity(
+      response.data.project.projectId === project,
+      'Remove ProjectLocation response does not match the requested Project',
+    )
+    assertProtocolIdentity(
+      response.data.machineId === machine &&
+        !response.data.project.locations.some(
+          (location) => location.machineId === machine,
+        ),
+      'Remove ProjectLocation response does not match the requested Machine',
     )
     return response
   }

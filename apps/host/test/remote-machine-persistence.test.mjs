@@ -9,6 +9,7 @@ import { MachineRegistry } from '../dist/api/machine-registry.js'
 import {
   ConversationStore,
   ProjectLocationConflictError,
+  ProjectLocationRemovalError,
   RemoteMachineProjectLocationConflictError,
   RemoteMachineTrustConflictError,
   currentSchemaVersion,
@@ -442,7 +443,152 @@ test('remote Project locations aggregate durably, reject conflicts, and atomical
       reopened.countProjectLocationsForMachine(candidate.machine.machineId),
       1,
     )
+    assert.throws(
+      () =>
+        reopened.removeProjectLocation('proj_multilocation01', local.machineId),
+      (error) =>
+        error instanceof ProjectLocationRemovalError &&
+        error.reason === 'local_required',
+    )
+    assert.deepEqual(
+      reopened.removeProjectLocation(
+        'proj_multilocation01',
+        candidate.machine.machineId,
+      ),
+      location,
+    )
+    assert.equal(
+      reopened.getProject('proj_multilocation01').locations.length,
+      1,
+    )
+    assert.ok(reopened.getMachine(candidate.machine.machineId))
+    assert.equal(
+      reopened.getTrustedMachinePeer(candidate.machine.machineId).trustState,
+      'active',
+    )
+    assert.throws(
+      () =>
+        reopened.removeProjectLocation(
+          'proj_multilocation01',
+          candidate.machine.machineId,
+        ),
+      (error) =>
+        error instanceof ProjectLocationRemovalError &&
+        error.reason === 'not_found',
+    )
+    assert.doesNotThrow(() =>
+      reopened.markTrustedMachinePeerRevoking(
+        candidate.machine.machineId,
+        later,
+      ),
+    )
     reopened.close()
+  })
+})
+
+test('remote ProjectLocation removal fails closed when durable Conversations bind the exact Project and Machine', () => {
+  withDatabase((databasePath) => {
+    const store = ConversationStore.open({ databasePath })
+    const [local] = store.listMachines()
+    assert.ok(local)
+    const root = normalizeTrustedProjectRoot(
+      resolve(databasePath, '..', 'conversation-bound-location'),
+    )
+    store.createProject({
+      projectId: 'proj_locationconversation01',
+      name: 'Conversation-bound location',
+      locations: [
+        {
+          projectId: 'proj_locationconversation01',
+          machineId: local.machineId,
+          rootPath: root.rootPath,
+          rootPathKey: root.rootPathKey,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+      ],
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    })
+    const candidate = remoteCandidate('machine_locationconversation01', 'c')
+    store.createRemoteMachineWithTrust(candidate.machine, candidate.trust)
+    store.activateTrustedMachinePeer(candidate.machine.machineId, later)
+    const remoteOnlyLocation = {
+      projectId: 'proj_remoteonlylocation01',
+      machineId: candidate.machine.machineId,
+      rootPath: '/srv/projects/remote-only',
+      rootPathKey: '/srv/projects/remote-only',
+      createdAt: later,
+      updatedAt: later,
+    }
+    store.createProject({
+      projectId: remoteOnlyLocation.projectId,
+      name: 'Remote-only safety fixture',
+      locations: [remoteOnlyLocation],
+      createdAt: later,
+      updatedAt: later,
+    })
+    assert.throws(
+      () =>
+        store.removeProjectLocation(
+          remoteOnlyLocation.projectId,
+          remoteOnlyLocation.machineId,
+        ),
+      (error) =>
+        error instanceof ProjectLocationRemovalError &&
+        error.reason === 'local_required',
+    )
+    assert.deepEqual(
+      store.getProjectLocation(
+        remoteOnlyLocation.projectId,
+        remoteOnlyLocation.machineId,
+      ),
+      remoteOnlyLocation,
+    )
+    const location = {
+      projectId: 'proj_locationconversation01',
+      machineId: candidate.machine.machineId,
+      rootPath: '/srv/projects/conversation-bound',
+      rootPathKey: '/srv/projects/conversation-bound',
+      createdAt: later,
+      updatedAt: later,
+    }
+    store.createProjectLocation(location)
+    store.createConversation({
+      conversationId: 'conv_locationconversation01',
+      projectId: 'proj_locationconversation01',
+      machineId: candidate.machine.machineId,
+      provider: 'codex',
+      providerThreadId: 'private-session-preserved',
+      cwd: root.rootPath,
+      status: 'completed',
+      title: 'Remote history safety fixture',
+      titleSource: 'manual',
+      createdAt: timestamp,
+      updatedAt: later,
+      lastActivityAt: later,
+    })
+
+    assert.throws(
+      () => store.removeProjectLocation(location.projectId, location.machineId),
+      (error) =>
+        error instanceof ProjectLocationRemovalError &&
+        error.reason === 'has_conversations' &&
+        error.conversationCount === 1,
+    )
+    assert.deepEqual(
+      store.getProjectLocation(location.projectId, location.machineId),
+      location,
+    )
+    assert.equal(
+      store.getConversation('conv_locationconversation01').machineId,
+      candidate.machine.machineId,
+    )
+    assert.ok(store.getMachine(candidate.machine.machineId))
+    const inspect = new DatabaseSync(databasePath)
+    assert.deepEqual(inspect.prepare('PRAGMA foreign_key_check').all(), [])
+    inspect.close()
+    store.close()
   })
 })
 

@@ -28,6 +28,8 @@ import {
   CreateProjectResponseSchema,
   RegisterProjectLocationRequestSchema,
   RegisterProjectLocationResponseSchema,
+  RemoveProjectLocationRequestSchema,
+  RemoveProjectLocationResponseSchema,
   DeleteProjectRequestSchema,
   DeleteProjectResponseSchema,
   GetConversationResponseSchema,
@@ -443,6 +445,41 @@ export class LocalHttpServer {
           response,
           result.data.created ? 201 : 200,
           RegisterProjectLocationResponseSchema.parse(result),
+          context.allowedOrigin,
+        )
+        return
+      }
+
+      const projectLocationRoute = this.#http.matchPath(
+        url.pathname,
+        /^\/api\/v1\/projects\/([^/]+)\/locations\/([^/]+)$/u,
+      )
+      if (request.method === 'DELETE' && projectLocationRoute !== undefined) {
+        const projectId = this.#http.parseRouteId(
+          ProjectIdSchema,
+          projectLocationRoute[0],
+          'projectId',
+        )
+        const machineId = this.#http.parseRouteId(
+          MachineIdSchema,
+          projectLocationRoute[1],
+          'machineId',
+        )
+        const body = await this.#http.readValidatedBody(
+          request,
+          RemoveProjectLocationRequestSchema,
+        )
+        context.actionId = body.actionId
+        this.#http.writeJson(
+          response,
+          200,
+          RemoveProjectLocationResponseSchema.parse(
+            await this.#service.removeProjectLocation(
+              projectId,
+              machineId,
+              body,
+            ),
+          ),
           context.allowedOrigin,
         )
         return

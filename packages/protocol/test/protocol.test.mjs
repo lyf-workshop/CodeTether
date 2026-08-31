@@ -53,6 +53,8 @@ import {
   RemoteMachinePairingCandidateSchema,
   RegisterProjectLocationRequestSchema,
   RegisterProjectLocationResponseSchema,
+  RemoveProjectLocationRequestSchema,
+  RemoveProjectLocationResponseSchema,
   RetryMachineConnectionRequestSchema,
   RetryMachineConnectionResponseSchema,
   ProviderAvailabilitySchema,
@@ -591,6 +593,53 @@ test('validates strict bounded ProjectLocation registration requests and exact r
     }).success,
     false,
   )
+})
+
+test('validates strict ProjectLocation removal requests and absence-preserving responses', () => {
+  const remoteMachineId = 'machine_remote01'
+  const request = { actionId: 'act_location_remove1' }
+  assert.deepEqual(RemoveProjectLocationRequestSchema.parse(request), request)
+  assert.equal(
+    RemoveProjectLocationRequestSchema.safeParse({
+      ...request,
+      deleteRemoteFiles: true,
+    }).success,
+    false,
+  )
+
+  const response = {
+    protocolVersion,
+    actionId: request.actionId,
+    status: 'completed',
+    data: { project, machineId: remoteMachineId },
+  }
+  assert.deepEqual(
+    RemoveProjectLocationResponseSchema.parse(response),
+    response,
+  )
+  assert.equal(
+    RemoveProjectLocationResponseSchema.safeParse({
+      ...response,
+      data: {
+        ...response.data,
+        project: {
+          ...project,
+          locations: [
+            ...project.locations,
+            { ...projectLocation, machineId: remoteMachineId },
+          ],
+        },
+      },
+    }).success,
+    false,
+  )
+  for (const code of [
+    'project_location_not_found',
+    'project_location_has_conversations',
+    'project_location_local_required',
+  ]) {
+    assert.equal(HostErrorCodeSchema.parse(code), code)
+  }
 })
 
 test('validates presentation-safe remote pairing contracts', () => {

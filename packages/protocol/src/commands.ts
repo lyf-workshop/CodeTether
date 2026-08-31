@@ -93,6 +93,14 @@ export type RegisterProjectLocationRequest = z.infer<
   typeof RegisterProjectLocationRequestSchema
 >
 
+/** Removes only the Controller-owned Project/Machine location association. */
+export const RemoveProjectLocationRequestSchema = z
+  .object({ actionId: ActionIdSchema })
+  .strict()
+export type RemoveProjectLocationRequest = z.infer<
+  typeof RemoveProjectLocationRequestSchema
+>
+
 export const DeleteProjectRequestSchema = z
   .object({ actionId: ActionIdSchema })
   .strict()
@@ -524,6 +532,29 @@ export type RegisterProjectLocationData = z.infer<
   typeof RegisterProjectLocationDataSchema
 >
 
+export const RemoveProjectLocationDataSchema = z
+  .object({
+    project: ProjectRecordSchema,
+    machineId: MachineIdSchema,
+  })
+  .strict()
+  .superRefine((data, context) => {
+    if (
+      data.project.locations.some(
+        (location) => location.machineId === data.machineId,
+      )
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Returned Project must not contain the removed location',
+        path: ['project', 'locations'],
+      })
+    }
+  })
+export type RemoveProjectLocationData = z.infer<
+  typeof RemoveProjectLocationDataSchema
+>
+
 export const DeleteProjectDataSchema = z
   .object({ projectId: ProjectIdSchema })
   .strict()
@@ -594,6 +625,13 @@ export const RegisterProjectLocationResponseSchema = mutationResponseSchema(
 )
 export type RegisterProjectLocationResponse = z.infer<
   typeof RegisterProjectLocationResponseSchema
+>
+
+export const RemoveProjectLocationResponseSchema = mutationResponseSchema(
+  RemoveProjectLocationDataSchema,
+)
+export type RemoveProjectLocationResponse = z.infer<
+  typeof RemoveProjectLocationResponseSchema
 >
 
 export const DeleteProjectResponseSchema = mutationResponseSchema(

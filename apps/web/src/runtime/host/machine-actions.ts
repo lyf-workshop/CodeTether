@@ -357,6 +357,9 @@ export function machineErrorMessage(
     case 'project_location_missing':
     case 'project_location_inaccessible':
     case 'project_location_conflict':
+    case 'project_location_not_found':
+    case 'project_location_has_conversations':
+    case 'project_location_local_required':
     case 'conversation_archived':
       return operation === 'unpair'
         ? 'CodeTether 未能取消机器配对。'

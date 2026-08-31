@@ -1,13 +1,29 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { Link } from '@tanstack/react-router'
-import { Check, Copy, FolderOpen, Monitor } from 'lucide-react'
+import {
+  Check,
+  Copy,
+  FolderOpen,
+  Monitor,
+  MoreHorizontal,
+  Trash2,
+} from 'lucide-react'
 
-import { IconButton, MachineBadge, Separator } from '@codetether/ui'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+  IconButton,
+  MachineBadge,
+  Separator,
+} from '@codetether/ui'
 import type { MachineSummary, ProjectRecord } from '@codetether/protocol'
 
 import { machineConnectionStateLabel } from '../machines/machine-presentation'
 import { ProjectAvailabilityBadge } from './project-availability-badge'
 import { compactProjectPath, projectFolderName } from './project-format'
+import { RemoveProjectLocationDialog } from './remove-project-location-dialog'
 
 interface ProjectLocationsSectionProps {
   machines: readonly MachineSummary[]
@@ -18,14 +34,30 @@ export function ProjectLocationsSection({
   machines,
   project,
 }: ProjectLocationsSectionProps) {
+  const sectionRef = useRef<HTMLElement>(null)
+  const [removeOpen, setRemoveOpen] = useState(false)
+  const [removalTarget, setRemovalTarget] = useState<{
+    readonly location: ProjectRecord['locations'][number]
+    readonly machine: MachineSummary
+  }>()
   const machinesById = new Map(
     machines.map((machine) => [machine.machineId, machine]),
   )
 
+  function openRemoveDialog(
+    location: ProjectRecord['locations'][number],
+    machine: MachineSummary,
+  ) {
+    setRemovalTarget({ location, machine })
+    setRemoveOpen(true)
+  }
+
   return (
     <section
+      ref={sectionRef}
+      tabIndex={-1}
       aria-labelledby="project-locations-heading"
-      className="min-w-0 rounded-lg border border-border bg-surface/65 p-5"
+      className="min-w-0 rounded-lg border border-border bg-surface/65 p-5 outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
     >
       <div className="flex min-w-0 items-start gap-3">
         <span
@@ -58,9 +90,21 @@ export function ProjectLocationsSection({
             key={location.machineId}
             location={location}
             machine={machinesById.get(location.machineId)}
+            onRemove={openRemoveDialog}
           />
         ))}
       </ul>
+
+      {removalTarget === undefined ? null : (
+        <RemoveProjectLocationDialog
+          location={removalTarget.location}
+          machine={removalTarget.machine}
+          open={removeOpen}
+          project={project}
+          returnFocus={() => sectionRef.current}
+          onOpenChange={setRemoveOpen}
+        />
+      )}
     </section>
   )
 }
@@ -68,10 +112,16 @@ export function ProjectLocationsSection({
 function ProjectLocationCard({
   location,
   machine,
+  onRemove,
 }: {
   location: ProjectRecord['locations'][number]
   machine?: MachineSummary
+  onRemove: (
+    location: ProjectRecord['locations'][number],
+    machine: MachineSummary,
+  ) => void
 }) {
+  const dialogOpeningRef = useRef(false)
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>(
     'idle',
   )
@@ -155,6 +205,40 @@ function ProjectLocationCard({
             <Copy aria-hidden="true" />
           )}
         </IconButton>
+        {machine?.kind === 'remote' ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <IconButton
+                type="button"
+                variant="ghost"
+                size="sm"
+                label={`更多工作区位置操作：${machine.displayName}，${projectFolderName(location.rootPath)}`}
+                className="size-7 shrink-0 text-text-muted hover:text-text-primary"
+              >
+                <MoreHorizontal aria-hidden="true" />
+              </IconButton>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              align="end"
+              onCloseAutoFocus={(event) => {
+                if (!dialogOpeningRef.current) return
+                event.preventDefault()
+                dialogOpeningRef.current = false
+              }}
+            >
+              <DropdownMenuItem
+                variant="danger"
+                onSelect={() => {
+                  dialogOpeningRef.current = true
+                  onRemove(location, machine)
+                }}
+              >
+                <Trash2 aria-hidden="true" />
+                移除位置
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : null}
       </div>
 
       {machine?.kind === 'remote' && !machineReachable ? (

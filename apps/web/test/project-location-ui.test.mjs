@@ -55,6 +55,44 @@ test('Add Location is a bounded, keyboard-accessible remote path registration fl
   )
 })
 
+test('Remote Location removal is explicit, metadata-only, and keyboard accessible', async () => {
+  const [locations, dialog, actions] = await Promise.all([
+    source('components/projects/project-locations-section.tsx'),
+    source('components/projects/remove-project-location-dialog.tsx'),
+    source('runtime/host/project-actions.ts'),
+  ])
+
+  assert.match(locations, /machine\?\.kind === 'remote'/u)
+  assert.match(locations, /DropdownMenuTrigger/u)
+  assert.match(locations, /更多工作区位置操作/u)
+  assert.match(locations, /移除位置/u)
+  assert.match(locations, /onCloseAutoFocus/u)
+  assert.match(locations, /tabIndex=\{-1\}/u)
+  assert.doesNotMatch(locations, /disabled=\{!machineReachable\}/u)
+
+  assert.match(dialog, /runtime\.removeProjectLocation/u)
+  assert.match(dialog, /移除工作区位置/u)
+  assert.match(dialog, /远程目录/u)
+  assert.match(dialog, /其中的文件不会被删除/u)
+  assert.match(dialog, /不会删除项目/u)
+  assert.match(dialog, /不会自动取消/u)
+  assert.match(dialog, /role="alert"/u)
+  assert.match(dialog, /showCloseButton=\{!busy\}/u)
+  assert.match(dialog, /onCloseAutoFocus/u)
+  assert.match(dialog, /returnFocus\(\)\?\.focus\(\)/u)
+  assert.match(dialog, /max-w-md overflow-x-hidden/u)
+  assert.doesNotMatch(
+    dialog,
+    /directoryPicker|nativeCapabilities|filesystem|shell|invoke/u,
+  )
+
+  assert.match(actions, /removeProjectLocation/u)
+  assert.match(actions, /machineQueryKeys\.list/u)
+  assert.match(actions, /machineQueryKeys\.detail\(machine\)/u)
+  assert.match(actions, /project_location_has_conversations/u)
+  assert.match(actions, /project_location_local_required/u)
+})
+
 test('Remote Machine keeps Projects readable but execution and destructive unpair remain gated', async () => {
   const [detail, projects, unpair] = await Promise.all([
     source('components/machines/machine-detail-page.tsx'),
@@ -72,7 +110,8 @@ test('Remote Machine keeps Projects readable but execution and destructive unpai
   assert.match(projects, /projects\.map/u)
   assert.match(projects, /projectLocationForMachine/u)
   assert.match(unpair, /projectCount > 0/u)
-  assert.match(unpair, /不会自动删除这些位置，因此暂时不能取消配对/u)
+  assert.match(unpair, /请先在对应的项目详情中明确移除这些位置/u)
+  assert.match(unpair, /取消配对不会自动删除位置/u)
 })
 
 async function source(relativePath) {

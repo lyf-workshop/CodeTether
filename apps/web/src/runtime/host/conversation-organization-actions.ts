@@ -253,6 +253,9 @@ export function conversationOrganizationErrorMessage(
     case 'project_location_missing':
     case 'project_location_inaccessible':
     case 'project_location_conflict':
+    case 'project_location_not_found':
+    case 'project_location_has_conversations':
+    case 'project_location_local_required':
     case 'machine_has_project_locations':
     case 'machine_pairing_code_invalid':
     case 'machine_pairing_code_expired':

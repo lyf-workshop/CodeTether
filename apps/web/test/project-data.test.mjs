@@ -52,6 +52,7 @@ test('HostRuntime exposes thin Project reads and owns mutation action IDs', asyn
     machineId: 'machine_remote01',
     rootPath: '/srv/alpha',
   })
+  await runtime.removeProjectLocation(projectA.projectId, 'machine_remote01')
   await runtime.deleteProject(projectA.projectId)
 
   assert.match(client.createCalls[0].actionId, /^act_[A-Za-z0-9_-]{6,95}$/u)
@@ -61,6 +62,10 @@ test('HostRuntime exposes thin Project reads and owns mutation action IDs', asyn
   )
   assert.match(
     client.deleteCalls[0].request.actionId,
+    /^act_[A-Za-z0-9_-]{6,95}$/u,
+  )
+  assert.match(
+    client.removeLocationCalls[0].request.actionId,
     /^act_[A-Za-z0-9_-]{6,95}$/u,
   )
   assert.notEqual(
@@ -309,6 +314,84 @@ test('ProjectLocation registration is exact, deduplicated, and refreshes Project
   )
 })
 
+test('ProjectLocation removal is exact, deduplicated, and refreshes Project and Machine truth', async () => {
+  const remoteLocation = {
+    projectId: projectA.projectId,
+    machineId: 'machine_remote01',
+    rootPath: '/srv/项目 alpha',
+    availability: 'unavailable',
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  }
+  const projectWithRemote = {
+    ...projectA,
+    locations: [...projectA.locations, remoteLocation],
+  }
+  const deferred = createDeferred()
+  const client = new FakeProjectClient({
+    removeLocation: () => deferred.promise,
+  })
+  const queryClient = createQueryClient()
+  queryClient.setQueryData(projectQueryKeys.list, [projectWithRemote])
+  queryClient.setQueryData(
+    projectQueryKeys.detail(projectA.projectId),
+    projectWithRemote,
+  )
+  queryClient.setQueryData(['host', 'machines', 'list'], [{ stale: true }])
+  queryClient.setQueryData(['host', 'machines', 'detail', 'machine_remote01'], {
+    stale: true,
+  })
+  const actions = new ProjectActions(client, idFactory(), queryClient)
+
+  const first = actions.removeProjectLocation(
+    projectA.projectId,
+    remoteLocation.machineId,
+  )
+  const duplicate = actions.removeProjectLocation(
+    projectA.projectId,
+    remoteLocation.machineId,
+  )
+  assert.strictEqual(first, duplicate)
+  assert.deepEqual(client.removeLocationCalls, [
+    {
+      projectId: projectA.projectId,
+      machineId: remoteLocation.machineId,
+      request: { actionId: 'act_project_001' },
+    },
+  ])
+
+  deferred.resolve(
+    removeLocationResponse(
+      'act_project_001',
+      projectA,
+      remoteLocation.machineId,
+    ),
+  )
+  await first
+
+  assert.deepEqual(
+    queryClient.getQueryData(projectQueryKeys.detail(projectA.projectId)),
+    projectA,
+  )
+  assert.equal(
+    queryClient.getQueryState(projectQueryKeys.list).isInvalidated,
+    true,
+  )
+  assert.equal(
+    queryClient.getQueryState(['host', 'machines', 'list']).isInvalidated,
+    true,
+  )
+  assert.equal(
+    queryClient.getQueryState([
+      'host',
+      'machines',
+      'detail',
+      remoteLocation.machineId,
+    ]).isInvalidated,
+    true,
+  )
+})
+
 test('browser Project action IDs are valid and unique', () => {
   const ids = Array.from({ length: 64 }, () => createBrowserActionId())
   assert.equal(new Set(ids).size, ids.length)
@@ -326,6 +409,11 @@ test('Project errors use stable safe copy and never expose Host diagnostics', ()
     'project_has_conversations',
     'foreign key and database diagnostics',
   )
+  const locationConflict = responseError(
+    409,
+    'project_location_has_conversations',
+    'conversation table and private location details',
+  )
 
   assert.equal(
     projectErrorMessage(invalid, 'create'),
@@ -336,12 +424,17 @@ test('Project errors use stable safe copy and never expose Host diagnostics', ()
     '此项目仍有关联会话，当前不能移除。',
   )
   assert.equal(
+    projectErrorMessage(locationConflict, 'remove-location'),
+    '此工作区位置仍有关联会话，当前不能移除。',
+  )
+  assert.equal(
     projectErrorMessage(new TypeError('fetch internals'), 'load'),
     'CodeTether 暂时无法连接，请重试。',
   )
   for (const message of [
     projectErrorMessage(invalid, 'create'),
     projectErrorMessage(conflict, 'remove'),
+    projectErrorMessage(locationConflict, 'remove-location'),
   ]) {
     assert.equal(message.includes('secret'), false)
     assert.equal(message.includes('database'), false)
@@ -405,6 +498,7 @@ class FakeProjectClient {
     this.createCalls = []
     this.deleteCalls = []
     this.locationCalls = []
+    this.removeLocationCalls = []
   }
 
   async listProjects(options = {}) {
@@ -466,6 +560,17 @@ class FakeProjectClient {
       )
     )
   }
+
+  removeProjectLocation(projectId, machineId, request) {
+    const call = { projectId, machineId, request }
+    this.removeLocationCalls.push(call)
+    return (
+      this.implementations.removeLocation?.(call) ??
+      Promise.resolve(
+        removeLocationResponse(request.actionId, projectA, machineId),
+      )
+    )
+  }
 }
 
 function project(projectId, name, rootPath, availability = 'available') {
@@ -511,6 +616,15 @@ function registerLocationResponse(actionId, project, location) {
     actionId,
     status: 'completed',
     data: { project, location, created: true },
+  }
+}
+
+function removeLocationResponse(actionId, project, machineId) {
+  return {
+    protocolVersion: 1,
+    actionId,
+    status: 'completed',
+    data: { project, machineId },
   }
 }
 

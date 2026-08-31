@@ -113,6 +113,46 @@ test('ProjectRegistry projects retain all locations while Machine projections co
       (error) =>
         error instanceof ProjectRegistryError && error.code === 'unavailable',
     )
+
+    const removed = await registry.removeLocation(
+      'proj_projectregistry01',
+      remote.machine.machineId,
+    )
+    assert.deepEqual(
+      removed.locations.map((location) => location.machineId),
+      [localMachine.machineId],
+    )
+    assert.deepEqual(
+      await registry.listForMachine(remote.machine.machineId),
+      [],
+    )
+    assert.equal(
+      store.getProjectLocation(
+        'proj_projectregistry01',
+        remote.machine.machineId,
+      ),
+      undefined,
+    )
+    assert.ok(store.getMachine(remote.machine.machineId))
+    assert.equal(
+      store.getTrustedMachinePeer(remote.machine.machineId).trustState,
+      'active',
+    )
+    await assert.rejects(
+      registry.removeLocation(
+        'proj_projectregistry01',
+        remote.machine.machineId,
+      ),
+      (error) =>
+        error instanceof ProjectRegistryError &&
+        error.code === 'location_not_found',
+    )
+    await assert.rejects(
+      registry.removeLocation('proj_projectregistry01', localMachine.machineId),
+      (error) =>
+        error instanceof ProjectRegistryError &&
+        error.code === 'local_location_required',
+    )
   } finally {
     store?.close()
     rmSync(directory, {

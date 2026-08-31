@@ -131,6 +131,20 @@ export class ProjectLocationConflictError extends Error {
   }
 }
 
+export type ProjectLocationRemovalReason =
+  'not_found' | 'local_required' | 'has_conversations'
+
+export class ProjectLocationRemovalError extends Error {
+  constructor(
+    readonly reason: ProjectLocationRemovalReason,
+    message: string,
+    readonly conversationCount: number = 0,
+  ) {
+    super(message)
+    this.name = 'ProjectLocationRemovalError'
+  }
+}
+
 export class RemoteMachineProjectLocationConflictError extends Error {
   constructor(
     readonly machineId: MachineId,
@@ -802,6 +816,60 @@ export class ConversationStore {
 
       this.#insertProjectLocation(value)
       return { location: value, created: true }
+    })
+  }
+
+  removeProjectLocation(
+    projectId: ProjectId,
+    machineId: MachineId,
+  ): DurableProjectLocation {
+    const project = ProjectIdSchema.parse(projectId)
+    const machine = MachineIdSchema.parse(machineId)
+    return this.runInTransaction(() => {
+      const location = this.getProjectLocation(project, machine)
+      if (location === undefined) {
+        throw new ProjectLocationRemovalError(
+          'not_found',
+          'Project Location was not found',
+        )
+      }
+      const durableMachine = this.getMachine(machine)
+      if (durableMachine?.kind !== 'remote') {
+        throw new ProjectLocationRemovalError(
+          'local_required',
+          'The local Project Location is required by the current Project model',
+        )
+      }
+      const locationRow = this.#statement(
+        `SELECT COUNT(*) AS count FROM project_locations
+         WHERE project_id = ?`,
+      ).get(project) as { readonly count: number }
+      if (locationRow.count <= 1) {
+        throw new ProjectLocationRemovalError(
+          'local_required',
+          'Project must retain its current usable Location',
+        )
+      }
+      const conversationRow = this.#statement(
+        `SELECT COUNT(*) AS count FROM conversations
+         WHERE project_id = ? AND machine_id = ?`,
+      ).get(project, machine) as { readonly count: number }
+      if (conversationRow.count > 0) {
+        throw new ProjectLocationRemovalError(
+          'has_conversations',
+          'Project Location has Conversations and cannot be removed',
+          conversationRow.count,
+        )
+      }
+      assertChanged(
+        this.#statement(
+          `DELETE FROM project_locations
+           WHERE project_id = ? AND machine_id = ?`,
+        ).run(project, machine).changes,
+        'Project Location',
+        `${project}:${machine}`,
+      )
+      return location
     })
   }
 

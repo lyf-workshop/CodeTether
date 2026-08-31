@@ -846,7 +846,7 @@ Exit gate:
 
 ## Phase 6A — Durable Machine Foundation
 
-**Status:** current approved implementation scope; not yet accepted, frozen, or READY.
+**Status:** accepted and frozen at `0858fc7`.
 
 **Goal:** make Machine a durable first-class execution identity while retaining exactly one truthful local Windows Machine.
 
@@ -868,6 +868,28 @@ Exit gate:
 
 - Exactly one stable local Machine exists after migration/restart; every Project has its preserved local Location; every existing/new Conversation has the correct immutable Machine; mixed Codex/Claude execution, native resume, Search/organization/Attention, cold isolation, and frozen background behavior remain correct.
 - The real Machines UI and explicit New Conversation binding use Host truth, the clean installed Desktop retains Machine identity and cleans up all owned processes/listeners, evidence is classified truthfully, and the working tree ends clean in one coherent commit.
+
+## Phase 6B.1 — Remote Node Identity & Secure Pairing
+
+**Status:** current approved implementation scope; not accepted or frozen.
+
+**Goal:** establish the first trustworthy LAN relationship between the existing Desktop-owned Host and a second real Machine running a minimal CodeTether Node, without executing Projects, Conversations, or Providers remotely.
+
+### In scope
+
+- A minimal independently launched Node with a durable random Machine identity and private cryptographic identity, explicit short-lived one-time pairing mode, clean shutdown, and no Provider/process child ownership.
+- Manual LAN address plus short-code pairing, PAKE-based proof, a separate presentation-safe Machine confirmation step, durable pinned peer trust, protocol-version negotiation, authenticated reconnect after either side restarts, and identity-mismatch failure without silent key replacement.
+- Transactional migration 009 preserves the accepted local Machine and complete Project/Conversation graph while admitting bounded remote Machine records plus private trust metadata. Pairing codes, reusable bearer tokens, private keys, handshake transcripts, process identity, and Provider identities remain absent from public Machine data.
+- `/machines` and `/machines/:machineId` truthfully show local and paired remote Machines, authenticated online/offline/authentication/incompatible state, safe platform/architecture/name metadata, and explicit online unpair. Remote capabilities remain false; Provider/Project/Conversation sections remain empty rather than fabricated.
+- Strict bounded Host ↔ Node framing, TLS encryption, authenticated identity, attempt/rate/connection/timeout limits, bounded heartbeat/backoff, log redaction, application-private credential files (POSIX mode hardening and inherited Windows user-data ACLs), and no shell/filesystem/process/generic-RPC surface. Phase 6B.1 does not claim OS credential-vault storage.
+
+### Out of scope
+
+- Remote Project Location, Conversation, Turn, Codex, Claude Code, Terminal, filesystem, Git, Diff, Approval, process execution, SSH/SFTP/SCP, sync, port forwarding, Wake-on-LAN, discovery, firewall modification, relay, NAT traversal, accounts, or Machine switching for existing Conversations.
+
+### Exit gate
+
+- A separate-process Node can be explicitly paired, confirmed, authenticated, persisted, restarted/reconnected without code reuse or duplicate Machine records, shown truthfully online/offline, and explicitly unpaired; wrong identity and malformed/replayed/expired/rate-limited attempts fail closed. Local Machine, mixed Provider, Search/organization/Attention, frozen background lifecycle, process cleanup, tests, and clean build identity remain correct.
 
 ## Phase 7 — Remote LAN / Tailscale
 

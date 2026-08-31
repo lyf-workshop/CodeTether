@@ -34,10 +34,9 @@ async function main(): Promise<void> {
   try {
     const client = new CodeTetherClient({ baseUrl: host.baseUrl })
     const machines = (await client.listMachines()).machines
-    if (machines.length !== 1 || machines[0] === undefined) {
-      throw new Error('Expected exactly one local Machine')
-    }
-    const machineId = machines[0].machineId
+    const localMachine = machines.find((machine) => machine.kind === 'local')
+    if (localMachine === undefined) throw new Error('Local Machine is missing')
+    const machineId = localMachine.machineId
     const [generalProject, approvalProject] = await Promise.all([
       client.createProject({
         actionId: actionId(),

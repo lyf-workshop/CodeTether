@@ -142,6 +142,9 @@ export class ConversationRuntimeHistory {
   apply(
     event: Exclude<HostEventEnvelope, { readonly type: 'stream.reset' }>,
   ): RuntimeHistoryEviction {
+    if (event.conversationId === null) {
+      throw new Error('Machine events must not enter runtime history')
+    }
     if (event.type === 'conversation.updated') {
       throw new Error(
         'Conversation metadata events must not enter runtime history',
@@ -284,6 +287,9 @@ export class ConversationRuntimeHistory {
   #stateFor(
     event: Exclude<HostEventEnvelope, { readonly type: 'stream.reset' }>,
   ): ConversationHistoryState {
+    if (event.conversationId === null) {
+      throw new Error('Machine events must not enter runtime history')
+    }
     const existing = this.#conversations.get(event.conversationId)
     if (existing !== undefined) return existing
     const state: ConversationHistoryState = {

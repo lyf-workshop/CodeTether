@@ -12,6 +12,9 @@ const tauriDirectory = join(desktopDirectory, 'src-tauri')
 const binariesDirectory = join(tauriDirectory, 'binaries')
 const temporaryDirectory = join(repositoryDirectory, '.tmp', 'desktop-sidecar')
 
+export const commonJsSeaBanner =
+  "import { createRequire as __ctCreateRequire } from 'node:module'; const require = __ctCreateRequire(import.meta.url);"
+
 export function createBuildId(revision, dirty) {
   const normalizedRevision = revision.trim().slice(0, 12)
   if (!/^[0-9a-f]{7,12}$/u.test(normalizedRevision)) {
@@ -68,6 +71,7 @@ async function main() {
     format: 'esm',
     target: 'node25',
     external: ['node:*'],
+    banner: { js: commonJsSeaBanner },
     define: {
       __CODETETHER_HOST_VERSION__: JSON.stringify(buildId),
     },

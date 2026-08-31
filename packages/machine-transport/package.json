@@ -1,0 +1,23 @@
+{
+  "name": "@codetether/machine-transport",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit --pretty false",
+    "lint": "eslint .",
+    "test": "pnpm build && node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@serenity-kit/opaque": "1.1.0",
+    "selfsigned": "5.5.0",
+    "zod": "4.4.3"
+  }
+}

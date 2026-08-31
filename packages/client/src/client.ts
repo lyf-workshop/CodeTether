@@ -4,7 +4,13 @@ import {
   AttentionListResponseSchema,
   ArchiveConversationRequestSchema,
   ArchiveConversationResponseSchema,
+  BeginRemoteMachinePairingRequestSchema,
+  BeginRemoteMachinePairingResponseSchema,
   BootstrapSchema,
+  CancelRemoteMachinePairingRequestSchema,
+  CancelRemoteMachinePairingResponseSchema,
+  ConfirmRemoteMachinePairingRequestSchema,
+  ConfirmRemoteMachinePairingResponseSchema,
   ApprovalIdSchema,
   ConversationIdSchema,
   ConversationListResponseSchema,
@@ -30,6 +36,7 @@ import {
   PinConversationRequestSchema,
   PinConversationResponseSchema,
   MachineIdSchema,
+  MachinePairingAttemptIdSchema,
   ProjectIdSchema,
   ResolveApprovalRequestSchema,
   ResolveApprovalResponseSchema,
@@ -41,6 +48,8 @@ import {
   StartTurnRequestSchema,
   StartTurnResponseSchema,
   TurnIdSchema,
+  UnpairMachineRequestSchema,
+  UnpairMachineResponseSchema,
   UnarchiveConversationRequestSchema,
   UnarchiveConversationResponseSchema,
   UnpinConversationRequestSchema,
@@ -51,7 +60,13 @@ import {
   type AttentionListResponse,
   type ArchiveConversationRequest,
   type ArchiveConversationResponse,
+  type BeginRemoteMachinePairingRequest,
+  type BeginRemoteMachinePairingResponse,
   type Bootstrap,
+  type CancelRemoteMachinePairingRequest,
+  type CancelRemoteMachinePairingResponse,
+  type ConfirmRemoteMachinePairingRequest,
+  type ConfirmRemoteMachinePairingResponse,
   type ConversationId,
   type ConversationListResponse,
   type ConversationSearchQuery,
@@ -74,6 +89,7 @@ import {
   type ListProjectsResponse,
   type ListProjectConversationsQuery,
   type MachineId,
+  type MachinePairingAttemptId,
   type ProjectId,
   type PinConversationRequest,
   type PinConversationResponse,
@@ -85,6 +101,8 @@ import {
   type StartTurnRequest,
   type StartTurnResponse,
   type TurnId,
+  type UnpairMachineRequest,
+  type UnpairMachineResponse,
   type UnarchiveConversationRequest,
   type UnarchiveConversationResponse,
   type UnpinConversationRequest,
@@ -211,6 +229,107 @@ export class CodeTetherClient {
     assertProtocolIdentity(
       response.machine.machineId === machine,
       'Machine response does not match the requested Machine',
+    )
+    return response
+  }
+
+  async beginRemoteMachinePairing(
+    input: BeginRemoteMachinePairingRequest,
+    options: RequestOptions = {},
+  ): Promise<BeginRemoteMachinePairingResponse> {
+    const request = parseProtocol(
+      BeginRemoteMachinePairingRequestSchema,
+      input,
+      'begin-remote-machine-pairing request',
+    )
+    return await this.#request(
+      '/api/v1/machine-pairings',
+      BeginRemoteMachinePairingResponseSchema,
+      jsonRequest(request, options.signal),
+      request.actionId,
+    )
+  }
+
+  async confirmRemoteMachinePairing(
+    pairingAttemptId: MachinePairingAttemptId,
+    input: ConfirmRemoteMachinePairingRequest,
+    options: RequestOptions = {},
+  ): Promise<ConfirmRemoteMachinePairingResponse> {
+    const attempt = parseProtocol(
+      MachinePairingAttemptIdSchema,
+      pairingAttemptId,
+      'confirm-remote-machine-pairing id',
+    )
+    const request = parseProtocol(
+      ConfirmRemoteMachinePairingRequestSchema,
+      input,
+      'confirm-remote-machine-pairing request',
+    )
+    const response = await this.#request(
+      `/api/v1/machine-pairings/${encodeURIComponent(attempt)}/confirm`,
+      ConfirmRemoteMachinePairingResponseSchema,
+      jsonRequest(request, options.signal),
+      request.actionId,
+    )
+    assertProtocolIdentity(
+      response.data.machine.kind === 'remote',
+      'Pairing response did not return a remote Machine',
+    )
+    return response
+  }
+
+  async cancelRemoteMachinePairing(
+    pairingAttemptId: MachinePairingAttemptId,
+    input: CancelRemoteMachinePairingRequest,
+    options: RequestOptions = {},
+  ): Promise<CancelRemoteMachinePairingResponse> {
+    const attempt = parseProtocol(
+      MachinePairingAttemptIdSchema,
+      pairingAttemptId,
+      'cancel-remote-machine-pairing id',
+    )
+    const request = parseProtocol(
+      CancelRemoteMachinePairingRequestSchema,
+      input,
+      'cancel-remote-machine-pairing request',
+    )
+    const response = await this.#request(
+      `/api/v1/machine-pairings/${encodeURIComponent(attempt)}`,
+      CancelRemoteMachinePairingResponseSchema,
+      { ...jsonRequest(request, options.signal), method: 'DELETE' },
+      request.actionId,
+    )
+    assertProtocolIdentity(
+      response.data.pairingAttemptId === attempt,
+      'Cancel pairing response does not match the requested attempt',
+    )
+    return response
+  }
+
+  async unpairMachine(
+    machineId: MachineId,
+    input: UnpairMachineRequest,
+    options: RequestOptions = {},
+  ): Promise<UnpairMachineResponse> {
+    const machine = parseProtocol(
+      MachineIdSchema,
+      machineId,
+      'unpair-machine id',
+    )
+    const request = parseProtocol(
+      UnpairMachineRequestSchema,
+      input,
+      'unpair-machine request',
+    )
+    const response = await this.#request(
+      `/api/v1/machines/${encodeURIComponent(machine)}/trust`,
+      UnpairMachineResponseSchema,
+      { ...jsonRequest(request, options.signal), method: 'DELETE' },
+      request.actionId,
+    )
+    assertProtocolIdentity(
+      response.data.machineId === machine,
+      'Unpair response does not match the requested Machine',
     )
     return response
   }

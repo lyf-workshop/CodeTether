@@ -509,6 +509,7 @@ test('durable write failure prevents Provider Turn start', async () => {
   }
   const failingStore = {
     listMachines: () => [durableMachine],
+    listTrustedMachinePeers: () => [],
     updateMachineLastSeen: (_machineId, lastSeenAt) => ({
       ...durableMachine,
       lastSeenAt,

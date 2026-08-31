@@ -32,6 +32,8 @@ const machine = {
   platform: 'Windows',
   architecture: 'x86_64',
   availability: 'available',
+  connectionState: 'local',
+  trustState: 'local',
   isLocal: true,
   createdAt: timestamp,
   lastSeenAt: timestamp,
@@ -424,6 +426,103 @@ test('uses Machine routes, forwards AbortSignal, and validates route identity', 
     mismatchClient.getMachine(machineId),
     CodeTetherProtocolError,
   )
+})
+
+test('uses bounded remote Machine pairing and trust routes', async () => {
+  const calls = []
+  const pairingAttemptId = 'pairing_attempt01'
+  const remoteMachine = {
+    ...machine,
+    machineId: 'machine_remote01',
+    displayName: 'Development server',
+    kind: 'remote',
+    platform: 'Linux',
+    availability: 'unavailable',
+    connectionState: 'offline',
+    trustState: 'trusted',
+    isLocal: false,
+    capabilities: {
+      projectAccess: false,
+      providerExecution: false,
+      backgroundRuntime: false,
+      nativeFolderPicker: false,
+      notifications: false,
+    },
+  }
+  const candidate = {
+    pairingAttemptId,
+    machineId: remoteMachine.machineId,
+    displayName: remoteMachine.displayName,
+    platform: remoteMachine.platform,
+    architecture: remoteMachine.architecture,
+    address: { host: '192.0.2.10', port: 43217 },
+    protocolVersion: 1,
+    expiresAt: timestamp,
+    verificationCode: '482 731',
+  }
+  const responses = [
+    {
+      protocolVersion: 1,
+      actionId: 'act_pair_begin01',
+      status: 'accepted',
+      data: { candidate },
+    },
+    {
+      protocolVersion: 1,
+      actionId: 'act_pair_confirm01',
+      status: 'completed',
+      data: { machine: remoteMachine },
+    },
+    {
+      protocolVersion: 1,
+      actionId: 'act_pair_cancel01',
+      status: 'completed',
+      data: { pairingAttemptId },
+    },
+    {
+      protocolVersion: 1,
+      actionId: 'act_unpair01',
+      status: 'completed',
+      data: { machineId: remoteMachine.machineId },
+    },
+  ]
+  const client = new CodeTetherClient({
+    baseUrl: 'http://host.test',
+    fetch: async (input, init) => {
+      calls.push({ url: String(input), init })
+      return jsonResponse(responses.shift())
+    },
+  })
+
+  await client.beginRemoteMachinePairing({
+    actionId: 'act_pair_begin01',
+    address: candidate.address,
+    pairingCode: '482 731',
+  })
+  await client.confirmRemoteMachinePairing(pairingAttemptId, {
+    actionId: 'act_pair_confirm01',
+  })
+  await client.cancelRemoteMachinePairing(pairingAttemptId, {
+    actionId: 'act_pair_cancel01',
+  })
+  await client.unpairMachine(remoteMachine.machineId, {
+    actionId: 'act_unpair01',
+  })
+
+  assert.deepEqual(
+    calls.map(({ url, init }) => [new URL(url).pathname, init.method]),
+    [
+      ['/api/v1/machine-pairings', 'POST'],
+      [`/api/v1/machine-pairings/${pairingAttemptId}/confirm`, 'POST'],
+      [`/api/v1/machine-pairings/${pairingAttemptId}`, 'DELETE'],
+      [`/api/v1/machines/${remoteMachine.machineId}/trust`, 'DELETE'],
+    ],
+  )
+  assert.deepEqual(JSON.parse(calls[0].init.body), {
+    actionId: 'act_pair_begin01',
+    address: candidate.address,
+    pairingCode: '482731',
+  })
 })
 
 test('rejects Project responses whose route identity does not match', async () => {

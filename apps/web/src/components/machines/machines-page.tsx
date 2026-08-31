@@ -1,6 +1,6 @@
 import { useQueries, useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { ArrowUpRight, Monitor, RefreshCw } from 'lucide-react'
+import { ArrowUpRight, Monitor, Plus, RefreshCw, Server } from 'lucide-react'
 
 import { AgentBadge, Badge, Button, cn } from '@codetether/ui'
 import type { GetMachineResponse, MachineSummary } from '@codetether/protocol'
@@ -15,9 +15,13 @@ import {
 } from '../../runtime/host/machine-query'
 import { providerPresentationsForMachine } from '../../provider/provider-presentation'
 import {
-  machineAvailabilityLabel,
+  formatMachineLastSeen,
+  machineConnectionBadgeVariant,
+  machineConnectionStateLabel,
   machineEnvironmentLabel,
+  machineKindLabel,
 } from './machine-presentation'
+import { AddRemoteMachineDialog } from './add-remote-machine-dialog'
 import {
   MachinesEmptyState,
   MachinesErrorState,
@@ -32,12 +36,19 @@ export function MachinesPage() {
     enabled: connectionState === 'connected',
   })
   const machines = machinesQuery.data ?? []
+  const localMachines = machines.filter((machine) => machine.kind === 'local')
   const detailQueries = useQueries({
-    queries: machines.map((machine) => ({
+    queries: localMachines.map((machine) => ({
       ...machineDetailQueryOptions(runtime, machine.machineId),
       enabled: connectionState === 'connected',
     })),
   })
+  const localDetails = new Map(
+    localMachines.map((machine, index) => [
+      machine.machineId,
+      detailQueries[index],
+    ]),
+  )
   const connectionUnavailable =
     connectionState === 'unavailable' || connectionState === 'incompatible'
   const loading =
@@ -52,11 +63,25 @@ export function MachinesPage() {
 
   return (
     <div className="flex min-h-full min-w-0 flex-col px-[var(--layout-content-inline-padding)] py-[var(--layout-content-block-padding)]">
-      <header className="min-w-0">
-        <h1 className="text-page font-semibold text-text-primary">机器</h1>
-        <p className="mt-0.5 text-sm text-text-secondary">
-          查看 CodeTether 实际运行智能体的位置。
-        </p>
+      <header className="flex min-w-0 flex-wrap items-start justify-between gap-4">
+        <div className="min-w-0">
+          <h1 className="text-page font-semibold text-text-primary">机器</h1>
+          <p className="mt-0.5 text-sm text-text-secondary">
+            查看 CodeTether 信任的本地和远程执行位置。
+          </p>
+        </div>
+        <AddRemoteMachineDialog
+          trigger={
+            <Button
+              size="sm"
+              disabled={connectionState !== 'connected'}
+              className="w-full sm:w-auto"
+            >
+              <Plus aria-hidden="true" />
+              添加机器
+            </Button>
+          }
+        />
       </header>
 
       <div className="mt-6 min-w-0 flex-1">
@@ -79,7 +104,7 @@ export function MachinesPage() {
                   id="machine-list-heading"
                   className="text-sm font-medium text-text-primary"
                 >
-                  可用位置
+                  已注册位置
                 </h2>
                 <p className="mt-0.5 text-xs text-text-muted">
                   共 {machines.length} 台机器
@@ -99,15 +124,18 @@ export function MachinesPage() {
               ) : null}
             </div>
             <div className="space-y-4">
-              {machines.map((machine, index) => (
-                <MachineRow
-                  key={machine.machineId}
-                  machine={machine}
-                  detail={detailQueries[index]?.data}
-                  detailError={detailQueries[index]?.isError ?? false}
-                  detailPending={detailQueries[index]?.isPending ?? false}
-                />
-              ))}
+              {machines.map((machine) => {
+                const detailQuery = localDetails.get(machine.machineId)
+                return (
+                  <MachineRow
+                    key={machine.machineId}
+                    machine={machine}
+                    detail={detailQuery?.data}
+                    detailError={detailQuery?.isError ?? false}
+                    detailPending={detailQuery?.isPending ?? false}
+                  />
+                )
+              })}
             </div>
           </section>
         )}
@@ -128,7 +156,10 @@ function MachineRow({
   machine: MachineSummary
 }) {
   const providers = providerPresentationsForMachine(detail?.providers ?? [])
-  const available = machine.availability === 'available'
+  const online =
+    machine.connectionState === 'local' || machine.connectionState === 'online'
+  const lastSeen = formatMachineLastSeen(machine.lastSeenAt)
+  const MachineIcon = machine.kind === 'local' ? Monitor : Server
 
   return (
     <article className="grid min-w-0 gap-5 rounded-lg border border-border bg-surface/70 p-5 transition-colors duration-150 hover:border-border-strong hover:bg-surface/90 motion-reduce:transition-none sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center">
@@ -136,12 +167,12 @@ function MachineRow({
         aria-hidden="true"
         className={cn(
           'grid size-11 shrink-0 place-items-center rounded-md border',
-          available
+          online
             ? 'border-primary/35 bg-primary-muted text-primary'
             : 'border-border-strong bg-surface-muted text-text-muted',
         )}
       >
-        <Monitor className="size-5" />
+        <MachineIcon className="size-5" />
       </span>
 
       <div className="min-w-0">
@@ -152,45 +183,55 @@ function MachineRow({
           >
             {machine.displayName}
           </h2>
-          {machine.isLocal ? <Badge variant="secondary">本地</Badge> : null}
-          <Badge variant={available ? 'success' : 'danger'}>
-            {machineAvailabilityLabel(machine.availability)}
+          <Badge variant="secondary">{machineKindLabel(machine)}</Badge>
+          <Badge
+            variant={machineConnectionBadgeVariant(machine.connectionState)}
+          >
+            {machineConnectionStateLabel(machine.connectionState)}
           </Badge>
         </div>
         <p className="mt-1.5 text-sm text-text-secondary">
           {machineEnvironmentLabel(machine)}
         </p>
-        <div
-          className="mt-4 flex min-w-0 flex-wrap items-center gap-2"
-          aria-label="此机器上的智能体"
-        >
-          {detailPending ? (
-            <span className="text-xs text-text-muted">正在读取智能体…</span>
-          ) : detailError || detail === undefined ? (
-            <span className="text-xs text-text-muted">
-              智能体信息暂时不可用
-            </span>
-          ) : providers.length === 0 ? (
-            <span className="text-xs text-text-muted">未检测到智能体</span>
-          ) : (
-            providers.map((provider) => (
-              <span
-                key={provider.provider}
-                className="inline-flex min-w-0 items-center gap-1.5 text-xs text-text-secondary"
-              >
-                <AgentBadge agent={provider.agent} variant="compact" />
-                <span className="truncate">{provider.displayName}</span>
-                <span
-                  className={
-                    provider.available ? 'text-success' : 'text-text-muted'
-                  }
-                >
-                  {provider.availabilityLabel}
-                </span>
+        {machine.kind === 'local' ? (
+          <div
+            className="mt-4 flex min-w-0 flex-wrap items-center gap-2"
+            aria-label="此机器上的智能体"
+          >
+            {detailPending ? (
+              <span className="text-xs text-text-muted">正在读取智能体…</span>
+            ) : detailError || detail === undefined ? (
+              <span className="text-xs text-text-muted">
+                智能体信息暂时不可用
               </span>
-            ))
-          )}
-        </div>
+            ) : providers.length === 0 ? (
+              <span className="text-xs text-text-muted">未检测到智能体</span>
+            ) : (
+              providers.map((provider) => (
+                <span
+                  key={provider.provider}
+                  className="inline-flex min-w-0 items-center gap-1.5 text-xs text-text-secondary"
+                >
+                  <AgentBadge agent={provider.agent} variant="compact" />
+                  <span className="truncate">{provider.displayName}</span>
+                  <span
+                    className={
+                      provider.available ? 'text-success' : 'text-text-muted'
+                    }
+                  >
+                    {provider.availabilityLabel}
+                  </span>
+                </span>
+              ))
+            )}
+          </div>
+        ) : (
+          <p className="mt-4 truncate text-xs text-text-muted">
+            {lastSeen === undefined
+              ? '已建立信任，尚未记录成功连接'
+              : `已建立信任 · 最近连接 ${lastSeen}`}
+          </p>
+        )}
       </div>
 
       <Button asChild size="sm" className="min-w-28">

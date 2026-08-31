@@ -294,7 +294,9 @@ export function applyHostEvent(
 
   if (
     event.type === 'attention.created' ||
-    event.type === 'attention.resolved'
+    event.type === 'attention.resolved' ||
+    event.type === 'machine.updated' ||
+    event.type === 'machine.removed'
   ) {
     return appliedCursorOnly(projection, event)
   }

@@ -174,11 +174,9 @@ async function run(): Promise<void> {
     let client = new CodeTetherClient({ baseUrl: host.baseUrl })
     let providerDescriptors = await requireCapabilities(client)
     const machines = (await client.listMachines()).machines
-    ensure(
-      machines.length === 1 && machines[0] !== undefined,
-      'machine_missing',
-    )
-    const machineId = machines[0].machineId
+    const localMachine = machines.find((machine) => machine.kind === 'local')
+    ensure(localMachine !== undefined, 'machine_missing')
+    const machineId = localMachine.machineId
     const initialEpoch = host.epoch
 
     const project = await client.createProject({

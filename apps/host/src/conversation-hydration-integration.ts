@@ -86,8 +86,7 @@ async function run(): Promise<void> {
     const firstEpoch = host.epoch
     let client = await requireLiveClient(host)
     const machines = (await client.listMachines()).machines
-    assert.equal(machines.length, 1)
-    const localMachine = machines[0]
+    const localMachine = machines.find((machine) => machine.kind === 'local')
     assert.ok(localMachine !== undefined)
     const machineId = localMachine.machineId
 

@@ -59,6 +59,8 @@
     "src/runtime/host/host-query-client.ts",
     "src/runtime/host/host-runtime.ts",
     "src/runtime/host/live-conversation-actions.ts",
+    "src/runtime/host/machine-actions.ts",
+    "src/runtime/host/machine-query.ts",
     "src/runtime/host/new-conversation-actions.ts",
     "src/runtime/host/project-actions.ts",
     "src/runtime/host/project-query.ts",

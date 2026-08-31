@@ -22,6 +22,7 @@ import {
   ListMachinesResponseSchema,
   ProjectIdSchema,
   MachineIdSchema,
+  MachinePairingAttemptIdSchema,
   ListProjectConversationsQuerySchema,
   protocolVersion,
   TimestampSchema,
@@ -32,6 +33,8 @@ import {
   type AttentionListResponse,
   type ArchiveConversationRequest,
   type ArchiveConversationResponse,
+  type BeginRemoteMachinePairingRequest,
+  type BeginRemoteMachinePairingResponse,
   type ConversationId,
   type ConversationApprovalHistoryRecord,
   type ConversationListResponse,
@@ -40,6 +43,10 @@ import {
   type ConversationSearchResponse,
   type ConversationRuntimeSnapshot,
   type ConversationSummary,
+  type CancelRemoteMachinePairingRequest,
+  type CancelRemoteMachinePairingResponse,
+  type ConfirmRemoteMachinePairingRequest,
+  type ConfirmRemoteMachinePairingResponse,
   type CreateConversationRequest,
   type CreateConversationResponse,
   type HostErrorCode,
@@ -60,6 +67,7 @@ import {
   type ListAttentionQuery,
   type ListProjectConversationsQuery,
   type MachineSummary,
+  type MachinePairingAttemptId,
   type PinConversationRequest,
   type PinConversationResponse,
   type ProjectId,
@@ -75,6 +83,8 @@ import {
   type StartTurnResponse,
   type TurnId,
   type TurnRecord,
+  type UnpairMachineRequest,
+  type UnpairMachineResponse,
   type UnarchiveConversationRequest,
   type UnarchiveConversationResponse,
   type UnpinConversationRequest,
@@ -90,6 +100,7 @@ import {
   ConversationOrganizationConflictError,
   ConversationSearchCursorError,
   DURABLE_TURN_SNAPSHOT_VERSION,
+  RemoteMachineTrustConflictError,
   captureTurnPresentation,
   initialTurnPresentation,
   readDurableConversationDetail,
@@ -133,6 +144,13 @@ import {
 } from './project-registry.js'
 import { ProviderEventTranslator } from './provider-event-translator.js'
 import { ProviderRegistry, providerSessionKey } from './provider-registry.js'
+import {
+  RemoteMachineCoordinatorError,
+  RemoteMachineRevocationPendingError,
+  UnavailableRemoteMachineCoordinator,
+  type ConfirmedRemoteMachine,
+  type RemoteMachineCoordinator,
+} from './remote-machine-coordinator.js'
 import { WorkspacePolicy } from './workspace-policy.js'
 
 const MAX_PENDING_PROVIDER_EVENTS = 512
@@ -169,6 +187,7 @@ export interface HostServiceOptions {
   readonly persistenceFlushMs?: number
   /** True only for the Desktop-owned sidecar assembly. */
   readonly desktopManaged?: boolean
+  readonly remoteMachineCoordinator?: RemoteMachineCoordinator
 }
 
 /** Runtime authority for live state, optionally backed by durable normalized snapshots. */
@@ -188,6 +207,7 @@ export class HostService {
   readonly #maxConversations: number
   readonly #persistence?: ConversationStore
   readonly #machines: MachineRegistry
+  readonly #remoteMachines: RemoteMachineCoordinator
   readonly #projects: ProjectRegistry
   readonly #persistenceFlushMs: number
   readonly #dirtyTurns = new Map<TurnId, ConversationId>()
@@ -203,6 +223,8 @@ export class HostService {
   readonly #unsubscribeEvents: Array<() => void> = []
   readonly #unsubscribeApprovals: Array<() => void> = []
   readonly #unsubscribeFailures: Array<() => void> = []
+  #unsubscribeRemoteMachineStatus?: () => void
+  #unsubscribeRemoteMachineRemoval?: () => void
   readonly #runtimeFailures = new Map<AgentProvider, Error>()
   #closePromise?: Promise<void>
   #acceptingActions = true
@@ -233,6 +255,9 @@ export class HostService {
       DEFAULT_PERSISTENCE_FLUSH_MS,
       'persistenceFlushMs',
     )
+    this.#remoteMachines =
+      options.remoteMachineCoordinator ??
+      new UnavailableRemoteMachineCoordinator()
     this.#machines = new MachineRegistry({
       ...(this.#persistence === undefined
         ? {}
@@ -245,7 +270,52 @@ export class HostService {
         nativeFolderPicker: options.desktopManaged === true,
         notifications: options.desktopManaged === true,
       },
+      remoteStatus: this.#remoteMachines,
     })
+    this.#unsubscribeRemoteMachineStatus =
+      this.#remoteMachines.subscribeStatus?.((machineId) => {
+        try {
+          const durable = this.#persistence?.getMachine(machineId)
+          const trust = this.#persistence?.getTrustedMachinePeer(machineId)
+          if (
+            durable === undefined ||
+            durable.kind !== 'remote' ||
+            trust?.trustState !== 'active'
+          ) {
+            return
+          }
+          let machine
+          try {
+            machine = this.#machines.refresh(durable)
+          } catch (error) {
+            if (!(error instanceof MachineRegistryError)) throw error
+            machine = this.#machines.retainRemote(durable)
+          }
+          this.#publish({
+            conversationId: null,
+            timestamp: this.#timestamp(),
+            type: 'machine.updated',
+            payload: { machine },
+          })
+        } catch (error) {
+          if (!(error instanceof MachineRegistryError)) throw error
+        }
+      })
+    this.#unsubscribeRemoteMachineRemoval =
+      this.#remoteMachines.subscribeRemoval?.((machineId) => {
+        try {
+          this.#machines.removeRemote(machineId)
+        } catch (error) {
+          if (!(error instanceof MachineRegistryError)) throw error
+          return
+        }
+        this.#publish({
+          conversationId: null,
+          timestamp: this.#timestamp(),
+          type: 'machine.removed',
+          payload: { machineId },
+        })
+      })
     this.#projects = new ProjectRegistry({
       workspacePolicy: this.#workspacePolicy,
       ...(this.#persistence === undefined
@@ -401,6 +471,209 @@ export class HostService {
     } catch (error) {
       throw machineServiceError(error)
     }
+  }
+
+  async beginRemoteMachinePairing(
+    request: BeginRemoteMachinePairingRequest,
+  ): Promise<BeginRemoteMachinePairingResponse> {
+    return await this.#executeAction(
+      request.actionId,
+      'machine.pairing.begin',
+      request,
+      async () => {
+        this.#requireDurableMachineState()
+        try {
+          const candidate = await this.#remoteMachines.beginPairing({
+            address: request.address,
+            pairingCode: request.pairingCode,
+          })
+          return {
+            protocolVersion,
+            actionId: request.actionId,
+            status: 'accepted',
+            data: { candidate },
+          }
+        } catch (error) {
+          throw remoteMachineServiceError(error)
+        }
+      },
+      false,
+    )
+  }
+
+  async confirmRemoteMachinePairing(
+    pairingAttemptId: MachinePairingAttemptId,
+    request: ConfirmRemoteMachinePairingRequest,
+  ): Promise<ConfirmRemoteMachinePairingResponse> {
+    const attemptId = MachinePairingAttemptIdSchema.parse(pairingAttemptId)
+    return await this.#executeAction(
+      request.actionId,
+      `machine.pairing.confirm:${attemptId}`,
+      { pairingAttemptId: attemptId, request },
+      async () => {
+        const persistence = this.#requireDurableMachineState()
+        let staged: ConfirmedRemoteMachine | undefined
+        try {
+          const confirmed = await this.#remoteMachines.confirmPairing(
+            attemptId,
+            async (candidate) => {
+              assertStagedRemoteMachine(candidate)
+              try {
+                this.#writeDurable(() => {
+                  persistence.createRemoteMachineWithTrust(
+                    candidate.machine,
+                    candidate.trust,
+                  )
+                })
+              } catch (error) {
+                if (error instanceof RemoteMachineTrustConflictError) {
+                  throw new RemoteMachineCoordinatorError(
+                    error.reason === 'capacity'
+                      ? 'conflict'
+                      : 'identity_mismatch',
+                    error.message,
+                  )
+                }
+                throw error
+              }
+              staged = candidate
+            },
+          )
+          if (staged === undefined) {
+            throw new Error(
+              'Remote pairing transport confirmed without staging trust',
+            )
+          }
+          assertSameConfirmedRemoteMachine(staged, confirmed)
+          const activatedAt = TimestampSchema.parse(this.#timestamp())
+          this.#writeDurable(() => {
+            persistence.activateTrustedMachinePeer(
+              confirmed.machine.machineId,
+              activatedAt,
+            )
+          })
+          const durable = persistence.getMachine(confirmed.machine.machineId)
+          if (durable === undefined) {
+            throw new Error('Paired remote Machine was not retained')
+          }
+          const machine = this.#machines.retainRemote(durable)
+          this.#publish({
+            conversationId: null,
+            timestamp: this.#timestamp(),
+            type: 'machine.updated',
+            payload: { machine },
+          })
+          return {
+            protocolVersion,
+            actionId: request.actionId,
+            status: 'completed',
+            data: { machine },
+          }
+        } catch (error) {
+          throw remoteMachineServiceError(error)
+        }
+      },
+      false,
+    )
+  }
+
+  async cancelRemoteMachinePairing(
+    pairingAttemptId: MachinePairingAttemptId,
+    request: CancelRemoteMachinePairingRequest,
+  ): Promise<CancelRemoteMachinePairingResponse> {
+    const attemptId = MachinePairingAttemptIdSchema.parse(pairingAttemptId)
+    return await this.#executeAction(
+      request.actionId,
+      `machine.pairing.cancel:${attemptId}`,
+      { pairingAttemptId: attemptId, request },
+      async () => {
+        try {
+          await this.#remoteMachines.cancelPairing(attemptId)
+          return {
+            protocolVersion,
+            actionId: request.actionId,
+            status: 'completed',
+            data: { pairingAttemptId: attemptId },
+          }
+        } catch (error) {
+          throw remoteMachineServiceError(error)
+        }
+      },
+      false,
+    )
+  }
+
+  async unpairMachine(
+    machineId: MachineId,
+    request: UnpairMachineRequest,
+  ): Promise<UnpairMachineResponse> {
+    const id = MachineIdSchema.parse(machineId)
+    return await this.#executeAction(
+      request.actionId,
+      `machine.unpair:${id}`,
+      { machineId: id, request },
+      async () => {
+        const persistence = this.#requireDurableMachineState()
+        const durable = persistence.getMachine(id)
+        const persistedTrust = persistence.getTrustedMachinePeer(id)
+        if (durable === undefined || persistedTrust === undefined) {
+          throw new HostServiceError('not_found', 'Machine was not found', 404)
+        }
+        if (durable.kind !== 'remote') {
+          throw new HostServiceError(
+            'conflict',
+            'The local Machine cannot be unpaired',
+            409,
+          )
+        }
+        let trust = persistedTrust
+        let markedRevoking = false
+        if (trust.trustState === 'active') {
+          this.#writeDurable(() => {
+            trust = persistence.markTrustedMachinePeerRevoking(
+              id,
+              TimestampSchema.parse(this.#timestamp()),
+            )
+          })
+          markedRevoking = true
+        }
+        try {
+          await this.#remoteMachines.unpair(durable, trust)
+        } catch (error) {
+          if (
+            markedRevoking &&
+            !(error instanceof RemoteMachineRevocationPendingError)
+          ) {
+            this.#writeDurable(() => {
+              persistence.restoreRevokingTrustedMachinePeer(
+                id,
+                TimestampSchema.parse(this.#timestamp()),
+              )
+            })
+          }
+          throw remoteMachineServiceError(error)
+        }
+        this.#writeDurable(() => {
+          if (!persistence.deleteRemoteMachine(id)) {
+            throw new Error('Remote Machine disappeared during unpair')
+          }
+        })
+        this.#machines.removeRemote(id)
+        this.#publish({
+          conversationId: null,
+          timestamp: this.#timestamp(),
+          type: 'machine.removed',
+          payload: { machineId: id },
+        })
+        return {
+          protocolVersion,
+          actionId: request.actionId,
+          status: 'completed',
+          data: { machineId: id },
+        }
+      },
+      false,
+    )
   }
 
   snapshot(): HostSnapshot {
@@ -1476,7 +1749,9 @@ export class HostService {
     if (parsed.type === 'stream.reset') {
       throw new Error('stream.reset cannot enter runtime history')
     }
-    this.#touchConversation(parsed.conversationId)
+    if (parsed.conversationId !== null) {
+      this.#touchConversation(parsed.conversationId)
+    }
     const nextSeq = this.publisher.currentSeq + 1
     const preview = HostEventEnvelopeSchema.parse({
       ...parsed,
@@ -1490,6 +1765,13 @@ export class HostService {
     })
     if (preview.type === 'stream.reset') {
       throw new Error('stream.reset cannot enter runtime history')
+    }
+    if (parsed.conversationId === null) {
+      const envelope = this.publisher.publish(parsed)
+      if (envelope.eventId !== preview.eventId) {
+        throw new Error('Host event sequence changed during global publication')
+      }
+      return
     }
     const previousRuntime = this.#runtimeHistory.snapshotFor(
       parsed.conversationId,
@@ -2362,11 +2644,26 @@ export class HostService {
     return this.#persistence
   }
 
+  #requireDurableMachineState(): ConversationStore {
+    if (
+      this.#persistence === undefined ||
+      this.#persistenceFailure !== undefined
+    ) {
+      throw new HostServiceError(
+        'runtime_unavailable',
+        'Durable Machine state is unavailable',
+        503,
+      )
+    }
+    return this.#persistence
+  }
+
   #writeDurable(operation: () => void): void {
     if (this.#persistence === undefined) return
     try {
       operation()
     } catch (error) {
+      if (error instanceof RemoteMachineTrustConflictError) throw error
       this.#handlePersistenceFailure(toError(error))
       throw runtimeUnavailableError('Conversation durability is unavailable')
     }
@@ -2473,6 +2770,11 @@ export class HostService {
         failures.push(error)
       }
       try {
+        await this.#remoteMachines.close?.()
+      } catch (error) {
+        failures.push(error)
+      }
+      try {
         this.#flushAllDurableTurns()
       } catch (error) {
         failures.push(error)
@@ -2489,6 +2791,10 @@ export class HostService {
       }
       for (const unsubscribe of this.#unsubscribeEvents) unsubscribe()
       for (const unsubscribe of this.#unsubscribeFailures) unsubscribe()
+      this.#unsubscribeRemoteMachineStatus?.()
+      this.#unsubscribeRemoteMachineStatus = undefined
+      this.#unsubscribeRemoteMachineRemoval?.()
+      this.#unsubscribeRemoteMachineRemoval = undefined
       this.#actions.clear()
       this.#hydrations.clear()
       this.#runtimeAccess.clear()
@@ -2583,8 +2889,8 @@ export class HostService {
   #providerDescriptorsForMachine(
     machineId: MachineId,
   ): readonly ProviderDescriptor[] {
-    this.#machines.requireAvailable(machineId)
-    return this.#providerDescriptors()
+    const machine = this.#machines.get(machineId)
+    return machine.kind === 'local' ? this.#providerDescriptors() : []
   }
 
   #assertRuntimeAvailable(provider?: AgentProvider): void {
@@ -2869,6 +3175,116 @@ function machineServiceError(error: unknown): Error {
   return error.code === 'not_found'
     ? new HostServiceError('not_found', error.message, 404)
     : new HostServiceError('runtime_unavailable', error.message, 503)
+}
+
+function remoteMachineServiceError(error: unknown): Error {
+  if (error instanceof HostServiceError) return error
+  if (error instanceof RemoteMachineTrustConflictError) {
+    return new HostServiceError(
+      error.reason === 'capacity' ? 'conflict' : 'machine_identity_mismatch',
+      error.message,
+      409,
+    )
+  }
+  if (!(error instanceof RemoteMachineCoordinatorError)) {
+    return error instanceof Error ? error : new Error(String(error))
+  }
+  switch (error.code) {
+    case 'not_found':
+      return new HostServiceError(
+        'not_found',
+        'Pairing attempt was not found',
+        404,
+      )
+    case 'unavailable':
+      return new HostServiceError(
+        'machine_connection_failed',
+        'Remote Machine pairing is currently unavailable',
+        503,
+      )
+    case 'pairing_code_invalid':
+      return new HostServiceError(
+        'machine_pairing_code_invalid',
+        'Pairing code is invalid',
+        422,
+      )
+    case 'pairing_code_expired':
+      return new HostServiceError(
+        'machine_pairing_code_expired',
+        'Pairing code has expired',
+        410,
+      )
+    case 'pairing_rate_limited':
+      return new HostServiceError(
+        'machine_pairing_rate_limited',
+        'Pairing attempts are temporarily limited',
+        429,
+      )
+    case 'authentication_failed':
+      return new HostServiceError(
+        'machine_authentication_failed',
+        'Remote Machine authentication failed',
+        401,
+      )
+    case 'identity_mismatch':
+      return new HostServiceError(
+        'machine_identity_mismatch',
+        'Remote Machine identity does not match the trusted identity',
+        409,
+      )
+    case 'conflict':
+      return new HostServiceError(
+        'conflict',
+        'Remote Machine trust conflicts with existing durable state',
+        409,
+      )
+    case 'protocol_incompatible':
+      return new HostServiceError(
+        'machine_protocol_incompatible',
+        'Remote Machine protocol is incompatible',
+        409,
+      )
+    case 'connection_failed':
+      return new HostServiceError(
+        'machine_connection_failed',
+        'Remote Machine connection failed',
+        503,
+      )
+  }
+}
+
+function assertStagedRemoteMachine(candidate: ConfirmedRemoteMachine): void {
+  if (
+    candidate.machine.kind !== 'remote' ||
+    candidate.trust.machineId !== candidate.machine.machineId ||
+    candidate.trust.trustState !== 'pending'
+  ) {
+    throw new RemoteMachineCoordinatorError(
+      'identity_mismatch',
+      'Remote pairing produced an invalid trust candidate',
+    )
+  }
+}
+
+function assertSameConfirmedRemoteMachine(
+  staged: ConfirmedRemoteMachine,
+  confirmed: ConfirmedRemoteMachine,
+): void {
+  if (
+    staged.machine.machineId !== confirmed.machine.machineId ||
+    staged.trust.machineId !== confirmed.trust.machineId ||
+    staged.trust.nodeIdentity !== confirmed.trust.nodeIdentity ||
+    staged.trust.peerKeyFingerprint !== confirmed.trust.peerKeyFingerprint ||
+    staged.trust.controllerCredentialRef !==
+      confirmed.trust.controllerCredentialRef ||
+    staged.trust.controllerKeyFingerprint !==
+      confirmed.trust.controllerKeyFingerprint
+  ) {
+    throw new RemoteMachineCoordinatorError(
+      'identity_mismatch',
+      'Remote Machine identity changed during confirmation',
+    )
+  }
 }
 
 function projectServiceError(error: unknown): Error {

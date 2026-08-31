@@ -5,6 +5,8 @@ import {
   AttentionIdSchema,
   AttentionItemSchema,
   AttentionListResponseSchema,
+  BeginRemoteMachinePairingRequestSchema,
+  BeginRemoteMachinePairingResponseSchema,
   ArchiveConversationRequestSchema,
   ArchiveConversationResponseSchema,
   BootstrapSchema,
@@ -40,11 +42,14 @@ import {
   MachineCapabilitiesSchema,
   MachineIdSchema,
   MachineSummarySchema,
+  MachinePairingAttemptIdSchema,
   PinConversationRequestSchema,
   PinConversationResponseSchema,
   ProjectIdSchema,
   ProjectLocationSchema,
   ProjectRecordSchema,
+  RemoteMachineAddressSchema,
+  RemoteMachinePairingCandidateSchema,
   ProviderAvailabilitySchema,
   ProviderCapabilitiesSchema,
   ProviderDescriptorSchema,
@@ -102,6 +107,8 @@ const machine = {
   platform: 'Windows',
   architecture: 'x86_64',
   availability: 'available',
+  connectionState: 'local',
+  trustState: 'local',
   isLocal: true,
   createdAt: timestamp,
   lastSeenAt: timestamp,
@@ -488,6 +495,56 @@ test('validates bounded public Machine records and Machine API responses', () =>
       false,
     )
   }
+})
+
+test('validates presentation-safe remote pairing contracts', () => {
+  const pairingAttemptId =
+    MachinePairingAttemptIdSchema.parse('pairing_attempt01')
+  const address = RemoteMachineAddressSchema.parse({
+    host: '192.0.2.10',
+    port: 43_217,
+  })
+  const request = BeginRemoteMachinePairingRequestSchema.parse({
+    actionId,
+    address,
+    pairingCode: '482 731',
+  })
+  assert.equal(request.pairingCode, '482731')
+  assert.equal(
+    RemoteMachineAddressSchema.safeParse({
+      host: 'https://remote.example',
+      port: 43_217,
+    }).success,
+    false,
+  )
+  const candidate = RemoteMachinePairingCandidateSchema.parse({
+    pairingAttemptId,
+    machineId: 'machine_remote01',
+    displayName: 'Development server',
+    platform: 'Linux',
+    architecture: 'x64',
+    address,
+    protocolVersion: 1,
+    expiresAt: timestamp,
+    verificationCode: '482 731',
+  })
+  const response = {
+    protocolVersion,
+    actionId,
+    status: 'accepted',
+    data: { candidate },
+  }
+  assert.deepEqual(
+    BeginRemoteMachinePairingResponseSchema.parse(response),
+    response,
+  )
+  assert.equal(
+    BeginRemoteMachinePairingResponseSchema.safeParse({
+      ...response,
+      data: { candidate: { ...candidate, peerPublicKey: 'private' } },
+    }).success,
+    false,
+  )
 })
 
 test('validates the durable Conversation summary without provider internals', () => {
@@ -1841,6 +1898,18 @@ function createHostEventFixtures() {
       timestamp,
       type: 'conversation.updated',
       payload: { conversation: conversationSummary },
+    },
+    {
+      conversationId: null,
+      timestamp,
+      type: 'machine.updated',
+      payload: { machine },
+    },
+    {
+      conversationId: null,
+      timestamp,
+      type: 'machine.removed',
+      payload: { machineId },
     },
     {
       ...turnIdentity,

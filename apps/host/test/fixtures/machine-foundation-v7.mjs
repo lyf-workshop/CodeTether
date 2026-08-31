@@ -6,7 +6,7 @@ export function downgradeMachineFoundationToVersionSeven(databasePath) {
   const database = new DatabaseSync(databasePath)
   database.exec('PRAGMA foreign_keys = OFF')
   database.exec(`
-    DELETE FROM schema_migrations WHERE version = 8;
+    DELETE FROM schema_migrations WHERE version IN (8, 9);
 
     CREATE TABLE projects_v7 (
       project_id TEXT PRIMARY KEY,
@@ -77,6 +77,7 @@ export function downgradeMachineFoundationToVersionSeven(databasePath) {
     DROP TABLE conversations;
     DROP TABLE project_locations;
     DROP TABLE projects;
+    DROP TABLE trusted_machine_peers;
     DROP TABLE machines;
     ALTER TABLE projects_v7 RENAME TO projects;
     ALTER TABLE conversations_v7 RENAME TO conversations;

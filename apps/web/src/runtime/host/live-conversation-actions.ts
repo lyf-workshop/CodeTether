@@ -341,6 +341,14 @@ export function mutationErrorMessage(error: unknown, fallback: string): string {
       return '该会话已归档，请先取消归档后再继续。'
     case 'project_has_conversations':
       return '项目仍有关联会话，无法移除。'
+    case 'machine_pairing_code_invalid':
+    case 'machine_pairing_code_expired':
+    case 'machine_pairing_rate_limited':
+    case 'machine_authentication_failed':
+    case 'machine_identity_mismatch':
+    case 'machine_unreachable':
+    case 'machine_protocol_incompatible':
+    case 'machine_connection_failed':
     case 'internal':
       return `CodeTether 未能${fallback}。`
   }

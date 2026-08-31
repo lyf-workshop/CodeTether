@@ -31,9 +31,8 @@ async function main(): Promise<void> {
 
   if (command.kind === 'create') {
     const machines = (await client.listMachines()).machines
-    if (machines.length !== 1 || machines[0] === undefined) {
-      throw new Error('Expected exactly one local Machine')
-    }
+    const localMachine = machines.find((machine) => machine.kind === 'local')
+    if (localMachine === undefined) throw new Error('Local Machine is missing')
     const project = await client.createProject({
       actionId: actionId(),
       path: command.cwd,
@@ -42,7 +41,7 @@ async function main(): Promise<void> {
       actionId: actionId(),
       provider: 'codex',
       projectId: project.data.project.projectId,
-      machineId: machines[0].machineId,
+      machineId: localMachine.machineId,
       ...(command.model === undefined ? {} : { model: command.model }),
       ...(command.reasoning === undefined
         ? {}

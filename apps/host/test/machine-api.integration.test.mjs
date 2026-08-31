@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { performance } from 'node:perf_hooks'
+import { DatabaseSync } from 'node:sqlite'
 import test from 'node:test'
 
 import { HostEventPublisher } from '../dist/api/host-event-publisher.js'
@@ -12,6 +13,10 @@ import {
   newEpoch,
 } from '../dist/api/host-service.js'
 import { LocalHttpServer } from '../dist/api/local-http-server.js'
+import {
+  RemoteMachineCoordinatorError,
+  RemoteMachineRevocationPendingError,
+} from '../dist/api/remote-machine-coordinator.js'
 import { WorkspacePolicy } from '../dist/api/workspace-policy.js'
 import { ConversationStore } from '../dist/persistence/conversation-store.js'
 
@@ -354,6 +359,163 @@ test('Machine API exposes one stable local Machine with mixed-Provider durable b
   }
 })
 
+test('remote pairing stages private trust before publication and unpair rolls back on revoke failure', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'codetether-remote-api-'))
+  const workspace = join(directory, 'workspace')
+  const databasePath = join(directory, 'data', 'codetether.sqlite3')
+  await mkdir(workspace, { recursive: true })
+  const runtime = new TrackingRuntime('codex')
+  const coordinator = new FakeRemoteMachineCoordinator()
+  let service
+  let server
+  try {
+    service = await createService({
+      workspace,
+      databasePath,
+      runtimes: [runtime],
+      maxConversations: 1,
+      remoteMachineCoordinator: coordinator,
+    })
+    const events = []
+    service.publisher.subscribe((event) => events.push(event))
+    server = new LocalHttpServer({
+      service,
+      allowedOrigins: ['http://localhost:5173'],
+      heartbeatMs: 60_000,
+    })
+    const baseUrl = await server.start(0)
+
+    const begun = await requestJson(baseUrl, '/api/v1/machine-pairings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        actionId: 'act_remote_pair_begin01',
+        address: { host: '192.0.2.10', port: 43_217 },
+        pairingCode: '482 731',
+      }),
+    })
+    assert.equal(begun.status, 202)
+    assert.equal(
+      begun.body.data.candidate.pairingAttemptId,
+      coordinator.attemptId,
+    )
+    assert.equal(service.listMachines().machines.length, 1)
+
+    const confirmed = await requestJson(
+      baseUrl,
+      `/api/v1/machine-pairings/${coordinator.attemptId}/confirm`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ actionId: 'act_remote_pair_confirm01' }),
+      },
+    )
+    assert.equal(confirmed.status, 200)
+    assert.equal(confirmed.body.data.machine.kind, 'remote')
+    assert.equal(confirmed.body.data.machine.connectionState, 'offline')
+    assert.equal(service.listMachines().machines.length, 2)
+    const remoteDetail = await service.getMachine(coordinator.machineId)
+    assert.deepEqual(remoteDetail.providers, [])
+    assert.deepEqual(remoteDetail.projects, [])
+    assert.deepEqual(remoteDetail.conversations, [])
+    const publicRemoteJson = JSON.stringify(remoteDetail)
+    for (const privateField of [
+      'nodeIdentity',
+      'peerPublicKeySpki',
+      'peerKeyFingerprint',
+      'controllerCredentialRef',
+      'controllerKeyFingerprint',
+      'endpointHost',
+    ]) {
+      assert.equal(publicRemoteJson.includes(privateField), false)
+    }
+    assert.equal(runtime.startConversationCalls.length, 0)
+    assert.equal(runtime.resumeConversationCalls.length, 0)
+
+    coordinator.failUnpair = true
+    const failed = await requestJson(
+      baseUrl,
+      `/api/v1/machines/${coordinator.machineId}/trust`,
+      {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ actionId: 'act_remote_unpair_fail01' }),
+      },
+    )
+    assert.equal(failed.status, 503)
+    assert.equal(failed.body.code, 'machine_connection_failed')
+    assert.equal(service.listMachines().machines.length, 2)
+    const inspectRollback = new DatabaseSync(databasePath)
+    assert.equal(
+      inspectRollback
+        .prepare(
+          'SELECT trust_state FROM trusted_machine_peers WHERE machine_id = ?',
+        )
+        .get(coordinator.machineId).trust_state,
+      'active',
+    )
+    inspectRollback.close()
+    assert.equal(
+      (await service.getMachine(coordinator.machineId)).machine.kind,
+      'remote',
+    )
+
+    coordinator.failUnpair = false
+    coordinator.pendingUnpair = true
+    const pending = await requestJson(
+      baseUrl,
+      `/api/v1/machines/${coordinator.machineId}/trust`,
+      {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ actionId: 'act_remote_unpair_pending01' }),
+      },
+    )
+    assert.equal(pending.status, 503)
+    assert.equal(pending.body.code, 'machine_connection_failed')
+    assert.equal(service.listMachines().machines.length, 2)
+    const inspectPending = new DatabaseSync(databasePath)
+    assert.equal(
+      inspectPending
+        .prepare(
+          'SELECT trust_state FROM trusted_machine_peers WHERE machine_id = ?',
+        )
+        .get(coordinator.machineId).trust_state,
+      'revoking',
+    )
+    inspectPending.close()
+
+    coordinator.pendingUnpair = false
+    const removed = await requestJson(
+      baseUrl,
+      `/api/v1/machines/${coordinator.machineId}/trust`,
+      {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ actionId: 'act_remote_unpair_ok01' }),
+      },
+    )
+    assert.equal(removed.status, 200)
+    assert.equal(removed.body.data.machineId, coordinator.machineId)
+    assert.equal(service.listMachines().machines.length, 1)
+    assert.deepEqual(
+      events
+        .filter((event) => event.type.startsWith('machine.'))
+        .map((event) => event.type),
+      ['machine.updated', 'machine.removed'],
+    )
+    assert.equal(runtime.startConversationCalls.length, 0)
+    assert.equal(runtime.resumeConversationCalls.length, 0)
+  } finally {
+    if (server !== undefined) {
+      await server.close().catch(() => undefined)
+      service = undefined
+    }
+    await service?.close().catch(() => undefined)
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
 async function createService(options) {
   const service = new HostService({
     runtimes: options.runtimes,
@@ -363,11 +525,89 @@ async function createService(options) {
     now: () => new Date(timestamp),
     maxConversations: options.maxConversations,
     persistence: ConversationStore.open({ databasePath: options.databasePath }),
+    ...(options.remoteMachineCoordinator === undefined
+      ? {}
+      : { remoteMachineCoordinator: options.remoteMachineCoordinator }),
   })
   if (options.registerRoot !== false) {
     await service.registerInitialProjectRoots([options.workspace])
   }
   return service
+}
+
+class FakeRemoteMachineCoordinator {
+  constructor() {
+    this.attemptId = 'pairing_remoteapi01'
+    this.machineId = 'machine_remoteapi01'
+    this.failUnpair = false
+    this.confirmed = {
+      machine: {
+        machineId: this.machineId,
+        displayName: 'Development server',
+        kind: 'remote',
+        platform: 'Linux',
+        architecture: 'x64',
+        createdAt: timestamp,
+      },
+      trust: {
+        machineId: this.machineId,
+        nodeIdentity: 'node_identity_remote_api',
+        peerPublicKeySpki: new Uint8Array(64).fill(1),
+        peerKeyFingerprint: 'a'.repeat(43),
+        controllerCredentialRef: 'controller_remote_api.json',
+        controllerKeyFingerprint: 'b'.repeat(43),
+        trustState: 'pending',
+        protocolVersion: 1,
+        address: { host: '192.0.2.10', port: 43_217 },
+        pairedAt: timestamp,
+        updatedAt: timestamp,
+      },
+    }
+  }
+
+  connectionState() {
+    return 'offline'
+  }
+
+  async beginPairing(input) {
+    assert.deepEqual(input, {
+      address: { host: '192.0.2.10', port: 43_217 },
+      pairingCode: '482731',
+    })
+    return {
+      pairingAttemptId: this.attemptId,
+      machineId: this.machineId,
+      displayName: this.confirmed.machine.displayName,
+      platform: this.confirmed.machine.platform,
+      architecture: this.confirmed.machine.architecture,
+      address: input.address,
+      protocolVersion: 1,
+      expiresAt: '2026-08-30T12:05:00.000Z',
+      verificationCode: '482 731',
+    }
+  }
+
+  async confirmPairing(pairingAttemptId, stageTrust) {
+    assert.equal(pairingAttemptId, this.attemptId)
+    await stageTrust(this.confirmed)
+    return this.confirmed
+  }
+
+  async cancelPairing() {}
+
+  async unpair() {
+    if (this.pendingUnpair) {
+      throw new RemoteMachineRevocationPendingError()
+    }
+    if (this.failUnpair) {
+      throw new RemoteMachineCoordinatorError(
+        'connection_failed',
+        'Controlled revoke failure',
+      )
+    }
+  }
+
+  async close() {}
 }
 
 function hasInternalProcessIdentity(value) {

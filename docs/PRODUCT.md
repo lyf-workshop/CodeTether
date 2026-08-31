@@ -66,7 +66,7 @@ A supported coding-agent runtime/provider. Codex remains the established Provide
 
 ### Machine
 
-A durable execution location where authorized Project workspaces and coding-agent sessions run. Phase 6A introduces exactly one real local Windows Machine with a stable random CodeTether identity, safe platform/architecture presentation, and explicit product capabilities. It is not a Host process identity or device fingerprint, and it exposes no remote transport.
+A durable execution location where authorized Project workspaces and coding-agent sessions run. Phase 6A established one real local Windows Machine with a stable random CodeTether identity. Phase 6B.1 may add real remote Machines through an explicit secure pairing flow, but does not yet put a Project Location or coding Agent on them. Machine identity is neither a Host process identity nor a device fingerprint.
 
 ## Desktop Experience
 
@@ -120,9 +120,9 @@ The Claude Code execution profile remains intentionally safe and minimal. Canoni
 
 ### Machines
 
-Machines show where Project workspaces and Agents actually execute. Phase 6A exposes exactly one real `本地电脑`: its safe Windows/architecture identity, implemented product capabilities, actual Provider availability, registered Project Locations, and recent Conversations. The identity is random and durable in the local CodeTether data root, survives ordinary restart/update/reboot, and is independent from hostname, IP, hardware identifiers, and process identity. Removing that data root is a new-install boundary and may create a new Machine identity; uninstall behavior follows whether the installed data root is retained.
+Machines show real execution locations and trusted future execution locations. Phase 6A exposes the real `本地电脑`: its safe Windows/architecture identity, implemented product capabilities, actual Provider availability, registered Project Locations, and recent Conversations. Phase 6B.1 adds only remote Node identity, trust, and reachability. Each local or remote identity is random and durable in its own CodeTether data root, survives ordinary restart/update/reboot, and is independent from hostname, IP, hardware identifiers, and process identity. Removing a Node data root intentionally creates a new identity.
 
-The Machines surface has no resource charts, SSH status, remote Terminal, ports, services, or invented remote entries. Reading it never starts Codex or Claude Code. Machine availability, Provider availability, Project Location availability, and Conversation execution status remain distinct facts. New Conversation preselects the sole eligible Machine for convenience but sends its real durable identity, filters Agents by that Machine, and never offers a Machine switch after creation.
+The Machines surface shows only real durable Machines. A user can pair a remote CodeTether Node by manually entering its LAN address and one-time code, confirm the presented identity, observe authenticated online/offline state, and explicitly unpair. It still has no resource charts, SSH, remote Terminal, Projects, Providers, ports, services, or invented execution capability for a remote Machine. Reading it never starts Codex or Claude Code. New Conversation continues to offer only Machines with a real available Project Location and Provider execution capability.
 
 ### Inbox
 
@@ -187,7 +187,7 @@ Explicitly deferred:
 - Enterprise administration and policy features.
 - Cross-agent conversation handoff.
 - Public cloud relay.
-- SSH, pairing, LAN discovery, remote files/Terminal/shell, file or Git synchronization, port forwarding, Wake-on-LAN, and fake remote Machines.
+- SSH, LAN discovery, remote Projects/Providers/files/Terminal/shell, file or Git synchronization, port forwarding, Wake-on-LAN, relay, and fake remote Machines.
 - Moving an existing Conversation between Machines or adding a second Location to a Project.
 
 ## Current Phase
@@ -272,6 +272,8 @@ Tray Quit is guarded for idempotency and gives the existing graceful Host/SQLite
 
 **Phase 5B — Claude Code Capability Expansion** is accepted and frozen at `5dac13c`. The installed Claude Code `2.1.251` boundary provides stable structured identities for Read, Glob, Grep, Edit, Write, and Bash plus a real `--effort` option. CodeTether enriches canonical Tool presentation from those structured envelopes and exposes only the Host-owned Claude effort choices. Its production launch remains Read/Glob/Grep-only. Approval, reliable interrupt, edit, shell, Diff, and model selection stay unsupported because no safe and complete product boundary was proven; unsupported capabilities are not simulated for UI symmetry.
 
-**Phase 6A — Durable Machine Foundation** is the current approved implementation phase; it is not yet accepted or frozen. It adds one durable canonical local Machine, Machine-scoped Project Locations, required immutable Conversation `machineId`, machine-scoped Provider composition, strict Machine list/detail APIs, and real Machines/New Conversation/Project/Conversation presentation. It deliberately adds no remote transport, discovery, trust/pairing, monitoring telemetry, native capability, second Location, or Conversation migration between Machines.
+**Phase 6A — Durable Machine Foundation** is accepted and frozen at `0858fc7`. It adds one durable canonical local Machine, Machine-scoped Project Locations, required immutable Conversation `machineId`, machine-scoped Provider composition, strict Machine list/detail APIs, and real Machines/New Conversation/Project/Conversation presentation.
 
-Start with Windows, tray Attention badges/counts, recent-item tray menus, close-behavior settings, notification delivery after explicit Quit, notification history, remote/mobile/browser push, email/chat delivery, custom sounds, schedules, updater/signing, automatic Host restart, drag-and-drop, Project discovery/relocation, remote access, Machine management, OpenCode/third Providers, cross-Provider handoff, and Claude capability parity remain unimplemented.
+**Phase 6B.1 — Remote Node Identity & Secure Pairing** is the current approved implementation phase; it is not yet accepted or frozen. It adds a minimal CodeTether Node, stable remote and cryptographic identity, explicit one-time expiring pairing, user confirmation, durable pinned trust, authenticated LAN reconnect, truthful online/offline state, and pair/unpair UI. It deliberately adds no remote Project Location, Conversation, Provider, Turn, Terminal, filesystem, shell, discovery, relay, or public-Internet behavior.
+
+Start with Windows, tray Attention badges/counts, recent-item tray menus, close-behavior settings, notification delivery after explicit Quit, notification history, remote/mobile/browser push, email/chat delivery, custom sounds, schedules, updater/signing, automatic Host restart, drag-and-drop, Project discovery/relocation, remote execution/control, relay, OpenCode/third Providers, cross-Provider handoff, and Claude capability parity remain unimplemented.

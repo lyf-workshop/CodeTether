@@ -54,7 +54,15 @@ import {
   type ProjectMutationClient,
 } from './project-actions.js'
 import type { ProjectReadClient } from './project-query.js'
-import type { MachineReadClient } from './machine-query.js'
+import {
+  invalidateMachineQueries,
+  removeMachineQueries,
+  type MachineReadClient,
+} from './machine-query.js'
+import {
+  MachineActions,
+  type MachineMutationClient,
+} from './machine-actions.js'
 import {
   AttentionActions,
   type AttentionMutationClient,
@@ -79,6 +87,7 @@ export interface HostRuntimeClient
     LiveConversationMutationClient,
     ProjectReadClient,
     MachineReadClient,
+    MachineMutationClient,
     ProjectMutationClient,
     ConversationDetailReadClient,
     ConversationListReadClient,
@@ -133,6 +142,7 @@ export class HostRuntime {
   readonly #appliedEventListeners = new Set<AppliedHostEventListener>()
   readonly #actions: LiveConversationActions
   readonly #projectActions: ProjectActions
+  readonly #machineActions: MachineActions
   readonly #newConversationActions: NewConversationActions
   readonly #attentionActions: AttentionActions
   readonly #conversationOrganizationActions: ConversationOrganizationActions
@@ -158,6 +168,7 @@ export class HostRuntime {
       new CodeTetherClient({ baseUrl: options.baseUrl ?? hostBaseUrl })
     this.#actions = new LiveConversationActions(this.#client)
     this.#projectActions = new ProjectActions(this.#client)
+    this.#machineActions = new MachineActions(this.#client, this.#queryClient)
     this.#newConversationActions = new NewConversationActions(this.#client)
     this.#attentionActions = new AttentionActions(this.#client)
     this.#conversationOrganizationActions = new ConversationOrganizationActions(
@@ -243,6 +254,33 @@ export class HostRuntime {
     options?: Parameters<MachineReadClient['getMachine']>[1],
   ) {
     return this.#client.getMachine(machineId, options)
+  }
+
+  beginRemoteMachinePairing(
+    address: Parameters<MachineActions['beginRemoteMachinePairing']>[0],
+    pairingCode: Parameters<MachineActions['beginRemoteMachinePairing']>[1],
+  ) {
+    return this.#machineActions.beginRemoteMachinePairing(address, pairingCode)
+  }
+
+  confirmRemoteMachinePairing(
+    pairingAttemptId: Parameters<
+      MachineActions['confirmRemoteMachinePairing']
+    >[0],
+  ) {
+    return this.#machineActions.confirmRemoteMachinePairing(pairingAttemptId)
+  }
+
+  cancelRemoteMachinePairing(
+    pairingAttemptId: Parameters<
+      MachineActions['cancelRemoteMachinePairing']
+    >[0],
+  ) {
+    return this.#machineActions.cancelRemoteMachinePairing(pairingAttemptId)
+  }
+
+  unpairMachine(machineId: Parameters<MachineActions['unpairMachine']>[0]) {
+    return this.#machineActions.unpairMachine(machineId)
   }
 
   getProject(
@@ -542,6 +580,11 @@ export class HostRuntime {
             replaceHostProjection(this.#queryClient, result.projection)
             this.#publishAppliedEvent(event)
             invalidateConversationProductQueries(this.#queryClient, event)
+            if (event.type === 'machine.updated') {
+              invalidateMachineQueries(this.#queryClient)
+            } else if (event.type === 'machine.removed') {
+              removeMachineQueries(this.#queryClient, event.payload.machineId)
+            }
             if (shouldRefreshAttention(event.type)) {
               void invalidateAttentionQueries(this.#queryClient)
             }
@@ -619,6 +662,7 @@ export class HostRuntime {
     if (this.#stats.snapshotReplacements > 0) {
       void invalidateAttentionQueries(this.#queryClient)
       invalidateConversationDurableQueries(this.#queryClient)
+      invalidateMachineQueries(this.#queryClient)
     }
     this.#increment('snapshotReplacements')
     return snapshotCursor(snapshot)

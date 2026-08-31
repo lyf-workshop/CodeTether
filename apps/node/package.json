@@ -1,0 +1,21 @@
+{
+  "name": "@codetether/node",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit --pretty false",
+    "lint": "eslint .",
+    "test": "pnpm build && node --test --test-isolation=none test/*.test.mjs",
+    "start": "node dist/main.js",
+    "sea": "node scripts/build-node.mjs"
+  },
+  "dependencies": {
+    "@codetether/machine-transport": "workspace:*",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

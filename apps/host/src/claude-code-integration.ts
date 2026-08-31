@@ -150,11 +150,9 @@ async function run(): Promise<void> {
     const firstEpoch = host.epoch
     let client = await requireProviders(host)
     const machines = (await client.listMachines()).machines
-    ensure(
-      machines.length === 1 && machines[0] !== undefined,
-      'machine_missing',
-    )
-    const machineId = machines[0].machineId
+    const localMachine = machines.find((machine) => machine.kind === 'local')
+    ensure(localMachine !== undefined, 'machine_missing')
+    const machineId = localMachine.machineId
 
     const project = await client.createProject({
       actionId: actionId('project'),

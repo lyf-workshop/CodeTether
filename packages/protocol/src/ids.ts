@@ -22,6 +22,14 @@ export const MachineIdSchema = z
   .brand<'MachineId'>()
 export type MachineId = z.infer<typeof MachineIdSchema>
 
+export const MachinePairingAttemptIdSchema = z
+  .string()
+  .regex(/^pairing_[A-Za-z0-9][A-Za-z0-9_-]{5,95}$/)
+  .brand<'MachinePairingAttemptId'>()
+export type MachinePairingAttemptId = z.infer<
+  typeof MachinePairingAttemptIdSchema
+>
+
 export const ActionIdSchema = z
   .string()
   .regex(/^act_[A-Za-z0-9][A-Za-z0-9_-]{5,95}$/)

@@ -249,6 +249,14 @@ export function conversationOrganizationErrorMessage(
     case 'provider_unavailable':
     case 'provider_conversation_unavailable':
     case 'project_has_conversations':
+    case 'machine_pairing_code_invalid':
+    case 'machine_pairing_code_expired':
+    case 'machine_pairing_rate_limited':
+    case 'machine_authentication_failed':
+    case 'machine_identity_mismatch':
+    case 'machine_unreachable':
+    case 'machine_protocol_incompatible':
+    case 'machine_connection_failed':
     case 'internal':
       return 'CodeTether 未能完成此会话操作。'
   }

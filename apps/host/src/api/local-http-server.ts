@@ -9,6 +9,8 @@ import {
   ApprovalIdSchema,
   AttentionIdSchema,
   AttentionListResponseSchema,
+  BeginRemoteMachinePairingRequestSchema,
+  BeginRemoteMachinePairingResponseSchema,
   ArchiveConversationRequestSchema,
   ArchiveConversationResponseSchema,
   BootstrapResponseSchema,
@@ -16,6 +18,10 @@ import {
   ConversationListResponseSchema,
   ConversationSearchQuerySchema,
   ConversationSearchResponseSchema,
+  CancelRemoteMachinePairingRequestSchema,
+  CancelRemoteMachinePairingResponseSchema,
+  ConfirmRemoteMachinePairingRequestSchema,
+  ConfirmRemoteMachinePairingResponseSchema,
   CreateConversationRequestSchema,
   CreateConversationResponseSchema,
   CreateProjectRequestSchema,
@@ -39,12 +45,15 @@ import {
   PinConversationRequestSchema,
   PinConversationResponseSchema,
   MachineIdSchema,
+  MachinePairingAttemptIdSchema,
   ProjectIdSchema,
   RenameConversationRequestSchema,
   RenameConversationResponseSchema,
   StartTurnRequestSchema,
   StartTurnResponseSchema,
   TurnIdSchema,
+  UnpairMachineRequestSchema,
+  UnpairMachineResponseSchema,
   UnarchiveConversationRequestSchema,
   UnarchiveConversationResponseSchema,
   UnpinConversationRequestSchema,
@@ -282,6 +291,83 @@ export class LocalHttpServer {
         )
         return
       }
+      if (
+        request.method === 'POST' &&
+        url.pathname === '/api/v1/machine-pairings'
+      ) {
+        const body = await this.#http.readValidatedBody(
+          request,
+          BeginRemoteMachinePairingRequestSchema,
+        )
+        context.actionId = body.actionId
+        this.#http.writeJson(
+          response,
+          202,
+          BeginRemoteMachinePairingResponseSchema.parse(
+            await this.#service.beginRemoteMachinePairing(body),
+          ),
+          context.allowedOrigin,
+        )
+        return
+      }
+
+      const pairingConfirmRoute = this.#http.matchPath(
+        url.pathname,
+        /^\/api\/v1\/machine-pairings\/([^/]+)\/confirm$/u,
+      )
+      if (request.method === 'POST' && pairingConfirmRoute !== undefined) {
+        const pairingAttemptId = this.#http.parseRouteId(
+          MachinePairingAttemptIdSchema,
+          pairingConfirmRoute[0],
+          'pairingAttemptId',
+        )
+        const body = await this.#http.readValidatedBody(
+          request,
+          ConfirmRemoteMachinePairingRequestSchema,
+        )
+        context.actionId = body.actionId
+        this.#http.writeJson(
+          response,
+          200,
+          ConfirmRemoteMachinePairingResponseSchema.parse(
+            await this.#service.confirmRemoteMachinePairing(
+              pairingAttemptId,
+              body,
+            ),
+          ),
+          context.allowedOrigin,
+        )
+        return
+      }
+
+      const pairingRoute = this.#http.matchPath(
+        url.pathname,
+        /^\/api\/v1\/machine-pairings\/([^/]+)$/u,
+      )
+      if (request.method === 'DELETE' && pairingRoute !== undefined) {
+        const pairingAttemptId = this.#http.parseRouteId(
+          MachinePairingAttemptIdSchema,
+          pairingRoute[0],
+          'pairingAttemptId',
+        )
+        const body = await this.#http.readValidatedBody(
+          request,
+          CancelRemoteMachinePairingRequestSchema,
+        )
+        context.actionId = body.actionId
+        this.#http.writeJson(
+          response,
+          200,
+          CancelRemoteMachinePairingResponseSchema.parse(
+            await this.#service.cancelRemoteMachinePairing(
+              pairingAttemptId,
+              body,
+            ),
+          ),
+          context.allowedOrigin,
+        )
+        return
+      }
 
       if (
         request.method === 'GET' &&
@@ -381,6 +467,31 @@ export class LocalHttpServer {
           200,
           GetMachineResponseSchema.parse(
             await this.#service.getMachine(machineId),
+          ),
+          context.allowedOrigin,
+        )
+        return
+      }
+      const machineTrustRoute = this.#http.matchPath(
+        url.pathname,
+        /^\/api\/v1\/machines\/([^/]+)\/trust$/u,
+      )
+      if (request.method === 'DELETE' && machineTrustRoute !== undefined) {
+        const machineId = this.#http.parseRouteId(
+          MachineIdSchema,
+          machineTrustRoute[0],
+          'machineId',
+        )
+        const body = await this.#http.readValidatedBody(
+          request,
+          UnpairMachineRequestSchema,
+        )
+        context.actionId = body.actionId
+        this.#http.writeJson(
+          response,
+          200,
+          UnpairMachineResponseSchema.parse(
+            await this.#service.unpairMachine(machineId, body),
           ),
           context.allowedOrigin,
         )

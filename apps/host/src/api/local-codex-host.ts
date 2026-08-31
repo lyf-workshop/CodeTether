@@ -20,6 +20,10 @@ import {
 } from './claude-code-host-runtime.js'
 import { UnavailableAgentRuntime } from './unavailable-agent-runtime.js'
 import { WorkspacePolicy } from './workspace-policy.js'
+import {
+  SecureRemoteMachineCoordinator,
+  type RemoteMachineCoordinator,
+} from './remote-machine-coordinator.js'
 
 export interface LocalCodexHostOptions {
   readonly allowedWorkspaceRoots?: readonly string[]
@@ -43,6 +47,8 @@ export interface LocalCodexHostOptions {
   readonly databasePath?: string
   /** Assembly fact used only for truthful local Machine capabilities. */
   readonly desktopManaged?: boolean
+  /** Explicit test-only opt-in; production remote pairing rejects loopback. */
+  readonly remoteMachineLoopbackForTests?: boolean
 }
 
 export interface RunningLocalCodexHost {
@@ -158,7 +164,14 @@ export async function startLocalCodexHostWithRuntime(
   const runtimes = Array.isArray(runtime) ? runtime : [runtime]
   let service: HostService | undefined
   let server: LocalHttpServer | undefined
+  let remoteMachineCoordinator: RemoteMachineCoordinator | undefined
   try {
+    if (persistence !== undefined) {
+      remoteMachineCoordinator = await SecureRemoteMachineCoordinator.create({
+        persistence,
+        allowLoopbackForTests: options.remoteMachineLoopbackForTests === true,
+      })
+    }
     const publisher = new HostEventPublisher({
       epoch: newEpoch(),
       ...(options.replayMaxEvents === undefined
@@ -178,6 +191,9 @@ export async function startLocalCodexHostWithRuntime(
         ? {}
         : { maxConversations: options.maxConversations }),
       ...(persistence === undefined ? {} : { persistence }),
+      ...(remoteMachineCoordinator === undefined
+        ? {}
+        : { remoteMachineCoordinator }),
     })
     await service.registerInitialProjectRoots(
       options.allowedWorkspaceRoots ?? [],
@@ -222,6 +238,7 @@ export async function startLocalCodexHostWithRuntime(
     } else if (service !== undefined) {
       await service.close().catch(() => undefined)
     } else {
+      await remoteMachineCoordinator?.close?.().catch(() => undefined)
       await Promise.allSettled(
         runtimes.map(async (providerRuntime) => await providerRuntime.close()),
       )

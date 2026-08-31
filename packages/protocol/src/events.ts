@@ -8,6 +8,7 @@ import {
   EventIdSchema,
   EventSequenceSchema,
   ItemIdSchema,
+  MachineIdSchema,
   ProtocolVersionSchema,
   SnapshotSequenceSchema,
   TimestampSchema,
@@ -20,10 +21,13 @@ import {
   ConversationSummarySchema,
   TurnRecordSchema,
 } from './records.js'
+import { MachineSummarySchema } from './machines.js'
 
 export const hostEventTypes = [
   'conversation.started',
   'conversation.updated',
+  'machine.updated',
+  'machine.removed',
   'turn.started',
   'message.delta',
   'message.completed',
@@ -57,6 +61,16 @@ export const ConversationUpdatedPayloadSchema = z
 export type ConversationUpdatedPayload = z.infer<
   typeof ConversationUpdatedPayloadSchema
 >
+
+export const MachineUpdatedPayloadSchema = z
+  .object({ machine: MachineSummarySchema })
+  .strict()
+export type MachineUpdatedPayload = z.infer<typeof MachineUpdatedPayloadSchema>
+
+export const MachineRemovedPayloadSchema = z
+  .object({ machineId: MachineIdSchema })
+  .strict()
+export type MachineRemovedPayload = z.infer<typeof MachineRemovedPayloadSchema>
 
 export const TurnStartedPayloadSchema = z
   .object({
@@ -272,6 +286,12 @@ const resetIdentityShape = {
   turnId: z.never().optional(),
   itemId: z.never().optional(),
 }
+const machineIdentityShape = {
+  ...eventBaseShape,
+  conversationId: z.null(),
+  turnId: z.never().optional(),
+  itemId: z.never().optional(),
+}
 
 const conversationStartedEventSchema = eventSchema(
   noTurnIdentityShape,
@@ -282,6 +302,16 @@ const conversationUpdatedEventSchema = eventSchema(
   noTurnIdentityShape,
   'conversation.updated',
   ConversationUpdatedPayloadSchema,
+)
+const machineUpdatedEventSchema = eventSchema(
+  machineIdentityShape,
+  'machine.updated',
+  MachineUpdatedPayloadSchema,
+)
+const machineRemovedEventSchema = eventSchema(
+  machineIdentityShape,
+  'machine.removed',
+  MachineRemovedPayloadSchema,
 )
 const turnStartedEventSchema = eventSchema(
   turnIdentityShape,
@@ -362,6 +392,8 @@ const streamResetEventSchema = eventSchema(
 const hostEventOptions = [
   conversationStartedEventSchema,
   conversationUpdatedEventSchema,
+  machineUpdatedEventSchema,
+  machineRemovedEventSchema,
   turnStartedEventSchema,
   messageDeltaEventSchema,
   messageCompletedEventSchema,
@@ -396,6 +428,8 @@ const sequencingShape = {
 const sequencedHostEventEnvelopeOptions = [
   conversationStartedEventSchema.extend(sequencingShape),
   conversationUpdatedEventSchema.extend(sequencingShape),
+  machineUpdatedEventSchema.extend(sequencingShape),
+  machineRemovedEventSchema.extend(sequencingShape),
   turnStartedEventSchema.extend(sequencingShape),
   messageDeltaEventSchema.extend(sequencingShape),
   messageCompletedEventSchema.extend(sequencingShape),

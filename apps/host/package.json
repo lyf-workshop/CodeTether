@@ -24,6 +24,7 @@
     "@codetether/adapter-codex": "workspace:*",
     "@codetether/agent-core": "workspace:*",
     "@codetether/client": "workspace:*",
+    "@codetether/machine-transport": "workspace:*",
     "@codetether/protocol": "workspace:*"
   }
 }

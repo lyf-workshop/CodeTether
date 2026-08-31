@@ -60,8 +60,7 @@ async function run(): Promise<void> {
   try {
     const client = new CodeTetherClient({ baseUrl: host.baseUrl })
     const machines = (await client.listMachines()).machines
-    assert.equal(machines.length, 1)
-    const localMachine = machines[0]
+    const localMachine = machines.find((machine) => machine.kind === 'local')
     assert.ok(localMachine !== undefined)
     const machineId = localMachine.machineId
     const bootstrap = await client.bootstrap()

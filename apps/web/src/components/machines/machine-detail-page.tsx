@@ -1,7 +1,15 @@
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link, useParams } from '@tanstack/react-router'
-import { ArrowLeft, FolderOpen, Monitor, RefreshCw } from 'lucide-react'
+import {
+  ArrowLeft,
+  FolderOpen,
+  Monitor,
+  RefreshCw,
+  Server,
+  ShieldCheck,
+  Unplug,
+} from 'lucide-react'
 
 import {
   AgentBadge,
@@ -11,7 +19,11 @@ import {
   Separator,
   cn,
 } from '@codetether/ui'
-import { MachineIdSchema, type MachineId } from '@codetether/protocol'
+import {
+  MachineIdSchema,
+  type MachineId,
+  type MachineSummary,
+} from '@codetether/protocol'
 import { CodeTetherResponseError } from '@codetether/client'
 
 import {
@@ -29,9 +41,12 @@ import {
 import { MachinesErrorState, MachinesLoadingState } from './machine-page-states'
 import {
   machineArchitectureLabel,
-  machineAvailabilityLabel,
+  formatMachineLastSeen,
+  machineConnectionBadgeVariant,
+  machineConnectionStateLabel,
   machinePlatformLabel,
 } from './machine-presentation'
+import { UnpairMachineDialog } from './unpair-machine-dialog'
 
 export function MachineDetailRoute() {
   const { machineId: rawMachineId } = useParams({
@@ -45,6 +60,7 @@ export function MachineDetailRoute() {
 function MachineDetailPage({ machineId }: { machineId: MachineId }) {
   const runtime = useHostRuntime()
   const connectionState = useHostConnectionState()
+  const [unpairOpen, setUnpairOpen] = useState(false)
   const machineQuery = useQuery({
     ...machineDetailQueryOptions(runtime, machineId),
     enabled: connectionState === 'connected',
@@ -74,18 +90,33 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
       </MachinePageFrame>
     )
   }
+  if (
+    machineQuery.error instanceof CodeTetherResponseError &&
+    machineQuery.error.envelope.code === 'not_found'
+  ) {
+    return <MachineNotFound />
+  }
   if (machineQuery.data === undefined) {
-    return machineQuery.error instanceof CodeTetherResponseError &&
-      machineQuery.error.envelope.code === 'not_found' ? (
-      <MachineNotFound />
-    ) : (
+    return (
       <MachinePageFrame>
         <MachinesErrorState onRetry={retry} />
       </MachinePageFrame>
     )
   }
 
-  const { machine, providers, projects, conversations } = machineQuery.data
+  const { machine } = machineQuery.data
+  if (machine.kind === 'remote') {
+    return (
+      <RemoteMachineDetail
+        connectionState={connectionState}
+        machine={machine}
+        onUnpair={() => setUnpairOpen(true)}
+        unpairOpen={unpairOpen}
+        onUnpairOpenChange={setUnpairOpen}
+      />
+    )
+  }
+  const { providers, projects, conversations } = machineQuery.data
   const providerPresentations = providerPresentationsForMachine(providers)
   const providerById = new Map(
     providerPresentations.map((provider) => [provider.provider, provider]),
@@ -122,7 +153,7 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
             </h1>
             {machine.isLocal ? <Badge variant="secondary">本地</Badge> : null}
             <Badge variant={available ? 'success' : 'danger'}>
-              {machineAvailabilityLabel(machine.availability)}
+              {machineConnectionStateLabel(machine.connectionState)}
             </Badge>
           </div>
           <p className="mt-1 text-sm text-text-secondary">
@@ -319,6 +350,163 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
       ) : null}
     </MachinePageFrame>
   )
+}
+
+interface RemoteMachineDetailProps {
+  connectionState: ReturnType<typeof useHostConnectionState>
+  machine: MachineSummary
+  onUnpair: () => void
+  onUnpairOpenChange: (open: boolean) => void
+  unpairOpen: boolean
+}
+
+function RemoteMachineDetail({
+  connectionState,
+  machine,
+  onUnpair,
+  onUnpairOpenChange,
+  unpairOpen,
+}: RemoteMachineDetailProps) {
+  const lastSeen = formatMachineLastSeen(machine.lastSeenAt)
+
+  return (
+    <MachinePageFrame>
+      <Link
+        to="/machines"
+        className="mb-4 inline-flex w-fit items-center gap-1.5 rounded-xs text-sm font-medium text-text-secondary outline-none transition-colors hover:text-text-primary focus-visible:ring-2 focus-visible:ring-ring/60 motion-reduce:transition-none"
+      >
+        <ArrowLeft aria-hidden="true" className="size-4" />
+        返回机器
+      </Link>
+
+      <header className="flex min-w-0 flex-wrap items-start gap-4">
+        <span
+          aria-hidden="true"
+          className="grid size-11 shrink-0 place-items-center rounded-md border border-primary/35 bg-primary-muted text-primary"
+        >
+          <Server className="size-5" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 flex-wrap items-center gap-2.5">
+            <h1
+              title={machine.displayName}
+              className="min-w-0 truncate text-page font-semibold text-text-primary"
+            >
+              {machine.displayName}
+            </h1>
+            <Badge variant="secondary">远程</Badge>
+            <Badge
+              variant={machineConnectionBadgeVariant(machine.connectionState)}
+            >
+              {machineConnectionStateLabel(machine.connectionState)}
+            </Badge>
+          </div>
+          <p className="mt-1 text-sm text-text-secondary">
+            已与此 CodeTether Node 建立长期信任关系。
+          </p>
+        </div>
+        <Button
+          variant="danger"
+          size="sm"
+          className="w-full sm:w-auto"
+          onClick={onUnpair}
+        >
+          <Unplug aria-hidden="true" />
+          取消配对
+        </Button>
+      </header>
+
+      <div className="mt-6 grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_20rem]">
+        <section className="min-w-0 rounded-lg border border-border bg-surface/65 p-5">
+          <h2 className="text-section font-semibold text-text-primary">概览</h2>
+          <Separator className="my-5" />
+          <dl className="grid min-w-0 gap-x-6 gap-y-5 sm:grid-cols-2">
+            <MachineMetadata label="机器名称" value={machine.displayName} />
+            <MachineMetadata label="类型" value="远程机器" />
+            <MachineMetadata
+              label="平台"
+              value={machinePlatformLabel(machine.platform)}
+            />
+            <MachineMetadata
+              label="架构"
+              value={machineArchitectureLabel(machine.architecture)}
+            />
+          </dl>
+        </section>
+
+        <section className="min-w-0 rounded-lg border border-border bg-surface/65 p-5">
+          <h2 className="text-section font-semibold text-text-primary">
+            安全连接
+          </h2>
+          <Separator className="my-4" />
+          <div className="flex min-w-0 items-start gap-3">
+            <ShieldCheck
+              aria-hidden="true"
+              className="mt-0.5 size-4 shrink-0 text-success"
+            />
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-text-primary">已信任</p>
+              <p className="mt-1 text-xs leading-relaxed text-text-muted">
+                {remoteConnectionDescription(machine.connectionState)}
+              </p>
+              {lastSeen === undefined ? null : (
+                <p className="mt-2 truncate text-xs text-text-muted">
+                  最近成功连接：{lastSeen}
+                </p>
+              )}
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <section className="mt-5 min-w-0 rounded-lg border border-border bg-surface/65 p-5">
+        <h2 className="text-section font-semibold text-text-primary">
+          当前能力
+        </h2>
+        <p className="mt-2 max-w-3xl text-sm leading-relaxed text-text-secondary">
+          此阶段仅验证远程节点身份和安全连接。远程项目、智能体、会话、终端和文件操作尚未启用。
+        </p>
+      </section>
+
+      {connectionState === 'reconnecting' ? (
+        <p
+          role="status"
+          className="mt-4 inline-flex items-center gap-1.5 text-xs text-text-muted"
+        >
+          <RefreshCw
+            aria-hidden="true"
+            className="size-3.5 animate-spin motion-reduce:animate-none"
+          />
+          正在重新连接，当前显示最近读取的机器数据。
+        </p>
+      ) : null}
+
+      <UnpairMachineDialog
+        machine={machine}
+        open={unpairOpen}
+        onOpenChange={onUnpairOpenChange}
+      />
+    </MachinePageFrame>
+  )
+}
+
+function remoteConnectionDescription(
+  state: MachineSummary['connectionState'],
+): string {
+  switch (state) {
+    case 'online':
+      return '远程节点当前在线，身份验证已通过。'
+    case 'connecting':
+      return '正在验证远程节点并建立安全连接。'
+    case 'offline':
+      return '远程节点当前离线；信任关系仍然保留。'
+    case 'authentication_failed':
+      return '最近连接无法验证远程节点身份，CodeTether 已拒绝信任该连接。'
+    case 'incompatible':
+      return '远程节点协议版本不兼容，需要更新后才能重新连接。'
+    case 'local':
+      return '本地连接。'
+  }
 }
 
 function MachineMetadata({ label, value }: { label: string; value: string }) {

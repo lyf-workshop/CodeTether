@@ -3,6 +3,7 @@ import { z } from 'zod'
 import {
   ActionIdSchema,
   MachineIdSchema,
+  MachinePairingAttemptIdSchema,
   ProjectIdSchema,
   ProtocolVersionSchema,
 } from './ids.js'
@@ -20,7 +21,13 @@ import {
   TurnInputSchema,
   TurnRecordSchema,
 } from './records.js'
-import { MachineSummarySchema, machineWireLimits } from './machines.js'
+import {
+  MachineSummarySchema,
+  RemoteMachineAddressSchema,
+  RemoteMachinePairingCandidateSchema,
+  RemoteMachinePairingCodeSchema,
+  machineWireLimits,
+} from './machines.js'
 import { ProviderDescriptorSchema, ProviderIdSchema } from './providers.js'
 
 const CreateConversationByProjectRequestSchema = z
@@ -184,6 +191,36 @@ export const GetMachineResponseSchema = z
     }
   })
 export type GetMachineResponse = z.infer<typeof GetMachineResponseSchema>
+
+export const BeginRemoteMachinePairingRequestSchema = z
+  .object({
+    actionId: ActionIdSchema,
+    address: RemoteMachineAddressSchema,
+    pairingCode: RemoteMachinePairingCodeSchema,
+  })
+  .strict()
+export type BeginRemoteMachinePairingRequest = z.infer<
+  typeof BeginRemoteMachinePairingRequestSchema
+>
+
+export const ConfirmRemoteMachinePairingRequestSchema = z
+  .object({ actionId: ActionIdSchema })
+  .strict()
+export type ConfirmRemoteMachinePairingRequest = z.infer<
+  typeof ConfirmRemoteMachinePairingRequestSchema
+>
+
+export const CancelRemoteMachinePairingRequestSchema = z
+  .object({ actionId: ActionIdSchema })
+  .strict()
+export type CancelRemoteMachinePairingRequest = z.infer<
+  typeof CancelRemoteMachinePairingRequestSchema
+>
+
+export const UnpairMachineRequestSchema = z
+  .object({ actionId: ActionIdSchema })
+  .strict()
+export type UnpairMachineRequest = z.infer<typeof UnpairMachineRequestSchema>
 
 export const conversationListLimits = {
   default: 50,
@@ -465,6 +502,32 @@ export const DeleteProjectResponseSchema = mutationResponseSchema(
   DeleteProjectDataSchema,
 )
 export type DeleteProjectResponse = z.infer<typeof DeleteProjectResponseSchema>
+
+export const BeginRemoteMachinePairingResponseSchema = mutationResponseSchema(
+  z.object({ candidate: RemoteMachinePairingCandidateSchema }).strict(),
+)
+export type BeginRemoteMachinePairingResponse = z.infer<
+  typeof BeginRemoteMachinePairingResponseSchema
+>
+
+export const ConfirmRemoteMachinePairingResponseSchema = mutationResponseSchema(
+  z.object({ machine: MachineSummarySchema }).strict(),
+)
+export type ConfirmRemoteMachinePairingResponse = z.infer<
+  typeof ConfirmRemoteMachinePairingResponseSchema
+>
+
+export const CancelRemoteMachinePairingResponseSchema = mutationResponseSchema(
+  z.object({ pairingAttemptId: MachinePairingAttemptIdSchema }).strict(),
+)
+export type CancelRemoteMachinePairingResponse = z.infer<
+  typeof CancelRemoteMachinePairingResponseSchema
+>
+
+export const UnpairMachineResponseSchema = mutationResponseSchema(
+  z.object({ machineId: MachineIdSchema }).strict(),
+)
+export type UnpairMachineResponse = z.infer<typeof UnpairMachineResponseSchema>
 
 export const RenameConversationResponseSchema = mutationResponseSchema(
   ConversationOrganizationDataSchema,

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  commonJsSeaBanner,
   createBuildId,
   createSeaConfiguration,
   sidecarFileName,
@@ -31,4 +32,9 @@ test('SEA entry stays relative so release binaries do not leak build paths', () 
   const configuration = createSeaConfiguration('C:\\release\\host.exe')
   assert.equal(configuration.main, 'codetether-host.mjs')
   assert.equal(configuration.output, 'C:\\release\\host.exe')
+})
+
+test('sidecar bundle supports CommonJS dependencies inside the ESM SEA', () => {
+  assert.match(commonJsSeaBanner, /createRequire as __ctCreateRequire/u)
+  assert.match(commonJsSeaBanner, /__ctCreateRequire\(import\.meta\.url\)/u)
 })

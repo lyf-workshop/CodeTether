@@ -1,4 +1,4 @@
-import { queryOptions } from '@tanstack/react-query'
+import { queryOptions, type QueryClient } from '@tanstack/react-query'
 import type {
   GetMachineResponse,
   ListMachinesResponse,
@@ -41,5 +41,29 @@ export function machineDetailQueryOptions(
     queryFn: ({ signal }) => client.getMachine(machineId, { signal }),
     retry: false,
     staleTime: 0,
+  })
+}
+
+/** Refreshes only durable Machine reads after a low-frequency Machine event. */
+export function invalidateMachineQueries(queryClient: QueryClient): void {
+  void queryClient.invalidateQueries({ queryKey: machineQueryKeys.all })
+}
+
+/** Removes one revoked Machine without disturbing unrelated Host query state. */
+export function removeMachineQueries(
+  queryClient: QueryClient,
+  machineId: MachineId,
+): void {
+  queryClient.setQueryData<readonly { readonly machineId: MachineId }[]>(
+    machineQueryKeys.list,
+    (current) => current?.filter((machine) => machine.machineId !== machineId),
+  )
+  queryClient.removeQueries({
+    queryKey: machineQueryKeys.detail(machineId),
+    exact: true,
+  })
+  void queryClient.invalidateQueries({
+    queryKey: machineQueryKeys.list,
+    exact: true,
   })
 }

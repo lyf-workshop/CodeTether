@@ -13,8 +13,11 @@ import {
   PairingCancelledMessageSchema,
   PairingLoginResponseMessageSchema,
   PairingOfferMessageSchema,
+  ProjectLocationValidatedMessageSchema,
+  RemoteProjectLocationPathSchema,
   TrustRevokedMessageSchema,
   type PublicKeyFingerprint,
+  type ProjectLocationValidatedMessage,
   type RemoteMachineMetadata,
 } from './messages.js'
 import {
@@ -383,6 +386,47 @@ export class AuthenticatedRemoteMachineConnection {
     }
   }
 
+  async validateProjectLocation(
+    rootPath: string,
+    signal?: AbortSignal,
+  ): Promise<ValidatedRemoteProjectLocation> {
+    const parsedRootPath = RemoteProjectLocationPathSchema.safeParse(rootPath)
+    if (!parsedRootPath.success) {
+      throw new MachineTransportError(
+        'project_location_path_invalid',
+        'Project Location path is invalid',
+      )
+    }
+    const boundedRootPath = parsedRootPath.data
+    const requestId = newMachineNonce()
+    await this.#connection.send({
+      type: 'project_location.validate',
+      protocolVersion: machineProtocolVersion,
+      requestId,
+      expectedMachineId: this.machine.machineId,
+      expectedNodeId: this.machine.nodeId,
+      rootPath: boundedRootPath,
+    })
+    const response = await receiveCompatibleMachineMessage(
+      this.#connection,
+      z.union([
+        ProjectLocationValidatedMessageSchema,
+        MachineErrorMessageSchema,
+      ]),
+      { signal },
+    )
+    if (response.type === 'machine.error') {
+      throw remoteError(response.code, response.message, true)
+    }
+    this.#assertProjectLocationResponse(response, requestId)
+    return {
+      canonicalPath: response.canonicalPath,
+      basename: response.basename,
+      exists: response.exists,
+      directory: response.directory,
+    }
+  }
+
   async revoke(signal?: AbortSignal): Promise<void> {
     const nonce = newMachineNonce()
     await this.#connection.send({
@@ -414,6 +458,31 @@ export class AuthenticatedRemoteMachineConnection {
   close(): void {
     this.#connection.end()
   }
+
+  #assertProjectLocationResponse(
+    response: ProjectLocationValidatedMessage,
+    requestId: string,
+  ): void {
+    if (
+      response.requestId !== requestId ||
+      response.machineId !== this.machine.machineId ||
+      response.nodeId !== this.machine.nodeId
+    ) {
+      this.#connection.destroy()
+      throw new MachineTransportError(
+        'identity_mismatch',
+        'Project Location validation did not match the trusted Machine',
+        { peerAuthenticated: true },
+      )
+    }
+  }
+}
+
+export interface ValidatedRemoteProjectLocation {
+  readonly canonicalPath: string
+  readonly basename: string
+  readonly exists: true
+  readonly directory: true
 }
 
 export async function receiveCompatibleMachineMessage<T>(
@@ -466,6 +535,14 @@ function remoteError(
                   ? 'busy'
                   : code === 'malformed_message'
                     ? 'malformed_message'
-                    : 'pairing_failed'
+                    : code === 'project_location_path_invalid'
+                      ? 'project_location_path_invalid'
+                      : code === 'project_location_missing'
+                        ? 'project_location_missing'
+                        : code === 'project_location_not_directory'
+                          ? 'project_location_not_directory'
+                          : code === 'project_location_inaccessible'
+                            ? 'project_location_inaccessible'
+                            : 'pairing_failed'
   return new MachineTransportError(mapped, message, { peerAuthenticated })
 }

@@ -22,12 +22,14 @@ interface UnpairMachineDialogProps {
   machine: MachineSummary
   onOpenChange: (open: boolean) => void
   open: boolean
+  projectCount?: number
 }
 
 export function UnpairMachineDialog({
   machine,
   onOpenChange,
   open,
+  projectCount = 0,
 }: UnpairMachineDialogProps) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
@@ -73,9 +75,11 @@ export function UnpairMachineDialog({
         </DialogHeader>
 
         <div className="rounded-sm border border-border bg-surface-muted/60 px-3 py-3 text-sm text-text-secondary">
-          {machine.connectionState === 'online'
-            ? 'CodeTether 会先请求远程节点撤销信任，确认成功后才移除本地机器记录。该操作不会删除远程机器上的文件或更改本地电脑。'
-            : '远程节点需要可连接才能确认撤销信任。如果无法连接，CodeTether 会保留本地机器和信任记录，不会假装已经远程撤销。'}
+          {projectCount > 0
+            ? `这台机器仍有 ${projectCount} 个项目位置。当前版本不会自动删除这些位置，因此暂时不能取消配对。`
+            : machine.connectionState === 'online'
+              ? 'CodeTether 会先请求远程节点撤销信任，确认成功后才移除本地机器记录。该操作不会删除远程机器上的文件或更改本地电脑。'
+              : '远程节点需要可连接才能确认撤销信任。如果无法连接，CodeTether 会保留本地机器和信任记录，不会假装已经远程撤销。'}
         </div>
 
         {unpairMutation.isError ? (
@@ -100,7 +104,12 @@ export function UnpairMachineDialog({
           <Button
             variant="danger"
             size="sm"
-            disabled={unpairMutation.isPending}
+            disabled={unpairMutation.isPending || projectCount > 0}
+            title={
+              projectCount > 0
+                ? '当前版本无法在保留项目位置时取消配对'
+                : undefined
+            }
             onClick={() => unpairMutation.mutate()}
           >
             {unpairMutation.isPending ? '正在取消…' : '取消配对'}

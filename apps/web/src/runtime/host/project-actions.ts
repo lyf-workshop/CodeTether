@@ -5,14 +5,21 @@ import {
 } from '@codetether/client'
 import {
   ProjectIdSchema,
+  MachineIdSchema,
   type CreateProjectRequest,
   type CreateProjectResponse,
   type DeleteProjectRequest,
   type DeleteProjectResponse,
+  type MachineId,
   type ProjectId,
+  type RegisterProjectLocationRequest,
+  type RegisterProjectLocationResponse,
 } from '@codetether/protocol'
+import type { QueryClient } from '@tanstack/react-query'
 
 import { createBrowserActionId, type ActionIdFactory } from './action-id.js'
+import { machineQueryKeys } from './machine-query.js'
+import { projectQueryKeys, upsertProjectCache } from './project-query.js'
 
 export interface ProjectMutationClient {
   createProject(
@@ -24,9 +31,15 @@ export interface ProjectMutationClient {
     request: DeleteProjectRequest,
     options?: { readonly signal?: AbortSignal },
   ): Promise<DeleteProjectResponse>
+  registerProjectLocation(
+    projectId: ProjectId,
+    request: RegisterProjectLocationRequest,
+    options?: { readonly signal?: AbortSignal },
+  ): Promise<RegisterProjectLocationResponse>
 }
 
-export type ProjectOperation = 'load' | 'create' | 'remove'
+export type ProjectOperation =
+  'load' | 'create' | 'register-location' | 'remove'
 
 interface CreateAttempt {
   readonly identity: string
@@ -54,18 +67,74 @@ export class ProjectInputError extends Error {
 export class ProjectActions {
   readonly #client: ProjectMutationClient
   readonly #createActionId: ActionIdFactory
+  readonly #queryClient?: QueryClient
   #createAttempt?: CreateAttempt
   readonly #deleteAttempts = new Map<
     ProjectId,
     Promise<DeleteProjectResponse>
   >()
+  readonly #locationAttempts = new Map<
+    string,
+    Promise<RegisterProjectLocationResponse>
+  >()
 
   constructor(
     client: ProjectMutationClient,
     createActionId: ActionIdFactory = createBrowserActionId,
+    queryClient?: QueryClient,
   ) {
     this.#client = client
     this.#createActionId = createActionId
+    this.#queryClient = queryClient
+  }
+
+  registerProjectLocation(
+    projectId: ProjectId | string,
+    input: {
+      readonly machineId: MachineId | string
+      readonly rootPath: string
+    },
+  ): Promise<RegisterProjectLocationResponse> {
+    const project = ProjectIdSchema.parse(projectId)
+    const machine = MachineIdSchema.parse(input.machineId)
+    const path = input.rootPath.trim()
+    if (path.length === 0) return Promise.reject(new ProjectInputError())
+    const identity = JSON.stringify([project, machine, path])
+    const current = this.#locationAttempts.get(identity)
+    if (current !== undefined) return current
+
+    const request: RegisterProjectLocationRequest = {
+      actionId: this.#createActionId(),
+      machineId: machine,
+      path,
+    }
+    const promise = this.#client
+      .registerProjectLocation(project, request)
+      .then((response) => {
+        if (this.#queryClient !== undefined) {
+          upsertProjectCache(this.#queryClient, response.data.project)
+          void this.#queryClient.invalidateQueries({
+            queryKey: projectQueryKeys.list,
+            exact: true,
+          })
+          void this.#queryClient.invalidateQueries({
+            queryKey: projectQueryKeys.detail(project),
+            exact: true,
+          })
+          void this.#queryClient.invalidateQueries({
+            queryKey: machineQueryKeys.detail(machine),
+            exact: true,
+          })
+        }
+        return response
+      })
+      .finally(() => {
+        if (this.#locationAttempts.get(identity) === promise) {
+          this.#locationAttempts.delete(identity)
+        }
+      })
+    this.#locationAttempts.set(identity, promise)
+    return promise
   }
 
   createProject(path: string, name?: string): Promise<CreateProjectResponse> {
@@ -146,6 +215,16 @@ export function projectErrorMessage(
       return '项目状态已经变化，请刷新后重试。'
     case 'project_unavailable':
       return '项目目录当前不可用；恢复原目录后 CodeTether 会重新识别。'
+    case 'project_location_invalid':
+      return '工作区路径无效；请输入所选机器上的绝对目录路径。'
+    case 'project_location_missing':
+      return '所选机器上不存在该目录。'
+    case 'project_location_inaccessible':
+      return '所选机器当前无法访问该目录。'
+    case 'project_location_conflict':
+      return '此项目已在所选机器上注册了工作区位置。'
+    case 'machine_has_project_locations':
+      return '这台机器仍有关联项目位置，当前不能取消配对。'
     case 'project_has_conversations':
       return '此项目仍有关联会话，当前不能移除。'
     case 'unsupported':

@@ -611,6 +611,255 @@ test('remote pairing stages private trust before publication and unpair rolls ba
   }
 })
 
+test('remote ProjectLocation API requires active online trust, stays idempotent, and never hydrates Providers', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'codetether-location-api-'))
+  const workspace = join(directory, 'workspace')
+  const databasePath = join(directory, 'data', 'codetether.sqlite3')
+  await mkdir(workspace, { recursive: true })
+  const runtime = new TrackingRuntime('codex')
+  const coordinator = new FakeRemoteMachineCoordinator()
+  let service
+  let server
+  try {
+    service = await createService({
+      workspace,
+      databasePath,
+      runtimes: [runtime],
+      maxConversations: 1,
+      remoteMachineCoordinator: coordinator,
+    })
+    server = new LocalHttpServer({
+      service,
+      allowedOrigins: ['http://localhost:5173'],
+      heartbeatMs: 60_000,
+    })
+    const baseUrl = await server.start(0)
+    const project = (await service.listProjects()).projects[0]
+    const localMachine = service.listMachines().machines[0]
+    assert.ok(project)
+    assert.ok(localMachine)
+
+    const begun = await requestJson(baseUrl, '/api/v1/machine-pairings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        actionId: 'act_location_pair01',
+        address: { host: '192.0.2.10', port: 43_217 },
+        pairingCode: '482 731',
+      }),
+    })
+    assert.equal(begun.status, 202)
+    const confirmed = await requestJson(
+      baseUrl,
+      `/api/v1/machine-pairings/${coordinator.attemptId}/confirm`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ actionId: 'act_location_confirm1' }),
+      },
+    )
+    assert.equal(confirmed.status, 200)
+    const connected = await requestJson(
+      baseUrl,
+      `/api/v1/machines/${coordinator.machineId}/connection/address`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          actionId: 'act_location_online01',
+          address: { host: '192.0.2.11', port: 43_217 },
+        }),
+      },
+    )
+    assert.equal(connected.status, 200)
+    const remoteMachine = service
+      .listMachines()
+      .machines.find((machine) => machine.machineId === coordinator.machineId)
+    assert.ok(remoteMachine)
+    assert.equal(remoteMachine.capabilities.projectAccess, true)
+    assert.equal(remoteMachine.capabilities.providerExecution, false)
+
+    coordinator.validationError = new RemoteMachineCoordinatorError(
+      'project_location_missing',
+      'Controlled missing remote directory',
+    )
+    const missing = await requestJson(
+      baseUrl,
+      `/api/v1/projects/${project.projectId}/locations`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          actionId: 'act_location_missing1',
+          machineId: coordinator.machineId,
+          path: '/srv/projects/missing',
+        }),
+      },
+    )
+    assert.equal(missing.status, 404)
+    assert.equal(missing.body.code, 'project_location_missing')
+    assert.equal(
+      (await service.getProject(project.projectId)).project.locations.length,
+      1,
+    )
+
+    coordinator.validationError = undefined
+    coordinator.validationCanonicalPath =
+      '/srv/projects/项目 with spaces/codetether'
+    const requestedPath = '/srv/project-links/codetether'
+    const created = await requestJson(
+      baseUrl,
+      `/api/v1/projects/${project.projectId}/locations`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          actionId: 'act_location_create01',
+          machineId: coordinator.machineId,
+          path: requestedPath,
+        }),
+      },
+    )
+    assert.equal(created.status, 201)
+    assert.equal(created.body.data.created, true)
+    assert.equal(
+      created.body.data.location.rootPath,
+      coordinator.validationCanonicalPath,
+    )
+    assert.equal(created.body.data.project.locations.length, 2)
+    assert.equal(coordinator.validationCalls.at(-1).path, requestedPath)
+    assert.equal(
+      coordinator.validationCalls.at(-1).machine.machineId,
+      coordinator.machineId,
+    )
+    assert.equal(coordinator.validationCalls.at(-1).trust.trustState, 'active')
+
+    const validationCountAfterCreate = coordinator.validationCalls.length
+    const replayed = await requestJson(
+      baseUrl,
+      `/api/v1/projects/${project.projectId}/locations`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          actionId: 'act_location_create01',
+          machineId: coordinator.machineId,
+          path: requestedPath,
+        }),
+      },
+    )
+    assert.equal(replayed.status, 201)
+    assert.deepEqual(replayed.body, created.body)
+    assert.equal(coordinator.validationCalls.length, validationCountAfterCreate)
+
+    const duplicate = await requestJson(
+      baseUrl,
+      `/api/v1/projects/${project.projectId}/locations`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          actionId: 'act_location_repeat01',
+          machineId: coordinator.machineId,
+          path: requestedPath,
+        }),
+      },
+    )
+    assert.equal(duplicate.status, 200)
+    assert.equal(duplicate.body.data.created, false)
+    assert.equal(duplicate.body.data.project.locations.length, 2)
+
+    coordinator.validationCanonicalPath = undefined
+    const conflict = await requestJson(
+      baseUrl,
+      `/api/v1/projects/${project.projectId}/locations`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          actionId: 'act_location_conflict1',
+          machineId: coordinator.machineId,
+          path: '/srv/projects/a-different-checkout',
+        }),
+      },
+    )
+    assert.equal(conflict.status, 409)
+    assert.equal(conflict.body.code, 'project_location_conflict')
+
+    const localTrustRequired = await requestJson(
+      baseUrl,
+      `/api/v1/projects/${project.projectId}/locations`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          actionId: 'act_location_local001',
+          machineId: localMachine.machineId,
+          path: workspace,
+        }),
+      },
+    )
+    assert.equal(localTrustRequired.status, 409)
+    assert.equal(localTrustRequired.body.code, 'conflict')
+
+    const machineDetail = await service.getMachine(coordinator.machineId)
+    assert.equal(machineDetail.projects.length, 1)
+    assert.equal(machineDetail.projects[0].projectId, project.projectId)
+    assert.deepEqual(
+      machineDetail.projects[0].locations.map((location) => location.machineId),
+      [coordinator.machineId],
+    )
+
+    const validationCountBeforeOffline = coordinator.validationCalls.length
+    coordinator.connection = { state: 'offline' }
+    const offline = await requestJson(
+      baseUrl,
+      `/api/v1/projects/${project.projectId}/locations`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          actionId: 'act_location_offline1',
+          machineId: coordinator.machineId,
+          path: '/srv/projects/offline',
+        }),
+      },
+    )
+    assert.equal(offline.status, 503)
+    assert.equal(
+      coordinator.validationCalls.length,
+      validationCountBeforeOffline,
+    )
+    assert.equal(
+      (await service.getProject(project.projectId)).project.locations.length,
+      2,
+    )
+
+    const blockedUnpair = await requestJson(
+      baseUrl,
+      `/api/v1/machines/${coordinator.machineId}/trust`,
+      {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ actionId: 'act_location_unpair01' }),
+      },
+    )
+    assert.equal(blockedUnpair.status, 409)
+    assert.equal(blockedUnpair.body.code, 'machine_has_project_locations')
+    assert.equal(blockedUnpair.body.details.locationCount, 1)
+    assert.equal(coordinator.unpairCalls, 0)
+    assert.equal(runtime.startConversationCalls.length, 0)
+    assert.equal(runtime.resumeConversationCalls.length, 0)
+  } finally {
+    if (server !== undefined) {
+      await server.close().catch(() => undefined)
+      service = undefined
+    }
+    await service?.close().catch(() => undefined)
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
 async function createService(options) {
   const service = new HostService({
     runtimes: options.runtimes,
@@ -639,6 +888,10 @@ class FakeRemoteMachineCoordinator {
     this.connection = { state: 'offline' }
     this.retryCalls = []
     this.addressUpdates = []
+    this.validationCalls = []
+    this.validationCanonicalPath = undefined
+    this.validationError = undefined
+    this.unpairCalls = 0
     this.confirmed = {
       machine: {
         machineId: this.machineId,
@@ -699,6 +952,7 @@ class FakeRemoteMachineCoordinator {
   async cancelPairing() {}
 
   async unpair() {
+    this.unpairCalls += 1
     if (this.pendingUnpair) {
       throw new RemoteMachineRevocationPendingError()
     }
@@ -734,6 +988,18 @@ class FakeRemoteMachineCoordinator {
       lastSuccessfulAt: timestamp,
     }
     return this.connection
+  }
+
+  async validateProjectLocation(machine, trust, path) {
+    this.validationCalls.push({ machine, trust, path })
+    if (this.validationError !== undefined) throw this.validationError
+    const canonicalPath = this.validationCanonicalPath ?? path
+    return {
+      canonicalPath,
+      basename: canonicalPath.split('/').filter(Boolean).at(-1) ?? '/',
+      exists: true,
+      directory: true,
+    }
   }
 
   async close() {}

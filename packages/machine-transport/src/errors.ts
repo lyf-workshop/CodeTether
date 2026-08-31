@@ -10,6 +10,10 @@ export type MachineTransportErrorCode =
   | 'timeout'
   | 'malformed_message'
   | 'busy'
+  | 'project_location_path_invalid'
+  | 'project_location_missing'
+  | 'project_location_not_directory'
+  | 'project_location_inaccessible'
 
 export class MachineTransportError extends Error {
   /** True only for a protocol error received after the TLS peer was pinned. */

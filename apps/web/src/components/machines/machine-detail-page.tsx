@@ -3,7 +3,6 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import { Link, useParams } from '@tanstack/react-router'
 import {
   ArrowLeft,
-  FolderOpen,
   MapPin,
   Monitor,
   RefreshCw,
@@ -23,6 +22,7 @@ import {
 import {
   MachineIdSchema,
   type MachineId,
+  type ProjectRecord,
   type RemoteMachineConnection,
   type MachineSummary,
 } from '@codetether/protocol'
@@ -34,14 +34,10 @@ import {
 } from '../../runtime/host/host-runtime-hooks'
 import { machineErrorMessage } from '../../runtime/host/machine-actions'
 import { machineDetailQueryOptions } from '../../runtime/host/machine-query'
-import { projectLocationForMachine } from '../../runtime/host/project-location'
 import { providerPresentationsForMachine } from '../../provider/provider-presentation'
 import { formatConversationActivity } from '../conversations/conversation-list-model'
-import {
-  compactProjectPath,
-  projectFolderName,
-} from '../projects/project-format'
 import { MachinesErrorState, MachinesLoadingState } from './machine-page-states'
+import { MachineProjectsSection } from './machine-projects-section'
 import {
   machineArchitectureLabel,
   formatMachineLastSeen,
@@ -125,6 +121,7 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
         connection={remoteConnection}
         hostConnectionState={hostConnectionState}
         machine={machine}
+        projects={machineQuery.data.projects}
         onUnpair={() => setUnpairOpen(true)}
         unpairOpen={unpairOpen}
         onUnpairOpenChange={setUnpairOpen}
@@ -230,72 +227,7 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
         </section>
       </div>
 
-      <section
-        className="mt-5 min-w-0 rounded-lg border border-border bg-surface/65 p-5"
-        aria-labelledby="machine-projects-heading"
-      >
-        <div className="flex items-end justify-between gap-4">
-          <div>
-            <h2
-              id="machine-projects-heading"
-              className="text-section font-semibold text-text-primary"
-            >
-              项目
-            </h2>
-            <p className="mt-0.5 text-sm text-text-secondary">
-              注册在这台机器上的工作区。
-            </p>
-          </div>
-          <span className="text-xs text-text-muted">{projects.length} 个</span>
-        </div>
-        <Separator className="my-4" />
-        {projects.length === 0 ? (
-          <p className="text-sm text-text-muted">这台机器上还没有项目。</p>
-        ) : (
-          <ul className="grid min-w-0 gap-3 lg:grid-cols-2">
-            {projects.map((project) => {
-              const location = projectLocationForMachine(
-                project,
-                machine.machineId,
-              )
-              return (
-                <li
-                  key={project.projectId}
-                  className="min-w-0 rounded-md border border-border bg-surface-muted/35 p-3"
-                >
-                  <Link
-                    to="/projects/$projectId"
-                    params={{ projectId: project.projectId }}
-                    className="flex min-w-0 items-center gap-3 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-                  >
-                    <FolderOpen
-                      aria-hidden="true"
-                      className="size-4 shrink-0 text-primary"
-                    />
-                    <span className="min-w-0 flex-1">
-                      <span
-                        className="block truncate text-sm font-medium text-text-primary"
-                        title={project.name}
-                      >
-                        {project.name}
-                      </span>
-                      {location === undefined ? null : (
-                        <span
-                          className="mt-0.5 block truncate font-mono text-xs text-text-muted"
-                          title={location.rootPath}
-                        >
-                          {projectFolderName(location.rootPath)} ·{' '}
-                          {compactProjectPath(location.rootPath)}
-                        </span>
-                      )}
-                    </span>
-                  </Link>
-                </li>
-              )
-            })}
-          </ul>
-        )}
-      </section>
+      <MachineProjectsSection machine={machine} projects={projects} />
 
       <section
         className="mt-5 min-w-0 rounded-lg border border-border bg-surface/65 p-5"
@@ -371,6 +303,7 @@ interface RemoteMachineDetailProps {
   connection: RemoteMachineConnection
   hostConnectionState: ReturnType<typeof useHostConnectionState>
   machine: MachineSummary
+  projects: readonly ProjectRecord[]
   onUnpair: () => void
   onUnpairOpenChange: (open: boolean) => void
   unpairOpen: boolean
@@ -380,6 +313,7 @@ function RemoteMachineDetail({
   connection,
   hostConnectionState,
   machine,
+  projects,
   onUnpair,
   onUnpairOpenChange,
   unpairOpen,
@@ -436,6 +370,12 @@ function RemoteMachineDetail({
           variant="danger"
           size="sm"
           className="w-full sm:w-auto"
+          disabled={projects.length > 0}
+          title={
+            projects.length > 0
+              ? '当前版本无法在保留项目位置时取消配对'
+              : undefined
+          }
           onClick={onUnpair}
         >
           <Unplug aria-hidden="true" />
@@ -544,9 +484,19 @@ function RemoteMachineDetail({
           当前能力
         </h2>
         <p className="mt-2 max-w-3xl text-sm leading-relaxed text-text-secondary">
-          此阶段仅验证远程节点身份和安全连接。远程项目、智能体、会话、终端和文件操作尚未启用。
+          可以在这台机器上注册和查看项目工作区位置。远程智能体与会话执行仍未启用，CodeTether
+          不会把位置注册解释为远程执行授权。
         </p>
       </section>
+
+      <MachineProjectsSection machine={machine} projects={projects} />
+
+      {projects.length > 0 ? (
+        <p role="status" className="mt-3 text-xs text-text-muted">
+          这台机器仍有 {projects.length}{' '}
+          个项目位置。当前版本不支持单独移除项目位置，因此这些位置存在时不能取消配对。
+        </p>
+      ) : null}
 
       {hostConnectionState === 'reconnecting' ? (
         <p
@@ -563,6 +513,7 @@ function RemoteMachineDetail({
 
       <UnpairMachineDialog
         machine={machine}
+        projectCount={projects.length}
         open={unpairOpen}
         onOpenChange={onUnpairOpenChange}
       />

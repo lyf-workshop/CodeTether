@@ -69,11 +69,14 @@ test('migration 008 creates one stable local Machine and preserves the complete 
     assert.equal(migrated.listMachines().length, 1)
 
     const preservedProject = migrated.getProject(project.projectId)
-    assert.equal(preservedProject.location.machineId, machine.machineId)
-    assert.equal(preservedProject.location.rootPath, project.location.rootPath)
+    assert.equal(preservedProject.locations[0].machineId, machine.machineId)
     assert.equal(
-      preservedProject.location.rootPathKey,
-      project.location.rootPathKey,
+      preservedProject.locations[0].rootPath,
+      project.locations[0].rootPath,
+    )
+    assert.equal(
+      preservedProject.locations[0].rootPathKey,
+      project.locations[0].rootPathKey,
     )
     const preservedConversation = migrated.getConversation(
       conversation.conversationId,
@@ -369,14 +372,16 @@ function durableProject(projectId, machineId, rootPath) {
   return {
     projectId,
     name: basename(normalized.rootPath),
-    location: {
-      projectId,
-      machineId,
-      rootPath: normalized.rootPath,
-      rootPathKey: normalized.rootPathKey,
-      createdAt: timestamp,
-      updatedAt: timestamp,
-    },
+    locations: [
+      {
+        projectId,
+        machineId,
+        rootPath: normalized.rootPath,
+        rootPathKey: normalized.rootPathKey,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+    ],
     createdAt: timestamp,
     updatedAt: timestamp,
   }
@@ -386,12 +391,12 @@ function durableConversation(conversationId, project, provider) {
   return {
     conversationId,
     projectId: project.projectId,
-    machineId: project.location.machineId,
+    machineId: project.locations[0].machineId,
     title: 'Machine foundation title',
     titleSource: 'generated',
     provider,
     providerThreadId: 'session-private',
-    cwd: project.location.rootPath,
+    cwd: project.locations[0].rootPath,
     status: 'completed',
     createdAt: timestamp,
     updatedAt: timestamp,

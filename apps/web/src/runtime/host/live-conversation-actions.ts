@@ -340,6 +340,11 @@ export function mutationErrorMessage(error: unknown, fallback: string): string {
     case 'conversation_archived':
       return '该会话已归档，请先取消归档后再继续。'
     case 'project_has_conversations':
+    case 'project_location_invalid':
+    case 'project_location_missing':
+    case 'project_location_inaccessible':
+    case 'project_location_conflict':
+    case 'machine_has_project_locations':
       return '项目仍有关联会话，无法移除。'
     case 'machine_pairing_code_invalid':
     case 'machine_pairing_code_expired':

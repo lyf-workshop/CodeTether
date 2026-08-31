@@ -12,6 +12,7 @@ import {
   PairingOpenMessageSchema,
   PairingLoginFinishMessageSchema,
   PairingLoginStartMessageSchema,
+  ProjectLocationValidateMessageSchema,
   TrustRevokeMessageSchema,
   exportMachineTlsBinding,
   machineProtocolVersion,
@@ -30,10 +31,12 @@ import {
 import { z } from 'zod'
 
 import { PairingMode, type PairingModeView } from './pairing-mode.js'
+import { validateProjectLocationPath } from './project-location-validation.js'
 import { NodeStateStore, type TrustedController } from './state-store.js'
 
 const AuthenticatedRequestSchema = z.discriminatedUnion('type', [
   MachinePingMessageSchema,
+  ProjectLocationValidateMessageSchema,
   TrustRevokeMessageSchema,
 ])
 const PairingDecisionSchema = z.discriminatedUnion('type', [
@@ -392,6 +395,34 @@ export class CodeTetherNodeService extends EventEmitter {
           })
           continue
         }
+        if (request.type === 'project_location.validate') {
+          if (
+            request.expectedMachineId !== this.state.machine.machineId ||
+            request.expectedNodeId !== this.state.machine.nodeId
+          ) {
+            throw new MachineTransportError(
+              'identity_mismatch',
+              'Project Location request did not match durable Node identity',
+            )
+          }
+          try {
+            const validated = await validateProjectLocationPath(
+              request.rootPath,
+            )
+            await connection.send({
+              type: 'project_location.validated',
+              protocolVersion: machineProtocolVersion,
+              requestId: request.requestId,
+              machineId: this.state.machine.machineId,
+              nodeId: this.state.machine.nodeId,
+              ...validated,
+            })
+          } catch (error) {
+            if (!isProjectLocationValidationError(error)) throw error
+            await sendSafeError(connection, error)
+          }
+          continue
+        }
         if (request.controllerId !== trusted.controllerId) {
           throw new MachineTransportError(
             'identity_mismatch',
@@ -491,6 +522,18 @@ function wireErrorCode(error: unknown): MachineWireErrorCode {
   return error.code
 }
 
+function isProjectLocationValidationError(
+  error: unknown,
+): error is MachineTransportError {
+  return (
+    error instanceof MachineTransportError &&
+    (error.code === 'project_location_path_invalid' ||
+      error.code === 'project_location_missing' ||
+      error.code === 'project_location_not_directory' ||
+      error.code === 'project_location_inaccessible')
+  )
+}
+
 function machineError(code: MachineWireErrorCode) {
   const message =
     code === 'pairing_disabled'
@@ -507,9 +550,17 @@ function machineError(code: MachineWireErrorCode) {
                 ? 'Machine message is invalid'
                 : code === 'identity_mismatch'
                   ? 'Machine identity did not match'
-                  : code === 'pairing_failed'
-                    ? 'Pairing authentication failed'
-                    : 'Machine authentication failed'
+                  : code === 'project_location_path_invalid'
+                    ? 'Project Location path is invalid'
+                    : code === 'project_location_missing'
+                      ? 'Project Location directory does not exist'
+                      : code === 'project_location_not_directory'
+                        ? 'Project Location path is not a directory'
+                        : code === 'project_location_inaccessible'
+                          ? 'Project Location directory is inaccessible'
+                          : code === 'pairing_failed'
+                            ? 'Pairing authentication failed'
+                            : 'Machine authentication failed'
   return MachineErrorMessageSchema.parse({
     type: 'machine.error',
     protocolVersion: machineProtocolVersion,

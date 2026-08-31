@@ -55,6 +55,8 @@ import {
   type HostSnapshot,
   type CreateProjectRequest,
   type CreateProjectResponse,
+  type RegisterProjectLocationRequest,
+  type RegisterProjectLocationResponse,
   type DeleteProjectRequest,
   type DeleteProjectResponse,
   type GetProjectResponse,
@@ -105,7 +107,9 @@ import {
   ConversationOrganizationConflictError,
   ConversationSearchCursorError,
   DURABLE_TURN_SNAPSHOT_VERSION,
+  ProjectLocationConflictError,
   RemoteMachineTrustConflictError,
+  RemoteMachineProjectLocationConflictError,
   captureTurnPresentation,
   initialTurnPresentation,
   readDurableConversationDetail,
@@ -329,6 +333,8 @@ export class HostService {
         : { persistence: this.#persistence }),
       now: () => TimestampSchema.parse(this.#timestamp()),
       localMachineId: this.#machines.localMachineId(),
+      machineAvailability: (machineId) =>
+        this.#machines.get(machineId).availability,
       writeDurable: (operation) => this.#writeDurable(operation),
       hasRuntimeConversations: (projectId) =>
         [...this.#conversations.values()].some(
@@ -635,15 +641,36 @@ export class HostService {
             409,
           )
         }
+        const locationCount = persistence.countProjectLocationsForMachine(id)
+        if (locationCount > 0) {
+          throw new HostServiceError(
+            'machine_has_project_locations',
+            'Remove this Machine from its registered Projects before unpairing',
+            409,
+            { locationCount },
+          )
+        }
         let trust = persistedTrust
         let markedRevoking = false
         if (trust.trustState === 'active') {
-          this.#writeDurable(() => {
-            trust = persistence.markTrustedMachinePeerRevoking(
-              id,
-              TimestampSchema.parse(this.#timestamp()),
-            )
-          })
+          try {
+            this.#writeDurable(() => {
+              trust = persistence.markTrustedMachinePeerRevoking(
+                id,
+                TimestampSchema.parse(this.#timestamp()),
+              )
+            })
+          } catch (error) {
+            if (error instanceof RemoteMachineProjectLocationConflictError) {
+              throw new HostServiceError(
+                'machine_has_project_locations',
+                'Remove this Machine from its registered Projects before unpairing',
+                409,
+                { locationCount: error.locationCount },
+              )
+            }
+            throw error
+          }
           markedRevoking = true
         }
         try {
@@ -802,6 +829,86 @@ export class HostService {
     } catch (error) {
       throw projectServiceError(error)
     }
+  }
+
+  async registerProjectLocation(
+    projectId: ProjectId,
+    request: RegisterProjectLocationRequest,
+  ): Promise<RegisterProjectLocationResponse> {
+    const id = ProjectIdSchema.parse(projectId)
+    return await this.#executeAction(
+      request.actionId,
+      `project.location.register:${id}:${request.machineId}`,
+      { projectId: id, request },
+      async () => {
+        try {
+          this.#projects.require(id)
+        } catch (error) {
+          throw projectServiceError(error)
+        }
+        const { durable, trust } = this.#requireRemoteMachineTrust(
+          request.machineId,
+        )
+        let machine: MachineSummary
+        try {
+          machine = this.#machines.requireAvailable(request.machineId)
+        } catch (error) {
+          throw machineServiceError(error)
+        }
+        if (machine.kind !== 'remote' || machine.connectionState !== 'online') {
+          throw new HostServiceError(
+            'machine_unreachable',
+            'Remote Machine must be online to register a Project Location',
+            503,
+          )
+        }
+        const validate = this.#remoteMachines.validateProjectLocation
+        if (validate === undefined) {
+          throw new HostServiceError(
+            'machine_connection_failed',
+            'Remote Project Location validation is unavailable',
+            503,
+          )
+        }
+        try {
+          const validated = await validate.call(
+            this.#remoteMachines,
+            durable,
+            trust,
+            request.path,
+          )
+          const result = await this.#projects.registerRemoteLocation(
+            id,
+            request.machineId,
+            validated.canonicalPath,
+          )
+          const location = result.project.locations.find(
+            (candidate) => candidate.machineId === request.machineId,
+          )
+          if (location === undefined) {
+            throw new Error(
+              'Registered Project Location is absent from Project truth',
+            )
+          }
+          return {
+            protocolVersion,
+            actionId: request.actionId,
+            status: 'completed',
+            data: {
+              project: result.project,
+              location,
+              created: result.created,
+            },
+          }
+        } catch (error) {
+          if (error instanceof ProjectRegistryError) {
+            throw projectServiceError(error)
+          }
+          throw remoteMachineServiceError(error)
+        }
+      },
+      false,
+    )
   }
 
   async listProjectConversations(
@@ -2806,7 +2913,13 @@ export class HostService {
     try {
       operation()
     } catch (error) {
-      if (error instanceof RemoteMachineTrustConflictError) throw error
+      if (
+        error instanceof RemoteMachineTrustConflictError ||
+        error instanceof ProjectLocationConflictError ||
+        error instanceof RemoteMachineProjectLocationConflictError
+      ) {
+        throw error
+      }
       this.#handlePersistenceFailure(toError(error))
       throw runtimeUnavailableError('Conversation durability is unavailable')
     }
@@ -3393,6 +3506,25 @@ function remoteMachineServiceError(error: unknown): Error {
         'Remote Machine connection failed',
         503,
       )
+    case 'project_location_path_invalid':
+    case 'project_location_not_directory':
+      return new HostServiceError(
+        'project_location_invalid',
+        'Remote Project Location path is invalid',
+        422,
+      )
+    case 'project_location_missing':
+      return new HostServiceError(
+        'project_location_missing',
+        'Remote Project Location directory does not exist',
+        404,
+      )
+    case 'project_location_inaccessible':
+      return new HostServiceError(
+        'project_location_inaccessible',
+        'Remote Project Location directory is inaccessible',
+        403,
+      )
   }
 }
 
@@ -3448,6 +3580,12 @@ function projectServiceError(error: unknown): Error {
       return new HostServiceError('project_unavailable', error.message, 409)
     case 'invalid_path':
       return new HostServiceError('invalid_request', error.message, 422)
+    case 'location_conflict':
+      return new HostServiceError(
+        'project_location_conflict',
+        error.message,
+        409,
+      )
   }
 }
 

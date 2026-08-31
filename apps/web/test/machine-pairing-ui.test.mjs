@@ -84,7 +84,8 @@ test('remote detail is truthful and unpair remains explicit and remote-only', as
   )
 
   assert.match(detail, /if \(machine\.kind === 'remote'\)/u)
-  assert.match(remote, /远程项目、智能体、会话、终端和文件操作尚未启用/u)
+  assert.match(remote, /可以在这台机器上注册和查看项目工作区位置/u)
+  assert.match(remote, /远程智能体与会话执行仍未启用/u)
   assert.match(remote, /machineConnectionStateLabel/u)
   assert.match(remote, /authentication_failed/u)
   assert.match(remote, /recovery_required/u)
@@ -103,13 +104,16 @@ test('remote detail is truthful and unpair remains explicit and remote-only', as
   assert.match(remote, /!hostReadyForConnectionAction/u)
   assert.match(remote, /<UnpairMachineDialog/u)
   assert.match(remote, /<UpdateMachineAddressDialog/u)
-  assert.doesNotMatch(
+  assert.match(
     remote,
-    /providerPresentations\.map|projects\.map|conversations\.map/u,
+    /<MachineProjectsSection machine=\{machine\} projects=\{projects\}/u,
   )
+  assert.doesNotMatch(remote, /providerPresentations\.map|conversations\.map/u)
+  assert.match(remote, /disabled=\{projects\.length > 0\}/u)
 
   assert.match(unpair, /if \(machine\.kind !== 'remote'\) return null/u)
   assert.match(unpair, /runtime\.unpairMachine/u)
+  assert.match(unpair, /projectCount > 0/u)
   assert.match(unpair, /不会删除远程机器上的文件/u)
   assert.match(unpair, /不会假装已经远程撤销/u)
   assert.match(unpair, /<DialogTitle>取消机器配对<\/DialogTitle>/u)
@@ -140,7 +144,7 @@ test('New Conversation excludes identity-only remote Machines by canonical capab
   assert.match(dialog, /machine\.capabilities\.projectAccess/u)
   assert.match(dialog, /machine\.capabilities\.providerExecution/u)
   assert.match(dialog, /projectLocationForMachine/u)
-  assert.doesNotMatch(dialog, /machine\.kind === 'remote'.*available/su)
+  assert.match(dialog, /当前版本尚不支持在远程机器上执行智能体会话/u)
 })
 
 async function source(relativePath) {

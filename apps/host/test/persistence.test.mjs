@@ -185,7 +185,7 @@ test('migration 002 preserves a normalized absolute Project path that is current
 
     const store = ConversationStore.open({ databasePath })
     const [project] = store.listProjects()
-    assert.equal(project.location.rootPath, missingRoot)
+    assert.equal(project.locations[0].rootPath, missingRoot)
     assert.equal(store.getConversation('conv_missingroot01').cwd, missingRoot)
     store.close()
   })
@@ -481,8 +481,8 @@ test('persists Project CRUD, canonical key uniqueness, and Conversation counts',
     assert.deepEqual(store.getProject(projectId), created)
     assert.deepEqual(
       store.getProjectByRootPathKey(
-        created.location.machineId,
-        created.location.rootPathKey,
+        created.locations[0].machineId,
+        created.locations[0].rootPathKey,
       ),
       created,
     )
@@ -501,10 +501,10 @@ test('persists Project CRUD, canonical key uniqueness, and Conversation counts',
         store.createProject({
           ...created,
           projectId: 'proj_duplicate01',
-          location: {
-            ...created.location,
+          locations: created.locations.map((location) => ({
+            ...location,
             projectId: 'proj_duplicate01',
-          },
+          })),
         }),
       /UNIQUE constraint failed: project_locations\.machine_id, project_locations\.root_path_key/,
     )
@@ -566,14 +566,16 @@ function project(store, overrides = {}) {
   return {
     projectId,
     name: basename(root.rootPath),
-    location: {
-      projectId,
-      machineId,
-      rootPath: root.rootPath,
-      rootPathKey: root.rootPathKey,
-      createdAt: timestamp,
-      updatedAt: timestamp,
-    },
+    locations: [
+      {
+        projectId,
+        machineId,
+        rootPath: root.rootPath,
+        rootPathKey: root.rootPathKey,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+    ],
     createdAt: timestamp,
     updatedAt: timestamp,
     ...overrides,

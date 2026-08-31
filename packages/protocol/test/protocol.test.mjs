@@ -51,6 +51,8 @@ import {
   RemoteMachineAddressSchema,
   RemoteMachineConnectionSchema,
   RemoteMachinePairingCandidateSchema,
+  RegisterProjectLocationRequestSchema,
+  RegisterProjectLocationResponseSchema,
   RetryMachineConnectionRequestSchema,
   RetryMachineConnectionResponseSchema,
   ProviderAvailabilitySchema,
@@ -500,6 +502,95 @@ test('validates bounded public Machine records and Machine API responses', () =>
       false,
     )
   }
+})
+
+test('validates strict bounded ProjectLocation registration requests and exact responses', () => {
+  const remoteMachineId = 'machine_remote01'
+  const remotePath = '/home/开发者/projects/CodeTether workspace'
+  const request = {
+    actionId: 'act_location1',
+    machineId: remoteMachineId,
+    path: remotePath,
+  }
+  assert.deepEqual(RegisterProjectLocationRequestSchema.parse(request), request)
+  assert.deepEqual(
+    RegisterProjectLocationRequestSchema.parse({
+      ...request,
+      path: `  ${remotePath}  `,
+    }),
+    request,
+  )
+  assert.equal(
+    RegisterProjectLocationRequestSchema.safeParse({
+      ...request,
+      genericFilesystemAccess: true,
+    }).success,
+    false,
+  )
+  assert.equal(
+    RegisterProjectLocationRequestSchema.safeParse({
+      ...request,
+      path: `/${'界'.repeat(4_096)}`,
+    }).success,
+    false,
+  )
+
+  const remoteLocation = {
+    ...projectLocation,
+    machineId: remoteMachineId,
+    rootPath: remotePath,
+  }
+  const projectWithRemoteLocation = {
+    ...project,
+    locations: [projectLocation, remoteLocation],
+  }
+  const response = {
+    protocolVersion,
+    actionId: request.actionId,
+    status: 'completed',
+    data: {
+      project: projectWithRemoteLocation,
+      location: remoteLocation,
+      created: true,
+    },
+  }
+  assert.deepEqual(
+    RegisterProjectLocationResponseSchema.parse(response),
+    response,
+  )
+  assert.equal(
+    RegisterProjectLocationResponseSchema.safeParse({
+      ...response,
+      data: {
+        ...response.data,
+        location: { ...remoteLocation, projectId: 'proj_other01' },
+      },
+    }).success,
+    false,
+  )
+  assert.equal(
+    RegisterProjectLocationResponseSchema.safeParse({
+      ...response,
+      data: {
+        ...response.data,
+        project: {
+          ...projectWithRemoteLocation,
+          locations: [
+            projectLocation,
+            { ...remoteLocation, rootPath: '/home/other/project' },
+          ],
+        },
+      },
+    }).success,
+    false,
+  )
+  assert.equal(
+    RegisterProjectLocationResponseSchema.safeParse({
+      ...response,
+      data: { ...response.data, canonicalPath: remotePath },
+    }).success,
+    false,
+  )
 })
 
 test('validates presentation-safe remote pairing contracts', () => {

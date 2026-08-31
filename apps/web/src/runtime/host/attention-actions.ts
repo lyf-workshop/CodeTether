@@ -161,6 +161,11 @@ export function attentionErrorMessage(error: unknown): string {
     case 'provider_start_failed':
     case 'conversation_archived':
     case 'project_has_conversations':
+    case 'project_location_invalid':
+    case 'project_location_missing':
+    case 'project_location_inaccessible':
+    case 'project_location_conflict':
+    case 'machine_has_project_locations':
     case 'machine_pairing_code_invalid':
     case 'machine_pairing_code_expired':
     case 'machine_pairing_rate_limited':

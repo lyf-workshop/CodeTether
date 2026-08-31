@@ -15,7 +15,6 @@ import {
 } from '../../runtime/host/host-runtime-hooks'
 import { projectListQueryOptions } from '../../runtime/host/project-query'
 import { machineListQueryOptions } from '../../runtime/host/machine-query'
-import { soleProjectLocation } from '../../runtime/host/project-location'
 import { projectListViewState } from '../../runtime/host/project-view-state'
 import { nativeCapabilities } from '../../runtime/native/native-capabilities'
 import { AddProjectDialog } from './add-project-dialog'
@@ -83,7 +82,7 @@ export function ProjectsPage() {
         <div className="min-w-0">
           <h1 className="text-page font-semibold text-text-primary">项目</h1>
           <p className="mt-0.5 text-sm font-regular text-text-secondary">
-            管理 CodeTether 可以访问的本地工作区。
+            管理 CodeTether 可以访问的项目和机器工作区位置。
           </p>
         </div>
 
@@ -134,7 +133,7 @@ export function ProjectsPage() {
                   id="project-list-heading"
                   className="text-sm font-medium text-text-primary"
                 >
-                  已授权工作区
+                  已注册项目
                 </h2>
                 <p className="mt-0.5 text-xs font-regular text-text-muted">
                   共 {projects.length} 个项目
@@ -155,21 +154,17 @@ export function ProjectsPage() {
             </div>
 
             <div className="space-y-4">
-              {projects.map((project) => {
-                const location = soleProjectLocation(project)
-                return (
-                  <ProjectRow
-                    key={project.projectId}
-                    project={project}
-                    machine={
-                      location === undefined
-                        ? undefined
-                        : machinesById.get(location.machineId)
-                    }
-                    onRemove={handleRemoveRequest}
-                  />
-                )
-              })}
+              {projects.map((project) => (
+                <ProjectRow
+                  key={project.projectId}
+                  project={project}
+                  machines={project.locations.flatMap((location) => {
+                    const machine = machinesById.get(location.machineId)
+                    return machine === undefined ? [] : [machine]
+                  })}
+                  onRemove={handleRemoveRequest}
+                />
+              ))}
             </div>
           </section>
         )}

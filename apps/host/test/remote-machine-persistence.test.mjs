@@ -8,6 +8,8 @@ import test from 'node:test'
 import { MachineRegistry } from '../dist/api/machine-registry.js'
 import {
   ConversationStore,
+  ProjectLocationConflictError,
+  RemoteMachineProjectLocationConflictError,
   RemoteMachineTrustConflictError,
   currentSchemaVersion,
 } from '../dist/persistence/index.js'
@@ -265,7 +267,7 @@ test('private remote trust is staged, hidden until active, durable, unique, and 
     assert.equal(remote.connectionState, 'offline')
     assert.equal(remote.trustState, 'trusted')
     assert.deepEqual(remote.capabilities, {
-      projectAccess: false,
+      projectAccess: true,
       providerExecution: false,
       backgroundRuntime: false,
       nativeFolderPicker: false,
@@ -291,6 +293,154 @@ test('private remote trust is staged, hidden until active, durable, unique, and 
     assert.deepEqual(
       reopened.listMachines().map((machine) => machine.machineId),
       [local.machineId],
+    )
+    reopened.close()
+  })
+})
+
+test('remote Project locations aggregate durably, reject conflicts, and atomically block revocation', () => {
+  withDatabase((databasePath) => {
+    const store = ConversationStore.open({ databasePath })
+    const [local] = store.listMachines()
+    assert.ok(local)
+    const firstRoot = normalizeTrustedProjectRoot(
+      resolve(databasePath, '..', 'multi-location-first'),
+    )
+    const secondRoot = normalizeTrustedProjectRoot(
+      resolve(databasePath, '..', 'multi-location-second'),
+    )
+    store.createProject({
+      projectId: 'proj_multilocation01',
+      name: 'Multi location',
+      locations: [
+        {
+          projectId: 'proj_multilocation01',
+          machineId: local.machineId,
+          rootPath: firstRoot.rootPath,
+          rootPathKey: firstRoot.rootPathKey,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+      ],
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    })
+    store.createProject({
+      projectId: 'proj_multilocation02',
+      name: 'Other logical project',
+      locations: [
+        {
+          projectId: 'proj_multilocation02',
+          machineId: local.machineId,
+          rootPath: secondRoot.rootPath,
+          rootPathKey: secondRoot.rootPathKey,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+      ],
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    })
+
+    const candidate = remoteCandidate('machine_projectlocation01', 'p')
+    store.createRemoteMachineWithTrust(candidate.machine, candidate.trust)
+    assert.throws(
+      () =>
+        store.createProjectLocation({
+          projectId: 'proj_multilocation01',
+          machineId: candidate.machine.machineId,
+          rootPath: '/home/user/projects/CodeTether',
+          rootPathKey: '/home/user/projects/CodeTether',
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        }),
+      (error) =>
+        error instanceof ProjectLocationConflictError &&
+        error.reason === 'machine_trust',
+    )
+    store.activateTrustedMachinePeer(candidate.machine.machineId, later)
+
+    const location = {
+      projectId: 'proj_multilocation01',
+      machineId: candidate.machine.machineId,
+      rootPath: '/home/user/projects/CodeTether 中文',
+      rootPathKey: '/home/user/projects/CodeTether 中文',
+      createdAt: later,
+      updatedAt: later,
+    }
+    assert.deepEqual(store.createProjectLocation(location), {
+      location,
+      created: true,
+    })
+    assert.deepEqual(store.createProjectLocation(location), {
+      location,
+      created: false,
+    })
+    assert.equal(store.getProject('proj_multilocation01').locations.length, 2)
+    assert.equal(
+      store.getProjectByRootPathKey(
+        candidate.machine.machineId,
+        location.rootPathKey,
+      ).projectId,
+      'proj_multilocation01',
+    )
+    assert.equal(
+      store.countProjectLocationsForMachine(candidate.machine.machineId),
+      1,
+    )
+
+    assert.throws(
+      () =>
+        store.createProjectLocation({
+          ...location,
+          rootPath: '/srv/different-checkout',
+          rootPathKey: '/srv/different-checkout',
+        }),
+      (error) =>
+        error instanceof ProjectLocationConflictError &&
+        error.reason === 'project_machine',
+    )
+    assert.throws(
+      () =>
+        store.createProjectLocation({
+          ...location,
+          projectId: 'proj_multilocation02',
+        }),
+      (error) =>
+        error instanceof ProjectLocationConflictError &&
+        error.reason === 'machine_path',
+    )
+    assert.throws(
+      () =>
+        store.markTrustedMachinePeerRevoking(
+          candidate.machine.machineId,
+          later,
+        ),
+      (error) =>
+        error instanceof RemoteMachineProjectLocationConflictError &&
+        error.machineId === candidate.machine.machineId &&
+        error.locationCount === 1,
+    )
+    assert.equal(
+      store.getTrustedMachinePeer(candidate.machine.machineId).trustState,
+      'active',
+    )
+    store.close()
+
+    const reopened = ConversationStore.open({ databasePath })
+    assert.equal(reopened.schemaVersion, 10)
+    assert.deepEqual(
+      reopened
+        .getProject('proj_multilocation01')
+        .locations.map((entry) => [entry.machineId, entry.rootPath]),
+      [
+        [local.machineId, firstRoot.rootPath],
+        [candidate.machine.machineId, location.rootPath],
+      ].sort(([left], [right]) => left.localeCompare(right)),
+    )
+    assert.equal(
+      reopened.countProjectLocationsForMachine(candidate.machine.machineId),
+      1,
     )
     reopened.close()
   })

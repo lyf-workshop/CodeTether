@@ -18,7 +18,10 @@ import {
 } from '@codetether/ui'
 import type { MachineSummary, ProjectRecord } from '@codetether/protocol'
 
-import { soleProjectLocation } from '../../runtime/host/project-location'
+import {
+  projectHasAvailableLocation,
+  type ProjectLocation,
+} from '../../runtime/host/project-location'
 import { ProjectAvailabilityBadge } from './project-availability-badge'
 import {
   compactProjectPath,
@@ -32,14 +35,23 @@ interface ProjectRowProps {
     returnFocusTarget: HTMLElement | null,
   ) => void
   project: ProjectRecord
-  machine?: MachineSummary
+  machines?: readonly MachineSummary[]
 }
 
-export function ProjectRow({ machine, onRemove, project }: ProjectRowProps) {
+export function ProjectRow({
+  machines = [],
+  onRemove,
+  project,
+}: ProjectRowProps) {
   const menuTriggerRef = useRef<HTMLButtonElement>(null)
   const initial = Array.from(project.name)[0]?.toLocaleUpperCase('zh-CN') ?? 'P'
-  const location = soleProjectLocation(project)
-  const availability = location?.availability ?? 'unavailable'
+  const location = primaryProjectLocation(project.locations)
+  const availability = projectHasAvailableLocation(project)
+    ? 'available'
+    : 'unavailable'
+  const primaryMachine = machines.find(
+    (candidate) => candidate.machineId === location?.machineId,
+  )
 
   return (
     <article
@@ -95,13 +107,18 @@ export function ProjectRow({ machine, onRemove, project }: ProjectRowProps) {
             <Folder aria-hidden="true" className="size-3.5" />
             已授权的工作区
           </span>
-          {machine === undefined ? null : (
+          {primaryMachine === undefined ? null : (
             <MachineBadge
-              name={machine.displayName}
-              title={machine.displayName}
+              name={primaryMachine.displayName}
+              title={primaryMachine.displayName}
               className="h-6"
             />
           )}
+          {project.locations.length > 1 ? (
+            <span className="text-xs text-text-muted">
+              共 {project.locations.length} 个位置
+            </span>
+          ) : null}
           <time dateTime={project.updatedAt}>
             更新于 {formatProjectTime(project.updatedAt)}
           </time>
@@ -153,5 +170,14 @@ export function ProjectRow({ machine, onRemove, project }: ProjectRowProps) {
         </DropdownMenu>
       </div>
     </article>
+  )
+}
+
+function primaryProjectLocation(
+  locations: readonly ProjectLocation[],
+): ProjectLocation | undefined {
+  return (
+    locations.find((location) => location.availability === 'available') ??
+    locations[0]
   )
 }

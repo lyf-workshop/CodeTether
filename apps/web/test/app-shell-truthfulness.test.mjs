@@ -77,17 +77,27 @@ test('Conversation shell hides unsupported controls and keeps long identities bo
 })
 
 test('Project detail keeps implementation identity out of its primary surface', async () => {
-  const source = await readFile(
-    new URL(
-      '../src/components/projects/project-detail-page.tsx',
-      import.meta.url,
+  const [source, locations] = await Promise.all([
+    readFile(
+      new URL(
+        '../src/components/projects/project-detail-page.tsx',
+        import.meta.url,
+      ),
+      'utf8',
     ),
-    'utf8',
-  )
+    readFile(
+      new URL(
+        '../src/components/projects/project-locations-section.tsx',
+        import.meta.url,
+      ),
+      'utf8',
+    ),
+  ])
 
   assert.doesNotMatch(source, /label="项目标识"/u)
-  assert.match(source, /compactProjectPath\(rootPath\)/u)
-  assert.match(source, /projectFolderName\(rootPath\)/u)
-  assert.match(source, /label="运行位置"/u)
-  assert.match(source, /复制完整路径/u)
+  assert.match(source, /<ProjectLocationsSection/u)
+  assert.match(locations, /compactProjectPath\(location\.rootPath\)/u)
+  assert.match(locations, /projectFolderName\(location\.rootPath\)/u)
+  assert.match(locations, /project\.locations\.map/u)
+  assert.match(locations, /复制完整路径/u)
 })

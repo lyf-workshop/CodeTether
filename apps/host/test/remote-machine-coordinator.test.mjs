@@ -32,6 +32,9 @@ async function fixture(options = {}) {
   let beginCalls = 0
   let connectCalls = 0
   let revokeCalls = 0
+  let validateCalls = 0
+  let activeValidations = 0
+  let maximumActiveValidations = 0
   const attemptedEndpoints = []
   const connections = []
   const transport = {
@@ -89,6 +92,30 @@ async function fixture(options = {}) {
             throw options.revokeError
           }
         },
+        async validateProjectLocation(rootPath) {
+          validateCalls += 1
+          activeValidations += 1
+          maximumActiveValidations = Math.max(
+            maximumActiveValidations,
+            activeValidations,
+          )
+          try {
+            if (options.validationError !== undefined) {
+              throw options.validationError
+            }
+            if (options.validationHandler !== undefined) {
+              return await options.validationHandler(rootPath)
+            }
+            return {
+              canonicalPath: rootPath,
+              basename: 'project',
+              exists: true,
+              directory: true,
+            }
+          } finally {
+            activeValidations -= 1
+          }
+        },
         close() {},
       }
       connections.push(connection)
@@ -110,6 +137,12 @@ async function fixture(options = {}) {
       get revoke() {
         return revokeCalls
       },
+      get validate() {
+        return validateCalls
+      },
+      get maximumActiveValidations() {
+        return maximumActiveValidations
+      },
     },
     attemptedEndpoints,
     async close(coordinator) {
@@ -119,6 +152,110 @@ async function fixture(options = {}) {
     },
   }
 }
+
+test('serializes purpose-specific ProjectLocation validation and keeps pinned trust healthy on path errors', async () => {
+  let releaseFirstValidation
+  const firstValidationGate = new Promise((resolve) => {
+    releaseFirstValidation = resolve
+  })
+  let gateFirstValidation = true
+  const options = {
+    async validationHandler(rootPath) {
+      if (gateFirstValidation) {
+        gateFirstValidation = false
+        await firstValidationGate
+      }
+      return {
+        canonicalPath: rootPath,
+        basename: 'workspace',
+        exists: true,
+        directory: true,
+      }
+    },
+  }
+  const f = await fixture(options)
+  let coordinator
+  try {
+    coordinator = await SecureRemoteMachineCoordinator.create({
+      persistence: f.store,
+      transport: f.transport,
+      heartbeatIntervalMs: 1_000,
+      reconnectMaximumDelayMs: 20,
+    })
+    const candidate = await coordinator.beginPairing({
+      address: { host: '172.20.1.30', port: 4319 },
+      pairingCode: '123456',
+    })
+    const confirmed = await coordinator.confirmPairing(
+      candidate.pairingAttemptId,
+      (staged) =>
+        f.store.createRemoteMachineWithTrust(staged.machine, staged.trust),
+    )
+    f.store.activateTrustedMachinePeer(
+      confirmed.machine.machineId,
+      new Date().toISOString(),
+    )
+    await waitFor(
+      () =>
+        coordinator.connectionState(confirmed.machine.machineId) === 'online',
+      'trusted worker connection',
+    )
+    const machine = f.store.getMachine(confirmed.machine.machineId)
+    const trust = f.store.getTrustedMachinePeer(confirmed.machine.machineId)
+    assert.ok(machine)
+    assert.ok(trust)
+
+    const first = coordinator.validateProjectLocation(
+      machine,
+      trust,
+      '/srv/projects/workspace',
+    )
+    await waitFor(() => f.counts.validate === 1, 'first validation')
+    const second = coordinator.validateProjectLocation(
+      machine,
+      trust,
+      '/srv/projects/workspace-two',
+    )
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.equal(f.counts.validate, 1)
+    assert.equal(f.counts.maximumActiveValidations, 1)
+    releaseFirstValidation()
+    assert.equal((await first).canonicalPath, '/srv/projects/workspace')
+    assert.equal((await second).canonicalPath, '/srv/projects/workspace-two')
+    assert.equal(f.counts.validate, 2)
+    assert.equal(f.counts.maximumActiveValidations, 1)
+
+    options.validationError = new MachineTransportError(
+      'project_location_missing',
+      'controlled missing path',
+      { peerAuthenticated: true },
+    )
+    await assert.rejects(
+      coordinator.validateProjectLocation(
+        machine,
+        f.store.getTrustedMachinePeer(confirmed.machine.machineId),
+        '/srv/projects/missing',
+      ),
+      (error) => error.code === 'project_location_missing',
+    )
+    assert.equal(
+      f.store.getTrustedMachinePeer(confirmed.machine.machineId)?.trustState,
+      'active',
+    )
+    assert.equal(
+      coordinator.connectionState(confirmed.machine.machineId),
+      'online',
+    )
+    assert.deepEqual(
+      f.store
+        .getTrustedMachinePeer(confirmed.machine.machineId)
+        ?.endpoints.map((endpoint) => endpoint.address),
+      [{ host: '172.20.1.30', port: 4319 }],
+    )
+  } finally {
+    await f.close(coordinator)
+  }
+})
 
 async function waitFor(predicate, label) {
   const deadline = Date.now() + 2_000

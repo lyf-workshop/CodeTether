@@ -7,17 +7,27 @@ import {
   ProjectLocationSchema,
   ProjectRecordSchema,
   type MachineId,
+  type MachineAvailability,
   type ProjectId,
   type ProjectRecord,
   type Timestamp,
 } from '@codetether/protocol'
 
-import { ConversationStore, type DurableProject } from '../persistence/index.js'
+import {
+  ConversationStore,
+  ProjectLocationConflictError,
+  type DurableProject,
+  type DurableProjectLocation,
+} from '../persistence/index.js'
 import { normalizeTrustedProjectRoot } from '../project-path.js'
 import { WorkspacePolicy, WorkspacePolicyError } from './workspace-policy.js'
 
 export type ProjectRegistryErrorCode =
-  'invalid_path' | 'not_found' | 'has_conversations' | 'unavailable'
+  | 'invalid_path'
+  | 'not_found'
+  | 'has_conversations'
+  | 'unavailable'
+  | 'location_conflict'
 
 export class ProjectRegistryError extends Error {
   constructor(
@@ -34,6 +44,7 @@ interface ProjectRegistryOptions {
   readonly persistence?: ConversationStore
   readonly now: () => Timestamp
   readonly localMachineId: MachineId
+  readonly machineAvailability?: (machineId: MachineId) => MachineAvailability
   readonly writeDurable: (operation: () => void) => void
   readonly hasRuntimeConversations: (projectId: ProjectId) => boolean
 }
@@ -50,6 +61,7 @@ export class ProjectRegistry {
   readonly #persistence?: ConversationStore
   readonly #now: () => Timestamp
   readonly #localMachineId: MachineId
+  readonly #machineAvailability?: (machineId: MachineId) => MachineAvailability
   readonly #writeDurable: (operation: () => void) => void
   readonly #hasRuntimeConversations: (projectId: ProjectId) => boolean
   readonly #projects = new Map<ProjectId, DurableProject>()
@@ -61,6 +73,7 @@ export class ProjectRegistry {
     this.#persistence = options.persistence
     this.#now = options.now
     this.#localMachineId = MachineIdSchema.parse(options.localMachineId)
+    this.#machineAvailability = options.machineAvailability
     this.#writeDurable = options.writeDurable
     this.#hasRuntimeConversations = options.hasRuntimeConversations
     for (const project of options.persistence?.listProjects() ?? []) {
@@ -98,14 +111,16 @@ export class ProjectRegistry {
     const project: DurableProject = {
       projectId,
       name: normalizedProjectName(name, rootPath),
-      location: {
-        projectId,
-        machineId: this.#localMachineId,
-        rootPath,
-        rootPathKey,
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      },
+      locations: [
+        {
+          projectId,
+          machineId: this.#localMachineId,
+          rootPath,
+          rootPathKey,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+      ],
       createdAt: timestamp,
       updatedAt: timestamp,
     }
@@ -135,13 +150,15 @@ export class ProjectRegistry {
     const id = MachineIdSchema.parse(machineId)
     return await Promise.all(
       [...this.#projects.values()]
-        .filter((project) => project.location.machineId === id)
+        .filter((project) =>
+          project.locations.some((location) => location.machineId === id),
+        )
         .sort(
           (left, right) =>
             right.updatedAt.localeCompare(left.updatedAt) ||
             left.projectId.localeCompare(right.projectId),
         )
-        .map(async (project) => await this.#record(project)),
+        .map(async (project) => await this.#record(project, id)),
     )
   }
 
@@ -158,6 +175,82 @@ export class ProjectRegistry {
     return project
   }
 
+  async registerRemoteLocation(
+    projectId: ProjectId,
+    machineId: MachineId,
+    canonicalPath: string,
+  ): Promise<{
+    readonly project: ProjectRecord
+    readonly location: DurableProjectLocation
+    readonly created: boolean
+  }> {
+    const project = this.require(projectId)
+    const machine = MachineIdSchema.parse(machineId)
+    if (machine === this.#localMachineId) {
+      throw new ProjectRegistryError(
+        'location_conflict',
+        'The local Project location is already registered',
+      )
+    }
+    if (this.#persistence === undefined) {
+      throw new ProjectRegistryError(
+        'unavailable',
+        'Durable Project locations are unavailable',
+      )
+    }
+    const timestamp = this.#now()
+    const remoteRoot = normalizeTrustedProjectRoot(
+      canonicalPath,
+      canonicalPath.startsWith('/') ? 'linux' : 'win32',
+    )
+    const candidate: DurableProjectLocation = {
+      projectId: project.projectId,
+      machineId: machine,
+      rootPath: remoteRoot.rootPath,
+      // The authenticated Node has already resolved this exact path. Unlike a
+      // local Windows path, the Controller must not reinterpret its case or
+      // separators using the Controller's operating system.
+      rootPathKey: remoteRoot.rootPathKey,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    }
+    let result:
+      | {
+          readonly location: DurableProjectLocation
+          readonly created: boolean
+        }
+      | undefined
+    try {
+      this.#writeDurable(() => {
+        result = this.#persistence?.createProjectLocation(candidate)
+      })
+    } catch (error) {
+      if (error instanceof ProjectLocationConflictError) {
+        throw new ProjectRegistryError('location_conflict', error.message)
+      }
+      throw error
+    }
+    if (result === undefined) {
+      throw new Error(
+        'Durable Project location registration produced no result',
+      )
+    }
+    if (result.created) {
+      const updated: DurableProject = {
+        ...project,
+        locations: [...project.locations, result.location].sort((left, right) =>
+          left.machineId.localeCompare(right.machineId),
+        ),
+      }
+      this.#replace(updated)
+    }
+    return {
+      project: await this.get(project.projectId),
+      location: result.location,
+      created: result.created,
+    }
+  }
+
   async authorizeConversation(
     projectId: ProjectId,
     machineId: MachineId,
@@ -165,18 +258,27 @@ export class ProjectRegistry {
   ): Promise<{ readonly project: DurableProject; readonly cwd: string }> {
     const project = this.require(projectId)
     const machine = MachineIdSchema.parse(machineId)
-    if (project.location.machineId !== machine) {
+    const location = project.locations.find(
+      (candidate) => candidate.machineId === machine,
+    )
+    if (location === undefined) {
       throw new ProjectRegistryError(
         'unavailable',
         'Project has no authorized location on the selected Machine',
+      )
+    }
+    if (machine !== this.#localMachineId) {
+      throw new ProjectRegistryError(
+        'unavailable',
+        'Agent execution is not available on this Machine',
       )
     }
     try {
       return {
         project,
         cwd: await this.#workspacePolicy.authorizeProjectWorkspace(
-          project.location.rootPath,
-          cwd ?? project.location.rootPath,
+          location.rootPath,
+          cwd ?? location.rootPath,
         ),
       }
     } catch (error) {
@@ -203,7 +305,7 @@ export class ProjectRegistry {
         machineId,
         cwd,
       )
-      return { ...workspace, machineId: project.location.machineId, release }
+      return { ...workspace, machineId, release }
     } catch (error) {
       release()
       throw error
@@ -221,28 +323,35 @@ export class ProjectRegistry {
     const matches: Array<{
       readonly project: DurableProject
       readonly cwd: string
+      readonly rootPathLength: number
     }> = []
     const machine = MachineIdSchema.parse(machineId)
+    if (machine !== this.#localMachineId) {
+      throw new ProjectRegistryError(
+        'unavailable',
+        'Legacy workspace selection is available only on the local Machine',
+      )
+    }
     for (const project of this.#projects.values()) {
-      if (project.location.machineId !== machine) continue
+      const location = project.locations.find(
+        (candidate) => candidate.machineId === machine,
+      )
+      if (location === undefined) continue
       try {
         matches.push({
           project,
           cwd: await this.#workspacePolicy.authorizeProjectWorkspace(
-            project.location.rootPath,
+            location.rootPath,
             cwd,
           ),
+          rootPathLength: location.rootPath.length,
         })
       } catch (error) {
         if (error instanceof WorkspacePolicyError) continue
         throw error
       }
     }
-    matches.sort(
-      (left, right) =>
-        right.project.location.rootPath.length -
-        left.project.location.rootPath.length,
-    )
+    matches.sort((left, right) => right.rootPathLength - left.rootPathLength)
     const match = matches[0]
     if (match === undefined) {
       throw new ProjectRegistryError(
@@ -267,7 +376,7 @@ export class ProjectRegistry {
       )
       return {
         ...workspace,
-        machineId: match.project.location.machineId,
+        machineId,
         release,
       }
     } catch (error) {
@@ -298,9 +407,11 @@ export class ProjectRegistry {
       }
     })
     this.#projects.delete(project.projectId)
-    this.#projectIdsByLocationKey.delete(
-      locationKey(project.location.machineId, project.location.rootPathKey),
-    )
+    for (const location of project.locations) {
+      this.#projectIdsByLocationKey.delete(
+        locationKey(location.machineId, location.rootPathKey),
+      )
+    }
     return project.projectId
   }
 
@@ -330,37 +441,69 @@ export class ProjectRegistry {
   }
 
   #retain(project: DurableProject): void {
-    const key = locationKey(
-      project.location.machineId,
-      project.location.rootPathKey,
-    )
-    if (
-      this.#projects.has(project.projectId) ||
-      this.#projectIdsByLocationKey.has(key)
-    ) {
+    if (this.#projects.has(project.projectId)) {
       throw new Error('Durable Project identity is duplicated')
     }
+    for (const location of project.locations) {
+      const key = locationKey(location.machineId, location.rootPathKey)
+      if (this.#projectIdsByLocationKey.has(key)) {
+        throw new Error('Durable Project location identity is duplicated')
+      }
+    }
     this.#projects.set(project.projectId, project)
-    this.#projectIdsByLocationKey.set(key, project.projectId)
+    for (const location of project.locations) {
+      this.#projectIdsByLocationKey.set(
+        locationKey(location.machineId, location.rootPathKey),
+        project.projectId,
+      )
+    }
   }
 
-  async #record(project: DurableProject): Promise<ProjectRecord> {
-    const availability = await this.#workspacePolicy.inspectProjectRoot(
-      project.location.rootPath,
-    )
+  #replace(project: DurableProject): void {
+    const existing = this.#projects.get(project.projectId)
+    if (existing === undefined) {
+      throw new ProjectRegistryError('not_found', 'Project was not found')
+    }
+    for (const location of existing.locations) {
+      this.#projectIdsByLocationKey.delete(
+        locationKey(location.machineId, location.rootPathKey),
+      )
+    }
+    this.#projects.delete(project.projectId)
+    this.#retain(project)
+  }
+
+  async #record(
+    project: DurableProject,
+    onlyMachineId?: MachineId,
+  ): Promise<ProjectRecord> {
+    const locations =
+      onlyMachineId === undefined
+        ? project.locations
+        : project.locations.filter(
+            (location) => location.machineId === onlyMachineId,
+          )
     return ProjectRecordSchema.parse({
       projectId: project.projectId,
       name: project.name,
-      locations: [
-        ProjectLocationSchema.parse({
-          projectId: project.projectId,
-          machineId: project.location.machineId,
-          rootPath: project.location.rootPath,
-          availability,
-          createdAt: project.location.createdAt,
-          updatedAt: project.location.updatedAt,
-        }),
-      ],
+      locations: await Promise.all(
+        locations.map(async (location) =>
+          ProjectLocationSchema.parse({
+            projectId: project.projectId,
+            machineId: location.machineId,
+            rootPath: location.rootPath,
+            availability:
+              location.machineId === this.#localMachineId
+                ? await this.#workspacePolicy.inspectProjectRoot(
+                    location.rootPath,
+                  )
+                : (this.#machineAvailability?.(location.machineId) ??
+                  'unavailable'),
+            createdAt: location.createdAt,
+            updatedAt: location.updatedAt,
+          }),
+        ),
+      ),
       createdAt: project.createdAt,
       updatedAt: project.updatedAt,
     })

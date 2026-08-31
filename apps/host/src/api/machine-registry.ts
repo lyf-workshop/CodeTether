@@ -214,7 +214,10 @@ export class MachineRegistry {
       createdAt: machine.createdAt,
       lastSeenAt: machine.lastSeenAt,
       capabilities: {
-        projectAccess: false,
+        // Phase 6B.3 admits only purpose-specific ProjectLocation
+        // registration/reads. This does not imply remote filesystem access or
+        // Provider execution.
+        projectAccess: true,
         providerExecution: false,
         backgroundRuntime: false,
         nativeFolderPicker: false,

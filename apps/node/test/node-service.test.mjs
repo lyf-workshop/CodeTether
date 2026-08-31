@@ -1,5 +1,13 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -14,6 +22,7 @@ import {
 
 import { parseNodeCli, runNode } from '../dist/main.js'
 import { CodeTetherNodeService } from '../dist/node-service.js'
+import { validateProjectLocationPath } from '../dist/project-location-validation.js'
 import { NodeStateStore } from '../dist/state-store.js'
 
 async function controller(controllerId = newControllerId()) {
@@ -129,6 +138,101 @@ test('real loopback pairing, staged trust recovery, restart, ping, and unpair', 
     await running?.service.close().catch(() => undefined)
     await rm(directory, { recursive: true, force: true })
   }
+})
+
+test('trusted Project Location validation canonicalizes only existing directories', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'codetether-node-'))
+  const workspace = join(directory, '项目 with spaces')
+  const linkedWorkspace = join(directory, 'workspace-link')
+  const file = join(directory, 'not-a-directory.txt')
+  const localController = await controller()
+  let running
+  let connected
+  try {
+    await mkdir(join(workspace, 'nested'), { recursive: true })
+    await writeFile(file, 'not returned by the Node', 'utf8')
+    await symlink(
+      workspace,
+      linkedWorkspace,
+      process.platform === 'win32' ? 'junction' : 'dir',
+    )
+    running = await startNode(join(directory, 'node-state'))
+    const mode = await running.service.enablePairing()
+    const pending = await beginRemoteMachinePairing({
+      endpoint: running.endpoint,
+      pairingCode: mode.code,
+      controller: localController,
+    })
+    const trusted = await pending.confirm()
+    connected = await connectTrustedRemoteMachine({
+      peer: trusted,
+      controller: localController,
+    })
+
+    const expectedCanonicalPath = await realpath(workspace)
+    assert.deepEqual(await connected.validateProjectLocation(workspace), {
+      canonicalPath: expectedCanonicalPath,
+      basename: '项目 with spaces',
+      exists: true,
+      directory: true,
+    })
+    assert.deepEqual(await connected.validateProjectLocation(linkedWorkspace), {
+      canonicalPath: expectedCanonicalPath,
+      basename: '项目 with spaces',
+      exists: true,
+      directory: true,
+    })
+    await assert.rejects(
+      connected.validateProjectLocation(join(directory, 'missing')),
+      (error) =>
+        error.code === 'project_location_missing' &&
+        error.peerAuthenticated === true,
+    )
+    await assert.rejects(
+      connected.validateProjectLocation(file),
+      (error) =>
+        error.code === 'project_location_not_directory' &&
+        error.peerAuthenticated === true,
+    )
+    await assert.rejects(
+      connected.validateProjectLocation('relative/project'),
+      (error) => error.code === 'project_location_path_invalid',
+    )
+    await assert.rejects(
+      connected.validateProjectLocation(`/${'界'.repeat(1_400)}`),
+      (error) => error.code === 'project_location_path_invalid',
+    )
+
+    connected.machine.nodeId = 'node_wrong_identity'
+    await assert.rejects(
+      connected.validateProjectLocation(workspace),
+      (error) =>
+        error.code === 'identity_mismatch' && error.peerAuthenticated === true,
+    )
+  } finally {
+    connected?.close()
+    await running?.service.close().catch(() => undefined)
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('Project Location validation maps inaccessible paths without leaking filesystem errors', async () => {
+  const denied = Object.assign(new Error('secret operating-system detail'), {
+    code: 'EACCES',
+  })
+  await assert.rejects(
+    validateProjectLocationPath(resolve('unreadable'), {
+      realpath: async () => {
+        throw denied
+      },
+      stat: async () => {
+        throw new Error('must not stat after failed realpath')
+      },
+    }),
+    (error) =>
+      error.code === 'project_location_inaccessible' &&
+      !error.message.includes('secret'),
+  )
 })
 
 test('wrong codes are rejected while the correct one remains usable until the bound limit', async () => {

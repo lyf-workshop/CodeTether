@@ -26,6 +26,8 @@ import {
   CreateConversationResponseSchema,
   CreateProjectRequestSchema,
   CreateProjectResponseSchema,
+  RegisterProjectLocationRequestSchema,
+  RegisterProjectLocationResponseSchema,
   DeleteProjectRequestSchema,
   DeleteProjectResponseSchema,
   GetConversationResponseSchema,
@@ -413,6 +415,34 @@ export class LocalHttpServer {
           ConversationListResponseSchema.parse(
             await this.#service.listProjectConversations(projectId, query),
           ),
+          context.allowedOrigin,
+        )
+        return
+      }
+
+      const projectLocationsRoute = this.#http.matchPath(
+        url.pathname,
+        /^\/api\/v1\/projects\/([^/]+)\/locations$/u,
+      )
+      if (request.method === 'POST' && projectLocationsRoute !== undefined) {
+        const projectId = this.#http.parseRouteId(
+          ProjectIdSchema,
+          projectLocationsRoute[0],
+          'projectId',
+        )
+        const body = await this.#http.readValidatedBody(
+          request,
+          RegisterProjectLocationRequestSchema,
+        )
+        context.actionId = body.actionId
+        const result = await this.#service.registerProjectLocation(
+          projectId,
+          body,
+        )
+        this.#http.writeJson(
+          response,
+          result.data.created ? 201 : 200,
+          RegisterProjectLocationResponseSchema.parse(result),
           context.allowedOrigin,
         )
         return

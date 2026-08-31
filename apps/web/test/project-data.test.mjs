@@ -48,9 +48,17 @@ test('HostRuntime exposes thin Project reads and owns mutation action IDs', asyn
     projectA.projectId,
   )
   await runtime.createProject('C:\\workspaces\\alpha', 'Alpha')
+  await runtime.registerProjectLocation(projectA.projectId, {
+    machineId: 'machine_remote01',
+    rootPath: '/srv/alpha',
+  })
   await runtime.deleteProject(projectA.projectId)
 
   assert.match(client.createCalls[0].actionId, /^act_[A-Za-z0-9_-]{6,95}$/u)
+  assert.match(
+    client.locationCalls[0].request.actionId,
+    /^act_[A-Za-z0-9_-]{6,95}$/u,
+  )
   assert.match(
     client.deleteCalls[0].request.actionId,
     /^act_[A-Za-z0-9_-]{6,95}$/u,
@@ -235,6 +243,72 @@ test('blank Project paths fail before generating an action or calling the Host',
   assert.equal(client.createCalls.length, 0)
 })
 
+test('ProjectLocation registration is exact, deduplicated, and refreshes Project and Machine truth', async () => {
+  const deferred = createDeferred()
+  const client = new FakeProjectClient({
+    location: () => deferred.promise,
+  })
+  const queryClient = createQueryClient()
+  queryClient.setQueryData(projectQueryKeys.list, [projectA])
+  queryClient.setQueryData(
+    projectQueryKeys.detail(projectA.projectId),
+    projectA,
+  )
+  queryClient.setQueryData(['host', 'machines', 'detail', 'machine_remote01'], {
+    stale: true,
+  })
+  const actions = new ProjectActions(client, idFactory(), queryClient)
+  const input = {
+    machineId: 'machine_remote01',
+    rootPath: '  /srv/项目 alpha  ',
+  }
+
+  const first = actions.registerProjectLocation(projectA.projectId, input)
+  const duplicate = actions.registerProjectLocation(projectA.projectId, input)
+  assert.strictEqual(first, duplicate)
+  assert.equal(client.locationCalls.length, 1)
+  assert.deepEqual(client.locationCalls[0], {
+    projectId: projectA.projectId,
+    request: {
+      actionId: 'act_project_001',
+      machineId: 'machine_remote01',
+      path: '/srv/项目 alpha',
+    },
+  })
+
+  const location = {
+    projectId: projectA.projectId,
+    machineId: 'machine_remote01',
+    rootPath: '/srv/项目 alpha',
+    availability: 'available',
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  }
+  const updated = { ...projectA, locations: [...projectA.locations, location] }
+  deferred.resolve(
+    registerLocationResponse('act_project_001', updated, location),
+  )
+  await first
+
+  assert.deepEqual(
+    queryClient.getQueryData(projectQueryKeys.detail(projectA.projectId)),
+    updated,
+  )
+  assert.equal(
+    queryClient.getQueryState(projectQueryKeys.list).isInvalidated,
+    true,
+  )
+  assert.equal(
+    queryClient.getQueryState([
+      'host',
+      'machines',
+      'detail',
+      'machine_remote01',
+    ]).isInvalidated,
+    true,
+  )
+})
+
 test('browser Project action IDs are valid and unique', () => {
   const ids = Array.from({ length: 64 }, () => createBrowserActionId())
   assert.equal(new Set(ids).size, ids.length)
@@ -330,6 +404,7 @@ class FakeProjectClient {
     this.getCalls = []
     this.createCalls = []
     this.deleteCalls = []
+    this.locationCalls = []
   }
 
   async listProjects(options = {}) {
@@ -368,6 +443,29 @@ class FakeProjectClient {
       Promise.resolve(deleteResponse(request.actionId, projectId))
     )
   }
+
+  registerProjectLocation(projectId, request) {
+    const call = { projectId, request }
+    this.locationCalls.push(call)
+    const location = {
+      projectId,
+      machineId: request.machineId,
+      rootPath: request.path,
+      availability: 'available',
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    }
+    return (
+      this.implementations.location?.(call) ??
+      Promise.resolve(
+        registerLocationResponse(
+          request.actionId,
+          { ...projectA, locations: [...projectA.locations, location] },
+          location,
+        ),
+      )
+    )
+  }
 }
 
 function project(projectId, name, rootPath, availability = 'available') {
@@ -404,6 +502,15 @@ function deleteResponse(actionId, projectId) {
     actionId,
     status: 'completed',
     data: { projectId },
+  }
+}
+
+function registerLocationResponse(actionId, project, location) {
+  return {
+    protocolVersion: 1,
+    actionId,
+    status: 'completed',
+    data: { project, location, created: true },
   }
 }
 

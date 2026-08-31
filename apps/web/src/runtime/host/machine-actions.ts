@@ -341,6 +341,8 @@ export function machineErrorMessage(
       return 'CodeTether 本地服务暂时不可用。'
     case 'unsupported':
       return '当前 CodeTether 版本不支持此机器操作。'
+    case 'machine_has_project_locations':
+      return '这台机器仍有关联项目位置，请先移除这些位置再取消配对。'
     case 'internal':
     case 'provider_error':
     case 'provider_not_installed':
@@ -351,6 +353,10 @@ export function machineErrorMessage(
     case 'provider_conversation_unavailable':
     case 'project_unavailable':
     case 'project_has_conversations':
+    case 'project_location_invalid':
+    case 'project_location_missing':
+    case 'project_location_inaccessible':
+    case 'project_location_conflict':
     case 'conversation_archived':
       return operation === 'unpair'
         ? 'CodeTether 未能取消机器配对。'

@@ -216,6 +216,26 @@ export function NewConversationDialog({
     selectedProjectLocation?.availability !== 'available'
   const noAvailableMachines =
     machinesQuery.isSuccess && candidateMachines.length === 0
+  const unavailableMachineExplanation = (() => {
+    if (currentProject === undefined || !noAvailableMachines) return undefined
+    const boundMachines = (machinesQuery.data ?? []).filter((machine) =>
+      currentProject.locations.some(
+        (location) => location.machineId === machine.machineId,
+      ),
+    )
+    if (
+      boundMachines.some(
+        (machine) =>
+          machine.kind === 'remote' && !machine.capabilities.providerExecution,
+      )
+    ) {
+      return '此项目已有远程工作区位置，但当前版本尚不支持在远程机器上执行智能体会话。'
+    }
+    if (boundMachines.some((machine) => machine.availability !== 'available')) {
+      return '此项目的工作区位置所在机器当前离线或不可用。恢复连接后再创建会话。'
+    }
+    return '当前没有可执行此项目智能体会话的机器。'
+  })()
   const noAvailableProjects =
     currentProject === undefined &&
     projectsQuery.isSuccess &&
@@ -600,7 +620,10 @@ export function NewConversationDialog({
               </InlineNotice>
             ) : null}
             {noAvailableMachines ? (
-              <InlineNotice>当前没有可用于此项目的机器。</InlineNotice>
+              <InlineNotice>
+                {unavailableMachineExplanation ??
+                  '当前没有可执行此项目智能体会话的机器。'}
+              </InlineNotice>
             ) : null}
             {hostUnavailable ? (
               <InlineNotice>

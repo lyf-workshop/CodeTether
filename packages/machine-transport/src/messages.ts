@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-import { machineProtocolVersion } from './constants.js'
+import { machineProtocolVersion, machineTransportLimits } from './constants.js'
 import {
   ControllerIdSchema,
   MachineTransportMachineIdSchema,
@@ -17,6 +17,26 @@ const TimestampSchema = z.iso.datetime({ offset: true })
 const BoundedOpaqueEnvelopeSchema = z.string().min(1).max(4096)
 const NonceSchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/)
 const AuthenticationTagSchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/)
+
+export const RemoteProjectLocationPathSchema = z
+  .string()
+  .min(1)
+  .max(machineTransportLimits.maximumProjectLocationPathBytes)
+  .refine((value) => !value.includes('\0'))
+  .refine(
+    (value) =>
+      Buffer.byteLength(value, 'utf8') <=
+      machineTransportLimits.maximumProjectLocationPathBytes,
+  )
+export type RemoteProjectLocationPath = z.infer<
+  typeof RemoteProjectLocationPathSchema
+>
+
+const RemoteProjectLocationBasenameSchema = z
+  .string()
+  .min(1)
+  .max(512)
+  .refine((value) => !value.includes('\0'))
 
 export const RemoteMachineMetadataSchema = z
   .object({
@@ -174,6 +194,37 @@ export const MachinePongMessageSchema = z
   .strict()
 export type MachinePongMessage = z.infer<typeof MachinePongMessageSchema>
 
+export const ProjectLocationValidateMessageSchema = z
+  .object({
+    type: z.literal('project_location.validate'),
+    protocolVersion: VersionField,
+    requestId: NonceSchema,
+    expectedMachineId: MachineTransportMachineIdSchema,
+    expectedNodeId: NodeIdSchema,
+    rootPath: RemoteProjectLocationPathSchema,
+  })
+  .strict()
+export type ProjectLocationValidateMessage = z.infer<
+  typeof ProjectLocationValidateMessageSchema
+>
+
+export const ProjectLocationValidatedMessageSchema = z
+  .object({
+    type: z.literal('project_location.validated'),
+    protocolVersion: VersionField,
+    requestId: NonceSchema,
+    machineId: MachineTransportMachineIdSchema,
+    nodeId: NodeIdSchema,
+    canonicalPath: RemoteProjectLocationPathSchema,
+    basename: RemoteProjectLocationBasenameSchema,
+    exists: z.literal(true),
+    directory: z.literal(true),
+  })
+  .strict()
+export type ProjectLocationValidatedMessage = z.infer<
+  typeof ProjectLocationValidatedMessageSchema
+>
+
 export const TrustRevokeMessageSchema = z
   .object({
     type: z.literal('trust.revoke'),
@@ -204,6 +255,10 @@ export const MachineWireErrorCodeSchema = z.enum([
   'protocol_incompatible',
   'busy',
   'malformed_message',
+  'project_location_path_invalid',
+  'project_location_missing',
+  'project_location_not_directory',
+  'project_location_inaccessible',
 ])
 export type MachineWireErrorCode = z.infer<typeof MachineWireErrorCodeSchema>
 
@@ -231,6 +286,8 @@ export const MachineWireMessageSchema = z.discriminatedUnion('type', [
   MachineStatusMessageSchema,
   MachinePingMessageSchema,
   MachinePongMessageSchema,
+  ProjectLocationValidateMessageSchema,
+  ProjectLocationValidatedMessageSchema,
   TrustRevokeMessageSchema,
   TrustRevokedMessageSchema,
   MachineErrorMessageSchema,

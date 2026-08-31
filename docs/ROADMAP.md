@@ -862,7 +862,7 @@ Implementation scope:
 Not included:
 
 - SSH, remote transport/control, pairing, trust exchange, LAN/mDNS discovery, relay, incoming listener, remote filesystem/Terminal/shell, port forwarding, synchronization, Wake-on-LAN, or fake remote Machine records.
-- Machine add/remove/rename, a second Project Location, Project relocation, moving an existing Conversation between Machines, resource monitoring, heartbeat/telemetry loops, or a third Provider.
+- At the Phase 6A exit: Machine add/remove/rename, a second Project Location, Project relocation, moving an existing Conversation between Machines, resource monitoring, heartbeat/telemetry loops, or a third Provider.
 
 Exit gate:
 
@@ -880,7 +880,7 @@ Exit gate:
 - A minimal independently launched Node with a durable random Machine identity and private cryptographic identity, explicit short-lived one-time pairing mode, clean shutdown, and no Provider/process child ownership.
 - Manual LAN address plus short-code pairing, PAKE-based proof, a separate presentation-safe Machine confirmation step, durable pinned peer trust, protocol-version negotiation, authenticated reconnect after either side restarts, and identity-mismatch failure without silent key replacement.
 - Transactional migration 009 preserves the accepted local Machine and complete Project/Conversation graph while admitting bounded remote Machine records plus private trust metadata. Pairing codes, reusable bearer tokens, private keys, handshake transcripts, process identity, and Provider identities remain absent from public Machine data.
-- `/machines` and `/machines/:machineId` truthfully show local and paired remote Machines, authenticated online/offline/authentication/incompatible state, safe platform/architecture/name metadata, and explicit online unpair. Remote capabilities remain false; Provider/Project/Conversation sections remain empty rather than fabricated.
+- `/machines` and `/machines/:machineId` truthfully show local and paired remote Machines, authenticated online/offline/authentication/incompatible state, safe platform/architecture/name metadata, and explicit online unpair. At the Phase 6B.1 exit, remote capabilities remain false and Provider/Project/Conversation sections remain empty rather than fabricated.
 - Strict bounded Host ↔ Node framing, TLS encryption, authenticated identity, attempt/rate/connection/timeout limits, bounded heartbeat/backoff, log redaction, application-private credential files (POSIX mode hardening and inherited Windows user-data ACLs), and no shell/filesystem/process/generic-RPC surface. Phase 6B.1 does not claim OS credential-vault storage.
 
 ### Out of scope
@@ -893,7 +893,7 @@ Exit gate:
 
 ## Phase 6B.2 — Secure Connection Recovery & Address Mobility
 
-**Status:** current approved implementation scope; not accepted or frozen.
+**Status:** accepted and frozen at `53e7c21`.
 
 **Goal:** let an already trusted remote Machine recover across an ordinary LAN endpoint change without making network location an identity or requiring unnecessary re-pairing.
 
@@ -911,6 +911,28 @@ Exit gate:
 ### Exit gate
 
 - A real trusted Node survives restart and address change as the same cryptographic Machine without re-pairing; a different Node at the same endpoint fails closed; endpoint history and workers remain bounded; installed Desktop restart, local behavior, Provider isolation, cleanup, tests, and clean build identity remain correct.
+
+## Phase 6B.3 — Remote ProjectLocation
+
+**Status:** current approved implementation scope; not accepted or frozen.
+
+**Goal:** let one logical Project own one durable canonical workspace Location on each trusted Machine without enabling remote execution or a general remote filesystem.
+
+### In scope
+
+- Reuse the existing version-10 `project_locations` schema and its composite Project/Machine identity; no SQLite migration is required. Host SQLite remains the only Project/Location product database, preserves every accepted local Location, and stores at most one Location for a Project on a Machine.
+- Strict Protocol v1 and typed Client list/register operations for presentation-safe Project Locations. Registration requires an active trusted online remote Machine, is idempotent for the same canonical path, rejects conflicting relocation or ambiguous cross-Project ownership, and keeps stored Locations readable while the Machine is offline.
+- One purpose-specific authenticated Host ↔ Node operation that accepts only a bounded absolute directory path, binds request/Machine/Node identity, resolves the operating system `realpath`, confirms an existing directory, and returns only its canonical path and basename. It is not a generic filesystem RPC and returns no listing, content, credentials, environment, ownership, or permission details.
+- Project Detail presents all real Locations and a bounded Add Location flow; remote Machine Detail presents logical Projects registered there. A trusted remote Machine advertises `projectAccess: true` and `providerExecution: false`, so New Conversation truthfully explains that remote Agent execution is unavailable.
+- Location persistence across Host/Desktop/Node restart and accepted address recovery. Reads and registration remain Provider-independent. Because this phase has no Location-removal operation, unpair is blocked while a Machine owns any Project Location rather than cascading or leaving dangling records.
+
+### Out of scope
+
+- Location removal/relocation, multi-root Locations on one Machine, Project discovery, remote Conversation/Turn/Provider execution, remote Provider detection, shell, Terminal, generic filesystem read/write/list/delete/stat, file or Git synchronization, Diff, Approval, Tool execution, SSH/SFTP/SCP, discovery shipment, relay, NAT traversal, public Internet access, or Machine switching.
+
+### Exit gate
+
+- A real trusted Node validates and registers the same logical Project's remote canonical directory; Project and Machine surfaces show exactly one correct row; restart, Node restart, offline reads, duplicate/conflict behavior, and unpair blocking preserve identity and durability; local Projects, Conversations, Codex/Claude, Search/organization/Attention, secure reconnect, background behavior, Provider isolation, cleanup, tests, and clean build identity remain correct.
 
 ## Phase 7 — Remote LAN / Tailscale
 

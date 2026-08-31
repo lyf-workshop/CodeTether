@@ -11,8 +11,10 @@ import {
   removeMachineQueries,
 } from '../.tmp/test-dist/runtime/host/machine-query.js'
 import {
+  availableProjectLocations,
   projectLocationAvailability,
   projectLocationForMachine,
+  projectHasAvailableLocation,
   projectLocationRootPath,
   soleProjectLocation,
 } from '../.tmp/test-dist/runtime/host/project-location.js'
@@ -127,6 +129,36 @@ test('Project locations select durable Machine identity without path inference',
   assert.equal(
     projectLocationForMachine(project, 'machine_unknown01'),
     undefined,
+  )
+})
+
+test('multi-Machine Projects aggregate availability without inventing a primary path', () => {
+  const localProject = machineDetail().projects[0]
+  const project = {
+    ...localProject,
+    locations: [
+      ...localProject.locations,
+      {
+        ...localProject.locations[0],
+        machineId: 'machine_remote01',
+        rootPath: '/srv/alpha',
+        availability: 'unavailable',
+      },
+    ],
+  }
+
+  assert.equal(soleProjectLocation(project), undefined)
+  assert.equal(projectLocationRootPath(project), undefined)
+  assert.equal(
+    projectLocationRootPath(project, machineId),
+    'C:\\workspaces\\alpha',
+  )
+  assert.equal(projectLocationAvailability(project), 'available')
+  assert.equal(projectHasAvailableLocation(project), true)
+  assert.deepEqual(availableProjectLocations(project), [project.locations[0]])
+  assert.equal(
+    projectLocationAvailability(project, 'machine_remote01'),
+    'unavailable',
   )
 })
 

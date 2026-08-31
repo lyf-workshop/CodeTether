@@ -22,6 +22,7 @@ import {
   TurnRecordSchema,
 } from './records.js'
 import {
+  ProjectLocationSchema,
   RemoteMachineConnectionSchema,
   MachineSummarySchema,
   RemoteMachineAddressSchema,
@@ -74,6 +75,23 @@ export const CreateProjectRequestSchema = z
   })
   .strict()
 export type CreateProjectRequest = z.infer<typeof CreateProjectRequestSchema>
+
+/**
+ * Registers one purpose-specific workspace location for an existing logical
+ * Project. The selected trusted Machine remains responsible for canonical
+ * path validation; callers cannot use this request as a generic filesystem
+ * operation.
+ */
+export const RegisterProjectLocationRequestSchema = z
+  .object({
+    actionId: ActionIdSchema,
+    machineId: MachineIdSchema,
+    path: z.string().trim().min(1).max(4096),
+  })
+  .strict()
+export type RegisterProjectLocationRequest = z.infer<
+  typeof RegisterProjectLocationRequestSchema
+>
 
 export const DeleteProjectRequestSchema = z
   .object({ actionId: ActionIdSchema })
@@ -473,6 +491,39 @@ export const CreateProjectDataSchema = z
   .strict()
 export type CreateProjectData = z.infer<typeof CreateProjectDataSchema>
 
+export const RegisterProjectLocationDataSchema = z
+  .object({
+    project: ProjectRecordSchema,
+    location: ProjectLocationSchema,
+    created: z.boolean(),
+  })
+  .strict()
+  .superRefine((data, context) => {
+    if (data.location.projectId !== data.project.projectId) {
+      context.addIssue({
+        code: 'custom',
+        message: 'ProjectLocation must belong to the returned Project',
+        path: ['location', 'projectId'],
+      })
+    }
+    const matchingLocations = data.project.locations.filter(
+      (location) => location.machineId === data.location.machineId,
+    )
+    if (
+      matchingLocations.length !== 1 ||
+      matchingLocations[0]?.rootPath !== data.location.rootPath
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Returned Project must contain the exact ProjectLocation',
+        path: ['project', 'locations'],
+      })
+    }
+  })
+export type RegisterProjectLocationData = z.infer<
+  typeof RegisterProjectLocationDataSchema
+>
+
 export const DeleteProjectDataSchema = z
   .object({ projectId: ProjectIdSchema })
   .strict()
@@ -537,6 +588,13 @@ export const CreateProjectResponseSchema = mutationResponseSchema(
   CreateProjectDataSchema,
 )
 export type CreateProjectResponse = z.infer<typeof CreateProjectResponseSchema>
+
+export const RegisterProjectLocationResponseSchema = mutationResponseSchema(
+  RegisterProjectLocationDataSchema,
+)
+export type RegisterProjectLocationResponse = z.infer<
+  typeof RegisterProjectLocationResponseSchema
+>
 
 export const DeleteProjectResponseSchema = mutationResponseSchema(
   DeleteProjectDataSchema,

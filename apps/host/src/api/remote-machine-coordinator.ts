@@ -35,6 +35,7 @@ import {
   type MachineControllerIdentity,
   type PendingRemoteMachinePairing,
   type TrustedRemotePeer,
+  type ValidatedRemoteProjectLocation,
 } from '@codetether/machine-transport'
 
 import type {
@@ -56,6 +57,10 @@ export type RemoteMachineCoordinatorErrorCode =
   | 'conflict'
   | 'protocol_incompatible'
   | 'connection_failed'
+  | 'project_location_path_invalid'
+  | 'project_location_missing'
+  | 'project_location_not_directory'
+  | 'project_location_inaccessible'
 
 export class RemoteMachineCoordinatorError extends Error {
   constructor(
@@ -118,6 +123,11 @@ export interface RemoteMachineCoordinator extends RemoteMachineStatusSource {
     trust: DurableTrustedMachinePeer,
     address: RemoteMachineAddress,
   ): Promise<RemoteMachineConnection>
+  validateProjectLocation?(
+    machine: DurableMachine,
+    trust: DurableTrustedMachinePeer,
+    rootPath: string,
+  ): Promise<ValidatedRemoteProjectLocation>
   close?(): Promise<void>
 }
 
@@ -148,6 +158,10 @@ export class UnavailableRemoteMachineCoordinator implements RemoteMachineCoordin
   }
 
   async updateAddress(): Promise<RemoteMachineConnection> {
+    throw unavailable()
+  }
+
+  async validateProjectLocation(): Promise<ValidatedRemoteProjectLocation> {
     throw unavailable()
   }
 }
@@ -510,6 +524,78 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
         connection?.close()
         const state = connectionStateFor(error)
         this.#setState(id, state === 'offline' ? 'recovery_required' : state)
+        setTimeout(() => this.#startDurableWorker(id), 0)
+        throw coordinatorError(error)
+      }
+    })
+  }
+
+  async validateProjectLocation(
+    machine: DurableMachine,
+    trust: DurableTrustedMachinePeer,
+    rootPath: string,
+  ): Promise<ValidatedRemoteProjectLocation> {
+    const id = MachineIdSchema.parse(machine.machineId)
+    return await this.#serializeMachineOperation(id, async () => {
+      const current = this.#requireCurrentActiveTrust(machine, trust)
+      await this.#stopWorker(id)
+      this.#setState(id, 'connecting')
+      let connection: AuthenticatedRemoteMachineConnection | undefined
+      let authenticatedEndpoint: DurableTrustedMachineEndpoint | undefined
+      let lastConnectionError: unknown
+      try {
+        const controller = await this.#loadController(current.trust)
+        for (const endpoint of current.trust.endpoints) {
+          try {
+            this.#recordAttempt(id)
+            connection = await this.#transport.connectTrusted({
+              peer: trustedPeer(
+                current.machine,
+                current.trust,
+                endpoint.address,
+              ),
+              controller,
+            })
+            authenticatedEndpoint = endpoint
+            break
+          } catch (error) {
+            lastConnectionError = error
+            this.#persistence.recordTrustedMachineEndpointFailure(
+              id,
+              endpoint.address,
+              TimestampSchema.parse(this.#now().toISOString()),
+            )
+          }
+        }
+        if (connection === undefined || authenticatedEndpoint === undefined) {
+          throw (
+            lastConnectionError ?? new Error('No trusted endpoint is available')
+          )
+        }
+
+        const authenticatedAt = TimestampSchema.parse(this.#now().toISOString())
+        this.#persistence.recordTrustedMachineAuthentication(
+          id,
+          authenticatedEndpoint.address,
+          authenticatedAt,
+          authenticatedEndpoint.source,
+        )
+        this.#setState(id, 'online')
+        const validated = await connection.validateProjectLocation(rootPath)
+        connection.close()
+        connection = undefined
+        setTimeout(() => this.#startDurableWorker(id), 0)
+        return validated
+      } catch (error) {
+        connection?.close()
+        if (isProjectLocationValidationError(error)) {
+          // The pinned peer remains healthy when it truthfully rejects only
+          // the requested directory. Path failures must not poison Machine
+          // trust or trigger an authentication state.
+          this.#setState(id, 'online')
+        } else {
+          this.#setState(id, connectionStateFor(lastConnectionError ?? error))
+        }
         setTimeout(() => this.#startDurableWorker(id), 0)
         throw coordinatorError(error)
       }
@@ -1387,11 +1473,41 @@ function coordinatorError(error: unknown): RemoteMachineCoordinatorError {
           'connection_failed',
           'Remote Machine connection failed',
         )
+      case 'project_location_path_invalid':
+        return new RemoteMachineCoordinatorError(
+          'project_location_path_invalid',
+          'Project Location path is invalid',
+        )
+      case 'project_location_missing':
+        return new RemoteMachineCoordinatorError(
+          'project_location_missing',
+          'Project Location directory does not exist',
+        )
+      case 'project_location_not_directory':
+        return new RemoteMachineCoordinatorError(
+          'project_location_not_directory',
+          'Project Location path is not a directory',
+        )
+      case 'project_location_inaccessible':
+        return new RemoteMachineCoordinatorError(
+          'project_location_inaccessible',
+          'Project Location directory is inaccessible',
+        )
     }
   }
   return new RemoteMachineCoordinatorError(
     'connection_failed',
     'Remote Machine connection failed',
+  )
+}
+
+function isProjectLocationValidationError(error: unknown): boolean {
+  return (
+    error instanceof MachineTransportError &&
+    (error.code === 'project_location_path_invalid' ||
+      error.code === 'project_location_missing' ||
+      error.code === 'project_location_not_directory' ||
+      error.code === 'project_location_inaccessible')
   )
 }
 

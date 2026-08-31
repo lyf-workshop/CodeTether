@@ -1,6 +1,6 @@
 import { mkdirSync } from 'node:fs'
 import { isIP } from 'node:net'
-import { dirname, isAbsolute, resolve } from 'node:path'
+import { dirname, isAbsolute, posix, resolve, win32 } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
 import {
@@ -118,6 +118,29 @@ export class RemoteMachineTrustConflictError extends Error {
   }
 }
 
+export type ProjectLocationConflictReason =
+  'project_machine' | 'machine_path' | 'machine_trust'
+
+export class ProjectLocationConflictError extends Error {
+  constructor(
+    readonly reason: ProjectLocationConflictReason,
+    message: string,
+  ) {
+    super(message)
+    this.name = 'ProjectLocationConflictError'
+  }
+}
+
+export class RemoteMachineProjectLocationConflictError extends Error {
+  constructor(
+    readonly machineId: MachineId,
+    readonly locationCount: number,
+  ) {
+    super('Remote Machine has registered Project locations')
+    this.name = 'RemoteMachineProjectLocationConflictError'
+  }
+}
+
 const durableTurnStatuses = [
   'starting',
   'running',
@@ -131,7 +154,7 @@ export type DurableTurnStatus = (typeof durableTurnStatuses)[number]
 export interface DurableProject {
   readonly projectId: ProjectId
   readonly name: string
-  readonly location: DurableProjectLocation
+  readonly locations: readonly DurableProjectLocation[]
   readonly createdAt: Timestamp
   readonly updatedAt: Timestamp
 }
@@ -513,15 +536,21 @@ export class ConversationStore {
   ): DurableTrustedMachinePeer {
     const id = MachineIdSchema.parse(machineId)
     const timestamp = TimestampSchema.parse(updatedAt)
-    assertChanged(
-      this.#statement(
-        `UPDATE trusted_machine_peers SET
-           trust_state = 'revoking', updated_at = ?
-         WHERE machine_id = ? AND trust_state = 'active'`,
-      ).run(timestamp, id).changes,
-      'Active trusted Machine peer',
-      id,
-    )
+    this.runInTransaction(() => {
+      const locationCount = this.countProjectLocationsForMachine(id)
+      if (locationCount > 0) {
+        throw new RemoteMachineProjectLocationConflictError(id, locationCount)
+      }
+      assertChanged(
+        this.#statement(
+          `UPDATE trusted_machine_peers SET
+             trust_state = 'revoking', updated_at = ?
+           WHERE machine_id = ? AND trust_state = 'active'`,
+        ).run(timestamp, id).changes,
+        'Active trusted Machine peer',
+        id,
+      )
+    })
     const peer = this.getTrustedMachinePeer(id)
     if (peer === undefined) {
       throw new Error(`Trusted Machine peer ${id} does not exist`)
@@ -687,17 +716,22 @@ export class ConversationStore {
 
   deleteRemoteMachine(machineId: MachineId): boolean {
     const id = MachineIdSchema.parse(machineId)
-    const machine = this.getMachine(id)
-    if (machine === undefined) return false
-    if (machine.kind !== 'remote') {
-      throw new Error('The canonical local Machine cannot be unpaired')
-    }
-    return this.runInTransaction(
-      () =>
+    return this.runInTransaction(() => {
+      const machine = this.getMachine(id)
+      if (machine === undefined) return false
+      if (machine.kind !== 'remote') {
+        throw new Error('The canonical local Machine cannot be unpaired')
+      }
+      const locationCount = this.countProjectLocationsForMachine(id)
+      if (locationCount > 0) {
+        throw new RemoteMachineProjectLocationConflictError(id, locationCount)
+      }
+      return (
         this.#statement(
           `DELETE FROM machines WHERE machine_id = ? AND kind = 'remote'`,
-        ).run(id).changes > 0,
-    )
+        ).run(id).changes > 0
+      )
+    })
   }
 
   createProject(project: DurableProject): void {
@@ -708,19 +742,66 @@ export class ConversationStore {
           project_id, name, created_at, updated_at
         ) VALUES (?, ?, ?, ?)`,
       ).run(value.projectId, value.name, value.createdAt, value.updatedAt)
-      this.#statement(
-        `INSERT INTO project_locations (
-          project_id, machine_id, root_path, root_path_key, created_at,
-          updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?)`,
-      ).run(
-        value.location.projectId,
-        value.location.machineId,
-        value.location.rootPath,
-        value.location.rootPathKey,
-        value.location.createdAt,
-        value.location.updatedAt,
-      )
+      for (const location of value.locations) {
+        this.#insertProjectLocation(location)
+      }
+    })
+  }
+
+  createProjectLocation(location: DurableProjectLocation): {
+    readonly location: DurableProjectLocation
+    readonly created: boolean
+  } {
+    const value = parseProjectLocation(location)
+    return this.runInTransaction(() => {
+      const existing = this.getProjectLocation(value.projectId, value.machineId)
+      if (existing !== undefined) {
+        if (
+          existing.rootPath === value.rootPath &&
+          existing.rootPathKey === value.rootPathKey
+        ) {
+          return { location: existing, created: false }
+        }
+        throw new ProjectLocationConflictError(
+          'project_machine',
+          'Project already has a different location on this Machine',
+        )
+      }
+
+      const pathOwner = this.#statement(
+        `SELECT project_id FROM project_locations
+         WHERE machine_id = ? AND root_path_key = ?`,
+      ).get(value.machineId, value.rootPathKey) as
+        { readonly project_id: string } | undefined
+      if (pathOwner !== undefined) {
+        throw new ProjectLocationConflictError(
+          'machine_path',
+          'Directory is already registered to another Project on this Machine',
+        )
+      }
+
+      const machine = this.getMachine(value.machineId)
+      if (machine === undefined) {
+        throw new ProjectLocationConflictError(
+          'machine_trust',
+          'Project location Machine is not registered',
+        )
+      }
+      if (machine.kind === 'remote') {
+        const trust = this.#statement(
+          `SELECT trust_state FROM trusted_machine_peers
+           WHERE machine_id = ?`,
+        ).get(value.machineId) as { readonly trust_state: string } | undefined
+        if (trust?.trust_state !== 'active') {
+          throw new ProjectLocationConflictError(
+            'machine_trust',
+            'Remote Machine does not have active durable trust',
+          )
+        }
+      }
+
+      this.#insertProjectLocation(value)
+      return { location: value, created: true }
     })
   }
 
@@ -730,11 +811,7 @@ export class ConversationStore {
     if (existing === undefined) {
       throw new Error(`Project ${value.projectId} does not exist`)
     }
-    if (
-      existing.location.machineId !== value.location.machineId ||
-      existing.location.rootPath !== value.location.rootPath ||
-      existing.location.rootPathKey !== value.location.rootPathKey
-    ) {
+    if (!sameProjectLocations(existing.locations, value.locations)) {
       throw new Error('Project location identity is immutable')
     }
     const result = this.#statement(
@@ -746,11 +823,47 @@ export class ConversationStore {
 
   getProject(projectId: ProjectId): DurableProject | undefined {
     const id = ProjectIdSchema.parse(projectId)
-    const row = this.#statement(
+    const rows = this.#statement(
       `${projectLocationSelect()}
-       WHERE projects.project_id = ?`,
-    ).get(id) as ProjectRow | undefined
-    return row === undefined ? undefined : projectFromRow(row)
+       WHERE projects.project_id = ?
+       ORDER BY project_locations.machine_id ASC`,
+    ).all(id) as unknown as ProjectRow[]
+    return rows.length === 0 ? undefined : projectFromRows(rows)
+  }
+
+  getProjectLocation(
+    projectId: ProjectId,
+    machineId: MachineId,
+  ): DurableProjectLocation | undefined {
+    const project = ProjectIdSchema.parse(projectId)
+    const machine = MachineIdSchema.parse(machineId)
+    const row = this.#statement(
+      `SELECT
+         project_id, machine_id, root_path, root_path_key, created_at, updated_at
+       FROM project_locations
+       WHERE project_id = ? AND machine_id = ?`,
+    ).get(project, machine) as ProjectLocationRow | undefined
+    return row === undefined ? undefined : projectLocationFromRow(row)
+  }
+
+  listProjectLocations(projectId: ProjectId): DurableProjectLocation[] {
+    const id = ProjectIdSchema.parse(projectId)
+    const rows = this.#statement(
+      `SELECT
+         project_id, machine_id, root_path, root_path_key, created_at, updated_at
+       FROM project_locations
+       WHERE project_id = ?
+       ORDER BY machine_id ASC`,
+    ).all(id) as unknown as ProjectLocationRow[]
+    return rows.map(projectLocationFromRow)
+  }
+
+  countProjectLocationsForMachine(machineId: MachineId): number {
+    const id = MachineIdSchema.parse(machineId)
+    const row = this.#statement(
+      'SELECT COUNT(*) AS count FROM project_locations WHERE machine_id = ?',
+    ).get(id) as { readonly count: number }
+    return row.count
   }
 
   getProjectByRootPathKey(
@@ -760,19 +873,23 @@ export class ConversationStore {
     const machine = MachineIdSchema.parse(machineId)
     const key = parseRootPathKey(rootPathKey)
     const row = this.#statement(
-      `${projectLocationSelect()}
-       WHERE project_locations.machine_id = ? AND
-         project_locations.root_path_key = ?`,
-    ).get(machine, key) as ProjectRow | undefined
-    return row === undefined ? undefined : projectFromRow(row)
+      `SELECT project_id FROM project_locations
+       WHERE machine_id = ? AND root_path_key = ?`,
+    ).get(machine, key) as { readonly project_id: string } | undefined
+    return row === undefined
+      ? undefined
+      : this.getProject(ProjectIdSchema.parse(row.project_id))
   }
 
   listProjects(): DurableProject[] {
     const rows = this.#statement(
       `${projectLocationSelect()}
-       ORDER BY projects.updated_at DESC, projects.project_id ASC`,
+       ORDER BY
+         projects.updated_at DESC,
+         projects.project_id ASC,
+         project_locations.machine_id ASC`,
     ).all() as unknown as ProjectRow[]
-    return rows.map(projectFromRow)
+    return projectsFromRows(rows)
   }
 
   countConversationsForProject(projectId: ProjectId): number {
@@ -788,6 +905,40 @@ export class ConversationStore {
     return (
       this.#statement('DELETE FROM projects WHERE project_id = ?').run(id)
         .changes > 0
+    )
+  }
+
+  #insertProjectLocation(location: DurableProjectLocation): void {
+    const machine = this.getMachine(location.machineId)
+    if (machine === undefined) {
+      throw new ProjectLocationConflictError(
+        'machine_trust',
+        'Project location Machine is not registered',
+      )
+    }
+    if (machine.kind === 'remote') {
+      const trust = this.#statement(
+        `SELECT trust_state FROM trusted_machine_peers
+         WHERE machine_id = ?`,
+      ).get(location.machineId) as { readonly trust_state: string } | undefined
+      if (trust?.trust_state !== 'active') {
+        throw new ProjectLocationConflictError(
+          'machine_trust',
+          'Remote Machine does not have active durable trust',
+        )
+      }
+    }
+    this.#statement(
+      `INSERT INTO project_locations (
+        project_id, machine_id, root_path, root_path_key, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run(
+      location.projectId,
+      location.machineId,
+      location.rootPath,
+      location.rootPathKey,
+      location.createdAt,
+      location.updatedAt,
     )
   }
 
@@ -1792,6 +1943,15 @@ interface ProjectRow {
   readonly location_updated_at: string
 }
 
+interface ProjectLocationRow {
+  readonly project_id: string
+  readonly machine_id: string
+  readonly root_path: string
+  readonly root_path_key: string
+  readonly created_at: string
+  readonly updated_at: string
+}
+
 interface MachineRow {
   readonly machine_id: string
   readonly display_name: string
@@ -1853,14 +2013,40 @@ interface AttentionSummaryRow {
 
 function parseProject(value: DurableProject): DurableProject {
   const projectId = ProjectIdSchema.parse(value.projectId)
-  const location = parseProjectLocation(value.location)
-  if (location.projectId !== projectId) {
-    throw new Error('Project location must belong to its Project')
+  const legacyLocation = (
+    value as DurableProject & { readonly location?: DurableProjectLocation }
+  ).location
+  const locations = (
+    value.locations ?? (legacyLocation === undefined ? [] : [legacyLocation])
+  ).map(parseProjectLocation)
+  if (
+    locations.length < 1 ||
+    locations.length > machineWireLimits.projectLocations
+  ) {
+    throw new Error('Project must have a bounded durable location set')
+  }
+  const machineIds = new Set<MachineId>()
+  const locationKeys = new Set<string>()
+  for (const location of locations) {
+    if (location.projectId !== projectId) {
+      throw new Error('Project locations must belong to their Project')
+    }
+    if (machineIds.has(location.machineId)) {
+      throw new Error('Project can have at most one location per Machine')
+    }
+    const key = JSON.stringify([location.machineId, location.rootPathKey])
+    if (locationKeys.has(key)) {
+      throw new Error('Project location identity is duplicated')
+    }
+    machineIds.add(location.machineId)
+    locationKeys.add(key)
   }
   return {
     projectId,
     name: parseBoundedText(value.name, 'Project name', 240),
-    location,
+    locations: [...locations].sort((left, right) =>
+      left.machineId.localeCompare(right.machineId),
+    ),
     createdAt: TimestampSchema.parse(value.createdAt),
     updatedAt: TimestampSchema.parse(value.updatedAt),
   }
@@ -1869,9 +2055,12 @@ function parseProject(value: DurableProject): DurableProject {
 function parseProjectLocation(
   value: DurableProjectLocation,
 ): DurableProjectLocation {
-  const root = normalizeTrustedProjectRoot(value.rootPath)
+  const rootPath = parseCanonicalProjectRoot(value.rootPath)
   const rootPathKey = parseRootPathKey(value.rootPathKey)
-  if (root.rootPathKey !== rootPathKey) {
+  const expectedRootPathKey = rootPath.startsWith('/')
+    ? rootPath
+    : rootPath.toLowerCase()
+  if (rootPathKey !== expectedRootPathKey) {
     throw new Error(
       'Project root path key does not match its trusted root path',
     )
@@ -1879,7 +2068,7 @@ function parseProjectLocation(
   return {
     projectId: ProjectIdSchema.parse(value.projectId),
     machineId: MachineIdSchema.parse(value.machineId),
-    rootPath: root.rootPath,
+    rootPath,
     rootPathKey,
     createdAt: TimestampSchema.parse(value.createdAt),
     updatedAt: TimestampSchema.parse(value.updatedAt),
@@ -2162,20 +2351,81 @@ function parseConversation(
   }
 }
 
-function projectFromRow(row: ProjectRow): DurableProject {
+function projectFromRows(rows: readonly ProjectRow[]): DurableProject {
+  const row = rows[0]
+  if (row === undefined) throw new Error('Project rows cannot be empty')
+  for (const candidate of rows) {
+    if (
+      candidate.project_id !== row.project_id ||
+      candidate.name !== row.name ||
+      candidate.project_created_at !== row.project_created_at ||
+      candidate.project_updated_at !== row.project_updated_at
+    ) {
+      throw new Error('Project row aggregation contains mixed identities')
+    }
+  }
   return parseProject({
     projectId: ProjectIdSchema.parse(row.project_id),
     name: row.name,
-    location: {
-      projectId: ProjectIdSchema.parse(row.project_id),
-      machineId: MachineIdSchema.parse(row.machine_id),
-      rootPath: row.root_path,
-      rootPathKey: row.root_path_key,
-      createdAt: TimestampSchema.parse(row.location_created_at),
-      updatedAt: TimestampSchema.parse(row.location_updated_at),
-    },
+    locations: rows.map((location) => ({
+      projectId: ProjectIdSchema.parse(location.project_id),
+      machineId: MachineIdSchema.parse(location.machine_id),
+      rootPath: location.root_path,
+      rootPathKey: location.root_path_key,
+      createdAt: TimestampSchema.parse(location.location_created_at),
+      updatedAt: TimestampSchema.parse(location.location_updated_at),
+    })),
     createdAt: TimestampSchema.parse(row.project_created_at),
     updatedAt: TimestampSchema.parse(row.project_updated_at),
+  })
+}
+
+function projectsFromRows(rows: readonly ProjectRow[]): DurableProject[] {
+  const projects: DurableProject[] = []
+  let currentRows: ProjectRow[] = []
+  for (const row of rows) {
+    if (
+      currentRows.length > 0 &&
+      currentRows[0]?.project_id !== row.project_id
+    ) {
+      projects.push(projectFromRows(currentRows))
+      currentRows = []
+    }
+    currentRows.push(row)
+  }
+  if (currentRows.length > 0) projects.push(projectFromRows(currentRows))
+  return projects
+}
+
+function projectLocationFromRow(
+  row: ProjectLocationRow,
+): DurableProjectLocation {
+  return parseProjectLocation({
+    projectId: ProjectIdSchema.parse(row.project_id),
+    machineId: MachineIdSchema.parse(row.machine_id),
+    rootPath: row.root_path,
+    rootPathKey: row.root_path_key,
+    createdAt: TimestampSchema.parse(row.created_at),
+    updatedAt: TimestampSchema.parse(row.updated_at),
+  })
+}
+
+function sameProjectLocations(
+  left: readonly DurableProjectLocation[],
+  right: readonly DurableProjectLocation[],
+): boolean {
+  if (left.length !== right.length) return false
+  return left.every((location, index) => {
+    const candidate = right[index]
+    return (
+      candidate !== undefined &&
+      location.projectId === candidate.projectId &&
+      location.machineId === candidate.machineId &&
+      location.rootPath === candidate.rootPath &&
+      location.rootPathKey === candidate.rootPathKey &&
+      location.createdAt === candidate.createdAt &&
+      location.updatedAt === candidate.updatedAt
+    )
   })
 }
 
@@ -2538,6 +2788,28 @@ function parseRootPathKey(value: string): string {
   }
   if (value.includes('\0')) {
     throw new Error('Project root path key must not contain NUL')
+  }
+  return value
+}
+
+function parseCanonicalProjectRoot(value: string): string {
+  if (value.length === 0 || value.length > 4096 || value.trim() !== value) {
+    throw new Error(
+      'Trusted Project root path must contain 1-4096 unpadded characters',
+    )
+  }
+  if (value.includes('\0')) {
+    throw new Error('Trusted Project root path must not contain NUL')
+  }
+  // `win32.isAbsolute('/home/...')` is true because Windows accepts a
+  // root-relative slash. Prefer explicit POSIX syntax so a Windows Controller
+  // never rewrites an authenticated Linux Node's canonical path.
+  const path = value.startsWith('/') ? posix : win32
+  if (!path.isAbsolute(value)) {
+    throw new Error('Trusted Project root path must be absolute')
+  }
+  if (path.normalize(value) !== value) {
+    throw new Error('Trusted Project root path must already be normalized')
   }
   return value
 }

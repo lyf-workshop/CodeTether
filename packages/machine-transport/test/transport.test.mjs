@@ -9,6 +9,7 @@ import {
   FramedMachineConnection,
   MachineErrorMessageSchema,
   MachineFrameDecoder,
+  MachineWireMessageSchema,
   OpaquePairingAuthority,
   OpaquePairingInitiator,
   createMachineTlsIdentityFile,
@@ -20,6 +21,7 @@ import {
   pairingServerIdentifier,
   readMachineTlsIdentityFile,
   receiveCompatibleMachineMessage,
+  RemoteProjectLocationPathSchema,
   validateMachineTlsIdentity,
   verifyPairingConfirmationTag,
 } from '../dist/index.js'
@@ -37,6 +39,38 @@ test('bounded framing handles fragmented and coalesced messages', () => {
   assert.throws(
     () => new MachineFrameDecoder().push(Buffer.from([0, 1, 0, 0])),
     /frame length/u,
+  )
+})
+
+test('Project Location messages are purpose-specific, strict, and path-bounded', () => {
+  const request = {
+    type: 'project_location.validate',
+    protocolVersion: 1,
+    requestId: 'A'.repeat(43),
+    expectedMachineId: 'machine_abcdef',
+    expectedNodeId: 'node_abcdef',
+    rootPath: '/home/user/项目 with spaces',
+  }
+  assert.equal(MachineWireMessageSchema.safeParse(request).success, true)
+  assert.equal(
+    MachineWireMessageSchema.safeParse({ ...request, list: true }).success,
+    false,
+  )
+  assert.equal(
+    MachineWireMessageSchema.safeParse({
+      type: 'filesystem.read',
+      protocolVersion: 1,
+      path: '/etc/passwd',
+    }).success,
+    false,
+  )
+  assert.equal(
+    RemoteProjectLocationPathSchema.safeParse(`/${'界'.repeat(1_400)}`).success,
+    false,
+  )
+  assert.equal(
+    RemoteProjectLocationPathSchema.safeParse('/safe\0path').success,
+    false,
   )
 })
 

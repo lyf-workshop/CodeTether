@@ -5,11 +5,12 @@ import test from 'node:test'
 const sourceRoot = new URL('../src/', import.meta.url)
 
 test('Machines routes and navigation expose only real Host-backed Machine pages', async () => {
-  const [router, sidebar, list, detail] = await Promise.all([
+  const [router, sidebar, list, detail, machineProjects] = await Promise.all([
     source('router.tsx'),
     source('components/app-shell/primary-sidebar.tsx'),
     source('components/machines/machines-page.tsx'),
     source('components/machines/machine-detail-page.tsx'),
+    source('components/machines/machine-projects-section.tsx'),
   ])
 
   assert.match(router, /path: '\/machines'/u)
@@ -19,7 +20,9 @@ test('Machines routes and navigation expose only real Host-backed Machine pages'
   assert.match(list, /machineDetailQueryOptions/u)
   assert.match(detail, /machineDetailQueryOptions/u)
   assert.match(detail, /providerPresentationsForMachine/u)
-  assert.match(detail, /projectLocationForMachine/u)
+  assert.match(detail, /MachineProjectsSection/u)
+  assert.match(machineProjects, /projectLocationForMachine/u)
+  assert.match(machineProjects, /projects\.map/u)
   assert.match(detail, /conversations\.map/u)
   assert.doesNotMatch(detail, /SSH|remote terminal|CPU chart|GPU chart/u)
 })
@@ -40,17 +43,26 @@ test('New Conversation binds Machine identity and machine-scoped Provider truth'
 })
 
 test('Project and Conversation surfaces resolve Machine display without a switch', async () => {
-  const [projectDetail, conversationRoute, adapter, header, inspector] =
-    await Promise.all([
-      source('components/projects/project-detail-page.tsx'),
-      source('components/conversation/conversation-detail-route.tsx'),
-      source('components/conversation/live-conversation-adapter.ts'),
-      source('components/conversation/conversation-header.tsx'),
-      source('components/conversation/inspector-panel.tsx'),
-    ])
+  const [
+    projectDetail,
+    projectLocations,
+    conversationRoute,
+    adapter,
+    header,
+    inspector,
+  ] = await Promise.all([
+    source('components/projects/project-detail-page.tsx'),
+    source('components/projects/project-locations-section.tsx'),
+    source('components/conversation/conversation-detail-route.tsx'),
+    source('components/conversation/live-conversation-adapter.ts'),
+    source('components/conversation/conversation-header.tsx'),
+    source('components/conversation/inspector-panel.tsx'),
+  ])
 
-  assert.match(projectDetail, /label="运行位置"/u)
-  assert.match(projectDetail, /soleProjectLocation\(project\)/u)
+  assert.match(projectDetail, /<ProjectLocationsSection/u)
+  assert.doesNotMatch(projectDetail, /soleProjectLocation\(project\)/u)
+  assert.match(projectLocations, /project\.locations\.map/u)
+  assert.match(projectLocations, /to="\/machines\/\$machineId"/u)
   assert.match(
     conversationRoute,
     /machineDetailQueryOptions\(runtime, machineId\)/u,

@@ -363,6 +363,142 @@ test('uses Project routes, validates route identity, and sends project-based Con
   })
 })
 
+test('registers a bounded ProjectLocation with exact route identity and AbortSignal', async () => {
+  const calls = []
+  const controller = new AbortController()
+  const remoteMachineId = 'machine_remote01'
+  const remotePath = '/home/开发者/projects/CodeTether workspace'
+  const remoteLocation = {
+    ...project.locations[0],
+    machineId: remoteMachineId,
+    rootPath: remotePath,
+  }
+  const projectWithRemoteLocation = {
+    ...project,
+    locations: [...project.locations, remoteLocation],
+  }
+  const client = new CodeTetherClient({
+    baseUrl: 'http://host.test',
+    fetch: async (input, init) => {
+      calls.push({ url: String(input), init })
+      return jsonResponse({
+        protocolVersion: 1,
+        actionId: 'act_location1',
+        status: 'completed',
+        data: {
+          project: projectWithRemoteLocation,
+          location: remoteLocation,
+          created: true,
+        },
+      })
+    },
+  })
+
+  const response = await client.registerProjectLocation(
+    projectId,
+    {
+      actionId: 'act_location1',
+      machineId: remoteMachineId,
+      path: `  ${remotePath}  `,
+    },
+    { signal: controller.signal },
+  )
+
+  assert.equal(response.data.location.rootPath, remotePath)
+  assert.equal(calls.length, 1)
+  assert.equal(
+    new URL(calls[0].url).pathname,
+    `/api/v1/projects/${projectId}/locations`,
+  )
+  assert.equal(calls[0].init.method, 'POST')
+  assert.equal(calls[0].init.signal, controller.signal)
+  assert.deepEqual(JSON.parse(calls[0].init.body), {
+    actionId: 'act_location1',
+    machineId: remoteMachineId,
+    path: remotePath,
+  })
+})
+
+test('rejects ProjectLocation responses with mismatched Project or Machine identity', async () => {
+  const requestedMachineId = 'machine_remote01'
+  const remotePath = '/home/user/projects/demo'
+  const cases = [
+    {
+      responseProjectId: 'proj_other01',
+      responseMachineId: requestedMachineId,
+    },
+    {
+      responseProjectId: projectId,
+      responseMachineId: 'machine_other01',
+    },
+  ]
+
+  for (const { responseProjectId, responseMachineId } of cases) {
+    const responseLocation = {
+      ...project.locations[0],
+      projectId: responseProjectId,
+      machineId: responseMachineId,
+      rootPath: remotePath,
+    }
+    const responseProject = {
+      ...project,
+      projectId: responseProjectId,
+      locations: [responseLocation],
+    }
+    const client = new CodeTetherClient({
+      baseUrl: 'http://host.test',
+      fetch: async () =>
+        jsonResponse({
+          protocolVersion: 1,
+          actionId: 'act_location1',
+          status: 'completed',
+          data: {
+            project: responseProject,
+            location: responseLocation,
+            created: true,
+          },
+        }),
+    })
+    await assert.rejects(
+      client.registerProjectLocation(projectId, {
+        actionId: 'act_location1',
+        machineId: requestedMachineId,
+        path: remotePath,
+      }),
+      CodeTetherProtocolError,
+    )
+  }
+})
+
+test('rejects unbounded or non-strict ProjectLocation registration input before fetch', async () => {
+  let fetchCalls = 0
+  const client = new CodeTetherClient({
+    baseUrl: 'http://host.test',
+    fetch: async () => {
+      fetchCalls += 1
+      throw new Error('fetch must not be called')
+    },
+  })
+  await assert.rejects(
+    client.registerProjectLocation(projectId, {
+      actionId: 'act_location1',
+      machineId: 'machine_remote01',
+      path: `/${'界'.repeat(4_096)}`,
+    }),
+    CodeTetherProtocolError,
+  )
+  await assert.rejects(
+    client.registerProjectLocation(projectId, {
+      actionId: 'act_location1',
+      machineId: 'machine_remote01',
+      path: '/home/user/project',
+      filesystemMethod: 'list',
+    }),
+    CodeTetherProtocolError,
+  )
+  assert.equal(fetchCalls, 0)
+})
+
 test('uses Machine routes, forwards AbortSignal, and validates route identity', async () => {
   const calls = []
   const controller = new AbortController()

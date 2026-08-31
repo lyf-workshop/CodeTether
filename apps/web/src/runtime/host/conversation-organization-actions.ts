@@ -249,6 +249,11 @@ export function conversationOrganizationErrorMessage(
     case 'provider_unavailable':
     case 'provider_conversation_unavailable':
     case 'project_has_conversations':
+    case 'project_location_invalid':
+    case 'project_location_missing':
+    case 'project_location_inaccessible':
+    case 'project_location_conflict':
+    case 'machine_has_project_locations':
     case 'machine_pairing_code_invalid':
     case 'machine_pairing_code_expired':
     case 'machine_pairing_rate_limited':

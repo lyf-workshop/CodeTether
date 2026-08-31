@@ -11,6 +11,7 @@ export const machineTransportLimits = {
   pairingMaximumAttempts: 5,
   maximumConnections: 16,
   maximumConnectionsPerAddress: 4,
+  maximumProjectLocationPathBytes: 4 * 1024,
   heartbeatIntervalMs: 30_000,
   heartbeatTimeoutMs: 10_000,
 } as const

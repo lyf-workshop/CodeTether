@@ -167,7 +167,11 @@ export class HostRuntime {
       options.client ??
       new CodeTetherClient({ baseUrl: options.baseUrl ?? hostBaseUrl })
     this.#actions = new LiveConversationActions(this.#client)
-    this.#projectActions = new ProjectActions(this.#client)
+    this.#projectActions = new ProjectActions(
+      this.#client,
+      undefined,
+      this.#queryClient,
+    )
     this.#machineActions = new MachineActions(this.#client, this.#queryClient)
     this.#newConversationActions = new NewConversationActions(this.#client)
     this.#attentionActions = new AttentionActions(this.#client)
@@ -304,6 +308,13 @@ export class HostRuntime {
     options?: { readonly signal?: AbortSignal },
   ) {
     return this.#client.getProject(projectId, options)
+  }
+
+  registerProjectLocation(
+    projectId: Parameters<ProjectActions['registerProjectLocation']>[0],
+    input: Parameters<ProjectActions['registerProjectLocation']>[1],
+  ) {
+    return this.#projectActions.registerProjectLocation(projectId, input)
   }
 
   listProjectConversations(

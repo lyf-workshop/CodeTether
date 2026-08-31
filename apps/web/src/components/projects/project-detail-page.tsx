@@ -3,12 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Link, useParams } from '@tanstack/react-router'
 import {
   ArrowLeft,
-  CalendarDays,
-  Check,
-  Copy,
-  FolderOpen,
   MessageSquare,
-  Monitor,
   Plus,
   RefreshCw,
   ShieldCheck,
@@ -16,12 +11,8 @@ import {
   TriangleAlert,
 } from 'lucide-react'
 
-import { Button, IconButton, MachineBadge, Separator, cn } from '@codetether/ui'
-import {
-  ProjectIdSchema,
-  type ProjectId,
-  type ProjectRecord,
-} from '@codetether/protocol'
+import { Button, Separator } from '@codetether/ui'
+import { ProjectIdSchema, type ProjectId } from '@codetether/protocol'
 
 import {
   useHostConnectionState,
@@ -29,15 +20,12 @@ import {
 } from '../../runtime/host/host-runtime-hooks'
 import { projectDetailQueryOptions } from '../../runtime/host/project-query'
 import { machineListQueryOptions } from '../../runtime/host/machine-query'
-import { soleProjectLocation } from '../../runtime/host/project-location'
+import { projectLocationAvailability } from '../../runtime/host/project-location'
 import { projectDetailViewState } from '../../runtime/host/project-view-state'
 import { ProjectAvailabilityBadge } from './project-availability-badge'
 import { ProjectsErrorState, ProjectsLoadingState } from './project-page-states'
-import {
-  compactProjectPath,
-  formatProjectTime,
-  projectFolderName,
-} from './project-format'
+import { AddProjectLocationDialog } from './add-project-location-dialog'
+import { ProjectLocationsSection } from './project-locations-section'
 import { RemoveProjectDialog } from './remove-project-dialog'
 import { NewConversationDialog } from '../conversations/new-conversation-dialog'
 
@@ -60,9 +48,6 @@ function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
   const connectionState = useHostConnectionState()
   const removeButtonRef = useRef<HTMLButtonElement>(null)
   const [removeOpen, setRemoveOpen] = useState(false)
-  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>(
-    'idle',
-  )
   const projectQuery = useQuery({
     ...projectDetailQueryOptions(runtime, projectId),
     enabled: connectionState === 'connected',
@@ -113,28 +98,23 @@ function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
   }
 
   const project = viewState.project
-  const location = soleProjectLocation(project)
-  const availability = location?.availability ?? 'unavailable'
-  const machine = (machinesQuery.data ?? []).find(
-    (candidate) => candidate.machineId === location?.machineId,
-  )
-  const rootPath = location?.rootPath
+  const machines = machinesQuery.data ?? []
+  const availability = projectLocationAvailability(project)
+  const hasExecutableLocation = project.locations.some((location) => {
+    const machine = machines.find(
+      (candidate) => candidate.machineId === location.machineId,
+    )
+    return (
+      location.availability === 'available' &&
+      machine?.availability === 'available' &&
+      machine.capabilities.providerExecution
+    )
+  })
 
   function handleRemoveOpenChange(open: boolean) {
     setRemoveOpen(open)
     if (!open) {
       requestAnimationFrame(() => removeButtonRef.current?.focus())
-    }
-  }
-
-  async function handleCopyRootPath() {
-    try {
-      if (navigator.clipboard === undefined) throw new Error('unavailable')
-      if (rootPath === undefined) throw new Error('unavailable')
-      await navigator.clipboard.writeText(rootPath)
-      setCopyState('copied')
-    } catch {
-      setCopyState('failed')
     }
   }
 
@@ -158,47 +138,13 @@ function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
               {project.name}
             </h1>
             <ProjectAvailabilityBadge availability={availability} />
-            {machine === undefined ? null : (
-              <MachineBadge
-                name={machine.displayName}
-                title={machine.displayName}
-                className="h-6"
-              />
-            )}
+            <span className="text-xs font-medium text-text-muted">
+              {project.locations.length} 个工作区位置
+            </span>
           </div>
-          {rootPath === undefined ? null : (
-            <div className="mt-1 flex min-w-0 max-w-2xl items-center gap-2 text-sm text-text-secondary">
-              <FolderOpen aria-hidden="true" className="size-3.5 shrink-0" />
-              <span className="shrink-0 font-medium text-text-primary">
-                {projectFolderName(rootPath)}
-              </span>
-              <span
-                title={rootPath}
-                className="min-w-0 truncate font-mono text-xs"
-              >
-                {compactProjectPath(rootPath)}
-              </span>
-              <IconButton
-                type="button"
-                variant="ghost"
-                size="sm"
-                label={copyState === 'copied' ? '路径已复制' : '复制完整路径'}
-                className="size-7 shrink-0 text-text-muted hover:text-text-primary"
-                onClick={() => void handleCopyRootPath()}
-              >
-                {copyState === 'copied' ? (
-                  <Check aria-hidden="true" />
-                ) : (
-                  <Copy aria-hidden="true" />
-                )}
-              </IconButton>
-              {copyState === 'failed' ? (
-                <span role="alert" className="shrink-0 text-xs text-danger">
-                  复制失败
-                </span>
-              ) : null}
-            </div>
-          )}
+          <p className="mt-1 text-sm text-text-secondary">
+            同一个项目可以在不同机器上拥有独立的工作区位置。
+          </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -217,15 +163,30 @@ function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
               <Button
                 size="sm"
                 className="h-9"
-                disabled={availability === 'unavailable'}
+                disabled={!hasExecutableLocation}
                 title={
-                  availability === 'unavailable'
-                    ? '项目目录当前不可用'
+                  !hasExecutableLocation
+                    ? '当前没有可执行智能体会话的工作区位置'
                     : undefined
                 }
               >
                 <Plus aria-hidden="true" />
                 新建会话
+              </Button>
+            }
+          />
+          <AddProjectLocationDialog
+            project={project}
+            machines={machines}
+            trigger={
+              <Button
+                variant="secondary"
+                size="sm"
+                className="h-9"
+                disabled={connectionState !== 'connected'}
+              >
+                <Plus aria-hidden="true" />
+                添加位置
               </Button>
             }
           />
@@ -253,22 +214,17 @@ function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
           />
           <div className="min-w-0">
             <h2 className="text-sm font-medium text-text-primary">
-              项目目录当前不可用
+              当前没有可用的工作区位置
             </h2>
             <p className="mt-0.5 text-sm font-regular text-text-secondary">
-              目录当前不存在或无法访问。恢复原目录后，CodeTether
-              会在下次读取时重新识别。
+              已注册的位置当前均不可用。持久项目和历史仍可读取；恢复本地目录或远程机器连接后会重新计算位置状态。
             </p>
           </div>
         </section>
       ) : null}
 
       <div className="mt-6 grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_18rem]">
-        <WorkspaceInformation
-          project={project}
-          rootPath={rootPath}
-          machineName={machine?.displayName}
-        />
+        <ProjectLocationsSection machines={machines} project={project} />
         <ProjectAvailabilityPanel availability={availability} />
       </div>
 
@@ -294,68 +250,6 @@ function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
   )
 }
 
-function WorkspaceInformation({
-  machineName,
-  project,
-  rootPath,
-}: {
-  machineName?: string
-  project: ProjectRecord
-  rootPath?: string
-}) {
-  return (
-    <section className="min-w-0 rounded-lg border border-border bg-surface/65 p-5">
-      <div className="flex items-start gap-3">
-        <span
-          aria-hidden="true"
-          className="grid size-10 shrink-0 place-items-center rounded-md border border-primary/30 bg-primary-muted text-primary"
-        >
-          <FolderOpen className="size-5" />
-        </span>
-        <div>
-          <h2 className="text-section font-semibold text-text-primary">
-            工作区信息
-          </h2>
-          <p className="mt-0.5 text-sm font-regular text-text-secondary">
-            项目目录与最近使用信息。
-          </p>
-        </div>
-      </div>
-
-      <Separator className="my-5" />
-
-      <dl className="grid min-w-0 gap-x-6 gap-y-5 md:grid-cols-2">
-        <MetadataItem label="项目名称" value={project.name} />
-        <MetadataItem
-          label="运行位置"
-          value={machineName ?? '机器信息不可用'}
-          icon={<Monitor aria-hidden="true" />}
-        />
-        {rootPath === undefined ? null : (
-          <MetadataItem
-            label="根目录"
-            value={compactProjectPath(rootPath)}
-            title={rootPath}
-            mono
-            wide
-            icon={<FolderOpen aria-hidden="true" />}
-          />
-        )}
-        <MetadataItem
-          label="创建时间"
-          value={formatProjectTime(project.createdAt)}
-          icon={<CalendarDays aria-hidden="true" />}
-        />
-        <MetadataItem
-          label="最近更新"
-          value={formatProjectTime(project.updatedAt)}
-          icon={<CalendarDays aria-hidden="true" />}
-        />
-      </dl>
-    </section>
-  )
-}
-
 function ProjectAvailabilityPanel({
   availability,
 }: {
@@ -373,8 +267,8 @@ function ProjectAvailabilityPanel({
       </div>
       <p className="mt-3 text-sm font-regular text-text-secondary">
         {available
-          ? 'CodeTether 已验证该目录，可以在此工作区中启动会话。'
-          : '持久项目记录仍可查看，但工作区相关操作会安全失败。'}
+          ? '至少一个工作区位置当前可访问。智能体执行仍取决于所选机器的真实能力。'
+          : '持久项目记录仍可查看，但所有工作区相关操作会安全失败。'}
       </p>
       <Separator className="my-5" />
       <div className="flex items-start gap-2.5">
@@ -384,50 +278,14 @@ function ProjectAvailabilityPanel({
         />
         <div>
           <p className="text-sm font-medium text-text-primary">
-            本地工作区授权
+            机器范围的工作区授权
           </p>
           <p className="mt-1 text-xs font-regular text-text-muted">
-            智能体只能在该项目根目录及其受验证的子目录内工作。
+            每个位置都绑定到一台真实机器；路径授权不会在机器之间复制或推断。
           </p>
         </div>
       </div>
     </section>
-  )
-}
-
-interface MetadataItemProps {
-  icon?: ReactNode
-  label: string
-  mono?: boolean
-  title?: string
-  value: string
-  wide?: boolean
-}
-
-function MetadataItem({
-  icon,
-  label,
-  mono = false,
-  title,
-  value,
-  wide,
-}: MetadataItemProps) {
-  return (
-    <div className={wide ? 'min-w-0 md:col-span-2' : 'min-w-0'}>
-      <dt className="flex items-center gap-1.5 text-xs font-regular text-text-muted [&_svg]:size-3.5">
-        {icon}
-        {label}
-      </dt>
-      <dd
-        title={title}
-        className={cn(
-          'mt-1.5 truncate text-base font-regular text-text-primary',
-          mono && 'font-mono text-sm',
-        )}
-      >
-        {value}
-      </dd>
-    </div>
   )
 }
 

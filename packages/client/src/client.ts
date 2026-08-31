@@ -20,6 +20,8 @@ import {
   CreateConversationResponseSchema,
   CreateProjectRequestSchema,
   CreateProjectResponseSchema,
+  RegisterProjectLocationRequestSchema,
+  RegisterProjectLocationResponseSchema,
   DeleteProjectRequestSchema,
   DeleteProjectResponseSchema,
   GetMachineResponseSchema,
@@ -79,6 +81,8 @@ import {
   type CreateConversationResponse,
   type CreateProjectRequest,
   type CreateProjectResponse,
+  type RegisterProjectLocationRequest,
+  type RegisterProjectLocationResponse,
   type DeleteProjectRequest,
   type DeleteProjectResponse,
   type GetMachineResponse,
@@ -665,6 +669,39 @@ export class CodeTetherClient {
     assertProtocolIdentity(
       response.data.projectId === project,
       'Delete Project response does not match the requested Project',
+    )
+    return response
+  }
+
+  async registerProjectLocation(
+    projectId: ProjectId,
+    input: RegisterProjectLocationRequest,
+    options: RequestOptions = {},
+  ): Promise<RegisterProjectLocationResponse> {
+    const project = parseProtocol(
+      ProjectIdSchema,
+      projectId,
+      'register-project-location project id',
+    )
+    const request = parseProtocol(
+      RegisterProjectLocationRequestSchema,
+      input,
+      'register-project-location request',
+    )
+    const response = await this.#request(
+      `/api/v1/projects/${encodeURIComponent(project)}/locations`,
+      RegisterProjectLocationResponseSchema,
+      jsonRequest(request, options.signal),
+      request.actionId,
+    )
+    assertProtocolIdentity(
+      response.data.project.projectId === project &&
+        response.data.location.projectId === project,
+      'Register ProjectLocation response does not match the requested Project',
+    )
+    assertProtocolIdentity(
+      response.data.location.machineId === request.machineId,
+      'Register ProjectLocation response does not match the requested Machine',
     )
     return response
   }

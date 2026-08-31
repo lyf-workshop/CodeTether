@@ -225,6 +225,106 @@ export type ProjectLocationValidatedMessage = z.infer<
   typeof ProjectLocationValidatedMessageSchema
 >
 
+/**
+ * Presentation-only Provider capability vocabulary shared with Protocol v1.
+ * A true value means CodeTether can actually expose that operation on this
+ * Machine; detecting a CLI executable alone never turns a capability on.
+ */
+export const RemoteProviderCapabilitiesSchema = z
+  .object({
+    streaming: z.boolean(),
+    resume: z.boolean(),
+    interrupt: z.boolean(),
+    approvals: z.boolean(),
+    fileRead: z.boolean(),
+    fileEdit: z.boolean(),
+    shell: z.boolean(),
+    search: z.boolean(),
+    diff: z.boolean(),
+    toolEvents: z.boolean(),
+    modelSelection: z.boolean(),
+    reasoningControl: z.boolean(),
+  })
+  .strict()
+export type RemoteProviderCapabilities = z.infer<
+  typeof RemoteProviderCapabilitiesSchema
+>
+
+export const RemoteProviderDescriptorSchema = z
+  .object({
+    provider: z.enum(['codex', 'claude-code']),
+    displayName: z.string().trim().min(1).max(120),
+    availability: z.enum([
+      'available',
+      'not_installed',
+      'unsupported_version',
+      'misconfigured',
+      'unavailable',
+    ]),
+    version: z.string().trim().min(1).max(120).optional(),
+    capabilities: RemoteProviderCapabilitiesSchema,
+  })
+  .strict()
+  .superRefine((descriptor, context) => {
+    if (Object.values(descriptor.capabilities).some(Boolean)) {
+      context.addIssue({
+        code: 'custom',
+        message:
+          'Remote Provider execution capabilities are unavailable in Machine protocol v1',
+        path: ['capabilities'],
+      })
+    }
+  })
+export type RemoteProviderDescriptor = z.infer<
+  typeof RemoteProviderDescriptorSchema
+>
+
+const RemoteProviderDescriptorListSchema = z
+  .array(RemoteProviderDescriptorSchema)
+  .length(2)
+  .readonly()
+  .superRefine((providers, context) => {
+    const identities = new Set(providers.map(({ provider }) => provider))
+    if (
+      identities.size !== 2 ||
+      !identities.has('codex') ||
+      !identities.has('claude-code')
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Remote Provider descriptors must contain each Provider once',
+      })
+    }
+  })
+
+export const ProvidersDescribeMessageSchema = z
+  .object({
+    type: z.literal('providers.describe'),
+    protocolVersion: VersionField,
+    requestId: NonceSchema,
+    expectedMachineId: MachineTransportMachineIdSchema,
+    expectedNodeId: NodeIdSchema,
+  })
+  .strict()
+export type ProvidersDescribeMessage = z.infer<
+  typeof ProvidersDescribeMessageSchema
+>
+
+export const ProvidersDescribedMessageSchema = z
+  .object({
+    type: z.literal('providers.described'),
+    protocolVersion: VersionField,
+    requestId: NonceSchema,
+    machineId: MachineTransportMachineIdSchema,
+    nodeId: NodeIdSchema,
+    observedAt: TimestampSchema,
+    providers: RemoteProviderDescriptorListSchema,
+  })
+  .strict()
+export type ProvidersDescribedMessage = z.infer<
+  typeof ProvidersDescribedMessageSchema
+>
+
 export const TrustRevokeMessageSchema = z
   .object({
     type: z.literal('trust.revoke'),
@@ -288,6 +388,8 @@ export const MachineWireMessageSchema = z.discriminatedUnion('type', [
   MachinePongMessageSchema,
   ProjectLocationValidateMessageSchema,
   ProjectLocationValidatedMessageSchema,
+  ProvidersDescribeMessageSchema,
+  ProvidersDescribedMessageSchema,
   TrustRevokeMessageSchema,
   TrustRevokedMessageSchema,
   MachineErrorMessageSchema,

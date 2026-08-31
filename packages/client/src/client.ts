@@ -24,6 +24,8 @@ import {
   RegisterProjectLocationResponseSchema,
   RemoveProjectLocationRequestSchema,
   RemoveProjectLocationResponseSchema,
+  RefreshMachineProvidersRequestSchema,
+  RefreshMachineProvidersResponseSchema,
   DeleteProjectRequestSchema,
   DeleteProjectResponseSchema,
   GetMachineResponseSchema,
@@ -87,6 +89,8 @@ import {
   type RegisterProjectLocationResponse,
   type RemoveProjectLocationRequest,
   type RemoveProjectLocationResponse,
+  type RefreshMachineProvidersRequest,
+  type RefreshMachineProvidersResponse,
   type DeleteProjectRequest,
   type DeleteProjectResponse,
   type GetMachineResponse,
@@ -372,6 +376,35 @@ export class CodeTetherClient {
       request.actionId,
     )
     assertMachineConnectionMutationIdentity(response, machine)
+    return response
+  }
+
+  async refreshMachineProviders(
+    machineId: MachineId,
+    input: RefreshMachineProvidersRequest,
+    options: RequestOptions = {},
+  ): Promise<RefreshMachineProvidersResponse> {
+    const machine = parseProtocol(
+      MachineIdSchema,
+      machineId,
+      'refresh-machine-providers id',
+    )
+    const request = parseProtocol(
+      RefreshMachineProvidersRequestSchema,
+      input,
+      'refresh-machine-providers request',
+    )
+    const response = await this.#request(
+      `/api/v1/machines/${encodeURIComponent(machine)}/providers/refresh`,
+      RefreshMachineProvidersResponseSchema,
+      jsonRequest(request, options.signal),
+      request.actionId,
+    )
+    assertProtocolIdentity(
+      response.data.machineId === machine &&
+        response.data.providerDiscovery.state === 'current',
+      'Provider refresh response does not match the requested Machine',
+    )
     return response
   }
 

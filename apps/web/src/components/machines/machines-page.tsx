@@ -36,18 +36,14 @@ export function MachinesPage() {
     enabled: connectionState === 'connected',
   })
   const machines = machinesQuery.data ?? []
-  const localMachines = machines.filter((machine) => machine.kind === 'local')
   const detailQueries = useQueries({
-    queries: localMachines.map((machine) => ({
+    queries: machines.map((machine) => ({
       ...machineDetailQueryOptions(runtime, machine.machineId),
       enabled: connectionState === 'connected',
     })),
   })
-  const localDetails = new Map(
-    localMachines.map((machine, index) => [
-      machine.machineId,
-      detailQueries[index],
-    ]),
+  const machineDetails = new Map(
+    machines.map((machine, index) => [machine.machineId, detailQueries[index]]),
   )
   const connectionUnavailable =
     connectionState === 'unavailable' || connectionState === 'incompatible'
@@ -125,7 +121,7 @@ export function MachinesPage() {
             </div>
             <div className="space-y-4">
               {machines.map((machine) => {
-                const detailQuery = localDetails.get(machine.machineId)
+                const detailQuery = machineDetails.get(machine.machineId)
                 return (
                   <MachineRow
                     key={machine.machineId}
@@ -156,6 +152,9 @@ function MachineRow({
   machine: MachineSummary
 }) {
   const providers = providerPresentationsForMachine(detail?.providers ?? [])
+  const installedProviders = providers.filter(
+    (provider) => provider.availability === 'available',
+  )
   const online =
     machine.connectionState === 'local' || machine.connectionState === 'online'
   const lastSeen = formatMachineLastSeen(machine.lastSeenAt)
@@ -225,12 +224,37 @@ function MachineRow({
               ))
             )}
           </div>
-        ) : (
+        ) : detailPending ? (
           <p className="mt-4 truncate text-xs text-text-muted">
-            {lastSeen === undefined
-              ? '已建立信任，尚未记录成功连接'
-              : `已建立信任 · 最近连接 ${lastSeen}`}
+            正在读取智能体…
           </p>
+        ) : detailError || detail === undefined ? (
+          <p className="mt-4 truncate text-xs text-text-muted">
+            智能体信息暂时不可用
+          </p>
+        ) : detail.providerDiscovery?.state === 'not_observed' ||
+          detail.providerDiscovery === undefined ? (
+          <p className="mt-4 truncate text-xs text-text-muted">
+            尚未检测智能体
+          </p>
+        ) : (
+          <div className="mt-4 min-w-0 text-xs text-text-muted">
+            <p className="truncate" aria-label="此远程机器上检测到的智能体">
+              {detail.providerDiscovery.state === 'last_known'
+                ? '上次检测 · '
+                : ''}
+              {installedProviders.length === 0
+                ? '未检测到已安装智能体'
+                : installedProviders
+                    .map((provider) => provider.displayName)
+                    .join(' · ')}
+            </p>
+            <p className="mt-1 truncate">
+              {lastSeen === undefined
+                ? '已建立信任，尚未记录成功连接'
+                : `最近连接 ${lastSeen}`}
+            </p>
+          </div>
         )}
       </div>
 

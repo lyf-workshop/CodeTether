@@ -36,11 +36,13 @@ import {
   type PendingRemoteMachinePairing,
   type TrustedRemotePeer,
   type ValidatedRemoteProjectLocation,
+  type RemoteProviderDiscovery,
 } from '@codetether/machine-transport'
 
 import type {
   ConversationStore,
   DurableMachine,
+  DurableRemoteProviderObservation,
   DurableTrustedMachineEndpoint,
   DurableTrustedMachinePeer,
 } from '../persistence/index.js'
@@ -101,6 +103,13 @@ export interface RemoteMachineCoordinator extends RemoteMachineStatusSource {
     ) => void,
   ): () => void
   subscribeRemoval?(listener: (machineId: MachineId) => void): () => void
+  subscribeProviderDiscovery?(
+    listener: (observation: DurableRemoteProviderObservation) => void,
+  ): () => void
+  providerDiscoveryCurrent?(
+    machineId: MachineId,
+    observedAt: Timestamp,
+  ): boolean
   beginPairing(input: {
     readonly address: RemoteMachineAddress
     readonly pairingCode: string
@@ -128,6 +137,10 @@ export interface RemoteMachineCoordinator extends RemoteMachineStatusSource {
     trust: DurableTrustedMachinePeer,
     rootPath: string,
   ): Promise<ValidatedRemoteProjectLocation>
+  discoverProviders?(
+    machine: DurableMachine,
+    trust: DurableTrustedMachinePeer,
+  ): Promise<DurableRemoteProviderObservation>
   close?(): Promise<void>
 }
 
@@ -164,6 +177,10 @@ export class UnavailableRemoteMachineCoordinator implements RemoteMachineCoordin
   async validateProjectLocation(): Promise<ValidatedRemoteProjectLocation> {
     throw unavailable()
   }
+
+  async discoverProviders(): Promise<DurableRemoteProviderObservation> {
+    throw unavailable()
+  }
 }
 
 interface PendingPairing {
@@ -178,6 +195,12 @@ interface RemoteWorker {
   abort: AbortController
   connection?: AuthenticatedRemoteMachineConnection
   task?: Promise<void>
+}
+
+interface ProviderDiscoveryTask {
+  readonly abort: AbortController
+  connection?: AuthenticatedRemoteMachineConnection
+  task?: Promise<DurableRemoteProviderObservation>
 }
 
 interface CoordinatorTransport {
@@ -214,12 +237,17 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
   readonly #workers = new Map<MachineId, RemoteWorker>()
   /** Mutating connection operations are linearized per durable Machine. */
   readonly #machineOperations = new Map<MachineId, Promise<unknown>>()
+  readonly #providerDiscoveryTasks = new Map<MachineId, ProviderDiscoveryTask>()
+  readonly #currentProviderObservations = new Map<MachineId, Timestamp>()
   readonly #states = new Map<MachineId, MachineConnectionState>()
   readonly #lastAttemptAt = new Map<MachineId, Timestamp>()
   readonly #listeners = new Set<
     (machineId: MachineId, state: MachineConnectionState) => void
   >()
   readonly #removalListeners = new Set<(machineId: MachineId) => void>()
+  readonly #providerDiscoveryListeners = new Set<
+    (observation: DurableRemoteProviderObservation) => void
+  >()
   readonly #deleteCredentialFile: typeof deleteMachineTlsIdentityFile
   #pendingReservations = 0
   #closed = false
@@ -294,6 +322,24 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
   subscribeRemoval(listener: (machineId: MachineId) => void): () => void {
     this.#removalListeners.add(listener)
     return () => this.#removalListeners.delete(listener)
+  }
+
+  subscribeProviderDiscovery(
+    listener: (observation: DurableRemoteProviderObservation) => void,
+  ): () => void {
+    this.#providerDiscoveryListeners.add(listener)
+    return () => this.#providerDiscoveryListeners.delete(listener)
+  }
+
+  providerDiscoveryCurrent(
+    machineId: MachineId,
+    observedAt: Timestamp,
+  ): boolean {
+    return (
+      this.#states.get(MachineIdSchema.parse(machineId)) === 'online' &&
+      this.#currentProviderObservations.get(machineId) ===
+        TimestampSchema.parse(observedAt)
+    )
   }
 
   async beginPairing(input: {
@@ -602,6 +648,68 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
     })
   }
 
+  discoverProviders(
+    machine: DurableMachine,
+    trust: DurableTrustedMachinePeer,
+  ): Promise<DurableRemoteProviderObservation> {
+    const id = MachineIdSchema.parse(machine.machineId)
+    const existing = this.#providerDiscoveryTasks.get(id)
+    if (existing?.task !== undefined) return existing.task
+    const discovery: ProviderDiscoveryTask = {
+      abort: new AbortController(),
+    }
+    const task = this.#serializeMachineOperation(id, async () => {
+      const current = this.#requireCurrentActiveTrust(machine, trust)
+      let connection: AuthenticatedRemoteMachineConnection | undefined
+      let lastConnectionError: unknown
+      try {
+        const controller = await this.#loadController(current.trust)
+        for (const endpoint of current.trust.endpoints) {
+          try {
+            connection = await this.#transport.connectTrusted({
+              peer: trustedPeer(
+                current.machine,
+                current.trust,
+                endpoint.address,
+              ),
+              controller,
+              signal: discovery.abort.signal,
+            })
+            discovery.connection = connection
+            break
+          } catch (error) {
+            lastConnectionError = error
+          }
+        }
+        if (connection === undefined) {
+          throw (
+            lastConnectionError ?? new Error('No trusted endpoint is available')
+          )
+        }
+        const observation = await this.#discoverAndPersist(
+          current.machine,
+          connection,
+          discovery.abort.signal,
+        )
+        connection.close()
+        connection = undefined
+        discovery.connection = undefined
+        return observation
+      } catch (error) {
+        connection?.close()
+        discovery.connection = undefined
+        throw coordinatorError(error)
+      }
+    }).finally(() => {
+      if (this.#providerDiscoveryTasks.get(id) === discovery) {
+        this.#providerDiscoveryTasks.delete(id)
+      }
+    })
+    discovery.task = task
+    this.#providerDiscoveryTasks.set(id, discovery)
+    return task
+  }
+
   async unpair(
     machine: DurableMachine,
     trust: DurableTrustedMachinePeer,
@@ -704,9 +812,17 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
       if (worker.task !== undefined) cleanups.push(worker.task)
     }
     this.#workers.clear()
+    for (const discovery of this.#providerDiscoveryTasks.values()) {
+      discovery.abort.abort()
+      discovery.connection?.close()
+      if (discovery.task !== undefined) cleanups.push(discovery.task)
+    }
+    this.#providerDiscoveryTasks.clear()
     await Promise.allSettled(cleanups)
     this.#listeners.clear()
     this.#removalListeners.clear()
+    this.#providerDiscoveryListeners.clear()
+    this.#currentProviderObservations.clear()
   }
 
   async #expirePairing(
@@ -1070,6 +1186,9 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
         cycleError = undefined
         this.#setState(machine.machineId, 'online')
         delayMs = 1_000
+        if (typeof connection.discoverProviders === 'function') {
+          void this.discoverProviders(machine, trust).catch(() => undefined)
+        }
         heartbeatActive = true
         while (!this.#closed && !worker.abort.signal.aborted) {
           await abortableDelay(this.#heartbeatIntervalMs, worker.abort.signal)
@@ -1119,6 +1238,31 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
     await this.#deleteCredentialRequired(trust.controllerCredentialRef)
     this.#persistence.deleteRemoteMachine(machineId)
     this.#states.delete(machineId)
+  }
+
+  async #discoverAndPersist(
+    machine: DurableMachine,
+    connection: AuthenticatedRemoteMachineConnection,
+    signal?: AbortSignal,
+  ): Promise<DurableRemoteProviderObservation> {
+    const discovery = await connection.discoverProviders(signal)
+    const observation = this.#persistence.recordRemoteProviderObservation(
+      remoteProviderObservation(machine.machineId, discovery),
+    )
+    if (this.#states.get(machine.machineId) === 'online') {
+      this.#currentProviderObservations.set(
+        machine.machineId,
+        observation.observedAt,
+      )
+    }
+    for (const listener of this.#providerDiscoveryListeners) {
+      try {
+        listener(observation)
+      } catch {
+        // Discovery is already durable; presentation observers are isolated.
+      }
+    }
+    return observation
   }
 
   #confirmedCandidate(attempt: PendingPairing): ConfirmedRemoteMachine {
@@ -1212,6 +1356,7 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
   #setState(machineId: MachineId, state: MachineConnectionState): void {
     if (this.#states.get(machineId) === state) return
     this.#states.set(machineId, state)
+    if (state !== 'online') this.#currentProviderObservations.delete(machineId)
     for (const listener of this.#listeners) listener(machineId, state)
   }
 
@@ -1229,6 +1374,25 @@ export function parseRemoteMachinePairingCandidate(
   value: RemoteMachinePairingCandidate,
 ): RemoteMachinePairingCandidate {
   return RemoteMachinePairingCandidateSchema.parse(value)
+}
+
+function remoteProviderObservation(
+  machineId: MachineId,
+  discovery: RemoteProviderDiscovery,
+): DurableRemoteProviderObservation {
+  for (const provider of discovery.providers) {
+    if (Object.values(provider.capabilities).some(Boolean)) {
+      throw new RemoteMachineCoordinatorError(
+        'protocol_incompatible',
+        'Remote Provider execution capabilities are not enabled',
+      )
+    }
+  }
+  return {
+    machineId: MachineIdSchema.parse(machineId),
+    providers: discovery.providers,
+    observedAt: TimestampSchema.parse(discovery.observedAt),
+  }
 }
 
 function unavailable(): RemoteMachineCoordinatorError {

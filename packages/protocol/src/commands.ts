@@ -22,6 +22,7 @@ import {
   TurnRecordSchema,
 } from './records.js'
 import {
+  MachineProviderDiscoverySchema,
   ProjectLocationSchema,
   RemoteMachineConnectionSchema,
   MachineSummarySchema,
@@ -155,6 +156,7 @@ export const GetMachineResponseSchema = z
       .array(ConversationSummarySchema)
       .max(machineWireLimits.recentConversations),
     connection: RemoteMachineConnectionSchema.optional(),
+    providerDiscovery: MachineProviderDiscoverySchema.optional(),
   })
   .strict()
   .superRefine((response, context) => {
@@ -178,6 +180,40 @@ export const GetMachineResponseSchema = z
         code: 'custom',
         message: 'Machine summary and connection detail states must agree',
         path: ['connection', 'state'],
+      })
+    }
+    if (
+      (response.machine.kind === 'local' &&
+        response.providerDiscovery !== undefined) ||
+      (response.machine.kind === 'remote' &&
+        response.providerDiscovery === undefined)
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message:
+          'Provider discovery metadata must be present only for remote Machines',
+        path: ['providerDiscovery'],
+      })
+    }
+    if (
+      response.providerDiscovery?.state === 'not_observed' &&
+      response.providers.length > 0
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'An unobserved remote Machine cannot expose Provider results',
+        path: ['providers'],
+      })
+    }
+    if (
+      response.providerDiscovery?.state === 'current' &&
+      response.machine.connectionState !== 'online'
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message:
+          'Current remote Provider discovery requires an authenticated online Machine',
+        path: ['providerDiscovery', 'state'],
       })
     }
     const providerIds = new Set<string>()
@@ -276,6 +312,13 @@ export const RetryMachineConnectionRequestSchema = z
   .strict()
 export type RetryMachineConnectionRequest = z.infer<
   typeof RetryMachineConnectionRequestSchema
+>
+
+export const RefreshMachineProvidersRequestSchema = z
+  .object({ actionId: ActionIdSchema })
+  .strict()
+export type RefreshMachineProvidersRequest = z.infer<
+  typeof RefreshMachineProvidersRequestSchema
 >
 
 export const UpdateMachineConnectionAddressRequestSchema = z
@@ -683,6 +726,46 @@ export const UpdateMachineConnectionAddressResponseSchema =
   mutationResponseSchema(MachineConnectionMutationDataSchema)
 export type UpdateMachineConnectionAddressResponse = z.infer<
   typeof UpdateMachineConnectionAddressResponseSchema
+>
+
+export const RefreshMachineProvidersDataSchema = z
+  .object({
+    machineId: MachineIdSchema,
+    providers: z
+      .array(ProviderDescriptorSchema)
+      .max(machineWireLimits.providers),
+    providerDiscovery: MachineProviderDiscoverySchema,
+  })
+  .strict()
+  .superRefine((data, context) => {
+    if (data.providerDiscovery.state !== 'current') {
+      context.addIssue({
+        code: 'custom',
+        message: 'A successful Provider refresh must return a current result',
+        path: ['providerDiscovery', 'state'],
+      })
+    }
+    const providerIds = new Set<string>()
+    for (const [index, provider] of data.providers.entries()) {
+      if (providerIds.has(provider.provider)) {
+        context.addIssue({
+          code: 'custom',
+          message: 'Machine Provider identities must be unique',
+          path: ['providers', index, 'provider'],
+        })
+      }
+      providerIds.add(provider.provider)
+    }
+  })
+export type RefreshMachineProvidersData = z.infer<
+  typeof RefreshMachineProvidersDataSchema
+>
+
+export const RefreshMachineProvidersResponseSchema = mutationResponseSchema(
+  RefreshMachineProvidersDataSchema,
+)
+export type RefreshMachineProvidersResponse = z.infer<
+  typeof RefreshMachineProvidersResponseSchema
 >
 
 export const RenameConversationResponseSchema = mutationResponseSchema(

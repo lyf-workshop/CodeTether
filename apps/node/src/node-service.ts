@@ -13,6 +13,7 @@ import {
   PairingLoginFinishMessageSchema,
   PairingLoginStartMessageSchema,
   ProjectLocationValidateMessageSchema,
+  ProvidersDescribeMessageSchema,
   TrustRevokeMessageSchema,
   exportMachineTlsBinding,
   machineProtocolVersion,
@@ -32,11 +33,13 @@ import { z } from 'zod'
 
 import { PairingMode, type PairingModeView } from './pairing-mode.js'
 import { validateProjectLocationPath } from './project-location-validation.js'
+import { RemoteProviderDetector } from './provider-discovery.js'
 import { NodeStateStore, type TrustedController } from './state-store.js'
 
 const AuthenticatedRequestSchema = z.discriminatedUnion('type', [
   MachinePingMessageSchema,
   ProjectLocationValidateMessageSchema,
+  ProvidersDescribeMessageSchema,
   TrustRevokeMessageSchema,
 ])
 const PairingDecisionSchema = z.discriminatedUnion('type', [
@@ -49,6 +52,7 @@ export interface CodeTetherNodeOptions {
   readonly bindAddress: string
   readonly port: number
   readonly authenticatedIdleTimeoutMs?: number
+  readonly providerDetector?: RemoteProviderDetector
 }
 
 export interface ListeningNodeAddress {
@@ -65,6 +69,7 @@ export class CodeTetherNodeService extends EventEmitter {
   readonly #connections = new Set<TLSSocket>()
   readonly #connectionsByAddress = new Map<string, number>()
   readonly #authenticatedConnections = new Map<string, Set<TLSSocket>>()
+  readonly #providerDetector: RemoteProviderDetector
   #server: Server | undefined
   #closing = false
 
@@ -85,6 +90,8 @@ export class CodeTetherNodeService extends EventEmitter {
         'Authenticated idle timeout must be a positive integer',
       )
     }
+    this.#providerDetector =
+      options.providerDetector ?? new RemoteProviderDetector()
     this.pairing = new PairingMode(
       options.state.machine,
       options.state.identity.publicKeyFingerprint,
@@ -161,6 +168,7 @@ export class CodeTetherNodeService extends EventEmitter {
         }
       })
     }
+    await this.#providerDetector.close()
     await this.state.close()
   }
 
@@ -421,6 +429,27 @@ export class CodeTetherNodeService extends EventEmitter {
             if (!isProjectLocationValidationError(error)) throw error
             await sendSafeError(connection, error)
           }
+          continue
+        }
+        if (request.type === 'providers.describe') {
+          if (
+            request.expectedMachineId !== this.state.machine.machineId ||
+            request.expectedNodeId !== this.state.machine.nodeId
+          ) {
+            throw new MachineTransportError(
+              'identity_mismatch',
+              'Provider discovery request did not match durable Node identity',
+            )
+          }
+          const discovery = await this.#providerDetector.discover()
+          await connection.send({
+            type: 'providers.described',
+            protocolVersion: machineProtocolVersion,
+            requestId: request.requestId,
+            machineId: this.state.machine.machineId,
+            nodeId: this.state.machine.nodeId,
+            ...discovery,
+          })
           continue
         }
         if (request.controllerId !== trusted.controllerId) {

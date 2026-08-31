@@ -41,6 +41,8 @@ import {
   ManualConversationTitleSchema,
   MachineCapabilitiesSchema,
   MachineIdSchema,
+  MachineProviderDiscoverySchema,
+  MachineProviderDiscoveryStateSchema,
   MachineSummarySchema,
   MachinePairingAttemptIdSchema,
   PinConversationRequestSchema,
@@ -55,6 +57,8 @@ import {
   RegisterProjectLocationResponseSchema,
   RemoveProjectLocationRequestSchema,
   RemoveProjectLocationResponseSchema,
+  RefreshMachineProvidersRequestSchema,
+  RefreshMachineProvidersResponseSchema,
   RetryMachineConnectionRequestSchema,
   RetryMachineConnectionResponseSchema,
   ProviderAvailabilitySchema,
@@ -738,6 +742,7 @@ test('validates bounded presentation-safe remote connection recovery contracts',
     projects: [],
     conversations: [],
     connection,
+    providerDiscovery: { state: 'not_observed' },
   }
   assert.deepEqual(GetMachineResponseSchema.parse(detail), detail)
   assert.equal(
@@ -766,6 +771,66 @@ test('validates bounded presentation-safe remote connection recovery contracts',
     'local Machine detail must not expose remote connection metadata',
   )
 
+  for (const state of ['not_observed', 'current', 'last_known']) {
+    assert.equal(MachineProviderDiscoveryStateSchema.parse(state), state)
+  }
+  assert.deepEqual(
+    MachineProviderDiscoverySchema.parse({ state: 'not_observed' }),
+    { state: 'not_observed' },
+  )
+  const currentProviderDiscovery = {
+    state: 'current',
+    observedAt: timestamp,
+  }
+  assert.deepEqual(
+    MachineProviderDiscoverySchema.parse(currentProviderDiscovery),
+    currentProviderDiscovery,
+  )
+  assert.equal(
+    MachineProviderDiscoverySchema.safeParse({
+      state: 'not_observed',
+      observedAt: timestamp,
+    }).success,
+    false,
+  )
+  assert.equal(
+    GetMachineResponseSchema.safeParse({
+      ...detail,
+      providers: [providerDescriptor],
+    }).success,
+    false,
+    'an unobserved Machine cannot expose Provider results',
+  )
+  assert.equal(
+    GetMachineResponseSchema.safeParse({
+      ...detail,
+      machine: {
+        ...remoteMachine,
+        availability: 'unavailable',
+        connectionState: 'offline',
+      },
+      connection: { ...connection, state: 'offline' },
+      providers: [providerDescriptor],
+      providerDiscovery: currentProviderDiscovery,
+    }).success,
+    false,
+    'an offline Machine cannot claim a current observation',
+  )
+  assert.deepEqual(
+    GetMachineResponseSchema.parse({
+      ...detail,
+      machine: {
+        ...remoteMachine,
+        availability: 'unavailable',
+        connectionState: 'offline',
+      },
+      connection: { ...connection, state: 'offline' },
+      providers: [providerDescriptor],
+      providerDiscovery: { state: 'last_known', observedAt: timestamp },
+    }).providerDiscovery,
+    { state: 'last_known', observedAt: timestamp },
+  )
+
   assert.deepEqual(RetryMachineConnectionRequestSchema.parse({ actionId }), {
     actionId,
   })
@@ -773,6 +838,9 @@ test('validates bounded presentation-safe remote connection recovery contracts',
     UpdateMachineConnectionAddressRequestSchema.parse({ actionId, address }),
     { actionId, address },
   )
+  assert.deepEqual(RefreshMachineProvidersRequestSchema.parse({ actionId }), {
+    actionId,
+  })
   const mutation = {
     protocolVersion,
     actionId,
@@ -786,6 +854,40 @@ test('validates bounded presentation-safe remote connection recovery contracts',
   assert.deepEqual(
     UpdateMachineConnectionAddressResponseSchema.parse(mutation),
     mutation,
+  )
+  const refresh = {
+    protocolVersion,
+    actionId,
+    status: 'completed',
+    data: {
+      machineId: remoteMachine.machineId,
+      providers: [providerDescriptor],
+      providerDiscovery: currentProviderDiscovery,
+    },
+  }
+  assert.deepEqual(
+    RefreshMachineProvidersResponseSchema.parse(refresh),
+    refresh,
+  )
+  assert.equal(
+    RefreshMachineProvidersResponseSchema.safeParse({
+      ...refresh,
+      data: {
+        ...refresh.data,
+        providerDiscovery: { state: 'last_known', observedAt: timestamp },
+      },
+    }).success,
+    false,
+  )
+  assert.equal(
+    RefreshMachineProvidersResponseSchema.safeParse({
+      ...refresh,
+      data: {
+        ...refresh.data,
+        providers: [providerDescriptor, providerDescriptor],
+      },
+    }).success,
+    false,
   )
 })
 

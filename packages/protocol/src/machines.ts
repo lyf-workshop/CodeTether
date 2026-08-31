@@ -137,6 +137,40 @@ export type RemoteMachineConnection = z.infer<
   typeof RemoteMachineConnectionSchema
 >
 
+/**
+ * Freshness of the presentation-safe Provider snapshot for a remote Machine.
+ * Provider descriptors remain separate canonical data; this metadata only
+ * states whether they were authenticated on the current connection or are a
+ * durable last-known observation.
+ */
+export const MachineProviderDiscoveryStateSchema = z.enum([
+  'not_observed',
+  'current',
+  'last_known',
+])
+export type MachineProviderDiscoveryState = z.infer<
+  typeof MachineProviderDiscoveryStateSchema
+>
+
+export const MachineProviderDiscoverySchema = z.discriminatedUnion('state', [
+  z.object({ state: z.literal('not_observed') }).strict(),
+  z
+    .object({
+      state: z.literal('current'),
+      observedAt: TimestampSchema,
+    })
+    .strict(),
+  z
+    .object({
+      state: z.literal('last_known'),
+      observedAt: TimestampSchema,
+    })
+    .strict(),
+])
+export type MachineProviderDiscovery = z.infer<
+  typeof MachineProviderDiscoverySchema
+>
+
 export const RemoteMachinePairingCodeSchema = z
   .string()
   .trim()

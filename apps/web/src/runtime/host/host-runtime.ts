@@ -293,6 +293,12 @@ export class HostRuntime {
     return this.#machineActions.retryMachineConnection(machineId)
   }
 
+  refreshMachineProviders(
+    machineId: Parameters<MachineActions['refreshMachineProviders']>[0],
+  ) {
+    return this.#machineActions.refreshMachineProviders(machineId)
+  }
+
   updateMachineConnectionAddress(
     machineId: Parameters<MachineActions['updateMachineConnectionAddress']>[0],
     address: Parameters<MachineActions['updateMachineConnectionAddress']>[1],

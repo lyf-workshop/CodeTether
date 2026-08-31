@@ -100,8 +100,8 @@ test('migration 009 preserves the v8 graph and rolls back replacement tables ato
     rolledBack.close()
 
     const migrated = ConversationStore.open({ databasePath })
-    assert.equal(currentSchemaVersion, 10)
-    assert.equal(migrated.schemaVersion, 10)
+    assert.equal(currentSchemaVersion, 11)
+    assert.equal(migrated.schemaVersion, 11)
     assert.deepEqual(
       migrated.listMachines().map((machine) => machine.machineId),
       [v8MachineId],
@@ -195,7 +195,7 @@ test('migration 010 backfills one preferred endpoint from v9 and rolls back with
     rolledBack.close()
 
     const migrated = ConversationStore.open({ databasePath })
-    assert.equal(migrated.schemaVersion, 10)
+    assert.equal(migrated.schemaVersion, 11)
     const trust = migrated.getTrustedMachinePeer(candidate.machine.machineId)
     assert.deepEqual(trust?.endpoints, [
       {
@@ -219,6 +219,124 @@ test('migration 010 backfills one preferred endpoint from v9 and rolls back with
       reopened.getTrustedMachinePeer(candidate.machine.machineId)?.endpoints
         .length,
       1,
+    )
+    reopened.close()
+  })
+})
+
+test('migration 011 adds bounded remote Provider observations transactionally', () => {
+  withDatabase((databasePath) => {
+    const seed = ConversationStore.open({ databasePath })
+    const candidate = remoteCandidate('machine_providerobservation01', 'p')
+    seed.createRemoteMachineWithTrust(candidate.machine, candidate.trust)
+    seed.activateTrustedMachinePeer(candidate.machine.machineId, later)
+    seed.close()
+
+    const downgrade = new DatabaseSync(databasePath)
+    downgrade.exec(`
+      DELETE FROM schema_migrations WHERE version = 11;
+      DROP TABLE remote_machine_provider_observations;
+      CREATE TABLE remote_machine_provider_observations (
+        blocked INTEGER
+      ) STRICT;
+    `)
+    downgrade.close()
+
+    assert.throws(
+      () => ConversationStore.open({ databasePath }),
+      /remote_machine_provider_observations/u,
+    )
+    const rolledBack = new DatabaseSync(databasePath)
+    assert.equal(
+      rolledBack
+        .prepare('SELECT MAX(version) AS version FROM schema_migrations')
+        .get().version,
+      10,
+    )
+    assert.deepEqual(rolledBack.prepare('PRAGMA foreign_key_check').all(), [])
+    rolledBack.exec('DROP TABLE remote_machine_provider_observations')
+    rolledBack.close()
+
+    const migrated = ConversationStore.open({ databasePath })
+    assert.equal(migrated.schemaVersion, 11)
+    assert.equal(
+      migrated.getRemoteProviderObservation(candidate.machine.machineId),
+      undefined,
+    )
+    migrated.close()
+  })
+})
+
+test('remote Provider observations are strict, durable, replace atomically, and cascade only on unpair', () => {
+  withDatabase((databasePath) => {
+    const store = ConversationStore.open({ databasePath })
+    const pending = remoteCandidate('machine_providerobservation02', 'q')
+    store.createRemoteMachineWithTrust(pending.machine, pending.trust)
+    assert.throws(
+      () =>
+        store.recordRemoteProviderObservation({
+          machineId: pending.machine.machineId,
+          providers: remoteProviderDescriptors('1.0.0'),
+          observedAt: timestamp,
+        }),
+      /actively trusted Machine/u,
+    )
+    store.activateTrustedMachinePeer(pending.machine.machineId, later)
+    assert.throws(
+      () =>
+        store.recordRemoteProviderObservation({
+          machineId: pending.machine.machineId,
+          providers: remoteProviderDescriptors('1.0.0').map((provider) =>
+            provider.provider === 'codex'
+              ? {
+                  ...provider,
+                  capabilities: {
+                    ...provider.capabilities,
+                    streaming: true,
+                  },
+                }
+              : provider,
+          ),
+          observedAt: timestamp,
+        }),
+      /execution capabilities are not enabled/u,
+    )
+    const recorded = store.recordRemoteProviderObservation({
+      machineId: pending.machine.machineId,
+      providers: remoteProviderDescriptors('1.0.0'),
+      observedAt: timestamp,
+    })
+    assert.deepEqual(recorded, {
+      machineId: pending.machine.machineId,
+      providers: remoteProviderDescriptors('1.0.0'),
+      observedAt: timestamp,
+    })
+    store.recordRemoteProviderObservation({
+      machineId: pending.machine.machineId,
+      providers: remoteProviderDescriptors('2.0.0'),
+      observedAt: later,
+    })
+    assert.deepEqual(
+      store.getRemoteProviderObservation(pending.machine.machineId),
+      {
+        machineId: pending.machine.machineId,
+        providers: remoteProviderDescriptors('2.0.0'),
+        observedAt: later,
+      },
+    )
+    store.close()
+
+    const reopened = ConversationStore.open({ databasePath })
+    assert.equal(
+      reopened.getRemoteProviderObservation(pending.machine.machineId)
+        .providers[0].version,
+      '2.0.0',
+    )
+    reopened.markTrustedMachinePeerRevoking(pending.machine.machineId, later)
+    assert.equal(reopened.deleteRemoteMachine(pending.machine.machineId), true)
+    assert.equal(
+      reopened.getRemoteProviderObservation(pending.machine.machineId),
+      undefined,
     )
     reopened.close()
   })
@@ -429,7 +547,7 @@ test('remote Project locations aggregate durably, reject conflicts, and atomical
     store.close()
 
     const reopened = ConversationStore.open({ databasePath })
-    assert.equal(reopened.schemaVersion, 10)
+    assert.equal(reopened.schemaVersion, 11)
     assert.deepEqual(
       reopened
         .getProject('proj_multilocation01')
@@ -660,6 +778,38 @@ function registry(store) {
   })
 }
 
+function remoteProviderDescriptors(version) {
+  const capabilities = {
+    streaming: false,
+    resume: false,
+    interrupt: false,
+    approvals: false,
+    fileRead: false,
+    fileEdit: false,
+    shell: false,
+    search: false,
+    diff: false,
+    toolEvents: false,
+    modelSelection: false,
+    reasoningControl: false,
+  }
+  return [
+    {
+      provider: 'codex',
+      displayName: 'Codex',
+      availability: 'available',
+      version,
+      capabilities,
+    },
+    {
+      provider: 'claude-code',
+      displayName: 'Claude Code',
+      availability: 'not_installed',
+      capabilities,
+    },
+  ]
+}
+
 function remoteCandidate(machineId, marker) {
   const fingerprint = `${marker.repeat(43)}`
   return {
@@ -701,7 +851,8 @@ function downgradeRemoteMachineEndpointsToVersionNine(databasePath) {
     database.exec('PRAGMA foreign_keys = OFF')
     database.exec(`
       BEGIN IMMEDIATE;
-      DELETE FROM schema_migrations WHERE version = 10;
+      DELETE FROM schema_migrations WHERE version IN (10, 11);
+      DROP TABLE remote_machine_provider_observations;
       CREATE TABLE trusted_machine_peers_v9 (
         machine_id TEXT PRIMARY KEY,
         node_identity TEXT NOT NULL UNIQUE,

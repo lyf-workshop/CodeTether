@@ -633,6 +633,82 @@ test('uses Machine routes, forwards AbortSignal, and validates route identity', 
   )
 })
 
+test('refreshes remote Machine Providers with bounded current identity and cancellation', async () => {
+  const remoteMachineId = 'machine_remote01'
+  const actionId = 'act_provider_refresh01'
+  const controller = new AbortController()
+  const provider = {
+    provider: 'codex',
+    displayName: 'Codex',
+    availability: 'available',
+    version: '0.149.1',
+    capabilities: {
+      streaming: true,
+      resume: true,
+      interrupt: true,
+      approvals: true,
+      fileRead: true,
+      fileEdit: true,
+      shell: true,
+      search: true,
+      diff: true,
+      toolEvents: true,
+      modelSelection: true,
+      reasoningControl: true,
+    },
+  }
+  const response = {
+    protocolVersion: 1,
+    actionId,
+    status: 'completed',
+    data: {
+      machineId: remoteMachineId,
+      providers: [provider],
+      providerDiscovery: { state: 'current', observedAt: timestamp },
+    },
+  }
+  const calls = []
+  const client = new CodeTetherClient({
+    baseUrl: 'http://host.test',
+    fetch: async (input, init) => {
+      calls.push({ url: String(input), init })
+      return jsonResponse(response)
+    },
+  })
+
+  const result = await client.refreshMachineProviders(
+    remoteMachineId,
+    { actionId },
+    { signal: controller.signal },
+  )
+
+  assert.deepEqual(result, response)
+  assert.equal(
+    new URL(calls[0].url).pathname,
+    `/api/v1/machines/${remoteMachineId}/providers/refresh`,
+  )
+  assert.equal(calls[0].init.method, 'POST')
+  assert.equal(calls[0].init.signal, controller.signal)
+  assert.deepEqual(JSON.parse(calls[0].init.body), { actionId })
+
+  for (const invalidData of [
+    { ...response.data, machineId: 'machine_other01' },
+    {
+      ...response.data,
+      providerDiscovery: { state: 'last_known', observedAt: timestamp },
+    },
+  ]) {
+    const invalidClient = new CodeTetherClient({
+      baseUrl: 'http://host.test',
+      fetch: async () => jsonResponse({ ...response, data: invalidData }),
+    })
+    await assert.rejects(
+      invalidClient.refreshMachineProviders(remoteMachineId, { actionId }),
+      CodeTetherProtocolError,
+    )
+  }
+})
+
 test('uses bounded remote Machine pairing and trust routes', async () => {
   const calls = []
   const pairingAttemptId = 'pairing_attempt01'

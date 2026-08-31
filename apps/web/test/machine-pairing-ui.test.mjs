@@ -49,18 +49,18 @@ test('pairing inputs are keyboard-oriented, bounded, and restore deliberate focu
   assert.match(dialog, /truncate/u)
 })
 
-test('remote rows show connection truth without querying or presenting Providers', async () => {
+test('remote rows show bounded last-known Provider discovery without triggering detection', async () => {
   const [page, query, runtime] = await Promise.all([
     source('components/machines/machines-page.tsx'),
     source('runtime/host/machine-query.ts'),
     source('runtime/host/host-runtime.ts'),
   ])
 
-  assert.match(
-    page,
-    /localMachines = machines\.filter\(\(machine\) => machine\.kind === 'local'\)/u,
-  )
+  assert.match(page, /queries: machines\.map/u)
   assert.match(page, /machine\.kind === 'local' \? \(/u)
+  assert.match(page, /detail\.providerDiscovery\?\.state === 'not_observed'/u)
+  assert.match(page, /detail\.providerDiscovery\.state === 'last_known'/u)
+  assert.match(page, /未检测到已安装智能体/u)
   assert.match(page, /machineConnectionStateLabel/u)
   assert.match(page, /machineConnectionBadgeVariant/u)
   assert.match(page, /最近连接/u)
@@ -86,6 +86,17 @@ test('remote detail is truthful and unpair remains explicit and remote-only', as
   assert.match(detail, /if \(machine\.kind === 'remote'\)/u)
   assert.match(remote, /可以在这台机器上注册和查看项目工作区位置/u)
   assert.match(remote, /远程智能体与会话执行仍未启用/u)
+  assert.match(remote, /<RemoteMachineProvidersSection/u)
+  assert.match(remote, /runtime\.refreshMachineProviders/u)
+  assert.match(remote, /重新检测智能体/u)
+  assert.match(remote, /aria-describedby/u)
+  assert.match(remote, /远程机器在线后才能重新检测智能体/u)
+  assert.match(remote, /provider\.available \? '已安装'/u)
+  assert.match(remote, /已检测到 CLI；远程执行尚未启用/u)
+  assert.match(remote, /providerDiscovery/u)
+  assert.match(remote, /current/u)
+  assert.match(remote, /last_known/u)
+  assert.match(remote, /not_observed/u)
   assert.match(remote, /machineConnectionStateLabel/u)
   assert.match(remote, /authentication_failed/u)
   assert.match(remote, /recovery_required/u)
@@ -108,7 +119,7 @@ test('remote detail is truthful and unpair remains explicit and remote-only', as
     remote,
     /<MachineProjectsSection machine=\{machine\} projects=\{projects\}/u,
   )
-  assert.doesNotMatch(remote, /providerPresentations\.map|conversations\.map/u)
+  assert.doesNotMatch(remote, /conversations\.map|Start Conversation|创建会话/u)
   assert.match(remote, /disabled=\{projects\.length > 0\}/u)
 
   assert.match(unpair, /if \(machine\.kind !== 'remote'\) return null/u)

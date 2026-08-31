@@ -103,6 +103,11 @@ const migrations: readonly Migration[] = [
     name: 'remote_machine_endpoints',
     up: migrateRemoteMachineEndpoints,
   },
+  {
+    version: 11,
+    name: 'remote_provider_discovery',
+    up: migrateRemoteProviderDiscovery,
+  },
 ]
 
 export const currentSchemaVersion = migrations.at(-1)?.version ?? 0
@@ -1810,6 +1815,37 @@ function migrateRemoteMachineEndpoints(database: DatabaseSync): void {
     BEGIN
       SELECT RAISE(ABORT, 'Trusted Machine endpoint capacity reached');
     END;
+  `)
+}
+
+/**
+ * Persists only the presentation-safe, last-known Provider descriptors that
+ * were observed over an authenticated remote Machine connection. Execution
+ * paths, diagnostics, environment, and Provider session identity stay out of
+ * durable product state.
+ */
+function migrateRemoteProviderDiscovery(database: DatabaseSync): void {
+  database.exec(`
+    CREATE TABLE remote_machine_provider_observations (
+      machine_id TEXT NOT NULL,
+      provider TEXT NOT NULL
+        CHECK (provider IN ('codex', 'claude-code')),
+      descriptor_json TEXT NOT NULL
+        CHECK (
+          json_valid(descriptor_json) AND
+          length(descriptor_json) BETWEEN 2 AND 16384
+        ),
+      observed_at TEXT NOT NULL,
+      PRIMARY KEY (machine_id, provider),
+      FOREIGN KEY (machine_id)
+        REFERENCES trusted_machine_peers(machine_id)
+        ON DELETE CASCADE
+    ) STRICT;
+
+    CREATE INDEX idx_remote_machine_provider_observed
+      ON remote_machine_provider_observations(
+        machine_id, observed_at DESC, provider ASC
+      );
   `)
 }
 

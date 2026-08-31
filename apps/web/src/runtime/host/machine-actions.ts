@@ -15,10 +15,13 @@ import {
   type CancelRemoteMachinePairingResponse,
   type ConfirmRemoteMachinePairingRequest,
   type ConfirmRemoteMachinePairingResponse,
+  type GetMachineResponse,
   type MachineId,
   type MachinePairingAttemptId,
   type MachineSummary,
   type RemoteMachineAddress,
+  type RefreshMachineProvidersRequest,
+  type RefreshMachineProvidersResponse,
   type RetryMachineConnectionRequest,
   type RetryMachineConnectionResponse,
   type UnpairMachineRequest,
@@ -55,6 +58,11 @@ export interface MachineMutationClient {
     request: RetryMachineConnectionRequest,
     options?: { readonly signal?: AbortSignal },
   ): Promise<RetryMachineConnectionResponse>
+  refreshMachineProviders(
+    machineId: MachineId,
+    request: RefreshMachineProvidersRequest,
+    options?: { readonly signal?: AbortSignal },
+  ): Promise<RefreshMachineProvidersResponse>
   updateMachineConnectionAddress(
     machineId: MachineId,
     request: UpdateMachineConnectionAddressRequest,
@@ -63,7 +71,13 @@ export interface MachineMutationClient {
 }
 
 export type MachineOperation =
-  'begin' | 'cancel' | 'confirm' | 'retry' | 'unpair' | 'update-address'
+  | 'begin'
+  | 'cancel'
+  | 'confirm'
+  | 'retry'
+  | 'unpair'
+  | 'update-address'
+  | 'refresh-providers'
 
 interface MutationAttempt<T> {
   readonly identity: string
@@ -172,6 +186,36 @@ export class MachineActions {
         })
         .then((response) => {
           this.#acceptMachine(response.data.machine)
+          return response
+        }),
+    )
+  }
+
+  refreshMachineProviders(
+    machineId: MachineId | string,
+  ): Promise<RefreshMachineProvidersResponse> {
+    const machine = MachineIdSchema.parse(machineId)
+    return this.#run(`providers:${machine}`, 'refresh', () =>
+      this.#client
+        .refreshMachineProviders(machine, {
+          actionId: this.#createActionId(),
+        })
+        .then((response) => {
+          this.#queryClient.setQueryData<GetMachineResponse>(
+            machineQueryKeys.detail(machine),
+            (current) =>
+              current === undefined
+                ? undefined
+                : {
+                    ...current,
+                    providers: response.data.providers,
+                    providerDiscovery: response.data.providerDiscovery,
+                  },
+          )
+          void this.#queryClient.invalidateQueries({
+            queryKey: machineQueryKeys.list,
+            exact: true,
+          })
           return response
         }),
     )
@@ -312,7 +356,9 @@ export function machineErrorMessage(
         ? '该地址指向另一台机器；CodeTether 已拒绝连接，原信任关系未更改。'
         : '远程机器的身份与已确认信息不一致。'
     case 'machine_unreachable':
-      return '远程机器当前不可连接，请检查地址和局域网连接。'
+      return operation === 'refresh-providers'
+        ? '远程机器当前不可连接，无法重新检测智能体。'
+        : '远程机器当前不可连接，请检查地址和局域网连接。'
     case 'machine_protocol_incompatible':
       return '远程节点版本不兼容，请更新 CodeTether Node。'
     case 'machine_connection_failed':
@@ -363,8 +409,10 @@ export function machineErrorMessage(
     case 'conversation_archived':
       return operation === 'unpair'
         ? 'CodeTether 未能取消机器配对。'
-        : operation === 'retry' || operation === 'update-address'
-          ? 'CodeTether 未能恢复机器连接。'
-          : 'CodeTether 未能完成机器配对。'
+        : operation === 'refresh-providers'
+          ? 'CodeTether 未能重新检测这台机器上的智能体。'
+          : operation === 'retry' || operation === 'update-address'
+            ? 'CodeTether 未能恢复机器连接。'
+            : 'CodeTether 未能完成机器配对。'
   }
 }

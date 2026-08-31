@@ -22,6 +22,7 @@ import {
   readMachineTlsIdentityFile,
   receiveCompatibleMachineMessage,
   RemoteProjectLocationPathSchema,
+  RemoteProviderDescriptorSchema,
   validateMachineTlsIdentity,
   verifyPairingConfirmationTag,
 } from '../dist/index.js'
@@ -70,6 +71,96 @@ test('Project Location messages are purpose-specific, strict, and path-bounded',
   )
   assert.equal(
     RemoteProjectLocationPathSchema.safeParse('/safe\0path').success,
+    false,
+  )
+})
+
+test('Provider discovery messages are purpose-specific and presentation-safe', () => {
+  const capabilities = {
+    streaming: false,
+    resume: false,
+    interrupt: false,
+    approvals: false,
+    fileRead: false,
+    fileEdit: false,
+    shell: false,
+    search: false,
+    diff: false,
+    toolEvents: false,
+    modelSelection: false,
+    reasoningControl: false,
+  }
+  const request = {
+    type: 'providers.describe',
+    protocolVersion: 1,
+    requestId: 'P'.repeat(43),
+    expectedMachineId: 'machine_abcdef',
+    expectedNodeId: 'node_abcdef',
+  }
+  const descriptor = {
+    provider: 'codex',
+    displayName: 'Codex',
+    availability: 'available',
+    version: '0.149.1',
+    capabilities,
+  }
+  assert.equal(MachineWireMessageSchema.safeParse(request).success, true)
+  assert.equal(
+    RemoteProviderDescriptorSchema.safeParse(descriptor).success,
+    true,
+  )
+  assert.equal(
+    RemoteProviderDescriptorSchema.safeParse({
+      ...descriptor,
+      capabilities: { ...capabilities, streaming: true },
+    }).success,
+    false,
+  )
+  assert.equal(
+    RemoteProviderDescriptorSchema.safeParse({
+      ...descriptor,
+      executablePath: '/home/user/.local/bin/codex',
+    }).success,
+    false,
+  )
+  assert.equal(
+    MachineWireMessageSchema.safeParse({
+      ...request,
+      executable: '/bin/sh',
+      arguments: ['-c', 'id'],
+    }).success,
+    false,
+  )
+  assert.equal(
+    MachineWireMessageSchema.safeParse({
+      type: 'providers.described',
+      protocolVersion: 1,
+      requestId: request.requestId,
+      machineId: request.expectedMachineId,
+      nodeId: request.expectedNodeId,
+      observedAt: new Date().toISOString(),
+      providers: [
+        descriptor,
+        {
+          ...descriptor,
+          provider: 'claude-code',
+          displayName: 'Claude Code',
+          version: '2.1.251',
+        },
+      ],
+    }).success,
+    true,
+  )
+  assert.equal(
+    MachineWireMessageSchema.safeParse({
+      type: 'providers.described',
+      protocolVersion: 1,
+      requestId: request.requestId,
+      machineId: request.expectedMachineId,
+      nodeId: request.expectedNodeId,
+      observedAt: new Date().toISOString(),
+      providers: [descriptor, descriptor],
+    }).success,
     false,
   )
 })

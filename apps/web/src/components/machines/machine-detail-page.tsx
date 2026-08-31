@@ -22,6 +22,8 @@ import {
 import {
   MachineIdSchema,
   type MachineId,
+  type MachineProviderDiscovery,
+  type ProviderDescriptor,
   type ProjectRecord,
   type RemoteMachineConnection,
   type MachineSummary,
@@ -121,6 +123,8 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
         connection={remoteConnection}
         hostConnectionState={hostConnectionState}
         machine={machine}
+        providerDiscovery={machineQuery.data.providerDiscovery}
+        providers={machineQuery.data.providers}
         projects={machineQuery.data.projects}
         onUnpair={() => setUnpairOpen(true)}
         unpairOpen={unpairOpen}
@@ -303,6 +307,8 @@ interface RemoteMachineDetailProps {
   connection: RemoteMachineConnection
   hostConnectionState: ReturnType<typeof useHostConnectionState>
   machine: MachineSummary
+  providerDiscovery: MachineProviderDiscovery | undefined
+  providers: readonly ProviderDescriptor[]
   projects: readonly ProjectRecord[]
   onUnpair: () => void
   onUnpairOpenChange: (open: boolean) => void
@@ -313,6 +319,8 @@ function RemoteMachineDetail({
   connection,
   hostConnectionState,
   machine,
+  providerDiscovery,
+  providers,
   projects,
   onUnpair,
   onUnpairOpenChange,
@@ -325,6 +333,10 @@ function RemoteMachineDetail({
   const retryMutation = useMutation({
     mutationFn: async () =>
       await runtime.retryMachineConnection(machine.machineId),
+  })
+  const providerRefreshMutation = useMutation({
+    mutationFn: async () =>
+      await runtime.refreshMachineProviders(machine.machineId),
   })
   const hostReadyForConnectionAction = hostConnectionState === 'connected'
   const canRetry =
@@ -479,6 +491,16 @@ function RemoteMachineDetail({
         </section>
       </div>
 
+      <RemoteMachineProvidersSection
+        connection={connection}
+        discovery={providerDiscovery}
+        hostReady={hostReadyForConnectionAction}
+        providers={providers}
+        refreshError={providerRefreshMutation.error}
+        refreshPending={providerRefreshMutation.isPending}
+        onRefresh={() => providerRefreshMutation.mutate()}
+      />
+
       <section className="mt-5 min-w-0 rounded-lg border border-border bg-surface/65 p-5">
         <h2 className="text-section font-semibold text-text-primary">
           当前能力
@@ -524,6 +546,146 @@ function RemoteMachineDetail({
         onOpenChange={setAddressOpen}
       />
     </MachinePageFrame>
+  )
+}
+
+function RemoteMachineProvidersSection({
+  connection,
+  discovery,
+  hostReady,
+  onRefresh,
+  providers,
+  refreshError,
+  refreshPending,
+}: {
+  connection: RemoteMachineConnection
+  discovery: MachineProviderDiscovery | undefined
+  hostReady: boolean
+  onRefresh: () => void
+  providers: readonly ProviderDescriptor[]
+  refreshError: unknown
+  refreshPending: boolean
+}) {
+  const observed =
+    discovery?.state !== 'not_observed' && discovery !== undefined
+  const presentations = observed
+    ? providerPresentationsForMachine(providers)
+    : []
+  const observedAt =
+    discovery?.state === 'current' || discovery?.state === 'last_known'
+      ? formatMachineLastSeen(discovery.observedAt)
+      : undefined
+  const canRefresh = connection.state === 'online' && hostReady
+
+  return (
+    <section
+      className="mt-5 min-w-0 rounded-lg border border-border bg-surface/65 p-5"
+      aria-labelledby="remote-machine-providers-heading"
+    >
+      <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h2
+            id="remote-machine-providers-heading"
+            className="text-section font-semibold text-text-primary"
+          >
+            智能体
+          </h2>
+          <p className="mt-0.5 text-sm text-text-secondary">
+            由受信任的 CodeTether Node 执行一次有界检测。
+          </p>
+        </div>
+        <Button
+          variant="secondary"
+          size="sm"
+          disabled={!canRefresh || refreshPending}
+          aria-describedby={
+            canRefresh ? undefined : 'remote-provider-refresh-unavailable'
+          }
+          title={canRefresh ? undefined : '远程机器在线后才能重新检测智能体'}
+          onClick={onRefresh}
+        >
+          <RefreshCw
+            aria-hidden="true"
+            className={cn(
+              refreshPending && 'animate-spin motion-reduce:animate-none',
+            )}
+          />
+          {refreshPending ? '正在检测…' : '重新检测智能体'}
+        </Button>
+        {canRefresh ? null : (
+          <span id="remote-provider-refresh-unavailable" className="sr-only">
+            远程机器在线后才能重新检测智能体。
+          </span>
+        )}
+      </div>
+      <Separator className="my-4" />
+
+      {discovery === undefined || discovery.state === 'not_observed' ? (
+        <p className="text-sm text-text-muted">
+          尚未从这台机器检测智能体。远程会话执行仍未启用。
+        </p>
+      ) : (
+        <>
+          <p className="mb-4 text-xs text-text-muted" role="status">
+            {discovery.state === 'current'
+              ? `当前连接已验证${observedAt === undefined ? '' : ` · ${observedAt}`}`
+              : `上次检测${observedAt === undefined ? '' : ` · ${observedAt}`} · 当前未重新验证`}
+          </p>
+          <ul className="grid min-w-0 gap-3 md:grid-cols-2">
+            {presentations.map((provider) => (
+              <li
+                key={provider.provider}
+                aria-label={`${provider.displayName}：${
+                  provider.available ? '已安装' : provider.availabilityLabel
+                }`}
+                className="flex min-w-0 items-start gap-3 rounded-md border border-border bg-surface-muted/45 px-3 py-3"
+              >
+                <AgentBadge agent={provider.agent} variant="compact" />
+                <div className="min-w-0 flex-1">
+                  <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                    <span className="min-w-0 truncate text-sm font-medium text-text-primary">
+                      {provider.displayName}
+                    </span>
+                    <span
+                      className={cn(
+                        'text-xs',
+                        provider.available ? 'text-success' : 'text-text-muted',
+                      )}
+                    >
+                      {provider.available
+                        ? '已安装'
+                        : provider.availabilityLabel}
+                    </span>
+                  </div>
+                  {provider.version === undefined ? null : (
+                    <p
+                      title={provider.version}
+                      className="mt-1 max-w-full truncate font-mono text-xs text-text-muted"
+                    >
+                      {provider.version}
+                    </p>
+                  )}
+                  {provider.available ? (
+                    <p className="mt-1 text-xs text-text-muted">
+                      已检测到 CLI；远程执行尚未启用
+                    </p>
+                  ) : null}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+
+      {refreshError !== null && refreshError !== undefined ? (
+        <p
+          role="alert"
+          className="mt-3 break-words rounded-sm border border-danger/30 bg-danger-muted px-3 py-2 text-sm text-danger"
+        >
+          {machineErrorMessage(refreshError, 'refresh-providers')}
+        </p>
+      ) : null}
+    </section>
   )
 }
 

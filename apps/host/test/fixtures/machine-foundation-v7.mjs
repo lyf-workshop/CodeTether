@@ -6,7 +6,8 @@ export function downgradeMachineFoundationToVersionSeven(databasePath) {
   const database = new DatabaseSync(databasePath)
   database.exec('PRAGMA foreign_keys = OFF')
   database.exec(`
-    DELETE FROM schema_migrations WHERE version IN (8, 9, 10);
+    DELETE FROM schema_migrations WHERE version IN (8, 9, 10, 11);
+    DROP TABLE remote_machine_provider_observations;
 
     CREATE TABLE projects_v7 (
       project_id TEXT PRIMARY KEY,

@@ -82,6 +82,21 @@ test('Machine actions keep pairing preview ephemeral and accept only Host-confir
   )
 
   await actions.retryMachineConnection('machine_remote01')
+  queryClient.setQueryData(machineQueryKeys.detail('machine_remote01'), {
+    protocolVersion: 1,
+    machine: remoteMachine(),
+    providers: [],
+    providerDiscovery: { state: 'not_observed' },
+    projects: [],
+    conversations: [],
+    connection: connectionResponse().data.connection,
+  })
+  await actions.refreshMachineProviders('machine_remote01')
+  assert.equal(
+    queryClient.getQueryData(machineQueryKeys.detail('machine_remote01'))
+      .providerDiscovery.state,
+    'current',
+  )
   await actions.updateMachineConnectionAddress('machine_remote01', {
     host: '192.168.1.43',
     port: 4318,
@@ -95,8 +110,47 @@ test('Machine actions keep pairing preview ephemeral and accept only Host-confir
   )
   assert.deepEqual(
     calls.map((call) => call.operation),
-    ['begin', 'confirm', 'retry', 'update-address', 'unpair'],
+    [
+      'begin',
+      'confirm',
+      'retry',
+      'refresh-providers',
+      'update-address',
+      'unpair',
+    ],
   )
+})
+
+test('Provider refresh is deduplicated independently from connection retry', async () => {
+  const discovery = Promise.withResolvers()
+  const retry = Promise.withResolvers()
+  let discoveryCalls = 0
+  let retryCalls = 0
+  const actions = new MachineActions(
+    {
+      refreshMachineProviders() {
+        discoveryCalls += 1
+        return discovery.promise
+      },
+      retryMachineConnection() {
+        retryCalls += 1
+        return retry.promise
+      },
+    },
+    new QueryClient(),
+    actionIdFactory(),
+  )
+
+  const first = actions.refreshMachineProviders('machine_remote01')
+  const duplicate = actions.refreshMachineProviders('machine_remote01')
+  const connection = actions.retryMachineConnection('machine_remote01')
+  assert.equal(first, duplicate)
+  assert.equal(discoveryCalls, 1)
+  assert.equal(retryCalls, 1)
+
+  discovery.resolve(refreshResponse('act_machine01'))
+  retry.resolve(connectionResponse('act_machine02'))
+  await Promise.all([first, connection])
 })
 
 test('connection retry dedupes per Machine and excludes a concurrent address mutation', async () => {
@@ -237,6 +291,10 @@ test('Machine errors expose stable actionable copy instead of transport diagnost
     machineErrorMessage(error('machine_connection_failed'), 'confirm'),
     /private transport diagnostic/u,
   )
+  assert.equal(
+    machineErrorMessage(error('machine_unreachable'), 'refresh-providers'),
+    '远程机器当前不可连接，无法重新检测智能体。',
+  )
 })
 
 function mutationClient(calls) {
@@ -276,9 +334,55 @@ function mutationClient(calls) {
       calls.push({ operation: 'retry', machineId, request })
       return connectionResponse(request.actionId)
     },
+    async refreshMachineProviders(machineId, request) {
+      calls.push({ operation: 'refresh-providers', machineId, request })
+      return refreshResponse(request.actionId, machineId)
+    },
     async updateMachineConnectionAddress(machineId, request) {
       calls.push({ operation: 'update-address', machineId, request })
       return connectionResponse(request.actionId, request.address)
+    },
+  }
+}
+
+function refreshResponse(
+  actionId = 'act_machine01',
+  machineId = 'machine_remote01',
+) {
+  return {
+    protocolVersion: 1,
+    actionId,
+    status: 'completed',
+    data: {
+      machineId,
+      providers: [
+        remoteProvider('codex', 'Codex', '0.149.1'),
+        remoteProvider('claude-code', 'Claude Code', '2.1.251'),
+      ],
+      providerDiscovery: { state: 'current', observedAt: timestamp },
+    },
+  }
+}
+
+function remoteProvider(provider, displayName, version) {
+  return {
+    provider,
+    displayName,
+    availability: 'available',
+    version,
+    capabilities: {
+      streaming: false,
+      resume: false,
+      interrupt: false,
+      approvals: false,
+      fileRead: false,
+      fileEdit: false,
+      shell: false,
+      search: false,
+      diff: false,
+      toolEvents: false,
+      modelSelection: false,
+      reasoningControl: false,
     },
   }
 }

@@ -365,7 +365,8 @@ test('remote pairing stages private trust before publication and unpair rolls ba
   const databasePath = join(directory, 'data', 'codetether.sqlite3')
   await mkdir(workspace, { recursive: true })
   const runtime = new TrackingRuntime('codex')
-  const coordinator = new FakeRemoteMachineCoordinator()
+  const persistence = ConversationStore.open({ databasePath })
+  const coordinator = new FakeRemoteMachineCoordinator(persistence)
   let service
   let server
   try {
@@ -375,6 +376,7 @@ test('remote pairing stages private trust before publication and unpair rolls ba
       runtimes: [runtime],
       maxConversations: 1,
       remoteMachineCoordinator: coordinator,
+      persistence,
     })
     const events = []
     service.publisher.subscribe((event) => events.push(event))
@@ -416,6 +418,9 @@ test('remote pairing stages private trust before publication and unpair rolls ba
     assert.equal(service.listMachines().machines.length, 2)
     const remoteDetail = await service.getMachine(coordinator.machineId)
     assert.deepEqual(remoteDetail.providers, [])
+    assert.deepEqual(remoteDetail.providerDiscovery, {
+      state: 'not_observed',
+    })
     assert.deepEqual(remoteDetail.projects, [])
     assert.deepEqual(remoteDetail.conversations, [])
     const publicRemoteJson = JSON.stringify(remoteDetail)
@@ -482,6 +487,47 @@ test('remote pairing stages private trust before publication and unpair rolls ba
     })
     assert.equal(coordinator.addressUpdates.length, 1)
     assert.equal(JSON.stringify(updated.body).includes('endpoints'), false)
+
+    const refreshedProviders = await requestJson(
+      baseUrl,
+      `/api/v1/machines/${coordinator.machineId}/providers/refresh`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ actionId: 'act_remote_provider_refresh01' }),
+      },
+    )
+    assert.equal(refreshedProviders.status, 200)
+    assert.equal(refreshedProviders.body.status, 'completed')
+    assert.equal(
+      refreshedProviders.body.data.providerDiscovery.state,
+      'current',
+    )
+    assert.deepEqual(
+      refreshedProviders.body.data.providers.map(({ provider }) => provider),
+      ['codex', 'claude-code'],
+    )
+    assert.equal(coordinator.discoveryCalls, 1)
+    const discoveredDetail = await service.getMachine(coordinator.machineId)
+    assert.equal(discoveredDetail.providerDiscovery.state, 'current')
+    assert.equal(discoveredDetail.providers[0].version, '1.2.3')
+    coordinator.connection = { state: 'offline' }
+    const offlineDetail = await service.getMachine(coordinator.machineId)
+    assert.equal(offlineDetail.providerDiscovery.state, 'last_known')
+    assert.equal(offlineDetail.providers[0].version, '1.2.3')
+    const offlineRefresh = await requestJson(
+      baseUrl,
+      `/api/v1/machines/${coordinator.machineId}/providers/refresh`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ actionId: 'act_remote_provider_refresh02' }),
+      },
+    )
+    assert.equal(offlineRefresh.status, 503)
+    assert.equal(offlineRefresh.body.code, 'machine_unreachable')
+    assert.equal(coordinator.discoveryCalls, 1)
+    coordinator.connection = updated.body.data.connection
 
     coordinator.failAddressUpdate = true
     const identityMismatch = await requestJson(
@@ -597,7 +643,7 @@ test('remote pairing stages private trust before publication and unpair rolls ba
       events
         .filter((event) => event.type.startsWith('machine.'))
         .map((event) => event.type),
-      ['machine.updated', 'machine.removed'],
+      ['machine.updated', 'machine.updated', 'machine.removed'],
     )
     assert.equal(runtime.startConversationCalls.length, 0)
     assert.equal(runtime.resumeConversationCalls.length, 0)
@@ -956,7 +1002,9 @@ async function createService(options) {
     hostVersion: '0.0.0-machine-test',
     now: () => new Date(timestamp),
     maxConversations: options.maxConversations,
-    persistence: ConversationStore.open({ databasePath: options.databasePath }),
+    persistence:
+      options.persistence ??
+      ConversationStore.open({ databasePath: options.databasePath }),
     ...(options.remoteMachineCoordinator === undefined
       ? {}
       : { remoteMachineCoordinator: options.remoteMachineCoordinator }),
@@ -968,7 +1016,8 @@ async function createService(options) {
 }
 
 class FakeRemoteMachineCoordinator {
-  constructor() {
+  constructor(persistence) {
+    this.persistence = persistence
     this.attemptId = 'pairing_remoteapi01'
     this.machineId = 'machine_remoteapi01'
     this.failUnpair = false
@@ -980,6 +1029,9 @@ class FakeRemoteMachineCoordinator {
     this.validationCanonicalPath = undefined
     this.validationError = undefined
     this.unpairCalls = 0
+    this.discoveryCalls = 0
+    this.discoveryListeners = new Set()
+    this.currentProviderObservedAt = undefined
     this.confirmed = {
       machine: {
         machineId: this.machineId,
@@ -1011,6 +1063,19 @@ class FakeRemoteMachineCoordinator {
 
   connectionDetails() {
     return this.connection
+  }
+
+  subscribeProviderDiscovery(listener) {
+    this.discoveryListeners.add(listener)
+    return () => this.discoveryListeners.delete(listener)
+  }
+
+  providerDiscoveryCurrent(machineId, observedAt) {
+    return (
+      machineId === this.machineId &&
+      this.connection.state === 'online' &&
+      observedAt === this.currentProviderObservedAt
+    )
   }
 
   async beginPairing(input) {
@@ -1078,6 +1143,20 @@ class FakeRemoteMachineCoordinator {
     return this.connection
   }
 
+  async discoverProviders(machine, trust) {
+    assert.equal(machine.machineId, this.machineId)
+    assert.equal(trust.machineId, this.machineId)
+    this.discoveryCalls += 1
+    const observation = this.persistence.recordRemoteProviderObservation({
+      machineId: this.machineId,
+      providers: remoteProviderDescriptors(),
+      observedAt: timestamp,
+    })
+    this.currentProviderObservedAt = observation.observedAt
+    for (const listener of this.discoveryListeners) listener(observation)
+    return observation
+  }
+
   async validateProjectLocation(machine, trust, path) {
     this.validationCalls.push({ machine, trust, path })
     if (this.validationError !== undefined) throw this.validationError
@@ -1091,6 +1170,38 @@ class FakeRemoteMachineCoordinator {
   }
 
   async close() {}
+}
+
+function remoteProviderDescriptors() {
+  const capabilities = {
+    streaming: false,
+    resume: false,
+    interrupt: false,
+    approvals: false,
+    fileRead: false,
+    fileEdit: false,
+    shell: false,
+    search: false,
+    diff: false,
+    toolEvents: false,
+    modelSelection: false,
+    reasoningControl: false,
+  }
+  return [
+    {
+      provider: 'codex',
+      displayName: 'Codex',
+      availability: 'available',
+      version: '1.2.3',
+      capabilities,
+    },
+    {
+      provider: 'claude-code',
+      displayName: 'Claude Code',
+      availability: 'not_installed',
+      capabilities,
+    },
+  ]
 }
 
 function hasInternalProcessIdentity(value) {

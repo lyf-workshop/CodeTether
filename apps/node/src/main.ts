@@ -198,7 +198,7 @@ function helpText(): string {
     '  --json             Emit bounded machine-readable lifecycle lines',
     '  --help             Show this help',
     '',
-    'The Node exposes identity, pairing, liveness, and trust revocation only.',
+    'The Node exposes identity, pairing, liveness, bounded Provider discovery, and trust revocation only.',
     '',
   ].join('\n')
 }

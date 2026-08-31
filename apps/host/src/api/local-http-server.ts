@@ -46,6 +46,8 @@ import {
   ResolveAttentionResponseSchema,
   RetryMachineConnectionRequestSchema,
   RetryMachineConnectionResponseSchema,
+  RefreshMachineProvidersRequestSchema,
+  RefreshMachineProvidersResponseSchema,
   ListProjectsResponseSchema,
   ListProjectConversationsQuerySchema,
   PinConversationRequestSchema,
@@ -563,6 +565,34 @@ export class LocalHttpServer {
           202,
           RetryMachineConnectionResponseSchema.parse(
             await this.#service.retryMachineConnection(machineId, body),
+          ),
+          context.allowedOrigin,
+        )
+        return
+      }
+      const machineProviderRefreshRoute = this.#http.matchPath(
+        url.pathname,
+        /^\/api\/v1\/machines\/([^/]+)\/providers\/refresh$/u,
+      )
+      if (
+        request.method === 'POST' &&
+        machineProviderRefreshRoute !== undefined
+      ) {
+        const machineId = this.#http.parseRouteId(
+          MachineIdSchema,
+          machineProviderRefreshRoute[0],
+          'machineId',
+        )
+        const body = await this.#http.readValidatedBody(
+          request,
+          RefreshMachineProvidersRequestSchema,
+        )
+        context.actionId = body.actionId
+        this.#http.writeJson(
+          response,
+          200,
+          RefreshMachineProvidersResponseSchema.parse(
+            await this.#service.refreshMachineProviders(machineId, body),
           ),
           context.allowedOrigin,
         )

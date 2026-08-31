@@ -23,6 +23,7 @@ import {
 import { parseNodeCli, runNode } from '../dist/main.js'
 import { CodeTetherNodeService } from '../dist/node-service.js'
 import { validateProjectLocationPath } from '../dist/project-location-validation.js'
+import { RemoteProviderDetector } from '../dist/provider-discovery.js'
 import { NodeStateStore } from '../dist/state-store.js'
 
 async function controller(controllerId = newControllerId()) {
@@ -37,6 +38,7 @@ async function startNode(
   name = 'Development Server',
   authenticatedIdleTimeoutMs,
   port = 0,
+  providerDetector,
 ) {
   const state = await NodeStateStore.open({
     dataDirectory,
@@ -49,10 +51,146 @@ async function startNode(
     bindAddress: '127.0.0.1',
     port,
     authenticatedIdleTimeoutMs,
+    providerDetector,
   })
   const address = await service.listen()
   return { state, service, endpoint: { host: '127.0.0.1', port: address.port } }
 }
+
+test('trusted Provider discovery is identity-bound, deduplicated, and non-executable', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'codetether-node-'))
+  const localController = await controller()
+  let running
+  let connected
+  const providerDetector = new RemoteProviderDetector({
+    probes: [
+      {
+        provider: 'codex',
+        displayName: 'Codex',
+        executable: process.execPath,
+        arguments: [
+          '-e',
+          "setTimeout(() => process.stdout.write('codex-cli 0.149.1'), 30)",
+        ],
+        parseVersion: (output) => /^codex-cli (\S+)$/u.exec(output)?.[1],
+        isSupportedVersion: () => true,
+      },
+      {
+        provider: 'claude-code',
+        displayName: 'Claude Code',
+        executable: process.execPath,
+        arguments: [
+          '-e',
+          "setTimeout(() => process.stdout.write('2.1.251 (Claude Code)'), 30)",
+        ],
+        parseVersion: (output) => /^(\S+) \(Claude Code\)$/u.exec(output)?.[1],
+        isSupportedVersion: (version) => version === '2.1.251',
+      },
+    ],
+  })
+  try {
+    running = await startNode(
+      directory,
+      'Discovery Node',
+      undefined,
+      0,
+      providerDetector,
+    )
+    const mode = await running.service.enablePairing()
+    const pending = await beginRemoteMachinePairing({
+      endpoint: running.endpoint,
+      pairingCode: mode.code,
+      controller: localController,
+    })
+    const trusted = await pending.confirm()
+    connected = await connectTrustedRemoteMachine({
+      peer: trusted,
+      controller: localController,
+    })
+    const first = connected.discoverProviders()
+    const duplicate = connected.discoverProviders()
+    assert.equal(first, duplicate)
+    const discovery = await first
+    assert.deepEqual(
+      discovery.providers.map(({ provider, availability }) => ({
+        provider,
+        availability,
+      })),
+      [
+        { provider: 'codex', availability: 'available' },
+        { provider: 'claude-code', availability: 'available' },
+      ],
+    )
+    assert.equal(
+      discovery.providers.some(({ capabilities }) =>
+        Object.values(capabilities).some(Boolean),
+      ),
+      false,
+    )
+
+    connected.machine.nodeId = 'node_wrong_identity'
+    await assert.rejects(
+      connected.discoverProviders(),
+      (error) =>
+        error.code === 'identity_mismatch' && error.peerAuthenticated === true,
+    )
+  } finally {
+    connected?.close()
+    await running?.service.close().catch(() => undefined)
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('Node disconnect during Provider discovery cancels exact owned probes boundedly', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'codetether-node-'))
+  const localController = await controller()
+  let running
+  let connected
+  const hangingProbe = (provider) => ({
+    provider,
+    displayName: provider === 'codex' ? 'Codex' : 'Claude Code',
+    executable: process.execPath,
+    arguments: ['-e', 'setInterval(() => {}, 1000)'],
+    parseVersion: () => undefined,
+    isSupportedVersion: () => false,
+  })
+  const providerDetector = new RemoteProviderDetector({
+    probes: [hangingProbe('codex'), hangingProbe('claude-code')],
+    timeoutMs: 5_000,
+  })
+  try {
+    running = await startNode(
+      directory,
+      'Disconnect Discovery Node',
+      undefined,
+      0,
+      providerDetector,
+    )
+    const mode = await running.service.enablePairing()
+    const pending = await beginRemoteMachinePairing({
+      endpoint: running.endpoint,
+      pairingCode: mode.code,
+      controller: localController,
+    })
+    const trusted = await pending.confirm()
+    connected = await connectTrustedRemoteMachine({
+      peer: trusted,
+      controller: localController,
+    })
+    const discovery = connected.discoverProviders()
+    const disconnected = assert.rejects(discovery, /connection/u)
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    const startedAt = performance.now()
+    await running.service.close()
+    running = undefined
+    await disconnected
+    assert.ok(performance.now() - startedAt < 2_000)
+  } finally {
+    connected?.close()
+    await running?.service.close().catch(() => undefined)
+    await rm(directory, { recursive: true, force: true })
+  }
+})
 
 test('real loopback pairing, staged trust recovery, restart, ping, and unpair', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'codetether-node-'))

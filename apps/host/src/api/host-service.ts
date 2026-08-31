@@ -92,6 +92,9 @@ import {
   type UnpairMachineResponse,
   type RetryMachineConnectionRequest,
   type RetryMachineConnectionResponse,
+  type RefreshMachineProvidersRequest,
+  type RefreshMachineProvidersResponse,
+  type MachineProviderDiscovery,
   type UpdateMachineConnectionAddressRequest,
   type UpdateMachineConnectionAddressResponse,
   type UnarchiveConversationRequest,
@@ -238,6 +241,7 @@ export class HostService {
   readonly #unsubscribeFailures: Array<() => void> = []
   #unsubscribeRemoteMachineStatus?: () => void
   #unsubscribeRemoteMachineRemoval?: () => void
+  #unsubscribeRemoteProviderDiscovery?: () => void
   readonly #runtimeFailures = new Map<AgentProvider, Error>()
   #closePromise?: Promise<void>
   #acceptingActions = true
@@ -328,6 +332,22 @@ export class HostService {
           type: 'machine.removed',
           payload: { machineId },
         })
+      })
+    this.#unsubscribeRemoteProviderDiscovery =
+      this.#remoteMachines.subscribeProviderDiscovery?.((observation) => {
+        try {
+          const durable = this.#persistence?.getMachine(observation.machineId)
+          if (durable?.kind !== 'remote') return
+          const machine = this.#refreshRemoteMachine(durable)
+          this.#publish({
+            conversationId: null,
+            timestamp: this.#timestamp(),
+            type: 'machine.updated',
+            payload: { machine },
+          })
+        } catch (error) {
+          if (!(error instanceof MachineRegistryError)) throw error
+        }
       })
     this.#projects = new ProjectRegistry({
       workspacePolicy: this.#workspacePolicy,
@@ -458,6 +478,10 @@ export class HostService {
   async getMachine(machineId: MachineId): Promise<GetMachineResponse> {
     try {
       const machine = this.#machines.get(MachineIdSchema.parse(machineId))
+      const remoteProviderPresentation =
+        machine.kind === 'remote'
+          ? this.#remoteProviderPresentation(machine)
+          : undefined
       const projects = await this.#projects.listForMachine(machine.machineId)
       const conversations =
         this.#persistence === undefined
@@ -479,11 +503,19 @@ export class HostService {
       return GetMachineResponseSchema.parse({
         protocolVersion,
         machine,
-        providers: this.#providerDescriptorsForMachine(machine.machineId),
+        providers:
+          remoteProviderPresentation?.providers ??
+          this.#providerDescriptorsForMachine(machine.machineId),
         projects,
         conversations,
         ...(machine.kind === 'remote'
-          ? { connection: this.#remoteConnection(machine) }
+          ? {
+              connection: this.#remoteConnection(machine),
+              providerDiscovery:
+                remoteProviderPresentation?.providerDiscovery ?? {
+                  state: 'not_observed' as const,
+                },
+            }
           : {}),
       })
     } catch (error) {
@@ -742,6 +774,67 @@ export class HostService {
             data: {
               machine,
               connection: this.#remoteConnection(machine),
+            },
+          }
+        } catch (error) {
+          throw remoteMachineServiceError(error)
+        }
+      },
+      false,
+    )
+  }
+
+  async refreshMachineProviders(
+    machineId: MachineId,
+    request: RefreshMachineProvidersRequest,
+  ): Promise<RefreshMachineProvidersResponse> {
+    const id = MachineIdSchema.parse(machineId)
+    return await this.#executeAction(
+      request.actionId,
+      `machine.providers.refresh:${id}`,
+      { machineId: id, request },
+      async () => {
+        const machine = this.#machines.get(id)
+        if (machine.kind !== 'remote') {
+          throw new HostServiceError(
+            'unsupported',
+            'Local Provider discovery is managed by the local Host',
+            409,
+          )
+        }
+        if (machine.connectionState !== 'online') {
+          throw new HostServiceError(
+            'machine_unreachable',
+            'Remote Machine must be online to detect Providers',
+            503,
+          )
+        }
+        const { durable, trust } = this.#requireRemoteMachineTrust(id)
+        const discover = this.#remoteMachines.discoverProviders
+        if (discover === undefined) {
+          throw new HostServiceError(
+            'machine_connection_failed',
+            'Remote Provider discovery is unavailable',
+            503,
+          )
+        }
+        try {
+          const observation = await discover.call(
+            this.#remoteMachines,
+            durable,
+            trust,
+          )
+          return {
+            protocolVersion,
+            actionId: request.actionId,
+            status: 'completed',
+            data: {
+              machineId: id,
+              providers: [...observation.providers],
+              providerDiscovery: {
+                state: 'current',
+                observedAt: observation.observedAt,
+              },
             },
           }
         } catch (error) {
@@ -3083,6 +3176,8 @@ export class HostService {
       this.#unsubscribeRemoteMachineStatus = undefined
       this.#unsubscribeRemoteMachineRemoval?.()
       this.#unsubscribeRemoteMachineRemoval = undefined
+      this.#unsubscribeRemoteProviderDiscovery?.()
+      this.#unsubscribeRemoteProviderDiscovery = undefined
       this.#actions.clear()
       this.#hydrations.clear()
       this.#runtimeAccess.clear()
@@ -3179,6 +3274,34 @@ export class HostService {
   ): readonly ProviderDescriptor[] {
     const machine = this.#machines.get(machineId)
     return machine.kind === 'local' ? this.#providerDescriptors() : []
+  }
+
+  #remoteProviderPresentation(machine: MachineSummary): {
+    readonly providers: readonly ProviderDescriptor[]
+    readonly providerDiscovery: MachineProviderDiscovery
+  } {
+    if (machine.kind !== 'remote') {
+      throw new Error('Remote Provider presentation requires a remote Machine')
+    }
+    const observation = this.#persistence?.getRemoteProviderObservation(
+      machine.machineId,
+    )
+    if (observation === undefined) {
+      return { providers: [], providerDiscovery: { state: 'not_observed' } }
+    }
+    const current =
+      machine.connectionState === 'online' &&
+      this.#remoteMachines.providerDiscoveryCurrent?.(
+        machine.machineId,
+        observation.observedAt,
+      ) === true
+    return {
+      providers: observation.providers,
+      providerDiscovery: {
+        state: current ? 'current' : 'last_known',
+        observedAt: observation.observedAt,
+      },
+    }
   }
 
   #assertRuntimeAvailable(provider?: AgentProvider): void {

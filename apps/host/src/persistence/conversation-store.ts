@@ -12,6 +12,7 @@ import {
   MachineIdSchema,
   ManualConversationTitleSchema,
   ProjectIdSchema,
+  ProviderDescriptorSchema,
   ProviderIdSchema,
   RemoteMachineAddressSchema,
   TimestampSchema,
@@ -23,6 +24,7 @@ import {
   type ConversationTitleSource,
   type MachineId,
   type ProjectId,
+  type ProviderDescriptor,
   type ProviderId,
   type RemoteMachineAddress,
   type Timestamp,
@@ -217,6 +219,13 @@ export interface DurableTrustedMachineEndpoint {
   readonly updatedAt: Timestamp
   readonly lastSuccessfulAt?: Timestamp
   readonly lastFailureAt?: Timestamp
+}
+
+/** Presentation-safe last-known discovery from an authenticated remote Node. */
+export interface DurableRemoteProviderObservation {
+  readonly machineId: MachineId
+  readonly providers: readonly ProviderDescriptor[]
+  readonly observedAt: Timestamp
 }
 
 export type NewDurableTrustedMachinePeer = Omit<
@@ -500,6 +509,80 @@ export class ConversationStore {
         row,
         this.#listTrustedMachineEndpoints(machineId),
       )
+    })
+  }
+
+  getRemoteProviderObservation(
+    machineId: MachineId,
+  ): DurableRemoteProviderObservation | undefined {
+    const id = MachineIdSchema.parse(machineId)
+    const rows = this.#statement(
+      `SELECT machine_id, provider, descriptor_json, observed_at
+       FROM remote_machine_provider_observations
+       WHERE machine_id = ?
+       ORDER BY CASE provider WHEN 'codex' THEN 0 ELSE 1 END, provider ASC`,
+    ).all(id) as unknown as RemoteProviderObservationRow[]
+    if (rows.length === 0) return undefined
+    const observedAt = TimestampSchema.parse(rows[0]?.observed_at)
+    const providers = rows.map((row) => {
+      if (row.machine_id !== id) {
+        throw new Error('Remote Provider observation Machine identity changed')
+      }
+      if (TimestampSchema.parse(row.observed_at) !== observedAt) {
+        throw new Error('Remote Provider observation snapshot is inconsistent')
+      }
+      const descriptor = ProviderDescriptorSchema.parse(
+        parseJson(row.descriptor_json, 'Remote Provider descriptor'),
+      )
+      if (descriptor.provider !== ProviderIdSchema.parse(row.provider)) {
+        throw new Error('Remote Provider observation identity is inconsistent')
+      }
+      return descriptor
+    })
+    return parseRemoteProviderObservation({
+      machineId: id,
+      providers,
+      observedAt,
+    })
+  }
+
+  recordRemoteProviderObservation(
+    observation: DurableRemoteProviderObservation,
+  ): DurableRemoteProviderObservation {
+    const value = parseRemoteProviderObservation(observation)
+    return this.runInTransaction(() => {
+      const machine = this.getMachine(value.machineId)
+      const trust = this.getTrustedMachinePeer(value.machineId)
+      if (
+        machine?.kind !== 'remote' ||
+        trust === undefined ||
+        trust.trustState !== 'active'
+      ) {
+        throw new Error(
+          'Remote Provider discovery requires an actively trusted Machine',
+        )
+      }
+      this.#statement(
+        'DELETE FROM remote_machine_provider_observations WHERE machine_id = ?',
+      ).run(value.machineId)
+      const insert = this.#statement(
+        `INSERT INTO remote_machine_provider_observations (
+           machine_id, provider, descriptor_json, observed_at
+         ) VALUES (?, ?, ?, ?)`,
+      )
+      for (const provider of value.providers) {
+        const serialized = JSON.stringify(provider)
+        if (serialized.length > 16_384) {
+          throw new Error('Remote Provider descriptor exceeds durable bounds')
+        }
+        insert.run(
+          value.machineId,
+          provider.provider,
+          serialized,
+          value.observedAt,
+        )
+      }
+      return this.getRemoteProviderObservation(value.machineId) ?? value
     })
   }
 
@@ -2057,6 +2140,13 @@ interface TrustedMachineEndpointRow {
   readonly last_failure_at: string | null
 }
 
+interface RemoteProviderObservationRow {
+  readonly machine_id: string
+  readonly provider: string
+  readonly descriptor_json: string
+  readonly observed_at: string
+}
+
 interface TurnRow {
   readonly turn_id: string
   readonly conversation_id: string
@@ -2190,6 +2280,40 @@ function parseMachine(value: DurableMachine): DurableMachine {
     ...(value.lastSeenAt === undefined
       ? {}
       : { lastSeenAt: TimestampSchema.parse(value.lastSeenAt) }),
+  }
+}
+
+function parseRemoteProviderObservation(
+  value: DurableRemoteProviderObservation,
+): DurableRemoteProviderObservation {
+  const machineId = MachineIdSchema.parse(value.machineId)
+  if (value.providers.length !== 2) {
+    throw new Error('Remote Provider observation count is invalid')
+  }
+  const identities = new Set<ProviderId>()
+  const providers = value.providers.map((provider) => {
+    const descriptor = ProviderDescriptorSchema.parse(provider)
+    if (Object.values(descriptor.capabilities).some(Boolean)) {
+      throw new Error('Remote Provider execution capabilities are not enabled')
+    }
+    if (identities.has(descriptor.provider)) {
+      throw new Error('Remote Provider observation identities must be unique')
+    }
+    identities.add(descriptor.provider)
+    return descriptor
+  })
+  if (!identities.has('codex') || !identities.has('claude-code')) {
+    throw new Error(
+      'Remote Provider observation must contain each supported Provider',
+    )
+  }
+  providers.sort((left, right) =>
+    left.provider === right.provider ? 0 : left.provider === 'codex' ? -1 : 1,
+  )
+  return {
+    machineId,
+    providers,
+    observedAt: TimestampSchema.parse(value.observedAt),
   }
 }
 

@@ -14,10 +14,13 @@ import {
   PairingLoginResponseMessageSchema,
   PairingOfferMessageSchema,
   ProjectLocationValidatedMessageSchema,
+  ProvidersDescribedMessageSchema,
   RemoteProjectLocationPathSchema,
   TrustRevokedMessageSchema,
   type PublicKeyFingerprint,
   type ProjectLocationValidatedMessage,
+  type ProvidersDescribedMessage,
+  type RemoteProviderDescriptor,
   type RemoteMachineMetadata,
 } from './messages.js'
 import {
@@ -352,6 +355,7 @@ export class AuthenticatedRemoteMachineConnection {
   readonly machine: RemoteMachineMetadata
   readonly #connection: FramedMachineConnection
   readonly #controllerId: ControllerId
+  #providerDiscoveryInFlight?: Promise<RemoteProviderDiscovery>
 
   constructor(
     connection: FramedMachineConnection,
@@ -427,6 +431,44 @@ export class AuthenticatedRemoteMachineConnection {
     }
   }
 
+  discoverProviders(signal?: AbortSignal): Promise<RemoteProviderDiscovery> {
+    this.#providerDiscoveryInFlight ??= this.#discoverProviders(signal).finally(
+      () => {
+        this.#providerDiscoveryInFlight = undefined
+      },
+    )
+    return this.#providerDiscoveryInFlight
+  }
+
+  async #discoverProviders(
+    signal?: AbortSignal,
+  ): Promise<RemoteProviderDiscovery> {
+    const requestId = newMachineNonce()
+    await this.#connection.send({
+      type: 'providers.describe',
+      protocolVersion: machineProtocolVersion,
+      requestId,
+      expectedMachineId: this.machine.machineId,
+      expectedNodeId: this.machine.nodeId,
+    })
+    const response = await receiveCompatibleMachineMessage(
+      this.#connection,
+      z.union([ProvidersDescribedMessageSchema, MachineErrorMessageSchema]),
+      {
+        signal,
+        timeoutMs: machineTransportLimits.providerDiscoveryTimeoutMs,
+      },
+    )
+    if (response.type === 'machine.error') {
+      throw remoteError(response.code, response.message, true)
+    }
+    this.#assertProviderDiscoveryResponse(response, requestId)
+    return {
+      providers: response.providers,
+      observedAt: response.observedAt,
+    }
+  }
+
   async revoke(signal?: AbortSignal): Promise<void> {
     const nonce = newMachineNonce()
     await this.#connection.send({
@@ -476,6 +518,24 @@ export class AuthenticatedRemoteMachineConnection {
       )
     }
   }
+
+  #assertProviderDiscoveryResponse(
+    response: ProvidersDescribedMessage,
+    requestId: string,
+  ): void {
+    if (
+      response.requestId !== requestId ||
+      response.machineId !== this.machine.machineId ||
+      response.nodeId !== this.machine.nodeId
+    ) {
+      this.#connection.destroy()
+      throw new MachineTransportError(
+        'identity_mismatch',
+        'Provider discovery did not match the trusted Machine',
+        { peerAuthenticated: true },
+      )
+    }
+  }
 }
 
 export interface ValidatedRemoteProjectLocation {
@@ -483,6 +543,11 @@ export interface ValidatedRemoteProjectLocation {
   readonly basename: string
   readonly exists: true
   readonly directory: true
+}
+
+export interface RemoteProviderDiscovery {
+  readonly providers: readonly RemoteProviderDescriptor[]
+  readonly observedAt: string
 }
 
 export async function receiveCompatibleMachineMessage<T>(

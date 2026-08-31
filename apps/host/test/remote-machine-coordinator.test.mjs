@@ -33,6 +33,9 @@ async function fixture(options = {}) {
   let connectCalls = 0
   let revokeCalls = 0
   let validateCalls = 0
+  let discoveryCalls = 0
+  let activeDiscoveries = 0
+  let maximumActiveDiscoveries = 0
   let activeValidations = 0
   let maximumActiveValidations = 0
   const attemptedEndpoints = []
@@ -116,6 +119,29 @@ async function fixture(options = {}) {
             activeValidations -= 1
           }
         },
+        ...(options.discoveryEnabled === true
+          ? {
+              async discoverProviders(signal) {
+                discoveryCalls += 1
+                activeDiscoveries += 1
+                maximumActiveDiscoveries = Math.max(
+                  maximumActiveDiscoveries,
+                  activeDiscoveries,
+                )
+                try {
+                  if (options.discoveryError !== undefined) {
+                    throw options.discoveryError
+                  }
+                  if (options.discoveryHandler !== undefined) {
+                    return await options.discoveryHandler(signal)
+                  }
+                  return remoteProviderDiscovery()
+                } finally {
+                  activeDiscoveries -= 1
+                }
+              },
+            }
+          : {}),
         close() {},
       }
       connections.push(connection)
@@ -143,6 +169,15 @@ async function fixture(options = {}) {
       get maximumActiveValidations() {
         return maximumActiveValidations
       },
+      get discovery() {
+        return discoveryCalls
+      },
+      get maximumActiveDiscoveries() {
+        return maximumActiveDiscoveries
+      },
+      get activeDiscoveries() {
+        return activeDiscoveries
+      },
     },
     attemptedEndpoints,
     async close(coordinator) {
@@ -150,6 +185,41 @@ async function fixture(options = {}) {
       store.close()
       await rm(directory, { recursive: true, force: true })
     },
+  }
+}
+
+function remoteProviderDiscovery() {
+  const capabilities = {
+    streaming: false,
+    resume: false,
+    interrupt: false,
+    approvals: false,
+    fileRead: false,
+    fileEdit: false,
+    shell: false,
+    search: false,
+    diff: false,
+    toolEvents: false,
+    modelSelection: false,
+    reasoningControl: false,
+  }
+  return {
+    providers: [
+      {
+        provider: 'codex',
+        displayName: 'Codex',
+        availability: 'available',
+        version: '1.2.3',
+        capabilities,
+      },
+      {
+        provider: 'claude-code',
+        displayName: 'Claude Code',
+        availability: 'not_installed',
+        capabilities,
+      },
+    ],
+    observedAt: '2026-08-31T12:00:00.000Z',
   }
 }
 
@@ -252,6 +322,129 @@ test('serializes purpose-specific ProjectLocation validation and keeps pinned tr
         ?.endpoints.map((endpoint) => endpoint.address),
       [{ host: '172.20.1.30', port: 4319 }],
     )
+  } finally {
+    await f.close(coordinator)
+  }
+})
+
+test('discovers remote Providers once per authenticated connection, deduplicates refresh, and preserves connectivity on discovery failure', async () => {
+  let releaseDiscovery
+  const gate = new Promise((resolve) => {
+    releaseDiscovery = resolve
+  })
+  let holdFirst = true
+  const options = {
+    discoveryEnabled: true,
+    async discoveryHandler() {
+      if (holdFirst) {
+        holdFirst = false
+        await gate
+      }
+      return remoteProviderDiscovery()
+    },
+  }
+  const f = await fixture(options)
+  let coordinator
+  try {
+    coordinator = await SecureRemoteMachineCoordinator.create({
+      persistence: f.store,
+      transport: f.transport,
+      heartbeatIntervalMs: 1_000,
+      reconnectMaximumDelayMs: 20,
+    })
+    const candidate = await coordinator.beginPairing({
+      address: { host: '172.20.1.30', port: 4319 },
+      pairingCode: '123456',
+    })
+    const confirmed = await coordinator.confirmPairing(
+      candidate.pairingAttemptId,
+      (staged) =>
+        f.store.createRemoteMachineWithTrust(staged.machine, staged.trust),
+    )
+    await waitFor(
+      () =>
+        coordinator.connectionState(confirmed.machine.machineId) === 'online',
+      'trusted worker connection',
+    )
+    await waitFor(() => f.counts.discovery === 1, 'automatic discovery')
+    const machine = f.store.getMachine(confirmed.machine.machineId)
+    const trust = f.store.getTrustedMachinePeer(confirmed.machine.machineId)
+    assert.ok(machine)
+    assert.ok(trust)
+    const first = coordinator.discoverProviders(machine, trust)
+    const second = coordinator.discoverProviders(machine, trust)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.equal(f.counts.discovery, 1)
+    releaseDiscovery()
+    assert.deepEqual(await first, await second)
+    assert.equal(f.counts.maximumActiveDiscoveries, 1)
+    assert.deepEqual(
+      f.store.getRemoteProviderObservation(machine.machineId),
+      await first,
+    )
+    assert.equal(
+      coordinator.providerDiscoveryCurrent(
+        machine.machineId,
+        (await first).observedAt,
+      ),
+      true,
+    )
+
+    options.discoveryError = new MachineTransportError(
+      'connection_failed',
+      'controlled discovery failure',
+      { peerAuthenticated: true },
+    )
+    await assert.rejects(
+      coordinator.discoverProviders(
+        machine,
+        f.store.getTrustedMachinePeer(machine.machineId),
+      ),
+      (error) => error.code === 'connection_failed',
+    )
+    assert.equal(coordinator.connectionState(machine.machineId), 'online')
+    assert.deepEqual(
+      f.store.getRemoteProviderObservation(machine.machineId),
+      await first,
+    )
+  } finally {
+    await f.close(coordinator)
+  }
+})
+
+test('close aborts and awaits an in-flight remote Provider discovery', async () => {
+  const options = {
+    discoveryEnabled: true,
+    discoveryHandler(signal) {
+      return new Promise((resolve, reject) => {
+        const onAbort = () => reject(signal.reason ?? new Error('aborted'))
+        if (signal.aborted) {
+          onAbort()
+          return
+        }
+        signal.addEventListener('abort', onAbort, { once: true })
+      })
+    },
+  }
+  const f = await fixture(options)
+  let coordinator
+  try {
+    coordinator = await SecureRemoteMachineCoordinator.create({
+      persistence: f.store,
+      transport: f.transport,
+      heartbeatIntervalMs: 1_000,
+      reconnectMaximumDelayMs: 20,
+    })
+    const candidate = await coordinator.beginPairing({
+      address: { host: '172.20.1.30', port: 4319 },
+      pairingCode: '123456',
+    })
+    await coordinator.confirmPairing(candidate.pairingAttemptId, (staged) =>
+      f.store.createRemoteMachineWithTrust(staged.machine, staged.trust),
+    )
+    await waitFor(() => f.counts.discovery === 1, 'hanging discovery')
+    await coordinator.close()
+    assert.equal(f.counts.activeDiscoveries, 0)
   } finally {
     await f.close(coordinator)
   }

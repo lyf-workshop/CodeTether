@@ -914,7 +914,7 @@ Exit gate:
 
 ## Phase 6B.3 — Remote ProjectLocation
 
-**Status:** current approved implementation scope; not accepted or frozen.
+**Status:** accepted and frozen at `11c652c`.
 
 **Goal:** let one logical Project own one durable canonical workspace Location on each trusted Machine without enabling remote execution or a general remote filesystem.
 
@@ -933,6 +933,28 @@ Exit gate:
 ### Exit gate
 
 - A real trusted Node validates and registers the same logical Project's remote canonical directory; Project and Machine surfaces show exactly one correct row; explicit safe removal breaks the former Location/unpair dead-end without deleting files or history; restart, Node restart, offline reads/removal, duplicate/conflict behavior, and separate authenticated unpair preserve identity and durability; local Projects, Conversations, Codex/Claude, Search/organization/Attention, secure reconnect, background behavior, Provider isolation, cleanup, tests, and clean build identity remain correct.
+
+## Phase 6C.1 — Remote Provider Discovery & Capability Foundation
+
+**Status:** current approved implementation scope; not accepted or frozen.
+
+**Goal:** let a trusted remote Node describe the coding-agent CLIs actually present on its Machine without enabling remote Conversation or Provider execution.
+
+### In scope
+
+- One purpose-specific authenticated `providers.describe` operation over the existing pinned Machine transport. The request accepts no executable, argv, path, Prompt, workspace, environment, or generic method input.
+- Node-owned bounded `codex --version` and `claude --version` probes with structured argv, `shell: false`, an isolated non-Project working directory, a restricted environment, independent timeout/output bounds, exact child ownership, and presentation-safe results only.
+- Reuse the canonical `ProviderDescriptor` identity, availability, version, and capability vocabulary. CLI installation truth remains distinct from CodeTether remote-execution truth; every remote execution capability remains false in this phase.
+- Transactional migration 011 stores only a small last-known authenticated Provider snapshot and observation time. Machine reads never execute detection; an online reconnect and explicit deduplicated refresh may update it, while offline presentation labels it as last known.
+- Compact Provider presentation on remote Machine list/detail surfaces, safe refresh/error states, and unchanged New Conversation gating through `Machine.capabilities.providerExecution === false`.
+
+### Out of scope
+
+- Remote Conversation creation, Prompt/session/Turn execution, streaming, Tools, Approval, Diff, interrupt, shell, Terminal, Provider configuration, generic process invocation, filesystem access, Project synchronization, LAN discovery, relay, or Internet transport.
+
+### Exit gate
+
+- A real trusted Node reports truthful Codex/Claude installation and version state; refresh/reconnect/offline last-known behavior stays bounded and identity-authenticated; malformed or hostile probes fail safely; no detection child remains; remote Conversation creation stays impossible; frozen local/remote lifecycle behavior, installed Desktop, tests, cleanup, and clean build identity pass.
 
 ## Phase 7 — Remote LAN / Tailscale
 

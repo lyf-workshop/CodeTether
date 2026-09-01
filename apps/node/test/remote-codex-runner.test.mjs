@@ -294,6 +294,29 @@ test('raw notification policy admits only text lifecycle and private reasoning',
   )
   assert.doesNotThrow(() =>
     validateRemoteCodexTextNotification({
+      method: 'configWarning',
+      params: {
+        summary: 'private warning',
+        details: null,
+      },
+    }),
+  )
+  assert.doesNotThrow(() =>
+    validateRemoteCodexTextNotification({
+      method: 'configWarning',
+      params: {
+        summary: 'private warning',
+        details: 'private details',
+        path: '/private/config.toml',
+        range: {
+          start: { line: 1, column: 2 },
+          end: { line: 1, column: 3 },
+        },
+      },
+    }),
+  )
+  assert.doesNotThrow(() =>
+    validateRemoteCodexTextNotification({
       method: 'deprecationNotice',
       params: { details: 'private details', summary: 'private summary' },
     }),
@@ -371,6 +394,23 @@ test('raw notification policy admits only text lifecycle and private reasoning',
         serverName: 'codex',
         status: 'disabled',
         unexpected: true,
+      },
+    },
+    {
+      method: 'configWarning',
+      params: {
+        summary: 'warning',
+        unexpected: true,
+      },
+    },
+    {
+      method: 'configWarning',
+      params: {
+        summary: 'warning',
+        range: {
+          start: { line: -1, column: 2 },
+          end: { line: 1, column: 3 },
+        },
       },
     },
     {

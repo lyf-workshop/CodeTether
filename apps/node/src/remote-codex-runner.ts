@@ -666,6 +666,23 @@ export function validateRemoteCodexTextNotification(
   notification: JsonRpcNotification,
 ): void {
   switch (notification.method) {
+    case 'configWarning': {
+      const params = requireRawRecord(notification.params)
+      requireAllowedRawKeys(params, ['details', 'path', 'range', 'summary'])
+      requireBoundedRawMetadataText(params.summary)
+      if (params.details !== undefined && params.details !== null) {
+        requireBoundedRawMetadataText(params.details)
+      }
+      if (params.path !== undefined && params.path !== null) {
+        requireBoundedRawMetadataText(params.path)
+      }
+      if (params.range !== undefined && params.range !== null) {
+        const range = requireExactRawRecord(params.range, ['end', 'start'])
+        requireRawTextPosition(range.start)
+        requireRawTextPosition(range.end)
+      }
+      return
+    }
     case 'remoteControl/status/changed': {
       const params = requireExactRawRecord(notification.params, [
         'environmentId',
@@ -830,6 +847,22 @@ function requireExactRawKeys(
   ) {
     throw remotePolicyViolation()
   }
+}
+
+function requireAllowedRawKeys(
+  value: Record<string, unknown>,
+  allowedKeys: readonly string[],
+): void {
+  const allowed = new Set(allowedKeys)
+  if (Object.keys(value).some((key) => !allowed.has(key))) {
+    throw remotePolicyViolation()
+  }
+}
+
+function requireRawTextPosition(value: unknown): void {
+  const position = requireExactRawRecord(value, ['column', 'line'])
+  requireRawTimestamp(position.column)
+  requireRawTimestamp(position.line)
 }
 
 function requireRawIdentity(value: unknown): void {

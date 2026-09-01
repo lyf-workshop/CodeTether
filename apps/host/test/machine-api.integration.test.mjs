@@ -1225,6 +1225,164 @@ test('remote Codex creation is lazy, idempotent, Machine-scoped, and resumes aft
   }
 })
 
+test('remote Claude creation stays lazy and effort-bound while safe Tools, idempotency, and native resume remain canonical', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'codetether-remote-claude-'))
+  const workspace = join(directory, 'workspace')
+  const databasePath = join(directory, 'data', 'codetether.sqlite3')
+  await mkdir(workspace, { recursive: true })
+  const remoteRoot = '/srv/projects/codetether-remote-claude'
+  let service
+  try {
+    const persistence = ConversationStore.open({ databasePath })
+    const coordinator = new FakeRemoteMachineCoordinator(persistence)
+    coordinator.remoteClaudeExecution = true
+    const localRuntime = new TrackingRuntime('codex')
+    service = await createService({
+      workspace,
+      databasePath,
+      runtimes: [localRuntime],
+      maxConversations: 2,
+      remoteMachineCoordinator: coordinator,
+      persistence,
+    })
+    const project = (await service.listProjects()).projects[0]
+    assert.ok(project)
+    await service.beginRemoteMachinePairing({
+      actionId: 'act_remote_claude_pair01',
+      address: { host: '192.0.2.10', port: 43_217 },
+      pairingCode: '482731',
+    })
+    await service.confirmRemoteMachinePairing(coordinator.attemptId, {
+      actionId: 'act_remote_claude_confirm01',
+    })
+    await service.updateMachineConnectionAddress(coordinator.machineId, {
+      actionId: 'act_remote_claude_online01',
+      address: { host: '192.0.2.11', port: 43_217 },
+    })
+    await service.refreshMachineProviders(coordinator.machineId, {
+      actionId: 'act_remote_claude_detect01',
+    })
+    coordinator.validationCanonicalPath = remoteRoot
+    await service.registerProjectLocation(project.projectId, {
+      actionId: 'act_remote_claude_location01',
+      machineId: coordinator.machineId,
+      path: remoteRoot,
+    })
+
+    await assert.rejects(
+      service.createConversation({
+        actionId: 'act_remote_claude_invalid_effort01',
+        machineId: coordinator.machineId,
+        projectId: project.projectId,
+        provider: 'claude-code',
+        reasoning: 'ultra',
+      }),
+      (error) => error.code === 'invalid_request',
+    )
+    assert.equal(coordinator.openClaudeCalls.length, 0)
+
+    const createRequest = {
+      actionId: 'act_remote_claude_create01',
+      machineId: coordinator.machineId,
+      projectId: project.projectId,
+      provider: 'claude-code',
+      reasoning: 'high',
+    }
+    const created = await service.createConversation(createRequest)
+    assert.deepEqual(await service.createConversation(createRequest), created)
+    assert.equal(created.data.conversation.provider, 'claude-code')
+    assert.equal(created.data.conversation.machineId, coordinator.machineId)
+    assert.equal(created.data.conversation.reasoning, 'high')
+    assert.equal(coordinator.openClaudeCalls.length, 0)
+    assert.equal(localRuntime.startConversationCalls.length, 0)
+
+    const conversationId = created.data.conversation.conversationId
+    service.getConversation(conversationId)
+    await service.renameConversation(conversationId, {
+      actionId: 'act_remote_claude_cold_rename01',
+      title: 'Remote Claude cold metadata',
+    })
+    const search = await service.searchProjectConversations(project.projectId, {
+      q: 'remote claude cold',
+      archive: 'active',
+      limit: 25,
+    })
+    assert.equal(search.results[0]?.conversation.conversationId, conversationId)
+    assert.equal(coordinator.openClaudeCalls.length, 0)
+
+    const turnRequest = {
+      actionId: 'act_remote_claude_turn01',
+      input: { type: 'text', text: 'Inspect fixture.txt safely' },
+    }
+    const [firstTurn, duplicateTurn] = await Promise.all([
+      service.startTurn(conversationId, turnRequest),
+      service.startTurn(conversationId, turnRequest),
+    ])
+    assert.deepEqual(duplicateTurn, firstTurn)
+    assert.equal(coordinator.openClaudeCalls.length, 1)
+    assert.equal(coordinator.openClaudeCalls[0].providerSessionId, undefined)
+    assert.equal(
+      coordinator.openClaudeCalls[0].providerSessionMaterialized,
+      undefined,
+    )
+    assert.equal(coordinator.openClaudeCalls[0].effort, 'high')
+    assert.equal(coordinator.remoteClaudeTurnCalls.length, 1)
+    await assert.rejects(
+      service.startTurn(conversationId, {
+        ...turnRequest,
+        input: { type: 'text', text: 'changed input' },
+      }),
+      (error) => error.code === 'conflict',
+    )
+
+    const completed = await waitForConversationIdle(service, conversationId)
+    assert.equal(completed.conversation.status, 'completed')
+    assert.equal(completed.runtime.turns.length, 1)
+    assert.equal(completed.runtime.messages[0]?.text, 'remote complete')
+    assert.equal(completed.runtime.tools.length, 1)
+    assert.equal(completed.runtime.tools[0]?.kind, 'read')
+    assert.equal(completed.runtime.tools[0]?.status, 'completed')
+    assert.equal(completed.runtime.tools[0]?.success, true)
+    assert.equal(
+      JSON.stringify(completed).includes(
+        '123e4567-e89b-42d3-a456-426614174000',
+      ),
+      false,
+    )
+    const attention = service.listAttention({ status: 'open', limit: 50 })
+    assert.equal(
+      attention.items.filter(
+        (item) =>
+          item.conversationId === conversationId &&
+          item.type === 'completed_review',
+      ).length,
+      1,
+    )
+
+    coordinator.remoteClaudeSessions.at(-1)?.simulateIdleClose()
+    await service.startTurn(conversationId, {
+      actionId: 'act_remote_claude_resume01',
+      input: { type: 'text', text: 'Continue the native session' },
+    })
+    assert.equal(coordinator.openClaudeCalls.length, 2)
+    assert.equal(
+      coordinator.openClaudeCalls[1].providerSessionId,
+      '123e4567-e89b-42d3-a456-426614174000',
+    )
+    assert.equal(
+      coordinator.openClaudeCalls[1].providerSessionMaterialized,
+      true,
+    )
+    assert.equal(coordinator.openClaudeCalls[1].effort, 'high')
+    await waitForConversationIdle(service, conversationId)
+    assert.equal(coordinator.remoteClaudeTurnCalls.length, 2)
+    assert.equal(localRuntime.startConversationCalls.length, 0)
+  } finally {
+    await service?.close().catch(() => undefined)
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
 async function createService(options) {
   const service = new HostService({
     runtimes: options.runtimes,
@@ -1264,10 +1422,15 @@ class FakeRemoteMachineCoordinator {
     this.discoveryListeners = new Set()
     this.currentProviderObservedAt = undefined
     this.remoteExecution = false
+    this.remoteClaudeExecution = false
     this.openCodexCalls = []
+    this.openClaudeCalls = []
     this.remoteTurnCalls = []
+    this.remoteClaudeTurnCalls = []
     this.remoteSessionCloseCalls = 0
+    this.remoteClaudeSessionCloseCalls = 0
     this.remoteSessions = []
+    this.remoteClaudeSessions = []
     this.openError = undefined
     this.offlineAfterStart = false
     this.statusListeners = new Set()
@@ -1302,7 +1465,7 @@ class FakeRemoteMachineCoordinator {
 
   providerExecutionAvailable(machineId) {
     return (
-      this.remoteExecution &&
+      (this.remoteExecution || this.remoteClaudeExecution) &&
       machineId === this.machineId &&
       this.connection.state === 'online' &&
       this.currentProviderObservedAt !== undefined
@@ -1407,7 +1570,10 @@ class FakeRemoteMachineCoordinator {
     this.discoveryCalls += 1
     const observation = this.persistence.recordRemoteProviderObservation({
       machineId: this.machineId,
-      providers: remoteProviderDescriptors(this.remoteExecution),
+      providers: remoteProviderDescriptors(
+        this.remoteExecution,
+        this.remoteClaudeExecution,
+      ),
       observedAt: timestamp,
     })
     this.currentProviderObservedAt = observation.observedAt
@@ -1476,13 +1642,85 @@ class FakeRemoteMachineCoordinator {
     return session
   }
 
+  async openClaudeSession(machine, trust, input) {
+    assert.equal(machine.machineId, this.machineId)
+    assert.equal(trust.machineId, this.machineId)
+    if (!this.remoteClaudeExecution) {
+      throw new RemoteMachineCoordinatorError(
+        'remote_execution_unavailable',
+        'Controlled unavailable remote Claude execution',
+      )
+    }
+    if (this.openError !== undefined) throw this.openError
+    this.openClaudeCalls.push(input)
+    const providerSessionId =
+      input.providerSessionId ?? '123e4567-e89b-42d3-a456-426614174000'
+    let closed = false
+    const session = {
+      machineId: this.machineId,
+      conversationId: input.conversationId,
+      providerSessionId,
+      effort: input.effort,
+      get closed() {
+        return closed
+      },
+      simulateIdleClose() {
+        closed = true
+      },
+      startTurn: async (turn) => {
+        this.remoteClaudeTurnCalls.push(turn)
+        return {
+          async *events() {
+            if (closed) throw new Error('controlled Claude Node disconnect')
+            yield { type: 'message.delta', text: 'remote ', sequence: 1 }
+            yield {
+              type: 'tool.started',
+              itemId: 'read-item-1',
+              kind: 'read',
+              name: 'Read',
+              command: 'fixture.txt',
+              sequence: 2,
+            }
+            yield {
+              type: 'tool.output',
+              itemId: 'read-item-1',
+              output: 'known marker',
+              sequence: 3,
+            }
+            yield {
+              type: 'tool.completed',
+              itemId: 'read-item-1',
+              kind: 'read',
+              name: 'Read',
+              command: 'fixture.txt',
+              success: true,
+              sequence: 4,
+            }
+            yield { type: 'message.delta', text: 'complete', sequence: 5 }
+            yield { type: 'message.completed', sequence: 6 }
+            yield { type: 'turn.completed', sequence: 7 }
+          },
+        }
+      },
+      close: async () => {
+        closed = true
+        this.remoteClaudeSessionCloseCalls += 1
+      },
+    }
+    this.remoteClaudeSessions.push(session)
+    return session
+  }
+
   async close() {}
 }
 
-function remoteProviderDescriptors(remoteExecution = false) {
-  const capabilities = {
-    streaming: remoteExecution,
-    resume: remoteExecution,
+function remoteProviderDescriptors(
+  remoteExecution = false,
+  remoteClaudeExecution = false,
+) {
+  const unavailableCapabilities = {
+    streaming: false,
+    resume: false,
     interrupt: false,
     approvals: false,
     fileRead: false,
@@ -1500,15 +1738,37 @@ function remoteProviderDescriptors(remoteExecution = false) {
       displayName: 'Codex',
       availability: 'available',
       version: '1.2.3',
-      capabilities,
+      capabilities: {
+        ...unavailableCapabilities,
+        streaming: remoteExecution,
+        resume: remoteExecution,
+      },
     },
     {
       provider: 'claude-code',
       displayName: 'Claude Code',
-      availability: 'not_installed',
-      capabilities: Object.fromEntries(
-        Object.keys(capabilities).map((capability) => [capability, false]),
-      ),
+      availability: remoteClaudeExecution ? 'available' : 'not_installed',
+      capabilities: {
+        ...unavailableCapabilities,
+        streaming: remoteClaudeExecution,
+        resume: remoteClaudeExecution,
+        fileRead: remoteClaudeExecution,
+        search: remoteClaudeExecution,
+        toolEvents: remoteClaudeExecution,
+        reasoningControl: remoteClaudeExecution,
+      },
+      ...(remoteClaudeExecution
+        ? {
+            reasoningLabel: '思考强度',
+            reasoningOptions: [
+              ['low', '低'],
+              ['medium', '中'],
+              ['high', '高'],
+              ['xhigh', '超高'],
+              ['max', '最大'],
+            ].map(([id, label]) => ({ id, label })),
+          }
+        : {}),
     },
   ]
 }

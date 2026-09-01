@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 
 import {
   ClaudeCodeDetector,
+  ClaudeCodeOwnedProcessCleanupError,
   detectClaudeCode,
   prepareClaudeCode,
 } from '../dist/index.js'
@@ -19,6 +20,38 @@ const launcher = {
   executable: process.execPath,
   prefixArguments: [fixture],
   sourcePath: process.execPath,
+}
+
+async function waitForPid(path) {
+  const deadline = Date.now() + 3000
+  while (Date.now() < deadline) {
+    try {
+      const value = Number.parseInt(await readFile(path, 'utf8'), 10)
+      if (Number.isSafeInteger(value) && value > 0) return value
+    } catch {
+      // The bounded fixture may not have reached its auth probe yet.
+    }
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 20))
+  }
+  throw new Error('fixture process identity was not observed')
+}
+
+function processExists(pid) {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return error?.code !== 'ESRCH'
+  }
+}
+
+async function waitForProcessExit(pid) {
+  const deadline = Date.now() + 3000
+  while (Date.now() < deadline) {
+    if (!processExists(pid)) return
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 20))
+  }
+  assert.fail(`fixture process ${String(pid)} remained alive`)
 }
 
 test('detects the exact tested version and caches the probe', async (t) => {
@@ -114,6 +147,142 @@ test('requires a bounded machine-readable logged-in auth status', async () => {
     assert.equal(result.diagnosticCode, diagnosticCode)
   }
 })
+
+test('lifecycle abort waits for the exact in-flight auth probe tree to exit', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'codetether-claude-abort-'))
+  const authPidPath = join(root, 'auth.pid')
+  const childPidPath = join(root, 'auth-child.pid')
+  const processOwnership =
+    process.platform === 'win32' ? 'direct-child' : 'posix-process-group'
+  t.after(async () => {
+    await import('node:fs/promises').then(({ rm }) =>
+      rm(root, { recursive: true, force: true }),
+    )
+  })
+  const controller = new AbortController()
+  const preparationPromise = prepareClaudeCode({
+    launcher: {
+      ...launcher,
+      prefixArguments: [
+        ...launcher.prefixArguments,
+        '--fixture-auth-status=hang',
+        `--fixture-auth-pid=${authPidPath}`,
+        ...(process.platform === 'win32'
+          ? []
+          : [`--fixture-auth-child-pid=${childPidPath}`]),
+      ],
+    },
+    timeoutMs: 30_000,
+    signal: controller.signal,
+    processOwnership,
+    environment: {
+      ...process.env,
+    },
+  })
+  const authPid = await waitForPid(authPidPath)
+  const childPid =
+    process.platform === 'win32' ? undefined : await waitForPid(childPidPath)
+
+  controller.abort()
+  const preparation = await preparationPromise
+
+  assert.equal(preparation.detection.status, 'misconfigured')
+  assert.equal(
+    preparation.detection.diagnosticCode,
+    'auth_status_probe_aborted',
+  )
+  await waitForProcessExit(authPid)
+  if (childPid !== undefined) await waitForProcessExit(childPid)
+})
+
+test(
+  'successful POSIX auth probe also cleans descendants before settling',
+  { skip: process.platform === 'win32' },
+  async (t) => {
+    const root = await mkdtemp(join(tmpdir(), 'codetether-claude-success-'))
+    const childPidPath = join(root, 'auth-child.pid')
+    let childPid
+    t.after(async () => {
+      if (childPid !== undefined && processExists(childPid)) {
+        process.kill(childPid, 'SIGKILL')
+      }
+      await import('node:fs/promises').then(({ rm }) =>
+        rm(root, { recursive: true, force: true }),
+      )
+    })
+    const preparation = await prepareClaudeCode({
+      launcher: {
+        ...launcher,
+        prefixArguments: [
+          ...launcher.prefixArguments,
+          `--fixture-auth-child-pid=${childPidPath}`,
+        ],
+      },
+      timeoutMs: 5_000,
+      processOwnership: 'posix-process-group',
+      environment: { ...process.env },
+    })
+    childPid = await waitForPid(childPidPath)
+
+    assert.equal(preparation.detection.status, 'available')
+    await waitForProcessExit(childPid)
+  },
+)
+
+test(
+  'POSIX preparation propagates an unverified process-group cleanup',
+  { skip: process.platform === 'win32' },
+  async (t) => {
+    const root = await mkdtemp(join(tmpdir(), 'codetether-claude-failure-'))
+    const authPidPath = join(root, 'auth.pid')
+    const childPidPath = join(root, 'auth-child.pid')
+    const originalKill = process.kill
+    let authPid
+    let childPid
+    t.after(async () => {
+      process.kill = originalKill
+      if (authPid !== undefined) {
+        try {
+          originalKill.call(process, -authPid, 'SIGKILL')
+        } catch (error) {
+          if (error?.code !== 'ESRCH') throw error
+        }
+      }
+      if (childPid !== undefined) await waitForProcessExit(childPid)
+      await import('node:fs/promises').then(({ rm }) =>
+        rm(root, { recursive: true, force: true }),
+      )
+    })
+    process.kill = (pid, signal) => {
+      if (pid < 0 && signal !== 0) {
+        const error = new Error('controlled process-group signal failure')
+        error.code = 'EPERM'
+        throw error
+      }
+      return originalKill.call(process, pid, signal)
+    }
+    const preparation = prepareClaudeCode({
+      launcher: {
+        ...launcher,
+        prefixArguments: [
+          ...launcher.prefixArguments,
+          `--fixture-auth-pid=${authPidPath}`,
+          `--fixture-auth-child-pid=${childPidPath}`,
+        ],
+      },
+      timeoutMs: 1_000,
+      processOwnership: 'posix-process-group',
+      environment: { ...process.env },
+    })
+    authPid = await waitForPid(authPidPath)
+    childPid = await waitForPid(childPidPath)
+
+    await assert.rejects(
+      preparation,
+      (error) => error instanceof ClaudeCodeOwnedProcessCleanupError,
+    )
+  },
+)
 
 test('prepares restricted turns with only allowlisted user configuration', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'codetether-claude-config-'))

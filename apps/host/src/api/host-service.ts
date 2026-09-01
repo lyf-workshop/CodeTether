@@ -162,6 +162,10 @@ import {
 import { ProviderEventTranslator } from './provider-event-translator.js'
 import { ProviderRegistry, providerSessionKey } from './provider-registry.js'
 import {
+  RemoteClaudeHostRuntime,
+  type RemoteClaudeRuntimeSession,
+} from './remote-claude-host-runtime.js'
+import {
   RemoteCodexHostRuntime,
   type RemoteCodexRuntimeSession,
 } from './remote-codex-host-runtime.js'
@@ -300,17 +304,32 @@ export class HostService {
     this.#machineRuntimes = new MachineProviderRuntimeResolver({
       localMachineId: this.#machines.localMachineId(),
       localProviders: this.#providers,
-      createRemoteCodex: (machineId) =>
-        this.#remoteMachines.openCodexSession === undefined
-          ? undefined
-          : new RemoteCodexHostRuntime({
-              machineId,
-              now: this.#now,
-              opener: {
-                open: async (input) =>
-                  await this.#openRemoteCodexSession(input),
-              },
-            }),
+      createRemoteProvider: (machineId, provider) => {
+        switch (provider) {
+          case 'codex':
+            return this.#remoteMachines.openCodexSession === undefined
+              ? undefined
+              : new RemoteCodexHostRuntime({
+                  machineId,
+                  now: this.#now,
+                  opener: {
+                    open: async (input) =>
+                      await this.#openRemoteCodexSession(input),
+                  },
+                })
+          case 'claude-code':
+            return this.#remoteMachines.openClaudeSession === undefined
+              ? undefined
+              : new RemoteClaudeHostRuntime({
+                  machineId,
+                  now: this.#now,
+                  opener: {
+                    open: async (input) =>
+                      await this.#openRemoteClaudeSession(input),
+                  },
+                })
+        }
+      },
     })
     this.#unsubscribeRemoteMachineStatus =
       this.#remoteMachines.subscribeStatus?.((machineId, connectionState) => {
@@ -1677,6 +1696,13 @@ export class HostService {
           conversationMachineId,
           conversationProvider,
         )
+        assertProviderConfiguration(
+          this.#providerDescriptorsForMachine(conversationMachineId).find(
+            (descriptor) => descriptor.provider === conversationProvider,
+          ),
+          durableConversation?.model ?? runtimeConversation?.model,
+          durableConversation?.reasoning ?? runtimeConversation?.reasoning,
+        )
         const releaseRuntimePin =
           this.#pinRuntimeConversation(parsedConversationId)
         let conversation: ConversationState
@@ -2455,11 +2481,7 @@ export class HostService {
       if (alreadyHydrated !== undefined) return alreadyHydrated
       if (durableConversation.providerThreadId === undefined) {
         const machine = this.#machines.get(durable.record.machineId)
-        if (
-          machine.kind !== 'remote' ||
-          durable.record.provider !== 'codex' ||
-          durable.history.totalTurns !== 0
-        ) {
+        if (machine.kind !== 'remote' || durable.history.totalTurns !== 0) {
           throw providerConversationUnavailableError(
             durableConversation.provider,
           )
@@ -2638,10 +2660,7 @@ export class HostService {
   }
 
   #invalidateRemoteProviderSession(conversation: ConversationState): void {
-    if (
-      conversation.record.machineId === this.#machines.localMachineId() ||
-      conversation.record.provider !== 'codex'
-    ) {
+    if (conversation.record.machineId === this.#machines.localMachineId()) {
       return
     }
     const providerThreadId = conversation.providerThreadId
@@ -2758,6 +2777,12 @@ export class HostService {
             cwd: authorizedCwd,
             providerSessionMaterialized:
               conversation.providerSessionMaterialized,
+            ...(conversation.record.model === undefined
+              ? {}
+              : { model: conversation.record.model }),
+            ...(conversation.record.reasoning === undefined
+              ? {}
+              : { reasoning: conversation.record.reasoning }),
             ...remoteContext,
           })
       if (
@@ -3256,7 +3281,39 @@ export class HostService {
           : { providerThreadId: input.providerThreadId }),
       })
     } catch (error) {
-      throw remoteProviderCommandError(error)
+      throw remoteProviderCommandError(error, 'codex')
+    }
+  }
+
+  async #openRemoteClaudeSession(input: {
+    readonly machineId: MachineId
+    readonly conversationId: ConversationId
+    readonly projectId: ProjectId
+    readonly rootPath: string
+    readonly providerSessionId?: string
+    readonly providerSessionMaterialized?: boolean
+    readonly effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+  }): Promise<RemoteClaudeRuntimeSession> {
+    const { durable, trust } = this.#requireRemoteMachineTrust(input.machineId)
+    this.#assertMachineRuntimeAvailable(input.machineId, 'claude-code')
+    const open = this.#remoteMachines.openClaudeSession
+    if (open === undefined) throw providerUnavailableError('claude-code')
+    try {
+      return await open.call(this.#remoteMachines, durable, trust, {
+        conversationId: input.conversationId,
+        projectId: input.projectId,
+        rootPath: input.rootPath,
+        ...(input.providerSessionId === undefined
+          ? {}
+          : {
+              providerSessionId: input.providerSessionId,
+              providerSessionMaterialized:
+                input.providerSessionMaterialized ?? false,
+            }),
+        ...(input.effort === undefined ? {} : { effort: input.effort }),
+      })
+    } catch (error) {
+      throw remoteProviderCommandError(error, 'claude-code')
     }
   }
 
@@ -3550,11 +3607,12 @@ export class HostService {
     if (presentation.providerDiscovery.state !== 'current') return []
     return presentation.providers.filter(
       (descriptor) =>
-        descriptor.provider === 'codex' &&
         descriptor.availability === 'available' &&
-        descriptor.capabilities.streaming &&
-        descriptor.capabilities.resume &&
-        this.#remoteMachines.openCodexSession !== undefined &&
+        remoteProviderExecutionProfileAvailable(
+          descriptor,
+          this.#remoteMachines.openCodexSession !== undefined,
+          this.#remoteMachines.openClaudeSession !== undefined,
+        ) &&
         !this.#machineRuntimeFailures.has(
           machineRuntimeKey(machine.machineId, descriptor.provider),
         ),
@@ -3900,22 +3958,26 @@ function providerCommandError(
   )
 }
 
-function remoteProviderCommandError(error: unknown): Error {
+function remoteProviderCommandError(
+  error: unknown,
+  provider: AgentProvider = 'codex',
+): Error {
   if (error instanceof HostServiceError) return error
   if (!(error instanceof RemoteMachineCoordinatorError)) {
     return error instanceof Error ? error : new Error(String(error))
   }
+  const displayName = providerDisplayName(provider)
   switch (error.code) {
     case 'provider_start_failed':
       return new HostServiceError(
         'provider_start_failed',
-        'Remote Codex failed to start',
+        `Remote ${displayName} failed to start`,
         503,
       )
     case 'provider_session_lost':
       return new HostServiceError(
         'provider_session_lost',
-        'The remote Codex session is no longer available',
+        `The remote ${displayName} session is no longer available`,
         409,
       )
     case 'provider_unavailable':
@@ -3924,7 +3986,7 @@ function remoteProviderCommandError(error: unknown): Error {
     case 'remote_policy_violation':
       return new HostServiceError(
         'provider_unavailable',
-        'Remote Codex execution is unavailable',
+        `Remote ${displayName} execution is unavailable`,
         503,
       )
     case 'conversation_busy':
@@ -3932,7 +3994,7 @@ function remoteProviderCommandError(error: unknown): Error {
     case 'conflict':
       return new HostServiceError(
         'conflict',
-        'Remote Codex Conversation has conflicting active work',
+        `Remote ${displayName} Conversation has conflicting active work`,
         409,
       )
     case 'project_location_path_invalid':
@@ -3995,6 +4057,45 @@ function assertProviderConfiguration(
       400,
     )
   }
+}
+
+function remoteProviderExecutionProfileAvailable(
+  descriptor: ProviderDescriptor,
+  codexTransportAvailable: boolean,
+  claudeTransportAvailable: boolean,
+): boolean {
+  const enabledCapabilities = Object.entries(descriptor.capabilities)
+    .filter(([, enabled]) => enabled)
+    .map(([capability]) => capability)
+    .sort()
+  if (descriptor.provider === 'codex') {
+    return (
+      codexTransportAvailable &&
+      enabledCapabilities.length === 2 &&
+      enabledCapabilities[0] === 'resume' &&
+      enabledCapabilities[1] === 'streaming'
+    )
+  }
+  const expected = [
+    'fileRead',
+    'reasoningControl',
+    'resume',
+    'search',
+    'streaming',
+    'toolEvents',
+  ]
+  return (
+    claudeTransportAvailable &&
+    enabledCapabilities.length === expected.length &&
+    enabledCapabilities.every(
+      (capability, index) => capability === expected[index],
+    ) &&
+    descriptor.reasoningOptions?.length === 5 &&
+    descriptor.reasoningOptions.every(
+      (option, index) =>
+        option.id === ['low', 'medium', 'high', 'xhigh', 'max'][index],
+    )
+  )
 }
 
 function providerErrorCode(error: unknown): HostErrorCode {

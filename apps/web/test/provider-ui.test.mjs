@@ -8,7 +8,9 @@ import {
 } from '../.tmp/test-dist/provider/provider-presentation.js'
 import {
   defaultProviderControls,
+  effectiveConversationProvider,
   effectiveProviderReasoning,
+  executableConversationProviders,
   providerDefaultReasoningSelection,
   providerReasoningFromControl,
 } from '../.tmp/test-dist/components/conversations/new-conversation-provider-selection.js'
@@ -26,6 +28,21 @@ const providerCapabilities = {
   toolEvents: true,
   modelSelection: true,
   reasoningControl: false,
+}
+
+const remoteClaudeCapabilities = {
+  streaming: true,
+  resume: true,
+  interrupt: false,
+  approvals: false,
+  fileRead: true,
+  fileEdit: false,
+  shell: false,
+  search: true,
+  diff: false,
+  toolEvents: true,
+  modelSelection: false,
+  reasoningControl: true,
 }
 
 test('Provider presentation uses descriptors and keeps legacy fallback Codex-only', () => {
@@ -139,6 +156,71 @@ test('Provider reasoning selection omits defaults and rejects stale values', () 
   assert.equal(providerSwitchDefaults.reasoning, undefined)
 })
 
+test('New Conversation falls back to executable Remote Claude and preserves its effort controls', () => {
+  const bootstrap = {
+    protocolVersion: 1,
+    hostVersion: 'phase-6c3',
+    epoch: 'epoch_remote_claude_provider',
+    capabilities: {
+      codex: true,
+      approvals: true,
+      interrupt: true,
+      resume: true,
+      diff: true,
+      streaming: true,
+    },
+    providers: [
+      {
+        provider: 'codex',
+        displayName: 'Codex',
+        availability: 'available',
+        capabilities: {
+          ...remoteClaudeCapabilities,
+          streaming: false,
+          resume: false,
+          fileRead: false,
+          search: false,
+          toolEvents: false,
+          reasoningControl: false,
+        },
+      },
+      {
+        provider: 'claude-code',
+        displayName: 'Claude Code',
+        availability: 'available',
+        version: '2.1.0',
+        capabilities: remoteClaudeCapabilities,
+        reasoningLabel: '思考强度',
+        reasoningOptions: ['low', 'medium', 'high', 'xhigh', 'max'].map(
+          (id) => ({ id, label: id }),
+        ),
+      },
+    ],
+  }
+  const eligible = executableConversationProviders(
+    providerPresentations(bootstrap),
+  )
+
+  assert.deepEqual(
+    eligible.map((provider) => provider.provider),
+    ['claude-code'],
+  )
+  const selected = effectiveConversationProvider('codex', eligible)
+  assert.equal(selected?.provider, 'claude-code')
+  assert.equal(selected?.capabilities.fileRead, true)
+  assert.equal(selected?.capabilities.search, true)
+  assert.equal(selected?.capabilities.fileEdit, false)
+  assert.equal(selected?.capabilities.shell, false)
+  assert.equal(selected?.capabilities.modelSelection, false)
+  assert.equal(selected?.reasoningLabel, '思考强度')
+  assert.deepEqual(
+    selected?.reasoningOptions.map((option) => option.id),
+    ['low', 'medium', 'high', 'xhigh', 'max'],
+  )
+  assert.equal(effectiveProviderReasoning('xhigh', selected), 'xhigh')
+  assert.equal(effectiveProviderReasoning('invalid', selected), undefined)
+})
+
 test('existing UI surfaces consume Provider truth without adding a switch to Detail', async () => {
   const root = new URL('../src/', import.meta.url)
   const [
@@ -175,7 +257,10 @@ test('existing UI surfaces consume Provider truth without adding a switch to Det
 
   assert.match(dialog, /providerPresentationsForMachine\(/u)
   assert.match(dialog, /machineDetailQuery\.data\?\.providers/u)
-  assert.match(dialog, /disabled=\{!provider\.available\}/u)
+  assert.match(dialog, /executableConversationProviders/u)
+  assert.match(dialog, /effectiveSelectedProvider/u)
+  assert.match(dialog, /capabilities\.resume/u)
+  assert.doesNotMatch(dialog, /disabled=\{!provider\.available\}/u)
   assert.match(dialog, /capabilities\.modelSelection/u)
   assert.match(dialog, /capabilities\.reasoningControl/u)
   assert.match(dialog, /reasoningOptions/u)

@@ -4,9 +4,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 
+import { ClaudeCodeOwnedProcessCleanupError } from '@codetether/adapter-claude'
+
 import {
   RemoteProviderDetector,
   isRemoteCodexExecutionVersion,
+  supportsRemoteClaudeExecutionPlatform,
   supportsRemoteCodexExecutionPlatform,
 } from '../dist/provider-discovery.js'
 
@@ -34,6 +37,7 @@ function detector(codexScript, claudeScript, options = {}) {
     timeoutMs: 500,
     maximumOutputBytes: 128,
     now: () => fixedNow,
+    claudeExecutionProbe: async () => ({ available: false }),
     ...options,
   })
 }
@@ -89,6 +93,76 @@ test('production remote Codex execution is gated to the tested version', () => {
   assert.equal(supportsRemoteCodexExecutionPlatform('linux'), true)
   assert.equal(supportsRemoteCodexExecutionPlatform('darwin'), true)
   assert.equal(supportsRemoteCodexExecutionPlatform('win32'), false)
+  assert.equal(supportsRemoteClaudeExecutionPlatform('linux'), true)
+  assert.equal(supportsRemoteClaudeExecutionPlatform('darwin'), true)
+  assert.equal(supportsRemoteClaudeExecutionPlatform('win32'), false)
+})
+
+test('authenticated tested Claude advertises only the restricted execution matrix', async () => {
+  const instance = detector(
+    "process.stdout.write('codex-cli 0.149.1')",
+    "process.stdout.write('2.1.251 (Claude Code)')",
+    {
+      platform: 'linux',
+      claudeExecutionProbe: async () => ({
+        available: true,
+        version: '2.1.251',
+      }),
+    },
+  )
+  try {
+    const claude = (await instance.discover()).providers.find(
+      ({ provider }) => provider === 'claude-code',
+    )
+    assert.equal(claude.availability, 'available')
+    assert.deepEqual(
+      Object.entries(claude.capabilities)
+        .filter(([, enabled]) => enabled)
+        .map(([capability]) => capability)
+        .sort(),
+      [
+        'fileRead',
+        'reasoningControl',
+        'resume',
+        'search',
+        'streaming',
+        'toolEvents',
+      ],
+    )
+    assert.equal(claude.reasoningLabel, '思考强度')
+    assert.deepEqual(
+      claude.reasoningOptions.map(({ id }) => id),
+      ['low', 'medium', 'high', 'xhigh', 'max'],
+    )
+    assert.equal('launcher' in claude, false)
+    assert.equal('environment' in claude, false)
+  } finally {
+    await instance.close()
+  }
+})
+
+test('Claude installation truth remains separate from authenticated execution truth', async () => {
+  const instance = detector(
+    "process.stdout.write('codex-cli 0.149.1')",
+    "process.stdout.write('2.1.251 (Claude Code)')",
+    {
+      platform: 'linux',
+      claudeExecutionProbe: async () => ({ available: false }),
+    },
+  )
+  try {
+    const claude = (await instance.discover()).providers.find(
+      ({ provider }) => provider === 'claude-code',
+    )
+    assert.equal(claude.availability, 'available')
+    assert.equal(
+      Object.values(claude.capabilities).some((enabled) => enabled),
+      false,
+    )
+    assert.equal(claude.reasoningOptions, undefined)
+  } finally {
+    await instance.close()
+  }
 })
 
 test('valid untested Codex remains discoverable without execution capabilities', async () => {
@@ -238,4 +312,61 @@ test('closing detection terminates its exact hanging children', async () => {
     ),
     true,
   )
+})
+
+test('closing detection aborts and awaits an in-flight Claude auth gate', async () => {
+  let observedSignal
+  const instance = detector(
+    "process.stdout.write('codex-cli 0.149.1')",
+    "process.stdout.write('2.1.251 (Claude Code)')",
+    {
+      platform: 'linux',
+      claudeExecutionProbe: async (signal) => {
+        observedSignal = signal
+        return await new Promise((resolvePromise) => {
+          signal.addEventListener(
+            'abort',
+            () => resolvePromise({ available: false }),
+            { once: true },
+          )
+        })
+      },
+    },
+  )
+  const discovery = instance.discover()
+  const deadline = Date.now() + 2_000
+  while (observedSignal === undefined && Date.now() < deadline) {
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 20))
+  }
+  assert.ok(observedSignal)
+
+  await instance.close()
+  assert.equal(observedSignal.aborted, true)
+  const result = await discovery
+  const claude = result.providers.find(
+    ({ provider }) => provider === 'claude-code',
+  )
+  assert.equal(
+    Object.values(claude.capabilities).some((enabled) => enabled),
+    false,
+  )
+})
+
+test('Claude probe cleanup failure remains fatal through detector close', async () => {
+  const cleanupFailure = new ClaudeCodeOwnedProcessCleanupError()
+  const instance = detector(
+    "process.stdout.write('codex-cli 0.149.1')",
+    "process.stdout.write('2.1.251 (Claude Code)')",
+    {
+      platform: 'linux',
+      claudeExecutionProbe: async () => {
+        throw cleanupFailure
+      },
+    },
+  )
+
+  await assert.rejects(instance.discover(), (error) => error === cleanupFailure)
+  await assert.rejects(instance.discover(), (error) => error === cleanupFailure)
+  await assert.rejects(instance.close(), (error) => error === cleanupFailure)
+  await assert.rejects(instance.close(), (error) => error === cleanupFailure)
 })

@@ -57,7 +57,9 @@ import { createProjectOptionPresentation } from './new-conversation-presentation
 import {
   defaultProviderControls,
   defaultProviderModel,
+  effectiveConversationProvider,
   effectiveProviderReasoning,
+  executableConversationProviders,
   providerDefaultReasoningSelection,
   providerReasoningFromControl,
 } from './new-conversation-provider-selection'
@@ -182,17 +184,27 @@ export function NewConversationDialog({
     availableProjects.find(
       (project) => project.projectId === effectiveSelectedProjectId,
     )
-  const providers = providerPresentationsForMachine(
+  const machineProviderPresentations = providerPresentationsForMachine(
     machineDetailQuery.data?.providers ?? [],
-  ).filter((provider) => provider.available && provider.capabilities.streaming)
+  )
+  const providers = executableConversationProviders(
+    machineProviderPresentations,
+  )
+  const effectiveProvider = effectiveConversationProvider(
+    selectedProvider,
+    providers,
+  )
+  const effectiveSelectedProvider = effectiveProvider?.provider
   const selectedProviderPresentation = providerPresentationForMachine(
     machineDetailQuery.data?.providers ?? [],
-    selectedProvider,
+    effectiveSelectedProvider ?? selectedProvider,
   )
   const showsModelSelection =
+    effectiveProvider !== undefined &&
     selectedProviderPresentation.capabilities.modelSelection &&
     selectedProviderPresentation.models.length > 0
   const showsReasoning =
+    effectiveProvider !== undefined &&
     selectedProviderPresentation.capabilities.reasoningControl
   const supportsReasoningSelection =
     showsReasoning && selectedProviderPresentation.reasoningOptions.length > 0
@@ -229,7 +241,7 @@ export function NewConversationDialog({
           machine.kind === 'remote' && !machine.capabilities.providerExecution,
       )
     ) {
-      return '此项目已有远程工作区位置，但远程机器当前未满足在线连接、当前 Codex 检测或安全执行条件。'
+      return '此项目已有远程工作区位置，但远程机器当前未满足在线连接、当前智能体检测或安全执行条件。'
     }
     if (boundMachines.some((machine) => machine.availability !== 'available')) {
       return '此项目的工作区位置所在机器当前离线或不可用。恢复连接后再创建会话。'
@@ -242,8 +254,10 @@ export function NewConversationDialog({
     availableProjects.length === 0
   const canSubmit =
     connectionState === 'connected' &&
+    effectiveSelectedProvider !== undefined &&
     selectedProviderPresentation.available &&
     selectedProviderPresentation.capabilities.streaming &&
+    selectedProviderPresentation.capabilities.resume &&
     selectedMachine !== undefined &&
     machineDetailQuery.isSuccess &&
     selectedProject !== undefined &&
@@ -293,14 +307,15 @@ export function NewConversationDialog({
     if (
       !canSubmit ||
       selectedProject === undefined ||
-      selectedMachine === undefined
+      selectedMachine === undefined ||
+      effectiveSelectedProvider === undefined
     ) {
       return
     }
     createMutation.mutate({
       projectId: selectedProject.projectId,
       machineId: selectedMachine.machineId,
-      provider: selectedProvider,
+      provider: effectiveSelectedProvider,
       ...(showsModelSelection && effectiveSelectedModel !== undefined
         ? { model: effectiveSelectedModel }
         : {}),
@@ -328,7 +343,7 @@ export function NewConversationDialog({
       {trigger ? <DialogTrigger asChild>{trigger}</DialogTrigger> : null}
       <DialogContent
         closeLabel="关闭新建会话对话框"
-        className="max-w-lg"
+        className="max-w-lg overflow-x-hidden"
         onCloseAutoFocus={(event) => {
           if (skipCloseFocusRestore.current) {
             skipCloseFocusRestore.current = false
@@ -439,21 +454,23 @@ export function NewConversationDialog({
                 label="智能体"
                 value={
                   <Select
-                    value={selectedProvider}
+                    value={effectiveSelectedProvider ?? ''}
                     onValueChange={handleProviderChange}
                     disabled={createMutation.isPending}
                   >
                     <SelectTrigger size="sm" aria-label="选择智能体">
-                      <SelectValue>
-                        <span className="flex min-w-0 items-center gap-1.5">
-                          <AgentBadge
-                            agent={selectedProviderPresentation.agent}
-                            variant="compact"
-                          />
-                          <span className="truncate">
-                            {selectedProviderPresentation.displayName}
+                      <SelectValue placeholder="选择可执行智能体">
+                        {effectiveSelectedProvider === undefined ? undefined : (
+                          <span className="flex min-w-0 items-center gap-1.5">
+                            <AgentBadge
+                              agent={selectedProviderPresentation.agent}
+                              variant="compact"
+                            />
+                            <span className="truncate">
+                              {selectedProviderPresentation.displayName}
+                            </span>
                           </span>
-                        </span>
+                        )}
                       </SelectValue>
                     </SelectTrigger>
                     <SelectContent>
@@ -462,7 +479,6 @@ export function NewConversationDialog({
                           key={provider.provider}
                           value={provider.provider}
                           textValue={`${provider.displayName} ${provider.availabilityLabel}`}
-                          disabled={!provider.available}
                           className="py-2"
                         >
                           <span className="grid min-w-0 gap-0.5">
@@ -634,16 +650,9 @@ export function NewConversationDialog({
             ) : null}
             {connectionState === 'connected' &&
             machineDetailQuery.isSuccess &&
-            !selectedProviderPresentation.available ? (
+            effectiveSelectedProvider === undefined ? (
               <InlineNotice>
-                {`${selectedProviderPresentation.displayName}：${selectedProviderPresentation.availabilityLabel}。`}
-              </InlineNotice>
-            ) : null}
-            {connectionState === 'connected' &&
-            selectedProviderPresentation.available &&
-            !selectedProviderPresentation.capabilities.streaming ? (
-              <InlineNotice>
-                {`${selectedProviderPresentation.displayName} 当前不支持通过 CodeTether 启动流式会话。`}
+                此机器当前没有可通过 CodeTether 启动可恢复流式会话的智能体。
               </InlineNotice>
             ) : null}
             {noAvailableProjects ? (
@@ -674,7 +683,7 @@ export function NewConversationDialog({
               >
                 {newConversationErrorMessage(
                   createMutation.error,
-                  selectedProvider,
+                  effectiveSelectedProvider ?? selectedProvider,
                 )}
               </p>
             ) : null}

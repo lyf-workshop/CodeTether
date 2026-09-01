@@ -299,20 +299,36 @@ test('remote Provider observations are strict, durable, replace atomically, and 
           ),
           observedAt: timestamp,
         }),
-      /exceed the Codex execution foundation/u,
+      /exceed an admitted execution foundation/u,
     )
     const executionFoundation = remoteProviderDescriptors('1.0.0').map(
-      (provider) =>
-        provider.provider === 'codex'
-          ? {
-              ...provider,
-              capabilities: {
-                ...provider.capabilities,
-                streaming: true,
-                resume: true,
-              },
-            }
-          : provider,
+      (provider) => {
+        if (provider.provider === 'codex') {
+          return {
+            ...provider,
+            capabilities: {
+              ...provider.capabilities,
+              streaming: true,
+              resume: true,
+            },
+          }
+        }
+        return {
+          ...provider,
+          availability: 'available',
+          capabilities: {
+            ...provider.capabilities,
+            streaming: true,
+            resume: true,
+            fileRead: true,
+            search: true,
+            toolEvents: true,
+            reasoningControl: true,
+          },
+          reasoningLabel: '思考强度',
+          reasoningOptions: claudeReasoningOptions(),
+        }
+      },
     )
     const recorded = store.recordRemoteProviderObservation({
       machineId: pending.machine.machineId,
@@ -821,6 +837,16 @@ function remoteProviderDescriptors(version) {
       capabilities,
     },
   ]
+}
+
+function claudeReasoningOptions() {
+  return [
+    ['low', '低'],
+    ['medium', '中'],
+    ['high', '高'],
+    ['xhigh', '超高'],
+    ['max', '最大'],
+  ].map(([id, label]) => ({ id, label }))
 }
 
 function remoteCandidate(machineId, marker) {

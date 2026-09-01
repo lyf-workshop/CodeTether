@@ -2294,18 +2294,21 @@ function parseRemoteProviderObservation(
     const enabledCapabilities = Object.entries(descriptor.capabilities)
       .filter(([, enabled]) => enabled)
       .map(([capability]) => capability)
-    const codexExecutionFoundation =
-      descriptor.provider === 'codex' &&
-      descriptor.availability === 'available' &&
-      descriptor.capabilities.streaming &&
-      descriptor.capabilities.resume &&
-      enabledCapabilities.every(
-        (capability) => capability === 'streaming' || capability === 'resume',
-      )
-    if (enabledCapabilities.length > 0 && !codexExecutionFoundation) {
+    const admittedExecutionFoundation =
+      remoteProviderExecutionFoundation(descriptor)
+    if (enabledCapabilities.length > 0 && !admittedExecutionFoundation) {
       throw new Error(
-        'Remote Provider capabilities exceed the Codex execution foundation',
+        'Remote Provider capabilities exceed an admitted execution foundation',
       )
+    }
+    const hasReasoningMetadata =
+      descriptor.reasoningLabel !== undefined ||
+      descriptor.reasoningOptions !== undefined
+    if (
+      hasReasoningMetadata !==
+      (descriptor.provider === 'claude-code' && admittedExecutionFoundation)
+    ) {
+      throw new Error('Remote Provider reasoning metadata is inconsistent')
     }
     if (identities.has(descriptor.provider)) {
       throw new Error('Remote Provider observation identities must be unique')
@@ -2326,6 +2329,39 @@ function parseRemoteProviderObservation(
     providers,
     observedAt: TimestampSchema.parse(value.observedAt),
   }
+}
+
+function remoteProviderExecutionFoundation(
+  descriptor: ProviderDescriptor,
+): boolean {
+  const enabled = Object.entries(descriptor.capabilities)
+    .filter(([, value]) => value)
+    .map(([capability]) => capability)
+    .sort()
+  if (descriptor.provider === 'codex') {
+    return (
+      descriptor.availability === 'available' &&
+      enabled.length === 2 &&
+      enabled[0] === 'resume' &&
+      enabled[1] === 'streaming'
+    )
+  }
+  const expected = [
+    'fileRead',
+    'reasoningControl',
+    'resume',
+    'search',
+    'streaming',
+    'toolEvents',
+  ]
+  return (
+    descriptor.availability === 'available' &&
+    enabled.length === expected.length &&
+    enabled.every((capability, index) => capability === expected[index]) &&
+    descriptor.reasoningLabel !== undefined &&
+    descriptor.reasoningOptions?.map(({ id }) => id).join(',') ===
+      'low,medium,high,xhigh,max'
+  )
 }
 
 function parseTrustedMachinePeer(

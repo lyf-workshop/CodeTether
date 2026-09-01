@@ -1,4 +1,4 @@
-import { isAbsolute, relative, resolve, sep } from 'node:path'
+import { isAbsolute, posix, relative, resolve, sep, win32 } from 'node:path'
 
 import type { AgentEvent, ToolKind } from '@codetether/agent-core'
 
@@ -588,6 +588,14 @@ function safeProjectRelativePath(
 ): string | undefined {
   const path = boundedInputText(rawPath)
   if (path === undefined || cwd === undefined) return undefined
+  // `node:path` follows only the current operating system's path grammar. A
+  // Windows drive or UNC path is otherwise interpreted as a relative filename
+  // on POSIX and could expose a Provider-supplied private absolute path in the
+  // canonical Tool clue. Native absolute paths still pass through the ordinary
+  // root-containment check below.
+  if (!isAbsolute(path) && (posix.isAbsolute(path) || win32.isAbsolute(path))) {
+    return undefined
+  }
   const root = resolve(cwd)
   const target = resolve(root, path)
   const relation = relative(root, target)

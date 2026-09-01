@@ -334,7 +334,8 @@ function ConnectedLiveConversationDetail({
     machine?.availability === 'available' &&
     machine.capabilities.providerExecution &&
     machineProvider?.availability === 'available' &&
-    machineProvider.capabilities.streaming
+    machineProvider.capabilities.streaming &&
+    machineProvider.capabilities.resume
   const executionUnavailableReason =
     machine?.kind === 'remote' && machine.connectionState !== 'online'
       ? 'machine_offline'

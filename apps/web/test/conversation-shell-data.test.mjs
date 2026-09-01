@@ -53,7 +53,12 @@ test('new Conversation request remains Project and Machine scoped', async () => 
     {
       async createConversation(request) {
         calls.push(request)
-        return createResponse(request.actionId, request.projectId)
+        return createResponse(
+          request.actionId,
+          request.projectId,
+          machineId,
+          request.provider,
+        )
       },
     },
     idFactory(),
@@ -90,7 +95,12 @@ test('new Conversation request carries the selected durable Provider and model',
     {
       async createConversation(request) {
         calls.push(request)
-        return createResponse(request.actionId, request.projectId)
+        return createResponse(
+          request.actionId,
+          request.projectId,
+          machineId,
+          request.provider,
+        )
       },
     },
     idFactory(),
@@ -256,6 +266,25 @@ test('created Conversation identity must remain bound to the requested Machine',
   )
 })
 
+test('created Conversation identity must remain bound to the requested Provider', async () => {
+  const actions = new NewConversationActions(
+    {
+      async createConversation(request) {
+        return createResponse(request.actionId, projectId, machineId, 'codex')
+      },
+    },
+    idFactory(),
+  )
+
+  await assert.rejects(
+    actions.createConversation(projectId, {
+      machineId,
+      provider: 'claude-code',
+    }),
+    CodeTetherProtocolError,
+  )
+})
+
 test('new Conversation errors use safe product copy', () => {
   const unavailable = responseError(
     'project_unavailable',
@@ -286,6 +315,7 @@ function createResponse(
   actionId,
   responseProjectId,
   responseMachineId = machineId,
+  responseProvider = 'codex',
 ) {
   const timestamp = '2026-08-27T12:00:00.000Z'
   return {
@@ -298,7 +328,7 @@ function createResponse(
         projectId: responseProjectId,
         machineId: responseMachineId,
         title: '新会话',
-        provider: 'codex',
+        provider: responseProvider,
         cwd: 'C:\\workspace',
         status: 'idle',
         createdAt: timestamp,

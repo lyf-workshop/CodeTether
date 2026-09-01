@@ -47,6 +47,7 @@ export interface LiveControlAvailability {
   readonly supportsInterrupt: boolean
   readonly supportsApprovals: boolean
   readonly supportsDiff: boolean
+  readonly supportsShell: boolean
   readonly supportsReasoningControl: boolean
 }
 
@@ -83,6 +84,9 @@ export function deriveLiveControlAvailability(
   const supportsInterrupt = capabilities?.interrupt === true
   const supportsApprovals = capabilities?.approvals === true
   const supportsDiff = capabilities?.diff === true
+  const supportsShell =
+    capabilities !== undefined &&
+    ('codex' in capabilities ? capabilities.codex : capabilities.shell)
   const supportsReasoningControl =
     capabilities !== undefined &&
     ('codex' in capabilities
@@ -96,6 +100,7 @@ export function deriveLiveControlAvailability(
     supportsInterrupt,
     supportsApprovals,
     supportsDiff,
+    supportsShell,
     supportsReasoningControl,
   }
 }

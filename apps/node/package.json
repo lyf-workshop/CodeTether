@@ -12,6 +12,7 @@
     "sea": "node scripts/build-node.mjs"
   },
   "dependencies": {
+    "@codetether/adapter-claude": "workspace:*",
     "@codetether/adapter-codex": "workspace:*",
     "@codetether/agent-core": "workspace:*",
     "@codetether/machine-transport": "workspace:*",

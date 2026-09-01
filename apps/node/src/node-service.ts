@@ -2,6 +2,9 @@ import { EventEmitter } from 'node:events'
 import { createServer, type Server, type TLSSocket } from 'node:tls'
 
 import {
+  ClaudeSessionDisposeMessageSchema,
+  ClaudeSessionOpenMessageSchema,
+  ClaudeTurnStartMessageSchema,
   CodexSessionDisposeMessageSchema,
   CodexSessionOpenMessageSchema,
   CodexTurnStartMessageSchema,
@@ -29,6 +32,8 @@ import {
   peerFingerprint,
   verifyPairingConfirmationTag,
   type MachineWireErrorCode,
+  type ClaudeSessionDisposeMessage,
+  type ClaudeTurnStartMessage,
   type CodexSessionDisposeMessage,
   type CodexTurnStartMessage,
   type PairingTranscript,
@@ -41,6 +46,11 @@ import { PairingMode, type PairingModeView } from './pairing-mode.js'
 import { validateProjectLocationPath } from './project-location-validation.js'
 import { RemoteProviderDetector } from './provider-discovery.js'
 import {
+  RemoteClaudeRunnerPool,
+  type RemoteClaudeRunner,
+  type RemoteClaudeRunnerTurn,
+} from './remote-claude-runner.js'
+import {
   RemoteCodexRunnerPool,
   type RemoteCodexRunner,
   type RemoteCodexRunnerTurn,
@@ -52,11 +62,16 @@ const AuthenticatedRequestSchema = z.discriminatedUnion('type', [
   ProjectLocationValidateMessageSchema,
   ProvidersDescribeMessageSchema,
   CodexSessionOpenMessageSchema,
+  ClaudeSessionOpenMessageSchema,
   TrustRevokeMessageSchema,
 ])
 const RemoteCodexSessionRequestSchema = z.discriminatedUnion('type', [
   CodexTurnStartMessageSchema,
   CodexSessionDisposeMessageSchema,
+])
+const RemoteClaudeSessionRequestSchema = z.discriminatedUnion('type', [
+  ClaudeTurnStartMessageSchema,
+  ClaudeSessionDisposeMessageSchema,
 ])
 const PairingDecisionSchema = z.discriminatedUnion('type', [
   PairingConfirmMessageSchema,
@@ -71,6 +86,8 @@ export interface CodeTetherNodeOptions {
   readonly providerDetector?: RemoteProviderDetector
   /** Internal test seam; remote callers cannot configure Provider execution. */
   readonly remoteCodexRunners?: RemoteCodexRunnerPool
+  /** Internal test seam; remote callers cannot configure Provider execution. */
+  readonly remoteClaudeRunners?: RemoteClaudeRunnerPool
 }
 
 export interface ListeningNodeAddress {
@@ -89,8 +106,10 @@ export class CodeTetherNodeService extends EventEmitter {
   readonly #authenticatedConnections = new Map<string, Set<TLSSocket>>()
   readonly #providerDetector: RemoteProviderDetector
   readonly #remoteCodexRunners: RemoteCodexRunnerPool
+  readonly #remoteClaudeRunners: RemoteClaudeRunnerPool
   #server: Server | undefined
   #closing = false
+  #closePromise: Promise<void> | undefined
 
   constructor(options: CodeTetherNodeOptions) {
     super()
@@ -113,6 +132,8 @@ export class CodeTetherNodeService extends EventEmitter {
       options.providerDetector ?? new RemoteProviderDetector()
     this.#remoteCodexRunners =
       options.remoteCodexRunners ?? new RemoteCodexRunnerPool()
+    this.#remoteClaudeRunners =
+      options.remoteClaudeRunners ?? new RemoteClaudeRunnerPool()
     this.pairing = new PairingMode(
       options.state.machine,
       options.state.identity.publicKeyFingerprint,
@@ -168,30 +189,51 @@ export class CodeTetherNodeService extends EventEmitter {
   }
 
   async close(): Promise<void> {
-    if (this.#closing) return
+    this.#closePromise ??= this.#closeOwnedResources()
+    await this.#closePromise
+  }
+
+  async #closeOwnedResources(): Promise<void> {
     this.#closing = true
     this.pairing.cancel()
     for (const socket of this.#connections) socket.destroy()
+    const failures: unknown[] = []
+    const attempt = async (operation: () => Promise<void>) => {
+      try {
+        await operation()
+      } catch (error) {
+        failures.push(error)
+      }
+    }
     const server = this.#server
     this.#server = undefined
     if (server !== undefined) {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) =>
-          error === undefined ? resolve() : reject(error),
-        )
-      }).catch((error: unknown) => {
-        if (!(
-          error instanceof Error &&
-          'code' in error &&
-          error.code === 'ERR_SERVER_NOT_RUNNING'
-        )) {
-          throw error
-        }
+      await attempt(async () => {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) =>
+            error === undefined ? resolve() : reject(error),
+          )
+        }).catch((error: unknown) => {
+          if (!(
+            error instanceof Error &&
+            'code' in error &&
+            error.code === 'ERR_SERVER_NOT_RUNNING'
+          )) {
+            throw error
+          }
+        })
       })
     }
-    await this.#providerDetector.close()
-    await this.#remoteCodexRunners.close()
-    await this.state.close()
+    await attempt(async () => await this.#providerDetector.close())
+    await attempt(async () => await this.#remoteCodexRunners.close())
+    await attempt(async () => await this.#remoteClaudeRunners.close())
+    await attempt(async () => await this.state.close())
+    if (failures.length > 0) {
+      throw new AggregateError(
+        failures,
+        'CodeTether Node owned resource cleanup did not complete',
+      )
+    }
   }
 
   #accept(socket: TLSSocket): void {
@@ -489,6 +531,21 @@ export class CodeTetherNodeService extends EventEmitter {
           await this.#serveRemoteCodexSession(connection, request)
           return
         }
+        if (request.type === 'claude.session.open') {
+          if (
+            request.expectedMachineId !== this.state.machine.machineId ||
+            request.expectedNodeId !== this.state.machine.nodeId
+          ) {
+            throw new MachineTransportError(
+              'identity_mismatch',
+              'Remote Claude request did not match durable Node identity',
+            )
+          }
+          const discovery = await this.#providerDetector.discover()
+          assertRemoteClaudeExecutionAdmission(discovery)
+          await this.#serveRemoteClaudeSession(connection, request)
+          return
+        }
         if (request.controllerId !== trusted.controllerId) {
           throw new MachineTransportError(
             'identity_mismatch',
@@ -661,6 +718,161 @@ export class CodeTetherNodeService extends EventEmitter {
     }
   }
 
+  async #serveRemoteClaudeSession(
+    connection: FramedMachineConnection,
+    request: z.infer<typeof ClaudeSessionOpenMessageSchema>,
+  ): Promise<void> {
+    let runner: RemoteClaudeRunner | undefined
+    let released = false
+    try {
+      runner = await this.#remoteClaudeRunners.open(request)
+      await connection.send({
+        type: 'claude.session.ready',
+        protocolVersion: machineProtocolVersion,
+        requestId: request.requestId,
+        machineId: this.state.machine.machineId,
+        nodeId: this.state.machine.nodeId,
+        conversationId: request.conversationId,
+        providerSessionId: runner.providerSessionId,
+        resumed: runner.resumed,
+        ...(runner.effort === undefined ? {} : { effort: runner.effort }),
+        executionProfile: 'claude-restricted-read-search-v1',
+      })
+
+      while (!connection.closed && !this.#closing) {
+        const control = await receiveStrict(
+          connection,
+          RemoteClaudeSessionRequestSchema,
+          {
+            timeoutMs: machineTransportLimits.remoteClaudeSessionIdleTimeoutMs,
+          },
+        )
+        assertRemoteClaudeSessionControl(control, runner)
+        if (control.type === 'claude.session.dispose') {
+          await this.#remoteClaudeRunners.release(runner)
+          released = true
+          await sendRemoteClaudeDisposed(
+            connection,
+            this.state.machine,
+            control,
+          )
+          connection.end()
+          return
+        }
+        const turn = await runner.startTurn(control)
+        await sendRemoteClaudeTurnStarted(
+          connection,
+          this.state.machine,
+          runner,
+          turn,
+        )
+        const disposal = await this.#streamRemoteClaudeTurn(
+          connection,
+          runner,
+          turn,
+        )
+        if (disposal !== undefined) {
+          await this.#remoteClaudeRunners.release(runner)
+          released = true
+          await sendRemoteClaudeDisposed(
+            connection,
+            this.state.machine,
+            disposal,
+          )
+          connection.end()
+          return
+        }
+      }
+    } finally {
+      if (runner !== undefined && !released) {
+        await this.#remoteClaudeRunners.release(runner)
+      }
+    }
+  }
+
+  async #streamRemoteClaudeTurn(
+    connection: FramedMachineConnection,
+    runner: RemoteClaudeRunner,
+    turn: RemoteClaudeRunnerTurn,
+  ): Promise<ClaudeSessionDisposeMessage | undefined> {
+    const events = turn.events()[Symbol.asyncIterator]()
+    const controlAbort = new AbortController()
+    let sequence = 1
+    let event = events
+      .next()
+      .then((result) => ({ kind: 'event' as const, result }))
+    let control = receiveStrict(connection, RemoteClaudeSessionRequestSchema, {
+      timeoutMs: machineTransportLimits.remoteClaudeTurnTimeoutMs,
+      signal: controlAbort.signal,
+    })
+    try {
+      while (true) {
+        const next = await Promise.race([
+          event,
+          control.then((value) => ({ kind: 'control' as const, value })),
+        ])
+        if (next.kind === 'control') {
+          assertRemoteClaudeSessionControl(next.value, runner)
+          if (next.value.type === 'claude.session.dispose') return next.value
+          const duplicate = await runner.startTurn(next.value)
+          if (duplicate !== turn) {
+            throw new MachineTransportError(
+              'conversation_busy',
+              'Remote Claude Conversation already has another active Turn',
+            )
+          }
+          await sendRemoteClaudeTurnStarted(
+            connection,
+            this.state.machine,
+            runner,
+            turn,
+          )
+          control = receiveStrict(
+            connection,
+            RemoteClaudeSessionRequestSchema,
+            {
+              timeoutMs: machineTransportLimits.remoteClaudeTurnTimeoutMs,
+              signal: controlAbort.signal,
+            },
+          )
+          continue
+        }
+        if (next.result.done) {
+          throw new MachineTransportError(
+            'remote_execution_lost',
+            'Remote Claude event stream ended before a terminal event',
+          )
+        }
+        await connection.send({
+          type: 'claude.turn.event',
+          protocolVersion: machineProtocolVersion,
+          machineId: this.state.machine.machineId,
+          nodeId: this.state.machine.nodeId,
+          actionId: turn.actionId,
+          conversationId: turn.conversationId,
+          turnId: turn.turnId,
+          providerSessionId: runner.providerSessionId,
+          providerTurnId: turn.providerTurnId,
+          sequence,
+          event: next.result.value,
+        })
+        sequence += 1
+        if (
+          next.result.value.type === 'turn.completed' ||
+          next.result.value.type === 'turn.failed'
+        ) {
+          return undefined
+        }
+        event = events
+          .next()
+          .then((result) => ({ kind: 'event' as const, result }))
+      }
+    } finally {
+      controlAbort.abort()
+      await control.catch(() => undefined)
+    }
+  }
+
   #trackAuthenticatedConnection(controllerId: string, socket: TLSSocket) {
     const current = this.#authenticatedConnections.get(controllerId)
     if (current === undefined) {
@@ -701,6 +913,34 @@ function assertRemoteCodexExecutionAdmission(
     throw new MachineTransportError(
       'remote_execution_unavailable',
       'Remote Codex execution is unavailable',
+    )
+  }
+}
+
+function assertRemoteClaudeExecutionAdmission(
+  discovery: Awaited<ReturnType<RemoteProviderDetector['discover']>>,
+): void {
+  const claude = discovery.providers.find(
+    ({ provider }) => provider === 'claude-code',
+  )
+  if (
+    claude?.availability !== 'available' ||
+    claude.capabilities.streaming !== true ||
+    claude.capabilities.resume !== true ||
+    claude.capabilities.fileRead !== true ||
+    claude.capabilities.search !== true ||
+    claude.capabilities.toolEvents !== true ||
+    claude.capabilities.reasoningControl !== true ||
+    claude.capabilities.interrupt ||
+    claude.capabilities.approvals ||
+    claude.capabilities.fileEdit ||
+    claude.capabilities.shell ||
+    claude.capabilities.diff ||
+    claude.capabilities.modelSelection
+  ) {
+    throw new MachineTransportError(
+      'remote_execution_unavailable',
+      'Remote Claude execution is unavailable',
     )
   }
 }
@@ -747,6 +987,21 @@ function assertRemoteCodexSessionControl(
   }
 }
 
+function assertRemoteClaudeSessionControl(
+  control: ClaudeTurnStartMessage | ClaudeSessionDisposeMessage,
+  runner: RemoteClaudeRunner,
+): void {
+  if (
+    control.conversationId !== runner.conversationId ||
+    control.providerSessionId !== runner.providerSessionId
+  ) {
+    throw new MachineTransportError(
+      'identity_mismatch',
+      'Remote Claude control did not match the owned session',
+    )
+  }
+}
+
 async function sendRemoteCodexTurnStarted(
   connection: FramedMachineConnection,
   machine: RemoteMachineMetadata,
@@ -773,6 +1028,40 @@ async function sendRemoteCodexDisposed(
 ): Promise<void> {
   await connection.send({
     type: 'codex.session.disposed',
+    protocolVersion: machineProtocolVersion,
+    requestId: request.requestId,
+    machineId: machine.machineId,
+    nodeId: machine.nodeId,
+    conversationId: request.conversationId,
+  })
+}
+
+async function sendRemoteClaudeTurnStarted(
+  connection: FramedMachineConnection,
+  machine: RemoteMachineMetadata,
+  runner: RemoteClaudeRunner,
+  turn: RemoteClaudeRunnerTurn,
+): Promise<void> {
+  await connection.send({
+    type: 'claude.turn.started',
+    protocolVersion: machineProtocolVersion,
+    machineId: machine.machineId,
+    nodeId: machine.nodeId,
+    actionId: turn.actionId,
+    conversationId: turn.conversationId,
+    turnId: turn.turnId,
+    providerSessionId: runner.providerSessionId,
+    providerTurnId: turn.providerTurnId,
+  })
+}
+
+async function sendRemoteClaudeDisposed(
+  connection: FramedMachineConnection,
+  machine: RemoteMachineMetadata,
+  request: ClaudeSessionDisposeMessage,
+): Promise<void> {
+  await connection.send({
+    type: 'claude.session.disposed',
     protocolVersion: machineProtocolVersion,
     requestId: request.requestId,
     machineId: machine.machineId,
@@ -824,14 +1113,14 @@ function machineError(code: MachineWireErrorCode) {
     project_location_missing: 'Project Location directory does not exist',
     project_location_not_directory: 'Project Location path is not a directory',
     project_location_inaccessible: 'Project Location directory is inaccessible',
-    remote_execution_unavailable: 'Remote Codex execution is unavailable',
-    provider_unavailable: 'Remote Codex is unavailable',
-    provider_start_failed: 'Remote Codex could not start',
-    provider_session_lost: 'Remote Codex session was lost',
-    remote_execution_lost: 'Remote Codex execution was lost',
-    remote_policy_violation: 'Remote Codex operation was rejected',
-    conversation_busy: 'Remote Codex Conversation is busy',
-    duplicate_action_conflict: 'Remote Codex action identity conflicted',
+    remote_execution_unavailable: 'Remote Provider execution is unavailable',
+    provider_unavailable: 'Remote Provider is unavailable',
+    provider_start_failed: 'Remote Provider could not start',
+    provider_session_lost: 'Remote Provider session was lost',
+    remote_execution_lost: 'Remote Provider execution was lost',
+    remote_policy_violation: 'Remote Provider operation was rejected',
+    conversation_busy: 'Remote Provider Conversation is busy',
+    duplicate_action_conflict: 'Remote Provider action identity conflicted',
   }
   return MachineErrorMessageSchema.parse({
     type: 'machine.error',

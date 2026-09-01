@@ -28,18 +28,26 @@ test('Machines routes and navigation expose only real Host-backed Machine pages'
 })
 
 test('New Conversation binds Machine identity and machine-scoped Provider truth', async () => {
-  const [dialog, actions] = await Promise.all([
+  const [dialog, providerSelection, actions] = await Promise.all([
     source('components/conversations/new-conversation-dialog.tsx'),
+    source('components/conversations/new-conversation-provider-selection.ts'),
     source('runtime/host/new-conversation-actions.ts'),
   ])
 
   assert.match(dialog, /machineListQueryOptions/u)
   assert.match(dialog, /machineDetailQueryOptions/u)
   assert.match(dialog, /providerPresentationsForMachine/u)
+  assert.match(dialog, /effectiveSelectedProvider/u)
+  assert.match(providerSelection, /provider\.capabilities\.streaming/u)
+  assert.match(providerSelection, /provider\.capabilities\.resume/u)
   assert.match(dialog, /machineId: selection\.machineId/u)
   assert.match(dialog, /aria-label="选择机器"/u)
   assert.match(actions, /current\.machineId === machine/u)
   assert.match(actions, /response\.data\.conversation\.machineId !== machine/u)
+  assert.match(
+    actions,
+    /response\.data\.conversation\.provider !== options\.provider/u,
+  )
 })
 
 test('Project and Conversation surfaces resolve Machine display without a switch', async () => {
@@ -77,11 +85,15 @@ test('Project and Conversation surfaces resolve Machine display without a switch
   assert.match(adapter, /machine: machineName/u)
   assert.match(adapter, /providerPresentationForMachine/u)
   assert.match(conversationRoute, /machineProvider\.capabilities\.streaming/u)
+  assert.match(conversationRoute, /machineProvider\.capabilities\.resume/u)
   assert.match(conversationRoute, /executionBoundary/u)
   assert.match(workspace, /远程执行机器当前离线/u)
   assert.match(workspace, /to="\/machines\/\$machineId"/u)
   assert.match(header, /name=\{conversation\.machine\}/u)
   assert.match(inspector, /conversation\.machine/u)
+  assert.match(inspector, /conversation\.capabilities\.supportsDiff/u)
+  assert.match(inspector, /conversation\.capabilities\.supportsShell/u)
+  assert.match(inspector, /requestedTab === 'terminal'/u)
   assert.doesNotMatch(header, /switchMachine|onMachineChange/u)
 })
 

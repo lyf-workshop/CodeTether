@@ -16,6 +16,7 @@ import {
   type RemoteMachineAddress,
   type RemoteMachineConnection,
   type RemoteMachinePairingCandidate,
+  type ProviderDescriptor,
   type Timestamp,
 } from '@codetether/protocol'
 import {
@@ -31,12 +32,14 @@ import {
   machineTransportLimits,
   newControllerId,
   NodeIdSchema,
+  openRemoteClaudeSession,
   openRemoteCodexSession,
   readMachineTlsIdentityFile,
   MachineTransportActionIdSchema,
   MachineTransportConversationIdSchema,
   MachineTransportProjectIdSchema,
   MachineTransportTurnIdSchema,
+  RemoteClaudeProviderIdentitySchema,
   RemoteCodexProviderIdentitySchema,
   type AuthenticatedRemoteMachineConnection,
   type MachineControllerIdentity,
@@ -44,6 +47,7 @@ import {
   type TrustedRemotePeer,
   type ValidatedRemoteProjectLocation,
   type RemoteProviderDiscovery,
+  type RemoteClaudeSession as MachineTransportRemoteClaudeSession,
   type RemoteCodexSession as MachineTransportRemoteCodexSession,
 } from '@codetether/machine-transport'
 
@@ -55,6 +59,10 @@ import type {
   DurableTrustedMachinePeer,
 } from '../persistence/index.js'
 import type { RemoteMachineStatusSource } from './machine-registry.js'
+import type {
+  RemoteClaudeEffort,
+  RemoteClaudeRuntimeSession,
+} from './remote-claude-host-runtime.js'
 import type { RemoteCodexRuntimeSession } from './remote-codex-host-runtime.js'
 
 export type RemoteMachineCoordinatorErrorCode =
@@ -137,6 +145,18 @@ export interface RemoteMachineCoordinator extends RemoteMachineStatusSource {
       readonly providerThreadId?: string
     },
   ): Promise<RemoteCodexRuntimeSession>
+  openClaudeSession?(
+    machine: DurableMachine,
+    trust: DurableTrustedMachinePeer,
+    input: {
+      readonly conversationId: string
+      readonly projectId: string
+      readonly rootPath: string
+      readonly providerSessionId?: string
+      readonly providerSessionMaterialized?: boolean
+      readonly effort?: RemoteClaudeEffort
+    },
+  ): Promise<RemoteClaudeRuntimeSession>
   beginPairing(input: {
     readonly address: RemoteMachineAddress
     readonly pairingCode: string
@@ -234,6 +254,7 @@ interface CoordinatorTransport {
   beginPairing: typeof beginRemoteMachinePairing
   connectTrusted: typeof connectTrustedRemoteMachine
   openCodexSession?: typeof openRemoteCodexSession
+  openClaudeSession?: typeof openRemoteClaudeSession
 }
 
 export interface SecureRemoteMachineCoordinatorOptions {
@@ -303,6 +324,7 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
       beginPairing: beginRemoteMachinePairing,
       connectTrusted: connectTrustedRemoteMachine,
       openCodexSession: openRemoteCodexSession,
+      openClaudeSession: openRemoteClaudeSession,
     }
     this.#deleteCredentialFile =
       options.deleteCredentialFile ?? deleteMachineTlsIdentityFile
@@ -371,19 +393,24 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
     )
   }
 
-  providerExecutionAvailable(machineId: MachineId): boolean {
+  providerExecutionAvailable(
+    machineId: MachineId,
+    provider?: 'codex' | 'claude-code',
+  ): boolean {
     const id = MachineIdSchema.parse(machineId)
     const observation = this.#persistence.getRemoteProviderObservation(id)
-    const codex = observation?.providers.find(
-      (provider) => provider.provider === 'codex',
-    )
     return (
       observation !== undefined &&
       this.providerDiscoveryCurrent(id, observation.observedAt) &&
-      codex?.availability === 'available' &&
-      codex.capabilities.streaming &&
-      codex.capabilities.resume &&
-      this.#transport.openCodexSession !== undefined
+      observation.providers.some(
+        (descriptor) =>
+          (provider === undefined || descriptor.provider === provider) &&
+          remoteProviderExecutionProfileAvailable(
+            descriptor,
+            this.#transport.openCodexSession !== undefined,
+            this.#transport.openClaudeSession !== undefined,
+          ),
+      )
     )
   }
 
@@ -783,7 +810,7 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
     const id = MachineIdSchema.parse(machine.machineId)
     return await this.#serializeMachineOperation(id, async () => {
       const current = this.#requireCurrentActiveTrust(machine, trust)
-      if (!this.providerExecutionAvailable(id)) {
+      if (!this.providerExecutionAvailable(id, 'codex')) {
         throw new RemoteMachineCoordinatorError(
           'remote_execution_unavailable',
           'Remote Codex execution is unavailable on this Machine',
@@ -821,6 +848,97 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
             authenticatedAt,
           )
           return remoteCodexRuntimeSession(session)
+        } catch (error) {
+          lastError = error
+          this.#persistence.recordTrustedMachineEndpointFailure(
+            id,
+            endpoint.address,
+            TimestampSchema.parse(this.#now().toISOString()),
+          )
+          if (
+            error instanceof MachineTransportError &&
+            (error.code === 'identity_mismatch' ||
+              error.code === 'authentication_failed' ||
+              error.code === 'protocol_incompatible' ||
+              error.code === 'remote_policy_violation')
+          ) {
+            break
+          }
+        }
+      }
+      throw coordinatorError(
+        lastError ?? new Error('No trusted endpoint is available'),
+      )
+    })
+  }
+
+  async openClaudeSession(
+    machine: DurableMachine,
+    trust: DurableTrustedMachinePeer,
+    input: {
+      readonly conversationId: string
+      readonly projectId: string
+      readonly rootPath: string
+      readonly providerSessionId?: string
+      readonly providerSessionMaterialized?: boolean
+      readonly effort?: RemoteClaudeEffort
+    },
+  ): Promise<RemoteClaudeRuntimeSession> {
+    const id = MachineIdSchema.parse(machine.machineId)
+    return await this.#serializeMachineOperation(id, async () => {
+      const current = this.#requireCurrentActiveTrust(machine, trust)
+      if (!this.providerExecutionAvailable(id, 'claude-code')) {
+        throw new RemoteMachineCoordinatorError(
+          'remote_execution_unavailable',
+          'Remote Claude Code execution is unavailable on this Machine',
+        )
+      }
+      if (
+        (input.providerSessionId === undefined) !==
+        (input.providerSessionMaterialized === undefined)
+      ) {
+        throw new RemoteMachineCoordinatorError(
+          'remote_policy_violation',
+          'Remote Claude Code session materialization state is invalid',
+        )
+      }
+      const controller = await this.#loadController(current.trust)
+      let lastError: unknown
+      for (const endpoint of current.trust.endpoints) {
+        try {
+          this.#recordAttempt(id)
+          const open =
+            this.#transport.openClaudeSession ?? openRemoteClaudeSession
+          const baseInput = {
+            peer: trustedPeer(current.machine, current.trust, endpoint.address),
+            controller,
+            conversationId: MachineTransportConversationIdSchema.parse(
+              input.conversationId,
+            ),
+            projectId: MachineTransportProjectIdSchema.parse(input.projectId),
+            rootPath: input.rootPath,
+            ...(input.effort === undefined ? {} : { effort: input.effort }),
+          }
+          const session =
+            input.providerSessionId === undefined
+              ? await open(baseInput)
+              : await open({
+                  ...baseInput,
+                  providerSessionId: RemoteClaudeProviderIdentitySchema.parse(
+                    input.providerSessionId,
+                  ),
+                  providerSessionMaterialized:
+                    input.providerSessionMaterialized === true,
+                })
+          const authenticatedAt = TimestampSchema.parse(
+            this.#now().toISOString(),
+          )
+          this.#persistence.recordTrustedMachineAuthentication(
+            id,
+            endpoint.address,
+            authenticatedAt,
+          )
+          return remoteClaudeRuntimeSession(session)
         } catch (error) {
           lastError = error
           this.#persistence.recordTrustedMachineEndpointFailure(
@@ -1523,30 +1641,72 @@ function remoteProviderObservation(
   machineId: MachineId,
   discovery: RemoteProviderDiscovery,
 ): DurableRemoteProviderObservation {
-  for (const provider of discovery.providers) {
+  const providers: readonly ProviderDescriptor[] = discovery.providers.map(
+    ({ reasoningOptions, ...provider }) => ({
+      ...provider,
+      ...(reasoningOptions === undefined
+        ? {}
+        : {
+            reasoningOptions: reasoningOptions.map((option) => ({ ...option })),
+          }),
+    }),
+  )
+  for (const provider of providers) {
     const enabledCapabilities = Object.entries(provider.capabilities)
       .filter(([, enabled]) => enabled)
       .map(([capability]) => capability)
-    const codexExecutionFoundation =
-      provider.provider === 'codex' &&
-      provider.availability === 'available' &&
-      provider.capabilities.streaming &&
-      provider.capabilities.resume &&
-      enabledCapabilities.every(
-        (capability) => capability === 'streaming' || capability === 'resume',
-      )
-    if (enabledCapabilities.length > 0 && !codexExecutionFoundation) {
+    if (
+      enabledCapabilities.length > 0 &&
+      !remoteProviderExecutionProfileAvailable(provider, true, true)
+    ) {
       throw new RemoteMachineCoordinatorError(
         'protocol_incompatible',
-        'Remote Provider capabilities exceed the Codex execution foundation',
+        'Remote Provider capabilities exceed an admitted execution foundation',
       )
     }
   }
   return {
     machineId: MachineIdSchema.parse(machineId),
-    providers: discovery.providers,
+    providers,
     observedAt: TimestampSchema.parse(discovery.observedAt),
   }
+}
+
+function remoteProviderExecutionProfileAvailable(
+  descriptor: ProviderDescriptor,
+  codexTransportAvailable: boolean,
+  claudeTransportAvailable: boolean,
+): boolean {
+  const enabled = Object.entries(descriptor.capabilities)
+    .filter(([, value]) => value)
+    .map(([capability]) => capability)
+    .sort()
+  if (descriptor.provider === 'codex') {
+    return (
+      codexTransportAvailable &&
+      descriptor.availability === 'available' &&
+      enabled.length === 2 &&
+      enabled[0] === 'resume' &&
+      enabled[1] === 'streaming'
+    )
+  }
+  const expected = [
+    'fileRead',
+    'reasoningControl',
+    'resume',
+    'search',
+    'streaming',
+    'toolEvents',
+  ]
+  return (
+    claudeTransportAvailable &&
+    descriptor.availability === 'available' &&
+    enabled.length === expected.length &&
+    enabled.every((capability, index) => capability === expected[index]) &&
+    descriptor.reasoningLabel !== undefined &&
+    descriptor.reasoningOptions?.map(({ id }) => id).join(',') ===
+      'low,medium,high,xhigh,max'
+  )
 }
 
 function unavailable(): RemoteMachineCoordinatorError {
@@ -1821,7 +1981,7 @@ function coordinatorError(error: unknown): RemoteMachineCoordinatorError {
       case 'duplicate_action_conflict':
         return new RemoteMachineCoordinatorError(
           error.code,
-          'Remote Codex execution failed',
+          'Remote Provider execution failed',
         )
     }
   }
@@ -1838,6 +1998,35 @@ function remoteCodexRuntimeSession(
     machineId: MachineIdSchema.parse(session.machine.machineId),
     conversationId: ConversationIdSchema.parse(session.conversationId),
     providerThreadId: session.providerThreadId,
+    get closed() {
+      return session.closed
+    },
+    startTurn: async (input) => {
+      const turn = await session.startTurn({
+        actionId: MachineTransportActionIdSchema.parse(input.actionId),
+        turnId: MachineTransportTurnIdSchema.parse(input.turnId),
+        prompt: input.prompt,
+      })
+      return {
+        events: async function* () {
+          for await (const envelope of turn.events()) {
+            yield { ...envelope.event, sequence: envelope.sequence }
+          }
+        },
+      }
+    },
+    close: async () => await session.close(),
+  }
+}
+
+function remoteClaudeRuntimeSession(
+  session: MachineTransportRemoteClaudeSession,
+): RemoteClaudeRuntimeSession {
+  return {
+    machineId: MachineIdSchema.parse(session.machine.machineId),
+    conversationId: ConversationIdSchema.parse(session.conversationId),
+    providerSessionId: session.providerSessionId,
+    ...(session.effort === undefined ? {} : { effort: session.effort }),
     get closed() {
       return session.closed
     },

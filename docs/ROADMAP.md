@@ -958,7 +958,7 @@ Exit gate:
 
 ## Phase 6C.2 — Remote Codex Execution Foundation
 
-**Status:** current approved implementation scope; not accepted or frozen.
+**Status:** accepted and frozen at `0b60dc6`.
 
 **Goal:** execute and natively resume one real Codex Conversation on an exact trusted remote Machine and its already registered Project Location, while preserving the canonical durable Conversation/Turn model and the bounded Machine security boundary.
 
@@ -977,6 +977,28 @@ Exit gate:
 ### Exit gate
 
 - A REAL trusted WSL2 Node creates, streams, durably completes, and natively resumes the same remote Codex thread after both Host/Desktop and Node restart; exact registered Location and cryptographic Machine identity are enforced; ambiguous loss never replays a Prompt; duplicate actions do not duplicate Turns/processes; cold Search/organization reads stay remote-independent; local Providers and frozen Machine/Location lifecycles remain correct; package/install, cleanup, tests, and clean build identity pass.
+
+## Phase 6C.3 — Remote Claude Code Execution Foundation
+
+**Status:** current approved implementation scope; not accepted or frozen.
+
+**Goal:** execute and natively resume a real Claude Code Conversation on an exact trusted remote Machine and registered Project Location while preserving the frozen restricted Claude capability matrix.
+
+### In scope
+
+- The existing provider-neutral Conversation APIs may select remote Claude Code only for a trusted online Machine with an exact registered Location and current tested descriptor advertising the restricted remote execution profile.
+- One additive strictly typed Claude session/Turn family over the existing pinned Machine transport, with bounded Prompt/output, private native session identity, validated effort, canonical streaming, canonical Read/Glob/Grep Tool events, and safe terminal failures.
+- A Node-owned official Claude CLI process tree launched with structured fixed argv, `shell: false`, `--restricted`, strict MCP configuration, `dontAsk`, and the exact `Read,Glob,Grep` allowlist. Credentials and allowed environment remain Node-local.
+- Durable Host-owned Conversation/Turn/Search/organization/Attention truth, immutable Machine/Provider binding, native session resume after Host/Desktop and Node restart, shared hydration limits, idempotency, background Tray completion, and exact process cleanup.
+- Capability-driven UI that exposes Claude effort and canonical Read/Search Tool history without showing unsupported mutation, shell, Diff, Approval, interrupt, or model controls.
+
+### Out of scope
+
+- Remote Claude Edit/Write, shell/Bash/PowerShell, Diff, Approval, interrupt/Stop, model selection, MCP/plugins/hooks, arbitrary process/argv/environment/cwd, generic filesystem/RPC/Terminal, sync, SSH, relay, Internet transport, Machine/Provider switching, handoff, or transcript-replay resume.
+
+### Exit gate
+
+- A REAL trusted WSL2 Node executes authenticated Claude Code with real streaming, safe Read and Search Tools, unchanged files under a denied mutation attempt, exact owned-process evidence, durable completion, native resume after Host/Desktop and Node restart, background Tray completion, idempotency, local/remote Claude isolation, preserved remote Codex behavior, cold Search/organization independence, complete cleanup, passing build/package tests, and a clean working tree.
 
 ## Phase 7 — Remote LAN / Tailscale
 

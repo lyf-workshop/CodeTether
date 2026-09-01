@@ -80,6 +80,7 @@ test('capabilities, connection and active Turn jointly gate controls', () => {
       supportsInterrupt: true,
       supportsApprovals: true,
       supportsDiff: true,
+      supportsShell: true,
       supportsReasoningControl: true,
     },
   )
@@ -93,6 +94,7 @@ test('capabilities, connection and active Turn jointly gate controls', () => {
       supportsInterrupt: true,
       supportsApprovals: true,
       supportsDiff: true,
+      supportsShell: true,
       supportsReasoningControl: true,
     },
   )
@@ -106,6 +108,7 @@ test('capabilities, connection and active Turn jointly gate controls', () => {
       supportsInterrupt: true,
       supportsApprovals: true,
       supportsDiff: true,
+      supportsShell: true,
       supportsReasoningControl: true,
     },
   )
@@ -126,13 +129,13 @@ test('Claude capabilities do not inherit unsupported Codex controls', () => {
     interrupt: false,
     approvals: false,
     fileRead: true,
-    fileEdit: true,
-    shell: true,
+    fileEdit: false,
+    shell: false,
     search: true,
     diff: false,
     toolEvents: true,
-    modelSelection: true,
-    reasoningControl: false,
+    modelSelection: false,
+    reasoningControl: true,
   }
 
   assert.deepEqual(
@@ -145,7 +148,8 @@ test('Claude capabilities do not inherit unsupported Codex controls', () => {
       supportsInterrupt: false,
       supportsApprovals: false,
       supportsDiff: false,
-      supportsReasoningControl: false,
+      supportsShell: false,
+      supportsReasoningControl: true,
     },
   )
 })

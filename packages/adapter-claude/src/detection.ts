@@ -1,6 +1,10 @@
 import { spawn } from 'node:child_process'
 
-import { ClaudeCodeError, ClaudeCodeNotInstalledError } from './errors.js'
+import {
+  ClaudeCodeError,
+  ClaudeCodeNotInstalledError,
+  ClaudeCodeOwnedProcessCleanupError,
+} from './errors.js'
 import {
   resolveClaudeCodeRestrictedEnvironment,
   restrictClaudeCodeProcessEnvironment,
@@ -16,9 +20,14 @@ import {
   type ClaudeCodeDetection,
   type ClaudeCodeLauncher,
 } from './types.js'
+import {
+  closeOwnedClaudeProcess,
+  type ClaudeCodeProcessOwnership,
+} from './process.js'
 
 const MAX_DETECTION_OUTPUT_BYTES = 4096
 const DEFAULT_DETECTION_TIMEOUT_MS = 5000
+const MAX_DETECTION_CLOSE_GRACE_MS = 250
 const VERSION_PATTERN = /^(\d+\.\d+\.\d+) \(Claude Code\)$/
 
 class ClaudeCodeDetectionProbeError extends Error {
@@ -31,6 +40,10 @@ export interface ClaudeCodeDetectionOptions extends ClaudeCodeResolutionOptions 
   readonly launcher?: ClaudeCodeLauncher
   readonly timeoutMs?: number
   readonly testedVersion?: string
+  /** Optional lifecycle cancellation for Node-owned discovery/preparation. */
+  readonly signal?: AbortSignal
+  /** Node-only opt-in. Local detection keeps direct-child ownership. */
+  readonly processOwnership?: ClaudeCodeProcessOwnership
 }
 
 export interface ClaudeCodePreparationOptions extends ClaudeCodeDetectionOptions {
@@ -69,6 +82,8 @@ export class ClaudeCodeDetector {
       const versionOutput = await probeVersion(launcher, {
         environment: this.#options.environment,
         timeoutMs: this.#options.timeoutMs,
+        signal: this.#options.signal,
+        processOwnership: this.#options.processOwnership,
       })
       const match = VERSION_PATTERN.exec(versionOutput)
       if (match?.[1] === undefined) {
@@ -93,6 +108,8 @@ export class ClaudeCodeDetector {
       const loggedIn = await probeAuthStatus(launcher, {
         environment: this.#options.environment,
         timeoutMs: this.#options.timeoutMs,
+        signal: this.#options.signal,
+        processOwnership: this.#options.processOwnership,
       })
       if (!loggedIn) {
         return unavailable('misconfigured', 'auth_not_logged_in', startedAt)
@@ -107,6 +124,7 @@ export class ClaudeCodeDetector {
         launcher,
       }
     } catch (error) {
+      if (error instanceof ClaudeCodeOwnedProcessCleanupError) throw error
       const status =
         error instanceof ClaudeCodeNotInstalledError
           ? 'notInstalled'
@@ -152,6 +170,7 @@ export async function prepareClaudeCode(
       runtimeEnvironment: () => ({ ...environment }),
     }
   } catch (error) {
+    if (error instanceof ClaudeCodeOwnedProcessCleanupError) throw error
     const diagnosticCode =
       error instanceof ClaudeCodeError ? error.code : 'configuration_invalid'
     let fallbackEnvironment: NodeJS.ProcessEnv = {}
@@ -173,6 +192,8 @@ export async function prepareClaudeCode(
 interface DetectionProbeOptions {
   readonly environment?: NodeJS.ProcessEnv
   readonly timeoutMs?: number
+  readonly signal?: AbortSignal
+  readonly processOwnership?: ClaudeCodeProcessOwnership
 }
 
 export async function probeClaudeCodeVersion(
@@ -228,6 +249,11 @@ function probeCommand(
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
     throw new RangeError('timeoutMs must be a positive safe integer')
   }
+  const processOwnership = options.processOwnership ?? 'direct-child'
+  validateProbeProcessOwnership(processOwnership)
+  if (options.signal?.aborted === true) {
+    throw new ClaudeCodeDetectionProbeError(`${diagnosticPrefix}_aborted`)
+  }
 
   return new Promise((resolve, reject) => {
     const child = spawn(
@@ -240,56 +266,136 @@ function probeCommand(
         shell: false,
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
+        detached: processOwnership === 'posix-process-group',
       },
     )
     const stdout: Buffer[] = []
     let stdoutBytes = 0
     let stderrBytes = 0
     let settled = false
+    let cleaningAfterClose = false
+    let forcedFailure: ClaudeCodeDetectionProbeError | undefined
 
     const finish = (callback: () => void) => {
       if (settled) return
       settled = true
       clearTimeout(timer)
+      options.signal?.removeEventListener('abort', abort)
       callback()
     }
-    const timer = setTimeout(() => {
-      child.kill('SIGTERM')
-      finish(() =>
-        reject(
+    const failAndClose = (failure: ClaudeCodeDetectionProbeError) => {
+      if (settled || cleaningAfterClose || forcedFailure !== undefined) return
+      forcedFailure = failure
+      clearTimeout(timer)
+      options.signal?.removeEventListener('abort', abort)
+      void closeOwnedClaudeProcess(
+        child,
+        Math.min(timeoutMs, MAX_DETECTION_CLOSE_GRACE_MS),
+        processOwnership,
+      ).then(
+        () => finish(() => reject(failure)),
+        (error) =>
+          finish(() =>
+            reject(
+              error instanceof ClaudeCodeOwnedProcessCleanupError
+                ? error
+                : new ClaudeCodeOwnedProcessCleanupError(
+                    error instanceof Error ? { cause: error } : undefined,
+                  ),
+            ),
+          ),
+      )
+    }
+    const abort = () =>
+      failAndClose(
+        new ClaudeCodeDetectionProbeError(`${diagnosticPrefix}_aborted`),
+      )
+    const timer = setTimeout(
+      () =>
+        failAndClose(
           new ClaudeCodeDetectionProbeError(`${diagnosticPrefix}_timeout`),
         ),
-      )
-    }, timeoutMs)
+      timeoutMs,
+    )
+    options.signal?.addEventListener('abort', abort, { once: true })
+    if (options.signal?.aborted === true) abort()
 
     child.stdout.on('data', (chunk: Buffer) => {
       stdoutBytes += chunk.byteLength
       if (stdoutBytes <= MAX_DETECTION_OUTPUT_BYTES) stdout.push(chunk)
+      else {
+        failAndClose(
+          new ClaudeCodeDetectionProbeError(`${diagnosticPrefix}_failed`),
+        )
+      }
     })
     child.stderr.on('data', (chunk: Buffer) => {
       stderrBytes += chunk.byteLength
+      if (stderrBytes > MAX_DETECTION_OUTPUT_BYTES) {
+        failAndClose(
+          new ClaudeCodeDetectionProbeError(`${diagnosticPrefix}_failed`),
+        )
+      }
     })
-    child.once('error', () =>
-      finish(() =>
-        reject(new ClaudeCodeDetectionProbeError(`${diagnosticPrefix}_failed`)),
-      ),
-    )
+    child.once('error', () => {
+      if (cleaningAfterClose || forcedFailure !== undefined) return
+      const failure = new ClaudeCodeDetectionProbeError(
+        `${diagnosticPrefix}_failed`,
+      )
+      if (child.pid === undefined) finish(() => reject(failure))
+      else failAndClose(failure)
+    })
     child.once('close', (code) => {
-      finish(() => {
-        if (
-          code !== 0 ||
-          stdoutBytes > MAX_DETECTION_OUTPUT_BYTES ||
-          stderrBytes > MAX_DETECTION_OUTPUT_BYTES
-        ) {
+      if (forcedFailure !== undefined) return
+      const finishAfterOwnedCleanup = () =>
+        finish(() => {
+          if (
+            code !== 0 ||
+            stdoutBytes > MAX_DETECTION_OUTPUT_BYTES ||
+            stderrBytes > MAX_DETECTION_OUTPUT_BYTES
+          ) {
+            reject(
+              new ClaudeCodeDetectionProbeError(`${diagnosticPrefix}_failed`),
+            )
+            return
+          }
+          resolve(Buffer.concat(stdout).toString('utf8').trim())
+        })
+      if (processOwnership === 'direct-child') {
+        finishAfterOwnedCleanup()
+        return
+      }
+      cleaningAfterClose = true
+      clearTimeout(timer)
+      options.signal?.removeEventListener('abort', abort)
+      void closeOwnedClaudeProcess(
+        child,
+        Math.min(timeoutMs, MAX_DETECTION_CLOSE_GRACE_MS),
+        processOwnership,
+      ).then(finishAfterOwnedCleanup, (error) =>
+        finish(() =>
           reject(
-            new ClaudeCodeDetectionProbeError(`${diagnosticPrefix}_failed`),
-          )
-          return
-        }
-        resolve(Buffer.concat(stdout).toString('utf8').trim())
-      })
+            error instanceof ClaudeCodeOwnedProcessCleanupError
+              ? error
+              : new ClaudeCodeOwnedProcessCleanupError(
+                  error instanceof Error ? { cause: error } : undefined,
+                ),
+          ),
+        ),
+      )
     })
   })
+}
+
+function validateProbeProcessOwnership(
+  ownership: ClaudeCodeProcessOwnership,
+): void {
+  if (ownership !== 'direct-child' && ownership !== 'posix-process-group') {
+    throw new TypeError('Claude Code process ownership is invalid')
+  }
+  if (ownership === 'posix-process-group' && process.platform === 'win32') {
+    throw new TypeError('POSIX process-group ownership is unavailable')
+  }
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

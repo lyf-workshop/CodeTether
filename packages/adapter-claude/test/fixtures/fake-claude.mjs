@@ -1,4 +1,5 @@
-import { appendFile } from 'node:fs/promises'
+import { spawn } from 'node:child_process'
+import { appendFile, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 
 const rawArguments = process.argv.slice(2)
@@ -42,7 +43,34 @@ if (arguments_.includes('--version')) {
   if (process.env.FAKE_CLAUDE_COUNT_PATH) {
     await appendFile(process.env.FAKE_CLAUDE_COUNT_PATH, 'auth\n', 'utf8')
   }
-  const authStatus = process.env.FAKE_CLAUDE_AUTH_STATUS ?? 'logged-in'
+  const authPidPath =
+    fixtureOptions['auth-pid'] ?? process.env.FAKE_CLAUDE_AUTH_PID_PATH
+  if (authPidPath) {
+    await writeFile(authPidPath, String(process.pid), 'utf8')
+  }
+  const authStatus =
+    fixtureOptions['auth-status'] ??
+    process.env.FAKE_CLAUDE_AUTH_STATUS ??
+    'logged-in'
+  const childPidPath =
+    fixtureOptions['auth-child-pid'] ??
+    process.env.FAKE_CLAUDE_AUTH_CHILD_PID_PATH
+  if (childPidPath) {
+    const descendant = spawn(
+      process.execPath,
+      [
+        '--eval',
+        "require('node:fs').writeFileSync(process.argv[1], String(process.pid)); setInterval(() => {}, 60000)",
+        childPidPath,
+      ],
+      { stdio: 'ignore' },
+    )
+    // Model a CLI-owned background descendant that outlives the successful
+    // probe parent. A referenced ChildProcess would instead keep this fixture
+    // parent alive forever, turning the success case into a probe timeout
+    // before the adapter can exercise its post-close process-group cleanup.
+    descendant.unref()
+  }
   if (authStatus === 'failure') {
     process.stderr.write('private auth diagnostic\n')
     process.exitCode = 2

@@ -132,6 +132,7 @@ export interface ConversationCapabilitiesViewModel {
   readonly supportsInterrupt: boolean
   readonly supportsApprovals: boolean
   readonly supportsDiff: boolean
+  readonly supportsShell: boolean
   readonly supportsReasoningControl: boolean
 }
 

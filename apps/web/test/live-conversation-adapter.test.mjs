@@ -25,6 +25,7 @@ test('maps one Host read model to the frozen read-only Conversation ViewModel', 
     supportsInterrupt: false,
     supportsApprovals: false,
     supportsDiff: false,
+    supportsShell: false,
     supportsReasoningControl: false,
   })
   assert.equal(viewModel.pendingApprovals[0]?.id, 'approval_live01')
@@ -59,6 +60,7 @@ test('maps every pending Approval and enables only advertised live controls', ()
     supportsInterrupt: true,
     supportsApprovals: true,
     supportsDiff: true,
+    supportsShell: true,
     supportsReasoningControl: true,
   })
   assert.deepEqual(
@@ -387,12 +389,139 @@ test('uses exact Machine-scoped remote Codex capabilities and rail identities', 
     supportsInterrupt: false,
     supportsApprovals: false,
     supportsDiff: false,
+    supportsShell: false,
     supportsReasoningControl: false,
   })
   assert.deepEqual(
     source.rail.groups[0].conversations.map((item) => item.machine),
     ['Linux VM', '本地电脑'],
   )
+})
+
+test('presents Remote Claude effort and canonical Read/Search tools without unsupported controls', () => {
+  const completedTurn = {
+    id: 'turn_live01',
+    status: 'completed',
+    startedAt: timestamp,
+    completedAt: '2026-08-26T12:01:00.000Z',
+    order: 0,
+  }
+  const remoteClaude = {
+    provider: 'claude-code',
+    displayName: 'Claude Code',
+    availability: 'available',
+    version: '2.1.0',
+    capabilities: {
+      streaming: true,
+      resume: true,
+      interrupt: false,
+      approvals: false,
+      fileRead: true,
+      fileEdit: false,
+      shell: false,
+      search: true,
+      diff: false,
+      toolEvents: true,
+      modelSelection: false,
+      reasoningControl: true,
+    },
+    reasoningLabel: '思考强度',
+    reasoningOptions: ['low', 'medium', 'high', 'xhigh', 'max'].map((id) => ({
+      id,
+      label: id === 'xhigh' ? 'XHigh' : id,
+    })),
+  }
+  const source = createLiveConversationDetailSource(
+    conversation({
+      provider: 'claude-code',
+      model: undefined,
+      reasoning: 'xhigh',
+      status: 'completed',
+      turns: [completedTurn],
+      currentTurn: completedTurn,
+      tools: [
+        tool('item_read01', 'Read', 'completed', {
+          kind: 'read',
+          command: 'Read fixtures/known.txt',
+          outputSummary: 'known marker',
+          order: 2,
+        }),
+        tool('item_search01', 'Search', 'completed', {
+          kind: 'search',
+          command: 'Grep marker in fixtures',
+          outputSummary: 'fixtures/known.txt',
+          order: 3,
+        }),
+      ],
+    }),
+    [
+      summary({
+        provider: 'claude-code',
+        model: undefined,
+        reasoning: 'xhigh',
+        status: 'completed',
+        machineId: 'machine_remote01',
+      }),
+    ],
+    'connected',
+    bootstrap('claude-code'),
+    'available',
+    '/home/test/project',
+    'Linux VM',
+    {
+      providerDescriptors: [remoteClaude],
+      executionAvailable: true,
+      names: { machine_remote01: 'Linux VM' },
+    },
+  )
+
+  assert.equal(source.conversation.provider, 'claude-code')
+  assert.equal(source.conversation.agent, 'claude')
+  assert.equal(source.conversation.reasoning, 'XHigh')
+  assert.deepEqual(source.conversation.capabilities, {
+    canCompose: true,
+    canInterrupt: false,
+    canStop: false,
+    canResolveApproval: false,
+    supportsInterrupt: false,
+    supportsApprovals: false,
+    supportsDiff: false,
+    supportsShell: false,
+    supportsReasoningControl: true,
+  })
+  const tools = source.conversation.timeline.blocks.flatMap((block) =>
+    block.kind === 'agent-run'
+      ? block.executions.flatMap((execution) =>
+          execution.kind === 'tool' ? [execution] : [],
+        )
+      : [],
+  )
+  assert.deepEqual(
+    tools.map((execution) => [
+      execution.id,
+      execution.tool.id,
+      execution.tool.presentationKind,
+      execution.tool.title,
+      execution.tool.outputSummary,
+    ]),
+    [
+      [
+        'execution:turn_live01:item_read01',
+        'turn_live01:item_read01',
+        'read-file',
+        'fixtures/known.txt',
+        'known marker',
+      ],
+      [
+        'execution:turn_live01:item_search01',
+        'turn_live01:item_search01',
+        'search',
+        'marker in fixtures',
+        'fixtures/known.txt',
+      ],
+    ],
+  )
+  assert.equal(JSON.stringify(tools).includes('raw Claude'), false)
 })
 
 test('keeps offline remote history readable while disabling execution', () => {
@@ -438,6 +567,7 @@ test('keeps Codex and Claude Code as distinct durable Rail groups', () => {
       interrupt: false,
       approvals: false,
       diff: false,
+      shell: false,
       reasoningControl: false,
     }),
   )
@@ -457,6 +587,7 @@ test('keeps Codex and Claude Code as distinct durable Rail groups', () => {
   assert.equal(source.conversation.capabilities.supportsInterrupt, false)
   assert.equal(source.conversation.capabilities.supportsApprovals, false)
   assert.equal(source.conversation.capabilities.supportsDiff, false)
+  assert.equal(source.conversation.capabilities.supportsShell, false)
   assert.equal(source.conversation.capabilities.supportsReasoningControl, false)
 })
 
@@ -564,6 +695,7 @@ test('keeps unavailable Project history visible while disabling controls', () =>
     supportsInterrupt: true,
     supportsApprovals: true,
     supportsDiff: true,
+    supportsShell: true,
     supportsReasoningControl: true,
   })
   assert.deepEqual(source.connectionIndicator, {

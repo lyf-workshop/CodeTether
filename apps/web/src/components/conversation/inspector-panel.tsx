@@ -321,7 +321,9 @@ function OverviewPane({
           selectedChangeId={selectedChangeId}
         />
       ) : null}
-      <TerminalSummary terminal={terminal} />
+      {conversation.capabilities.supportsShell ? (
+        <TerminalSummary terminal={terminal} />
+      ) : null}
       <ContextSummary context={context} visibleCount={3} />
     </div>
   )
@@ -362,7 +364,8 @@ export function InspectorPanel({
 }: InspectorPanelProps) {
   const requestedTab = tab ?? initialTab
   const effectiveTab =
-    requestedTab === 'changes' && !conversation.capabilities.supportsDiff
+    (requestedTab === 'changes' && !conversation.capabilities.supportsDiff) ||
+    (requestedTab === 'terminal' && !conversation.capabilities.supportsShell)
       ? 'overview'
       : requestedTab
 
@@ -421,12 +424,14 @@ export function InspectorPanel({
                 变更
               </TabsTrigger>
             ) : null}
-            <TabsTrigger
-              value="terminal"
-              className="h-9 flex-1 px-1 text-sm font-medium data-[state=active]:text-text-primary"
-            >
-              终端
-            </TabsTrigger>
+            {conversation.capabilities.supportsShell ? (
+              <TabsTrigger
+                value="terminal"
+                className="h-9 flex-1 px-1 text-sm font-medium data-[state=active]:text-text-primary"
+              >
+                终端
+              </TabsTrigger>
+            ) : null}
             <TabsTrigger
               value="context"
               className="h-9 flex-1 px-1 text-sm font-medium data-[state=active]:text-text-primary"
@@ -463,13 +468,15 @@ export function InspectorPanel({
           </TabsContent>
         ) : null}
 
-        <TabsContent value="terminal" className="min-h-0 overflow-hidden">
-          <ScrollArea className="h-full">
-            <div className="px-4 pb-4">
-              <TerminalSummary terminal={terminal} />
-            </div>
-          </ScrollArea>
-        </TabsContent>
+        {conversation.capabilities.supportsShell ? (
+          <TabsContent value="terminal" className="min-h-0 overflow-hidden">
+            <ScrollArea className="h-full">
+              <div className="px-4 pb-4">
+                <TerminalSummary terminal={terminal} />
+              </div>
+            </ScrollArea>
+          </TabsContent>
+        ) : null}
 
         <TabsContent value="context" className="min-h-0 overflow-hidden">
           <ScrollArea className="h-full">

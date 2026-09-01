@@ -351,3 +351,65 @@ test('close terminates only the exact owned Claude child', async () => {
     }
   }
 })
+
+test(
+  'opt-in POSIX process-group ownership cleans exact descendants only',
+  { skip: process.platform === 'win32' },
+  async () => {
+    const groupLeader = spawn(
+      process.execPath,
+      [
+        '-e',
+        [
+          "const { spawn } = require('node:child_process')",
+          "const child = spawn(process.execPath, ['-e', 'setInterval(() => undefined, 60000)'], { stdio: 'ignore' })",
+          'process.stdout.write(String(child.pid) + "\\n")',
+          'setInterval(() => undefined, 60000)',
+        ].join(';'),
+      ],
+      {
+        detached: true,
+        shell: false,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      },
+    )
+    const unrelated = spawn(
+      process.execPath,
+      ['-e', 'setInterval(() => undefined, 60000)'],
+      { shell: false, stdio: 'ignore' },
+    )
+    const [chunk] = await once(groupLeader.stdout, 'data')
+    const descendantPid = Number(String(chunk).trim())
+    assert.ok(Number.isSafeInteger(descendantPid) && descendantPid > 0)
+    try {
+      await closeOwnedClaudeProcess(groupLeader, 250, 'posix-process-group')
+      assert.equal(processExists(descendantPid), false)
+      assert.equal(unrelated.exitCode, null)
+      assert.equal(unrelated.signalCode, null)
+    } finally {
+      if (processExists(descendantPid)) {
+        try {
+          process.kill(descendantPid, 'SIGKILL')
+        } catch {
+          // The process may have exited between the liveness check and signal.
+        }
+      }
+      if (groupLeader.exitCode === null && groupLeader.signalCode === null) {
+        groupLeader.kill('SIGKILL')
+      }
+      if (unrelated.exitCode === null && unrelated.signalCode === null) {
+        unrelated.kill('SIGKILL')
+        await once(unrelated, 'close')
+      }
+    }
+  },
+)
+
+function processExists(pid) {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return error?.code !== 'ESRCH'
+  }
+}

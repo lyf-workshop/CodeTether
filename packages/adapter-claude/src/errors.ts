@@ -68,6 +68,19 @@ export class ClaudeCodeStartError extends ClaudeCodeError {
   }
 }
 
+/** Exact owned child/process-group cleanup could not be proven complete. */
+export class ClaudeCodeOwnedProcessCleanupError extends ClaudeCodeError {
+  override readonly name: string = 'ClaudeCodeOwnedProcessCleanupError'
+
+  constructor(options?: ErrorOptions) {
+    super(
+      'provider_start_failed',
+      'Claude Code owned process cleanup could not be verified.',
+      options,
+    )
+  }
+}
+
 export class ClaudeCodeSessionLostError extends ClaudeCodeError {
   override readonly name: string = 'ClaudeCodeSessionLostError'
 

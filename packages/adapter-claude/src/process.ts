@@ -1,4 +1,8 @@
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import {
+  spawn,
+  type ChildProcess,
+  type ChildProcessWithoutNullStreams,
+} from 'node:child_process'
 import { isAbsolute } from 'node:path'
 
 import type { AgentEvent } from '@codetether/agent-core'
@@ -7,6 +11,7 @@ import { restrictClaudeCodeProcessEnvironment } from './configuration.js'
 import {
   asClaudeCodeError,
   ClaudeCodeError,
+  ClaudeCodeOwnedProcessCleanupError,
   ClaudeCodeProtocolError,
   ClaudeCodeSessionLostError,
   ClaudeCodeStartError,
@@ -50,8 +55,12 @@ export interface ClaudeCodeTurnProcessOptions {
   readonly effort?: ClaudeCodeEffort
   readonly environment?: NodeJS.ProcessEnv
   readonly testedVersion?: string
+  /** Node-only opt-in. Local Claude keeps direct-child ownership. */
+  readonly processOwnership?: ClaudeCodeProcessOwnership
   readonly onEvent: (event: AgentEvent) => void | Promise<void>
 }
+
+export type ClaudeCodeProcessOwnership = 'direct-child' | 'posix-process-group'
 
 export interface ClaudeCodeTurnProcessHandle {
   readonly child: ChildProcessWithoutNullStreams
@@ -119,6 +128,7 @@ export function startClaudeCodeTurnProcess(
   options: ClaudeCodeTurnProcessOptions,
 ): ClaudeCodeTurnProcessHandle {
   validateTurnOptions(options)
+  const processOwnership = options.processOwnership ?? 'direct-child'
   const arguments_ = [
     ...options.launcher.prefixArguments,
     ...buildClaudeCodeArguments(options),
@@ -129,6 +139,7 @@ export function startClaudeCodeTurnProcess(
     shell: false,
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true,
+    detached: processOwnership === 'posix-process-group',
   })
   const decoder = new ClaudeJsonLineDecoder()
   const normalizer = new ClaudeStreamNormalizer({
@@ -146,7 +157,7 @@ export function startClaudeCodeTurnProcess(
   const rememberError = (error: unknown) => {
     processingError ??= error
     if (child.exitCode === null && child.signalCode === null) {
-      child.kill('SIGTERM')
+      signalOwnedClaudeProcess(child, 'SIGTERM', processOwnership)
     }
   }
 
@@ -199,6 +210,17 @@ export function startClaudeCodeTurnProcess(
           }
         }
         await eventQueue
+        if (processOwnership === 'posix-process-group') {
+          try {
+            await closeOwnedClaudeProcess(
+              child,
+              DEFAULT_CLOSE_GRACE_MS,
+              processOwnership,
+            )
+          } catch (error) {
+            processingError ??= error
+          }
+        }
 
         let failure: ClaudeCodeError | undefined
         if (processingError !== undefined) {
@@ -242,27 +264,38 @@ export function startClaudeCodeTurnProcess(
     completion,
     async close() {
       closeRequested = true
-      await closeOwnedClaudeProcess(child)
+      await closeOwnedClaudeProcess(
+        child,
+        DEFAULT_CLOSE_GRACE_MS,
+        processOwnership,
+      )
     },
   }
 }
 
 export async function closeOwnedClaudeProcess(
-  child: ChildProcessWithoutNullStreams,
+  child: ChildProcess,
   graceMs = DEFAULT_CLOSE_GRACE_MS,
+  ownership: ClaudeCodeProcessOwnership = 'direct-child',
 ): Promise<void> {
   if (!Number.isSafeInteger(graceMs) || graceMs < 0) {
     throw new RangeError('graceMs must be a non-negative safe integer')
   }
-  if (child.exitCode !== null || child.signalCode !== null) return
+  validateProcessOwnership(ownership)
+  if (
+    ownership === 'direct-child' &&
+    (child.exitCode !== null || child.signalCode !== null)
+  ) {
+    return
+  }
 
-  child.stdin.end()
-  if (await waitForExit(child, graceMs)) return
-  child.kill('SIGTERM')
-  if (await waitForExit(child, graceMs)) return
-  child.kill('SIGKILL')
-  if (await waitForExit(child, graceMs)) return
-  throw new ClaudeCodeStartError()
+  child.stdin?.end()
+  if (await waitForOwnedExit(child, graceMs, ownership)) return
+  signalOwnedClaudeProcess(child, 'SIGTERM', ownership)
+  if (await waitForOwnedExit(child, graceMs, ownership)) return
+  signalOwnedClaudeProcess(child, 'SIGKILL', ownership)
+  if (await waitForOwnedExit(child, graceMs, ownership)) return
+  throw new ClaudeCodeOwnedProcessCleanupError()
 }
 
 function validateTurnOptions(options: ClaudeCodeTurnProcessOptions): void {
@@ -273,6 +306,13 @@ function validateTurnOptions(options: ClaudeCodeTurnProcessOptions): void {
     throw new RangeError('turnId must contain between 1 and 128 characters')
   }
   encodeClaudeUserMessage(options.prompt)
+  validateProcessOwnership(options.processOwnership ?? 'direct-child')
+}
+
+function validateProcessOwnership(ownership: ClaudeCodeProcessOwnership): void {
+  if (ownership === 'posix-process-group' && process.platform === 'win32') {
+    throw new TypeError('POSIX process-group ownership is unavailable')
+  }
 }
 
 function validateEffort(effort: string | undefined): void {
@@ -291,7 +331,7 @@ function validateSessionId(sessionId: string): void {
 }
 
 async function waitForExit(
-  child: ChildProcessWithoutNullStreams,
+  child: ChildProcess,
   timeoutMs: number,
 ): Promise<boolean> {
   if (child.exitCode !== null || child.signalCode !== null) return true
@@ -306,4 +346,56 @@ async function waitForExit(
     }, timeoutMs)
     child.once('close', onClose)
   })
+}
+
+async function waitForOwnedExit(
+  child: ChildProcess,
+  timeoutMs: number,
+  ownership: ClaudeCodeProcessOwnership,
+): Promise<boolean> {
+  if (ownership === 'direct-child') return await waitForExit(child, timeoutMs)
+  const pid = child.pid
+  if (pid === undefined || !processGroupAlive(pid)) return true
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    await new Promise<void>((resolve) => setTimeout(resolve, 25))
+    if (!processGroupAlive(pid)) return true
+  }
+  return !processGroupAlive(pid)
+}
+
+function signalOwnedClaudeProcess(
+  child: ChildProcess,
+  signal: NodeJS.Signals,
+  ownership: ClaudeCodeProcessOwnership,
+): void {
+  if (ownership === 'direct-child') {
+    if (child.exitCode === null && child.signalCode === null) child.kill(signal)
+    return
+  }
+  const pid = child.pid
+  if (pid === undefined) return
+  try {
+    process.kill(-pid, signal)
+  } catch (error) {
+    if (!isMissingProcessError(error)) throw error
+  }
+}
+
+function processGroupAlive(pid: number): boolean {
+  try {
+    process.kill(-pid, 0)
+    return true
+  } catch (error) {
+    if (isMissingProcessError(error)) return false
+    return true
+  }
+}
+
+function isMissingProcessError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    'code' in error &&
+    (error as NodeJS.ErrnoException).code === 'ESRCH'
+  )
 }

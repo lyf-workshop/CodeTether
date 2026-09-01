@@ -45,7 +45,7 @@ export function createToolPresentation({
       ? hasCompoundCommandSyntax(inspectedCommand)
         ? ({ kind: 'command', title: '执行命令' } as const)
         : classifyCommand(executable, tokens)
-      : classifyCanonicalTool(kind)
+      : classifyCanonicalTool(kind, inspectedCommand)
   const failure =
     status === 'failed' ? summarizeToolFailure(outputSummary) : undefined
   const subtitle = failure ?? classification.subtitle
@@ -58,19 +58,46 @@ export function createToolPresentation({
   }
 }
 
-function classifyCanonicalTool(kind: ToolKind): CommandClassification {
+function classifyCanonicalTool(
+  kind: ToolKind,
+  command: string,
+): CommandClassification {
   switch (kind) {
-    case 'read':
-      return { kind: 'read-file', title: '读取文件' }
+    case 'read': {
+      const path = canonicalToolSubject(command, 'Read')
+      return {
+        kind: 'read-file',
+        title: '读取文件',
+        ...(path === undefined ? {} : { subtitle: path }),
+      }
+    }
     case 'edit':
       return { kind: 'edit-file', title: '编辑文件' }
-    case 'search':
-      return { kind: 'search', title: '搜索' }
+    case 'search': {
+      const clue =
+        canonicalToolSubject(command, 'Glob') ??
+        canonicalToolSubject(command, 'Grep')
+      return {
+        kind: 'search',
+        title: '搜索',
+        ...(clue === undefined ? {} : { subtitle: clue }),
+      }
+    }
     case 'shell':
       return { kind: 'command', title: '执行命令' }
     case 'generic':
       return { kind: 'generic', title: '使用工具' }
   }
+}
+
+/** Extracts only the bounded, presentation-safe clue emitted by a canonical adapter. */
+function canonicalToolSubject(
+  command: string,
+  prefix: 'Glob' | 'Grep' | 'Read',
+): string | undefined {
+  if (!command.startsWith(`${prefix} `)) return undefined
+  const subject = command.slice(prefix.length + 1).trim()
+  return subject.length === 0 ? undefined : compactSubtitle(subject)
 }
 
 /** Compact, wrapper-free command text suitable for a secondary UI label. */

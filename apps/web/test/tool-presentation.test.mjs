@@ -98,6 +98,50 @@ test('canonical Provider Tool kinds take precedence over command heuristics', ()
   )
 })
 
+test('canonical Claude Read and Search commands expose only their safe subject', () => {
+  const read = createToolPresentation({
+    command: 'Read fixtures/known text.txt',
+    kind: 'read',
+    status: 'completed',
+  })
+  assert.equal(read.kind, 'read-file')
+  assert.equal(read.subtitle, 'fixtures/known text.txt')
+  assert.equal(read.rawCommand, 'Read fixtures/known text.txt')
+
+  const grep = createToolPresentation({
+    command: 'Grep reconnect marker in fixtures',
+    kind: 'search',
+    status: 'completed',
+  })
+  assert.equal(grep.kind, 'search')
+  assert.equal(grep.subtitle, 'reconnect marker in fixtures')
+
+  const glob = createToolPresentation({
+    command: 'Glob **/*.md',
+    kind: 'search',
+    status: 'completed',
+  })
+  assert.equal(glob.kind, 'search')
+  assert.equal(glob.subtitle, '**/*.md')
+
+  assert.equal(
+    createToolPresentation({
+      command: 'opaque provider input',
+      kind: 'read',
+      status: 'completed',
+    }).subtitle,
+    undefined,
+  )
+  assert.equal(
+    createToolPresentation({
+      command: 'opaque provider input',
+      kind: 'search',
+      status: 'completed',
+    }).subtitle,
+    undefined,
+  )
+})
+
 test('keeps raw commands and reduces failure output to a stable short subtitle', () => {
   const command = "Get-Content -LiteralPath 'missing.txt'"
   const presentation = createToolPresentation({

@@ -21,6 +21,8 @@ import {
   pairingServerIdentifier,
   readMachineTlsIdentityFile,
   receiveCompatibleMachineMessage,
+  RemoteClaudePromptSchema,
+  RemoteClaudeSession,
   RemoteCodexSession,
   RemoteProjectLocationPathSchema,
   RemoteCodexPromptSchema,
@@ -292,6 +294,233 @@ test('remote Codex session exposes a closed dedicated transport without probing 
       actionId: 'act_remote_liveness01',
       turnId: 'turn_remote_liveness01',
       prompt: 'This prompt must not be written to the closed connection.',
+    }),
+    (error) => error.code === 'provider_session_lost',
+  )
+  await session.close()
+})
+
+test('remote Claude messages admit only the restricted read/search profile', () => {
+  const providerSessionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+  const providerTurnId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+  const session = {
+    type: 'claude.session.open',
+    protocolVersion: 1,
+    requestId: 'C'.repeat(43),
+    expectedMachineId: 'machine_abcdef',
+    expectedNodeId: 'node_abcdef',
+    conversationId: 'conv_abcdef',
+    projectId: 'proj_abcdef',
+    rootPath: '/home/user/project',
+    effort: 'high',
+  }
+  const resumed = {
+    ...session,
+    providerSessionId,
+    providerSessionMaterialized: true,
+  }
+  const turn = {
+    type: 'claude.turn.start',
+    protocolVersion: 1,
+    actionId: 'act_abcdef',
+    conversationId: session.conversationId,
+    turnId: 'turn_abcdef',
+    providerSessionId,
+    prompt: 'Inspect the workspace safely.',
+  }
+  assert.equal(MachineWireMessageSchema.safeParse(session).success, true)
+  assert.equal(MachineWireMessageSchema.safeParse(resumed).success, true)
+  assert.equal(
+    MachineWireMessageSchema.safeParse({
+      ...resumed,
+      providerSessionMaterialized: undefined,
+    }).success,
+    false,
+  )
+  assert.equal(
+    MachineWireMessageSchema.safeParse({
+      ...session,
+      providerSessionMaterialized: false,
+    }).success,
+    false,
+  )
+  assert.equal(MachineWireMessageSchema.safeParse(turn).success, true)
+  assert.equal(
+    MachineWireMessageSchema.safeParse({ ...session, effort: 'ultra' }).success,
+    false,
+  )
+  for (const injected of [
+    { executable: '/bin/sh' },
+    { argv: ['sh', '-c', 'id'] },
+    { environment: { TOKEN: 'secret' } },
+    { cwd: '/tmp/attacker-controlled' },
+    { method: 'process.execute' },
+  ]) {
+    assert.equal(
+      MachineWireMessageSchema.safeParse({ ...session, ...injected }).success,
+      false,
+    )
+  }
+  assert.equal(
+    MachineWireMessageSchema.safeParse({
+      ...turn,
+      prompt: 'x'.repeat(9 * 1024),
+    }).success,
+    false,
+  )
+  assert.equal(
+    RemoteClaudePromptSchema.safeParse('safe\0prompt').success,
+    false,
+  )
+
+  const envelope = {
+    type: 'claude.turn.event',
+    protocolVersion: 1,
+    machineId: session.expectedMachineId,
+    nodeId: session.expectedNodeId,
+    actionId: turn.actionId,
+    conversationId: turn.conversationId,
+    turnId: turn.turnId,
+    providerSessionId,
+    providerTurnId,
+    sequence: 1,
+  }
+  assert.equal(
+    MachineWireMessageSchema.safeParse({
+      ...envelope,
+      event: {
+        type: 'tool.started',
+        itemId: 'turn_abcdef_claude_item_1',
+        kind: 'read',
+        name: 'Read',
+        command: 'Read fixture.txt',
+      },
+    }).success,
+    true,
+  )
+  assert.equal(
+    MachineWireMessageSchema.safeParse({
+      ...envelope,
+      event: {
+        type: 'tool.completed',
+        itemId: 'turn_abcdef_claude_item_2',
+        kind: 'search',
+        name: 'Search',
+        command: 'Grep marker in .',
+        success: true,
+      },
+    }).success,
+    true,
+  )
+  for (const unsafeEvent of [
+    {
+      type: 'tool.started',
+      itemId: 'unsafe',
+      kind: 'edit',
+      name: 'Edit',
+    },
+    {
+      type: 'tool.started',
+      itemId: 'unsafe',
+      kind: 'read',
+      name: 'Search',
+    },
+    { type: 'file.changed', path: 'fixture.txt' },
+  ]) {
+    assert.equal(
+      MachineWireMessageSchema.safeParse({
+        ...envelope,
+        event: unsafeEvent,
+      }).success,
+      false,
+    )
+  }
+})
+
+test('remote Claude descriptor is exact and carries bounded effort metadata', () => {
+  const capabilities = {
+    streaming: true,
+    resume: true,
+    interrupt: false,
+    approvals: false,
+    fileRead: true,
+    fileEdit: false,
+    shell: false,
+    search: true,
+    diff: false,
+    toolEvents: true,
+    modelSelection: false,
+    reasoningControl: true,
+  }
+  const descriptor = {
+    provider: 'claude-code',
+    displayName: 'Claude Code',
+    availability: 'available',
+    version: '2.1.251',
+    capabilities,
+    reasoningLabel: '思考强度',
+    reasoningOptions: [
+      { id: 'low', label: 'Low' },
+      { id: 'medium', label: 'Medium' },
+      { id: 'high', label: 'High' },
+      { id: 'xhigh', label: 'XHigh' },
+      { id: 'max', label: 'Max' },
+    ],
+  }
+  assert.equal(
+    RemoteProviderDescriptorSchema.safeParse(descriptor).success,
+    true,
+  )
+  assert.equal(
+    RemoteProviderDescriptorSchema.safeParse({
+      ...descriptor,
+      capabilities: { ...capabilities, fileEdit: true },
+    }).success,
+    false,
+  )
+  assert.equal(
+    RemoteProviderDescriptorSchema.safeParse({
+      ...descriptor,
+      reasoningOptions: descriptor.reasoningOptions.slice(0, 4),
+    }).success,
+    false,
+  )
+})
+
+test('remote Claude session exposes closed dedicated transport without Provider work', async () => {
+  const stream = new ResponseDuplex()
+  const connection = new FramedMachineConnection(stream)
+  const session = new RemoteClaudeSession(
+    connection,
+    {
+      machineId: 'machine_remote_claude01',
+      nodeId: 'node_remote_claude01',
+      displayName: 'Remote Claude fixture',
+      platform: 'Linux',
+      architecture: 'x64',
+    },
+    {
+      type: 'claude.session.ready',
+      protocolVersion: 1,
+      requestId: 'Q'.repeat(43),
+      machineId: 'machine_remote_claude01',
+      nodeId: 'node_remote_claude01',
+      conversationId: 'conv_remote_claude01',
+      providerSessionId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      resumed: true,
+      effort: 'medium',
+      executionProfile: 'claude-restricted-read-search-v1',
+    },
+  )
+  assert.equal(session.closed, false)
+  stream.push(null)
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(session.closed, true)
+  await assert.rejects(
+    session.startTurn({
+      actionId: 'act_remote_claude01',
+      turnId: 'turn_remote_claude01',
+      prompt: 'Do not send this closed prompt.',
     }),
     (error) => error.code === 'provider_session_lost',
   )

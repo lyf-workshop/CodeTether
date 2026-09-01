@@ -36,7 +36,10 @@ import {
 } from '../../runtime/host/host-runtime-hooks'
 import { machineErrorMessage } from '../../runtime/host/machine-actions'
 import { machineDetailQueryOptions } from '../../runtime/host/machine-query'
-import { providerPresentationsForMachine } from '../../provider/provider-presentation'
+import {
+  providerPresentationsForMachine,
+  type ProviderPresentation,
+} from '../../provider/provider-presentation'
 import { formatConversationActivity } from '../conversations/conversation-list-model'
 import { MachinesErrorState, MachinesLoadingState } from './machine-page-states'
 import { MachineProjectsSection } from './machine-projects-section'
@@ -508,7 +511,7 @@ function RemoteMachineDetail({
         <p className="mt-2 max-w-3xl text-sm leading-relaxed text-text-secondary">
           可以在这台机器上注册和查看项目工作区位置。位置注册本身不会授予执行权限。
           {machine.capabilities.providerExecution
-            ? '当前仅支持经过验证的 Codex 文本流式与原生恢复；工具、写入、Shell、审批和中断均未启用。'
+            ? '当前仅启用上方已通过本次连接验证的智能体能力；未声明的写入、Shell、审批、中断和模型选择保持关闭。'
             : '当前连接或智能体尚未满足远程执行条件。'}
         </p>
       </section>
@@ -669,12 +672,10 @@ function RemoteMachineProvidersSection({
                   )}
                   {provider.available ? (
                     <p className="mt-1 text-xs text-text-muted">
-                      {provider.capabilities.streaming &&
-                      provider.capabilities.resume
-                        ? discovery.state === 'current'
-                          ? '远程会话基础能力已启用 · 仅文本流式与原生恢复'
-                          : '上次检测支持文本流式与原生恢复 · 当前未重新验证'
-                        : '已检测到 CLI；远程执行尚未启用'}
+                      {remoteProviderCapabilitySummary(
+                        provider,
+                        discovery.state,
+                      )}
                     </p>
                   ) : null}
                 </div>
@@ -694,6 +695,29 @@ function RemoteMachineProvidersSection({
       ) : null}
     </section>
   )
+}
+
+function remoteProviderCapabilitySummary(
+  provider: ProviderPresentation,
+  discoveryState: 'current' | 'last_known',
+): string {
+  const { capabilities } = provider
+  if (!capabilities.streaming || !capabilities.resume) {
+    return '已检测到 CLI；远程执行尚未启用'
+  }
+
+  const enabled = [
+    '文本流式',
+    '原生恢复',
+    capabilities.fileRead ? '读取' : undefined,
+    capabilities.search ? '搜索' : undefined,
+    capabilities.toolEvents ? '工具事件' : undefined,
+    capabilities.reasoningControl ? provider.reasoningLabel : undefined,
+  ].filter((value): value is string => value !== undefined)
+  const summary = enabled.join('、')
+  return discoveryState === 'current'
+    ? `远程会话能力已启用 · ${summary}`
+    : `上次检测支持 ${summary} · 当前未重新验证`
 }
 
 function remoteConnectionDescription(

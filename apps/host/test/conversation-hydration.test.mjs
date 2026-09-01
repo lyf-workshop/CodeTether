@@ -603,6 +603,8 @@ test('hydrates a cold Conversation once, resumes once, and evicts the least-rece
       providerThreadId: providerThreadId(0),
       cwd: fixture.workspace,
       providerSessionMaterialized: false,
+      model: 'gpt-5.6-sol',
+      reasoning: 'medium',
     },
   ])
   assert.equal(fixture.runtime.turnCalls.length, 1)

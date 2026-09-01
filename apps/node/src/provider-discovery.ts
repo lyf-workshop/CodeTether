@@ -3,6 +3,10 @@ import { tmpdir } from 'node:os'
 import { TextDecoder } from 'node:util'
 
 import {
+  ClaudeCodeOwnedProcessCleanupError,
+  prepareClaudeCode,
+} from '@codetether/adapter-claude'
+import {
   machineTransportLimits,
   type RemoteProviderCapabilities,
   type RemoteProviderDescriptor,
@@ -31,6 +35,27 @@ const REMOTE_CODEX_TEXT_CAPABILITIES: RemoteProviderCapabilities =
     streaming: true,
     resume: true,
   })
+
+const REMOTE_CLAUDE_CAPABILITIES: RemoteProviderCapabilities = Object.freeze({
+  ...NO_REMOTE_EXECUTION_CAPABILITIES,
+  streaming: true,
+  resume: true,
+  fileRead: true,
+  search: true,
+  toolEvents: true,
+  reasoningControl: true,
+})
+
+const REMOTE_CLAUDE_REASONING = Object.freeze({
+  reasoningLabel: '思考强度',
+  reasoningOptions: Object.freeze([
+    { id: 'low' as const, label: 'Low' },
+    { id: 'medium' as const, label: 'Medium' },
+    { id: 'high' as const, label: 'High' },
+    { id: 'xhigh' as const, label: 'XHigh' },
+    { id: 'max' as const, label: 'Max' },
+  ]),
+})
 
 const REMOTE_CODEX_EXECUTION_TESTED_VERSIONS = new Set(['0.149.1'])
 const CLAUDE_CODE_TESTED_VERSIONS = new Set(['2.1.250', '2.1.251'])
@@ -64,7 +89,18 @@ export interface RemoteProviderDetectorOptions {
   readonly now?: () => Date
   /** Internal test seam; remote callers cannot select the Node platform. */
   readonly platform?: NodeJS.Platform
+  /** Internal test seam; remote callers cannot influence authentication. */
+  readonly claudeExecutionProbe?: RemoteClaudeExecutionProbe
 }
+
+export interface RemoteClaudeExecutionProbeResult {
+  readonly available: boolean
+  readonly version?: string
+}
+
+export type RemoteClaudeExecutionProbe = (
+  signal: AbortSignal,
+) => Promise<RemoteClaudeExecutionProbeResult>
 
 const DEFAULT_PROBES: readonly ProviderProbeDefinition[] = Object.freeze([
   {
@@ -102,6 +138,14 @@ export function supportsRemoteCodexExecutionPlatform(
   return platform !== 'win32'
 }
 
+export function supportsRemoteClaudeExecutionPlatform(
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  // The remote Claude adapter needs an exact POSIX process-group boundary for
+  // CLI descendants. Windows remains discovery-only.
+  return platform !== 'win32'
+}
+
 /**
  * Node-owned, purpose-specific Provider version detector. It accepts no input
  * from the Machine protocol beyond the fixed `providers.describe` operation.
@@ -113,9 +157,14 @@ export class RemoteProviderDetector {
   readonly #maximumOutputBytes: number
   readonly #now: () => Date
   readonly #executionPlatformSupported: boolean
+  readonly #claudeExecutionPlatformSupported: boolean
+  readonly #claudeExecutionProbe: RemoteClaudeExecutionProbe
+  readonly #lifecycleAbort = new AbortController()
   readonly #children = new Set<ChildProcess>()
   #inFlight?: Promise<RemoteProviderDiscovery>
+  #cleanupFailure: ClaudeCodeOwnedProcessCleanupError | undefined
   #closed = false
+  #closePromise: Promise<void> | undefined
 
   constructor(options: RemoteProviderDetectorOptions = {}) {
     this.#probes = validateProbeDefinitions(options.probes ?? DEFAULT_PROBES)
@@ -135,23 +184,64 @@ export class RemoteProviderDetector {
     this.#executionPlatformSupported = supportsRemoteCodexExecutionPlatform(
       options.platform,
     )
+    this.#claudeExecutionPlatformSupported =
+      supportsRemoteClaudeExecutionPlatform(options.platform)
+    const providerEnvironment = options.environment ?? process.env
+    this.#claudeExecutionProbe =
+      options.claudeExecutionProbe ??
+      (async (signal) => {
+        const preparation = await prepareClaudeCode({
+          environment: providerEnvironment,
+          timeoutMs: this.#timeoutMs,
+          signal,
+          processOwnership: 'posix-process-group',
+        })
+        return preparation.detection.status === 'available'
+          ? { available: true, version: preparation.detection.version }
+          : { available: false }
+      })
   }
 
   discover(): Promise<RemoteProviderDiscovery> {
+    if (this.#cleanupFailure !== undefined) {
+      return Promise.reject(this.#cleanupFailure)
+    }
     if (this.#closed) {
       return Promise.reject(new Error('Provider detector is closed'))
     }
-    this.#inFlight ??= this.#discoverOnce().finally(() => {
-      this.#inFlight = undefined
-    })
+    this.#inFlight ??= this.#discoverOnce()
+      .catch((error: unknown) => {
+        if (error instanceof ClaudeCodeOwnedProcessCleanupError) {
+          this.#cleanupFailure ??= error
+          this.#lifecycleAbort.abort()
+        }
+        throw error
+      })
+      .finally(() => {
+        this.#inFlight = undefined
+      })
     return this.#inFlight
   }
 
   async close(): Promise<void> {
-    if (this.#closed) return
+    this.#closePromise ??= this.#close()
+    await this.#closePromise
+  }
+
+  async #close(): Promise<void> {
     this.#closed = true
+    this.#lifecycleAbort.abort()
     for (const child of this.#children) terminateExactChild(child)
-    await this.#inFlight?.catch(() => undefined)
+    try {
+      await this.#inFlight
+    } catch (error) {
+      if (error instanceof ClaudeCodeOwnedProcessCleanupError) {
+        this.#cleanupFailure ??= error
+      } else {
+        throw error
+      }
+    }
+    if (this.#cleanupFailure !== undefined) throw this.#cleanupFailure
   }
 
   async #discoverOnce(): Promise<RemoteProviderDiscovery> {
@@ -193,6 +283,24 @@ export class RemoteProviderDetector {
       return { ...base, availability: 'misconfigured' }
     }
     const executionVersionSupported = probe.isSupportedVersion(version)
+    let claudeExecutionAvailable = false
+    if (
+      probe.provider === 'claude-code' &&
+      executionVersionSupported &&
+      this.#claudeExecutionPlatformSupported
+    ) {
+      let execution: RemoteClaudeExecutionProbeResult
+      try {
+        execution = await this.#claudeExecutionProbe(
+          this.#lifecycleAbort.signal,
+        )
+      } catch (error) {
+        if (error instanceof ClaudeCodeOwnedProcessCleanupError) throw error
+        execution = { available: false }
+      }
+      claudeExecutionAvailable =
+        execution.available && execution.version === version
+    }
     return {
       ...base,
       // Frozen Phase 6C.1 discovery truth describes the real installation.
@@ -208,7 +316,12 @@ export class RemoteProviderDetector {
         executionVersionSupported &&
         this.#executionPlatformSupported
           ? REMOTE_CODEX_TEXT_CAPABILITIES
-          : NO_REMOTE_EXECUTION_CAPABILITIES,
+          : probe.provider === 'claude-code' && claudeExecutionAvailable
+            ? REMOTE_CLAUDE_CAPABILITIES
+            : NO_REMOTE_EXECUTION_CAPABILITIES,
+      ...(probe.provider === 'claude-code' && claudeExecutionAvailable
+        ? REMOTE_CLAUDE_REASONING
+        : {}),
     }
   }
 }

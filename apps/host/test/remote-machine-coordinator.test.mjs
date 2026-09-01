@@ -35,6 +35,7 @@ async function fixture(options = {}) {
   let validateCalls = 0
   let discoveryCalls = 0
   let openCodexCalls = 0
+  let openClaudeCalls = 0
   let activeDiscoveries = 0
   let maximumActiveDiscoveries = 0
   let activeValidations = 0
@@ -173,6 +174,34 @@ async function fixture(options = {}) {
           },
         }
       : {}),
+    ...(options.claudeExecutionEnabled === true
+      ? {
+          async openClaudeSession(input) {
+            openClaudeCalls += 1
+            if (options.openClaudeError !== undefined) {
+              throw options.openClaudeError
+            }
+            const providerSessionId =
+              input.providerSessionId ?? '123e4567-e89b-42d3-a456-426614174000'
+            return {
+              machine,
+              conversationId: input.conversationId,
+              providerSessionId,
+              resumed:
+                input.providerSessionId !== undefined &&
+                input.providerSessionMaterialized === true,
+              effort: input.effort,
+              executionProfile: 'claude-restricted-read-search-v1',
+              async startTurn() {
+                throw new Error(
+                  'Turn execution is outside this coordinator test',
+                )
+              },
+              async close() {},
+            }
+          },
+        }
+      : {}),
   }
   return {
     directory,
@@ -201,6 +230,9 @@ async function fixture(options = {}) {
       get openCodex() {
         return openCodexCalls
       },
+      get openClaude() {
+        return openClaudeCalls
+      },
       get maximumActiveDiscoveries() {
         return maximumActiveDiscoveries
       },
@@ -217,7 +249,10 @@ async function fixture(options = {}) {
   }
 }
 
-function remoteProviderDiscovery(executionEnabled = false) {
+function remoteProviderDiscovery(
+  executionEnabled = false,
+  claudeExecutionEnabled = false,
+) {
   const capabilities = {
     streaming: executionEnabled,
     resume: executionEnabled,
@@ -244,10 +279,30 @@ function remoteProviderDiscovery(executionEnabled = false) {
       {
         provider: 'claude-code',
         displayName: 'Claude Code',
-        availability: 'not_installed',
-        capabilities: Object.fromEntries(
-          Object.keys(capabilities).map((capability) => [capability, false]),
-        ),
+        availability: claudeExecutionEnabled ? 'available' : 'not_installed',
+        capabilities: {
+          ...Object.fromEntries(
+            Object.keys(capabilities).map((capability) => [capability, false]),
+          ),
+          streaming: claudeExecutionEnabled,
+          resume: claudeExecutionEnabled,
+          fileRead: claudeExecutionEnabled,
+          search: claudeExecutionEnabled,
+          toolEvents: claudeExecutionEnabled,
+          reasoningControl: claudeExecutionEnabled,
+        },
+        ...(claudeExecutionEnabled
+          ? {
+              reasoningLabel: '思考强度',
+              reasoningOptions: [
+                ['low', '低'],
+                ['medium', '中'],
+                ['high', '高'],
+                ['xhigh', '超高'],
+                ['max', '最大'],
+              ].map(([id, label]) => ({ id, label })),
+            }
+          : {}),
       },
     ],
     observedAt: '2026-08-31T12:00:00.000Z',
@@ -337,6 +392,109 @@ test('current Codex discovery survives authenticated Location validation and adm
     assert.equal(f.counts.openCodex, 1)
     await session.close()
     unsubscribe()
+  } finally {
+    await f.close(coordinator)
+  }
+})
+
+test('current Claude discovery admits only the restricted effort-bound session and exact native resume', async () => {
+  const f = await fixture({
+    discoveryEnabled: true,
+    claudeExecutionEnabled: true,
+    async discoveryHandler() {
+      return remoteProviderDiscovery(false, true)
+    },
+  })
+  let coordinator
+  try {
+    coordinator = await SecureRemoteMachineCoordinator.create({
+      persistence: f.store,
+      transport: f.transport,
+      heartbeatIntervalMs: 1_000,
+      reconnectMaximumDelayMs: 20,
+    })
+    const candidate = await coordinator.beginPairing({
+      address: { host: '172.20.1.31', port: 4319 },
+      pairingCode: '123456',
+    })
+    const confirmed = await coordinator.confirmPairing(
+      candidate.pairingAttemptId,
+      (staged) =>
+        f.store.createRemoteMachineWithTrust(staged.machine, staged.trust),
+    )
+    await waitFor(() => f.counts.discovery >= 1, 'Claude execution discovery')
+    const machine = f.store.getMachine(confirmed.machine.machineId)
+    const trust = f.store.getTrustedMachinePeer(confirmed.machine.machineId)
+    assert.ok(machine)
+    assert.ok(trust)
+    if (
+      f.store.getRemoteProviderObservation(confirmed.machine.machineId) ===
+      undefined
+    ) {
+      await coordinator.discoverProviders(machine, trust)
+    }
+
+    assert.equal(
+      coordinator.providerExecutionAvailable(machine.machineId, 'codex'),
+      false,
+    )
+    assert.equal(
+      coordinator.providerExecutionAvailable(machine.machineId, 'claude-code'),
+      true,
+    )
+    assert.equal(
+      coordinator.providerExecutionAvailable(machine.machineId),
+      true,
+    )
+
+    await assert.rejects(
+      coordinator.openCodexSession(machine, trust, {
+        conversationId: 'conv_remote_codex_rejected',
+        projectId: 'proj_remote_claude_coordinator',
+        rootPath: '/srv/projects/workspace',
+      }),
+      (error) => error.code === 'remote_execution_unavailable',
+    )
+    assert.equal(f.counts.openCodex, 0)
+
+    const created = await coordinator.openClaudeSession(machine, trust, {
+      conversationId: 'conv_remote_claude_coordinator',
+      projectId: 'proj_remote_claude_coordinator',
+      rootPath: '/srv/projects/workspace',
+      effort: 'high',
+    })
+    assert.equal(created.machineId, machine.machineId)
+    assert.equal(created.conversationId, 'conv_remote_claude_coordinator')
+    assert.equal(
+      created.providerSessionId,
+      '123e4567-e89b-42d3-a456-426614174000',
+    )
+    assert.equal(created.effort, 'high')
+    await created.close()
+
+    const resumed = await coordinator.openClaudeSession(machine, trust, {
+      conversationId: 'conv_remote_claude_coordinator',
+      projectId: 'proj_remote_claude_coordinator',
+      rootPath: '/srv/projects/workspace',
+      providerSessionId: created.providerSessionId,
+      providerSessionMaterialized: true,
+      effort: 'high',
+    })
+    assert.equal(resumed.providerSessionId, created.providerSessionId)
+    assert.equal(f.counts.openClaude, 2)
+    await resumed.close()
+
+    await assert.rejects(
+      coordinator.openClaudeSession(machine, trust, {
+        conversationId: 'conv_remote_claude_coordinator',
+        projectId: 'proj_remote_claude_coordinator',
+        rootPath: '/srv/projects/workspace',
+        providerSessionId: created.providerSessionId,
+        effort: 'high',
+      }),
+      (error) => error.code === 'remote_policy_violation',
+    )
+    assert.equal(f.counts.openClaude, 2)
   } finally {
     await f.close(coordinator)
   }

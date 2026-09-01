@@ -215,7 +215,13 @@ if (
     const stop = () => {
       if (stopping) return
       stopping = true
-      void service?.close().finally(() => process.exit(0))
+      void service?.close().then(
+        () => process.exit(0),
+        () => {
+          process.stderr.write('CodeTether Node cleanup did not complete\n')
+          process.exit(1)
+        },
+      )
     }
     process.once('SIGINT', stop)
     process.once('SIGTERM', stop)

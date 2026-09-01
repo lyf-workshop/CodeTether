@@ -12,6 +12,10 @@ import type {
   MachineTransportTurnId,
 } from './ids.js'
 import {
+  ClaudeSessionDisposedMessageSchema,
+  ClaudeSessionReadyMessageSchema,
+  ClaudeTurnEventMessageSchema,
+  ClaudeTurnStartedMessageSchema,
   CodexSessionDisposedMessageSchema,
   CodexSessionReadyMessageSchema,
   CodexTurnEventMessageSchema,
@@ -28,11 +32,15 @@ import {
   RemoteProjectLocationPathSchema,
   TrustRevokedMessageSchema,
   type PublicKeyFingerprint,
+  type ClaudeTurnEventMessage,
   type CodexTurnEventMessage,
   type ProjectLocationValidatedMessage,
   type ProvidersDescribedMessage,
   type RemoteCodexProviderIdentity,
   type RemoteCodexPrompt,
+  type RemoteClaudeEffort,
+  type RemoteClaudePrompt,
+  type RemoteClaudeProviderIdentity,
   type RemoteProviderDescriptor,
   type RemoteMachineMetadata,
 } from './messages.js'
@@ -403,6 +411,60 @@ export async function openRemoteCodexSession(
   }
 }
 
+interface OpenRemoteClaudeSessionBaseOptions {
+  readonly peer: TrustedRemotePeer
+  readonly controller: MachineControllerIdentity
+  readonly conversationId: MachineTransportConversationId
+  readonly projectId: MachineTransportProjectId
+  /** Durable ProjectLocation root; never accept a transient UI path here. */
+  readonly rootPath: string
+  readonly effort?: RemoteClaudeEffort
+  readonly signal?: AbortSignal
+}
+
+type RemoteClaudeSessionIdentityOptions =
+  | {
+      readonly providerSessionId?: never
+      readonly providerSessionMaterialized?: never
+    }
+  | {
+      readonly providerSessionId: RemoteClaudeProviderIdentity
+      readonly providerSessionMaterialized: boolean
+    }
+
+export type OpenRemoteClaudeSessionOptions =
+  OpenRemoteClaudeSessionBaseOptions & RemoteClaudeSessionIdentityOptions
+
+/** Opens one dedicated authenticated restricted Claude Code session. */
+export async function openRemoteClaudeSession(
+  options: OpenRemoteClaudeSessionOptions,
+): Promise<RemoteClaudeSession> {
+  const connection = await connectTrustedRemoteMachine({
+    peer: options.peer,
+    controller: options.controller,
+    signal: options.signal,
+  })
+  try {
+    const sessionOptions = {
+      conversationId: options.conversationId,
+      projectId: options.projectId,
+      rootPath: options.rootPath,
+      ...(options.effort === undefined ? {} : { effort: options.effort }),
+      signal: options.signal,
+    }
+    return await (options.providerSessionId === undefined
+      ? connection.openClaudeSession(sessionOptions)
+      : connection.openClaudeSession({
+          ...sessionOptions,
+          providerSessionId: options.providerSessionId,
+          providerSessionMaterialized: options.providerSessionMaterialized,
+        }))
+  } catch (error) {
+    connection.close()
+    throw error
+  }
+}
+
 export class AuthenticatedRemoteMachineConnection {
   readonly machine: RemoteMachineMetadata
   readonly #connection: FramedMachineConnection
@@ -616,6 +678,75 @@ export class AuthenticatedRemoteMachineConnection {
     }
     this.#dedicated = true
     return new RemoteCodexSession(this.#connection, this.machine, response)
+  }
+
+  async openClaudeSession(
+    options: {
+      readonly conversationId: MachineTransportConversationId
+      readonly projectId: MachineTransportProjectId
+      readonly rootPath: string
+      readonly effort?: RemoteClaudeEffort
+      readonly signal?: AbortSignal
+    } & RemoteClaudeSessionIdentityOptions,
+  ): Promise<RemoteClaudeSession> {
+    this.#assertGeneralPurpose()
+    const rootPath = RemoteProjectLocationPathSchema.safeParse(options.rootPath)
+    if (!rootPath.success) {
+      throw new MachineTransportError(
+        'project_location_path_invalid',
+        'Project Location path is invalid',
+      )
+    }
+    const requestId = newMachineNonce()
+    await this.#connection.send({
+      type: 'claude.session.open',
+      protocolVersion: machineProtocolVersion,
+      requestId,
+      expectedMachineId: this.machine.machineId,
+      expectedNodeId: this.machine.nodeId,
+      conversationId: options.conversationId,
+      projectId: options.projectId,
+      rootPath: rootPath.data,
+      ...(options.providerSessionId === undefined
+        ? {}
+        : {
+            providerSessionId: options.providerSessionId,
+            providerSessionMaterialized: options.providerSessionMaterialized,
+          }),
+      ...(options.effort === undefined ? {} : { effort: options.effort }),
+    })
+    const response = await receiveCompatibleMachineMessage(
+      this.#connection,
+      z.union([ClaudeSessionReadyMessageSchema, MachineErrorMessageSchema]),
+      {
+        signal: options.signal,
+        timeoutMs: machineTransportLimits.providerDiscoveryTimeoutMs,
+      },
+    )
+    if (response.type === 'machine.error') {
+      throw remoteError(response.code, response.message, true)
+    }
+    if (
+      response.requestId !== requestId ||
+      response.machineId !== this.machine.machineId ||
+      response.nodeId !== this.machine.nodeId ||
+      response.conversationId !== options.conversationId ||
+      (options.providerSessionId !== undefined &&
+        response.providerSessionId !== options.providerSessionId) ||
+      response.resumed !==
+        (options.providerSessionId !== undefined &&
+          options.providerSessionMaterialized) ||
+      response.effort !== options.effort
+    ) {
+      this.#connection.destroy()
+      throw new MachineTransportError(
+        'identity_mismatch',
+        'Remote Claude session did not match the trusted Conversation',
+        { peerAuthenticated: true },
+      )
+    }
+    this.#dedicated = true
+    return new RemoteClaudeSession(this.#connection, this.machine, response)
   }
 
   #assertGeneralPurpose(): void {
@@ -918,6 +1049,254 @@ export class RemoteCodexTurn {
 }
 
 export type RemoteCodexTurnEvent = CodexTurnEventMessage
+
+export interface StartRemoteClaudeTurnOptions {
+  readonly actionId: MachineTransportActionId
+  readonly turnId: MachineTransportTurnId
+  readonly prompt: RemoteClaudePrompt
+  readonly signal?: AbortSignal
+}
+
+export class RemoteClaudeSession {
+  readonly machine: RemoteMachineMetadata
+  readonly conversationId: MachineTransportConversationId
+  readonly providerSessionId: RemoteClaudeProviderIdentity
+  readonly resumed: boolean
+  readonly effort?: RemoteClaudeEffort
+  readonly executionProfile = 'claude-restricted-read-search-v1' as const
+  readonly #connection: FramedMachineConnection
+  #activeTurn: RemoteClaudeTurn | undefined
+  #closed = false
+
+  constructor(
+    connection: FramedMachineConnection,
+    machine: RemoteMachineMetadata,
+    ready: z.infer<typeof ClaudeSessionReadyMessageSchema>,
+  ) {
+    this.#connection = connection
+    this.machine = machine
+    this.conversationId = ready.conversationId
+    this.providerSessionId = ready.providerSessionId
+    this.resumed = ready.resumed
+    this.effort = ready.effort
+  }
+
+  get closed(): boolean {
+    return this.#closed || this.#connection.closed
+  }
+
+  async startTurn(
+    options: StartRemoteClaudeTurnOptions,
+  ): Promise<RemoteClaudeTurn> {
+    if (this.closed) {
+      this.#closed = true
+      throw new MachineTransportError(
+        'provider_session_lost',
+        'Remote Claude session is closed',
+        { peerAuthenticated: true },
+      )
+    }
+    if (this.#activeTurn !== undefined) {
+      throw new MachineTransportError(
+        'conversation_busy',
+        'Remote Claude Conversation already has an active Turn',
+        { peerAuthenticated: true },
+      )
+    }
+    options.signal?.throwIfAborted()
+    try {
+      await this.#connection.send({
+        type: 'claude.turn.start',
+        protocolVersion: machineProtocolVersion,
+        actionId: options.actionId,
+        conversationId: this.conversationId,
+        turnId: options.turnId,
+        providerSessionId: this.providerSessionId,
+        prompt: options.prompt,
+      })
+      const response = await receiveCompatibleMachineMessage(
+        this.#connection,
+        z.union([ClaudeTurnStartedMessageSchema, MachineErrorMessageSchema]),
+        {
+          signal: options.signal,
+          timeoutMs: machineTransportLimits.messageTimeoutMs,
+        },
+      )
+      if (response.type === 'machine.error') {
+        throw remoteError(response.code, response.message, true)
+      }
+      if (
+        response.machineId !== this.machine.machineId ||
+        response.nodeId !== this.machine.nodeId ||
+        response.actionId !== options.actionId ||
+        response.conversationId !== this.conversationId ||
+        response.turnId !== options.turnId ||
+        response.providerSessionId !== this.providerSessionId
+      ) {
+        throw new MachineTransportError(
+          'identity_mismatch',
+          'Remote Claude Turn did not match the bound Conversation',
+          { peerAuthenticated: true },
+        )
+      }
+      const turn = new RemoteClaudeTurn(
+        this.#connection,
+        response,
+        () => {
+          if (this.#activeTurn === turn) this.#activeTurn = undefined
+        },
+        () => this.#failClosed(),
+      )
+      this.#activeTurn = turn
+      return turn
+    } catch (error) {
+      // Prompt ownership is uncertain after send. Never replay it implicitly.
+      this.#failClosed()
+      throw error
+    }
+  }
+
+  async close(signal?: AbortSignal): Promise<void> {
+    if (this.#closed) return
+    this.#closed = true
+    if (this.#connection.closed) return
+    if (this.#activeTurn !== undefined) {
+      this.#connection.destroy()
+      return
+    }
+    const requestId = newMachineNonce()
+    try {
+      await this.#connection.send({
+        type: 'claude.session.dispose',
+        protocolVersion: machineProtocolVersion,
+        requestId,
+        conversationId: this.conversationId,
+        providerSessionId: this.providerSessionId,
+      })
+      const response = await receiveCompatibleMachineMessage(
+        this.#connection,
+        z.union([
+          ClaudeSessionDisposedMessageSchema,
+          MachineErrorMessageSchema,
+        ]),
+        { signal },
+      )
+      if (response.type === 'machine.error') {
+        throw remoteError(response.code, response.message, true)
+      }
+      if (
+        response.requestId !== requestId ||
+        response.machineId !== this.machine.machineId ||
+        response.nodeId !== this.machine.nodeId ||
+        response.conversationId !== this.conversationId
+      ) {
+        throw new MachineTransportError(
+          'identity_mismatch',
+          'Remote Claude disposal receipt did not match the session',
+          { peerAuthenticated: true },
+        )
+      }
+      this.#connection.end()
+    } catch (error) {
+      this.#connection.destroy()
+      throw error
+    }
+  }
+
+  #failClosed(): void {
+    this.#closed = true
+    this.#connection.destroy()
+  }
+}
+
+export class RemoteClaudeTurn {
+  readonly actionId: MachineTransportActionId
+  readonly conversationId: MachineTransportConversationId
+  readonly turnId: MachineTransportTurnId
+  readonly providerSessionId: RemoteClaudeProviderIdentity
+  readonly providerTurnId: RemoteClaudeProviderIdentity
+  readonly #connection: FramedMachineConnection
+  readonly #release: () => void
+  readonly #failClosed: () => void
+  readonly #started: z.infer<typeof ClaudeTurnStartedMessageSchema>
+  #nextSequence = 1
+  #terminal = false
+
+  constructor(
+    connection: FramedMachineConnection,
+    started: z.infer<typeof ClaudeTurnStartedMessageSchema>,
+    release: () => void,
+    failClosed: () => void,
+  ) {
+    this.#connection = connection
+    this.#started = started
+    this.actionId = started.actionId
+    this.conversationId = started.conversationId
+    this.turnId = started.turnId
+    this.providerSessionId = started.providerSessionId
+    this.providerTurnId = started.providerTurnId
+    this.#release = release
+    this.#failClosed = failClosed
+  }
+
+  async nextEvent(signal?: AbortSignal): Promise<ClaudeTurnEventMessage> {
+    if (this.#terminal) {
+      throw new MachineTransportError(
+        'provider_session_lost',
+        'Remote Claude Turn is already terminal',
+        { peerAuthenticated: true },
+      )
+    }
+    const response = await receiveCompatibleMachineMessage(
+      this.#connection,
+      z.union([ClaudeTurnEventMessageSchema, MachineErrorMessageSchema]),
+      {
+        signal,
+        timeoutMs: machineTransportLimits.remoteClaudeTurnTimeoutMs,
+      },
+    )
+    if (response.type === 'machine.error') {
+      this.#failClosed()
+      throw remoteError(response.code, response.message, true)
+    }
+    if (
+      response.machineId !== this.#started.machineId ||
+      response.nodeId !== this.#started.nodeId ||
+      response.actionId !== this.actionId ||
+      response.conversationId !== this.conversationId ||
+      response.turnId !== this.turnId ||
+      response.providerSessionId !== this.providerSessionId ||
+      response.providerTurnId !== this.providerTurnId ||
+      response.sequence !== this.#nextSequence
+    ) {
+      this.#failClosed()
+      throw new MachineTransportError(
+        'identity_mismatch',
+        'Remote Claude event correlation or sequence was invalid',
+        { peerAuthenticated: true },
+      )
+    }
+    this.#nextSequence += 1
+    if (
+      response.event.type === 'turn.completed' ||
+      response.event.type === 'turn.failed'
+    ) {
+      this.#terminal = true
+      this.#release()
+    }
+    return response
+  }
+
+  async *events(signal?: AbortSignal): AsyncGenerator<ClaudeTurnEventMessage> {
+    try {
+      while (!this.#terminal) yield await this.nextEvent(signal)
+    } finally {
+      if (!this.#terminal) this.#failClosed()
+    }
+  }
+}
+
+export type RemoteClaudeTurnEvent = ClaudeTurnEventMessage
 
 export interface ValidatedRemoteProjectLocation {
   readonly canonicalPath: string

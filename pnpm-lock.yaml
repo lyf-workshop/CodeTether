@@ -68,6 +68,9 @@ importers:
 
   apps/node:
     dependencies:
+      '@codetether/adapter-claude':
+        specifier: workspace:*
+        version: link:../../packages/adapter-claude
       '@codetether/adapter-codex':
         specifier: workspace:*
         version: link:../../packages/adapter-codex

@@ -11,6 +11,7 @@ import {
 } from './errors.js'
 import {
   startClaudeCodeTurnProcess,
+  type ClaudeCodeProcessOwnership,
   type ClaudeCodeTurnProcessHandle,
 } from './process.js'
 import type {
@@ -25,6 +26,8 @@ export interface ClaudeCodeSessionOptions {
   readonly cwd: string
   readonly environment?: NodeJS.ProcessEnv
   readonly testedVersion?: string
+  /** Node-only opt-in. Omitted for the frozen local direct-child profile. */
+  readonly processOwnership?: ClaudeCodeProcessOwnership
 }
 
 export interface ClaudeCodeCreateSessionOptions extends ClaudeCodeSessionOptions {
@@ -54,6 +57,7 @@ export class ClaudeCodeSessionRuntime {
   readonly #launcher: ClaudeCodeLauncher
   readonly #environment?: NodeJS.ProcessEnv
   readonly #testedVersion?: string
+  readonly #processOwnership?: ClaudeCodeProcessOwnership
   readonly #eventListeners = new Set<ClaudeCodeEventListener>()
   readonly #failureListeners = new Set<ClaudeCodeFailureListener>()
   #resume: boolean
@@ -72,6 +76,7 @@ export class ClaudeCodeSessionRuntime {
     this.#launcher = options.launcher
     this.#environment = options.environment
     this.#testedVersion = options.testedVersion
+    this.#processOwnership = options.processOwnership
     this.#resume = options.resume
   }
 
@@ -126,6 +131,9 @@ export class ClaudeCodeSessionRuntime {
       ...(this.#testedVersion === undefined
         ? {}
         : { testedVersion: this.#testedVersion }),
+      ...(this.#processOwnership === undefined
+        ? {}
+        : { processOwnership: this.#processOwnership }),
       onEvent: async (event) => {
         for (const listener of this.#eventListeners) await listener(event)
       },

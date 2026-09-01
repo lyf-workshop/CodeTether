@@ -325,6 +325,7 @@ test('Conversation identity, rich multi-Turn history, and Provider identity surv
         providerThreadId,
         cwd: environment.workspace,
         providerSessionMaterialized: true,
+        model: 'gpt-5.6-sol',
       },
     ])
     assert.equal(second.runtime.turnCalls.length, 1)

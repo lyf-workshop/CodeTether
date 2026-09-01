@@ -314,6 +314,31 @@ test('normalizes edit and search inputs while failing shell closed', () => {
   )
 })
 
+test('rejects foreign-platform absolute paths from safe Tool clues', () => {
+  const privatePaths = [
+    'C:\\private\\windows-secret.txt',
+    '\\\\private-server\\private-share\\unc-secret.txt',
+    '/private/posix-secret.txt',
+  ]
+
+  for (const privatePath of privatePaths) {
+    const normalized = normalizeClaudeTool(
+      'Read',
+      { file_path: privatePath },
+      cwd,
+    )
+    assert.deepEqual(normalized, {
+      name: 'Read',
+      kind: 'read',
+      summary: 'Read file',
+    })
+    assert.doesNotMatch(
+      JSON.stringify(normalized),
+      /private|secret|windows|posix|server|share/u,
+    )
+  }
+})
+
 test('keeps one stable generic identity for an unavailable shell tool', () => {
   const normalizer = createNormalizer()
   normalizer.consume(init())

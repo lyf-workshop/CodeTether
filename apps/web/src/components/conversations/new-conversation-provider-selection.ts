@@ -5,6 +5,29 @@ export interface NewConversationProviderDefaults {
   readonly reasoning?: string
 }
 
+/** A Provider must support both the live Turn path and durable native resume. */
+export function executableConversationProviders(
+  providers: readonly ProviderPresentation[],
+): readonly ProviderPresentation[] {
+  return providers.filter(
+    (provider) =>
+      provider.available &&
+      provider.capabilities.streaming &&
+      provider.capabilities.resume,
+  )
+}
+
+/** Preserve an eligible choice, otherwise fall back to the first executable Provider. */
+export function effectiveConversationProvider(
+  selectedProvider: ProviderPresentation['provider'],
+  providers: readonly ProviderPresentation[],
+): ProviderPresentation | undefined {
+  return (
+    providers.find((provider) => provider.provider === selectedProvider) ??
+    providers[0]
+  )
+}
+
 export function defaultProviderControls(
   provider: ProviderPresentation,
 ): NewConversationProviderDefaults {

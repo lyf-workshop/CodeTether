@@ -100,6 +100,11 @@ export class NewConversationActions {
             'Created Conversation does not belong to the requested Machine',
           )
         }
+        if (response.data.conversation.provider !== options.provider) {
+          throw new CodeTetherProtocolError(
+            'Created Conversation does not belong to the requested Provider',
+          )
+        }
         return response
       })
       .finally(() => {

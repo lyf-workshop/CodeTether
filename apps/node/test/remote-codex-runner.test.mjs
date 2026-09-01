@@ -23,6 +23,7 @@ import {
   machineTransportLimits,
   newControllerId,
   newMachineNonce,
+  openRemoteClaudeSession,
   openRemoteCodexSession,
 } from '@codetether/machine-transport'
 
@@ -35,6 +36,7 @@ import {
   RemoteCodexRunnerPool,
   validateRemoteCodexTextNotification,
 } from '../dist/remote-codex-runner.js'
+import { RemoteClaudeRunnerPool } from '../dist/remote-claude-runner.js'
 import { NodeStateStore } from '../dist/state-store.js'
 
 function sessionRequest(rootPath, conversationId = 'conv_remote_a') {
@@ -141,6 +143,8 @@ function executionDetector(options = {}) {
     options.codexScript ?? "process.stdout.write('codex-cli 0.149.1')"
   return new RemoteProviderDetector({
     platform: 'linux',
+    claudeExecutionProbe:
+      options.claudeExecutionProbe ?? (async () => ({ available: false })),
     probes: [
       {
         provider: 'codex',
@@ -765,6 +769,43 @@ test('Node service close waits for fatal exact runner cleanup before returning',
   }
 })
 
+test('Node service retains and reports remote Claude cleanup failure', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'codetether-cleanup-fail-'))
+  const state = await NodeStateStore.open({
+    dataDirectory: join(directory, 'node-state'),
+    displayName: 'Cleanup Failure Node',
+    platform: 'Linux',
+    architecture: 'x64',
+  })
+  const cleanupFailure = new Error('private owned cleanup diagnostic')
+  let cleanupAttempts = 0
+  const service = new CodeTetherNodeService({
+    state,
+    providerDetector: executionDetector(),
+    remoteClaudeRunners: {
+      close: async () => {
+        cleanupAttempts += 1
+        throw cleanupFailure
+      },
+    },
+  })
+  try {
+    await assert.rejects(
+      service.close(),
+      (error) =>
+        error instanceof AggregateError &&
+        error.message ===
+          'CodeTether Node owned resource cleanup did not complete' &&
+        error.errors.includes(cleanupFailure),
+    )
+    await assert.rejects(service.close(), AggregateError)
+    assert.equal(cleanupAttempts, 1)
+  } finally {
+    await service.close().catch(() => undefined)
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
 test('released execution connections reopen by exact native session identity', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'codetether-resume-'))
   const fake = fakeClientFactory()
@@ -876,6 +917,189 @@ test('real authenticated transport streams one fake-owned remote Codex Turn', as
     assert.equal(runners.activeCount, 0)
     assert.equal(fake.launches, 1)
     assert.equal(fake.starts, 1)
+  } finally {
+    await session?.close().catch(() => undefined)
+    await service.close().catch(() => undefined)
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('authenticated transport streams canonical restricted Claude events and resumes exact identity', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'codetether-node-claude-'))
+  const project = join(directory, 'project')
+  await mkdir(project)
+  const providerSessionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+  const factoryCalls = []
+  let processStarts = 0
+  const runtimes = new Set()
+  const runners = new RemoteClaudeRunnerPool({
+    runtimeFactory: async (options) => {
+      factoryCalls.push(options)
+      let listener = () => undefined
+      const runtime = {
+        sessionId: options.providerSessionId ?? providerSessionId,
+        cwd: options.cwd,
+        subscribeEvents(next) {
+          listener = next
+          return () => {
+            listener = () => undefined
+          }
+        },
+        async startTurn(turn) {
+          processStarts += 1
+          const base = {
+            provider: 'claude-code',
+            timestamp: new Date().toISOString(),
+            threadId: runtime.sessionId,
+            turnId: turn.turnId,
+          }
+          listener({
+            type: 'conversation.started',
+            provider: 'claude-code',
+            timestamp: base.timestamp,
+            threadId: runtime.sessionId,
+            cwd: options.cwd,
+          })
+          listener({ type: 'turn.started', ...base })
+          listener({
+            type: 'message.delta',
+            ...base,
+            itemId: 'message_remote_claude',
+            delta: 'CLAUDE TRANSPORT MARKER',
+          })
+          listener({
+            type: 'message.completed',
+            ...base,
+            itemId: 'message_remote_claude',
+            message: 'CLAUDE TRANSPORT MARKER',
+          })
+          listener({
+            type: 'tool.started',
+            ...base,
+            itemId: 'tool_remote_read',
+            kind: 'read',
+            name: 'Read',
+            command: 'Read fixture.txt',
+            summary: 'Read fixture.txt',
+          })
+          listener({
+            type: 'tool.output',
+            ...base,
+            itemId: 'tool_remote_read',
+            output: 'known fixture',
+            stream: 'combined',
+          })
+          listener({
+            type: 'tool.completed',
+            ...base,
+            itemId: 'tool_remote_read',
+            kind: 'read',
+            name: 'Read',
+            command: 'Read fixture.txt',
+            success: true,
+            summary: 'Read fixture.txt',
+          })
+          listener({ type: 'turn.completed', ...base })
+          return {
+            sessionId: runtime.sessionId,
+            turnId: turn.turnId,
+            finalMessage: 'CLAUDE TRANSPORT MARKER',
+          }
+        },
+        async close() {
+          runtimes.delete(runtime)
+        },
+      }
+      runtimes.add(runtime)
+      return runtime
+    },
+  })
+  const state = await NodeStateStore.open({
+    dataDirectory: join(directory, 'node-state'),
+    displayName: 'Remote Claude Test Node',
+    platform: 'Linux',
+    architecture: 'x64',
+  })
+  const service = new CodeTetherNodeService({
+    state,
+    bindAddress: '127.0.0.1',
+    port: 0,
+    providerDetector: executionDetector({
+      claudeExecutionProbe: async () => ({
+        available: true,
+        version: '2.1.251',
+      }),
+    }),
+    remoteClaudeRunners: runners,
+  })
+  const controller = {
+    controllerId: newControllerId(),
+    tls: await generateMachineTlsIdentity('Remote Claude Test Controller'),
+  }
+  let session
+  try {
+    const peer = await pairService(service, controller)
+    session = await openRemoteClaudeSession({
+      peer,
+      controller,
+      conversationId: 'conv_remote_claude01',
+      projectId: 'proj_remote_claude01',
+      rootPath: project,
+      effort: 'high',
+    })
+    assert.equal(session.providerSessionId, providerSessionId)
+    assert.equal(session.resumed, false)
+    assert.equal(session.effort, 'high')
+    const turn = await session.startTurn({
+      actionId: 'act_remote_claude01',
+      turnId: 'turn_remote_claude01',
+      prompt: 'Inspect the fixture.',
+    })
+    const events = []
+    for await (const event of turn.events()) events.push(event.event)
+    assert.deepEqual(
+      events.map(({ type }) => type),
+      [
+        'message.delta',
+        'tool.started',
+        'tool.output',
+        'tool.completed',
+        'message.completed',
+        'turn.completed',
+      ],
+    )
+    assert.equal(events[0].text, 'CLAUDE TRANSPORT MARKER')
+    assert.deepEqual(events[1], {
+      type: 'tool.started',
+      itemId: 'tool_remote_read',
+      kind: 'read',
+      name: 'Read',
+      command: 'Read fixture.txt',
+      summary: 'Read fixture.txt',
+    })
+    await session.close()
+    session = undefined
+
+    session = await openRemoteClaudeSession({
+      peer,
+      controller,
+      conversationId: 'conv_remote_claude01',
+      projectId: 'proj_remote_claude01',
+      rootPath: project,
+      providerSessionId,
+      providerSessionMaterialized: true,
+      effort: 'high',
+    })
+    assert.equal(session.resumed, true)
+    assert.equal(factoryCalls.length, 2)
+    assert.equal(factoryCalls[0].resume, false)
+    assert.equal(factoryCalls[1].resume, true)
+    assert.equal(factoryCalls[1].providerSessionId, providerSessionId)
+    assert.equal(processStarts, 1)
+    await session.close()
+    session = undefined
+    assert.equal(runners.activeCount, 0)
+    assert.equal(runtimes.size, 0)
   } finally {
     await session?.close().catch(() => undefined)
     await service.close().catch(() => undefined)

@@ -103,6 +103,8 @@ export interface AgentHostRuntime {
       readonly cwd: string
       /** True only after at least one durable Provider Turn has been created. */
       readonly providerSessionMaterialized: boolean
+      readonly model?: string
+      readonly reasoning?: string
     } & ProviderRuntimeContext,
   ): Promise<ProviderConversationResult>
   startTurn(

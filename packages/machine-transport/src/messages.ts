@@ -51,6 +51,77 @@ const RemoteCodexDeltaSchema = z
       machineTransportLimits.maximumRemoteCodexDeltaBytes,
   )
 
+const ClaudeSessionIdentityPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+export const RemoteClaudeProviderIdentitySchema = z
+  .string()
+  .regex(ClaudeSessionIdentityPattern)
+export type RemoteClaudeProviderIdentity = z.infer<
+  typeof RemoteClaudeProviderIdentitySchema
+>
+
+export const RemoteClaudeEffortSchema = z.enum([
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+])
+export type RemoteClaudeEffort = z.infer<typeof RemoteClaudeEffortSchema>
+
+export const RemoteClaudePromptSchema = z
+  .string()
+  .min(1)
+  .refine((value) => !value.includes('\0'))
+  .refine(
+    (value) =>
+      Buffer.byteLength(value, 'utf8') <=
+      machineTransportLimits.maximumRemoteClaudePromptBytes,
+  )
+export type RemoteClaudePrompt = z.infer<typeof RemoteClaudePromptSchema>
+
+const RemoteClaudeDeltaSchema = z
+  .string()
+  .min(1)
+  .refine(
+    (value) =>
+      Buffer.byteLength(value, 'utf8') <=
+      machineTransportLimits.maximumRemoteClaudeDeltaBytes,
+  )
+
+const RemoteClaudeToolItemIdSchema = z
+  .string()
+  .min(1)
+  .max(256)
+  .regex(/^[\x21-\x7e]+$/)
+const RemoteClaudeToolCommandSchema = z
+  .string()
+  .min(1)
+  .refine((value) => !value.includes('\0'))
+  .refine(
+    (value) =>
+      Buffer.byteLength(value, 'utf8') <=
+      machineTransportLimits.maximumRemoteClaudeToolCommandBytes,
+  )
+const RemoteClaudeToolSummarySchema = z
+  .string()
+  .trim()
+  .min(1)
+  .refine(
+    (value) =>
+      Buffer.byteLength(value, 'utf8') <=
+      machineTransportLimits.maximumRemoteClaudeToolSummaryBytes,
+  )
+const RemoteClaudeToolOutputSchema = z
+  .string()
+  .min(1)
+  .refine(
+    (value) =>
+      Buffer.byteLength(value, 'utf8') <=
+      machineTransportLimits.maximumRemoteClaudeToolOutputBytes,
+  )
+
 export const RemoteProjectLocationPathSchema = z
   .string()
   .min(1)
@@ -283,6 +354,13 @@ export type RemoteProviderCapabilities = z.infer<
   typeof RemoteProviderCapabilitiesSchema
 >
 
+const RemoteProviderReasoningOptionSchema = z
+  .object({
+    id: RemoteClaudeEffortSchema,
+    label: z.string().trim().min(1).max(120),
+  })
+  .strict()
+
 export const RemoteProviderDescriptorSchema = z
   .object({
     provider: z.enum(['codex', 'claude-code']),
@@ -296,6 +374,12 @@ export const RemoteProviderDescriptorSchema = z
     ]),
     version: z.string().trim().min(1).max(120).optional(),
     capabilities: RemoteProviderCapabilitiesSchema,
+    reasoningLabel: z.string().trim().min(1).max(120).optional(),
+    reasoningOptions: z
+      .array(RemoteProviderReasoningOptionSchema)
+      .length(5)
+      .readonly()
+      .optional(),
   })
   .strict()
   .superRefine((descriptor, context) => {
@@ -309,12 +393,48 @@ export const RemoteProviderDescriptorSchema = z
       enabled.length === 2 &&
       enabled[0] === 'resume' &&
       enabled[1] === 'streaming'
-    if (enabled.length > 0 && !remoteCodexTextFoundation) {
+    const remoteClaudeReadSearchFoundation =
+      descriptor.provider === 'claude-code' &&
+      descriptor.availability === 'available' &&
+      enabled.length === 6 &&
+      enabled[0] === 'fileRead' &&
+      enabled[1] === 'reasoningControl' &&
+      enabled[2] === 'resume' &&
+      enabled[3] === 'search' &&
+      enabled[4] === 'streaming' &&
+      enabled[5] === 'toolEvents'
+    if (
+      enabled.length > 0 &&
+      !remoteCodexTextFoundation &&
+      !remoteClaudeReadSearchFoundation
+    ) {
       context.addIssue({
         code: 'custom',
         message:
-          'Remote Provider capabilities exceed the Codex text execution foundation',
+          'Remote Provider capabilities exceed an admitted execution foundation',
         path: ['capabilities'],
+      })
+    }
+    const reasoningIds = descriptor.reasoningOptions?.map(({ id }) => id)
+    const exactClaudeReasoning =
+      descriptor.reasoningLabel !== undefined &&
+      reasoningIds?.join(',') === 'low,medium,high,xhigh,max'
+    if (remoteClaudeReadSearchFoundation !== exactClaudeReasoning) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Remote Claude reasoning metadata is inconsistent',
+        path: ['reasoningOptions'],
+      })
+    }
+    if (
+      descriptor.provider !== 'claude-code' &&
+      (descriptor.reasoningLabel !== undefined ||
+        descriptor.reasoningOptions !== undefined)
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Remote reasoning metadata belongs only to Claude Code',
+        path: ['reasoningOptions'],
       })
     }
   })
@@ -510,6 +630,229 @@ export type CodexSessionDisposedMessage = z.infer<
   typeof CodexSessionDisposedMessageSchema
 >
 
+export const RemoteClaudeExecutionProfileSchema = z.literal(
+  'claude-restricted-read-search-v1',
+)
+export type RemoteClaudeExecutionProfile = z.infer<
+  typeof RemoteClaudeExecutionProfileSchema
+>
+
+export const ClaudeSessionOpenMessageSchema = z
+  .object({
+    type: z.literal('claude.session.open'),
+    protocolVersion: VersionField,
+    requestId: NonceSchema,
+    expectedMachineId: MachineTransportMachineIdSchema,
+    expectedNodeId: NodeIdSchema,
+    conversationId: MachineTransportConversationIdSchema,
+    projectId: MachineTransportProjectIdSchema,
+    rootPath: RemoteProjectLocationPathSchema,
+    providerSessionId: RemoteClaudeProviderIdentitySchema.optional(),
+    providerSessionMaterialized: z.boolean().optional(),
+    effort: RemoteClaudeEffortSchema.optional(),
+  })
+  .strict()
+  .superRefine((request, context) => {
+    if (
+      (request.providerSessionId === undefined) !==
+      (request.providerSessionMaterialized === undefined)
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message:
+          'Claude session materialization state requires an existing session identity',
+        path: ['providerSessionMaterialized'],
+      })
+    }
+  })
+export type ClaudeSessionOpenMessage = z.infer<
+  typeof ClaudeSessionOpenMessageSchema
+>
+
+export const ClaudeSessionReadyMessageSchema = z
+  .object({
+    type: z.literal('claude.session.ready'),
+    protocolVersion: VersionField,
+    requestId: NonceSchema,
+    machineId: MachineTransportMachineIdSchema,
+    nodeId: NodeIdSchema,
+    conversationId: MachineTransportConversationIdSchema,
+    providerSessionId: RemoteClaudeProviderIdentitySchema,
+    resumed: z.boolean(),
+    effort: RemoteClaudeEffortSchema.optional(),
+    executionProfile: RemoteClaudeExecutionProfileSchema,
+  })
+  .strict()
+export type ClaudeSessionReadyMessage = z.infer<
+  typeof ClaudeSessionReadyMessageSchema
+>
+
+export const ClaudeTurnStartMessageSchema = z
+  .object({
+    type: z.literal('claude.turn.start'),
+    protocolVersion: VersionField,
+    actionId: MachineTransportActionIdSchema,
+    conversationId: MachineTransportConversationIdSchema,
+    turnId: MachineTransportTurnIdSchema,
+    providerSessionId: RemoteClaudeProviderIdentitySchema,
+    prompt: RemoteClaudePromptSchema,
+  })
+  .strict()
+export type ClaudeTurnStartMessage = z.infer<
+  typeof ClaudeTurnStartMessageSchema
+>
+
+export const ClaudeTurnStartedMessageSchema = z
+  .object({
+    type: z.literal('claude.turn.started'),
+    protocolVersion: VersionField,
+    machineId: MachineTransportMachineIdSchema,
+    nodeId: NodeIdSchema,
+    actionId: MachineTransportActionIdSchema,
+    conversationId: MachineTransportConversationIdSchema,
+    turnId: MachineTransportTurnIdSchema,
+    providerSessionId: RemoteClaudeProviderIdentitySchema,
+    providerTurnId: RemoteClaudeProviderIdentitySchema,
+  })
+  .strict()
+export type ClaudeTurnStartedMessage = z.infer<
+  typeof ClaudeTurnStartedMessageSchema
+>
+
+const RemoteClaudeReadToolStartedSchema = z
+  .object({
+    type: z.literal('tool.started'),
+    itemId: RemoteClaudeToolItemIdSchema,
+    kind: z.literal('read'),
+    name: z.literal('Read'),
+    command: RemoteClaudeToolCommandSchema.optional(),
+    summary: RemoteClaudeToolSummarySchema.optional(),
+  })
+  .strict()
+const RemoteClaudeSearchToolStartedSchema = z
+  .object({
+    type: z.literal('tool.started'),
+    itemId: RemoteClaudeToolItemIdSchema,
+    kind: z.literal('search'),
+    name: z.literal('Search'),
+    command: RemoteClaudeToolCommandSchema.optional(),
+    summary: RemoteClaudeToolSummarySchema.optional(),
+  })
+  .strict()
+const RemoteClaudeReadToolCompletedSchema = z
+  .object({
+    type: z.literal('tool.completed'),
+    itemId: RemoteClaudeToolItemIdSchema,
+    kind: z.literal('read'),
+    name: z.literal('Read'),
+    command: RemoteClaudeToolCommandSchema.optional(),
+    success: z.boolean(),
+    summary: RemoteClaudeToolSummarySchema.optional(),
+  })
+  .strict()
+const RemoteClaudeSearchToolCompletedSchema = z
+  .object({
+    type: z.literal('tool.completed'),
+    itemId: RemoteClaudeToolItemIdSchema,
+    kind: z.literal('search'),
+    name: z.literal('Search'),
+    command: RemoteClaudeToolCommandSchema.optional(),
+    success: z.boolean(),
+    summary: RemoteClaudeToolSummarySchema.optional(),
+  })
+  .strict()
+
+export const RemoteClaudeTurnFailureCodeSchema = z.enum([
+  'provider_start_failed',
+  'provider_session_lost',
+  'provider_unavailable',
+  'remote_execution_lost',
+  'remote_policy_violation',
+  'provider_failed',
+])
+export type RemoteClaudeTurnFailureCode = z.infer<
+  typeof RemoteClaudeTurnFailureCodeSchema
+>
+
+export const RemoteClaudeTurnEventPayloadSchema = z.union([
+  z
+    .object({ type: z.literal('message.delta'), text: RemoteClaudeDeltaSchema })
+    .strict(),
+  z.object({ type: z.literal('message.completed') }).strict(),
+  z.union([
+    RemoteClaudeReadToolStartedSchema,
+    RemoteClaudeSearchToolStartedSchema,
+  ]),
+  z
+    .object({
+      type: z.literal('tool.output'),
+      itemId: RemoteClaudeToolItemIdSchema,
+      output: RemoteClaudeToolOutputSchema,
+    })
+    .strict(),
+  z.union([
+    RemoteClaudeReadToolCompletedSchema,
+    RemoteClaudeSearchToolCompletedSchema,
+  ]),
+  z.object({ type: z.literal('turn.completed') }).strict(),
+  z
+    .object({
+      type: z.literal('turn.failed'),
+      code: RemoteClaudeTurnFailureCodeSchema,
+      message: z.string().trim().min(1).max(240),
+    })
+    .strict(),
+])
+export type RemoteClaudeTurnEventPayload = z.infer<
+  typeof RemoteClaudeTurnEventPayloadSchema
+>
+
+export const ClaudeTurnEventMessageSchema = z
+  .object({
+    type: z.literal('claude.turn.event'),
+    protocolVersion: VersionField,
+    machineId: MachineTransportMachineIdSchema,
+    nodeId: NodeIdSchema,
+    actionId: MachineTransportActionIdSchema,
+    conversationId: MachineTransportConversationIdSchema,
+    turnId: MachineTransportTurnIdSchema,
+    providerSessionId: RemoteClaudeProviderIdentitySchema,
+    providerTurnId: RemoteClaudeProviderIdentitySchema,
+    sequence: z.number().int().positive().safe(),
+    event: RemoteClaudeTurnEventPayloadSchema,
+  })
+  .strict()
+export type ClaudeTurnEventMessage = z.infer<
+  typeof ClaudeTurnEventMessageSchema
+>
+
+export const ClaudeSessionDisposeMessageSchema = z
+  .object({
+    type: z.literal('claude.session.dispose'),
+    protocolVersion: VersionField,
+    requestId: NonceSchema,
+    conversationId: MachineTransportConversationIdSchema,
+    providerSessionId: RemoteClaudeProviderIdentitySchema,
+  })
+  .strict()
+export type ClaudeSessionDisposeMessage = z.infer<
+  typeof ClaudeSessionDisposeMessageSchema
+>
+
+export const ClaudeSessionDisposedMessageSchema = z
+  .object({
+    type: z.literal('claude.session.disposed'),
+    protocolVersion: VersionField,
+    requestId: NonceSchema,
+    machineId: MachineTransportMachineIdSchema,
+    nodeId: NodeIdSchema,
+    conversationId: MachineTransportConversationIdSchema,
+  })
+  .strict()
+export type ClaudeSessionDisposedMessage = z.infer<
+  typeof ClaudeSessionDisposedMessageSchema
+>
+
 export const TrustRevokeMessageSchema = z
   .object({
     type: z.literal('trust.revoke'),
@@ -590,6 +933,13 @@ export const MachineWireMessageSchema = z.discriminatedUnion('type', [
   CodexTurnEventMessageSchema,
   CodexSessionDisposeMessageSchema,
   CodexSessionDisposedMessageSchema,
+  ClaudeSessionOpenMessageSchema,
+  ClaudeSessionReadyMessageSchema,
+  ClaudeTurnStartMessageSchema,
+  ClaudeTurnStartedMessageSchema,
+  ClaudeTurnEventMessageSchema,
+  ClaudeSessionDisposeMessageSchema,
+  ClaudeSessionDisposedMessageSchema,
   TrustRevokeMessageSchema,
   TrustRevokedMessageSchema,
   MachineErrorMessageSchema,

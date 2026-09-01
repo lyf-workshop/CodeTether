@@ -68,6 +68,12 @@ importers:
 
   apps/node:
     dependencies:
+      '@codetether/adapter-codex':
+        specifier: workspace:*
+        version: link:../../packages/adapter-codex
+      '@codetether/agent-core':
+        specifier: workspace:*
+        version: link:../../packages/agent-core
       '@codetether/machine-transport':
         specifier: workspace:*
         version: link:../../packages/machine-transport

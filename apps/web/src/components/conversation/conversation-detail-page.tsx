@@ -8,6 +8,7 @@ import { ConversationRail } from './conversation-rail'
 import type { ConversationControls } from './conversation-controls'
 import type {
   ConversationConnectionIndicatorViewModel,
+  ConversationExecutionBoundaryViewModel,
   ConversationRailViewModel,
   ConversationViewModel,
 } from './conversation-view-model'
@@ -25,6 +26,7 @@ export interface ConversationDetailPageProps {
   viewModel: ConversationViewModel
   rail: ConversationRailViewModel
   connectionIndicator?: ConversationConnectionIndicatorViewModel
+  executionBoundary?: ConversationExecutionBoundaryViewModel
   initialInspectorTab?: InspectorTab
   controls?: ConversationControls
   newConversationButtonRef?: Ref<HTMLButtonElement>
@@ -40,6 +42,7 @@ export function ConversationDetailPage({
   viewModel,
   rail,
   connectionIndicator,
+  executionBoundary,
   initialInspectorTab = 'overview',
   controls,
   newConversationButtonRef,
@@ -116,6 +119,7 @@ export function ConversationDetailPage({
           anchorRequestKey={anchorRequestKey}
           viewModel={viewModel}
           connectionIndicator={connectionIndicator}
+          executionBoundary={executionBoundary}
           onOpenInspector={() =>
             setInspector((current) =>
               setConversationInspectorOpen(current, true),

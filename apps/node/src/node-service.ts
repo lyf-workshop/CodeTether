@@ -2,6 +2,9 @@ import { EventEmitter } from 'node:events'
 import { createServer, type Server, type TLSSocket } from 'node:tls'
 
 import {
+  CodexSessionDisposeMessageSchema,
+  CodexSessionOpenMessageSchema,
+  CodexTurnStartMessageSchema,
   FramedMachineConnection,
   MachineErrorMessageSchema,
   MachineHelloMessageSchema,
@@ -26,21 +29,34 @@ import {
   peerFingerprint,
   verifyPairingConfirmationTag,
   type MachineWireErrorCode,
+  type CodexSessionDisposeMessage,
+  type CodexTurnStartMessage,
   type PairingTranscript,
   type PublicKeyFingerprint,
+  type RemoteMachineMetadata,
 } from '@codetether/machine-transport'
 import { z } from 'zod'
 
 import { PairingMode, type PairingModeView } from './pairing-mode.js'
 import { validateProjectLocationPath } from './project-location-validation.js'
 import { RemoteProviderDetector } from './provider-discovery.js'
+import {
+  RemoteCodexRunnerPool,
+  type RemoteCodexRunner,
+  type RemoteCodexRunnerTurn,
+} from './remote-codex-runner.js'
 import { NodeStateStore, type TrustedController } from './state-store.js'
 
 const AuthenticatedRequestSchema = z.discriminatedUnion('type', [
   MachinePingMessageSchema,
   ProjectLocationValidateMessageSchema,
   ProvidersDescribeMessageSchema,
+  CodexSessionOpenMessageSchema,
   TrustRevokeMessageSchema,
+])
+const RemoteCodexSessionRequestSchema = z.discriminatedUnion('type', [
+  CodexTurnStartMessageSchema,
+  CodexSessionDisposeMessageSchema,
 ])
 const PairingDecisionSchema = z.discriminatedUnion('type', [
   PairingConfirmMessageSchema,
@@ -53,6 +69,8 @@ export interface CodeTetherNodeOptions {
   readonly port: number
   readonly authenticatedIdleTimeoutMs?: number
   readonly providerDetector?: RemoteProviderDetector
+  /** Internal test seam; remote callers cannot configure Provider execution. */
+  readonly remoteCodexRunners?: RemoteCodexRunnerPool
 }
 
 export interface ListeningNodeAddress {
@@ -70,6 +88,7 @@ export class CodeTetherNodeService extends EventEmitter {
   readonly #connectionsByAddress = new Map<string, number>()
   readonly #authenticatedConnections = new Map<string, Set<TLSSocket>>()
   readonly #providerDetector: RemoteProviderDetector
+  readonly #remoteCodexRunners: RemoteCodexRunnerPool
   #server: Server | undefined
   #closing = false
 
@@ -92,6 +111,8 @@ export class CodeTetherNodeService extends EventEmitter {
     }
     this.#providerDetector =
       options.providerDetector ?? new RemoteProviderDetector()
+    this.#remoteCodexRunners =
+      options.remoteCodexRunners ?? new RemoteCodexRunnerPool()
     this.pairing = new PairingMode(
       options.state.machine,
       options.state.identity.publicKeyFingerprint,
@@ -169,6 +190,7 @@ export class CodeTetherNodeService extends EventEmitter {
       })
     }
     await this.#providerDetector.close()
+    await this.#remoteCodexRunners.close()
     await this.state.close()
   }
 
@@ -452,6 +474,21 @@ export class CodeTetherNodeService extends EventEmitter {
           })
           continue
         }
+        if (request.type === 'codex.session.open') {
+          if (
+            request.expectedMachineId !== this.state.machine.machineId ||
+            request.expectedNodeId !== this.state.machine.nodeId
+          ) {
+            throw new MachineTransportError(
+              'identity_mismatch',
+              'Remote Codex request did not match durable Node identity',
+            )
+          }
+          const discovery = await this.#providerDetector.discover()
+          assertRemoteCodexExecutionAdmission(discovery)
+          await this.#serveRemoteCodexSession(connection, request)
+          return
+        }
         if (request.controllerId !== trusted.controllerId) {
           throw new MachineTransportError(
             'identity_mismatch',
@@ -477,6 +514,150 @@ export class CodeTetherNodeService extends EventEmitter {
       if (tracked) {
         this.#untrackAuthenticatedConnection(trusted.controllerId, socket)
       }
+    }
+  }
+
+  async #serveRemoteCodexSession(
+    connection: FramedMachineConnection,
+    request: z.infer<typeof CodexSessionOpenMessageSchema>,
+  ): Promise<void> {
+    let runner: RemoteCodexRunner | undefined
+    let released = false
+    try {
+      runner = await this.#remoteCodexRunners.open(request)
+      await connection.send({
+        type: 'codex.session.ready',
+        protocolVersion: machineProtocolVersion,
+        requestId: request.requestId,
+        machineId: this.state.machine.machineId,
+        nodeId: this.state.machine.nodeId,
+        conversationId: request.conversationId,
+        providerThreadId: runner.providerThreadId,
+        resumed: runner.resumed,
+        executionProfile: 'codex-text-v1',
+      })
+
+      while (!connection.closed && !this.#closing) {
+        const control = await receiveStrict(
+          connection,
+          RemoteCodexSessionRequestSchema,
+          { timeoutMs: machineTransportLimits.remoteCodexSessionIdleTimeoutMs },
+        )
+        assertRemoteCodexSessionControl(control, runner)
+        if (control.type === 'codex.session.dispose') {
+          await this.#remoteCodexRunners.release(runner)
+          released = true
+          await sendRemoteCodexDisposed(connection, this.state.machine, control)
+          connection.end()
+          return
+        }
+        const turn = await runner.startTurn(control)
+        await sendRemoteCodexTurnStarted(
+          connection,
+          this.state.machine,
+          runner,
+          turn,
+        )
+        const disposal = await this.#streamRemoteCodexTurn(
+          connection,
+          runner,
+          turn,
+        )
+        if (disposal !== undefined) {
+          await this.#remoteCodexRunners.release(runner)
+          released = true
+          await sendRemoteCodexDisposed(
+            connection,
+            this.state.machine,
+            disposal,
+          )
+          connection.end()
+          return
+        }
+      }
+    } finally {
+      if (runner !== undefined && !released) {
+        await this.#remoteCodexRunners.release(runner)
+      }
+    }
+  }
+
+  async #streamRemoteCodexTurn(
+    connection: FramedMachineConnection,
+    runner: RemoteCodexRunner,
+    turn: RemoteCodexRunnerTurn,
+  ): Promise<CodexSessionDisposeMessage | undefined> {
+    const events = turn.events()[Symbol.asyncIterator]()
+    const controlAbort = new AbortController()
+    let sequence = 1
+    let event = events
+      .next()
+      .then((result) => ({ kind: 'event' as const, result }))
+    let control = receiveStrict(connection, RemoteCodexSessionRequestSchema, {
+      timeoutMs: machineTransportLimits.remoteCodexTurnTimeoutMs,
+      signal: controlAbort.signal,
+    })
+    try {
+      while (true) {
+        const next = await Promise.race([
+          event,
+          control.then((value) => ({ kind: 'control' as const, value })),
+        ])
+        if (next.kind === 'control') {
+          assertRemoteCodexSessionControl(next.value, runner)
+          if (next.value.type === 'codex.session.dispose') return next.value
+          const duplicate = await runner.startTurn(next.value)
+          if (duplicate !== turn) {
+            throw new MachineTransportError(
+              'conversation_busy',
+              'Remote Codex Conversation already has another active Turn',
+            )
+          }
+          await sendRemoteCodexTurnStarted(
+            connection,
+            this.state.machine,
+            runner,
+            turn,
+          )
+          control = receiveStrict(connection, RemoteCodexSessionRequestSchema, {
+            timeoutMs: machineTransportLimits.remoteCodexTurnTimeoutMs,
+            signal: controlAbort.signal,
+          })
+          continue
+        }
+        if (next.result.done) {
+          throw new MachineTransportError(
+            'remote_execution_lost',
+            'Remote Codex event stream ended before a terminal event',
+          )
+        }
+        await connection.send({
+          type: 'codex.turn.event',
+          protocolVersion: machineProtocolVersion,
+          machineId: this.state.machine.machineId,
+          nodeId: this.state.machine.nodeId,
+          actionId: turn.actionId,
+          conversationId: turn.conversationId,
+          turnId: turn.turnId,
+          providerThreadId: runner.providerThreadId,
+          providerTurnId: turn.providerTurnId,
+          sequence,
+          event: next.result.value,
+        })
+        sequence += 1
+        if (
+          next.result.value.type === 'turn.completed' ||
+          next.result.value.type === 'turn.failed'
+        ) {
+          return undefined
+        }
+        event = events
+          .next()
+          .then((result) => ({ kind: 'event' as const, result }))
+      }
+    } finally {
+      controlAbort.abort()
+      await control.catch(() => undefined)
     }
   }
 
@@ -508,10 +689,26 @@ export class CodeTetherNodeService extends EventEmitter {
   }
 }
 
+function assertRemoteCodexExecutionAdmission(
+  discovery: Awaited<ReturnType<RemoteProviderDetector['discover']>>,
+): void {
+  const codex = discovery.providers.find(({ provider }) => provider === 'codex')
+  if (
+    codex?.availability !== 'available' ||
+    codex.capabilities.streaming !== true ||
+    codex.capabilities.resume !== true
+  ) {
+    throw new MachineTransportError(
+      'remote_execution_unavailable',
+      'Remote Codex execution is unavailable',
+    )
+  }
+}
+
 async function receiveStrict<T>(
   connection: FramedMachineConnection,
   schema: z.ZodType<T>,
-  options?: { readonly timeoutMs?: number },
+  options?: { readonly timeoutMs?: number; readonly signal?: AbortSignal },
 ): Promise<T> {
   const raw = await connection.receive(z.unknown(), options)
   if (
@@ -533,6 +730,55 @@ async function receiveStrict<T>(
     )
   }
   return parsed.data
+}
+
+function assertRemoteCodexSessionControl(
+  control: CodexTurnStartMessage | CodexSessionDisposeMessage,
+  runner: RemoteCodexRunner,
+): void {
+  if (
+    control.conversationId !== runner.conversationId ||
+    control.providerThreadId !== runner.providerThreadId
+  ) {
+    throw new MachineTransportError(
+      'identity_mismatch',
+      'Remote Codex control did not match the owned session',
+    )
+  }
+}
+
+async function sendRemoteCodexTurnStarted(
+  connection: FramedMachineConnection,
+  machine: RemoteMachineMetadata,
+  runner: RemoteCodexRunner,
+  turn: RemoteCodexRunnerTurn,
+): Promise<void> {
+  await connection.send({
+    type: 'codex.turn.started',
+    protocolVersion: machineProtocolVersion,
+    machineId: machine.machineId,
+    nodeId: machine.nodeId,
+    actionId: turn.actionId,
+    conversationId: turn.conversationId,
+    turnId: turn.turnId,
+    providerThreadId: runner.providerThreadId,
+    providerTurnId: turn.providerTurnId,
+  })
+}
+
+async function sendRemoteCodexDisposed(
+  connection: FramedMachineConnection,
+  machine: RemoteMachineMetadata,
+  request: CodexSessionDisposeMessage,
+): Promise<void> {
+  await connection.send({
+    type: 'codex.session.disposed',
+    protocolVersion: machineProtocolVersion,
+    requestId: request.requestId,
+    machineId: machine.machineId,
+    nodeId: machine.nodeId,
+    conversationId: request.conversationId,
+  })
 }
 
 async function sendSafeError(
@@ -564,37 +810,34 @@ function isProjectLocationValidationError(
 }
 
 function machineError(code: MachineWireErrorCode) {
-  const message =
-    code === 'pairing_disabled'
-      ? 'Pairing mode is disabled'
-      : code === 'pairing_expired'
-        ? 'Pairing code expired'
-        : code === 'pairing_rate_limited'
-          ? 'Pairing attempt limit was reached'
-          : code === 'protocol_incompatible'
-            ? 'Machine protocol is incompatible'
-            : code === 'busy'
-              ? 'Machine connection limit was reached'
-              : code === 'malformed_message'
-                ? 'Machine message is invalid'
-                : code === 'identity_mismatch'
-                  ? 'Machine identity did not match'
-                  : code === 'project_location_path_invalid'
-                    ? 'Project Location path is invalid'
-                    : code === 'project_location_missing'
-                      ? 'Project Location directory does not exist'
-                      : code === 'project_location_not_directory'
-                        ? 'Project Location path is not a directory'
-                        : code === 'project_location_inaccessible'
-                          ? 'Project Location directory is inaccessible'
-                          : code === 'pairing_failed'
-                            ? 'Pairing authentication failed'
-                            : 'Machine authentication failed'
+  const messages: Record<MachineWireErrorCode, string> = {
+    pairing_disabled: 'Pairing mode is disabled',
+    pairing_expired: 'Pairing code expired',
+    pairing_rate_limited: 'Pairing attempt limit was reached',
+    pairing_failed: 'Pairing authentication failed',
+    authentication_failed: 'Machine authentication failed',
+    identity_mismatch: 'Machine identity did not match',
+    protocol_incompatible: 'Machine protocol is incompatible',
+    busy: 'Machine connection limit was reached',
+    malformed_message: 'Machine message is invalid',
+    project_location_path_invalid: 'Project Location path is invalid',
+    project_location_missing: 'Project Location directory does not exist',
+    project_location_not_directory: 'Project Location path is not a directory',
+    project_location_inaccessible: 'Project Location directory is inaccessible',
+    remote_execution_unavailable: 'Remote Codex execution is unavailable',
+    provider_unavailable: 'Remote Codex is unavailable',
+    provider_start_failed: 'Remote Codex could not start',
+    provider_session_lost: 'Remote Codex session was lost',
+    remote_execution_lost: 'Remote Codex execution was lost',
+    remote_policy_violation: 'Remote Codex operation was rejected',
+    conversation_busy: 'Remote Codex Conversation is busy',
+    duplicate_action_conflict: 'Remote Codex action identity conflicted',
+  }
   return MachineErrorMessageSchema.parse({
     type: 'machine.error',
     protocolVersion: machineProtocolVersion,
     code,
-    message,
+    message: messages[code],
   })
 }
 

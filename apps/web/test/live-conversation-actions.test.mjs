@@ -244,7 +244,7 @@ test('safe mutation errors never expose Provider diagnostics', () => {
       }),
       '发送消息',
     ),
-    '项目工作区当前不可用；本地历史仍可查看。',
+    '项目工作区当前不可用；会话历史仍可查看。',
   )
   assert.equal(
     mutationErrorMessage(

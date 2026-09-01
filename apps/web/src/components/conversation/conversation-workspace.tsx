@@ -1,11 +1,12 @@
 import { useEffect, useRef, type Ref } from 'react'
-import { Archive } from 'lucide-react'
+import { Link } from '@tanstack/react-router'
+import { Archive, WifiOff } from 'lucide-react'
 import {
   ConversationIdSchema,
   type ConversationSummary,
   type ProjectId,
 } from '@codetether/protocol'
-import { cn } from '@codetether/ui'
+import { Button, cn } from '@codetether/ui'
 
 import { Composer } from './composer'
 import { ConversationHeader } from './conversation-header'
@@ -13,6 +14,7 @@ import { ConversationTimeline } from './conversation-timeline'
 import type { ConversationControls } from './conversation-controls'
 import type {
   ConversationConnectionIndicatorViewModel,
+  ConversationExecutionBoundaryViewModel,
   ConversationViewModel,
 } from './conversation-view-model'
 import { organizationConversationStatus } from './conversation-view-model'
@@ -23,6 +25,7 @@ interface ConversationWorkspaceProps {
   anchorRequestKey?: string
   viewModel: ConversationViewModel
   connectionIndicator?: ConversationConnectionIndicatorViewModel
+  executionBoundary?: ConversationExecutionBoundaryViewModel
   inspectorTriggerRef?: Ref<HTMLButtonElement>
   onOpenInspector?: () => void
   onOpenChanges?: () => void
@@ -38,6 +41,7 @@ export function ConversationWorkspace({
   anchorRequestKey,
   viewModel,
   connectionIndicator,
+  executionBoundary,
   inspectorTriggerRef,
   onOpenInspector,
   onOpenChanges,
@@ -125,6 +129,37 @@ export function ConversationWorkspace({
               conversation={organizationConversation}
               size="sm"
             />
+          </div>
+        )}
+        {organizationConversation?.archivedAt !== undefined ||
+        executionBoundary === undefined ? null : (
+          <div
+            role="status"
+            className="flex min-w-0 items-center gap-3 border-b border-border bg-warning-muted/30 px-5 py-2.5"
+          >
+            <WifiOff
+              aria-hidden="true"
+              className="size-4 shrink-0 text-warning"
+            />
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-medium text-text-primary">
+                {executionBoundary.reason === 'machine_offline'
+                  ? '远程执行机器当前离线'
+                  : '这台机器当前无法执行此智能体'}
+              </p>
+              <p className="truncate text-xs text-text-secondary">
+                历史记录仍可查看；请在机器详情确认连接和智能体状态后再继续。
+              </p>
+            </div>
+            <Button asChild variant="secondary" size="sm">
+              <Link
+                to="/machines/$machineId"
+                params={{ machineId: executionBoundary.machineId }}
+                aria-label={`查看${executionBoundary.machineName}的机器详情`}
+              >
+                查看机器
+              </Link>
+            </Button>
           </div>
         )}
       </div>

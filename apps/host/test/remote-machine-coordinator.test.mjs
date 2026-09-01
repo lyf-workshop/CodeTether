@@ -34,6 +34,7 @@ async function fixture(options = {}) {
   let revokeCalls = 0
   let validateCalls = 0
   let discoveryCalls = 0
+  let openCodexCalls = 0
   let activeDiscoveries = 0
   let maximumActiveDiscoveries = 0
   let activeValidations = 0
@@ -147,6 +148,31 @@ async function fixture(options = {}) {
       connections.push(connection)
       return connection
     },
+    ...(options.executionEnabled === true
+      ? {
+          async openCodexSession(input) {
+            openCodexCalls += 1
+            if (options.openCodexError !== undefined) {
+              throw options.openCodexError
+            }
+            const providerThreadId =
+              input.providerThreadId ?? 'thread_remote_fixture'
+            return {
+              machine,
+              conversationId: input.conversationId,
+              providerThreadId,
+              resumed: input.providerThreadId !== undefined,
+              executionProfile: 'codex-text-v1',
+              async startTurn() {
+                throw new Error(
+                  'Turn execution is outside this coordinator test',
+                )
+              },
+              async close() {},
+            }
+          },
+        }
+      : {}),
   }
   return {
     directory,
@@ -172,6 +198,9 @@ async function fixture(options = {}) {
       get discovery() {
         return discoveryCalls
       },
+      get openCodex() {
+        return openCodexCalls
+      },
       get maximumActiveDiscoveries() {
         return maximumActiveDiscoveries
       },
@@ -188,10 +217,10 @@ async function fixture(options = {}) {
   }
 }
 
-function remoteProviderDiscovery() {
+function remoteProviderDiscovery(executionEnabled = false) {
   const capabilities = {
-    streaming: false,
-    resume: false,
+    streaming: executionEnabled,
+    resume: executionEnabled,
     interrupt: false,
     approvals: false,
     fileRead: false,
@@ -216,12 +245,102 @@ function remoteProviderDiscovery() {
         provider: 'claude-code',
         displayName: 'Claude Code',
         availability: 'not_installed',
-        capabilities,
+        capabilities: Object.fromEntries(
+          Object.keys(capabilities).map((capability) => [capability, false]),
+        ),
       },
     ],
     observedAt: '2026-08-31T12:00:00.000Z',
   }
 }
+
+test('current Codex discovery survives authenticated Location validation and admits the exact session open', async () => {
+  const f = await fixture({
+    discoveryEnabled: true,
+    executionEnabled: true,
+    async discoveryHandler() {
+      return remoteProviderDiscovery(true)
+    },
+  })
+  let coordinator
+  try {
+    coordinator = await SecureRemoteMachineCoordinator.create({
+      persistence: f.store,
+      transport: f.transport,
+      heartbeatIntervalMs: 1_000,
+      reconnectMaximumDelayMs: 20,
+    })
+    const candidate = await coordinator.beginPairing({
+      address: { host: '172.20.1.30', port: 4319 },
+      pairingCode: '123456',
+    })
+    const confirmed = await coordinator.confirmPairing(
+      candidate.pairingAttemptId,
+      (staged) =>
+        f.store.createRemoteMachineWithTrust(staged.machine, staged.trust),
+    )
+    await waitFor(() => f.counts.discovery >= 1, 'execution discovery')
+    const initialMachine = f.store.getMachine(confirmed.machine.machineId)
+    const initialTrust = f.store.getTrustedMachinePeer(
+      confirmed.machine.machineId,
+    )
+    assert.ok(initialMachine)
+    assert.ok(initialTrust)
+    if (
+      f.store.getRemoteProviderObservation(confirmed.machine.machineId) ===
+      undefined
+    ) {
+      await coordinator.discoverProviders(initialMachine, initialTrust)
+    }
+    assert.equal(
+      coordinator.providerExecutionAvailable(confirmed.machine.machineId),
+      true,
+      JSON.stringify({
+        state: coordinator.connectionState(confirmed.machine.machineId),
+        observation: f.store.getRemoteProviderObservation(
+          confirmed.machine.machineId,
+        ),
+        opens: f.counts.openCodex,
+      }),
+    )
+    const validationStates = []
+    const unsubscribe = coordinator.subscribeStatus((_machineId, state) => {
+      validationStates.push(state)
+    })
+    const machine = f.store.getMachine(confirmed.machine.machineId)
+    const trust = f.store.getTrustedMachinePeer(confirmed.machine.machineId)
+    assert.ok(machine)
+    assert.ok(trust)
+    const discoveryBeforeValidation = f.counts.discovery
+
+    const validated = await coordinator.validateProjectLocation(
+      machine,
+      trust,
+      '/srv/projects/workspace',
+    )
+    assert.equal(validated.canonicalPath, '/srv/projects/workspace')
+    assert.ok(f.counts.discovery > discoveryBeforeValidation)
+    assert.equal(
+      coordinator.providerExecutionAvailable(machine.machineId),
+      true,
+    )
+    assert.equal(validationStates.includes('connecting'), false)
+
+    const session = await coordinator.openCodexSession(machine, trust, {
+      conversationId: 'conv_remote_coordinator',
+      projectId: 'proj_remote_coordinator',
+      rootPath: validated.canonicalPath,
+    })
+    assert.equal(session.machineId, machine.machineId)
+    assert.equal(session.conversationId, 'conv_remote_coordinator')
+    assert.equal(session.providerThreadId, 'thread_remote_fixture')
+    assert.equal(f.counts.openCodex, 1)
+    await session.close()
+    unsubscribe()
+  } finally {
+    await f.close(coordinator)
+  }
+})
 
 test('serializes purpose-specific ProjectLocation validation and keeps pinned trust healthy on path errors', async () => {
   let releaseFirstValidation

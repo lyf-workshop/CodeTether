@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
+import { resolve } from 'node:path'
 import { PassThrough } from 'node:stream'
 import test from 'node:test'
 
@@ -23,7 +24,7 @@ class FakeChildProcess extends EventEmitter {
   }
 }
 
-function createHarness(options = {}) {
+function createHarness(options = {}, executionProfile = 'local') {
   const child = new FakeChildProcess()
   const written = []
   let buffered = ''
@@ -41,7 +42,7 @@ function createHarness(options = {}) {
 
   return {
     child,
-    client: new CodexAppServerClient(child, options),
+    client: new CodexAppServerClient(child, options, executionProfile),
     written,
   }
 }
@@ -49,6 +50,254 @@ function createHarness(options = {}) {
 async function nextTurn() {
   await new Promise((resolve) => setImmediate(resolve))
 }
+
+test('local initialization capabilities remain unchanged', async () => {
+  const { child, client, written } = createHarness()
+  const initialized = client.initialize({
+    name: 'codetether',
+    title: 'CodeTether',
+    version: 'test',
+  })
+  await nextTurn()
+
+  assert.deepEqual(written[0], {
+    id: written[0].id,
+    method: 'initialize',
+    params: {
+      clientInfo: {
+        name: 'codetether',
+        title: 'CodeTether',
+        version: 'test',
+      },
+      capabilities: {
+        experimentalApi: false,
+        requestAttestation: false,
+      },
+    },
+  })
+  child.stdout.write(
+    `${JSON.stringify({
+      id: written[0].id,
+      result: {
+        userAgent: 'codex-test',
+        codexHome: '/isolated',
+        platformFamily: 'unix',
+        platformOs: 'linux',
+      },
+    })}\n`,
+  )
+  await initialized
+  await nextTurn()
+  assert.deepEqual(written[1], { method: 'initialized' })
+})
+
+test('remote text-only thread, resume, and turn requests are fixed', async () => {
+  const cwd = resolve('remote project with spaces')
+  const { child, client, written } = createHarness({}, 'remote-text-only')
+
+  const startedThread = client.startRemoteTextThread({ cwd })
+  await nextTurn()
+  assert.deepEqual(written[0], {
+    id: written[0].id,
+    method: 'thread/start',
+    params: {
+      cwd,
+      approvalPolicy: 'never',
+      approvalsReviewer: 'user',
+      sandbox: 'read-only',
+      ephemeral: false,
+      environments: [],
+      runtimeWorkspaceRoots: [],
+      dynamicTools: [],
+      selectedCapabilityRoots: [],
+      config: {
+        web_search: 'disabled',
+        tools: {
+          update_plan: { enabled: false },
+          experimental_request_user_input: { enabled: false },
+        },
+        orchestrator: {
+          skills: { enabled: false },
+          mcp: { enabled: false },
+        },
+      },
+      serviceName: 'CodeTether',
+    },
+  })
+  child.stdout.write(
+    `${JSON.stringify({
+      id: written[0].id,
+      result: {
+        thread: { id: 'thread-remote', cwd },
+        model: 'gpt-5',
+        modelProvider: 'openai',
+        cwd,
+      },
+    })}\n`,
+  )
+  assert.equal((await startedThread).thread.id, 'thread-remote')
+
+  const resumedThread = client.resumeRemoteTextThread({
+    threadId: 'thread-remote',
+    cwd,
+  })
+  await nextTurn()
+  assert.deepEqual(written[1], {
+    id: written[1].id,
+    method: 'thread/resume',
+    params: {
+      threadId: 'thread-remote',
+      cwd,
+      approvalPolicy: 'never',
+      approvalsReviewer: 'user',
+      sandbox: 'read-only',
+      runtimeWorkspaceRoots: [],
+      config: {
+        web_search: 'disabled',
+        tools: {
+          update_plan: { enabled: false },
+          experimental_request_user_input: { enabled: false },
+        },
+        orchestrator: {
+          skills: { enabled: false },
+          mcp: { enabled: false },
+        },
+      },
+    },
+  })
+  child.stdout.write(
+    `${JSON.stringify({
+      id: written[1].id,
+      result: {
+        thread: { id: 'thread-remote', cwd },
+        model: 'gpt-5',
+        modelProvider: 'openai',
+        cwd,
+      },
+    })}\n`,
+  )
+  assert.equal((await resumedThread).thread.id, 'thread-remote')
+
+  const startedTurn = client.startRemoteTextTurn({
+    threadId: 'thread-remote',
+    prompt: 'bounded prompt',
+  })
+  await nextTurn()
+  assert.deepEqual(written[2], {
+    id: written[2].id,
+    method: 'turn/start',
+    params: {
+      threadId: 'thread-remote',
+      input: [
+        {
+          type: 'text',
+          text: 'bounded prompt',
+          text_elements: [],
+        },
+      ],
+      approvalPolicy: 'never',
+      approvalsReviewer: 'user',
+      sandboxPolicy: { type: 'readOnly', networkAccess: false },
+      environments: [],
+      runtimeWorkspaceRoots: [],
+    },
+  })
+  child.stdout.write(
+    `${JSON.stringify({
+      id: written[2].id,
+      result: { turn: { id: 'turn-remote', status: 'inProgress' } },
+    })}\n`,
+  )
+  assert.equal((await startedTurn).turn.id, 'turn-remote')
+})
+
+test('local and remote client operations cannot cross execution profiles', async () => {
+  const cwd = resolve('remote-profile-boundary')
+  const local = createHarness().client
+  const remote = createHarness({}, 'remote-text-only').client
+
+  await assert.rejects(
+    local.startRemoteTextThread({ cwd }),
+    /Operation is unavailable for Codex execution profile local/,
+  )
+  await assert.rejects(
+    remote.startThread({ cwd }),
+    /Operation is unavailable for Codex execution profile remote-text-only/,
+  )
+  await assert.rejects(
+    remote.interruptTurn({ threadId: 'thread', turnId: 'turn' }),
+    /Operation is unavailable for Codex execution profile remote-text-only/,
+  )
+})
+
+test('notification policy rejects raw provider events before normalization', async () => {
+  const diagnostics = []
+  const { child, client } = createHarness({
+    validateNotification: (notification) => {
+      if (notification.method.startsWith('item/commandExecution/')) {
+        throw new Error('tool notification denied')
+      }
+    },
+    onError: (error) => diagnostics.push(error.message),
+  })
+  const terminal = client.waitForTurn('thread-remote', 'turn-remote', 1_000)
+
+  writeNotification(child, 'item/commandExecution/started', {
+    threadId: 'thread-remote',
+    turnId: 'turn-remote',
+    item: { id: 'command', type: 'commandExecution' },
+  })
+
+  await assert.rejects(
+    terminal,
+    /Codex notification was rejected by the execution policy/,
+  )
+  assert.deepEqual(client.observedRawMethods, [])
+  assert.deepEqual(diagnostics, [
+    'Codex notification was rejected by the execution policy',
+  ])
+})
+
+test('remote text-only profile rejects every server request fail closed', async () => {
+  const diagnostics = []
+  const { child, client, written } = createHarness(
+    { onError: (error) => diagnostics.push(error.message) },
+    'remote-text-only',
+  )
+  const terminal = client.waitForTurn('thread-remote', 'turn-remote', 1_000)
+  const terminalRejected = assert.rejects(
+    terminal,
+    /Remote text-only Codex emitted an unsupported server request/,
+  )
+
+  child.stdout.write(
+    `${JSON.stringify({
+      id: 94,
+      method: 'item/commandExecution/requestApproval',
+      params: {
+        threadId: 'thread-remote',
+        turnId: 'turn-remote',
+        itemId: 'command',
+        command: 'echo unsafe',
+      },
+    })}\n`,
+  )
+  await nextTurn()
+
+  assert.deepEqual(written, [
+    {
+      id: 94,
+      error: {
+        code: -32601,
+        message: 'Remote text-only execution does not accept server requests',
+      },
+    },
+  ])
+  await terminalRejected
+  assert.deepEqual(diagnostics, [
+    'Remote text-only Codex emitted an unsupported server request',
+  ])
+})
 
 test('emits and answers a one-shot command approval request', async () => {
   const events = []

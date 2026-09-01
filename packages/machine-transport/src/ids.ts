@@ -24,6 +24,34 @@ export const PairingAttemptIdSchema = z
   .regex(/^pairing_[A-Za-z0-9][A-Za-z0-9_-]{5,95}$/)
 export type PairingAttemptId = z.infer<typeof PairingAttemptIdSchema>
 
+export const MachineTransportConversationIdSchema = z
+  .string()
+  .regex(/^conv_[A-Za-z0-9][A-Za-z0-9_-]{5,95}$/)
+export type MachineTransportConversationId = z.infer<
+  typeof MachineTransportConversationIdSchema
+>
+
+export const MachineTransportProjectIdSchema = z
+  .string()
+  .regex(/^proj_[A-Za-z0-9][A-Za-z0-9_-]{5,95}$/)
+export type MachineTransportProjectId = z.infer<
+  typeof MachineTransportProjectIdSchema
+>
+
+export const MachineTransportActionIdSchema = z
+  .string()
+  .regex(/^act_[A-Za-z0-9][A-Za-z0-9_-]{5,95}$/)
+export type MachineTransportActionId = z.infer<
+  typeof MachineTransportActionIdSchema
+>
+
+export const MachineTransportTurnIdSchema = z
+  .string()
+  .regex(/^turn_[A-Za-z0-9][A-Za-z0-9_-]{5,95}$/)
+export type MachineTransportTurnId = z.infer<
+  typeof MachineTransportTurnIdSchema
+>
+
 export function newMachineTransportMachineId(): MachineTransportMachineId {
   return MachineTransportMachineIdSchema.parse(`machine_${compactUuid()}`)
 }

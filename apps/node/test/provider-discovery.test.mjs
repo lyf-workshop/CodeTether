@@ -4,7 +4,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 
-import { RemoteProviderDetector } from '../dist/provider-discovery.js'
+import {
+  RemoteProviderDetector,
+  isRemoteCodexExecutionVersion,
+  supportsRemoteCodexExecutionPlatform,
+} from '../dist/provider-discovery.js'
 
 const fixedNow = new Date('2026-08-31T12:34:56.000Z')
 
@@ -34,7 +38,7 @@ function detector(codexScript, claudeScript, options = {}) {
   })
 }
 
-test('bounded discovery returns safe versions and no remote execution capabilities', async () => {
+test('bounded discovery advertises only the Codex text execution foundation', async () => {
   const instance = detector(
     "process.stdout.write('codex-cli 0.149.1')",
     "process.stdout.write('2.1.251 (Claude Code)')",
@@ -61,10 +65,52 @@ test('bounded discovery returns safe versions and no remote execution capabiliti
       ],
     )
     for (const provider of result.providers) {
-      assert.equal(Object.values(provider.capabilities).some(Boolean), false)
+      assert.deepEqual(
+        Object.entries(provider.capabilities)
+          .filter(([, enabled]) => enabled)
+          .map(([capability]) => capability)
+          .sort(),
+        provider.provider === 'codex' && supportsRemoteCodexExecutionPlatform()
+          ? ['resume', 'streaming']
+          : [],
+      )
       assert.equal('executablePath' in provider, false)
       assert.equal('rawOutput' in provider, false)
     }
+  } finally {
+    await instance.close()
+  }
+})
+
+test('production remote Codex execution is gated to the tested version', () => {
+  assert.equal(isRemoteCodexExecutionVersion('0.149.1'), true)
+  assert.equal(isRemoteCodexExecutionVersion('0.149.0'), false)
+  assert.equal(isRemoteCodexExecutionVersion('0.150.0'), false)
+  assert.equal(supportsRemoteCodexExecutionPlatform('linux'), true)
+  assert.equal(supportsRemoteCodexExecutionPlatform('darwin'), true)
+  assert.equal(supportsRemoteCodexExecutionPlatform('win32'), false)
+})
+
+test('valid untested Codex remains discoverable without execution capabilities', async () => {
+  const instance = new RemoteProviderDetector({
+    probes: [
+      probe('codex', "process.stdout.write('codex-cli 0.151.0')", {
+        isSupportedVersion: isRemoteCodexExecutionVersion,
+      }),
+      probe('claude-code', "process.stdout.write('2.1.251 (Claude Code)')"),
+    ],
+    timeoutMs: 500,
+    maximumOutputBytes: 128,
+    now: () => fixedNow,
+  })
+  try {
+    const [codex] = (await instance.discover()).providers
+    assert.equal(codex.availability, 'available')
+    assert.equal(codex.version, '0.151.0')
+    assert.equal(
+      Object.values(codex.capabilities).some((enabled) => enabled),
+      false,
+    )
   } finally {
     await instance.close()
   }

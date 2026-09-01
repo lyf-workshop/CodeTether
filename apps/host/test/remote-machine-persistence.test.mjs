@@ -299,16 +299,29 @@ test('remote Provider observations are strict, durable, replace atomically, and 
           ),
           observedAt: timestamp,
         }),
-      /execution capabilities are not enabled/u,
+      /exceed the Codex execution foundation/u,
+    )
+    const executionFoundation = remoteProviderDescriptors('1.0.0').map(
+      (provider) =>
+        provider.provider === 'codex'
+          ? {
+              ...provider,
+              capabilities: {
+                ...provider.capabilities,
+                streaming: true,
+                resume: true,
+              },
+            }
+          : provider,
     )
     const recorded = store.recordRemoteProviderObservation({
       machineId: pending.machine.machineId,
-      providers: remoteProviderDescriptors('1.0.0'),
+      providers: executionFoundation,
       observedAt: timestamp,
     })
     assert.deepEqual(recorded, {
       machineId: pending.machine.machineId,
-      providers: remoteProviderDescriptors('1.0.0'),
+      providers: executionFoundation,
       observedAt: timestamp,
     })
     store.recordRemoteProviderObservation({

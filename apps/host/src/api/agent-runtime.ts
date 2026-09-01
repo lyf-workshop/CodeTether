@@ -4,6 +4,13 @@ import type {
   ApprovalKind,
 } from '@codetether/agent-core'
 import type { ProviderDescriptor } from '@codetether/protocol'
+import type {
+  ActionId,
+  ConversationId,
+  MachineId,
+  ProjectId,
+  TurnId,
+} from '@codetether/protocol'
 
 export type PublicApprovalDecision = 'accept' | 'decline'
 export type ProviderRequestId = string | number
@@ -15,6 +22,20 @@ export interface ProviderConversationResult {
 
 export interface ProviderTurnResult {
   readonly providerTurnId: string
+}
+
+/**
+ * Host-private routing identity supplied by the generic Conversation service.
+ * Local adapters may ignore it. A Machine-scoped adapter must fail closed when
+ * any required identity is absent instead of accepting caller-controlled
+ * executable, argv, or working-directory data.
+ */
+export interface ProviderRuntimeContext {
+  readonly conversationId?: ConversationId
+  readonly projectId?: ProjectId
+  readonly machineId?: MachineId
+  readonly actionId?: ActionId
+  readonly turnId?: TurnId
 }
 
 /**
@@ -69,25 +90,31 @@ export interface AgentHostRuntime {
     onRequest: (request: ProviderApprovalRequest) => void,
     onResolved: (resolution: ProviderApprovalResolution) => void,
   ): () => void
-  startConversation(options: {
-    readonly cwd: string
-    readonly model?: string
-    readonly reasoning?: string
-  }): Promise<ProviderConversationResult>
-  resumeConversation(options: {
-    readonly providerThreadId: string
-    readonly cwd: string
-    /** True only after at least one durable Provider Turn has been created. */
-    readonly providerSessionMaterialized: boolean
-  }): Promise<ProviderConversationResult>
-  startTurn(options: {
-    readonly providerThreadId: string
-    /** Re-authorized for every Turn; process-per-Turn Providers must use it. */
-    readonly cwd: string
-    readonly input: string
-    readonly model?: string
-    readonly reasoning?: string
-  }): Promise<ProviderTurnResult>
+  startConversation(
+    options: {
+      readonly cwd: string
+      readonly model?: string
+      readonly reasoning?: string
+    } & ProviderRuntimeContext,
+  ): Promise<ProviderConversationResult>
+  resumeConversation(
+    options: {
+      readonly providerThreadId: string
+      readonly cwd: string
+      /** True only after at least one durable Provider Turn has been created. */
+      readonly providerSessionMaterialized: boolean
+    } & ProviderRuntimeContext,
+  ): Promise<ProviderConversationResult>
+  startTurn(
+    options: {
+      readonly providerThreadId: string
+      /** Re-authorized for every Turn; process-per-Turn Providers must use it. */
+      readonly cwd: string
+      readonly input: string
+      readonly model?: string
+      readonly reasoning?: string
+    } & ProviderRuntimeContext,
+  ): Promise<ProviderTurnResult>
   interruptTurn(options: {
     readonly providerThreadId: string
     readonly providerTurnId: string
@@ -96,5 +123,7 @@ export interface AgentHostRuntime {
   disposeConversation?(options: {
     readonly providerThreadId: string
   }): Promise<void>
+  /** Process-local liveness only; durable Provider identity remains Host-owned. */
+  hasConversationSession?(providerThreadId: string): boolean
   close(): Promise<void>
 }

@@ -25,6 +25,14 @@ const NO_REMOTE_EXECUTION_CAPABILITIES: RemoteProviderCapabilities =
     reasoningControl: false,
   })
 
+const REMOTE_CODEX_TEXT_CAPABILITIES: RemoteProviderCapabilities =
+  Object.freeze({
+    ...NO_REMOTE_EXECUTION_CAPABILITIES,
+    streaming: true,
+    resume: true,
+  })
+
+const REMOTE_CODEX_EXECUTION_TESTED_VERSIONS = new Set(['0.149.1'])
 const CLAUDE_CODE_TESTED_VERSIONS = new Set(['2.1.250', '2.1.251'])
 const SEMANTIC_VERSION = String.raw`\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?`
 const CODEX_VERSION_PATTERN = new RegExp(
@@ -54,6 +62,8 @@ export interface RemoteProviderDetectorOptions {
   readonly timeoutMs?: number
   readonly maximumOutputBytes?: number
   readonly now?: () => Date
+  /** Internal test seam; remote callers cannot select the Node platform. */
+  readonly platform?: NodeJS.Platform
 }
 
 const DEFAULT_PROBES: readonly ProviderProbeDefinition[] = Object.freeze([
@@ -63,9 +73,11 @@ const DEFAULT_PROBES: readonly ProviderProbeDefinition[] = Object.freeze([
     executable: 'codex',
     arguments: ['--version'],
     parseVersion: (output) => CODEX_VERSION_PATTERN.exec(output)?.[1],
-    // Local Codex currently has no narrower tested-version gate. Discovery
-    // still advertises no remote execution capability in this phase.
-    isSupportedVersion: () => true,
+    // The remote text execution profile is a narrower boundary than local
+    // Codex. Only versions exercised against that exact profile may advertise
+    // streaming/resume; other real installations remain visible by version but
+    // fail closed as unsupported.
+    isSupportedVersion: isRemoteCodexExecutionVersion,
   },
   {
     provider: 'claude-code',
@@ -77,6 +89,19 @@ const DEFAULT_PROBES: readonly ProviderProbeDefinition[] = Object.freeze([
   },
 ])
 
+export function isRemoteCodexExecutionVersion(version: string): boolean {
+  return REMOTE_CODEX_EXECUTION_TESTED_VERSIONS.has(version)
+}
+
+export function supportsRemoteCodexExecutionPlatform(
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  // POSIX detached process groups permit exact remote-only descendant cleanup.
+  // Windows remains discovery-only until the Node owns an equivalent Job
+  // Object boundary; an installed CLI alone is not execution capability.
+  return platform !== 'win32'
+}
+
 /**
  * Node-owned, purpose-specific Provider version detector. It accepts no input
  * from the Machine protocol beyond the fixed `providers.describe` operation.
@@ -87,6 +112,7 @@ export class RemoteProviderDetector {
   readonly #timeoutMs: number
   readonly #maximumOutputBytes: number
   readonly #now: () => Date
+  readonly #executionPlatformSupported: boolean
   readonly #children = new Set<ChildProcess>()
   #inFlight?: Promise<RemoteProviderDiscovery>
   #closed = false
@@ -106,6 +132,9 @@ export class RemoteProviderDetector {
       'Provider probe output limit',
     )
     this.#now = options.now ?? (() => new Date())
+    this.#executionPlatformSupported = supportsRemoteCodexExecutionPlatform(
+      options.platform,
+    )
   }
 
   discover(): Promise<RemoteProviderDiscovery> {
@@ -163,12 +192,23 @@ export class RemoteProviderDetector {
     if (version === undefined || version.length > 120) {
       return { ...base, availability: 'misconfigured' }
     }
+    const executionVersionSupported = probe.isSupportedVersion(version)
     return {
       ...base,
-      availability: probe.isSupportedVersion(version)
-        ? 'available'
-        : 'unsupported_version',
+      // Frozen Phase 6C.1 discovery truth describes the real installation.
+      // Codex execution has a narrower version gate, but an untested valid
+      // Codex binary remains installed/available rather than being relabelled.
+      availability:
+        probe.provider === 'codex' || executionVersionSupported
+          ? 'available'
+          : 'unsupported_version',
       version,
+      capabilities:
+        probe.provider === 'codex' &&
+        executionVersionSupported &&
+        this.#executionPlatformSupported
+          ? REMOTE_CODEX_TEXT_CAPABILITIES
+          : NO_REMOTE_EXECUTION_CAPABILITIES,
     }
   }
 }

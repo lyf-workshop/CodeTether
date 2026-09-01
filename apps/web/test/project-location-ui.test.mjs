@@ -93,7 +93,7 @@ test('Remote Location removal is explicit, metadata-only, and keyboard accessibl
   assert.match(actions, /project_location_local_required/u)
 })
 
-test('Remote Machine keeps Projects readable but execution and destructive unpair remain gated', async () => {
+test('Remote Machine keeps Projects readable while remote execution and destructive unpair remain capability-gated', async () => {
   const [detail, projects, unpair] = await Promise.all([
     source('components/machines/machine-detail-page.tsx'),
     source('components/machines/machine-projects-section.tsx'),
@@ -105,7 +105,8 @@ test('Remote Machine keeps Projects readable but execution and destructive unpai
     detail,
     /<MachineProjectsSection machine=\{machine\} projects=\{projects\}/u,
   )
-  assert.match(detail, /远程智能体与会话执行仍未启用/u)
+  assert.match(detail, /machine\.capabilities\.providerExecution/u)
+  assert.match(detail, /当前连接或智能体尚未满足远程执行条件/u)
   assert.match(detail, /disabled=\{projects\.length > 0\}/u)
   assert.match(projects, /projects\.map/u)
   assert.match(projects, /projectLocationForMachine/u)

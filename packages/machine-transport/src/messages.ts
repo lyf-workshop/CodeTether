@@ -3,7 +3,11 @@ import { z } from 'zod'
 import { machineProtocolVersion, machineTransportLimits } from './constants.js'
 import {
   ControllerIdSchema,
+  MachineTransportActionIdSchema,
+  MachineTransportConversationIdSchema,
   MachineTransportMachineIdSchema,
+  MachineTransportProjectIdSchema,
+  MachineTransportTurnIdSchema,
   NodeIdSchema,
   PairingAttemptIdSchema,
 } from './ids.js'
@@ -17,6 +21,35 @@ const TimestampSchema = z.iso.datetime({ offset: true })
 const BoundedOpaqueEnvelopeSchema = z.string().min(1).max(4096)
 const NonceSchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/)
 const AuthenticationTagSchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/)
+
+export const RemoteCodexProviderIdentitySchema = z
+  .string()
+  .min(1)
+  .max(machineTransportLimits.maximumRemoteCodexProviderIdentityBytes)
+  .regex(/^[\x21-\x7e]+$/)
+export type RemoteCodexProviderIdentity = z.infer<
+  typeof RemoteCodexProviderIdentitySchema
+>
+
+export const RemoteCodexPromptSchema = z
+  .string()
+  .min(1)
+  .refine((value) => !value.includes('\0'))
+  .refine(
+    (value) =>
+      Buffer.byteLength(value, 'utf8') <=
+      machineTransportLimits.maximumRemoteCodexPromptBytes,
+  )
+export type RemoteCodexPrompt = z.infer<typeof RemoteCodexPromptSchema>
+
+const RemoteCodexDeltaSchema = z
+  .string()
+  .min(1)
+  .refine(
+    (value) =>
+      Buffer.byteLength(value, 'utf8') <=
+      machineTransportLimits.maximumRemoteCodexDeltaBytes,
+  )
 
 export const RemoteProjectLocationPathSchema = z
   .string()
@@ -266,11 +299,21 @@ export const RemoteProviderDescriptorSchema = z
   })
   .strict()
   .superRefine((descriptor, context) => {
-    if (Object.values(descriptor.capabilities).some(Boolean)) {
+    const enabled = Object.entries(descriptor.capabilities)
+      .filter(([, value]) => value)
+      .map(([capability]) => capability)
+      .sort()
+    const remoteCodexTextFoundation =
+      descriptor.provider === 'codex' &&
+      descriptor.availability === 'available' &&
+      enabled.length === 2 &&
+      enabled[0] === 'resume' &&
+      enabled[1] === 'streaming'
+    if (enabled.length > 0 && !remoteCodexTextFoundation) {
       context.addIssue({
         code: 'custom',
         message:
-          'Remote Provider execution capabilities are unavailable in Machine protocol v1',
+          'Remote Provider capabilities exceed the Codex text execution foundation',
         path: ['capabilities'],
       })
     }
@@ -325,6 +368,148 @@ export type ProvidersDescribedMessage = z.infer<
   typeof ProvidersDescribedMessageSchema
 >
 
+export const RemoteCodexExecutionProfileSchema = z.literal('codex-text-v1')
+export type RemoteCodexExecutionProfile = z.infer<
+  typeof RemoteCodexExecutionProfileSchema
+>
+
+export const CodexSessionOpenMessageSchema = z
+  .object({
+    type: z.literal('codex.session.open'),
+    protocolVersion: VersionField,
+    requestId: NonceSchema,
+    expectedMachineId: MachineTransportMachineIdSchema,
+    expectedNodeId: NodeIdSchema,
+    conversationId: MachineTransportConversationIdSchema,
+    projectId: MachineTransportProjectIdSchema,
+    rootPath: RemoteProjectLocationPathSchema,
+    providerThreadId: RemoteCodexProviderIdentitySchema.optional(),
+  })
+  .strict()
+export type CodexSessionOpenMessage = z.infer<
+  typeof CodexSessionOpenMessageSchema
+>
+
+export const CodexSessionReadyMessageSchema = z
+  .object({
+    type: z.literal('codex.session.ready'),
+    protocolVersion: VersionField,
+    requestId: NonceSchema,
+    machineId: MachineTransportMachineIdSchema,
+    nodeId: NodeIdSchema,
+    conversationId: MachineTransportConversationIdSchema,
+    providerThreadId: RemoteCodexProviderIdentitySchema,
+    resumed: z.boolean(),
+    executionProfile: RemoteCodexExecutionProfileSchema,
+  })
+  .strict()
+export type CodexSessionReadyMessage = z.infer<
+  typeof CodexSessionReadyMessageSchema
+>
+
+export const CodexTurnStartMessageSchema = z
+  .object({
+    type: z.literal('codex.turn.start'),
+    protocolVersion: VersionField,
+    actionId: MachineTransportActionIdSchema,
+    conversationId: MachineTransportConversationIdSchema,
+    turnId: MachineTransportTurnIdSchema,
+    providerThreadId: RemoteCodexProviderIdentitySchema,
+    prompt: RemoteCodexPromptSchema,
+  })
+  .strict()
+export type CodexTurnStartMessage = z.infer<typeof CodexTurnStartMessageSchema>
+
+export const CodexTurnStartedMessageSchema = z
+  .object({
+    type: z.literal('codex.turn.started'),
+    protocolVersion: VersionField,
+    machineId: MachineTransportMachineIdSchema,
+    nodeId: NodeIdSchema,
+    actionId: MachineTransportActionIdSchema,
+    conversationId: MachineTransportConversationIdSchema,
+    turnId: MachineTransportTurnIdSchema,
+    providerThreadId: RemoteCodexProviderIdentitySchema,
+    providerTurnId: RemoteCodexProviderIdentitySchema,
+  })
+  .strict()
+export type CodexTurnStartedMessage = z.infer<
+  typeof CodexTurnStartedMessageSchema
+>
+
+export const RemoteCodexTurnFailureCodeSchema = z.enum([
+  'provider_start_failed',
+  'provider_session_lost',
+  'remote_execution_lost',
+  'remote_policy_violation',
+  'provider_failed',
+])
+export type RemoteCodexTurnFailureCode = z.infer<
+  typeof RemoteCodexTurnFailureCodeSchema
+>
+
+export const RemoteCodexTurnEventPayloadSchema = z.discriminatedUnion('type', [
+  z
+    .object({ type: z.literal('message.delta'), text: RemoteCodexDeltaSchema })
+    .strict(),
+  z.object({ type: z.literal('message.completed') }).strict(),
+  z.object({ type: z.literal('turn.completed') }).strict(),
+  z
+    .object({
+      type: z.literal('turn.failed'),
+      code: RemoteCodexTurnFailureCodeSchema,
+      message: z.string().trim().min(1).max(240),
+    })
+    .strict(),
+])
+export type RemoteCodexTurnEventPayload = z.infer<
+  typeof RemoteCodexTurnEventPayloadSchema
+>
+
+export const CodexTurnEventMessageSchema = z
+  .object({
+    type: z.literal('codex.turn.event'),
+    protocolVersion: VersionField,
+    machineId: MachineTransportMachineIdSchema,
+    nodeId: NodeIdSchema,
+    actionId: MachineTransportActionIdSchema,
+    conversationId: MachineTransportConversationIdSchema,
+    turnId: MachineTransportTurnIdSchema,
+    providerThreadId: RemoteCodexProviderIdentitySchema,
+    providerTurnId: RemoteCodexProviderIdentitySchema,
+    sequence: z.number().int().positive().safe(),
+    event: RemoteCodexTurnEventPayloadSchema,
+  })
+  .strict()
+export type CodexTurnEventMessage = z.infer<typeof CodexTurnEventMessageSchema>
+
+export const CodexSessionDisposeMessageSchema = z
+  .object({
+    type: z.literal('codex.session.dispose'),
+    protocolVersion: VersionField,
+    requestId: NonceSchema,
+    conversationId: MachineTransportConversationIdSchema,
+    providerThreadId: RemoteCodexProviderIdentitySchema,
+  })
+  .strict()
+export type CodexSessionDisposeMessage = z.infer<
+  typeof CodexSessionDisposeMessageSchema
+>
+
+export const CodexSessionDisposedMessageSchema = z
+  .object({
+    type: z.literal('codex.session.disposed'),
+    protocolVersion: VersionField,
+    requestId: NonceSchema,
+    machineId: MachineTransportMachineIdSchema,
+    nodeId: NodeIdSchema,
+    conversationId: MachineTransportConversationIdSchema,
+  })
+  .strict()
+export type CodexSessionDisposedMessage = z.infer<
+  typeof CodexSessionDisposedMessageSchema
+>
+
 export const TrustRevokeMessageSchema = z
   .object({
     type: z.literal('trust.revoke'),
@@ -359,6 +544,14 @@ export const MachineWireErrorCodeSchema = z.enum([
   'project_location_missing',
   'project_location_not_directory',
   'project_location_inaccessible',
+  'remote_execution_unavailable',
+  'provider_unavailable',
+  'provider_start_failed',
+  'provider_session_lost',
+  'remote_execution_lost',
+  'remote_policy_violation',
+  'conversation_busy',
+  'duplicate_action_conflict',
 ])
 export type MachineWireErrorCode = z.infer<typeof MachineWireErrorCodeSchema>
 
@@ -390,6 +583,13 @@ export const MachineWireMessageSchema = z.discriminatedUnion('type', [
   ProjectLocationValidatedMessageSchema,
   ProvidersDescribeMessageSchema,
   ProvidersDescribedMessageSchema,
+  CodexSessionOpenMessageSchema,
+  CodexSessionReadyMessageSchema,
+  CodexTurnStartMessageSchema,
+  CodexTurnStartedMessageSchema,
+  CodexTurnEventMessageSchema,
+  CodexSessionDisposeMessageSchema,
+  CodexSessionDisposedMessageSchema,
   TrustRevokeMessageSchema,
   TrustRevokedMessageSchema,
   MachineErrorMessageSchema,

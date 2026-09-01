@@ -936,7 +936,7 @@ Exit gate:
 
 ## Phase 6C.1 — Remote Provider Discovery & Capability Foundation
 
-**Status:** current approved implementation scope; not accepted or frozen.
+**Status:** accepted and frozen at `466d63c`.
 
 **Goal:** let a trusted remote Node describe the coding-agent CLIs actually present on its Machine without enabling remote Conversation or Provider execution.
 
@@ -955,6 +955,28 @@ Exit gate:
 ### Exit gate
 
 - A real trusted Node reports truthful Codex/Claude installation and version state; refresh/reconnect/offline last-known behavior stays bounded and identity-authenticated; malformed or hostile probes fail safely; no detection child remains; remote Conversation creation stays impossible; frozen local/remote lifecycle behavior, installed Desktop, tests, cleanup, and clean build identity pass.
+
+## Phase 6C.2 — Remote Codex Execution Foundation
+
+**Status:** current approved implementation scope; not accepted or frozen.
+
+**Goal:** execute and natively resume one real Codex Conversation on an exact trusted remote Machine and its already registered Project Location, while preserving the canonical durable Conversation/Turn model and the bounded Machine security boundary.
+
+### In scope
+
+- The ordinary provider-neutral Conversation create/start APIs may select a remote Machine only when it is trusted, online, owns the selected Project Location, has a current supported Codex observation, and advertises the exact remote text-execution foundation.
+- One closed authenticated Machine-transport session family for exact Codex session open/resume, bounded Prompt submission, normalized text deltas/completion, and safe terminal failure. It accepts no executable, argv, environment, model, arbitrary cwd, shell, generic RPC method, or filesystem command.
+- Node-owned exact Codex App Server children under a fixed text-only profile: native persistent thread identity and resume, `never` Approval, read-only sandbox with tool network disabled, and hooks/plugins/MCP/browser/computer/shell/file/Tool surfaces disabled. Any unexpected Tool, file, Approval, server request, or unknown raw notification fails closed.
+- Durable Host-owned Conversation, Turn, Search, organization, Attention, Machine, Project, and Project Location truth. Private native Provider identity crosses only the authenticated internal boundary; cold reads and metadata mutations never open a remote Provider session.
+- Exact child ownership, bounded output/backpressure, eight-Conversation shared hydration budget, action-id duplicate suppression, truthful offline UI, local/remote Codex isolation, background Tray completion, native resume after Host/Desktop and Node restart, and REAL WSL2 validation.
+
+### Out of scope
+
+- Remote Claude Code, Read/Search Tools unless separately proven enforceable, Edit/Write, shell, Diff, Approval, interrupt, model/reasoning controls, remote Terminal/filesystem browser, arbitrary process/argv/environment/cwd, Project Location creation/relocation, sync, SSH, relay, Internet transport, LAN discovery, Machine/Provider switching, or transcript-replay resume.
+
+### Exit gate
+
+- A REAL trusted WSL2 Node creates, streams, durably completes, and natively resumes the same remote Codex thread after both Host/Desktop and Node restart; exact registered Location and cryptographic Machine identity are enforced; ambiguous loss never replays a Prompt; duplicate actions do not duplicate Turns/processes; cold Search/organization reads stay remote-independent; local Providers and frozen Machine/Location lifecycles remain correct; package/install, cleanup, tests, and clean build identity pass.
 
 ## Phase 7 — Remote LAN / Tailscale
 

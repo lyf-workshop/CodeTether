@@ -334,9 +334,9 @@ export function mutationErrorMessage(error: unknown, fallback: string): string {
       return `智能体未能${fallback}。`
     case 'provider_session_lost':
     case 'provider_conversation_unavailable':
-      return '智能体已无法恢复此会话；本地历史仍可查看。'
+      return '智能体已无法恢复此会话；会话历史仍可查看。'
     case 'project_unavailable':
-      return '项目工作区当前不可用；本地历史仍可查看。'
+      return '项目工作区当前不可用；会话历史仍可查看。'
     case 'conversation_archived':
       return '该会话已归档，请先取消归档后再继续。'
     case 'project_has_conversations':

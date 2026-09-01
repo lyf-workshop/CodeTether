@@ -4,8 +4,18 @@ import { machineProtocolVersion, machineTransportLimits } from './constants.js'
 import { MachineTransportError } from './errors.js'
 import { FramedMachineConnection } from './framing.js'
 import { fingerprintsEqual, type MachineTlsIdentity } from './identity.js'
-import type { ControllerId } from './ids.js'
+import type {
+  ControllerId,
+  MachineTransportActionId,
+  MachineTransportConversationId,
+  MachineTransportProjectId,
+  MachineTransportTurnId,
+} from './ids.js'
 import {
+  CodexSessionDisposedMessageSchema,
+  CodexSessionReadyMessageSchema,
+  CodexTurnEventMessageSchema,
+  CodexTurnStartedMessageSchema,
   MachineErrorMessageSchema,
   MachinePongMessageSchema,
   MachineStatusMessageSchema,
@@ -18,8 +28,11 @@ import {
   RemoteProjectLocationPathSchema,
   TrustRevokedMessageSchema,
   type PublicKeyFingerprint,
+  type CodexTurnEventMessage,
   type ProjectLocationValidatedMessage,
   type ProvidersDescribedMessage,
+  type RemoteCodexProviderIdentity,
+  type RemoteCodexPrompt,
   type RemoteProviderDescriptor,
   type RemoteMachineMetadata,
 } from './messages.js'
@@ -351,11 +364,51 @@ export async function connectTrustedRemoteMachine(options: {
   }
 }
 
+export interface OpenRemoteCodexSessionOptions {
+  readonly peer: TrustedRemotePeer
+  readonly controller: MachineControllerIdentity
+  readonly conversationId: MachineTransportConversationId
+  readonly projectId: MachineTransportProjectId
+  /** Durable ProjectLocation root; never accept a transient UI path here. */
+  readonly rootPath: string
+  readonly providerThreadId?: RemoteCodexProviderIdentity
+  readonly signal?: AbortSignal
+}
+
+/**
+ * Opens one dedicated authenticated execution connection for one remote
+ * Conversation. The connection cannot be used as a generic Machine channel.
+ */
+export async function openRemoteCodexSession(
+  options: OpenRemoteCodexSessionOptions,
+): Promise<RemoteCodexSession> {
+  const connection = await connectTrustedRemoteMachine({
+    peer: options.peer,
+    controller: options.controller,
+    signal: options.signal,
+  })
+  try {
+    return await connection.openCodexSession({
+      conversationId: options.conversationId,
+      projectId: options.projectId,
+      rootPath: options.rootPath,
+      ...(options.providerThreadId === undefined
+        ? {}
+        : { providerThreadId: options.providerThreadId }),
+      signal: options.signal,
+    })
+  } catch (error) {
+    connection.close()
+    throw error
+  }
+}
+
 export class AuthenticatedRemoteMachineConnection {
   readonly machine: RemoteMachineMetadata
   readonly #connection: FramedMachineConnection
   readonly #controllerId: ControllerId
   #providerDiscoveryInFlight?: Promise<RemoteProviderDiscovery>
+  #dedicated = false
 
   constructor(
     connection: FramedMachineConnection,
@@ -368,6 +421,7 @@ export class AuthenticatedRemoteMachineConnection {
   }
 
   async ping(signal?: AbortSignal): Promise<void> {
+    this.#assertGeneralPurpose()
     const nonce = newMachineNonce()
     await this.#connection.send({
       type: 'machine.ping',
@@ -394,6 +448,7 @@ export class AuthenticatedRemoteMachineConnection {
     rootPath: string,
     signal?: AbortSignal,
   ): Promise<ValidatedRemoteProjectLocation> {
+    this.#assertGeneralPurpose()
     const parsedRootPath = RemoteProjectLocationPathSchema.safeParse(rootPath)
     if (!parsedRootPath.success) {
       throw new MachineTransportError(
@@ -432,6 +487,7 @@ export class AuthenticatedRemoteMachineConnection {
   }
 
   discoverProviders(signal?: AbortSignal): Promise<RemoteProviderDiscovery> {
+    this.#assertGeneralPurpose()
     this.#providerDiscoveryInFlight ??= this.#discoverProviders(signal).finally(
       () => {
         this.#providerDiscoveryInFlight = undefined
@@ -470,6 +526,7 @@ export class AuthenticatedRemoteMachineConnection {
   }
 
   async revoke(signal?: AbortSignal): Promise<void> {
+    this.#assertGeneralPurpose()
     const nonce = newMachineNonce()
     await this.#connection.send({
       type: 'trust.revoke',
@@ -499,6 +556,76 @@ export class AuthenticatedRemoteMachineConnection {
 
   close(): void {
     this.#connection.end()
+  }
+
+  async openCodexSession(options: {
+    readonly conversationId: MachineTransportConversationId
+    readonly projectId: MachineTransportProjectId
+    readonly rootPath: string
+    readonly providerThreadId?: RemoteCodexProviderIdentity
+    readonly signal?: AbortSignal
+  }): Promise<RemoteCodexSession> {
+    this.#assertGeneralPurpose()
+    const rootPath = RemoteProjectLocationPathSchema.safeParse(options.rootPath)
+    if (!rootPath.success) {
+      throw new MachineTransportError(
+        'project_location_path_invalid',
+        'Project Location path is invalid',
+      )
+    }
+    const requestId = newMachineNonce()
+    await this.#connection.send({
+      type: 'codex.session.open',
+      protocolVersion: machineProtocolVersion,
+      requestId,
+      expectedMachineId: this.machine.machineId,
+      expectedNodeId: this.machine.nodeId,
+      conversationId: options.conversationId,
+      projectId: options.projectId,
+      rootPath: rootPath.data,
+      ...(options.providerThreadId === undefined
+        ? {}
+        : { providerThreadId: options.providerThreadId }),
+    })
+    const response = await receiveCompatibleMachineMessage(
+      this.#connection,
+      z.union([CodexSessionReadyMessageSchema, MachineErrorMessageSchema]),
+      {
+        signal: options.signal,
+        timeoutMs: machineTransportLimits.providerDiscoveryTimeoutMs,
+      },
+    )
+    if (response.type === 'machine.error') {
+      throw remoteError(response.code, response.message, true)
+    }
+    if (
+      response.requestId !== requestId ||
+      response.machineId !== this.machine.machineId ||
+      response.nodeId !== this.machine.nodeId ||
+      response.conversationId !== options.conversationId ||
+      (options.providerThreadId !== undefined &&
+        response.providerThreadId !== options.providerThreadId) ||
+      response.resumed !== (options.providerThreadId !== undefined)
+    ) {
+      this.#connection.destroy()
+      throw new MachineTransportError(
+        'identity_mismatch',
+        'Remote Codex session did not match the trusted Conversation',
+        { peerAuthenticated: true },
+      )
+    }
+    this.#dedicated = true
+    return new RemoteCodexSession(this.#connection, this.machine, response)
+  }
+
+  #assertGeneralPurpose(): void {
+    if (this.#dedicated) {
+      throw new MachineTransportError(
+        'conversation_busy',
+        'Machine connection is dedicated to a remote Codex session',
+        { peerAuthenticated: true },
+      )
+    }
   }
 
   #assertProjectLocationResponse(
@@ -537,6 +664,260 @@ export class AuthenticatedRemoteMachineConnection {
     }
   }
 }
+
+export interface StartRemoteCodexTurnOptions {
+  readonly actionId: MachineTransportActionId
+  readonly turnId: MachineTransportTurnId
+  readonly prompt: RemoteCodexPrompt
+  readonly signal?: AbortSignal
+}
+
+export class RemoteCodexSession {
+  readonly machine: RemoteMachineMetadata
+  readonly conversationId: MachineTransportConversationId
+  readonly providerThreadId: RemoteCodexProviderIdentity
+  readonly resumed: boolean
+  readonly executionProfile = 'codex-text-v1' as const
+  readonly #connection: FramedMachineConnection
+  #activeTurn: RemoteCodexTurn | undefined
+  #closed = false
+
+  constructor(
+    connection: FramedMachineConnection,
+    machine: RemoteMachineMetadata,
+    ready: z.infer<typeof CodexSessionReadyMessageSchema>,
+  ) {
+    this.#connection = connection
+    this.machine = machine
+    this.conversationId = ready.conversationId
+    this.providerThreadId = ready.providerThreadId
+    this.resumed = ready.resumed
+  }
+
+  /** Host-private liveness for the dedicated authenticated connection. */
+  get closed(): boolean {
+    return this.#closed || this.#connection.closed
+  }
+
+  async startTurn(
+    options: StartRemoteCodexTurnOptions,
+  ): Promise<RemoteCodexTurn> {
+    if (this.closed) {
+      this.#closed = true
+      throw new MachineTransportError(
+        'provider_session_lost',
+        'Remote Codex session is closed',
+        { peerAuthenticated: true },
+      )
+    }
+    if (this.#activeTurn !== undefined) {
+      throw new MachineTransportError(
+        'conversation_busy',
+        'Remote Codex Conversation already has an active Turn',
+        { peerAuthenticated: true },
+      )
+    }
+    options.signal?.throwIfAborted()
+    try {
+      await this.#connection.send({
+        type: 'codex.turn.start',
+        protocolVersion: machineProtocolVersion,
+        actionId: options.actionId,
+        conversationId: this.conversationId,
+        turnId: options.turnId,
+        providerThreadId: this.providerThreadId,
+        prompt: options.prompt,
+      })
+      const response = await receiveCompatibleMachineMessage(
+        this.#connection,
+        z.union([CodexTurnStartedMessageSchema, MachineErrorMessageSchema]),
+        {
+          signal: options.signal,
+          timeoutMs: machineTransportLimits.messageTimeoutMs,
+        },
+      )
+      if (response.type === 'machine.error') {
+        throw remoteError(response.code, response.message, true)
+      }
+      if (
+        response.machineId !== this.machine.machineId ||
+        response.nodeId !== this.machine.nodeId ||
+        response.actionId !== options.actionId ||
+        response.conversationId !== this.conversationId ||
+        response.turnId !== options.turnId ||
+        response.providerThreadId !== this.providerThreadId
+      ) {
+        throw new MachineTransportError(
+          'identity_mismatch',
+          'Remote Codex Turn did not match the bound Conversation',
+          { peerAuthenticated: true },
+        )
+      }
+      const turn = new RemoteCodexTurn(
+        this.#connection,
+        response,
+        () => {
+          if (this.#activeTurn === turn) this.#activeTurn = undefined
+        },
+        () => this.#failClosed(),
+      )
+      this.#activeTurn = turn
+      return turn
+    } catch (error) {
+      // Once the start frame is sent, a timeout/abort leaves Prompt ownership
+      // ambiguous. Fail the dedicated connection closed; callers may reconcile
+      // the durable Turn but must never blindly send the Prompt again.
+      this.#failClosed()
+      throw error
+    }
+  }
+
+  async close(signal?: AbortSignal): Promise<void> {
+    if (this.#closed) return
+    this.#closed = true
+    if (this.#connection.closed) return
+    if (this.#activeTurn !== undefined) {
+      this.#connection.destroy()
+      return
+    }
+    const requestId = newMachineNonce()
+    try {
+      await this.#connection.send({
+        type: 'codex.session.dispose',
+        protocolVersion: machineProtocolVersion,
+        requestId,
+        conversationId: this.conversationId,
+        providerThreadId: this.providerThreadId,
+      })
+      const response = await receiveCompatibleMachineMessage(
+        this.#connection,
+        z.union([CodexSessionDisposedMessageSchema, MachineErrorMessageSchema]),
+        { signal },
+      )
+      if (response.type === 'machine.error') {
+        throw remoteError(response.code, response.message, true)
+      }
+      if (
+        response.requestId !== requestId ||
+        response.machineId !== this.machine.machineId ||
+        response.nodeId !== this.machine.nodeId ||
+        response.conversationId !== this.conversationId
+      ) {
+        throw new MachineTransportError(
+          'identity_mismatch',
+          'Remote Codex disposal receipt did not match the session',
+          { peerAuthenticated: true },
+        )
+      }
+      this.#connection.end()
+    } catch (error) {
+      this.#connection.destroy()
+      throw error
+    }
+  }
+
+  #failClosed(): void {
+    this.#closed = true
+    this.#connection.destroy()
+  }
+}
+
+export class RemoteCodexTurn {
+  readonly actionId: MachineTransportActionId
+  readonly conversationId: MachineTransportConversationId
+  readonly turnId: MachineTransportTurnId
+  readonly providerThreadId: RemoteCodexProviderIdentity
+  readonly providerTurnId: RemoteCodexProviderIdentity
+  readonly #connection: FramedMachineConnection
+  readonly #release: () => void
+  readonly #failClosed: () => void
+  readonly #started: z.infer<typeof CodexTurnStartedMessageSchema>
+  #nextSequence = 1
+  #terminal = false
+
+  constructor(
+    connection: FramedMachineConnection,
+    started: z.infer<typeof CodexTurnStartedMessageSchema>,
+    release: () => void,
+    failClosed: () => void,
+  ) {
+    this.#connection = connection
+    this.#started = started
+    this.actionId = started.actionId
+    this.conversationId = started.conversationId
+    this.turnId = started.turnId
+    this.providerThreadId = started.providerThreadId
+    this.providerTurnId = started.providerTurnId
+    this.#release = release
+    this.#failClosed = failClosed
+  }
+
+  async nextEvent(signal?: AbortSignal): Promise<CodexTurnEventMessage> {
+    if (this.#terminal) {
+      throw new MachineTransportError(
+        'provider_session_lost',
+        'Remote Codex Turn is already terminal',
+        { peerAuthenticated: true },
+      )
+    }
+    const response = await receiveCompatibleMachineMessage(
+      this.#connection,
+      z.union([CodexTurnEventMessageSchema, MachineErrorMessageSchema]),
+      {
+        signal,
+        timeoutMs: machineTransportLimits.remoteCodexTurnTimeoutMs,
+      },
+    )
+    if (response.type === 'machine.error') {
+      this.#failClosed()
+      throw remoteError(response.code, response.message, true)
+    }
+    if (
+      response.machineId !== this.#startedMachineId ||
+      response.nodeId !== this.#startedNodeId ||
+      response.actionId !== this.actionId ||
+      response.conversationId !== this.conversationId ||
+      response.turnId !== this.turnId ||
+      response.providerThreadId !== this.providerThreadId ||
+      response.providerTurnId !== this.providerTurnId ||
+      response.sequence !== this.#nextSequence
+    ) {
+      this.#failClosed()
+      throw new MachineTransportError(
+        'identity_mismatch',
+        'Remote Codex event correlation or sequence was invalid',
+        { peerAuthenticated: true },
+      )
+    }
+    this.#nextSequence += 1
+    if (
+      response.event.type === 'turn.completed' ||
+      response.event.type === 'turn.failed'
+    ) {
+      this.#terminal = true
+      this.#release()
+    }
+    return response
+  }
+
+  async *events(signal?: AbortSignal): AsyncGenerator<CodexTurnEventMessage> {
+    try {
+      while (!this.#terminal) yield await this.nextEvent(signal)
+    } finally {
+      if (!this.#terminal) this.#failClosed()
+    }
+  }
+
+  get #startedMachineId(): string {
+    return this.#started.machineId
+  }
+
+  get #startedNodeId(): string {
+    return this.#started.nodeId
+  }
+}
+
+export type RemoteCodexTurnEvent = CodexTurnEventMessage
 
 export interface ValidatedRemoteProjectLocation {
   readonly canonicalPath: string
@@ -608,6 +989,22 @@ function remoteError(
                           ? 'project_location_not_directory'
                           : code === 'project_location_inaccessible'
                             ? 'project_location_inaccessible'
-                            : 'pairing_failed'
+                            : code === 'remote_execution_unavailable'
+                              ? 'remote_execution_unavailable'
+                              : code === 'provider_unavailable'
+                                ? 'provider_unavailable'
+                                : code === 'provider_start_failed'
+                                  ? 'provider_start_failed'
+                                  : code === 'provider_session_lost'
+                                    ? 'provider_session_lost'
+                                    : code === 'remote_execution_lost'
+                                      ? 'remote_execution_lost'
+                                      : code === 'remote_policy_violation'
+                                        ? 'remote_policy_violation'
+                                        : code === 'conversation_busy'
+                                          ? 'conversation_busy'
+                                          : code === 'duplicate_action_conflict'
+                                            ? 'duplicate_action_conflict'
+                                            : 'pairing_failed'
   return new MachineTransportError(mapped, message, { peerAuthenticated })
 }

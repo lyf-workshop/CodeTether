@@ -18,11 +18,12 @@ export class ProviderItemCapacityError extends Error {
 
 export interface ConversationState {
   record: ConversationRecord
-  readonly providerThreadId: string
+  /** Absent only for a newly created lazy remote Conversation. */
+  providerThreadId?: string
   readonly turns: Map<TurnId, TurnState>
   readonly providerTurnIds: Map<string, TurnId>
   providerSessionMaterialized: boolean
-  providerSession: 'ready' | 'needs-resume' | 'unavailable'
+  providerSession: 'uninitialized' | 'ready' | 'needs-resume' | 'unavailable'
   startingTurn: boolean
 }
 

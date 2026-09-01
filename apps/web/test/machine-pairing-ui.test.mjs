@@ -85,7 +85,8 @@ test('remote detail is truthful and unpair remains explicit and remote-only', as
 
   assert.match(detail, /if \(machine\.kind === 'remote'\)/u)
   assert.match(remote, /可以在这台机器上注册和查看项目工作区位置/u)
-  assert.match(remote, /远程智能体与会话执行仍未启用/u)
+  assert.match(remote, /位置注册本身不会授予执行权限/u)
+  assert.match(remote, /当前仅支持经过验证的 Codex 文本流式与原生恢复/u)
   assert.match(remote, /<RemoteMachineProvidersSection/u)
   assert.match(remote, /runtime\.refreshMachineProviders/u)
   assert.match(remote, /重新检测智能体/u)
@@ -93,6 +94,7 @@ test('remote detail is truthful and unpair remains explicit and remote-only', as
   assert.match(remote, /远程机器在线后才能重新检测智能体/u)
   assert.match(remote, /provider\.available \? '已安装'/u)
   assert.match(remote, /已检测到 CLI；远程执行尚未启用/u)
+  assert.match(remote, /远程会话基础能力已启用 · 仅文本流式与原生恢复/u)
   assert.match(remote, /providerDiscovery/u)
   assert.match(remote, /current/u)
   assert.match(remote, /last_known/u)
@@ -155,7 +157,11 @@ test('New Conversation excludes identity-only remote Machines by canonical capab
   assert.match(dialog, /machine\.capabilities\.projectAccess/u)
   assert.match(dialog, /machine\.capabilities\.providerExecution/u)
   assert.match(dialog, /projectLocationForMachine/u)
-  assert.match(dialog, /当前版本尚不支持在远程机器上执行智能体会话/u)
+  assert.match(
+    dialog,
+    /provider\.available && provider\.capabilities\.streaming/u,
+  )
+  assert.match(dialog, /当前未满足在线连接、当前 Codex 检测或安全执行条件/u)
 })
 
 async function source(relativePath) {

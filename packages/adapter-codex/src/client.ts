@@ -6,7 +6,12 @@ import type { AgentEvent, ApprovalRequestedEvent } from '@codetether/agent-core'
 import { CodexProcessError, CodexProtocolError } from './errors.js'
 import type { ProtocolLogger } from './logging.js'
 import { CodexEventNormalizer, normalizeApprovalRequest } from './normalizer.js'
-import { spawnCodexAppServer, stopCodexAppServer } from './process.js'
+import {
+  spawnCodexAppServer,
+  spawnRemoteCodexAppServer,
+  stopCodexAppServer,
+  stopRemoteCodexAppServer,
+} from './process.js'
 import type {
   CodexThread,
   CodexTurn,
@@ -56,6 +61,8 @@ export interface CodexAppServerClientOptions {
   readonly onUnknownServerRequest?: (request: JsonRpcRequest) => void
   readonly onUnknownResponse?: (id: string | number) => void
   readonly onError?: (error: Error) => void
+  /** A fail-closed policy hook invoked before any notification is normalized. */
+  readonly validateNotification?: (notification: JsonRpcNotification) => void
   readonly approvalHandler?: (
     prompt: ApprovalPrompt,
   ) => ApprovalDecision | Promise<ApprovalDecision>
@@ -86,6 +93,38 @@ export interface LaunchCodexClientOptions extends CodexAppServerClientOptions {
   }
 }
 
+export interface LaunchRemoteCodexClientOptions extends Omit<
+  CodexAppServerClientOptions,
+  'approvalHandler'
+> {
+  readonly executable?: string
+  /** Isolated Node-owned auth and native-session state. */
+  readonly codexHome: string
+  /** Node-local environment; it is reduced to the fixed safe allowlist. */
+  readonly environment?: NodeJS.ProcessEnv
+  readonly clientInfo: {
+    readonly name: string
+    readonly title: string
+    readonly version: string
+  }
+}
+
+export type CodexExecutionProfile = 'local' | 'remote-text-only'
+
+export interface RemoteTextThreadOptions {
+  readonly cwd: string
+}
+
+export interface RemoteTextResumeOptions {
+  readonly threadId: string
+  readonly cwd: string
+}
+
+export interface RemoteTextTurnOptions {
+  readonly threadId: string
+  readonly prompt: string
+}
+
 const SERVER_REQUEST_DRAIN_TIMEOUT_MS = 2_000
 
 /** Coordinates the App Server handshake and the small Thread/Turn spike API. */
@@ -104,6 +143,7 @@ export class CodexAppServerClient {
   constructor(
     readonly process: ChildProcessWithoutNullStreams,
     options: CodexAppServerClientOptions = {},
+    readonly executionProfile: CodexExecutionProfile = 'local',
   ) {
     this.#options = options
     this.#transport = new JsonRpcTransport(process, {
@@ -150,20 +190,41 @@ export class CodexAppServerClient {
     }
   }
 
+  static async launchRemote(
+    options: LaunchRemoteCodexClientOptions,
+  ): Promise<CodexAppServerClient> {
+    const process = spawnRemoteCodexAppServer(options)
+    const client = new CodexAppServerClient(
+      process,
+      options,
+      'remote-text-only',
+    )
+    try {
+      await client.initialize(options.clientInfo, { experimentalApi: true })
+      return client
+    } catch (error) {
+      await client.shutdown()
+      throw error
+    }
+  }
+
   get observedRawMethods(): readonly string[] {
     return [...this.#observedMethods]
   }
 
-  async initialize(clientInfo: {
-    readonly name: string
-    readonly title: string
-    readonly version: string
-  }): Promise<InitializeResult> {
+  async initialize(
+    clientInfo: {
+      readonly name: string
+      readonly title: string
+      readonly version: string
+    },
+    capabilities: { readonly experimentalApi?: boolean } = {},
+  ): Promise<InitializeResult> {
     this.#assertOpen()
     const result = await this.#transport.request<unknown>('initialize', {
       clientInfo,
       capabilities: {
-        experimentalApi: false,
+        experimentalApi: capabilities.experimentalApi ?? false,
         requestAttestation: false,
       },
     })
@@ -173,7 +234,7 @@ export class CodexAppServerClient {
   }
 
   async startThread(options: StartThreadOptions): Promise<ThreadStartResult> {
-    this.#assertOpen()
+    this.#assertExecutionProfile('local')
     if (!isAbsolute(options.cwd)) {
       throw new CodexProtocolError('thread/start cwd must be an absolute path')
     }
@@ -198,7 +259,7 @@ export class CodexAppServerClient {
   async resumeThread(
     options: ResumeThreadOptions,
   ): Promise<ThreadResumeResult> {
-    this.#assertOpen()
+    this.#assertExecutionProfile('local')
     if (options.cwd !== undefined && !isAbsolute(options.cwd)) {
       throw new CodexProtocolError('thread/resume cwd must be an absolute path')
     }
@@ -231,7 +292,7 @@ export class CodexAppServerClient {
     readonly model?: string
     readonly reasoning?: string
   }): Promise<TurnStartResult> {
-    this.#assertOpen()
+    this.#assertExecutionProfile('local')
     const result = await this.#transport.request<unknown>('turn/start', {
       threadId: options.threadId,
       input: [
@@ -249,11 +310,90 @@ export class CodexAppServerClient {
     return parsed
   }
 
+  async startRemoteTextThread(
+    options: RemoteTextThreadOptions,
+  ): Promise<ThreadStartResult> {
+    this.#assertExecutionProfile('remote-text-only')
+    assertAbsoluteCwd(options.cwd, 'thread/start')
+    const result = await this.#transport.request<unknown>('thread/start', {
+      cwd: options.cwd,
+      approvalPolicy: 'never',
+      approvalsReviewer: 'user',
+      sandbox: 'read-only',
+      ephemeral: false,
+      environments: [],
+      runtimeWorkspaceRoots: [],
+      dynamicTools: [],
+      selectedCapabilityRoots: [],
+      config: remoteTextOnlyConfig(),
+      serviceName: 'CodeTether',
+    })
+    const parsed = parseThreadResult(result, 'thread/start response')
+    if (!samePath(parsed.cwd, options.cwd)) {
+      throw new CodexProtocolError(
+        `thread/start returned unexpected cwd ${parsed.cwd}`,
+      )
+    }
+    return parsed
+  }
+
+  async resumeRemoteTextThread(
+    options: RemoteTextResumeOptions,
+  ): Promise<ThreadResumeResult> {
+    this.#assertExecutionProfile('remote-text-only')
+    assertAbsoluteCwd(options.cwd, 'thread/resume')
+    const result = await this.#transport.request<unknown>('thread/resume', {
+      threadId: options.threadId,
+      cwd: options.cwd,
+      approvalPolicy: 'never',
+      approvalsReviewer: 'user',
+      sandbox: 'read-only',
+      runtimeWorkspaceRoots: [],
+      config: remoteTextOnlyConfig(),
+    })
+    const parsed = parseThreadResult(result, 'thread/resume response')
+    if (parsed.thread.id !== options.threadId) {
+      throw new CodexProtocolError(
+        `thread/resume returned unexpected thread ${parsed.thread.id}`,
+      )
+    }
+    if (!samePath(parsed.cwd, options.cwd)) {
+      throw new CodexProtocolError(
+        `thread/resume returned unexpected cwd ${parsed.cwd}`,
+      )
+    }
+    return parsed
+  }
+
+  async startRemoteTextTurn(
+    options: RemoteTextTurnOptions,
+  ): Promise<TurnStartResult> {
+    this.#assertExecutionProfile('remote-text-only')
+    const result = await this.#transport.request<unknown>('turn/start', {
+      threadId: options.threadId,
+      input: [
+        {
+          type: 'text',
+          text: options.prompt,
+          text_elements: [],
+        },
+      ],
+      approvalPolicy: 'never',
+      approvalsReviewer: 'user',
+      sandboxPolicy: { type: 'readOnly', networkAccess: false },
+      environments: [],
+      runtimeWorkspaceRoots: [],
+    })
+    const parsed = parseTurnStartResult(result)
+    this.#lifecycle.activate(options.threadId, parsed.turn.id)
+    return parsed
+  }
+
   async interruptTurn(options: {
     readonly threadId: string
     readonly turnId: string
   }): Promise<TurnInterruptResult> {
-    this.#assertOpen()
+    this.#assertExecutionProfile('local')
     const result = await this.#transport.request<unknown>('turn/interrupt', {
       threadId: options.threadId,
       turnId: options.turnId,
@@ -277,6 +417,17 @@ export class CodexAppServerClient {
 
   #handleNotification(notification: JsonRpcNotification): void {
     if (this.#closing || this.#lifecycle.failure !== undefined) return
+    try {
+      this.#options.validateNotification?.(notification)
+    } catch (error) {
+      this.#fail(
+        new CodexProtocolError(
+          'Codex notification was rejected by the execution policy',
+          { cause: error },
+        ),
+      )
+      return
+    }
     this.#observedMethods.add(notification.method)
     let result
     try {
@@ -386,6 +537,19 @@ export class CodexAppServerClient {
 
   async #handleServerRequest(request: JsonRpcRequest): Promise<void> {
     this.#observedMethods.add(request.method)
+    if (this.executionProfile === 'remote-text-only') {
+      await this.#transport.respondError(
+        request.id,
+        -32601,
+        'Remote text-only execution does not accept server requests',
+      )
+      this.#fail(
+        new CodexProtocolError(
+          'Remote text-only Codex emitted an unsupported server request',
+        ),
+      )
+      return
+    }
     const params = isRecord(request.params) ? request.params : {}
     const threadId =
       readString(params, 'threadId') ?? readString(params, 'conversationId')
@@ -554,12 +718,25 @@ export class CodexAppServerClient {
     if (this.#lifecycle.failure !== undefined) throw this.#lifecycle.failure
   }
 
+  #assertExecutionProfile(expected: CodexExecutionProfile): void {
+    this.#assertOpen()
+    if (this.executionProfile !== expected) {
+      throw new CodexProtocolError(
+        `Operation is unavailable for Codex execution profile ${this.executionProfile}`,
+      )
+    }
+  }
+
   async #shutdown(): Promise<void> {
     this.#closing = true
     this.#lifecycle.failAll(new CodexProcessError('Codex App Server closed'))
     await this.#drainServerRequests()
     this.#transport.beginShutdown()
-    await stopCodexAppServer(this.process)
+    if (this.executionProfile === 'remote-text-only') {
+      await stopRemoteCodexAppServer(this.process)
+    } else {
+      await stopCodexAppServer(this.process)
+    }
   }
 
   async #drainServerRequests(): Promise<void> {
@@ -577,6 +754,26 @@ export class CodexAppServerClient {
     } finally {
       if (timer !== undefined) clearTimeout(timer)
     }
+  }
+}
+
+function assertAbsoluteCwd(cwd: string, operation: string): void {
+  if (!isAbsolute(cwd)) {
+    throw new CodexProtocolError(`${operation} cwd must be an absolute path`)
+  }
+}
+
+function remoteTextOnlyConfig(): Record<string, unknown> {
+  return {
+    web_search: 'disabled',
+    tools: {
+      update_plan: { enabled: false },
+      experimental_request_user_input: { enabled: false },
+    },
+    orchestrator: {
+      skills: { enabled: false },
+      mcp: { enabled: false },
+    },
   }
 }
 

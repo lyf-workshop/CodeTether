@@ -14,6 +14,14 @@ export type MachineTransportErrorCode =
   | 'project_location_missing'
   | 'project_location_not_directory'
   | 'project_location_inaccessible'
+  | 'remote_execution_unavailable'
+  | 'provider_unavailable'
+  | 'provider_start_failed'
+  | 'provider_session_lost'
+  | 'remote_execution_lost'
+  | 'remote_policy_violation'
+  | 'conversation_busy'
+  | 'duplicate_action_conflict'
 
 export class MachineTransportError extends Error {
   /** True only for a protocol error received after the TLS peer was pinned. */

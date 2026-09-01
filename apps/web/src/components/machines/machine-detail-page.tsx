@@ -506,8 +506,10 @@ function RemoteMachineDetail({
           当前能力
         </h2>
         <p className="mt-2 max-w-3xl text-sm leading-relaxed text-text-secondary">
-          可以在这台机器上注册和查看项目工作区位置。远程智能体与会话执行仍未启用，CodeTether
-          不会把位置注册解释为远程执行授权。
+          可以在这台机器上注册和查看项目工作区位置。位置注册本身不会授予执行权限。
+          {machine.capabilities.providerExecution
+            ? '当前仅支持经过验证的 Codex 文本流式与原生恢复；工具、写入、Shell、审批和中断均未启用。'
+            : '当前连接或智能体尚未满足远程执行条件。'}
         </p>
       </section>
 
@@ -667,7 +669,12 @@ function RemoteMachineProvidersSection({
                   )}
                   {provider.available ? (
                     <p className="mt-1 text-xs text-text-muted">
-                      已检测到 CLI；远程执行尚未启用
+                      {provider.capabilities.streaming &&
+                      provider.capabilities.resume
+                        ? discovery.state === 'current'
+                          ? '远程会话基础能力已启用 · 仅文本流式与原生恢复'
+                          : '上次检测支持文本流式与原生恢复 · 当前未重新验证'
+                        : '已检测到 CLI；远程执行尚未启用'}
                     </p>
                   ) : null}
                 </div>

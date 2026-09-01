@@ -21,7 +21,9 @@ import {
   pairingServerIdentifier,
   readMachineTlsIdentityFile,
   receiveCompatibleMachineMessage,
+  RemoteCodexSession,
   RemoteProjectLocationPathSchema,
+  RemoteCodexPromptSchema,
   RemoteProviderDescriptorSchema,
   validateMachineTlsIdentity,
   verifyPairingConfirmationTag,
@@ -119,6 +121,21 @@ test('Provider discovery messages are purpose-specific and presentation-safe', (
   assert.equal(
     RemoteProviderDescriptorSchema.safeParse({
       ...descriptor,
+      capabilities: { ...capabilities, streaming: true, resume: true },
+    }).success,
+    true,
+  )
+  assert.equal(
+    RemoteProviderDescriptorSchema.safeParse({
+      ...descriptor,
+      provider: 'claude-code',
+      capabilities: { ...capabilities, streaming: true, resume: true },
+    }).success,
+    false,
+  )
+  assert.equal(
+    RemoteProviderDescriptorSchema.safeParse({
+      ...descriptor,
       executablePath: '/home/user/.local/bin/codex',
     }).success,
     false,
@@ -163,6 +180,122 @@ test('Provider discovery messages are purpose-specific and presentation-safe', (
     }).success,
     false,
   )
+})
+
+test('remote Codex execution messages are correlated, bounded, and non-generic', () => {
+  const session = {
+    type: 'codex.session.open',
+    protocolVersion: 1,
+    requestId: 'S'.repeat(43),
+    expectedMachineId: 'machine_abcdef',
+    expectedNodeId: 'node_abcdef',
+    conversationId: 'conv_abcdef',
+    projectId: 'proj_abcdef',
+    rootPath: '/home/user/project',
+  }
+  const turn = {
+    type: 'codex.turn.start',
+    protocolVersion: 1,
+    actionId: 'act_abcdef',
+    conversationId: 'conv_abcdef',
+    turnId: 'turn_abcdef',
+    providerThreadId: 'thread-native-1',
+    prompt: 'Return a short marker.',
+  }
+  assert.equal(MachineWireMessageSchema.safeParse(session).success, true)
+  assert.equal(MachineWireMessageSchema.safeParse(turn).success, true)
+  for (const injected of [
+    { executable: '/bin/sh' },
+    { argv: ['sh', '-c', 'id'] },
+    { environment: { TOKEN: 'secret' } },
+    { cwd: '/tmp/attacker-controlled' },
+    { method: 'process.execute' },
+  ]) {
+    assert.equal(
+      MachineWireMessageSchema.safeParse({ ...session, ...injected }).success,
+      false,
+    )
+  }
+  assert.equal(
+    MachineWireMessageSchema.safeParse({
+      ...turn,
+      prompt: 'x'.repeat(9 * 1024),
+    }).success,
+    false,
+  )
+  assert.equal(RemoteCodexPromptSchema.safeParse('safe\0prompt').success, false)
+  assert.equal(
+    MachineWireMessageSchema.safeParse({
+      type: 'codex.turn.event',
+      protocolVersion: 1,
+      machineId: session.expectedMachineId,
+      nodeId: session.expectedNodeId,
+      actionId: turn.actionId,
+      conversationId: turn.conversationId,
+      turnId: turn.turnId,
+      providerThreadId: turn.providerThreadId,
+      providerTurnId: 'provider-turn-1',
+      sequence: 1,
+      event: { type: 'message.delta', text: 'streamed text' },
+    }).success,
+    true,
+  )
+  assert.equal(
+    MachineWireMessageSchema.safeParse({
+      type: 'codex.turn.event',
+      protocolVersion: 1,
+      machineId: session.expectedMachineId,
+      nodeId: session.expectedNodeId,
+      actionId: turn.actionId,
+      conversationId: turn.conversationId,
+      turnId: turn.turnId,
+      providerThreadId: turn.providerThreadId,
+      providerTurnId: 'provider-turn-1',
+      sequence: 1,
+      event: { type: 'tool.started', command: 'cat secret' },
+    }).success,
+    false,
+  )
+})
+
+test('remote Codex session exposes a closed dedicated transport without probing the Node', async () => {
+  const stream = new ResponseDuplex()
+  const connection = new FramedMachineConnection(stream)
+  const session = new RemoteCodexSession(
+    connection,
+    {
+      machineId: 'machine_remote_liveness01',
+      nodeId: 'node_remote_liveness01',
+      displayName: 'Remote liveness fixture',
+      platform: 'Linux',
+      architecture: 'x64',
+    },
+    {
+      type: 'codex.session.ready',
+      protocolVersion: 1,
+      requestId: 'L'.repeat(43),
+      machineId: 'machine_remote_liveness01',
+      nodeId: 'node_remote_liveness01',
+      conversationId: 'conv_remote_liveness01',
+      providerThreadId: 'native-thread-liveness',
+      resumed: true,
+      executionProfile: 'codex-text-v1',
+    },
+  )
+
+  assert.equal(session.closed, false)
+  stream.push(null)
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(session.closed, true)
+  await assert.rejects(
+    session.startTurn({
+      actionId: 'act_remote_liveness01',
+      turnId: 'turn_remote_liveness01',
+      prompt: 'This prompt must not be written to the closed connection.',
+    }),
+    (error) => error.code === 'provider_session_lost',
+  )
+  await session.close()
 })
 
 test('OPAQUE pairing authenticates the code without transmitting it', async () => {

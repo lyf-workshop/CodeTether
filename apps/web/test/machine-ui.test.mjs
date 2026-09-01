@@ -50,6 +50,7 @@ test('Project and Conversation surfaces resolve Machine display without a switch
     adapter,
     header,
     inspector,
+    workspace,
   ] = await Promise.all([
     source('components/projects/project-detail-page.tsx'),
     source('components/projects/project-locations-section.tsx'),
@@ -57,6 +58,7 @@ test('Project and Conversation surfaces resolve Machine display without a switch
     source('components/conversation/live-conversation-adapter.ts'),
     source('components/conversation/conversation-header.tsx'),
     source('components/conversation/inspector-panel.tsx'),
+    source('components/conversation/conversation-workspace.tsx'),
   ])
 
   assert.match(projectDetail, /<ProjectLocationsSection/u)
@@ -73,6 +75,11 @@ test('Project and Conversation surfaces resolve Machine display without a switch
   )
   assert.doesNotMatch(adapter, /machine: '本地电脑'/u)
   assert.match(adapter, /machine: machineName/u)
+  assert.match(adapter, /providerPresentationForMachine/u)
+  assert.match(conversationRoute, /machineProvider\.capabilities\.streaming/u)
+  assert.match(conversationRoute, /executionBoundary/u)
+  assert.match(workspace, /远程执行机器当前离线/u)
+  assert.match(workspace, /to="\/machines\/\$machineId"/u)
   assert.match(header, /name=\{conversation\.machine\}/u)
   assert.match(inspector, /conversation\.machine/u)
   assert.doesNotMatch(header, /switchMachine|onMachineChange/u)

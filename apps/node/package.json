@@ -12,6 +12,8 @@
     "sea": "node scripts/build-node.mjs"
   },
   "dependencies": {
+    "@codetether/adapter-codex": "workspace:*",
+    "@codetether/agent-core": "workspace:*",
     "@codetether/machine-transport": "workspace:*",
     "zod": "4.4.3"
   },

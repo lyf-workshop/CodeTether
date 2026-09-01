@@ -994,6 +994,237 @@ test('remote ProjectLocation API requires active online trust, stays idempotent,
   }
 })
 
+test('remote Codex creation is lazy, idempotent, Machine-scoped, and resumes after Host and Node restart', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'codetether-remote-codex-'))
+  const workspace = join(directory, 'workspace')
+  const databasePath = join(directory, 'data', 'codetether.sqlite3')
+  await mkdir(workspace, { recursive: true })
+  const remoteRoot = '/srv/projects/codetether-remote'
+  let firstService
+  let secondService
+  try {
+    const firstPersistence = ConversationStore.open({ databasePath })
+    const firstCoordinator = new FakeRemoteMachineCoordinator(firstPersistence)
+    firstCoordinator.remoteExecution = true
+    const firstLocalRuntime = new TrackingRuntime('codex')
+    firstService = await createService({
+      workspace,
+      databasePath,
+      runtimes: [firstLocalRuntime],
+      maxConversations: 1,
+      remoteMachineCoordinator: firstCoordinator,
+      persistence: firstPersistence,
+    })
+    const project = (await firstService.listProjects()).projects[0]
+    assert.ok(project)
+    await firstService.beginRemoteMachinePairing({
+      actionId: 'act_remote_exec_pair01',
+      address: { host: '192.0.2.10', port: 43_217 },
+      pairingCode: '482731',
+    })
+    await firstService.confirmRemoteMachinePairing(firstCoordinator.attemptId, {
+      actionId: 'act_remote_exec_confirm01',
+    })
+    await firstService.updateMachineConnectionAddress(
+      firstCoordinator.machineId,
+      {
+        actionId: 'act_remote_exec_online01',
+        address: { host: '192.0.2.11', port: 43_217 },
+      },
+    )
+    await firstService.refreshMachineProviders(firstCoordinator.machineId, {
+      actionId: 'act_remote_exec_detect01',
+    })
+    firstCoordinator.validationCanonicalPath = remoteRoot
+    await firstService.registerProjectLocation(project.projectId, {
+      actionId: 'act_remote_exec_location01',
+      machineId: firstCoordinator.machineId,
+      path: remoteRoot,
+    })
+
+    const createRequest = {
+      actionId: 'act_remote_exec_create01',
+      machineId: firstCoordinator.machineId,
+      projectId: project.projectId,
+      provider: 'codex',
+    }
+    const created = await firstService.createConversation(createRequest)
+    const duplicateCreate = await firstService.createConversation(createRequest)
+    assert.deepEqual(duplicateCreate, created)
+    assert.equal(firstCoordinator.openCodexCalls.length, 0)
+    assert.equal(firstLocalRuntime.startConversationCalls.length, 0)
+    assert.equal(
+      created.data.conversation.machineId,
+      firstCoordinator.machineId,
+    )
+
+    const firstTurnRequest = {
+      actionId: 'act_remote_exec_turn01',
+      input: {
+        type: 'text',
+        text: 'remember marker REMOTE-CODEX-FOUNDATION',
+      },
+    }
+    const firstTurn = await firstService.startTurn(
+      created.data.conversation.conversationId,
+      firstTurnRequest,
+    )
+    const duplicateTurn = await firstService.startTurn(
+      created.data.conversation.conversationId,
+      firstTurnRequest,
+    )
+    assert.deepEqual(duplicateTurn, firstTurn)
+    assert.equal(firstCoordinator.openCodexCalls.length, 1)
+    assert.equal(firstCoordinator.openCodexCalls[0].providerThreadId, undefined)
+    assert.equal(firstCoordinator.remoteTurnCalls.length, 1)
+    await waitForConversationIdle(
+      firstService,
+      created.data.conversation.conversationId,
+    )
+    const durableFirst = firstPersistence.getConversation(
+      created.data.conversation.conversationId,
+    )
+    assert.ok(durableFirst.providerThreadId)
+    assert.equal(
+      durableFirst.providerThreadId.includes(
+        'remote-native-session-machine-api',
+      ),
+      false,
+    )
+    assert.equal(
+      JSON.stringify(
+        firstService.getConversation(created.data.conversation.conversationId),
+      ).includes('providerThreadId'),
+      false,
+    )
+    await firstService.close()
+    firstService = undefined
+
+    const secondPersistence = ConversationStore.open({ databasePath })
+    const secondCoordinator = new FakeRemoteMachineCoordinator(
+      secondPersistence,
+    )
+    secondCoordinator.remoteExecution = true
+    secondCoordinator.connection = { state: 'online' }
+    secondCoordinator.currentProviderObservedAt = timestamp
+    const secondLocalRuntime = new TrackingRuntime('codex')
+    secondService = await createService({
+      workspace,
+      databasePath,
+      runtimes: [secondLocalRuntime],
+      maxConversations: 1,
+      remoteMachineCoordinator: secondCoordinator,
+      persistence: secondPersistence,
+      registerRoot: false,
+    })
+    const coldDetail = secondService.getConversation(
+      created.data.conversation.conversationId,
+    )
+    assert.equal(coldDetail.conversation.machineId, secondCoordinator.machineId)
+    assert.equal(secondCoordinator.openCodexCalls.length, 0)
+
+    await secondService.startTurn(created.data.conversation.conversationId, {
+      actionId: 'act_remote_exec_turn02',
+      input: { type: 'text', text: 'recall the marker' },
+    })
+    assert.equal(secondCoordinator.openCodexCalls.length, 1)
+    assert.equal(
+      secondCoordinator.openCodexCalls[0].providerThreadId,
+      'remote-native-session-machine-api',
+    )
+    await waitForConversationIdle(
+      secondService,
+      created.data.conversation.conversationId,
+    )
+
+    const turnsBeforeIdleClose = secondService.getConversation(
+      created.data.conversation.conversationId,
+    ).runtime.turns.length
+    const idleSession = secondCoordinator.remoteSessions.at(-1)
+    assert.ok(idleSession)
+    idleSession.simulateIdleClose()
+    await secondService.startTurn(created.data.conversation.conversationId, {
+      actionId: 'act_remote_exec_idle_resume01',
+      input: { type: 'text', text: 'resume before sending this prompt' },
+    })
+    assert.equal(secondCoordinator.openCodexCalls.length, 2)
+    assert.equal(
+      secondCoordinator.openCodexCalls[1].providerThreadId,
+      'remote-native-session-machine-api',
+    )
+    assert.equal(secondCoordinator.remoteTurnCalls.length, 2)
+    const afterIdleResume = await waitForConversationIdle(
+      secondService,
+      created.data.conversation.conversationId,
+    )
+    assert.equal(afterIdleResume.runtime.turns.length, turnsBeforeIdleClose + 1)
+    assert.equal(afterIdleResume.runtime.turns.at(-1)?.status, 'completed')
+    assert.equal(
+      afterIdleResume.runtime.turns.some((turn) => turn.status === 'failed'),
+      false,
+    )
+
+    secondCoordinator.setConnection('offline')
+    secondCoordinator.setConnection('online')
+    await secondService.startTurn(created.data.conversation.conversationId, {
+      actionId: 'act_remote_exec_turn03',
+      input: {
+        type: 'text',
+        text: 'resume after controlled Node restart',
+      },
+    })
+    assert.equal(secondCoordinator.openCodexCalls.length, 3)
+    assert.equal(
+      secondCoordinator.openCodexCalls[2].providerThreadId,
+      'remote-native-session-machine-api',
+    )
+    await waitForConversationIdle(
+      secondService,
+      created.data.conversation.conversationId,
+    )
+    assert.equal(secondService.snapshot().conversations.length, 1)
+
+    secondCoordinator.offlineAfterStart = true
+    const lostTurnRequest = {
+      actionId: 'act_remote_exec_turn04',
+      input: { type: 'text', text: 'one prompt across a lost connection' },
+    }
+    const lostTurn = await secondService.startTurn(
+      created.data.conversation.conversationId,
+      lostTurnRequest,
+    )
+    assert.deepEqual(
+      await secondService.startTurn(
+        created.data.conversation.conversationId,
+        lostTurnRequest,
+      ),
+      lostTurn,
+    )
+    assert.equal(secondCoordinator.remoteTurnCalls.length, 4)
+    const failed = await waitForConversationStatus(
+      secondService,
+      created.data.conversation.conversationId,
+      'failed',
+    )
+    assert.equal(failed.runtime.turns.at(-1)?.status, 'failed')
+    assert.equal(secondCoordinator.remoteTurnCalls.length, 4)
+
+    await secondService.createConversation({
+      actionId: 'act_remote_exec_local01',
+      machineId: secondService.listMachines().machines[0].machineId,
+      projectId: project.projectId,
+      provider: 'codex',
+    })
+    assert.equal(secondService.snapshot().conversations.length, 1)
+    assert.equal(secondLocalRuntime.startConversationCalls.length, 1)
+    assert.ok(secondCoordinator.remoteSessionCloseCalls >= 1)
+  } finally {
+    await secondService?.close().catch(() => undefined)
+    await firstService?.close().catch(() => undefined)
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
 async function createService(options) {
   const service = new HostService({
     runtimes: options.runtimes,
@@ -1032,6 +1263,14 @@ class FakeRemoteMachineCoordinator {
     this.discoveryCalls = 0
     this.discoveryListeners = new Set()
     this.currentProviderObservedAt = undefined
+    this.remoteExecution = false
+    this.openCodexCalls = []
+    this.remoteTurnCalls = []
+    this.remoteSessionCloseCalls = 0
+    this.remoteSessions = []
+    this.openError = undefined
+    this.offlineAfterStart = false
+    this.statusListeners = new Set()
     this.confirmed = {
       machine: {
         machineId: this.machineId,
@@ -1059,6 +1298,25 @@ class FakeRemoteMachineCoordinator {
 
   connectionState() {
     return this.connection.state
+  }
+
+  providerExecutionAvailable(machineId) {
+    return (
+      this.remoteExecution &&
+      machineId === this.machineId &&
+      this.connection.state === 'online' &&
+      this.currentProviderObservedAt !== undefined
+    )
+  }
+
+  subscribeStatus(listener) {
+    this.statusListeners.add(listener)
+    return () => this.statusListeners.delete(listener)
+  }
+
+  setConnection(state) {
+    this.connection = { state }
+    for (const listener of this.statusListeners) listener(this.machineId, state)
   }
 
   connectionDetails() {
@@ -1149,7 +1407,7 @@ class FakeRemoteMachineCoordinator {
     this.discoveryCalls += 1
     const observation = this.persistence.recordRemoteProviderObservation({
       machineId: this.machineId,
-      providers: remoteProviderDescriptors(),
+      providers: remoteProviderDescriptors(this.remoteExecution),
       observedAt: timestamp,
     })
     this.currentProviderObservedAt = observation.observedAt
@@ -1169,13 +1427,62 @@ class FakeRemoteMachineCoordinator {
     }
   }
 
+  async openCodexSession(machine, trust, input) {
+    assert.equal(machine.machineId, this.machineId)
+    assert.equal(trust.machineId, this.machineId)
+    if (!this.remoteExecution) {
+      throw new RemoteMachineCoordinatorError(
+        'remote_execution_unavailable',
+        'Controlled unavailable remote execution',
+      )
+    }
+    if (this.openError !== undefined) throw this.openError
+    this.openCodexCalls.push(input)
+    const providerThreadId =
+      input.providerThreadId ?? 'remote-native-session-machine-api'
+    let closed = false
+    const session = {
+      machineId: this.machineId,
+      conversationId: input.conversationId,
+      providerThreadId,
+      get closed() {
+        return closed
+      },
+      simulateIdleClose() {
+        closed = true
+      },
+      startTurn: async (turn) => {
+        this.remoteTurnCalls.push(turn)
+        if (this.offlineAfterStart) {
+          this.offlineAfterStart = false
+          this.setConnection('offline')
+        }
+        return {
+          async *events() {
+            if (closed) throw new Error('controlled Node disconnect')
+            yield { type: 'message.delta', text: 'remote ', sequence: 1 }
+            yield { type: 'message.delta', text: 'complete', sequence: 2 }
+            yield { type: 'message.completed', sequence: 3 }
+            yield { type: 'turn.completed', sequence: 4 }
+          },
+        }
+      },
+      close: async () => {
+        closed = true
+        this.remoteSessionCloseCalls += 1
+      },
+    }
+    this.remoteSessions.push(session)
+    return session
+  }
+
   async close() {}
 }
 
-function remoteProviderDescriptors() {
+function remoteProviderDescriptors(remoteExecution = false) {
   const capabilities = {
-    streaming: false,
-    resume: false,
+    streaming: remoteExecution,
+    resume: remoteExecution,
     interrupt: false,
     approvals: false,
     fileRead: false,
@@ -1199,7 +1506,9 @@ function remoteProviderDescriptors() {
       provider: 'claude-code',
       displayName: 'Claude Code',
       availability: 'not_installed',
-      capabilities,
+      capabilities: Object.fromEntries(
+        Object.keys(capabilities).map((capability) => [capability, false]),
+      ),
     },
   ]
 }
@@ -1220,6 +1529,23 @@ function hasInternalProcessIdentity(value) {
     if (hasInternalProcessIdentity(child)) return true
   }
   return false
+}
+
+async function waitForConversationIdle(service, conversationId) {
+  return await waitForConversationStatus(service, conversationId, 'completed')
+}
+
+async function waitForConversationStatus(service, conversationId, status) {
+  let lastDetail
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const detail = service.getConversation(conversationId)
+    if (detail.conversation.status === status) return detail
+    lastDetail = detail
+    await new Promise((resolve) => setImmediate(resolve))
+  }
+  throw new Error(
+    `Timed out waiting for remote Conversation ${status}: ${JSON.stringify(lastDetail)}`,
+  )
 }
 
 function percentile(values, quantile) {

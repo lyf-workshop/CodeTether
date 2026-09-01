@@ -3,6 +3,7 @@ import type {
   Bootstrap,
   ConversationSummary,
   ProjectAvailability,
+  ProviderDescriptor,
 } from '@codetether/protocol'
 
 import type {
@@ -28,6 +29,7 @@ import { deriveLiveControlAvailability } from './conversation-controls.js'
 import {
   providerAgentId,
   providerPresentation,
+  providerPresentationForMachine,
 } from '../../provider/provider-presentation.js'
 
 type OrderedActivity =
@@ -52,6 +54,13 @@ type OrderedActivity =
       readonly approval: PendingApprovalReadModel
     }
 
+export interface LiveConversationMachineContext {
+  readonly providerDescriptors?: readonly ProviderDescriptor[]
+  readonly executionAvailable?: boolean
+  readonly executionUnavailableLabel?: string
+  readonly names?: Readonly<Record<string, string>>
+}
+
 export function createLiveConversationDetailSource(
   model: ConversationReadModel,
   summaries: readonly ConversationSummary[],
@@ -60,9 +69,13 @@ export function createLiveConversationDetailSource(
   projectAvailability: ProjectAvailability = 'available',
   projectRootPath?: string,
   machineName?: string,
+  machineContext?: LiveConversationMachineContext,
 ): ConversationDetailSourceViewModel {
+  const machineExecutionAvailable = machineContext?.executionAvailable ?? true
   const controlConnectionState =
-    projectAvailability === 'available' ? connectionState : 'unavailable'
+    projectAvailability === 'available' && machineExecutionAvailable
+      ? connectionState
+      : 'unavailable'
   return {
     conversation: createLiveConversationViewModel(
       model,
@@ -70,12 +83,26 @@ export function createLiveConversationDetailSource(
       controlConnectionState,
       projectRootPath,
       machineName,
+      machineContext?.providerDescriptors,
     ),
-    rail: createLiveConversationRailViewModel(summaries, model, machineName),
+    rail: createLiveConversationRailViewModel(
+      summaries,
+      model,
+      machineName,
+      machineContext?.names,
+    ),
     connectionIndicator:
-      projectAvailability === 'available'
-        ? connectionIndicator(connectionState)
-        : { state: 'unavailable', label: '项目不可用' },
+      projectAvailability === 'unavailable'
+        ? { state: 'unavailable', label: '项目不可用' }
+        : !machineExecutionAvailable
+          ? {
+              state: 'unavailable',
+              label:
+                machineContext?.executionUnavailableLabel ?? '执行机器离线',
+            }
+          : projectAvailability === 'available'
+            ? connectionIndicator(connectionState)
+            : { state: 'unavailable', label: '项目不可用' },
   }
 }
 
@@ -83,6 +110,7 @@ export function createLiveConversationRailViewModel(
   summaries: readonly ConversationSummary[],
   current: ConversationReadModel,
   machineName?: string,
+  machineNames?: Readonly<Record<string, string>>,
 ): ConversationDetailSourceViewModel['rail'] {
   const activeSummaries = summaries.filter(
     (summary) =>
@@ -127,7 +155,11 @@ export function createLiveConversationRailViewModel(
               : { archivedAt: summary.archivedAt }),
             status: selected ? current.status : summary.status,
             lastActivity: formatActivityTime(summary.lastActivityAt),
-            ...(machineName === undefined ? {} : { machine: machineName }),
+            ...(machineNames?.[summary.machineId] === undefined
+              ? machineName === undefined
+                ? {}
+                : { machine: machineName }
+              : { machine: machineNames[summary.machineId] }),
             provider: summary.provider,
           }
         }),
@@ -144,6 +176,7 @@ export function createLiveConversationViewModel(
   connectionState: HostConnectionState = 'unavailable',
   projectRootPath?: string,
   machineName = '机器',
+  machineProviderDescriptors?: readonly ProviderDescriptor[],
 ): ConversationViewModel {
   const presentationRoot = model.cwd ?? projectRootPath
   const files = model.changes.map((change) =>
@@ -164,7 +197,13 @@ export function createLiveConversationViewModel(
     requestedAt: formatActivityTime(approval.requestedAt),
     ...(presentationRoot === undefined ? {} : { context: presentationRoot }),
   }))
-  const provider = providerPresentation(bootstrap, model.provider)
+  const provider =
+    machineProviderDescriptors === undefined
+      ? providerPresentation(bootstrap, model.provider)
+      : providerPresentationForMachine(
+          machineProviderDescriptors,
+          model.provider,
+        )
 
   return {
     id: model.id,

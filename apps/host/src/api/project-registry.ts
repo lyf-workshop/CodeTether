@@ -49,6 +49,16 @@ interface ProjectRegistryOptions {
   readonly now: () => Timestamp
   readonly localMachineId: MachineId
   readonly machineAvailability?: (machineId: MachineId) => MachineAvailability
+  /**
+   * Authenticated, purpose-specific validation for an already registered
+   * remote ProjectLocation. It must return the Node-canonical root and may not
+   * browse or mutate the remote filesystem.
+   */
+  readonly authorizeRemoteLocation?: (input: {
+    readonly projectId: ProjectId
+    readonly machineId: MachineId
+    readonly rootPath: string
+  }) => Promise<string>
   readonly writeDurable: (operation: () => void) => void
   readonly hasRuntimeConversations: (projectId: ProjectId) => boolean
 }
@@ -66,11 +76,13 @@ export class ProjectRegistry {
   readonly #now: () => Timestamp
   readonly #localMachineId: MachineId
   readonly #machineAvailability?: (machineId: MachineId) => MachineAvailability
+  readonly #authorizeRemoteLocation?: ProjectRegistryOptions['authorizeRemoteLocation']
   readonly #writeDurable: (operation: () => void) => void
   readonly #hasRuntimeConversations: (projectId: ProjectId) => boolean
   readonly #projects = new Map<ProjectId, DurableProject>()
   readonly #projectIdsByLocationKey = new Map<string, ProjectId>()
   readonly #conversationReservations = new Map<ProjectId, number>()
+  readonly #locationReservations = new Map<string, number>()
 
   constructor(options: ProjectRegistryOptions) {
     this.#workspacePolicy = options.workspacePolicy
@@ -78,6 +90,7 @@ export class ProjectRegistry {
     this.#now = options.now
     this.#localMachineId = MachineIdSchema.parse(options.localMachineId)
     this.#machineAvailability = options.machineAvailability
+    this.#authorizeRemoteLocation = options.authorizeRemoteLocation
     this.#writeDurable = options.writeDurable
     this.#hasRuntimeConversations = options.hasRuntimeConversations
     for (const project of options.persistence?.listProjects() ?? []) {
@@ -267,6 +280,16 @@ export class ProjectRegistry {
         'Durable Project locations are unavailable',
       )
     }
+    if (
+      (this.#locationReservations.get(
+        projectMachineKey(project.projectId, machine),
+      ) ?? 0) > 0
+    ) {
+      throw new ProjectRegistryError(
+        'location_has_conversations',
+        'Project Location is reserved by a Conversation creation',
+      )
+    }
     try {
       this.#writeDurable(() => {
         this.#persistence?.removeProjectLocation(project.projectId, machine)
@@ -316,10 +339,57 @@ export class ProjectRegistry {
       )
     }
     if (machine !== this.#localMachineId) {
-      throw new ProjectRegistryError(
-        'unavailable',
-        'Agent execution is not available on this Machine',
+      if (cwd !== undefined) {
+        let requested
+        try {
+          requested = normalizeTrustedProjectRoot(
+            cwd,
+            location.rootPath.startsWith('/') ? 'linux' : 'win32',
+          )
+        } catch {
+          throw new ProjectRegistryError(
+            'unavailable',
+            'Remote execution must use the registered Project Location',
+          )
+        }
+        if (requested.rootPathKey !== location.rootPathKey) {
+          throw new ProjectRegistryError(
+            'unavailable',
+            'Remote execution must use the registered Project Location',
+          )
+        }
+      }
+      if (this.#authorizeRemoteLocation === undefined) {
+        throw new ProjectRegistryError(
+          'unavailable',
+          'Agent execution is not available on this Machine',
+        )
+      }
+      let canonicalPath: string
+      try {
+        canonicalPath = await this.#authorizeRemoteLocation({
+          projectId: project.projectId,
+          machineId: machine,
+          rootPath: location.rootPath,
+        })
+      } catch (error) {
+        if (error instanceof ProjectRegistryError) throw error
+        throw new ProjectRegistryError(
+          'unavailable',
+          'Remote Project Location is unavailable or no longer authorized',
+        )
+      }
+      const validated = normalizeTrustedProjectRoot(
+        canonicalPath,
+        location.rootPath.startsWith('/') ? 'linux' : 'win32',
       )
+      if (validated.rootPathKey !== location.rootPathKey) {
+        throw new ProjectRegistryError(
+          'unavailable',
+          'Remote Project Location identity no longer matches its registration',
+        )
+      }
+      return { project, cwd: location.rootPath }
     }
     try {
       return {
@@ -346,7 +416,7 @@ export class ProjectRegistry {
     cwd?: string,
   ): Promise<ProjectConversationReservation> {
     const project = this.require(projectId)
-    const release = this.#reserveConversation(project)
+    const release = this.#reserveConversation(project, machineId)
     try {
       const workspace = await this.authorizeConversation(
         project.projectId,
@@ -415,7 +485,7 @@ export class ProjectRegistry {
     machineId: MachineId,
   ): Promise<ProjectConversationReservation> {
     const match = await this.resolveLegacyConversation(cwd, machineId)
-    const release = this.#reserveConversation(match.project)
+    const release = this.#reserveConversation(match.project, machineId)
     try {
       const workspace = await this.authorizeConversation(
         match.project.projectId,
@@ -463,7 +533,10 @@ export class ProjectRegistry {
     return project.projectId
   }
 
-  #reserveConversation(project: DurableProject): () => void {
+  #reserveConversation(
+    project: DurableProject,
+    machineId: MachineId,
+  ): () => void {
     if (this.#projects.get(project.projectId) !== project) {
       throw new ProjectRegistryError(
         'unavailable',
@@ -473,6 +546,11 @@ export class ProjectRegistry {
     this.#conversationReservations.set(
       project.projectId,
       (this.#conversationReservations.get(project.projectId) ?? 0) + 1,
+    )
+    const reservationKey = projectMachineKey(project.projectId, machineId)
+    this.#locationReservations.set(
+      reservationKey,
+      (this.#locationReservations.get(reservationKey) ?? 0) + 1,
     )
     let released = false
     return () => {
@@ -484,6 +562,13 @@ export class ProjectRegistry {
         this.#conversationReservations.delete(project.projectId)
       } else {
         this.#conversationReservations.set(project.projectId, remaining)
+      }
+      const locationRemaining =
+        (this.#locationReservations.get(reservationKey) ?? 1) - 1
+      if (locationRemaining === 0) {
+        this.#locationReservations.delete(reservationKey)
+      } else {
+        this.#locationReservations.set(reservationKey, locationRemaining)
       }
     }
   }
@@ -560,6 +645,13 @@ export class ProjectRegistry {
 
 function locationKey(machineId: MachineId, rootPathKey: string): string {
   return JSON.stringify([MachineIdSchema.parse(machineId), rootPathKey])
+}
+
+function projectMachineKey(projectId: ProjectId, machineId: MachineId): string {
+  return JSON.stringify([
+    ProjectIdSchema.parse(projectId),
+    MachineIdSchema.parse(machineId),
+  ])
 }
 
 function newProjectId(): ProjectId {

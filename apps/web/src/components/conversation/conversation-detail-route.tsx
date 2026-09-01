@@ -13,7 +13,9 @@ import {
   type ConversationId,
   type ConversationSummary,
   type GetConversationResponse,
+  type MachineSummary,
   type ProjectRecord,
+  type ProviderDescriptor,
   type TurnId,
 } from '@codetether/protocol'
 import { Button } from '@codetether/ui'
@@ -25,7 +27,10 @@ import {
 } from '../../runtime/host/host-runtime-hooks'
 import { conversationDetailQueryOptions } from '../../runtime/host/conversation-detail-query'
 import { conversationListQueryOptions } from '../../runtime/host/conversation-list-query'
-import { machineDetailQueryOptions } from '../../runtime/host/machine-query'
+import {
+  machineDetailQueryOptions,
+  machineListQueryOptions,
+} from '../../runtime/host/machine-query'
 import {
   includeConversationDetail,
   type ConversationReadModel,
@@ -207,6 +212,10 @@ function LoadedLiveConversationDetail({
     ...machineDetailQueryOptions(runtime, machineId),
     enabled: connectionState === 'connected',
   })
+  const machinesQuery = useQuery({
+    ...machineListQueryOptions(runtime),
+    enabled: connectionState === 'connected',
+  })
   const railQuery = useQuery({
     ...conversationListQueryOptions(runtime, projectId),
     enabled: connectionState === 'connected',
@@ -267,7 +276,15 @@ function LoadedLiveConversationDetail({
           ? undefined
           : projectLocationForMachine(projectQuery.data, machineId)?.rootPath
       }
+      machine={machineQuery.data?.machine}
       machineName={machineQuery.data?.machine.displayName ?? '机器'}
+      machineNames={Object.fromEntries(
+        (machinesQuery.data ?? []).map((machine) => [
+          machine.machineId,
+          machine.displayName,
+        ]),
+      )}
+      machineProviders={machineQuery.data?.providers ?? []}
       initialInspectorTab={initialInspectorTab}
       targetTurnId={targetTurnId}
     />
@@ -283,7 +300,10 @@ interface ConnectedLiveConversationDetailProps {
   readonly project: ProjectRecord | undefined
   readonly projectAvailability: 'available' | 'unavailable'
   readonly projectRootPath?: string
+  readonly machine?: MachineSummary
   readonly machineName: string
+  readonly machineNames: Readonly<Record<string, string>>
+  readonly machineProviders: readonly ProviderDescriptor[]
   readonly initialInspectorTab?: 'changes'
   readonly targetTurnId?: TurnId
 }
@@ -297,13 +317,28 @@ function ConnectedLiveConversationDetail({
   project,
   projectAvailability,
   projectRootPath,
+  machine,
   machineName,
+  machineNames,
+  machineProviders,
   initialInspectorTab,
   targetTurnId,
 }: ConnectedLiveConversationDetailProps) {
   const navigate = useNavigate()
   const newConversationButtonRef = useRef<HTMLButtonElement>(null)
   const [newConversationOpen, setNewConversationOpen] = useState(false)
+  const machineProvider = machineProviders.find(
+    (provider) => provider.provider === conversation.provider,
+  )
+  const executionAvailable =
+    machine?.availability === 'available' &&
+    machine.capabilities.providerExecution &&
+    machineProvider?.availability === 'available' &&
+    machineProvider.capabilities.streaming
+  const executionUnavailableReason =
+    machine?.kind === 'remote' && machine.connectionState !== 'online'
+      ? 'machine_offline'
+      : 'execution_unavailable'
   const source = createLiveConversationDetailSource(
     conversation,
     summaries,
@@ -312,6 +347,15 @@ function ConnectedLiveConversationDetail({
     projectAvailability,
     projectRootPath,
     machineName,
+    {
+      providerDescriptors: machineProviders,
+      executionAvailable,
+      executionUnavailableLabel:
+        executionUnavailableReason === 'machine_offline'
+          ? '执行机器离线'
+          : '远程执行不可用',
+      names: machineNames,
+    },
   )
   const controls = useLiveConversationControls(
     conversation,
@@ -325,6 +369,15 @@ function ConnectedLiveConversationDetail({
         viewModel={source.conversation}
         rail={source.rail}
         connectionIndicator={source.connectionIndicator}
+        {...(executionAvailable || machine === undefined
+          ? {}
+          : {
+              executionBoundary: {
+                machineId: machine.machineId,
+                machineName: machine.displayName,
+                reason: executionUnavailableReason,
+              },
+            })}
         controls={controls}
         initialInspectorTab={initialInspectorTab}
         targetTurnId={targetTurnId}

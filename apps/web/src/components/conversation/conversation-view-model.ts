@@ -1,6 +1,7 @@
 import type {
   ConversationStatus,
   ConversationTitleSource,
+  MachineId,
   ProviderId,
 } from '@codetether/protocol'
 import type { AgentId, DiffLine, ExecutionStatus } from '@codetether/ui'
@@ -188,6 +189,12 @@ export type ConversationConnectionState =
 export interface ConversationConnectionIndicatorViewModel {
   readonly state: ConversationConnectionState
   readonly label: string
+}
+
+export interface ConversationExecutionBoundaryViewModel {
+  readonly machineId: MachineId
+  readonly machineName: string
+  readonly reason: 'machine_offline' | 'execution_unavailable'
 }
 
 export interface ConversationDetailSourceViewModel {

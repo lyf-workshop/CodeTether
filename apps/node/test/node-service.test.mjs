@@ -23,7 +23,10 @@ import {
 import { parseNodeCli, runNode } from '../dist/main.js'
 import { CodeTetherNodeService } from '../dist/node-service.js'
 import { validateProjectLocationPath } from '../dist/project-location-validation.js'
-import { RemoteProviderDetector } from '../dist/provider-discovery.js'
+import {
+  RemoteProviderDetector,
+  supportsRemoteCodexExecutionPlatform,
+} from '../dist/provider-discovery.js'
 import { NodeStateStore } from '../dist/state-store.js'
 
 async function controller(controllerId = newControllerId()) {
@@ -121,10 +124,15 @@ test('trusted Provider discovery is identity-bound, deduplicated, and non-execut
         { provider: 'claude-code', availability: 'available' },
       ],
     )
+    assert.deepEqual(
+      Object.entries(discovery.providers[0].capabilities)
+        .filter(([, enabled]) => enabled)
+        .map(([capability]) => capability)
+        .sort(),
+      supportsRemoteCodexExecutionPlatform() ? ['resume', 'streaming'] : [],
+    )
     assert.equal(
-      discovery.providers.some(({ capabilities }) =>
-        Object.values(capabilities).some(Boolean),
-      ),
+      Object.values(discovery.providers[1].capabilities).some(Boolean),
       false,
     )
 

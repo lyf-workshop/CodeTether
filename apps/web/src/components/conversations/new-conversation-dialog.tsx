@@ -184,7 +184,7 @@ export function NewConversationDialog({
     )
   const providers = providerPresentationsForMachine(
     machineDetailQuery.data?.providers ?? [],
-  )
+  ).filter((provider) => provider.available && provider.capabilities.streaming)
   const selectedProviderPresentation = providerPresentationForMachine(
     machineDetailQuery.data?.providers ?? [],
     selectedProvider,
@@ -229,7 +229,7 @@ export function NewConversationDialog({
           machine.kind === 'remote' && !machine.capabilities.providerExecution,
       )
     ) {
-      return '此项目已有远程工作区位置，但当前版本尚不支持在远程机器上执行智能体会话。'
+      return '此项目已有远程工作区位置，但远程机器当前未满足在线连接、当前 Codex 检测或安全执行条件。'
     }
     if (boundMachines.some((machine) => machine.availability !== 'available')) {
       return '此项目的工作区位置所在机器当前离线或不可用。恢复连接后再创建会话。'

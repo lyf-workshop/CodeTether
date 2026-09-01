@@ -116,7 +116,7 @@ export class FramedMachineConnection {
   }
 
   get closed(): boolean {
-    return this.#closed
+    return this.#closed || this.#failure !== undefined
   }
 
   async receive<T>(

@@ -29,6 +29,8 @@ export class MachineRegistryError extends Error {
 
 export interface RemoteMachineStatusSource {
   connectionState(machineId: MachineId): MachineConnectionState | undefined
+  /** True only for an online, authenticated Machine with a current execution profile. */
+  providerExecutionAvailable?(machineId: MachineId): boolean
 }
 
 interface MachineRegistryOptions {
@@ -218,7 +220,10 @@ export class MachineRegistry {
         // registration/reads. This does not imply remote filesystem access or
         // Provider execution.
         projectAccess: true,
-        providerExecution: false,
+        providerExecution:
+          this.#remoteStatus?.providerExecutionAvailable?.(
+            machine.machineId,
+          ) === true,
         backgroundRuntime: false,
         nativeFolderPicker: false,
         notifications: false,

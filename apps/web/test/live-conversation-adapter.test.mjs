@@ -335,6 +335,89 @@ test('passes the queried Machine display name through Detail and Rail', () => {
   assert.equal(source.rail.groups[0].conversations[0].machine, '本地电脑')
 })
 
+test('uses exact Machine-scoped remote Codex capabilities and rail identities', () => {
+  const remoteCodex = {
+    provider: 'codex',
+    displayName: 'Codex',
+    availability: 'available',
+    capabilities: {
+      streaming: true,
+      resume: true,
+      interrupt: false,
+      approvals: false,
+      fileRead: false,
+      fileEdit: false,
+      shell: false,
+      search: false,
+      diff: false,
+      toolEvents: false,
+      modelSelection: false,
+      reasoningControl: false,
+    },
+  }
+  const source = createLiveConversationDetailSource(
+    conversation({ turns: [], currentTurn: undefined, status: 'idle' }),
+    [
+      summary({ machineId: 'machine_remote01' }),
+      summary({
+        conversationId: 'conv_live02',
+        machineId: 'machine_local01',
+      }),
+    ],
+    'connected',
+    bootstrap('codex'),
+    'available',
+    '/home/test/project',
+    'Linux VM',
+    {
+      providerDescriptors: [remoteCodex],
+      executionAvailable: true,
+      names: {
+        machine_remote01: 'Linux VM',
+        machine_local01: '本地电脑',
+      },
+    },
+  )
+
+  assert.deepEqual(source.conversation.capabilities, {
+    canCompose: true,
+    canInterrupt: false,
+    canStop: false,
+    canResolveApproval: false,
+    supportsInterrupt: false,
+    supportsApprovals: false,
+    supportsDiff: false,
+    supportsReasoningControl: false,
+  })
+  assert.deepEqual(
+    source.rail.groups[0].conversations.map((item) => item.machine),
+    ['Linux VM', '本地电脑'],
+  )
+})
+
+test('keeps offline remote history readable while disabling execution', () => {
+  const source = createLiveConversationDetailSource(
+    conversation({ turns: [], currentTurn: undefined, status: 'idle' }),
+    [summary({ machineId: 'machine_remote01' })],
+    'connected',
+    undefined,
+    'available',
+    '/home/test/project',
+    'Linux VM',
+    {
+      executionAvailable: false,
+      executionUnavailableLabel: '执行机器离线',
+    },
+  )
+
+  assert.equal(source.conversation.capabilities.canCompose, false)
+  assert.deepEqual(source.conversation.timeline.blocks, [])
+  assert.deepEqual(source.connectionIndicator, {
+    state: 'unavailable',
+    label: '执行机器离线',
+  })
+})
+
 test('keeps Codex and Claude Code as distinct durable Rail groups', () => {
   const selected = conversation({
     provider: 'claude-code',

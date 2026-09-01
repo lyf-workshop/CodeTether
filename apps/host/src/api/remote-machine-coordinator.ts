@@ -4,6 +4,7 @@ import { isIP } from 'node:net'
 import { basename, dirname, join, resolve } from 'node:path'
 
 import {
+  ConversationIdSchema,
   MachineIdSchema,
   MachinePairingAttemptIdSchema,
   RemoteMachinePairingCandidateSchema,
@@ -30,13 +31,20 @@ import {
   machineTransportLimits,
   newControllerId,
   NodeIdSchema,
+  openRemoteCodexSession,
   readMachineTlsIdentityFile,
+  MachineTransportActionIdSchema,
+  MachineTransportConversationIdSchema,
+  MachineTransportProjectIdSchema,
+  MachineTransportTurnIdSchema,
+  RemoteCodexProviderIdentitySchema,
   type AuthenticatedRemoteMachineConnection,
   type MachineControllerIdentity,
   type PendingRemoteMachinePairing,
   type TrustedRemotePeer,
   type ValidatedRemoteProjectLocation,
   type RemoteProviderDiscovery,
+  type RemoteCodexSession as MachineTransportRemoteCodexSession,
 } from '@codetether/machine-transport'
 
 import type {
@@ -47,6 +55,7 @@ import type {
   DurableTrustedMachinePeer,
 } from '../persistence/index.js'
 import type { RemoteMachineStatusSource } from './machine-registry.js'
+import type { RemoteCodexRuntimeSession } from './remote-codex-host-runtime.js'
 
 export type RemoteMachineCoordinatorErrorCode =
   | 'not_found'
@@ -63,6 +72,14 @@ export type RemoteMachineCoordinatorErrorCode =
   | 'project_location_missing'
   | 'project_location_not_directory'
   | 'project_location_inaccessible'
+  | 'remote_execution_unavailable'
+  | 'provider_unavailable'
+  | 'provider_start_failed'
+  | 'provider_session_lost'
+  | 'remote_execution_lost'
+  | 'remote_policy_violation'
+  | 'conversation_busy'
+  | 'duplicate_action_conflict'
 
 export class RemoteMachineCoordinatorError extends Error {
   constructor(
@@ -110,6 +127,16 @@ export interface RemoteMachineCoordinator extends RemoteMachineStatusSource {
     machineId: MachineId,
     observedAt: Timestamp,
   ): boolean
+  openCodexSession?(
+    machine: DurableMachine,
+    trust: DurableTrustedMachinePeer,
+    input: {
+      readonly conversationId: string
+      readonly projectId: string
+      readonly rootPath: string
+      readonly providerThreadId?: string
+    },
+  ): Promise<RemoteCodexRuntimeSession>
   beginPairing(input: {
     readonly address: RemoteMachineAddress
     readonly pairingCode: string
@@ -206,6 +233,7 @@ interface ProviderDiscoveryTask {
 interface CoordinatorTransport {
   beginPairing: typeof beginRemoteMachinePairing
   connectTrusted: typeof connectTrustedRemoteMachine
+  openCodexSession?: typeof openRemoteCodexSession
 }
 
 export interface SecureRemoteMachineCoordinatorOptions {
@@ -274,6 +302,7 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
     this.#transport = options.transport ?? {
       beginPairing: beginRemoteMachinePairing,
       connectTrusted: connectTrustedRemoteMachine,
+      openCodexSession: openRemoteCodexSession,
     }
     this.#deleteCredentialFile =
       options.deleteCredentialFile ?? deleteMachineTlsIdentityFile
@@ -339,6 +368,22 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
       this.#states.get(MachineIdSchema.parse(machineId)) === 'online' &&
       this.#currentProviderObservations.get(machineId) ===
         TimestampSchema.parse(observedAt)
+    )
+  }
+
+  providerExecutionAvailable(machineId: MachineId): boolean {
+    const id = MachineIdSchema.parse(machineId)
+    const observation = this.#persistence.getRemoteProviderObservation(id)
+    const codex = observation?.providers.find(
+      (provider) => provider.provider === 'codex',
+    )
+    return (
+      observation !== undefined &&
+      this.providerDiscoveryCurrent(id, observation.observedAt) &&
+      codex?.availability === 'available' &&
+      codex.capabilities.streaming &&
+      codex.capabilities.resume &&
+      this.#transport.openCodexSession !== undefined
     )
   }
 
@@ -584,8 +629,20 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
     const id = MachineIdSchema.parse(machine.machineId)
     return await this.#serializeMachineOperation(id, async () => {
       const current = this.#requireCurrentActiveTrust(machine, trust)
+      // Validation temporarily replaces the heartbeat connection.  If this
+      // Machine was execution-eligible, restore Provider freshness on the
+      // same pinned connection before returning; otherwise Start Turn would
+      // observe a stale descriptor immediately after its own authorization.
+      const restoreExecutionDiscovery = this.providerExecutionAvailable(id)
+      const wasOnline = this.#states.get(id) === 'online'
       await this.#stopWorker(id)
-      this.#setState(id, 'connecting')
+      // Replacing one already-authenticated connection with another exact
+      // pinned connection is not a Machine outage. In particular, do not tell
+      // Host runtimes to invalidate a live native Session merely because the
+      // next Turn re-authorizes its registered ProjectLocation. A real dial,
+      // authentication, or heartbeat failure below still transitions away
+      // from online and invalidates sessions.
+      if (!wasOnline) this.#setState(id, 'connecting')
       let connection: AuthenticatedRemoteMachineConnection | undefined
       let authenticatedEndpoint: DurableTrustedMachineEndpoint | undefined
       let lastConnectionError: unknown
@@ -628,6 +685,9 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
         )
         this.#setState(id, 'online')
         const validated = await connection.validateProjectLocation(rootPath)
+        if (restoreExecutionDiscovery) {
+          await this.#discoverAndPersist(current.machine, connection)
+        }
         connection.close()
         connection = undefined
         setTimeout(() => this.#startDurableWorker(id), 0)
@@ -708,6 +768,81 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
     discovery.task = task
     this.#providerDiscoveryTasks.set(id, discovery)
     return task
+  }
+
+  async openCodexSession(
+    machine: DurableMachine,
+    trust: DurableTrustedMachinePeer,
+    input: {
+      readonly conversationId: string
+      readonly projectId: string
+      readonly rootPath: string
+      readonly providerThreadId?: string
+    },
+  ): Promise<RemoteCodexRuntimeSession> {
+    const id = MachineIdSchema.parse(machine.machineId)
+    return await this.#serializeMachineOperation(id, async () => {
+      const current = this.#requireCurrentActiveTrust(machine, trust)
+      if (!this.providerExecutionAvailable(id)) {
+        throw new RemoteMachineCoordinatorError(
+          'remote_execution_unavailable',
+          'Remote Codex execution is unavailable on this Machine',
+        )
+      }
+      const controller = await this.#loadController(current.trust)
+      let lastError: unknown
+      for (const endpoint of current.trust.endpoints) {
+        try {
+          this.#recordAttempt(id)
+          const session = await (
+            this.#transport.openCodexSession ?? openRemoteCodexSession
+          )({
+            peer: trustedPeer(current.machine, current.trust, endpoint.address),
+            controller,
+            conversationId: MachineTransportConversationIdSchema.parse(
+              input.conversationId,
+            ),
+            projectId: MachineTransportProjectIdSchema.parse(input.projectId),
+            rootPath: input.rootPath,
+            ...(input.providerThreadId === undefined
+              ? {}
+              : {
+                  providerThreadId: RemoteCodexProviderIdentitySchema.parse(
+                    input.providerThreadId,
+                  ),
+                }),
+          })
+          const authenticatedAt = TimestampSchema.parse(
+            this.#now().toISOString(),
+          )
+          this.#persistence.recordTrustedMachineAuthentication(
+            id,
+            endpoint.address,
+            authenticatedAt,
+          )
+          return remoteCodexRuntimeSession(session)
+        } catch (error) {
+          lastError = error
+          this.#persistence.recordTrustedMachineEndpointFailure(
+            id,
+            endpoint.address,
+            TimestampSchema.parse(this.#now().toISOString()),
+          )
+          if (
+            error instanceof MachineTransportError &&
+            (error.code === 'identity_mismatch' ||
+              error.code === 'authentication_failed' ||
+              error.code === 'protocol_incompatible' ||
+              error.code === 'remote_policy_violation')
+          ) {
+            break
+          }
+        }
+      }
+      throw coordinatorError(
+        lastError ?? new Error('No trusted endpoint is available'),
+      )
+    })
   }
 
   async unpair(
@@ -1134,7 +1269,15 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
     let delayMs = 1_000
     let trust = initialTrust
     while (!this.#closed && !worker.abort.signal.aborted) {
-      this.#setState(machine.machineId, 'connecting')
+      // A successful purpose-specific authenticated handoff (for example
+      // ProjectLocation validation immediately before execution) already
+      // proves the Machine online. Do not manufacture a transient disconnect
+      // or stale a freshly renewed Provider observation while establishing
+      // the replacement heartbeat connection. Real dial/heartbeat failure
+      // below still transitions offline and invalidates freshness.
+      if (this.#states.get(machine.machineId) !== 'online') {
+        this.#setState(machine.machineId, 'connecting')
+      }
       let cycleError: unknown
       let cycleHasRetryableEndpointFailure = false
       let authenticatedEndpoint: DurableTrustedMachineEndpoint | undefined
@@ -1381,10 +1524,21 @@ function remoteProviderObservation(
   discovery: RemoteProviderDiscovery,
 ): DurableRemoteProviderObservation {
   for (const provider of discovery.providers) {
-    if (Object.values(provider.capabilities).some(Boolean)) {
+    const enabledCapabilities = Object.entries(provider.capabilities)
+      .filter(([, enabled]) => enabled)
+      .map(([capability]) => capability)
+    const codexExecutionFoundation =
+      provider.provider === 'codex' &&
+      provider.availability === 'available' &&
+      provider.capabilities.streaming &&
+      provider.capabilities.resume &&
+      enabledCapabilities.every(
+        (capability) => capability === 'streaming' || capability === 'resume',
+      )
+    if (enabledCapabilities.length > 0 && !codexExecutionFoundation) {
       throw new RemoteMachineCoordinatorError(
         'protocol_incompatible',
-        'Remote Provider execution capabilities are not enabled',
+        'Remote Provider capabilities exceed the Codex execution foundation',
       )
     }
   }
@@ -1657,12 +1811,52 @@ function coordinatorError(error: unknown): RemoteMachineCoordinatorError {
           'project_location_inaccessible',
           'Project Location directory is inaccessible',
         )
+      case 'remote_execution_unavailable':
+      case 'provider_unavailable':
+      case 'provider_start_failed':
+      case 'provider_session_lost':
+      case 'remote_execution_lost':
+      case 'remote_policy_violation':
+      case 'conversation_busy':
+      case 'duplicate_action_conflict':
+        return new RemoteMachineCoordinatorError(
+          error.code,
+          'Remote Codex execution failed',
+        )
     }
   }
   return new RemoteMachineCoordinatorError(
     'connection_failed',
     'Remote Machine connection failed',
   )
+}
+
+function remoteCodexRuntimeSession(
+  session: MachineTransportRemoteCodexSession,
+): RemoteCodexRuntimeSession {
+  return {
+    machineId: MachineIdSchema.parse(session.machine.machineId),
+    conversationId: ConversationIdSchema.parse(session.conversationId),
+    providerThreadId: session.providerThreadId,
+    get closed() {
+      return session.closed
+    },
+    startTurn: async (input) => {
+      const turn = await session.startTurn({
+        actionId: MachineTransportActionIdSchema.parse(input.actionId),
+        turnId: MachineTransportTurnIdSchema.parse(input.turnId),
+        prompt: input.prompt,
+      })
+      return {
+        events: async function* () {
+          for await (const envelope of turn.events()) {
+            yield { ...envelope.event, sequence: envelope.sequence }
+          }
+        },
+      }
+    },
+    close: async () => await session.close(),
+  }
 }
 
 function isProjectLocationValidationError(error: unknown): boolean {

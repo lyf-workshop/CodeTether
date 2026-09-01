@@ -32,8 +32,6 @@ import {
   type TurnInputRecord,
 } from '@codetether/protocol'
 
-import { normalizeTrustedProjectRoot } from '../project-path.js'
-
 import {
   attentionFromRow,
   parseAttentionId,
@@ -2293,8 +2291,21 @@ function parseRemoteProviderObservation(
   const identities = new Set<ProviderId>()
   const providers = value.providers.map((provider) => {
     const descriptor = ProviderDescriptorSchema.parse(provider)
-    if (Object.values(descriptor.capabilities).some(Boolean)) {
-      throw new Error('Remote Provider execution capabilities are not enabled')
+    const enabledCapabilities = Object.entries(descriptor.capabilities)
+      .filter(([, enabled]) => enabled)
+      .map(([capability]) => capability)
+    const codexExecutionFoundation =
+      descriptor.provider === 'codex' &&
+      descriptor.availability === 'available' &&
+      descriptor.capabilities.streaming &&
+      descriptor.capabilities.resume &&
+      enabledCapabilities.every(
+        (capability) => capability === 'streaming' || capability === 'resume',
+      )
+    if (enabledCapabilities.length > 0 && !codexExecutionFoundation) {
+      throw new Error(
+        'Remote Provider capabilities exceed the Codex execution foundation',
+      )
     }
     if (identities.has(descriptor.provider)) {
       throw new Error('Remote Provider observation identities must be unique')
@@ -2498,7 +2509,11 @@ function parseConversation(
   value: DurableConversation | NewDurableConversation,
 ): DurableConversation {
   const provider = ProviderIdSchema.parse(value.provider)
-  const cwd = normalizeTrustedProjectRoot(value.cwd).rootPath
+  // Conversation bindings can now point at an authenticated ProjectLocation
+  // on a Machine whose path syntax differs from the Controller.  This is a
+  // durable/path-shape check only; ProjectRegistry re-authorizes the exact
+  // Machine-scoped Location before every workspace-dependent operation.
+  const cwd = parseCanonicalProjectRoot(value.cwd)
   assertOptionalBoundedText(value.providerThreadId, 'Provider Thread ID', 4096)
   assertOptionalBoundedText(value.model, 'Conversation model', 240)
   assertOptionalBoundedText(value.reasoning, 'Conversation reasoning', 120)

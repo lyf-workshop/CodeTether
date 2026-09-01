@@ -1,0 +1,922 @@
+import { createHash } from 'node:crypto'
+import { homedir } from 'node:os'
+import { isAbsolute, join } from 'node:path'
+
+import {
+  CodexAppServerClient,
+  isRecord,
+  type JsonRpcNotification,
+  type ThreadResumeResult,
+  type ThreadStartResult,
+  type TurnStartResult,
+} from '@codetether/adapter-codex'
+import type { AgentEvent } from '@codetether/agent-core'
+import {
+  MachineTransportError,
+  RemoteCodexProviderIdentitySchema,
+  RemoteCodexPromptSchema,
+  machineTransportLimits,
+  type CodexSessionOpenMessage,
+  type CodexTurnStartMessage,
+  type RemoteCodexTurnEventPayload,
+} from '@codetether/machine-transport'
+
+import { validateProjectLocationPath } from './project-location-validation.js'
+import { supportsRemoteCodexExecutionPlatform } from './provider-discovery.js'
+
+interface RemoteCodexClient {
+  readonly startRemoteTextThread: (options: {
+    readonly cwd: string
+  }) => Promise<ThreadStartResult>
+  readonly resumeRemoteTextThread: (options: {
+    readonly threadId: string
+    readonly cwd: string
+  }) => Promise<ThreadResumeResult>
+  readonly startRemoteTextTurn: (options: {
+    readonly threadId: string
+    readonly prompt: string
+  }) => Promise<TurnStartResult>
+  readonly waitForTurn: (
+    threadId: string,
+    turnId: string,
+    timeoutMs?: number,
+  ) => Promise<unknown>
+  readonly shutdown: () => Promise<void>
+}
+
+export interface RemoteCodexClientFactoryOptions {
+  readonly onEvent: (event: AgentEvent) => void
+  readonly onError: (error: Error) => void
+}
+
+export type RemoteCodexClientFactory = (
+  options: RemoteCodexClientFactoryOptions,
+) => Promise<RemoteCodexClient>
+
+export interface RemoteCodexRunnerPoolOptions {
+  /** Internal Node-owned state only; never supplied by the Machine protocol. */
+  readonly codexHome?: string
+  /** Internal test seam; the Machine protocol cannot select an executable. */
+  readonly clientFactory?: RemoteCodexClientFactory
+  readonly maximumSessions?: number
+}
+
+export class RemoteCodexRunnerPool {
+  readonly #clientFactory: RemoteCodexClientFactory
+  readonly #maximumSessions: number
+  readonly #runners = new Map<string, RemoteCodexRunner>()
+  readonly #opening = new Map<string, Promise<RemoteCodexRunner>>()
+  readonly #cleanupTasks = new Set<Promise<void>>()
+  readonly #executionSupported: boolean
+  #closed = false
+  #closePromise: Promise<void> | undefined
+
+  constructor(options: RemoteCodexRunnerPoolOptions = {}) {
+    const codexHome = options.codexHome ?? defaultRemoteCodexHome()
+    if (!isAbsolute(codexHome)) {
+      throw new TypeError('Remote Codex home must be an absolute path')
+    }
+    this.#maximumSessions =
+      options.maximumSessions ??
+      machineTransportLimits.maximumRemoteCodexSessions
+    if (
+      !Number.isSafeInteger(this.#maximumSessions) ||
+      this.#maximumSessions <= 0 ||
+      this.#maximumSessions > machineTransportLimits.maximumRemoteCodexSessions
+    ) {
+      throw new TypeError('Remote Codex session limit is invalid')
+    }
+    this.#executionSupported =
+      options.clientFactory !== undefined ||
+      supportsRemoteCodexExecutionPlatform()
+    this.#clientFactory =
+      options.clientFactory ??
+      (async ({ onEvent, onError }) =>
+        await CodexAppServerClient.launchRemote({
+          codexHome,
+          clientInfo: {
+            name: 'codetether-node',
+            title: 'CodeTether Node',
+            version: '1',
+          },
+          onEvent,
+          onError,
+          validateNotification: validateRemoteCodexTextNotification,
+          onStderr: () => undefined,
+        }))
+  }
+
+  get activeCount(): number {
+    return this.#runners.size
+  }
+
+  async open(request: CodexSessionOpenMessage): Promise<RemoteCodexRunner> {
+    if (this.#closed || !this.#executionSupported) throw executionUnavailable()
+    if (
+      this.#runners.has(request.conversationId) ||
+      this.#opening.has(request.conversationId)
+    ) {
+      throw new MachineTransportError(
+        'conversation_busy',
+        'Remote Codex Conversation already has an owned session',
+      )
+    }
+    if (this.#runners.size + this.#opening.size >= this.#maximumSessions) {
+      throw new MachineTransportError(
+        'busy',
+        'Remote Codex session limit was reached',
+      )
+    }
+
+    const opening = this.#openRunner(request)
+    this.#opening.set(request.conversationId, opening)
+    try {
+      return await opening
+    } finally {
+      if (this.#opening.get(request.conversationId) === opening) {
+        this.#opening.delete(request.conversationId)
+      }
+    }
+  }
+
+  async release(runner: RemoteCodexRunner): Promise<void> {
+    if (this.#runners.get(runner.conversationId) === runner) {
+      this.#runners.delete(runner.conversationId)
+    }
+    await runner.close()
+  }
+
+  async close(): Promise<void> {
+    this.#closePromise ??= this.#close()
+    await this.#closePromise
+  }
+
+  async #openRunner(
+    request: CodexSessionOpenMessage,
+  ): Promise<RemoteCodexRunner> {
+    const validated = await validateProjectLocationPath(request.rootPath)
+    if (validated.canonicalPath !== request.rootPath) {
+      throw new MachineTransportError(
+        'project_location_path_invalid',
+        'Registered Project Location is no longer canonical',
+      )
+    }
+    if (this.#closed) throw executionUnavailable()
+    const runner = await RemoteCodexRunner.open({
+      request,
+      canonicalRoot: validated.canonicalPath,
+      clientFactory: this.#clientFactory,
+      onFatal: (ownedRunner) => this.#releaseAfterFatal(ownedRunner),
+    })
+    if (this.#closed) {
+      await runner.close()
+      throw executionUnavailable()
+    }
+    this.#runners.set(request.conversationId, runner)
+    return runner
+  }
+
+  async #close(): Promise<void> {
+    this.#closed = true
+    while (
+      this.#runners.size > 0 ||
+      this.#opening.size > 0 ||
+      this.#cleanupTasks.size > 0
+    ) {
+      const runners = [...this.#runners.values()]
+      const openings = [...this.#opening.values()]
+      const cleanups = [...this.#cleanupTasks]
+      this.#runners.clear()
+      await Promise.allSettled([
+        ...runners.map(async (runner) => await runner.close()),
+        ...openings,
+        ...cleanups,
+      ])
+    }
+  }
+
+  #releaseAfterFatal(runner: RemoteCodexRunner): void {
+    // Adapter callbacks run inside the protocol notification stack. Defer
+    // exact release so shutdown cannot re-enter that stack; runner.close() is
+    // idempotent if shutdown itself reports another failure.
+    queueMicrotask(() => {
+      if (this.#runners.get(runner.conversationId) !== runner) return
+      this.#runners.delete(runner.conversationId)
+      this.#trackCleanup(runner.close())
+    })
+  }
+
+  #trackCleanup(task: Promise<void>): void {
+    this.#cleanupTasks.add(task)
+    void task
+      .finally(() => this.#cleanupTasks.delete(task))
+      .catch(() => undefined)
+  }
+}
+
+interface OpenRemoteCodexRunnerOptions {
+  readonly request: CodexSessionOpenMessage
+  readonly canonicalRoot: string
+  readonly clientFactory: RemoteCodexClientFactory
+  readonly onFatal: (runner: RemoteCodexRunner) => void
+}
+
+export class RemoteCodexRunner {
+  readonly conversationId: CodexSessionOpenMessage['conversationId']
+  readonly projectId: CodexSessionOpenMessage['projectId']
+  readonly canonicalRoot: string
+  readonly providerThreadId: string
+  readonly resumed: boolean
+  readonly #client: RemoteCodexClient
+  readonly #actions = new Map<string, RemoteCodexRunnerTurn>()
+  #activeTurn: RemoteCodexRunnerTurn | undefined
+  #closed = false
+
+  private constructor(options: {
+    request: CodexSessionOpenMessage
+    canonicalRoot: string
+    client: RemoteCodexClient
+    providerThreadId: string
+    resumed: boolean
+  }) {
+    this.conversationId = options.request.conversationId
+    this.projectId = options.request.projectId
+    this.canonicalRoot = options.canonicalRoot
+    this.#client = options.client
+    this.providerThreadId = options.providerThreadId
+    this.resumed = options.resumed
+  }
+
+  static async open(
+    options: OpenRemoteCodexRunnerOptions,
+  ): Promise<RemoteCodexRunner> {
+    let runner: RemoteCodexRunner | undefined
+    let startupFailure: Error | undefined
+    const client = await options.clientFactory({
+      onEvent: (event) => runner?.handleProviderEvent(event),
+      onError: (error) => {
+        startupFailure = error
+        runner?.failActiveTurn('provider_session_lost')
+        if (runner !== undefined) options.onFatal(runner)
+      },
+    })
+    try {
+      if (startupFailure !== undefined) throw startupFailure
+      const thread =
+        options.request.providerThreadId === undefined
+          ? await client.startRemoteTextThread({ cwd: options.canonicalRoot })
+          : await client.resumeRemoteTextThread({
+              threadId: options.request.providerThreadId,
+              cwd: options.canonicalRoot,
+            })
+      const providerThreadId = RemoteCodexProviderIdentitySchema.parse(
+        thread.thread.id,
+      )
+      if (
+        options.request.providerThreadId !== undefined &&
+        providerThreadId !== options.request.providerThreadId
+      ) {
+        throw new MachineTransportError(
+          'provider_session_lost',
+          'Remote Codex resumed a different native session',
+        )
+      }
+      runner = new RemoteCodexRunner({
+        request: options.request,
+        canonicalRoot: options.canonicalRoot,
+        client,
+        providerThreadId,
+        resumed: options.request.providerThreadId !== undefined,
+      })
+      if (startupFailure !== undefined) throw startupFailure
+      return runner
+    } catch (error) {
+      await client.shutdown().catch(() => undefined)
+      throw mapProviderStartError(error)
+    }
+  }
+
+  async startTurn(
+    request: CodexTurnStartMessage,
+  ): Promise<RemoteCodexRunnerTurn> {
+    if (this.#closed) throw sessionLost()
+    if (
+      request.conversationId !== this.conversationId ||
+      request.providerThreadId !== this.providerThreadId
+    ) {
+      throw new MachineTransportError(
+        'identity_mismatch',
+        'Remote Codex Turn did not match the owned session',
+      )
+    }
+    RemoteCodexPromptSchema.parse(request.prompt)
+    const validated = await validateProjectLocationPath(this.canonicalRoot)
+    if (validated.canonicalPath !== this.canonicalRoot) {
+      throw new MachineTransportError(
+        'project_location_path_invalid',
+        'Registered Project Location identity changed',
+      )
+    }
+    if (this.#closed) throw sessionLost()
+    const requestHash = turnRequestHash(request)
+    const previous = this.#actions.get(request.actionId)
+    if (previous !== undefined) {
+      if (previous.requestHash !== requestHash) {
+        throw new MachineTransportError(
+          'duplicate_action_conflict',
+          'Remote Codex action identity was reused with different input',
+        )
+      }
+      if (previous.terminal) {
+        throw new MachineTransportError(
+          'duplicate_action_conflict',
+          'Remote Codex action already reached a terminal state',
+        )
+      }
+      return previous
+    }
+    if (this.#activeTurn !== undefined) {
+      throw new MachineTransportError(
+        'conversation_busy',
+        'Remote Codex Conversation already has an active Turn',
+      )
+    }
+
+    const turn = new RemoteCodexRunnerTurn(request, requestHash, () => {
+      if (this.#activeTurn === turn) this.#activeTurn = undefined
+    })
+    this.#activeTurn = turn
+    this.#rememberAction(request.actionId, turn)
+    try {
+      const started = await this.#client.startRemoteTextTurn({
+        threadId: this.providerThreadId,
+        prompt: request.prompt,
+      })
+      turn.bindProviderTurn(started.turn.id)
+      void this.#client
+        .waitForTurn(
+          this.providerThreadId,
+          turn.providerTurnId,
+          machineTransportLimits.remoteCodexTurnTimeoutMs,
+        )
+        .catch(() => this.failActiveTurn('provider_session_lost'))
+      return turn
+    } catch (error) {
+      turn.fail('provider_start_failed')
+      await this.close()
+      throw mapProviderStartError(error)
+    }
+  }
+
+  handleProviderEvent(event: AgentEvent): void {
+    if (this.#closed) return
+    if (
+      event.type === 'conversation.started' &&
+      this.#activeTurn === undefined
+    ) {
+      return
+    }
+    const turn = this.#activeTurn
+    if (turn === undefined) {
+      this.failActiveTurn('remote_policy_violation')
+      void this.close()
+      return
+    }
+    if (event.threadId !== this.providerThreadId) {
+      turn.fail('remote_policy_violation')
+      void this.close()
+      return
+    }
+    if ('turnId' in event && !turn.observeProviderTurn(event.turnId)) {
+      turn.fail('remote_policy_violation')
+      void this.close()
+      return
+    }
+    if (event.type === 'turn.started') return
+    if (event.type === 'message.delta') {
+      turn.pushDelta(event.delta)
+      return
+    }
+    if (event.type === 'message.completed') {
+      turn.push({ type: 'message.completed' })
+      return
+    }
+    if (event.type === 'turn.completed') {
+      turn.push({ type: 'turn.completed' })
+      return
+    }
+    if (event.type === 'turn.failed') {
+      turn.fail('provider_failed')
+      return
+    }
+    if (event.type === 'turn.interrupted') {
+      turn.fail('remote_execution_lost')
+      return
+    }
+
+    // Tool, file and approval events are impossible in the shipped text-only
+    // profile. Treat any occurrence as a policy violation and terminate the
+    // exact owned App Server rather than publishing it.
+    turn.fail('remote_policy_violation')
+    void this.close()
+  }
+
+  failActiveTurn(
+    code: 'provider_session_lost' | 'remote_policy_violation',
+  ): void {
+    this.#activeTurn?.fail(code)
+  }
+
+  async close(): Promise<void> {
+    if (this.#closed) return
+    this.#closed = true
+    this.#activeTurn?.fail('remote_execution_lost')
+    await this.#client.shutdown().catch(() => undefined)
+  }
+
+  #rememberAction(actionId: string, turn: RemoteCodexRunnerTurn): void {
+    this.#actions.set(actionId, turn)
+    while (this.#actions.size > 64) {
+      const oldest = this.#actions.keys().next().value as string | undefined
+      if (oldest === undefined) break
+      this.#actions.delete(oldest)
+    }
+  }
+}
+
+export class RemoteCodexRunnerTurn {
+  readonly actionId: CodexTurnStartMessage['actionId']
+  readonly conversationId: CodexTurnStartMessage['conversationId']
+  readonly turnId: CodexTurnStartMessage['turnId']
+  readonly requestHash: string
+  readonly #queue = new BoundedTurnEventQueue()
+  readonly #release: () => void
+  #observedProviderTurnId: string | undefined
+  #providerTurnId: string | undefined
+  #terminal = false
+
+  get terminal(): boolean {
+    return this.#terminal
+  }
+
+  constructor(
+    request: CodexTurnStartMessage,
+    requestHash: string,
+    release: () => void,
+  ) {
+    this.actionId = request.actionId
+    this.conversationId = request.conversationId
+    this.turnId = request.turnId
+    this.requestHash = requestHash
+    this.#release = release
+  }
+
+  get providerTurnId(): string {
+    if (this.#providerTurnId === undefined) {
+      throw new MachineTransportError(
+        'provider_start_failed',
+        'Remote Codex did not establish Turn ownership',
+      )
+    }
+    return this.#providerTurnId
+  }
+
+  bindProviderTurn(value: string): void {
+    const providerTurnId = RemoteCodexProviderIdentitySchema.parse(value)
+    if (
+      this.#observedProviderTurnId !== undefined &&
+      this.#observedProviderTurnId !== providerTurnId
+    ) {
+      throw new MachineTransportError(
+        'provider_start_failed',
+        'Remote Codex Turn identity changed during startup',
+      )
+    }
+    this.#providerTurnId = providerTurnId
+  }
+
+  observeProviderTurn(value: string): boolean {
+    const parsed = RemoteCodexProviderIdentitySchema.safeParse(value)
+    if (!parsed.success) return false
+    this.#observedProviderTurnId ??= parsed.data
+    return (
+      this.#observedProviderTurnId === parsed.data &&
+      (this.#providerTurnId === undefined ||
+        this.#providerTurnId === parsed.data)
+    )
+  }
+
+  pushDelta(text: string): void {
+    for (const chunk of splitUtf8(text)) {
+      this.push({ type: 'message.delta', text: chunk })
+    }
+  }
+
+  push(event: RemoteCodexTurnEventPayload): void {
+    if (this.#terminal) return
+    try {
+      this.#queue.push(event)
+      if (isTerminal(event)) {
+        this.#terminal = true
+        this.#release()
+      }
+    } catch {
+      this.fail('remote_execution_lost')
+    }
+  }
+
+  fail(
+    code:
+      | 'provider_start_failed'
+      | 'provider_session_lost'
+      | 'remote_execution_lost'
+      | 'remote_policy_violation'
+      | 'provider_failed',
+  ): void {
+    if (this.#terminal) return
+    this.#terminal = true
+    this.#queue.forceTerminal({
+      type: 'turn.failed',
+      code,
+      message: safeFailureMessage(code),
+    })
+    this.#release()
+  }
+
+  events(): AsyncIterable<RemoteCodexTurnEventPayload> {
+    return this.#queue
+  }
+}
+
+class BoundedTurnEventQueue implements AsyncIterable<RemoteCodexTurnEventPayload> {
+  readonly #queue: RemoteCodexTurnEventPayload[] = []
+  readonly #waiters: Array<{
+    resolve: (result: IteratorResult<RemoteCodexTurnEventPayload>) => void
+  }> = []
+  #queuedBytes = 0
+  #totalOutputBytes = 0
+  #closed = false
+
+  push(event: RemoteCodexTurnEventPayload): void {
+    if (this.#closed) return
+    const bytes = eventBytes(event)
+    if (event.type === 'message.delta') this.#totalOutputBytes += bytes
+    if (
+      this.#totalOutputBytes >
+        machineTransportLimits.maximumRemoteCodexOutputBytes ||
+      this.#queue.length >=
+        machineTransportLimits.maximumRemoteCodexQueuedEvents ||
+      this.#queuedBytes + bytes >
+        machineTransportLimits.maximumRemoteCodexQueuedOutputBytes
+    ) {
+      throw new MachineTransportError(
+        'remote_execution_lost',
+        'Remote Codex output exceeded its bound',
+      )
+    }
+    const waiter = this.#waiters.shift()
+    if (waiter !== undefined) waiter.resolve({ value: event, done: false })
+    else {
+      this.#queue.push(event)
+      this.#queuedBytes += bytes
+    }
+    if (isTerminal(event)) this.#closed = true
+  }
+
+  forceTerminal(event: RemoteCodexTurnEventPayload): void {
+    if (this.#closed) return
+    this.#queue.splice(0)
+    this.#queuedBytes = 0
+    const waiter = this.#waiters.shift()
+    if (waiter !== undefined) waiter.resolve({ value: event, done: false })
+    else this.#queue.push(event)
+    this.#closed = true
+    for (const pending of this.#waiters.splice(0)) {
+      pending.resolve({ value: undefined, done: true })
+    }
+  }
+
+  [Symbol.asyncIterator](): AsyncIterator<RemoteCodexTurnEventPayload> {
+    return {
+      next: async () => {
+        const event = this.#queue.shift()
+        if (event !== undefined) {
+          this.#queuedBytes = Math.max(0, this.#queuedBytes - eventBytes(event))
+          return { value: event, done: false }
+        }
+        if (this.#closed) return { value: undefined, done: true }
+        return await new Promise((resolve) => this.#waiters.push({ resolve }))
+      },
+    }
+  }
+}
+
+function splitUtf8(value: string): string[] {
+  if (value.length === 0) return []
+  const chunks: string[] = []
+  let current = ''
+  let currentBytes = 0
+  for (const character of value) {
+    const bytes = Buffer.byteLength(character, 'utf8')
+    if (
+      current.length > 0 &&
+      currentBytes + bytes > machineTransportLimits.maximumRemoteCodexDeltaBytes
+    ) {
+      chunks.push(current)
+      current = ''
+      currentBytes = 0
+    }
+    current += character
+    currentBytes += bytes
+  }
+  if (current.length > 0) chunks.push(current)
+  return chunks
+}
+
+function eventBytes(event: RemoteCodexTurnEventPayload): number {
+  return event.type === 'message.delta'
+    ? Buffer.byteLength(event.text, 'utf8')
+    : Buffer.byteLength(JSON.stringify(event), 'utf8')
+}
+
+function isTerminal(event: RemoteCodexTurnEventPayload): boolean {
+  return event.type === 'turn.completed' || event.type === 'turn.failed'
+}
+
+function turnRequestHash(request: CodexTurnStartMessage): string {
+  return createHash('sha256')
+    .update(request.conversationId)
+    .update('\0')
+    .update(request.turnId)
+    .update('\0')
+    .update(request.providerThreadId)
+    .update('\0')
+    .update(request.prompt)
+    .digest('base64url')
+}
+
+/**
+ * Fail-closed raw App Server notification policy for the remote text profile.
+ * This check runs before the shared normalizer, so an unknown Provider event
+ * can never be silently ignored. Reasoning lifecycle is admitted only because
+ * Codex can emit it while producing text; it is deliberately not normalized or
+ * sent over the Machine transport.
+ */
+export function validateRemoteCodexTextNotification(
+  notification: JsonRpcNotification,
+): void {
+  switch (notification.method) {
+    case 'remoteControl/status/changed': {
+      const params = requireExactRawRecord(notification.params, [
+        'environmentId',
+        'installationId',
+        'serverName',
+        'status',
+      ])
+      if (params.environmentId !== null) throw remotePolicyViolation()
+      requireRawIdentity(params.installationId)
+      requireBoundedRawMetadataText(params.serverName)
+      requireBoundedRawMetadataText(params.status)
+      return
+    }
+    case 'deprecationNotice': {
+      const params = requireExactRawRecord(notification.params, [
+        'details',
+        'summary',
+      ])
+      requireBoundedRawMetadataText(params.details)
+      requireBoundedRawMetadataText(params.summary)
+      return
+    }
+    case 'warning': {
+      const params = requireExactRawRecord(notification.params, [
+        'message',
+        'threadId',
+      ])
+      requireBoundedRawMetadataText(params.message)
+      requireRawIdentity(params.threadId)
+      return
+    }
+    case 'thread/started': {
+      const params = requireRawRecord(notification.params)
+      const thread = requireRawRecord(params.thread)
+      requireRawIdentity(thread.id)
+      return
+    }
+    case 'turn/started':
+    case 'turn/completed': {
+      const params = requireRawRecord(notification.params)
+      requireRawIdentity(params.threadId)
+      const turn = requireRawRecord(params.turn)
+      requireRawIdentity(turn.id)
+      return
+    }
+    case 'item/agentMessage/delta': {
+      const params = requireRawTurnItemParams(notification.params)
+      requireBoundedRawText(params.delta)
+      return
+    }
+    case 'item/started':
+    case 'item/completed': {
+      const params = requireRawRecord(notification.params)
+      requireRawIdentity(params.threadId)
+      requireRawIdentity(params.turnId)
+      const item = requireRawRecord(params.item)
+      requireRawIdentity(item.id)
+      if (item.type === 'userMessage') {
+        validateRawUserMessageItem(notification.method, params, item)
+        return
+      }
+      if (item.type !== 'agentMessage' && item.type !== 'reasoning') {
+        throw remotePolicyViolation()
+      }
+      if (
+        notification.method === 'item/completed' &&
+        item.type === 'agentMessage'
+      ) {
+        requireBoundedRawText(item.text)
+      }
+      return
+    }
+    case 'item/reasoning/summaryTextDelta':
+    case 'item/reasoning/textDelta': {
+      const params = requireRawTurnItemParams(notification.params)
+      requireBoundedRawText(params.delta)
+      return
+    }
+    case 'item/reasoning/summaryPartAdded': {
+      requireRawTurnItemParams(notification.params)
+      return
+    }
+    case 'thread/status/changed':
+    case 'thread/tokenUsage/updated': {
+      const params = requireRawRecord(notification.params)
+      requireRawIdentity(params.threadId)
+      return
+    }
+    case 'error':
+      requireRawRecord(notification.params)
+      return
+    default:
+      throw remotePolicyViolation()
+  }
+}
+
+function validateRawUserMessageItem(
+  method: 'item/started' | 'item/completed',
+  params: Record<string, unknown>,
+  item: Record<string, unknown>,
+): void {
+  requireExactRawKeys(
+    params,
+    method === 'item/started'
+      ? ['item', 'startedAtMs', 'threadId', 'turnId']
+      : ['completedAtMs', 'item', 'threadId', 'turnId'],
+  )
+  requireRawTimestamp(
+    method === 'item/started' ? params.startedAtMs : params.completedAtMs,
+  )
+  requireExactRawKeys(item, ['clientId', 'content', 'id', 'type'])
+  if (item.clientId !== null) throw remotePolicyViolation()
+  if (!Array.isArray(item.content) || item.content.length !== 1) {
+    throw remotePolicyViolation()
+  }
+  const content = requireExactRawRecord(item.content[0], [
+    'text',
+    'text_elements',
+    'type',
+  ])
+  if (
+    content.type !== 'text' ||
+    !Array.isArray(content.text_elements) ||
+    content.text_elements.length !== 0 ||
+    !RemoteCodexPromptSchema.safeParse(content.text).success
+  ) {
+    throw remotePolicyViolation()
+  }
+}
+
+function requireRawTurnItemParams(value: unknown): Record<string, unknown> {
+  const params = requireRawRecord(value)
+  requireRawIdentity(params.threadId)
+  requireRawIdentity(params.turnId)
+  requireRawIdentity(params.itemId)
+  return params
+}
+
+function requireRawRecord(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) throw remotePolicyViolation()
+  return value
+}
+
+function requireExactRawRecord(
+  value: unknown,
+  keys: readonly string[],
+): Record<string, unknown> {
+  const record = requireRawRecord(value)
+  requireExactRawKeys(record, keys)
+  return record
+}
+
+function requireExactRawKeys(
+  value: Record<string, unknown>,
+  keys: readonly string[],
+): void {
+  const actual = Object.keys(value).sort()
+  const expected = [...keys].sort()
+  if (
+    actual.length !== expected.length ||
+    actual.some((key, index) => key !== expected[index])
+  ) {
+    throw remotePolicyViolation()
+  }
+}
+
+function requireRawIdentity(value: unknown): void {
+  if (!RemoteCodexProviderIdentitySchema.safeParse(value).success) {
+    throw remotePolicyViolation()
+  }
+}
+
+function requireBoundedRawText(value: unknown): void {
+  if (
+    typeof value !== 'string' ||
+    Buffer.byteLength(value, 'utf8') >
+      machineTransportLimits.maximumRemoteCodexOutputBytes
+  ) {
+    throw remotePolicyViolation()
+  }
+}
+
+function requireBoundedRawMetadataText(value: unknown): void {
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    value.includes('\0') ||
+    Buffer.byteLength(value, 'utf8') > 4 * 1024
+  ) {
+    throw remotePolicyViolation()
+  }
+}
+
+function requireRawTimestamp(value: unknown): void {
+  if (!Number.isSafeInteger(value) || Number(value) < 0) {
+    throw remotePolicyViolation()
+  }
+}
+
+function remotePolicyViolation(): MachineTransportError {
+  return new MachineTransportError(
+    'remote_policy_violation',
+    'Remote Codex emitted an unsupported operation',
+  )
+}
+
+function defaultRemoteCodexHome(): string {
+  const configured = process.env.CODEX_HOME
+  return configured !== undefined && isAbsolute(configured)
+    ? configured
+    : join(homedir(), '.codex')
+}
+
+function safeFailureMessage(
+  code:
+    | 'provider_start_failed'
+    | 'provider_session_lost'
+    | 'remote_execution_lost'
+    | 'remote_policy_violation'
+    | 'provider_failed',
+): string {
+  return code === 'provider_start_failed'
+    ? 'Remote Codex could not start the Turn'
+    : code === 'provider_session_lost'
+      ? 'Remote Codex session was lost'
+      : code === 'remote_policy_violation'
+        ? 'Remote Codex emitted an unsupported operation'
+        : code === 'provider_failed'
+          ? 'Remote Codex failed the Turn'
+          : 'Remote Codex execution was lost'
+}
+
+function executionUnavailable(): MachineTransportError {
+  return new MachineTransportError(
+    'remote_execution_unavailable',
+    'Remote Codex execution is unavailable',
+  )
+}
+
+function sessionLost(): MachineTransportError {
+  return new MachineTransportError(
+    'provider_session_lost',
+    'Remote Codex session is unavailable',
+  )
+}
+
+function mapProviderStartError(error: unknown): MachineTransportError {
+  if (error instanceof MachineTransportError) return error
+  return new MachineTransportError(
+    'provider_start_failed',
+    'Remote Codex could not establish Provider ownership',
+    { cause: error },
+  )
+}

@@ -405,7 +405,7 @@ export function AddRemoteMachineDialog({
 
               <p className="rounded-sm border border-warning/30 bg-warning-muted/45 px-3 py-2 text-sm text-text-secondary">
                 只有当远程节点显示相同的安全校验码时，才信任这台机器。CodeTether
-                不会在本阶段远程执行智能体、命令或文件操作。
+                不会因配对本身执行命令或访问文件；远程会话还必须满足独立的项目位置和智能体安全能力校验。
               </p>
 
               {error ? (

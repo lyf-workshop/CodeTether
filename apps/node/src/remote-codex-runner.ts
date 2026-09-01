@@ -696,6 +696,11 @@ export function validateRemoteCodexTextNotification(
       requireBoundedRawMetadataText(params.status)
       return
     }
+    case 'account/rateLimits/updated': {
+      const params = requireExactRawRecord(notification.params, ['rateLimits'])
+      requireRawRateLimitSnapshot(params.rateLimits)
+      return
+    }
     case 'deprecationNotice': {
       const params = requireExactRawRecord(notification.params, [
         'details',
@@ -863,6 +868,121 @@ function requireRawTextPosition(value: unknown): void {
   const position = requireExactRawRecord(value, ['column', 'line'])
   requireRawTimestamp(position.column)
   requireRawTimestamp(position.line)
+}
+
+function requireRawRateLimitSnapshot(value: unknown): void {
+  const snapshot = requireRawRecord(value)
+  requireAllowedRawKeys(snapshot, [
+    'credits',
+    'individualLimit',
+    'limitId',
+    'limitName',
+    'planType',
+    'primary',
+    'rateLimitReachedType',
+    'secondary',
+    'spendControlReached',
+  ])
+  if (Object.hasOwn(snapshot, 'limitId')) {
+    requireNullableBoundedRawMetadataText(snapshot.limitId)
+  }
+  if (Object.hasOwn(snapshot, 'limitName')) {
+    requireNullableBoundedRawMetadataText(snapshot.limitName)
+  }
+  if (Object.hasOwn(snapshot, 'primary')) {
+    requireRawRateLimitWindow(snapshot.primary)
+  }
+  if (Object.hasOwn(snapshot, 'secondary')) {
+    requireRawRateLimitWindow(snapshot.secondary)
+  }
+  if (Object.hasOwn(snapshot, 'credits')) {
+    requireRawCreditsSnapshot(snapshot.credits)
+  }
+  if (Object.hasOwn(snapshot, 'individualLimit')) {
+    requireRawSpendControlLimit(snapshot.individualLimit)
+  }
+  if (Object.hasOwn(snapshot, 'spendControlReached')) {
+    requireNullableRawBoolean(snapshot.spendControlReached)
+  }
+  if (Object.hasOwn(snapshot, 'planType')) {
+    requireNullableBoundedRawMetadataText(snapshot.planType)
+  }
+  if (Object.hasOwn(snapshot, 'rateLimitReachedType')) {
+    requireNullableBoundedRawMetadataText(snapshot.rateLimitReachedType)
+  }
+}
+
+function requireRawRateLimitWindow(value: unknown): void {
+  if (value === null) return
+  const window = requireRawRecord(value)
+  requireAllowedRawKeys(window, [
+    'resetsAt',
+    'usedPercent',
+    'windowDurationMins',
+  ])
+  if (!Object.hasOwn(window, 'usedPercent')) throw remotePolicyViolation()
+  requireRawInt32(window.usedPercent)
+  if (Object.hasOwn(window, 'windowDurationMins')) {
+    requireNullableRawTimestamp(window.windowDurationMins)
+  }
+  if (Object.hasOwn(window, 'resetsAt')) {
+    requireNullableRawTimestamp(window.resetsAt)
+  }
+}
+
+function requireRawCreditsSnapshot(value: unknown): void {
+  if (value === null) return
+  const credits = requireRawRecord(value)
+  requireAllowedRawKeys(credits, ['balance', 'hasCredits', 'unlimited'])
+  if (
+    !Object.hasOwn(credits, 'hasCredits') ||
+    !Object.hasOwn(credits, 'unlimited') ||
+    typeof credits.hasCredits !== 'boolean' ||
+    typeof credits.unlimited !== 'boolean'
+  ) {
+    throw remotePolicyViolation()
+  }
+  if (Object.hasOwn(credits, 'balance')) {
+    requireNullableBoundedRawMetadataText(credits.balance)
+  }
+}
+
+function requireRawSpendControlLimit(value: unknown): void {
+  if (value === null) return
+  const limit = requireExactRawRecord(value, [
+    'limit',
+    'remainingPercent',
+    'resetsAt',
+    'used',
+  ])
+  requireBoundedRawMetadataText(limit.limit)
+  requireBoundedRawMetadataText(limit.used)
+  requireRawInt32(limit.remainingPercent)
+  requireRawTimestamp(limit.resetsAt)
+}
+
+function requireNullableRawBoolean(value: unknown): void {
+  if (value !== null && typeof value !== 'boolean') {
+    throw remotePolicyViolation()
+  }
+}
+
+function requireNullableBoundedRawMetadataText(value: unknown): void {
+  if (value !== null) requireBoundedRawMetadataText(value)
+}
+
+function requireNullableRawTimestamp(value: unknown): void {
+  if (value !== null) requireRawTimestamp(value)
+}
+
+function requireRawInt32(value: unknown): void {
+  if (
+    !Number.isSafeInteger(value) ||
+    Number(value) < -2_147_483_648 ||
+    Number(value) > 2_147_483_647
+  ) {
+    throw remotePolicyViolation()
+  }
 }
 
 function requireRawIdentity(value: unknown): void {

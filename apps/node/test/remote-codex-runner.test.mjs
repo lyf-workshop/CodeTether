@@ -294,6 +294,49 @@ test('raw notification policy admits only text lifecycle and private reasoning',
   )
   assert.doesNotThrow(() =>
     validateRemoteCodexTextNotification({
+      method: 'account/rateLimits/updated',
+      params: {
+        rateLimits: {
+          limitId: 'codex',
+          limitName: null,
+          primary: {
+            usedPercent: 12,
+            windowDurationMins: 300,
+            resetsAt: 1_777_777_777,
+          },
+          secondary: null,
+          credits: {
+            hasCredits: true,
+            unlimited: false,
+            balance: '42.00',
+          },
+          individualLimit: {
+            limit: '100.00',
+            used: '10.00',
+            remainingPercent: 90,
+            resetsAt: 1_777_777_777,
+          },
+          spendControlReached: false,
+          planType: 'plus',
+          rateLimitReachedType: null,
+        },
+      },
+    }),
+  )
+  for (const rateLimits of [
+    {},
+    { primary: { usedPercent: 12 } },
+    { credits: { hasCredits: true, unlimited: false } },
+  ]) {
+    assert.doesNotThrow(() =>
+      validateRemoteCodexTextNotification({
+        method: 'account/rateLimits/updated',
+        params: { rateLimits },
+      }),
+    )
+  }
+  assert.doesNotThrow(() =>
+    validateRemoteCodexTextNotification({
       method: 'configWarning',
       params: {
         summary: 'private warning',
@@ -401,6 +444,43 @@ test('raw notification policy admits only text lifecycle and private reasoning',
       params: {
         summary: 'warning',
         unexpected: true,
+      },
+    },
+    {
+      method: 'account/rateLimits/updated',
+      params: {
+        rateLimits: {
+          limitId: 'codex',
+          limitName: null,
+          primary: null,
+          secondary: null,
+          credits: null,
+          individualLimit: null,
+          spendControlReached: null,
+          planType: 'plus',
+          rateLimitReachedType: null,
+          secret: 'not admitted',
+        },
+      },
+    },
+    {
+      method: 'account/rateLimits/updated',
+      params: {
+        rateLimits: {
+          primary: {
+            usedPercent: 1.5,
+          },
+        },
+      },
+    },
+    {
+      method: 'account/rateLimits/updated',
+      params: { rateLimits: { primary: {} } },
+    },
+    {
+      method: 'account/rateLimits/updated',
+      params: {
+        rateLimits: { credits: { hasCredits: true } },
       },
     },
     {

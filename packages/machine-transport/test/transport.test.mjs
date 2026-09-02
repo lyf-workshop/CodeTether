@@ -106,11 +106,17 @@ test('concurrent stalled sends cannot grow the outbound queue without bound', as
   assert.ok(stream.writes <= 8)
 })
 
-test('fatal inbound queue overflow discards every queued frame', async () => {
+test('fatal inbound queue overflow rejects armed receives and discards queued frames', async () => {
   const stream = new ResponseDuplex()
   const connection = new FramedMachineConnection(stream)
+  const armedReceive = assert.rejects(
+    connection.receive(MachineErrorMessageSchema),
+    (error) =>
+      error.code === 'malformed_message' &&
+      /queue exceeded its bound/u.test(error.message),
+  )
   const frames = Array.from(
-    { length: machineTransportLimits.maximumQueuedFrames + 1 },
+    { length: machineTransportLimits.maximumQueuedFrames + 2 },
     (_, index) =>
       encodeMachineFrame({
         type: 'machine.error',
@@ -124,6 +130,7 @@ test('fatal inbound queue overflow discards every queued frame', async () => {
   await waitFor(() => connection.closed)
 
   assert.equal(connection.closed, true)
+  await armedReceive
   for (let attempt = 0; attempt < 2; attempt += 1) {
     await assert.rejects(
       connection.receive(MachineErrorMessageSchema),

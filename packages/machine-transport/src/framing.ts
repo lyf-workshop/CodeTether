@@ -128,6 +128,7 @@ export class FramedMachineConnection {
     } = {},
   ): Promise<T> {
     const raw = await this.#next(options)
+    if (this.#failure !== undefined) throw this.#failure
     const parsed = schema.safeParse(raw)
     if (!parsed.success) {
       this.destroy(malformed('Machine message failed strict validation'))

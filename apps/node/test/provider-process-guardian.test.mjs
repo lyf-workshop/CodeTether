@@ -10,6 +10,43 @@ const guardianModule = new URL(
 ).href
 
 test(
+  'a finite Provider exit also releases its guardian',
+  { skip: process.platform === 'win32', timeout: 10_000 },
+  async () => {
+    const { spawnNodeProviderProcess } = await import(guardianModule)
+    const controller = spawnNodeProviderProcess({
+      provider: 'claude-code',
+      executable: process.execPath,
+      arguments: ['-e', "process.stdout.write('completed\\n')"],
+      environment: {},
+    })
+    let stdout = ''
+    controller.child.stdout.setEncoding('utf8')
+    controller.child.stdout.on('data', (chunk) => {
+      stdout += chunk
+    })
+    try {
+      await controller.ownershipEstablished
+      const [code, signal] = await Promise.race([
+        once(controller.child, 'close'),
+        new Promise((_, reject) =>
+          setTimeout(
+            () => reject(new Error('finite Provider guardian did not exit')),
+            2_000,
+          ),
+        ),
+      ])
+      assert.equal(code, 0)
+      assert.equal(signal, null)
+      assert.equal(stdout, 'completed\n')
+      assert.equal(processIsRunning(controller.child.pid), false)
+    } finally {
+      await controller.close().catch(() => undefined)
+    }
+  },
+)
+
+test(
   'hard Node-owner death cleans the exact Provider group and preserves unrelated work',
   { skip: process.platform === 'win32', timeout: 20_000 },
   async () => {

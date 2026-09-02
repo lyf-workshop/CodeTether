@@ -243,6 +243,12 @@ export async function runProviderProcessGuardian(): Promise<void> {
     await providerClosed
   } finally {
     await cleanup()
+    // A finite Provider (Claude's one-process-per-Turn contract) must also
+    // release the guardian. The parent keeps this private liveness pipe open
+    // for long-lived Providers such as Codex, so leaving our read end active
+    // after the owned Provider exits would prevent the guardian's `close`
+    // event and strand the Turn in `running`.
+    control.destroy()
   }
 }
 

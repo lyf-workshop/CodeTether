@@ -511,9 +511,10 @@ test('drains a shutdown-only approval decision before closing provider stdin', a
 
 test('sends schema-shaped resume and interrupt requests', async () => {
   const { child, client, written } = createHarness()
+  const cwd = resolve('spike')
   const resumed = client.resumeThread({
     threadId: 'thread-a',
-    cwd: 'C:/spike',
+    cwd,
     approvalPolicy: 'on-request',
     sandbox: 'workspace-write',
   })
@@ -526,7 +527,7 @@ test('sends schema-shaped resume and interrupt requests', async () => {
         thread: { id: 'thread-a' },
         model: 'gpt-5',
         modelProvider: 'openai',
-        cwd: 'C:/spike',
+        cwd,
       },
     })}\n`,
   )

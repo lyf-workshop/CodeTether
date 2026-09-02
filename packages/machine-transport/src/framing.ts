@@ -216,8 +216,8 @@ export class FramedMachineConnection {
     readonly timeoutMs?: number | null
     readonly signal?: AbortSignal
   }): Promise<unknown> {
-    if (this.#queue.length > 0) return this.#queue.shift()
     if (this.#failure !== undefined) throw this.#failure
+    if (this.#queue.length > 0) return this.#queue.shift()
     const timeoutMs =
       options.timeoutMs === undefined
         ? machineTransportLimits.messageTimeoutMs
@@ -263,6 +263,7 @@ export class FramedMachineConnection {
   }
 
   #enqueue(value: unknown): void {
+    if (this.#failure !== undefined) return
     const waiter = this.#waiters.shift()
     if (waiter !== undefined) {
       waiter.resolve(value)
@@ -278,6 +279,7 @@ export class FramedMachineConnection {
   #fail(error: Error): void {
     if (this.#failure !== undefined) return
     this.#failure = error
+    this.#queue.length = 0
     for (const waiter of this.#waiters.splice(0)) waiter.reject(error)
     if (!this.#stream.destroyed) this.#stream.destroy()
   }

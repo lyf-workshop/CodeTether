@@ -15,6 +15,7 @@ import {
   createMachineTlsIdentityFile,
   encodeMachineFrame,
   generateMachineTlsIdentity,
+  machineTransportLimits,
   newMachineTransportMachineId,
   newPairingAttemptId,
   pairingConfirmationTag,
@@ -103,6 +104,34 @@ test('concurrent stalled sends cannot grow the outbound queue without bound', as
   )
   assert.equal(connection.closed, true)
   assert.ok(stream.writes <= 8)
+})
+
+test('fatal inbound queue overflow discards every queued frame', async () => {
+  const stream = new ResponseDuplex()
+  const connection = new FramedMachineConnection(stream)
+  const frames = Array.from(
+    { length: machineTransportLimits.maximumQueuedFrames + 1 },
+    (_, index) =>
+      encodeMachineFrame({
+        type: 'machine.error',
+        protocolVersion: 1,
+        code: 'connection_failed',
+        message: `queued frame ${index}`,
+      }),
+  )
+
+  stream.push(Buffer.concat(frames))
+  await waitFor(() => connection.closed)
+
+  assert.equal(connection.closed, true)
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    await assert.rejects(
+      connection.receive(MachineErrorMessageSchema),
+      (error) =>
+        error.code === 'malformed_message' &&
+        /queue exceeded its bound/u.test(error.message),
+    )
+  }
 })
 
 test('active receives can be lifecycle-bounded without a wall-clock timeout', async () => {

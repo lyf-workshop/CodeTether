@@ -5,6 +5,10 @@ import { pathToFileURL } from 'node:url'
 import { formatPairingCode } from '@codetether/machine-transport'
 
 import { CodeTetherNodeService } from './node-service.js'
+import {
+  isProviderGuardianInvocation,
+  runProviderProcessGuardian,
+} from './provider-process-guardian.js'
 import { NodeStateStore } from './state-store.js'
 
 declare const __CODETETHER_NODE_VERSION__: string | undefined
@@ -207,29 +211,41 @@ if (
   process.argv[1] !== undefined &&
   import.meta.url === pathToFileURL(resolve(process.argv[1])).href
 ) {
-  let service: CodeTetherNodeService | undefined
-  try {
-    const options = parseNodeCli(process.argv.slice(2))
-    service = await runNode(options)
-    let stopping = false
-    const stop = () => {
-      if (stopping) return
-      stopping = true
-      void service?.close().then(
-        () => process.exit(0),
-        () => {
-          process.stderr.write('CodeTether Node cleanup did not complete\n')
-          process.exit(1)
-        },
-      )
+  const arguments_ = process.argv.slice(2)
+  if (isProviderGuardianInvocation(arguments_)) {
+    try {
+      await runProviderProcessGuardian()
+    } catch {
+      // Internal failures are deliberately presentation-safe. Provider stderr,
+      // executable details, environment, and credentials are never emitted.
+      process.stderr.write('Provider guardian cleanup did not complete\n')
+      process.exitCode = 1
     }
-    process.once('SIGINT', stop)
-    process.once('SIGTERM', stop)
-  } catch (error) {
-    process.stderr.write(
-      `${error instanceof Error ? error.message : 'CodeTether Node failed to start'}\n`,
-    )
-    await service?.close().catch(() => undefined)
-    process.exitCode = 1
+  } else {
+    let service: CodeTetherNodeService | undefined
+    try {
+      const options = parseNodeCli(arguments_)
+      service = await runNode(options)
+      let stopping = false
+      const stop = () => {
+        if (stopping) return
+        stopping = true
+        void service?.close().then(
+          () => process.exit(0),
+          () => {
+            process.stderr.write('CodeTether Node cleanup did not complete\n')
+            process.exit(1)
+          },
+        )
+      }
+      process.once('SIGINT', stop)
+      process.once('SIGTERM', stop)
+    } catch (error) {
+      process.stderr.write(
+        `${error instanceof Error ? error.message : 'CodeTether Node failed to start'}\n`,
+      )
+      await service?.close().catch(() => undefined)
+      process.exitCode = 1
+    }
   }
 }

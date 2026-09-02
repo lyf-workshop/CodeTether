@@ -77,6 +77,7 @@ export class FramedMachineConnection {
   }> = []
   #failure: Error | undefined
   #closed = false
+  #pendingSends = 0
 
   constructor(stream: Duplex) {
     this.#stream = stream
@@ -122,7 +123,7 @@ export class FramedMachineConnection {
   async receive<T>(
     schema: z.ZodType<T>,
     options: {
-      readonly timeoutMs?: number
+      readonly timeoutMs?: number | null
       readonly signal?: AbortSignal
     } = {},
   ): Promise<T> {
@@ -135,15 +136,70 @@ export class FramedMachineConnection {
     return parsed.data
   }
 
-  async send(value: unknown): Promise<void> {
+  async send(
+    value: unknown,
+    options: {
+      readonly timeoutMs?: number
+      readonly signal?: AbortSignal
+    } = {},
+  ): Promise<void> {
     if (this.#failure !== undefined) throw this.#failure
+    if (this.#pendingSends >= machineTransportLimits.maximumQueuedFrames) {
+      const error = new MachineTransportError(
+        'connection_failed',
+        'Machine send queue exceeded its bound',
+      )
+      this.#fail(error)
+      throw error
+    }
     const frame = encodeMachineFrame(value)
-    await new Promise<void>((resolve, reject) => {
-      this.#stream.write(frame, (error) => {
-        if (error === null || error === undefined) resolve()
-        else reject(connectionFailure(error))
+    this.#pendingSends += 1
+    try {
+      await new Promise<void>((resolve, reject) => {
+        let settled = false
+        const timeoutMs =
+          options.timeoutMs ?? machineTransportLimits.messageTimeoutMs
+        const settle = (error?: Error) => {
+          if (settled) return
+          settled = true
+          clearTimeout(timeout)
+          options.signal?.removeEventListener('abort', abort)
+          if (error === undefined) resolve()
+          else {
+            this.#fail(error)
+            reject(error)
+          }
+        }
+        const abort = () =>
+          settle(
+            new MachineTransportError(
+              'connection_failed',
+              'Machine send was cancelled',
+            ),
+          )
+        const timeout = setTimeout(
+          () =>
+            settle(
+              new MachineTransportError('timeout', 'Machine send timed out'),
+            ),
+          timeoutMs,
+        )
+        if (options.signal?.aborted === true) {
+          abort()
+          return
+        }
+        options.signal?.addEventListener('abort', abort, { once: true })
+        this.#stream.write(frame, (error) =>
+          settle(
+            error === null || error === undefined
+              ? undefined
+              : connectionFailure(error),
+          ),
+        )
       })
-    })
+    } finally {
+      this.#pendingSends -= 1
+    }
   }
 
   end(): void {
@@ -157,24 +213,32 @@ export class FramedMachineConnection {
   }
 
   async #next(options: {
-    readonly timeoutMs?: number
+    readonly timeoutMs?: number | null
     readonly signal?: AbortSignal
   }): Promise<unknown> {
     if (this.#queue.length > 0) return this.#queue.shift()
     if (this.#failure !== undefined) throw this.#failure
     const timeoutMs =
-      options.timeoutMs ?? machineTransportLimits.messageTimeoutMs
+      options.timeoutMs === undefined
+        ? machineTransportLimits.messageTimeoutMs
+        : options.timeoutMs
     return await new Promise<unknown>((resolve, reject) => {
       let settled = false
       const waiter = {
         resolve: (value: unknown) => settle(() => resolve(value)),
         reject: (error: Error) => settle(() => reject(error)),
       }
-      const timeout = setTimeout(() => {
-        waiter.reject(
-          new MachineTransportError('timeout', 'Machine message timed out'),
-        )
-      }, timeoutMs)
+      const timeout =
+        timeoutMs === null
+          ? undefined
+          : setTimeout(() => {
+              waiter.reject(
+                new MachineTransportError(
+                  'timeout',
+                  'Machine message timed out',
+                ),
+              )
+            }, timeoutMs)
       const abort = () => {
         waiter.reject(
           new MachineTransportError(
@@ -186,7 +250,7 @@ export class FramedMachineConnection {
       const settle = (result: () => void) => {
         if (settled) return
         settled = true
-        clearTimeout(timeout)
+        if (timeout !== undefined) clearTimeout(timeout)
         options.signal?.removeEventListener('abort', abort)
         const index = this.#waiters.indexOf(waiter)
         if (index >= 0) this.#waiters.splice(index, 1)

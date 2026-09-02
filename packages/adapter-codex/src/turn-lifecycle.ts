@@ -4,7 +4,7 @@ import type { TurnTerminalResult } from './protocol.js'
 interface TurnWaiter {
   readonly resolve: (result: TurnTerminalResult) => void
   readonly reject: (error: Error) => void
-  readonly timer: NodeJS.Timeout
+  readonly timer?: NodeJS.Timeout
 }
 
 interface TurnState {
@@ -95,7 +95,7 @@ export class TurnLifecycleRegistry {
     this.#release(threadId, turn.id)
     this.#rememberReleased(key)
     for (const waiter of waiters) {
-      clearTimeout(waiter.timer)
+      if (waiter.timer !== undefined) clearTimeout(waiter.timer)
       waiter.resolve(result)
     }
   }
@@ -103,7 +103,7 @@ export class TurnLifecycleRegistry {
   wait(
     threadId: string,
     turnId: string,
-    timeoutMs: number,
+    timeoutMs: number | null,
   ): Promise<TurnTerminalResult> {
     if (this.#failure !== undefined) return Promise.reject(this.#failure)
     const key = turnKey(threadId, turnId)
@@ -124,14 +124,19 @@ export class TurnLifecycleRegistry {
     const state = this.#state(threadId, turnId)
 
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        state.waiters.delete(waiter)
-        if (state.waiters.size === 0) {
-          this.#release(threadId, turnId)
-          this.#rememberReleased(key)
-        }
-        reject(new CodexProtocolError(`Timed out waiting for turn ${turnId}`))
-      }, timeoutMs)
+      const timer =
+        timeoutMs === null
+          ? undefined
+          : setTimeout(() => {
+              state.waiters.delete(waiter)
+              if (state.waiters.size === 0) {
+                this.#release(threadId, turnId)
+                this.#rememberReleased(key)
+              }
+              reject(
+                new CodexProtocolError(`Timed out waiting for turn ${turnId}`),
+              )
+            }, timeoutMs)
       const waiter: TurnWaiter = { resolve, reject, timer }
       state.waiters.add(waiter)
     })
@@ -142,7 +147,7 @@ export class TurnLifecycleRegistry {
     this.#failure = error
     for (const state of this.#turns.values()) {
       for (const waiter of state.waiters) {
-        clearTimeout(waiter.timer)
+        if (waiter.timer !== undefined) clearTimeout(waiter.timer)
         waiter.reject(error)
       }
       this.#onRelease?.(state.threadId, state.turnId)

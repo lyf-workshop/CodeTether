@@ -550,8 +550,9 @@ test('state refuses partial/corrupt identity and duplicate writers', async () =>
   }
 })
 
-test('stale lock takeover is fail-closed for every concurrent opener', async () => {
+test('one concurrent opener atomically recovers a dead Node lock', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'codetether-node-'))
+  let recovered
   try {
     await writeFile(
       join(directory, 'node.lock'),
@@ -570,19 +571,26 @@ test('stale lock takeover is fail-closed for every concurrent opener', async () 
           }),
       ),
     )
+    const fulfilled = attempts.filter(
+      (attempt) => attempt.status === 'fulfilled',
+    )
+    const rejected = attempts.filter((attempt) => attempt.status === 'rejected')
+    assert.equal(fulfilled.length, 1)
+    assert.equal(rejected.length, 15)
     assert.equal(
-      attempts.every(
-        (attempt) =>
-          attempt.status === 'rejected' &&
-          /stale.*explicit/u.test(String(attempt.reason)),
+      rejected.every((attempt) =>
+        /already in use/u.test(String(attempt.reason)),
       ),
       true,
     )
+    recovered = fulfilled[0].value
+    assert.equal(recovered.machine.machineId.startsWith('machine_'), true)
     assert.match(
       await readFile(join(directory, 'node.lock'), 'utf8'),
-      /2147483647/u,
+      /"pid":/u,
     )
   } finally {
+    await recovered?.close().catch(() => undefined)
     await rm(directory, { recursive: true, force: true })
   }
 })

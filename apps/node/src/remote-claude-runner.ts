@@ -6,6 +6,7 @@ import {
   prepareClaudeCode,
   type ClaudeCodeEffort,
   type ClaudeCodeLauncher,
+  type ClaudeCodeProcessSpecification,
   type ClaudeCodeTurnResult,
 } from '@codetether/adapter-claude'
 import type { AgentEvent } from '@codetether/agent-core'
@@ -21,6 +22,7 @@ import {
 } from '@codetether/machine-transport'
 
 import { validateProjectLocationPath } from './project-location-validation.js'
+import { spawnNodeProviderProcess } from './provider-process-guardian.js'
 import { supportsRemoteClaudeExecutionPlatform } from './provider-discovery.js'
 
 interface RemoteClaudeSessionRuntime {
@@ -32,6 +34,14 @@ interface RemoteClaudeSessionRuntime {
     readonly prompt: string
     readonly effort?: ClaudeCodeEffort
   }): Promise<ClaudeCodeTurnResult>
+  startTurnExecution?(options: {
+    readonly turnId: string
+    readonly prompt: string
+    readonly effort?: ClaudeCodeEffort
+  }): {
+    readonly ownershipEstablished: Promise<void>
+    readonly completion: Promise<ClaudeCodeTurnResult>
+  }
   close(): Promise<void>
 }
 
@@ -142,12 +152,14 @@ export class RemoteClaudeRunnerPool {
   }
 
   async release(runner: RemoteClaudeRunner): Promise<void> {
-    if (this.#runners.get(runner.conversationId) === runner) {
-      this.#runners.delete(runner.conversationId)
-    }
     const cleanup = runner.close()
     this.#trackCleanup(cleanup)
     await cleanup
+    if (this.#runners.get(runner.conversationId) === runner) {
+      // A closing native session still owns this Conversation. Do not admit a
+      // reconnect until exact Provider-process cleanup has completed.
+      this.#runners.delete(runner.conversationId)
+    }
   }
 
   async close(): Promise<void> {
@@ -226,8 +238,7 @@ export class RemoteClaudeRunnerPool {
   #releaseAfterFatal(runner: RemoteClaudeRunner): void {
     queueMicrotask(() => {
       if (this.#runners.get(runner.conversationId) !== runner) return
-      this.#runners.delete(runner.conversationId)
-      this.#trackCleanup(runner.close())
+      void this.release(runner).catch(() => undefined)
     })
   }
 
@@ -395,11 +406,14 @@ export class RemoteClaudeRunner {
     )
     this.#activeTurn = turn
     this.#rememberAction(request.actionId, turn)
-    const completion = this.#runtime.startTurn({
+    const turnOptions = {
       turnId: providerTurnId,
       prompt: request.prompt,
       ...(this.effort === undefined ? {} : { effort: this.effort }),
-    })
+    }
+    const execution = this.#runtime.startTurnExecution?.(turnOptions)
+    const completion =
+      execution?.completion ?? this.#runtime.startTurn(turnOptions)
     void completion.then(
       () => {
         if (this.#closed || turn.terminal) return
@@ -419,6 +433,14 @@ export class RemoteClaudeRunner {
         )
       },
     )
+    if (execution !== undefined) {
+      try {
+        await execution.ownershipEstablished
+      } catch (error) {
+        this.#terminate(mapProviderFailure(error))
+        throw mapProviderStartError(error)
+      }
+    }
     return turn
   }
 
@@ -638,6 +660,13 @@ export class RemoteClaudeRunnerTurn {
 
   pushMessageDelta(itemId: string, text: string): void {
     if (text.length === 0) return
+    if (
+      !this.#messages.has(itemId) &&
+      this.#messages.size + this.#tools.size >=
+        machineTransportLimits.maximumRemoteClaudeTurnItems
+    ) {
+      throw remoteExecutionLost()
+    }
     const state = this.#messages.get(itemId) ?? { text: '', completed: false }
     if (state.completed) throw remotePolicyViolation()
     for (const chunk of splitUtf8(
@@ -660,6 +689,12 @@ export class RemoteClaudeRunnerTurn {
 
   pushToolStarted(event: Extract<AgentEvent, { type: 'tool.started' }>): void {
     if (this.#tools.has(event.itemId) || !isAllowedTool(event)) {
+      throw remotePolicyViolation()
+    }
+    if (
+      this.#messages.size + this.#tools.size >=
+      machineTransportLimits.maximumRemoteClaudeTurnItems
+    ) {
       throw remotePolicyViolation()
     }
     const state = toolStateFromEvent(event)
@@ -768,34 +803,63 @@ class BoundedTurnEventQueue implements AsyncIterable<RemoteClaudeTurnEventPayloa
   }> = []
   #queuedBytes = 0
   #totalOutputBytes = 0
+  #totalEvents = 0
   #closed = false
 
   push(event: RemoteClaudeTurnEventPayload): void {
     if (this.#closed) return
     const bytes = eventBytes(event)
+    this.#totalEvents += 1
     if (event.type === 'message.delta' || event.type === 'tool.output') {
       this.#totalOutputBytes += bytes
     }
     if (
+      this.#totalEvents >
+        machineTransportLimits.maximumRemoteClaudeTurnEvents ||
       this.#totalOutputBytes >
         machineTransportLimits.maximumRemoteClaudeOutputBytes ||
-      this.#queue.length >=
-        machineTransportLimits.maximumRemoteClaudeQueuedEvents ||
-      this.#queuedBytes + bytes >
-        machineTransportLimits.maximumRemoteClaudeQueuedOutputBytes
+      !this.#enqueueBounded(event, bytes)
     ) {
       throw new MachineTransportError(
         'remote_execution_lost',
         'Remote Claude output exceeded its bound',
       )
     }
-    const waiter = this.#waiters.shift()
-    if (waiter !== undefined) waiter.resolve({ value: event, done: false })
-    else {
-      this.#queue.push(event)
-      this.#queuedBytes += bytes
-    }
     if (isTerminal(event)) this.#closed = true
+  }
+
+  #enqueueBounded(event: RemoteClaudeTurnEventPayload, bytes: number): boolean {
+    const waiter = this.#waiters.shift()
+    if (waiter !== undefined) {
+      waiter.resolve({ value: event, done: false })
+      return true
+    }
+    const tail = this.#queue.at(-1)
+    const coalesced = coalesceClaudeEvent(tail, event)
+    if (coalesced !== undefined) {
+      const previousBytes = eventBytes(tail!)
+      const nextBytes = eventBytes(coalesced)
+      if (
+        this.#queuedBytes - previousBytes + nextBytes >
+        machineTransportLimits.maximumRemoteClaudeQueuedOutputBytes
+      ) {
+        return false
+      }
+      this.#queue[this.#queue.length - 1] = coalesced
+      this.#queuedBytes = this.#queuedBytes - previousBytes + nextBytes
+      return true
+    }
+    if (
+      this.#queue.length >=
+        machineTransportLimits.maximumRemoteClaudeQueuedEvents ||
+      this.#queuedBytes + bytes >
+        machineTransportLimits.maximumRemoteClaudeQueuedOutputBytes
+    ) {
+      return false
+    }
+    this.#queue.push(event)
+    this.#queuedBytes += bytes
+    return true
   }
 
   forceTerminal(event: RemoteClaudeTurnEventPayload): void {
@@ -826,6 +890,31 @@ class BoundedTurnEventQueue implements AsyncIterable<RemoteClaudeTurnEventPayloa
   }
 }
 
+function coalesceClaudeEvent(
+  previous: RemoteClaudeTurnEventPayload | undefined,
+  next: RemoteClaudeTurnEventPayload,
+): RemoteClaudeTurnEventPayload | undefined {
+  if (previous?.type === 'message.delta' && next.type === 'message.delta') {
+    const text = previous.text + next.text
+    return Buffer.byteLength(text, 'utf8') <=
+      machineTransportLimits.maximumRemoteClaudeDeltaBytes
+      ? { type: 'message.delta', text }
+      : undefined
+  }
+  if (
+    previous?.type === 'tool.output' &&
+    next.type === 'tool.output' &&
+    previous.itemId === next.itemId
+  ) {
+    const output = previous.output + next.output
+    return Buffer.byteLength(output, 'utf8') <=
+      machineTransportLimits.maximumRemoteClaudeToolOutputBytes
+      ? { type: 'tool.output', itemId: next.itemId, output }
+      : undefined
+  }
+  return undefined
+}
+
 async function defaultRemoteClaudeRuntimeFactory(
   options: RemoteClaudeRuntimeFactoryOptions,
   signal: AbortSignal,
@@ -843,6 +932,11 @@ async function defaultRemoteClaudeRuntimeFactory(
     environment: preparation.runtimeEnvironment(),
     testedVersion: preparation.detection.version,
     processOwnership: 'posix-process-group' as const,
+    processFactory: (specification: ClaudeCodeProcessSpecification) =>
+      spawnNodeProviderProcess({
+        provider: 'claude-code',
+        ...specification,
+      }),
     ...(options.providerSessionId === undefined
       ? {}
       : { sessionId: options.providerSessionId }),

@@ -125,7 +125,9 @@ export class RemoteClaudeHostRuntime implements AgentHostRuntime {
   readonly #eventListeners = new Set<(event: AgentEvent) => void>()
   readonly #failureListeners = new Set<(failure: Error) => void>()
   readonly #turnPumps = new Set<Promise<void>>()
+  readonly #openingConversations = new Set<ConversationId>()
   readonly #sessionCleanups = new Map<string, Promise<void>>()
+  readonly #conversationCleanups = new Map<ConversationId, Promise<void>>()
   #closed = false
   #closePromise?: Promise<void>
 
@@ -170,14 +172,18 @@ export class RemoteClaudeHostRuntime implements AgentHostRuntime {
     assertModelUnsupported(options.model)
     const effort = parseRemoteClaudeEffort(options.reasoning)
     const identity = requiredContext(options, this.#machineId)
-    const session = await this.#opener.open({
-      machineId: this.#machineId,
-      conversationId: identity.conversationId,
-      projectId: identity.projectId,
-      rootPath: options.cwd,
-      ...(effort === undefined ? {} : { effort }),
-    })
-    return await this.#retainSession(session, identity.conversationId, effort)
+    return await this.#openAndRetainSession(
+      identity.conversationId,
+      effort,
+      async () =>
+        await this.#opener.open({
+          machineId: this.#machineId,
+          conversationId: identity.conversationId,
+          projectId: identity.projectId,
+          rootPath: options.cwd,
+          ...(effort === undefined ? {} : { effort }),
+        }),
+    )
   }
 
   async resumeConversation(
@@ -214,25 +220,25 @@ export class RemoteClaudeHostRuntime implements AgentHostRuntime {
         return { providerThreadId: options.providerThreadId }
       }
     }
-    await this.#awaitSessionCleanup(options.providerThreadId)
-    this.#assertOpen()
-    const session = await this.#opener.open({
-      machineId: this.#machineId,
-      conversationId: identity.conversationId,
-      projectId: identity.projectId,
-      rootPath: options.cwd,
-      providerSessionId: decoded,
-      providerSessionMaterialized: options.providerSessionMaterialized,
-      ...(effort === undefined ? {} : { effort }),
-    })
-    const retained = await this.#retainSession(
-      session,
+    const retained = await this.#openAndRetainSession(
       identity.conversationId,
       effort,
+      async () =>
+        await this.#opener.open({
+          machineId: this.#machineId,
+          conversationId: identity.conversationId,
+          projectId: identity.projectId,
+          rootPath: options.cwd,
+          providerSessionId: decoded,
+          providerSessionMaterialized: options.providerSessionMaterialized,
+          ...(effort === undefined ? {} : { effort }),
+        }),
+      options.providerThreadId,
     )
     if (retained.providerThreadId !== options.providerThreadId) {
-      await session.close()
-      this.#sessions.delete(retained.providerThreadId)
+      await this.disposeConversation({
+        providerThreadId: retained.providerThreadId,
+      })
       throw new ProviderConversationUnavailableError(
         this.provider,
         options.providerThreadId,
@@ -322,12 +328,17 @@ export class RemoteClaudeHostRuntime implements AgentHostRuntime {
       return this.#trackSessionCleanup(providerThreadId, session)
     })
     const results = await Promise.allSettled([
-      ...new Set([...this.#sessionCleanups.values(), ...sessionCloses]),
+      ...new Set([
+        ...this.#sessionCleanups.values(),
+        ...this.#conversationCleanups.values(),
+        ...sessionCloses,
+      ]),
       ...this.#turnPumps,
     ])
     this.#eventListeners.clear()
     this.#failureListeners.clear()
     this.#sessionCleanups.clear()
+    this.#conversationCleanups.clear()
     const rejected = results.find((result) => result.status === 'rejected')
     if (rejected?.status === 'rejected') throw rejected.reason
   }
@@ -521,6 +532,37 @@ export class RemoteClaudeHostRuntime implements AgentHostRuntime {
     }
   }
 
+  async #openAndRetainSession(
+    conversationId: ConversationId,
+    effort: RemoteClaudeEffort | undefined,
+    open: () => Promise<RemoteClaudeRuntimeSession>,
+    expectedProviderThreadId?: string,
+  ): Promise<ProviderConversationResult> {
+    await this.#awaitConversationCleanup(conversationId)
+    if (expectedProviderThreadId !== undefined) {
+      await this.#awaitSessionCleanup(expectedProviderThreadId)
+    }
+    this.#assertOpen()
+    if (
+      this.#openingConversations.has(conversationId) ||
+      [...this.#sessions.values()].some(
+        (session) => session.conversationId === conversationId,
+      )
+    ) {
+      throw new ProviderConversationUnavailableError(
+        this.provider,
+        expectedProviderThreadId ?? conversationId,
+      )
+    }
+    this.#openingConversations.add(conversationId)
+    try {
+      const session = await open()
+      return await this.#retainSession(session, conversationId, effort)
+    } finally {
+      this.#openingConversations.delete(conversationId)
+    }
+  }
+
   async #retainSession(
     session: RemoteClaudeRuntimeSession,
     conversationId: ConversationId,
@@ -539,7 +581,9 @@ export class RemoteClaudeHostRuntime implements AgentHostRuntime {
       this.#machineId,
       session.providerSessionId,
     )
-    const pendingCleanup = this.#sessionCleanups.get(providerThreadId)
+    const pendingCleanup =
+      this.#sessionCleanups.get(providerThreadId) ??
+      this.#conversationCleanups.get(conversationId)
     if (pendingCleanup !== undefined) {
       const results = await Promise.allSettled([
         pendingCleanup,
@@ -604,13 +648,28 @@ export class RemoteClaudeHostRuntime implements AgentHostRuntime {
     session: RemoteClaudeRuntimeSession,
   ): Promise<void> {
     const existing = this.#sessionCleanups.get(providerThreadId)
+    const existingConversation = this.#conversationCleanups.get(
+      session.conversationId,
+    )
     if (existing !== undefined) return existing
-    const cleanup = Promise.resolve().then(async () => await session.close())
+    if (existingConversation !== undefined) return existingConversation
+    let cleanup: Promise<void>
+    try {
+      cleanup = Promise.resolve(session.close())
+    } catch (error) {
+      cleanup = Promise.reject(error)
+    }
     this.#sessionCleanups.set(providerThreadId, cleanup)
+    this.#conversationCleanups.set(session.conversationId, cleanup)
     void cleanup.then(
       () => {
         if (this.#sessionCleanups.get(providerThreadId) === cleanup) {
           this.#sessionCleanups.delete(providerThreadId)
+        }
+        if (
+          this.#conversationCleanups.get(session.conversationId) === cleanup
+        ) {
+          this.#conversationCleanups.delete(session.conversationId)
         }
       },
       () => undefined,
@@ -627,6 +686,21 @@ export class RemoteClaudeHostRuntime implements AgentHostRuntime {
       throw new ProviderConversationUnavailableError(
         this.provider,
         providerThreadId,
+      )
+    }
+  }
+
+  async #awaitConversationCleanup(
+    conversationId: ConversationId,
+  ): Promise<void> {
+    const cleanup = this.#conversationCleanups.get(conversationId)
+    if (cleanup === undefined) return
+    try {
+      await cleanup
+    } catch {
+      throw new ProviderConversationUnavailableError(
+        this.provider,
+        conversationId,
       )
     }
   }

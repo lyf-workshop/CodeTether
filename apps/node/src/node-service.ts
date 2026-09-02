@@ -2,9 +2,11 @@ import { EventEmitter } from 'node:events'
 import { createServer, type Server, type TLSSocket } from 'node:tls'
 
 import {
+  ClaudeSessionHeartbeatMessageSchema,
   ClaudeSessionDisposeMessageSchema,
   ClaudeSessionOpenMessageSchema,
   ClaudeTurnStartMessageSchema,
+  CodexSessionHeartbeatMessageSchema,
   CodexSessionDisposeMessageSchema,
   CodexSessionOpenMessageSchema,
   CodexTurnStartMessageSchema,
@@ -33,8 +35,10 @@ import {
   verifyPairingConfirmationTag,
   type MachineWireErrorCode,
   type ClaudeSessionDisposeMessage,
+  type ClaudeSessionHeartbeatMessage,
   type ClaudeTurnStartMessage,
   type CodexSessionDisposeMessage,
+  type CodexSessionHeartbeatMessage,
   type CodexTurnStartMessage,
   type PairingTranscript,
   type PublicKeyFingerprint,
@@ -67,10 +71,12 @@ const AuthenticatedRequestSchema = z.discriminatedUnion('type', [
 ])
 const RemoteCodexSessionRequestSchema = z.discriminatedUnion('type', [
   CodexTurnStartMessageSchema,
+  CodexSessionHeartbeatMessageSchema,
   CodexSessionDisposeMessageSchema,
 ])
 const RemoteClaudeSessionRequestSchema = z.discriminatedUnion('type', [
   ClaudeTurnStartMessageSchema,
+  ClaudeSessionHeartbeatMessageSchema,
   ClaudeSessionDisposeMessageSchema,
 ])
 const PairingDecisionSchema = z.discriminatedUnion('type', [
@@ -83,6 +89,8 @@ export interface CodeTetherNodeOptions {
   readonly bindAddress: string
   readonly port: number
   readonly authenticatedIdleTimeoutMs?: number
+  /** Internal test seam; production uses the fixed execution-session lease. */
+  readonly executionSessionLeaseTimeoutMs?: number
   readonly providerDetector?: RemoteProviderDetector
   /** Internal test seam; remote callers cannot configure Provider execution. */
   readonly remoteCodexRunners?: RemoteCodexRunnerPool
@@ -101,6 +109,7 @@ export class CodeTetherNodeService extends EventEmitter {
   readonly #bindAddress: string
   readonly #requestedPort: number
   readonly #authenticatedIdleTimeoutMs: number
+  readonly #executionSessionLeaseTimeoutMs: number
   readonly #connections = new Set<TLSSocket>()
   readonly #connectionsByAddress = new Map<string, number>()
   readonly #authenticatedConnections = new Map<string, Set<TLSSocket>>()
@@ -127,6 +136,17 @@ export class CodeTetherNodeService extends EventEmitter {
       throw new TypeError(
         'Authenticated idle timeout must be a positive integer',
       )
+    }
+    this.#executionSessionLeaseTimeoutMs =
+      options.executionSessionLeaseTimeoutMs ??
+      machineTransportLimits.remoteExecutionSessionLeaseTimeoutMs
+    if (
+      !Number.isSafeInteger(this.#executionSessionLeaseTimeoutMs) ||
+      this.#executionSessionLeaseTimeoutMs <= 0 ||
+      this.#executionSessionLeaseTimeoutMs >
+        machineTransportLimits.remoteExecutionSessionLeaseTimeoutMs
+    ) {
+      throw new TypeError('Execution session lease timeout is invalid')
     }
     this.#providerDetector =
       options.providerDetector ?? new RemoteProviderDetector()
@@ -601,6 +621,13 @@ export class CodeTetherNodeService extends EventEmitter {
           { timeoutMs: machineTransportLimits.remoteCodexSessionIdleTimeoutMs },
         )
         assertRemoteCodexSessionControl(control, runner)
+        if (control.type === 'codex.session.heartbeat') {
+          // A heartbeat can already be in flight when a terminal Provider
+          // event wins the active-Turn race. The client stops its watchdog on
+          // that terminal event, so discard the late control rather than
+          // placing an unsolicited acknowledgement before the next command.
+          continue
+        }
         if (control.type === 'codex.session.dispose') {
           await this.#remoteCodexRunners.release(runner)
           released = true
@@ -646,22 +673,43 @@ export class CodeTetherNodeService extends EventEmitter {
   ): Promise<CodexSessionDisposeMessage | undefined> {
     const events = turn.events()[Symbol.asyncIterator]()
     const controlAbort = new AbortController()
+    const lease = new ExecutionSessionLease(
+      connection,
+      this.#executionSessionLeaseTimeoutMs,
+    )
     let sequence = 1
     let event = events
       .next()
       .then((result) => ({ kind: 'event' as const, result }))
     let control = receiveStrict(connection, RemoteCodexSessionRequestSchema, {
-      timeoutMs: machineTransportLimits.remoteCodexTurnTimeoutMs,
+      // Quiet Provider work is still active work. Connection loss or an
+      // explicit lifecycle signal ends this receive; elapsed wall-clock time
+      // alone must not fail or replay a Turn.
+      timeoutMs: null,
       signal: controlAbort.signal,
-    })
+    }).then((value) => ({ kind: 'control' as const, value }))
     try {
       while (true) {
-        const next = await Promise.race([
-          event,
-          control.then((value) => ({ kind: 'control' as const, value })),
-        ])
+        // Reuse one tagged control Promise until it settles. Attaching a new
+        // `.then` for every Provider event would retain one reaction per delta
+        // while the Controller is quiet.
+        const next = await Promise.race([control, event])
         if (next.kind === 'control') {
           assertRemoteCodexSessionControl(next.value, runner)
+          lease.renew()
+          if (next.value.type === 'codex.session.heartbeat') {
+            await sendRemoteCodexHeartbeatAck(
+              connection,
+              this.state.machine,
+              next.value,
+            )
+            control = receiveStrict(
+              connection,
+              RemoteCodexSessionRequestSchema,
+              { timeoutMs: null, signal: controlAbort.signal },
+            ).then((value) => ({ kind: 'control' as const, value }))
+            continue
+          }
           if (next.value.type === 'codex.session.dispose') return next.value
           const duplicate = await runner.startTurn(next.value)
           if (duplicate !== turn) {
@@ -677,9 +725,9 @@ export class CodeTetherNodeService extends EventEmitter {
             turn,
           )
           control = receiveStrict(connection, RemoteCodexSessionRequestSchema, {
-            timeoutMs: machineTransportLimits.remoteCodexTurnTimeoutMs,
+            timeoutMs: null,
             signal: controlAbort.signal,
-          })
+          }).then((value) => ({ kind: 'control' as const, value }))
           continue
         }
         if (next.result.done) {
@@ -713,6 +761,7 @@ export class CodeTetherNodeService extends EventEmitter {
           .then((result) => ({ kind: 'event' as const, result }))
       }
     } finally {
+      lease.close()
       controlAbort.abort()
       await control.catch(() => undefined)
     }
@@ -748,6 +797,11 @@ export class CodeTetherNodeService extends EventEmitter {
           },
         )
         assertRemoteClaudeSessionControl(control, runner)
+        if (control.type === 'claude.session.heartbeat') {
+          // See the Codex path above: this is a late active-Turn heartbeat,
+          // not an idle-session keepalive.
+          continue
+        }
         if (control.type === 'claude.session.dispose') {
           await this.#remoteClaudeRunners.release(runner)
           released = true
@@ -797,22 +851,37 @@ export class CodeTetherNodeService extends EventEmitter {
   ): Promise<ClaudeSessionDisposeMessage | undefined> {
     const events = turn.events()[Symbol.asyncIterator]()
     const controlAbort = new AbortController()
+    const lease = new ExecutionSessionLease(
+      connection,
+      this.#executionSessionLeaseTimeoutMs,
+    )
     let sequence = 1
     let event = events
       .next()
       .then((result) => ({ kind: 'event' as const, result }))
     let control = receiveStrict(connection, RemoteClaudeSessionRequestSchema, {
-      timeoutMs: machineTransportLimits.remoteClaudeTurnTimeoutMs,
+      timeoutMs: null,
       signal: controlAbort.signal,
-    })
+    }).then((value) => ({ kind: 'control' as const, value }))
     try {
       while (true) {
-        const next = await Promise.race([
-          event,
-          control.then((value) => ({ kind: 'control' as const, value })),
-        ])
+        const next = await Promise.race([control, event])
         if (next.kind === 'control') {
           assertRemoteClaudeSessionControl(next.value, runner)
+          lease.renew()
+          if (next.value.type === 'claude.session.heartbeat') {
+            await sendRemoteClaudeHeartbeatAck(
+              connection,
+              this.state.machine,
+              next.value,
+            )
+            control = receiveStrict(
+              connection,
+              RemoteClaudeSessionRequestSchema,
+              { timeoutMs: null, signal: controlAbort.signal },
+            ).then((value) => ({ kind: 'control' as const, value }))
+            continue
+          }
           if (next.value.type === 'claude.session.dispose') return next.value
           const duplicate = await runner.startTurn(next.value)
           if (duplicate !== turn) {
@@ -831,10 +900,10 @@ export class CodeTetherNodeService extends EventEmitter {
             connection,
             RemoteClaudeSessionRequestSchema,
             {
-              timeoutMs: machineTransportLimits.remoteClaudeTurnTimeoutMs,
+              timeoutMs: null,
               signal: controlAbort.signal,
             },
-          )
+          ).then((value) => ({ kind: 'control' as const, value }))
           continue
         }
         if (next.result.done) {
@@ -868,6 +937,7 @@ export class CodeTetherNodeService extends EventEmitter {
           .then((result) => ({ kind: 'event' as const, result }))
       }
     } finally {
+      lease.close()
       controlAbort.abort()
       await control.catch(() => undefined)
     }
@@ -948,7 +1018,10 @@ function assertRemoteClaudeExecutionAdmission(
 async function receiveStrict<T>(
   connection: FramedMachineConnection,
   schema: z.ZodType<T>,
-  options?: { readonly timeoutMs?: number; readonly signal?: AbortSignal },
+  options?: {
+    readonly timeoutMs?: number | null
+    readonly signal?: AbortSignal
+  },
 ): Promise<T> {
   const raw = await connection.receive(z.unknown(), options)
   if (
@@ -973,7 +1046,10 @@ async function receiveStrict<T>(
 }
 
 function assertRemoteCodexSessionControl(
-  control: CodexTurnStartMessage | CodexSessionDisposeMessage,
+  control:
+    | CodexTurnStartMessage
+    | CodexSessionHeartbeatMessage
+    | CodexSessionDisposeMessage,
   runner: RemoteCodexRunner,
 ): void {
   if (
@@ -988,7 +1064,10 @@ function assertRemoteCodexSessionControl(
 }
 
 function assertRemoteClaudeSessionControl(
-  control: ClaudeTurnStartMessage | ClaudeSessionDisposeMessage,
+  control:
+    | ClaudeTurnStartMessage
+    | ClaudeSessionHeartbeatMessage
+    | ClaudeSessionDisposeMessage,
   runner: RemoteClaudeRunner,
 ): void {
   if (
@@ -1000,6 +1079,22 @@ function assertRemoteClaudeSessionControl(
       'Remote Claude control did not match the owned session',
     )
   }
+}
+
+async function sendRemoteCodexHeartbeatAck(
+  connection: FramedMachineConnection,
+  machine: RemoteMachineMetadata,
+  request: CodexSessionHeartbeatMessage,
+): Promise<void> {
+  await connection.send({
+    type: 'codex.session.heartbeat.ack',
+    protocolVersion: machineProtocolVersion,
+    requestId: request.requestId,
+    machineId: machine.machineId,
+    nodeId: machine.nodeId,
+    conversationId: request.conversationId,
+    providerThreadId: request.providerThreadId,
+  })
 }
 
 async function sendRemoteCodexTurnStarted(
@@ -1055,6 +1150,22 @@ async function sendRemoteClaudeTurnStarted(
   })
 }
 
+async function sendRemoteClaudeHeartbeatAck(
+  connection: FramedMachineConnection,
+  machine: RemoteMachineMetadata,
+  request: ClaudeSessionHeartbeatMessage,
+): Promise<void> {
+  await connection.send({
+    type: 'claude.session.heartbeat.ack',
+    protocolVersion: machineProtocolVersion,
+    requestId: request.requestId,
+    machineId: machine.machineId,
+    nodeId: machine.nodeId,
+    conversationId: request.conversationId,
+    providerSessionId: request.providerSessionId,
+  })
+}
+
 async function sendRemoteClaudeDisposed(
   connection: FramedMachineConnection,
   machine: RemoteMachineMetadata,
@@ -1068,6 +1179,47 @@ async function sendRemoteClaudeDisposed(
     nodeId: machine.nodeId,
     conversationId: request.conversationId,
   })
+}
+
+/**
+ * Independent Controller-ownership lease for an active execution session.
+ * Provider silence is valid; only absence of authenticated session controls
+ * expires ownership and closes the exact dedicated connection.
+ */
+class ExecutionSessionLease {
+  readonly #connection: FramedMachineConnection
+  readonly #timeoutMs: number
+  #timer: ReturnType<typeof setTimeout> | undefined
+  #closed = false
+
+  constructor(connection: FramedMachineConnection, timeoutMs: number) {
+    this.#connection = connection
+    this.#timeoutMs = timeoutMs
+    this.renew()
+  }
+
+  renew(): void {
+    if (this.#closed) return
+    if (this.#timer !== undefined) clearTimeout(this.#timer)
+    this.#timer = setTimeout(() => {
+      this.#timer = undefined
+      this.#closed = true
+      this.#connection.destroy(
+        new MachineTransportError(
+          'remote_execution_lost',
+          'Remote execution Controller lease expired',
+        ),
+      )
+    }, this.#timeoutMs)
+    this.#timer.unref?.()
+  }
+
+  close(): void {
+    if (this.#closed) return
+    this.#closed = true
+    if (this.#timer !== undefined) clearTimeout(this.#timer)
+    this.#timer = undefined
+  }
 }
 
 async function sendSafeError(

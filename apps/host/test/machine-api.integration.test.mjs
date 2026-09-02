@@ -103,6 +103,10 @@ class TrackingRuntime {
 
   async interruptTurn() {}
 
+  fail(error) {
+    for (const listener of [...this.failureListeners]) listener(error)
+  }
+
   async close() {
     this.closeCalls += 1
     this.eventListeners.clear()
@@ -1383,6 +1387,287 @@ test('remote Claude creation stays lazy and effort-bound while safe Tools, idemp
   }
 })
 
+test('HostService awaits exact remote acquisition rollback and permanently fails closed', async (t) => {
+  await t.test('reused Codex identity with cleanup failure', async () => {
+    const fixture = await createRemoteAcquisitionFixture('codex')
+    try {
+      const first = await fixture.service.createConversation({
+        actionId: 'act_acquire_codex_create01',
+        machineId: fixture.coordinator.machineId,
+        projectId: fixture.project.projectId,
+        provider: 'codex',
+      })
+      await fixture.service.startTurn(first.data.conversation.conversationId, {
+        actionId: 'act_acquire_codex_turn01',
+        input: { type: 'text', text: 'Materialize the first identity' },
+      })
+      await waitForConversationIdle(
+        fixture.service,
+        first.data.conversation.conversationId,
+      )
+      const second = await fixture.service.createConversation({
+        actionId: 'act_acquire_codex_create02',
+        machineId: fixture.coordinator.machineId,
+        projectId: fixture.project.projectId,
+        provider: 'codex',
+      })
+      const closeCallsBefore = fixture.coordinator.remoteSessionCloseCalls
+      const cleanupGate = deferred()
+      fixture.coordinator.remoteSessionCloseGate = cleanupGate.promise
+      fixture.coordinator.remoteSessionCloseError = new Error(
+        'private Codex cleanup failure',
+      )
+      let settled = false
+      const starting = fixture.service
+        .startTurn(second.data.conversation.conversationId, {
+          actionId: 'act_acquire_codex_turn02',
+          input: { type: 'text', text: 'Reject the reused identity' },
+        })
+        .finally(() => {
+          settled = true
+        })
+      void starting.catch(() => undefined)
+      await waitFor(
+        () =>
+          fixture.coordinator.remoteSessionCloseCalls === closeCallsBefore + 1,
+      )
+      assert.equal(settled, false)
+      assert.equal(fixture.coordinator.openCodexCalls.length, 2)
+      assert.equal(fixture.coordinator.remoteTurnCalls.length, 1)
+
+      cleanupGate.resolve()
+      await assert.rejects(
+        starting,
+        (error) =>
+          error instanceof HostServiceError && error.code === 'provider_error',
+      )
+      await assert.rejects(
+        fixture.service.startTurn(second.data.conversation.conversationId, {
+          actionId: 'act_acquire_codex_retry01',
+          input: { type: 'text', text: 'Never reopen after cleanup failure' },
+        }),
+      )
+      assert.equal(fixture.coordinator.openCodexCalls.length, 2)
+      assert.equal(fixture.coordinator.remoteTurnCalls.length, 1)
+    } finally {
+      await fixture.close()
+    }
+  })
+
+  await t.test('Claude durable persistence failure', async () => {
+    const fixture = await createRemoteAcquisitionFixture('claude-code')
+    try {
+      const created = await fixture.service.createConversation({
+        actionId: 'act_acquire_claude_create01',
+        machineId: fixture.coordinator.machineId,
+        projectId: fixture.project.projectId,
+        provider: 'claude-code',
+        reasoning: 'high',
+      })
+      const durableFailure = new Error('controlled durable update failure')
+      const updateConversation = fixture.persistence.updateConversation.bind(
+        fixture.persistence,
+      )
+      let failNextUpdate = true
+      fixture.persistence.updateConversation = (conversation) => {
+        if (failNextUpdate) {
+          failNextUpdate = false
+          throw durableFailure
+        }
+        return updateConversation(conversation)
+      }
+      const cleanupGate = deferred()
+      fixture.coordinator.remoteClaudeSessionCloseGate = cleanupGate.promise
+      let settled = false
+      const starting = fixture.service
+        .startTurn(created.data.conversation.conversationId, {
+          actionId: 'act_acquire_claude_turn01',
+          input: { type: 'text', text: 'Fail before Prompt persistence' },
+        })
+        .finally(() => {
+          settled = true
+        })
+      void starting.catch(() => undefined)
+      await waitFor(
+        () => fixture.coordinator.remoteClaudeSessionCloseCalls === 1,
+      )
+      assert.equal(settled, false)
+      assert.equal(fixture.coordinator.openClaudeCalls.length, 1)
+      assert.equal(fixture.coordinator.remoteClaudeTurnCalls.length, 0)
+
+      cleanupGate.resolve()
+      await assert.rejects(
+        starting,
+        (error) =>
+          error instanceof HostServiceError &&
+          error.code === 'runtime_unavailable',
+      )
+      await assert.rejects(
+        fixture.service.startTurn(created.data.conversation.conversationId, {
+          actionId: 'act_acquire_claude_retry01',
+          input: { type: 'text', text: 'Never reopen without durability' },
+        }),
+      )
+      assert.equal(fixture.coordinator.openClaudeCalls.length, 1)
+      assert.equal(fixture.coordinator.remoteClaudeTurnCalls.length, 0)
+    } finally {
+      await fixture.close()
+    }
+  })
+})
+
+test('a local Provider failure does not terminalize an active remote Turn for the same Provider', async () => {
+  const fixture = await createRemoteAcquisitionFixture('codex')
+  const eventGate = deferred()
+  try {
+    fixture.coordinator.remoteTurnEventGate = eventGate.promise
+    const created = await fixture.service.createConversation({
+      actionId: 'act_local_failure_remote_create01',
+      machineId: fixture.coordinator.machineId,
+      projectId: fixture.project.projectId,
+      provider: 'codex',
+    })
+    const conversationId = created.data.conversation.conversationId
+    await fixture.service.startTurn(conversationId, {
+      actionId: 'act_local_failure_remote_turn01',
+      input: { type: 'text', text: 'Remain owned by the remote runtime' },
+    })
+    assert.equal(
+      fixture.service.getConversation(conversationId).conversation.status,
+      'running',
+    )
+
+    fixture.localRuntime.fail(new Error('controlled local Provider failure'))
+    assert.equal(
+      fixture.service.getConversation(conversationId).conversation.status,
+      'running',
+    )
+
+    eventGate.resolve()
+    const completed = await waitForConversationIdle(
+      fixture.service,
+      conversationId,
+    )
+    assert.equal(completed.conversation.status, 'completed')
+    assert.equal(completed.runtime.turns.at(-1)?.status, 'completed')
+  } finally {
+    eventGate.resolve()
+    await fixture.close()
+  }
+})
+
+test('100 repeated cold reads stay Provider-free while the remote Machine is offline', async () => {
+  const fixture = await createRemoteAcquisitionFixture('codex')
+  try {
+    const created = await fixture.service.createConversation({
+      actionId: 'act_offline_cold_create01',
+      machineId: fixture.coordinator.machineId,
+      projectId: fixture.project.projectId,
+      provider: 'codex',
+    })
+    const conversationId = created.data.conversation.conversationId
+    await fixture.service.renameConversation(conversationId, {
+      actionId: 'act_offline_cold_rename01',
+      title: 'Offline cold read marker',
+    })
+    fixture.coordinator.setConnection('offline')
+
+    for (let index = 0; index < 100; index += 1) {
+      const detail = fixture.service.getConversation(conversationId)
+      const conversations = await fixture.service.listProjectConversations(
+        fixture.project.projectId,
+        { limit: 25 },
+      )
+      const search = await fixture.service.searchProjectConversations(
+        fixture.project.projectId,
+        {
+          q: 'offline cold read marker',
+          archive: 'active',
+          limit: 25,
+        },
+      )
+      const machine = await fixture.service.getMachine(
+        fixture.coordinator.machineId,
+      )
+      const project = await fixture.service.getProject(
+        fixture.project.projectId,
+      )
+
+      assert.equal(detail.conversation.conversationId, conversationId)
+      assert.equal(
+        conversations.conversations[0]?.conversationId,
+        conversationId,
+      )
+      assert.equal(
+        search.results[0]?.conversation.conversationId,
+        conversationId,
+      )
+      assert.equal(machine.connection.state, 'offline')
+      assert.equal(project.project.projectId, fixture.project.projectId)
+    }
+
+    assert.equal(fixture.coordinator.openCodexCalls.length, 0)
+    assert.equal(fixture.coordinator.remoteTurnCalls.length, 0)
+  } finally {
+    await fixture.close()
+  }
+})
+
+async function createRemoteAcquisitionFixture(provider) {
+  const directory = await mkdtemp(join(tmpdir(), 'codetether-acquisition-'))
+  const workspace = join(directory, 'workspace')
+  const databasePath = join(directory, 'data', 'codetether.sqlite3')
+  await mkdir(workspace, { recursive: true })
+  const persistence = ConversationStore.open({ databasePath })
+  const coordinator = new FakeRemoteMachineCoordinator(persistence)
+  coordinator.remoteExecution = provider === 'codex'
+  coordinator.remoteClaudeExecution = provider === 'claude-code'
+  const localRuntime = new TrackingRuntime('codex')
+  const service = await createService({
+    workspace,
+    databasePath,
+    runtimes: [localRuntime],
+    maxConversations: 1,
+    remoteMachineCoordinator: coordinator,
+    persistence,
+  })
+  const project = (await service.listProjects()).projects[0]
+  assert.ok(project)
+  const suffix = provider === 'codex' ? 'codex' : 'claude'
+  await service.beginRemoteMachinePairing({
+    actionId: `act_acquire_${suffix}_pair01`,
+    address: { host: '192.0.2.10', port: 43_217 },
+    pairingCode: '482731',
+  })
+  await service.confirmRemoteMachinePairing(coordinator.attemptId, {
+    actionId: `act_acquire_${suffix}_confirm01`,
+  })
+  await service.updateMachineConnectionAddress(coordinator.machineId, {
+    actionId: `act_acquire_${suffix}_online01`,
+    address: { host: '192.0.2.11', port: 43_217 },
+  })
+  await service.refreshMachineProviders(coordinator.machineId, {
+    actionId: `act_acquire_${suffix}_detect01`,
+  })
+  coordinator.validationCanonicalPath = `/srv/projects/acquire-${suffix}`
+  await service.registerProjectLocation(project.projectId, {
+    actionId: `act_acquire_${suffix}_location01`,
+    machineId: coordinator.machineId,
+    path: coordinator.validationCanonicalPath,
+  })
+  return {
+    coordinator,
+    persistence,
+    project,
+    localRuntime,
+    service,
+    close: async () => {
+      await service.close().catch(() => undefined)
+      await rm(directory, { recursive: true, force: true })
+    },
+  }
+}
+
 async function createService(options) {
   const service = new HostService({
     runtimes: options.runtimes,
@@ -1431,8 +1716,13 @@ class FakeRemoteMachineCoordinator {
     this.remoteClaudeSessionCloseCalls = 0
     this.remoteSessions = []
     this.remoteClaudeSessions = []
+    this.remoteSessionCloseGate = undefined
+    this.remoteSessionCloseError = undefined
+    this.remoteClaudeSessionCloseGate = undefined
+    this.remoteClaudeSessionCloseError = undefined
     this.openError = undefined
     this.offlineAfterStart = false
+    this.remoteTurnEventGate = undefined
     this.statusListeners = new Set()
     this.confirmed = {
       machine: {
@@ -1619,12 +1909,14 @@ class FakeRemoteMachineCoordinator {
       },
       startTurn: async (turn) => {
         this.remoteTurnCalls.push(turn)
+        const eventGate = this.remoteTurnEventGate
         if (this.offlineAfterStart) {
           this.offlineAfterStart = false
           this.setConnection('offline')
         }
         return {
           async *events() {
+            await eventGate
             if (closed) throw new Error('controlled Node disconnect')
             yield { type: 'message.delta', text: 'remote ', sequence: 1 }
             yield { type: 'message.delta', text: 'complete', sequence: 2 }
@@ -1636,6 +1928,10 @@ class FakeRemoteMachineCoordinator {
       close: async () => {
         closed = true
         this.remoteSessionCloseCalls += 1
+        await this.remoteSessionCloseGate
+        if (this.remoteSessionCloseError !== undefined) {
+          throw this.remoteSessionCloseError
+        }
       },
     }
     this.remoteSessions.push(session)
@@ -1705,6 +2001,10 @@ class FakeRemoteMachineCoordinator {
       close: async () => {
         closed = true
         this.remoteClaudeSessionCloseCalls += 1
+        await this.remoteClaudeSessionCloseGate
+        if (this.remoteClaudeSessionCloseError !== undefined) {
+          throw this.remoteClaudeSessionCloseError
+        }
       },
     }
     this.remoteClaudeSessions.push(session)
@@ -1789,6 +2089,22 @@ function hasInternalProcessIdentity(value) {
     if (hasInternalProcessIdentity(child)) return true
   }
   return false
+}
+
+function deferred() {
+  let resolve
+  const promise = new Promise((settle) => {
+    resolve = settle
+  })
+  return { promise, resolve }
+}
+
+async function waitFor(condition) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (condition()) return
+    await new Promise((resolve) => setImmediate(resolve))
+  }
+  assert.fail('Timed out waiting for acquisition cleanup')
 }
 
 async function waitForConversationIdle(service, conversationId) {

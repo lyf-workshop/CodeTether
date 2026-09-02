@@ -114,6 +114,10 @@ const REMOTE_CODEX_PROCESS_GROUPS = new WeakMap<
   ChildProcessWithoutNullStreams,
   number
 >()
+const REMOTE_CODEX_PROCESS_CONTROLLERS = new WeakMap<
+  ChildProcessWithoutNullStreams,
+  RemoteCodexProcessController
+>()
 
 export interface CodexInstallation {
   readonly executable: string
@@ -189,28 +193,55 @@ export interface SpawnRemoteCodexAppServerOptions {
   readonly executable?: string
   readonly codexHome: string
   readonly environment?: NodeJS.ProcessEnv
+  /** Node-private ownership seam. It is never populated from a wire request. */
+  readonly processFactory?: RemoteCodexProcessFactory
 }
+
+export interface RemoteCodexProcessSpecification {
+  readonly executable: string
+  readonly arguments: readonly string[]
+  readonly environment: NodeJS.ProcessEnv
+}
+
+export interface RemoteCodexProcessController {
+  readonly child: ChildProcessWithoutNullStreams
+  readonly ownershipEstablished?: Promise<void>
+  close(graceMs?: number): Promise<void>
+}
+
+export type RemoteCodexProcessFactory = (
+  specification: RemoteCodexProcessSpecification,
+) => RemoteCodexProcessController
 
 /** Starts the fixed text-only remote profile with no caller-controlled argv. */
 export function spawnRemoteCodexAppServer(
   options: SpawnRemoteCodexAppServerOptions,
 ): ChildProcessWithoutNullStreams {
-  const child = spawn(
-    options.executable ?? 'codex',
-    remoteCodexAppServerArguments(),
-    {
-      env: sanitizeRemoteCodexChildEnvironment(
-        options.environment ?? process.env,
-        options.codexHome,
-      ),
-      // A detached POSIX child becomes leader of a new process group. The
-      // remote-only shutdown path targets that saved group exactly, including
-      // descendants, without process-name or port searches.
-      detached: process.platform !== 'win32',
-      stdio: ['pipe', 'pipe', 'pipe'],
-      windowsHide: true,
-    },
+  const executable = options.executable ?? 'codex'
+  const arguments_ = remoteCodexAppServerArguments()
+  const environment = sanitizeRemoteCodexChildEnvironment(
+    options.environment ?? process.env,
+    options.codexHome,
   )
+  if (options.processFactory !== undefined) {
+    const controller = options.processFactory({
+      executable,
+      arguments: arguments_,
+      environment,
+    })
+    REMOTE_CODEX_PROCESS_CONTROLLERS.set(controller.child, controller)
+    return controller.child
+  }
+
+  const child = spawn(executable, arguments_, {
+    env: environment,
+    // A detached POSIX child becomes leader of a new process group. The
+    // remote-only shutdown path targets that saved group exactly, including
+    // descendants, without process-name or port searches.
+    detached: process.platform !== 'win32',
+    stdio: ['pipe', 'pipe', 'pipe'],
+    windowsHide: true,
+  })
   if (process.platform !== 'win32' && child.pid !== undefined) {
     REMOTE_CODEX_PROCESS_GROUPS.set(child, child.pid)
   }
@@ -283,6 +314,11 @@ export async function stopRemoteCodexAppServer(
   child: ChildProcessWithoutNullStreams,
   graceMs = 2_000,
 ): Promise<void> {
+  const controller = REMOTE_CODEX_PROCESS_CONTROLLERS.get(child)
+  if (controller !== undefined) {
+    await controller.close(graceMs)
+    return
+  }
   const processGroupId = REMOTE_CODEX_PROCESS_GROUPS.get(child)
   if (processGroupId === undefined) {
     // Synthetic adapter tests do not own a real process group. Production

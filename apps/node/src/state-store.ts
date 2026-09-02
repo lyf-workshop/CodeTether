@@ -4,8 +4,10 @@ import {
   lstat,
   mkdir,
   open,
+  readdir,
   readFile,
   rename,
+  rmdir,
   unlink,
   type FileHandle,
 } from 'node:fs/promises'
@@ -279,6 +281,59 @@ const NodeLockSchema = z
 
 async function acquireNodeLock(path: string): Promise<NodeStateLock> {
   const nonce = randomBytes(16).toString('hex')
+  const acquisition = await acquireNodeLockAcquisition(path)
+  let ownedLock: NodeStateLock | undefined
+  let operationError: unknown
+  try {
+    try {
+      ownedLock = await createOwnedNodeLock(path, nonce)
+    } catch (error) {
+      if (!hasCode(error, 'EEXIST')) throw error
+      const metadata = await lstat(path)
+      if (metadata.isSymbolicLink() || !metadata.isFile()) {
+        throw new Error('Node lock path is unsafe', { cause: error })
+      }
+      const existing = NodeLockSchema.parse(await readBoundedJson(path))
+      if (processExists(existing.pid)) {
+        throw new Error('Node state is already in use', { cause: error })
+      }
+      await unlink(path)
+      ownedLock = await createOwnedNodeLock(path, nonce)
+    }
+    if (ownedLock === undefined) {
+      throw new Error('Node state lock was not established')
+    }
+  } catch (error) {
+    operationError = error
+  } finally {
+    try {
+      await releaseNodeLockAcquisition(path, acquisition)
+    } catch (error) {
+      if (ownedLock !== undefined) {
+        try {
+          await releaseNodeLock(path, ownedLock)
+        } catch (cleanupError) {
+          operationError ??= new AggregateError(
+            [error, cleanupError],
+            'Node lock acquisition and exact cleanup both failed',
+          )
+        }
+        ownedLock = undefined
+      }
+      operationError ??= error
+    }
+  }
+  if (operationError !== undefined) throw operationError
+  if (ownedLock === undefined) {
+    throw new Error('Node state lock was not established')
+  }
+  return ownedLock
+}
+
+async function createOwnedNodeLock(
+  path: string,
+  nonce: string,
+): Promise<NodeStateLock> {
   let handle: FileHandle | undefined
   try {
     handle = await open(path, 'wx', 0o600)
@@ -291,22 +346,244 @@ async function acquireNodeLock(path: string): Promise<NodeStateLock> {
   } catch (error) {
     if (handle !== undefined) {
       await handle.close().catch(() => undefined)
+      // The caller holds the acquisition mutex, so a partially written file
+      // cannot have been replaced by another legitimate Node writer.
       await unlink(path).catch(() => undefined)
     }
-    if (!hasCode(error, 'EEXIST')) throw error
-    const metadata = await lstat(path)
-    if (metadata.isSymbolicLink() || !metadata.isFile()) {
-      throw new Error('Node lock path is unsafe', { cause: error })
+    throw error
+  }
+}
+
+interface NodeLockAcquisition {
+  readonly directory: string
+  readonly ownerPath: string
+  readonly nonce: string
+}
+
+const LOCK_ACQUISITION_RETRY_MS = 10
+const LOCK_ACQUISITION_STALE_MS = 1_000
+const LOCK_ACQUISITION_ATTEMPTS = 500
+
+/**
+ * Serializes stale-lock recovery across processes. The short-lived directory
+ * is not held for the Node lifetime; it only closes the unlink/create race
+ * where two recovering Nodes could otherwise displace each other's live lock.
+ */
+async function acquireNodeLockAcquisition(
+  path: string,
+): Promise<NodeLockAcquisition> {
+  const directory = `${path}.acquire`
+  const ownerPath = join(directory, 'owner.json')
+  const nonce = randomBytes(16).toString('hex')
+  for (let attempt = 0; attempt < LOCK_ACQUISITION_ATTEMPTS; attempt += 1) {
+    try {
+      await mkdir(directory, { mode: 0o700 })
+      try {
+        await writePrivateJsonExclusive(ownerPath, {
+          pid: process.pid,
+          nonce,
+        })
+      } catch (error) {
+        await rmdir(directory).catch(() => undefined)
+        throw error
+      }
+      return { directory, ownerPath, nonce }
+    } catch (error) {
+      if (!hasCode(error, 'EEXIST')) throw error
     }
-    const existing = NodeLockSchema.parse(await readBoundedJson(path))
-    if (processExists(existing.pid)) {
-      throw new Error('Node state is already in use', { cause: error })
+
+    const metadata = await lstat(directory).catch((error: unknown) => {
+      if (hasCode(error, 'ENOENT')) return undefined
+      throw error
+    })
+    if (metadata === undefined) continue
+    if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
+      throw new Error('Node lock acquisition path is unsafe')
     }
-    throw new Error(
-      'Node state lock is stale; explicit lock recovery is required',
-      { cause: error },
+    const entries = await readdir(directory).catch((error: unknown) => {
+      if (hasCode(error, 'ENOENT') || hasCode(error, 'EPERM')) return undefined
+      throw error
+    })
+    if (entries === undefined) {
+      await new Promise((resolveWait) =>
+        setTimeout(resolveWait, LOCK_ACQUISITION_RETRY_MS),
+      )
+      continue
+    }
+    if (entries.some((entry) => entry !== 'owner.json')) {
+      throw new Error('Node lock acquisition path is unsafe')
+    }
+    let owner: z.infer<typeof NodeLockSchema> | undefined
+    if (entries.includes('owner.json')) {
+      try {
+        owner = NodeLockSchema.parse(await readBoundedJson(ownerPath))
+      } catch (error) {
+        const ownerMetadata = await lstat(ownerPath).catch((cause: unknown) => {
+          if (hasCode(cause, 'ENOENT')) return undefined
+          throw cause
+        })
+        if (ownerMetadata === undefined) continue
+        if (ownerMetadata.isFile() && !ownerMetadata.isSymbolicLink()) {
+          const ageMs = Date.now() - ownerMetadata.mtimeMs
+          if (ownerMetadata.size === 0 && ageMs >= LOCK_ACQUISITION_STALE_MS) {
+            await recoverNodeLockAcquisition({
+              directory,
+              ownerPath,
+              metadata,
+              emptyOwnerFile: true,
+            })
+            continue
+          }
+          if (ageMs < LOCK_ACQUISITION_STALE_MS) {
+            await new Promise((resolveWait) =>
+              setTimeout(resolveWait, LOCK_ACQUISITION_RETRY_MS),
+            )
+            continue
+          }
+        }
+        throw error
+      }
+    }
+    if (owner !== undefined && !processExists(owner.pid)) {
+      await recoverNodeLockAcquisition({
+        directory,
+        ownerPath,
+        metadata,
+        owner,
+      })
+      continue
+    }
+    if (
+      owner === undefined &&
+      Date.now() - metadata.mtimeMs >= LOCK_ACQUISITION_STALE_MS
+    ) {
+      await recoverNodeLockAcquisition({
+        directory,
+        ownerPath,
+        metadata,
+      })
+      continue
+    }
+    await new Promise((resolveWait) =>
+      setTimeout(resolveWait, LOCK_ACQUISITION_RETRY_MS),
     )
   }
+  throw new Error('Node state lock acquisition remained busy')
+}
+
+async function recoverNodeLockAcquisition(options: {
+  readonly directory: string
+  readonly ownerPath: string
+  readonly metadata: Awaited<ReturnType<typeof lstat>>
+  readonly owner?: z.infer<typeof NodeLockSchema>
+  readonly emptyOwnerFile?: boolean
+}): Promise<void> {
+  const identity =
+    options.owner?.nonce ??
+    `empty-${String(options.metadata.dev)}-${String(options.metadata.ino)}-${String(Math.trunc(Number(options.metadata.mtimeMs)))}`
+  const claimPath = `${options.directory}.recover-${identity}`
+  const claim = {
+    pid: process.pid,
+    nonce: randomBytes(16).toString('hex'),
+  }
+  try {
+    await writePrivateJsonExclusive(claimPath, claim)
+  } catch (error) {
+    if (!hasCode(error, 'EEXIST')) throw error
+    const existing = NodeLockSchema.parse(await readBoundedJson(claimPath))
+    if (!processExists(existing.pid)) {
+      // Never race another recovery by replacing its claim. A crash inside
+      // this tiny recovery window fails closed and requires explicit cleanup.
+      throw new Error('Node lock recovery claim is stale', { cause: error })
+    }
+    await new Promise((resolveWait) =>
+      setTimeout(resolveWait, LOCK_ACQUISITION_RETRY_MS),
+    )
+    return
+  }
+
+  try {
+    const currentMetadata = await lstat(options.directory).catch(
+      (error: unknown) => {
+        if (hasCode(error, 'ENOENT')) return undefined
+        throw error
+      },
+    )
+    if (currentMetadata === undefined) return
+    if (
+      currentMetadata.isSymbolicLink() ||
+      !currentMetadata.isDirectory() ||
+      currentMetadata.dev !== options.metadata.dev ||
+      currentMetadata.ino !== options.metadata.ino
+    ) {
+      return
+    }
+    const entries = await readdir(options.directory).catch((error: unknown) => {
+      if (hasCode(error, 'ENOENT') || hasCode(error, 'EPERM')) return undefined
+      throw error
+    })
+    if (entries === undefined) return
+    if (options.owner === undefined) {
+      if (options.emptyOwnerFile === true) {
+        if (entries.length !== 1 || entries[0] !== 'owner.json') return
+        const ownerMetadata = await lstat(options.ownerPath)
+        if (
+          ownerMetadata.isSymbolicLink() ||
+          !ownerMetadata.isFile() ||
+          ownerMetadata.size !== 0 ||
+          Date.now() - ownerMetadata.mtimeMs < LOCK_ACQUISITION_STALE_MS
+        ) {
+          return
+        }
+        await unlink(options.ownerPath)
+      } else if (entries.length !== 0) return
+    } else {
+      if (entries.length !== 1 || entries[0] !== 'owner.json') return
+      const currentOwner = NodeLockSchema.parse(
+        await readBoundedJson(options.ownerPath),
+      )
+      if (
+        currentOwner.pid !== options.owner.pid ||
+        currentOwner.nonce !== options.owner.nonce ||
+        processExists(currentOwner.pid)
+      ) {
+        return
+      }
+      await unlink(options.ownerPath)
+    }
+    await rmdir(options.directory)
+  } finally {
+    await releaseRecoveryClaim(claimPath, claim)
+  }
+}
+
+async function releaseRecoveryClaim(
+  path: string,
+  claim: z.infer<typeof NodeLockSchema>,
+): Promise<void> {
+  const current = NodeLockSchema.parse(await readBoundedJson(path))
+  if (current.pid !== claim.pid || current.nonce !== claim.nonce) {
+    throw new Error('Node lock recovery claim ownership changed')
+  }
+  await unlink(path)
+}
+
+async function releaseNodeLockAcquisition(
+  path: string,
+  acquisition: NodeLockAcquisition,
+): Promise<void> {
+  const expectedDirectory = `${path}.acquire`
+  if (acquisition.directory !== expectedDirectory) {
+    throw new Error('Node lock acquisition ownership is invalid')
+  }
+  const owner = NodeLockSchema.parse(
+    await readBoundedJson(acquisition.ownerPath),
+  )
+  if (owner.pid !== process.pid || owner.nonce !== acquisition.nonce) {
+    throw new Error('Node lock acquisition ownership changed')
+  }
+  await unlink(acquisition.ownerPath)
+  await rmdir(acquisition.directory)
 }
 
 async function releaseNodeLock(

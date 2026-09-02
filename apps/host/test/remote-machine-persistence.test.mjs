@@ -100,8 +100,8 @@ test('migration 009 preserves the v8 graph and rolls back replacement tables ato
     rolledBack.close()
 
     const migrated = ConversationStore.open({ databasePath })
-    assert.equal(currentSchemaVersion, 11)
-    assert.equal(migrated.schemaVersion, 11)
+    assert.equal(currentSchemaVersion, 12)
+    assert.equal(migrated.schemaVersion, 12)
     assert.deepEqual(
       migrated.listMachines().map((machine) => machine.machineId),
       [v8MachineId],
@@ -195,7 +195,7 @@ test('migration 010 backfills one preferred endpoint from v9 and rolls back with
     rolledBack.close()
 
     const migrated = ConversationStore.open({ databasePath })
-    assert.equal(migrated.schemaVersion, 11)
+    assert.equal(migrated.schemaVersion, 12)
     const trust = migrated.getTrustedMachinePeer(candidate.machine.machineId)
     assert.deepEqual(trust?.endpoints, [
       {
@@ -234,7 +234,8 @@ test('migration 011 adds bounded remote Provider observations transactionally', 
 
     const downgrade = new DatabaseSync(databasePath)
     downgrade.exec(`
-      DELETE FROM schema_migrations WHERE version = 11;
+      DELETE FROM schema_migrations WHERE version IN (11, 12);
+      DROP TABLE turn_start_actions;
       DROP TABLE remote_machine_provider_observations;
       CREATE TABLE remote_machine_provider_observations (
         blocked INTEGER
@@ -258,7 +259,7 @@ test('migration 011 adds bounded remote Provider observations transactionally', 
     rolledBack.close()
 
     const migrated = ConversationStore.open({ databasePath })
-    assert.equal(migrated.schemaVersion, 11)
+    assert.equal(migrated.schemaVersion, 12)
     assert.equal(
       migrated.getRemoteProviderObservation(candidate.machine.machineId),
       undefined,
@@ -576,7 +577,7 @@ test('remote Project locations aggregate durably, reject conflicts, and atomical
     store.close()
 
     const reopened = ConversationStore.open({ databasePath })
-    assert.equal(reopened.schemaVersion, 11)
+    assert.equal(reopened.schemaVersion, 12)
     assert.deepEqual(
       reopened
         .getProject('proj_multilocation01')
@@ -890,7 +891,8 @@ function downgradeRemoteMachineEndpointsToVersionNine(databasePath) {
     database.exec('PRAGMA foreign_keys = OFF')
     database.exec(`
       BEGIN IMMEDIATE;
-      DELETE FROM schema_migrations WHERE version IN (10, 11);
+      DELETE FROM schema_migrations WHERE version IN (10, 11, 12);
+      DROP TABLE turn_start_actions;
       DROP TABLE remote_machine_provider_observations;
       CREATE TABLE trusted_machine_peers_v9 (
         machine_id TEXT PRIMARY KEY,

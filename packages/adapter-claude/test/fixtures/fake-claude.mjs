@@ -174,35 +174,57 @@ if (arguments_.includes('--version')) {
       parent_tool_use_id: null,
       event: { type: 'message_start', message: { id: 'message-1' } },
     })
-    emit({
-      type: 'stream_event',
-      uuid: 'stream-delta',
-      session_id: emittedSessionId,
-      parent_tool_use_id: null,
-      event: {
-        type: 'content_block_delta',
-        index: 0,
-        delta: { type: 'text_delta', text: 'HELLO' },
-      },
-    })
-    emit({
-      type: 'assistant',
-      uuid: 'assistant-1',
-      session_id: emittedSessionId,
-      parent_tool_use_id: null,
-      message: {
-        id: 'message-1',
-        content: [{ type: 'text', text: 'HELLO' }],
-      },
-    })
-    emit({
-      type: 'result',
-      subtype: 'success',
-      uuid: 'result-1',
-      session_id: emittedSessionId,
-      is_error: false,
-      result: 'HELLO',
-      permission_denials: [],
-    })
+    if (scenario === 'burst') {
+      for (let index = 0; index < 40; index += 1) {
+        emit({
+          type: 'stream_event',
+          uuid: `stream-delta-${String(index)}`,
+          session_id: emittedSessionId,
+          parent_tool_use_id: null,
+          event: {
+            type: 'content_block_delta',
+            index: 0,
+            delta: { type: 'text_delta', text: 'X' },
+          },
+        })
+        await new Promise((resolveWait) => setTimeout(resolveWait, 5))
+      }
+    } else {
+      emit({
+        type: 'stream_event',
+        uuid: 'stream-delta',
+        session_id: emittedSessionId,
+        parent_tool_use_id: null,
+        event: {
+          type: 'content_block_delta',
+          index: 0,
+          delta: { type: 'text_delta', text: 'HELLO' },
+        },
+      })
+    }
+    if (scenario === 'after-delta-crash') {
+      process.exitCode = 7
+    } else {
+      const finalMessage = scenario === 'burst' ? 'X'.repeat(40) : 'HELLO'
+      emit({
+        type: 'assistant',
+        uuid: 'assistant-1',
+        session_id: emittedSessionId,
+        parent_tool_use_id: null,
+        message: {
+          id: 'message-1',
+          content: [{ type: 'text', text: finalMessage }],
+        },
+      })
+      emit({
+        type: 'result',
+        subtype: 'success',
+        uuid: 'result-1',
+        session_id: emittedSessionId,
+        is_error: false,
+        result: finalMessage,
+        permission_denials: [],
+      })
+    }
   }
 }

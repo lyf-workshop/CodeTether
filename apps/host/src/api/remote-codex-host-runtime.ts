@@ -8,13 +8,14 @@ import {
   type ProjectId,
 } from '@codetether/protocol'
 
-import type {
-  AgentHostRuntime,
-  ProviderApprovalRequest,
-  ProviderApprovalResolution,
-  ProviderConversationResult,
-  ProviderRuntimeContext,
-  ProviderTurnResult,
+import {
+  ProviderConversationUnavailableError,
+  type AgentHostRuntime,
+  type ProviderApprovalRequest,
+  type ProviderApprovalResolution,
+  type ProviderConversationResult,
+  type ProviderRuntimeContext,
+  type ProviderTurnResult,
 } from './agent-runtime.js'
 
 const REMOTE_SESSION_PREFIX = 'remote-codex-v1:'
@@ -83,7 +84,11 @@ export class RemoteCodexHostRuntime implements AgentHostRuntime {
   readonly #eventListeners = new Set<(event: AgentEvent) => void>()
   readonly #failureListeners = new Set<(failure: Error) => void>()
   readonly #turnPumps = new Set<Promise<void>>()
+  readonly #openingConversations = new Set<ConversationId>()
+  readonly #sessionCleanups = new Map<string, Promise<void>>()
+  readonly #conversationCleanups = new Map<ConversationId, Promise<void>>()
   #closed = false
+  #closePromise?: Promise<void>
 
   constructor(options: RemoteCodexHostRuntimeOptions) {
     this.#machineId = MachineIdSchema.parse(options.machineId)
@@ -122,13 +127,16 @@ export class RemoteCodexHostRuntime implements AgentHostRuntime {
   ): Promise<ProviderConversationResult> {
     this.#assertOpen()
     const identity = requiredContext(options, this.#machineId)
-    const session = await this.#opener.open({
-      machineId: this.#machineId,
-      conversationId: identity.conversationId,
-      projectId: identity.projectId,
-      rootPath: options.cwd,
-    })
-    return this.#retainSession(session, identity.conversationId)
+    return await this.#openAndRetainSession(
+      identity.conversationId,
+      async () =>
+        await this.#opener.open({
+          machineId: this.#machineId,
+          conversationId: identity.conversationId,
+          projectId: identity.projectId,
+          rootPath: options.cwd,
+        }),
+    )
   }
 
   async resumeConversation(
@@ -157,17 +165,21 @@ export class RemoteCodexHostRuntime implements AgentHostRuntime {
         return { providerThreadId: options.providerThreadId }
       }
     }
-    const session = await this.#opener.open({
-      machineId: this.#machineId,
-      conversationId: identity.conversationId,
-      projectId: identity.projectId,
-      rootPath: options.cwd,
-      providerThreadId: decoded,
-    })
-    const retained = this.#retainSession(session, identity.conversationId)
+    const retained = await this.#openAndRetainSession(
+      identity.conversationId,
+      async () =>
+        await this.#opener.open({
+          machineId: this.#machineId,
+          conversationId: identity.conversationId,
+          projectId: identity.projectId,
+          rootPath: options.cwd,
+          providerThreadId: decoded,
+        }),
+    )
     if (retained.providerThreadId !== options.providerThreadId) {
-      await session.close()
-      this.#sessions.delete(retained.providerThreadId)
+      await this.disposeConversation({
+        providerThreadId: retained.providerThreadId,
+      })
       throw new Error('Remote Codex resumed a different native Session')
     }
     return retained
@@ -212,9 +224,11 @@ export class RemoteCodexHostRuntime implements AgentHostRuntime {
     readonly providerThreadId: string
   }): Promise<void> {
     const session = this.#sessions.get(options.providerThreadId)
-    if (session === undefined) return
-    this.#sessions.delete(options.providerThreadId)
-    await session.close()
+    if (session !== undefined) {
+      this.#sessions.delete(options.providerThreadId)
+      this.#trackSessionCleanup(options.providerThreadId, session)
+    }
+    await this.#awaitSessionCleanup(options.providerThreadId)
   }
 
   hasConversationSession(providerThreadId: string): boolean {
@@ -226,16 +240,35 @@ export class RemoteCodexHostRuntime implements AgentHostRuntime {
   }
 
   async close(): Promise<void> {
-    if (this.#closed) return
-    this.#closed = true
+    if (this.#closePromise === undefined) {
+      this.#closed = true
+      this.#closePromise = this.#closeOwnedSessions()
+    }
+    await this.#closePromise
+  }
+
+  async #closeOwnedSessions(): Promise<void> {
     const sessions = [...this.#sessions.values()]
     this.#sessions.clear()
+    const sessionCloses = sessions.map((session) => {
+      const providerThreadId = encodeRemoteProviderThreadId(
+        this.#machineId,
+        session.providerThreadId,
+      )
+      return this.#trackSessionCleanup(providerThreadId, session)
+    })
     const results = await Promise.allSettled([
-      ...sessions.map(async (session) => await session.close()),
+      ...new Set([
+        ...this.#sessionCleanups.values(),
+        ...this.#conversationCleanups.values(),
+        ...sessionCloses,
+      ]),
       ...this.#turnPumps,
     ])
     this.#eventListeners.clear()
     this.#failureListeners.clear()
+    this.#sessionCleanups.clear()
+    this.#conversationCleanups.clear()
     const rejected = results.find((result) => result.status === 'rejected')
     if (rejected?.status === 'rejected') throw rejected.reason
   }
@@ -246,6 +279,7 @@ export class RemoteCodexHostRuntime implements AgentHostRuntime {
     providerTurnId: string,
   ): Promise<void> {
     let message = ''
+    let messageCompleted = false
     let terminal = false
     try {
       const events = turn.events?.() ?? turn
@@ -257,6 +291,9 @@ export class RemoteCodexHostRuntime implements AgentHostRuntime {
         const timestamp = this.#now().toISOString()
         switch (event.type) {
           case 'message.delta':
+            if (messageCompleted) {
+              throw new Error('Remote Codex emitted text after completion')
+            }
             message += event.text
             this.#emit({
               type: 'message.delta',
@@ -269,6 +306,10 @@ export class RemoteCodexHostRuntime implements AgentHostRuntime {
             })
             break
           case 'message.completed':
+            if (messageCompleted) {
+              throw new Error('Remote Codex completed its message twice')
+            }
+            messageCompleted = true
             this.#emit({
               type: 'message.completed',
               provider: 'codex',
@@ -280,6 +321,11 @@ export class RemoteCodexHostRuntime implements AgentHostRuntime {
             })
             break
           case 'turn.completed':
+            if (!messageCompleted) {
+              throw new Error(
+                'Remote Codex completed before its message was finalized',
+              )
+            }
             terminal = true
             this.#emit({
               type: 'turn.completed',
@@ -319,25 +365,70 @@ export class RemoteCodexHostRuntime implements AgentHostRuntime {
     }
   }
 
-  #retainSession(
+  async #openAndRetainSession(
+    conversationId: ConversationId,
+    open: () => Promise<RemoteCodexRuntimeSession>,
+  ): Promise<ProviderConversationResult> {
+    await this.#awaitConversationCleanup(conversationId)
+    this.#assertOpen()
+    if (
+      this.#openingConversations.has(conversationId) ||
+      [...this.#sessions.values()].some(
+        (session) => session.conversationId === conversationId,
+      )
+    ) {
+      throw new ProviderConversationUnavailableError(
+        this.provider,
+        conversationId,
+      )
+    }
+    this.#openingConversations.add(conversationId)
+    try {
+      const session = await open()
+      return await this.#retainSession(session, conversationId)
+    } finally {
+      this.#openingConversations.delete(conversationId)
+    }
+  }
+
+  async #retainSession(
     session: RemoteCodexRuntimeSession,
     conversationId: ConversationId,
-  ): ProviderConversationResult {
+  ): Promise<ProviderConversationResult> {
     if (
       session.machineId !== this.#machineId ||
       session.conversationId !== conversationId ||
       session.providerThreadId.trim().length === 0
     ) {
-      void session.close()
+      await session.close()
       throw new Error('Remote Codex returned mismatched Session identity')
     }
     const providerThreadId = encodeRemoteProviderThreadId(
       this.#machineId,
       session.providerThreadId,
     )
+    const pendingCleanup =
+      this.#sessionCleanups.get(providerThreadId) ??
+      this.#conversationCleanups.get(conversationId)
+    if (pendingCleanup !== undefined) {
+      const results = await Promise.allSettled([
+        pendingCleanup,
+        Promise.resolve().then(async () => await session.close()),
+      ])
+      const rejected = results.find((result) => result.status === 'rejected')
+      if (rejected?.status === 'rejected') throw rejected.reason
+      throw new ProviderConversationUnavailableError(
+        this.provider,
+        providerThreadId,
+      )
+    }
+    if (this.#closed) {
+      await session.close()
+      throw new Error('Remote Codex runtime is closed')
+    }
     const existing = this.#sessions.get(providerThreadId)
     if (existing !== undefined && existing !== session) {
-      void session.close()
+      await session.close()
       throw new Error('Remote Codex Session identity is already active')
     }
     this.#sessions.set(providerThreadId, session)
@@ -366,7 +457,7 @@ export class RemoteCodexHostRuntime implements AgentHostRuntime {
     const session = this.#sessions.get(providerThreadId)
     if (session === undefined) return
     this.#sessions.delete(providerThreadId)
-    void Promise.resolve(session.close()).catch(() => undefined)
+    this.#trackSessionCleanup(providerThreadId, session)
   }
 
   #removeStaleSession(
@@ -375,7 +466,67 @@ export class RemoteCodexHostRuntime implements AgentHostRuntime {
   ): void {
     if (this.#sessions.get(providerThreadId) !== session) return
     this.#sessions.delete(providerThreadId)
-    void Promise.resolve(session.close()).catch(() => undefined)
+    this.#trackSessionCleanup(providerThreadId, session)
+  }
+
+  #trackSessionCleanup(
+    providerThreadId: string,
+    session: RemoteCodexRuntimeSession,
+  ): Promise<void> {
+    const existing =
+      this.#sessionCleanups.get(providerThreadId) ??
+      this.#conversationCleanups.get(session.conversationId)
+    if (existing !== undefined) return existing
+    let cleanup: Promise<void>
+    try {
+      cleanup = Promise.resolve(session.close())
+    } catch (error) {
+      cleanup = Promise.reject(error)
+    }
+    this.#sessionCleanups.set(providerThreadId, cleanup)
+    this.#conversationCleanups.set(session.conversationId, cleanup)
+    void cleanup.then(
+      () => {
+        if (this.#sessionCleanups.get(providerThreadId) === cleanup) {
+          this.#sessionCleanups.delete(providerThreadId)
+        }
+        if (
+          this.#conversationCleanups.get(session.conversationId) === cleanup
+        ) {
+          this.#conversationCleanups.delete(session.conversationId)
+        }
+      },
+      () => undefined,
+    )
+    return cleanup
+  }
+
+  async #awaitSessionCleanup(providerThreadId: string): Promise<void> {
+    const cleanup = this.#sessionCleanups.get(providerThreadId)
+    if (cleanup === undefined) return
+    try {
+      await cleanup
+    } catch {
+      throw new ProviderConversationUnavailableError(
+        this.provider,
+        providerThreadId,
+      )
+    }
+  }
+
+  async #awaitConversationCleanup(
+    conversationId: ConversationId,
+  ): Promise<void> {
+    const cleanup = this.#conversationCleanups.get(conversationId)
+    if (cleanup === undefined) return
+    try {
+      await cleanup
+    } catch {
+      throw new ProviderConversationUnavailableError(
+        this.provider,
+        conversationId,
+      )
+    }
   }
 
   #assertOpen(): void {

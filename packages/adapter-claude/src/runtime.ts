@@ -11,6 +11,7 @@ import {
 } from './errors.js'
 import {
   startClaudeCodeTurnProcess,
+  type ClaudeCodeProcessFactory,
   type ClaudeCodeProcessOwnership,
   type ClaudeCodeTurnProcessHandle,
 } from './process.js'
@@ -28,6 +29,8 @@ export interface ClaudeCodeSessionOptions {
   readonly testedVersion?: string
   /** Node-only opt-in. Omitted for the frozen local direct-child profile. */
   readonly processOwnership?: ClaudeCodeProcessOwnership
+  /** Node-private ownership seam. Omitted for local Claude. */
+  readonly processFactory?: ClaudeCodeProcessFactory
 }
 
 export interface ClaudeCodeCreateSessionOptions extends ClaudeCodeSessionOptions {
@@ -44,6 +47,11 @@ export interface ClaudeCodeStartTurnOptions {
   readonly effort?: ClaudeCodeEffort
 }
 
+export interface ClaudeCodeTurnExecution {
+  readonly ownershipEstablished: Promise<void>
+  readonly completion: Promise<ClaudeCodeTurnResult>
+}
+
 export type ClaudeCodeEventListener = (
   event: AgentEvent,
 ) => void | Promise<void>
@@ -58,6 +66,7 @@ export class ClaudeCodeSessionRuntime {
   readonly #environment?: NodeJS.ProcessEnv
   readonly #testedVersion?: string
   readonly #processOwnership?: ClaudeCodeProcessOwnership
+  readonly #processFactory?: ClaudeCodeProcessFactory
   readonly #eventListeners = new Set<ClaudeCodeEventListener>()
   readonly #failureListeners = new Set<ClaudeCodeFailureListener>()
   #resume: boolean
@@ -77,6 +86,7 @@ export class ClaudeCodeSessionRuntime {
     this.#environment = options.environment
     this.#testedVersion = options.testedVersion
     this.#processOwnership = options.processOwnership
+    this.#processFactory = options.processFactory
     this.#resume = options.resume
   }
 
@@ -109,6 +119,13 @@ export class ClaudeCodeSessionRuntime {
   async startTurn(
     options: ClaudeCodeStartTurnOptions,
   ): Promise<ClaudeCodeTurnResult> {
+    return await this.startTurnExecution(options).completion
+  }
+
+  /** Node execution uses this to acknowledge real process ownership first. */
+  startTurnExecution(
+    options: ClaudeCodeStartTurnOptions,
+  ): ClaudeCodeTurnExecution {
     if (this.#closed) throw new ClaudeCodeStartError()
     if (this.#active !== undefined) {
       throw new ClaudeCodeError(
@@ -134,29 +151,35 @@ export class ClaudeCodeSessionRuntime {
       ...(this.#processOwnership === undefined
         ? {}
         : { processOwnership: this.#processOwnership }),
+      ...(this.#processFactory === undefined
+        ? {}
+        : { processFactory: this.#processFactory }),
       onEvent: async (event) => {
         for (const listener of this.#eventListeners) await listener(event)
       },
     })
     this.#active = handle
-    try {
-      const result = await handle.completion
-      this.#resume = true
-      return result
-    } catch (error) {
-      if (error instanceof ClaudeCodeTurnInterruptedError) throw error
-      const safeError = asClaudeCodeError(error)
-      const failure: ClaudeCodeFailure = {
-        sessionId: this.sessionId,
-        turnId: options.turnId,
-        code: safeError.code,
-        message: safeError.message,
+    const completion = (async () => {
+      try {
+        const result = await handle.completion
+        this.#resume = true
+        return result
+      } catch (error) {
+        if (error instanceof ClaudeCodeTurnInterruptedError) throw error
+        const safeError = asClaudeCodeError(error)
+        const failure: ClaudeCodeFailure = {
+          sessionId: this.sessionId,
+          turnId: options.turnId,
+          code: safeError.code,
+          message: safeError.message,
+        }
+        for (const listener of this.#failureListeners) await listener(failure)
+        throw safeError
+      } finally {
+        if (this.#active === handle) this.#active = undefined
       }
-      for (const listener of this.#failureListeners) await listener(failure)
-      throw safeError
-    } finally {
-      if (this.#active === handle) this.#active = undefined
-    }
+    })()
+    return { ownershipEstablished: handle.ownershipEstablished, completion }
   }
 
   async close(): Promise<void> {

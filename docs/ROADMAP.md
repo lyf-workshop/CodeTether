@@ -980,7 +980,7 @@ Exit gate:
 
 ## Phase 6C.3 — Remote Claude Code Execution Foundation
 
-**Status:** current approved implementation scope; not accepted or frozen.
+**Status:** accepted and frozen at `4239cc3`.
 
 **Goal:** execute and natively resume a real Claude Code Conversation on an exact trusted remote Machine and registered Project Location while preserving the frozen restricted Claude capability matrix.
 
@@ -999,6 +999,32 @@ Exit gate:
 ### Exit gate
 
 - A REAL trusted WSL2 Node executes authenticated Claude Code with real streaming, safe Read and Search Tools, unchanged files under a denied mutation attempt, exact owned-process evidence, durable completion, native resume after Host/Desktop and Node restart, background Tray completion, idempotency, local/remote Claude isolation, preserved remote Codex behavior, cold Search/organization independence, complete cleanup, passing build/package tests, and a clean working tree.
+
+## Phase 6C.4 — Remote Execution Hardening
+
+**Status:** current approved implementation scope; not accepted, frozen, or declared ready.
+
+**Goal:** harden the accepted remote Codex and restricted remote Claude execution foundations against ambiguous Turn admission, hard process death, backpressure, reconnect flapping, and restart residue without expanding their Provider capabilities or public product surfaces.
+
+### In scope
+
+- SQLite migration 012 (`durable_turn_start_actions`) atomically associates each newly admitted durable Turn with its Host `actionId`. A same-input retry, including after Host restart, resolves to the exact existing Turn; conflicting reuse fails closed. This is restart-safe exactly-once Turn admission, not generalized durable command execution or a Provider-event log.
+- The Host durably admits the Turn before any Provider call. Once a start frame may have been written, timeout, abort, disconnect, or malformed acknowledgement makes execution ownership uncertain: the dedicated session fails closed, the durable Turn reaches a safe terminal failure, and neither Host nor Node automatically resends the Prompt. Provider session open has the same fail-closed boundary after pinned authentication: a rejection or missing/malformed ready result stops that semantic operation without fallback to another remembered endpoint or failure-marking the authenticated address, because native session creation may already have happened.
+- Machine-transport writes are bounded by frame size and elapsed write time. An admitted active Turn has no wall-clock timeout; quiet real Provider work remains valid until a canonical terminal event, connection loss, or explicit lifecycle cleanup.
+- Remote Codex and Claude runners use bounded event-count and byte queues with tail-only coalescing of compatible adjacent deltas. Reliable overflow produces an explicit terminal failure; terminal events are not silently dropped and memory does not grow without bound under a slow consumer. Before the Host binds Provider startup events to a public Turn, its separate global buffer is capped at 512 events and 4 MiB. Overflow marks only the exact Machine/Provider/session/Turn, removes only that Turn's unbound events, ignores later frames for the marked session, and never throws callback failure back into the Runtime. Turn start awaits exact session cleanup before one durable failed terminal is published; cleanup rejection keeps that session unavailable behind a barrier without disturbing other buffered or running work.
+- On Linux, each Node-owned Provider starts behind a private guardian. Loss of the exact Node parent pipe causes bounded termination of the exact Provider POSIX process group, including descendants, while normal disposal and shutdown use the same owned cleanup boundary. Active dedicated execution additionally uses a Provider-specific authenticated heartbeat/ack and bounded Node-side Controller lease: quiet Provider work has no inactivity timeout, but a blackholed Controller session loses ownership, closes, and cleans the exact execution without replay.
+- Host and Node cleanup are keyed ownership barriers. Pending close remains associated with the exact public Conversation and private Provider session/process; same-Conversation create or hydration waits, only one competing opener may proceed after success, and failed cleanup stays unavailable rather than permitting replacement execution. The Host's shared hydration budget counts pending and failed disposals so a new admission cannot overlap an incompletely disposed session or exceed the accepted eight-Conversation budget.
+- Every post-open rejection closes and awaits the exact acquired session before returning failure. This includes identity/ownership mismatch, runtime close, failure to retain or durably bind a new/resumed Conversation, and an invalid or reused Turn acknowledgement; cleanup failure itself becomes an explicit unavailable boundary rather than leaving an untracked Provider process.
+- The per-Machine reconnect coordinator bounds its initial attempt and backoff, coalesces concurrent explicit/automatic retry demand, and prevents parallel reconnect workers or unbounded retry timers during endpoint flapping.
+- Node state startup serializes stale-lock recovery, validates the recorded owner and process liveness, and removes only the unchanged stale lock. A live owner, changed nonce/identity, unsafe path, or unresolved race fails closed.
+
+### Out of scope
+
+- New remote Provider capability, Claude Edit/Write/shell/Diff/Approval/interrupt/model selection, richer Codex Tools, generic RPC/filesystem/Terminal/process input, Provider/Machine switching, replaying an uncertain Prompt, durable Provider-event storage, generalized durable exactly-once mutations, synchronization, discovery shipment, relay, or new UI.
+
+### Exit gate
+
+- Evidence must cover hard Node and Host crashes, REAL mixed Codex/Claude concurrency, 50k/100k streaming events with a slow consumer, bounded memory/queue/timer/hydration/process resources, a 30-minute background soak, ten Node restart cycles, ten Desktop/Host restart cycles, and thirty automated network-flap cycles. Across those runs, no Prompt replay, duplicate Turn/process, orphan Provider process group, parallel reconnect worker, leaked hydration slot, or stale-lock takeover may occur; all focused and repository quality gates, packaging/cleanup checks, and clean-build identity checks must pass. Until that evidence is complete, Phase 6C.4 is not accepted, frozen, or ready.
 
 ## Phase 7 — Remote LAN / Tailscale
 

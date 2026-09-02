@@ -12,10 +12,12 @@ import type {
   MachineTransportTurnId,
 } from './ids.js'
 import {
+  ClaudeSessionHeartbeatAckMessageSchema,
   ClaudeSessionDisposedMessageSchema,
   ClaudeSessionReadyMessageSchema,
   ClaudeTurnEventMessageSchema,
   ClaudeTurnStartedMessageSchema,
+  CodexSessionHeartbeatAckMessageSchema,
   CodexSessionDisposedMessageSchema,
   CodexSessionReadyMessageSchema,
   CodexTurnEventMessageSchema,
@@ -381,6 +383,9 @@ export interface OpenRemoteCodexSessionOptions {
   readonly rootPath: string
   readonly providerThreadId?: RemoteCodexProviderIdentity
   readonly signal?: AbortSignal
+  /** Test-only tightening; production callers cannot extend either bound. */
+  readonly heartbeatIntervalMs?: number
+  readonly heartbeatTimeoutMs?: number
 }
 
 /**
@@ -404,10 +409,19 @@ export async function openRemoteCodexSession(
         ? {}
         : { providerThreadId: options.providerThreadId }),
       signal: options.signal,
+      ...(options.heartbeatIntervalMs === undefined
+        ? {}
+        : { heartbeatIntervalMs: options.heartbeatIntervalMs }),
+      ...(options.heartbeatTimeoutMs === undefined
+        ? {}
+        : { heartbeatTimeoutMs: options.heartbeatTimeoutMs }),
     })
   } catch (error) {
     connection.close()
-    throw error
+    // The pinned TLS/Machine handshake completed before the semantic session
+    // open began. A dropped ready response is therefore an uncertain accepted
+    // operation, not evidence that another endpoint is safe to retry.
+    throw authenticatedOperationError(error)
   }
 }
 
@@ -420,6 +434,9 @@ interface OpenRemoteClaudeSessionBaseOptions {
   readonly rootPath: string
   readonly effort?: RemoteClaudeEffort
   readonly signal?: AbortSignal
+  /** Test-only tightening; production callers cannot extend either bound. */
+  readonly heartbeatIntervalMs?: number
+  readonly heartbeatTimeoutMs?: number
 }
 
 type RemoteClaudeSessionIdentityOptions =
@@ -451,6 +468,12 @@ export async function openRemoteClaudeSession(
       rootPath: options.rootPath,
       ...(options.effort === undefined ? {} : { effort: options.effort }),
       signal: options.signal,
+      ...(options.heartbeatIntervalMs === undefined
+        ? {}
+        : { heartbeatIntervalMs: options.heartbeatIntervalMs }),
+      ...(options.heartbeatTimeoutMs === undefined
+        ? {}
+        : { heartbeatTimeoutMs: options.heartbeatTimeoutMs }),
     }
     return await (options.providerSessionId === undefined
       ? connection.openClaudeSession(sessionOptions)
@@ -461,7 +484,7 @@ export async function openRemoteClaudeSession(
         }))
   } catch (error) {
     connection.close()
-    throw error
+    throw authenticatedOperationError(error)
   }
 }
 
@@ -626,6 +649,8 @@ export class AuthenticatedRemoteMachineConnection {
     readonly rootPath: string
     readonly providerThreadId?: RemoteCodexProviderIdentity
     readonly signal?: AbortSignal
+    readonly heartbeatIntervalMs?: number
+    readonly heartbeatTimeoutMs?: number
   }): Promise<RemoteCodexSession> {
     this.#assertGeneralPurpose()
     const rootPath = RemoteProjectLocationPathSchema.safeParse(options.rootPath)
@@ -677,7 +702,14 @@ export class AuthenticatedRemoteMachineConnection {
       )
     }
     this.#dedicated = true
-    return new RemoteCodexSession(this.#connection, this.machine, response)
+    return new RemoteCodexSession(this.#connection, this.machine, response, {
+      ...(options.heartbeatIntervalMs === undefined
+        ? {}
+        : { intervalMs: options.heartbeatIntervalMs }),
+      ...(options.heartbeatTimeoutMs === undefined
+        ? {}
+        : { timeoutMs: options.heartbeatTimeoutMs }),
+    })
   }
 
   async openClaudeSession(
@@ -687,6 +719,8 @@ export class AuthenticatedRemoteMachineConnection {
       readonly rootPath: string
       readonly effort?: RemoteClaudeEffort
       readonly signal?: AbortSignal
+      readonly heartbeatIntervalMs?: number
+      readonly heartbeatTimeoutMs?: number
     } & RemoteClaudeSessionIdentityOptions,
   ): Promise<RemoteClaudeSession> {
     this.#assertGeneralPurpose()
@@ -746,7 +780,14 @@ export class AuthenticatedRemoteMachineConnection {
       )
     }
     this.#dedicated = true
-    return new RemoteClaudeSession(this.#connection, this.machine, response)
+    return new RemoteClaudeSession(this.#connection, this.machine, response, {
+      ...(options.heartbeatIntervalMs === undefined
+        ? {}
+        : { intervalMs: options.heartbeatIntervalMs }),
+      ...(options.heartbeatTimeoutMs === undefined
+        ? {}
+        : { timeoutMs: options.heartbeatTimeoutMs }),
+    })
   }
 
   #assertGeneralPurpose(): void {
@@ -803,6 +844,11 @@ export interface StartRemoteCodexTurnOptions {
   readonly signal?: AbortSignal
 }
 
+interface ExecutionHeartbeatBounds {
+  readonly intervalMs?: number
+  readonly timeoutMs?: number
+}
+
 export class RemoteCodexSession {
   readonly machine: RemoteMachineMetadata
   readonly conversationId: MachineTransportConversationId
@@ -810,6 +856,7 @@ export class RemoteCodexSession {
   readonly resumed: boolean
   readonly executionProfile = 'codex-text-v1' as const
   readonly #connection: FramedMachineConnection
+  readonly #heartbeat: Required<ExecutionHeartbeatBounds>
   #activeTurn: RemoteCodexTurn | undefined
   #closed = false
 
@@ -817,12 +864,14 @@ export class RemoteCodexSession {
     connection: FramedMachineConnection,
     machine: RemoteMachineMetadata,
     ready: z.infer<typeof CodexSessionReadyMessageSchema>,
+    heartbeat: ExecutionHeartbeatBounds = {},
   ) {
     this.#connection = connection
     this.machine = machine
     this.conversationId = ready.conversationId
     this.providerThreadId = ready.providerThreadId
     this.resumed = ready.resumed
+    this.#heartbeat = executionHeartbeatBounds(heartbeat)
   }
 
   /** Host-private liveness for the dedicated authenticated connection. */
@@ -891,6 +940,7 @@ export class RemoteCodexSession {
           if (this.#activeTurn === turn) this.#activeTurn = undefined
         },
         () => this.#failClosed(),
+        this.#heartbeat,
       )
       this.#activeTurn = turn
       return turn
@@ -908,7 +958,7 @@ export class RemoteCodexSession {
     this.#closed = true
     if (this.#connection.closed) return
     if (this.#activeTurn !== undefined) {
-      this.#connection.destroy()
+      this.#failClosed()
       return
     }
     const requestId = newMachineNonce()
@@ -949,6 +999,7 @@ export class RemoteCodexSession {
 
   #failClosed(): void {
     this.#closed = true
+    this.#activeTurn?.transportClosed()
     this.#connection.destroy()
   }
 }
@@ -963,6 +1014,7 @@ export class RemoteCodexTurn {
   readonly #release: () => void
   readonly #failClosed: () => void
   readonly #started: z.infer<typeof CodexTurnStartedMessageSchema>
+  readonly #heartbeat: ExecutionHeartbeat
   #nextSequence = 1
   #terminal = false
 
@@ -971,6 +1023,7 @@ export class RemoteCodexTurn {
     started: z.infer<typeof CodexTurnStartedMessageSchema>,
     release: () => void,
     failClosed: () => void,
+    heartbeat: Required<ExecutionHeartbeatBounds>,
   ) {
     this.#connection = connection
     this.#started = started
@@ -981,6 +1034,22 @@ export class RemoteCodexTurn {
     this.providerTurnId = started.providerTurnId
     this.#release = release
     this.#failClosed = failClosed
+    this.#heartbeat = new ExecutionHeartbeat({
+      ...heartbeat,
+      send: async (requestId) =>
+        await this.#connection.send(
+          {
+            type: 'codex.session.heartbeat',
+            protocolVersion: machineProtocolVersion,
+            requestId,
+            conversationId: this.conversationId,
+            providerThreadId: this.providerThreadId,
+          },
+          { timeoutMs: heartbeat.timeoutMs },
+        ),
+      onLost: this.#failClosed,
+    })
+    this.#heartbeat.start()
   }
 
   async nextEvent(signal?: AbortSignal): Promise<CodexTurnEventMessage> {
@@ -991,44 +1060,67 @@ export class RemoteCodexTurn {
         { peerAuthenticated: true },
       )
     }
-    const response = await receiveCompatibleMachineMessage(
-      this.#connection,
-      z.union([CodexTurnEventMessageSchema, MachineErrorMessageSchema]),
-      {
-        signal,
-        timeoutMs: machineTransportLimits.remoteCodexTurnTimeoutMs,
-      },
-    )
-    if (response.type === 'machine.error') {
+    try {
+      while (true) {
+        const response = await receiveCompatibleMachineMessage(
+          this.#connection,
+          z.union([
+            CodexTurnEventMessageSchema,
+            CodexSessionHeartbeatAckMessageSchema,
+            MachineErrorMessageSchema,
+          ]),
+          {
+            signal,
+            timeoutMs: null,
+          },
+        )
+        if (response.type === 'machine.error') {
+          throw remoteError(response.code, response.message, true)
+        }
+        if (response.type === 'codex.session.heartbeat.ack') {
+          if (
+            response.machineId !== this.#startedMachineId ||
+            response.nodeId !== this.#startedNodeId ||
+            response.conversationId !== this.conversationId ||
+            response.providerThreadId !== this.providerThreadId ||
+            !this.#heartbeat.acknowledge(response.requestId)
+          ) {
+            throw identityMismatch(
+              'Remote Codex heartbeat identity was invalid',
+            )
+          }
+          continue
+        }
+        if (
+          response.machineId !== this.#startedMachineId ||
+          response.nodeId !== this.#startedNodeId ||
+          response.actionId !== this.actionId ||
+          response.conversationId !== this.conversationId ||
+          response.turnId !== this.turnId ||
+          response.providerThreadId !== this.providerThreadId ||
+          response.providerTurnId !== this.providerTurnId ||
+          response.sequence !== this.#nextSequence
+        ) {
+          throw identityMismatch(
+            'Remote Codex event correlation or sequence was invalid',
+          )
+        }
+        this.#nextSequence += 1
+        if (
+          response.event.type === 'turn.completed' ||
+          response.event.type === 'turn.failed'
+        ) {
+          this.#terminal = true
+          this.#heartbeat.close()
+          this.#release()
+        }
+        return response
+      }
+    } catch (error) {
+      this.#heartbeat.close()
       this.#failClosed()
-      throw remoteError(response.code, response.message, true)
+      throw error
     }
-    if (
-      response.machineId !== this.#startedMachineId ||
-      response.nodeId !== this.#startedNodeId ||
-      response.actionId !== this.actionId ||
-      response.conversationId !== this.conversationId ||
-      response.turnId !== this.turnId ||
-      response.providerThreadId !== this.providerThreadId ||
-      response.providerTurnId !== this.providerTurnId ||
-      response.sequence !== this.#nextSequence
-    ) {
-      this.#failClosed()
-      throw new MachineTransportError(
-        'identity_mismatch',
-        'Remote Codex event correlation or sequence was invalid',
-        { peerAuthenticated: true },
-      )
-    }
-    this.#nextSequence += 1
-    if (
-      response.event.type === 'turn.completed' ||
-      response.event.type === 'turn.failed'
-    ) {
-      this.#terminal = true
-      this.#release()
-    }
-    return response
   }
 
   async *events(signal?: AbortSignal): AsyncGenerator<CodexTurnEventMessage> {
@@ -1037,6 +1129,11 @@ export class RemoteCodexTurn {
     } finally {
       if (!this.#terminal) this.#failClosed()
     }
+  }
+
+  transportClosed(): void {
+    this.#heartbeat.close()
+    this.#release()
   }
 
   get #startedMachineId(): string {
@@ -1065,6 +1162,7 @@ export class RemoteClaudeSession {
   readonly effort?: RemoteClaudeEffort
   readonly executionProfile = 'claude-restricted-read-search-v1' as const
   readonly #connection: FramedMachineConnection
+  readonly #heartbeat: Required<ExecutionHeartbeatBounds>
   #activeTurn: RemoteClaudeTurn | undefined
   #closed = false
 
@@ -1072,6 +1170,7 @@ export class RemoteClaudeSession {
     connection: FramedMachineConnection,
     machine: RemoteMachineMetadata,
     ready: z.infer<typeof ClaudeSessionReadyMessageSchema>,
+    heartbeat: ExecutionHeartbeatBounds = {},
   ) {
     this.#connection = connection
     this.machine = machine
@@ -1079,6 +1178,7 @@ export class RemoteClaudeSession {
     this.providerSessionId = ready.providerSessionId
     this.resumed = ready.resumed
     this.effort = ready.effort
+    this.#heartbeat = executionHeartbeatBounds(heartbeat)
   }
 
   get closed(): boolean {
@@ -1146,6 +1246,7 @@ export class RemoteClaudeSession {
           if (this.#activeTurn === turn) this.#activeTurn = undefined
         },
         () => this.#failClosed(),
+        this.#heartbeat,
       )
       this.#activeTurn = turn
       return turn
@@ -1161,7 +1262,7 @@ export class RemoteClaudeSession {
     this.#closed = true
     if (this.#connection.closed) return
     if (this.#activeTurn !== undefined) {
-      this.#connection.destroy()
+      this.#failClosed()
       return
     }
     const requestId = newMachineNonce()
@@ -1205,6 +1306,7 @@ export class RemoteClaudeSession {
 
   #failClosed(): void {
     this.#closed = true
+    this.#activeTurn?.transportClosed()
     this.#connection.destroy()
   }
 }
@@ -1219,6 +1321,7 @@ export class RemoteClaudeTurn {
   readonly #release: () => void
   readonly #failClosed: () => void
   readonly #started: z.infer<typeof ClaudeTurnStartedMessageSchema>
+  readonly #heartbeat: ExecutionHeartbeat
   #nextSequence = 1
   #terminal = false
 
@@ -1227,6 +1330,7 @@ export class RemoteClaudeTurn {
     started: z.infer<typeof ClaudeTurnStartedMessageSchema>,
     release: () => void,
     failClosed: () => void,
+    heartbeat: Required<ExecutionHeartbeatBounds>,
   ) {
     this.#connection = connection
     this.#started = started
@@ -1237,6 +1341,22 @@ export class RemoteClaudeTurn {
     this.providerTurnId = started.providerTurnId
     this.#release = release
     this.#failClosed = failClosed
+    this.#heartbeat = new ExecutionHeartbeat({
+      ...heartbeat,
+      send: async (requestId) =>
+        await this.#connection.send(
+          {
+            type: 'claude.session.heartbeat',
+            protocolVersion: machineProtocolVersion,
+            requestId,
+            conversationId: this.conversationId,
+            providerSessionId: this.providerSessionId,
+          },
+          { timeoutMs: heartbeat.timeoutMs },
+        ),
+      onLost: this.#failClosed,
+    })
+    this.#heartbeat.start()
   }
 
   async nextEvent(signal?: AbortSignal): Promise<ClaudeTurnEventMessage> {
@@ -1247,44 +1367,67 @@ export class RemoteClaudeTurn {
         { peerAuthenticated: true },
       )
     }
-    const response = await receiveCompatibleMachineMessage(
-      this.#connection,
-      z.union([ClaudeTurnEventMessageSchema, MachineErrorMessageSchema]),
-      {
-        signal,
-        timeoutMs: machineTransportLimits.remoteClaudeTurnTimeoutMs,
-      },
-    )
-    if (response.type === 'machine.error') {
+    try {
+      while (true) {
+        const response = await receiveCompatibleMachineMessage(
+          this.#connection,
+          z.union([
+            ClaudeTurnEventMessageSchema,
+            ClaudeSessionHeartbeatAckMessageSchema,
+            MachineErrorMessageSchema,
+          ]),
+          {
+            signal,
+            timeoutMs: null,
+          },
+        )
+        if (response.type === 'machine.error') {
+          throw remoteError(response.code, response.message, true)
+        }
+        if (response.type === 'claude.session.heartbeat.ack') {
+          if (
+            response.machineId !== this.#started.machineId ||
+            response.nodeId !== this.#started.nodeId ||
+            response.conversationId !== this.conversationId ||
+            response.providerSessionId !== this.providerSessionId ||
+            !this.#heartbeat.acknowledge(response.requestId)
+          ) {
+            throw identityMismatch(
+              'Remote Claude heartbeat identity was invalid',
+            )
+          }
+          continue
+        }
+        if (
+          response.machineId !== this.#started.machineId ||
+          response.nodeId !== this.#started.nodeId ||
+          response.actionId !== this.actionId ||
+          response.conversationId !== this.conversationId ||
+          response.turnId !== this.turnId ||
+          response.providerSessionId !== this.providerSessionId ||
+          response.providerTurnId !== this.providerTurnId ||
+          response.sequence !== this.#nextSequence
+        ) {
+          throw identityMismatch(
+            'Remote Claude event correlation or sequence was invalid',
+          )
+        }
+        this.#nextSequence += 1
+        if (
+          response.event.type === 'turn.completed' ||
+          response.event.type === 'turn.failed'
+        ) {
+          this.#terminal = true
+          this.#heartbeat.close()
+          this.#release()
+        }
+        return response
+      }
+    } catch (error) {
+      this.#heartbeat.close()
       this.#failClosed()
-      throw remoteError(response.code, response.message, true)
+      throw error
     }
-    if (
-      response.machineId !== this.#started.machineId ||
-      response.nodeId !== this.#started.nodeId ||
-      response.actionId !== this.actionId ||
-      response.conversationId !== this.conversationId ||
-      response.turnId !== this.turnId ||
-      response.providerSessionId !== this.providerSessionId ||
-      response.providerTurnId !== this.providerTurnId ||
-      response.sequence !== this.#nextSequence
-    ) {
-      this.#failClosed()
-      throw new MachineTransportError(
-        'identity_mismatch',
-        'Remote Claude event correlation or sequence was invalid',
-        { peerAuthenticated: true },
-      )
-    }
-    this.#nextSequence += 1
-    if (
-      response.event.type === 'turn.completed' ||
-      response.event.type === 'turn.failed'
-    ) {
-      this.#terminal = true
-      this.#release()
-    }
-    return response
   }
 
   async *events(signal?: AbortSignal): AsyncGenerator<ClaudeTurnEventMessage> {
@@ -1294,9 +1437,116 @@ export class RemoteClaudeTurn {
       if (!this.#terminal) this.#failClosed()
     }
   }
+
+  transportClosed(): void {
+    this.#heartbeat.close()
+    this.#release()
+  }
 }
 
 export type RemoteClaudeTurnEvent = ClaudeTurnEventMessage
+
+class ExecutionHeartbeat {
+  readonly #intervalMs: number
+  readonly #timeoutMs: number
+  readonly #send: (requestId: string) => Promise<void>
+  readonly #onLost: () => void
+  #scheduleTimer: ReturnType<typeof setTimeout> | undefined
+  #acknowledgementTimer: ReturnType<typeof setTimeout> | undefined
+  #requestId: string | undefined
+  #closed = false
+
+  constructor(options: {
+    readonly intervalMs: number
+    readonly timeoutMs: number
+    readonly send: (requestId: string) => Promise<void>
+    readonly onLost: () => void
+  }) {
+    this.#intervalMs = options.intervalMs
+    this.#timeoutMs = options.timeoutMs
+    this.#send = options.send
+    this.#onLost = options.onLost
+  }
+
+  start(): void {
+    if (this.#closed || this.#scheduleTimer !== undefined) return
+    this.#scheduleTimer = setTimeout(() => {
+      this.#scheduleTimer = undefined
+      void this.#sendHeartbeat()
+    }, this.#intervalMs)
+    this.#scheduleTimer.unref?.()
+  }
+
+  acknowledge(requestId: string): boolean {
+    if (this.#closed || this.#requestId !== requestId) return false
+    this.#requestId = undefined
+    if (this.#acknowledgementTimer !== undefined) {
+      clearTimeout(this.#acknowledgementTimer)
+      this.#acknowledgementTimer = undefined
+    }
+    this.start()
+    return true
+  }
+
+  close(): void {
+    if (this.#closed) return
+    this.#closed = true
+    if (this.#scheduleTimer !== undefined) clearTimeout(this.#scheduleTimer)
+    if (this.#acknowledgementTimer !== undefined) {
+      clearTimeout(this.#acknowledgementTimer)
+    }
+    this.#scheduleTimer = undefined
+    this.#acknowledgementTimer = undefined
+    this.#requestId = undefined
+  }
+
+  async #sendHeartbeat(): Promise<void> {
+    if (this.#closed) return
+    const requestId = newMachineNonce()
+    this.#requestId = requestId
+    this.#acknowledgementTimer = setTimeout(() => this.#lose(), this.#timeoutMs)
+    this.#acknowledgementTimer.unref?.()
+    try {
+      await this.#send(requestId)
+    } catch {
+      this.#lose()
+    }
+  }
+
+  #lose(): void {
+    if (this.#closed) return
+    this.close()
+    this.#onLost()
+  }
+}
+
+function executionHeartbeatBounds(
+  options: ExecutionHeartbeatBounds,
+): Required<ExecutionHeartbeatBounds> {
+  const intervalMs =
+    options.intervalMs ??
+    machineTransportLimits.remoteExecutionHeartbeatIntervalMs
+  const timeoutMs =
+    options.timeoutMs ??
+    machineTransportLimits.remoteExecutionHeartbeatTimeoutMs
+  if (
+    !Number.isSafeInteger(intervalMs) ||
+    intervalMs <= 0 ||
+    intervalMs > machineTransportLimits.remoteExecutionHeartbeatIntervalMs ||
+    !Number.isSafeInteger(timeoutMs) ||
+    timeoutMs <= 0 ||
+    timeoutMs > machineTransportLimits.remoteExecutionHeartbeatTimeoutMs
+  ) {
+    throw new TypeError('Remote execution heartbeat bounds are invalid')
+  }
+  return { intervalMs, timeoutMs }
+}
+
+function identityMismatch(message: string): MachineTransportError {
+  return new MachineTransportError('identity_mismatch', message, {
+    peerAuthenticated: true,
+  })
+}
 
 export interface ValidatedRemoteProjectLocation {
   readonly canonicalPath: string
@@ -1313,7 +1563,10 @@ export interface RemoteProviderDiscovery {
 export async function receiveCompatibleMachineMessage<T>(
   connection: FramedMachineConnection,
   schema: z.ZodType<T>,
-  options: { readonly timeoutMs?: number; readonly signal?: AbortSignal } = {},
+  options: {
+    readonly timeoutMs?: number | null
+    readonly signal?: AbortSignal
+  } = {},
 ): Promise<T> {
   const raw = await connection.receive(z.unknown(), options)
   if (
@@ -1386,4 +1639,19 @@ function remoteError(
                                             ? 'duplicate_action_conflict'
                                             : 'pairing_failed'
   return new MachineTransportError(mapped, message, { peerAuthenticated })
+}
+
+function authenticatedOperationError(error: unknown): MachineTransportError {
+  if (error instanceof MachineTransportError) {
+    if (error.peerAuthenticated) return error
+    return new MachineTransportError(error.code, error.message, {
+      cause: error,
+      peerAuthenticated: true,
+    })
+  }
+  return new MachineTransportError(
+    'connection_failed',
+    'Authenticated Machine operation failed',
+    { cause: error, peerAuthenticated: true },
+  )
 }

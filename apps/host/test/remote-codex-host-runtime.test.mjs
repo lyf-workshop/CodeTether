@@ -157,8 +157,87 @@ test('remote Codex runtime invalidates a failed connection so the next explicit 
   })
   await waitFor(() => events.some((event) => event.type === 'turn.failed'))
   assert.equal(runtime.hasConversationSession(created.providerThreadId), false)
+  assert.equal(events.filter((event) => event.type === 'turn.failed').length, 1)
+  assert.equal(
+    events.some((event) => event.type === 'turn.completed'),
+    false,
+  )
+  assert.equal(session.startTurnCalls, 1)
+  assert.equal(session.closeCalls, 1)
+  await assert.rejects(
+    runtime.startTurn({
+      providerThreadId: created.providerThreadId,
+      cwd: '/srv/project',
+      input: 'must not replay after liveness loss',
+      machineId,
+      conversationId,
+      projectId,
+      actionId: 'act_remote_runtime02',
+      turnId: 'turn_remote_runtime02',
+    }),
+    /not active/u,
+  )
   assert.equal(session.startTurnCalls, 1)
   await runtime.close()
+  assert.equal(session.closeCalls, 1)
+})
+
+test('remote Codex lifecycle rejects duplicate or delayed message events fail closed', async () => {
+  for (const invalidEvents of [
+    [
+      { type: 'message.delta', text: 'one', sequence: 1 },
+      { type: 'message.completed', sequence: 2 },
+      { type: 'message.delta', text: 'late', sequence: 3 },
+      { type: 'turn.completed', sequence: 4 },
+    ],
+    [
+      { type: 'message.delta', text: 'one', sequence: 1 },
+      { type: 'message.completed', sequence: 2 },
+      { type: 'message.completed', sequence: 3 },
+      { type: 'turn.completed', sequence: 4 },
+    ],
+    [{ type: 'turn.completed', sequence: 1 }],
+  ]) {
+    const session = fakeSession('native-invalid-lifecycle', {
+      events: invalidEvents,
+    })
+    const runtime = new RemoteCodexHostRuntime({
+      machineId,
+      opener: { open: async () => session },
+    })
+    const events = []
+    runtime.subscribeEvents((event) => events.push(event))
+    const created = await runtime.startConversation({
+      cwd: '/srv/project',
+      machineId,
+      conversationId,
+      projectId,
+    })
+    await runtime.startTurn({
+      providerThreadId: created.providerThreadId,
+      cwd: '/srv/project',
+      input: 'one explicit prompt',
+      machineId,
+      conversationId,
+      projectId,
+      actionId: `act_invalid_lifecycle_${invalidEvents.length}_${invalidEvents[0].type}`,
+      turnId: `turn_invalid_lifecycle_${invalidEvents.length}`,
+    })
+    await waitFor(() => events.some((event) => event.type === 'turn.failed'))
+    assert.equal(
+      events.some((event) => event.type === 'turn.completed'),
+      false,
+    )
+    assert.equal(
+      events.filter((event) => event.type === 'turn.failed').length,
+      1,
+    )
+    assert.equal(
+      runtime.hasConversationSession(created.providerThreadId),
+      false,
+    )
+    await runtime.close()
+  }
 })
 
 test('remote Codex runtime removes an idle closed session and natively resumes before the next Prompt', async () => {
@@ -231,6 +310,10 @@ function fakeSession(providerThreadId, options = {}) {
       this.startTurnCalls += 1
       return {
         async *events() {
+          if (options.events !== undefined) {
+            yield* options.events
+            return
+          }
           yield { type: 'message.delta', text: 'hello ', sequence: 1 }
           if (options.fail) throw new Error('controlled disconnect')
           yield { type: 'message.delta', text: 'world', sequence: 2 }

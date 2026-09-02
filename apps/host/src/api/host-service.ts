@@ -118,6 +118,7 @@ import {
   RemoteMachineProjectLocationConflictError,
   captureTurnPresentation,
   initialTurnPresentation,
+  parseDurableTurnPresentation,
   readDurableConversationDetail,
   restoreDurableConversations,
   type DurableApprovalHistoryRecord,
@@ -183,6 +184,22 @@ const MAX_PENDING_PROVIDER_EVENT_BYTES = 4 * 1024 * 1024
 export const DEFAULT_MAX_CONVERSATIONS = 8
 export const DEFAULT_PERSISTENCE_FLUSH_MS = 300
 
+interface PendingProviderEvent {
+  readonly machineId: MachineId
+  readonly runtime: AgentHostRuntime
+  readonly event: AgentEvent
+  readonly bytes: number
+}
+
+interface PendingProviderStartFailure {
+  readonly key: string
+  readonly machineId: MachineId
+  readonly provider: AgentProvider
+  readonly providerThreadId: string
+  readonly providerTurnId: string
+  readonly cleanup: Promise<void>
+}
+
 export class HostServiceError extends Error {
   constructor(
     readonly code: HostErrorCode,
@@ -240,9 +257,15 @@ export class HostService {
   readonly #hydrations = new Map<ConversationId, Promise<ConversationState>>()
   readonly #runtimeAccess = new Map<ConversationId, number>()
   readonly #runtimePins = new Map<ConversationId, number>()
-  readonly #pendingProviderEvents: AgentEvent[] = []
+  readonly #pendingRuntimeDisposals = new Set<Promise<void>>()
+  readonly #pendingProviderEvents: PendingProviderEvent[] = []
+  readonly #pendingProviderStartFailures = new Map<
+    string,
+    PendingProviderStartFailure
+  >()
   #runtimeAccessSequence = 0
   #runtimeReservations = 0
+  #failedRuntimeDisposals = 0
   #pendingProviderEventBytes = 0
   #persistenceTimer?: ReturnType<typeof setTimeout>
   #persistenceFailure?: Error
@@ -1413,7 +1436,7 @@ export class HostService {
         )
         const workspace = await this.#reserveConversationProject(request)
         try {
-          const releaseRuntimeSlot = this.#reserveRuntimeSlot()
+          const releaseRuntimeSlot = await this.#reserveRuntimeSlot()
           try {
             const projectId = workspace.project.projectId
             const cwd = workspace.cwd
@@ -1518,92 +1541,102 @@ export class HostService {
                 error,
               )
             }
-            this.#assertMachineRuntimeAvailable(
-              machine.machineId,
-              request.provider,
-            )
-
-            const sessionKey = providerSessionKey(
-              request.provider,
-              provider.providerThreadId,
-            )
-            if (
-              provider.providerThreadId.trim().length === 0 ||
-              this.#providerThreads.has(sessionKey) ||
-              this.#persistence
-                ?.listConversations()
-                .some(
-                  (conversation) =>
-                    conversation.provider === request.provider &&
-                    conversation.providerThreadId === provider.providerThreadId,
-                ) === true
-            ) {
-              this.#rollbackCreatingConversation(conversationId)
-              throw new HostServiceError(
-                'provider_error',
-                `${providerDisplayName(request.provider)} returned an invalid or reused Session identity`,
-                500,
-              )
-            }
-
-            let record
             try {
-              record = ConversationRecordSchema.parse({
-                conversationId,
-                projectId,
-                machineId: machine.machineId,
-                title: DEFAULT_CONVERSATION_TITLE,
-                titleSource: 'generated',
-                provider: request.provider,
-                cwd,
-                ...(provider.model === undefined && request.model === undefined
-                  ? {}
-                  : { model: provider.model ?? request.model }),
-                ...(request.reasoning === undefined
-                  ? {}
-                  : { reasoning: request.reasoning }),
-                status: 'idle',
-                createdAt: timestamp,
-                updatedAt: timestamp,
-                lastActivityAt: timestamp,
-              })
-            } catch (error) {
-              this.#rollbackCreatingConversation(conversationId)
-              throw providerCommandError(
+              this.#assertMachineRuntimeAvailable(
+                machine.machineId,
                 request.provider,
-                'return valid conversation metadata',
+              )
+
+              const sessionKey = providerSessionKey(
+                request.provider,
+                provider.providerThreadId,
+              )
+              if (
+                provider.providerThreadId.trim().length === 0 ||
+                this.#providerThreads.has(sessionKey) ||
+                this.#persistence
+                  ?.listConversations()
+                  .some(
+                    (conversation) =>
+                      conversation.provider === request.provider &&
+                      conversation.providerThreadId ===
+                        provider.providerThreadId,
+                  ) === true
+              ) {
+                throw new HostServiceError(
+                  'provider_error',
+                  `${providerDisplayName(request.provider)} returned an invalid or reused Session identity`,
+                  500,
+                )
+              }
+
+              let record
+              try {
+                record = ConversationRecordSchema.parse({
+                  conversationId,
+                  projectId,
+                  machineId: machine.machineId,
+                  title: DEFAULT_CONVERSATION_TITLE,
+                  titleSource: 'generated',
+                  provider: request.provider,
+                  cwd,
+                  ...(provider.model === undefined &&
+                  request.model === undefined
+                    ? {}
+                    : { model: provider.model ?? request.model }),
+                  ...(request.reasoning === undefined
+                    ? {}
+                    : { reasoning: request.reasoning }),
+                  status: 'idle',
+                  createdAt: timestamp,
+                  updatedAt: timestamp,
+                  lastActivityAt: timestamp,
+                })
+              } catch (error) {
+                throw providerCommandError(
+                  request.provider,
+                  'return valid conversation metadata',
+                  error,
+                )
+              }
+              const state: ConversationState = {
+                record,
+                providerThreadId: provider.providerThreadId,
+                turns: new Map(),
+                providerTurnIds: new Map(),
+                providerSessionMaterialized: false,
+                providerSession: 'ready',
+                startingTurn: false,
+              }
+              this.#writeDurable(() => {
+                this.#persistence?.updateConversation(
+                  this.#durableConversation(state),
+                )
+              })
+              this.#conversations.set(conversationId, state)
+              this.#providerThreads.set(sessionKey, conversationId)
+              this.#publish({
+                conversationId,
+                timestamp,
+                type: 'conversation.started',
+                payload: { conversation: record },
+              })
+              this.#flushProviderEvents()
+              this.#touchConversation(conversationId)
+              return {
+                protocolVersion,
+                actionId: request.actionId,
+                status: 'completed',
+                data: { conversation: record },
+              }
+            } catch (error) {
+              return await this.#rollbackAcquiredProviderConversation(
+                conversationId,
+                request.provider,
+                provider.providerThreadId,
+                runtime,
                 error,
               )
-            }
-            const state: ConversationState = {
-              record,
-              providerThreadId: provider.providerThreadId,
-              turns: new Map(),
-              providerTurnIds: new Map(),
-              providerSessionMaterialized: false,
-              providerSession: 'ready',
-              startingTurn: false,
-            }
-            this.#writeDurable(() => {
-              this.#persistence?.updateConversation(
-                this.#durableConversation(state),
-              )
-            })
-            this.#conversations.set(conversationId, state)
-            this.#providerThreads.set(sessionKey, conversationId)
-            this.#publish({
-              conversationId,
-              timestamp,
-              type: 'conversation.started',
-              payload: { conversation: record },
-            })
-            this.#flushProviderEvents()
-            this.#touchConversation(conversationId)
-            return {
-              protocolVersion,
-              actionId: request.actionId,
-              status: 'completed',
-              data: { conversation: record },
             }
           } finally {
             releaseRuntimeSlot()
@@ -1625,6 +1658,32 @@ export class HostService {
       `turn.start:${conversationId}`,
       { conversationId, request },
       async () => {
+        const parsedConversationId = ConversationIdSchema.parse(conversationId)
+        const durableActionTurn = this.#persistence?.getTurnForStartAction(
+          request.actionId,
+        )
+        if (durableActionTurn !== undefined) {
+          if (
+            durableActionTurn.conversationId !== parsedConversationId ||
+            durableActionTurn.input.type !== request.input.type ||
+            durableActionTurn.input.text !== request.input.text
+          ) {
+            throw new HostServiceError(
+              'conflict',
+              'Action id was already used for a different Turn start',
+              409,
+            )
+          }
+          return {
+            protocolVersion,
+            actionId: request.actionId,
+            status: 'accepted',
+            data: {
+              turn: parseDurableTurnPresentation(durableActionTurn.snapshot)
+                .turn,
+            },
+          }
+        }
         const inputBytes = Buffer.byteLength(request.input.text, 'utf8')
         const inputRuntimeBytes = Buffer.byteLength(
           JSON.stringify(request.input.text),
@@ -1645,7 +1704,6 @@ export class HostService {
             },
           )
         }
-        const parsedConversationId = ConversationIdSchema.parse(conversationId)
         const runtimeConversation =
           this.#conversations.get(parsedConversationId)?.record
         const durableConversation =
@@ -1784,8 +1842,9 @@ export class HostService {
         })
         try {
           this.#writeDurable(() => {
-            this.#persistence?.runInTransaction(() => {
-              this.#persistence?.createTurn({
+            this.#persistence?.createTurnForStartAction({
+              actionId: request.actionId,
+              turn: {
                 turnId,
                 conversationId,
                 input: record.input!,
@@ -1793,8 +1852,8 @@ export class HostService {
                 startedAt: timestamp,
                 snapshotVersion: DURABLE_TURN_SNAPSHOT_VERSION,
                 snapshot: initialTurnPresentation(record),
-              })
-              this.#persistence?.updateConversation({
+              },
+              conversation: {
                 ...this.#durableConversation(conversation),
                 title:
                   nextConversationRecord.title ?? DEFAULT_CONVERSATION_TITLE,
@@ -1802,7 +1861,7 @@ export class HostService {
                 lastActivityAt:
                   nextConversationRecord.lastActivityAt ??
                   nextConversationRecord.updatedAt,
-              })
+              },
             })
           })
           conversation.record = nextConversationRecord
@@ -1842,6 +1901,34 @@ export class HostService {
           })
         } catch (error) {
           startError = error
+        }
+        const providerStartFailure = this.#findPendingProviderStartFailure(
+          conversation.record.machineId,
+          conversation.record.provider,
+          requireProviderThreadId(conversation),
+          provider?.providerTurnId,
+        )
+        if (providerStartFailure !== undefined) {
+          const cleanupError =
+            await this.#settlePendingProviderStartFailure(providerStartFailure)
+          conversation.startingTurn = false
+          conversation.providerSessionMaterialized = true
+          conversation.providerSession =
+            cleanupError === undefined ? 'needs-resume' : 'unavailable'
+          this.#recordProviderStartFailure(
+            conversation,
+            record,
+            'provider_error',
+            `${providerDisplayName(conversation.record.provider)} event stream exceeded the Host startup buffer`,
+          )
+          this.#flushProviderEvents()
+          throw new HostServiceError(
+            'provider_error',
+            cleanupError === undefined
+              ? `${providerDisplayName(conversation.record.provider)} failed during Turn startup`
+              : `${providerDisplayName(conversation.record.provider)} cleanup could not be verified`,
+            500,
+          )
         }
         if (startError !== undefined) {
           conversation.startingTurn = false
@@ -1885,6 +1972,7 @@ export class HostService {
           conversation.providerTurnIds.has(provider.providerTurnId)
         ) {
           conversation.startingTurn = false
+          await this.#disposeInvalidProviderTurnSession(conversation, runtime)
           this.#recordProviderStartFailure(
             conversation,
             record,
@@ -2106,17 +2194,160 @@ export class HostService {
     await this.#closePromise
   }
 
-  #acceptProviderEvent(event: AgentEvent): void {
+  #acceptProviderEvent(
+    machineId: MachineId,
+    runtime: AgentHostRuntime,
+    event: AgentEvent,
+  ): void {
     if (this.#providerEventTranslator.translate(event)) return
+    if (!('turnId' in event)) {
+      throw new Error('Provider emitted an unbound event without Turn identity')
+    }
+    if (
+      this.#findPendingProviderStartFailure(
+        machineId,
+        event.provider,
+        event.threadId,
+      ) !== undefined
+    ) {
+      return
+    }
     const bytes = Buffer.byteLength(JSON.stringify(event), 'utf8')
     if (
       this.#pendingProviderEvents.length >= MAX_PENDING_PROVIDER_EVENTS ||
       this.#pendingProviderEventBytes + bytes > MAX_PENDING_PROVIDER_EVENT_BYTES
     ) {
-      throw new Error('Pending provider event binding buffer is full')
+      this.#rejectPendingProviderStart(machineId, runtime, event)
+      return
     }
-    this.#pendingProviderEvents.push(event)
+    this.#pendingProviderEvents.push({ machineId, runtime, event, bytes })
     this.#pendingProviderEventBytes += bytes
+  }
+
+  #rejectPendingProviderStart(
+    machineId: MachineId,
+    runtime: AgentHostRuntime,
+    event: AgentEvent & { readonly turnId: string },
+  ): void {
+    const existing = this.#findPendingProviderStartFailure(
+      machineId,
+      event.provider,
+      event.threadId,
+    )
+    if (existing !== undefined) return
+
+    this.#dropPendingProviderEvents(
+      machineId,
+      event.provider,
+      event.threadId,
+      event.turnId,
+    )
+    const key = providerStartFailureKey(
+      machineId,
+      event.provider,
+      event.threadId,
+      event.turnId,
+    )
+    const cleanup =
+      runtime.disposeConversation === undefined
+        ? Promise.reject(
+            new Error(
+              'Provider runtime cannot release exact session ownership',
+            ),
+          )
+        : Promise.resolve().then(async () => {
+            await runtime.disposeConversation?.({
+              providerThreadId: event.threadId,
+            })
+          })
+    const failure: PendingProviderStartFailure = {
+      key,
+      machineId,
+      provider: event.provider,
+      providerThreadId: event.threadId,
+      providerTurnId: event.turnId,
+      cleanup,
+    }
+    this.#pendingProviderStartFailures.set(key, failure)
+    // Event observers are synchronous Provider callbacks. Keep rejection
+    // observed here; the owning Start action awaits and classifies it below.
+    void cleanup.catch(() => {
+      const conversationId = this.#providerThreads.get(
+        providerSessionKey(event.provider, event.threadId),
+      )
+      const conversation =
+        conversationId === undefined
+          ? undefined
+          : this.#conversations.get(conversationId)
+      if (
+        conversation?.record.machineId === machineId &&
+        conversation.record.provider === event.provider
+      ) {
+        conversation.providerSession = 'unavailable'
+      }
+    })
+  }
+
+  #findPendingProviderStartFailure(
+    machineId: MachineId,
+    provider: AgentProvider,
+    providerThreadId: string,
+    providerTurnId?: string,
+  ): PendingProviderStartFailure | undefined {
+    if (providerTurnId !== undefined) {
+      const exact = this.#pendingProviderStartFailures.get(
+        providerStartFailureKey(
+          machineId,
+          provider,
+          providerThreadId,
+          providerTurnId,
+        ),
+      )
+      if (exact !== undefined) return exact
+    }
+    return [...this.#pendingProviderStartFailures.values()].find(
+      (failure) =>
+        failure.machineId === machineId &&
+        failure.provider === provider &&
+        failure.providerThreadId === providerThreadId,
+    )
+  }
+
+  #dropPendingProviderEvents(
+    machineId: MachineId,
+    provider: AgentProvider,
+    providerThreadId: string,
+    providerTurnId: string,
+  ): void {
+    const retained = this.#pendingProviderEvents.filter(
+      (pending) =>
+        pending.machineId !== machineId ||
+        pending.event.provider !== provider ||
+        pending.event.threadId !== providerThreadId ||
+        !('turnId' in pending.event) ||
+        pending.event.turnId !== providerTurnId,
+    )
+    this.#pendingProviderEvents.length = 0
+    this.#pendingProviderEvents.push(...retained)
+    this.#pendingProviderEventBytes = retained.reduce(
+      (total, pending) => total + pending.bytes,
+      0,
+    )
+  }
+
+  async #settlePendingProviderStartFailure(
+    failure: PendingProviderStartFailure,
+  ): Promise<unknown | undefined> {
+    try {
+      await failure.cleanup
+      if (this.#pendingProviderStartFailures.get(failure.key) === failure) {
+        this.#pendingProviderStartFailures.delete(failure.key)
+      }
+      return undefined
+    } catch (error) {
+      // Retain the rejected cleanup as a permanent session-scoped barrier.
+      return error
+    }
   }
 
   #completeTurn(
@@ -2163,9 +2394,13 @@ export class HostService {
     if (this.#pendingProviderEvents.length === 0) return
     const pending = this.#pendingProviderEvents.splice(0)
     this.#pendingProviderEventBytes = 0
-    for (const event of pending) {
-      if (!this.#providerEventTranslator.translate(event)) {
-        this.#acceptProviderEvent(event)
+    for (const buffered of pending) {
+      if (!this.#providerEventTranslator.translate(buffered.event)) {
+        this.#acceptProviderEvent(
+          buffered.machineId,
+          buffered.runtime,
+          buffered.event,
+        )
       }
     }
   }
@@ -2464,26 +2699,45 @@ export class HostService {
     ) {
       throw new HostServiceError('not_found', 'Conversation was not found', 404)
     }
-    const durable = readDurableConversationDetail(
-      this.#persistence,
-      conversationId,
-      {
-        maxTurns: this.#runtimeHistory.maxTurns,
-        maxEntries: this.#runtimeHistory.maxEntries,
-      },
-    )
-    if (durable === undefined) {
-      throw new HostServiceError('not_found', 'Conversation was not found', 404)
-    }
-    const releaseRuntimeSlot = this.#reserveRuntimeSlot(conversationId)
+    const releaseRuntimeSlot = await this.#reserveRuntimeSlot(conversationId)
     try {
       const alreadyHydrated = this.#conversations.get(conversationId)
       if (alreadyHydrated !== undefined) return alreadyHydrated
-      if (durableConversation.providerThreadId === undefined) {
+      // Slot admission may wait for an exact Provider-session disposal. Read
+      // durable truth again after that wait so metadata mutations such as
+      // Archive cannot be overwritten by a stale pre-admission snapshot.
+      const currentDurableConversation =
+        this.#persistence.getConversation(conversationId)
+      if (
+        currentDurableConversation === undefined ||
+        currentDurableConversation.status === 'creating'
+      ) {
+        throw new HostServiceError(
+          'not_found',
+          'Conversation was not found',
+          404,
+        )
+      }
+      const durable = readDurableConversationDetail(
+        this.#persistence,
+        conversationId,
+        {
+          maxTurns: this.#runtimeHistory.maxTurns,
+          maxEntries: this.#runtimeHistory.maxEntries,
+        },
+      )
+      if (durable === undefined) {
+        throw new HostServiceError(
+          'not_found',
+          'Conversation was not found',
+          404,
+        )
+      }
+      if (currentDurableConversation.providerThreadId === undefined) {
         const machine = this.#machines.get(durable.record.machineId)
         if (machine.kind !== 'remote' || durable.history.totalTurns !== 0) {
           throw providerConversationUnavailableError(
-            durableConversation.provider,
+            currentDurableConversation.provider,
           )
         }
         this.#runtimeHistory.restore(durable.runtime)
@@ -2498,8 +2752,8 @@ export class HostService {
       } else {
         const providerOwner = this.#providerThreads.get(
           providerSessionKey(
-            durableConversation.provider,
-            durableConversation.providerThreadId,
+            currentDurableConversation.provider,
+            currentDurableConversation.providerThreadId,
           ),
         )
         if (providerOwner !== undefined && providerOwner !== conversationId) {
@@ -2511,7 +2765,7 @@ export class HostService {
         }
         this.#installRestoredConversation({
           record: durable.record,
-          providerThreadId: durableConversation.providerThreadId,
+          providerThreadId: currentDurableConversation.providerThreadId,
           providerSessionMaterialized: durable.history.totalTurns > 0,
           runtime: durable.runtime,
           providerTurns: this.#persistence
@@ -2542,11 +2796,20 @@ export class HostService {
     }
   }
 
-  #reserveRuntimeSlot(protectedConversationId?: ConversationId): () => void {
+  async #reserveRuntimeSlot(
+    protectedConversationId?: ConversationId,
+  ): Promise<() => void> {
     while (
-      this.#conversations.size + this.#runtimeReservations >=
+      this.#conversations.size +
+        this.#runtimeReservations +
+        this.#pendingRuntimeDisposals.size +
+        this.#failedRuntimeDisposals >=
       this.#maxConversations
     ) {
+      if (this.#pendingRuntimeDisposals.size > 0) {
+        await Promise.race(this.#pendingRuntimeDisposals)
+        continue
+      }
       if (this.#persistence === undefined) {
         throw new HostServiceError(
           'runtime_unavailable',
@@ -2628,10 +2891,27 @@ export class HostService {
     this.#conversations.delete(conversationId)
     const providerThreadId = conversation.providerThreadId
     if (providerThreadId !== undefined) {
-      void this.#machineRuntimes
-        .existing(conversation.record.machineId, conversation.record.provider)
-        ?.disposeConversation?.({ providerThreadId })
-        .catch(() => undefined)
+      const runtime = this.#machineRuntimes.existing(
+        conversation.record.machineId,
+        conversation.record.provider,
+      )
+      if (runtime?.disposeConversation !== undefined) {
+        const disposal: Promise<void> = Promise.resolve()
+          .then(
+            async () =>
+              await runtime.disposeConversation?.({ providerThreadId }),
+          )
+          .catch(() => {
+            // A failed exact-session cleanup remains charged to the global
+            // budget. The Host cannot safely assume that Provider ownership
+            // was released until the owning runtime itself is shut down.
+            this.#failedRuntimeDisposals += 1
+          })
+          .finally(() => {
+            this.#pendingRuntimeDisposals.delete(disposal)
+          })
+        this.#pendingRuntimeDisposals.add(disposal)
+      }
       if (
         this.#providerThreads.get(
           providerSessionKey(conversation.record.provider, providerThreadId),
@@ -2644,6 +2924,29 @@ export class HostService {
     }
     this.#runtimeHistory.delete(conversationId)
     this.#runtimeAccess.delete(conversationId)
+  }
+
+  async #disposeInvalidProviderTurnSession(
+    conversation: ConversationState,
+    runtime: AgentHostRuntime,
+  ): Promise<void> {
+    const providerThreadId = conversation.providerThreadId
+    if (
+      providerThreadId === undefined ||
+      runtime.disposeConversation === undefined
+    ) {
+      return
+    }
+    conversation.providerSession = 'needs-resume'
+    conversation.providerSessionMaterialized = true
+    try {
+      // `runtime` is the exact Machine + Provider owner selected for this
+      // Turn. Wait for its session-scoped cleanup before publishing failure,
+      // so a malformed/reused acknowledgement cannot leave untracked work.
+      await runtime.disposeConversation({ providerThreadId })
+    } catch {
+      conversation.providerSession = 'unavailable'
+    }
   }
 
   #touchConversation(conversationId: ConversationId): void {
@@ -2748,6 +3051,11 @@ export class HostService {
     if (conversation.providerSession === 'unavailable') {
       throw providerConversationUnavailableError(conversation.record.provider)
     }
+    const previousProviderSession = conversation.providerSession
+    const previousProviderThreadId = conversation.providerThreadId
+    const previousRecord = conversation.record
+    let acquiredProviderThreadId: string | undefined
+    let retained = false
     try {
       const projectId = ProjectIdSchema.parse(conversation.record.projectId)
       const machineId = MachineIdSchema.parse(conversation.record.machineId)
@@ -2785,6 +3093,7 @@ export class HostService {
               : { reasoning: conversation.record.reasoning }),
             ...remoteContext,
           })
+      acquiredProviderThreadId = resumed.providerThreadId
       if (
         resumed.providerThreadId.trim().length === 0 ||
         (!wasUninitialized &&
@@ -2827,29 +3136,38 @@ export class HostService {
         }
       }
       conversation.providerThreadId = resumed.providerThreadId
-      try {
-        // This Host-private native Session identity is durable before the
-        // Prompt can cross the remote transport. A retry can therefore resume
-        // rather than silently creating a second Provider Session.
-        this.#writeDurable(() => {
-          this.#persistence?.updateConversation(
-            this.#durableConversation(conversation),
-          )
-        })
-      } catch (error) {
-        conversation.providerThreadId = existingProviderThreadId
-        if (wasUninitialized) {
-          await runtime
-            .disposeConversation?.({
-              providerThreadId: resumed.providerThreadId,
-            })
-            .catch(() => undefined)
-        }
-        throw error
-      }
+      // This Host-private native Session identity is durable before the
+      // Prompt can cross the remote transport. A retry can therefore resume
+      // rather than silently creating a second Provider Session.
+      this.#writeDurable(() => {
+        this.#persistence?.updateConversation(
+          this.#durableConversation(conversation),
+        )
+      })
       this.#providerThreads.set(sessionKey, conversation.record.conversationId)
       conversation.providerSession = 'ready'
+      retained = true
     } catch (error) {
+      if (!retained && acquiredProviderThreadId !== undefined) {
+        conversation.record = previousRecord
+        conversation.providerThreadId = previousProviderThreadId
+        conversation.providerSession = previousProviderSession
+        try {
+          await runtime.disposeConversation?.({
+            providerThreadId: acquiredProviderThreadId,
+          })
+        } catch (cleanupError) {
+          conversation.providerSession = 'unavailable'
+          throw providerCommandError(
+            conversation.record.provider,
+            'clean up conversation ownership',
+            new AggregateError(
+              [error, cleanupError],
+              'Provider acquisition and exact cleanup both failed',
+            ),
+          )
+        }
+      }
       if (error instanceof HostServiceError) throw error
       if (error instanceof ProviderConversationUnavailableError) {
         conversation.providerSession = 'unavailable'
@@ -3172,6 +3490,37 @@ export class HostService {
     })
   }
 
+  async #rollbackAcquiredProviderConversation(
+    conversationId: ConversationId,
+    provider: AgentProvider,
+    providerThreadId: string,
+    runtime: AgentHostRuntime,
+    cause: unknown,
+  ): Promise<never> {
+    const results = await Promise.allSettled([
+      Promise.resolve().then(() =>
+        this.#rollbackCreatingConversation(conversationId),
+      ),
+      runtime.disposeConversation === undefined
+        ? Promise.resolve()
+        : runtime.disposeConversation({ providerThreadId }),
+    ])
+    const rollbackFailures = results.flatMap((result) =>
+      result.status === 'rejected' ? [result.reason] : [],
+    )
+    if (rollbackFailures.length > 0) {
+      throw providerCommandError(
+        provider,
+        'clean up conversation ownership',
+        new AggregateError(
+          [cause, ...rollbackFailures],
+          'Provider acquisition rollback did not complete',
+        ),
+      )
+    }
+    throw cause
+  }
+
   #requireAttentionStore(): ConversationStore {
     if (
       this.#persistence === undefined ||
@@ -3468,6 +3817,7 @@ export class HostService {
     for (const unsubscribe of this.#unsubscribeApprovals) unsubscribe()
     this.#approvalRegistry.declineAll()
     try {
+      await Promise.allSettled([...this.#pendingRuntimeDisposals])
       try {
         await this.#providers.close()
       } catch (error) {
@@ -3510,8 +3860,11 @@ export class HostService {
       this.#hydrations.clear()
       this.#runtimeAccess.clear()
       this.#runtimePins.clear()
+      this.#pendingRuntimeDisposals.clear()
+      this.#failedRuntimeDisposals = 0
       this.#pendingProviderEvents.length = 0
       this.#pendingProviderEventBytes = 0
+      this.#pendingProviderStartFailures.clear()
     }
     if (failures.length === 1) throw failures[0]
     if (failures.length > 1) {
@@ -3532,13 +3885,14 @@ export class HostService {
     }
     this.#runtimeFailures.set(provider, failure)
     const retainedEvents = this.#pendingProviderEvents.filter(
-      (event) => event.provider !== provider,
+      (pending) =>
+        pending.machineId !== this.#machines.localMachineId() ||
+        pending.event.provider !== provider,
     )
     this.#pendingProviderEvents.length = 0
     this.#pendingProviderEvents.push(...retainedEvents)
     this.#pendingProviderEventBytes = retainedEvents.reduce(
-      (total, event) =>
-        total + Buffer.byteLength(JSON.stringify(event), 'utf8'),
+      (total, pending) => total + pending.bytes,
       0,
     )
     const timestamp = this.#timestamp()
@@ -3550,7 +3904,12 @@ export class HostService {
           : 'Conversation durability became unavailable',
     }
     for (const conversation of this.#conversations.values()) {
-      if (conversation.record.provider !== provider) continue
+      if (
+        conversation.record.machineId !== this.#machines.localMachineId() ||
+        conversation.record.provider !== provider
+      ) {
+        continue
+      }
       const activeTurnId = conversation.record.activeTurnId
       if (activeTurnId === undefined) continue
       const turn = conversation.turns.get(activeTurnId)
@@ -3713,11 +4072,23 @@ export class HostService {
     }
     this.#unsubscribeEvents.push(
       runtime.subscribeEvents((event) => {
-        if (event.provider !== runtime.provider) {
-          fail(new Error('Provider emitted an event with the wrong identity'))
-          return
+        try {
+          if (event.provider !== runtime.provider) {
+            throw new Error('Provider emitted an event with the wrong identity')
+          }
+          this.#acceptProviderEvent(machineId, runtime, event)
+        } catch (error) {
+          // Provider callbacks are owned by the Runtime. Never throw Host
+          // translation or durability failures back through that callback,
+          // because doing so can bypass the Runtime's exact-child cleanup.
+          try {
+            fail(toError(error))
+          } catch {
+            // `fail` has already transitioned the scoped runtime as far as
+            // durable authority permits. The Runtime must retain control of
+            // its own callback/process teardown path.
+          }
         }
-        this.#acceptProviderEvent(event)
       }),
     )
     this.#unsubscribeApprovals.push(
@@ -3773,6 +4144,16 @@ export class HostService {
       return
     }
     this.#machineRuntimeFailures.set(key, failure)
+    const retainedEvents = this.#pendingProviderEvents.filter(
+      (pending) =>
+        pending.machineId !== machineId || pending.event.provider !== provider,
+    )
+    this.#pendingProviderEvents.length = 0
+    this.#pendingProviderEvents.push(...retainedEvents)
+    this.#pendingProviderEventBytes = retainedEvents.reduce(
+      (total, pending) => total + pending.bytes,
+      0,
+    )
     const timestamp = this.#timestamp()
     const error = {
       code: 'runtime_unavailable' as const,
@@ -4175,6 +4556,20 @@ function machineRuntimeKey(
   provider: AgentProvider,
 ): string {
   return JSON.stringify([MachineIdSchema.parse(machineId), provider])
+}
+
+function providerStartFailureKey(
+  machineId: MachineId,
+  provider: AgentProvider,
+  providerThreadId: string,
+  providerTurnId: string,
+): string {
+  return JSON.stringify([
+    MachineIdSchema.parse(machineId),
+    provider,
+    providerThreadId,
+    providerTurnId,
+  ])
 }
 
 function machineServiceError(error: unknown): Error {

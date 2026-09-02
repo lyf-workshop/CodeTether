@@ -603,6 +603,34 @@ export const CodexTurnEventMessageSchema = z
   .strict()
 export type CodexTurnEventMessage = z.infer<typeof CodexTurnEventMessageSchema>
 
+export const CodexSessionHeartbeatMessageSchema = z
+  .object({
+    type: z.literal('codex.session.heartbeat'),
+    protocolVersion: VersionField,
+    requestId: NonceSchema,
+    conversationId: MachineTransportConversationIdSchema,
+    providerThreadId: RemoteCodexProviderIdentitySchema,
+  })
+  .strict()
+export type CodexSessionHeartbeatMessage = z.infer<
+  typeof CodexSessionHeartbeatMessageSchema
+>
+
+export const CodexSessionHeartbeatAckMessageSchema = z
+  .object({
+    type: z.literal('codex.session.heartbeat.ack'),
+    protocolVersion: VersionField,
+    requestId: NonceSchema,
+    machineId: MachineTransportMachineIdSchema,
+    nodeId: NodeIdSchema,
+    conversationId: MachineTransportConversationIdSchema,
+    providerThreadId: RemoteCodexProviderIdentitySchema,
+  })
+  .strict()
+export type CodexSessionHeartbeatAckMessage = z.infer<
+  typeof CodexSessionHeartbeatAckMessageSchema
+>
+
 export const CodexSessionDisposeMessageSchema = z
   .object({
     type: z.literal('codex.session.dispose'),
@@ -826,6 +854,34 @@ export type ClaudeTurnEventMessage = z.infer<
   typeof ClaudeTurnEventMessageSchema
 >
 
+export const ClaudeSessionHeartbeatMessageSchema = z
+  .object({
+    type: z.literal('claude.session.heartbeat'),
+    protocolVersion: VersionField,
+    requestId: NonceSchema,
+    conversationId: MachineTransportConversationIdSchema,
+    providerSessionId: RemoteClaudeProviderIdentitySchema,
+  })
+  .strict()
+export type ClaudeSessionHeartbeatMessage = z.infer<
+  typeof ClaudeSessionHeartbeatMessageSchema
+>
+
+export const ClaudeSessionHeartbeatAckMessageSchema = z
+  .object({
+    type: z.literal('claude.session.heartbeat.ack'),
+    protocolVersion: VersionField,
+    requestId: NonceSchema,
+    machineId: MachineTransportMachineIdSchema,
+    nodeId: NodeIdSchema,
+    conversationId: MachineTransportConversationIdSchema,
+    providerSessionId: RemoteClaudeProviderIdentitySchema,
+  })
+  .strict()
+export type ClaudeSessionHeartbeatAckMessage = z.infer<
+  typeof ClaudeSessionHeartbeatAckMessageSchema
+>
+
 export const ClaudeSessionDisposeMessageSchema = z
   .object({
     type: z.literal('claude.session.dispose'),
@@ -931,6 +987,8 @@ export const MachineWireMessageSchema = z.discriminatedUnion('type', [
   CodexTurnStartMessageSchema,
   CodexTurnStartedMessageSchema,
   CodexTurnEventMessageSchema,
+  CodexSessionHeartbeatMessageSchema,
+  CodexSessionHeartbeatAckMessageSchema,
   CodexSessionDisposeMessageSchema,
   CodexSessionDisposedMessageSchema,
   ClaudeSessionOpenMessageSchema,
@@ -938,6 +996,8 @@ export const MachineWireMessageSchema = z.discriminatedUnion('type', [
   ClaudeTurnStartMessageSchema,
   ClaudeTurnStartedMessageSchema,
   ClaudeTurnEventMessageSchema,
+  ClaudeSessionHeartbeatMessageSchema,
+  ClaudeSessionHeartbeatAckMessageSchema,
   ClaudeSessionDisposeMessageSchema,
   ClaudeSessionDisposedMessageSchema,
   TrustRevokeMessageSchema,

@@ -286,6 +286,7 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
   readonly #workers = new Map<MachineId, RemoteWorker>()
   /** Mutating connection operations are linearized per durable Machine. */
   readonly #machineOperations = new Map<MachineId, Promise<unknown>>()
+  readonly #retryTasks = new Map<MachineId, Promise<RemoteMachineConnection>>()
   readonly #providerDiscoveryTasks = new Map<MachineId, ProviderDiscoveryTask>()
   readonly #currentProviderObservations = new Map<MachineId, Timestamp>()
   readonly #states = new Map<MachineId, MachineConnectionState>()
@@ -587,7 +588,9 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
     trust: DurableTrustedMachinePeer,
   ): Promise<RemoteMachineConnection> {
     const id = MachineIdSchema.parse(machine.machineId)
-    return await this.#serializeMachineOperation(id, async () => {
+    const existing = this.#retryTasks.get(id)
+    if (existing !== undefined) return await existing
+    const task = this.#serializeMachineOperation(id, async () => {
       const current = this.#requireCurrentActiveTrust(machine, trust)
       await this.#stopWorker(id)
       this.#setState(id, 'connecting')
@@ -595,8 +598,14 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
       // if loading the private controller credential has not completed yet.
       this.#recordAttempt(id)
       this.#startWorker(current.machine, current.trust)
-      return this.connectionDetails(id) ?? { state: 'connecting' }
+      return this.connectionDetails(id) ?? { state: 'connecting' as const }
     })
+    this.#retryTasks.set(id, task)
+    try {
+      return await task
+    } finally {
+      if (this.#retryTasks.get(id) === task) this.#retryTasks.delete(id)
+    }
   }
 
   async updateAddress(
@@ -850,6 +859,16 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
           return remoteCodexRuntimeSession(session)
         } catch (error) {
           lastError = error
+          // A purpose-specific rejection received after pinned TLS
+          // authentication proves that this endpoint is healthy. Retrying the
+          // same semantic operation at another remembered address could open
+          // the same native session twice and would poison endpoint history.
+          if (
+            error instanceof MachineTransportError &&
+            error.peerAuthenticated
+          ) {
+            break
+          }
           this.#persistence.recordTrustedMachineEndpointFailure(
             id,
             endpoint.address,
@@ -941,6 +960,12 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
           return remoteClaudeRuntimeSession(session)
         } catch (error) {
           lastError = error
+          if (
+            error instanceof MachineTransportError &&
+            error.peerAuthenticated
+          ) {
+            break
+          }
           this.#persistence.recordTrustedMachineEndpointFailure(
             id,
             endpoint.address,
@@ -1132,7 +1157,7 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
     remoteRevocationKnown: boolean,
     priorRevokeAttempt: boolean,
   ): Promise<void> {
-    let delayMs = 1_000
+    let delayMs = Math.min(1_000, this.#reconnectMaximumDelayMs)
     // A Node can only prove that this controller has already been revoked by
     // rejecting the revocation request on an authenticated pinned connection.
     // Do not infer revocation from a later dial error at an old address.
@@ -1384,7 +1409,7 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
     initialTrust: DurableTrustedMachinePeer,
     worker: RemoteWorker,
   ): Promise<void> {
-    let delayMs = 1_000
+    let delayMs = Math.min(1_000, this.#reconnectMaximumDelayMs)
     let trust = initialTrust
     while (!this.#closed && !worker.abort.signal.aborted) {
       // A successful purpose-specific authenticated handoff (for example
@@ -1446,7 +1471,7 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
         }
         cycleError = undefined
         this.#setState(machine.machineId, 'online')
-        delayMs = 1_000
+        delayMs = Math.min(1_000, this.#reconnectMaximumDelayMs)
         if (typeof connection.discoverProviders === 'function') {
           void this.discoverProviders(machine, trust).catch(() => undefined)
         }

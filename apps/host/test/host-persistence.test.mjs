@@ -28,6 +28,9 @@ class FakeRuntime {
   conversationError = undefined
   turnPrefix = 'provider-turn'
   resumeError = undefined
+  beforeTurnReturn = undefined
+  disposeCalls = []
+  disposeError = undefined
   #eventListeners = new Set()
   #failureListeners = new Set()
   #approvalListeners = new Set()
@@ -69,7 +72,13 @@ class FakeRuntime {
   async startTurn(options) {
     const providerTurnId = `${this.turnPrefix}-${String(this.turnCalls.length + 1)}`
     this.turnCalls.push({ options, providerTurnId })
+    this.beforeTurnReturn?.({ options, providerTurnId })
     return { providerTurnId }
+  }
+
+  async disposeConversation(options) {
+    this.disposeCalls.push(options)
+    if (this.disposeError !== undefined) throw this.disposeError
   }
 
   async interruptTurn(options) {
@@ -349,6 +358,150 @@ test('Conversation identity, rich multi-Turn history, and Provider identity surv
   }
 })
 
+test('completed Start action replay survives Host restart without Provider hydration or resend', async () => {
+  const environment = await createEnvironment()
+  try {
+    const first = await createService(
+      environment,
+      '12121212-1212-4212-8212-121212121212',
+    )
+    const created = await createConversation(
+      first.service,
+      environment.workspace,
+      'act_restart_replay_create01',
+    )
+    const other = await createConversation(
+      first.service,
+      environment.workspace,
+      'act_restart_replay_create02',
+    )
+    const conversationId = created.data.conversation.conversationId
+    const actionId = 'act_restart_replay_turn01'
+    const text = 'Execute this durable action exactly once'
+    const started = await startTurn(
+      first.service,
+      conversationId,
+      actionId,
+      text,
+    )
+    completeRichTurn(
+      first.runtime,
+      'provider-thread-1',
+      first.runtime.turnCalls[0].providerTurnId,
+      'durable-action',
+    )
+    await first.service.close()
+
+    const runtime = new FakeRuntime()
+    const second = await createService(
+      environment,
+      '13131313-1313-4313-8313-131313131313',
+      runtime,
+    )
+    const replay = await startTurn(
+      second.service,
+      conversationId,
+      actionId,
+      text,
+    )
+    assert.equal(replay.data.turn.turnId, started.data.turn.turnId)
+    assert.equal(replay.data.turn.status, 'completed')
+    assert.equal(replay.data.turn.finalMessage, 'Finished durable-action')
+    assert.equal(runtime.resumeCalls.length, 0)
+    assert.equal(runtime.turnCalls.length, 0)
+    await second.service.close()
+
+    const changedRuntime = new FakeRuntime()
+    const changed = await createService(
+      environment,
+      '16161616-1616-4616-8616-161616161616',
+      changedRuntime,
+    )
+    await assert.rejects(
+      startTurn(changed.service, conversationId, actionId, 'Changed input'),
+      (error) => error instanceof HostServiceError && error.code === 'conflict',
+    )
+    assert.equal(changedRuntime.resumeCalls.length, 0)
+    assert.equal(changedRuntime.turnCalls.length, 0)
+    await changed.service.close()
+
+    const otherRuntime = new FakeRuntime()
+    const otherConversation = await createService(
+      environment,
+      '17171717-1717-4717-8717-171717171717',
+      otherRuntime,
+    )
+    await assert.rejects(
+      startTurn(
+        otherConversation.service,
+        other.data.conversation.conversationId,
+        actionId,
+        text,
+      ),
+      (error) => error instanceof HostServiceError && error.code === 'conflict',
+    )
+    assert.equal(otherRuntime.resumeCalls.length, 0)
+    assert.equal(otherRuntime.turnCalls.length, 0)
+    assert.equal(otherConversation.store.countTurns(conversationId), 1)
+    assert.equal(
+      otherConversation.store.countTurns(
+        other.data.conversation.conversationId,
+      ),
+      0,
+    )
+    await otherConversation.service.close()
+  } finally {
+    await removeEnvironment(environment.directory)
+  }
+})
+
+test('interrupted Start action closes the Host-restart window without Prompt resend', async () => {
+  const environment = await createEnvironment()
+  try {
+    const first = await createService(
+      environment,
+      '14141414-1414-4414-8414-141414141414',
+    )
+    const created = await createConversation(
+      first.service,
+      environment.workspace,
+      'act_restart_window_create01',
+    )
+    const conversationId = created.data.conversation.conversationId
+    const actionId = 'act_restart_window_turn01'
+    const text = 'Do not deliver this Prompt twice after restart'
+    const started = await startTurn(
+      first.service,
+      conversationId,
+      actionId,
+      text,
+    )
+    assert.equal(first.runtime.turnCalls.length, 1)
+    await first.service.close()
+
+    const runtime = new FakeRuntime()
+    const second = await createService(
+      environment,
+      '15151515-1515-4515-8515-151515151515',
+      runtime,
+    )
+    const replay = await startTurn(
+      second.service,
+      conversationId,
+      actionId,
+      text,
+    )
+    assert.equal(replay.data.turn.turnId, started.data.turn.turnId)
+    assert.equal(replay.data.turn.status, 'interrupted')
+    assert.equal(runtime.resumeCalls.length, 0)
+    assert.equal(runtime.turnCalls.length, 0)
+    assert.equal(second.store.countTurns(conversationId), 1)
+    await second.service.close()
+  } finally {
+    await removeEnvironment(environment.directory)
+  }
+})
+
 test('graceful close declines Provider but expires pending Approval only on restart', async () => {
   const environment = await createEnvironment()
   try {
@@ -525,6 +678,10 @@ test('durable write failure prevents Provider Turn start', async () => {
     createConversation: () => undefined,
     updateConversation: () => undefined,
     deleteConversation: () => true,
+    getTurnForStartAction: () => undefined,
+    createTurnForStartAction: () => {
+      throw new Error('disk full')
+    },
     createTurn: () => {
       throw new Error('disk full')
     },
@@ -849,7 +1006,7 @@ test('terminal durability failure emits failure instead of a false completed eve
       'act_terminal_fail_turn',
       'Complete safely',
     )
-    assert.throws(() =>
+    assert.doesNotThrow(() =>
       runtime.emit(
         providerEvent(
           'turn.completed',
@@ -871,6 +1028,185 @@ test('terminal durability failure emits failure instead of a false completed eve
   } finally {
     unsubscribe()
     await service.close().catch(() => undefined)
+    await removeEnvironment(environment.directory)
+  }
+})
+
+test('startup event overflow disposes only the owning session and records one durable failure', async () => {
+  const environment = await createEnvironment()
+  try {
+    const fixture = await createService(
+      environment,
+      '18181818-1818-4818-8818-181818181818',
+    )
+    const affected = await createConversation(
+      fixture.service,
+      environment.workspace,
+      'act_start_overflow_create01',
+    )
+    const unaffected = await createConversation(
+      fixture.service,
+      environment.workspace,
+      'act_start_overflow_create02',
+    )
+    const events = []
+    const unsubscribe = fixture.publisher.subscribe((event) =>
+      events.push(event),
+    )
+    let callbackError
+    fixture.runtime.beforeTurnReturn = ({ options, providerTurnId }) => {
+      fixture.runtime.beforeTurnReturn = undefined
+      try {
+        for (let index = 0; index <= 512; index += 1) {
+          fixture.runtime.emit(
+            providerEvent(
+              'message.delta',
+              options.providerThreadId,
+              providerTurnId,
+              {
+                itemId: 'provider-message-start-overflow',
+                delta: 'x',
+              },
+            ),
+          )
+        }
+        fixture.runtime.emit(
+          providerEvent(
+            'turn.completed',
+            options.providerThreadId,
+            providerTurnId,
+            { finalMessage: 'must not complete' },
+          ),
+        )
+      } catch (error) {
+        callbackError = error
+      }
+    }
+
+    const actionId = 'act_start_overflow_turn01'
+    await assert.rejects(
+      startTurn(
+        fixture.service,
+        affected.data.conversation.conversationId,
+        actionId,
+        'Exercise bounded startup events',
+      ),
+      (error) =>
+        error instanceof HostServiceError && error.code === 'provider_error',
+    )
+    assert.equal(callbackError, undefined)
+    assert.deepEqual(fixture.runtime.disposeCalls, [
+      { providerThreadId: 'provider-thread-1' },
+    ])
+
+    const failed = fixture.store.getTurnForStartAction(actionId)
+    assert.ok(failed)
+    assert.equal(failed.status, 'failed')
+    assert.equal(fixture.store.listIncompleteTurns().length, 0)
+    const terminalEvents = events.filter(
+      (event) =>
+        event.turnId === failed.turnId &&
+        (event.type === 'turn.completed' || event.type === 'turn.failed'),
+    )
+    assert.deepEqual(
+      terminalEvents.map((event) => event.type),
+      ['turn.failed'],
+    )
+
+    const unaffectedTurn = await startTurn(
+      fixture.service,
+      unaffected.data.conversation.conversationId,
+      'act_start_overflow_turn02',
+      'Remain isolated',
+    )
+    const unaffectedCall = fixture.runtime.turnCalls.at(-1)
+    fixture.runtime.emit(
+      providerEvent(
+        'turn.completed',
+        unaffectedCall.options.providerThreadId,
+        unaffectedCall.providerTurnId,
+        { finalMessage: 'unaffected' },
+      ),
+    )
+    assert.equal(
+      fixture.store.getTurn(unaffectedTurn.data.turn.turnId).status,
+      'completed',
+    )
+    unsubscribe()
+    await fixture.service.close()
+  } finally {
+    await removeEnvironment(environment.directory)
+  }
+})
+
+test('startup overflow cleanup rejection leaves a durable failure and blocks a new Turn', async () => {
+  const environment = await createEnvironment()
+  try {
+    const fixture = await createService(
+      environment,
+      '19191919-1919-4919-8919-191919191919',
+    )
+    const created = await createConversation(
+      fixture.service,
+      environment.workspace,
+      'act_start_cleanup_create01',
+    )
+    fixture.runtime.disposeError = new Error('private cleanup failure')
+    fixture.runtime.beforeTurnReturn = ({ options, providerTurnId }) => {
+      fixture.runtime.beforeTurnReturn = undefined
+      for (let index = 0; index <= 512; index += 1) {
+        fixture.runtime.emit(
+          providerEvent(
+            'message.delta',
+            options.providerThreadId,
+            providerTurnId,
+            {
+              itemId: 'provider-message-cleanup-failure',
+              delta: 'x',
+            },
+          ),
+        )
+      }
+    }
+
+    const actionId = 'act_start_cleanup_turn01'
+    await assert.rejects(
+      startTurn(
+        fixture.service,
+        created.data.conversation.conversationId,
+        actionId,
+        'Exercise failed exact cleanup',
+      ),
+      (error) =>
+        error instanceof HostServiceError && error.code === 'provider_error',
+    )
+    const failed = fixture.store.getTurnForStartAction(actionId)
+    assert.ok(failed)
+    assert.equal(failed.status, 'failed')
+    assert.equal(fixture.store.listIncompleteTurns().length, 0)
+    assert.equal(fixture.runtime.turnCalls.length, 1)
+    assert.deepEqual(fixture.runtime.disposeCalls, [
+      { providerThreadId: 'provider-thread-1' },
+    ])
+
+    await assert.rejects(
+      startTurn(
+        fixture.service,
+        created.data.conversation.conversationId,
+        'act_start_cleanup_turn02',
+        'Must remain blocked after uncertain cleanup',
+      ),
+      (error) =>
+        error instanceof HostServiceError &&
+        error.code === 'provider_session_lost',
+    )
+    assert.equal(fixture.runtime.turnCalls.length, 1)
+    assert.equal(
+      fixture.store.countTurns(created.data.conversation.conversationId),
+      1,
+    )
+    await fixture.service.close().catch(() => undefined)
+  } finally {
     await removeEnvironment(environment.directory)
   }
 })

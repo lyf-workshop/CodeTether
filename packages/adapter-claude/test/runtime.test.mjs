@@ -13,6 +13,7 @@ import {
   ClaudeCodeSessionRuntime,
   encodeClaudeUserMessage,
   sanitizeClaudeChildEnvironment,
+  startClaudeCodeTurnProcess,
 } from '../dist/index.js'
 
 const fixture = fileURLToPath(
@@ -172,6 +173,120 @@ test('creates cold, streams one child per turn, then resumes the exact session',
     message: { role: 'user', content: 'secret prompt first' },
     parent_tool_use_id: null,
   })
+})
+
+test('startup ownership rejects ENOENT before any canonical started event', async () => {
+  const events = []
+  const handle = startClaudeCodeTurnProcess({
+    launcher: {
+      kind: 'native',
+      executable: join(tmpdir(), 'codetether-definitely-missing-claude'),
+      prefixArguments: [],
+      sourcePath: join(tmpdir(), 'codetether-definitely-missing-claude'),
+    },
+    sessionId,
+    turnId: 'turn_missing_executable',
+    cwd: process.cwd(),
+    prompt: 'bounded input',
+    resume: false,
+    onEvent: (event) => events.push(event),
+  })
+  await assert.rejects(
+    handle.ownershipEstablished,
+    (error) => error.code === 'provider_start_failed',
+  )
+  await assert.rejects(
+    handle.completion,
+    (error) => error.code === 'provider_start_failed',
+  )
+  assert.equal(
+    events.some((event) => event.type === 'turn.started'),
+    false,
+  )
+})
+
+test('post-ownership Provider exit is unavailable rather than startup failure', async (t) => {
+  const cwd = await mkdtemp(join(tmpdir(), 'codetether-claude-crash-'))
+  t.after(async () => {
+    await import('node:fs/promises').then(({ rm }) =>
+      rm(cwd, { recursive: true, force: true }),
+    )
+  })
+  const events = []
+  const handle = startClaudeCodeTurnProcess({
+    launcher: fixtureLauncher('--fixture-scenario=after-delta-crash'),
+    sessionId,
+    turnId: 'turn_after_delta_crash',
+    cwd,
+    prompt: 'bounded input',
+    resume: false,
+    onEvent: (event) => events.push(event),
+  })
+  await handle.ownershipEstablished
+  await assert.rejects(
+    handle.completion,
+    (error) => error.code === 'provider_unavailable',
+  )
+  assert.equal(
+    events.some((event) => event.type === 'message.delta'),
+    true,
+  )
+  assert.equal(events.at(-1).type, 'turn.failed')
+})
+
+test('slow async listeners apply bounded stdout pause and resume', async (t) => {
+  const cwd = await mkdtemp(join(tmpdir(), 'codetether-claude-backpressure-'))
+  t.after(async () => {
+    await import('node:fs/promises').then(({ rm }) =>
+      rm(cwd, { recursive: true, force: true }),
+    )
+  })
+  let pauses = 0
+  let resumes = 0
+  const runtime = ClaudeCodeSessionRuntime.createSession({
+    launcher: fixtureLauncher('--fixture-scenario=burst'),
+    sessionId,
+    cwd,
+    processFactory: (specification) => {
+      const child = spawn(specification.executable, specification.arguments, {
+        cwd: specification.cwd,
+        env: specification.environment,
+        shell: false,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      })
+      const pause = child.stdout.pause.bind(child.stdout)
+      const resume = child.stdout.resume.bind(child.stdout)
+      child.stdout.pause = () => {
+        pauses += 1
+        return pause()
+      }
+      child.stdout.resume = () => {
+        resumes += 1
+        return resume()
+      }
+      return {
+        child,
+        close: async () => await closeOwnedClaudeProcess(child, 250),
+      }
+    },
+  })
+  const events = []
+  runtime.subscribeEvents(async (event) => {
+    events.push(event)
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  })
+  const result = await runtime.startTurn({
+    turnId: 'turn_backpressure',
+    prompt: 'bounded input',
+  })
+  assert.equal(result.finalMessage, 'X'.repeat(40))
+  assert.ok(pauses >= 1)
+  assert.ok(resumes >= 1)
+  assert.equal(
+    events.filter((event) => event.type === 'message.delta').length,
+    40,
+  )
+  await runtime.close()
 })
 
 test('resumeSession uses native resume on its first lazy turn', async (t) => {

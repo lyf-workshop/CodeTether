@@ -22,6 +22,7 @@ import {
 } from '@codetether/machine-transport'
 
 import { validateProjectLocationPath } from './project-location-validation.js'
+import { spawnNodeProviderProcess } from './provider-process-guardian.js'
 import { supportsRemoteCodexExecutionPlatform } from './provider-discovery.js'
 
 interface RemoteCodexClient {
@@ -39,7 +40,7 @@ interface RemoteCodexClient {
   readonly waitForTurn: (
     threadId: string,
     turnId: string,
-    timeoutMs?: number,
+    timeoutMs?: number | null,
   ) => Promise<unknown>
   readonly shutdown: () => Promise<void>
 }
@@ -61,12 +62,24 @@ export interface RemoteCodexRunnerPoolOptions {
   readonly maximumSessions?: number
 }
 
+class RemoteCodexOwnedCleanupError extends MachineTransportError {
+  constructor(cause: unknown) {
+    super(
+      'remote_execution_lost',
+      'Remote Codex owned process cleanup could not be verified',
+      { cause },
+    )
+    this.name = 'RemoteCodexOwnedCleanupError'
+  }
+}
+
 export class RemoteCodexRunnerPool {
   readonly #clientFactory: RemoteCodexClientFactory
   readonly #maximumSessions: number
   readonly #runners = new Map<string, RemoteCodexRunner>()
   readonly #opening = new Map<string, Promise<RemoteCodexRunner>>()
   readonly #cleanupTasks = new Set<Promise<void>>()
+  readonly #cleanupFailures = new Set<unknown>()
   readonly #executionSupported: boolean
   #closed = false
   #closePromise: Promise<void> | undefined
@@ -103,6 +116,11 @@ export class RemoteCodexRunnerPool {
           onError,
           validateNotification: validateRemoteCodexTextNotification,
           onStderr: () => undefined,
+          processFactory: (specification) =>
+            spawnNodeProviderProcess({
+              provider: 'codex',
+              ...specification,
+            }),
         }))
   }
 
@@ -111,7 +129,13 @@ export class RemoteCodexRunnerPool {
   }
 
   async open(request: CodexSessionOpenMessage): Promise<RemoteCodexRunner> {
-    if (this.#closed || !this.#executionSupported) throw executionUnavailable()
+    if (
+      this.#closed ||
+      !this.#executionSupported ||
+      this.#cleanupFailures.size > 0
+    ) {
+      throw executionUnavailable()
+    }
     if (
       this.#runners.has(request.conversationId) ||
       this.#opening.has(request.conversationId)
@@ -132,6 +156,11 @@ export class RemoteCodexRunnerPool {
     this.#opening.set(request.conversationId, opening)
     try {
       return await opening
+    } catch (error) {
+      if (error instanceof RemoteCodexOwnedCleanupError) {
+        this.#cleanupFailures.add(error)
+      }
+      throw error
     } finally {
       if (this.#opening.get(request.conversationId) === opening) {
         this.#opening.delete(request.conversationId)
@@ -140,10 +169,15 @@ export class RemoteCodexRunnerPool {
   }
 
   async release(runner: RemoteCodexRunner): Promise<void> {
+    const cleanup = runner.close()
+    this.#trackCleanup(cleanup)
+    await cleanup
     if (this.#runners.get(runner.conversationId) === runner) {
+      // Keep the exact Conversation occupied until owned-process cleanup has
+      // been verified. A reconnect must never open a replacement alongside a
+      // closing Provider tree.
       this.#runners.delete(runner.conversationId)
     }
-    await runner.close()
   }
 
   async close(): Promise<void> {
@@ -178,6 +212,7 @@ export class RemoteCodexRunnerPool {
 
   async #close(): Promise<void> {
     this.#closed = true
+    const cleanupFailures = new Set<unknown>(this.#cleanupFailures)
     while (
       this.#runners.size > 0 ||
       this.#opening.size > 0 ||
@@ -187,11 +222,30 @@ export class RemoteCodexRunnerPool {
       const openings = [...this.#opening.values()]
       const cleanups = [...this.#cleanupTasks]
       this.#runners.clear()
-      await Promise.allSettled([
-        ...runners.map(async (runner) => await runner.close()),
-        ...openings,
-        ...cleanups,
-      ])
+      const work = [
+        ...runners.map((runner) => ({ cleanup: true, task: runner.close() })),
+        ...openings.map((task) => ({ cleanup: false, task })),
+        ...cleanups.map((task) => ({ cleanup: true, task })),
+      ]
+      const results = await Promise.allSettled(work.map(({ task }) => task))
+      for (const [index, result] of results.entries()) {
+        if (
+          result.status === 'rejected' &&
+          (work[index]?.cleanup === true ||
+            result.reason instanceof RemoteCodexOwnedCleanupError)
+        ) {
+          cleanupFailures.add(result.reason)
+        }
+      }
+    }
+    for (const failure of this.#cleanupFailures) {
+      cleanupFailures.add(failure)
+    }
+    if (cleanupFailures.size > 0) {
+      throw new AggregateError(
+        [...cleanupFailures],
+        'Remote Codex owned process cleanup did not complete',
+      )
     }
   }
 
@@ -201,16 +255,17 @@ export class RemoteCodexRunnerPool {
     // idempotent if shutdown itself reports another failure.
     queueMicrotask(() => {
       if (this.#runners.get(runner.conversationId) !== runner) return
-      this.#runners.delete(runner.conversationId)
-      this.#trackCleanup(runner.close())
+      void this.release(runner).catch(() => undefined)
     })
   }
 
   #trackCleanup(task: Promise<void>): void {
     this.#cleanupTasks.add(task)
     void task
+      .catch((error: unknown) => {
+        this.#cleanupFailures.add(error)
+      })
       .finally(() => this.#cleanupTasks.delete(task))
-      .catch(() => undefined)
   }
 }
 
@@ -228,9 +283,12 @@ export class RemoteCodexRunner {
   readonly providerThreadId: string
   readonly resumed: boolean
   readonly #client: RemoteCodexClient
+  readonly #onFatal: (runner: RemoteCodexRunner) => void
   readonly #actions = new Map<string, RemoteCodexRunnerTurn>()
   #activeTurn: RemoteCodexRunnerTurn | undefined
   #closed = false
+  #cleanupPromise: Promise<void> | undefined
+  #fatalScheduled = false
 
   private constructor(options: {
     request: CodexSessionOpenMessage
@@ -238,6 +296,7 @@ export class RemoteCodexRunner {
     client: RemoteCodexClient
     providerThreadId: string
     resumed: boolean
+    onFatal: (runner: RemoteCodexRunner) => void
   }) {
     this.conversationId = options.request.conversationId
     this.projectId = options.request.projectId
@@ -245,6 +304,7 @@ export class RemoteCodexRunner {
     this.#client = options.client
     this.providerThreadId = options.providerThreadId
     this.resumed = options.resumed
+    this.#onFatal = options.onFatal
   }
 
   static async open(
@@ -256,8 +316,7 @@ export class RemoteCodexRunner {
       onEvent: (event) => runner?.handleProviderEvent(event),
       onError: (error) => {
         startupFailure = error
-        runner?.failActiveTurn('provider_session_lost')
-        if (runner !== undefined) options.onFatal(runner)
+        runner?.failOwnedSession('provider_session_lost')
       },
     })
     try {
@@ -287,11 +346,21 @@ export class RemoteCodexRunner {
         client,
         providerThreadId,
         resumed: options.request.providerThreadId !== undefined,
+        onFatal: options.onFatal,
       })
       if (startupFailure !== undefined) throw startupFailure
       return runner
     } catch (error) {
-      await client.shutdown().catch(() => undefined)
+      try {
+        await client.shutdown()
+      } catch (cleanupError) {
+        throw new RemoteCodexOwnedCleanupError(
+          new AggregateError(
+            [error, cleanupError],
+            'Remote Codex startup and owned cleanup both failed',
+          ),
+        )
+      }
       throw mapProviderStartError(error)
     }
   }
@@ -342,9 +411,14 @@ export class RemoteCodexRunner {
       )
     }
 
-    const turn = new RemoteCodexRunnerTurn(request, requestHash, () => {
-      if (this.#activeTurn === turn) this.#activeTurn = undefined
-    })
+    const turn = new RemoteCodexRunnerTurn(
+      request,
+      requestHash,
+      () => {
+        if (this.#activeTurn === turn) this.#activeTurn = undefined
+      },
+      () => this.#terminate('remote_execution_lost'),
+    )
     this.#activeTurn = turn
     this.#rememberAction(request.actionId, turn)
     try {
@@ -354,11 +428,7 @@ export class RemoteCodexRunner {
       })
       turn.bindProviderTurn(started.turn.id)
       void this.#client
-        .waitForTurn(
-          this.providerThreadId,
-          turn.providerTurnId,
-          machineTransportLimits.remoteCodexTurnTimeoutMs,
-        )
+        .waitForTurn(this.providerThreadId, turn.providerTurnId, null)
         .catch(() => this.failActiveTurn('provider_session_lost'))
       return turn
     } catch (error) {
@@ -427,11 +497,38 @@ export class RemoteCodexRunner {
     this.#activeTurn?.fail(code)
   }
 
+  failOwnedSession(
+    code: 'provider_session_lost' | 'remote_policy_violation',
+  ): void {
+    this.#terminate(code)
+  }
+
+  #terminate(
+    code:
+      | 'provider_session_lost'
+      | 'remote_policy_violation'
+      | 'remote_execution_lost',
+  ): void {
+    if (this.#fatalScheduled) return
+    this.#fatalScheduled = true
+    this.#activeTurn?.fail(code)
+    void this.close().then(
+      () => this.#onFatal(this),
+      () => this.#onFatal(this),
+    )
+  }
+
   async close(): Promise<void> {
-    if (this.#closed) return
+    if (this.#cleanupPromise !== undefined) {
+      await this.#cleanupPromise
+      return
+    }
     this.#closed = true
     this.#activeTurn?.fail('remote_execution_lost')
-    await this.#client.shutdown().catch(() => undefined)
+    this.#cleanupPromise = this.#client.shutdown().catch((error: unknown) => {
+      throw new RemoteCodexOwnedCleanupError(error)
+    })
+    await this.#cleanupPromise
   }
 
   #rememberAction(actionId: string, turn: RemoteCodexRunnerTurn): void {
@@ -451,6 +548,7 @@ export class RemoteCodexRunnerTurn {
   readonly requestHash: string
   readonly #queue = new BoundedTurnEventQueue()
   readonly #release: () => void
+  readonly #onOverflow: () => void
   #observedProviderTurnId: string | undefined
   #providerTurnId: string | undefined
   #terminal = false
@@ -463,12 +561,14 @@ export class RemoteCodexRunnerTurn {
     request: CodexTurnStartMessage,
     requestHash: string,
     release: () => void,
+    onOverflow: () => void,
   ) {
     this.actionId = request.actionId
     this.conversationId = request.conversationId
     this.turnId = request.turnId
     this.requestHash = requestHash
     this.#release = release
+    this.#onOverflow = onOverflow
   }
 
   get providerTurnId(): string {
@@ -522,6 +622,7 @@ export class RemoteCodexRunnerTurn {
       }
     } catch {
       this.fail('remote_execution_lost')
+      this.#onOverflow()
     }
   }
 
@@ -555,32 +656,60 @@ class BoundedTurnEventQueue implements AsyncIterable<RemoteCodexTurnEventPayload
   }> = []
   #queuedBytes = 0
   #totalOutputBytes = 0
+  #totalEvents = 0
   #closed = false
 
   push(event: RemoteCodexTurnEventPayload): void {
     if (this.#closed) return
     const bytes = eventBytes(event)
+    this.#totalEvents += 1
     if (event.type === 'message.delta') this.#totalOutputBytes += bytes
     if (
+      this.#totalEvents > machineTransportLimits.maximumRemoteCodexTurnEvents ||
       this.#totalOutputBytes >
         machineTransportLimits.maximumRemoteCodexOutputBytes ||
-      this.#queue.length >=
-        machineTransportLimits.maximumRemoteCodexQueuedEvents ||
-      this.#queuedBytes + bytes >
-        machineTransportLimits.maximumRemoteCodexQueuedOutputBytes
+      !this.#enqueueBounded(event, bytes)
     ) {
       throw new MachineTransportError(
         'remote_execution_lost',
         'Remote Codex output exceeded its bound',
       )
     }
-    const waiter = this.#waiters.shift()
-    if (waiter !== undefined) waiter.resolve({ value: event, done: false })
-    else {
-      this.#queue.push(event)
-      this.#queuedBytes += bytes
-    }
     if (isTerminal(event)) this.#closed = true
+  }
+
+  #enqueueBounded(event: RemoteCodexTurnEventPayload, bytes: number): boolean {
+    const waiter = this.#waiters.shift()
+    if (waiter !== undefined) {
+      waiter.resolve({ value: event, done: false })
+      return true
+    }
+    const tail = this.#queue.at(-1)
+    const coalesced = coalesceCodexEvent(tail, event)
+    if (coalesced !== undefined) {
+      const previousBytes = eventBytes(tail!)
+      const nextBytes = eventBytes(coalesced)
+      if (
+        this.#queuedBytes - previousBytes + nextBytes >
+        machineTransportLimits.maximumRemoteCodexQueuedOutputBytes
+      ) {
+        return false
+      }
+      this.#queue[this.#queue.length - 1] = coalesced
+      this.#queuedBytes = this.#queuedBytes - previousBytes + nextBytes
+      return true
+    }
+    if (
+      this.#queue.length >=
+        machineTransportLimits.maximumRemoteCodexQueuedEvents ||
+      this.#queuedBytes + bytes >
+        machineTransportLimits.maximumRemoteCodexQueuedOutputBytes
+    ) {
+      return false
+    }
+    this.#queue.push(event)
+    this.#queuedBytes += bytes
+    return true
   }
 
   forceTerminal(event: RemoteCodexTurnEventPayload): void {
@@ -609,6 +738,20 @@ class BoundedTurnEventQueue implements AsyncIterable<RemoteCodexTurnEventPayload
       },
     }
   }
+}
+
+function coalesceCodexEvent(
+  previous: RemoteCodexTurnEventPayload | undefined,
+  next: RemoteCodexTurnEventPayload,
+): RemoteCodexTurnEventPayload | undefined {
+  if (previous?.type !== 'message.delta' || next.type !== 'message.delta') {
+    return undefined
+  }
+  const text = previous.text + next.text
+  return Buffer.byteLength(text, 'utf8') <=
+    machineTransportLimits.maximumRemoteCodexDeltaBytes
+    ? { type: 'message.delta', text }
+    : undefined
 }
 
 function splitUtf8(value: string): string[] {

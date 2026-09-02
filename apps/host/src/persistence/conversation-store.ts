@@ -4,6 +4,7 @@ import { dirname, isAbsolute, posix, resolve, win32 } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
 import {
+  ActionIdSchema,
   conversationSearchLimits,
   conversationListLimits,
   ConversationIdSchema,
@@ -19,6 +20,7 @@ import {
   machineWireLimits,
   TurnIdSchema,
   TurnInputRecordSchema,
+  type ActionId,
   type ConversationId,
   type ConversationSummary,
   type ConversationTitleSource,
@@ -307,6 +309,12 @@ export interface DurableTurnSnapshot {
   readonly snapshotVersion: number
   /** Parsed CodeTether normalized presentation state; never raw provider JSON. */
   readonly snapshot: unknown
+}
+
+export interface CreateDurableTurnForStartAction {
+  readonly actionId: ActionId
+  readonly turn: DurableTurnSnapshot
+  readonly conversation: DurableConversation
 }
 
 export interface ConversationStoreOptions extends DataDirectoryOptions {
@@ -1861,13 +1869,40 @@ export class ConversationStore {
     )
   }
 
+  /**
+   * Atomically creates the durable Turn, binds its Start action identity, and
+   * advances the owning Conversation. A durable action can therefore never
+   * exist without its exact Turn, and Provider execution remains strictly
+   * after this transaction commits.
+   */
+  createTurnForStartAction(input: CreateDurableTurnForStartAction): void {
+    const actionId = ActionIdSchema.parse(input.actionId)
+    const turn = parseTurn(input.turn)
+    const conversation = parseConversation(input.conversation)
+    if (turn.conversationId !== conversation.conversationId) {
+      throw new Error('Start action Turn must belong to its Conversation')
+    }
+    this.runInTransaction(() => {
+      this.createTurn(turn)
+      this.#statement(
+        `INSERT INTO turn_start_actions (action_id, turn_id, created_at)
+         VALUES (?, ?, ?)`,
+      ).run(actionId, turn.turnId, turn.startedAt)
+      this.updateConversation(conversation)
+    })
+  }
+
   updateTurn(turn: DurableTurnSnapshot): void {
     const value = parseTurn(turn)
     const result = this.#statement(
       `UPDATE turns SET
         conversation_id = ?, provider_turn_id = ?, input = ?, status = ?,
         started_at = ?, completed_at = ?, snapshot_version = ?, snapshot_json = ?
-      WHERE turn_id = ?`,
+      WHERE turn_id = ?
+        AND (
+          status NOT IN ('completed', 'failed', 'interrupted')
+          OR status = ?
+        )`,
     ).run(
       value.conversationId,
       value.providerTurnId ?? null,
@@ -1878,6 +1913,7 @@ export class ConversationStore {
       value.snapshotVersion,
       serializeSnapshot(value.snapshot),
       value.turnId,
+      value.status,
     )
     assertChanged(result.changes, 'Turn', value.turnId)
   }
@@ -1887,6 +1923,17 @@ export class ConversationStore {
     const row = this.#statement('SELECT * FROM turns WHERE turn_id = ?').get(
       id,
     ) as TurnRow | undefined
+    return row === undefined ? undefined : turnFromRow(row)
+  }
+
+  getTurnForStartAction(actionId: ActionId): DurableTurnSnapshot | undefined {
+    const id = ActionIdSchema.parse(actionId)
+    const row = this.#statement(
+      `SELECT turns.*
+       FROM turn_start_actions
+       INNER JOIN turns ON turns.turn_id = turn_start_actions.turn_id
+       WHERE turn_start_actions.action_id = ?`,
+    ).get(id) as TurnRow | undefined
     return row === undefined ? undefined : turnFromRow(row)
   }
 

@@ -11,6 +11,7 @@ import {
   spawnRemoteCodexAppServer,
   stopCodexAppServer,
   stopRemoteCodexAppServer,
+  type RemoteCodexProcessFactory,
 } from './process.js'
 import type {
   CodexThread,
@@ -102,6 +103,8 @@ export interface LaunchRemoteCodexClientOptions extends Omit<
   readonly codexHome: string
   /** Node-local environment; it is reduced to the fixed safe allowlist. */
   readonly environment?: NodeJS.ProcessEnv
+  /** Node-private ownership seam; never accepted from public protocol input. */
+  readonly processFactory?: RemoteCodexProcessFactory
   readonly clientInfo: {
     readonly name: string
     readonly title: string
@@ -405,7 +408,7 @@ export class CodexAppServerClient {
   waitForTurn(
     threadId: string,
     turnId: string,
-    timeoutMs = 300_000,
+    timeoutMs: number | null = 300_000,
   ): Promise<TurnTerminalResult> {
     return this.#lifecycle.wait(threadId, turnId, timeoutMs)
   }

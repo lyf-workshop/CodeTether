@@ -80,6 +80,64 @@ test('migrates a fresh database and reopens the same schema idempotently', () =>
   })
 })
 
+test('migration 012 adds durable Turn start actions transactionally', () => {
+  withDatabase((databasePath) => {
+    const seed = ConversationStore.open({ databasePath })
+    seed.createProject(project(seed))
+    seed.createConversation(conversation(seed))
+    seed.createTurn(turn(1, { migration: 'preserve' }))
+    seed.close()
+
+    const downgrade = new DatabaseSync(databasePath)
+    downgrade.exec(`
+      DELETE FROM schema_migrations WHERE version = 12;
+      DROP TABLE turn_start_actions;
+      CREATE INDEX idx_turn_start_actions_created ON turns(started_at);
+    `)
+    downgrade.close()
+
+    assert.throws(
+      () => ConversationStore.open({ databasePath }),
+      /idx_turn_start_actions_created/u,
+    )
+    const rolledBack = new DatabaseSync(databasePath)
+    assert.equal(
+      rolledBack
+        .prepare('SELECT MAX(version) AS version FROM schema_migrations')
+        .get().version,
+      11,
+    )
+    assert.equal(
+      rolledBack
+        .prepare(
+          `SELECT COUNT(*) AS count FROM sqlite_master
+           WHERE type = 'table' AND name = 'turn_start_actions'`,
+        )
+        .get().count,
+      0,
+    )
+    assert.deepEqual(rolledBack.prepare('PRAGMA foreign_key_check').all(), [])
+    assert.equal(
+      rolledBack.prepare('SELECT COUNT(*) AS count FROM turns').get().count,
+      1,
+    )
+    rolledBack.exec('DROP INDEX idx_turn_start_actions_created')
+    rolledBack.close()
+
+    const migrated = ConversationStore.open({ databasePath })
+    assert.equal(migrated.schemaVersion, 12)
+    assert.equal(
+      migrated.getTurnForStartAction('act_migration_start01'),
+      undefined,
+    )
+    assert.equal(migrated.getConversation(conversationId).projectId, projectId)
+    assert.deepEqual(migrated.getTurn('turn_persistence01').snapshot, {
+      migration: 'preserve',
+    })
+    migrated.close()
+  })
+})
+
 test('migration 002 backfills shared Projects and preserves v1 Conversation and Turn data', () => {
   withDatabase((databasePath) => {
     const firstRoot = resolve(databasePath, '..', 'missing-project-one')
@@ -339,6 +397,109 @@ test('persists Conversation and normalized Turn snapshots across reopen', () => 
   })
 })
 
+test('durably binds one Start action to its exact Turn across reopen', () => {
+  withDatabase((databasePath) => {
+    const actionId = 'act_durable_start01'
+    const store = ConversationStore.open({ databasePath })
+    store.createProject(project(store))
+    const durableConversation = conversation(store)
+    store.createConversation(durableConversation)
+    const startedTurn = {
+      turnId: 'turn_persistence01',
+      conversationId,
+      input: {
+        type: 'text',
+        text: 'Prompt 1',
+        timestamp: '2026-08-26T12:01:00.000Z',
+      },
+      status: 'starting',
+      startedAt: '2026-08-26T12:01:00.000Z',
+      snapshotVersion: 1,
+      snapshot: { phase: 'starting' },
+    }
+    store.createTurnForStartAction({
+      actionId,
+      turn: startedTurn,
+      conversation: {
+        ...durableConversation,
+        status: 'running',
+        updatedAt: startedTurn.startedAt,
+        lastActivityAt: startedTurn.startedAt,
+      },
+    })
+
+    assert.deepEqual(store.getTurnForStartAction(actionId), startedTurn)
+    assert.equal(store.getConversation(conversationId).status, 'running')
+    assert.throws(
+      () =>
+        store.createTurnForStartAction({
+          actionId,
+          turn: turn(2, { phase: 'other' }),
+          conversation: durableConversation,
+        }),
+      /UNIQUE constraint failed: turn_start_actions\.action_id/u,
+    )
+    assert.equal(store.getTurn('turn_persistence02'), undefined)
+    store.close()
+
+    const reopened = ConversationStore.open({ databasePath })
+    assert.deepEqual(reopened.getTurnForStartAction(actionId), startedTurn)
+    assert.equal(reopened.deleteConversation(conversationId), true)
+    assert.equal(reopened.getTurnForStartAction(actionId), undefined)
+    reopened.close()
+  })
+})
+
+test('Start action transaction rolls back its Turn and ledger when Conversation advance fails', () => {
+  withDatabase((databasePath) => {
+    const actionId = 'act_durable_rollback01'
+    let store = ConversationStore.open({ databasePath })
+    store.createProject(project(store))
+    const durableConversation = conversation(store)
+    store.createConversation(durableConversation)
+    store.close()
+
+    const raw = new DatabaseSync(databasePath)
+    raw.exec(`
+      CREATE TRIGGER reject_start_action_conversation_update
+      BEFORE UPDATE ON conversations
+      BEGIN
+        SELECT RAISE(ABORT, 'controlled conversation update failure');
+      END;
+    `)
+    raw.close()
+
+    store = ConversationStore.open({ databasePath })
+    const startedTurn = turn(
+      3,
+      { phase: 'starting' },
+      {
+        providerTurnId: undefined,
+        status: 'starting',
+        completedAt: undefined,
+      },
+    )
+    assert.throws(
+      () =>
+        store.createTurnForStartAction({
+          actionId,
+          turn: startedTurn,
+          conversation: {
+            ...durableConversation,
+            status: 'running',
+            updatedAt: startedTurn.startedAt,
+            lastActivityAt: startedTurn.startedAt,
+          },
+        }),
+      /controlled conversation update failure/u,
+    )
+    assert.equal(store.getTurn(startedTurn.turnId), undefined)
+    assert.equal(store.getTurnForStartAction(actionId), undefined)
+    assert.deepEqual(store.getConversation(conversationId), durableConversation)
+    store.close()
+  })
+})
+
 test('updates lifecycle records, reports incomplete Turns, and cascades deletion', () => {
   withDatabase((databasePath) => {
     const store = ConversationStore.open({ databasePath })
@@ -370,6 +531,33 @@ test('updates lifecycle records, reports incomplete Turns, and cascades deletion
     assert.equal(store.deleteConversation(conversationId), true)
     assert.equal(store.getTurn('turn_persistence01'), undefined)
     assert.equal(store.deleteConversation(conversationId), false)
+    store.close()
+  })
+})
+
+test('a durable terminal Turn cannot transition to another outcome', () => {
+  withDatabase((databasePath) => {
+    const store = ConversationStore.open({ databasePath })
+    store.createProject(project(store))
+    store.createConversation(conversation(store))
+    const completed = turn(1, { phase: 'completed' })
+    store.createTurn(completed)
+
+    assert.throws(
+      () =>
+        store.updateTurn(
+          turn(
+            1,
+            { phase: 'late-failure' },
+            {
+              status: 'failed',
+              completedAt: '2026-08-26T12:02:00.000Z',
+            },
+          ),
+        ),
+      /Turn/u,
+    )
+    assert.deepEqual(store.getTurn(completed.turnId), completed)
     store.close()
   })
 })

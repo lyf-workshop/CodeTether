@@ -108,6 +108,11 @@ const migrations: readonly Migration[] = [
     name: 'remote_provider_discovery',
     up: migrateRemoteProviderDiscovery,
   },
+  {
+    version: 12,
+    name: 'durable_turn_start_actions',
+    up: migrateDurableTurnStartActions,
+  },
 ]
 
 export const currentSchemaVersion = migrations.at(-1)?.version ?? 0
@@ -1846,6 +1851,35 @@ function migrateRemoteProviderDiscovery(database: DatabaseSync): void {
       ON remote_machine_provider_observations(
         machine_id, observed_at DESC, provider ASC
       );
+  `)
+}
+
+/**
+ * Binds a Start Turn action identity to the exact durable Turn created for it.
+ * The Prompt remains canonical only on `turns`; this private relation stores
+ * no duplicate input, Provider identity, or execution payload. Its lifetime
+ * follows the Turn so a retry after Host restart can return durable truth
+ * without ever sending the Prompt again.
+ */
+function migrateDurableTurnStartActions(database: DatabaseSync): void {
+  database.exec(`
+    CREATE TABLE turn_start_actions (
+      action_id TEXT PRIMARY KEY
+        CHECK (
+          length(action_id) BETWEEN 10 AND 100 AND
+          substr(action_id, 1, 4) = 'act_' AND
+          action_id = trim(action_id) AND
+          instr(action_id, char(0)) = 0
+        ),
+      turn_id TEXT NOT NULL UNIQUE,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (turn_id)
+        REFERENCES turns(turn_id)
+        ON DELETE CASCADE
+    ) STRICT;
+
+    CREATE INDEX idx_turn_start_actions_created
+      ON turn_start_actions(created_at, action_id);
   `)
 }
 

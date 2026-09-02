@@ -87,7 +87,11 @@ async function fixture(options = {}) {
           : 'mismatch',
       )
       const connection = {
-        async ping() {},
+        async ping() {
+          if (options.pingHandler !== undefined) {
+            await options.pingHandler({ connectCalls })
+          }
+        },
         async revoke() {
           revokeCalls += 1
           if (options.revokeError !== undefined) {
@@ -500,6 +504,182 @@ test('current Claude discovery admits only the restricted effort-bound session a
   }
 })
 
+test('an authenticated Provider rejection is not retried across healthy endpoint hints', async () => {
+  const semanticFailure = new MachineTransportError(
+    'provider_start_failed',
+    'presentation-safe Provider startup failure',
+    { peerAuthenticated: true },
+  )
+  const f = await fixture({
+    discoveryEnabled: true,
+    executionEnabled: true,
+    openCodexError: semanticFailure,
+    async discoveryHandler() {
+      return remoteProviderDiscovery(true)
+    },
+  })
+  let coordinator
+  try {
+    coordinator = await SecureRemoteMachineCoordinator.create({
+      persistence: f.store,
+      transport: f.transport,
+      heartbeatIntervalMs: 60_000,
+      reconnectMaximumDelayMs: 20,
+    })
+    const candidate = await coordinator.beginPairing({
+      address: { host: '172.20.1.41', port: 4319 },
+      pairingCode: '123456',
+    })
+    const confirmed = await coordinator.confirmPairing(
+      candidate.pairingAttemptId,
+      (staged) =>
+        f.store.createRemoteMachineWithTrust(staged.machine, staged.trust),
+    )
+    await waitFor(() => f.counts.discovery >= 1, 'execution discovery')
+    const timestamp = new Date().toISOString()
+    f.store.recordTrustedMachineAuthentication(
+      confirmed.machine.machineId,
+      { host: '172.20.1.42', port: 4319 },
+      timestamp,
+      'manual',
+    )
+    const machine = f.store.getMachine(confirmed.machine.machineId)
+    const trust = f.store.getTrustedMachinePeer(confirmed.machine.machineId)
+    assert.ok(machine)
+    assert.ok(trust)
+    assert.equal(trust.endpoints.length, 2)
+
+    await assert.rejects(
+      coordinator.openCodexSession(machine, trust, {
+        conversationId: 'conv_semantic_failure',
+        projectId: 'proj_semantic_failure',
+        rootPath: '/srv/projects/workspace',
+      }),
+      (error) => error.code === 'provider_start_failed',
+    )
+    assert.equal(f.counts.openCodex, 1)
+    const after = f.store.getTrustedMachinePeer(machine.machineId)
+    assert.ok(after)
+    assert.equal(
+      after.endpoints.every((endpoint) => endpoint.lastFailureAt === undefined),
+      true,
+    )
+  } finally {
+    await f.close(coordinator)
+  }
+})
+
+test('100 concurrent retries coalesce to one worker replacement', async () => {
+  const f = await fixture()
+  let coordinator
+  try {
+    coordinator = await SecureRemoteMachineCoordinator.create({
+      persistence: f.store,
+      transport: f.transport,
+      heartbeatIntervalMs: 60_000,
+      reconnectMaximumDelayMs: 20,
+    })
+    const candidate = await coordinator.beginPairing({
+      address: { host: '172.20.1.43', port: 4319 },
+      pairingCode: '123456',
+    })
+    const confirmed = await coordinator.confirmPairing(
+      candidate.pairingAttemptId,
+      (staged) =>
+        f.store.createRemoteMachineWithTrust(staged.machine, staged.trust),
+    )
+    await waitFor(
+      () =>
+        coordinator.connectionState(confirmed.machine.machineId) === 'online',
+      'initial connection',
+    )
+    const machine = f.store.getMachine(confirmed.machine.machineId)
+    const trust = f.store.getTrustedMachinePeer(confirmed.machine.machineId)
+    assert.ok(machine)
+    assert.ok(trust)
+    const before = f.counts.connect
+    const results = await Promise.all(
+      Array.from(
+        { length: 100 },
+        async () => await coordinator.retry(machine, trust),
+      ),
+    )
+    assert.equal(
+      results.every((result) => result.state === 'connecting'),
+      true,
+    )
+    await waitFor(
+      () => coordinator.connectionState(machine.machineId) === 'online',
+      'coalesced retry connection',
+    )
+    assert.equal(f.counts.connect - before, 1)
+    assert.equal(
+      f.store
+        .listMachines()
+        .filter(({ machineId }) => machineId === machine.machineId).length,
+      1,
+    )
+  } finally {
+    await f.close(coordinator)
+  }
+})
+
+test('30 retryable connection flaps retain one durable Machine and bounded reconnect cadence', async () => {
+  let remainingFlaps = 30
+  const f = await fixture({
+    async pingHandler() {
+      if (remainingFlaps > 0) {
+        remainingFlaps -= 1
+        throw new MachineTransportError(
+          'connection_failed',
+          'controlled heartbeat flap',
+        )
+      }
+    },
+  })
+  let coordinator
+  try {
+    coordinator = await SecureRemoteMachineCoordinator.create({
+      persistence: f.store,
+      transport: f.transport,
+      heartbeatIntervalMs: 1,
+      reconnectMaximumDelayMs: 1,
+      random: () => 0.5,
+    })
+    const candidate = await coordinator.beginPairing({
+      address: { host: '172.20.1.44', port: 4319 },
+      pairingCode: '123456',
+    })
+    const confirmed = await coordinator.confirmPairing(
+      candidate.pairingAttemptId,
+      (staged) =>
+        f.store.createRemoteMachineWithTrust(staged.machine, staged.trust),
+    )
+    await waitFor(
+      () =>
+        remainingFlaps === 0 &&
+        coordinator.connectionState(confirmed.machine.machineId) === 'online',
+      '30 connection flaps',
+      8_000,
+    )
+    const connectsAtRecovery = f.counts.connect
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.ok(f.counts.connect - connectsAtRecovery <= 1)
+    assert.equal(
+      f.store
+        .listMachines()
+        .filter(({ machineId }) => machineId === confirmed.machine.machineId)
+        .length,
+      1,
+    )
+    const trust = f.store.getTrustedMachinePeer(confirmed.machine.machineId)
+    assert.ok(trust)
+    assert.equal(trust.nodeIdentity, f.machine.nodeId)
+  } finally {
+    await f.close(coordinator)
+  }
+})
+
 test('serializes purpose-specific ProjectLocation validation and keeps pinned trust healthy on path errors', async () => {
   let releaseFirstValidation
   const firstValidationGate = new Promise((resolve) => {
@@ -727,8 +907,8 @@ test('close aborts and awaits an in-flight remote Provider discovery', async () 
   }
 })
 
-async function waitFor(predicate, label) {
-  const deadline = Date.now() + 2_000
+async function waitFor(predicate, label, timeoutMs = 2_000) {
+  const deadline = Date.now() + timeoutMs
   while (!predicate()) {
     if (Date.now() >= deadline)
       throw new Error(`Timed out waiting for ${label}`)

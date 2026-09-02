@@ -25,6 +25,7 @@ class FakeRuntime {
   provider = 'codex'
   resumeCalls = []
   turnCalls = []
+  disposeCalls = []
   approvalDecisions = []
   closeCalls = 0
   #turnSequence = 0
@@ -32,6 +33,7 @@ class FakeRuntime {
   #failureListeners = new Set()
   #approvalListeners = new Set()
   #resumeGate
+  #disposeGate
 
   subscribeEvents(listener) {
     this.#eventListeners.add(listener)
@@ -75,6 +77,16 @@ class FakeRuntime {
 
   async interruptTurn() {}
 
+  async disposeConversation(options) {
+    this.disposeCalls.push(options)
+    const gate = this.#disposeGate
+    if (gate !== undefined) {
+      this.#disposeGate = undefined
+      gate.markStarted()
+      await gate.waitForRelease
+    }
+  }
+
   async close() {
     this.closeCalls += 1
   }
@@ -83,6 +95,19 @@ class FakeRuntime {
     const started = deferred()
     const released = deferred()
     this.#resumeGate = {
+      markStarted: () => started.resolve(),
+      waitForRelease: released.promise,
+    }
+    return {
+      started: started.promise,
+      release: () => released.resolve(),
+    }
+  }
+
+  holdNextDispose() {
+    const started = deferred()
+    const released = deferred()
+    this.#disposeGate = {
       markStarted: () => started.resolve(),
       waitForRelease: released.promise,
     }
@@ -639,6 +664,45 @@ test('hydrates a cold Conversation once, resumes once, and evicts the least-rece
     'completed',
   )
   assert.equal(fixture.runtime.resumeCalls.length, 1)
+})
+
+test('keeps an evicted runtime charged until async disposal finishes and shutdown waits for it', async (t) => {
+  const fixture = await createFixture(t, {
+    conversationCount: 9,
+    maxConversations: 8,
+  })
+  const disposal = fixture.runtime.holdNextDispose()
+  const start = startTurn(
+    fixture.service,
+    conversationId(0),
+    'act_hydration_delayed_disposal',
+  )
+
+  await disposal.started
+  assert.deepEqual(fixture.runtime.disposeCalls, [
+    { providerThreadId: providerThreadId(1) },
+  ])
+  assert.equal(fixture.runtime.resumeCalls.length, 0)
+  assert.equal(fixture.runtime.turnCalls.length, 0)
+  assert.deepEqual(
+    hotConversationIds(fixture.service),
+    conversationIndexes(2, 9),
+  )
+
+  let closeSettled = false
+  const close = fixture.service.close().then(() => {
+    closeSettled = true
+  })
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(closeSettled, false)
+  assert.equal(fixture.runtime.closeCalls, 0)
+
+  disposal.release()
+  await start
+  await close
+  assert.equal(fixture.runtime.resumeCalls.length, 1)
+  assert.equal(fixture.runtime.turnCalls.length, 1)
+  assert.equal(fixture.runtime.closeCalls, 1)
 })
 
 test('does not evict an active Conversation with a pending Approval', async (t) => {

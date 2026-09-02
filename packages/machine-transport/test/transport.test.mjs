@@ -47,6 +47,77 @@ test('bounded framing handles fragmented and coalesced messages', () => {
   )
 })
 
+test('framed sends fail boundedly when a peer stops consuming writes', async () => {
+  class StalledWriteDuplex extends Duplex {
+    destroyedByTimeout = false
+
+    _read() {}
+
+    _write(_chunk, _encoding, _callback) {
+      // Deliberately retain the callback to model a TLS peer whose outbound
+      // flow-control window never opens.
+      void _chunk
+      void _encoding
+      void _callback
+    }
+
+    _destroy(error, callback) {
+      this.destroyedByTimeout = true
+      callback(error)
+    }
+  }
+
+  const stream = new StalledWriteDuplex()
+  const connection = new FramedMachineConnection(stream)
+  await assert.rejects(
+    connection.send({ type: 'bounded-write-fixture' }, { timeoutMs: 10 }),
+    (error) => error.code === 'timeout',
+  )
+  assert.equal(stream.destroyedByTimeout, true)
+  assert.equal(connection.closed, true)
+})
+
+test('concurrent stalled sends cannot grow the outbound queue without bound', async () => {
+  class StalledWriteDuplex extends Duplex {
+    writes = 0
+
+    _read() {}
+
+    _write(_chunk, _encoding, _callback) {
+      this.writes += 1
+      void _chunk
+      void _encoding
+      void _callback
+    }
+  }
+
+  const stream = new StalledWriteDuplex()
+  const connection = new FramedMachineConnection(stream)
+  const sends = Array.from({ length: 9 }, (_, index) =>
+    connection.send({ type: 'bounded-send', index }, { timeoutMs: 1_000 }),
+  )
+  const results = await Promise.allSettled(sends)
+  assert.equal(
+    results.every((result) => result.status === 'rejected'),
+    true,
+  )
+  assert.equal(connection.closed, true)
+  assert.ok(stream.writes <= 8)
+})
+
+test('active receives can be lifecycle-bounded without a wall-clock timeout', async () => {
+  const stream = new ResponseDuplex()
+  const connection = new FramedMachineConnection(stream)
+  const controller = new AbortController()
+  const pending = connection.receive(MachineErrorMessageSchema, {
+    timeoutMs: null,
+    signal: controller.signal,
+  })
+  await new Promise((resolve) => setTimeout(resolve, 15))
+  controller.abort()
+  await assert.rejects(pending, (error) => error.code === 'connection_failed')
+})
+
 test('Project Location messages are purpose-specific, strict, and path-bounded', () => {
   const request = {
     type: 'project_location.validate',
@@ -300,6 +371,112 @@ test('remote Codex session exposes a closed dedicated transport without probing 
   await session.close()
 })
 
+test('active Codex heartbeat keeps a quiet dedicated session alive without replaying its Turn', async () => {
+  const stream = new RecordingResponseDuplex()
+  const connection = new FramedMachineConnection(stream)
+  const machine = {
+    machineId: 'machine_remote_heartbeat01',
+    nodeId: 'node_remote_heartbeat01',
+    displayName: 'Remote heartbeat fixture',
+    platform: 'Linux',
+    architecture: 'x64',
+  }
+  const providerThreadId = 'native-thread-heartbeat'
+  let starts = 0
+  let heartbeats = 0
+  stream.onMessage = (message) => {
+    if (message.type === 'codex.turn.start') {
+      starts += 1
+      stream.respond({
+        type: 'codex.turn.started',
+        protocolVersion: 1,
+        machineId: machine.machineId,
+        nodeId: machine.nodeId,
+        actionId: message.actionId,
+        conversationId: message.conversationId,
+        turnId: message.turnId,
+        providerThreadId,
+        providerTurnId: 'provider-turn-heartbeat',
+      })
+    } else if (message.type === 'codex.session.heartbeat') {
+      heartbeats += 1
+      stream.respond({
+        type: 'codex.session.heartbeat.ack',
+        protocolVersion: 1,
+        requestId: message.requestId,
+        machineId: machine.machineId,
+        nodeId: machine.nodeId,
+        conversationId: message.conversationId,
+        providerThreadId,
+      })
+    } else if (message.type === 'codex.session.dispose') {
+      stream.respond({
+        type: 'codex.session.disposed',
+        protocolVersion: 1,
+        requestId: message.requestId,
+        machineId: machine.machineId,
+        nodeId: machine.nodeId,
+        conversationId: message.conversationId,
+      })
+    }
+  }
+  const session = new RemoteCodexSession(
+    connection,
+    machine,
+    {
+      type: 'codex.session.ready',
+      protocolVersion: 1,
+      requestId: 'H'.repeat(43),
+      machineId: machine.machineId,
+      nodeId: machine.nodeId,
+      conversationId: 'conv_remote_heartbeat01',
+      providerThreadId,
+      resumed: false,
+      executionProfile: 'codex-text-v1',
+    },
+    { intervalMs: 5, timeoutMs: 20 },
+  )
+  const turn = await session.startTurn({
+    actionId: 'act_remote_heartbeat01',
+    turnId: 'turn_remote_heartbeat01',
+    prompt: 'Remain quiet until the fixture completes.',
+  })
+  const firstEvent = turn.nextEvent()
+  await waitFor(() => heartbeats >= 2)
+  assert.equal(session.closed, false)
+  assert.equal(starts, 1)
+  stream.respond({
+    type: 'codex.turn.event',
+    protocolVersion: 1,
+    machineId: machine.machineId,
+    nodeId: machine.nodeId,
+    actionId: 'act_remote_heartbeat01',
+    conversationId: 'conv_remote_heartbeat01',
+    turnId: 'turn_remote_heartbeat01',
+    providerThreadId,
+    providerTurnId: 'provider-turn-heartbeat',
+    sequence: 1,
+    event: { type: 'message.completed' },
+  })
+  stream.respond({
+    type: 'codex.turn.event',
+    protocolVersion: 1,
+    machineId: machine.machineId,
+    nodeId: machine.nodeId,
+    actionId: 'act_remote_heartbeat01',
+    conversationId: 'conv_remote_heartbeat01',
+    turnId: 'turn_remote_heartbeat01',
+    providerThreadId,
+    providerTurnId: 'provider-turn-heartbeat',
+    sequence: 2,
+    event: { type: 'turn.completed' },
+  })
+  assert.equal((await firstEvent).event.type, 'message.completed')
+  assert.equal((await turn.nextEvent()).event.type, 'turn.completed')
+  await session.close()
+  assert.equal(starts, 1)
+})
+
 test('remote Claude messages admit only the restricted read/search profile', () => {
   const providerSessionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
   const providerTurnId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
@@ -527,6 +704,70 @@ test('remote Claude session exposes closed dedicated transport without Provider 
   await session.close()
 })
 
+test('missing Claude heartbeat acknowledgement fails a quiet Turn closed without replay', async () => {
+  const stream = new RecordingResponseDuplex()
+  const connection = new FramedMachineConnection(stream)
+  const machine = {
+    machineId: 'machine_remote_claude_heartbeat01',
+    nodeId: 'node_remote_claude_heartbeat01',
+    displayName: 'Remote Claude heartbeat fixture',
+    platform: 'Linux',
+    architecture: 'x64',
+  }
+  const providerSessionId = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
+  let starts = 0
+  let heartbeats = 0
+  stream.onMessage = (message) => {
+    if (message.type === 'claude.turn.start') {
+      starts += 1
+      stream.respond({
+        type: 'claude.turn.started',
+        protocolVersion: 1,
+        machineId: machine.machineId,
+        nodeId: machine.nodeId,
+        actionId: message.actionId,
+        conversationId: message.conversationId,
+        turnId: message.turnId,
+        providerSessionId,
+        providerTurnId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+      })
+    } else if (message.type === 'claude.session.heartbeat') {
+      heartbeats += 1
+      // Deliberately blackhole the authenticated acknowledgement.
+    }
+  }
+  const session = new RemoteClaudeSession(
+    connection,
+    machine,
+    {
+      type: 'claude.session.ready',
+      protocolVersion: 1,
+      requestId: 'J'.repeat(43),
+      machineId: machine.machineId,
+      nodeId: machine.nodeId,
+      conversationId: 'conv_remote_claude_heartbeat01',
+      providerSessionId,
+      resumed: false,
+      effort: 'high',
+      executionProfile: 'claude-restricted-read-search-v1',
+    },
+    { intervalMs: 5, timeoutMs: 10 },
+  )
+  const turn = await session.startTurn({
+    actionId: 'act_remote_claude_heartbeat01',
+    turnId: 'turn_remote_claude_heartbeat01',
+    prompt: 'Remain quiet while the Controller liveness fixture runs.',
+  })
+  await assert.rejects(
+    turn.nextEvent(),
+    (error) => error.code === 'connection_failed',
+  )
+  assert.equal(heartbeats, 1)
+  assert.equal(starts, 1)
+  assert.equal(session.closed, true)
+  await session.close()
+})
+
 test('OPAQUE pairing authenticates the code without transmitting it', async () => {
   const code = '482731'
   const machineId = newMachineTransportMachineId()
@@ -737,5 +978,29 @@ class ResponseDuplex extends Duplex {
 
   respond(value) {
     this.push(encodeMachineFrame(value))
+  }
+}
+
+class RecordingResponseDuplex extends ResponseDuplex {
+  decoder = new MachineFrameDecoder()
+  onMessage = () => undefined
+
+  _write(chunk, _encoding, callback) {
+    try {
+      for (const message of this.decoder.push(Buffer.from(chunk))) {
+        this.onMessage(message)
+      }
+      callback()
+    } catch (error) {
+      callback(error)
+    }
+  }
+}
+
+async function waitFor(predicate, timeoutMs = 500) {
+  const deadline = Date.now() + timeoutMs
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error('Timed out waiting for fixture')
+    await new Promise((resolve) => setTimeout(resolve, 5))
   }
 }

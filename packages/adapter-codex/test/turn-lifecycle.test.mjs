@@ -83,6 +83,19 @@ test('releases timed-out state and ignores a late terminal result', async () => 
   )
 })
 
+test('an active remote wait has no elapsed-time failure when timeout is null', async () => {
+  const registry = new TurnLifecycleRegistry()
+  registry.activate('thread-long', 'turn-long')
+  const waiter = registry.wait('thread-long', 'turn-long', null)
+  await new Promise((resolve) => setTimeout(resolve, 15))
+  registry.settle({
+    threadId: 'thread-long',
+    turn: { id: 'turn-long', status: 'completed', error: null },
+  })
+  assert.equal((await waiter).turn.id, 'turn-long')
+  assert.equal(registry.waiterCount, 0)
+})
+
 test('ignores duplicate terminal results after a waiter consumes the turn', async () => {
   const registry = new TurnLifecycleRegistry()
   registry.activate('thread-duplicate', 'turn-duplicate')

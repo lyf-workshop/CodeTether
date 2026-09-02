@@ -28,6 +28,11 @@ import {
 
 export const MAX_CLAUDE_PROMPT_BYTES = 1024 * 1024
 const DEFAULT_CLOSE_GRACE_MS = 2000
+const OWNERSHIP_ESTABLISHMENT_TIMEOUT_MS = 8_000
+const EVENT_BATCH_HIGH_WATER = 4
+const EVENT_BATCH_LOW_WATER = 1
+const EVENT_BATCH_HARD_LIMIT = 64
+const MAXIMUM_EVENTS_PER_DISPATCH_BATCH = 16
 const PARENT_CLAUDE_CONTROL_VARIABLES = new Set([
   'CLAUDECODE',
   'CLAUDE_CODE_ENTRYPOINT',
@@ -57,13 +62,34 @@ export interface ClaudeCodeTurnProcessOptions {
   readonly testedVersion?: string
   /** Node-only opt-in. Local Claude keeps direct-child ownership. */
   readonly processOwnership?: ClaudeCodeProcessOwnership
+  /** Node-private ownership seam. It is never populated from wire input. */
+  readonly processFactory?: ClaudeCodeProcessFactory
   readonly onEvent: (event: AgentEvent) => void | Promise<void>
 }
 
 export type ClaudeCodeProcessOwnership = 'direct-child' | 'posix-process-group'
 
+export interface ClaudeCodeProcessSpecification {
+  readonly executable: string
+  readonly arguments: readonly string[]
+  readonly cwd: string
+  readonly environment: NodeJS.ProcessEnv
+}
+
+export interface ClaudeCodeProcessController {
+  readonly child: ChildProcessWithoutNullStreams
+  readonly ownershipEstablished?: Promise<void>
+  close(graceMs?: number): Promise<void>
+}
+
+export type ClaudeCodeProcessFactory = (
+  specification: ClaudeCodeProcessSpecification,
+) => ClaudeCodeProcessController
+
 export interface ClaudeCodeTurnProcessHandle {
   readonly child: ChildProcessWithoutNullStreams
+  /** Resolves only after spawn and bounded Prompt-stdin acceptance. */
+  readonly ownershipEstablished: Promise<void>
   readonly completion: Promise<ClaudeCodeTurnResult>
   close(): Promise<void>
 }
@@ -133,14 +159,27 @@ export function startClaudeCodeTurnProcess(
     ...options.launcher.prefixArguments,
     ...buildClaudeCodeArguments(options),
   ]
-  const child = spawn(options.launcher.executable, arguments_, {
+  const environment = sanitizeClaudeChildEnvironment(
+    options.environment ?? process.env,
+  )
+  const controller = options.processFactory?.({
+    executable: options.launcher.executable,
+    arguments: arguments_,
     cwd: options.cwd,
-    env: sanitizeClaudeChildEnvironment(options.environment ?? process.env),
-    shell: false,
-    stdio: ['pipe', 'pipe', 'pipe'],
-    windowsHide: true,
-    detached: processOwnership === 'posix-process-group',
+    environment,
   })
+  const child =
+    controller?.child ??
+    spawn(options.launcher.executable, arguments_, {
+      cwd: options.cwd,
+      env: environment,
+      shell: false,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
+      detached: processOwnership === 'posix-process-group',
+    })
+  const providerOwnershipEstablished =
+    controller?.ownershipEstablished ?? Promise.resolve()
   const decoder = new ClaudeJsonLineDecoder()
   const normalizer = new ClaudeStreamNormalizer({
     sessionId: options.sessionId,
@@ -153,27 +192,95 @@ export function startClaudeCodeTurnProcess(
   let processingError: unknown
   let closeRequested = false
   let eventQueue = Promise.resolve()
+  let pendingEventBatches = 0
+  let stdoutPaused = false
+  let ownershipSettled = false
+  let ownershipEstablishedSuccessfully = false
+  let resolveOwnership!: () => void
+  let rejectOwnership!: (error: unknown) => void
+  const ownershipEstablished = new Promise<void>((resolve, reject) => {
+    resolveOwnership = resolve
+    rejectOwnership = reject
+  })
+  // Local callers historically await completion only. Retain that contract
+  // while exposing a separate Node-only startup acknowledgement.
+  void ownershipEstablished.catch(() => undefined)
+  const ownershipTimer = setTimeout(() => {
+    rememberError(new ClaudeCodeStartError())
+  }, OWNERSHIP_ESTABLISHMENT_TIMEOUT_MS)
+
+  const settleOwnership = (error?: unknown) => {
+    if (ownershipSettled) return
+    ownershipSettled = true
+    clearTimeout(ownershipTimer)
+    if (error === undefined) {
+      ownershipEstablishedSuccessfully = true
+      resolveOwnership()
+    } else rejectOwnership(error)
+  }
 
   const rememberError = (error: unknown) => {
     processingError ??= error
+    settleOwnership(asClaudeCodeError(error))
     if (child.exitCode === null && child.signalCode === null) {
-      signalOwnedClaudeProcess(child, 'SIGTERM', processOwnership)
+      if (controller === undefined) {
+        signalOwnedClaudeProcess(child, 'SIGTERM', processOwnership)
+      } else {
+        void controller.close(DEFAULT_CLOSE_GRACE_MS).catch((cleanupError) => {
+          processingError ??= cleanupError
+        })
+      }
     }
   }
 
   const publish = (events: readonly AgentEvent[]) => {
     if (events.length === 0) return
+    if (pendingEventBatches >= EVENT_BATCH_HARD_LIMIT) {
+      rememberError(new ClaudeCodeProtocolError())
+      return
+    }
+    pendingEventBatches += 1
+    if (
+      pendingEventBatches >= EVENT_BATCH_HIGH_WATER &&
+      !stdoutPaused &&
+      !child.stdout.destroyed
+    ) {
+      child.stdout.pause()
+      stdoutPaused = true
+    }
     eventQueue = eventQueue
       .then(async () => {
         for (const event of events) await options.onEvent(event)
       })
       .catch(rememberError)
+      .finally(() => {
+        pendingEventBatches = Math.max(0, pendingEventBatches - 1)
+        if (
+          stdoutPaused &&
+          pendingEventBatches <= EVENT_BATCH_LOW_WATER &&
+          processingError === undefined &&
+          !child.stdout.destroyed
+        ) {
+          stdoutPaused = false
+          child.stdout.resume()
+        }
+      })
   }
 
-  const consumeLine = (line: string) => {
+  const consumeLines = (lines: readonly string[]) => {
     if (processingError !== undefined) return
     try {
-      publish(normalizer.consume(parseClaudeJsonLine(line)))
+      let events: AgentEvent[] = []
+      for (const line of lines) {
+        for (const event of normalizer.consume(parseClaudeJsonLine(line))) {
+          events.push(event)
+          if (events.length >= MAXIMUM_EVENTS_PER_DISPATCH_BATCH) {
+            publish(events)
+            events = []
+          }
+        }
+      }
+      publish(events)
     } catch (error) {
       rememberError(error)
     }
@@ -182,7 +289,7 @@ export function startClaudeCodeTurnProcess(
   child.stdout.on('data', (chunk: Buffer) => {
     if (processingError !== undefined) return
     try {
-      for (const line of decoder.push(chunk)) consumeLine(line)
+      consumeLines(decoder.push(chunk))
     } catch (error) {
       rememberError(error)
     }
@@ -193,7 +300,12 @@ export function startClaudeCodeTurnProcess(
   child.once('error', rememberError)
   child.once('spawn', () => {
     try {
-      child.stdin.end(encodeClaudeUserMessage(options.prompt))
+      child.stdin.end(encodeClaudeUserMessage(options.prompt), () => {
+        void providerOwnershipEstablished.then(
+          () => settleOwnership(),
+          (error: unknown) => rememberError(error),
+        )
+      })
     } catch (error) {
       rememberError(error)
     }
@@ -202,21 +314,29 @@ export function startClaudeCodeTurnProcess(
   const completion = new Promise<ClaudeCodeTurnResult>((resolve, reject) => {
     child.once('close', () => {
       void (async () => {
+        if (!ownershipSettled) {
+          settleOwnership(processingError ?? new ClaudeCodeStartError())
+        }
         if (processingError === undefined) {
           try {
-            for (const line of decoder.end()) consumeLine(line)
+            consumeLines(decoder.end())
           } catch (error) {
             processingError = error
           }
         }
         await eventQueue
-        if (processOwnership === 'posix-process-group') {
+        if (
+          controller !== undefined ||
+          processOwnership === 'posix-process-group'
+        ) {
           try {
-            await closeOwnedClaudeProcess(
-              child,
-              DEFAULT_CLOSE_GRACE_MS,
-              processOwnership,
-            )
+            if (controller === undefined) {
+              await closeOwnedClaudeProcess(
+                child,
+                DEFAULT_CLOSE_GRACE_MS,
+                processOwnership,
+              )
+            } else await controller.close(DEFAULT_CLOSE_GRACE_MS)
           } catch (error) {
             processingError ??= error
           }
@@ -234,10 +354,14 @@ export function startClaudeCodeTurnProcess(
             reject(new ClaudeCodeTurnInterruptedError())
             return
           }
-          failure =
-            options.resume && !normalizer.initialized
+          failure = !ownershipEstablishedSuccessfully
+            ? new ClaudeCodeStartError()
+            : options.resume && !normalizer.initialized
               ? new ClaudeCodeSessionLostError()
-              : new ClaudeCodeStartError()
+              : new ClaudeCodeError(
+                  'provider_unavailable',
+                  'Claude Code exited before completing this turn.',
+                )
         }
 
         if (failure !== undefined) {
@@ -261,14 +385,17 @@ export function startClaudeCodeTurnProcess(
 
   return {
     child,
+    ownershipEstablished,
     completion,
     async close() {
       closeRequested = true
-      await closeOwnedClaudeProcess(
-        child,
-        DEFAULT_CLOSE_GRACE_MS,
-        processOwnership,
-      )
+      if (controller === undefined) {
+        await closeOwnedClaudeProcess(
+          child,
+          DEFAULT_CLOSE_GRACE_MS,
+          processOwnership,
+        )
+      } else await controller.close(DEFAULT_CLOSE_GRACE_MS)
     },
   }
 }

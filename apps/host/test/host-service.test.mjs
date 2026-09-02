@@ -18,7 +18,9 @@ const timestamp = '2026-08-26T08:00:00.000Z'
 class FakeRuntime {
   provider = 'codex'
   conversationCalls = []
+  resumeCalls = []
   turnCalls = []
+  disposeCalls = []
   interruptCalls = []
   approvalDecisions = []
   lifecycle = []
@@ -32,6 +34,7 @@ class FakeRuntime {
   #eventListeners = new Set()
   #approvalListeners = new Set()
   #failureListeners = new Set()
+  #disposeGate
 
   subscribeEvents(listener) {
     this.#eventListeners.add(listener)
@@ -71,6 +74,11 @@ class FakeRuntime {
     }
   }
 
+  async resumeConversation(options) {
+    this.resumeCalls.push(options)
+    return { providerThreadId: options.providerThreadId }
+  }
+
   async startTurn(options) {
     const generated = `provider-turn-secret-${++this.#turnSequence}`
     const providerTurnId = this.nextProviderTurnId ?? generated
@@ -81,6 +89,29 @@ class FakeRuntime {
 
   async interruptTurn(options) {
     this.interruptCalls.push(options)
+  }
+
+  async disposeConversation(options) {
+    this.disposeCalls.push(options)
+    const gate = this.#disposeGate
+    if (gate !== undefined) {
+      this.#disposeGate = undefined
+      gate.markStarted()
+      await gate.waitForRelease
+    }
+  }
+
+  holdNextDispose() {
+    const started = deferred()
+    const released = deferred()
+    this.#disposeGate = {
+      markStarted: () => started.resolve(),
+      waitForRelease: released.promise,
+    }
+    return {
+      started: started.promise,
+      release: () => released.resolve(),
+    }
   }
 
   async close() {
@@ -357,8 +388,19 @@ test('provider Thread identities must be non-empty and globally unique', async (
   await createConversation(fixture, 'act_create11')
 
   fixture.runtime.nextProviderThreadId = 'provider-thread-secret-1'
+  const reusedCleanup = fixture.runtime.holdNextDispose()
+  let reusedSettled = false
+  const reused = createConversation(fixture, 'act_create12').finally(() => {
+    reusedSettled = true
+  })
+  await reusedCleanup.started
+  assert.equal(reusedSettled, false)
+  assert.deepEqual(fixture.runtime.disposeCalls, [
+    { providerThreadId: 'provider-thread-secret-1' },
+  ])
+  reusedCleanup.release()
   await assert.rejects(
-    createConversation(fixture, 'act_create12'),
+    reused,
     (error) =>
       error instanceof HostServiceError && error.code === 'provider_error',
   )
@@ -369,6 +411,10 @@ test('provider Thread identities must be non-empty and globally unique', async (
       error instanceof HostServiceError && error.code === 'provider_error',
   )
 
+  assert.deepEqual(fixture.runtime.disposeCalls, [
+    { providerThreadId: 'provider-thread-secret-1' },
+    { providerThreadId: '   ' },
+  ])
   assert.equal(fixture.service.snapshot().conversations.length, 1)
 })
 
@@ -419,8 +465,22 @@ test('provider Turn identities must be non-empty and unique per Conversation', a
   })
 
   fixture.runtime.nextProviderTurnId = 'provider-turn-secret-1'
+  const disposal = fixture.runtime.holdNextDispose()
+  let rejected = false
+  const reused = startTurn(fixture, conversationId, 'act_start015').catch(
+    (error) => {
+      rejected = true
+      throw error
+    },
+  )
+  await disposal.started
+  assert.equal(rejected, false)
+  assert.deepEqual(fixture.runtime.disposeCalls, [
+    { providerThreadId: 'provider-thread-secret-1' },
+  ])
+  disposal.release()
   await assert.rejects(
-    startTurn(fixture, conversationId, 'act_start015'),
+    reused,
     (error) =>
       error instanceof HostServiceError && error.code === 'provider_error',
   )
@@ -430,10 +490,16 @@ test('provider Turn identities must be non-empty and unique per Conversation', a
     (error) =>
       error instanceof HostServiceError && error.code === 'provider_error',
   )
+  assert.deepEqual(fixture.runtime.disposeCalls, [
+    { providerThreadId: 'provider-thread-secret-1' },
+    { providerThreadId: 'provider-thread-secret-1' },
+  ])
+  assert.equal(fixture.runtime.resumeCalls.length, 1)
 
   const next = await startTurn(fixture, conversationId, 'act_start017')
   assert.equal(next.data.turn.status, 'running')
   assert.equal(fixture.service.snapshot().activeTurns.length, 1)
+  assert.equal(fixture.runtime.resumeCalls.length, 2)
 })
 
 test('rejects an oversized canonical Turn input before calling the provider', async (t) => {
@@ -1942,3 +2008,11 @@ test('truncates a terminal final message until one retained Turn fits its memory
     true,
   )
 })
+
+function deferred() {
+  let resolve
+  const promise = new Promise((resolvePromise) => {
+    resolve = resolvePromise
+  })
+  return { promise, resolve }
+}

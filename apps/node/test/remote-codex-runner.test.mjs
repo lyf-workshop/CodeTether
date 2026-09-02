@@ -107,6 +107,9 @@ function fakeClientFactory(options = {}) {
         shutdowns += 1
         options.onShutdown?.()
         await options.shutdownGate
+        if (options.shutdownFailure !== undefined) {
+          throw options.shutdownFailure
+        }
       },
     }
   }
@@ -232,6 +235,88 @@ test('runner owns one idempotent text Turn and chunks bounded output', async () 
     await pool.release(runner)
     assert.equal(pool.activeCount, 0)
     assert.equal(fake.shutdowns, 1)
+  } finally {
+    await pool.close()
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('slow consumers receive coalesced Codex deltas without queue growth', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'codetether-coalesce-'))
+  const fake = fakeClientFactory()
+  const pool = new RemoteCodexRunnerPool({
+    codexHome: directory,
+    clientFactory: fake.factory,
+  })
+  try {
+    const runner = await pool.open(sessionRequest(directory))
+    const turn = await runner.startTurn(turnRequest(runner.providerThreadId))
+    for (let index = 0; index < 300; index += 1) {
+      fake.emit(
+        providerEvent('message.delta', {
+          itemId: 'item_remote_a',
+          delta: 'x',
+        }),
+      )
+    }
+    fake.emit(
+      providerEvent('message.completed', {
+        itemId: 'item_remote_a',
+        message: 'x'.repeat(300),
+      }),
+    )
+    fake.emit(providerEvent('turn.completed'))
+
+    const events = []
+    for await (const event of turn.events()) events.push(event)
+    assert.equal(
+      events
+        .filter(({ type }) => type === 'message.delta')
+        .map(({ text }) => text)
+        .join(''),
+      'x'.repeat(300),
+    )
+    assert.ok(events.length < 10)
+    assert.deepEqual(events.at(-1), { type: 'turn.completed' })
+    await pool.release(runner)
+  } finally {
+    await pool.close()
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('high-volume Codex output fails the Turn and closes the exact client', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'codetether-overflow-'))
+  const fake = fakeClientFactory()
+  const pool = new RemoteCodexRunnerPool({
+    codexHome: directory,
+    clientFactory: fake.factory,
+  })
+  try {
+    const runner = await pool.open(sessionRequest(directory))
+    const turn = await runner.startTurn(turnRequest(runner.providerThreadId))
+    for (let index = 0; index < 40; index += 1) {
+      fake.emit(
+        providerEvent('message.delta', {
+          itemId: 'item_remote_a',
+          delta: 'x'.repeat(
+            machineTransportLimits.maximumRemoteCodexDeltaBytes,
+          ),
+        }),
+      )
+    }
+    const events = []
+    for await (const event of turn.events()) events.push(event)
+    assert.deepEqual(events, [
+      {
+        type: 'turn.failed',
+        code: 'remote_execution_lost',
+        message: 'Remote Codex execution was lost',
+      },
+    ])
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(fake.shutdowns, 1)
+    assert.equal(pool.activeCount, 0)
   } finally {
     await pool.close()
     await rm(directory, { recursive: true, force: true })
@@ -605,6 +690,37 @@ test('raw policy failure releases the exact idle child and pool slot', async () 
   }
 })
 
+test('fatal Codex cleanup retains its exact pool slot until ownership ends', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'codetether-fatal-slot-'))
+  const cleanup = deferred()
+  const fake = fakeClientFactory({ shutdownGate: cleanup.promise })
+  const pool = new RemoteCodexRunnerPool({
+    codexHome: directory,
+    clientFactory: fake.factory,
+    maximumSessions: 1,
+  })
+  try {
+    await pool.open(sessionRequest(directory))
+    fake.fail(new Error('controlled Provider ownership loss'))
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(pool.activeCount, 1)
+    await assert.rejects(
+      pool.open(sessionRequest(directory, 'conv_remote_b')),
+      (error) => error.code === 'busy',
+    )
+    cleanup.resolve()
+    for (let attempt = 0; attempt < 20 && pool.activeCount > 0; attempt += 1) {
+      await new Promise((resolve) => setImmediate(resolve))
+    }
+    assert.equal(pool.activeCount, 0)
+    assert.equal(fake.shutdowns, 1)
+  } finally {
+    cleanup.resolve()
+    await pool.close()
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
 test('every Turn revalidates the exact registered root before Prompt send', async () => {
   for (const scenario of ['missing', 'non-directory', 'symlink-change']) {
     const directory = await mkdtemp(join(tmpdir(), 'codetether-revalidate-'))
@@ -769,6 +885,38 @@ test('Node service close waits for fatal exact runner cleanup before returning',
   }
 })
 
+test('remote Codex cleanup failure is latched and blocks new ownership', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'codetether-codex-cleanup-'))
+  const cleanupFailure = new Error('private exact cleanup failure')
+  const fake = fakeClientFactory({ shutdownFailure: cleanupFailure })
+  const pool = new RemoteCodexRunnerPool({
+    codexHome: directory,
+    clientFactory: fake.factory,
+  })
+  try {
+    const runner = await pool.open(sessionRequest(directory))
+    await assert.rejects(
+      pool.release(runner),
+      (error) =>
+        error.code === 'remote_execution_lost' &&
+        error.cause === cleanupFailure,
+    )
+    await assert.rejects(
+      pool.open(sessionRequest(directory, 'conv_remote_b')),
+      (error) => error.code === 'remote_execution_unavailable',
+    )
+    await assert.rejects(
+      pool.close(),
+      (error) =>
+        error instanceof AggregateError &&
+        error.message === 'Remote Codex owned process cleanup did not complete',
+    )
+  } finally {
+    await pool.close().catch(() => undefined)
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
 test('Node service retains and reports remote Claude cleanup failure', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'codetether-cleanup-fail-'))
   const state = await NodeStateStore.open({
@@ -830,6 +978,64 @@ test('released execution connections reopen by exact native session identity', a
     assert.equal(fake.shutdowns, 2)
   } finally {
     await pool.close()
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('lost session-ready after pinned authentication remains peer-authenticated', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'codetether-ready-loss-'))
+  const project = join(directory, 'project')
+  const codexHome = join(directory, 'codex-home')
+  await mkdir(project)
+  await mkdir(codexHome)
+  const factoryStarted = deferred()
+  const factoryRelease = deferred()
+  const fake = fakeClientFactory({
+    factoryGate: factoryRelease.promise,
+    onFactoryOwned: () => factoryStarted.resolve(),
+  })
+  const runners = new RemoteCodexRunnerPool({
+    codexHome,
+    clientFactory: fake.factory,
+  })
+  const state = await NodeStateStore.open({
+    dataDirectory: join(directory, 'node-state'),
+    displayName: 'Remote ready-loss Node',
+    platform: 'Linux',
+    architecture: 'x64',
+  })
+  const service = new CodeTetherNodeService({
+    state,
+    bindAddress: '127.0.0.1',
+    port: 0,
+    providerDetector: executionDetector(),
+    remoteCodexRunners: runners,
+  })
+  const controller = {
+    controllerId: newControllerId(),
+    tls: await generateMachineTlsIdentity('Ready-loss Controller'),
+  }
+  try {
+    const peer = await pairService(service, controller)
+    const abort = new AbortController()
+    const opening = openRemoteCodexSession({
+      peer,
+      controller,
+      conversationId: 'conv_ready_loss01',
+      projectId: 'proj_ready_loss01',
+      rootPath: project,
+      signal: abort.signal,
+    })
+    await factoryStarted.promise
+    abort.abort()
+    await assert.rejects(
+      opening,
+      (error) =>
+        error.code === 'connection_failed' && error.peerAuthenticated === true,
+    )
+  } finally {
+    factoryRelease.resolve()
+    await service.close().catch(() => undefined)
     await rm(directory, { recursive: true, force: true })
   }
 })
@@ -1380,3 +1586,235 @@ test('duplicate control during streaming does not consume the pending event', as
     await rm(directory, { recursive: true, force: true })
   }
 })
+
+test('authenticated execution heartbeats keep a quiet Provider Turn alive without replay', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'codetether-lease-live-'))
+  const project = join(directory, 'project')
+  const codexHome = join(directory, 'codex-home')
+  await mkdir(project)
+  await mkdir(codexHome)
+  const fake = fakeClientFactory()
+  const runners = new RemoteCodexRunnerPool({
+    codexHome,
+    clientFactory: fake.factory,
+  })
+  const state = await NodeStateStore.open({
+    dataDirectory: join(directory, 'node-state'),
+    displayName: 'Execution lease Node',
+    platform: 'Linux',
+    architecture: 'x64',
+  })
+  const service = new CodeTetherNodeService({
+    state,
+    bindAddress: '127.0.0.1',
+    port: 0,
+    executionSessionLeaseTimeoutMs: 50,
+    providerDetector: executionDetector(),
+    remoteCodexRunners: runners,
+  })
+  const controller = {
+    controllerId: newControllerId(),
+    tls: await generateMachineTlsIdentity('Execution lease Controller'),
+  }
+  let session
+  try {
+    const peer = await pairService(service, controller)
+    session = await openRemoteCodexSession({
+      peer,
+      controller,
+      conversationId: 'conv_execution_lease_live01',
+      projectId: 'proj_execution_lease_live01',
+      rootPath: project,
+      heartbeatIntervalMs: 5,
+      heartbeatTimeoutMs: 20,
+    })
+    const turn = await session.startTurn({
+      actionId: 'act_execution_lease_live01',
+      turnId: 'turn_execution_lease_live01',
+      prompt: 'Remain quiet until the deterministic fixture completes.',
+    })
+    const events = []
+    const collecting = (async () => {
+      for await (const event of turn.events()) events.push(event.event)
+    })()
+    await new Promise((resolve) => setTimeout(resolve, 120))
+    assert.equal(session.closed, false)
+    assert.equal(runners.activeCount, 1)
+    assert.equal(fake.starts, 1)
+    fake.emit(
+      providerEvent('message.completed', {
+        itemId: 'item_remote_a',
+        message: '',
+      }),
+    )
+    fake.emit(providerEvent('turn.completed'))
+    await collecting
+    assert.deepEqual(events, [
+      { type: 'message.completed' },
+      { type: 'turn.completed' },
+    ])
+    await session.close()
+    session = undefined
+    assert.equal(fake.starts, 1)
+    assert.equal(fake.shutdowns, 1)
+  } finally {
+    await session?.close().catch(() => undefined)
+    await service.close().catch(() => undefined)
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('expired authenticated execution lease cleans a blackholed quiet Provider exactly once', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'codetether-lease-expired-'))
+  const project = join(directory, 'project')
+  const codexHome = join(directory, 'codex-home')
+  await mkdir(project)
+  await mkdir(codexHome)
+  const fake = fakeClientFactory()
+  const runners = new RemoteCodexRunnerPool({
+    codexHome,
+    clientFactory: fake.factory,
+  })
+  const state = await NodeStateStore.open({
+    dataDirectory: join(directory, 'node-state'),
+    displayName: 'Expired execution lease Node',
+    platform: 'Linux',
+    architecture: 'x64',
+  })
+  const service = new CodeTetherNodeService({
+    state,
+    bindAddress: '127.0.0.1',
+    port: 0,
+    executionSessionLeaseTimeoutMs: 30,
+    providerDetector: executionDetector(),
+    remoteCodexRunners: runners,
+  })
+  const controller = {
+    controllerId: newControllerId(),
+    tls: await generateMachineTlsIdentity('Expired lease Controller'),
+  }
+  let session
+  try {
+    const peer = await pairService(service, controller)
+    session = await openRemoteCodexSession({
+      peer,
+      controller,
+      conversationId: 'conv_execution_lease_expired01',
+      projectId: 'proj_execution_lease_expired01',
+      rootPath: project,
+      // The first heartbeat is intentionally later than the Node lease.
+      heartbeatIntervalMs: 1_000,
+      heartbeatTimeoutMs: 1_000,
+    })
+    const turn = await session.startTurn({
+      actionId: 'act_execution_lease_expired01',
+      turnId: 'turn_execution_lease_expired01',
+      prompt: 'Remain quiet while the Controller path is blackholed.',
+    })
+    await assert.rejects(async () => {
+      for await (const _event of turn.events()) void _event
+    })
+    await waitForCondition(() => runners.activeCount === 0)
+    assert.equal(session.closed, true)
+    assert.equal(fake.starts, 1)
+    assert.equal(fake.shutdowns, 1)
+    await session.close()
+    session = undefined
+  } finally {
+    await session?.close().catch(() => undefined)
+    await service.close().catch(() => undefined)
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('expired authenticated execution lease cleans a quiet Claude Provider exactly once', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'codetether-claude-lease-'))
+  const project = join(directory, 'project')
+  await mkdir(project)
+  const providerSessionId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+  const completion = deferred()
+  let starts = 0
+  let closes = 0
+  const runners = new RemoteClaudeRunnerPool({
+    runtimeFactory: async ({ cwd }) => ({
+      sessionId: providerSessionId,
+      cwd,
+      subscribeEvents() {
+        return () => undefined
+      },
+      async startTurn() {
+        starts += 1
+        return await completion.promise
+      },
+      async close() {
+        closes += 1
+      },
+    }),
+  })
+  const state = await NodeStateStore.open({
+    dataDirectory: join(directory, 'node-state'),
+    displayName: 'Expired Claude lease Node',
+    platform: 'Linux',
+    architecture: 'x64',
+  })
+  const service = new CodeTetherNodeService({
+    state,
+    bindAddress: '127.0.0.1',
+    port: 0,
+    executionSessionLeaseTimeoutMs: 30,
+    providerDetector: executionDetector({
+      claudeExecutionProbe: async () => ({
+        available: true,
+        version: '2.1.251',
+      }),
+    }),
+    remoteClaudeRunners: runners,
+  })
+  const controller = {
+    controllerId: newControllerId(),
+    tls: await generateMachineTlsIdentity('Expired Claude lease Controller'),
+  }
+  let session
+  try {
+    const peer = await pairService(service, controller)
+    session = await openRemoteClaudeSession({
+      peer,
+      controller,
+      conversationId: 'conv_claude_lease_expired01',
+      projectId: 'proj_claude_lease_expired01',
+      rootPath: project,
+      effort: 'high',
+      // The first heartbeat is intentionally later than the Node lease.
+      heartbeatIntervalMs: 1_000,
+      heartbeatTimeoutMs: 1_000,
+    })
+    const turn = await session.startTurn({
+      actionId: 'act_claude_lease_expired01',
+      turnId: 'turn_claude_lease_expired01',
+      prompt: 'Remain quiet while the Controller path is blackholed.',
+    })
+    await assert.rejects(async () => {
+      for await (const _event of turn.events()) void _event
+    })
+    await waitForCondition(() => runners.activeCount === 0)
+    assert.equal(session.closed, true)
+    assert.equal(starts, 1)
+    assert.equal(closes, 1)
+    await session.close()
+    session = undefined
+  } finally {
+    await session?.close().catch(() => undefined)
+    await service.close().catch(() => undefined)
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+async function waitForCondition(predicate, timeoutMs = 1_000) {
+  const deadline = Date.now() + timeoutMs
+  while (!predicate()) {
+    if (Date.now() >= deadline) {
+      throw new Error('Timed out waiting for deterministic lifecycle state')
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+}

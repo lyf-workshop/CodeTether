@@ -1608,7 +1608,10 @@ test('authenticated execution heartbeats keep a quiet Provider Turn alive withou
     state,
     bindAddress: '127.0.0.1',
     port: 0,
-    executionSessionLeaseTimeoutMs: 50,
+    // Keep this integration fixture comfortably above ordinary CI/WSL timer
+    // jitter while retaining the production ordering: several authenticated
+    // heartbeats must renew the lease before the quiet Turn is completed.
+    executionSessionLeaseTimeoutMs: 500,
     providerDetector: executionDetector(),
     remoteCodexRunners: runners,
   })
@@ -1625,8 +1628,8 @@ test('authenticated execution heartbeats keep a quiet Provider Turn alive withou
       conversationId: 'conv_execution_lease_live01',
       projectId: 'proj_execution_lease_live01',
       rootPath: project,
-      heartbeatIntervalMs: 5,
-      heartbeatTimeoutMs: 20,
+      heartbeatIntervalMs: 50,
+      heartbeatTimeoutMs: 250,
     })
     const turn = await session.startTurn({
       actionId: 'act_execution_lease_live01',
@@ -1637,7 +1640,7 @@ test('authenticated execution heartbeats keep a quiet Provider Turn alive withou
     const collecting = (async () => {
       for await (const event of turn.events()) events.push(event.event)
     })()
-    await new Promise((resolve) => setTimeout(resolve, 120))
+    await new Promise((resolve) => setTimeout(resolve, 1_200))
     assert.equal(session.closed, false)
     assert.equal(runners.activeCount, 1)
     assert.equal(fake.starts, 1)

@@ -735,6 +735,29 @@ test('100 authenticated connection lifecycles return the registry to bounded idl
   })
 })
 
+test('authenticated idle connections outlive the TLS handshake deadline', async () => {
+  await withService(
+    async ({ store, service, tls }) => {
+      const peer = await enrollPeer(
+        service,
+        tls.publicKeySpkiFingerprint,
+        store.createEnrollmentToken('controller'),
+        'controller',
+        generateRelayApplicationIdentity(),
+      )
+      await new Promise((resolve) => setTimeout(resolve, 70))
+      assert.equal(peer.channel.closed, false)
+      assert.equal(service.metrics().authenticatedConnections, 1)
+      await closePeer(peer)
+    },
+    {
+      handshakeTimeoutMs: 40,
+      heartbeatIntervalMs: 100,
+      heartbeatTimeoutMs: 300,
+    },
+  )
+})
+
 test('missed heartbeat closes an authenticated peer without persistent registry growth', async () => {
   await withService(
     async ({ store, service, tls }) => {

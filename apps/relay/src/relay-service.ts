@@ -221,6 +221,7 @@ export class RelayService {
         minVersion: 'TLSv1.3',
         maxVersion: 'TLSv1.3',
         ALPNProtocols: [relayProtocolAlpn],
+        handshakeTimeout: this.#options.handshakeTimeoutMs,
         requestCert: false,
         rejectUnauthorized: false,
       },
@@ -243,9 +244,6 @@ export class RelayService {
       this.#metrics.acceptedConnections += 1
       this.#rawSockets.add(tlsSocket)
       this.#addressCounts.set(address, current + 1)
-      tlsSocket.setTimeout(this.#options.handshakeTimeoutMs, () =>
-        tlsSocket.destroy(),
-      )
       tlsSocket.once('close', () => {
         this.#rawSockets.delete(tlsSocket)
         const remaining = (this.#addressCounts.get(address) ?? 1) - 1

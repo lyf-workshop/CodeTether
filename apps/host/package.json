@@ -25,6 +25,8 @@
     "@codetether/agent-core": "workspace:*",
     "@codetether/client": "workspace:*",
     "@codetether/machine-transport": "workspace:*",
-    "@codetether/protocol": "workspace:*"
+    "@codetether/protocol": "workspace:*",
+    "@codetether/relay-client": "workspace:*",
+    "@codetether/relay-protocol": "workspace:*"
   }
 }

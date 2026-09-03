@@ -65,6 +65,12 @@ importers:
       '@codetether/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
+      '@codetether/relay-client':
+        specifier: workspace:*
+        version: link:../../packages/relay-client
+      '@codetether/relay-protocol':
+        specifier: workspace:*
+        version: link:../../packages/relay-protocol
 
   apps/node:
     dependencies:
@@ -80,6 +86,28 @@ importers:
       '@codetether/machine-transport':
         specifier: workspace:*
         version: link:../../packages/machine-transport
+      '@codetether/relay-client':
+        specifier: workspace:*
+        version: link:../../packages/relay-client
+      '@codetether/relay-protocol':
+        specifier: workspace:*
+        version: link:../../packages/relay-protocol
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
+    devDependencies:
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
+
+  apps/relay:
+    dependencies:
+      '@codetether/relay-protocol':
+        specifier: workspace:*
+        version: link:../../packages/relay-protocol
+      selfsigned:
+        specifier: 5.5.0
+        version: 5.5.0
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -188,6 +216,25 @@ importers:
         version: link:../agent-core
       zod:
         specifier: ^4.4.3
+        version: 4.4.3
+
+  packages/relay-client:
+    dependencies:
+      '@codetether/relay-protocol':
+        specifier: workspace:*
+        version: link:../relay-protocol
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@codetether/machine-transport':
+        specifier: workspace:*
+        version: link:../machine-transport
+
+  packages/relay-protocol:
+    dependencies:
+      zod:
+        specifier: 4.4.3
         version: 4.4.3
 
   packages/ui:

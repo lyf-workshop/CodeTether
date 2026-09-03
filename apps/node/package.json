@@ -16,6 +16,8 @@
     "@codetether/adapter-codex": "workspace:*",
     "@codetether/agent-core": "workspace:*",
     "@codetether/machine-transport": "workspace:*",
+    "@codetether/relay-client": "workspace:*",
+    "@codetether/relay-protocol": "workspace:*",
     "zod": "4.4.3"
   },
   "devDependencies": {

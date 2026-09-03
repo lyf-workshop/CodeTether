@@ -1,0 +1,25 @@
+{
+  "name": "@codetether/relay-client",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit --pretty false",
+    "lint": "eslint .",
+    "test": "pnpm -r --workspace-concurrency=1 --filter @codetether/relay... build && pnpm build && node --test --test-isolation=none test/*.test.mjs"
+  },
+  "dependencies": {
+    "@codetether/relay-protocol": "workspace:*",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@codetether/machine-transport": "workspace:*"
+  }
+}

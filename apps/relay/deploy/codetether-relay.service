@@ -1,0 +1,45 @@
+[Unit]
+Description=CodeTether Internet Relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=codetether-relay
+Group=codetether-relay
+ExecStart=/usr/local/bin/codetether-relay serve --config /etc/codetether-relay/relay.json
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=20s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=codetether-relay
+StateDirectory=codetether-relay
+StateDirectoryMode=0700
+ConfigurationDirectory=codetether-relay
+ConfigurationDirectoryMode=0700
+UMask=0077
+LimitNOFILE=4096
+LogRateLimitIntervalSec=30s
+LogRateLimitBurst=500
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+ReadWritePaths=/var/lib/codetether-relay
+
+[Install]
+WantedBy=multi-user.target

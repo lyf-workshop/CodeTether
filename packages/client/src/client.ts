@@ -11,6 +11,8 @@ import {
   CancelRemoteMachinePairingResponseSchema,
   ConfirmRemoteMachinePairingRequestSchema,
   ConfirmRemoteMachinePairingResponseSchema,
+  ConfigureMachineRelayRequestSchema,
+  ConfigureMachineRelayResponseSchema,
   ApprovalIdSchema,
   ConversationIdSchema,
   ConversationListResponseSchema,
@@ -20,6 +22,10 @@ import {
   CreateConversationResponseSchema,
   CreateProjectRequestSchema,
   CreateProjectResponseSchema,
+  DisconnectMachineRelayRequestSchema,
+  DisconnectMachineRelayResponseSchema,
+  EnrollMachineRelayRequestSchema,
+  EnrollMachineRelayResponseSchema,
   RegisterProjectLocationRequestSchema,
   RegisterProjectLocationResponseSchema,
   RemoveProjectLocationRequestSchema,
@@ -52,6 +58,8 @@ import {
   RenameConversationResponseSchema,
   RetryMachineConnectionRequestSchema,
   RetryMachineConnectionResponseSchema,
+  RetryMachineRelayRequestSchema,
+  RetryMachineRelayResponseSchema,
   SafeErrorEnvelopeSchema,
   StartTurnRequestSchema,
   StartTurnResponseSchema,
@@ -60,6 +68,8 @@ import {
   UpdateMachineConnectionAddressResponseSchema,
   UnpairMachineRequestSchema,
   UnpairMachineResponseSchema,
+  RemoveMachineRelayRequestSchema,
+  RemoveMachineRelayResponseSchema,
   UnarchiveConversationRequestSchema,
   UnarchiveConversationResponseSchema,
   UnpinConversationRequestSchema,
@@ -77,6 +87,8 @@ import {
   type CancelRemoteMachinePairingResponse,
   type ConfirmRemoteMachinePairingRequest,
   type ConfirmRemoteMachinePairingResponse,
+  type ConfigureMachineRelayRequest,
+  type ConfigureMachineRelayResponse,
   type ConversationId,
   type ConversationListResponse,
   type ConversationSearchQuery,
@@ -85,6 +97,10 @@ import {
   type CreateConversationResponse,
   type CreateProjectRequest,
   type CreateProjectResponse,
+  type DisconnectMachineRelayRequest,
+  type DisconnectMachineRelayResponse,
+  type EnrollMachineRelayRequest,
+  type EnrollMachineRelayResponse,
   type RegisterProjectLocationRequest,
   type RegisterProjectLocationResponse,
   type RemoveProjectLocationRequest,
@@ -116,6 +132,8 @@ import {
   type RenameConversationResponse,
   type RetryMachineConnectionRequest,
   type RetryMachineConnectionResponse,
+  type RetryMachineRelayRequest,
+  type RetryMachineRelayResponse,
   type StartTurnRequest,
   type StartTurnResponse,
   type TurnId,
@@ -123,6 +141,8 @@ import {
   type UpdateMachineConnectionAddressResponse,
   type UnpairMachineRequest,
   type UnpairMachineResponse,
+  type RemoveMachineRelayRequest,
+  type RemoveMachineRelayResponse,
   type UnarchiveConversationRequest,
   type UnarchiveConversationResponse,
   type UnpinConversationRequest,
@@ -430,6 +450,116 @@ export class CodeTetherClient {
       request.actionId,
     )
     assertMachineConnectionMutationIdentity(response, machine)
+    return response
+  }
+
+  async configureMachineRelay(
+    machineId: MachineId,
+    input: ConfigureMachineRelayRequest,
+    options: RequestOptions = {},
+  ): Promise<ConfigureMachineRelayResponse> {
+    return await this.#machineRelayMutation(
+      machineId,
+      input,
+      ConfigureMachineRelayRequestSchema,
+      ConfigureMachineRelayResponseSchema,
+      { method: 'PUT', suffix: '' },
+      options,
+    )
+  }
+
+  async enrollMachineRelay(
+    machineId: MachineId,
+    input: EnrollMachineRelayRequest,
+    options: RequestOptions = {},
+  ): Promise<EnrollMachineRelayResponse> {
+    return await this.#machineRelayMutation(
+      machineId,
+      input,
+      EnrollMachineRelayRequestSchema,
+      EnrollMachineRelayResponseSchema,
+      { method: 'POST', suffix: '/enroll' },
+      options,
+    )
+  }
+
+  async retryMachineRelay(
+    machineId: MachineId,
+    input: RetryMachineRelayRequest,
+    options: RequestOptions = {},
+  ): Promise<RetryMachineRelayResponse> {
+    return await this.#machineRelayMutation(
+      machineId,
+      input,
+      RetryMachineRelayRequestSchema,
+      RetryMachineRelayResponseSchema,
+      { method: 'POST', suffix: '/retry' },
+      options,
+    )
+  }
+
+  async disconnectMachineRelay(
+    machineId: MachineId,
+    input: DisconnectMachineRelayRequest,
+    options: RequestOptions = {},
+  ): Promise<DisconnectMachineRelayResponse> {
+    return await this.#machineRelayMutation(
+      machineId,
+      input,
+      DisconnectMachineRelayRequestSchema,
+      DisconnectMachineRelayResponseSchema,
+      { method: 'POST', suffix: '/disconnect' },
+      options,
+    )
+  }
+
+  async removeMachineRelay(
+    machineId: MachineId,
+    input: RemoveMachineRelayRequest,
+    options: RequestOptions = {},
+  ): Promise<RemoveMachineRelayResponse> {
+    return await this.#machineRelayMutation(
+      machineId,
+      input,
+      RemoveMachineRelayRequestSchema,
+      RemoveMachineRelayResponseSchema,
+      { method: 'DELETE', suffix: '' },
+      options,
+    )
+  }
+
+  async #machineRelayMutation<
+    TRequest extends { readonly actionId: ActionId },
+    TResponse extends {
+      readonly data: { readonly machineId: MachineId }
+    },
+  >(
+    machineId: MachineId,
+    input: TRequest,
+    requestSchema: RuntimeSchema<TRequest>,
+    responseSchema: RuntimeSchema<TResponse>,
+    route: {
+      readonly method: 'POST' | 'PUT' | 'DELETE'
+      readonly suffix: string
+    },
+    options: RequestOptions,
+  ): Promise<TResponse> {
+    const machine = parseProtocol(
+      MachineIdSchema,
+      machineId,
+      'machine-relay id',
+    )
+    const request = parseProtocol(requestSchema, input, 'machine-relay request')
+    const response = await this.#request(
+      `/api/v1/machines/${encodeURIComponent(machine)}/relay${route.suffix}`,
+      responseSchema,
+      { ...jsonRequest(request, options.signal), method: route.method },
+      request.actionId,
+    )
+    assertProtocolIdentity(
+      response.data.machineId === machine,
+      'Relay response does not match the requested Machine',
+    )
     return response
   }
 

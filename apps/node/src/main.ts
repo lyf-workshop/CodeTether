@@ -5,11 +5,13 @@ import { pathToFileURL } from 'node:url'
 import { formatPairingCode } from '@codetether/machine-transport'
 
 import { CodeTetherNodeService } from './node-service.js'
+import { NodeRelayManager } from './node-relay-manager.js'
 import {
   isProviderGuardianInvocation,
   runProviderProcessGuardian,
 } from './provider-process-guardian.js'
 import { NodeStateStore } from './state-store.js'
+import { readNodeRelayConfiguration } from './relay-state.js'
 
 declare const __CODETETHER_NODE_VERSION__: string | undefined
 
@@ -81,17 +83,41 @@ export async function runNode(
     architecture: arch(),
   })
   let service: CodeTetherNodeService | undefined
+  let relayManager: NodeRelayManager | undefined
+  let relayConfigurationInvalid = false
   try {
-    service = new CodeTetherNodeService({
-      state,
-      bindAddress: options.bindAddress,
-      port: options.port,
-    })
-    const address = await service.listen()
     const buildIdentity =
       typeof __CODETETHER_NODE_VERSION__ === 'string'
         ? __CODETETHER_NODE_VERSION__
         : 'development'
+    try {
+      const relayConfiguration = await readNodeRelayConfiguration(
+        options.dataDirectory,
+      )
+      if (relayConfiguration?.enabled === true) {
+        relayManager = new NodeRelayManager({
+          state,
+          configuration: relayConfiguration,
+          clientBuildIdentity: buildIdentity,
+          onStatus: (observation) =>
+            writeStatus(options.json, {
+              event: 'relay.status',
+              ...observation,
+            }),
+        })
+      }
+    } catch {
+      // Relay is additive. A malformed Relay configuration fails that control
+      // connection closed without disabling the direct Node listener.
+      relayConfigurationInvalid = true
+    }
+    service = new CodeTetherNodeService({
+      state,
+      bindAddress: options.bindAddress,
+      port: options.port,
+      ...(relayManager === undefined ? {} : { relayControl: relayManager }),
+    })
+    const address = await service.listen()
     writeStatus(options.json, {
       event: 'node.ready',
       buildIdentity,
@@ -104,6 +130,13 @@ export async function runNode(
       port: address.port,
       trustedControllerCount: state.trustedControllerCount,
     })
+    if (relayConfigurationInvalid) {
+      writeStatus(options.json, {
+        event: 'relay.status',
+        status: 'configuration_invalid',
+        observedAt: new Date().toISOString(),
+      })
+    }
     if (options.pairing) {
       const pairing = await service.enablePairing()
       writeStatus(options.json, {
@@ -112,12 +145,13 @@ export async function runNode(
         expiresAt: pairing.expiresAt.toISOString(),
       })
     }
-    service.on('paired', () =>
+    service.on('paired', () => {
+      relayManager?.synchronizeMachineTrust()
       writeStatus(options.json, {
         event: 'pairing.completed',
         machineId: state.machine.machineId,
-      }),
-    )
+      })
+    })
     service.on('pairingVerification', (value: unknown) => {
       const event = value as { readonly verificationCode: string }
       writeStatus(options.json, {
@@ -125,12 +159,14 @@ export async function runNode(
         verificationCode: formatPairingCode(event.verificationCode),
       })
     })
-    service.on('unpaired', () =>
+    service.on('unpaired', () => {
+      relayManager?.synchronizeMachineTrust()
       writeStatus(options.json, {
         event: 'trust.revoked',
         machineId: state.machine.machineId,
-      }),
-    )
+      })
+    })
+    relayManager?.start()
     return service
   } catch (error) {
     try {
@@ -185,6 +221,8 @@ function writeStatus(json: boolean, value: Record<string, unknown>): void {
     process.stdout.write(
       `Verify this code is also shown by CodeTether: ${String(value.verificationCode)}\n`,
     )
+  } else if (value.event === 'relay.status') {
+    process.stdout.write(`Internet Relay: ${String(value.status)}\n`)
   }
 }
 
@@ -202,7 +240,7 @@ function helpText(): string {
     '  --json             Emit bounded machine-readable lifecycle lines',
     '  --help             Show this help',
     '',
-    'The Node exposes identity, pairing, liveness, bounded Provider discovery, and trust revocation only.',
+    'The Node exposes identity, pairing, liveness, bounded Provider discovery, trust revocation, and optional outbound Relay presence only.',
     '',
   ].join('\n')
 }

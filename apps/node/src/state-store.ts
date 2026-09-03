@@ -197,6 +197,16 @@ export class NodeStateStore {
     return this.#controllers.length
   }
 
+  /**
+   * Returns the one durable Controller trust record without exposing mutable
+   * store state. Relay presence may attest only this already-paired
+   * relationship; it cannot create or replace Machine trust.
+   */
+  trustedController(): TrustedController | undefined {
+    const [controller] = this.#controllers
+    return controller === undefined ? undefined : { ...controller }
+  }
+
   controllerByFingerprint(
     fingerprint: PublicKeyFingerprint,
   ): TrustedController | undefined {

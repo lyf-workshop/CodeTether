@@ -415,6 +415,13 @@ export function mutationErrorMessage(error: unknown, fallback: string): string {
     case 'machine_unreachable':
     case 'machine_protocol_incompatible':
     case 'machine_connection_failed':
+    case 'relay_not_configured':
+    case 'relay_unreachable':
+    case 'relay_authentication_failed':
+    case 'relay_identity_mismatch':
+    case 'relay_protocol_incompatible':
+    case 'relay_revoked':
+    case 'relay_rate_limited':
     case 'internal':
       return `CodeTether 未能${fallback}。`
   }

@@ -1028,7 +1028,7 @@ Exit gate:
 
 ## Phase 6D — Provider Failure Diagnostics & Recovery UX
 
-**Status:** current approved implementation scope; not accepted, frozen, or declared ready.
+**Status:** accepted and frozen at `cb2c412`.
 
 **Goal:** make failures from the frozen local and remote Codex/Claude execution paths immediately understandable and actionable through one safe durable diagnostic model, while preserving truthful uncertainty, immutable Conversation ownership, and the Phase 6C.4 no-replay boundary.
 
@@ -1056,22 +1056,50 @@ Exit gate:
 - Provider login/OAuth or credential entry/copying, quota purchase, account/Provider/Machine switching, automatic fallback, automatic retry or Prompt replay, installation/update automation, raw Provider log viewer, support-bundle or observability/telemetry platform, and continuous Provider monitoring.
 - New Codex or Claude capabilities, Claude Edit/Write/shell/Diff/Approval/interrupt/model selection, another Provider, generic RPC/process/filesystem/Terminal input, Project relocation/browser, synchronization, Relay, public-Internet transport, Mobile, Push, or any Phase 7+ work.
 
+### Acceptance boundary
+
+- Owner review accepted upstream classifiers, canonical durability, installation/health separation, current-versus-historical truth, safe explicit new-Turn recovery, eligibility explanations, Attention/notification deduplication, accessibility/responsiveness, malicious-payload privacy tests, REAL failure/recovery evidence, local/remote Provider and Phase 6C.4 regressions, package/install/cleanup checks, all repository quality gates, matching clean build identity, and a clean working tree. The implementation and evidence are frozen at `cb2c412`.
+
+## Phase 7A — Internet Relay Architecture Foundation
+
+**Status:** current approved implementation scope; not accepted, frozen, or declared ready.
+
+**Goal:** establish a real public Internet rendezvous/control plane where an already-paired Controller and Node behind unrelated networks connect outbound, authenticate durable cryptographic identities, and expose authorized presence without forwarding any Agent or product execution payload.
+
+### In scope
+
+- A standalone production CodeTether Relay service with a random durable P-256 application identity independent of IP, hostname, domain, TLS certificate, Alibaba instance identity, or deployment path. Identity replacement is explicit; restart, address change, certificate renewal, and state-preserving upgrade retain the same fingerprint.
+- A strict versioned `packages/relay-protocol` control union with explicit bounds for frames, identifiers, strings, timeouts, pending messages, and connection metadata. Its only semantic families are enrollment, challenge/authentication, heartbeat/liveness, presence, authorized rendezvous, revocation, graceful close, and controlled errors.
+- Outbound-only persistent TLS connections from Host/Desktop as Controller and from Node. Web remains a Protocol v1 client of the local Host and never owns Relay sockets, enrollment tokens, private keys, challenges, or peer authorization.
+- Reuse of the Node's existing durable identity and the existing per-Machine Controller identity created during secure pairing. Relay enrollment does not create a new Machine identity, product account, or wildcard Controller authority.
+- Host migration 014 (`relay_controller_configuration`) stores one private bounded Relay configuration for each already-trusted remote Machine: endpoint host/port, `public_ca | pinned_identity` transport mode, pinned Relay identity fingerprint, optional safe label, enablement/enrollment state, and lifecycle timestamps. It stores no enrollment token, private key, challenge, live connection epoch, presence history, or Agent/product data.
+- Random high-entropy, role-scoped, expiring, one-time enrollment tokens stored only as bounded non-reusable verification metadata. Atomic consumption makes simultaneous use exactly-once; expiry, replay, wrong role, and identity mismatch fail closed.
+- Proof-of-possession reconnect using random short-lived one-use connection-bound challenges. The transcript binds Relay, peer identity, immutable role, protocol, and connection context. Recorded challenge/signature pairs cannot authenticate a future connection.
+- One deterministic current connection epoch per enrolled identity. The latest successfully authenticated connection replaces and invalidates its predecessor; stale sockets and delayed heartbeat/rendezvous frames cannot mutate current state.
+- Bounded heartbeat and truthful online/offline presence, coalesced exponential reconnect backoff with jitter, no read-created worker, no IP-based identity, and no inbound Controller/Node public port or router configuration.
+- Privacy-minimized rendezvous authorization. A Node authors a bounded reciprocal grant for the exact Controller fingerprint already trusted through Machine pairing. Relay accepts it only in the Node-signed enrollment transcript or from that Node's exact current authenticated connection epoch. Controller lookup is additionally limited to its local trusted Machine. Sharing a Relay enrollment alone never grants discovery or control; Relay provides no global directory or peer search.
+- Separate Relay revocation and Machine Unpair semantics. Relay revocation disconnects and blocks that Relay identity only; it neither deletes nor creates Controller ↔ Node trust. Returning after revocation requires explicit re-enrollment of the same identity and immutable role with a fresh role-scoped one-time token; no old token or revoked enrollment is silently reused.
+- A separate minimal Relay SQLite registry in a restricted state directory. Durable data is limited to Relay identity, enrolled public peer identity/fingerprint, immutable role, revocation, reciprocal authorization grant, token digest/scope/expiry/consumption metadata, schema/protocol version, and safe timestamps. Presence, epochs, challenges, sockets, and queues remain ephemeral.
+- Mandatory TLS with normal CA/hostname verification for a public domain plus independently pinned Relay application identity. A secure no-domain/development path explicitly pins both transport and application identities; it may bypass public-CA chain validation only to enforce the configured transport SPKI and cannot skip identity verification or use plaintext. Intentional endpoint change preserves enrollment only when the same Relay identity verifies.
+- Bounded server resources and abuse resistance: maximum frame and connection counts, one current connection per peer, auth/handshake/heartbeat deadlines, bounded pending control queues, enrollment/auth/malformed-frame rate limits, safe logs, minimal health/readiness, private operational metrics, and bounded graceful SIGTERM shutdown.
+- Narrow Phase 6D-integrated diagnostics and UI for not configured, enrollment required, connected, reconnecting, offline/unreachable, authentication failure, identity mismatch, revoked, rate limited, incompatible protocol, and authorized Node online/offline. Every surface states that Internet execution through Relay is not enabled. Validation covers keyboard-accessible enrollment/status/error behavior, cleared secret input and focus recovery, non-color-only status, and responsive 1440 × 900 and 1100 × 700 layouts.
+- A standalone production Linux artifact and documented service lifecycle, explicit state/configuration directories and permissions, TLS operation, enrollment/revocation, health/logs, restart, upgrade, identity/registry backup and restore, and minimum public inbound TCP 443 policy.
+- Automated security/lifecycle validation, 100 connect/auth/disconnect cycles, multiple simulated Controllers/Nodes without a directory, exact restart/hard-failure recovery, a 30-minute resource soak, direct execution regression while Relay is online and offline, and privacy-classified evidence.
+- REAL deployment to the Owner-prepared Alibaba Cloud server when authorized access is available: production service, public TLS, outbound Controller and Node enrollment/authentication, authorized presence, peer/Relay/Desktop/Node restart, exact hard Relay failure, resource soak, direct-execution isolation, and security-group validation.
+
+### Out of scope
+
+- Prompt, Conversation, Agent, Tool, Provider, Project, Project Location, filesystem, shell, Terminal, Diff, Approval, or arbitrary byte payload forwarding through Relay.
+- Remote Codex or Claude execution over Relay, any execution routing/fallback change, generic TCP/WebSocket proxy, SSH, VPN integration, NAT traversal or hole punching, STUN, TURN, WebRTC, UPnP, port forwarding, Relay execution tunnel, or E2E execution-payload design.
+- Accounts, arbitrary users, peer directory/search, teams, billing, cloud control plane, Mobile, Push, multi-region, Relay clustering/failover, additional Providers, remote Terminal/files, or any Phase 7B+ behavior.
+- Any change to frozen direct Machine trust, Project Location, Provider capability, execution ownership, no-replay, crash-containment, backpressure, diagnostics, Search, organization, Attention, or Desktop lifecycle semantics.
+
 ### Exit gate
 
-- Upstream classifiers, canonical durability, installation/health separation, current-versus-historical truth, safe explicit new-Turn recovery, eligibility explanations, Attention/notification deduplication, accessibility/responsiveness, malicious-payload privacy tests, REAL failure/recovery evidence, local/remote Provider and Phase 6C.4 regressions, package/install/cleanup checks, all repository quality gates, matching clean build identity, and a clean working tree must pass. Until that evidence is complete and Owner review occurs, Phase 6D is not accepted, frozen, or ready.
-
-## Phase 7 — Remote LAN / Tailscale
-
-**Goal:** securely monitor and control a machine host from another device over a user-managed trusted network.
-
-Planned outcomes:
-
-- Authenticated and encrypted remote client/host connection.
-- LAN and Tailscale-style discovery/configuration guidance.
-- Reconnect, event catch-up, command authorization, and audit behavior.
-- Remote monitor, approve, reply, interrupt, and resume flows.
-
-Exit gate: a remote web/mobile client can safely operate the supported loop without a public cloud relay.
+- A production Relay with persistent cryptographic identity and minimal durable registry must authenticate outbound Controller and Node peers after one-time enrollment, reject token/challenge replay and unauthorized rendezvous, enforce one current epoch, publish truthful bounded presence, survive graceful/hard restart without re-enrollment, fail closed on Relay/version/identity mismatch, remain bounded under the full automated stress/security matrix, and expose no Agent/product data path.
+- REAL direct Remote Codex and restricted Remote Claude must remain on the direct Machine transport while Relay is connected and must remain functional when Relay is offline. Relay traffic/evidence must prove that no execution payload reached or could be represented by Relay.
+- Production Relay artifact, service/restart/backup/upgrade smoke, all workspace/Desktop/Node/package gates, 30-minute soak, zero local test residue, clean deployed state, matching clean build identities, and a clean worktree must pass.
+- If authorized Alibaba access is available, the full public Internet deployment matrix is mandatory. If it is unavailable, evidence must say `OWNER ACTION REQUIRED FOR REAL ALIBABA DEPLOYMENT` and Phase 7A remains not ready; local/staging results cannot substitute for or fabricate this criterion.
 
 ## Phase 8 — OpenCode
 
@@ -1103,4 +1131,4 @@ Exit gate: core mobile tasks are fast, legible, safe, resilient, and validated o
 - Team collaboration.
 - Enterprise administration and policy.
 - Cross-agent conversation handoff.
-- Public cloud relay.
+- Relay execution or Agent/product payload transport beyond the Phase 7A control-plane foundation.

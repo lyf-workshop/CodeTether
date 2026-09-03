@@ -407,6 +407,13 @@ export function machineErrorMessage(
     case 'project_location_has_conversations':
     case 'project_location_local_required':
     case 'conversation_archived':
+    case 'relay_not_configured':
+    case 'relay_unreachable':
+    case 'relay_authentication_failed':
+    case 'relay_identity_mismatch':
+    case 'relay_protocol_incompatible':
+    case 'relay_revoked':
+    case 'relay_rate_limited':
       return operation === 'unpair'
         ? 'CodeTether 未能取消机器配对。'
         : operation === 'refresh-providers'

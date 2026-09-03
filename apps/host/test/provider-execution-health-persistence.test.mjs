@@ -22,7 +22,8 @@ test('migration 013 adds Provider execution health transactionally', () => {
 
     const downgrade = new DatabaseSync(databasePath)
     downgrade.exec(`
-      DELETE FROM schema_migrations WHERE version = 13;
+      DELETE FROM schema_migrations WHERE version IN (13, 14);
+      DROP TABLE machine_relay_configurations;
       DROP TABLE machine_provider_execution_health;
       CREATE TABLE machine_provider_execution_health (
         blocked INTEGER
@@ -48,7 +49,7 @@ test('migration 013 adds Provider execution health transactionally', () => {
 
     const migrated = ConversationStore.open({ databasePath })
     assert.equal(migrated.schemaVersion, currentSchemaVersion)
-    assert.equal(currentSchemaVersion, 13)
+    assert.equal(currentSchemaVersion, 14)
     const machineId = migrated.listMachines()[0].machineId
     assert.deepEqual(migrated.listProviderExecutionHealth(machineId), [])
     migrated.close()

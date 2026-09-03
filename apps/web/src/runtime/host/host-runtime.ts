@@ -64,6 +64,11 @@ import {
   type MachineMutationClient,
 } from './machine-actions.js'
 import {
+  RelayActions,
+  type ConfigureRelayInput,
+  type RelayMutationClient,
+} from './relay-actions.js'
+import {
   AttentionActions,
   type AttentionMutationClient,
 } from './attention-actions.js'
@@ -88,6 +93,7 @@ export interface HostRuntimeClient
     ProjectReadClient,
     MachineReadClient,
     MachineMutationClient,
+    RelayMutationClient,
     ProjectMutationClient,
     ConversationDetailReadClient,
     ConversationListReadClient,
@@ -143,6 +149,7 @@ export class HostRuntime {
   readonly #actions: LiveConversationActions
   readonly #projectActions: ProjectActions
   readonly #machineActions: MachineActions
+  readonly #relayActions: RelayActions
   readonly #newConversationActions: NewConversationActions
   readonly #attentionActions: AttentionActions
   readonly #conversationOrganizationActions: ConversationOrganizationActions
@@ -173,6 +180,7 @@ export class HostRuntime {
       this.#queryClient,
     )
     this.#machineActions = new MachineActions(this.#client, this.#queryClient)
+    this.#relayActions = new RelayActions(this.#client, this.#queryClient)
     this.#newConversationActions = new NewConversationActions(this.#client)
     this.#attentionActions = new AttentionActions(this.#client)
     this.#conversationOrganizationActions = new ConversationOrganizationActions(
@@ -311,6 +319,32 @@ export class HostRuntime {
       machineId,
       address,
     )
+  }
+
+  configureMachineRelay(
+    machineId: Parameters<RelayActions['configure']>[0],
+    input: ConfigureRelayInput,
+  ) {
+    return this.#relayActions.configure(machineId, input)
+  }
+
+  enrollMachineRelay(
+    machineId: Parameters<RelayActions['enroll']>[0],
+    enrollmentToken: Parameters<RelayActions['enroll']>[1],
+  ) {
+    return this.#relayActions.enroll(machineId, enrollmentToken)
+  }
+
+  retryMachineRelay(machineId: Parameters<RelayActions['retry']>[0]) {
+    return this.#relayActions.retry(machineId)
+  }
+
+  disconnectMachineRelay(machineId: Parameters<RelayActions['disconnect']>[0]) {
+    return this.#relayActions.disconnect(machineId)
+  }
+
+  removeMachineRelay(machineId: Parameters<RelayActions['remove']>[0]) {
+    return this.#relayActions.remove(machineId)
   }
 
   getProject(

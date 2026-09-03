@@ -32,6 +32,7 @@ import {
   machineWireLimits,
 } from './machines.js'
 import { ProviderDescriptorSchema, ProviderIdSchema } from './providers.js'
+import { RelayMachineConnectivitySchema } from './relay.js'
 
 const CreateConversationByProjectRequestSchema = z
   .object({
@@ -157,6 +158,7 @@ export const GetMachineResponseSchema = z
       .max(machineWireLimits.recentConversations),
     connection: RemoteMachineConnectionSchema.optional(),
     providerDiscovery: MachineProviderDiscoverySchema.optional(),
+    relay: RelayMachineConnectivitySchema.optional(),
   })
   .strict()
   .superRefine((response, context) => {
@@ -214,6 +216,13 @@ export const GetMachineResponseSchema = z
         message:
           'Current remote Provider discovery requires an authenticated online Machine',
         path: ['providerDiscovery', 'state'],
+      })
+    }
+    if (response.machine.kind === 'local' && response.relay !== undefined) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Relay connectivity must be present only for remote Machines',
+        path: ['relay'],
       })
     }
     const providerIds = new Set<string>()

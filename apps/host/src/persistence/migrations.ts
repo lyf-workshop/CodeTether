@@ -118,6 +118,11 @@ const migrations: readonly Migration[] = [
     name: 'provider_execution_health',
     up: migrateProviderExecutionHealth,
   },
+  {
+    version: 14,
+    name: 'relay_controller_configuration',
+    up: migrateRelayControllerConfiguration,
+  },
 ]
 
 export const currentSchemaVersion = migrations.at(-1)?.version ?? 0
@@ -1918,6 +1923,61 @@ function migrateProviderExecutionHealth(database: DatabaseSync): void {
         REFERENCES machines(machine_id)
         ON DELETE CASCADE
     ) STRICT;
+  `)
+}
+
+/**
+ * Stores only bounded local Controller Relay configuration. Existing
+ * per-Machine Controller credentials remain owner-private files, enrollment
+ * tokens are never persisted, and live presence/connection epochs remain
+ * ephemeral in the Relay coordinator.
+ */
+function migrateRelayControllerConfiguration(database: DatabaseSync): void {
+  database.exec(`
+    CREATE TABLE machine_relay_configurations (
+      machine_id TEXT PRIMARY KEY,
+      endpoint_host TEXT NOT NULL
+        CHECK (
+          length(endpoint_host) BETWEEN 1 AND 253 AND
+          endpoint_host = trim(endpoint_host) AND
+          instr(endpoint_host, char(0)) = 0
+        ),
+      endpoint_port INTEGER NOT NULL
+        CHECK (endpoint_port BETWEEN 1 AND 65535),
+      transport_security TEXT NOT NULL
+        CHECK (transport_security IN ('public_ca', 'pinned_identity')),
+      relay_identity_fingerprint TEXT NOT NULL
+        CHECK (
+          length(relay_identity_fingerprint) = 43 AND
+          relay_identity_fingerprint = trim(relay_identity_fingerprint)
+        ),
+      display_label TEXT
+        CHECK (
+          display_label IS NULL OR (
+            length(display_label) BETWEEN 1 AND 120 AND
+            display_label = trim(display_label) AND
+            instr(display_label, char(0)) = 0
+          )
+        ),
+      enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+      enrollment_state TEXT NOT NULL
+        CHECK (enrollment_state IN ('required', 'enrolled', 'revoked')),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      enrolled_at TEXT,
+      last_connected_at TEXT,
+      last_attempt_at TEXT,
+      CHECK (
+        (enrollment_state = 'enrolled' AND enrolled_at IS NOT NULL) OR
+        (enrollment_state != 'enrolled' AND enrolled_at IS NULL)
+      ),
+      FOREIGN KEY (machine_id)
+        REFERENCES trusted_machine_peers(machine_id)
+        ON DELETE CASCADE
+    ) STRICT;
+
+    CREATE INDEX idx_machine_relay_enabled
+      ON machine_relay_configurations(enabled, updated_at, machine_id);
   `)
 }
 

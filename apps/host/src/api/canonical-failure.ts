@@ -127,6 +127,20 @@ export function safeFailureMessage(
       return 'The remote transport could not be authenticated'
     case 'reconnecting':
       return 'The remote Machine is reconnecting'
+    case 'relay_not_configured':
+      return 'Internet Relay is not configured'
+    case 'relay_unreachable':
+      return 'Internet Relay is temporarily unreachable'
+    case 'relay_authentication_failed':
+      return 'Internet Relay authentication failed'
+    case 'relay_identity_mismatch':
+      return 'Internet Relay identity could not be verified'
+    case 'relay_protocol_incompatible':
+      return 'Internet Relay protocol version is incompatible'
+    case 'relay_revoked':
+      return 'This peer has been revoked by the Internet Relay'
+    case 'relay_rate_limited':
+      return 'Internet Relay is temporarily rate limiting this peer'
     case 'provider_error':
       return `${name} execution failed`
     case 'runtime_error':
@@ -185,6 +199,20 @@ function hostErrorCode(reason: CanonicalFailureReason): HostErrorCode {
       return 'runtime_unavailable'
     case 'conversation_busy':
       return 'conflict'
+    case 'relay_not_configured':
+      return 'relay_not_configured'
+    case 'relay_unreachable':
+      return 'relay_unreachable'
+    case 'relay_authentication_failed':
+      return 'relay_authentication_failed'
+    case 'relay_identity_mismatch':
+      return 'relay_identity_mismatch'
+    case 'relay_protocol_incompatible':
+      return 'relay_protocol_incompatible'
+    case 'relay_revoked':
+      return 'relay_revoked'
+    case 'relay_rate_limited':
+      return 'relay_rate_limited'
     case 'provider_misconfigured':
     case 'provider_service_unavailable':
     case 'provider_crashed':

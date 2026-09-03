@@ -1,0 +1,16 @@
+{
+  "stateDirectory": "/var/lib/codetether-relay",
+  "listen": {
+    "host": "0.0.0.0",
+    "port": 443
+  },
+  "management": {
+    "host": "127.0.0.1",
+    "port": 9443
+  },
+  "tls": {
+    "mode": "public_ca",
+    "certificatePath": "/etc/codetether-relay/fullchain.pem",
+    "privateKeyPath": "/etc/codetether-relay/privkey.pem"
+  }
+}

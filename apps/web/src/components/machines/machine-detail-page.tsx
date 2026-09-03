@@ -21,6 +21,7 @@ import {
 } from '@codetether/ui'
 import {
   MachineIdSchema,
+  type GetMachineResponse,
   type MachineId,
   type MachineProviderDiscovery,
   type ProviderDescriptor,
@@ -44,6 +45,7 @@ import {
 import { formatConversationActivity } from '../conversations/conversation-list-model'
 import { MachinesErrorState, MachinesLoadingState } from './machine-page-states'
 import { MachineProjectsSection } from './machine-projects-section'
+import { MachineRelaySection } from './machine-relay-section'
 import {
   machineArchitectureLabel,
   formatMachineLastSeen,
@@ -130,6 +132,7 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
         providerDiscovery={machineQuery.data.providerDiscovery}
         providers={machineQuery.data.providers}
         projects={machineQuery.data.projects}
+        relay={machineQuery.data.relay}
         onUnpair={() => setUnpairOpen(true)}
         unpairOpen={unpairOpen}
         onUnpairOpenChange={setUnpairOpen}
@@ -361,6 +364,7 @@ interface RemoteMachineDetailProps {
   providerDiscovery: MachineProviderDiscovery | undefined
   providers: readonly ProviderDescriptor[]
   projects: readonly ProjectRecord[]
+  relay: GetMachineResponse['relay']
   onUnpair: () => void
   onUnpairOpenChange: (open: boolean) => void
   unpairOpen: boolean
@@ -373,6 +377,7 @@ function RemoteMachineDetail({
   providerDiscovery,
   providers,
   projects,
+  relay,
   onUnpair,
   onUnpairOpenChange,
   unpairOpen,
@@ -541,6 +546,12 @@ function RemoteMachineDetail({
           ) : null}
         </section>
       </div>
+
+      <MachineRelaySection
+        hostReady={hostReadyForConnectionAction}
+        machine={machine}
+        relay={relay}
+      />
 
       <RemoteMachineProvidersSection
         connection={connection}

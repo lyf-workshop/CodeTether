@@ -196,6 +196,41 @@ const failureReasonCopy = {
     cause: 'CodeTether 正在恢复与执行机器的安全连接。',
     guidance: '请等待连接状态重新验证。',
   },
+  relay_not_configured: {
+    title: 'Internet Relay 尚未配置',
+    cause: '这台 Machine 尚未配置用于互联网连通性的 CodeTether Relay。',
+    guidance: '请在 Machine 详情中配置并确认 Relay 身份。',
+  },
+  relay_unreachable: {
+    title: 'Internet Relay 暂时无法连接',
+    cause: 'CodeTether 当前无法建立到已配置 Relay 的安全连接。',
+    guidance: '直接局域网功能不受影响；CodeTether 将按有界退避继续重连。',
+  },
+  relay_authentication_failed: {
+    title: 'Internet Relay 验证失败',
+    cause: 'Relay 无法验证这个已注册的 CodeTether 身份。',
+    guidance: '请在 Machine 详情中检查注册状态；不要绕过身份验证。',
+  },
+  relay_identity_mismatch: {
+    title: 'Internet Relay 身份不匹配',
+    cause: '端点返回的 Relay 身份与已确认的身份不一致。',
+    guidance: 'CodeTether 已拒绝连接。请先核实 Relay 身份，再明确更新配置。',
+  },
+  relay_protocol_incompatible: {
+    title: 'Internet Relay 版本不兼容',
+    cause: 'Relay 控制协议与当前 CodeTether 版本不兼容。',
+    guidance: '请升级 Relay 或 CodeTether 后重新连接。',
+  },
+  relay_revoked: {
+    title: 'Internet Relay 注册已撤销',
+    cause: 'Relay 已撤销这个基础设施身份的连接权限。',
+    guidance: 'Machine trust 未被修改；如需恢复，请使用新的单次注册流程。',
+  },
+  relay_rate_limited: {
+    title: 'Internet Relay 暂时限制连接',
+    cause: 'Relay 已暂时限制新的连接或验证尝试。',
+    guidance: '请稍后重试；不要重复快速提交注册或连接请求。',
+  },
   provider_error: {
     title: '智能体执行失败',
     cause: '智能体未能完成本轮工作。',
@@ -219,6 +254,7 @@ const sourceLabels = {
   transport: '安全连接',
   project: '项目位置',
   runtime: 'CodeTether 运行时',
+  relay: 'Internet Relay',
 } as const satisfies Record<CanonicalFailureSource, string>
 
 const replayUnsafeReasons = new Set<CanonicalFailureReason>([

@@ -93,6 +93,8 @@ export interface CodeTetherNodeOptions {
   readonly state: NodeStateStore
   readonly bindAddress: string
   readonly port: number
+  /** Outbound Relay control lifecycle only; it has no execution methods. */
+  readonly relayControl?: { close(): Promise<void> }
   readonly authenticatedIdleTimeoutMs?: number
   /** Internal test seam; production uses the fixed execution-session lease. */
   readonly executionSessionLeaseTimeoutMs?: number
@@ -121,6 +123,7 @@ export class CodeTetherNodeService extends EventEmitter {
   readonly #providerDetector: RemoteProviderDetector
   readonly #remoteCodexRunners: RemoteCodexRunnerPool
   readonly #remoteClaudeRunners: RemoteClaudeRunnerPool
+  readonly #relayControl: { close(): Promise<void> } | undefined
   #server: Server | undefined
   #closing = false
   #closePromise: Promise<void> | undefined
@@ -159,6 +162,7 @@ export class CodeTetherNodeService extends EventEmitter {
       options.remoteCodexRunners ?? new RemoteCodexRunnerPool()
     this.#remoteClaudeRunners =
       options.remoteClaudeRunners ?? new RemoteClaudeRunnerPool()
+    this.#relayControl = options.relayControl
     this.pairing = new PairingMode(
       options.state.machine,
       options.state.identity.publicKeyFingerprint,
@@ -248,6 +252,10 @@ export class CodeTetherNodeService extends EventEmitter {
           }
         })
       })
+    }
+    const relayControl = this.#relayControl
+    if (relayControl !== undefined) {
+      await attempt(async () => await relayControl.close())
     }
     await attempt(async () => await this.#providerDetector.close())
     await attempt(async () => await this.#remoteCodexRunners.close())

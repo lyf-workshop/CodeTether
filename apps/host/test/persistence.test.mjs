@@ -90,7 +90,8 @@ test('migration 012 adds durable Turn start actions transactionally', () => {
 
     const downgrade = new DatabaseSync(databasePath)
     downgrade.exec(`
-      DELETE FROM schema_migrations WHERE version IN (12, 13);
+      DELETE FROM schema_migrations WHERE version IN (12, 13, 14);
+      DROP TABLE machine_relay_configurations;
       DROP TABLE machine_provider_execution_health;
       DROP TABLE turn_start_actions;
       CREATE INDEX idx_turn_start_actions_created ON turns(started_at);
@@ -126,7 +127,7 @@ test('migration 012 adds durable Turn start actions transactionally', () => {
     rolledBack.close()
 
     const migrated = ConversationStore.open({ databasePath })
-    assert.equal(migrated.schemaVersion, 13)
+    assert.equal(migrated.schemaVersion, 14)
     assert.equal(
       migrated.getTurnForStartAction('act_migration_start01'),
       undefined,

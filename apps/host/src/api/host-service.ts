@@ -18,6 +18,9 @@ import {
   ConversationSearchQuerySchema,
   ConversationSearchResponseSchema,
   ConversationSummarySchema,
+  ConfigureMachineRelayResponseSchema,
+  DisconnectMachineRelayResponseSchema,
+  EnrollMachineRelayResponseSchema,
   EpochIdSchema,
   formatLastEventId,
   GetConversationResponseSchema,
@@ -26,6 +29,8 @@ import {
   HostEventEnvelopeSchema,
   ListAttentionQuerySchema,
   ListMachinesResponseSchema,
+  RemoveMachineRelayResponseSchema,
+  RetryMachineRelayResponseSchema,
   ProjectIdSchema,
   MachineIdSchema,
   MachinePairingAttemptIdSchema,
@@ -49,12 +54,18 @@ import {
   type ConversationSearchResponse,
   type ConversationRuntimeSnapshot,
   type ConversationSummary,
+  type ConfigureMachineRelayRequest,
+  type ConfigureMachineRelayResponse,
   type CancelRemoteMachinePairingRequest,
   type CancelRemoteMachinePairingResponse,
   type ConfirmRemoteMachinePairingRequest,
   type ConfirmRemoteMachinePairingResponse,
   type CreateConversationRequest,
   type CreateConversationResponse,
+  type DisconnectMachineRelayRequest,
+  type DisconnectMachineRelayResponse,
+  type EnrollMachineRelayRequest,
+  type EnrollMachineRelayResponse,
   type HostError,
   type HostErrorCode,
   type HostEvent,
@@ -100,8 +111,12 @@ import {
   type UnpairMachineResponse,
   type RetryMachineConnectionRequest,
   type RetryMachineConnectionResponse,
+  type RetryMachineRelayRequest,
+  type RetryMachineRelayResponse,
   type RefreshMachineProvidersRequest,
   type RefreshMachineProvidersResponse,
+  type RemoveMachineRelayRequest,
+  type RemoveMachineRelayResponse,
   type MachineProviderDiscovery,
   type UpdateMachineConnectionAddressRequest,
   type UpdateMachineConnectionAddressResponse,
@@ -193,6 +208,11 @@ import {
   providerExecutionHealthState,
   safeProviderHostError,
 } from './canonical-failure.js'
+import {
+  ControllerRelayCoordinatorError,
+  UnavailableControllerRelayCoordinator,
+  type ControllerRelayCoordinator,
+} from './controller-relay-coordinator.js'
 
 const MAX_PENDING_PROVIDER_EVENTS = 512
 const MAX_PENDING_PROVIDER_EVENT_BYTES = 4 * 1024 * 1024
@@ -244,6 +264,7 @@ export interface HostServiceOptions {
   /** True only for the Desktop-owned sidecar assembly. */
   readonly desktopManaged?: boolean
   readonly remoteMachineCoordinator?: RemoteMachineCoordinator
+  readonly controllerRelayCoordinator?: ControllerRelayCoordinator
   /**
    * Bounded local recovery hook owned by the Host assembly. It may probe only
    * the fixed Provider executable and is invoked solely by an explicit
@@ -273,6 +294,7 @@ export class HostService {
   readonly #persistence?: ConversationStore
   readonly #machines: MachineRegistry
   readonly #remoteMachines: RemoteMachineCoordinator
+  readonly #controllerRelay: ControllerRelayCoordinator
   readonly #refreshUnavailableLocalProvider?: (
     provider: AgentProvider,
   ) => Promise<AgentHostRuntime>
@@ -301,6 +323,7 @@ export class HostService {
   #unsubscribeRemoteMachineStatus?: () => void
   #unsubscribeRemoteMachineRemoval?: () => void
   #unsubscribeRemoteProviderDiscovery?: () => void
+  #unsubscribeControllerRelay?: () => void
   readonly #runtimeFailures = new Map<AgentProvider, Error>()
   readonly #machineRuntimeFailures = new Map<string, Error>()
   readonly #providerExecutionHealth = new Map<
@@ -349,6 +372,9 @@ export class HostService {
     this.#remoteMachines =
       options.remoteMachineCoordinator ??
       new UnavailableRemoteMachineCoordinator()
+    this.#controllerRelay =
+      options.controllerRelayCoordinator ??
+      new UnavailableControllerRelayCoordinator()
     this.#machines = new MachineRegistry({
       ...(this.#persistence === undefined
         ? {}
@@ -463,6 +489,26 @@ export class HostService {
           if (!(error instanceof MachineRegistryError)) throw error
         }
       })
+    this.#unsubscribeControllerRelay = this.#controllerRelay.subscribe(
+      (machineId) => {
+        try {
+          const durable = this.#persistence?.getMachine(machineId)
+          const trust = this.#persistence?.getTrustedMachinePeer(machineId)
+          if (durable?.kind !== 'remote' || trust?.trustState !== 'active') {
+            return
+          }
+          const machine = this.#refreshRemoteMachine(durable)
+          this.#publish({
+            conversationId: null,
+            timestamp: this.#timestamp(),
+            type: 'machine.updated',
+            payload: { machine },
+          })
+        } catch (error) {
+          if (!(error instanceof MachineRegistryError)) throw error
+        }
+      },
+    )
     this.#projects = new ProjectRegistry({
       workspacePolicy: this.#workspacePolicy,
       ...(this.#persistence === undefined
@@ -578,6 +624,7 @@ export class HostService {
                 remoteProviderPresentation?.providerDiscovery ?? {
                   state: 'not_observed' as const,
                 },
+              relay: this.#controllerRelay.status(machine.machineId),
             }
           : {}),
       })
@@ -793,6 +840,13 @@ export class HostService {
           }
           throw remoteMachineServiceError(error)
         }
+        if (persistence.getMachineRelayConfiguration(id) !== undefined) {
+          try {
+            await this.#controllerRelay.remove(id)
+          } catch (error) {
+            throw controllerRelayServiceError(error, this.#timestamp())
+          }
+        }
         this.#writeDurable(() => {
           if (!persistence.deleteRemoteMachine(id)) {
             throw new Error('Remote Machine disappeared during unpair')
@@ -942,6 +996,152 @@ export class HostService {
           }
         } catch (error) {
           throw remoteMachineServiceError(error)
+        }
+      },
+      false,
+    )
+  }
+
+  async configureMachineRelay(
+    machineId: MachineId,
+    request: ConfigureMachineRelayRequest,
+  ): Promise<ConfigureMachineRelayResponse> {
+    const id = MachineIdSchema.parse(machineId)
+    return await this.#executeAction(
+      request.actionId,
+      `machine.relay.configure:${id}`,
+      { machineId: id, request },
+      async () => {
+        const { trust } = this.#requireRemoteMachineTrust(id)
+        try {
+          const relay = await this.#controllerRelay.configure(trust, {
+            endpoint: request.endpoint,
+            relayIdentityFingerprint: request.relayIdentityFingerprint,
+            ...(request.displayLabel === undefined
+              ? {}
+              : { displayLabel: request.displayLabel }),
+          })
+          return ConfigureMachineRelayResponseSchema.parse({
+            protocolVersion,
+            actionId: request.actionId,
+            status: 'completed',
+            data: { machineId: id, relay },
+          })
+        } catch (error) {
+          throw controllerRelayServiceError(error, this.#timestamp())
+        }
+      },
+      false,
+    )
+  }
+
+  async enrollMachineRelay(
+    machineId: MachineId,
+    request: EnrollMachineRelayRequest,
+  ): Promise<EnrollMachineRelayResponse> {
+    const id = MachineIdSchema.parse(machineId)
+    return await this.#executeAction(
+      request.actionId,
+      `machine.relay.enroll:${id}`,
+      // The bounded action cache retains only a digest of this input; the
+      // one-time token is never persisted or logged by Host.
+      { machineId: id, request },
+      async () => {
+        const { trust } = this.#requireRemoteMachineTrust(id)
+        try {
+          const relay = await this.#controllerRelay.enroll(
+            trust,
+            request.enrollmentToken,
+          )
+          return EnrollMachineRelayResponseSchema.parse({
+            protocolVersion,
+            actionId: request.actionId,
+            status: 'completed',
+            data: { machineId: id, relay },
+          })
+        } catch (error) {
+          throw controllerRelayServiceError(error, this.#timestamp())
+        }
+      },
+      false,
+    )
+  }
+
+  async retryMachineRelay(
+    machineId: MachineId,
+    request: RetryMachineRelayRequest,
+  ): Promise<RetryMachineRelayResponse> {
+    const id = MachineIdSchema.parse(machineId)
+    return await this.#executeAction(
+      request.actionId,
+      `machine.relay.retry:${id}`,
+      { machineId: id, request },
+      async () => {
+        const { trust } = this.#requireRemoteMachineTrust(id)
+        try {
+          const relay = await this.#controllerRelay.retry(trust)
+          return RetryMachineRelayResponseSchema.parse({
+            protocolVersion,
+            actionId: request.actionId,
+            status: 'accepted',
+            data: { machineId: id, relay },
+          })
+        } catch (error) {
+          throw controllerRelayServiceError(error, this.#timestamp())
+        }
+      },
+      false,
+    )
+  }
+
+  async disconnectMachineRelay(
+    machineId: MachineId,
+    request: DisconnectMachineRelayRequest,
+  ): Promise<DisconnectMachineRelayResponse> {
+    const id = MachineIdSchema.parse(machineId)
+    return await this.#executeAction(
+      request.actionId,
+      `machine.relay.disconnect:${id}`,
+      { machineId: id, request },
+      async () => {
+        this.#requireRemoteMachineTrust(id)
+        try {
+          const relay = await this.#controllerRelay.disconnect(id)
+          return DisconnectMachineRelayResponseSchema.parse({
+            protocolVersion,
+            actionId: request.actionId,
+            status: 'completed',
+            data: { machineId: id, relay },
+          })
+        } catch (error) {
+          throw controllerRelayServiceError(error, this.#timestamp())
+        }
+      },
+      false,
+    )
+  }
+
+  async removeMachineRelay(
+    machineId: MachineId,
+    request: RemoveMachineRelayRequest,
+  ): Promise<RemoveMachineRelayResponse> {
+    const id = MachineIdSchema.parse(machineId)
+    return await this.#executeAction(
+      request.actionId,
+      `machine.relay.remove:${id}`,
+      { machineId: id, request },
+      async () => {
+        this.#requireRemoteMachineTrust(id)
+        try {
+          const relay = await this.#controllerRelay.remove(id)
+          return RemoveMachineRelayResponseSchema.parse({
+            protocolVersion,
+            actionId: request.actionId,
+            status: 'completed',
+            data: { machineId: id, relay },
+          })
+        } catch (error) {
+          throw controllerRelayServiceError(error, this.#timestamp())
         }
       },
       false,
@@ -4127,6 +4327,11 @@ export class HostService {
         failures.push(error)
       }
       try {
+        await this.#controllerRelay.close()
+      } catch (error) {
+        failures.push(error)
+      }
+      try {
         this.#flushAllDurableTurns()
       } catch (error) {
         failures.push(error)
@@ -4153,6 +4358,8 @@ export class HostService {
       this.#unsubscribeRemoteMachineRemoval = undefined
       this.#unsubscribeRemoteProviderDiscovery?.()
       this.#unsubscribeRemoteProviderDiscovery = undefined
+      this.#unsubscribeControllerRelay?.()
+      this.#unsubscribeControllerRelay = undefined
       this.#actions.clear()
       this.#hydrations.clear()
       this.#runtimeAccess.clear()
@@ -4849,6 +5056,79 @@ function hostServiceErrorForFailure(
     undefined,
     failure,
   )
+}
+
+function controllerRelayServiceError(
+  error: unknown,
+  occurredAt: string,
+): Error {
+  if (error instanceof HostServiceError) return error
+  if (!(error instanceof ControllerRelayCoordinatorError)) {
+    return error instanceof Error ? error : new Error(String(error))
+  }
+  const reason = isRelayFailureReason(error.reason)
+    ? error.reason
+    : 'relay_unreachable'
+  const failure = canonicalFailure(reason, occurredAt)
+  const status =
+    reason === 'relay_rate_limited'
+      ? 429
+      : reason === 'relay_unreachable'
+        ? 503
+        : reason === 'relay_not_configured'
+          ? 409
+          : 403
+  return new HostServiceError(
+    reason,
+    relayFailureMessage(reason),
+    status,
+    undefined,
+    failure,
+  )
+}
+
+function isRelayFailureReason(
+  reason: CanonicalFailureReason,
+): reason is
+  | 'relay_not_configured'
+  | 'relay_unreachable'
+  | 'relay_authentication_failed'
+  | 'relay_identity_mismatch'
+  | 'relay_protocol_incompatible'
+  | 'relay_revoked'
+  | 'relay_rate_limited' {
+  return (
+    reason === 'relay_not_configured' ||
+    reason === 'relay_unreachable' ||
+    reason === 'relay_authentication_failed' ||
+    reason === 'relay_identity_mismatch' ||
+    reason === 'relay_protocol_incompatible' ||
+    reason === 'relay_revoked' ||
+    reason === 'relay_rate_limited'
+  )
+}
+
+function relayFailureMessage(
+  reason: ReturnType<typeof canonicalFailure>['reason'],
+): string {
+  switch (reason) {
+    case 'relay_not_configured':
+      return 'Internet Relay is not configured'
+    case 'relay_unreachable':
+      return 'Internet Relay is temporarily unreachable'
+    case 'relay_authentication_failed':
+      return 'Internet Relay authentication failed'
+    case 'relay_identity_mismatch':
+      return 'Internet Relay identity did not match its confirmed identity'
+    case 'relay_protocol_incompatible':
+      return 'Internet Relay version is incompatible'
+    case 'relay_revoked':
+      return 'Internet Relay enrollment was revoked'
+    case 'relay_rate_limited':
+      return 'Internet Relay temporarily limited connection attempts'
+    default:
+      return 'Internet Relay control connection failed'
+  }
 }
 
 function remoteProviderCommandError(

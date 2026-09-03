@@ -18,6 +18,8 @@ import {
   ProviderExecutionHealthSchema,
   ProviderExecutionHealthStateSchema,
   ProviderIdSchema,
+  RelayEndpointSchema,
+  RelayIdentityFingerprintSchema,
   RemoteMachineAddressSchema,
   TimestampSchema,
   machineWireLimits,
@@ -33,6 +35,8 @@ import {
   type ProviderDescriptor,
   type ProviderExecutionHealth,
   type ProviderId,
+  type RelayEndpoint,
+  type RelayIdentityFingerprint,
   type RemoteMachineAddress,
   type Timestamp,
   type TurnId,
@@ -242,6 +246,24 @@ export interface DurableProviderExecutionHealthObservation {
   readonly state: ProviderExecutionHealth['state']
   readonly failure?: CanonicalFailure
   readonly observedAt: Timestamp
+}
+
+/**
+ * Presentation-safe Controller Relay configuration. Enrollment tokens,
+ * Controller private keys, connection epochs, and presence never enter SQLite.
+ */
+export interface DurableMachineRelayConfiguration {
+  readonly machineId: MachineId
+  readonly endpoint: RelayEndpoint
+  readonly relayIdentityFingerprint: RelayIdentityFingerprint
+  readonly displayLabel?: string
+  readonly enabled: boolean
+  readonly enrollmentState: 'required' | 'enrolled' | 'revoked'
+  readonly createdAt: Timestamp
+  readonly updatedAt: Timestamp
+  readonly enrolledAt?: Timestamp
+  readonly lastConnectedAt?: Timestamp
+  readonly lastAttemptAt?: Timestamp
 }
 
 export type NewDurableTrustedMachinePeer = Omit<
@@ -668,6 +690,211 @@ export class ConversationStore {
       throw new Error('Provider execution health observation was not retained')
     }
     return current
+  }
+
+  getMachineRelayConfiguration(
+    machineId: MachineId,
+  ): DurableMachineRelayConfiguration | undefined {
+    const id = MachineIdSchema.parse(machineId)
+    const row = this.#statement(
+      `SELECT * FROM machine_relay_configurations WHERE machine_id = ?`,
+    ).get(id) as MachineRelayConfigurationRow | undefined
+    return row === undefined ? undefined : machineRelayConfigurationFromRow(row)
+  }
+
+  listEnabledMachineRelayConfigurations(): DurableMachineRelayConfiguration[] {
+    const rows = this.#statement(
+      `SELECT * FROM machine_relay_configurations
+       WHERE enabled = 1
+       ORDER BY updated_at ASC, machine_id ASC`,
+    ).all() as unknown as MachineRelayConfigurationRow[]
+    return rows.map(machineRelayConfigurationFromRow)
+  }
+
+  configureMachineRelay(
+    machineId: MachineId,
+    endpoint: RelayEndpoint,
+    relayIdentityFingerprint: RelayIdentityFingerprint,
+    updatedAt: Timestamp,
+    displayLabel?: string,
+  ): DurableMachineRelayConfiguration {
+    const id = MachineIdSchema.parse(machineId)
+    const relayEndpoint = RelayEndpointSchema.parse(endpoint)
+    const relayFingerprint = RelayIdentityFingerprintSchema.parse(
+      relayIdentityFingerprint,
+    )
+    const timestamp = TimestampSchema.parse(updatedAt)
+    const label =
+      displayLabel === undefined
+        ? undefined
+        : parseBoundedText(displayLabel, 'Relay display label', 120)
+
+    this.runInTransaction(() => {
+      const machine = this.getMachine(id)
+      const trust = this.getTrustedMachinePeer(id)
+      if (
+        machine?.kind !== 'remote' ||
+        trust === undefined ||
+        trust.trustState !== 'active'
+      ) {
+        throw new Error(
+          'Relay configuration requires an actively trusted remote Machine',
+        )
+      }
+      const previous = this.getMachineRelayConfiguration(id)
+      const retainsEnrollment =
+        previous?.relayIdentityFingerprint === relayFingerprint
+      this.#statement(
+        `INSERT INTO machine_relay_configurations (
+           machine_id, endpoint_host, endpoint_port, transport_security,
+           relay_identity_fingerprint, display_label, enabled,
+           enrollment_state, created_at, updated_at, enrolled_at,
+           last_connected_at, last_attempt_at
+         ) VALUES (?, ?, ?, ?, ?, ?, 1, 'required', ?, ?, NULL, NULL, NULL)
+         ON CONFLICT(machine_id) DO UPDATE SET
+           endpoint_host = excluded.endpoint_host,
+           endpoint_port = excluded.endpoint_port,
+           transport_security = excluded.transport_security,
+           relay_identity_fingerprint = excluded.relay_identity_fingerprint,
+           display_label = excluded.display_label,
+           enabled = 1,
+           enrollment_state = CASE WHEN ? THEN enrollment_state ELSE 'required' END,
+           enrolled_at = CASE WHEN ? THEN enrolled_at ELSE NULL END,
+           last_connected_at = CASE WHEN ? THEN last_connected_at ELSE NULL END,
+           last_attempt_at = NULL,
+           updated_at = excluded.updated_at`,
+      ).run(
+        id,
+        relayEndpoint.host,
+        relayEndpoint.port,
+        relayEndpoint.transportSecurity,
+        relayFingerprint,
+        label ?? null,
+        timestamp,
+        timestamp,
+        retainsEnrollment ? 1 : 0,
+        retainsEnrollment ? 1 : 0,
+        retainsEnrollment ? 1 : 0,
+      )
+    })
+    return this.#requireMachineRelayConfiguration(id)
+  }
+
+  markMachineRelayEnrolled(
+    machineId: MachineId,
+    enrolledAt: Timestamp,
+  ): DurableMachineRelayConfiguration {
+    const id = MachineIdSchema.parse(machineId)
+    const timestamp = TimestampSchema.parse(enrolledAt)
+    assertChanged(
+      this.#statement(
+        `UPDATE machine_relay_configurations SET
+           enrollment_state = 'enrolled', enabled = 1,
+           enrolled_at = ?, updated_at = ?
+         WHERE machine_id = ? AND enrollment_state IN ('required', 'revoked')`,
+      ).run(timestamp, timestamp, id).changes,
+      'Relay configuration requiring explicit enrollment',
+      id,
+    )
+    return this.#requireMachineRelayConfiguration(id)
+  }
+
+  markMachineRelayRevoked(
+    machineId: MachineId,
+    revokedAt: Timestamp,
+  ): DurableMachineRelayConfiguration {
+    const id = MachineIdSchema.parse(machineId)
+    const timestamp = TimestampSchema.parse(revokedAt)
+    assertChanged(
+      this.#statement(
+        `UPDATE machine_relay_configurations SET
+           enrollment_state = 'revoked', enabled = 0,
+           enrolled_at = NULL, updated_at = ?
+         WHERE machine_id = ? AND enrollment_state != 'revoked'`,
+      ).run(timestamp, id).changes,
+      'Non-revoked Relay configuration',
+      id,
+    )
+    return this.#requireMachineRelayConfiguration(id)
+  }
+
+  setMachineRelayEnabled(
+    machineId: MachineId,
+    enabled: boolean,
+    updatedAt: Timestamp,
+  ): DurableMachineRelayConfiguration {
+    const id = MachineIdSchema.parse(machineId)
+    const timestamp = TimestampSchema.parse(updatedAt)
+    if (
+      enabled &&
+      this.#requireMachineRelayConfiguration(id).enrollmentState === 'revoked'
+    ) {
+      throw new Error('A revoked Relay enrollment cannot be enabled')
+    }
+    assertChanged(
+      this.#statement(
+        `UPDATE machine_relay_configurations SET enabled = ?, updated_at = ?
+         WHERE machine_id = ?`,
+      ).run(enabled ? 1 : 0, timestamp, id).changes,
+      'Relay configuration',
+      id,
+    )
+    return this.#requireMachineRelayConfiguration(id)
+  }
+
+  recordMachineRelayAttempt(
+    machineId: MachineId,
+    attemptedAt: Timestamp,
+  ): DurableMachineRelayConfiguration {
+    const id = MachineIdSchema.parse(machineId)
+    const timestamp = TimestampSchema.parse(attemptedAt)
+    assertChanged(
+      this.#statement(
+        `UPDATE machine_relay_configurations SET
+           last_attempt_at = ?, updated_at = ?
+         WHERE machine_id = ? AND enabled = 1`,
+      ).run(timestamp, timestamp, id).changes,
+      'Enabled Relay configuration',
+      id,
+    )
+    return this.#requireMachineRelayConfiguration(id)
+  }
+
+  recordMachineRelayConnected(
+    machineId: MachineId,
+    connectedAt: Timestamp,
+  ): DurableMachineRelayConfiguration {
+    const id = MachineIdSchema.parse(machineId)
+    const timestamp = TimestampSchema.parse(connectedAt)
+    assertChanged(
+      this.#statement(
+        `UPDATE machine_relay_configurations SET
+           last_connected_at = ?, last_attempt_at = ?, updated_at = ?
+         WHERE machine_id = ? AND enabled = 1 AND enrollment_state = 'enrolled'`,
+      ).run(timestamp, timestamp, timestamp, id).changes,
+      'Enabled enrolled Relay configuration',
+      id,
+    )
+    return this.#requireMachineRelayConfiguration(id)
+  }
+
+  deleteMachineRelayConfiguration(machineId: MachineId): boolean {
+    const id = MachineIdSchema.parse(machineId)
+    return (
+      this.#statement(
+        'DELETE FROM machine_relay_configurations WHERE machine_id = ?',
+      ).run(id).changes > 0
+    )
+  }
+
+  #requireMachineRelayConfiguration(
+    machineId: MachineId,
+  ): DurableMachineRelayConfiguration {
+    const configuration = this.getMachineRelayConfiguration(machineId)
+    if (configuration === undefined) {
+      throw new Error(`Relay configuration for ${machineId} does not exist`)
+    }
+    return configuration
   }
 
   activateTrustedMachinePeer(
@@ -2278,6 +2505,22 @@ interface ProviderExecutionHealthRow {
   readonly observed_at: string
 }
 
+interface MachineRelayConfigurationRow {
+  readonly machine_id: string
+  readonly endpoint_host: string
+  readonly endpoint_port: number
+  readonly transport_security: string
+  readonly relay_identity_fingerprint: string
+  readonly display_label: string | null
+  readonly enabled: number
+  readonly enrollment_state: string
+  readonly created_at: string
+  readonly updated_at: string
+  readonly enrolled_at: string | null
+  readonly last_connected_at: string | null
+  readonly last_attempt_at: string | null
+}
+
 interface TurnRow {
   readonly turn_id: string
   readonly conversation_id: string
@@ -2516,6 +2759,60 @@ function serializeProviderExecutionHealthFailure(
     throw new Error('Provider execution health failure exceeds durable bounds')
   }
   return serialized
+}
+
+function machineRelayConfigurationFromRow(
+  row: MachineRelayConfigurationRow,
+): DurableMachineRelayConfiguration {
+  if (
+    row.enrollment_state !== 'required' &&
+    row.enrollment_state !== 'enrolled' &&
+    row.enrollment_state !== 'revoked'
+  ) {
+    throw new Error(
+      `Unsupported Relay enrollment state: ${row.enrollment_state}`,
+    )
+  }
+  const endpoint = RelayEndpointSchema.parse({
+    host: row.endpoint_host,
+    port: row.endpoint_port,
+    transportSecurity: row.transport_security,
+  })
+  const enrollmentState = row.enrollment_state
+  const enrolledAt =
+    row.enrolled_at === null
+      ? undefined
+      : TimestampSchema.parse(row.enrolled_at)
+  if ((enrollmentState === 'enrolled') !== (enrolledAt !== undefined)) {
+    throw new Error('Durable Relay enrollment timestamp is inconsistent')
+  }
+  return {
+    machineId: MachineIdSchema.parse(row.machine_id),
+    endpoint,
+    relayIdentityFingerprint: RelayIdentityFingerprintSchema.parse(
+      row.relay_identity_fingerprint,
+    ),
+    ...(row.display_label === null
+      ? {}
+      : {
+          displayLabel: parseBoundedText(
+            row.display_label,
+            'Relay display label',
+            120,
+          ),
+        }),
+    enabled: row.enabled === 1,
+    enrollmentState,
+    createdAt: TimestampSchema.parse(row.created_at),
+    updatedAt: TimestampSchema.parse(row.updated_at),
+    ...(enrolledAt === undefined ? {} : { enrolledAt }),
+    ...(row.last_connected_at === null
+      ? {}
+      : { lastConnectedAt: TimestampSchema.parse(row.last_connected_at) }),
+    ...(row.last_attempt_at === null
+      ? {}
+      : { lastAttemptAt: TimestampSchema.parse(row.last_attempt_at) }),
+  }
 }
 
 function remoteProviderExecutionFoundation(

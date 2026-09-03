@@ -44,6 +44,13 @@ export const canonicalFailureReasons = [
   'transport_lost',
   'transport_authentication_failed',
   'reconnecting',
+  'relay_not_configured',
+  'relay_unreachable',
+  'relay_authentication_failed',
+  'relay_identity_mismatch',
+  'relay_protocol_incompatible',
+  'relay_revoked',
+  'relay_rate_limited',
   'provider_error',
   'runtime_error',
   'unknown_failure',
@@ -87,6 +94,7 @@ export const canonicalFailureSources = [
   'transport',
   'project',
   'runtime',
+  'relay',
 ] as const
 
 export type CanonicalFailureSource = (typeof canonicalFailureSources)[number]
@@ -298,6 +306,48 @@ const profiles: Readonly<
     retryability: 'retry_later',
     userAction: 'wait',
     source: 'transport',
+  },
+  relay_not_configured: {
+    category: 'transport',
+    retryability: 'retry_after_user_action',
+    userAction: 'open_machine',
+    source: 'relay',
+  },
+  relay_unreachable: {
+    category: 'transport',
+    retryability: 'retry_later',
+    userAction: 'wait',
+    source: 'relay',
+  },
+  relay_authentication_failed: {
+    category: 'authentication',
+    retryability: 'retry_after_user_action',
+    userAction: 'open_machine',
+    source: 'relay',
+  },
+  relay_identity_mismatch: {
+    category: 'transport',
+    retryability: 'retry_after_user_action',
+    userAction: 'open_machine',
+    source: 'relay',
+  },
+  relay_protocol_incompatible: {
+    category: 'transport',
+    retryability: 'retry_after_user_action',
+    userAction: 'open_machine',
+    source: 'relay',
+  },
+  relay_revoked: {
+    category: 'authentication',
+    retryability: 'retry_after_user_action',
+    userAction: 'open_machine',
+    source: 'relay',
+  },
+  relay_rate_limited: {
+    category: 'transport',
+    retryability: 'retry_later',
+    userAction: 'wait',
+    source: 'relay',
   },
   provider_error: {
     category: 'generic',

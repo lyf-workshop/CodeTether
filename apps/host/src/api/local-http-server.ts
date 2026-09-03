@@ -22,10 +22,16 @@ import {
   CancelRemoteMachinePairingResponseSchema,
   ConfirmRemoteMachinePairingRequestSchema,
   ConfirmRemoteMachinePairingResponseSchema,
+  ConfigureMachineRelayRequestSchema,
+  ConfigureMachineRelayResponseSchema,
   CreateConversationRequestSchema,
   CreateConversationResponseSchema,
   CreateProjectRequestSchema,
   CreateProjectResponseSchema,
+  DisconnectMachineRelayRequestSchema,
+  DisconnectMachineRelayResponseSchema,
+  EnrollMachineRelayRequestSchema,
+  EnrollMachineRelayResponseSchema,
   RegisterProjectLocationRequestSchema,
   RegisterProjectLocationResponseSchema,
   RemoveProjectLocationRequestSchema,
@@ -46,6 +52,8 @@ import {
   ResolveAttentionResponseSchema,
   RetryMachineConnectionRequestSchema,
   RetryMachineConnectionResponseSchema,
+  RetryMachineRelayRequestSchema,
+  RetryMachineRelayResponseSchema,
   RefreshMachineProvidersRequestSchema,
   RefreshMachineProvidersResponseSchema,
   ListProjectsResponseSchema,
@@ -62,6 +70,8 @@ import {
   TurnIdSchema,
   UnpairMachineRequestSchema,
   UnpairMachineResponseSchema,
+  RemoveMachineRelayRequestSchema,
+  RemoveMachineRelayResponseSchema,
   UpdateMachineConnectionAddressRequestSchema,
   UpdateMachineConnectionAddressResponseSchema,
   UnarchiveConversationRequestSchema,
@@ -618,6 +628,133 @@ export class LocalHttpServer {
           200,
           UpdateMachineConnectionAddressResponseSchema.parse(
             await this.#service.updateMachineConnectionAddress(machineId, body),
+          ),
+          context.allowedOrigin,
+        )
+        return
+      }
+      const machineRelayRoute = this.#http.matchPath(
+        url.pathname,
+        /^\/api\/v1\/machines\/([^/]+)\/relay$/u,
+      )
+      if (request.method === 'PUT' && machineRelayRoute !== undefined) {
+        const machineId = this.#http.parseRouteId(
+          MachineIdSchema,
+          machineRelayRoute[0],
+          'machineId',
+        )
+        const body = await this.#http.readValidatedBody(
+          request,
+          ConfigureMachineRelayRequestSchema,
+        )
+        context.actionId = body.actionId
+        this.#http.writeJson(
+          response,
+          200,
+          ConfigureMachineRelayResponseSchema.parse(
+            await this.#service.configureMachineRelay(machineId, body),
+          ),
+          context.allowedOrigin,
+        )
+        return
+      }
+      if (request.method === 'DELETE' && machineRelayRoute !== undefined) {
+        const machineId = this.#http.parseRouteId(
+          MachineIdSchema,
+          machineRelayRoute[0],
+          'machineId',
+        )
+        const body = await this.#http.readValidatedBody(
+          request,
+          RemoveMachineRelayRequestSchema,
+        )
+        context.actionId = body.actionId
+        this.#http.writeJson(
+          response,
+          200,
+          RemoveMachineRelayResponseSchema.parse(
+            await this.#service.removeMachineRelay(machineId, body),
+          ),
+          context.allowedOrigin,
+        )
+        return
+      }
+      const machineRelayEnrollmentRoute = this.#http.matchPath(
+        url.pathname,
+        /^\/api\/v1\/machines\/([^/]+)\/relay\/enroll$/u,
+      )
+      if (
+        request.method === 'POST' &&
+        machineRelayEnrollmentRoute !== undefined
+      ) {
+        const machineId = this.#http.parseRouteId(
+          MachineIdSchema,
+          machineRelayEnrollmentRoute[0],
+          'machineId',
+        )
+        const body = await this.#http.readValidatedBody(
+          request,
+          EnrollMachineRelayRequestSchema,
+        )
+        context.actionId = body.actionId
+        this.#http.writeJson(
+          response,
+          200,
+          EnrollMachineRelayResponseSchema.parse(
+            await this.#service.enrollMachineRelay(machineId, body),
+          ),
+          context.allowedOrigin,
+        )
+        return
+      }
+      const machineRelayRetryRoute = this.#http.matchPath(
+        url.pathname,
+        /^\/api\/v1\/machines\/([^/]+)\/relay\/retry$/u,
+      )
+      if (request.method === 'POST' && machineRelayRetryRoute !== undefined) {
+        const machineId = this.#http.parseRouteId(
+          MachineIdSchema,
+          machineRelayRetryRoute[0],
+          'machineId',
+        )
+        const body = await this.#http.readValidatedBody(
+          request,
+          RetryMachineRelayRequestSchema,
+        )
+        context.actionId = body.actionId
+        this.#http.writeJson(
+          response,
+          202,
+          RetryMachineRelayResponseSchema.parse(
+            await this.#service.retryMachineRelay(machineId, body),
+          ),
+          context.allowedOrigin,
+        )
+        return
+      }
+      const machineRelayDisconnectRoute = this.#http.matchPath(
+        url.pathname,
+        /^\/api\/v1\/machines\/([^/]+)\/relay\/disconnect$/u,
+      )
+      if (
+        request.method === 'POST' &&
+        machineRelayDisconnectRoute !== undefined
+      ) {
+        const machineId = this.#http.parseRouteId(
+          MachineIdSchema,
+          machineRelayDisconnectRoute[0],
+          'machineId',
+        )
+        const body = await this.#http.readValidatedBody(
+          request,
+          DisconnectMachineRelayRequestSchema,
+        )
+        context.actionId = body.actionId
+        this.#http.writeJson(
+          response,
+          200,
+          DisconnectMachineRelayResponseSchema.parse(
+            await this.#service.disconnectMachineRelay(machineId, body),
           ),
           context.allowedOrigin,
         )

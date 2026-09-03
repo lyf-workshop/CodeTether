@@ -36,6 +36,10 @@ import {
   SecureRemoteMachineCoordinator,
   type RemoteMachineCoordinator,
 } from './remote-machine-coordinator.js'
+import {
+  SecureControllerRelayCoordinator,
+  type ControllerRelayCoordinator,
+} from './controller-relay-coordinator.js'
 
 export interface LocalCodexHostOptions {
   readonly allowedWorkspaceRoots?: readonly string[]
@@ -219,12 +223,18 @@ export async function startLocalCodexHostWithRuntime(
   let service: HostService | undefined
   let server: LocalHttpServer | undefined
   let remoteMachineCoordinator: RemoteMachineCoordinator | undefined
+  let controllerRelayCoordinator: ControllerRelayCoordinator | undefined
   try {
     if (persistence !== undefined) {
       remoteMachineCoordinator = await SecureRemoteMachineCoordinator.create({
         persistence,
         allowLoopbackForTests: options.remoteMachineLoopbackForTests === true,
       })
+      controllerRelayCoordinator =
+        await SecureControllerRelayCoordinator.create({
+          persistence,
+          clientBuildIdentity: options.hostVersion,
+        })
     }
     const publisher = new HostEventPublisher({
       epoch: newEpoch(),
@@ -248,6 +258,9 @@ export async function startLocalCodexHostWithRuntime(
       ...(remoteMachineCoordinator === undefined
         ? {}
         : { remoteMachineCoordinator }),
+      ...(controllerRelayCoordinator === undefined
+        ? {}
+        : { controllerRelayCoordinator }),
       ...(refreshUnavailableLocalProvider === undefined
         ? {}
         : { refreshUnavailableLocalProvider }),
@@ -295,6 +308,7 @@ export async function startLocalCodexHostWithRuntime(
     } else if (service !== undefined) {
       await service.close().catch(() => undefined)
     } else {
+      await controllerRelayCoordinator?.close().catch(() => undefined)
       await remoteMachineCoordinator?.close?.().catch(() => undefined)
       await Promise.allSettled(
         runtimes.map(async (providerRuntime) => await providerRuntime.close()),

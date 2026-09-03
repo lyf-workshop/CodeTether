@@ -113,6 +113,16 @@ test('Machine Detail Relay UI stays Host-owned, accessible, bounded, and executi
   assert.match(section, /maxLength=\{56\}/u)
   assert.match(section, /maxLength=\{43\}/u)
   assert.match(section, /maxLength=\{253\}/u)
+  assert.match(section, /ref=\{configurationTriggerRef\}/u)
+  assert.match(section, /ref=\{enrollmentTriggerRef\}/u)
+  assert.match(section, /ref=\{removeTriggerRef\}/u)
+  assert.match(section, /restoreRelayDialogTrigger\(configurationTriggerRef\)/u)
+  assert.match(section, /restoreRelayDialogTrigger\(enrollmentTriggerRef\)/u)
+  assert.match(section, /restoreRelayDialogTrigger\(removeTriggerRef\)/u)
+  assert.match(
+    section,
+    /requestAnimationFrame\(\(\) => trigger\.current\?\.focus\(\{ preventScroll: true \}\)\)/u,
+  )
   assert.match(section, /Internet Relay 执行尚未启用/u)
   assert.match(section, /Agent 执行仍只使用现有局域网直连/u)
   assert.match(section, /使用新令牌重新注册/u)

@@ -56,6 +56,9 @@ export function MachineRelaySection({
   relay,
 }: MachineRelaySectionProps) {
   const runtime = useHostRuntime()
+  const configurationTriggerRef = useRef<HTMLButtonElement>(null)
+  const enrollmentTriggerRef = useRef<HTMLButtonElement>(null)
+  const removeTriggerRef = useRef<HTMLButtonElement>(null)
   const [configurationOpen, setConfigurationOpen] = useState(false)
   const [enrollmentOpen, setEnrollmentOpen] = useState(false)
   const [removeOpen, setRemoveOpen] = useState(false)
@@ -99,6 +102,7 @@ export function MachineRelaySection({
           </p>
         </div>
         <Button
+          ref={configurationTriggerRef}
           variant="secondary"
           size="sm"
           disabled={!hostReady || busy}
@@ -194,6 +198,7 @@ export function MachineRelaySection({
       <div className="mt-4 flex min-w-0 flex-wrap gap-2">
         {relay?.enrollment === 'required' || relay?.enrollment === 'revoked' ? (
           <Button
+            ref={enrollmentTriggerRef}
             size="sm"
             disabled={!hostReady || busy}
             onClick={() => setEnrollmentOpen(true)}
@@ -234,6 +239,7 @@ export function MachineRelaySection({
         ) : null}
         {relay !== undefined && relay.state !== 'not_configured' ? (
           <Button
+            ref={removeTriggerRef}
             variant="ghost"
             size="sm"
             disabled={!hostReady || busy}
@@ -285,7 +291,10 @@ export function MachineRelaySection({
           machine={machine}
           relay={relay}
           open
-          onOpenChange={setConfigurationOpen}
+          onOpenChange={(open) => {
+            setConfigurationOpen(open)
+            if (!open) restoreRelayDialogTrigger(configurationTriggerRef)
+          }}
         />
       ) : null}
       {enrollmentOpen ? (
@@ -293,11 +302,20 @@ export function MachineRelaySection({
           machine={machine}
           reenrollment={relay?.enrollment === 'revoked'}
           open
-          onOpenChange={setEnrollmentOpen}
+          onOpenChange={(open) => {
+            setEnrollmentOpen(open)
+            if (!open) restoreRelayDialogTrigger(enrollmentTriggerRef)
+          }}
         />
       ) : null}
       {removeOpen ? (
-        <Dialog open onOpenChange={setRemoveOpen}>
+        <Dialog
+          open
+          onOpenChange={(open) => {
+            setRemoveOpen(open)
+            if (!open) restoreRelayDialogTrigger(removeTriggerRef)
+          }}
+        >
           <DialogContent
             className="max-w-md overflow-x-hidden"
             closeLabel="关闭移除 Relay 配置对话框"
@@ -815,3 +833,9 @@ function relayStatusBadgeVariant(
 
 class RelayConfigurationInputError extends Error {}
 class RelayEnrollmentInputError extends Error {}
+
+function restoreRelayDialogTrigger(
+  trigger: React.RefObject<HTMLButtonElement | null>,
+): void {
+  requestAnimationFrame(() => trigger.current?.focus({ preventScroll: true }))
+}

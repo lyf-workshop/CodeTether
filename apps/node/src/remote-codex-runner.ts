@@ -10,7 +10,13 @@ import {
   type ThreadStartResult,
   type TurnStartResult,
 } from '@codetether/adapter-codex'
-import type { AgentEvent } from '@codetether/agent-core'
+import {
+  canonicalFailure,
+  isCanonicalFailureReason,
+  type AgentEvent,
+  type CanonicalFailure,
+  type CanonicalFailureReason,
+} from '@codetether/agent-core'
 import {
   MachineTransportError,
   RemoteCodexProviderIdentitySchema,
@@ -67,7 +73,7 @@ class RemoteCodexOwnedCleanupError extends MachineTransportError {
     super(
       'remote_execution_lost',
       'Remote Codex owned process cleanup could not be verified',
-      { cause },
+      { cause, failureReason: 'execution_ownership_uncertain' },
     )
     this.name = 'RemoteCodexOwnedCleanupError'
   }
@@ -316,7 +322,10 @@ export class RemoteCodexRunner {
       onEvent: (event) => runner?.handleProviderEvent(event),
       onError: (error) => {
         startupFailure = error
-        runner?.failOwnedSession('provider_session_lost')
+        runner?.failOwnedSession(
+          'provider_session_lost',
+          canonicalFailureFromError(error, 'provider_session_lost'),
+        )
       },
     })
     try {
@@ -421,20 +430,50 @@ export class RemoteCodexRunner {
     )
     this.#activeTurn = turn
     this.#rememberAction(request.actionId, turn)
+    let started: TurnStartResult
     try {
-      const started = await this.#client.startRemoteTextTurn({
+      started = await this.#client.startRemoteTextTurn({
         threadId: this.providerThreadId,
         prompt: request.prompt,
       })
-      turn.bindProviderTurn(started.turn.id)
-      void this.#client
-        .waitForTurn(this.providerThreadId, turn.providerTurnId, null)
-        .catch(() => this.failActiveTurn('provider_session_lost'))
-      return turn
     } catch (error) {
-      turn.fail('provider_start_failed')
+      turn.fail(
+        'provider_start_failed',
+        canonicalFailureFromError(error, 'provider_start_failed'),
+      )
       await this.close()
       throw mapProviderStartError(error)
+    }
+
+    try {
+      turn.bindProviderTurn(started.turn.id)
+      void Promise.resolve()
+        .then(
+          async () =>
+            await this.#client.waitForTurn(
+              this.providerThreadId,
+              turn.providerTurnId,
+              null,
+            ),
+        )
+        .catch((error: unknown) =>
+          this.failActiveTurn(
+            'provider_session_lost',
+            canonicalFailureFromError(error, 'provider_session_lost'),
+          ),
+        )
+      return turn
+    } catch (error) {
+      turn.fail(
+        'remote_execution_lost',
+        canonicalFailureFromError(error, 'execution_ownership_uncertain'),
+      )
+      await this.close()
+      throw new MachineTransportError(
+        'remote_execution_lost',
+        'Remote Codex Turn ownership could not be verified',
+        { cause: error, failureReason: 'execution_ownership_uncertain' },
+      )
     }
   }
 
@@ -476,7 +515,7 @@ export class RemoteCodexRunner {
       return
     }
     if (event.type === 'turn.failed') {
-      turn.fail('provider_failed')
+      turn.fail('provider_failed', event.error.failure)
       return
     }
     if (event.type === 'turn.interrupted') {
@@ -493,14 +532,16 @@ export class RemoteCodexRunner {
 
   failActiveTurn(
     code: 'provider_session_lost' | 'remote_policy_violation',
+    failure?: CanonicalFailure,
   ): void {
-    this.#activeTurn?.fail(code)
+    this.#activeTurn?.fail(code, failure)
   }
 
   failOwnedSession(
     code: 'provider_session_lost' | 'remote_policy_violation',
+    failure?: CanonicalFailure,
   ): void {
-    this.#terminate(code)
+    this.#terminate(code, failure)
   }
 
   #terminate(
@@ -508,10 +549,11 @@ export class RemoteCodexRunner {
       | 'provider_session_lost'
       | 'remote_policy_violation'
       | 'remote_execution_lost',
+    failure?: CanonicalFailure,
   ): void {
     if (this.#fatalScheduled) return
     this.#fatalScheduled = true
-    this.#activeTurn?.fail(code)
+    this.#activeTurn?.fail(code, failure)
     void this.close().then(
       () => this.#onFatal(this),
       () => this.#onFatal(this),
@@ -621,7 +663,10 @@ export class RemoteCodexRunnerTurn {
         this.#release()
       }
     } catch {
-      this.fail('remote_execution_lost')
+      this.fail(
+        'remote_execution_lost',
+        canonicalFailure('output_limit_exceeded', new Date().toISOString()),
+      )
       this.#onOverflow()
     }
   }
@@ -633,6 +678,7 @@ export class RemoteCodexRunnerTurn {
       | 'remote_execution_lost'
       | 'remote_policy_violation'
       | 'provider_failed',
+    failure?: CanonicalFailure,
   ): void {
     if (this.#terminal) return
     this.#terminal = true
@@ -640,6 +686,9 @@ export class RemoteCodexRunnerTurn {
       type: 'turn.failed',
       code,
       message: safeFailureMessage(code),
+      failure:
+        failure ??
+        canonicalFailure(defaultFailureReason(code), new Date().toISOString()),
     })
     this.#release()
   }
@@ -1213,6 +1262,52 @@ function mapProviderStartError(error: unknown): MachineTransportError {
   return new MachineTransportError(
     'provider_start_failed',
     'Remote Codex could not establish Provider ownership',
-    { cause: error },
+    {
+      cause: error,
+      failureReason: controlledFailureReason(error, 'provider_start_failed'),
+    },
   )
+}
+
+function controlledFailureReason(
+  error: unknown,
+  fallback: CanonicalFailureReason,
+): CanonicalFailureReason {
+  return error instanceof Error &&
+    'failureReason' in error &&
+    isCanonicalFailureReason(error.failureReason)
+    ? error.failureReason
+    : fallback
+}
+
+function canonicalFailureFromError(
+  error: unknown,
+  fallback: CanonicalFailureReason,
+): CanonicalFailure {
+  return canonicalFailure(
+    controlledFailureReason(error, fallback),
+    new Date().toISOString(),
+  )
+}
+
+function defaultFailureReason(
+  code:
+    | 'provider_start_failed'
+    | 'provider_session_lost'
+    | 'remote_execution_lost'
+    | 'remote_policy_violation'
+    | 'provider_failed',
+): CanonicalFailureReason {
+  switch (code) {
+    case 'provider_start_failed':
+      return 'provider_start_failed'
+    case 'provider_session_lost':
+      return 'provider_session_lost'
+    case 'remote_execution_lost':
+      return 'execution_lost'
+    case 'remote_policy_violation':
+      return 'provider_protocol_error'
+    case 'provider_failed':
+      return 'provider_error'
+  }
 }

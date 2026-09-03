@@ -63,7 +63,10 @@ export const AttentionIdSchema = z
   .brand<'AttentionId'>()
 export type AttentionId = z.infer<typeof AttentionIdSchema>
 
-export const TimestampSchema = z.iso.datetime({ offset: true })
+export const maximumTimestampCharacters = 64 as const
+export const TimestampSchema = z.iso
+  .datetime({ offset: true })
+  .max(maximumTimestampCharacters)
 export type Timestamp = z.infer<typeof TimestampSchema>
 
 export const EventSequenceSchema = z.number().int().positive().safe()

@@ -1,4 +1,10 @@
-import { useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
+import {
+  useId,
+  useRef,
+  useState,
+  type FormEvent,
+  type KeyboardEvent,
+} from 'react'
 import { LoaderCircle, Send } from 'lucide-react'
 
 import { IconButton, Separator, Textarea } from '@codetether/ui'
@@ -31,6 +37,7 @@ export function Composer({
   controller,
   externalError,
 }: ComposerProps) {
+  const statusId = useId()
   const [value, setValue] = useState('')
   const compositionActive = useRef(false)
   const submitActive = useRef(false)
@@ -39,6 +46,7 @@ export function Composer({
     capabilities.canCompose && isComposerEditableState(controlState)
   const canSend = canEdit && value.trim().length > 0
   const isLive = controller !== undefined
+  const disabledExplanation = capabilities.composerDisabled?.message
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -95,6 +103,8 @@ export function Composer({
           }}
           rows={2}
           readOnly={!canEdit}
+          aria-disabled={!canEdit || undefined}
+          aria-describedby={statusId}
           placeholder="输入消息…"
           aria-keyshortcuts="Enter"
           className="min-h-12 flex-1 resize-none border-0 bg-transparent px-1 py-2.5 text-base font-regular leading-normal placeholder:text-text-secondary/80 hover:border-transparent hover:bg-transparent focus-visible:border-transparent focus-visible:ring-0"
@@ -103,6 +113,7 @@ export function Composer({
           type="submit"
           label={isLive ? '发送消息' : '发送消息（演示）'}
           disabled={!canSend}
+          aria-describedby={statusId}
           className="mt-2 size-[var(--avatar-size-md)]"
         >
           {controlState === 'submitting' ? (
@@ -121,19 +132,22 @@ export function Composer({
       <div className="flex min-w-0 items-center px-3 py-2">
         {feedback ? (
           <span
+            id={statusId}
             role="alert"
-            className="ml-auto max-w-64 truncate text-xs text-danger"
+            className="ml-auto max-w-xl text-right text-xs leading-relaxed text-danger"
           >
             {feedback}
           </span>
         ) : (
           <span
+            id={statusId}
             role="status"
-            className="ml-auto shrink-0 text-xs text-text-muted"
+            className="ml-auto max-w-xl text-right text-xs leading-relaxed text-text-muted"
           >
-            {isLive
-              ? composerStateLabels[controlState]
-              : 'Enter 发送 · Shift + Enter 换行'}
+            {disabledExplanation ??
+              (isLive
+                ? composerStateLabels[controlState]
+                : 'Enter 发送 · Shift + Enter 换行')}
           </span>
         )}
       </div>

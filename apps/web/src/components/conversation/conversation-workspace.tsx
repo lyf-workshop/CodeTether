@@ -1,9 +1,10 @@
 import { useEffect, useRef, type Ref } from 'react'
 import { Link } from '@tanstack/react-router'
-import { Archive, WifiOff } from 'lucide-react'
+import { Archive, TriangleAlert, WifiOff } from 'lucide-react'
 import {
   ConversationIdSchema,
   type ConversationSummary,
+  type MachineId,
   type ProjectId,
 } from '@codetether/protocol'
 import { Button, cn } from '@codetether/ui'
@@ -11,10 +12,14 @@ import { Button, cn } from '@codetether/ui'
 import { Composer } from './composer'
 import { ConversationHeader } from './conversation-header'
 import { ConversationTimeline } from './conversation-timeline'
-import type { ConversationControls } from './conversation-controls'
+import {
+  conversationExecutionBoundaryPresentation,
+  type ConversationControls,
+} from './conversation-controls'
 import type {
   ConversationConnectionIndicatorViewModel,
   ConversationExecutionBoundaryViewModel,
+  ConversationProjectBoundaryViewModel,
   ConversationViewModel,
 } from './conversation-view-model'
 import { organizationConversationStatus } from './conversation-view-model'
@@ -26,7 +31,9 @@ interface ConversationWorkspaceProps {
   viewModel: ConversationViewModel
   connectionIndicator?: ConversationConnectionIndicatorViewModel
   executionBoundary?: ConversationExecutionBoundaryViewModel
+  projectBoundary?: ConversationProjectBoundaryViewModel
   inspectorTriggerRef?: Ref<HTMLButtonElement>
+  machineId?: MachineId
   onOpenInspector?: () => void
   onOpenChanges?: () => void
   controls?: ConversationControls
@@ -42,7 +49,9 @@ export function ConversationWorkspace({
   viewModel,
   connectionIndicator,
   executionBoundary,
+  projectBoundary,
   inspectorTriggerRef,
+  machineId,
   onOpenInspector,
   onOpenChanges,
   controls,
@@ -70,6 +79,10 @@ export function ConversationWorkspace({
             ? {}
             : { archivedAt: viewModel.archivedAt }),
         }
+  const executionBoundaryCopy =
+    executionBoundary === undefined
+      ? undefined
+      : conversationExecutionBoundaryPresentation(executionBoundary.reason)
 
   useEffect(() => {
     const wasArchived = wasArchivedRef.current
@@ -132,6 +145,11 @@ export function ConversationWorkspace({
           </div>
         )}
         {organizationConversation?.archivedAt !== undefined ||
+        projectBoundary === undefined ? null : (
+          <ProjectLocationBoundary boundary={projectBoundary} />
+        )}
+        {organizationConversation?.archivedAt !== undefined ||
+        projectBoundary !== undefined ||
         executionBoundary === undefined ? null : (
           <div
             role="status"
@@ -143,12 +161,10 @@ export function ConversationWorkspace({
             />
             <div className="min-w-0 flex-1">
               <p className="text-sm font-medium text-text-primary">
-                {executionBoundary.reason === 'machine_offline'
-                  ? '远程执行机器当前离线'
-                  : '这台机器当前无法执行此智能体'}
+                {executionBoundaryCopy?.title}
               </p>
               <p className="truncate text-xs text-text-secondary">
-                历史记录仍可查看；请在机器详情确认连接和智能体状态后再继续。
+                {executionBoundaryCopy?.description}
               </p>
             </div>
             <Button asChild variant="secondary" size="sm">
@@ -169,7 +185,10 @@ export function ConversationWorkspace({
         timeline={viewModel.timeline}
         changes={viewModel.changes}
         pendingApprovals={viewModel.pendingApprovals}
+        machineId={machineId}
+        projectId={projectId}
         projectRootPath={viewModel.projectRootPath}
+        retryController={controls?.failedTurnRetry}
         targetChangeId={targetChangeId}
         targetChangeRequestKey={targetChangeRequestKey}
         targetTurnId={targetTurnId}
@@ -193,6 +212,59 @@ export function ConversationWorkspace({
         )}
       </div>
     </section>
+  )
+}
+
+interface ProjectLocationBoundaryProps {
+  readonly boundary: ConversationProjectBoundaryViewModel
+}
+
+function ProjectLocationBoundary({ boundary }: ProjectLocationBoundaryProps) {
+  const copy = {
+    project_location_missing: {
+      title: '这台机器缺少项目位置',
+      description:
+        '历史记录仍可查看。请在项目详情中注册此机器的项目位置；CodeTether 不会改用其他目录。',
+    },
+    project_location_invalid: {
+      title: '已注册的项目位置已改变',
+      description:
+        '历史记录仍可查看。请修复原项目位置；CodeTether 未删除项目文件，也不会改用其他目录。',
+    },
+    project_location_unavailable: {
+      title: '项目位置当前不可用',
+      description:
+        '历史记录仍可查看。请检查已注册的位置；CodeTether 未删除项目文件，也不会改用其他目录。',
+    },
+  } as const
+  const current = copy[boundary.reason]
+
+  return (
+    <div
+      role="status"
+      aria-label="项目位置不可用"
+      className="flex min-w-0 flex-wrap items-center gap-3 border-b border-border bg-warning-muted/30 px-5 py-2.5 sm:flex-nowrap"
+    >
+      <TriangleAlert
+        aria-hidden="true"
+        className="size-4 shrink-0 text-warning"
+      />
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-medium text-text-primary">{current.title}</p>
+        <p className="break-words text-xs text-text-secondary">
+          {current.description}
+        </p>
+      </div>
+      <Button asChild variant="secondary" size="sm">
+        <Link
+          to="/projects/$projectId"
+          params={{ projectId: boundary.projectId }}
+          aria-label={`查看${boundary.projectName}的项目详情`}
+        >
+          查看项目
+        </Link>
+      </Button>
+    </div>
   )
 }
 

@@ -1,4 +1,5 @@
 import {
+  useId,
   useRef,
   useState,
   type FormEvent,
@@ -60,6 +61,7 @@ import {
   effectiveConversationProvider,
   effectiveProviderReasoning,
   executableConversationProviders,
+  newConversationProviderEligibility,
   providerDefaultReasoningSelection,
   providerReasoningFromControl,
 } from './new-conversation-provider-selection'
@@ -98,6 +100,7 @@ export function NewConversationDialog({
   const [selectedProvider, setSelectedProvider] = useState<ProviderId>('codex')
   const [selectedModel, setSelectedModel] = useState<string>()
   const [selectedReasoning, setSelectedReasoning] = useState<string>()
+  const providerHealthNoticeId = useId()
   const skipCloseFocusRestore = useRef(false)
   const open = controlledOpen ?? internalOpen
   const projectsQuery = useQuery({
@@ -187,6 +190,10 @@ export function NewConversationDialog({
   const machineProviderPresentations = providerPresentationsForMachine(
     machineDetailQuery.data?.providers ?? [],
   )
+  const providerOptions = machineProviderPresentations.map((provider) => ({
+    provider,
+    eligibility: newConversationProviderEligibility(provider),
+  }))
   const providers = executableConversationProviders(
     machineProviderPresentations,
   )
@@ -198,6 +205,9 @@ export function NewConversationDialog({
   const selectedProviderPresentation = providerPresentationForMachine(
     machineDetailQuery.data?.providers ?? [],
     effectiveSelectedProvider ?? selectedProvider,
+  )
+  const selectedProviderEligibility = newConversationProviderEligibility(
+    selectedProviderPresentation,
   )
   const showsModelSelection =
     effectiveProvider !== undefined &&
@@ -258,6 +268,7 @@ export function NewConversationDialog({
     selectedProviderPresentation.available &&
     selectedProviderPresentation.capabilities.streaming &&
     selectedProviderPresentation.capabilities.resume &&
+    selectedProviderEligibility.eligible &&
     selectedMachine !== undefined &&
     machineDetailQuery.isSuccess &&
     selectedProject !== undefined &&
@@ -458,7 +469,16 @@ export function NewConversationDialog({
                     onValueChange={handleProviderChange}
                     disabled={createMutation.isPending}
                   >
-                    <SelectTrigger size="sm" aria-label="选择智能体">
+                    <SelectTrigger
+                      size="sm"
+                      aria-label="选择智能体"
+                      aria-describedby={
+                        selectedProviderEligibility.executionAdvisory ===
+                        undefined
+                          ? undefined
+                          : providerHealthNoticeId
+                      }
+                    >
                       <SelectValue placeholder="选择可执行智能体">
                         {effectiveSelectedProvider === undefined ? undefined : (
                           <span className="flex min-w-0 items-center gap-1.5">
@@ -474,11 +494,12 @@ export function NewConversationDialog({
                       </SelectValue>
                     </SelectTrigger>
                     <SelectContent>
-                      {providers.map((provider) => (
+                      {providerOptions.map(({ provider, eligibility }) => (
                         <SelectItem
                           key={provider.provider}
                           value={provider.provider}
-                          textValue={`${provider.displayName} ${provider.availabilityLabel}`}
+                          textValue={eligibility.label}
+                          disabled={!eligibility.eligible}
                           className="py-2"
                         >
                           <span className="grid min-w-0 gap-0.5">
@@ -496,6 +517,9 @@ export function NewConversationDialog({
                               {provider.version === undefined
                                 ? ''
                                 : ` · ${provider.version}`}
+                              {eligibility.executionLabel === undefined
+                                ? ''
+                                : ` · ${eligibility.executionLabel}`}
                             </span>
                           </span>
                         </SelectItem>
@@ -630,6 +654,13 @@ export function NewConversationDialog({
               ) : null}
             </dl>
 
+            {selectedProviderEligibility.executionAdvisory ===
+            undefined ? null : (
+              <InlineNotice id={providerHealthNoticeId}>
+                {selectedProviderEligibility.executionAdvisory}
+              </InlineNotice>
+            )}
+
             {projectUnavailable ? (
               <InlineNotice>
                 项目目录当前不可用；恢复原目录后才能创建会话。
@@ -737,9 +768,10 @@ function LockedSetting({
   )
 }
 
-function InlineNotice({ children }: { children: string }) {
+function InlineNotice({ children, id }: { children: string; id?: string }) {
   return (
     <p
+      id={id}
       role="status"
       className="rounded-sm border border-warning/30 bg-warning-muted/35 px-3 py-2 text-sm text-text-secondary"
     >

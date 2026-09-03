@@ -49,6 +49,12 @@ import { NewConversationDialog } from '../conversations/new-conversation-dialog'
 import { createDemoConversationDetailSource } from './demo-conversation-adapter'
 import { createLiveConversationDetailSource } from './live-conversation-adapter'
 import { startComposerFocusHandoff } from './composer-focus-handoff'
+import {
+  deriveComposerEligibility,
+  deriveConversationExecutionBoundaryReason,
+  deriveProjectLocationBoundaryReason,
+  conversationExecutionBoundaryPresentation,
+} from './conversation-controls'
 import { useLiveConversationControls } from './use-live-conversation-controls'
 
 export function ConversationDetailRoute() {
@@ -330,6 +336,13 @@ function ConnectedLiveConversationDetail({
   const machineProvider = machineProviders.find(
     (provider) => provider.provider === conversation.provider,
   )
+  const composerDisabled = deriveComposerEligibility({
+    connectionState,
+    currentTurnStatus: conversation.currentTurn?.status,
+    machine,
+    projectAvailability,
+    provider: machineProvider,
+  })
   const executionAvailable =
     machine?.availability === 'available' &&
     machine.capabilities.providerExecution &&
@@ -337,9 +350,16 @@ function ConnectedLiveConversationDetail({
     machineProvider.capabilities.streaming &&
     machineProvider.capabilities.resume
   const executionUnavailableReason =
+    deriveConversationExecutionBoundaryReason(machine)
+  const executionUnavailablePresentation =
+    conversationExecutionBoundaryPresentation(executionUnavailableReason)
+  const projectBoundaryReason =
     machine?.kind === 'remote' && machine.connectionState !== 'online'
-      ? 'machine_offline'
-      : 'execution_unavailable'
+      ? undefined
+      : deriveProjectLocationBoundaryReason(
+          projectAvailability,
+          conversation.currentTurn?.error,
+        )
   const source = createLiveConversationDetailSource(
     conversation,
     summaries,
@@ -349,12 +369,10 @@ function ConnectedLiveConversationDetail({
     projectRootPath,
     machineName,
     {
+      composerDisabled,
       providerDescriptors: machineProviders,
       executionAvailable,
-      executionUnavailableLabel:
-        executionUnavailableReason === 'machine_offline'
-          ? '执行机器离线'
-          : '远程执行不可用',
+      executionUnavailableLabel: executionUnavailablePresentation.title,
       names: machineNames,
     },
   )
@@ -370,7 +388,9 @@ function ConnectedLiveConversationDetail({
         viewModel={source.conversation}
         rail={source.rail}
         connectionIndicator={source.connectionIndicator}
-        {...(executionAvailable || machine === undefined
+        {...(executionAvailable ||
+        machine === undefined ||
+        (project !== undefined && projectBoundaryReason !== undefined)
           ? {}
           : {
               executionBoundary: {
@@ -379,8 +399,18 @@ function ConnectedLiveConversationDetail({
                 reason: executionUnavailableReason,
               },
             })}
+        {...(project === undefined || projectBoundaryReason === undefined
+          ? {}
+          : {
+              projectBoundary: {
+                projectId: project.projectId,
+                projectName: project.name,
+                reason: projectBoundaryReason,
+              },
+            })}
         controls={controls}
         initialInspectorTab={initialInspectorTab}
+        machineId={machine?.machineId}
         targetTurnId={targetTurnId}
         newConversationButtonRef={newConversationButtonRef}
         newConversationDisabled={projectAvailability === 'unavailable'}

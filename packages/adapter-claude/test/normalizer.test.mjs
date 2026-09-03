@@ -514,6 +514,75 @@ test('maps authentication and terminal errors to bounded safe failures', () => {
   assert.equal(normalizer.failure?.code, 'provider_unavailable')
 })
 
+test('maps exact service and output-limit assistant errors to canonical failures', () => {
+  for (const [assistantError, expectedReason] of [
+    ['server_error', 'provider_service_unavailable'],
+    ['max_output_tokens', 'output_limit_exceeded'],
+  ]) {
+    const normalizer = createNormalizer()
+    normalizer.consume(init())
+    const diagnostic = normalizer.consume({
+      type: 'assistant',
+      session_id: sessionId,
+      uuid: `assistant-${assistantError}`,
+      error: assistantError,
+      message: {
+        id: `message-${assistantError}`,
+        content: [
+          {
+            type: 'text',
+            text: 'private Provider diagnostic must not be published',
+          },
+        ],
+      },
+    })
+    const failed = normalizer.consume({
+      type: 'result',
+      subtype: 'error_during_execution',
+      session_id: sessionId,
+      is_error: true,
+      errors: ['private raw failure detail'],
+    })
+
+    assert.deepEqual(diagnostic, [])
+    assert.deepEqual(
+      failed.map((event) => event.type),
+      ['turn.failed'],
+    )
+    assert.equal(failed[0].error.failure.reason, expectedReason)
+    assert.doesNotMatch(
+      JSON.stringify(failed),
+      /private Provider diagnostic|private raw failure detail/u,
+    )
+  }
+})
+
+test('fails closed when an assistant error is followed by a false success result', () => {
+  const normalizer = createNormalizer()
+  normalizer.consume(init())
+  normalizer.consume({
+    type: 'assistant',
+    session_id: sessionId,
+    uuid: 'assistant-error-before-success',
+    error: 'authentication_failed',
+  })
+
+  const terminal = normalizer.consume({
+    type: 'result',
+    subtype: 'success',
+    session_id: sessionId,
+    is_error: false,
+    result: 'malformed success after failure',
+  })
+
+  assert.deepEqual(
+    terminal.map((event) => event.type),
+    ['turn.failed'],
+  )
+  assert.equal(terminal[0].error.failure.reason, 'authentication_invalid')
+  assert.equal(normalizer.result, undefined)
+})
+
 test('maps a provider terminal failure without raw diagnostics', () => {
   const normalizer = createNormalizer()
   normalizer.consume(init())
@@ -528,4 +597,39 @@ test('maps a provider terminal failure without raw diagnostics', () => {
   assert.equal(failed[0].type, 'turn.failed')
   assert.equal(failed[0].error.code, 'provider_unavailable')
   assert.doesNotMatch(failed[0].error.message, /OAuth|token|private/)
+})
+
+test('does not retain or publish an oversized adversarial assistant error', () => {
+  const normalizer = createNormalizer()
+  normalizer.consume(init())
+  const privateDiagnostic = `<script>${'private-token '.repeat(32_768)}</script>`
+  const diagnostic = normalizer.consume({
+    type: 'assistant',
+    session_id: sessionId,
+    uuid: 'assistant-adversarial-error',
+    error: privateDiagnostic,
+    message: {
+      id: 'message-adversarial-error',
+      content: [
+        {
+          type: 'text',
+          text: '[Authenticate](https://malicious.invalid)',
+        },
+      ],
+    },
+  })
+  const failed = normalizer.consume({
+    type: 'result',
+    subtype: 'error_during_execution',
+    session_id: sessionId,
+    is_error: true,
+  })
+
+  assert.deepEqual(diagnostic, [])
+  assert.equal(failed[0].type, 'turn.failed')
+  assert.equal(failed[0].error.failure.reason, 'provider_error')
+  assert.doesNotMatch(
+    JSON.stringify(failed),
+    /script|private-token|malicious\.invalid|Authenticate/u,
+  )
 })

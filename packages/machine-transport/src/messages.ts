@@ -1,5 +1,16 @@
 import { z } from 'zod'
 
+import {
+  canonicalFailure,
+  canonicalFailureCategories,
+  canonicalFailureReasons,
+  canonicalFailureRetryabilities,
+  canonicalFailureSources,
+  canonicalFailureUserActions,
+  type CanonicalFailure,
+  type CanonicalFailureReason,
+} from '@codetether/agent-core'
+
 import { machineProtocolVersion, machineTransportLimits } from './constants.js'
 import {
   ControllerIdSchema,
@@ -17,7 +28,131 @@ export const PublicKeyFingerprintSchema = z
   .regex(/^[A-Za-z0-9_-]{43}$/)
 export type PublicKeyFingerprint = z.infer<typeof PublicKeyFingerprintSchema>
 
-const TimestampSchema = z.iso.datetime({ offset: true })
+const MAXIMUM_TIMESTAMP_CHARACTERS = 64
+const TimestampSchema = z.iso
+  .datetime({ offset: true })
+  .max(MAXIMUM_TIMESTAMP_CHARACTERS)
+export const MachineTransportCanonicalFailureSchema: z.ZodType<CanonicalFailure> =
+  z
+    .object({
+      category: z.enum(canonicalFailureCategories),
+      reason: z.enum(canonicalFailureReasons),
+      retryability: z.enum(canonicalFailureRetryabilities),
+      userAction: z.enum(canonicalFailureUserActions),
+      source: z.enum(canonicalFailureSources),
+      occurredAt: TimestampSchema,
+      technicalCode: z.enum(canonicalFailureReasons),
+    })
+    .strict()
+    .superRefine((failure, context) => {
+      const expected = canonicalFailure(failure.reason, failure.occurredAt)
+      for (const field of [
+        'category',
+        'retryability',
+        'userAction',
+        'source',
+        'technicalCode',
+      ] as const) {
+        if (failure[field] !== expected[field]) {
+          context.addIssue({
+            code: 'custom',
+            message: `Canonical failure ${field} does not match its reason`,
+            path: [field],
+          })
+        }
+      }
+    })
+
+const providerConditionFailureReasonValues = [
+  'login_required',
+  'authentication_expired',
+  'authentication_invalid',
+  'account_unavailable',
+  'usage_limit_reached',
+  'rate_limited',
+  'provider_capacity_limited',
+  'provider_not_installed',
+  'provider_unsupported_version',
+  'provider_misconfigured',
+  'provider_service_unavailable',
+  'provider_start_failed',
+  'provider_crashed',
+  'provider_protocol_error',
+  'provider_error',
+] as const satisfies readonly CanonicalFailureReason[]
+
+const providerConditionFailureReasons = new Set<CanonicalFailureReason>(
+  providerConditionFailureReasonValues,
+)
+
+const providerOperationFailureReasons = new Set<CanonicalFailureReason>([
+  ...providerConditionFailureReasons,
+  'execution_ownership_uncertain',
+  'output_limit_exceeded',
+  'protocol_limit_exceeded',
+])
+
+const providerSessionLossFailureReasons = new Set<CanonicalFailureReason>([
+  'provider_crashed',
+  'provider_session_lost',
+  'execution_lost',
+  'execution_ownership_uncertain',
+])
+
+const remoteExecutionLossFailureReasons = new Set<CanonicalFailureReason>([
+  'execution_lost',
+  'execution_ownership_uncertain',
+  'output_limit_exceeded',
+  'protocol_limit_exceeded',
+  'transport_lost',
+])
+
+const remotePolicyFailureReasons = new Set<CanonicalFailureReason>([
+  'provider_protocol_error',
+  'protocol_limit_exceeded',
+])
+
+function isFailureCompatibleWithWireCode(
+  code: string,
+  failure: CanonicalFailure | undefined,
+): boolean {
+  if (failure === undefined) return true
+
+  switch (code) {
+    case 'authentication_failed':
+      return failure.reason === 'transport_authentication_failed'
+    case 'identity_mismatch':
+      return failure.reason === 'machine_identity_mismatch'
+    case 'busy':
+      return failure.reason === 'execution_capacity_reached'
+    case 'project_location_path_invalid':
+    case 'project_location_not_directory':
+      return failure.reason === 'project_location_invalid'
+    case 'project_location_missing':
+      return failure.reason === 'project_location_missing'
+    case 'project_location_inaccessible':
+      return failure.reason === 'project_location_unavailable'
+    case 'remote_execution_unavailable':
+      return failure.reason === 'remote_execution_unavailable'
+    case 'provider_unavailable':
+    case 'provider_start_failed':
+    case 'provider_failed':
+      return providerOperationFailureReasons.has(failure.reason)
+    case 'provider_session_lost':
+      return providerSessionLossFailureReasons.has(failure.reason)
+    case 'remote_execution_lost':
+      return remoteExecutionLossFailureReasons.has(failure.reason)
+    case 'remote_policy_violation':
+      return remotePolicyFailureReasons.has(failure.reason)
+    case 'conversation_busy':
+      return failure.reason === 'conversation_busy'
+    default:
+      // Pairing/protocol framing and duplicate-action errors do not carry
+      // Provider execution diagnostics. Their bounded machine error code is
+      // already the complete public signal.
+      return false
+  }
+}
 const BoundedOpaqueEnvelopeSchema = z.string().min(1).max(4096)
 const NonceSchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/)
 const AuthenticationTagSchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/)
@@ -380,6 +515,10 @@ export const RemoteProviderDescriptorSchema = z
       .length(5)
       .readonly()
       .optional(),
+    /** Safe execution truth kept distinct from installation availability. */
+    executionFailureReason: z
+      .enum(providerConditionFailureReasonValues)
+      .optional(),
   })
   .strict()
   .superRefine((descriptor, context) => {
@@ -435,6 +574,14 @@ export const RemoteProviderDescriptorSchema = z
         code: 'custom',
         message: 'Remote reasoning metadata belongs only to Claude Code',
         path: ['reasoningOptions'],
+      })
+    }
+    if (descriptor.executionFailureReason !== undefined && enabled.length > 0) {
+      context.addIssue({
+        code: 'custom',
+        message:
+          'Unavailable execution cannot advertise execution capabilities',
+        path: ['executionFailureReason'],
       })
     }
   })
@@ -579,8 +726,16 @@ export const RemoteCodexTurnEventPayloadSchema = z.discriminatedUnion('type', [
       type: z.literal('turn.failed'),
       code: RemoteCodexTurnFailureCodeSchema,
       message: z.string().trim().min(1).max(240),
+      failure: MachineTransportCanonicalFailureSchema.optional(),
     })
-    .strict(),
+    .strict()
+    .refine(
+      (event) => isFailureCompatibleWithWireCode(event.code, event.failure),
+      {
+        message: 'Canonical failure is incompatible with the Turn error code',
+        path: ['failure'],
+      },
+    ),
 ])
 export type RemoteCodexTurnEventPayload = z.infer<
   typeof RemoteCodexTurnEventPayloadSchema
@@ -828,8 +983,16 @@ export const RemoteClaudeTurnEventPayloadSchema = z.union([
       type: z.literal('turn.failed'),
       code: RemoteClaudeTurnFailureCodeSchema,
       message: z.string().trim().min(1).max(240),
+      failure: MachineTransportCanonicalFailureSchema.optional(),
     })
-    .strict(),
+    .strict()
+    .refine(
+      (event) => isFailureCompatibleWithWireCode(event.code, event.failure),
+      {
+        message: 'Canonical failure is incompatible with the Turn error code',
+        path: ['failure'],
+      },
+    ),
 ])
 export type RemoteClaudeTurnEventPayload = z.infer<
   typeof RemoteClaudeTurnEventPayloadSchema
@@ -960,8 +1123,16 @@ export const MachineErrorMessageSchema = z
     protocolVersion: VersionField,
     code: MachineWireErrorCodeSchema,
     message: z.string().trim().min(1).max(240),
+    failure: MachineTransportCanonicalFailureSchema.optional(),
   })
   .strict()
+  .refine(
+    (error) => isFailureCompatibleWithWireCode(error.code, error.failure),
+    {
+      message: 'Canonical failure is incompatible with the Machine error code',
+      path: ['failure'],
+    },
+  )
 export type MachineErrorMessage = z.infer<typeof MachineErrorMessageSchema>
 
 export const MachineWireMessageSchema = z.discriminatedUnion('type', [

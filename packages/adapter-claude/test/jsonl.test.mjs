@@ -29,6 +29,7 @@ test('bounds provider JSONL lines', () => {
       assert.ok(error instanceof ClaudeJsonLineTooLongError)
       assert.equal(error.maxLineBytes, 4)
       assert.equal(error.observedLineBytes, 5)
+      assert.equal(error.failureReason, 'protocol_limit_exceeded')
       return true
     },
   )
@@ -40,6 +41,7 @@ test('malformed input becomes a safe protocol error without raw content', () => 
     (error) => {
       assert.ok(error instanceof ClaudeCodeProtocolError)
       assert.equal(error.code, 'provider_start_failed')
+      assert.equal(error.failureReason, 'provider_protocol_error')
       assert.doesNotMatch(error.message, /private|payload/)
       return true
     },

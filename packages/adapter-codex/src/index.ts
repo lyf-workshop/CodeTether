@@ -1,5 +1,6 @@
 export * from './client.js'
 export * from './errors.js'
+export * from './failure-classifier.js'
 export * from './line-decoder.js'
 export * from './logging.js'
 export * from './normalizer.js'

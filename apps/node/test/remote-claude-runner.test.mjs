@@ -285,6 +285,7 @@ test('runner maps pre-ownership startup failure without acknowledging a Turn', a
   const root = await realpath(temporary)
   const startupFailure = Object.assign(new Error('private spawn failure'), {
     code: 'provider_start_failed',
+    failureReason: 'login_required',
   })
   const runtime = new FakeClaudeRuntime(sessionId, root)
   runtime.startTurnExecution = () => ({
@@ -298,8 +299,112 @@ test('runner maps pre-ownership startup failure without acknowledging a Turn', a
   const runner = await pool.open(sessionRequest(root))
   await assert.rejects(
     runner.startTurn(turnRequest(runner.providerSessionId)),
-    (error) => error.code === 'provider_start_failed',
+    (error) =>
+      error.code === 'provider_start_failed' &&
+      error.failureReason === 'login_required' &&
+      !error.message.includes('private'),
   )
+})
+
+test('runner cleans a synchronous start failure before releasing its Conversation slot', async (t) => {
+  const temporary = await mkdtemp(
+    join(tmpdir(), 'codetether-claude-sync-start-'),
+  )
+  t.after(async () => await rm(temporary, { recursive: true, force: true }))
+  const root = await realpath(temporary)
+  const startupFailure = Object.assign(
+    new Error('private synchronous process factory detail'),
+    {
+      code: 'provider_start_failed',
+      failureReason: 'provider_start_failed',
+    },
+  )
+  const firstRuntime = new FakeClaudeRuntime(sessionId, root)
+  firstRuntime.startTurnExecution = () => {
+    throw startupFailure
+  }
+  const recoveredRuntime = new FakeClaudeRuntime(sessionId, root)
+  let factoryCalls = 0
+  const pool = new RemoteClaudeRunnerPool({
+    runtimeFactory: async () => {
+      factoryCalls += 1
+      return factoryCalls === 1 ? firstRuntime : recoveredRuntime
+    },
+  })
+  t.after(async () => await pool.close())
+
+  const runner = await pool.open(sessionRequest(root))
+  await assert.rejects(
+    runner.startTurn(turnRequest(runner.providerSessionId)),
+    (error) =>
+      error.code === 'provider_start_failed' &&
+      error.failureReason === 'provider_start_failed' &&
+      !error.message.includes('private'),
+  )
+  assert.equal(firstRuntime.closeCount, 1)
+  for (let attempt = 0; attempt < 10 && pool.activeCount !== 0; attempt += 1) {
+    await new Promise((resolve) => setImmediate(resolve))
+  }
+  assert.equal(pool.activeCount, 0)
+
+  const recovered = await pool.open(
+    sessionRequest(root, { requestId: 'D'.repeat(43) }),
+  )
+  await recovered.startTurn(
+    turnRequest(recovered.providerSessionId, {
+      actionId: 'act_remote_claude_sync_recovery',
+      turnId: 'turn_remote_claude_sync_recovery',
+    }),
+  )
+  assert.equal(recoveredRuntime.starts.length, 1)
+})
+
+test('runner open preserves a controlled login failure from execution admission', async (t) => {
+  const temporary = await mkdtemp(
+    join(tmpdir(), 'codetether-claude-login-admission-'),
+  )
+  t.after(async () => await rm(temporary, { recursive: true, force: true }))
+  const root = await realpath(temporary)
+  const pool = new RemoteClaudeRunnerPool({
+    runtimeFactory: async () => {
+      throw Object.assign(new Error('private auth path and account detail'), {
+        code: 'provider_unavailable',
+        failureReason: 'login_required',
+      })
+    },
+  })
+  t.after(async () => await pool.close())
+
+  await assert.rejects(
+    pool.open(sessionRequest(root)),
+    (error) =>
+      error.code === 'provider_unavailable' &&
+      error.failureReason === 'login_required' &&
+      error.message === 'Remote Claude is unavailable' &&
+      !error.message.includes('private'),
+  )
+  assert.equal(pool.activeCount, 0)
+})
+
+test('runner preserves a controlled Claude Provider failure without its prose', async (t) => {
+  const temporary = await mkdtemp(join(tmpdir(), 'codetether-claude-failure-'))
+  t.after(async () => await rm(temporary, { recursive: true, force: true }))
+  const root = await realpath(temporary)
+  const harness = runtimeHarness()
+  const pool = new RemoteClaudeRunnerPool({ runtimeFactory: harness.factory })
+  t.after(async () => await pool.close())
+  const runner = await pool.open(sessionRequest(root))
+  const turn = await runner.startTurn(turnRequest(runner.providerSessionId))
+  harness.runtimes[0].completions[0].reject(
+    Object.assign(new Error('private Provider account and token detail'), {
+      code: 'provider_unavailable',
+      failureReason: 'rate_limited',
+    }),
+  )
+
+  const events = await collectTurn(turn)
+  assert.equal(events[0].failure.reason, 'rate_limited')
+  assert.doesNotMatch(JSON.stringify(events), /private|account|token/u)
 })
 
 test('50,000 tiny deltas remain bounded for a deliberately slow consumer', async (t) => {
@@ -516,7 +621,8 @@ test('nonstreamed assistant snapshots fail closed without fabricated deltas', as
   })
 
   const events = await collectTurn(turn)
-  assert.deepEqual(events, [
+  assert.equal(events[0].failure.reason, 'execution_lost')
+  assert.deepEqual(events.map(stripCanonicalFailure), [
     {
       type: 'turn.failed',
       code: 'remote_execution_lost',
@@ -552,7 +658,8 @@ test('a successful Provider result without a streamed message fails closed', asy
   })
 
   const events = await collectTurn(turn)
-  assert.deepEqual(events, [
+  assert.equal(events[0].failure.reason, 'execution_lost')
+  assert.deepEqual(events.map(stripCanonicalFailure), [
     {
       type: 'turn.failed',
       code: 'remote_execution_lost',
@@ -584,7 +691,8 @@ test('unsupported mutation Tool fails closed after exact runtime cleanup', async
     command: 'Edit fixture.txt',
   })
   const events = await collectTurn(turn)
-  assert.deepEqual(events, [
+  assert.equal(events[0].failure.reason, 'provider_protocol_error')
+  assert.deepEqual(events.map(stripCanonicalFailure), [
     {
       type: 'turn.failed',
       code: 'remote_policy_violation',
@@ -621,7 +729,9 @@ test('fatal policy termination retains cleanup failure after terminal event', as
     command: 'Write fixture.txt',
   })
 
-  assert.deepEqual(await collectTurn(turn), [
+  const events = await collectTurn(turn)
+  assert.equal(events[0].failure.reason, 'execution_ownership_uncertain')
+  assert.deepEqual(events.map(stripCanonicalFailure), [
     {
       type: 'turn.failed',
       code: 'remote_policy_violation',
@@ -746,7 +856,9 @@ test('pool shutdown rejects cleanup failure after terminalizing its active Turn'
       error instanceof AggregateError &&
       error.message === 'Remote Claude owned process cleanup did not complete',
   )
-  assert.deepEqual(await collectTurn(turn), [
+  const events = await collectTurn(turn)
+  assert.equal(events[0].failure.reason, 'execution_ownership_uncertain')
+  assert.deepEqual(events.map(stripCanonicalFailure), [
     {
       type: 'turn.failed',
       code: 'remote_execution_lost',
@@ -799,4 +911,10 @@ async function waitForPoolRelease(pool) {
     await new Promise((resolve) => setImmediate(resolve))
   }
   assert.fail('Timed out waiting for remote Claude pool release')
+}
+
+function stripCanonicalFailure(event) {
+  const legacyEvent = { ...event }
+  delete legacyEvent.failure
+  return legacyEvent
 }

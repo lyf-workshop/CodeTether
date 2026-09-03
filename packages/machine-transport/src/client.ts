@@ -1,5 +1,7 @@
 import { z } from 'zod'
 
+import type { CanonicalFailure } from '@codetether/agent-core'
+
 import { machineProtocolVersion, machineTransportLimits } from './constants.js'
 import { MachineTransportError } from './errors.js'
 import { FramedMachineConnection } from './framing.js'
@@ -111,7 +113,7 @@ export async function beginRemoteMachinePairing(options: {
       { signal: options.signal },
     )
     if (first.type === 'machine.error')
-      throw remoteError(first.code, first.message)
+      throw remoteError(first.code, first.message, false, first.failure)
     if (!fingerprintsEqual(first.nodeFingerprint, tls.peerFingerprint)) {
       throw new MachineTransportError(
         'identity_mismatch',
@@ -142,7 +144,12 @@ export async function beginRemoteMachinePairing(options: {
       { signal: options.signal },
     )
     if (response.type === 'machine.error') {
-      throw remoteError(response.code, response.message)
+      throw remoteError(
+        response.code,
+        response.message,
+        false,
+        response.failure,
+      )
     }
     const login = initiator.finish(response.response)
     await connection.send({
@@ -257,7 +264,12 @@ export class PendingRemoteMachinePairing {
         },
       )
       if (response.type === 'machine.error') {
-        throw remoteError(response.code, response.message)
+        throw remoteError(
+          response.code,
+          response.message,
+          false,
+          response.failure,
+        )
       }
       verifyPairingConfirmationTag(
         this.#sessionKey,
@@ -293,7 +305,12 @@ export class PendingRemoteMachinePairing {
         { signal },
       )
       if (response.type === 'machine.error') {
-        throw remoteError(response.code, response.message)
+        throw remoteError(
+          response.code,
+          response.message,
+          false,
+          response.failure,
+        )
       }
       verifyPairingConfirmationTag(
         this.#sessionKey,
@@ -351,7 +368,7 @@ export async function connectTrustedRemoteMachine(options: {
       { signal: options.signal },
     )
     if (response.type === 'machine.error') {
-      throw remoteError(response.code, response.message, true)
+      throw remoteError(response.code, response.message, true, response.failure)
     }
     if (
       response.nonce !== nonce ||
@@ -519,7 +536,7 @@ export class AuthenticatedRemoteMachineConnection {
       { signal, timeoutMs: machineTransportLimits.heartbeatTimeoutMs },
     )
     if (response.type === 'machine.error') {
-      throw remoteError(response.code, response.message, true)
+      throw remoteError(response.code, response.message, true, response.failure)
     }
     if (response.nonce !== nonce) {
       throw new MachineTransportError(
@@ -560,7 +577,7 @@ export class AuthenticatedRemoteMachineConnection {
       { signal },
     )
     if (response.type === 'machine.error') {
-      throw remoteError(response.code, response.message, true)
+      throw remoteError(response.code, response.message, true, response.failure)
     }
     this.#assertProjectLocationResponse(response, requestId)
     return {
@@ -601,7 +618,7 @@ export class AuthenticatedRemoteMachineConnection {
       },
     )
     if (response.type === 'machine.error') {
-      throw remoteError(response.code, response.message, true)
+      throw remoteError(response.code, response.message, true, response.failure)
     }
     this.#assertProviderDiscoveryResponse(response, requestId)
     return {
@@ -625,7 +642,7 @@ export class AuthenticatedRemoteMachineConnection {
       { signal },
     )
     if (response.type === 'machine.error') {
-      throw remoteError(response.code, response.message, true)
+      throw remoteError(response.code, response.message, true, response.failure)
     }
     if (
       response.controllerId !== this.#controllerId ||
@@ -683,7 +700,7 @@ export class AuthenticatedRemoteMachineConnection {
       },
     )
     if (response.type === 'machine.error') {
-      throw remoteError(response.code, response.message, true)
+      throw remoteError(response.code, response.message, true, response.failure)
     }
     if (
       response.requestId !== requestId ||
@@ -758,7 +775,7 @@ export class AuthenticatedRemoteMachineConnection {
       },
     )
     if (response.type === 'machine.error') {
-      throw remoteError(response.code, response.message, true)
+      throw remoteError(response.code, response.message, true, response.failure)
     }
     if (
       response.requestId !== requestId ||
@@ -898,6 +915,7 @@ export class RemoteCodexSession {
       )
     }
     options.signal?.throwIfAborted()
+    let definitiveMachineError = false
     try {
       await this.#connection.send({
         type: 'codex.turn.start',
@@ -917,7 +935,13 @@ export class RemoteCodexSession {
         },
       )
       if (response.type === 'machine.error') {
-        throw remoteError(response.code, response.message, true)
+        definitiveMachineError = true
+        throw remoteError(
+          response.code,
+          response.message,
+          true,
+          response.failure,
+        )
       }
       if (
         response.machineId !== this.machine.machineId ||
@@ -945,11 +969,14 @@ export class RemoteCodexSession {
       this.#activeTurn = turn
       return turn
     } catch (error) {
-      // Once the start frame is sent, a timeout/abort leaves Prompt ownership
-      // ambiguous. Fail the dedicated connection closed; callers may reconcile
-      // the durable Turn but must never blindly send the Prompt again.
+      // Once this dedicated connection attempts the start write, only a
+      // structured authenticated machine.error can prove a terminal rejection.
+      // A dropped/malformed acknowledgement (or a write whose delivery cannot
+      // be proven) leaves Prompt ownership ambiguous even if the Machine's
+      // separate coordinator connection remains online.
       this.#failClosed()
-      throw error
+      if (definitiveMachineError) throw error
+      throw uncertainTurnStart('Codex', error)
     }
   }
 
@@ -976,7 +1003,12 @@ export class RemoteCodexSession {
         { signal },
       )
       if (response.type === 'machine.error') {
-        throw remoteError(response.code, response.message, true)
+        throw remoteError(
+          response.code,
+          response.message,
+          true,
+          response.failure,
+        )
       }
       if (
         response.requestId !== requestId ||
@@ -1075,7 +1107,12 @@ export class RemoteCodexTurn {
           },
         )
         if (response.type === 'machine.error') {
-          throw remoteError(response.code, response.message, true)
+          throw remoteError(
+            response.code,
+            response.message,
+            true,
+            response.failure,
+          )
         }
         if (response.type === 'codex.session.heartbeat.ack') {
           if (
@@ -1204,6 +1241,7 @@ export class RemoteClaudeSession {
       )
     }
     options.signal?.throwIfAborted()
+    let definitiveMachineError = false
     try {
       await this.#connection.send({
         type: 'claude.turn.start',
@@ -1223,7 +1261,13 @@ export class RemoteClaudeSession {
         },
       )
       if (response.type === 'machine.error') {
-        throw remoteError(response.code, response.message, true)
+        definitiveMachineError = true
+        throw remoteError(
+          response.code,
+          response.message,
+          true,
+          response.failure,
+        )
       }
       if (
         response.machineId !== this.machine.machineId ||
@@ -1251,9 +1295,12 @@ export class RemoteClaudeSession {
       this.#activeTurn = turn
       return turn
     } catch (error) {
-      // Prompt ownership is uncertain after send. Never replay it implicitly.
+      // The dedicated execution acknowledgement is independent of the Machine
+      // coordinator connection. Without an authenticated machine.error, any
+      // post-write failure is ownership-uncertain and never replay-safe.
       this.#failClosed()
-      throw error
+      if (definitiveMachineError) throw error
+      throw uncertainTurnStart('Claude Code', error)
     }
   }
 
@@ -1283,7 +1330,12 @@ export class RemoteClaudeSession {
         { signal },
       )
       if (response.type === 'machine.error') {
-        throw remoteError(response.code, response.message, true)
+        throw remoteError(
+          response.code,
+          response.message,
+          true,
+          response.failure,
+        )
       }
       if (
         response.requestId !== requestId ||
@@ -1309,6 +1361,21 @@ export class RemoteClaudeSession {
     this.#activeTurn?.transportClosed()
     this.#connection.destroy()
   }
+}
+
+function uncertainTurnStart(
+  provider: 'Codex' | 'Claude Code',
+  cause: unknown,
+): MachineTransportError {
+  return new MachineTransportError(
+    'remote_execution_lost',
+    `Remote ${provider} Turn ownership could not be confirmed`,
+    {
+      cause,
+      peerAuthenticated: true,
+      failureReason: 'execution_ownership_uncertain',
+    },
+  )
 }
 
 export class RemoteClaudeTurn {
@@ -1382,7 +1449,12 @@ export class RemoteClaudeTurn {
           },
         )
         if (response.type === 'machine.error') {
-          throw remoteError(response.code, response.message, true)
+          throw remoteError(
+            response.code,
+            response.message,
+            true,
+            response.failure,
+          )
         }
         if (response.type === 'claude.session.heartbeat.ack') {
           if (
@@ -1595,6 +1667,7 @@ function remoteError(
   code: z.infer<typeof MachineErrorMessageSchema>['code'],
   message: string,
   peerAuthenticated = false,
+  failure?: CanonicalFailure,
 ) {
   const mapped =
     code === 'protocol_incompatible'
@@ -1638,7 +1711,10 @@ function remoteError(
                                           : code === 'duplicate_action_conflict'
                                             ? 'duplicate_action_conflict'
                                             : 'pairing_failed'
-  return new MachineTransportError(mapped, message, { peerAuthenticated })
+  return new MachineTransportError(mapped, message, {
+    peerAuthenticated,
+    failure,
+  })
 }
 
 function authenticatedOperationError(error: unknown): MachineTransportError {
@@ -1647,6 +1723,8 @@ function authenticatedOperationError(error: unknown): MachineTransportError {
     return new MachineTransportError(error.code, error.message, {
       cause: error,
       peerAuthenticated: true,
+      failureReason: error.failureReason,
+      failure: error.failure,
     })
   }
   return new MachineTransportError(

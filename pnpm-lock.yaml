@@ -168,6 +168,9 @@ importers:
 
   packages/machine-transport:
     dependencies:
+      '@codetether/agent-core':
+        specifier: workspace:*
+        version: link:../agent-core
       '@serenity-kit/opaque':
         specifier: 1.1.0
         version: 1.1.0
@@ -180,6 +183,9 @@ importers:
 
   packages/protocol:
     dependencies:
+      '@codetether/agent-core':
+        specifier: workspace:*
+        version: link:../agent-core
       zod:
         specifier: ^4.4.3
         version: 4.4.3

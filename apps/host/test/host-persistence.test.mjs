@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 
+import { canonicalFailure } from '@codetether/agent-core'
+
 import { ProviderConversationUnavailableError } from '../dist/api/agent-runtime.js'
 import { HostEventPublisher } from '../dist/api/host-event-publisher.js'
 import { HostService, HostServiceError } from '../dist/api/host-service.js'
@@ -12,6 +14,7 @@ import {
   ConversationStore,
   DURABLE_TURN_SNAPSHOT_VERSION,
   initialTurnPresentation,
+  readDurableConversationDetail,
 } from '../dist/persistence/index.js'
 import { normalizeTrustedProjectRoot } from '../dist/project-path.js'
 
@@ -137,7 +140,12 @@ async function createEnvironment() {
   return { directory, workspace, databasePath }
 }
 
-async function createService(environment, epoch, runtime = new FakeRuntime()) {
+async function createService(
+  environment,
+  epoch,
+  runtime = new FakeRuntime(),
+  now = () => new Date(timestamp),
+) {
   const store = ConversationStore.open({
     databasePath: environment.databasePath,
   })
@@ -149,7 +157,7 @@ async function createService(environment, epoch, runtime = new FakeRuntime()) {
     publisher,
     persistence: store,
     hostVersion: '0.0.0-test',
-    now: () => new Date(timestamp),
+    now,
     persistenceFlushMs: 5,
   })
   await service.registerInitialProjectRoots([environment.workspace])
@@ -493,11 +501,449 @@ test('interrupted Start action closes the Host-restart window without Prompt res
     )
     assert.equal(replay.data.turn.turnId, started.data.turn.turnId)
     assert.equal(replay.data.turn.status, 'interrupted')
+    assert.notEqual(replay.data.turn.status, 'failed')
+    assert.notEqual(replay.data.turn.status, 'completed')
+    const restartFailure = canonicalFailure(
+      'execution_ownership_uncertain',
+      timestamp,
+    )
+    assert.deepEqual(replay.data.turn.error, {
+      code: 'provider_unavailable',
+      message: 'Codex execution could not be verified after Host restart',
+      failure: restartFailure,
+    })
     assert.equal(runtime.resumeCalls.length, 0)
     assert.equal(runtime.turnCalls.length, 0)
     assert.equal(second.store.countTurns(conversationId), 1)
+    assert.deepEqual(
+      second.store.getTurn(started.data.turn.turnId).snapshot.turn.error,
+      replay.data.turn.error,
+    )
+    assert.equal(second.store.listAttentionItems({ type: 'failed' }).length, 0)
     await second.service.close()
   } finally {
+    await removeEnvironment(environment.directory)
+  }
+})
+
+test('canonical Provider failure and recovered health remain durable without rewriting history', async () => {
+  const environment = await createEnvironment()
+  const failedAt = '2026-08-27T08:01:00.000Z'
+  const recoveredAt = '2026-08-27T08:02:00.000Z'
+  try {
+    const first = await createService(
+      environment,
+      '18181818-1818-4818-8818-181818181810',
+    )
+    const created = await createConversation(
+      first.service,
+      environment.workspace,
+      'act_failure_health_create01',
+    )
+    const conversationId = created.data.conversation.conversationId
+    const machineId = created.data.conversation.machineId
+    const failedTurn = await startTurn(
+      first.service,
+      conversationId,
+      'act_failure_health_turn01',
+      'Fail with a classified Provider condition',
+    )
+    const failure = canonicalFailure('rate_limited', failedAt)
+    const failedIdentity = first.runtime.turnCalls[0]
+    first.runtime.emit(
+      providerEvent(
+        'turn.failed',
+        'provider-thread-1',
+        failedIdentity.providerTurnId,
+        {
+          timestamp: failedAt,
+          error: {
+            message: 'private Provider diagnostics must stay private',
+            failure,
+          },
+        },
+      ),
+    )
+    first.runtime.emit(
+      providerEvent(
+        'turn.failed',
+        'provider-thread-1',
+        failedIdentity.providerTurnId,
+        {
+          timestamp: '2026-08-27T08:01:30.000Z',
+          error: { message: 'stale duplicate terminal' },
+        },
+      ),
+    )
+
+    const expectedError = {
+      code: 'provider_error',
+      message: 'Codex is temporarily rate limited',
+      failure,
+    }
+    const durableFailure = first.store.getTurn(failedTurn.data.turn.turnId)
+    assert.deepEqual(durableFailure.snapshot.turn.error, expectedError)
+    assert.equal(
+      first.publisher
+        .replayAfter({ epoch: first.publisher.epoch, seq: 0 })
+        .events.filter(
+          (event) =>
+            event.type === 'turn.failed' &&
+            event.turnId === failedTurn.data.turn.turnId,
+        ).length,
+      1,
+    )
+    const failedAttention = first.store.listAttentionItems({
+      type: 'failed',
+      status: 'open',
+    })
+    assert.equal(failedAttention.length, 1)
+    assert.deepEqual(failedAttention[0].payload.error, expectedError)
+    assert.deepEqual(
+      (await first.service.getMachine(machineId)).providers.find(
+        ({ provider }) => provider === 'codex',
+      ).executionHealth,
+      {
+        state: 'degraded',
+        freshness: 'current',
+        observedAt: timestamp,
+        failure,
+      },
+    )
+
+    await startTurn(
+      first.service,
+      conversationId,
+      'act_failure_health_turn02',
+      'Recover explicitly with a later Turn',
+    )
+    const recoveredIdentity = first.runtime.turnCalls[1]
+    first.runtime.emit(
+      providerEvent(
+        'turn.completed',
+        'provider-thread-1',
+        recoveredIdentity.providerTurnId,
+        { timestamp: recoveredAt, finalMessage: 'Recovered' },
+      ),
+    )
+    assert.deepEqual(
+      (await first.service.getMachine(machineId)).providers.find(
+        ({ provider }) => provider === 'codex',
+      ).executionHealth,
+      {
+        state: 'healthy',
+        freshness: 'current',
+        observedAt: timestamp,
+      },
+    )
+    assert.deepEqual(
+      first.store.getTurn(failedTurn.data.turn.turnId).snapshot.turn.error,
+      expectedError,
+    )
+    await first.service.close()
+
+    const second = await createService(
+      environment,
+      '19191919-1919-4919-8919-191919191910',
+      new FakeRuntime(),
+    )
+    assert.deepEqual(
+      (await second.service.getMachine(machineId)).providers.find(
+        ({ provider }) => provider === 'codex',
+      ).executionHealth,
+      {
+        state: 'healthy',
+        freshness: 'last_known',
+        observedAt: timestamp,
+      },
+    )
+    assert.deepEqual(
+      second.store.getTurn(failedTurn.data.turn.turnId).snapshot.turn.error,
+      expectedError,
+    )
+    assert.deepEqual(
+      second.store.listAttentionItems({ type: 'failed', status: 'open' })[0]
+        .payload.error,
+      expectedError,
+    )
+    assert.equal(second.runtime.resumeCalls.length, 0)
+    assert.equal(second.runtime.turnCalls.length, 0)
+    await second.service.archiveConversation(conversationId, {
+      actionId: 'act_failure_health_archive01',
+    })
+    assert.deepEqual(
+      (await second.service.getConversation(conversationId)).runtime.turns[0]
+        .error,
+      expectedError,
+    )
+    await second.service.close()
+
+    const coldStore = ConversationStore.open({
+      databasePath: environment.databasePath,
+    })
+    const coldDetail = readDurableConversationDetail(coldStore, conversationId)
+    assert.ok(coldDetail)
+    assert.equal(typeof coldDetail.record.archivedAt, 'string')
+    assert.deepEqual(coldDetail.runtime.turns[0].error, expectedError)
+    assert.deepEqual(coldStore.getProviderExecutionHealth(machineId, 'codex'), {
+      machineId,
+      provider: 'codex',
+      state: 'healthy',
+      observedAt: timestamp,
+    })
+    coldStore.close()
+  } finally {
+    await removeEnvironment(environment.directory)
+  }
+})
+
+test('login, quota, and Provider crash recovery require fresh explicit Turns and preserve each failure', async () => {
+  const environment = await createEnvironment()
+  let fixture
+  const scenarios = [
+    {
+      key: 'login',
+      reason: 'login_required',
+      expectedHealth: 'unavailable',
+    },
+    {
+      key: 'quota',
+      reason: 'usage_limit_reached',
+      expectedHealth: 'degraded',
+    },
+    {
+      key: 'crash',
+      reason: 'provider_crashed',
+      expectedHealth: 'degraded',
+    },
+  ]
+  try {
+    fixture = await createService(
+      environment,
+      '20202020-2020-4020-8020-202020202020',
+    )
+
+    for (const [index, scenario] of scenarios.entries()) {
+      const created = await createConversation(
+        fixture.service,
+        environment.workspace,
+        `act_recovery_${scenario.key}_create`,
+      )
+      const conversationId = created.data.conversation.conversationId
+      const machineId = created.data.conversation.machineId
+      const prompt = `Explicit ${scenario.key} recovery request`
+      const failed = await startTurn(
+        fixture.service,
+        conversationId,
+        `act_recovery_${scenario.key}_failed`,
+        prompt,
+      )
+      const failedCall = fixture.runtime.turnCalls.at(-1)
+      assert.ok(failedCall)
+      const failureMinute = 10 + index * 10
+      const failure = canonicalFailure(
+        scenario.reason,
+        `2026-08-27T08:${String(failureMinute)}:00.000Z`,
+      )
+      fixture.runtime.emit(
+        providerEvent(
+          'turn.failed',
+          `provider-thread-${String(index + 1)}`,
+          failedCall.providerTurnId,
+          {
+            timestamp: failure.occurredAt,
+            error: {
+              message: 'private raw Provider diagnostic',
+              failure,
+            },
+          },
+        ),
+      )
+
+      const failedSnapshot = fixture.store.getTurn(failed.data.turn.turnId)
+        .snapshot.turn
+      assert.equal(failedSnapshot.status, 'failed')
+      assert.deepEqual(failedSnapshot.error?.failure, failure)
+      assert.deepEqual(
+        (await fixture.service.getMachine(machineId)).providers.find(
+          ({ provider }) => provider === 'codex',
+        ).executionHealth,
+        {
+          state: scenario.expectedHealth,
+          freshness: 'current',
+          observedAt: timestamp,
+          failure,
+        },
+      )
+
+      const callsBeforeExplicitRecovery = fixture.runtime.turnCalls.length
+      await new Promise((resolve) => setImmediate(resolve))
+      assert.equal(
+        fixture.runtime.turnCalls.length,
+        callsBeforeExplicitRecovery,
+      )
+
+      const recovered = await startTurn(
+        fixture.service,
+        conversationId,
+        `act_recovery_${scenario.key}_success`,
+        prompt,
+      )
+      assert.notEqual(recovered.data.turn.turnId, failed.data.turn.turnId)
+      assert.equal(
+        fixture.runtime.turnCalls.length,
+        callsBeforeExplicitRecovery + 1,
+      )
+      const recoveredCall = fixture.runtime.turnCalls.at(-1)
+      assert.ok(recoveredCall)
+      assert.equal(recoveredCall.options.input, prompt)
+      const recoveredAt = `2026-08-27T08:${String(failureMinute + 1)}:00.000Z`
+      fixture.runtime.emit(
+        providerEvent(
+          'turn.completed',
+          `provider-thread-${String(index + 1)}`,
+          recoveredCall.providerTurnId,
+          { timestamp: recoveredAt, finalMessage: 'Recovered explicitly' },
+        ),
+      )
+
+      const detail = fixture.service.getConversation(conversationId)
+      assert.deepEqual(
+        detail.runtime.turns.map((turn) => [
+          turn.turnId,
+          turn.status,
+          turn.input.text,
+          turn.error?.failure?.reason,
+        ]),
+        [
+          [failed.data.turn.turnId, 'failed', prompt, scenario.reason],
+          [recovered.data.turn.turnId, 'completed', prompt, undefined],
+        ],
+      )
+      assert.deepEqual(
+        fixture.store.getTurn(failed.data.turn.turnId).snapshot.turn,
+        failedSnapshot,
+      )
+      assert.deepEqual(
+        (await fixture.service.getMachine(machineId)).providers.find(
+          ({ provider }) => provider === 'codex',
+        ).executionHealth,
+        {
+          state: 'healthy',
+          freshness: 'current',
+          observedAt: timestamp,
+        },
+      )
+    }
+
+    assert.equal(
+      fixture.store.listAttentionItems({ type: 'failed', status: 'open' })
+        .length,
+      scenarios.length,
+    )
+    await fixture.service.close()
+    fixture = undefined
+  } finally {
+    await fixture?.service.close().catch(() => undefined)
+    await removeEnvironment(environment.directory)
+  }
+})
+
+test('Provider health ordering uses the Host receipt clock instead of a remote failure clock', async () => {
+  const environment = await createEnvironment()
+  let fixture
+  let clock = new Date('2026-08-27T09:00:00.000Z')
+  try {
+    fixture = await createService(
+      environment,
+      '21212121-2121-4121-8121-212121212121',
+      new FakeRuntime(),
+      () => new Date(clock),
+    )
+    const created = await createConversation(
+      fixture.service,
+      environment.workspace,
+      'act_health_clock_create01',
+    )
+    const conversationId = created.data.conversation.conversationId
+    const machineId = created.data.conversation.machineId
+    const failed = await startTurn(
+      fixture.service,
+      conversationId,
+      'act_health_clock_turn01',
+      'Observe a bounded failure',
+    )
+    const failedCall = fixture.runtime.turnCalls.at(-1)
+    assert.ok(failedCall)
+    const futureFailure = canonicalFailure(
+      'rate_limited',
+      '2099-01-01T00:00:00.000Z',
+    )
+    fixture.runtime.emit(
+      providerEvent(
+        'turn.failed',
+        'provider-thread-1',
+        failedCall.providerTurnId,
+        {
+          timestamp: clock.toISOString(),
+          error: {
+            message: 'private remote diagnostic',
+            failure: futureFailure,
+          },
+        },
+      ),
+    )
+
+    assert.deepEqual(
+      (await fixture.service.getMachine(machineId)).providers.find(
+        ({ provider }) => provider === 'codex',
+      ).executionHealth,
+      {
+        state: 'degraded',
+        freshness: 'current',
+        observedAt: '2026-08-27T09:00:00.000Z',
+        failure: futureFailure,
+      },
+    )
+
+    clock = new Date('2026-08-27T09:01:00.000Z')
+    await startTurn(
+      fixture.service,
+      conversationId,
+      'act_health_clock_turn02',
+      'Explicitly recover after the observation',
+    )
+    const recoveredCall = fixture.runtime.turnCalls.at(-1)
+    assert.ok(recoveredCall)
+    fixture.runtime.emit(
+      providerEvent(
+        'turn.completed',
+        'provider-thread-1',
+        recoveredCall.providerTurnId,
+        {
+          timestamp: clock.toISOString(),
+          finalMessage: 'Recovered explicitly',
+        },
+      ),
+    )
+
+    assert.deepEqual(
+      (await fixture.service.getMachine(machineId)).providers.find(
+        ({ provider }) => provider === 'codex',
+      ).executionHealth,
+      {
+        state: 'healthy',
+        freshness: 'current',
+        observedAt: '2026-08-27T09:01:00.000Z',
+      },
+    )
+    assert.deepEqual(
+      fixture.store.getTurn(failed.data.turn.turnId).snapshot.turn.error
+        .failure,
+      futureFailure,
+    )
+  } finally {
+    await fixture?.service.close().catch(() => undefined)
     await removeEnvironment(environment.directory)
   }
 })
@@ -629,7 +1075,6 @@ test('missing Provider Thread preserves local history and returns a specific saf
       '66666666-6666-4666-8666-666666666666',
       runtime,
     )
-    const before = second.service.snapshot().conversationRuntimes[0]
     await assert.rejects(
       startTurn(
         second.service,
@@ -642,7 +1087,20 @@ test('missing Provider Thread preserves local history and returns a specific saf
         error.code === 'provider_session_lost',
     )
     assert.equal(runtime.turnCalls.length, 0)
-    assert.deepEqual(second.service.snapshot().conversationRuntimes[0], before)
+    const after = second.service.getConversation(conversationId)
+    assert.equal(after.runtime.turns.length, 2)
+    assert.equal(after.runtime.turns[0].status, 'completed')
+    assert.equal(after.runtime.turns[1].status, 'failed')
+    assert.equal(
+      after.runtime.turns[1].error?.failure?.reason,
+      'provider_session_lost',
+    )
+    const providerHealth = (
+      await second.service.getMachine(
+        second.service.listMachines().machines[0].machineId,
+      )
+    ).providers.find(({ provider }) => provider === 'codex')?.executionHealth
+    assert.equal(providerHealth?.failure?.reason, 'provider_session_lost')
     await second.service.close()
   } finally {
     await removeEnvironment(environment.directory)
@@ -679,6 +1137,7 @@ test('durable write failure prevents Provider Turn start', async () => {
     updateConversation: () => undefined,
     deleteConversation: () => true,
     getTurnForStartAction: () => undefined,
+    getProviderExecutionHealth: () => undefined,
     createTurnForStartAction: () => {
       throw new Error('disk full')
     },
@@ -741,7 +1200,9 @@ test('Provider conversation creation failure rolls back the creating row', async
         'act_create_rollback01',
       ),
       (error) =>
-        error instanceof HostServiceError && error.code === 'provider_error',
+        error instanceof HostServiceError &&
+        error.code === 'provider_start_failed' &&
+        error.failure?.reason === 'provider_start_failed',
     )
     assert.equal(fixture.store.listConversations().length, 0)
     await fixture.service.close()
@@ -1092,7 +1553,9 @@ test('startup event overflow disposes only the owning session and records one du
         'Exercise bounded startup events',
       ),
       (error) =>
-        error instanceof HostServiceError && error.code === 'provider_error',
+        error instanceof HostServiceError &&
+        error.code === 'provider_error' &&
+        error.failure?.reason === 'protocol_limit_exceeded',
     )
     assert.equal(callbackError, undefined)
     assert.deepEqual(fixture.runtime.disposeCalls, [
@@ -1102,6 +1565,10 @@ test('startup event overflow disposes only the owning session and records one du
     const failed = fixture.store.getTurnForStartAction(actionId)
     assert.ok(failed)
     assert.equal(failed.status, 'failed')
+    assert.equal(
+      failed.snapshot.turn.error.failure.reason,
+      'protocol_limit_exceeded',
+    )
     assert.equal(fixture.store.listIncompleteTurns().length, 0)
     const terminalEvents = events.filter(
       (event) =>
@@ -1178,11 +1645,17 @@ test('startup overflow cleanup rejection leaves a durable failure and blocks a n
         'Exercise failed exact cleanup',
       ),
       (error) =>
-        error instanceof HostServiceError && error.code === 'provider_error',
+        error instanceof HostServiceError &&
+        error.code === 'provider_unavailable' &&
+        error.failure?.reason === 'execution_ownership_uncertain',
     )
     const failed = fixture.store.getTurnForStartAction(actionId)
     assert.ok(failed)
     assert.equal(failed.status, 'failed')
+    assert.equal(
+      failed.snapshot.turn.error.failure.reason,
+      'execution_ownership_uncertain',
+    )
     assert.equal(fixture.store.listIncompleteTurns().length, 0)
     assert.equal(fixture.runtime.turnCalls.length, 1)
     assert.deepEqual(fixture.runtime.disposeCalls, [
@@ -1203,9 +1676,26 @@ test('startup overflow cleanup rejection leaves a durable failure and blocks a n
     assert.equal(fixture.runtime.turnCalls.length, 1)
     assert.equal(
       fixture.store.countTurns(created.data.conversation.conversationId),
-      1,
+      2,
+    )
+    assert.equal(
+      fixture.store.getTurnForStartAction('act_start_cleanup_turn02')?.snapshot
+        .turn.error.failure.reason,
+      'provider_session_lost',
     )
     await fixture.service.close().catch(() => undefined)
+    const reopened = ConversationStore.open({
+      databasePath: environment.databasePath,
+    })
+    try {
+      assert.equal(
+        reopened.getTurnForStartAction(actionId)?.snapshot.turn.error.failure
+          .reason,
+        'execution_ownership_uncertain',
+      )
+    } finally {
+      reopened.close()
+    }
   } finally {
     await removeEnvironment(environment.directory)
   }

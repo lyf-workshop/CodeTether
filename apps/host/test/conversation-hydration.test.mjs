@@ -747,6 +747,69 @@ test('does not evict an active Conversation with a pending Approval', async (t) 
   assert.equal(fixture.runtime.turnCalls.length, 1)
 })
 
+test('capacity recovery waits for the active owner to finish and admits only a fresh action', async (t) => {
+  const fixture = await createFixture(t, {
+    conversationCount: 2,
+    maxConversations: 1,
+  })
+  const activeId = conversationId(1)
+  const waitingId = conversationId(0)
+  const active = await startTurn(
+    fixture.service,
+    activeId,
+    'act_capacity_recovery_active',
+  )
+
+  await assert.rejects(
+    startTurn(fixture.service, waitingId, 'act_capacity_recovery_blocked'),
+    (error) => {
+      assert.ok(error instanceof HostServiceError)
+      assert.equal(error.code, 'runtime_unavailable')
+      assert.equal(error.httpStatus, 503)
+      assert.equal(error.failure?.reason, 'execution_capacity_reached')
+      return true
+    },
+  )
+  assert.equal(fixture.runtime.resumeCalls.length, 1)
+  assert.equal(fixture.runtime.turnCalls.length, 1)
+  assert.equal(
+    fixture.store.getTurnForStartAction('act_capacity_recovery_blocked'),
+    undefined,
+  )
+
+  completeTurn(fixture.runtime, 1, fixture.runtime.turnCalls[0], 'Released')
+  assert.equal(
+    fixture.service.getConversation(activeId).runtime.turns.at(-1)?.status,
+    'completed',
+  )
+
+  const admitted = await startTurn(
+    fixture.service,
+    waitingId,
+    'act_capacity_recovery_fresh',
+  )
+  assert.notEqual(admitted.data.turn.turnId, active.data.turn.turnId)
+  assert.equal(fixture.runtime.resumeCalls.length, 2)
+  assert.equal(fixture.runtime.turnCalls.length, 2)
+  assert.equal(
+    fixture.runtime.turnCalls.filter(
+      (call) => call.options.input === `Continue ${waitingId}`,
+    ).length,
+    1,
+  )
+  completeTurn(fixture.runtime, 0, fixture.runtime.turnCalls[1], 'Admitted')
+
+  assert.equal(
+    fixture.service.getConversation(waitingId).runtime.turns.at(-1)?.status,
+    'completed',
+  )
+  assert.equal(
+    fixture.service.getConversation(activeId).runtime.turns.at(-1)?.status,
+    'completed',
+  )
+  assert.deepEqual(hotConversationIds(fixture.service), [waitingId])
+})
+
 test('keeps unavailable Projects and missing Provider Threads readable while controls fail closed', async (t) => {
   const missingId = 'conv_hydration_missing_provider'
   const fixture = await createFixture(t, {

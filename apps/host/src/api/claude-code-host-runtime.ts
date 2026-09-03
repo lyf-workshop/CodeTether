@@ -1,6 +1,11 @@
 import { randomUUID } from 'node:crypto'
 
-import type { AgentEvent } from '@codetether/agent-core'
+import {
+  canonicalFailure,
+  isCanonicalFailureReason,
+  type AgentEvent,
+  type CanonicalFailureReason,
+} from '@codetether/agent-core'
 import {
   CLAUDE_CODE_CAPABILITIES,
   CLAUDE_CODE_EFFORT_LEVELS,
@@ -163,15 +168,18 @@ export class ClaudeCodeHostRuntime implements AgentHostRuntime {
     void completion
       .catch((error: unknown) => {
         if (this.#terminalTurns.has(providerTurnId) || this.#closed) return
+        const timestamp = new Date().toISOString()
+        const failureReason = safeProviderFailureReason(error)
         this.#emit({
           type: 'turn.failed',
           provider: this.provider,
-          timestamp: new Date().toISOString(),
+          timestamp,
           threadId: options.providerThreadId,
           turnId: providerTurnId,
           error: {
             code: safeProviderErrorCode(error),
             message: 'Claude Code could not complete this Turn.',
+            failure: canonicalFailure(failureReason, timestamp),
           },
         })
       })
@@ -267,6 +275,18 @@ function safeProviderErrorCode(error: unknown): string {
     typeof error.code === 'string'
   ) {
     return error.code
+  }
+  return 'provider_start_failed'
+}
+
+function safeProviderFailureReason(error: unknown): CanonicalFailureReason {
+  if (
+    typeof error === 'object' &&
+    error !== null &&
+    'failureReason' in error &&
+    isCanonicalFailureReason(error.failureReason)
+  ) {
+    return error.failureReason
   }
   return 'provider_start_failed'
 }

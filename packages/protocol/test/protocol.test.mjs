@@ -10,6 +10,7 @@ import {
   ArchiveConversationRequestSchema,
   ArchiveConversationResponseSchema,
   BootstrapSchema,
+  CanonicalFailureSchema,
   ConversationIdSchema,
   ConversationListResponseSchema,
   ConversationRecordSchema,
@@ -64,6 +65,7 @@ import {
   ProviderAvailabilitySchema,
   ProviderCapabilitiesSchema,
   ProviderDescriptorSchema,
+  ProviderExecutionHealthSchema,
   ProviderIdSchema,
   ResolveApprovalRequestSchema,
   ResolveAttentionRequestSchema,
@@ -71,9 +73,11 @@ import {
   RenameConversationRequestSchema,
   RenameConversationResponseSchema,
   SafeErrorEnvelopeSchema,
+  safeErrorDetailLimits,
   StartTurnRequestSchema,
   TurnRecordSchema,
   ToolKindSchema,
+  TimestampSchema,
   UpdateMachineConnectionAddressRequestSchema,
   UpdateMachineConnectionAddressResponseSchema,
   UnarchiveConversationRequestSchema,
@@ -90,6 +94,7 @@ import {
   machineWireLimits,
   parseLastEventId,
   protocolVersion,
+  maximumTimestampCharacters,
   conversationListLimits,
 } from '../dist/index.js'
 
@@ -1646,6 +1651,37 @@ test('adds Host-owned Turn input without invalidating legacy Turn records', () =
     }).success,
     false,
   )
+  const restartFailure = {
+    category: 'runtime',
+    reason: 'execution_ownership_uncertain',
+    retryability: 'not_retryable',
+    userAction: 'view_details',
+    source: 'runtime',
+    occurredAt: timestamp,
+    technicalCode: 'execution_ownership_uncertain',
+  }
+  const diagnosticallyInterrupted = {
+    ...runningTurnWithInput,
+    status: 'interrupted',
+    completedAt: timestamp,
+    error: {
+      code: 'provider_unavailable',
+      message: 'Execution could not be verified after Host restart',
+      failure: restartFailure,
+    },
+  }
+  assert.deepEqual(
+    TurnRecordSchema.parse(diagnosticallyInterrupted),
+    diagnosticallyInterrupted,
+  )
+  assert.equal(
+    TurnRecordSchema.safeParse({
+      ...diagnosticallyInterrupted,
+      status: 'completed',
+    }).success,
+    false,
+    'canonical diagnostics do not turn completed history into failure history',
+  )
 })
 
 test('validates a complete additive Conversation runtime Snapshot', () => {
@@ -1953,6 +1989,77 @@ test('validates strict Provider descriptors, canonical errors, and Tool kinds', 
     capabilities,
   }
   assert.deepEqual(ProviderDescriptorSchema.parse(descriptor), descriptor)
+  const failure = {
+    category: 'quota',
+    reason: 'usage_limit_reached',
+    retryability: 'retry_later',
+    userAction: 'wait',
+    source: 'provider',
+    occurredAt: timestamp,
+    technicalCode: 'usage_limit_reached',
+  }
+  assert.deepEqual(CanonicalFailureSchema.parse(failure), failure)
+  assert.equal(
+    CanonicalFailureSchema.safeParse({
+      ...failure,
+      retryability: 'retry_now',
+    }).success,
+    false,
+    'retry semantics are fixed by the CodeTether-owned reason',
+  )
+  assert.equal(
+    CanonicalFailureSchema.safeParse({
+      ...failure,
+      rawProviderError: '<script>steal()</script>\u001b[2J',
+    }).success,
+    false,
+    'raw Provider diagnostics cannot enter public failure metadata',
+  )
+  const executionHealth = {
+    state: 'degraded',
+    freshness: 'current',
+    observedAt: timestamp,
+    failure,
+  }
+  assert.deepEqual(
+    ProviderExecutionHealthSchema.parse(executionHealth),
+    executionHealth,
+  )
+  assert.deepEqual(
+    ProviderDescriptorSchema.parse({ ...descriptor, executionHealth }),
+    { ...descriptor, executionHealth },
+  )
+  assert.equal(
+    ProviderExecutionHealthSchema.safeParse({
+      state: 'healthy',
+      freshness: 'current',
+      observedAt: timestamp,
+      failure,
+    }).success,
+    false,
+  )
+  assert.equal(
+    ProviderExecutionHealthSchema.safeParse({
+      state: 'unknown',
+      freshness: 'last_known',
+      failure,
+    }).success,
+    false,
+    'unknown health cannot smuggle a failure observation',
+  )
+  const oversizedTimestamp = `2026-09-02T08:00:00.${'1'.repeat(
+    maximumTimestampCharacters,
+  )}Z`
+  assert.ok(oversizedTimestamp.length > maximumTimestampCharacters)
+  assert.equal(TimestampSchema.safeParse(oversizedTimestamp).success, false)
+  assert.equal(
+    CanonicalFailureSchema.safeParse({
+      ...failure,
+      occurredAt: oversizedTimestamp,
+    }).success,
+    false,
+    'canonical failure timestamps use the bounded protocol timestamp schema',
+  )
   assert.equal(
     ProviderDescriptorSchema.safeParse({
       ...descriptor,
@@ -2086,6 +2193,67 @@ test('separates mutation success and safe HTTP error envelopes', () => {
   assert.equal(
     SafeErrorEnvelopeSchema.safeParse({ ...safeError, stack: 'secret stack' })
       .success,
+    false,
+  )
+  for (const details of [
+    { stderr: 'Bearer owner-secret' },
+    { access_token: 'owner-secret' },
+    { authorizationHeader: 'Bearer owner-secret' },
+    { rawDiagnostic: '<script>unsafe</script>' },
+  ]) {
+    assert.equal(
+      SafeErrorEnvelopeSchema.safeParse({ ...safeError, details }).success,
+      false,
+    )
+  }
+  const classifiedError = {
+    ...safeError,
+    failure: {
+      category: 'authentication',
+      reason: 'login_required',
+      retryability: 'retry_after_user_action',
+      userAction: 'login_on_machine',
+      source: 'provider',
+      occurredAt: timestamp,
+      technicalCode: 'login_required',
+    },
+  }
+  assert.deepEqual(
+    SafeErrorEnvelopeSchema.parse(classifiedError),
+    classifiedError,
+  )
+
+  assert.equal(
+    SafeErrorEnvelopeSchema.safeParse({
+      ...safeError,
+      details: {
+        diagnostic: 'x'.repeat(safeErrorDetailLimits.maxStringCharacters + 1),
+      },
+    }).success,
+    false,
+  )
+  assert.equal(
+    SafeErrorEnvelopeSchema.safeParse({
+      ...safeError,
+      details: Object.fromEntries(
+        Array.from(
+          { length: safeErrorDetailLimits.maxEntries + 1 },
+          (_, index) => [`field${String(index)}`, index],
+        ),
+      ),
+    }).success,
+    false,
+  )
+  assert.equal(
+    SafeErrorEnvelopeSchema.safeParse({
+      ...safeError,
+      details: Object.fromEntries(
+        Array.from({ length: safeErrorDetailLimits.maxEntries }, (_, index) => [
+          `field${String(index)}`,
+          '界'.repeat(safeErrorDetailLimits.maxStringCharacters),
+        ]),
+      ),
+    }).success,
     false,
   )
 })

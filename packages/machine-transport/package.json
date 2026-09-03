@@ -16,6 +16,7 @@
     "test": "pnpm build && node --test test/*.test.mjs"
   },
   "dependencies": {
+    "@codetether/agent-core": "workspace:*",
     "@serenity-kit/opaque": "1.1.0",
     "selfsigned": "5.5.0",
     "zod": "4.4.3"

@@ -1,6 +1,11 @@
 import { isAbsolute, posix, relative, resolve, sep, win32 } from 'node:path'
 
-import type { AgentEvent, ToolKind } from '@codetether/agent-core'
+import {
+  canonicalFailure,
+  type AgentEvent,
+  type CanonicalFailureReason,
+  type ToolKind,
+} from '@codetether/agent-core'
 
 import {
   ClaudeCodeError,
@@ -8,6 +13,7 @@ import {
   ClaudeCodeSessionLostError,
   ClaudeCodeVersionUnsupportedError,
 } from './errors.js'
+import { classifyClaudeCodeProviderFailure } from './failure-classifier.js'
 import {
   CLAUDE_CODE_PROVIDER,
   isClaudeCodeTestedVersion,
@@ -59,7 +65,10 @@ export class ClaudeStreamNormalizer {
   #currentMessageItemId?: string
   #currentProviderMessageId?: string
   #finalMessage?: string
-  #assistantError?: string
+  // Keep only the controlled classification across Provider messages. The raw
+  // assistant error field may be large or adversarial and is never needed
+  // after its exact enum token has been inspected.
+  #assistantFailureReason?: CanonicalFailureReason
   #result?: ClaudeCodeTurnResult
   #failure?: ClaudeCodeError
 
@@ -220,7 +229,10 @@ export class ClaudeStreamNormalizer {
     this.#validateSession(message)
     const providerError = readString(message, 'error')
     if (providerError !== undefined) {
-      this.#assistantError = providerError
+      this.#assistantFailureReason = classifyClaudeCodeProviderFailure(
+        providerError,
+        undefined,
+      )
       // Error-bearing assistant envelopes contain provider diagnostics, not
       // canonical Agent output. The terminal result below supplies the only
       // presentation-safe failure event.
@@ -354,7 +366,11 @@ export class ClaudeStreamNormalizer {
     this.#validateSession(message)
     const subtype = readString(message, 'subtype')
     const isError = message.is_error === true
-    if (subtype === 'success' && !isError) {
+    if (
+      subtype === 'success' &&
+      !isError &&
+      this.#assistantFailureReason === undefined
+    ) {
       this.#terminal = true
       this.#result = {
         sessionId: this.#sessionId,
@@ -377,7 +393,16 @@ export class ClaudeStreamNormalizer {
       ]
     }
 
-    const failure = providerFailure(this.#assistantError, subtype)
+    const subtypeFailureReason = classifyClaudeCodeProviderFailure(
+      undefined,
+      subtype,
+    )
+    const failure = providerFailure(
+      this.#assistantFailureReason !== undefined &&
+        this.#assistantFailureReason !== 'provider_error'
+        ? this.#assistantFailureReason
+        : subtypeFailureReason,
+    )
     this.#terminal = true
     this.#failure = failure
     return [this.#turnFailed(failure)]
@@ -468,13 +493,18 @@ export class ClaudeStreamNormalizer {
   }
 
   #turnFailed(error: ClaudeCodeError): AgentEvent {
+    const timestamp = this.#timestamp()
     return {
       type: 'turn.failed',
       provider: CLAUDE_CODE_PROVIDER,
-      timestamp: this.#timestamp(),
+      timestamp,
       threadId: this.#sessionId,
       turnId: this.#turnId,
-      error: { code: error.code, message: error.message },
+      error: {
+        code: error.code,
+        message: error.message,
+        failure: canonicalFailure(error.failureReason, timestamp),
+      },
     }
   }
 
@@ -633,37 +663,38 @@ export function boundUtf8(value: string, maxBytes: number): string {
 }
 
 function providerFailure(
-  assistantError: string | undefined,
-  resultSubtype: string | undefined,
+  failureReason: CanonicalFailureReason,
 ): ClaudeCodeError {
-  switch (assistantError) {
-    case 'authentication_failed':
-    case 'oauth_org_not_allowed':
+  switch (failureReason) {
+    case 'authentication_invalid':
       return new ClaudeCodeError(
         'provider_unavailable',
         'Claude Code authentication is unavailable.',
+        { failureReason },
       )
-    case 'billing_error':
+    case 'account_unavailable':
       return new ClaudeCodeError(
         'provider_unavailable',
-        'Claude Code billing is unavailable for this account.',
+        'Claude Code is unavailable for this account.',
+        { failureReason },
       )
-    case 'model_not_found':
-      return new ClaudeCodeError(
-        'provider_unavailable',
-        'The Claude Code model is unavailable for this account.',
-      )
-    case 'rate_limit':
+    case 'rate_limited':
       return new ClaudeCodeError(
         'provider_unavailable',
         'Claude Code is temporarily rate limited.',
+        { failureReason },
+      )
+    case 'usage_limit_reached':
+      return new ClaudeCodeError(
+        'provider_unavailable',
+        'Claude Code reached the configured turn budget.',
+        { failureReason },
       )
     default:
       return new ClaudeCodeError(
         'provider_unavailable',
-        resultSubtype === 'error_max_budget_usd'
-          ? 'Claude Code reached the configured turn budget.'
-          : 'Claude Code could not complete this turn.',
+        'Claude Code could not complete this turn.',
+        { failureReason },
       )
   }
 }

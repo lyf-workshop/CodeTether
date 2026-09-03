@@ -14,6 +14,7 @@ import {
 } from '@codetether/protocol'
 
 import { createBrowserActionId, type ActionIdFactory } from './action-id.js'
+import { canonicalFailureActionPresentation } from '../../failures/failure-presentation.js'
 import { providerDisplayName } from '../../provider/provider-presentation.js'
 
 export interface NewConversationMutationClient {
@@ -141,6 +142,14 @@ export function newConversationErrorMessage(
   }
   if (!(error instanceof CodeTetherResponseError)) {
     return 'CodeTether 暂时无法连接，请重试。'
+  }
+
+  if (error.envelope.failure !== undefined) {
+    const presentation = canonicalFailureActionPresentation(
+      error.envelope.failure,
+      { providerDisplayName: providerName },
+    )
+    return `${presentation.cause} ${presentation.guidance}`
   }
 
   switch (error.envelope.code) {

@@ -2,9 +2,14 @@ import type { AgentEvent } from '@codetether/agent-core'
 import type {
   ConversationId,
   HostEvent,
+  HostError,
   TurnRecord,
 } from '@codetether/protocol'
 
+import {
+  classifyCanonicalFailure,
+  safeProviderHostError,
+} from './canonical-failure.js'
 import {
   publicItemId,
   type ConversationState,
@@ -26,6 +31,16 @@ export interface ProviderEventTranslatorOptions {
     status: Exclude<TurnRecord['status'], 'running'>,
     completedAt: string,
     fields: Pick<TurnRecord, 'finalMessage' | 'error'>,
+  ) => void
+  readonly executionSucceeded?: (
+    conversation: ConversationState,
+    provider: AgentEvent['provider'],
+    occurredAt: string,
+  ) => void
+  readonly executionFailed?: (
+    conversation: ConversationState,
+    provider: AgentEvent['provider'],
+    error: HostError,
   ) => void
 }
 
@@ -218,19 +233,20 @@ export class ProviderEventTranslator {
               : { finalMessage: event.finalMessage }),
           },
         })
+        this.#options.executionSucceeded?.(
+          conversation,
+          event.provider,
+          event.timestamp,
+        )
         return true
       }
       case 'turn.failed': {
-        const code = safeProviderFailureCode(event.error.code)
-        const error = {
-          code,
-          message:
-            code === 'provider_session_lost'
-              ? `The ${providerDisplayName(event.provider)} session is no longer available`
-              : code === 'provider_unavailable'
-                ? `${providerDisplayName(event.provider)} is temporarily unavailable`
-                : `${providerDisplayName(event.provider)} Turn failed`,
-        }
+        const failure = classifyCanonicalFailure(
+          event.error,
+          event.timestamp,
+          'provider_error',
+        )
+        const error = safeProviderHostError(event.provider, failure)
         this.#options.completeTurn(
           conversation,
           turn,
@@ -245,6 +261,7 @@ export class ProviderEventTranslator {
           type: event.type,
           payload: { error },
         })
+        this.#options.executionFailed?.(conversation, event.provider, error)
         return true
       }
       case 'turn.interrupted': {
@@ -267,31 +284,6 @@ export class ProviderEventTranslator {
       default:
         return true
     }
-  }
-}
-
-function providerDisplayName(provider: AgentEvent['provider']): string {
-  return provider === 'codex' ? 'Codex' : 'Claude Code'
-}
-
-function safeProviderFailureCode(
-  code: string | undefined,
-):
-  | 'provider_error'
-  | 'provider_not_installed'
-  | 'provider_version_unsupported'
-  | 'provider_start_failed'
-  | 'provider_session_lost'
-  | 'provider_unavailable' {
-  switch (code) {
-    case 'provider_not_installed':
-    case 'provider_version_unsupported':
-    case 'provider_start_failed':
-    case 'provider_session_lost':
-    case 'provider_unavailable':
-      return code
-    default:
-      return 'provider_error'
   }
 }
 

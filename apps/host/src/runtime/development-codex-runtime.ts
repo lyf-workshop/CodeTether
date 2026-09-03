@@ -3,7 +3,6 @@ import { EventEmitter, once } from 'node:events'
 import type { AgentEvent } from '@codetether/agent-core'
 import {
   CodexAppServerClient,
-  createStderrProtocolLogger,
   spawnCodexAppServer,
   type ApprovalPrompt,
   type ApprovalResolution,
@@ -24,7 +23,6 @@ interface RuntimeEventWaiter {
 export interface DevelopmentCodexRuntimeOptions {
   readonly executable: string
   readonly version: string
-  readonly includeRawPayloads?: boolean
   readonly printEvents?: boolean
   readonly approvalHandler: (
     prompt: ApprovalPrompt,
@@ -63,7 +61,7 @@ export class DevelopmentCodexRuntime {
   #closing = false
 
   private constructor(options: DevelopmentCodexRuntimeOptions) {
-    this.#printEvents = options.printEvents ?? true
+    this.#printEvents = options.printEvents ?? false
     this.#pump = this.#queue
       .consume(async (event) => await this.#consumeEvent(event))
       .catch((error: unknown) => {
@@ -78,28 +76,34 @@ export class DevelopmentCodexRuntime {
     })
     this.client = new CodexAppServerClient(child, {
       requestTimeoutMs: 30_000,
-      protocolLogger: createStderrProtocolLogger({
-        includePayload: options.includeRawPayloads ?? false,
-      }),
       onStderr: (text) => {
-        const diagnostic = redactDiagnostic(text).trimEnd()
-        if (diagnostic.length > 0) {
-          process.stderr.write(`[codex:stderr] ${diagnostic}\n`)
+        if (text.length > 0) {
+          process.stderr.write('[codex:stderr] diagnostic suppressed\n')
         }
       },
       onUnknownNotification: (notification) => {
         process.stderr.write(
-          `[codex:unknown-notification] ${notification.method}\n`,
+          developmentProviderDiagnosticForLog(
+            'unknown-notification',
+            notification.method,
+          ),
         )
       },
       onUnknownServerRequest: (request) => {
-        process.stderr.write(`[codex:unknown-request] ${request.method}\n`)
+        process.stderr.write(
+          developmentProviderDiagnosticForLog(
+            'unknown-request',
+            request.method,
+          ),
+        )
       },
       onUnknownResponse: (id) => {
-        process.stderr.write(`[codex:unknown-response] id=${String(id)}\n`)
+        process.stderr.write(
+          developmentProviderDiagnosticForLog('unknown-response', id),
+        )
       },
       onError: (error) => {
-        process.stderr.write(`[codex:error] ${error.message}\n`)
+        process.stderr.write(`[codex:error] ${safeErrorName(error)}\n`)
       },
       onEvent: (event) => this.#enqueueEvent(event),
       approvalHandler: options.approvalHandler,
@@ -223,9 +227,10 @@ export class DevelopmentCodexRuntime {
       this.#failedToolCount += 1
     }
     if (this.#printEvents) {
-      await writeStdoutLine(
-        `${JSON.stringify({ event: Object.fromEntries(Object.entries(event)) })}\n`,
+      const safeEvent = Object.fromEntries(
+        Object.entries(event).filter(([key]) => key !== 'raw'),
       )
+      await writeStdoutLine(`${JSON.stringify({ event: safeEvent })}\n`)
     }
   }
 
@@ -257,7 +262,7 @@ export class DevelopmentCodexRuntime {
       // handler, while close() itself waits for that pump to settle.
       void this.close().catch((closeError: unknown) => {
         process.stderr.write(
-          `[codex:cleanup-error] ${redactDiagnostic(toError(closeError).message)}\n`,
+          `[codex:cleanup-error] ${safeErrorName(closeError)}\n`,
         )
       })
     }
@@ -283,11 +288,32 @@ function turnKey(threadId: string, turnId: string): string {
   return `${threadId}\u0000${turnId}`
 }
 
-function redactDiagnostic(value: string): string {
-  return value.replace(
-    /(authorization|credential|password|secret|token|api.?key)(\s*[:=]\s*)\S+/gi,
-    '$1$2[redacted]',
-  )
+function safeErrorName(value: unknown): string {
+  return value instanceof Error &&
+    /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/u.test(value.name)
+    ? value.name
+    : 'Error'
+}
+
+type DevelopmentProviderDiagnosticKind =
+  'unknown-notification' | 'unknown-request' | 'unknown-response'
+
+export function developmentProviderDiagnosticForLog(
+  kind: DevelopmentProviderDiagnosticKind,
+  providerControlledValue: unknown,
+): string {
+  // The value is accepted only to make the privacy boundary explicit. Provider
+  // protocol identifiers are never copied, sanitized, or interpolated into a
+  // development log because they may contain private or hostile text.
+  void providerControlledValue
+  switch (kind) {
+    case 'unknown-notification':
+      return '[codex:unknown-notification] suppressed\n'
+    case 'unknown-request':
+      return '[codex:unknown-request] suppressed\n'
+    case 'unknown-response':
+      return '[codex:unknown-response] suppressed\n'
+  }
 }
 
 function toError(value: unknown): Error {

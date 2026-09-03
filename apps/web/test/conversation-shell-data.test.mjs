@@ -311,6 +311,46 @@ test('new Conversation errors use safe product copy', () => {
   assert.equal(newConversationErrorMessage(runtime).includes('stderr'), false)
 })
 
+test('new Conversation errors prefer canonical failure recovery copy', () => {
+  const cases = [
+    [
+      canonicalFailure('execution_capacity_reached'),
+      'CodeTether 当前没有可用的远程运行时槽位。 请等待其他工作结束后再开始新一轮。',
+    ],
+    [
+      canonicalFailure('conversation_busy'),
+      '这个会话已经有一个活动轮次。 请等待当前轮次结束。',
+    ],
+    [
+      canonicalFailure('login_required'),
+      '执行机器上的 Claude Code 登录状态不可用。 请在执行机器上完成登录，然后再开始新一轮。',
+    ],
+    [
+      canonicalFailure('machine_offline'),
+      'CodeTether 当前无法连接到这台执行机器。 请恢复机器连接并等待状态重新验证。',
+    ],
+    [
+      canonicalFailure('project_location_missing'),
+      '这台机器上没有可用于本会话的已注册项目位置。 请在项目详情中注册或修复对应机器上的项目位置。',
+    ],
+  ]
+
+  for (const [failure, expected] of cases) {
+    const error = new CodeTetherResponseError(503, {
+      protocolVersion: 1,
+      actionId: 'act_conversation_structured',
+      code: 'internal',
+      message: '<b>raw provider login instructions</b>',
+      details: { stderr: 'Bearer owner-secret' },
+      failure,
+    })
+    const message = newConversationErrorMessage(error, 'claude-code')
+    assert.equal(message, expected)
+    assert.equal(message.includes('<b>'), false)
+    assert.equal(message.includes('owner-secret'), false)
+  }
+})
+
 function createResponse(
   actionId,
   responseProjectId,
@@ -398,4 +438,45 @@ function createDeferred() {
     reject = rejectPromise
   })
   return { promise, resolve, reject }
+}
+
+function canonicalFailure(reason) {
+  const profile = {
+    execution_capacity_reached: {
+      category: 'runtime',
+      retryability: 'retry_later',
+      userAction: 'reduce_active_work',
+      source: 'runtime',
+    },
+    conversation_busy: {
+      category: 'runtime',
+      retryability: 'retry_later',
+      userAction: 'wait',
+      source: 'runtime',
+    },
+    login_required: {
+      category: 'authentication',
+      retryability: 'retry_after_user_action',
+      userAction: 'login_on_machine',
+      source: 'provider',
+    },
+    machine_offline: {
+      category: 'machine',
+      retryability: 'retry_after_user_action',
+      userAction: 'reconnect_machine',
+      source: 'machine',
+    },
+    project_location_missing: {
+      category: 'project',
+      retryability: 'retry_after_user_action',
+      userAction: 'repair_project_location',
+      source: 'project',
+    },
+  }[reason]
+  return {
+    ...profile,
+    reason,
+    occurredAt: '2026-09-02T20:00:00.000Z',
+    technicalCode: reason,
+  }
 }

@@ -20,3 +20,25 @@ export type {
   TurnInterruptedEvent,
   TurnStartedEvent,
 } from './events.js'
+export {
+  canonicalFailure,
+  canonicalFailureCategories,
+  canonicalFailureReasons,
+  canonicalFailureRetryabilities,
+  canonicalFailureSources,
+  canonicalFailureUserActions,
+  isCanonicalFailureReason,
+  providerExecutionHealthFreshness,
+  providerExecutionHealthStates,
+} from './failures.js'
+export type {
+  CanonicalFailure,
+  CanonicalFailureCategory,
+  CanonicalFailureReason,
+  CanonicalFailureRetryability,
+  CanonicalFailureSource,
+  CanonicalFailureUserAction,
+  ProviderExecutionHealth,
+  ProviderExecutionHealthFreshness,
+  ProviderExecutionHealthState,
+} from './failures.js'

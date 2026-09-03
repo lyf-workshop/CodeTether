@@ -13,6 +13,7 @@ import test from 'node:test'
 
 import { z } from 'zod'
 
+import { canonicalFailure } from '@codetether/agent-core'
 import {
   FramedMachineConnection,
   beginRemoteMachinePairing,
@@ -93,14 +94,22 @@ function fakeClientFactory(options = {}) {
       },
       startRemoteTextTurn: async () => {
         starts += 1
+        if (options.turnStartFailure !== undefined) {
+          throw options.turnStartFailure
+        }
         callbacks.onEvent({
           type: 'turn.started',
           provider: 'codex',
           timestamp: new Date().toISOString(),
           threadId: 'provider-thread-a',
-          turnId: 'provider-turn-a',
+          turnId: options.observedProviderTurnId ?? 'provider-turn-a',
         })
-        return { turn: { id: 'provider-turn-a', status: 'inProgress' } }
+        return {
+          turn: {
+            id: options.returnedProviderTurnId ?? 'provider-turn-a',
+            status: 'inProgress',
+          },
+        }
       },
       waitForTurn: async () => ({}),
       shutdown: async () => {
@@ -241,6 +250,133 @@ test('runner owns one idempotent text Turn and chunks bounded output', async () 
   }
 })
 
+test('runner preserves a controlled Codex Provider failure without its prose', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'codetether-failure-wire-'))
+  const fake = fakeClientFactory()
+  const pool = new RemoteCodexRunnerPool({
+    codexHome: directory,
+    clientFactory: fake.factory,
+  })
+  try {
+    const runner = await pool.open(sessionRequest(directory))
+    const turn = await runner.startTurn(turnRequest(runner.providerThreadId))
+    const occurredAt = '2026-09-02T12:00:00.000Z'
+    fake.emit(
+      providerEvent('turn.failed', {
+        error: {
+          message: 'private Provider account and token detail',
+          failure: canonicalFailure('rate_limited', occurredAt),
+        },
+      }),
+    )
+    const events = []
+    for await (const event of turn.events()) events.push(event)
+    assert.equal(events[0].failure.reason, 'rate_limited')
+    assert.equal(events[0].failure.occurredAt, occurredAt)
+    assert.doesNotMatch(JSON.stringify(events), /private|account|token/u)
+  } finally {
+    await pool.close()
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('fatal Codex child failure preserves the controlled crash reason', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'codetether-fatal-wire-'))
+  const fake = fakeClientFactory()
+  const pool = new RemoteCodexRunnerPool({
+    codexHome: directory,
+    clientFactory: fake.factory,
+  })
+  try {
+    const runner = await pool.open(sessionRequest(directory))
+    const turn = await runner.startTurn(turnRequest(runner.providerThreadId))
+    fake.fail(
+      Object.assign(new Error('private process path and stderr'), {
+        failureReason: 'provider_crashed',
+      }),
+    )
+
+    const events = []
+    for await (const event of turn.events()) events.push(event)
+    assert.equal(events.length, 1)
+    assert.equal(events[0].type, 'turn.failed')
+    assert.equal(events[0].failure.reason, 'provider_crashed')
+    assert.doesNotMatch(JSON.stringify(events), /private|process path|stderr/u)
+  } finally {
+    await pool.close()
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('runner preserves a controlled pre-ownership Codex failure reason', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'codetether-start-failure-'))
+  const fake = fakeClientFactory({
+    turnStartFailure: Object.assign(
+      new Error('private authentication and token detail'),
+      { failureReason: 'authentication_invalid' },
+    ),
+  })
+  const pool = new RemoteCodexRunnerPool({
+    codexHome: directory,
+    clientFactory: fake.factory,
+  })
+  try {
+    const runner = await pool.open(sessionRequest(directory))
+    await assert.rejects(
+      runner.startTurn(turnRequest(runner.providerThreadId)),
+      (error) =>
+        error.code === 'provider_start_failed' &&
+        error.failureReason === 'authentication_invalid' &&
+        !error.message.includes('private') &&
+        !error.message.includes('token'),
+    )
+    assert.equal(fake.starts, 1)
+  } finally {
+    await pool.close()
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('post-acceptance Codex Turn identity failures are never replay-safe', async (t) => {
+  const scenarios = [
+    { name: 'malformed returned identity', returnedProviderTurnId: '' },
+    {
+      name: 'returned identity mismatches the observed Turn',
+      returnedProviderTurnId: 'provider-turn-b',
+    },
+  ]
+
+  for (const scenario of scenarios) {
+    await t.test(scenario.name, async () => {
+      const directory = await mkdtemp(
+        join(tmpdir(), 'codetether-post-acceptance-identity-'),
+      )
+      const fake = fakeClientFactory({
+        returnedProviderTurnId: scenario.returnedProviderTurnId,
+      })
+      const pool = new RemoteCodexRunnerPool({
+        codexHome: directory,
+        clientFactory: fake.factory,
+      })
+      try {
+        const runner = await pool.open(sessionRequest(directory))
+        await assert.rejects(
+          runner.startTurn(turnRequest(runner.providerThreadId)),
+          (error) =>
+            error.code === 'remote_execution_lost' &&
+            error.failureReason === 'execution_ownership_uncertain' &&
+            error.failureReason !== 'provider_start_failed',
+        )
+        assert.equal(fake.starts, 1)
+        assert.equal(fake.shutdowns, 1)
+      } finally {
+        await pool.close()
+        await rm(directory, { recursive: true, force: true })
+      }
+    })
+  }
+})
+
 test('slow consumers receive coalesced Codex deltas without queue growth', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'codetether-coalesce-'))
   const fake = fakeClientFactory()
@@ -307,7 +443,8 @@ test('high-volume Codex output fails the Turn and closes the exact client', asyn
     }
     const events = []
     for await (const event of turn.events()) events.push(event)
-    assert.deepEqual(events, [
+    assert.equal(events[0].failure.reason, 'output_limit_exceeded')
+    assert.deepEqual(events.map(stripCanonicalFailure), [
       {
         type: 'turn.failed',
         code: 'remote_execution_lost',
@@ -343,7 +480,8 @@ test('runner rejects Tool events and closes only its exact client', async () => 
     )
     const events = []
     for await (const event of turn.events()) events.push(event)
-    assert.deepEqual(events, [
+    assert.equal(events[0].failure.reason, 'provider_protocol_error')
+    assert.deepEqual(events.map(stripCanonicalFailure), [
       {
         type: 'turn.failed',
         code: 'remote_policy_violation',
@@ -1130,6 +1268,72 @@ test('real authenticated transport streams one fake-owned remote Codex Turn', as
   }
 })
 
+test('authenticated Node startup failure preserves canonical reason end to end', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'codetether-node-failure-'))
+  const project = join(directory, 'project')
+  const codexHome = join(directory, 'codex-home')
+  await mkdir(project)
+  await mkdir(codexHome)
+  const fake = fakeClientFactory({
+    turnStartFailure: Object.assign(
+      new Error('private Provider authentication and token detail'),
+      { failureReason: 'authentication_invalid' },
+    ),
+  })
+  const runners = new RemoteCodexRunnerPool({
+    codexHome,
+    clientFactory: fake.factory,
+  })
+  const state = await NodeStateStore.open({
+    dataDirectory: join(directory, 'node-state'),
+    displayName: 'Remote failure Node',
+    platform: 'Linux',
+    architecture: 'x64',
+  })
+  const service = new CodeTetherNodeService({
+    state,
+    bindAddress: '127.0.0.1',
+    port: 0,
+    providerDetector: executionDetector(),
+    remoteCodexRunners: runners,
+  })
+  const controller = {
+    controllerId: newControllerId(),
+    tls: await generateMachineTlsIdentity('Remote failure Controller'),
+  }
+  let session
+  try {
+    const peer = await pairService(service, controller)
+    session = await openRemoteCodexSession({
+      peer,
+      controller,
+      conversationId: 'conv_remote_a',
+      projectId: 'proj_remote_a',
+      rootPath: project,
+    })
+    await assert.rejects(
+      session.startTurn({
+        actionId: 'act_remote_a',
+        turnId: 'turn_remote_a',
+        prompt: 'Return a public fixture marker.',
+      }),
+      (error) =>
+        error.code === 'provider_start_failed' &&
+        error.peerAuthenticated === true &&
+        error.failureReason === 'authentication_invalid' &&
+        error.failure?.reason === 'authentication_invalid' &&
+        !JSON.stringify(error.failure).includes('private') &&
+        !error.message.includes('token'),
+    )
+    assert.equal(fake.starts, 1)
+    assert.equal(session.closed, true)
+  } finally {
+    await session?.close().catch(() => undefined)
+    await service.close().catch(() => undefined)
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
 test('authenticated transport streams canonical restricted Claude events and resumes exact identity', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'codetether-node-claude-'))
   const project = join(directory, 'project')
@@ -1820,4 +2024,10 @@ async function waitForCondition(predicate, timeoutMs = 1_000) {
     }
     await new Promise((resolve) => setTimeout(resolve, 5))
   }
+}
+
+function stripCanonicalFailure(event) {
+  const legacyEvent = { ...event }
+  delete legacyEvent.failure
+  return legacyEvent
 }

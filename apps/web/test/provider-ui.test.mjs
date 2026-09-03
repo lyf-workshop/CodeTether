@@ -11,6 +11,7 @@ import {
   effectiveConversationProvider,
   effectiveProviderReasoning,
   executableConversationProviders,
+  newConversationProviderEligibility,
   providerDefaultReasoningSelection,
   providerReasoningFromControl,
 } from '../.tmp/test-dist/components/conversations/new-conversation-provider-selection.js'
@@ -221,6 +222,177 @@ test('New Conversation falls back to executable Remote Claude and preserves its 
   assert.equal(effectiveProviderReasoning('invalid', selected), undefined)
 })
 
+test('New Conversation explains health without turning a recoverable observation into a deadlock', () => {
+  const provider = {
+    ...providerPresentation(undefined, 'codex'),
+    available: true,
+    availability: 'available',
+    availabilityLabel: '可用',
+    displayName: 'Codex',
+    capabilities: {
+      ...providerCapabilities,
+      streaming: true,
+      resume: true,
+    },
+    executionHealth: {
+      state: 'unavailable',
+      freshness: 'current',
+      failure: {
+        category: 'quota',
+        reason: 'usage_limit_reached',
+        retryability: 'retry_later',
+        userAction: 'wait',
+        source: 'provider',
+        occurredAt: '2026-09-02T20:00:00.000Z',
+        technicalCode: 'usage_limit_reached',
+      },
+    },
+  }
+
+  const eligibility = newConversationProviderEligibility(provider)
+  assert.equal(eligibility.eligible, true)
+  assert.match(eligibility.executionLabel, /执行不可用/u)
+  assert.match(eligibility.executionAdvisory, /Codex/u)
+  assert.match(eligibility.executionAdvisory, /首个明确轮次会重新验证/u)
+  assert.match(eligibility.executionAdvisory, /不会重发任何旧请求/u)
+  assert.deepEqual(executableConversationProviders([provider]), [provider])
+
+  const unsupported = newConversationProviderEligibility({
+    ...provider,
+    capabilities: { ...provider.capabilities, resume: false },
+  })
+  assert.equal(unsupported.eligible, false)
+})
+
+test('New Conversation keeps execution health advisory unless the executable profile is closed', () => {
+  const provider = {
+    ...providerPresentation(undefined, 'codex'),
+    available: true,
+    availability: 'available',
+    availabilityLabel: '可用',
+    displayName: 'Codex',
+    capabilities: {
+      ...providerCapabilities,
+      streaming: true,
+      resume: true,
+    },
+  }
+  const failure = {
+    category: 'authentication',
+    reason: 'login_required',
+    retryability: 'retry_after_user_action',
+    userAction: 'login_on_machine',
+    source: 'provider',
+    occurredAt: '2026-09-02T20:00:00.000Z',
+    technicalCode: 'login_required',
+  }
+
+  const current = newConversationProviderEligibility({
+    ...provider,
+    executionHealth: {
+      state: 'unavailable',
+      freshness: 'current',
+      failure,
+    },
+  })
+  assert.equal(current.eligible, true)
+  assert.match(current.executionAdvisory, /首个明确轮次会重新验证/u)
+  assert.deepEqual(
+    executableConversationProviders([
+      {
+        ...provider,
+        executionHealth: {
+          state: 'unavailable',
+          freshness: 'current',
+          failure,
+        },
+      },
+    ]),
+    [
+      {
+        ...provider,
+        executionHealth: {
+          state: 'unavailable',
+          freshness: 'current',
+          failure,
+        },
+      },
+    ],
+  )
+
+  const stale = newConversationProviderEligibility({
+    ...provider,
+    executionHealth: {
+      state: 'unavailable',
+      freshness: 'last_known',
+      failure,
+    },
+  })
+  assert.equal(stale.eligible, true)
+  assert.match(stale.executionAdvisory, /首个明确轮次会重新验证/u)
+
+  for (const reason of [
+    'provider_session_lost',
+    'provider_protocol_error',
+    'execution_ownership_uncertain',
+  ]) {
+    const profiles = {
+      provider_session_lost: [
+        'provider',
+        'not_retryable',
+        'view_details',
+        'provider',
+      ],
+      provider_protocol_error: [
+        'provider',
+        'retry_after_user_action',
+        'update_provider',
+        'provider',
+      ],
+      execution_ownership_uncertain: [
+        'runtime',
+        'not_retryable',
+        'view_details',
+        'runtime',
+      ],
+    }
+    const [category, retryability, userAction, source] = profiles[reason]
+    assert.equal(
+      newConversationProviderEligibility({
+        ...provider,
+        executionHealth: {
+          state: 'unavailable',
+          freshness: 'current',
+          failure: {
+            category,
+            reason,
+            retryability,
+            userAction,
+            source,
+            occurredAt: '2026-09-02T20:00:00.000Z',
+            technicalCode: reason,
+          },
+        },
+      }).eligible,
+      true,
+    )
+  }
+
+  const loggedOutRestrictedClaude = newConversationProviderEligibility({
+    ...provider,
+    displayName: 'Claude Code',
+    capabilities: { ...provider.capabilities, streaming: false, resume: false },
+    executionHealth: {
+      state: 'unavailable',
+      freshness: 'current',
+      failure,
+    },
+  })
+  assert.equal(loggedOutRestrictedClaude.eligible, false)
+  assert.match(loggedOutRestrictedClaude.executionAdvisory, /Claude Code/u)
+  assert.match(loggedOutRestrictedClaude.executionAdvisory, /完成登录/u)
+})
+
 test('existing UI surfaces consume Provider truth without adding a switch to Detail', async () => {
   const root = new URL('../src/', import.meta.url)
   const [
@@ -259,6 +431,10 @@ test('existing UI surfaces consume Provider truth without adding a switch to Det
   assert.match(dialog, /machineDetailQuery\.data\?\.providers/u)
   assert.match(dialog, /executableConversationProviders/u)
   assert.match(dialog, /effectiveSelectedProvider/u)
+  assert.match(dialog, /newConversationProviderEligibility/u)
+  assert.match(dialog, /disabled=\{!eligibility\.eligible\}/u)
+  assert.match(dialog, /selectedProviderEligibility\.executionAdvisory/u)
+  assert.match(dialog, /aria-describedby/u)
   assert.match(dialog, /capabilities\.resume/u)
   assert.doesNotMatch(dialog, /disabled=\{!provider\.available\}/u)
   assert.match(dialog, /capabilities\.modelSelection/u)

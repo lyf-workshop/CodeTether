@@ -113,6 +113,11 @@ const migrations: readonly Migration[] = [
     name: 'durable_turn_start_actions',
     up: migrateDurableTurnStartActions,
   },
+  {
+    version: 13,
+    name: 'provider_execution_health',
+    up: migrateProviderExecutionHealth,
+  },
 ]
 
 export const currentSchemaVersion = migrations.at(-1)?.version ?? 0
@@ -1880,6 +1885,39 @@ function migrateDurableTurnStartActions(database: DatabaseSync): void {
 
     CREATE INDEX idx_turn_start_actions_created
       ON turn_start_actions(created_at, action_id);
+  `)
+}
+
+/**
+ * Retains only the latest presentation-safe execution-health observation for
+ * each Machine/Provider pair. Provider installation discovery remains in its
+ * own table, while historical Turn failures remain in their Turn snapshots.
+ */
+function migrateProviderExecutionHealth(database: DatabaseSync): void {
+  database.exec(`
+    CREATE TABLE machine_provider_execution_health (
+      machine_id TEXT NOT NULL,
+      provider TEXT NOT NULL
+        CHECK (provider IN ('codex', 'claude-code')),
+      state TEXT NOT NULL
+        CHECK (state IN ('healthy', 'degraded', 'unavailable', 'unknown')),
+      failure_json TEXT
+        CHECK (
+          failure_json IS NULL OR (
+            json_valid(failure_json) AND
+            length(failure_json) BETWEEN 2 AND 4096
+          )
+        ),
+      observed_at TEXT NOT NULL,
+      PRIMARY KEY (machine_id, provider),
+      CHECK (
+        (state IN ('healthy', 'unknown') AND failure_json IS NULL) OR
+        (state IN ('degraded', 'unavailable') AND failure_json IS NOT NULL)
+      ),
+      FOREIGN KEY (machine_id)
+        REFERENCES machines(machine_id)
+        ON DELETE CASCADE
+    ) STRICT;
   `)
 }
 

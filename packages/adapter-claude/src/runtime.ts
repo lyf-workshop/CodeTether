@@ -131,6 +131,7 @@ export class ClaudeCodeSessionRuntime {
       throw new ClaudeCodeError(
         'provider_unavailable',
         'Claude Code is already running a turn for this conversation.',
+        { failureReason: 'conversation_busy' },
       )
     }
 
@@ -172,6 +173,7 @@ export class ClaudeCodeSessionRuntime {
           turnId: options.turnId,
           code: safeError.code,
           message: safeError.message,
+          failureReason: safeError.failureReason,
         }
         for (const listener of this.#failureListeners) await listener(failure)
         throw safeError

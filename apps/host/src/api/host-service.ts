@@ -1,6 +1,12 @@
 import { randomUUID } from 'node:crypto'
 
-import type { AgentEvent, AgentProvider } from '@codetether/agent-core'
+import {
+  canonicalFailure,
+  type AgentEvent,
+  type AgentProvider,
+  type CanonicalFailure,
+  type CanonicalFailureReason,
+} from '@codetether/agent-core'
 import {
   ActionIdSchema,
   ApprovalIdSchema,
@@ -49,6 +55,7 @@ import {
   type ConfirmRemoteMachinePairingResponse,
   type CreateConversationRequest,
   type CreateConversationResponse,
+  type HostError,
   type HostErrorCode,
   type HostEvent,
   type HostEventEnvelope,
@@ -78,6 +85,7 @@ import {
   type ProjectId,
   type MachineId,
   type ProviderDescriptor,
+  type ProviderExecutionHealth,
   type RenameConversationRequest,
   type RenameConversationResponse,
   type ResolveApprovalRequest,
@@ -125,6 +133,7 @@ import {
   type DurableConversation,
   type DurableConversationMutationResult,
   type DurableMachine,
+  type DurableProviderExecutionHealthObservation,
   type RestoredDurableConversation,
   type DurableTurnSnapshot,
 } from '../persistence/index.js'
@@ -178,6 +187,12 @@ import {
   type RemoteMachineCoordinator,
 } from './remote-machine-coordinator.js'
 import { WorkspacePolicy } from './workspace-policy.js'
+import {
+  classifyCanonicalFailure,
+  failureAffectsProviderExecutionHealth,
+  providerExecutionHealthState,
+  safeProviderHostError,
+} from './canonical-failure.js'
 
 const MAX_PENDING_PROVIDER_EVENTS = 512
 const MAX_PENDING_PROVIDER_EVENT_BYTES = 4 * 1024 * 1024
@@ -205,9 +220,8 @@ export class HostServiceError extends Error {
     readonly code: HostErrorCode,
     message: string,
     readonly httpStatus: number,
-    readonly details?: Readonly<
-      Record<string, string | number | boolean | null>
-    >,
+    readonly details?: HostError['details'],
+    readonly failure?: CanonicalFailure,
   ) {
     super(message)
     this.name = 'HostServiceError'
@@ -230,6 +244,14 @@ export interface HostServiceOptions {
   /** True only for the Desktop-owned sidecar assembly. */
   readonly desktopManaged?: boolean
   readonly remoteMachineCoordinator?: RemoteMachineCoordinator
+  /**
+   * Bounded local recovery hook owned by the Host assembly. It may probe only
+   * the fixed Provider executable and is invoked solely by an explicit
+   * Conversation/Turn action after that Provider became unavailable.
+   */
+  readonly refreshUnavailableLocalProvider?: (
+    provider: AgentProvider,
+  ) => Promise<AgentHostRuntime>
 }
 
 /** Runtime authority for live state, optionally backed by durable normalized snapshots. */
@@ -251,6 +273,10 @@ export class HostService {
   readonly #persistence?: ConversationStore
   readonly #machines: MachineRegistry
   readonly #remoteMachines: RemoteMachineCoordinator
+  readonly #refreshUnavailableLocalProvider?: (
+    provider: AgentProvider,
+  ) => Promise<AgentHostRuntime>
+  readonly #localProviderRefreshes = new Map<AgentProvider, Promise<void>>()
   readonly #projects: ProjectRegistry
   readonly #persistenceFlushMs: number
   readonly #dirtyTurns = new Map<TurnId, ConversationId>()
@@ -269,15 +295,26 @@ export class HostService {
   #pendingProviderEventBytes = 0
   #persistenceTimer?: ReturnType<typeof setTimeout>
   #persistenceFailure?: Error
-  readonly #unsubscribeEvents: Array<() => void> = []
-  readonly #unsubscribeApprovals: Array<() => void> = []
-  readonly #unsubscribeFailures: Array<() => void> = []
+  readonly #unsubscribeEvents = new Set<() => void>()
+  readonly #unsubscribeApprovals = new Set<() => void>()
+  readonly #unsubscribeFailures = new Set<() => void>()
   #unsubscribeRemoteMachineStatus?: () => void
   #unsubscribeRemoteMachineRemoval?: () => void
   #unsubscribeRemoteProviderDiscovery?: () => void
   readonly #runtimeFailures = new Map<AgentProvider, Error>()
   readonly #machineRuntimeFailures = new Map<string, Error>()
-  readonly #subscribedRuntimes = new WeakSet<AgentHostRuntime>()
+  readonly #providerExecutionHealth = new Map<
+    string,
+    DurableProviderExecutionHealthObservation
+  >()
+  /** Health observations established during this Host/connection epoch. */
+  readonly #currentProviderExecutionHealth = new Set<string>()
+  /** Monotonic Host-owned generation for every observed remote transport loss. */
+  readonly #remoteTransportGenerations = new Map<MachineId, number>()
+  readonly #runtimeSubscriptions = new Map<
+    AgentHostRuntime,
+    readonly [() => void, () => void, () => void]
+  >()
   #closePromise?: Promise<void>
   #acceptingActions = true
   #closingRuntime = false
@@ -295,6 +332,8 @@ export class HostService {
     this.publisher = options.publisher
     this.#hostVersion = options.hostVersion
     this.#now = options.now ?? (() => new Date())
+    this.#refreshUnavailableLocalProvider =
+      options.refreshUnavailableLocalProvider
     this.#maxConversations = positiveInteger(
       options.maxConversations,
       DEFAULT_MAX_CONVERSATIONS,
@@ -358,7 +397,13 @@ export class HostService {
       this.#remoteMachines.subscribeStatus?.((machineId, connectionState) => {
         try {
           if (connectionState !== 'online') {
+            this.#remoteTransportGenerations.set(
+              machineId,
+              this.#remoteTransportGeneration(machineId) + 1,
+            )
+            this.#terminalizeActiveRemoteTurnsForTransportLoss(machineId)
             this.#invalidateRemoteProviderSessions(machineId)
+            this.#markProviderExecutionHealthLastKnown(machineId)
           }
           const durable = this.#persistence?.getMachine(machineId)
           const trust = this.#persistence?.getTrustedMachinePeer(machineId)
@@ -394,6 +439,7 @@ export class HostService {
           if (!(error instanceof MachineRegistryError)) throw error
           return
         }
+        this.#forgetProviderExecutionHealth(machineId)
         this.#publish({
           conversationId: null,
           timestamp: this.#timestamp(),
@@ -449,6 +495,10 @@ export class HostService {
       publish: (event) => this.#publish(event),
       completeTurn: (conversation, turn, status, completedAt, fields) =>
         this.#completeTurn(conversation, turn, status, completedAt, fields),
+      executionSucceeded: (conversation) =>
+        this.#recordProviderExecutionSuccess(conversation),
+      executionFailed: (conversation, _provider, error) =>
+        this.#recordProviderExecutionFailure(conversation, error),
     })
     for (const runtime of this.#providers.runtimes()) {
       this.#subscribeRuntime(runtime, this.#machines.localMachineId())
@@ -749,6 +799,7 @@ export class HostService {
           }
         })
         this.#machines.removeRemote(id)
+        this.#forgetProviderExecutionHealth(id)
         this.#publish({
           conversationId: null,
           timestamp: this.#timestamp(),
@@ -960,7 +1011,10 @@ export class HostService {
         )
         let machine: MachineSummary
         try {
-          machine = this.#machines.requireAvailable(request.machineId)
+          machine = this.#machines.get(request.machineId)
+          if (machine.availability !== 'available') {
+            throw machineUnavailableError(machine, this.#timestamp())
+          }
         } catch (error) {
           throw machineServiceError(error)
         }
@@ -1412,16 +1466,25 @@ export class HostService {
       async () => {
         let machine: MachineSummary
         try {
-          machine = this.#machines.requireAvailable(request.machineId)
+          machine = this.#machines.get(request.machineId)
+          if (machine.availability !== 'available') {
+            throw machineUnavailableError(machine, this.#timestamp())
+          }
         } catch (error) {
           throw machineServiceError(error)
         }
-        const machineProvider = this.#providerDescriptorsForMachine(
+        await this.#refreshLocalProviderForExplicitStart(
           machine.machineId,
-        ).find((descriptor) => descriptor.provider === request.provider)
+          request.provider,
+        )
+        const machineProvider = this.#providerDescriptorForMachine(
+          machine.machineId,
+          request.provider,
+        )
         if (
           machineProvider === undefined ||
-          machineProvider.availability !== 'available'
+          machineProvider.availability !== 'available' ||
+          !this.#machineRuntimeAvailable(machine.machineId, request.provider)
         ) {
           throw providerUnavailableError(request.provider, machineProvider)
         }
@@ -1535,11 +1598,22 @@ export class HostService {
               ) {
                 throw providerUnavailableError(request.provider)
               }
-              throw providerCommandError(
-                request.provider,
-                'create conversation',
+              const observedAt = this.#timestamp()
+              const failure = classifyCanonicalFailure(
                 error,
+                observedAt,
+                'provider_start_failed',
               )
+              if (failureAffectsProviderExecutionHealth(failure)) {
+                this.#recordProviderExecutionHealth({
+                  machineId: machine.machineId,
+                  provider: request.provider,
+                  state: providerExecutionHealthState(failure),
+                  failure,
+                  observedAt: TimestampSchema.parse(observedAt),
+                })
+              }
+              throw hostServiceErrorForFailure(request.provider, failure)
             }
             try {
               this.#assertMachineRuntimeAvailable(
@@ -1746,13 +1820,23 @@ export class HostService {
           )
         }
         try {
-          this.#machines.requireAvailable(conversationMachineId)
+          const machine = this.#machines.get(conversationMachineId)
+          if (machine.availability !== 'available') {
+            throw machineUnavailableError(machine, this.#timestamp())
+          }
         } catch (error) {
           throw machineServiceError(error)
         }
+        await this.#refreshLocalProviderForExplicitStart(
+          conversationMachineId,
+          conversationProvider,
+        )
         this.#assertMachineRuntimeAvailable(
           conversationMachineId,
           conversationProvider,
+        )
+        const admittedTransportGeneration = this.#remoteTransportGeneration(
+          conversationMachineId,
         )
         assertProviderConfiguration(
           this.#providerDescriptorsForMachine(conversationMachineId).find(
@@ -1774,10 +1858,16 @@ export class HostService {
             conversation.startingTurn ||
             conversation.record.activeTurnId !== undefined
           ) {
+            const failure = canonicalFailure(
+              'conversation_busy',
+              this.#timestamp(),
+            )
             throw new HostServiceError(
               'conflict',
               'Conversation already has an active Turn',
               409,
+              undefined,
+              failure,
             )
           }
           conversation.startingTurn = true
@@ -1785,38 +1875,6 @@ export class HostService {
           releaseRuntimePin()
         }
         this.#touchConversation(conversation.record.conversationId)
-        let authorizedCwd: string
-        let runtime: AgentHostRuntime
-        try {
-          const projectId = conversation.record.projectId
-          if (projectId === undefined) {
-            throw new HostServiceError(
-              'project_unavailable',
-              'Conversation has no durable Project identity',
-              409,
-            )
-          }
-          authorizedCwd = (
-            await this.#projects.authorizeConversation(
-              projectId,
-              conversation.record.machineId,
-              conversation.record.cwd,
-            )
-          ).cwd
-          runtime = this.#requireMachineProviderRuntime(
-            conversation.record.machineId,
-            conversation.record.provider,
-          )
-          await this.#ensureProviderConversation(
-            conversation,
-            authorizedCwd,
-            runtime,
-          )
-        } catch (error) {
-          conversation.startingTurn = false
-          throw projectServiceError(error)
-        }
-
         const timestamp = this.#timestamp()
         const turnId = newTurnId()
         const record: TurnRecord = {
@@ -1870,6 +1928,82 @@ export class HostService {
           throw error
         }
 
+        let authorizedCwd: string
+        try {
+          const projectId = conversation.record.projectId
+          if (projectId === undefined) {
+            throw new HostServiceError(
+              'project_unavailable',
+              'Conversation has no durable Project identity',
+              409,
+            )
+          }
+          authorizedCwd = (
+            await this.#projects.authorizeConversation(
+              projectId,
+              conversation.record.machineId,
+              conversation.record.cwd,
+            )
+          ).cwd
+        } catch (error) {
+          conversation.startingTurn = false
+          const mapped = projectServiceError(error)
+          const failure = classifyCanonicalFailure(
+            mapped,
+            this.#timestamp(),
+            'project_location_unavailable',
+          )
+          this.#recordProviderStartFailure(
+            conversation,
+            record,
+            safeProviderHostError(conversation.record.provider, failure),
+          )
+          throw hostServiceErrorForFailure(
+            conversation.record.provider,
+            failure,
+          )
+        }
+
+        let runtime: AgentHostRuntime
+        try {
+          runtime = this.#requireMachineProviderRuntime(
+            conversation.record.machineId,
+            conversation.record.provider,
+          )
+          await this.#ensureProviderConversation(
+            conversation,
+            authorizedCwd,
+            runtime,
+          )
+          if (
+            this.#remoteTransportLostSince(
+              conversation.record.machineId,
+              admittedTransportGeneration,
+            )
+          ) {
+            throw hostServiceErrorForFailure(
+              conversation.record.provider,
+              canonicalFailure('transport_lost', this.#timestamp()),
+            )
+          }
+        } catch (error) {
+          conversation.startingTurn = false
+          const failure = classifyCanonicalFailure(
+            error,
+            this.#timestamp(),
+            'provider_start_failed',
+          )
+          this.#recordProviderStartFailure(
+            conversation,
+            record,
+            safeProviderHostError(conversation.record.provider, failure),
+          )
+          throw hostServiceErrorForFailure(
+            conversation.record.provider,
+            failure,
+          )
+        }
+
         let provider:
           Awaited<ReturnType<AgentHostRuntime['startTurn']>> | undefined
         let startError: unknown
@@ -1902,6 +2036,10 @@ export class HostService {
         } catch (error) {
           startError = error
         }
+        const transportLostDuringStart = this.#remoteTransportLostSince(
+          conversation.record.machineId,
+          admittedTransportGeneration,
+        )
         const providerStartFailure = this.#findPendingProviderStartFailure(
           conversation.record.machineId,
           conversation.record.provider,
@@ -1915,20 +2053,49 @@ export class HostService {
           conversation.providerSessionMaterialized = true
           conversation.providerSession =
             cleanupError === undefined ? 'needs-resume' : 'unavailable'
-          this.#recordProviderStartFailure(
+          const failure = canonicalFailure(
+            'protocol_limit_exceeded',
+            this.#timestamp(),
+          )
+          const responseFailure =
+            cleanupError === undefined
+              ? failure
+              : canonicalFailure(
+                  'execution_ownership_uncertain',
+                  this.#timestamp(),
+                )
+          const error = safeProviderHostError(
+            conversation.record.provider,
+            responseFailure,
+          )
+          this.#recordProviderStartFailure(conversation, record, error)
+          this.#flushProviderEvents()
+          throw hostServiceErrorForFailure(
+            conversation.record.provider,
+            responseFailure,
+          )
+        }
+        if (transportLostDuringStart) {
+          conversation.startingTurn = false
+          this.#invalidateRemoteProviderSession(conversation)
+          const failure = canonicalFailure('transport_lost', this.#timestamp())
+          const failedTurn = this.#recordProviderStartFailure(
             conversation,
             record,
-            'provider_error',
-            `${providerDisplayName(conversation.record.provider)} event stream exceeded the Host startup buffer`,
+            safeProviderHostError(conversation.record.provider, failure),
           )
           this.#flushProviderEvents()
-          throw new HostServiceError(
-            'provider_error',
-            cleanupError === undefined
-              ? `${providerDisplayName(conversation.record.provider)} failed during Turn startup`
-              : `${providerDisplayName(conversation.record.provider)} cleanup could not be verified`,
-            500,
-          )
+          // The Provider accepted the execution before the authenticated
+          // transport was lost. Preserve the frozen accepted-start contract:
+          // the action resolves to its one durable terminal Turn rather than
+          // making an HTTP response look like proof that execution never
+          // started. Replaying this action resolves to the same failed Turn.
+          return {
+            protocolVersion,
+            actionId: request.actionId,
+            status: 'accepted',
+            data: { turn: failedTurn },
+          }
         }
         if (startError !== undefined) {
           conversation.startingTurn = false
@@ -1941,22 +2108,22 @@ export class HostService {
             conversation.record.machineId,
             conversation.record.provider,
           )
-          this.#recordProviderStartFailure(
-            conversation,
-            record,
-            unavailable ? 'runtime_unavailable' : 'provider_error',
-            unavailable
-              ? `${providerDisplayName(conversation.record.provider)} is unavailable`
-              : `${providerDisplayName(conversation.record.provider)} failed to start Turn`,
-          )
-          this.#flushProviderEvents()
-          if (unavailable) {
-            throw providerUnavailableError(conversation.record.provider)
-          }
-          throw providerCommandError(
-            conversation.record.provider,
-            'start turn',
+          const failure = classifyCanonicalFailure(
             startError,
+            this.#timestamp(),
+            unavailable
+              ? 'remote_execution_unavailable'
+              : 'provider_start_failed',
+          )
+          const error = safeProviderHostError(
+            conversation.record.provider,
+            failure,
+          )
+          this.#recordProviderStartFailure(conversation, record, error)
+          this.#flushProviderEvents()
+          throw hostServiceErrorForFailure(
+            conversation.record.provider,
+            failure,
           )
         }
         if (conversation.record.machineId === this.#machines.localMachineId()) {
@@ -1972,18 +2139,25 @@ export class HostService {
           conversation.providerTurnIds.has(provider.providerTurnId)
         ) {
           conversation.startingTurn = false
-          await this.#disposeInvalidProviderTurnSession(conversation, runtime)
+          const cleanupVerified = await this.#disposeInvalidProviderTurnSession(
+            conversation,
+            runtime,
+          )
+          const failure = canonicalFailure(
+            cleanupVerified
+              ? 'provider_protocol_error'
+              : 'execution_ownership_uncertain',
+            this.#timestamp(),
+          )
           this.#recordProviderStartFailure(
             conversation,
             record,
-            'provider_error',
-            `${providerDisplayName(conversation.record.provider)} returned an invalid Turn identity`,
+            safeProviderHostError(conversation.record.provider, failure),
           )
           this.#flushProviderEvents()
-          throw new HostServiceError(
-            'provider_error',
-            `${providerDisplayName(conversation.record.provider)} returned an invalid or reused Turn identity`,
-            500,
+          throw hostServiceErrorForFailure(
+            conversation.record.provider,
+            failure,
           )
         }
 
@@ -2487,11 +2661,12 @@ export class HostService {
     const conversation = this.#conversations.get(event.conversationId)
     const turn = conversation?.turns.get(event.turnId)
     if (conversation === undefined || turn === undefined) return
+    const completedAt = this.#timestamp()
     const error = {
       code: 'runtime_unavailable' as const,
       message: 'Conversation durability became unavailable',
+      failure: canonicalFailure('runtime_error', completedAt),
     }
-    const completedAt = this.#timestamp()
     turn.record = {
       turnId: turn.record.turnId,
       conversationId: turn.record.conversationId,
@@ -2811,20 +2986,30 @@ export class HostService {
         continue
       }
       if (this.#persistence === undefined) {
+        const failure = canonicalFailure(
+          'execution_capacity_reached',
+          this.#timestamp(),
+        )
         throw new HostServiceError(
           'runtime_unavailable',
           'Host Conversation capacity is temporarily exhausted',
           503,
           { maxConversations: this.#maxConversations },
+          failure,
         )
       }
       const candidate = this.#runtimeEvictionCandidate(protectedConversationId)
       if (candidate === undefined) {
+        const failure = canonicalFailure(
+          'execution_capacity_reached',
+          this.#timestamp(),
+        )
         throw new HostServiceError(
           'runtime_unavailable',
           'Host Conversation working set is temporarily exhausted',
           503,
           { maxConversations: this.#maxConversations },
+          failure,
         )
       }
       this.#evictRuntimeConversation(candidate)
@@ -2929,13 +3114,13 @@ export class HostService {
   async #disposeInvalidProviderTurnSession(
     conversation: ConversationState,
     runtime: AgentHostRuntime,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const providerThreadId = conversation.providerThreadId
     if (
       providerThreadId === undefined ||
       runtime.disposeConversation === undefined
     ) {
-      return
+      return false
     }
     conversation.providerSession = 'needs-resume'
     conversation.providerSessionMaterialized = true
@@ -2944,8 +3129,10 @@ export class HostService {
       // Turn. Wait for its session-scoped cleanup before publishing failure,
       // so a malformed/reused acknowledgement cannot leave untracked work.
       await runtime.disposeConversation({ providerThreadId })
+      return true
     } catch {
       conversation.providerSession = 'unavailable'
+      return false
     }
   }
 
@@ -2959,6 +3146,46 @@ export class HostService {
     for (const conversation of this.#conversations.values()) {
       if (conversation.record.machineId !== machineId) continue
       this.#invalidateRemoteProviderSession(conversation)
+    }
+  }
+
+  #terminalizeActiveRemoteTurnsForTransportLoss(machineId: MachineId): void {
+    // Graceful Host shutdown owns its own reconciliation path. A live Host
+    // observing a trusted transport transition, however, knows that any
+    // active remote Turn lost its Controller channel and must fail closed.
+    if (this.#closePromise !== undefined) return
+    const occurredAt = this.#timestamp()
+    for (const conversation of this.#conversations.values()) {
+      if (conversation.record.machineId !== machineId) continue
+      const activeTurnId = conversation.record.activeTurnId
+      if (activeTurnId === undefined) continue
+      const turn = conversation.turns.get(activeTurnId)
+      if (turn === undefined || turn.record.status !== 'running') continue
+      const failure = canonicalFailure('transport_lost', occurredAt)
+      const error = safeProviderHostError(conversation.record.provider, failure)
+      this.#completeTurn(conversation, turn, 'failed', occurredAt, { error })
+      this.#publish({
+        conversationId: conversation.record.conversationId,
+        turnId: turn.record.turnId,
+        timestamp: occurredAt,
+        type: 'turn.failed',
+        payload: { error },
+      })
+    }
+  }
+
+  #remoteTransportGeneration(machineId: MachineId): number {
+    return this.#remoteTransportGenerations.get(machineId) ?? 0
+  }
+
+  #remoteTransportLostSince(machineId: MachineId, generation: number): boolean {
+    if (machineId === this.#machines.localMachineId()) return false
+    if (this.#remoteTransportGeneration(machineId) !== generation) return true
+    try {
+      const machine = this.#machines.get(machineId)
+      return machine.kind === 'remote' && machine.connectionState !== 'online'
+    } catch {
+      return true
     }
   }
 
@@ -3192,9 +3419,8 @@ export class HostService {
   #recordProviderStartFailure(
     conversation: ConversationState,
     record: TurnRecord,
-    code: HostErrorCode,
-    message: string,
-  ): void {
+    error: HostError,
+  ): TurnRecord {
     const state: TurnState = {
       record,
       providerItems: new Map(),
@@ -3215,7 +3441,6 @@ export class HostService {
       payload: { turn: record },
     })
     const completedAt = this.#timestamp()
-    const error = { code, message }
     this.#completeTurn(conversation, state, 'failed', completedAt, { error })
     this.#publish({
       conversationId: record.conversationId,
@@ -3224,6 +3449,74 @@ export class HostService {
       type: 'turn.failed',
       payload: { error },
     })
+    this.#recordProviderExecutionFailure(conversation, error)
+    return state.record
+  }
+
+  #recordProviderExecutionSuccess(conversation: ConversationState): void {
+    this.#recordProviderExecutionHealth({
+      machineId: conversation.record.machineId,
+      provider: conversation.record.provider,
+      state: 'healthy',
+      observedAt: TimestampSchema.parse(this.#timestamp()),
+    })
+  }
+
+  #recordProviderExecutionFailure(
+    conversation: ConversationState,
+    error: HostError,
+  ): void {
+    const failure = error.failure
+    if (
+      failure === undefined ||
+      !failureAffectsProviderExecutionHealth(failure)
+    ) {
+      return
+    }
+    this.#recordProviderExecutionHealth({
+      machineId: conversation.record.machineId,
+      provider: conversation.record.provider,
+      state: providerExecutionHealthState(failure),
+      failure,
+      observedAt: TimestampSchema.parse(this.#timestamp()),
+    })
+  }
+
+  #recordProviderExecutionHealth(
+    observation: DurableProviderExecutionHealthObservation,
+  ): void {
+    const key = machineRuntimeKey(observation.machineId, observation.provider)
+    const existing =
+      this.#providerExecutionHealth.get(key) ??
+      this.#persistence?.getProviderExecutionHealth(
+        observation.machineId,
+        observation.provider,
+      )
+    if (
+      existing !== undefined &&
+      timestampAfter(existing.observedAt, observation.observedAt)
+    ) {
+      return
+    }
+    const retained =
+      this.#persistence === undefined
+        ? observation
+        : this.#writeDurableResult(() =>
+            this.#persistence!.recordProviderExecutionHealth(observation),
+          )
+    this.#providerExecutionHealth.set(key, retained)
+    this.#currentProviderExecutionHealth.add(key)
+    try {
+      const machine = this.#machines.get(observation.machineId)
+      this.#publish({
+        conversationId: null,
+        timestamp: observation.observedAt,
+        type: 'machine.updated',
+        payload: { machine },
+      })
+    } catch (error) {
+      if (!(error instanceof MachineRegistryError)) throw error
+    }
   }
 
   #recordDurableEvent(
@@ -3850,6 +4143,10 @@ export class HostService {
       }
       for (const unsubscribe of this.#unsubscribeEvents) unsubscribe()
       for (const unsubscribe of this.#unsubscribeFailures) unsubscribe()
+      this.#unsubscribeEvents.clear()
+      this.#unsubscribeApprovals.clear()
+      this.#unsubscribeFailures.clear()
+      this.#runtimeSubscriptions.clear()
       this.#unsubscribeRemoteMachineStatus?.()
       this.#unsubscribeRemoteMachineStatus = undefined
       this.#unsubscribeRemoteMachineRemoval?.()
@@ -3896,12 +4193,25 @@ export class HostService {
       0,
     )
     const timestamp = this.#timestamp()
-    const error = {
-      code: 'runtime_unavailable' as const,
-      message:
-        this.#persistenceFailure === undefined
-          ? `${providerDisplayName(provider)} runtime became unavailable`
-          : 'Conversation durability became unavailable',
+    const canonical = classifyCanonicalFailure(
+      failure,
+      timestamp,
+      this.#persistenceFailure === undefined
+        ? 'runtime_error'
+        : 'runtime_error',
+    )
+    const error = safeProviderHostError(provider, canonical)
+    if (
+      this.#persistenceFailure === undefined &&
+      failureAffectsProviderExecutionHealth(canonical)
+    ) {
+      this.#recordProviderExecutionHealth({
+        machineId: this.#machines.localMachineId(),
+        provider,
+        state: providerExecutionHealthState(canonical),
+        failure: canonical,
+        observedAt: TimestampSchema.parse(timestamp),
+      })
     }
     for (const conversation of this.#conversations.values()) {
       if (
@@ -3945,15 +4255,77 @@ export class HostService {
     )
   }
 
+  async #refreshLocalProviderForExplicitStart(
+    machineId: MachineId,
+    provider: AgentProvider,
+  ): Promise<void> {
+    if (
+      machineId !== this.#machines.localMachineId() ||
+      this.#refreshUnavailableLocalProvider === undefined ||
+      this.#persistenceFailure !== undefined
+    ) {
+      return
+    }
+    const current = this.#providers.get(provider)
+    if (
+      current === undefined ||
+      (current.available !== false && !this.#runtimeFailures.has(provider))
+    ) {
+      return
+    }
+    const inFlight = this.#localProviderRefreshes.get(provider)
+    if (inFlight !== undefined) {
+      await inFlight
+      return
+    }
+    const refresh = (async (): Promise<void> => {
+      const previous = this.#providers.get(provider)
+      if (previous === undefined) return
+      const knownFatalFailure = this.#runtimeFailures.get(provider)
+      this.#unsubscribeRuntime(previous)
+      try {
+        await previous.close()
+      } catch (error) {
+        // Codex retains and rethrows the exact fatal failure that already
+        // caused Host terminalization after its child has been shut down.
+        // That identity is cleanup-complete, not a second cleanup failure.
+        // Any different rejection remains uncertain and blocks replacement.
+        if (knownFatalFailure === undefined || error !== knownFatalFailure) {
+          throw error
+        }
+      }
+      const replacement =
+        await this.#refreshUnavailableLocalProvider?.(provider)
+      if (replacement === undefined || replacement.provider !== provider) {
+        await replacement?.close().catch(() => undefined)
+        throw new Error('Local Provider recovery returned the wrong identity')
+      }
+      this.#providers.replace(previous, replacement)
+      this.#runtimeFailures.delete(provider)
+      if (replacement.available !== false) {
+        this.#subscribeRuntime(replacement, machineId)
+      }
+    })()
+    this.#localProviderRefreshes.set(provider, refresh)
+    try {
+      await refresh
+    } finally {
+      if (this.#localProviderRefreshes.get(provider) === refresh) {
+        this.#localProviderRefreshes.delete(provider)
+      }
+    }
+  }
+
   #providerDescriptors(): readonly ProviderDescriptor[] {
-    return this.#providers
-      .descriptors()
-      .map((descriptor) =>
-        descriptor.availability === 'available' &&
-        !this.#runtimeAvailable(descriptor.provider)
-          ? { ...descriptor, availability: 'unavailable' }
-          : descriptor,
-      )
+    const machine = this.#machines.get(this.#machines.localMachineId())
+    return this.#providers.descriptors().map((descriptor) => ({
+      ...descriptor,
+      executionHealth: this.#providerExecutionHealthPresentation(
+        machine,
+        descriptor.provider,
+        descriptor.executionHealth,
+      ),
+    }))
   }
 
   #providerDescriptorsForMachine(
@@ -3997,12 +4369,94 @@ export class HostService {
         machine.machineId,
         observation.observedAt,
       ) === true
+    const providerDiscoveryFreshness = current
+      ? ('current' as const)
+      : ('last_known' as const)
     return {
-      providers: observation.providers,
+      providers: observation.providers.map((descriptor) => ({
+        ...descriptor,
+        executionHealth: this.#providerExecutionHealthPresentation(
+          machine,
+          descriptor.provider,
+          descriptor.executionHealth,
+          providerDiscoveryFreshness,
+        ),
+      })),
       providerDiscovery: {
         state: current ? 'current' : 'last_known',
         observedAt: observation.observedAt,
       },
+    }
+  }
+
+  #providerExecutionHealthPresentation(
+    machine: MachineSummary,
+    provider: AgentProvider,
+    discoveredHealth?: ProviderExecutionHealth,
+    providerDiscoveryFreshness?: 'current' | 'last_known',
+  ): ProviderExecutionHealth {
+    const key = machineRuntimeKey(machine.machineId, provider)
+    const observation =
+      this.#providerExecutionHealth.get(key) ??
+      this.#persistence?.getProviderExecutionHealth(machine.machineId, provider)
+    if (observation !== undefined) {
+      this.#providerExecutionHealth.set(key, observation)
+    }
+    // Discovery may report a bounded blocking condition (for example a
+    // machine-readable login failure), but installation/auth probing cannot
+    // prove successful Agent execution. Only a completed explicit Turn may
+    // establish healthy execution state.
+    const discoveredFailureHealth =
+      discoveredHealth?.failure === undefined ? undefined : discoveredHealth
+    const discoveredIsNewer =
+      discoveredFailureHealth !== undefined &&
+      (observation === undefined ||
+        (discoveredFailureHealth.observedAt !== undefined &&
+          !timestampAfter(
+            observation.observedAt,
+            discoveredFailureHealth.observedAt,
+          )))
+    const selected = discoveredIsNewer ? discoveredFailureHealth : observation
+    const remoteTruthIsStale =
+      machine.kind === 'remote' &&
+      (machine.connectionState !== 'online' ||
+        providerDiscoveryFreshness === 'last_known')
+    const freshness = remoteTruthIsStale
+      ? ('last_known' as const)
+      : discoveredIsNewer && discoveredFailureHealth?.freshness === 'last_known'
+        ? ('last_known' as const)
+        : discoveredIsNewer || this.#currentProviderExecutionHealth.has(key)
+          ? ('current' as const)
+          : ('last_known' as const)
+    if (selected === undefined) {
+      return {
+        state: 'unknown',
+        freshness: remoteTruthIsStale ? 'last_known' : 'current',
+      }
+    }
+    return {
+      state: selected.state,
+      freshness,
+      ...(selected.observedAt === undefined
+        ? {}
+        : { observedAt: selected.observedAt }),
+      ...(selected.failure === undefined ? {} : { failure: selected.failure }),
+    }
+  }
+
+  #markProviderExecutionHealthLastKnown(machineId: MachineId): void {
+    for (const provider of ['codex', 'claude-code'] as const) {
+      this.#currentProviderExecutionHealth.delete(
+        machineRuntimeKey(machineId, provider),
+      )
+    }
+  }
+
+  #forgetProviderExecutionHealth(machineId: MachineId): void {
+    for (const provider of ['codex', 'claude-code'] as const) {
+      const key = machineRuntimeKey(machineId, provider)
+      this.#providerExecutionHealth.delete(key)
+      this.#currentProviderExecutionHealth.delete(key)
     }
   }
 
@@ -4043,10 +4497,20 @@ export class HostService {
     if (this.#machineRuntimeAvailable(machineId, provider)) return
     throw providerUnavailableError(
       provider,
-      this.#providerDescriptorsForMachine(machineId).find(
-        (descriptor) => descriptor.provider === provider,
-      ),
+      this.#providerDescriptorForMachine(machineId, provider),
     )
+  }
+
+  #providerDescriptorForMachine(
+    machineId: MachineId,
+    provider: AgentProvider,
+  ): ProviderDescriptor | undefined {
+    const machine = this.#machines.get(machineId)
+    const descriptors =
+      machine.kind === 'local'
+        ? this.#providerDescriptors()
+        : this.#remoteProviderPresentation(machine).providers
+    return descriptors.find((descriptor) => descriptor.provider === provider)
   }
 
   #requireMachineProviderRuntime(
@@ -4061,8 +4525,7 @@ export class HostService {
   }
 
   #subscribeRuntime(runtime: AgentHostRuntime, machineId: MachineId): void {
-    if (this.#subscribedRuntimes.has(runtime)) return
-    this.#subscribedRuntimes.add(runtime)
+    if (this.#runtimeSubscriptions.has(runtime)) return
     const fail = (failure: Error): void => {
       if (machineId === this.#machines.localMachineId()) {
         this.#handleRuntimeFailure(runtime.provider, failure)
@@ -4070,61 +4533,78 @@ export class HostService {
         this.#handleMachineRuntimeFailure(machineId, runtime.provider, failure)
       }
     }
-    this.#unsubscribeEvents.push(
-      runtime.subscribeEvents((event) => {
-        try {
-          if (event.provider !== runtime.provider) {
-            throw new Error('Provider emitted an event with the wrong identity')
-          }
-          this.#acceptProviderEvent(machineId, runtime, event)
-        } catch (error) {
-          // Provider callbacks are owned by the Runtime. Never throw Host
-          // translation or durability failures back through that callback,
-          // because doing so can bypass the Runtime's exact-child cleanup.
-          try {
-            fail(toError(error))
-          } catch {
-            // `fail` has already transitioned the scoped runtime as far as
-            // durable authority permits. The Runtime must retain control of
-            // its own callback/process teardown path.
-          }
+    const unsubscribeEvents = runtime.subscribeEvents((event) => {
+      try {
+        if (event.provider !== runtime.provider) {
+          throw new Error('Provider emitted an event with the wrong identity')
         }
-      }),
+        this.#acceptProviderEvent(machineId, runtime, event)
+      } catch (error) {
+        // Provider callbacks are owned by the Runtime. Never throw Host
+        // translation or durability failures back through that callback,
+        // because doing so can bypass the Runtime's exact-child cleanup.
+        try {
+          fail(toError(error))
+        } catch {
+          // `fail` has already transitioned the scoped runtime as far as
+          // durable authority permits. The Runtime must retain control of
+          // its own callback/process teardown path.
+        }
+      }
+    })
+    const unsubscribeApprovals = runtime.subscribeApprovals(
+      (request) => {
+        if (
+          machineId !== this.#machines.localMachineId() ||
+          (request.provider !== undefined &&
+            request.provider !== runtime.provider)
+        ) {
+          request.respond('decline')
+          fail(new Error('Provider emitted an unsupported Approval'))
+          return
+        }
+        this.#approvalRegistry.request({
+          ...request,
+          provider: runtime.provider,
+        })
+      },
+      (resolution) => {
+        if (
+          machineId !== this.#machines.localMachineId() ||
+          (resolution.provider !== undefined &&
+            resolution.provider !== runtime.provider)
+        ) {
+          fail(new Error('Provider resolved an unsupported Approval'))
+          return
+        }
+        this.#approvalRegistry.resolveProvider({
+          ...resolution,
+          provider: runtime.provider,
+        })
+      },
     )
-    this.#unsubscribeApprovals.push(
-      runtime.subscribeApprovals(
-        (request) => {
-          if (
-            machineId !== this.#machines.localMachineId() ||
-            (request.provider !== undefined &&
-              request.provider !== runtime.provider)
-          ) {
-            request.respond('decline')
-            fail(new Error('Provider emitted an unsupported Approval'))
-            return
-          }
-          this.#approvalRegistry.request({
-            ...request,
-            provider: runtime.provider,
-          })
-        },
-        (resolution) => {
-          if (
-            machineId !== this.#machines.localMachineId() ||
-            (resolution.provider !== undefined &&
-              resolution.provider !== runtime.provider)
-          ) {
-            fail(new Error('Provider resolved an unsupported Approval'))
-            return
-          }
-          this.#approvalRegistry.resolveProvider({
-            ...resolution,
-            provider: runtime.provider,
-          })
-        },
-      ),
-    )
-    this.#unsubscribeFailures.push(runtime.subscribeFailures(fail))
+    const unsubscribeFailures = runtime.subscribeFailures(fail)
+    this.#unsubscribeEvents.add(unsubscribeEvents)
+    this.#unsubscribeApprovals.add(unsubscribeApprovals)
+    this.#unsubscribeFailures.add(unsubscribeFailures)
+    this.#runtimeSubscriptions.set(runtime, [
+      unsubscribeEvents,
+      unsubscribeApprovals,
+      unsubscribeFailures,
+    ])
+  }
+
+  #unsubscribeRuntime(runtime: AgentHostRuntime): void {
+    const subscriptions = this.#runtimeSubscriptions.get(runtime)
+    if (subscriptions === undefined) return
+    this.#runtimeSubscriptions.delete(runtime)
+    const [events, approvals, failures] = subscriptions
+    this.#unsubscribeEvents.delete(events)
+    this.#unsubscribeApprovals.delete(approvals)
+    this.#unsubscribeFailures.delete(failures)
+    approvals()
+    events()
+    failures()
   }
 
   #handleMachineRuntimeFailure(
@@ -4155,9 +4635,23 @@ export class HostService {
       0,
     )
     const timestamp = this.#timestamp()
-    const error = {
-      code: 'runtime_unavailable' as const,
-      message: `${providerDisplayName(provider)} runtime became unavailable on this Machine`,
+    const canonical = classifyCanonicalFailure(
+      failure,
+      timestamp,
+      'execution_lost',
+    )
+    const error = safeProviderHostError(provider, canonical)
+    if (
+      this.#persistenceFailure === undefined &&
+      failureAffectsProviderExecutionHealth(canonical)
+    ) {
+      this.#recordProviderExecutionHealth({
+        machineId,
+        provider,
+        state: providerExecutionHealthState(canonical),
+        failure: canonical,
+        observedAt: TimestampSchema.parse(timestamp),
+      })
     }
     for (const conversation of this.#conversations.values()) {
       if (
@@ -4329,13 +4823,31 @@ function providerCommandError(
   provider: AgentProvider,
   operation: string,
   error: unknown,
+  occurredAt = new Date().toISOString(),
 ): HostServiceError {
-  const code = providerErrorCode(error)
+  void operation
+  const failure = classifyCanonicalFailure(error, occurredAt, 'provider_error')
+  const safe = safeProviderHostError(provider, failure)
   return new HostServiceError(
-    code,
-    `${providerDisplayName(provider)} failed to ${operation}`,
-    code === 'provider_session_lost' ? 409 : 500,
-    { cause: safeErrorName(error) },
+    safe.code,
+    safe.message,
+    failureHttpStatus(failure),
+    undefined,
+    failure,
+  )
+}
+
+function hostServiceErrorForFailure(
+  provider: AgentProvider,
+  failure: CanonicalFailure,
+): HostServiceError {
+  const safe = safeProviderHostError(provider, failure)
+  return new HostServiceError(
+    safe.code,
+    safe.message,
+    failureHttpStatus(failure),
+    undefined,
+    failure,
   )
 }
 
@@ -4347,64 +4859,98 @@ function remoteProviderCommandError(
   if (!(error instanceof RemoteMachineCoordinatorError)) {
     return error instanceof Error ? error : new Error(String(error))
   }
-  const displayName = providerDisplayName(provider)
+  const reason: CanonicalFailureReason = (() => {
+    switch (error.code) {
+      case 'provider_start_failed':
+        return 'provider_start_failed'
+      case 'provider_session_lost':
+        return 'provider_session_lost'
+      case 'provider_unavailable':
+        return 'provider_service_unavailable'
+      case 'remote_execution_unavailable':
+        return 'remote_execution_unavailable'
+      case 'remote_execution_lost':
+        return 'execution_ownership_uncertain'
+      case 'remote_policy_violation':
+        return 'provider_protocol_error'
+      case 'conversation_busy':
+      case 'duplicate_action_conflict':
+      case 'conflict':
+        return 'conversation_busy'
+      case 'project_location_path_invalid':
+      case 'project_location_not_directory':
+        return 'project_location_invalid'
+      case 'project_location_missing':
+        return 'project_location_missing'
+      case 'project_location_inaccessible':
+        return 'project_location_unavailable'
+      case 'authentication_failed':
+        return 'transport_authentication_failed'
+      case 'identity_mismatch':
+        return 'machine_identity_mismatch'
+      case 'connection_failed':
+      case 'unavailable':
+        return 'node_disconnected'
+      default:
+        return 'remote_execution_unavailable'
+    }
+  })()
+  const failure = classifyCanonicalFailure(
+    error,
+    new Date().toISOString(),
+    reason,
+  )
+  if (
+    error.code === 'provider_start_failed' ||
+    error.code === 'provider_session_lost' ||
+    error.code === 'provider_unavailable' ||
+    error.code === 'remote_execution_unavailable' ||
+    error.code === 'remote_execution_lost' ||
+    error.code === 'remote_policy_violation' ||
+    error.code === 'conversation_busy' ||
+    error.code === 'duplicate_action_conflict' ||
+    error.code === 'conflict'
+  ) {
+    const safe = safeProviderHostError(provider, failure)
+    return new HostServiceError(
+      safe.code,
+      safe.message,
+      failureHttpStatus(failure),
+      undefined,
+      failure,
+    )
+  }
   switch (error.code) {
-    case 'provider_start_failed':
-      return new HostServiceError(
-        'provider_start_failed',
-        `Remote ${displayName} failed to start`,
-        503,
-      )
-    case 'provider_session_lost':
-      return new HostServiceError(
-        'provider_session_lost',
-        `The remote ${displayName} session is no longer available`,
-        409,
-      )
-    case 'provider_unavailable':
-    case 'remote_execution_unavailable':
-    case 'remote_execution_lost':
-    case 'remote_policy_violation':
-      return new HostServiceError(
-        'provider_unavailable',
-        `Remote ${displayName} execution is unavailable`,
-        503,
-      )
-    case 'conversation_busy':
-    case 'duplicate_action_conflict':
-    case 'conflict':
-      return new HostServiceError(
-        'conflict',
-        `Remote ${displayName} Conversation has conflicting active work`,
-        409,
-      )
     case 'project_location_path_invalid':
     case 'project_location_missing':
     case 'project_location_not_directory':
     case 'project_location_inaccessible':
-      return new HostServiceError(
-        'project_unavailable',
-        'Remote Project Location is unavailable',
-        409,
-      )
     case 'authentication_failed':
-    case 'identity_mismatch':
+    case 'identity_mismatch': {
+      const safe = safeProviderHostError(provider, failure)
       return new HostServiceError(
-        'machine_identity_mismatch',
-        'Remote Machine identity could not be authenticated',
-        409,
+        safe.code,
+        safe.message,
+        failureHttpStatus(failure),
+        undefined,
+        failure,
       )
+    }
     case 'protocol_incompatible':
       return new HostServiceError(
         'machine_protocol_incompatible',
         'Remote Machine protocol is incompatible',
         409,
+        undefined,
+        failure,
       )
     default:
       return new HostServiceError(
         'machine_connection_failed',
         'Remote Machine connection failed',
         503,
+        undefined,
+        failure,
       )
   }
 }
@@ -4479,65 +5025,99 @@ function remoteProviderExecutionProfileAvailable(
   )
 }
 
-function providerErrorCode(error: unknown): HostErrorCode {
-  if (!(error instanceof Error) || !('code' in error)) return 'provider_error'
-  switch (error.code) {
-    case 'provider_not_installed':
-    case 'provider_version_unsupported':
-    case 'provider_start_failed':
-    case 'provider_session_lost':
-    case 'provider_unavailable':
-      return error.code
-    default:
-      return 'provider_error'
-  }
-}
-
-function safeErrorName(error: unknown): string {
-  return error instanceof Error && error.name.trim().length > 0
-    ? error.name
-    : 'Error'
-}
-
 function runtimeUnavailableError(
   message = 'Codex runtime is unavailable',
 ): HostServiceError {
-  return new HostServiceError('runtime_unavailable', message, 503)
+  const failure = canonicalFailure('runtime_error', new Date().toISOString())
+  return new HostServiceError(
+    'runtime_unavailable',
+    message,
+    503,
+    undefined,
+    failure,
+  )
 }
 
 function providerConversationUnavailableError(
   provider: AgentProvider,
 ): HostServiceError {
-  return new HostServiceError(
+  const failure = canonicalFailure(
     'provider_session_lost',
-    `The ${providerDisplayName(provider)} conversation can no longer be resumed`,
-    409,
+    new Date().toISOString(),
   )
+  const safe = safeProviderHostError(provider, failure)
+  return new HostServiceError(safe.code, safe.message, 409, undefined, failure)
 }
 
 function providerUnavailableError(
   provider: AgentProvider,
   descriptor?: ProviderDescriptor,
 ): HostServiceError {
-  const code: HostErrorCode =
+  const installationReason: CanonicalFailureReason | undefined =
     descriptor?.availability === 'not_installed'
       ? 'provider_not_installed'
       : descriptor?.availability === 'unsupported_version'
-        ? 'provider_version_unsupported'
-        : 'provider_unavailable'
-  const suffix =
-    descriptor?.availability === 'misconfigured'
-      ? ' is not configured for use'
-      : descriptor?.availability === 'unsupported_version'
-        ? ' version is not supported'
-        : descriptor?.availability === 'not_installed'
-          ? ' is not installed'
-          : ' is temporarily unavailable'
+        ? 'provider_unsupported_version'
+        : descriptor?.availability === 'misconfigured'
+          ? 'provider_misconfigured'
+          : descriptor?.availability === 'unavailable'
+            ? 'provider_service_unavailable'
+            : undefined
+  const currentExecutionFailure =
+    descriptor?.availability === 'available' &&
+    descriptor.executionHealth?.freshness === 'current'
+      ? descriptor.executionHealth.failure
+      : undefined
+  const failure =
+    installationReason === undefined
+      ? (currentExecutionFailure ??
+        canonicalFailure(
+          'provider_service_unavailable',
+          new Date().toISOString(),
+        ))
+      : canonicalFailure(installationReason, new Date().toISOString())
+  const safe = safeProviderHostError(provider, failure)
   return new HostServiceError(
-    code,
-    `${providerDisplayName(provider)}${suffix}`,
-    503,
+    safe.code,
+    safe.message,
+    failureHttpStatus(failure),
+    undefined,
+    failure,
   )
+}
+
+function failureHttpStatus(failure: CanonicalFailure): number {
+  switch (failure.reason) {
+    case 'login_required':
+    case 'authentication_expired':
+    case 'authentication_invalid':
+    case 'transport_authentication_failed':
+      return 401
+    case 'rate_limited':
+    case 'usage_limit_reached':
+    case 'provider_capacity_limited':
+      return 429
+    case 'conversation_busy':
+    case 'provider_session_lost':
+    case 'machine_identity_mismatch':
+    case 'project_location_missing':
+    case 'project_location_invalid':
+    case 'project_location_unavailable':
+      return 409
+    case 'provider_not_installed':
+    case 'provider_unsupported_version':
+    case 'provider_misconfigured':
+    case 'provider_service_unavailable':
+    case 'provider_start_failed':
+    case 'remote_execution_unavailable':
+    case 'machine_offline':
+    case 'node_disconnected':
+    case 'reconnecting':
+    case 'execution_capacity_reached':
+      return 503
+    default:
+      return 500
+  }
 }
 
 function providerDisplayName(provider: AgentProvider): string {
@@ -4556,6 +5136,13 @@ function machineRuntimeKey(
   provider: AgentProvider,
 ): string {
   return JSON.stringify([MachineIdSchema.parse(machineId), provider])
+}
+
+function timestampAfter(left: string, right: string): boolean {
+  // Both values have already crossed TimestampSchema. Compare instants rather
+  // than their ISO spellings because the public protocol admits explicit UTC
+  // offsets as well as the canonical `Z` form.
+  return Date.parse(left) > Date.parse(right)
 }
 
 function providerStartFailureKey(
@@ -4582,6 +5169,40 @@ function machineServiceError(error: unknown): Error {
     : new HostServiceError('runtime_unavailable', error.message, 503)
 }
 
+function machineUnavailableError(
+  machine: MachineSummary,
+  occurredAt: string,
+): HostServiceError {
+  const reason: CanonicalFailureReason =
+    machine.connectionState === 'connecting'
+      ? 'reconnecting'
+      : machine.connectionState === 'authentication_failed'
+        ? 'transport_authentication_failed'
+        : machine.connectionState === 'incompatible'
+          ? 'remote_execution_unavailable'
+          : machine.connectionState === 'offline'
+            ? 'machine_offline'
+            : 'node_disconnected'
+  const failure = canonicalFailure(reason, occurredAt)
+  const code: HostErrorCode =
+    reason === 'transport_authentication_failed'
+      ? 'machine_authentication_failed'
+      : machine.connectionState === 'incompatible'
+        ? 'machine_protocol_incompatible'
+        : 'machine_unreachable'
+  const message =
+    reason === 'reconnecting'
+      ? 'Remote Machine is reconnecting'
+      : reason === 'transport_authentication_failed'
+        ? 'Remote Machine authentication failed'
+        : reason === 'remote_execution_unavailable'
+          ? 'Remote Machine execution is incompatible'
+          : reason === 'machine_offline'
+            ? 'Remote Machine is offline'
+            : 'Remote Node is disconnected'
+  return new HostServiceError(code, message, 503, undefined, failure)
+}
+
 function remoteMachineServiceError(error: unknown): Error {
   if (error instanceof HostServiceError) return error
   if (error instanceof RemoteMachineTrustConflictError) {
@@ -4602,10 +5223,11 @@ function remoteMachineServiceError(error: unknown): Error {
         404,
       )
     case 'unavailable':
-      return new HostServiceError(
+      return infrastructureFailureError(
         'machine_connection_failed',
         'Remote Machine pairing is currently unavailable',
         503,
+        'node_disconnected',
       )
     case 'pairing_code_invalid':
       return new HostServiceError(
@@ -4626,16 +5248,18 @@ function remoteMachineServiceError(error: unknown): Error {
         429,
       )
     case 'authentication_failed':
-      return new HostServiceError(
+      return infrastructureFailureError(
         'machine_authentication_failed',
         'Remote Machine authentication failed',
         401,
+        'transport_authentication_failed',
       )
     case 'identity_mismatch':
-      return new HostServiceError(
+      return infrastructureFailureError(
         'machine_identity_mismatch',
         'Remote Machine identity does not match the trusted identity',
         409,
+        'machine_identity_mismatch',
       )
     case 'conflict':
       return new HostServiceError(
@@ -4650,29 +5274,33 @@ function remoteMachineServiceError(error: unknown): Error {
         409,
       )
     case 'connection_failed':
-      return new HostServiceError(
+      return infrastructureFailureError(
         'machine_connection_failed',
         'Remote Machine connection failed',
         503,
+        'node_disconnected',
       )
     case 'project_location_path_invalid':
     case 'project_location_not_directory':
-      return new HostServiceError(
+      return infrastructureFailureError(
         'project_location_invalid',
         'Remote Project Location path is invalid',
         422,
+        'project_location_invalid',
       )
     case 'project_location_missing':
-      return new HostServiceError(
+      return infrastructureFailureError(
         'project_location_missing',
         'Remote Project Location directory does not exist',
         404,
+        'project_location_missing',
       )
     case 'project_location_inaccessible':
-      return new HostServiceError(
+      return infrastructureFailureError(
         'project_location_inaccessible',
         'Remote Project Location directory is inaccessible',
         403,
+        'project_location_unavailable',
       )
     case 'remote_execution_unavailable':
     case 'provider_unavailable':
@@ -4684,6 +5312,21 @@ function remoteMachineServiceError(error: unknown): Error {
     case 'duplicate_action_conflict':
       return remoteProviderCommandError(error)
   }
+}
+
+function infrastructureFailureError(
+  code: HostErrorCode,
+  message: string,
+  httpStatus: number,
+  reason: CanonicalFailureReason,
+): HostServiceError {
+  return new HostServiceError(
+    code,
+    message,
+    httpStatus,
+    undefined,
+    canonicalFailure(reason, new Date().toISOString()),
+  )
 }
 
 function assertStagedRemoteMachine(candidate: ConfirmedRemoteMachine): void {
@@ -4735,9 +5378,19 @@ function projectServiceError(error: unknown): Error {
         409,
       )
     case 'unavailable':
-      return new HostServiceError('project_unavailable', error.message, 409)
+      return projectFailureError(
+        'project_unavailable',
+        error.message,
+        409,
+        'project_location_unavailable',
+      )
     case 'invalid_path':
-      return new HostServiceError('invalid_request', error.message, 422)
+      return projectFailureError(
+        'invalid_request',
+        error.message,
+        422,
+        'project_location_invalid',
+      )
     case 'location_conflict':
       return new HostServiceError(
         'project_location_conflict',
@@ -4745,10 +5398,11 @@ function projectServiceError(error: unknown): Error {
         409,
       )
     case 'location_not_found':
-      return new HostServiceError(
+      return projectFailureError(
         'project_location_not_found',
         error.message,
         404,
+        'project_location_missing',
       )
     case 'location_has_conversations':
       return new HostServiceError(
@@ -4763,6 +5417,21 @@ function projectServiceError(error: unknown): Error {
         409,
       )
   }
+}
+
+function projectFailureError(
+  code: HostErrorCode,
+  message: string,
+  httpStatus: number,
+  reason: CanonicalFailureReason,
+): HostServiceError {
+  return new HostServiceError(
+    code,
+    message,
+    httpStatus,
+    undefined,
+    canonicalFailure(reason, new Date().toISOString()),
+  )
 }
 
 function toError(value: unknown): Error {

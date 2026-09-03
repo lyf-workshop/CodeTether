@@ -76,6 +76,75 @@ test('ambiguous network retry reuses actionId while a new submit does not', asyn
   )
 })
 
+test('an explicit failed-Turn retry always creates a fresh logical action', async () => {
+  let attempts = 0
+  const client = new FakeMutationClient({
+    start: (call) => {
+      attempts += 1
+      return attempts === 1
+        ? Promise.reject(new TypeError('response lost'))
+        : Promise.resolve(startResponse(call.request.actionId))
+    },
+  })
+  const actions = new LiveConversationActions(client, idFactory())
+  actions.adoptHostEpoch(epochA)
+
+  await assert.rejects(
+    actions.startTurn('conv_control01', 'Explicitly repeat this work'),
+    TypeError,
+  )
+  await actions.startNewTurn('conv_control01', 'Explicitly repeat this work')
+
+  assert.notEqual(
+    client.startCalls[0].request.actionId,
+    client.startCalls[1].request.actionId,
+  )
+})
+
+test('an ambiguous explicit failed-Turn retry preserves its fresh actionId', async () => {
+  let attempts = 0
+  const client = new FakeMutationClient({
+    start: (call) => {
+      attempts += 1
+      return attempts === 1
+        ? Promise.reject(new TypeError('explicit retry response lost'))
+        : Promise.resolve(startResponse(call.request.actionId))
+    },
+  })
+  const actions = new LiveConversationActions(client, idFactory())
+  actions.adoptHostEpoch(epochA)
+
+  await assert.rejects(
+    actions.startNewTurn('conv_control01', 'Explicit recovery request'),
+    TypeError,
+  )
+  await actions.startNewTurn('conv_control01', 'Explicit recovery request')
+
+  assert.equal(client.startCalls.length, 2)
+  assert.equal(
+    client.startCalls[0].request.actionId,
+    client.startCalls[1].request.actionId,
+  )
+})
+
+test('an unresolved explicit retry cannot be replaced with changed input', async () => {
+  const client = new FakeMutationClient({
+    start: () => Promise.reject(new TypeError('explicit retry response lost')),
+  })
+  const actions = new LiveConversationActions(client, idFactory())
+  actions.adoptHostEpoch(epochA)
+
+  await assert.rejects(
+    actions.startNewTurn('conv_control01', 'Original explicit recovery'),
+    TypeError,
+  )
+  await assert.rejects(
+    actions.startNewTurn('conv_control01', 'Changed explicit recovery'),
+    ConversationMutationBusyError,
+  )
+  assert.equal(client.startCalls.length, 1)
+})
+
 test('new Host epoch gives every uncertain mutation a fresh actionId', async () => {
   const attempts = { start: 0, interrupt: 0, approval: 0 }
   const client = new FakeMutationClient({
@@ -260,6 +329,46 @@ test('safe mutation errors never expose Provider diagnostics', () => {
   )
 })
 
+test('structured canonical failures control pre-Turn mutation copy without raw fields', () => {
+  const cases = [
+    [
+      canonicalFailure('execution_capacity_reached'),
+      'CodeTether 当前没有可用的远程运行时槽位。 请等待其他工作结束后再开始新一轮。',
+    ],
+    [
+      canonicalFailure('conversation_busy'),
+      '这个会话已经有一个活动轮次。 请等待当前轮次结束。',
+    ],
+    [
+      canonicalFailure('login_required'),
+      '执行机器上的智能体登录状态不可用。 请在执行机器上完成登录，然后再开始新一轮。',
+    ],
+    [
+      canonicalFailure('machine_offline'),
+      'CodeTether 当前无法连接到这台执行机器。 请恢复机器连接并等待状态重新验证。',
+    ],
+    [
+      canonicalFailure('project_location_invalid'),
+      '已注册的项目位置不再匹配原来的工作区。 请在项目详情中修复项目位置后再继续。',
+    ],
+  ]
+
+  for (const [failure, expected] of cases) {
+    const error = new CodeTetherResponseError(503, {
+      protocolVersion: 1,
+      actionId: 'act_control_structured',
+      code: 'internal',
+      message: '<script>raw-provider-message</script>',
+      details: { stderr: 'Authorization: Bearer secret-token' },
+      failure,
+    })
+    const message = mutationErrorMessage(error, '发送消息')
+    assert.equal(message, expected)
+    assert.equal(message.includes('script'), false)
+    assert.equal(message.includes('secret-token'), false)
+  }
+})
+
 class FakeMutationClient {
   constructor(implementations = {}) {
     this.implementations = implementations
@@ -352,4 +461,45 @@ function createDeferred() {
     reject = rejectPromise
   })
   return { promise, resolve, reject }
+}
+
+function canonicalFailure(reason) {
+  const profile = {
+    execution_capacity_reached: {
+      category: 'runtime',
+      retryability: 'retry_later',
+      userAction: 'reduce_active_work',
+      source: 'runtime',
+    },
+    conversation_busy: {
+      category: 'runtime',
+      retryability: 'retry_later',
+      userAction: 'wait',
+      source: 'runtime',
+    },
+    login_required: {
+      category: 'authentication',
+      retryability: 'retry_after_user_action',
+      userAction: 'login_on_machine',
+      source: 'provider',
+    },
+    machine_offline: {
+      category: 'machine',
+      retryability: 'retry_after_user_action',
+      userAction: 'reconnect_machine',
+      source: 'machine',
+    },
+    project_location_invalid: {
+      category: 'project',
+      retryability: 'retry_after_user_action',
+      userAction: 'repair_project_location',
+      source: 'project',
+    },
+  }[reason]
+  return {
+    ...profile,
+    reason,
+    occurredAt: timestamp,
+    technicalCode: reason,
+  }
 }

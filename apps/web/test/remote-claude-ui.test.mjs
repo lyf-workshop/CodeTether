@@ -53,11 +53,12 @@ test('Remote Claude Detail keeps execution and Inspector controls capability-dri
 })
 
 test('Remote Claude offline and archived history remain responsive and accessible', async () => {
-  const [dialog, detail, workspace, inspector] = await Promise.all([
+  const [dialog, detail, workspace, inspector, controls] = await Promise.all([
     source('components/conversations/new-conversation-dialog.tsx'),
     source('components/conversation/conversation-detail-page.tsx'),
     source('components/conversation/conversation-workspace.tsx'),
     source('components/conversation/inspector-panel.tsx'),
+    source('components/conversation/conversation-controls.ts'),
   ])
 
   assert.match(dialog, /max-w-lg overflow-x-hidden/u)
@@ -75,8 +76,8 @@ test('Remote Claude offline and archived history remain responsive and accessibl
   )
   assert.match(workspace, /grid-rows-\[auto_minmax\(0,1fr\)_auto_auto\]/u)
   assert.match(workspace, /role="status"/u)
-  assert.match(workspace, /远程执行机器当前离线/u)
-  assert.match(workspace, /历史记录仍可查看/u)
+  assert.match(controls, /远程执行机器当前离线/u)
+  assert.match(controls, /历史记录仍可查看/u)
   assert.match(workspace, /executionBoundary\.machineName/u)
   assert.match(workspace, /的机器详情/u)
   assert.match(workspace, /aria-label="已归档会话"/u)

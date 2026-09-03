@@ -165,6 +165,39 @@ test('Claude installation truth remains separate from authenticated execution tr
   }
 })
 
+test('Claude login health is a controlled execution diagnostic, not installation truth', async () => {
+  const instance = detector(
+    "process.stdout.write('codex-cli 0.149.1')",
+    "process.stdout.write('2.1.251 (Claude Code)')",
+    {
+      platform: 'linux',
+      claudeExecutionProbe: async () => ({
+        available: false,
+        failureReason: 'login_required',
+        rawDiagnostic: '<script>private token and auth path</script>',
+      }),
+    },
+  )
+  try {
+    const claude = (await instance.discover()).providers.find(
+      ({ provider }) => provider === 'claude-code',
+    )
+    assert.equal(claude.availability, 'available')
+    assert.equal(claude.version, '2.1.251')
+    assert.equal(
+      Object.values(claude.capabilities).some((enabled) => enabled),
+      false,
+    )
+    assert.equal(claude.executionFailureReason, 'login_required')
+    assert.doesNotMatch(
+      JSON.stringify(claude),
+      /script|private token|auth path|rawDiagnostic/u,
+    )
+  } finally {
+    await instance.close()
+  }
+})
+
 test('valid untested Codex remains discoverable without execution capabilities', async () => {
   const instance = new RemoteProviderDetector({
     probes: [

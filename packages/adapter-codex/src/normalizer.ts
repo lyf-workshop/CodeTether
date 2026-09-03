@@ -1,12 +1,14 @@
 import { createHash } from 'node:crypto'
 
-import type {
-  AgentEvent,
-  ApprovalKind,
-  FileChangeKind,
+import {
+  canonicalFailure,
+  type AgentEvent,
+  type ApprovalKind,
+  type FileChangeKind,
 } from '@codetether/agent-core'
 
 import { CodexProtocolError } from './errors.js'
+import { classifyCodexErrorInfo } from './failure-classifier.js'
 import type { JsonRpcNotification, JsonRpcRequest } from './protocol.js'
 import { isRecord, readString } from './protocol.js'
 
@@ -322,9 +324,11 @@ export class CodexEventNormalizer {
           threadId,
           turnId,
           error: {
-            message:
-              readString(error ?? {}, 'message') ??
-              `Codex turn ended with status ${status}`,
+            message: 'Codex could not complete this turn.',
+            failure: canonicalFailure(
+              classifyCodexErrorInfo(error?.codexErrorInfo),
+              timestamp,
+            ),
           },
           raw,
         },

@@ -2,10 +2,17 @@ import type {
   ConversationStatus,
   ConversationTitleSource,
   MachineId,
+  ProjectId,
   ProviderId,
 } from '@codetether/protocol'
 import type { AgentId, DiffLine, ExecutionStatus } from '@codetether/ui'
 
+import type { ExecutionFailurePresentation } from '../../failures/failure-presentation.js'
+import type {
+  ComposerDisabledPresentation,
+  ConversationExecutionBoundaryReason,
+  ProjectLocationBoundaryReason,
+} from './conversation-controls.js'
 import type { ToolPresentationKind } from './tool-presentation.js'
 
 export type ConversationRailFilter = 'all' | 'running' | 'waiting' | 'completed'
@@ -105,7 +112,12 @@ export type ConversationTimelineBlockViewModel =
       readonly executions: readonly ConversationRunExecutionViewModel[]
       readonly outcome?: 'completed' | 'failed' | 'interrupted'
       readonly outcomeText?: string
+      readonly failure?: ConversationFailureViewModel
     }
+
+export interface ConversationFailureViewModel extends ExecutionFailurePresentation {
+  readonly retryInput?: string
+}
 
 export interface ConversationTimelineViewModel {
   readonly dayLabel: string
@@ -134,6 +146,7 @@ export interface ConversationCapabilitiesViewModel {
   readonly supportsDiff: boolean
   readonly supportsShell: boolean
   readonly supportsReasoningControl: boolean
+  readonly composerDisabled?: ComposerDisabledPresentation
 }
 
 export interface ConversationViewModel {
@@ -195,7 +208,13 @@ export interface ConversationConnectionIndicatorViewModel {
 export interface ConversationExecutionBoundaryViewModel {
   readonly machineId: MachineId
   readonly machineName: string
-  readonly reason: 'machine_offline' | 'execution_unavailable'
+  readonly reason: ConversationExecutionBoundaryReason
+}
+
+export interface ConversationProjectBoundaryViewModel {
+  readonly projectId: ProjectId
+  readonly projectName: string
+  readonly reason: ProjectLocationBoundaryReason
 }
 
 export interface ConversationDetailSourceViewModel {

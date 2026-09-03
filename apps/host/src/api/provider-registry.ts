@@ -8,7 +8,7 @@ import type { AgentHostRuntime } from './agent-runtime.js'
 
 const providerOrder: readonly AgentProvider[] = ['codex', 'claude-code']
 
-const codexCapabilities: ProviderCapabilities = {
+export const LOCAL_CODEX_CAPABILITIES: ProviderCapabilities = {
   streaming: true,
   resume: true,
   interrupt: true,
@@ -23,7 +23,7 @@ const codexCapabilities: ProviderCapabilities = {
   reasoningControl: true,
 }
 
-const unavailableCapabilities: ProviderCapabilities = {
+export const UNAVAILABLE_PROVIDER_CAPABILITIES: ProviderCapabilities = {
   streaming: false,
   resume: false,
   interrupt: false,
@@ -41,7 +41,6 @@ const unavailableCapabilities: ProviderCapabilities = {
 /** Host-owned lookup for the bounded set of installed Provider adapters. */
 export class ProviderRegistry {
   readonly #runtimes = new Map<AgentProvider, AgentHostRuntime>()
-  readonly #descriptors = new Map<AgentProvider, ProviderDescriptor>()
 
   constructor(runtimes: readonly AgentHostRuntime[]) {
     for (const runtime of runtimes) {
@@ -49,10 +48,6 @@ export class ProviderRegistry {
         throw new Error(`Provider ${runtime.provider} was registered twice`)
       }
       this.#runtimes.set(runtime.provider, runtime)
-      this.#descriptors.set(
-        runtime.provider,
-        runtime.descriptor ?? fallbackDescriptor(runtime),
-      )
     }
   }
 
@@ -65,8 +60,10 @@ export class ProviderRegistry {
 
   descriptors(): readonly ProviderDescriptor[] {
     return providerOrder.flatMap((provider) => {
-      const descriptor = this.#descriptors.get(provider)
-      return descriptor === undefined ? [] : [descriptor]
+      const runtime = this.#runtimes.get(provider)
+      return runtime === undefined
+        ? []
+        : [runtime.descriptor ?? fallbackDescriptor(runtime)]
     })
   }
 
@@ -75,7 +72,28 @@ export class ProviderRegistry {
   }
 
   descriptor(provider: AgentProvider): ProviderDescriptor | undefined {
-    return this.#descriptors.get(provider)
+    const runtime = this.#runtimes.get(provider)
+    return (
+      runtime?.descriptor ??
+      (runtime === undefined ? undefined : fallbackDescriptor(runtime))
+    )
+  }
+
+  /**
+   * Replaces only a locally unavailable assembly placeholder. This is used by
+   * an explicit Turn-start recovery probe after the user repairs the Provider
+   * environment; a live runtime can never be displaced or switched.
+   */
+  replace(previous: AgentHostRuntime, runtime: AgentHostRuntime): void {
+    if (
+      previous.provider !== runtime.provider ||
+      this.#runtimes.get(runtime.provider) !== previous
+    ) {
+      throw new Error(
+        `Provider ${runtime.provider} runtime changed during replacement`,
+      )
+    }
+    this.#runtimes.set(runtime.provider, runtime)
   }
 
   async close(): Promise<void> {
@@ -107,8 +125,8 @@ function fallbackDescriptor(runtime: AgentHostRuntime): ProviderDescriptor {
     availability: available ? 'available' : 'unavailable',
     capabilities: available
       ? runtime.provider === 'codex'
-        ? codexCapabilities
-        : unavailableCapabilities
-      : unavailableCapabilities,
+        ? LOCAL_CODEX_CAPABILITIES
+        : UNAVAILABLE_PROVIDER_CAPABILITIES
+      : UNAVAILABLE_PROVIDER_CAPABILITIES,
   }
 }

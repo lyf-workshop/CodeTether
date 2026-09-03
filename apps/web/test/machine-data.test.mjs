@@ -19,6 +19,7 @@ import {
   soleProjectLocation,
 } from '../.tmp/test-dist/runtime/host/project-location.js'
 import {
+  providerExecutionHealthPresentation,
   providerPresentationForMachine,
   providerPresentationsForMachine,
 } from '../.tmp/test-dist/provider/provider-presentation.js'
@@ -177,6 +178,100 @@ test('Provider presentation is scoped to one Machine descriptor response', () =>
     providerPresentationForMachine([], 'codex').availability,
     'unavailable',
   )
+})
+
+test('Provider installation and execution health remain separate presentation truth', () => {
+  const healthy = providerExecutionHealthPresentation({
+    state: 'healthy',
+    freshness: 'current',
+    observedAt: timestamp,
+  })
+  assert.equal(healthy.stateLabel, '执行正常')
+  assert.equal(healthy.freshnessLabel, '当前状态')
+
+  const unavailable = providerExecutionHealthPresentation({
+    state: 'unavailable',
+    freshness: 'last_known',
+    observedAt: timestamp,
+    failure: {
+      category: 'authentication',
+      reason: 'login_required',
+      retryability: 'retry_after_user_action',
+      userAction: 'login_on_machine',
+      source: 'provider',
+      occurredAt: timestamp,
+      technicalCode: 'login_required',
+    },
+  })
+  assert.equal(unavailable.stateLabel, '执行不可用')
+  assert.equal(unavailable.freshnessLabel, '上次已知')
+  assert.match(unavailable.description, /登录/u)
+
+  const namedUnavailable = providerExecutionHealthPresentation(
+    {
+      state: 'unavailable',
+      freshness: 'current',
+      failure: {
+        category: 'authentication',
+        reason: 'login_required',
+        retryability: 'retry_after_user_action',
+        userAction: 'login_on_machine',
+        source: 'provider',
+        occurredAt: timestamp,
+        technicalCode: 'login_required',
+      },
+    },
+    'Claude Code',
+  )
+  assert.match(namedUnavailable.description, /Claude Code/u)
+
+  const recovered = providerExecutionHealthPresentation(
+    { state: 'healthy', freshness: 'current', observedAt: timestamp },
+    'Claude Code',
+  )
+  assert.equal(recovered.stateLabel, '执行正常')
+  assert.doesNotMatch(recovered.description, /登录/u)
+
+  const notObserved = providerExecutionHealthPresentation(undefined)
+  assert.equal(notObserved.state, 'not_observed')
+  assert.match(notObserved.description, /安装状态不代表当前可以执行/u)
+})
+
+test('local Machine Provider presentation preserves installed truth beside unavailable execution health', () => {
+  const loginFailure = {
+    category: 'authentication',
+    reason: 'login_required',
+    retryability: 'retry_after_user_action',
+    userAction: 'login_on_machine',
+    source: 'provider',
+    occurredAt: timestamp,
+    technicalCode: 'login_required',
+  }
+  const descriptor = {
+    ...provider('claude-code', 'available'),
+    version: '2.1.251',
+    executionHealth: {
+      state: 'unavailable',
+      freshness: 'current',
+      observedAt: timestamp,
+      failure: loginFailure,
+    },
+  }
+
+  const presented = providerPresentationForMachine([descriptor], 'claude-code')
+  const health = providerExecutionHealthPresentation(
+    presented.executionHealth,
+    presented.displayName,
+  )
+
+  assert.equal(presented.availability, 'available')
+  assert.equal(presented.available, true)
+  assert.equal(presented.version, '2.1.251')
+  assert.equal(presented.executionHealth?.failure?.reason, 'login_required')
+  assert.equal(health.stateLabel, '执行不可用')
+  assert.equal(health.freshnessLabel, '当前状态')
+  assert.match(health.description, /Claude Code/u)
+  assert.match(health.description, /登录/u)
 })
 
 function machine() {

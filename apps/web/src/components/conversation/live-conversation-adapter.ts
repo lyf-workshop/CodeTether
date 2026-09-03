@@ -15,9 +15,11 @@ import type {
   ToolReadModel,
 } from '../../runtime/host/conversation-projection.js'
 import type { HostConnectionState } from '../../runtime/host/host-runtime.js'
+import { executionFailurePresentation } from '../../failures/failure-presentation.js'
 import type {
   ConversationConnectionIndicatorViewModel,
   ConversationDetailSourceViewModel,
+  ConversationFailureViewModel,
   ConversationFileChangeViewModel,
   ConversationRunExecutionViewModel,
   ConversationTimelineBlockViewModel,
@@ -25,7 +27,10 @@ import type {
 } from './conversation-view-model.js'
 import { presentProjectPaths } from './message-presentation.js'
 import { createToolPresentation } from './tool-presentation.js'
-import { deriveLiveControlAvailability } from './conversation-controls.js'
+import {
+  deriveLiveControlAvailability,
+  type ComposerDisabledPresentation,
+} from './conversation-controls.js'
 import {
   providerAgentId,
   providerPresentation,
@@ -55,6 +60,7 @@ type OrderedActivity =
     }
 
 export interface LiveConversationMachineContext {
+  readonly composerDisabled?: ComposerDisabledPresentation
   readonly providerDescriptors?: readonly ProviderDescriptor[]
   readonly executionAvailable?: boolean
   readonly executionUnavailableLabel?: string
@@ -84,6 +90,7 @@ export function createLiveConversationDetailSource(
       projectRootPath,
       machineName,
       machineContext?.providerDescriptors,
+      machineContext?.composerDisabled,
     ),
     rail: createLiveConversationRailViewModel(
       summaries,
@@ -177,6 +184,7 @@ export function createLiveConversationViewModel(
   projectRootPath?: string,
   machineName = '机器',
   machineProviderDescriptors?: readonly ProviderDescriptor[],
+  composerDisabled?: ComposerDisabledPresentation,
 ): ConversationViewModel {
   const presentationRoot = model.cwd ?? projectRootPath
   const files = model.changes.map((change) =>
@@ -239,7 +247,7 @@ export function createLiveConversationViewModel(
           model.currentTurn?.startedAt ??
           model.updatedAt,
       ),
-      blocks: projectTimeline(model, provider.displayName),
+      blocks: projectTimeline(model, provider.displayName, machineName),
     },
     changes: { files, totals },
     terminal: {
@@ -262,6 +270,7 @@ export function createLiveConversationViewModel(
       connectionState,
       provider.available ? provider.capabilities : undefined,
       model.currentTurn?.status,
+      composerDisabled,
     ),
   }
 }
@@ -269,16 +278,20 @@ export function createLiveConversationViewModel(
 function projectTimeline(
   model: ConversationReadModel,
   providerName: string,
+  machineName: string,
 ): readonly ConversationTimelineBlockViewModel[] {
   return [...model.turns]
     .sort((left, right) => left.order - right.order)
-    .flatMap((turn) => projectTurnTimeline(model, turn, providerName))
+    .flatMap((turn) =>
+      projectTurnTimeline(model, turn, providerName, machineName),
+    )
 }
 
 function projectTurnTimeline(
   model: ConversationReadModel,
   turn: ConversationTurnReadModel,
   providerName: string,
+  machineName: string,
 ): readonly ConversationTimelineBlockViewModel[] {
   const activities: OrderedActivity[] = [
     ...model.messages
@@ -430,7 +443,7 @@ function projectTurnTimeline(
     })
   }
 
-  const terminalOutcome = turnOutcome(turn)
+  const terminalOutcome = turnOutcome(model, turn, providerName, machineName)
   if (terminalOutcome !== undefined) {
     const last = blocks.at(-1)
     if (last?.kind === 'agent-run') {
@@ -494,24 +507,53 @@ function runStatus(
   return turn.status
 }
 
-function turnOutcome(turn: ConversationTurnReadModel):
+function turnOutcome(
+  model: ConversationReadModel,
+  turn: ConversationTurnReadModel,
+  providerName: string,
+  machineName: string,
+):
   | {
       readonly outcome: 'failed' | 'interrupted'
-      readonly outcomeText: string
+      readonly outcomeText?: string
+      readonly failure?: ConversationFailureViewModel
     }
   | undefined {
   if (turn.status === 'failed') {
+    const presentation = executionFailurePresentation(turn.error, {
+      providerDisplayName: providerName,
+      machineDisplayName: machineName,
+    })
+    const retryInput = model.messages.find(
+      (message) => message.turnId === turn.id && message.author === 'user',
+    )?.body
     return {
       outcome: 'failed',
-      outcomeText: turn.errorMessage
-        ? `本轮失败：${turn.errorMessage}`
-        : '本轮执行失败。',
+      failure: {
+        ...presentation,
+        canStartNewTurn:
+          presentation.canStartNewTurn &&
+          retryInput !== undefined &&
+          model.currentTurn?.id === turn.id,
+        ...(retryInput === undefined ? {} : { retryInput }),
+      },
     }
   }
   if (turn.status === 'interrupted') {
+    const failure =
+      turn.error === undefined
+        ? undefined
+        : {
+            ...executionFailurePresentation(turn.error, {
+              providerDisplayName: providerName,
+              machineDisplayName: machineName,
+            }),
+            canStartNewTurn: false,
+          }
     return {
       outcome: 'interrupted',
       outcomeText: '本轮已中断。',
+      ...(failure === undefined ? {} : { failure }),
     }
   }
   return undefined

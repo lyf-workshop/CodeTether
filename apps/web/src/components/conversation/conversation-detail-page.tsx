@@ -1,7 +1,7 @@
 import { useRef, useState, type Ref } from 'react'
 
 import { Dialog, DialogContent, DialogTitle } from '@codetether/ui'
-import type { ProjectId, TurnId } from '@codetether/protocol'
+import type { MachineId, ProjectId, TurnId } from '@codetether/protocol'
 import type { ConversationSummary } from '@codetether/protocol'
 
 import { ConversationRail } from './conversation-rail'
@@ -9,6 +9,7 @@ import type { ConversationControls } from './conversation-controls'
 import type {
   ConversationConnectionIndicatorViewModel,
   ConversationExecutionBoundaryViewModel,
+  ConversationProjectBoundaryViewModel,
   ConversationRailViewModel,
   ConversationViewModel,
 } from './conversation-view-model'
@@ -27,7 +28,9 @@ export interface ConversationDetailPageProps {
   rail: ConversationRailViewModel
   connectionIndicator?: ConversationConnectionIndicatorViewModel
   executionBoundary?: ConversationExecutionBoundaryViewModel
+  projectBoundary?: ConversationProjectBoundaryViewModel
   initialInspectorTab?: InspectorTab
+  machineId?: MachineId
   controls?: ConversationControls
   newConversationButtonRef?: Ref<HTMLButtonElement>
   newConversationDisabled?: boolean
@@ -43,7 +46,9 @@ export function ConversationDetailPage({
   rail,
   connectionIndicator,
   executionBoundary,
+  projectBoundary,
   initialInspectorTab = 'overview',
+  machineId,
   controls,
   newConversationButtonRef,
   newConversationDisabled = false,
@@ -120,6 +125,7 @@ export function ConversationDetailPage({
           viewModel={viewModel}
           connectionIndicator={connectionIndicator}
           executionBoundary={executionBoundary}
+          projectBoundary={projectBoundary}
           onOpenInspector={() =>
             setInspector((current) =>
               setConversationInspectorOpen(current, true),
@@ -136,6 +142,7 @@ export function ConversationDetailPage({
           }
           inspectorTriggerRef={inspectorTriggerRef}
           controls={controls}
+          machineId={machineId}
           targetChangeId={selectedChangeId}
           targetChangeRequestKey={changeNavigationRequest}
           targetTurnId={targetTurnId}

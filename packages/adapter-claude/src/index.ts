@@ -1,6 +1,7 @@
 export * from './configuration.js'
 export * from './detection.js'
 export * from './errors.js'
+export * from './failure-classifier.js'
 export * from './jsonl.js'
 export * from './normalizer.js'
 export * from './process.js'

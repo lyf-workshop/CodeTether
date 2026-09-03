@@ -277,6 +277,79 @@ test('uses semantic Tool titles and keeps failure output out of the row title', 
   assert.equal(viewModel.terminal.lines.join('\n'), fullFailure)
 })
 
+test('projects a pre-execution startup failure with its safe explicit retry input', () => {
+  const failedTurn = {
+    id: 'turn_live01',
+    status: 'failed',
+    startedAt: timestamp,
+    completedAt: '2026-08-26T12:01:00.000Z',
+    order: 0,
+    error: hostFailure('provider_start_failed', {
+      category: 'provider',
+      retryability: 'retry_now',
+      userAction: 'retry',
+      source: 'provider',
+    }),
+  }
+  const viewModel = createLiveConversationViewModel(
+    conversation({
+      status: 'failed',
+      turns: [failedTurn],
+      currentTurn: failedTurn,
+      messages: [
+        message('turn_live01', 'input', 'user', 'Retry-safe public input', -1),
+      ],
+    }),
+  )
+  const run = viewModel.timeline.blocks.find(
+    (block) => block.kind === 'agent-run',
+  )
+
+  assert.equal(run?.kind, 'agent-run')
+  assert.equal(run?.outcome, 'failed')
+  assert.equal(run?.failure?.canStartNewTurn, true)
+  assert.equal(run?.failure?.retryInput, 'Retry-safe public input')
+  assert.doesNotMatch(run?.failure?.title ?? '', /意外退出/u)
+  assert.doesNotMatch(JSON.stringify(run?.failure), /raw provider stderr/u)
+})
+
+test('keeps interrupted ownership uncertainty truthful and never offers Retry', () => {
+  const interruptedTurn = {
+    id: 'turn_live01',
+    status: 'interrupted',
+    startedAt: timestamp,
+    completedAt: '2026-08-26T12:01:00.000Z',
+    order: 0,
+    error: hostFailure('execution_ownership_uncertain', {
+      category: 'runtime',
+      retryability: 'not_retryable',
+      userAction: 'view_details',
+      source: 'runtime',
+    }),
+  }
+  const viewModel = createLiveConversationViewModel(
+    conversation({
+      status: 'failed',
+      turns: [interruptedTurn],
+      currentTurn: interruptedTurn,
+      messages: [
+        message('turn_live01', 'input', 'user', 'Do not resend this input', -1),
+      ],
+    }),
+  )
+  const run = viewModel.timeline.blocks.find(
+    (block) => block.kind === 'agent-run',
+  )
+
+  assert.equal(run?.kind, 'agent-run')
+  assert.equal(run?.outcome, 'interrupted')
+  assert.equal(run?.outcomeText, '本轮已中断。')
+  assert.equal(run?.failure?.title, '执行归属无法确认')
+  assert.equal(run?.failure?.canStartNewTurn, false)
+  assert.equal(run?.failure?.retryInput, undefined)
+  assert.match(run?.failure?.historyNote ?? '', /未自动重新发送/u)
+})
+
 test('builds the live rail from durable Host summaries without fake metadata', () => {
   const selected = conversation({ updatedAt: '2026-08-26T12:10:00.000Z' })
   const summaries = [
@@ -824,5 +897,19 @@ function tool(itemId, name, status, fields = {}) {
     timestamp,
     order: 3,
     ...fields,
+  }
+}
+
+function hostFailure(reason, profile) {
+  return {
+    code: 'provider_error',
+    message: 'raw provider stderr',
+    details: { private: 'must not render' },
+    failure: {
+      ...profile,
+      reason,
+      occurredAt: timestamp,
+      technicalCode: reason,
+    },
   }
 }

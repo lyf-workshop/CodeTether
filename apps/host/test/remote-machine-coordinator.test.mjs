@@ -9,10 +9,12 @@ import {
   deleteMachineTlsIdentityFile,
   generateMachineTlsIdentity,
 } from '@codetether/machine-transport'
+import { canonicalFailure } from '@codetether/agent-core'
 
 import {
   RemoteMachineRevocationPendingError,
   SecureRemoteMachineCoordinator,
+  remoteProviderObservation,
 } from '../dist/api/remote-machine-coordinator.js'
 import { ConversationStore } from '../dist/persistence/index.js'
 
@@ -313,6 +315,47 @@ function remoteProviderDiscovery(
   }
 }
 
+test('uses the Host receipt clock for remote Provider health ordering', () => {
+  const discovery = remoteProviderDiscovery(false, true)
+  const providers = discovery.providers.map((provider) =>
+    provider.provider === 'claude-code'
+      ? {
+          ...provider,
+          capabilities: Object.fromEntries(
+            Object.keys(provider.capabilities).map((capability) => [
+              capability,
+              false,
+            ]),
+          ),
+          executionFailureReason: 'login_required',
+        }
+      : provider,
+  )
+  const observation = remoteProviderObservation(
+    'machine_remote_fixture',
+    {
+      ...discovery,
+      providers,
+      observedAt: '2099-08-31T14:00:00.000+02:00',
+    },
+    '2026-08-31T14:00:00.000+02:00',
+  )
+
+  assert.equal(observation.observedAt, '2026-08-31T12:00:00.000Z')
+  assert.equal(
+    observation.providers.find(
+      (provider) => provider.provider === 'claude-code',
+    ).executionHealth.observedAt,
+    '2026-08-31T12:00:00.000Z',
+  )
+  assert.equal(
+    observation.providers.find(
+      (provider) => provider.provider === 'claude-code',
+    ).executionHealth.failure.occurredAt,
+    '2026-08-31T12:00:00.000Z',
+  )
+})
+
 test('current Codex discovery survives authenticated Location validation and admits the exact session open', async () => {
   const f = await fixture({
     discoveryEnabled: true,
@@ -505,10 +548,11 @@ test('current Claude discovery admits only the restricted effort-bound session a
 })
 
 test('an authenticated Provider rejection is not retried across healthy endpoint hints', async () => {
+  const failure = canonicalFailure('rate_limited', '2026-09-02T12:00:00.000Z')
   const semanticFailure = new MachineTransportError(
     'provider_start_failed',
-    'presentation-safe Provider startup failure',
-    { peerAuthenticated: true },
+    '<script>private Provider token detail</script>',
+    { peerAuthenticated: true, failure },
   )
   const f = await fixture({
     discoveryEnabled: true,
@@ -555,7 +599,15 @@ test('an authenticated Provider rejection is not retried across healthy endpoint
         projectId: 'proj_semantic_failure',
         rootPath: '/srv/projects/workspace',
       }),
-      (error) => error.code === 'provider_start_failed',
+      (error) =>
+        error.code === 'provider_start_failed' &&
+        error.message === 'Remote Provider execution failed' &&
+        error.failure?.reason === 'rate_limited' &&
+        error.failure?.occurredAt === failure.occurredAt &&
+        !JSON.stringify({
+          message: error.message,
+          failure: error.failure,
+        }).includes('private Provider token'),
     )
     assert.equal(f.counts.openCodex, 1)
     const after = f.store.getTrustedMachinePeer(machine.machineId)

@@ -201,7 +201,7 @@ export class AttentionAlreadyResolvedError extends Error {
 }
 
 function attentionItem(durable: DurableAttentionItem): AttentionItem {
-  return AttentionItemSchema.parse({
+  const value = {
     attentionId: durable.attentionId,
     projectId: durable.projectId,
     conversationId: durable.conversationId,
@@ -214,7 +214,29 @@ function attentionItem(durable: DurableAttentionItem): AttentionItem {
     ...(durable.resolvedAt === undefined
       ? {}
       : { resolvedAt: durable.resolvedAt }),
-  })
+  }
+  const parsed = AttentionItemSchema.safeParse(value)
+  if (parsed.success) return parsed.data
+
+  // Historical failed Attention can carry a pre-Phase-6D generic details
+  // object. Keep the durable failure and discard only that unsafe bag.
+  if (durable.type === 'failed') {
+    const payload = durable.payload
+    const error = isRecord(payload.error) ? payload.error : undefined
+    if (error !== undefined && Object.hasOwn(error, 'details')) {
+      const sanitizedError = { ...error }
+      delete sanitizedError.details
+      return AttentionItemSchema.parse({
+        ...value,
+        payload: { ...payload, error: sanitizedError },
+      })
+    }
+  }
+  return AttentionItemSchema.parse(value)
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function approvalActionTitle(

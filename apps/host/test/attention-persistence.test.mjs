@@ -6,6 +6,7 @@ import { performance } from 'node:perf_hooks'
 import { DatabaseSync } from 'node:sqlite'
 import test from 'node:test'
 
+import { listAttention } from '../dist/api/attention-service.js'
 import {
   ConversationStore,
   currentSchemaVersion,
@@ -46,7 +47,7 @@ test('migration 004 creates an empty Attention index without backfilling durable
       DROP TRIGGER trg_conversation_search_title_update;
       DROP TRIGGER trg_conversation_search_title_insert;
       DROP TABLE conversation_search_documents;
-      DELETE FROM schema_migrations WHERE version IN (4, 5, 6, 7, 8, 9, 10, 11, 12);
+      DELETE FROM schema_migrations WHERE version IN (4, 5, 6, 7, 8, 9, 10, 11, 12, 13);
     `)
     assert.equal(
       v3.prepare('SELECT MAX(version) AS version FROM schema_migrations').get()
@@ -57,7 +58,7 @@ test('migration 004 creates an empty Attention index without backfilling durable
 
     const migrated = ConversationStore.open({ databasePath })
     assert.equal(migrated.schemaVersion, currentSchemaVersion)
-    assert.equal(currentSchemaVersion, 12)
+    assert.equal(currentSchemaVersion, 13)
     assert.equal(migrated.listProjects().length, 1)
     assert.equal(migrated.listConversations().length, 1)
     assert.equal(migrated.countTurns(conversationId), 1)
@@ -142,6 +143,33 @@ test('Attention identity and composite foreign keys bind the exact Project, Conv
       /FOREIGN KEY constraint failed/u,
     )
     raw.close()
+  })
+})
+
+test('historical failed Attention drops a legacy unsafe details bag on public read', () => {
+  withFixture(({ store, workspace }) => {
+    seedConversationGraph(store, workspace)
+    store.createAttentionItem(
+      attention(9, 'failed', {
+        payload: {
+          conversationTitle: 'Attention',
+          error: {
+            code: 'provider_error',
+            message: 'Provider execution failed',
+            details: {
+              stderr: `Bearer PRIVATE-${'x'.repeat(2_048)}`,
+              access_token: 'PRIVATE',
+            },
+          },
+        },
+      }),
+    )
+
+    const response = listAttention(store, { status: 'open', limit: 50 })
+    assert.equal(response.items.length, 1)
+    assert.equal(response.items[0].type, 'failed')
+    assert.equal(response.items[0].payload.error.code, 'provider_error')
+    assert.equal(response.items[0].payload.error.details, undefined)
   })
 })
 

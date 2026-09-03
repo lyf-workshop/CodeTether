@@ -27,6 +27,26 @@ test('Machines routes and navigation expose only real Host-backed Machine pages'
   assert.doesNotMatch(detail, /SSH|remote terminal|CPU chart|GPU chart/u)
 })
 
+test('local Machine Detail separates Provider installation from execution health', async () => {
+  const detail = await source('components/machines/machine-detail-page.tsx')
+  const localDetail = sourceSection(
+    detail,
+    'const { providers, projects, conversations }',
+    'function RemoteMachineDetail',
+  )
+
+  assert.match(localDetail, /安装检测与最近的执行健康结果彼此独立/u)
+  assert.match(localDetail, /providerExecutionHealthPresentation\(/u)
+  assert.match(localDetail, /provider\.executionHealth/u)
+  assert.match(localDetail, /provider\.availabilityLabel/u)
+  assert.match(localDetail, /安装状态/u)
+  assert.match(localDetail, /执行状态/u)
+  assert.match(localDetail, /health\.stateLabel/u)
+  assert.match(localDetail, /health\.freshnessLabel/u)
+  assert.match(localDetail, /health\.description/u)
+  assert.match(localDetail, /health\.observedAt/u)
+})
+
 test('New Conversation binds Machine identity and machine-scoped Provider truth', async () => {
   const [dialog, providerSelection, actions] = await Promise.all([
     source('components/conversations/new-conversation-dialog.tsx'),
@@ -59,6 +79,7 @@ test('Project and Conversation surfaces resolve Machine display without a switch
     header,
     inspector,
     workspace,
+    controls,
   ] = await Promise.all([
     source('components/projects/project-detail-page.tsx'),
     source('components/projects/project-locations-section.tsx'),
@@ -67,6 +88,7 @@ test('Project and Conversation surfaces resolve Machine display without a switch
     source('components/conversation/conversation-header.tsx'),
     source('components/conversation/inspector-panel.tsx'),
     source('components/conversation/conversation-workspace.tsx'),
+    source('components/conversation/conversation-controls.ts'),
   ])
 
   assert.match(projectDetail, /<ProjectLocationsSection/u)
@@ -87,7 +109,7 @@ test('Project and Conversation surfaces resolve Machine display without a switch
   assert.match(conversationRoute, /machineProvider\.capabilities\.streaming/u)
   assert.match(conversationRoute, /machineProvider\.capabilities\.resume/u)
   assert.match(conversationRoute, /executionBoundary/u)
-  assert.match(workspace, /远程执行机器当前离线/u)
+  assert.match(controls, /远程执行机器当前离线/u)
   assert.match(workspace, /to="\/machines\/\$machineId"/u)
   assert.match(header, /name=\{conversation\.machine\}/u)
   assert.match(inspector, /conversation\.machine/u)
@@ -99,4 +121,12 @@ test('Project and Conversation surfaces resolve Machine display without a switch
 
 async function source(path) {
   return await readFile(new URL(path, sourceRoot), 'utf8')
+}
+
+function sourceSection(value, startMarker, endMarker) {
+  const start = value.indexOf(startMarker)
+  const end = value.indexOf(endMarker, start)
+  assert.notEqual(start, -1, `missing source marker: ${startMarker}`)
+  assert.notEqual(end, -1, `missing source marker: ${endMarker}`)
+  return value.slice(start, end)
 }

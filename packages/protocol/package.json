@@ -16,6 +16,7 @@
     "test": "pnpm build && node --test test/*.test.mjs"
   },
   "dependencies": {
+    "@codetether/agent-core": "workspace:*",
     "zod": "^4.4.3"
   }
 }

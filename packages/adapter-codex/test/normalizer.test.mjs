@@ -236,9 +236,43 @@ test('normalizes successful and failed turn completion fixtures', () => {
       timestamp,
       threadId,
       turnId: 'turn-2',
-      error: { message: 'sandbox process failed' },
+      error: {
+        message: 'Codex could not complete this turn.',
+        failure: {
+          category: 'generic',
+          reason: 'provider_error',
+          retryability: 'unknown',
+          userAction: 'view_details',
+          source: 'provider',
+          occurredAt: timestamp,
+          technicalCode: 'provider_error',
+        },
+      },
     },
   ])
+})
+
+test('normalizes structured Codex quota failure without Provider prose', () => {
+  const normalizer = new CodexEventNormalizer()
+  const failed = normalize(normalizer, 'turn/completed', {
+    threadId,
+    turn: {
+      id: 'turn-quota',
+      status: 'failed',
+      error: {
+        message: 'private account and token detail',
+        additionalDetails: 'private provider trace',
+        codexErrorInfo: 'usageLimitExceeded',
+      },
+    },
+  })
+
+  assert.equal(failed.events[0].error.failure.reason, 'usage_limit_reached')
+  assert.equal(failed.events[0].error.failure.occurredAt, timestamp)
+  assert.doesNotMatch(
+    failed.events[0].error.message,
+    /private|account|token|trace/u,
+  )
 })
 
 test('normalizes interruption separately from failure', () => {

@@ -9,6 +9,7 @@ import {
   type ApprovalRecord,
   type ConversationId,
   type HostErrorCode,
+  type HostError,
   type HostEvent,
   type TurnId,
 } from '@codetether/protocol'
@@ -47,7 +48,7 @@ export interface ApprovalRegistryOptions {
     code: HostErrorCode,
     message: string,
     httpStatus: number,
-    details?: Readonly<Record<string, string | number | boolean | null>>,
+    details?: HostError['details'],
   ) => Error
 }
 
@@ -263,13 +264,12 @@ export class ApprovalRegistry {
     approval.resolving = true
     try {
       approval.respond(decision)
-    } catch (error) {
+    } catch {
       approval.resolving = false
       throw this.#options.serviceError(
         'provider_error',
         'Provider approval response failed',
         500,
-        { cause: safeErrorName(error) },
       )
     }
     return approval.record
@@ -459,10 +459,4 @@ function providerApprovalKey(
       ? ['number', providerRequestId]
       : ['string', providerRequestId],
   ])
-}
-
-function safeErrorName(error: unknown): string {
-  return error instanceof Error && error.name.trim().length > 0
-    ? error.name
-    : 'Error'
 }

@@ -6,6 +6,8 @@ import { performance } from 'node:perf_hooks'
 import { DatabaseSync } from 'node:sqlite'
 import test from 'node:test'
 
+import { canonicalFailure } from '@codetether/agent-core'
+
 import { HostEventPublisher } from '../dist/api/host-event-publisher.js'
 import {
   HostService,
@@ -515,10 +517,31 @@ test('remote pairing stages private trust before publication and unpair rolls ba
     const discoveredDetail = await service.getMachine(coordinator.machineId)
     assert.equal(discoveredDetail.providerDiscovery.state, 'current')
     assert.equal(discoveredDetail.providers[0].version, '1.2.3')
-    coordinator.connection = { state: 'offline' }
+    const executionFailure = canonicalFailure('rate_limited', timestamp)
+    persistence.recordProviderExecutionHealth({
+      machineId: coordinator.machineId,
+      provider: 'codex',
+      state: 'degraded',
+      failure: executionFailure,
+      observedAt: timestamp,
+    })
+    const onlineHealth = await service.getMachine(coordinator.machineId)
+    assert.deepEqual(onlineHealth.providers[0].executionHealth, {
+      state: 'degraded',
+      freshness: 'last_known',
+      observedAt: timestamp,
+      failure: executionFailure,
+    })
+    coordinator.setConnection('offline')
     const offlineDetail = await service.getMachine(coordinator.machineId)
     assert.equal(offlineDetail.providerDiscovery.state, 'last_known')
     assert.equal(offlineDetail.providers[0].version, '1.2.3')
+    assert.deepEqual(offlineDetail.providers[0].executionHealth, {
+      state: 'degraded',
+      freshness: 'last_known',
+      observedAt: timestamp,
+      failure: executionFailure,
+    })
     const offlineRefresh = await requestJson(
       baseUrl,
       `/api/v1/machines/${coordinator.machineId}/providers/refresh`,
@@ -531,7 +554,12 @@ test('remote pairing stages private trust before publication and unpair rolls ba
     assert.equal(offlineRefresh.status, 503)
     assert.equal(offlineRefresh.body.code, 'machine_unreachable')
     assert.equal(coordinator.discoveryCalls, 1)
-    coordinator.connection = updated.body.data.connection
+    coordinator.setConnection(updated.body.data.connection)
+    const reconnectedDetail = await service.getMachine(coordinator.machineId)
+    assert.equal(
+      reconnectedDetail.providers[0].executionHealth.freshness,
+      'last_known',
+    )
 
     coordinator.failAddressUpdate = true
     const identityMismatch = await requestJson(
@@ -647,10 +675,59 @@ test('remote pairing stages private trust before publication and unpair rolls ba
       events
         .filter((event) => event.type.startsWith('machine.'))
         .map((event) => event.type),
-      ['machine.updated', 'machine.updated', 'machine.removed'],
+      [
+        'machine.updated',
+        'machine.updated',
+        'machine.updated',
+        'machine.updated',
+        'machine.removed',
+      ],
     )
     assert.equal(runtime.startConversationCalls.length, 0)
     assert.equal(runtime.resumeConversationCalls.length, 0)
+
+    const rePairBegun = await requestJson(baseUrl, '/api/v1/machine-pairings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        actionId: 'act_remote_pair_begin02',
+        address: { host: '192.0.2.10', port: 43_217 },
+        pairingCode: '482 731',
+      }),
+    })
+    assert.equal(rePairBegun.status, 202)
+    const rePairConfirmed = await requestJson(
+      baseUrl,
+      `/api/v1/machine-pairings/${coordinator.attemptId}/confirm`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ actionId: 'act_remote_pair_confirm02' }),
+      },
+    )
+    assert.equal(rePairConfirmed.status, 200)
+    coordinator.setConnection(updated.body.data.connection)
+    const rePairRefresh = await requestJson(
+      baseUrl,
+      `/api/v1/machines/${coordinator.machineId}/providers/refresh`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          actionId: 'act_remote_provider_refresh03',
+        }),
+      },
+    )
+    assert.equal(rePairRefresh.status, 200)
+    const rePairedDetail = await service.getMachine(coordinator.machineId)
+    assert.deepEqual(rePairedDetail.providers[0].executionHealth, {
+      state: 'unknown',
+      freshness: 'current',
+    })
+    assert.equal(
+      persistence.getProviderExecutionHealth(coordinator.machineId, 'codex'),
+      undefined,
+    )
   } finally {
     if (server !== undefined) {
       await server.close().catch(() => undefined)
@@ -1211,6 +1288,14 @@ test('remote Codex creation is lazy, idempotent, Machine-scoped, and resumes aft
       'failed',
     )
     assert.equal(failed.runtime.turns.at(-1)?.status, 'failed')
+    assert.equal(
+      failed.runtime.turns.at(-1)?.error?.failure?.reason,
+      'transport_lost',
+    )
+    assert.equal(
+      failed.runtime.turns.at(-1)?.error?.failure?.retryability,
+      'not_retryable',
+    )
     assert.equal(secondCoordinator.remoteTurnCalls.length, 4)
 
     await secondService.createConversation({
@@ -1468,11 +1553,14 @@ test('HostService awaits exact remote acquisition rollback and permanently fails
       const updateConversation = fixture.persistence.updateConversation.bind(
         fixture.persistence,
       )
-      let failNextUpdate = true
+      let remainingUpdatesBeforeFailure = 1
       fixture.persistence.updateConversation = (conversation) => {
-        if (failNextUpdate) {
-          failNextUpdate = false
+        if (remainingUpdatesBeforeFailure === 0) {
+          remainingUpdatesBeforeFailure = -1
           throw durableFailure
+        }
+        if (remainingUpdatesBeforeFailure > 0) {
+          remainingUpdatesBeforeFailure -= 1
         }
         return updateConversation(conversation)
       }
@@ -1514,6 +1602,94 @@ test('HostService awaits exact remote acquisition rollback and permanently fails
       await fixture.close()
     }
   })
+})
+
+test('remote session-open diagnostics retain canonical transport truth without raw text', async (t) => {
+  for (const scenario of [
+    {
+      name: 'authenticated Provider classification',
+      coordinatorCode: 'provider_start_failed',
+      expectedReason: 'rate_limited',
+      failure: canonicalFailure('rate_limited', timestamp),
+    },
+    {
+      name: 'Node connection loss',
+      coordinatorCode: 'connection_failed',
+      expectedReason: 'node_disconnected',
+    },
+    {
+      name: 'protocol incompatibility',
+      coordinatorCode: 'protocol_incompatible',
+      expectedReason: 'remote_execution_unavailable',
+    },
+  ]) {
+    await t.test(scenario.name, async () => {
+      const fixture = await createRemoteAcquisitionFixture('codex')
+      try {
+        const created = await fixture.service.createConversation({
+          actionId: `act_diagnostic_${scenario.coordinatorCode}_create`,
+          machineId: fixture.coordinator.machineId,
+          projectId: fixture.project.projectId,
+          provider: 'codex',
+        })
+        fixture.coordinator.openError = new RemoteMachineCoordinatorError(
+          scenario.coordinatorCode,
+          '<script>private Provider diagnostic with token</script>',
+          scenario.failure === undefined
+            ? undefined
+            : { failure: scenario.failure },
+        )
+
+        await assert.rejects(
+          fixture.service.startTurn(created.data.conversation.conversationId, {
+            actionId: `act_diagnostic_${scenario.coordinatorCode}_turn`,
+            input: { type: 'text', text: 'safe deterministic fixture' },
+          }),
+          (error) => {
+            assert.ok(error instanceof HostServiceError)
+            assert.equal(error.failure?.reason, scenario.expectedReason)
+            assert.doesNotMatch(
+              JSON.stringify({
+                code: error.code,
+                message: error.message,
+                failure: error.failure,
+              }),
+              /script|private Provider diagnostic|token/u,
+            )
+            return true
+          },
+        )
+
+        const conversation = fixture.service.getConversation(
+          created.data.conversation.conversationId,
+        )
+        // The durable action boundary precedes session acquisition, so a
+        // restart can explain the failure and the same action cannot reopen
+        // another Provider process.
+        assert.equal(conversation.runtime.turns.length, 1)
+        assert.equal(conversation.conversation.status, 'failed')
+        assert.equal(
+          conversation.runtime.turns[0].error?.failure?.reason,
+          scenario.expectedReason,
+        )
+        await assert.rejects(
+          fixture.service.startTurn(created.data.conversation.conversationId, {
+            actionId: `act_diagnostic_${scenario.coordinatorCode}_turn`,
+            input: { type: 'text', text: 'safe deterministic fixture' },
+          }),
+          (error) => {
+            assert.ok(error instanceof HostServiceError)
+            assert.equal(error.failure?.reason, scenario.expectedReason)
+            return true
+          },
+        )
+        assert.equal(fixture.coordinator.openCodexCalls.length, 0)
+        assert.equal(fixture.coordinator.remoteTurnCalls.length, 0)
+      } finally {
+        await fixture.close()
+      }
+    })
+  }
 })
 
 test('a local Provider failure does not terminalize an active remote Turn for the same Provider', async () => {
@@ -1668,6 +1844,152 @@ async function createRemoteAcquisitionFixture(provider) {
   }
 }
 
+test('offline remote recovery requires reconnect and a fresh action without replaying the blocked Prompt', async () => {
+  const fixture = await createRemoteAcquisitionFixture('codex')
+  try {
+    const created = await fixture.service.createConversation({
+      actionId: 'act_offline_recovery_create',
+      machineId: fixture.coordinator.machineId,
+      projectId: fixture.project.projectId,
+      provider: 'codex',
+    })
+    const conversationId = created.data.conversation.conversationId
+    fixture.coordinator.setConnection('offline')
+
+    await assert.rejects(
+      fixture.service.startTurn(conversationId, {
+        actionId: 'act_offline_recovery_blocked',
+        input: { type: 'text', text: 'must not replay after reconnect' },
+      }),
+      (error) => {
+        assert.ok(error instanceof HostServiceError)
+        assert.equal(error.code, 'machine_unreachable')
+        assert.equal(error.httpStatus, 503)
+        assert.equal(error.failure?.reason, 'machine_offline')
+        return true
+      },
+    )
+    assert.equal(fixture.coordinator.openCodexCalls.length, 0)
+    assert.equal(fixture.coordinator.remoteTurnCalls.length, 0)
+    assert.deepEqual(
+      fixture.service.getConversation(conversationId).runtime.turns,
+      [],
+    )
+
+    fixture.coordinator.setConnection('online')
+    const recovered = await fixture.service.startTurn(conversationId, {
+      actionId: 'act_offline_recovery_fresh',
+      input: { type: 'text', text: 'explicit request after reconnect' },
+    })
+    const detail = await waitForConversationIdle(
+      fixture.service,
+      conversationId,
+    )
+    assert.equal(fixture.coordinator.openCodexCalls.length, 1)
+    assert.equal(fixture.coordinator.remoteTurnCalls.length, 1)
+    assert.deepEqual(
+      detail.runtime.turns.map((turn) => [turn.turnId, turn.input.text]),
+      [[recovered.data.turn.turnId, 'explicit request after reconnect']],
+    )
+  } finally {
+    await fixture.close()
+  }
+})
+
+test('a repaired remote ProjectLocation revalidates the same registered root before a fresh Turn', async () => {
+  const fixture = await createRemoteAcquisitionFixture('codex')
+  try {
+    const created = await fixture.service.createConversation({
+      actionId: 'act_location_recovery_create',
+      machineId: fixture.coordinator.machineId,
+      projectId: fixture.project.projectId,
+      provider: 'codex',
+    })
+    const conversationId = created.data.conversation.conversationId
+    const initial = await fixture.service.startTurn(conversationId, {
+      actionId: 'act_location_recovery_initial',
+      input: { type: 'text', text: 'initial durable history' },
+    })
+    const initialDetail = await waitForConversationIdle(
+      fixture.service,
+      conversationId,
+    )
+    const historicalTurn = initialDetail.runtime.turns[0]
+    assert.equal(historicalTurn.turnId, initial.data.turn.turnId)
+
+    fixture.coordinator.validationError = new RemoteMachineCoordinatorError(
+      'project_location_missing',
+      'Controlled missing registered location',
+    )
+    const turnsBeforeFailure = fixture.coordinator.remoteTurnCalls.length
+    await assert.rejects(
+      fixture.service.startTurn(conversationId, {
+        actionId: 'act_location_recovery_blocked',
+        input: { type: 'text', text: 'must not use a fallback root' },
+      }),
+      (error) => {
+        assert.ok(error instanceof HostServiceError)
+        assert.equal(error.code, 'project_unavailable')
+        assert.equal(error.httpStatus, 409)
+        assert.equal(error.failure?.reason, 'project_location_unavailable')
+        return true
+      },
+    )
+    assert.equal(fixture.coordinator.remoteTurnCalls.length, turnsBeforeFailure)
+    const failedLocationTurn = fixture.service
+      .getConversation(conversationId)
+      .runtime.turns.at(-1)
+    assert.equal(failedLocationTurn?.status, 'failed')
+    assert.equal(
+      failedLocationTurn?.error?.failure?.reason,
+      'project_location_unavailable',
+    )
+
+    fixture.coordinator.validationError = undefined
+    const registeredRoot = (
+      await fixture.service.getProject(fixture.project.projectId)
+    ).project.locations.find(
+      ({ machineId }) => machineId === fixture.coordinator.machineId,
+    )?.rootPath
+    assert.equal(registeredRoot, fixture.coordinator.validationCanonicalPath)
+    const recovered = await fixture.service.startTurn(conversationId, {
+      actionId: 'act_location_recovery_fresh',
+      input: { type: 'text', text: 'explicit request after location repair' },
+    })
+    const recoveredDetail = await waitForConversationIdle(
+      fixture.service,
+      conversationId,
+    )
+    assert.equal(
+      fixture.coordinator.remoteTurnCalls.length,
+      turnsBeforeFailure + 1,
+    )
+    assert.deepEqual(recoveredDetail.runtime.turns[0], historicalTurn)
+    assert.deepEqual(
+      recoveredDetail.runtime.turns.map((turn) => [
+        turn.turnId,
+        turn.input.text,
+        turn.status,
+      ]),
+      [
+        [initial.data.turn.turnId, 'initial durable history', 'completed'],
+        [failedLocationTurn.turnId, 'must not use a fallback root', 'failed'],
+        [
+          recovered.data.turn.turnId,
+          'explicit request after location repair',
+          'completed',
+        ],
+      ],
+    )
+    assert.equal(
+      fixture.coordinator.validationCalls.at(-1).path,
+      registeredRoot,
+    )
+  } finally {
+    await fixture.close()
+  }
+})
+
 async function createService(options) {
   const service = new HostService({
     runtimes: options.runtimes,
@@ -1767,9 +2089,12 @@ class FakeRemoteMachineCoordinator {
     return () => this.statusListeners.delete(listener)
   }
 
-  setConnection(state) {
-    this.connection = { state }
-    for (const listener of this.statusListeners) listener(this.machineId, state)
+  setConnection(connection) {
+    this.connection =
+      typeof connection === 'string' ? { state: connection } : connection
+    for (const listener of this.statusListeners) {
+      listener(this.machineId, this.connection.state)
+    }
   }
 
   connectionDetails() {

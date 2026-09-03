@@ -206,6 +206,43 @@ test('keeps failed local history readable without a Provider Thread identity', (
   })
 })
 
+test('keeps a legacy failed Turn readable while discarding only unsafe details', () => {
+  const occurredAt = '2026-08-27T08:00:00.000Z'
+  const parsed = parseDurableTurnPresentation({
+    turn: {
+      turnId: 'turn_legacy_failure_details',
+      conversationId,
+      status: 'failed',
+      input: {
+        type: 'text',
+        text: 'Historical request',
+        timestamp: occurredAt,
+      },
+      startedAt: occurredAt,
+      completedAt: occurredAt,
+      error: {
+        code: 'provider_error',
+        message: 'Provider execution failed',
+        details: {
+          stderr: `Bearer PRIVATE-${'x'.repeat(2_048)}`,
+          authorizationHeader: 'PRIVATE',
+        },
+      },
+    },
+    messages: [],
+    tools: [],
+    changes: [],
+    approvals: [],
+    presentationTruncated: false,
+  })
+
+  assert.equal(parsed.turn.status, 'failed')
+  assert.equal(parsed.turn.error.code, 'provider_error')
+  assert.equal(parsed.turn.error.message, 'Provider execution failed')
+  assert.equal(parsed.turn.error.details, undefined)
+  assert.equal(parsed.turn.error.failure, undefined)
+})
+
 function durableTurn(index) {
   const suffix = String(index).padStart(2, '0')
   const turnId = `turn_durable_detail_${suffix}`

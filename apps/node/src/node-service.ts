@@ -2,6 +2,11 @@ import { EventEmitter } from 'node:events'
 import { createServer, type Server, type TLSSocket } from 'node:tls'
 
 import {
+  canonicalFailure,
+  isCanonicalFailureReason,
+  type CanonicalFailure,
+} from '@codetether/agent-core'
+import {
   ClaudeSessionHeartbeatMessageSchema,
   ClaudeSessionDisposeMessageSchema,
   ClaudeSessionOpenMessageSchema,
@@ -1227,7 +1232,19 @@ async function sendSafeError(
   error: unknown,
 ): Promise<void> {
   const code = wireErrorCode(error)
-  await connection.send(machineError(code)).catch(() => undefined)
+  await connection
+    .send(machineError(code, canonicalFailureForWire(error)))
+    .catch(() => undefined)
+}
+
+function canonicalFailureForWire(error: unknown): CanonicalFailure | undefined {
+  if (
+    !(error instanceof MachineTransportError) ||
+    !isCanonicalFailureReason(error.failureReason)
+  ) {
+    return undefined
+  }
+  return canonicalFailure(error.failureReason, new Date().toISOString())
 }
 
 function wireErrorCode(error: unknown): MachineWireErrorCode {
@@ -1250,7 +1267,7 @@ function isProjectLocationValidationError(
   )
 }
 
-function machineError(code: MachineWireErrorCode) {
+function machineError(code: MachineWireErrorCode, failure?: CanonicalFailure) {
   const messages: Record<MachineWireErrorCode, string> = {
     pairing_disabled: 'Pairing mode is disabled',
     pairing_expired: 'Pairing code expired',
@@ -1279,6 +1296,7 @@ function machineError(code: MachineWireErrorCode) {
     protocolVersion: machineProtocolVersion,
     code,
     message: messages[code],
+    ...(failure === undefined ? {} : { failure }),
   })
 }
 

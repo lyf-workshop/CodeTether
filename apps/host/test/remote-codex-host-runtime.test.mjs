@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
+import { canonicalFailure } from '@codetether/agent-core'
+
 import { RemoteCodexHostRuntime } from '../dist/api/remote-codex-host-runtime.js'
 
 const machineId = 'machine_remote_runtime01'
@@ -180,6 +182,48 @@ test('remote Codex runtime invalidates a failed connection so the next explicit 
   assert.equal(session.startTurnCalls, 1)
   await runtime.close()
   assert.equal(session.closeCalls, 1)
+})
+
+test('remote Codex runtime preserves canonical failure metadata from the Node', async () => {
+  const occurredAt = '2026-09-02T12:00:00.000Z'
+  const session = fakeSession('native-canonical-failure', {
+    events: [
+      {
+        type: 'turn.failed',
+        code: 'provider_failed',
+        message: 'Node-owned safe failure',
+        failure: canonicalFailure('rate_limited', occurredAt),
+        sequence: 1,
+      },
+    ],
+  })
+  const runtime = new RemoteCodexHostRuntime({
+    machineId,
+    opener: { open: async () => session },
+  })
+  const events = []
+  runtime.subscribeEvents((event) => events.push(event))
+  const created = await runtime.startConversation({
+    cwd: '/srv/project',
+    machineId,
+    conversationId,
+    projectId,
+  })
+  await runtime.startTurn({
+    providerThreadId: created.providerThreadId,
+    cwd: '/srv/project',
+    input: 'one explicit prompt',
+    machineId,
+    conversationId,
+    projectId,
+    actionId: 'act_remote_canonical_failure01',
+    turnId: 'turn_remote_canonical_failure01',
+  })
+  await waitFor(() => events.some((event) => event.type === 'turn.failed'))
+  assert.equal(events[0].error.failure.reason, 'rate_limited')
+  assert.equal(events[0].error.failure.occurredAt, occurredAt)
+  assert.equal(events[0].error.message, 'Remote Codex Turn failed')
+  await runtime.close()
 })
 
 test('remote Codex lifecycle rejects duplicate or delayed message events fail closed', async () => {

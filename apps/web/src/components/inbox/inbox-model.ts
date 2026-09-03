@@ -1,5 +1,6 @@
 import type { AttentionItem, AttentionListResponse } from '@codetether/protocol'
 
+import { executionFailurePresentation } from '../../failures/failure-presentation.js'
 import {
   createToolCommandSubtitle,
   createToolPresentation,
@@ -84,10 +85,11 @@ export function createInboxItemPresentation(
     }
   }
 
+  const failure = executionFailurePresentation(item.payload.error)
   return {
     conversation: item.payload.conversationTitle,
-    description: item.payload.error.message,
-    title: item.payload.conversationTitle,
+    description: `${failure.cause} ${failure.historyNote}`,
+    title: failure.title,
   }
 }
 

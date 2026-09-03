@@ -229,6 +229,10 @@ export class HostRuntime {
     return this.#actions.startTurn(conversationId, text)
   }
 
+  startNewTurn(conversationId: string, text: string) {
+    return this.#actions.startNewTurn(conversationId, text)
+  }
+
   interruptTurn(conversationId: string, turnId: string) {
     return this.#actions.interruptTurn(conversationId, turnId)
   }

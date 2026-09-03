@@ -1,7 +1,10 @@
 import {
   CLAUDE_CODE_TESTED_VERSION,
+  classifyClaudeCodeDetectionFailure,
   prepareClaudeCode,
+  type ClaudeCodeDetection,
 } from '@codetether/adapter-claude'
+import { canonicalFailure } from '@codetether/agent-core'
 import type { ProviderDescriptor } from '@codetether/protocol'
 
 import { HostEventPublisher } from './host-event-publisher.js'
@@ -14,12 +17,21 @@ import {
 } from './local-http-server.js'
 import { CodexHostRuntime } from './codex-host-runtime.js'
 import {
+  classifyCanonicalFailure,
+  providerExecutionHealthState,
+} from './canonical-failure.js'
+import {
   CLAUDE_CODE_REASONING_LABEL,
   ClaudeCodeHostRuntime,
   claudeCodeReasoningOptions,
 } from './claude-code-host-runtime.js'
 import { UnavailableAgentRuntime } from './unavailable-agent-runtime.js'
+import {
+  LOCAL_CODEX_CAPABILITIES,
+  UNAVAILABLE_PROVIDER_CAPABILITIES,
+} from './provider-registry.js'
 import { WorkspacePolicy } from './workspace-policy.js'
+import { safeErrorNameForLog } from './safe-log.js'
 import {
   SecureRemoteMachineCoordinator,
   type RemoteMachineCoordinator,
@@ -73,57 +85,18 @@ export async function startLocalCodexHost(
             ? {}
             : { databasePath: options.databasePath }),
         })
-  let runtime: AgentHostRuntime
-  try {
-    runtime = await CodexHostRuntime.launch({
-      version: options.hostVersion,
-      ...(options.executable === undefined
-        ? {}
-        : { executable: options.executable }),
-      ...(options.disableHooks === undefined
-        ? {}
-        : { disableHooks: options.disableHooks }),
-      ...(options.ephemeralThreads === undefined
-        ? {}
-        : { ephemeralThreads: options.ephemeralThreads }),
-    })
-  } catch (error) {
-    runtime = new UnavailableAgentRuntime()
-    process.stderr.write(
-      `[codetether:runtime-unavailable] Codex launch failed (${safeErrorName(error)}); durable APIs remain read-only\n`,
-    )
-  }
-  const runtimes: AgentHostRuntime[] = [runtime]
-  const claudePreparation = await prepareClaudeCode()
-  const claudeDetection = claudePreparation.detection
-  if (claudeDetection.status === 'available') {
-    runtimes.push(
-      new ClaudeCodeHostRuntime(
-        claudeDetection,
-        claudePreparation.runtimeEnvironment(),
-      ),
-    )
-  } else {
-    const descriptor: ProviderDescriptor = {
-      provider: 'claude-code',
-      displayName: 'Claude Code',
-      availability: claudeDetectionAvailability(claudeDetection.status),
-      capabilities: claudeDetection.capabilities,
-      testedVersion: CLAUDE_CODE_TESTED_VERSION,
-      reasoningLabel: CLAUDE_CODE_REASONING_LABEL,
-      reasoningOptions: claudeCodeReasoningOptions(),
-      ...('version' in claudeDetection
-        ? { version: claudeDetection.version }
-        : {}),
-    }
-    runtimes.push(new UnavailableAgentRuntime('claude-code', descriptor))
-  }
+  const runtimes = await Promise.all(
+    (['codex', 'claude-code'] as const).map(
+      async (provider) => await createLocalProviderRuntime(provider, options),
+    ),
+  )
   try {
     return await startLocalCodexHostWithRuntime(
       options,
       runtimes,
       workspacePolicy,
       persistence,
+      async (provider) => await createLocalProviderRuntime(provider, options),
     )
   } catch (error) {
     try {
@@ -135,10 +108,71 @@ export async function startLocalCodexHost(
   }
 }
 
-function safeErrorName(error: unknown): string {
-  return error instanceof Error && error.name.trim().length > 0
-    ? error.name
-    : 'Error'
+/** Converts a local Codex launch failure into installation and health truth. */
+export function codexUnavailableDescriptor(
+  error: unknown,
+  observedAt: string,
+): ProviderDescriptor {
+  const failure = classifyCanonicalFailure(
+    error,
+    observedAt,
+    'provider_start_failed',
+  )
+  const availability = codexFailureAvailability(failure.reason)
+  return {
+    provider: 'codex',
+    displayName: 'Codex',
+    availability,
+    capabilities:
+      availability === 'available'
+        ? LOCAL_CODEX_CAPABILITIES
+        : UNAVAILABLE_PROVIDER_CAPABILITIES,
+    executionHealth: {
+      state: providerExecutionHealthState(failure),
+      freshness: 'current',
+      observedAt,
+      failure,
+    },
+  }
+}
+
+type UnavailableClaudeCodeDetection = Exclude<
+  ClaudeCodeDetection,
+  { readonly status: 'available' }
+>
+
+/** Converts private detection diagnostics into bounded public execution truth. */
+export function claudeCodeUnavailableDescriptor(
+  detection: UnavailableClaudeCodeDetection,
+  observedAt: string,
+): ProviderDescriptor {
+  const failureReason = classifyClaudeCodeDetectionFailure(detection)
+  return {
+    provider: 'claude-code',
+    displayName: 'Claude Code',
+    // Authentication is execution health, not installation discovery. A
+    // logged-out but tested CLI remains installed/available while the runtime
+    // gate below stays closed by its login-required health observation.
+    availability:
+      failureReason === 'login_required'
+        ? 'available'
+        : claudeDetectionAvailability(detection.status),
+    capabilities: detection.capabilities,
+    testedVersion: CLAUDE_CODE_TESTED_VERSION,
+    reasoningLabel: CLAUDE_CODE_REASONING_LABEL,
+    reasoningOptions: claudeCodeReasoningOptions(),
+    ...('version' in detection ? { version: detection.version } : {}),
+    ...(failureReason === undefined
+      ? {}
+      : {
+          executionHealth: {
+            state: 'unavailable',
+            freshness: 'current',
+            observedAt,
+            failure: canonicalFailure(failureReason, observedAt),
+          },
+        }),
+  }
 }
 
 function claudeDetectionAvailability(
@@ -154,12 +188,32 @@ function claudeDetectionAvailability(
   }
 }
 
+function codexFailureAvailability(
+  reason: ReturnType<typeof classifyCanonicalFailure>['reason'],
+): ProviderDescriptor['availability'] {
+  switch (reason) {
+    case 'provider_not_installed':
+      return 'not_installed'
+    case 'provider_unsupported_version':
+      return 'unsupported_version'
+    case 'provider_misconfigured':
+      return 'misconfigured'
+    case 'provider_start_failed':
+      return 'unavailable'
+    default:
+      return 'available'
+  }
+}
+
 /** Testable assembly boundary that owns Runtime cleanup after launch. */
 export async function startLocalCodexHostWithRuntime(
   options: LocalCodexHostOptions,
   runtime: AgentHostRuntime | readonly AgentHostRuntime[],
   workspacePolicy: WorkspacePolicy,
   persistence?: ConversationStore,
+  refreshUnavailableLocalProvider?: (
+    provider: AgentHostRuntime['provider'],
+  ) => Promise<AgentHostRuntime>,
 ): Promise<RunningLocalCodexHost> {
   const runtimes = Array.isArray(runtime) ? runtime : [runtime]
   let service: HostService | undefined
@@ -194,6 +248,9 @@ export async function startLocalCodexHostWithRuntime(
       ...(remoteMachineCoordinator === undefined
         ? {}
         : { remoteMachineCoordinator }),
+      ...(refreshUnavailableLocalProvider === undefined
+        ? {}
+        : { refreshUnavailableLocalProvider }),
     })
     await service.registerInitialProjectRoots(
       options.allowedWorkspaceRoots ?? [],
@@ -249,5 +306,43 @@ export async function startLocalCodexHostWithRuntime(
       }
     }
     throw error
+  }
+}
+
+async function createLocalProviderRuntime(
+  provider: AgentHostRuntime['provider'],
+  options: LocalCodexHostOptions,
+): Promise<AgentHostRuntime> {
+  if (provider === 'claude-code') {
+    const preparation = await prepareClaudeCode()
+    const detection = preparation.detection
+    return detection.status === 'available'
+      ? new ClaudeCodeHostRuntime(detection, preparation.runtimeEnvironment())
+      : new UnavailableAgentRuntime(
+          'claude-code',
+          claudeCodeUnavailableDescriptor(detection, new Date().toISOString()),
+        )
+  }
+  try {
+    return await CodexHostRuntime.launch({
+      version: options.hostVersion,
+      ...(options.executable === undefined
+        ? {}
+        : { executable: options.executable }),
+      ...(options.disableHooks === undefined
+        ? {}
+        : { disableHooks: options.disableHooks }),
+      ...(options.ephemeralThreads === undefined
+        ? {}
+        : { ephemeralThreads: options.ephemeralThreads }),
+    })
+  } catch (error) {
+    process.stderr.write(
+      `[codetether:runtime-unavailable] Codex launch failed (${safeErrorNameForLog(error)}); durable APIs remain read-only\n`,
+    )
+    return new UnavailableAgentRuntime(
+      'codex',
+      codexUnavailableDescriptor(error, new Date().toISOString()),
+    )
   }
 }

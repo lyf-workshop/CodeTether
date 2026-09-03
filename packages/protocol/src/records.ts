@@ -276,10 +276,15 @@ export const TurnRecordSchema = z
         path: ['error'],
       })
     }
-    if (turn.status !== 'failed' && turn.error !== undefined) {
+    if (
+      turn.status !== 'failed' &&
+      turn.status !== 'interrupted' &&
+      turn.error !== undefined
+    ) {
       context.addIssue({
         code: 'custom',
-        message: 'Only a failed turn may include an error',
+        message:
+          'Only a failed or diagnostically interrupted turn may include an error',
         path: ['error'],
       })
     }

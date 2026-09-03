@@ -9,3 +9,6 @@ The development Host URL defaults to `http://127.0.0.1:4317` and can be overridd
 On a live route, the existing Composer starts text Turns, pending Approval rows resolve one-shot `accept` or `decline` decisions by exact Host identity, and the Header interrupts the exact active Turn. The controller never creates an optimistic canonical User message and waits for Host events before treating Approval or Turn terminal state as final. Unsupported quick actions, model/reasoning/permission changes, and Stop remain disabled. Inbox and Conversations remain Mock data, and all runtime history is process-local rather than persistent.
 
 `/__ui` remains a development-only component showcase rather than a product route.
+`/__phase6d` is a development-only rendered diagnostics matrix that reuses the
+production canonical failure card and execution-health presentation; it is
+excluded from production routing and does not contact a Host or Provider.

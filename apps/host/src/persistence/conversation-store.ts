@@ -5,6 +5,7 @@ import { DatabaseSync } from 'node:sqlite'
 
 import {
   ActionIdSchema,
+  CanonicalFailureSchema,
   conversationSearchLimits,
   conversationListLimits,
   ConversationIdSchema,
@@ -14,6 +15,8 @@ import {
   ManualConversationTitleSchema,
   ProjectIdSchema,
   ProviderDescriptorSchema,
+  ProviderExecutionHealthSchema,
+  ProviderExecutionHealthStateSchema,
   ProviderIdSchema,
   RemoteMachineAddressSchema,
   TimestampSchema,
@@ -21,12 +24,14 @@ import {
   TurnIdSchema,
   TurnInputRecordSchema,
   type ActionId,
+  type CanonicalFailure,
   type ConversationId,
   type ConversationSummary,
   type ConversationTitleSource,
   type MachineId,
   type ProjectId,
   type ProviderDescriptor,
+  type ProviderExecutionHealth,
   type ProviderId,
   type RemoteMachineAddress,
   type Timestamp,
@@ -66,6 +71,8 @@ import {
 import { currentSchemaVersion, migrateDatabase } from './migrations.js'
 
 const DEFAULT_BUSY_TIMEOUT_MS = 5_000
+
+export const providerExecutionHealthFailureMaximumBytes = 4 * 1024
 
 const durableConversationStatuses = [
   'creating',
@@ -225,6 +232,15 @@ export interface DurableTrustedMachineEndpoint {
 export interface DurableRemoteProviderObservation {
   readonly machineId: MachineId
   readonly providers: readonly ProviderDescriptor[]
+  readonly observedAt: Timestamp
+}
+
+/** Latest durable execution-health observation; freshness is presentation state. */
+export interface DurableProviderExecutionHealthObservation {
+  readonly machineId: MachineId
+  readonly provider: ProviderId
+  readonly state: ProviderExecutionHealth['state']
+  readonly failure?: CanonicalFailure
   readonly observedAt: Timestamp
 }
 
@@ -590,6 +606,68 @@ export class ConversationStore {
       }
       return this.getRemoteProviderObservation(value.machineId) ?? value
     })
+  }
+
+  getProviderExecutionHealth(
+    machineId: MachineId,
+    provider: ProviderId,
+  ): DurableProviderExecutionHealthObservation | undefined {
+    const id = MachineIdSchema.parse(machineId)
+    const providerId = ProviderIdSchema.parse(provider)
+    const row = this.#statement(
+      `SELECT machine_id, provider, state, failure_json, observed_at
+       FROM machine_provider_execution_health
+       WHERE machine_id = ? AND provider = ?`,
+    ).get(id, providerId) as ProviderExecutionHealthRow | undefined
+    return row === undefined ? undefined : providerExecutionHealthFromRow(row)
+  }
+
+  listProviderExecutionHealth(
+    machineId: MachineId,
+  ): DurableProviderExecutionHealthObservation[] {
+    const id = MachineIdSchema.parse(machineId)
+    const rows = this.#statement(
+      `SELECT machine_id, provider, state, failure_json, observed_at
+       FROM machine_provider_execution_health
+       WHERE machine_id = ?
+       ORDER BY CASE provider WHEN 'codex' THEN 0 ELSE 1 END, provider ASC`,
+    ).all(id) as unknown as ProviderExecutionHealthRow[]
+    return rows.map(providerExecutionHealthFromRow)
+  }
+
+  recordProviderExecutionHealth(
+    observation: DurableProviderExecutionHealthObservation,
+  ): DurableProviderExecutionHealthObservation {
+    const value = parseProviderExecutionHealthObservation(observation)
+    const failureJson =
+      value.failure === undefined
+        ? null
+        : serializeProviderExecutionHealthFailure(value.failure)
+    this.#statement(
+      `INSERT INTO machine_provider_execution_health (
+         machine_id, provider, state, failure_json, observed_at
+       ) VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(machine_id, provider) DO UPDATE SET
+         state = excluded.state,
+         failure_json = excluded.failure_json,
+         observed_at = excluded.observed_at
+       WHERE julianday(excluded.observed_at) >=
+         julianday(machine_provider_execution_health.observed_at)`,
+    ).run(
+      value.machineId,
+      value.provider,
+      value.state,
+      failureJson,
+      value.observedAt,
+    )
+    const current = this.getProviderExecutionHealth(
+      value.machineId,
+      value.provider,
+    )
+    if (current === undefined) {
+      throw new Error('Provider execution health observation was not retained')
+    }
+    return current
   }
 
   activateTrustedMachinePeer(
@@ -2192,6 +2270,14 @@ interface RemoteProviderObservationRow {
   readonly observed_at: string
 }
 
+interface ProviderExecutionHealthRow {
+  readonly machine_id: string
+  readonly provider: string
+  readonly state: string
+  readonly failure_json: string | null
+  readonly observed_at: string
+}
+
 interface TurnRow {
   readonly turn_id: string
   readonly conversation_id: string
@@ -2376,6 +2462,60 @@ function parseRemoteProviderObservation(
     providers,
     observedAt: TimestampSchema.parse(value.observedAt),
   }
+}
+
+function parseProviderExecutionHealthObservation(
+  value: DurableProviderExecutionHealthObservation,
+): DurableProviderExecutionHealthObservation {
+  const machineId = MachineIdSchema.parse(value.machineId)
+  const provider = ProviderIdSchema.parse(value.provider)
+  const observedAt = new Date(
+    TimestampSchema.parse(value.observedAt),
+  ).toISOString()
+  const health = ProviderExecutionHealthSchema.parse({
+    state: value.state,
+    freshness: 'last_known',
+    observedAt,
+    ...(value.failure === undefined ? {} : { failure: value.failure }),
+  })
+  return {
+    machineId,
+    provider,
+    state: health.state,
+    ...(health.failure === undefined ? {} : { failure: health.failure }),
+    observedAt,
+  }
+}
+
+function providerExecutionHealthFromRow(
+  row: ProviderExecutionHealthRow,
+): DurableProviderExecutionHealthObservation {
+  return parseProviderExecutionHealthObservation({
+    machineId: MachineIdSchema.parse(row.machine_id),
+    provider: ProviderIdSchema.parse(row.provider),
+    state: ProviderExecutionHealthStateSchema.parse(row.state),
+    ...(row.failure_json === null
+      ? {}
+      : {
+          failure: CanonicalFailureSchema.parse(
+            parseJson(row.failure_json, 'Provider execution health failure'),
+          ),
+        }),
+    observedAt: TimestampSchema.parse(row.observed_at),
+  })
+}
+
+function serializeProviderExecutionHealthFailure(
+  failure: CanonicalFailure,
+): string {
+  const serialized = JSON.stringify(CanonicalFailureSchema.parse(failure))
+  if (
+    Buffer.byteLength(serialized, 'utf8') >
+    providerExecutionHealthFailureMaximumBytes
+  ) {
+    throw new Error('Provider execution health failure exceeds durable bounds')
+  }
+  return serialized
 }
 
 function remoteProviderExecutionFoundation(

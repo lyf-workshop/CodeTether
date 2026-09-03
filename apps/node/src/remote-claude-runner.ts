@@ -9,7 +9,13 @@ import {
   type ClaudeCodeProcessSpecification,
   type ClaudeCodeTurnResult,
 } from '@codetether/adapter-claude'
-import type { AgentEvent } from '@codetether/agent-core'
+import {
+  canonicalFailure,
+  isCanonicalFailureReason,
+  type AgentEvent,
+  type CanonicalFailure,
+  type CanonicalFailureReason,
+} from '@codetether/agent-core'
 import {
   MachineTransportError,
   RemoteClaudePromptSchema,
@@ -66,9 +72,18 @@ class RemoteClaudeOwnedCleanupError extends MachineTransportError {
     super(
       'remote_execution_lost',
       'Remote Claude owned process cleanup could not be verified',
-      { cause },
+      { cause, failureReason: 'execution_ownership_uncertain' },
     )
     this.name = 'RemoteClaudeOwnedCleanupError'
+  }
+}
+
+class RemoteClaudeOutputLimitError extends MachineTransportError {
+  readonly failureReason: CanonicalFailureReason = 'output_limit_exceeded'
+
+  constructor() {
+    super('remote_execution_lost', 'Remote Claude output exceeded its bound')
+    this.name = 'RemoteClaudeOutputLimitError'
   }
 }
 
@@ -411,9 +426,25 @@ export class RemoteClaudeRunner {
       prompt: request.prompt,
       ...(this.effort === undefined ? {} : { effort: this.effort }),
     }
-    const execution = this.#runtime.startTurnExecution?.(turnOptions)
-    const completion =
-      execution?.completion ?? this.#runtime.startTurn(turnOptions)
+    let execution:
+      | ReturnType<
+          NonNullable<RemoteClaudeSessionRuntime['startTurnExecution']>
+        >
+      | undefined
+    let completion: Promise<ClaudeCodeTurnResult>
+    try {
+      execution = this.#runtime.startTurnExecution?.(turnOptions)
+      completion = execution?.completion ?? this.#runtime.startTurn(turnOptions)
+    } catch (error) {
+      const code = mapProviderFailure(error)
+      this.#terminate(
+        code,
+        error instanceof ClaudeCodeOwnedProcessCleanupError ? error : undefined,
+        canonicalFailureFromError(error, defaultFailureReason(code)),
+      )
+      await this.#cleanupPromise
+      throw mapProviderStartError(error)
+    }
     void completion.then(
       () => {
         if (this.#closed || turn.terminal) return
@@ -425,11 +456,13 @@ export class RemoteClaudeRunner {
       },
       (error: unknown) => {
         if (this.#closed || turn.terminal) return
+        const code = mapProviderFailure(error)
         this.#terminate(
-          mapProviderFailure(error),
+          code,
           error instanceof ClaudeCodeOwnedProcessCleanupError
             ? error
             : undefined,
+          canonicalFailureFromError(error, defaultFailureReason(code)),
         )
       },
     )
@@ -437,7 +470,12 @@ export class RemoteClaudeRunner {
       try {
         await execution.ownershipEstablished
       } catch (error) {
-        this.#terminate(mapProviderFailure(error))
+        const code = mapProviderFailure(error)
+        this.#terminate(
+          code,
+          undefined,
+          canonicalFailureFromError(error, defaultFailureReason(code)),
+        )
         throw mapProviderStartError(error)
       }
     }
@@ -466,18 +504,26 @@ export class RemoteClaudeRunner {
     if (event.type === 'message.delta') {
       try {
         turn.pushMessageDelta(event.itemId, event.delta)
-      } catch {
-        this.#terminate('remote_execution_lost')
+      } catch (error) {
+        this.#terminate(
+          'remote_execution_lost',
+          undefined,
+          canonicalFailureFromError(error, 'execution_lost'),
+        )
       }
       return
     }
     if (event.type === 'message.completed') {
       try {
         turn.observeMessageCompleted(event.itemId, event.message)
-      } catch {
+      } catch (error) {
         // The tested stream-json profile must deliver partial text deltas and
         // an exact full snapshot. Never synthesize deltas from a snapshot.
-        this.#terminate('remote_execution_lost')
+        this.#terminate(
+          'remote_execution_lost',
+          undefined,
+          canonicalFailureFromError(error, 'execution_lost'),
+        )
       }
       return
     }
@@ -488,16 +534,24 @@ export class RemoteClaudeRunner {
       }
       try {
         turn.pushToolStarted(event)
-      } catch {
-        this.#terminate('remote_policy_violation')
+      } catch (error) {
+        this.#terminate(
+          'remote_policy_violation',
+          undefined,
+          canonicalFailureFromError(error, 'provider_protocol_error'),
+        )
       }
       return
     }
     if (event.type === 'tool.output') {
       try {
         turn.pushToolOutput(event.itemId, event.output)
-      } catch {
-        this.#terminate('remote_policy_violation')
+      } catch (error) {
+        this.#terminate(
+          'remote_policy_violation',
+          undefined,
+          canonicalFailureFromError(error, 'provider_protocol_error'),
+        )
       }
       return
     }
@@ -508,16 +562,24 @@ export class RemoteClaudeRunner {
       }
       try {
         turn.pushToolCompleted(event)
-      } catch {
-        this.#terminate('remote_policy_violation')
+      } catch (error) {
+        this.#terminate(
+          'remote_policy_violation',
+          undefined,
+          canonicalFailureFromError(error, 'provider_protocol_error'),
+        )
       }
       return
     }
     if (event.type === 'turn.completed') {
       try {
         turn.observeProviderCompleted()
-      } catch {
-        this.#terminate('remote_execution_lost')
+      } catch (error) {
+        this.#terminate(
+          'remote_execution_lost',
+          undefined,
+          canonicalFailureFromError(error, 'execution_lost'),
+        )
       }
       return
     }
@@ -546,6 +608,7 @@ export class RemoteClaudeRunner {
   #terminate(
     code: RemoteClaudeTurnFailureCode,
     priorCleanupError?: ClaudeCodeOwnedProcessCleanupError,
+    failure?: CanonicalFailure,
   ): void {
     if (this.#closed) return
     this.#closed = true
@@ -554,6 +617,7 @@ export class RemoteClaudeRunner {
       active,
       code,
       priorCleanupError,
+      failure,
     ).finally(() => this.#onFatal(this))
     void this.#cleanupPromise.catch(() => undefined)
   }
@@ -562,6 +626,7 @@ export class RemoteClaudeRunner {
     active: RemoteClaudeRunnerTurn | undefined,
     terminalCode: RemoteClaudeTurnFailureCode,
     priorCleanupError?: ClaudeCodeOwnedProcessCleanupError,
+    failure?: CanonicalFailure,
   ): Promise<void> {
     let cleanupError: unknown = priorCleanupError
     try {
@@ -582,7 +647,15 @@ export class RemoteClaudeRunner {
       finalizationError = error
     }
     try {
-      active?.fail(terminalCode)
+      active?.fail(
+        terminalCode,
+        cleanupError === undefined
+          ? failure
+          : canonicalFailureFromError(
+              cleanupError,
+              'execution_ownership_uncertain',
+            ),
+      )
     } catch (error) {
       finalizationError ??= error
     }
@@ -771,13 +844,16 @@ export class RemoteClaudeRunnerTurn {
     this.#push({ type: 'turn.completed' })
   }
 
-  fail(code: RemoteClaudeTurnFailureCode): void {
+  fail(code: RemoteClaudeTurnFailureCode, failure?: CanonicalFailure): void {
     if (this.#terminal) return
     this.#terminal = true
     this.#queue.forceTerminal({
       type: 'turn.failed',
       code,
       message: safeFailureMessage(code),
+      failure:
+        failure ??
+        canonicalFailure(defaultFailureReason(code), new Date().toISOString()),
     })
     this.#release()
   }
@@ -820,10 +896,7 @@ class BoundedTurnEventQueue implements AsyncIterable<RemoteClaudeTurnEventPayloa
         machineTransportLimits.maximumRemoteClaudeOutputBytes ||
       !this.#enqueueBounded(event, bytes)
     ) {
-      throw new MachineTransportError(
-        'remote_execution_lost',
-        'Remote Claude output exceeded its bound',
-      )
+      throw new RemoteClaudeOutputLimitError()
     }
     if (isTerminal(event)) this.#closed = true
   }
@@ -924,7 +997,13 @@ async function defaultRemoteClaudeRuntimeFactory(
     processOwnership: 'posix-process-group',
   })
   if (preparation.detection.status !== 'available') {
-    throw executionUnavailable()
+    throw new MachineTransportError(
+      'provider_unavailable',
+      'Remote Claude is unavailable',
+      {
+        failureReason: preparation.failureReason ?? 'provider_error',
+      },
+    )
   }
   const sessionOptions = {
     launcher: privateLauncher(preparation.detection.launcher),
@@ -1089,6 +1168,46 @@ function mapProviderFailure(error: unknown): RemoteClaudeTurnFailureCode {
   return 'provider_failed'
 }
 
+function canonicalFailureFromError(
+  error: unknown,
+  fallback: CanonicalFailureReason,
+): CanonicalFailure {
+  return canonicalFailure(
+    controlledFailureReason(error, fallback),
+    new Date().toISOString(),
+  )
+}
+
+function controlledFailureReason(
+  error: unknown,
+  fallback: CanonicalFailureReason,
+): CanonicalFailureReason {
+  return error instanceof Error &&
+    'failureReason' in error &&
+    isCanonicalFailureReason(error.failureReason)
+    ? error.failureReason
+    : fallback
+}
+
+function defaultFailureReason(
+  code: RemoteClaudeTurnFailureCode,
+): CanonicalFailureReason {
+  switch (code) {
+    case 'provider_start_failed':
+      return 'provider_start_failed'
+    case 'provider_session_lost':
+      return 'provider_session_lost'
+    case 'provider_unavailable':
+      return 'provider_service_unavailable'
+    case 'remote_execution_lost':
+      return 'execution_lost'
+    case 'remote_policy_violation':
+      return 'provider_protocol_error'
+    case 'provider_failed':
+      return 'provider_error'
+  }
+}
+
 function mapProviderStartError(error: unknown): MachineTransportError {
   if (error instanceof MachineTransportError) return error
   const code = mapProviderFailure(error)
@@ -1103,6 +1222,10 @@ function mapProviderStartError(error: unknown): MachineTransportError {
       : code === 'provider_unavailable'
         ? 'Remote Claude is unavailable'
         : 'Remote Claude could not start',
+    {
+      cause: error,
+      failureReason: controlledFailureReason(error, defaultFailureReason(code)),
+    },
   )
 }
 

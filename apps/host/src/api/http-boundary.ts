@@ -4,9 +4,13 @@ import {
   protocolVersion,
   SafeErrorEnvelopeSchema,
   type ActionId,
+  type CanonicalFailure,
+  type HostError,
   type HostErrorCode,
   type SafeErrorEnvelope,
 } from '@codetether/protocol'
+
+import { safeErrorNameForLog } from './safe-log.js'
 
 import { HostServiceError } from './host-service.js'
 
@@ -36,9 +40,8 @@ export class HttpBoundaryError extends Error {
     readonly code: HostErrorCode,
     message: string,
     readonly httpStatus: number,
-    readonly details?: Readonly<
-      Record<string, string | number | boolean | null>
-    >,
+    readonly details?: HostError['details'],
+    readonly failure?: CanonicalFailure,
   ) {
     super(message)
     this.name = 'HttpBoundaryError'
@@ -262,14 +265,31 @@ export class HttpBoundary {
     context: HttpRequestContext,
   ): void {
     const safe = toSafeHttpError(error)
-    const envelope: SafeErrorEnvelope = SafeErrorEnvelopeSchema.parse({
+    const candidate = {
       protocolVersion,
       ...(context.actionId === undefined ? {} : { actionId: context.actionId }),
       code: safe.code,
       message: safe.message,
+      ...(safe.failure === undefined ? {} : { failure: safe.failure }),
       ...(safe.details === undefined ? {} : { details: safe.details }),
-    })
-    this.writeJson(response, safe.httpStatus, envelope, context.allowedOrigin)
+    }
+    const parsed = SafeErrorEnvelopeSchema.safeParse(candidate)
+    const envelope: SafeErrorEnvelope = parsed.success
+      ? parsed.data
+      : SafeErrorEnvelopeSchema.parse({
+          protocolVersion,
+          ...(context.actionId === undefined
+            ? {}
+            : { actionId: context.actionId }),
+          code: 'internal',
+          message: 'The Host could not safely present this failure',
+        })
+    this.writeJson(
+      response,
+      parsed.success ? safe.httpStatus : 500,
+      envelope,
+      context.allowedOrigin,
+    )
   }
 
   baseHeaders(allowedOrigin?: string): Record<string, string> {
@@ -320,10 +340,11 @@ function toSafeHttpError(error: unknown): HttpBoundaryError {
       error.message,
       error.httpStatus,
       error.details,
+      error.failure,
     )
   }
   process.stderr.write(
-    `[codetether:http-error] ${error instanceof Error ? error.name : 'Error'}\n`,
+    `[codetether:http-error] ${safeErrorNameForLog(error)}\n`,
   )
   return new HttpBoundaryError(
     'internal',

@@ -1,5 +1,14 @@
 import { z } from 'zod'
 
+import {
+  providerExecutionHealthFreshness,
+  providerExecutionHealthStates,
+  type ProviderExecutionHealth as CoreProviderExecutionHealth,
+} from '@codetether/agent-core'
+
+import { CanonicalFailureSchema } from './errors.js'
+import { TimestampSchema } from './ids.js'
+
 /** Durable Provider identity. A Conversation never changes this value. */
 export const ProviderIdSchema = z.enum(['codex', 'claude-code'])
 export type ProviderId = z.infer<typeof ProviderIdSchema>
@@ -51,6 +60,54 @@ export type ProviderReasoningOption = z.infer<
   typeof ProviderReasoningOptionSchema
 >
 
+export const ProviderExecutionHealthStateSchema = z.enum(
+  providerExecutionHealthStates,
+)
+export const ProviderExecutionHealthFreshnessSchema = z.enum(
+  providerExecutionHealthFreshness,
+)
+export const ProviderExecutionHealthSchema: z.ZodType<CoreProviderExecutionHealth> =
+  z
+    .object({
+      state: ProviderExecutionHealthStateSchema,
+      freshness: ProviderExecutionHealthFreshnessSchema,
+      observedAt: TimestampSchema.optional(),
+      failure: CanonicalFailureSchema.optional(),
+    })
+    .strict()
+    .superRefine((health, context) => {
+      if (
+        (health.state === 'healthy' || health.state === 'unknown') &&
+        health.failure !== undefined
+      ) {
+        context.addIssue({
+          code: 'custom',
+          message: 'Healthy or unknown execution state cannot carry a failure',
+          path: ['failure'],
+        })
+      }
+      if (
+        (health.state === 'degraded' || health.state === 'unavailable') &&
+        health.failure === undefined
+      ) {
+        context.addIssue({
+          code: 'custom',
+          message: 'Unhealthy execution state requires a canonical failure',
+          path: ['failure'],
+        })
+      }
+      if (health.state !== 'unknown' && health.observedAt === undefined) {
+        context.addIssue({
+          code: 'custom',
+          message: 'Observed execution state requires an observation time',
+          path: ['observedAt'],
+        })
+      }
+    })
+export type ProviderExecutionHealth = z.infer<
+  typeof ProviderExecutionHealthSchema
+>
+
 /** Public Provider detection result. Executable paths and raw diagnostics stay private. */
 export const ProviderDescriptorSchema = z
   .object({
@@ -63,6 +120,7 @@ export const ProviderDescriptorSchema = z
     models: z.array(ProviderModelSchema).max(64).optional(),
     reasoningLabel: z.string().trim().min(1).max(120).optional(),
     reasoningOptions: z.array(ProviderReasoningOptionSchema).max(16).optional(),
+    executionHealth: ProviderExecutionHealthSchema.optional(),
   })
   .strict()
   .superRefine((descriptor, context) => {

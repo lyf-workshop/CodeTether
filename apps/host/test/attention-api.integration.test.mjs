@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 
+import { canonicalFailure } from '@codetether/agent-core'
+
 import { HostEventPublisher } from '../dist/api/host-event-publisher.js'
 import { HostService } from '../dist/api/host-service.js'
 import { LocalHttpServer } from '../dist/api/local-http-server.js'
@@ -109,10 +111,37 @@ test('serves a durable priority-sorted Attention index without treating tool fai
   const failedAttention = response.body.items.find(
     (item) => item.type === 'failed',
   )
+  const failure = canonicalFailure('provider_error', '2026-08-27T08:02:00.000Z')
   assert.deepEqual(failedAttention.payload.error, {
     code: 'provider_error',
-    message: 'Codex Turn failed',
+    message: 'Codex execution failed',
+    failure,
   })
+  const failedConversation = await getJson(
+    harness.baseUrl,
+    `/api/v1/conversations/${failed.conversationId}`,
+  )
+  assert.deepEqual(failedConversation.body.runtime.turns[0].error, {
+    code: 'provider_error',
+    message: 'Codex execution failed',
+    failure,
+  })
+  assert.equal(
+    harness.events.filter(
+      (event) =>
+        event.type === 'turn.failed' && event.turnId === failed.publicTurnId,
+    ).length,
+    1,
+  )
+  assert.equal(
+    harness.events.filter(
+      (event) =>
+        event.type === 'attention.created' &&
+        event.payload.attention.type === 'failed' &&
+        event.payload.attention.turnId === failed.publicTurnId,
+    ).length,
+    1,
+  )
   const publicAttention = JSON.stringify({
     response: response.body,
     events: harness.events.filter((event) =>

@@ -1,3 +1,4 @@
+import { canonicalFailure } from '@codetether/agent-core'
 import {
   ApprovalRecordSchema,
   ConversationFileChangeRecordSchema,
@@ -159,7 +160,7 @@ export function parseDurableTurnPresentation(
     throw new Error('Turn snapshot interruption reason is unsupported')
   }
   return {
-    turn: TurnRecordSchema.parse(record.turn),
+    turn: parseDurableTurnRecord(record.turn),
     messages: record.messages.map((message) =>
       ConversationMessageRecordSchema.parse(message),
     ),
@@ -179,6 +180,26 @@ export function parseDurableTurnPresentation(
 }
 
 /**
+ * Phase 6D narrows public `details` to a fixed safe allowlist. Older durable
+ * snapshots may contain a larger generic details map. Preserve the historical
+ * failure itself without guessing a richer reason, but discard only that
+ * legacy diagnostics bag when it no longer satisfies the public boundary.
+ */
+function parseDurableTurnRecord(value: unknown): TurnRecord {
+  const parsed = TurnRecordSchema.safeParse(value)
+  if (parsed.success) return parsed.data
+
+  const turn = requireRecord(value, 'Durable Turn record')
+  const errorValue = turn.error
+  if (errorValue === undefined) return TurnRecordSchema.parse(value)
+  const error = requireRecord(errorValue, 'Durable Turn error')
+  if (!Object.hasOwn(error, 'details')) return TurnRecordSchema.parse(value)
+  const sanitizedError = { ...error }
+  delete sanitizedError.details
+  return TurnRecordSchema.parse({ ...turn, error: sanitizedError })
+}
+
+/**
  * Reconciles state that cannot still be live after a Host process restart.
  * Provider approval request handles are intentionally never reconstructed.
  */
@@ -192,6 +213,9 @@ export function reconcileHostRestart(
     const affectedConversations = new Set<string>()
     for (const durable of store.listIncompleteTurns()) {
       const presentation = parseSnapshot(durable)
+      const provider = store.getConversation(durable.conversationId)?.provider
+      const providerName = provider === 'claude-code' ? 'Claude Code' : 'Codex'
+      const failure = canonicalFailure('execution_ownership_uncertain', now)
       const turn: TurnRecord = {
         turnId: presentation.turn.turnId,
         conversationId: presentation.turn.conversationId,
@@ -201,6 +225,11 @@ export function reconcileHostRestart(
           : { input: presentation.turn.input }),
         startedAt: presentation.turn.startedAt,
         completedAt: now,
+        error: {
+          code: 'provider_unavailable',
+          message: `${providerName} execution could not be verified after Host restart`,
+          failure,
+        },
       }
       const interrupted = parseDurableTurnPresentation({
         ...presentation,

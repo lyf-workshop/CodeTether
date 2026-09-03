@@ -14,6 +14,18 @@ const appRoot = rootElement
 document.documentElement.dataset.theme = 'dark'
 
 async function renderApp() {
+  if (import.meta.env.DEV && window.location.pathname === '/__phase6d') {
+    const { FailureDiagnosticsShowcaseApp } =
+      await import('./showcase/failure-diagnostics-showcase')
+
+    createRoot(appRoot).render(
+      <StrictMode>
+        <FailureDiagnosticsShowcaseApp />
+      </StrictMode>,
+    )
+    return
+  }
+
   if (import.meta.env.DEV && window.location.pathname === '/__ui') {
     const { ComponentShowcase } = await import('./showcase/component-showcase')
 

@@ -96,6 +96,9 @@ export interface RemoteProviderDetectorOptions {
 export interface RemoteClaudeExecutionProbeResult {
   readonly available: boolean
   readonly version?: string
+  readonly failureReason?: NonNullable<
+    RemoteProviderDescriptor['executionFailureReason']
+  >
 }
 
 export type RemoteClaudeExecutionProbe = (
@@ -198,7 +201,12 @@ export class RemoteProviderDetector {
         })
         return preparation.detection.status === 'available'
           ? { available: true, version: preparation.detection.version }
-          : { available: false }
+          : {
+              available: false,
+              ...(preparation.failureReason === undefined
+                ? {}
+                : { failureReason: preparation.failureReason }),
+            }
       })
   }
 
@@ -284,6 +292,9 @@ export class RemoteProviderDetector {
     }
     const executionVersionSupported = probe.isSupportedVersion(version)
     let claudeExecutionAvailable = false
+    let claudeExecutionFailureReason:
+      | NonNullable<RemoteProviderDescriptor['executionFailureReason']>
+      | undefined
     if (
       probe.provider === 'claude-code' &&
       executionVersionSupported &&
@@ -300,6 +311,9 @@ export class RemoteProviderDetector {
       }
       claudeExecutionAvailable =
         execution.available && execution.version === version
+      if (!claudeExecutionAvailable) {
+        claudeExecutionFailureReason = execution.failureReason
+      }
     }
     return {
       ...base,
@@ -321,6 +335,10 @@ export class RemoteProviderDetector {
             : NO_REMOTE_EXECUTION_CAPABILITIES,
       ...(probe.provider === 'claude-code' && claudeExecutionAvailable
         ? REMOTE_CLAUDE_REASONING
+        : {}),
+      ...(probe.provider === 'claude-code' &&
+      claudeExecutionFailureReason !== undefined
+        ? { executionFailureReason: claudeExecutionFailureReason }
         : {}),
     }
   }

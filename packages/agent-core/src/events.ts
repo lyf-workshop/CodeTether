@@ -1,3 +1,5 @@
+import type { CanonicalFailure } from './failures.js'
+
 export type AgentProvider = 'codex' | 'claude-code'
 
 export type ToolKind = 'read' | 'edit' | 'shell' | 'search' | 'generic'
@@ -102,6 +104,7 @@ export interface TurnFailedEvent extends TurnEventBase<'turn.failed'> {
   readonly error: {
     readonly message: string
     readonly code?: string
+    readonly failure?: CanonicalFailure
   }
 }
 

@@ -5,11 +5,14 @@ import { join } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 
+import { CLAUDE_CODE_CAPABILITIES } from '@codetether/adapter-claude'
+
 import { ClaudeCodeHostRuntime } from '../dist/api/claude-code-host-runtime.js'
 import { HostEventPublisher } from '../dist/api/host-event-publisher.js'
 import { HostService, newEpoch } from '../dist/api/host-service.js'
 import { WorkspacePolicy } from '../dist/api/workspace-policy.js'
 import { ConversationStore } from '../dist/persistence/conversation-store.js'
+import { claudeCodeUnavailableDescriptor } from '../dist/api/local-codex-host.js'
 
 const fixture = fileURLToPath(
   new URL(
@@ -17,6 +20,58 @@ const fixture = fileURLToPath(
     import.meta.url,
   ),
 )
+
+test('keeps a tested logged-out Claude installation separate from execution health', () => {
+  const observedAt = '2026-09-02T20:00:00.000Z'
+  const descriptor = claudeCodeUnavailableDescriptor(
+    {
+      provider: 'claude-code',
+      status: 'misconfigured',
+      capabilities: CLAUDE_CODE_CAPABILITIES,
+      durationMs: 1,
+      diagnosticCode: 'auth_not_logged_in',
+    },
+    observedAt,
+  )
+
+  assert.equal(descriptor.availability, 'available')
+  assert.equal(descriptor.executionHealth.state, 'unavailable')
+  assert.equal(descriptor.executionHealth.freshness, 'current')
+  assert.equal(descriptor.executionHealth.failure.reason, 'login_required')
+  assert.equal(descriptor.executionHealth.failure.occurredAt, observedAt)
+})
+
+test('publishes only a controlled canonical failure when the Claude child crashes', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'codetether-claude-crash-'))
+  const runtime = createRuntime('--fixture-scenario=after-delta-crash')
+  const events = []
+  const terminal = new Promise((resolve) => {
+    runtime.subscribeEvents((event) => {
+      events.push(event)
+      if (event.type === 'turn.completed' || event.type === 'turn.failed') {
+        resolve(event)
+      }
+    })
+  })
+
+  try {
+    const session = await runtime.startConversation({ cwd })
+    await runtime.startTurn({
+      providerThreadId: session.providerThreadId,
+      cwd,
+      input: 'deliberately public crash fixture',
+    })
+    const terminalEvent = await terminal
+    assert.equal(terminalEvent.type, 'turn.failed')
+    assert.equal(terminalEvent.error.failure.reason, 'provider_crashed')
+    assert.equal(terminalEvent.error.failure.retryability, 'unknown')
+    assert.equal(terminalEvent.error.failure.userAction, 'view_details')
+    assert.doesNotMatch(JSON.stringify(events), /private diagnostic|stderr/u)
+  } finally {
+    await runtime.close()
+    await rm(cwd, { recursive: true, force: true })
+  }
+})
 
 test('bridges a cold Claude session into canonical streaming Host events', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'codetether-claude-host-'))

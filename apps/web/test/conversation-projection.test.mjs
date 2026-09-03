@@ -991,21 +991,37 @@ test('a terminal final message produces the same single Agent Item live and from
 })
 
 test('turn failure and interruption map to canonical terminal presentations', () => {
+  const providerCrash = {
+    category: 'provider',
+    reason: 'provider_crashed',
+    retryability: 'unknown',
+    userAction: 'view_details',
+    source: 'provider',
+    occurredAt: timestamp,
+    technicalCode: 'provider_crashed',
+  }
   let failed = projectSnapshot(snapshot())
   failed = apply(
     failed,
     envelope(
       1,
       'turn.failed',
-      { error: { code: 'provider_error', message: 'Codex Turn failed' } },
+      {
+        error: {
+          code: 'provider_error',
+          message: 'Codex Turn failed',
+          failure: providerCrash,
+        },
+      },
       { itemId: undefined },
     ),
   )
   assert.equal(failed.conversations[conversationId].status, 'failed')
-  assert.equal(
-    failed.conversations[conversationId].currentTurn.errorMessage,
-    'Codex Turn failed',
-  )
+  assert.deepEqual(failed.conversations[conversationId].currentTurn.error, {
+    code: 'provider_error',
+    message: 'Codex Turn failed',
+    failure: providerCrash,
+  })
 
   let interrupted = projectSnapshot(snapshot())
   interrupted = apply(
@@ -1035,12 +1051,29 @@ test('turn failure and interruption map to canonical terminal presentations', ()
           ...runningTurn(turnId, 'Run safely'),
           status: 'interrupted',
           completedAt: timestamp,
+          error: {
+            code: 'runtime_unavailable',
+            message: 'Execution ownership could not be proven',
+            failure: {
+              category: 'runtime',
+              reason: 'execution_ownership_uncertain',
+              retryability: 'not_retryable',
+              userAction: 'view_details',
+              source: 'runtime',
+              occurredAt: timestamp,
+              technicalCode: 'execution_ownership_uncertain',
+            },
+          },
         },
       ],
     }),
   ).conversations[conversationId]
   assert.equal(restored.status, conversation.status)
   assert.equal(restored.currentTurn.status, conversation.currentTurn.status)
+  assert.equal(
+    restored.currentTurn.error.failure.reason,
+    'execution_ownership_uncertain',
+  )
 })
 
 test('returns explicit reset results for stream reset and strict ordering failures', () => {

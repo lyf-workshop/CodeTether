@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 
+import { canonicalFailure } from '@codetether/agent-core'
+
 import { HostEventPublisher } from '../dist/api/host-event-publisher.js'
 import {
   HostService,
@@ -11,6 +13,7 @@ import {
   newEpoch,
 } from '../dist/api/host-service.js'
 import { WorkspacePolicy } from '../dist/api/workspace-policy.js'
+import { UnavailableAgentRuntime } from '../dist/api/unavailable-agent-runtime.js'
 import { ConversationStore } from '../dist/persistence/conversation-store.js'
 
 const capabilities = {
@@ -52,6 +55,8 @@ class MixedRuntime {
     this.failures = new Set()
     this.turnCalls = []
     this.turnSequence = 0
+    this.closeCalls = 0
+    this.closeError = undefined
   }
 
   subscribeEvents(listener) {
@@ -83,10 +88,46 @@ class MixedRuntime {
   }
 
   async interruptTurn() {}
-  async close() {}
+  async close() {
+    this.closeCalls += 1
+    if (this.closeError !== undefined) throw this.closeError
+  }
 
   fail(error) {
     for (const listener of this.failures) listener(error)
+  }
+
+  completeLast(message = 'Recovered explicitly') {
+    const turn = this.turnCalls.at(-1)
+    if (turn === undefined) throw new Error('No Provider Turn to complete')
+    for (const listener of this.events) {
+      listener({
+        provider: this.provider,
+        timestamp: '2026-09-02T22:00:00.000Z',
+        threadId: turn.providerThreadId,
+        turnId: `${this.provider}-turn-${this.turnSequence}`,
+        itemId: `${this.provider}-message-${this.turnSequence}`,
+        type: 'message.delta',
+        delta: message,
+      })
+      listener({
+        provider: this.provider,
+        timestamp: '2026-09-02T22:00:00.000Z',
+        threadId: turn.providerThreadId,
+        turnId: `${this.provider}-turn-${this.turnSequence}`,
+        itemId: `${this.provider}-message-${this.turnSequence}`,
+        type: 'message.completed',
+        message,
+      })
+      listener({
+        provider: this.provider,
+        timestamp: '2026-09-02T22:00:00.000Z',
+        threadId: turn.providerThreadId,
+        turnId: `${this.provider}-turn-${this.turnSequence}`,
+        type: 'turn.completed',
+        finalMessage: message,
+      })
+    }
   }
 }
 
@@ -193,7 +234,14 @@ test('routes mixed Conversations through Provider-scoped sessions and failures',
         .bootstrap()
         .providers?.find((provider) => provider.provider === 'claude-code')
         ?.availability,
-      'unavailable',
+      'available',
+    )
+    assert.equal(
+      service
+        .bootstrap()
+        .providers?.find((provider) => provider.provider === 'claude-code')
+        ?.executionHealth?.failure?.reason,
+      'runtime_error',
     )
 
     await assert.rejects(
@@ -309,6 +357,119 @@ test('marks an evicted zero-Turn Provider session as not materialized', async ()
     assert.equal(runtime.disposeCalls.length >= 1, true)
     assert.equal(runtime.resumeCalls.length, 1)
     assert.equal(runtime.resumeCalls[0].providerSessionMaterialized, false)
+  } finally {
+    await service.close().catch(() => undefined)
+    await rm(workspace, { recursive: true, force: true })
+  }
+})
+
+test('an explicit local Turn replaces one crashed runtime and resets health only after success', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'codetether-local-recovery-'))
+  const crashed = new MixedRuntime('codex', 'local-recovery-session')
+  const recovered = new MixedRuntime('codex', 'local-recovery-session')
+  let refreshCalls = 0
+  const service = new HostService({
+    runtimes: [crashed],
+    workspacePolicy: await WorkspacePolicy.create([workspace]),
+    publisher: new HostEventPublisher({ epoch: newEpoch() }),
+    hostVersion: 'test',
+    persistence: ConversationStore.open({
+      databasePath: join(workspace, 'host.sqlite'),
+    }),
+    refreshUnavailableLocalProvider: async (provider) => {
+      assert.equal(provider, 'codex')
+      refreshCalls += 1
+      return recovered
+    },
+  })
+
+  try {
+    await service.registerInitialProjectRoots([workspace])
+    const project = (await service.listProjects()).projects[0]
+    const machine = service.listMachines().machines[0]
+    const conversation = await service.createConversation({
+      actionId: 'act_local_crash_recovery_create',
+      projectId: project.projectId,
+      machineId: machine.machineId,
+      provider: 'codex',
+    })
+    const fatalFailure = Object.assign(
+      new Error('PRIVATE fatal Provider detail'),
+      { failureReason: 'provider_crashed' },
+    )
+    crashed.closeError = fatalFailure
+    crashed.fail(fatalFailure)
+
+    const started = await service.startTurn(
+      conversation.data.conversation.conversationId,
+      {
+        actionId: 'act_local_crash_recovery_turn',
+        input: { type: 'text', text: 'fresh explicit request only' },
+      },
+    )
+    assert.equal(refreshCalls, 1)
+    assert.equal(crashed.closeCalls, 1)
+    assert.equal(recovered.turnCalls.length, 1)
+    assert.equal(recovered.turnCalls[0].input, 'fresh explicit request only')
+    recovered.completeLast()
+
+    const detail = service.getConversation(
+      conversation.data.conversation.conversationId,
+    )
+    assert.equal(detail.runtime.turns.at(-1)?.turnId, started.data.turn.turnId)
+    assert.equal(detail.runtime.turns.at(-1)?.status, 'completed')
+    const provider = (await service.getMachine(machine.machineId)).providers[0]
+    assert.equal(provider.executionHealth?.state, 'healthy')
+    assert.equal(provider.executionHealth?.failure, undefined)
+  } finally {
+    await service.close().catch(() => undefined)
+    await rm(workspace, { recursive: true, force: true })
+  }
+})
+
+test('explicit local Conversation creation re-probes a repaired login once', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'codetether-login-recovery-'))
+  const observedAt = '2026-09-02T21:00:00.000Z'
+  const unavailable = new UnavailableAgentRuntime('claude-code', {
+    provider: 'claude-code',
+    displayName: 'Claude Code',
+    availability: 'available',
+    capabilities,
+    executionHealth: {
+      state: 'unavailable',
+      freshness: 'current',
+      observedAt,
+      failure: canonicalFailure('login_required', observedAt),
+    },
+  })
+  const recovered = new MixedRuntime('claude-code', 'login-recovery-session')
+  let refreshCalls = 0
+  const service = new HostService({
+    runtimes: [unavailable],
+    workspacePolicy: await WorkspacePolicy.create([workspace]),
+    publisher: new HostEventPublisher({ epoch: newEpoch() }),
+    hostVersion: 'test',
+    refreshUnavailableLocalProvider: async (provider) => {
+      assert.equal(provider, 'claude-code')
+      refreshCalls += 1
+      return recovered
+    },
+  })
+
+  try {
+    await service.registerInitialProjectRoots([workspace])
+    const project = (await service.listProjects()).projects[0]
+    const machine = service.listMachines().machines[0]
+    const created = await service.createConversation({
+      actionId: 'act_local_login_recovery_create',
+      projectId: project.projectId,
+      machineId: machine.machineId,
+      provider: 'claude-code',
+    })
+
+    assert.equal(refreshCalls, 1)
+    assert.equal(created.data.conversation.provider, 'claude-code')
+    assert.equal(recovered.turnCalls.length, 0)
   } finally {
     await service.close().catch(() => undefined)
     await rm(workspace, { recursive: true, force: true })

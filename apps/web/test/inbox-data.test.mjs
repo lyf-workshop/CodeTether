@@ -36,7 +36,19 @@ const failed = {
   updatedAt: timestamp,
   payload: {
     conversationTitle: '修复连接恢复',
-    error: { code: 'provider_error', message: 'Turn 执行失败' },
+    error: {
+      code: 'provider_error',
+      message: 'RAW provider stderr must stay hidden',
+      failure: {
+        category: 'provider',
+        reason: 'provider_crashed',
+        retryability: 'unknown',
+        userAction: 'view_details',
+        source: 'provider',
+        occurredAt: timestamp,
+        technicalCode: 'provider_crashed',
+      },
+    },
   },
 }
 const completed = {
@@ -100,6 +112,14 @@ test('non-command Approval presentation keeps normalized Host metadata', () => {
     description: 'src/example.ts',
     title: '修改文件',
   })
+})
+
+test('failed Attention uses canonical product copy without Provider diagnostics', () => {
+  const presentation = createInboxItemPresentation(failed)
+
+  assert.equal(presentation.title, '智能体意外退出')
+  assert.match(presentation.description, /本轮工作可能不完整/u)
+  assert.doesNotMatch(presentation.description, /RAW|stderr/u)
 })
 
 test('Inbox model retains the Host summary instead of deriving it from rows', () => {

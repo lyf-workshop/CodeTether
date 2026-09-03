@@ -3,6 +3,8 @@ import { lookup } from 'node:dns/promises'
 import { isIP } from 'node:net'
 import { basename, dirname, join, resolve } from 'node:path'
 
+import { canonicalFailure, type CanonicalFailure } from '@codetether/agent-core'
+
 import {
   ConversationIdSchema,
   MachineIdSchema,
@@ -93,10 +95,15 @@ export class RemoteMachineCoordinatorError extends Error {
   constructor(
     readonly code: RemoteMachineCoordinatorErrorCode,
     message: string,
+    options?: ErrorOptions & { readonly failure?: CanonicalFailure },
   ) {
-    super(message)
+    super(message, options)
     this.name = 'RemoteMachineCoordinatorError'
+    this.failure = options?.failure
   }
+
+  /** Canonical diagnostic from an authenticated bounded Node response. */
+  readonly failure?: CanonicalFailure
 }
 
 /** The Node committed revocation, but local credential cleanup is still pending. */
@@ -1533,7 +1540,11 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
   ): Promise<DurableRemoteProviderObservation> {
     const discovery = await connection.discoverProviders(signal)
     const observation = this.#persistence.recordRemoteProviderObservation(
-      remoteProviderObservation(machine.machineId, discovery),
+      remoteProviderObservation(
+        machine.machineId,
+        discovery,
+        this.#now().toISOString(),
+      ),
     )
     if (this.#states.get(machine.machineId) === 'online') {
       this.#currentProviderObservations.set(
@@ -1662,19 +1673,37 @@ export function parseRemoteMachinePairingCandidate(
   return RemoteMachinePairingCandidateSchema.parse(value)
 }
 
-function remoteProviderObservation(
+export function remoteProviderObservation(
   machineId: MachineId,
   discovery: RemoteProviderDiscovery,
+  receivedAt: string,
 ): DurableRemoteProviderObservation {
+  const observedAt = TimestampSchema.parse(
+    new Date(TimestampSchema.parse(receivedAt)).toISOString(),
+  )
   const providers: readonly ProviderDescriptor[] = discovery.providers.map(
-    ({ reasoningOptions, ...provider }) => ({
-      ...provider,
-      ...(reasoningOptions === undefined
-        ? {}
-        : {
-            reasoningOptions: reasoningOptions.map((option) => ({ ...option })),
-          }),
-    }),
+    ({ reasoningOptions, executionFailureReason, ...provider }) => {
+      const executionHealth =
+        executionFailureReason !== undefined
+          ? {
+              state: 'unavailable' as const,
+              freshness: 'current' as const,
+              observedAt,
+              failure: canonicalFailure(executionFailureReason, observedAt),
+            }
+          : undefined
+      return {
+        ...provider,
+        ...(reasoningOptions === undefined
+          ? {}
+          : {
+              reasoningOptions: reasoningOptions.map((option) => ({
+                ...option,
+              })),
+            }),
+        ...(executionHealth === undefined ? {} : { executionHealth }),
+      }
+    },
   )
   for (const provider of providers) {
     const enabledCapabilities = Object.entries(provider.capabilities)
@@ -1693,7 +1722,7 @@ function remoteProviderObservation(
   return {
     machineId: MachineIdSchema.parse(machineId),
     providers,
-    observedAt: TimestampSchema.parse(discovery.observedAt),
+    observedAt,
   }
 }
 
@@ -1932,70 +1961,60 @@ function jitteredDelay(milliseconds: number, random: () => number): number {
 function coordinatorError(error: unknown): RemoteMachineCoordinatorError {
   if (error instanceof RemoteMachineCoordinatorError) return error
   if (error instanceof MachineTransportError) {
+    let code: RemoteMachineCoordinatorErrorCode
+    let message: string
     switch (error.code) {
       case 'pairing_failed':
-        return new RemoteMachineCoordinatorError(
-          'pairing_code_invalid',
-          'Pairing code is invalid',
-        )
+        code = 'pairing_code_invalid'
+        message = 'Pairing code is invalid'
+        break
       case 'pairing_expired':
-        return new RemoteMachineCoordinatorError(
-          'pairing_code_expired',
-          'Pairing code has expired',
-        )
+        code = 'pairing_code_expired'
+        message = 'Pairing code has expired'
+        break
       case 'pairing_rate_limited':
       case 'busy':
-        return new RemoteMachineCoordinatorError(
-          'pairing_rate_limited',
-          'Pairing attempts are temporarily limited',
-        )
+        code = 'pairing_rate_limited'
+        message = 'Pairing attempts are temporarily limited'
+        break
       case 'authentication_failed':
       case 'malformed_message':
-        return new RemoteMachineCoordinatorError(
-          'authentication_failed',
-          'Remote Machine authentication failed',
-        )
+        code = 'authentication_failed'
+        message = 'Remote Machine authentication failed'
+        break
       case 'identity_mismatch':
-        return new RemoteMachineCoordinatorError(
-          'identity_mismatch',
-          'Remote Machine identity does not match durable trust',
-        )
+        code = 'identity_mismatch'
+        message = 'Remote Machine identity does not match durable trust'
+        break
       case 'protocol_incompatible':
-        return new RemoteMachineCoordinatorError(
-          'protocol_incompatible',
-          'Remote Machine protocol is incompatible',
-        )
+        code = 'protocol_incompatible'
+        message = 'Remote Machine protocol is incompatible'
+        break
       case 'pairing_disabled':
-        return new RemoteMachineCoordinatorError(
-          'pairing_code_expired',
-          'Pairing mode is no longer active',
-        )
+        code = 'pairing_code_expired'
+        message = 'Pairing mode is no longer active'
+        break
       case 'connection_failed':
       case 'timeout':
-        return new RemoteMachineCoordinatorError(
-          'connection_failed',
-          'Remote Machine connection failed',
-        )
+        code = 'connection_failed'
+        message = 'Remote Machine connection failed'
+        break
       case 'project_location_path_invalid':
-        return new RemoteMachineCoordinatorError(
-          'project_location_path_invalid',
-          'Project Location path is invalid',
-        )
+        code = 'project_location_path_invalid'
+        message = 'Project Location path is invalid'
+        break
       case 'project_location_missing':
-        return new RemoteMachineCoordinatorError(
-          'project_location_missing',
-          'Project Location directory does not exist',
-        )
+        code = 'project_location_missing'
+        message = 'Project Location directory does not exist'
+        break
       case 'project_location_not_directory':
-        return new RemoteMachineCoordinatorError(
-          'project_location_not_directory',
-          'Project Location path is not a directory',
-        )
+        code = 'project_location_not_directory'
+        message = 'Project Location path is not a directory'
+        break
       case 'project_location_inaccessible':
-        return new RemoteMachineCoordinatorError(
-          'project_location_inaccessible',
-          'Project Location directory is inaccessible',
-        )
+        code = 'project_location_inaccessible'
+        message = 'Project Location directory is inaccessible'
+        break
       case 'remote_execution_unavailable':
       case 'provider_unavailable':
       case 'provider_start_failed':
@@ -2004,11 +2023,14 @@ function coordinatorError(error: unknown): RemoteMachineCoordinatorError {
       case 'remote_policy_violation':
       case 'conversation_busy':
       case 'duplicate_action_conflict':
-        return new RemoteMachineCoordinatorError(
-          error.code,
-          'Remote Provider execution failed',
-        )
+        code = error.code
+        message = 'Remote Provider execution failed'
+        break
     }
+    return new RemoteMachineCoordinatorError(code, message, {
+      cause: error,
+      ...(error.failure === undefined ? {} : { failure: error.failure }),
+    })
   }
   return new RemoteMachineCoordinatorError(
     'connection_failed',

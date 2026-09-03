@@ -47,6 +47,7 @@ export class CodexHostRuntime implements AgentHostRuntime {
   #approvalResolvedListener?: (resolution: ProviderApprovalResolution) => void
   #failure?: Error
   #closePromise?: Promise<void>
+  #providerDiagnosticSuppressionReported = false
 
   private constructor(options: CodexHostRuntimeOptions) {
     this.#ephemeralThreads = options.ephemeralThreads ?? false
@@ -67,25 +68,30 @@ export class CodexHostRuntime implements AgentHostRuntime {
       approvalHandler: async (prompt) => await this.#requestApproval(prompt),
       onApprovalResolved: (resolution) =>
         this.#notifyApprovalResolved(resolution),
-      onUnknownNotification: (notification) => {
+      onUnknownNotification: () => {
         process.stderr.write(
-          `[codetether:provider-unknown-notification] ${notification.method}\n`,
+          '[codetether:provider-unknown-notification] Suppressed unrecognized Provider notification\n',
         )
       },
-      onUnknownServerRequest: (request) => {
+      onUnknownServerRequest: () => {
         process.stderr.write(
-          `[codetether:provider-unknown-request] ${request.method}\n`,
+          '[codetether:provider-unknown-request] Suppressed unrecognized Provider request\n',
         )
       },
-      onUnknownResponse: (id) => {
+      onUnknownResponse: () => {
         process.stderr.write(
-          `[codetether:provider-unknown-response] ${String(id)}\n`,
+          '[codetether:provider-unknown-response] Suppressed unrecognized Provider response\n',
         )
       },
       onStderr: (text) => {
-        const diagnostic = redactDiagnostic(text).trimEnd()
-        if (diagnostic.length > 0) {
-          process.stderr.write(`[codetether:codex] ${diagnostic}\n`)
+        if (text.length > 0 && !this.#providerDiagnosticSuppressionReported) {
+          this.#providerDiagnosticSuppressionReported = true
+          // Provider diagnostics may contain Prompts, source, paths, account
+          // data, or credentials. Classification consumes structured App
+          // Server errors; raw stderr never crosses into product logs.
+          process.stderr.write(
+            '[codetether:codex] Provider diagnostic output was suppressed\n',
+          )
         }
       },
       onError: (error) => this.#fail(error),
@@ -253,7 +259,7 @@ export class CodexHostRuntime implements AgentHostRuntime {
         })
       } catch (error) {
         process.stderr.write(
-          `[codetether:approval-handler] ${redactDiagnostic(toError(error).message)}\n`,
+          `[codetether:approval-handler] ${safeErrorName(error)}\n`,
         )
         if (!deferred.settled) respond('decline')
       }
@@ -344,7 +350,7 @@ export class CodexHostRuntime implements AgentHostRuntime {
       listener(error)
     } catch (listenerError) {
       process.stderr.write(
-        `[codetether:runtime-failure-listener] ${redactDiagnostic(toError(listenerError).message)}\n`,
+        `[codetether:runtime-failure-listener] ${safeErrorName(listenerError)}\n`,
       )
     }
   }
@@ -390,13 +396,13 @@ export async function resumeCodexConversation(
   }
 }
 
-function redactDiagnostic(value: string): string {
-  return value.replace(
-    /(authorization|credential|password|secret|token|api.?key)(\s*[:=]\s*)\S+/gi,
-    '$1$2[redacted]',
-  )
-}
-
 function toError(value: unknown): Error {
   return value instanceof Error ? value : new Error(String(value))
+}
+
+function safeErrorName(value: unknown): string {
+  return value instanceof Error &&
+    /^[A-Za-z][A-Za-z0-9]{0,63}$/u.test(value.name)
+    ? value.name
+    : 'Error'
 }

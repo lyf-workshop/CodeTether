@@ -5,6 +5,9 @@ import { tmpdir } from 'node:os'
 import { join, sep } from 'node:path'
 import test from 'node:test'
 
+import { canonicalFailure } from '@codetether/agent-core'
+import { SafeErrorEnvelopeSchema } from '@codetether/protocol'
+
 import { HostEventPublisher } from '../dist/api/host-event-publisher.js'
 import { HostService } from '../dist/api/host-service.js'
 import {
@@ -183,6 +186,17 @@ test('starts a read-only durable API when the Codex executable is unavailable', 
     assert.equal(bootstrap.status, 200)
     assert.equal(bootstrap.body.capabilities.codex, false)
     assert.equal(bootstrap.body.capabilities.resume, false)
+    const machine = await getJson(
+      readOnly.baseUrl,
+      `/api/v1/machines/${machineId}`,
+    )
+    const codex = machine.body.providers.find(
+      (provider) => provider.provider === 'codex',
+    )
+    assert.equal(codex.availability, 'not_installed')
+    assert.equal(codex.executionHealth.state, 'unavailable')
+    assert.equal(codex.executionHealth.freshness, 'current')
+    assert.equal(codex.executionHealth.failure.reason, 'provider_not_installed')
 
     const detail = await getJson(
       readOnly.baseUrl,
@@ -212,7 +226,8 @@ test('starts a read-only durable API when the Codex executable is unavailable', 
       },
     )
     assert.equal(mutation.status, 503)
-    assert.equal(mutation.body.code, 'provider_unavailable')
+    assert.equal(mutation.body.code, 'provider_not_installed')
+    assert.equal(mutation.body.failure.reason, 'provider_not_installed')
   } finally {
     await seeded?.close().catch(() => undefined)
     await readOnly?.close().catch(() => undefined)
@@ -357,6 +372,10 @@ test('serves bootstrap, snapshot, and idempotent mutations with a fake runtime',
             toolEvents: true,
             modelSelection: true,
             reasoningControl: true,
+          },
+          executionHealth: {
+            state: 'unknown',
+            freshness: 'current',
           },
         },
       ],
@@ -1536,7 +1555,7 @@ test('releases an SSE slot when reconnect setup fails before headers', async () 
   }
 })
 
-test('returns safe provider_unavailable responses after a fatal runtime signal', async () => {
+test('returns a safe canonical runtime failure after a fatal runtime signal', async () => {
   const harness = await createHarness()
   try {
     harness.runtime.fail(
@@ -1549,8 +1568,9 @@ test('returns safe provider_unavailable responses after a fatal runtime signal',
       cwd: harness.workspace,
     })
 
-    assert.equal(response.status, 503)
-    assert.equal(response.body.code, 'provider_unavailable')
+    assert.equal(response.status, 500)
+    assert.equal(response.body.code, 'runtime_unavailable')
+    assert.equal(response.body.failure.reason, 'runtime_error')
     assert.equal(
       JSON.stringify(response.body).includes('must-not-cross-http-boundary'),
       false,
@@ -1558,6 +1578,42 @@ test('returns safe provider_unavailable responses after a fatal runtime signal',
     const bootstrap = await getJson(harness.baseUrl, '/api/v1/bootstrap')
     assert.equal(bootstrap.body.capabilities.codex, false)
     assert.equal(bootstrap.body.capabilities.streaming, true)
+  } finally {
+    await harness.close()
+  }
+})
+
+test('HttpBoundary preserves canonical failure metadata in its safe error envelope', async () => {
+  const harness = await createHarness()
+  try {
+    const failure = canonicalFailure(
+      'login_required',
+      '2026-08-26T08:00:00.000Z',
+    )
+    harness.runtime.startConversation = async () => {
+      const error = new Error('private authentication diagnostics')
+      error.failure = failure
+      throw error
+    }
+    const response = await postJson(harness.baseUrl, '/api/v1/conversations', {
+      actionId: 'act_http_canonical_failure01',
+      provider: 'codex',
+      machineId: harness.machineId,
+      cwd: harness.workspace,
+    })
+
+    assert.equal(response.status, 401)
+    assert.deepEqual(SafeErrorEnvelopeSchema.parse(response.body), {
+      protocolVersion: 1,
+      actionId: 'act_http_canonical_failure01',
+      code: 'provider_error',
+      message: 'Codex requires login on this Machine',
+      failure,
+    })
+    assert.equal(
+      JSON.stringify(response.body).includes('private authentication'),
+      false,
+    )
   } finally {
     await harness.close()
   }

@@ -1002,7 +1002,7 @@ Exit gate:
 
 ## Phase 6C.4 — Remote Execution Hardening
 
-**Status:** current approved implementation scope; not accepted, frozen, or declared ready.
+**Status:** accepted and frozen at `01e749c`.
 
 **Goal:** harden the accepted remote Codex and restricted remote Claude execution foundations against ambiguous Turn admission, hard process death, backpressure, reconnect flapping, and restart residue without expanding their Provider capabilities or public product surfaces.
 
@@ -1022,9 +1022,43 @@ Exit gate:
 
 - New remote Provider capability, Claude Edit/Write/shell/Diff/Approval/interrupt/model selection, richer Codex Tools, generic RPC/filesystem/Terminal/process input, Provider/Machine switching, replaying an uncertain Prompt, durable Provider-event storage, generalized durable exactly-once mutations, synchronization, discovery shipment, relay, or new UI.
 
+### Acceptance boundary
+
+- Owner review accepted the hard-crash containment, mixed-provider concurrency, large-stream backpressure, bounded memory/queue/timer/hydration/process ownership, soak, restart-cycle, network-flap, package/cleanup, and clean-build evidence. No Prompt replay, duplicate Turn/process, orphan Provider process group, parallel reconnect worker, leaked hydration slot, or unsafe stale-lock takeover was accepted into the frozen boundary.
+
+## Phase 6D — Provider Failure Diagnostics & Recovery UX
+
+**Status:** current approved implementation scope; not accepted, frozen, or declared ready.
+
+**Goal:** make failures from the frozen local and remote Codex/Claude execution paths immediately understandable and actionable through one safe durable diagnostic model, while preserving truthful uncertainty, immutable Conversation ownership, and the Phase 6C.4 no-replay boundary.
+
+### In scope
+
+- One exhaustive CodeTether-owned `CanonicalFailure` contract in `packages/agent-core`, validated by Protocol v1. Each reason has exactly one category, retryability, recommended user action, high-level source, occurrence timestamp, and matching safe technical code; an inconsistent or unknown profile fails validation instead of selecting UI behavior.
+- Authentication reasons for login required, expired/invalid authentication, and unavailable account; quota reasons for usage exhausted, transient rate limiting, and Provider capacity; Provider reasons for installation, unsupported version, misconfiguration, service availability, startup, exact process crash, native-session loss, and protocol failure; Machine/Node, Project Location, Runtime/capacity/busy/ownership, transport/reconnecting, and conservative generic reasons.
+- Provider-specific classification at the private boundary that owns structured evidence. Codex maps stable App Server error-info variants such as usage-limit, unauthorized, overload/service, and structured HTTP 401/429 forms. Claude maps exact stream-json error/subtype tokens and its bounded machine-readable discovery/authentication result. Narrow compatibility matching, if ever required, stays inside the adapter; React and the Host do not parse Provider stderr or prose.
+- Provider-neutral Host composition for local Codex, local Claude Code, remote Codex, and remote Claude Code. The Host accepts only a validated canonical record, a known CodeTether reason, or an allowlisted legacy code, and falls back conservatively to a generic reason without guessing from raw messages.
+- Failed Turns retain the bounded canonical record inside their existing durable `HostError` snapshot. Cold reads, archived history, Desktop/Host/Node restart, Machine-offline reads, Attention, and multiple clients therefore receive the same historical reason without starting or contacting a Provider. Existing broad historical errors remain broad and are not migrated into guessed specificity.
+- SQLite migration 013 (`provider_execution_health`) stores only the latest presentation-safe observation for each Machine/Provider pair: `healthy`, `degraded`, `unavailable`, or `unknown`, optional canonical failure where required, and observation time. The row is replaceable, timestamp ordered, and bounded; it is not an execution log or telemetry history.
+- Provider discovery continues to own installation/version/capability truth independently from execution health. Login, quota, rate, service, or crash failure cannot turn an installed descriptor into `not_installed` or `unsupported_version`. A later successful explicit Turn updates current health to healthy without rewriting the old Turn, while an offline Machine presents retained health only as last known.
+- Health updates only from bounded existing triggers such as execution start/terminal failure and later success. Discovery/reconnect may compose the current retained observation, but reads do not poll, start a Provider, hydrate a Conversation, or add a monitoring timer. Transient historical health remains advisory rather than a permanent execution block.
+- One exhaustive controlled Web presentation over canonical reason. Failed-Turn cards explain what happened, that execution may be incomplete, that saved Conversation history remains readable, and the next safe action; partial output and already-observed Tool events remain ordinary incomplete history. Expandable keyboard-accessible Technical Details contains only CodeTether-owned code/source/time and existing bounded public labels.
+- Explicit recovery actions may navigate only to the bound Machine or Project, wait for capacity/service, or create a new Turn when the fixed retry profile permits it. Retry always uses the same immutable Conversation/Machine/Provider/Project Location with a fresh action, Turn, and Provider-execution identity; it never mutates the old failed Turn or automatically resends a Prompt.
+- `execution_ownership_uncertain`, `execution_lost`, and `transport_lost` do not offer Retry because Provider acceptance and side effects cannot be proven. Copy states that CodeTether did not resend automatically and does not claim that no work or external change occurred.
+- Composer and New Conversation controls expose a canonical current ineligibility explanation. Deterministic precedence favors current Machine offline/reconnecting over stale Provider health, then exact Project Location and installation/capability gates, then Conversation busy/runtime capacity; there is no silent Provider, Machine, local, or directory fallback.
+- Machine Detail shows Installation and Execution as separate readable fields for each Provider and uses current/last-known freshness without hover-only meaning. The Machine list remains primarily Online/Reconnecting/Offline instead of becoming a Provider status dashboard.
+- Existing failed-Turn Attention remains the only durable failure-attention system. Its payload and existing notification path may use safe canonical copy while retaining stable-source/Attention-ID deduplication across terminal replay, reconnect, restart, and multiple clients. Failed-Turn operating-system notifications omit the potentially Prompt-derived Conversation title; notification text never includes Prompt, source, command, raw Provider output, credentials, or private session identity.
+- Security and accessibility coverage for raw-error/credential/auth/session/Prompt/source leakage, malicious HTML/Markdown/ANSI/control/URL/JSON/oversized/invalid-encoding payloads, log injection, keyboard actions/details, semantic failure status, focus behavior, disabled-control explanations, and 1440 × 900 plus 1100 × 700 layouts.
+- Deterministic Codex, Claude, and infrastructure classification matrices plus recovery tests for login, quota, reconnect, repaired Location, crash, and released capacity. REAL installed Desktop + WSL2 evidence must cover successful remote Codex/Claude after the change, offline/disconnect/reconnect, isolated unavailable Location, exact test-owned Provider crash, at least one safely reproducible authenticated failure and later explicit success, restart-preserved history, no replay/duplication, and zero raw diagnostic or credential leakage. Quota is not intentionally exhausted.
+
+### Out of scope
+
+- Provider login/OAuth or credential entry/copying, quota purchase, account/Provider/Machine switching, automatic fallback, automatic retry or Prompt replay, installation/update automation, raw Provider log viewer, support-bundle or observability/telemetry platform, and continuous Provider monitoring.
+- New Codex or Claude capabilities, Claude Edit/Write/shell/Diff/Approval/interrupt/model selection, another Provider, generic RPC/process/filesystem/Terminal input, Project relocation/browser, synchronization, Relay, public-Internet transport, Mobile, Push, or any Phase 7+ work.
+
 ### Exit gate
 
-- Evidence must cover hard Node and Host crashes, REAL mixed Codex/Claude concurrency, 50k/100k streaming events with a slow consumer, bounded memory/queue/timer/hydration/process resources, a 30-minute background soak, ten Node restart cycles, ten Desktop/Host restart cycles, and thirty automated network-flap cycles. Across those runs, no Prompt replay, duplicate Turn/process, orphan Provider process group, parallel reconnect worker, leaked hydration slot, or stale-lock takeover may occur; all focused and repository quality gates, packaging/cleanup checks, and clean-build identity checks must pass. Until that evidence is complete, Phase 6C.4 is not accepted, frozen, or ready.
+- Upstream classifiers, canonical durability, installation/health separation, current-versus-historical truth, safe explicit new-Turn recovery, eligibility explanations, Attention/notification deduplication, accessibility/responsiveness, malicious-payload privacy tests, REAL failure/recovery evidence, local/remote Provider and Phase 6C.4 regressions, package/install/cleanup checks, all repository quality gates, matching clean build identity, and a clean working tree must pass. Until that evidence is complete and Owner review occurs, Phase 6D is not accepted, frozen, or ready.
 
 ## Phase 7 — Remote LAN / Tailscale
 

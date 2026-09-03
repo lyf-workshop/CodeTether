@@ -12,6 +12,7 @@ import {
   asClaudeCodeError,
   ClaudeCodeError,
   ClaudeCodeOwnedProcessCleanupError,
+  ClaudeCodeProcessExitError,
   ClaudeCodeProtocolError,
   ClaudeCodeSessionLostError,
   ClaudeCodeStartError,
@@ -178,8 +179,16 @@ export function startClaudeCodeTurnProcess(
       windowsHide: true,
       detached: processOwnership === 'posix-process-group',
     })
-  const providerOwnershipEstablished =
+  // Observe a controller rejection immediately. Some guardians can reject
+  // before the stdin completion callback is reached; leaving that original
+  // Promise temporarily unhandled could leak private controller diagnostics
+  // through the process-wide unhandled-rejection path.
+  const providerOwnershipOutcome = (
     controller?.ownershipEstablished ?? Promise.resolve()
+  ).then(
+    () => ({ status: 'fulfilled' }) as const,
+    (error: unknown) => ({ status: 'rejected', error }) as const,
+  )
   const decoder = new ClaudeJsonLineDecoder()
   const normalizer = new ClaudeStreamNormalizer({
     sessionId: options.sessionId,
@@ -196,6 +205,7 @@ export function startClaudeCodeTurnProcess(
   let stdoutPaused = false
   let ownershipSettled = false
   let ownershipEstablishedSuccessfully = false
+  let promptDeliveryStarted = false
   let resolveOwnership!: () => void
   let rejectOwnership!: (error: unknown) => void
   const ownershipEstablished = new Promise<void>((resolve, reject) => {
@@ -206,7 +216,7 @@ export function startClaudeCodeTurnProcess(
   // while exposing a separate Node-only startup acknowledgement.
   void ownershipEstablished.catch(() => undefined)
   const ownershipTimer = setTimeout(() => {
-    rememberError(new ClaudeCodeStartError())
+    rememberError(ownershipFailure())
   }, OWNERSHIP_ESTABLISHMENT_TIMEOUT_MS)
 
   const settleOwnership = (error?: unknown) => {
@@ -221,7 +231,7 @@ export function startClaudeCodeTurnProcess(
 
   const rememberError = (error: unknown) => {
     processingError ??= error
-    settleOwnership(asClaudeCodeError(error))
+    settleOwnership(classifyProcessingFailure(error))
     if (child.exitCode === null && child.signalCode === null) {
       if (controller === undefined) {
         signalOwnedClaudeProcess(child, 'SIGTERM', processOwnership)
@@ -233,10 +243,33 @@ export function startClaudeCodeTurnProcess(
     }
   }
 
+  const ownershipFailure = (cause?: unknown): ClaudeCodeStartError =>
+    new ClaudeCodeStartError({
+      ...(cause instanceof Error ? { cause } : {}),
+      failureReason: promptDeliveryStarted
+        ? 'execution_ownership_uncertain'
+        : 'provider_start_failed',
+    })
+
+  const classifyProcessingFailure = (error: unknown): ClaudeCodeError => {
+    // Structured adapter errors retain their precise safe classification.
+    // Once stdin delivery has begun, however, an unclassified callback,
+    // controller, or cleanup failure cannot prove that Claude did not act.
+    // It must never collapse back to the replay-safe startup category.
+    if (promptDeliveryStarted && !(error instanceof ClaudeCodeError)) {
+      return ownershipFailure(error)
+    }
+    return asClaudeCodeError(error)
+  }
+
   const publish = (events: readonly AgentEvent[]) => {
     if (events.length === 0) return
     if (pendingEventBatches >= EVENT_BATCH_HARD_LIMIT) {
-      rememberError(new ClaudeCodeProtocolError())
+      rememberError(
+        new ClaudeCodeProtocolError({
+          failureReason: 'output_limit_exceeded',
+        }),
+      )
       return
     }
     pendingEventBatches += 1
@@ -296,18 +329,19 @@ export function startClaudeCodeTurnProcess(
   })
   // stderr is deliberately drained but never retained, logged, or surfaced.
   child.stderr.on('data', () => undefined)
-  child.stdin.on('error', rememberError)
-  child.once('error', rememberError)
+  child.stdin.on('error', (error) => rememberError(ownershipFailure(error)))
+  child.once('error', (error) => rememberError(ownershipFailure(error)))
   child.once('spawn', () => {
     try {
+      promptDeliveryStarted = true
       child.stdin.end(encodeClaudeUserMessage(options.prompt), () => {
-        void providerOwnershipEstablished.then(
-          () => settleOwnership(),
-          (error: unknown) => rememberError(error),
-        )
+        void providerOwnershipOutcome.then((outcome) => {
+          if (outcome.status === 'fulfilled') settleOwnership()
+          else rememberError(ownershipFailure(outcome.error))
+        })
       })
     } catch (error) {
-      rememberError(error)
+      rememberError(ownershipFailure(error))
     }
   })
 
@@ -315,7 +349,7 @@ export function startClaudeCodeTurnProcess(
     child.once('close', () => {
       void (async () => {
         if (!ownershipSettled) {
-          settleOwnership(processingError ?? new ClaudeCodeStartError())
+          settleOwnership(processingError ?? ownershipFailure())
         }
         if (processingError === undefined) {
           try {
@@ -344,7 +378,7 @@ export function startClaudeCodeTurnProcess(
 
         let failure: ClaudeCodeError | undefined
         if (processingError !== undefined) {
-          failure = asClaudeCodeError(processingError)
+          failure = classifyProcessingFailure(processingError)
         } else if (normalizer.failure !== undefined) {
           failure = normalizer.failure
         } else if (!normalizer.terminal || normalizer.result === undefined) {
@@ -355,13 +389,10 @@ export function startClaudeCodeTurnProcess(
             return
           }
           failure = !ownershipEstablishedSuccessfully
-            ? new ClaudeCodeStartError()
+            ? ownershipFailure()
             : options.resume && !normalizer.initialized
               ? new ClaudeCodeSessionLostError()
-              : new ClaudeCodeError(
-                  'provider_unavailable',
-                  'Claude Code exited before completing this turn.',
-                )
+              : new ClaudeCodeProcessExitError()
         }
 
         if (failure !== undefined) {
@@ -379,7 +410,7 @@ export function startClaudeCodeTurnProcess(
           return
         }
         resolve(result)
-      })().catch((error: unknown) => reject(asClaudeCodeError(error)))
+      })().catch((error: unknown) => reject(classifyProcessingFailure(error)))
     })
   })
 

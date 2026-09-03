@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import test from 'node:test'
 
+import { canonicalFailure } from '@codetether/agent-core'
 import { HostSnapshotSchema } from '@codetether/protocol'
 
 import { MAX_CANONICAL_TURN_INPUT_BYTES } from '../dist/api/conversation-runtime-history.js'
@@ -21,6 +22,7 @@ class FakeRuntime {
   resumeCalls = []
   turnCalls = []
   disposeCalls = []
+  disposeError = undefined
   interruptCalls = []
   approvalDecisions = []
   lifecycle = []
@@ -29,6 +31,7 @@ class FakeRuntime {
   nextProviderThreadId = undefined
   nextProviderTurnId = undefined
   nextProviderModel = undefined
+  nextTurnError = undefined
   #conversationSequence = 0
   #turnSequence = 0
   #eventListeners = new Set()
@@ -84,6 +87,9 @@ class FakeRuntime {
     const providerTurnId = this.nextProviderTurnId ?? generated
     this.nextProviderTurnId = undefined
     this.turnCalls.push({ options, providerTurnId })
+    const error = this.nextTurnError
+    this.nextTurnError = undefined
+    if (error !== undefined) throw error
     return { providerTurnId }
   }
 
@@ -99,6 +105,7 @@ class FakeRuntime {
       gate.markStarted()
       await gate.waitForRelease
     }
+    if (this.disposeError !== undefined) throw this.disposeError
   }
 
   holdNextDispose() {
@@ -251,6 +258,72 @@ test('bootstrap reports only implemented runtime capabilities', async (t) => {
   })
 })
 
+test('current installation truth and health freshness outrank stale failures', async (t) => {
+  const capabilities = {
+    streaming: true,
+    resume: true,
+    interrupt: true,
+    approvals: true,
+    fileRead: true,
+    fileEdit: true,
+    shell: true,
+    search: true,
+    diff: true,
+    toolEvents: true,
+    modelSelection: true,
+    reasoningControl: true,
+  }
+  const observedAt = '2026-08-26T07:00:00.000Z'
+  const executionHealth = {
+    state: 'degraded',
+    freshness: 'last_known',
+    observedAt,
+    failure: canonicalFailure('usage_limit_reached', observedAt),
+  }
+
+  await t.test('not installed outranks last-known quota', async (scenario) => {
+    const fixture = await createFixture(scenario, {
+      descriptor: {
+        provider: 'codex',
+        displayName: 'Codex',
+        availability: 'not_installed',
+        capabilities,
+        executionHealth,
+      },
+    })
+    await assert.rejects(
+      createConversation(fixture, 'act_installation_precedence'),
+      (error) =>
+        error instanceof HostServiceError &&
+        error.code === 'provider_not_installed' &&
+        error.failure?.reason === 'provider_not_installed',
+    )
+  })
+
+  await t.test(
+    'last-known quota is not a current execution block',
+    async (scenario) => {
+      const fixture = await createFixture(scenario, {
+        descriptor: {
+          provider: 'codex',
+          displayName: 'Codex',
+          availability: 'available',
+          capabilities,
+          executionHealth,
+        },
+      })
+      fixture.runtime.available = false
+      await assert.rejects(
+        createConversation(fixture, 'act_health_freshness_precedence'),
+        (error) =>
+          error instanceof HostServiceError &&
+          error.code === 'provider_unavailable' &&
+          error.failure?.reason === 'provider_service_unavailable',
+      )
+    },
+  )
+})
+
 test('rejects a Provider reasoning option outside the Host-owned descriptor', async (t) => {
   const capabilities = {
     streaming: true,
@@ -374,7 +447,9 @@ test('a failed Conversation creation releases its Project reservation', async (t
       machineId: fixture.machineId,
     }),
     (error) =>
-      error instanceof HostServiceError && error.code === 'provider_error',
+      error instanceof HostServiceError &&
+      error.code === 'provider_start_failed' &&
+      error.failure?.reason === 'provider_start_failed',
   )
 
   const deleted = await fixture.service.deleteProject(project.projectId, {
@@ -500,6 +575,73 @@ test('provider Turn identities must be non-empty and unique per Conversation', a
   assert.equal(next.data.turn.status, 'running')
   assert.equal(fixture.service.snapshot().activeTurns.length, 1)
   assert.equal(fixture.runtime.resumeCalls.length, 2)
+})
+
+test('invalid Provider Turn ownership stays uncertain when exact cleanup fails', async (t) => {
+  const fixture = await createFixture(t)
+  const created = await createConversation(fixture, 'act_create_invalid_owner')
+  const conversationId = created.data.conversation.conversationId
+  fixture.runtime.nextProviderTurnId = ''
+  fixture.runtime.disposeError = new Error('private exact cleanup failure')
+
+  await assert.rejects(
+    startTurn(fixture, conversationId, 'act_start_invalid_owner'),
+    (error) =>
+      error instanceof HostServiceError &&
+      error.code === 'provider_unavailable' &&
+      error.failure?.reason === 'execution_ownership_uncertain' &&
+      !JSON.stringify(error).includes('private'),
+  )
+  const failedTurn = fixture.service
+    .snapshot()
+    .conversationRuntimes.find(
+      (runtime) => runtime.conversationId === conversationId,
+    )?.turns[0]
+  assert.ok(failedTurn)
+  assert.equal(failedTurn.status, 'failed')
+  assert.equal(
+    failedTurn.error?.failure?.reason,
+    'execution_ownership_uncertain',
+  )
+  assert.equal(fixture.runtime.turnCalls.length, 1)
+  assert.deepEqual(fixture.runtime.disposeCalls, [
+    { providerThreadId: 'provider-thread-secret-1' },
+  ])
+})
+
+test('lost remote start acknowledgement remains ownership-uncertain even while runtime is available', async (t) => {
+  const fixture = await createFixture(t)
+  const created = await createConversation(fixture, 'act_create_lost_ack01')
+  const conversationId = created.data.conversation.conversationId
+  const lostAcknowledgement = new Error(
+    'private dedicated transport acknowledgement detail',
+  )
+  lostAcknowledgement.code = 'remote_execution_lost'
+  lostAcknowledgement.failureReason = 'execution_ownership_uncertain'
+  fixture.runtime.nextTurnError = lostAcknowledgement
+
+  await assert.rejects(
+    startTurn(fixture, conversationId, 'act_start_lost_ack01'),
+    (error) =>
+      error instanceof HostServiceError &&
+      error.code === 'provider_unavailable' &&
+      error.failure?.reason === 'execution_ownership_uncertain' &&
+      error.failure.retryability === 'not_retryable' &&
+      error.failure.userAction === 'view_details' &&
+      !JSON.stringify(error).includes('private'),
+  )
+  const failedTurn = fixture.service
+    .snapshot()
+    .conversationRuntimes.find(
+      (runtime) => runtime.conversationId === conversationId,
+    )?.turns[0]
+  assert.ok(failedTurn)
+  assert.equal(failedTurn.status, 'failed')
+  assert.equal(
+    failedTurn.error?.failure?.reason,
+    'execution_ownership_uncertain',
+  )
+  assert.equal(fixture.runtime.turnCalls.length, 1)
 })
 
 test('rejects an oversized canonical Turn input before calling the provider', async (t) => {
@@ -1006,7 +1148,8 @@ test('provider Turn failure details are redacted from public state and events', 
   const failed = fixture.events.find((event) => event.type === 'turn.failed')
   assert.deepEqual(failed.payload.error, {
     code: 'provider_error',
-    message: 'Codex Turn failed',
+    message: 'Codex execution failed',
+    failure: canonicalFailure('provider_error', timestamp),
   })
   const publicJson = JSON.stringify({
     snapshot: fixture.service.snapshot(),
@@ -1140,7 +1283,8 @@ test('projects a fatal runtime failure into terminal safe Host state', async (t)
   )
   assert.deepEqual(terminalTurn.payload.error, {
     code: 'runtime_unavailable',
-    message: 'Codex runtime became unavailable',
+    message: 'Codex runtime failed',
+    failure: canonicalFailure('runtime_error', timestamp),
   })
   const resolved = fixture.events.find(
     (event) => event.type === 'approval.resolved',
@@ -1161,18 +1305,21 @@ test('projects a fatal runtime failure into terminal safe Host state', async (t)
     streaming: true,
   })
 
-  await assert.rejects(
-    fixture.service.createConversation({
+  const unavailableError = await fixture.service
+    .createConversation({
       actionId: 'act_afterfailure01',
       provider: 'codex',
       machineId: fixture.machineId,
       cwd: fixture.workspace,
-    }),
-    (error) =>
-      error instanceof HostServiceError &&
-      error.code === 'provider_unavailable' &&
-      error.httpStatus === 503,
-  )
+    })
+    .then(
+      () => undefined,
+      (error) => error,
+    )
+  assert.ok(unavailableError instanceof HostServiceError)
+  assert.equal(unavailableError.code, 'runtime_unavailable')
+  assert.equal(unavailableError.httpStatus, 500)
+  assert.equal(unavailableError.failure?.reason, 'runtime_error')
   assert.equal(fixture.runtime.conversationCalls.length, 1)
 })
 

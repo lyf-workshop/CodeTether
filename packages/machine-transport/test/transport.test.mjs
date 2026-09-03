@@ -5,10 +5,13 @@ import { join } from 'node:path'
 import { Duplex } from 'node:stream'
 import test from 'node:test'
 
+import { canonicalFailure } from '@codetether/agent-core'
+
 import {
   FramedMachineConnection,
   MachineErrorMessageSchema,
   MachineFrameDecoder,
+  MachineTransportCanonicalFailureSchema,
   MachineWireMessageSchema,
   OpaquePairingAuthority,
   OpaquePairingInitiator,
@@ -22,15 +25,152 @@ import {
   pairingServerIdentifier,
   readMachineTlsIdentityFile,
   receiveCompatibleMachineMessage,
+  RemoteClaudeTurnEventPayloadSchema,
   RemoteClaudePromptSchema,
   RemoteClaudeSession,
   RemoteCodexSession,
   RemoteProjectLocationPathSchema,
   RemoteCodexPromptSchema,
+  RemoteCodexTurnEventPayloadSchema,
   RemoteProviderDescriptorSchema,
   validateMachineTlsIdentity,
   verifyPairingConfirmationTag,
 } from '../dist/index.js'
+
+test('remote failure payloads carry only a canonical controlled diagnostic', () => {
+  const occurredAt = '2026-09-02T12:00:00.000Z'
+  const failure = canonicalFailure('rate_limited', occurredAt)
+  assert.equal(
+    MachineTransportCanonicalFailureSchema.safeParse(failure).success,
+    true,
+  )
+  for (const schema of [
+    RemoteCodexTurnEventPayloadSchema,
+    RemoteClaudeTurnEventPayloadSchema,
+  ]) {
+    assert.equal(
+      schema.safeParse({
+        type: 'turn.failed',
+        code: 'provider_failed',
+        message: 'Remote Provider failed the Turn',
+        failure,
+      }).success,
+      true,
+    )
+    assert.equal(
+      schema.safeParse({
+        type: 'turn.failed',
+        code: 'provider_failed',
+        message: 'Remote Provider failed the Turn',
+        failure: { ...failure, category: 'authentication' },
+      }).success,
+      false,
+    )
+    assert.equal(
+      schema.safeParse({
+        type: 'turn.failed',
+        code: 'provider_failed',
+        message: 'Remote Provider failed the Turn',
+        failure: { ...failure, providerMessage: 'private token detail' },
+      }).success,
+      false,
+    )
+    assert.equal(
+      schema.safeParse({
+        type: 'turn.failed',
+        code: 'provider_start_failed',
+        message: 'Remote Provider could not start',
+        failure: canonicalFailure('authentication_invalid', occurredAt),
+      }).success,
+      true,
+      'Provider operation codes preserve structured authentication failures',
+    )
+    assert.equal(
+      schema.safeParse({
+        type: 'turn.failed',
+        code: 'remote_execution_lost',
+        message: 'Remote execution ownership was lost',
+        failure: canonicalFailure('execution_ownership_uncertain', occurredAt),
+      }).success,
+      true,
+      'execution-loss codes retain their non-retryable ownership diagnosis',
+    )
+    for (const [code, reason] of [
+      ['remote_execution_lost', 'rate_limited'],
+      ['provider_session_lost', 'usage_limit_reached'],
+      ['remote_policy_violation', 'login_required'],
+    ]) {
+      assert.equal(
+        schema.safeParse({
+          type: 'turn.failed',
+          code,
+          message: 'Controlled failure',
+          failure: canonicalFailure(reason, occurredAt),
+        }).success,
+        false,
+        `${code} must reject mismatched ${reason} recovery policy`,
+      )
+    }
+  }
+  assert.equal(
+    MachineErrorMessageSchema.safeParse({
+      type: 'machine.error',
+      protocolVersion: 1,
+      code: 'provider_start_failed',
+      message: 'Remote Provider could not start',
+      failure,
+    }).success,
+    true,
+  )
+  assert.equal(
+    MachineErrorMessageSchema.safeParse({
+      type: 'machine.error',
+      protocolVersion: 1,
+      code: 'provider_start_failed',
+      message: 'Remote Provider could not start',
+      failure: { ...failure, providerMessage: 'private token detail' },
+    }).success,
+    false,
+  )
+  assert.equal(
+    MachineErrorMessageSchema.safeParse({
+      type: 'machine.error',
+      protocolVersion: 1,
+      code: 'provider_unavailable',
+      message: 'Remote Provider is unavailable',
+      failure: canonicalFailure('login_required', occurredAt),
+    }).success,
+    true,
+    'Machine Provider errors preserve structured authentication diagnostics',
+  )
+  for (const [code, reason] of [
+    ['remote_execution_lost', 'rate_limited'],
+    ['project_location_missing', 'usage_limit_reached'],
+    ['pairing_failed', 'authentication_invalid'],
+  ]) {
+    assert.equal(
+      MachineErrorMessageSchema.safeParse({
+        type: 'machine.error',
+        protocolVersion: 1,
+        code,
+        message: 'Controlled Machine failure',
+        failure: canonicalFailure(reason, occurredAt),
+      }).success,
+      false,
+      `${code} must reject mismatched ${reason} recovery policy`,
+    )
+  }
+  assert.equal(
+    MachineTransportCanonicalFailureSchema.safeParse(
+      canonicalFailure(
+        'provider_error',
+        `2026-09-02T12:00:00.${'1'.repeat(48)}Z`,
+      ),
+    ).success,
+    false,
+    'canonical failure timestamps are explicitly bounded',
+  )
+})
 
 test('bounded framing handles fragmented and coalesced messages', () => {
   const decoder = new MachineFrameDecoder()
@@ -249,6 +389,20 @@ test('Provider discovery messages are purpose-specific and presentation-safe', (
     }).success,
     false,
   )
+  for (const infrastructureReason of [
+    'machine_offline',
+    'project_location_missing',
+    'conversation_busy',
+    'execution_ownership_uncertain',
+  ]) {
+    assert.equal(
+      RemoteProviderDescriptorSchema.safeParse({
+        ...descriptor,
+        executionFailureReason: infrastructureReason,
+      }).success,
+      false,
+    )
+  }
   assert.equal(
     MachineWireMessageSchema.safeParse({
       ...request,
@@ -405,6 +559,106 @@ test('remote Codex session exposes a closed dedicated transport without probing 
     (error) => error.code === 'provider_session_lost',
   )
   await session.close()
+})
+
+test('authenticated startup errors preserve only the canonical failure', async () => {
+  const stream = new RecordingResponseDuplex()
+  const connection = new FramedMachineConnection(stream)
+  const failure = canonicalFailure(
+    'authentication_invalid',
+    '2026-09-02T12:00:00.000Z',
+  )
+  stream.onMessage = (message) => {
+    if (message.type !== 'codex.turn.start') return
+    stream.respond({
+      type: 'machine.error',
+      protocolVersion: 1,
+      code: 'provider_start_failed',
+      message: 'Remote Provider could not start',
+      failure,
+    })
+  }
+  const session = new RemoteCodexSession(
+    connection,
+    {
+      machineId: 'machine_remote_failure01',
+      nodeId: 'node_remote_failure01',
+      displayName: 'Remote failure fixture',
+      platform: 'Linux',
+      architecture: 'x64',
+    },
+    {
+      type: 'codex.session.ready',
+      protocolVersion: 1,
+      requestId: 'F'.repeat(43),
+      machineId: 'machine_remote_failure01',
+      nodeId: 'node_remote_failure01',
+      conversationId: 'conv_remote_failure01',
+      providerThreadId: 'native-thread-failure',
+      resumed: false,
+      executionProfile: 'codex-text-v1',
+    },
+  )
+
+  await assert.rejects(
+    session.startTurn({
+      actionId: 'act_remote_failure01',
+      turnId: 'turn_remote_failure01',
+      prompt: 'Return a public fixture marker.',
+    }),
+    (error) =>
+      error.code === 'provider_start_failed' &&
+      error.failureReason === 'authentication_invalid' &&
+      error.failure?.occurredAt === failure.occurredAt &&
+      !JSON.stringify(error.failure).includes('private'),
+  )
+  assert.equal(session.closed, true)
+})
+
+test('lost Codex start acknowledgement is ownership-uncertain without replay', async () => {
+  const stream = new RecordingResponseDuplex()
+  const connection = new FramedMachineConnection(stream)
+  const machine = {
+    machineId: 'machine_remote_codex_lost_ack01',
+    nodeId: 'node_remote_codex_lost_ack01',
+    displayName: 'Remote lost acknowledgement fixture',
+    platform: 'Linux',
+    architecture: 'x64',
+  }
+  let starts = 0
+  stream.onMessage = (message) => {
+    if (message.type !== 'codex.turn.start') return
+    starts += 1
+    // The Node may already own the Provider execution. Lose only the
+    // dedicated acknowledgement while the general Machine channel is outside
+    // this session and may remain online.
+    stream.push(null)
+  }
+  const session = new RemoteCodexSession(connection, machine, {
+    type: 'codex.session.ready',
+    protocolVersion: 1,
+    requestId: 'K'.repeat(43),
+    machineId: machine.machineId,
+    nodeId: machine.nodeId,
+    conversationId: 'conv_remote_codex_lost_ack01',
+    providerThreadId: 'native-thread-lost-ack',
+    resumed: false,
+    executionProfile: 'codex-text-v1',
+  })
+
+  await assert.rejects(
+    session.startTurn({
+      actionId: 'act_remote_codex_lost_ack01',
+      turnId: 'turn_remote_codex_lost_ack01',
+      prompt: 'Public lost acknowledgement fixture.',
+    }),
+    (error) =>
+      error.code === 'remote_execution_lost' &&
+      error.failureReason === 'execution_ownership_uncertain' &&
+      error.peerAuthenticated === true,
+  )
+  assert.equal(starts, 1)
+  assert.equal(session.closed, true)
 })
 
 test('active Codex heartbeat keeps a quiet dedicated session alive without replaying its Turn', async () => {
@@ -738,6 +992,51 @@ test('remote Claude session exposes closed dedicated transport without Provider 
     (error) => error.code === 'provider_session_lost',
   )
   await session.close()
+})
+
+test('lost Claude start acknowledgement is ownership-uncertain without replay', async () => {
+  const stream = new RecordingResponseDuplex()
+  const connection = new FramedMachineConnection(stream)
+  const machine = {
+    machineId: 'machine_remote_claude_lost_ack01',
+    nodeId: 'node_remote_claude_lost_ack01',
+    displayName: 'Remote Claude lost acknowledgement fixture',
+    platform: 'Linux',
+    architecture: 'x64',
+  }
+  const providerSessionId = 'ffffffff-ffff-4fff-8fff-ffffffffffff'
+  let starts = 0
+  stream.onMessage = (message) => {
+    if (message.type !== 'claude.turn.start') return
+    starts += 1
+    stream.push(null)
+  }
+  const session = new RemoteClaudeSession(connection, machine, {
+    type: 'claude.session.ready',
+    protocolVersion: 1,
+    requestId: 'W'.repeat(43),
+    machineId: machine.machineId,
+    nodeId: machine.nodeId,
+    conversationId: 'conv_remote_claude_lost_ack01',
+    providerSessionId,
+    resumed: false,
+    effort: 'medium',
+    executionProfile: 'claude-restricted-read-search-v1',
+  })
+
+  await assert.rejects(
+    session.startTurn({
+      actionId: 'act_remote_claude_lost_ack01',
+      turnId: 'turn_remote_claude_lost_ack01',
+      prompt: 'Public Claude lost acknowledgement fixture.',
+    }),
+    (error) =>
+      error.code === 'remote_execution_lost' &&
+      error.failureReason === 'execution_ownership_uncertain' &&
+      error.peerAuthenticated === true,
+  )
+  assert.equal(starts, 1)
+  assert.equal(session.closed, true)
 })
 
 test('missing Claude heartbeat acknowledgement fails a quiet Turn closed without replay', async () => {

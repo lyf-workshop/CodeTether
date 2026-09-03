@@ -6,6 +6,7 @@ import type {
   FileChangeKind,
   GetConversationResponse,
   HostEventEnvelope,
+  HostError,
   HostSnapshot,
   ProviderId,
   StreamResetReason,
@@ -39,7 +40,7 @@ export interface ConversationTurnReadModel {
   readonly startedAt: string
   readonly completedAt?: string
   readonly finalMessage?: string
-  readonly errorMessage?: string
+  readonly error?: HostError
   /** Stable retained-Turn order, independent of wall-clock formatting. */
   readonly order: number
 }
@@ -738,7 +739,7 @@ export function applyHostEvent(
         ...current,
         status: 'failed',
         completedAt: event.timestamp,
-        errorMessage: event.payload.error.message,
+        error: event.payload.error,
       }
       return applied(projection, event, {
         ...conversation,
@@ -933,7 +934,7 @@ function projectTurn(
     ...(turn.finalMessage === undefined
       ? {}
       : { finalMessage: turn.finalMessage }),
-    ...(turn.error === undefined ? {} : { errorMessage: turn.error.message }),
+    ...(turn.error === undefined ? {} : { error: turn.error }),
     order,
   }
 }

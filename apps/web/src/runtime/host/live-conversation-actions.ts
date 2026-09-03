@@ -15,6 +15,7 @@ import {
 } from '@codetether/protocol'
 
 import { createBrowserActionId, type ActionIdFactory } from './action-id.js'
+import { canonicalFailureActionPresentation } from '../../failures/failure-presentation.js'
 
 export interface LiveConversationMutationClient {
   startTurn(
@@ -60,6 +61,10 @@ interface RetryIntent<TIdentity> {
   readonly actionId: ActionId
 }
 
+interface StartRetryIntent extends RetryIntent<string> {
+  readonly mode: 'submit' | 'explicit-new-turn'
+}
+
 /** A second, different mutation cannot replace an operation already in flight. */
 export class ConversationMutationBusyError extends Error {
   constructor(operation: string) {
@@ -84,7 +89,7 @@ export class LiveConversationActions {
   readonly #client: LiveConversationMutationClient
   readonly #createActionId: ActionIdFactory
   readonly #starts = new Map<string, StartAttempt>()
-  readonly #startRetries = new Map<string, RetryIntent<string>>()
+  readonly #startRetries = new Map<string, StartRetryIntent>()
   readonly #interrupts = new Map<string, InterruptAttempt>()
   readonly #interruptRetries = new Map<string, RetryIntent<true>>()
   readonly #approvals = new Map<string, ApprovalAttempt>()
@@ -132,6 +137,52 @@ export class LiveConversationActions {
     const retry = this.#startRetries.get(conversation)
     const actionId =
       retry?.identity === text ? retry.actionId : this.#createActionId()
+    return this.#beginStart(conversation, text, actionId, 'submit')
+  }
+
+  /**
+   * Starts a deliberate new logical Turn. Its first action identity is fresh
+   * relative to the historical failed Turn, then remains stable across an
+   * ambiguous response retry of this same explicit request.
+   */
+  startNewTurn(
+    conversationId: string,
+    text: string,
+  ): Promise<StartTurnResponse> {
+    const conversation = ConversationIdSchema.parse(conversationId)
+    const current = this.#starts.get(conversation)
+    if (current !== undefined) {
+      return Promise.reject(new ConversationMutationBusyError('Start Turn'))
+    }
+    const retry = this.#startRetries.get(conversation)
+    if (retry?.mode === 'explicit-new-turn') {
+      if (retry.identity !== text) {
+        return Promise.reject(
+          new ConversationMutationBusyError('Start Turn reconciliation'),
+        )
+      }
+      return this.#beginStart(
+        conversation,
+        text,
+        retry.actionId,
+        'explicit-new-turn',
+      )
+    }
+    this.#startRetries.delete(conversation)
+    return this.#beginStart(
+      conversation,
+      text,
+      this.#createActionId(),
+      'explicit-new-turn',
+    )
+  }
+
+  #beginStart(
+    conversation: ConversationId,
+    text: string,
+    actionId: ActionId,
+    mode: StartRetryIntent['mode'],
+  ): Promise<StartTurnResponse> {
     const epochGeneration = this.#epochGeneration
     const promise = rejectOnEpochChange(
       this.#client.startTurn(conversation, {
@@ -151,7 +202,7 @@ export class LiveConversationActions {
           this.#rememberAmbiguousRetry(
             this.#startRetries,
             conversation,
-            { identity: text, actionId },
+            { identity: text, actionId, mode },
             error,
           )
         }
@@ -256,10 +307,10 @@ export class LiveConversationActions {
     return promise
   }
 
-  #rememberAmbiguousRetry<TIdentity>(
-    retries: Map<string, RetryIntent<TIdentity>>,
+  #rememberAmbiguousRetry<TIdentity, TRetry extends RetryIntent<TIdentity>>(
+    retries: Map<string, TRetry>,
     key: string,
-    retry: RetryIntent<TIdentity>,
+    retry: TRetry,
     error: unknown,
   ): void {
     if (error instanceof CodeTetherResponseError) retries.delete(key)
@@ -311,6 +362,13 @@ export function mutationErrorMessage(error: unknown, fallback: string): string {
   }
   if (!(error instanceof CodeTetherResponseError)) {
     return 'CodeTether 暂时无法连接，请重试。'
+  }
+
+  if (error.envelope.failure !== undefined) {
+    const presentation = canonicalFailureActionPresentation(
+      error.envelope.failure,
+    )
+    return `${presentation.cause} ${presentation.guidance}`
   }
 
   switch (error.envelope.code) {

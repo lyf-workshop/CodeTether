@@ -1,3 +1,5 @@
+import type { CanonicalFailureReason } from '@codetether/agent-core'
+
 export const CLAUDE_CODE_PROVIDER = 'claude-code' as const
 export const CLAUDE_CODE_TESTED_VERSION = '2.1.251' as const
 export const CLAUDE_CODE_TESTED_VERSIONS = ['2.1.250', '2.1.251'] as const
@@ -102,4 +104,5 @@ export interface ClaudeCodeFailure {
   readonly turnId: string
   readonly code: string
   readonly message: string
+  readonly failureReason: CanonicalFailureReason
 }

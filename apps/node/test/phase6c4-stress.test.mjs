@@ -375,15 +375,24 @@ test('Claude duplicate and delayed terminal events fail closed without a second 
     duplicateEvents.some((event) => event.type === 'turn.completed'),
     false,
   )
-  assert.deepEqual(
-    duplicateEvents.filter((event) => event.type === 'turn.failed'),
-    [
-      {
-        type: 'turn.failed',
-        code: 'remote_execution_lost',
-        message: 'Remote Claude execution was lost',
-      },
-    ],
+  const duplicateFailures = duplicateEvents.filter(
+    (event) => event.type === 'turn.failed',
+  )
+  assert.equal(duplicateFailures.length, 1)
+  assert.equal(duplicateFailures[0].code, 'remote_execution_lost')
+  assert.equal(duplicateFailures[0].message, 'Remote Claude execution was lost')
+  assert.deepEqual(duplicateFailures[0].failure, {
+    category: 'runtime',
+    reason: 'execution_lost',
+    retryability: 'not_retryable',
+    userAction: 'view_details',
+    source: 'runtime',
+    occurredAt: duplicateFailures[0].failure.occurredAt,
+    technicalCode: 'execution_lost',
+  })
+  assert.equal(
+    Number.isNaN(Date.parse(duplicateFailures[0].failure.occurredAt)),
+    false,
   )
   await waitFor(() => pool.activeCount === 0, 'duplicate cleanup')
 

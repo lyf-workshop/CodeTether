@@ -1,6 +1,7 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 
 import {
+  CodexExecutableNotFoundError,
   CodexProcessError,
   CodexProcessExitError,
   CodexProtocolError,
@@ -74,22 +75,20 @@ export class JsonRpcTransport {
     })
     process.stdin.on('error', (error) => {
       if (this.#closing) return
+      const ownershipDeliveryPending = [...this.#pending.values()].some(
+        ({ method }) => isOwnershipCreatingMethod(method),
+      )
       this.#fail(
-        new CodexProcessError(
-          `Unable to write protocol message: ${error.message}`,
-          { cause: error },
-        ),
+        new CodexProcessError('Unable to write protocol message', {
+          cause: error,
+          failureReason: ownershipDeliveryPending
+            ? 'execution_ownership_uncertain'
+            : 'provider_start_failed',
+        }),
       )
     })
     process.once('error', (error) => {
-      this.#fail(
-        new CodexProcessError(
-          `Unable to run Codex App Server: ${error.message}`,
-          {
-            cause: error,
-          },
-        ),
-      )
+      this.#fail(codexSpawnError(error))
     })
     process.once('exit', (code, signal) => {
       if (this.#closing) {
@@ -300,9 +299,12 @@ export class JsonRpcTransport {
         if (error === null || error === undefined) resolve()
         else
           reject(
-            new CodexProcessError(
-              `Unable to write protocol message: ${error.message}`,
-            ),
+            new CodexProcessError('Unable to write protocol message', {
+              cause: error,
+              failureReason: isOwnershipCreatingRequest(message)
+                ? 'execution_ownership_uncertain'
+                : 'provider_start_failed',
+            }),
           )
       })
     })
@@ -326,10 +328,55 @@ export class JsonRpcTransport {
   #rejectPending(error: Error): void {
     for (const pending of this.#pending.values()) {
       clearTimeout(pending.timer)
-      pending.reject(error)
+      pending.reject(ownershipSafePendingError(error, pending.method))
     }
     this.#pending.clear()
   }
+}
+
+function isOwnershipCreatingRequest(
+  message: JsonRpcIncoming | JsonRpcRequest | JsonRpcNotification,
+): boolean {
+  return (
+    'method' in message &&
+    (message.method === 'thread/start' ||
+      message.method === 'thread/resume' ||
+      message.method === 'turn/start')
+  )
+}
+
+function isOwnershipCreatingMethod(method: string): boolean {
+  return (
+    method === 'thread/start' ||
+    method === 'thread/resume' ||
+    method === 'turn/start'
+  )
+}
+
+function ownershipSafePendingError(error: Error, method: string): Error {
+  if (
+    isOwnershipCreatingMethod(method) &&
+    error instanceof CodexProcessError &&
+    error.failureReason === 'provider_start_failed'
+  ) {
+    return new CodexProcessError(
+      'Codex ownership request failed after protocol delivery began',
+      { cause: error, failureReason: 'execution_ownership_uncertain' },
+    )
+  }
+  return error
+}
+
+function codexSpawnError(error: NodeJS.ErrnoException): Error {
+  if (error.code === 'ENOENT') {
+    return new CodexExecutableNotFoundError('codex', { cause: error })
+  }
+  return new CodexProcessError('Unable to run Codex App Server.', {
+    cause: error,
+    ...(error.code === 'EACCES' || error.code === 'EPERM'
+      ? { failureReason: 'provider_misconfigured' }
+      : {}),
+  })
 }
 
 function toError(value: unknown): Error {

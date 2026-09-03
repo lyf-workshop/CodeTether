@@ -7,6 +7,8 @@ import type {
   TurnId,
 } from '@codetether/protocol'
 
+import { executionFailurePresentation } from '../../failures/failure-presentation.js'
+
 const PROJECT_NAME_GRAPHEME_LIMIT = 24
 const CONVERSATION_TITLE_GRAPHEME_LIMIT = 36
 const PROJECT_NAME_CODE_POINT_LIMIT = 64
@@ -64,17 +66,20 @@ export function createNotificationIntent(
   attention: AttentionItem,
   metadata: AttentionNotificationMetadata,
 ): NotificationIntent {
-  const copy = notificationCopy(attention.type)
+  const copy = notificationCopy(attention)
   const projectName = truncateNotificationLabel(
     metadata.projectName,
     PROJECT_NAME_GRAPHEME_LIMIT,
     PROJECT_NAME_CODE_POINT_LIMIT,
   )
-  const conversationTitle = truncateNotificationLabel(
-    metadata.conversationTitle,
-    CONVERSATION_TITLE_GRAPHEME_LIMIT,
-    CONVERSATION_TITLE_CODE_POINT_LIMIT,
-  )
+  const conversationTitle =
+    attention.type === 'failed'
+      ? undefined
+      : truncateNotificationLabel(
+          metadata.conversationTitle,
+          CONVERSATION_TITLE_GRAPHEME_LIMIT,
+          CONVERSATION_TITLE_CODE_POINT_LIMIT,
+        )
 
   return {
     attentionId: attention.attentionId,
@@ -83,7 +88,13 @@ export function createNotificationIntent(
     conversationId: attention.conversationId,
     ...(attention.turnId === undefined ? {} : { turnId: attention.turnId }),
     title: copy.title,
-    body: `${projectName} · ${conversationTitle}\n${copy.detail}`,
+    // A generated Conversation title can be derived from the first Prompt.
+    // Failure notifications can appear on a lock screen, so they intentionally
+    // omit that title while approval/completion retain their frozen copy.
+    body:
+      conversationTitle === undefined
+        ? `${projectName}\n${copy.detail}`
+        : `${projectName} · ${conversationTitle}\n${copy.detail}`,
   }
 }
 
@@ -168,11 +179,11 @@ export function truncateNotificationLabel(
   return `${kept.join('')}…`
 }
 
-function notificationCopy(type: AttentionType): {
+function notificationCopy(attention: AttentionItem): {
   readonly detail: string
   readonly title: string
 } {
-  switch (type) {
+  switch (attention.type) {
     case 'approval':
       return {
         title: 'CodeTether · 需要批准',
@@ -183,11 +194,13 @@ function notificationCopy(type: AttentionType): {
         title: 'CodeTether · 工作已完成',
         detail: '智能体已完成本轮工作',
       }
-    case 'failed':
+    case 'failed': {
+      const failure = executionFailurePresentation(attention.payload.error)
       return {
-        title: 'CodeTether · 执行失败',
-        detail: '需要你查看执行结果',
+        title: `CodeTether · ${failure.title}`,
+        detail: failure.cause,
       }
+    }
   }
 }
 

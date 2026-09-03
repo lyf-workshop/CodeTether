@@ -54,15 +54,59 @@ test('maps only durable Attention type and safe product metadata to notification
     attention('failed', {
       conversationTitle: 'Host-owned title',
       error: {
-        code: 'provider_failed',
+        code: 'provider_error',
         message: 'private provider JSON-RPC diagnostics',
+        failure: {
+          category: 'quota',
+          reason: 'usage_limit_reached',
+          retryability: 'retry_later',
+          userAction: 'wait',
+          source: 'provider',
+          occurredAt: timestamp,
+          technicalCode: 'usage_limit_reached',
+        },
       },
     }),
     metadata,
   )
-  assert.equal(failed.title, 'CodeTether · 执行失败')
-  assert.match(failed.body, /需要你查看执行结果$/u)
+  assert.match(failed.title, /CodeTether/u)
+  assert.doesNotMatch(failed.title, /执行失败$/u)
+  assert.match(failed.body, /配额/u)
   assert.doesNotMatch(failed.body, /provider|JSON-RPC/u)
+  assert.doesNotMatch(failed.body, /修复 Windows 登录/u)
+})
+
+test('failure notifications never expose a Prompt-derived Conversation title', () => {
+  const hostileTitle =
+    'Prompt secret Authorization: Bearer owner-token <script>alert(1)</script>'
+  const failed = createNotificationIntent(
+    attention('failed', {
+      conversationTitle: hostileTitle,
+      error: {
+        code: 'provider_error',
+        message: 'private diagnostic',
+        failure: {
+          category: 'provider',
+          reason: 'provider_crashed',
+          retryability: 'retry_now',
+          userAction: 'retry',
+          source: 'provider',
+          occurredAt: timestamp,
+          technicalCode: 'provider_crashed',
+        },
+      },
+    }),
+    {
+      projectName: 'Safe project',
+      conversationTitle: hostileTitle,
+    },
+  )
+
+  assert.match(failed.body, /^Safe project\n/u)
+  assert.doesNotMatch(
+    `${failed.title}\n${failed.body}`,
+    /Prompt|Authorization|Bearer|owner-token|script|alert/u,
+  )
 })
 
 test('clamps long labels by grapheme without splitting Unicode emoji', () => {

@@ -8,6 +8,7 @@ import {
 } from 'react'
 import { CheckCircle2, ChevronDown } from 'lucide-react'
 
+import type { MachineId, ProjectId } from '@codetether/protocol'
 import {
   DiffCard,
   Button,
@@ -24,7 +25,11 @@ import type {
   ConversationRunExecutionViewModel,
   ConversationTimelineViewModel,
 } from './conversation-view-model'
-import { isNearTimelineBottom } from './conversation-controls'
+import {
+  isNearTimelineBottom,
+  type FailedTurnRetryController,
+} from './conversation-controls'
+import { ConversationFailureCard } from './conversation-failure-card'
 import {
   createTimelineAnchorRequestKey,
   decideTimelineScroll,
@@ -42,7 +47,10 @@ interface ConversationTimelineProps {
   timeline: ConversationTimelineViewModel
   changes: ConversationChangesViewModel
   pendingApprovals: readonly ConversationApprovalViewModel[]
+  machineId?: MachineId
+  projectId?: ProjectId
   projectRootPath?: string
+  retryController?: FailedTurnRetryController
   targetChangeId?: string
   targetChangeRequestKey?: number
   targetTurnId?: string
@@ -283,7 +291,10 @@ export function ConversationTimeline({
   timeline,
   changes,
   pendingApprovals,
+  machineId,
+  projectId,
   projectRootPath,
+  retryController,
   targetChangeId,
   targetChangeRequestKey,
   targetTurnId,
@@ -501,7 +512,9 @@ export function ConversationTimeline({
                     block.message ??
                     emptyRunMessage(block.id, block.time, block.status)
                   const runContent =
-                    block.executions.length > 0 || block.outcomeText ? (
+                    block.executions.length > 0 ||
+                    block.outcomeText ||
+                    block.failure ? (
                       <>
                         {block.executions.length > 0 ? (
                           <AgentRunExecutions
@@ -521,6 +534,15 @@ export function ConversationTimeline({
                             {block.outcomeText}
                           </p>
                         ) : null}
+                        {block.failure === undefined ? null : (
+                          <ConversationFailureCard
+                            failure={block.failure}
+                            machineId={machineId}
+                            projectId={projectId}
+                            retryController={retryController}
+                            turnId={block.turnId}
+                          />
+                        )}
                       </>
                     ) : undefined
 

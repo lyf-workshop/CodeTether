@@ -193,14 +193,100 @@ test('startup ownership rejects ENOENT before any canonical started event', asyn
   })
   await assert.rejects(
     handle.ownershipEstablished,
-    (error) => error.code === 'provider_start_failed',
+    (error) =>
+      error.code === 'provider_start_failed' &&
+      error.failureReason === 'provider_start_failed',
   )
   await assert.rejects(
     handle.completion,
-    (error) => error.code === 'provider_start_failed',
+    (error) =>
+      error.code === 'provider_start_failed' &&
+      error.failureReason === 'provider_start_failed',
   )
   assert.equal(
     events.some((event) => event.type === 'turn.started'),
+    false,
+  )
+})
+
+test('post-Prompt ownership acknowledgement loss fails closed without safe replay', async () => {
+  const events = []
+  const handle = startClaudeCodeTurnProcess({
+    launcher: fixtureLauncher('--fixture-scenario=hang'),
+    sessionId,
+    turnId: 'turn_uncertain_ownership',
+    cwd: process.cwd(),
+    prompt: 'bounded input',
+    resume: false,
+    processFactory: (specification) => {
+      const child = spawn(specification.executable, specification.arguments, {
+        cwd: specification.cwd,
+        env: specification.environment,
+        shell: false,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      })
+      const ownershipEstablished = new Promise((_, reject) => {
+        setTimeout(
+          () => reject(new Error('PRIVATE ownership acknowledgement detail')),
+          25,
+        )
+      })
+      return {
+        child,
+        ownershipEstablished,
+        async close(graceMs) {
+          await closeOwnedClaudeProcess(child, graceMs)
+        },
+      }
+    },
+    onEvent: (event) => events.push(event),
+  })
+
+  await assert.rejects(
+    handle.ownershipEstablished,
+    (error) =>
+      error.code === 'provider_start_failed' &&
+      error.failureReason === 'execution_ownership_uncertain' &&
+      !error.message.includes('PRIVATE'),
+  )
+  await assert.rejects(
+    handle.completion,
+    (error) => error.failureReason === 'execution_ownership_uncertain',
+  )
+  assert.equal(
+    events.at(-1)?.error?.failure?.reason,
+    'execution_ownership_uncertain',
+  )
+})
+
+test('post-Prompt event-consumer failure is ownership-uncertain, never replay-safe startup failure', async () => {
+  const events = []
+  let rejected = false
+  const handle = startClaudeCodeTurnProcess({
+    launcher: fixtureLauncher(),
+    sessionId,
+    turnId: 'turn_consumer_failure_after_delivery',
+    cwd: process.cwd(),
+    prompt: 'bounded input',
+    resume: false,
+    onEvent: async (event) => {
+      events.push(event)
+      if (!rejected && event.type === 'message.delta') {
+        rejected = true
+        throw new Error('PRIVATE downstream callback detail')
+      }
+    },
+  })
+
+  await handle.ownershipEstablished
+  await assert.rejects(
+    handle.completion,
+    (error) =>
+      error.failureReason === 'execution_ownership_uncertain' &&
+      !error.message.includes('PRIVATE'),
+  )
+  assert.equal(
+    events.some((event) => event.type === 'turn.completed'),
     false,
   )
 })
@@ -225,13 +311,16 @@ test('post-ownership Provider exit is unavailable rather than startup failure', 
   await handle.ownershipEstablished
   await assert.rejects(
     handle.completion,
-    (error) => error.code === 'provider_unavailable',
+    (error) =>
+      error.code === 'provider_unavailable' &&
+      error.failureReason === 'provider_crashed',
   )
   assert.equal(
     events.some((event) => event.type === 'message.delta'),
     true,
   )
   assert.equal(events.at(-1).type, 'turn.failed')
+  assert.equal(events.at(-1).error.failure.reason, 'provider_crashed')
 })
 
 test('slow async listeners apply bounded stdout pause and resume', async (t) => {
@@ -336,10 +425,13 @@ test('suppresses expired OAuth assistant diagnostics from canonical events', asy
       turnId: 'turn_auth_error',
       prompt: 'bounded input',
     }),
-    (error) => error.code === 'provider_unavailable',
+    (error) =>
+      error.code === 'provider_unavailable' &&
+      error.failureReason === 'authentication_invalid',
   )
 
   assert.equal(failures[0].code, 'provider_unavailable')
+  assert.equal(failures[0].failureReason, 'authentication_invalid')
   assert.doesNotMatch(failures[0].message, /private|diagnostic|credential/)
   assert.deepEqual(
     events.map((event) => event.type),
@@ -349,6 +441,7 @@ test('suppresses expired OAuth assistant diagnostics from canonical events', asy
     JSON.stringify(events),
     /OAuth|token expired|private provider diagnostic/,
   )
+  assert.equal(events.at(-1).error.failure.reason, 'authentication_invalid')
   await runtime.close()
 })
 
@@ -377,12 +470,16 @@ test('reports malformed provider output as a safe start failure', async (t) => {
       turnId: 'turn_malformed',
       prompt: 'bounded input',
     }),
-    (error) => error.code === 'provider_start_failed',
+    (error) =>
+      error.code === 'provider_start_failed' &&
+      error.failureReason === 'provider_protocol_error',
   )
 
   assert.equal(failures[0].code, 'provider_start_failed')
+  assert.equal(failures[0].failureReason, 'provider_protocol_error')
   assert.doesNotMatch(failures[0].message, /private|diagnostic|credential/)
   assert.equal(events.at(-1).type, 'turn.failed')
+  assert.equal(events.at(-1).error.failure.reason, 'provider_protocol_error')
   await runtime.close()
 })
 

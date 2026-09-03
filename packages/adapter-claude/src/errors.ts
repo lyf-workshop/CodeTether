@@ -1,3 +1,5 @@
+import type { CanonicalFailureReason } from '@codetether/agent-core'
+
 export type ClaudeCodeErrorCode =
   | 'provider_not_installed'
   | 'provider_version_unsupported'
@@ -5,15 +7,22 @@ export type ClaudeCodeErrorCode =
   | 'provider_session_lost'
   | 'provider_unavailable'
 
+export interface ClaudeCodeErrorOptions extends ErrorOptions {
+  readonly failureReason?: CanonicalFailureReason
+}
+
 export class ClaudeCodeError extends Error {
   override readonly name: string = 'ClaudeCodeError'
+  readonly failureReason: CanonicalFailureReason
 
   constructor(
     readonly code: ClaudeCodeErrorCode,
     message: string,
-    options?: ErrorOptions,
+    options?: ClaudeCodeErrorOptions,
   ) {
-    super(message, options)
+    const { failureReason = 'provider_error', ...errorOptions } = options ?? {}
+    super(message, errorOptions)
+    this.failureReason = failureReason
   }
 }
 
@@ -24,7 +33,7 @@ export class ClaudeCodeNotInstalledError extends ClaudeCodeError {
     super(
       'provider_not_installed',
       'Claude Code is not installed or could not be found.',
-      options,
+      { ...options, failureReason: 'provider_not_installed' },
     )
   }
 }
@@ -36,7 +45,7 @@ export class ClaudeCodeMisconfiguredError extends ClaudeCodeError {
     super(
       'provider_unavailable',
       'Claude Code is installed but is not configured for this environment.',
-      options,
+      { ...options, failureReason: 'provider_misconfigured' },
     )
   }
 }
@@ -51,7 +60,7 @@ export class ClaudeCodeVersionUnsupportedError extends ClaudeCodeError {
     super(
       'provider_version_unsupported',
       `Claude Code ${version} has not been validated with this CodeTether build.`,
-      options,
+      { ...options, failureReason: 'provider_unsupported_version' },
     )
   }
 }
@@ -59,11 +68,22 @@ export class ClaudeCodeVersionUnsupportedError extends ClaudeCodeError {
 export class ClaudeCodeStartError extends ClaudeCodeError {
   override readonly name: string = 'ClaudeCodeStartError'
 
+  constructor(options?: ClaudeCodeErrorOptions) {
+    super('provider_start_failed', 'Claude Code could not start this turn.', {
+      failureReason: 'provider_start_failed',
+      ...options,
+    })
+  }
+}
+
+export class ClaudeCodeProcessExitError extends ClaudeCodeError {
+  override readonly name: string = 'ClaudeCodeProcessExitError'
+
   constructor(options?: ErrorOptions) {
     super(
-      'provider_start_failed',
-      'Claude Code could not start this turn.',
-      options,
+      'provider_unavailable',
+      'Claude Code exited before completing this turn.',
+      { ...options, failureReason: 'provider_crashed' },
     )
   }
 }
@@ -76,7 +96,7 @@ export class ClaudeCodeOwnedProcessCleanupError extends ClaudeCodeError {
     super(
       'provider_start_failed',
       'Claude Code owned process cleanup could not be verified.',
-      options,
+      { ...options, failureReason: 'execution_ownership_uncertain' },
     )
   }
 }
@@ -88,7 +108,7 @@ export class ClaudeCodeSessionLostError extends ClaudeCodeError {
     super(
       'provider_session_lost',
       'The saved Claude Code session is no longer available.',
-      options,
+      { ...options, failureReason: 'provider_session_lost' },
     )
   }
 }
@@ -96,11 +116,11 @@ export class ClaudeCodeSessionLostError extends ClaudeCodeError {
 export class ClaudeCodeProtocolError extends ClaudeCodeError {
   override readonly name: string = 'ClaudeCodeProtocolError'
 
-  constructor(options?: ErrorOptions) {
+  constructor(options?: ClaudeCodeErrorOptions) {
     super(
       'provider_start_failed',
       'Claude Code returned an unsupported response.',
-      options,
+      { failureReason: 'provider_protocol_error', ...options },
     )
   }
 }
@@ -121,7 +141,7 @@ export class ClaudeJsonLineTooLongError extends ClaudeCodeProtocolError {
     readonly maxLineBytes: number,
     readonly observedLineBytes: number,
   ) {
-    super()
+    super({ failureReason: 'protocol_limit_exceeded' })
   }
 }
 

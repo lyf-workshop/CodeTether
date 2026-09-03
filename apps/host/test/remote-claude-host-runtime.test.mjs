@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
+import { canonicalFailure } from '@codetether/agent-core'
+
 import { RemoteClaudeHostRuntime } from '../dist/api/remote-claude-host-runtime.js'
 
 const machineId = 'machine_remote_claude_runtime01'
@@ -261,6 +263,51 @@ test('remote Claude runtime rejects invalid effort and fails closed on an unsafe
   assert.equal(events[0].error.code, 'provider_unavailable')
   assert.equal(runtime.hasConversationSession(created.providerThreadId), false)
   assert.equal(session.closeCalls, 1)
+  await runtime.close()
+})
+
+test('remote Claude runtime preserves canonical failure metadata from the Node', async () => {
+  const occurredAt = '2026-09-02T12:00:00.000Z'
+  const session = fakeSession(nativeSessionId, {
+    effort: 'low',
+    events: [
+      {
+        type: 'turn.failed',
+        code: 'provider_failed',
+        message: 'Node-owned safe failure',
+        failure: canonicalFailure('usage_limit_reached', occurredAt),
+        sequence: 1,
+      },
+    ],
+  })
+  const runtime = new RemoteClaudeHostRuntime({
+    machineId,
+    opener: { open: async () => session },
+  })
+  const events = []
+  runtime.subscribeEvents((event) => events.push(event))
+  const created = await runtime.startConversation({
+    cwd: '/srv/project',
+    reasoning: 'low',
+    machineId,
+    conversationId,
+    projectId,
+  })
+  await runtime.startTurn({
+    providerThreadId: created.providerThreadId,
+    cwd: '/srv/project',
+    input: 'one explicit prompt',
+    reasoning: 'low',
+    machineId,
+    conversationId,
+    projectId,
+    actionId: 'act_remote_claude_canonical01',
+    turnId: 'turn_remote_claude_canonical01',
+  })
+  await waitFor(() => events.some((event) => event.type === 'turn.failed'))
+  assert.equal(events[0].error.failure.reason, 'usage_limit_reached')
+  assert.equal(events[0].error.failure.occurredAt, occurredAt)
+  assert.equal(events[0].error.message, 'Remote Claude Code Turn failed')
   await runtime.close()
 })
 

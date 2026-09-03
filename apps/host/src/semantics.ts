@@ -5,7 +5,6 @@ import { fileURLToPath } from 'node:url'
 
 import {
   inspectCodexInstallation,
-  type ApprovalPrompt,
   type ApprovalResolution,
 } from '@codetether/adapter-codex'
 
@@ -18,8 +17,6 @@ import {
 
 const repositoryRoot = fileURLToPath(new URL('../../../', import.meta.url))
 const executable = process.env.CODETETHER_CODEX_PATH ?? 'codex'
-const includeRawPayloads = process.env.CODETETHER_CODEX_RAW === '1'
-const printEvents = process.env.CODETETHER_CODEX_EVENTS !== '0'
 
 async function run(): Promise<void> {
   const scenario = parseScenario(process.argv.slice(2))
@@ -36,13 +33,8 @@ async function run(): Promise<void> {
     `[codex:semantics] ${installation.version} scenario=${scenario}\n`,
   )
 
-  const approvalHandler = async (
-    prompt: ApprovalPrompt,
-  ): Promise<'allow' | 'deny'> => {
-    process.stderr.write(
-      `[codex:approval] method=${prompt.request.method} requestId=${String(prompt.request.id)} thread=${prompt.event.threadId} turn=${prompt.event.turnId} item=${prompt.event.itemId ?? 'none'}\n`,
-    )
-    process.stderr.write(`[codex:approval] ${prompt.event.summary}\n`)
+  const approvalHandler = async (): Promise<'allow' | 'deny'> => {
+    process.stderr.write('[codex:approval] request received\n')
     const answer = await readline.question('Allow once? [y/N] ')
     return answer.trim().toLowerCase() === 'y' ? 'allow' : 'deny'
   }
@@ -79,8 +71,6 @@ async function run(): Promise<void> {
     const runtime = await DevelopmentCodexRuntime.launch({
       executable,
       version,
-      includeRawPayloads,
-      printEvents,
       approvalHandler,
       onApprovalResolved,
     })
@@ -113,8 +103,8 @@ async function run(): Promise<void> {
           semantics: {
             scenario,
             installedCodex: installation.version,
-            approvals: resolutions,
-            result,
+            approvals: summarizeApprovals(resolutions),
+            result: summarizeScenarioResult(scenario, result),
           },
         },
         null,
@@ -168,8 +158,142 @@ function readString(
   return typeof value[key] === 'string' ? value[key] : undefined
 }
 
+function summarizeApprovals(
+  resolutions: readonly SemanticsApprovalResolution[],
+): Readonly<Record<string, number>> {
+  let allow = 0
+  let deny = 0
+  for (const resolution of resolutions) {
+    if (resolution.decision === 'allow') allow += 1
+    else deny += 1
+  }
+  return {
+    count: resolutions.length,
+    allow,
+    deny,
+  }
+}
+
+function summarizeScenarioResult(
+  scenario: SemanticsScenario,
+  value: unknown,
+): Readonly<Record<string, unknown>> {
+  const result = asRecord(value)
+  const runtime = summarizeRuntime(result.runtime)
+  switch (scenario) {
+    case 'approval':
+      return {
+        terminalStatus: readTerminalStatus(result.terminal),
+        fileChanged: readBoolean(result, 'fileChanged'),
+        fixtureIntact: readBoolean(result, 'fixtureIntact'),
+        runtime,
+      }
+    case 'multiturn':
+      return {
+        firstTurnStatus: readTerminalStatus(result.turnOne),
+        secondTurnStatus: readTerminalStatus(result.turnTwo),
+        contextRetained: readBoolean(result, 'contextRetained'),
+        runtime,
+      }
+    case 'multithread':
+      return {
+        firstTurnStatus: readTerminalStatus(result.threadA),
+        secondTurnStatus: readTerminalStatus(result.threadB),
+        isolated: readBoolean(result, 'isolated'),
+        runtime,
+      }
+    case 'resume':
+      return {
+        seedTurnStatus: readTerminalStatus(result.seedTurn),
+        resumedTurnStatus: readTerminalStatus(result.resumedTurn),
+        sameProviderThread: readBoolean(result, 'sameProviderThread'),
+        contextRetained: readBoolean(result, 'contextRetained'),
+        firstRuntime: summarizeRuntime(result.firstRuntime),
+        secondRuntime: summarizeRuntime(result.secondRuntime),
+      }
+    case 'interrupt':
+      return {
+        interruptedTurnStatus: readTerminalStatus(result.interruptedTurn),
+        followUpTurnStatus: readTerminalStatus(result.followUpTurn),
+        threadContinued: readBoolean(result, 'threadContinued'),
+        runtime,
+      }
+    case 'failure':
+      return {
+        terminalStatus: readTerminalStatus(result.terminal),
+        commandFailureObserved: readBoolean(result, 'commandFailureObserved'),
+        wholeTurnFailed: readBoolean(result, 'wholeTurnFailed'),
+        runtime,
+      }
+  }
+}
+
+function summarizeRuntime(value: unknown): Readonly<Record<string, unknown>> {
+  const runtime = asRecord(value)
+  const eventCounts = Object.fromEntries(
+    Object.entries(asRecord(runtime.eventCounts)).filter(
+      ([name, count]) =>
+        /^[a-z]+(?:\.[a-z]+)*$/u.test(name) &&
+        typeof count === 'number' &&
+        Number.isSafeInteger(count) &&
+        count >= 0,
+    ),
+  )
+  const aggregation = Object.fromEntries(
+    Object.entries(asRecord(runtime.aggregation)).filter(
+      ([name, count]) =>
+        /^[A-Za-z][A-Za-z0-9]{0,63}$/u.test(name) &&
+        typeof count === 'number' &&
+        Number.isSafeInteger(count) &&
+        count >= 0,
+    ),
+  )
+  return {
+    eventCounts,
+    failedToolCount: readNonNegativeInteger(runtime, 'failedToolCount'),
+    deltaTextIntegrity: readBoolean(runtime, 'deltaTextIntegrity'),
+    aggregation,
+  }
+}
+
+function readTerminalStatus(value: unknown): string | null {
+  const status = asRecord(value).status
+  return typeof status === 'string' && /^[a-z_]{1,32}$/u.test(status)
+    ? status
+    : null
+}
+
+function readBoolean(
+  value: Record<string, unknown>,
+  key: string,
+): boolean | null {
+  return typeof value[key] === 'boolean' ? value[key] : null
+}
+
+function readNonNegativeInteger(
+  value: Record<string, unknown>,
+  key: string,
+): number | null {
+  const candidate = value[key]
+  return typeof candidate === 'number' &&
+    Number.isSafeInteger(candidate) &&
+    candidate >= 0
+    ? candidate
+    : null
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return isRecord(value) ? value : {}
+}
+
+function safeErrorName(value: unknown): string {
+  return value instanceof Error &&
+    /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/u.test(value.name)
+    ? value.name
+    : 'Error'
+}
+
 void run().catch((error: unknown) => {
-  const message = error instanceof Error ? error.message : String(error)
-  process.stderr.write(`[codex:semantics] failed: ${message}\n`)
+  process.stderr.write(`[codex:semantics] failed: ${safeErrorName(error)}\n`)
   process.exitCode = 1
 })

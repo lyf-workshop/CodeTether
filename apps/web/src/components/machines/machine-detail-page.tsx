@@ -37,6 +37,7 @@ import {
 import { machineErrorMessage } from '../../runtime/host/machine-actions'
 import { machineDetailQueryOptions } from '../../runtime/host/machine-query'
 import {
+  providerExecutionHealthPresentation,
   providerPresentationsForMachine,
   type ProviderPresentation,
 } from '../../provider/provider-presentation'
@@ -207,29 +208,76 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
             智能体
           </h2>
           <p className="mt-0.5 text-sm text-text-secondary">
-            此机器真实检测到的可用能力。
+            安装检测与最近的执行健康结果彼此独立。
           </p>
           <Separator className="my-4" />
           <ul className="space-y-3">
-            {providerPresentations.map((provider) => (
-              <li
-                key={provider.provider}
-                className="flex min-w-0 items-center gap-2"
-              >
-                <AgentBadge agent={provider.agent} variant="compact" />
-                <span className="min-w-0 flex-1 truncate text-sm font-medium text-text-primary">
-                  {provider.displayName}
-                </span>
-                <span
-                  className={cn(
-                    'shrink-0 text-xs',
-                    provider.available ? 'text-success' : 'text-text-muted',
-                  )}
+            {providerPresentations.map((provider) => {
+              const health = providerExecutionHealthPresentation(
+                provider.executionHealth,
+                provider.displayName,
+              )
+              const installationLabel = provider.available
+                ? '已安装'
+                : provider.availabilityLabel
+
+              return (
+                <li
+                  key={provider.provider}
+                  aria-label={`${provider.displayName}：安装状态 ${installationLabel}；执行状态 ${health.stateLabel}，${health.freshnessLabel}`}
+                  className="flex min-w-0 items-start gap-3 rounded-md border border-border bg-surface-muted/45 px-3 py-3"
                 >
-                  {provider.availabilityLabel}
-                </span>
-              </li>
-            ))}
+                  <AgentBadge agent={provider.agent} variant="compact" />
+                  <div className="min-w-0 flex-1">
+                    <span className="block min-w-0 truncate text-sm font-medium text-text-primary">
+                      {provider.displayName}
+                    </span>
+                    {provider.version === undefined ? null : (
+                      <p
+                        title={provider.version}
+                        className="mt-1 max-w-full truncate font-mono text-xs text-text-muted"
+                      >
+                        {provider.version}
+                      </p>
+                    )}
+                    <dl className="mt-2 grid min-w-0 gap-1.5 text-xs">
+                      <div className="flex min-w-0 items-baseline justify-between gap-3">
+                        <dt className="shrink-0 text-text-muted">安装状态</dt>
+                        <dd
+                          className={cn(
+                            'min-w-0 text-right font-medium',
+                            provider.available
+                              ? 'text-success'
+                              : 'text-text-secondary',
+                          )}
+                        >
+                          {installationLabel}
+                        </dd>
+                      </div>
+                      <div className="flex min-w-0 items-baseline justify-between gap-3">
+                        <dt className="shrink-0 text-text-muted">执行状态</dt>
+                        <dd
+                          className={cn(
+                            'min-w-0 text-right font-medium',
+                            providerExecutionHealthTone(health.state),
+                          )}
+                        >
+                          {health.stateLabel} · {health.freshnessLabel}
+                        </dd>
+                      </div>
+                    </dl>
+                    <p className="mt-2 break-words text-xs leading-relaxed text-text-muted">
+                      {health.description}
+                    </p>
+                    {health.observedAt === undefined ? null : (
+                      <p className="mt-1 text-xs text-text-muted">
+                        验证时间 · {formatMachineLastSeen(health.observedAt)}
+                      </p>
+                    )}
+                  </div>
+                </li>
+              )
+            })}
           </ul>
         </section>
       </div>
@@ -637,50 +685,76 @@ function RemoteMachineProvidersSection({
               : `上次检测${observedAt === undefined ? '' : ` · ${observedAt}`} · 当前未重新验证`}
           </p>
           <ul className="grid min-w-0 gap-3 md:grid-cols-2">
-            {presentations.map((provider) => (
-              <li
-                key={provider.provider}
-                aria-label={`${provider.displayName}：${
-                  provider.available ? '已安装' : provider.availabilityLabel
-                }`}
-                className="flex min-w-0 items-start gap-3 rounded-md border border-border bg-surface-muted/45 px-3 py-3"
-              >
-                <AgentBadge agent={provider.agent} variant="compact" />
-                <div className="min-w-0 flex-1">
-                  <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-                    <span className="min-w-0 truncate text-sm font-medium text-text-primary">
+            {presentations.map((provider) => {
+              const health = providerExecutionHealthPresentation(
+                provider.executionHealth,
+                provider.displayName,
+              )
+              const installationLabel = provider.available
+                ? '已安装'
+                : provider.availabilityLabel
+              return (
+                <li
+                  key={provider.provider}
+                  aria-label={`${provider.displayName}：安装状态 ${installationLabel}；执行状态 ${health.stateLabel}，${health.freshnessLabel}`}
+                  className="flex min-w-0 items-start gap-3 rounded-md border border-border bg-surface-muted/45 px-3 py-3"
+                >
+                  <AgentBadge agent={provider.agent} variant="compact" />
+                  <div className="min-w-0 flex-1">
+                    <span className="block min-w-0 truncate text-sm font-medium text-text-primary">
                       {provider.displayName}
                     </span>
-                    <span
-                      className={cn(
-                        'text-xs',
-                        provider.available ? 'text-success' : 'text-text-muted',
-                      )}
-                    >
-                      {provider.available
-                        ? '已安装'
-                        : provider.availabilityLabel}
-                    </span>
+                    {provider.version === undefined ? null : (
+                      <p
+                        title={provider.version}
+                        className="mt-1 max-w-full truncate font-mono text-xs text-text-muted"
+                      >
+                        {provider.version}
+                      </p>
+                    )}
+                    <dl className="mt-2 grid min-w-0 gap-1.5 text-xs">
+                      <div className="flex min-w-0 items-baseline justify-between gap-3">
+                        <dt className="shrink-0 text-text-muted">安装状态</dt>
+                        <dd
+                          className={cn(
+                            'min-w-0 text-right font-medium',
+                            provider.available
+                              ? 'text-success'
+                              : 'text-text-secondary',
+                          )}
+                        >
+                          {installationLabel}
+                        </dd>
+                      </div>
+                      <div className="flex min-w-0 items-baseline justify-between gap-3">
+                        <dt className="shrink-0 text-text-muted">执行状态</dt>
+                        <dd
+                          className={cn(
+                            'min-w-0 text-right font-medium',
+                            providerExecutionHealthTone(health.state),
+                          )}
+                        >
+                          {health.stateLabel} · {health.freshnessLabel}
+                        </dd>
+                      </div>
+                    </dl>
+                    <p className="mt-2 break-words text-xs leading-relaxed text-text-muted">
+                      {health.description}
+                    </p>
+                    {health.observedAt === undefined ? null : (
+                      <p className="mt-1 text-xs text-text-muted">
+                        验证时间 · {formatMachineLastSeen(health.observedAt)}
+                      </p>
+                    )}
+                    {provider.available ? (
+                      <p className="mt-1 text-xs text-text-muted">
+                        {remoteProviderCapabilitySummary(provider)}
+                      </p>
+                    ) : null}
                   </div>
-                  {provider.version === undefined ? null : (
-                    <p
-                      title={provider.version}
-                      className="mt-1 max-w-full truncate font-mono text-xs text-text-muted"
-                    >
-                      {provider.version}
-                    </p>
-                  )}
-                  {provider.available ? (
-                    <p className="mt-1 text-xs text-text-muted">
-                      {remoteProviderCapabilitySummary(
-                        provider,
-                        discovery.state,
-                      )}
-                    </p>
-                  ) : null}
-                </div>
-              </li>
-            ))}
+                </li>
+              )
+            })}
           </ul>
         </>
       )}
@@ -699,11 +773,10 @@ function RemoteMachineProvidersSection({
 
 function remoteProviderCapabilitySummary(
   provider: ProviderPresentation,
-  discoveryState: 'current' | 'last_known',
 ): string {
   const { capabilities } = provider
   if (!capabilities.streaming || !capabilities.resume) {
-    return '已检测到 CLI；远程执行尚未启用'
+    return '已检测到 CLI；未声明会话所需的远程能力'
   }
 
   const enabled = [
@@ -715,9 +788,23 @@ function remoteProviderCapabilitySummary(
     capabilities.reasoningControl ? provider.reasoningLabel : undefined,
   ].filter((value): value is string => value !== undefined)
   const summary = enabled.join('、')
-  return discoveryState === 'current'
-    ? `远程会话能力已启用 · ${summary}`
-    : `上次检测支持 ${summary} · 当前未重新验证`
+  return `已声明能力 · ${summary}`
+}
+
+function providerExecutionHealthTone(
+  state: ReturnType<typeof providerExecutionHealthPresentation>['state'],
+): string {
+  switch (state) {
+    case 'healthy':
+      return 'text-success'
+    case 'degraded':
+      return 'text-warning'
+    case 'unavailable':
+      return 'text-danger'
+    case 'unknown':
+    case 'not_observed':
+      return 'text-text-secondary'
+  }
 }
 
 function remoteConnectionDescription(

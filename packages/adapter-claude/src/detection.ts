@@ -20,6 +20,7 @@ import {
   type ClaudeCodeDetection,
   type ClaudeCodeLauncher,
 } from './types.js'
+import { classifyClaudeCodeDetectionFailure } from './failure-classifier.js'
 import {
   closeOwnedClaudeProcess,
   type ClaudeCodeProcessOwnership,
@@ -52,6 +53,8 @@ export interface ClaudeCodePreparationOptions extends ClaudeCodeDetectionOptions
 
 export interface ClaudeCodePreparation {
   readonly detection: ClaudeCodeDetection
+  /** Controlled execution-health reason derived only from bounded detection. */
+  readonly failureReason?: ReturnType<typeof classifyClaudeCodeDetectionFailure>
   /** Returns a fresh secret-bearing environment. Never serialize or log it. */
   runtimeEnvironment(): NodeJS.ProcessEnv
 }
@@ -165,8 +168,10 @@ export async function prepareClaudeCode(
       settingsPath: options.settingsPath,
     })
     const detection = await detectClaudeCode({ ...options, environment })
+    const failureReason = classifyClaudeCodeDetectionFailure(detection)
     return {
       detection,
+      ...(failureReason === undefined ? {} : { failureReason }),
       runtimeEnvironment: () => ({ ...environment }),
     }
   } catch (error) {
@@ -182,8 +187,10 @@ export async function prepareClaudeCode(
       // A malformed optional environment remains unavailable and crosses no
       // values into a later child process.
     }
+    const detection = unavailable('misconfigured', diagnosticCode, startedAt)
     return {
-      detection: unavailable('misconfigured', diagnosticCode, startedAt),
+      detection,
+      failureReason: classifyClaudeCodeDetectionFailure(detection),
       runtimeEnvironment: () => ({ ...fallbackEnvironment }),
     }
   }

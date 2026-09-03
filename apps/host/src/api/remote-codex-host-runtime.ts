@@ -1,4 +1,8 @@
-import type { AgentEvent } from '@codetether/agent-core'
+import {
+  canonicalFailure,
+  type AgentEvent,
+  type CanonicalFailure,
+} from '@codetether/agent-core'
 import {
   ConversationIdSchema,
   MachineIdSchema,
@@ -32,6 +36,7 @@ export type RemoteCodexRuntimeTurnEvent =
       readonly type: 'turn.failed'
       readonly code: string
       readonly message: string
+      readonly failure?: CanonicalFailure
       readonly sequence: number
     }
 
@@ -347,6 +352,9 @@ export class RemoteCodexHostRuntime implements AgentHostRuntime {
               error: {
                 code: safeRemoteFailureCode(event.code),
                 message: 'Remote Codex Turn failed',
+                ...(event.failure === undefined
+                  ? {}
+                  : { failure: event.failure }),
               },
             })
             this.#invalidateSession(providerThreadId)
@@ -440,15 +448,17 @@ export class RemoteCodexHostRuntime implements AgentHostRuntime {
   }
 
   #emitTurnLost(providerThreadId: string, providerTurnId: string): void {
+    const timestamp = this.#now().toISOString()
     this.#emit({
       type: 'turn.failed',
       provider: 'codex',
-      timestamp: this.#now().toISOString(),
+      timestamp,
       threadId: providerThreadId,
       turnId: providerTurnId,
       error: {
         code: 'provider_unavailable',
         message: 'Remote Codex execution was lost',
+        failure: canonicalFailure('execution_lost', timestamp),
       },
     })
   }

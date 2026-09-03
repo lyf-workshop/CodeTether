@@ -4,6 +4,8 @@ import { PassThrough } from 'node:stream'
 import test from 'node:test'
 
 import {
+  CodexExecutableNotFoundError,
+  CodexProcessError,
   CodexProcessExitError,
   CodexProtocolError,
   JsonRpcLineTooLongError,
@@ -88,6 +90,7 @@ test('rejects the matching request with a typed remote error', async () => {
     assert.equal(error.method, 'turn/start')
     assert.equal(error.code, -32000)
     assert.deepEqual(error.data, { retry: false })
+    assert.equal(error.failureReason, 'provider_error')
     return true
   })
 })
@@ -118,6 +121,7 @@ test('surfaces invalid JSON and rejects later requests with the same failure', a
   const [error] = await errorPromise
   assert.ok(error instanceof CodexProtocolError)
   assert.match(error.message, /invalid JSON/)
+  assert.equal(error.failureReason, 'provider_protocol_error')
   await assert.rejects(transport.request('initialize'), (requestError) => {
     assert.equal(requestError, error)
     return true
@@ -135,6 +139,7 @@ test('routes line overflow through transport failure and rejects pending request
   assert.ok(error instanceof JsonRpcLineTooLongError)
   assert.equal(error.maxLineBytes, 16)
   assert.equal(error.observedLineBytes, 17)
+  assert.equal(error.failureReason, 'protocol_limit_exceeded')
   await assert.rejects(pending, (requestError) => {
     assert.equal(requestError, error)
     return true
@@ -155,10 +160,61 @@ test('rejects every pending request when the process exits unexpectedly', async 
     await assert.rejects(pending, (error) => {
       assert.ok(error instanceof CodexProcessExitError)
       assert.match(error.message, /code 17/)
+      assert.equal(error.failureReason, 'provider_crashed')
       return true
     })
   }
   assert.equal(transport.pendingRequestCount, 0)
+})
+
+test('fails closed when Provider stdin errors after an ownership request begins', async () => {
+  const { child, transport } = createHarness()
+  const observed = once(transportErrorEmitter(transport), 'error')
+  const pending = transport.request('turn/start', { prompt: 'safe fixture' })
+  await nextTurn()
+
+  child.stdin.emit('error', new Error('PRIVATE write diagnostic'))
+
+  const [error] = await observed
+  assert.ok(error instanceof CodexProcessError)
+  assert.equal(error.failureReason, 'execution_ownership_uncertain')
+  assert.doesNotMatch(error.message, /PRIVATE/u)
+  await assert.rejects(
+    pending,
+    (requestError) =>
+      requestError.failureReason === 'execution_ownership_uncertain',
+  )
+})
+
+test('classifies process launch failures without exposing operating-system diagnostics', async () => {
+  for (const scenario of [
+    {
+      code: 'ENOENT',
+      constructor: CodexExecutableNotFoundError,
+      failureReason: 'provider_not_installed',
+    },
+    {
+      code: 'EACCES',
+      constructor: CodexProcessError,
+      failureReason: 'provider_misconfigured',
+    },
+  ]) {
+    const { child, transport } = createHarness()
+    const observed = once(transportErrorEmitter(transport), 'error')
+    const pending = transport.request('initialize')
+    child.emit(
+      'error',
+      Object.assign(new Error('PRIVATE path and credential-like diagnostic'), {
+        code: scenario.code,
+      }),
+    )
+
+    const [error] = await observed
+    assert.ok(error instanceof scenario.constructor)
+    assert.equal(error.failureReason, scenario.failureReason)
+    assert.doesNotMatch(error.message, /PRIVATE|credential|path/u)
+    await assert.rejects(pending, (requestError) => requestError === error)
+  }
 })
 
 test('rejects writes and absorbs provider stdin errors after shutdown begins', async () => {

@@ -651,6 +651,186 @@ test('rendezvous grants are exact, revocable, and reveal no peer membership to u
   })
 })
 
+test('two reciprocal Controller and Node pairs remain identity-isolated without cross-peer presence or a directory', async () => {
+  await withService(
+    async ({ store, service, tls }) => {
+      const controllerAIdentity = generateRelayApplicationIdentity()
+      const controllerBIdentity = generateRelayApplicationIdentity()
+      const nodeAIdentity = generateRelayApplicationIdentity()
+      const nodeBIdentity = generateRelayApplicationIdentity()
+      const controllerA = await enrollPeer(
+        service,
+        tls.publicKeySpkiFingerprint,
+        store.createEnrollmentToken('controller'),
+        'controller',
+        controllerAIdentity,
+      )
+      const controllerB = await enrollPeer(
+        service,
+        tls.publicKeySpkiFingerprint,
+        store.createEnrollmentToken('controller'),
+        'controller',
+        controllerBIdentity,
+      )
+      const nodeA = await enrollPeer(
+        service,
+        tls.publicKeySpkiFingerprint,
+        store.createEnrollmentToken('node'),
+        'node',
+        nodeAIdentity,
+        controllerAIdentity.publicKeyFingerprint,
+      )
+      let nodeB = await enrollPeer(
+        service,
+        tls.publicKeySpkiFingerprint,
+        store.createEnrollmentToken('node'),
+        'node',
+        nodeBIdentity,
+        controllerBIdentity.publicKeyFingerprint,
+      )
+
+      assert.equal(
+        new Set([
+          controllerA.ready.peerId,
+          controllerB.ready.peerId,
+          nodeA.ready.peerId,
+          nodeB.ready.peerId,
+        ]).size,
+        4,
+      )
+      assert.deepEqual(store.counts(), {
+        enrolledControllers: 2,
+        enrolledNodes: 2,
+        revokedPeers: 0,
+        unconsumedTokens: 0,
+      })
+
+      const requestA = newRelayRequestId()
+      await controllerA.channel.send({
+        type: 'rendezvous.subscribe',
+        protocolVersion: relayProtocolVersion,
+        connectionEpoch: controllerA.ready.connectionEpoch,
+        requestId: requestA,
+        targetNodeFingerprint: nodeAIdentity.publicKeyFingerprint,
+      })
+      const initialA = await receiveType(
+        controllerA.channel,
+        'rendezvous.status',
+      )
+      assert.equal(initialA.requestId, requestA)
+      assert.equal(initialA.state, 'online')
+
+      const requestB = newRelayRequestId()
+      await controllerB.channel.send({
+        type: 'rendezvous.subscribe',
+        protocolVersion: relayProtocolVersion,
+        connectionEpoch: controllerB.ready.connectionEpoch,
+        requestId: requestB,
+        targetNodeFingerprint: nodeBIdentity.publicKeyFingerprint,
+      })
+      const initialB = await receiveType(
+        controllerB.channel,
+        'rendezvous.status',
+      )
+      assert.equal(initialB.requestId, requestB)
+      assert.equal(initialB.state, 'online')
+
+      await closePeer(nodeB)
+      const offlineB = await receiveType(
+        controllerB.channel,
+        'rendezvous.status',
+      )
+      assert.equal(offlineB.requestId, requestB)
+      assert.equal(offlineB.state, 'offline')
+      await assert.rejects(
+        controllerA.channel.receive(RelayServerMessageSchema, {
+          timeoutMs: 100,
+        }),
+        (error) => error?.code === 'timeout',
+      )
+
+      nodeB = await authenticatePeer(
+        service,
+        tls.publicKeySpkiFingerprint,
+        'node',
+        nodeBIdentity,
+      )
+      const onlineB = await receiveType(
+        controllerB.channel,
+        'rendezvous.status',
+      )
+      assert.equal(onlineB.requestId, requestB)
+      assert.equal(onlineB.state, 'online')
+
+      await controllerA.channel.send({
+        type: 'rendezvous.subscribe',
+        protocolVersion: relayProtocolVersion,
+        connectionEpoch: controllerA.ready.connectionEpoch,
+        requestId: newRelayRequestId(),
+        targetNodeFingerprint: nodeBIdentity.publicKeyFingerprint,
+      })
+      const crossFailureA = await receiveType(
+        controllerA.channel,
+        'relay.error',
+      )
+      assert.equal(crossFailureA.code, 'not_authorized')
+
+      await controllerB.channel.send({
+        type: 'rendezvous.subscribe',
+        protocolVersion: relayProtocolVersion,
+        connectionEpoch: controllerB.ready.connectionEpoch,
+        requestId: newRelayRequestId(),
+        targetNodeFingerprint: nodeAIdentity.publicKeyFingerprint,
+      })
+      const crossFailureB = await receiveType(
+        controllerB.channel,
+        'relay.error',
+      )
+      assert.deepEqual(
+        {
+          code: crossFailureB.code,
+          message: crossFailureB.message,
+        },
+        {
+          code: crossFailureA.code,
+          message: crossFailureA.message,
+        },
+      )
+
+      const directoryAttempt = await authenticatePeer(
+        service,
+        tls.publicKeySpkiFingerprint,
+        'controller',
+        controllerAIdentity,
+      )
+      await directoryAttempt.channel.send({
+        type: 'peer.list',
+        protocolVersion: relayProtocolVersion,
+        connectionEpoch: directoryAttempt.ready.connectionEpoch,
+      })
+      const directoryFailure = await receiveType(
+        directoryAttempt.channel,
+        'relay.error',
+      )
+      assert.equal(directoryFailure.code, 'malformed_message')
+
+      const metrics = await fetch(
+        `http://127.0.0.1:${service.managementAddress.port}/metrics`,
+      ).then((response) => response.json())
+      assert.equal('peers' in metrics, false)
+      assert.equal('peerIds' in metrics, false)
+      assert.equal('fingerprints' in metrics, false)
+
+      await closePeer(directoryAttempt)
+      await closePeer(nodeB)
+      await closePeer(nodeA)
+      await closePeer(controllerB)
+      await closePeer(controllerA)
+    },
+    { heartbeatIntervalMs: 10_000, heartbeatTimeoutMs: 20_000 },
+  )
+})
+
 test('revocation denies signed reconnect until the exact peer explicitly re-enrolls with a fresh token', async () => {
   await withService(async ({ store, service, tls }) => {
     const identity = generateRelayApplicationIdentity()

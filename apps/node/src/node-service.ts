@@ -830,6 +830,14 @@ export class CodeTetherNodeService extends EventEmitter {
             'Remote Codex event stream ended before a terminal event',
           )
         }
+        const terminal =
+          next.result.value.type === 'turn.completed' ||
+          next.result.value.type === 'turn.failed'
+        if (terminal) {
+          // Remove this Turn's control waiter before the Controller can
+          // observe terminal state and send its next session command.
+          controlAbort.abort()
+        }
         await connection.send({
           type: 'codex.turn.event',
           protocolVersion: machineProtocolVersion,
@@ -844,12 +852,7 @@ export class CodeTetherNodeService extends EventEmitter {
           event: next.result.value,
         })
         sequence += 1
-        if (
-          next.result.value.type === 'turn.completed' ||
-          next.result.value.type === 'turn.failed'
-        ) {
-          return undefined
-        }
+        if (terminal) return undefined
         event = events
           .next()
           .then((result) => ({ kind: 'event' as const, result }))
@@ -1006,6 +1009,14 @@ export class CodeTetherNodeService extends EventEmitter {
             'Remote Claude event stream ended before a terminal event',
           )
         }
+        const terminal =
+          next.result.value.type === 'turn.completed' ||
+          next.result.value.type === 'turn.failed'
+        if (terminal) {
+          // Keep the Claude boundary identical to Codex: stop this Turn's
+          // control waiter before publishing terminal state.
+          controlAbort.abort()
+        }
         await connection.send({
           type: 'claude.turn.event',
           protocolVersion: machineProtocolVersion,
@@ -1020,12 +1031,7 @@ export class CodeTetherNodeService extends EventEmitter {
           event: next.result.value,
         })
         sequence += 1
-        if (
-          next.result.value.type === 'turn.completed' ||
-          next.result.value.type === 'turn.failed'
-        ) {
-          return undefined
-        }
+        if (terminal) return undefined
         event = events
           .next()
           .then((result) => ({ kind: 'event' as const, result }))

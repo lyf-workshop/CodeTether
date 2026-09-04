@@ -225,11 +225,19 @@ test('four relayed Provider Conversations stay isolated and preserve exact nativ
 
     const running = await Promise.all(
       opened.map(async (scenario) => {
-        const turn = await scenario.session.startTurn({
-          actionId: scenario.actionId,
-          turnId: scenario.turnId,
-          prompt: scenario.prompt,
-        })
+        let turn
+        try {
+          turn = await scenario.session.startTurn({
+            actionId: scenario.actionId,
+            turnId: scenario.turnId,
+            prompt: scenario.prompt,
+          })
+        } catch (error) {
+          throw new Error(
+            `Relayed Turn start failed for ${scenario.key}; metrics=${JSON.stringify(relay.metrics())}`,
+            { cause: error },
+          )
+        }
         assert.equal(turn.actionId, scenario.actionId)
         assert.equal(turn.turnId, scenario.turnId)
         const iterator = turn.events()
@@ -322,7 +330,21 @@ test('four relayed Provider Conversations stay isolated and preserve exact nativ
     assert.ok(claudeScenario)
     const codexProviderThreadId = codexScenario.session.providerThreadId
     const claudeProviderSessionId = claudeScenario.session.providerSessionId
-    await Promise.all(opened.map((scenario) => scenario.session.close()))
+    await Promise.all(
+      opened.map(async (scenario) => {
+        try {
+          await scenario.session.close()
+        } catch (error) {
+          throw new Error(
+            `Relayed session close failed for ${scenario.key}; claudeRuntimeCloses=${JSON.stringify(claude.closeCalls)}; claudeRunners=${claudeRunners.activeCount}; codexRunners=${codexRunners.activeCount}; metrics=${JSON.stringify(relay.metrics())}`,
+            { cause: error },
+          )
+        }
+      }),
+    )
+    assert.equal(codexRunners.activeCount, 0)
+    assert.equal(claudeRunners.activeCount, 0)
+    assert.equal(claude.closeCalls.length, 2)
     for (const scenario of opened) sessions.delete(scenario.session)
     // Let each normal Machine TLS shutdown and its final Relay data/ACK/close
     // frames settle before proving that the same authenticated control peers
@@ -605,9 +627,16 @@ function executionDetector() {
 }
 
 async function openProviderSession(options) {
-  const channel = await options.connection.openMachineChannel(
-    options.nodeState.identity.publicKeyFingerprint,
-  )
+  let channel
+  try {
+    channel = await options.connection.openMachineChannel(
+      options.nodeState.identity.publicKeyFingerprint,
+    )
+  } catch (error) {
+    throw new Error(`Relay channel open failed for ${options.provider}`, {
+      cause: error,
+    })
+  }
   channel.on('error', () => undefined)
   const base = {
     stream: channel,
@@ -616,26 +645,32 @@ async function openProviderSession(options) {
     projectId: 'proj_phase7b_provider_relay',
     rootPath: options.project,
   }
-  if (options.provider === 'codex') {
-    return await openRemoteCodexSessionOverStream({
+  try {
+    if (options.provider === 'codex') {
+      return await openRemoteCodexSessionOverStream({
+        ...base,
+        conversationId: options.conversationId,
+        ...(options.providerIdentity === undefined
+          ? {}
+          : { providerThreadId: options.providerIdentity }),
+      })
+    }
+    return await openRemoteClaudeSessionOverStream({
       ...base,
       conversationId: options.conversationId,
+      effort: 'high',
       ...(options.providerIdentity === undefined
         ? {}
-        : { providerThreadId: options.providerIdentity }),
+        : {
+            providerSessionId: options.providerIdentity,
+            providerSessionMaterialized: true,
+          }),
+    })
+  } catch (error) {
+    throw new Error(`Machine session open failed for ${options.provider}`, {
+      cause: error,
     })
   }
-  return await openRemoteClaudeSessionOverStream({
-    ...base,
-    conversationId: options.conversationId,
-    effort: 'high',
-    ...(options.providerIdentity === undefined
-      ? {}
-      : {
-          providerSessionId: options.providerIdentity,
-          providerSessionMaterialized: true,
-        }),
-  })
 }
 
 function relayOnlyPeer(state, controllerId) {
@@ -783,9 +818,11 @@ function createClaudeHarness() {
   const factoryCalls = []
   const starts = []
   const releases = []
+  const closeCalls = []
   return {
     factoryCalls,
     starts,
+    closeCalls,
     release(index) {
       releases[index].resolve()
     },
@@ -857,7 +894,9 @@ function createClaudeHarness() {
           })
           return completion.promise
         },
-        async close() {},
+        async close() {
+          closeCalls.push(runtime.sessionId)
+        },
       }
       return runtime
     },

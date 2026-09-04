@@ -183,6 +183,14 @@ async function receiveType(channel, expectedType, timeoutMs = 2_000) {
   throw new Error(`Timed out waiting for ${expectedType}`)
 }
 
+async function waitForCondition(predicate, timeoutMs = 2_000) {
+  const deadline = Date.now() + timeoutMs
+  while (!predicate()) {
+    assert.ok(Date.now() < deadline, 'Timed out waiting for Relay test state')
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+}
+
 async function expectNoMessage(channel, timeoutMs = 80) {
   await assert.rejects(
     channel.receive(RelayServerMessageSchema, { timeoutMs }),
@@ -918,7 +926,10 @@ test('exact terminal channel frames are tombstoned without weakening stale-bindi
       channelGeneration: newRelayChannelGeneration(),
       reason: 'completed',
     })
-    await new Promise((resolve) => setTimeout(resolve, 20))
+    await waitForCondition(
+      () =>
+        service.metrics().staleChannelFrames === staleBeforeTerminalFrames + 1,
+    )
     assert.equal(
       service.metrics().staleChannelFrames,
       staleBeforeTerminalFrames + 1,

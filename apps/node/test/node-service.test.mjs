@@ -12,6 +12,7 @@ import {
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { connect as connectTls } from 'node:tls'
 import test from 'node:test'
 
 import {
@@ -19,6 +20,7 @@ import {
   connectMachineTls,
   connectTrustedRemoteMachine,
   generateMachineTlsIdentity,
+  machineTransportAlpn,
   newControllerId,
 } from '@codetether/machine-transport'
 
@@ -61,6 +63,62 @@ async function startNode(
   const address = await service.listen()
   return { state, service, endpoint: { host: '127.0.0.1', port: address.port } }
 }
+
+test(
+  'Direct Node ingress performs a fresh handshake when offered a prior TLS ticket',
+  { timeout: 10_000 },
+  async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'codetether-node-'))
+    const localController = await controller()
+    let running
+    let first
+    let second
+    try {
+      running = await startNode(directory, 'Resumption Guard Node')
+      const mode = await running.service.enablePairing()
+      const pending = await beginRemoteMachinePairing({
+        endpoint: running.endpoint,
+        pairingCode: mode.code,
+        controller: localController,
+      })
+      await pending.confirm()
+
+      const clientOptions = {
+        ...running.endpoint,
+        key: localController.tls.privateKeyPem,
+        cert: localController.tls.certificatePem,
+        rejectUnauthorized: false,
+        minVersion: 'TLSv1.3',
+        maxVersion: 'TLSv1.3',
+        ALPNProtocols: [machineTransportAlpn],
+      }
+      first = connectTls(clientOptions)
+      first.on('data', () => undefined)
+      const sessionAvailable = once(first, 'session')
+      await once(first, 'secureConnect')
+      assert.equal(first.isSessionReused(), false)
+      const [session] = await sessionAvailable
+      assert.ok(Buffer.isBuffer(session) && session.length > 0)
+      first.destroy()
+      await once(first, 'close')
+
+      second = connectTls({ ...clientOptions, session })
+      second.on('error', () => undefined)
+      let applicationBytes = 0
+      second.on('data', (chunk) => {
+        applicationBytes += chunk.length
+      })
+      await once(second, 'secureConnect')
+      assert.equal(second.isSessionReused(), false)
+      assert.equal(applicationBytes, 0)
+    } finally {
+      first?.destroy()
+      second?.destroy()
+      await running?.service.close().catch(() => undefined)
+      await rm(directory, { recursive: true, force: true })
+    }
+  },
+)
 
 test('trusted Provider discovery is identity-bound, deduplicated, and non-executable', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'codetether-node-'))

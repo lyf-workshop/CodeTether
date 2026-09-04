@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
-import { X509Certificate, createHash } from 'node:crypto'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { X509Certificate, createHash, randomBytes } from 'node:crypto'
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -29,6 +29,7 @@ import {
 import {
   RelayService,
   RelayStateStore,
+  createJsonRelayLogger,
   generateRelayPinnedTlsIdentity,
 } from '../dist/index.js'
 
@@ -52,7 +53,7 @@ async function withService(run, overrides = {}) {
   })
   try {
     await service.start()
-    await run({ store, service, tls })
+    await run({ root, store, service, tls })
   } finally {
     await service.close()
     await rm(root, { recursive: true, force: true })
@@ -483,6 +484,97 @@ test('authorized machine TLS channel forwards bounded data and ACKs without beco
     await closePeer(unauthorized)
     await closePeer(controller)
   })
+})
+
+test('opaque channel payload is absent from Relay logs, metrics, and persistence', async () => {
+  const marker = `phase7c-sentinel-${randomBytes(18).toString('base64url')}`
+  const encodedMarker = Buffer.from(marker, 'utf8').toString('base64url')
+  const logLines = []
+  const logger = createJsonRelayLogger((line) => logLines.push(line))
+
+  await withService(
+    async ({ root, store, service, tls }) => {
+      const controllerIdentity = generateRelayApplicationIdentity()
+      const nodeIdentity = generateRelayApplicationIdentity()
+      const controller = await enrollPeer(
+        service,
+        tls.publicKeySpkiFingerprint,
+        store.createEnrollmentToken('controller'),
+        'controller',
+        controllerIdentity,
+      )
+      const node = await enrollPeer(
+        service,
+        tls.publicKeySpkiFingerprint,
+        store.createEnrollmentToken('node'),
+        'node',
+        nodeIdentity,
+        controllerIdentity.publicKeyFingerprint,
+      )
+      const opened = await openMachineChannel(
+        controller,
+        node,
+        nodeIdentity.publicKeyFingerprint,
+      )
+
+      await controller.channel.send({
+        type: 'channel.data',
+        ...channelBinding(
+          opened.controllerOpened,
+          controller.ready.connectionEpoch,
+        ),
+        sequence: 1,
+        data: encodedMarker,
+      })
+      const forwarded = await receiveType(node.channel, 'channel.data')
+      assert.equal(forwarded.data, encodedMarker)
+      await node.channel.send({
+        type: 'channel.data.ack',
+        ...channelBinding(opened.nodeOpened, node.ready.connectionEpoch),
+        acknowledgedSequence: 1,
+      })
+      await receiveType(controller.channel, 'channel.data.ack')
+
+      await controller.channel.send({
+        type: 'channel.close',
+        ...channelBinding(
+          opened.controllerOpened,
+          controller.ready.connectionEpoch,
+        ),
+        reason: 'completed',
+      })
+      await Promise.all([
+        receiveType(controller.channel, 'channel.closed'),
+        receiveType(node.channel, 'channel.closed'),
+      ])
+
+      const metrics = JSON.stringify(service.metrics())
+      assert.equal(metrics.includes(marker), false)
+      assert.equal(metrics.includes(encodedMarker), false)
+
+      const stateDirectory = join(root, 'state')
+      const stateFiles = await readdir(stateDirectory)
+      const persisted = Buffer.concat(
+        await Promise.all(
+          stateFiles.map(
+            async (name) => await readFile(join(stateDirectory, name)),
+          ),
+        ),
+      )
+      assert.equal(persisted.includes(Buffer.from(marker, 'utf8')), false)
+      assert.equal(
+        persisted.includes(Buffer.from(encodedMarker, 'utf8')),
+        false,
+      )
+
+      await Promise.all([closePeer(controller), closePeer(node)])
+    },
+    { logger },
+  )
+
+  const logs = logLines.join('')
+  assert.equal(logs.includes(marker), false)
+  assert.equal(logs.includes(encodedMarker), false)
 })
 
 test('two authorized Controller and Node pairs multiplex isolated Machine channels without cross-peer access', async () => {

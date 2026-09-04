@@ -39,6 +39,7 @@ import {
   pairingConfirmationTag,
   pairingVerificationCode,
   peerFingerprint,
+  requireFreshMachineTlsSession,
   verifyPairingConfirmationTag,
   type MachineWireErrorCode,
   type ClaudeSessionDisposeMessage,
@@ -331,6 +332,12 @@ export class CodeTetherNodeService extends EventEmitter {
 
   #accept(socket: TLSSocket): void {
     if (this.#closing || socket.alpnProtocol !== machineTransportAlpn) {
+      socket.destroy()
+      return
+    }
+    try {
+      requireFreshMachineTlsSession(socket)
+    } catch {
       socket.destroy()
       return
     }

@@ -8,8 +8,9 @@ ephemeral, purpose-bound `machine_tls_v1` channel. It does not provide an
 arbitrary destination, caller-defined application message, generic tunnel, or
 Relay-owned Provider operation.
 
-Phase 7A is accepted and frozen at `67e2a98`. Phase 7B is the current approved
-implementation scope and is not yet accepted or frozen.
+Phase 7A is accepted and frozen at `67e2a98`, and Phase 7B is accepted and
+frozen at `b0f74f5`. Phase 7C is the current approved end-to-end security
+hardening scope; it changes neither the Relay's purpose nor Provider behavior.
 
 Relay enrollment is infrastructure access, not Machine pairing. A Node grants
 presence visibility only to the exact Controller public-key fingerprint it has
@@ -36,8 +37,10 @@ epochs. The Node then accepts only the exact currently paired Controller and
 validates its inner Machine certificate. The Controller independently pins the
 expected Node certificate, Node identity, Machine identity, ALPN, and protocol.
 The Relay cannot name a host, port, URL, process, Provider, Project path, shell
-command, or arbitrary destination. It routes Machine TLS ciphertext and never
-stores channel state or payload in SQLite.
+command, or arbitrary destination. It routes opaque Machine TLS wire records
+and never stores channel state or payload in SQLite. Machine application
+records are TLS 1.3 ciphertext; ordinary handshake metadata, record sizes,
+timing, volume, and Relay peer/channel control metadata remain observable.
 
 Channel acknowledgement is transport flow control only. A channel-open result
 says that the current Node Relay client accepted the offer. A data ACK says that
@@ -83,6 +86,36 @@ Conversation, or runtime-capacity eligibility. Loss of current Relay execution
 state clears the process-local qualification; Host or Relay reconnection must
 qualify the new current state before public `internetExecutionEnabled` can be
 true again.
+
+## Phase 7C end-to-end security boundary
+
+Relay transport has two independent TLS layers: each peer authenticates the
+Relay over its outer Internet TLS connection, while the paired Controller and
+Node establish `codetether-machine/1` TLS inside the purpose-bound channel. The
+inner Machine connection is TLS 1.3-only and each endpoint requires the exact
+expected peer SPKI fingerprint. Relay authentication, enrollment, presence, or
+channel acceptance cannot replace that pin or authorize a Machine operation.
+
+The Machine policy requests no stateless tickets, and CodeTether captures,
+persists, and supplies no TLS resumption state. OpenSSL may still emit a
+stateful TLS 1.3 post-handshake ticket, but CodeTether never reuses it and the
+Machine verifier rejects a socket reported as resumed. Each new Relay channel
+therefore performs a fresh authenticated inner handshake before any Machine
+frame, and no early-data API is used.
+Handshake, pin, ALPN, or protocol failure closes the stream; there is no
+plaintext, trust-Relay, or weaker-TLS fallback.
+
+Controller and Node Machine private identities stay on their respective
+endpoints. They are distinct from the Relay's own application and transport
+identity. The Relay has no Machine/Provider/content decoder and applies no
+payload-aware compression; it forwards bounded channel data unchanged and
+keeps only infrastructure state plus aggregate numeric observability. It never
+logs or persists raw inner wire records. This protects Machine application
+confidentiality and integrity in transit but does not hide ordinary handshake
+metadata or traffic shape, protect a compromised endpoint, or prevent the
+Relay from delaying or denying service. The full implementation-based trust,
+key, plaintext, metadata, and threat model is in
+`docs/PHASE7C-END-TO-END-SECURITY.md`.
 
 ## Build and install
 
@@ -321,8 +354,9 @@ curl --fail --silent http://127.0.0.1:9443/metrics
 ```
 
 Logs contain controlled event/code/role fields and one-way opaque references.
-They never contain tokens, challenges, signatures, private keys, Prompts,
-Projects, Conversations, paths, Provider output, or arbitrary client strings.
+They never contain tokens, challenges, signatures, private keys, raw inner
+Machine TLS records, Prompts, Projects, Conversations, paths, Provider output,
+Tool content, private Provider session identity, or arbitrary client strings.
 The supplied unit rate-limits journal emission. Configure the host's normal
 journald size/retention policy so stored logs are bounded as well.
 
@@ -376,10 +410,16 @@ application fingerprint, then verify version-1 peer reconnect and authorized
 presence. Rolling back only the Relay or only one peer is intentionally
 incompatible. Direct LAN transport remains independent while reachable.
 
-The Relay application forwards end-to-end Machine TLS ciphertext in Phase 7B,
-so it does not decode Prompt, Provider output, Tool activity, Project paths,
-credentials, or native Provider session identity. Operators can still observe
-peer/channel timing, counts, frame sizes, and byte volume and can disrupt
-availability. Do not describe Phase 7B as completing Phase 7C's broader
-compromised-Relay, traffic-analysis, rekey, forward-secrecy, or key-compromise
-review.
+Phase 7C rollback restores the matching frozen Phase 7B Desktop/Host and Node
+artifacts at `b0f74f5` while preserving Relay protocol-v2 identity, state,
+enrollments, and grants. Restore the Relay artifact only if Phase 7C changed
+it. Verify the unchanged Relay and Machine identity pins plus Direct and Relay
+operation after rollback; never downgrade Machine traffic to plaintext.
+
+The verified Phase 7C claim is deliberately narrow: the Relay application does
+not need plaintext for Machine application traffic and does not decode Prompt,
+Provider output, Tool activity, Project paths, credentials, or native Provider
+session identity. Operators can still observe peer relationships, ordinary TLS
+handshake metadata, timing, counts, frame sizes, and byte volume and can disrupt
+availability. Phase 7C does not claim traffic-analysis resistance, anonymity,
+compromised-endpoint protection, or availability against a malicious Relay.

@@ -177,6 +177,72 @@ test('Machine detail exposes Relay control state only for remote Machines', () =
   )
 })
 
+test('public Relay and Machine detail schemas reject private security material', () => {
+  const relay = {
+    state: 'connected',
+    enrollment: 'enrolled',
+    nodePresence: 'online',
+    internetExecutionEnabled: true,
+    endpoint,
+    relayIdentityFingerprint,
+  }
+  const privateFields = {
+    privateKeyPem: 'private',
+    certificatePem: 'certificate',
+    controllerCredentialRef: 'credential-file',
+    tlsExporter: 'traffic-binding',
+    sessionTicket: 'ticket',
+  }
+  for (const [field, value] of Object.entries(privateFields)) {
+    assert.equal(
+      RelayMachineConnectivitySchema.safeParse({ ...relay, [field]: value })
+        .success,
+      false,
+      `Relay status must reject ${field}`,
+    )
+  }
+
+  const response = {
+    protocolVersion: 1,
+    machine: {
+      ...machineFixture('remote'),
+      availability: 'available',
+      connectionState: 'online',
+      capabilities: {
+        ...machineFixture('remote').capabilities,
+        providerExecution: true,
+      },
+    },
+    providers: [],
+    projects: [],
+    conversations: [],
+    connection: {
+      state: 'online',
+      directState: 'offline',
+      executionTransport: 'relay',
+    },
+    providerDiscovery: { state: 'not_observed' },
+    relay,
+  }
+  assert.equal(GetMachineResponseSchema.safeParse(response).success, true)
+  for (const [field, value] of Object.entries(privateFields)) {
+    assert.equal(
+      GetMachineResponseSchema.safeParse({ ...response, [field]: value })
+        .success,
+      false,
+      `Machine detail must reject ${field}`,
+    )
+    assert.equal(
+      GetMachineResponseSchema.safeParse({
+        ...response,
+        machine: { ...response.machine, [field]: value },
+      }).success,
+      false,
+      `Machine summary must reject ${field}`,
+    )
+  }
+})
+
 function canonicalRelayFailure(reason) {
   const profiles = {
     relay_unreachable: {

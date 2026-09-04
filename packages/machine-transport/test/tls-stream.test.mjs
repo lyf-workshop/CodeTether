@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { constants } from 'node:crypto'
 import { once } from 'node:events'
 import { connect as connectTcp, createServer } from 'node:net'
 import {
@@ -15,6 +16,7 @@ import {
   connectMachineTls,
   connectMachineTlsOverStream,
   connectTrustedRemoteMachineOverStream,
+  exportMachineTlsBinding,
   FramedMachineConnection,
   generateMachineTlsIdentity,
   MachineHelloMessageSchema,
@@ -26,6 +28,7 @@ import {
   newNodeId,
   openRemoteClaudeSessionOverStream,
   openRemoteCodexSessionOverStream,
+  requireFreshMachineTlsSession,
 } from '../dist/index.js'
 
 test('Machine TLS authenticates both identities over existing Duplex streams', async () => {
@@ -54,6 +57,13 @@ test('Machine TLS authenticates both identities over existing Duplex streams', a
     assert.equal(server.socket.getProtocol(), 'TLSv1.3')
     assert.equal(client.socket.alpnProtocol, machineTransportAlpn)
     assert.equal(server.socket.alpnProtocol, machineTransportAlpn)
+    assert.equal(client.socket.isSessionReused(), false)
+    assert.equal(server.socket.isSessionReused(), false)
+    assert.equal(
+      exportMachineTlsBinding(client.socket),
+      exportMachineTlsBinding(server.socket),
+    )
+    assert.match(client.socket.getCipher().standardName ?? '', /^TLS_/u)
 
     const received = once(server.socket, 'data')
     client.socket.write(Buffer.from('bounded-machine-frame'))
@@ -62,6 +72,221 @@ test('Machine TLS authenticates both identities over existing Duplex streams', a
   } finally {
     client?.socket.destroy()
     server?.socket.destroy()
+    pair.destroy()
+    await pair.closeServer()
+  }
+})
+
+test('Machine TLS policy is TLS 1.3-only and requests no stateless tickets', async () => {
+  const node = await generateMachineTlsIdentity('CodeTether Node')
+  const options = machineTlsServerOptions(node)
+  assert.equal(options.minVersion, 'TLSv1.3')
+  assert.equal(options.maxVersion, 'TLSv1.3')
+  assert.deepEqual(options.ALPNProtocols, [machineTransportAlpn])
+  assert.equal(options.requestCert, true)
+  assert.equal(options.rejectUnauthorized, false)
+  assert.notEqual(options.secureOptions & constants.SSL_OP_NO_TICKET, 0)
+})
+
+test('fresh Machine TLS streams do not resume or reuse channel bindings', async () => {
+  const node = await generateMachineTlsIdentity('CodeTether Node')
+  const controller = await generateMachineTlsIdentity('CodeTether Controller')
+  const bindings = []
+  for (let index = 0; index < 2; index += 1) {
+    const pair = await createTcpDuplexPair()
+    let client
+    let server
+    try {
+      ;[client, server] = await Promise.all([
+        connectMachineTlsOverStream({
+          stream: pair.client,
+          identity: controller,
+          expectedPeerFingerprint: node.publicKeyFingerprint,
+        }),
+        acceptMachineTlsOverStream({
+          stream: pair.accepted,
+          identity: node,
+          expectedPeerFingerprint: controller.publicKeyFingerprint,
+        }),
+      ])
+      assert.equal(client.socket.isSessionReused(), false)
+      assert.equal(server.socket.isSessionReused(), false)
+      bindings.push(exportMachineTlsBinding(client.socket))
+    } finally {
+      client?.socket.destroy()
+      server?.socket.destroy()
+      pair.destroy()
+      await pair.closeServer()
+    }
+  }
+  assert.notEqual(bindings[0], bindings[1])
+})
+
+test(
+  'an actual TLS 1.3 session resumption attempt is rejected before Machine framing',
+  { timeout: 10_000 },
+  async () => {
+    const node = await generateMachineTlsIdentity('CodeTether Node')
+    const controller = await generateMachineTlsIdentity('CodeTether Controller')
+    let acceptedFreshSessions = 0
+    let resumedRejection
+    const resumedRejected = new Promise((resolve) => {
+      resumedRejection = resolve
+    })
+    const sockets = new Set()
+    const server = createTlsServer(
+      {
+        ...machineTlsServerOptions(node),
+        // The test deliberately permits a ticket so the rejection guard sees
+        // a real resumed TLS 1.3 socket. Production requests no stateless one.
+        secureOptions: 0,
+      },
+      (socket) => {
+        sockets.add(socket)
+        socket.once('close', () => sockets.delete(socket))
+        try {
+          requireFreshMachineTlsSession(socket)
+          acceptedFreshSessions += 1
+          socket.once('end', () => socket.end())
+          socket.resume()
+        } catch (error) {
+          resumedRejection(error)
+          setImmediate(() => socket.destroy())
+        }
+      },
+    )
+    await listen(server)
+    const address = server.address()
+    assert.ok(address !== null && typeof address !== 'string')
+    const clientOptions = {
+      host: '127.0.0.1',
+      port: address.port,
+      key: controller.privateKeyPem,
+      cert: controller.certificatePem,
+      rejectUnauthorized: false,
+      minVersion: 'TLSv1.3',
+      maxVersion: 'TLSv1.3',
+      ALPNProtocols: [machineTransportAlpn],
+    }
+    let first
+    let second
+    try {
+      first = connectTls(clientOptions)
+      const sessionAvailable = once(first, 'session')
+      await once(first, 'secureConnect')
+      assert.equal(first.isSessionReused(), false)
+      const [session] = await sessionAvailable
+      assert.ok(Buffer.isBuffer(session) && session.length > 0)
+      first.end()
+      await once(first, 'close')
+
+      second = connectTls({ ...clientOptions, session })
+      await once(second, 'secureConnect')
+      assert.equal(second.isSessionReused(), true)
+      const rejection = await resumedRejected
+      assert.equal(rejection?.code, 'authentication_failed')
+      assert.equal(acceptedFreshSessions, 1)
+    } finally {
+      first?.destroy()
+      second?.destroy()
+      for (const socket of sockets) socket.destroy()
+      await closeServer(server)
+    }
+  },
+)
+
+test('Machine TLS exporter refuses a socket outside the verified protocol', () => {
+  let exported = false
+  const incompatible = {
+    destroyed: false,
+    encrypted: true,
+    alpnProtocol: 'not-codetether-machine',
+    getProtocol: () => 'TLSv1.3',
+    isSessionReused: () => false,
+    exportKeyingMaterial() {
+      exported = true
+      return Buffer.alloc(32)
+    },
+  }
+  assert.throws(
+    () => exportMachineTlsBinding(incompatible),
+    (error) => error?.code === 'authentication_failed',
+  )
+  assert.equal(exported, false)
+})
+
+test('Machine TLS exporter refuses a resumed TLS session', () => {
+  let certificateRead = false
+  const resumed = {
+    destroyed: false,
+    encrypted: true,
+    alpnProtocol: machineTransportAlpn,
+    getProtocol: () => 'TLSv1.3',
+    isSessionReused: () => true,
+    getPeerCertificate() {
+      certificateRead = true
+      return {}
+    },
+  }
+  assert.throws(
+    () => exportMachineTlsBinding(resumed),
+    (error) => error?.code === 'authentication_failed',
+  )
+  assert.equal(certificateRead, false)
+})
+
+test('Machine TLS over an existing stream requires an exact peer pin', async () => {
+  const controller = await generateMachineTlsIdentity('CodeTether Controller')
+  const pair = await createTcpDuplexPair()
+  try {
+    await assert.rejects(
+      connectMachineTlsOverStream({
+        stream: pair.client,
+        identity: controller,
+      }),
+      (error) => error?.code === 'identity_mismatch',
+    )
+    assert.equal(pair.client.destroyed, true)
+  } finally {
+    pair.destroy()
+    await pair.closeServer()
+  }
+})
+
+test('Machine TLS server over an existing stream requires an exact peer pin', async () => {
+  const node = await generateMachineTlsIdentity('CodeTether Node')
+  const pair = await createTcpDuplexPair()
+  try {
+    await assert.rejects(
+      acceptMachineTlsOverStream({
+        stream: pair.accepted,
+        identity: node,
+      }),
+      (error) => error?.code === 'identity_mismatch',
+    )
+    assert.equal(pair.accepted.destroyed, true)
+  } finally {
+    pair.destroy()
+    await pair.closeServer()
+  }
+})
+
+test('Machine TLS over an existing stream rejects plaintext without fallback', async () => {
+  const node = await generateMachineTlsIdentity('CodeTether Node')
+  const controller = await generateMachineTlsIdentity('CodeTether Controller')
+  const pair = await createTcpDuplexPair()
+  const serverPromise = acceptMachineTlsOverStream({
+    stream: pair.accepted,
+    identity: node,
+    expectedPeerFingerprint: controller.publicKeyFingerprint,
+  })
+  try {
+    pair.client.end(Buffer.from('{"type":"machine.hello","prompt":"not-tls"}'))
+    await assert.rejects(
+      serverPromise,
+      (error) => error?.code === 'connection_failed',
+    )
+  } finally {
     pair.destroy()
     await pair.closeServer()
   }
@@ -109,6 +334,7 @@ test('Machine TLS over a stream rejects a wrong Node identity pin', async () => 
   const serverPromise = acceptMachineTlsOverStream({
     stream: pair.accepted,
     identity: node,
+    expectedPeerFingerprint: controller.publicKeyFingerprint,
   })
   const clientPromise = connectMachineTlsOverStream({
     stream: pair.client,
@@ -170,6 +396,7 @@ test('Machine TLS over a stream rejects an incompatible ALPN', async () => {
   const serverPromise = acceptMachineTlsOverStream({
     stream: pair.accepted,
     identity: node,
+    expectedPeerFingerprint: controller.publicKeyFingerprint,
   })
   const incompatibleClient = connectTls({
     socket: pair.client,
@@ -189,6 +416,37 @@ test('Machine TLS over a stream rejects an incompatible ALPN', async () => {
     )
   } finally {
     incompatibleClient.destroy()
+    pair.destroy()
+    await pair.closeServer()
+  }
+})
+
+test('Machine TLS over a stream rejects TLS 1.2 without downgrade', async () => {
+  const node = await generateMachineTlsIdentity('CodeTether Node')
+  const controller = await generateMachineTlsIdentity('CodeTether Controller')
+  const pair = await createTcpDuplexPair()
+  const serverPromise = acceptMachineTlsOverStream({
+    stream: pair.accepted,
+    identity: node,
+    expectedPeerFingerprint: controller.publicKeyFingerprint,
+  })
+  const downgradedClient = connectTls({
+    socket: pair.client,
+    key: controller.privateKeyPem,
+    cert: controller.certificatePem,
+    rejectUnauthorized: false,
+    minVersion: 'TLSv1.2',
+    maxVersion: 'TLSv1.2',
+    ALPNProtocols: [machineTransportAlpn],
+  })
+  downgradedClient.once('error', () => undefined)
+  try {
+    await assert.rejects(
+      serverPromise,
+      (error) => error?.code === 'connection_failed',
+    )
+  } finally {
+    downgradedClient.destroy()
     pair.destroy()
     await pair.closeServer()
   }

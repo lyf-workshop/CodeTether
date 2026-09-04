@@ -3,6 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { connect as connectTcp, createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { Duplex } from 'node:stream'
 import test from 'node:test'
 
 import {
@@ -47,6 +48,76 @@ test('trusted Relay Machine channel and direct listener share the exact Node dis
     relayed?.close()
     pair?.destroy()
     await pair?.closeServer()
+    await fixture.close()
+  }
+})
+
+test('Relay stream observes TLS wire records but no Machine application plaintext', async () => {
+  const fixture = await createNodeFixture()
+  const pair = await createTcpDuplexPair()
+  const observed = new RecordingDuplex(pair.client)
+  let relayed
+  try {
+    const accepted = fixture.service.acceptRelayMachineChannel({
+      stream: pair.accepted,
+      controllerFingerprint: fixture.controller.tls.publicKeyFingerprint,
+    })
+    relayed = await connectTrustedRemoteMachineOverStream({
+      peer: fixture.peer,
+      controller: fixture.controller,
+      stream: observed,
+    })
+    await accepted
+    await relayed.ping()
+
+    const wireBytes = Buffer.concat([
+      ...observed.outboundChunks,
+      ...observed.inboundChunks,
+    ])
+    assert.ok(wireBytes.length > 0)
+    for (const plaintext of [
+      fixture.controller.controllerId,
+      fixture.state.machine.machineId,
+      fixture.state.machine.nodeId,
+      'machine.hello',
+      'machine.ping',
+      'machine.pong',
+    ]) {
+      assert.equal(wireBytes.includes(Buffer.from(plaintext, 'utf8')), false)
+    }
+  } finally {
+    relayed?.close()
+    observed.destroy()
+    pair.destroy()
+    await pair.closeServer()
+    await fixture.close()
+  }
+})
+
+test('corrupted inner TLS application record fails closed before Machine dispatch', async () => {
+  const fixture = await createNodeFixture()
+  const pair = await createTcpDuplexPair()
+  const observed = new RecordingDuplex(pair.client)
+  let relayed
+  try {
+    const accepted = fixture.service.acceptRelayMachineChannel({
+      stream: pair.accepted,
+      controllerFingerprint: fixture.controller.tls.publicKeyFingerprint,
+    })
+    relayed = await connectTrustedRemoteMachineOverStream({
+      peer: fixture.peer,
+      controller: fixture.controller,
+      stream: observed,
+    })
+    await accepted
+    observed.corruptNextOutboundChunk()
+    await assert.rejects(relayed.ping())
+    assert.equal(observed.corruptedChunks, 1)
+  } finally {
+    relayed?.close()
+    observed.destroy()
+    pair.destroy()
+    await pair.closeServer()
     await fixture.close()
   }
 })
@@ -238,5 +309,55 @@ async function createTcpDuplexPair() {
         )
       })
     },
+  }
+}
+
+class RecordingDuplex extends Duplex {
+  outboundChunks = []
+  inboundChunks = []
+  corruptedChunks = 0
+  corruptNext = false
+
+  constructor(stream) {
+    super({ allowHalfOpen: false })
+    this.stream = stream
+    stream.on('data', (chunk) => {
+      const bytes = Buffer.from(chunk)
+      this.inboundChunks.push(bytes)
+      if (!this.push(bytes)) stream.pause()
+    })
+    stream.once('end', () => this.push(null))
+    stream.once('error', (error) => this.destroy(error))
+  }
+
+  _read() {
+    this.stream.resume()
+  }
+
+  _write(chunk, encoding, callback) {
+    let bytes = Buffer.isBuffer(chunk)
+      ? Buffer.from(chunk)
+      : Buffer.from(chunk, encoding)
+    if (this.corruptNext && bytes.length > 0) {
+      this.corruptNext = false
+      this.corruptedChunks += 1
+      bytes = Buffer.from(bytes)
+      bytes[bytes.length - 1] ^= 1
+    }
+    this.outboundChunks.push(bytes)
+    this.stream.write(bytes, callback)
+  }
+
+  corruptNextOutboundChunk() {
+    this.corruptNext = true
+  }
+
+  _final(callback) {
+    this.stream.end(callback)
+  }
+
+  _destroy(error, callback) {
+    this.stream.destroy()
+    callback(error)
   }
 }

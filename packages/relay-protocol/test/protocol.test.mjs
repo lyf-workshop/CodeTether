@@ -228,8 +228,15 @@ test('machine TLS channels are purpose-bound, epoch-bound, and strictly bounded'
   const forbiddenOpenFields = [
     { host: '127.0.0.1' },
     { port: 22 },
+    { machineId: 'machine_private' },
+    { projectId: 'proj_private' },
+    { projectPath: '/isolated/private-path' },
+    { conversationId: 'conv_private' },
+    { turnId: 'turn_private' },
     { provider: 'codex' },
     { prompt: 'secret' },
+    { toolOutput: 'secret' },
+    { providerSessionId: 'private-session' },
     { targetUrl: 'tcp://example.invalid:22' },
     { destination: { host: 'example.invalid', port: 443 } },
   ]

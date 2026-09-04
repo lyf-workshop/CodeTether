@@ -18,7 +18,10 @@ import {
   publicCertificateFromPeer,
   type MachineTlsIdentity,
 } from './identity.js'
-import type { PublicKeyFingerprint } from './messages.js'
+import {
+  PublicKeyFingerprintSchema,
+  type PublicKeyFingerprint,
+} from './messages.js'
 
 export function newMachineNonce(): string {
   return randomBytes(32).toString('base64url')
@@ -42,13 +45,21 @@ export interface MachineTlsConnection {
   readonly peerFingerprint: PublicKeyFingerprint
 }
 
-export interface MachineTlsStreamOptions {
+interface MachineTlsBaseStreamOptions {
   /** An already-established byte stream owned by the caller. */
   readonly stream: Duplex
   readonly identity: MachineTlsIdentity
-  readonly expectedPeerFingerprint?: PublicKeyFingerprint
   readonly signal?: AbortSignal
   readonly timeoutMs?: number
+}
+
+export interface MachineTlsStreamOptions extends MachineTlsBaseStreamOptions {
+  /** Relay streams are never permitted to substitute Relay trust for this pin. */
+  readonly expectedPeerFingerprint: PublicKeyFingerprint
+}
+
+type MachineTlsClientStreamOptions = MachineTlsBaseStreamOptions & {
+  readonly expectedPeerFingerprint?: PublicKeyFingerprint
 }
 
 export async function connectMachineTls(options: {
@@ -60,7 +71,7 @@ export async function connectMachineTls(options: {
   readonly timeoutMs?: number
 }): Promise<MachineTlsConnection> {
   const stream = connectTcp({ host: options.host, port: options.port })
-  return await connectMachineTlsOverStream({
+  return await connectMachineTlsClientOverStream({
     stream,
     identity: options.identity,
     expectedPeerFingerprint: options.expectedPeerFingerprint,
@@ -76,6 +87,14 @@ export async function connectMachineTls(options: {
  */
 export async function connectMachineTlsOverStream(
   options: MachineTlsStreamOptions,
+): Promise<MachineTlsConnection> {
+  return await connectMachineTlsClientOverStream(
+    requirePinnedMachineTlsStream(options),
+  )
+}
+
+async function connectMachineTlsClientOverStream(
+  options: MachineTlsClientStreamOptions,
 ): Promise<MachineTlsConnection> {
   const connectionOptions: ConnectionOptions = {
     socket: options.stream,
@@ -105,23 +124,24 @@ export async function connectMachineTlsOverStream(
 export async function acceptMachineTlsOverStream(
   options: MachineTlsStreamOptions,
 ): Promise<MachineTlsConnection> {
+  const pinnedOptions = requirePinnedMachineTlsStream(options)
   let socket: TLSSocket
   try {
-    socket = new TLSSocket(options.stream, {
-      ...machineTlsServerOptions(options.identity),
+    socket = new TLSSocket(pinnedOptions.stream, {
+      ...machineTlsServerOptions(pinnedOptions.identity),
       isServer: true,
     })
   } catch (error) {
-    options.stream.destroy()
+    pinnedOptions.stream.destroy()
     throw connectionFailure(error)
   }
-  return await verifyMachineTlsConnection(socket, 'secure', options)
+  return await verifyMachineTlsConnection(socket, 'secure', pinnedOptions)
 }
 
 async function verifyMachineTlsConnection(
   socket: TLSSocket,
   secureEvent: 'secure' | 'secureConnect',
-  options: Omit<MachineTlsStreamOptions, 'stream'>,
+  options: Omit<MachineTlsClientStreamOptions, 'stream'>,
 ): Promise<MachineTlsConnection> {
   const timeoutMs =
     options.timeoutMs ?? machineTransportLimits.handshakeTimeoutMs
@@ -139,6 +159,7 @@ async function verifyMachineTlsConnection(
         'Machine TLS protocol is incompatible',
       )
     }
+    requireFreshMachineTlsSession(socket)
     const peer = publicCertificateFromPeer(socket.getPeerCertificate(true))
     if (
       options.expectedPeerFingerprint !== undefined &&
@@ -156,6 +177,22 @@ async function verifyMachineTlsConnection(
   }
 }
 
+function requirePinnedMachineTlsStream(
+  options: MachineTlsStreamOptions,
+): MachineTlsStreamOptions {
+  const parsed = PublicKeyFingerprintSchema.safeParse(
+    options.expectedPeerFingerprint,
+  )
+  if (!parsed.success) {
+    options.stream.destroy()
+    throw new MachineTransportError(
+      'identity_mismatch',
+      'Machine TLS peer identity pin is required for an existing stream',
+    )
+  }
+  return { ...options, expectedPeerFingerprint: parsed.data }
+}
+
 function connectionFailure(error: unknown): MachineTransportError {
   if (error instanceof MachineTransportError) return error
   return new MachineTransportError(
@@ -171,11 +208,35 @@ export function peerFingerprint(socket: TLSSocket): PublicKeyFingerprint {
   return publicCertificateFromPeer(socket.getPeerCertificate(true)).fingerprint
 }
 
+export function requireFreshMachineTlsSession(socket: TLSSocket): void {
+  if (socket.isSessionReused()) {
+    throw new MachineTransportError(
+      'authentication_failed',
+      'Machine TLS session resumption is not accepted',
+    )
+  }
+}
+
 export function exportMachineTlsBinding(socket: TLSSocket): string {
-  if (!socket.authorized && socket.getCipher().standardName === undefined) {
+  if (
+    socket.destroyed ||
+    socket.encrypted !== true ||
+    socket.getProtocol() !== 'TLSv1.3' ||
+    socket.alpnProtocol !== machineTransportAlpn
+  ) {
     throw new MachineTransportError(
       'authentication_failed',
       'Machine TLS channel is invalid',
+    )
+  }
+  requireFreshMachineTlsSession(socket)
+  try {
+    peerFingerprint(socket)
+  } catch (error) {
+    throw new MachineTransportError(
+      'authentication_failed',
+      'Machine TLS peer identity is unavailable',
+      { cause: error },
     )
   }
   return socket

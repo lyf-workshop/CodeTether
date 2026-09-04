@@ -1107,7 +1107,7 @@ Exit gate:
 
 ## Phase 7B — Authenticated Relay Transport
 
-**Status:** current approved implementation scope; not accepted, frozen, or declared ready.
+**Status:** accepted and frozen at `b0f74f51a1816ebe20745948da7192028c3216e6`.
 
 **Goal:** carry the existing end-peer-authenticated Machine protocol over the Owner-operated Internet Relay when Direct is unavailable, without changing Machine trust, Provider capabilities, execution ownership, or no-replay semantics and without creating a generic tunnel.
 
@@ -1124,7 +1124,7 @@ Exit gate:
 - Phase 6D gains controlled Relay channel-open/lost/capacity diagnostics and product surfaces may truthfully distinguish Direct, Relay, and unavailable transport. Web still owns no Relay socket or credential, and users receive no per-Turn transport switch or transparent-failover promise.
 - The production upgrade reuses the existing public TCP 443 listener and outbound peer connections; management remains loopback-only TCP 9443 and no new public, Node, database, or development port is added. Relay wire version 1 and version 2 fail closed rather than downgrade, so Relay, Desktop/Host, and Node artifacts are upgraded as a coordinated set.
 - Rollback preserves the Phase 7A Relay identity/registry backup and restores the matching Phase 7A Relay, Desktop/Host, and Node artifacts together. Rolling back only one participant is intentionally incompatible; reachable Direct LAN execution remains independent.
-- The Relay application forwards bounded end-to-end Machine TLS ciphertext and cannot decode Machine operations without endpoint keys, but it observes relationship/timing/count/size/volume metadata and can disrupt service. A broader compromised-Relay, traffic-analysis, rekey/forward-secrecy, and key-compromise assessment remains Phase 7C.
+- The Relay application forwards bounded opaque Machine TLS wire records and cannot decode Machine application operations without endpoint keys. TLS 1.3 application records are ciphertext, while ordinary handshake metadata and relationship/timing/count/size/volume metadata remain observable and the Relay can disrupt service. Formal verification of that boundary was intentionally deferred to Phase 7C.
 
 ### Out of scope
 
@@ -1138,6 +1138,39 @@ Exit gate:
 - Channel open, delivery/backpressure, close, stale epoch/generation, authorization, capacity, reconnect/restart, unpair/revocation, mixed-version, and forced Relay-only automated matrices must prove bounded cleanup and no cross-peer/cross-channel leakage. At least 100 channel/session lifecycles and the required resource soak return Relay, Host, and Node to bounded idle state.
 - Failure before semantic acceptance may permit a later route choice; failure after a Machine/Turn write preserves exact ownership uncertainty and never automatically replays or migrates. Historical diagnostics, current transport/health truth, Attention, and direct/local operation remain intact.
 - Production Relay v2 upgrade/restart/rollback documentation, TCP-443-only cloud boundary, aggregate channel metrics, all workspace/Desktop/Node/Relay/package gates, privacy evidence, zero test residue, matching clean build identities, and a clean worktree must pass.
+
+### Acceptance boundary
+
+- Owner review accepted one shared Direct/Relay Machine transport and remote Runtime, end-peer Machine trust through nested TLS 1.3, bounded opaque Relay channels and backpressure, Direct-first new-Turn routing, no active-Turn migration or automatic Prompt replay, execution ownership and cross-transport `actionId` idempotency, REAL public-Relay Codex/Claude streaming and native resume, restart/interruption/background/concurrency behavior, direct regressions, deterministic high-volume stress, the production Alibaba TCP-443-only lifecycle, private evidence, and a clean final state. The implementation and evidence are frozen at `b0f74f5`.
+
+## Phase 7C — End-to-End Security Hardening
+
+**Status:** current approved implementation scope; not accepted, frozen, or declared ready.
+
+**Goal:** formally verify and harden the existing nested TLS security boundary so Relay transport carries authenticated Controller ↔ Node Machine application traffic without requiring Agent payload plaintext or substituting Relay enrollment for Machine trust.
+
+### In scope
+
+- Preserve the three independent trust layers: outer Relay transport/application identity, Relay peer enrollment/authorization, and exact paired Controller ↔ Node Machine trust. Only the last authorizes Machine operations.
+- Require TLS 1.3 and `codetether-machine/1` ALPN for every inner Machine session. Relay-backed Duplex entry points require an exact paired peer SPKI pin before Machine framing; identity, protocol, or certificate failure closes the stream without plaintext, Relay-trust, or weaker-TLS fallback.
+- Audit the standard TLS lifecycle rather than inventing cryptography. Machine TLS requests no stateless tickets; CodeTether supplies, captures, and persists no resumption state, uses no early-data API, and performs a fresh authenticated handshake and exporter binding for each new channel.
+- Keep Controller and Node Machine private identity keys endpoint-local and separate from Relay identity. Provider credentials and private native Provider sessions remain Node-local/application-private; Web and Relay receive no private Machine key or TLS traffic secret.
+- Keep Relay channel data opaque and bounded. Relay has no Machine, Conversation, Turn, ProjectLocation, Provider, Tool, or Prompt decoder; it does not persist payload, log payload, label metrics with product content, add payload-aware compression, or create a store-and-forward replay path.
+- Verify privacy with architecture/dependency/schema review, isolated identity-mismatch and TLS-integrity fixtures, safe log/database/metrics sentinel checks, and a complete implementation-based Relay metadata inventory. Sentinel absence supports but does not replace the cryptographic evidence.
+- Preserve Direct/Relay security parity, execution ownership, durable `actionId` idempotency, no-replay/no-migration behavior, ProjectLocation enforcement, fixed Provider capabilities, bounded queues, diagnostics, native resume, normal restart/reconnect, and production Alibaba operation on public TCP 443 only.
+
+### Out of scope
+
+- Custom cipher, MAC, key exchange, encrypted envelope, certificate authority, identity rotation, post-quantum scheme, packet padding, traffic-shape obfuscation, anonymity, onion/multi-hop routing, or protection against a compromised Controller or Node.
+- Availability against a malicious or unavailable Relay, traffic-analysis resistance, invasive memory forensics, penetration testing, exploit development, infrastructure attack simulation, remote crash injection, or Phase 7D roaming work.
+- Any new Provider capability, account/team feature, Mobile, Push, Remote Terminal, Remote Files, arbitrary tunnel, or change to the frozen product model.
+
+### Exit gate
+
+- Code and deterministic tests must prove TLS 1.3-only inner sessions, exact end-peer pins, no plaintext/security downgrade, no 0-RTT execution, no unsafe resumption, fresh authenticated reconnect, identity-mismatch rejection, TLS integrity failure, and unchanged ownership/idempotency/backpressure semantics.
+- Static and runtime evidence must prove the Relay neither imports an application decoder nor logs, persists, metrics-labels, compresses semantically, or replays inner Machine payload. Private Machine keys and Provider credentials must remain outside Relay/Web, and the Relay-visible metadata inventory and endpoint/availability limitations must be explicit.
+- REAL Direct and Alibaba Relay Codex/Claude, incremental streaming, Read/Search, exact ProjectLocation, native resume, normal Host/Node/Relay restart, safe Relay interruption, Tray/background, and mixed-Provider regressions must pass without capability expansion or fallback weakening.
+- Required workspace, Linux Node/Relay, Desktop/NSIS, lifecycle, production health/port, evidence-redaction, resource, cleanup, matching-build, and clean-worktree gates must pass with no P0/P1 product-security blocker.
 
 ## Phase 8 — OpenCode
 
@@ -1169,4 +1202,4 @@ Exit gate: core mobile tasks are fast, legible, safe, resilient, and validated o
 - Team collaboration.
 - Enterprise administration and policy.
 - Cross-agent conversation handoff.
-- Relay operations or payload transport beyond Phase 7B's purpose-bound encrypted Machine protocol, including generic tunneling and Phase 7C hardening.
+- Relay behavior beyond the purpose-bound encrypted Machine protocol, including generic tunneling, traffic-shape obfuscation/anonymity, automatic Machine-key rotation, and separately specified Phase 7D roaming/reliability work.

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -18,6 +18,20 @@ import {
 } from '../dist/index.js'
 
 const execFileAsync = promisify(execFile)
+
+const collectTypeScriptFiles = async (directory) => {
+  const entries = await readdir(directory, { withFileTypes: true })
+  const files = []
+  for (const entry of entries) {
+    const path = join(directory, entry.name)
+    if (entry.isDirectory()) {
+      files.push(...(await collectTypeScriptFiles(path)))
+    } else if (entry.isFile() && entry.name.endsWith('.ts')) {
+      files.push(path)
+    }
+  }
+  return files
+}
 
 test('bounded token bucket limits abuse and refuses unbounded identity state', () => {
   const limiter = new BoundedTokenBucketRateLimiter({
@@ -58,6 +72,62 @@ test('safe structured logs never interpolate hostile remote fields', () => {
   assert.equal(parsed.peer, opaqueReference(malicious))
   assert.equal(typeof parsed.connection, 'string')
   assert.equal('code' in parsed, false)
+})
+
+test('production Relay dependency boundary excludes Machine and Provider decoders', async () => {
+  const root = process.cwd()
+  const manifest = JSON.parse(
+    await readFile(join(root, 'package.json'), 'utf8'),
+  )
+  assert.deepEqual(Object.keys(manifest.dependencies).sort(), [
+    '@codetether/relay-protocol',
+    'selfsigned',
+    'zod',
+  ])
+
+  const sourcePaths = await collectTypeScriptFiles(join(root, 'src'))
+  const source = (
+    await Promise.all(
+      sourcePaths.map(async (path) => await readFile(path, 'utf8')),
+    )
+  ).join('\n')
+  for (const forbiddenImport of [
+    '@codetether/machine-transport',
+    '@codetether/protocol',
+    '@codetether/agent-core',
+    '@codetether/adapter-',
+    'apps/host',
+    'apps/node',
+    'apps/web',
+  ]) {
+    assert.equal(source.includes(forbiddenImport), false)
+  }
+  for (const forbiddenRuntimeEscape of [
+    'NODE_TLS_REJECT_UNAUTHORIZED',
+    'SSLKEYLOGFILE',
+    'keylog',
+    'perMessageDeflate',
+    'createGunzip',
+    'createInflate',
+    'brotliDecompress',
+  ]) {
+    assert.equal(source.includes(forbiddenRuntimeEscape), false)
+  }
+  assert.equal(source.includes('process.env'), false)
+
+  const serviceSource = await readFile(
+    join(root, 'src', 'relay-service.ts'),
+    'utf8',
+  )
+  const forwardStart = serviceSource.indexOf('async #forwardChannelData(')
+  const forwardEnd = serviceSource.indexOf(
+    'async #forwardChannelAcknowledgement(',
+  )
+  assert.ok(forwardStart >= 0 && forwardEnd > forwardStart)
+  const forwarding = serviceSource.slice(forwardStart, forwardEnd)
+  assert.equal(forwarding.includes('Buffer.from'), false)
+  assert.equal(forwarding.includes('JSON.parse'), false)
+  assert.match(forwarding, /data: message\.data/u)
 })
 
 test('configuration requires explicit paths and loopback management', async () => {

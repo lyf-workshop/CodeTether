@@ -1,15 +1,88 @@
 # CodeTether Relay
 
-The Phase 7A Relay is a standalone TLS control-plane service. Controllers and
-Nodes both connect outbound. It carries enrollment, authentication, heartbeat,
-authorized Node presence, and rendezvous metadata only. Its strict protocol has
-no Prompt, Conversation, Provider, Tool, shell, filesystem, opaque-payload, or
-generic tunnel message.
+The CodeTether Relay is a standalone TLS service. The accepted Phase 7A
+foundation carries enrollment, authentication, heartbeat, authorized Node
+presence, and rendezvous metadata over outbound-only Controller and Node
+connections. Phase 7B protocol version 2 additionally carries one bounded,
+ephemeral, purpose-bound `machine_tls_v1` channel. It does not provide an
+arbitrary destination, caller-defined application message, generic tunnel, or
+Relay-owned Provider operation.
+
+Phase 7A is accepted and frozen at `67e2a98`. Phase 7B is the current approved
+implementation scope and is not yet accepted or frozen.
 
 Relay enrollment is infrastructure access, not Machine pairing. A Node grants
 presence visibility only to the exact Controller public-key fingerprint it has
 already paired with. The Relay never lists peers and cannot create or replace
 Controller ↔ Node trust.
+
+## Phase 7B Machine channel boundary
+
+The channel transports the existing end-peer Machine TLS session rather than a
+new Relay execution protocol:
+
+```text
+Host Controller
+  -> Relay TLS/control connection
+  -> machine_tls_v1 channel
+  -> Relay TLS/control connection
+  -> Node
+  -> existing inner TLS 1.3 Machine protocol and Node dispatcher
+```
+
+The Relay authorizes the exact enrolled Controller/Node relationship and binds
+every channel to its random identity/generation plus both current connection
+epochs. The Node then accepts only the exact currently paired Controller and
+validates its inner Machine certificate. The Controller independently pins the
+expected Node certificate, Node identity, Machine identity, ALPN, and protocol.
+The Relay cannot name a host, port, URL, process, Provider, Project path, shell
+command, or arbitrary destination. It routes Machine TLS ciphertext and never
+stores channel state or payload in SQLite.
+
+Channel acknowledgement is transport flow control only. A channel-open result
+says that the current Node Relay client accepted the offer. A data ACK says that
+one sequenced chunk reached or advanced through the peer's bounded Duplex read
+path; it does not prove Machine authentication, Machine request parsing,
+Provider-session creation, Prompt acceptance, Tool execution, or Turn
+completion. Those semantics remain owned by the inner Machine session-ready,
+Turn acknowledgement and terminal messages plus the Host's durable `actionId`
+ledger.
+
+Protocol ceilings are 256 live channels globally, eight per authenticated peer,
+4 KiB decoded data per chunk, one unacknowledged chunk per direction, 10-second
+channel-open and data-acknowledgement deadlines, 8 KiB outer frames, 16 KiB
+parser buffering, 16 queued control frames per Relay connection, and 240
+channel-open attempts per authenticated identity per minute. A service may
+configure lower channel/open counts but cannot exceed these limits. Thirty-two
+stale, guessed, or cross-peer channel frames on one authenticated connection
+disconnect only that offending connection. An exact closed binding remains as
+a payload-free tombstone for at most one acknowledgement deadline so up to four
+already-in-flight terminal ACK/data frames cannot poison unrelated multiplexed
+channels; tombstones are bounded by the global channel ceiling. Stale
+generation/epoch, sequence, authorization, capacity, timeout, connection
+replacement, grant removal, revocation, or disconnect closes the exact channel;
+Relay never retains bytes for reconnect or replays a Turn.
+
+Production Host policy is Direct first. Relay is considered only after a
+retryable Direct connectivity failure for an idle operation and before an
+authenticated semantic acceptance boundary. Once a Machine session or Turn has
+selected Direct or Relay, it does not migrate. Relay reconnect creates a new
+channel generation for a later explicit operation, apart from one short-lived
+Host qualification channel described below. A post-write loss remains
+execution-ownership uncertainty and is not safe replay merely because a Relay
+frame was acknowledged.
+
+Relay presence alone does not publish Internet execution as available. For the
+current Host process and live Relay epoch, the Host first opens a bounded
+`machine_tls_v1` channel, completes the existing pinned Controller-to-Node
+Machine TLS handshake, and receives the nonce-matched `machine.pong` within the
+10-second Machine heartbeat timeout. The qualification connection is then
+closed. It sends no Provider, Project Location, Prompt, or Conversation
+operation, starts no Provider, and does not prove Provider, Project Location,
+Conversation, or runtime-capacity eligibility. Loss of current Relay execution
+state clears the process-local qualification; Host or Relay reconnection must
+qualify the new current state before public `internetExecutionEnabled` can be
+true again.
 
 ## Build and install
 
@@ -96,8 +169,11 @@ key as `codetether-relay:codetether-relay` mode `0600`, then restart the Relay s
 it loads the new files. Certificate rotation does not rotate the Relay
 application identity.
 
-The Relay protocol is framed TLS with `codetether-relay/1` ALPN, not HTTP or
-WebSocket. An HTTP reverse proxy is therefore not a compatible Relay frontend.
+Relay protocol version 2 is framed TLS with the transport-family
+`codetether-relay/1` ALPN, not HTTP or WebSocket. The ALPN label remains stable;
+the signed and strictly validated message handshake rejects Relay protocol
+version 1 rather than silently downgrading. An HTTP reverse proxy is therefore
+not a compatible Relay frontend.
 If an existing proxy is retained, it must use layer-4 TLS pass-through that
 leaves the Relay certificate, ALPN, long-lived connection, frame bounds, and
 application-identity checks intact. Direct TLS termination in the Relay is the
@@ -227,7 +303,16 @@ there is intentionally no command or endpoint that lists or searches all peers.
 When configured, loopback-only `GET /healthz`, `/readyz`, and `/metrics` expose
 minimal process/service counters. Metrics contain aggregate connection,
 authentication, enrollment, heartbeat, rate-limit, uptime, file-descriptor, and
-RSS values only. They expose no peer directory or identities.
+RSS values plus active/opening channels, bounded terminal-channel tombstones,
+pending channel data frames/bytes,
+open/accept/reject/close/error outcomes, forwarded frame/byte counts,
+four directional Relay-channel byte counters, backpressure failures, and
+stale-channel frames. Aggregate
+`queuedInboundFrames`/`queuedInboundBytes` and
+`pendingOutboundFrames`/`pendingOutboundBytes` expose current framed-connection
+pressure; `framedQueueFramesHighWaterMark`/`framedQueueBytesHighWaterMark` and
+the pending-channel high-water marks retain only lifetime counts. They expose no
+peer directory, identities, channel bytes, Machine frames, or product content.
 
 ```text
 curl --fail --silent http://127.0.0.1:9443/healthz
@@ -276,3 +361,25 @@ registrations. Unsupported database or wire versions fail closed. Changing
 hostname or IP is safe when clients intentionally update the endpoint and the
 pinned application identity remains the same. A different Relay identity must
 never be accepted silently.
+
+Phase 7B changes the Relay wire protocol from version 1 to version 2 but adds no
+durable channel table. Upgrade the Relay, Desktop/Host, and Node as one planned
+compatibility set; mixed version-1/version-2 peers disconnect and reconnect with
+a safe incompatibility diagnostic rather than negotiating down. The upgrade
+continues to use public TCP 443 only. Do not add another security-group rule,
+publish loopback TCP 9443, expose SQLite, or expose development ports.
+
+To roll back, stop the version-2 participants and restore the matching Phase 7A
+Relay, Desktop/Host, and Node artifacts together. Keep the validated Relay state
+directory (or restore its consistent pre-upgrade backup), verify the unchanged
+application fingerprint, then verify version-1 peer reconnect and authorized
+presence. Rolling back only the Relay or only one peer is intentionally
+incompatible. Direct LAN transport remains independent while reachable.
+
+The Relay application forwards end-to-end Machine TLS ciphertext in Phase 7B,
+so it does not decode Prompt, Provider output, Tool activity, Project paths,
+credentials, or native Provider session identity. Operators can still observe
+peer/channel timing, counts, frame sizes, and byte volume and can disrupt
+availability. Do not describe Phase 7B as completing Phase 7C's broader
+compromised-Relay, traffic-analysis, rekey, forward-secrecy, or key-compromise
+review.

@@ -2,8 +2,13 @@ import { X509Certificate } from 'node:crypto'
 import { lookup } from 'node:dns/promises'
 import { isIP } from 'node:net'
 import { basename, dirname, join, resolve } from 'node:path'
+import type { Duplex } from 'node:stream'
 
-import { canonicalFailure, type CanonicalFailure } from '@codetether/agent-core'
+import {
+  canonicalFailure,
+  isCanonicalFailureReason,
+  type CanonicalFailure,
+} from '@codetether/agent-core'
 
 import {
   ConversationIdSchema,
@@ -13,6 +18,7 @@ import {
   TimestampSchema,
   machineWireLimits,
   type MachineConnectionState,
+  type MachineExecutionTransport,
   type MachineId,
   type MachinePairingAttemptId,
   type RemoteMachineAddress,
@@ -28,6 +34,7 @@ import {
   PublicKeyFingerprintSchema,
   beginRemoteMachinePairing,
   connectTrustedRemoteMachine,
+  connectTrustedRemoteMachineOverStream,
   createMachineTlsIdentityFile,
   deleteMachineTlsIdentityFile,
   machineProtocolVersion,
@@ -35,7 +42,9 @@ import {
   newControllerId,
   NodeIdSchema,
   openRemoteClaudeSession,
+  openRemoteClaudeSessionOverStream,
   openRemoteCodexSession,
+  openRemoteCodexSessionOverStream,
   readMachineTlsIdentityFile,
   MachineTransportActionIdSchema,
   MachineTransportConversationIdSchema,
@@ -128,6 +137,12 @@ export interface ConfirmedRemoteMachine {
  */
 export interface RemoteMachineCoordinator extends RemoteMachineStatusSource {
   connectionDetails?(machineId: MachineId): RemoteMachineConnection | undefined
+  /**
+   * True only after this Host epoch has authenticated the exact paired Machine
+   * through a current Relay connection generation. Relay presence alone is
+   * intentionally insufficient for the public execution-eligibility claim.
+   */
+  relayExecutionAvailable?(machineId: MachineId): boolean
   subscribeStatus?(
     listener: (
       machineId: MachineId,
@@ -204,6 +219,10 @@ export class UnavailableRemoteMachineCoordinator implements RemoteMachineCoordin
     return undefined
   }
 
+  relayExecutionAvailable(): boolean {
+    return false
+  }
+
   async beginPairing(): Promise<RemoteMachinePairingCandidate> {
     throw unavailable()
   }
@@ -248,6 +267,7 @@ interface PendingPairing {
 interface RemoteWorker {
   abort: AbortController
   connection?: AuthenticatedRemoteMachineConnection
+  transport?: Exclude<MachineExecutionTransport, 'unavailable'>
   task?: Promise<void>
 }
 
@@ -257,12 +277,61 @@ interface ProviderDiscoveryTask {
   task?: Promise<DurableRemoteProviderObservation>
 }
 
+interface RelayVerificationTask {
+  readonly abort: AbortController
+  readonly relayEpoch: string
+  task?: Promise<void>
+}
+
+type RoutedMachineConnection =
+  | {
+      readonly connection: AuthenticatedRemoteMachineConnection
+      readonly transport: 'direct'
+      readonly endpoint: DurableTrustedMachineEndpoint
+      readonly relayEpoch?: never
+    }
+  | {
+      readonly connection: AuthenticatedRemoteMachineConnection
+      readonly transport: 'relay'
+      readonly endpoint?: never
+      /** The exact outer Relay generation that carried peer authentication. */
+      readonly relayEpoch: string
+    }
+
+interface TrackedExecutionSession {
+  readonly transport: Exclude<MachineExecutionTransport, 'unavailable'>
+  readonly session: { readonly closed: boolean }
+}
+
 interface CoordinatorTransport {
   beginPairing: typeof beginRemoteMachinePairing
   connectTrusted: typeof connectTrustedRemoteMachine
   openCodexSession?: typeof openRemoteCodexSession
   openClaudeSession?: typeof openRemoteClaudeSession
+  connectTrustedOverStream?: typeof connectTrustedRemoteMachineOverStream
+  openCodexSessionOverStream?: typeof openRemoteCodexSessionOverStream
+  openClaudeSessionOverStream?: typeof openRemoteClaudeSessionOverStream
 }
+
+export interface RelayMachineTransport {
+  status(machineId: MachineId): {
+    readonly internetExecutionEnabled: boolean
+  }
+  /** Exact process-private outer Relay epoch when one is current. */
+  connectionEpoch?(machineId: MachineId): string | undefined
+  openMachineChannel(
+    trust: DurableTrustedMachinePeer,
+    signal?: AbortSignal,
+  ): Promise<Duplex>
+  openMachineRevocationChannel?(
+    trust: DurableTrustedMachinePeer,
+    signal?: AbortSignal,
+  ): Promise<Duplex>
+  subscribe(listener: (machineId: MachineId) => void): () => void
+}
+
+export type RemoteMachineTransportPolicy =
+  'direct_first' | 'direct_only' | 'relay_only'
 
 export interface SecureRemoteMachineCoordinatorOptions {
   readonly persistence: ConversationStore
@@ -275,6 +344,9 @@ export interface SecureRemoteMachineCoordinatorOptions {
   readonly random?: () => number
   /** Narrow deterministic seam for Host coordinator tests. */
   readonly transport?: CoordinatorTransport
+  readonly relayTransport?: RelayMachineTransport
+  /** Internal validation seam; normal product policy is direct-first. */
+  readonly transportPolicy?: RemoteMachineTransportPolicy
   /** Narrow deterministic seam for credential-cleanup failure tests. */
   readonly deleteCredentialFile?: typeof deleteMachineTlsIdentityFile
 }
@@ -289,14 +361,33 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
   readonly #now: () => Date
   readonly #random: () => number
   readonly #transport: CoordinatorTransport
+  readonly #relayTransport: RelayMachineTransport | undefined
+  readonly #transportPolicy: RemoteMachineTransportPolicy
   readonly #pending = new Map<MachinePairingAttemptId, PendingPairing>()
   readonly #workers = new Map<MachineId, RemoteWorker>()
   /** Mutating connection operations are linearized per durable Machine. */
   readonly #machineOperations = new Map<MachineId, Promise<unknown>>()
   readonly #retryTasks = new Map<MachineId, Promise<RemoteMachineConnection>>()
   readonly #providerDiscoveryTasks = new Map<MachineId, ProviderDiscoveryTask>()
+  readonly #relayVerificationTasks = new Map<MachineId, RelayVerificationTask>()
   readonly #currentProviderObservations = new Map<MachineId, Timestamp>()
   readonly #states = new Map<MachineId, MachineConnectionState>()
+  readonly #directStates = new Map<MachineId, MachineConnectionState>()
+  readonly #lastExecutionTransports = new Map<
+    MachineId,
+    Exclude<MachineExecutionTransport, 'unavailable'>
+  >()
+  /** Current-Host observations of a peer-authenticated Machine TLS session. */
+  readonly #relayVerifiedMachines = new Map<MachineId, string>()
+  readonly #executionSessions = new Map<
+    MachineId,
+    Set<TrackedExecutionSession>
+  >()
+  /** Idle-route state withheld only while an independent session proves life. */
+  readonly #deferredIdleRouteStates = new Map<
+    MachineId,
+    MachineConnectionState
+  >()
   readonly #lastAttemptAt = new Map<MachineId, Timestamp>()
   readonly #listeners = new Set<
     (machineId: MachineId, state: MachineConnectionState) => void
@@ -306,6 +397,7 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
     (observation: DurableRemoteProviderObservation) => void
   >()
   readonly #deleteCredentialFile: typeof deleteMachineTlsIdentityFile
+  readonly #unsubscribeRelayStatus: (() => void) | undefined
   #pendingReservations = 0
   #closed = false
 
@@ -333,9 +425,55 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
       connectTrusted: connectTrustedRemoteMachine,
       openCodexSession: openRemoteCodexSession,
       openClaudeSession: openRemoteClaudeSession,
+      connectTrustedOverStream: connectTrustedRemoteMachineOverStream,
+      openCodexSessionOverStream: openRemoteCodexSessionOverStream,
+      openClaudeSessionOverStream: openRemoteClaudeSessionOverStream,
+    }
+    this.#relayTransport = options.relayTransport
+    this.#transportPolicy = options.transportPolicy ?? 'direct_first'
+    if (
+      this.#transportPolicy !== 'direct_first' &&
+      this.#transportPolicy !== 'direct_only' &&
+      this.#transportPolicy !== 'relay_only'
+    ) {
+      throw new TypeError('Remote Machine transport policy is invalid')
     }
     this.#deleteCredentialFile =
       options.deleteCredentialFile ?? deleteMachineTlsIdentityFile
+    this.#unsubscribeRelayStatus = this.#relayTransport?.subscribe(
+      (machineId) => {
+        const relayStatus = this.#relayTransport?.status(machineId)
+        if (relayStatus?.internetExecutionEnabled !== true) {
+          // Reconnect creates a new Relay epoch/channel generation. The old
+          // inner Machine authentication proof cannot authorize that epoch.
+          this.#relayVerifiedMachines.delete(machineId)
+          // A new online observation can race this asynchronous stop while the
+          // old task still owns the per-Machine slot. Reconcile again only
+          // after that stale task has released ownership so the current Relay
+          // epoch always receives its own inner Machine authentication.
+          void this.#stopRelayVerification(machineId).then(() => {
+            this.#reconcileRelayVerification(machineId)
+          })
+          return
+        }
+        const relayEpoch = this.#relayTransport?.connectionEpoch?.(machineId)
+        if (relayEpoch === undefined) return
+        if (this.#relayVerifiedMachines.get(machineId) !== relayEpoch) {
+          this.#relayVerifiedMachines.delete(machineId)
+        }
+        const verification = this.#relayVerificationTasks.get(machineId)
+        if (
+          verification !== undefined &&
+          verification.relayEpoch !== relayEpoch
+        ) {
+          void this.#stopRelayVerification(machineId).then(() => {
+            this.#reconcileRelayVerification(machineId)
+          })
+          return
+        }
+        this.#reconcileRelayVerification(machineId)
+      },
+    )
   }
 
   static async create(
@@ -350,15 +488,38 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
     return this.#states.get(MachineIdSchema.parse(machineId))
   }
 
+  relayExecutionAvailable(machineId: MachineId): boolean {
+    const id = MachineIdSchema.parse(machineId)
+    return (
+      this.#persistence.getTrustedMachinePeer(id)?.trustState === 'active' &&
+      this.#relayVerifiedMachines.get(id) ===
+        this.#relayTransport?.connectionEpoch?.(id) &&
+      this.#relayTransport?.status(id).internetExecutionEnabled === true
+    )
+  }
+
   connectionDetails(machineId: MachineId): RemoteMachineConnection | undefined {
     const id = MachineIdSchema.parse(machineId)
     const state = this.#states.get(id)
     if (state === undefined || state === 'local') return undefined
+    const observedDirectState = this.#directStates.get(id)
+    const directState =
+      observedDirectState === undefined || observedDirectState === 'local'
+        ? state
+        : observedDirectState
+    const activeTransport =
+      this.#liveExecutionTransport(id) ?? this.#workers.get(id)?.transport
+    const executionTransport: MachineExecutionTransport =
+      state === 'online'
+        ? (activeTransport ?? this.#lastExecutionTransports.get(id) ?? 'direct')
+        : 'unavailable'
     const preferred = this.#persistence
       .getTrustedMachinePeer(id)
       ?.endpoints.find((endpoint) => endpoint.preferred)
     return {
       state,
+      directState,
+      executionTransport,
       ...(preferred?.lastSuccessfulAt === undefined
         ? {}
         : {
@@ -415,8 +576,10 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
           (provider === undefined || descriptor.provider === provider) &&
           remoteProviderExecutionProfileAvailable(
             descriptor,
-            this.#transport.openCodexSession !== undefined,
-            this.#transport.openClaudeSession !== undefined,
+            this.#transport.openCodexSession !== undefined ||
+              this.#transport.openCodexSessionOverStream !== undefined,
+            this.#transport.openClaudeSession !== undefined ||
+              this.#transport.openClaudeSessionOverStream !== undefined,
           ),
       )
     )
@@ -686,64 +849,36 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
       // authentication, or heartbeat failure below still transitions away
       // from online and invalidates sessions.
       if (!wasOnline) this.#setState(id, 'connecting')
-      let connection: AuthenticatedRemoteMachineConnection | undefined
-      let authenticatedEndpoint: DurableTrustedMachineEndpoint | undefined
-      let lastConnectionError: unknown
+      let route: RoutedMachineConnection | undefined
       try {
         const controller = await this.#loadController(current.trust)
-        for (const endpoint of current.trust.endpoints) {
-          try {
-            this.#recordAttempt(id)
-            connection = await this.#transport.connectTrusted({
-              peer: trustedPeer(
-                current.machine,
-                current.trust,
-                endpoint.address,
-              ),
-              controller,
-            })
-            authenticatedEndpoint = endpoint
-            break
-          } catch (error) {
-            lastConnectionError = error
-            this.#persistence.recordTrustedMachineEndpointFailure(
-              id,
-              endpoint.address,
-              TimestampSchema.parse(this.#now().toISOString()),
-            )
-          }
-        }
-        if (connection === undefined || authenticatedEndpoint === undefined) {
-          throw (
-            lastConnectionError ?? new Error('No trusted endpoint is available')
-          )
-        }
+        route = await this.#connectMachineByPolicy(
+          current.machine,
+          current.trust,
+          controller,
+        )
+        const connection = route.connection
 
         const authenticatedAt = TimestampSchema.parse(this.#now().toISOString())
-        this.#persistence.recordTrustedMachineAuthentication(
-          id,
-          authenticatedEndpoint.address,
-          authenticatedAt,
-          authenticatedEndpoint.source,
-        )
+        this.#recordAuthenticatedRoute(id, route, authenticatedAt)
         this.#setState(id, 'online')
         const validated = await connection.validateProjectLocation(rootPath)
         if (restoreExecutionDiscovery) {
           await this.#discoverAndPersist(current.machine, connection)
         }
         connection.close()
-        connection = undefined
+        route = undefined
         setTimeout(() => this.#startDurableWorker(id), 0)
         return validated
       } catch (error) {
-        connection?.close()
+        route?.connection.close()
         if (isProjectLocationValidationError(error)) {
           // The pinned peer remains healthy when it truthfully rejects only
           // the requested directory. Path failures must not poison Machine
           // trust or trigger an authentication state.
           this.#setState(id, 'online')
         } else {
-          this.#setState(id, connectionStateFor(lastConnectionError ?? error))
+          this.#setState(id, connectionStateFor(error))
         }
         setTimeout(() => this.#startDurableWorker(id), 0)
         throw coordinatorError(error)
@@ -763,43 +898,34 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
     }
     const task = this.#serializeMachineOperation(id, async () => {
       const current = this.#requireCurrentActiveTrust(machine, trust)
-      let connection: AuthenticatedRemoteMachineConnection | undefined
-      let lastConnectionError: unknown
+      let route: RoutedMachineConnection | undefined
       try {
         const controller = await this.#loadController(current.trust)
-        for (const endpoint of current.trust.endpoints) {
-          try {
-            connection = await this.#transport.connectTrusted({
-              peer: trustedPeer(
-                current.machine,
-                current.trust,
-                endpoint.address,
-              ),
-              controller,
-              signal: discovery.abort.signal,
-            })
-            discovery.connection = connection
-            break
-          } catch (error) {
-            lastConnectionError = error
-          }
-        }
-        if (connection === undefined) {
-          throw (
-            lastConnectionError ?? new Error('No trusted endpoint is available')
-          )
-        }
+        route = await this.#connectMachineByPolicy(
+          current.machine,
+          current.trust,
+          controller,
+          discovery.abort.signal,
+        )
+        const connection = route.connection
+        discovery.connection = connection
+        this.#recordAuthenticatedRoute(
+          id,
+          route,
+          TimestampSchema.parse(this.#now().toISOString()),
+        )
+        this.#setState(id, 'online')
         const observation = await this.#discoverAndPersist(
           current.machine,
           connection,
           discovery.abort.signal,
         )
         connection.close()
-        connection = undefined
+        route = undefined
         discovery.connection = undefined
         return observation
       } catch (error) {
-        connection?.close()
+        route?.connection.close()
         discovery.connection = undefined
         throw coordinatorError(error)
       }
@@ -834,62 +960,125 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
       }
       const controller = await this.#loadController(current.trust)
       let lastError: unknown
-      for (const endpoint of current.trust.endpoints) {
+      const conversationId = MachineTransportConversationIdSchema.parse(
+        input.conversationId,
+      )
+      const projectId = MachineTransportProjectIdSchema.parse(input.projectId)
+      const providerThreadId =
+        input.providerThreadId === undefined
+          ? undefined
+          : RemoteCodexProviderIdentitySchema.parse(input.providerThreadId)
+      if (this.#transportPolicy !== 'relay_only') {
+        for (const endpoint of current.trust.endpoints) {
+          try {
+            this.#recordAttempt(id)
+            const session = await (
+              this.#transport.openCodexSession ?? openRemoteCodexSession
+            )({
+              peer: trustedPeer(
+                current.machine,
+                current.trust,
+                endpoint.address,
+              ),
+              controller,
+              conversationId,
+              projectId,
+              rootPath: input.rootPath,
+              ...(providerThreadId === undefined ? {} : { providerThreadId }),
+            })
+            const authenticatedAt = TimestampSchema.parse(
+              this.#now().toISOString(),
+            )
+            this.#persistence.recordTrustedMachineAuthentication(
+              id,
+              endpoint.address,
+              authenticatedAt,
+            )
+            this.#directStates.set(id, 'online')
+            this.#lastExecutionTransports.set(id, 'direct')
+            return remoteCodexRuntimeSession(
+              session,
+              'direct',
+              this.#now,
+              this.#trackExecutionSession(id, session, 'direct'),
+            )
+          } catch (error) {
+            lastError = error
+            // Once the exact Machine has authenticated, a rejected or lost
+            // session-open operation may already own native Provider state.
+            // Never try either another direct endpoint or Relay afterward.
+            if (
+              error instanceof MachineTransportError &&
+              error.peerAuthenticated
+            ) {
+              throw coordinatorError(error)
+            }
+            this.#persistence.recordTrustedMachineEndpointFailure(
+              id,
+              endpoint.address,
+              TimestampSchema.parse(this.#now().toISOString()),
+            )
+            this.#directStates.set(id, connectionStateFor(error))
+            if (isPermanentConnectionError(error)) {
+              throw coordinatorError(error)
+            }
+          }
+        }
+      }
+      if (
+        this.#transportPolicy !== 'direct_only' &&
+        this.#relayTransport?.status(id).internetExecutionEnabled === true
+      ) {
+        let stream: Duplex | undefined
         try {
+          const relayEpoch = this.#requireCurrentRelayEpoch(id)
+          const endpoint = current.trust.endpoints[0]
+          if (endpoint === undefined) {
+            throw new RemoteMachineCoordinatorError(
+              'connection_failed',
+              'Trusted Machine identity endpoint is unavailable',
+            )
+          }
           this.#recordAttempt(id)
-          const session = await (
-            this.#transport.openCodexSession ?? openRemoteCodexSession
-          )({
+          stream = await this.#relayTransport.openMachineChannel(current.trust)
+          const open =
+            this.#transport.openCodexSessionOverStream ??
+            openRemoteCodexSessionOverStream
+          const session = await open({
             peer: trustedPeer(current.machine, current.trust, endpoint.address),
             controller,
-            conversationId: MachineTransportConversationIdSchema.parse(
-              input.conversationId,
-            ),
-            projectId: MachineTransportProjectIdSchema.parse(input.projectId),
+            stream,
+            conversationId,
+            projectId,
             rootPath: input.rootPath,
-            ...(input.providerThreadId === undefined
-              ? {}
-              : {
-                  providerThreadId: RemoteCodexProviderIdentitySchema.parse(
-                    input.providerThreadId,
-                  ),
-                }),
+            ...(providerThreadId === undefined ? {} : { providerThreadId }),
           })
-          const authenticatedAt = TimestampSchema.parse(
-            this.#now().toISOString(),
-          )
-          this.#persistence.recordTrustedMachineAuthentication(
+          this.#assertCurrentRelayEpoch(id, relayEpoch)
+          stream = undefined
+          this.#persistence.recordTrustedMachineRelayAuthentication(
             id,
-            endpoint.address,
-            authenticatedAt,
+            TimestampSchema.parse(this.#now().toISOString()),
           )
-          return remoteCodexRuntimeSession(session)
+          this.#lastExecutionTransports.set(id, 'relay')
+          this.#markRelayVerified(id, relayEpoch)
+          return remoteCodexRuntimeSession(
+            session,
+            'relay',
+            this.#now,
+            this.#trackExecutionSession(id, session, 'relay'),
+          )
         } catch (error) {
-          lastError = error
-          // A purpose-specific rejection received after pinned TLS
-          // authentication proves that this endpoint is healthy. Retrying the
-          // same semantic operation at another remembered address could open
-          // the same native session twice and would poison endpoint history.
+          stream?.destroy()
           if (
             error instanceof MachineTransportError &&
             error.peerAuthenticated
           ) {
-            break
+            throw coordinatorError(error)
           }
-          this.#persistence.recordTrustedMachineEndpointFailure(
-            id,
-            endpoint.address,
-            TimestampSchema.parse(this.#now().toISOString()),
-          )
-          if (
-            error instanceof MachineTransportError &&
-            (error.code === 'identity_mismatch' ||
-              error.code === 'authentication_failed' ||
-              error.code === 'protocol_incompatible' ||
-              error.code === 'remote_policy_violation')
-          ) {
-            break
+          if (isPermanentConnectionError(error)) {
+            throw coordinatorError(error)
           }
+          throw this.#relayFailure(error, 'relay_channel_open_failed')
         }
       }
       throw coordinatorError(
@@ -930,63 +1119,140 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
       }
       const controller = await this.#loadController(current.trust)
       let lastError: unknown
-      for (const endpoint of current.trust.endpoints) {
+      const conversationId = MachineTransportConversationIdSchema.parse(
+        input.conversationId,
+      )
+      const projectId = MachineTransportProjectIdSchema.parse(input.projectId)
+      const providerSessionId =
+        input.providerSessionId === undefined
+          ? undefined
+          : RemoteClaudeProviderIdentitySchema.parse(input.providerSessionId)
+      if (this.#transportPolicy !== 'relay_only') {
+        for (const endpoint of current.trust.endpoints) {
+          try {
+            this.#recordAttempt(id)
+            const open =
+              this.#transport.openClaudeSession ?? openRemoteClaudeSession
+            const baseInput = {
+              peer: trustedPeer(
+                current.machine,
+                current.trust,
+                endpoint.address,
+              ),
+              controller,
+              conversationId,
+              projectId,
+              rootPath: input.rootPath,
+              ...(input.effort === undefined ? {} : { effort: input.effort }),
+            }
+            const session =
+              providerSessionId === undefined
+                ? await open(baseInput)
+                : await open({
+                    ...baseInput,
+                    providerSessionId,
+                    providerSessionMaterialized:
+                      input.providerSessionMaterialized === true,
+                  })
+            const authenticatedAt = TimestampSchema.parse(
+              this.#now().toISOString(),
+            )
+            this.#persistence.recordTrustedMachineAuthentication(
+              id,
+              endpoint.address,
+              authenticatedAt,
+            )
+            this.#directStates.set(id, 'online')
+            this.#lastExecutionTransports.set(id, 'direct')
+            return remoteClaudeRuntimeSession(
+              session,
+              'direct',
+              this.#now,
+              this.#trackExecutionSession(id, session, 'direct'),
+            )
+          } catch (error) {
+            lastError = error
+            if (
+              error instanceof MachineTransportError &&
+              error.peerAuthenticated
+            ) {
+              throw coordinatorError(error)
+            }
+            this.#persistence.recordTrustedMachineEndpointFailure(
+              id,
+              endpoint.address,
+              TimestampSchema.parse(this.#now().toISOString()),
+            )
+            this.#directStates.set(id, connectionStateFor(error))
+            if (isPermanentConnectionError(error)) {
+              throw coordinatorError(error)
+            }
+          }
+        }
+      }
+      if (
+        this.#transportPolicy !== 'direct_only' &&
+        this.#relayTransport?.status(id).internetExecutionEnabled === true
+      ) {
+        let stream: Duplex | undefined
         try {
+          const relayEpoch = this.#requireCurrentRelayEpoch(id)
+          const endpoint = current.trust.endpoints[0]
+          if (endpoint === undefined) {
+            throw new RemoteMachineCoordinatorError(
+              'connection_failed',
+              'Trusted Machine identity endpoint is unavailable',
+            )
+          }
           this.#recordAttempt(id)
+          stream = await this.#relayTransport.openMachineChannel(current.trust)
           const open =
-            this.#transport.openClaudeSession ?? openRemoteClaudeSession
+            this.#transport.openClaudeSessionOverStream ??
+            openRemoteClaudeSessionOverStream
           const baseInput = {
             peer: trustedPeer(current.machine, current.trust, endpoint.address),
             controller,
-            conversationId: MachineTransportConversationIdSchema.parse(
-              input.conversationId,
-            ),
-            projectId: MachineTransportProjectIdSchema.parse(input.projectId),
+            stream,
+            conversationId,
+            projectId,
             rootPath: input.rootPath,
             ...(input.effort === undefined ? {} : { effort: input.effort }),
           }
           const session =
-            input.providerSessionId === undefined
+            providerSessionId === undefined
               ? await open(baseInput)
               : await open({
                   ...baseInput,
-                  providerSessionId: RemoteClaudeProviderIdentitySchema.parse(
-                    input.providerSessionId,
-                  ),
+                  providerSessionId,
                   providerSessionMaterialized:
                     input.providerSessionMaterialized === true,
                 })
-          const authenticatedAt = TimestampSchema.parse(
-            this.#now().toISOString(),
-          )
-          this.#persistence.recordTrustedMachineAuthentication(
+          this.#assertCurrentRelayEpoch(id, relayEpoch)
+          stream = undefined
+          this.#persistence.recordTrustedMachineRelayAuthentication(
             id,
-            endpoint.address,
-            authenticatedAt,
+            TimestampSchema.parse(this.#now().toISOString()),
           )
-          return remoteClaudeRuntimeSession(session)
+          this.#lastExecutionTransports.set(id, 'relay')
+          this.#markRelayVerified(id, relayEpoch)
+          return remoteClaudeRuntimeSession(
+            session,
+            'relay',
+            this.#now,
+            this.#trackExecutionSession(id, session, 'relay'),
+          )
         } catch (error) {
-          lastError = error
+          stream?.destroy()
           if (
             error instanceof MachineTransportError &&
             error.peerAuthenticated
           ) {
-            break
+            throw coordinatorError(error)
           }
-          this.#persistence.recordTrustedMachineEndpointFailure(
-            id,
-            endpoint.address,
-            TimestampSchema.parse(this.#now().toISOString()),
-          )
-          if (
-            error instanceof MachineTransportError &&
-            (error.code === 'identity_mismatch' ||
-              error.code === 'authentication_failed' ||
-              error.code === 'protocol_incompatible' ||
-              error.code === 'remote_policy_violation')
-          ) {
-            break
+          if (isPermanentConnectionError(error)) {
+            throw coordinatorError(error)
           }
+          throw this.#relayFailure(error, 'relay_channel_open_failed')
         }
       }
       throw coordinatorError(
@@ -1003,37 +1269,20 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
     return await this.#serializeMachineOperation(id, async () => {
       this.#assertOpen()
       await this.#stopWorker(id)
+      await this.#stopRelayVerification(id)
       let connection: AuthenticatedRemoteMachineConnection | undefined
       let authenticatedRevokeAttempt = false
       let authenticatedRevokeRejected = false
       try {
         const current = this.#requireCurrentRevokingTrust(machine, trust)
         const controller = await this.#loadController(current.trust)
-        let connectionError: unknown
-        for (const endpoint of current.trust.endpoints) {
-          try {
-            this.#recordAttempt(id)
-            connection = await this.#transport.connectTrusted({
-              peer: trustedPeer(
-                current.machine,
-                current.trust,
-                endpoint.address,
-              ),
-              controller,
-            })
-            break
-          } catch (error) {
-            connectionError = error
-            this.#persistence.recordTrustedMachineEndpointFailure(
-              id,
-              endpoint.address,
-              TimestampSchema.parse(this.#now().toISOString()),
-            )
-          }
-        }
-        if (connection === undefined) {
-          throw connectionError ?? new Error('No trusted endpoint is available')
-        }
+        connection = (
+          await this.#connectRevokingMachine(
+            current.machine,
+            current.trust,
+            controller,
+          )
+        ).connection
         try {
           authenticatedRevokeAttempt = true
           await connection.revoke()
@@ -1076,6 +1325,7 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
   async close(): Promise<void> {
     if (this.#closed) return
     this.#closed = true
+    this.#unsubscribeRelayStatus?.()
     const cleanups: Promise<unknown>[] = []
     for (const attempt of this.#pending.values()) {
       if (attempt.expirationTimer !== undefined) {
@@ -1103,11 +1353,21 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
       if (discovery.task !== undefined) cleanups.push(discovery.task)
     }
     this.#providerDiscoveryTasks.clear()
+    for (const verification of this.#relayVerificationTasks.values()) {
+      verification.abort.abort()
+      if (verification.task !== undefined) cleanups.push(verification.task)
+    }
+    this.#relayVerificationTasks.clear()
     await Promise.allSettled(cleanups)
     this.#listeners.clear()
     this.#removalListeners.clear()
     this.#providerDiscoveryListeners.clear()
     this.#currentProviderObservations.clear()
+    this.#directStates.clear()
+    this.#lastExecutionTransports.clear()
+    this.#relayVerifiedMachines.clear()
+    this.#executionSessions.clear()
+    this.#deferredIdleRouteStates.clear()
   }
 
   async #expirePairing(
@@ -1175,28 +1435,14 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
       try {
         if (!remoteRevoked) {
           const controller = await this.#loadController(trust)
-          let lastError: unknown
-          for (const endpoint of trust.endpoints) {
-            try {
-              this.#recordAttempt(machine.machineId)
-              connection = await this.#transport.connectTrusted({
-                peer: trustedPeer(machine, trust, endpoint.address),
-                controller,
-                signal: worker.abort.signal,
-              })
-              break
-            } catch (error) {
-              lastError = error
-              this.#persistence.recordTrustedMachineEndpointFailure(
-                machine.machineId,
-                endpoint.address,
-                TimestampSchema.parse(this.#now().toISOString()),
-              )
-            }
-          }
-          if (connection === undefined) {
-            throw lastError ?? new Error('No trusted endpoint is available')
-          }
+          connection = (
+            await this.#connectRevokingMachine(
+              machine,
+              trust,
+              controller,
+              worker.abort.signal,
+            )
+          ).connection
           worker.connection = connection
           try {
             revokeAttempted = true
@@ -1244,6 +1490,7 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
     await this.#deleteCredentialRequired(trust.controllerCredentialRef)
     const removed = this.#persistence.deleteRemoteMachine(machineId)
     this.#states.delete(machineId)
+    this.#deferredIdleRouteStates.delete(machineId)
     if (removed) {
       for (const listener of this.#removalListeners) {
         try {
@@ -1411,6 +1658,472 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
     })
   }
 
+  #startRelayVerification(
+    machine: DurableMachine,
+    trust: DurableTrustedMachinePeer,
+  ): void {
+    const relayEpoch = this.#relayTransport?.connectionEpoch?.(
+      machine.machineId,
+    )
+    if (
+      this.#closed ||
+      relayEpoch === undefined ||
+      this.#relayVerifiedMachines.get(machine.machineId) === relayEpoch ||
+      this.#relayVerificationTasks.has(machine.machineId) ||
+      this.#relayTransport === undefined ||
+      this.#transport.connectTrustedOverStream === undefined
+    ) {
+      return
+    }
+    const task: RelayVerificationTask = {
+      abort: new AbortController(),
+      relayEpoch,
+    }
+    this.#relayVerificationTasks.set(machine.machineId, task)
+    task.task = this.#verifyRelayMachine(
+      machine,
+      trust,
+      relayEpoch,
+      task.abort.signal,
+    ).finally(() => {
+      if (this.#relayVerificationTasks.get(machine.machineId) === task) {
+        this.#relayVerificationTasks.delete(machine.machineId)
+      }
+    })
+    void task.task.catch(() => undefined)
+  }
+
+  #reconcileRelayVerification(machineId: MachineId): void {
+    if (this.#closed) return
+    const machine = this.#persistence.getMachine(machineId)
+    const trust = this.#persistence.getTrustedMachinePeer(machineId)
+    if (
+      machine?.kind !== 'remote' ||
+      trust?.trustState !== 'active' ||
+      this.#relayTransport?.status(machineId).internetExecutionEnabled !== true
+    ) {
+      return
+    }
+    if (this.#states.get(machineId) === 'online') {
+      this.#startRelayVerification(machine, trust)
+      return
+    }
+    void this.retry(machine, trust).catch(() => undefined)
+  }
+
+  async #verifyRelayMachine(
+    machine: DurableMachine,
+    trust: DurableTrustedMachinePeer,
+    relayEpoch: string,
+    signal: AbortSignal,
+  ): Promise<void> {
+    let stream: Duplex | undefined
+    let connection: AuthenticatedRemoteMachineConnection | undefined
+    try {
+      const current = this.#persistence.getTrustedMachinePeer(machine.machineId)
+      if (
+        current?.trustState !== 'active' ||
+        current.nodeIdentity !== trust.nodeIdentity ||
+        current.peerKeyFingerprint !== trust.peerKeyFingerprint ||
+        this.#relayTransport?.connectionEpoch?.(machine.machineId) !==
+          relayEpoch ||
+        this.#relayTransport?.status(machine.machineId)
+          .internetExecutionEnabled !== true
+      ) {
+        return
+      }
+      const identityEndpoint = current.endpoints[0]
+      if (identityEndpoint === undefined) return
+      const controller = await this.#loadController(current)
+      stream = await this.#relayTransport.openMachineChannel(current, signal)
+      connection = await this.#transport.connectTrustedOverStream!({
+        peer: trustedPeer(machine, current, identityEndpoint.address),
+        controller,
+        stream,
+        signal,
+      })
+      stream = undefined
+      await connection.ping(signal)
+      const finalTrust = this.#persistence.getTrustedMachinePeer(
+        machine.machineId,
+      )
+      if (
+        !signal.aborted &&
+        finalTrust?.trustState === 'active' &&
+        finalTrust.nodeIdentity === trust.nodeIdentity &&
+        finalTrust.peerKeyFingerprint === trust.peerKeyFingerprint &&
+        this.#relayTransport.connectionEpoch?.(machine.machineId) ===
+          relayEpoch &&
+        this.#relayTransport.status(machine.machineId)
+          .internetExecutionEnabled === true
+      ) {
+        this.#persistence.recordTrustedMachineRelayAuthentication(
+          machine.machineId,
+          TimestampSchema.parse(this.#now().toISOString()),
+        )
+        this.#markRelayVerified(machine.machineId, relayEpoch)
+      }
+    } finally {
+      connection?.close()
+      stream?.destroy()
+    }
+  }
+
+  async #stopRelayVerification(machineId: MachineId): Promise<void> {
+    const task = this.#relayVerificationTasks.get(machineId)
+    if (task === undefined) return
+    task.abort.abort()
+    await task.task?.catch(() => undefined)
+    if (this.#relayVerificationTasks.get(machineId) === task) {
+      this.#relayVerificationTasks.delete(machineId)
+    }
+  }
+
+  #trackExecutionSession(
+    machineId: MachineId,
+    session: { readonly closed: boolean },
+    transport: Exclude<MachineExecutionTransport, 'unavailable'>,
+  ): () => void {
+    this.#pruneExecutionSessions(machineId)
+    // This authenticated session is newer evidence than any failure withheld
+    // for an earlier idle route.
+    this.#deferredIdleRouteStates.delete(machineId)
+    const tracked: TrackedExecutionSession = { transport, session }
+    const sessions = this.#executionSessions.get(machineId) ?? new Set()
+    sessions.add(tracked)
+    this.#executionSessions.set(machineId, sessions)
+    return () => {
+      sessions.delete(tracked)
+      if (sessions.size === 0) {
+        this.#executionSessions.delete(machineId)
+        const deferred = this.#deferredIdleRouteStates.get(machineId)
+        this.#deferredIdleRouteStates.delete(machineId)
+        if (
+          deferred !== undefined &&
+          !this.#closed &&
+          this.#persistence.getTrustedMachinePeer(machineId)?.trustState ===
+            'active'
+        ) {
+          this.#setState(machineId, deferred)
+        }
+      }
+    }
+  }
+
+  #hasLiveExecutionSession(machineId: MachineId): boolean {
+    this.#pruneExecutionSessions(machineId)
+    return (this.#executionSessions.get(machineId)?.size ?? 0) > 0
+  }
+
+  #liveExecutionTransport(
+    machineId: MachineId,
+  ): Exclude<MachineExecutionTransport, 'unavailable'> | undefined {
+    this.#pruneExecutionSessions(machineId)
+    const sessions = this.#executionSessions.get(machineId)
+    if (sessions === undefined) return undefined
+    const preferred = this.#lastExecutionTransports.get(machineId)
+    if (
+      preferred !== undefined &&
+      [...sessions].some((tracked) => tracked.transport === preferred)
+    ) {
+      return preferred
+    }
+    return sessions.values().next().value?.transport
+  }
+
+  #pruneExecutionSessions(machineId: MachineId): void {
+    const sessions = this.#executionSessions.get(machineId)
+    if (sessions === undefined) return
+    for (const tracked of sessions) {
+      if (tracked.session.closed) sessions.delete(tracked)
+    }
+    if (sessions.size === 0) this.#executionSessions.delete(machineId)
+  }
+
+  /**
+   * Opens one peer-authenticated Machine connection for the existing
+   * `trust.revoke` operation. Callers cannot use this path for Provider or
+   * Project operations because ordinary Relay channels require active trust,
+   * while this dedicated opener requires the exact durable revoking record.
+   */
+  async #connectRevokingMachine(
+    machine: DurableMachine,
+    trust: DurableTrustedMachinePeer,
+    controller: MachineControllerIdentity,
+    signal?: AbortSignal,
+  ): Promise<RoutedMachineConnection> {
+    let lastError: unknown
+    if (this.#transportPolicy !== 'relay_only') {
+      for (const endpoint of trust.endpoints) {
+        try {
+          this.#recordAttempt(machine.machineId)
+          const connection = await this.#transport.connectTrusted({
+            peer: trustedPeer(machine, trust, endpoint.address),
+            controller,
+            ...(signal === undefined ? {} : { signal }),
+          })
+          this.#directStates.set(machine.machineId, 'online')
+          return { connection, transport: 'direct', endpoint }
+        } catch (error) {
+          lastError = error
+          this.#directStates.set(machine.machineId, connectionStateFor(error))
+          if (signal?.aborted === true || this.#closed) throw error
+          this.#persistence.recordTrustedMachineEndpointFailure(
+            machine.machineId,
+            endpoint.address,
+            TimestampSchema.parse(this.#now().toISOString()),
+          )
+          if (
+            error instanceof MachineTransportError &&
+            error.peerAuthenticated
+          ) {
+            throw error
+          }
+        }
+      }
+    }
+
+    const openRevocation = this.#relayTransport?.openMachineRevocationChannel
+    if (
+      this.#transportPolicy !== 'direct_only' &&
+      openRevocation !== undefined &&
+      this.#relayTransport?.status(machine.machineId)
+        .internetExecutionEnabled === true
+    ) {
+      let stream: Duplex | undefined
+      try {
+        const relayEpoch = this.#requireCurrentRelayEpoch(machine.machineId)
+        const identityEndpoint = trust.endpoints[0]
+        if (identityEndpoint === undefined) {
+          throw new RemoteMachineCoordinatorError(
+            'connection_failed',
+            'Trusted Machine has no durable identity endpoint',
+          )
+        }
+        this.#recordAttempt(machine.machineId)
+        stream = await openRevocation.call(this.#relayTransport, trust, signal)
+        const open =
+          this.#transport.connectTrustedOverStream ??
+          connectTrustedRemoteMachineOverStream
+        const connection = await open({
+          peer: trustedPeer(machine, trust, identityEndpoint.address),
+          controller,
+          stream,
+          ...(signal === undefined ? {} : { signal }),
+        })
+        this.#assertCurrentRelayEpoch(machine.machineId, relayEpoch)
+        stream = undefined
+        return { connection, transport: 'relay', relayEpoch }
+      } catch (error) {
+        stream?.destroy()
+        if (error instanceof MachineTransportError && error.peerAuthenticated) {
+          throw error
+        }
+        if (isPermanentConnectionError(error)) throw error
+        lastError = this.#relayFailure(error, 'relay_channel_open_failed')
+      }
+    }
+
+    throw (
+      lastError ??
+      new RemoteMachineCoordinatorError(
+        'connection_failed',
+        'No authenticated Machine revocation transport is available',
+      )
+    )
+  }
+
+  async #connectMachineByPolicy(
+    machine: DurableMachine,
+    trust: DurableTrustedMachinePeer,
+    controller: MachineControllerIdentity,
+    signal?: AbortSignal,
+    observation?: { retryableDirectFailure: boolean },
+  ): Promise<RoutedMachineConnection> {
+    let lastError: unknown
+    if (
+      this.#transportPolicy === 'relay_only' &&
+      !this.#directStates.has(machine.machineId)
+    ) {
+      this.#directStates.set(machine.machineId, 'offline')
+    }
+    if (this.#transportPolicy !== 'relay_only') {
+      this.#directStates.set(machine.machineId, 'connecting')
+      for (const endpoint of trust.endpoints) {
+        try {
+          this.#recordAttempt(machine.machineId)
+          const connection = await this.#transport.connectTrusted({
+            peer: trustedPeer(machine, trust, endpoint.address),
+            controller,
+            ...(signal === undefined ? {} : { signal }),
+          })
+          this.#directStates.set(machine.machineId, 'online')
+          return { connection, transport: 'direct', endpoint }
+        } catch (error) {
+          lastError = error
+          this.#directStates.set(machine.machineId, connectionStateFor(error))
+          if (!isPermanentConnectionError(error) && observation !== undefined) {
+            observation.retryableDirectFailure = true
+          }
+          if (signal?.aborted === true || this.#closed) throw error
+          this.#persistence.recordTrustedMachineEndpointFailure(
+            machine.machineId,
+            endpoint.address,
+            TimestampSchema.parse(this.#now().toISOString()),
+          )
+          // Identity, authentication, and protocol failures are authoritative
+          // for this exact trusted peer. Relay is an alternate transport, not
+          // an alternate trust decision, so it must not mask these failures.
+          if (isPermanentConnectionError(error)) throw error
+          // An authenticated Machine rejection is authoritative. Trying the
+          // same semantic peer through Relay cannot make it safe to continue.
+          if (
+            error instanceof MachineTransportError &&
+            error.peerAuthenticated
+          ) {
+            throw error
+          }
+        }
+      }
+    }
+
+    if (
+      trust.trustState === 'active' &&
+      this.#transportPolicy !== 'direct_only' &&
+      this.#relayTransport !== undefined
+    ) {
+      if (
+        !this.#relayTransport.status(machine.machineId).internetExecutionEnabled
+      ) {
+        if (this.#transportPolicy === 'relay_only') {
+          throw this.#relayFailure(undefined, 'relay_transport_unavailable')
+        }
+      } else {
+        this.#recordAttempt(machine.machineId)
+        let stream: Duplex | undefined
+        try {
+          const relayEpoch = this.#requireCurrentRelayEpoch(machine.machineId)
+          const endpoint = trust.endpoints[0]
+          if (endpoint === undefined) {
+            throw new RemoteMachineCoordinatorError(
+              'connection_failed',
+              'Trusted Machine has no durable identity endpoint',
+            )
+          }
+          stream = await this.#relayTransport.openMachineChannel(trust, signal)
+          const open =
+            this.#transport.connectTrustedOverStream ??
+            connectTrustedRemoteMachineOverStream
+          const connection = await open({
+            peer: trustedPeer(machine, trust, endpoint.address),
+            controller,
+            stream,
+            ...(signal === undefined ? {} : { signal }),
+          })
+          this.#assertCurrentRelayEpoch(machine.machineId, relayEpoch)
+          stream = undefined
+          return { connection, transport: 'relay', relayEpoch }
+        } catch (error) {
+          stream?.destroy()
+          if (isPermanentConnectionError(error)) throw error
+          lastError = this.#relayFailure(error, 'relay_channel_open_failed')
+        }
+      }
+    }
+    throw (
+      lastError ??
+      new RemoteMachineCoordinatorError(
+        'connection_failed',
+        'No authenticated Machine transport is available',
+      )
+    )
+  }
+
+  #recordAuthenticatedRoute(
+    machineId: MachineId,
+    route: RoutedMachineConnection,
+    authenticatedAt: Timestamp,
+  ): DurableTrustedMachinePeer {
+    this.#lastExecutionTransports.set(machineId, route.transport)
+    if (route.transport === 'relay') {
+      this.#assertCurrentRelayEpoch(machineId, route.relayEpoch)
+      this.#markRelayVerified(machineId, route.relayEpoch)
+    }
+    return route.endpoint === undefined
+      ? this.#persistence.recordTrustedMachineRelayAuthentication(
+          machineId,
+          authenticatedAt,
+        )
+      : this.#persistence.recordTrustedMachineAuthentication(
+          machineId,
+          route.endpoint.address,
+          authenticatedAt,
+          route.endpoint.source,
+        )
+  }
+
+  #relayFailure(
+    error: unknown,
+    fallback: 'relay_transport_unavailable' | 'relay_channel_open_failed',
+  ): RemoteMachineCoordinatorError {
+    const carrier =
+      typeof error === 'object' && error !== null
+        ? (error as { readonly reason?: unknown; readonly code?: unknown })
+        : undefined
+    const reason = isRelayCanonicalFailureReason(carrier?.reason)
+      ? carrier.reason
+      : isRelayCanonicalFailureReason(carrier?.code)
+        ? carrier.code
+        : fallback === 'relay_transport_unavailable'
+          ? 'relay_unreachable'
+          : fallback
+    return new RemoteMachineCoordinatorError(
+      'connection_failed',
+      'Internet Relay Machine transport is unavailable',
+      {
+        ...(error === undefined ? {} : { cause: error }),
+        failure: canonicalFailure(reason, this.#now().toISOString()),
+      },
+    )
+  }
+
+  #requireCurrentRelayEpoch(machineId: MachineId): string {
+    const relayEpoch = this.#relayTransport?.connectionEpoch?.(machineId)
+    if (
+      relayEpoch === undefined ||
+      this.#relayTransport?.status(machineId).internetExecutionEnabled !== true
+    ) {
+      throw this.#relayFailure(undefined, 'relay_transport_unavailable')
+    }
+    return relayEpoch
+  }
+
+  #assertCurrentRelayEpoch(machineId: MachineId, relayEpoch: string): void {
+    if (
+      this.#relayTransport?.connectionEpoch?.(machineId) !== relayEpoch ||
+      this.#relayTransport?.status(machineId).internetExecutionEnabled !== true
+    ) {
+      throw this.#relayFailure(
+        { reason: 'relay_channel_lost' },
+        'relay_channel_open_failed',
+      )
+    }
+  }
+
+  #markRelayVerified(machineId: MachineId, relayEpoch: string): void {
+    if (
+      this.#relayTransport?.connectionEpoch?.(machineId) !== relayEpoch ||
+      this.#relayTransport?.status(machineId).internetExecutionEnabled !== true
+    ) {
+      return
+    }
+    if (this.#relayVerifiedMachines.get(machineId) === relayEpoch) return
+    this.#relayVerifiedMachines.set(machineId, relayEpoch)
+    const state = this.#states.get(machineId)
+    if (state === undefined) return
+    for (const listener of this.#listeners) listener(machineId, state)
+  }
+
   async #runWorker(
     machine: DurableMachine,
     initialTrust: DurableTrustedMachinePeer,
@@ -1428,56 +2141,49 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
       if (this.#states.get(machine.machineId) !== 'online') {
         this.#setState(machine.machineId, 'connecting')
       }
-      let cycleError: unknown
-      let cycleHasRetryableEndpointFailure = false
-      let authenticatedEndpoint: DurableTrustedMachineEndpoint | undefined
+      let authenticatedRoute: RoutedMachineConnection | undefined
+      const routeObservation = { retryableDirectFailure: false }
       let heartbeatActive = false
       try {
         const controller = await this.#loadController(trust)
-        let connection: AuthenticatedRemoteMachineConnection | undefined
-        for (const endpoint of trust.endpoints) {
-          try {
-            this.#recordAttempt(machine.machineId)
-            connection = await this.#transport.connectTrusted({
-              peer: trustedPeer(machine, trust, endpoint.address),
-              controller,
-              signal: worker.abort.signal,
-            })
-            authenticatedEndpoint = endpoint
-            break
-          } catch (error) {
-            cycleError = error
-            if (!isPermanentConnectionError(error)) {
-              cycleHasRetryableEndpointFailure = true
-            }
-            if (worker.abort.signal.aborted || this.#closed) return
-            this.#persistence.recordTrustedMachineEndpointFailure(
-              machine.machineId,
-              endpoint.address,
-              TimestampSchema.parse(this.#now().toISOString()),
-            )
-          }
-        }
-        if (connection === undefined || authenticatedEndpoint === undefined) {
-          throw cycleError ?? new Error('No trusted endpoint is available')
-        }
+        const route = await this.#connectMachineByPolicy(
+          machine,
+          trust,
+          controller,
+          worker.abort.signal,
+          routeObservation,
+        )
+        authenticatedRoute = route
+        const connection = route.connection
         worker.connection = connection
+        worker.transport = route.transport
         const authenticatedAt = TimestampSchema.parse(this.#now().toISOString())
         if (trust.trustState === 'pending') {
+          if (route.transport !== 'direct') {
+            throw new RemoteMachineCoordinatorError(
+              'authentication_failed',
+              'Pending Machine trust cannot be activated through Relay',
+            )
+          }
           trust = this.#persistence.activateTrustedMachinePeer(
             machine.machineId,
             authenticatedAt,
           )
         } else {
-          trust = this.#persistence.recordTrustedMachineAuthentication(
+          trust = this.#recordAuthenticatedRoute(
             machine.machineId,
-            authenticatedEndpoint.address,
+            route,
             authenticatedAt,
-            authenticatedEndpoint.source,
           )
         }
-        cycleError = undefined
         this.#setState(machine.machineId, 'online')
+        if (
+          route.transport === 'direct' &&
+          this.#relayTransport?.status(machine.machineId)
+            .internetExecutionEnabled === true
+        ) {
+          this.#startRelayVerification(machine, trust)
+        }
         delayMs = Math.min(1_000, this.#reconnectMaximumDelayMs)
         if (typeof connection.discoverProviders === 'function') {
           void this.discoverProviders(machine, trust).catch(() => undefined)
@@ -1489,16 +2195,26 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
         }
       } catch (error) {
         if (worker.abort.signal.aborted || this.#closed) return
-        if (heartbeatActive && authenticatedEndpoint !== undefined) {
+        if (heartbeatActive && authenticatedRoute?.endpoint !== undefined) {
           this.#persistence.recordTrustedMachineEndpointFailure(
             machine.machineId,
-            authenticatedEndpoint.address,
+            authenticatedRoute.endpoint.address,
             TimestampSchema.parse(this.#now().toISOString()),
           )
         }
-        const state = connectionStateFor(cycleError ?? error)
-        this.#setState(machine.machineId, state)
-        if (isPermanentConnectionError(cycleError ?? error)) {
+        if (authenticatedRoute?.transport === 'direct') {
+          this.#directStates.set(machine.machineId, connectionStateFor(error))
+        }
+        const state = connectionStateFor(error)
+        // Purpose-specific Machine sessions own independent authenticated
+        // sockets. Losing the idle coordinator route must not abort healthy
+        // work on another channel; its own closure will fail that Turn.
+        if (this.#hasLiveExecutionSession(machine.machineId)) {
+          this.#deferredIdleRouteStates.set(machine.machineId, state)
+        } else {
+          this.#setState(machine.machineId, state)
+        }
+        if (isPermanentConnectionError(error)) {
           if (trust.trustState === 'pending') {
             try {
               await this.#discardPendingTrust(machine.machineId, trust)
@@ -1508,13 +2224,14 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
               // pending record and retry bounded cleanup rather than losing
               // its only durable reference.
             }
-          } else if (!cycleHasRetryableEndpointFailure) {
+          } else if (!routeObservation.retryableDirectFailure) {
             return
           }
         }
       } finally {
         worker.connection?.close()
         worker.connection = undefined
+        worker.transport = undefined
       }
       await abortableDelay(
         jitteredDelay(delayMs, this.#random),
@@ -1531,6 +2248,7 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
     await this.#deleteCredentialRequired(trust.controllerCredentialRef)
     this.#persistence.deleteRemoteMachine(machineId)
     this.#states.delete(machineId)
+    this.#deferredIdleRouteStates.delete(machineId)
   }
 
   async #discoverAndPersist(
@@ -1651,6 +2369,8 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
   }
 
   #setState(machineId: MachineId, state: MachineConnectionState): void {
+    // Any newer route observation supersedes a withheld idle-route failure.
+    this.#deferredIdleRouteStates.delete(machineId)
     if (this.#states.get(machineId) === state) return
     this.#states.set(machineId, state)
     if (state !== 'online') this.#currentProviderObservations.delete(machineId)
@@ -2040,6 +2760,9 @@ function coordinatorError(error: unknown): RemoteMachineCoordinatorError {
 
 function remoteCodexRuntimeSession(
   session: MachineTransportRemoteCodexSession,
+  transport: Exclude<MachineExecutionTransport, 'unavailable'> = 'direct',
+  now: () => Date = () => new Date(),
+  release: () => void = () => undefined,
 ): RemoteCodexRuntimeSession {
   return {
     machineId: MachineIdSchema.parse(session.machine.machineId),
@@ -2056,18 +2779,45 @@ function remoteCodexRuntimeSession(
       })
       return {
         events: async function* () {
-          for await (const envelope of turn.events()) {
-            yield { ...envelope.event, sequence: envelope.sequence }
+          let nextSequence = 1
+          try {
+            for await (const envelope of turn.events()) {
+              nextSequence = envelope.sequence + 1
+              yield { ...envelope.event, sequence: envelope.sequence }
+            }
+          } catch (error) {
+            if (transport !== 'relay' || !isMachineConnectionLoss(error)) {
+              throw error
+            }
+            yield {
+              type: 'turn.failed' as const,
+              code: 'remote_execution_lost',
+              message: 'Internet Relay Machine channel was lost',
+              sequence: nextSequence,
+              failure: canonicalFailure(
+                'relay_channel_lost',
+                TimestampSchema.parse(now().toISOString()),
+              ),
+            }
           }
         },
       }
     },
-    close: async () => await session.close(),
+    close: async () => {
+      try {
+        await session.close()
+      } finally {
+        release()
+      }
+    },
   }
 }
 
 function remoteClaudeRuntimeSession(
   session: MachineTransportRemoteClaudeSession,
+  transport: Exclude<MachineExecutionTransport, 'unavailable'> = 'direct',
+  now: () => Date = () => new Date(),
+  release: () => void = () => undefined,
 ): RemoteClaudeRuntimeSession {
   return {
     machineId: MachineIdSchema.parse(session.machine.machineId),
@@ -2085,13 +2835,67 @@ function remoteClaudeRuntimeSession(
       })
       return {
         events: async function* () {
-          for await (const envelope of turn.events()) {
-            yield { ...envelope.event, sequence: envelope.sequence }
+          let nextSequence = 1
+          try {
+            for await (const envelope of turn.events()) {
+              nextSequence = envelope.sequence + 1
+              yield { ...envelope.event, sequence: envelope.sequence }
+            }
+          } catch (error) {
+            if (transport !== 'relay' || !isMachineConnectionLoss(error)) {
+              throw error
+            }
+            yield {
+              type: 'turn.failed' as const,
+              code: 'remote_execution_lost',
+              message: 'Internet Relay Machine channel was lost',
+              sequence: nextSequence,
+              failure: canonicalFailure(
+                'relay_channel_lost',
+                TimestampSchema.parse(now().toISOString()),
+              ),
+            }
           }
         },
       }
     },
-    close: async () => await session.close(),
+    close: async () => {
+      try {
+        await session.close()
+      } finally {
+        release()
+      }
+    },
+  }
+}
+
+function isMachineConnectionLoss(error: unknown): boolean {
+  return (
+    error instanceof MachineTransportError &&
+    (error.code === 'connection_failed' || error.code === 'timeout')
+  )
+}
+
+function isRelayCanonicalFailureReason(
+  value: unknown,
+): value is CanonicalFailure['reason'] {
+  if (!isCanonicalFailureReason(value)) return false
+  switch (value) {
+    case 'relay_not_configured':
+    case 'relay_unreachable':
+    case 'relay_authentication_failed':
+    case 'relay_identity_mismatch':
+    case 'relay_protocol_incompatible':
+    case 'relay_revoked':
+    case 'relay_rate_limited':
+    case 'relay_channel_open_failed':
+    case 'relay_channel_lost':
+    case 'relay_peer_offline':
+    case 'relay_transport_capacity_reached':
+    case 'relay_protocol_error':
+      return true
+    default:
+      return false
   }
 }
 

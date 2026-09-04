@@ -7,6 +7,7 @@ import {
   isDesktopManaged,
   parseServeArguments,
   resolveHostVersion,
+  resolveRemoteMachineTransportPolicy,
 } from './serve-config.js'
 
 async function main(): Promise<void> {
@@ -25,6 +26,7 @@ async function main(): Promise<void> {
       hostVersion,
       port: arguments_.port,
       desktopManaged,
+      remoteMachineTransportPolicy: resolveRemoteMachineTransportPolicy(),
     })
     if (!lifecycle.isRequested) {
       process.stdout.write(

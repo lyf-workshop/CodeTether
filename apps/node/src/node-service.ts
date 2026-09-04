@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events'
+import type { Duplex } from 'node:stream'
 import { createServer, type Server, type TLSSocket } from 'node:tls'
 
 import {
@@ -28,6 +29,7 @@ import {
   ProjectLocationValidateMessageSchema,
   ProvidersDescribeMessageSchema,
   TrustRevokeMessageSchema,
+  acceptMachineTlsOverStream,
   exportMachineTlsBinding,
   machineProtocolVersion,
   machineTlsServerOptions,
@@ -93,7 +95,7 @@ export interface CodeTetherNodeOptions {
   readonly state: NodeStateStore
   readonly bindAddress: string
   readonly port: number
-  /** Outbound Relay control lifecycle only; it has no execution methods. */
+  /** Outbound Relay lifecycle; Machine traffic still enters through this service. */
   readonly relayControl?: { close(): Promise<void> }
   readonly authenticatedIdleTimeoutMs?: number
   /** Internal test seam; production uses the fixed execution-session lease. */
@@ -110,6 +112,11 @@ export interface ListeningNodeAddress {
   readonly port: number
 }
 
+export interface RelayMachineChannelInput {
+  readonly stream: Duplex
+  readonly controllerFingerprint: PublicKeyFingerprint
+}
+
 export class CodeTetherNodeService extends EventEmitter {
   readonly state: NodeStateStore
   readonly pairing: PairingMode
@@ -120,6 +127,8 @@ export class CodeTetherNodeService extends EventEmitter {
   readonly #connections = new Set<TLSSocket>()
   readonly #connectionsByAddress = new Map<string, number>()
   readonly #authenticatedConnections = new Map<string, Set<TLSSocket>>()
+  readonly #pendingRelayStreams = new Map<Duplex, PublicKeyFingerprint>()
+  readonly #relayConnections = new Map<TLSSocket, PublicKeyFingerprint>()
   readonly #providerDetector: RemoteProviderDetector
   readonly #remoteCodexRunners: RemoteCodexRunnerPool
   readonly #remoteClaudeRunners: RemoteClaudeRunnerPool
@@ -217,6 +226,56 @@ export class CodeTetherNodeService extends EventEmitter {
     this.pairing.cancel()
   }
 
+  /**
+   * Terminates the existing Relay control envelope at the Node boundary, then
+   * feeds the authenticated inner Machine TLS socket through the same direct
+   * capacity, trust, protocol, and Provider dispatcher.
+   */
+  async acceptRelayMachineChannel(
+    input: RelayMachineChannelInput,
+  ): Promise<void> {
+    const trusted = this.state.controllerByFingerprint(
+      input.controllerFingerprint,
+    )
+    if (
+      this.#closing ||
+      input.stream.destroyed ||
+      trusted === undefined ||
+      this.#pendingRelayStreams.has(input.stream) ||
+      this.#connections.size + this.#pendingRelayStreams.size >=
+        machineTransportLimits.maximumConnections
+    ) {
+      input.stream.destroy()
+      return
+    }
+    this.#pendingRelayStreams.set(input.stream, trusted.publicKeyFingerprint)
+    let tls: Awaited<ReturnType<typeof acceptMachineTlsOverStream>> | undefined
+    try {
+      tls = await acceptMachineTlsOverStream({
+        stream: input.stream,
+        identity: this.state.identity,
+        expectedPeerFingerprint: trusted.publicKeyFingerprint,
+      })
+    } catch {
+      input.stream.destroy()
+      return
+    } finally {
+      this.#pendingRelayStreams.delete(input.stream)
+    }
+    const current = this.state.controllerByFingerprint(
+      input.controllerFingerprint,
+    )
+    if (this.#closing || current?.controllerId !== trusted.controllerId) {
+      tls.socket.destroy()
+      return
+    }
+    this.#relayConnections.set(tls.socket, trusted.publicKeyFingerprint)
+    tls.socket.once('close', () => {
+      this.#relayConnections.delete(tls.socket)
+    })
+    this.#accept(tls.socket)
+  }
+
   async close(): Promise<void> {
     this.#closePromise ??= this.#closeOwnedResources()
     await this.#closePromise
@@ -225,6 +284,7 @@ export class CodeTetherNodeService extends EventEmitter {
   async #closeOwnedResources(): Promise<void> {
     this.#closing = true
     this.pairing.cancel()
+    for (const stream of this.#pendingRelayStreams.keys()) stream.destroy()
     for (const socket of this.#connections) socket.destroy()
     const failures: unknown[] = []
     const attempt = async (operation: () => Promise<void>) => {
@@ -274,11 +334,23 @@ export class CodeTetherNodeService extends EventEmitter {
       socket.destroy()
       return
     }
-    const remoteAddress = normalizedRemoteAddress(socket.remoteAddress)
+    // Direct unauthenticated sockets retain the per-address admission bound.
+    // Relay streams have already passed one exact enrolled/granted peer bound
+    // and are capped per peer/channel by Relay; grouping every nested TLS
+    // socket under the Relay server's (or an absent) address would otherwise
+    // consume the four-socket direct abuse budget and prevent the required
+    // four Provider sessions plus the independent Machine heartbeat channel.
+    const relayController = this.#relayConnections.get(socket)
+    const remoteAddress =
+      relayController === undefined
+        ? normalizedRemoteAddress(socket.remoteAddress)
+        : `relay:${relayController}`
     const addressCount = this.#connectionsByAddress.get(remoteAddress) ?? 0
     if (
-      this.#connections.size >= machineTransportLimits.maximumConnections ||
-      addressCount >= machineTransportLimits.maximumConnectionsPerAddress
+      this.#connections.size + this.#pendingRelayStreams.size >=
+        machineTransportLimits.maximumConnections ||
+      (relayController === undefined &&
+        addressCount >= machineTransportLimits.maximumConnectionsPerAddress)
     ) {
       const connection = new FramedMachineConnection(socket)
       void connection
@@ -463,10 +535,18 @@ export class CodeTetherNodeService extends EventEmitter {
     socket: TLSSocket,
     trusted: TrustedController,
   ): Promise<void> {
-    let tracked = false
+    // A pinned TLS peer is already attributable to one durable Controller.
+    // Track it before waiting for the first Machine frame so an overlapping
+    // trust revocation also closes sockets stalled in the hello window.
+    this.#trackAuthenticatedConnection(trusted.controllerId, socket)
     try {
       const hello = await receiveStrict(connection, MachineHelloMessageSchema)
+      const currentTrust = this.state.controllerByFingerprint(
+        trusted.publicKeyFingerprint,
+      )
       if (
+        currentTrust === undefined ||
+        currentTrust.controllerId !== trusted.controllerId ||
         hello.controllerId !== trusted.controllerId ||
         hello.expectedMachineId !== this.state.machine.machineId
       ) {
@@ -482,8 +562,6 @@ export class CodeTetherNodeService extends EventEmitter {
         nonce: hello.nonce,
         observedAt: new Date().toISOString(),
       })
-      this.#trackAuthenticatedConnection(trusted.controllerId, socket)
-      tracked = true
       while (!connection.closed && !this.#closing) {
         const request = await receiveStrict(
           connection,
@@ -586,7 +664,12 @@ export class CodeTetherNodeService extends EventEmitter {
           )
         }
         await this.state.revokeController(trusted.controllerId)
-        this.#closeAuthenticatedConnections(trusted.controllerId, socket)
+        this.#closeRelayMachineConnections(trusted.publicKeyFingerprint, socket)
+        this.#closeAuthenticatedConnections(
+          trusted.controllerId,
+          trusted.publicKeyFingerprint,
+          socket,
+        )
         await connection.send({
           type: 'trust.revoked',
           protocolVersion: machineProtocolVersion,
@@ -601,9 +684,7 @@ export class CodeTetherNodeService extends EventEmitter {
       if (!connection.closed) await sendSafeError(connection, error)
       connection.destroy()
     } finally {
-      if (tracked) {
-        this.#untrackAuthenticatedConnection(trusted.controllerId, socket)
-      }
+      this.#untrackAuthenticatedConnection(trusted.controllerId, socket)
     }
   }
 
@@ -974,12 +1055,35 @@ export class CodeTetherNodeService extends EventEmitter {
 
   #closeAuthenticatedConnections(
     controllerId: string,
+    controllerFingerprint: PublicKeyFingerprint,
     except: TLSSocket,
   ): void {
     const current = this.#authenticatedConnections.get(controllerId)
-    if (current === undefined) return
-    for (const socket of current) {
-      if (socket !== except) socket.destroy()
+    for (const socket of this.#connections) {
+      if (socket === except) continue
+      let samePinnedPeer = current?.has(socket) ?? false
+      if (!samePinnedPeer) {
+        try {
+          samePinnedPeer = peerFingerprint(socket) === controllerFingerprint
+        } catch {
+          samePinnedPeer = false
+        }
+      }
+      if (samePinnedPeer) socket.destroy()
+    }
+  }
+
+  #closeRelayMachineConnections(
+    controllerFingerprint: PublicKeyFingerprint,
+    except: TLSSocket,
+  ): void {
+    for (const [stream, fingerprint] of this.#pendingRelayStreams) {
+      if (fingerprint === controllerFingerprint) stream.destroy()
+    }
+    for (const [socket, fingerprint] of this.#relayConnections) {
+      if (fingerprint === controllerFingerprint && socket !== except) {
+        socket.destroy()
+      }
     }
   }
 }

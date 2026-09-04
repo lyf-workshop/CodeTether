@@ -1,4 +1,5 @@
 export * from './configuration.js'
+export * from './channel-registry.js'
 export * from './connection-registry.js'
 export * from './development-tls.js'
 export * from './rate-limiter.js'

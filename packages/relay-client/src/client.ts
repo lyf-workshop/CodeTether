@@ -18,6 +18,11 @@ import {
   signRelayTranscript,
   verifyRelayTranscript,
   type RelayChallengeMessage,
+  type RelayClientMessage,
+  type RelayChannelGeneration,
+  type RelayChannelId,
+  type RelayChannelOfferMessage,
+  type RelayChannelRejectReason,
   type RelayConnectionEpoch,
   type RelayId,
   type RelayPeerId,
@@ -28,6 +33,7 @@ import {
   type RelayRequestId,
   type RelayServerMessage,
 } from '@codetether/relay-protocol'
+import type { Duplex } from 'node:stream'
 import { z } from 'zod'
 
 import {
@@ -40,6 +46,10 @@ import {
   type RelayClientEndpoint,
   type RelayClientTlsPolicy,
 } from './tls.js'
+import {
+  RelayMachineChannelDuplex,
+  type RelayMachineChannelBinding,
+} from './machine-channel.js'
 
 const MAXIMUM_CHALLENGE_CLOCK_SKEW_MS = 60_000
 const RelayProtocolVersionProbeSchema = z
@@ -81,6 +91,23 @@ export interface RelayRendezvousObservation {
   readonly state: RelayPresenceState
   readonly observedAt: string
 }
+
+export interface RelayIncomingMachineChannelOffer {
+  readonly controllerFingerprint: RelayPublicKeyFingerprint
+  readonly controllerConnectionEpoch: RelayConnectionEpoch
+  readonly nodeConnectionEpoch: RelayConnectionEpoch
+  accept(): Promise<Duplex>
+  reject(reason?: RelayChannelRejectReason): Promise<void>
+}
+
+export type RelayMachineChannelHandler = (
+  offer: RelayIncomingMachineChannelOffer,
+) => void | Promise<void>
+
+type RelayMachineChannelDataPlaneMessage = Extract<
+  RelayClientMessage,
+  { readonly type: 'channel.data' | 'channel.data.ack' | 'channel.close' }
+>
 
 export interface ConnectedRelayControl {
   readonly connection: RelayControlConnection
@@ -263,7 +290,49 @@ export class RelayControlConnection {
     RelayPublicKeyFingerprint,
     RelayRequestId
   >()
+  readonly #machineChannelOpens = new Map<
+    RelayRequestId,
+    {
+      readonly targetNodeFingerprint: RelayPublicKeyFingerprint
+      readonly resolve: (channel: Duplex) => void
+      readonly reject: (error: Error) => void
+      timer: ReturnType<typeof setTimeout>
+      readonly removeAbortListener: () => void
+      cancelled: boolean
+    }
+  >()
+  readonly #machineChannels = new Map<
+    RelayChannelId,
+    {
+      readonly requestId: RelayRequestId
+      readonly channel: RelayMachineChannelDuplex
+      readonly nodeOpening?: {
+        readonly promise: Promise<void>
+        readonly resolve: () => void
+        readonly reject: (error: Error) => void
+        readonly timer: ReturnType<typeof setTimeout>
+      }
+      /** Bounded grace for exact late frames after a local terminal close. */
+      releaseTimer?: ReturnType<typeof setTimeout>
+      terminalFrames?: number
+    }
+  >()
+  readonly #incomingMachineOffers = new Map<
+    RelayChannelId,
+    {
+      readonly message: RelayChannelOfferMessage
+      readonly timer: ReturnType<typeof setTimeout>
+      decided: boolean
+    }
+  >()
+  readonly #machineChannelSendQueue: Array<{
+    readonly message: RelayMachineChannelDataPlaneMessage
+    readonly resolve: () => void
+    readonly reject: (error: Error) => void
+  }> = []
   readonly #completion: Promise<void>
+  #machineChannelHandler: RelayMachineChannelHandler | undefined
+  #machineChannelSendActive = false
   #failure: RelayClientError | undefined
   #closing = false
 
@@ -412,6 +481,131 @@ export class RelayControlConnection {
     }
   }
 
+  async openMachineChannel(
+    targetNodeFingerprint: RelayPublicKeyFingerprint | string,
+    options: { readonly signal?: AbortSignal } = {},
+  ): Promise<Duplex> {
+    if (this.role !== 'controller') {
+      throw new RelayClientError(
+        'relay_protocol_error',
+        'Only a Relay Controller may open a Machine channel',
+      )
+    }
+    this.#assertOpen()
+    if (
+      this.#machineChannels.size + this.#machineChannelOpens.size >=
+      relayProtocolLimits.maximumChannelsPerPeer
+    ) {
+      throw new RelayClientError(
+        'relay_transport_capacity_reached',
+        'Internet Relay Machine channel capacity was reached',
+      )
+    }
+    const fingerprint = RelayPublicKeyFingerprintSchema.parse(
+      targetNodeFingerprint,
+    )
+    if (options.signal?.aborted === true) {
+      throw new RelayClientError(
+        'relay_channel_open_failed',
+        'Internet Relay Machine channel opening was cancelled',
+      )
+    }
+    const requestId = newRelayRequestId()
+    let abort = () => undefined
+    const result = new Promise<Duplex>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        const pending = this.#machineChannelOpens.get(requestId)
+        if (pending === undefined) return
+        pending.removeAbortListener()
+        if (pending.cancelled) {
+          this.#machineChannelOpens.delete(requestId)
+          return
+        }
+        pending.cancelled = true
+        pending.reject(
+          new RelayClientError(
+            'relay_channel_open_failed',
+            'Internet Relay Machine channel opening timed out',
+          ),
+        )
+        pending.timer = setTimeout(() => {
+          if (this.#machineChannelOpens.get(requestId) === pending) {
+            this.#machineChannelOpens.delete(requestId)
+          }
+        }, relayProtocolLimits.channelOpenTimeoutMs)
+        pending.timer.unref()
+      }, relayProtocolLimits.channelOpenTimeoutMs)
+      abort = () => {
+        const pending = this.#machineChannelOpens.get(requestId)
+        if (pending === undefined || pending.cancelled) return
+        pending.cancelled = true
+        pending.reject(
+          new RelayClientError(
+            'relay_channel_open_failed',
+            'Internet Relay Machine channel opening was cancelled',
+          ),
+        )
+      }
+      options.signal?.addEventListener('abort', abort, { once: true })
+      this.#machineChannelOpens.set(requestId, {
+        targetNodeFingerprint: fingerprint,
+        resolve,
+        reject,
+        timer,
+        removeAbortListener: () =>
+          options.signal?.removeEventListener('abort', abort),
+        cancelled: false,
+      })
+    })
+    void result.catch(() => undefined)
+    try {
+      await sendClientMessage(this.#framed, {
+        type: 'channel.open',
+        protocolVersion: relayProtocolVersion,
+        connectionEpoch: this.connectionEpoch,
+        requestId,
+        targetNodeFingerprint: fingerprint,
+        purpose: 'machine_tls_v1',
+      })
+      return await result
+    } catch (error) {
+      const pending = this.#machineChannelOpens.get(requestId)
+      if (pending?.cancelled === true) throw machineChannelOpenError(error)
+      if (pending !== undefined) {
+        clearTimeout(pending.timer)
+        pending.removeAbortListener()
+        this.#machineChannelOpens.delete(requestId)
+        if (!pending.cancelled) pending.reject(machineChannelOpenError(error))
+      }
+      throw machineChannelOpenError(error)
+    }
+  }
+
+  setMachineChannelHandler(handler: RelayMachineChannelHandler): () => void {
+    if (this.role !== 'node') {
+      throw new RelayClientError(
+        'relay_protocol_error',
+        'Only a Relay Node may receive Machine channels',
+      )
+    }
+    this.#assertOpen()
+    if (this.#machineChannelHandler !== undefined) {
+      throw new RelayClientError(
+        'relay_protocol_error',
+        'Internet Relay Machine channel handler is already installed',
+      )
+    }
+    this.#machineChannelHandler = handler
+    let removed = false
+    return () => {
+      if (removed) return
+      removed = true
+      if (this.#machineChannelHandler === handler) {
+        this.#machineChannelHandler = undefined
+      }
+    }
+  }
+
   async waitUntilClosed(): Promise<void> {
     await this.#completion
     if (this.#failure !== undefined) throw this.#failure
@@ -494,6 +688,95 @@ export class RelayControlConnection {
           }
           continue
         }
+        if (message.type === 'channel.offer') {
+          this.#receiveMachineChannelOffer(message)
+          continue
+        }
+        if (message.type === 'channel.opened') {
+          this.#receiveMachineChannelOpened(message)
+          continue
+        }
+        if (message.type === 'channel.reject') {
+          this.#receiveMachineChannelRejected(message)
+          continue
+        }
+        if (message.type === 'channel.data') {
+          const channel = this.#boundMachineChannel(message)
+          channel.receiveData(message.sequence, message.data)
+          continue
+        }
+        if (message.type === 'channel.data.ack') {
+          const channel = this.#boundMachineChannel(message)
+          channel.receiveAcknowledgement(message.acknowledgedSequence)
+          continue
+        }
+        if (message.type === 'channel.closed') {
+          const entry = this.#machineChannels.get(message.channelId)
+          if (entry !== undefined) {
+            this.#assertMachineChannelBinding(entry.channel, message)
+            if (entry.requestId !== message.requestId) {
+              throw machineChannelProtocolError(
+                'Internet Relay returned a wrong Machine channel request',
+              )
+            }
+            this.#rejectNodeMachineChannelOpening(
+              entry,
+              machineChannelClosedWhileOpening(message.reason),
+            )
+            entry.channel.receiveClosed(message.reason)
+            this.#deleteMachineChannel(message.channelId, entry.channel)
+            continue
+          }
+          const offer = this.#incomingMachineOffers.get(message.channelId)
+          if (offer !== undefined) {
+            if (
+              offer.message.requestId !== message.requestId ||
+              !sameMachineChannelBinding(offer.message, message)
+            ) {
+              throw machineChannelProtocolError(
+                'Internet Relay returned a stale Machine channel closing',
+              )
+            }
+            clearTimeout(offer.timer)
+            offer.decided = true
+            this.#incomingMachineOffers.delete(message.channelId)
+            continue
+          }
+          const pending = this.#machineChannelOpens.get(message.requestId)
+          if (pending !== undefined) {
+            clearTimeout(pending.timer)
+            pending.removeAbortListener()
+            this.#machineChannelOpens.delete(message.requestId)
+            if (!pending.cancelled) {
+              pending.reject(machineChannelClosedWhileOpening(message.reason))
+            }
+          }
+          continue
+        }
+        if (message.type === 'channel.error') {
+          if (!('channelId' in message)) {
+            this.#receiveMachineChannelOpenError(
+              message.requestId,
+              message.code,
+            )
+            continue
+          }
+          const entry = this.#machineChannels.get(message.channelId)
+          if (entry === undefined) continue
+          this.#assertMachineChannelBinding(entry.channel, message)
+          if (entry.requestId !== message.requestId) {
+            throw machineChannelProtocolError(
+              'Internet Relay returned a wrong Machine channel request',
+            )
+          }
+          this.#rejectNodeMachineChannelOpening(
+            entry,
+            machineChannelBoundCodeError(message.code),
+          )
+          entry.channel.receiveError(message.code)
+          this.#deleteMachineChannel(message.channelId, entry.channel)
+          continue
+        }
         throw new RelayClientError(
           'relay_protocol_error',
           'Internet Relay sent an invalid control message',
@@ -514,6 +797,465 @@ export class RelayControlConnection {
       this.#grantRequests.clear()
       this.#rendezvousSubscriptions.clear()
       this.#rendezvousTargets.clear()
+      for (const pending of this.#machineChannelOpens.values()) {
+        clearTimeout(pending.timer)
+        pending.removeAbortListener()
+        if (!pending.cancelled) pending.reject(machineChannelOpenError(failure))
+      }
+      this.#machineChannelOpens.clear()
+      for (const offer of this.#incomingMachineOffers.values()) {
+        clearTimeout(offer.timer)
+        offer.decided = true
+      }
+      this.#incomingMachineOffers.clear()
+      for (const entry of [...this.#machineChannels.values()]) {
+        this.#rejectNodeMachineChannelOpening(
+          entry,
+          machineChannelOpenError(failure),
+        )
+        const { channel } = entry
+        channel.connectionLost(failure)
+        if (entry.releaseTimer !== undefined) clearTimeout(entry.releaseTimer)
+      }
+      this.#machineChannels.clear()
+      this.#rejectMachineChannelSendQueue(failure)
+      this.#machineChannelHandler = undefined
+    }
+  }
+
+  #receiveMachineChannelOffer(message: RelayChannelOfferMessage): void {
+    if (
+      this.role !== 'node' ||
+      message.nodeConnectionEpoch !== this.connectionEpoch ||
+      this.#incomingMachineOffers.has(message.channelId) ||
+      this.#machineChannels.has(message.channelId)
+    ) {
+      throw machineChannelProtocolError(
+        'Internet Relay returned an invalid Machine channel offer',
+      )
+    }
+    const handler = this.#machineChannelHandler
+    if (
+      handler === undefined ||
+      this.#machineChannels.size + this.#incomingMachineOffers.size >=
+        relayProtocolLimits.maximumChannelsPerPeer
+    ) {
+      void this.#sendMachineChannelRejection(
+        message,
+        handler === undefined ? 'not_available' : 'capacity_reached',
+      )
+      return
+    }
+    const state = {
+      message,
+      decided: false,
+      timer: setTimeout(() => {
+        void this.#rejectMachineChannelOffer(message, 'not_available')
+      }, relayProtocolLimits.channelOpenTimeoutMs),
+    }
+    this.#incomingMachineOffers.set(message.channelId, state)
+    const offer: RelayIncomingMachineChannelOffer = {
+      controllerFingerprint: message.controllerFingerprint,
+      controllerConnectionEpoch: message.controllerConnectionEpoch,
+      nodeConnectionEpoch: message.nodeConnectionEpoch,
+      accept: async () => await this.#acceptMachineChannelOffer(message),
+      reject: async (reason = 'not_available') =>
+        await this.#rejectMachineChannelOffer(message, reason),
+    }
+    void Promise.resolve()
+      .then(async () => await handler(offer))
+      .catch(() => undefined)
+      .finally(() => {
+        const current = this.#incomingMachineOffers.get(message.channelId)
+        if (current !== undefined && !current.decided) {
+          void this.#rejectMachineChannelOffer(message, 'not_available')
+        }
+      })
+  }
+
+  async #acceptMachineChannelOffer(
+    message: RelayChannelOfferMessage,
+  ): Promise<Duplex> {
+    this.#assertOpen()
+    const state = this.#incomingMachineOffers.get(message.channelId)
+    if (state === undefined || state.message !== message || state.decided) {
+      throw machineChannelProtocolError(
+        'Internet Relay Machine channel offer was already decided',
+      )
+    }
+    state.decided = true
+    clearTimeout(state.timer)
+    this.#incomingMachineOffers.delete(message.channelId)
+    let resolveOpened: () => void = () => undefined
+    let rejectOpened: (error: Error) => void = () => undefined
+    const opened = new Promise<void>((resolve, reject) => {
+      resolveOpened = resolve
+      rejectOpened = reject
+    })
+    void opened.catch(() => undefined)
+    const nodeOpening = {
+      promise: opened,
+      resolve: resolveOpened,
+      reject: rejectOpened,
+      timer: setTimeout(() => {
+        const entry = this.#machineChannels.get(message.channelId)
+        if (entry?.nodeOpening !== nodeOpening) return
+        const failure = new RelayClientError(
+          'relay_channel_open_failed',
+          'Internet Relay Machine channel acceptance timed out',
+        )
+        this.#rejectNodeMachineChannelOpening(entry, failure)
+        entry.channel.destroy(failure)
+      }, relayProtocolLimits.channelOpenTimeoutMs),
+    }
+    nodeOpening.timer.unref()
+    const channel = this.#createMachineChannel(
+      message.requestId,
+      message,
+      nodeOpening,
+    )
+    try {
+      await sendClientMessage(this.#framed, {
+        type: 'channel.accept',
+        protocolVersion: relayProtocolVersion,
+        connectionEpoch: this.connectionEpoch,
+        requestId: message.requestId,
+        ...machineChannelBinding(message),
+      })
+      await opened
+      return channel
+    } catch (error) {
+      const entry = this.#machineChannels.get(message.channelId)
+      if (entry !== undefined) {
+        this.#rejectNodeMachineChannelOpening(
+          entry,
+          machineChannelOpenError(error),
+        )
+      }
+      channel.connectionLost(machineChannelOpenError(error))
+      throw machineChannelOpenError(error)
+    }
+  }
+
+  async #rejectMachineChannelOffer(
+    message: RelayChannelOfferMessage,
+    reason: RelayChannelRejectReason,
+  ): Promise<void> {
+    const state = this.#incomingMachineOffers.get(message.channelId)
+    if (state === undefined || state.message !== message || state.decided) {
+      throw machineChannelProtocolError(
+        'Internet Relay Machine channel offer was already decided',
+      )
+    }
+    state.decided = true
+    clearTimeout(state.timer)
+    this.#incomingMachineOffers.delete(message.channelId)
+    await this.#sendMachineChannelRejection(message, reason)
+  }
+
+  async #sendMachineChannelRejection(
+    message: RelayChannelOfferMessage,
+    reason: RelayChannelRejectReason,
+  ): Promise<void> {
+    if (this.#closing || this.#failure !== undefined) return
+    await sendClientMessage(this.#framed, {
+      type: 'channel.reject',
+      protocolVersion: relayProtocolVersion,
+      connectionEpoch: this.connectionEpoch,
+      requestId: message.requestId,
+      ...machineChannelBinding(message),
+      reason,
+    }).catch(() => undefined)
+  }
+
+  #receiveMachineChannelOpened(message: {
+    readonly requestId: RelayRequestId
+    readonly channelId: RelayChannelId
+    readonly channelGeneration: RelayChannelGeneration
+    readonly controllerConnectionEpoch: RelayConnectionEpoch
+    readonly nodeConnectionEpoch: RelayConnectionEpoch
+    readonly purpose: 'machine_tls_v1'
+  }): void {
+    if (this.role === 'node') {
+      if (message.nodeConnectionEpoch !== this.connectionEpoch) {
+        throw machineChannelProtocolError(
+          'Internet Relay returned an invalid Machine channel opening',
+        )
+      }
+      const entry = this.#machineChannels.get(message.channelId)
+      if (entry === undefined || entry.requestId !== message.requestId) {
+        throw machineChannelProtocolError(
+          'Internet Relay returned an unknown Machine channel opening',
+        )
+      }
+      this.#assertMachineChannelBinding(entry.channel, message)
+      if (entry.nodeOpening === undefined) {
+        throw machineChannelProtocolError(
+          'Internet Relay repeated a Machine channel opening',
+        )
+      }
+      clearTimeout(entry.nodeOpening.timer)
+      entry.nodeOpening.resolve()
+      this.#machineChannels.set(message.channelId, {
+        requestId: entry.requestId,
+        channel: entry.channel,
+      })
+      return
+    }
+    if (message.controllerConnectionEpoch !== this.connectionEpoch) {
+      throw machineChannelProtocolError(
+        'Internet Relay returned an invalid Machine channel opening',
+      )
+    }
+    const pending = this.#machineChannelOpens.get(message.requestId)
+    if (pending === undefined) {
+      throw machineChannelProtocolError(
+        'Internet Relay returned an unknown Machine channel opening',
+      )
+    }
+    clearTimeout(pending.timer)
+    pending.removeAbortListener()
+    this.#machineChannelOpens.delete(message.requestId)
+    if (pending.cancelled) {
+      void sendClientMessage(this.#framed, {
+        type: 'channel.close',
+        protocolVersion: relayProtocolVersion,
+        connectionEpoch: this.connectionEpoch,
+        ...machineChannelBinding(message),
+        reason: 'cancelled',
+      }).catch(() => undefined)
+      return
+    }
+    try {
+      const channel = this.#createMachineChannel(message.requestId, message)
+      pending.resolve(channel)
+    } catch (error) {
+      pending.reject(asRelayClientError(error))
+      throw error
+    }
+  }
+
+  #receiveMachineChannelRejected(message: {
+    readonly requestId: RelayRequestId
+    readonly controllerConnectionEpoch: RelayConnectionEpoch
+    readonly reason: RelayChannelRejectReason
+  }): void {
+    if (
+      this.role !== 'controller' ||
+      message.controllerConnectionEpoch !== this.connectionEpoch
+    ) {
+      throw machineChannelProtocolError(
+        'Internet Relay returned an invalid Machine channel rejection',
+      )
+    }
+    const pending = this.#machineChannelOpens.get(message.requestId)
+    if (pending === undefined) {
+      throw machineChannelProtocolError(
+        'Internet Relay returned an unknown Machine channel rejection',
+      )
+    }
+    clearTimeout(pending.timer)
+    pending.removeAbortListener()
+    this.#machineChannelOpens.delete(message.requestId)
+    if (!pending.cancelled)
+      pending.reject(machineChannelRejection(message.reason))
+  }
+
+  #receiveMachineChannelOpenError(
+    requestId: RelayRequestId,
+    code:
+      'capacity_reached' | 'not_authorized' | 'peer_unavailable' | 'internal',
+  ): void {
+    if (this.role !== 'controller') {
+      throw machineChannelProtocolError(
+        'Internet Relay returned a Machine channel opening error to a Node',
+      )
+    }
+    const pending = this.#machineChannelOpens.get(requestId)
+    if (pending === undefined) {
+      throw machineChannelProtocolError(
+        'Internet Relay returned an unknown Machine channel opening error',
+      )
+    }
+    clearTimeout(pending.timer)
+    pending.removeAbortListener()
+    this.#machineChannelOpens.delete(requestId)
+    if (!pending.cancelled) pending.reject(machineChannelOpenCodeError(code))
+  }
+
+  #createMachineChannel(
+    requestId: RelayRequestId,
+    binding: RelayMachineChannelBinding,
+    nodeOpening?: {
+      readonly promise: Promise<void>
+      readonly resolve: () => void
+      readonly reject: (error: Error) => void
+      readonly timer: ReturnType<typeof setTimeout>
+    },
+  ): RelayMachineChannelDuplex {
+    if (
+      this.#machineChannels.has(binding.channelId) ||
+      this.#machineChannels.size >= relayProtocolLimits.maximumChannelsPerPeer
+    ) {
+      throw new RelayClientError(
+        'relay_transport_capacity_reached',
+        'Internet Relay Machine channel capacity was reached',
+      )
+    }
+    const exactBinding = machineChannelBinding(binding)
+    const channel = new RelayMachineChannelDuplex(exactBinding, {
+      localConnectionEpoch: this.connectionEpoch,
+      send: async (message) => await this.#sendMachineChannelMessage(message),
+      release: (released) => {
+        const current = this.#machineChannels.get(exactBinding.channelId)
+        if (
+          current?.channel !== released ||
+          current.releaseTimer !== undefined
+        ) {
+          return
+        }
+        // The Relay socket and Machine stream are independently framed. An
+        // exact data/ACK frame already queued by the Relay may arrive after
+        // local TLS/session shutdown but before channel.closed. Retain only
+        // this exact bounded binding as a terminal tombstone so it is ignored
+        // by the terminal Duplex without weakening unknown/stale rejection.
+        current.releaseTimer = setTimeout(() => {
+          this.#deleteMachineChannel(exactBinding.channelId, released)
+        }, relayProtocolLimits.channelAcknowledgementTimeoutMs)
+        current.terminalFrames = 0
+        current.releaseTimer.unref()
+      },
+    })
+    this.#machineChannels.set(exactBinding.channelId, {
+      requestId,
+      channel,
+      ...(nodeOpening === undefined ? {} : { nodeOpening }),
+    })
+    return channel
+  }
+
+  #deleteMachineChannel(
+    channelId: RelayChannelId,
+    expected: RelayMachineChannelDuplex,
+  ): void {
+    const current = this.#machineChannels.get(channelId)
+    if (current?.channel !== expected) return
+    if (current.releaseTimer !== undefined) clearTimeout(current.releaseTimer)
+    this.#machineChannels.delete(channelId)
+  }
+
+  #boundMachineChannel(
+    binding: RelayMachineChannelBinding,
+  ): RelayMachineChannelDuplex {
+    const entry = this.#machineChannels.get(binding.channelId)
+    if (entry === undefined) {
+      throw machineChannelProtocolError(
+        'Internet Relay returned an unknown Machine channel',
+      )
+    }
+    this.#assertMachineChannelBinding(entry.channel, binding)
+    if (entry.releaseTimer !== undefined) {
+      entry.terminalFrames = (entry.terminalFrames ?? 0) + 1
+      if (
+        entry.terminalFrames > relayProtocolLimits.maximumTerminalChannelFrames
+      ) {
+        throw machineChannelProtocolError(
+          'Internet Relay repeated a terminal Machine channel frame',
+        )
+      }
+    }
+    return entry.channel
+  }
+
+  #assertMachineChannelBinding(
+    channel: RelayMachineChannelDuplex,
+    binding: RelayMachineChannelBinding,
+  ): void {
+    if (!channel.matchesBinding(binding)) {
+      throw machineChannelProtocolError(
+        'Internet Relay returned a stale Machine channel binding',
+      )
+    }
+  }
+
+  #rejectNodeMachineChannelOpening(
+    entry: {
+      readonly nodeOpening?: {
+        readonly reject: (error: Error) => void
+        readonly timer: ReturnType<typeof setTimeout>
+      }
+    },
+    error: Error,
+  ): void {
+    if (entry.nodeOpening === undefined) return
+    clearTimeout(entry.nodeOpening.timer)
+    entry.nodeOpening.reject(error)
+  }
+
+  async #sendMachineChannelMessage(
+    message: RelayMachineChannelDataPlaneMessage,
+  ): Promise<void> {
+    this.#assertOpen()
+    if (
+      this.#machineChannelSendQueue.length >=
+      relayProtocolLimits.maximumChannelsPerPeer * 2
+    ) {
+      throw new RelayClientError(
+        'relay_transport_capacity_reached',
+        'Internet Relay Machine channel send capacity was reached',
+      )
+    }
+    const result = new Promise<void>((resolve, reject) => {
+      const pending = { message, resolve, reject }
+      if (message.type === 'channel.data') {
+        this.#machineChannelSendQueue.push(pending)
+      } else {
+        const firstData = this.#machineChannelSendQueue.findIndex(
+          (queued) => queued.message.type === 'channel.data',
+        )
+        if (firstData < 0) this.#machineChannelSendQueue.push(pending)
+        else this.#machineChannelSendQueue.splice(firstData, 0, pending)
+      }
+    })
+    void result.catch(() => undefined)
+    this.#drainMachineChannelSendQueue()
+    await result
+  }
+
+  #drainMachineChannelSendQueue(): void {
+    if (this.#machineChannelSendActive) return
+    this.#machineChannelSendActive = true
+    void (async () => {
+      try {
+        while (this.#machineChannelSendQueue.length > 0) {
+          const pending = this.#machineChannelSendQueue.shift()
+          if (pending === undefined) break
+          try {
+            await sendClientMessage(this.#framed, pending.message)
+            pending.resolve()
+          } catch (error) {
+            const failure = machineChannelActiveError(error)
+            pending.reject(failure)
+            this.#rejectMachineChannelSendQueue(failure)
+            break
+          }
+        }
+      } finally {
+        this.#machineChannelSendActive = false
+        if (
+          this.#machineChannelSendQueue.length > 0 &&
+          !this.#closing &&
+          this.#failure === undefined
+        ) {
+          this.#drainMachineChannelSendQueue()
+        }
+      }
+    })()
+  }
+
+  #rejectMachineChannelSendQueue(error: Error): void {
+    for (const pending of this.#machineChannelSendQueue.splice(0)) {
+      pending.reject(error)
     }
   }
 
@@ -525,6 +1267,189 @@ export class RelayControlConnection {
       )
     }
   }
+}
+
+function machineChannelBinding(
+  value: RelayMachineChannelBinding,
+): RelayMachineChannelBinding {
+  return {
+    channelId: value.channelId,
+    channelGeneration: value.channelGeneration,
+    controllerConnectionEpoch: value.controllerConnectionEpoch,
+    nodeConnectionEpoch: value.nodeConnectionEpoch,
+  }
+}
+
+function sameMachineChannelBinding(
+  left: RelayMachineChannelBinding,
+  right: RelayMachineChannelBinding,
+): boolean {
+  return (
+    left.channelId === right.channelId &&
+    left.channelGeneration === right.channelGeneration &&
+    left.controllerConnectionEpoch === right.controllerConnectionEpoch &&
+    left.nodeConnectionEpoch === right.nodeConnectionEpoch
+  )
+}
+
+function machineChannelProtocolError(message: string): RelayClientError {
+  return new RelayClientError('relay_protocol_error', message)
+}
+
+function machineChannelOpenError(error: unknown): RelayClientError {
+  if (
+    error instanceof RelayClientError &&
+    (error.code === 'relay_transport_capacity_reached' ||
+      error.code === 'relay_peer_offline' ||
+      error.code === 'relay_protocol_error' ||
+      error.code === 'relay_channel_open_failed')
+  ) {
+    return error
+  }
+  return new RelayClientError(
+    'relay_channel_open_failed',
+    'Internet Relay Machine channel could not be opened',
+    undefined,
+    { cause: error },
+  )
+}
+
+function machineChannelActiveError(error: unknown): RelayClientError {
+  if (
+    error instanceof RelayClientError &&
+    (error.code === 'relay_channel_lost' ||
+      error.code === 'relay_protocol_error' ||
+      error.code === 'relay_transport_capacity_reached')
+  ) {
+    return error
+  }
+  return new RelayClientError(
+    'relay_channel_lost',
+    'Internet Relay Machine channel was lost',
+    undefined,
+    { cause: error },
+  )
+}
+
+function machineChannelRejection(
+  reason: RelayChannelRejectReason,
+): RelayClientError {
+  switch (reason) {
+    case 'busy':
+    case 'capacity_reached':
+      return new RelayClientError(
+        'relay_transport_capacity_reached',
+        'Internet Relay Machine channel capacity was reached',
+      )
+    case 'not_available':
+      return new RelayClientError(
+        'relay_channel_open_failed',
+        'Internet Relay Machine channel is not available',
+      )
+    case 'not_supported':
+      return machineChannelProtocolError(
+        'Internet Relay Machine channel is not supported',
+      )
+  }
+}
+
+function machineChannelOpenCodeError(
+  code: 'capacity_reached' | 'not_authorized' | 'peer_unavailable' | 'internal',
+): RelayClientError {
+  switch (code) {
+    case 'capacity_reached':
+      return new RelayClientError(
+        'relay_transport_capacity_reached',
+        'Internet Relay Machine channel capacity was reached',
+      )
+    case 'peer_unavailable':
+      return new RelayClientError(
+        'relay_peer_offline',
+        'Internet Relay Node is offline',
+      )
+    case 'internal':
+    case 'not_authorized':
+      return new RelayClientError(
+        'relay_channel_open_failed',
+        'Internet Relay Machine channel could not be opened',
+      )
+  }
+}
+
+function machineChannelBoundCodeError(
+  code:
+    | 'stale_channel'
+    | 'invalid_state'
+    | 'flow_control_violation'
+    | 'capacity_reached'
+    | 'not_authorized'
+    | 'peer_unavailable'
+    | 'internal',
+): RelayClientError {
+  switch (code) {
+    case 'capacity_reached':
+      return new RelayClientError(
+        'relay_transport_capacity_reached',
+        'Internet Relay Machine channel capacity was reached',
+      )
+    case 'peer_unavailable':
+      return new RelayClientError(
+        'relay_channel_lost',
+        'Internet Relay Machine channel peer is unavailable',
+      )
+    case 'flow_control_violation':
+    case 'internal':
+    case 'invalid_state':
+    case 'not_authorized':
+    case 'stale_channel':
+      return machineChannelProtocolError(
+        'Internet Relay Machine channel protocol failed',
+      )
+  }
+}
+
+function machineChannelClosedWhileOpening(
+  reason:
+    | 'peer_closed'
+    | 'peer_disconnected'
+    | 'authorization_revoked'
+    | 'connection_replaced'
+    | 'timeout'
+    | 'capacity_reached'
+    | 'protocol_error'
+    | 'relay_shutdown',
+): RelayClientError {
+  switch (reason) {
+    case 'capacity_reached':
+      return new RelayClientError(
+        'relay_transport_capacity_reached',
+        'Internet Relay Machine channel capacity was reached',
+      )
+    case 'peer_disconnected':
+      return new RelayClientError(
+        'relay_peer_offline',
+        'Internet Relay Node is offline',
+      )
+    case 'protocol_error':
+      return machineChannelProtocolError(
+        'Internet Relay Machine channel protocol failed while opening',
+      )
+    case 'authorization_revoked':
+    case 'connection_replaced':
+    case 'peer_closed':
+    case 'relay_shutdown':
+    case 'timeout':
+      return new RelayClientError(
+        'relay_channel_open_failed',
+        'Internet Relay Machine channel could not be opened',
+      )
+  }
+}
+
+function asRelayClientError(error: unknown): RelayClientError {
+  return error instanceof RelayClientError
+    ? error
+    : machineChannelProtocolError('Internet Relay Machine channel failed')
 }
 
 function validateClientIdentity(identity: RelayClientIdentity): {

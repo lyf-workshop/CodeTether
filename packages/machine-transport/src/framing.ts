@@ -12,22 +12,31 @@ export class MachineFrameDecoder {
 
   push(chunk: Buffer): unknown[] {
     if (chunk.length === 0) return []
-    if (
-      this.#buffer.length + chunk.length >
-      machineTransportLimits.maximumBufferedBytes
-    ) {
-      throw malformed('Machine frame buffer exceeded its bound')
-    }
-    this.#buffer = Buffer.concat([this.#buffer, chunk])
     const values: unknown[] = []
-    while (this.#buffer.length >= 4) {
+    let offset = 0
+    while (offset < chunk.length) {
+      if (this.#buffer.length < 4) {
+        const headerBytes = Math.min(
+          4 - this.#buffer.length,
+          chunk.length - offset,
+        )
+        this.#appendResidual(chunk.subarray(offset, offset + headerBytes))
+        offset += headerBytes
+        if (this.#buffer.length < 4) break
+      }
       const length = this.#buffer.readUInt32BE(0)
       if (length === 0 || length > machineTransportLimits.maximumFrameBytes) {
         throw malformed('Machine frame length is invalid')
       }
-      if (this.#buffer.length < length + 4) break
+      const totalLength = length + 4
+      const bodyBytes = Math.min(
+        totalLength - this.#buffer.length,
+        chunk.length - offset,
+      )
+      this.#appendResidual(chunk.subarray(offset, offset + bodyBytes))
+      offset += bodyBytes
+      if (this.#buffer.length < totalLength) break
       const body = this.#buffer.subarray(4, length + 4)
-      this.#buffer = this.#buffer.subarray(length + 4)
       let text: string
       try {
         text = fatalUtf8Decoder.decode(body)
@@ -39,6 +48,10 @@ export class MachineFrameDecoder {
       } catch (error) {
         throw malformed('Machine frame is not valid JSON', error)
       }
+      this.#buffer = Buffer.alloc(0)
+      if (values.length > machineTransportLimits.maximumQueuedFrames + 1) {
+        throw malformed('Machine message queue exceeded its bound')
+      }
     }
     return values
   }
@@ -47,6 +60,17 @@ export class MachineFrameDecoder {
     if (this.#buffer.length !== 0) {
       throw malformed('Machine connection ended with an incomplete frame')
     }
+  }
+
+  #appendResidual(bytes: Buffer): void {
+    if (bytes.length === 0) return
+    if (
+      this.#buffer.length + bytes.length >
+      machineTransportLimits.maximumBufferedBytes
+    ) {
+      throw malformed('Machine frame buffer exceeded its bound')
+    }
+    this.#buffer = Buffer.concat([this.#buffer, bytes])
   }
 }
 

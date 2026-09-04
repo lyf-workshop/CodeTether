@@ -200,6 +200,9 @@ class FakeControllerRelayCoordinator {
       state: 'connected',
       enrollment: 'enrolled',
       nodePresence: 'online',
+      // Infrastructure presence is intentionally not enough for Host's
+      // public Relay execution eligibility claim.
+      internetExecutionEnabled: true,
     })
   }
 

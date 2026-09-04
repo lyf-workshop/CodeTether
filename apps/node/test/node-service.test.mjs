@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { once } from 'node:events'
 import {
   mkdir,
   mkdtemp,
@@ -15,6 +16,7 @@ import test from 'node:test'
 
 import {
   beginRemoteMachinePairing,
+  connectMachineTls,
   connectTrustedRemoteMachine,
   generateMachineTlsIdentity,
   newControllerId,
@@ -281,6 +283,58 @@ test('real loopback pairing, staged trust recovery, restart, ping, and unpair', 
     await replacementPending.confirm()
     assert.equal(running.state.trustedControllerCount, 1)
   } finally {
+    await running?.service.close().catch(() => undefined)
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('trust revocation closes a pinned TLS peer stalled before Machine hello', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'codetether-node-'))
+  const localController = await controller()
+  let running
+  let revoker
+  let stalledTls
+  try {
+    running = await startNode(directory)
+    const mode = await running.service.enablePairing()
+    const pending = await beginRemoteMachinePairing({
+      endpoint: running.endpoint,
+      pairingCode: mode.code,
+      controller: localController,
+    })
+    const trusted = await pending.confirm()
+
+    stalledTls = await connectMachineTls({
+      ...running.endpoint,
+      identity: localController.tls,
+      expectedPeerFingerprint: trusted.nodeFingerprint,
+    })
+    const stalledClosed = once(stalledTls.socket, 'close', {
+      signal: AbortSignal.timeout(2_000),
+    })
+    // Yield after TLS so the Node is blocked on the deliberately withheld
+    // Machine hello when another authenticated socket revokes durable trust.
+    await new Promise((resolve) => setTimeout(resolve, 30))
+
+    revoker = await connectTrustedRemoteMachine({
+      peer: trusted,
+      controller: localController,
+    })
+    await revoker.revoke()
+    await stalledClosed
+
+    assert.equal(stalledTls.socket.destroyed, true)
+    assert.equal(running.state.trustedControllerCount, 0)
+    await assert.rejects(
+      connectTrustedRemoteMachine({
+        peer: trusted,
+        controller: localController,
+      }),
+      /authentication|disabled/u,
+    )
+  } finally {
+    stalledTls?.socket.destroy()
+    revoker?.close()
     await running?.service.close().catch(() => undefined)
     await rm(directory, { recursive: true, force: true })
   }

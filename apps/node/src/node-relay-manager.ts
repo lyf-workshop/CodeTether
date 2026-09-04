@@ -1,12 +1,15 @@
 import { X509Certificate } from 'node:crypto'
 import { performance } from 'node:perf_hooks'
+import type { Duplex } from 'node:stream'
 
+import type { PublicKeyFingerprint } from '@codetether/machine-transport'
 import {
   RelayClientError,
   connectRelayControl,
   isPermanentRelayClientError,
   type ConnectRelayControlOptions,
   type RelayControlConnection,
+  type RelayIncomingMachineChannelOffer,
 } from '@codetether/relay-client'
 import {
   relayProtocolLimits,
@@ -48,6 +51,15 @@ export interface NodeRelayStatusObservation {
   readonly errorCode?: RelayClientError['code']
 }
 
+export interface NodeRelayMachineChannel {
+  readonly stream: Duplex
+  readonly controllerFingerprint: PublicKeyFingerprint
+}
+
+export type NodeRelayMachineChannelHandler = (
+  channel: NodeRelayMachineChannel,
+) => void | Promise<void>
+
 type ConnectRelay = typeof connectRelayControl
 
 export interface NodeRelayManagerOptions {
@@ -69,11 +81,7 @@ export interface NodeRelayManagerOptions {
   readonly writeRegistration?: typeof writeNodeRelayRegistration
 }
 
-/**
- * Owns one outbound-only Relay control connection. It receives no Provider,
- * Project, Conversation, Prompt, or execution dependency and therefore cannot
- * become an execution transport.
- */
+/** Owns one outbound Relay control connection and its bounded Machine channels. */
 export class NodeRelayManager {
   readonly #state: NodeStateStore
   readonly #configuration: NodeRelayConfiguration
@@ -92,8 +100,16 @@ export class NodeRelayManager {
   readonly #readRegistration: typeof readNodeRelayRegistration
   readonly #writeRegistration: typeof writeNodeRelayRegistration
   readonly #abort = new AbortController()
+  readonly #machineChannels = new Map<
+    Duplex,
+    {
+      readonly connection: RelayControlConnection
+      readonly controllerFingerprint: PublicKeyFingerprint
+    }
+  >()
   #worker: Promise<void> | undefined
   #connection: RelayControlConnection | undefined
+  #machineChannelHandler: NodeRelayMachineChannelHandler | undefined
   #registration: NodeRelayRegistration | undefined
   #grantRevision = 0
   #appliedGrantRevision = -1
@@ -148,6 +164,28 @@ export class NodeRelayManager {
     return this.#worker !== undefined
   }
 
+  get activeMachineChannelCount(): number {
+    return this.#machineChannels.size
+  }
+
+  setMachineChannelHandler(
+    handler: NodeRelayMachineChannelHandler,
+  ): () => void {
+    if (this.#closed) throw new Error('Node Relay manager is closed')
+    if (this.#machineChannelHandler !== undefined) {
+      throw new Error('Node Relay Machine channel handler is already installed')
+    }
+    this.#machineChannelHandler = handler
+    let removed = false
+    return () => {
+      if (removed) return
+      removed = true
+      if (this.#machineChannelHandler !== handler) return
+      this.#machineChannelHandler = undefined
+      this.#destroyMachineChannels()
+    }
+  }
+
   start(): void {
     if (
       this.#closed ||
@@ -175,6 +213,7 @@ export class NodeRelayManager {
   /** Coalesces pairing/unpair changes into the one current grant update. */
   synchronizeMachineTrust(): void {
     if (this.#closed) return
+    this.#closeUnauthorizedMachineChannels()
     this.#grantRevision += 1
     const connection = this.#connection
     if (connection !== undefined) {
@@ -191,6 +230,7 @@ export class NodeRelayManager {
     }
     this.#closed = true
     this.#abort.abort()
+    this.#destroyMachineChannels()
     await this.#connection?.close().catch(() => undefined)
     await this.#worker
     await this.#grantTask?.catch(() => undefined)
@@ -216,6 +256,8 @@ export class NodeRelayManager {
       let ownedConnection: RelayControlConnection | undefined
       let attemptedEnrollment = false
       let connectedAt: number | undefined
+      let removeMachineChannelHandler: (() => void) | undefined
+      let channelConnection: RelayControlConnection | undefined
       try {
         let connected
         if (this.#registration !== undefined) {
@@ -295,17 +337,28 @@ export class NodeRelayManager {
         }
         if (this.#closed || this.#abort.signal.aborted) return
 
-        this.#connection = ownedConnection
+        const activeConnection = ownedConnection
+        this.#connection = activeConnection
+        channelConnection = activeConnection
+        removeMachineChannelHandler = activeConnection.setMachineChannelHandler(
+          async (offer) =>
+            await this.#handleMachineChannelOffer(activeConnection, offer),
+        )
         this.#appliedGrantRevision = -1
-        await this.#flushGrant(ownedConnection)
+        await this.#flushGrant(activeConnection)
         this.#setStatus('connected')
         connectedAt = this.#monotonicNow()
-        await ownedConnection.waitUntilClosed()
+        await activeConnection.waitUntilClosed()
       } catch (error) {
         if (this.#closed || this.#abort.signal.aborted) return
         const failedConnection = this.#connection ?? ownedConnection
         this.#connection = undefined
         ownedConnection = undefined
+        removeMachineChannelHandler?.()
+        removeMachineChannelHandler = undefined
+        if (failedConnection !== undefined) {
+          this.#destroyMachineChannels(failedConnection)
+        }
         await failedConnection?.close().catch(() => undefined)
         const failure = relayManagerError(error)
         if (failure.code === 'relay_enrollment_required') {
@@ -352,6 +405,10 @@ export class NodeRelayManager {
         ).catch(() => undefined)
         delayMs = Math.min(delayMs * 2, this.#maximumDelayMs)
       } finally {
+        removeMachineChannelHandler?.()
+        if (channelConnection !== undefined) {
+          this.#destroyMachineChannels(channelConnection)
+        }
         const connection = this.#connection ?? ownedConnection
         this.#connection = undefined
         await connection?.close().catch(() => undefined)
@@ -388,6 +445,76 @@ export class NodeRelayManager {
       now: this.#now,
     }
     return await this.#connect(options)
+  }
+
+  async #handleMachineChannelOffer(
+    connection: RelayControlConnection,
+    offer: RelayIncomingMachineChannelOffer,
+  ): Promise<void> {
+    const handler = this.#machineChannelHandler
+    const trustedFingerprint = this.#currentControllerFingerprint()
+    if (
+      this.#closed ||
+      connection !== this.#connection ||
+      handler === undefined ||
+      trustedFingerprint === undefined ||
+      offer.controllerFingerprint !== trustedFingerprint
+    ) {
+      await offer.reject('not_available').catch(() => undefined)
+      return
+    }
+    let stream: Duplex
+    try {
+      stream = await offer.accept()
+    } catch {
+      return
+    }
+    if (
+      this.#closed ||
+      connection !== this.#connection ||
+      handler !== this.#machineChannelHandler ||
+      offer.controllerFingerprint !== this.#currentControllerFingerprint()
+    ) {
+      stream.destroy()
+      return
+    }
+    const entry = {
+      connection,
+      controllerFingerprint: offer.controllerFingerprint,
+    }
+    this.#machineChannels.set(stream, entry)
+    stream.once('close', () => {
+      if (this.#machineChannels.get(stream) === entry) {
+        this.#machineChannels.delete(stream)
+      }
+    })
+    try {
+      await handler({
+        stream,
+        controllerFingerprint: offer.controllerFingerprint,
+      })
+    } catch {
+      stream.destroy()
+    }
+  }
+
+  #closeUnauthorizedMachineChannels(): void {
+    const current = this.#currentControllerFingerprint()
+    for (const [stream, entry] of this.#machineChannels) {
+      if (entry.controllerFingerprint !== current) {
+        this.#machineChannels.delete(stream)
+        stream.destroy()
+      }
+    }
+  }
+
+  #destroyMachineChannels(connection?: RelayControlConnection): void {
+    for (const [stream, entry] of this.#machineChannels) {
+      if (connection === undefined || entry.connection === connection) {
+        this.#machineChannels.delete(stream)
+        stream.destroy()
+      }
+    }
   }
 
   async #flushGrant(connection: RelayControlConnection): Promise<void> {

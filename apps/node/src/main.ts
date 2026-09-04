@@ -117,6 +117,11 @@ export async function runNode(
       port: options.port,
       ...(relayManager === undefined ? {} : { relayControl: relayManager }),
     })
+    const runningService = service
+    relayManager?.setMachineChannelHandler(
+      async (channel) =>
+        await runningService.acceptRelayMachineChannel(channel),
+    )
     const address = await service.listen()
     writeStatus(options.json, {
       event: 'node.ready',
@@ -240,7 +245,7 @@ function helpText(): string {
     '  --json             Emit bounded machine-readable lifecycle lines',
     '  --help             Show this help',
     '',
-    'The Node exposes identity, pairing, liveness, bounded Provider discovery, trust revocation, and optional outbound Relay presence only.',
+    'The Node exposes identity, pairing, liveness, bounded Provider discovery, trust revocation, and optional outbound Relay transport for the same authenticated Machine protocol.',
     '',
   ].join('\n')
 }

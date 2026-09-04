@@ -1062,7 +1062,7 @@ Exit gate:
 
 ## Phase 7A — Internet Relay Architecture Foundation
 
-**Status:** current approved implementation scope; not accepted, frozen, or declared ready.
+**Status:** accepted and frozen at `67e2a98`.
 
 **Goal:** establish a real public Internet rendezvous/control plane where an already-paired Controller and Node behind unrelated networks connect outbound, authenticate durable cryptographic identities, and expose authorized presence without forwarding any Agent or product execution payload.
 
@@ -1101,6 +1101,44 @@ Exit gate:
 - Production Relay artifact, service/restart/backup/upgrade smoke, all workspace/Desktop/Node/package gates, 30-minute soak, zero local test residue, clean deployed state, matching clean build identities, and a clean worktree must pass.
 - If authorized Alibaba access is available, the full public Internet deployment matrix is mandatory. If it is unavailable, evidence must say `OWNER ACTION REQUIRED FOR REAL ALIBABA DEPLOYMENT` and Phase 7A remains not ready; local/staging results cannot substitute for or fabricate this criterion.
 
+### Acceptance boundary
+
+- Owner review accepted the public Alibaba deployment, TLS and durable identity, outbound Controller/Node enrollment and authentication, authorized presence, restart/hard-failure recovery, 30-minute resource soak, direct Codex/Claude isolation, cloud firewall boundary, automated security matrix, package gates, and clean deployed/worktree state. The implementation and evidence are frozen at `67e2a98`.
+
+## Phase 7B — Authenticated Relay Transport
+
+**Status:** current approved implementation scope; not accepted, frozen, or declared ready.
+
+**Goal:** carry the existing end-peer-authenticated Machine protocol over the Owner-operated Internet Relay when Direct is unavailable, without changing Machine trust, Provider capabilities, execution ownership, or no-replay semantics and without creating a generic tunnel.
+
+### In scope
+
+- Relay protocol version 2 adds one purpose-bound ephemeral channel family, `machine_tls_v1`. A channel is authorized by the existing reciprocal Controller/Node grant and bound to exact current peer epochs plus random channel identity/generation; it cannot name an arbitrary host, port, URL, process, Provider, Project path, command, or destination.
+- The Controller and Node run the frozen TLS 1.3 Machine session inside the Relay Duplex. Controller Node/Machine pinning and Node Controller-certificate trust remain authoritative after Relay enrollment; the same Machine hello, Project Location validation, Provider discovery/session, Turn, Tool/event, lease, ownership, capacity, and cleanup paths serve Direct and Relay.
+- Public `internetExecutionEnabled` requires more than Relay presence: for the current Host process/live Relay epoch, one bounded qualification channel must complete the exact pinned inner Machine TLS handshake and nonce-matched Machine ping before closing. Loss or restart clears that process-local proof. The qualification starts no Provider and does not replace Project Location, Provider, busy, or capacity eligibility.
+- Production route selection is Direct first. Relay fallback is allowed only before an authenticated semantic operation may have been accepted. Identity/protocol failures and post-authentication/session-open uncertainty stop the operation. The forced Relay-only policy remains an internal validation seam, not a user-selectable mode.
+- An active Machine session or Turn never moves between Direct and Relay or between Relay channel generations. Peer/Relay reconnect, epoch replacement, grant removal, unpair, revocation, timeout, backpressure failure, or process loss terminates the exact channel without automatic resume or Prompt replay; only a later explicit operation chooses a new route.
+- Three explicit delivery layers remain separate: Relay channel open/data acknowledgement proves only bounded channel/byte-stream progress; the inner Machine session-ready and Turn acknowledgement establish semantic acceptance/ownership; the Host's durable `actionId` ledger provides restart-safe logical idempotency. Relay ACK is never presented as Provider or Turn completion.
+- Hard channel ceilings are 256 globally, eight per authenticated peer, 4 KiB decoded data per chunk, one unacknowledged chunk per direction, 10-second open/data-ack deadlines, 8 KiB outer frames, 16 KiB parser buffering, and 16 queued control frames per Relay connection. Channel state and ciphertext remain ephemeral and never enter Relay SQLite.
+- Aggregate private metrics cover active/opening channels, current pending/queued data frames and bytes, their lifetime high-water marks, open/accept/reject/close/error outcomes, forwarded frames/bytes, backpressure failures, and stale frames. They use no unbounded peer/channel labels. Logs, metrics, diagnostics, and evidence contain no channel bytes, Machine frames, Prompt, Provider/Tool output, Project data, credentials, or private Provider session identity.
+- Phase 6D gains controlled Relay channel-open/lost/capacity diagnostics and product surfaces may truthfully distinguish Direct, Relay, and unavailable transport. Web still owns no Relay socket or credential, and users receive no per-Turn transport switch or transparent-failover promise.
+- The production upgrade reuses the existing public TCP 443 listener and outbound peer connections; management remains loopback-only TCP 9443 and no new public, Node, database, or development port is added. Relay wire version 1 and version 2 fail closed rather than downgrade, so Relay, Desktop/Host, and Node artifacts are upgraded as a coordinated set.
+- Rollback preserves the Phase 7A Relay identity/registry backup and restores the matching Phase 7A Relay, Desktop/Host, and Node artifacts together. Rolling back only one participant is intentionally incompatible; reachable Direct LAN execution remains independent.
+- The Relay application forwards bounded end-to-end Machine TLS ciphertext and cannot decode Machine operations without endpoint keys, but it observes relationship/timing/count/size/volume metadata and can disrupt service. A broader compromised-Relay, traffic-analysis, rekey/forward-secrecy, and key-compromise assessment remains Phase 7C.
+
+### Out of scope
+
+- Any new Codex or Claude capability, Provider switching, new Provider, arbitrary Machine operation, Remote Terminal/filesystem/browser, generic TCP/WebSocket/byte tunnel, SSH/VPN, arbitrary destination, port forwarding, NAT traversal/hole punching, STUN/TURN/WebRTC/UPnP, Mobile, Push, accounts, teams, billing, multi-region, clustering, or failover.
+- Mid-Turn transport migration, automatic replay/resume after channel loss, Relay-side execution interpretation, decoded Agent/product persistence, continuous routing probes, user-selected routing, or weakening exact action/session/Turn ownership.
+- Completion of Phase 7C's broader malicious-Relay and cryptographic hardening claims.
+
+### Exit gate
+
+- REAL Remote Codex and restricted Remote Claude Turns must succeed through the public Alibaba Relay with Direct unavailable, exact Machine/Controller trust and Project Location enforcement intact, correct streaming/native resume/tool restrictions, and no capability expansion. REAL Direct-first selection and Direct-unavailable fallback must also pass.
+- Channel open, delivery/backpressure, close, stale epoch/generation, authorization, capacity, reconnect/restart, unpair/revocation, mixed-version, and forced Relay-only automated matrices must prove bounded cleanup and no cross-peer/cross-channel leakage. At least 100 channel/session lifecycles and the required resource soak return Relay, Host, and Node to bounded idle state.
+- Failure before semantic acceptance may permit a later route choice; failure after a Machine/Turn write preserves exact ownership uncertainty and never automatically replays or migrates. Historical diagnostics, current transport/health truth, Attention, and direct/local operation remain intact.
+- Production Relay v2 upgrade/restart/rollback documentation, TCP-443-only cloud boundary, aggregate channel metrics, all workspace/Desktop/Node/Relay/package gates, privacy evidence, zero test residue, matching clean build identities, and a clean worktree must pass.
+
 ## Phase 8 — OpenCode
 
 **Goal:** add OpenCode through the established adapter model.
@@ -1131,4 +1169,4 @@ Exit gate: core mobile tasks are fast, legible, safe, resilient, and validated o
 - Team collaboration.
 - Enterprise administration and policy.
 - Cross-agent conversation handoff.
-- Relay execution or Agent/product payload transport beyond the Phase 7A control-plane foundation.
+- Relay operations or payload transport beyond Phase 7B's purpose-bound encrypted Machine protocol, including generic tunneling and Phase 7C hardening.

@@ -23,6 +23,7 @@ import {
   MachineIdSchema,
   type GetMachineResponse,
   type MachineId,
+  type MachineExecutionTransport,
   type MachineProviderDiscovery,
   type ProviderDescriptor,
   type ProjectRecord,
@@ -384,6 +385,7 @@ function RemoteMachineDetail({
 }: RemoteMachineDetailProps) {
   const runtime = useHostRuntime()
   const [addressOpen, setAddressOpen] = useState(false)
+  const directState = connection.directState ?? connection.state
   const lastSuccessful = formatMachineLastSeen(connection.lastSuccessfulAt)
   const lastAttempt = formatMachineLastSeen(connection.lastAttemptAt)
   const retryMutation = useMutation({
@@ -395,8 +397,7 @@ function RemoteMachineDetail({
       await runtime.refreshMachineProviders(machine.machineId),
   })
   const hostReadyForConnectionAction = hostConnectionState === 'connected'
-  const canRetry =
-    connection.state !== 'online' && connection.state !== 'connecting'
+  const canRetry = directState !== 'online' && directState !== 'connecting'
 
   return (
     <MachinePageFrame>
@@ -471,7 +472,7 @@ function RemoteMachineDetail({
 
         <section className="min-w-0 rounded-lg border border-border bg-surface/65 p-5">
           <h2 className="text-section font-semibold text-text-primary">
-            安全连接
+            Machine 连接
           </h2>
           <Separator className="my-4" />
           <div className="flex min-w-0 items-start gap-3">
@@ -482,13 +483,21 @@ function RemoteMachineDetail({
             <div className="min-w-0">
               <p className="text-sm font-medium text-text-primary">已信任</p>
               <p className="mt-1 text-xs leading-relaxed text-text-muted">
-                {remoteConnectionDescription(connection.state)}
+                {remoteConnectionDescription(directState)}
               </p>
             </div>
           </div>
           <dl className="mt-4 min-w-0 space-y-3 border-t border-border pt-4">
             <MachineMetadata
-              label="当前连接地址"
+              label="当前执行路径"
+              value={executionTransportLabel(connection.executionTransport)}
+            />
+            <MachineMetadata
+              label="局域网直连"
+              value={machineConnectionStateLabel(directState)}
+            />
+            <MachineMetadata
+              label="直连地址"
               value={
                 connection.currentEndpoint === undefined
                   ? '暂无已验证地址'
@@ -836,6 +845,21 @@ function remoteConnectionDescription(
       return '远程节点协议版本不兼容，需要更新后才能重新连接。'
     case 'local':
       return '本地连接。'
+  }
+}
+
+function executionTransportLabel(
+  transport: MachineExecutionTransport | undefined,
+): string {
+  switch (transport) {
+    case 'direct':
+      return '局域网直连'
+    case 'relay':
+      return 'Internet Relay'
+    case 'unavailable':
+      return '当前不可用'
+    case undefined:
+      return '旧版连接状态'
   }
 }
 

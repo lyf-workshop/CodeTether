@@ -1089,6 +1089,43 @@ export class ConversationStore {
     return peer
   }
 
+  /**
+   * Records end-peer Machine authentication completed through Relay without
+   * inventing, promoting, or poisoning a direct endpoint. Relay remains a
+   * transport path; the existing Controller/Node trust record is authoritative.
+   */
+  recordTrustedMachineRelayAuthentication(
+    machineId: MachineId,
+    authenticatedAt: Timestamp,
+  ): DurableTrustedMachinePeer {
+    const id = MachineIdSchema.parse(machineId)
+    const timestamp = TimestampSchema.parse(authenticatedAt)
+    this.runInTransaction(() => {
+      assertChanged(
+        this.#statement(
+          `UPDATE trusted_machine_peers SET
+             updated_at = ?, last_authenticated_at = ?
+           WHERE machine_id = ? AND trust_state IN ('pending', 'active')`,
+        ).run(timestamp, timestamp, id).changes,
+        'Trusted Machine peer',
+        id,
+      )
+      assertChanged(
+        this.#statement(
+          `UPDATE machines SET last_seen_at = ?, updated_at = ?
+           WHERE machine_id = ? AND kind = 'remote'`,
+        ).run(timestamp, timestamp, id).changes,
+        'Remote Machine',
+        id,
+      )
+    })
+    const peer = this.getTrustedMachinePeer(id)
+    if (peer === undefined) {
+      throw new Error(`Trusted Machine peer ${id} does not exist`)
+    }
+    return peer
+  }
+
   recordTrustedMachineEndpointFailure(
     machineId: MachineId,
     address: RemoteMachineAddress,

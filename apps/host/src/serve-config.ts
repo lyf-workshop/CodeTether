@@ -1,5 +1,7 @@
 import { readFile } from 'node:fs/promises'
 
+import type { RemoteMachineTransportPolicy } from './api/remote-machine-coordinator.js'
+
 const BROWSER_DEVELOPMENT_ORIGINS = [
   'http://127.0.0.1:5173',
   'http://localhost:5173',
@@ -23,6 +25,27 @@ export function isDesktopManaged(
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
   return env.CODETETHER_DESKTOP_MANAGED === '1'
+}
+
+/**
+ * Narrow process-level validation seam. It is intentionally absent from Web
+ * and Turn APIs so normal users never choose or race transports per request.
+ */
+export function resolveRemoteMachineTransportPolicy(
+  env: NodeJS.ProcessEnv = process.env,
+): RemoteMachineTransportPolicy {
+  const value = env.CODETETHER_MACHINE_TRANSPORT_POLICY?.trim()
+  if (value === undefined || value.length === 0) return 'direct_first'
+  if (
+    value === 'direct_first' ||
+    value === 'direct_only' ||
+    value === 'relay_only'
+  ) {
+    return value
+  }
+  throw new Error(
+    'CODETETHER_MACHINE_TRANSPORT_POLICY must be direct_first, direct_only, or relay_only',
+  )
 }
 
 export function parseServeArguments(

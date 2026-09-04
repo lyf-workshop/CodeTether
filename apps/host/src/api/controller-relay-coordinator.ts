@@ -1,4 +1,5 @@
 import { basename, dirname, join, resolve } from 'node:path'
+import type { Duplex } from 'node:stream'
 
 import {
   canonicalFailure,
@@ -30,6 +31,7 @@ import {
 import {
   relayProtocolLimits,
   relayPublicKeySpkiFromCertificate,
+  type RelayConnectionEpoch,
 } from '@codetether/relay-protocol'
 
 import type {
@@ -57,6 +59,8 @@ export interface ConfigureControllerRelayInput {
 
 export interface ControllerRelayCoordinator {
   status(machineId: MachineId): RelayMachineConnectivity
+  /** Process-private current Relay epoch; never exposed through Protocol/Web. */
+  connectionEpoch?(machineId: MachineId): RelayConnectionEpoch | undefined
   subscribe(
     listener: (machineId: MachineId, status: RelayMachineConnectivity) => void,
   ): () => void
@@ -69,6 +73,15 @@ export interface ControllerRelayCoordinator {
     token: RelayEnrollmentToken,
   ): Promise<RelayMachineConnectivity>
   retry(trust: DurableTrustedMachinePeer): Promise<RelayMachineConnectivity>
+  openMachineChannel(
+    trust: DurableTrustedMachinePeer,
+    signal?: AbortSignal,
+  ): Promise<Duplex>
+  /** Dedicated teardown path; it never admits ordinary Machine execution. */
+  openMachineRevocationChannel?(
+    trust: DurableTrustedMachinePeer,
+    signal?: AbortSignal,
+  ): Promise<Duplex>
   disconnect(machineId: MachineId): Promise<RelayMachineConnectivity>
   remove(machineId: MachineId): Promise<RelayMachineConnectivity>
   close(): Promise<void>
@@ -94,8 +107,9 @@ export interface SecureControllerRelayCoordinatorOptions {
 }
 
 /**
- * Host-owned, outbound-only Relay control plane. This class has no Provider,
- * Project, Conversation, Turn, or execution transport dependency.
+ * Host-owned, outbound-only Relay client. It owns infrastructure enrollment,
+ * presence and bounded Machine byte channels, but has no Provider, Project,
+ * Conversation or Turn semantics.
  */
 export class SecureControllerRelayCoordinator implements ControllerRelayCoordinator {
   readonly #persistence: ConversationStore
@@ -153,6 +167,11 @@ export class SecureControllerRelayCoordinator implements ControllerRelayCoordina
   status(machineId: MachineId): RelayMachineConnectivity {
     const id = MachineIdSchema.parse(machineId)
     return this.#statuses.get(id) ?? this.#durableStatus(id)
+  }
+
+  connectionEpoch(machineId: MachineId): RelayConnectionEpoch | undefined {
+    const id = MachineIdSchema.parse(machineId)
+    return this.#workers.get(id)?.connection?.connectionEpoch
   }
 
   subscribe(
@@ -307,6 +326,64 @@ export class SecureControllerRelayCoordinator implements ControllerRelayCoordina
     return this.status(trust.machineId)
   }
 
+  async openMachineChannel(
+    trust: DurableTrustedMachinePeer,
+    signal?: AbortSignal,
+  ): Promise<Duplex> {
+    return await this.#openMachineChannel(trust, 'active', signal)
+  }
+
+  async openMachineRevocationChannel(
+    trust: DurableTrustedMachinePeer,
+    signal?: AbortSignal,
+  ): Promise<Duplex> {
+    return await this.#openMachineChannel(trust, 'revoking', signal)
+  }
+
+  async #openMachineChannel(
+    trust: DurableTrustedMachinePeer,
+    requiredTrustState: 'active' | 'revoking',
+    signal?: AbortSignal,
+  ): Promise<Duplex> {
+    this.#assertOpen()
+    const current = this.#persistence.getTrustedMachinePeer(trust.machineId)
+    if (
+      current?.trustState !== requiredTrustState ||
+      trust.trustState !== requiredTrustState ||
+      current.nodeIdentity !== trust.nodeIdentity ||
+      current.peerKeyFingerprint !== trust.peerKeyFingerprint ||
+      current.controllerKeyFingerprint !== trust.controllerKeyFingerprint ||
+      current.controllerCredentialRef !== trust.controllerCredentialRef
+    ) {
+      throw new ControllerRelayCoordinatorError(
+        'relay_authentication_failed',
+        'Internet Relay Machine channel is not bound to current Machine trust',
+      )
+    }
+    const status = this.status(trust.machineId)
+    const worker = this.#workers.get(trust.machineId)
+    if (
+      !status.internetExecutionEnabled ||
+      status.nodePresence !== 'online' ||
+      worker?.connection === undefined
+    ) {
+      throw new ControllerRelayCoordinatorError(
+        status.state === 'connected'
+          ? 'relay_peer_offline'
+          : (status.failure?.reason ?? 'relay_unreachable'),
+        'Internet Relay Machine transport is unavailable',
+      )
+    }
+    try {
+      return await worker.connection.openMachineChannel(
+        current.peerKeyFingerprint,
+        signal === undefined ? {} : { signal },
+      )
+    } catch (error) {
+      throw coordinatorError(error)
+    }
+  }
+
   async disconnect(machineId: MachineId): Promise<RelayMachineConnectivity> {
     const id = MachineIdSchema.parse(machineId)
     await this.#stopWorker(id)
@@ -378,7 +455,7 @@ export class SecureControllerRelayCoordinator implements ControllerRelayCoordina
         configuration === undefined ||
         !configuration.enabled ||
         configuration.enrollmentState !== 'enrolled' ||
-        trust?.trustState !== 'active'
+        (trust?.trustState !== 'active' && trust?.trustState !== 'revoking')
       ) {
         return
       }
@@ -595,7 +672,10 @@ export class SecureControllerRelayCoordinator implements ControllerRelayCoordina
       state: connectionState,
       enrollment: configuration.enrollmentState,
       nodePresence,
-      internetExecutionEnabled: false,
+      internetExecutionEnabled:
+        connectionState === 'connected' &&
+        configuration.enrollmentState === 'enrolled' &&
+        nodePresence === 'online',
       endpoint: configuration.endpoint,
       relayIdentityFingerprint: configuration.relayIdentityFingerprint,
       ...(configuration.displayLabel === undefined
@@ -680,6 +760,10 @@ export class UnavailableControllerRelayCoordinator implements ControllerRelayCoo
     }
   }
 
+  connectionEpoch(): undefined {
+    return undefined
+  }
+
   subscribe(): () => void {
     return () => undefined
   }
@@ -693,6 +777,14 @@ export class UnavailableControllerRelayCoordinator implements ControllerRelayCoo
   }
 
   async retry(): Promise<RelayMachineConnectivity> {
+    throw unavailableRelay()
+  }
+
+  async openMachineChannel(): Promise<Duplex> {
+    throw unavailableRelay()
+  }
+
+  async openMachineRevocationChannel(): Promise<Duplex> {
     throw unavailableRelay()
   }
 
@@ -745,10 +837,25 @@ function coordinatorError(error: unknown): ControllerRelayCoordinatorError {
       case 'relay_capacity_reached':
         reason = 'relay_rate_limited'
         break
+      case 'relay_channel_open_failed':
+        reason = 'relay_channel_open_failed'
+        break
+      case 'relay_channel_lost':
+        reason = 'relay_channel_lost'
+        break
+      case 'relay_peer_offline':
+        reason = 'relay_peer_offline'
+        break
+      case 'relay_transport_capacity_reached':
+        reason = 'relay_transport_capacity_reached'
+        break
       case 'relay_unreachable':
       case 'relay_protocol_error':
       case 'relay_closed':
-        reason = 'relay_unreachable'
+        reason =
+          error.code === 'relay_protocol_error'
+            ? 'relay_protocol_error'
+            : 'relay_unreachable'
         break
     }
   }

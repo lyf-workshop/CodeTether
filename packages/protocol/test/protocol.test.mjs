@@ -731,6 +731,28 @@ test('validates bounded presentation-safe remote connection recovery contracts',
     RemoteMachineConnectionSchema.safeParse({ state: 'online' }).success,
     false,
   )
+  assert.deepEqual(
+    RemoteMachineConnectionSchema.parse({
+      state: 'online',
+      directState: 'offline',
+      executionTransport: 'relay',
+      lastAttemptAt: timestamp,
+    }),
+    {
+      state: 'online',
+      directState: 'offline',
+      executionTransport: 'relay',
+      lastAttemptAt: timestamp,
+    },
+  )
+  assert.equal(
+    RemoteMachineConnectionSchema.safeParse({
+      state: 'offline',
+      directState: 'offline',
+      executionTransport: 'relay',
+    }).success,
+    false,
+  )
   assert.equal(
     RemoteMachineConnectionSchema.safeParse({
       ...connection,

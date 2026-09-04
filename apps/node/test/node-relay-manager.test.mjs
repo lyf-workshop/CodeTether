@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { access, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { PassThrough } from 'node:stream'
 import test from 'node:test'
 
 import { newControllerId } from '@codetether/machine-transport'
@@ -45,6 +46,7 @@ function registration() {
 class FakeRelayConnection {
   grants = []
   closed = false
+  machineChannelHandler
   #resolve
   #reject
   #lifetime = new Promise((resolve, reject) => {
@@ -59,6 +61,24 @@ class FakeRelayConnection {
 
   async waitUntilClosed() {
     await this.#lifetime
+  }
+
+  setMachineChannelHandler(handler) {
+    assert.equal(this.machineChannelHandler, undefined)
+    this.machineChannelHandler = handler
+    let removed = false
+    return () => {
+      if (removed) return
+      removed = true
+      if (this.machineChannelHandler === handler) {
+        this.machineChannelHandler = undefined
+      }
+    }
+  }
+
+  async offerMachineChannel(offer) {
+    assert.notEqual(this.machineChannelHandler, undefined)
+    await this.machineChannelHandler(offer)
   }
 
   disconnect() {
@@ -115,6 +135,35 @@ async function waitFor(predicate, timeoutMs = 2_000) {
   while (!predicate()) {
     if (Date.now() >= deadline) throw new Error('condition timed out')
     await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+}
+
+function machineChannelOffer(controllerFingerprintValue) {
+  const stream = new PassThrough()
+  const state = {
+    accepts: 0,
+    rejections: [],
+  }
+  return {
+    stream,
+    get accepts() {
+      return state.accepts
+    },
+    get rejections() {
+      return state.rejections
+    },
+    offer: {
+      controllerFingerprint: controllerFingerprintValue,
+      controllerConnectionEpoch: 'relay_conn_controller_fixture',
+      nodeConnectionEpoch: 'relay_conn_node_fixture',
+      async accept() {
+        state.accepts += 1
+        return stream
+      },
+      async reject(reason = 'not_available') {
+        state.rejections.push(reason)
+      },
+    },
   }
 }
 
@@ -659,6 +708,133 @@ test('Machine unpair removes only the Relay rendezvous grant, not Relay enrollme
     true,
   )
   await manager.close()
+})
+
+test('Relay Machine offers require the exact paired Controller and unpair closes accepted channels', async (t) => {
+  const directory = await mkdtemp(
+    join(tmpdir(), 'codetether-node-relay-machine-channel-'),
+  )
+  const state = await openNodeState(directory)
+  t.after(async () => {
+    await state.close().catch(() => undefined)
+    await import('node:fs/promises').then(async ({ rm }) =>
+      rm(directory, { recursive: true, force: true }),
+    )
+  })
+  const controllerId = newControllerId()
+  await state.trustController({
+    controllerId,
+    publicKeyFingerprint: controllerFingerprint,
+    pairedAt: new Date().toISOString(),
+  })
+  await writeNodeRelayRegistration(directory, {
+    schemaVersion: 1,
+    relayId: registration().relayId,
+    relayIdentityFingerprint: registration().relayIdentityFingerprint,
+    peerId: registration().peerId,
+    observedAt: registration().authenticatedAt,
+  })
+  const connection = new FakeRelayConnection()
+  const manager = new NodeRelayManager({
+    state,
+    configuration: configuration(),
+    clientBuildIdentity: 'git-cb2c412def81',
+    connect: async () => ({
+      connection,
+      registration: registration(),
+      enrolled: false,
+    }),
+  })
+  const handled = []
+  manager.setMachineChannelHandler((channel) => handled.push(channel))
+  manager.start()
+  await waitFor(() => manager.status === 'connected')
+
+  const unexpected = machineChannelOffer('U'.repeat(43))
+  await connection.offerMachineChannel(unexpected.offer)
+  assert.equal(unexpected.accepts, 0)
+  assert.deepEqual(unexpected.rejections, ['not_available'])
+  assert.equal(handled.length, 0)
+
+  const expected = machineChannelOffer(controllerFingerprint)
+  await connection.offerMachineChannel(expected.offer)
+  assert.equal(expected.accepts, 1)
+  assert.deepEqual(expected.rejections, [])
+  assert.equal(handled.length, 1)
+  assert.equal(handled[0].stream, expected.stream)
+  assert.equal(handled[0].controllerFingerprint, controllerFingerprint)
+  assert.equal(manager.activeMachineChannelCount, 1)
+
+  await state.revokeController(controllerId)
+  manager.synchronizeMachineTrust()
+  await waitFor(() => expected.stream.destroyed)
+  await waitFor(() => manager.activeMachineChannelCount === 0)
+  assert.equal(
+    await access(join(directory, NODE_RELAY_REGISTRATION_FILE)).then(
+      () => true,
+      () => false,
+    ),
+    true,
+  )
+  await manager.close()
+})
+
+test('Relay reconnect replacement and manager close destroy their exact Machine channels', async (t) => {
+  const directory = await mkdtemp(
+    join(tmpdir(), 'codetether-node-relay-channel-reconnect-'),
+  )
+  const state = await openNodeState(directory)
+  t.after(async () => {
+    await state.close().catch(() => undefined)
+    await import('node:fs/promises').then(async ({ rm }) =>
+      rm(directory, { recursive: true, force: true }),
+    )
+  })
+  await state.trustController({
+    controllerId: newControllerId(),
+    publicKeyFingerprint: controllerFingerprint,
+    pairedAt: new Date().toISOString(),
+  })
+  await writeNodeRelayRegistration(directory, {
+    schemaVersion: 1,
+    relayId: registration().relayId,
+    relayIdentityFingerprint: registration().relayIdentityFingerprint,
+    peerId: registration().peerId,
+    observedAt: registration().authenticatedAt,
+  })
+  const connections = [new FakeRelayConnection(), new FakeRelayConnection()]
+  let connectIndex = 0
+  const manager = new NodeRelayManager({
+    state,
+    configuration: configuration(),
+    clientBuildIdentity: 'git-cb2c412def81',
+    reconnectInitialDelayMs: 1,
+    reconnectMaximumDelayMs: 2,
+    random: () => 0.5,
+    connect: async () => ({
+      connection: connections[connectIndex++],
+      registration: registration(),
+      enrolled: false,
+    }),
+  })
+  manager.setMachineChannelHandler(() => undefined)
+  manager.start()
+  await waitFor(() => manager.status === 'connected')
+  const first = machineChannelOffer(controllerFingerprint)
+  await connections[0].offerMachineChannel(first.offer)
+  assert.equal(manager.activeMachineChannelCount, 1)
+  connections[0].disconnect()
+  await waitFor(() => connectIndex === 2 && manager.status === 'connected')
+  await waitFor(() => first.stream.destroyed)
+  assert.equal(connections[0].machineChannelHandler, undefined)
+
+  const second = machineChannelOffer(controllerFingerprint)
+  await connections[1].offerMachineChannel(second.offer)
+  assert.equal(manager.activeMachineChannelCount, 1)
+  await manager.close()
+  await waitFor(() => second.stream.destroyed)
+  assert.equal(manager.activeMachineChannelCount, 0)
+  assert.equal(connections[1].machineChannelHandler, undefined)
 })
 
 test('rapid Machine trust notifications coalesce behind one bounded grant writer', async (t) => {

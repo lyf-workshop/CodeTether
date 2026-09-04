@@ -188,6 +188,34 @@ test('bounded framing handles fragmented and coalesced messages', () => {
   )
 })
 
+test('Machine decoder parses coalesced near-limit frames before bounding only residual input', () => {
+  const values = [
+    'a'.repeat(machineTransportLimits.maximumFrameBytes - 2),
+    'b'.repeat(machineTransportLimits.maximumFrameBytes - 2),
+    'c'.repeat(machineTransportLimits.maximumFrameBytes - 2),
+  ]
+  const frames = values.map((value) => encodeMachineFrame(value))
+  const decoder = new MachineFrameDecoder()
+
+  assert.deepEqual(decoder.push(frames[0].subarray(0, 3)), [])
+  assert.deepEqual(
+    decoder.push(Buffer.concat([frames[0].subarray(3), frames[1], frames[2]])),
+    values,
+  )
+  decoder.finish()
+
+  const excessive = Buffer.concat(
+    Array.from(
+      { length: machineTransportLimits.maximumQueuedFrames + 2 },
+      (_, index) => encodeMachineFrame({ index }),
+    ),
+  )
+  assert.throws(
+    () => new MachineFrameDecoder().push(excessive),
+    /message queue exceeded/u,
+  )
+})
+
 test('framed sends fail boundedly when a peer stops consuming writes', async () => {
   class StalledWriteDuplex extends Duplex {
     destroyedByTimeout = false

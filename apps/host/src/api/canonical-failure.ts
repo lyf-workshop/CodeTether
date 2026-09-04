@@ -141,6 +141,16 @@ export function safeFailureMessage(
       return 'This peer has been revoked by the Internet Relay'
     case 'relay_rate_limited':
       return 'Internet Relay is temporarily rate limiting this peer'
+    case 'relay_channel_open_failed':
+      return 'The Internet Relay Machine channel could not be opened'
+    case 'relay_channel_lost':
+      return 'The Internet Relay Machine channel was lost during execution'
+    case 'relay_peer_offline':
+      return 'The remote Node is not currently reachable through Internet Relay'
+    case 'relay_transport_capacity_reached':
+      return 'Internet Relay Machine transport capacity has been reached'
+    case 'relay_protocol_error':
+      return 'Internet Relay returned an invalid Machine transport response'
     case 'provider_error':
       return `${name} execution failed`
     case 'runtime_error':
@@ -213,6 +223,14 @@ function hostErrorCode(reason: CanonicalFailureReason): HostErrorCode {
       return 'relay_revoked'
     case 'relay_rate_limited':
       return 'relay_rate_limited'
+    case 'relay_channel_open_failed':
+    case 'relay_peer_offline':
+    case 'relay_protocol_error':
+      return 'relay_unreachable'
+    case 'relay_channel_lost':
+      return 'machine_connection_failed'
+    case 'relay_transport_capacity_reached':
+      return 'runtime_unavailable'
     case 'provider_misconfigured':
     case 'provider_service_unavailable':
     case 'provider_crashed':
@@ -268,6 +286,7 @@ function isExecutionLossReason(reason: CanonicalFailureReason): boolean {
     reason === 'execution_ownership_uncertain' ||
     reason === 'output_limit_exceeded' ||
     reason === 'protocol_limit_exceeded' ||
-    reason === 'transport_lost'
+    reason === 'transport_lost' ||
+    reason === 'relay_channel_lost'
   )
 }

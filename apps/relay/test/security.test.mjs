@@ -44,11 +44,15 @@ test('safe structured logs never interpolate hostile remote fields', () => {
     code: malicious,
     peerReference: malicious,
     connectionEpoch: malicious,
+    channelId: malicious,
+    data: Buffer.from('private Machine TLS ciphertext').toString('base64url'),
   })
   assert.equal(lines.length, 1)
   assert.equal(lines[0].includes('relay_enroll_secret'), false)
   assert.equal(lines[0].includes('<script>'), false)
   assert.equal(lines[0].includes('\u001b'), false)
+  assert.equal(lines[0].includes('private'), false)
+  assert.equal(lines[0].includes('cHJpdmF0ZQ'), false)
   const parsed = JSON.parse(lines[0])
   assert.equal(parsed.event, 'connection.rejected')
   assert.equal(parsed.peer, opaqueReference(malicious))

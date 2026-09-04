@@ -90,6 +90,7 @@ import {
   type ListProjectConversationsQuery,
   type MachineSummary,
   type RemoteMachineConnection,
+  type RelayMachineConnectivity,
   type MachinePairingAttemptId,
   type PinConversationRequest,
   type PinConversationResponse,
@@ -459,6 +460,10 @@ export class HostService {
       })
     this.#unsubscribeRemoteMachineRemoval =
       this.#remoteMachines.subscribeRemoval?.((machineId) => {
+        // Durable revocation recovery may finish after a Host restart, outside
+        // the synchronous unpair action. Tear down the now-orphaned Relay
+        // worker/configuration as a separate infrastructure lifecycle step.
+        void this.#controllerRelay.remove(machineId).catch(() => undefined)
         try {
           this.#machines.removeRemote(machineId)
         } catch (error) {
@@ -624,7 +629,7 @@ export class HostService {
                 remoteProviderPresentation?.providerDiscovery ?? {
                   state: 'not_observed' as const,
                 },
-              relay: this.#controllerRelay.status(machine.machineId),
+              relay: this.#publicRelayConnectivity(machine.machineId),
             }
           : {}),
       })
@@ -1025,7 +1030,10 @@ export class HostService {
             protocolVersion,
             actionId: request.actionId,
             status: 'completed',
-            data: { machineId: id, relay },
+            data: {
+              machineId: id,
+              relay: this.#publicRelayConnectivity(id, relay),
+            },
           })
         } catch (error) {
           throw controllerRelayServiceError(error, this.#timestamp())
@@ -1057,7 +1065,10 @@ export class HostService {
             protocolVersion,
             actionId: request.actionId,
             status: 'completed',
-            data: { machineId: id, relay },
+            data: {
+              machineId: id,
+              relay: this.#publicRelayConnectivity(id, relay),
+            },
           })
         } catch (error) {
           throw controllerRelayServiceError(error, this.#timestamp())
@@ -1084,7 +1095,10 @@ export class HostService {
             protocolVersion,
             actionId: request.actionId,
             status: 'accepted',
-            data: { machineId: id, relay },
+            data: {
+              machineId: id,
+              relay: this.#publicRelayConnectivity(id, relay),
+            },
           })
         } catch (error) {
           throw controllerRelayServiceError(error, this.#timestamp())
@@ -1111,7 +1125,10 @@ export class HostService {
             protocolVersion,
             actionId: request.actionId,
             status: 'completed',
-            data: { machineId: id, relay },
+            data: {
+              machineId: id,
+              relay: this.#publicRelayConnectivity(id, relay),
+            },
           })
         } catch (error) {
           throw controllerRelayServiceError(error, this.#timestamp())
@@ -1138,7 +1155,10 @@ export class HostService {
             protocolVersion,
             actionId: request.actionId,
             status: 'completed',
-            data: { machineId: id, relay },
+            data: {
+              machineId: id,
+              relay: this.#publicRelayConnectivity(id, relay),
+            },
           })
         } catch (error) {
           throw controllerRelayServiceError(error, this.#timestamp())
@@ -4191,6 +4211,22 @@ export class HostService {
             lastSuccessfulAt: preferred.lastSuccessfulAt,
           }),
     }
+  }
+
+  #publicRelayConnectivity(
+    machineId: MachineId,
+    status: RelayMachineConnectivity = this.#controllerRelay.status(machineId),
+  ): RelayMachineConnectivity {
+    // Phase 7A presence is only infrastructure reachability. The product may
+    // advertise Internet execution only after this Host epoch has completed
+    // the existing peer-authenticated Machine TLS handshake through a Relay
+    // channel for the exact durable Machine trust.
+    const internetExecutionEnabled =
+      status.internetExecutionEnabled &&
+      this.#remoteMachines.relayExecutionAvailable?.(machineId) === true
+    return internetExecutionEnabled === status.internetExecutionEnabled
+      ? status
+      : { ...status, internetExecutionEnabled }
   }
 
   #writeDurable(operation: () => void): void {

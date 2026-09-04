@@ -32,6 +32,18 @@ export const RelayPingIdSchema = z
   .regex(/^relay_ping_[A-Za-z0-9][A-Za-z0-9_-]{5,95}$/u)
 export type RelayPingId = z.infer<typeof RelayPingIdSchema>
 
+export const RelayChannelIdSchema = z
+  .string()
+  .regex(/^relay_channel_[A-Za-z0-9][A-Za-z0-9_-]{5,95}$/u)
+export type RelayChannelId = z.infer<typeof RelayChannelIdSchema>
+
+export const RelayChannelGenerationSchema = z
+  .string()
+  .regex(/^relay_channel_generation_[A-Za-z0-9][A-Za-z0-9_-]{5,95}$/u)
+export type RelayChannelGeneration = z.infer<
+  typeof RelayChannelGenerationSchema
+>
+
 export const RelayNonceSchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/u)
 export type RelayNonce = z.infer<typeof RelayNonceSchema>
 
@@ -60,6 +72,16 @@ export function newRelayRequestId(): RelayRequestId {
 
 export function newRelayPingId(): RelayPingId {
   return RelayPingIdSchema.parse(`relay_ping_${compactUuid()}`)
+}
+
+export function newRelayChannelId(): RelayChannelId {
+  return RelayChannelIdSchema.parse(`relay_channel_${compactUuid()}`)
+}
+
+export function newRelayChannelGeneration(): RelayChannelGeneration {
+  return RelayChannelGenerationSchema.parse(
+    `relay_channel_generation_${compactUuid()}`,
+  )
 }
 
 export function newRelayNonce(): RelayNonce {

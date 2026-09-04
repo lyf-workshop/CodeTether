@@ -80,8 +80,12 @@ export const RelayMachineConnectivitySchema = z
     state: RelayConnectionStateSchema,
     enrollment: RelayEnrollmentStateSchema,
     nodePresence: RelayNodePresenceSchema,
-    /** Phase 7A is control/presence only. This value must remain false. */
-    internetExecutionEnabled: z.literal(false),
+    /**
+     * Host-derived Relay Machine-transport eligibility. Presence alone never
+     * sets this value; it is true only for an enrolled, authenticated current
+     * Relay connection to the exact authorized Node on a 7B-capable build.
+     */
+    internetExecutionEnabled: z.boolean(),
     endpoint: RelayEndpointSchema.optional(),
     relayIdentityFingerprint: RelayIdentityFingerprintSchema.optional(),
     displayLabel: z.string().trim().min(1).max(120).optional(),
@@ -159,6 +163,19 @@ export const RelayMachineConnectivitySchema = z
         code: 'custom',
         message: 'Online Node presence requires a connected Relay',
         path: ['nodePresence'],
+      })
+    }
+    if (
+      relay.internetExecutionEnabled &&
+      (relay.state !== 'connected' ||
+        relay.enrollment !== 'enrolled' ||
+        relay.nodePresence !== 'online')
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message:
+          'Internet execution requires an enrolled current Relay connection and authorized online Node',
+        path: ['internetExecutionEnabled'],
       })
     }
     if (relay.failure !== undefined && relay.failure.source !== 'relay') {

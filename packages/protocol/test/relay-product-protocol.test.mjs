@@ -16,7 +16,7 @@ const endpoint = {
 }
 const relayIdentityFingerprint = 'r'.repeat(43)
 
-test('Relay product status is bounded, provider-neutral, and never execution-capable', () => {
+test('Relay product status is bounded, provider-neutral, and gates Internet execution', () => {
   assert.deepEqual(
     RelayMachineConnectivitySchema.parse({
       state: 'connected',
@@ -48,8 +48,31 @@ test('Relay product status is bounded, provider-neutral, and never execution-cap
       endpoint,
       relayIdentityFingerprint,
     }).success,
-    false,
+    true,
   )
+  for (const blocked of [
+    { state: 'offline', enrollment: 'enrolled', nodePresence: 'offline' },
+    {
+      state: 'connected',
+      enrollment: 'enrolled',
+      nodePresence: 'offline',
+    },
+    {
+      state: 'enrollment_required',
+      enrollment: 'required',
+      nodePresence: 'not_observed',
+    },
+  ]) {
+    assert.equal(
+      RelayMachineConnectivitySchema.safeParse({
+        ...blocked,
+        internetExecutionEnabled: true,
+        endpoint,
+        relayIdentityFingerprint,
+      }).success,
+      false,
+    )
+  }
   assert.equal(
     RelayMachineConnectivitySchema.safeParse({
       state: 'offline',

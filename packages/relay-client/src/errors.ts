@@ -14,6 +14,10 @@ export const relayClientErrorCodes = [
   'relay_revoked',
   'relay_rate_limited',
   'relay_capacity_reached',
+  'relay_channel_open_failed',
+  'relay_channel_lost',
+  'relay_peer_offline',
+  'relay_transport_capacity_reached',
   'relay_protocol_error',
   'relay_closed',
 ] as const
@@ -123,6 +127,14 @@ function safeMessage(code: RelayClientErrorCode): string {
       return 'Internet Relay temporarily rate limited this peer'
     case 'relay_capacity_reached':
       return 'Internet Relay connection capacity was reached'
+    case 'relay_channel_open_failed':
+      return 'Internet Relay Machine channel could not be opened'
+    case 'relay_channel_lost':
+      return 'Internet Relay Machine channel was lost'
+    case 'relay_peer_offline':
+      return 'Internet Relay Node is offline'
+    case 'relay_transport_capacity_reached':
+      return 'Internet Relay Machine channel capacity was reached'
     case 'relay_protocol_error':
       return 'Internet Relay returned an invalid control response'
     case 'relay_closed':

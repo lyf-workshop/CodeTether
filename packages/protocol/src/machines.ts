@@ -112,10 +112,23 @@ export const RemoteMachineAddressSchema = z
   .strict()
 export type RemoteMachineAddress = z.infer<typeof RemoteMachineAddressSchema>
 
+export const MachineExecutionTransportSchema = z.enum([
+  'direct',
+  'relay',
+  'unavailable',
+])
+export type MachineExecutionTransport = z.infer<
+  typeof MachineExecutionTransportSchema
+>
+
 /** Presentation-safe connection state; private trust and endpoint history stay Host-owned. */
 export const RemoteMachineConnectionSchema = z
   .object({
     state: MachineConnectionStateSchema.exclude(['local']),
+    /** Current direct-path truth, kept separate from effective availability. */
+    directState: MachineConnectionStateSchema.exclude(['local']).optional(),
+    /** Host-selected execution path; never a user-controlled per-Turn switch. */
+    executionTransport: MachineExecutionTransportSchema.optional(),
     currentEndpoint: RemoteMachineAddressSchema.optional(),
     lastSuccessfulAt: TimestampSchema.optional(),
     lastAttemptAt: TimestampSchema.optional(),
@@ -124,12 +137,33 @@ export const RemoteMachineConnectionSchema = z
   .superRefine((connection, context) => {
     if (
       connection.state === 'online' &&
+      connection.executionTransport !== 'relay' &&
       connection.currentEndpoint === undefined
     ) {
       context.addIssue({
         code: 'custom',
         message: 'An online remote Machine must have an authenticated endpoint',
         path: ['currentEndpoint'],
+      })
+    }
+    if (
+      connection.executionTransport === 'relay' &&
+      connection.state !== 'online'
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Relay execution transport requires an online effective state',
+        path: ['executionTransport'],
+      })
+    }
+    if (
+      connection.executionTransport === 'unavailable' &&
+      connection.state === 'online'
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'An online Machine must have an available execution transport',
+        path: ['executionTransport'],
       })
     }
   })

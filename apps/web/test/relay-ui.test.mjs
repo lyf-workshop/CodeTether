@@ -91,7 +91,7 @@ test('Retry is offered only to enrolled terminal connection failures', () => {
   assert.equal(relayCanRetry(relay('enrollment_required', 'required')), false)
 })
 
-test('Machine Detail Relay UI stays Host-owned, accessible, bounded, and execution-disabled', async () => {
+test('Machine Detail Relay UI stays Host-owned, accessible, bounded, and truthful about execution eligibility', async () => {
   const [detail, section, actions] = await Promise.all([
     source('components/machines/machine-detail-page.tsx'),
     source('components/machines/machine-relay-section.tsx'),
@@ -123,8 +123,19 @@ test('Machine Detail Relay UI stays Host-owned, accessible, bounded, and executi
     section,
     /requestAnimationFrame\(\(\) => trigger\.current\?\.focus\(\{ preventScroll: true \}\)\)/u,
   )
-  assert.match(section, /Internet Relay 执行尚未启用/u)
-  assert.match(section, /Agent 执行仍只使用现有局域网直连/u)
+  assert.match(section, /label="Internet 执行"/u)
+  assert.match(section, /relay\?\.internetExecutionEnabled === true/u)
+  assert.match(section, /可用（按需选择）/u)
+  assert.match(section, /当前不可用/u)
+  assert.match(
+    section,
+    /当已验证的直连不可用时，新请求可以使用 Internet Relay/u,
+  )
+  assert.match(section, /活动中的请求不会在直连与 Relay 之间迁移/u)
+  assert.match(section, /Relay 在线也不单独代表项目位置或智能体可执行/u)
+  assert.match(section, /Internet Relay 当前不能承载新的 Machine 执行/u)
+  assert.match(section, /Machine 传输/u)
+  assert.match(section, /'eligible' : 'unavailable'/u)
   assert.match(section, /使用新令牌重新注册/u)
   assert.match(section, /撤销后的普通重连仍会被拒绝/u)
   assert.match(section, /lg:grid-cols/u)

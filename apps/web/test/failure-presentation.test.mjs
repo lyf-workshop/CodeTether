@@ -69,6 +69,36 @@ const profiles = {
     userAction: 'wait',
     source: 'transport',
   },
+  relay_channel_open_failed: {
+    category: 'transport',
+    retryability: 'retry_later',
+    userAction: 'wait',
+    source: 'relay',
+  },
+  relay_channel_lost: {
+    category: 'transport',
+    retryability: 'not_retryable',
+    userAction: 'view_details',
+    source: 'relay',
+  },
+  relay_peer_offline: {
+    category: 'transport',
+    retryability: 'retry_later',
+    userAction: 'wait',
+    source: 'relay',
+  },
+  relay_transport_capacity_reached: {
+    category: 'runtime',
+    retryability: 'retry_later',
+    userAction: 'reduce_active_work',
+    source: 'relay',
+  },
+  relay_protocol_error: {
+    category: 'transport',
+    retryability: 'retry_after_user_action',
+    userAction: 'open_machine',
+    source: 'relay',
+  },
   usage_limit_reached: {
     category: 'quota',
     retryability: 'retry_later',
@@ -110,6 +140,11 @@ test('canonical failure cards cover required user-facing categories without pars
     ['provider_unsupported_version', '智能体版本不受支持'],
     ['machine_offline', '执行机器离线'],
     ['reconnecting', '正在重新连接'],
+    ['relay_channel_open_failed', 'Internet Relay 通道无法建立'],
+    ['relay_channel_lost', 'Internet Relay 执行通道已中断'],
+    ['relay_peer_offline', '远程 Node 未连接到 Internet Relay'],
+    ['relay_transport_capacity_reached', 'Internet Relay 执行通道已满'],
+    ['relay_protocol_error', 'Internet Relay 执行协议异常'],
     ['execution_capacity_reached', '执行容量已满'],
     ['project_location_unavailable', '项目位置不可用'],
     ['provider_crashed', '智能体意外退出'],
@@ -136,6 +171,7 @@ test('canonical actions expose only the matching safe navigation target', () => 
     'provider_not_installed',
     'provider_unsupported_version',
     'machine_offline',
+    'relay_protocol_error',
   ]
   for (const reason of machineCases) {
     assert.equal(
@@ -161,6 +197,10 @@ test('canonical actions expose only the matching safe navigation target', () => 
     'reconnecting',
     'execution_capacity_reached',
     'execution_ownership_uncertain',
+    'relay_channel_open_failed',
+    'relay_channel_lost',
+    'relay_peer_offline',
+    'relay_transport_capacity_reached',
     'unknown_failure',
   ]) {
     assert.equal(
@@ -212,6 +252,7 @@ test('only an explicitly retryable safe failure can create a deliberate new Turn
     'execution_lost',
     'execution_ownership_uncertain',
     'transport_lost',
+    'relay_channel_lost',
   ]) {
     const failure = canonicalFailure(reason)
     const presentation = executionFailurePresentation({
@@ -222,6 +263,36 @@ test('only an explicitly retryable safe failure can create a deliberate new Turn
     assert.equal(canStartNewTurnAfterFailure(failure), false)
     assert.equal(presentation.canStartNewTurn, false)
     assert.match(presentation.historyNote, /未自动重新发送/u)
+  }
+})
+
+test('Relay execution failures use controlled copy and never trust transport diagnostics', () => {
+  const cases = [
+    [
+      'relay_channel_open_failed',
+      '请等待 Relay 与远程 Node 恢复后，再开始新的请求。',
+    ],
+    ['relay_peer_offline', '请等待 Node 重新连接；会话历史仍可查看。'],
+    ['relay_transport_capacity_reached', '请等待其他远程任务结束后再试。'],
+    ['relay_protocol_error', '请检查 Relay、Desktop 与 Node 版本后再试。'],
+  ]
+
+  for (const [reason, guidance] of cases) {
+    const presentation = executionFailurePresentation({
+      code: 'machine_connection_failed',
+      message:
+        '\u001b[31mECONNRESET\n<script>steal()</script> https://fake-login.invalid',
+      details: {
+        websocket: 'raw frame',
+        authorization: 'Bearer secret',
+      },
+      failure: canonicalFailure(reason),
+    })
+    assert.equal(presentation.guidance, guidance)
+    assert.doesNotMatch(
+      JSON.stringify(presentation),
+      /ECONNRESET|script|fake-login|websocket|Bearer|secret/iu,
+    )
   }
 })
 

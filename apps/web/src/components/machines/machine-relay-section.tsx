@@ -98,7 +98,7 @@ export function MachineRelaySection({
             </Badge>
           </div>
           <p className="mt-1 text-sm text-text-secondary">
-            出站加密控制连接，仅用于在线状态与授权会合。
+            出站加密连接，用于授权会合和受限的 Machine 传输。
           </p>
         </div>
         <Button
@@ -165,6 +165,14 @@ export function MachineRelaySection({
               relay?.nodePresence ?? 'not_observed',
             )}
           />
+          <RelayMetadata
+            label="Internet 执行"
+            value={
+              relay?.internetExecutionEnabled === true
+                ? '可用（按需选择）'
+                : '当前不可用'
+            }
+          />
           {relay?.displayLabel === undefined ? null : (
             <RelayMetadata label="Relay" value={relay.displayLabel} />
           )}
@@ -190,8 +198,9 @@ export function MachineRelaySection({
           className="mt-0.5 size-4 shrink-0 text-warning"
         />
         <p className="min-w-0 leading-relaxed">
-          Internet Relay 执行尚未启用。Agent 执行仍只使用现有局域网直连；Relay
-          在线不代表机器、项目位置或智能体可执行。
+          {relay?.internetExecutionEnabled === true
+            ? '当已验证的直连不可用时，新请求可以使用 Internet Relay。活动中的请求不会在直连与 Relay 之间迁移；Relay 在线也不单独代表项目位置或智能体可执行。'
+            : 'Internet Relay 当前不能承载新的 Machine 执行。Relay 在线状态本身不代表机器、项目位置或智能体可执行。'}
         </p>
       </div>
 
@@ -280,6 +289,13 @@ export function MachineRelaySection({
             <RelayMetadata
               label="诊断代码"
               value={relay.failure?.technicalCode ?? '无'}
+              monospace
+            />
+            <RelayMetadata
+              label="Machine 传输"
+              value={
+                relay.internetExecutionEnabled ? 'eligible' : 'unavailable'
+              }
               monospace
             />
           </dl>

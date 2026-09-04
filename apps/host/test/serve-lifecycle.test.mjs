@@ -14,6 +14,7 @@ import { ConversationStore } from '../dist/persistence/index.js'
 import {
   parseServeArguments,
   resolveHostVersion,
+  resolveRemoteMachineTransportPolicy,
 } from '../dist/serve-config.js'
 
 const hostRoot = fileURLToPath(new URL('../', import.meta.url))
@@ -120,6 +121,29 @@ test('managed serve configuration excludes Browser dev origins and supports inje
       env: { CODETETHER_HOST_VERSION: '0.0.0+environment-revision' },
     }),
     '0.0.0+compile-revision',
+  )
+})
+
+test('Machine transport override is strict, process-scoped, and direct-first by default', () => {
+  assert.equal(resolveRemoteMachineTransportPolicy({}), 'direct_first')
+  assert.equal(
+    resolveRemoteMachineTransportPolicy({
+      CODETETHER_MACHINE_TRANSPORT_POLICY: 'relay_only',
+    }),
+    'relay_only',
+  )
+  assert.equal(
+    resolveRemoteMachineTransportPolicy({
+      CODETETHER_MACHINE_TRANSPORT_POLICY: 'direct_only',
+    }),
+    'direct_only',
+  )
+  assert.throws(
+    () =>
+      resolveRemoteMachineTransportPolicy({
+        CODETETHER_MACHINE_TRANSPORT_POLICY: 'race_both',
+      }),
+    /must be direct_first, direct_only, or relay_only/u,
   )
 })
 

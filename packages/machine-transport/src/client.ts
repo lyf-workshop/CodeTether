@@ -1,3 +1,5 @@
+import type { Duplex } from 'node:stream'
+
 import { z } from 'zod'
 
 import type { CanonicalFailure } from '@codetether/agent-core'
@@ -61,8 +63,10 @@ import {
 import type { PairingCode } from './pairing-code.js'
 import {
   connectMachineTls,
+  connectMachineTlsOverStream,
   exportMachineTlsBinding,
   newMachineNonce,
+  type MachineTlsConnection,
 } from './tls.js'
 
 export const MachineEndpointSchema = z
@@ -340,18 +344,62 @@ export async function connectTrustedRemoteMachine(options: {
   readonly controller: MachineControllerIdentity
   readonly signal?: AbortSignal
 }): Promise<AuthenticatedRemoteMachineConnection> {
+  return await connectTrustedRemoteMachineWithTls(options, async () => {
+    return await connectMachineTls({
+      ...MachineEndpointSchema.parse(options.peer.endpoint),
+      identity: options.controller.tls,
+      expectedPeerFingerprint: options.peer.nodeFingerprint,
+      signal: options.signal,
+    })
+  })
+}
+
+export interface ConnectTrustedRemoteMachineOverStreamOptions {
+  readonly peer: TrustedRemotePeer
+  readonly controller: MachineControllerIdentity
+  /** Existing Relay-owned byte stream; no endpoint override is accepted. */
+  readonly stream: Duplex
+  readonly signal?: AbortSignal
+}
+
+/**
+ * Authenticates a trusted Machine over a caller-established byte stream. Only
+ * dialing is replaced: TLS pinning and the exact Machine hello remain shared
+ * with the direct transport path.
+ */
+export async function connectTrustedRemoteMachineOverStream(
+  options: ConnectTrustedRemoteMachineOverStreamOptions,
+): Promise<AuthenticatedRemoteMachineConnection> {
+  try {
+    return await connectTrustedRemoteMachineWithTls(options, async () => {
+      return await connectMachineTlsOverStream({
+        stream: options.stream,
+        identity: options.controller.tls,
+        expectedPeerFingerprint: options.peer.nodeFingerprint,
+        signal: options.signal,
+      })
+    })
+  } catch (error) {
+    if (!options.stream.destroyed) options.stream.destroy()
+    throw error
+  }
+}
+
+async function connectTrustedRemoteMachineWithTls(
+  options: {
+    readonly peer: TrustedRemotePeer
+    readonly controller: MachineControllerIdentity
+    readonly signal?: AbortSignal
+  },
+  establishTls: () => Promise<MachineTlsConnection>,
+): Promise<AuthenticatedRemoteMachineConnection> {
   if (options.peer.controllerId !== options.controller.controllerId) {
     throw new MachineTransportError(
       'identity_mismatch',
       'Trusted Machine is bound to another controller identity',
     )
   }
-  const tls = await connectMachineTls({
-    ...MachineEndpointSchema.parse(options.peer.endpoint),
-    identity: options.controller.tls,
-    expectedPeerFingerprint: options.peer.nodeFingerprint,
-    signal: options.signal,
-  })
+  const tls = await establishTls()
   const connection = new FramedMachineConnection(tls.socket)
   try {
     const nonce = newMachineNonce()
@@ -412,11 +460,39 @@ export interface OpenRemoteCodexSessionOptions {
 export async function openRemoteCodexSession(
   options: OpenRemoteCodexSessionOptions,
 ): Promise<RemoteCodexSession> {
-  const connection = await connectTrustedRemoteMachine({
-    peer: options.peer,
-    controller: options.controller,
-    signal: options.signal,
+  return await openRemoteCodexSessionWithConnection(options, async () => {
+    return await connectTrustedRemoteMachine({
+      peer: options.peer,
+      controller: options.controller,
+      signal: options.signal,
+    })
   })
+}
+
+export type OpenRemoteCodexSessionOverStreamOptions =
+  OpenRemoteCodexSessionOptions & {
+    /** Existing Relay-owned byte stream; no endpoint override is accepted. */
+    readonly stream: Duplex
+  }
+
+export async function openRemoteCodexSessionOverStream(
+  options: OpenRemoteCodexSessionOverStreamOptions,
+): Promise<RemoteCodexSession> {
+  return await openRemoteCodexSessionWithConnection(options, async () => {
+    return await connectTrustedRemoteMachineOverStream({
+      peer: options.peer,
+      controller: options.controller,
+      stream: options.stream,
+      signal: options.signal,
+    })
+  })
+}
+
+async function openRemoteCodexSessionWithConnection(
+  options: OpenRemoteCodexSessionOptions,
+  connectTrusted: () => Promise<AuthenticatedRemoteMachineConnection>,
+): Promise<RemoteCodexSession> {
+  const connection = await connectTrusted()
   try {
     return await connection.openCodexSession({
       conversationId: options.conversationId,
@@ -473,11 +549,39 @@ export type OpenRemoteClaudeSessionOptions =
 export async function openRemoteClaudeSession(
   options: OpenRemoteClaudeSessionOptions,
 ): Promise<RemoteClaudeSession> {
-  const connection = await connectTrustedRemoteMachine({
-    peer: options.peer,
-    controller: options.controller,
-    signal: options.signal,
+  return await openRemoteClaudeSessionWithConnection(options, async () => {
+    return await connectTrustedRemoteMachine({
+      peer: options.peer,
+      controller: options.controller,
+      signal: options.signal,
+    })
   })
+}
+
+export type OpenRemoteClaudeSessionOverStreamOptions =
+  OpenRemoteClaudeSessionOptions & {
+    /** Existing Relay-owned byte stream; no endpoint override is accepted. */
+    readonly stream: Duplex
+  }
+
+export async function openRemoteClaudeSessionOverStream(
+  options: OpenRemoteClaudeSessionOverStreamOptions,
+): Promise<RemoteClaudeSession> {
+  return await openRemoteClaudeSessionWithConnection(options, async () => {
+    return await connectTrustedRemoteMachineOverStream({
+      peer: options.peer,
+      controller: options.controller,
+      stream: options.stream,
+      signal: options.signal,
+    })
+  })
+}
+
+async function openRemoteClaudeSessionWithConnection(
+  options: OpenRemoteClaudeSessionOptions,
+  connectTrusted: () => Promise<AuthenticatedRemoteMachineConnection>,
+): Promise<RemoteClaudeSession> {
+  const connection = await connectTrusted()
   try {
     const sessionOptions = {
       conversationId: options.conversationId,

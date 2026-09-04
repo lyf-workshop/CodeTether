@@ -47,6 +47,32 @@ test('local Machine Detail separates Provider installation from execution health
   assert.match(localDetail, /health\.observedAt/u)
 })
 
+test('remote Machine Detail separates direct reachability from the Host-selected execution transport', async () => {
+  const detail = await source('components/machines/machine-detail-page.tsx')
+  const remoteDetail = sourceSection(
+    detail,
+    'function RemoteMachineDetail',
+    'function MachineNotFound',
+  )
+
+  assert.match(remoteDetail, /connection\.directState \?\? connection\.state/u)
+  assert.match(remoteDetail, /label="当前执行路径"/u)
+  assert.match(
+    remoteDetail,
+    /value=\{executionTransportLabel\(connection\.executionTransport\)\}/u,
+  )
+  assert.match(remoteDetail, /label="局域网直连"/u)
+  assert.match(remoteDetail, /machineConnectionStateLabel\(directState\)/u)
+  assert.match(remoteDetail, /label="直连地址"/u)
+  assert.match(detail, /case 'direct':[\s\S]*return '局域网直连'/u)
+  assert.match(detail, /case 'relay':[\s\S]*return 'Internet Relay'/u)
+  assert.match(detail, /case 'unavailable':[\s\S]*return '当前不可用'/u)
+  assert.doesNotMatch(
+    remoteDetail,
+    /transport(?:Mode)?Select|setExecutionTransport|onTransportChange/u,
+  )
+})
+
 test('New Conversation binds Machine identity and machine-scoped Provider truth', async () => {
   const [dialog, providerSelection, actions] = await Promise.all([
     source('components/conversations/new-conversation-dialog.tsx'),

@@ -1,5 +1,7 @@
-export const relayProtocolVersion = 1 as const
+export const relayProtocolVersion = 2 as const
 
+// The ALPN labels the TLS transport family. JSON handshake versioning performs
+// the explicit v1/v2 compatibility check after both peers reach the Relay.
 export const relayProtocolAlpn = 'codetether-relay/1' as const
 
 export const relayProtocolLimits = {
@@ -19,6 +21,15 @@ export const relayProtocolLimits = {
   heartbeatIntervalMs: 30_000,
   heartbeatTimeoutMs: 75_000,
   maximumSubscriptionsPerController: 32,
+  maximumChannels: 256,
+  maximumChannelsPerPeer: 8,
+  maximumChannelOpenAttemptsPerMinute: 240,
+  maximumStaleChannelFramesPerConnection: 32,
+  maximumTerminalChannelFrames: 4,
+  maximumChannelDataBytes: 4 * 1024,
+  maximumChannelEncodedDataCharacters: 5_462,
+  channelOpenTimeoutMs: 10_000,
+  channelAcknowledgementTimeoutMs: 10_000,
   maximumRateLimitEntries: 10_000,
   enrollmentTokenLifetimeMs: 10 * 60_000,
   enrollmentMaximumAttempts: 5,

@@ -35,6 +35,7 @@ import { safeErrorNameForLog } from './safe-log.js'
 import {
   SecureRemoteMachineCoordinator,
   type RemoteMachineCoordinator,
+  type RemoteMachineTransportPolicy,
 } from './remote-machine-coordinator.js'
 import {
   SecureControllerRelayCoordinator,
@@ -65,6 +66,8 @@ export interface LocalCodexHostOptions {
   readonly desktopManaged?: boolean
   /** Explicit test-only opt-in; production remote pairing rejects loopback. */
   readonly remoteMachineLoopbackForTests?: boolean
+  /** Internal validation/operator override; normal product routing is direct-first. */
+  readonly remoteMachineTransportPolicy?: RemoteMachineTransportPolicy
 }
 
 export interface RunningLocalCodexHost {
@@ -226,15 +229,17 @@ export async function startLocalCodexHostWithRuntime(
   let controllerRelayCoordinator: ControllerRelayCoordinator | undefined
   try {
     if (persistence !== undefined) {
-      remoteMachineCoordinator = await SecureRemoteMachineCoordinator.create({
-        persistence,
-        allowLoopbackForTests: options.remoteMachineLoopbackForTests === true,
-      })
       controllerRelayCoordinator =
         await SecureControllerRelayCoordinator.create({
           persistence,
           clientBuildIdentity: options.hostVersion,
         })
+      remoteMachineCoordinator = await SecureRemoteMachineCoordinator.create({
+        persistence,
+        allowLoopbackForTests: options.remoteMachineLoopbackForTests === true,
+        relayTransport: controllerRelayCoordinator,
+        transportPolicy: options.remoteMachineTransportPolicy ?? 'direct_first',
+      })
     }
     const publisher = new HostEventPublisher({
       epoch: newEpoch(),
@@ -308,8 +313,8 @@ export async function startLocalCodexHostWithRuntime(
     } else if (service !== undefined) {
       await service.close().catch(() => undefined)
     } else {
-      await controllerRelayCoordinator?.close().catch(() => undefined)
       await remoteMachineCoordinator?.close?.().catch(() => undefined)
+      await controllerRelayCoordinator?.close().catch(() => undefined)
       await Promise.allSettled(
         runtimes.map(async (providerRuntime) => await providerRuntime.close()),
       )

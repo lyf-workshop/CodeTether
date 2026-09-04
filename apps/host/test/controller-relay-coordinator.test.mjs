@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { mkdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { PassThrough } from 'node:stream'
 import test from 'node:test'
 
 import { createMachineTlsIdentityFile } from '@codetether/machine-transport'
@@ -267,6 +268,52 @@ test('restart reconnect uses the enrolled Controller identity without a token', 
   })
 })
 
+test('revoking trust admits only the dedicated Relay Machine teardown channel', async () => {
+  await withFixture(async (fixture) => {
+    fixture.store.configureMachineRelay(
+      fixture.machineId,
+      {
+        host: '39.104.94.53',
+        port: 443,
+        transportSecurity: 'pinned_identity',
+      },
+      relayFingerprint,
+      timestamp,
+    )
+    fixture.store.markMachineRelayEnrolled(fixture.machineId, timestamp)
+    let presence
+    const connection = controlledConnection((_fingerprint, listener) => {
+      presence = listener
+    })
+    const coordinator = await SecureControllerRelayCoordinator.create({
+      persistence: fixture.store,
+      clientBuildIdentity: 'phase7b-test',
+      credentialDirectory: fixture.credentialDirectory,
+      connect: async (options) => connectedResult(connection, options, false),
+      now: () => new Date(timestamp),
+      reconnectInitialDelayMs: 5,
+      reconnectMaximumDelayMs: 10,
+    })
+    await waitFor(
+      () => coordinator.status(fixture.machineId).state === 'connected',
+    )
+    presence({ state: 'online' })
+
+    const revoking = fixture.store.markTrustedMachinePeerRevoking(
+      fixture.machineId,
+      timestamp,
+    )
+    await assert.rejects(
+      coordinator.openMachineChannel(fixture.trust),
+      (error) => error?.reason === 'relay_authentication_failed',
+    )
+    const channel = await coordinator.openMachineRevocationChannel(revoking)
+    assert.equal(connection.machineChannelOpens, 1)
+    channel.destroy()
+    await coordinator.close()
+  })
+})
+
 test('failed candidate verification restores the prior enrolled Relay worker', async () => {
   await withFixture(async (fixture) => {
     const priorEndpoint = {
@@ -422,7 +469,7 @@ function controlledConnection(onSubscribe = () => undefined) {
   const completion = new Promise((resolve) => {
     resolveClosed = resolve
   })
-  return {
+  const connection = {
     peerId: 'relay_peer_controllerfixture01',
     role: 'controller',
     connectionEpoch: 'relay_connection_fixture01',
@@ -431,6 +478,11 @@ function controlledConnection(onSubscribe = () => undefined) {
       return async () => undefined
     },
     async replaceAuthorizedController() {},
+    machineChannelOpens: 0,
+    async openMachineChannel() {
+      this.machineChannelOpens += 1
+      return new PassThrough()
+    },
     async waitUntilClosed() {
       await completion
     },
@@ -445,6 +497,7 @@ function controlledConnection(onSubscribe = () => undefined) {
       return closed
     },
   }
+  return connection
 }
 
 function connectedResult(connection, options, enrolled) {

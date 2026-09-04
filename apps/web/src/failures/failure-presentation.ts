@@ -231,6 +231,31 @@ const failureReasonCopy = {
     cause: 'Relay 已暂时限制新的连接或验证尝试。',
     guidance: '请稍后重试；不要重复快速提交注册或连接请求。',
   },
+  relay_channel_open_failed: {
+    title: 'Internet Relay 通道无法建立',
+    cause: 'CodeTether 无法为这台受信任的 Machine 建立执行通道。',
+    guidance: '请等待 Relay 与远程 Node 恢复后，再开始新的请求。',
+  },
+  relay_channel_lost: {
+    title: 'Internet Relay 执行通道已中断',
+    cause: '活动执行使用的 Relay 通道在完成状态确认前断开。',
+    guidance: '为避免重复操作，CodeTether 没有自动重发原请求。',
+  },
+  relay_peer_offline: {
+    title: '远程 Node 未连接到 Internet Relay',
+    cause: 'Relay 当前无法到达这台受信任 Machine 的 Node。',
+    guidance: '请等待 Node 重新连接；会话历史仍可查看。',
+  },
+  relay_transport_capacity_reached: {
+    title: 'Internet Relay 执行通道已满',
+    cause: '当前 Relay Machine 通道已达到有界容量。',
+    guidance: '请等待其他远程任务结束后再试。',
+  },
+  relay_protocol_error: {
+    title: 'Internet Relay 执行协议异常',
+    cause: 'CodeTether 拒绝了无效或不兼容的 Relay Machine 通道数据。',
+    guidance: '请检查 Relay、Desktop 与 Node 版本后再试。',
+  },
   provider_error: {
     title: '智能体执行失败',
     cause: '智能体未能完成本轮工作。',
@@ -261,6 +286,7 @@ const replayUnsafeReasons = new Set<CanonicalFailureReason>([
   'execution_lost',
   'execution_ownership_uncertain',
   'transport_lost',
+  'relay_channel_lost',
 ])
 
 export function executionFailurePresentation(

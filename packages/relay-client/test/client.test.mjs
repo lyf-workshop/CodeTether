@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict'
 import { X509Certificate, createHash } from 'node:crypto'
+import { once } from 'node:events'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { setTimeout as delay } from 'node:timers/promises'
 import { createServer } from 'node:tls'
 import test from 'node:test'
 
@@ -12,6 +14,8 @@ import {
   RelayClientMessageSchema,
   generateRelayApplicationIdentity,
   newRelayChallengeId,
+  newRelayChannelGeneration,
+  newRelayChannelId,
   newRelayConnectionEpoch,
   newRelayId,
   newRelayNonce,
@@ -181,6 +185,7 @@ async function startRelayFixture(options = {}) {
         sentAt: new Date().toISOString(),
       })
     }
+    const fixtureMachineChannels = []
     while (!framed.closed) {
       let message
       try {
@@ -201,6 +206,101 @@ async function startRelayFixture(options = {}) {
           connectionEpoch,
           requestId: message.requestId,
           observedAt: new Date().toISOString(),
+        })
+      } else if (
+        message.type === 'channel.open' &&
+        options.machineChannelScenario !== undefined
+      ) {
+        const binding = {
+          channelId: newRelayChannelId(),
+          channelGeneration: newRelayChannelGeneration(),
+          controllerConnectionEpoch:
+            options.machineChannelScenario === 'stale_opening'
+              ? newRelayConnectionEpoch()
+              : connectionEpoch,
+          nodeConnectionEpoch: newRelayConnectionEpoch(),
+        }
+        fixtureMachineChannels.push({ requestId: message.requestId, binding })
+        await framed.send({
+          type: 'channel.opened',
+          protocolVersion: relayProtocolVersion,
+          connectionEpoch,
+          requestId: message.requestId,
+          ...binding,
+          purpose: 'machine_tls_v1',
+        })
+        if (options.machineChannelScenario === 'stale_data') {
+          await framed.send({
+            type: 'channel.data',
+            protocolVersion: relayProtocolVersion,
+            connectionEpoch,
+            ...binding,
+            channelGeneration: newRelayChannelGeneration(),
+            sequence: 1,
+            data: Buffer.from('untrusted').toString('base64url'),
+          })
+        }
+      } else if (
+        options.machineChannelScenario === 'terminal_race' &&
+        message.type === 'channel.close' &&
+        message.channelId === fixtureMachineChannels[0]?.binding.channelId
+      ) {
+        const [closed, surviving] = fixtureMachineChannels
+        assert.notEqual(closed, undefined)
+        assert.notEqual(surviving, undefined)
+        await framed.send({
+          type: 'channel.data',
+          protocolVersion: relayProtocolVersion,
+          connectionEpoch,
+          ...closed.binding,
+          sequence: 1,
+          data: Buffer.from('already-queued-data').toString('base64url'),
+        })
+        await framed.send({
+          type: 'channel.data.ack',
+          protocolVersion: relayProtocolVersion,
+          connectionEpoch,
+          ...closed.binding,
+          acknowledgedSequence: 1,
+        })
+        await framed.send({
+          type: 'channel.closed',
+          protocolVersion: relayProtocolVersion,
+          connectionEpoch,
+          requestId: closed.requestId,
+          ...closed.binding,
+          reason: 'peer_closed',
+        })
+        await framed.send({
+          type: 'channel.data',
+          protocolVersion: relayProtocolVersion,
+          connectionEpoch,
+          ...surviving.binding,
+          sequence: 1,
+          data: Buffer.from('surviving-channel-data').toString('base64url'),
+        })
+      } else if (
+        options.machineChannelScenario === 'terminal_race' &&
+        message.type === 'channel.data' &&
+        message.channelId === fixtureMachineChannels[1]?.binding.channelId
+      ) {
+        const surviving = fixtureMachineChannels[1]
+        assert.notEqual(surviving, undefined)
+        await framed.send({
+          type: 'channel.data.ack',
+          protocolVersion: relayProtocolVersion,
+          connectionEpoch,
+          ...surviving.binding,
+          acknowledgedSequence: message.sequence,
+        })
+        await framed.send({
+          type: 'channel.data',
+          protocolVersion: relayProtocolVersion,
+          connectionEpoch,
+          ...surviving.binding,
+          channelGeneration: newRelayChannelGeneration(),
+          sequence: 2,
+          data: Buffer.from('mismatched-binding').toString('base64url'),
         })
       } else if (message.type === 'peer.goodbye') {
         framed.end()
@@ -319,10 +419,10 @@ test('Relay client fails closed on TLS and application identity mismatch', async
   )
 })
 
-test('Relay client classifies an incompatible challenge version before strict v1 parsing', async (t) => {
+test('Relay client classifies an incompatible challenge version before strict parsing', async (t) => {
   const identity = await peerIdentity()
   const fixture = await startRelayFixture({
-    challengeProtocolVersion: 2,
+    challengeProtocolVersion: relayProtocolVersion + 1,
     expectedPeerPublicKeySpki: identity.publicKeySpki,
   })
   t.after(() => fixture.close())
@@ -338,7 +438,7 @@ test('Relay client classifies an incompatible authentication response version', 
   const identity = await peerIdentity()
   const fixture = await startRelayFixture({
     enrolled: true,
-    readyProtocolVersion: 2,
+    readyProtocolVersion: relayProtocolVersion + 1,
     expectedPeerPublicKeySpki: identity.publicKeySpki,
   })
   t.after(() => fixture.close())
@@ -355,7 +455,7 @@ test('Relay client classifies an incompatible post-authentication frame version'
   const fixture = await startRelayFixture({
     enrolled: true,
     sendHeartbeat: true,
-    postAuthenticationProtocolVersion: 2,
+    postAuthenticationProtocolVersion: relayProtocolVersion + 1,
     expectedPeerPublicKeySpki: identity.publicKeySpki,
   })
   t.after(() => fixture.close())
@@ -583,6 +683,387 @@ test('Relay client interoperates with the production Relay service across presen
   )
   assert.equal((await online).state, 'online')
 })
+
+test('Machine channel offers require an explicit Node decision and preserve exact peer epochs', async (t) => {
+  const fixture = await startMachineChannelFixture()
+  t.after(() => fixture.close())
+
+  let observedOffer
+  fixture.node.connection.setMachineChannelHandler(async (offer) => {
+    observedOffer = offer
+    await offer.reject('busy')
+  })
+
+  await assert.rejects(
+    fixture.controller.connection.openMachineChannel(
+      fixture.nodeIdentity.publicKeyFingerprint,
+    ),
+    (error) =>
+      error instanceof RelayClientError &&
+      error.code === 'relay_transport_capacity_reached',
+  )
+  assert.equal(
+    observedOffer.controllerFingerprint,
+    fixture.controllerIdentity.publicKeyFingerprint,
+  )
+  assert.equal(
+    observedOffer.controllerConnectionEpoch,
+    fixture.controller.connection.connectionEpoch,
+  )
+  assert.equal(
+    observedOffer.nodeConnectionEpoch,
+    fixture.node.connection.connectionEpoch,
+  )
+})
+
+test('Machine channel Duplex carries bounded bytes in both directions', async (t) => {
+  const fixture = await startMachineChannelFixture()
+  t.after(() => fixture.close())
+  const incoming = deferred()
+  fixture.node.connection.setMachineChannelHandler(async (offer) => {
+    incoming.resolve(await offer.accept())
+  })
+
+  const controllerChannel =
+    await fixture.controller.connection.openMachineChannel(
+      fixture.nodeIdentity.publicKeyFingerprint,
+    )
+  const nodeChannel = await incoming.promise
+  silenceStreamErrors(controllerChannel, nodeChannel)
+
+  const fromController = once(nodeChannel, 'data')
+  const fromNode = once(controllerChannel, 'data')
+  await Promise.all([
+    writeAsync(controllerChannel, Buffer.from('controller-to-node')),
+    writeAsync(nodeChannel, Buffer.from('node-to-controller')),
+  ])
+  assert.equal(
+    Buffer.concat(await fromController).toString(),
+    'controller-to-node',
+  )
+  assert.equal(Buffer.concat(await fromNode).toString(), 'node-to-controller')
+  controllerChannel.destroy()
+})
+
+test('Machine channel withholds ACK under readable backpressure while control remains responsive', async (t) => {
+  const fixture = await startMachineChannelFixture()
+  t.after(() => fixture.close())
+  const incoming = deferred()
+  fixture.node.connection.setMachineChannelHandler(async (offer) => {
+    incoming.resolve(await offer.accept())
+  })
+  const controllerChannel =
+    await fixture.controller.connection.openMachineChannel(
+      fixture.nodeIdentity.publicKeyFingerprint,
+    )
+  const nodeChannel = await incoming.promise
+  silenceStreamErrors(controllerChannel, nodeChannel)
+
+  const frameBytes = relayProtocolLimits.maximumChannelDataBytes
+  const payload = Buffer.alloc(frameBytes * 2, 0x61)
+  let settled = false
+  const writing = writeAsync(controllerChannel, payload).finally(() => {
+    settled = true
+  })
+  await waitFor(() => nodeChannel.readableLength === frameBytes)
+  await delay(30)
+  assert.equal(settled, false)
+
+  await fixture.node.connection.replaceAuthorizedController(
+    fixture.controllerIdentity.publicKeyFingerprint,
+  )
+  assert.equal(fixture.node.connection.connectionEpoch.length > 0, true)
+
+  assert.deepEqual(
+    nodeChannel.read(frameBytes),
+    payload.subarray(0, frameBytes),
+  )
+  await waitFor(() => nodeChannel.readableLength === frameBytes)
+  assert.equal(settled, false)
+  assert.deepEqual(nodeChannel.read(frameBytes), payload.subarray(frameBytes))
+  await writing
+  assert.equal(settled, true)
+  controllerChannel.destroy()
+})
+
+test('Machine channel multiplexing isolates a closed channel from another channel', async (t) => {
+  const fixture = await startMachineChannelFixture()
+  t.after(() => fixture.close())
+  const incomingChannels = []
+  const incomingWaiters = []
+  fixture.node.connection.setMachineChannelHandler(async (offer) => {
+    const channel = await offer.accept()
+    const waiter = incomingWaiters.shift()
+    if (waiter === undefined) incomingChannels.push(channel)
+    else waiter(channel)
+  })
+  const nextIncoming = () =>
+    incomingChannels.length > 0
+      ? Promise.resolve(incomingChannels.shift())
+      : new Promise((resolve) => incomingWaiters.push(resolve))
+
+  const controllerOne = await fixture.controller.connection.openMachineChannel(
+    fixture.nodeIdentity.publicKeyFingerprint,
+  )
+  const nodeOne = await nextIncoming()
+  const controllerTwo = await fixture.controller.connection.openMachineChannel(
+    fixture.nodeIdentity.publicKeyFingerprint,
+  )
+  const nodeTwo = await nextIncoming()
+  silenceStreamErrors(controllerOne, nodeOne, controllerTwo, nodeTwo)
+
+  nodeOne.resume()
+  const nodeOneEnded = once(nodeOne, 'end')
+  controllerOne.end()
+  await nodeOneEnded
+
+  const received = once(nodeTwo, 'data')
+  await writeAsync(controllerTwo, Buffer.from('second-channel-still-open'))
+  assert.equal(
+    Buffer.concat(await received).toString(),
+    'second-channel-still-open',
+  )
+  controllerTwo.destroy()
+})
+
+test('exact late data and ACK for a locally released channel do not close its multiplexed Relay connection', async (t) => {
+  const identity = await peerIdentity('controller')
+  const fixture = await startRelayFixture({
+    enrolled: true,
+    machineChannelScenario: 'terminal_race',
+    expectedPeerPublicKeySpki: identity.publicKeySpki,
+  })
+  t.after(() => fixture.close())
+  const connected = await connectRelayControl(clientOptions(fixture, identity))
+  const first = await connected.connection.openMachineChannel('N'.repeat(43))
+  const second = await connected.connection.openMachineChannel('N'.repeat(43))
+  silenceStreamErrors(first, second)
+
+  const secondData = once(second, 'data')
+  const firstFinished = once(first, 'finish')
+  first.end()
+  await firstFinished
+  assert.equal(
+    Buffer.concat(await secondData).toString(),
+    'surviving-channel-data',
+  )
+
+  await writeAsync(second, Buffer.from('prove-outer-connection-still-open'))
+  await assert.rejects(
+    connected.connection.waitUntilClosed(),
+    (error) =>
+      error instanceof RelayClientError &&
+      error.code === 'relay_protocol_error',
+  )
+  assert.equal(second.destroyed, true)
+  assert.deepEqual(fixture.failures, [])
+})
+
+test('Machine channel stale opening and binding responses fail closed', async (t) => {
+  const identity = await peerIdentity('controller')
+  const staleOpening = await startRelayFixture({
+    enrolled: true,
+    machineChannelScenario: 'stale_opening',
+    expectedPeerPublicKeySpki: identity.publicKeySpki,
+  })
+  t.after(() => staleOpening.close())
+  const opened = await connectRelayControl(
+    clientOptions(staleOpening, identity),
+  )
+  await assert.rejects(
+    opened.connection.openMachineChannel('N'.repeat(43)),
+    (error) =>
+      error instanceof RelayClientError &&
+      error.code === 'relay_protocol_error',
+  )
+  await assert.rejects(
+    opened.connection.waitUntilClosed(),
+    (error) =>
+      error instanceof RelayClientError &&
+      error.code === 'relay_protocol_error',
+  )
+
+  const staleData = await startRelayFixture({
+    enrolled: true,
+    machineChannelScenario: 'stale_data',
+    expectedPeerPublicKeySpki: identity.publicKeySpki,
+  })
+  t.after(() => staleData.close())
+  const connected = await connectRelayControl(
+    clientOptions(staleData, identity),
+  )
+  const channel = await connected.connection.openMachineChannel('N'.repeat(43))
+  const channelError = once(channel, 'error')
+  const [failure] = await channelError
+  assert.equal(failure instanceof RelayClientError, true)
+  assert.equal(failure.code, 'relay_protocol_error')
+  await assert.rejects(
+    connected.connection.waitUntilClosed(),
+    (error) =>
+      error instanceof RelayClientError &&
+      error.code === 'relay_protocol_error',
+  )
+})
+
+test('Relay connection loss destroys every active Machine channel without resume', async (t) => {
+  const fixture = await startMachineChannelFixture()
+  t.after(() => fixture.close())
+  const incoming = deferred()
+  fixture.node.connection.setMachineChannelHandler(async (offer) => {
+    incoming.resolve(await offer.accept())
+  })
+  const controllerChannel =
+    await fixture.controller.connection.openMachineChannel(
+      fixture.nodeIdentity.publicKeyFingerprint,
+    )
+  const nodeChannel = await incoming.promise
+  const controllerFailure = once(controllerChannel, 'error')
+  const nodeFailure = once(nodeChannel, 'error')
+
+  await fixture.node.connection.close()
+  const [[controllerError], [nodeError]] = await Promise.all([
+    controllerFailure,
+    nodeFailure,
+  ])
+  assert.equal(controllerError.code, 'relay_channel_lost')
+  assert.equal(nodeError.code, 'relay_channel_lost')
+  assert.equal(controllerChannel.destroyed, true)
+  assert.equal(nodeChannel.destroyed, true)
+})
+
+test('Machine channel opening times out without an implicit Node acceptance', async (t) => {
+  const fixture = await startMachineChannelFixture({ channelOpenTimeoutMs: 40 })
+  t.after(() => fixture.close())
+  fixture.node.connection.setMachineChannelHandler(
+    async () => await new Promise(() => undefined),
+  )
+
+  await assert.rejects(
+    fixture.controller.connection.openMachineChannel(
+      fixture.nodeIdentity.publicKeyFingerprint,
+    ),
+    (error) =>
+      error instanceof RelayClientError &&
+      error.code === 'relay_channel_open_failed',
+  )
+})
+
+test('Machine channel write fails within the bounded acknowledgement timeout', async (t) => {
+  const fixture = await startMachineChannelFixture({
+    channelAcknowledgementTimeoutMs: 40,
+  })
+  t.after(() => fixture.close())
+  const incoming = deferred()
+  fixture.node.connection.setMachineChannelHandler(async (offer) => {
+    incoming.resolve(await offer.accept())
+  })
+  const controllerChannel =
+    await fixture.controller.connection.openMachineChannel(
+      fixture.nodeIdentity.publicKeyFingerprint,
+    )
+  const nodeChannel = await incoming.promise
+  silenceStreamErrors(controllerChannel, nodeChannel)
+
+  await assert.rejects(
+    writeAsync(
+      controllerChannel,
+      Buffer.alloc(relayProtocolLimits.maximumChannelDataBytes, 0x62),
+    ),
+    (error) =>
+      error instanceof RelayClientError &&
+      error.code === 'relay_protocol_error',
+  )
+  await fixture.node.connection.replaceAuthorizedController(
+    fixture.controllerIdentity.publicKeyFingerprint,
+  )
+})
+
+async function startMachineChannelFixture(serviceOptions = {}) {
+  const root = await mkdtemp(join(tmpdir(), 'codetether-relay-client-channel-'))
+  const store = new RelayStateStore(join(root, 'state'))
+  const tls = await generateRelayPinnedTlsIdentity(store.identity)
+  const service = new RelayService({
+    stateStore: store,
+    tls,
+    host: '127.0.0.1',
+    port: 0,
+    managementPort: null,
+    heartbeatIntervalMs: 100,
+    heartbeatTimeoutMs: 300,
+    logger: { log() {} },
+    ...serviceOptions,
+  })
+  await service.start()
+  const endpoint = { host: '127.0.0.1', port: service.listeningAddress.port }
+  const common = {
+    endpoint,
+    tls: {
+      mode: 'pinned_certificate',
+      certificatePublicKeyFingerprint: service.relayFingerprint,
+    },
+    expectedRelayIdentityFingerprint: service.relayFingerprint,
+    clientBuildIdentity: 'relay-client-machine-channel-test',
+  }
+  const controllerIdentity = generateRelayApplicationIdentity()
+  const nodeIdentity = generateRelayApplicationIdentity()
+  const node = await connectRelayControl({
+    ...common,
+    identity: { role: 'node', ...nodeIdentity },
+    enrollmentToken: store.createEnrollmentToken('node'),
+    authorizedControllerFingerprint: controllerIdentity.publicKeyFingerprint,
+  })
+  const controller = await connectRelayControl({
+    ...common,
+    identity: { role: 'controller', ...controllerIdentity },
+    enrollmentToken: store.createEnrollmentToken('controller'),
+  })
+  let closed = false
+  return {
+    controller,
+    controllerIdentity,
+    node,
+    nodeIdentity,
+    async close() {
+      if (closed) return
+      closed = true
+      await controller.connection.close().catch(() => undefined)
+      await node.connection.close().catch(() => undefined)
+      await service.close().catch(() => undefined)
+      await rm(root, { recursive: true, force: true })
+    },
+  }
+}
+
+function deferred() {
+  let resolve
+  let reject
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
+function writeAsync(stream, chunk) {
+  return new Promise((resolve, reject) => {
+    stream.write(chunk, (error) => {
+      if (error === null || error === undefined) resolve()
+      else reject(error)
+    })
+  })
+}
+
+function silenceStreamErrors(...streams) {
+  for (const stream of streams) stream.on('error', () => undefined)
+}
+
+async function waitFor(predicate, timeoutMs = 2_000) {
+  const deadline = Date.now() + timeoutMs
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error('Timed out waiting for state')
+    await delay(5)
+  }
+}
 
 function certificateSpkiFingerprint(certificatePem) {
   const certificate = new X509Certificate(certificatePem)

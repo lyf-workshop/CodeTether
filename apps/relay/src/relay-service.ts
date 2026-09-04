@@ -12,6 +12,9 @@ import {
 
 import {
   FramedRelayConnection,
+  type RelayFramingQueueMetrics,
+  type RelayChannelClosedReason,
+  type RelayChannelId,
   RelayClientMessageSchema,
   type RelayChallengeMessage,
   type RelayClientMessage,
@@ -36,6 +39,10 @@ import {
 } from '@codetether/relay-protocol'
 import { z } from 'zod'
 
+import {
+  RelayChannelRegistry,
+  type RelayEphemeralChannel,
+} from './channel-registry.js'
 import {
   RelayConnectionRegistry,
   type RelayOwnedConnection,
@@ -67,6 +74,11 @@ export interface RelayServiceOptions {
   readonly heartbeatTimeoutMs?: number
   readonly handshakeTimeoutMs?: number
   readonly challengeLifetimeMs?: number
+  readonly maximumChannels?: number
+  readonly maximumChannelsPerPeer?: number
+  readonly maximumChannelOpenAttemptsPerMinute?: number
+  readonly channelOpenTimeoutMs?: number
+  readonly channelAcknowledgementTimeoutMs?: number
 }
 
 export interface RelayServiceMetrics {
@@ -78,6 +90,14 @@ export interface RelayServiceMetrics {
   readonly authenticatedControllers: number
   readonly authenticatedNodes: number
   readonly pendingControlMessagesUpperBound: number
+  readonly queuedInboundFrames: number
+  readonly queuedInboundBytes: number
+  readonly pendingOutboundFrames: number
+  readonly pendingOutboundBytes: number
+  readonly framedQueueFrames: number
+  readonly framedQueueBytes: number
+  readonly framedQueueFramesHighWaterMark: number
+  readonly framedQueueBytesHighWaterMark: number
   readonly connectionRegistryEntries: number
   readonly acceptedConnections: number
   readonly authenticatedReconnects: number
@@ -88,6 +108,26 @@ export interface RelayServiceMetrics {
   readonly rateLimitEvents: number
   readonly malformedFrames: number
   readonly heartbeatTimeouts: number
+  readonly activeChannels: number
+  readonly openingChannels: number
+  readonly terminalChannelTombstones: number
+  readonly pendingChannelDataFrames: number
+  readonly pendingChannelDataBytes: number
+  readonly pendingChannelDataFramesHighWaterMark: number
+  readonly pendingChannelDataBytesHighWaterMark: number
+  readonly channelOpenRequests: number
+  readonly channelAccepted: number
+  readonly channelRejected: number
+  readonly channelClosed: number
+  readonly channelErrors: number
+  readonly channelDataFramesForwarded: number
+  readonly channelDataBytesForwarded: number
+  readonly controllerToRelayChannelBytes: number
+  readonly relayToNodeChannelBytes: number
+  readonly nodeToRelayChannelBytes: number
+  readonly relayToControllerChannelBytes: number
+  readonly channelBackpressureFailures: number
+  readonly staleChannelFrames: number
 }
 
 interface MutableMetrics {
@@ -100,6 +140,26 @@ interface MutableMetrics {
   rateLimitEvents: number
   malformedFrames: number
   heartbeatTimeouts: number
+  channelOpenRequests: number
+  channelAccepted: number
+  channelRejected: number
+  channelClosed: number
+  channelErrors: number
+  channelDataFramesForwarded: number
+  channelDataBytesForwarded: number
+  controllerToRelayChannelBytes: number
+  relayToNodeChannelBytes: number
+  nodeToRelayChannelBytes: number
+  relayToControllerChannelBytes: number
+  channelBackpressureFailures: number
+  staleChannelFrames: number
+}
+
+interface MutableFramingQueueMetrics {
+  queuedInboundFrames: number
+  queuedInboundBytes: number
+  pendingOutboundFrames: number
+  pendingOutboundBytes: number
 }
 
 interface Subscription {
@@ -107,10 +167,17 @@ interface Subscription {
   readonly targetNodeFingerprint: RelayPublicKeyFingerprint
 }
 
+interface ClosedChannelTombstone {
+  readonly channel: RelayEphemeralChannel<ActiveConnection>
+  readonly timer: NodeJS.Timeout
+  exactLateFrames: number
+}
+
 class ActiveConnection implements RelayOwnedConnection {
   readonly subscriptions = new Map<string, Subscription>()
   readonly pendingPings = new Map<RelayPingId, number>()
   lastHeartbeatAcknowledgedAt = Date.now()
+  staleChannelFrames = 0
   invalidated = false
   readonly #invalidate: (reason: 'replaced' | 'revoked' | 'shutdown') => void
 
@@ -144,17 +211,40 @@ export class RelayService {
       | 'heartbeatTimeoutMs'
       | 'handshakeTimeoutMs'
       | 'challengeLifetimeMs'
+      | 'maximumChannels'
+      | 'maximumChannelsPerPeer'
+      | 'maximumChannelOpenAttemptsPerMinute'
+      | 'channelOpenTimeoutMs'
+      | 'channelAcknowledgementTimeoutMs'
     >
   > & { readonly managementPort: number | null }
   readonly #logger: RelaySafeLogger
   readonly #server: TlsServer
   readonly #registry = new RelayConnectionRegistry<ActiveConnection>()
+  readonly #channels: RelayChannelRegistry<ActiveConnection>
+  readonly #channelOpenTimers = new Map<RelayChannelId, NodeJS.Timeout>()
+  readonly #channelAcknowledgementTimers = new Map<string, NodeJS.Timeout>()
+  readonly #closedChannelTombstones = new Map<
+    RelayChannelId,
+    ClosedChannelTombstone
+  >()
   readonly #rawSockets = new Set<TLSSocket>()
+  readonly #framingQueues = new Map<
+    FramedRelayConnection,
+    RelayFramingQueueMetrics
+  >()
+  readonly #framingQueueTotals: MutableFramingQueueMetrics = {
+    queuedInboundFrames: 0,
+    queuedInboundBytes: 0,
+    pendingOutboundFrames: 0,
+    pendingOutboundBytes: 0,
+  }
   readonly #addressCounts = new Map<string, number>()
   readonly #admissionLimiter: BoundedTokenBucketRateLimiter
   readonly #authenticationLimiter: BoundedTokenBucketRateLimiter
   readonly #authenticationIdentityLimiter: BoundedTokenBucketRateLimiter
   readonly #enrollmentLimiter: BoundedTokenBucketRateLimiter
+  readonly #channelOpenLimiter: BoundedTokenBucketRateLimiter
   readonly #metrics: MutableMetrics = {
     acceptedConnections: 0,
     authenticatedReconnects: 0,
@@ -165,8 +255,25 @@ export class RelayService {
     rateLimitEvents: 0,
     malformedFrames: 0,
     heartbeatTimeouts: 0,
+    channelOpenRequests: 0,
+    channelAccepted: 0,
+    channelRejected: 0,
+    channelClosed: 0,
+    channelErrors: 0,
+    channelDataFramesForwarded: 0,
+    channelDataBytesForwarded: 0,
+    controllerToRelayChannelBytes: 0,
+    relayToNodeChannelBytes: 0,
+    nodeToRelayChannelBytes: 0,
+    relayToControllerChannelBytes: 0,
+    channelBackpressureFailures: 0,
+    staleChannelFrames: 0,
   }
   readonly #startedAt = Date.now()
+  #framedQueueFramesHighWaterMark = 0
+  #framedQueueBytesHighWaterMark = 0
+  #pendingChannelDataFramesHighWaterMark = 0
+  #pendingChannelDataBytesHighWaterMark = 0
   #managementServer: HttpServer | undefined
   #started = false
   #closing = false
@@ -192,8 +299,26 @@ export class RelayService {
         options.handshakeTimeoutMs ?? relayProtocolLimits.handshakeTimeoutMs,
       challengeLifetimeMs:
         options.challengeLifetimeMs ?? relayProtocolLimits.challengeLifetimeMs,
+      maximumChannels:
+        options.maximumChannels ?? relayProtocolLimits.maximumChannels,
+      maximumChannelsPerPeer:
+        options.maximumChannelsPerPeer ??
+        relayProtocolLimits.maximumChannelsPerPeer,
+      maximumChannelOpenAttemptsPerMinute:
+        options.maximumChannelOpenAttemptsPerMinute ??
+        relayProtocolLimits.maximumChannelOpenAttemptsPerMinute,
+      channelOpenTimeoutMs:
+        options.channelOpenTimeoutMs ??
+        relayProtocolLimits.channelOpenTimeoutMs,
+      channelAcknowledgementTimeoutMs:
+        options.channelAcknowledgementTimeoutMs ??
+        relayProtocolLimits.channelAcknowledgementTimeoutMs,
     }
     validateServiceBounds(this.#options)
+    this.#channels = new RelayChannelRegistry(
+      this.#options.maximumChannels,
+      this.#options.maximumChannelsPerPeer,
+    )
     this.#admissionLimiter = new BoundedTokenBucketRateLimiter({
       capacity: 240,
       refillIntervalMs: 60_000,
@@ -212,6 +337,11 @@ export class RelayService {
     this.#enrollmentLimiter = new BoundedTokenBucketRateLimiter({
       capacity: relayProtocolLimits.enrollmentMaximumAttempts,
       refillIntervalMs: 10 * 60_000,
+      maximumEntries: relayProtocolLimits.maximumRateLimitEntries,
+    })
+    this.#channelOpenLimiter = new BoundedTokenBucketRateLimiter({
+      capacity: this.#options.maximumChannelOpenAttemptsPerMinute,
+      refillIntervalMs: 60_000,
       maximumEntries: relayProtocolLimits.maximumRateLimitEntries,
     })
     this.#server = createTlsServer(
@@ -291,6 +421,12 @@ export class RelayService {
   }
 
   metrics(): RelayServiceMetrics {
+    const framedQueueFrames =
+      this.#framingQueueTotals.queuedInboundFrames +
+      this.#framingQueueTotals.pendingOutboundFrames
+    const framedQueueBytes =
+      this.#framingQueueTotals.queuedInboundBytes +
+      this.#framingQueueTotals.pendingOutboundBytes
     return {
       uptimeSeconds: Math.max(0, (Date.now() - this.#startedAt) / 1_000),
       processRssBytes: process.memoryUsage().rss,
@@ -301,7 +437,21 @@ export class RelayService {
       authenticatedNodes: this.#registry.count('node'),
       pendingControlMessagesUpperBound:
         this.#registry.count() * relayProtocolLimits.maximumQueuedFrames,
+      ...this.#framingQueueTotals,
+      framedQueueFrames,
+      framedQueueBytes,
+      framedQueueFramesHighWaterMark: this.#framedQueueFramesHighWaterMark,
+      framedQueueBytesHighWaterMark: this.#framedQueueBytesHighWaterMark,
       connectionRegistryEntries: this.#registry.count(),
+      activeChannels: this.#channels.count,
+      openingChannels: this.#channels.openingCount,
+      terminalChannelTombstones: this.#closedChannelTombstones.size,
+      pendingChannelDataFrames: this.#channels.outstandingDataFrames,
+      pendingChannelDataBytes: this.#channels.outstandingDataBytes,
+      pendingChannelDataFramesHighWaterMark:
+        this.#pendingChannelDataFramesHighWaterMark,
+      pendingChannelDataBytesHighWaterMark:
+        this.#pendingChannelDataBytesHighWaterMark,
       ...this.#metrics,
     }
   }
@@ -311,6 +461,13 @@ export class RelayService {
     if (!revoked) return false
     const peer = this.#store.getPeerById(peerId)
     if (peer !== undefined) {
+      const connection = this.#registry.current(peer.fingerprint)
+      if (connection !== undefined) {
+        void this.#closeChannelsForConnection(
+          connection,
+          'authorization_revoked',
+        )
+      }
       this.#registry.current(peer.fingerprint)?.invalidate('revoked')
       this.#logger.log('peer.revoked', {
         peerReference: peer.peerId,
@@ -323,6 +480,8 @@ export class RelayService {
   async close(): Promise<void> {
     if (this.#closing) return
     this.#closing = true
+    await this.#closeAllChannels('relay_shutdown')
+    this.#clearClosedChannelTombstones()
     this.#registry.clear('shutdown')
     for (const socket of this.#rawSockets) socket.destroy()
     await Promise.all([
@@ -342,7 +501,15 @@ export class RelayService {
       return
     }
     const address = normalizeAddress(socket.remoteAddress)
-    const channel = new FramedRelayConnection(socket)
+    const observed = { channel: undefined as FramedRelayConnection | undefined }
+    const channel = new FramedRelayConnection(socket, {
+      onQueueMetricsChanged: (metrics) => {
+        if (observed.channel !== undefined)
+          this.#observeFramingQueue(observed.channel, metrics)
+      },
+    })
+    observed.channel = channel
+    this.#framingQueues.set(channel, channel.queueMetrics)
     let active: ActiveConnection | undefined
     try {
       const challenge = this.#createChallenge()
@@ -389,6 +556,16 @@ export class RelayService {
           : this.#authenticate(challenge, parsed.data)
       const epoch = newRelayConnectionEpoch()
       active = new ActiveConnection(peer, epoch, channel, (reason) => {
+        if (active !== undefined) {
+          void this.#closeChannelsForConnection(
+            active,
+            reason === 'replaced'
+              ? 'connection_replaced'
+              : reason === 'revoked'
+                ? 'authorization_revoked'
+                : 'relay_shutdown',
+          )
+        }
         if (reason === 'replaced') {
           void sendError(
             channel,
@@ -440,6 +617,7 @@ export class RelayService {
       this.#logger.log('connection.rejected', { code: failure.code })
     } finally {
       if (active !== undefined && this.#registry.remove(active)) {
+        await this.#closeChannelsForConnection(active, 'peer_disconnected')
         if (active.peer.role === 'node') {
           await this.#publishNodePresence(active.peer.fingerprint)
         }
@@ -450,6 +628,7 @@ export class RelayService {
         })
       }
       channel.destroy()
+      this.#removeFramingQueue(channel)
     }
   }
 
@@ -593,6 +772,7 @@ export class RelayService {
         const raw = await connection.channel.receive(unknownSchema, {
           timeoutMs: null,
         })
+        if (!this.#registry.owns(connection) || connection.invalidated) break
         assertCompatibleProtocol(raw)
         const parsed = RelayClientMessageSchema.safeParse(raw)
         if (!parsed.success) {
@@ -627,6 +807,23 @@ export class RelayService {
         'Relay connection epoch is stale',
       )
     }
+    if (!this.#registry.owns(connection) || connection.invalidated) {
+      throw new RelayProtocolError(
+        'stale_connection',
+        'Relay connection epoch is stale',
+      )
+    }
+    if (
+      message.type === 'channel.open' ||
+      message.type === 'channel.accept' ||
+      message.type === 'channel.reject' ||
+      message.type === 'channel.data' ||
+      message.type === 'channel.data.ack' ||
+      message.type === 'channel.close'
+    ) {
+      await this.#handleChannelMessage(connection, message)
+      return
+    }
     if (message.type === 'heartbeat.pong') {
       if (!connection.pendingPings.delete(message.pingId)) return
       connection.lastHeartbeatAcknowledgedAt = Date.now()
@@ -642,6 +839,8 @@ export class RelayService {
         connection.peer.peerId,
         message.authorizedControllerFingerprint,
       )
+      await this.#closeUnauthorizedChannelsForNode(connection)
+      if (!this.#registry.owns(connection) || connection.invalidated) return
       await connection.channel.send({
         type: 'grant.replaced',
         protocolVersion: relayProtocolVersion,
@@ -693,6 +892,596 @@ export class RelayService {
         connection.subscriptions.get(message.targetNodeFingerprint)!,
       )
     }
+  }
+
+  async #handleChannelMessage(
+    connection: ActiveConnection,
+    message: Extract<
+      RelayClientMessage,
+      { readonly type: `channel.${string}` }
+    >,
+  ): Promise<void> {
+    if (message.type === 'channel.open') {
+      await this.#openChannel(connection, message)
+      return
+    }
+    const channel = this.#resolveChannel(connection, message)
+    if (channel === undefined) return
+    if (message.type === 'channel.accept') {
+      if (
+        connection !== channel.node ||
+        channel.state !== 'opening' ||
+        message.requestId !== channel.requestId
+      ) {
+        await this.#failChannel(channel, 'invalid_state')
+        return
+      }
+      this.#clearChannelOpenTimer(channel.channelId)
+      channel.state = 'open'
+      try {
+        await Promise.all([
+          this.#sendChannelOpened(channel, channel.controller),
+          this.#sendChannelOpened(channel, channel.node),
+        ])
+        if (!this.#channels.owns(channel)) return
+        this.#metrics.channelAccepted += 1
+      } catch {
+        await this.#closeChannel(channel, 'peer_disconnected')
+      }
+      return
+    }
+    if (message.type === 'channel.reject') {
+      if (
+        connection !== channel.node ||
+        channel.state !== 'opening' ||
+        message.requestId !== channel.requestId
+      ) {
+        await this.#failChannel(channel, 'invalid_state')
+        return
+      }
+      this.#removeChannel(channel)
+      this.#metrics.channelRejected += 1
+      await this.#sendIfCurrent(channel.controller, {
+        ...this.#channelBinding(channel, channel.controller),
+        type: 'channel.reject',
+        requestId: channel.requestId,
+        reason: message.reason,
+      })
+      return
+    }
+    if (message.type === 'channel.data') {
+      await this.#forwardChannelData(connection, channel, message)
+      return
+    }
+    if (message.type === 'channel.data.ack') {
+      await this.#forwardChannelAcknowledgement(connection, channel, message)
+      return
+    }
+    await this.#closeChannel(channel, 'peer_closed')
+  }
+
+  async #openChannel(
+    controller: ActiveConnection,
+    message: Extract<RelayClientMessage, { readonly type: 'channel.open' }>,
+  ): Promise<void> {
+    this.#metrics.channelOpenRequests += 1
+    const openRate = this.#channelOpenLimiter.consume(
+      controller.peer.fingerprint,
+    )
+    if (!openRate.allowed) {
+      this.#recordRateLimit()
+      await sendError(
+        controller.channel,
+        'rate_limited',
+        'Relay rate limit reached',
+      )
+      controller.invalidated = true
+      controller.channel.destroy()
+      return
+    }
+    if (
+      controller.peer.role !== 'controller' ||
+      !this.#store.canControllerObserveNode(
+        controller.peer.fingerprint,
+        message.targetNodeFingerprint,
+      )
+    ) {
+      await this.#sendChannelOpenError(
+        controller,
+        message.requestId,
+        'not_authorized',
+      )
+      return
+    }
+    const node = this.#registry.current(message.targetNodeFingerprint)
+    if (
+      node === undefined ||
+      node.peer.role !== 'node' ||
+      !this.#registry.owns(node) ||
+      node.invalidated
+    ) {
+      await this.#sendChannelOpenError(
+        controller,
+        message.requestId,
+        'peer_unavailable',
+      )
+      return
+    }
+    const created = this.#channels.create({
+      requestId: message.requestId,
+      purpose: message.purpose,
+      controller,
+      node,
+    })
+    if (!created.ok) {
+      await this.#sendChannelOpenError(
+        controller,
+        message.requestId,
+        created.reason === 'duplicate' ? 'internal' : 'capacity_reached',
+      )
+      return
+    }
+    const channel = created.channel
+    this.#startChannelOpenTimer(channel)
+    try {
+      await node.channel.send(
+        {
+          ...this.#channelBinding(channel, node),
+          type: 'channel.offer',
+          requestId: channel.requestId,
+          controllerFingerprint: controller.peer.fingerprint,
+          purpose: channel.purpose,
+        },
+        { timeoutMs: this.#options.channelAcknowledgementTimeoutMs },
+      )
+      if (
+        !this.#registry.owns(controller) ||
+        !this.#registry.owns(node) ||
+        !this.#channels.owns(channel)
+      ) {
+        await this.#closeChannel(channel, 'connection_replaced')
+      }
+    } catch {
+      this.#removeChannel(channel)
+      await this.#sendChannelOpenError(
+        controller,
+        message.requestId,
+        'peer_unavailable',
+      )
+    }
+  }
+
+  #resolveChannel(
+    connection: ActiveConnection,
+    message: Exclude<
+      Extract<RelayClientMessage, { readonly type: `channel.${string}` }>,
+      { readonly type: 'channel.open' }
+    >,
+  ): RelayEphemeralChannel<ActiveConnection> | undefined {
+    const channel = this.#channels.get(message.channelId)
+    if (channel === undefined) {
+      const tombstone = this.#closedChannelTombstones.get(message.channelId)
+      if (
+        tombstone !== undefined &&
+        this.#matchesClosedChannel(tombstone.channel, connection, message)
+      ) {
+        return undefined
+      }
+      this.#recordStaleChannelFrame(connection)
+      return undefined
+    }
+    if (connection !== channel.controller && connection !== channel.node) {
+      this.#recordStaleChannelFrame(connection)
+      return undefined
+    }
+    if (
+      message.channelGeneration !== channel.channelGeneration ||
+      message.controllerConnectionEpoch !== channel.controllerConnectionEpoch ||
+      message.nodeConnectionEpoch !== channel.nodeConnectionEpoch
+    ) {
+      if (this.#recordStaleChannelFrame(connection)) {
+        void this.#failChannel(channel, 'stale_channel')
+      }
+      return undefined
+    }
+    return channel
+  }
+
+  #matchesClosedChannel(
+    channel: RelayEphemeralChannel<ActiveConnection>,
+    connection: ActiveConnection,
+    message: {
+      readonly channelGeneration: string
+      readonly controllerConnectionEpoch: string
+      readonly nodeConnectionEpoch: string
+    },
+  ): boolean {
+    const exact =
+      (connection === channel.controller || connection === channel.node) &&
+      message.channelGeneration === channel.channelGeneration &&
+      message.controllerConnectionEpoch === channel.controllerConnectionEpoch &&
+      message.nodeConnectionEpoch === channel.nodeConnectionEpoch
+    if (!exact) return false
+    const tombstone = this.#closedChannelTombstones.get(channel.channelId)
+    if (tombstone?.channel !== channel) return false
+    tombstone.exactLateFrames += 1
+    return (
+      tombstone.exactLateFrames <=
+      relayProtocolLimits.maximumTerminalChannelFrames
+    )
+  }
+
+  #recordStaleChannelFrame(connection: ActiveConnection): boolean {
+    this.#metrics.staleChannelFrames += 1
+    connection.staleChannelFrames += 1
+    if (
+      connection.staleChannelFrames <
+      relayProtocolLimits.maximumStaleChannelFramesPerConnection
+    ) {
+      return true
+    }
+    this.#recordRateLimit()
+    connection.invalidated = true
+    connection.channel.destroy()
+    return false
+  }
+
+  async #forwardChannelData(
+    sender: ActiveConnection,
+    channel: RelayEphemeralChannel<ActiveConnection>,
+    message: Extract<RelayClientMessage, { readonly type: 'channel.data' }>,
+  ): Promise<void> {
+    if (channel.state !== 'open') {
+      await this.#failChannel(channel, 'invalid_state')
+      return
+    }
+    const senderIsController = sender === channel.controller
+    const outstanding = senderIsController
+      ? channel.controllerOutstandingSequence
+      : channel.nodeOutstandingSequence
+    const expected = senderIsController
+      ? channel.nextControllerSequence
+      : channel.nextNodeSequence
+    if (outstanding !== undefined || message.sequence !== expected) {
+      if (outstanding !== undefined)
+        this.#metrics.channelBackpressureFailures += 1
+      await this.#failChannel(channel, 'flow_control_violation')
+      return
+    }
+    if (senderIsController) {
+      channel.controllerOutstandingSequence = message.sequence
+      channel.controllerOutstandingBytes = decodedBase64UrlBytes(message.data)
+      channel.nextControllerSequence += 1
+    } else {
+      channel.nodeOutstandingSequence = message.sequence
+      channel.nodeOutstandingBytes = decodedBase64UrlBytes(message.data)
+      channel.nextNodeSequence += 1
+    }
+    this.#observePendingChannelData()
+    const recipient = senderIsController ? channel.node : channel.controller
+    try {
+      await recipient.channel.send(
+        {
+          ...this.#channelBinding(channel, recipient),
+          type: 'channel.data',
+          sequence: message.sequence,
+          data: message.data,
+        },
+        { timeoutMs: this.#options.channelAcknowledgementTimeoutMs },
+      )
+      if (!this.#channels.owns(channel)) return
+      const forwardedBytes = decodedBase64UrlBytes(message.data)
+      this.#metrics.channelDataFramesForwarded += 1
+      this.#metrics.channelDataBytesForwarded += forwardedBytes
+      if (senderIsController) {
+        this.#metrics.controllerToRelayChannelBytes += forwardedBytes
+        this.#metrics.relayToNodeChannelBytes += forwardedBytes
+      } else {
+        this.#metrics.nodeToRelayChannelBytes += forwardedBytes
+        this.#metrics.relayToControllerChannelBytes += forwardedBytes
+      }
+      const stillOutstanding = senderIsController
+        ? channel.controllerOutstandingSequence
+        : channel.nodeOutstandingSequence
+      if (stillOutstanding === message.sequence) {
+        this.#startChannelAcknowledgementTimer(
+          channel,
+          senderIsController ? 'controller' : 'node',
+          message.sequence,
+        )
+      }
+    } catch {
+      await this.#closeChannel(channel, 'peer_disconnected')
+    }
+  }
+
+  async #forwardChannelAcknowledgement(
+    acknowledger: ActiveConnection,
+    channel: RelayEphemeralChannel<ActiveConnection>,
+    message: Extract<RelayClientMessage, { readonly type: 'channel.data.ack' }>,
+  ): Promise<void> {
+    if (channel.state !== 'open') {
+      await this.#failChannel(channel, 'invalid_state')
+      return
+    }
+    const acknowledgesController = acknowledger === channel.node
+    const outstanding = acknowledgesController
+      ? channel.controllerOutstandingSequence
+      : channel.nodeOutstandingSequence
+    if (outstanding !== message.acknowledgedSequence) {
+      await this.#failChannel(channel, 'flow_control_violation')
+      return
+    }
+    const recipient = acknowledgesController ? channel.controller : channel.node
+    try {
+      await recipient.channel.send(
+        {
+          ...this.#channelBinding(channel, recipient),
+          type: 'channel.data.ack',
+          acknowledgedSequence: message.acknowledgedSequence,
+        },
+        { timeoutMs: this.#options.channelAcknowledgementTimeoutMs },
+      )
+      if (!this.#channels.owns(channel)) return
+      if (acknowledgesController) {
+        channel.controllerOutstandingSequence = undefined
+        channel.controllerOutstandingBytes = undefined
+        this.#clearChannelAcknowledgementTimer(channel, 'controller')
+      } else {
+        channel.nodeOutstandingSequence = undefined
+        channel.nodeOutstandingBytes = undefined
+        this.#clearChannelAcknowledgementTimer(channel, 'node')
+      }
+    } catch {
+      await this.#closeChannel(channel, 'peer_disconnected')
+    }
+  }
+
+  #channelBinding(
+    channel: RelayEphemeralChannel<ActiveConnection>,
+    recipient: ActiveConnection,
+  ) {
+    return {
+      protocolVersion: relayProtocolVersion,
+      connectionEpoch: recipient.epoch,
+      channelId: channel.channelId,
+      channelGeneration: channel.channelGeneration,
+      controllerConnectionEpoch: channel.controllerConnectionEpoch,
+      nodeConnectionEpoch: channel.nodeConnectionEpoch,
+    } as const
+  }
+
+  async #sendChannelOpened(
+    channel: RelayEphemeralChannel<ActiveConnection>,
+    recipient: ActiveConnection,
+  ): Promise<void> {
+    if (!this.#registry.owns(recipient) || recipient.invalidated) {
+      throw new RelayProtocolError(
+        'stale_connection',
+        'Relay connection epoch is stale',
+      )
+    }
+    await recipient.channel.send(
+      {
+        ...this.#channelBinding(channel, recipient),
+        type: 'channel.opened',
+        requestId: channel.requestId,
+        purpose: channel.purpose,
+      },
+      { timeoutMs: this.#options.channelAcknowledgementTimeoutMs },
+    )
+  }
+
+  async #sendChannelOpenError(
+    controller: ActiveConnection,
+    requestId: Extract<
+      RelayClientMessage,
+      { readonly type: 'channel.open' }
+    >['requestId'],
+    code:
+      'capacity_reached' | 'not_authorized' | 'peer_unavailable' | 'internal',
+  ): Promise<void> {
+    this.#metrics.channelErrors += 1
+    await this.#sendIfCurrent(controller, {
+      type: 'channel.error',
+      protocolVersion: relayProtocolVersion,
+      connectionEpoch: controller.epoch,
+      requestId,
+      code,
+    })
+  }
+
+  async #closeChannel(
+    channel: RelayEphemeralChannel<ActiveConnection>,
+    reason: RelayChannelClosedReason,
+  ): Promise<void> {
+    if (!this.#removeChannel(channel)) return
+    this.#metrics.channelClosed += 1
+    await Promise.all([
+      this.#sendIfCurrent(channel.controller, {
+        ...this.#channelBinding(channel, channel.controller),
+        type: 'channel.closed',
+        requestId: channel.requestId,
+        reason,
+      }),
+      this.#sendIfCurrent(channel.node, {
+        ...this.#channelBinding(channel, channel.node),
+        type: 'channel.closed',
+        requestId: channel.requestId,
+        reason,
+      }),
+    ])
+  }
+
+  async #failChannel(
+    channel: RelayEphemeralChannel<ActiveConnection>,
+    code:
+      | 'stale_channel'
+      | 'invalid_state'
+      | 'flow_control_violation'
+      | 'capacity_reached'
+      | 'not_authorized'
+      | 'peer_unavailable'
+      | 'internal',
+  ): Promise<void> {
+    if (!this.#removeChannel(channel)) return
+    this.#metrics.channelErrors += 1
+    await Promise.all([
+      this.#sendIfCurrent(channel.controller, {
+        ...this.#channelBinding(channel, channel.controller),
+        type: 'channel.error',
+        requestId: channel.requestId,
+        code,
+      }),
+      this.#sendIfCurrent(channel.node, {
+        ...this.#channelBinding(channel, channel.node),
+        type: 'channel.error',
+        requestId: channel.requestId,
+        code,
+      }),
+    ])
+  }
+
+  async #sendIfCurrent(
+    connection: ActiveConnection,
+    message: unknown,
+  ): Promise<void> {
+    if (!this.#registry.owns(connection) || connection.invalidated) return
+    await connection.channel
+      .send(message, {
+        timeoutMs: this.#options.channelAcknowledgementTimeoutMs,
+      })
+      .catch(() => undefined)
+  }
+
+  #startChannelOpenTimer(
+    channel: RelayEphemeralChannel<ActiveConnection>,
+  ): void {
+    const timer = setTimeout(() => {
+      if (!this.#channels.owns(channel) || channel.state !== 'opening') return
+      void this.#closeChannel(channel, 'timeout')
+    }, this.#options.channelOpenTimeoutMs)
+    timer.unref()
+    this.#channelOpenTimers.set(channel.channelId, timer)
+  }
+
+  #clearChannelOpenTimer(channelId: RelayChannelId): void {
+    const timer = this.#channelOpenTimers.get(channelId)
+    if (timer !== undefined) clearTimeout(timer)
+    this.#channelOpenTimers.delete(channelId)
+  }
+
+  #startChannelAcknowledgementTimer(
+    channel: RelayEphemeralChannel<ActiveConnection>,
+    senderRole: 'controller' | 'node',
+    sequence: number,
+  ): void {
+    const key = channelAcknowledgementKey(channel.channelId, senderRole)
+    const timer = setTimeout(() => {
+      if (!this.#channels.owns(channel)) return
+      const outstanding =
+        senderRole === 'controller'
+          ? channel.controllerOutstandingSequence
+          : channel.nodeOutstandingSequence
+      if (outstanding !== sequence) return
+      this.#metrics.channelBackpressureFailures += 1
+      void this.#failChannel(channel, 'flow_control_violation')
+    }, this.#options.channelAcknowledgementTimeoutMs)
+    timer.unref()
+    this.#channelAcknowledgementTimers.set(key, timer)
+  }
+
+  #clearChannelAcknowledgementTimer(
+    channel: RelayEphemeralChannel<ActiveConnection>,
+    senderRole: 'controller' | 'node',
+  ): void {
+    const key = channelAcknowledgementKey(channel.channelId, senderRole)
+    const timer = this.#channelAcknowledgementTimers.get(key)
+    if (timer !== undefined) clearTimeout(timer)
+    this.#channelAcknowledgementTimers.delete(key)
+  }
+
+  #removeChannel(channel: RelayEphemeralChannel<ActiveConnection>): boolean {
+    if (!this.#channels.remove(channel)) return false
+    this.#clearChannelOpenTimer(channel.channelId)
+    this.#clearChannelAcknowledgementTimer(channel, 'controller')
+    this.#clearChannelAcknowledgementTimer(channel, 'node')
+    this.#rememberClosedChannel(channel)
+    return true
+  }
+
+  #rememberClosedChannel(
+    channel: RelayEphemeralChannel<ActiveConnection>,
+  ): void {
+    const previous = this.#closedChannelTombstones.get(channel.channelId)
+    if (previous !== undefined) clearTimeout(previous.timer)
+    this.#closedChannelTombstones.delete(channel.channelId)
+    while (
+      this.#closedChannelTombstones.size >= this.#options.maximumChannels
+    ) {
+      const oldestId = this.#closedChannelTombstones.keys().next().value as
+        RelayChannelId | undefined
+      if (oldestId === undefined) break
+      const oldest = this.#closedChannelTombstones.get(oldestId)
+      if (oldest !== undefined) clearTimeout(oldest.timer)
+      this.#closedChannelTombstones.delete(oldestId)
+    }
+    const timer = setTimeout(() => {
+      if (
+        this.#closedChannelTombstones.get(channel.channelId)?.timer === timer
+      ) {
+        this.#closedChannelTombstones.delete(channel.channelId)
+      }
+    }, this.#options.channelAcknowledgementTimeoutMs)
+    timer.unref()
+    this.#closedChannelTombstones.set(channel.channelId, {
+      channel,
+      timer,
+      exactLateFrames: 0,
+    })
+  }
+
+  #clearClosedChannelTombstones(): void {
+    for (const tombstone of this.#closedChannelTombstones.values()) {
+      clearTimeout(tombstone.timer)
+    }
+    this.#closedChannelTombstones.clear()
+  }
+
+  async #closeChannelsForConnection(
+    connection: ActiveConnection,
+    reason: RelayChannelClosedReason,
+  ): Promise<void> {
+    await Promise.all(
+      this.#channels
+        .channelsForConnection(connection)
+        .map((channel) => this.#closeChannel(channel, reason)),
+    )
+  }
+
+  async #closeUnauthorizedChannelsForNode(
+    node: ActiveConnection,
+  ): Promise<void> {
+    await Promise.all(
+      this.#channels
+        .channelsForConnection(node)
+        .filter(
+          (channel) =>
+            !this.#store.canControllerObserveNode(
+              channel.controller.peer.fingerprint,
+              node.peer.fingerprint,
+            ),
+        )
+        .map((channel) => this.#closeChannel(channel, 'authorization_revoked')),
+    )
+  }
+
+  async #closeAllChannels(reason: RelayChannelClosedReason): Promise<void> {
+    await Promise.all(
+      this.#channels
+        .values()
+        .map((channel) => this.#closeChannel(channel, reason)),
+    )
   }
 
   async #heartbeat(connection: ActiveConnection): Promise<void> {
@@ -792,6 +1581,64 @@ export class RelayService {
   #recordRateLimit(): void {
     this.#metrics.rateLimitEvents += 1
     this.#logger.log('rate_limit.applied', { code: 'rate_limited' })
+  }
+
+  #observeFramingQueue(
+    connection: FramedRelayConnection,
+    next: RelayFramingQueueMetrics,
+  ): void {
+    const previous = this.#framingQueues.get(connection)
+    if (previous === undefined) return
+    this.#framingQueues.set(connection, next)
+    this.#framingQueueTotals.queuedInboundFrames +=
+      next.queuedInboundFrames - previous.queuedInboundFrames
+    this.#framingQueueTotals.queuedInboundBytes +=
+      next.queuedInboundBytes - previous.queuedInboundBytes
+    this.#framingQueueTotals.pendingOutboundFrames +=
+      next.pendingOutboundFrames - previous.pendingOutboundFrames
+    this.#framingQueueTotals.pendingOutboundBytes +=
+      next.pendingOutboundBytes - previous.pendingOutboundBytes
+    this.#observeFramingQueueHighWater()
+  }
+
+  #removeFramingQueue(connection: FramedRelayConnection): void {
+    const previous = this.#framingQueues.get(connection)
+    if (previous === undefined) return
+    this.#framingQueues.delete(connection)
+    this.#framingQueueTotals.queuedInboundFrames -= previous.queuedInboundFrames
+    this.#framingQueueTotals.queuedInboundBytes -= previous.queuedInboundBytes
+    this.#framingQueueTotals.pendingOutboundFrames -=
+      previous.pendingOutboundFrames
+    this.#framingQueueTotals.pendingOutboundBytes -=
+      previous.pendingOutboundBytes
+  }
+
+  #observeFramingQueueHighWater(): void {
+    const frames =
+      this.#framingQueueTotals.queuedInboundFrames +
+      this.#framingQueueTotals.pendingOutboundFrames
+    const bytes =
+      this.#framingQueueTotals.queuedInboundBytes +
+      this.#framingQueueTotals.pendingOutboundBytes
+    this.#framedQueueFramesHighWaterMark = Math.max(
+      this.#framedQueueFramesHighWaterMark,
+      frames,
+    )
+    this.#framedQueueBytesHighWaterMark = Math.max(
+      this.#framedQueueBytesHighWaterMark,
+      bytes,
+    )
+  }
+
+  #observePendingChannelData(): void {
+    this.#pendingChannelDataFramesHighWaterMark = Math.max(
+      this.#pendingChannelDataFramesHighWaterMark,
+      this.#channels.outstandingDataFrames,
+    )
+    this.#pendingChannelDataBytesHighWaterMark = Math.max(
+      this.#pendingChannelDataBytesHighWaterMark,
+      this.#channels.outstandingDataBytes,
+    )
   }
 
   #createManagementServer(): HttpServer {
@@ -900,6 +1747,17 @@ function normalizeAddress(address: string | undefined): string {
   return address.length <= 64 ? address : 'oversized-address'
 }
 
+function channelAcknowledgementKey(
+  channelId: RelayChannelId,
+  senderRole: 'controller' | 'node',
+): string {
+  return `${channelId}:${senderRole}`
+}
+
+function decodedBase64UrlBytes(value: string): number {
+  return Math.floor((value.length * 3) / 4)
+}
+
 function currentFileDescriptorCount(): number | null {
   try {
     return readdirSync('/proc/self/fd').length
@@ -918,6 +1776,11 @@ function validateServiceBounds(options: {
   readonly heartbeatTimeoutMs: number
   readonly handshakeTimeoutMs: number
   readonly challengeLifetimeMs: number
+  readonly maximumChannels: number
+  readonly maximumChannelsPerPeer: number
+  readonly maximumChannelOpenAttemptsPerMinute: number
+  readonly channelOpenTimeoutMs: number
+  readonly channelAcknowledgementTimeoutMs: number
 }): void {
   if (!['127.0.0.1', '::1', 'localhost'].includes(options.managementHost)) {
     throw new RangeError('Relay management listener must be loopback-only')
@@ -950,7 +1813,26 @@ function validateServiceBounds(options: {
     options.handshakeTimeoutMs > relayProtocolLimits.handshakeTimeoutMs ||
     !Number.isSafeInteger(options.challengeLifetimeMs) ||
     options.challengeLifetimeMs <= 0 ||
-    options.challengeLifetimeMs > relayProtocolLimits.challengeLifetimeMs
+    options.challengeLifetimeMs > relayProtocolLimits.challengeLifetimeMs ||
+    !Number.isSafeInteger(options.maximumChannels) ||
+    options.maximumChannels <= 0 ||
+    options.maximumChannels > relayProtocolLimits.maximumChannels ||
+    !Number.isSafeInteger(options.maximumChannelsPerPeer) ||
+    options.maximumChannelsPerPeer <= 0 ||
+    options.maximumChannelsPerPeer > options.maximumChannels ||
+    options.maximumChannelsPerPeer >
+      relayProtocolLimits.maximumChannelsPerPeer ||
+    !Number.isSafeInteger(options.maximumChannelOpenAttemptsPerMinute) ||
+    options.maximumChannelOpenAttemptsPerMinute <= 0 ||
+    options.maximumChannelOpenAttemptsPerMinute >
+      relayProtocolLimits.maximumChannelOpenAttemptsPerMinute ||
+    !Number.isSafeInteger(options.channelOpenTimeoutMs) ||
+    options.channelOpenTimeoutMs <= 0 ||
+    options.channelOpenTimeoutMs > relayProtocolLimits.channelOpenTimeoutMs ||
+    !Number.isSafeInteger(options.channelAcknowledgementTimeoutMs) ||
+    options.channelAcknowledgementTimeoutMs <= 0 ||
+    options.channelAcknowledgementTimeoutMs >
+      relayProtocolLimits.channelAcknowledgementTimeoutMs
   ) {
     throw new RangeError('Relay service bounds are invalid')
   }

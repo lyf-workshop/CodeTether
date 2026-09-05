@@ -277,8 +277,8 @@ interface RemoteWorker {
   cycleAbort?: AbortController
   connection?: AuthenticatedRemoteMachineConnection
   transport?: Exclude<MachineExecutionTransport, 'unavailable'>
-  /** Exact outer Relay generation that owns the established idle route. */
-  relayEpoch?: string
+  /** Exact composite Relay Machine route generation for the idle route. */
+  relayGeneration?: string
   task?: Promise<void>
 }
 
@@ -292,7 +292,7 @@ interface ProviderDiscoveryTask {
 
 interface RelayVerificationTask {
   readonly abort: AbortController
-  readonly relayEpoch: string
+  readonly relayGeneration: string
   task?: Promise<void>
 }
 
@@ -301,14 +301,14 @@ type RoutedMachineConnection =
       readonly connection: AuthenticatedRemoteMachineConnection
       readonly transport: 'direct'
       readonly endpoint: DurableTrustedMachineEndpoint
-      readonly relayEpoch?: never
+      readonly relayGeneration?: never
     }
   | {
       readonly connection: AuthenticatedRemoteMachineConnection
       readonly transport: 'relay'
       readonly endpoint?: never
-      /** The exact outer Relay generation that carried peer authentication. */
-      readonly relayEpoch: string
+      /** Exact composite route generation that carried peer authentication. */
+      readonly relayGeneration: string
     }
 
 interface TrackedExecutionSession {
@@ -332,6 +332,12 @@ export interface RelayMachineTransport {
   }
   /** Exact process-private outer Relay epoch when one is current. */
   connectionEpoch?(machineId: MachineId): string | undefined
+  /**
+   * Exact process-private Controller/Node route generation when execution is
+   * currently eligible. Implementations predating route generations may omit
+   * this and retain connectionEpoch compatibility.
+   */
+  machineRouteGeneration?(machineId: MachineId): string | undefined
   openMachineChannel(
     trust: DurableTrustedMachinePeer,
     signal?: AbortSignal,
@@ -491,32 +497,36 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
     this.#unsubscribeRelayStatus = this.#relayTransport?.subscribe(
       (machineId) => {
         const relayStatus = this.#relayTransport?.status(machineId)
-        const relayEpoch =
+        const relayGeneration =
           relayStatus?.internetExecutionEnabled === true
-            ? this.#relayTransport?.connectionEpoch?.(machineId)
+            ? this.#relayRouteGeneration(machineId)
             : undefined
-        this.#invalidateStaleRelayWorker(machineId, relayEpoch)
-        if (relayStatus?.internetExecutionEnabled !== true) {
-          // Reconnect creates a new Relay epoch/channel generation. The old
-          // inner Machine authentication proof cannot authorize that epoch.
+        if (
+          relayStatus?.internetExecutionEnabled !== true ||
+          relayGeneration === undefined
+        ) {
+          // Reconnect or lost presence invalidates the prior Controller/Node
+          // route generation. The old inner Machine authentication proof
+          // cannot authorize a later generation.
           this.#relayVerifiedMachines.delete(machineId)
+          this.#invalidateStaleRelayWorker(machineId, undefined)
           // A new online observation can race this asynchronous stop while the
           // old task still owns the per-Machine slot. Reconcile again only
-          // after that stale task has released ownership so the current Relay
-          // epoch always receives its own inner Machine authentication.
+          // after that stale task has released ownership so the current route
+          // generation always receives its own inner Machine authentication.
           void this.#stopRelayVerification(machineId).then(() => {
             this.#reconcileRelayVerification(machineId)
           })
           return
         }
-        if (relayEpoch === undefined) return
-        if (this.#relayVerifiedMachines.get(machineId) !== relayEpoch) {
+        if (this.#relayVerifiedMachines.get(machineId) !== relayGeneration) {
           this.#relayVerifiedMachines.delete(machineId)
         }
+        this.#invalidateStaleRelayWorker(machineId, relayGeneration)
         const verification = this.#relayVerificationTasks.get(machineId)
         if (
           verification !== undefined &&
-          verification.relayEpoch !== relayEpoch
+          verification.relayGeneration !== relayGeneration
         ) {
           void this.#stopRelayVerification(machineId).then(() => {
             this.#reconcileRelayVerification(machineId)
@@ -554,10 +564,11 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
 
   relayExecutionAvailable(machineId: MachineId): boolean {
     const id = MachineIdSchema.parse(machineId)
+    const relayGeneration = this.#relayRouteGeneration(id)
     return (
+      relayGeneration !== undefined &&
       this.#persistence.getTrustedMachinePeer(id)?.trustState === 'active' &&
-      this.#relayVerifiedMachines.get(id) ===
-        this.#relayTransport?.connectionEpoch?.(id) &&
+      this.#relayVerifiedMachines.get(id) === relayGeneration &&
       this.#relayTransport?.status(id).internetExecutionEnabled === true
     )
   }
@@ -1146,7 +1157,7 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
       ) {
         let stream: Duplex | undefined
         try {
-          const relayEpoch = this.#requireCurrentRelayEpoch(id)
+          const relayGeneration = this.#requireCurrentRelayGeneration(id)
           const endpoint = current.trust.endpoints[0]
           if (endpoint === undefined) {
             throw new RemoteMachineCoordinatorError(
@@ -1168,14 +1179,14 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
             rootPath: input.rootPath,
             ...(providerThreadId === undefined ? {} : { providerThreadId }),
           })
-          this.#assertCurrentRelayEpoch(id, relayEpoch)
+          this.#assertCurrentRelayGeneration(id, relayGeneration)
           stream = undefined
           this.#persistence.recordTrustedMachineRelayAuthentication(
             id,
             TimestampSchema.parse(this.#now().toISOString()),
           )
           this.#lastExecutionTransports.set(id, 'relay')
-          this.#markRelayVerified(id, relayEpoch)
+          this.#markRelayVerified(id, relayGeneration)
           return remoteCodexRuntimeSession(
             session,
             'relay',
@@ -1311,7 +1322,7 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
       ) {
         let stream: Duplex | undefined
         try {
-          const relayEpoch = this.#requireCurrentRelayEpoch(id)
+          const relayGeneration = this.#requireCurrentRelayGeneration(id)
           const endpoint = current.trust.endpoints[0]
           if (endpoint === undefined) {
             throw new RemoteMachineCoordinatorError(
@@ -1342,14 +1353,14 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
                   providerSessionMaterialized:
                     input.providerSessionMaterialized === true,
                 })
-          this.#assertCurrentRelayEpoch(id, relayEpoch)
+          this.#assertCurrentRelayGeneration(id, relayGeneration)
           stream = undefined
           this.#persistence.recordTrustedMachineRelayAuthentication(
             id,
             TimestampSchema.parse(this.#now().toISOString()),
           )
           this.#lastExecutionTransports.set(id, 'relay')
-          this.#markRelayVerified(id, relayEpoch)
+          this.#markRelayVerified(id, relayGeneration)
           return remoteClaudeRuntimeSession(
             session,
             'relay',
@@ -1667,7 +1678,7 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
     worker.cycleAbort?.abort()
     const connection = worker.connection
     worker.connection = undefined
-    worker.relayEpoch = undefined
+    worker.relayGeneration = undefined
     connection?.close()
     this.#cancelStableProviderDiscovery(machineId)
     this.#cancelAutomaticProviderDiscovery(machineId)
@@ -1676,12 +1687,12 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
 
   #invalidateStaleRelayWorker(
     machineId: MachineId,
-    currentRelayEpoch: string | undefined,
+    currentRelayGeneration: string | undefined,
   ): void {
     const worker = this.#workers.get(machineId)
     if (
       worker?.transport !== 'relay' ||
-      worker.relayEpoch === currentRelayEpoch
+      worker.relayGeneration === currentRelayGeneration
     ) {
       return
     }
@@ -1902,13 +1913,11 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
     machine: DurableMachine,
     trust: DurableTrustedMachinePeer,
   ): void {
-    const relayEpoch = this.#relayTransport?.connectionEpoch?.(
-      machine.machineId,
-    )
+    const relayGeneration = this.#relayRouteGeneration(machine.machineId)
     if (
       this.#closed ||
-      relayEpoch === undefined ||
-      this.#relayVerifiedMachines.get(machine.machineId) === relayEpoch ||
+      relayGeneration === undefined ||
+      this.#relayVerifiedMachines.get(machine.machineId) === relayGeneration ||
       this.#relayVerificationTasks.has(machine.machineId) ||
       this.#relayTransport === undefined ||
       this.#transport.connectTrustedOverStream === undefined
@@ -1917,13 +1926,13 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
     }
     const task: RelayVerificationTask = {
       abort: new AbortController(),
-      relayEpoch,
+      relayGeneration,
     }
     this.#relayVerificationTasks.set(machine.machineId, task)
     task.task = this.#verifyRelayMachine(
       machine,
       trust,
-      relayEpoch,
+      relayGeneration,
       task.abort.signal,
     ).finally(() => {
       if (this.#relayVerificationTasks.get(machine.machineId) === task) {
@@ -1954,7 +1963,7 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
   async #verifyRelayMachine(
     machine: DurableMachine,
     trust: DurableTrustedMachinePeer,
-    relayEpoch: string,
+    relayGeneration: string,
     signal: AbortSignal,
   ): Promise<void> {
     let stream: Duplex | undefined
@@ -1965,8 +1974,7 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
         current?.trustState !== 'active' ||
         current.nodeIdentity !== trust.nodeIdentity ||
         current.peerKeyFingerprint !== trust.peerKeyFingerprint ||
-        this.#relayTransport?.connectionEpoch?.(machine.machineId) !==
-          relayEpoch ||
+        this.#relayRouteGeneration(machine.machineId) !== relayGeneration ||
         this.#relayTransport?.status(machine.machineId)
           .internetExecutionEnabled !== true
       ) {
@@ -1992,8 +2000,7 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
         finalTrust?.trustState === 'active' &&
         finalTrust.nodeIdentity === trust.nodeIdentity &&
         finalTrust.peerKeyFingerprint === trust.peerKeyFingerprint &&
-        this.#relayTransport.connectionEpoch?.(machine.machineId) ===
-          relayEpoch &&
+        this.#relayRouteGeneration(machine.machineId) === relayGeneration &&
         this.#relayTransport.status(machine.machineId)
           .internetExecutionEnabled === true
       ) {
@@ -2001,7 +2008,7 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
           machine.machineId,
           TimestampSchema.parse(this.#now().toISOString()),
         )
-        this.#markRelayVerified(machine.machineId, relayEpoch)
+        this.#markRelayVerified(machine.machineId, relayGeneration)
       }
     } finally {
       connection?.close()
@@ -2136,7 +2143,9 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
     ) {
       let stream: Duplex | undefined
       try {
-        const relayEpoch = this.#requireCurrentRelayEpoch(machine.machineId)
+        const relayGeneration = this.#requireCurrentRelayGeneration(
+          machine.machineId,
+        )
         const identityEndpoint = trust.endpoints[0]
         if (identityEndpoint === undefined) {
           throw new RemoteMachineCoordinatorError(
@@ -2155,9 +2164,9 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
           stream,
           ...(signal === undefined ? {} : { signal }),
         })
-        this.#assertCurrentRelayEpoch(machine.machineId, relayEpoch)
+        this.#assertCurrentRelayGeneration(machine.machineId, relayGeneration)
         stream = undefined
-        return { connection, transport: 'relay', relayEpoch }
+        return { connection, transport: 'relay', relayGeneration }
       } catch (error) {
         stream?.destroy()
         if (error instanceof MachineTransportError && error.peerAuthenticated) {
@@ -2250,7 +2259,9 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
         this.#recordAttempt(machine.machineId)
         let stream: Duplex | undefined
         try {
-          const relayEpoch = this.#requireCurrentRelayEpoch(machine.machineId)
+          const relayGeneration = this.#requireCurrentRelayGeneration(
+            machine.machineId,
+          )
           const endpoint = trust.endpoints[0]
           if (endpoint === undefined) {
             throw new RemoteMachineCoordinatorError(
@@ -2272,9 +2283,9 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
             connection.close()
             signal.throwIfAborted()
           }
-          this.#assertCurrentRelayEpoch(machine.machineId, relayEpoch)
+          this.#assertCurrentRelayGeneration(machine.machineId, relayGeneration)
           stream = undefined
-          return { connection, transport: 'relay', relayEpoch }
+          return { connection, transport: 'relay', relayGeneration }
         } catch (error) {
           stream?.destroy()
           if (isPermanentConnectionError(error)) throw error
@@ -2298,8 +2309,8 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
   ): DurableTrustedMachinePeer {
     this.#lastExecutionTransports.set(machineId, route.transport)
     if (route.transport === 'relay') {
-      this.#assertCurrentRelayEpoch(machineId, route.relayEpoch)
-      this.#markRelayVerified(machineId, route.relayEpoch)
+      this.#assertCurrentRelayGeneration(machineId, route.relayGeneration)
+      this.#markRelayVerified(machineId, route.relayGeneration)
     }
     return route.endpoint === undefined
       ? this.#persistence.recordTrustedMachineRelayAuthentication(
@@ -2339,20 +2350,32 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
     )
   }
 
-  #requireCurrentRelayEpoch(machineId: MachineId): string {
-    const relayEpoch = this.#relayTransport?.connectionEpoch?.(machineId)
+  #relayRouteGeneration(machineId: MachineId): string | undefined {
+    const relayTransport = this.#relayTransport
+    if (relayTransport === undefined) return undefined
+    if (relayTransport.machineRouteGeneration !== undefined) {
+      return relayTransport.machineRouteGeneration(machineId)
+    }
+    return relayTransport.connectionEpoch?.(machineId)
+  }
+
+  #requireCurrentRelayGeneration(machineId: MachineId): string {
+    const relayGeneration = this.#relayRouteGeneration(machineId)
     if (
-      relayEpoch === undefined ||
+      relayGeneration === undefined ||
       this.#relayTransport?.status(machineId).internetExecutionEnabled !== true
     ) {
       throw this.#relayFailure(undefined, 'relay_transport_unavailable')
     }
-    return relayEpoch
+    return relayGeneration
   }
 
-  #assertCurrentRelayEpoch(machineId: MachineId, relayEpoch: string): void {
+  #assertCurrentRelayGeneration(
+    machineId: MachineId,
+    relayGeneration: string,
+  ): void {
     if (
-      this.#relayTransport?.connectionEpoch?.(machineId) !== relayEpoch ||
+      this.#relayRouteGeneration(machineId) !== relayGeneration ||
       this.#relayTransport?.status(machineId).internetExecutionEnabled !== true
     ) {
       throw this.#relayFailure(
@@ -2362,15 +2385,15 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
     }
   }
 
-  #markRelayVerified(machineId: MachineId, relayEpoch: string): void {
+  #markRelayVerified(machineId: MachineId, relayGeneration: string): void {
     if (
-      this.#relayTransport?.connectionEpoch?.(machineId) !== relayEpoch ||
+      this.#relayRouteGeneration(machineId) !== relayGeneration ||
       this.#relayTransport?.status(machineId).internetExecutionEnabled !== true
     ) {
       return
     }
-    if (this.#relayVerifiedMachines.get(machineId) === relayEpoch) return
-    this.#relayVerifiedMachines.set(machineId, relayEpoch)
+    if (this.#relayVerifiedMachines.get(machineId) === relayGeneration) return
+    this.#relayVerifiedMachines.set(machineId, relayGeneration)
     const state = this.#states.get(machineId)
     if (state === undefined) return
     for (const listener of this.#listeners) {
@@ -2435,8 +2458,8 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
         const connection = route.connection
         worker.connection = connection
         worker.transport = route.transport
-        worker.relayEpoch =
-          route.transport === 'relay' ? route.relayEpoch : undefined
+        worker.relayGeneration =
+          route.transport === 'relay' ? route.relayGeneration : undefined
         reconnect.noteConnected(this.#monotonicNow())
         connectedGeneration = true
         const authenticatedAt = TimestampSchema.parse(this.#now().toISOString())
@@ -2521,7 +2544,7 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
         const connection = worker.connection ?? authenticatedRoute?.connection
         worker.connection = undefined
         worker.transport = undefined
-        worker.relayEpoch = undefined
+        worker.relayGeneration = undefined
         connection?.close()
       }
       if (!reconnect.wakePending) {

@@ -14,6 +14,12 @@ export const machineTransportLimits = {
   maximumProjectLocationPathBytes: 4 * 1024,
   providerDiscoveryTimeoutMs: 8_000,
   providerProbeTimeoutMs: 5_000,
+  // Session admission may run the outer Claude version probe, preparation
+  // version probe, and auth-status probe serially (3 * 5s), followed on a
+  // cold Codex open by initialize and thread start/resume (2 * 30s), with a
+  // bounded 15s transport/scheduling margin. It is intentionally distinct
+  // from the already-running Provider discovery response budget above.
+  providerSessionOpenTimeoutMs: 90_000,
   maximumProviderProbeOutputBytes: 4 * 1024,
   maximumRemoteCodexPromptBytes: 8 * 1024,
   maximumRemoteCodexDeltaBytes: 8 * 1024,

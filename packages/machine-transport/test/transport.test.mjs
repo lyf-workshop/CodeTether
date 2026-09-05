@@ -8,6 +8,7 @@ import test from 'node:test'
 import { canonicalFailure } from '@codetether/agent-core'
 
 import {
+  AuthenticatedRemoteMachineConnection,
   FramedMachineConnection,
   MachineErrorMessageSchema,
   MachineFrameDecoder,
@@ -36,6 +37,104 @@ import {
   validateMachineTlsIdentity,
   verifyPairingConfirmationTag,
 } from '../dist/index.js'
+
+test('Provider session-ready waits use one distinct bounded cold-start budget', async () => {
+  assert.equal(
+    machineTransportLimits.providerSessionOpenTimeoutMs,
+    3 * 5_000 + 2 * 30_000 + 15_000,
+    'three discovery probes, two cold Codex requests, and margin are bounded',
+  )
+  assert.ok(
+    machineTransportLimits.providerSessionOpenTimeoutMs >
+      machineTransportLimits.providerDiscoveryTimeoutMs,
+  )
+  assert.ok(
+    machineTransportLimits.providerSessionOpenTimeoutMs <
+      machineTransportLimits.remoteCodexSessionIdleTimeoutMs,
+  )
+  assert.ok(
+    machineTransportLimits.providerSessionOpenTimeoutMs <
+      machineTransportLimits.remoteClaudeSessionIdleTimeoutMs,
+  )
+
+  const machine = {
+    machineId: 'machine_sessiontimeout01',
+    nodeId: 'node_sessiontimeout01',
+    displayName: 'Session timeout fixture',
+    platform: 'Linux',
+    architecture: 'x64',
+  }
+  for (const provider of ['codex', 'claude']) {
+    let request
+    const receiveOptions = []
+    const framed = {
+      closed: false,
+      async send(message) {
+        request = message
+      },
+      async receive(_schema, options) {
+        receiveOptions.push(options)
+        assert.ok(request)
+        return provider === 'codex'
+          ? {
+              type: 'codex.session.ready',
+              protocolVersion: 1,
+              requestId: request.requestId,
+              machineId: machine.machineId,
+              nodeId: machine.nodeId,
+              conversationId: request.conversationId,
+              providerThreadId: 'thread_session_timeout',
+              resumed: false,
+              executionProfile: 'codex-text-v1',
+            }
+          : {
+              type: 'claude.session.ready',
+              protocolVersion: 1,
+              requestId: request.requestId,
+              machineId: machine.machineId,
+              nodeId: machine.nodeId,
+              conversationId: request.conversationId,
+              providerSessionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+              resumed: false,
+              effort: 'high',
+              executionProfile: 'claude-restricted-read-search-v1',
+            }
+      },
+      end() {
+        this.closed = true
+      },
+      destroy() {
+        this.closed = true
+      },
+    }
+    const connection = new AuthenticatedRemoteMachineConnection(
+      framed,
+      'controller_sessiontimeout01',
+      machine,
+    )
+    if (provider === 'codex') {
+      await connection.openCodexSession({
+        conversationId: 'conv_session_timeout_codex',
+        projectId: 'proj_session_timeout_codex',
+        rootPath: '/srv/session-timeout',
+      })
+    } else {
+      await connection.openClaudeSession({
+        conversationId: 'conv_session_timeout_claude',
+        projectId: 'proj_session_timeout_claude',
+        rootPath: '/srv/session-timeout',
+        effort: 'high',
+      })
+    }
+    assert.equal(receiveOptions.length, 1)
+    assert.equal(
+      receiveOptions[0]?.timeoutMs,
+      machineTransportLimits.providerSessionOpenTimeoutMs,
+      `${provider} waits for its purpose-specific ready response`,
+    )
+    connection.close()
+  }
+})
 
 test('remote failure payloads carry only a canonical controlled diagnostic', () => {
   const occurredAt = '2026-09-02T12:00:00.000Z'

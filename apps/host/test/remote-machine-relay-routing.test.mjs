@@ -478,6 +478,106 @@ test('an established Relay worker is replaced before stale epoch callbacks can d
   })
 })
 
+test('a Node-only Relay replacement retires stale readiness before Project validation and Turn start', async () => {
+  await withRoutingFixture(async (fixture) => {
+    const staleHeartbeat = deferred()
+    fixture.behavior.machinePingGates.push(staleHeartbeat.promise)
+    const coordinator = await fixture.createCoordinator('relay_only', {
+      heartbeatIntervalMs: 20,
+    })
+    await fixture.waitUntilReady(coordinator)
+    await waitFor(
+      () => fixture.counts.pings === 1,
+      'Node generation A heartbeat callback',
+    )
+
+    const controllerEpoch = fixture.relayConnectionEpoch()
+    const nodeGenerationA = fixture.relayRouteGeneration()
+    const [generationAWorkerStream] =
+      fixture.openRelayStreamsForRouteGeneration(nodeGenerationA)
+    assert.ok(
+      generationAWorkerStream,
+      'Node generation A owns one idle Machine route',
+    )
+    const observedStates = []
+    const unsubscribe = coordinator.subscribeStatus((machineId, state) => {
+      if (machineId === fixture.machine.machineId) observedStates.push(state)
+    })
+
+    const nodeGenerationB = fixture.advanceNodeGeneration()
+    assert.equal(
+      fixture.relayConnectionEpoch(),
+      controllerEpoch,
+      'the Controller Relay connection is deliberately unchanged',
+    )
+    assert.notEqual(nodeGenerationB, nodeGenerationA)
+    assert.equal(
+      generationAWorkerStream.destroyed,
+      true,
+      'the Node replacement retires the old idle route synchronously',
+    )
+    assert.equal(
+      coordinator.relayExecutionAvailable(fixture.machine.machineId),
+      false,
+      'old Machine qualification cannot authorize the replacement Node route',
+    )
+
+    staleHeartbeat.reject(
+      new MachineTransportError(
+        'connection_failed',
+        'stale Node generation A heartbeat callback',
+      ),
+    )
+    await waitFor(
+      () =>
+        fixture.openRelayStreamsForRouteGeneration(nodeGenerationB).length ===
+          1 &&
+        coordinator.connectionState(fixture.machine.machineId) === 'online' &&
+        coordinator.relayExecutionAvailable(fixture.machine.machineId) &&
+        coordinator.providerExecutionAvailable(
+          fixture.machine.machineId,
+          'codex',
+        ),
+      'Node generation B authenticated idle Machine route',
+    )
+
+    const validated = await coordinator.validateProjectLocation(
+      fixture.machine,
+      fixture.trust(),
+      '/srv/projects/relay-routing',
+    )
+    assert.equal(validated.canonicalPath, '/srv/projects/relay-routing')
+    const before = fixture.snapshot()
+    const session = await coordinator.openCodexSession(
+      fixture.machine,
+      fixture.trust(),
+      codexSessionInput('node-replacement'),
+    )
+    const action = {
+      actionId: 'act_relay_node_replacement01',
+      turnId: 'turn_relay_node_replacement01',
+      prompt: 'execute once after the Node route replacement',
+    }
+    await session.startTurn(action)
+    await session.close()
+    unsubscribe()
+
+    assert.equal(
+      fixture.counts.relayCodexSessions,
+      before.relayCodexSessions + 1,
+    )
+    assert.deepEqual(fixture.turnStarts, [action])
+    assert.equal(fixture.counts.directCodexSessions, 0)
+    assert.equal(
+      observedStates.includes('offline') ||
+        observedStates.includes('recovery_required'),
+      false,
+      'the stale Node generation cannot demote replacement readiness',
+    )
+    await coordinator.close()
+  })
+})
+
 test('duplicate Relay-ready signals retain one pending Machine reconnect worker', async () => {
   await withRoutingFixture(async (fixture) => {
     const coordinator = await fixture.createCoordinator('direct_first')
@@ -934,6 +1034,7 @@ async function withRoutingFixture(run) {
   const behavior = {
     relayEnabled: true,
     relayEpoch: 1,
+    relayRouteGeneration: 1,
     directConnectionError: undefined,
     directConnectionGates: [],
     relayConnectionError: undefined,
@@ -970,6 +1071,7 @@ async function withRoutingFixture(run) {
   const relayStreams = new Set()
   const relayStreamHistory = []
   const relayStreamEpochs = new WeakMap()
+  const relayStreamRouteGenerations = new WeakMap()
   const relayListeners = new Set()
   const transport = {
     async beginPairing() {
@@ -1038,6 +1140,11 @@ async function withRoutingFixture(run) {
         ? `relay_connection_fixture_${behavior.relayEpoch}`
         : undefined
     },
+    machineRouteGeneration() {
+      return behavior.relayEnabled
+        ? `relay_connection_fixture_${behavior.relayEpoch}:${behavior.relayRouteGeneration}`
+        : undefined
+    },
     async openMachineChannel(_trust, signal) {
       counts.relayChannels += 1
       if (signal?.aborted === true) throw new Error('Relay channel aborted')
@@ -1046,6 +1153,10 @@ async function withRoutingFixture(run) {
       }
       const stream = new PassThrough()
       relayStreamEpochs.set(stream, behavior.relayEpoch)
+      relayStreamRouteGenerations.set(
+        stream,
+        relayTransport.machineRouteGeneration(),
+      )
       relayStreams.add(stream)
       relayStreamHistory.push(stream)
       stream.once('close', () => relayStreams.delete(stream))
@@ -1090,9 +1201,20 @@ async function withRoutingFixture(run) {
     relayEpoch() {
       return behavior.relayEpoch
     },
+    relayConnectionEpoch() {
+      return relayTransport.connectionEpoch()
+    },
+    relayRouteGeneration() {
+      return relayTransport.machineRouteGeneration()
+    },
     openRelayStreams(epoch) {
       return [...relayStreams].filter(
         (stream) => relayStreamEpochs.get(stream) === epoch,
+      )
+    },
+    openRelayStreamsForRouteGeneration(generation) {
+      return [...relayStreams].filter(
+        (stream) => relayStreamRouteGenerations.get(stream) === generation,
       )
     },
     notifyRelayStatus() {
@@ -1100,16 +1222,27 @@ async function withRoutingFixture(run) {
     },
     advanceRelayEpoch({ notify = true } = {}) {
       behavior.relayEpoch += 1
+      behavior.relayRouteGeneration += 1
       if (notify) {
         for (const listener of relayListeners) listener(machine.machineId)
       }
       return behavior.relayEpoch
     },
+    advanceNodeGeneration({ notify = true } = {}) {
+      behavior.relayRouteGeneration += 1
+      if (notify) {
+        for (const listener of relayListeners) listener(machine.machineId)
+      }
+      return relayTransport.machineRouteGeneration()
+    },
     snapshot() {
       return { ...counts }
     },
     setRelayEnabled(enabled) {
-      if (enabled && !behavior.relayEnabled) behavior.relayEpoch += 1
+      if (enabled && !behavior.relayEnabled) {
+        behavior.relayEpoch += 1
+        behavior.relayRouteGeneration += 1
+      }
       behavior.relayEnabled = enabled
       for (const listener of relayListeners) listener(machine.machineId)
     },

@@ -686,6 +686,69 @@ test('Controller recovery synchronously revokes stale Relay channel and presence
   })
 })
 
+test('Node rendezvous replacement advances Machine route generation without changing Controller epoch', async () => {
+  await withFixture(async (fixture) => {
+    fixture.store.configureMachineRelay(
+      fixture.machineId,
+      {
+        host: '39.104.94.53',
+        port: 443,
+        transportSecurity: 'pinned_identity',
+      },
+      relayFingerprint,
+      timestamp,
+    )
+    fixture.store.markMachineRelayEnrolled(fixture.machineId, timestamp)
+    let publishPresence
+    const connection = controlledConnection((_fingerprint, listener) => {
+      publishPresence = listener
+    }, 'relay_connection_node_replacement01')
+    const coordinator = await SecureControllerRelayCoordinator.create({
+      persistence: fixture.store,
+      clientBuildIdentity: 'phase7d-test',
+      credentialDirectory: fixture.credentialDirectory,
+      connect: async (options) => connectedResult(connection, options, false),
+    })
+    await waitFor(
+      () => coordinator.status(fixture.machineId).state === 'connected',
+    )
+
+    assert.equal(
+      coordinator.machineRouteGeneration(fixture.machineId),
+      undefined,
+      'a Controller connection alone is not an eligible Machine route',
+    )
+    publishPresence({ state: 'online' })
+    const controllerEpoch = coordinator.connectionEpoch(fixture.machineId)
+    const generationA = coordinator.machineRouteGeneration(fixture.machineId)
+    assert.ok(generationA)
+
+    // Relay publishes online again when the same enrolled Node identity
+    // replaces its connection. The Controller socket and its epoch remain
+    // current, but any Machine channel routed to the old Node is stale.
+    publishPresence({ state: 'online' })
+    const generationB = coordinator.machineRouteGeneration(fixture.machineId)
+    assert.equal(
+      coordinator.connectionEpoch(fixture.machineId),
+      controllerEpoch,
+    )
+    assert.ok(generationB)
+    assert.notEqual(generationB, generationA)
+
+    publishPresence({ state: 'offline' })
+    assert.equal(
+      coordinator.machineRouteGeneration(fixture.machineId),
+      undefined,
+    )
+    publishPresence({ state: 'online' })
+    assert.notEqual(
+      coordinator.machineRouteGeneration(fixture.machineId),
+      generationB,
+    )
+    await coordinator.close()
+  })
+})
+
 test('a late Controller Relay dial from an invalidated generation is closed and never adopted', async () => {
   await withFixture(async (fixture) => {
     fixture.store.configureMachineRelay(

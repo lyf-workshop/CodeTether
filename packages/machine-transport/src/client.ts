@@ -800,7 +800,7 @@ export class AuthenticatedRemoteMachineConnection {
       z.union([CodexSessionReadyMessageSchema, MachineErrorMessageSchema]),
       {
         signal: options.signal,
-        timeoutMs: machineTransportLimits.providerDiscoveryTimeoutMs,
+        timeoutMs: machineTransportLimits.providerSessionOpenTimeoutMs,
       },
     )
     if (response.type === 'machine.error') {
@@ -875,7 +875,7 @@ export class AuthenticatedRemoteMachineConnection {
       z.union([ClaudeSessionReadyMessageSchema, MachineErrorMessageSchema]),
       {
         signal: options.signal,
-        timeoutMs: machineTransportLimits.providerDiscoveryTimeoutMs,
+        timeoutMs: machineTransportLimits.providerSessionOpenTimeoutMs,
       },
     )
     if (response.type === 'machine.error') {

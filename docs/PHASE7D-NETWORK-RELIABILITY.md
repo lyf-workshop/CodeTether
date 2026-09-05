@@ -40,6 +40,8 @@ The following are ephemeral routing or liveness state:
 - Direct socket candidate and authenticated connection;
 - Controller and Node Relay TLS sockets;
 - Relay connection epoch;
+- process-private Relay Machine route generation, composed from the Controller
+  epoch and current Node rendezvous/presence sequence;
 - Relay Machine channel ID and generation;
 - inner Machine TLS session and traffic keys;
 - reconnect delay/timer and current presence observation;
@@ -123,29 +125,40 @@ still true:
 
 A late result is closed before it can publish online state, update endpoint
 preference, persist authentication time, install handlers, or start discovery.
-After authentication, any connection replacement creates a new ephemeral
-generation:
+After authentication, either endpoint's Relay replacement creates a new
+ephemeral Machine route generation:
 
 ```text
 same durable identities
         +
-new Relay connection epoch
+new Controller Relay epoch (Controller replacement)
+        or
+new Node rendezvous/presence sequence (Node replacement)
+        +
+new Controller/Node Machine route generation
         +
 new Relay Machine channel generation
         +
 fresh non-resumed inner Machine TLS session
 ```
 
-Phase 7B channel binding rejects old epoch/generation/sequence traffic. Phase
-7C requires a fresh TLS 1.3 handshake and exact end-peer pins. Host Machine
-workers reject a stale dial callback, and the Web runtime rejects an old loop
-generation or old Host `<epoch>:<seq>` event. Delayed `online`, `offline`,
-socket-error, channel-close, Machine-TLS, or observer events therefore cannot
-mutate a newer generation.
+Phase 7B channel binding rejects old epoch/generation/sequence traffic. A
+current Relay rendezvous observation advances the bounded process-private
+Machine route generation before status publication, including an
+online-to-online Node connection replacement that leaves the Controller epoch
+unchanged; ordinary heartbeats do not advance it. Host qualification and its
+idle Machine worker bind to that composite generation and are synchronously
+invalidated before old-route callbacks can publish current state. Phase 7C
+requires a fresh TLS 1.3 handshake and exact end-peer pins. Host Machine workers
+reject a stale dial callback, and the Web runtime rejects an old loop generation
+or old Host `<epoch>:<seq>` event. Delayed `online`, `offline`, socket-error,
+channel-close, Machine-TLS, or observer events therefore cannot mutate a newer
+generation.
 
-Connection epochs, channel IDs, timers, pending wakes, and current interface
-state are process-local and are never written to product or Relay persistence.
-Startup always reconstructs connectivity from durable configuration and trust.
+Connection epochs, Machine route generations, channel IDs, timers, pending
+wakes, and current interface state are process-local and are never written to
+product or Relay persistence. Startup always reconstructs connectivity from
+durable configuration and trust.
 
 ## Recovery state machine
 
@@ -200,8 +213,10 @@ only way to add a new Direct hint.
 
 Controller and Node Relay connections authenticate by durable endpoint keys,
 enrollment records, and the independently expected Relay identity. Their
-source IP, source port, and interface may change. A reconnect creates a new
-connection epoch without re-enrollment.
+source IP, source port, and interface may change. A Controller reconnect creates
+a new connection epoch without re-enrollment. A Node reconnect is also visible
+to an unchanged Controller connection as a fresh rendezvous observation and
+therefore advances that Machine's composite route generation.
 
 For a hostname endpoint, each new TLS connection uses the normal Node.js/OS
 resolution path rather than a CodeTether-owned permanent resolved-IP cache.
@@ -362,6 +377,15 @@ window before scheduling at most one discovery for the current generation. If
 the route flaps before that window, its timer is cancelled. Reconnect therefore
 does not spawn a provider probe on every transient transition, and cold reads
 do not probe or hydrate a Provider.
+
+The eight-second Machine Provider-discovery response budget remains separate
+from purpose-specific Provider session opening. Session ready is bounded at 90
+seconds: three sequential Provider-admission probes may consume five seconds
+each, cold Codex initialize and thread start/resume may consume 30 seconds
+each, and 15 seconds remains as a bounded transport/scheduling margin. A
+timeout after Machine authentication remains an uncertain session-open
+failure: it closes that route and never falls back or reissues the semantic
+operation.
 
 ## Web and SSE recovery
 

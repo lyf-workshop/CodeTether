@@ -63,6 +63,12 @@ export interface ControllerRelayCoordinator {
   status(machineId: MachineId): RelayMachineConnectivity
   /** Process-private current Relay epoch; never exposed through Protocol/Web. */
   connectionEpoch?(machineId: MachineId): RelayConnectionEpoch | undefined
+  /**
+   * Process-private generation of the current Controller/Node Relay route.
+   * It changes when either the Controller connection or the subscribed Node
+   * presence generation changes and is never exposed through Protocol/Web.
+   */
+  machineRouteGeneration?(machineId: MachineId): string | undefined
   subscribe(
     listener: (machineId: MachineId, status: RelayMachineConnectivity) => void,
   ): () => void
@@ -138,6 +144,7 @@ export class SecureControllerRelayCoordinator implements ControllerRelayCoordina
   readonly #monotonicNow: () => number
   readonly #workers = new Map<MachineId, RelayWorker>()
   readonly #statuses = new Map<MachineId, RelayMachineConnectivity>()
+  readonly #machineRouteSequences = new Map<MachineId, number>()
   readonly #listeners = new Set<
     (machineId: MachineId, status: RelayMachineConnectivity) => void
   >()
@@ -194,6 +201,20 @@ export class SecureControllerRelayCoordinator implements ControllerRelayCoordina
   connectionEpoch(machineId: MachineId): RelayConnectionEpoch | undefined {
     const id = MachineIdSchema.parse(machineId)
     return this.#workers.get(id)?.connection?.connectionEpoch
+  }
+
+  machineRouteGeneration(machineId: MachineId): string | undefined {
+    const id = MachineIdSchema.parse(machineId)
+    const connection = this.#workers.get(id)?.connection
+    const sequence = this.#machineRouteSequences.get(id)
+    if (
+      connection === undefined ||
+      sequence === undefined ||
+      this.status(id).internetExecutionEnabled !== true
+    ) {
+      return undefined
+    }
+    return `${connection.connectionEpoch}:${sequence}`
   }
 
   subscribe(
@@ -455,6 +476,7 @@ export class SecureControllerRelayCoordinator implements ControllerRelayCoordina
     await this.#stopWorker(id)
     this.#persistence.deleteMachineRelayConfiguration(id)
     this.#statuses.delete(id)
+    this.#machineRouteSequences.delete(id)
     const status = this.#durableStatus(id)
     for (const listener of this.#listeners) listener(id, status)
     return status
@@ -467,6 +489,7 @@ export class SecureControllerRelayCoordinator implements ControllerRelayCoordina
       [...this.#workers.keys()].map(async (id) => this.#stopWorker(id)),
     )
     this.#listeners.clear()
+    this.#machineRouteSequences.clear()
   }
 
   #startWorker(
@@ -575,6 +598,12 @@ export class SecureControllerRelayCoordinator implements ControllerRelayCoordina
             const current =
               this.#persistence.getMachineRelayConfiguration(machineId)
             if (current === undefined) return
+            // A rendezvous observation is emitted for meaningful Node
+            // presence/ownership changes, including online -> online Node
+            // replacement. It is not emitted by ordinary Relay heartbeats.
+            // Advance before publishing status so observers can synchronously
+            // retire qualification and idle Machine work from the old route.
+            this.#advanceMachineRouteSequence(machineId)
             this.#setStatus(
               machineId,
               this.#statusFromConfiguration(
@@ -824,6 +853,17 @@ export class SecureControllerRelayCoordinator implements ControllerRelayCoordina
     }
   }
 
+  #advanceMachineRouteSequence(machineId: MachineId): void {
+    const current = this.#machineRouteSequences.get(machineId) ?? 0
+    // Keep the process-private counter a bounded safe integer. Every
+    // intermediate generation synchronously invalidates the sole prior idle
+    // route, so deterministic rollover cannot retain a live predecessor.
+    this.#machineRouteSequences.set(
+      machineId,
+      current >= Number.MAX_SAFE_INTEGER ? 1 : current + 1,
+    )
+  }
+
   #requireConfiguration(
     machineId: MachineId,
   ): DurableMachineRelayConfiguration {
@@ -863,6 +903,10 @@ export class UnavailableControllerRelayCoordinator implements ControllerRelayCoo
   }
 
   connectionEpoch(): undefined {
+    return undefined
+  }
+
+  machineRouteGeneration(): undefined {
     return undefined
   }
 

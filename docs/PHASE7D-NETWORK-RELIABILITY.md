@@ -299,6 +299,18 @@ and a potentially accepted semantic operation remain authoritative and stop
 fallback exactly as in Phase 7B. Transport becoming available during an
 already admitted Turn cannot create a second execution.
 
+The Node also treats Provider-session socket ownership as ephemeral. A newer
+Machine connection from the same authenticated Controller may retire an older
+idle connection only when the Conversation, Project, canonical Project
+Location, native Provider session identity, and Provider options match
+exactly. Claude materialization state must match current Node truth as well.
+The Node closes the old runner and exact connection, waits for verified
+Provider cleanup, and only then resumes the same native session on the new
+connection. Missing or changed identity, an older connection generation,
+cleanup uncertainty, or any active Turn remains busy and cannot be evicted.
+This is idle transport requalification; it never migrates a Turn or replays an
+action.
+
 An authenticated Relay control epoch that encounters a channel/control
 protocol failure is retired in full and may reconnect through the same bounded
 coordinator. Exact terminal channel bindings remain as short bounded

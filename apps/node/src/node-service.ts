@@ -67,6 +67,7 @@ import {
   type RemoteCodexRunner,
   type RemoteCodexRunnerTurn,
 } from './remote-codex-runner.js'
+import type { RemoteProviderSessionConnectionOwner } from './remote-provider-session-owner.js'
 import { NodeStateStore, type TrustedController } from './state-store.js'
 
 const AuthenticatedRequestSchema = z.discriminatedUnion('type', [
@@ -136,6 +137,7 @@ export class CodeTetherNodeService extends EventEmitter {
   readonly #relayControl: { close(): Promise<void> } | undefined
   #server: Server | undefined
   #closing = false
+  #nextProviderSessionConnectionGeneration = 1n
   #closePromise: Promise<void> | undefined
 
   constructor(options: CodeTetherNodeOptions) {
@@ -562,6 +564,12 @@ export class CodeTetherNodeService extends EventEmitter {
           'Authenticated Machine identity did not match durable trust',
         )
       }
+      const providerSessionOwner: RemoteProviderSessionConnectionOwner = {
+        controllerId: trusted.controllerId,
+        generation: this.#nextProviderSessionConnectionGeneration,
+        retire: () => connection.destroy(),
+      }
+      this.#nextProviderSessionConnectionGeneration += 1n
       await connection.send({
         type: 'machine.status',
         protocolVersion: machineProtocolVersion,
@@ -646,7 +654,11 @@ export class CodeTetherNodeService extends EventEmitter {
           }
           const discovery = await this.#providerDetector.discover()
           assertRemoteCodexExecutionAdmission(discovery)
-          await this.#serveRemoteCodexSession(connection, request)
+          await this.#serveRemoteCodexSession(
+            connection,
+            request,
+            providerSessionOwner,
+          )
           return
         }
         if (request.type === 'claude.session.open') {
@@ -661,7 +673,11 @@ export class CodeTetherNodeService extends EventEmitter {
           }
           const discovery = await this.#providerDetector.discover()
           assertRemoteClaudeExecutionAdmission(discovery)
-          await this.#serveRemoteClaudeSession(connection, request)
+          await this.#serveRemoteClaudeSession(
+            connection,
+            request,
+            providerSessionOwner,
+          )
           return
         }
         if (request.controllerId !== trusted.controllerId) {
@@ -698,11 +714,12 @@ export class CodeTetherNodeService extends EventEmitter {
   async #serveRemoteCodexSession(
     connection: FramedMachineConnection,
     request: z.infer<typeof CodexSessionOpenMessageSchema>,
+    owner: RemoteProviderSessionConnectionOwner,
   ): Promise<void> {
     let runner: RemoteCodexRunner | undefined
     let released = false
     try {
-      runner = await this.#remoteCodexRunners.open(request)
+      runner = await this.#remoteCodexRunners.open(request, owner)
       await connection.send({
         type: 'codex.session.ready',
         protocolVersion: machineProtocolVersion,
@@ -874,11 +891,12 @@ export class CodeTetherNodeService extends EventEmitter {
   async #serveRemoteClaudeSession(
     connection: FramedMachineConnection,
     request: z.infer<typeof ClaudeSessionOpenMessageSchema>,
+    owner: RemoteProviderSessionConnectionOwner,
   ): Promise<void> {
     let runner: RemoteClaudeRunner | undefined
     let released = false
     try {
-      runner = await this.#remoteClaudeRunners.open(request)
+      runner = await this.#remoteClaudeRunners.open(request, owner)
       await connection.send({
         type: 'claude.session.ready',
         protocolVersion: machineProtocolVersion,

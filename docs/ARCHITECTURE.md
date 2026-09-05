@@ -1094,6 +1094,8 @@ Transport selection is immutable after a Machine session or Turn generation begi
 
 Provider native-session identity and Project Location are application state above transport. A fresh socket, Relay epoch, Machine channel, or inner TLS handshake therefore neither replaces a Codex/Claude native session nor creates another `(projectId, machineId)` Location. Native resume remains explicit on the next Turn and never uses transcript replay.
 
+A stale Direct or Relay socket can outlive its useful route after a network change. The Node assigns each authenticated Machine connection a process-local generation. A newer generation from the same paired Controller may supersede an older runner only while it is idle and only when its Conversation, Project, canonical root, exact native Provider session identity, and Provider options match. The old exact connection is retired and its Provider cleanup is awaited before the same native session is reopened. Active, mismatched, closing, or cleanup-uncertain ownership remains fail-closed and busy. Connection generations are not durable identity, and this handoff cannot migrate or replay an active Turn.
+
 ### Offline startup, recovery ordering, and limitations
 
 Host and Node startup always reconstruct connection coordination from durable trust/configuration; no pre-exit socket, channel, timer, or connection epoch is persisted or assumed live. Starting either peer while Relay or Internet access is unavailable leaves local runtime/history healthy and bounded retry active. Relay-first, Node-first, or Controller-last restoration converges through the same identity-authenticated workers. CodeTether does not queue a Prompt for later delivery while offline.

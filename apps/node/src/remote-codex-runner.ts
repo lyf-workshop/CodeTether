@@ -30,6 +30,7 @@ import {
 import { validateProjectLocationPath } from './project-location-validation.js'
 import { spawnNodeProviderProcess } from './provider-process-guardian.js'
 import { supportsRemoteCodexExecutionPlatform } from './provider-discovery.js'
+import type { RemoteProviderSessionConnectionOwner } from './remote-provider-session-owner.js'
 
 interface RemoteCodexClient {
   readonly startRemoteTextThread: (options: {
@@ -134,7 +135,10 @@ export class RemoteCodexRunnerPool {
     return this.#runners.size
   }
 
-  async open(request: CodexSessionOpenMessage): Promise<RemoteCodexRunner> {
+  async open(
+    request: CodexSessionOpenMessage,
+    owner?: RemoteProviderSessionConnectionOwner,
+  ): Promise<RemoteCodexRunner> {
     if (
       this.#closed ||
       !this.#executionSupported ||
@@ -142,23 +146,27 @@ export class RemoteCodexRunnerPool {
     ) {
       throw executionUnavailable()
     }
-    if (
-      this.#runners.has(request.conversationId) ||
-      this.#opening.has(request.conversationId)
-    ) {
+    if (this.#opening.has(request.conversationId)) {
       throw new MachineTransportError(
         'conversation_busy',
         'Remote Codex Conversation already has an owned session',
       )
     }
-    if (this.#runners.size + this.#opening.size >= this.#maximumSessions) {
+    const existing = this.#runners.get(request.conversationId)
+    if (
+      existing === undefined &&
+      this.#runners.size + this.#opening.size >= this.#maximumSessions
+    ) {
       throw new MachineTransportError(
         'busy',
         'Remote Codex session limit was reached',
       )
     }
 
-    const opening = this.#openRunner(request)
+    const opening =
+      existing === undefined
+        ? this.#openRunner(request, owner)
+        : this.#supersedeIdleRunner(existing, request, owner)
     this.#opening.set(request.conversationId, opening)
     try {
       return await opening
@@ -193,6 +201,7 @@ export class RemoteCodexRunnerPool {
 
   async #openRunner(
     request: CodexSessionOpenMessage,
+    owner?: RemoteProviderSessionConnectionOwner,
   ): Promise<RemoteCodexRunner> {
     const validated = await validateProjectLocationPath(request.rootPath)
     if (validated.canonicalPath !== request.rootPath) {
@@ -201,12 +210,25 @@ export class RemoteCodexRunnerPool {
         'Registered Project Location is no longer canonical',
       )
     }
+    return await this.#openValidatedRunner(
+      request,
+      validated.canonicalPath,
+      owner,
+    )
+  }
+
+  async #openValidatedRunner(
+    request: CodexSessionOpenMessage,
+    canonicalRoot: string,
+    owner?: RemoteProviderSessionConnectionOwner,
+  ): Promise<RemoteCodexRunner> {
     if (this.#closed) throw executionUnavailable()
     const runner = await RemoteCodexRunner.open({
       request,
-      canonicalRoot: validated.canonicalPath,
+      canonicalRoot,
       clientFactory: this.#clientFactory,
       onFatal: (ownedRunner) => this.#releaseAfterFatal(ownedRunner),
+      owner,
     })
     if (this.#closed) {
       await runner.close()
@@ -214,6 +236,50 @@ export class RemoteCodexRunnerPool {
     }
     this.#runners.set(request.conversationId, runner)
     return runner
+  }
+
+  async #supersedeIdleRunner(
+    existing: RemoteCodexRunner,
+    request: CodexSessionOpenMessage,
+    owner?: RemoteProviderSessionConnectionOwner,
+  ): Promise<RemoteCodexRunner> {
+    const validated = await validateProjectLocationPath(request.rootPath)
+    if (validated.canonicalPath !== request.rootPath) {
+      throw new MachineTransportError(
+        'project_location_path_invalid',
+        'Registered Project Location is no longer canonical',
+      )
+    }
+    const current = this.#runners.get(request.conversationId)
+    if (current === undefined) {
+      return await this.#openValidatedRunner(
+        request,
+        validated.canonicalPath,
+        owner,
+      )
+    }
+    if (
+      current !== existing ||
+      !existing.canBeSupersededBy(request, validated.canonicalPath, owner)
+    ) {
+      throw new MachineTransportError(
+        'conversation_busy',
+        'Remote Codex Conversation already has an owned session',
+      )
+    }
+
+    // close() marks the old runner closed synchronously before its first
+    // await. Retire the exact stale transport in the same turn of the event
+    // loop, then wait for verified Provider cleanup before resuming it on the
+    // new authenticated connection. An active Turn is never superseded.
+    const cleanup = this.release(existing)
+    existing.retireConnection()
+    await cleanup
+    return await this.#openValidatedRunner(
+      request,
+      validated.canonicalPath,
+      owner,
+    )
   }
 
   async #close(): Promise<void> {
@@ -280,6 +346,7 @@ interface OpenRemoteCodexRunnerOptions {
   readonly canonicalRoot: string
   readonly clientFactory: RemoteCodexClientFactory
   readonly onFatal: (runner: RemoteCodexRunner) => void
+  readonly owner?: RemoteProviderSessionConnectionOwner
 }
 
 export class RemoteCodexRunner {
@@ -290,6 +357,7 @@ export class RemoteCodexRunner {
   readonly resumed: boolean
   readonly #client: RemoteCodexClient
   readonly #onFatal: (runner: RemoteCodexRunner) => void
+  readonly #owner?: RemoteProviderSessionConnectionOwner
   readonly #actions = new Map<string, RemoteCodexRunnerTurn>()
   #activeTurn: RemoteCodexRunnerTurn | undefined
   #closed = false
@@ -303,6 +371,7 @@ export class RemoteCodexRunner {
     providerThreadId: string
     resumed: boolean
     onFatal: (runner: RemoteCodexRunner) => void
+    owner?: RemoteProviderSessionConnectionOwner
   }) {
     this.conversationId = options.request.conversationId
     this.projectId = options.request.projectId
@@ -311,6 +380,7 @@ export class RemoteCodexRunner {
     this.providerThreadId = options.providerThreadId
     this.resumed = options.resumed
     this.#onFatal = options.onFatal
+    this.#owner = options.owner
   }
 
   static async open(
@@ -356,6 +426,7 @@ export class RemoteCodexRunner {
         providerThreadId,
         resumed: options.request.providerThreadId !== undefined,
         onFatal: options.onFatal,
+        owner: options.owner,
       })
       if (startupFailure !== undefined) throw startupFailure
       return runner
@@ -372,6 +443,30 @@ export class RemoteCodexRunner {
       }
       throw mapProviderStartError(error)
     }
+  }
+
+  canBeSupersededBy(
+    request: CodexSessionOpenMessage,
+    canonicalRoot: string,
+    owner?: RemoteProviderSessionConnectionOwner,
+  ): boolean {
+    return (
+      !this.#closed &&
+      this.#activeTurn === undefined &&
+      this.#owner !== undefined &&
+      owner !== undefined &&
+      owner.controllerId === this.#owner.controllerId &&
+      owner.generation > this.#owner.generation &&
+      request.conversationId === this.conversationId &&
+      request.projectId === this.projectId &&
+      canonicalRoot === this.canonicalRoot &&
+      request.providerThreadId !== undefined &&
+      request.providerThreadId === this.providerThreadId
+    )
+  }
+
+  retireConnection(): void {
+    this.#owner?.retire()
   }
 
   async startTurn(

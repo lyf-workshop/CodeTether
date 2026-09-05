@@ -30,6 +30,7 @@ import {
 import { validateProjectLocationPath } from './project-location-validation.js'
 import { spawnNodeProviderProcess } from './provider-process-guardian.js'
 import { supportsRemoteClaudeExecutionPlatform } from './provider-discovery.js'
+import type { RemoteProviderSessionConnectionOwner } from './remote-provider-session-owner.js'
 
 interface RemoteClaudeSessionRuntime {
   readonly sessionId: string
@@ -126,7 +127,10 @@ export class RemoteClaudeRunnerPool {
     return this.#runners.size
   }
 
-  async open(request: ClaudeSessionOpenMessage): Promise<RemoteClaudeRunner> {
+  async open(
+    request: ClaudeSessionOpenMessage,
+    owner?: RemoteProviderSessionConnectionOwner,
+  ): Promise<RemoteClaudeRunner> {
     if (
       this.#closed ||
       !this.#executionSupported ||
@@ -134,23 +138,27 @@ export class RemoteClaudeRunnerPool {
     ) {
       throw executionUnavailable()
     }
-    if (
-      this.#runners.has(request.conversationId) ||
-      this.#opening.has(request.conversationId)
-    ) {
+    if (this.#opening.has(request.conversationId)) {
       throw new MachineTransportError(
         'conversation_busy',
         'Remote Claude Conversation already has an owned session',
       )
     }
-    if (this.#runners.size + this.#opening.size >= this.#maximumSessions) {
+    const existing = this.#runners.get(request.conversationId)
+    if (
+      existing === undefined &&
+      this.#runners.size + this.#opening.size >= this.#maximumSessions
+    ) {
       throw new MachineTransportError(
         'busy',
         'Remote Claude session limit was reached',
       )
     }
 
-    const opening = this.#openRunner(request)
+    const opening =
+      existing === undefined
+        ? this.#openRunner(request, owner)
+        : this.#supersedeIdleRunner(existing, request, owner)
     this.#opening.set(request.conversationId, opening)
     try {
       return await opening
@@ -184,6 +192,7 @@ export class RemoteClaudeRunnerPool {
 
   async #openRunner(
     request: ClaudeSessionOpenMessage,
+    owner?: RemoteProviderSessionConnectionOwner,
   ): Promise<RemoteClaudeRunner> {
     const validated = await validateProjectLocationPath(request.rootPath)
     if (validated.canonicalPath !== request.rootPath) {
@@ -192,12 +201,25 @@ export class RemoteClaudeRunnerPool {
         'Registered Project Location is no longer canonical',
       )
     }
+    return await this.#openValidatedRunner(
+      request,
+      validated.canonicalPath,
+      owner,
+    )
+  }
+
+  async #openValidatedRunner(
+    request: ClaudeSessionOpenMessage,
+    canonicalRoot: string,
+    owner?: RemoteProviderSessionConnectionOwner,
+  ): Promise<RemoteClaudeRunner> {
     if (this.#closed) throw executionUnavailable()
     const runner = await RemoteClaudeRunner.open({
       request,
-      canonicalRoot: validated.canonicalPath,
+      canonicalRoot,
       runtimeFactory: this.#runtimeFactory,
       onFatal: (ownedRunner) => this.#releaseAfterFatal(ownedRunner),
+      owner,
     })
     if (this.#closed) {
       await runner.close()
@@ -205,6 +227,46 @@ export class RemoteClaudeRunnerPool {
     }
     this.#runners.set(request.conversationId, runner)
     return runner
+  }
+
+  async #supersedeIdleRunner(
+    existing: RemoteClaudeRunner,
+    request: ClaudeSessionOpenMessage,
+    owner?: RemoteProviderSessionConnectionOwner,
+  ): Promise<RemoteClaudeRunner> {
+    const validated = await validateProjectLocationPath(request.rootPath)
+    if (validated.canonicalPath !== request.rootPath) {
+      throw new MachineTransportError(
+        'project_location_path_invalid',
+        'Registered Project Location is no longer canonical',
+      )
+    }
+    const current = this.#runners.get(request.conversationId)
+    if (current === undefined) {
+      return await this.#openValidatedRunner(
+        request,
+        validated.canonicalPath,
+        owner,
+      )
+    }
+    if (
+      current !== existing ||
+      !existing.canBeSupersededBy(request, validated.canonicalPath, owner)
+    ) {
+      throw new MachineTransportError(
+        'conversation_busy',
+        'Remote Claude Conversation already has an owned session',
+      )
+    }
+
+    const cleanup = this.release(existing)
+    existing.retireConnection()
+    await cleanup
+    return await this.#openValidatedRunner(
+      request,
+      validated.canonicalPath,
+      owner,
+    )
   }
 
   async #close(): Promise<void> {
@@ -272,6 +334,7 @@ interface OpenRemoteClaudeRunnerOptions {
   readonly canonicalRoot: string
   readonly runtimeFactory: RemoteClaudeRuntimeFactory
   readonly onFatal: (runner: RemoteClaudeRunner) => void
+  readonly owner?: RemoteProviderSessionConnectionOwner
 }
 
 export class RemoteClaudeRunner {
@@ -284,6 +347,7 @@ export class RemoteClaudeRunner {
   readonly #runtime: RemoteClaudeSessionRuntime
   readonly #unsubscribe: () => void
   readonly #onFatal: (runner: RemoteClaudeRunner) => void
+  readonly #owner?: RemoteProviderSessionConnectionOwner
   readonly #actions = new Map<string, RemoteClaudeRunnerTurn>()
   #activeTurn: RemoteClaudeRunnerTurn | undefined
   #closed = false
@@ -294,6 +358,7 @@ export class RemoteClaudeRunner {
     canonicalRoot: string
     runtime: RemoteClaudeSessionRuntime
     onFatal: (runner: RemoteClaudeRunner) => void
+    owner?: RemoteProviderSessionConnectionOwner
   }) {
     this.conversationId = options.request.conversationId
     this.projectId = options.request.projectId
@@ -305,6 +370,7 @@ export class RemoteClaudeRunner {
     this.resumed = options.request.providerSessionMaterialized === true
     this.effort = options.request.effort
     this.#onFatal = options.onFatal
+    this.#owner = options.owner
     this.#unsubscribe = this.#runtime.subscribeEvents((event) =>
       this.handleProviderEvent(event),
     )
@@ -345,6 +411,7 @@ export class RemoteClaudeRunner {
         canonicalRoot: options.canonicalRoot,
         runtime,
         onFatal: options.onFatal,
+        owner: options.owner,
       })
     } catch (error) {
       if (
@@ -367,6 +434,33 @@ export class RemoteClaudeRunner {
       }
       throw mapProviderStartError(error)
     }
+  }
+
+  canBeSupersededBy(
+    request: ClaudeSessionOpenMessage,
+    canonicalRoot: string,
+    owner?: RemoteProviderSessionConnectionOwner,
+  ): boolean {
+    const materialized = this.resumed || this.#actions.size > 0
+    return (
+      !this.#closed &&
+      this.#activeTurn === undefined &&
+      this.#owner !== undefined &&
+      owner !== undefined &&
+      owner.controllerId === this.#owner.controllerId &&
+      owner.generation > this.#owner.generation &&
+      request.conversationId === this.conversationId &&
+      request.projectId === this.projectId &&
+      canonicalRoot === this.canonicalRoot &&
+      request.providerSessionId !== undefined &&
+      request.providerSessionId === this.providerSessionId &&
+      request.providerSessionMaterialized === materialized &&
+      request.effort === this.effort
+    )
+  }
+
+  retireConnection(): void {
+    this.#owner?.retire()
   }
 
   async startTurn(

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, realpath, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -44,9 +44,10 @@ class FakeClaudeRuntime {
   completions = []
   closeCount = 0
 
-  constructor(sessionId, cwd) {
+  constructor(sessionId, cwd, closeGate = Promise.resolve()) {
     this.sessionId = sessionId
     this.cwd = cwd
+    this.closeGate = closeGate
   }
 
   subscribeEvents(listener) {
@@ -72,6 +73,7 @@ class FakeClaudeRuntime {
 
   async close() {
     this.closeCount += 1
+    await this.closeGate
   }
 }
 
@@ -86,11 +88,28 @@ function runtimeHarness(options = {}) {
       const runtime = new FakeClaudeRuntime(
         options.returnedSessionId ?? input.providerSessionId ?? sessionId,
         input.cwd,
+        options.closeGate,
       )
       runtimes.push(runtime)
       return runtime
     },
   }
+}
+
+function connectionOwner(generation, retire = () => undefined) {
+  return {
+    controllerId: 'controller_remote_owner01',
+    generation: BigInt(generation),
+    retire,
+  }
+}
+
+function deferred() {
+  let resolve
+  const promise = new Promise((complete) => {
+    resolve = complete
+  })
+  return { promise, resolve }
 }
 
 async function collectTurn(turn) {
@@ -777,6 +796,179 @@ test('assigned and materialized native session identities select create versus r
     providerSessionId: sessionId,
     resume: true,
   })
+})
+
+test('a newer authenticated connection safely replaces the exact idle Claude session', async (t) => {
+  const temporary = await mkdtemp(join(tmpdir(), 'codetether-claude-handoff-'))
+  t.after(async () => await rm(temporary, { recursive: true, force: true }))
+  const root = await realpath(temporary)
+  const cleanup = deferred()
+  const harness = runtimeHarness({ closeGate: cleanup.promise })
+  const pool = new RemoteClaudeRunnerPool({ runtimeFactory: harness.factory })
+  t.after(async () => {
+    cleanup.resolve()
+    await pool.close()
+  })
+  let retired = 0
+
+  const stale = await pool.open(
+    sessionRequest(root, {
+      providerSessionId: sessionId,
+      providerSessionMaterialized: false,
+    }),
+    connectionOwner(1, () => {
+      retired += 1
+    }),
+  )
+  const turn = await stale.startTurn(turnRequest(stale.providerSessionId))
+  const runtime = harness.runtimes[0]
+  const timestamp = new Date().toISOString()
+  const base = {
+    provider: 'claude-code',
+    timestamp,
+    threadId: stale.providerSessionId,
+    turnId: turn.providerTurnId,
+  }
+  runtime.emit({
+    type: 'message.delta',
+    ...base,
+    itemId: 'message_handoff',
+    delta: 'safe marker',
+  })
+  runtime.emit({
+    type: 'message.completed',
+    ...base,
+    itemId: 'message_handoff',
+    message: 'safe marker',
+  })
+  runtime.emit({ type: 'turn.completed', ...base })
+  runtime.completions[0].resolve({
+    sessionId: stale.providerSessionId,
+    turnId: turn.providerTurnId,
+    finalMessage: 'safe marker',
+  })
+  await collectTurn(turn)
+
+  let replacementSettled = false
+  const replacementOpening = pool
+    .open(
+      sessionRequest(root, {
+        requestId: 'D'.repeat(43),
+        providerSessionId: sessionId,
+        providerSessionMaterialized: true,
+      }),
+      connectionOwner(2),
+    )
+    .then((next) => {
+      replacementSettled = true
+      return next
+    })
+  while (runtime.closeCount === 0) {
+    await new Promise((resolve) => setImmediate(resolve))
+  }
+  assert.equal(replacementSettled, false)
+  assert.equal(harness.runtimes.length, 1)
+  cleanup.resolve()
+  const replacement = await replacementOpening
+  assert.equal(retired, 1)
+  assert.equal(runtime.closeCount, 1)
+  assert.equal(replacement.resumed, true)
+  assert.deepEqual(harness.calls[1], {
+    cwd: root,
+    providerSessionId: sessionId,
+    resume: true,
+  })
+  await assert.rejects(
+    stale.startTurn(
+      turnRequest(stale.providerSessionId, {
+        actionId: 'act_remote_claude_stale',
+        turnId: 'turn_remote_claude_stale',
+      }),
+    ),
+    (error) => error.code === 'provider_session_lost',
+  )
+  await pool.release(stale)
+  assert.equal(pool.activeCount, 1)
+  await pool.release(replacement)
+  assert.equal(pool.activeCount, 0)
+})
+
+test('Claude idle-session handoff rejects active or mismatched ownership', async (t) => {
+  const temporary = await mkdtemp(
+    join(tmpdir(), 'codetether-claude-handoff-guard-'),
+  )
+  t.after(async () => await rm(temporary, { recursive: true, force: true }))
+  const root = await realpath(temporary)
+  const otherRootPath = join(temporary, 'other-root')
+  await mkdir(otherRootPath)
+  const otherRoot = await realpath(otherRootPath)
+  const harness = runtimeHarness()
+  const pool = new RemoteClaudeRunnerPool({ runtimeFactory: harness.factory })
+  t.after(async () => await pool.close())
+  let retired = 0
+  const runner = await pool.open(
+    sessionRequest(root, {
+      providerSessionId: sessionId,
+      providerSessionMaterialized: false,
+    }),
+    connectionOwner(10, () => {
+      retired += 1
+    }),
+  )
+  const exactUnused = sessionRequest(root, {
+    providerSessionId: sessionId,
+    providerSessionMaterialized: false,
+  })
+  const mismatches = [
+    [exactUnused, connectionOwner(10)],
+    [
+      exactUnused,
+      {
+        ...connectionOwner(11),
+        controllerId: 'controller_remote_owner02',
+      },
+    ],
+    [
+      {
+        ...exactUnused,
+        providerSessionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      },
+      connectionOwner(11),
+    ],
+    [
+      { ...exactUnused, projectId: 'proj_remote_claude02' },
+      connectionOwner(11),
+    ],
+    [{ ...exactUnused, rootPath: otherRoot }, connectionOwner(11)],
+    [{ ...exactUnused, effort: 'low' }, connectionOwner(11)],
+    [
+      { ...exactUnused, providerSessionMaterialized: true },
+      connectionOwner(11),
+    ],
+  ]
+  for (const [request, owner] of mismatches) {
+    await assert.rejects(
+      pool.open(request, owner),
+      (error) => error.code === 'conversation_busy',
+    )
+  }
+  assert.equal(retired, 0)
+  assert.equal(harness.runtimes.length, 1)
+
+  await runner.startTurn(turnRequest(runner.providerSessionId))
+  await assert.rejects(
+    pool.open(
+      sessionRequest(root, {
+        requestId: 'E'.repeat(43),
+        providerSessionId: sessionId,
+        providerSessionMaterialized: true,
+      }),
+      connectionOwner(12),
+    ),
+    (error) => error.code === 'conversation_busy',
+  )
+  assert.equal(retired, 0)
+  assert.equal(harness.runtimes.length, 1)
 })
 
 test('runner rejects a changed native session identity without exposing it', async (t) => {

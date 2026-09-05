@@ -149,6 +149,14 @@ function deferred() {
   return { promise, resolve }
 }
 
+function connectionOwner(generation, retire = () => undefined) {
+  return {
+    controllerId: 'controller_remote_owner01',
+    generation: BigInt(generation),
+    retire,
+  }
+}
+
 function executionDetector(options = {}) {
   const codexExecutable = options.codexExecutable ?? process.execPath
   const codexScript =
@@ -1120,6 +1128,183 @@ test('released execution connections reopen by exact native session identity', a
   }
 })
 
+test('a newer authenticated connection supersedes only the exact idle Codex session after cleanup', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'codetether-idle-handoff-'))
+  const cleanup = deferred()
+  const fake = fakeClientFactory({ shutdownGate: cleanup.promise })
+  const pool = new RemoteCodexRunnerPool({
+    codexHome: directory,
+    clientFactory: fake.factory,
+  })
+  let retired = 0
+  try {
+    const stale = await pool.open(
+      sessionRequest(directory),
+      connectionOwner(1, () => {
+        retired += 1
+      }),
+    )
+    let replacementSettled = false
+    const replacementOpening = pool
+      .open(
+        {
+          ...sessionRequest(directory),
+          requestId: 'T'.repeat(43),
+          providerThreadId: stale.providerThreadId,
+        },
+        connectionOwner(2),
+      )
+      .then((runner) => {
+        replacementSettled = true
+        return runner
+      })
+
+    await waitForCondition(() => fake.shutdowns === 1)
+    assert.equal(retired, 1)
+    assert.equal(replacementSettled, false)
+    assert.equal(pool.activeCount, 1)
+    await assert.rejects(
+      stale.startTurn(turnRequest(stale.providerThreadId)),
+      (error) => error.code === 'provider_session_lost',
+    )
+    await assert.rejects(
+      pool.open(
+        {
+          ...sessionRequest(directory),
+          requestId: 'U'.repeat(43),
+          providerThreadId: stale.providerThreadId,
+        },
+        connectionOwner(3),
+      ),
+      (error) => error.code === 'conversation_busy',
+    )
+    assert.equal(fake.launches, 1)
+
+    cleanup.resolve()
+    const replacement = await replacementOpening
+    assert.equal(replacement.resumed, true)
+    assert.equal(fake.launches, 2)
+    assert.equal(fake.resumes, 1)
+    assert.equal(pool.activeCount, 1)
+
+    // The stale connection's eventual finally/release cannot remove the new
+    // exact owner from the pool.
+    await pool.release(stale)
+    assert.equal(pool.activeCount, 1)
+    await pool.release(replacement)
+    assert.equal(pool.activeCount, 0)
+  } finally {
+    cleanup.resolve()
+    await pool.close().catch(() => undefined)
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('Codex idle-session handoff rejects active, older, or mismatched owners without eviction', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'codetether-handoff-guard-'))
+  const otherRoot = join(directory, 'other-root')
+  await mkdir(otherRoot)
+  const fake = fakeClientFactory()
+  const pool = new RemoteCodexRunnerPool({
+    codexHome: directory,
+    clientFactory: fake.factory,
+  })
+  let retired = 0
+  try {
+    const runner = await pool.open(
+      sessionRequest(directory),
+      connectionOwner(10, () => {
+        retired += 1
+      }),
+    )
+    const exact = {
+      ...sessionRequest(directory),
+      providerThreadId: runner.providerThreadId,
+    }
+    const mismatches = [
+      [exact, connectionOwner(10)],
+      [
+        exact,
+        {
+          ...connectionOwner(11),
+          controllerId: 'controller_remote_owner02',
+        },
+      ],
+      [
+        { ...exact, providerThreadId: 'provider-thread-b' },
+        connectionOwner(11),
+      ],
+      [{ ...exact, providerThreadId: undefined }, connectionOwner(11)],
+      [{ ...exact, projectId: 'proj_remote_b' }, connectionOwner(11)],
+      [{ ...exact, rootPath: otherRoot }, connectionOwner(11)],
+    ]
+    for (const [request, owner] of mismatches) {
+      await assert.rejects(
+        pool.open(request, owner),
+        (error) => error.code === 'conversation_busy',
+      )
+    }
+    assert.equal(retired, 0)
+    assert.equal(fake.launches, 1)
+
+    const turn = await runner.startTurn(turnRequest(runner.providerThreadId))
+    await assert.rejects(
+      pool.open({ ...exact, requestId: 'V'.repeat(43) }, connectionOwner(12)),
+      (error) => error.code === 'conversation_busy',
+    )
+    assert.equal(retired, 0)
+    assert.equal(fake.launches, 1)
+    fake.emit(providerEvent('message.completed'))
+    fake.emit(providerEvent('turn.completed'))
+    for await (const _event of turn.events()) void _event
+    await pool.release(runner)
+  } finally {
+    await pool.close().catch(() => undefined)
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('pool shutdown racing an idle Codex handoff cannot install a replacement', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'codetether-handoff-close-'))
+  const cleanup = deferred()
+  const fake = fakeClientFactory({ shutdownGate: cleanup.promise })
+  const pool = new RemoteCodexRunnerPool({
+    codexHome: directory,
+    clientFactory: fake.factory,
+  })
+  try {
+    const stale = await pool.open(sessionRequest(directory), connectionOwner(1))
+    const replacing = pool.open(
+      {
+        ...sessionRequest(directory),
+        providerThreadId: stale.providerThreadId,
+      },
+      connectionOwner(2),
+    )
+    await waitForCondition(() => fake.shutdowns === 1)
+    let closeSettled = false
+    const closing = pool.close().then(() => {
+      closeSettled = true
+    })
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(closeSettled, false)
+
+    cleanup.resolve()
+    await assert.rejects(
+      replacing,
+      (error) => error.code === 'remote_execution_unavailable',
+    )
+    await closing
+    assert.equal(closeSettled, true)
+    assert.equal(fake.launches, 1)
+    assert.equal(pool.activeCount, 0)
+  } finally {
+    cleanup.resolve()
+    await pool.close().catch(() => undefined)
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
 test('lost session-ready after pinned authentication remains peer-authenticated', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'codetether-ready-loss-'))
   const project = join(directory, 'project')
@@ -1263,6 +1448,105 @@ test('real authenticated transport streams one fake-owned remote Codex Turn', as
     assert.equal(fake.starts, 1)
   } finally {
     await session?.close().catch(() => undefined)
+    await service.close().catch(() => undefined)
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('a newer authenticated Machine connection retires an exact idle stale session', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'codetether-node-handoff-'))
+  const project = join(directory, 'project')
+  const codexHome = join(directory, 'codex-home')
+  await mkdir(project)
+  await mkdir(codexHome)
+  const fake = fakeClientFactory()
+  const runners = new RemoteCodexRunnerPool({
+    codexHome,
+    clientFactory: fake.factory,
+  })
+  const state = await NodeStateStore.open({
+    dataDirectory: join(directory, 'node-state'),
+    displayName: 'Remote handoff Test Node',
+    platform: 'Linux',
+    architecture: 'x64',
+  })
+  const service = new CodeTetherNodeService({
+    state,
+    bindAddress: '127.0.0.1',
+    port: 0,
+    providerDetector: executionDetector(),
+    remoteCodexRunners: runners,
+  })
+  const controller = {
+    controllerId: newControllerId(),
+    tls: await generateMachineTlsIdentity('Remote handoff Controller'),
+  }
+  let stale
+  let replacement
+  try {
+    const peer = await pairService(service, controller)
+    stale = await openRemoteCodexSession({
+      peer,
+      controller,
+      conversationId: 'conv_remote_a',
+      projectId: 'proj_remote_a',
+      rootPath: project,
+    })
+    const providerThreadId = stale.providerThreadId
+    replacement = await openRemoteCodexSession({
+      peer,
+      controller,
+      conversationId: 'conv_remote_a',
+      projectId: 'proj_remote_a',
+      rootPath: project,
+      providerThreadId,
+    })
+    await waitForCondition(() => stale.closed)
+    assert.equal(replacement.providerThreadId, providerThreadId)
+    assert.equal(replacement.resumed, true)
+    assert.equal(runners.activeCount, 1)
+    assert.equal(fake.launches, 2)
+    assert.equal(fake.resumes, 1)
+    assert.equal(fake.shutdowns, 1)
+    await assert.rejects(
+      stale.startTurn({
+        actionId: 'act_remote_stale',
+        turnId: 'turn_remote_stale',
+        prompt: 'This stale connection must not execute.',
+      }),
+    )
+    await stale.close()
+    stale = undefined
+    assert.equal(runners.activeCount, 1)
+
+    const turn = await replacement.startTurn({
+      actionId: 'act_remote_handoff',
+      turnId: 'turn_remote_handoff',
+      prompt: 'Execute once on the replacement connection.',
+    })
+    fake.emit(
+      providerEvent('message.delta', {
+        itemId: 'item_remote_handoff',
+        delta: 'HANDOFF MARKER',
+      }),
+    )
+    fake.emit(
+      providerEvent('message.completed', {
+        itemId: 'item_remote_handoff',
+        message: 'HANDOFF MARKER',
+      }),
+    )
+    fake.emit(providerEvent('turn.completed'))
+    const events = []
+    for await (const event of turn.events()) events.push(event.event)
+    assert.deepEqual(events.at(-1), { type: 'turn.completed' })
+    assert.equal(fake.starts, 1)
+    await replacement.close()
+    replacement = undefined
+    assert.equal(runners.activeCount, 0)
+  } finally {
+    await stale?.close().catch(() => undefined)
+    await replacement?.close().catch(() => undefined)
     await service.close().catch(() => undefined)
     await rm(directory, { recursive: true, force: true })
   }

@@ -398,6 +398,86 @@ test('effective Relay availability retains the failed direct state separately', 
   })
 })
 
+test('an established Relay worker is replaced before stale epoch callbacks can demote the current route', async () => {
+  await withRoutingFixture(async (fixture) => {
+    const staleHeartbeat = deferred()
+    fixture.behavior.machinePingGates.push(staleHeartbeat.promise)
+    const coordinator = await fixture.createCoordinator('relay_only', {
+      heartbeatIntervalMs: 20,
+    })
+    await fixture.waitUntilReady(coordinator)
+    await waitFor(
+      () => fixture.counts.pings === 1,
+      'epoch A heartbeat callback',
+    )
+    const epochA = fixture.relayEpoch()
+    const [epochAWorkerStream] = fixture.openRelayStreams(epochA)
+    assert.ok(epochAWorkerStream, 'epoch A owns one idle Machine route')
+
+    const before = fixture.snapshot()
+    const epochB = fixture.advanceRelayEpoch({ notify: false })
+    const session = await coordinator.openCodexSession(
+      fixture.machine,
+      fixture.trust(),
+      codexSessionInput('relay-worker-generation'),
+    )
+    const action = {
+      actionId: 'act_relay_worker_generation01',
+      turnId: 'turn_relay_worker_generation01',
+      prompt: 'execute exactly once on the current Relay generation',
+    }
+    await session.startTurn(action)
+    await session.close()
+
+    assert.equal(
+      fixture.counts.relayCodexSessions,
+      before.relayCodexSessions + 1,
+    )
+    assert.deepEqual(fixture.turnStarts, [action])
+
+    const observedStates = []
+    const unsubscribe = coordinator.subscribeStatus((machineId, state) => {
+      if (machineId === fixture.machine.machineId) observedStates.push(state)
+    })
+    fixture.notifyRelayStatus()
+    const retiredBeforeStaleCallback = epochAWorkerStream.destroyed
+    staleHeartbeat.reject(
+      new MachineTransportError(
+        'connection_failed',
+        'stale epoch A heartbeat callback',
+      ),
+    )
+    await waitFor(
+      () =>
+        fixture.openRelayStreams(epochB).length === 1 &&
+        coordinator.connectionState(fixture.machine.machineId) === 'online' &&
+        coordinator.providerExecutionAvailable(
+          fixture.machine.machineId,
+          'codex',
+        ),
+      'epoch B idle Machine route',
+    )
+    unsubscribe()
+
+    assert.equal(
+      retiredBeforeStaleCallback,
+      true,
+      'the status transition retires epoch A before its pending callback',
+    )
+    assert.equal(
+      observedStates.includes('offline') ||
+        observedStates.includes('recovery_required'),
+      false,
+      'the stale epoch A callback cannot demote current epoch B',
+    )
+    assert.equal(
+      coordinator.connectionState(fixture.machine.machineId),
+      'online',
+    )
+    await coordinator.close()
+  })
+})
+
 test('duplicate Relay-ready signals retain one pending Machine reconnect worker', async () => {
   await withRoutingFixture(async (fixture) => {
     const coordinator = await fixture.createCoordinator('direct_first')
@@ -868,6 +948,7 @@ async function withRoutingFixture(run) {
     relayClaudeSessionGate: undefined,
     relayChannelError: undefined,
     machinePingError: undefined,
+    machinePingGates: [],
     turnEventError: undefined,
     revocationError: undefined,
     disableRelayAfterRevocationError: false,
@@ -888,6 +969,7 @@ async function withRoutingFixture(run) {
   const turnStarts = []
   const relayStreams = new Set()
   const relayStreamHistory = []
+  const relayStreamEpochs = new WeakMap()
   const relayListeners = new Set()
   const transport = {
     async beginPairing() {
@@ -963,6 +1045,7 @@ async function withRoutingFixture(run) {
         throw behavior.relayChannelError
       }
       const stream = new PassThrough()
+      relayStreamEpochs.set(stream, behavior.relayEpoch)
       relayStreams.add(stream)
       relayStreamHistory.push(stream)
       stream.once('close', () => relayStreams.delete(stream))
@@ -1003,6 +1086,24 @@ async function withRoutingFixture(run) {
     },
     latestRelayStream() {
       return relayStreamHistory.at(-1)
+    },
+    relayEpoch() {
+      return behavior.relayEpoch
+    },
+    openRelayStreams(epoch) {
+      return [...relayStreams].filter(
+        (stream) => relayStreamEpochs.get(stream) === epoch,
+      )
+    },
+    notifyRelayStatus() {
+      for (const listener of relayListeners) listener(machine.machineId)
+    },
+    advanceRelayEpoch({ notify = true } = {}) {
+      behavior.relayEpoch += 1
+      if (notify) {
+        for (const listener of relayListeners) listener(machine.machineId)
+      }
+      return behavior.relayEpoch
     },
     snapshot() {
       return { ...counts }
@@ -1063,6 +1164,7 @@ async function withRoutingFixture(run) {
     return {
       async ping() {
         counts.pings += 1
+        await behavior.machinePingGates.shift()
         if (behavior.machinePingError !== undefined) {
           throw behavior.machinePingError
         }

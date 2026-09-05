@@ -277,6 +277,8 @@ interface RemoteWorker {
   cycleAbort?: AbortController
   connection?: AuthenticatedRemoteMachineConnection
   transport?: Exclude<MachineExecutionTransport, 'unavailable'>
+  /** Exact outer Relay generation that owns the established idle route. */
+  relayEpoch?: string
   task?: Promise<void>
 }
 
@@ -489,6 +491,11 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
     this.#unsubscribeRelayStatus = this.#relayTransport?.subscribe(
       (machineId) => {
         const relayStatus = this.#relayTransport?.status(machineId)
+        const relayEpoch =
+          relayStatus?.internetExecutionEnabled === true
+            ? this.#relayTransport?.connectionEpoch?.(machineId)
+            : undefined
+        this.#invalidateStaleRelayWorker(machineId, relayEpoch)
         if (relayStatus?.internetExecutionEnabled !== true) {
           // Reconnect creates a new Relay epoch/channel generation. The old
           // inner Machine authentication proof cannot authorize that epoch.
@@ -502,7 +509,6 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
           })
           return
         }
-        const relayEpoch = this.#relayTransport?.connectionEpoch?.(machineId)
         if (relayEpoch === undefined) return
         if (this.#relayVerifiedMachines.get(machineId) !== relayEpoch) {
           this.#relayVerifiedMachines.delete(machineId)
@@ -1661,10 +1667,29 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
     worker.cycleAbort?.abort()
     const connection = worker.connection
     worker.connection = undefined
+    worker.relayEpoch = undefined
     connection?.close()
     this.#cancelStableProviderDiscovery(machineId)
     this.#cancelAutomaticProviderDiscovery(machineId)
     return true
+  }
+
+  #invalidateStaleRelayWorker(
+    machineId: MachineId,
+    currentRelayEpoch: string | undefined,
+  ): void {
+    const worker = this.#workers.get(machineId)
+    if (
+      worker?.transport !== 'relay' ||
+      worker.relayEpoch === currentRelayEpoch
+    ) {
+      return
+    }
+    // A Relay status transition publishes the new outer generation before an
+    // old idle Machine heartbeat necessarily observes its dead stream. Retire
+    // that exact route now so its later callback is handled as an aborted
+    // cycle, never as current Machine evidence.
+    this.#requestWorkerReconnect(machineId)
   }
 
   #cancelStableProviderDiscovery(machineId: MachineId): void {
@@ -2410,6 +2435,8 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
         const connection = route.connection
         worker.connection = connection
         worker.transport = route.transport
+        worker.relayEpoch =
+          route.transport === 'relay' ? route.relayEpoch : undefined
         reconnect.noteConnected(this.#monotonicNow())
         connectedGeneration = true
         const authenticatedAt = TimestampSchema.parse(this.#now().toISOString())
@@ -2494,6 +2521,7 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
         const connection = worker.connection ?? authenticatedRoute?.connection
         worker.connection = undefined
         worker.transport = undefined
+        worker.relayEpoch = undefined
         connection?.close()
       }
       if (!reconnect.wakePending) {

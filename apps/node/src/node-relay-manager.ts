@@ -448,7 +448,6 @@ export class NodeRelayManager {
         token = undefined
         if (
           isPermanentRelayClientError(failure) ||
-          failure.code === 'relay_protocol_error' ||
           (failure.code === 'relay_authentication_failed' &&
             this.#registration !== undefined)
         ) {

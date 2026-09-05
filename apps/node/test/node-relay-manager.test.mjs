@@ -82,12 +82,16 @@ class FakeRelayConnection {
   }
 
   disconnect() {
-    this.#reject(
+    this.fail(
       new RelayClientError(
         'relay_unreachable',
         'Internet Relay is unreachable',
       ),
     )
+  }
+
+  fail(error) {
+    this.#reject(error)
   }
 
   async close() {
@@ -981,6 +985,93 @@ test('permanent Relay identity mismatch stops without a reconnect storm', async 
   assert.equal(calls, 1)
   assert.equal(manager.workerActive, false)
   await manager.close()
+})
+
+test('authenticated Relay protocol failure reconnects without enrollment or trust replacement', async (t) => {
+  const directory = await mkdtemp(
+    join(tmpdir(), 'codetether-node-relay-protocol-reconnect-'),
+  )
+  const state = await openNodeState(directory)
+  t.after(async () => {
+    await state.close().catch(() => undefined)
+    await import('node:fs/promises').then(async ({ rm }) =>
+      rm(directory, { recursive: true, force: true }),
+    )
+  })
+  await state.trustController({
+    controllerId: newControllerId(),
+    publicKeyFingerprint: controllerFingerprint,
+    pairedAt: new Date().toISOString(),
+  })
+  await writeNodeRelayRegistration(directory, {
+    schemaVersion: 1,
+    relayId: registration().relayId,
+    relayIdentityFingerprint: registration().relayIdentityFingerprint,
+    peerId: registration().peerId,
+    observedAt: registration().authenticatedAt,
+  })
+  const connections = [new FakeRelayConnection(), new FakeRelayConnection()]
+  const calls = []
+  const manager = new NodeRelayManager({
+    state,
+    configuration: configuration(),
+    clientBuildIdentity: 'phase7d-test',
+    reconnectInitialDelayMs: 1,
+    reconnectMaximumDelayMs: 2,
+    random: () => 0.5,
+    connect: async (options) => {
+      calls.push(options)
+      return {
+        connection: connections[calls.length - 1],
+        registration: registration(),
+        enrolled: false,
+      }
+    },
+  })
+  const handled = []
+  manager.setMachineChannelHandler((channel) => handled.push(channel))
+  manager.start()
+  await waitFor(() => manager.status === 'connected')
+
+  const oldChannel = machineChannelOffer(controllerFingerprint)
+  await connections[0].offerMachineChannel(oldChannel.offer)
+  assert.equal(oldChannel.accepts, 1)
+  assert.equal(manager.activeMachineChannelCount, 1)
+
+  connections[0].fail(
+    new RelayClientError(
+      'relay_protocol_error',
+      'Internet Relay returned an invalid control response',
+    ),
+  )
+  await waitFor(() => calls.length === 2 && manager.status === 'connected')
+
+  assert.equal(connections[0].closed, true)
+  assert.equal(oldChannel.stream.destroyed, true)
+  assert.equal(manager.activeMachineChannelCount, 0)
+  assert.equal(handled.length, 1)
+  assert.equal(manager.workerActive, true)
+  assert.equal(
+    calls.every(({ enrollmentToken }) => enrollmentToken === undefined),
+    true,
+  )
+  assert.equal(
+    calls.every(
+      ({ identity }) =>
+        identity.publicKeyFingerprint === state.identity.publicKeyFingerprint,
+    ),
+    true,
+  )
+  assert.deepEqual(await readNodeRelayRegistration(directory), {
+    schemaVersion: 1,
+    relayId: registration().relayId,
+    relayIdentityFingerprint: registration().relayIdentityFingerprint,
+    peerId: registration().peerId,
+    observedAt: registration().authenticatedAt,
+  })
+
+  await manager.close()
+  assert.equal(connections[1].closed, true)
 })
 
 test('Node restart reuses the exact Node identity and Relay registration without a token', async (t) => {

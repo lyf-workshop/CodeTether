@@ -299,6 +299,15 @@ and a potentially accepted semantic operation remain authoritative and stop
 fallback exactly as in Phase 7B. Transport becoming available during an
 already admitted Turn cannot create a second execution.
 
+An authenticated Relay control epoch that encounters a channel/control
+protocol failure is retired in full and may reconnect through the same bounded
+coordinator. Exact terminal channel bindings remain as short bounded
+tombstones so already-queued data or acknowledgements cannot turn a scoped
+channel failure into a stranded Node. This reconnect never reuses a Machine
+channel or replays a semantic operation. Relay identity mismatch, protocol
+incompatibility, revocation, and registered-peer authentication failure remain
+terminal until their explicit frozen recovery action.
+
 ## Suspend, resume, Tray, and Windows session behavior
 
 The Windows Desktop continues to own one Host sidecar. Suspend does not stop or

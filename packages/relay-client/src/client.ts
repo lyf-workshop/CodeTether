@@ -312,7 +312,7 @@ export class RelayControlConnection {
         readonly reject: (error: Error) => void
         readonly timer: ReturnType<typeof setTimeout>
       }
-      /** Bounded grace for exact late frames after a local terminal close. */
+      /** Bounded grace for exact late frames after a terminal channel outcome. */
       releaseTimer?: ReturnType<typeof setTimeout>
       terminalFrames?: number
     }
@@ -724,7 +724,6 @@ export class RelayControlConnection {
               machineChannelClosedWhileOpening(message.reason),
             )
             entry.channel.receiveClosed(message.reason)
-            this.#deleteMachineChannel(message.channelId, entry.channel)
             continue
           }
           const offer = this.#incomingMachineOffers.get(message.channelId)
@@ -774,7 +773,6 @@ export class RelayControlConnection {
             machineChannelBoundCodeError(message.code),
           )
           entry.channel.receiveError(message.code)
-          this.#deleteMachineChannel(message.channelId, entry.channel)
           continue
         }
         throw new RelayClientError(
@@ -1116,7 +1114,7 @@ export class RelayControlConnection {
         }
         // The Relay socket and Machine stream are independently framed. An
         // exact data/ACK frame already queued by the Relay may arrive after
-        // local TLS/session shutdown but before channel.closed. Retain only
+        // local TLS/session shutdown or a remote terminal outcome. Retain only
         // this exact bounded binding as a terminal tombstone so it is ignored
         // by the terminal Duplex without weakening unknown/stale rejection.
         current.releaseTimer = setTimeout(() => {

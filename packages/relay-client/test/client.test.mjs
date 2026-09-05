@@ -302,6 +302,59 @@ async function startRelayFixture(options = {}) {
           sequence: 2,
           data: Buffer.from('mismatched-binding').toString('base64url'),
         })
+      } else if (
+        options.machineChannelScenario === 'terminal_error_race' &&
+        message.type === 'channel.data' &&
+        message.channelId === fixtureMachineChannels[0]?.binding.channelId
+      ) {
+        const [failed, surviving] = fixtureMachineChannels
+        assert.notEqual(failed, undefined)
+        assert.notEqual(surviving, undefined)
+        await framed.send({
+          type: 'channel.error',
+          protocolVersion: relayProtocolVersion,
+          connectionEpoch,
+          requestId: failed.requestId,
+          ...failed.binding,
+          code: 'flow_control_violation',
+        })
+        await framed.send({
+          type: 'channel.data.ack',
+          protocolVersion: relayProtocolVersion,
+          connectionEpoch,
+          ...failed.binding,
+          acknowledgedSequence: message.sequence,
+        })
+        await framed.send({
+          type: 'channel.data',
+          protocolVersion: relayProtocolVersion,
+          connectionEpoch,
+          ...failed.binding,
+          sequence: 1,
+          data: Buffer.from('already-queued-data').toString('base64url'),
+        })
+        await framed.send({
+          type: 'channel.data',
+          protocolVersion: relayProtocolVersion,
+          connectionEpoch,
+          ...surviving.binding,
+          sequence: 1,
+          data: Buffer.from('surviving-channel-data').toString('base64url'),
+        })
+      } else if (
+        options.machineChannelScenario === 'terminal_error_race' &&
+        message.type === 'channel.data' &&
+        message.channelId === fixtureMachineChannels[1]?.binding.channelId
+      ) {
+        const surviving = fixtureMachineChannels[1]
+        assert.notEqual(surviving, undefined)
+        await framed.send({
+          type: 'channel.data.ack',
+          protocolVersion: relayProtocolVersion,
+          connectionEpoch,
+          ...surviving.binding,
+          acknowledgedSequence: message.sequence,
+        })
       } else if (message.type === 'peer.goodbye') {
         framed.end()
         return
@@ -856,6 +909,38 @@ test('exact late data and ACK for a locally released channel do not close its mu
       error.code === 'relay_protocol_error',
   )
   assert.equal(second.destroyed, true)
+  assert.deepEqual(fixture.failures, [])
+})
+
+test('exact late data and ACK after a channel error preserve the multiplexed Relay connection', async (t) => {
+  const identity = await peerIdentity('controller')
+  const fixture = await startRelayFixture({
+    enrolled: true,
+    machineChannelScenario: 'terminal_error_race',
+    expectedPeerPublicKeySpki: identity.publicKeySpki,
+  })
+  t.after(() => fixture.close())
+  const connected = await connectRelayControl(clientOptions(fixture, identity))
+  const failed = await connected.connection.openMachineChannel('N'.repeat(43))
+  const surviving = await connected.connection.openMachineChannel(
+    'N'.repeat(43),
+  )
+  silenceStreamErrors(failed, surviving)
+
+  const survivingData = once(surviving, 'data')
+  await assert.rejects(
+    writeAsync(failed, Buffer.from('trigger-channel-error')),
+    (error) =>
+      error instanceof RelayClientError &&
+      error.code === 'relay_protocol_error',
+  )
+  assert.equal(
+    Buffer.concat(await survivingData).toString(),
+    'surviving-channel-data',
+  )
+
+  await writeAsync(surviving, Buffer.from('control-connection-still-open'))
+  await connected.connection.close()
   assert.deepEqual(fixture.failures, [])
 })
 

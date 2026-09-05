@@ -1049,6 +1049,17 @@ Production Relay reconnect starts at one second and is capped at 60 seconds; the
 
 Every reconnect attempt belongs to the current owner and abortable cycle. A completed dial is admitted only if the owner, cycle, and lifetime signals are still current; a late candidate is closed before it can publish status, update endpoint preference, persist authentication time, or install channel handlers. An authenticated Controller reconnect creates a new Relay connection epoch; a current Node rendezvous/presence replacement advances the composite Relay Machine route generation even when that Controller epoch is unchanged. Either transition invalidates prior process-local Machine qualification and its idle route before stale callbacks can publish current state. A replacement route uses a new Machine channel generation and a fresh non-resumed inner Machine TLS session. Existing Phase 7B epoch/channel checks and Phase 7C TLS checks reject delayed old traffic. Web SSE additionally retains its Host runtime generation plus Host `<epoch>:<seq>` cursor rules, so an old observer cannot mutate a replacement projection.
 
+An authenticated Relay control epoch is also disposable after a bounded
+channel/control protocol failure: the exact epoch and all of its Machine
+channels close, then the one owning coordinator may authenticate a fresh epoch
+with unchanged enrollment and Machine trust. Exact terminal channel bindings
+remain only for the existing bounded acknowledgement grace so already-queued
+data or ACK records cannot escalate one failed channel into a permanently
+stranded live Node. This infrastructure reconnect cannot reopen a Machine
+channel or replay a Prompt. Relay identity mismatch, protocol incompatibility,
+revocation, and registered-peer authentication failure still stop without an
+automatic trust or enrollment change.
+
 Reconnect duration and heartbeat expiry use monotonic elapsed time where duration correctness matters. Wall-clock ISO timestamps remain presentation/persistence observations only. A suspend-induced late timer therefore produces one current-cycle decision rather than replaying every missed reconnect interval.
 
 ### Idle recovery, presence, and execution eligibility

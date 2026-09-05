@@ -2578,6 +2578,34 @@ export class HostService {
     })
   }
 
+  /**
+   * Private Desktop lifecycle seam. Platform resume/network-restored hints
+   * are advisory and coalesced by the existing socket owners; they never
+   * create an action, Provider session, Turn, or deferred Prompt.
+   */
+  requestNetworkRecovery(reason: 'desktop_resume'): {
+    readonly relayWorkers: number
+    readonly machineWorkers: number
+  } {
+    if (reason !== 'desktop_resume' || !this.#acceptingActions) {
+      return { relayWorkers: 0, machineWorkers: 0 }
+    }
+    let relayWorkers = 0
+    let machineWorkers = 0
+    try {
+      relayWorkers = this.#controllerRelay.requestReconnect?.() ?? 0
+    } catch {
+      // Recovery hints are best effort. Keep independent socket owners
+      // isolated so one observer cannot prevent the other from waking.
+    }
+    try {
+      machineWorkers = this.#remoteMachines.requestReconnect?.() ?? 0
+    } catch {
+      // The coordinator remains responsible for its canonical status/error.
+    }
+    return { relayWorkers, machineWorkers }
+  }
+
   async close(): Promise<void> {
     if (this.#closePromise === undefined) {
       // Stop new action admission synchronously, but keep the Runtime usable

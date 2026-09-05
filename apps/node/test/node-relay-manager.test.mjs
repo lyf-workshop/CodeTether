@@ -138,7 +138,7 @@ async function waitFor(predicate, timeoutMs = 2_000) {
   }
 }
 
-function machineChannelOffer(controllerFingerprintValue) {
+function machineChannelOffer(controllerFingerprintValue, acceptGate) {
   const stream = new PassThrough()
   const state = {
     accepts: 0,
@@ -158,6 +158,7 @@ function machineChannelOffer(controllerFingerprintValue) {
       nodeConnectionEpoch: 'relay_conn_node_fixture',
       async accept() {
         state.accepts += 1
+        await acceptGate
         return stream
       },
       async reject(reason = 'not_available') {
@@ -779,6 +780,67 @@ test('Relay Machine offers require the exact paired Controller and unpair closes
   await manager.close()
 })
 
+test('Node recovery rejects a Machine offer from the invalidated Relay generation', async (t) => {
+  const directory = await mkdtemp(
+    join(tmpdir(), 'codetether-node-relay-stale-offer-'),
+  )
+  const state = await openNodeState(directory)
+  t.after(async () => {
+    await state.close().catch(() => undefined)
+    await import('node:fs/promises').then(async ({ rm }) =>
+      rm(directory, { recursive: true, force: true }),
+    )
+  })
+  await state.trustController({
+    controllerId: newControllerId(),
+    publicKeyFingerprint: controllerFingerprint,
+    pairedAt: new Date().toISOString(),
+  })
+  await writeNodeRelayRegistration(directory, {
+    schemaVersion: 1,
+    relayId: registration().relayId,
+    relayIdentityFingerprint: registration().relayIdentityFingerprint,
+    peerId: registration().peerId,
+    observedAt: registration().authenticatedAt,
+  })
+  const connections = [new FakeRelayConnection(), new FakeRelayConnection()]
+  let connectIndex = 0
+  const manager = new NodeRelayManager({
+    state,
+    configuration: configuration(),
+    clientBuildIdentity: 'phase7d-test',
+    reconnectInitialDelayMs: 60_000,
+    reconnectMaximumDelayMs: 60_000,
+    random: () => 0.5,
+    connect: async () => ({
+      connection: connections[connectIndex++],
+      registration: registration(),
+      enrolled: false,
+    }),
+  })
+  const handled = []
+  manager.setMachineChannelHandler((channel) => handled.push(channel))
+  manager.start()
+  await waitFor(() => manager.status === 'connected')
+
+  let releaseAccept
+  const acceptGate = new Promise((resolve) => {
+    releaseAccept = resolve
+  })
+  const stale = machineChannelOffer(controllerFingerprint, acceptGate)
+  const handling = connections[0].offerMachineChannel(stale.offer)
+  await waitFor(() => stale.accepts === 1)
+  assert.equal(manager.requestReconnect(), true)
+  assert.equal(manager.status, 'reconnecting')
+  releaseAccept()
+  await handling
+
+  assert.equal(stale.stream.destroyed, true)
+  assert.equal(handled.length, 0)
+  await waitFor(() => connectIndex === 2 && manager.status === 'connected')
+  await manager.close()
+})
+
 test('Relay reconnect replacement and manager close destroy their exact Machine channels', async (t) => {
   const directory = await mkdtemp(
     join(tmpdir(), 'codetether-node-relay-channel-reconnect-'),
@@ -987,6 +1049,103 @@ test('Node restart reuses the exact Node identity and Relay registration without
   await secondState.close()
 })
 
+test('registered Node starts offline, retries within its cap, and recovers without enrollment or identity change', async (t) => {
+  const directory = await mkdtemp(
+    join(tmpdir(), 'codetether-node-relay-offline-start-'),
+  )
+  const state = await openNodeState(directory)
+  t.after(async () => {
+    await state.close().catch(() => undefined)
+    await import('node:fs/promises').then(async ({ rm }) =>
+      rm(directory, { recursive: true, force: true }),
+    )
+  })
+  await state.trustController({
+    controllerId: newControllerId(),
+    publicKeyFingerprint: controllerFingerprint,
+    pairedAt: new Date().toISOString(),
+  })
+  const trustBefore = state.trustedController()
+  const identityBefore = state.identity.publicKeyFingerprint
+  const durableRegistration = {
+    schemaVersion: 1,
+    relayId: registration().relayId,
+    relayIdentityFingerprint: registration().relayIdentityFingerprint,
+    peerId: registration().peerId,
+    observedAt: registration().authenticatedAt,
+  }
+  await writeNodeRelayRegistration(directory, durableRegistration)
+
+  const calls = []
+  const attemptsAt = []
+  let tokenReads = 0
+  let registrationWrites = 0
+  const recovered = new FakeRelayConnection()
+  const statuses = []
+  const manager = new NodeRelayManager({
+    state,
+    configuration: configuration(),
+    clientBuildIdentity: 'phase7d-test',
+    reconnectInitialDelayMs: 1,
+    reconnectMaximumDelayMs: 2,
+    random: () => 1,
+    onStatus: ({ status }) => statuses.push(status),
+    readEnrollmentToken: async () => {
+      tokenReads += 1
+      return undefined
+    },
+    writeRegistration: async () => {
+      registrationWrites += 1
+    },
+    connect: async (options) => {
+      calls.push(options)
+      attemptsAt.push(performance.now())
+      if (calls.length <= 6) {
+        throw new RelayClientError(
+          'relay_unreachable',
+          'Internet Relay is unreachable',
+        )
+      }
+      return {
+        connection: recovered,
+        registration: registration(),
+        enrolled: false,
+      }
+    },
+  })
+
+  manager.start()
+  await waitFor(() => manager.status === 'connected')
+
+  assert.equal(calls.length, 7)
+  assert.equal(tokenReads, 0)
+  assert.equal(registrationWrites, 0)
+  assert.equal(state.identity.publicKeyFingerprint, identityBefore)
+  assert.deepEqual(state.trustedController(), trustBefore)
+  assert.deepEqual(
+    await readNodeRelayRegistration(directory),
+    durableRegistration,
+  )
+  assert.equal(
+    calls.every(
+      (options) =>
+        options.enrollmentToken === undefined &&
+        options.expectedRelayId === durableRegistration.relayId &&
+        options.identity.publicKeyFingerprint === identityBefore,
+    ),
+    true,
+  )
+  assert.equal(statuses.includes('offline'), true)
+  assert.equal(statuses.at(-1), 'connected')
+  for (let index = 2; index < attemptsAt.length; index += 1) {
+    assert.ok(attemptsAt[index] - attemptsAt[index - 1] < 100)
+  }
+
+  await manager.close()
+  assert.equal(manager.workerActive, false)
+  assert.equal(recovered.closed, true)
+})
+
 test('Node service shutdown closes Relay control and still releases direct Node state', async (t) => {
   const directory = await mkdtemp(
     join(tmpdir(), 'codetether-node-relay-close-'),
@@ -1016,7 +1175,7 @@ test('Node service shutdown closes Relay control and still releases direct Node 
   await reopened.close()
 })
 
-test('30 Relay disconnects reuse one bounded Node reconnect worker', async (t) => {
+test('100 Relay disconnects reuse one bounded Node reconnect worker', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'codetether-node-relay-flap-'))
   const state = await openNodeState(directory)
   t.after(async () => {
@@ -1051,14 +1210,14 @@ test('30 Relay disconnects reuse one bounded Node reconnect worker', async (t) =
     },
   })
   manager.start()
-  for (let cycle = 0; cycle < 30; cycle += 1) {
+  for (let cycle = 0; cycle < 100; cycle += 1) {
     await waitFor(
       () => connections.length === cycle + 1 && manager.status === 'connected',
     )
     assert.equal(manager.workerActive, true)
     connections[cycle].disconnect()
   }
-  await waitFor(() => connections.length === 31)
+  await waitFor(() => connections.length === 101)
   assert.equal(manager.workerActive, true)
   await manager.close()
   assert.equal(manager.workerActive, false)
@@ -1066,4 +1225,248 @@ test('30 Relay disconnects reuse one bounded Node reconnect worker', async (t) =
     connections.every(({ closed }) => closed),
     true,
   )
+})
+
+test('1000 reconnect wake signals coalesce into one Node Relay replacement', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'codetether-node-relay-wake-'))
+  const state = await openNodeState(directory)
+  t.after(async () => {
+    await state.close().catch(() => undefined)
+    await import('node:fs/promises').then(async ({ rm }) =>
+      rm(directory, { recursive: true, force: true }),
+    )
+  })
+  const connections = []
+  const statuses = []
+  const manager = new NodeRelayManager({
+    state,
+    configuration: configuration(),
+    clientBuildIdentity: 'git-f42a98800900',
+    reconnectInitialDelayMs: 60_000,
+    reconnectMaximumDelayMs: 60_000,
+    random: () => 0.5,
+    onStatus: (observation) => statuses.push(observation.status),
+    readRegistration: async () => ({
+      schemaVersion: 1,
+      relayId: registration().relayId,
+      relayIdentityFingerprint: registration().relayIdentityFingerprint,
+      peerId: registration().peerId,
+      observedAt: registration().authenticatedAt,
+    }),
+    connect: async () => {
+      const connection = new FakeRelayConnection()
+      connections.push(connection)
+      return {
+        connection,
+        registration: registration(),
+        enrolled: false,
+      }
+    },
+  })
+  manager.start()
+  await waitFor(
+    () => connections.length === 1 && manager.status === 'connected',
+  )
+  const recoveryStatusStart = statuses.length
+
+  let accepted = 0
+  for (let signal = 0; signal < 1_000; signal += 1) {
+    if (manager.requestReconnect()) accepted += 1
+  }
+  assert.equal(accepted, 1)
+  await waitFor(
+    () => connections.length === 2 && manager.status === 'connected',
+  )
+  await new Promise((resolve) => setTimeout(resolve, 25))
+  assert.equal(connections.length, 2)
+  assert.equal(connections[0].closed, true)
+  assert.equal(manager.workerActive, true)
+  assert.equal(statuses.slice(recoveryStatusStart).includes('offline'), false)
+  assert.equal(statuses[recoveryStatusStart], 'reconnecting')
+  assert.equal(statuses.at(-1), 'connected')
+
+  await manager.close()
+  assert.equal(manager.workerActive, false)
+  assert.equal(manager.requestReconnect(), false)
+})
+
+test('reconnect wakes abort one stale in-flight dial before opening its replacement', async (t) => {
+  const directory = await mkdtemp(
+    join(tmpdir(), 'codetether-node-relay-dial-wake-'),
+  )
+  const state = await openNodeState(directory)
+  t.after(async () => {
+    await state.close().catch(() => undefined)
+    await import('node:fs/promises').then(async ({ rm }) =>
+      rm(directory, { recursive: true, force: true }),
+    )
+  })
+  let calls = 0
+  let activeDials = 0
+  let maximumActiveDials = 0
+  const replacement = new FakeRelayConnection()
+  const manager = new NodeRelayManager({
+    state,
+    configuration: configuration(),
+    clientBuildIdentity: 'git-f42a98800900',
+    reconnectInitialDelayMs: 60_000,
+    reconnectMaximumDelayMs: 60_000,
+    random: () => 0.5,
+    readRegistration: async () => ({
+      schemaVersion: 1,
+      relayId: registration().relayId,
+      relayIdentityFingerprint: registration().relayIdentityFingerprint,
+      peerId: registration().peerId,
+      observedAt: registration().authenticatedAt,
+    }),
+    connect: async (options) => {
+      calls += 1
+      activeDials += 1
+      maximumActiveDials = Math.max(maximumActiveDials, activeDials)
+      try {
+        if (calls === 1) {
+          await new Promise((resolve, reject) => {
+            const abort = () => reject(new Error('controlled dial abort'))
+            options.signal.addEventListener('abort', abort, { once: true })
+          })
+        }
+        return {
+          connection: replacement,
+          registration: registration(),
+          enrolled: false,
+        }
+      } finally {
+        activeDials -= 1
+      }
+    },
+  })
+  manager.start()
+  await waitFor(() => calls === 1 && activeDials === 1)
+
+  let accepted = 0
+  for (let signal = 0; signal < 1_000; signal += 1) {
+    if (manager.requestReconnect()) accepted += 1
+  }
+  assert.equal(accepted, 1)
+  await waitFor(() => calls === 2 && manager.status === 'connected')
+  assert.equal(maximumActiveDials, 1)
+  assert.equal(activeDials, 0)
+
+  await manager.close()
+  assert.equal(replacement.closed, true)
+})
+
+test('a later Node recovery signal invalidates a replacement dial already in progress', async (t) => {
+  const directory = await mkdtemp(
+    join(tmpdir(), 'codetether-node-relay-second-dial-wake-'),
+  )
+  const state = await openNodeState(directory)
+  t.after(async () => {
+    await state.close().catch(() => undefined)
+    await import('node:fs/promises').then(async ({ rm }) =>
+      rm(directory, { recursive: true, force: true }),
+    )
+  })
+  await writeNodeRelayRegistration(directory, {
+    schemaVersion: 1,
+    relayId: registration().relayId,
+    relayIdentityFingerprint: registration().relayIdentityFingerprint,
+    peerId: registration().peerId,
+    observedAt: registration().authenticatedAt,
+  })
+  const first = new FakeRelayConnection()
+  const staleReplacement = new FakeRelayConnection()
+  const current = new FakeRelayConnection()
+  let releaseStaleReplacement
+  const staleReplacementGate = new Promise((resolve) => {
+    releaseStaleReplacement = resolve
+  })
+  let calls = 0
+  const manager = new NodeRelayManager({
+    state,
+    configuration: configuration(),
+    clientBuildIdentity: 'phase7d-test',
+    reconnectInitialDelayMs: 60_000,
+    reconnectMaximumDelayMs: 60_000,
+    random: () => 0.5,
+    connect: async () => {
+      calls += 1
+      if (calls === 1) {
+        return {
+          connection: first,
+          registration: registration(),
+          enrolled: false,
+        }
+      }
+      if (calls === 2) {
+        await staleReplacementGate
+        return {
+          connection: staleReplacement,
+          registration: registration(),
+          enrolled: false,
+        }
+      }
+      return {
+        connection: current,
+        registration: registration(),
+        enrolled: false,
+      }
+    },
+  })
+  manager.start()
+  await waitFor(() => manager.status === 'connected')
+
+  assert.equal(manager.requestReconnect(), true)
+  await waitFor(() => calls === 2)
+  assert.equal(manager.requestReconnect(), true)
+  releaseStaleReplacement()
+
+  await waitFor(() => calls === 3 && manager.status === 'connected')
+  assert.equal(staleReplacement.closed, true)
+  await manager.close()
+  assert.equal(current.closed, true)
+})
+
+test('Node Relay shutdown cancels a long reconnect delay without another dial', async (t) => {
+  const directory = await mkdtemp(
+    join(tmpdir(), 'codetether-node-relay-wait-close-'),
+  )
+  const state = await openNodeState(directory)
+  t.after(async () => {
+    await state.close().catch(() => undefined)
+    await import('node:fs/promises').then(async ({ rm }) =>
+      rm(directory, { recursive: true, force: true }),
+    )
+  })
+  let calls = 0
+  const manager = new NodeRelayManager({
+    state,
+    configuration: configuration(),
+    clientBuildIdentity: 'git-f42a98800900',
+    reconnectInitialDelayMs: 60_000,
+    reconnectMaximumDelayMs: 60_000,
+    random: () => 0.5,
+    readRegistration: async () => ({
+      schemaVersion: 1,
+      relayId: registration().relayId,
+      relayIdentityFingerprint: registration().relayIdentityFingerprint,
+      peerId: registration().peerId,
+      observedAt: registration().authenticatedAt,
+    }),
+    connect: async () => {
+      calls += 1
+      throw new RelayClientError(
+        'relay_unreachable',
+        'Internet Relay is unreachable',
+      )
+    },
+  })
+  manager.start()
+  await waitFor(() => manager.status === 'offline' && manager.workerActive)
+  const startedAt = Date.now()
+  await manager.close()
+  assert.ok(Date.now() - startedAt < 1_000)
+  assert.equal(calls, 1)
+  assert.equal(manager.workerActive, false)
+  assert.equal(manager.status, 'closed')
 })

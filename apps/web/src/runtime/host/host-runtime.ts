@@ -119,6 +119,8 @@ export interface HostRuntimeStats {
   readonly projectionUpdates: number
   readonly duplicateEvents: number
   readonly resetRecoveries: number
+  readonly reconnectBackoffResets: number
+  readonly reconnectDelayHighWaterMs: number
 }
 
 export interface HostRuntimeOptions {
@@ -126,6 +128,10 @@ export interface HostRuntimeOptions {
   readonly client?: HostRuntimeClient
   readonly baseUrl?: string
   readonly reconnectDelayMs?: number
+  readonly reconnectMaximumDelayMs?: number
+  readonly reconnectStableResetMs?: number
+  readonly random?: () => number
+  readonly monotonicNow?: () => number
 }
 
 type ConnectionListener = () => void
@@ -137,13 +143,19 @@ export type AppliedHostEventListener = (event: AppliedHostEvent) => void
 
 const runtimesByQueryClient = new WeakMap<QueryClient, HostRuntime>()
 const RELEASE_GRACE_MS = 100
+const DEFAULT_RECONNECT_MAXIMUM_DELAY_MS = 60_000
+const DEFAULT_RECONNECT_STABLE_RESET_MS = 60_000
 
 class OwnedDesktopHostIdentityError extends Error {}
 
 export class HostRuntime {
   readonly #queryClient: QueryClient
   readonly #client: HostRuntimeClient
-  readonly #reconnectDelayMs: number
+  readonly #reconnectInitialDelayMs: number
+  readonly #reconnectMaximumDelayMs: number
+  readonly #reconnectStableResetMs: number
+  readonly #random: () => number
+  readonly #monotonicNow: () => number
   readonly #listeners = new Set<ConnectionListener>()
   readonly #appliedEventListeners = new Set<AppliedHostEventListener>()
   readonly #actions: LiveConversationActions
@@ -161,6 +173,7 @@ export class HostRuntime {
   #runPromise?: Promise<void>
   #stream?: HostEventStream
   #streamConnectAbortController?: AbortController
+  #reconnectDelayAbortController?: AbortController
   #resumeReconnectRequested = false
   #ownedDesktopHostEpoch?: Bootstrap['epoch']
   #bootstrap?: Bootstrap
@@ -187,11 +200,29 @@ export class HostRuntime {
       this.#client,
       this.#queryClient,
     )
-    this.#reconnectDelayMs = nonNegativeInteger(
+    this.#reconnectInitialDelayMs = nonNegativeInteger(
       options.reconnectDelayMs,
       500,
       'reconnectDelayMs',
     )
+    this.#reconnectMaximumDelayMs = nonNegativeInteger(
+      options.reconnectMaximumDelayMs,
+      Math.max(
+        DEFAULT_RECONNECT_MAXIMUM_DELAY_MS,
+        this.#reconnectInitialDelayMs,
+      ),
+      'reconnectMaximumDelayMs',
+    )
+    this.#reconnectStableResetMs = nonNegativeInteger(
+      options.reconnectStableResetMs,
+      DEFAULT_RECONNECT_STABLE_RESET_MS,
+      'reconnectStableResetMs',
+    )
+    if (this.#reconnectInitialDelayMs > this.#reconnectMaximumDelayMs) {
+      throw new Error('Host reconnect delay bounds are invalid')
+    }
+    this.#random = options.random ?? Math.random
+    this.#monotonicNow = options.monotonicNow ?? (() => performance.now())
   }
 
   get connectionState(): HostConnectionState {
@@ -487,6 +518,7 @@ export class HostRuntime {
     if (this.#resumeReconnectRequested) return
     this.#resumeReconnectRequested = true
     this.#increment('resumeRecoveries')
+    this.#reconnectDelayAbortController?.abort()
     if (stream !== undefined) void stream.close().catch(() => undefined)
     else pendingConnection?.abort()
   }
@@ -525,6 +557,8 @@ export class HostRuntime {
     this.#abortController = undefined
     this.#streamConnectAbortController?.abort()
     this.#streamConnectAbortController = undefined
+    this.#reconnectDelayAbortController?.abort()
+    this.#reconnectDelayAbortController = undefined
     const stream = this.#stream
     this.#stream = undefined
     await stream?.close().catch(() => undefined)
@@ -551,6 +585,7 @@ export class HostRuntime {
       )
       if (!this.#isActive(generation) || cursor === undefined) return
       let snapshotRequired = false
+      let reconnectDelayMs = this.#reconnectInitialDelayMs
 
       while (this.#isActive(generation)) {
         if (this.#resumeReconnectRequested) {
@@ -568,7 +603,8 @@ export class HostRuntime {
             }
             this.#lastError = error
             this.#increment('reconnectAttempts')
-            await waitForDelay(this.#reconnectDelayMs, signal)
+            await this.#waitForReconnectDelay(reconnectDelayMs, signal)
+            reconnectDelayMs = this.#nextReconnectDelay(reconnectDelayMs)
             continue
           }
         }
@@ -594,7 +630,9 @@ export class HostRuntime {
             }
             this.#lastError = error
             this.#increment('reconnectAttempts')
-            await waitForDelay(this.#reconnectDelayMs, signal)
+            if (this.#resumeReconnectRequested) continue
+            await this.#waitForReconnectDelay(reconnectDelayMs, signal)
+            reconnectDelayMs = this.#nextReconnectDelay(reconnectDelayMs)
             continue
           }
         }
@@ -605,6 +643,7 @@ export class HostRuntime {
         if (this.#resumeReconnectRequested) continue
 
         let stream: HostEventStream | undefined
+        let connectedAt: number | undefined
         const streamConnectAbortController = new AbortController()
         this.#streamConnectAbortController = streamConnectAbortController
         try {
@@ -621,16 +660,26 @@ export class HostRuntime {
           ) {
             this.#streamConnectAbortController = undefined
           }
-          if (!this.#isActive(generation)) {
+          if (
+            !this.#isActive(generation) ||
+            streamConnectAbortController.signal.aborted ||
+            this.#resumeReconnectRequested
+          ) {
             await stream.close().catch(() => undefined)
-            return
+            if (!this.#isActive(generation)) return
+            continue
           }
           this.#stream = stream
+          connectedAt = this.#monotonicNow()
           this.#lastError = undefined
           this.#setConnectionState('connected')
 
           for await (const event of stream) {
             if (!this.#isActive(generation)) return
+            // A close implementation may resolve one already-queued event
+            // after resume invalidated this SSE generation. Do not let that
+            // stale event touch the current projection or cursor.
+            if (this.#resumeReconnectRequested) break
             this.#increment('hostEvents')
             if (event.type === 'stream.reset') {
               this.#increment('resetRecoveries')
@@ -682,6 +731,16 @@ export class HostRuntime {
           await stream?.close().catch(() => undefined)
         }
 
+        if (
+          this.#isActive(generation) &&
+          connectedAt !== undefined &&
+          this.#monotonicNow() - connectedAt >= this.#reconnectStableResetMs &&
+          reconnectDelayMs !== this.#reconnectInitialDelayMs
+        ) {
+          reconnectDelayMs = this.#reconnectInitialDelayMs
+          this.#increment('reconnectBackoffResets')
+        }
+
         if (!this.#isActive(generation)) return
         if (snapshotRequired) {
           continue
@@ -691,7 +750,8 @@ export class HostRuntime {
         }
         this.#increment('reconnectAttempts')
         this.#setConnectionState('reconnecting')
-        await waitForDelay(this.#reconnectDelayMs, signal)
+        await this.#waitForReconnectDelay(reconnectDelayMs, signal)
+        reconnectDelayMs = this.#nextReconnectDelay(reconnectDelayMs)
       }
     } catch (error) {
       if (!this.#isActive(generation)) return
@@ -750,6 +810,42 @@ export class HostRuntime {
     return this.#started && this.#generation === generation
   }
 
+  async #waitForReconnectDelay(
+    delayMs: number,
+    signal: AbortSignal,
+  ): Promise<void> {
+    if (signal.aborted) return
+    const boundedDelayMs = jitteredDelay(
+      delayMs,
+      this.#reconnectMaximumDelayMs,
+      this.#random,
+    )
+    this.#stats = {
+      ...this.#stats,
+      reconnectDelayHighWaterMs: Math.max(
+        this.#stats.reconnectDelayHighWaterMs,
+        boundedDelayMs,
+      ),
+    }
+    const delayAbortController = new AbortController()
+    this.#reconnectDelayAbortController = delayAbortController
+    try {
+      await waitForDelay(
+        boundedDelayMs,
+        AbortSignal.any([signal, delayAbortController.signal]),
+      )
+    } finally {
+      if (this.#reconnectDelayAbortController === delayAbortController) {
+        this.#reconnectDelayAbortController = undefined
+      }
+    }
+  }
+
+  #nextReconnectDelay(delayMs: number): number {
+    if (delayMs === 0) return 0
+    return Math.min(delayMs * 2, this.#reconnectMaximumDelayMs)
+  }
+
   #setConnectionState(state: HostConnectionState): void {
     if (this.#connectionState === state) return
     this.#connectionState = state
@@ -801,7 +897,25 @@ function emptyStats(): HostRuntimeStats {
     projectionUpdates: 0,
     duplicateEvents: 0,
     resetRecoveries: 0,
+    reconnectBackoffResets: 0,
+    reconnectDelayHighWaterMs: 0,
   }
+}
+
+function jitteredDelay(
+  delayMs: number,
+  maximumDelayMs: number,
+  random: () => number,
+): number {
+  if (delayMs === 0) return 0
+  const sample = random()
+  const boundedSample = Number.isFinite(sample)
+    ? Math.min(1, Math.max(0, sample))
+    : 0.5
+  return Math.min(
+    maximumDelayMs,
+    Math.max(1, Math.round(delayMs * (0.8 + boundedSample * 0.4))),
+  )
 }
 
 async function waitForDelay(

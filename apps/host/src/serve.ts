@@ -12,8 +12,13 @@ import {
 
 async function main(): Promise<void> {
   const desktopManaged = isDesktopManaged()
-  const lifecycle = createHostProcessLifecycle({ desktopManaged })
   let host: RunningLocalCodexHost | undefined
+  const lifecycle = createHostProcessLifecycle({
+    desktopManaged,
+    onNetworkRestored: () => {
+      host?.service.requestNetworkRecovery('desktop_resume')
+    },
+  })
   try {
     if (!(await lifecycle.activated) || lifecycle.isRequested) return
     const arguments_ = parseServeArguments(process.argv.slice(2), {

@@ -977,6 +977,37 @@ test('missed heartbeat closes an authenticated peer without persistent registry 
   )
 })
 
+test('Relay heartbeat and uptime use monotonic elapsed time across wall-clock-style jumps', async () => {
+  let elapsedMs = 10_000
+  await withService(
+    async ({ store, service, tls }) => {
+      const peer = await enrollPeer(
+        service,
+        tls.publicKeySpkiFingerprint,
+        store.createEnrollmentToken('controller'),
+        'controller',
+        generateRelayApplicationIdentity(),
+      )
+
+      elapsedMs = 9_000
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      assert.equal(peer.channel.closed, false)
+      assert.equal(service.metrics().heartbeatTimeouts, 0)
+      assert.equal(service.metrics().uptimeSeconds, 0)
+
+      elapsedMs = 10_071
+      await waitUntil(() => peer.channel.closed, 1_000)
+      assert.equal(service.metrics().heartbeatTimeouts, 1)
+      assert.equal(service.metrics().uptimeSeconds, 0.071)
+    },
+    {
+      monotonicNow: () => elapsedMs,
+      heartbeatIntervalMs: 20,
+      heartbeatTimeoutMs: 70,
+    },
+  )
+})
+
 test('delayed and duplicate heartbeat acknowledgements remain bounded and do not replace connection ownership', async () => {
   await withService(
     async ({ store, service, tls }) => {

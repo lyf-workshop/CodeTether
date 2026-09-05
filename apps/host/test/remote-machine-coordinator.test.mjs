@@ -88,6 +88,7 @@ async function fixture(options = {}) {
           ? input.controller.tls.publicKeyFingerprint
           : 'mismatch',
       )
+      let closed = false
       const connection = {
         async ping() {
           if (options.pingHandler !== undefined) {
@@ -150,7 +151,12 @@ async function fixture(options = {}) {
               },
             }
           : {}),
-        close() {},
+        close() {
+          closed = true
+        },
+        get closed() {
+          return closed
+        },
       }
       connections.push(connection)
       return connection
@@ -247,6 +253,7 @@ async function fixture(options = {}) {
       },
     },
     attemptedEndpoints,
+    connections,
     async close(coordinator) {
       await coordinator?.close().catch(() => undefined)
       store.close()
@@ -958,6 +965,350 @@ test('close aborts and awaits an in-flight remote Provider discovery', async () 
     await f.close(coordinator)
   }
 })
+
+test('1000 Host recovery signals coalesce into one remote Machine replacement', async () => {
+  const f = await fixture()
+  let coordinator
+  try {
+    coordinator = await SecureRemoteMachineCoordinator.create({
+      persistence: f.store,
+      transport: f.transport,
+      heartbeatIntervalMs: 60_000,
+      reconnectInitialDelayMs: 60_000,
+      reconnectMaximumDelayMs: 60_000,
+      random: () => 0.5,
+    })
+    const confirmed = await pairAndActivate(coordinator, f)
+    await waitFor(
+      () =>
+        coordinator.connectionState(confirmed.machine.machineId) === 'online',
+      'initial remote Machine connection',
+    )
+    assert.equal(f.counts.connect, 1)
+
+    let accepted = 0
+    for (let signal = 0; signal < 1_000; signal += 1) {
+      accepted += coordinator.requestReconnect()
+    }
+    assert.equal(accepted, 1)
+    await waitFor(
+      () =>
+        f.counts.connect === 2 &&
+        coordinator.connectionState(confirmed.machine.machineId) === 'online',
+      'coalesced remote Machine reconnect',
+    )
+    await new Promise((resolve) => setTimeout(resolve, 25))
+    assert.equal(f.counts.connect, 2)
+    assert.equal(f.connections[0].closed, true)
+    assert.equal(
+      f.store.getTrustedMachinePeer(confirmed.machine.machineId).trustState,
+      'active',
+    )
+  } finally {
+    await f.close(coordinator)
+  }
+})
+
+test('a delayed remote Machine dial from a stale lifecycle generation is closed', async () => {
+  let heldDials = 0
+  const releaseDials = []
+  const f = await fixture({
+    async connectHandler() {
+      if (heldDials === 0) return
+      heldDials -= 1
+      await new Promise((resolve) => {
+        releaseDials.push(resolve)
+      })
+    },
+  })
+  let coordinator
+  try {
+    coordinator = await SecureRemoteMachineCoordinator.create({
+      persistence: f.store,
+      transport: f.transport,
+      heartbeatIntervalMs: 60_000,
+      reconnectInitialDelayMs: 60_000,
+      reconnectMaximumDelayMs: 60_000,
+      random: () => 0.5,
+    })
+    const confirmed = await pairAndActivate(coordinator, f)
+    await waitFor(
+      () =>
+        coordinator.connectionState(confirmed.machine.machineId) === 'online',
+      'initial remote Machine connection',
+    )
+
+    heldDials = 1
+    assert.equal(coordinator.requestReconnect(), 1)
+    await waitFor(() => f.counts.connect === 2, 'delayed second dial')
+    assert.equal(
+      coordinator.connectionState(confirmed.machine.machineId),
+      'connecting',
+    )
+    assert.equal(
+      coordinator.connectionDetails(confirmed.machine.machineId).directState,
+      'connecting',
+    )
+    assert.equal(coordinator.requestReconnect(), 1)
+    heldDials = 1
+    releaseDials.shift()()
+    await waitFor(() => f.counts.connect === 3, 'delayed third dial')
+    await waitFor(() => f.connections[1].closed, 'stale dial cleanup')
+    assert.equal(
+      coordinator.connectionDetails(confirmed.machine.machineId).directState,
+      'connecting',
+    )
+    releaseDials.shift()()
+    await waitFor(
+      () =>
+        f.counts.connect === 3 &&
+        coordinator.connectionState(confirmed.machine.machineId) === 'online',
+      'fresh remote Machine generation',
+    )
+    assert.equal(f.connections[1].closed, true)
+    assert.equal(f.connections[2].closed, false)
+  } finally {
+    await f.close(coordinator)
+  }
+})
+
+test('rapid idle reconnects debounce automatic Provider discovery until stable', async () => {
+  const f = await fixture({ discoveryEnabled: true })
+  let coordinator
+  try {
+    coordinator = await SecureRemoteMachineCoordinator.create({
+      persistence: f.store,
+      transport: f.transport,
+      heartbeatIntervalMs: 60_000,
+      reconnectInitialDelayMs: 60_000,
+      reconnectMaximumDelayMs: 60_000,
+      providerDiscoveryStabilityDelayMs: 50,
+      random: () => 0.5,
+    })
+    const confirmed = await pairAndActivate(coordinator, f)
+    for (let cycle = 1; cycle <= 15; cycle += 1) {
+      await waitFor(
+        () =>
+          f.counts.connect === cycle &&
+          coordinator.connectionState(confirmed.machine.machineId) === 'online',
+        `remote Machine flap ${cycle}`,
+      )
+      assert.equal(coordinator.requestReconnect(), 1)
+    }
+    await waitFor(
+      () =>
+        f.counts.connect === 16 &&
+        coordinator.connectionState(confirmed.machine.machineId) === 'online',
+      'final stable remote Machine connection',
+    )
+    await waitFor(() => f.counts.discovery === 1, 'stable Provider discovery')
+    await new Promise((resolve) => setTimeout(resolve, 75))
+    assert.equal(f.counts.discovery, 1)
+  } finally {
+    await f.close(coordinator)
+  }
+})
+
+test('network recovery aborts stale automatic discovery before it can publish freshness', async () => {
+  let releaseDiscovery
+  const discoveryGate = new Promise((resolve) => {
+    releaseDiscovery = resolve
+  })
+  const f = await fixture({
+    discoveryEnabled: true,
+    async discoveryHandler() {
+      await discoveryGate
+      return remoteProviderDiscovery()
+    },
+  })
+  let coordinator
+  try {
+    coordinator = await SecureRemoteMachineCoordinator.create({
+      persistence: f.store,
+      transport: f.transport,
+      heartbeatIntervalMs: 60_000,
+      reconnectInitialDelayMs: 60_000,
+      reconnectMaximumDelayMs: 60_000,
+      providerDiscoveryStabilityDelayMs: 250,
+      random: () => 0.5,
+    })
+    const confirmed = await pairAndActivate(coordinator, f)
+    await waitFor(() => f.counts.discovery === 1, 'automatic discovery start')
+    assert.equal(f.counts.activeDiscoveries, 1)
+    assert.equal(coordinator.requestReconnect(), 1)
+    releaseDiscovery()
+
+    await waitFor(
+      () => f.counts.activeDiscoveries === 0,
+      'stale automatic discovery cleanup',
+    )
+    assert.equal(
+      f.store.getRemoteProviderObservation(confirmed.machine.machineId),
+      undefined,
+    )
+    assert.equal(f.connections[1].closed, true)
+  } finally {
+    releaseDiscovery()
+    await f.close(coordinator)
+  }
+})
+
+test('provider discovery recovers when cancelled cleanup outlives replacement stability', async () => {
+  let releaseFirstDiscovery
+  const firstDiscoveryGate = new Promise((resolve) => {
+    releaseFirstDiscovery = resolve
+  })
+  let discovery = 0
+  const f = await fixture({
+    discoveryEnabled: true,
+    async discoveryHandler() {
+      discovery += 1
+      if (discovery === 1) await firstDiscoveryGate
+      return remoteProviderDiscovery()
+    },
+  })
+  let coordinator
+  try {
+    coordinator = await SecureRemoteMachineCoordinator.create({
+      persistence: f.store,
+      transport: f.transport,
+      heartbeatIntervalMs: 60_000,
+      reconnectInitialDelayMs: 60_000,
+      reconnectMaximumDelayMs: 60_000,
+      providerDiscoveryStabilityDelayMs: 20,
+      random: () => 0.5,
+    })
+    const confirmed = await pairAndActivate(coordinator, f)
+    await waitFor(() => f.counts.discovery === 1, 'first automatic discovery')
+
+    assert.equal(coordinator.requestReconnect(), 1)
+    await waitFor(
+      () =>
+        coordinator.connectionState(confirmed.machine.machineId) === 'online' &&
+        f.counts.connect >= 3,
+      'replacement Machine generation',
+    )
+    // Let the replacement generation's first stability timer encounter the
+    // old abort-ignoring discovery while it still owns the task slot.
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    assert.equal(f.counts.discovery, 1)
+
+    releaseFirstDiscovery()
+    await waitFor(() => f.counts.discovery === 2, 'rescheduled discovery')
+    await waitFor(
+      () =>
+        f.store.getRemoteProviderObservation(confirmed.machine.machineId) !==
+        undefined,
+      'current Provider observation',
+    )
+    assert.equal(f.counts.maximumActiveDiscoveries, 1)
+  } finally {
+    releaseFirstDiscovery()
+    await f.close(coordinator)
+  }
+})
+
+test('explicit discovery takes ownership of a live automatic probe', async () => {
+  let releaseDiscovery
+  const discoveryGate = new Promise((resolve) => {
+    releaseDiscovery = resolve
+  })
+  let automaticSignal
+  const f = await fixture({
+    discoveryEnabled: true,
+    async discoveryHandler(signal) {
+      automaticSignal = signal
+      await discoveryGate
+      return remoteProviderDiscovery()
+    },
+  })
+  let coordinator
+  try {
+    coordinator = await SecureRemoteMachineCoordinator.create({
+      persistence: f.store,
+      transport: f.transport,
+      heartbeatIntervalMs: 60_000,
+      reconnectInitialDelayMs: 60_000,
+      reconnectMaximumDelayMs: 60_000,
+      providerDiscoveryStabilityDelayMs: 1,
+      random: () => 0.5,
+    })
+    const confirmed = await pairAndActivate(coordinator, f)
+    await waitFor(() => f.counts.discovery === 1, 'automatic discovery')
+    const machine = f.store.getMachine(confirmed.machine.machineId)
+    const trust = f.store.getTrustedMachinePeer(confirmed.machine.machineId)
+    assert.ok(machine)
+    assert.ok(trust)
+
+    const explicit = coordinator.discoverProviders(machine, trust)
+    assert.equal(coordinator.requestReconnect(), 1)
+    assert.equal(automaticSignal.aborted, false)
+    releaseDiscovery()
+    await explicit
+    assert.equal(f.counts.discovery, 1)
+    assert.ok(f.store.getRemoteProviderObservation(confirmed.machine.machineId))
+  } finally {
+    releaseDiscovery()
+    await f.close(coordinator)
+  }
+})
+
+test('explicit discovery after automatic cancellation starts a fresh generation', async () => {
+  let releaseFirstDiscovery
+  const firstDiscoveryGate = new Promise((resolve) => {
+    releaseFirstDiscovery = resolve
+  })
+  let discovery = 0
+  const f = await fixture({
+    discoveryEnabled: true,
+    async discoveryHandler() {
+      discovery += 1
+      if (discovery === 1) await firstDiscoveryGate
+      return remoteProviderDiscovery()
+    },
+  })
+  let coordinator
+  try {
+    coordinator = await SecureRemoteMachineCoordinator.create({
+      persistence: f.store,
+      transport: f.transport,
+      heartbeatIntervalMs: 60_000,
+      reconnectInitialDelayMs: 60_000,
+      reconnectMaximumDelayMs: 60_000,
+      providerDiscoveryStabilityDelayMs: 1,
+      random: () => 0.5,
+    })
+    const confirmed = await pairAndActivate(coordinator, f)
+    await waitFor(() => f.counts.discovery === 1, 'automatic discovery')
+    const machine = f.store.getMachine(confirmed.machine.machineId)
+    const trust = f.store.getTrustedMachinePeer(confirmed.machine.machineId)
+    assert.ok(machine)
+    assert.ok(trust)
+
+    assert.equal(coordinator.requestReconnect(), 1)
+    const explicit = coordinator.discoverProviders(machine, trust)
+    releaseFirstDiscovery()
+    await explicit
+    assert.equal(f.counts.discovery, 2)
+    assert.ok(f.store.getRemoteProviderObservation(confirmed.machine.machineId))
+  } finally {
+    releaseFirstDiscovery()
+    await f.close(coordinator)
+  }
+})
+
+async function pairAndActivate(coordinator, f) {
+  const candidate = await coordinator.beginPairing({
+    address: { host: '172.20.1.30', port: 4319 },
+    pairingCode: '123456',
+  })
+  const confirmed = await coordinator.confirmPairing(
+    candidate.pairingAttemptId,
+    (staged) =>
+      f.store.createRemoteMachineWithTrust(staged.machine, staged.trust),
+  )
+  return confirmed
+}
 
 async function waitFor(predicate, label, timeoutMs = 2_000) {
   const deadline = Date.now() + timeoutMs

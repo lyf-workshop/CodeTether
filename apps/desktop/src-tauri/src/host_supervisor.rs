@@ -141,6 +141,12 @@ impl DesktopState {
     fn host_epoch(&self) -> Option<String> {
         lock(&self.host_epoch).clone()
     }
+
+    fn request_host_network_recovery(&self, generation: u64) -> bool {
+        lock(&self.host)
+            .as_mut()
+            .is_some_and(|host| host.request_network_recovery(generation))
+    }
 }
 
 #[derive(Clone)]
@@ -326,6 +332,15 @@ impl HostSupervisor {
         self.child.as_ref().map(CommandChild::pid)
     }
 
+    fn request_network_recovery(&mut self, generation: u64) -> bool {
+        let Some(child) = self.child.as_mut() else {
+            return false;
+        };
+        child
+            .write(network_restored_command(generation).as_bytes())
+            .is_ok()
+    }
+
     fn shutdown(&mut self, timeout: Duration) -> ShutdownOutcome {
         let started_at = Instant::now();
         self.observation.stopping.store(true, Ordering::Release);
@@ -372,6 +387,10 @@ impl Drop for HostSupervisor {
             let _ = child.kill();
         }
     }
+}
+
+fn network_restored_command(generation: u64) -> String {
+    format!("network-restored desktop_resume {generation}\n")
 }
 
 #[derive(Debug)]
@@ -764,6 +783,9 @@ pub(crate) fn resume_windows_runtime(app: &AppHandle) {
         }
         return;
     };
+    if !state.request_host_network_recovery(resume_generation) {
+        eprintln!("[codetether:desktop] could not request bounded Host network recovery");
+    }
     log_lifecycle_event(
         "system_resuming",
         &state,
@@ -1447,6 +1469,15 @@ mod tests {
         assert!(state.begin_shutdown());
         assert!(state.is_shutting_down());
         assert!(!state.is_ready());
+    }
+
+    #[test]
+    fn network_recovery_command_is_bounded_and_generation_scoped() {
+        assert_eq!(
+            network_restored_command(42),
+            "network-restored desktop_resume 42\n"
+        );
+        assert!(network_restored_command(u64::MAX).len() < 64);
     }
 
     #[test]

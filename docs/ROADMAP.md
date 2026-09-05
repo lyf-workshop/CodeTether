@@ -1145,7 +1145,7 @@ Exit gate:
 
 ## Phase 7C — End-to-End Security Hardening
 
-**Status:** current approved implementation scope; not accepted, frozen, or declared ready.
+**Status:** accepted and frozen at `f42a9880090068ee8dcc1ad0d6bb4862f15dedea`.
 
 **Goal:** formally verify and harden the existing nested TLS security boundary so Relay transport carries authenticated Controller ↔ Node Machine application traffic without requiring Agent payload plaintext or substituting Relay enrollment for Machine trust.
 
@@ -1172,19 +1172,45 @@ Exit gate:
 - REAL Direct and Alibaba Relay Codex/Claude, incremental streaming, Read/Search, exact ProjectLocation, native resume, normal Host/Node/Relay restart, safe Relay interruption, Tray/background, and mixed-Provider regressions must pass without capability expansion or fallback weakening.
 - Required workspace, Linux Node/Relay, Desktop/NSIS, lifecycle, production health/port, evidence-redaction, resource, cleanup, matching-build, and clean-worktree gates must pass with no P0/P1 product-security blocker.
 
-## Phase 8 — OpenCode
+### Acceptance boundary
 
-**Goal:** add OpenCode through the established adapter model.
+- Owner review accepted the existing nested Controller ↔ Node Machine TLS architecture, TLS 1.3-only configuration, exact peer pins, fresh non-resumed handshakes without early data or plaintext fallback, endpoint-local keys, Node-local Provider credentials, opaque Relay forwarding, infrastructure-only Relay persistence/observability, privacy sentinels, metadata inventory, Direct/Relay Provider and native-resume regressions, restart/interruption/background/concurrency behavior, production Alibaba operation, package gates, and clean final state. The implementation and evidence are frozen at `f42a988`.
 
-Planned outcomes:
+## Phase 7D — Network Roaming & Internet Reliability
 
-- OpenCode detection, capabilities, session lifecycle, and normalized events.
-- Provider comparison and compatibility coverage.
-- No provider-specific branching in shared product UI unless an approved capability difference requires it.
+**Status:** current approved implementation scope; not accepted, frozen, or declared ready.
 
-Exit gate: OpenCode passes the shared adapter contract and core conversation workflows without weakening existing providers.
+**Goal:** preserve durable Controller, Node, Machine, Relay, Project Location, Conversation, and Provider-session identity while ordinary network addresses, interfaces, sockets, DNS answers, Relay epochs, and channels change, with bounded automatic idle recovery and no active-Turn migration or Prompt replay.
 
-## Phase 9 — Mobile Polish
+### In scope
+
+- Keep one reconnect authority for each logical Web SSE, Controller Relay, Host Machine, and Node Relay connection. Use bounded exponential backoff with jitter, reset only after stable authenticated success, coalesce duplicate socket/network/resume/manual wake triggers, and tear down timers/listeners/sockets with their owner.
+- Treat every reconnect as a fresh ephemeral generation. A late Direct dial, Relay epoch, Machine channel, inner TLS callback, status update, or Web observer event from an invalidated generation must be closed or ignored before it can mutate current state, endpoint preference, trust, presence, discovery, or execution.
+- Preserve address mobility through exact cryptographic identity. Controller and Node source-address/interface changes, normal Relay endpoint resolution changes, Direct endpoint recovery, sleep/wake, offline startup, short and long outages, Relay/peer restart, network flapping, and out-of-order recovery must not require re-pairing, Relay re-enrollment, Project Location recreation, or Provider-session replacement.
+- Recover idle Relay control, Direct/Relay Machine eligibility, truthful presence, and Web observation automatically. Provider discovery remains bounded and stability-delayed rather than spawning on every flap; cold history/Search/organization and local Provider work remain independent from Internet availability.
+- Re-evaluate the frozen route only for each new explicit Turn: authenticated Direct first, otherwise eligible Relay, otherwise unavailable. An active Direct/Relay Turn never changes transport, and reconnect never regenerates an `actionId`, queues an offline Prompt, fabricates completion, or resends uncertain work.
+- Preserve Phase 7C TLS/pinning/Relay-opacity guarantees, Phase 6C.4 ownership/idempotency/backpressure/process cleanup, Phase 6D diagnostics and deduplication, fixed Codex/Claude capability profiles, production Alibaba TCP-443-only ingress, and one shared Remote Runtime.
+
+### Out of scope
+
+- Active-Turn transport migration, automatic Prompt replay, deferred/offline Prompt delivery, generic retransmission or routing protocols, multiple Relays/regions, Relay failover, VPN, port forwarding, NAT hole punching, STUN/TURN/WebRTC, captive-portal detection, arbitrary HTTP/SOCKS proxy support, or a new IPv6 architecture.
+- Mobile clients, Push/APNs/FCM, mobile background or battery policy, Remote Terminal/Files, synchronization, new Providers/capabilities, accounts/teams, or any Phase 8 and later product work.
+- Penetration testing, offensive network research, exploit simulation, adversarial infrastructure process manipulation, or broad changes to Owner networking/firewall/DNS merely to produce evidence.
+
+### Exit gate
+
+- Deterministic tests must pass for 100 network flaps, 1,000 coalesced reconnect signals, bounded stable-reset/jitter behavior, Direct/Relay reconnect, stale callbacks across every generation layer, address/identity distinction, DNS failure/recovery where hostname mode applies, suspend/resume and large timer delay, offline startup/long-offline/out-of-order recovery, and clean shutdown.
+- Routing tests must prove Direct-first, Relay fallback, truthful both-unavailable behavior, no mid-Turn migration/replay, cross-reconnect `actionId` idempotency, one-active-Turn semantics, bounded Provider discovery, Attention/notification deduplication, 50k/100k backpressure, and four-Conversation isolation.
+- Strongest-practical REAL evidence must cover Controller source/network change, Node address mobility, unrelated-network Relay-only execution, Codex/Claude native continuity, normal Host/Node/Relay restart and outage recovery, Tray/background recovery, offline launch/long-offline behavior, mixed Direct/Relay routing, Direct/Relay/local Provider regressions, and a minimum 60-minute mostly idle production reliability session when two hours is impractical. Simulated, WSL2, owner-assisted, and unobserved behavior must be classified honestly.
+- Recovery resources must return to bounded steady state with no accumulated sockets, timers, listeners, channels, tombstones, waiters, discovery tasks, SSE subscriptions, duplicate execution, or orphan Provider. Canonical diagnostics, evidence privacy, package/build gates, production TCP-443-only state, cleanup, and a clean worktree must pass with no P0/P1 reliability/security blocker.
+
+### Phase 8 boundary
+
+- Phase 7D leaves typed status, centralized reconnect ownership, durable state independent of sockets, and fail-closed transport loss ready for a later Mobile client. It does not implement Mobile, Push, APNs/FCM, mobile UI, mobile background execution, or mobile battery/lifecycle policy.
+
+## Phase 8 — Mobile Polish
+
+**Status:** planned; unimplemented and unauthorized during Phase 7D.
 
 **Goal:** make the remote companion exceptional for short, high-value interventions.
 
@@ -1197,9 +1223,23 @@ Planned outcomes:
 
 Exit gate: core mobile tasks are fast, legible, safe, resilient, and validated on representative devices.
 
+## Phase 9 — OpenCode
+
+**Status:** planned; unimplemented and unauthorized during Phase 7D.
+
+**Goal:** add OpenCode through the established adapter model.
+
+Planned outcomes:
+
+- OpenCode detection, capabilities, session lifecycle, and normalized events.
+- Provider comparison and compatibility coverage.
+- No provider-specific branching in shared product UI unless an approved capability difference requires it.
+
+Exit gate: OpenCode passes the shared adapter contract and core conversation workflows without weakening existing providers.
+
 ## Deferred Beyond This Roadmap
 
 - Team collaboration.
 - Enterprise administration and policy.
 - Cross-agent conversation handoff.
-- Relay behavior beyond the purpose-bound encrypted Machine protocol, including generic tunneling, traffic-shape obfuscation/anonymity, automatic Machine-key rotation, and separately specified Phase 7D roaming/reliability work.
+- Relay behavior beyond the purpose-bound encrypted Machine protocol and bounded Phase 7D reconnect/requalification model, including generic tunneling, traffic-shape obfuscation/anonymity, automatic Machine-key rotation, multi-Relay failover, and custom routing protocols.

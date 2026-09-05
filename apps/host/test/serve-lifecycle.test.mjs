@@ -56,6 +56,75 @@ test('Desktop-managed lifecycle requires an exact activation before startup', as
   assert.equal(await lifecycle.requested, 'desktop_shutdown')
 })
 
+test('Desktop-managed lifecycle validates and deduplicates network recovery generations', async () => {
+  const input = new PassThrough()
+  const observed = []
+  const lifecycle = createHostProcessLifecycle({
+    desktopManaged: true,
+    input,
+    signalSource: new EventEmitter(),
+    onNetworkRestored: (generation) => observed.push(generation),
+  })
+
+  input.write('start\n')
+  assert.equal(await lifecycle.activated, true)
+  input.write('network-restored desktop_resume 1\n')
+  input.write('network-restored desktop_resume 1\n')
+  input.write('network-restored desktop_resume 3\n')
+  input.write('network-restored desktop_resume 2\n')
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.deepEqual(observed, [1, 3])
+  assert.equal(input.listenerCount('data'), 1)
+
+  input.write('shutdown\n')
+  assert.equal(await lifecycle.requested, 'desktop_shutdown')
+})
+
+test('Desktop-managed lifecycle isolates a failing network recovery observer', async () => {
+  const input = new PassThrough()
+  let calls = 0
+  const lifecycle = createHostProcessLifecycle({
+    desktopManaged: true,
+    input,
+    signalSource: new EventEmitter(),
+    onNetworkRestored: () => {
+      calls += 1
+      throw new Error('presentation observer failed')
+    },
+  })
+
+  input.write('start\n')
+  assert.equal(await lifecycle.activated, true)
+  input.write('network-restored desktop_resume 1\n')
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(calls, 1)
+  assert.equal(lifecycle.isRequested, false)
+  assert.equal(input.listenerCount('data'), 1)
+
+  input.write('shutdown\n')
+  assert.equal(await lifecycle.requested, 'desktop_shutdown')
+})
+
+test('Desktop-managed lifecycle rejects malformed network recovery commands', async () => {
+  for (const command of [
+    'network-restored desktop_resume 0',
+    'network-restored desktop_resume -1',
+    'network-restored desktop_resume 9007199254740992',
+    'network-restored other 1',
+  ]) {
+    const input = new PassThrough()
+    const lifecycle = createHostProcessLifecycle({
+      desktopManaged: true,
+      input,
+      signalSource: new EventEmitter(),
+    })
+    input.write('start\n')
+    assert.equal(await lifecycle.activated, true)
+    input.write(`${command}\n`)
+    assert.equal(await lifecycle.requested, 'desktop_channel_error')
+  }
+})
+
 test('Desktop-managed lifecycle treats EOF and a corrupt oversized channel as shutdown', async () => {
   const eofInput = new PassThrough()
   const eofLifecycle = createHostProcessLifecycle({

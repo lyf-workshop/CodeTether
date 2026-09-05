@@ -206,6 +206,12 @@ async function createFixture(t, options = {}) {
     ...(options.maxConversations === undefined
       ? {}
       : { maxConversations: options.maxConversations }),
+    ...(options.remoteMachineCoordinator === undefined
+      ? {}
+      : { remoteMachineCoordinator: options.remoteMachineCoordinator }),
+    ...(options.controllerRelayCoordinator === undefined
+      ? {}
+      : { controllerRelayCoordinator: options.controllerRelayCoordinator }),
   })
   await service.registerInitialProjectRoots([workspace])
   const machine = service.listMachines().machines[0]
@@ -256,6 +262,90 @@ test('bootstrap reports only implemented runtime capabilities', async (t) => {
     diff: true,
     streaming: true,
   })
+})
+
+test('cold offline metadata stays readable and Desktop recovery wakes only existing Host-owned coordinators', async (t) => {
+  let relayWakes = 0
+  let machineWakes = 0
+  const controllerRelayCoordinator = {
+    subscribe() {
+      return () => undefined
+    },
+    requestReconnect() {
+      relayWakes += 1
+      return 1
+    },
+    async close() {},
+  }
+  const remoteMachineCoordinator = {
+    connectionState() {
+      return undefined
+    },
+    requestReconnect() {
+      machineWakes += 1
+      return 2
+    },
+    async close() {},
+  }
+  const fixture = await createFixture(t, {
+    controllerRelayCoordinator,
+    remoteMachineCoordinator,
+  })
+
+  const projectsBefore = await fixture.service.listProjects()
+  const machinesBefore = fixture.service.listMachines()
+  const bootstrapBefore = fixture.service.bootstrap()
+
+  assert.deepEqual(fixture.service.requestNetworkRecovery('desktop_resume'), {
+    relayWorkers: 1,
+    machineWorkers: 2,
+  })
+  assert.deepEqual(await fixture.service.listProjects(), projectsBefore)
+  assert.deepEqual(fixture.service.listMachines(), machinesBefore)
+  assert.deepEqual(fixture.service.bootstrap(), bootstrapBefore)
+  assert.equal(relayWakes, 1)
+  assert.equal(machineWakes, 1)
+  assert.equal(fixture.runtime.conversationCalls.length, 0)
+  assert.equal(fixture.runtime.turnCalls.length, 0)
+
+  await fixture.service.close()
+  assert.deepEqual(fixture.service.requestNetworkRecovery('desktop_resume'), {
+    relayWorkers: 0,
+    machineWorkers: 0,
+  })
+})
+
+test('Desktop network recovery isolates independent coordinator failures', async (t) => {
+  let machineWakes = 0
+  const fixture = await createFixture(t, {
+    controllerRelayCoordinator: {
+      subscribe() {
+        return () => undefined
+      },
+      requestReconnect() {
+        throw new Error('Relay status observer failed')
+      },
+      async close() {},
+    },
+    remoteMachineCoordinator: {
+      connectionState() {
+        return undefined
+      },
+      requestReconnect() {
+        machineWakes += 1
+        return 2
+      },
+      async close() {},
+    },
+  })
+
+  assert.deepEqual(fixture.service.requestNetworkRecovery('desktop_resume'), {
+    relayWorkers: 0,
+    machineWorkers: 2,
+  })
+  assert.equal(machineWakes, 1)
+  assert.equal(fixture.runtime.conversationCalls.length, 0)
+  assert.equal(fixture.runtime.turnCalls.length, 0)
 })
 
 test('current installation truth and health freshness outrank stale failures', async (t) => {

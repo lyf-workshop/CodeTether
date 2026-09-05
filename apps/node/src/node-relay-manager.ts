@@ -2,7 +2,10 @@ import { X509Certificate } from 'node:crypto'
 import { performance } from 'node:perf_hooks'
 import type { Duplex } from 'node:stream'
 
-import type { PublicKeyFingerprint } from '@codetether/machine-transport'
+import {
+  ReconnectWakeCoordinator,
+  type PublicKeyFingerprint,
+} from '@codetether/machine-transport'
 import {
   RelayClientError,
   connectRelayControl,
@@ -88,11 +91,8 @@ export class NodeRelayManager {
   readonly #clientBuildIdentity: string
   readonly #connect: ConnectRelay
   readonly #now: () => Date
-  readonly #random: () => number
   readonly #monotonicNow: () => number
-  readonly #initialDelayMs: number
-  readonly #maximumDelayMs: number
-  readonly #stableResetMs: number
+  readonly #reconnect: ReconnectWakeCoordinator
   readonly #onStatus: (observation: NodeRelayStatusObservation) => void
   readonly #readEnrollmentToken: typeof readNodeRelayEnrollmentToken
   readonly #readPendingEnrollmentToken: typeof readPendingNodeRelayEnrollmentToken
@@ -109,6 +109,7 @@ export class NodeRelayManager {
   >()
   #worker: Promise<void> | undefined
   #connection: RelayControlConnection | undefined
+  #cycleAbort: AbortController | undefined
   #machineChannelHandler: NodeRelayMachineChannelHandler | undefined
   #registration: NodeRelayRegistration | undefined
   #grantRevision = 0
@@ -123,26 +124,28 @@ export class NodeRelayManager {
     this.#clientBuildIdentity = options.clientBuildIdentity
     this.#connect = options.connect ?? connectRelayControl
     this.#now = options.now ?? (() => new Date())
-    this.#random = options.random ?? Math.random
     this.#monotonicNow = options.monotonicNow ?? (() => performance.now())
-    this.#initialDelayMs = positiveInteger(
+    const initialDelayMs = positiveInteger(
       options.reconnectInitialDelayMs,
       relayProtocolLimits.reconnectInitialDelayMs,
       'Relay reconnect initial delay',
     )
-    this.#maximumDelayMs = positiveInteger(
+    const maximumDelayMs = positiveInteger(
       options.reconnectMaximumDelayMs,
       relayProtocolLimits.reconnectMaximumDelayMs,
       'Relay reconnect maximum delay',
     )
-    this.#stableResetMs = positiveInteger(
+    const stableResetMs = positiveInteger(
       options.reconnectStableResetMs,
       DEFAULT_RECONNECT_STABLE_RESET_MS,
       'Relay reconnect stable reset',
     )
-    if (this.#initialDelayMs > this.#maximumDelayMs) {
-      throw new TypeError('Relay reconnect delay bounds are invalid')
-    }
+    this.#reconnect = new ReconnectWakeCoordinator({
+      initialDelayMs,
+      maximumDelayMs,
+      stableResetMs,
+      random: options.random,
+    })
     this.#onStatus = options.onStatus ?? (() => undefined)
     this.#readEnrollmentToken =
       options.readEnrollmentToken ?? readNodeRelayEnrollmentToken
@@ -166,6 +169,35 @@ export class NodeRelayManager {
 
   get activeMachineChannelCount(): number {
     return this.#machineChannels.size
+  }
+
+  /**
+   * Invalidates an apparently-live Relay connection or expedites its one
+   * existing backoff worker after a network/resume lifecycle signal.
+   */
+  requestReconnect(): boolean {
+    if (
+      this.#closed ||
+      !this.#configuration.enabled ||
+      !isReconnectableStatus(this.#status)
+    ) {
+      return false
+    }
+    const accepted = this.#reconnect.requestWake()
+    if (!accepted) return false
+    const connection = this.#connection
+    this.#connection = undefined
+    if (connection !== undefined) {
+      this.#destroyMachineChannels(connection)
+    }
+    this.#setStatus('reconnecting')
+    this.#cycleAbort?.abort()
+    if (connection === undefined) {
+      this.start()
+    } else {
+      void connection.close().catch(() => undefined)
+    }
+    return true
   }
 
   setMachineChannelHandler(
@@ -229,6 +261,8 @@ export class NodeRelayManager {
       return
     }
     this.#closed = true
+    this.#reconnect.close()
+    this.#cycleAbort?.abort()
     this.#abort.abort()
     this.#destroyMachineChannels()
     await this.#connection?.close().catch(() => undefined)
@@ -247,22 +281,25 @@ export class NodeRelayManager {
       this.#setStatus('identity_mismatch', 'relay_identity_mismatch')
       return
     }
-    let delayMs = this.#initialDelayMs
     let firstAttempt = true
     while (!this.#closed && !this.#abort.signal.aborted) {
+      const cycleAbort = new AbortController()
+      this.#cycleAbort = cycleAbort
+      this.#reconnect.consumePendingWake()
       this.#setStatus(firstAttempt ? 'connecting' : 'reconnecting')
       firstAttempt = false
       let token: NodeRelayEnrollmentToken | undefined
       let ownedConnection: RelayControlConnection | undefined
       let attemptedEnrollment = false
-      let connectedAt: number | undefined
+      let authenticatedConnection = false
+      let retryAfterMs = 0
       let removeMachineChannelHandler: (() => void) | undefined
       let channelConnection: RelayControlConnection | undefined
       try {
         let connected
         if (this.#registration !== undefined) {
           try {
-            connected = await this.#connectOnce()
+            connected = await this.#connectOnce(undefined, cycleAbort.signal)
           } catch (error) {
             if (
               !(error instanceof RelayClientError) ||
@@ -279,14 +316,14 @@ export class NodeRelayManager {
               return
             }
             attemptedEnrollment = true
-            connected = await this.#connectOnce(token.secret)
+            connected = await this.#connectOnce(token.secret, cycleAbort.signal)
           }
         } else {
           // Authentication by the durable Node key is attempted first. This
           // recovers the post-commit/pre-response enrollment-loss window
           // without replaying or retaining the one-time token.
           try {
-            connected = await this.#connectOnce()
+            connected = await this.#connectOnce(undefined, cycleAbort.signal)
           } catch (error) {
             if (!isUnknownEnrollment(error)) throw error
             token = await this.#readEnrollmentToken(this.#state.dataDirectory)
@@ -295,11 +332,12 @@ export class NodeRelayManager {
               return
             }
             attemptedEnrollment = true
-            connected = await this.#connectOnce(token.secret)
+            connected = await this.#connectOnce(token.secret, cycleAbort.signal)
           }
         }
         ownedConnection = connected.connection
         if (this.#closed || this.#abort.signal.aborted) return
+        if (cycleAbort.signal.aborted) continue
 
         const nextRegistration: NodeRelayRegistration = {
           schemaVersion: 1,
@@ -324,6 +362,7 @@ export class NodeRelayManager {
             nextRegistration,
           )
           if (this.#closed || this.#abort.signal.aborted) return
+          if (cycleAbort.signal.aborted) continue
           this.#registration = nextRegistration
         }
         if (token !== undefined) {
@@ -336,21 +375,49 @@ export class NodeRelayManager {
           }
         }
         if (this.#closed || this.#abort.signal.aborted) return
+        if (cycleAbort.signal.aborted) continue
 
         const activeConnection = ownedConnection
         this.#connection = activeConnection
         channelConnection = activeConnection
         removeMachineChannelHandler = activeConnection.setMachineChannelHandler(
           async (offer) =>
-            await this.#handleMachineChannelOffer(activeConnection, offer),
+            await this.#handleMachineChannelOffer(
+              activeConnection,
+              offer,
+              cycleAbort.signal,
+            ),
         )
         this.#appliedGrantRevision = -1
         await this.#flushGrant(activeConnection)
+        if (
+          cycleAbort.signal.aborted ||
+          this.#connection !== activeConnection
+        ) {
+          continue
+        }
         this.#setStatus('connected')
-        connectedAt = this.#monotonicNow()
+        this.#reconnect.noteConnected(this.#monotonicNow())
+        authenticatedConnection = true
+        // A lifecycle signal that arrived during authentication conservatively
+        // invalidates this candidate. The one pending wake then expedites its
+        // replacement without creating a second connection owner.
+        if (this.#reconnect.wakePending) {
+          void activeConnection.close().catch(() => undefined)
+        }
         await activeConnection.waitUntilClosed()
+        if (this.#closed || this.#abort.signal.aborted) return
+        if (cycleAbort.signal.aborted && this.#reconnect.wakePending) continue
+        this.#reconnect.noteDisconnected(this.#monotonicNow())
+        authenticatedConnection = false
+        this.#setStatus('offline', 'relay_closed')
       } catch (error) {
         if (this.#closed || this.#abort.signal.aborted) return
+        if (cycleAbort.signal.aborted && this.#reconnect.wakePending) continue
+        if (authenticatedConnection) {
+          this.#reconnect.noteDisconnected(this.#monotonicNow())
+          authenticatedConnection = false
+        }
         const failedConnection = this.#connection ?? ownedConnection
         this.#connection = undefined
         ownedConnection = undefined
@@ -380,12 +447,6 @@ export class NodeRelayManager {
         }
         token = undefined
         if (
-          connectedAt !== undefined &&
-          this.#monotonicNow() - connectedAt >= this.#stableResetMs
-        ) {
-          delayMs = this.#initialDelayMs
-        }
-        if (
           isPermanentRelayClientError(failure) ||
           failure.code === 'relay_protocol_error' ||
           (failure.code === 'relay_authentication_failed' &&
@@ -395,28 +456,28 @@ export class NodeRelayManager {
           return
         }
         this.#setStatus('offline', failure.code)
-        const retryDelay = Math.max(
-          delayMs,
-          Math.min(failure.retryAfterMs ?? 0, this.#maximumDelayMs),
-        )
-        await abortableDelay(
-          jitteredDelay(retryDelay, this.#random),
-          this.#abort.signal,
-        ).catch(() => undefined)
-        delayMs = Math.min(delayMs * 2, this.#maximumDelayMs)
+        retryAfterMs = failure.retryAfterMs ?? 0
       } finally {
+        if (authenticatedConnection) {
+          this.#reconnect.noteDisconnected(this.#monotonicNow())
+        }
         removeMachineChannelHandler?.()
         if (channelConnection !== undefined) {
           this.#destroyMachineChannels(channelConnection)
         }
         const connection = this.#connection ?? ownedConnection
         this.#connection = undefined
+        if (this.#cycleAbort === cycleAbort) this.#cycleAbort = undefined
         await connection?.close().catch(() => undefined)
+      }
+      if (!this.#reconnect.wakePending) {
+        const wait = await this.#reconnect.wait(retryAfterMs)
+        if (wait.outcome === 'closed') return
       }
     }
   }
 
-  async #connectOnce(enrollmentToken?: string) {
+  async #connectOnce(enrollmentToken?: string, cycleSignal?: AbortSignal) {
     const certificate = new X509Certificate(this.#state.identity.certificatePem)
     const peerPublicKeySpki = relayPublicKeySpkiFromCertificate(certificate.raw)
     const options: ConnectRelayControlOptions = {
@@ -441,7 +502,10 @@ export class NodeRelayManager {
             authorizedControllerFingerprint:
               this.#currentControllerFingerprint(),
           }),
-      signal: this.#abort.signal,
+      signal:
+        cycleSignal === undefined
+          ? this.#abort.signal
+          : AbortSignal.any([this.#abort.signal, cycleSignal]),
       now: this.#now,
     }
     return await this.#connect(options)
@@ -450,11 +514,13 @@ export class NodeRelayManager {
   async #handleMachineChannelOffer(
     connection: RelayControlConnection,
     offer: RelayIncomingMachineChannelOffer,
+    cycleSignal: AbortSignal,
   ): Promise<void> {
     const handler = this.#machineChannelHandler
     const trustedFingerprint = this.#currentControllerFingerprint()
     if (
       this.#closed ||
+      cycleSignal.aborted ||
       connection !== this.#connection ||
       handler === undefined ||
       trustedFingerprint === undefined ||
@@ -471,6 +537,7 @@ export class NodeRelayManager {
     }
     if (
       this.#closed ||
+      cycleSignal.aborted ||
       connection !== this.#connection ||
       handler !== this.#machineChannelHandler ||
       offer.controllerFingerprint !== this.#currentControllerFingerprint()
@@ -608,6 +675,15 @@ function permanentStatus(error: RelayClientError): NodeRelayStatus {
   return 'offline'
 }
 
+function isReconnectableStatus(status: NodeRelayStatus): boolean {
+  return (
+    status === 'connecting' ||
+    status === 'connected' ||
+    status === 'reconnecting' ||
+    status === 'offline'
+  )
+}
+
 function sameRegistration(
   left: NodeRelayRegistration | undefined,
   right: NodeRelayRegistration,
@@ -630,28 +706,4 @@ function positiveInteger(
     throw new TypeError(`${name} must be a positive integer`)
   }
   return resolved
-}
-
-function jitteredDelay(delayMs: number, random: () => number): number {
-  const sample = Math.min(1, Math.max(0, random()))
-  return Math.max(1, Math.round(delayMs * (0.8 + sample * 0.4)))
-}
-
-async function abortableDelay(
-  delayMs: number,
-  signal: AbortSignal,
-): Promise<void> {
-  if (signal.aborted) return
-  await new Promise<void>((resolve) => {
-    let settled = false
-    const settle = () => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      signal.removeEventListener('abort', settle)
-      resolve()
-    }
-    const timer = setTimeout(settle, delayMs)
-    signal.addEventListener('abort', settle, { once: true })
-  })
 }

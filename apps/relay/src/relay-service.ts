@@ -4,6 +4,7 @@ import {
 } from 'node:http'
 import { readdirSync } from 'node:fs'
 import type { AddressInfo } from 'node:net'
+import { performance } from 'node:perf_hooks'
 import {
   createServer as createTlsServer,
   type Server as TlsServer,
@@ -79,6 +80,8 @@ export interface RelayServiceOptions {
   readonly maximumChannelOpenAttemptsPerMinute?: number
   readonly channelOpenTimeoutMs?: number
   readonly channelAcknowledgementTimeoutMs?: number
+  /** Monotonic elapsed-time source; wall time remains presentation-only. */
+  readonly monotonicNow?: () => number
 }
 
 export interface RelayServiceMetrics {
@@ -176,7 +179,7 @@ interface ClosedChannelTombstone {
 class ActiveConnection implements RelayOwnedConnection {
   readonly subscriptions = new Map<string, Subscription>()
   readonly pendingPings = new Map<RelayPingId, number>()
-  lastHeartbeatAcknowledgedAt = Date.now()
+  lastHeartbeatAcknowledgedAt: number
   staleChannelFrames = 0
   invalidated = false
   readonly #invalidate: (reason: 'replaced' | 'revoked' | 'shutdown') => void
@@ -186,8 +189,10 @@ class ActiveConnection implements RelayOwnedConnection {
     readonly epoch: RelayConnectionEpoch,
     readonly channel: FramedRelayConnection,
     invalidate: (reason: 'replaced' | 'revoked' | 'shutdown') => void,
+    monotonicNow: number,
   ) {
     this.#invalidate = invalidate
+    this.lastHeartbeatAcknowledgedAt = monotonicNow
   }
 
   invalidate(reason: 'replaced' | 'revoked' | 'shutdown'): void {
@@ -219,6 +224,7 @@ export class RelayService {
     >
   > & { readonly managementPort: number | null }
   readonly #logger: RelaySafeLogger
+  readonly #monotonicNow: () => number
   readonly #server: TlsServer
   readonly #registry = new RelayConnectionRegistry<ActiveConnection>()
   readonly #channels: RelayChannelRegistry<ActiveConnection>
@@ -269,7 +275,7 @@ export class RelayService {
     channelBackpressureFailures: 0,
     staleChannelFrames: 0,
   }
-  readonly #startedAt = Date.now()
+  readonly #startedAt: number
   #framedQueueFramesHighWaterMark = 0
   #framedQueueBytesHighWaterMark = 0
   #pendingChannelDataFramesHighWaterMark = 0
@@ -281,6 +287,8 @@ export class RelayService {
   constructor(options: RelayServiceOptions) {
     this.#store = options.stateStore
     this.#logger = options.logger ?? createJsonRelayLogger()
+    this.#monotonicNow = options.monotonicNow ?? (() => performance.now())
+    this.#startedAt = this.#monotonicNow()
     this.#options = {
       host: options.host ?? '0.0.0.0',
       port: options.port ?? 443,
@@ -428,7 +436,10 @@ export class RelayService {
       this.#framingQueueTotals.queuedInboundBytes +
       this.#framingQueueTotals.pendingOutboundBytes
     return {
-      uptimeSeconds: Math.max(0, (Date.now() - this.#startedAt) / 1_000),
+      uptimeSeconds: Math.max(
+        0,
+        (this.#monotonicNow() - this.#startedAt) / 1_000,
+      ),
       processRssBytes: process.memoryUsage().rss,
       fileDescriptorCount: currentFileDescriptorCount(),
       activeTlsConnections: this.#rawSockets.size,
@@ -555,28 +566,34 @@ export class RelayService {
           ? this.#enroll(challenge, parsed.data, address)
           : this.#authenticate(challenge, parsed.data)
       const epoch = newRelayConnectionEpoch()
-      active = new ActiveConnection(peer, epoch, channel, (reason) => {
-        if (active !== undefined) {
-          void this.#closeChannelsForConnection(
-            active,
-            reason === 'replaced'
-              ? 'connection_replaced'
-              : reason === 'revoked'
-                ? 'authorization_revoked'
-                : 'relay_shutdown',
-          )
-        }
-        if (reason === 'replaced') {
-          void sendError(
-            channel,
-            'stale_connection',
-            'Relay connection was replaced',
-          )
-        } else if (reason === 'revoked') {
-          void sendError(channel, 'revoked', 'Relay enrollment was revoked')
-        }
-        channel.destroy()
-      })
+      active = new ActiveConnection(
+        peer,
+        epoch,
+        channel,
+        (reason) => {
+          if (active !== undefined) {
+            void this.#closeChannelsForConnection(
+              active,
+              reason === 'replaced'
+                ? 'connection_replaced'
+                : reason === 'revoked'
+                  ? 'authorization_revoked'
+                  : 'relay_shutdown',
+            )
+          }
+          if (reason === 'replaced') {
+            void sendError(
+              channel,
+              'stale_connection',
+              'Relay connection was replaced',
+            )
+          } else if (reason === 'revoked') {
+            void sendError(channel, 'revoked', 'Relay enrollment was revoked')
+          }
+          channel.destroy()
+        },
+        this.#monotonicNow(),
+      )
       const replaced = this.#registry.replace(active)
       if (replaced !== undefined) {
         this.#metrics.reconnectReplacements += 1
@@ -826,7 +843,7 @@ export class RelayService {
     }
     if (message.type === 'heartbeat.pong') {
       if (!connection.pendingPings.delete(message.pingId)) return
-      connection.lastHeartbeatAcknowledgedAt = Date.now()
+      connection.lastHeartbeatAcknowledgedAt = this.#monotonicNow()
       return
     }
     if (message.type === 'peer.goodbye') {
@@ -1491,7 +1508,7 @@ export class RelayService {
       connection.invalidate('revoked')
       return
     }
-    const now = Date.now()
+    const now = this.#monotonicNow()
     if (
       now - connection.lastHeartbeatAcknowledgedAt >
       this.#options.heartbeatTimeoutMs
@@ -1523,7 +1540,7 @@ export class RelayService {
         protocolVersion: relayProtocolVersion,
         connectionEpoch: connection.epoch,
         pingId,
-        sentAt: new Date(now).toISOString(),
+        sentAt: new Date().toISOString(),
       })
       .catch(() => undefined)
   }

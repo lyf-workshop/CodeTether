@@ -58,6 +58,68 @@ test('direct-first selects exactly one successful direct session path', async ()
   })
 })
 
+test('Relay unavailable selects one Direct session and never opens a Relay channel', async () => {
+  await withRoutingFixture(async (fixture) => {
+    const coordinator = await fixture.createCoordinator('direct_first')
+    await fixture.waitUntilReady(coordinator)
+    fixture.setRelayEnabled(false)
+    const before = fixture.snapshot()
+
+    const session = await coordinator.openCodexSession(
+      fixture.machine,
+      fixture.trust(),
+      codexSessionInput('relay-unavailable-direct'),
+    )
+
+    assert.equal(
+      fixture.counts.directCodexSessions,
+      before.directCodexSessions + 1,
+    )
+    assert.equal(fixture.counts.relayChannels, before.relayChannels)
+    assert.equal(fixture.counts.relayCodexSessions, before.relayCodexSessions)
+    assert.equal(
+      coordinator.connectionDetails(fixture.machine.machineId)
+        ?.executionTransport,
+      'direct',
+    )
+    await session.close()
+    await coordinator.close()
+  })
+})
+
+test('both unavailable fails the session selector without opening Relay or starting a Turn', async () => {
+  await withRoutingFixture(async (fixture) => {
+    const coordinator = await fixture.createCoordinator('direct_first')
+    await fixture.waitUntilReady(coordinator)
+    fixture.setRelayEnabled(false)
+    fixture.behavior.directCodexSessionError = new MachineTransportError(
+      'connection_failed',
+      'direct route unavailable in deterministic fixture',
+    )
+    const before = fixture.snapshot()
+
+    await assert.rejects(
+      coordinator.openCodexSession(
+        fixture.machine,
+        fixture.trust(),
+        codexSessionInput('both-unavailable'),
+      ),
+      (error) =>
+        error?.code === 'connection_failed' &&
+        error?.message === 'Remote Machine connection failed',
+    )
+
+    assert.equal(
+      fixture.counts.directCodexSessions,
+      before.directCodexSessions + 1,
+    )
+    assert.equal(fixture.counts.relayChannels, before.relayChannels)
+    assert.equal(fixture.counts.relayCodexSessions, before.relayCodexSessions)
+    assert.deepEqual(fixture.turnStarts, [])
+    await coordinator.close()
+  })
+})
+
 test('relay-only uses only the purpose-bound over-stream session seams and preserves Turn action identity', async () => {
   await withRoutingFixture(async (fixture) => {
     const coordinator = await fixture.createCoordinator('relay_only')
@@ -164,7 +226,7 @@ test('direct identity or protocol failures stop before Relay for ordinary Machin
   }
 })
 
-test('an authenticated Relay channel loss terminalizes the Turn without transport fallback or replay', async () => {
+test('an active Relay Turn never migrates to an available Direct path after channel loss', async () => {
   await withRoutingFixture(async (fixture) => {
     const coordinator = await fixture.createCoordinator('direct_first')
     await fixture.waitUntilReady(coordinator)
@@ -176,6 +238,17 @@ test('an authenticated Relay channel loss terminalizes the Turn without transpor
       fixture.machine,
       fixture.trust(),
       codexSessionInput('relay-loss'),
+    )
+    fixture.behavior.directCodexSessionError = undefined
+    const directConnectionsBeforeRecovery = fixture.counts.directConnections
+    assert.equal(coordinator.requestReconnect(), 1)
+    await waitFor(
+      () =>
+        fixture.counts.directConnections ===
+          directConnectionsBeforeRecovery + 1 &&
+        coordinator.connectionDetails(fixture.machine.machineId)
+          ?.directState === 'online',
+      'alternate Direct transport requalification',
     )
     fixture.behavior.turnEventError = new MachineTransportError(
       'connection_failed',
@@ -203,6 +276,54 @@ test('an authenticated Relay channel loss terminalizes the Turn without transpor
     assert.deepEqual(fixture.turnStarts, [action])
     assert.deepEqual(fixture.snapshot(), afterOpen)
 
+    await session.close()
+    await coordinator.close()
+  })
+})
+
+test('an active Direct Turn never migrates to an available Relay path after transport loss', async () => {
+  await withRoutingFixture(async (fixture) => {
+    const coordinator = await fixture.createCoordinator('direct_first')
+    await fixture.waitUntilReady(coordinator)
+    await waitFor(
+      () => coordinator.relayExecutionAvailable(fixture.machine.machineId),
+      'available alternate Relay transport',
+    )
+    const session = await coordinator.openCodexSession(
+      fixture.machine,
+      fixture.trust(),
+      codexSessionInput('direct-loss'),
+    )
+    assert.equal(
+      coordinator.connectionDetails(fixture.machine.machineId)
+        ?.executionTransport,
+      'direct',
+    )
+    fixture.behavior.turnEventError = new MachineTransportError(
+      'connection_failed',
+      'raw Direct stream failure',
+      { peerAuthenticated: true },
+    )
+    const afterOpen = fixture.snapshot()
+    const action = {
+      actionId: 'act_direct_loss_action01',
+      turnId: 'turn_direct_loss_action01',
+      prompt: 'execute once through the selected Direct transport',
+    }
+
+    const turn = await session.startTurn(action)
+    await assert.rejects(
+      async () => {
+        for await (const event of turn.events()) {
+          // The deterministic transport fails before publishing an event.
+          void event
+        }
+      },
+      (error) => error === fixture.behavior.turnEventError,
+    )
+
+    assert.deepEqual(fixture.turnStarts, [action])
+    assert.deepEqual(fixture.snapshot(), afterOpen)
     await session.close()
     await coordinator.close()
   })
@@ -273,6 +394,36 @@ test('effective Relay availability retains the failed direct state separately', 
       'a Relay epoch loss invalidates the prior Machine authentication proof',
     )
 
+    await coordinator.close()
+  })
+})
+
+test('duplicate Relay-ready signals retain one pending Machine reconnect worker', async () => {
+  await withRoutingFixture(async (fixture) => {
+    const coordinator = await fixture.createCoordinator('direct_first')
+    await fixture.waitUntilReady(coordinator)
+    let releaseReplacement
+    const replacementGate = new Promise((resolve) => {
+      releaseReplacement = resolve
+    })
+    fixture.behavior.directConnectionGates.push(replacementGate)
+    const before = fixture.snapshot()
+
+    assert.equal(coordinator.requestReconnect(), 1)
+    await waitFor(
+      () => fixture.counts.directConnections === before.directConnections + 1,
+      'held replacement Direct dial',
+    )
+    fixture.setRelayEnabled(true)
+    fixture.setRelayEnabled(true)
+    releaseReplacement()
+
+    await waitFor(
+      () => coordinator.connectionState(fixture.machine.machineId) === 'online',
+      'single replacement Machine route',
+    )
+    await new Promise((resolve) => setTimeout(resolve, 25))
+    assert.equal(fixture.counts.directConnections, before.directConnections + 1)
     await coordinator.close()
   })
 })
@@ -704,6 +855,7 @@ async function withRoutingFixture(run) {
     relayEnabled: true,
     relayEpoch: 1,
     directConnectionError: undefined,
+    directConnectionGates: [],
     relayConnectionError: undefined,
     relayConnectionGate: undefined,
     relayConnectionGates: [],
@@ -743,6 +895,7 @@ async function withRoutingFixture(run) {
     },
     async connectTrusted(input) {
       counts.directConnections += 1
+      await behavior.directConnectionGates.shift()
       if (behavior.directConnectionError !== undefined) {
         throw behavior.directConnectionError
       }

@@ -1,4 +1,5 @@
 import { basename, dirname, join, resolve } from 'node:path'
+import { performance } from 'node:perf_hooks'
 import type { Duplex } from 'node:stream'
 
 import {
@@ -7,6 +8,7 @@ import {
 } from '@codetether/agent-core'
 import {
   ControllerIdSchema,
+  ReconnectWakeCoordinator,
   readMachineTlsIdentityFile,
 } from '@codetether/machine-transport'
 import {
@@ -64,6 +66,12 @@ export interface ControllerRelayCoordinator {
   subscribe(
     listener: (machineId: MachineId, status: RelayMachineConnectivity) => void,
   ): () => void
+  /**
+   * Wakes the existing Host-owned reconnect workers after a platform/network
+   * lifecycle signal. This never creates product work or changes trust.
+   * Returns the number of workers that accepted a coalesced wake request.
+   */
+  requestReconnect?(): number
   configure(
     trust: DurableTrustedMachinePeer,
     input: ConfigureControllerRelayInput,
@@ -89,8 +97,10 @@ export interface ControllerRelayCoordinator {
 
 interface RelayWorker {
   readonly abort: AbortController
+  readonly reconnect: ReconnectWakeCoordinator
   task: Promise<void>
   connection?: RelayControlConnection
+  cycleAbort?: AbortController
 }
 
 type ConnectRelay = typeof connectRelayControl
@@ -104,7 +114,11 @@ export interface SecureControllerRelayCoordinatorOptions {
   readonly random?: () => number
   readonly reconnectInitialDelayMs?: number
   readonly reconnectMaximumDelayMs?: number
+  readonly reconnectStableResetMs?: number
+  readonly monotonicNow?: () => number
 }
+
+const DEFAULT_RECONNECT_STABLE_RESET_MS = 60_000
 
 /**
  * Host-owned, outbound-only Relay client. It owns infrastructure enrollment,
@@ -120,6 +134,8 @@ export class SecureControllerRelayCoordinator implements ControllerRelayCoordina
   readonly #random: () => number
   readonly #initialDelayMs: number
   readonly #maximumDelayMs: number
+  readonly #stableResetMs: number
+  readonly #monotonicNow: () => number
   readonly #workers = new Map<MachineId, RelayWorker>()
   readonly #statuses = new Map<MachineId, RelayMachineConnectivity>()
   readonly #listeners = new Set<
@@ -150,6 +166,12 @@ export class SecureControllerRelayCoordinator implements ControllerRelayCoordina
     if (this.#initialDelayMs > this.#maximumDelayMs) {
       throw new TypeError('Relay reconnect delay bounds are invalid')
     }
+    this.#stableResetMs = positiveInteger(
+      options.reconnectStableResetMs,
+      DEFAULT_RECONNECT_STABLE_RESET_MS,
+      'Relay reconnect stable reset',
+    )
+    this.#monotonicNow = options.monotonicNow ?? (() => performance.now())
   }
 
   static async create(
@@ -179,6 +201,28 @@ export class SecureControllerRelayCoordinator implements ControllerRelayCoordina
   ): () => void {
     this.#listeners.add(listener)
     return () => this.#listeners.delete(listener)
+  }
+
+  requestReconnect(): number {
+    if (this.#closed) return 0
+    let requested = 0
+    for (const [machineId, worker] of this.#workers) {
+      if (!worker.reconnect.requestWake()) continue
+      requested += 1
+      const connection = worker.connection
+      worker.connection = undefined
+      const configuration =
+        this.#persistence.getMachineRelayConfiguration(machineId)
+      if (configuration !== undefined) {
+        this.#setStatus(
+          machineId,
+          this.#statusFromConfiguration(configuration, 'reconnecting'),
+        )
+      }
+      worker.cycleAbort?.abort()
+      void connection?.close().catch(() => undefined)
+    }
+    return requested
   }
 
   async configure(
@@ -374,11 +418,20 @@ export class SecureControllerRelayCoordinator implements ControllerRelayCoordina
         'Internet Relay Machine transport is unavailable',
       )
     }
+    const connection = worker.connection
     try {
-      return await worker.connection.openMachineChannel(
+      const stream = await connection.openMachineChannel(
         current.peerKeyFingerprint,
         signal === undefined ? {} : { signal },
       )
+      if (worker.connection !== connection) {
+        stream.destroy()
+        throw new ControllerRelayCoordinatorError(
+          'relay_channel_lost',
+          'Internet Relay Machine channel generation changed while opening',
+        )
+      }
+      return stream
     } catch (error) {
       throw coordinatorError(error)
     }
@@ -427,8 +480,17 @@ export class SecureControllerRelayCoordinator implements ControllerRelayCoordina
     const abort = new AbortController()
     const worker: RelayWorker = {
       abort,
+      reconnect: new ReconnectWakeCoordinator({
+        initialDelayMs: this.#initialDelayMs,
+        maximumDelayMs: this.#maximumDelayMs,
+        stableResetMs: this.#stableResetMs,
+        random: this.#random,
+      }),
       task: Promise.resolve(),
     }
+    // Publish ownership before an already-authenticated transferred
+    // connection can synchronously enter the generation guard.
+    this.#workers.set(machineId, worker)
     worker.task = this.#runWorker(machineId, worker, initialConnection).finally(
       () => {
         if (this.#workers.get(machineId) === worker) {
@@ -436,7 +498,6 @@ export class SecureControllerRelayCoordinator implements ControllerRelayCoordina
         }
       },
     )
-    this.#workers.set(machineId, worker)
   }
 
   async #runWorker(
@@ -444,10 +505,10 @@ export class SecureControllerRelayCoordinator implements ControllerRelayCoordina
     worker: RelayWorker,
     initialConnection?: ConnectedRelayControl,
   ): Promise<void> {
-    let delayMs = this.#initialDelayMs
     let firstAttempt = initialConnection === undefined
     let suppliedConnection = initialConnection
     while (!this.#closed && !worker.abort.signal.aborted) {
+      worker.reconnect.consumePendingWake()
       const configuration =
         this.#persistence.getMachineRelayConfiguration(machineId)
       const trust = this.#persistence.getTrustedMachinePeer(machineId)
@@ -467,6 +528,10 @@ export class SecureControllerRelayCoordinator implements ControllerRelayCoordina
         ),
       )
       firstAttempt = false
+      let retryAfterMs = 0
+      let connectionAuthenticated = false
+      const cycleAbort = new AbortController()
+      worker.cycleAbort = cycleAbort
       try {
         if (suppliedConnection === undefined) {
           this.#persistence.recordMachineRelayAttempt(
@@ -480,10 +545,20 @@ export class SecureControllerRelayCoordinator implements ControllerRelayCoordina
             trust,
             configuration,
             undefined,
-            worker.abort.signal,
+            AbortSignal.any([worker.abort.signal, cycleAbort.signal]),
           ))
         suppliedConnection = undefined
+        if (
+          this.#workers.get(machineId) !== worker ||
+          worker.abort.signal.aborted ||
+          cycleAbort.signal.aborted
+        ) {
+          await connected.connection.close().catch(() => undefined)
+          continue
+        }
         worker.connection = connected.connection
+        connectionAuthenticated = true
+        worker.reconnect.noteConnected(this.#monotonicNow())
         this.#persistence.recordMachineRelayConnected(
           machineId,
           this.#timestamp(),
@@ -491,7 +566,12 @@ export class SecureControllerRelayCoordinator implements ControllerRelayCoordina
         await connected.connection.subscribeToNode(
           trust.peerKeyFingerprint,
           (observation) => {
-            if (worker.connection !== connected.connection) return
+            if (
+              cycleAbort.signal.aborted ||
+              worker.connection !== connected.connection
+            ) {
+              return
+            }
             const current =
               this.#persistence.getMachineRelayConfiguration(machineId)
             if (current === undefined) return
@@ -509,31 +589,42 @@ export class SecureControllerRelayCoordinator implements ControllerRelayCoordina
             )
           },
         )
+        if (
+          cycleAbort.signal.aborted ||
+          worker.connection !== connected.connection
+        ) {
+          continue
+        }
         this.#setStatus(
           machineId,
           this.#statusFromConfiguration(configuration, 'connected'),
         )
-        delayMs = this.#initialDelayMs
         await connected.connection.waitUntilClosed()
       } catch (error) {
         if (this.#closed || worker.abort.signal.aborted) return
+        if (cycleAbort.signal.aborted && worker.reconnect.wakePending) {
+          continue
+        }
         const failure = coordinatorError(error)
         this.#setFailureStatus(machineId, failure.reason)
         if (isPermanentCoordinatorReason(failure.reason)) return
         const relayError = error instanceof RelayClientError ? error : undefined
-        const retryDelay = Math.max(
-          delayMs,
-          Math.min(relayError?.retryAfterMs ?? 0, this.#maximumDelayMs),
+        retryAfterMs = Math.min(
+          relayError?.retryAfterMs ?? 0,
+          this.#maximumDelayMs,
         )
-        await abortableDelay(
-          jitteredDelay(retryDelay, this.#random),
-          worker.abort.signal,
-        )
-        delayMs = Math.min(delayMs * 2, this.#maximumDelayMs)
       } finally {
+        if (connectionAuthenticated) {
+          worker.reconnect.noteDisconnected(this.#monotonicNow())
+        }
+        if (worker.cycleAbort === cycleAbort) worker.cycleAbort = undefined
         const connection = worker.connection
         worker.connection = undefined
         await connection?.close().catch(() => undefined)
+      }
+      if (!worker.reconnect.wakePending) {
+        const wait = await worker.reconnect.wait(retryAfterMs)
+        if (wait.outcome === 'closed') return
       }
     }
   }
@@ -618,8 +709,12 @@ export class SecureControllerRelayCoordinator implements ControllerRelayCoordina
   async #stopWorker(machineId: MachineId): Promise<void> {
     const worker = this.#workers.get(machineId)
     if (worker === undefined) return
+    const connection = worker.connection
+    worker.connection = undefined
     worker.abort.abort()
-    await worker.connection?.close().catch(() => undefined)
+    worker.cycleAbort?.abort()
+    worker.reconnect.close()
+    await connection?.close().catch(() => undefined)
     await worker.task.catch(() => undefined)
   }
 
@@ -719,7 +814,14 @@ export class SecureControllerRelayCoordinator implements ControllerRelayCoordina
 
   #setStatus(machineId: MachineId, status: RelayMachineConnectivity): void {
     this.#statuses.set(machineId, status)
-    for (const listener of this.#listeners) listener(machineId, status)
+    for (const listener of this.#listeners) {
+      try {
+        listener(machineId, status)
+      } catch {
+        // Connectivity observers cannot take ownership of the one Relay
+        // worker or interrupt its generation cleanup.
+      }
+    }
   }
 
   #requireConfiguration(
@@ -892,28 +994,4 @@ function positiveInteger(
     throw new TypeError(`${name} must be a positive integer`)
   }
   return resolved
-}
-
-function jitteredDelay(delayMs: number, random: () => number): number {
-  const sample = Math.min(1, Math.max(0, random()))
-  return Math.max(1, Math.round(delayMs * (0.8 + sample * 0.4)))
-}
-
-async function abortableDelay(
-  delayMs: number,
-  signal: AbortSignal,
-): Promise<void> {
-  if (signal.aborted) return
-  await new Promise<void>((resolveDelay) => {
-    let settled = false
-    const settle = () => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      signal.removeEventListener('abort', settle)
-      resolveDelay()
-    }
-    const timer = setTimeout(settle, delayMs)
-    signal.addEventListener('abort', settle, { once: true })
-  })
 }

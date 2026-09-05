@@ -2,6 +2,7 @@ import { X509Certificate } from 'node:crypto'
 import { lookup } from 'node:dns/promises'
 import { isIP } from 'node:net'
 import { basename, dirname, join, resolve } from 'node:path'
+import { performance } from 'node:perf_hooks'
 import type { Duplex } from 'node:stream'
 
 import {
@@ -50,6 +51,7 @@ import {
   MachineTransportConversationIdSchema,
   MachineTransportProjectIdSchema,
   MachineTransportTurnIdSchema,
+  ReconnectWakeCoordinator,
   RemoteClaudeProviderIdentitySchema,
   RemoteCodexProviderIdentitySchema,
   type AuthenticatedRemoteMachineConnection,
@@ -157,6 +159,11 @@ export interface RemoteMachineCoordinator extends RemoteMachineStatusSource {
     machineId: MachineId,
     observedAt: Timestamp,
   ): boolean
+  /**
+   * Wakes existing connectivity workers only. It never opens a Provider
+   * session, starts a Turn, or changes durable Machine trust.
+   */
+  requestReconnect?(): number
   openCodexSession?(
     machine: DurableMachine,
     trust: DurableTrustedMachinePeer,
@@ -266,6 +273,8 @@ interface PendingPairing {
 
 interface RemoteWorker {
   abort: AbortController
+  reconnect?: ReconnectWakeCoordinator
+  cycleAbort?: AbortController
   connection?: AuthenticatedRemoteMachineConnection
   transport?: Exclude<MachineExecutionTransport, 'unavailable'>
   task?: Promise<void>
@@ -273,6 +282,8 @@ interface RemoteWorker {
 
 interface ProviderDiscoveryTask {
   readonly abort: AbortController
+  automatic?: boolean
+  rescheduleAfterCleanup?: boolean
   connection?: AuthenticatedRemoteMachineConnection
   task?: Promise<DurableRemoteProviderObservation>
 }
@@ -339,7 +350,11 @@ export interface SecureRemoteMachineCoordinatorOptions {
   /** Explicitly test-only. Production pairing always rejects loopback. */
   readonly allowLoopbackForTests?: boolean
   readonly heartbeatIntervalMs?: number
+  readonly reconnectInitialDelayMs?: number
   readonly reconnectMaximumDelayMs?: number
+  readonly reconnectStableResetMs?: number
+  readonly providerDiscoveryStabilityDelayMs?: number
+  readonly monotonicNow?: () => number
   readonly now?: () => Date
   readonly random?: () => number
   /** Narrow deterministic seam for Host coordinator tests. */
@@ -357,7 +372,11 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
   readonly #credentialDirectory: string
   readonly #allowLoopback: boolean
   readonly #heartbeatIntervalMs: number
+  readonly #reconnectInitialDelayMs: number
   readonly #reconnectMaximumDelayMs: number
+  readonly #reconnectStableResetMs: number
+  readonly #providerDiscoveryStabilityDelayMs: number
+  readonly #monotonicNow: () => number
   readonly #now: () => Date
   readonly #random: () => number
   readonly #transport: CoordinatorTransport
@@ -369,6 +388,10 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
   readonly #machineOperations = new Map<MachineId, Promise<unknown>>()
   readonly #retryTasks = new Map<MachineId, Promise<RemoteMachineConnection>>()
   readonly #providerDiscoveryTasks = new Map<MachineId, ProviderDiscoveryTask>()
+  readonly #providerDiscoveryStabilityTimers = new Map<
+    MachineId,
+    ReturnType<typeof setTimeout>
+  >()
   readonly #relayVerificationTasks = new Map<MachineId, RelayVerificationTask>()
   readonly #currentProviderObservations = new Map<MachineId, Timestamp>()
   readonly #states = new Map<MachineId, MachineConnectionState>()
@@ -413,11 +436,34 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
       machineTransportLimits.heartbeatIntervalMs,
       'heartbeat interval',
     )
+    this.#reconnectInitialDelayMs = positiveInteger(
+      options.reconnectInitialDelayMs,
+      Math.min(
+        1_000,
+        options.reconnectMaximumDelayMs ??
+          machineTransportLimits.heartbeatIntervalMs,
+      ),
+      'reconnect initial delay',
+    )
     this.#reconnectMaximumDelayMs = positiveInteger(
       options.reconnectMaximumDelayMs,
       machineTransportLimits.heartbeatIntervalMs,
       'reconnect maximum delay',
     )
+    if (this.#reconnectInitialDelayMs > this.#reconnectMaximumDelayMs) {
+      throw new TypeError('Remote Machine reconnect delay bounds are invalid')
+    }
+    this.#reconnectStableResetMs = positiveInteger(
+      options.reconnectStableResetMs,
+      60_000,
+      'reconnect stable reset',
+    )
+    this.#providerDiscoveryStabilityDelayMs = positiveInteger(
+      options.providerDiscoveryStabilityDelayMs,
+      500,
+      'provider discovery stability delay',
+    )
+    this.#monotonicNow = options.monotonicNow ?? (() => performance.now())
     this.#now = options.now ?? (() => new Date())
     this.#random = options.random ?? Math.random
     this.#transport = options.transport ?? {
@@ -470,6 +516,18 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
             this.#reconcileRelayVerification(machineId)
           })
           return
+        }
+        if (this.#states.get(machineId) !== 'online') {
+          const worker = this.#workers.get(machineId)
+          if (worker !== undefined && !worker.abort.signal.aborted) {
+            // Whether this call accepts a new wake or finds one already
+            // pending, the existing per-Machine worker remains the sole
+            // reconnect authority. Do not replace it or reset its backoff.
+            if (this.#states.get(machineId) !== 'connecting') {
+              this.#requestWorkerReconnect(machineId)
+            }
+            return
+          }
         }
         this.#reconcileRelayVerification(machineId)
       },
@@ -537,6 +595,15 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
   ): () => void {
     this.#listeners.add(listener)
     return () => this.#listeners.delete(listener)
+  }
+
+  requestReconnect(): number {
+    if (this.#closed) return 0
+    let requested = 0
+    for (const machineId of this.#workers.keys()) {
+      if (this.#requestWorkerReconnect(machineId)) requested += 1
+    }
+    return requested
   }
 
   subscribeRemoval(listener: (machineId: MachineId) => void): () => void {
@@ -890,11 +957,37 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
     machine: DurableMachine,
     trust: DurableTrustedMachinePeer,
   ): Promise<DurableRemoteProviderObservation> {
+    return this.#beginProviderDiscovery(machine, trust, 'explicit')
+  }
+
+  #beginProviderDiscovery(
+    machine: DurableMachine,
+    trust: DurableTrustedMachinePeer,
+    origin: 'explicit' | 'automatic',
+  ): Promise<DurableRemoteProviderObservation> {
     const id = MachineIdSchema.parse(machine.machineId)
     const existing = this.#providerDiscoveryTasks.get(id)
-    if (existing?.task !== undefined) return existing.task
+    if (existing?.task !== undefined) {
+      if (origin === 'explicit') {
+        if (existing.abort.signal.aborted) {
+          // Do not hand an explicit refresh the already-cancelled Promise from
+          // an obsolete network generation. Serialize one fresh operation
+          // after that exact cleanup releases ownership.
+          return existing.task
+            .catch(() => undefined)
+            .then(() => this.#beginProviderDiscovery(machine, trust, origin))
+        }
+        // An explicit refresh that joins the one automatic probe takes
+        // ownership of it. A later lifecycle hint must not cancel an
+        // operation now awaited by the user-facing refresh path.
+        existing.automatic = false
+        existing.rescheduleAfterCleanup = false
+      }
+      return existing.task
+    }
     const discovery: ProviderDiscoveryTask = {
       abort: new AbortController(),
+      automatic: origin === 'automatic',
     }
     const task = this.#serializeMachineOperation(id, async () => {
       const current = this.#requireCurrentActiveTrust(machine, trust)
@@ -909,6 +1002,7 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
         )
         const connection = route.connection
         discovery.connection = connection
+        discovery.abort.signal.throwIfAborted()
         this.#recordAuthenticatedRoute(
           id,
           route,
@@ -930,8 +1024,23 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
         throw coordinatorError(error)
       }
     }).finally(() => {
+      const shouldReschedule =
+        discovery.automatic === true &&
+        discovery.rescheduleAfterCleanup === true
       if (this.#providerDiscoveryTasks.get(id) === discovery) {
         this.#providerDiscoveryTasks.delete(id)
+      }
+      if (shouldReschedule) {
+        const worker = this.#workers.get(id)
+        if (
+          worker !== undefined &&
+          !worker.abort.signal.aborted &&
+          this.#states.get(id) === 'online'
+        ) {
+          // If cleanup outlived the replacement generation's initial
+          // stability timer, schedule exactly one fresh bounded probe now.
+          this.#scheduleStableProviderDiscovery(id, worker)
+        }
       }
     })
     discovery.task = task
@@ -1343,10 +1452,16 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
     this.#pending.clear()
     for (const worker of this.#workers.values()) {
       worker.abort.abort()
+      worker.cycleAbort?.abort()
+      worker.reconnect?.close()
       worker.connection?.close()
       if (worker.task !== undefined) cleanups.push(worker.task)
     }
     this.#workers.clear()
+    for (const timer of this.#providerDiscoveryStabilityTimers.values()) {
+      clearTimeout(timer)
+    }
+    this.#providerDiscoveryStabilityTimers.clear()
     for (const discovery of this.#providerDiscoveryTasks.values()) {
       discovery.abort.abort()
       discovery.connection?.close()
@@ -1526,10 +1641,100 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
     this.#startWorker(machine, trust)
   }
 
+  #requestWorkerReconnect(machineId: MachineId): boolean {
+    const worker = this.#workers.get(machineId)
+    if (
+      worker?.reconnect === undefined ||
+      worker.abort.signal.aborted ||
+      !worker.reconnect.requestWake()
+    ) {
+      return false
+    }
+    if (this.#hasLiveExecutionSession(machineId)) {
+      this.#deferredIdleRouteStates.set(machineId, 'connecting')
+    } else {
+      this.#setState(machineId, 'connecting')
+    }
+    if (this.#transportPolicy !== 'relay_only') {
+      this.#directStates.set(machineId, 'connecting')
+    }
+    worker.cycleAbort?.abort()
+    const connection = worker.connection
+    worker.connection = undefined
+    connection?.close()
+    this.#cancelStableProviderDiscovery(machineId)
+    this.#cancelAutomaticProviderDiscovery(machineId)
+    return true
+  }
+
+  #cancelStableProviderDiscovery(machineId: MachineId): void {
+    const timer = this.#providerDiscoveryStabilityTimers.get(machineId)
+    if (timer === undefined) return
+    clearTimeout(timer)
+    this.#providerDiscoveryStabilityTimers.delete(machineId)
+  }
+
+  #cancelAutomaticProviderDiscovery(machineId: MachineId): void {
+    const discovery = this.#providerDiscoveryTasks.get(machineId)
+    if (discovery?.automatic !== true) return
+    discovery.rescheduleAfterCleanup = true
+    discovery.abort.abort()
+    discovery.connection?.close()
+  }
+
+  #scheduleStableProviderDiscovery(
+    machineId: MachineId,
+    worker: RemoteWorker,
+  ): void {
+    this.#cancelStableProviderDiscovery(machineId)
+    const timer = setTimeout(() => {
+      if (this.#providerDiscoveryStabilityTimers.get(machineId) !== timer) {
+        return
+      }
+      this.#providerDiscoveryStabilityTimers.delete(machineId)
+      if (
+        this.#closed ||
+        worker.abort.signal.aborted ||
+        this.#workers.get(machineId) !== worker ||
+        this.#states.get(machineId) !== 'online'
+      ) {
+        return
+      }
+      const machine = this.#persistence.getMachine(machineId)
+      const trust = this.#persistence.getTrustedMachinePeer(machineId)
+      if (
+        machine === undefined ||
+        machine.kind !== 'remote' ||
+        trust?.trustState !== 'active'
+      ) {
+        return
+      }
+      const existing = this.#providerDiscoveryTasks.get(machineId)
+      if (existing !== undefined) {
+        if (existing.automatic === true) {
+          existing.rescheduleAfterCleanup = true
+        }
+        return
+      }
+      const discoveryPromise = this.#beginProviderDiscovery(
+        machine,
+        trust,
+        'automatic',
+      )
+      void discoveryPromise.catch(() => undefined)
+    }, this.#providerDiscoveryStabilityDelayMs)
+    timer.unref?.()
+    this.#providerDiscoveryStabilityTimers.set(machineId, timer)
+  }
+
   async #stopWorker(machineId: MachineId): Promise<void> {
     const worker = this.#workers.get(machineId)
     worker?.abort.abort()
+    worker?.cycleAbort?.abort()
+    worker?.reconnect?.close()
     worker?.connection?.close()
+    this.#cancelStableProviderDiscovery(machineId)
+    this.#cancelAutomaticProviderDiscovery(machineId)
     await worker?.task?.catch(() => undefined)
     if (this.#workers.get(machineId) === worker) {
       this.#workers.delete(machineId)
@@ -1649,9 +1854,19 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
     initialTrust: DurableTrustedMachinePeer,
   ): void {
     if (this.#workers.has(machine.machineId)) return
-    const worker: RemoteWorker = { abort: new AbortController() }
+    const worker: RemoteWorker = {
+      abort: new AbortController(),
+      reconnect: new ReconnectWakeCoordinator({
+        initialDelayMs: this.#reconnectInitialDelayMs,
+        maximumDelayMs: this.#reconnectMaximumDelayMs,
+        stableResetMs: this.#reconnectStableResetMs,
+        random: this.#random,
+      }),
+    }
     this.#workers.set(machine.machineId, worker)
     worker.task = this.#runWorker(machine, initialTrust, worker).finally(() => {
+      worker.reconnect?.close()
+      this.#cancelStableProviderDiscovery(machine.machineId)
       if (this.#workers.get(machine.machineId) === worker) {
         this.#workers.delete(machine.machineId)
       }
@@ -1862,6 +2077,10 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
             controller,
             ...(signal === undefined ? {} : { signal }),
           })
+          if (signal?.aborted === true) {
+            connection.close()
+            signal.throwIfAborted()
+          }
           this.#directStates.set(machine.machineId, 'online')
           return { connection, transport: 'direct', endpoint }
         } catch (error) {
@@ -1957,6 +2176,10 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
             controller,
             ...(signal === undefined ? {} : { signal }),
           })
+          if (signal?.aborted === true) {
+            connection.close()
+            signal.throwIfAborted()
+          }
           this.#directStates.set(machine.machineId, 'online')
           return { connection, transport: 'direct', endpoint }
         } catch (error) {
@@ -2020,6 +2243,10 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
             stream,
             ...(signal === undefined ? {} : { signal }),
           })
+          if (signal?.aborted === true) {
+            connection.close()
+            signal.throwIfAborted()
+          }
           this.#assertCurrentRelayEpoch(machine.machineId, relayEpoch)
           stream = undefined
           return { connection, transport: 'relay', relayEpoch }
@@ -2121,7 +2348,14 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
     this.#relayVerifiedMachines.set(machineId, relayEpoch)
     const state = this.#states.get(machineId)
     if (state === undefined) return
-    for (const listener of this.#listeners) listener(machineId, state)
+    for (const listener of this.#listeners) {
+      try {
+        listener(machineId, state)
+      } catch {
+        // Relay eligibility publication is observational and cannot own the
+        // authenticated Machine generation.
+      }
+    }
   }
 
   async #runWorker(
@@ -2129,9 +2363,13 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
     initialTrust: DurableTrustedMachinePeer,
     worker: RemoteWorker,
   ): Promise<void> {
-    let delayMs = Math.min(1_000, this.#reconnectMaximumDelayMs)
+    const reconnect = worker.reconnect
+    if (reconnect === undefined) {
+      throw new TypeError('Remote Machine reconnect coordinator is missing')
+    }
     let trust = initialTrust
     while (!this.#closed && !worker.abort.signal.aborted) {
+      reconnect.consumePendingWake()
       // A successful purpose-specific authenticated handoff (for example
       // ProjectLocation validation immediately before execution) already
       // proves the Machine online. Do not manufacture a transient disconnect
@@ -2144,19 +2382,36 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
       let authenticatedRoute: RoutedMachineConnection | undefined
       const routeObservation = { retryableDirectFailure: false }
       let heartbeatActive = false
+      let connectedGeneration = false
+      const cycleAbort = new AbortController()
+      worker.cycleAbort = cycleAbort
+      const cycleSignal = AbortSignal.any([
+        worker.abort.signal,
+        cycleAbort.signal,
+      ])
       try {
         const controller = await this.#loadController(trust)
         const route = await this.#connectMachineByPolicy(
           machine,
           trust,
           controller,
-          worker.abort.signal,
+          cycleSignal,
           routeObservation,
         )
+        if (
+          this.#workers.get(machine.machineId) !== worker ||
+          worker.abort.signal.aborted ||
+          cycleAbort.signal.aborted
+        ) {
+          route.connection.close()
+          continue
+        }
         authenticatedRoute = route
         const connection = route.connection
         worker.connection = connection
         worker.transport = route.transport
+        reconnect.noteConnected(this.#monotonicNow())
+        connectedGeneration = true
         const authenticatedAt = TimestampSchema.parse(this.#now().toISOString())
         if (trust.trustState === 'pending') {
           if (route.transport !== 'direct') {
@@ -2184,17 +2439,19 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
         ) {
           this.#startRelayVerification(machine, trust)
         }
-        delayMs = Math.min(1_000, this.#reconnectMaximumDelayMs)
         if (typeof connection.discoverProviders === 'function') {
-          void this.discoverProviders(machine, trust).catch(() => undefined)
+          this.#scheduleStableProviderDiscovery(machine.machineId, worker)
         }
         heartbeatActive = true
-        while (!this.#closed && !worker.abort.signal.aborted) {
-          await abortableDelay(this.#heartbeatIntervalMs, worker.abort.signal)
-          await connection.ping(worker.abort.signal)
+        while (!this.#closed && !cycleSignal.aborted) {
+          await abortableDelay(this.#heartbeatIntervalMs, cycleSignal)
+          await connection.ping(cycleSignal)
         }
       } catch (error) {
         if (worker.abort.signal.aborted || this.#closed) return
+        if (cycleAbort.signal.aborted && reconnect.wakePending) {
+          continue
+        }
         if (heartbeatActive && authenticatedRoute?.endpoint !== undefined) {
           this.#persistence.recordTrustedMachineEndpointFailure(
             machine.machineId,
@@ -2229,15 +2486,20 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
           }
         }
       } finally {
-        worker.connection?.close()
+        this.#cancelStableProviderDiscovery(machine.machineId)
+        if (connectedGeneration) {
+          reconnect.noteDisconnected(this.#monotonicNow())
+        }
+        if (worker.cycleAbort === cycleAbort) worker.cycleAbort = undefined
+        const connection = worker.connection ?? authenticatedRoute?.connection
         worker.connection = undefined
         worker.transport = undefined
+        connection?.close()
       }
-      await abortableDelay(
-        jitteredDelay(delayMs, this.#random),
-        worker.abort.signal,
-      ).catch(() => undefined)
-      delayMs = Math.min(delayMs * 2, this.#reconnectMaximumDelayMs)
+      if (!reconnect.wakePending) {
+        const wait = await reconnect.wait()
+        if (wait.outcome === 'closed') return
+      }
     }
   }
 
@@ -2257,6 +2519,7 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
     signal?: AbortSignal,
   ): Promise<DurableRemoteProviderObservation> {
     const discovery = await connection.discoverProviders(signal)
+    signal?.throwIfAborted()
     const observation = this.#persistence.recordRemoteProviderObservation(
       remoteProviderObservation(
         machine.machineId,
@@ -2374,7 +2637,14 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
     if (this.#states.get(machineId) === state) return
     this.#states.set(machineId, state)
     if (state !== 'online') this.#currentProviderObservations.delete(machineId)
-    for (const listener of this.#listeners) listener(machineId, state)
+    for (const listener of this.#listeners) {
+      try {
+        listener(machineId, state)
+      } catch {
+        // Status publication is observational. A presentation listener cannot
+        // interrupt socket invalidation or take ownership of reconnect.
+      }
+    }
   }
 
   #assertOpen(): void {

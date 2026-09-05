@@ -463,7 +463,351 @@ test('enroll closes an authenticated connection when durable adoption fails', as
   })
 })
 
-function controlledConnection(onSubscribe = () => undefined) {
+test('1000 Host recovery signals coalesce into one Controller Relay replacement', async () => {
+  await withFixture(async (fixture) => {
+    fixture.store.configureMachineRelay(
+      fixture.machineId,
+      {
+        host: '39.104.94.53',
+        port: 443,
+        transportSecurity: 'pinned_identity',
+      },
+      relayFingerprint,
+      timestamp,
+    )
+    fixture.store.markMachineRelayEnrolled(fixture.machineId, timestamp)
+    const connections = []
+    const coordinator = await SecureControllerRelayCoordinator.create({
+      persistence: fixture.store,
+      clientBuildIdentity: 'phase7d-test',
+      credentialDirectory: fixture.credentialDirectory,
+      reconnectInitialDelayMs: 60_000,
+      reconnectMaximumDelayMs: 60_000,
+      random: () => 0.5,
+      connect: async (options) => {
+        const connection = controlledConnection()
+        connections.push(connection)
+        return connectedResult(connection, options, false)
+      },
+    })
+    await waitFor(
+      () =>
+        connections.length === 1 &&
+        coordinator.status(fixture.machineId).state === 'connected',
+    )
+
+    let accepted = 0
+    for (let signal = 0; signal < 1_000; signal += 1) {
+      accepted += coordinator.requestReconnect()
+    }
+    assert.equal(accepted, 1)
+    await waitFor(
+      () =>
+        connections.length === 2 &&
+        coordinator.status(fixture.machineId).state === 'connected',
+    )
+    await new Promise((resolve) => setTimeout(resolve, 25))
+    assert.equal(connections.length, 2)
+    assert.equal(connections[0].closed, true)
+
+    await coordinator.close()
+    assert.equal(connections[1].closed, true)
+    assert.equal(coordinator.requestReconnect(), 0)
+  })
+})
+
+test('Controller reconnects after a transient hostname failure with the same durable identity and enrollment', async () => {
+  await withFixture(async (fixture) => {
+    const endpoint = {
+      host: 'relay.roaming.test',
+      port: 443,
+      transportSecurity: 'public_ca',
+    }
+    fixture.store.configureMachineRelay(
+      fixture.machineId,
+      endpoint,
+      relayFingerprint,
+      timestamp,
+    )
+    fixture.store.markMachineRelayEnrolled(fixture.machineId, timestamp)
+    const trustBefore = fixture.store.getTrustedMachinePeer(fixture.machineId)
+    const connection = controlledConnection()
+    const sourceRoutes = ['fixture-source-route-a', 'fixture-source-route-b']
+    const attempts = []
+    const coordinator = await SecureControllerRelayCoordinator.create({
+      persistence: fixture.store,
+      clientBuildIdentity: 'phase7d-test',
+      credentialDirectory: fixture.credentialDirectory,
+      reconnectInitialDelayMs: 5,
+      reconnectMaximumDelayMs: 10,
+      random: () => 0.5,
+      connect: async (options) => {
+        attempts.push({
+          options,
+          sourceRoute: sourceRoutes[attempts.length],
+        })
+        if (attempts.length === 1) {
+          throw new RelayClientError(
+            'relay_unreachable',
+            'temporary hostname resolution failure',
+          )
+        }
+        return connectedResult(connection, options, false)
+      },
+    })
+
+    await waitFor(
+      () =>
+        attempts.length === 2 &&
+        coordinator.status(fixture.machineId).state === 'connected',
+    )
+    assert.deepEqual(
+      attempts.map(({ sourceRoute }) => sourceRoute),
+      sourceRoutes,
+      'the deterministic fixture crossed a simulated source-route change',
+    )
+    for (const { options } of attempts) {
+      assert.deepEqual(options.endpoint, {
+        host: endpoint.host,
+        port: endpoint.port,
+      })
+      assert.equal(options.tls.serverName, endpoint.host)
+      assert.equal(
+        options.identity.publicKeyFingerprint,
+        fixture.identity.publicKeyFingerprint,
+      )
+      assert.equal(options.expectedRelayIdentityFingerprint, relayFingerprint)
+      assert.equal(options.enrollmentToken, undefined)
+    }
+    assert.equal(
+      fixture.store.getMachineRelayConfiguration(fixture.machineId)
+        .enrollmentState,
+      'enrolled',
+    )
+    assert.deepEqual(
+      fixture.store.getTrustedMachinePeer(fixture.machineId),
+      trustBefore,
+    )
+    assert.deepEqual(coordinator.status(fixture.machineId).endpoint, endpoint)
+    await coordinator.close()
+  })
+})
+
+test('Controller recovery synchronously revokes stale Relay channel and presence ownership', async () => {
+  await withFixture(async (fixture) => {
+    fixture.store.configureMachineRelay(
+      fixture.machineId,
+      {
+        host: '39.104.94.53',
+        port: 443,
+        transportSecurity: 'pinned_identity',
+      },
+      relayFingerprint,
+      timestamp,
+    )
+    fixture.store.markMachineRelayEnrolled(fixture.machineId, timestamp)
+    let stalePresence
+    let replacementPresence
+    let releaseChannel
+    const channelGate = new Promise((resolve) => {
+      releaseChannel = resolve
+    })
+    const staleStream = new PassThrough()
+    const current = controlledConnection((_fingerprint, listener) => {
+      stalePresence = listener
+    }, 'relay_connection_stale01')
+    current.openMachineChannel = async () => {
+      current.machineChannelOpens += 1
+      await channelGate
+      return staleStream
+    }
+    const replacement = controlledConnection((_fingerprint, listener) => {
+      replacementPresence = listener
+    }, 'relay_connection_current01')
+    let calls = 0
+    const coordinator = await SecureControllerRelayCoordinator.create({
+      persistence: fixture.store,
+      clientBuildIdentity: 'phase7d-test',
+      credentialDirectory: fixture.credentialDirectory,
+      reconnectInitialDelayMs: 60_000,
+      reconnectMaximumDelayMs: 60_000,
+      random: () => 0.5,
+      connect: async (options) =>
+        connectedResult(calls++ === 0 ? current : replacement, options, false),
+    })
+    await waitFor(
+      () => coordinator.status(fixture.machineId).state === 'connected',
+    )
+    stalePresence({ state: 'online' })
+    assert.equal(
+      coordinator.status(fixture.machineId).internetExecutionEnabled,
+      true,
+    )
+
+    const staleOpen = coordinator.openMachineChannel(fixture.trust)
+    await waitFor(() => current.machineChannelOpens === 1)
+    assert.equal(coordinator.requestReconnect(), 1)
+    assert.equal(coordinator.connectionEpoch(fixture.machineId), undefined)
+    assert.equal(coordinator.status(fixture.machineId).state, 'reconnecting')
+    stalePresence({ state: 'online' })
+    assert.equal(coordinator.status(fixture.machineId).state, 'reconnecting')
+    await assert.rejects(
+      coordinator.openMachineChannel(fixture.trust),
+      (error) => error?.reason === 'relay_unreachable',
+    )
+
+    releaseChannel()
+    await assert.rejects(
+      staleOpen,
+      (error) => error?.reason === 'relay_channel_lost',
+    )
+    assert.equal(staleStream.destroyed, true)
+    await waitFor(
+      () =>
+        calls === 2 &&
+        coordinator.status(fixture.machineId).state === 'connected',
+    )
+    replacementPresence({ state: 'online' })
+    const replacementStatus = coordinator.status(fixture.machineId)
+    assert.equal(replacementStatus.nodePresence, 'online')
+    assert.equal(replacementStatus.internetExecutionEnabled, true)
+    assert.equal(
+      coordinator.connectionEpoch(fixture.machineId),
+      replacement.connectionEpoch,
+    )
+
+    stalePresence({ state: 'offline' })
+    assert.deepEqual(
+      coordinator.status(fixture.machineId),
+      replacementStatus,
+      'an offline event from the old connection cannot mutate the replacement generation',
+    )
+    await coordinator.close()
+  })
+})
+
+test('a late Controller Relay dial from an invalidated generation is closed and never adopted', async () => {
+  await withFixture(async (fixture) => {
+    fixture.store.configureMachineRelay(
+      fixture.machineId,
+      {
+        host: '39.104.94.53',
+        port: 443,
+        transportSecurity: 'pinned_identity',
+      },
+      relayFingerprint,
+      timestamp,
+    )
+    fixture.store.markMachineRelayEnrolled(fixture.machineId, timestamp)
+    const stale = controlledConnection()
+    const replacement = controlledConnection()
+    let firstOptions
+    let resolveFirst
+    let calls = 0
+    const coordinator = await SecureControllerRelayCoordinator.create({
+      persistence: fixture.store,
+      clientBuildIdentity: 'phase7d-test',
+      credentialDirectory: fixture.credentialDirectory,
+      reconnectInitialDelayMs: 60_000,
+      reconnectMaximumDelayMs: 60_000,
+      random: () => 0.5,
+      connect: async (options) => {
+        calls += 1
+        if (calls === 1) {
+          firstOptions = options
+          return await new Promise((resolve) => {
+            resolveFirst = resolve
+          })
+        }
+        return connectedResult(replacement, options, false)
+      },
+    })
+    await waitFor(() => calls === 1)
+    assert.equal(coordinator.requestReconnect(), 1)
+    resolveFirst(connectedResult(stale, firstOptions, false))
+
+    await waitFor(
+      () =>
+        calls === 2 &&
+        coordinator.status(fixture.machineId).state === 'connected',
+    )
+    assert.equal(stale.closed, true)
+    assert.equal(
+      coordinator.connectionEpoch(fixture.machineId),
+      replacement.connectionEpoch,
+    )
+
+    await coordinator.close()
+  })
+})
+
+test('a later recovery signal invalidates a replacement Relay dial already in progress', async () => {
+  await withFixture(async (fixture) => {
+    fixture.store.configureMachineRelay(
+      fixture.machineId,
+      {
+        host: '39.104.94.53',
+        port: 443,
+        transportSecurity: 'pinned_identity',
+      },
+      relayFingerprint,
+      timestamp,
+    )
+    fixture.store.markMachineRelayEnrolled(fixture.machineId, timestamp)
+    const first = controlledConnection()
+    const staleReplacement = controlledConnection()
+    const current = controlledConnection()
+    let releaseStaleReplacement
+    const staleReplacementGate = new Promise((resolve) => {
+      releaseStaleReplacement = resolve
+    })
+    let staleOptions
+    let calls = 0
+    const coordinator = await SecureControllerRelayCoordinator.create({
+      persistence: fixture.store,
+      clientBuildIdentity: 'phase7d-test',
+      credentialDirectory: fixture.credentialDirectory,
+      reconnectInitialDelayMs: 60_000,
+      reconnectMaximumDelayMs: 60_000,
+      random: () => 0.5,
+      connect: async (options) => {
+        calls += 1
+        if (calls === 1) return connectedResult(first, options, false)
+        if (calls === 2) {
+          staleOptions = options
+          await staleReplacementGate
+          return connectedResult(staleReplacement, staleOptions, false)
+        }
+        return connectedResult(current, options, false)
+      },
+    })
+    await waitFor(
+      () => coordinator.status(fixture.machineId).state === 'connected',
+    )
+
+    assert.equal(coordinator.requestReconnect(), 1)
+    await waitFor(() => calls === 2)
+    assert.equal(coordinator.requestReconnect(), 1)
+    releaseStaleReplacement()
+
+    await waitFor(
+      () =>
+        calls === 3 &&
+        coordinator.status(fixture.machineId).state === 'connected',
+    )
+    assert.equal(staleReplacement.closed, true)
+    assert.equal(
+      coordinator.connectionEpoch(fixture.machineId),
+      current.connectionEpoch,
+    )
+    await coordinator.close()
+  })
+})
+
+function controlledConnection(
+  onSubscribe = () => undefined,
+  connectionEpoch = 'relay_connection_fixture01',
+) {
   let resolveClosed
   let closed = false
   const completion = new Promise((resolve) => {
@@ -472,7 +816,7 @@ function controlledConnection(onSubscribe = () => undefined) {
   const connection = {
     peerId: 'relay_peer_controllerfixture01',
     role: 'controller',
-    connectionEpoch: 'relay_connection_fixture01',
+    connectionEpoch,
     async subscribeToNode(fingerprint, listener) {
       onSubscribe(fingerprint, listener)
       return async () => undefined

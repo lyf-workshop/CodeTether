@@ -64,6 +64,8 @@ test('bootstraps and snapshots through QueryClient before opening one stream', a
     projectionUpdates: 0,
     duplicateEvents: 0,
     resetRecoveries: 0,
+    reconnectBackoffResets: 0,
+    reconnectDelayHighWaterMs: 0,
   })
 })
 
@@ -299,7 +301,7 @@ test('temporary stream failure keeps projection and reconnects from the last eve
   assert.equal(runtime.stats.reconnectAttempts, 1)
 })
 
-test('duplicate Desktop resume signals close one stream and reconnect from the same cursor', async (t) => {
+test('1000 duplicate Desktop resume signals close one stream and reconnect from the same cursor', async (t) => {
   const first = new ControlledStream()
   const second = new ControlledStream()
   const client = new FakeHostClient({
@@ -321,7 +323,7 @@ test('duplicate Desktop resume signals close one stream and reconnect from the s
     connectionStates.push(runtime.connectionState)
   })
   t.after(unsubscribeConnection)
-  for (let index = 0; index < 5; index += 1) {
+  for (let index = 0; index < 1_000; index += 1) {
     runtime.recoverAfterDesktopResume({ hostEpoch: epochA })
   }
 
@@ -336,6 +338,192 @@ test('duplicate Desktop resume signals close one stream and reconnect from the s
   assert.equal(runtime.stats.reconnectAttempts, 0)
   assert.equal(runtime.connectionState, 'connected')
   assert.equal(connectionStates.includes('reconnecting'), true)
+})
+
+test('Desktop resume wakes the current backoff without creating another reconnect worker', async (t) => {
+  const first = new ControlledStream()
+  const second = new ControlledStream()
+  const client = new FakeHostClient({
+    bootstraps: [bootstrap(epochA), bootstrap(epochA)],
+    snapshots: [snapshot(epochA, 0)],
+    streams: [first, second],
+  })
+  const runtime = new HostRuntime({
+    queryClient: createQueryClient(),
+    client,
+    reconnectDelayMs: 60_000,
+    reconnectMaximumDelayMs: 60_000,
+  })
+  t.after(async () => await runtime.stop())
+
+  runtime.start()
+  await waitFor(() => runtime.connectionState === 'connected')
+  first.fail(new Error('network became unavailable'))
+  await waitFor(() => runtime.connectionState === 'reconnecting')
+
+  for (let index = 0; index < 1_000; index += 1) {
+    runtime.recoverAfterDesktopResume({ hostEpoch: epochA })
+  }
+
+  await waitFor(() => runtime.connectionState === 'connected')
+  assert.equal(client.bootstrapCalls, 2)
+  assert.equal(client.connectCalls.length, 2)
+  assert.equal(runtime.stats.resumeRecoveries, 1)
+  assert.equal(runtime.stats.reconnectAttempts, 1)
+})
+
+test('SSE reconnect uses bounded exponential jitter and resets only after stable success', async (t) => {
+  const first = new ControlledStream()
+  const second = new ControlledStream()
+  const stable = new ControlledStream()
+  const recovered = new ControlledStream()
+  let monotonicNow = 0
+  const randomSamples = [0, 1, 0.5]
+  const client = new FakeHostClient({
+    bootstraps: [bootstrap(epochA)],
+    snapshots: [snapshot(epochA, 0)],
+    streams: [first, second, stable, recovered],
+  })
+  const runtime = new HostRuntime({
+    queryClient: createQueryClient(),
+    client,
+    reconnectDelayMs: 10,
+    reconnectMaximumDelayMs: 20,
+    reconnectStableResetMs: 50,
+    random: () => randomSamples.shift() ?? 0.5,
+    monotonicNow: () => monotonicNow,
+  })
+  t.after(async () => await runtime.stop())
+
+  runtime.start()
+  await waitFor(() => runtime.connectionState === 'connected')
+  first.fail(new Error('first unstable connection'))
+  await waitFor(() => client.connectCalls.length === 2)
+  assert.equal(runtime.stats.reconnectDelayHighWaterMs, 8)
+  second.fail(new Error('second unstable connection'))
+  await waitFor(() => client.connectCalls.length === 3)
+
+  assert.equal(runtime.stats.reconnectDelayHighWaterMs, 20)
+  assert.equal(runtime.stats.reconnectBackoffResets, 0)
+
+  monotonicNow = 50
+  stable.fail(new Error('stable connection ended'))
+  await waitFor(() => client.connectCalls.length === 4)
+
+  assert.equal(runtime.stats.reconnectAttempts, 3)
+  assert.equal(runtime.stats.reconnectBackoffResets, 1)
+  assert.equal(runtime.stats.reconnectDelayHighWaterMs, 20)
+  assert.equal(randomSamples.length, 0)
+})
+
+test('stopping a reconnect generation closes stale stream completion before a clean restart', async (t) => {
+  const first = new ControlledStream()
+  let resolveStaleConnection
+  const staleConnection = new Promise((resolve) => {
+    resolveStaleConnection = resolve
+  })
+  const current = new ControlledStream()
+  const stale = new ControlledStream()
+  const client = new FakeHostClient({
+    bootstraps: [bootstrap(epochA), bootstrap(epochA)],
+    snapshots: [snapshot(epochA, 0), snapshot(epochA, 0)],
+    streams: [first, () => staleConnection, current],
+  })
+  const runtime = new HostRuntime({
+    queryClient: createQueryClient(),
+    client,
+    reconnectDelayMs: 1,
+    reconnectMaximumDelayMs: 1,
+  })
+  t.after(async () => await runtime.stop())
+
+  runtime.start()
+  await waitFor(() => runtime.connectionState === 'connected')
+  first.fail(new Error('replace this generation'))
+  await waitFor(() => client.connectCalls.length === 2)
+
+  const stopping = runtime.stop()
+  resolveStaleConnection(stale)
+  await stopping
+  runtime.start()
+  await waitFor(() => runtime.connectionState === 'connected')
+
+  assert.equal(client.connectCalls.length, 3)
+  assert.equal(stale.closed, true)
+  assert.equal(current.closed, false)
+})
+
+test('Desktop resume rejects an abort-ignoring stale SSE connection result', async (t) => {
+  let resolveStaleConnection
+  const staleConnection = new Promise((resolve) => {
+    resolveStaleConnection = resolve
+  })
+  const stale = new ControlledStream()
+  const current = new ControlledStream()
+  const client = new FakeHostClient({
+    bootstraps: [bootstrap(epochA), bootstrap(epochA)],
+    snapshots: [snapshot(epochA, 0)],
+    streams: [() => staleConnection, current],
+  })
+  const runtime = new HostRuntime({
+    queryClient: createQueryClient(),
+    client,
+    reconnectDelayMs: 60_000,
+  })
+  t.after(async () => await runtime.stop())
+
+  runtime.start()
+  await waitFor(() => client.connectCalls.length === 1)
+  runtime.recoverAfterDesktopResume({ hostEpoch: epochA })
+  resolveStaleConnection(stale)
+
+  await waitFor(() => runtime.connectionState === 'connected')
+  assert.equal(client.connectCalls.length, 2)
+  assert.equal(stale.closed, true)
+  assert.equal(current.closed, false)
+  assert.equal(runtime.stats.resumeRecoveries, 1)
+})
+
+test('Desktop resume rejects an event yielded after a stale stream ignores close', async (t) => {
+  let releaseStaleEvent
+  const staleEventGate = new Promise((resolve) => {
+    releaseStaleEvent = resolve
+  })
+  const stale = {
+    closeCalls: 0,
+    async close() {
+      this.closeCalls += 1
+    },
+    async *[Symbol.asyncIterator]() {
+      await staleEventGate
+      yield messageDelta(1, 'stale post-resume event')
+    },
+  }
+  const current = new ControlledStream()
+  const client = new FakeHostClient({
+    bootstraps: [bootstrap(epochA), bootstrap(epochA)],
+    snapshots: [snapshot(epochA, 0)],
+    streams: [stale, current],
+  })
+  const queryClient = createQueryClient()
+  const runtime = new HostRuntime({
+    queryClient,
+    client,
+    reconnectDelayMs: 60_000,
+  })
+  t.after(async () => await runtime.stop())
+
+  runtime.start()
+  await waitFor(() => runtime.connectionState === 'connected')
+  runtime.recoverAfterDesktopResume({ hostEpoch: epochA })
+  releaseStaleEvent()
+
+  await waitFor(() => client.connectCalls.length === 2)
+  await waitFor(() => runtime.connectionState === 'connected')
+  assert.equal(readHostProjection(queryClient).cursor.seq, 0)
+  assert.equal(runtime.stats.hostEvents, 0)
+  assert.equal(runtime.stats.projectionUpdates, 0)
+  assert.equal(stale.closeCalls >= 1, true)
 })
 
 test('Desktop resume aborts one half-open SSE handshake and reuses its cursor', async (t) => {
@@ -586,6 +774,10 @@ class ControlledStream {
   #closed = false
   #queue = []
   #waiters = []
+
+  get closed() {
+    return this.#closed
+  }
 
   push(event) {
     if (this.#closed) throw new Error('Stream is closed')

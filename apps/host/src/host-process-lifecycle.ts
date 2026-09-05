@@ -3,6 +3,7 @@ import type { EventEmitter } from 'node:events'
 import type { Readable } from 'node:stream'
 
 const MAX_DESKTOP_COMMAND_BYTES = 1_024
+const NETWORK_RESTORED_PREFIX = 'network-restored desktop_resume '
 
 export type HostShutdownReason =
   | 'SIGINT'
@@ -23,6 +24,7 @@ export interface HostProcessLifecycleOptions {
   readonly input?: Readable
   readonly signalSource?: EventEmitter
   readonly maxDesktopCommandBytes?: number
+  readonly onNetworkRestored?: (generation: number) => void
 }
 
 /**
@@ -50,6 +52,7 @@ export function createHostProcessLifecycle(
   let settled = false
   let disposed = false
   let buffered = ''
+  let latestNetworkRecoveryGeneration = 0
   const decoder = new StringDecoder('utf8')
   const requested = new Promise<HostShutdownReason>((resolve) => {
     resolveRequest = resolve
@@ -117,6 +120,32 @@ export function createHostProcessLifecycle(
       }
       if (line === 'start') {
         activate()
+        continue
+      }
+      if (line.startsWith('network-restored')) {
+        if (!line.startsWith(NETWORK_RESTORED_PREFIX)) {
+          settle('desktop_channel_error')
+          return
+        }
+        const encodedGeneration = line.slice(NETWORK_RESTORED_PREFIX.length)
+        if (!/^[1-9][0-9]*$/u.test(encodedGeneration)) {
+          settle('desktop_channel_error')
+          return
+        }
+        const generation = Number(encodedGeneration)
+        if (!Number.isSafeInteger(generation)) {
+          settle('desktop_channel_error')
+          return
+        }
+        if (generation <= latestNetworkRecoveryGeneration) continue
+        latestNetworkRecoveryGeneration = generation
+        try {
+          options.onNetworkRestored?.(generation)
+        } catch {
+          // This private lifecycle line is an advisory recovery hint. A
+          // coordinator observer failure must not escape an EventEmitter
+          // callback and terminate the otherwise healthy Host sidecar.
+        }
       }
     }
     if (Buffer.byteLength(buffered, 'utf8') > maxDesktopCommandBytes) {

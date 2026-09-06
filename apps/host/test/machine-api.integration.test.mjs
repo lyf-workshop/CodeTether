@@ -1866,6 +1866,93 @@ test('remote adopted native session keeps the frozen private binding across resc
   }
 })
 
+test('remote adopted binding survives Relay generation replacement and resumes only on the replacement route', async () => {
+  const fixture = await createRemoteAcquisitionFixture('codex')
+  const nativeSessionId = 'native-external-phase8a-relay-restart'
+  try {
+    fixture.coordinator.providerSessionCandidate = {
+      provider: 'codex',
+      nativeSessionId,
+      revision: 'revision_phase8a_relay_restart',
+      workingDirectory: fixture.coordinator.validationCanonicalPath,
+      title: 'External session across Relay restart',
+      createdAt: '2026-08-29T10:00:00.000Z',
+      lastActiveAt: '2026-08-29T11:00:00.000Z',
+      providerVersion: '1.2.3',
+      resumeStatus: 'supported',
+      historicalTranscript: 'unavailable',
+    }
+
+    const discovered = await fixture.service.discoverProviderSessions(
+      fixture.project.projectId,
+      fixture.coordinator.machineId,
+      { provider: 'codex', limit: 50, rescan: true },
+    )
+    const candidate = discovered.candidates[0]
+    assert.ok(candidate)
+    const adopted = await fixture.service.adoptProviderSession(
+      fixture.project.projectId,
+      fixture.coordinator.machineId,
+      {
+        actionId: 'act_phase8a_relay_restart_adopt',
+        discoveryCandidateId: candidate.discoveryCandidateId,
+      },
+    )
+    const conversationId = adopted.data.conversation.conversationId
+    const bindingBefore = fixture.persistence.getConversation(conversationId)
+    assert.ok(bindingBefore)
+    assert.equal(
+      bindingBefore.providerThreadId.startsWith('remote-codex-v1:'),
+      true,
+    )
+    assert.equal(
+      bindingBefore.providerThreadId.includes(nativeSessionId),
+      false,
+    )
+    assert.equal(fixture.coordinator.openCodexCalls.length, 0)
+
+    // A Relay restart discards ephemeral discovery/channel state. The durable
+    // private binding, not that stale candidate, must drive the later resume.
+    fixture.coordinator.providerSessionCandidate = undefined
+    const replacementGeneration = fixture.coordinator.replaceRelayGeneration()
+    assert.equal(replacementGeneration, 2)
+    assert.equal(fixture.coordinator.connectionState(), 'online')
+    assert.equal(fixture.coordinator.openCodexCalls.length, 0)
+
+    const bindingAfter = fixture.persistence.getConversation(conversationId)
+    assert.ok(bindingAfter)
+    assert.equal(bindingAfter.providerThreadId, bindingBefore.providerThreadId)
+    assert.equal(bindingAfter.origin, 'adopted_native')
+    assert.equal(bindingAfter.providerSessionMaterialized, true)
+
+    await fixture.service.startTurn(conversationId, {
+      actionId: 'act_phase8a_relay_restart_resume',
+      input: {
+        type: 'text',
+        text: 'Explicit continuation on replacement route',
+      },
+    })
+    const completed = await waitForConversationIdle(
+      fixture.service,
+      conversationId,
+    )
+    assert.equal(completed.conversation.status, 'completed')
+    assert.equal(fixture.coordinator.openCodexCalls.length, 1)
+    assert.equal(
+      fixture.coordinator.openCodexCalls[0].providerThreadId,
+      nativeSessionId,
+    )
+    assert.deepEqual(fixture.coordinator.openCodexGenerations, [2])
+    assert.equal(fixture.coordinator.remoteTurnCalls.length, 1)
+    assert.equal(
+      fixture.persistence.getConversation(conversationId)?.providerThreadId,
+      bindingBefore.providerThreadId,
+    )
+  } finally {
+    await fixture.close()
+  }
+})
+
 test('remote metadata discovery remains available when current native resume capability is unsupported', async () => {
   const fixture = await createRemoteAcquisitionFixture('codex')
   try {
@@ -2159,6 +2246,7 @@ class FakeRemoteMachineCoordinator {
     this.remoteExecution = false
     this.remoteClaudeExecution = false
     this.openCodexCalls = []
+    this.openCodexGenerations = []
     this.openClaudeCalls = []
     this.remoteTurnCalls = []
     this.remoteClaudeTurnCalls = []
@@ -2224,6 +2312,13 @@ class FakeRemoteMachineCoordinator {
     for (const listener of this.statusListeners) {
       listener(this.machineId, this.connection.state)
     }
+  }
+
+  replaceRelayGeneration() {
+    this.connectionGeneration = (this.connectionGeneration ?? 1) + 1
+    this.setConnection('offline')
+    this.setConnection('online')
+    return this.connectionGeneration
   }
 
   connectionDetails() {
@@ -2389,6 +2484,7 @@ class FakeRemoteMachineCoordinator {
     }
     if (this.openError !== undefined) throw this.openError
     this.openCodexCalls.push(input)
+    this.openCodexGenerations.push(this.connectionGeneration ?? 1)
     const providerThreadId =
       input.providerThreadId ?? 'remote-native-session-machine-api'
     let closed = false

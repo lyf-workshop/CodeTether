@@ -8,7 +8,12 @@ import test from 'node:test'
 import { Worker } from 'node:worker_threads'
 
 import { HostEventPublisher } from '../dist/api/host-event-publisher.js'
-import { HostService, newEpoch } from '../dist/api/host-service.js'
+import { ProviderConversationUnavailableError } from '../dist/api/agent-runtime.js'
+import {
+  HostService,
+  HostServiceError,
+  newEpoch,
+} from '../dist/api/host-service.js'
 import { WorkspacePolicy } from '../dist/api/workspace-policy.js'
 import {
   ConversationStore,
@@ -238,6 +243,157 @@ test('Host hydration resumes an adopted zero-Turn session without creating one',
   }
 })
 
+test('removed native session leaves its adopted Conversation and private binding intact while resume fails closed', async (t) => {
+  const fixture = await createFixture(t)
+  const seed = ConversationStore.open({ databasePath: fixture.databasePath })
+  const adopted = seed.createOrGetAdoptedConversation(
+    adoptedConversation(fixture, 'conv_phase8a_removed_native'),
+  )
+  seed.close()
+
+  const runtime = new ResumeOnlyRuntime()
+  runtime.resumeError = new ProviderConversationUnavailableError(
+    'codex',
+    'native-session-phase8a-adoption',
+  )
+  const persistence = ConversationStore.open({
+    databasePath: fixture.databasePath,
+  })
+  const service = new HostService({
+    runtime,
+    persistence,
+    workspacePolicy: await WorkspacePolicy.create([fixture.workspace]),
+    publisher: new HostEventPublisher({ epoch: newEpoch() }),
+    hostVersion: 'phase8a-test',
+    now: () => new Date(timestamp),
+  })
+  try {
+    await assert.rejects(
+      service.startTurn(adopted.conversation.conversationId, {
+        actionId: 'act_phase8a_removed_native_resume',
+        input: { type: 'text', text: 'Explicit continuation after removal' },
+      }),
+      (error) => {
+        assert.ok(error instanceof HostServiceError)
+        assert.equal(error.code, 'provider_session_lost')
+        assert.equal(error.failure?.reason, 'provider_session_lost')
+        return true
+      },
+    )
+
+    assert.equal(runtime.startConversationCalls, 0)
+    assert.equal(runtime.resumeCalls.length, 1)
+    assert.equal(runtime.turnCalls.length, 0)
+    const detail = service.getConversation(adopted.conversation.conversationId)
+    assert.equal(detail.conversation.origin, 'adopted_native')
+    assert.equal(detail.runtime.turns.length, 1)
+    assert.equal(detail.runtime.turns[0].status, 'failed')
+    assert.equal(
+      detail.runtime.turns[0].error?.failure?.reason,
+      'provider_session_lost',
+    )
+
+    const durable = persistence.getConversation(
+      adopted.conversation.conversationId,
+    )
+    assert.ok(durable)
+    assert.equal(durable.providerThreadId, 'native-session-phase8a-adoption')
+    assert.equal(durable.providerSessionMaterialized, true)
+    assert.equal(durable.origin, 'adopted_native')
+    assert.equal(
+      persistence.getConversationByProviderSession(
+        fixture.machineId,
+        'codex',
+        'native-session-phase8a-adoption',
+      )?.conversationId,
+      adopted.conversation.conversationId,
+    )
+  } finally {
+    await service.close()
+  }
+
+  const restarted = ConversationStore.open({
+    databasePath: fixture.databasePath,
+  })
+  try {
+    const durable = restarted.getConversation(
+      adopted.conversation.conversationId,
+    )
+    assert.ok(durable)
+    assert.equal(durable.providerThreadId, 'native-session-phase8a-adoption')
+    assert.equal(durable.providerSessionMaterialized, true)
+    assert.equal(durable.origin, 'adopted_native')
+    assert.equal(
+      restarted.listTurns(adopted.conversation.conversationId).length,
+      1,
+    )
+  } finally {
+    restarted.close()
+  }
+})
+
+test('organization changes on an adopted Conversation never replace its private native binding', async (t) => {
+  const fixture = await createFixture(t)
+  const persistence = ConversationStore.open({
+    databasePath: fixture.databasePath,
+  })
+  const adopted = persistence.createOrGetAdoptedConversation(
+    adoptedConversation(fixture, 'conv_phase8a_adopted_organization'),
+  )
+  const runtime = new ResumeOnlyRuntime()
+  const service = new HostService({
+    runtime,
+    persistence,
+    workspacePolicy: await WorkspacePolicy.create([fixture.workspace]),
+    publisher: new HostEventPublisher({ epoch: newEpoch() }),
+    hostVersion: 'phase8a-test',
+    now: () => new Date(timestamp),
+  })
+  try {
+    const renamed = await service.renameConversation(
+      adopted.conversation.conversationId,
+      {
+        actionId: 'act_phase8a_adopted_organization_rename',
+        title: 'Renamed adopted conversation',
+      },
+    )
+    assert.equal(
+      renamed.data.conversation.title,
+      'Renamed adopted conversation',
+    )
+    const pinned = await service.pinConversation(
+      adopted.conversation.conversationId,
+      { actionId: 'act_phase8a_adopted_organization_pin' },
+    )
+    assert.ok(pinned.data.conversation.pinnedAt)
+    const archived = await service.archiveConversation(
+      adopted.conversation.conversationId,
+      { actionId: 'act_phase8a_adopted_organization_archive' },
+    )
+    assert.ok(archived.data.conversation.archivedAt)
+    assert.equal(archived.data.conversation.pinnedAt, undefined)
+    const restored = await service.unarchiveConversation(
+      adopted.conversation.conversationId,
+      { actionId: 'act_phase8a_adopted_organization_restore' },
+    )
+    assert.equal(restored.data.conversation.archivedAt, undefined)
+    assert.equal(restored.data.conversation.origin, 'adopted_native')
+
+    const durable = persistence.getConversation(
+      adopted.conversation.conversationId,
+    )
+    assert.ok(durable)
+    assert.equal(durable.providerThreadId, 'native-session-phase8a-adoption')
+    assert.equal(durable.providerSessionMaterialized, true)
+    assert.equal(durable.origin, 'adopted_native')
+    assert.equal(runtime.startConversationCalls, 0)
+    assert.equal(runtime.resumeCalls.length, 0)
+    assert.equal(runtime.turnCalls.length, 0)
+  } finally {
+    await service.close()
+  }
+})
+
 async function createFixture(t) {
   const directory = await mkdtemp(join(tmpdir(), 'codetether-phase8a-store-'))
   const workspace = join(directory, 'workspace')
@@ -373,6 +529,7 @@ class ResumeOnlyRuntime {
 
   async resumeConversation(options) {
     this.resumeCalls.push(options)
+    if (this.resumeError !== undefined) throw this.resumeError
     return { providerThreadId: options.providerThreadId }
   }
 

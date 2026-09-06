@@ -56,8 +56,8 @@ test('validates init identity and emits canonical lifecycle events', () => {
   )
 })
 
-test('accepts the frozen Phase 5A and current Phase 5B CLI versions', () => {
-  for (const version of ['2.1.250', '2.1.251']) {
+test('accepts the exact revalidated Claude Code versions', () => {
+  for (const version of ['2.1.250', '2.1.251', '2.1.263']) {
     const normalizer = createNormalizer()
     assert.deepEqual(
       normalizer

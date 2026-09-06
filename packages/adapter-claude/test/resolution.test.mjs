@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises'
+import { chmod, mkdtemp, mkdir, realpath, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { delimiter, dirname, join } from 'node:path'
 import test from 'node:test'
 
 import {
@@ -108,3 +108,40 @@ test('reports not installed when PATH has no candidate', async () => {
     ClaudeCodeNotInstalledError,
   )
 })
+
+test(
+  'POSIX PATH order deterministically selects one canonical installation',
+  { skip: process.platform === 'win32' },
+  async (t) => {
+    const root = await mkdtemp(join(tmpdir(), 'codetether-claude-posix-path-'))
+    t.after(async () => {
+      await import('node:fs/promises').then(({ rm }) =>
+        rm(root, { recursive: true, force: true }),
+      )
+    })
+    const firstDirectory = join(root, 'first')
+    const secondDirectory = join(root, 'second')
+    await Promise.all([
+      mkdir(firstDirectory, { recursive: true }),
+      mkdir(secondDirectory, { recursive: true }),
+    ])
+    const first = join(firstDirectory, 'claude')
+    const second = join(secondDirectory, 'claude')
+    await Promise.all([
+      writeFile(first, '#!/bin/sh\nexit 0\n'),
+      writeFile(second, '#!/bin/sh\nexit 0\n'),
+    ])
+    await Promise.all([chmod(first, 0o755), chmod(second, 0o755)])
+
+    const selectedFirst = await resolveClaudeCodeLauncher({
+      platform: 'linux',
+      environment: { PATH: `${firstDirectory}${delimiter}${secondDirectory}` },
+    })
+    const selectedSecond = await resolveClaudeCodeLauncher({
+      platform: 'linux',
+      environment: { PATH: `${secondDirectory}${delimiter}${firstDirectory}` },
+    })
+    assert.equal(selectedFirst.executable, await realpath(first))
+    assert.equal(selectedSecond.executable, await realpath(second))
+  },
+)

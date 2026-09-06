@@ -1,5 +1,12 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, sep } from 'node:path'
 import test from 'node:test'
@@ -70,6 +77,77 @@ test('real Claude discovery metadata fits the private Machine wire schema', asyn
       resumeStatus: native.resumeStatus,
       historicalTranscript: native.historicalTranscript,
     }),
+  )
+})
+
+test('default Claude discovery uses the Node lifecycle configuration root only', async (t) => {
+  const directory = await mkdtemp(
+    join(tmpdir(), 'codetether-node-claude-config-selection-'),
+  )
+  t.after(async () => {
+    await rm(directory, { recursive: true, force: true })
+  })
+  const selectedConfiguration = join(directory, 'selected-claude-state')
+  const decoyConfiguration = join(directory, 'decoy-claude-state')
+  const selectedBucket = join(selectedConfiguration, 'projects', 'fixture')
+  const decoyBucket = join(decoyConfiguration, 'projects', 'fixture')
+  const projectDirectory = join(directory, 'project')
+  await Promise.all([
+    mkdir(selectedBucket, { recursive: true }),
+    mkdir(decoyBucket, { recursive: true }),
+    mkdir(projectDirectory),
+  ])
+  const projectRoot = await realpath(projectDirectory)
+  const selectedId = '10000000-0000-4000-8000-000000000001'
+  const decoyId = '20000000-0000-4000-8000-000000000002'
+  const record = (sessionId, title) =>
+    `${JSON.stringify({
+      type: 'ai-title',
+      sessionId,
+      cwd: projectRoot,
+      timestamp: '2026-09-06T12:00:00.000Z',
+      version: '2.1.263',
+      aiTitle: title,
+    })}\n`
+  const selectedFile = join(selectedBucket, `${selectedId}.jsonl`)
+  const decoyFile = join(decoyBucket, `${decoyId}.jsonl`)
+  await Promise.all([
+    writeFile(
+      selectedFile,
+      record(selectedId, 'Selected installation history'),
+    ),
+    writeFile(decoyFile, record(decoyId, 'Decoy installation history')),
+  ])
+  const before = await Promise.all([
+    readFile(selectedFile),
+    readFile(decoyFile),
+  ])
+  const registry = new RemoteProviderSessionDiscoveryRegistry({
+    environment: {
+      ...process.env,
+      CLAUDE_CONFIG_DIR: selectedConfiguration,
+    },
+  })
+
+  const page = await registry.discover({
+    provider: 'claude-code',
+    projectRoot,
+    limit: 10,
+  })
+  assert.equal(page.status, 'supported')
+  assert.equal(page.candidates.length, 1)
+  assert.equal(page.candidates[0].nativeSessionId, selectedId)
+  const validated = await registry.validateCandidate({
+    provider: 'claude-code',
+    projectRoot,
+    nativeSessionId: selectedId,
+    revision: page.candidates[0].revision,
+  })
+  assert.equal(validated?.nativeSessionId, selectedId)
+  assert.equal(validated?.workingDirectory, page.candidates[0].workingDirectory)
+  assert.deepEqual(
+    await Promise.all([readFile(selectedFile), readFile(decoyFile)]),
+    before,
   )
 })
 

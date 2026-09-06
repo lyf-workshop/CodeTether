@@ -70,7 +70,9 @@ The state-database-only query is intentionally conservative. Legacy native sessi
 
 The Claude adapter reads only immediate UUID `.jsonl` session files below the configured `CLAUDE_CONFIG_DIR/projects` location (or the normal user-local default). It does not recurse through the home directory, read settings or credentials, start Claude, or contact the inference backend. JSONL is streamed under per-line, per-file, aggregate-byte, file-count, directory-count, and entry-count bounds. Transcript content is discarded after extracting guarded metadata.
 
-Current known writer versions are checked conservatively. Missing optional fields and unknown optional fields are tolerated; inconsistent identity/path evidence, truncation, oversized data, symlinks, or unknown required writer provenance cannot be claimed resumable. The Owner-configured Claude backend and exact executable remain unchanged. Local metadata discovery does not require backend availability; an actual later resume does.
+Current known writer versions (`2.1.250`, `2.1.251`, and `2.1.263`) are checked conservatively. Missing optional fields and unknown optional fields are tolerated; inconsistent identity/path evidence, truncation, oversized data, symlinks, or unknown required writer provenance cannot be claimed resumable. The Owner-configured Claude backend and exact executable remain unchanged. Local metadata discovery does not require backend availability; an actual later resume does.
+
+Multiple installations remain a future Phase 8B product surface, but remote execution has one narrow correctness rule now: the Node snapshots its Provider environment and pins the first successfully resolved canonical Claude launcher for that Node lifecycle. Version/authentication observation and later new-session/native-resume execution use that same private launcher; they never independently re-resolve `PATH` or fall through to another installation after a Turn begins. A failed pre-selection resolution is not cached, so the existing bounded refresh can recover after installation repair. Store discovery remains executable-independent but uses the same lifecycle configuration environment, keeping `HOME`/`CLAUDE_CONFIG_DIR` selection consistent without starting Claude.
 
 ## Project and Machine authority
 
@@ -137,7 +139,7 @@ Direct-first/Relay-fallback selection applies independently to each remote disco
 
 ## Future boundaries
 
-- Phase 8B may broaden Provider-format/version compatibility and lifecycle reporting.
+- Phase 8B may broaden Provider-format/version compatibility and lifecycle reporting, including explicit discovered-installation identity, compatibility, health, and default selection for Machines with more than one installation.
 - Phase 8C may model Provider backend/profile readiness. Discovery identity remains Machine + Provider + native session, not backend profile.
 - Phase 8D may broaden onboarding/Doctor workflows.
 - Mobile, Remote Terminal, Remote Files, full transcript conversion, unmatched-session browsing, and new Providers remain outside Phase 8A.

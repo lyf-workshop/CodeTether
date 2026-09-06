@@ -22,7 +22,11 @@ const UUID_PATTERN =
 const REVISION_PATTERN = /^[0-9a-f]{64}$/u
 const SEMANTIC_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/u
 
-const SUPPORTED_CLAUDE_STORE_WRITERS = new Set(['2.1.250', '2.1.251'])
+const SUPPORTED_CLAUDE_STORE_WRITERS = new Set([
+  '2.1.250',
+  '2.1.251',
+  '2.1.263',
+])
 
 const MAXIMUM_PAGE_SIZE = 100
 const DEFAULT_MAXIMUM_PROJECT_DIRECTORIES = 4_096

@@ -14,6 +14,8 @@ import { spawnNodeProviderProcess } from './provider-process-guardian.js'
 
 export interface RemoteProviderSessionDiscoveryRegistryOptions {
   readonly discoveries?: readonly ProviderSessionDiscovery[]
+  /** Node lifecycle environment snapshot; never supplied by Machine input. */
+  readonly environment?: NodeJS.ProcessEnv
 }
 
 /** Machine-local, read-only Provider metadata boundary. */
@@ -21,16 +23,17 @@ export class RemoteProviderSessionDiscoveryRegistry {
   readonly #discoveries = new Map<AgentProvider, ProviderSessionDiscovery>()
 
   constructor(options: RemoteProviderSessionDiscoveryRegistryOptions = {}) {
+    const environment = options.environment ?? process.env
     const discoveries = options.discoveries ?? [
       new CodexSessionDiscovery({
-        codexHome: nodeCodexHome(),
+        codexHome: nodeCodexHome(environment),
         processFactory: (specification) =>
           spawnNodeProviderProcess({
             provider: 'codex',
             ...specification,
           }),
       }),
-      new ClaudeSessionDiscovery(),
+      new ClaudeSessionDiscovery({ environment }),
     ]
     for (const discovery of discoveries) {
       if (this.#discoveries.has(discovery.provider)) {
@@ -77,11 +80,17 @@ export class RemoteProviderSessionDiscoveryRegistry {
   }
 }
 
-function nodeCodexHome(): string {
-  const configured = process.env.CODEX_HOME
+function nodeCodexHome(environment: NodeJS.ProcessEnv): string {
+  const configured = environment.CODEX_HOME
   return configured !== undefined && isAbsolute(configured)
     ? configured
-    : join(homedir(), '.codex')
+    : join(nodeHome(environment), '.codex')
+}
+
+function nodeHome(environment: NodeJS.ProcessEnv): string {
+  return (
+    environment.HOME?.trim() || environment.USERPROFILE?.trim() || homedir()
+  )
 }
 
 function unsupported(provider: AgentProvider): ProviderSessionDiscoveryPage {

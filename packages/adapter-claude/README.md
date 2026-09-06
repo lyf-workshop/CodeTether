@@ -12,7 +12,10 @@ selection remain unsupported.
 
 Phase 5A was accepted against Claude Code `2.1.250`; Phase 5B revalidated the
 same safe execution boundary and structured Tool envelopes against `2.1.251`.
-Both exact versions remain admitted; unknown versions fail closed.
+Phase 8A revalidated that frozen capability boundary against `2.1.263` while
+closing a multiple-installation selection mismatch. All three exact versions
+remain admitted; no additional Claude capability is exposed.
+Unknown versions fail closed.
 Detection is bounded to Host startup; later CLI launch or authentication
 failures are mapped to presentation-safe canonical Provider errors rather than
 raw diagnostics.

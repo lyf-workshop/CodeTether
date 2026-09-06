@@ -58,6 +58,7 @@ import {
 import { z } from 'zod'
 
 import { PairingMode, type PairingModeView } from './pairing-mode.js'
+import { NodeClaudeInstallation } from './claude-installation.js'
 import { validateProjectLocationPath } from './project-location-validation.js'
 import { RemoteProviderDetector } from './provider-discovery.js'
 import { RemoteProviderSessionDiscoveryRegistry } from './provider-session-discovery.js'
@@ -151,6 +152,10 @@ export class CodeTetherNodeService extends EventEmitter {
 
   constructor(options: CodeTetherNodeOptions) {
     super()
+    const providerEnvironment = { ...process.env }
+    const claudeInstallation = new NodeClaudeInstallation({
+      environment: providerEnvironment,
+    })
     this.state = options.state
     this.#bindAddress = options.bindAddress
     this.#requestedPort = options.port
@@ -178,14 +183,21 @@ export class CodeTetherNodeService extends EventEmitter {
       throw new TypeError('Execution session lease timeout is invalid')
     }
     this.#providerDetector =
-      options.providerDetector ?? new RemoteProviderDetector()
+      options.providerDetector ??
+      new RemoteProviderDetector({
+        environment: providerEnvironment,
+        claudeInstallation,
+      })
     this.#providerSessionDiscoveries =
       options.providerSessionDiscoveries ??
-      new RemoteProviderSessionDiscoveryRegistry()
+      new RemoteProviderSessionDiscoveryRegistry({
+        environment: providerEnvironment,
+      })
     this.#remoteCodexRunners =
       options.remoteCodexRunners ?? new RemoteCodexRunnerPool()
     this.#remoteClaudeRunners =
-      options.remoteClaudeRunners ?? new RemoteClaudeRunnerPool()
+      options.remoteClaudeRunners ??
+      new RemoteClaudeRunnerPool({ claudeInstallation })
     this.#relayControl = options.relayControl
     this.pairing = new PairingMode(
       options.state.machine,

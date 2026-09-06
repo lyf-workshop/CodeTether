@@ -3,8 +3,11 @@ import { tmpdir } from 'node:os'
 import { TextDecoder } from 'node:util'
 
 import {
+  ClaudeCodeMisconfiguredError,
+  ClaudeCodeNotInstalledError,
   ClaudeCodeOwnedProcessCleanupError,
-  prepareClaudeCode,
+  isClaudeCodeTestedVersion,
+  type ClaudeCodeLauncher,
 } from '@codetether/adapter-claude'
 import {
   machineTransportLimits,
@@ -12,6 +15,8 @@ import {
   type RemoteProviderDescriptor,
   type RemoteProviderDiscovery,
 } from '@codetether/machine-transport'
+
+import { NodeClaudeInstallation } from './claude-installation.js'
 
 const NO_REMOTE_EXECUTION_CAPABILITIES: RemoteProviderCapabilities =
   Object.freeze({
@@ -58,7 +63,6 @@ const REMOTE_CLAUDE_REASONING = Object.freeze({
 })
 
 const REMOTE_CODEX_EXECUTION_TESTED_VERSIONS = new Set(['0.149.1'])
-const CLAUDE_CODE_TESTED_VERSIONS = new Set(['2.1.250', '2.1.251'])
 const SEMANTIC_VERSION = String.raw`\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?`
 const CODEX_VERSION_PATTERN = new RegExp(
   String.raw`^(?:codex-cli|codex)\s+(${SEMANTIC_VERSION})$`,
@@ -91,6 +95,8 @@ export interface RemoteProviderDetectorOptions {
   readonly platform?: NodeJS.Platform
   /** Internal test seam; remote callers cannot influence authentication. */
   readonly claudeExecutionProbe?: RemoteClaudeExecutionProbe
+  /** Node-private lifecycle selection; never populated from Machine input. */
+  readonly claudeInstallation?: NodeClaudeInstallation
 }
 
 export interface RemoteClaudeExecutionProbeResult {
@@ -124,7 +130,7 @@ const DEFAULT_PROBES: readonly ProviderProbeDefinition[] = Object.freeze([
     executable: 'claude',
     arguments: ['--version'],
     parseVersion: (output) => CLAUDE_VERSION_PATTERN.exec(output)?.[1],
-    isSupportedVersion: (version) => CLAUDE_CODE_TESTED_VERSIONS.has(version),
+    isSupportedVersion: isClaudeCodeTestedVersion,
   },
 ])
 
@@ -162,6 +168,8 @@ export class RemoteProviderDetector {
   readonly #executionPlatformSupported: boolean
   readonly #claudeExecutionPlatformSupported: boolean
   readonly #claudeExecutionProbe: RemoteClaudeExecutionProbe
+  readonly #claudeInstallation: NodeClaudeInstallation
+  readonly #usesDefaultProbes: boolean
   readonly #lifecycleAbort = new AbortController()
   readonly #children = new Set<ChildProcess>()
   #inFlight?: Promise<RemoteProviderDiscovery>
@@ -170,6 +178,8 @@ export class RemoteProviderDetector {
   #closePromise: Promise<void> | undefined
 
   constructor(options: RemoteProviderDetectorOptions = {}) {
+    const usesDefaultProbes = options.probes === undefined
+    this.#usesDefaultProbes = usesDefaultProbes
     this.#probes = validateProbeDefinitions(options.probes ?? DEFAULT_PROBES)
     this.#environment = restrictedDetectionEnvironment(
       options.environment ?? process.env,
@@ -190,11 +200,13 @@ export class RemoteProviderDetector {
     this.#claudeExecutionPlatformSupported =
       supportsRemoteClaudeExecutionPlatform(options.platform)
     const providerEnvironment = options.environment ?? process.env
+    this.#claudeInstallation =
+      options.claudeInstallation ??
+      new NodeClaudeInstallation({ environment: providerEnvironment })
     this.#claudeExecutionProbe =
       options.claudeExecutionProbe ??
       (async (signal) => {
-        const preparation = await prepareClaudeCode({
-          environment: providerEnvironment,
+        const preparation = await this.#claudeInstallation.prepare({
           timeoutMs: this.#timeoutMs,
           signal,
           processOwnership: 'posix-process-group',
@@ -265,18 +277,34 @@ export class RemoteProviderDetector {
   async #probe(
     probe: ProviderProbeDefinition,
   ): Promise<RemoteProviderDescriptor> {
-    const outcome = await runBoundedVersionProbe({
-      probe,
-      environment: this.#environment,
-      timeoutMs: this.#timeoutMs,
-      maximumOutputBytes: this.#maximumOutputBytes,
-      children: this.#children,
-    })
     const base = {
       provider: probe.provider,
       displayName: probe.displayName,
       capabilities: NO_REMOTE_EXECUTION_CAPABILITIES,
     } as const
+    let effectiveProbe = probe
+    if (probe.provider === 'claude-code' && this.#usesDefaultProbes) {
+      let launcher: ClaudeCodeLauncher
+      try {
+        launcher = await this.#claudeInstallation.launcher()
+      } catch (error) {
+        if (error instanceof ClaudeCodeNotInstalledError) {
+          return { ...base, availability: 'not_installed' }
+        }
+        if (error instanceof ClaudeCodeMisconfiguredError) {
+          return { ...base, availability: 'misconfigured' }
+        }
+        return { ...base, availability: 'unavailable' }
+      }
+      effectiveProbe = probeForClaudeLauncher(probe, launcher)
+    }
+    const outcome = await runBoundedVersionProbe({
+      probe: effectiveProbe,
+      environment: this.#environment,
+      timeoutMs: this.#timeoutMs,
+      maximumOutputBytes: this.#maximumOutputBytes,
+      children: this.#children,
+    })
     if (outcome.kind === 'not_installed') {
       return { ...base, availability: 'not_installed' }
     }
@@ -341,6 +369,17 @@ export class RemoteProviderDetector {
         ? { executionFailureReason: claudeExecutionFailureReason }
         : {}),
     }
+  }
+}
+
+function probeForClaudeLauncher(
+  probe: ProviderProbeDefinition,
+  launcher: ClaudeCodeLauncher,
+): ProviderProbeDefinition {
+  return {
+    ...probe,
+    executable: launcher.executable,
+    arguments: [...launcher.prefixArguments, ...probe.arguments],
   }
 }
 

@@ -21,7 +21,8 @@ const arguments_ = rawArguments.filter(
 )
 const scenario =
   fixtureOptions.scenario ?? process.env.FAKE_CLAUDE_SCENARIO ?? 'happy'
-const version = process.env.FAKE_CLAUDE_VERSION ?? '2.1.251'
+const version =
+  fixtureOptions.version ?? process.env.FAKE_CLAUDE_VERSION ?? '2.1.251'
 
 if (arguments_.includes('--version')) {
   if (process.env.FAKE_CLAUDE_COUNT_PATH) {

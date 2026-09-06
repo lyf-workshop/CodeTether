@@ -1,9 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto'
 
 import {
+  ClaudeCodeError,
   ClaudeCodeOwnedProcessCleanupError,
   ClaudeCodeSessionRuntime,
-  prepareClaudeCode,
   type ClaudeCodeEffort,
   type ClaudeCodeLauncher,
   type ClaudeCodeProcessSpecification,
@@ -30,6 +30,7 @@ import {
 import { validateProjectLocationPath } from './project-location-validation.js'
 import { spawnNodeProviderProcess } from './provider-process-guardian.js'
 import { supportsRemoteClaudeExecutionPlatform } from './provider-discovery.js'
+import { NodeClaudeInstallation } from './claude-installation.js'
 import type { RemoteProviderSessionConnectionOwner } from './remote-provider-session-owner.js'
 
 interface RemoteClaudeSessionRuntime {
@@ -65,6 +66,10 @@ export type RemoteClaudeRuntimeFactory = (
 export interface RemoteClaudeRunnerPoolOptions {
   /** Internal test seam; the Machine protocol cannot select a launcher. */
   readonly runtimeFactory?: RemoteClaudeRuntimeFactory
+  /** Node-private lifecycle selection; never populated from Machine input. */
+  readonly claudeInstallation?: NodeClaudeInstallation
+  /** Internal test seam; remote callers cannot select the Node platform. */
+  readonly platform?: NodeJS.Platform
   readonly maximumSessions?: number
 }
 
@@ -113,14 +118,17 @@ export class RemoteClaudeRunnerPool {
     }
     this.#executionSupported =
       options.runtimeFactory !== undefined ||
-      supportsRemoteClaudeExecutionPlatform()
-    this.#runtimeFactory =
-      options.runtimeFactory ??
-      (async (runtimeOptions) =>
-        await defaultRemoteClaudeRuntimeFactory(
-          runtimeOptions,
-          this.#lifecycleAbort.signal,
-        ))
+      supportsRemoteClaudeExecutionPlatform(options.platform)
+    if (options.runtimeFactory !== undefined) {
+      this.#runtimeFactory = options.runtimeFactory
+    } else {
+      const claudeInstallation =
+        options.claudeInstallation ?? new NodeClaudeInstallation()
+      this.#runtimeFactory = makeDefaultRuntimeFactory(
+        claudeInstallation,
+        this.#lifecycleAbort.signal,
+      )
+    }
   }
 
   get activeCount(): number {
@@ -327,6 +335,14 @@ export class RemoteClaudeRunnerPool {
       })
       .finally(() => this.#cleanupTasks.delete(task))
   }
+}
+
+function makeDefaultRuntimeFactory(
+  claudeInstallation: NodeClaudeInstallation,
+  signal: AbortSignal,
+): RemoteClaudeRuntimeFactory {
+  return async (options) =>
+    await defaultRemoteClaudeRuntimeFactory(options, signal, claudeInstallation)
 }
 
 interface OpenRemoteClaudeRunnerOptions {
@@ -1085,11 +1101,27 @@ function coalesceClaudeEvent(
 async function defaultRemoteClaudeRuntimeFactory(
   options: RemoteClaudeRuntimeFactoryOptions,
   signal: AbortSignal,
+  claudeInstallation: NodeClaudeInstallation,
 ): Promise<RemoteClaudeSessionRuntime> {
-  const preparation = await prepareClaudeCode({
-    signal,
-    processOwnership: 'posix-process-group',
-  })
+  let preparation
+  try {
+    preparation = await claudeInstallation.prepare({
+      signal,
+      processOwnership: 'posix-process-group',
+    })
+  } catch (error) {
+    if (error instanceof ClaudeCodeOwnedProcessCleanupError) throw error
+    throw new MachineTransportError(
+      'provider_unavailable',
+      'Remote Claude is unavailable',
+      {
+        failureReason:
+          error instanceof ClaudeCodeError
+            ? error.failureReason
+            : 'provider_error',
+      },
+    )
+  }
   if (preparation.detection.status !== 'available') {
     throw new MachineTransportError(
       'provider_unavailable',

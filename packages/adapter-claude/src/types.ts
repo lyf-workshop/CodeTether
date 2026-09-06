@@ -1,8 +1,12 @@
 import type { CanonicalFailureReason } from '@codetether/agent-core'
 
 export const CLAUDE_CODE_PROVIDER = 'claude-code' as const
-export const CLAUDE_CODE_TESTED_VERSION = '2.1.251' as const
-export const CLAUDE_CODE_TESTED_VERSIONS = ['2.1.250', '2.1.251'] as const
+export const CLAUDE_CODE_TESTED_VERSION = '2.1.263' as const
+export const CLAUDE_CODE_TESTED_VERSIONS = [
+  '2.1.250',
+  '2.1.251',
+  '2.1.263',
+] as const
 export const CLAUDE_CODE_EFFORT_LEVELS = [
   'low',
   'medium',

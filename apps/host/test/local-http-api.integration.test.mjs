@@ -1313,6 +1313,103 @@ test('streams more than the live queue limit directly from replay history', asyn
   }
 })
 
+test('Provider session discovery and adoption stay opaque and non-executable over HTTP', async () => {
+  let discoveredRoot
+  const nativeSessionId = 'private-native-session-http-phase8a'
+  const revision = 'private-revision-http-phase8a'
+  const providerSessionDiscoveries = [
+    {
+      provider: 'codex',
+      async discover(request) {
+        discoveredRoot = request.projectRoot
+        return {
+          provider: 'codex',
+          status: 'supported',
+          resumeStatus: 'supported',
+          providerVersion: '0.149.1',
+          candidates: [
+            {
+              provider: 'codex',
+              nativeSessionId,
+              revision,
+              workingDirectory: request.projectRoot,
+              title: 'Existing HTTP conversation',
+              lastActiveAt: '2026-08-26T07:00:00.000Z',
+              resumeStatus: 'supported',
+              historicalTranscript: 'unavailable',
+            },
+          ],
+          metrics: {
+            filesInspected: 0,
+            candidatesParsed: 1,
+            candidatesMatched: 1,
+            corruptEntriesSkipped: 0,
+            elapsedMs: 1,
+            truncated: false,
+          },
+        }
+      },
+      async validateCandidate(request) {
+        if (
+          request.nativeSessionId !== nativeSessionId ||
+          request.revision !== revision
+        ) {
+          return undefined
+        }
+        return {
+          provider: 'codex',
+          nativeSessionId,
+          revision,
+          workingDirectory: request.projectRoot,
+          title: 'Existing HTTP conversation',
+          lastActiveAt: '2026-08-26T07:00:00.000Z',
+          resumeStatus: 'supported',
+          historicalTranscript: 'unavailable',
+        }
+      },
+    },
+  ]
+  const harness = await createHarness({
+    persistence: true,
+    providerSessionDiscoveries,
+  })
+  try {
+    const projects = await getJson(harness.baseUrl, '/api/v1/projects')
+    const projectId = projects.body.projects[0].projectId
+    const route = `/api/v1/projects/${projectId}/locations/${harness.machineId}/provider-sessions`
+    const discovery = await getJson(harness.baseUrl, `${route}?limit=50`)
+    assert.equal(discovery.status, 200, JSON.stringify(discovery.body))
+    assert.equal(discovery.body.candidates.length, 1)
+    assert.equal(
+      discovery.body.candidates[0].title,
+      'Existing HTTP conversation',
+    )
+    assert.equal(discoveredRoot, harness.workspace)
+    assert.equal(
+      JSON.stringify(discovery.body).includes(nativeSessionId),
+      false,
+    )
+    assert.equal(JSON.stringify(discovery.body).includes(revision), false)
+    assert.equal(
+      JSON.stringify(discovery.body).includes(harness.workspace),
+      false,
+    )
+
+    const adopted = await postJson(harness.baseUrl, route, {
+      actionId: 'act_phase8a_http_adoption',
+      discoveryCandidateId: discovery.body.candidates[0].discoveryCandidateId,
+    })
+    assert.equal(adopted.status, 201)
+    assert.equal(adopted.body.data.disposition, 'adopted')
+    assert.equal(adopted.body.data.conversation.origin, 'adopted_native')
+    assert.equal(harness.runtime.startConversationCalls.length, 0)
+    assert.equal(harness.runtime.resumeConversationCalls.length, 0)
+    assert.equal(harness.runtime.startTurnCalls.length, 0)
+  } finally {
+    await harness.close()
+  }
+})
+
 test('allows only configured origins and never emits wildcard CORS', async () => {
   const harness = await createHarness()
   try {
@@ -1768,6 +1865,9 @@ async function createHarness(options = {}) {
   const publisher = new HostEventPublisher({ epoch })
   const service = new HostService({
     runtime,
+    ...(options.providerSessionDiscoveries === undefined
+      ? {}
+      : { providerSessionDiscoveries: options.providerSessionDiscoveries }),
     workspacePolicy,
     publisher,
     hostVersion: '0.0.0-test',

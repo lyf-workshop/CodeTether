@@ -79,6 +79,9 @@ export type ConversationTitleSource = z.infer<
   typeof ConversationTitleSourceSchema
 >
 
+export const ConversationOriginSchema = z.enum(['codetether', 'adopted_native'])
+export type ConversationOrigin = z.infer<typeof ConversationOriginSchema>
+
 export const ProjectRecordSchema = z
   .object({
     projectId: ProjectIdSchema,
@@ -127,6 +130,8 @@ export const ConversationRecordSchema = z
     title: ConversationTitleSchema.optional(),
     /** Additive organization metadata; current organization-aware Hosts populate it. */
     titleSource: ConversationTitleSourceSchema.optional(),
+    /** Additive provenance; current Phase 8A Hosts always populate it. */
+    origin: ConversationOriginSchema.optional(),
     /** Product organization metadata; absence means the Conversation is not pinned. */
     pinnedAt: TimestampSchema.optional(),
     /** Product organization metadata; absence means the Conversation is active. */
@@ -188,6 +193,8 @@ export const ConversationSummarySchema = z
     machineId: MachineIdSchema,
     title: ConversationTitleSchema,
     titleSource: ConversationTitleSourceSchema,
+    /** Additive provenance; current Phase 8A Hosts always populate it. */
+    origin: ConversationOriginSchema.optional(),
     pinnedAt: TimestampSchema.optional(),
     archivedAt: TimestampSchema.optional(),
     provider: ProviderIdSchema,

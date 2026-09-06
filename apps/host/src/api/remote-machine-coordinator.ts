@@ -8,7 +8,11 @@ import type { Duplex } from 'node:stream'
 import {
   canonicalFailure,
   isCanonicalFailureReason,
+  type AgentProvider,
   type CanonicalFailure,
+  type NativeProviderSessionCandidate,
+  type ProviderSessionDiscoveryMetrics,
+  type ProviderSessionDiscoveryPage,
 } from '@codetether/agent-core'
 
 import {
@@ -60,6 +64,7 @@ import {
   type TrustedRemotePeer,
   type ValidatedRemoteProjectLocation,
   type RemoteProviderDiscovery,
+  type RemoteProviderSessionDiscoveryPage,
   type RemoteClaudeSession as MachineTransportRemoteClaudeSession,
   type RemoteCodexSession as MachineTransportRemoteCodexSession,
 } from '@codetether/machine-transport'
@@ -217,6 +222,28 @@ export interface RemoteMachineCoordinator extends RemoteMachineStatusSource {
     machine: DurableMachine,
     trust: DurableTrustedMachinePeer,
   ): Promise<DurableRemoteProviderObservation>
+  discoverProviderSessions?(
+    machine: DurableMachine,
+    trust: DurableTrustedMachinePeer,
+    input: {
+      readonly provider: AgentProvider
+      readonly projectId: string
+      readonly rootPath: string
+      readonly signal?: AbortSignal
+    },
+  ): Promise<ProviderSessionDiscoveryPage>
+  validateProviderSession?(
+    machine: DurableMachine,
+    trust: DurableTrustedMachinePeer,
+    input: {
+      readonly provider: AgentProvider
+      readonly projectId: string
+      readonly rootPath: string
+      readonly nativeSessionId: string
+      readonly revision: string
+      readonly signal?: AbortSignal
+    },
+  ): Promise<NativeProviderSessionCandidate | undefined>
   close?(): Promise<void>
 }
 
@@ -259,6 +286,16 @@ export class UnavailableRemoteMachineCoordinator implements RemoteMachineCoordin
   }
 
   async discoverProviders(): Promise<DurableRemoteProviderObservation> {
+    throw unavailable()
+  }
+
+  async discoverProviderSessions(): Promise<ProviderSessionDiscoveryPage> {
+    throw unavailable()
+  }
+
+  async validateProviderSession(): Promise<
+    NativeProviderSessionCandidate | undefined
+  > {
     throw unavailable()
   }
 }
@@ -397,6 +434,15 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
   readonly #retryTasks = new Map<MachineId, Promise<RemoteMachineConnection>>()
   readonly #providerDiscoveryTasks = new Map<MachineId, ProviderDiscoveryTask>()
   readonly #providerDiscoveryStabilityTimers = new Map<
+    MachineId,
+    ReturnType<typeof setTimeout>
+  >()
+  /**
+   * One deferred idle-worker handoff per Machine. Purpose-scoped operations
+   * cancel this handle before taking connection ownership so an older
+   * operation cannot resurrect the idle coordinator beside its successor.
+   */
+  readonly #durableWorkerRestartTimers = new Map<
     MachineId,
     ReturnType<typeof setTimeout>
   >()
@@ -797,7 +843,7 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
           'Remote Machine identity changed during confirmation',
         )
       }
-      setTimeout(() => this.#startDurableWorker(prepared.machine.machineId), 0)
+      this.#scheduleDurableWorkerRestart(prepared.machine.machineId)
       return prepared
     } catch (error) {
       await attempt.pending.cancel().catch(() => undefined)
@@ -899,13 +945,13 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
         }
         connection.close()
         connection = undefined
-        setTimeout(() => this.#startDurableWorker(id), 0)
+        this.#scheduleDurableWorkerRestart(id)
         return result
       } catch (error) {
         connection?.close()
         const state = connectionStateFor(error)
         this.#setState(id, state === 'offline' ? 'recovery_required' : state)
-        setTimeout(() => this.#startDurableWorker(id), 0)
+        this.#scheduleDurableWorkerRestart(id)
         throw coordinatorError(error)
       }
     })
@@ -952,7 +998,7 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
         }
         connection.close()
         route = undefined
-        setTimeout(() => this.#startDurableWorker(id), 0)
+        this.#scheduleDurableWorkerRestart(id)
         return validated
       } catch (error) {
         route?.connection.close()
@@ -964,7 +1010,7 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
         } else {
           this.#setState(id, connectionStateFor(error))
         }
-        setTimeout(() => this.#startDurableWorker(id), 0)
+        this.#scheduleDurableWorkerRestart(id)
         throw coordinatorError(error)
       }
     })
@@ -975,6 +1021,218 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
     trust: DurableTrustedMachinePeer,
   ): Promise<DurableRemoteProviderObservation> {
     return this.#beginProviderDiscovery(machine, trust, 'explicit')
+  }
+
+  async discoverProviderSessions(
+    machine: DurableMachine,
+    trust: DurableTrustedMachinePeer,
+    input: {
+      readonly provider: AgentProvider
+      readonly projectId: string
+      readonly rootPath: string
+      readonly signal?: AbortSignal
+    },
+  ): Promise<ProviderSessionDiscoveryPage> {
+    const id = MachineIdSchema.parse(machine.machineId)
+    return await this.#serializeMachineOperation(id, async () => {
+      const current = this.#requireCurrentActiveTrust(machine, trust)
+      const restoreExecutionDiscovery = this.providerExecutionAvailable(id)
+      const previousState = this.#states.get(id) ?? 'offline'
+      const wasOnline = previousState === 'online'
+      await this.#stopWorker(id)
+      if (!wasOnline) this.#setState(id, 'connecting')
+      let route: RoutedMachineConnection | undefined
+      try {
+        const controller = await this.#loadController(current.trust)
+        route = await this.#connectMachineByPolicy(
+          current.machine,
+          current.trust,
+          controller,
+          input.signal,
+        )
+        const connection = route.connection
+        this.#recordAuthenticatedRoute(
+          id,
+          route,
+          TimestampSchema.parse(this.#now().toISOString()),
+        )
+        this.#setState(id, 'online')
+        const pages: RemoteProviderSessionDiscoveryPage[] = []
+        let cursor: string | undefined
+        const observedCursors = new Set<string>()
+        const scanDeadline = AbortSignal.timeout(
+          machineTransportLimits.providerSessionDiscoveryTotalTimeoutMs,
+        )
+        const scanSignal =
+          input.signal === undefined
+            ? scanDeadline
+            : AbortSignal.any([input.signal, scanDeadline])
+        let scanDeadlineReached = false
+        let remaining =
+          machineTransportLimits.providerSessionDiscoveryMaximumCandidates
+        let remainingPages =
+          machineTransportLimits.providerSessionDiscoveryMaximumPages
+        do {
+          input.signal?.throwIfAborted()
+          let page: RemoteProviderSessionDiscoveryPage
+          try {
+            page = await connection.discoverProviderSessions({
+              provider: input.provider,
+              projectId: MachineTransportProjectIdSchema.parse(input.projectId),
+              rootPath: input.rootPath,
+              ...(cursor === undefined ? {} : { cursor }),
+              limit: Math.min(
+                remaining,
+                machineTransportLimits.providerSessionDiscoveryPageSize,
+              ),
+              signal: scanSignal,
+            })
+          } catch (error) {
+            if (
+              scanDeadline.aborted &&
+              input.signal?.aborted !== true &&
+              pages.length > 0
+            ) {
+              scanDeadlineReached = true
+              break
+            }
+            throw error
+          }
+          pages.push(page)
+          remainingPages -= 1
+          if (page.status !== 'supported') break
+          remaining -= page.candidates.length
+          cursor = page.nextCursor
+          if (cursor !== undefined) {
+            if (observedCursors.has(cursor)) {
+              throw new RemoteMachineCoordinatorError(
+                'protocol_incompatible',
+                'Remote Provider session discovery cursor did not advance',
+              )
+            }
+            observedCursors.add(cursor)
+          }
+        } while (cursor !== undefined && remaining > 0 && remainingPages > 0)
+        if (restoreExecutionDiscovery) {
+          if (!scanDeadlineReached) {
+            await this.#discoverAndPersist(
+              current.machine,
+              connection,
+              input.signal,
+            )
+          }
+        }
+        connection.close()
+        route = undefined
+        this.#scheduleDurableWorkerRestart(id)
+        return combineProviderSessionDiscoveryPages(
+          input.provider,
+          input.rootPath,
+          pages,
+          remaining === 0 ||
+            (remainingPages === 0 && cursor !== undefined) ||
+            scanDeadlineReached,
+        )
+      } catch (error) {
+        route?.connection.close()
+        if (
+          wasOnline ||
+          route !== undefined ||
+          isCallerCancellation(error, input.signal) ||
+          isProjectLocationValidationError(error)
+        ) {
+          // This request-scoped metadata route is independent from dedicated
+          // Provider execution transports. Once Machine connectivity was
+          // already current (or this route authenticated), cancellation,
+          // metadata timeout/parser failure, and path rejection cannot
+          // fabricate a global transport loss or terminalize another Turn.
+          this.#setState(id, 'online')
+        } else {
+          this.#setState(id, connectionStateFor(error))
+        }
+        this.#scheduleDurableWorkerRestart(id)
+        throw coordinatorError(error)
+      }
+    })
+  }
+
+  async validateProviderSession(
+    machine: DurableMachine,
+    trust: DurableTrustedMachinePeer,
+    input: {
+      readonly provider: AgentProvider
+      readonly projectId: string
+      readonly rootPath: string
+      readonly nativeSessionId: string
+      readonly revision: string
+      readonly signal?: AbortSignal
+    },
+  ): Promise<NativeProviderSessionCandidate | undefined> {
+    const id = MachineIdSchema.parse(machine.machineId)
+    return await this.#serializeMachineOperation(id, async () => {
+      const current = this.#requireCurrentActiveTrust(machine, trust)
+      const restoreExecutionDiscovery = this.providerExecutionAvailable(id)
+      const previousState = this.#states.get(id) ?? 'offline'
+      const wasOnline = previousState === 'online'
+      await this.#stopWorker(id)
+      if (!wasOnline) this.#setState(id, 'connecting')
+      let route: RoutedMachineConnection | undefined
+      try {
+        const controller = await this.#loadController(current.trust)
+        route = await this.#connectMachineByPolicy(
+          current.machine,
+          current.trust,
+          controller,
+          input.signal,
+        )
+        const connection = route.connection
+        this.#recordAuthenticatedRoute(
+          id,
+          route,
+          TimestampSchema.parse(this.#now().toISOString()),
+        )
+        this.#setState(id, 'online')
+        const candidate = await connection.validateProviderSession({
+          provider: input.provider,
+          projectId: MachineTransportProjectIdSchema.parse(input.projectId),
+          rootPath: input.rootPath,
+          nativeSessionId: input.nativeSessionId,
+          revision: input.revision,
+          signal: input.signal,
+        })
+        if (restoreExecutionDiscovery) {
+          await this.#discoverAndPersist(
+            current.machine,
+            connection,
+            input.signal,
+          )
+        }
+        connection.close()
+        route = undefined
+        this.#scheduleDurableWorkerRestart(id)
+        return candidate === undefined
+          ? undefined
+          : {
+              ...candidate,
+              provider: input.provider,
+              workingDirectory: input.rootPath,
+            }
+      } catch (error) {
+        route?.connection.close()
+        if (
+          wasOnline ||
+          route !== undefined ||
+          isCallerCancellation(error, input.signal) ||
+          isProjectLocationValidationError(error)
+        ) {
+          this.#setState(id, 'online')
+        } else {
+          this.#setState(id, connectionStateFor(error))
+        }
+        this.#scheduleDurableWorkerRestart(id)
+        throw coordinatorError(error)
+      }
+    })
   }
 
   #beginProviderDiscovery(
@@ -1479,6 +1737,10 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
       clearTimeout(timer)
     }
     this.#providerDiscoveryStabilityTimers.clear()
+    for (const timer of this.#durableWorkerRestartTimers.values()) {
+      clearTimeout(timer)
+    }
+    this.#durableWorkerRestartTimers.clear()
     for (const discovery of this.#providerDiscoveryTasks.values()) {
       discovery.abort.abort()
       discovery.connection?.close()
@@ -1658,6 +1920,25 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
     this.#startWorker(machine, trust)
   }
 
+  #scheduleDurableWorkerRestart(machineId: MachineId): void {
+    const existing = this.#durableWorkerRestartTimers.get(machineId)
+    if (existing !== undefined) clearTimeout(existing)
+    const timer = setTimeout(() => {
+      if (this.#durableWorkerRestartTimers.get(machineId) !== timer) return
+      this.#durableWorkerRestartTimers.delete(machineId)
+      this.#startDurableWorker(machineId)
+    }, 0)
+    timer.unref?.()
+    this.#durableWorkerRestartTimers.set(machineId, timer)
+  }
+
+  #cancelDurableWorkerRestart(machineId: MachineId): void {
+    const timer = this.#durableWorkerRestartTimers.get(machineId)
+    if (timer === undefined) return
+    clearTimeout(timer)
+    this.#durableWorkerRestartTimers.delete(machineId)
+  }
+
   #requestWorkerReconnect(machineId: MachineId): boolean {
     const worker = this.#workers.get(machineId)
     if (
@@ -1764,6 +2045,7 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
   }
 
   async #stopWorker(machineId: MachineId): Promise<void> {
+    this.#cancelDurableWorkerRestart(machineId)
     const worker = this.#workers.get(machineId)
     worker?.abort.abort()
     worker?.cycleAbort?.abort()
@@ -2714,6 +2996,96 @@ export function parseRemoteMachinePairingCandidate(
   return RemoteMachinePairingCandidateSchema.parse(value)
 }
 
+function combineProviderSessionDiscoveryPages(
+  provider: AgentProvider,
+  workingDirectory: string,
+  pages: readonly RemoteProviderSessionDiscoveryPage[],
+  hitCandidateLimit: boolean,
+): ProviderSessionDiscoveryPage {
+  const first = pages[0]
+  if (first === undefined) {
+    throw new RemoteMachineCoordinatorError(
+      'connection_failed',
+      'Remote Provider session discovery returned no result',
+    )
+  }
+  const candidates: NativeProviderSessionCandidate[] = []
+  const identities = new Set<string>()
+  for (const page of pages) {
+    if (
+      page.provider !== provider ||
+      page.status !== first.status ||
+      page.resumeStatus !== first.resumeStatus ||
+      page.providerVersion !== first.providerVersion
+    ) {
+      throw new RemoteMachineCoordinatorError(
+        'protocol_incompatible',
+        'Remote Provider session discovery changed identity or capability',
+      )
+    }
+    for (const candidate of page.candidates) {
+      if (identities.has(candidate.nativeSessionId)) continue
+      identities.add(candidate.nativeSessionId)
+      candidates.push({ ...candidate, provider, workingDirectory })
+    }
+  }
+  candidates.sort(
+    (left, right) =>
+      (right.lastActiveAt ?? '').localeCompare(left.lastActiveAt ?? '') ||
+      (right.createdAt ?? '').localeCompare(left.createdAt ?? '') ||
+      left.nativeSessionId.localeCompare(right.nativeSessionId),
+  )
+  const metrics: ProviderSessionDiscoveryMetrics = pages.reduce(
+    (total, page) => ({
+      filesInspected: safeMetricSum(
+        total.filesInspected,
+        page.metrics.filesInspected,
+      ),
+      candidatesParsed: safeMetricSum(
+        total.candidatesParsed,
+        page.metrics.candidatesParsed,
+      ),
+      candidatesMatched: safeMetricSum(
+        total.candidatesMatched,
+        page.metrics.candidatesMatched,
+      ),
+      corruptEntriesSkipped: safeMetricSum(
+        total.corruptEntriesSkipped,
+        page.metrics.corruptEntriesSkipped,
+      ),
+      elapsedMs: safeMetricSum(total.elapsedMs, page.metrics.elapsedMs),
+      truncated: total.truncated || page.metrics.truncated,
+    }),
+    {
+      filesInspected: 0,
+      candidatesParsed: 0,
+      candidatesMatched: 0,
+      corruptEntriesSkipped: 0,
+      elapsedMs: 0,
+      truncated: hitCandidateLimit,
+    },
+  )
+  return {
+    provider,
+    status: first.status,
+    resumeStatus: first.resumeStatus,
+    ...(first.providerVersion === undefined
+      ? {}
+      : { providerVersion: first.providerVersion }),
+    candidates,
+    ...(first.failureReason === undefined
+      ? {}
+      : { failureReason: first.failureReason }),
+    metrics: { ...metrics, truncated: metrics.truncated || hitCandidateLimit },
+  }
+}
+
+function safeMetricSum(left: number, right: number): number {
+  return left > Number.MAX_SAFE_INTEGER - right
+    ? Number.MAX_SAFE_INTEGER
+    : left + right
+}
+
 export function remoteProviderObservation(
   machineId: MachineId,
   discovery: RemoteProviderDiscovery,
@@ -3227,6 +3599,17 @@ function isProjectLocationValidationError(error: unknown): boolean {
       error.code === 'project_location_missing' ||
       error.code === 'project_location_not_directory' ||
       error.code === 'project_location_inaccessible')
+  )
+}
+
+function isCallerCancellation(
+  error: unknown,
+  signal: AbortSignal | undefined,
+): boolean {
+  return (
+    signal?.aborted === true &&
+    error instanceof Error &&
+    error.name === 'AbortError'
   )
 }
 

@@ -40,7 +40,10 @@ test('picker cancel and selection restore focus without closing the Add Project 
     /if \(outcome\.kind === 'selected'\) setPath\(outcome\.path\)/u,
   )
   assert.match(source, /if \(outcome\.kind === 'error'\)/u)
-  assert.match(source, /if \(!nextOpen && busy\) return/u)
+  assert.match(
+    source,
+    /if \(!nextOpen && \(busy \|\| createdProject !== undefined\)\) return/u,
+  )
   assert.match(source, /无法打开文件夹选择器，请重试。/u)
 })
 

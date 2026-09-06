@@ -11,6 +11,7 @@ import {
   type HostErrorCode,
   type HostError,
   type HostEvent,
+  type MachineId,
   type TurnId,
 } from '@codetether/protocol'
 
@@ -97,9 +98,9 @@ export class ApprovalRegistry {
     )
   }
 
-  request(request: ProviderApprovalRequest): void {
+  request(machineId: MachineId, request: ProviderApprovalRequest): void {
     const conversationId = this.#options.providerThreads.get(
-      providerSessionKey(request.provider, request.providerThreadId),
+      providerSessionKey(machineId, request.provider, request.providerThreadId),
     )
     const conversation =
       conversationId === undefined
@@ -111,6 +112,7 @@ export class ApprovalRegistry {
     if (
       conversationId === undefined ||
       conversation === undefined ||
+      conversation.record.machineId !== machineId ||
       turnId === undefined ||
       turn === undefined ||
       conversation.record.provider !== request.provider ||

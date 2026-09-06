@@ -414,6 +414,10 @@ export function machineErrorMessage(
     case 'relay_protocol_incompatible':
     case 'relay_revoked':
     case 'relay_rate_limited':
+    case 'provider_session_discovery_unavailable':
+    case 'provider_session_format_unsupported':
+    case 'provider_session_store_unreadable':
+    case 'provider_session_candidate_expired':
       return operation === 'unpair'
         ? 'CodeTether 未能取消机器配对。'
         : operation === 'refresh-providers'

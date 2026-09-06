@@ -7,6 +7,7 @@ import test from 'node:test'
 import { canonicalFailure } from '@codetether/agent-core'
 
 import { HostEventPublisher } from '../dist/api/host-event-publisher.js'
+import { ProviderEventTranslator } from '../dist/api/provider-event-translator.js'
 import {
   HostService,
   HostServiceError,
@@ -14,6 +15,7 @@ import {
 } from '../dist/api/host-service.js'
 import { WorkspacePolicy } from '../dist/api/workspace-policy.js'
 import { UnavailableAgentRuntime } from '../dist/api/unavailable-agent-runtime.js'
+import { providerSessionKey } from '../dist/api/provider-registry.js'
 import { ConversationStore } from '../dist/persistence/conversation-store.js'
 
 const capabilities = {
@@ -30,6 +32,90 @@ const capabilities = {
   modelSelection: false,
   reasoningControl: false,
 }
+
+test('Provider session ownership keys include the exact Machine identity', () => {
+  const first = providerSessionKey(
+    'machine_provider_key_a',
+    'codex',
+    'shared-native-session',
+  )
+  const second = providerSessionKey(
+    'machine_provider_key_b',
+    'codex',
+    'shared-native-session',
+  )
+  assert.notEqual(first, second)
+  assert.equal(
+    first,
+    providerSessionKey(
+      'machine_provider_key_a',
+      'codex',
+      'shared-native-session',
+    ),
+  )
+})
+
+test('Provider events with equal native identities stay Machine-scoped', () => {
+  const providerThreadId = 'shared-native-session'
+  const providerTurnId = 'shared-native-turn'
+  const turnIdA = 'turn_provider_machine_a'
+  const turnIdB = 'turn_provider_machine_b'
+  const conversationA = providerEventConversation(
+    'conv_provider_machine_a',
+    'machine_provider_key_a',
+    turnIdA,
+    providerTurnId,
+  )
+  const conversationB = providerEventConversation(
+    'conv_provider_machine_b',
+    'machine_provider_key_b',
+    turnIdB,
+    providerTurnId,
+  )
+  const published = []
+  const translator = new ProviderEventTranslator({
+    providerThreads: new Map([
+      [
+        providerSessionKey(
+          conversationA.record.machineId,
+          'codex',
+          providerThreadId,
+        ),
+        conversationA.record.conversationId,
+      ],
+      [
+        providerSessionKey(
+          conversationB.record.machineId,
+          'codex',
+          providerThreadId,
+        ),
+        conversationB.record.conversationId,
+      ],
+    ]),
+    conversations: new Map([
+      [conversationA.record.conversationId, conversationA],
+      [conversationB.record.conversationId, conversationB],
+    ]),
+    publish: (event) => published.push(event),
+    completeTurn: () => undefined,
+  })
+
+  assert.equal(
+    translator.translate(conversationB.record.machineId, {
+      type: 'message.delta',
+      provider: 'codex',
+      threadId: providerThreadId,
+      turnId: providerTurnId,
+      itemId: 'provider-item-shared',
+      delta: 'Machine B',
+      timestamp: '2026-10-01T12:00:00.000Z',
+    }),
+    true,
+  )
+  assert.equal(published.length, 1)
+  assert.equal(published[0].conversationId, conversationB.record.conversationId)
+  assert.equal(published[0].turnId, turnIdB)
+})
 
 class MixedRuntime {
   constructor(provider, sessionId = 'shared-provider-session') {
@@ -128,6 +214,52 @@ class MixedRuntime {
         finalMessage: message,
       })
     }
+  }
+}
+
+function providerEventConversation(
+  conversationId,
+  machineId,
+  turnId,
+  providerTurnId,
+) {
+  return {
+    record: {
+      conversationId,
+      projectId: 'proj_provider_machine_scope',
+      machineId,
+      title: 'Machine-scoped Provider session',
+      titleSource: 'generated',
+      provider: 'codex',
+      cwd: 'C:\\provider-machine-scope',
+      status: 'running',
+      activeTurnId: turnId,
+      createdAt: '2026-10-01T12:00:00.000Z',
+      updatedAt: '2026-10-01T12:00:00.000Z',
+      lastActivityAt: '2026-10-01T12:00:00.000Z',
+    },
+    origin: 'codetether',
+    providerThreadId: 'shared-native-session',
+    turns: new Map([
+      [
+        turnId,
+        {
+          record: {
+            turnId,
+            conversationId,
+            status: 'running',
+            startedAt: '2026-10-01T12:00:00.000Z',
+          },
+          providerTurnId,
+          providerItems: new Map(),
+          interrupting: false,
+        },
+      ],
+    ]),
+    providerTurnIds: new Map([[providerTurnId, turnId]]),
+    providerSessionMaterialized: true,
+    providerSession: 'ready',
+    startingTurn: false,
   }
 }
 

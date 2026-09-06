@@ -596,6 +596,146 @@ test('rejects an unbound known approval request without failing the client', asy
   ])
 })
 
+test('lists and reads stored thread metadata without loading or resuming it', async () => {
+  const cwd = resolve('stored-thread-project')
+  const { child, client, written } = createHarness()
+
+  const listed = client.listStoredThreads({
+    cwd,
+    cursor: 'next-page',
+    limit: 2,
+  })
+  await nextTurn()
+  assert.deepEqual(written[0], {
+    id: written[0].id,
+    method: 'thread/list',
+    params: {
+      cursor: 'next-page',
+      limit: 2,
+      cwd,
+      sortKey: 'updated_at',
+      sortDirection: 'desc',
+      modelProviders: [],
+      sourceKinds: ['cli', 'vscode', 'appServer'],
+      archived: false,
+      useStateDbOnly: true,
+    },
+  })
+  child.stdout.write(
+    `${JSON.stringify({
+      id: written[0].id,
+      result: {
+        data: [
+          {
+            id: 'private-thread-a',
+            sessionId: 'private-session-tree',
+            cwd,
+            name: 'Safe provider title',
+            preview: 'must not leave the protocol parser',
+            path: '/private/provider/rollout.jsonl',
+            createdAt: 1_700_000_000,
+            updatedAt: 1_700_000_100,
+            recencyAt: 1_700_000_050,
+            cliVersion: '0.149.1',
+            modelProvider: 'openai',
+            source: 'cli',
+            status: { type: 'notLoaded' },
+            ephemeral: false,
+            turns: [],
+          },
+          { id: 'corrupt-entry' },
+        ],
+        nextCursor: 'page-two',
+      },
+    })}\n`,
+  )
+  assert.deepEqual(await listed, {
+    threads: [
+      {
+        id: 'private-thread-a',
+        cwd,
+        name: 'Safe provider title',
+        createdAt: 1_700_000_000,
+        updatedAt: 1_700_000_100,
+        recencyAt: 1_700_000_050,
+        cliVersion: '0.149.1',
+        modelProvider: 'openai',
+        source: 'cli',
+        status: 'notLoaded',
+        ephemeral: false,
+      },
+    ],
+    invalidEntryCount: 1,
+    nextCursor: 'page-two',
+  })
+
+  const read = client.readStoredThread({ threadId: 'private-thread-a' })
+  await nextTurn()
+  assert.deepEqual(written[1], {
+    id: written[1].id,
+    method: 'thread/read',
+    params: {
+      threadId: 'private-thread-a',
+      includeTurns: false,
+    },
+  })
+  child.stdout.write(
+    `${JSON.stringify({
+      id: written[1].id,
+      result: {
+        thread: {
+          id: 'private-thread-a',
+          cwd,
+          name: 'Safe provider title',
+          preview: 'still private',
+          createdAt: 1_700_000_000,
+          updatedAt: 1_700_000_100,
+          recencyAt: null,
+          cliVersion: '0.149.1',
+          modelProvider: 'openai',
+          source: 'cli',
+          status: { type: 'notLoaded' },
+          ephemeral: false,
+          turns: [],
+        },
+      },
+    })}\n`,
+  )
+  const metadata = await read
+  assert.equal(metadata.id, 'private-thread-a')
+  assert.equal(Object.hasOwn(metadata, 'preview'), false)
+  assert.equal(Object.hasOwn(metadata, 'path'), false)
+  assert.equal(Object.hasOwn(metadata, 'sessionId'), false)
+  assert.deepEqual(
+    written.map((request) => request.method),
+    ['thread/list', 'thread/read'],
+  )
+})
+
+test('rejects unbounded stored-thread metadata pages', async () => {
+  const cwd = resolve('stored-thread-bounds')
+  const { child, client, written } = createHarness()
+  await assert.rejects(
+    client.listStoredThreads({ cwd, limit: 101 }),
+    /between 1 and 100/,
+  )
+  await assert.rejects(
+    client.listStoredThreads({ cwd, cursor: 'x'.repeat(513), limit: 1 }),
+    /cursor is invalid/,
+  )
+  assert.deepEqual(written, [])
+
+  const listed = client.listStoredThreads({ cwd, limit: 1 })
+  await nextTurn()
+  child.stdout.write(
+    `${JSON.stringify({
+      id: written[0].id,
+      result: { data: [{}, {}], nextCursor: null },
+    })}\n`,
+  )
+  await assert.rejects(listed, /exceeded requested limit/)
+})
+
 function writeNotification(child, method, params) {
   child.stdout.write(`${JSON.stringify({ method, params })}\n`)
 }

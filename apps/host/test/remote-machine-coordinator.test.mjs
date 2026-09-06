@@ -12,6 +12,7 @@ import {
 import { canonicalFailure } from '@codetether/agent-core'
 
 import {
+  RemoteMachineCoordinatorError,
   RemoteMachineRevocationPendingError,
   SecureRemoteMachineCoordinator,
   remoteProviderObservation,
@@ -36,12 +37,17 @@ async function fixture(options = {}) {
   let revokeCalls = 0
   let validateCalls = 0
   let discoveryCalls = 0
+  let providerSessionDiscoveryCalls = 0
+  let providerSessionValidationCalls = 0
   let openCodexCalls = 0
   let openClaudeCalls = 0
+  let closedCodexSessions = 0
   let activeDiscoveries = 0
   let maximumActiveDiscoveries = 0
   let activeValidations = 0
   let maximumActiveValidations = 0
+  let activeConnections = 0
+  let maximumActiveConnections = 0
   const attemptedEndpoints = []
   const connections = []
   const transport = {
@@ -89,6 +95,11 @@ async function fixture(options = {}) {
           : 'mismatch',
       )
       let closed = false
+      activeConnections += 1
+      maximumActiveConnections = Math.max(
+        maximumActiveConnections,
+        activeConnections,
+      )
       const connection = {
         async ping() {
           if (options.pingHandler !== undefined) {
@@ -151,8 +162,28 @@ async function fixture(options = {}) {
               },
             }
           : {}),
+        ...(options.providerSessionDiscoveryEnabled === true
+          ? {
+              async discoverProviderSessions(input) {
+                providerSessionDiscoveryCalls += 1
+                if (options.providerSessionDiscoveryHandler !== undefined) {
+                  return await options.providerSessionDiscoveryHandler(input)
+                }
+                return remoteProviderSessionDiscoveryPage(input)
+              },
+              async validateProviderSession(input) {
+                providerSessionValidationCalls += 1
+                if (options.providerSessionValidationHandler !== undefined) {
+                  return await options.providerSessionValidationHandler(input)
+                }
+                return remoteProviderSessionCandidate(input)
+              },
+            }
+          : {}),
         close() {
+          if (closed) return
           closed = true
+          activeConnections -= 1
         },
         get closed() {
           return closed
@@ -170,18 +201,29 @@ async function fixture(options = {}) {
             }
             const providerThreadId =
               input.providerThreadId ?? 'thread_remote_fixture'
+            let closed = false
             return {
               machine,
               conversationId: input.conversationId,
               providerThreadId,
               resumed: input.providerThreadId !== undefined,
               executionProfile: 'codex-text-v1',
-              async startTurn() {
+              get closed() {
+                return closed
+              },
+              async startTurn(turnInput) {
+                if (options.codexTurnHandler !== undefined) {
+                  return await options.codexTurnHandler(turnInput)
+                }
                 throw new Error(
                   'Turn execution is outside this coordinator test',
                 )
               },
-              async close() {},
+              async close() {
+                if (closed) return
+                closed = true
+                closedCodexSessions += 1
+              },
             }
           },
         }
@@ -239,14 +281,29 @@ async function fixture(options = {}) {
       get discovery() {
         return discoveryCalls
       },
+      get providerSessionDiscovery() {
+        return providerSessionDiscoveryCalls
+      },
+      get providerSessionValidation() {
+        return providerSessionValidationCalls
+      },
       get openCodex() {
         return openCodexCalls
+      },
+      get closedCodexSessions() {
+        return closedCodexSessions
       },
       get openClaude() {
         return openClaudeCalls
       },
       get maximumActiveDiscoveries() {
         return maximumActiveDiscoveries
+      },
+      get activeConnections() {
+        return activeConnections
+      },
+      get maximumActiveConnections() {
+        return maximumActiveConnections
       },
       get activeDiscoveries() {
         return activeDiscoveries
@@ -319,6 +376,37 @@ function remoteProviderDiscovery(
       },
     ],
     observedAt: '2026-08-31T12:00:00.000Z',
+  }
+}
+
+function remoteProviderSessionCandidate(input) {
+  return {
+    nativeSessionId: input.nativeSessionId ?? 'native-session-remote-fixture',
+    revision: input.revision ?? 'revision_remote_fixture',
+    title: 'Existing remote Provider conversation',
+    createdAt: '2026-09-05T10:00:00.000Z',
+    lastActiveAt: '2026-09-05T11:00:00.000Z',
+    providerVersion: '1.2.3',
+    resumeStatus: 'supported',
+    historicalTranscript: 'unavailable',
+  }
+}
+
+function remoteProviderSessionDiscoveryPage(input) {
+  return {
+    provider: input.provider,
+    status: 'supported',
+    resumeStatus: 'supported',
+    providerVersion: '1.2.3',
+    candidates: [remoteProviderSessionCandidate(input)],
+    metrics: {
+      filesInspected: 1,
+      candidatesParsed: 1,
+      candidatesMatched: 1,
+      corruptEntriesSkipped: 0,
+      elapsedMs: 1,
+      truncated: false,
+    },
   }
 }
 
@@ -447,6 +535,340 @@ test('current Codex discovery survives authenticated Location validation and adm
     await session.close()
     unsubscribe()
   } finally {
+    await f.close(coordinator)
+  }
+})
+
+test('serialized Provider session metadata routes cannot resurrect a parallel idle worker', async () => {
+  const f = await fixture({
+    providerSessionDiscoveryEnabled: true,
+    async providerSessionDiscoveryHandler(input) {
+      if (input.provider === 'claude-code') {
+        // Leave the successor operation alive across the prior operation's
+        // deferred worker-handoff tick.
+        await new Promise((resolve) => setTimeout(resolve, 25))
+      }
+      return remoteProviderSessionDiscoveryPage(input)
+    },
+    async providerSessionValidationHandler(input) {
+      await new Promise((resolve) => setTimeout(resolve, 25))
+      return remoteProviderSessionCandidate(input)
+    },
+  })
+  let coordinator
+  try {
+    coordinator = await SecureRemoteMachineCoordinator.create({
+      persistence: f.store,
+      transport: f.transport,
+      heartbeatIntervalMs: 60_000,
+      reconnectMaximumDelayMs: 20,
+    })
+    const confirmed = await pairAndActivate(coordinator, f)
+    await waitFor(
+      () =>
+        coordinator.connectionState(confirmed.machine.machineId) === 'online',
+      'initial durable Machine worker',
+    )
+    const machine = f.store.getMachine(confirmed.machine.machineId)
+    const trust = f.store.getTrustedMachinePeer(confirmed.machine.machineId)
+    assert.ok(machine)
+    assert.ok(trust)
+
+    await Promise.all([
+      coordinator.discoverProviderSessions(machine, trust, {
+        provider: 'codex',
+        projectId: 'proj_remote_metadata_serialization',
+        rootPath: '/srv/projects/workspace',
+      }),
+      coordinator.discoverProviderSessions(machine, trust, {
+        provider: 'claude-code',
+        projectId: 'proj_remote_metadata_serialization',
+        rootPath: '/srv/projects/workspace',
+      }),
+    ])
+
+    await Promise.all([
+      coordinator.discoverProviderSessions(machine, trust, {
+        provider: 'codex',
+        projectId: 'proj_remote_metadata_serialization',
+        rootPath: '/srv/projects/workspace',
+      }),
+      coordinator.validateProviderSession(machine, trust, {
+        provider: 'codex',
+        projectId: 'proj_remote_metadata_serialization',
+        rootPath: '/srv/projects/workspace',
+        nativeSessionId: 'native-session-remote-fixture',
+        revision: 'revision_remote_fixture',
+      }),
+    ])
+
+    await waitFor(
+      () => f.counts.activeConnections === 1,
+      'single replacement durable Machine worker',
+    )
+    assert.equal(f.counts.maximumActiveConnections, 1)
+    assert.equal(
+      f.connections.filter((connection) => !connection.closed).length,
+      1,
+    )
+  } finally {
+    await f.close(coordinator)
+  }
+})
+
+test('remote Provider session pagination rejects a Provider version change', async () => {
+  const f = await fixture({
+    providerSessionDiscoveryEnabled: true,
+    async providerSessionDiscoveryHandler(input) {
+      const firstPage = input.cursor === undefined
+      return {
+        ...remoteProviderSessionDiscoveryPage(input),
+        providerVersion: firstPage ? '1.2.3' : '1.2.4',
+        candidates: [
+          remoteProviderSessionCandidate({
+            ...input,
+            nativeSessionId: firstPage
+              ? 'native-session-version-page-one'
+              : 'native-session-version-page-two',
+          }),
+        ],
+        ...(firstPage ? { nextCursor: 'cursor_version_page_two' } : {}),
+      }
+    },
+  })
+  let coordinator
+  try {
+    coordinator = await SecureRemoteMachineCoordinator.create({
+      persistence: f.store,
+      transport: f.transport,
+      heartbeatIntervalMs: 60_000,
+      reconnectMaximumDelayMs: 20,
+    })
+    const confirmed = await pairAndActivate(coordinator, f)
+    await waitFor(
+      () =>
+        coordinator.connectionState(confirmed.machine.machineId) === 'online',
+      'active Machine trust for version consistency',
+    )
+    const machine = f.store.getMachine(confirmed.machine.machineId)
+    const trust = f.store.getTrustedMachinePeer(confirmed.machine.machineId)
+    assert.ok(machine)
+    assert.ok(trust)
+
+    await assert.rejects(
+      coordinator.discoverProviderSessions(machine, trust, {
+        provider: 'codex',
+        projectId: 'proj_remote_version_consistency',
+        rootPath: '/srv/projects/workspace',
+      }),
+      (error) =>
+        error instanceof RemoteMachineCoordinatorError &&
+        error.code === 'protocol_incompatible',
+    )
+  } finally {
+    await f.close(coordinator)
+  }
+})
+
+test('remote Provider session pagination saturates aggregate safe metrics', async () => {
+  const f = await fixture({
+    providerSessionDiscoveryEnabled: true,
+    async providerSessionDiscoveryHandler(input) {
+      const firstPage = input.cursor === undefined
+      return {
+        ...remoteProviderSessionDiscoveryPage(input),
+        candidates: [
+          remoteProviderSessionCandidate({
+            ...input,
+            nativeSessionId: firstPage
+              ? 'native-session-metrics-page-one'
+              : 'native-session-metrics-page-two',
+          }),
+        ],
+        ...(firstPage ? { nextCursor: 'cursor_metrics_page_two' } : {}),
+        metrics: {
+          filesInspected: Number.MAX_SAFE_INTEGER,
+          candidatesParsed: Number.MAX_SAFE_INTEGER,
+          candidatesMatched: Number.MAX_SAFE_INTEGER,
+          corruptEntriesSkipped: Number.MAX_SAFE_INTEGER,
+          elapsedMs: Number.MAX_SAFE_INTEGER,
+          truncated: false,
+        },
+      }
+    },
+  })
+  let coordinator
+  try {
+    coordinator = await SecureRemoteMachineCoordinator.create({
+      persistence: f.store,
+      transport: f.transport,
+      heartbeatIntervalMs: 60_000,
+      reconnectMaximumDelayMs: 20,
+    })
+    const confirmed = await pairAndActivate(coordinator, f)
+    await waitFor(
+      () =>
+        coordinator.connectionState(confirmed.machine.machineId) === 'online',
+      'active Machine trust for metric bounds',
+    )
+    const machine = f.store.getMachine(confirmed.machine.machineId)
+    const trust = f.store.getTrustedMachinePeer(confirmed.machine.machineId)
+    assert.ok(machine)
+    assert.ok(trust)
+
+    const page = await coordinator.discoverProviderSessions(machine, trust, {
+      provider: 'codex',
+      projectId: 'proj_remote_metric_bounds',
+      rootPath: '/srv/projects/workspace',
+    })
+    assert.equal(page.candidates.length, 2)
+    assert.deepEqual(page.metrics, {
+      filesInspected: Number.MAX_SAFE_INTEGER,
+      candidatesParsed: Number.MAX_SAFE_INTEGER,
+      candidatesMatched: Number.MAX_SAFE_INTEGER,
+      corruptEntriesSkipped: Number.MAX_SAFE_INTEGER,
+      elapsedMs: Number.MAX_SAFE_INTEGER,
+      truncated: false,
+    })
+  } finally {
+    await f.close(coordinator)
+  }
+})
+
+test('cancelled remote session discovery and validation preserve online state and an unrelated active Turn', async () => {
+  let releaseTurn
+  const turnCompletion = new Promise((resolve) => {
+    releaseTurn = resolve
+  })
+  const waitForAdministrativeAbort = async (input) => {
+    input.signal.throwIfAborted()
+    await new Promise((resolve, reject) => {
+      const rejectAborted = () =>
+        reject(input.signal.reason ?? abortError('administrative cancellation'))
+      input.signal.addEventListener('abort', rejectAborted, { once: true })
+    })
+  }
+  const f = await fixture({
+    discoveryEnabled: true,
+    executionEnabled: true,
+    providerSessionDiscoveryEnabled: true,
+    async discoveryHandler() {
+      return remoteProviderDiscovery(true)
+    },
+    providerSessionDiscoveryHandler: waitForAdministrativeAbort,
+    providerSessionValidationHandler: waitForAdministrativeAbort,
+    async codexTurnHandler() {
+      return {
+        async *events() {
+          yield {
+            sequence: 1,
+            event: {
+              type: 'message.delta',
+              itemId: 'item_remote_active_turn',
+              delta: 'active',
+            },
+          }
+          await turnCompletion
+          yield {
+            sequence: 2,
+            event: { type: 'turn.completed' },
+          }
+        },
+      }
+    },
+  })
+  let coordinator
+  let session
+  try {
+    coordinator = await SecureRemoteMachineCoordinator.create({
+      persistence: f.store,
+      transport: f.transport,
+      heartbeatIntervalMs: 60_000,
+      reconnectMaximumDelayMs: 20,
+    })
+    const confirmed = await pairAndActivate(coordinator, f)
+    await waitFor(() => f.counts.discovery >= 1, 'execution discovery')
+    const machine = f.store.getMachine(confirmed.machine.machineId)
+    const trust = f.store.getTrustedMachinePeer(confirmed.machine.machineId)
+    assert.ok(machine)
+    assert.ok(trust)
+    if (f.store.getRemoteProviderObservation(machine.machineId) === undefined) {
+      await coordinator.discoverProviders(machine, trust)
+    }
+    assert.equal(coordinator.connectionState(machine.machineId), 'online')
+
+    session = await coordinator.openCodexSession(machine, trust, {
+      conversationId: 'conv_remote_active_during_session_discovery',
+      projectId: 'proj_remote_active_during_session_discovery',
+      rootPath: '/srv/projects/workspace',
+    })
+    const turn = await session.startTurn({
+      actionId: 'act_remote_active_during_session_discovery',
+      turnId: 'turn_remote_active_during_session_discovery',
+      prompt: 'Synthetic active Turn',
+    })
+    const events = turn.events()[Symbol.asyncIterator]()
+    const firstEvent = await events.next()
+    assert.equal(firstEvent.value.type, 'message.delta')
+    assert.equal(session.closed, false)
+
+    const states = []
+    const unsubscribe = coordinator.subscribeStatus((machineId, state) => {
+      if (machineId === machine.machineId) states.push(state)
+    })
+    try {
+      const discoveryAbort = new AbortController()
+      const discovery = coordinator.discoverProviderSessions(machine, trust, {
+        provider: 'codex',
+        projectId: 'proj_remote_active_during_session_discovery',
+        rootPath: '/srv/projects/workspace',
+        signal: discoveryAbort.signal,
+      })
+      await waitFor(
+        () => f.counts.providerSessionDiscovery === 1,
+        'remote Provider session discovery',
+      )
+      discoveryAbort.abort()
+      await assert.rejects(discovery)
+      assert.equal(coordinator.connectionState(machine.machineId), 'online')
+      assert.equal(session.closed, false)
+      assert.equal(f.counts.closedCodexSessions, 0)
+
+      const validationAbort = new AbortController()
+      const validation = coordinator.validateProviderSession(machine, trust, {
+        provider: 'codex',
+        projectId: 'proj_remote_active_during_session_discovery',
+        rootPath: '/srv/projects/workspace',
+        nativeSessionId: 'native-session-remote-fixture',
+        revision: 'revision_remote_fixture',
+        signal: validationAbort.signal,
+      })
+      await waitFor(
+        () => f.counts.providerSessionValidation === 1,
+        'remote Provider session validation',
+      )
+      validationAbort.abort()
+      await assert.rejects(validation)
+      assert.equal(coordinator.connectionState(machine.machineId), 'online')
+      assert.equal(session.closed, false)
+      assert.equal(f.counts.closedCodexSessions, 0)
+      assert.equal(
+        states.some((state) => state !== 'online'),
+        false,
+        JSON.stringify(states),
+      )
+
+      releaseTurn()
+      const terminal = await events.next()
+      assert.equal(terminal.value.type, 'turn.completed')
+      assert.equal((await events.next()).done, true)
+      assert.equal(session.closed, false)
+    } finally {
+      unsubscribe()
+    }
+  } finally {
+    releaseTurn()
+    await session?.close().catch(() => undefined)
     await f.close(coordinator)
   }
 })
@@ -1317,6 +1739,12 @@ async function waitFor(predicate, label, timeoutMs = 2_000) {
       throw new Error(`Timed out waiting for ${label}`)
     await new Promise((resolve) => setTimeout(resolve, 10))
   }
+}
+
+function abortError(message) {
+  const error = new Error(message)
+  error.name = 'AbortError'
+  return error
 }
 
 test('rejects public and loopback endpoints before transport, with explicit test-only loopback opt-in', async () => {

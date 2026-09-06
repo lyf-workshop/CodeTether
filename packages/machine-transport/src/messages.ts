@@ -635,6 +635,173 @@ export type ProvidersDescribedMessage = z.infer<
   typeof ProvidersDescribedMessageSchema
 >
 
+/**
+ * Private Machine-protocol metadata used only inside pinned end-peer TLS.
+ * Relay and public Protocol v1 never parse or expose these native identities.
+ */
+export const NativeProviderSessionIdentitySchema = z
+  .string()
+  .min(1)
+  .max(machineTransportLimits.maximumRemoteCodexProviderIdentityBytes)
+  .refine((value) => !value.includes('\0'))
+
+const ProviderSessionDiscoveryCursorSchema = z
+  .string()
+  .min(1)
+  .max(machineTransportLimits.maximumProviderSessionDiscoveryCursorBytes)
+  .refine((value) => !value.includes('\0'))
+
+const ProviderSessionDiscoveryRevisionSchema = z
+  .string()
+  .min(1)
+  .max(machineTransportLimits.maximumProviderSessionDiscoveryRevisionBytes)
+  .regex(/^[A-Za-z0-9_-]+$/)
+
+const ProviderSessionDiscoveryTitleSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .refine(
+    (value) =>
+      Buffer.byteLength(value, 'utf8') <=
+      machineTransportLimits.maximumProviderSessionDiscoveryTitleBytes,
+  )
+
+export const PrivateProviderSessionCandidateSchema = z
+  .object({
+    nativeSessionId: NativeProviderSessionIdentitySchema,
+    revision: ProviderSessionDiscoveryRevisionSchema,
+    title: ProviderSessionDiscoveryTitleSchema,
+    createdAt: TimestampSchema.optional(),
+    lastActiveAt: TimestampSchema.optional(),
+    providerVersion: z.string().trim().min(1).max(120).optional(),
+    resumeStatus: z.enum(['supported', 'unsupported', 'unavailable']),
+    historicalTranscript: z.enum(['supported', 'unsupported', 'unavailable']),
+  })
+  .strict()
+export type PrivateProviderSessionCandidate = z.infer<
+  typeof PrivateProviderSessionCandidateSchema
+>
+
+const ProviderSessionDiscoveryFailureReasonSchema = z.enum([
+  'provider_session_discovery_unavailable',
+  'provider_session_format_unsupported',
+  'provider_session_store_unreadable',
+  'machine_offline',
+])
+
+export const ProviderSessionsDiscoverMessageSchema = z
+  .object({
+    type: z.literal('provider_sessions.discover'),
+    protocolVersion: VersionField,
+    requestId: NonceSchema,
+    expectedMachineId: MachineTransportMachineIdSchema,
+    expectedNodeId: NodeIdSchema,
+    provider: z.enum(['codex', 'claude-code']),
+    projectId: MachineTransportProjectIdSchema,
+    rootPath: RemoteProjectLocationPathSchema,
+    cursor: ProviderSessionDiscoveryCursorSchema.optional(),
+    limit: z
+      .number()
+      .int()
+      .min(1)
+      .max(machineTransportLimits.providerSessionDiscoveryPageSize),
+  })
+  .strict()
+export type ProviderSessionsDiscoverMessage = z.infer<
+  typeof ProviderSessionsDiscoverMessageSchema
+>
+
+export const ProviderSessionsDiscoveredMessageSchema = z
+  .object({
+    type: z.literal('provider_sessions.discovered'),
+    protocolVersion: VersionField,
+    requestId: NonceSchema,
+    machineId: MachineTransportMachineIdSchema,
+    nodeId: NodeIdSchema,
+    provider: z.enum(['codex', 'claude-code']),
+    status: z.enum(['supported', 'unsupported', 'unavailable']),
+    resumeStatus: z.enum(['supported', 'unsupported', 'unavailable']),
+    providerVersion: z.string().trim().min(1).max(120).optional(),
+    candidates: z
+      .array(PrivateProviderSessionCandidateSchema)
+      .max(machineTransportLimits.providerSessionDiscoveryPageSize),
+    nextCursor: ProviderSessionDiscoveryCursorSchema.optional(),
+    failureReason: ProviderSessionDiscoveryFailureReasonSchema.optional(),
+    metrics: z
+      .object({
+        filesInspected: z.number().int().nonnegative().safe(),
+        candidatesParsed: z.number().int().nonnegative().safe(),
+        candidatesMatched: z.number().int().nonnegative().safe(),
+        corruptEntriesSkipped: z.number().int().nonnegative().safe(),
+        elapsedMs: z.number().int().nonnegative().safe(),
+        truncated: z.boolean(),
+      })
+      .strict(),
+  })
+  .strict()
+  .superRefine((response, context) => {
+    if (
+      (response.status === 'supported') ===
+      (response.failureReason !== undefined)
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message:
+          'Supported discovery has no failure reason; unavailable discovery requires one',
+        path: ['failureReason'],
+      })
+    }
+    if (response.status !== 'supported' && response.candidates.length > 0) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Unavailable discovery cannot return native sessions',
+        path: ['candidates'],
+      })
+    }
+  })
+export type ProviderSessionsDiscoveredMessage = z.infer<
+  typeof ProviderSessionsDiscoveredMessageSchema
+>
+
+export const ProviderSessionValidateMessageSchema = z
+  .object({
+    type: z.literal('provider_session.validate'),
+    protocolVersion: VersionField,
+    requestId: NonceSchema,
+    expectedMachineId: MachineTransportMachineIdSchema,
+    expectedNodeId: NodeIdSchema,
+    provider: z.enum(['codex', 'claude-code']),
+    projectId: MachineTransportProjectIdSchema,
+    rootPath: RemoteProjectLocationPathSchema,
+    nativeSessionId: NativeProviderSessionIdentitySchema,
+    revision: ProviderSessionDiscoveryRevisionSchema,
+  })
+  .strict()
+export type ProviderSessionValidateMessage = z.infer<
+  typeof ProviderSessionValidateMessageSchema
+>
+
+export const ProviderSessionValidatedMessageSchema = z
+  .object({
+    type: z.literal('provider_session.validated'),
+    protocolVersion: VersionField,
+    requestId: NonceSchema,
+    machineId: MachineTransportMachineIdSchema,
+    nodeId: NodeIdSchema,
+    provider: z.enum(['codex', 'claude-code']),
+    valid: z.boolean(),
+    candidate: PrivateProviderSessionCandidateSchema.optional(),
+  })
+  .strict()
+  .refine((response) => response.valid === (response.candidate !== undefined), {
+    message: 'A valid native session requires revalidated metadata',
+    path: ['candidate'],
+  })
+export type ProviderSessionValidatedMessage = z.infer<
+  typeof ProviderSessionValidatedMessageSchema
+>
+
 export const RemoteCodexExecutionProfileSchema = z.literal('codex-text-v1')
 export type RemoteCodexExecutionProfile = z.infer<
   typeof RemoteCodexExecutionProfileSchema
@@ -1153,6 +1320,10 @@ export const MachineWireMessageSchema = z.discriminatedUnion('type', [
   ProjectLocationValidatedMessageSchema,
   ProvidersDescribeMessageSchema,
   ProvidersDescribedMessageSchema,
+  ProviderSessionsDiscoverMessageSchema,
+  ProviderSessionsDiscoveredMessageSchema,
+  ProviderSessionValidateMessageSchema,
+  ProviderSessionValidatedMessageSchema,
   CodexSessionOpenMessageSchema,
   CodexSessionReadyMessageSchema,
   CodexTurnStartMessageSchema,

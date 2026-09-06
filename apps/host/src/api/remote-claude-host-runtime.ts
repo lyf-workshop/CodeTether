@@ -22,8 +22,11 @@ import {
   type ProviderRuntimeContext,
   type ProviderTurnResult,
 } from './agent-runtime.js'
+import {
+  decodeRemoteProviderSessionBinding,
+  encodeRemoteProviderSessionBinding,
+} from './remote-provider-session-binding.js'
 
-const REMOTE_SESSION_PREFIX = 'remote-claude-v1:'
 const REMOTE_TURN_PREFIX = 'remote-claude-turn-v1:'
 
 export const REMOTE_CLAUDE_EFFORT_LEVELS = [
@@ -760,45 +763,22 @@ function encodeRemoteProviderSessionId(
   machineId: MachineId,
   providerSessionId: string,
 ): string {
-  return `${REMOTE_SESSION_PREFIX}${Buffer.from(
-    JSON.stringify({ version: 1, machineId, providerSessionId }),
-    'utf8',
-  ).toString('base64url')}`
+  return encodeRemoteProviderSessionBinding(
+    'claude-code',
+    machineId,
+    providerSessionId,
+  )
 }
 
 function decodeRemoteProviderSessionId(
   value: string,
   machineId: MachineId,
 ): string {
-  if (!value.startsWith(REMOTE_SESSION_PREFIX)) {
-    throw new ProviderConversationUnavailableError('claude-code', value)
-  }
-  let parsed: unknown
   try {
-    parsed = JSON.parse(
-      Buffer.from(
-        value.slice(REMOTE_SESSION_PREFIX.length),
-        'base64url',
-      ).toString('utf8'),
-    )
+    return decodeRemoteProviderSessionBinding('claude-code', machineId, value)
   } catch {
     throw new ProviderConversationUnavailableError('claude-code', value)
   }
-  if (
-    typeof parsed !== 'object' ||
-    parsed === null ||
-    !('version' in parsed) ||
-    parsed.version !== 1 ||
-    !('machineId' in parsed) ||
-    parsed.machineId !== machineId ||
-    !('providerSessionId' in parsed) ||
-    typeof parsed.providerSessionId !== 'string' ||
-    parsed.providerSessionId.trim().length === 0 ||
-    parsed.providerSessionId.length > 2048
-  ) {
-    throw new ProviderConversationUnavailableError('claude-code', value)
-  }
-  return parsed.providerSessionId
 }
 
 function remoteProviderTurnId(machineId: MachineId, turnId: string): string {

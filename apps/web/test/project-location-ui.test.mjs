@@ -45,7 +45,10 @@ test('Add Location is a bounded, keyboard-accessible remote path registration fl
   assert.match(dialog, /aria-describedby/u)
   assert.match(dialog, /aria-busy=\{busy\}/u)
   assert.match(dialog, /role="alert"/u)
-  assert.match(dialog, /showCloseButton=\{!busy\}/u)
+  assert.match(
+    dialog,
+    /showCloseButton=\{!busy && registeredLocation === undefined\}/u,
+  )
   assert.match(dialog, /if \(!nextOpen && busy\) return/u)
   assert.match(dialog, /max-w-lg overflow-x-hidden/u)
   assert.match(dialog, /不浏览文件或执行命令/u)

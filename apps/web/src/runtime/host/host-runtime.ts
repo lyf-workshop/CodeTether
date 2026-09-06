@@ -5,12 +5,18 @@ import {
 import {
   formatLastEventId,
   type ApprovalDecision,
+  type AdoptProviderSessionRequest,
+  type AdoptProviderSessionResponse,
   type AttentionId,
   type Bootstrap,
   type ConversationId,
+  type DiscoverProviderSessionsQuery,
+  type DiscoverProviderSessionsResponse,
+  type DiscoveryCandidateId,
   type HostEventEnvelope,
   type HostSnapshot,
   type LastEventId,
+  type MachineId,
   type ProjectId,
 } from '@codetether/protocol'
 import type { QueryClient } from '@tanstack/react-query'
@@ -77,6 +83,7 @@ import {
   shouldRefreshAttention,
   type AttentionReadClient,
 } from './attention-query.js'
+import { createBrowserActionId } from './action-id.js'
 
 export type HostConnectionState =
   'connecting' | 'connected' | 'reconnecting' | 'unavailable' | 'incompatible'
@@ -102,6 +109,23 @@ export interface HostRuntimeClient
     NewConversationMutationClient,
     AttentionReadClient,
     AttentionMutationClient {
+  discoverProviderSessions(
+    projectId: ProjectId,
+    machineId: MachineId,
+    options?: {
+      readonly provider?: DiscoverProviderSessionsQuery['provider']
+      readonly limit?: DiscoverProviderSessionsQuery['limit']
+      readonly cursor?: DiscoverProviderSessionsQuery['cursor']
+      readonly rescan?: boolean
+      readonly signal?: AbortSignal
+    },
+  ): Promise<DiscoverProviderSessionsResponse>
+  adoptProviderSession(
+    projectId: ProjectId,
+    machineId: MachineId,
+    request: AdoptProviderSessionRequest,
+    options?: { readonly signal?: AbortSignal },
+  ): Promise<AdoptProviderSessionResponse>
   connectEvents(options?: {
     readonly lastEventId?: LastEventId
     readonly signal?: AbortSignal
@@ -397,6 +421,31 @@ export class HostRuntime {
     machineId: Parameters<ProjectActions['removeProjectLocation']>[1],
   ) {
     return this.#projectActions.removeProjectLocation(projectId, machineId)
+  }
+
+  discoverProviderSessions(
+    projectId: ProjectId,
+    machineId: MachineId,
+    options?: Parameters<HostRuntimeClient['discoverProviderSessions']>[2],
+  ) {
+    return this.#client.discoverProviderSessions(projectId, machineId, options)
+  }
+
+  async adoptProviderSession(
+    projectId: ProjectId,
+    machineId: MachineId,
+    discoveryCandidateId: DiscoveryCandidateId,
+  ) {
+    const response = await this.#client.adoptProviderSession(
+      projectId,
+      machineId,
+      {
+        actionId: createBrowserActionId(),
+        discoveryCandidateId,
+      },
+    )
+    invalidateConversationDurableQueries(this.#queryClient)
+    return response
   }
 
   listProjectConversations(

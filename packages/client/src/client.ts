@@ -24,6 +24,8 @@ import {
   CreateProjectResponseSchema,
   DisconnectMachineRelayRequestSchema,
   DisconnectMachineRelayResponseSchema,
+  DiscoverProviderSessionsQuerySchema,
+  DiscoverProviderSessionsResponseSchema,
   EnrollMachineRelayRequestSchema,
   EnrollMachineRelayResponseSchema,
   RegisterProjectLocationRequestSchema,
@@ -66,6 +68,8 @@ import {
   TurnIdSchema,
   UpdateMachineConnectionAddressRequestSchema,
   UpdateMachineConnectionAddressResponseSchema,
+  AdoptProviderSessionRequestSchema,
+  AdoptProviderSessionResponseSchema,
   UnpairMachineRequestSchema,
   UnpairMachineResponseSchema,
   RemoveMachineRelayRequestSchema,
@@ -99,6 +103,8 @@ import {
   type CreateProjectResponse,
   type DisconnectMachineRelayRequest,
   type DisconnectMachineRelayResponse,
+  type DiscoverProviderSessionsQuery,
+  type DiscoverProviderSessionsResponse,
   type EnrollMachineRelayRequest,
   type EnrollMachineRelayResponse,
   type RegisterProjectLocationRequest,
@@ -139,6 +145,8 @@ import {
   type TurnId,
   type UpdateMachineConnectionAddressRequest,
   type UpdateMachineConnectionAddressResponse,
+  type AdoptProviderSessionRequest,
+  type AdoptProviderSessionResponse,
   type UnpairMachineRequest,
   type UnpairMachineResponse,
   type RemoveMachineRelayRequest,
@@ -197,6 +205,13 @@ export interface ListAttentionOptions extends RequestOptions {
   readonly type?: ListAttentionQuery['type']
   readonly status?: ListAttentionQuery['status']
   readonly limit?: ListAttentionQuery['limit']
+}
+
+export interface DiscoverProviderSessionsOptions extends RequestOptions {
+  readonly provider?: DiscoverProviderSessionsQuery['provider']
+  readonly limit?: DiscoverProviderSessionsQuery['limit']
+  readonly cursor?: DiscoverProviderSessionsQuery['cursor']
+  readonly rescan?: boolean
 }
 
 export class CodeTetherClient {
@@ -913,6 +928,107 @@ export class CodeTetherClient {
           (location) => location.machineId === machine,
         ),
       'Remove ProjectLocation response does not match the requested Machine',
+    )
+    return response
+  }
+
+  async discoverProviderSessions(
+    projectId: ProjectId,
+    machineId: MachineId,
+    options: DiscoverProviderSessionsOptions = {},
+  ): Promise<DiscoverProviderSessionsResponse> {
+    const project = parseProtocol(
+      ProjectIdSchema,
+      projectId,
+      'discover-provider-sessions project id',
+    )
+    const machine = parseProtocol(
+      MachineIdSchema,
+      machineId,
+      'discover-provider-sessions machine id',
+    )
+    const query = parseProtocol(
+      DiscoverProviderSessionsQuerySchema,
+      {
+        ...(options.provider === undefined
+          ? {}
+          : { provider: options.provider }),
+        ...(options.limit === undefined ? {} : { limit: options.limit }),
+        ...(options.cursor === undefined ? {} : { cursor: options.cursor }),
+        ...(options.rescan === undefined ? {} : { rescan: options.rescan }),
+      },
+      'discover-provider-sessions query',
+    )
+    const search = new URLSearchParams({ limit: String(query.limit) })
+    if (query.provider !== undefined) search.set('provider', query.provider)
+    if (query.cursor !== undefined) search.set('cursor', query.cursor)
+    // Omitting false is important: URL query values are strings and the
+    // Protocol default already represents the ordinary cached read.
+    if (query.rescan) search.set('rescan', 'true')
+
+    const response = await this.#request(
+      `/api/v1/projects/${encodeURIComponent(project)}/locations/${encodeURIComponent(machine)}/provider-sessions?${search.toString()}`,
+      DiscoverProviderSessionsResponseSchema,
+      { method: 'GET', signal: options.signal },
+    )
+    assertProtocolIdentity(
+      response.candidates.every((candidate) => candidate.machineId === machine),
+      'Provider session discovery contains a candidate from another Machine',
+    )
+    if (query.provider !== undefined) {
+      assertProtocolIdentity(
+        response.providers.every(
+          (provider) => provider.provider === query.provider,
+        ) &&
+          response.candidates.every(
+            (candidate) => candidate.provider === query.provider,
+          ),
+        'Provider session discovery contains results from another Provider',
+      )
+    }
+    if (query.cursor !== undefined && response.nextCursor !== undefined) {
+      assertProtocolIdentity(
+        response.nextCursor !== query.cursor,
+        'Provider session discovery returned the same pagination cursor',
+      )
+    }
+    return response
+  }
+
+  async adoptProviderSession(
+    projectId: ProjectId,
+    machineId: MachineId,
+    input: AdoptProviderSessionRequest,
+    options: RequestOptions = {},
+  ): Promise<AdoptProviderSessionResponse> {
+    const project = parseProtocol(
+      ProjectIdSchema,
+      projectId,
+      'adopt-provider-session project id',
+    )
+    const machine = parseProtocol(
+      MachineIdSchema,
+      machineId,
+      'adopt-provider-session machine id',
+    )
+    const request = parseProtocol(
+      AdoptProviderSessionRequestSchema,
+      input,
+      'adopt-provider-session request',
+    )
+    const response = await this.#request(
+      `/api/v1/projects/${encodeURIComponent(project)}/locations/${encodeURIComponent(machine)}/provider-sessions`,
+      AdoptProviderSessionResponseSchema,
+      jsonRequest(request, options.signal),
+      request.actionId,
+    )
+    assertProtocolIdentity(
+      response.data.conversation.projectId === project,
+      'Adopted Conversation does not match the requested Project',
+    )
+    assertProtocolIdentity(
+      response.data.conversation.machineId === machine,
+      'Adopted Conversation does not match the requested Machine',
     )
     return response
   }

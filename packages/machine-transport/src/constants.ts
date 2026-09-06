@@ -13,6 +13,19 @@ export const machineTransportLimits = {
   maximumConnectionsPerAddress: 4,
   maximumProjectLocationPathBytes: 4 * 1024,
   providerDiscoveryTimeoutMs: 8_000,
+  providerSessionDiscoveryTimeoutMs: 30_000,
+  // A complete paginated discovery operation is bounded independently from
+  // each Machine request so empty/slow cursor chains cannot monopolize the
+  // per-Machine operation authority for hours.
+  providerSessionDiscoveryTotalTimeoutMs: 60_000,
+  providerSessionDiscoveryMaximumPages: 128,
+  // Eight worst-case private candidates remain below the 16 KiB frame bound.
+  providerSessionDiscoveryPageSize: 8,
+  providerSessionDiscoveryMaximumCandidates: 1_000,
+  providerSessionDiscoveryMaximumFiles: 10_000,
+  maximumProviderSessionDiscoveryCursorBytes: 512,
+  maximumProviderSessionDiscoveryTitleBytes: 512,
+  maximumProviderSessionDiscoveryRevisionBytes: 128,
   providerProbeTimeoutMs: 5_000,
   // Session admission may run the outer Claude version probe, preparation
   // version probe, and auth-status probe serially (3 * 5s), followed on a

@@ -6,9 +6,14 @@ import {
   type AgentProvider,
   type CanonicalFailure,
   type CanonicalFailureReason,
+  type NativeProviderSessionCandidate,
+  type ProviderSessionDiscovery,
+  type ProviderSessionDiscoveryPage,
+  type ProviderSessionResumeStatus,
 } from '@codetether/agent-core'
 import {
   ActionIdSchema,
+  AdoptProviderSessionResponseSchema,
   ApprovalIdSchema,
   AttentionIdSchema,
   AttentionListResponseSchema,
@@ -35,7 +40,11 @@ import {
   MachineIdSchema,
   MachinePairingAttemptIdSchema,
   ListProjectConversationsQuerySchema,
+  providerSessionDiscoveryLimits,
   protocolVersion,
+  DiscoverProviderSessionsQuerySchema,
+  DiscoverProviderSessionsResponseSchema,
+  DiscoveryCandidateIdSchema,
   TimestampSchema,
   TurnIdSchema,
   type BootstrapResponse,
@@ -71,6 +80,10 @@ import {
   type HostEvent,
   type HostEventEnvelope,
   type HostSnapshot,
+  type AdoptProviderSessionRequest,
+  type AdoptProviderSessionResponse,
+  type DiscoverProviderSessionsQuery,
+  type DiscoverProviderSessionsResponse,
   type CreateProjectRequest,
   type CreateProjectResponse,
   type RegisterProjectLocationRequest,
@@ -140,6 +153,7 @@ import {
   ProjectLocationRemovalError,
   RemoteMachineTrustConflictError,
   RemoteMachineProjectLocationConflictError,
+  NativeProviderSessionBindingConflictError,
   captureTurnPresentation,
   initialTurnPresentation,
   parseDurableTurnPresentation,
@@ -187,6 +201,8 @@ import {
 } from './project-registry.js'
 import { ProviderEventTranslator } from './provider-event-translator.js'
 import { ProviderRegistry, providerSessionKey } from './provider-registry.js'
+import { ProviderSessionDiscoveryRegistry } from './provider-session-discovery-registry.js'
+import { encodeRemoteProviderSessionBinding } from './remote-provider-session-binding.js'
 import {
   RemoteClaudeHostRuntime,
   type RemoteClaudeRuntimeSession,
@@ -217,6 +233,13 @@ import {
 
 const MAX_PENDING_PROVIDER_EVENTS = 512
 const MAX_PENDING_PROVIDER_EVENT_BYTES = 4 * 1024 * 1024
+const MAX_DISCOVERED_NATIVE_SESSIONS = 1_000
+const PROVIDER_SESSION_ADAPTER_PAGE_SIZE = 100
+const PROVIDER_SESSION_DISCOVERY_TOTAL_TIMEOUT_MS = 60_000
+const PROVIDER_SESSION_DISCOVERY_MAXIMUM_PAGES = 100
+const PROVIDER_SESSION_PRIVATE_ID_MAXIMUM_BYTES = 4 * 1024
+const PROVIDER_SESSION_REVISION_MAXIMUM_BYTES = 128
+const DEFAULT_MAX_CONCURRENT_PROVIDER_SESSION_SCANS = 4
 export const DEFAULT_MAX_CONVERSATIONS = 8
 export const DEFAULT_PERSISTENCE_FLUSH_MS = 300
 
@@ -234,6 +257,13 @@ interface PendingProviderStartFailure {
   readonly providerThreadId: string
   readonly providerTurnId: string
   readonly cleanup: Promise<void>
+}
+
+interface InFlightProviderSessionScan {
+  readonly abort: AbortController
+  promise: Promise<ProviderSessionDiscoveryPage>
+  waiters: number
+  settled: boolean
 }
 
 export class HostServiceError extends Error {
@@ -254,6 +284,8 @@ export interface HostServiceOptions {
   readonly runtime?: AgentHostRuntime
   readonly runtimes?: readonly AgentHostRuntime[]
   readonly providerRegistry?: ProviderRegistry
+  /** Read-only Machine-local native-session metadata adapters. */
+  readonly providerSessionDiscoveries?: readonly ProviderSessionDiscovery[]
   readonly workspacePolicy: WorkspacePolicy
   readonly publisher: HostEventPublisher
   readonly hostVersion: string
@@ -262,6 +294,10 @@ export interface HostServiceOptions {
   readonly maxConversations?: number
   readonly persistence?: ConversationStore
   readonly persistenceFlushMs?: number
+  /** Internal deterministic-test seam; production uses the fixed bounded scan deadline. */
+  readonly providerSessionDiscoveryTimeoutMs?: number
+  /** Internal deterministic-test seam; production admits a small process-wide scan set. */
+  readonly maxConcurrentProviderSessionScans?: number
   /** True only for the Desktop-owned sidecar assembly. */
   readonly desktopManaged?: boolean
   readonly remoteMachineCoordinator?: RemoteMachineCoordinator
@@ -280,6 +316,15 @@ export interface HostServiceOptions {
 export class HostService {
   readonly publisher: HostEventPublisher
   readonly #providers: ProviderRegistry
+  readonly #providerSessionDiscoveries = new Map<
+    AgentProvider,
+    ProviderSessionDiscovery
+  >()
+  readonly #providerSessionCandidates: ProviderSessionDiscoveryRegistry
+  readonly #providerSessionScans = new Map<
+    string,
+    InFlightProviderSessionScan
+  >()
   readonly #machineRuntimes: MachineProviderRuntimeResolver
   readonly #workspacePolicy: WorkspacePolicy
   readonly #hostVersion: string
@@ -302,6 +347,8 @@ export class HostService {
   readonly #localProviderRefreshes = new Map<AgentProvider, Promise<void>>()
   readonly #projects: ProjectRegistry
   readonly #persistenceFlushMs: number
+  readonly #providerSessionDiscoveryTimeoutMs: number
+  readonly #maxConcurrentProviderSessionScans: number
   readonly #dirtyTurns = new Map<TurnId, ConversationId>()
   readonly #hydrations = new Map<ConversationId, Promise<ConversationState>>()
   readonly #runtimeAccess = new Map<ConversationId, number>()
@@ -356,6 +403,17 @@ export class HostService {
     this.publisher = options.publisher
     this.#hostVersion = options.hostVersion
     this.#now = options.now ?? (() => new Date())
+    this.#providerSessionCandidates = new ProviderSessionDiscoveryRegistry({
+      now: () => this.#now().getTime(),
+    })
+    for (const discovery of options.providerSessionDiscoveries ?? []) {
+      if (this.#providerSessionDiscoveries.has(discovery.provider)) {
+        throw new Error(
+          `Host received duplicate Provider session discovery adapter: ${discovery.provider}`,
+        )
+      }
+      this.#providerSessionDiscoveries.set(discovery.provider, discovery)
+    }
     this.#refreshUnavailableLocalProvider =
       options.refreshUnavailableLocalProvider
     this.#maxConversations = positiveInteger(
@@ -369,6 +427,16 @@ export class HostService {
       options.persistenceFlushMs,
       DEFAULT_PERSISTENCE_FLUSH_MS,
       'persistenceFlushMs',
+    )
+    this.#providerSessionDiscoveryTimeoutMs = positiveInteger(
+      options.providerSessionDiscoveryTimeoutMs,
+      PROVIDER_SESSION_DISCOVERY_TOTAL_TIMEOUT_MS,
+      'providerSessionDiscoveryTimeoutMs',
+    )
+    this.#maxConcurrentProviderSessionScans = positiveInteger(
+      options.maxConcurrentProviderSessionScans,
+      DEFAULT_MAX_CONCURRENT_PROVIDER_SESSION_SCANS,
+      'maxConcurrentProviderSessionScans',
     )
     this.#remoteMachines =
       options.remoteMachineCoordinator ??
@@ -1394,6 +1462,262 @@ export class HostService {
     }
   }
 
+  async discoverProviderSessions(
+    projectId: ProjectId,
+    machineId: MachineId,
+    query: DiscoverProviderSessionsQuery,
+    signal?: AbortSignal,
+  ): Promise<DiscoverProviderSessionsResponse> {
+    if (this.#persistence === undefined) {
+      throw new HostServiceError(
+        'runtime_unavailable',
+        'Durable Provider session adoption is unavailable',
+        503,
+      )
+    }
+    const project = ProjectIdSchema.parse(projectId)
+    const machine = MachineIdSchema.parse(machineId)
+    const options = DiscoverProviderSessionsQuerySchema.parse(query)
+    if (options.cursor !== undefined) {
+      const cached = this.#providerSessionCandidates.page({
+        projectId: project,
+        machineId: machine,
+        ...(options.provider === undefined
+          ? {}
+          : { providerFilter: options.provider }),
+        cursor: options.cursor,
+        limit: options.limit,
+      })
+      if (cached === undefined) {
+        throw new HostServiceError(
+          'provider_session_candidate_expired',
+          'Previous conversation results expired; scan again',
+          409,
+        )
+      }
+      return DiscoverProviderSessionsResponseSchema.parse(cached)
+    }
+
+    let durableProject
+    let machineRecord
+    try {
+      durableProject = this.#projects.require(project)
+      machineRecord = this.#machines.get(machine)
+    } catch (error) {
+      if (error instanceof ProjectRegistryError)
+        throw projectServiceError(error)
+      throw machineServiceError(error)
+    }
+    const location = durableProject.locations.find(
+      (candidate) => candidate.machineId === machine,
+    )
+    if (location === undefined) {
+      throw new HostServiceError(
+        'project_location_not_found',
+        'Project has no location on the selected Machine',
+        404,
+      )
+    }
+    const providers: readonly AgentProvider[] =
+      options.provider === undefined
+        ? ['codex', 'claude-code']
+        : [options.provider]
+    const pages = await Promise.all(
+      providers.map(async (provider) => {
+        if (
+          machineRecord.kind === 'remote' &&
+          machineRecord.connectionState !== 'online'
+        ) {
+          return unavailableProviderSessionDiscoveryPage(
+            provider,
+            'machine_offline',
+          )
+        }
+        try {
+          return this.#withCurrentProviderSessionResumeStatus(
+            machine,
+            provider,
+            await this.#scanProviderSessions(
+              project,
+              machine,
+              location.rootPath,
+              provider,
+              signal,
+            ),
+          )
+        } catch (error) {
+          if (signal?.aborted || isAbortError(error)) throw error
+          return unavailableProviderSessionDiscoveryPage(
+            provider,
+            'provider_session_discovery_unavailable',
+          )
+        }
+      }),
+    )
+    const response = this.#providerSessionCandidates.createSnapshot({
+      projectId: project,
+      machineId: machine,
+      rootPath: location.rootPath,
+      ...(options.provider === undefined
+        ? {}
+        : { providerFilter: options.provider }),
+      pages,
+      adoptedConversation: (candidate) =>
+        this.#persistence?.getConversationByProviderSession(
+          machine,
+          candidate.provider,
+          this.#materializeProviderSessionBinding(
+            machine,
+            candidate.provider,
+            candidate.nativeSessionId,
+          ),
+        )?.conversationId,
+      limit: options.limit,
+    })
+    return DiscoverProviderSessionsResponseSchema.parse(response)
+  }
+
+  async adoptProviderSession(
+    projectId: ProjectId,
+    machineId: MachineId,
+    request: AdoptProviderSessionRequest,
+  ): Promise<AdoptProviderSessionResponse> {
+    const project = ProjectIdSchema.parse(projectId)
+    const machine = MachineIdSchema.parse(machineId)
+    const candidateId = DiscoveryCandidateIdSchema.parse(
+      request.discoveryCandidateId,
+    )
+    return await this.#executeAction(
+      request.actionId,
+      `provider.session.adopt:${project}:${machine}`,
+      { projectId: project, machineId: machine, candidateId },
+      async () => {
+        const persistence = this.#persistence
+        if (persistence === undefined) {
+          throw new HostServiceError(
+            'runtime_unavailable',
+            'Durable Provider session adoption is unavailable',
+            503,
+          )
+        }
+        const candidate = this.#providerSessionCandidates.candidate(
+          candidateId,
+          { projectId: project, machineId: machine },
+        )
+        if (candidate === undefined) throw expiredDiscoveryCandidate()
+        if (candidate.native.resumeStatus !== 'supported') {
+          throw providerUnavailableError(
+            candidate.native.provider,
+            this.#providerDescriptorForMachine(
+              machine,
+              candidate.native.provider,
+            ),
+          )
+        }
+        let durableProject
+        try {
+          durableProject = this.#projects.require(project)
+        } catch (error) {
+          if (error instanceof ProjectRegistryError) {
+            throw expiredDiscoveryCandidate()
+          }
+          throw error
+        }
+        const location = durableProject.locations.find(
+          (entry) => entry.machineId === machine,
+        )
+        if (
+          location === undefined ||
+          location.rootPath !== candidate.rootPath
+        ) {
+          throw expiredDiscoveryCandidate()
+        }
+        const validated =
+          await this.#validateProviderSessionCandidate(candidate)
+        if (
+          validated === undefined ||
+          validated.provider !== candidate.native.provider ||
+          validated.nativeSessionId !== candidate.native.nativeSessionId ||
+          validated.revision !== candidate.native.revision ||
+          validated.workingDirectory !== candidate.native.workingDirectory ||
+          validated.resumeStatus !== 'supported'
+        ) {
+          throw expiredDiscoveryCandidate()
+        }
+        this.#assertProviderSessionResumeReady(machine, validated.provider)
+        const reservation = await this.#projects.reserveConversationCreation(
+          project,
+          machine,
+          validated.workingDirectory,
+        )
+        try {
+          const timestamp = TimestampSchema.parse(this.#timestamp())
+          let adoption
+          try {
+            adoption = this.#writeDurableResult(() =>
+              persistence.createOrGetAdoptedConversation({
+                conversationId: newConversationId(),
+                projectId: project,
+                machineId: machine,
+                title: validated.title,
+                titleSource: 'generated',
+                provider: validated.provider,
+                providerThreadId: this.#materializeProviderSessionBinding(
+                  machine,
+                  validated.provider,
+                  validated.nativeSessionId,
+                ),
+                cwd: reservation.cwd,
+                status: 'idle',
+                createdAt: timestamp,
+                updatedAt: timestamp,
+                lastActivityAt: validated.lastActiveAt ?? timestamp,
+              }),
+            )
+          } catch (error) {
+            if (error instanceof NativeProviderSessionBindingConflictError) {
+              throw new HostServiceError(
+                'conflict',
+                'Previous Provider conversation is already bound elsewhere',
+                409,
+              )
+            }
+            throw error
+          }
+          const conversation = conversationRecordFromDurable(
+            adoption.conversation,
+          )
+          this.#providerSessionCandidates.markAdopted(
+            machine,
+            validated.provider,
+            validated.nativeSessionId,
+            conversation.conversationId,
+          )
+          if (adoption.created) {
+            this.#publish({
+              conversationId: conversation.conversationId,
+              timestamp,
+              type: 'conversation.started',
+              payload: { conversation },
+            })
+          }
+          return AdoptProviderSessionResponseSchema.parse({
+            protocolVersion,
+            actionId: request.actionId,
+            status: 'completed',
+            data: {
+              conversation,
+              disposition: adoption.created ? 'adopted' : 'already_adopted',
+            },
+          })
+        } finally {
+          reservation.release()
+        }
+      },
+      false,
+    )
+  }
+
   getConversation(conversationId: ConversationId): GetConversationResponse {
     if (this.#persistence === undefined) {
       throw new HostServiceError(
@@ -1732,6 +2056,8 @@ export class HostService {
               title: DEFAULT_CONVERSATION_TITLE,
               titleSource: 'generated',
               provider: request.provider,
+              origin: 'codetether',
+              providerSessionMaterialized: false,
               cwd,
               ...(request.model === undefined ? {} : { model: request.model }),
               ...(request.reasoning === undefined
@@ -1753,6 +2079,7 @@ export class HostService {
                 machineId: machine.machineId,
                 title: DEFAULT_CONVERSATION_TITLE,
                 titleSource: 'generated',
+                origin: 'codetether',
                 provider: request.provider,
                 cwd,
                 ...(request.model === undefined
@@ -1768,6 +2095,7 @@ export class HostService {
               })
               const state: ConversationState = {
                 record,
+                origin: 'codetether',
                 turns: new Map(),
                 providerTurnIds: new Map(),
                 providerSessionMaterialized: false,
@@ -1842,6 +2170,7 @@ export class HostService {
               )
 
               const sessionKey = providerSessionKey(
+                machine.machineId,
                 request.provider,
                 provider.providerThreadId,
               )
@@ -1852,6 +2181,7 @@ export class HostService {
                   ?.listConversations()
                   .some(
                     (conversation) =>
+                      conversation.machineId === machine.machineId &&
                       conversation.provider === request.provider &&
                       conversation.providerThreadId ===
                         provider.providerThreadId,
@@ -1872,6 +2202,7 @@ export class HostService {
                   machineId: machine.machineId,
                   title: DEFAULT_CONVERSATION_TITLE,
                   titleSource: 'generated',
+                  origin: 'codetether',
                   provider: request.provider,
                   cwd,
                   ...(provider.model === undefined &&
@@ -1895,6 +2226,7 @@ export class HostService {
               }
               const state: ConversationState = {
                 record,
+                origin: 'codetether',
                 providerThreadId: provider.providerThreadId,
                 turns: new Map(),
                 providerTurnIds: new Map(),
@@ -2621,7 +2953,7 @@ export class HostService {
     runtime: AgentHostRuntime,
     event: AgentEvent,
   ): void {
-    if (this.#providerEventTranslator.translate(event)) return
+    if (this.#providerEventTranslator.translate(machineId, event)) return
     if (!('turnId' in event)) {
       throw new Error('Provider emitted an unbound event without Turn identity')
     }
@@ -2695,7 +3027,7 @@ export class HostService {
     // observed here; the owning Start action awaits and classifies it below.
     void cleanup.catch(() => {
       const conversationId = this.#providerThreads.get(
-        providerSessionKey(event.provider, event.threadId),
+        providerSessionKey(machineId, event.provider, event.threadId),
       )
       const conversation =
         conversationId === undefined
@@ -2817,7 +3149,12 @@ export class HostService {
     const pending = this.#pendingProviderEvents.splice(0)
     this.#pendingProviderEventBytes = 0
     for (const buffered of pending) {
-      if (!this.#providerEventTranslator.translate(buffered.event)) {
+      if (
+        !this.#providerEventTranslator.translate(
+          buffered.machineId,
+          buffered.event,
+        )
+      ) {
         this.#acceptProviderEvent(
           buffered.machineId,
           buffered.runtime,
@@ -3040,6 +3377,7 @@ export class HostService {
     durable: RestoredDurableConversation,
   ): ConversationRuntimeSnapshot {
     const sessionKey = providerSessionKey(
+      durable.record.machineId,
       durable.record.provider,
       durable.providerThreadId,
     )
@@ -3076,6 +3414,7 @@ export class HostService {
     }
     const state: ConversationState = {
       record: durable.record,
+      origin: durable.origin,
       providerThreadId: durable.providerThreadId,
       turns,
       providerTurnIds,
@@ -3166,6 +3505,7 @@ export class HostService {
         this.#runtimeHistory.restore(durable.runtime)
         this.#conversations.set(conversationId, {
           record: durable.record,
+          origin: currentDurableConversation.origin,
           turns: new Map(),
           providerTurnIds: new Map(),
           providerSessionMaterialized: false,
@@ -3175,6 +3515,7 @@ export class HostService {
       } else {
         const providerOwner = this.#providerThreads.get(
           providerSessionKey(
+            currentDurableConversation.machineId,
             currentDurableConversation.provider,
             currentDurableConversation.providerThreadId,
           ),
@@ -3189,7 +3530,9 @@ export class HostService {
         this.#installRestoredConversation({
           record: durable.record,
           providerThreadId: currentDurableConversation.providerThreadId,
-          providerSessionMaterialized: durable.history.totalTurns > 0,
+          origin: currentDurableConversation.origin,
+          providerSessionMaterialized:
+            currentDurableConversation.providerSessionMaterialized,
           runtime: durable.runtime,
           providerTurns: this.#persistence
             .listRecentTurns(conversationId, this.#runtimeHistory.maxTurns)
@@ -3347,11 +3690,19 @@ export class HostService {
       }
       if (
         this.#providerThreads.get(
-          providerSessionKey(conversation.record.provider, providerThreadId),
+          providerSessionKey(
+            conversation.record.machineId,
+            conversation.record.provider,
+            providerThreadId,
+          ),
         ) === conversationId
       ) {
         this.#providerThreads.delete(
-          providerSessionKey(conversation.record.provider, providerThreadId),
+          providerSessionKey(
+            conversation.record.machineId,
+            conversation.record.provider,
+            providerThreadId,
+          ),
         )
       }
     }
@@ -3580,6 +3931,7 @@ export class HostService {
         )
       }
       const sessionKey = providerSessionKey(
+        conversation.record.machineId,
         conversation.record.provider,
         resumed.providerThreadId,
       )
@@ -3591,6 +3943,7 @@ export class HostService {
           .some(
             (candidate) =>
               candidate.conversationId !== conversation.record.conversationId &&
+              candidate.machineId === conversation.record.machineId &&
               candidate.provider === conversation.record.provider &&
               candidate.providerThreadId === resumed.providerThreadId,
           ) === true
@@ -3915,6 +4268,8 @@ export class HostService {
       ...(conversation.providerThreadId === undefined
         ? {}
         : { providerThreadId: conversation.providerThreadId }),
+      origin: conversation.origin,
+      providerSessionMaterialized: conversation.providerSessionMaterialized,
       cwd: conversation.record.cwd,
       ...(conversation.record.model === undefined
         ? {}
@@ -4266,7 +4621,8 @@ export class HostService {
         error instanceof RemoteMachineTrustConflictError ||
         error instanceof ProjectLocationConflictError ||
         error instanceof ProjectLocationRemovalError ||
-        error instanceof RemoteMachineProjectLocationConflictError
+        error instanceof RemoteMachineProjectLocationConflictError ||
+        error instanceof NativeProviderSessionBindingConflictError
       ) {
         throw error
       }
@@ -4310,6 +4666,244 @@ export class HostService {
       throw new HostServiceError('not_found', 'Turn was not found', 404)
     }
     return turn
+  }
+
+  async #scanProviderSessions(
+    projectId: ProjectId,
+    machineId: MachineId,
+    rootPath: string,
+    provider: AgentProvider,
+    signal?: AbortSignal,
+  ): Promise<ProviderSessionDiscoveryPage> {
+    signal?.throwIfAborted()
+    const key = `${projectId}\0${machineId}\0${provider}\0${rootPath}`
+    let scan = this.#providerSessionScans.get(key)
+    if (scan?.abort.signal.aborted === true) {
+      await scan.promise.catch(() => undefined)
+      signal?.throwIfAborted()
+      return await this.#scanProviderSessions(
+        projectId,
+        machineId,
+        rootPath,
+        provider,
+        signal,
+      )
+    }
+    if (scan === undefined) {
+      if (
+        this.#providerSessionScans.size >=
+        this.#maxConcurrentProviderSessionScans
+      ) {
+        return unavailableProviderSessionDiscoveryPage(
+          provider,
+          'provider_session_discovery_unavailable',
+        )
+      }
+      const abort = new AbortController()
+      const created: InFlightProviderSessionScan = {
+        abort,
+        waiters: 0,
+        settled: false,
+        promise: Promise.resolve(
+          unavailableProviderSessionDiscoveryPage(
+            provider,
+            'provider_session_discovery_unavailable',
+          ),
+        ),
+      }
+      created.promise = this.#scanProviderSessionsOnce(
+        projectId,
+        machineId,
+        rootPath,
+        provider,
+        abort.signal,
+      ).finally(() => {
+        created.settled = true
+        if (this.#providerSessionScans.get(key) === created) {
+          this.#providerSessionScans.delete(key)
+        }
+      })
+      this.#providerSessionScans.set(key, created)
+      scan = created
+    }
+    scan.waiters += 1
+    try {
+      return await waitForProviderSessionScan(scan.promise, signal)
+    } finally {
+      scan.waiters -= 1
+      if (scan.waiters === 0 && !scan.settled) scan.abort.abort()
+    }
+  }
+
+  #materializeProviderSessionBinding(
+    machineId: MachineId,
+    provider: AgentProvider,
+    nativeSessionId: string,
+  ): string {
+    return machineId === this.#machines.localMachineId()
+      ? nativeSessionId
+      : encodeRemoteProviderSessionBinding(provider, machineId, nativeSessionId)
+  }
+
+  #withCurrentProviderSessionResumeStatus(
+    machineId: MachineId,
+    provider: AgentProvider,
+    page: ProviderSessionDiscoveryPage,
+  ): ProviderSessionDiscoveryPage {
+    const current = this.#providerSessionResumeStatus(machineId, provider)
+    return {
+      ...page,
+      resumeStatus: intersectProviderSessionResumeStatus(
+        page.resumeStatus,
+        current,
+      ),
+      candidates: page.candidates.map((candidate) => ({
+        ...candidate,
+        resumeStatus: intersectProviderSessionResumeStatus(
+          candidate.resumeStatus,
+          current,
+        ),
+      })),
+    }
+  }
+
+  #providerSessionResumeStatus(
+    machineId: MachineId,
+    provider: AgentProvider,
+  ): ProviderSessionResumeStatus {
+    const descriptor = this.#providerDescriptorForMachine(machineId, provider)
+    if (descriptor?.availability === 'unsupported_version') {
+      return 'unsupported'
+    }
+    if (descriptor?.availability !== 'available') return 'unavailable'
+    if (!descriptor.capabilities.resume) return 'unsupported'
+    if (!this.#machineRuntimeAvailable(machineId, provider)) {
+      return 'unavailable'
+    }
+    const health = descriptor.executionHealth
+    return health?.freshness === 'current' &&
+      (health.state === 'degraded' || health.state === 'unavailable')
+      ? 'unavailable'
+      : 'supported'
+  }
+
+  #assertProviderSessionResumeReady(
+    machineId: MachineId,
+    provider: AgentProvider,
+  ): void {
+    if (
+      this.#providerSessionResumeStatus(machineId, provider) === 'supported'
+    ) {
+      return
+    }
+    throw providerUnavailableError(
+      provider,
+      this.#providerDescriptorForMachine(machineId, provider),
+    )
+  }
+
+  async #scanProviderSessionsOnce(
+    projectId: ProjectId,
+    machineId: MachineId,
+    rootPath: string,
+    provider: AgentProvider,
+    signal?: AbortSignal,
+  ): Promise<ProviderSessionDiscoveryPage> {
+    if (machineId === this.#machines.localMachineId()) {
+      const authorized = await this.#projects.authorizeConversation(
+        projectId,
+        machineId,
+        rootPath,
+      )
+      const discovery = this.#providerSessionDiscoveries.get(provider)
+      if (discovery === undefined) {
+        return unavailableProviderSessionDiscoveryPage(
+          provider,
+          'provider_session_discovery_unavailable',
+          'unsupported',
+        )
+      }
+      return await collectProviderSessionDiscovery(
+        discovery,
+        authorized.cwd,
+        signal,
+        this.#providerSessionDiscoveryTimeoutMs,
+      )
+    }
+    const { durable, trust } = this.#requireRemoteMachineTrust(machineId)
+    const discover = this.#remoteMachines.discoverProviderSessions
+    if (discover === undefined) {
+      return unavailableProviderSessionDiscoveryPage(
+        provider,
+        'provider_session_discovery_unavailable',
+        'unsupported',
+      )
+    }
+    return await discover.call(this.#remoteMachines, durable, trust, {
+      provider,
+      projectId,
+      rootPath,
+      ...(signal === undefined ? {} : { signal }),
+    })
+  }
+
+  async #validateProviderSessionCandidate(candidate: {
+    readonly projectId: ProjectId
+    readonly machineId: MachineId
+    readonly rootPath: string
+    readonly native: NativeProviderSessionCandidate
+  }): Promise<NativeProviderSessionCandidate | undefined> {
+    if (candidate.machineId === this.#machines.localMachineId()) {
+      const discovery = this.#providerSessionDiscoveries.get(
+        candidate.native.provider,
+      )
+      if (discovery === undefined) return undefined
+      // Revalidate current ProjectLocation authorization before reading the
+      // exact Provider-owned native metadata again.
+      await this.#projects.authorizeConversation(
+        candidate.projectId,
+        candidate.machineId,
+        candidate.native.workingDirectory,
+      )
+      const validated = await discovery.validateCandidate({
+        projectRoot: candidate.rootPath,
+        nativeSessionId: candidate.native.nativeSessionId,
+        revision: candidate.native.revision,
+      })
+      return validated !== undefined &&
+        isValidNativeProviderSessionCandidate(
+          validated,
+          candidate.native.provider,
+          candidate.rootPath,
+        )
+        ? validated
+        : undefined
+    }
+    const { durable, trust } = this.#requireRemoteMachineTrust(
+      candidate.machineId,
+    )
+    const validate = this.#remoteMachines.validateProviderSession
+    if (validate === undefined) return undefined
+    const validated = await validate.call(
+      this.#remoteMachines,
+      durable,
+      trust,
+      {
+        provider: candidate.native.provider,
+        projectId: candidate.projectId,
+        rootPath: candidate.rootPath,
+        nativeSessionId: candidate.native.nativeSessionId,
+        revision: candidate.native.revision,
+      },
+    )
+    return validated !== undefined &&
+      isValidNativeProviderSessionCandidate(
+        validated,
+        candidate.native.provider,
+        candidate.rootPath,
+      )
+      ? validated
+      : undefined
   }
 
   async #executeAction<T>(
@@ -4366,6 +4960,14 @@ export class HostService {
       failures.push(error)
     }
     await Promise.allSettled([...this.#inFlightActions])
+    // Discovery is request-scoped and bounded. Let any exact scan already in
+    // progress release its Provider metadata client/file handles before the
+    // owning registries are torn down; no reconnect or background scan is
+    // created during shutdown.
+    for (const scan of this.#providerSessionScans.values()) scan.abort.abort()
+    await Promise.allSettled(
+      [...this.#providerSessionScans.values()].map(({ promise }) => promise),
+    )
     this.#closingRuntime = true
     // A shutdown-only decline releases the live Provider request, but it is
     // not a user decision. Stop consuming Provider resolution callbacks first
@@ -4433,6 +5035,8 @@ export class HostService {
       this.#pendingProviderEvents.length = 0
       this.#pendingProviderEventBytes = 0
       this.#pendingProviderStartFailures.clear()
+      this.#providerSessionScans.clear()
+      this.#providerSessionCandidates.clear()
     }
     if (failures.length === 1) throw failures[0]
     if (failures.length > 1) {
@@ -4834,7 +5438,7 @@ export class HostService {
           fail(new Error('Provider emitted an unsupported Approval'))
           return
         }
-        this.#approvalRegistry.request({
+        this.#approvalRegistry.request(machineId, {
           ...request,
           provider: runtime.provider,
         })
@@ -4957,9 +5561,23 @@ function shouldGenerateConversationTitle(
   conversation: ConversationState,
 ): boolean {
   return (
+    (conversation.record.origin ?? 'codetether') === 'codetether' &&
     conversation.record.titleSource === 'generated' &&
     conversation.turns.size === 0
   )
+}
+
+function intersectProviderSessionResumeStatus(
+  nativeStatus: ProviderSessionResumeStatus,
+  currentStatus: ProviderSessionResumeStatus,
+): ProviderSessionResumeStatus {
+  if (nativeStatus === 'unsupported' || currentStatus === 'unsupported') {
+    return 'unsupported'
+  }
+  if (nativeStatus === 'unavailable' || currentStatus === 'unavailable') {
+    return 'unavailable'
+  }
+  return 'supported'
 }
 
 function isAttentionSourceEvent(
@@ -4990,6 +5608,7 @@ function conversationSummary(
     machineId: record.machineId,
     title: record.title,
     titleSource: record.titleSource,
+    origin: record.origin ?? 'codetether',
     ...(record.pinnedAt === undefined ? {} : { pinnedAt: record.pinnedAt }),
     ...(record.archivedAt === undefined
       ? {}
@@ -5001,6 +5620,428 @@ function conversationSummary(
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
     lastActivityAt: record.lastActivityAt,
+  })
+}
+
+async function collectProviderSessionDiscovery(
+  discovery: ProviderSessionDiscovery,
+  projectRoot: string,
+  signal?: AbortSignal,
+  timeoutMs = PROVIDER_SESSION_DISCOVERY_TOTAL_TIMEOUT_MS,
+): Promise<ProviderSessionDiscoveryPage> {
+  const pages: ProviderSessionDiscoveryPage[] = []
+  const observedCursors = new Set<string>()
+  const scanDeadline = AbortSignal.timeout(timeoutMs)
+  const scanSignal =
+    signal === undefined
+      ? scanDeadline
+      : AbortSignal.any([signal, scanDeadline])
+  let scanDeadlineReached = false
+  let cursor: string | undefined
+  let remaining = MAX_DISCOVERED_NATIVE_SESSIONS
+  let remainingPages = PROVIDER_SESSION_DISCOVERY_MAXIMUM_PAGES
+  do {
+    signal?.throwIfAborted()
+    let page: ProviderSessionDiscoveryPage
+    try {
+      const discovered = await discovery.discover({
+        projectRoot,
+        ...(cursor === undefined ? {} : { cursor }),
+        limit: Math.min(PROVIDER_SESSION_ADAPTER_PAGE_SIZE, remaining),
+        signal: scanSignal,
+      })
+      const requestedLimit = Math.min(
+        PROVIDER_SESSION_ADAPTER_PAGE_SIZE,
+        remaining,
+      )
+      if (
+        !isValidProviderSessionDiscoveryPage(
+          discovered,
+          discovery.provider,
+          projectRoot,
+          requestedLimit,
+        )
+      ) {
+        return unavailableProviderSessionDiscoveryPage(
+          discovery.provider,
+          'provider_session_format_unsupported',
+        )
+      }
+      page = discovered
+    } catch (error) {
+      if (scanDeadline.aborted && signal?.aborted !== true) {
+        if (pages.length === 0) {
+          return unavailableProviderSessionDiscoveryPage(
+            discovery.provider,
+            'provider_session_discovery_unavailable',
+          )
+        }
+        scanDeadlineReached = true
+        break
+      }
+      throw error
+    }
+    const firstPage = pages[0]
+    if (
+      page.provider !== discovery.provider ||
+      page.candidates.some(
+        (candidate) =>
+          candidate.provider !== discovery.provider ||
+          candidate.workingDirectory !== projectRoot,
+      ) ||
+      (firstPage !== undefined &&
+        (page.status !== firstPage.status ||
+          page.resumeStatus !== firstPage.resumeStatus ||
+          page.providerVersion !== firstPage.providerVersion))
+    ) {
+      return unavailableProviderSessionDiscoveryPage(
+        discovery.provider,
+        'provider_session_format_unsupported',
+      )
+    }
+    pages.push(page)
+    remainingPages -= 1
+    if (page.status !== 'supported') break
+    remaining -= page.candidates.length
+    cursor = page.nextCursor
+    if (cursor !== undefined) {
+      if (observedCursors.has(cursor)) {
+        return unavailableProviderSessionDiscoveryPage(
+          discovery.provider,
+          'provider_session_format_unsupported',
+        )
+      }
+      observedCursors.add(cursor)
+    }
+  } while (cursor !== undefined && remaining > 0 && remainingPages > 0)
+
+  const first = pages[0]
+  if (first === undefined) {
+    return unavailableProviderSessionDiscoveryPage(
+      discovery.provider,
+      'provider_session_discovery_unavailable',
+    )
+  }
+  const candidates = pages.flatMap((page) => page.candidates)
+  return {
+    provider: discovery.provider,
+    status: first.status,
+    resumeStatus: first.resumeStatus,
+    ...(first.providerVersion === undefined
+      ? {}
+      : { providerVersion: first.providerVersion }),
+    candidates: candidates.slice(0, MAX_DISCOVERED_NATIVE_SESSIONS),
+    ...(first.failureReason === undefined
+      ? {}
+      : { failureReason: first.failureReason }),
+    metrics: pages.reduce(
+      (total, page) => ({
+        filesInspected: safeProviderSessionMetricSum(
+          total.filesInspected,
+          page.metrics.filesInspected,
+        ),
+        candidatesParsed: safeProviderSessionMetricSum(
+          total.candidatesParsed,
+          page.metrics.candidatesParsed,
+        ),
+        candidatesMatched: safeProviderSessionMetricSum(
+          total.candidatesMatched,
+          page.metrics.candidatesMatched,
+        ),
+        corruptEntriesSkipped: safeProviderSessionMetricSum(
+          total.corruptEntriesSkipped,
+          page.metrics.corruptEntriesSkipped,
+        ),
+        elapsedMs: safeProviderSessionMetricSum(
+          total.elapsedMs,
+          page.metrics.elapsedMs,
+        ),
+        truncated:
+          total.truncated ||
+          page.metrics.truncated ||
+          remaining === 0 ||
+          (remainingPages === 0 && cursor !== undefined) ||
+          scanDeadlineReached,
+      }),
+      {
+        filesInspected: 0,
+        candidatesParsed: 0,
+        candidatesMatched: 0,
+        corruptEntriesSkipped: 0,
+        elapsedMs: 0,
+        truncated:
+          remaining === 0 ||
+          (remainingPages === 0 && cursor !== undefined) ||
+          scanDeadlineReached,
+      },
+    ),
+  }
+}
+
+function isValidProviderSessionDiscoveryPage(
+  value: unknown,
+  provider: AgentProvider,
+  projectRoot: string,
+  requestedLimit: number,
+): value is ProviderSessionDiscoveryPage {
+  if (!isUnknownRecord(value) || value.provider !== provider) return false
+  if (!isProviderSessionDiscoveryStatus(value.status)) return false
+  if (!isProviderSessionResumeStatus(value.resumeStatus)) return false
+  if (!Array.isArray(value.candidates)) return false
+  if (value.candidates.length > requestedLimit) return false
+  if (value.status !== 'supported' && value.candidates.length > 0) return false
+  if ((value.status === 'supported') === (value.failureReason !== undefined)) {
+    return false
+  }
+  if (
+    value.failureReason !== undefined &&
+    !isProviderSessionDiscoveryFailureReason(value.failureReason)
+  ) {
+    return false
+  }
+  if (
+    value.providerVersion !== undefined &&
+    (!isTrimmedBoundedText(value.providerVersion, 120) ||
+      value.providerVersion.includes('\0'))
+  ) {
+    return false
+  }
+  if (
+    value.nextCursor !== undefined &&
+    (value.status !== 'supported' ||
+      !isTrimmedBoundedText(
+        value.nextCursor,
+        providerSessionDiscoveryLimits.maximumCursorCodeUnits,
+      ) ||
+      value.nextCursor.includes('\0'))
+  ) {
+    return false
+  }
+  if (!isProviderSessionDiscoveryMetrics(value.metrics)) return false
+  return value.candidates.every((candidate) =>
+    isValidNativeProviderSessionCandidate(candidate, provider, projectRoot),
+  )
+}
+
+function isValidNativeProviderSessionCandidate(
+  value: unknown,
+  provider: AgentProvider,
+  projectRoot: string,
+): value is NativeProviderSessionCandidate {
+  if (!isUnknownRecord(value) || value.provider !== provider) return false
+  if (value.workingDirectory !== projectRoot) return false
+  if (
+    !isBoundedOpaqueText(
+      value.nativeSessionId,
+      PROVIDER_SESSION_PRIVATE_ID_MAXIMUM_BYTES,
+    ) ||
+    !isBoundedOpaqueText(
+      value.revision,
+      PROVIDER_SESSION_REVISION_MAXIMUM_BYTES,
+    ) ||
+    !/^[A-Za-z0-9_-]+$/u.test(value.revision)
+  ) {
+    return false
+  }
+  if (
+    !isTrimmedBoundedText(
+      value.title,
+      providerSessionDiscoveryLimits.maximumTitleCodeUnits,
+    )
+  ) {
+    return false
+  }
+  if (
+    (value.createdAt !== undefined &&
+      !TimestampSchema.safeParse(value.createdAt).success) ||
+    (value.lastActiveAt !== undefined &&
+      !TimestampSchema.safeParse(value.lastActiveAt).success)
+  ) {
+    return false
+  }
+  if (
+    value.providerVersion !== undefined &&
+    (!isTrimmedBoundedText(value.providerVersion, 120) ||
+      value.providerVersion.includes('\0'))
+  ) {
+    return false
+  }
+  return (
+    isProviderSessionResumeStatus(value.resumeStatus) &&
+    (value.historicalTranscript === 'supported' ||
+      value.historicalTranscript === 'unsupported' ||
+      value.historicalTranscript === 'unavailable')
+  )
+}
+
+function isProviderSessionDiscoveryMetrics(value: unknown): boolean {
+  if (!isUnknownRecord(value) || typeof value.truncated !== 'boolean') {
+    return false
+  }
+  return [
+    value.filesInspected,
+    value.candidatesParsed,
+    value.candidatesMatched,
+    value.corruptEntriesSkipped,
+    value.elapsedMs,
+  ].every(
+    (metric) =>
+      typeof metric === 'number' && Number.isSafeInteger(metric) && metric >= 0,
+  )
+}
+
+function safeProviderSessionMetricSum(left: number, right: number): number {
+  return left > Number.MAX_SAFE_INTEGER - right
+    ? Number.MAX_SAFE_INTEGER
+    : left + right
+}
+
+function isProviderSessionDiscoveryStatus(
+  value: unknown,
+): value is ProviderSessionDiscoveryPage['status'] {
+  return (
+    value === 'supported' || value === 'unsupported' || value === 'unavailable'
+  )
+}
+
+function isProviderSessionResumeStatus(
+  value: unknown,
+): value is ProviderSessionResumeStatus {
+  return (
+    value === 'supported' || value === 'unsupported' || value === 'unavailable'
+  )
+}
+
+function isProviderSessionDiscoveryFailureReason(
+  value: unknown,
+): value is NonNullable<ProviderSessionDiscoveryPage['failureReason']> {
+  return (
+    value === 'provider_session_discovery_unavailable' ||
+    value === 'provider_session_format_unsupported' ||
+    value === 'provider_session_store_unreadable' ||
+    value === 'machine_offline'
+  )
+}
+
+function isTrimmedBoundedText(
+  value: unknown,
+  maximumCodeUnits: number,
+): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length > 0 &&
+    value.length <= maximumCodeUnits &&
+    value === value.trim()
+  )
+}
+
+function isBoundedOpaqueText(
+  value: unknown,
+  maximumBytes: number,
+): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length > 0 &&
+    !value.includes('\0') &&
+    Buffer.byteLength(value, 'utf8') <= maximumBytes
+  )
+}
+
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function unavailableProviderSessionDiscoveryPage(
+  provider: AgentProvider,
+  failureReason:
+    | 'provider_session_discovery_unavailable'
+    | 'provider_session_format_unsupported'
+    | 'provider_session_store_unreadable'
+    | 'machine_offline',
+  status: 'unsupported' | 'unavailable' = 'unavailable',
+): ProviderSessionDiscoveryPage {
+  return {
+    provider,
+    status,
+    resumeStatus: status,
+    candidates: [],
+    failureReason,
+    metrics: {
+      filesInspected: 0,
+      candidatesParsed: 0,
+      candidatesMatched: 0,
+      corruptEntriesSkipped: 0,
+      elapsedMs: 0,
+      truncated: false,
+    },
+  }
+}
+
+async function waitForProviderSessionScan(
+  promise: Promise<ProviderSessionDiscoveryPage>,
+  signal?: AbortSignal,
+): Promise<ProviderSessionDiscoveryPage> {
+  if (signal === undefined) return await promise
+  signal.throwIfAborted()
+  return await new Promise<ProviderSessionDiscoveryPage>((resolve, reject) => {
+    let settled = false
+    const finish = (action: () => void): void => {
+      if (settled) return
+      settled = true
+      signal.removeEventListener('abort', abort)
+      action()
+    }
+    const abort = (): void => {
+      const error = new Error('Provider session discovery was cancelled')
+      error.name = 'AbortError'
+      finish(() => reject(error))
+    }
+    signal.addEventListener('abort', abort, { once: true })
+    void promise.then(
+      (page) => finish(() => resolve(page)),
+      (error: unknown) => finish(() => reject(error)),
+    )
+  })
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError'
+}
+
+function expiredDiscoveryCandidate(): HostServiceError {
+  return new HostServiceError(
+    'provider_session_candidate_expired',
+    'Previous conversation changed or expired; scan again',
+    409,
+  )
+}
+
+function conversationRecordFromDurable(
+  conversation: DurableConversation,
+): ConversationRecord {
+  return ConversationRecordSchema.parse({
+    conversationId: conversation.conversationId,
+    projectId: conversation.projectId,
+    machineId: conversation.machineId,
+    title: conversation.title,
+    titleSource: conversation.titleSource,
+    origin: conversation.origin,
+    ...(conversation.pinnedAt === undefined
+      ? {}
+      : { pinnedAt: conversation.pinnedAt }),
+    ...(conversation.archivedAt === undefined
+      ? {}
+      : { archivedAt: conversation.archivedAt }),
+    provider: conversation.provider,
+    cwd: conversation.cwd,
+    ...(conversation.model === undefined ? {} : { model: conversation.model }),
+    ...(conversation.reasoning === undefined
+      ? {}
+      : { reasoning: conversation.reasoning }),
+    status: conversation.status,
+    createdAt: conversation.createdAt,
+    updatedAt: conversation.updatedAt,
+    lastActivityAt: conversation.lastActivityAt,
   })
 }
 

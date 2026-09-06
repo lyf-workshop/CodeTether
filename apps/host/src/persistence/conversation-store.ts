@@ -89,6 +89,13 @@ const durableConversationStatuses = [
 export type DurableConversationStatus =
   (typeof durableConversationStatuses)[number]
 
+export const durableConversationOrigins = [
+  'codetether',
+  'adopted_native',
+] as const
+export type DurableConversationOrigin =
+  (typeof durableConversationOrigins)[number]
+
 const searchableConversationStatuses = [
   'idle',
   'running',
@@ -155,6 +162,13 @@ export class ProjectLocationRemovalError extends Error {
   ) {
     super(message)
     this.name = 'ProjectLocationRemovalError'
+  }
+}
+
+export class NativeProviderSessionBindingConflictError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'NativeProviderSessionBindingConflictError'
   }
 }
 
@@ -285,6 +299,8 @@ export interface DurableConversation {
   readonly archivedAt?: Timestamp
   readonly provider: ProviderId
   readonly providerThreadId?: string
+  readonly origin: DurableConversationOrigin
+  readonly providerSessionMaterialized: boolean
   readonly cwd: string
   readonly model?: string
   readonly reasoning?: string
@@ -296,9 +312,34 @@ export interface DurableConversation {
 
 export type NewDurableConversation = Omit<
   DurableConversation,
-  'titleSource' | 'pinnedAt' | 'archivedAt'
+  | 'titleSource'
+  | 'pinnedAt'
+  | 'archivedAt'
+  | 'origin'
+  | 'providerSessionMaterialized'
 > &
-  Partial<Pick<DurableConversation, 'titleSource' | 'pinnedAt' | 'archivedAt'>>
+  Partial<
+    Pick<
+      DurableConversation,
+      | 'titleSource'
+      | 'pinnedAt'
+      | 'archivedAt'
+      | 'origin'
+      | 'providerSessionMaterialized'
+    >
+  >
+
+export type NewDurableAdoptedConversation = Omit<
+  NewDurableConversation,
+  'origin' | 'providerSessionMaterialized' | 'providerThreadId'
+> & {
+  readonly providerThreadId: string
+}
+
+export interface DurableConversationAdoptionResult {
+  readonly conversation: DurableConversation
+  readonly created: boolean
+}
 
 export type DurableConversationSummary = ConversationSummary
 
@@ -1446,9 +1487,10 @@ export class ConversationStore {
     this.#statement(
       `INSERT INTO conversations (
         conversation_id, project_id, machine_id, title, title_source,
-        pinned_at, archived_at, provider, provider_thread_id, cwd, model,
-        reasoning, status, created_at, updated_at, last_activity_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        pinned_at, archived_at, provider, provider_thread_id, origin,
+        provider_session_materialized, cwd, model, reasoning, status,
+        created_at, updated_at, last_activity_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       value.conversationId,
       value.projectId,
@@ -1459,6 +1501,8 @@ export class ConversationStore {
       value.archivedAt ?? null,
       value.provider,
       value.providerThreadId ?? null,
+      value.origin,
+      value.providerSessionMaterialized ? 1 : 0,
       value.cwd,
       value.model ?? null,
       value.reasoning ?? null,
@@ -1467,6 +1511,70 @@ export class ConversationStore {
       value.updatedAt,
       value.lastActivityAt,
     )
+  }
+
+  getConversationByProviderSession(
+    machineId: MachineId,
+    provider: ProviderId,
+    providerThreadId: string,
+  ): DurableConversation | undefined {
+    const machine = MachineIdSchema.parse(machineId)
+    const providerId = ProviderIdSchema.parse(provider)
+    const nativeSessionId = parseBoundedText(
+      providerThreadId,
+      'Provider Thread ID',
+      4096,
+    )
+    const row = this.#statement(
+      `SELECT * FROM conversations
+       WHERE machine_id = ? AND provider = ? AND provider_thread_id = ?`,
+    ).get(machine, providerId, nativeSessionId) as ConversationRow | undefined
+    return row === undefined ? undefined : conversationFromRow(row)
+  }
+
+  createOrGetAdoptedConversation(
+    conversation: NewDurableAdoptedConversation,
+  ): DurableConversationAdoptionResult {
+    const value = parseConversation({
+      ...conversation,
+      origin: 'adopted_native',
+      providerSessionMaterialized: true,
+    })
+    if (value.status !== 'idle') {
+      throw new Error('An adopted Conversation must start idle')
+    }
+    const providerThreadId = value.providerThreadId
+    if (providerThreadId === undefined) {
+      throw new Error(
+        'An adopted Conversation requires a native Provider session',
+      )
+    }
+    return this.runInTransaction(() => {
+      const existing = this.getConversationByProviderSession(
+        value.machineId,
+        value.provider,
+        providerThreadId,
+      )
+      if (existing !== undefined) {
+        if (
+          existing.projectId !== value.projectId ||
+          existing.cwd !== value.cwd
+        ) {
+          throw new NativeProviderSessionBindingConflictError(
+            'Native Provider session is already bound to another Project Location',
+          )
+        }
+        return { conversation: existing, created: false }
+      }
+      this.createConversation(value)
+      return {
+        conversation: requireConversation(
+          this.getConversation(value.conversationId),
+          value.conversationId,
+        ),
+        created: true,
+      }
+    })
   }
 
   updateConversation(conversation: DurableConversation): void {
@@ -1479,6 +1587,11 @@ export class ConversationStore {
       existing.projectId !== value.projectId ||
       existing.machineId !== value.machineId ||
       existing.provider !== value.provider ||
+      existing.origin !== value.origin ||
+      (existing.providerThreadId !== undefined &&
+        existing.providerThreadId !== value.providerThreadId) ||
+      (existing.providerSessionMaterialized &&
+        !value.providerSessionMaterialized) ||
       existing.cwd !== value.cwd
     ) {
       throw new Error('Conversation execution binding is immutable')
@@ -1486,8 +1599,9 @@ export class ConversationStore {
     const result = this.#statement(
       `UPDATE conversations SET
         title = ?, title_source = ?, pinned_at = ?, archived_at = ?,
-        provider_thread_id = ?, model = ?, reasoning = ?, status = ?,
-        created_at = ?, updated_at = ?, last_activity_at = ?
+        provider_thread_id = ?, provider_session_materialized = ?, model = ?,
+        reasoning = ?, status = ?, created_at = ?, updated_at = ?,
+        last_activity_at = ?
       WHERE conversation_id = ?`,
     ).run(
       value.title,
@@ -1495,6 +1609,7 @@ export class ConversationStore {
       value.pinnedAt ?? null,
       value.archivedAt ?? null,
       value.providerThreadId ?? null,
+      value.providerSessionMaterialized ? 1 : 0,
       value.model ?? null,
       value.reasoning ?? null,
       value.status,
@@ -2433,6 +2548,8 @@ interface ConversationRow {
   readonly archived_at: string | null
   readonly provider: string
   readonly provider_thread_id: string | null
+  readonly origin: string
+  readonly provider_session_materialized: number
   readonly cwd: string
   readonly model: string | null
   readonly reasoning: string | null
@@ -3074,6 +3191,27 @@ function parseConversation(
   assertOptionalBoundedText(value.providerThreadId, 'Provider Thread ID', 4096)
   assertOptionalBoundedText(value.model, 'Conversation model', 240)
   assertOptionalBoundedText(value.reasoning, 'Conversation reasoning', 120)
+  const origin = value.origin ?? 'codetether'
+  if (!isOneOf(origin, durableConversationOrigins)) {
+    throw new Error(`Unsupported durable Conversation origin: ${origin}`)
+  }
+  const providerSessionMaterialized = value.providerSessionMaterialized ?? false
+  if (typeof providerSessionMaterialized !== 'boolean') {
+    throw new Error('Provider session materialization must be boolean')
+  }
+  if (providerSessionMaterialized && value.providerThreadId === undefined) {
+    throw new Error(
+      'A materialized Provider session requires a native Provider identity',
+    )
+  }
+  if (
+    origin === 'adopted_native' &&
+    (!providerSessionMaterialized || value.providerThreadId === undefined)
+  ) {
+    throw new Error(
+      'An adopted native Conversation requires a materialized Provider session',
+    )
+  }
   if (!isOneOf(value.status, durableConversationStatuses)) {
     throw new Error(`Unsupported durable Conversation status: ${value.status}`)
   }
@@ -3103,6 +3241,8 @@ function parseConversation(
     ...(value.providerThreadId === undefined
       ? {}
       : { providerThreadId: value.providerThreadId.trim() }),
+    origin,
+    providerSessionMaterialized,
     cwd,
     ...(value.model === undefined ? {} : { model: value.model.trim() }),
     ...(value.reasoning === undefined
@@ -3256,6 +3396,11 @@ function conversationFromRow(row: ConversationRow): DurableConversation {
     ...(row.provider_thread_id === null
       ? {}
       : { providerThreadId: row.provider_thread_id }),
+    origin: parseConversationOrigin(row.origin),
+    providerSessionMaterialized: parseStoredBoolean(
+      row.provider_session_materialized,
+      'Provider session materialization',
+    ),
     cwd: row.cwd,
     ...(row.model === null ? {} : { model: row.model }),
     ...(row.reasoning === null ? {} : { reasoning: row.reasoning }),
@@ -3472,6 +3617,17 @@ function parseConversationStatus(value: string): DurableConversationStatus {
     throw new Error(`Unsupported durable Conversation status: ${value}`)
   }
   return value
+}
+
+function parseConversationOrigin(value: string): DurableConversationOrigin {
+  if (isOneOf(value, durableConversationOrigins)) return value
+  throw new Error(`Unsupported durable Conversation origin: ${value}`)
+}
+
+function parseStoredBoolean(value: number, label: string): boolean {
+  if (value === 0) return false
+  if (value === 1) return true
+  throw new Error(`${label} must be stored as 0 or 1`)
 }
 
 function parseConversationTitleSource(value: string): ConversationTitleSource {

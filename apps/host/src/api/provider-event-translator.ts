@@ -3,6 +3,7 @@ import type {
   ConversationId,
   HostEvent,
   HostError,
+  MachineId,
   TurnRecord,
 } from '@codetether/protocol'
 
@@ -52,7 +53,7 @@ export class ProviderEventTranslator {
     this.#options = options
   }
 
-  translate(event: AgentEvent): boolean {
+  translate(machineId: MachineId, event: AgentEvent): boolean {
     // Host creates its own identities and publishes these lifecycle events
     // only after the matching provider RPC response is bound.
     if (
@@ -64,7 +65,7 @@ export class ProviderEventTranslator {
     }
 
     const conversationId = this.#options.providerThreads.get(
-      providerSessionKey(event.provider, event.threadId),
+      providerSessionKey(machineId, event.provider, event.threadId),
     )
     // An event for a cold/evicted or unknown Provider Thread cannot acquire a
     // public binding. Consume it as diagnostics instead of filling the short
@@ -73,6 +74,7 @@ export class ProviderEventTranslator {
     const conversation = this.#options.conversations.get(conversationId)
     if (
       conversation === undefined ||
+      conversation.record.machineId !== machineId ||
       conversation.record.provider !== event.provider
     ) {
       return true

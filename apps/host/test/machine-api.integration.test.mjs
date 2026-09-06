@@ -1789,6 +1789,134 @@ test('100 repeated cold reads stay Provider-free while the remote Machine is off
   }
 })
 
+test('remote adopted native session keeps the frozen private binding across rescan and resume', async () => {
+  const fixture = await createRemoteAcquisitionFixture('codex')
+  const nativeSessionId = 'native-external-phase8a-remote-codex'
+  try {
+    fixture.coordinator.providerSessionCandidate = {
+      provider: 'codex',
+      nativeSessionId,
+      revision: 'revision_phase8a_remote_codex',
+      workingDirectory: fixture.coordinator.validationCanonicalPath,
+      title: 'External remote Codex conversation',
+      createdAt: '2026-08-29T10:00:00.000Z',
+      lastActiveAt: '2026-08-29T11:00:00.000Z',
+      providerVersion: '1.2.3',
+      resumeStatus: 'supported',
+      historicalTranscript: 'unavailable',
+    }
+
+    const discovered = await fixture.service.discoverProviderSessions(
+      fixture.project.projectId,
+      fixture.coordinator.machineId,
+      { provider: 'codex', limit: 50, rescan: true },
+    )
+    assert.equal(discovered.candidates.length, 1)
+    assert.equal(discovered.candidates[0].alreadyAdopted, false)
+    assert.equal(JSON.stringify(discovered).includes(nativeSessionId), false)
+
+    const adopted = await fixture.service.adoptProviderSession(
+      fixture.project.projectId,
+      fixture.coordinator.machineId,
+      {
+        actionId: 'act_phase8a_remote_adopt01',
+        discoveryCandidateId: discovered.candidates[0].discoveryCandidateId,
+      },
+    )
+    const conversationId = adopted.data.conversation.conversationId
+    assert.equal(adopted.data.disposition, 'adopted')
+    assert.equal(adopted.data.conversation.origin, 'adopted_native')
+    assert.equal(fixture.coordinator.openCodexCalls.length, 0)
+
+    const durable = fixture.persistence.getConversation(conversationId)
+    assert.ok(durable)
+    assert.equal(durable.providerThreadId === nativeSessionId, false)
+    assert.equal(durable.providerThreadId.startsWith('remote-codex-v1:'), true)
+
+    const rescanned = await fixture.service.discoverProviderSessions(
+      fixture.project.projectId,
+      fixture.coordinator.machineId,
+      { provider: 'codex', limit: 50, rescan: true },
+    )
+    assert.equal(rescanned.candidates.length, 1)
+    assert.equal(rescanned.candidates[0].alreadyAdopted, true)
+    assert.equal(rescanned.candidates[0].conversationId, conversationId)
+
+    await fixture.service.startTurn(conversationId, {
+      actionId: 'act_phase8a_remote_resume_turn01',
+      input: { type: 'text', text: 'One explicit continuation only' },
+    })
+    const completed = await waitForConversationIdle(
+      fixture.service,
+      conversationId,
+    )
+    assert.equal(completed.conversation.status, 'completed')
+    assert.equal(
+      completed.conversation.title,
+      'External remote Codex conversation',
+    )
+    assert.equal(fixture.coordinator.openCodexCalls.length, 1)
+    assert.equal(
+      fixture.coordinator.openCodexCalls[0].providerThreadId,
+      nativeSessionId,
+    )
+    assert.equal(fixture.coordinator.remoteTurnCalls.length, 1)
+  } finally {
+    await fixture.close()
+  }
+})
+
+test('remote metadata discovery remains available when current native resume capability is unsupported', async () => {
+  const fixture = await createRemoteAcquisitionFixture('codex')
+  try {
+    fixture.coordinator.providerSessionCandidate = {
+      provider: 'codex',
+      nativeSessionId: 'native-external-phase8a-remote-unavailable',
+      revision: 'revision_phase8a_remote_unavailable',
+      workingDirectory: fixture.coordinator.validationCanonicalPath,
+      title: 'External remote metadata only',
+      providerVersion: '1.2.3',
+      resumeStatus: 'supported',
+      historicalTranscript: 'unavailable',
+    }
+    fixture.coordinator.remoteExecution = false
+    await fixture.service.refreshMachineProviders(
+      fixture.coordinator.machineId,
+      { actionId: 'act_phase8a_remote_resume_unavailable_refresh' },
+    )
+
+    const discovered = await fixture.service.discoverProviderSessions(
+      fixture.project.projectId,
+      fixture.coordinator.machineId,
+      { provider: 'codex', limit: 50, rescan: true },
+    )
+    assert.equal(discovered.providers[0].status, 'supported')
+    assert.equal(discovered.providers[0].resumeStatus, 'unsupported')
+    assert.equal(discovered.candidates.length, 1)
+    assert.equal(discovered.candidates[0].resumeStatus, 'unsupported')
+    assert.equal(fixture.coordinator.openCodexCalls.length, 0)
+    assert.equal(fixture.coordinator.remoteTurnCalls.length, 0)
+
+    await assert.rejects(
+      fixture.service.adoptProviderSession(
+        fixture.project.projectId,
+        fixture.coordinator.machineId,
+        {
+          actionId: 'act_phase8a_remote_resume_unavailable_adopt',
+          discoveryCandidateId: discovered.candidates[0].discoveryCandidateId,
+        },
+      ),
+      (error) =>
+        error instanceof HostServiceError &&
+        error.code === 'provider_unavailable',
+    )
+    assert.equal(fixture.coordinator.openCodexCalls.length, 0)
+    assert.equal(fixture.coordinator.remoteTurnCalls.length, 0)
+  } finally {
+    await fixture.close()
+  }
+})
+
 async function createRemoteAcquisitionFixture(provider) {
   const directory = await mkdtemp(join(tmpdir(), 'codetether-acquisition-'))
   const workspace = join(directory, 'workspace')
@@ -2045,6 +2173,7 @@ class FakeRemoteMachineCoordinator {
     this.openError = undefined
     this.offlineAfterStart = false
     this.remoteTurnEventGate = undefined
+    this.providerSessionCandidate = undefined
     this.statusListeners = new Set()
     this.confirmed = {
       machine: {
@@ -2206,6 +2335,47 @@ class FakeRemoteMachineCoordinator {
       exists: true,
       directory: true,
     }
+  }
+
+  async discoverProviderSessions(machine, trust, input) {
+    assert.equal(machine.machineId, this.machineId)
+    assert.equal(trust.machineId, this.machineId)
+    const candidate = this.providerSessionCandidate
+    const candidates =
+      candidate?.provider === input.provider &&
+      candidate.workingDirectory === input.rootPath
+        ? [candidate]
+        : []
+    return {
+      provider: input.provider,
+      status: 'supported',
+      resumeStatus: 'supported',
+      candidates,
+      metrics: {
+        filesInspected: candidates.length,
+        candidatesParsed: candidates.length,
+        candidatesMatched: candidates.length,
+        corruptEntriesSkipped: 0,
+        elapsedMs: 1,
+        truncated: false,
+      },
+    }
+  }
+
+  async validateProviderSession(machine, trust, input) {
+    assert.equal(machine.machineId, this.machineId)
+    assert.equal(trust.machineId, this.machineId)
+    const candidate = this.providerSessionCandidate
+    if (
+      candidate === undefined ||
+      candidate.provider !== input.provider ||
+      candidate.nativeSessionId !== input.nativeSessionId ||
+      candidate.revision !== input.revision ||
+      candidate.workingDirectory !== input.rootPath
+    ) {
+      return undefined
+    }
+    return candidate
   }
 
   async openCodexSession(machine, trust, input) {

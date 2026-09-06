@@ -123,6 +123,11 @@ const migrations: readonly Migration[] = [
     name: 'relay_controller_configuration',
     up: migrateRelayControllerConfiguration,
   },
+  {
+    version: 15,
+    name: 'existing_provider_sessions',
+    up: migrateExistingProviderSessions,
+  },
 ]
 
 export const currentSchemaVersion = migrations.at(-1)?.version ?? 0
@@ -1978,6 +1983,50 @@ function migrateRelayControllerConfiguration(database: DatabaseSync): void {
 
     CREATE INDEX idx_machine_relay_enabled
       ON machine_relay_configurations(enabled, updated_at, machine_id);
+  `)
+}
+
+/**
+ * Reuses the existing private Provider-session binding for native sessions
+ * adopted by Phase 8A. Origin and materialization remain private durable
+ * execution metadata; the partial index is the cross-restart authority that
+ * prevents one Machine/Provider native session from binding twice.
+ */
+function migrateExistingProviderSessions(database: DatabaseSync): void {
+  database.exec(`
+    ALTER TABLE conversations
+      ADD COLUMN provider_session_materialized INTEGER NOT NULL DEFAULT 0
+        CHECK (
+          provider_session_materialized IN (0, 1) AND
+          (provider_session_materialized = 0 OR provider_thread_id IS NOT NULL)
+        );
+
+    UPDATE conversations
+    SET provider_session_materialized = 1
+    WHERE
+      provider_thread_id IS NOT NULL AND
+      EXISTS (
+        SELECT 1
+        FROM turns
+        WHERE turns.conversation_id = conversations.conversation_id
+      );
+
+    ALTER TABLE conversations
+      ADD COLUMN origin TEXT NOT NULL DEFAULT 'codetether'
+        CHECK (
+          origin IN ('codetether', 'adopted_native') AND
+          (
+            origin = 'codetether' OR
+            (
+              provider_thread_id IS NOT NULL AND
+              provider_session_materialized = 1
+            )
+          )
+        );
+
+    CREATE UNIQUE INDEX idx_conversations_provider_session_identity
+      ON conversations(machine_id, provider, provider_thread_id)
+      WHERE provider_thread_id IS NOT NULL;
   `)
 }
 

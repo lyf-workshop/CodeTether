@@ -20,6 +20,7 @@ import {
 } from '../dist/persistence/index.js'
 import { normalizeTrustedProjectRoot } from '../dist/project-path.js'
 import { createV1Database } from './fixtures/persistence-v1.mjs'
+import { downgradeExistingProviderSessionsToVersionFourteen } from './fixtures/existing-provider-sessions-v14.mjs'
 
 const conversationId = 'conv_persistence01'
 const projectId = 'proj_persistence01'
@@ -89,6 +90,7 @@ test('migration 012 adds durable Turn start actions transactionally', () => {
     seed.close()
 
     const downgrade = new DatabaseSync(databasePath)
+    downgradeExistingProviderSessionsToVersionFourteen(downgrade)
     downgrade.exec(`
       DELETE FROM schema_migrations WHERE version IN (12, 13, 14);
       DROP TABLE machine_relay_configurations;
@@ -127,7 +129,7 @@ test('migration 012 adds durable Turn start actions transactionally', () => {
     rolledBack.close()
 
     const migrated = ConversationStore.open({ databasePath })
-    assert.equal(migrated.schemaVersion, 14)
+    assert.equal(migrated.schemaVersion, 15)
     assert.equal(
       migrated.getTurnForStartAction('act_migration_start01'),
       undefined,
@@ -739,6 +741,8 @@ function conversation(store, overrides = {}) {
     titleSource: 'generated',
     provider: 'codex',
     providerThreadId: 'provider-thread-persistence',
+    origin: 'codetether',
+    providerSessionMaterialized: false,
     cwd: workspaceRoot,
     model: 'gpt-5.6-sol',
     reasoning: 'medium',

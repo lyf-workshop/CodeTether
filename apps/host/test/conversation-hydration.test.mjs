@@ -930,11 +930,12 @@ async function createFixture(t, options) {
   const seedStore = ConversationStore.open({ databasePath })
   seedProject(seedStore, workspace)
   for (let index = 0; index < options.conversationCount; index += 1) {
+    const turnCount = options.turnCounts?.get(index) ?? 0
     seedConversation(seedStore, workspace, {
       conversationId: conversationId(index),
       index,
+      turnCount,
     })
-    const turnCount = options.turnCounts?.get(index) ?? 0
     for (let turnIndex = 0; turnIndex < turnCount; turnIndex += 1) {
       seedStore.createTurn(durableTurn(index, turnIndex))
     }
@@ -1032,6 +1033,7 @@ function seedConversation(store, workspace, options) {
     cwd: workspace,
     model: 'gpt-5.6-sol',
     reasoning: 'medium',
+    providerSessionMaterialized: (options.turnCount ?? 0) > 0,
     status: options.status ?? 'completed',
     createdAt: timestamp,
     updatedAt: timestamp,

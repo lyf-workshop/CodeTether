@@ -7,6 +7,8 @@ import type { AddressInfo } from 'node:net'
 
 import {
   ApprovalIdSchema,
+  AdoptProviderSessionRequestSchema,
+  AdoptProviderSessionResponseSchema,
   AttentionIdSchema,
   AttentionListResponseSchema,
   BeginRemoteMachinePairingRequestSchema,
@@ -30,6 +32,8 @@ import {
   CreateProjectResponseSchema,
   DisconnectMachineRelayRequestSchema,
   DisconnectMachineRelayResponseSchema,
+  DiscoverProviderSessionsQuerySchema,
+  DiscoverProviderSessionsResponseSchema,
   EnrollMachineRelayRequestSchema,
   EnrollMachineRelayResponseSchema,
   RegisterProjectLocationRequestSchema,
@@ -224,10 +228,15 @@ export class LocalHttpServer {
         url.pathname,
         /^\/api\/v1\/projects\/([^/]+)\/conversations\/search$/u,
       )
+      const providerSessionsRoute = this.#http.matchPath(
+        url.pathname,
+        /^\/api\/v1\/projects\/([^/]+)\/locations\/([^/]+)\/provider-sessions$/u,
+      )
       const acceptsQuery =
         request.method === 'GET' &&
         (projectConversationsRoute !== undefined ||
           projectConversationSearchRoute !== undefined ||
+          providerSessionsRoute !== undefined ||
           url.pathname === '/api/v1/attention')
       if (url.search !== '' && !acceptsQuery) {
         throw new HttpBoundaryError(
@@ -466,6 +475,75 @@ export class LocalHttpServer {
         url.pathname,
         /^\/api\/v1\/projects\/([^/]+)\/locations\/([^/]+)$/u,
       )
+
+      if (request.method === 'GET' && providerSessionsRoute !== undefined) {
+        const projectId = this.#http.parseRouteId(
+          ProjectIdSchema,
+          providerSessionsRoute[0],
+          'projectId',
+        )
+        const machineId = this.#http.parseRouteId(
+          MachineIdSchema,
+          providerSessionsRoute[1],
+          'machineId',
+        )
+        const query = this.#http.parseValidatedQuery(
+          url.searchParams,
+          DiscoverProviderSessionsQuerySchema,
+        )
+        const abort = new AbortController()
+        const cancel = () => abort.abort()
+        request.once('aborted', cancel)
+        response.once('close', cancel)
+        try {
+          this.#http.writeJson(
+            response,
+            200,
+            DiscoverProviderSessionsResponseSchema.parse(
+              await this.#service.discoverProviderSessions(
+                projectId,
+                machineId,
+                query,
+                abort.signal,
+              ),
+            ),
+            context.allowedOrigin,
+          )
+        } finally {
+          request.off('aborted', cancel)
+          response.off('close', cancel)
+        }
+        return
+      }
+      if (request.method === 'POST' && providerSessionsRoute !== undefined) {
+        const projectId = this.#http.parseRouteId(
+          ProjectIdSchema,
+          providerSessionsRoute[0],
+          'projectId',
+        )
+        const machineId = this.#http.parseRouteId(
+          MachineIdSchema,
+          providerSessionsRoute[1],
+          'machineId',
+        )
+        const body = await this.#http.readValidatedBody(
+          request,
+          AdoptProviderSessionRequestSchema,
+        )
+        context.actionId = body.actionId
+        const result = await this.#service.adoptProviderSession(
+          projectId,
+          machineId,
+          body,
+        )
+        this.#http.writeJson(
+          response,
+          result.data.disposition === 'adopted' ? 201 : 200,
+          AdoptProviderSessionResponseSchema.parse(result),
+          context.allowedOrigin,
+        )
+        return
+      }
       if (request.method === 'DELETE' && projectLocationRoute !== undefined) {
         const projectId = this.#http.parseRouteId(
           ProjectIdSchema,

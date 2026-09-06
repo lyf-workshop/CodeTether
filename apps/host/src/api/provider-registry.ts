@@ -1,5 +1,6 @@
 import type { AgentProvider } from '@codetether/agent-core'
 import type {
+  MachineId,
   ProviderCapabilities,
   ProviderDescriptor,
 } from '@codetether/protocol'
@@ -111,10 +112,11 @@ export class ProviderRegistry {
 }
 
 export function providerSessionKey(
+  machineId: MachineId,
   provider: AgentProvider,
   providerThreadId: string,
 ): string {
-  return JSON.stringify([provider, providerThreadId])
+  return JSON.stringify([machineId, provider, providerThreadId])
 }
 
 function fallbackDescriptor(runtime: AgentHostRuntime): ProviderDescriptor {

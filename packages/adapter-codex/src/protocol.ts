@@ -41,6 +41,36 @@ export interface CodexThread {
   readonly cwd?: string
 }
 
+export type CodexStoredThreadSource = 'cli' | 'vscode' | 'appServer'
+
+export type CodexStoredThreadStatus =
+  'notLoaded' | 'idle' | 'active' | 'systemError'
+
+/**
+ * Provider-private metadata projected from app-server thread/list. Fields such
+ * as preview, rollout path, sessionId, turns, and Git metadata are deliberately
+ * absent so discovery callers cannot accidentally publish Provider content.
+ */
+export interface CodexStoredThread {
+  readonly id: string
+  readonly cwd: string
+  readonly name?: string
+  readonly createdAt: number
+  readonly updatedAt: number
+  readonly recencyAt?: number
+  readonly cliVersion: string
+  readonly modelProvider: string
+  readonly source: CodexStoredThreadSource
+  readonly status: CodexStoredThreadStatus
+  readonly ephemeral: boolean
+}
+
+export interface CodexStoredThreadPage {
+  readonly threads: readonly CodexStoredThread[]
+  readonly invalidEntryCount: number
+  readonly nextCursor?: string
+}
+
 export interface CodexTurnError {
   readonly message: string
   readonly codexErrorInfo?: unknown

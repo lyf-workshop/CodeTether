@@ -1,10 +1,15 @@
 import {
   CLAUDE_CODE_TESTED_VERSION,
+  ClaudeSessionDiscovery,
   classifyClaudeCodeDetectionFailure,
   prepareClaudeCode,
   type ClaudeCodeDetection,
 } from '@codetether/adapter-claude'
-import { canonicalFailure } from '@codetether/agent-core'
+import {
+  canonicalFailure,
+  type ProviderSessionDiscovery,
+} from '@codetether/agent-core'
+import { CodexSessionDiscovery } from '@codetether/adapter-codex'
 import type { ProviderDescriptor } from '@codetether/protocol'
 
 import { HostEventPublisher } from './host-event-publisher.js'
@@ -97,6 +102,14 @@ export async function startLocalCodexHost(
       async (provider) => await createLocalProviderRuntime(provider, options),
     ),
   )
+  const providerSessionDiscoveries: readonly ProviderSessionDiscovery[] = [
+    new CodexSessionDiscovery({
+      ...(options.executable === undefined
+        ? {}
+        : { executable: options.executable }),
+    }),
+    new ClaudeSessionDiscovery(),
+  ]
   try {
     return await startLocalCodexHostWithRuntime(
       options,
@@ -104,6 +117,7 @@ export async function startLocalCodexHost(
       workspacePolicy,
       persistence,
       async (provider) => await createLocalProviderRuntime(provider, options),
+      providerSessionDiscoveries,
     )
   } catch (error) {
     try {
@@ -221,6 +235,7 @@ export async function startLocalCodexHostWithRuntime(
   refreshUnavailableLocalProvider?: (
     provider: AgentHostRuntime['provider'],
   ) => Promise<AgentHostRuntime>,
+  providerSessionDiscoveries?: readonly ProviderSessionDiscovery[],
 ): Promise<RunningLocalCodexHost> {
   const runtimes = Array.isArray(runtime) ? runtime : [runtime]
   let service: HostService | undefined
@@ -269,6 +284,9 @@ export async function startLocalCodexHostWithRuntime(
       ...(refreshUnavailableLocalProvider === undefined
         ? {}
         : { refreshUnavailableLocalProvider }),
+      ...(providerSessionDiscoveries === undefined
+        ? {}
+        : { providerSessionDiscoveries }),
     })
     await service.registerInitialProjectRoots(
       options.allowedWorkspaceRoots ?? [],

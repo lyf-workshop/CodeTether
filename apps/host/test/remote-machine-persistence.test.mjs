@@ -16,6 +16,7 @@ import {
 } from '../dist/persistence/index.js'
 import { normalizeTrustedProjectRoot } from '../dist/project-path.js'
 import { downgradeMachineFoundationToVersionSeven } from './fixtures/machine-foundation-v7.mjs'
+import { downgradeExistingProviderSessionsToVersionFourteen } from './fixtures/existing-provider-sessions-v14.mjs'
 
 const timestamp = '2026-08-30T12:00:00.000Z'
 const later = '2026-08-30T12:01:00.000Z'
@@ -100,8 +101,8 @@ test('migration 009 preserves the v8 graph and rolls back replacement tables ato
     rolledBack.close()
 
     const migrated = ConversationStore.open({ databasePath })
-    assert.equal(currentSchemaVersion, 14)
-    assert.equal(migrated.schemaVersion, 14)
+    assert.equal(currentSchemaVersion, 15)
+    assert.equal(migrated.schemaVersion, 15)
     assert.deepEqual(
       migrated.listMachines().map((machine) => machine.machineId),
       [v8MachineId],
@@ -195,7 +196,7 @@ test('migration 010 backfills one preferred endpoint from v9 and rolls back with
     rolledBack.close()
 
     const migrated = ConversationStore.open({ databasePath })
-    assert.equal(migrated.schemaVersion, 14)
+    assert.equal(migrated.schemaVersion, 15)
     const trust = migrated.getTrustedMachinePeer(candidate.machine.machineId)
     assert.deepEqual(trust?.endpoints, [
       {
@@ -233,6 +234,7 @@ test('migration 011 adds bounded remote Provider observations transactionally', 
     seed.close()
 
     const downgrade = new DatabaseSync(databasePath)
+    downgradeExistingProviderSessionsToVersionFourteen(downgrade)
     downgrade.exec(`
       DELETE FROM schema_migrations WHERE version IN (11, 12, 13, 14);
       DROP TABLE machine_relay_configurations;
@@ -261,7 +263,7 @@ test('migration 011 adds bounded remote Provider observations transactionally', 
     rolledBack.close()
 
     const migrated = ConversationStore.open({ databasePath })
-    assert.equal(migrated.schemaVersion, 14)
+    assert.equal(migrated.schemaVersion, 15)
     assert.equal(
       migrated.getRemoteProviderObservation(candidate.machine.machineId),
       undefined,
@@ -579,7 +581,7 @@ test('remote Project locations aggregate durably, reject conflicts, and atomical
     store.close()
 
     const reopened = ConversationStore.open({ databasePath })
-    assert.equal(reopened.schemaVersion, 14)
+    assert.equal(reopened.schemaVersion, 15)
     assert.deepEqual(
       reopened
         .getProject('proj_multilocation01')
@@ -890,6 +892,7 @@ function tableCount(database, name) {
 function downgradeRemoteMachineEndpointsToVersionNine(databasePath) {
   const database = new DatabaseSync(databasePath)
   try {
+    downgradeExistingProviderSessionsToVersionFourteen(database)
     database.exec('PRAGMA foreign_keys = OFF')
     database.exec(`
       BEGIN IMMEDIATE;

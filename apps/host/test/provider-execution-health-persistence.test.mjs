@@ -10,6 +10,7 @@ import {
   currentSchemaVersion,
   providerExecutionHealthFailureMaximumBytes,
 } from '../dist/persistence/index.js'
+import { downgradeExistingProviderSessionsToVersionFourteen } from './fixtures/existing-provider-sessions-v14.mjs'
 
 const observedAt = '2026-09-02T12:00:00.000Z'
 const olderObservedAt = '2026-09-02T11:59:00.000Z'
@@ -21,6 +22,7 @@ test('migration 013 adds Provider execution health transactionally', () => {
     seed.close()
 
     const downgrade = new DatabaseSync(databasePath)
+    downgradeExistingProviderSessionsToVersionFourteen(downgrade)
     downgrade.exec(`
       DELETE FROM schema_migrations WHERE version IN (13, 14);
       DROP TABLE machine_relay_configurations;
@@ -49,7 +51,7 @@ test('migration 013 adds Provider execution health transactionally', () => {
 
     const migrated = ConversationStore.open({ databasePath })
     assert.equal(migrated.schemaVersion, currentSchemaVersion)
-    assert.equal(currentSchemaVersion, 14)
+    assert.equal(currentSchemaVersion, 15)
     const machineId = migrated.listMachines()[0].machineId
     assert.deepEqual(migrated.listProviderExecutionHealth(machineId), [])
     migrated.close()

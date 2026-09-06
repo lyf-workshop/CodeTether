@@ -7,6 +7,8 @@ import {
   type TurnRecord,
 } from '@codetether/protocol'
 
+import type { DurableConversationOrigin } from '../persistence/conversation-store.js'
+
 export const MAX_PROVIDER_ITEMS_PER_TURN = 1024
 
 export class ProviderItemCapacityError extends Error {
@@ -18,6 +20,7 @@ export class ProviderItemCapacityError extends Error {
 
 export interface ConversationState {
   record: ConversationRecord
+  readonly origin: DurableConversationOrigin
   /** Absent only for a newly created lazy remote Conversation. */
   providerThreadId?: string
   readonly turns: Map<TurnId, TurnState>

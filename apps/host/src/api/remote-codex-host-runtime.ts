@@ -21,8 +21,10 @@ import {
   type ProviderRuntimeContext,
   type ProviderTurnResult,
 } from './agent-runtime.js'
-
-const REMOTE_SESSION_PREFIX = 'remote-codex-v1:'
+import {
+  decodeRemoteProviderSessionBinding,
+  encodeRemoteProviderSessionBinding,
+} from './remote-provider-session-binding.js'
 
 export type RemoteCodexRuntimeTurnEvent =
   | {
@@ -581,45 +583,22 @@ function encodeRemoteProviderThreadId(
   machineId: MachineId,
   providerThreadId: string,
 ): string {
-  return `${REMOTE_SESSION_PREFIX}${Buffer.from(
-    JSON.stringify({ version: 1, machineId, providerThreadId }),
-    'utf8',
-  ).toString('base64url')}`
+  return encodeRemoteProviderSessionBinding(
+    'codex',
+    machineId,
+    providerThreadId,
+  )
 }
 
 function decodeRemoteProviderThreadId(
   value: string,
   machineId: MachineId,
 ): string {
-  if (!value.startsWith(REMOTE_SESSION_PREFIX)) {
-    throw new Error('Remote Codex Session identity is malformed')
-  }
-  let parsed: unknown
   try {
-    parsed = JSON.parse(
-      Buffer.from(
-        value.slice(REMOTE_SESSION_PREFIX.length),
-        'base64url',
-      ).toString('utf8'),
-    )
+    return decodeRemoteProviderSessionBinding('codex', machineId, value)
   } catch {
     throw new Error('Remote Codex Session identity is malformed')
   }
-  if (
-    typeof parsed !== 'object' ||
-    parsed === null ||
-    !('version' in parsed) ||
-    parsed.version !== 1 ||
-    !('machineId' in parsed) ||
-    parsed.machineId !== machineId ||
-    !('providerThreadId' in parsed) ||
-    typeof parsed.providerThreadId !== 'string' ||
-    parsed.providerThreadId.trim().length === 0 ||
-    parsed.providerThreadId.length > 2048
-  ) {
-    throw new Error('Remote Codex Session identity is malformed')
-  }
-  return parsed.providerThreadId
 }
 
 function remoteProviderTurnId(machineId: MachineId, turnId: string): string {

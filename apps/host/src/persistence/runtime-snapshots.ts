@@ -48,6 +48,7 @@ export interface DurableTurnPresentationV1 {
 export interface RestoredDurableConversation {
   readonly record: ConversationRecord
   readonly providerThreadId: string
+  readonly origin: DurableConversation['origin']
   readonly providerSessionMaterialized: boolean
   readonly runtime: ConversationRuntimeSnapshot
   readonly providerTurns: ReadonlyArray<{
@@ -387,7 +388,8 @@ function restoreConversation(
   return {
     record: reconstructed.record,
     providerThreadId: conversation.providerThreadId,
-    providerSessionMaterialized: reconstructed.totalTurns > 0,
+    origin: conversation.origin,
+    providerSessionMaterialized: conversation.providerSessionMaterialized,
     runtime: reconstructed.runtime,
     providerTurns: reconstructed.providerTurns,
     expiredApprovals: reconstructed.approvals.filter(
@@ -549,6 +551,7 @@ function reconstructDurableConversation(
     machineId: conversation.machineId,
     title: conversation.title,
     titleSource: conversation.titleSource,
+    origin: conversation.origin,
     ...(conversation.pinnedAt === undefined
       ? {}
       : { pinnedAt: conversation.pinnedAt }),

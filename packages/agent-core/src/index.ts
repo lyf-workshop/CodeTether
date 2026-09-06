@@ -31,6 +31,24 @@ export {
   providerExecutionHealthFreshness,
   providerExecutionHealthStates,
 } from './failures.js'
+export {
+  providerHistoricalTranscriptStatuses,
+  providerSessionDiscoveryFailureReasons,
+  providerSessionDiscoveryStatuses,
+  providerSessionResumeStatuses,
+} from './session-discovery.js'
+export type {
+  NativeProviderSessionCandidate,
+  ProviderHistoricalTranscriptStatus,
+  ProviderSessionCandidateValidationRequest,
+  ProviderSessionDiscovery,
+  ProviderSessionDiscoveryFailureReason,
+  ProviderSessionDiscoveryMetrics,
+  ProviderSessionDiscoveryPage,
+  ProviderSessionDiscoveryRequest,
+  ProviderSessionDiscoveryStatus,
+  ProviderSessionResumeStatus,
+} from './session-discovery.js'
 export type {
   CanonicalFailure,
   CanonicalFailureCategory,

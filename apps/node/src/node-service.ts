@@ -6,6 +6,7 @@ import {
   canonicalFailure,
   isCanonicalFailureReason,
   type CanonicalFailure,
+  type NativeProviderSessionCandidate,
 } from '@codetether/agent-core'
 import {
   ClaudeSessionHeartbeatMessageSchema,
@@ -27,6 +28,8 @@ import {
   PairingLoginFinishMessageSchema,
   PairingLoginStartMessageSchema,
   ProjectLocationValidateMessageSchema,
+  ProviderSessionValidateMessageSchema,
+  ProviderSessionsDiscoverMessageSchema,
   ProvidersDescribeMessageSchema,
   TrustRevokeMessageSchema,
   acceptMachineTlsOverStream,
@@ -57,6 +60,7 @@ import { z } from 'zod'
 import { PairingMode, type PairingModeView } from './pairing-mode.js'
 import { validateProjectLocationPath } from './project-location-validation.js'
 import { RemoteProviderDetector } from './provider-discovery.js'
+import { RemoteProviderSessionDiscoveryRegistry } from './provider-session-discovery.js'
 import {
   RemoteClaudeRunnerPool,
   type RemoteClaudeRunner,
@@ -74,6 +78,8 @@ const AuthenticatedRequestSchema = z.discriminatedUnion('type', [
   MachinePingMessageSchema,
   ProjectLocationValidateMessageSchema,
   ProvidersDescribeMessageSchema,
+  ProviderSessionsDiscoverMessageSchema,
+  ProviderSessionValidateMessageSchema,
   CodexSessionOpenMessageSchema,
   ClaudeSessionOpenMessageSchema,
   TrustRevokeMessageSchema,
@@ -103,6 +109,8 @@ export interface CodeTetherNodeOptions {
   /** Internal test seam; production uses the fixed execution-session lease. */
   readonly executionSessionLeaseTimeoutMs?: number
   readonly providerDetector?: RemoteProviderDetector
+  /** Internal test seam; discovery adapters never own Provider inference. */
+  readonly providerSessionDiscoveries?: RemoteProviderSessionDiscoveryRegistry
   /** Internal test seam; remote callers cannot configure Provider execution. */
   readonly remoteCodexRunners?: RemoteCodexRunnerPool
   /** Internal test seam; remote callers cannot configure Provider execution. */
@@ -132,6 +140,7 @@ export class CodeTetherNodeService extends EventEmitter {
   readonly #pendingRelayStreams = new Map<Duplex, PublicKeyFingerprint>()
   readonly #relayConnections = new Map<TLSSocket, PublicKeyFingerprint>()
   readonly #providerDetector: RemoteProviderDetector
+  readonly #providerSessionDiscoveries: RemoteProviderSessionDiscoveryRegistry
   readonly #remoteCodexRunners: RemoteCodexRunnerPool
   readonly #remoteClaudeRunners: RemoteClaudeRunnerPool
   readonly #relayControl: { close(): Promise<void> } | undefined
@@ -170,6 +179,9 @@ export class CodeTetherNodeService extends EventEmitter {
     }
     this.#providerDetector =
       options.providerDetector ?? new RemoteProviderDetector()
+    this.#providerSessionDiscoveries =
+      options.providerSessionDiscoveries ??
+      new RemoteProviderSessionDiscoveryRegistry()
     this.#remoteCodexRunners =
       options.remoteCodexRunners ?? new RemoteCodexRunnerPool()
     this.#remoteClaudeRunners =
@@ -548,6 +560,10 @@ export class CodeTetherNodeService extends EventEmitter {
     // Track it before waiting for the first Machine frame so an overlapping
     // trust revocation also closes sockets stalled in the hello window.
     this.#trackAuthenticatedConnection(trusted.controllerId, socket)
+    const providerSessionDiscoveryAbort = new AbortController()
+    const abortProviderSessionDiscovery = (): void =>
+      providerSessionDiscoveryAbort.abort()
+    socket.once('close', abortProviderSessionDiscovery)
     try {
       const hello = await receiveStrict(connection, MachineHelloMessageSchema)
       const currentTrust = this.state.controllerByFingerprint(
@@ -642,6 +658,76 @@ export class CodeTetherNodeService extends EventEmitter {
           })
           continue
         }
+        if (request.type === 'provider_sessions.discover') {
+          this.#assertProviderSessionDiscoveryIdentity(request)
+          const validated = await validateProjectLocationPath(request.rootPath)
+          if (validated.canonicalPath !== request.rootPath) {
+            throw new MachineTransportError(
+              'project_location_path_invalid',
+              'Provider session discovery requires the canonical Project Location',
+            )
+          }
+          const discovery = await this.#providerSessionDiscoveries.discover({
+            provider: request.provider,
+            projectRoot: validated.canonicalPath,
+            ...(request.cursor === undefined ? {} : { cursor: request.cursor }),
+            limit: request.limit,
+            signal: providerSessionDiscoveryAbort.signal,
+          })
+          await connection.send({
+            type: 'provider_sessions.discovered',
+            protocolVersion: machineProtocolVersion,
+            requestId: request.requestId,
+            machineId: this.state.machine.machineId,
+            nodeId: this.state.machine.nodeId,
+            provider: request.provider,
+            status: discovery.status,
+            resumeStatus: discovery.resumeStatus,
+            ...(discovery.providerVersion === undefined
+              ? {}
+              : { providerVersion: discovery.providerVersion }),
+            candidates: discovery.candidates.map(privateCandidate),
+            ...(discovery.nextCursor === undefined
+              ? {}
+              : { nextCursor: discovery.nextCursor }),
+            ...(discovery.failureReason === undefined
+              ? {}
+              : { failureReason: discovery.failureReason }),
+            metrics: discovery.metrics,
+          })
+          continue
+        }
+        if (request.type === 'provider_session.validate') {
+          this.#assertProviderSessionDiscoveryIdentity(request)
+          const validated = await validateProjectLocationPath(request.rootPath)
+          if (validated.canonicalPath !== request.rootPath) {
+            throw new MachineTransportError(
+              'project_location_path_invalid',
+              'Provider session adoption requires the canonical Project Location',
+            )
+          }
+          const candidate =
+            await this.#providerSessionDiscoveries.validateCandidate({
+              provider: request.provider,
+              projectRoot: validated.canonicalPath,
+              nativeSessionId: request.nativeSessionId,
+              revision: request.revision,
+              signal: providerSessionDiscoveryAbort.signal,
+            })
+          await connection.send({
+            type: 'provider_session.validated',
+            protocolVersion: machineProtocolVersion,
+            requestId: request.requestId,
+            machineId: this.state.machine.machineId,
+            nodeId: this.state.machine.nodeId,
+            provider: request.provider,
+            valid: candidate !== undefined,
+            ...(candidate === undefined
+              ? {}
+              : { candidate: privateCandidate(candidate) }),
+          })
+          continue
+        }
         if (request.type === 'codex.session.open') {
           if (
             request.expectedMachineId !== this.state.machine.machineId ||
@@ -707,7 +793,24 @@ export class CodeTetherNodeService extends EventEmitter {
       if (!connection.closed) await sendSafeError(connection, error)
       connection.destroy()
     } finally {
+      providerSessionDiscoveryAbort.abort()
+      socket.off('close', abortProviderSessionDiscovery)
       this.#untrackAuthenticatedConnection(trusted.controllerId, socket)
+    }
+  }
+
+  #assertProviderSessionDiscoveryIdentity(request: {
+    readonly expectedMachineId: string
+    readonly expectedNodeId: string
+  }): void {
+    if (
+      request.expectedMachineId !== this.state.machine.machineId ||
+      request.expectedNodeId !== this.state.machine.nodeId
+    ) {
+      throw new MachineTransportError(
+        'identity_mismatch',
+        'Provider session discovery did not match durable Node identity',
+      )
     }
   }
 
@@ -1367,6 +1470,25 @@ class ExecutionSessionLease {
     this.#closed = true
     if (this.#timer !== undefined) clearTimeout(this.#timer)
     this.#timer = undefined
+  }
+}
+
+function privateCandidate(candidate: NativeProviderSessionCandidate) {
+  return {
+    nativeSessionId: candidate.nativeSessionId,
+    revision: candidate.revision,
+    title: candidate.title,
+    ...(candidate.createdAt === undefined
+      ? {}
+      : { createdAt: candidate.createdAt }),
+    ...(candidate.lastActiveAt === undefined
+      ? {}
+      : { lastActiveAt: candidate.lastActiveAt }),
+    ...(candidate.providerVersion === undefined
+      ? {}
+      : { providerVersion: candidate.providerVersion }),
+    resumeStatus: candidate.resumeStatus,
+    historicalTranscript: candidate.historicalTranscript,
   }
 }
 

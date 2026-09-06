@@ -9,6 +9,7 @@ import {
   ConversationStore,
   currentSchemaVersion,
 } from '../dist/persistence/index.js'
+import { downgradeExistingProviderSessionsToVersionFourteen } from './fixtures/existing-provider-sessions-v14.mjs'
 
 const createdAt = '2026-09-03T12:00:00.000Z'
 const enrolledAt = '2026-09-03T12:01:00.000Z'
@@ -23,6 +24,7 @@ test('migration 014 creates the bounded Relay configuration atomically', () => {
     seed.close()
 
     const downgrade = new DatabaseSync(databasePath)
+    downgradeExistingProviderSessionsToVersionFourteen(downgrade)
     downgrade.exec(`
       DELETE FROM schema_migrations WHERE version = 14;
       DROP TABLE machine_relay_configurations;
@@ -46,8 +48,8 @@ test('migration 014 creates the bounded Relay configuration atomically', () => {
     rolledBack.close()
 
     const migrated = ConversationStore.open({ databasePath })
-    assert.equal(currentSchemaVersion, 14)
-    assert.equal(migrated.schemaVersion, 14)
+    assert.equal(currentSchemaVersion, 15)
+    assert.equal(migrated.schemaVersion, 15)
     migrated.close()
 
     const inspect = new DatabaseSync(databasePath)

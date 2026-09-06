@@ -2,7 +2,7 @@ import type { Duplex } from 'node:stream'
 
 import { z } from 'zod'
 
-import type { CanonicalFailure } from '@codetether/agent-core'
+import type { AgentProvider, CanonicalFailure } from '@codetether/agent-core'
 
 import { machineProtocolVersion, machineTransportLimits } from './constants.js'
 import { MachineTransportError } from './errors.js'
@@ -34,6 +34,8 @@ import {
   PairingLoginResponseMessageSchema,
   PairingOfferMessageSchema,
   ProjectLocationValidatedMessageSchema,
+  ProviderSessionsDiscoveredMessageSchema,
+  ProviderSessionValidatedMessageSchema,
   ProvidersDescribedMessageSchema,
   RemoteProjectLocationPathSchema,
   TrustRevokedMessageSchema,
@@ -41,6 +43,9 @@ import {
   type ClaudeTurnEventMessage,
   type CodexTurnEventMessage,
   type ProjectLocationValidatedMessage,
+  type PrivateProviderSessionCandidate,
+  type ProviderSessionsDiscoveredMessage,
+  type ProviderSessionValidatedMessage,
   type ProvidersDescribedMessage,
   type RemoteCodexProviderIdentity,
   type RemoteCodexPrompt,
@@ -731,6 +736,116 @@ export class AuthenticatedRemoteMachineConnection {
     }
   }
 
+  async discoverProviderSessions(options: {
+    readonly provider: AgentProvider
+    readonly projectId: MachineTransportProjectId
+    /** Durable Host-owned ProjectLocation root, never a Web-selected scan path. */
+    readonly rootPath: string
+    readonly cursor?: string
+    readonly limit: number
+    readonly signal?: AbortSignal
+  }): Promise<RemoteProviderSessionDiscoveryPage> {
+    this.#assertGeneralPurpose()
+    const rootPath = RemoteProjectLocationPathSchema.safeParse(options.rootPath)
+    if (!rootPath.success) {
+      throw new MachineTransportError(
+        'project_location_path_invalid',
+        'Project Location path is invalid',
+      )
+    }
+    const requestId = newMachineNonce()
+    await this.#connection.send({
+      type: 'provider_sessions.discover',
+      protocolVersion: machineProtocolVersion,
+      requestId,
+      expectedMachineId: this.machine.machineId,
+      expectedNodeId: this.machine.nodeId,
+      provider: options.provider,
+      projectId: options.projectId,
+      rootPath: rootPath.data,
+      ...(options.cursor === undefined ? {} : { cursor: options.cursor }),
+      limit: options.limit,
+    })
+    const response = await receiveCompatibleMachineMessage(
+      this.#connection,
+      z.union([
+        ProviderSessionsDiscoveredMessageSchema,
+        MachineErrorMessageSchema,
+      ]),
+      {
+        signal: options.signal,
+        timeoutMs: machineTransportLimits.providerSessionDiscoveryTimeoutMs,
+      },
+    )
+    if (response.type === 'machine.error') {
+      throw remoteError(response.code, response.message, true, response.failure)
+    }
+    this.#assertProviderSessionResponse(response, requestId, options.provider)
+    return {
+      provider: response.provider,
+      status: response.status,
+      resumeStatus: response.resumeStatus,
+      ...(response.providerVersion === undefined
+        ? {}
+        : { providerVersion: response.providerVersion }),
+      candidates: response.candidates,
+      ...(response.nextCursor === undefined
+        ? {}
+        : { nextCursor: response.nextCursor }),
+      ...(response.failureReason === undefined
+        ? {}
+        : { failureReason: response.failureReason }),
+      metrics: response.metrics,
+    }
+  }
+
+  async validateProviderSession(options: {
+    readonly provider: AgentProvider
+    readonly projectId: MachineTransportProjectId
+    readonly rootPath: string
+    readonly nativeSessionId: string
+    readonly revision: string
+    readonly signal?: AbortSignal
+  }): Promise<PrivateProviderSessionCandidate | undefined> {
+    this.#assertGeneralPurpose()
+    const rootPath = RemoteProjectLocationPathSchema.safeParse(options.rootPath)
+    if (!rootPath.success) {
+      throw new MachineTransportError(
+        'project_location_path_invalid',
+        'Project Location path is invalid',
+      )
+    }
+    const requestId = newMachineNonce()
+    await this.#connection.send({
+      type: 'provider_session.validate',
+      protocolVersion: machineProtocolVersion,
+      requestId,
+      expectedMachineId: this.machine.machineId,
+      expectedNodeId: this.machine.nodeId,
+      provider: options.provider,
+      projectId: options.projectId,
+      rootPath: rootPath.data,
+      nativeSessionId: options.nativeSessionId,
+      revision: options.revision,
+    })
+    const response = await receiveCompatibleMachineMessage(
+      this.#connection,
+      z.union([
+        ProviderSessionValidatedMessageSchema,
+        MachineErrorMessageSchema,
+      ]),
+      {
+        signal: options.signal,
+        timeoutMs: machineTransportLimits.providerSessionDiscoveryTimeoutMs,
+      },
+    )
+    if (response.type === 'machine.error') {
+      throw remoteError(response.code, response.message, true, response.failure)
+    }
+    this.#assertProviderSessionResponse(response, requestId, options.provider)
+    return response.candidate
+  }
+
   async revoke(signal?: AbortSignal): Promise<void> {
     this.#assertGeneralPurpose()
     const nonce = newMachineNonce()
@@ -956,6 +1071,42 @@ export class AuthenticatedRemoteMachineConnection {
       )
     }
   }
+
+  #assertProviderSessionResponse(
+    response:
+      ProviderSessionsDiscoveredMessage | ProviderSessionValidatedMessage,
+    requestId: string,
+    provider: AgentProvider,
+  ): void {
+    if (
+      response.requestId !== requestId ||
+      response.machineId !== this.machine.machineId ||
+      response.nodeId !== this.machine.nodeId ||
+      response.provider !== provider
+    ) {
+      this.#connection.destroy()
+      throw new MachineTransportError(
+        'identity_mismatch',
+        'Provider session discovery did not match the trusted Machine',
+        { peerAuthenticated: true },
+      )
+    }
+  }
+}
+
+export interface RemoteProviderSessionDiscoveryPage {
+  readonly provider: AgentProvider
+  readonly status: 'supported' | 'unsupported' | 'unavailable'
+  readonly resumeStatus: 'supported' | 'unsupported' | 'unavailable'
+  readonly providerVersion?: string
+  readonly candidates: readonly PrivateProviderSessionCandidate[]
+  readonly nextCursor?: string
+  readonly failureReason?:
+    | 'provider_session_discovery_unavailable'
+    | 'provider_session_format_unsupported'
+    | 'provider_session_store_unreadable'
+    | 'machine_offline'
+  readonly metrics: ProviderSessionsDiscoveredMessage['metrics']
 }
 
 export interface StartRemoteCodexTurnOptions {

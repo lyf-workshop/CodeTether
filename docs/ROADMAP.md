@@ -1178,7 +1178,7 @@ Exit gate:
 
 ## Phase 7D — Network Roaming & Internet Reliability
 
-**Status:** current approved implementation scope; not accepted, frozen, or declared ready.
+**Status:** accepted and frozen at `abbcf38be98efbbecfa0db0874d9adc033b608e4`.
 
 **Goal:** preserve durable Controller, Node, Machine, Relay, Project Location, Conversation, and Provider-session identity while ordinary network addresses, interfaces, sockets, DNS answers, Relay epochs, and channels change, with bounded automatic idle recovery and no active-Turn migration or Prompt replay.
 
@@ -1208,11 +1208,57 @@ Exit gate:
 
 - Phase 7D leaves typed status, centralized reconnect ownership, durable state independent of sockets, and fail-closed transport loss ready for a later Mobile client. It does not implement Mobile, Push, APNs/FCM, mobile UI, mobile background execution, or mobile battery/lifecycle policy.
 
-## Phase 8 — Mobile Polish
+### Acceptance boundary
 
-**Status:** planned; unimplemented and unauthorized during Phase 7D.
+- Owner review accepted identity continuity, bounded reconnect/coalescing and stale-generation rejection, Direct/Relay requalification, short/long offline and outage recovery, no active-Turn migration or Prompt replay, native Provider continuity, background recovery, deterministic flap stress, the 60-minute production reliability session, Provider regressions, package gates, clean resources, and the Phase 7 Internet Remote Foundation. The implementation and evidence are frozen at `abbcf38`.
 
-**Goal:** make the remote companion exceptional for short, high-value interventions.
+## Phase 8A — Existing Session Discovery & Adoption
+
+**Status:** current approved implementation scope; not accepted, frozen, or declared ready.
+
+**Goal:** let an exact Machine/Project Location discover compatible Codex and Claude Code native sessions, adopt selected sessions into ordinary durable CodeTether Conversations without inference or Provider-store mutation, and continue them only through a later explicit native resume.
+
+### In scope
+
+- Provider-specific, Machine-local, read-only metadata discovery through stable Provider APIs where available or narrowly guarded known native stores where necessary. Local discovery stays in the Host adapter; remote discovery uses the existing Direct-first/Relay-fallback Machine transport and Node adapter. Relay remains opaque.
+- Strict separation between Discover, Adopt, and Resume. Discovery creates no Conversation or Turn. Adoption transactionally creates at most one ordinary Conversation/private binding for `(Machine, Provider, native session)` and starts no Provider. Resume occurs only on a later explicit Turn through the accepted native path without transcript replay.
+- Exact canonical Project Location matching, Machine/Provider isolation, short-lived Host-owned opaque candidate IDs, bounded pagination/scans/cancellation/coalescing, per-entry/provider failure isolation, and privacy-safe diagnostics.
+- Migration 015 may add minimal origin/materialization metadata and a private Machine-scoped uniqueness constraint while preserving every existing Conversation and native binding. Adopted Conversations retain immutable Project, Machine, Provider, organization, Search, ownership, idempotency, and restart behavior.
+- An optional Previous Conversations step after successful Project/Location registration, including zero, mixed, partial, offline, expired, and already-adopted states. Discovery is always skippable.
+
+### Out of scope
+
+- Full transcript conversion, inferred history, unmatched-session browsing, Provider file mutation, generic file reads, Provider lifecycle/update management, backend/profile switching, onboarding Doctor, new Providers/capabilities, Mobile, Remote Terminal, or Remote Files.
+
+### Exit gate
+
+- REAL isolated sessions created outside CodeTether by the exact accepted Codex and Claude installations must be discovered, adopted once, survive Host/Node/Relay restart, and resume natively with marker continuity. Relay-only discovery/adoption/resume, wrong-project exclusion, no inference during discovery/adoption, Provider-store immutability, and Direct/Relay new-session regressions are mandatory.
+- Deterministic tests cover path/Machine/Provider isolation, opaque/private identity boundaries, duplicate and concurrent adoption, stale candidates, corrupt/unknown stores, pagination and 1,000-session bounds, cancellation/coalescing, restart binding, removed sessions, organization/Search, and no transcript replay.
+- UI/accessibility, Node SEA, Desktop/NSIS, Machine/Relay smoke, workspace gates, evidence privacy, exact cleanup, matching build identity, and clean worktree must pass without weakening Phase 7.
+
+## Phase 8B — Provider Lifecycle & Compatibility
+
+**Status:** planned; unimplemented and unauthorized during Phase 8A.
+
+**Goal:** manage Provider-version discovery compatibility and lifecycle without weakening the adapter boundary.
+
+## Phase 8C — Provider Backend / Profile Management
+
+**Status:** planned; unimplemented and unauthorized during Phase 8A.
+
+**Goal:** model configured Provider backends/profiles and explicit switching as a separate product concern.
+
+## Phase 8D — Zero-Configuration Onboarding / Doctor
+
+**Status:** planned; unimplemented and unauthorized during Phase 8A.
+
+**Goal:** broaden installation, project, Provider, and connectivity onboarding after the narrow existing-session flow is proven.
+
+## Phase 9 — Mobile Companion
+
+**Status:** planned; unimplemented and unauthorized during Phase 8A.
+
+**Goal:** add focused mobile monitoring, approval, reply, and resume flows on the established Internet foundation.
 
 Planned outcomes:
 
@@ -1222,20 +1268,6 @@ Planned outcomes:
 - Explicit separation from desktop-only dense workflows.
 
 Exit gate: core mobile tasks are fast, legible, safe, resilient, and validated on representative devices.
-
-## Phase 9 — OpenCode
-
-**Status:** planned; unimplemented and unauthorized during Phase 7D.
-
-**Goal:** add OpenCode through the established adapter model.
-
-Planned outcomes:
-
-- OpenCode detection, capabilities, session lifecycle, and normalized events.
-- Provider comparison and compatibility coverage.
-- No provider-specific branching in shared product UI unless an approved capability difference requires it.
-
-Exit gate: OpenCode passes the shared adapter contract and core conversation workflows without weakening existing providers.
 
 ## Deferred Beyond This Roadmap
 

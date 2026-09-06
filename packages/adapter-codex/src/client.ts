@@ -14,6 +14,10 @@ import {
   type RemoteCodexProcessFactory,
 } from './process.js'
 import type {
+  CodexStoredThread,
+  CodexStoredThreadPage,
+  CodexStoredThreadSource,
+  CodexStoredThreadStatus,
   CodexThread,
   CodexTurn,
   InitializeResult,
@@ -128,7 +132,27 @@ export interface RemoteTextTurnOptions {
   readonly prompt: string
 }
 
+export interface ListStoredThreadsOptions {
+  readonly cwd: string
+  readonly cursor?: string
+  readonly limit: number
+  readonly sourceKinds?: readonly CodexStoredThreadSource[]
+}
+
+export interface ReadStoredThreadOptions {
+  readonly threadId: string
+}
+
 const SERVER_REQUEST_DRAIN_TIMEOUT_MS = 2_000
+export const MAX_CODEX_STORED_THREAD_PAGE_SIZE = 100
+export const MAX_CODEX_STORED_THREAD_CURSOR_CODE_UNITS = 512
+export const MAX_CODEX_STORED_THREAD_ID_CODE_UNITS = 512
+const MAX_CODEX_STORED_THREAD_VERSION_CODE_UNITS = 120
+const DEFAULT_CODEX_DISCOVERY_SOURCES = [
+  'cli',
+  'vscode',
+  'appServer',
+] as const satisfies readonly CodexStoredThreadSource[]
 
 /** Coordinates the App Server handshake and the small Thread/Turn spike API. */
 export class CodexAppServerClient {
@@ -390,6 +414,52 @@ export class CodexAppServerClient {
     const parsed = parseTurnStartResult(result)
     this.#lifecycle.activate(options.threadId, parsed.turn.id)
     return parsed
+  }
+
+  /**
+   * Reads only bounded persisted-thread metadata. useStateDbOnly prevents the
+   * Provider's default rollout scan-and-repair path; no execution method is
+   * issued by this operation.
+   */
+  async listStoredThreads(
+    options: ListStoredThreadsOptions,
+  ): Promise<CodexStoredThreadPage> {
+    this.#assertOpen()
+    assertAbsoluteCwd(options.cwd, 'thread/list')
+    assertStoredThreadPageSize(options.limit)
+    assertStoredThreadCursor(options.cursor)
+    const result = await this.#transport.request<unknown>('thread/list', {
+      ...(options.cursor === undefined ? {} : { cursor: options.cursor }),
+      limit: options.limit,
+      cwd: options.cwd,
+      sortKey: 'updated_at',
+      sortDirection: 'desc',
+      modelProviders: [],
+      sourceKinds: options.sourceKinds ?? DEFAULT_CODEX_DISCOVERY_SOURCES,
+      archived: false,
+      useStateDbOnly: true,
+    })
+    return parseStoredThreadPage(result, options.limit)
+  }
+
+  /** Reads one stored thread's metadata without loading turns or resuming it. */
+  async readStoredThread(
+    options: ReadStoredThreadOptions,
+  ): Promise<CodexStoredThread> {
+    this.#assertOpen()
+    if (
+      options.threadId.length === 0 ||
+      options.threadId.length > MAX_CODEX_STORED_THREAD_ID_CODE_UNITS ||
+      options.threadId.includes('\0')
+    ) {
+      throw new CodexProtocolError('thread/read threadId is invalid')
+    }
+    const result = await this.#transport.request<unknown>('thread/read', {
+      threadId: options.threadId,
+      includeTurns: false,
+    })
+    const record = requireRecord(result, 'thread/read response')
+    return parseStoredThread(record.thread, 'thread/read response')
   }
 
   async interruptTurn(options: {
@@ -792,6 +862,169 @@ function parseInitializeResult(value: unknown): InitializeResult {
     ),
     platformOs: requireString(record, 'platformOs', 'initialize response'),
   }
+}
+
+function assertStoredThreadPageSize(limit: number): void {
+  if (
+    !Number.isSafeInteger(limit) ||
+    limit <= 0 ||
+    limit > MAX_CODEX_STORED_THREAD_PAGE_SIZE
+  ) {
+    throw new RangeError(
+      `thread/list limit must be between 1 and ${MAX_CODEX_STORED_THREAD_PAGE_SIZE}`,
+    )
+  }
+}
+
+function assertStoredThreadCursor(cursor: string | undefined): void {
+  if (
+    cursor !== undefined &&
+    (cursor.length === 0 ||
+      cursor.length > MAX_CODEX_STORED_THREAD_CURSOR_CODE_UNITS)
+  ) {
+    throw new RangeError('thread/list cursor is invalid')
+  }
+}
+
+function parseStoredThreadPage(
+  value: unknown,
+  requestedLimit: number,
+): CodexStoredThreadPage {
+  const record = requireRecord(value, 'thread/list response')
+  if (!Array.isArray(record.data)) {
+    throw new CodexProtocolError('thread/list response is missing data')
+  }
+  if (record.data.length > requestedLimit) {
+    throw new CodexProtocolError(
+      'thread/list response exceeded requested limit',
+    )
+  }
+
+  const threads: CodexStoredThread[] = []
+  let invalidEntryCount = 0
+  for (const value of record.data) {
+    try {
+      threads.push(parseStoredThread(value, 'thread/list response'))
+    } catch {
+      invalidEntryCount += 1
+    }
+  }
+
+  const nextCursor = record.nextCursor
+  if (
+    nextCursor !== undefined &&
+    nextCursor !== null &&
+    (typeof nextCursor !== 'string' ||
+      nextCursor.length > MAX_CODEX_STORED_THREAD_CURSOR_CODE_UNITS)
+  ) {
+    throw new CodexProtocolError('thread/list response has invalid nextCursor')
+  }
+  return {
+    threads,
+    invalidEntryCount,
+    ...(typeof nextCursor === 'string' && nextCursor.length > 0
+      ? { nextCursor }
+      : {}),
+  }
+}
+
+function parseStoredThread(value: unknown, context: string): CodexStoredThread {
+  const record = requireRecord(value, context)
+  const source = requireString(record, 'source', context)
+  if (!isCodexStoredThreadSource(source)) {
+    throw new CodexProtocolError(`${context} has unsupported source`)
+  }
+  const statusRecord = requireRecord(record.status, context)
+  const status = requireString(statusRecord, 'type', context)
+  if (!isCodexStoredThreadStatus(status)) {
+    throw new CodexProtocolError(`${context} has unsupported status`)
+  }
+  if (typeof record.ephemeral !== 'boolean') {
+    throw new CodexProtocolError(`${context} is missing ephemeral`)
+  }
+  const createdAt = requireTimestamp(record, 'createdAt', context)
+  const updatedAt = requireTimestamp(record, 'updatedAt', context)
+  const recencyAt = readOptionalTimestamp(record, 'recencyAt', context)
+  const name = readString(record, 'name')
+  return {
+    id: requireBoundedString(
+      record,
+      'id',
+      context,
+      MAX_CODEX_STORED_THREAD_ID_CODE_UNITS,
+    ),
+    cwd: requireString(record, 'cwd', context),
+    ...(name === undefined ? {} : { name }),
+    createdAt,
+    updatedAt,
+    ...(recencyAt === undefined ? {} : { recencyAt }),
+    cliVersion: requireBoundedString(
+      record,
+      'cliVersion',
+      context,
+      MAX_CODEX_STORED_THREAD_VERSION_CODE_UNITS,
+    ),
+    modelProvider: requireBoundedString(
+      record,
+      'modelProvider',
+      context,
+      MAX_CODEX_STORED_THREAD_VERSION_CODE_UNITS,
+    ),
+    source,
+    status,
+    ephemeral: record.ephemeral,
+  }
+}
+
+function requireBoundedString(
+  value: Record<string, unknown>,
+  key: string,
+  context: string,
+  maximumCodeUnits: number,
+): string {
+  const result = requireString(value, key, context)
+  if (
+    result.length === 0 ||
+    result.length > maximumCodeUnits ||
+    result.includes('\0')
+  ) {
+    throw new CodexProtocolError(`${context} has invalid ${key}`)
+  }
+  return result
+}
+
+function requireTimestamp(
+  value: Record<string, unknown>,
+  key: string,
+  context: string,
+): number {
+  const result = value[key]
+  if (!Number.isSafeInteger(result) || Number(result) < 0) {
+    throw new CodexProtocolError(`${context} has invalid ${key}`)
+  }
+  return Number(result)
+}
+
+function readOptionalTimestamp(
+  value: Record<string, unknown>,
+  key: string,
+  context: string,
+): number | undefined {
+  const result = value[key]
+  if (result === undefined || result === null) return undefined
+  return requireTimestamp(value, key, context)
+}
+
+function isCodexStoredThreadSource(
+  value: string,
+): value is CodexStoredThreadSource {
+  return DEFAULT_CODEX_DISCOVERY_SOURCES.some((source) => source === value)
+}
+
+function isCodexStoredThreadStatus(
+  value: string,
+): value is CodexStoredThreadStatus {
+  return ['notLoaded', 'idle', 'active', 'systemError'].includes(value)
 }
 
 function parseThreadResult(value: unknown, context: string): ThreadStartResult {

@@ -54,6 +54,7 @@ test('discovers only exact, unloaded, durable Codex sessions with bounded metada
       tracker,
       threads: [
         storedThread(),
+        storedThread({ id: 'exec-thread', source: 'exec' }),
         storedThread(),
         storedThread({ id: 'thread-b', name: undefined }),
         storedThread({ id: 'other-project', cwd: otherRoot }),
@@ -71,9 +72,10 @@ test('discovers only exact, unloaded, durable Codex sessions with bounded metada
 
   assert.equal(page.status, 'supported')
   assert.equal(page.providerVersion, '0.149.1')
-  assert.equal(page.candidates.length, 2)
+  assert.equal(page.candidates.length, 3)
   assert.equal(page.candidates[0].title, 'Existing Codex conversation')
-  assert.match(page.candidates[1].title, /^Codex conversation \u2014 /)
+  assert.equal(page.candidates[1].title, 'Existing Codex conversation')
+  assert.match(page.candidates[2].title, /^Codex conversation \u2014 /)
   assert.deepEqual(
     page.candidates.map(({ provider, workingDirectory, resumeStatus }) => ({
       provider,
@@ -91,12 +93,17 @@ test('discovers only exact, unloaded, durable Codex sessions with bounded metada
         workingDirectory: projectRoot,
         resumeStatus: 'supported',
       },
+      {
+        provider: 'codex',
+        workingDirectory: projectRoot,
+        resumeStatus: 'supported',
+      },
     ],
   )
   assert.deepEqual(page.metrics, {
     filesInspected: 0,
-    candidatesParsed: 6,
-    candidatesMatched: 2,
+    candidatesParsed: 7,
+    candidatesMatched: 3,
     corruptEntriesSkipped: 0,
     elapsedMs: page.metrics.elapsedMs,
     truncated: false,

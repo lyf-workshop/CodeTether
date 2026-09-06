@@ -62,7 +62,7 @@ Discovery readiness and native-resume readiness are independent. Each scan repor
 
 ### Codex
 
-The Codex adapter uses the installed Codex app-server's official metadata-only `thread/list` operation with `useStateDbOnly: true` and the exact canonical working directory. Adoption revalidation uses metadata-only `thread/read` without turns. The adapter never invokes `thread/start`, `thread/resume`, or `turn/start` during discovery/adoption. It launches only a bounded purpose-scoped metadata child and awaits exact shutdown.
+The Codex adapter uses the installed Codex app-server's official metadata-only `thread/list` operation with `useStateDbOnly: true`, all supported interactive/CLI source kinds (including sessions created by `codex exec`), and the exact canonical working directory. Adoption revalidation uses metadata-only `thread/read` without turns. The adapter never invokes `thread/start`, `thread/resume`, or `turn/start` during discovery/adoption. It launches only a bounded purpose-scoped metadata child and awaits exact shutdown.
 
 The state-database-only query is intentionally conservative. Legacy native sessions absent from the current Codex state database may not be discoverable; broader storage/version compatibility belongs to Phase 8B.
 

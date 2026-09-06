@@ -150,6 +150,7 @@ export const MAX_CODEX_STORED_THREAD_ID_CODE_UNITS = 512
 const MAX_CODEX_STORED_THREAD_VERSION_CODE_UNITS = 120
 const DEFAULT_CODEX_DISCOVERY_SOURCES = [
   'cli',
+  'exec',
   'vscode',
   'appServer',
 ] as const satisfies readonly CodexStoredThreadSource[]

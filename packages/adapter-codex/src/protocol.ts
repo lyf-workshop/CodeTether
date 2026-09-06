@@ -41,7 +41,7 @@ export interface CodexThread {
   readonly cwd?: string
 }
 
-export type CodexStoredThreadSource = 'cli' | 'vscode' | 'appServer'
+export type CodexStoredThreadSource = 'cli' | 'exec' | 'vscode' | 'appServer'
 
 export type CodexStoredThreadStatus =
   'notLoaded' | 'idle' | 'active' | 'systemError'

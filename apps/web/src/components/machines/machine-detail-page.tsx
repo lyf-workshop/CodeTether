@@ -1,4 +1,10 @@
-import { useState, type ReactNode } from 'react'
+import {
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { Link, useParams } from '@tanstack/react-router'
 import {
@@ -82,6 +88,8 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
   const localProviderRefreshMutation = useMutation({
     mutationFn: async () => await runtime.refreshMachineProviders(machineId),
   })
+  const [localProviderRefreshButtonRef, rememberLocalProviderRefreshFocus] =
+    useProviderRefreshFocusRestoration(localProviderRefreshMutation.isPending)
   const localProviderRefreshAvailable = hostConnectionState === 'connected'
   const connectionUnavailable =
     hostConnectionState === 'unavailable' ||
@@ -239,6 +247,7 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
               </p>
             </div>
             <Button
+              ref={localProviderRefreshButtonRef}
               variant="secondary"
               size="sm"
               disabled={
@@ -255,7 +264,10 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
                   ? undefined
                   : 'CodeTether Host 连接恢复后才能重新检测智能体'
               }
-              onClick={() => localProviderRefreshMutation.mutate()}
+              onClick={() => {
+                rememberLocalProviderRefreshFocus()
+                localProviderRefreshMutation.mutate()
+              }}
             >
               <RefreshCw
                 aria-hidden="true"
@@ -697,6 +709,8 @@ function RemoteMachineProvidersSection({
   refreshError: unknown
   refreshPending: boolean
 }) {
+  const [providerRefreshButtonRef, rememberProviderRefreshFocus] =
+    useProviderRefreshFocusRestoration(refreshPending)
   const observed =
     discovery?.state !== 'not_observed' && discovery !== undefined
   const presentations = observed
@@ -727,6 +741,7 @@ function RemoteMachineProvidersSection({
           </p>
         </div>
         <Button
+          ref={providerRefreshButtonRef}
           variant="secondary"
           size="sm"
           disabled={!canRefresh || refreshPending}
@@ -734,7 +749,10 @@ function RemoteMachineProvidersSection({
             canRefresh ? undefined : 'remote-provider-refresh-unavailable'
           }
           title={canRefresh ? undefined : '远程机器在线后才能重新检测智能体'}
-          onClick={onRefresh}
+          onClick={() => {
+            rememberProviderRefreshFocus()
+            onRefresh()
+          }}
         >
           <RefreshCw
             aria-hidden="true"
@@ -830,6 +848,48 @@ function RemoteMachineProvidersSection({
       ) : null}
     </section>
   )
+}
+
+function useProviderRefreshFocusRestoration(
+  refreshPending: boolean,
+): readonly [RefObject<HTMLButtonElement | null>, () => void] {
+  const buttonRef = useRef<HTMLButtonElement>(null)
+  const previousPendingRef = useRef(refreshPending)
+  const restoreFocusRef = useRef(false)
+
+  useLayoutEffect(() => {
+    const wasPending = previousPendingRef.current
+    previousPendingRef.current = refreshPending
+
+    if (refreshPending && restoreFocusRef.current) {
+      const disarmFocusRestoration = (): void => {
+        restoreFocusRef.current = false
+      }
+      document.addEventListener('pointerdown', disarmFocusRestoration, true)
+      document.addEventListener('keydown', disarmFocusRestoration, true)
+      return () => {
+        document.removeEventListener(
+          'pointerdown',
+          disarmFocusRestoration,
+          true,
+        )
+        document.removeEventListener('keydown', disarmFocusRestoration, true)
+      }
+    }
+
+    if (!wasPending || !restoreFocusRef.current) return
+
+    restoreFocusRef.current = false
+    if (document.activeElement === document.body) {
+      buttonRef.current?.focus()
+    }
+  }, [refreshPending])
+
+  function rememberFocus(): void {
+    restoreFocusRef.current = document.activeElement === buttonRef.current
+  }
+
+  return [buttonRef, rememberFocus] as const
 }
 
 function MachineProviderLifecycleDetails({

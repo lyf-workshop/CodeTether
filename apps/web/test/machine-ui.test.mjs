@@ -88,6 +88,51 @@ test('Machine Provider lifecycle UI stays safe, status-readable, and refreshes t
   )
 })
 
+test('Provider refresh restores keyboard focus after its bounded pending state settles', async () => {
+  const detail = await source('components/machines/machine-detail-page.tsx')
+
+  assert.match(detail, /useProviderRefreshFocusRestoration\(/u)
+  assert.match(
+    detail,
+    /useProviderRefreshFocusRestoration\(\s*localProviderRefreshMutation\.isPending/u,
+  )
+  assert.match(detail, /useProviderRefreshFocusRestoration\(refreshPending\)/u)
+  assert.match(detail, /ref=\{localProviderRefreshButtonRef\}/u)
+  assert.match(detail, /ref=\{providerRefreshButtonRef\}/u)
+  assert.match(
+    detail,
+    /rememberLocalProviderRefreshFocus\(\)\s*localProviderRefreshMutation\.mutate\(\)/u,
+  )
+  assert.match(detail, /rememberProviderRefreshFocus\(\)\s*onRefresh\(\)/u)
+  assert.match(
+    detail,
+    /restoreFocusRef\.current = document\.activeElement === buttonRef\.current/u,
+  )
+  assert.match(detail, /if \(refreshPending && restoreFocusRef\.current\)/u)
+  assert.match(
+    detail,
+    /document\.addEventListener\('pointerdown', disarmFocusRestoration, true\)/u,
+  )
+  assert.match(
+    detail,
+    /document\.addEventListener\('keydown', disarmFocusRestoration, true\)/u,
+  )
+  assert.match(
+    detail,
+    /document\.removeEventListener\(\s*'pointerdown',\s*disarmFocusRestoration,\s*true,?\s*\)/u,
+  )
+  assert.match(
+    detail,
+    /document\.removeEventListener\(\s*'keydown',\s*disarmFocusRestoration,\s*true,?\s*\)/u,
+  )
+  assert.match(
+    detail,
+    /if \(!wasPending \|\| !restoreFocusRef\.current\) return/u,
+  )
+  assert.match(detail, /document\.activeElement === document\.body/u)
+  assert.match(detail, /buttonRef\.current\?\.focus\(\)/u)
+})
+
 test('remote Machine Detail separates direct reachability from the Host-selected execution transport', async () => {
   const detail = await source('components/machines/machine-detail-page.tsx')
   const remoteDetail = sourceSection(

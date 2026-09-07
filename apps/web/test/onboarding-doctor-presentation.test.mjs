@@ -457,6 +457,15 @@ test('remote Doctor cards show connection-specific recovery and bounded Provider
   assert.match(doctor, /backendReadinessLabel\(provider\.backend\)/u)
   assert.match(doctor, /sessionDiscoveryLabel\(provider\.sessionDiscovery\)/u)
   assert.match(doctor, /doctorOverallPresentation\(doctor\)/u)
+  assert.match(doctor, /restoreCheckFocusRef\.current = true/u)
+  assert.match(
+    doctor,
+    /!restoreCheckFocusRef\.current[\s\S]*restoreCheckFocusRef\.current = false[\s\S]*checkButtonRef\.current\?\.focus\(\)/u,
+  )
+  assert.doesNotMatch(
+    doctor,
+    /requestAnimationFrame\(\(\) => checkButtonRef\.current\?\.focus\(\)\)/u,
+  )
   assert.match(
     doctor,
     /provider\.state !== 'ready'[\s\S]*providerRepairText\(provider\)/u,

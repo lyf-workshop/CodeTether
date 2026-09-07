@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useSearch } from '@tanstack/react-router'
 import {
@@ -68,6 +68,7 @@ export function DoctorPage() {
   const navigate = useNavigate()
   const search = useSearch({ from: '/doctor' })
   const checkButtonRef = useRef<HTMLButtonElement>(null)
+  const restoreCheckFocusRef = useRef(false)
   const refreshCoordinatorRef = useRef(new DoctorRefreshCoordinator())
   const [checking, setChecking] = useState(false)
   const [checkIssue, setCheckIssue] = useState<'partial' | 'failed'>()
@@ -84,6 +85,13 @@ export function DoctorPage() {
         onboardingQuery.data !== undefined ||
         onboardingQuery.isError),
   })
+  useEffect(() => {
+    if (checking || doctorQuery.isFetching || !restoreCheckFocusRef.current) {
+      return
+    }
+    restoreCheckFocusRef.current = false
+    checkButtonRef.current?.focus()
+  }, [checking, doctorQuery.isFetching])
   const reopenMutation = useMutation({
     mutationFn: async () => {
       const progress = onboardingQuery.data
@@ -96,6 +104,7 @@ export function DoctorPage() {
 
   function checkAgain(): Promise<void> {
     return refreshCoordinatorRef.current.run(async () => {
+      restoreCheckFocusRef.current = true
       setChecking(true)
       setCheckIssue(undefined)
       try {
@@ -136,7 +145,6 @@ export function DoctorPage() {
         }
       } finally {
         setChecking(false)
-        requestAnimationFrame(() => checkButtonRef.current?.focus())
       }
     })
   }

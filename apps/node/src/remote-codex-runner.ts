@@ -1037,12 +1037,13 @@ export function validateRemoteCodexTextNotification(
       return
     }
     case 'deprecationNotice': {
-      const params = requireExactRawRecord(notification.params, [
-        'details',
-        'summary',
-      ])
-      requireBoundedRawMetadataText(params.details)
-      requireBoundedRawMetadataText(params.summary)
+      const params = requireRawRecord(notification.params)
+      requireAllowedRawKeys(params, ['details', 'summary'])
+      if (!Object.hasOwn(params, 'summary')) throw remotePolicyViolation()
+      requireBoundedRawDeprecationText(params.summary)
+      if (Object.hasOwn(params, 'details') && params.details !== null) {
+        requireBoundedRawDeprecationText(params.details)
+      }
       return
     }
     case 'warning': {
@@ -1340,6 +1341,16 @@ function requireBoundedRawMetadataText(value: unknown): void {
   if (
     typeof value !== 'string' ||
     value.length === 0 ||
+    value.includes('\0') ||
+    Buffer.byteLength(value, 'utf8') > 4 * 1024
+  ) {
+    throw remotePolicyViolation()
+  }
+}
+
+function requireBoundedRawDeprecationText(value: unknown): void {
+  if (
+    typeof value !== 'string' ||
     value.includes('\0') ||
     Buffer.byteLength(value, 'utf8') > 4 * 1024
   ) {

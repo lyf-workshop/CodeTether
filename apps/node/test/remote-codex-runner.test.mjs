@@ -614,12 +614,20 @@ test('raw notification policy admits only text lifecycle and private reasoning',
       },
     }),
   )
-  assert.doesNotThrow(() =>
-    validateRemoteCodexTextNotification({
-      method: 'deprecationNotice',
-      params: { details: 'private details', summary: 'private summary' },
-    }),
-  )
+  // Codex 0.152 emits the official optional/null details shape while resuming.
+  for (const params of [
+    { summary: 'private summary' },
+    { details: null, summary: 'private summary' },
+    { details: 'private details', summary: 'private summary' },
+    { details: '', summary: '' },
+  ]) {
+    assert.doesNotThrow(() =>
+      validateRemoteCodexTextNotification({
+        method: 'deprecationNotice',
+        params,
+      }),
+    )
+  }
   assert.doesNotThrow(() =>
     validateRemoteCodexTextNotification({
       method: 'warning',
@@ -752,6 +760,34 @@ test('raw notification policy admits only text lifecycle and private reasoning',
     {
       method: 'deprecationNotice',
       params: { details: 'x'.repeat(4 * 1024 + 1), summary: 'summary' },
+    },
+    {
+      method: 'deprecationNotice',
+      params: { details: null },
+    },
+    {
+      method: 'deprecationNotice',
+      params: { details: undefined, summary: 'summary' },
+    },
+    {
+      method: 'deprecationNotice',
+      params: { details: null, summary: null },
+    },
+    {
+      method: 'deprecationNotice',
+      params: { details: null, summary: 'summary\0' },
+    },
+    {
+      method: 'deprecationNotice',
+      params: { details: 'details\0', summary: 'summary' },
+    },
+    {
+      method: 'deprecationNotice',
+      params: { details: null, summary: 'x'.repeat(4 * 1024 + 1) },
+    },
+    {
+      method: 'deprecationNotice',
+      params: { details: null, summary: 'summary', unexpected: true },
     },
     {
       method: 'warning',

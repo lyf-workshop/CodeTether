@@ -827,9 +827,9 @@ export const RemoteProviderDescriptorSchema = z
         (installation) => installation.selected,
       )
       if (
-        (descriptor.installations.length === 0 &&
-          descriptor.selectedInstallationId !== undefined) ||
-        (descriptor.installations.length > 0 &&
+        (descriptor.selectedInstallationId === undefined &&
+          selected.length !== 0) ||
+        (descriptor.selectedInstallationId !== undefined &&
           (selected.length !== 1 ||
             selected[0]?.installationId !== descriptor.selectedInstallationId))
       ) {

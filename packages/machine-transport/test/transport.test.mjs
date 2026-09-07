@@ -568,6 +568,44 @@ test('Provider discovery messages are purpose-specific and presentation-safe', (
     RemoteProviderDescriptorSchema.safeParse(descriptorWithLifecycle).success,
     true,
   )
+  const descriptorWithUnselectedInstallations = {
+    ...descriptorWithLifecycle,
+    availability: 'unavailable',
+    installations: descriptorWithLifecycle.installations.map(
+      (installation) => ({
+        ...installation,
+        selected: false,
+      }),
+    ),
+    selectedInstallationId: undefined,
+  }
+  assert.equal(
+    RemoteProviderDescriptorSchema.safeParse(
+      descriptorWithUnselectedInstallations,
+    ).success,
+    true,
+  )
+  assert.equal(
+    RemoteProviderDescriptorSchema.safeParse({
+      ...descriptorWithUnselectedInstallations,
+      selectedInstallationId: providerInstallationId,
+    }).success,
+    false,
+  )
+  assert.equal(
+    RemoteProviderDescriptorSchema.safeParse({
+      ...descriptorWithLifecycle,
+      selectedInstallationId: undefined,
+    }).success,
+    false,
+  )
+  assert.equal(
+    RemoteProviderDescriptorSchema.safeParse({
+      ...descriptorWithLifecycle,
+      selectedInstallationId: 'provider_installation_abcdef1234567890',
+    }).success,
+    false,
+  )
   assert.equal(
     RemoteProviderDescriptorSchema.safeParse({
       ...descriptorWithLifecycle,

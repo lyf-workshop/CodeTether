@@ -10,6 +10,8 @@ import {
   ClaudeCodeOwnedProcessCleanupError,
   detectClaudeCode,
   prepareClaudeCode,
+  probeClaudeCodeHelp,
+  probeClaudeCodeVersion,
 } from '../dist/index.js'
 
 const fixture = fileURLToPath(
@@ -126,6 +128,39 @@ test('maps invalid output and a missing executable to distinct states', async ()
   })
   assert.equal(missing.status, 'notInstalled')
   assert.equal(missing.diagnosticCode, 'provider_not_installed')
+})
+
+test('bounds metadata probes at 4 KiB while admitting bounded real-world help output', async () => {
+  const realWorldHelpBytes = 24 * 1024
+  const help = await probeClaudeCodeHelp(launcher, {
+    environment: {
+      ...process.env,
+      FAKE_CLAUDE_HELP_BYTES: String(realWorldHelpBytes),
+    },
+  })
+  assert.equal(Buffer.byteLength(help), realWorldHelpBytes)
+
+  await assert.rejects(
+    probeClaudeCodeVersion(launcher, {
+      environment: {
+        ...process.env,
+        FAKE_CLAUDE_VERSION: '9'.repeat(4097),
+      },
+    }),
+    { diagnosticCode: 'version_probe_failed' },
+  )
+})
+
+test('rejects compatibility-contract help output beyond its distinct bound', async () => {
+  await assert.rejects(
+    probeClaudeCodeHelp(launcher, {
+      environment: {
+        ...process.env,
+        FAKE_CLAUDE_HELP_BYTES: String(64 * 1024 + 1),
+      },
+    }),
+    { diagnosticCode: 'contract_probe_failed' },
+  )
 })
 
 test('requires a bounded machine-readable logged-in auth status', async () => {

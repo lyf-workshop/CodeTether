@@ -36,6 +36,15 @@ if (arguments_.includes('--version')) {
   } else {
     process.stdout.write(`${version} (Claude Code)\n`)
   }
+} else if (arguments_.includes('--help')) {
+  const helpBytes = Number.parseInt(
+    fixtureOptions['help-bytes'] ?? process.env.FAKE_CLAUDE_HELP_BYTES ?? '0',
+    10,
+  )
+  if (!Number.isSafeInteger(helpBytes) || helpBytes < 0) {
+    throw new Error('invalid fixture help byte count')
+  }
+  process.stdout.write('H'.repeat(helpBytes))
 } else if (
   arguments_[0] === 'auth' &&
   arguments_[1] === 'status' &&

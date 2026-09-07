@@ -27,6 +27,7 @@ import {
 } from './process.js'
 
 const MAX_DETECTION_OUTPUT_BYTES = 4096
+const MAX_CONTRACT_PROBE_OUTPUT_BYTES = 64 * 1024
 const DEFAULT_DETECTION_TIMEOUT_MS = 5000
 const MAX_DETECTION_CLOSE_GRACE_MS = 250
 const VERSION_PATTERN = /^(\d+\.\d+\.\d+) \(Claude Code\)$/
@@ -261,6 +262,10 @@ function probeCommand(
   diagnosticPrefix: 'version_probe' | 'auth_status_probe' | 'contract_probe',
 ): Promise<string> {
   const timeoutMs = options.timeoutMs ?? DEFAULT_DETECTION_TIMEOUT_MS
+  const maxOutputBytes =
+    diagnosticPrefix === 'contract_probe'
+      ? MAX_CONTRACT_PROBE_OUTPUT_BYTES
+      : MAX_DETECTION_OUTPUT_BYTES
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
     throw new RangeError('timeoutMs must be a positive safe integer')
   }
@@ -337,7 +342,7 @@ function probeCommand(
 
     child.stdout.on('data', (chunk: Buffer) => {
       stdoutBytes += chunk.byteLength
-      if (stdoutBytes <= MAX_DETECTION_OUTPUT_BYTES) stdout.push(chunk)
+      if (stdoutBytes <= maxOutputBytes) stdout.push(chunk)
       else {
         failAndClose(
           new ClaudeCodeDetectionProbeError(`${diagnosticPrefix}_failed`),
@@ -346,7 +351,7 @@ function probeCommand(
     })
     child.stderr.on('data', (chunk: Buffer) => {
       stderrBytes += chunk.byteLength
-      if (stderrBytes > MAX_DETECTION_OUTPUT_BYTES) {
+      if (stderrBytes > maxOutputBytes) {
         failAndClose(
           new ClaudeCodeDetectionProbeError(`${diagnosticPrefix}_failed`),
         )
@@ -366,8 +371,8 @@ function probeCommand(
         finish(() => {
           if (
             code !== 0 ||
-            stdoutBytes > MAX_DETECTION_OUTPUT_BYTES ||
-            stderrBytes > MAX_DETECTION_OUTPUT_BYTES
+            stdoutBytes > maxOutputBytes ||
+            stderrBytes > maxOutputBytes
           ) {
             reject(
               new ClaudeCodeDetectionProbeError(`${diagnosticPrefix}_failed`),

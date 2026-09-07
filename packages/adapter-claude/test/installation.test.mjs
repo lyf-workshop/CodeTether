@@ -104,6 +104,27 @@ test('preserves configured selection ahead of PATH while bounding candidate insp
   assert.equal(result.truncated, true)
 })
 
+test('inspects a late Windows PATH entry that remains within the declared entry bound', async (t) => {
+  const root = await fixture(t, 'codetether-claude-late-path-')
+  const pathDirectories = Array.from({ length: 20 }, (_, index) =>
+    join(root, `path-${String(index).padStart(2, '0')}`),
+  )
+  const late = await executable(join(pathDirectories[18], 'claude.exe'))
+
+  const result = await discoverClaudeCodeInstallations({
+    platform: 'win32',
+    environment: { PATH: pathDirectories.join(delimiter) },
+    knownPaths: [],
+    maximumPathEntries: pathDirectories.length,
+    maximumInstallations: 2,
+  })
+
+  assert.equal(result.installations.length, 1)
+  assert.equal(result.installations[0].launcherPath, late)
+  assert.equal(result.pathsInspected, pathDirectories.length * 2)
+  assert.equal(result.truncated, false)
+})
+
 test('propagates lifecycle cancellation before filesystem discovery', async () => {
   const controller = new AbortController()
   const reason = new Error('discovery cancelled')

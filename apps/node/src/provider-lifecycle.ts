@@ -655,7 +655,11 @@ export class NodeProviderLifecycleCoordinator {
       const selectedId =
         state.selected[provider] ??
         previousSelectedId ??
-        current[0]?.installationId
+        current.find(
+          ({ descriptor }) =>
+            descriptor.availability === 'available' &&
+            executionReady(provider, descriptor.compatibility),
+        )?.installationId
       if (selectedId !== undefined && state.selected[provider] === undefined) {
         state.selected[provider] = selectedId
       }

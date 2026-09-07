@@ -226,7 +226,16 @@ function boundedCandidatePaths(options: {
 }): { readonly paths: readonly string[]; readonly truncated: boolean } {
   const paths: string[] = []
   let truncated = false
-  const maximumPaths = Math.max(options.maximumInstallations * 4, 16)
+  // `maximumPathEntries` bounds directories, while Windows contributes two
+  // fixed executable names per directory. Keep separate bounded headroom for
+  // configured/previous/known locations so those sources cannot cause the
+  // PATH scan to stop after only half (or less) of its declared entry bound.
+  const candidatesPerPathEntry = options.platform === 'win32' ? 2 : 1
+  const maximumPaths = Math.max(
+    options.maximumPathEntries * candidatesPerPathEntry +
+      options.maximumInstallations * 4,
+    16,
+  )
   const add = (path: string | undefined): void => {
     if (path === undefined || !isAbsolute(path)) return
     if (paths.length >= maximumPaths) {

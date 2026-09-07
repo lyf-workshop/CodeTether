@@ -1,4 +1,4 @@
-import { normalize } from 'node:path'
+import { isAbsolute, normalize } from 'node:path'
 
 import {
   CLAUDE_CODE_CAPABILITIES,
@@ -273,7 +273,28 @@ export class LocalProviderLifecycleCoordinator {
     const observed = scan.installations
     let selectedInstallationId = previous?.selectedInstallationId
     if (selectedInstallationId === undefined) {
-      selectedInstallationId = observed[0]?.durable.installationId
+      const configuredCodexInstallationId =
+        provider === 'codex' &&
+        this.#options.codexExecutable !== undefined &&
+        isAbsolute(this.#options.codexExecutable)
+          ? installationIdentity(
+              this.#options.machineId,
+              provider,
+              this.#options.codexExecutable,
+              this.#options.platform ?? process.platform,
+            ).installationId
+          : undefined
+      selectedInstallationId =
+        configuredCodexInstallationId === undefined
+          ? observed.find(({ durable }) =>
+              localInstallationExecutionReady(provider, durable),
+            )?.durable.installationId
+          : observed.some(
+                ({ durable }) =>
+                  durable.installationId === configuredCodexInstallationId,
+              )
+            ? configuredCodexInstallationId
+            : undefined
     }
     const absent = [...previousInstallations.values()]
       .filter(
@@ -634,7 +655,7 @@ export class LocalProviderLifecycleCoordinator {
     if (
       installation !== undefined &&
       installation.revision !== undefined &&
-      installation.compatibility?.freshness === 'current' &&
+      localInstallationExecutionReady(provider, installation) &&
       existing?.installation?.installationId === installation.installationId &&
       existing.installation.installationRevision === installation.revision &&
       existing.available !== false
@@ -644,16 +665,8 @@ export class LocalProviderLifecycleCoordinator {
     if (
       selected === undefined ||
       installation === undefined ||
-      installation.availability !== 'available' ||
       installation.revision === undefined ||
-      installation.compatibility?.freshness !== 'current' ||
-      installation.compatibility?.capabilities.execution.effective !== true ||
-      installation.compatibility.capabilities.streaming.effective !== true ||
-      (provider === 'claude-code' &&
-        (installation.compatibility.capabilities.fileRead.effective !== true ||
-          installation.compatibility.capabilities.search.effective !== true ||
-          installation.compatibility.capabilities.toolEvents.effective !==
-            true))
+      !localInstallationExecutionReady(provider, installation)
     ) {
       return unavailableRuntime(
         provider,
@@ -1182,4 +1195,25 @@ function defaultCapabilities(
     toolEvents: unavailable('toolEvents'),
     reasoningControl: unavailable('reasoningControl'),
   }
+}
+
+function localInstallationExecutionReady(
+  provider: AgentProvider,
+  installation: DurableProviderInstallation,
+): boolean {
+  const compatibility = installation.compatibility
+  return (
+    installation.availability === 'available' &&
+    installation.revision !== undefined &&
+    compatibility?.freshness === 'current' &&
+    compatibility.capabilities.execution.effective === true &&
+    compatibility.capabilities.streaming.effective === true &&
+    (compatibility.state === 'verified' ||
+      compatibility.state === 'compatible_unverified' ||
+      compatibility.state === 'limited') &&
+    (provider === 'codex' ||
+      (compatibility.capabilities.fileRead.effective === true &&
+        compatibility.capabilities.search.effective === true &&
+        compatibility.capabilities.toolEvents.effective === true))
+  )
 }

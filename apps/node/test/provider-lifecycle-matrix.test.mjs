@@ -116,6 +116,86 @@ test('capability-compatible malformed version output does not become execution a
   assert.equal(selected.executable, executable)
 })
 
+test('first selection skips an earlier incompatible installation and then remains durable', async (t) => {
+  const directory = await fixtureDirectory(t, 'first-eligible-selection')
+  const incompatiblePath = await executableFixture(
+    directory,
+    'codex-incompatible',
+    'incompatible-revision',
+  )
+  const compatiblePath = await executableFixture(
+    directory,
+    'codex-compatible',
+    'compatible-revision',
+  )
+  const incompatibleCandidate = codexCandidate(
+    incompatiblePath,
+    'file:codex-incompatible-first',
+  )
+  const compatibleCandidate = codexCandidate(
+    compatiblePath,
+    'file:codex-compatible-second',
+  )
+  let firstCandidateCompatible = false
+  const coordinator = new NodeProviderLifecycleCoordinator({
+    machineId: 'machine_provider_lifecycle_first_eligible',
+    dataDirectory: directory,
+    discoverCodex: async () =>
+      discovery([incompatibleCandidate, compatibleCandidate]),
+    observeCodex: async (options) => {
+      const observed = await codexObservation(options)
+      if (
+        options.installation.fileIdentity !==
+          incompatibleCandidate.fileIdentity ||
+        firstCandidateCompatible
+      ) {
+        return observed
+      }
+      const unsupported = {
+        observed: 'unsupported',
+        enabled: true,
+        effective: false,
+      }
+      return {
+        ...observed,
+        compatibility: {
+          state: 'incompatible',
+          runtimeReadiness: 'blocked',
+          contractVersion: 1,
+          failureCode: 'provider_protocol_error',
+          capabilities: {
+            execution: unsupported,
+            streaming: unsupported,
+            nativeResume: unsupported,
+            nativeSessionDiscovery: unsupported,
+            fileRead: unsupported,
+            search: unsupported,
+            toolEvents: unsupported,
+            reasoningControl: unsupported,
+          },
+        },
+      }
+    },
+  })
+  t.after(async () => coordinator.close())
+
+  const initial = await coordinator.refreshProvider('codex')
+  assert.equal(
+    initial.selected.observation.installation.executable,
+    compatiblePath,
+  )
+  const selectedId = initial.selected.installationId
+
+  firstCandidateCompatible = true
+  const refreshed = await coordinator.refreshProvider('codex')
+  assert.equal(refreshed.descriptor.selectedInstallationId, selectedId)
+  assert.equal(refreshed.selected.installationId, selectedId)
+  assert.equal(
+    refreshed.selected.observation.installation.executable,
+    compatiblePath,
+  )
+})
+
 test('an unknown newer Claude revision remains selectable when the frozen execution contract passes', async (t) => {
   const directory = await fixtureDirectory(t, 'claude-newer-selection')
   const executable = await executableFixture(directory, 'claude', 'revision')

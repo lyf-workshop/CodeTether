@@ -268,6 +268,235 @@ test('local truncated discovery retains an omitted selection as last-known until
   )
 })
 
+test('local first selection skips an earlier incompatible installation and remains stable', async (t) => {
+  const directory = await mkdtemp(
+    join(tmpdir(), 'codetether-phase8b-local-first-eligible-'),
+  )
+  const databasePath = join(directory, 'codetether.sqlite3')
+  const incompatiblePath = join(directory, 'claude-incompatible')
+  const compatiblePath = join(directory, 'claude-compatible')
+  await writeFile(incompatiblePath, 'incompatible-revision', 'utf8')
+  await writeFile(compatiblePath, 'compatible-revision', 'utf8')
+  const persistence = ConversationStore.open({ databasePath })
+  const machine = persistence.listMachines()[0]
+  assert.ok(machine)
+  const candidate = (launcherPath, fileIdentity) => ({
+    launcherPath,
+    launcher: {
+      kind: 'native',
+      launcherPath,
+      executable: launcherPath,
+      prefixArguments: [],
+      sourcePath: launcherPath,
+    },
+    fileIdentity,
+    launcherKind: 'native',
+    installMethod: 'manual',
+  })
+  const incompatibleCandidate = candidate(
+    incompatiblePath,
+    'local-incompatible-first',
+  )
+  const compatibleCandidate = candidate(
+    compatiblePath,
+    'local-compatible-second',
+  )
+  let firstCandidateCompatible = false
+  let now = new Date(observedAt)
+  const coordinator = await LocalProviderLifecycleCoordinator.create({
+    machineId: machine.machineId,
+    persistence,
+    hostVersion: 'phase8b-local-first-eligible-test',
+    environment: { PATH: '' },
+    now: () => now,
+    discoverCodex: async () => ({
+      installations: [],
+      pathsInspected: 0,
+      truncated: false,
+    }),
+    discoverClaude: async () => ({
+      installations: [incompatibleCandidate, compatibleCandidate],
+      pathsInspected: 2,
+      truncated: false,
+    }),
+    observeClaude: async (options) => {
+      const compatible =
+        options.installation.fileIdentity ===
+          compatibleCandidate.fileIdentity || firstCandidateCompatible
+      const capability = {
+        observed: compatible ? 'supported' : 'unsupported',
+        enabled: true,
+        effective: compatible,
+      }
+      return {
+        installation: options.installation,
+        version: compatible
+          ? options.installation.fileIdentity ===
+            compatibleCandidate.fileIdentity
+            ? '2.1.263-good'
+            : '2.1.263-now-good'
+          : '2.1.263-bad',
+        privateRevision: await options.fingerprint(),
+        compatibility: {
+          state: compatible ? 'verified' : 'incompatible',
+          runtimeReadiness: compatible ? 'ready' : 'blocked',
+          contractVersion: 1,
+          ...(compatible ? {} : { failureCode: 'provider_protocol_error' }),
+          capabilities: {
+            execution: capability,
+            streaming: capability,
+            nativeResume: capability,
+            nativeSessionDiscovery: capability,
+            fileRead: capability,
+            search: capability,
+            toolEvents: capability,
+            reasoningControl: capability,
+          },
+        },
+        backend: {
+          mode: 'custom_gateway',
+          source: 'process_environment',
+          hasBaseUrl: true,
+          hasApiKey: false,
+          hasAuthToken: true,
+          hasOAuthToken: false,
+          bedrockConfigured: false,
+          vertexConfigured: false,
+          configurationValid: true,
+          privateConfigurationRevision: 'local-first-eligible-backend',
+          readiness: 'unknown',
+        },
+        runtimeEnvironment: () => ({ PATH: '' }),
+      }
+    },
+  })
+  t.after(async () => {
+    await coordinator.close().catch(() => undefined)
+    persistence.close()
+    await rm(directory, { recursive: true, force: true, maxRetries: 5 })
+  })
+
+  const initial = coordinator.state('claude-code')
+  assert.ok(initial)
+  const selected = selectedInstallation(initial.lifecycle)
+  assert.equal(selected.version, '2.1.263-good')
+  const selectedId = selected.installationId
+
+  firstCandidateCompatible = true
+  now = new Date(changedAt)
+  const refreshed = await coordinator.refresh('claude-code')
+  assert.equal(refreshed.lifecycle.selectedInstallationId, selectedId)
+  assert.equal(
+    selectedInstallation(refreshed.lifecycle).version,
+    '2.1.263-good',
+  )
+})
+
+test('a missing absolute Codex executable remains authoritative over a compatible alternate', async (t) => {
+  const directory = await mkdtemp(
+    join(tmpdir(), 'codetether-phase8b-local-explicit-missing-'),
+  )
+  const databasePath = join(directory, 'codetether.sqlite3')
+  const missingConfiguredPath = join(directory, 'configured', 'missing-codex')
+  const alternatePath = join(directory, 'path', 'codex')
+  await mkdir(join(directory, 'path'), { recursive: true })
+  await writeFile(alternatePath, 'compatible-alternate', 'utf8')
+  const persistence = ConversationStore.open({ databasePath })
+  const machine = persistence.listMachines()[0]
+  assert.ok(machine)
+  const alternate = {
+    launcherPath: alternatePath,
+    executable: alternatePath,
+    fileIdentity: 'test-owned-compatible-path-alternate',
+    launcherKind: 'native',
+    installMethod: 'manual',
+  }
+  const supported = {
+    observed: 'supported',
+    enabled: true,
+    effective: true,
+  }
+  const policyDisabled = {
+    observed: 'supported',
+    enabled: false,
+    effective: false,
+  }
+  let observationCalls = 0
+  const coordinator = await LocalProviderLifecycleCoordinator.create({
+    machineId: machine.machineId,
+    persistence,
+    hostVersion: 'phase8b-local-explicit-missing-test',
+    codexExecutable: missingConfiguredPath,
+    environment: { PATH: '' },
+    now: () => new Date(observedAt),
+    discoverCodex: async () => ({
+      installations: [alternate],
+      pathsInspected: 2,
+      truncated: false,
+    }),
+    discoverClaude: async () => ({
+      installations: [],
+      pathsInspected: 0,
+      truncated: false,
+    }),
+    observeCodex: async (options) => {
+      observationCalls += 1
+      return {
+        installation: options.installation,
+        version: '0.149.1',
+        privateRevision: await options.fingerprint(),
+        compatibility: {
+          state: 'verified',
+          runtimeReadiness: 'ready',
+          contractVersion: 1,
+          capabilities: {
+            execution: supported,
+            streaming: supported,
+            nativeResume: supported,
+            nativeSessionDiscovery: supported,
+            fileRead: policyDisabled,
+            search: policyDisabled,
+            toolEvents: policyDisabled,
+            reasoningControl: policyDisabled,
+          },
+        },
+        backend: {
+          mode: 'first_party',
+          source: 'provider_settings',
+          hasBaseUrl: false,
+          hasApiKey: false,
+          hasAuthToken: false,
+          hasOAuthToken: true,
+          bedrockConfigured: false,
+          vertexConfigured: false,
+          configurationValid: true,
+          privateConfigurationRevision: 'explicit-missing-codex-backend',
+          readiness: 'unknown',
+        },
+        runtimeEnvironment: () => ({ PATH: '' }),
+      }
+    },
+  })
+  t.after(async () => {
+    await coordinator.close().catch(() => undefined)
+    persistence.close()
+    await rm(directory, { recursive: true, force: true, maxRetries: 5 })
+  })
+
+  const state = coordinator.state('codex')
+  assert.ok(state)
+  assert.equal(observationCalls, 1)
+  assert.equal(state.lifecycle.selectedInstallationId, undefined)
+  assert.equal(state.lifecycle.installations.length, 1)
+  assert.equal(state.lifecycle.installations[0].selected, false)
+  assert.equal(state.lifecycle.installations[0].availability, 'available')
+  assert.equal(state.runtime.available, false)
+  const durable = persistence.getProviderLifecycle(machine.machineId, 'codex')
+  assert.ok(durable)
+  assert.equal(durable.selectedInstallationId, undefined)
+  assert.equal(durable.installations[0].selected, false)
+})
+
 test('local lifecycle isolates one broken installation without swallowing coordinator abort', async () => {
   const controller = new AbortController()
   const observed = await observeLocalProviderCandidates(
@@ -436,6 +665,18 @@ test('discarded coordinator preparation neither replaces its cached runtime nor 
   const machine = persistence.listMachines()[0]
   assert.ok(machine)
   let now = observedAt
+  const candidate = {
+    launcherPath: executable,
+    executable,
+    fileIdentity: 'test-owned-staged-codex',
+    launcherKind: 'native',
+    installMethod: 'manual',
+  }
+  const supported = {
+    observed: 'supported',
+    enabled: true,
+    effective: true,
+  }
   const coordinator = await LocalProviderLifecycleCoordinator.create({
     machineId: machine.machineId,
     persistence,
@@ -444,6 +685,45 @@ test('discarded coordinator preparation neither replaces its cached runtime nor 
     environment: { PATH: '' },
     platform: process.platform,
     now: () => new Date(now),
+    discoverCodex: async () => ({
+      installations: [candidate],
+      pathsInspected: 1,
+      truncated: false,
+    }),
+    observeCodex: async (options) => ({
+      installation: options.installation,
+      version: '0.149.1',
+      privateRevision: await options.fingerprint(),
+      compatibility: {
+        state: 'verified',
+        runtimeReadiness: 'ready',
+        contractVersion: 1,
+        capabilities: {
+          execution: supported,
+          streaming: supported,
+          nativeResume: supported,
+          nativeSessionDiscovery: supported,
+          fileRead: supported,
+          search: supported,
+          toolEvents: supported,
+          reasoningControl: supported,
+        },
+      },
+      backend: {
+        mode: 'first_party',
+        source: 'provider_settings',
+        hasBaseUrl: false,
+        hasApiKey: false,
+        hasAuthToken: false,
+        hasOAuthToken: true,
+        bedrockConfigured: false,
+        vertexConfigured: false,
+        configurationValid: true,
+        privateConfigurationRevision: 'staged-codex-backend',
+        readiness: 'unknown',
+      },
+      runtimeEnvironment: () => ({ PATH: '' }),
+    }),
   })
   t.after(async () => {
     await coordinator.close().catch(() => undefined)

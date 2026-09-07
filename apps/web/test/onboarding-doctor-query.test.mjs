@@ -12,8 +12,61 @@ import {
   doctorQueryKeys,
   doctorQueryOptions,
 } from '../.tmp/test-dist/runtime/host/doctor-query.js'
+import {
+  startupGateRecoveryAction,
+  startupGateRecoveryDelay,
+  startupGateRecoveryDelaysMs,
+} from '../.tmp/test-dist/components/onboarding/startup-gate-recovery.js'
 
 const observedAt = '2026-09-07T12:00:00.000Z'
+
+test('StartupGate recovery is finite, local to transient startup/read failures, and excludes incompatibility', () => {
+  assert.deepEqual(startupGateRecoveryDelaysMs, [100, 400, 1_200, 3_000, 8_000])
+  assert.equal(startupGateRecoveryDelay(0), 100)
+  assert.equal(startupGateRecoveryDelay(3), 3_000)
+  assert.equal(startupGateRecoveryDelay(4), 8_000)
+  assert.equal(startupGateRecoveryDelay(5), undefined)
+  assert.equal(
+    startupGateRecoveryDelaysMs.reduce((total, delay) => total + delay, 0),
+    12_700,
+  )
+
+  assert.equal(
+    startupGateRecoveryAction({
+      connectionState: 'unavailable',
+      onboardingReadFailed: false,
+      onboardingReadFetching: false,
+    }),
+    'retry_host',
+  )
+  assert.equal(
+    startupGateRecoveryAction({
+      connectionState: 'connected',
+      onboardingReadFailed: true,
+      onboardingReadFetching: false,
+    }),
+    'refetch_onboarding',
+  )
+  for (const input of [
+    {
+      connectionState: 'incompatible',
+      onboardingReadFailed: true,
+      onboardingReadFetching: false,
+    },
+    {
+      connectionState: 'connected',
+      onboardingReadFailed: true,
+      onboardingReadFetching: true,
+    },
+    {
+      connectionState: 'connected',
+      onboardingReadFailed: false,
+      onboardingReadFetching: false,
+    },
+  ]) {
+    assert.equal(startupGateRecoveryAction(input), undefined)
+  }
+})
 
 test('onboarding progress query is a bounded explicit read and forwards cancellation', async () => {
   const calls = []

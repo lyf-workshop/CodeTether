@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Navigate } from '@tanstack/react-router'
 import { LoaderCircle } from 'lucide-react'
@@ -8,6 +9,10 @@ import {
   useHostRuntime,
 } from '../../runtime/host/host-runtime-hooks'
 import { onboardingQueryOptions } from '../../runtime/host/onboarding-query'
+import {
+  startupGateRecoveryAction,
+  startupGateRecoveryDelay,
+} from './startup-gate-recovery.js'
 
 /** Routes only after durable Host progress is known, avoiding a Welcome flash. */
 export function StartupGate() {
@@ -17,6 +22,37 @@ export function StartupGate() {
     ...onboardingQueryOptions(runtime),
     enabled: connectionState === 'connected',
   })
+  const [automaticRecoveryAttempts, setAutomaticRecoveryAttempts] = useState(0)
+  const automaticRecoveryAction = startupGateRecoveryAction({
+    connectionState,
+    onboardingReadFailed: onboardingQuery.isError,
+    onboardingReadFetching: onboardingQuery.isFetching,
+  })
+  const automaticRecoveryDelay =
+    automaticRecoveryAction === undefined
+      ? undefined
+      : startupGateRecoveryDelay(automaticRecoveryAttempts)
+  const refetchOnboarding = onboardingQuery.refetch
+
+  useEffect(() => {
+    if (
+      automaticRecoveryAction === undefined ||
+      automaticRecoveryDelay === undefined
+    ) {
+      return
+    }
+    const timeout = window.setTimeout(() => {
+      setAutomaticRecoveryAttempts((attempts) => attempts + 1)
+      if (automaticRecoveryAction === 'retry_host') runtime.retry()
+      else void refetchOnboarding()
+    }, automaticRecoveryDelay)
+    return () => window.clearTimeout(timeout)
+  }, [
+    automaticRecoveryAction,
+    automaticRecoveryDelay,
+    refetchOnboarding,
+    runtime,
+  ])
 
   if (onboardingQuery.data !== undefined) {
     return onboardingQuery.data.step === 'ready' ? (
@@ -26,10 +62,13 @@ export function StartupGate() {
     )
   }
 
+  const automaticRecoveryPending = automaticRecoveryDelay !== undefined
   const blocked =
-    onboardingQuery.isError ||
-    connectionState === 'unavailable' ||
-    connectionState === 'incompatible'
+    !automaticRecoveryPending &&
+    !onboardingQuery.isFetching &&
+    (onboardingQuery.isError ||
+      connectionState === 'unavailable' ||
+      connectionState === 'incompatible')
 
   return (
     <div

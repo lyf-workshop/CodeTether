@@ -41,6 +41,7 @@
     "src/components/projects/project-format.ts",
     "src/components/machines/machine-relay-presentation.ts",
     "src/components/onboarding/onboarding-model.ts",
+    "src/components/onboarding/startup-gate-recovery.ts",
     "src/components/inbox/inbox-actions.ts",
     "src/components/inbox/inbox-model.ts",
     "src/runtime/host/action-id.ts",

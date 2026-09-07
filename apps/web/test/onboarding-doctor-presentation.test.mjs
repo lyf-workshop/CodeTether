@@ -407,6 +407,9 @@ test('routing and settings expose setup and permanent Doctor access', () => {
     /data\.step === 'ready'\s*\|\|\s*onboardingQuery\.data\.completedAt/u,
   )
   assert.match(startup, /runtime\.retry\(\)/u)
+  assert.match(startup, /startupGateRecoveryDelay/u)
+  assert.match(startup, /window\.setTimeout/u)
+  assert.doesNotMatch(startup, /setInterval/u)
   assert.match(shell, /onHelp=/u)
   assert.match(shell, /to: '\/doctor'/u)
   assert.match(settings, /kind: 'reopen'/u)

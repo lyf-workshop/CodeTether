@@ -13,8 +13,8 @@ import {
   generateMachineTlsIdentity,
   machineProtocolVersion,
   newControllerId,
-  openRemoteClaudeSessionOverStream,
-  openRemoteCodexSessionOverStream,
+  openRemoteClaudeSessionOverStream as openRemoteClaudeSessionOverStreamWithInstallation,
+  openRemoteCodexSessionOverStream as openRemoteCodexSessionOverStreamWithInstallation,
 } from '@codetether/machine-transport'
 import { connectRelayControl } from '@codetether/relay-client'
 import { relayPublicKeySpkiFromCertificate } from '@codetether/relay-protocol'
@@ -32,6 +32,14 @@ import {
 import { RemoteClaudeRunnerPool } from '../dist/remote-claude-runner.js'
 import { RemoteCodexRunnerPool } from '../dist/remote-codex-runner.js'
 import { NodeStateStore } from '../dist/state-store.js'
+
+function openRemoteCodexSessionOverStream(options) {
+  return openRemoteCodexSessionOverStreamWithInstallation(options)
+}
+
+function openRemoteClaudeSessionOverStream(options) {
+  return openRemoteClaudeSessionOverStreamWithInstallation(options)
+}
 
 test('four relayed Provider Conversations stay isolated and preserve exact native resume', async () => {
   const temporary = await mkdtemp(
@@ -643,6 +651,8 @@ async function openProviderSession(options) {
     peer: options.peer,
     controller: options.controller,
     projectId: 'proj_phase7b_provider_relay',
+    providerInstallationId: 'pinst_relayfixture01',
+    expectedInstallationRevision: 'prev_relayfixture01',
     rootPath: options.project,
   }
   try {

@@ -296,10 +296,7 @@ function createDefaultClientFactory(
       })
   }
 
-  if (
-    options.environment !== undefined ||
-    options.processFactory !== undefined
-  ) {
+  if (options.processFactory !== undefined) {
     throw new TypeError(
       'Remote Codex discovery options require an absolute codexHome',
     )
@@ -309,6 +306,9 @@ function createDefaultClientFactory(
       ...(options.executable === undefined
         ? {}
         : { executable: options.executable }),
+      ...(options.environment === undefined
+        ? {}
+        : { environment: options.environment }),
       ...(options.requestTimeoutMs === undefined
         ? {}
         : { requestTimeoutMs: options.requestTimeoutMs }),

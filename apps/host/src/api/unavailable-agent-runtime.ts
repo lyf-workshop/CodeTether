@@ -1,7 +1,10 @@
 import type { AgentProvider } from '@codetether/agent-core'
 import type { ProviderDescriptor } from '@codetether/protocol'
 
-import type { AgentHostRuntime } from './agent-runtime.js'
+import type {
+  AgentHostRuntime,
+  ProviderRuntimeInstallation,
+} from './agent-runtime.js'
 
 /**
  * Read-only runtime used when Codex cannot launch. Durable Host APIs remain
@@ -11,13 +14,16 @@ export class UnavailableAgentRuntime implements AgentHostRuntime {
   readonly provider: AgentProvider
   readonly descriptor?: ProviderDescriptor
   readonly available = false
+  readonly installation?: ProviderRuntimeInstallation
 
   constructor(
     provider: AgentProvider = 'codex',
     descriptor?: ProviderDescriptor,
+    installation?: ProviderRuntimeInstallation,
   ) {
     this.provider = provider
     this.descriptor = descriptor
+    this.installation = installation
   }
 
   subscribeEvents(): () => void {

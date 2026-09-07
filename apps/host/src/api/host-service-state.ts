@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import {
   ItemIdSchema,
   type ConversationRecord,
+  type ProviderInstallationId,
   type TurnId,
   type TurnRecord,
 } from '@codetether/protocol'
@@ -21,6 +22,8 @@ export class ProviderItemCapacityError extends Error {
 export interface ConversationState {
   record: ConversationRecord
   readonly origin: DurableConversationOrigin
+  /** Private immutable runtime binding; never projected into Conversation DTOs. */
+  providerInstallationId?: ProviderInstallationId
   /** Absent only for a newly created lazy remote Conversation. */
   providerThreadId?: string
   readonly turns: Map<TurnId, TurnState>

@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url'
 
 import {
   buildClaudeCodeArguments,
+  CLAUDE_CODE_RUNTIME_CLI_CONTRACT,
   closeOwnedClaudeProcess,
   ClaudeCodeSessionRuntime,
   encodeClaudeUserMessage,
@@ -77,6 +78,27 @@ test('builds the locked-down argv and never places a prompt in it', () => {
       }),
     /supported Claude Code level/u,
   )
+})
+
+test('lifecycle probing and execution share one exact CLI flag contract', () => {
+  const observedFlags = new Set([
+    ...CLAUDE_CODE_RUNTIME_CLI_CONTRACT.executionFlags,
+    ...CLAUDE_CODE_RUNTIME_CLI_CONTRACT.streamingFlags,
+    ...CLAUDE_CODE_RUNTIME_CLI_CONTRACT.nativeResumeFlags,
+    ...CLAUDE_CODE_RUNTIME_CLI_CONTRACT.reasoningControlFlags,
+  ])
+  const executionFlags = new Set(
+    [
+      ...buildClaudeCodeArguments({ sessionId, resume: false }),
+      ...buildClaudeCodeArguments({
+        sessionId,
+        resume: true,
+        effort: 'max',
+      }),
+    ].filter((argument) => argument.startsWith('--')),
+  )
+
+  assert.deepEqual(executionFlags, observedFlags)
 })
 
 test('admits only bounded Claude runtime context and explicit auth inputs', () => {

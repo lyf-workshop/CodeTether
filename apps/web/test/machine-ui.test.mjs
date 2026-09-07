@@ -31,20 +31,61 @@ test('local Machine Detail separates Provider installation from execution health
   const detail = await source('components/machines/machine-detail-page.tsx')
   const localDetail = sourceSection(
     detail,
-    'const { providers, projects, conversations }',
+    'const providerPresentations = providerPresentationsForMachine(providers)',
     'function RemoteMachineDetail',
   )
 
-  assert.match(localDetail, /安装检测与最近的执行健康结果彼此独立/u)
+  assert.match(
+    localDetail,
+    /安装、运行时兼容性、推理后端与最近执行健康彼此独立/u,
+  )
   assert.match(localDetail, /providerExecutionHealthPresentation\(/u)
   assert.match(localDetail, /provider\.executionHealth/u)
   assert.match(localDetail, /provider\.availabilityLabel/u)
+  assert.match(localDetail, /providerLifecycleForMachine\(/u)
+  assert.match(localDetail, /providerLifecyclePresentation\(/u)
   assert.match(localDetail, /安装状态/u)
+  assert.match(localDetail, /运行时/u)
+  assert.match(localDetail, /后端/u)
   assert.match(localDetail, /执行状态/u)
   assert.match(localDetail, /health\.stateLabel/u)
   assert.match(localDetail, /health\.freshnessLabel/u)
-  assert.match(localDetail, /health\.description/u)
-  assert.match(localDetail, /health\.observedAt/u)
+  assert.match(localDetail, /health=\{health\}/u)
+  assert.match(detail, /health\.description/u)
+  assert.match(detail, /health\.observedAt/u)
+})
+
+test('Machine Provider lifecycle UI stays safe, status-readable, and refreshes through one bounded action', async () => {
+  const [detail, actions] = await Promise.all([
+    source('components/machines/machine-detail-page.tsx'),
+    source('runtime/host/machine-actions.ts'),
+  ])
+
+  assert.match(detail, /providerLifecycles/u)
+  assert.match(detail, /providerLifecycleForMachine/u)
+  assert.match(detail, /providerLifecyclePresentation/u)
+  assert.match(detail, /label="安装状态"/u)
+  assert.match(detail, /label="运行时"/u)
+  assert.match(detail, /label="后端"/u)
+  assert.match(detail, /label="执行状态"/u)
+  assert.match(detail, /另发现 .* 个安装；不会自动切换/u)
+  assert.match(detail, /aria-label=.*运行时 .*后端 .*执行状态/u)
+  assert.match(detail, /role="status"/u)
+  assert.match(detail, /aria-busy=\{refreshPending\}/u)
+  assert.match(detail, /disabled=\{!canRefresh \|\| refreshPending\}/u)
+  assert.match(detail, /aria-labelledby="local-machine-providers-heading"/u)
+  assert.match(detail, /local-provider-refresh-unavailable/u)
+  assert.match(detail, /motion-reduce:animate-none/u)
+  assert.match(actions, /`providers:\$\{machine\}`/u)
+  assert.match(actions, /response\.data\.providerLifecycles/u)
+  assert.doesNotMatch(
+    detail,
+    /selectedInstallationId|installationId|sanitizedOrigin|configurationRevision|hasAuthToken/u,
+  )
+  assert.doesNotMatch(
+    detail,
+    /installationSelector|setSelectedInstallation|Update Provider|更新 Provider/u,
+  )
 })
 
 test('remote Machine Detail separates direct reachability from the Host-selected execution transport', async () => {
@@ -134,6 +175,11 @@ test('Project and Conversation surfaces resolve Machine display without a switch
   assert.match(adapter, /providerPresentationForMachine/u)
   assert.match(conversationRoute, /machineProvider\.capabilities\.streaming/u)
   assert.match(conversationRoute, /machineProvider\.capabilities\.resume/u)
+  assert.match(conversationRoute, /detail\.providerLifecycle/u)
+  assert.match(
+    conversationRoute,
+    /providerLifecycleSupportsConversationExecution/u,
+  )
   assert.match(conversationRoute, /executionBoundary/u)
   assert.match(controls, /远程执行机器当前离线/u)
   assert.match(workspace, /to="\/machines\/\$machineId"/u)

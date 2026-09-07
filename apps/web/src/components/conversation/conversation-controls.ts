@@ -8,6 +8,7 @@ import type {
   ProviderCapabilities,
   ProviderDescriptor,
   ProviderExecutionHealth,
+  ProviderInstallationSummary,
 } from '@codetether/protocol'
 
 import type { HostConnectionState } from '../../runtime/host/host-runtime.js'
@@ -107,6 +108,8 @@ export interface ComposerEligibilityInput {
   readonly machine: MachineSummary | undefined
   readonly projectAvailability: ProjectAvailability
   readonly provider: ProviderDescriptor | undefined
+  readonly providerLifecycle?: ProviderInstallationSummary
+  readonly providerSessionRequiresResume?: boolean
 }
 
 export type ComposerSubmitPhase = 'idle' | 'submitting' | 'awaiting-event'
@@ -252,57 +255,70 @@ export function deriveComposerEligibility(
     )
   }
 
-  const { provider } = input
-  if (provider === undefined) {
+  const { provider, providerLifecycle } = input
+  if (provider === undefined && providerLifecycle === undefined) {
     return disabled(
       'remote_execution_unavailable',
       '这台机器尚未提供当前智能体的检测结果。',
       'machine',
     )
   }
-  switch (provider.availability) {
-    case 'not_installed':
-      return disabled(
-        'provider_not_installed',
-        '执行机器上未安装当前智能体。',
-        'machine',
-      )
-    case 'unsupported_version':
-      return disabled(
-        'provider_unsupported_version',
-        '执行机器上的智能体版本不受支持。',
-        'machine',
-      )
-    case 'misconfigured':
-      return disabled(
-        'provider_misconfigured',
-        '执行机器上的智能体配置当前不可用。',
-        'machine',
-      )
-    case 'unavailable':
-      return disabled(
-        'remote_execution_unavailable',
-        '当前智能体在这台机器上不可用。',
-        'machine',
-      )
-    case 'available':
-      break
+  if (providerLifecycle !== undefined) {
+    const lifecycleDisabled = providerLifecycleComposerDisabled(
+      providerLifecycle,
+      provider?.displayName,
+      machine.displayName,
+      input.providerSessionRequiresResume ?? true,
+    )
+    if (lifecycleDisabled !== undefined) return lifecycleDisabled
+  } else if (provider !== undefined) {
+    switch (provider.availability) {
+      case 'not_installed':
+        return disabled(
+          'provider_not_installed',
+          '执行机器上未安装当前智能体。',
+          'machine',
+        )
+      case 'unsupported_version':
+        return disabled(
+          'provider_unsupported_version',
+          '执行机器上的智能体版本不受支持。',
+          'machine',
+        )
+      case 'misconfigured':
+        return disabled(
+          'provider_misconfigured',
+          '执行机器上的智能体配置当前不可用。',
+          'machine',
+        )
+      case 'unavailable':
+        return disabled(
+          'remote_execution_unavailable',
+          '当前智能体在这台机器上不可用。',
+          'machine',
+        )
+      case 'available':
+        break
+    }
   }
 
   const currentExecutionFailure =
-    provider.executionHealth?.freshness === 'current'
+    provider?.executionHealth?.freshness === 'current'
       ? provider.executionHealth.failure
       : undefined
   if (
     machine.capabilities.providerExecution !== true ||
-    provider.capabilities.streaming !== true ||
-    provider.capabilities.resume !== true
+    (providerLifecycle === undefined &&
+      (provider?.capabilities.streaming !== true ||
+        provider.capabilities.resume !== true))
   ) {
     if (currentExecutionFailure !== undefined) {
       const presentation = canonicalFailureActionPresentation(
         currentExecutionFailure,
         {
-          providerDisplayName: provider.displayName,
+          ...(provider === undefined
+            ? {}
+            : { providerDisplayName: provider.displayName }),
           machineDisplayName: machine.displayName,
         },
       )
@@ -322,6 +338,143 @@ export function deriveComposerEligibility(
     return disabled('conversation_busy', '智能体正在执行当前轮次，请等待完成。')
   }
   return undefined
+}
+
+export function providerLifecycleSupportsConversationExecution(
+  lifecycle: ProviderInstallationSummary,
+  providerSessionRequiresResume = true,
+): boolean {
+  if (lifecycle.availability !== 'available') return false
+
+  const compatibility = lifecycle.compatibility
+  if (compatibility !== undefined) {
+    if (
+      compatibility.state === 'incompatible' ||
+      compatibility.state === 'unavailable'
+    ) {
+      return false
+    }
+    const { execution, streaming, nativeResume } = compatibility.capabilities
+    if (
+      !execution.effective ||
+      !streaming.effective ||
+      (providerSessionRequiresResume && !nativeResume.effective)
+    ) {
+      return false
+    }
+  }
+
+  const backend = lifecycle.backend
+  return !(
+    backend?.freshness === 'current' &&
+    (backend.readiness === 'unavailable' ||
+      backend.readiness === 'authentication_required' ||
+      backend.readiness === 'misconfigured')
+  )
+}
+
+function providerLifecycleComposerDisabled(
+  lifecycle: ProviderInstallationSummary,
+  providerDisplayName: string | undefined,
+  machineDisplayName: string,
+  providerSessionRequiresResume: boolean,
+): ComposerDisabledPresentation | undefined {
+  if (lifecycle.availability !== 'available') {
+    return disabled(
+      'provider_not_installed',
+      '此会话绑定的智能体安装当前不可用；历史记录仍可查看。',
+      'machine',
+    )
+  }
+
+  const compatibility = lifecycle.compatibility
+  if (
+    compatibility?.state === 'incompatible' ||
+    compatibility?.state === 'unavailable'
+  ) {
+    if (compatibility.failure !== undefined) {
+      return disabledFromCanonicalFailure(
+        compatibility.failure,
+        providerDisplayName,
+        machineDisplayName,
+      )
+    }
+    return disabled(
+      compatibility.state === 'incompatible'
+        ? 'provider_unsupported_version'
+        : 'provider_start_failed',
+      compatibility.state === 'incompatible'
+        ? '此会话绑定的智能体安装需要 CodeTether 更新后才能继续；历史记录仍然安全。'
+        : '此会话绑定的智能体安装当前无法运行；历史记录仍可查看。',
+      'machine',
+    )
+  }
+  if (compatibility !== undefined) {
+    const { execution, streaming, nativeResume } = compatibility.capabilities
+    if (
+      !execution.effective ||
+      !streaming.effective ||
+      (providerSessionRequiresResume && !nativeResume.effective)
+    ) {
+      return disabled(
+        'provider_capability_unsupported',
+        '此会话绑定的智能体安装不再支持安全执行和原生恢复；不会重放历史记录。',
+        'machine',
+      )
+    }
+  }
+
+  const backend = lifecycle.backend
+  if (
+    backend?.freshness !== 'current' ||
+    backend.readiness === 'ready' ||
+    backend.readiness === 'unknown'
+  ) {
+    return undefined
+  }
+  if (backend.failure !== undefined) {
+    return disabledFromCanonicalFailure(
+      backend.failure,
+      providerDisplayName,
+      machineDisplayName,
+    )
+  }
+  switch (backend.readiness) {
+    case 'authentication_required':
+      return disabled(
+        'login_required',
+        '智能体运行时兼容，但当前推理后端需要在这台机器上登录。',
+        'machine',
+      )
+    case 'misconfigured':
+      return disabled(
+        'provider_misconfigured',
+        '智能体运行时兼容，但当前推理后端配置不可用。',
+        'machine',
+      )
+    case 'unavailable':
+      return disabled(
+        'provider_service_unavailable',
+        '智能体运行时兼容，但推理后端当前不可用。',
+        'machine',
+      )
+  }
+}
+
+function disabledFromCanonicalFailure(
+  failure: CanonicalFailure,
+  providerDisplayName: string | undefined,
+  machineDisplayName: string,
+): ComposerDisabledPresentation {
+  const presentation = canonicalFailureActionPresentation(failure, {
+    ...(providerDisplayName === undefined ? {} : { providerDisplayName }),
+    machineDisplayName,
+  })
+  return disabled(
+    failure.reason,
+    `${presentation.cause} ${presentation.guidance}`,
+    presentation.navigation,
+  )
 }
 
 export function deriveConversationExecutionBoundaryReason(

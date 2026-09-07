@@ -128,6 +128,11 @@ const migrations: readonly Migration[] = [
     name: 'existing_provider_sessions',
     up: migrateExistingProviderSessions,
   },
+  {
+    version: 16,
+    name: 'provider_lifecycle',
+    up: migrateProviderLifecycle,
+  },
 ]
 
 export const currentSchemaVersion = migrations.at(-1)?.version ?? 0
@@ -2027,6 +2032,294 @@ function migrateExistingProviderSessions(database: DatabaseSync): void {
     CREATE UNIQUE INDEX idx_conversations_provider_session_identity
       ON conversations(machine_id, provider, provider_thread_id)
       WHERE provider_thread_id IS NOT NULL;
+  `)
+}
+
+/**
+ * Adds the bounded Provider lifecycle graph without probing or launching a
+ * Provider. Existing Conversations intentionally remain legacy-unbound until
+ * the exact accepted installation is observed and bound transactionally.
+ */
+function migrateProviderLifecycle(database: DatabaseSync): void {
+  database.exec(`
+    CREATE TABLE provider_installations (
+      installation_id TEXT PRIMARY KEY
+        CHECK (
+          length(installation_id) BETWEEN 22 AND 102 AND
+          substr(installation_id, 1, 6) = 'pinst_' AND
+          installation_id = trim(installation_id) AND
+          instr(installation_id, char(0)) = 0
+        ),
+      machine_id TEXT NOT NULL,
+      provider TEXT NOT NULL
+        CHECK (provider IN ('codex', 'claude-code')),
+      locator_key TEXT NOT NULL
+        CHECK (
+          length(locator_key) BETWEEN 1 AND 512 AND
+          locator_key = trim(locator_key) AND
+          instr(locator_key, char(0)) = 0
+        ),
+      launcher_path TEXT
+        CHECK (
+          launcher_path IS NULL OR (
+            length(launcher_path) BETWEEN 1 AND 4096 AND
+            launcher_path = trim(launcher_path) AND
+            instr(launcher_path, char(0)) = 0
+          )
+        ),
+      resolved_executable_path TEXT
+        CHECK (
+          resolved_executable_path IS NULL OR (
+            length(resolved_executable_path) BETWEEN 1 AND 4096 AND
+            resolved_executable_path = trim(resolved_executable_path) AND
+            instr(resolved_executable_path, char(0)) = 0
+          )
+        ),
+      launcher_kind TEXT NOT NULL
+        CHECK (
+          launcher_kind IN (
+            'native', 'symlink', 'hardlink', 'wrapper', 'npm_shim', 'unknown'
+          )
+        ),
+      install_method TEXT NOT NULL
+        CHECK (
+          install_method IN (
+            'native_installer', 'npm', 'homebrew', 'package_manager',
+            'manual', 'unknown'
+          )
+        ),
+      availability TEXT NOT NULL
+        CHECK (availability IN ('available', 'unavailable', 'unresolved')),
+      observed_version TEXT
+        CHECK (
+          observed_version IS NULL OR (
+            length(observed_version) BETWEEN 1 AND 120 AND
+            observed_version = trim(observed_version) AND
+            instr(observed_version, char(0)) = 0
+          )
+        ),
+      installation_revision TEXT
+        CHECK (
+          installation_revision IS NULL OR (
+            length(installation_revision) BETWEEN 21 AND 129 AND
+            substr(installation_revision, 1, 5) = 'prev_' AND
+            installation_revision = trim(installation_revision) AND
+            instr(installation_revision, char(0)) = 0
+          )
+        ),
+      first_observed_at TEXT NOT NULL,
+      last_observed_at TEXT NOT NULL,
+      CHECK (
+        (launcher_path IS NULL) = (resolved_executable_path IS NULL)
+      ),
+      CHECK (
+        availability <> 'unresolved' OR installation_revision IS NULL
+      ),
+      UNIQUE (machine_id, provider, locator_key),
+      UNIQUE (installation_id, machine_id, provider),
+      FOREIGN KEY (machine_id)
+        REFERENCES machines(machine_id)
+        ON DELETE CASCADE
+    ) STRICT;
+
+    CREATE INDEX idx_provider_installations_machine_provider
+      ON provider_installations(
+        machine_id, provider, last_observed_at DESC, installation_id
+      );
+
+    CREATE TABLE machine_provider_installation_selections (
+      machine_id TEXT NOT NULL,
+      provider TEXT NOT NULL
+        CHECK (provider IN ('codex', 'claude-code')),
+      installation_id TEXT,
+      selected_at TEXT,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (machine_id, provider),
+      CHECK ((installation_id IS NULL) = (selected_at IS NULL)),
+      FOREIGN KEY (machine_id)
+        REFERENCES machines(machine_id)
+        ON DELETE CASCADE,
+      FOREIGN KEY (installation_id, machine_id, provider)
+        REFERENCES provider_installations(
+          installation_id, machine_id, provider
+        )
+        ON DELETE RESTRICT
+    ) STRICT;
+
+    CREATE TABLE provider_installation_compatibility (
+      installation_id TEXT PRIMARY KEY,
+      installation_revision TEXT
+        CHECK (
+          installation_revision IS NULL OR (
+            length(installation_revision) BETWEEN 21 AND 129 AND
+            substr(installation_revision, 1, 5) = 'prev_' AND
+            installation_revision = trim(installation_revision) AND
+            instr(installation_revision, char(0)) = 0
+          )
+        ),
+      contract_version INTEGER NOT NULL
+        CHECK (contract_version > 0),
+      state TEXT NOT NULL
+        CHECK (
+          state IN (
+            'verified', 'compatible_unverified', 'limited', 'incompatible',
+            'unavailable'
+          )
+        ),
+      runtime_readiness TEXT NOT NULL
+        CHECK (
+          runtime_readiness IN ('ready', 'limited', 'blocked', 'unavailable')
+        ),
+      freshness TEXT NOT NULL
+        CHECK (freshness IN ('current', 'last_known', 'not_observed')),
+      capabilities_json TEXT NOT NULL
+        CHECK (
+          json_valid(capabilities_json) AND
+          length(capabilities_json) BETWEEN 2 AND 16384
+        ),
+      failure_json TEXT
+        CHECK (
+          failure_json IS NULL OR (
+            json_valid(failure_json) AND
+            length(failure_json) BETWEEN 2 AND 4096
+          )
+        ),
+      observed_at TEXT,
+      CHECK (
+        (freshness = 'not_observed' AND observed_at IS NULL) OR
+        (freshness <> 'not_observed' AND observed_at IS NOT NULL)
+      ),
+      CHECK (
+        (state IN ('verified', 'compatible_unverified') AND
+          runtime_readiness = 'ready' AND failure_json IS NULL) OR
+        (state = 'limited' AND runtime_readiness = 'limited') OR
+        (state = 'incompatible' AND runtime_readiness = 'blocked') OR
+        (state = 'unavailable' AND runtime_readiness = 'unavailable')
+      ),
+      CHECK (
+        freshness <> 'not_observed' OR (
+          state = 'unavailable' AND failure_json IS NULL
+        )
+      ),
+      CHECK (
+        freshness <> 'current' OR state = 'unavailable' OR
+        installation_revision IS NOT NULL
+      ),
+      FOREIGN KEY (installation_id)
+        REFERENCES provider_installations(installation_id)
+        ON DELETE CASCADE
+    ) STRICT;
+
+    CREATE TABLE provider_backend_observations (
+      installation_id TEXT PRIMARY KEY,
+      installation_revision TEXT
+        CHECK (
+          installation_revision IS NULL OR (
+            length(installation_revision) BETWEEN 21 AND 129 AND
+            substr(installation_revision, 1, 5) = 'prev_' AND
+            installation_revision = trim(installation_revision) AND
+            instr(installation_revision, char(0)) = 0
+          )
+        ),
+      configuration_revision TEXT
+        CHECK (
+          configuration_revision IS NULL OR (
+            length(configuration_revision) BETWEEN 22 AND 129 AND
+            substr(configuration_revision, 1, 6) = 'pbcfg_' AND
+            configuration_revision = trim(configuration_revision) AND
+            instr(configuration_revision, char(0)) = 0
+          )
+        ),
+      mode TEXT NOT NULL
+        CHECK (
+          mode IN (
+            'first_party', 'custom_gateway', 'bedrock', 'vertex', 'unknown'
+          )
+        ),
+      readiness TEXT NOT NULL
+        CHECK (
+          readiness IN (
+            'unknown', 'ready', 'unavailable', 'authentication_required',
+            'misconfigured'
+          )
+        ),
+      freshness TEXT NOT NULL
+        CHECK (freshness IN ('current', 'last_known', 'not_observed')),
+      configuration_json TEXT NOT NULL
+        CHECK (
+          json_valid(configuration_json) AND
+          length(configuration_json) BETWEEN 2 AND 4096
+        ),
+      sanitized_origin TEXT
+        CHECK (
+          sanitized_origin IS NULL OR (
+            length(sanitized_origin) BETWEEN 1 AND 512 AND
+            sanitized_origin = trim(sanitized_origin) AND
+            instr(sanitized_origin, char(0)) = 0
+          )
+        ),
+      failure_json TEXT
+        CHECK (
+          failure_json IS NULL OR (
+            json_valid(failure_json) AND
+            length(failure_json) BETWEEN 2 AND 4096
+          )
+        ),
+      observed_at TEXT,
+      CHECK (
+        (freshness = 'not_observed' AND observed_at IS NULL) OR
+        (freshness <> 'not_observed' AND observed_at IS NOT NULL)
+      ),
+      CHECK (
+        readiness NOT IN ('ready', 'unknown') OR failure_json IS NULL
+      ),
+      CHECK (
+        (sanitized_origin IS NULL OR mode = 'custom_gateway') AND
+        (freshness <> 'not_observed' OR (
+          mode = 'unknown' AND readiness = 'unknown' AND
+          configuration_revision IS NULL AND
+          sanitized_origin IS NULL AND failure_json IS NULL
+        ))
+      ),
+      FOREIGN KEY (installation_id)
+        REFERENCES provider_installations(installation_id)
+        ON DELETE CASCADE
+    ) STRICT;
+
+    CREATE UNIQUE INDEX idx_conversations_provider_installation_identity
+      ON conversations(conversation_id, machine_id, provider);
+
+    CREATE TABLE conversation_provider_installation_bindings (
+      conversation_id TEXT PRIMARY KEY,
+      machine_id TEXT NOT NULL,
+      provider TEXT NOT NULL
+        CHECK (provider IN ('codex', 'claude-code')),
+      installation_id TEXT NOT NULL,
+      bound_at TEXT NOT NULL,
+      FOREIGN KEY (conversation_id, machine_id, provider)
+        REFERENCES conversations(conversation_id, machine_id, provider)
+        ON DELETE CASCADE,
+      FOREIGN KEY (installation_id, machine_id, provider)
+        REFERENCES provider_installations(
+          installation_id, machine_id, provider
+        )
+        ON DELETE RESTRICT
+    ) STRICT;
+
+    CREATE INDEX idx_conversation_provider_installation
+      ON conversation_provider_installation_bindings(
+        installation_id, conversation_id
+      );
+
+    CREATE TRIGGER trg_conversation_provider_installation_immutable
+    BEFORE UPDATE ON conversation_provider_installation_bindings
+    WHEN
+      OLD.machine_id IS NOT NEW.machine_id OR
+      OLD.provider IS NOT NEW.provider OR
+      OLD.installation_id IS NOT NEW.installation_id
+    BEGIN
+      SELECT RAISE(ABORT, 'Conversation Provider installation is immutable');
+    END;
   `)
 }
 

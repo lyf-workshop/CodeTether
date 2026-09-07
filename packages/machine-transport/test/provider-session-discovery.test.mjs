@@ -20,6 +20,8 @@ const machine = {
 }
 const projectId = 'proj_sessions01'
 const rootPath = '/srv/codetether-session-project'
+const providerInstallationId = 'pinst_sessions01'
+const installationRevision = 'prev_sessions01'
 
 function privateCandidate(provider, suffix = 'a') {
   return {
@@ -54,6 +56,8 @@ test('Provider session Machine messages are narrow, bounded, and private', () =>
     expectedMachineId: machine.machineId,
     expectedNodeId: machine.nodeId,
     provider: 'codex',
+    providerInstallationId,
+    expectedInstallationRevision: installationRevision,
     projectId,
     rootPath,
     limit: machineTransportLimits.providerSessionDiscoveryPageSize,
@@ -112,6 +116,8 @@ test('Provider session Machine messages are narrow, bounded, and private', () =>
     machineId: machine.machineId,
     nodeId: machine.nodeId,
     provider: 'codex',
+    providerInstallationId,
+    installationRevision,
     status: 'supported',
     resumeStatus: 'supported',
     providerVersion: '0.149.1',
@@ -185,6 +191,8 @@ test('authenticated client discovers and revalidates both Providers exactly', as
           machineId: machine.machineId,
           nodeId: machine.nodeId,
           provider: request.provider,
+          providerInstallationId: request.providerInstallationId,
+          installationRevision: request.expectedInstallationRevision,
           status: 'supported',
           resumeStatus: 'supported',
           providerVersion: request.provider === 'codex' ? '0.149.1' : '2.1.251',
@@ -200,6 +208,8 @@ test('authenticated client discovers and revalidates both Providers exactly', as
         machineId: machine.machineId,
         nodeId: machine.nodeId,
         provider: request.provider,
+        providerInstallationId: request.providerInstallationId,
+        installationRevision: request.expectedInstallationRevision,
         valid,
         ...(valid ? { candidate: privateCandidate(request.provider) } : {}),
       }
@@ -220,6 +230,8 @@ test('authenticated client discovers and revalidates both Providers exactly', as
   for (const provider of ['codex', 'claude-code']) {
     const page = await connection.discoverProviderSessions({
       provider,
+      providerInstallationId,
+      expectedInstallationRevision: installationRevision,
       projectId,
       rootPath,
       cursor: 'page_a',
@@ -238,6 +250,8 @@ test('authenticated client discovers and revalidates both Providers exactly', as
         expectedMachineId: request.expectedMachineId,
         expectedNodeId: request.expectedNodeId,
         provider: request.provider,
+        providerInstallationId: request.providerInstallationId,
+        expectedInstallationRevision: request.expectedInstallationRevision,
         projectId: request.projectId,
         rootPath: request.rootPath,
         cursor: request.cursor,
@@ -248,6 +262,8 @@ test('authenticated client discovers and revalidates both Providers exactly', as
         expectedMachineId: machine.machineId,
         expectedNodeId: machine.nodeId,
         provider,
+        providerInstallationId,
+        expectedInstallationRevision: installationRevision,
         projectId,
         rootPath,
         cursor: 'page_a',
@@ -258,6 +274,8 @@ test('authenticated client discovers and revalidates both Providers exactly', as
     assert.deepEqual(
       await connection.validateProviderSession({
         provider,
+        providerInstallationId,
+        expectedInstallationRevision: installationRevision,
         projectId,
         rootPath,
         nativeSessionId: page.candidates[0].nativeSessionId,
@@ -268,6 +286,8 @@ test('authenticated client discovers and revalidates both Providers exactly', as
     assert.equal(
       await connection.validateProviderSession({
         provider,
+        providerInstallationId,
+        expectedInstallationRevision: installationRevision,
         projectId,
         rootPath,
         nativeSessionId: page.candidates[0].nativeSessionId,
@@ -301,6 +321,8 @@ test('authenticated client rejects stale Provider-session peer responses', async
         machineId: machine.machineId,
         nodeId: 'node_stale_session_peer',
         provider: request.provider,
+        providerInstallationId: request.providerInstallationId,
+        installationRevision: request.expectedInstallationRevision,
         valid: true,
         candidate: privateCandidate(request.provider),
       }
@@ -320,6 +342,8 @@ test('authenticated client rejects stale Provider-session peer responses', async
   await assert.rejects(
     connection.validateProviderSession({
       provider: 'codex',
+      providerInstallationId,
+      expectedInstallationRevision: installationRevision,
       projectId,
       rootPath,
       nativeSessionId: 'codex-private-native-a',
@@ -339,6 +363,8 @@ test('validated Provider-session responses bind validity to private metadata', (
     machineId: machine.machineId,
     nodeId: machine.nodeId,
     provider: 'claude-code',
+    providerInstallationId,
+    installationRevision,
     valid: true,
     candidate: privateCandidate('claude-code'),
   }

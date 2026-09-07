@@ -31,6 +31,7 @@ import { validateProjectLocationPath } from './project-location-validation.js'
 import { spawnNodeProviderProcess } from './provider-process-guardian.js'
 import { supportsRemoteClaudeExecutionPlatform } from './provider-discovery.js'
 import { NodeClaudeInstallation } from './claude-installation.js'
+import type { NodeProviderLifecycleCoordinator } from './provider-lifecycle.js'
 import type { RemoteProviderSessionConnectionOwner } from './remote-provider-session-owner.js'
 
 interface RemoteClaudeSessionRuntime {
@@ -57,6 +58,10 @@ export interface RemoteClaudeRuntimeFactoryOptions {
   readonly cwd: string
   readonly providerSessionId?: string
   readonly resume: boolean
+  /** Exact Node-selected runtime; absent only in legacy fixture factories. */
+  readonly launcher?: ClaudeCodeLauncher
+  readonly environment?: NodeJS.ProcessEnv
+  readonly version?: string
 }
 
 export type RemoteClaudeRuntimeFactory = (
@@ -68,6 +73,8 @@ export interface RemoteClaudeRunnerPoolOptions {
   readonly runtimeFactory?: RemoteClaudeRuntimeFactory
   /** Node-private lifecycle selection; never populated from Machine input. */
   readonly claudeInstallation?: NodeClaudeInstallation
+  /** Shared exact-installation authority used by production execution. */
+  readonly providerLifecycle?: NodeProviderLifecycleCoordinator
   /** Internal test seam; remote callers cannot select the Node platform. */
   readonly platform?: NodeJS.Platform
   readonly maximumSessions?: number
@@ -101,11 +108,13 @@ export class RemoteClaudeRunnerPool {
   readonly #cleanupTasks = new Set<Promise<void>>()
   readonly #cleanupFailures = new Set<unknown>()
   readonly #executionSupported: boolean
+  readonly #providerLifecycle?: NodeProviderLifecycleCoordinator
   readonly #lifecycleAbort = new AbortController()
   #closed = false
   #closePromise: Promise<void> | undefined
 
   constructor(options: RemoteClaudeRunnerPoolOptions = {}) {
+    this.#providerLifecycle = options.providerLifecycle
     this.#maximumSessions =
       options.maximumSessions ??
       machineTransportLimits.maximumRemoteClaudeSessions
@@ -222,10 +231,38 @@ export class RemoteClaudeRunnerPool {
     owner?: RemoteProviderSessionConnectionOwner,
   ): Promise<RemoteClaudeRunner> {
     if (this.#closed) throw executionUnavailable()
+    const selected =
+      this.#providerLifecycle === undefined
+        ? undefined
+        : await this.#providerLifecycle.selected(
+            'claude-code',
+            request.providerInstallationId,
+            request.expectedInstallationRevision,
+          )
+    if (selected !== undefined && selected.provider !== 'claude-code') {
+      throw executionUnavailable()
+    }
+    if (
+      selected !== undefined &&
+      ((request.providerSessionMaterialized === true &&
+        selected.compatibility.capabilities.nativeResume.effective !== true) ||
+        (request.effort !== undefined &&
+          selected.compatibility.capabilities.reasoningControl.effective !==
+            true))
+    ) {
+      throw executionUnavailable()
+    }
     const runner = await RemoteClaudeRunner.open({
       request,
       canonicalRoot,
       runtimeFactory: this.#runtimeFactory,
+      ...(selected === undefined
+        ? {}
+        : {
+            launcher: selected.launcher,
+            environment: selected.environment,
+            version: selected.version,
+          }),
       onFatal: (ownedRunner) => this.#releaseAfterFatal(ownedRunner),
       owner,
     })
@@ -349,6 +386,9 @@ interface OpenRemoteClaudeRunnerOptions {
   readonly request: ClaudeSessionOpenMessage
   readonly canonicalRoot: string
   readonly runtimeFactory: RemoteClaudeRuntimeFactory
+  readonly launcher?: ClaudeCodeLauncher
+  readonly environment?: NodeJS.ProcessEnv
+  readonly version?: string
   readonly onFatal: (runner: RemoteClaudeRunner) => void
   readonly owner?: RemoteProviderSessionConnectionOwner
 }
@@ -403,6 +443,13 @@ export class RemoteClaudeRunner {
           ? {}
           : { providerSessionId: options.request.providerSessionId }),
         resume: options.request.providerSessionMaterialized === true,
+        ...(options.launcher === undefined
+          ? {}
+          : { launcher: privateLauncher(options.launcher) }),
+        ...(options.environment === undefined
+          ? {}
+          : { environment: { ...options.environment } }),
+        ...(options.version === undefined ? {} : { version: options.version }),
       })
       const providerSessionId = RemoteClaudeProviderIdentitySchema.parse(
         runtime.sessionId,
@@ -1103,6 +1150,56 @@ async function defaultRemoteClaudeRuntimeFactory(
   signal: AbortSignal,
   claudeInstallation: NodeClaudeInstallation,
 ): Promise<RemoteClaudeSessionRuntime> {
+  const selected = await selectedClaudeRuntime(
+    options,
+    signal,
+    claudeInstallation,
+  )
+  const sessionOptions = {
+    launcher: privateLauncher(selected.launcher),
+    cwd: options.cwd,
+    environment: selected.environment,
+    testedVersion: selected.version,
+    processOwnership: 'posix-process-group' as const,
+    processFactory: (specification: ClaudeCodeProcessSpecification) =>
+      spawnNodeProviderProcess({
+        provider: 'claude-code',
+        ...specification,
+      }),
+    ...(options.providerSessionId === undefined
+      ? {}
+      : { sessionId: options.providerSessionId }),
+  }
+  return options.resume
+    ? ClaudeCodeSessionRuntime.resumeSession({
+        ...sessionOptions,
+        sessionId: RemoteClaudeProviderIdentitySchema.parse(
+          options.providerSessionId,
+        ),
+      })
+    : ClaudeCodeSessionRuntime.createSession(sessionOptions)
+}
+
+async function selectedClaudeRuntime(
+  options: RemoteClaudeRuntimeFactoryOptions,
+  signal: AbortSignal,
+  claudeInstallation: NodeClaudeInstallation,
+): Promise<{
+  launcher: ClaudeCodeLauncher
+  environment: NodeJS.ProcessEnv
+  version: string
+}> {
+  if (
+    options.launcher !== undefined &&
+    options.environment !== undefined &&
+    options.version !== undefined
+  ) {
+    return {
+      launcher: privateLauncher(options.launcher),
+      environment: { ...options.environment },
+      version: options.version,
+    }
+  }
   let preparation
   try {
     preparation = await claudeInstallation.prepare({
@@ -1131,34 +1228,17 @@ async function defaultRemoteClaudeRuntimeFactory(
       },
     )
   }
-  const sessionOptions = {
+  return {
     launcher: privateLauncher(preparation.detection.launcher),
-    cwd: options.cwd,
     environment: preparation.runtimeEnvironment(),
-    testedVersion: preparation.detection.version,
-    processOwnership: 'posix-process-group' as const,
-    processFactory: (specification: ClaudeCodeProcessSpecification) =>
-      spawnNodeProviderProcess({
-        provider: 'claude-code',
-        ...specification,
-      }),
-    ...(options.providerSessionId === undefined
-      ? {}
-      : { sessionId: options.providerSessionId }),
+    version: preparation.detection.version,
   }
-  return options.resume
-    ? ClaudeCodeSessionRuntime.resumeSession({
-        ...sessionOptions,
-        sessionId: RemoteClaudeProviderIdentitySchema.parse(
-          options.providerSessionId,
-        ),
-      })
-    : ClaudeCodeSessionRuntime.createSession(sessionOptions)
 }
 
 function privateLauncher(launcher: ClaudeCodeLauncher): ClaudeCodeLauncher {
   return {
     kind: launcher.kind,
+    launcherPath: launcher.launcherPath,
     executable: launcher.executable,
     prefixArguments: [...launcher.prefixArguments],
     sourcePath: launcher.sourcePath,

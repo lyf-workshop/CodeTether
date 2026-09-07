@@ -14,6 +14,8 @@ import type {
   MachineTransportConversationId,
   MachineTransportProjectId,
   MachineTransportTurnId,
+  ProviderInstallationId,
+  ProviderInstallationRevision,
 } from './ids.js'
 import {
   ClaudeSessionHeartbeatAckMessageSchema,
@@ -449,6 +451,8 @@ export interface OpenRemoteCodexSessionOptions {
   readonly controller: MachineControllerIdentity
   readonly conversationId: MachineTransportConversationId
   readonly projectId: MachineTransportProjectId
+  readonly providerInstallationId: ProviderInstallationId
+  readonly expectedInstallationRevision: ProviderInstallationRevision
   /** Durable ProjectLocation root; never accept a transient UI path here. */
   readonly rootPath: string
   readonly providerThreadId?: RemoteCodexProviderIdentity
@@ -502,6 +506,8 @@ async function openRemoteCodexSessionWithConnection(
     return await connection.openCodexSession({
       conversationId: options.conversationId,
       projectId: options.projectId,
+      providerInstallationId: options.providerInstallationId,
+      expectedInstallationRevision: options.expectedInstallationRevision,
       rootPath: options.rootPath,
       ...(options.providerThreadId === undefined
         ? {}
@@ -528,6 +534,8 @@ interface OpenRemoteClaudeSessionBaseOptions {
   readonly controller: MachineControllerIdentity
   readonly conversationId: MachineTransportConversationId
   readonly projectId: MachineTransportProjectId
+  readonly providerInstallationId: ProviderInstallationId
+  readonly expectedInstallationRevision: ProviderInstallationRevision
   /** Durable ProjectLocation root; never accept a transient UI path here. */
   readonly rootPath: string
   readonly effort?: RemoteClaudeEffort
@@ -591,6 +599,8 @@ async function openRemoteClaudeSessionWithConnection(
     const sessionOptions = {
       conversationId: options.conversationId,
       projectId: options.projectId,
+      providerInstallationId: options.providerInstallationId,
+      expectedInstallationRevision: options.expectedInstallationRevision,
       rootPath: options.rootPath,
       ...(options.effort === undefined ? {} : { effort: options.effort }),
       signal: options.signal,
@@ -738,6 +748,8 @@ export class AuthenticatedRemoteMachineConnection {
 
   async discoverProviderSessions(options: {
     readonly provider: AgentProvider
+    readonly providerInstallationId: ProviderInstallationId
+    readonly expectedInstallationRevision: ProviderInstallationRevision
     readonly projectId: MachineTransportProjectId
     /** Durable Host-owned ProjectLocation root, never a Web-selected scan path. */
     readonly rootPath: string
@@ -761,6 +773,8 @@ export class AuthenticatedRemoteMachineConnection {
       expectedMachineId: this.machine.machineId,
       expectedNodeId: this.machine.nodeId,
       provider: options.provider,
+      providerInstallationId: options.providerInstallationId,
+      expectedInstallationRevision: options.expectedInstallationRevision,
       projectId: options.projectId,
       rootPath: rootPath.data,
       ...(options.cursor === undefined ? {} : { cursor: options.cursor }),
@@ -780,9 +794,17 @@ export class AuthenticatedRemoteMachineConnection {
     if (response.type === 'machine.error') {
       throw remoteError(response.code, response.message, true, response.failure)
     }
-    this.#assertProviderSessionResponse(response, requestId, options.provider)
+    this.#assertProviderSessionResponse(
+      response,
+      requestId,
+      options.provider,
+      options.providerInstallationId,
+      options.expectedInstallationRevision,
+    )
     return {
       provider: response.provider,
+      providerInstallationId: response.providerInstallationId,
+      installationRevision: response.installationRevision,
       status: response.status,
       resumeStatus: response.resumeStatus,
       ...(response.providerVersion === undefined
@@ -801,6 +823,8 @@ export class AuthenticatedRemoteMachineConnection {
 
   async validateProviderSession(options: {
     readonly provider: AgentProvider
+    readonly providerInstallationId: ProviderInstallationId
+    readonly expectedInstallationRevision: ProviderInstallationRevision
     readonly projectId: MachineTransportProjectId
     readonly rootPath: string
     readonly nativeSessionId: string
@@ -823,6 +847,8 @@ export class AuthenticatedRemoteMachineConnection {
       expectedMachineId: this.machine.machineId,
       expectedNodeId: this.machine.nodeId,
       provider: options.provider,
+      providerInstallationId: options.providerInstallationId,
+      expectedInstallationRevision: options.expectedInstallationRevision,
       projectId: options.projectId,
       rootPath: rootPath.data,
       nativeSessionId: options.nativeSessionId,
@@ -842,7 +868,13 @@ export class AuthenticatedRemoteMachineConnection {
     if (response.type === 'machine.error') {
       throw remoteError(response.code, response.message, true, response.failure)
     }
-    this.#assertProviderSessionResponse(response, requestId, options.provider)
+    this.#assertProviderSessionResponse(
+      response,
+      requestId,
+      options.provider,
+      options.providerInstallationId,
+      options.expectedInstallationRevision,
+    )
     return response.candidate
   }
 
@@ -882,6 +914,8 @@ export class AuthenticatedRemoteMachineConnection {
   async openCodexSession(options: {
     readonly conversationId: MachineTransportConversationId
     readonly projectId: MachineTransportProjectId
+    readonly providerInstallationId: ProviderInstallationId
+    readonly expectedInstallationRevision: ProviderInstallationRevision
     readonly rootPath: string
     readonly providerThreadId?: RemoteCodexProviderIdentity
     readonly signal?: AbortSignal
@@ -905,6 +939,8 @@ export class AuthenticatedRemoteMachineConnection {
       expectedNodeId: this.machine.nodeId,
       conversationId: options.conversationId,
       projectId: options.projectId,
+      providerInstallationId: options.providerInstallationId,
+      expectedInstallationRevision: options.expectedInstallationRevision,
       rootPath: rootPath.data,
       ...(options.providerThreadId === undefined
         ? {}
@@ -926,6 +962,8 @@ export class AuthenticatedRemoteMachineConnection {
       response.machineId !== this.machine.machineId ||
       response.nodeId !== this.machine.nodeId ||
       response.conversationId !== options.conversationId ||
+      response.providerInstallationId !== options.providerInstallationId ||
+      response.installationRevision !== options.expectedInstallationRevision ||
       (options.providerThreadId !== undefined &&
         response.providerThreadId !== options.providerThreadId) ||
       response.resumed !== (options.providerThreadId !== undefined)
@@ -952,6 +990,8 @@ export class AuthenticatedRemoteMachineConnection {
     options: {
       readonly conversationId: MachineTransportConversationId
       readonly projectId: MachineTransportProjectId
+      readonly providerInstallationId: ProviderInstallationId
+      readonly expectedInstallationRevision: ProviderInstallationRevision
       readonly rootPath: string
       readonly effort?: RemoteClaudeEffort
       readonly signal?: AbortSignal
@@ -976,6 +1016,8 @@ export class AuthenticatedRemoteMachineConnection {
       expectedNodeId: this.machine.nodeId,
       conversationId: options.conversationId,
       projectId: options.projectId,
+      providerInstallationId: options.providerInstallationId,
+      expectedInstallationRevision: options.expectedInstallationRevision,
       rootPath: rootPath.data,
       ...(options.providerSessionId === undefined
         ? {}
@@ -1001,6 +1043,8 @@ export class AuthenticatedRemoteMachineConnection {
       response.machineId !== this.machine.machineId ||
       response.nodeId !== this.machine.nodeId ||
       response.conversationId !== options.conversationId ||
+      response.providerInstallationId !== options.providerInstallationId ||
+      response.installationRevision !== options.expectedInstallationRevision ||
       (options.providerSessionId !== undefined &&
         response.providerSessionId !== options.providerSessionId) ||
       response.resumed !==
@@ -1077,12 +1121,16 @@ export class AuthenticatedRemoteMachineConnection {
       ProviderSessionsDiscoveredMessage | ProviderSessionValidatedMessage,
     requestId: string,
     provider: AgentProvider,
+    installationId: ProviderInstallationId,
+    revision: ProviderInstallationRevision,
   ): void {
     if (
       response.requestId !== requestId ||
       response.machineId !== this.machine.machineId ||
       response.nodeId !== this.machine.nodeId ||
-      response.provider !== provider
+      response.provider !== provider ||
+      response.providerInstallationId !== installationId ||
+      response.installationRevision !== revision
     ) {
       this.#connection.destroy()
       throw new MachineTransportError(
@@ -1096,6 +1144,8 @@ export class AuthenticatedRemoteMachineConnection {
 
 export interface RemoteProviderSessionDiscoveryPage {
   readonly provider: AgentProvider
+  readonly providerInstallationId: ProviderInstallationId
+  readonly installationRevision: ProviderInstallationRevision
   readonly status: 'supported' | 'unsupported' | 'unavailable'
   readonly resumeStatus: 'supported' | 'unsupported' | 'unavailable'
   readonly providerVersion?: string
@@ -1125,6 +1175,8 @@ export class RemoteCodexSession {
   readonly machine: RemoteMachineMetadata
   readonly conversationId: MachineTransportConversationId
   readonly providerThreadId: RemoteCodexProviderIdentity
+  readonly providerInstallationId: ProviderInstallationId
+  readonly installationRevision: ProviderInstallationRevision
   readonly resumed: boolean
   readonly executionProfile = 'codex-text-v1' as const
   readonly #connection: FramedMachineConnection
@@ -1142,6 +1194,8 @@ export class RemoteCodexSession {
     this.machine = machine
     this.conversationId = ready.conversationId
     this.providerThreadId = ready.providerThreadId
+    this.providerInstallationId = ready.providerInstallationId
+    this.installationRevision = ready.installationRevision
     this.resumed = ready.resumed
     this.#heartbeat = executionHeartbeatBounds(heartbeat)
   }
@@ -1450,6 +1504,8 @@ export class RemoteClaudeSession {
   readonly machine: RemoteMachineMetadata
   readonly conversationId: MachineTransportConversationId
   readonly providerSessionId: RemoteClaudeProviderIdentity
+  readonly providerInstallationId: ProviderInstallationId
+  readonly installationRevision: ProviderInstallationRevision
   readonly resumed: boolean
   readonly effort?: RemoteClaudeEffort
   readonly executionProfile = 'claude-restricted-read-search-v1' as const
@@ -1468,6 +1524,8 @@ export class RemoteClaudeSession {
     this.machine = machine
     this.conversationId = ready.conversationId
     this.providerSessionId = ready.providerSessionId
+    this.providerInstallationId = ready.providerInstallationId
+    this.installationRevision = ready.installationRevision
     this.resumed = ready.resumed
     this.effort = ready.effort
     this.#heartbeat = executionHeartbeatBounds(heartbeat)

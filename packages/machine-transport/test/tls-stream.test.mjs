@@ -31,6 +31,9 @@ import {
   requireFreshMachineTlsSession,
 } from '../dist/index.js'
 
+const providerInstallationId = 'pinst_streamfixture01'
+const installationRevision = 'prev_streamfixture01'
+
 test('Machine TLS authenticates both identities over existing Duplex streams', async () => {
   const node = await generateMachineTlsIdentity('CodeTether Node')
   const controller = await generateMachineTlsIdentity('CodeTether Controller')
@@ -528,6 +531,8 @@ test('Codex session over a stream shares trusted hello and exact session-open va
       machineId: trust.machine.machineId,
       nodeId: trust.machine.nodeId,
       conversationId,
+      providerInstallationId,
+      installationRevision,
       providerThreadId,
       resumed: false,
       executionProfile: 'codex-text-v1',
@@ -542,6 +547,8 @@ test('Codex session over a stream shares trusted hello and exact session-open va
       stream: pair.client,
       conversationId,
       projectId,
+      providerInstallationId,
+      expectedInstallationRevision: installationRevision,
       rootPath: '/srv/stream-codex',
     })
     assert.equal(session.machine.machineId, trust.machine.machineId)
@@ -577,6 +584,8 @@ test('Claude session over a stream shares trusted hello and exact session-open v
       machineId: trust.machine.machineId,
       nodeId: trust.machine.nodeId,
       conversationId,
+      providerInstallationId,
+      installationRevision,
       providerSessionId,
       resumed: false,
       effort: 'high',
@@ -591,6 +600,8 @@ test('Claude session over a stream shares trusted hello and exact session-open v
       stream: pair.client,
       conversationId,
       projectId,
+      providerInstallationId,
+      expectedInstallationRevision: installationRevision,
       rootPath: '/srv/stream-claude',
       effort: 'high',
     })
@@ -622,6 +633,8 @@ test('stream session-open loss remains authenticated and unsafe for endpoint ret
         stream: pair.client,
         conversationId: 'conv_stream_uncertain',
         projectId: 'proj_stream_uncertain',
+        providerInstallationId,
+        expectedInstallationRevision: installationRevision,
         rootPath: '/srv/stream-uncertain',
       }),
       (error) =>
@@ -650,6 +663,8 @@ test('Turn-start loss over a stream preserves action correlation and ownership u
       machineId: trust.machine.machineId,
       nodeId: trust.machine.nodeId,
       conversationId,
+      providerInstallationId,
+      installationRevision,
       providerThreadId,
       resumed: false,
       executionProfile: 'codex-text-v1',
@@ -669,6 +684,8 @@ test('Turn-start loss over a stream preserves action correlation and ownership u
       stream: pair.client,
       conversationId,
       projectId: 'proj_stream_turn',
+      providerInstallationId,
+      expectedInstallationRevision: installationRevision,
       rootPath: '/srv/stream-turn',
     })
     await assert.rejects(

@@ -15,6 +15,7 @@ import {
   RemoteMachineCoordinatorError,
   RemoteMachineRevocationPendingError,
   SecureRemoteMachineCoordinator,
+  remoteProviderLifecycleObservations,
   remoteProviderObservation,
 } from '../dist/api/remote-machine-coordinator.js'
 import { ConversationStore } from '../dist/persistence/index.js'
@@ -451,6 +452,93 @@ test('uses the Host receipt clock for remote Provider health ordering', () => {
   )
 })
 
+test('normalizes Node-ahead Provider lifecycle clocks to authenticated Host receipt time without persisting paths', async () => {
+  const directory = await mkdtemp(
+    join(tmpdir(), 'codetether-remote-lifecycle-clock-'),
+  )
+  const store = ConversationStore.open({
+    databasePath: join(directory, 'codetether.sqlite3'),
+  })
+  const installationId = 'pinst_remote_clock_fixture01'
+  const revision = 'prev_remote_clock_fixture01'
+  const nodeTimestamp = '2099-08-31T12:00:00.000Z'
+  const receivedAt = '2026-08-31T14:00:00.000+02:00'
+  const supported = (enabled = true) => ({
+    observed: 'supported',
+    enabled,
+    effective: enabled,
+  })
+  const observations = remoteProviderLifecycleObservations(
+    store.listMachines()[0].machineId,
+    {
+      providers: [
+        {
+          provider: 'codex',
+          selectedInstallationId: installationId,
+          installationsTruncated: true,
+          installations: [
+            {
+              installationId,
+              provider: 'codex',
+              selected: true,
+              version: '1.2.3',
+              launcherKind: 'symlink',
+              installMethod: 'npm',
+              availability: 'available',
+              revision,
+              firstObservedAt: nodeTimestamp,
+              lastObservedAt: nodeTimestamp,
+              compatibility: {
+                state: 'verified',
+                runtimeReadiness: 'ready',
+                freshness: 'current',
+                contractVersion: 1,
+                observedAt: nodeTimestamp,
+                capabilities: {
+                  execution: supported(),
+                  streaming: supported(),
+                  nativeResume: supported(),
+                  nativeSessionDiscovery: supported(),
+                  fileRead: supported(false),
+                  search: supported(false),
+                  toolEvents: supported(false),
+                  reasoningControl: supported(false),
+                },
+              },
+            },
+          ],
+        },
+      ],
+      observedAt: nodeTimestamp,
+    },
+    receivedAt,
+  )
+
+  assert.equal(observations.length, 1)
+  assert.equal(observations[0].installationsTruncated, true)
+  assert.equal(observations[0].observedAt, '2026-08-31T12:00:00.000Z')
+  const installation = observations[0].installations[0]
+  assert.equal(installation.firstObservedAt, observations[0].observedAt)
+  assert.equal(installation.lastObservedAt, observations[0].observedAt)
+  assert.equal(
+    installation.compatibility.observedAt,
+    observations[0].observedAt,
+  )
+  assert.equal(installation.locatorKey, installationId)
+  assert.equal('launcherPath' in installation, false)
+  assert.equal('resolvedExecutablePath' in installation, false)
+  try {
+    store.recordProviderLifecycle(observations[0])
+    const persisted = store.getProviderInstallation(installationId)
+    assert.ok(persisted)
+    assert.equal(persisted.lastObservedAt, observations[0].observedAt)
+    assert.equal(persisted.compatibility.observedAt, observations[0].observedAt)
+  } finally {
+    store.close()
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
 test('current Codex discovery survives authenticated Location validation and admits the exact session open', async () => {
   const f = await fixture({
     discoveryEnabled: true,
@@ -876,6 +964,7 @@ test('cancelled remote session discovery and validation preserve online state an
 test('current Claude discovery admits only the restricted effort-bound session and exact native resume', async () => {
   const f = await fixture({
     discoveryEnabled: true,
+    executionEnabled: true,
     claudeExecutionEnabled: true,
     async discoveryHandler() {
       return remoteProviderDiscovery(false, true)
@@ -971,6 +1060,109 @@ test('current Claude discovery admits only the restricted effort-bound session a
       (error) => error.code === 'remote_policy_violation',
     )
     assert.equal(f.counts.openClaude, 2)
+
+    const currentObservation = f.store.getRemoteProviderObservation(
+      machine.machineId,
+    )
+    assert.ok(currentObservation)
+    const optionalCapabilities = currentObservation.providers.map(
+      (provider) => {
+        if (provider.provider === 'codex') {
+          return {
+            ...provider,
+            availability: 'available',
+            capabilities: {
+              ...provider.capabilities,
+              streaming: true,
+              resume: false,
+            },
+          }
+        }
+        const withoutReasoning = { ...provider }
+        delete withoutReasoning.reasoningLabel
+        delete withoutReasoning.reasoningOptions
+        return {
+          ...withoutReasoning,
+          capabilities: {
+            ...provider.capabilities,
+            resume: false,
+            reasoningControl: false,
+          },
+        }
+      },
+    )
+    f.store.recordRemoteProviderObservation({
+      machineId: machine.machineId,
+      providers: optionalCapabilities,
+      observedAt: currentObservation.observedAt,
+    })
+    assert.equal(
+      coordinator.providerExecutionAvailable(machine.machineId, 'codex'),
+      true,
+    )
+    assert.equal(
+      coordinator.providerExecutionAvailable(machine.machineId, 'claude-code'),
+      true,
+    )
+
+    const codexCalls = f.counts.openCodex
+    await assert.rejects(
+      coordinator.openCodexSession(machine, trust, {
+        conversationId: 'conv_remote_codex_resume_rejected',
+        projectId: 'proj_remote_claude_coordinator',
+        providerInstallationId: 'pinst_coordinatorfixture01',
+        expectedInstallationRevision: 'prev_coordinatorfixture01',
+        rootPath: '/srv/projects/workspace',
+        providerThreadId: 'private-existing-codex-thread',
+      }),
+      (error) => error.code === 'remote_execution_unavailable',
+    )
+    assert.equal(f.counts.openCodex, codexCalls)
+
+    const claudeCalls = f.counts.openClaude
+    await assert.rejects(
+      coordinator.openClaudeSession(machine, trust, {
+        conversationId: 'conv_remote_claude_resume_rejected',
+        projectId: 'proj_remote_claude_coordinator',
+        providerInstallationId: 'pinst_coordinatorfixture01',
+        expectedInstallationRevision: 'prev_coordinatorfixture01',
+        rootPath: '/srv/projects/workspace',
+        providerSessionId: created.providerSessionId,
+        providerSessionMaterialized: true,
+      }),
+      (error) => error.code === 'remote_execution_unavailable',
+    )
+    await assert.rejects(
+      coordinator.openClaudeSession(machine, trust, {
+        conversationId: 'conv_remote_claude_effort_rejected',
+        projectId: 'proj_remote_claude_coordinator',
+        providerInstallationId: 'pinst_coordinatorfixture01',
+        expectedInstallationRevision: 'prev_coordinatorfixture01',
+        rootPath: '/srv/projects/workspace',
+        effort: 'high',
+      }),
+      (error) => error.code === 'remote_execution_unavailable',
+    )
+    assert.equal(f.counts.openClaude, claudeCalls)
+
+    const freshCodex = await coordinator.openCodexSession(machine, trust, {
+      conversationId: 'conv_remote_codex_fresh_limited',
+      projectId: 'proj_remote_claude_coordinator',
+      providerInstallationId: 'pinst_coordinatorfixture01',
+      expectedInstallationRevision: 'prev_coordinatorfixture01',
+      rootPath: '/srv/projects/workspace',
+    })
+    await freshCodex.close()
+    const freshClaude = await coordinator.openClaudeSession(machine, trust, {
+      conversationId: 'conv_remote_claude_fresh_limited',
+      projectId: 'proj_remote_claude_coordinator',
+      providerInstallationId: 'pinst_coordinatorfixture01',
+      expectedInstallationRevision: 'prev_coordinatorfixture01',
+      rootPath: '/srv/projects/workspace',
+    })
+    await freshClaude.close()
+    assert.equal(f.counts.openCodex, codexCalls + 1)
+    assert.equal(f.counts.openClaude, claudeCalls + 1)
   } finally {
     await f.close(coordinator)
   }

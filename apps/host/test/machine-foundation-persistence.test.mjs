@@ -59,8 +59,8 @@ test('migration 008 creates one stable local Machine and preserves the complete 
     downgradeMachineFoundationToVersionSeven(databasePath)
 
     const migrated = ConversationStore.open({ databasePath })
-    assert.equal(currentSchemaVersion, 15)
-    assert.equal(migrated.schemaVersion, 15)
+    assert.equal(currentSchemaVersion, 16)
+    assert.equal(migrated.schemaVersion, 16)
     const [machine] = migrated.listMachines()
     assert.ok(machine)
     assert.match(machine.machineId, /^machine_/u)
@@ -247,7 +247,14 @@ function downgradeMachineFoundationToVersionSeven(databasePath) {
   const database = new DatabaseSync(databasePath)
   database.exec('PRAGMA foreign_keys = OFF')
   database.exec(`
-    DELETE FROM schema_migrations WHERE version IN (8, 9, 10, 11, 12, 13, 14, 15);
+    DELETE FROM schema_migrations
+    WHERE version IN (8, 9, 10, 11, 12, 13, 14, 15, 16);
+    DROP TABLE conversation_provider_installation_bindings;
+    DROP TABLE provider_backend_observations;
+    DROP TABLE provider_installation_compatibility;
+    DROP TABLE machine_provider_installation_selections;
+    DROP TABLE provider_installations;
+    DROP INDEX idx_conversations_provider_installation_identity;
     DROP TABLE machine_relay_configurations;
     DROP TABLE machine_provider_execution_health;
     DROP TABLE turn_start_actions;

@@ -9,6 +9,8 @@ import { machineTransportLimits } from '@codetether/machine-transport'
 import { RemoteClaudeRunnerPool } from '../dist/remote-claude-runner.js'
 
 const sessionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+const providerInstallationId = 'pinst_nodefixture01'
+const installationRevision = 'prev_nodefixture01'
 
 function sessionRequest(rootPath, overrides = {}) {
   return {
@@ -19,6 +21,8 @@ function sessionRequest(rootPath, overrides = {}) {
     expectedNodeId: 'node_remote_claude01',
     conversationId: 'conv_remote_claude01',
     projectId: 'proj_remote_claude01',
+    providerInstallationId,
+    expectedInstallationRevision: installationRevision,
     rootPath,
     effort: 'high',
     ...overrides,
@@ -796,6 +800,74 @@ test('assigned and materialized native session identities select create versus r
     providerSessionId: sessionId,
     resume: true,
   })
+})
+
+test('selected installation capability loss rejects Claude resume and effort before runtime launch while fresh create remains available', async (t) => {
+  const temporary = await mkdtemp(
+    join(tmpdir(), 'codetether-claude-capability-'),
+  )
+  t.after(async () => await rm(temporary, { recursive: true, force: true }))
+  const root = await realpath(temporary)
+  const harness = runtimeHarness()
+  const nativeResume = false
+  let reasoningControl = false
+  const executable = join(root, 'claude-fixture')
+  const providerLifecycle = {
+    selected: async () => ({
+      provider: 'claude-code',
+      launcher: {
+        kind: 'native',
+        launcherPath: executable,
+        executable,
+        prefixArguments: [],
+        sourcePath: executable,
+      },
+      environment: { HOME: root },
+      version: 'fixture-version',
+      compatibility: {
+        state: 'limited',
+        capabilities: {
+          execution: { effective: true },
+          streaming: { effective: true },
+          nativeResume: { effective: nativeResume },
+          reasoningControl: { effective: reasoningControl },
+        },
+      },
+    }),
+  }
+  const pool = new RemoteClaudeRunnerPool({
+    runtimeFactory: harness.factory,
+    providerLifecycle,
+  })
+  t.after(async () => await pool.close())
+
+  await assert.rejects(
+    pool.open(sessionRequest(root)),
+    (error) => error.code === 'remote_execution_unavailable',
+  )
+  assert.equal(harness.calls.length, 0)
+
+  reasoningControl = true
+  await assert.rejects(
+    pool.open(
+      sessionRequest(root, {
+        providerSessionId: sessionId,
+        providerSessionMaterialized: true,
+      }),
+    ),
+    (error) => error.code === 'remote_execution_unavailable',
+  )
+  assert.equal(harness.calls.length, 0)
+
+  const fresh = await pool.open(
+    sessionRequest(root, {
+      effort: undefined,
+      providerSessionMaterialized: false,
+    }),
+  )
+  assert.equal(fresh.resumed, false)
+  assert.equal(harness.calls.length, 1)
+  await pool.release(fresh)
 })
 
 test('a newer authenticated connection safely replaces the exact idle Claude session', async (t) => {

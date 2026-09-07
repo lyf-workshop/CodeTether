@@ -55,6 +55,8 @@ export type ClaudeCodeDetectionStatus =
 
 export interface ClaudeCodeLauncher {
   readonly kind: 'native' | 'npm'
+  /** Absolute logical launcher selected before symlink resolution. */
+  readonly launcherPath: string
   /** Absolute executable passed directly to child_process.spawn. */
   readonly executable: string
   /** Trusted adapter-owned argv placed before Claude's argv. */

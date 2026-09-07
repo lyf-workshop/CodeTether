@@ -137,7 +137,10 @@ test('requires a bounded machine-readable logged-in auth status', async () => {
   ]) {
     const result = await detectClaudeCode({
       launcher,
-      timeoutMs: authStatus === 'hang' ? 100 : 5000,
+      // This bound must include the separate --version child before the auth
+      // child starts. A cold Windows Node process can legitimately take more
+      // than 100 ms, which would test the wrong timeout boundary.
+      timeoutMs: authStatus === 'hang' ? 3000 : 5000,
       environment: {
         ...process.env,
         FAKE_CLAUDE_AUTH_STATUS: authStatus,

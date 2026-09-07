@@ -172,10 +172,17 @@ export async function inspectCodexInstallation(
 
 export function spawnCodexAppServer(
   executable = 'codex',
-  options: { readonly disableHooks?: boolean } = {},
+  options: {
+    readonly disableHooks?: boolean
+    /**
+     * Machine-local Provider environment selected by the lifecycle authority.
+     * It is still stripped of parent Codex control variables before spawn.
+     */
+    readonly environment?: NodeJS.ProcessEnv
+  } = {},
 ): ChildProcessWithoutNullStreams {
   return spawn(executable, codexAppServerArguments(options), {
-    env: sanitizeCodexChildEnvironment(process.env),
+    env: sanitizeCodexChildEnvironment(options.environment ?? process.env),
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true,
   })
@@ -268,12 +275,23 @@ export function sanitizeRemoteCodexChildEnvironment(
     throw new CodexProcessError('Remote Codex home must be an absolute path')
   }
 
-  const sanitized = Object.fromEntries(
+  const sanitized = sanitizeCodexProbeEnvironment(environment)
+  return { ...sanitized, CODEX_HOME: codexHome }
+}
+
+/**
+ * Restricts zero-inference Provider probes to the same Provider/network/OS
+ * allowlist as remote Codex execution. In particular, a Node or Relay secret
+ * inherited by the owning process can never cross into `--version`/`--help`.
+ */
+export function sanitizeCodexProbeEnvironment(
+  environment: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  return Object.fromEntries(
     Object.entries(environment).filter(([name]) =>
       REMOTE_CODEX_ENVIRONMENT_VARIABLES.has(name.toUpperCase()),
     ),
   )
-  return { ...sanitized, CODEX_HOME: codexHome }
 }
 
 /**

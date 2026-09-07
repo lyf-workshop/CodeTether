@@ -58,7 +58,7 @@ test('migration 004 creates an empty Attention index without backfilling durable
 
     const migrated = ConversationStore.open({ databasePath })
     assert.equal(migrated.schemaVersion, currentSchemaVersion)
-    assert.equal(currentSchemaVersion, 15)
+    assert.equal(currentSchemaVersion, 16)
     assert.equal(migrated.listProjects().length, 1)
     assert.equal(migrated.listConversations().length, 1)
     assert.equal(migrated.countTurns(conversationId), 1)

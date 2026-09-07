@@ -14,6 +14,8 @@ import {
   type MachineId,
   type ProjectId,
   type ProviderId,
+  type ProviderInstallationId,
+  type ProviderInstallationRevision,
   type ProviderSessionDiscoveryCandidate,
   type ProviderSessionDiscoveryCursor,
   type ProviderSessionDiscoveryProviderResult,
@@ -28,6 +30,9 @@ export interface PrivateDiscoveryCandidate {
   readonly projectId: ProjectId
   readonly machineId: MachineId
   readonly rootPath: string
+  /** Exact private runtime context that owned this scan. */
+  readonly providerInstallationId?: ProviderInstallationId
+  readonly installationRevision?: ProviderInstallationRevision
   readonly native: NativeProviderSessionCandidate
   readonly createdAtMs: number
 }
@@ -106,6 +111,12 @@ export class ProviderSessionDiscoveryRegistry {
     readonly rootPath: string
     readonly providerFilter?: ProviderId
     readonly pages: readonly ProviderSessionDiscoveryPage[]
+    readonly installationForProvider?: (provider: ProviderId) =>
+      | {
+          readonly installationId: ProviderInstallationId
+          readonly installationRevision: ProviderInstallationRevision
+        }
+      | undefined
     readonly adoptedConversation: (
       native: NativeProviderSessionCandidate,
     ) => ConversationId | undefined
@@ -138,6 +149,7 @@ export class ProviderSessionDiscoveryRegistry {
       this.#deleteSnapshot(oldest.snapshotId)
     }
     const candidateIds = candidates.map((native) => {
+      const installation = input.installationForProvider?.(native.provider)
       const candidateId = DiscoveryCandidateIdSchema.parse(
         `candidate_${this.#randomId().replaceAll('-', '')}`,
       )
@@ -147,6 +159,12 @@ export class ProviderSessionDiscoveryRegistry {
         projectId: input.projectId,
         machineId: input.machineId,
         rootPath: input.rootPath,
+        ...(installation === undefined
+          ? {}
+          : {
+              providerInstallationId: installation.installationId,
+              installationRevision: installation.installationRevision,
+            }),
         native,
         createdAtMs: now,
         adoptedConversationId: input.adoptedConversation(native),

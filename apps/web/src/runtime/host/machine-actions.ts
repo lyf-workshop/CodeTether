@@ -209,6 +209,11 @@ export class MachineActions {
                 : {
                     ...current,
                     providers: response.data.providers,
+                    ...(response.data.providerLifecycles === undefined
+                      ? {}
+                      : {
+                          providerLifecycles: response.data.providerLifecycles,
+                        }),
                     providerDiscovery: response.data.providerDiscovery,
                   },
           )

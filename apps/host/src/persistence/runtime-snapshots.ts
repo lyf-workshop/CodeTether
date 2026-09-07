@@ -48,6 +48,8 @@ export interface DurableTurnPresentationV1 {
 export interface RestoredDurableConversation {
   readonly record: ConversationRecord
   readonly providerThreadId: string
+  /** Private Phase 8B installation binding retained across Host hydration. */
+  readonly providerInstallationId?: DurableConversation['providerInstallationId']
   readonly origin: DurableConversation['origin']
   readonly providerSessionMaterialized: boolean
   readonly runtime: ConversationRuntimeSnapshot
@@ -388,6 +390,9 @@ function restoreConversation(
   return {
     record: reconstructed.record,
     providerThreadId: conversation.providerThreadId,
+    ...(conversation.providerInstallationId === undefined
+      ? {}
+      : { providerInstallationId: conversation.providerInstallationId }),
     origin: conversation.origin,
     providerSessionMaterialized: conversation.providerSessionMaterialized,
     runtime: reconstructed.runtime,

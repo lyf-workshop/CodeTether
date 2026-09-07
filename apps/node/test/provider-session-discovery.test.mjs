@@ -26,6 +26,8 @@ import { RemoteProviderSessionDiscoveryRegistry } from '../dist/provider-session
 import { NodeStateStore } from '../dist/state-store.js'
 
 const projectId = 'proj_sessiondiscovery'
+const providerInstallationId = 'pinst_discoveryfixture01'
+const installationRevision = 'prev_discoveryfixture01'
 
 test('real Claude discovery metadata fits the private Machine wire schema', async (t) => {
   const directory = await mkdtemp(
@@ -346,6 +348,8 @@ test(
       ]) {
         const page = await connected.discoverProviderSessions({
           provider,
+          providerInstallationId,
+          expectedInstallationRevision: installationRevision,
           projectId,
           rootPath: projectRoot,
           limit: machineTransportLimits.providerSessionDiscoveryPageSize,
@@ -371,6 +375,8 @@ test(
 
         const valid = await connected.validateProviderSession({
           provider,
+          providerInstallationId,
+          expectedInstallationRevision: installationRevision,
           projectId,
           rootPath: projectRoot,
           nativeSessionId: page.candidates[0].nativeSessionId,
@@ -380,6 +386,8 @@ test(
         assert.equal(
           await connected.validateProviderSession({
             provider,
+            providerInstallationId,
+            expectedInstallationRevision: installationRevision,
             projectId,
             rootPath: projectRoot,
             nativeSessionId: page.candidates[0].nativeSessionId,
@@ -393,6 +401,8 @@ test(
 
       const unavailable = await connected.discoverProviderSessions({
         provider: 'codex',
+        providerInstallationId,
+        expectedInstallationRevision: installationRevision,
         projectId,
         rootPath: projectRoot,
         cursor: 'format_unavailable',
@@ -431,6 +441,8 @@ test(
       await assert.rejects(
         wrongNodeConnection.discoverProviderSessions({
           provider: 'codex',
+          providerInstallationId,
+          expectedInstallationRevision: installationRevision,
           projectId,
           rootPath: projectRoot,
           limit: 1,
@@ -444,6 +456,8 @@ test(
       await assert.rejects(
         wrongMachineConnection.discoverProviderSessions({
           provider: 'codex',
+          providerInstallationId,
+          expectedInstallationRevision: installationRevision,
           projectId,
           rootPath: projectRoot,
           limit: 1,
@@ -458,6 +472,8 @@ test(
       await assert.rejects(
         connected.discoverProviderSessions({
           provider: 'codex',
+          providerInstallationId,
+          expectedInstallationRevision: installationRevision,
           projectId,
           rootPath: `${projectRoot}${sep}.`,
           limit: 1,
@@ -536,6 +552,8 @@ test(
       ;({ connected } = await pairAndConnect(running, localController))
       const pending = connected.discoverProviderSessions({
         provider: 'codex',
+        providerInstallationId,
+        expectedInstallationRevision: installationRevision,
         projectId,
         rootPath: projectRoot,
         limit: 1,

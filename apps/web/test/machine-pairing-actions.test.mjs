@@ -97,6 +97,12 @@ test('Machine actions keep pairing preview ephemeral and accept only Host-confir
       .providerDiscovery.state,
     'current',
   )
+  assert.deepEqual(
+    queryClient
+      .getQueryData(machineQueryKeys.detail('machine_remote01'))
+      .providerLifecycles.map((lifecycle) => lifecycle.provider),
+    ['codex', 'claude-code'],
+  )
   await actions.updateMachineConnectionAddress('machine_remote01', {
     host: '192.168.1.43',
     port: 4318,
@@ -358,6 +364,10 @@ function refreshResponse(
       providers: [
         remoteProvider('codex', 'Codex', '0.149.1'),
         remoteProvider('claude-code', 'Claude Code', '2.1.251'),
+      ],
+      providerLifecycles: [
+        { provider: 'codex', installations: [] },
+        { provider: 'claude-code', installations: [] },
       ],
       providerDiscovery: { state: 'current', observedAt: timestamp },
     },

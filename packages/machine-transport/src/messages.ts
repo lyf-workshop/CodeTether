@@ -21,6 +21,9 @@ import {
   MachineTransportTurnIdSchema,
   NodeIdSchema,
   PairingAttemptIdSchema,
+  ProviderBackendConfigurationRevisionSchema,
+  ProviderInstallationIdSchema,
+  ProviderInstallationRevisionSchema,
 } from './ids.js'
 
 export const PublicKeyFingerprintSchema = z
@@ -489,6 +492,142 @@ export type RemoteProviderCapabilities = z.infer<
   typeof RemoteProviderCapabilitiesSchema
 >
 
+export const RemoteProviderCapabilityObservationSchema = z
+  .object({
+    observed: z.enum(['supported', 'unsupported', 'unavailable', 'unknown']),
+    enabled: z.boolean(),
+    effective: z.boolean(),
+  })
+  .strict()
+  .refine((capability) => !capability.effective || capability.enabled, {
+    message: 'An effective Provider capability must be enabled by policy',
+    path: ['effective'],
+  })
+
+export const RemoteProviderCompatibilityCapabilitiesSchema = z
+  .object({
+    execution: RemoteProviderCapabilityObservationSchema,
+    streaming: RemoteProviderCapabilityObservationSchema,
+    nativeResume: RemoteProviderCapabilityObservationSchema,
+    nativeSessionDiscovery: RemoteProviderCapabilityObservationSchema,
+    fileRead: RemoteProviderCapabilityObservationSchema,
+    search: RemoteProviderCapabilityObservationSchema,
+    toolEvents: RemoteProviderCapabilityObservationSchema,
+    reasoningControl: RemoteProviderCapabilityObservationSchema,
+  })
+  .strict()
+
+export const RemoteProviderCompatibilityObservationSchema = z
+  .object({
+    state: z.enum([
+      'verified',
+      'compatible_unverified',
+      'limited',
+      'incompatible',
+      'unavailable',
+    ]),
+    runtimeReadiness: z.enum(['ready', 'limited', 'blocked', 'unavailable']),
+    freshness: z.enum(['current', 'last_known', 'not_observed']),
+    contractVersion: z.number().int().positive().safe(),
+    observedAt: TimestampSchema.optional(),
+    failure: MachineTransportCanonicalFailureSchema.optional(),
+    capabilities: RemoteProviderCompatibilityCapabilitiesSchema,
+  })
+  .strict()
+export type RemoteProviderCompatibilityObservation = z.infer<
+  typeof RemoteProviderCompatibilityObservationSchema
+>
+
+export const RemoteProviderBackendConfigurationSchema = z
+  .object({
+    source: z.enum([
+      'process_environment',
+      'provider_settings',
+      'platform_integration',
+      'mixed',
+      'unknown',
+    ]),
+    hasBaseUrl: z.boolean(),
+    hasApiKey: z.boolean(),
+    hasAuthToken: z.boolean(),
+    hasOAuthToken: z.boolean(),
+    bedrockConfigured: z.boolean(),
+    vertexConfigured: z.boolean(),
+  })
+  .strict()
+
+export const RemoteProviderBackendObservationSchema = z
+  .object({
+    mode: z.enum([
+      'first_party',
+      'custom_gateway',
+      'bedrock',
+      'vertex',
+      'unknown',
+    ]),
+    readiness: z.enum([
+      'unknown',
+      'ready',
+      'unavailable',
+      'authentication_required',
+      'misconfigured',
+    ]),
+    freshness: z.enum(['current', 'last_known', 'not_observed']),
+    configurationRevision:
+      ProviderBackendConfigurationRevisionSchema.optional(),
+    configuration: RemoteProviderBackendConfigurationSchema,
+    sanitizedOrigin: z
+      .string()
+      .trim()
+      .min(1)
+      .max(253)
+      .refine(
+        isSanitizedBackendOrigin,
+        'Provider backend origin must not contain credentials, a path, query, or fragment',
+      )
+      .optional(),
+    observedAt: TimestampSchema.optional(),
+    failure: MachineTransportCanonicalFailureSchema.optional(),
+  })
+  .strict()
+export type RemoteProviderBackendObservation = z.infer<
+  typeof RemoteProviderBackendObservationSchema
+>
+
+export const RemoteProviderInstallationDescriptorSchema = z
+  .object({
+    installationId: ProviderInstallationIdSchema,
+    provider: z.enum(['codex', 'claude-code']),
+    selected: z.boolean(),
+    version: z.string().trim().min(1).max(120).optional(),
+    launcherKind: z.enum([
+      'native',
+      'symlink',
+      'hardlink',
+      'wrapper',
+      'npm_shim',
+      'unknown',
+    ]),
+    installMethod: z.enum([
+      'native_installer',
+      'npm',
+      'homebrew',
+      'package_manager',
+      'manual',
+      'unknown',
+    ]),
+    availability: z.enum(['available', 'unavailable', 'unresolved']),
+    revision: ProviderInstallationRevisionSchema.optional(),
+    firstObservedAt: TimestampSchema,
+    lastObservedAt: TimestampSchema,
+    compatibility: RemoteProviderCompatibilityObservationSchema.optional(),
+    backend: RemoteProviderBackendObservationSchema.optional(),
+  })
+  .strict()
+export type RemoteProviderInstallationDescriptor = z.infer<
+  typeof RemoteProviderInstallationDescriptorSchema
+>
+
 const RemoteProviderReasoningOptionSchema = z
   .object({
     id: RemoteClaudeEffortSchema,
@@ -519,6 +658,16 @@ export const RemoteProviderDescriptorSchema = z
     executionFailureReason: z
       .enum(providerConditionFailureReasonValues)
       .optional(),
+    installations: z
+      .array(RemoteProviderInstallationDescriptorSchema)
+      .max(machineTransportLimits.maximumProviderInstallationsPerProvider)
+      .readonly()
+      .optional(),
+    /** The bounded Machine-local scan or wire projection omitted candidates. */
+    installationsTruncated: z.boolean().optional(),
+    selectedInstallationId: ProviderInstallationIdSchema.optional(),
+    compatibility: RemoteProviderCompatibilityObservationSchema.optional(),
+    backend: RemoteProviderBackendObservationSchema.optional(),
   })
   .strict()
   .superRefine((descriptor, context) => {
@@ -526,6 +675,40 @@ export const RemoteProviderDescriptorSchema = z
       .filter(([, value]) => value)
       .map(([capability]) => capability)
       .sort()
+    const selectedInstallation = descriptor.installations?.find(
+      (installation) => installation.selected,
+    )
+    const selectedCompatibility = selectedInstallation?.compatibility
+    const descriptorCompatibility = descriptor.compatibility
+    const hasLifecycle = descriptor.installations !== undefined
+    if (descriptor.installationsTruncated !== undefined && !hasLifecycle) {
+      context.addIssue({
+        code: 'custom',
+        message:
+          'Remote Provider installation truncation requires a lifecycle snapshot',
+        path: ['installationsTruncated'],
+      })
+    }
+    const currentLifecycleCompatibility =
+      selectedCompatibility?.freshness === 'current' &&
+      descriptorCompatibility?.freshness === 'current' &&
+      JSON.stringify(selectedCompatibility) ===
+        JSON.stringify(descriptorCompatibility)
+        ? descriptorCompatibility
+        : undefined
+    if (
+      hasLifecycle &&
+      (selectedCompatibility?.freshness === 'current' ||
+        descriptorCompatibility?.freshness === 'current') &&
+      currentLifecycleCompatibility === undefined
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message:
+          'Remote Provider compatibility must match its current selected installation',
+        path: ['compatibility'],
+      })
+    }
     const remoteCodexTextFoundation =
       descriptor.provider === 'codex' &&
       descriptor.availability === 'available' &&
@@ -542,11 +725,53 @@ export const RemoteProviderDescriptorSchema = z
       enabled[3] === 'search' &&
       enabled[4] === 'streaming' &&
       enabled[5] === 'toolEvents'
-    if (
-      enabled.length > 0 &&
-      !remoteCodexTextFoundation &&
-      !remoteClaudeReadSearchFoundation
-    ) {
+    let admittedCapabilities =
+      enabled.length === 0 ||
+      remoteCodexTextFoundation ||
+      remoteClaudeReadSearchFoundation
+    if (hasLifecycle) {
+      const compatibility = currentLifecycleCompatibility
+      const compatibleRuntime =
+        descriptor.availability === 'available' &&
+        compatibility?.capabilities.execution.effective === true &&
+        (compatibility.state === 'verified' ||
+          compatibility.state === 'compatible_unverified' ||
+          compatibility.state === 'limited')
+      const expected = Object.fromEntries(
+        Object.keys(descriptor.capabilities).map((capability) => [
+          capability,
+          false,
+        ]),
+      ) as Record<keyof typeof descriptor.capabilities, boolean>
+      if (
+        descriptor.provider === 'codex' &&
+        compatibleRuntime &&
+        compatibility.capabilities.streaming.effective
+      ) {
+        expected.streaming = true
+        expected.resume = compatibility.capabilities.nativeResume.effective
+      } else if (
+        descriptor.provider === 'claude-code' &&
+        compatibleRuntime &&
+        compatibility.capabilities.streaming.effective &&
+        compatibility.capabilities.fileRead.effective &&
+        compatibility.capabilities.search.effective &&
+        compatibility.capabilities.toolEvents.effective
+      ) {
+        expected.streaming = true
+        expected.resume = compatibility.capabilities.nativeResume.effective
+        expected.fileRead = true
+        expected.search = true
+        expected.toolEvents = true
+        expected.reasoningControl =
+          compatibility.capabilities.reasoningControl.effective
+      }
+      admittedCapabilities = Object.entries(descriptor.capabilities).every(
+        ([capability, value]) =>
+          expected[capability as keyof typeof expected] === value,
+      )
+    }
+    if (!admittedCapabilities) {
       context.addIssue({
         code: 'custom',
         message:
@@ -555,10 +780,13 @@ export const RemoteProviderDescriptorSchema = z
       })
     }
     const reasoningIds = descriptor.reasoningOptions?.map(({ id }) => id)
-    const exactClaudeReasoning =
+    const exactClaudeReasoningMetadata =
       descriptor.reasoningLabel !== undefined &&
       reasoningIds?.join(',') === 'low,medium,high,xhigh,max'
-    if (remoteClaudeReadSearchFoundation !== exactClaudeReasoning) {
+    const remoteClaudeReasoningEnabled =
+      descriptor.provider === 'claude-code' &&
+      descriptor.capabilities.reasoningControl
+    if (remoteClaudeReasoningEnabled !== exactClaudeReasoningMetadata) {
       context.addIssue({
         code: 'custom',
         message: 'Remote Claude reasoning metadata is inconsistent',
@@ -583,6 +811,45 @@ export const RemoteProviderDescriptorSchema = z
           'Unavailable execution cannot advertise execution capabilities',
         path: ['executionFailureReason'],
       })
+    }
+    if (
+      descriptor.installations === undefined &&
+      descriptor.selectedInstallationId !== undefined
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Provider lifecycle installations require a selected identity',
+        path: ['selectedInstallationId'],
+      })
+    }
+    if (descriptor.installations !== undefined) {
+      const selected = descriptor.installations.filter(
+        (installation) => installation.selected,
+      )
+      if (
+        (descriptor.installations.length === 0 &&
+          descriptor.selectedInstallationId !== undefined) ||
+        (descriptor.installations.length > 0 &&
+          (selected.length !== 1 ||
+            selected[0]?.installationId !== descriptor.selectedInstallationId))
+      ) {
+        context.addIssue({
+          code: 'custom',
+          message: 'Provider selected installation is inconsistent',
+          path: ['installations'],
+        })
+      }
+      if (
+        descriptor.installations.some(
+          (installation) => installation.provider !== descriptor.provider,
+        )
+      ) {
+        context.addIssue({
+          code: 'custom',
+          message: 'Provider installations must match the descriptor Provider',
+          path: ['installations'],
+        })
+      }
     }
   })
 export type RemoteProviderDescriptor = z.infer<
@@ -698,6 +965,8 @@ export const ProviderSessionsDiscoverMessageSchema = z
     expectedMachineId: MachineTransportMachineIdSchema,
     expectedNodeId: NodeIdSchema,
     provider: z.enum(['codex', 'claude-code']),
+    providerInstallationId: ProviderInstallationIdSchema,
+    expectedInstallationRevision: ProviderInstallationRevisionSchema,
     projectId: MachineTransportProjectIdSchema,
     rootPath: RemoteProjectLocationPathSchema,
     cursor: ProviderSessionDiscoveryCursorSchema.optional(),
@@ -720,6 +989,8 @@ export const ProviderSessionsDiscoveredMessageSchema = z
     machineId: MachineTransportMachineIdSchema,
     nodeId: NodeIdSchema,
     provider: z.enum(['codex', 'claude-code']),
+    providerInstallationId: ProviderInstallationIdSchema,
+    installationRevision: ProviderInstallationRevisionSchema,
     status: z.enum(['supported', 'unsupported', 'unavailable']),
     resumeStatus: z.enum(['supported', 'unsupported', 'unavailable']),
     providerVersion: z.string().trim().min(1).max(120).optional(),
@@ -772,6 +1043,8 @@ export const ProviderSessionValidateMessageSchema = z
     expectedMachineId: MachineTransportMachineIdSchema,
     expectedNodeId: NodeIdSchema,
     provider: z.enum(['codex', 'claude-code']),
+    providerInstallationId: ProviderInstallationIdSchema,
+    expectedInstallationRevision: ProviderInstallationRevisionSchema,
     projectId: MachineTransportProjectIdSchema,
     rootPath: RemoteProjectLocationPathSchema,
     nativeSessionId: NativeProviderSessionIdentitySchema,
@@ -790,6 +1063,8 @@ export const ProviderSessionValidatedMessageSchema = z
     machineId: MachineTransportMachineIdSchema,
     nodeId: NodeIdSchema,
     provider: z.enum(['codex', 'claude-code']),
+    providerInstallationId: ProviderInstallationIdSchema,
+    installationRevision: ProviderInstallationRevisionSchema,
     valid: z.boolean(),
     candidate: PrivateProviderSessionCandidateSchema.optional(),
   })
@@ -817,6 +1092,8 @@ export const CodexSessionOpenMessageSchema = z
     conversationId: MachineTransportConversationIdSchema,
     projectId: MachineTransportProjectIdSchema,
     rootPath: RemoteProjectLocationPathSchema,
+    providerInstallationId: ProviderInstallationIdSchema,
+    expectedInstallationRevision: ProviderInstallationRevisionSchema,
     providerThreadId: RemoteCodexProviderIdentitySchema.optional(),
   })
   .strict()
@@ -832,6 +1109,8 @@ export const CodexSessionReadyMessageSchema = z
     machineId: MachineTransportMachineIdSchema,
     nodeId: NodeIdSchema,
     conversationId: MachineTransportConversationIdSchema,
+    providerInstallationId: ProviderInstallationIdSchema,
+    installationRevision: ProviderInstallationRevisionSchema,
     providerThreadId: RemoteCodexProviderIdentitySchema,
     resumed: z.boolean(),
     executionProfile: RemoteCodexExecutionProfileSchema,
@@ -997,6 +1276,8 @@ export const ClaudeSessionOpenMessageSchema = z
     conversationId: MachineTransportConversationIdSchema,
     projectId: MachineTransportProjectIdSchema,
     rootPath: RemoteProjectLocationPathSchema,
+    providerInstallationId: ProviderInstallationIdSchema,
+    expectedInstallationRevision: ProviderInstallationRevisionSchema,
     providerSessionId: RemoteClaudeProviderIdentitySchema.optional(),
     providerSessionMaterialized: z.boolean().optional(),
     effort: RemoteClaudeEffortSchema.optional(),
@@ -1027,6 +1308,8 @@ export const ClaudeSessionReadyMessageSchema = z
     machineId: MachineTransportMachineIdSchema,
     nodeId: NodeIdSchema,
     conversationId: MachineTransportConversationIdSchema,
+    providerInstallationId: ProviderInstallationIdSchema,
+    installationRevision: ProviderInstallationRevisionSchema,
     providerSessionId: RemoteClaudeProviderIdentitySchema,
     resumed: z.boolean(),
     effort: RemoteClaudeEffortSchema.optional(),
@@ -1347,3 +1630,37 @@ export const MachineWireMessageSchema = z.discriminatedUnion('type', [
   MachineErrorMessageSchema,
 ])
 export type MachineWireMessage = z.infer<typeof MachineWireMessageSchema>
+
+function isSanitizedBackendOrigin(value: string): boolean {
+  try {
+    const explicitUrl = new URL(value)
+    if (
+      (explicitUrl.protocol === 'https:' || explicitUrl.protocol === 'http:') &&
+      explicitUrl.username.length === 0 &&
+      explicitUrl.password.length === 0 &&
+      explicitUrl.search.length === 0 &&
+      explicitUrl.hash.length === 0 &&
+      explicitUrl.pathname === '/' &&
+      explicitUrl.origin === value
+    ) {
+      return true
+    }
+  } catch {
+    // A presentation-safe hostname (optionally with port) is also accepted.
+  }
+  if (
+    value.includes('/') ||
+    value.includes('@') ||
+    value.includes('?') ||
+    value.includes('#') ||
+    /\s/u.test(value)
+  ) {
+    return false
+  }
+  try {
+    const host = new URL(`https://${value}`)
+    return host.host === value && host.pathname === '/'
+  } catch {
+    return false
+  }
+}

@@ -270,6 +270,8 @@ test('remote observation and runtime preparation share one selected installation
         expectedNodeId: 'node_claude_selection',
         conversationId: 'conv_claude_selection',
         projectId: 'proj_claude_selection',
+        providerInstallationId: 'pinst_claudeselection01',
+        expectedInstallationRevision: 'prev_claudeselection01',
         rootPath: projectRoot,
         effort: 'high',
       })
@@ -287,6 +289,8 @@ test('remote observation and runtime preparation share one selected installation
         expectedNodeId: 'node_claude_selection',
         conversationId: 'conv_claude_selection',
         projectId: 'proj_claude_selection',
+        providerInstallationId: 'pinst_claudeselection01',
+        expectedInstallationRevision: 'prev_claudeselection01',
         rootPath: projectRoot,
         providerSessionId,
         providerSessionMaterialized: true,

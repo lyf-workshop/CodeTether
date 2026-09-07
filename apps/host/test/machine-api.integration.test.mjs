@@ -23,6 +23,10 @@ import { WorkspacePolicy } from '../dist/api/workspace-policy.js'
 import { ConversationStore } from '../dist/persistence/conversation-store.js'
 
 const timestamp = '2026-08-30T12:00:00.000Z'
+const remoteCodexInstallationId = 'pinst_remoteapicodex0001'
+const remoteCodexInstallationRevision = 'prev_remoteapicodex0001'
+const remoteClaudeInstallationId = 'pinst_remoteapiclaude0001'
+const remoteClaudeInstallationRevision = 'prev_remoteapiclaude0001'
 const availableCapabilities = {
   streaming: true,
   resume: true,
@@ -2407,13 +2411,23 @@ class FakeRemoteMachineCoordinator {
     assert.equal(machine.machineId, this.machineId)
     assert.equal(trust.machineId, this.machineId)
     this.discoveryCalls += 1
+    const observedAt = new Date(
+      Date.parse(timestamp) + this.discoveryCalls - 1,
+    ).toISOString()
+    recordRemoteProviderLifecycleFixtures({
+      persistence: this.persistence,
+      machineId: this.machineId,
+      observedAt,
+      codexExecution: this.remoteExecution,
+      claudeExecution: this.remoteClaudeExecution,
+    })
     const observation = this.persistence.recordRemoteProviderObservation({
       machineId: this.machineId,
       providers: remoteProviderDescriptors(
         this.remoteExecution,
         this.remoteClaudeExecution,
       ),
-      observedAt: timestamp,
+      observedAt,
     })
     this.currentProviderObservedAt = observation.observedAt
     for (const listener of this.discoveryListeners) listener(observation)
@@ -2483,6 +2497,11 @@ class FakeRemoteMachineCoordinator {
       )
     }
     if (this.openError !== undefined) throw this.openError
+    assert.equal(input.providerInstallationId, remoteCodexInstallationId)
+    assert.equal(
+      input.expectedInstallationRevision,
+      remoteCodexInstallationRevision,
+    )
     this.openCodexCalls.push(input)
     this.openCodexGenerations.push(this.connectionGeneration ?? 1)
     const providerThreadId =
@@ -2539,6 +2558,11 @@ class FakeRemoteMachineCoordinator {
       )
     }
     if (this.openError !== undefined) throw this.openError
+    assert.equal(input.providerInstallationId, remoteClaudeInstallationId)
+    assert.equal(
+      input.expectedInstallationRevision,
+      remoteClaudeInstallationRevision,
+    )
     this.openClaudeCalls.push(input)
     const providerSessionId =
       input.providerSessionId ?? '123e4567-e89b-42d3-a456-426614174000'
@@ -2662,6 +2686,114 @@ function remoteProviderDescriptors(
         : {}),
     },
   ]
+}
+
+function recordRemoteProviderLifecycleFixtures({
+  persistence,
+  machineId,
+  observedAt,
+  codexExecution,
+  claudeExecution,
+}) {
+  persistence.recordProviderLifecycle(
+    remoteProviderLifecycleFixture({
+      machineId,
+      provider: 'codex',
+      installationId: remoteCodexInstallationId,
+      revision: remoteCodexInstallationRevision,
+      observedAt,
+      execution: codexExecution,
+      discovery: true,
+    }),
+  )
+  persistence.recordProviderLifecycle(
+    claudeExecution
+      ? remoteProviderLifecycleFixture({
+          machineId,
+          provider: 'claude-code',
+          installationId: remoteClaudeInstallationId,
+          revision: remoteClaudeInstallationRevision,
+          observedAt,
+          execution: true,
+          discovery: true,
+        })
+      : {
+          machineId,
+          provider: 'claude-code',
+          observedAt,
+          installations: [],
+        },
+  )
+}
+
+function remoteProviderLifecycleFixture({
+  machineId,
+  provider,
+  installationId,
+  revision,
+  observedAt,
+  execution,
+  discovery,
+}) {
+  const enabledCapability = (supported) => ({
+    observed: supported ? 'supported' : 'unsupported',
+    enabled: true,
+    effective: supported,
+  })
+  const disabledCapability = {
+    observed: 'unknown',
+    enabled: false,
+    effective: false,
+  }
+  const executionCapability = enabledCapability(execution)
+  const claudeFeature = provider === 'claude-code' && execution
+  return {
+    machineId,
+    provider,
+    observedAt,
+    selectedInstallationId: installationId,
+    installations: [
+      {
+        installationId,
+        machineId,
+        provider,
+        locatorKey: installationId,
+        selected: true,
+        version: '1.2.3',
+        launcherKind: 'symlink',
+        installMethod: 'npm',
+        availability: 'available',
+        revision,
+        firstObservedAt: timestamp,
+        lastObservedAt: observedAt,
+        compatibility: {
+          state: execution ? 'verified' : 'incompatible',
+          runtimeReadiness: execution ? 'ready' : 'blocked',
+          freshness: 'current',
+          contractVersion: 1,
+          observedAt,
+          capabilities: {
+            execution: executionCapability,
+            streaming: executionCapability,
+            nativeResume: enabledCapability(execution),
+            nativeSessionDiscovery: enabledCapability(discovery),
+            fileRead: claudeFeature
+              ? enabledCapability(true)
+              : disabledCapability,
+            search: claudeFeature
+              ? enabledCapability(true)
+              : disabledCapability,
+            toolEvents: claudeFeature
+              ? enabledCapability(true)
+              : disabledCapability,
+            reasoningControl: claudeFeature
+              ? enabledCapability(true)
+              : disabledCapability,
+          },
+        },
+      },
+    ],
+  }
 }
 
 function hasInternalProcessIdentity(value) {

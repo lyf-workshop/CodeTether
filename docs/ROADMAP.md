@@ -1214,7 +1214,7 @@ Exit gate:
 
 ## Phase 8A — Existing Session Discovery & Adoption
 
-**Status:** current approved implementation scope; not accepted, frozen, or declared ready.
+**Status:** accepted and frozen at `5d2f67c`.
 
 **Goal:** let an exact Machine/Project Location discover compatible Codex and Claude Code native sessions, adopt selected sessions into ordinary durable CodeTether Conversations without inference or Provider-store mutation, and continue them only through a later explicit native resume.
 
@@ -1238,25 +1238,43 @@ Exit gate:
 
 ## Phase 8B — Provider Lifecycle & Compatibility
 
-**Status:** planned; unimplemented and unauthorized during Phase 8A.
+**Status:** current approved implementation scope; not accepted, frozen, or declared ready.
 
-**Goal:** manage Provider-version discovery compatibility and lifecycle without weakening the adapter boundary.
+**Goal:** identify exact Machine-local Provider installations, detect external installation changes, re-evaluate bounded capability contracts, and keep runtime compatibility separate from inference-backend readiness without weakening the adapter, Machine, or Conversation boundaries.
+
+### In scope
+
+- A durable Machine/Provider-scoped `ProviderInstallation` identity with bounded discovery, launcher/resolved-executable distinction, installation provenance, revision observation, deterministic selection, and immutable Conversation binding.
+- Revision-scoped, zero-inference compatibility probes with required versus optional capabilities, observed versus CodeTether-enabled support, bounded coalescing, stale-result guards, and independent execution, streaming, native-resume, and native-session-discovery status.
+- Safe backend-mode/configuration observation and current/last-known readiness that never stores credentials or treats a custom-gateway outage as runtime incompatibility.
+- Local and remote lifecycle refresh through the existing typed Machine transport; Relay remains opaque. Existing history and organization remain usable while execution is blocked, and no active Turn migrates or replays.
+- Provider status and explicit refresh UX plus deterministic and REAL current-Provider validation. Provider installations and settings remain read-only.
+
+### Out of scope
+
+- Automatic update, downgrade, reinstall, package-manager mutation, alternate-installation failover, broad installation migration, backend/profile/account switching, automatic gateway failover, onboarding Doctor, new Provider capabilities, Mobile, Remote Terminal, or Remote Files.
+
+### Exit gate
+
+- Observation and execution use the same exact selected installation across local, Direct, and Relay paths; PATH changes cannot silently migrate existing Conversations; changed revisions invalidate compatibility and unknown compatible versions remain usable only after bounded contract probes.
+- Runtime compatibility, optional session discovery/resume compatibility, and backend readiness remain independent; incompatible or missing installations preserve Projects, history, Search, organization, Machine trust, and Phase 8A native bindings without deferred Prompt execution or replay.
+- REAL current Codex and Claude observations/executions, current custom-gateway readiness, multiple-Claude-installation handling, Direct/Relay and native-resume regressions, deterministic lifecycle matrices, UI/accessibility, package gates, privacy, cleanup, and a clean worktree pass.
 
 ## Phase 8C — Provider Backend / Profile Management
 
-**Status:** planned; unimplemented and unauthorized during Phase 8A.
+**Status:** planned; unimplemented and unauthorized during Phase 8B.
 
 **Goal:** model configured Provider backends/profiles and explicit switching as a separate product concern.
 
 ## Phase 8D — Zero-Configuration Onboarding / Doctor
 
-**Status:** planned; unimplemented and unauthorized during Phase 8A.
+**Status:** planned; unimplemented and unauthorized during Phase 8B.
 
 **Goal:** broaden installation, project, Provider, and connectivity onboarding after the narrow existing-session flow is proven.
 
 ## Phase 9 — Mobile Companion
 
-**Status:** planned; unimplemented and unauthorized during Phase 8A.
+**Status:** planned; unimplemented and unauthorized during Phase 8B.
 
 **Goal:** add focused mobile monitoring, approval, reply, and resume flows on the established Internet foundation.
 

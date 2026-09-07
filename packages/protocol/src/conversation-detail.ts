@@ -6,6 +6,7 @@ import {
   conversationRuntimeWireLimits,
 } from './runtime-history.js'
 import { ApprovalRecordSchema, ConversationSummarySchema } from './records.js'
+import { ProviderInstallationSummarySchema } from './provider-lifecycle.js'
 
 export const conversationDetailWireLimits = {
   pendingApprovals: 64,
@@ -90,6 +91,13 @@ export const GetConversationResponseSchema = z
   .object({
     protocolVersion: ProtocolVersionSchema,
     conversation: ConversationSummarySchema,
+    /**
+     * Additive Phase 8B projection of the Conversation's private installation
+     * binding. Exact executable paths and locator material remain private.
+     */
+    providerLifecycle: ProviderInstallationSummarySchema.optional(),
+    /** True only when the next Turn must reopen an existing native session. */
+    providerSessionRequiresResume: z.boolean().optional(),
     runtime: ConversationRuntimeSnapshotSchema,
     history: DurableConversationHistoryMetadataSchema,
     pendingApprovals: z
@@ -110,6 +118,16 @@ function validateConversationDetail(
   context: z.RefinementCtx,
 ): void {
   const conversationId = detail.conversation.conversationId
+  if (
+    detail.providerLifecycle !== undefined &&
+    detail.providerLifecycle.provider !== detail.conversation.provider
+  ) {
+    addIssue(
+      context,
+      ['providerLifecycle', 'provider'],
+      'Bound Provider lifecycle must match the Conversation Provider',
+    )
+  }
   if (detail.runtime.conversationId !== conversationId) {
     addIssue(
       context,

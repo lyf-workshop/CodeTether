@@ -35,6 +35,7 @@ import {
   ListAttentionQuerySchema,
   ListMachinesResponseSchema,
   RemoveMachineRelayResponseSchema,
+  RefreshMachineProvidersResponseSchema,
   RetryMachineRelayResponseSchema,
   ProjectIdSchema,
   MachineIdSchema,
@@ -110,6 +111,10 @@ import {
   type ProjectId,
   type MachineId,
   type ProviderDescriptor,
+  type MachineProviderLifecycle,
+  type ProviderInstallationId,
+  type ProviderInstallationRevision,
+  type ProviderInstallationSummary,
   type ProviderExecutionHealth,
   type RenameConversationRequest,
   type RenameConversationResponse,
@@ -164,6 +169,7 @@ import {
   type DurableConversationMutationResult,
   type DurableMachine,
   type DurableProviderExecutionHealthObservation,
+  type DurableProviderInstallation,
   type RestoredDurableConversation,
   type DurableTurnSnapshot,
 } from '../persistence/index.js'
@@ -176,6 +182,7 @@ import {
 import {
   ProviderConversationUnavailableError,
   type AgentHostRuntime,
+  type ProviderRuntimeInstallation,
 } from './agent-runtime.js'
 import { ApprovalRegistry } from './approval-registry.js'
 import {
@@ -284,6 +291,8 @@ export interface HostServiceOptions {
   readonly runtime?: AgentHostRuntime
   readonly runtimes?: readonly AgentHostRuntime[]
   readonly providerRegistry?: ProviderRegistry
+  /** Initial presentation-safe local lifecycle observations. */
+  readonly providerLifecycles?: readonly MachineProviderLifecycle[]
   /** Read-only Machine-local native-session metadata adapters. */
   readonly providerSessionDiscoveries?: readonly ProviderSessionDiscovery[]
   readonly workspacePolicy: WorkspacePolicy
@@ -310,6 +319,18 @@ export interface HostServiceOptions {
   readonly refreshUnavailableLocalProvider?: (
     provider: AgentProvider,
   ) => Promise<AgentHostRuntime>
+  /** One Host-owned bounded lifecycle refresh authority per local Provider. */
+  readonly refreshLocalProviderLifecycle?: (
+    provider: AgentProvider,
+  ) => Promise<{
+    readonly runtime: AgentHostRuntime
+    readonly lifecycle: MachineProviderLifecycle
+    readonly sessionDiscovery?: ProviderSessionDiscovery
+    /** Optional two-phase lifecycle publication owned by the local coordinator. */
+    readonly commit?: () => MachineProviderLifecycle
+    /** Releases a staged runtime if Host handoff cannot be completed safely. */
+    readonly discard?: () => Promise<void>
+  }>
 }
 
 /** Runtime authority for live state, optionally backed by durable normalized snapshots. */
@@ -344,6 +365,7 @@ export class HostService {
   readonly #refreshUnavailableLocalProvider?: (
     provider: AgentProvider,
   ) => Promise<AgentHostRuntime>
+  readonly #refreshLocalProviderLifecycle?: HostServiceOptions['refreshLocalProviderLifecycle']
   readonly #localProviderRefreshes = new Map<AgentProvider, Promise<void>>()
   readonly #projects: ProjectRegistry
   readonly #persistenceFlushMs: number
@@ -395,7 +417,8 @@ export class HostService {
       options.runtimes ??
       (options.runtime === undefined ? [] : [options.runtime])
     this.#providers =
-      options.providerRegistry ?? new ProviderRegistry(configuredRuntimes)
+      options.providerRegistry ??
+      new ProviderRegistry(configuredRuntimes, options.providerLifecycles)
     if (this.#providers.runtimes().length === 0) {
       throw new Error('Host requires at least one Provider runtime')
     }
@@ -416,6 +439,7 @@ export class HostService {
     }
     this.#refreshUnavailableLocalProvider =
       options.refreshUnavailableLocalProvider
+    this.#refreshLocalProviderLifecycle = options.refreshLocalProviderLifecycle
     this.#maxConversations = positiveInteger(
       options.maxConversations,
       DEFAULT_MAX_CONVERSATIONS,
@@ -461,17 +485,34 @@ export class HostService {
     this.#machineRuntimes = new MachineProviderRuntimeResolver({
       localMachineId: this.#machines.localMachineId(),
       localProviders: this.#providers,
-      createRemoteProvider: (machineId, provider) => {
+      createRemoteProvider: (machineId, provider, installation) => {
+        if (installation === undefined) return undefined
         switch (provider) {
           case 'codex':
             return this.#remoteMachines.openCodexSession === undefined
               ? undefined
               : new RemoteCodexHostRuntime({
                   machineId,
+                  providerInstallationId: installation.installationId,
+                  installationRevision: installation.installationRevision,
                   now: this.#now,
                   opener: {
-                    open: async (input) =>
-                      await this.#openRemoteCodexSession(input),
+                    open: async (input) => {
+                      if (
+                        input.providerInstallationId === undefined ||
+                        input.expectedInstallationRevision === undefined
+                      ) {
+                        throw new Error(
+                          'Remote Codex installation identity is missing',
+                        )
+                      }
+                      return await this.#openRemoteCodexSession({
+                        ...input,
+                        providerInstallationId: input.providerInstallationId,
+                        expectedInstallationRevision:
+                          input.expectedInstallationRevision,
+                      })
+                    },
                   },
                 })
           case 'claude-code':
@@ -479,10 +520,26 @@ export class HostService {
               ? undefined
               : new RemoteClaudeHostRuntime({
                   machineId,
+                  providerInstallationId: installation.installationId,
+                  installationRevision: installation.installationRevision,
                   now: this.#now,
                   opener: {
-                    open: async (input) =>
-                      await this.#openRemoteClaudeSession(input),
+                    open: async (input) => {
+                      if (
+                        input.providerInstallationId === undefined ||
+                        input.expectedInstallationRevision === undefined
+                      ) {
+                        throw new Error(
+                          'Remote Claude Code installation identity is missing',
+                        )
+                      }
+                      return await this.#openRemoteClaudeSession({
+                        ...input,
+                        providerInstallationId: input.providerInstallationId,
+                        expectedInstallationRevision:
+                          input.expectedInstallationRevision,
+                      })
+                    },
                   },
                 })
         }
@@ -688,6 +745,7 @@ export class HostService {
         providers:
           remoteProviderPresentation?.providers ??
           this.#providerDescriptorsForMachine(machine.machineId),
+        providerLifecycles: this.#providerLifecyclesForMachine(machine),
         projects,
         conversations,
         ...(machine.kind === 'remote'
@@ -986,12 +1044,43 @@ export class HostService {
       { machineId: id, request },
       async () => {
         const machine = this.#machines.get(id)
-        if (machine.kind !== 'remote') {
-          throw new HostServiceError(
-            'unsupported',
-            'Local Provider discovery is managed by the local Host',
-            409,
+        if (machine.kind === 'local') {
+          if (this.#refreshLocalProviderLifecycle === undefined) {
+            throw new HostServiceError(
+              'unsupported',
+              'Local Provider lifecycle refresh is unavailable',
+              409,
+            )
+          }
+          await Promise.all(
+            (['codex', 'claude-code'] as const).map(
+              async (provider) =>
+                await this.#refreshLocalProviderForExplicitStart(id, provider),
+            ),
           )
+          const providerLifecycles = this.#providers.lifecycles()
+          const observedAt = providerLifecycles
+            .flatMap((lifecycle) =>
+              lifecycle.installations.map(
+                (installation) => installation.lastObservedAt,
+              ),
+            )
+            .sort()
+            .at(-1)
+          return RefreshMachineProvidersResponseSchema.parse({
+            protocolVersion,
+            actionId: request.actionId,
+            status: 'completed',
+            data: {
+              machineId: id,
+              providers: this.#providerDescriptors(),
+              providerLifecycles,
+              providerDiscovery:
+                observedAt === undefined
+                  ? { state: 'not_observed' }
+                  : { state: 'current', observedAt },
+            },
+          })
         }
         if (machine.connectionState !== 'online') {
           throw new HostServiceError(
@@ -1022,6 +1111,8 @@ export class HostService {
             data: {
               machineId: id,
               providers: [...observation.providers],
+              providerLifecycles:
+                this.#persistence?.listProviderLifecycles(id) ?? [],
               providerDiscovery: {
                 state: 'current',
                 observedAt: observation.observedAt,
@@ -1522,6 +1613,30 @@ export class HostService {
       options.provider === undefined
         ? ['codex', 'claude-code']
         : [options.provider]
+    const discoveryInstallations = new Map<
+      AgentProvider,
+      ProviderRuntimeInstallation
+    >()
+    for (const provider of providers) {
+      const lifecycle = this.#providerLifecyclesForMachine(machineRecord).find(
+        (candidate) => candidate.provider === provider,
+      )
+      if (lifecycle === undefined) continue
+      const installation = this.#providerInstallation(
+        machine,
+        provider,
+        lifecycle.selectedInstallationId,
+      )
+      if (
+        installation?.revision !== undefined &&
+        installation.availability === 'available'
+      ) {
+        discoveryInstallations.set(provider, {
+          installationId: installation.installationId,
+          installationRevision: installation.revision,
+        })
+      }
+    }
     const pages = await Promise.all(
       providers.map(async (provider) => {
         if (
@@ -1562,6 +1677,8 @@ export class HostService {
         ? {}
         : { providerFilter: options.provider }),
       pages,
+      installationForProvider: (provider) =>
+        discoveryInstallations.get(provider),
       adoptedConversation: (candidate) =>
         this.#persistence?.getConversationByProviderSession(
           machine,
@@ -1645,6 +1762,21 @@ export class HostService {
           throw expiredDiscoveryCandidate()
         }
         this.#assertProviderSessionResumeReady(machine, validated.provider)
+        const providerInstallation =
+          candidate.providerInstallationId === undefined
+            ? undefined
+            : this.#requireProviderRuntimeInstallation(
+                machine,
+                validated.provider,
+                candidate.providerInstallationId,
+              )
+        if (
+          candidate.installationRevision !== undefined &&
+          providerInstallation?.installationRevision !==
+            candidate.installationRevision
+        ) {
+          throw expiredDiscoveryCandidate()
+        }
         const reservation = await this.#projects.reserveConversationCreation(
           project,
           machine,
@@ -1662,6 +1794,12 @@ export class HostService {
                 title: validated.title,
                 titleSource: 'generated',
                 provider: validated.provider,
+                ...(providerInstallation === undefined
+                  ? {}
+                  : {
+                      providerInstallationId:
+                        providerInstallation.installationId,
+                    }),
                 providerThreadId: this.#materializeProviderSessionBinding(
                   machine,
                   validated.provider,
@@ -1727,6 +1865,7 @@ export class HostService {
       )
     }
     const id = ConversationIdSchema.parse(conversationId)
+    const durableConversation = this.#persistence.getConversation(id)
     const durable = readDurableConversationDetail(this.#persistence, id, {
       maxTurns: this.#runtimeHistory.maxTurns,
       maxEntries: this.#runtimeHistory.maxEntries,
@@ -1756,6 +1895,19 @@ export class HostService {
       runtime,
     )
     const totalTurnCount = durable.history.totalTurns
+    const providerLifecycle =
+      durableConversation?.providerInstallationId === undefined
+        ? undefined
+        : this.#providerInstallation(
+            durableConversation.machineId,
+            durableConversation.provider,
+            durableConversation.providerInstallationId,
+          )
+    const providerSessionRequiresResume =
+      hydrated === undefined
+        ? durableConversation?.providerThreadId !== undefined
+        : hydrated.providerSession !== 'ready' &&
+          hydrated.providerSession !== 'uninitialized'
 
     return GetConversationResponseSchema.parse({
       protocolVersion,
@@ -1768,6 +1920,8 @@ export class HostService {
       },
       pendingApprovals,
       approvalHistory,
+      ...(providerLifecycle === undefined ? {} : { providerLifecycle }),
+      providerSessionRequiresResume,
     })
   }
 
@@ -2056,6 +2210,11 @@ export class HostService {
               title: DEFAULT_CONVERSATION_TITLE,
               titleSource: 'generated',
               provider: request.provider,
+              ...(runtime.installation === undefined
+                ? {}
+                : {
+                    providerInstallationId: runtime.installation.installationId,
+                  }),
               origin: 'codetether',
               providerSessionMaterialized: false,
               cwd,
@@ -2096,6 +2255,12 @@ export class HostService {
               const state: ConversationState = {
                 record,
                 origin: 'codetether',
+                ...(runtime.installation === undefined
+                  ? {}
+                  : {
+                      providerInstallationId:
+                        runtime.installation.installationId,
+                    }),
                 turns: new Map(),
                 providerTurnIds: new Map(),
                 providerSessionMaterialized: false,
@@ -2227,6 +2392,12 @@ export class HostService {
               const state: ConversationState = {
                 record,
                 origin: 'codetether',
+                ...(runtime.installation === undefined
+                  ? {}
+                  : {
+                      providerInstallationId:
+                        runtime.installation.installationId,
+                    }),
                 providerThreadId: provider.providerThreadId,
                 turns: new Map(),
                 providerTurnIds: new Map(),
@@ -2422,6 +2593,15 @@ export class HostService {
               failure,
             )
           }
+          this.#assertProviderInstallationCapabilities(
+            conversation.record.machineId,
+            conversation.record.provider,
+            conversation.providerInstallationId,
+            conversation.providerSession !== 'ready' &&
+              conversation.providerSession !== 'uninitialized',
+            conversation.record.provider === 'claude-code' &&
+              conversation.record.reasoning !== undefined,
+          )
           conversation.startingTurn = true
         } finally {
           releaseRuntimePin()
@@ -2518,9 +2698,11 @@ export class HostService {
 
         let runtime: AgentHostRuntime
         try {
+          await this.#releaseObsoleteConversationInstallation(conversation)
           runtime = this.#requireMachineProviderRuntime(
             conversation.record.machineId,
             conversation.record.provider,
+            conversation,
           )
           await this.#ensureProviderConversation(
             conversation,
@@ -2817,10 +2999,18 @@ export class HostService {
           releaseRuntimePin()
         }
         this.#touchConversation(conversation.record.conversationId)
-        const runtime = this.#requireMachineProviderRuntime(
-          conversation.record.machineId,
-          conversation.record.provider,
-        )
+        const runtime =
+          this.#machineRuntimes.existingSession(
+            conversation.record.machineId,
+            conversation.record.provider,
+            conversation.providerInstallationId,
+            requireProviderThreadId(conversation),
+          ) ??
+          this.#requireMachineProviderRuntime(
+            conversation.record.machineId,
+            conversation.record.provider,
+            conversation,
+          )
         if (
           this.#providerDescriptorsForMachine(
             conversation.record.machineId,
@@ -3415,6 +3605,9 @@ export class HostService {
     const state: ConversationState = {
       record: durable.record,
       origin: durable.origin,
+      ...(durable.providerInstallationId === undefined
+        ? {}
+        : { providerInstallationId: durable.providerInstallationId }),
       providerThreadId: durable.providerThreadId,
       turns,
       providerTurnIds,
@@ -3506,6 +3699,12 @@ export class HostService {
         this.#conversations.set(conversationId, {
           record: durable.record,
           origin: currentDurableConversation.origin,
+          ...(currentDurableConversation.providerInstallationId === undefined
+            ? {}
+            : {
+                providerInstallationId:
+                  currentDurableConversation.providerInstallationId,
+              }),
           turns: new Map(),
           providerTurnIds: new Map(),
           providerSessionMaterialized: false,
@@ -3531,6 +3730,12 @@ export class HostService {
           record: durable.record,
           providerThreadId: currentDurableConversation.providerThreadId,
           origin: currentDurableConversation.origin,
+          ...(currentDurableConversation.providerInstallationId === undefined
+            ? {}
+            : {
+                providerInstallationId:
+                  currentDurableConversation.providerInstallationId,
+              }),
           providerSessionMaterialized:
             currentDurableConversation.providerSessionMaterialized,
           runtime: durable.runtime,
@@ -3667,9 +3872,11 @@ export class HostService {
     this.#conversations.delete(conversationId)
     const providerThreadId = conversation.providerThreadId
     if (providerThreadId !== undefined) {
-      const runtime = this.#machineRuntimes.existing(
+      const runtime = this.#machineRuntimes.existingSession(
         conversation.record.machineId,
         conversation.record.provider,
+        conversation.providerInstallationId,
+        providerThreadId,
       )
       if (runtime?.disposeConversation !== undefined) {
         const disposal: Promise<void> = Promise.resolve()
@@ -3677,6 +3884,9 @@ export class HostService {
             async () =>
               await runtime.disposeConversation?.({ providerThreadId }),
           )
+          .then(async () => {
+            await this.#machineRuntimes.retireIfIdle(runtime)
+          })
           .catch(() => {
             // A failed exact-session cleanup remains charged to the global
             // budget. The Host cannot safely assume that Provider ownership
@@ -3796,10 +4006,18 @@ export class HostService {
     conversation.providerSession =
       providerThreadId === undefined ? 'uninitialized' : 'needs-resume'
     if (providerThreadId === undefined) return
-    void this.#machineRuntimes
-      .existing(conversation.record.machineId, conversation.record.provider)
-      ?.disposeConversation?.({ providerThreadId })
-      .catch(() => undefined)
+    const runtime = this.#machineRuntimes.existingSession(
+      conversation.record.machineId,
+      conversation.record.provider,
+      conversation.providerInstallationId,
+      providerThreadId,
+    )
+    if (runtime?.disposeConversation !== undefined) {
+      void runtime
+        .disposeConversation({ providerThreadId })
+        .then(async () => await this.#machineRuntimes.retireIfIdle(runtime))
+        .catch(() => undefined)
+    }
   }
 
   #pinRuntimeConversation(conversationId: ConversationId): () => void {
@@ -4061,6 +4279,7 @@ export class HostService {
       state: 'healthy',
       observedAt: TimestampSchema.parse(this.#timestamp()),
     })
+    this.#recordProviderBackendReadiness(conversation, 'ready')
   }
 
   #recordProviderExecutionFailure(
@@ -4081,6 +4300,92 @@ export class HostService {
       failure,
       observedAt: TimestampSchema.parse(this.#timestamp()),
     })
+    const backendReadiness = backendReadinessForFailure(failure.reason)
+    if (backendReadiness !== undefined) {
+      this.#recordProviderBackendReadiness(
+        conversation,
+        backendReadiness,
+        failure,
+      )
+    }
+  }
+
+  #recordProviderBackendReadiness(
+    conversation: ConversationState,
+    readiness:
+      'ready' | 'unavailable' | 'authentication_required' | 'misconfigured',
+    failure?: CanonicalFailure,
+  ): void {
+    const persistence = this.#persistence
+    const installationId = conversation.providerInstallationId
+    if (persistence === undefined || installationId === undefined) return
+    const installation = persistence.getProviderInstallation(installationId)
+    if (
+      installation?.revision === undefined ||
+      installation.backend === undefined
+    ) {
+      return
+    }
+    const observedAt = TimestampSchema.parse(this.#timestamp())
+    const backendConfiguration = {
+      mode: installation.backend.mode,
+      freshness: installation.backend.freshness,
+      configurationRevision: installation.backend.configurationRevision,
+      configuration: installation.backend.configuration,
+      sanitizedOrigin: installation.backend.sanitizedOrigin,
+    }
+    let retained: DurableProviderInstallation
+    try {
+      retained = this.#writeDurableResult(() =>
+        persistence.recordProviderBackendObservation(
+          installationId,
+          installation.revision,
+          {
+            ...backendConfiguration,
+            readiness,
+            freshness: 'current',
+            observedAt,
+            ...(failure === undefined ? {} : { failure }),
+          },
+        ),
+      )
+    } catch {
+      return
+    }
+    if (conversation.record.machineId === this.#machines.localMachineId()) {
+      const lifecycle = this.#providers.lifecycle(conversation.record.provider)
+      if (lifecycle !== undefined) {
+        this.#providers.setLifecycle({
+          ...lifecycle,
+          installations: lifecycle.installations.map((candidate) =>
+            candidate.installationId === retained.installationId
+              ? {
+                  installationId: retained.installationId,
+                  provider: retained.provider,
+                  selected: retained.selected,
+                  ...(retained.version === undefined
+                    ? {}
+                    : { version: retained.version }),
+                  launcherKind: retained.launcherKind,
+                  installMethod: retained.installMethod,
+                  availability: retained.availability,
+                  ...(retained.revision === undefined
+                    ? {}
+                    : { revision: retained.revision }),
+                  firstObservedAt: retained.firstObservedAt,
+                  lastObservedAt: retained.lastObservedAt,
+                  ...(retained.compatibility === undefined
+                    ? {}
+                    : { compatibility: retained.compatibility }),
+                  ...(retained.backend === undefined
+                    ? {}
+                    : { backend: retained.backend }),
+                }
+              : candidate,
+          ),
+        })
+      }
+    }
   }
 
   #recordProviderExecutionHealth(
@@ -4268,6 +4573,11 @@ export class HostService {
       ...(conversation.providerThreadId === undefined
         ? {}
         : { providerThreadId: conversation.providerThreadId }),
+      ...(conversation.providerInstallationId === undefined
+        ? {}
+        : {
+            providerInstallationId: conversation.providerInstallationId,
+          }),
       origin: conversation.origin,
       providerSessionMaterialized: conversation.providerSessionMaterialized,
       cwd: conversation.record.cwd,
@@ -4510,6 +4820,8 @@ export class HostService {
     readonly conversationId: ConversationId
     readonly projectId: ProjectId
     readonly rootPath: string
+    readonly providerInstallationId: ProviderInstallationId
+    readonly expectedInstallationRevision: ProviderInstallationRevision
     readonly providerThreadId?: string
   }): Promise<RemoteCodexRuntimeSession> {
     const { durable, trust } = this.#requireRemoteMachineTrust(input.machineId)
@@ -4521,6 +4833,8 @@ export class HostService {
         conversationId: input.conversationId,
         projectId: input.projectId,
         rootPath: input.rootPath,
+        providerInstallationId: input.providerInstallationId,
+        expectedInstallationRevision: input.expectedInstallationRevision,
         ...(input.providerThreadId === undefined
           ? {}
           : { providerThreadId: input.providerThreadId }),
@@ -4535,6 +4849,8 @@ export class HostService {
     readonly conversationId: ConversationId
     readonly projectId: ProjectId
     readonly rootPath: string
+    readonly providerInstallationId: ProviderInstallationId
+    readonly expectedInstallationRevision: ProviderInstallationRevision
     readonly providerSessionId?: string
     readonly providerSessionMaterialized?: boolean
     readonly effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'
@@ -4548,6 +4864,8 @@ export class HostService {
         conversationId: input.conversationId,
         projectId: input.projectId,
         rootPath: input.rootPath,
+        providerInstallationId: input.providerInstallationId,
+        expectedInstallationRevision: input.expectedInstallationRevision,
         ...(input.providerSessionId === undefined
           ? {}
           : {
@@ -4771,6 +5089,16 @@ export class HostService {
     machineId: MachineId,
     provider: AgentProvider,
   ): ProviderSessionResumeStatus {
+    const installation = this.#providerInstallation(machineId, provider)
+    if (
+      installation?.compatibility !== undefined &&
+      installation.compatibility.capabilities.nativeResume.effective !== true
+    ) {
+      return installation.compatibility.capabilities.nativeResume.observed ===
+        'unsupported'
+        ? 'unsupported'
+        : 'unavailable'
+    }
     const descriptor = this.#providerDescriptorForMachine(machineId, provider)
     if (descriptor?.availability === 'unsupported_version') {
       return 'unsupported'
@@ -4809,6 +5137,18 @@ export class HostService {
     provider: AgentProvider,
     signal?: AbortSignal,
   ): Promise<ProviderSessionDiscoveryPage> {
+    const installation = this.#providerInstallation(machineId, provider)
+    if (
+      installation?.compatibility !== undefined &&
+      installation.compatibility.capabilities.nativeSessionDiscovery
+        .effective !== true
+    ) {
+      return unavailableProviderSessionDiscoveryPage(
+        provider,
+        'provider_session_format_unsupported',
+        'unsupported',
+      )
+    }
     if (machineId === this.#machines.localMachineId()) {
       const authorized = await this.#projects.authorizeConversation(
         projectId,
@@ -4831,6 +5171,13 @@ export class HostService {
       )
     }
     const { durable, trust } = this.#requireRemoteMachineTrust(machineId)
+    if (installation?.revision === undefined) {
+      return unavailableProviderSessionDiscoveryPage(
+        provider,
+        'provider_session_discovery_unavailable',
+        'unavailable',
+      )
+    }
     const discover = this.#remoteMachines.discoverProviderSessions
     if (discover === undefined) {
       return unavailableProviderSessionDiscoveryPage(
@@ -4843,6 +5190,8 @@ export class HostService {
       provider,
       projectId,
       rootPath,
+      providerInstallationId: installation.installationId,
+      expectedInstallationRevision: installation.revision,
       ...(signal === undefined ? {} : { signal }),
     })
   }
@@ -4851,8 +5200,23 @@ export class HostService {
     readonly projectId: ProjectId
     readonly machineId: MachineId
     readonly rootPath: string
+    readonly providerInstallationId?: ProviderInstallationId
+    readonly installationRevision?: ProviderInstallationRevision
     readonly native: NativeProviderSessionCandidate
   }): Promise<NativeProviderSessionCandidate | undefined> {
+    if (candidate.providerInstallationId !== undefined) {
+      const current = this.#providerInstallation(
+        candidate.machineId,
+        candidate.native.provider,
+        candidate.providerInstallationId,
+      )
+      if (
+        current?.revision === undefined ||
+        current.revision !== candidate.installationRevision
+      ) {
+        return undefined
+      }
+    }
     if (candidate.machineId === this.#machines.localMachineId()) {
       const discovery = this.#providerSessionDiscoveries.get(
         candidate.native.provider,
@@ -4884,6 +5248,12 @@ export class HostService {
     )
     const validate = this.#remoteMachines.validateProviderSession
     if (validate === undefined) return undefined
+    if (
+      candidate.providerInstallationId === undefined ||
+      candidate.installationRevision === undefined
+    ) {
+      return undefined
+    }
     const validated = await validate.call(
       this.#remoteMachines,
       durable,
@@ -4894,6 +5264,8 @@ export class HostService {
         rootPath: candidate.rootPath,
         nativeSessionId: candidate.native.nativeSessionId,
         revision: candidate.native.revision,
+        providerInstallationId: candidate.providerInstallationId,
+        expectedInstallationRevision: candidate.installationRevision,
       },
     )
     return validated !== undefined &&
@@ -5122,10 +5494,25 @@ export class HostService {
     }
     const runtime = this.#providers.get(provider)
     const descriptor = this.#providers.descriptor(provider)
+    const lifecycle = this.#providers.lifecycle(provider)
+    const selected = lifecycle?.installations.find(
+      (installation) =>
+        installation.installationId === lifecycle.selectedInstallationId,
+    )
+    const lifecycleReady =
+      lifecycle === undefined ||
+      (selected?.availability === 'available' &&
+        selected.revision !== undefined &&
+        selected.compatibility !== undefined &&
+        selected.compatibility.capabilities.execution.effective &&
+        (selected.compatibility.state === 'verified' ||
+          selected.compatibility.state === 'compatible_unverified' ||
+          selected.compatibility.state === 'limited'))
     return (
       runtime !== undefined &&
       runtime.available !== false &&
       descriptor?.availability === 'available' &&
+      lifecycleReady &&
       !this.#runtimeFailures.has(provider)
     )
   }
@@ -5136,15 +5523,18 @@ export class HostService {
   ): Promise<void> {
     if (
       machineId !== this.#machines.localMachineId() ||
-      this.#refreshUnavailableLocalProvider === undefined ||
+      (this.#refreshLocalProviderLifecycle === undefined &&
+        this.#refreshUnavailableLocalProvider === undefined) ||
       this.#persistenceFailure !== undefined
     ) {
       return
     }
+    if (this.#localProviderHasActiveTurn(provider)) return
     const current = this.#providers.get(provider)
     if (
-      current === undefined ||
-      (current.available !== false && !this.#runtimeFailures.has(provider))
+      this.#refreshLocalProviderLifecycle === undefined &&
+      (current === undefined ||
+        (current.available !== false && !this.#runtimeFailures.has(provider)))
     ) {
       return
     }
@@ -5157,25 +5547,77 @@ export class HostService {
       const previous = this.#providers.get(provider)
       if (previous === undefined) return
       const knownFatalFailure = this.#runtimeFailures.get(provider)
-      this.#unsubscribeRuntime(previous)
-      try {
-        await previous.close()
-      } catch (error) {
-        // Codex retains and rethrows the exact fatal failure that already
-        // caused Host terminalization after its child has been shut down.
-        // That identity is cleanup-complete, not a second cleanup failure.
-        // Any different rejection remains uncertain and blocks replacement.
-        if (knownFatalFailure === undefined || error !== knownFatalFailure) {
-          throw error
-        }
-      }
+      const lifecycleResult =
+        await this.#refreshLocalProviderLifecycle?.(provider)
       const replacement =
-        await this.#refreshUnavailableLocalProvider?.(provider)
-      if (replacement === undefined || replacement.provider !== provider) {
+        lifecycleResult?.runtime ??
+        (await this.#refreshUnavailableLocalProvider?.(provider))
+      const discardReplacement = async (): Promise<void> => {
+        if (lifecycleResult?.discard !== undefined) {
+          await lifecycleResult.discard().catch(() => undefined)
+          return
+        }
         await replacement?.close().catch(() => undefined)
+      }
+      if (replacement === undefined || replacement.provider !== provider) {
+        await discardReplacement()
         throw new Error('Local Provider recovery returned the wrong identity')
       }
-      this.#providers.replace(previous, replacement)
+      if (replacement !== previous) {
+        if (lifecycleResult !== undefined) {
+          try {
+            this.#providers.assertReplacementWithLifecycle(
+              previous,
+              replacement,
+              lifecycleResult.lifecycle,
+            )
+          } catch (error) {
+            await discardReplacement()
+            throw error
+          }
+        }
+        this.#unsubscribeRuntime(previous)
+        try {
+          await previous.close()
+        } catch (error) {
+          // Codex retains and rethrows the exact fatal failure that already
+          // caused Host terminalization after its child has been shut down.
+          // That identity is cleanup-complete, not a second cleanup failure.
+          // Any different rejection remains uncertain and blocks replacement.
+          if (knownFatalFailure === undefined || error !== knownFatalFailure) {
+            await discardReplacement()
+            throw error
+          }
+        }
+        if (lifecycleResult === undefined) {
+          this.#providers.replace(previous, replacement)
+        } else {
+          let lifecycle: MachineProviderLifecycle
+          try {
+            lifecycle = lifecycleResult.commit?.() ?? lifecycleResult.lifecycle
+          } catch (error) {
+            await discardReplacement()
+            throw error
+          }
+          this.#providers.replaceWithLifecycle(previous, replacement, lifecycle)
+        }
+        this.#invalidateLocalProviderSessions(provider)
+      } else if (lifecycleResult !== undefined) {
+        let lifecycle: MachineProviderLifecycle
+        try {
+          lifecycle = lifecycleResult.commit?.() ?? lifecycleResult.lifecycle
+        } catch (error) {
+          await discardReplacement()
+          throw error
+        }
+        this.#providers.setLifecycle(lifecycle)
+      }
+      if (lifecycleResult?.sessionDiscovery !== undefined) {
+        this.#providerSessionDiscoveries.set(
+          provider,
+          lifecycleResult.sessionDiscovery,
+        )
+      }
       this.#runtimeFailures.delete(provider)
       if (replacement.available !== false) {
         this.#subscribeRuntime(replacement, machineId)
@@ -5191,16 +5633,196 @@ export class HostService {
     }
   }
 
+  #localProviderHasActiveTurn(provider: AgentProvider): boolean {
+    return [...this.#conversations.values()].some(
+      (conversation) =>
+        conversation.record.machineId === this.#machines.localMachineId() &&
+        conversation.record.provider === provider &&
+        (conversation.startingTurn ||
+          conversation.record.activeTurnId !== undefined ||
+          conversation.record.status === 'running'),
+    )
+  }
+
+  #invalidateLocalProviderSessions(provider: AgentProvider): void {
+    for (const conversation of this.#conversations.values()) {
+      if (
+        conversation.record.machineId === this.#machines.localMachineId() &&
+        conversation.record.provider === provider &&
+        conversation.providerSession !== 'uninitialized'
+      ) {
+        conversation.providerSession = 'needs-resume'
+      }
+    }
+  }
+
   #providerDescriptors(): readonly ProviderDescriptor[] {
     const machine = this.#machines.get(this.#machines.localMachineId())
-    return this.#providers.descriptors().map((descriptor) => ({
-      ...descriptor,
-      executionHealth: this.#providerExecutionHealthPresentation(
-        machine,
-        descriptor.provider,
-        descriptor.executionHealth,
+    return this.#providers.descriptors().map((descriptor) =>
+      providerDescriptorWithLifecycleCapabilities(
+        {
+          ...descriptor,
+          executionHealth: this.#providerExecutionHealthPresentation(
+            machine,
+            descriptor.provider,
+            descriptor.executionHealth,
+          ),
+        },
+        this.#providers.lifecycle(descriptor.provider),
       ),
-    }))
+    )
+  }
+
+  #providerLifecyclesForMachine(
+    machine: MachineSummary,
+  ): readonly MachineProviderLifecycle[] {
+    if (machine.kind === 'local') return this.#providers.lifecycles()
+    const lifecycles =
+      this.#persistence?.listProviderLifecycles(machine.machineId) ?? []
+    const providerObservation = this.#persistence?.getRemoteProviderObservation(
+      machine.machineId,
+    )
+    const providerObservationIsCurrent =
+      machine.connectionState === 'online' &&
+      providerObservation !== undefined &&
+      this.#remoteMachines.providerDiscoveryCurrent?.(
+        machine.machineId,
+        providerObservation.observedAt,
+      ) === true
+    return lifecycles.map((lifecycle) => {
+      // A legacy/partial Node can return a current Provider descriptor without
+      // the additive Phase 8B installation graph. Retained lifecycle data is
+      // then explicitly last-known instead of being promoted by connectivity.
+      return {
+        ...lifecycle,
+        installations: lifecycle.installations.map((installation) => {
+          const installationIsCurrent =
+            providerObservationIsCurrent &&
+            installation.lastObservedAt === providerObservation.observedAt
+          if (installationIsCurrent) return installation
+          return {
+            ...installation,
+            ...(installation.compatibility === undefined
+              ? {}
+              : {
+                  compatibility: {
+                    ...installation.compatibility,
+                    freshness:
+                      installation.compatibility.freshness === 'not_observed'
+                        ? ('not_observed' as const)
+                        : ('last_known' as const),
+                  },
+                }),
+            ...(installation.backend === undefined
+              ? {}
+              : {
+                  backend: {
+                    ...installation.backend,
+                    freshness:
+                      installation.backend.freshness === 'not_observed'
+                        ? ('not_observed' as const)
+                        : ('last_known' as const),
+                  },
+                }),
+          }
+        }),
+      }
+    })
+  }
+
+  #providerInstallation(
+    machineId: MachineId,
+    provider: AgentProvider,
+    installationId?: ProviderInstallationId,
+  ): ProviderInstallationSummary | undefined {
+    const machine = this.#machines.get(machineId)
+    const lifecycle = this.#providerLifecyclesForMachine(machine).find(
+      (candidate) => candidate.provider === provider,
+    )
+    const selectedId = installationId ?? lifecycle?.selectedInstallationId
+    return selectedId === undefined
+      ? undefined
+      : lifecycle?.installations.find(
+          (installation) => installation.installationId === selectedId,
+        )
+  }
+
+  #requireProviderRuntimeInstallation(
+    machineId: MachineId,
+    provider: AgentProvider,
+    installationId?: ProviderInstallationId,
+  ): ProviderRuntimeInstallation {
+    const installation = this.#providerInstallation(
+      machineId,
+      provider,
+      installationId,
+    )
+    if (
+      installation === undefined ||
+      installation.availability !== 'available' ||
+      installation.revision === undefined ||
+      installation.compatibility === undefined ||
+      installation.compatibility.freshness !== 'current' ||
+      (installation.compatibility.state !== 'verified' &&
+        installation.compatibility.state !== 'compatible_unverified' &&
+        installation.compatibility.state !== 'limited') ||
+      installation.compatibility.capabilities.execution.effective !== true ||
+      installation.compatibility.capabilities.streaming.effective !== true ||
+      (provider === 'claude-code' &&
+        (installation.compatibility.capabilities.fileRead.effective !== true ||
+          installation.compatibility.capabilities.search.effective !== true ||
+          installation.compatibility.capabilities.toolEvents.effective !==
+            true))
+    ) {
+      throw providerUnavailableError(
+        provider,
+        this.#providerDescriptorForMachine(machineId, provider),
+      )
+    }
+    return {
+      installationId: installation.installationId,
+      installationRevision: installation.revision,
+    }
+  }
+
+  #assertProviderInstallationCapabilities(
+    machineId: MachineId,
+    provider: AgentProvider,
+    installationId: ProviderInstallationId | undefined,
+    nativeResumeRequired: boolean,
+    reasoningControlRequired = false,
+  ): void {
+    const lifecycle = this.#providerLifecyclesForMachine(
+      this.#machines.get(machineId),
+    ).find((candidate) => candidate.provider === provider)
+    // Additive compatibility with pre-8B and isolated test runtimes. Product
+    // assembly always supplies lifecycle truth once an installation is
+    // observed.
+    if (lifecycle === undefined) return
+    const installation = this.#providerInstallation(
+      machineId,
+      provider,
+      installationId,
+    )
+    const capabilities = installation?.compatibility?.capabilities
+    if (
+      installation === undefined ||
+      capabilities === undefined ||
+      installation.compatibility?.freshness !== 'current' ||
+      !capabilities.execution.effective ||
+      !capabilities.streaming.effective ||
+      (provider === 'claude-code' &&
+        (!capabilities.fileRead.effective ||
+          !capabilities.search.effective ||
+          !capabilities.toolEvents.effective)) ||
+      (nativeResumeRequired && !capabilities.nativeResume.effective) ||
+      (reasoningControlRequired && !capabilities.reasoningControl.effective)
+    ) {
+      throw providerUnavailableError(
+        provider,
+        this.#providerDescriptorForMachine(machineId, provider),
+      )
+    }
   }
 
   #providerDescriptorsForMachine(
@@ -5358,6 +5980,23 @@ export class HostService {
     if (this.#persistenceFailure !== undefined || this.#closingRuntime) {
       return false
     }
+    const lifecycle = this.#providerLifecyclesForMachine(
+      this.#machines.get(machineId),
+    ).find((candidate) => candidate.provider === provider)
+    if (lifecycle !== undefined) {
+      const selected = lifecycle.installations.find(
+        (installation) =>
+          installation.installationId === lifecycle.selectedInstallationId,
+      )
+      if (
+        selected?.availability !== 'available' ||
+        selected.revision === undefined ||
+        selected.compatibility?.freshness !== 'current' ||
+        selected.compatibility?.capabilities.execution.effective !== true
+      ) {
+        return false
+      }
+    }
     return this.#providerDescriptorsForMachine(machineId).some(
       (descriptor) =>
         descriptor.provider === provider &&
@@ -5388,13 +6027,95 @@ export class HostService {
     return descriptors.find((descriptor) => descriptor.provider === provider)
   }
 
+  /**
+   * An in-place revision change preserves logical installation identity, but
+   * an idle session must leave its old exact runtime before native resume on
+   * the revalidated revision. Active Turns never enter this path.
+   */
+  async #releaseObsoleteConversationInstallation(
+    conversation: ConversationState,
+  ): Promise<void> {
+    if (conversation.record.machineId === this.#machines.localMachineId())
+      return
+    const installationId = conversation.providerInstallationId
+    if (installationId === undefined) return
+    const current = this.#requireProviderRuntimeInstallation(
+      conversation.record.machineId,
+      conversation.record.provider,
+      installationId,
+    )
+    await this.#machineRuntimes.retireObsoleteIdle(
+      conversation.record.machineId,
+      conversation.record.provider,
+      current,
+    )
+    const providerThreadId = conversation.providerThreadId
+    if (providerThreadId === undefined) return
+    const owner = this.#machineRuntimes.existingSession(
+      conversation.record.machineId,
+      conversation.record.provider,
+      installationId,
+      providerThreadId,
+    )
+    if (owner === undefined) return
+    if (
+      owner.installation?.installationId === current.installationId &&
+      owner.installation.installationRevision === current.installationRevision
+    ) {
+      return
+    }
+    if (owner.disposeConversation === undefined) {
+      throw providerUnavailableError(conversation.record.provider)
+    }
+    await owner.disposeConversation({ providerThreadId })
+    conversation.providerSession = 'needs-resume'
+    conversation.providerSessionMaterialized = true
+    await this.#machineRuntimes.retireIfIdle(owner)
+  }
+
   #requireMachineProviderRuntime(
     machineId: MachineId,
     provider: AgentProvider,
+    conversation?: ConversationState,
   ): AgentHostRuntime {
     this.#assertMachineRuntimeAvailable(machineId, provider)
-    const runtime = this.#machineRuntimes.get(machineId, provider)
+    let installation: ProviderRuntimeInstallation | undefined
+    const lifecycle = this.#providerLifecyclesForMachine(
+      this.#machines.get(machineId),
+    ).find((candidate) => candidate.provider === provider)
+    if (lifecycle !== undefined) {
+      installation = this.#requireProviderRuntimeInstallation(
+        machineId,
+        provider,
+        conversation?.providerInstallationId,
+      )
+      if (
+        conversation !== undefined &&
+        conversation.providerInstallationId === undefined
+      ) {
+        const persistence = this.#persistence
+        if (persistence === undefined) {
+          throw providerUnavailableError(provider)
+        }
+        this.#writeDurable(() => {
+          persistence.bindLegacyConversationInstallation(
+            conversation.record.conversationId,
+            installation!.installationId,
+          )
+        })
+        conversation.providerInstallationId = installation.installationId
+      }
+    }
+    const runtime = this.#machineRuntimes.get(machineId, provider, installation)
     if (runtime === undefined) throw providerUnavailableError(provider)
+    if (
+      installation !== undefined &&
+      (runtime.installation?.installationId !== installation.installationId ||
+        runtime.installation.installationRevision !==
+          installation.installationRevision)
+    ) {
+      throw providerUnavailableError(provider)
+    }
     this.#subscribeRuntime(runtime, machineId)
     return runtime
   }
@@ -6058,6 +6779,79 @@ function archiveFilterForStore(
   }
 }
 
+function backendReadinessForFailure(
+  reason: CanonicalFailureReason,
+): 'unavailable' | 'authentication_required' | 'misconfigured' | undefined {
+  switch (reason) {
+    case 'login_required':
+    case 'authentication_expired':
+    case 'authentication_invalid':
+      return 'authentication_required'
+    case 'provider_misconfigured':
+      return 'misconfigured'
+    case 'account_unavailable':
+    case 'usage_limit_reached':
+    case 'rate_limited':
+    case 'provider_capacity_limited':
+    case 'provider_service_unavailable':
+      return 'unavailable'
+    default:
+      return undefined
+  }
+}
+
+function providerDescriptorWithLifecycleCapabilities(
+  descriptor: ProviderDescriptor,
+  lifecycle: MachineProviderLifecycle | undefined,
+): ProviderDescriptor {
+  const selected = lifecycle?.installations.find(
+    ({ installationId }) => installationId === lifecycle.selectedInstallationId,
+  )
+  const compatibility = selected?.compatibility
+  if (compatibility === undefined) return descriptor
+
+  const executionReady =
+    compatibility.capabilities.execution.effective === true &&
+    compatibility.capabilities.streaming.effective === true &&
+    (descriptor.provider === 'codex' ||
+      (compatibility.capabilities.fileRead.effective === true &&
+        compatibility.capabilities.search.effective === true &&
+        compatibility.capabilities.toolEvents.effective === true)) &&
+    (compatibility.state === 'verified' ||
+      compatibility.state === 'compatible_unverified' ||
+      compatibility.state === 'limited')
+  const effective = (
+    capability:
+      | 'streaming'
+      | 'nativeResume'
+      | 'fileRead'
+      | 'search'
+      | 'toolEvents'
+      | 'reasoningControl',
+  ): boolean =>
+    executionReady && compatibility.capabilities[capability].effective === true
+  const capabilities = {
+    ...descriptor.capabilities,
+    streaming: effective('streaming'),
+    resume: effective('nativeResume'),
+    fileRead: effective('fileRead'),
+    search: effective('search'),
+    toolEvents: effective('toolEvents'),
+    reasoningControl: effective('reasoningControl'),
+  }
+  const { reasoningLabel, reasoningOptions, ...withoutReasoning } = descriptor
+  return {
+    ...withoutReasoning,
+    capabilities,
+    ...(capabilities.reasoningControl
+      ? {
+          ...(reasoningLabel === undefined ? {} : { reasoningLabel }),
+          ...(reasoningOptions === undefined ? {} : { reasoningOptions }),
+        }
+      : {}),
+  }
+}
+
 function activeConversationArchiveError(): HostServiceError {
   return new HostServiceError(
     'conflict',
@@ -6376,6 +7170,7 @@ function remoteProviderExecutionProfileAvailable(
   codexTransportAvailable: boolean,
   claudeTransportAvailable: boolean,
 ): boolean {
+  if (descriptor.availability !== 'available') return false
   const enabledCapabilities = Object.entries(descriptor.capabilities)
     .filter(([, enabled]) => enabled)
     .map(([capability]) => capability)
@@ -6383,30 +7178,35 @@ function remoteProviderExecutionProfileAvailable(
   if (descriptor.provider === 'codex') {
     return (
       codexTransportAvailable &&
-      enabledCapabilities.length === 2 &&
-      enabledCapabilities[0] === 'resume' &&
-      enabledCapabilities[1] === 'streaming'
+      descriptor.capabilities.streaming &&
+      enabledCapabilities.every(
+        (capability) => capability === 'resume' || capability === 'streaming',
+      )
     )
   }
-  const expected = [
+  const allowed = new Set([
     'fileRead',
     'reasoningControl',
     'resume',
     'search',
     'streaming',
     'toolEvents',
-  ]
+  ])
   return (
     claudeTransportAvailable &&
-    enabledCapabilities.length === expected.length &&
-    enabledCapabilities.every(
-      (capability, index) => capability === expected[index],
-    ) &&
-    descriptor.reasoningOptions?.length === 5 &&
-    descriptor.reasoningOptions.every(
-      (option, index) =>
-        option.id === ['low', 'medium', 'high', 'xhigh', 'max'][index],
-    )
+    descriptor.capabilities.streaming &&
+    descriptor.capabilities.fileRead &&
+    descriptor.capabilities.search &&
+    descriptor.capabilities.toolEvents &&
+    enabledCapabilities.every((capability) => allowed.has(capability)) &&
+    (descriptor.capabilities.reasoningControl
+      ? descriptor.reasoningOptions?.length === 5 &&
+        descriptor.reasoningOptions.every(
+          (option, index) =>
+            option.id === ['low', 'medium', 'high', 'xhigh', 'max'][index],
+        )
+      : descriptor.reasoningLabel === undefined &&
+        descriptor.reasoningOptions === undefined)
   )
 }
 

@@ -91,6 +91,8 @@ export interface ResumeThreadOptions {
 
 export interface LaunchCodexClientOptions extends CodexAppServerClientOptions {
   readonly executable?: string
+  /** Exact Machine-local environment selected for this installation. */
+  readonly environment?: NodeJS.ProcessEnv
   readonly clientInfo: {
     readonly name: string
     readonly title: string
@@ -207,7 +209,11 @@ export class CodexAppServerClient {
   static async launch(
     options: LaunchCodexClientOptions,
   ): Promise<CodexAppServerClient> {
-    const process = spawnCodexAppServer(options.executable)
+    const process = spawnCodexAppServer(options.executable, {
+      ...(options.environment === undefined
+        ? {}
+        : { environment: options.environment }),
+    })
     const client = new CodexAppServerClient(process, options)
     try {
       await client.initialize(options.clientInfo)

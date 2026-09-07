@@ -22,6 +22,36 @@ export const MachineIdSchema = z
   .brand<'MachineId'>()
 export type MachineId = z.infer<typeof MachineIdSchema>
 
+/** Opaque CodeTether identity for one Machine-local Provider installation. */
+export const ProviderInstallationIdSchema = z
+  .string()
+  .regex(/^pinst_[A-Za-z0-9][A-Za-z0-9_-]{15,95}$/)
+  .brand<'ProviderInstallationId'>()
+export type ProviderInstallationId = z.infer<
+  typeof ProviderInstallationIdSchema
+>
+
+/**
+ * Presentation-safe opaque identity for the observed executable revision.
+ * It is deliberately not a public binary hash or filesystem identity.
+ */
+export const ProviderInstallationRevisionSchema = z
+  .string()
+  .regex(/^prev_[A-Za-z0-9][A-Za-z0-9_-]{15,123}$/)
+  .brand<'ProviderInstallationRevision'>()
+export type ProviderInstallationRevision = z.infer<
+  typeof ProviderInstallationRevisionSchema
+>
+
+/** Opaque revision of the effective, secret-free backend configuration. */
+export const ProviderBackendConfigurationRevisionSchema = z
+  .string()
+  .regex(/^pbcfg_[A-Za-z0-9][A-Za-z0-9_-]{15,122}$/)
+  .brand<'ProviderBackendConfigurationRevision'>()
+export type ProviderBackendConfigurationRevision = z.infer<
+  typeof ProviderBackendConfigurationRevisionSchema
+>
+
 export const MachinePairingAttemptIdSchema = z
   .string()
   .regex(/^pairing_[A-Za-z0-9][A-Za-z0-9_-]{5,95}$/)

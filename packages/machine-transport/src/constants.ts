@@ -27,6 +27,9 @@ export const machineTransportLimits = {
   maximumProviderSessionDiscoveryTitleBytes: 512,
   maximumProviderSessionDiscoveryRevisionBytes: 128,
   providerProbeTimeoutMs: 5_000,
+  maximumProviderInstallationsPerProvider: 8,
+  maximumProviderInstallationCandidates: 32,
+  maximumProviderInstallationPathEntries: 64,
   // Session admission may run the outer Claude version probe, preparation
   // version probe, and auth-status probe serially (3 * 5s), followed on a
   // cold Codex open by initialize and thread start/resume (2 * 30s), with a

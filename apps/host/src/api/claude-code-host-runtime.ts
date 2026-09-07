@@ -14,7 +14,11 @@ import {
   type ClaudeCodeAvailableDetection,
   type ClaudeCodeEffort,
 } from '@codetether/adapter-claude'
-import type { ProviderDescriptor } from '@codetether/protocol'
+import type {
+  ProviderDescriptor,
+  ProviderInstallationId,
+  ProviderInstallationRevision,
+} from '@codetether/protocol'
 
 export const CLAUDE_CODE_REASONING_LABEL = '思考强度'
 
@@ -42,6 +46,7 @@ import {
 export class ClaudeCodeHostRuntime implements AgentHostRuntime {
   readonly provider = 'claude-code' as const
   readonly available = true
+  readonly installation
   readonly descriptor: ProviderDescriptor
   readonly #detection: ClaudeCodeAvailableDetection
   readonly #environment: NodeJS.ProcessEnv
@@ -54,9 +59,14 @@ export class ClaudeCodeHostRuntime implements AgentHostRuntime {
   constructor(
     detection: ClaudeCodeAvailableDetection,
     environment: NodeJS.ProcessEnv = process.env,
+    installation?: {
+      readonly installationId: ProviderInstallationId
+      readonly installationRevision: ProviderInstallationRevision
+    },
   ) {
     this.#detection = detection
     this.#environment = { ...environment }
+    this.installation = installation
     this.descriptor = {
       provider: this.provider,
       displayName: 'Claude Code',

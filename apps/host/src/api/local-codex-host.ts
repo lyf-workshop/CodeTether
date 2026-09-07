@@ -10,7 +10,10 @@ import {
   type ProviderSessionDiscovery,
 } from '@codetether/agent-core'
 import { CodexSessionDiscovery } from '@codetether/adapter-codex'
-import type { ProviderDescriptor } from '@codetether/protocol'
+import type {
+  MachineProviderLifecycle,
+  ProviderDescriptor,
+} from '@codetether/protocol'
 
 import { HostEventPublisher } from './host-event-publisher.js'
 import { ConversationStore } from '../persistence/index.js'
@@ -36,6 +39,10 @@ import {
   UNAVAILABLE_PROVIDER_CAPABILITIES,
 } from './provider-registry.js'
 import { WorkspacePolicy } from './workspace-policy.js'
+import {
+  LocalProviderLifecycleCoordinator,
+  type LocalProviderLifecycleState,
+} from './local-provider-lifecycle-coordinator.js'
 import { safeErrorNameForLog } from './safe-log.js'
 import {
   SecureRemoteMachineCoordinator,
@@ -97,27 +104,71 @@ export async function startLocalCodexHost(
             ? {}
             : { databasePath: options.databasePath }),
         })
-  const runtimes = await Promise.all(
-    (['codex', 'claude-code'] as const).map(
-      async (provider) => await createLocalProviderRuntime(provider, options),
-    ),
-  )
-  const providerSessionDiscoveries: readonly ProviderSessionDiscovery[] = [
-    new CodexSessionDiscovery({
-      ...(options.executable === undefined
-        ? {}
-        : { executable: options.executable }),
-    }),
-    new ClaudeSessionDiscovery(),
-  ]
+  const localMachine = persistence
+    ?.listMachines()
+    .find((machine) => machine.kind === 'local')
+  let lifecycleCoordinator: LocalProviderLifecycleCoordinator | undefined
+  try {
+    lifecycleCoordinator =
+      persistence === undefined || localMachine === undefined
+        ? undefined
+        : await LocalProviderLifecycleCoordinator.create({
+            machineId: localMachine.machineId,
+            persistence,
+            hostVersion: options.hostVersion,
+            ...(options.executable === undefined
+              ? {}
+              : { codexExecutable: options.executable }),
+            ...(options.disableHooks === undefined
+              ? {}
+              : { disableCodexHooks: options.disableHooks }),
+            ...(options.ephemeralThreads === undefined
+              ? {}
+              : { ephemeralCodexThreads: options.ephemeralThreads }),
+          })
+  } catch (error) {
+    try {
+      persistence?.close()
+    } catch {
+      // Preserve the lifecycle assembly failure.
+    }
+    throw error
+  }
+  const lifecycleStates = lifecycleCoordinator?.states()
+  const runtimes =
+    lifecycleStates?.map((state) => state.runtime) ??
+    (await Promise.all(
+      (['codex', 'claude-code'] as const).map(
+        async (provider) => await createLocalProviderRuntime(provider, options),
+      ),
+    ))
+  const providerSessionDiscoveries: readonly ProviderSessionDiscovery[] =
+    lifecycleStates?.flatMap((state) =>
+      state.sessionDiscovery === undefined ? [] : [state.sessionDiscovery],
+    ) ?? [
+      new CodexSessionDiscovery({
+        ...(options.executable === undefined
+          ? {}
+          : { executable: options.executable }),
+      }),
+      new ClaudeSessionDiscovery(),
+    ]
   try {
     return await startLocalCodexHostWithRuntime(
       options,
       runtimes,
       workspacePolicy,
       persistence,
-      async (provider) => await createLocalProviderRuntime(provider, options),
+      lifecycleCoordinator === undefined
+        ? async (provider) =>
+            await createLocalProviderRuntime(provider, options)
+        : undefined,
       providerSessionDiscoveries,
+      lifecycleStates?.map((state) => state.lifecycle),
+      lifecycleCoordinator === undefined
+        ? undefined
+        : async (provider) =>
+            await lifecycleCoordinator.prepareRefresh(provider),
     )
   } catch (error) {
     try {
@@ -236,6 +287,10 @@ export async function startLocalCodexHostWithRuntime(
     provider: AgentHostRuntime['provider'],
   ) => Promise<AgentHostRuntime>,
   providerSessionDiscoveries?: readonly ProviderSessionDiscovery[],
+  providerLifecycles?: readonly MachineProviderLifecycle[],
+  refreshLocalProviderLifecycle?: (
+    provider: AgentHostRuntime['provider'],
+  ) => Promise<LocalProviderLifecycleState>,
 ): Promise<RunningLocalCodexHost> {
   const runtimes = Array.isArray(runtime) ? runtime : [runtime]
   let service: HostService | undefined
@@ -287,6 +342,10 @@ export async function startLocalCodexHostWithRuntime(
       ...(providerSessionDiscoveries === undefined
         ? {}
         : { providerSessionDiscoveries }),
+      ...(providerLifecycles === undefined ? {} : { providerLifecycles }),
+      ...(refreshLocalProviderLifecycle === undefined
+        ? {}
+        : { refreshLocalProviderLifecycle }),
     })
     await service.registerInitialProjectRoots(
       options.allowedWorkspaceRoots ?? [],

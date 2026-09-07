@@ -32,6 +32,11 @@ import {
   machineWireLimits,
 } from './machines.js'
 import { ProviderDescriptorSchema, ProviderIdSchema } from './providers.js'
+import {
+  MachineProviderLifecycleSchema,
+  providerLifecycleWireLimits,
+  type MachineProviderLifecycle,
+} from './provider-lifecycle.js'
 import { RelayMachineConnectivitySchema } from './relay.js'
 
 const CreateConversationByProjectRequestSchema = z
@@ -152,6 +157,11 @@ export const GetMachineResponseSchema = z
     providers: z
       .array(ProviderDescriptorSchema)
       .max(machineWireLimits.providers),
+    /** Additive Phase 8B lifecycle detail; legacy Hosts may omit it. */
+    providerLifecycles: z
+      .array(MachineProviderLifecycleSchema)
+      .max(providerLifecycleWireLimits.providerLifecycles)
+      .optional(),
     projects: z.array(ProjectRecordSchema).max(machineWireLimits.projects),
     conversations: z
       .array(ConversationSummarySchema)
@@ -236,6 +246,11 @@ export const GetMachineResponseSchema = z
       }
       providerIds.add(provider.provider)
     }
+    validateProviderLifecycleGroups(
+      response.providerLifecycles,
+      context,
+      providerIds,
+    )
 
     const projectIds = new Set<string>()
     for (const [projectIndex, project] of response.projects.entries()) {
@@ -743,6 +758,11 @@ export const RefreshMachineProvidersDataSchema = z
     providers: z
       .array(ProviderDescriptorSchema)
       .max(machineWireLimits.providers),
+    /** Additive Phase 8B lifecycle detail; legacy Hosts may omit it. */
+    providerLifecycles: z
+      .array(MachineProviderLifecycleSchema)
+      .max(providerLifecycleWireLimits.providerLifecycles)
+      .optional(),
     providerDiscovery: MachineProviderDiscoverySchema,
   })
   .strict()
@@ -765,6 +785,11 @@ export const RefreshMachineProvidersDataSchema = z
       }
       providerIds.add(provider.provider)
     }
+    validateProviderLifecycleGroups(
+      data.providerLifecycles,
+      context,
+      providerIds,
+    )
   })
 export type RefreshMachineProvidersData = z.infer<
   typeof RefreshMachineProvidersDataSchema
@@ -776,6 +801,31 @@ export const RefreshMachineProvidersResponseSchema = mutationResponseSchema(
 export type RefreshMachineProvidersResponse = z.infer<
   typeof RefreshMachineProvidersResponseSchema
 >
+
+function validateProviderLifecycleGroups(
+  lifecycles: readonly MachineProviderLifecycle[] | undefined,
+  context: z.RefinementCtx,
+  providerIds: ReadonlySet<string>,
+): void {
+  const lifecycleProviders = new Set<string>()
+  for (const [index, lifecycle] of (lifecycles ?? []).entries()) {
+    if (lifecycleProviders.has(lifecycle.provider)) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Machine Provider lifecycle identities must be unique',
+        path: ['providerLifecycles', index, 'provider'],
+      })
+    }
+    lifecycleProviders.add(lifecycle.provider)
+    if (!providerIds.has(lifecycle.provider)) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Provider lifecycle requires a matching Provider descriptor',
+        path: ['providerLifecycles', index, 'provider'],
+      })
+    }
+  }
+}
 
 export const RenameConversationResponseSchema = mutationResponseSchema(
   ConversationOrganizationDataSchema,

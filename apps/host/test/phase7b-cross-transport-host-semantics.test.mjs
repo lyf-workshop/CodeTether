@@ -18,6 +18,8 @@ const timestamp = '2026-09-04T12:00:00.000Z'
 const machineId = 'machine_phase7bcross01'
 const projectId = 'proj_phase7bcross01'
 const remoteRoot = '/srv/projects/phase7b-cross-transport'
+const remoteCodexInstallationId = 'pinst_phase7bcrosscodex01'
+const remoteCodexInstallationRevision = 'prev_phase7bcrosscodex01'
 
 test('a Relay-labelled Start action replays its exact Turn after Direct becomes current', async (t) => {
   const fixture = await createFixture(t)
@@ -250,6 +252,7 @@ async function createFixture(t) {
     providers: remoteProviderDescriptors(),
     observedAt: timestamp,
   })
+  persistence.recordProviderLifecycle(remoteCodexLifecycleFixture())
 
   const coordinator = new CrossTransportRemoteCoordinator()
   const service = new HostService({
@@ -359,6 +362,11 @@ class CrossTransportRemoteCoordinator {
   async openCodexSession(machine, trust, input) {
     assert.equal(machine.machineId, machineId)
     assert.equal(trust.machineId, machineId)
+    assert.equal(input.providerInstallationId, remoteCodexInstallationId)
+    assert.equal(
+      input.expectedInstallationRevision,
+      remoteCodexInstallationRevision,
+    )
     const transport = this.executionTransport
     this.providerSessionOpens.push({ transport, input })
     if (transport === 'relay') this.relaySessionOpens += 1
@@ -509,6 +517,58 @@ function remoteProviderDescriptors() {
       capabilities: none,
     },
   ]
+}
+
+function remoteCodexLifecycleFixture() {
+  const supported = {
+    observed: 'supported',
+    enabled: true,
+    effective: true,
+  }
+  const disabled = {
+    observed: 'unknown',
+    enabled: false,
+    effective: false,
+  }
+  return {
+    machineId,
+    provider: 'codex',
+    observedAt: timestamp,
+    selectedInstallationId: remoteCodexInstallationId,
+    installations: [
+      {
+        installationId: remoteCodexInstallationId,
+        machineId,
+        provider: 'codex',
+        locatorKey: remoteCodexInstallationId,
+        selected: true,
+        version: '1.2.3',
+        launcherKind: 'symlink',
+        installMethod: 'npm',
+        availability: 'available',
+        revision: remoteCodexInstallationRevision,
+        firstObservedAt: timestamp,
+        lastObservedAt: timestamp,
+        compatibility: {
+          state: 'verified',
+          runtimeReadiness: 'ready',
+          freshness: 'current',
+          contractVersion: 1,
+          observedAt: timestamp,
+          capabilities: {
+            execution: supported,
+            streaming: supported,
+            nativeResume: supported,
+            nativeSessionDiscovery: supported,
+            fileRead: disabled,
+            search: disabled,
+            toolEvents: disabled,
+            reasoningControl: disabled,
+          },
+        },
+      },
+    ],
+  }
 }
 
 function deferred() {

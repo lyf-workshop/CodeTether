@@ -15,9 +15,16 @@ import {
   ManualConversationTitleSchema,
   ProjectIdSchema,
   ProviderDescriptorSchema,
+  ProviderBackendObservationSchema,
+  ProviderCompatibilityObservationSchema,
   ProviderExecutionHealthSchema,
   ProviderExecutionHealthStateSchema,
   ProviderIdSchema,
+  ProviderInstallationIdSchema,
+  ProviderInstallationRevisionSchema,
+  ProviderInstallationSummarySchema,
+  MachineProviderLifecycleSchema,
+  providerLifecycleWireLimits,
   RelayEndpointSchema,
   RelayIdentityFingerprintSchema,
   RemoteMachineAddressSchema,
@@ -33,8 +40,13 @@ import {
   type MachineId,
   type ProjectId,
   type ProviderDescriptor,
+  type ProviderBackendObservation,
+  type ProviderCompatibilityObservation,
   type ProviderExecutionHealth,
   type ProviderId,
+  type ProviderInstallationId,
+  type ProviderInstallationSummary,
+  type MachineProviderLifecycle,
   type RelayEndpoint,
   type RelayIdentityFingerprint,
   type RemoteMachineAddress,
@@ -75,6 +87,15 @@ import {
 import { currentSchemaVersion, migrateDatabase } from './migrations.js'
 
 const DEFAULT_BUSY_TIMEOUT_MS = 5_000
+
+/**
+ * Selected and Conversation-bound installations are durable authorities and
+ * are never pruned. Keep only this many additional historical alternatives
+ * per Machine/Provider so repeated external PATH changes cannot grow the
+ * lifecycle catalog without bound.
+ */
+const MAXIMUM_RETAINED_UNBOUND_PROVIDER_INSTALLATIONS =
+  providerLifecycleWireLimits.installationsPerProvider
 
 export const providerExecutionHealthFailureMaximumBytes = 4 * 1024
 
@@ -263,6 +284,28 @@ export interface DurableProviderExecutionHealthObservation {
 }
 
 /**
+ * Private durable Provider installation. Exact paths never cross the public
+ * Protocol; remote installations may retain only their Machine-local locator.
+ */
+export interface DurableProviderInstallation extends ProviderInstallationSummary {
+  readonly machineId: MachineId
+  readonly locatorKey: string
+  readonly launcherPath?: string
+  readonly resolvedExecutablePath?: string
+}
+
+/** One bounded, transactionally recorded lifecycle snapshot. */
+export interface DurableMachineProviderLifecycleObservation {
+  readonly machineId: MachineId
+  readonly provider: ProviderId
+  readonly observedAt: Timestamp
+  readonly selectedInstallationId?: ProviderInstallationId
+  readonly installations: readonly DurableProviderInstallation[]
+  /** True when the owning Machine intentionally omitted bounded candidates. */
+  readonly installationsTruncated?: boolean
+}
+
+/**
  * Presentation-safe Controller Relay configuration. Enrollment tokens,
  * Controller private keys, connection epochs, and presence never enter SQLite.
  */
@@ -298,6 +341,8 @@ export interface DurableConversation {
   readonly pinnedAt?: Timestamp
   readonly archivedAt?: Timestamp
   readonly provider: ProviderId
+  /** Private Phase 8B execution binding; absent only for legacy v15 data. */
+  readonly providerInstallationId?: ProviderInstallationId
   readonly providerThreadId?: string
   readonly origin: DurableConversationOrigin
   readonly providerSessionMaterialized: boolean
@@ -731,6 +776,373 @@ export class ConversationStore {
       throw new Error('Provider execution health observation was not retained')
     }
     return current
+  }
+
+  getProviderInstallation(
+    installationId: ProviderInstallationId,
+  ): DurableProviderInstallation | undefined {
+    const id = ProviderInstallationIdSchema.parse(installationId)
+    const row = this.#statement(
+      `SELECT
+         provider_installations.*,
+         CASE
+           WHEN machine_provider_installation_selections.installation_id =
+             provider_installations.installation_id
+           THEN 1 ELSE 0
+         END AS selected
+       FROM provider_installations
+       LEFT JOIN machine_provider_installation_selections
+         ON machine_provider_installation_selections.machine_id =
+              provider_installations.machine_id
+        AND machine_provider_installation_selections.provider =
+              provider_installations.provider
+       WHERE provider_installations.installation_id = ?`,
+    ).get(id) as ProviderInstallationRow | undefined
+    return row === undefined
+      ? undefined
+      : this.#providerInstallationFromRow(row)
+  }
+
+  getProviderLifecycle(
+    machineId: MachineId,
+    provider: ProviderId,
+  ): MachineProviderLifecycle | undefined {
+    const machine = MachineIdSchema.parse(machineId)
+    const providerId = ProviderIdSchema.parse(provider)
+    const rows = this.#statement(
+      `SELECT
+         provider_installations.*,
+         CASE
+           WHEN machine_provider_installation_selections.installation_id =
+             provider_installations.installation_id
+           THEN 1 ELSE 0
+         END AS selected
+       FROM provider_installations
+       LEFT JOIN machine_provider_installation_selections
+         ON machine_provider_installation_selections.machine_id =
+              provider_installations.machine_id
+        AND machine_provider_installation_selections.provider =
+              provider_installations.provider
+       WHERE
+         provider_installations.machine_id = ? AND
+         provider_installations.provider = ?
+       ORDER BY selected DESC, last_observed_at DESC, installation_id ASC
+       LIMIT ?`,
+    ).all(
+      machine,
+      providerId,
+      providerLifecycleWireLimits.installationsPerProvider,
+    ) as unknown as ProviderInstallationRow[]
+    const selection = this.#statement(
+      `SELECT installation_id
+       FROM machine_provider_installation_selections
+       WHERE machine_id = ? AND provider = ?`,
+    ).get(machine, providerId) as
+      { readonly installation_id: string | null } | undefined
+    if (rows.length === 0 && selection === undefined) return undefined
+    return MachineProviderLifecycleSchema.parse({
+      provider: providerId,
+      ...(selection === undefined || selection.installation_id === null
+        ? {}
+        : {
+            selectedInstallationId: ProviderInstallationIdSchema.parse(
+              selection.installation_id,
+            ),
+          }),
+      installations: rows.map((row) =>
+        providerInstallationPublic(this.#providerInstallationFromRow(row)),
+      ),
+    })
+  }
+
+  listProviderLifecycles(machineId: MachineId): MachineProviderLifecycle[] {
+    const machine = MachineIdSchema.parse(machineId)
+    return (['codex', 'claude-code'] as const).flatMap((provider) => {
+      const lifecycle = this.getProviderLifecycle(machine, provider)
+      return lifecycle === undefined ? [] : [lifecycle]
+    })
+  }
+
+  recordProviderLifecycle(
+    observation: DurableMachineProviderLifecycleObservation,
+  ): MachineProviderLifecycle {
+    const value = parseProviderLifecycleObservation(observation)
+    return this.runInTransaction(() => {
+      const currentSnapshot = this.#statement(
+        `SELECT installation_id, updated_at
+         FROM machine_provider_installation_selections
+         WHERE machine_id = ? AND provider = ?`,
+      ).get(value.machineId, value.provider) as
+        | {
+            readonly installation_id: string | null
+            readonly updated_at: string
+          }
+        | undefined
+      if (
+        currentSnapshot !== undefined &&
+        Date.parse(currentSnapshot.updated_at) >= Date.parse(value.observedAt)
+      ) {
+        return (
+          this.getProviderLifecycle(value.machineId, value.provider) ??
+          MachineProviderLifecycleSchema.parse({
+            provider: value.provider,
+            installations: [],
+          })
+        )
+      }
+      for (const installation of value.installations) {
+        const existing = this.getProviderInstallation(
+          installation.installationId,
+        )
+        if (
+          existing !== undefined &&
+          (existing.machineId !== installation.machineId ||
+            existing.provider !== installation.provider ||
+            existing.locatorKey !== installation.locatorKey)
+        ) {
+          throw new Error(
+            'Provider installation identity is already bound to another locator',
+          )
+        }
+        const revisionChanged =
+          existing !== undefined && existing.revision !== installation.revision
+        this.#statement(
+          `INSERT INTO provider_installations (
+             installation_id, machine_id, provider, locator_key,
+             launcher_path, resolved_executable_path, launcher_kind,
+             install_method, availability, observed_version,
+             installation_revision, first_observed_at, last_observed_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(installation_id) DO UPDATE SET
+             launcher_path = COALESCE(
+               excluded.launcher_path, provider_installations.launcher_path
+             ),
+             resolved_executable_path = COALESCE(
+               excluded.resolved_executable_path,
+               provider_installations.resolved_executable_path
+             ),
+             launcher_kind = excluded.launcher_kind,
+             install_method = excluded.install_method,
+             availability = excluded.availability,
+             observed_version = excluded.observed_version,
+             installation_revision = excluded.installation_revision,
+             last_observed_at = excluded.last_observed_at
+           WHERE julianday(excluded.last_observed_at) >
+             julianday(provider_installations.last_observed_at)`,
+        ).run(
+          installation.installationId,
+          installation.machineId,
+          installation.provider,
+          installation.locatorKey,
+          installation.launcherPath ?? null,
+          installation.resolvedExecutablePath ?? null,
+          installation.launcherKind,
+          installation.installMethod,
+          installation.availability,
+          installation.version ?? null,
+          installation.revision ?? null,
+          installation.firstObservedAt,
+          installation.lastObservedAt,
+        )
+        const retained = this.#statement(
+          `SELECT installation_revision, last_observed_at
+           FROM provider_installations
+           WHERE installation_id = ?`,
+        ).get(installation.installationId) as
+          | {
+              readonly installation_revision: string | null
+              readonly last_observed_at: string
+            }
+          | undefined
+        if (
+          retained === undefined ||
+          retained.last_observed_at !== installation.lastObservedAt ||
+          (retained.installation_revision ?? undefined) !==
+            installation.revision
+        ) {
+          continue
+        }
+        if (revisionChanged) {
+          this.#statement(
+            `DELETE FROM provider_installation_compatibility
+             WHERE installation_id = ?`,
+          ).run(installation.installationId)
+          this.#statement(
+            `DELETE FROM provider_backend_observations
+             WHERE installation_id = ?`,
+          ).run(installation.installationId)
+        }
+        if (installation.compatibility !== undefined) {
+          this.#recordProviderCompatibility(
+            installation.installationId,
+            installation.revision,
+            installation.compatibility,
+          )
+          if (installation.compatibility.freshness === 'last_known') {
+            this.#markProviderCompatibilityLastKnown(
+              installation.installationId,
+              installation.revision,
+            )
+          }
+        }
+        const existingBackend = existing?.backend
+        const retainKnownBackend =
+          !revisionChanged &&
+          existingBackend !== undefined &&
+          existingBackend.readiness !== 'unknown' &&
+          (installation.backend === undefined ||
+            (installation.backend.configurationRevision !== undefined &&
+              installation.backend.configurationRevision ===
+                existingBackend.configurationRevision &&
+              (installation.backend.readiness === 'unknown' ||
+                (installation.backend.freshness === 'last_known' &&
+                  installation.backend.readiness ===
+                    existingBackend.readiness &&
+                  installation.backend.observedAt ===
+                    existingBackend.observedAt))))
+        if (retainKnownBackend && existingBackend !== undefined) {
+          this.#markProviderBackendLastKnown(
+            installation.installationId,
+            installation.revision,
+            existingBackend.configurationRevision,
+          )
+        } else if (installation.backend !== undefined) {
+          this.#recordProviderBackend(
+            installation.installationId,
+            installation.revision,
+            installation.backend,
+          )
+        }
+        if (installation.backend?.freshness === 'last_known') {
+          this.#markProviderBackendObservationLastKnown(
+            installation.installationId,
+            installation.revision,
+          )
+        }
+      }
+
+      const observedInstallationIds = new Set(
+        value.installations.map(({ installationId }) => installationId),
+      )
+      const retainedRows = this.#statement(
+        `SELECT installation_id, installation_revision
+         FROM provider_installations
+         WHERE machine_id = ? AND provider = ?`,
+      ).all(value.machineId, value.provider) as Array<{
+        readonly installation_id: string
+        readonly installation_revision: string | null
+      }>
+      if (value.installationsTruncated === true) {
+        for (const row of retainedRows) {
+          const installationId = ProviderInstallationIdSchema.parse(
+            row.installation_id,
+          )
+          if (observedInstallationIds.has(installationId)) continue
+          const revision =
+            row.installation_revision === null
+              ? undefined
+              : ProviderInstallationRevisionSchema.parse(
+                  row.installation_revision,
+                )
+          this.#markProviderCompatibilityLastKnown(installationId, revision)
+          this.#markProviderBackendObservationLastKnown(
+            installationId,
+            revision,
+          )
+        }
+      } else {
+        for (const row of retainedRows) {
+          const installationId = ProviderInstallationIdSchema.parse(
+            row.installation_id,
+          )
+          if (observedInstallationIds.has(installationId)) continue
+          const revision =
+            row.installation_revision === null
+              ? undefined
+              : ProviderInstallationRevisionSchema.parse(
+                  row.installation_revision,
+                )
+          this.#statement(
+            `UPDATE provider_installations
+             SET availability = 'unavailable', last_observed_at = ?
+             WHERE installation_id = ?`,
+          ).run(value.observedAt, installationId)
+          this.#recordProviderCompatibility(
+            installationId,
+            revision,
+            unavailableProviderCompatibility(value.provider, value.observedAt),
+          )
+          this.#statement(
+            `UPDATE provider_backend_observations
+             SET freshness = 'last_known'
+             WHERE installation_id = ? AND freshness = 'current'`,
+          ).run(installationId)
+        }
+      }
+
+      const selected =
+        value.installationsTruncated === true &&
+        currentSnapshot?.installation_id !== undefined &&
+        currentSnapshot.installation_id !== null
+          ? ProviderInstallationIdSchema.parse(currentSnapshot.installation_id)
+          : value.selectedInstallationId
+      this.#statement(
+        `INSERT INTO machine_provider_installation_selections (
+           machine_id, provider, installation_id, selected_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(machine_id, provider) DO UPDATE SET
+           installation_id = excluded.installation_id,
+           selected_at = CASE
+             WHEN machine_provider_installation_selections.installation_id IS
+               excluded.installation_id
+             THEN machine_provider_installation_selections.selected_at
+             ELSE excluded.selected_at
+           END,
+           updated_at = excluded.updated_at
+         WHERE julianday(excluded.updated_at) >
+           julianday(machine_provider_installation_selections.updated_at)`,
+      ).run(
+        value.machineId,
+        value.provider,
+        selected ?? null,
+        selected === undefined ? null : value.observedAt,
+        value.observedAt,
+      )
+
+      this.#pruneUnboundProviderInstallations(value.machineId, value.provider)
+
+      return (
+        this.getProviderLifecycle(value.machineId, value.provider) ??
+        MachineProviderLifecycleSchema.parse({
+          provider: value.provider,
+          installations: [],
+        })
+      )
+    })
+  }
+
+  /** Updates backend health without manufacturing a new binary observation. */
+  recordProviderBackendObservation(
+    installationId: ProviderInstallationId,
+    revision: DurableProviderInstallation['revision'],
+    observation: ProviderBackendObservation,
+  ): DurableProviderInstallation {
+    const id = ProviderInstallationIdSchema.parse(installationId)
+    const backend = ProviderBackendObservationSchema.parse(observation)
+    return this.runInTransaction(() => {
+      const installation = this.getProviderInstallation(id)
+      if (installation === undefined || installation.revision !== revision) {
+        throw new Error(
+          'Provider backend observation targets a stale installation revision',
+        )
+      }
+      this.#recordProviderBackend(id, revision, backend)
+      const retained = this.getProviderInstallation(id)
+      if (retained === undefined) {
+        throw new Error('Provider backend observation was not retained')
+      }
+      return retained
+    })
   }
 
   getMachineRelayConfiguration(
@@ -1484,6 +1896,32 @@ export class ConversationStore {
 
   createConversation(conversation: NewDurableConversation): void {
     const value = parseConversation(conversation)
+    if (value.providerInstallationId === undefined) {
+      this.#insertConversation(value)
+      return
+    }
+    this.#database.exec('SAVEPOINT create_conversation_provider_installation')
+    try {
+      this.#insertConversation(value)
+      this.#database.exec(
+        'RELEASE SAVEPOINT create_conversation_provider_installation',
+      )
+    } catch (error) {
+      try {
+        this.#database.exec(
+          'ROLLBACK TO SAVEPOINT create_conversation_provider_installation',
+        )
+        this.#database.exec(
+          'RELEASE SAVEPOINT create_conversation_provider_installation',
+        )
+      } catch {
+        // Preserve the insertion failure.
+      }
+      throw error
+    }
+  }
+
+  #insertConversation(value: DurableConversation): void {
     this.#statement(
       `INSERT INTO conversations (
         conversation_id, project_id, machine_id, title, title_source,
@@ -1511,6 +1949,13 @@ export class ConversationStore {
       value.updatedAt,
       value.lastActivityAt,
     )
+    if (value.providerInstallationId !== undefined) {
+      this.#insertConversationProviderInstallationBinding(
+        value,
+        value.providerInstallationId,
+        value.createdAt,
+      )
+    }
   }
 
   getConversationByProviderSession(
@@ -1526,8 +1971,18 @@ export class ConversationStore {
       4096,
     )
     const row = this.#statement(
-      `SELECT * FROM conversations
-       WHERE machine_id = ? AND provider = ? AND provider_thread_id = ?`,
+      `SELECT
+         conversations.*,
+         conversation_provider_installation_bindings.installation_id AS
+           provider_installation_id
+       FROM conversations
+       LEFT JOIN conversation_provider_installation_bindings
+         ON conversation_provider_installation_bindings.conversation_id =
+              conversations.conversation_id
+       WHERE
+         conversations.machine_id = ? AND
+         conversations.provider = ? AND
+         conversations.provider_thread_id = ?`,
     ).get(machine, providerId, nativeSessionId) as ConversationRow | undefined
     return row === undefined ? undefined : conversationFromRow(row)
   }
@@ -1564,9 +2019,35 @@ export class ConversationStore {
             'Native Provider session is already bound to another Project Location',
           )
         }
+        if (
+          value.providerInstallationId !== undefined &&
+          existing.providerInstallationId !== undefined &&
+          existing.providerInstallationId !== value.providerInstallationId
+        ) {
+          throw new NativeProviderSessionBindingConflictError(
+            'Native Provider session is already bound to another Provider installation',
+          )
+        }
+        if (
+          existing.providerInstallationId === undefined &&
+          value.providerInstallationId !== undefined
+        ) {
+          this.#insertConversationProviderInstallationBinding(
+            existing,
+            value.providerInstallationId,
+            value.createdAt,
+          )
+          return {
+            conversation: requireConversation(
+              this.getConversation(existing.conversationId),
+              existing.conversationId,
+            ),
+            created: false,
+          }
+        }
         return { conversation: existing, created: false }
       }
-      this.createConversation(value)
+      this.#insertConversation(value)
       return {
         conversation: requireConversation(
           this.getConversation(value.conversationId),
@@ -1587,6 +2068,7 @@ export class ConversationStore {
       existing.projectId !== value.projectId ||
       existing.machineId !== value.machineId ||
       existing.provider !== value.provider ||
+      existing.providerInstallationId !== value.providerInstallationId ||
       existing.origin !== value.origin ||
       (existing.providerThreadId !== undefined &&
         existing.providerThreadId !== value.providerThreadId) ||
@@ -1626,16 +2108,65 @@ export class ConversationStore {
   ): DurableConversation | undefined {
     const id = ConversationIdSchema.parse(conversationId)
     const row = this.#statement(
-      'SELECT * FROM conversations WHERE conversation_id = ?',
+      `SELECT
+         conversations.*,
+         conversation_provider_installation_bindings.installation_id AS
+           provider_installation_id
+       FROM conversations
+       LEFT JOIN conversation_provider_installation_bindings
+         ON conversation_provider_installation_bindings.conversation_id =
+              conversations.conversation_id
+       WHERE conversations.conversation_id = ?`,
     ).get(id) as ConversationRow | undefined
     return row === undefined ? undefined : conversationFromRow(row)
   }
 
   listConversations(): DurableConversation[] {
     const rows = this.#statement(
-      'SELECT * FROM conversations ORDER BY last_activity_at DESC, conversation_id ASC',
+      `SELECT
+         conversations.*,
+         conversation_provider_installation_bindings.installation_id AS
+           provider_installation_id
+       FROM conversations
+       LEFT JOIN conversation_provider_installation_bindings
+         ON conversation_provider_installation_bindings.conversation_id =
+              conversations.conversation_id
+       ORDER BY conversations.last_activity_at DESC,
+         conversations.conversation_id ASC`,
     ).all() as unknown as ConversationRow[]
     return rows.map(conversationFromRow)
+  }
+
+  bindLegacyConversationInstallation(
+    conversationId: ConversationId,
+    installationId: ProviderInstallationId,
+  ): DurableConversation {
+    const conversationIdentity = ConversationIdSchema.parse(conversationId)
+    const installationIdentity =
+      ProviderInstallationIdSchema.parse(installationId)
+    return this.runInTransaction(() => {
+      const conversation = requireConversation(
+        this.getConversation(conversationIdentity),
+        conversationIdentity,
+      )
+      if (conversation.providerInstallationId !== undefined) {
+        if (conversation.providerInstallationId !== installationIdentity) {
+          throw new NativeProviderSessionBindingConflictError(
+            'Conversation Provider installation is immutable',
+          )
+        }
+        return conversation
+      }
+      this.#insertConversationProviderInstallationBinding(
+        conversation,
+        installationIdentity,
+        new Date().toISOString(),
+      )
+      return requireConversation(
+        this.getConversation(conversationIdentity),
+        conversationIdentity,
+      )
+    })
   }
 
   renameConversation(
@@ -2480,6 +3011,295 @@ export class ConversationStore {
     return rows.map(turnFromRow)
   }
 
+  #providerInstallationFromRow(
+    row: ProviderInstallationRow,
+  ): DurableProviderInstallation {
+    const installationId = ProviderInstallationIdSchema.parse(
+      row.installation_id,
+    )
+    const compatibilityRow = this.#statement(
+      `SELECT * FROM provider_installation_compatibility
+       WHERE installation_id = ?`,
+    ).get(installationId) as ProviderCompatibilityRow | undefined
+    const backendRow = this.#statement(
+      `SELECT * FROM provider_backend_observations
+       WHERE installation_id = ?`,
+    ).get(installationId) as ProviderBackendObservationRow | undefined
+    if (
+      compatibilityRow !== undefined &&
+      compatibilityRow.installation_revision !== row.installation_revision
+    ) {
+      throw new Error('Provider compatibility revision is stale')
+    }
+    if (
+      backendRow !== undefined &&
+      backendRow.installation_revision !== row.installation_revision
+    ) {
+      throw new Error('Provider backend observation revision is stale')
+    }
+    return parseDurableProviderInstallation({
+      installationId,
+      machineId: MachineIdSchema.parse(row.machine_id),
+      provider: ProviderIdSchema.parse(row.provider),
+      locatorKey: row.locator_key,
+      ...(row.launcher_path === null
+        ? {}
+        : { launcherPath: row.launcher_path }),
+      ...(row.resolved_executable_path === null
+        ? {}
+        : { resolvedExecutablePath: row.resolved_executable_path }),
+      selected: parseStoredBoolean(row.selected, 'Provider selection'),
+      ...(row.observed_version === null
+        ? {}
+        : { version: row.observed_version }),
+      launcherKind: parseProviderInstallationLauncherKind(row.launcher_kind),
+      installMethod: parseProviderInstallationMethod(row.install_method),
+      availability: parseProviderInstallationAvailability(row.availability),
+      ...(row.installation_revision === null
+        ? {}
+        : {
+            revision: ProviderInstallationRevisionSchema.parse(
+              row.installation_revision,
+            ),
+          }),
+      firstObservedAt: TimestampSchema.parse(row.first_observed_at),
+      lastObservedAt: TimestampSchema.parse(row.last_observed_at),
+      ...(compatibilityRow === undefined
+        ? {}
+        : { compatibility: compatibilityFromRow(compatibilityRow) }),
+      ...(backendRow === undefined
+        ? {}
+        : { backend: backendObservationFromRow(backendRow) }),
+    })
+  }
+
+  #recordProviderCompatibility(
+    installationId: ProviderInstallationId,
+    revision: DurableProviderInstallation['revision'],
+    observation: ProviderCompatibilityObservation,
+  ): void {
+    const capabilitiesJson = serializeBoundedJson(
+      observation.capabilities,
+      'Provider compatibility capabilities',
+      16_384,
+    )
+    const failureJson =
+      observation.failure === undefined
+        ? null
+        : serializeBoundedJson(
+            observation.failure,
+            'Provider compatibility failure',
+            4_096,
+          )
+    this.#statement(
+      `INSERT INTO provider_installation_compatibility (
+         installation_id, installation_revision, contract_version, state,
+         runtime_readiness, freshness, capabilities_json, failure_json,
+         observed_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(installation_id) DO UPDATE SET
+         installation_revision = excluded.installation_revision,
+         contract_version = excluded.contract_version,
+         state = excluded.state,
+         runtime_readiness = excluded.runtime_readiness,
+         freshness = excluded.freshness,
+         capabilities_json = excluded.capabilities_json,
+         failure_json = excluded.failure_json,
+         observed_at = excluded.observed_at
+       WHERE
+         provider_installation_compatibility.installation_revision IS
+           excluded.installation_revision AND
+         (
+           provider_installation_compatibility.observed_at IS NULL OR
+           (
+             excluded.observed_at IS NOT NULL AND
+             julianday(excluded.observed_at) >
+               julianday(provider_installation_compatibility.observed_at)
+           )
+         )`,
+    ).run(
+      installationId,
+      revision ?? null,
+      observation.contractVersion,
+      observation.state,
+      observation.runtimeReadiness,
+      observation.freshness,
+      capabilitiesJson,
+      failureJson,
+      observation.observedAt ?? null,
+    )
+  }
+
+  #markProviderCompatibilityLastKnown(
+    installationId: ProviderInstallationId,
+    revision: DurableProviderInstallation['revision'],
+  ): void {
+    this.#statement(
+      `UPDATE provider_installation_compatibility
+       SET freshness = 'last_known'
+       WHERE installation_id = ?
+         AND installation_revision IS ?
+         AND freshness = 'current'`,
+    ).run(installationId, revision ?? null)
+  }
+
+  #pruneUnboundProviderInstallations(
+    machineId: MachineId,
+    provider: ProviderId,
+  ): void {
+    this.#statement(
+      `DELETE FROM provider_installations
+       WHERE installation_id IN (
+         SELECT candidate.installation_id
+         FROM provider_installations AS candidate
+         WHERE
+           candidate.machine_id = ? AND
+           candidate.provider = ? AND
+           NOT EXISTS (
+             SELECT 1
+             FROM machine_provider_installation_selections AS selection
+             WHERE
+               selection.machine_id = candidate.machine_id AND
+               selection.provider = candidate.provider AND
+               selection.installation_id = candidate.installation_id
+           ) AND
+           NOT EXISTS (
+             SELECT 1
+             FROM conversation_provider_installation_bindings AS binding
+             WHERE binding.installation_id = candidate.installation_id
+         )
+         ORDER BY
+           CASE candidate.availability
+             WHEN 'unavailable' THEN 1
+             ELSE 0
+           END ASC,
+           julianday(candidate.first_observed_at) DESC,
+           candidate.first_observed_at DESC,
+           julianday(candidate.last_observed_at) DESC,
+           candidate.last_observed_at DESC,
+           candidate.installation_id ASC
+         LIMIT -1 OFFSET ?
+       )`,
+    ).run(
+      MachineIdSchema.parse(machineId),
+      ProviderIdSchema.parse(provider),
+      MAXIMUM_RETAINED_UNBOUND_PROVIDER_INSTALLATIONS,
+    )
+  }
+
+  #recordProviderBackend(
+    installationId: ProviderInstallationId,
+    revision: DurableProviderInstallation['revision'],
+    observation: ProviderBackendObservation,
+  ): void {
+    const configurationJson = serializeBoundedJson(
+      observation.configuration,
+      'Provider backend configuration',
+      4_096,
+    )
+    const failureJson =
+      observation.failure === undefined
+        ? null
+        : serializeBoundedJson(
+            observation.failure,
+            'Provider backend failure',
+            4_096,
+          )
+    this.#statement(
+      `INSERT INTO provider_backend_observations (
+         installation_id, installation_revision, configuration_revision,
+         mode, readiness, freshness, configuration_json, sanitized_origin,
+         failure_json, observed_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(installation_id) DO UPDATE SET
+         installation_revision = excluded.installation_revision,
+         configuration_revision = excluded.configuration_revision,
+         mode = excluded.mode,
+         readiness = excluded.readiness,
+         freshness = excluded.freshness,
+         configuration_json = excluded.configuration_json,
+         sanitized_origin = excluded.sanitized_origin,
+         failure_json = excluded.failure_json,
+         observed_at = excluded.observed_at
+       WHERE
+         provider_backend_observations.installation_revision IS
+           excluded.installation_revision AND
+         (
+           provider_backend_observations.observed_at IS NULL OR
+           (
+             excluded.observed_at IS NOT NULL AND
+             julianday(excluded.observed_at) >
+               julianday(provider_backend_observations.observed_at)
+           )
+         )`,
+    ).run(
+      installationId,
+      revision ?? null,
+      observation.configurationRevision ?? null,
+      observation.mode,
+      observation.readiness,
+      observation.freshness,
+      configurationJson,
+      observation.sanitizedOrigin ?? null,
+      failureJson,
+      observation.observedAt ?? null,
+    )
+  }
+
+  /**
+   * A metadata-only lifecycle refresh cannot manufacture current backend
+   * health. Preserve the last explicit execution/auth observation and its
+   * original timestamp, while making its staleness truthful.
+   */
+  #markProviderBackendLastKnown(
+    installationId: ProviderInstallationId,
+    revision: DurableProviderInstallation['revision'],
+    configurationRevision: ProviderBackendObservation['configurationRevision'],
+  ): void {
+    this.#statement(
+      `UPDATE provider_backend_observations
+       SET freshness = 'last_known'
+       WHERE installation_id = ?
+         AND installation_revision IS ?
+         AND configuration_revision IS ?
+         AND freshness = 'current'`,
+    ).run(installationId, revision ?? null, configurationRevision ?? null)
+  }
+
+  #markProviderBackendObservationLastKnown(
+    installationId: ProviderInstallationId,
+    revision: DurableProviderInstallation['revision'],
+  ): void {
+    this.#statement(
+      `UPDATE provider_backend_observations
+       SET freshness = 'last_known'
+       WHERE installation_id = ?
+         AND installation_revision IS ?
+         AND freshness = 'current'`,
+    ).run(installationId, revision ?? null)
+  }
+
+  #insertConversationProviderInstallationBinding(
+    conversation: Pick<
+      DurableConversation,
+      'conversationId' | 'machineId' | 'provider'
+    >,
+    installationId: ProviderInstallationId,
+    boundAt: Timestamp,
+  ): void {
+    this.#statement(
+      `INSERT INTO conversation_provider_installation_bindings (
+         conversation_id, machine_id, provider, installation_id, bound_at
+       ) VALUES (?, ?, ?, ?, ?)`,
+    ).run(
+      conversation.conversationId,
+      conversation.machineId,
+      conversation.provider,
+      ProviderInstallationIdSchema.parse(installationId),
+      TimestampSchema.parse(boundAt),
+    )
+  }
+
   #assertRemoteTrustIdentityAvailable(
     machine: DurableMachine,
     peer: DurableTrustedMachinePeer,
@@ -2547,6 +3367,7 @@ interface ConversationRow {
   readonly pinned_at: string | null
   readonly archived_at: string | null
   readonly provider: string
+  readonly provider_installation_id: string | null
   readonly provider_thread_id: string | null
   readonly origin: string
   readonly provider_session_materialized: number
@@ -2657,6 +3478,48 @@ interface ProviderExecutionHealthRow {
   readonly state: string
   readonly failure_json: string | null
   readonly observed_at: string
+}
+
+interface ProviderInstallationRow {
+  readonly installation_id: string
+  readonly machine_id: string
+  readonly provider: string
+  readonly locator_key: string
+  readonly launcher_path: string | null
+  readonly resolved_executable_path: string | null
+  readonly launcher_kind: string
+  readonly install_method: string
+  readonly availability: string
+  readonly observed_version: string | null
+  readonly installation_revision: string | null
+  readonly first_observed_at: string
+  readonly last_observed_at: string
+  readonly selected: number
+}
+
+interface ProviderCompatibilityRow {
+  readonly installation_id: string
+  readonly installation_revision: string | null
+  readonly contract_version: number
+  readonly state: string
+  readonly runtime_readiness: string
+  readonly freshness: string
+  readonly capabilities_json: string
+  readonly failure_json: string | null
+  readonly observed_at: string | null
+}
+
+interface ProviderBackendObservationRow {
+  readonly installation_id: string
+  readonly installation_revision: string | null
+  readonly configuration_revision: string | null
+  readonly mode: string
+  readonly readiness: string
+  readonly freshness: string
+  readonly configuration_json: string
+  readonly sanitized_origin: string | null
+  readonly failure_json: string | null
+  readonly observed_at: string | null
 }
 
 interface MachineRelayConfigurationRow {
@@ -2836,7 +3699,8 @@ function parseRemoteProviderObservation(
       descriptor.reasoningOptions !== undefined
     if (
       hasReasoningMetadata !==
-      (descriptor.provider === 'claude-code' && admittedExecutionFoundation)
+      (descriptor.provider === 'claude-code' &&
+        descriptor.capabilities.reasoningControl)
     ) {
       throw new Error('Remote Provider reasoning metadata is inconsistent')
     }
@@ -2915,6 +3779,266 @@ function serializeProviderExecutionHealthFailure(
   return serialized
 }
 
+function parseProviderLifecycleObservation(
+  value: DurableMachineProviderLifecycleObservation,
+): DurableMachineProviderLifecycleObservation {
+  const machineId = MachineIdSchema.parse(value.machineId)
+  const provider = ProviderIdSchema.parse(value.provider)
+  const observedAt = TimestampSchema.parse(value.observedAt)
+  const installations = value.installations.map((installation) => {
+    const parsed = parseDurableProviderInstallation(installation)
+    if (parsed.machineId !== machineId || parsed.provider !== provider) {
+      throw new Error(
+        'Provider installation must belong to its lifecycle Machine and Provider',
+      )
+    }
+    if (Date.parse(parsed.lastObservedAt) > Date.parse(observedAt)) {
+      throw new Error(
+        'Provider installation observation cannot be newer than its lifecycle snapshot',
+      )
+    }
+    return parsed
+  })
+  const selectedInstallationId =
+    value.selectedInstallationId === undefined
+      ? undefined
+      : ProviderInstallationIdSchema.parse(value.selectedInstallationId)
+  if (
+    value.installationsTruncated !== undefined &&
+    typeof value.installationsTruncated !== 'boolean'
+  ) {
+    throw new Error('Provider installation truncation marker is invalid')
+  }
+  MachineProviderLifecycleSchema.parse({
+    provider,
+    ...(selectedInstallationId === undefined ? {} : { selectedInstallationId }),
+    installations: installations.map(providerInstallationPublic),
+  })
+  return {
+    machineId,
+    provider,
+    observedAt,
+    ...(selectedInstallationId === undefined ? {} : { selectedInstallationId }),
+    installations,
+    ...(value.installationsTruncated === undefined
+      ? {}
+      : { installationsTruncated: value.installationsTruncated }),
+  }
+}
+
+function unavailableProviderCompatibility(
+  provider: ProviderId,
+  observedAt: Timestamp,
+): ProviderCompatibilityObservation {
+  const codexEnabled = new Set([
+    'execution',
+    'streaming',
+    'nativeResume',
+    'nativeSessionDiscovery',
+  ])
+  const capability = (name: string) => ({
+    observed: 'unavailable' as const,
+    enabled: provider === 'claude-code' || codexEnabled.has(name),
+    effective: false,
+  })
+  return ProviderCompatibilityObservationSchema.parse({
+    state: 'unavailable',
+    runtimeReadiness: 'unavailable',
+    freshness: 'current',
+    contractVersion: 1,
+    observedAt,
+    capabilities: {
+      execution: capability('execution'),
+      streaming: capability('streaming'),
+      nativeResume: capability('nativeResume'),
+      nativeSessionDiscovery: capability('nativeSessionDiscovery'),
+      fileRead: capability('fileRead'),
+      search: capability('search'),
+      toolEvents: capability('toolEvents'),
+      reasoningControl: capability('reasoningControl'),
+    },
+  })
+}
+
+function parseDurableProviderInstallation(
+  value: DurableProviderInstallation,
+): DurableProviderInstallation {
+  const publicInstallation = ProviderInstallationSummarySchema.parse(
+    providerInstallationPublic(value),
+  )
+  const launcherPath = parseProviderExecutablePath(
+    value.launcherPath,
+    'Provider launcher path',
+  )
+  const resolvedExecutablePath = parseProviderExecutablePath(
+    value.resolvedExecutablePath,
+    'Resolved Provider executable path',
+  )
+  if ((launcherPath === undefined) !== (resolvedExecutablePath === undefined)) {
+    throw new Error(
+      'Provider launcher and resolved executable paths must be retained together',
+    )
+  }
+  return {
+    ...publicInstallation,
+    machineId: MachineIdSchema.parse(value.machineId),
+    locatorKey: parseBoundedText(value.locatorKey, 'Provider locator key', 512),
+    ...(launcherPath === undefined ? {} : { launcherPath }),
+    ...(resolvedExecutablePath === undefined ? {} : { resolvedExecutablePath }),
+  }
+}
+
+function providerInstallationPublic(
+  installation: DurableProviderInstallation,
+): ProviderInstallationSummary {
+  return ProviderInstallationSummarySchema.parse({
+    installationId: installation.installationId,
+    provider: installation.provider,
+    selected: installation.selected,
+    ...(installation.version === undefined
+      ? {}
+      : { version: installation.version }),
+    launcherKind: installation.launcherKind,
+    installMethod: installation.installMethod,
+    availability: installation.availability,
+    ...(installation.revision === undefined
+      ? {}
+      : { revision: installation.revision }),
+    firstObservedAt: installation.firstObservedAt,
+    lastObservedAt: installation.lastObservedAt,
+    ...(installation.compatibility === undefined
+      ? {}
+      : { compatibility: installation.compatibility }),
+    ...(installation.backend === undefined
+      ? {}
+      : { backend: installation.backend }),
+  })
+}
+
+function compatibilityFromRow(
+  row: ProviderCompatibilityRow,
+): ProviderCompatibilityObservation {
+  return ProviderCompatibilityObservationSchema.parse({
+    state: row.state,
+    runtimeReadiness: row.runtime_readiness,
+    freshness: row.freshness,
+    contractVersion: row.contract_version,
+    ...(row.observed_at === null ? {} : { observedAt: row.observed_at }),
+    ...(row.failure_json === null
+      ? {}
+      : {
+          failure: CanonicalFailureSchema.parse(
+            parseJson(row.failure_json, 'Provider compatibility failure'),
+          ),
+        }),
+    capabilities: parseJson(
+      row.capabilities_json,
+      'Provider compatibility capabilities',
+    ),
+  })
+}
+
+function backendObservationFromRow(
+  row: ProviderBackendObservationRow,
+): ProviderBackendObservation {
+  return ProviderBackendObservationSchema.parse({
+    mode: row.mode,
+    readiness: row.readiness,
+    freshness: row.freshness,
+    ...(row.configuration_revision === null
+      ? {}
+      : { configurationRevision: row.configuration_revision }),
+    configuration: parseJson(
+      row.configuration_json,
+      'Provider backend configuration',
+    ),
+    ...(row.sanitized_origin === null
+      ? {}
+      : { sanitizedOrigin: row.sanitized_origin }),
+    ...(row.observed_at === null ? {} : { observedAt: row.observed_at }),
+    ...(row.failure_json === null
+      ? {}
+      : {
+          failure: CanonicalFailureSchema.parse(
+            parseJson(row.failure_json, 'Provider backend failure'),
+          ),
+        }),
+  })
+}
+
+function parseProviderExecutablePath(
+  value: string | undefined,
+  label: string,
+): string | undefined {
+  if (value === undefined) return undefined
+  try {
+    return parseCanonicalProjectRoot(value)
+  } catch (error) {
+    throw new Error(`${label} must be an absolute normalized path`, {
+      cause: error,
+    })
+  }
+}
+
+function parseProviderInstallationLauncherKind(
+  value: string,
+): DurableProviderInstallation['launcherKind'] {
+  switch (value) {
+    case 'native':
+    case 'symlink':
+    case 'hardlink':
+    case 'wrapper':
+    case 'npm_shim':
+    case 'unknown':
+      return value
+    default:
+      throw new Error(`Unsupported Provider launcher kind: ${value}`)
+  }
+}
+
+function parseProviderInstallationMethod(
+  value: string,
+): DurableProviderInstallation['installMethod'] {
+  switch (value) {
+    case 'native_installer':
+    case 'npm':
+    case 'homebrew':
+    case 'package_manager':
+    case 'manual':
+    case 'unknown':
+      return value
+    default:
+      throw new Error(`Unsupported Provider installation method: ${value}`)
+  }
+}
+
+function parseProviderInstallationAvailability(
+  value: string,
+): DurableProviderInstallation['availability'] {
+  switch (value) {
+    case 'available':
+    case 'unavailable':
+    case 'unresolved':
+      return value
+    default:
+      throw new Error(
+        `Unsupported Provider installation availability: ${value}`,
+      )
+  }
+}
+
+function serializeBoundedJson(
+  value: unknown,
+  label: string,
+  maximumBytes: number,
+): string {
+  const serialized = JSON.stringify(value)
+  if (Buffer.byteLength(serialized, 'utf8') > maximumBytes) {
+    throw new Error(`${label} exceeds durable bounds`)
+  }
+  return serialized
+}
+
 function machineRelayConfigurationFromRow(
   row: MachineRelayConfigurationRow,
 ): DurableMachineRelayConfiguration {
@@ -2972,33 +4096,35 @@ function machineRelayConfigurationFromRow(
 function remoteProviderExecutionFoundation(
   descriptor: ProviderDescriptor,
 ): boolean {
-  const enabled = Object.entries(descriptor.capabilities)
-    .filter(([, value]) => value)
-    .map(([capability]) => capability)
-    .sort()
+  if (descriptor.availability !== 'available') return false
+  const enabled = new Set(
+    Object.entries(descriptor.capabilities)
+      .filter(([, value]) => value)
+      .map(([capability]) => capability),
+  )
   if (descriptor.provider === 'codex') {
     return (
-      descriptor.availability === 'available' &&
-      enabled.length === 2 &&
-      enabled[0] === 'resume' &&
-      enabled[1] === 'streaming'
+      enabled.has('streaming') &&
+      [...enabled].every(
+        (capability) => capability === 'streaming' || capability === 'resume',
+      )
     )
   }
-  const expected = [
-    'fileRead',
-    'reasoningControl',
-    'resume',
-    'search',
-    'streaming',
-    'toolEvents',
-  ]
+  const required = ['fileRead', 'search', 'streaming', 'toolEvents'] as const
   return (
-    descriptor.availability === 'available' &&
-    enabled.length === expected.length &&
-    enabled.every((capability, index) => capability === expected[index]) &&
-    descriptor.reasoningLabel !== undefined &&
-    descriptor.reasoningOptions?.map(({ id }) => id).join(',') ===
-      'low,medium,high,xhigh,max'
+    required.every((capability) => enabled.has(capability)) &&
+    [...enabled].every(
+      (capability) =>
+        required.includes(capability as (typeof required)[number]) ||
+        capability === 'resume' ||
+        capability === 'reasoningControl',
+    ) &&
+    (descriptor.capabilities.reasoningControl
+      ? descriptor.reasoningLabel !== undefined &&
+        descriptor.reasoningOptions?.map(({ id }) => id).join(',') ===
+          'low,medium,high,xhigh,max'
+      : descriptor.reasoningLabel === undefined &&
+        descriptor.reasoningOptions === undefined)
   )
 }
 
@@ -3183,6 +4309,10 @@ function parseConversation(
   value: DurableConversation | NewDurableConversation,
 ): DurableConversation {
   const provider = ProviderIdSchema.parse(value.provider)
+  const providerInstallationId =
+    value.providerInstallationId === undefined
+      ? undefined
+      : ProviderInstallationIdSchema.parse(value.providerInstallationId)
   // Conversation bindings can now point at an authenticated ProjectLocation
   // on a Machine whose path syntax differs from the Controller.  This is a
   // durable/path-shape check only; ProjectRegistry re-authorizes the exact
@@ -3238,6 +4368,7 @@ function parseConversation(
     ...(pinnedAt === undefined ? {} : { pinnedAt }),
     ...(archivedAt === undefined ? {} : { archivedAt }),
     provider,
+    ...(providerInstallationId === undefined ? {} : { providerInstallationId }),
     ...(value.providerThreadId === undefined
       ? {}
       : { providerThreadId: value.providerThreadId.trim() }),
@@ -3393,6 +4524,13 @@ function conversationFromRow(row: ConversationRow): DurableConversation {
       ? {}
       : { archivedAt: TimestampSchema.parse(row.archived_at) }),
     provider: parseProvider(row.provider),
+    ...(row.provider_installation_id === null
+      ? {}
+      : {
+          providerInstallationId: ProviderInstallationIdSchema.parse(
+            row.provider_installation_id,
+          ),
+        }),
     ...(row.provider_thread_id === null
       ? {}
       : { providerThreadId: row.provider_thread_id }),

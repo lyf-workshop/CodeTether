@@ -58,9 +58,9 @@ import {
 import { z } from 'zod'
 
 import { PairingMode, type PairingModeView } from './pairing-mode.js'
-import { NodeClaudeInstallation } from './claude-installation.js'
 import { validateProjectLocationPath } from './project-location-validation.js'
 import { RemoteProviderDetector } from './provider-discovery.js'
+import { NodeProviderLifecycleCoordinator } from './provider-lifecycle.js'
 import { RemoteProviderSessionDiscoveryRegistry } from './provider-session-discovery.js'
 import {
   RemoteClaudeRunnerPool,
@@ -110,6 +110,8 @@ export interface CodeTetherNodeOptions {
   /** Internal test seam; production uses the fixed execution-session lease. */
   readonly executionSessionLeaseTimeoutMs?: number
   readonly providerDetector?: RemoteProviderDetector
+  /** Internal test seam; production constructs one Machine-scoped authority. */
+  readonly providerLifecycle?: NodeProviderLifecycleCoordinator
   /** Internal test seam; discovery adapters never own Provider inference. */
   readonly providerSessionDiscoveries?: RemoteProviderSessionDiscoveryRegistry
   /** Internal test seam; remote callers cannot configure Provider execution. */
@@ -141,6 +143,7 @@ export class CodeTetherNodeService extends EventEmitter {
   readonly #pendingRelayStreams = new Map<Duplex, PublicKeyFingerprint>()
   readonly #relayConnections = new Map<TLSSocket, PublicKeyFingerprint>()
   readonly #providerDetector: RemoteProviderDetector
+  readonly #providerLifecycle: NodeProviderLifecycleCoordinator
   readonly #providerSessionDiscoveries: RemoteProviderSessionDiscoveryRegistry
   readonly #remoteCodexRunners: RemoteCodexRunnerPool
   readonly #remoteClaudeRunners: RemoteClaudeRunnerPool
@@ -153,10 +156,14 @@ export class CodeTetherNodeService extends EventEmitter {
   constructor(options: CodeTetherNodeOptions) {
     super()
     const providerEnvironment = { ...process.env }
-    const claudeInstallation = new NodeClaudeInstallation({
-      environment: providerEnvironment,
-    })
     this.state = options.state
+    this.#providerLifecycle =
+      options.providerLifecycle ??
+      new NodeProviderLifecycleCoordinator({
+        machineId: options.state.machine.machineId,
+        dataDirectory: options.state.dataDirectory,
+        environment: providerEnvironment,
+      })
     this.#bindAddress = options.bindAddress
     this.#requestedPort = options.port
     this.#authenticatedIdleTimeoutMs =
@@ -186,18 +193,24 @@ export class CodeTetherNodeService extends EventEmitter {
       options.providerDetector ??
       new RemoteProviderDetector({
         environment: providerEnvironment,
-        claudeInstallation,
+        providerLifecycle: this.#providerLifecycle,
       })
     this.#providerSessionDiscoveries =
       options.providerSessionDiscoveries ??
       new RemoteProviderSessionDiscoveryRegistry({
         environment: providerEnvironment,
+        providerLifecycle: this.#providerLifecycle,
       })
     this.#remoteCodexRunners =
-      options.remoteCodexRunners ?? new RemoteCodexRunnerPool()
+      options.remoteCodexRunners ??
+      new RemoteCodexRunnerPool({
+        providerLifecycle: this.#providerLifecycle,
+      })
     this.#remoteClaudeRunners =
       options.remoteClaudeRunners ??
-      new RemoteClaudeRunnerPool({ claudeInstallation })
+      new RemoteClaudeRunnerPool({
+        providerLifecycle: this.#providerLifecycle,
+      })
     this.#relayControl = options.relayControl
     this.pairing = new PairingMode(
       options.state.machine,
@@ -347,6 +360,7 @@ export class CodeTetherNodeService extends EventEmitter {
     await attempt(async () => await this.#providerDetector.close())
     await attempt(async () => await this.#remoteCodexRunners.close())
     await attempt(async () => await this.#remoteClaudeRunners.close())
+    await attempt(async () => await this.#providerLifecycle.close())
     await attempt(async () => await this.state.close())
     if (failures.length > 0) {
       throw new AggregateError(
@@ -681,6 +695,8 @@ export class CodeTetherNodeService extends EventEmitter {
           }
           const discovery = await this.#providerSessionDiscoveries.discover({
             provider: request.provider,
+            providerInstallationId: request.providerInstallationId,
+            expectedInstallationRevision: request.expectedInstallationRevision,
             projectRoot: validated.canonicalPath,
             ...(request.cursor === undefined ? {} : { cursor: request.cursor }),
             limit: request.limit,
@@ -693,6 +709,8 @@ export class CodeTetherNodeService extends EventEmitter {
             machineId: this.state.machine.machineId,
             nodeId: this.state.machine.nodeId,
             provider: request.provider,
+            providerInstallationId: request.providerInstallationId,
+            installationRevision: request.expectedInstallationRevision,
             status: discovery.status,
             resumeStatus: discovery.resumeStatus,
             ...(discovery.providerVersion === undefined
@@ -721,6 +739,9 @@ export class CodeTetherNodeService extends EventEmitter {
           const candidate =
             await this.#providerSessionDiscoveries.validateCandidate({
               provider: request.provider,
+              providerInstallationId: request.providerInstallationId,
+              expectedInstallationRevision:
+                request.expectedInstallationRevision,
               projectRoot: validated.canonicalPath,
               nativeSessionId: request.nativeSessionId,
               revision: request.revision,
@@ -733,6 +754,8 @@ export class CodeTetherNodeService extends EventEmitter {
             machineId: this.state.machine.machineId,
             nodeId: this.state.machine.nodeId,
             provider: request.provider,
+            providerInstallationId: request.providerInstallationId,
+            installationRevision: request.expectedInstallationRevision,
             valid: candidate !== undefined,
             ...(candidate === undefined
               ? {}
@@ -842,6 +865,8 @@ export class CodeTetherNodeService extends EventEmitter {
         machineId: this.state.machine.machineId,
         nodeId: this.state.machine.nodeId,
         conversationId: request.conversationId,
+        providerInstallationId: request.providerInstallationId,
+        installationRevision: request.expectedInstallationRevision,
         providerThreadId: runner.providerThreadId,
         resumed: runner.resumed,
         executionProfile: 'codex-text-v1',
@@ -1019,6 +1044,8 @@ export class CodeTetherNodeService extends EventEmitter {
         machineId: this.state.machine.machineId,
         nodeId: this.state.machine.nodeId,
         conversationId: request.conversationId,
+        providerInstallationId: request.providerInstallationId,
+        installationRevision: request.expectedInstallationRevision,
         providerSessionId: runner.providerSessionId,
         resumed: runner.resumed,
         ...(runner.effort === undefined ? {} : { effort: runner.effort }),

@@ -20,6 +20,9 @@ import {
   MachineIdSchema,
   MachinePairingAttemptIdSchema,
   RemoteMachinePairingCandidateSchema,
+  ProviderInstallationIdSchema,
+  ProviderInstallationRevisionSchema,
+  ProviderInstallationSummarySchema,
   TimestampSchema,
   machineWireLimits,
   type MachineConnectionState,
@@ -30,6 +33,8 @@ import {
   type RemoteMachineConnection,
   type RemoteMachinePairingCandidate,
   type ProviderDescriptor,
+  type ProviderInstallationId,
+  type ProviderInstallationRevision,
   type Timestamp,
 } from '@codetether/protocol'
 import {
@@ -73,6 +78,7 @@ import type {
   ConversationStore,
   DurableMachine,
   DurableRemoteProviderObservation,
+  DurableMachineProviderLifecycleObservation,
   DurableTrustedMachineEndpoint,
   DurableTrustedMachinePeer,
 } from '../persistence/index.js'
@@ -176,6 +182,8 @@ export interface RemoteMachineCoordinator extends RemoteMachineStatusSource {
       readonly conversationId: string
       readonly projectId: string
       readonly rootPath: string
+      readonly providerInstallationId: ProviderInstallationId
+      readonly expectedInstallationRevision: ProviderInstallationRevision
       readonly providerThreadId?: string
     },
   ): Promise<RemoteCodexRuntimeSession>
@@ -186,6 +194,8 @@ export interface RemoteMachineCoordinator extends RemoteMachineStatusSource {
       readonly conversationId: string
       readonly projectId: string
       readonly rootPath: string
+      readonly providerInstallationId: ProviderInstallationId
+      readonly expectedInstallationRevision: ProviderInstallationRevision
       readonly providerSessionId?: string
       readonly providerSessionMaterialized?: boolean
       readonly effort?: RemoteClaudeEffort
@@ -229,6 +239,8 @@ export interface RemoteMachineCoordinator extends RemoteMachineStatusSource {
       readonly provider: AgentProvider
       readonly projectId: string
       readonly rootPath: string
+      readonly providerInstallationId: ProviderInstallationId
+      readonly expectedInstallationRevision: ProviderInstallationRevision
       readonly signal?: AbortSignal
     },
   ): Promise<ProviderSessionDiscoveryPage>
@@ -239,6 +251,8 @@ export interface RemoteMachineCoordinator extends RemoteMachineStatusSource {
       readonly provider: AgentProvider
       readonly projectId: string
       readonly rootPath: string
+      readonly providerInstallationId: ProviderInstallationId
+      readonly expectedInstallationRevision: ProviderInstallationRevision
       readonly nativeSessionId: string
       readonly revision: string
       readonly signal?: AbortSignal
@@ -1028,6 +1042,8 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
     trust: DurableTrustedMachinePeer,
     input: {
       readonly provider: AgentProvider
+      readonly providerInstallationId: ProviderInstallationId
+      readonly expectedInstallationRevision: ProviderInstallationRevision
       readonly projectId: string
       readonly rootPath: string
       readonly signal?: AbortSignal
@@ -1078,6 +1094,8 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
           try {
             page = await connection.discoverProviderSessions({
               provider: input.provider,
+              providerInstallationId: input.providerInstallationId,
+              expectedInstallationRevision: input.expectedInstallationRevision,
               projectId: MachineTransportProjectIdSchema.parse(input.projectId),
               rootPath: input.rootPath,
               ...(cursor === undefined ? {} : { cursor }),
@@ -1161,6 +1179,8 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
     trust: DurableTrustedMachinePeer,
     input: {
       readonly provider: AgentProvider
+      readonly providerInstallationId: ProviderInstallationId
+      readonly expectedInstallationRevision: ProviderInstallationRevision
       readonly projectId: string
       readonly rootPath: string
       readonly nativeSessionId: string
@@ -1194,6 +1214,8 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
         this.#setState(id, 'online')
         const candidate = await connection.validateProviderSession({
           provider: input.provider,
+          providerInstallationId: input.providerInstallationId,
+          expectedInstallationRevision: input.expectedInstallationRevision,
           projectId: MachineTransportProjectIdSchema.parse(input.projectId),
           rootPath: input.rootPath,
           nativeSessionId: input.nativeSessionId,
@@ -1330,6 +1352,8 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
       readonly conversationId: string
       readonly projectId: string
       readonly rootPath: string
+      readonly providerInstallationId: ProviderInstallationId
+      readonly expectedInstallationRevision: ProviderInstallationRevision
       readonly providerThreadId?: string
     },
   ): Promise<RemoteCodexRuntimeSession> {
@@ -1340,6 +1364,18 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
         throw new RemoteMachineCoordinatorError(
           'remote_execution_unavailable',
           'Remote Codex execution is unavailable on this Machine',
+        )
+      }
+      const descriptor = this.#persistence
+        .getRemoteProviderObservation(id)
+        ?.providers.find(({ provider }) => provider === 'codex')
+      if (
+        input.providerThreadId !== undefined &&
+        descriptor?.capabilities.resume !== true
+      ) {
+        throw new RemoteMachineCoordinatorError(
+          'remote_execution_unavailable',
+          'Remote Codex native resume is unavailable on this Machine',
         )
       }
       const controller = await this.#loadController(current.trust)
@@ -1367,6 +1403,8 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
               controller,
               conversationId,
               projectId,
+              providerInstallationId: input.providerInstallationId,
+              expectedInstallationRevision: input.expectedInstallationRevision,
               rootPath: input.rootPath,
               ...(providerThreadId === undefined ? {} : { providerThreadId }),
             })
@@ -1434,6 +1472,8 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
             stream,
             conversationId,
             projectId,
+            providerInstallationId: input.providerInstallationId,
+            expectedInstallationRevision: input.expectedInstallationRevision,
             rootPath: input.rootPath,
             ...(providerThreadId === undefined ? {} : { providerThreadId }),
           })
@@ -1478,6 +1518,8 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
       readonly conversationId: string
       readonly projectId: string
       readonly rootPath: string
+      readonly providerInstallationId: ProviderInstallationId
+      readonly expectedInstallationRevision: ProviderInstallationRevision
       readonly providerSessionId?: string
       readonly providerSessionMaterialized?: boolean
       readonly effort?: RemoteClaudeEffort
@@ -1499,6 +1541,20 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
         throw new RemoteMachineCoordinatorError(
           'remote_policy_violation',
           'Remote Claude Code session materialization state is invalid',
+        )
+      }
+      const descriptor = this.#persistence
+        .getRemoteProviderObservation(id)
+        ?.providers.find(({ provider }) => provider === 'claude-code')
+      if (
+        (input.providerSessionMaterialized === true &&
+          descriptor?.capabilities.resume !== true) ||
+        (input.effort !== undefined &&
+          descriptor?.capabilities.reasoningControl !== true)
+      ) {
+        throw new RemoteMachineCoordinatorError(
+          'remote_execution_unavailable',
+          'Remote Claude Code session capability is unavailable on this Machine',
         )
       }
       const controller = await this.#loadController(current.trust)
@@ -1526,6 +1582,8 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
               controller,
               conversationId,
               projectId,
+              providerInstallationId: input.providerInstallationId,
+              expectedInstallationRevision: input.expectedInstallationRevision,
               rootPath: input.rootPath,
               ...(input.effort === undefined ? {} : { effort: input.effort }),
             }
@@ -1599,6 +1657,8 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
             stream,
             conversationId,
             projectId,
+            providerInstallationId: input.providerInstallationId,
+            expectedInstallationRevision: input.expectedInstallationRevision,
             rootPath: input.rootPath,
             ...(input.effort === undefined ? {} : { effort: input.effort }),
           }
@@ -2853,12 +2913,16 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
   ): Promise<DurableRemoteProviderObservation> {
     const discovery = await connection.discoverProviders(signal)
     signal?.throwIfAborted()
+    const receivedAt = this.#now().toISOString()
+    for (const lifecycle of remoteProviderLifecycleObservations(
+      machine.machineId,
+      discovery,
+      receivedAt,
+    )) {
+      this.#persistence.recordProviderLifecycle(lifecycle)
+    }
     const observation = this.#persistence.recordRemoteProviderObservation(
-      remoteProviderObservation(
-        machine.machineId,
-        discovery,
-        this.#now().toISOString(),
-      ),
+      remoteProviderObservation(machine.machineId, discovery, receivedAt),
     )
     if (this.#states.get(machine.machineId) === 'online') {
       this.#currentProviderObservations.set(
@@ -3095,7 +3159,8 @@ export function remoteProviderObservation(
     new Date(TimestampSchema.parse(receivedAt)).toISOString(),
   )
   const providers: readonly ProviderDescriptor[] = discovery.providers.map(
-    ({ reasoningOptions, executionFailureReason, ...provider }) => {
+    (descriptor) => {
+      const { reasoningOptions, executionFailureReason } = descriptor
       const executionHealth =
         executionFailureReason !== undefined
           ? {
@@ -3106,7 +3171,16 @@ export function remoteProviderObservation(
             }
           : undefined
       return {
-        ...provider,
+        provider: descriptor.provider,
+        displayName: descriptor.displayName,
+        availability: descriptor.availability,
+        capabilities: descriptor.capabilities,
+        ...(descriptor.version === undefined
+          ? {}
+          : { version: descriptor.version }),
+        ...(descriptor.reasoningLabel === undefined
+          ? {}
+          : { reasoningLabel: descriptor.reasoningLabel }),
         ...(reasoningOptions === undefined
           ? {}
           : {
@@ -3139,6 +3213,87 @@ export function remoteProviderObservation(
   }
 }
 
+export function remoteProviderLifecycleObservations(
+  machineId: MachineId,
+  discovery: RemoteProviderDiscovery,
+  receivedAt: string,
+): readonly DurableMachineProviderLifecycleObservation[] {
+  const machine = MachineIdSchema.parse(machineId)
+  const observedAt = TimestampSchema.parse(
+    new Date(TimestampSchema.parse(receivedAt)).toISOString(),
+  )
+  return discovery.providers.flatMap((descriptor) => {
+    if (descriptor.installations === undefined) return []
+    const installations = descriptor.installations.map((installation) => {
+      const publicInstallation = ProviderInstallationSummarySchema.parse({
+        ...installation,
+        // Node and Controller wall clocks are not a trusted ordering domain.
+        // The authenticated receipt is the current observation; persistence
+        // retains an already-known firstObservedAt for this logical install.
+        firstObservedAt: observedAt,
+        lastObservedAt: observedAt,
+        ...(installation.compatibility === undefined
+          ? {}
+          : {
+              compatibility: {
+                ...installation.compatibility,
+                ...(installation.compatibility.freshness === 'not_observed'
+                  ? {}
+                  : { observedAt }),
+              },
+            }),
+        ...(installation.backend === undefined
+          ? {}
+          : {
+              backend: {
+                ...installation.backend,
+                ...(installation.backend.freshness === 'not_observed'
+                  ? {}
+                  : { observedAt }),
+              },
+            }),
+        installationId: ProviderInstallationIdSchema.parse(
+          installation.installationId,
+        ),
+        ...(installation.revision === undefined
+          ? {}
+          : {
+              revision: ProviderInstallationRevisionSchema.parse(
+                installation.revision,
+              ),
+            }),
+      })
+      return {
+        ...publicInstallation,
+        machineId: machine,
+        // The Node retains executable paths. This authenticated opaque ID is
+        // the only stable remote locator persisted by the Controller.
+        locatorKey: publicInstallation.installationId,
+      }
+    })
+    return [
+      {
+        machineId: machine,
+        provider: descriptor.provider,
+        observedAt,
+        ...(descriptor.selectedInstallationId === undefined
+          ? {}
+          : {
+              selectedInstallationId: ProviderInstallationIdSchema.parse(
+                descriptor.selectedInstallationId,
+              ),
+            }),
+        ...(descriptor.installationsTruncated === undefined
+          ? {}
+          : {
+              installationsTruncated: descriptor.installationsTruncated,
+            }),
+        installations,
+      },
+    ]
+  })
+}
+
 function remoteProviderExecutionProfileAvailable(
   descriptor: ProviderDescriptor,
   codexTransportAvailable: boolean,
@@ -3152,27 +3307,34 @@ function remoteProviderExecutionProfileAvailable(
     return (
       codexTransportAvailable &&
       descriptor.availability === 'available' &&
-      enabled.length === 2 &&
-      enabled[0] === 'resume' &&
-      enabled[1] === 'streaming'
+      descriptor.capabilities.streaming &&
+      enabled.every(
+        (capability) => capability === 'resume' || capability === 'streaming',
+      )
     )
   }
-  const expected = [
+  const allowed = new Set([
     'fileRead',
     'reasoningControl',
     'resume',
     'search',
     'streaming',
     'toolEvents',
-  ]
+  ])
   return (
     claudeTransportAvailable &&
     descriptor.availability === 'available' &&
-    enabled.length === expected.length &&
-    enabled.every((capability, index) => capability === expected[index]) &&
-    descriptor.reasoningLabel !== undefined &&
-    descriptor.reasoningOptions?.map(({ id }) => id).join(',') ===
-      'low,medium,high,xhigh,max'
+    descriptor.capabilities.streaming &&
+    descriptor.capabilities.fileRead &&
+    descriptor.capabilities.search &&
+    descriptor.capabilities.toolEvents &&
+    enabled.every((capability) => allowed.has(capability)) &&
+    (descriptor.capabilities.reasoningControl
+      ? descriptor.reasoningLabel !== undefined &&
+        descriptor.reasoningOptions?.map(({ id }) => id).join(',') ===
+          'low,medium,high,xhigh,max'
+      : descriptor.reasoningLabel === undefined &&
+        descriptor.reasoningOptions === undefined)
   )
 }
 

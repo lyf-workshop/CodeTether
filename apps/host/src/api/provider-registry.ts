@@ -1,5 +1,6 @@
 import type { AgentProvider } from '@codetether/agent-core'
 import type {
+  MachineProviderLifecycle,
   MachineId,
   ProviderCapabilities,
   ProviderDescriptor,
@@ -42,14 +43,19 @@ export const UNAVAILABLE_PROVIDER_CAPABILITIES: ProviderCapabilities = {
 /** Host-owned lookup for the bounded set of installed Provider adapters. */
 export class ProviderRegistry {
   readonly #runtimes = new Map<AgentProvider, AgentHostRuntime>()
+  readonly #lifecycles = new Map<AgentProvider, MachineProviderLifecycle>()
 
-  constructor(runtimes: readonly AgentHostRuntime[]) {
+  constructor(
+    runtimes: readonly AgentHostRuntime[],
+    lifecycles: readonly MachineProviderLifecycle[] = [],
+  ) {
     for (const runtime of runtimes) {
       if (this.#runtimes.has(runtime.provider)) {
         throw new Error(`Provider ${runtime.provider} was registered twice`)
       }
       this.#runtimes.set(runtime.provider, runtime)
     }
+    for (const lifecycle of lifecycles) this.setLifecycle(lifecycle)
   }
 
   runtimes(): readonly AgentHostRuntime[] {
@@ -80,6 +86,35 @@ export class ProviderRegistry {
     )
   }
 
+  lifecycles(): readonly MachineProviderLifecycle[] {
+    return providerOrder.flatMap((provider) => {
+      const lifecycle = this.#lifecycles.get(provider)
+      return lifecycle === undefined ? [] : [lifecycle]
+    })
+  }
+
+  lifecycle(provider: AgentProvider): MachineProviderLifecycle | undefined {
+    return this.#lifecycles.get(provider)
+  }
+
+  setLifecycle(lifecycle: MachineProviderLifecycle): void {
+    const runtime = this.#runtimes.get(lifecycle.provider)
+    const selected = lifecycle.installations.find(
+      ({ installationId }) =>
+        installationId === lifecycle.selectedInstallationId,
+    )
+    if (
+      runtime?.installation !== undefined &&
+      (selected?.installationId !== runtime.installation.installationId ||
+        selected.revision !== runtime.installation.installationRevision)
+    ) {
+      throw new Error(
+        `Provider ${lifecycle.provider} lifecycle does not match its runtime installation`,
+      )
+    }
+    this.#lifecycles.set(lifecycle.provider, lifecycle)
+  }
+
   /**
    * Replaces only a locally unavailable assembly placeholder. This is used by
    * an explicit Turn-start recovery probe after the user repairs the Provider
@@ -95,6 +130,54 @@ export class ProviderRegistry {
       )
     }
     this.#runtimes.set(runtime.provider, runtime)
+  }
+
+  /**
+   * Atomically changes an idle local runtime and its selected-installation
+   * projection after the Host lifecycle authority has revalidated a changed
+   * executable revision. Callers must settle active work before invoking it.
+   */
+  replaceWithLifecycle(
+    previous: AgentHostRuntime,
+    runtime: AgentHostRuntime,
+    lifecycle: MachineProviderLifecycle,
+  ): void {
+    this.assertReplacementWithLifecycle(previous, runtime, lifecycle)
+    this.#runtimes.set(runtime.provider, runtime)
+    this.#lifecycles.set(runtime.provider, lifecycle)
+  }
+
+  /** Validates a staged handoff before the currently-owned runtime is closed. */
+  assertReplacementWithLifecycle(
+    previous: AgentHostRuntime,
+    runtime: AgentHostRuntime,
+    lifecycle: MachineProviderLifecycle,
+  ): void {
+    if (
+      previous.provider !== runtime.provider ||
+      lifecycle.provider !== runtime.provider ||
+      this.#runtimes.get(runtime.provider) !== previous
+    ) {
+      throw new Error('Provider lifecycle replacement identity changed')
+    }
+    const selected = lifecycle.installations.find(
+      ({ installationId }) =>
+        installationId === lifecycle.selectedInstallationId,
+    )
+    const unavailableWithoutSelection =
+      runtime.available === false &&
+      runtime.installation === undefined &&
+      selected === undefined &&
+      lifecycle.selectedInstallationId === undefined
+    const exactSelectedInstallation =
+      runtime.installation !== undefined &&
+      selected?.installationId === runtime.installation.installationId &&
+      selected.revision === runtime.installation.installationRevision
+    if (!unavailableWithoutSelection && !exactSelectedInstallation) {
+      throw new Error(
+        'Replacement runtime does not match selected installation',
+      )
+    }
   }
 
   async close(): Promise<void> {

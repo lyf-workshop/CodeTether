@@ -7,6 +7,10 @@ import {
   type ApprovalResolution,
   spawnCodexAppServer,
 } from '@codetether/adapter-codex'
+import type {
+  ProviderInstallationId,
+  ProviderInstallationRevision,
+} from '@codetether/protocol'
 
 import { BoundedAgentEventQueue } from '../runtime/bounded-agent-event-queue.js'
 import { IncrementalDeltaIntegrityTracker } from '../runtime/delta-integrity-tracker.js'
@@ -27,14 +31,18 @@ interface ApprovalDeferred {
 
 export interface CodexHostRuntimeOptions {
   readonly executable?: string
+  readonly environment?: NodeJS.ProcessEnv
   readonly version: string
   readonly disableHooks?: boolean
   readonly ephemeralThreads?: boolean
+  readonly providerInstallationId?: ProviderInstallationId
+  readonly installationRevision?: ProviderInstallationRevision
 }
 
 /** One long-running Codex App Server behind the Host-facing runtime boundary. */
 export class CodexHostRuntime implements AgentHostRuntime {
   readonly provider = 'codex' as const
+  readonly installation
   readonly #client: CodexAppServerClient
   readonly #queue = new BoundedAgentEventQueue()
   readonly #integrity = new IncrementalDeltaIntegrityTracker()
@@ -50,6 +58,22 @@ export class CodexHostRuntime implements AgentHostRuntime {
   #providerDiagnosticSuppressionReported = false
 
   private constructor(options: CodexHostRuntimeOptions) {
+    if (
+      (options.providerInstallationId === undefined) !==
+      (options.installationRevision === undefined)
+    ) {
+      throw new TypeError(
+        'Codex runtime installation identity requires an exact revision',
+      )
+    }
+    this.installation =
+      options.providerInstallationId === undefined ||
+      options.installationRevision === undefined
+        ? undefined
+        : {
+            installationId: options.providerInstallationId,
+            installationRevision: options.installationRevision,
+          }
     this.#ephemeralThreads = options.ephemeralThreads ?? false
     this.#pump = this.#queue.consume(async (event) => {
       this.#integrity.observeDelivered(event)
@@ -61,6 +85,9 @@ export class CodexHostRuntime implements AgentHostRuntime {
       // CodeTether must remain the approval authority for every Alpha Host
       // launch path. Callers may opt back in only as an explicit decision.
       disableHooks: options.disableHooks ?? true,
+      ...(options.environment === undefined
+        ? {}
+        : { environment: options.environment }),
     })
     this.#client = new CodexAppServerClient(child, {
       requestTimeoutMs: 30_000,

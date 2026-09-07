@@ -10,6 +10,7 @@ import {
   draftAfterSubmit,
   isComposerEditableState,
   isNearTimelineBottom,
+  providerLifecycleSupportsConversationExecution,
   providerExecutionHealthAllowsExplicitStart,
   conversationExecutionBoundaryPresentation,
   shouldSubmitComposerKey,
@@ -351,6 +352,154 @@ test('a terminal failure observation is advisory for the next explicit action', 
   }
 })
 
+test('Conversation Composer follows its bound installation lifecycle instead of another selected installation descriptor', () => {
+  const machine = {
+    kind: 'remote',
+    displayName: 'Test Node',
+    connectionState: 'online',
+    capabilities: { providerExecution: true },
+  }
+  const selectedMachineDescriptor = {
+    displayName: 'Claude Code',
+    availability: 'not_installed',
+    capabilities: { streaming: false, resume: false },
+  }
+  const boundCompatibleInstallation = providerLifecycleInstallation()
+  const base = {
+    connectionState: 'connected',
+    currentTurnStatus: 'completed',
+    machine,
+    projectAvailability: 'available',
+    provider: selectedMachineDescriptor,
+    providerLifecycle: boundCompatibleInstallation,
+  }
+
+  assert.equal(
+    providerLifecycleSupportsConversationExecution(boundCompatibleInstallation),
+    true,
+  )
+  assert.equal(deriveComposerEligibility(base), undefined)
+
+  const incompatible = providerLifecycleInstallation({
+    compatibilityState: 'incompatible',
+  })
+  assert.equal(
+    providerLifecycleSupportsConversationExecution(incompatible),
+    false,
+  )
+  assert.equal(
+    deriveComposerEligibility({ ...base, providerLifecycle: incompatible })
+      .reason,
+    'provider_unsupported_version',
+  )
+
+  const missing = providerLifecycleInstallation({ availability: 'unavailable' })
+  assert.equal(
+    deriveComposerEligibility({ ...base, providerLifecycle: missing }).reason,
+    'provider_not_installed',
+  )
+})
+
+test('Conversation lifecycle separates optional discovery loss and backend readiness from runtime compatibility', () => {
+  const machine = {
+    kind: 'local',
+    displayName: 'Local Machine',
+    connectionState: 'local',
+    capabilities: { providerExecution: true },
+  }
+  const provider = {
+    displayName: 'Claude Code',
+    availability: 'available',
+    capabilities: { streaming: true, resume: true },
+  }
+  const base = {
+    connectionState: 'connected',
+    currentTurnStatus: 'completed',
+    machine,
+    projectAvailability: 'available',
+    provider,
+  }
+  const discoveryLimited = providerLifecycleInstallation({
+    compatibilityState: 'limited',
+    discoveryEffective: false,
+  })
+  assert.equal(
+    providerLifecycleSupportsConversationExecution(discoveryLimited),
+    true,
+  )
+  assert.equal(
+    deriveComposerEligibility({
+      ...base,
+      providerLifecycle: discoveryLimited,
+    }),
+    undefined,
+  )
+
+  const backendUnavailable = providerLifecycleInstallation({
+    backendReadiness: 'unavailable',
+    backendFreshness: 'current',
+  })
+  assert.equal(
+    deriveComposerEligibility({
+      ...base,
+      providerLifecycle: backendUnavailable,
+    }).reason,
+    'provider_service_unavailable',
+  )
+  assert.equal(
+    providerLifecycleSupportsConversationExecution(backendUnavailable),
+    false,
+  )
+
+  const lastKnownOutage = providerLifecycleInstallation({
+    backendReadiness: 'unavailable',
+    backendFreshness: 'last_known',
+  })
+  assert.equal(
+    providerLifecycleSupportsConversationExecution(lastKnownOutage),
+    true,
+  )
+  assert.equal(
+    deriveComposerEligibility({
+      ...base,
+      providerLifecycle: lastKnownOutage,
+    }),
+    undefined,
+  )
+
+  const resumeLost = providerLifecycleInstallation({ resumeEffective: false })
+  assert.equal(
+    providerLifecycleSupportsConversationExecution(resumeLost),
+    false,
+  )
+  assert.match(
+    deriveComposerEligibility({ ...base, providerLifecycle: resumeLost })
+      .message,
+    /原生恢复.*不会重放/u,
+  )
+
+  assert.equal(
+    providerLifecycleSupportsConversationExecution(resumeLost, false),
+    true,
+  )
+  assert.equal(
+    deriveComposerEligibility({
+      ...base,
+      providerLifecycle: resumeLost,
+      providerSessionRequiresResume: false,
+    }),
+    undefined,
+  )
+  assert.equal(
+    deriveComposerEligibility({
+      ...base,
+      providerLifecycle: resumeLost,
+      providerSessionRequiresResume: true,
+    }).reason,
+    'provider_capability_unsupported',
+  )
+})
+
 test('Composer can explicitly revalidate quota or crash health after its failed Turn', () => {
   const machine = {
     kind: 'remote',
@@ -539,5 +688,72 @@ function canonicalFailure(reason) {
     reason,
     occurredAt: '2026-09-02T20:00:00.000Z',
     technicalCode: reason,
+  }
+}
+
+function providerLifecycleInstallation({
+  availability = 'available',
+  compatibilityState = 'verified',
+  discoveryEffective = true,
+  resumeEffective = true,
+  backendReadiness = 'ready',
+  backendFreshness = 'current',
+} = {}) {
+  const capability = (effective) => ({
+    observed: effective ? 'supported' : 'unsupported',
+    enabled: true,
+    effective,
+  })
+  return {
+    installationId: 'provider_installation_bound01',
+    provider: 'claude-code',
+    selected: false,
+    version: '2.1.263',
+    launcherKind: 'symlink',
+    installMethod: 'native_installer',
+    availability,
+    revision: 'provider_revision_bound01',
+    firstObservedAt: '2026-09-02T20:00:00.000Z',
+    lastObservedAt: '2026-09-02T20:00:00.000Z',
+    compatibility: {
+      state: compatibilityState,
+      runtimeReadiness:
+        compatibilityState === 'verified' ||
+        compatibilityState === 'compatible_unverified'
+          ? 'ready'
+          : compatibilityState === 'limited'
+            ? 'limited'
+            : compatibilityState === 'incompatible'
+              ? 'blocked'
+              : 'unavailable',
+      freshness: 'current',
+      contractVersion: 1,
+      observedAt: '2026-09-02T20:00:00.000Z',
+      capabilities: {
+        execution: capability(true),
+        streaming: capability(true),
+        nativeResume: capability(resumeEffective),
+        nativeSessionDiscovery: capability(discoveryEffective),
+        fileRead: capability(true),
+        search: capability(true),
+        toolEvents: capability(true),
+        reasoningControl: capability(true),
+      },
+    },
+    backend: {
+      mode: 'custom_gateway',
+      readiness: backendReadiness,
+      freshness: backendFreshness,
+      configuration: {
+        source: 'process_environment',
+        hasBaseUrl: true,
+        hasApiKey: false,
+        hasAuthToken: true,
+        hasOAuthToken: false,
+        bedrockConfigured: false,
+        vertexConfigured: false,
+      },
+      observedAt: '2026-09-02T20:00:00.000Z',
+    },
   }
 }

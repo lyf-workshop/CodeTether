@@ -217,6 +217,14 @@ export async function probeClaudeCodeAuthStatus(
   return await probeAuthStatus(launcher, options)
 }
 
+/** Zero-inference CLI contract surface used for unknown-version compatibility. */
+export async function probeClaudeCodeHelp(
+  launcher: ClaudeCodeLauncher,
+  options: DetectionProbeOptions = {},
+): Promise<string> {
+  return await probeCommand(launcher, ['--help'], options, 'contract_probe')
+}
+
 function probeVersion(
   launcher: ClaudeCodeLauncher,
   options: DetectionProbeOptions,
@@ -250,7 +258,7 @@ function probeCommand(
   launcher: ClaudeCodeLauncher,
   arguments_: readonly string[],
   options: DetectionProbeOptions,
-  diagnosticPrefix: 'version_probe' | 'auth_status_probe',
+  diagnosticPrefix: 'version_probe' | 'auth_status_probe' | 'contract_probe',
 ): Promise<string> {
   const timeoutMs = options.timeoutMs ?? DEFAULT_DETECTION_TIMEOUT_MS
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {

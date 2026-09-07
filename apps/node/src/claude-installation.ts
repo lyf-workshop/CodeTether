@@ -83,6 +83,7 @@ export class NodeClaudeInstallation {
 function copyLauncher(launcher: ClaudeCodeLauncher): ClaudeCodeLauncher {
   return {
     kind: launcher.kind,
+    launcherPath: launcher.launcherPath,
     executable: launcher.executable,
     prefixArguments: [...launcher.prefixArguments],
     sourcePath: launcher.sourcePath,

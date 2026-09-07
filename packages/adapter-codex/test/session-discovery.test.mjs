@@ -43,6 +43,18 @@ function clientFactory({ threads = [], reads = new Map(), list, tracker }) {
 
 const canonicalizePath = async (path) => resolve(path)
 
+test('local discovery accepts the selected installation environment without changing to the remote profile', () => {
+  const discovery = new CodexSessionDiscovery({
+    executable: process.execPath,
+    environment: {
+      PATH: process.env.PATH,
+      CODEX_HOME: resolve('selected-codex-store'),
+      CODEX_SESSION_ID: 'must-be-stripped-before-child-spawn',
+    },
+  })
+  assert.equal(discovery.provider, 'codex')
+})
+
 test('discovers only exact, unloaded, durable Codex sessions with bounded metadata', async () => {
   const projectRoot = resolve('project-a')
   const otherRoot = resolve('project-b')

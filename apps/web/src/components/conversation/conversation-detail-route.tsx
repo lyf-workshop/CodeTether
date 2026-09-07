@@ -16,6 +16,7 @@ import {
   type MachineSummary,
   type ProjectRecord,
   type ProviderDescriptor,
+  type ProviderInstallationSummary,
   type TurnId,
 } from '@codetether/protocol'
 import { Button } from '@codetether/ui'
@@ -53,6 +54,7 @@ import {
   deriveComposerEligibility,
   deriveConversationExecutionBoundaryReason,
   deriveProjectLocationBoundaryReason,
+  providerLifecycleSupportsConversationExecution,
   conversationExecutionBoundaryPresentation,
 } from './conversation-controls'
 import { useLiveConversationControls } from './use-live-conversation-controls'
@@ -291,6 +293,8 @@ function LoadedLiveConversationDetail({
         ]),
       )}
       machineProviders={machineQuery.data?.providers ?? []}
+      providerLifecycle={detail.providerLifecycle}
+      providerSessionRequiresResume={detail.providerSessionRequiresResume}
       initialInspectorTab={initialInspectorTab}
       targetTurnId={targetTurnId}
     />
@@ -310,6 +314,8 @@ interface ConnectedLiveConversationDetailProps {
   readonly machineName: string
   readonly machineNames: Readonly<Record<string, string>>
   readonly machineProviders: readonly ProviderDescriptor[]
+  readonly providerLifecycle?: ProviderInstallationSummary
+  readonly providerSessionRequiresResume?: boolean
   readonly initialInspectorTab?: 'changes'
   readonly targetTurnId?: TurnId
 }
@@ -327,6 +333,8 @@ function ConnectedLiveConversationDetail({
   machineName,
   machineNames,
   machineProviders,
+  providerLifecycle,
+  providerSessionRequiresResume,
   initialInspectorTab,
   targetTurnId,
 }: ConnectedLiveConversationDetailProps) {
@@ -342,13 +350,24 @@ function ConnectedLiveConversationDetail({
     machine,
     projectAvailability,
     provider: machineProvider,
+    ...(providerLifecycle === undefined ? {} : { providerLifecycle }),
+    ...(providerSessionRequiresResume === undefined
+      ? {}
+      : { providerSessionRequiresResume }),
   })
+  const lifecycleExecutionAvailable =
+    providerLifecycle === undefined
+      ? machineProvider?.availability === 'available' &&
+        machineProvider.capabilities.streaming &&
+        machineProvider.capabilities.resume
+      : providerLifecycleSupportsConversationExecution(
+          providerLifecycle,
+          providerSessionRequiresResume ?? true,
+        )
   const executionAvailable =
     machine?.availability === 'available' &&
     machine.capabilities.providerExecution &&
-    machineProvider?.availability === 'available' &&
-    machineProvider.capabilities.streaming &&
-    machineProvider.capabilities.resume
+    lifecycleExecutionAvailable
   const executionUnavailableReason =
     deriveConversationExecutionBoundaryReason(machine)
   const executionUnavailablePresentation =

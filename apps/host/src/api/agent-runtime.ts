@@ -9,6 +9,8 @@ import type {
   ConversationId,
   MachineId,
   ProjectId,
+  ProviderInstallationId,
+  ProviderInstallationRevision,
   TurnId,
 } from '@codetether/protocol'
 
@@ -22,6 +24,17 @@ export interface ProviderConversationResult {
 
 export interface ProviderTurnResult {
   readonly providerTurnId: string
+}
+
+/**
+ * Private executable identity owned by one Provider runtime. Paths, launch
+ * arguments, and environment never cross this Host boundary. The identity is
+ * copied into a durable Conversation binding before Provider ownership can be
+ * established.
+ */
+export interface ProviderRuntimeInstallation {
+  readonly installationId: ProviderInstallationId
+  readonly installationRevision: ProviderInstallationRevision
 }
 
 /**
@@ -80,6 +93,8 @@ export interface ProviderApprovalResolution {
 
 export interface AgentHostRuntime {
   readonly provider: AgentProvider
+  /** Exact installation/revision this runtime observes and executes. */
+  readonly installation?: ProviderRuntimeInstallation
   /** Public, presentation-safe capability result cached for this Host life. */
   readonly descriptor?: ProviderDescriptor
   /** False for the read-only Host fallback when the Provider cannot launch. */
@@ -127,5 +142,14 @@ export interface AgentHostRuntime {
   }): Promise<void>
   /** Process-local liveness only; durable Provider identity remains Host-owned. */
   hasConversationSession?(providerThreadId: string): boolean
+  /**
+   * True while this runtime still owns either the live native session or its
+   * exact pending/permanent cleanup barrier. This is intentionally stronger
+   * than process liveness so a replacement installation cannot resume across
+   * cleanup that has not been proven complete.
+   */
+  ownsConversationSession?(providerThreadId: string): boolean
+  /** True only when this exact installation runtime owns no live/opening work. */
+  canRetireInstallation?(): boolean
   close(): Promise<void>
 }

@@ -24,8 +24,8 @@ import {
   machineTransportLimits,
   newControllerId,
   newMachineNonce,
-  openRemoteClaudeSession,
-  openRemoteCodexSession,
+  openRemoteClaudeSession as openRemoteClaudeSessionWithInstallation,
+  openRemoteCodexSession as openRemoteCodexSessionWithInstallation,
 } from '@codetether/machine-transport'
 
 import { CodeTetherNodeService } from '../dist/node-service.js'
@@ -40,6 +40,25 @@ import {
 import { RemoteClaudeRunnerPool } from '../dist/remote-claude-runner.js'
 import { NodeStateStore } from '../dist/state-store.js'
 
+const providerInstallationId = 'pinst_nodefixture01'
+const installationRevision = 'prev_nodefixture01'
+
+function openRemoteCodexSession(options) {
+  return openRemoteCodexSessionWithInstallation({
+    providerInstallationId,
+    expectedInstallationRevision: installationRevision,
+    ...options,
+  })
+}
+
+function openRemoteClaudeSession(options) {
+  return openRemoteClaudeSessionWithInstallation({
+    providerInstallationId,
+    expectedInstallationRevision: installationRevision,
+    ...options,
+  })
+}
+
 function sessionRequest(rootPath, conversationId = 'conv_remote_a') {
   return {
     type: 'codex.session.open',
@@ -49,6 +68,8 @@ function sessionRequest(rootPath, conversationId = 'conv_remote_a') {
     expectedNodeId: 'node_remote_a',
     conversationId,
     projectId: 'proj_remote_a',
+    providerInstallationId,
+    expectedInstallationRevision: installationRevision,
     rootPath,
   }
 }
@@ -1122,6 +1143,53 @@ test('released execution connections reopen by exact native session identity', a
     assert.equal(fake.resumes, 1)
     await pool.release(resumed)
     assert.equal(fake.shutdowns, 2)
+  } finally {
+    await pool.close()
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('selected installation native-resume loss rejects an existing Codex thread before client launch while fresh create remains available', async () => {
+  const directory = await mkdtemp(
+    join(tmpdir(), 'codetether-resume-capability-'),
+  )
+  const fake = fakeClientFactory()
+  const providerLifecycle = {
+    selected: async () => ({
+      provider: 'codex',
+      executable: join(directory, 'codex-fixture'),
+      environment: { HOME: directory },
+      compatibility: {
+        state: 'limited',
+        capabilities: {
+          execution: { effective: true },
+          streaming: { effective: true },
+          nativeResume: { effective: false },
+        },
+      },
+    }),
+  }
+  const pool = new RemoteCodexRunnerPool({
+    codexHome: directory,
+    clientFactory: fake.factory,
+    providerLifecycle,
+  })
+  try {
+    await assert.rejects(
+      pool.open({
+        ...sessionRequest(directory),
+        providerThreadId: 'provider-existing-thread',
+      }),
+      (error) => error.code === 'remote_execution_unavailable',
+    )
+    assert.equal(fake.launches, 0)
+    assert.equal(fake.resumes, 0)
+
+    const fresh = await pool.open(sessionRequest(directory))
+    assert.equal(fake.launches, 1)
+    assert.equal(fake.resumes, 0)
+    assert.equal(fresh.resumed, false)
+    await pool.release(fresh)
   } finally {
     await pool.close()
     await rm(directory, { recursive: true, force: true })

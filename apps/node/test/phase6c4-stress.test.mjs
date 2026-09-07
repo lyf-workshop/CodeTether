@@ -8,6 +8,8 @@ import { RemoteClaudeRunnerPool } from '../dist/remote-claude-runner.js'
 import { RemoteCodexRunnerPool } from '../dist/remote-codex-runner.js'
 
 const timestamp = '2026-01-01T00:00:00.000Z'
+const providerInstallationId = 'pinst_stressfixture01'
+const installationRevision = 'prev_stressfixture01'
 
 function codexSessionRequest(rootPath, index) {
   return {
@@ -18,6 +20,8 @@ function codexSessionRequest(rootPath, index) {
     expectedNodeId: 'node_stress_remote',
     conversationId: `conv_stress_codex_${String(index).padStart(2, '0')}`,
     projectId: 'proj_stress_remote',
+    providerInstallationId,
+    expectedInstallationRevision: installationRevision,
     rootPath,
   }
 }
@@ -43,6 +47,8 @@ function claudeSessionRequest(rootPath, index) {
     expectedNodeId: 'node_stress_remote',
     conversationId: `conv_stress_claude_${String(index).padStart(2, '0')}`,
     projectId: 'proj_stress_remote',
+    providerInstallationId,
+    expectedInstallationRevision: installationRevision,
     rootPath,
     effort: 'high',
   }

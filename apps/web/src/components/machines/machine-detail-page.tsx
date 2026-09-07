@@ -24,6 +24,7 @@ import {
   type GetMachineResponse,
   type MachineId,
   type MachineExecutionTransport,
+  type MachineProviderLifecycle,
   type MachineProviderDiscovery,
   type ProviderDescriptor,
   type ProjectRecord,
@@ -40,7 +41,10 @@ import { machineErrorMessage } from '../../runtime/host/machine-actions'
 import { machineDetailQueryOptions } from '../../runtime/host/machine-query'
 import {
   providerExecutionHealthPresentation,
+  providerLifecycleForMachine,
+  providerLifecyclePresentation,
   providerPresentationsForMachine,
+  type ProviderLifecyclePresentation,
   type ProviderPresentation,
 } from '../../provider/provider-presentation'
 import { formatConversationActivity } from '../conversations/conversation-list-model'
@@ -75,6 +79,10 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
     ...machineDetailQueryOptions(runtime, machineId),
     enabled: hostConnectionState === 'connected',
   })
+  const localProviderRefreshMutation = useMutation({
+    mutationFn: async () => await runtime.refreshMachineProviders(machineId),
+  })
+  const localProviderRefreshAvailable = hostConnectionState === 'connected'
   const connectionUnavailable =
     hostConnectionState === 'unavailable' ||
     hostConnectionState === 'incompatible'
@@ -131,6 +139,7 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
         hostConnectionState={hostConnectionState}
         machine={machine}
         providerDiscovery={machineQuery.data.providerDiscovery}
+        providerLifecycles={machineQuery.data.providerLifecycles ?? []}
         providers={machineQuery.data.providers}
         projects={machineQuery.data.projects}
         relay={machineQuery.data.relay}
@@ -140,7 +149,12 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
       />
     )
   }
-  const { providers, projects, conversations } = machineQuery.data
+  const {
+    providers,
+    providerLifecycles = [],
+    projects,
+    conversations,
+  } = machineQuery.data
   const providerPresentations = providerPresentationsForMachine(providers)
   const providerById = new Map(
     providerPresentations.map((provider) => [provider.provider, provider]),
@@ -207,13 +221,59 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
           </dl>
         </section>
 
-        <section className="rounded-lg border border-border bg-surface/65 p-5">
-          <h2 className="text-section font-semibold text-text-primary">
-            智能体
-          </h2>
-          <p className="mt-0.5 text-sm text-text-secondary">
-            安装检测与最近的执行健康结果彼此独立。
-          </p>
+        <section
+          className="rounded-lg border border-border bg-surface/65 p-5"
+          aria-busy={localProviderRefreshMutation.isPending}
+          aria-labelledby="local-machine-providers-heading"
+        >
+          <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <h2
+                id="local-machine-providers-heading"
+                className="text-section font-semibold text-text-primary"
+              >
+                智能体
+              </h2>
+              <p className="mt-0.5 text-sm text-text-secondary">
+                安装、运行时兼容性、推理后端与最近执行健康彼此独立。
+              </p>
+            </div>
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={
+                !localProviderRefreshAvailable ||
+                localProviderRefreshMutation.isPending
+              }
+              aria-describedby={
+                localProviderRefreshAvailable
+                  ? undefined
+                  : 'local-provider-refresh-unavailable'
+              }
+              title={
+                localProviderRefreshAvailable
+                  ? undefined
+                  : 'CodeTether Host 连接恢复后才能重新检测智能体'
+              }
+              onClick={() => localProviderRefreshMutation.mutate()}
+            >
+              <RefreshCw
+                aria-hidden="true"
+                className={cn(
+                  localProviderRefreshMutation.isPending &&
+                    'animate-spin motion-reduce:animate-none',
+                )}
+              />
+              {localProviderRefreshMutation.isPending
+                ? '正在检测…'
+                : '重新检测智能体'}
+            </Button>
+            {localProviderRefreshAvailable ? null : (
+              <span id="local-provider-refresh-unavailable" className="sr-only">
+                CodeTether Host 连接恢复后才能重新检测智能体。
+              </span>
+            )}
+          </div>
           <Separator className="my-4" />
           <ul className="space-y-3">
             {providerPresentations.map((provider) => {
@@ -221,14 +281,23 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
                 provider.executionHealth,
                 provider.displayName,
               )
-              const installationLabel = provider.available
-                ? '已安装'
-                : provider.availabilityLabel
+              const lifecycleGroup = providerLifecycleForMachine(
+                providerLifecycles,
+                provider.provider,
+              )
+              const lifecycle = providerLifecyclePresentation(lifecycleGroup)
+              const installationLabel =
+                lifecycleGroup === undefined
+                  ? provider.available
+                    ? '已安装'
+                    : provider.availabilityLabel
+                  : lifecycle.installation.stateLabel
+              const version = lifecycle.installation.version ?? provider.version
 
               return (
                 <li
                   key={provider.provider}
-                  aria-label={`${provider.displayName}：安装状态 ${installationLabel}；执行状态 ${health.stateLabel}，${health.freshnessLabel}`}
+                  aria-label={`${provider.displayName}：安装状态 ${installationLabel}；运行时 ${lifecycle.runtime.stateLabel}，${lifecycle.runtime.freshnessLabel}；后端 ${lifecycle.backend.modeLabel}，${lifecycle.backend.readinessLabel}，${lifecycle.backend.freshnessLabel}；执行状态 ${health.stateLabel}，${health.freshnessLabel}`}
                   className="flex min-w-0 items-start gap-3 rounded-md border border-border bg-surface-muted/45 px-3 py-3"
                 >
                   <AgentBadge agent={provider.agent} variant="compact" />
@@ -236,53 +305,37 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
                     <span className="block min-w-0 truncate text-sm font-medium text-text-primary">
                       {provider.displayName}
                     </span>
-                    {provider.version === undefined ? null : (
+                    {version === undefined ? null : (
                       <p
-                        title={provider.version}
+                        title={version}
                         className="mt-1 max-w-full truncate font-mono text-xs text-text-muted"
                       >
-                        {provider.version}
+                        {version}
                       </p>
                     )}
-                    <dl className="mt-2 grid min-w-0 gap-1.5 text-xs">
-                      <div className="flex min-w-0 items-baseline justify-between gap-3">
-                        <dt className="shrink-0 text-text-muted">安装状态</dt>
-                        <dd
-                          className={cn(
-                            'min-w-0 text-right font-medium',
-                            provider.available
-                              ? 'text-success'
-                              : 'text-text-secondary',
-                          )}
-                        >
-                          {installationLabel}
-                        </dd>
-                      </div>
-                      <div className="flex min-w-0 items-baseline justify-between gap-3">
-                        <dt className="shrink-0 text-text-muted">执行状态</dt>
-                        <dd
-                          className={cn(
-                            'min-w-0 text-right font-medium',
-                            providerExecutionHealthTone(health.state),
-                          )}
-                        >
-                          {health.stateLabel} · {health.freshnessLabel}
-                        </dd>
-                      </div>
-                    </dl>
-                    <p className="mt-2 break-words text-xs leading-relaxed text-text-muted">
-                      {health.description}
-                    </p>
-                    {health.observedAt === undefined ? null : (
-                      <p className="mt-1 text-xs text-text-muted">
-                        验证时间 · {formatMachineLastSeen(health.observedAt)}
-                      </p>
-                    )}
+                    <MachineProviderLifecycleDetails
+                      health={health}
+                      installationLabel={installationLabel}
+                      lifecycle={lifecycle}
+                      lifecycleObserved={lifecycleGroup !== undefined}
+                      providerAvailable={provider.available}
+                    />
                   </div>
                 </li>
               )
             })}
           </ul>
+          {localProviderRefreshMutation.isError ? (
+            <p
+              role="alert"
+              className="mt-3 break-words rounded-sm border border-danger/30 bg-danger-muted px-3 py-2 text-sm text-danger"
+            >
+              {machineErrorMessage(
+                localProviderRefreshMutation.error,
+                'refresh-providers',
+              )}
+            </p>
+          ) : null}
         </section>
       </div>
 
@@ -363,6 +416,7 @@ interface RemoteMachineDetailProps {
   hostConnectionState: ReturnType<typeof useHostConnectionState>
   machine: MachineSummary
   providerDiscovery: MachineProviderDiscovery | undefined
+  providerLifecycles: readonly MachineProviderLifecycle[]
   providers: readonly ProviderDescriptor[]
   projects: readonly ProjectRecord[]
   relay: GetMachineResponse['relay']
@@ -376,6 +430,7 @@ function RemoteMachineDetail({
   hostConnectionState,
   machine,
   providerDiscovery,
+  providerLifecycles,
   providers,
   projects,
   relay,
@@ -566,6 +621,7 @@ function RemoteMachineDetail({
         connection={connection}
         discovery={providerDiscovery}
         hostReady={hostReadyForConnectionAction}
+        lifecycles={providerLifecycles}
         providers={providers}
         refreshError={providerRefreshMutation.error}
         refreshPending={providerRefreshMutation.isPending}
@@ -626,6 +682,7 @@ function RemoteMachineProvidersSection({
   connection,
   discovery,
   hostReady,
+  lifecycles,
   onRefresh,
   providers,
   refreshError,
@@ -634,6 +691,7 @@ function RemoteMachineProvidersSection({
   connection: RemoteMachineConnection
   discovery: MachineProviderDiscovery | undefined
   hostReady: boolean
+  lifecycles: readonly MachineProviderLifecycle[]
   onRefresh: () => void
   providers: readonly ProviderDescriptor[]
   refreshError: unknown
@@ -653,6 +711,7 @@ function RemoteMachineProvidersSection({
   return (
     <section
       className="mt-5 min-w-0 rounded-lg border border-border bg-surface/65 p-5"
+      aria-busy={refreshPending}
       aria-labelledby="remote-machine-providers-heading"
     >
       <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
@@ -664,7 +723,7 @@ function RemoteMachineProvidersSection({
             智能体
           </h2>
           <p className="mt-0.5 text-sm text-text-secondary">
-            由受信任的 CodeTether Node 执行一次有界检测。
+            由受信任的 CodeTether Node 有界检测安装、兼容性与后端状态。
           </p>
         </div>
         <Button
@@ -710,13 +769,22 @@ function RemoteMachineProvidersSection({
                 provider.executionHealth,
                 provider.displayName,
               )
-              const installationLabel = provider.available
-                ? '已安装'
-                : provider.availabilityLabel
+              const lifecycleGroup = providerLifecycleForMachine(
+                lifecycles,
+                provider.provider,
+              )
+              const lifecycle = providerLifecyclePresentation(lifecycleGroup)
+              const installationLabel =
+                lifecycleGroup === undefined
+                  ? provider.available
+                    ? '已安装'
+                    : provider.availabilityLabel
+                  : lifecycle.installation.stateLabel
+              const version = lifecycle.installation.version ?? provider.version
               return (
                 <li
                   key={provider.provider}
-                  aria-label={`${provider.displayName}：安装状态 ${installationLabel}；执行状态 ${health.stateLabel}，${health.freshnessLabel}`}
+                  aria-label={`${provider.displayName}：安装状态 ${installationLabel}；运行时 ${lifecycle.runtime.stateLabel}，${lifecycle.runtime.freshnessLabel}；后端 ${lifecycle.backend.modeLabel}，${lifecycle.backend.readinessLabel}，${lifecycle.backend.freshnessLabel}；执行状态 ${health.stateLabel}，${health.freshnessLabel}`}
                   className="flex min-w-0 items-start gap-3 rounded-md border border-border bg-surface-muted/45 px-3 py-3"
                 >
                   <AgentBadge agent={provider.agent} variant="compact" />
@@ -724,48 +792,21 @@ function RemoteMachineProvidersSection({
                     <span className="block min-w-0 truncate text-sm font-medium text-text-primary">
                       {provider.displayName}
                     </span>
-                    {provider.version === undefined ? null : (
+                    {version === undefined ? null : (
                       <p
-                        title={provider.version}
+                        title={version}
                         className="mt-1 max-w-full truncate font-mono text-xs text-text-muted"
                       >
-                        {provider.version}
+                        {version}
                       </p>
                     )}
-                    <dl className="mt-2 grid min-w-0 gap-1.5 text-xs">
-                      <div className="flex min-w-0 items-baseline justify-between gap-3">
-                        <dt className="shrink-0 text-text-muted">安装状态</dt>
-                        <dd
-                          className={cn(
-                            'min-w-0 text-right font-medium',
-                            provider.available
-                              ? 'text-success'
-                              : 'text-text-secondary',
-                          )}
-                        >
-                          {installationLabel}
-                        </dd>
-                      </div>
-                      <div className="flex min-w-0 items-baseline justify-between gap-3">
-                        <dt className="shrink-0 text-text-muted">执行状态</dt>
-                        <dd
-                          className={cn(
-                            'min-w-0 text-right font-medium',
-                            providerExecutionHealthTone(health.state),
-                          )}
-                        >
-                          {health.stateLabel} · {health.freshnessLabel}
-                        </dd>
-                      </div>
-                    </dl>
-                    <p className="mt-2 break-words text-xs leading-relaxed text-text-muted">
-                      {health.description}
-                    </p>
-                    {health.observedAt === undefined ? null : (
-                      <p className="mt-1 text-xs text-text-muted">
-                        验证时间 · {formatMachineLastSeen(health.observedAt)}
-                      </p>
-                    )}
+                    <MachineProviderLifecycleDetails
+                      health={health}
+                      installationLabel={installationLabel}
+                      lifecycle={lifecycle}
+                      lifecycleObserved={lifecycleGroup !== undefined}
+                      providerAvailable={provider.available}
+                    />
                     {provider.available ? (
                       <p className="mt-1 text-xs text-text-muted">
                         {remoteProviderCapabilitySummary(provider)}
@@ -788,6 +829,96 @@ function RemoteMachineProvidersSection({
         </p>
       ) : null}
     </section>
+  )
+}
+
+function MachineProviderLifecycleDetails({
+  health,
+  installationLabel,
+  lifecycle,
+  lifecycleObserved,
+  providerAvailable,
+}: {
+  health: ReturnType<typeof providerExecutionHealthPresentation>
+  installationLabel: string
+  lifecycle: ProviderLifecyclePresentation
+  lifecycleObserved: boolean
+  providerAvailable: boolean
+}) {
+  const installationDetail = lifecycleObserved
+    ? lifecycle.installation.detailLabel
+    : '此 Host 尚未提供安装生命周期详情'
+
+  return (
+    <>
+      <dl className="mt-2 grid min-w-0 gap-1.5 text-xs">
+        <MachineProviderStatusRow
+          label="安装状态"
+          tone={
+            (lifecycleObserved &&
+              lifecycle.installation.state === 'available') ||
+            (!lifecycleObserved && providerAvailable)
+              ? 'text-success'
+              : 'text-text-secondary'
+          }
+          value={installationLabel}
+        />
+        <MachineProviderStatusRow
+          label="运行时"
+          tone={providerRuntimeLifecycleTone(lifecycle.runtime.state)}
+          value={`${lifecycle.runtime.stateLabel} · ${lifecycle.runtime.freshnessLabel}`}
+        />
+        <MachineProviderStatusRow
+          label="后端"
+          tone={providerBackendLifecycleTone(lifecycle.backend.readiness)}
+          value={`${lifecycle.backend.modeLabel} · ${lifecycle.backend.readinessLabel} · ${lifecycle.backend.freshnessLabel}`}
+        />
+        <MachineProviderStatusRow
+          label="执行状态"
+          tone={providerExecutionHealthTone(health.state)}
+          value={`${health.stateLabel} · ${health.freshnessLabel}`}
+        />
+      </dl>
+      <p className="mt-2 break-words text-xs leading-relaxed text-text-muted">
+        安装 · {installationDetail}
+      </p>
+      {lifecycle.installation.alternateCount === 0 ? null : (
+        <p className="mt-1 text-xs text-text-muted">
+          另发现 {lifecycle.installation.alternateCount} 个安装；不会自动切换。
+        </p>
+      )}
+      <p className="mt-1 break-words text-xs leading-relaxed text-text-muted">
+        运行时 · {lifecycle.runtime.description}
+      </p>
+      <p className="mt-1 break-words text-xs leading-relaxed text-text-muted">
+        后端 · {lifecycle.backend.description}
+      </p>
+      <p className="mt-1 break-words text-xs leading-relaxed text-text-muted">
+        执行 · {health.description}
+      </p>
+      {health.observedAt === undefined ? null : (
+        <p className="mt-1 text-xs text-text-muted">
+          执行验证时间 · {formatMachineLastSeen(health.observedAt)}
+        </p>
+      )}
+    </>
+  )
+}
+
+function MachineProviderStatusRow({
+  label,
+  tone,
+  value,
+}: {
+  label: string
+  tone: string
+  value: string
+}) {
+  return (
+    <div className="flex min-w-0 items-baseline justify-between gap-3">
+      <dt className="shrink-0 text-text-muted">{label}</dt>
+      <dd className={cn('min-w-0 text-right font-medium', tone)}>{value}</dd>
+    </div>
   )
 }
 
@@ -820,6 +951,39 @@ function providerExecutionHealthTone(
     case 'degraded':
       return 'text-warning'
     case 'unavailable':
+      return 'text-danger'
+    case 'unknown':
+    case 'not_observed':
+      return 'text-text-secondary'
+  }
+}
+
+function providerRuntimeLifecycleTone(
+  state: ProviderLifecyclePresentation['runtime']['state'],
+): string {
+  switch (state) {
+    case 'verified':
+    case 'compatible_unverified':
+      return 'text-success'
+    case 'limited':
+      return 'text-warning'
+    case 'incompatible':
+    case 'unavailable':
+      return 'text-danger'
+    case 'not_observed':
+      return 'text-text-secondary'
+  }
+}
+
+function providerBackendLifecycleTone(
+  readiness: ProviderLifecyclePresentation['backend']['readiness'],
+): string {
+  switch (readiness) {
+    case 'ready':
+      return 'text-success'
+    case 'unavailable':
+    case 'authentication_required':
+    case 'misconfigured':
       return 'text-danger'
     case 'unknown':
     case 'not_observed':

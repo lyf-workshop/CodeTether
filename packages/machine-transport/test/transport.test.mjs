@@ -38,6 +38,9 @@ import {
   verifyPairingConfirmationTag,
 } from '../dist/index.js'
 
+const providerInstallationId = 'pinst_transportfixture01'
+const installationRevision = 'prev_transportfixture01'
+
 test('Provider session-ready waits use one distinct bounded cold-start budget', async () => {
   assert.equal(
     machineTransportLimits.providerSessionOpenTimeoutMs,
@@ -83,6 +86,8 @@ test('Provider session-ready waits use one distinct bounded cold-start budget', 
               machineId: machine.machineId,
               nodeId: machine.nodeId,
               conversationId: request.conversationId,
+              providerInstallationId: request.providerInstallationId,
+              installationRevision: request.expectedInstallationRevision,
               providerThreadId: 'thread_session_timeout',
               resumed: false,
               executionProfile: 'codex-text-v1',
@@ -94,6 +99,8 @@ test('Provider session-ready waits use one distinct bounded cold-start budget', 
               machineId: machine.machineId,
               nodeId: machine.nodeId,
               conversationId: request.conversationId,
+              providerInstallationId: request.providerInstallationId,
+              installationRevision: request.expectedInstallationRevision,
               providerSessionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
               resumed: false,
               effort: 'high',
@@ -116,12 +123,16 @@ test('Provider session-ready waits use one distinct bounded cold-start budget', 
       await connection.openCodexSession({
         conversationId: 'conv_session_timeout_codex',
         projectId: 'proj_session_timeout_codex',
+        providerInstallationId,
+        expectedInstallationRevision: installationRevision,
         rootPath: '/srv/session-timeout',
       })
     } else {
       await connection.openClaudeSession({
         conversationId: 'conv_session_timeout_claude',
         projectId: 'proj_session_timeout_claude',
+        providerInstallationId,
+        expectedInstallationRevision: installationRevision,
         rootPath: '/srv/session-timeout',
         effort: 'high',
       })
@@ -516,6 +527,163 @@ test('Provider discovery messages are purpose-specific and presentation-safe', (
     }).success,
     false,
   )
+  const backend = {
+    mode: 'custom_gateway',
+    readiness: 'unknown',
+    freshness: 'current',
+    configurationRevision: 'pbcfg_transportfixture01',
+    configuration: {
+      source: 'process_environment',
+      hasBaseUrl: true,
+      hasApiKey: false,
+      hasAuthToken: true,
+      hasOAuthToken: false,
+      bedrockConfigured: false,
+      vertexConfigured: false,
+    },
+    sanitizedOrigin: 'gateway.example.test',
+    observedAt: '2026-09-06T00:00:00.000Z',
+  }
+  const descriptorWithLifecycle = {
+    ...descriptor,
+    installations: [
+      {
+        installationId: providerInstallationId,
+        provider: 'codex',
+        selected: true,
+        version: '0.149.1',
+        launcherKind: 'native',
+        installMethod: 'manual',
+        availability: 'available',
+        revision: installationRevision,
+        firstObservedAt: '2026-09-06T00:00:00.000Z',
+        lastObservedAt: '2026-09-06T00:00:00.000Z',
+        backend,
+      },
+    ],
+    selectedInstallationId: providerInstallationId,
+    backend,
+  }
+  assert.equal(
+    RemoteProviderDescriptorSchema.safeParse(descriptorWithLifecycle).success,
+    true,
+  )
+  assert.equal(
+    RemoteProviderDescriptorSchema.safeParse({
+      ...descriptorWithLifecycle,
+      installationsTruncated: true,
+    }).success,
+    true,
+  )
+  assert.equal(
+    RemoteProviderDescriptorSchema.safeParse({
+      ...descriptor,
+      installationsTruncated: true,
+    }).success,
+    false,
+  )
+  const supported = {
+    observed: 'supported',
+    enabled: true,
+    effective: true,
+  }
+  const unsupportedOptional = {
+    observed: 'unsupported',
+    enabled: true,
+    effective: false,
+  }
+  const resumelessCompatibility = {
+    state: 'limited',
+    runtimeReadiness: 'limited',
+    freshness: 'current',
+    contractVersion: 1,
+    observedAt: '2026-09-06T00:00:00.000Z',
+    capabilities: {
+      execution: supported,
+      streaming: supported,
+      nativeResume: unsupportedOptional,
+      nativeSessionDiscovery: supported,
+      fileRead: supported,
+      search: supported,
+      toolEvents: supported,
+      reasoningControl: supported,
+    },
+  }
+  const resumelessLifecycleDescriptor = {
+    ...descriptorWithLifecycle,
+    capabilities: { ...capabilities, streaming: true },
+    compatibility: resumelessCompatibility,
+    installations: descriptorWithLifecycle.installations.map(
+      (installation) => ({
+        ...installation,
+        compatibility: resumelessCompatibility,
+      }),
+    ),
+  }
+  assert.equal(
+    RemoteProviderDescriptorSchema.safeParse(resumelessLifecycleDescriptor)
+      .success,
+    true,
+  )
+  assert.equal(
+    RemoteProviderDescriptorSchema.safeParse({
+      ...resumelessLifecycleDescriptor,
+      capabilities: {
+        ...resumelessLifecycleDescriptor.capabilities,
+        resume: true,
+      },
+    }).success,
+    false,
+  )
+  assert.equal(
+    RemoteProviderDescriptorSchema.safeParse({
+      ...resumelessLifecycleDescriptor,
+      compatibility: {
+        ...resumelessCompatibility,
+        capabilities: {
+          ...resumelessCompatibility.capabilities,
+          nativeResume: supported,
+        },
+      },
+    }).success,
+    false,
+  )
+  assert.equal(
+    RemoteProviderDescriptorSchema.safeParse({
+      ...descriptorWithLifecycle,
+      installations: [
+        {
+          ...descriptorWithLifecycle.installations[0],
+          launcherPath: '/home/user/.local/bin/codex',
+        },
+      ],
+    }).success,
+    false,
+  )
+  assert.equal(
+    RemoteProviderDescriptorSchema.safeParse({
+      ...descriptorWithLifecycle,
+      backend: {
+        ...backend,
+        configuration: {
+          ...backend.configuration,
+          authToken: 'must-never-cross-the-Machine-protocol',
+        },
+      },
+    }).success,
+    false,
+  )
+  assert.equal(
+    RemoteProviderDescriptorSchema.safeParse({
+      ...descriptorWithLifecycle,
+      backend: {
+        ...backend,
+        sanitizedOrigin:
+          'https://user:secret@gateway.example.test/private?token=secret',
+      },
+    }).success,
+    false,
+  )
   for (const infrastructureReason of [
     'machine_offline',
     'project_location_missing',
@@ -581,6 +749,8 @@ test('remote Codex execution messages are correlated, bounded, and non-generic',
     expectedNodeId: 'node_abcdef',
     conversationId: 'conv_abcdef',
     projectId: 'proj_abcdef',
+    providerInstallationId,
+    expectedInstallationRevision: installationRevision,
     rootPath: '/home/user/project',
   }
   const turn = {
@@ -667,6 +837,8 @@ test('remote Codex session exposes a closed dedicated transport without probing 
       machineId: 'machine_remote_liveness01',
       nodeId: 'node_remote_liveness01',
       conversationId: 'conv_remote_liveness01',
+      providerInstallationId,
+      installationRevision,
       providerThreadId: 'native-thread-liveness',
       resumed: true,
       executionProfile: 'codex-text-v1',
@@ -721,6 +893,8 @@ test('authenticated startup errors preserve only the canonical failure', async (
       machineId: 'machine_remote_failure01',
       nodeId: 'node_remote_failure01',
       conversationId: 'conv_remote_failure01',
+      providerInstallationId,
+      installationRevision,
       providerThreadId: 'native-thread-failure',
       resumed: false,
       executionProfile: 'codex-text-v1',
@@ -768,6 +942,8 @@ test('lost Codex start acknowledgement is ownership-uncertain without replay', a
     machineId: machine.machineId,
     nodeId: machine.nodeId,
     conversationId: 'conv_remote_codex_lost_ack01',
+    providerInstallationId,
+    installationRevision,
     providerThreadId: 'native-thread-lost-ack',
     resumed: false,
     executionProfile: 'codex-text-v1',
@@ -847,6 +1023,8 @@ test('active Codex heartbeat keeps a quiet dedicated session alive without repla
       machineId: machine.machineId,
       nodeId: machine.nodeId,
       conversationId: 'conv_remote_heartbeat01',
+      providerInstallationId,
+      installationRevision,
       providerThreadId,
       resumed: false,
       executionProfile: 'codex-text-v1',
@@ -905,6 +1083,8 @@ test('remote Claude messages admit only the restricted read/search profile', () 
     expectedNodeId: 'node_abcdef',
     conversationId: 'conv_abcdef',
     projectId: 'proj_abcdef',
+    providerInstallationId,
+    expectedInstallationRevision: installationRevision,
     rootPath: '/home/user/project',
     effort: 'high',
   }
@@ -1079,6 +1259,81 @@ test('remote Claude descriptor is exact and carries bounded effort metadata', ()
     }).success,
     false,
   )
+
+  const supported = {
+    observed: 'supported',
+    enabled: true,
+    effective: true,
+  }
+  const unsupportedOptional = {
+    observed: 'unsupported',
+    enabled: true,
+    effective: false,
+  }
+  const compatibility = {
+    state: 'limited',
+    runtimeReadiness: 'limited',
+    freshness: 'current',
+    contractVersion: 1,
+    observedAt: '2026-09-06T00:00:00.000Z',
+    capabilities: {
+      execution: supported,
+      streaming: supported,
+      nativeResume: unsupportedOptional,
+      nativeSessionDiscovery: supported,
+      fileRead: supported,
+      search: supported,
+      toolEvents: supported,
+      reasoningControl: unsupportedOptional,
+    },
+  }
+  const lifecycleDescriptor = {
+    provider: 'claude-code',
+    displayName: 'Claude Code',
+    availability: 'available',
+    version: '2.1.264',
+    capabilities: {
+      ...capabilities,
+      resume: false,
+      reasoningControl: false,
+    },
+    installations: [
+      {
+        installationId: providerInstallationId,
+        provider: 'claude-code',
+        selected: true,
+        version: '2.1.264',
+        launcherKind: 'native',
+        installMethod: 'manual',
+        availability: 'available',
+        revision: installationRevision,
+        firstObservedAt: '2026-09-06T00:00:00.000Z',
+        lastObservedAt: '2026-09-06T00:00:00.000Z',
+        compatibility,
+      },
+    ],
+    selectedInstallationId: providerInstallationId,
+    compatibility,
+  }
+  assert.equal(
+    RemoteProviderDescriptorSchema.safeParse(lifecycleDescriptor).success,
+    true,
+  )
+  assert.equal(
+    RemoteProviderDescriptorSchema.safeParse({
+      ...lifecycleDescriptor,
+      capabilities: { ...lifecycleDescriptor.capabilities, resume: true },
+    }).success,
+    false,
+  )
+  assert.equal(
+    RemoteProviderDescriptorSchema.safeParse({
+      ...lifecycleDescriptor,
+      reasoningLabel: 'Thinking effort',
+      reasoningOptions: descriptor.reasoningOptions,
+    }).success,
+    false,
+  )
 })
 
 test('remote Claude session exposes closed dedicated transport without Provider work', async () => {
@@ -1100,6 +1355,8 @@ test('remote Claude session exposes closed dedicated transport without Provider 
       machineId: 'machine_remote_claude01',
       nodeId: 'node_remote_claude01',
       conversationId: 'conv_remote_claude01',
+      providerInstallationId,
+      installationRevision,
       providerSessionId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
       resumed: true,
       effort: 'medium',
@@ -1145,6 +1402,8 @@ test('lost Claude start acknowledgement is ownership-uncertain without replay', 
     machineId: machine.machineId,
     nodeId: machine.nodeId,
     conversationId: 'conv_remote_claude_lost_ack01',
+    providerInstallationId,
+    installationRevision,
     providerSessionId,
     resumed: false,
     effort: 'medium',
@@ -1208,6 +1467,8 @@ test('missing Claude heartbeat acknowledgement fails a quiet Turn closed without
       machineId: machine.machineId,
       nodeId: machine.nodeId,
       conversationId: 'conv_remote_claude_heartbeat01',
+      providerInstallationId,
+      installationRevision,
       providerSessionId,
       resumed: false,
       effort: 'high',

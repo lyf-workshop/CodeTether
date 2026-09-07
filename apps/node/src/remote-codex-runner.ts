@@ -30,6 +30,7 @@ import {
 import { validateProjectLocationPath } from './project-location-validation.js'
 import { spawnNodeProviderProcess } from './provider-process-guardian.js'
 import { supportsRemoteCodexExecutionPlatform } from './provider-discovery.js'
+import type { NodeProviderLifecycleCoordinator } from './provider-lifecycle.js'
 import type { RemoteProviderSessionConnectionOwner } from './remote-provider-session-owner.js'
 
 interface RemoteCodexClient {
@@ -55,6 +56,10 @@ interface RemoteCodexClient {
 export interface RemoteCodexClientFactoryOptions {
   readonly onEvent: (event: AgentEvent) => void
   readonly onError: (error: Error) => void
+  /** Exact Node-selected executable; absent only in legacy fixture factories. */
+  readonly executable?: string
+  readonly environment?: NodeJS.ProcessEnv
+  readonly codexHome?: string
 }
 
 export type RemoteCodexClientFactory = (
@@ -66,6 +71,8 @@ export interface RemoteCodexRunnerPoolOptions {
   readonly codexHome?: string
   /** Internal test seam; the Machine protocol cannot select an executable. */
   readonly clientFactory?: RemoteCodexClientFactory
+  /** Shared exact-installation authority used by production execution. */
+  readonly providerLifecycle?: NodeProviderLifecycleCoordinator
   readonly maximumSessions?: number
 }
 
@@ -82,6 +89,7 @@ class RemoteCodexOwnedCleanupError extends MachineTransportError {
 
 export class RemoteCodexRunnerPool {
   readonly #clientFactory: RemoteCodexClientFactory
+  readonly #providerLifecycle?: NodeProviderLifecycleCoordinator
   readonly #maximumSessions: number
   readonly #runners = new Map<string, RemoteCodexRunner>()
   readonly #opening = new Map<string, Promise<RemoteCodexRunner>>()
@@ -92,6 +100,7 @@ export class RemoteCodexRunnerPool {
   #closePromise: Promise<void> | undefined
 
   constructor(options: RemoteCodexRunnerPoolOptions = {}) {
+    this.#providerLifecycle = options.providerLifecycle
     const codexHome = options.codexHome ?? defaultRemoteCodexHome()
     if (!isAbsolute(codexHome)) {
       throw new TypeError('Remote Codex home must be an absolute path')
@@ -111,9 +120,11 @@ export class RemoteCodexRunnerPool {
       supportsRemoteCodexExecutionPlatform()
     this.#clientFactory =
       options.clientFactory ??
-      (async ({ onEvent, onError }) =>
+      (async ({ onEvent, onError, executable, environment, codexHome }) =>
         await CodexAppServerClient.launchRemote({
-          codexHome,
+          ...(executable === undefined ? {} : { executable }),
+          codexHome: codexHome ?? defaultRemoteCodexHome(environment),
+          ...(environment === undefined ? {} : { environment }),
           clientInfo: {
             name: 'codetether-node',
             title: 'CodeTether Node',
@@ -223,10 +234,35 @@ export class RemoteCodexRunnerPool {
     owner?: RemoteProviderSessionConnectionOwner,
   ): Promise<RemoteCodexRunner> {
     if (this.#closed) throw executionUnavailable()
+    const selected =
+      this.#providerLifecycle === undefined
+        ? undefined
+        : await this.#providerLifecycle.selected(
+            'codex',
+            request.providerInstallationId,
+            request.expectedInstallationRevision,
+          )
+    if (selected !== undefined && selected.provider !== 'codex') {
+      throw executionUnavailable()
+    }
+    if (
+      selected !== undefined &&
+      request.providerThreadId !== undefined &&
+      selected.compatibility.capabilities.nativeResume.effective !== true
+    ) {
+      throw executionUnavailable()
+    }
     const runner = await RemoteCodexRunner.open({
       request,
       canonicalRoot,
       clientFactory: this.#clientFactory,
+      ...(selected === undefined
+        ? {}
+        : {
+            executable: selected.executable,
+            environment: selected.environment,
+            codexHome: defaultRemoteCodexHome(selected.environment),
+          }),
       onFatal: (ownedRunner) => this.#releaseAfterFatal(ownedRunner),
       owner,
     })
@@ -345,6 +381,9 @@ interface OpenRemoteCodexRunnerOptions {
   readonly request: CodexSessionOpenMessage
   readonly canonicalRoot: string
   readonly clientFactory: RemoteCodexClientFactory
+  readonly executable?: string
+  readonly environment?: NodeJS.ProcessEnv
+  readonly codexHome?: string
   readonly onFatal: (runner: RemoteCodexRunner) => void
   readonly owner?: RemoteProviderSessionConnectionOwner
 }
@@ -397,6 +436,15 @@ export class RemoteCodexRunner {
           canonicalFailureFromError(error, 'provider_session_lost'),
         )
       },
+      ...(options.executable === undefined
+        ? {}
+        : { executable: options.executable }),
+      ...(options.environment === undefined
+        ? {}
+        : { environment: options.environment }),
+      ...(options.codexHome === undefined
+        ? {}
+        : { codexHome: options.codexHome }),
     })
     try {
       if (startupFailure !== undefined) throw startupFailure
@@ -1312,11 +1360,18 @@ function remotePolicyViolation(): MachineTransportError {
   )
 }
 
-function defaultRemoteCodexHome(): string {
-  const configured = process.env.CODEX_HOME
+function defaultRemoteCodexHome(
+  environment: NodeJS.ProcessEnv = process.env,
+): string {
+  const configured = environment.CODEX_HOME
   return configured !== undefined && isAbsolute(configured)
     ? configured
-    : join(homedir(), '.codex')
+    : join(
+        environment.HOME?.trim() ||
+          environment.USERPROFILE?.trim() ||
+          homedir(),
+        '.codex',
+      )
 }
 
 function safeFailureMessage(

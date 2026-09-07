@@ -101,8 +101,8 @@ test('migration 009 preserves the v8 graph and rolls back replacement tables ato
     rolledBack.close()
 
     const migrated = ConversationStore.open({ databasePath })
-    assert.equal(currentSchemaVersion, 15)
-    assert.equal(migrated.schemaVersion, 15)
+    assert.equal(currentSchemaVersion, 16)
+    assert.equal(migrated.schemaVersion, 16)
     assert.deepEqual(
       migrated.listMachines().map((machine) => machine.machineId),
       [v8MachineId],
@@ -196,7 +196,7 @@ test('migration 010 backfills one preferred endpoint from v9 and rolls back with
     rolledBack.close()
 
     const migrated = ConversationStore.open({ databasePath })
-    assert.equal(migrated.schemaVersion, 15)
+    assert.equal(migrated.schemaVersion, 16)
     const trust = migrated.getTrustedMachinePeer(candidate.machine.machineId)
     assert.deepEqual(trust?.endpoints, [
       {
@@ -263,7 +263,7 @@ test('migration 011 adds bounded remote Provider observations transactionally', 
     rolledBack.close()
 
     const migrated = ConversationStore.open({ databasePath })
-    assert.equal(migrated.schemaVersion, 15)
+    assert.equal(migrated.schemaVersion, 16)
     assert.equal(
       migrated.getRemoteProviderObservation(candidate.machine.machineId),
       undefined,
@@ -297,7 +297,7 @@ test('remote Provider observations are strict, durable, replace atomically, and 
                   ...provider,
                   capabilities: {
                     ...provider.capabilities,
-                    streaming: true,
+                    shell: true,
                   },
                 }
               : provider,
@@ -581,7 +581,7 @@ test('remote Project locations aggregate durably, reject conflicts, and atomical
     store.close()
 
     const reopened = ConversationStore.open({ databasePath })
-    assert.equal(reopened.schemaVersion, 15)
+    assert.equal(reopened.schemaVersion, 16)
     assert.deepEqual(
       reopened
         .getProject('proj_multilocation01')

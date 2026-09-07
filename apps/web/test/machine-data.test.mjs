@@ -20,6 +20,9 @@ import {
 } from '../.tmp/test-dist/runtime/host/project-location.js'
 import {
   providerExecutionHealthPresentation,
+  providerLifecycleForMachine,
+  providerLifecycleFreshnessLabel,
+  providerLifecyclePresentation,
   providerPresentationForMachine,
   providerPresentationsForMachine,
 } from '../.tmp/test-dist/provider/provider-presentation.js'
@@ -274,6 +277,136 @@ test('local Machine Provider presentation preserves installed truth beside unava
   assert.match(health.description, /登录/u)
 })
 
+test('Provider lifecycle presentation separates selected installation, runtime, backend, and freshness', () => {
+  const lifecycle = providerLifecycle('claude-code', {
+    compatibility: compatibility('compatible_unverified', 'current'),
+    backend: backend('custom_gateway', 'ready', 'current'),
+    alternateCount: 2,
+  })
+  const presentation = providerLifecyclePresentation(lifecycle)
+
+  assert.equal(
+    providerLifecycleForMachine([lifecycle], 'claude-code'),
+    lifecycle,
+  )
+  assert.equal(providerLifecycleForMachine([lifecycle], 'codex'), undefined)
+  assert.equal(presentation.installation.stateLabel, '已选择')
+  assert.equal(presentation.installation.version, '2.1.263')
+  assert.match(presentation.installation.detailLabel, /npm/u)
+  assert.match(presentation.installation.detailLabel, /符号链接/u)
+  assert.equal(presentation.installation.alternateCount, 2)
+  assert.equal(presentation.runtime.stateLabel, '兼容 — 新版本')
+  assert.equal(presentation.runtime.freshnessLabel, '当前状态')
+  assert.equal(presentation.backend.modeLabel, '自定义网关')
+  assert.equal(presentation.backend.readinessLabel, '就绪')
+  assert.equal(presentation.backend.freshnessLabel, '当前状态')
+})
+
+test('Provider lifecycle presentation exhaustively distinguishes degraded and last-known states', () => {
+  const expectedRuntimeLabels = {
+    verified: '兼容',
+    compatible_unverified: '兼容 — 新版本',
+    limited: '受限',
+    incompatible: '需要更新 CodeTether',
+    unavailable: '不可用',
+  }
+  for (const [state, label] of Object.entries(expectedRuntimeLabels)) {
+    const presentation = providerLifecyclePresentation(
+      providerLifecycle('codex', {
+        compatibility: compatibility(state, 'last_known'),
+      }),
+    )
+    assert.equal(presentation.runtime.stateLabel, label)
+    assert.equal(presentation.runtime.freshnessLabel, '上次已知')
+  }
+
+  const backendLabels = {
+    unknown: '尚未验证',
+    ready: '就绪',
+    unavailable: '不可用',
+    authentication_required: '需要登录',
+    misconfigured: '配置不可用',
+  }
+  for (const [readiness, label] of Object.entries(backendLabels)) {
+    const presentation = providerLifecyclePresentation(
+      providerLifecycle('claude-code', {
+        backend: backend('custom_gateway', readiness, 'last_known'),
+      }),
+    )
+    assert.equal(presentation.backend.readinessLabel, label)
+    assert.equal(presentation.backend.freshnessLabel, '上次已知')
+  }
+
+  assert.equal(providerLifecycleFreshnessLabel('not_observed'), '尚未观察')
+  assert.equal(
+    providerLifecyclePresentation(undefined).runtime.state,
+    'not_observed',
+  )
+})
+
+test('Provider lifecycle presentation covers installation absence and every backend mode without path data', () => {
+  const empty = providerLifecyclePresentation({
+    provider: 'codex',
+    installations: [],
+  })
+  assert.equal(empty.installation.state, 'not_selected')
+  assert.equal(empty.installation.stateLabel, '未检测到安装')
+
+  const unselected = providerLifecycle('codex', {})
+  delete unselected.selectedInstallationId
+  unselected.installations[0].selected = false
+  const unselectedPresentation = providerLifecyclePresentation(unselected)
+  assert.equal(unselectedPresentation.installation.stateLabel, '尚未选择')
+  assert.equal(unselectedPresentation.installation.alternateCount, 1)
+
+  const installationStates = {
+    available: '已选择',
+    unavailable: '所选安装不可用',
+    unresolved: '所选安装未解析',
+  }
+  for (const [availability, label] of Object.entries(installationStates)) {
+    const lifecycle = providerLifecycle('codex', {})
+    lifecycle.installations[0].availability = availability
+    assert.equal(
+      providerLifecyclePresentation(lifecycle).installation.stateLabel,
+      label,
+    )
+  }
+
+  const backendModes = {
+    first_party: 'Provider 官方服务',
+    custom_gateway: '自定义网关',
+    bedrock: 'Amazon Bedrock',
+    vertex: 'Google Vertex AI',
+    unknown: '后端模式未知',
+  }
+  for (const [mode, label] of Object.entries(backendModes)) {
+    const lifecycle = providerLifecycle('claude-code', {
+      backend: backend(mode, 'ready', 'current'),
+    })
+    assert.equal(
+      providerLifecyclePresentation(lifecycle).backend.modeLabel,
+      label,
+    )
+  }
+})
+
+test('Provider lifecycle presentation omits private installation and backend identity', () => {
+  const lifecycle = providerLifecycle('claude-code', {
+    compatibility: compatibility('verified', 'current'),
+    backend: backend('custom_gateway', 'ready', 'current'),
+  })
+  lifecycle.installations[0].installationId = 'provider_installation_private01'
+  lifecycle.selectedInstallationId = 'provider_installation_private01'
+  lifecycle.installations[0].revision = 'provider_revision_private01'
+  lifecycle.installations[0].backend.sanitizedOrigin = 'https://gateway.example'
+
+  const serialized = JSON.stringify(providerLifecyclePresentation(lifecycle))
+  assert.doesNotMatch(serialized, /private01/u)
+  assert.doesNotMatch(serialized, /gateway\.example/u)
+  assert.doesNotMatch(serialized, /installationId|revision|sanitizedOrigin/u)
+})
+
 function machine() {
   return {
     machineId,
@@ -345,5 +478,95 @@ function provider(id, availability) {
       modelSelection: false,
       reasoningControl: false,
     },
+  }
+}
+
+function providerLifecycle(
+  providerId,
+  {
+    compatibility: compatibilityValue,
+    backend: backendValue,
+    alternateCount = 0,
+  },
+) {
+  const selected = {
+    installationId: 'provider_installation_selected01',
+    provider: providerId,
+    selected: true,
+    version: '2.1.263',
+    launcherKind: 'symlink',
+    installMethod: 'npm',
+    availability: 'available',
+    revision: 'provider_revision_selected01',
+    firstObservedAt: timestamp,
+    lastObservedAt: timestamp,
+    ...(compatibilityValue === undefined
+      ? {}
+      : { compatibility: compatibilityValue }),
+    ...(backendValue === undefined ? {} : { backend: backendValue }),
+  }
+  return {
+    provider: providerId,
+    selectedInstallationId: selected.installationId,
+    installations: [
+      selected,
+      ...Array.from({ length: alternateCount }, (_, index) => ({
+        ...selected,
+        installationId: `provider_installation_alternate${index}`,
+        selected: false,
+      })),
+    ],
+  }
+}
+
+function compatibility(state, freshness) {
+  const supported = { observed: 'supported', enabled: true, effective: true }
+  const unavailable = {
+    observed: 'unavailable',
+    enabled: true,
+    effective: false,
+  }
+  return {
+    state,
+    runtimeReadiness:
+      state === 'verified' || state === 'compatible_unverified'
+        ? 'ready'
+        : state === 'limited'
+          ? 'limited'
+          : state === 'incompatible'
+            ? 'blocked'
+            : 'unavailable',
+    freshness,
+    contractVersion: 1,
+    observedAt: timestamp,
+    capabilities: {
+      execution: state === 'incompatible' ? unavailable : supported,
+      streaming: state === 'incompatible' ? unavailable : supported,
+      nativeResume: state === 'incompatible' ? unavailable : supported,
+      nativeSessionDiscovery: state === 'limited' ? unavailable : supported,
+      fileRead: supported,
+      search: supported,
+      toolEvents: supported,
+      reasoningControl: supported,
+    },
+  }
+}
+
+function backend(mode, readiness, freshness) {
+  return {
+    mode,
+    readiness,
+    freshness,
+    configurationRevision: 'provider_backend_revision01',
+    configuration: {
+      source: 'process_environment',
+      hasBaseUrl: mode === 'custom_gateway',
+      hasApiKey: false,
+      hasAuthToken: mode === 'custom_gateway',
+      hasOAuthToken: false,
+      bedrockConfigured: mode === 'bedrock',
+      vertexConfigured: mode === 'vertex',
+    },
+    observedAt: timestamp,
   }
 }

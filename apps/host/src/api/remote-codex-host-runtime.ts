@@ -10,6 +10,8 @@ import {
   type ConversationId,
   type MachineId,
   type ProjectId,
+  type ProviderInstallationId,
+  type ProviderInstallationRevision,
 } from '@codetether/protocol'
 
 import {
@@ -18,6 +20,7 @@ import {
   type ProviderApprovalRequest,
   type ProviderApprovalResolution,
   type ProviderConversationResult,
+  type ProviderRuntimeInstallation,
   type ProviderRuntimeContext,
   type ProviderTurnResult,
 } from './agent-runtime.js'
@@ -68,12 +71,16 @@ export interface RemoteCodexSessionOpener {
     readonly conversationId: ConversationId
     readonly projectId: ProjectId
     readonly rootPath: string
+    readonly providerInstallationId?: ProviderInstallationId
+    readonly expectedInstallationRevision?: ProviderInstallationRevision
     readonly providerThreadId?: string
   }): Promise<RemoteCodexRuntimeSession>
 }
 
 export interface RemoteCodexHostRuntimeOptions {
   readonly machineId: MachineId
+  readonly providerInstallationId?: ProviderInstallationId
+  readonly installationRevision?: ProviderInstallationRevision
   readonly opener: RemoteCodexSessionOpener
   readonly now?: () => Date
 }
@@ -84,6 +91,7 @@ export interface RemoteCodexHostRuntimeOptions {
  */
 export class RemoteCodexHostRuntime implements AgentHostRuntime {
   readonly provider = 'codex' as const
+  readonly installation
   readonly #machineId: MachineId
   readonly #opener: RemoteCodexSessionOpener
   readonly #now: () => Date
@@ -99,6 +107,22 @@ export class RemoteCodexHostRuntime implements AgentHostRuntime {
 
   constructor(options: RemoteCodexHostRuntimeOptions) {
     this.#machineId = MachineIdSchema.parse(options.machineId)
+    if (
+      (options.providerInstallationId === undefined) !==
+      (options.installationRevision === undefined)
+    ) {
+      throw new TypeError(
+        'Remote Codex installation identity and revision must be configured together',
+      )
+    }
+    this.installation =
+      options.providerInstallationId === undefined ||
+      options.installationRevision === undefined
+        ? undefined
+        : {
+            installationId: options.providerInstallationId,
+            installationRevision: options.installationRevision,
+          }
     this.#opener = options.opener
     this.#now = options.now ?? (() => new Date())
   }
@@ -142,6 +166,7 @@ export class RemoteCodexHostRuntime implements AgentHostRuntime {
           conversationId: identity.conversationId,
           projectId: identity.projectId,
           rootPath: options.cwd,
+          ...installationInput(this.installation),
         }),
     )
   }
@@ -180,6 +205,7 @@ export class RemoteCodexHostRuntime implements AgentHostRuntime {
           conversationId: identity.conversationId,
           projectId: identity.projectId,
           rootPath: options.cwd,
+          ...installationInput(this.installation),
           providerThreadId: decoded,
         }),
     )
@@ -244,6 +270,23 @@ export class RemoteCodexHostRuntime implements AgentHostRuntime {
     if (!session.closed) return true
     this.#removeStaleSession(providerThreadId, session)
     return false
+  }
+
+  ownsConversationSession(providerThreadId: string): boolean {
+    return (
+      this.#sessions.has(providerThreadId) ||
+      this.#sessionCleanups.has(providerThreadId)
+    )
+  }
+
+  canRetireInstallation(): boolean {
+    return (
+      this.#sessions.size === 0 &&
+      this.#openingConversations.size === 0 &&
+      this.#sessionCleanups.size === 0 &&
+      this.#conversationCleanups.size === 0 &&
+      this.#turnPumps.size === 0
+    )
   }
 
   async close(): Promise<void> {
@@ -557,6 +600,22 @@ function requiredContext(
     conversationId: ConversationIdSchema.parse(context.conversationId),
     projectId: ProjectIdSchema.parse(context.projectId),
   }
+}
+
+function installationInput(
+  installation: ProviderRuntimeInstallation | undefined,
+):
+  | Record<string, never>
+  | {
+      readonly providerInstallationId: ProviderInstallationId
+      readonly expectedInstallationRevision: ProviderInstallationRevision
+    } {
+  return installation === undefined
+    ? {}
+    : {
+        providerInstallationId: installation.installationId,
+        expectedInstallationRevision: installation.installationRevision,
+      }
 }
 
 function requiredTurnContext(

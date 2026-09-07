@@ -51,7 +51,7 @@ test('migration 013 adds Provider execution health transactionally', () => {
 
     const migrated = ConversationStore.open({ databasePath })
     assert.equal(migrated.schemaVersion, currentSchemaVersion)
-    assert.equal(currentSchemaVersion, 15)
+    assert.equal(currentSchemaVersion, 16)
     const machineId = migrated.listMachines()[0].machineId
     assert.deepEqual(migrated.listProviderExecutionHealth(machineId), [])
     migrated.close()

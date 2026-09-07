@@ -9,21 +9,30 @@ import type {
   ProviderSessionDiscovery,
   ProviderSessionDiscoveryPage,
 } from '@codetether/agent-core'
+import type {
+  ProviderInstallationId,
+  ProviderInstallationRevision,
+} from '@codetether/machine-transport'
 
 import { spawnNodeProviderProcess } from './provider-process-guardian.js'
+import type { NodeProviderLifecycleCoordinator } from './provider-lifecycle.js'
 
 export interface RemoteProviderSessionDiscoveryRegistryOptions {
   readonly discoveries?: readonly ProviderSessionDiscovery[]
   /** Node lifecycle environment snapshot; never supplied by Machine input. */
   readonly environment?: NodeJS.ProcessEnv
+  /** Shared exact-installation authority used by production discovery. */
+  readonly providerLifecycle?: NodeProviderLifecycleCoordinator
 }
 
 /** Machine-local, read-only Provider metadata boundary. */
 export class RemoteProviderSessionDiscoveryRegistry {
   readonly #discoveries = new Map<AgentProvider, ProviderSessionDiscovery>()
+  readonly #providerLifecycle?: NodeProviderLifecycleCoordinator
 
   constructor(options: RemoteProviderSessionDiscoveryRegistryOptions = {}) {
     const environment = options.environment ?? process.env
+    this.#providerLifecycle = options.providerLifecycle
     const discoveries = options.discoveries ?? [
       new CodexSessionDiscovery({
         codexHome: nodeCodexHome(environment),
@@ -47,12 +56,14 @@ export class RemoteProviderSessionDiscoveryRegistry {
 
   async discover(input: {
     readonly provider: AgentProvider
+    readonly providerInstallationId: ProviderInstallationId
+    readonly expectedInstallationRevision: ProviderInstallationRevision
     readonly projectRoot: string
     readonly cursor?: string
     readonly limit: number
     readonly signal?: AbortSignal
   }): Promise<ProviderSessionDiscoveryPage> {
-    const discovery = this.#discoveries.get(input.provider)
+    const discovery = await this.#discoveryFor(input)
     if (discovery === undefined) return unsupported(input.provider)
     return await discovery.discover({
       projectRoot: input.projectRoot,
@@ -64,12 +75,14 @@ export class RemoteProviderSessionDiscoveryRegistry {
 
   async validateCandidate(input: {
     readonly provider: AgentProvider
+    readonly providerInstallationId: ProviderInstallationId
+    readonly expectedInstallationRevision: ProviderInstallationRevision
     readonly projectRoot: string
     readonly nativeSessionId: string
     readonly revision: string
     readonly signal?: AbortSignal
   }): Promise<NativeProviderSessionCandidate | undefined> {
-    const discovery = this.#discoveries.get(input.provider)
+    const discovery = await this.#discoveryFor(input)
     if (discovery === undefined) return undefined
     return await discovery.validateCandidate({
       projectRoot: input.projectRoot,
@@ -77,6 +90,43 @@ export class RemoteProviderSessionDiscoveryRegistry {
       revision: input.revision,
       ...(input.signal === undefined ? {} : { signal: input.signal }),
     })
+  }
+
+  async #discoveryFor(input: {
+    readonly provider: AgentProvider
+    readonly providerInstallationId: ProviderInstallationId
+    readonly expectedInstallationRevision: ProviderInstallationRevision
+  }): Promise<ProviderSessionDiscovery | undefined> {
+    if (this.#providerLifecycle === undefined) {
+      return this.#discoveries.get(input.provider)
+    }
+    const selected = await this.#providerLifecycle.resolveSelected(
+      input.provider,
+      input.providerInstallationId,
+      input.expectedInstallationRevision,
+    )
+    if (
+      selected.compatibility.capabilities.nativeSessionDiscovery.effective !==
+      true
+    ) {
+      return undefined
+    }
+    return selected.provider === 'codex'
+      ? new CodexSessionDiscovery({
+          executable: selected.executable,
+          codexHome: nodeCodexHome(selected.environment),
+          environment: selected.environment,
+          providerVersion: selected.version,
+          processFactory: (specification) =>
+            spawnNodeProviderProcess({
+              provider: 'codex',
+              ...specification,
+            }),
+        })
+      : new ClaudeSessionDiscovery({
+          environment: selected.environment,
+          providerVersion: selected.version,
+        })
   }
 }
 

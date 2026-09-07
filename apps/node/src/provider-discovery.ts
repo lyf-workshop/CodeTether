@@ -17,6 +17,7 @@ import {
 } from '@codetether/machine-transport'
 
 import { NodeClaudeInstallation } from './claude-installation.js'
+import type { NodeProviderLifecycleCoordinator } from './provider-lifecycle.js'
 
 const NO_REMOTE_EXECUTION_CAPABILITIES: RemoteProviderCapabilities =
   Object.freeze({
@@ -97,6 +98,8 @@ export interface RemoteProviderDetectorOptions {
   readonly claudeExecutionProbe?: RemoteClaudeExecutionProbe
   /** Node-private lifecycle selection; never populated from Machine input. */
   readonly claudeInstallation?: NodeClaudeInstallation
+  /** Shared production lifecycle authority; omitted by legacy fixture probes. */
+  readonly providerLifecycle?: NodeProviderLifecycleCoordinator
 }
 
 export interface RemoteClaudeExecutionProbeResult {
@@ -170,6 +173,7 @@ export class RemoteProviderDetector {
   readonly #claudeExecutionProbe: RemoteClaudeExecutionProbe
   readonly #claudeInstallation: NodeClaudeInstallation
   readonly #usesDefaultProbes: boolean
+  readonly #providerLifecycle?: NodeProviderLifecycleCoordinator
   readonly #lifecycleAbort = new AbortController()
   readonly #children = new Set<ChildProcess>()
   #inFlight?: Promise<RemoteProviderDiscovery>
@@ -180,6 +184,7 @@ export class RemoteProviderDetector {
   constructor(options: RemoteProviderDetectorOptions = {}) {
     const usesDefaultProbes = options.probes === undefined
     this.#usesDefaultProbes = usesDefaultProbes
+    this.#providerLifecycle = options.providerLifecycle
     this.#probes = validateProbeDefinitions(options.probes ?? DEFAULT_PROBES)
     this.#environment = restrictedDetectionEnvironment(
       options.environment ?? process.env,
@@ -265,6 +270,9 @@ export class RemoteProviderDetector {
   }
 
   async #discoverOnce(): Promise<RemoteProviderDiscovery> {
+    if (this.#providerLifecycle !== undefined) {
+      return await this.#providerLifecycle.describe()
+    }
     const providers = await Promise.all(
       this.#probes.map(async (probe) => await this.#probe(probe)),
     )

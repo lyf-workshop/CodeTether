@@ -28,6 +28,12 @@ const SUPPORTED_CLAUDE_STORE_WRITERS = new Set([
   '2.1.263',
 ])
 
+export function isClaudeSessionDiscoveryVersionSupported(
+  version: string,
+): boolean {
+  return SUPPORTED_CLAUDE_STORE_WRITERS.has(version)
+}
+
 const MAXIMUM_PAGE_SIZE = 100
 const DEFAULT_MAXIMUM_PROJECT_DIRECTORIES = 4_096
 const DEFAULT_MAXIMUM_SESSION_FILES = 5_000

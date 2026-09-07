@@ -95,6 +95,59 @@ export interface ClaudeCodeTurnProcessHandle {
   close(): Promise<void>
 }
 
+/**
+ * Exact zero-inference CLI surface used by the frozen Claude runtime.
+ *
+ * Compatibility probing imports this contract so lifecycle observation and
+ * execution cannot silently drift to checking different flags.  The tool
+ * allow-list flags are required execution safety controls, not optional tool
+ * capability probes.
+ */
+const CLAUDE_ARGUMENT = Object.freeze({
+  print: '--print',
+  inputFormat: '--input-format',
+  outputFormat: '--output-format',
+  verbose: '--verbose',
+  includePartialMessages: '--include-partial-messages',
+  resume: '--resume',
+  sessionId: '--session-id',
+  restricted: '--restricted',
+  strictMcpConfig: '--strict-mcp-config',
+  tools: '--tools',
+  allowedTools: '--allowedTools',
+  permissionMode: '--permission-mode',
+  effort: '--effort',
+  noChrome: '--no-chrome',
+  disableSlashCommands: '--disable-slash-commands',
+})
+
+export const CLAUDE_CODE_RUNTIME_CLI_CONTRACT = Object.freeze({
+  executionFlags: Object.freeze([
+    CLAUDE_ARGUMENT.print,
+    CLAUDE_ARGUMENT.sessionId,
+    CLAUDE_ARGUMENT.restricted,
+    CLAUDE_ARGUMENT.strictMcpConfig,
+    CLAUDE_ARGUMENT.tools,
+    CLAUDE_ARGUMENT.allowedTools,
+    CLAUDE_ARGUMENT.permissionMode,
+    CLAUDE_ARGUMENT.noChrome,
+    CLAUDE_ARGUMENT.disableSlashCommands,
+  ] as const),
+  streamingFlags: Object.freeze([
+    CLAUDE_ARGUMENT.inputFormat,
+    CLAUDE_ARGUMENT.outputFormat,
+    CLAUDE_ARGUMENT.verbose,
+    CLAUDE_ARGUMENT.includePartialMessages,
+  ] as const),
+  nativeResumeFlags: Object.freeze([CLAUDE_ARGUMENT.resume] as const),
+  reasoningControlFlags: Object.freeze([CLAUDE_ARGUMENT.effort] as const),
+  inputFormat: 'stream-json',
+  outputFormat: 'stream-json',
+  permissionMode: 'dontAsk',
+  tools: 'Read,Glob,Grep',
+  effortLevels: Object.freeze([...CLAUDE_CODE_EFFORT_LEVELS]),
+})
+
 export function buildClaudeCodeArguments(options: {
   readonly sessionId: string
   readonly resume: boolean
@@ -103,26 +156,28 @@ export function buildClaudeCodeArguments(options: {
   validateSessionId(options.sessionId)
   validateEffort(options.effort)
   return [
-    '--print',
-    '--input-format',
-    'stream-json',
-    '--output-format',
-    'stream-json',
-    '--verbose',
-    '--include-partial-messages',
-    options.resume ? '--resume' : '--session-id',
+    CLAUDE_ARGUMENT.print,
+    CLAUDE_ARGUMENT.inputFormat,
+    CLAUDE_CODE_RUNTIME_CLI_CONTRACT.inputFormat,
+    CLAUDE_ARGUMENT.outputFormat,
+    CLAUDE_CODE_RUNTIME_CLI_CONTRACT.outputFormat,
+    CLAUDE_ARGUMENT.verbose,
+    CLAUDE_ARGUMENT.includePartialMessages,
+    options.resume ? CLAUDE_ARGUMENT.resume : CLAUDE_ARGUMENT.sessionId,
     options.sessionId,
-    '--restricted',
-    '--strict-mcp-config',
-    '--tools',
-    'Read,Glob,Grep',
-    '--allowedTools',
-    'Read,Glob,Grep',
-    '--permission-mode',
-    'dontAsk',
-    ...(options.effort === undefined ? [] : ['--effort', options.effort]),
-    '--no-chrome',
-    '--disable-slash-commands',
+    CLAUDE_ARGUMENT.restricted,
+    CLAUDE_ARGUMENT.strictMcpConfig,
+    CLAUDE_ARGUMENT.tools,
+    CLAUDE_CODE_RUNTIME_CLI_CONTRACT.tools,
+    CLAUDE_ARGUMENT.allowedTools,
+    CLAUDE_CODE_RUNTIME_CLI_CONTRACT.tools,
+    CLAUDE_ARGUMENT.permissionMode,
+    CLAUDE_CODE_RUNTIME_CLI_CONTRACT.permissionMode,
+    ...(options.effort === undefined
+      ? []
+      : [CLAUDE_ARGUMENT.effort, options.effort]),
+    CLAUDE_ARGUMENT.noChrome,
+    CLAUDE_ARGUMENT.disableSlashCommands,
   ]
 }
 

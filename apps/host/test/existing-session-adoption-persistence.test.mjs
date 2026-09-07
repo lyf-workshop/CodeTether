@@ -59,8 +59,8 @@ test('migration 015 backfills CodeTether origin and materialized native-session 
   const migrated = ConversationStore.open({
     databasePath: fixture.databasePath,
   })
-  assert.equal(currentSchemaVersion, 15)
-  assert.equal(migrated.schemaVersion, 15)
+  assert.equal(currentSchemaVersion, 16)
+  assert.equal(migrated.schemaVersion, 16)
   assert.deepEqual(
     pickSessionState(migrated.getConversation('conv_phase8a_unmaterialized')),
     { origin: 'codetether', providerSessionMaterialized: false },

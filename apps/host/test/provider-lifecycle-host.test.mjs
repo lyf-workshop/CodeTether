@@ -88,6 +88,151 @@ test('Host selection ignores candidate ordering and keeps runtime compatibility 
   )
 })
 
+test('Doctor composes exact selected lifecycle truth without paths or backend secrets', async (t) => {
+  const fixture = await createFixture(t)
+  const global = await fixture.service.getDoctor()
+  assert.equal(global.doctor.overall, 'needs_attention')
+  assert.equal(global.doctor.project, undefined)
+  const response = await fixture.service.getDoctor(fixture.projectId)
+  const codex = response.doctor.providers.find(
+    ({ provider }) => provider === 'codex',
+  )
+  assert.ok(codex)
+  assert.equal(response.doctor.overall, 'ready')
+  assert.equal(codex.state, 'ready')
+  assert.equal(codex.installed, true)
+  assert.equal(codex.selected, true)
+  assert.equal(codex.alternateInstallations, 1)
+  assert.equal(codex.launcherKind, 'symlink')
+  assert.equal(codex.installMethod, 'npm')
+  assert.equal(codex.compatibility, 'verified')
+  assert.equal(codex.runtimeReadiness, 'ready')
+  assert.equal(codex.backend.mode, 'custom_gateway')
+  assert.equal(codex.backend.readiness, 'ready')
+  assert.equal(codex.sessionDiscovery, 'supported')
+  const serialized = JSON.stringify(response)
+  assert.equal(serialized.includes(fixture.directory), false)
+  assert.equal(serialized.includes('hasApiKey'), false)
+  assert.equal(serialized.includes('gateway.example.test'), false)
+})
+
+test('Doctor keeps runtime compatibility separate from unavailable backend readiness', async (t) => {
+  const fixture = await createFixture(t, { backendReadiness: 'unavailable' })
+  const response = await fixture.service.getDoctor(fixture.projectId)
+  const codex = response.doctor.providers.find(
+    ({ provider }) => provider === 'codex',
+  )
+  assert.ok(codex)
+  assert.equal(codex.compatibility, 'verified')
+  assert.equal(codex.runtimeReadiness, 'ready')
+  assert.equal(codex.backend.state, 'unavailable')
+  assert.equal(codex.backend.readiness, 'unavailable')
+  assert.equal(codex.state, 'unavailable')
+  assert.equal(response.doctor.overall, 'needs_attention')
+})
+
+test('Doctor does not report a Provider Ready while current execution health is fatally unavailable', async (t) => {
+  const failure = canonicalFailure('provider_crashed', observedAt)
+  const fixture = await createFixture(t, {
+    executionHealth: {
+      state: 'degraded',
+      freshness: 'current',
+      observedAt,
+      failure,
+    },
+  })
+  const response = await fixture.service.getDoctor(fixture.projectId)
+  const codex = response.doctor.providers.find(
+    ({ provider }) => provider === 'codex',
+  )
+  assert.ok(codex)
+  assert.equal(codex.compatibility, 'verified')
+  assert.equal(codex.runtimeReadiness, 'ready')
+  assert.equal(codex.backend.state, 'ready')
+  assert.equal(codex.executionHealth.state, 'degraded')
+  assert.equal(codex.executionHealth.freshness, 'current')
+  assert.equal(codex.failure.reason, 'provider_crashed')
+  assert.equal(codex.state, 'unavailable')
+  assert.equal(response.doctor.overall, 'needs_attention')
+})
+
+test('Doctor retains last-known Provider execution failures as advisory history', async (t) => {
+  const failure = canonicalFailure('provider_crashed', observedAt)
+  const fixture = await createFixture(t, {
+    executionHealth: {
+      state: 'degraded',
+      freshness: 'last_known',
+      observedAt,
+      failure,
+    },
+  })
+  const response = await fixture.service.getDoctor(fixture.projectId)
+  const codex = response.doctor.providers.find(
+    ({ provider }) => provider === 'codex',
+  )
+  assert.ok(codex)
+  assert.equal(codex.executionHealth.freshness, 'last_known')
+  assert.equal(codex.failure.reason, 'provider_crashed')
+  assert.equal(codex.state, 'ready')
+  assert.equal(response.doctor.overall, 'ready')
+})
+
+test('Doctor reports a current nonfatal Provider health degradation without changing compatibility or backend truth', async (t) => {
+  const failure = canonicalFailure('rate_limited', observedAt)
+  const fixture = await createFixture(t, {
+    executionHealth: {
+      state: 'degraded',
+      freshness: 'current',
+      observedAt,
+      failure,
+    },
+  })
+  const response = await fixture.service.getDoctor(fixture.projectId)
+  const codex = response.doctor.providers.find(
+    ({ provider }) => provider === 'codex',
+  )
+  assert.ok(codex)
+  assert.equal(codex.compatibility, 'verified')
+  assert.equal(codex.runtimeReadiness, 'ready')
+  assert.equal(codex.backend.state, 'ready')
+  assert.equal(codex.executionHealth.state, 'degraded')
+  assert.equal(codex.failure.reason, 'rate_limited')
+  assert.equal(codex.state, 'limited')
+  assert.equal(response.doctor.overall, 'limited')
+})
+
+test('Doctor requires actual durable local Host state before reporting Ready', async (t) => {
+  const fixture = await createNonDurableDoctorFixture(t)
+  const response = await fixture.service.getDoctor(fixture.projectId)
+  const codex = response.doctor.providers.find(
+    ({ provider }) => provider === 'codex',
+  )
+  assert.ok(codex)
+  assert.equal(codex.state, 'ready')
+  assert.equal(response.doctor.project.state, 'ready')
+  assert.equal(response.doctor.thisComputer.state, 'unavailable')
+  assert.equal(response.doctor.overall, 'unavailable')
+})
+
+test('Doctor overall readiness requires a Provider on the same ready Project Machine', async (t) => {
+  const fixture = await createRemoteUninitializedFixture(t)
+  const online = await fixture.service.getDoctor(fixture.projectId, true)
+  assert.equal(online.doctor.overall, 'limited')
+  assert.equal(online.doctor.remoteComputers[0].state, 'limited')
+
+  fixture.coordinator.online = false
+  const offline = await fixture.service.getDoctor(fixture.projectId)
+  assert.equal(offline.doctor.remoteComputers[0].state, 'offline')
+  const staleRemoteCodex = offline.doctor.remoteComputers[0].providers.find(
+    ({ provider }) => provider === 'codex',
+  )
+  assert.ok(staleRemoteCodex)
+  assert.equal(staleRemoteCodex.backend.freshness, 'last_known')
+  assert.equal(staleRemoteCodex.backend.readiness, 'ready')
+  assert.equal(staleRemoteCodex.backend.state, 'unknown')
+  assert.equal(offline.doctor.overall, 'unknown')
+})
+
 test('Host rejects lifecycle observations for a stale runtime revision', async () => {
   const runtime = new TrackingRuntime(installationAId, revisionA2)
   const current = publicLifecycle({ revision: revisionA2 })
@@ -1619,6 +1764,12 @@ async function createFixture(t, options = {}) {
     selectedUnavailable: options.selectedUnavailable,
   })
   const runtime = new TrackingRuntime(installationAId, revisionA1)
+  if (options.executionHealth !== undefined) {
+    runtime.descriptor = {
+      ...runtime.descriptor,
+      executionHealth: options.executionHealth,
+    }
+  }
   fixture.runtime = runtime
 
   if (options.seedLegacyConversation === true) {
@@ -1730,6 +1881,31 @@ async function createFixture(t, options = {}) {
     await rm(directory, { recursive: true, force: true, maxRetries: 5 })
   })
   return fixture
+}
+
+async function createNonDurableDoctorFixture(t) {
+  const directory = await mkdtemp(
+    join(tmpdir(), 'codetether-phase8c-doctor-nondurable-'),
+  )
+  const workspace = join(directory, 'workspace')
+  await mkdir(workspace, { recursive: true })
+  const runtime = new TrackingRuntime(installationAId, revisionA1)
+  const service = new HostService({
+    runtime,
+    providerLifecycles: [publicLifecycle({ revision: revisionA1 })],
+    workspacePolicy: await WorkspacePolicy.create([workspace]),
+    publisher: new HostEventPublisher({ epoch: newEpoch() }),
+    hostVersion: 'phase8c-doctor-nondurable-test',
+    now: () => new Date(observedAt),
+  })
+  await service.registerInitialProjectRoots([workspace])
+  const project = (await service.listProjects()).projects[0]
+  assert.ok(project)
+  t.after(async () => {
+    await service.close().catch(() => undefined)
+    await rm(directory, { recursive: true, force: true, maxRetries: 5 })
+  })
+  return { service, projectId: project.projectId }
 }
 
 async function createRemoteUninitializedFixture(t) {

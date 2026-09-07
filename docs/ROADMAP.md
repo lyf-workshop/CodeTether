@@ -1238,7 +1238,7 @@ Exit gate:
 
 ## Phase 8B — Provider Lifecycle & Compatibility
 
-**Status:** current approved implementation scope; not accepted, frozen, or declared ready.
+**Status:** accepted and frozen at `89808b2f2ffaddf2ab26552671176a3e5487483d`.
 
 **Goal:** identify exact Machine-local Provider installations, detect external installation changes, re-evaluate bounded capability contracts, and keep runtime compatibility separate from inference-backend readiness without weakening the adapter, Machine, or Conversation boundaries.
 
@@ -1260,21 +1260,48 @@ Exit gate:
 - Runtime compatibility, optional session discovery/resume compatibility, and backend readiness remain independent; incompatible or missing installations preserve Projects, history, Search, organization, Machine trust, and Phase 8A native bindings without deferred Prompt execution or replay.
 - REAL current Codex and Claude observations/executions, current custom-gateway readiness, multiple-Claude-installation handling, Direct/Relay and native-resume regressions, deterministic lifecycle matrices, UI/accessibility, package gates, privacy, cleanup, and a clean worktree pass.
 
-## Phase 8C — Provider Backend / Profile Management
+### Acceptance boundary
 
-**Status:** planned; unimplemented and unauthorized during Phase 8B.
+- Owner review accepted all 75 criteria, the final lifecycle evidence, exact current Codex and Claude observations, custom-gateway separation, multiple-installation consistency, Direct/Relay and native-resume regressions, bounded probes, package gates, cleanup, and preservation of Owner state. The implementation and evidence are frozen at `89808b2f2ffaddf2ab26552671176a3e5487483d`.
 
-**Goal:** model configured Provider backends/profiles and explicit switching as a separate product concern.
+## Phase 8C — Zero-Config Onboarding & Doctor
 
-## Phase 8D — Zero-Configuration Onboarding / Doctor
+**Status:** current approved implementation scope; not accepted, frozen, or declared ready.
 
-**Status:** planned; unimplemented and unauthorized during Phase 8B.
+**Goal:** make the accepted local and remote CodeTether foundation usable and diagnosable without requiring ordinary users to understand Host, Node, Relay, TLS, ProjectLocation, ProviderInstallation, or canonical diagnostic internals.
 
-**Goal:** broaden installation, project, Provider, and connectivity onboarding after the narrow existing-session flow is proven.
+### In scope
+
+- A small durable, resumable onboarding state machine for Welcome, computer and Provider checks, Project setup, optional previous-conversation discovery/adoption, optional remote setup, and Ready. Existing users retain all state and bypass destructive first-run setup.
+- Progressive-disclosure Provider presentation that consumes Phase 8B's exact selected installation, compatibility, runtime, backend mode/readiness, and freshness. Provider-specific guidance is allowed; automatic Provider installation, update, downgrade, selection changes, backend/profile switching, and default model inference are not.
+- Existing Project/ProjectLocation creation or matching, canonical folder validation, and Phase 8A discovery/adoption integration. Discovery is optional, import is explicit and idempotent, and neither action starts inference or resumes a Provider.
+- A guided Add Computer flow over the frozen one-time-code, explicit-confirmation, pinned-identity pairing protocol; remote Provider observation and exact remote ProjectLocation setup; and ordinary Internet-access wording over Direct-first/Relay-fallback transport. No public Node port, port forwarding, generic remote file/command API, or weaker trust path is added.
+- A permanent Doctor that composes existing Desktop/Host, Machine, Provider/runtime, backend, ProjectLocation, session-discovery, trust, and connectivity facts into bounded component and overall readiness. Current versus last-known state, stale observations, canonical diagnostics, safe advanced details, explicit `Check again`, and narrow user-confirmed repair guidance remain visible.
+- Windows installed Desktop, returning-user, offline, local/remote/Relay, accessibility, performance, idempotency, privacy, resource, and frozen-regression validation with truthful evidence.
+
+### Out of scope
+
+- Provider backend/profile/account management, ccswitch-style switching, credential management, quota-driven or automatic gateway/account failover, automatic Provider mutation, a broad package manager, or a test Prompt required for setup.
+- New Machine trust, public Node exposure, self-hosted Relay wizard, cloud account/control plane, generic command/filesystem APIs, trust reset as routine repair, automatic re-pairing, or Prompt retry/replay.
+- Phase 8D cross-platform distribution, macOS/Linux Desktop releases, wider Node packaging, signing/notarization/update distribution, Mobile, Remote Terminal, Remote Files, new Providers, or capability expansion.
+
+### Exit gate
+
+- A fresh supported Windows user with at least one ready Provider can complete installed local setup, choose an isolated Project, optionally discover/adopt a test-owned native session without inference, reach Ready, restart into returning-user state, and reopen Setup/Doctor without terminal knowledge or state loss.
+- Custom-gateway, first-party-auth, backend-offline, Provider-missing/incompatible/limited/new-version, no/one/two-Provider, Project-missing, offline/stale, Direct-only, Relay-only, and session-discovery-unavailable states remain truthful and keep runtime/backend/trust/transport layers distinct.
+- Guided remote setup reuses the accepted cryptographic pairing and outbound Relay architecture, requires no port forwarding or manual TLS/Relay protocol setup, remains idempotent, and renders remote Provider and exact ProjectLocation readiness without treating presence as execution readiness.
+- Doctor performs no inference on open, uses bounded/coalesced factual refreshes, offers only targeted safe actions, never parses raw Provider stderr, never auto-repairs trust/credentials/installations, and never queues, retries, or replays Prompt work.
+- Required REAL installed Desktop/local/remote/Relay observations, deterministic state/accessibility/stress/privacy suites, Direct/Relay and adopted-session regressions, package gates, cleanup, production-Relay preservation, and a clean worktree pass. Unobserved mandatory REAL installed setup/Doctor evidence yields `NOT READY`.
+
+## Phase 8D — Cross-Platform Distribution
+
+**Status:** planned; unimplemented and unauthorized during Phase 8C.
+
+**Goal:** distribute the established Desktop/Node and onboarding architecture across the supported Windows, macOS, and Linux matrix with platform-appropriate packaging, signing, credential storage, background/tray behavior, sleep/wake handling, path semantics, and update delivery.
 
 ## Phase 9 — Mobile Companion
 
-**Status:** planned; unimplemented and unauthorized during Phase 8B.
+**Status:** planned; unimplemented and unauthorized during Phase 8C.
 
 **Goal:** add focused mobile monitoring, approval, reply, and resume flows on the established Internet foundation.
 
@@ -1289,6 +1316,7 @@ Exit gate: core mobile tasks are fast, legible, safe, resilient, and validated o
 
 ## Deferred Beyond This Roadmap
 
+- Advanced Provider backend/profile/account management, including ccswitch-like switching, multiple gateways/accounts, credential profiles, quota-driven routing, and automatic backend failover.
 - Team collaboration.
 - Enterprise administration and policy.
 - Cross-agent conversation handoff.

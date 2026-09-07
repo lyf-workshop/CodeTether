@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { Outlet, useRouterState } from '@tanstack/react-router'
+import { TooltipProvider } from '@codetether/ui'
 
 import {
   ConversationIdSchema,
@@ -30,6 +31,7 @@ const pageTitles = {
   '/': '首页',
   '/activity': '活动',
   '/agents': '智能体',
+  '/doctor': 'CodeTether 检查',
   '/inbox': '收件箱',
   '/machines': '机器',
   '/projects': '项目',
@@ -37,6 +39,40 @@ const pageTitles = {
 } as const
 
 export function RootLayout() {
+  const currentPath = useRouterState({
+    select: (state) => state.location.pathname,
+  })
+
+  if (currentPath === '/') {
+    return (
+      <TooltipProvider>
+        <div className="min-h-dvh overflow-y-auto bg-background text-text-primary">
+          <Outlet />
+        </div>
+      </TooltipProvider>
+    )
+  }
+
+  if (currentPath === '/setup') {
+    return (
+      <TooltipProvider>
+        <div className="min-h-dvh overflow-y-auto bg-background text-text-primary">
+          <a
+            href="#setup-main"
+            className="fixed top-2 left-2 z-50 -translate-y-20 rounded-sm bg-primary-action px-3 py-2 text-sm font-medium text-primary-foreground transition-transform focus-visible:translate-y-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            跳到设置内容
+          </a>
+          <Outlet />
+        </div>
+      </TooltipProvider>
+    )
+  }
+
+  return <StandardRootLayout currentPath={currentPath} />
+}
+
+function StandardRootLayout({ currentPath }: { readonly currentPath: string }) {
   const runtime = useHostRuntime()
   const connectionState = useHostConnectionState()
   const attentionQuery = useQuery({
@@ -47,9 +83,6 @@ export function RootLayout() {
     connectionState === 'unavailable' || connectionState === 'incompatible'
       ? 0
       : (attentionQuery.data?.summary.totalOpen ?? 0)
-  const currentPath = useRouterState({
-    select: (state) => state.location.pathname,
-  })
   const agentProviders = providerPresentations(
     connectionState === 'connected' ? runtime.bootstrap : undefined,
   )

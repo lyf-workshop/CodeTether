@@ -7,7 +7,8 @@ export function downgradeMachineFoundationToVersionSeven(databasePath) {
   database.exec('PRAGMA foreign_keys = OFF')
   database.exec(`
     DELETE FROM schema_migrations
-    WHERE version IN (8, 9, 10, 11, 12, 13, 14, 15, 16);
+    WHERE version IN (8, 9, 10, 11, 12, 13, 14, 15, 16, 17);
+    DROP TABLE onboarding_progress;
     DROP TABLE conversation_provider_installation_bindings;
     DROP TABLE provider_backend_observations;
     DROP TABLE provider_installation_compatibility;

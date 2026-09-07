@@ -22,6 +22,8 @@ import {
   CreateConversationResponseSchema,
   CreateProjectRequestSchema,
   CreateProjectResponseSchema,
+  CreateRemoteProjectRequestSchema,
+  CreateRemoteProjectResponseSchema,
   DisconnectMachineRelayRequestSchema,
   DisconnectMachineRelayResponseSchema,
   DiscoverProviderSessionsQuerySchema,
@@ -37,6 +39,9 @@ import {
   DeleteProjectRequestSchema,
   DeleteProjectResponseSchema,
   GetMachineResponseSchema,
+  GetDoctorQuerySchema,
+  GetDoctorResponseSchema,
+  GetOnboardingResponseSchema,
   GetProjectResponseSchema,
   GetConversationResponseSchema,
   HostSnapshotSchema,
@@ -78,6 +83,8 @@ import {
   UnarchiveConversationResponseSchema,
   UnpinConversationRequestSchema,
   UnpinConversationResponseSchema,
+  UpdateOnboardingRequestSchema,
+  UpdateOnboardingResponseSchema,
   type ActionId,
   type ApprovalId,
   type AttentionId,
@@ -101,6 +108,8 @@ import {
   type CreateConversationResponse,
   type CreateProjectRequest,
   type CreateProjectResponse,
+  type CreateRemoteProjectRequest,
+  type CreateRemoteProjectResponse,
   type DisconnectMachineRelayRequest,
   type DisconnectMachineRelayResponse,
   type DiscoverProviderSessionsQuery,
@@ -116,6 +125,9 @@ import {
   type DeleteProjectRequest,
   type DeleteProjectResponse,
   type GetMachineResponse,
+  type GetDoctorQuery,
+  type GetDoctorResponse,
+  type GetOnboardingResponse,
   type GetProjectResponse,
   type GetConversationResponse,
   type HostSnapshot,
@@ -155,6 +167,8 @@ import {
   type UnarchiveConversationResponse,
   type UnpinConversationRequest,
   type UnpinConversationResponse,
+  type UpdateOnboardingRequest,
+  type UpdateOnboardingResponse,
   protocolVersion,
 } from '@codetether/protocol'
 
@@ -214,6 +228,12 @@ export interface DiscoverProviderSessionsOptions extends RequestOptions {
   readonly rescan?: boolean
 }
 
+export interface GetDoctorOptions extends RequestOptions {
+  readonly projectId?: GetDoctorQuery['projectId']
+  /** Explicit bounded factual check; ordinary Doctor reads leave this false. */
+  readonly check?: boolean
+}
+
 export class CodeTetherClient {
   readonly #baseUrl: string
   readonly #fetch: typeof globalThis.fetch
@@ -257,6 +277,54 @@ export class CodeTetherClient {
       method: 'GET',
       signal: options.signal,
     })
+  }
+
+  async getOnboarding(
+    options: RequestOptions = {},
+  ): Promise<GetOnboardingResponse> {
+    return await this.#request(
+      '/api/v1/onboarding',
+      GetOnboardingResponseSchema,
+      { method: 'GET', signal: options.signal },
+    )
+  }
+
+  async updateOnboarding(
+    input: UpdateOnboardingRequest,
+    options: RequestOptions = {},
+  ): Promise<UpdateOnboardingResponse> {
+    const request = parseProtocol(
+      UpdateOnboardingRequestSchema,
+      input,
+      'update-onboarding request',
+    )
+    return await this.#request(
+      '/api/v1/onboarding',
+      UpdateOnboardingResponseSchema,
+      { ...jsonRequest(request, options.signal), method: 'PATCH' },
+      request.actionId,
+    )
+  }
+
+  async getDoctor(options: GetDoctorOptions = {}): Promise<GetDoctorResponse> {
+    const query = parseProtocol(
+      GetDoctorQuerySchema,
+      {
+        ...(options.projectId === undefined
+          ? {}
+          : { projectId: options.projectId }),
+        ...(options.check === true ? { check: 'true' as const } : {}),
+      },
+      'get-doctor query',
+    )
+    const search = new URLSearchParams()
+    if (query.projectId !== undefined) search.set('projectId', query.projectId)
+    if (query.check !== undefined) search.set('check', query.check)
+    return await this.#request(
+      `/api/v1/doctor${search.size === 0 ? '' : `?${search.toString()}`}`,
+      GetDoctorResponseSchema,
+      { method: 'GET', signal: options.signal },
+    )
   }
 
   async listMachines(
@@ -822,6 +890,38 @@ export class CodeTetherClient {
       jsonRequest(request, options.signal),
       request.actionId,
     )
+  }
+
+  async createRemoteProject(
+    machineId: MachineId,
+    input: CreateRemoteProjectRequest,
+    options: RequestOptions = {},
+  ): Promise<CreateRemoteProjectResponse> {
+    const machine = parseProtocol(
+      MachineIdSchema,
+      machineId,
+      'create-remote-project machine id',
+    )
+    const request = parseProtocol(
+      CreateRemoteProjectRequestSchema,
+      input,
+      'create-remote-project request',
+    )
+    const response = await this.#request(
+      `/api/v1/machines/${encodeURIComponent(machine)}/projects`,
+      CreateRemoteProjectResponseSchema,
+      jsonRequest(request, options.signal),
+      request.actionId,
+    )
+    assertProtocolIdentity(
+      response.data.location.machineId === machine,
+      'Create remote Project response does not match the requested Machine',
+    )
+    assertProtocolIdentity(
+      response.data.location.projectId === response.data.project.projectId,
+      'Create remote Project response contains mismatched Project identity',
+    )
+    return response
   }
 
   async deleteProject(

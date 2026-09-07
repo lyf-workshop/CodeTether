@@ -742,6 +742,223 @@ test('remote pairing stages private trust before publication and unpair rolls ba
   }
 })
 
+test('remote-only Project creation validates one exact trusted Machine path and stays idempotent', async () => {
+  const directory = await mkdtemp(
+    join(tmpdir(), 'codetether-remote-project-api-'),
+  )
+  const workspace = join(directory, 'unused-local-workspace')
+  const databasePath = join(directory, 'data', 'codetether.sqlite3')
+  await mkdir(workspace, { recursive: true })
+  const runtime = new TrackingRuntime('codex')
+  const coordinator = new FakeRemoteMachineCoordinator()
+  let service
+  let server
+  try {
+    service = await createService({
+      workspace,
+      databasePath,
+      runtimes: [runtime],
+      maxConversations: 1,
+      remoteMachineCoordinator: coordinator,
+      registerRoot: false,
+    })
+    server = new LocalHttpServer({
+      service,
+      allowedOrigins: ['http://localhost:5173'],
+      heartbeatMs: 60_000,
+    })
+    const baseUrl = await server.start(0)
+    assert.deepEqual((await service.listProjects()).projects, [])
+
+    const begun = await requestJson(baseUrl, '/api/v1/machine-pairings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        actionId: 'act_remoteproject_pair01',
+        address: { host: '192.0.2.10', port: 43_217 },
+        pairingCode: '482 731',
+      }),
+    })
+    assert.equal(begun.status, 202)
+    const confirmed = await requestJson(
+      baseUrl,
+      `/api/v1/machine-pairings/${coordinator.attemptId}/confirm`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ actionId: 'act_remoteproject_confirm01' }),
+      },
+    )
+    assert.equal(confirmed.status, 200)
+    const connected = await requestJson(
+      baseUrl,
+      `/api/v1/machines/${coordinator.machineId}/connection/address`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          actionId: 'act_remoteproject_online01',
+          address: { host: '192.0.2.11', port: 43_217 },
+        }),
+      },
+    )
+    assert.equal(connected.status, 200)
+
+    coordinator.validationCanonicalPath = '/srv/projects/remote-only'
+    const request = {
+      actionId: 'act_remoteproject_create01',
+      name: 'Remote only',
+      path: '/srv/project-links/remote-only',
+    }
+    const created = await requestJson(
+      baseUrl,
+      `/api/v1/machines/${coordinator.machineId}/projects`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(request),
+      },
+    )
+    assert.equal(created.status, 201)
+    assert.equal(created.body.data.created, true)
+    assert.equal(created.body.data.project.locations.length, 1)
+    assert.equal(created.body.data.location.machineId, coordinator.machineId)
+    assert.equal(
+      created.body.data.location.rootPath,
+      coordinator.validationCanonicalPath,
+    )
+    assert.equal(coordinator.validationCalls.length, 1)
+    assert.equal(coordinator.validationCalls[0].path, request.path)
+
+    const replayed = await requestJson(
+      baseUrl,
+      `/api/v1/machines/${coordinator.machineId}/projects`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(request),
+      },
+    )
+    assert.equal(replayed.status, 201)
+    assert.equal(
+      replayed.body.data.project.projectId,
+      created.body.data.project.projectId,
+    )
+    assert.equal(coordinator.validationCalls.length, 1)
+
+    const reused = await requestJson(
+      baseUrl,
+      `/api/v1/machines/${coordinator.machineId}/projects`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...request,
+          actionId: 'act_remoteproject_create02',
+          name: 'Must not rename existing Project',
+          path: '/srv/another-link/remote-only',
+        }),
+      },
+    )
+    assert.equal(reused.status, 200)
+    assert.equal(reused.body.data.created, false)
+    assert.equal(
+      reused.body.data.project.projectId,
+      created.body.data.project.projectId,
+    )
+    assert.equal(reused.body.data.project.name, 'Remote only')
+    assert.equal(coordinator.validationCalls.length, 2)
+    assert.equal(
+      coordinator.validationCalls.at(-1).path,
+      '/srv/another-link/remote-only',
+    )
+    assert.equal((await service.listProjects()).projects.length, 1)
+    assert.equal(runtime.startConversationCalls.length, 0)
+    assert.equal(runtime.resumeConversationCalls.length, 0)
+    assert.equal(runtime.startTurnCalls.length, 0)
+
+    const validationCallsBeforeDoctor = coordinator.validationCalls.length
+    const uncheckedDoctor = await service.getDoctor(
+      created.body.data.project.projectId,
+    )
+    assert.equal(uncheckedDoctor.doctor.project.locations[0].state, 'unknown')
+    assert.equal(
+      coordinator.validationCalls.length,
+      validationCallsBeforeDoctor,
+      'opening Doctor must not run a remote Project validation',
+    )
+
+    const checkedDoctor = await service.getDoctor(
+      created.body.data.project.projectId,
+      true,
+    )
+    assert.equal(checkedDoctor.doctor.project.locations[0].state, 'ready')
+    assert.equal(checkedDoctor.doctor.project.state, 'ready')
+    assert.equal(
+      coordinator.validationCalls.length,
+      validationCallsBeforeDoctor + 1,
+    )
+
+    coordinator.validationError = new RemoteMachineCoordinatorError(
+      'project_location_missing',
+      'Controlled Doctor ProjectLocation failure',
+    )
+    const missingDoctor = await service.getDoctor(
+      created.body.data.project.projectId,
+      true,
+    )
+    assert.equal(missingDoctor.doctor.project.locations[0].state, 'unavailable')
+    assert.equal(missingDoctor.doctor.project.state, 'unavailable')
+    coordinator.validationError = undefined
+
+    const validationCallsBeforeStress = coordinator.validationCalls.length
+    const coalescedChecks = await Promise.all(
+      Array.from({ length: 100 }, () =>
+        service.getDoctor(created.body.data.project.projectId, true),
+      ),
+    )
+    assert.ok(
+      coalescedChecks.every(
+        (result) => result.doctor.project.locations[0].state === 'ready',
+      ),
+    )
+    assert.equal(
+      coordinator.validationCalls.length,
+      validationCallsBeforeStress + 1,
+      'concurrent Doctor checks must share one exact ProjectLocation validation',
+    )
+
+    coordinator.setConnection('offline')
+    const offlineDoctor = await service.getDoctor(
+      created.body.data.project.projectId,
+    )
+    assert.equal(offlineDoctor.doctor.project.locations[0].state, 'offline')
+    assert.equal(offlineDoctor.doctor.project.state, 'offline')
+    const unavailable = await requestJson(
+      baseUrl,
+      `/api/v1/machines/${coordinator.machineId}/projects`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          actionId: 'act_remoteproject_offline01',
+          path: '/srv/projects/offline',
+        }),
+      },
+    )
+    assert.equal(unavailable.status, 503)
+    assert.equal(unavailable.body.code, 'machine_unreachable')
+    assert.equal((await service.listProjects()).projects.length, 1)
+  } finally {
+    if (server !== undefined) {
+      await server.close().catch(() => undefined)
+      service = undefined
+    }
+    await service?.close().catch(() => undefined)
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
 test('remote ProjectLocation API requires active online trust, stays idempotent, and never hydrates Providers', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'codetether-location-api-'))
   const workspace = join(directory, 'workspace')

@@ -38,11 +38,13 @@ import { createSelectedDirectoryPresentation } from './add-project-presentation'
 import { PreviousConversationsStep } from './previous-conversations-step'
 
 interface AddProjectDialogProps {
+  deferPreviousConversations?: boolean
   directoryPicker?: DirectoryPicker
   onOpenChange?: (open: boolean) => void
   onProjectCreated?: (
     project: ProjectRecord,
     created: boolean,
+    machineId?: MachineId,
   ) => Promise<void> | void
   open?: boolean
   trigger?: ReactElement
@@ -60,6 +62,7 @@ interface CreatedProjectContext {
 }
 
 export function AddProjectDialog({
+  deferPreviousConversations = false,
   directoryPicker = nativeCapabilities.directoryPicker,
   onOpenChange,
   onProjectCreated,
@@ -112,6 +115,14 @@ export function AddProjectDialog({
             (location) => location.machineId === localMachine.machineId,
           )
         ) {
+          if (deferPreviousConversations) {
+            await finishCreatedProject(
+              project,
+              response.data.created,
+              localMachine.machineId,
+            )
+            return
+          }
           setCreatedProject({
             project,
             created: response.data.created,
@@ -151,6 +162,7 @@ export function AddProjectDialog({
   async function finishCreatedProject(
     project: ProjectRecord,
     created: boolean,
+    machineId?: MachineId,
   ) {
     const current = completionInFlightRef.current
     if (current !== null) return await current
@@ -158,7 +170,11 @@ export function AddProjectDialog({
       setDialogOpen(false)
       resetForm()
       if (onProjectCreated !== undefined) {
-        await onProjectCreated(project, created)
+        if (machineId === undefined) {
+          await onProjectCreated(project, created)
+        } else {
+          await onProjectCreated(project, created, machineId)
+        }
         return
       }
       await navigate({
@@ -416,6 +432,7 @@ export function AddProjectDialog({
               finishCreatedProject(
                 createdProject.project,
                 createdProject.created,
+                createdProject.machineId,
               )
             }
           />

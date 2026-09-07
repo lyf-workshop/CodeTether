@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-provider-guidance"
+description = "Allows the main CodeTether window to open only the compile-time allowlisted official Codex or Claude Code guidance page."
+commands.allow = ["open_provider_guidance"]

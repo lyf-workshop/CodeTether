@@ -9,7 +9,7 @@ import {
   RefreshCw,
 } from 'lucide-react'
 
-import { Button, DialogFooter, DialogHeader, DialogTitle } from '@codetether/ui'
+import { Button, DialogHeader, DialogTitle } from '@codetether/ui'
 import { CodeTetherResponseError } from '@codetether/client'
 import {
   providerSessionDiscoveryLimits,
@@ -28,7 +28,10 @@ import { useHostRuntime } from '../../runtime/host/host-runtime-hooks'
 interface PreviousConversationsStepProps {
   readonly machineId: MachineId
   readonly projectId: ProjectId
-  readonly onFinished: () => Promise<void> | void
+  readonly onFinished: (
+    disposition: 'reviewed' | 'skipped',
+  ) => Promise<void> | void
+  readonly presentation?: 'dialog' | 'page'
 }
 
 type CandidateActivity =
@@ -48,6 +51,7 @@ export function PreviousConversationsStep({
   machineId,
   projectId,
   onFinished,
+  presentation = 'dialog',
 }: PreviousConversationsStepProps) {
   const runtime = useHostRuntime()
   const navigate = useNavigate()
@@ -256,7 +260,7 @@ export function PreviousConversationsStep({
   }
 
   async function openConversation(conversationId: ConversationId) {
-    await onFinished()
+    await onFinished('reviewed')
     await navigate({
       to: '/conversations/$conversationId',
       params: { conversationId },
@@ -287,19 +291,37 @@ export function PreviousConversationsStep({
         scanState === 'scanning' || scanState === 'loading-more' || importing
       }
     >
-      <DialogHeader>
-        <span
-          aria-hidden="true"
-          className="grid size-10 place-items-center rounded-md border border-primary/30 bg-primary-muted text-primary"
-        >
-          <History className="size-5" />
-        </span>
-        <DialogTitle>以前的会话</DialogTitle>
-        <p className="text-base leading-normal text-text-secondary">
-          可选择此工作区中已有的 Codex 或 Claude Code 会话添加到 CodeTether。
-          导入不会启动智能体。
-        </p>
-      </DialogHeader>
+      {presentation === 'dialog' ? (
+        <DialogHeader>
+          <span
+            aria-hidden="true"
+            className="grid size-10 place-items-center rounded-md border border-primary/30 bg-primary-muted text-primary"
+          >
+            <History className="size-5" />
+          </span>
+          <DialogTitle>以前的会话</DialogTitle>
+          <p className="text-base leading-normal text-text-secondary">
+            可选择此工作区中已有的 Codex 或 Claude Code 会话添加到 CodeTether。
+            导入不会启动智能体。
+          </p>
+        </DialogHeader>
+      ) : (
+        <div>
+          <span
+            aria-hidden="true"
+            className="grid size-10 place-items-center rounded-md border border-primary/30 bg-primary-muted text-primary"
+          >
+            <History className="size-5" />
+          </span>
+          <h2 className="mt-4 text-xl font-semibold text-text-primary">
+            以前的会话
+          </h2>
+          <p className="mt-2 text-base leading-normal text-text-secondary">
+            可选择此工作区中已有的 Codex 或 Claude Code 会话添加到 CodeTether。
+            导入不会启动智能体，也不会发送任何提示词。
+          </p>
+        </div>
+      )}
 
       <div className="mt-5 min-w-0 space-y-4">
         <p className="sr-only" role="status" aria-live="polite">
@@ -542,12 +564,20 @@ export function PreviousConversationsStep({
         ) : null}
       </div>
 
-      <DialogFooter className="mt-6">
+      <div
+        className={
+          presentation === 'dialog'
+            ? 'mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end'
+            : 'mt-6 flex flex-wrap items-center justify-end gap-2 border-t border-border pt-4'
+        }
+      >
         <Button
           variant="secondary"
           size="sm"
           disabled={importing}
-          onClick={() => void onFinished()}
+          onClick={() =>
+            void onFinished(importedCount > 0 ? 'reviewed' : 'skipped')
+          }
         >
           {importedCount > 0 ? '完成' : '跳过'}
         </Button>
@@ -560,7 +590,7 @@ export function PreviousConversationsStep({
             {importing ? '正在导入…' : `导入所选（${selected.size}）`}
           </Button>
         ) : null}
-      </DialogFooter>
+      </div>
     </div>
   )
 }

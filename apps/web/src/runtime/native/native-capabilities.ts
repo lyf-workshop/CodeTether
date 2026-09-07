@@ -1,4 +1,10 @@
-import { EpochIdSchema, TurnIdSchema, type EpochId } from '@codetether/protocol'
+import {
+  EpochIdSchema,
+  ProviderIdSchema,
+  TurnIdSchema,
+  type EpochId,
+  type ProviderId,
+} from '@codetether/protocol'
 
 import type {
   DesktopWindowState,
@@ -27,6 +33,11 @@ export interface BackgroundRuntimeCapability {
   ): Promise<() => void>
 }
 
+export interface ProviderGuidanceCapability {
+  readonly available: boolean
+  open(provider: ProviderId): Promise<void>
+}
+
 export interface DesktopResumeIntent {
   readonly hostEpoch: EpochId
 }
@@ -35,6 +46,7 @@ export interface NativeCapabilities {
   readonly directoryPicker: DirectoryPicker
   readonly notifications: DesktopNotifications
   readonly backgroundRuntime: BackgroundRuntimeCapability
+  readonly providerGuidance: ProviderGuidanceCapability
 }
 
 interface TauriCoreModule {
@@ -114,6 +126,12 @@ const unavailableBackgroundRuntime: BackgroundRuntimeCapability = {
   subscribeToResume: () => Promise.resolve(() => undefined),
 }
 
+const unavailableProviderGuidance: ProviderGuidanceCapability = {
+  available: false,
+  open: () =>
+    Promise.reject(new Error('Native Provider guidance is unavailable.')),
+}
+
 /** Tauri v2 exposes this public marker even when `withGlobalTauri` is off. */
 export function hasTauriRuntime(scope: unknown = globalThis): boolean {
   return (
@@ -133,6 +151,7 @@ export function createNativeCapabilities(
       directoryPicker: unavailableDirectoryPicker,
       notifications: unavailableDesktopNotifications,
       backgroundRuntime: unavailableBackgroundRuntime,
+      providerGuidance: unavailableProviderGuidance,
     }
   }
 
@@ -335,10 +354,21 @@ export function createNativeCapabilities(
     },
   }
 
+  const providerGuidance: ProviderGuidanceCapability = {
+    available: true,
+    async open(provider) {
+      const { invoke } = await loadCore()
+      await invoke<void>('open_provider_guidance', {
+        provider: ProviderIdSchema.parse(provider),
+      })
+    },
+  }
+
   return {
     directoryPicker,
     notifications,
     backgroundRuntime,
+    providerGuidance,
   }
 }
 

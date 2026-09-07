@@ -1,4 +1,7 @@
 import { useMemo, useState } from 'react'
+import { useMutation, useQuery } from '@tanstack/react-query'
+import { Link, useNavigate } from '@tanstack/react-router'
+import { CircleHelp, RefreshCw } from 'lucide-react'
 
 import type { AttentionType } from '@codetether/protocol'
 import {
@@ -7,6 +10,7 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
+  Button,
   cn,
 } from '@codetether/ui'
 
@@ -18,6 +22,11 @@ import {
   updateDesktopNotificationPreference,
   type NotificationPreferenceStorage,
 } from '../../runtime/native/notification-preferences'
+import {
+  useHostConnectionState,
+  useHostRuntime,
+} from '../../runtime/host/host-runtime-hooks'
+import { onboardingQueryOptions } from '../../runtime/host/onboarding-query'
 
 const notificationOptions = [
   {
@@ -89,6 +98,8 @@ export function DesktopNotificationSettings({
         管理需要在后台提醒你的事项。
       </p>
 
+      <SetupAndDoctorSettings />
+
       <Card className="mt-5">
         <CardHeader className="pb-3">
           <CardTitle id="desktop-notifications-heading">桌面通知</CardTitle>
@@ -159,5 +170,62 @@ export function DesktopNotificationSettings({
         </Card>
       ) : null}
     </section>
+  )
+}
+
+function SetupAndDoctorSettings() {
+  const runtime = useHostRuntime()
+  const connectionState = useHostConnectionState()
+  const navigate = useNavigate()
+  const onboardingQuery = useQuery({
+    ...onboardingQueryOptions(runtime),
+    enabled: connectionState === 'connected',
+  })
+  const reopenMutation = useMutation({
+    mutationFn: async () => {
+      const progress = onboardingQuery.data
+      if (progress !== undefined && progress.step === 'ready') {
+        await runtime.updateOnboarding(progress.revision, { kind: 'reopen' })
+      }
+    },
+    onSuccess: async () => await navigate({ to: '/setup' }),
+  })
+
+  return (
+    <Card className="mt-5">
+      <CardHeader className="pb-3">
+        <CardTitle>设置与检查</CardTitle>
+        <CardDescription>
+          检查电脑、AI 工具、AI 服务、项目和远程连接，或安全地重新打开设置流程。
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-wrap gap-2 pt-0">
+        <Button asChild size="sm" variant="secondary">
+          <Link to="/doctor">
+            <CircleHelp aria-hidden="true" />
+            打开 CodeTether 检查
+          </Link>
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="secondary"
+          disabled={
+            reopenMutation.isPending ||
+            connectionState !== 'connected' ||
+            onboardingQuery.data === undefined
+          }
+          onClick={() => reopenMutation.mutate()}
+        >
+          <RefreshCw aria-hidden="true" />
+          重新运行设置
+        </Button>
+        {reopenMutation.isError ? (
+          <p role="alert" className="basis-full text-sm text-danger">
+            暂时无法重新打开设置。已有配置没有改变。
+          </p>
+        ) : null}
+      </CardContent>
+    </Card>
   )
 }

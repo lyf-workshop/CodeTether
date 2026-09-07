@@ -84,6 +84,22 @@ export const CreateProjectRequestSchema = z
 export type CreateProjectRequest = z.infer<typeof CreateProjectRequestSchema>
 
 /**
+ * Creates or reuses one logical Project whose first authorized Location is on
+ * the exact remote Machine named by the route. The Node validates this one
+ * caller-supplied path; this is not a remote directory-listing capability.
+ */
+export const CreateRemoteProjectRequestSchema = z
+  .object({
+    actionId: ActionIdSchema,
+    name: z.string().trim().min(1).max(240).optional(),
+    path: z.string().trim().min(1).max(4096),
+  })
+  .strict()
+export type CreateRemoteProjectRequest = z.infer<
+  typeof CreateRemoteProjectRequestSchema
+>
+
+/**
  * Registers one purpose-specific workspace location for an existing logical
  * Project. The selected trusted Machine remains responsible for canonical
  * path validation; callers cannot use this request as a generic filesystem
@@ -566,6 +582,40 @@ export const CreateProjectDataSchema = z
   .strict()
 export type CreateProjectData = z.infer<typeof CreateProjectDataSchema>
 
+export const CreateRemoteProjectDataSchema = z
+  .object({
+    project: ProjectRecordSchema,
+    location: ProjectLocationSchema,
+    created: z.boolean(),
+  })
+  .strict()
+  .superRefine((data, context) => {
+    if (data.location.projectId !== data.project.projectId) {
+      context.addIssue({
+        code: 'custom',
+        message: 'ProjectLocation must belong to the returned Project',
+        path: ['location', 'projectId'],
+      })
+    }
+    const matchingLocations = data.project.locations.filter(
+      (location) => location.machineId === data.location.machineId,
+    )
+    if (
+      matchingLocations.length !== 1 ||
+      matchingLocations[0]?.rootPath !== data.location.rootPath
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message:
+          'Returned Project must contain the exact remote ProjectLocation',
+        path: ['project', 'locations'],
+      })
+    }
+  })
+export type CreateRemoteProjectData = z.infer<
+  typeof CreateRemoteProjectDataSchema
+>
+
 export const RegisterProjectLocationDataSchema = z
   .object({
     project: ProjectRecordSchema,
@@ -686,6 +736,13 @@ export const CreateProjectResponseSchema = mutationResponseSchema(
   CreateProjectDataSchema,
 )
 export type CreateProjectResponse = z.infer<typeof CreateProjectResponseSchema>
+
+export const CreateRemoteProjectResponseSchema = mutationResponseSchema(
+  CreateRemoteProjectDataSchema,
+)
+export type CreateRemoteProjectResponse = z.infer<
+  typeof CreateRemoteProjectResponseSchema
+>
 
 export const RegisterProjectLocationResponseSchema = mutationResponseSchema(
   RegisterProjectLocationDataSchema,

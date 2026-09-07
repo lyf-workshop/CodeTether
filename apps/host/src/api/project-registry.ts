@@ -149,6 +149,88 @@ export class ProjectRegistry {
     }
   }
 
+  /**
+   * Creates or reuses a logical Project from one Node-canonicalized remote
+   * Location. Authentication, online state, and purpose-specific path
+   * validation are owned by HostService before this method is called.
+   */
+  async createRemote(
+    machineId: MachineId,
+    canonicalPath: string,
+    name?: string,
+  ): Promise<{
+    readonly project: ProjectRecord
+    readonly location: DurableProjectLocation
+    readonly created: boolean
+  }> {
+    const machine = MachineIdSchema.parse(machineId)
+    if (machine === this.#localMachineId) {
+      throw new ProjectRegistryError(
+        'location_conflict',
+        'Remote Project creation requires a remote Machine',
+      )
+    }
+    if (this.#persistence === undefined) {
+      throw new ProjectRegistryError(
+        'unavailable',
+        'Durable Projects are unavailable',
+      )
+    }
+    const remoteRoot = normalizeTrustedProjectRoot(
+      canonicalPath,
+      canonicalPath.startsWith('/') ? 'linux' : 'win32',
+    )
+    const existingId = this.#projectIdsByLocationKey.get(
+      locationKey(machine, remoteRoot.rootPathKey),
+    )
+    if (existingId !== undefined) {
+      const existing = this.require(existingId)
+      const location = existing.locations.find(
+        (candidate) => candidate.machineId === machine,
+      )
+      if (location === undefined) {
+        throw new Error('Remote Project Location identity is inconsistent')
+      }
+      return {
+        project: await this.#record(existing),
+        location,
+        created: false,
+      }
+    }
+
+    const timestamp = this.#now()
+    const projectId = newProjectId()
+    const location: DurableProjectLocation = {
+      projectId,
+      machineId: machine,
+      rootPath: remoteRoot.rootPath,
+      rootPathKey: remoteRoot.rootPathKey,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    }
+    const project: DurableProject = {
+      projectId,
+      name: normalizedProjectName(name, remoteRoot.rootPath),
+      locations: [location],
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    }
+    try {
+      this.#writeDurable(() => this.#persistence?.createProject(project))
+    } catch (error) {
+      if (error instanceof ProjectLocationConflictError) {
+        throw new ProjectRegistryError('location_conflict', error.message)
+      }
+      throw error
+    }
+    this.#retain(project)
+    return {
+      project: await this.#record(project),
+      location,
+      created: true,
+    }
+  }
+
   async list(): Promise<readonly ProjectRecord[]> {
     return await Promise.all(
       [...this.#projects.values()]

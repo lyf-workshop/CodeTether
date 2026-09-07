@@ -91,11 +91,10 @@ test('remote ProjectLocation discovery starts only after validated registration'
     'components/projects/add-project-location-dialog.tsx',
   )
 
-  assert.match(source, /onSuccess: \(response\) =>/u)
-  assert.match(
-    source,
-    /setRegisteredLocation\(\{ machineId: response\.data\.location\.machineId \}\)/u,
-  )
+  assert.match(source, /onSuccess: async \(response\) =>/u)
+  assert.match(source, /machineId: response\.data\.location\.machineId/u)
+  assert.match(source, /project: response\.data\.project/u)
+  assert.match(source, /setRegisteredLocation\(context\)/u)
   assert.match(source, /registeredLocation === undefined \? \(/u)
   assert.match(source, /<PreviousConversationsStep/u)
   assert.match(source, /onFinished=\{\(\) => setDialogOpen\(false\)\}/u)

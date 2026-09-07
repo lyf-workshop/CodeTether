@@ -1196,6 +1196,7 @@ pub fn run_desktop() {
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
             crate::project_directory_picker::pick_project_directory,
+            crate::provider_guidance::open_provider_guidance,
             crate::attention_notifications::deliver_attention_notification,
             crate::attention_notifications::take_pending_notification_intent
         ])

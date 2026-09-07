@@ -1,4 +1,5 @@
 import { useRef, useState, type ReactNode } from 'react'
+import { useNavigate } from '@tanstack/react-router'
 
 import { TooltipProvider } from '@codetether/ui'
 import type { ProjectRecord } from '@codetether/protocol'
@@ -29,6 +30,7 @@ export function AppShell({
   agentProviders = [],
   inboxAttentionCount = 0,
 }: AppShellProps) {
+  const navigate = useNavigate()
   const newConversationButtonRef = useRef<HTMLButtonElement>(null)
   const [globalDialog, setGlobalDialog] = useState<
     'add-project' | 'new-conversation' | null
@@ -48,6 +50,15 @@ export function AppShell({
           currentPage={currentPage}
           newConversationButtonRef={newConversationButtonRef}
           onNewConversation={() => setGlobalDialog('new-conversation')}
+          onHelp={() =>
+            void navigate({
+              to: '/doctor',
+              search:
+                currentProject === undefined
+                  ? {}
+                  : { projectId: currentProject.projectId },
+            })
+          }
         />
         <div className="grid min-h-0 grid-cols-[var(--layout-sidebar-current-width)_minmax(0,1fr)]">
           <PrimarySidebar

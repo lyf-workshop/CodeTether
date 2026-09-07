@@ -351,7 +351,9 @@ export function machineErrorMessage(
     case 'machine_pairing_code_expired':
       return '配对码已过期，请在远程节点重新开启配对。'
     case 'machine_pairing_rate_limited':
-      return '配对尝试过多，请稍后在远程节点生成新的配对码。'
+      return operation === 'refresh-providers'
+        ? '这台电脑暂时忙碌，无法完成检查。请稍后再试。'
+        : '配对尝试过多，请稍后在远程节点生成新的配对码。'
     case 'machine_authentication_failed':
       return operation === 'update-address'
         ? '无法验证新地址上的机器身份；原信任关系未更改。'

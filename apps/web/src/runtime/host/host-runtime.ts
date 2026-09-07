@@ -84,6 +84,12 @@ import {
   type AttentionReadClient,
 } from './attention-query.js'
 import { createBrowserActionId } from './action-id.js'
+import {
+  OnboardingActions,
+  type OnboardingMutationClient,
+  type OnboardingReadClient,
+} from './onboarding-query.js'
+import type { DoctorReadClient } from './doctor-query.js'
 
 export type HostConnectionState =
   'connecting' | 'connected' | 'reconnecting' | 'unavailable' | 'incompatible'
@@ -108,7 +114,10 @@ export interface HostRuntimeClient
     ConversationOrganizationMutationClient,
     NewConversationMutationClient,
     AttentionReadClient,
-    AttentionMutationClient {
+    AttentionMutationClient,
+    OnboardingReadClient,
+    OnboardingMutationClient,
+    DoctorReadClient {
   discoverProviderSessions(
     projectId: ProjectId,
     machineId: MachineId,
@@ -189,6 +198,7 @@ export class HostRuntime {
   readonly #newConversationActions: NewConversationActions
   readonly #attentionActions: AttentionActions
   readonly #conversationOrganizationActions: ConversationOrganizationActions
+  readonly #onboardingActions: OnboardingActions
   #connectionState: HostConnectionState = 'connecting'
   #lastError: unknown
   #started = false
@@ -221,6 +231,10 @@ export class HostRuntime {
     this.#newConversationActions = new NewConversationActions(this.#client)
     this.#attentionActions = new AttentionActions(this.#client)
     this.#conversationOrganizationActions = new ConversationOrganizationActions(
+      this.#client,
+      this.#queryClient,
+    )
+    this.#onboardingActions = new OnboardingActions(
       this.#client,
       this.#queryClient,
     )
@@ -320,6 +334,21 @@ export class HostRuntime {
     return this.#client.listMachines(options)
   }
 
+  getOnboarding(options?: { readonly signal?: AbortSignal }) {
+    return this.#client.getOnboarding(options)
+  }
+
+  updateOnboarding(
+    expectedRevision: Parameters<OnboardingActions['update']>[0],
+    transition: Parameters<OnboardingActions['update']>[1],
+  ) {
+    return this.#onboardingActions.update(expectedRevision, transition)
+  }
+
+  getDoctor(options?: Parameters<DoctorReadClient['getDoctor']>[0]) {
+    return this.#client.getDoctor(options)
+  }
+
   getMachine(
     machineId: Parameters<MachineReadClient['getMachine']>[0],
     options?: Parameters<MachineReadClient['getMachine']>[1],
@@ -414,6 +443,13 @@ export class HostRuntime {
     input: Parameters<ProjectActions['registerProjectLocation']>[1],
   ) {
     return this.#projectActions.registerProjectLocation(projectId, input)
+  }
+
+  createRemoteProject(
+    machineId: Parameters<ProjectActions['createRemoteProject']>[0],
+    input: Parameters<ProjectActions['createRemoteProject']>[1],
+  ) {
+    return this.#projectActions.createRemoteProject(machineId, input)
   }
 
   removeProjectLocation(

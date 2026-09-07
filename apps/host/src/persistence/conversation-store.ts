@@ -24,6 +24,8 @@ import {
   ProviderInstallationRevisionSchema,
   ProviderInstallationSummarySchema,
   MachineProviderLifecycleSchema,
+  OnboardingProgressSchema,
+  UpdateOnboardingRequestSchema,
   providerLifecycleWireLimits,
   RelayEndpointSchema,
   RelayIdentityFingerprintSchema,
@@ -47,12 +49,15 @@ import {
   type ProviderInstallationId,
   type ProviderInstallationSummary,
   type MachineProviderLifecycle,
+  type OnboardingProgress,
+  type OnboardingTransition,
   type RelayEndpoint,
   type RelayIdentityFingerprint,
   type RemoteMachineAddress,
   type Timestamp,
   type TurnId,
   type TurnInputRecord,
+  type UpdateOnboardingRequest,
 } from '@codetether/protocol'
 
 import {
@@ -386,6 +391,17 @@ export interface DurableConversationAdoptionResult {
   readonly created: boolean
 }
 
+export type DurableOnboardingUpdateResult =
+  | {
+      readonly status: 'updated' | 'unchanged'
+      readonly onboarding: OnboardingProgress
+    }
+  | {
+      readonly status:
+        'revision_conflict' | 'invalid_transition' | 'context_unavailable'
+      readonly onboarding: OnboardingProgress
+    }
+
 export type DurableConversationSummary = ConversationSummary
 
 export interface DurableConversationMutationResult {
@@ -517,6 +533,93 @@ export class ConversationStore {
       'SELECT * FROM machines WHERE machine_id = ?',
     ).get(id) as MachineRow | undefined
     return row === undefined ? undefined : machineFromRow(row)
+  }
+
+  getOnboardingProgress(): OnboardingProgress {
+    const row = this.#statement(
+      'SELECT * FROM onboarding_progress WHERE singleton = 1',
+    ).get() as OnboardingProgressRow | undefined
+    if (row === undefined) {
+      throw new Error('Durable onboarding singleton does not exist')
+    }
+    return onboardingProgressFromRow(row)
+  }
+
+  updateOnboardingProgress(
+    request: UpdateOnboardingRequest,
+    updatedAt: Timestamp,
+  ): DurableOnboardingUpdateResult {
+    const value = UpdateOnboardingRequestSchema.parse(request)
+    const timestamp = TimestampSchema.parse(updatedAt)
+    return this.runInTransaction(() => {
+      const row = this.#statement(
+        'SELECT * FROM onboarding_progress WHERE singleton = 1',
+      ).get() as OnboardingProgressRow | undefined
+      if (row === undefined) {
+        throw new Error('Durable onboarding singleton does not exist')
+      }
+      const current = onboardingProgressFromRow(row)
+      if (row.last_action_id === value.actionId) {
+        return { status: 'unchanged', onboarding: current }
+      }
+      if (onboardingTransitionSatisfied(current, value.transition)) {
+        return { status: 'unchanged', onboarding: current }
+      }
+      if (value.expectedRevision !== current.revision) {
+        return { status: 'revision_conflict', onboarding: current }
+      }
+
+      const effectiveTimestamp =
+        Date.parse(timestamp) < Date.parse(current.updatedAt)
+          ? current.updatedAt
+          : timestamp
+      const next = advanceOnboarding(
+        current,
+        value.transition,
+        effectiveTimestamp,
+      )
+      if (next === undefined) {
+        return { status: 'invalid_transition', onboarding: current }
+      }
+      if (
+        next.projectId !== undefined &&
+        next.machineId !== undefined &&
+        this.#statement(
+          `SELECT 1 FROM project_locations
+           WHERE project_id = ? AND machine_id = ?`,
+        ).get(next.projectId, next.machineId) === undefined
+      ) {
+        return { status: 'context_unavailable', onboarding: current }
+      }
+
+      const changes = this.#statement(
+        `UPDATE onboarding_progress
+         SET
+           step = ?, revision = ?, project_id = ?, machine_id = ?,
+           previous_conversations_disposition = ?,
+           remote_setup_disposition = ?, last_action_id = ?, updated_at = ?,
+           completed_at = ?
+         WHERE singleton = 1 AND revision = ?`,
+      ).run(
+        next.step,
+        next.revision,
+        next.projectId ?? null,
+        next.machineId ?? null,
+        next.previousConversationsDisposition ?? null,
+        next.remoteSetupDisposition ?? null,
+        value.actionId,
+        next.updatedAt,
+        next.completedAt ?? null,
+        current.revision,
+      ).changes
+      if (changes !== 1 && changes !== 1n) {
+        throw new Error('Durable onboarding compare-and-set failed')
+      }
+      return {
+        status: 'updated',
+        onboarding: this.getOnboardingProgress(),
+      }
+    })
   }
 
   updateMachineLastSeen(
@@ -3439,6 +3542,21 @@ interface MachineRow {
   readonly last_seen_at: string | null
 }
 
+interface OnboardingProgressRow {
+  readonly singleton: 1
+  readonly flow_version: 1
+  readonly step: string
+  readonly revision: number
+  readonly project_id: string | null
+  readonly machine_id: string | null
+  readonly previous_conversations_disposition: string | null
+  readonly remote_setup_disposition: string | null
+  readonly last_action_id: string | null
+  readonly started_at: string
+  readonly updated_at: string
+  readonly completed_at: string | null
+}
+
 interface TrustedMachinePeerRow {
   readonly machine_id: string
   readonly node_identity: string
@@ -3647,6 +3765,157 @@ function machineFromRow(row: MachineRow): DurableMachine {
       ? {}
       : { lastSeenAt: TimestampSchema.parse(row.last_seen_at) }),
   })
+}
+
+function onboardingProgressFromRow(
+  row: OnboardingProgressRow,
+): OnboardingProgress {
+  return OnboardingProgressSchema.parse({
+    flowVersion: row.flow_version,
+    step: row.step,
+    revision: row.revision,
+    ...(row.project_id === null ? {} : { projectId: row.project_id }),
+    ...(row.machine_id === null ? {} : { machineId: row.machine_id }),
+    ...(row.previous_conversations_disposition === null
+      ? {}
+      : {
+          previousConversationsDisposition:
+            row.previous_conversations_disposition,
+        }),
+    ...(row.remote_setup_disposition === null
+      ? {}
+      : { remoteSetupDisposition: row.remote_setup_disposition }),
+    startedAt: row.started_at,
+    updatedAt: row.updated_at,
+    ...(row.completed_at === null ? {} : { completedAt: row.completed_at }),
+  })
+}
+
+function onboardingTransitionSatisfied(
+  current: OnboardingProgress,
+  transition: OnboardingTransition,
+): boolean {
+  switch (transition.kind) {
+    case 'continue':
+      return false
+    case 'project_reselect':
+      return current.step === 'project_setup'
+    case 'project_selected':
+      return (
+        current.projectId === transition.projectId &&
+        current.machineId === transition.machineId &&
+        onboardingStepIndex(current.step) >=
+          onboardingStepIndex('previous_conversations')
+      )
+    case 'previous_conversations_finished':
+      return (
+        current.previousConversationsDisposition === transition.disposition &&
+        onboardingStepIndex(current.step) >= onboardingStepIndex('remote_setup')
+      )
+    case 'remote_setup_finished':
+      return (
+        current.remoteSetupDisposition === transition.disposition &&
+        current.completedAt !== undefined &&
+        current.step === 'ready'
+      )
+    case 'reopen':
+      return current.completedAt !== undefined && current.step === 'welcome'
+  }
+}
+
+function advanceOnboarding(
+  current: OnboardingProgress,
+  transition: OnboardingTransition,
+  updatedAt: Timestamp,
+): OnboardingProgress | undefined {
+  let update: Partial<OnboardingProgress>
+  switch (transition.kind) {
+    case 'continue': {
+      const next = {
+        welcome: 'computer_check',
+        computer_check: 'provider_check',
+        provider_check: 'project_setup',
+      } as const
+      const step = next[current.step as keyof typeof next]
+      if (step === undefined) return undefined
+      update = { step }
+      break
+    }
+    case 'project_reselect':
+      if (
+        (current.step !== 'previous_conversations' &&
+          current.step !== 'remote_setup') ||
+        current.projectId !== undefined ||
+        current.machineId !== undefined
+      ) {
+        return undefined
+      }
+      update = {
+        step: 'project_setup',
+        previousConversationsDisposition: undefined,
+        remoteSetupDisposition: undefined,
+      }
+      break
+    case 'project_selected':
+      if (current.step !== 'project_setup') return undefined
+      update = {
+        step: 'previous_conversations',
+        projectId: transition.projectId,
+        machineId: transition.machineId,
+        previousConversationsDisposition: undefined,
+        remoteSetupDisposition: undefined,
+      }
+      break
+    case 'previous_conversations_finished':
+      if (
+        current.step !== 'previous_conversations' ||
+        current.projectId === undefined ||
+        current.machineId === undefined
+      ) {
+        return undefined
+      }
+      update = {
+        step: 'remote_setup',
+        previousConversationsDisposition: transition.disposition,
+      }
+      break
+    case 'remote_setup_finished':
+      if (
+        current.step !== 'remote_setup' ||
+        current.projectId === undefined ||
+        current.machineId === undefined
+      ) {
+        return undefined
+      }
+      update = {
+        step: 'ready',
+        remoteSetupDisposition: transition.disposition,
+        completedAt: current.completedAt ?? updatedAt,
+      }
+      break
+    case 'reopen':
+      if (current.completedAt === undefined) return undefined
+      update = { step: 'welcome' }
+      break
+  }
+  return OnboardingProgressSchema.parse({
+    ...current,
+    ...update,
+    revision: current.revision + 1,
+    updatedAt,
+  })
+}
+
+function onboardingStepIndex(step: OnboardingProgress['step']): number {
+  return [
+    'welcome',
+    'computer_check',
+    'provider_check',
+    'project_setup',
+    'previous_conversations',
+    'remote_setup',
+    'ready',
+  ].indexOf(step)
 }
 
 function parseMachine(value: DurableMachine): DurableMachine {
@@ -4668,6 +4937,18 @@ function assertDatabaseIntegrity(database: DatabaseSync): void {
   }
   if (database.prepare('PRAGMA foreign_key_check').all().length > 0) {
     throw new Error('SQLite foreign key integrity check failed')
+  }
+  const onboarding = database
+    .prepare(
+      `SELECT COUNT(*) AS count
+       FROM onboarding_progress
+       WHERE singleton = 1`,
+    )
+    .get() as { readonly count: number }
+  if (onboarding.count !== 1) {
+    throw new Error(
+      'SQLite onboarding state must contain one durable singleton',
+    )
   }
   const machines = database
     .prepare(

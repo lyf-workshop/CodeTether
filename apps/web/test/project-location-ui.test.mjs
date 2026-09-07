@@ -32,6 +32,8 @@ test('Add Location is a bounded, keyboard-accessible remote path registration fl
   )
 
   assert.match(dialog, /runtime\.registerProjectLocation/u)
+  assert.match(dialog, /runtime\.createRemoteProject/u)
+  assert.match(dialog, /createNewProject/u)
   assert.match(dialog, /machine\.capabilities\.projectAccess/u)
   assert.match(dialog, /machine\.connectionState === 'online'/u)
   assert.match(dialog, /registeredMachineIds\.has/u)

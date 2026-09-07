@@ -32,15 +32,26 @@ import { machineConnectionStateLabel } from '../machines/machine-presentation'
 import { PreviousConversationsStep } from './previous-conversations-step'
 
 interface AddProjectLocationDialogProps {
+  createNewProject?: boolean
+  deferPreviousConversations?: boolean
   machines: readonly MachineSummary[]
+  onProjectCreated?: (
+    project: ProjectRecord,
+    machineId: MachineId,
+  ) => Promise<void> | void
   onOpenChange?: (open: boolean) => void
-  project: ProjectRecord
+  presentation?: 'technical' | 'ordinary'
+  project?: ProjectRecord
   trigger: ReactElement
 }
 
 export function AddProjectLocationDialog({
+  createNewProject = false,
+  deferPreviousConversations = false,
   machines,
+  onProjectCreated,
   onOpenChange,
+  presentation = 'technical',
   project,
   trigger,
 }: AddProjectLocationDialogProps) {
@@ -51,9 +62,10 @@ export function AddProjectLocationDialog({
   const [selectedMachineId, setSelectedMachineId] = useState<MachineId>()
   const [registeredLocation, setRegisteredLocation] = useState<{
     readonly machineId: MachineId
+    readonly project: ProjectRecord
   }>()
   const registeredMachineIds = new Set(
-    project.locations.map((location) => location.machineId),
+    project?.locations.map((location) => location.machineId) ?? [],
   )
   const candidates = machines.filter(
     (machine) =>
@@ -81,20 +93,40 @@ export function AddProjectLocationDialog({
       if (selectedMachine === undefined) {
         throw new Error('No remote Machine selected')
       }
+      if (createNewProject) {
+        return await runtime.createRemoteProject(selectedMachine.machineId, {
+          rootPath,
+        })
+      }
+      if (project === undefined) {
+        throw new Error('No Project selected for remote location')
+      }
       return await runtime.registerProjectLocation(project.projectId, {
         machineId: selectedMachine.machineId,
         rootPath,
       })
     },
-    onSuccess: (response) => {
-      setRegisteredLocation({ machineId: response.data.location.machineId })
+    onSuccess: async (response) => {
+      const context = {
+        machineId: response.data.location.machineId,
+        project: response.data.project,
+      }
+      if (deferPreviousConversations) {
+        setDialogOpen(false)
+        await onProjectCreated?.(context.project, context.machineId)
+        return
+      }
+      setRegisteredLocation(context)
     },
   })
   const busy = registerMutation.isPending
   const canSubmit =
     selectedMachine !== undefined && machineReady && rootPath.trim().length > 0
   const errorMessage = registerMutation.isError
-    ? projectErrorMessage(registerMutation.error, 'register-location')
+    ? projectErrorMessage(
+        registerMutation.error,
+        createNewProject ? 'create-remote' : 'register-location',
+      )
     : ''
 
   function setDialogOpen(nextOpen: boolean) {
@@ -130,7 +162,11 @@ export function AddProjectLocationDialog({
     >
       <DialogTrigger asChild>{trigger}</DialogTrigger>
       <DialogContent
-        closeLabel="关闭添加工作区位置"
+        closeLabel={
+          presentation === 'ordinary'
+            ? '关闭选择远程项目文件夹对话框'
+            : '关闭添加工作区位置'
+        }
         className="max-w-lg overflow-x-hidden"
         showCloseButton={!busy && registeredLocation === undefined}
         onOpenAutoFocus={(event) => {
@@ -148,35 +184,48 @@ export function AddProjectLocationDialog({
               >
                 <FolderPlus className="size-5" />
               </span>
-              <DialogTitle>添加工作区位置</DialogTitle>
+              <DialogTitle>
+                {presentation === 'ordinary'
+                  ? createNewProject
+                    ? '使用另一台电脑上的项目'
+                    : '选择另一台电脑上的项目文件夹'
+                  : '添加工作区位置'}
+              </DialogTitle>
               <DialogDescription>
-                将“{project.name}
-                ”在一台已配对远程机器上的真实目录注册为独立位置。
+                {presentation === 'ordinary'
+                  ? createNewProject
+                    ? '验证另一台已安全连接电脑上的现有项目文件夹。'
+                    : `验证“${project?.name ?? '此项目'}”在另一台已安全连接电脑上的现有文件夹。`
+                  : `将“${project?.name ?? '此项目'}”在一台已配对远程机器上的真实目录注册为独立位置。`}
               </DialogDescription>
             </DialogHeader>
 
             <div className="mt-5 min-w-0 space-y-4">
-              <div className="min-w-0">
-                <label className="text-sm font-medium text-text-primary">
-                  项目
-                </label>
-                <div className="mt-2 min-w-0 rounded-sm border border-border bg-surface-muted px-3 py-2.5 text-sm text-text-primary">
-                  <span className="block truncate" title={project.name}>
-                    {project.name}
-                  </span>
+              {project !== undefined ? (
+                <div className="min-w-0">
+                  <label className="text-sm font-medium text-text-primary">
+                    项目
+                  </label>
+                  <div className="mt-2 min-w-0 rounded-sm border border-border bg-surface-muted px-3 py-2.5 text-sm text-text-primary">
+                    <span className="block truncate" title={project.name}>
+                      {project.name}
+                    </span>
+                  </div>
                 </div>
-              </div>
+              ) : null}
 
               <div className="min-w-0">
                 <label className="text-sm font-medium text-text-primary">
-                  机器
+                  {presentation === 'ordinary' ? '电脑' : '机器'}
                 </label>
                 {candidates.length === 0 ? (
                   <p
                     role="status"
                     className="mt-2 rounded-sm border border-warning/30 bg-warning-muted/35 px-3 py-2 text-sm text-text-secondary"
                   >
-                    没有可添加的位置。请先配对一台支持项目访问的远程机器，或检查该项目是否已在机器上注册。
+                    {presentation === 'ordinary'
+                      ? '没有可选择的电脑。请先安全连接另一台电脑，或检查这个项目是否已经添加。'
+                      : '没有可添加的位置。请先配对一台支持项目访问的远程机器，或检查该项目是否已在机器上注册。'}
                   </p>
                 ) : (
                   <Select
@@ -193,7 +242,13 @@ export function AddProjectLocationDialog({
                       className="mt-2 min-w-0"
                       aria-label="选择远程机器"
                     >
-                      <SelectValue placeholder="选择远程机器">
+                      <SelectValue
+                        placeholder={
+                          presentation === 'ordinary'
+                            ? '选择另一台电脑'
+                            : '选择远程机器'
+                        }
+                      >
                         {selectedMachine === undefined ? undefined : (
                           <span className="flex min-w-0 items-center gap-2">
                             <Monitor
@@ -226,8 +281,10 @@ export function AddProjectLocationDialog({
                               </span>
                               <span className="truncate text-xs text-text-muted">
                                 {online
-                                  ? '在线 · 可验证工作区位置'
-                                  : `${machineConnectionStateLabel(machine.connectionState)} · 当前不能添加位置`}
+                                  ? presentation === 'ordinary'
+                                    ? '已连接 · 可以验证项目文件夹'
+                                    : '在线 · 可验证工作区位置'
+                                  : `${machineConnectionStateLabel(machine.connectionState)} · 当前不能选择项目文件夹`}
                               </span>
                             </span>
                           </SelectItem>
@@ -243,14 +300,15 @@ export function AddProjectLocationDialog({
                   htmlFor="add-project-location-path"
                   className="text-sm font-medium text-text-primary"
                 >
-                  远程目录
+                  {presentation === 'ordinary' ? '项目文件夹' : '远程目录'}
                 </label>
                 <p
                   id="add-project-location-path-description"
                   className="mt-1 text-xs leading-relaxed text-text-muted"
                 >
-                  输入所选远程机器上的绝对目录路径。CodeTether
-                  只验证并注册此目录，不浏览文件或执行命令。
+                  {presentation === 'ordinary'
+                    ? '输入这台电脑上已有项目文件夹的完整路径。CodeTether 只验证该文件夹，不会浏览文件或执行命令。'
+                    : '输入所选远程机器上的绝对目录路径。CodeTether 只验证并注册此目录，不浏览文件或执行命令。'}
                 </p>
                 <Input
                   ref={pathInputRef}
@@ -305,13 +363,17 @@ export function AddProjectLocationDialog({
                 </Button>
               </DialogClose>
               <Button type="submit" size="sm" disabled={!canSubmit || busy}>
-                {busy ? '正在验证…' : '添加位置'}
+                {busy
+                  ? '正在验证…'
+                  : createNewProject
+                    ? '添加项目'
+                    : '添加位置'}
               </Button>
             </DialogFooter>
           </form>
         ) : (
           <PreviousConversationsStep
-            projectId={project.projectId}
+            projectId={registeredLocation.project.projectId}
             machineId={registeredLocation.machineId}
             onFinished={() => setDialogOpen(false)}
           />

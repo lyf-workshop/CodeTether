@@ -14,6 +14,7 @@ fn main() {
     let attributes =
         tauri_build::Attributes::new().app_manifest(tauri_build::AppManifest::new().commands(&[
             "pick_project_directory",
+            "open_provider_guidance",
             "deliver_attention_notification",
             "take_pending_notification_intent",
         ]));

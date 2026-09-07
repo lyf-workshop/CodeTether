@@ -30,6 +30,8 @@ import {
   CreateConversationResponseSchema,
   CreateProjectRequestSchema,
   CreateProjectResponseSchema,
+  CreateRemoteProjectRequestSchema,
+  CreateRemoteProjectResponseSchema,
   DisconnectMachineRelayRequestSchema,
   DisconnectMachineRelayResponseSchema,
   DiscoverProviderSessionsQuerySchema,
@@ -43,7 +45,10 @@ import {
   DeleteProjectRequestSchema,
   DeleteProjectResponseSchema,
   GetConversationResponseSchema,
+  GetDoctorQuerySchema,
+  GetDoctorResponseSchema,
   GetMachineResponseSchema,
+  GetOnboardingResponseSchema,
   GetProjectResponseSchema,
   HostSnapshotSchema,
   InterruptTurnRequestSchema,
@@ -82,6 +87,8 @@ import {
   UnarchiveConversationResponseSchema,
   UnpinConversationRequestSchema,
   UnpinConversationResponseSchema,
+  UpdateOnboardingRequestSchema,
+  UpdateOnboardingResponseSchema,
 } from '@codetether/protocol'
 
 import { HostService } from './host-service.js'
@@ -232,11 +239,16 @@ export class LocalHttpServer {
         url.pathname,
         /^\/api\/v1\/projects\/([^/]+)\/locations\/([^/]+)\/provider-sessions$/u,
       )
+      const remoteProjectsRoute = this.#http.matchPath(
+        url.pathname,
+        /^\/api\/v1\/machines\/([^/]+)\/projects$/u,
+      )
       const acceptsQuery =
         request.method === 'GET' &&
         (projectConversationsRoute !== undefined ||
           projectConversationSearchRoute !== undefined ||
           providerSessionsRoute !== undefined ||
+          url.pathname === '/api/v1/doctor' ||
           url.pathname === '/api/v1/attention')
       if (url.search !== '' && !acceptsQuery) {
         throw new HttpBoundaryError(
@@ -251,6 +263,49 @@ export class LocalHttpServer {
           response,
           200,
           BootstrapResponseSchema.parse(this.#service.bootstrap()),
+          context.allowedOrigin,
+        )
+        return
+      }
+      if (request.method === 'GET' && url.pathname === '/api/v1/onboarding') {
+        this.#http.writeJson(
+          response,
+          200,
+          GetOnboardingResponseSchema.parse(this.#service.getOnboarding()),
+          context.allowedOrigin,
+        )
+        return
+      }
+      if (request.method === 'PATCH' && url.pathname === '/api/v1/onboarding') {
+        const body = await this.#http.readValidatedBody(
+          request,
+          UpdateOnboardingRequestSchema,
+        )
+        context.actionId = body.actionId
+        this.#http.writeJson(
+          response,
+          200,
+          UpdateOnboardingResponseSchema.parse(
+            await this.#service.updateOnboarding(body),
+          ),
+          context.allowedOrigin,
+        )
+        return
+      }
+      if (request.method === 'GET' && url.pathname === '/api/v1/doctor') {
+        const query = this.#http.parseValidatedQuery(
+          url.searchParams,
+          GetDoctorQuerySchema,
+        )
+        this.#http.writeJson(
+          response,
+          200,
+          GetDoctorResponseSchema.parse(
+            await this.#service.getDoctor(
+              query.projectId,
+              query.check === 'true',
+            ),
+          ),
           context.allowedOrigin,
         )
         return
@@ -316,6 +371,26 @@ export class LocalHttpServer {
           response,
           result.data.created ? 201 : 200,
           CreateProjectResponseSchema.parse(result),
+          context.allowedOrigin,
+        )
+        return
+      }
+      if (request.method === 'POST' && remoteProjectsRoute !== undefined) {
+        const machineId = this.#http.parseRouteId(
+          MachineIdSchema,
+          remoteProjectsRoute[0],
+          'machineId',
+        )
+        const body = await this.#http.readValidatedBody(
+          request,
+          CreateRemoteProjectRequestSchema,
+        )
+        context.actionId = body.actionId
+        const result = await this.#service.createRemoteProject(machineId, body)
+        this.#http.writeJson(
+          response,
+          result.data.created ? 201 : 200,
+          CreateRemoteProjectResponseSchema.parse(result),
           context.allowedOrigin,
         )
         return

@@ -1773,6 +1773,71 @@ test('server shutdown drains an admitted mutation before closing Host state', as
   }
 })
 
+test('onboarding and Doctor HTTP routes are durable, strict, and metadata-only', async () => {
+  const harness = await createHarness({ persistence: true })
+  const movedWorkspace = `${harness.workspace}-temporarily-missing`
+  try {
+    const projects = await getJson(harness.baseUrl, '/api/v1/projects')
+    const project = projects.body.projects[0]
+    assert.ok(project)
+    let onboarding = await getJson(harness.baseUrl, '/api/v1/onboarding')
+    assert.equal(onboarding.status, 200)
+    assert.equal(onboarding.body.onboarding.step, 'welcome')
+
+    for (let index = 0; index < 3; index += 1) {
+      const response = await patchJson(harness.baseUrl, '/api/v1/onboarding', {
+        actionId: `act_http_onboarding_continue${String(index)}`,
+        expectedRevision: onboarding.body.onboarding.revision,
+        transition: { kind: 'continue' },
+      })
+      assert.equal(response.status, 200)
+      onboarding = { body: response.body, status: response.status }
+      onboarding.body.onboarding = response.body.data.onboarding
+    }
+    assert.equal(onboarding.body.onboarding.step, 'project_setup')
+
+    await rename(harness.workspace, movedWorkspace)
+    const unavailable = await patchJson(harness.baseUrl, '/api/v1/onboarding', {
+      actionId: 'act_http_onboarding_missing_project',
+      expectedRevision: onboarding.body.onboarding.revision,
+      transition: {
+        kind: 'project_selected',
+        projectId: project.projectId,
+        machineId: harness.machineId,
+      },
+    })
+    assert.equal(unavailable.status, 409)
+    assert.equal(unavailable.body.code, 'project_unavailable')
+    await rename(movedWorkspace, harness.workspace)
+
+    const selected = await patchJson(harness.baseUrl, '/api/v1/onboarding', {
+      actionId: 'act_http_onboarding_select_project',
+      expectedRevision: onboarding.body.onboarding.revision,
+      transition: {
+        kind: 'project_selected',
+        projectId: project.projectId,
+        machineId: harness.machineId,
+      },
+    })
+    assert.equal(selected.status, 200)
+    assert.equal(selected.body.data.onboarding.step, 'previous_conversations')
+
+    const doctor = await getJson(
+      harness.baseUrl,
+      `/api/v1/doctor?projectId=${encodeURIComponent(project.projectId)}`,
+    )
+    assert.equal(doctor.status, 200)
+    assert.equal(doctor.body.doctor.project.projectId, project.projectId)
+    assert.equal(doctor.body.doctor.providers.length, 2)
+    assert.equal(JSON.stringify(doctor.body).includes(harness.workspace), false)
+    assert.equal(harness.runtime.startConversationCalls.length, 0)
+    assert.equal(harness.runtime.startTurnCalls.length, 0)
+  } finally {
+    await rename(movedWorkspace, harness.workspace).catch(() => undefined)
+    await harness.close()
+  }
+})
+
 class FakeAgentRuntime {
   provider = 'codex'
   startConversationCalls = []

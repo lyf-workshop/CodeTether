@@ -25,11 +25,45 @@ test('Browser capability stays unavailable without loading Tauri code', async ()
   assert.equal(hasTauriRuntime({ isTauri: true }), true)
   assert.equal(hasTauriRuntime({ isTauri: false }), false)
   assert.equal(capabilities.directoryPicker.available, false)
+  assert.equal(capabilities.providerGuidance.available, false)
   await assert.rejects(
     capabilities.directoryPicker.pickDirectory(),
     /unavailable/u,
   )
+  await assert.rejects(
+    capabilities.providerGuidance.open('codex'),
+    /unavailable/u,
+  )
   assert.equal(loadCalls, 0)
+})
+
+test('Desktop opens only a typed allowlisted Provider guidance command', async () => {
+  const calls = []
+  const capabilities = createNativeCapabilities({
+    tauriAvailable: true,
+    loadTauriCore: async () => ({
+      invoke: async (command, input) => {
+        calls.push({ command, input })
+      },
+    }),
+  })
+
+  assert.equal(capabilities.providerGuidance.available, true)
+  await capabilities.providerGuidance.open('codex')
+  await capabilities.providerGuidance.open('claude-code')
+  assert.deepEqual(calls, [
+    {
+      command: 'open_provider_guidance',
+      input: { provider: 'codex' },
+    },
+    {
+      command: 'open_provider_guidance',
+      input: { provider: 'claude-code' },
+    },
+  ])
+  await assert.rejects(
+    capabilities.providerGuidance.open('https://example.test'),
+  )
 })
 
 test('Desktop capability invokes only the narrow project directory command', async () => {

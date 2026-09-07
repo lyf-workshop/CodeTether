@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-open-provider-guidance"
+description = "Enables the open_provider_guidance command without any pre-configured scope."
+commands.allow = ["open_provider_guidance"]
+
+[[permission]]
+identifier = "deny-open-provider-guidance"
+description = "Denies the open_provider_guidance command without any pre-configured scope."
+commands.deny = ["open_provider_guidance"]

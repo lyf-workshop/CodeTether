@@ -37,9 +37,19 @@ test('production Desktop CSP and capabilities stay loopback-only and non-wildcar
     ),
     'utf8',
   )
+  const providerGuidancePermission = await readFile(
+    resolve(
+      desktopDirectory,
+      'src-tauri',
+      'permissions',
+      'provider-guidance.toml',
+    ),
+    'utf8',
+  )
 
   assert.deepEqual(capability.permissions, [
     'allow-project-directory-picker',
+    'allow-provider-guidance',
     'allow-attention-notifications',
     'core:event:allow-listen',
     'core:event:allow-unlisten',
@@ -60,6 +70,14 @@ test('production Desktop CSP and capabilities stay loopback-only and non-wildcar
   assert.doesNotMatch(
     projectDirectoryPermission,
     /filesystem|shell|run_command|native_action/iu,
+  )
+  assert.match(
+    providerGuidancePermission,
+    /commands\.allow = \["open_provider_guidance"\]/u,
+  )
+  assert.doesNotMatch(
+    providerGuidancePermission,
+    /filesystem|run_command|native_action/iu,
   )
   assert.match(
     attentionNotificationPermission,
@@ -88,7 +106,7 @@ test('production Desktop CSP and capabilities stay loopback-only and non-wildcar
   assert.equal(config.app.withGlobalTauri, false)
 })
 
-test('Web UI exposes only the narrow Project picker and Attention notification commands', async () => {
+test('Web UI exposes only the narrow Project picker, Provider guidance, and Attention notification commands', async () => {
   const webPackage = JSON.parse(
     await readFile(
       resolve(repositoryDirectory, 'apps', 'web', 'package.json'),
@@ -138,6 +156,9 @@ test('Web UI exposes only the narrow Project picker and Attention notification c
   assert.match(desktopCargo, /tauri-plugin-notification = "=2\.3\.3"/u)
   assert.match(desktopCargo, /tauri-winrt-notification = "=0\.7\.3"/u)
   assert.match(desktopRust, /pick_project_directory/u)
+  assert.match(desktopRust, /open_provider_guidance/u)
+  assert.match(desktopRust, /provider_guidance_url/u)
+  assert.match(desktopRust, /https:\/\/developers\.openai\.com\/codex\/cli/u)
   assert.match(desktopRust, /blocking_pick_folder/u)
   assert.match(desktopRust, /set_parent\(&window\)/u)
   assert.match(desktopRust, /tauri_plugin_dialog::init/u)
@@ -162,7 +183,7 @@ test('Web UI exposes only the narrow Project picker and Attention notification c
   assert.match(desktopRust, /invoke_handler/u)
   assert.match(
     buildScript,
-    /"pick_project_directory",\s*"deliver_attention_notification",\s*"take_pending_notification_intent",/u,
+    /"pick_project_directory",\s*"open_provider_guidance",\s*"deliver_attention_notification",\s*"take_pending_notification_intent",/u,
   )
   assert.match(buildScript, /tauri_build::try_build/u)
   assert.doesNotMatch(buildScript, /tauri_build::build\(\)/u)

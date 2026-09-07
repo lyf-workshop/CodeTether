@@ -29,7 +29,9 @@ import {
   EpochIdSchema,
   formatLastEventId,
   GetConversationResponseSchema,
+  GetDoctorResponseSchema,
   GetMachineResponseSchema,
+  GetOnboardingResponseSchema,
   HostEventSchema,
   HostEventEnvelopeSchema,
   ListAttentionQuerySchema,
@@ -41,6 +43,7 @@ import {
   MachineIdSchema,
   MachinePairingAttemptIdSchema,
   ListProjectConversationsQuerySchema,
+  onboardingWireLimits,
   providerSessionDiscoveryLimits,
   protocolVersion,
   DiscoverProviderSessionsQuerySchema,
@@ -87,14 +90,25 @@ import {
   type DiscoverProviderSessionsResponse,
   type CreateProjectRequest,
   type CreateProjectResponse,
+  type CreateRemoteProjectRequest,
+  type CreateRemoteProjectResponse,
   type RegisterProjectLocationRequest,
   type RegisterProjectLocationResponse,
   type RemoveProjectLocationRequest,
   type RemoveProjectLocationResponse,
   type DeleteProjectRequest,
   type DeleteProjectResponse,
+  type DoctorBackendStatus,
+  type DoctorComponentState,
+  type DoctorProjectStatus,
+  type DoctorProviderStatus,
+  type DoctorRelayStatus,
+  type DoctorRemoteComputer,
+  type DoctorSessionDiscoveryState,
   type GetProjectResponse,
+  type GetDoctorResponse,
   type GetMachineResponse,
+  type GetOnboardingResponse,
   type GetConversationResponse,
   type InterruptTurnRequest,
   type InterruptTurnResponse,
@@ -109,6 +123,7 @@ import {
   type PinConversationRequest,
   type PinConversationResponse,
   type ProjectId,
+  type ProjectRecord,
   type MachineId,
   type ProviderDescriptor,
   type MachineProviderLifecycle,
@@ -143,6 +158,8 @@ import {
   type UnarchiveConversationResponse,
   type UnpinConversationRequest,
   type UnpinConversationResponse,
+  type UpdateOnboardingRequest,
+  type UpdateOnboardingResponse,
 } from '@codetether/protocol'
 
 import {
@@ -367,6 +384,7 @@ export class HostService {
   ) => Promise<AgentHostRuntime>
   readonly #refreshLocalProviderLifecycle?: HostServiceOptions['refreshLocalProviderLifecycle']
   readonly #localProviderRefreshes = new Map<AgentProvider, Promise<void>>()
+  readonly #doctorChecks = new Map<string, Promise<GetDoctorResponse>>()
   readonly #projects: ProjectRegistry
   readonly #persistenceFlushMs: number
   readonly #providerSessionDiscoveryTimeoutMs: number
@@ -705,6 +723,219 @@ export class HostService {
       },
       providers: this.#providerDescriptors(),
     }
+  }
+
+  getOnboarding(): GetOnboardingResponse {
+    return GetOnboardingResponseSchema.parse({
+      protocolVersion,
+      onboarding: this.#requireDurableMachineState().getOnboardingProgress(),
+    })
+  }
+
+  async updateOnboarding(
+    request: UpdateOnboardingRequest,
+  ): Promise<UpdateOnboardingResponse> {
+    return await this.#executeAction(
+      request.actionId,
+      'onboarding.update',
+      request,
+      async () => {
+        if (request.transition.kind === 'project_selected') {
+          const transition = request.transition
+          let project: ProjectRecord
+          try {
+            project = await this.#projects.get(transition.projectId)
+          } catch (error) {
+            throw projectServiceError(error)
+          }
+          const location = project.locations.find(
+            (candidate) => candidate.machineId === transition.machineId,
+          )
+          if (location?.availability !== 'available') {
+            throw new HostServiceError(
+              'project_unavailable',
+              'The selected project folder is unavailable on that computer.',
+              409,
+            )
+          }
+        }
+        const result = this.#writeDurableResult(() =>
+          this.#requireDurableMachineState().updateOnboardingProgress(
+            request,
+            TimestampSchema.parse(this.#timestamp()),
+          ),
+        )
+        if (result.status === 'revision_conflict') {
+          throw new HostServiceError(
+            'conflict',
+            'Onboarding changed in another window. Check the current step and try again.',
+            409,
+          )
+        }
+        if (result.status === 'invalid_transition') {
+          throw new HostServiceError(
+            'conflict',
+            'That setup step cannot be completed from the current onboarding state.',
+            409,
+          )
+        }
+        if (result.status === 'context_unavailable') {
+          throw new HostServiceError(
+            'project_unavailable',
+            'The selected project folder is not registered on that computer.',
+            409,
+          )
+        }
+        return {
+          protocolVersion,
+          actionId: request.actionId,
+          status: 'completed' as const,
+          data: {
+            onboarding: result.onboarding,
+            changed: result.status === 'updated',
+          },
+        }
+      },
+      false,
+    )
+  }
+
+  async getDoctor(
+    projectId?: ProjectId,
+    checkProjectLocations = false,
+  ): Promise<GetDoctorResponse> {
+    const selectedProjectId =
+      projectId === undefined ? undefined : ProjectIdSchema.parse(projectId)
+    if (!checkProjectLocations) {
+      return await this.#composeDoctor(selectedProjectId)
+    }
+
+    const key = selectedProjectId ?? 'global'
+    const existing = this.#doctorChecks.get(key)
+    if (existing !== undefined) return await existing
+    const attempt = this.#composeDoctor(selectedProjectId, true).finally(() => {
+      if (this.#doctorChecks.get(key) === attempt) {
+        this.#doctorChecks.delete(key)
+      }
+    })
+    this.#doctorChecks.set(key, attempt)
+    return await attempt
+  }
+
+  async #composeDoctor(
+    selectedProjectId: ProjectId | undefined,
+    checkProjectLocations = false,
+  ): Promise<GetDoctorResponse> {
+    let machines = this.#machines.list()
+    let checkedRemoteLocations:
+      ReadonlyMap<MachineId, DoctorComponentState> | undefined
+    if (selectedProjectId !== undefined && checkProjectLocations) {
+      const beforeCheck = (await this.getProject(selectedProjectId)).project
+      checkedRemoteLocations = await this.#checkDoctorProjectLocations(
+        beforeCheck,
+        machines,
+      )
+      machines = this.#machines.list()
+    }
+    const local = machines.find((machine) => machine.kind === 'local')
+    if (local === undefined) {
+      throw new HostServiceError(
+        'runtime_unavailable',
+        'This computer is unavailable',
+        503,
+      )
+    }
+    const localDetail = await this.getMachine(local.machineId)
+    const providers = doctorProviderStatuses(localDetail)
+    const thisComputerState = this.#doctorThisComputerState(local.machineId)
+    const remoteComputers = await Promise.all(
+      machines
+        .filter((machine) => machine.kind === 'remote')
+        .map(async (machine): Promise<DoctorRemoteComputer> => {
+          try {
+            return doctorRemoteComputer(
+              await this.getMachine(machine.machineId),
+            )
+          } catch {
+            return doctorRemoteComputerFallback(
+              machine,
+              this.#publicRelayConnectivity(machine.machineId),
+            )
+          }
+        }),
+    )
+    const project =
+      selectedProjectId === undefined
+        ? undefined
+        : doctorProjectStatus(
+            (await this.getProject(selectedProjectId)).project,
+            machines,
+            checkedRemoteLocations,
+          )
+    const overall = doctorOverallState(
+      thisComputerState,
+      providers,
+      project,
+      local.machineId,
+      remoteComputers,
+    )
+    return GetDoctorResponseSchema.parse({
+      protocolVersion,
+      doctor: {
+        generatedAt: this.#timestamp(),
+        overall,
+        thisComputer: {
+          machineId: local.machineId,
+          displayName: local.displayName,
+          platform: local.platform,
+          architecture: local.architecture,
+          state: thisComputerState,
+        },
+        providers,
+        ...(project === undefined ? {} : { project }),
+        remoteComputers,
+      },
+    })
+  }
+
+  async #checkDoctorProjectLocations(
+    project: ProjectRecord,
+    machines: readonly MachineSummary[],
+  ): Promise<ReadonlyMap<MachineId, DoctorComponentState>> {
+    const checks = project.locations
+      .filter((location) => {
+        const machine = machines.find(
+          (candidate) => candidate.machineId === location.machineId,
+        )
+        return (
+          machine?.kind === 'remote' && machine.connectionState === 'online'
+        )
+      })
+      .slice(0, onboardingWireLimits.projectLocations)
+    const results = new Map<MachineId, DoctorComponentState>()
+    let nextIndex = 0
+    const workers = Array.from(
+      { length: Math.min(2, checks.length) },
+      async () => {
+        while (nextIndex < checks.length) {
+          const location = checks[nextIndex++]
+          if (location === undefined) return
+          try {
+            await this.#projects.authorizeConversation(
+              project.projectId,
+              location.machineId,
+            )
+            results.set(location.machineId, 'ready')
+          } catch {
+            // The purpose-specific ProjectLocation validator owns raw details.
+            // Doctor publishes only bounded component truth.
+            results.set(location.machineId, 'unavailable')
+          }
+        }
+      },
+    )
+    await Promise.all(workers)
+    return results
   }
 
   listMachines(): ListMachinesResponse {
@@ -1430,6 +1661,82 @@ export class HostService {
           if (location === undefined) {
             throw new Error(
               'Registered Project Location is absent from Project truth',
+            )
+          }
+          return {
+            protocolVersion,
+            actionId: request.actionId,
+            status: 'completed',
+            data: {
+              project: result.project,
+              location,
+              created: result.created,
+            },
+          }
+        } catch (error) {
+          if (error instanceof ProjectRegistryError) {
+            throw projectServiceError(error)
+          }
+          throw remoteMachineServiceError(error)
+        }
+      },
+      false,
+    )
+  }
+
+  async createRemoteProject(
+    machineId: MachineId,
+    request: CreateRemoteProjectRequest,
+  ): Promise<CreateRemoteProjectResponse> {
+    const id = MachineIdSchema.parse(machineId)
+    return await this.#executeAction(
+      request.actionId,
+      `project.remote.create:${id}`,
+      { machineId: id, request },
+      async () => {
+        const { durable, trust } = this.#requireRemoteMachineTrust(id)
+        let machine: MachineSummary
+        try {
+          machine = this.#machines.get(id)
+          if (machine.availability !== 'available') {
+            throw machineUnavailableError(machine, this.#timestamp())
+          }
+        } catch (error) {
+          throw machineServiceError(error)
+        }
+        if (machine.kind !== 'remote' || machine.connectionState !== 'online') {
+          throw new HostServiceError(
+            'machine_unreachable',
+            'Remote Machine must be online to create a Project',
+            503,
+          )
+        }
+        const validate = this.#remoteMachines.validateProjectLocation
+        if (validate === undefined) {
+          throw new HostServiceError(
+            'machine_connection_failed',
+            'Remote Project Location validation is unavailable',
+            503,
+          )
+        }
+        try {
+          const validated = await validate.call(
+            this.#remoteMachines,
+            durable,
+            trust,
+            request.path,
+          )
+          const result = await this.#projects.createRemote(
+            id,
+            validated.canonicalPath,
+            request.name,
+          )
+          const location = result.project.locations.find(
+            (candidate) => candidate.machineId === id,
+          )
+          if (location === undefined) {
+            throw new Error(
+              'Created remote Project Location is absent from Project truth',
             )
           }
           return {
@@ -4755,6 +5062,23 @@ export class HostService {
     return this.#persistence
   }
 
+  #doctorThisComputerState(machineId: MachineId): DoctorComponentState {
+    if (
+      this.#persistence === undefined ||
+      this.#persistenceFailure !== undefined ||
+      !this.#acceptingActions ||
+      this.#closingRuntime
+    ) {
+      return 'unavailable'
+    }
+    try {
+      const durable = this.#persistence.getMachine(machineId)
+      return durable?.kind === 'local' ? 'ready' : 'unavailable'
+    } catch {
+      return 'unavailable'
+    }
+  }
+
   #requireRemoteMachineTrust(machineId: MachineId) {
     const persistence = this.#requireDurableMachineState()
     const durable = persistence.getMachine(machineId)
@@ -6276,6 +6600,373 @@ export class HostService {
       throw runtimeUnavailableError('Host is shutting down')
     }
   }
+}
+
+const doctorProviders = ['codex', 'claude-code'] as const
+
+function doctorProviderStatuses(
+  detail: GetMachineResponse,
+): DoctorProviderStatus[] {
+  const machineOffline =
+    detail.machine.kind === 'remote' &&
+    detail.machine.connectionState !== 'online'
+  return doctorProviders.map((provider) => {
+    const descriptor = detail.providers.find(
+      (candidate) => candidate.provider === provider,
+    )
+    const lifecycle = detail.providerLifecycles?.find(
+      (candidate) => candidate.provider === provider,
+    )
+    const selected = lifecycle?.installations.find(
+      (installation) =>
+        installation.installationId === lifecycle.selectedInstallationId,
+    )
+    const compatibility = selected?.compatibility
+    const backend = selected?.backend
+    const fallbackFreshness =
+      detail.providerDiscovery?.state === 'current'
+        ? ('current' as const)
+        : detail.providerDiscovery?.state === 'last_known'
+          ? ('last_known' as const)
+          : ('not_observed' as const)
+    const freshness = compatibility?.freshness ?? fallbackFreshness
+    const installed =
+      lifecycle?.installations.some(
+        (installation) => installation.availability === 'available',
+      ) ??
+      (descriptor !== undefined && descriptor.availability !== 'not_installed')
+    const backendStatus =
+      backend === undefined ? undefined : doctorBackendStatus(backend)
+    const executionHealth = descriptor?.executionHealth
+    const state = doctorProviderState({
+      descriptor,
+      installed,
+      selected: selected !== undefined,
+      compatibility,
+      backend: backendStatus,
+      executionHealth,
+      machineOffline,
+    })
+    const failure =
+      compatibility?.failure ?? descriptor?.executionHealth?.failure
+    const version = selected?.version ?? descriptor?.version
+    const providerObservedAt =
+      detail.providerDiscovery?.state === 'current' ||
+      detail.providerDiscovery?.state === 'last_known'
+        ? detail.providerDiscovery.observedAt
+        : undefined
+    const observedAt = compatibility?.observedAt ?? providerObservedAt
+    return {
+      provider,
+      state,
+      installed,
+      selected: selected !== undefined,
+      alternateInstallations: Math.min(
+        7,
+        Math.max(
+          0,
+          (lifecycle?.installations.length ?? 0) - (selected ? 1 : 0),
+        ),
+      ),
+      ...(version === undefined ? {} : { version }),
+      ...(selected?.launcherKind === undefined
+        ? {}
+        : { launcherKind: selected.launcherKind }),
+      ...(selected?.installMethod === undefined
+        ? {}
+        : { installMethod: selected.installMethod }),
+      ...(compatibility === undefined
+        ? {}
+        : {
+            compatibility: compatibility.state,
+            runtimeReadiness: compatibility.runtimeReadiness,
+          }),
+      freshness,
+      ...(observedAt === undefined ? {} : { observedAt }),
+      ...(executionHealth === undefined ? {} : { executionHealth }),
+      ...(backendStatus === undefined ? {} : { backend: backendStatus }),
+      sessionDiscovery: doctorSessionDiscoveryState(compatibility),
+      ...(failure === undefined ? {} : { failure }),
+    }
+  })
+}
+
+function doctorBackendStatus(
+  backend: NonNullable<ProviderInstallationSummary['backend']>,
+): DoctorBackendStatus {
+  const state: DoctorComponentState =
+    backend.freshness !== 'current'
+      ? 'unknown'
+      : backend.readiness === 'ready'
+        ? 'ready'
+        : backend.readiness === 'unknown'
+          ? 'unknown'
+          : backend.readiness === 'unavailable'
+            ? 'unavailable'
+            : 'needs_attention'
+  return {
+    state,
+    mode: backend.mode,
+    readiness: backend.readiness,
+    freshness: backend.freshness,
+    ...(backend.observedAt === undefined
+      ? {}
+      : { observedAt: backend.observedAt }),
+    ...(backend.failure === undefined ? {} : { failure: backend.failure }),
+  }
+}
+
+function doctorProviderState(input: {
+  readonly descriptor?: ProviderDescriptor
+  readonly installed: boolean
+  readonly selected: boolean
+  readonly compatibility?: ProviderInstallationSummary['compatibility']
+  readonly backend?: DoctorBackendStatus
+  readonly executionHealth?: ProviderExecutionHealth
+  readonly machineOffline: boolean
+}): DoctorComponentState {
+  if (input.machineOffline) return 'offline'
+  if (!input.installed) return 'unavailable'
+  let state: DoctorComponentState
+  if (!input.selected || input.compatibility === undefined) {
+    state =
+      input.descriptor?.availability === 'available'
+        ? 'unknown'
+        : 'needs_attention'
+  } else if (input.compatibility.freshness !== 'current') {
+    state = 'unknown'
+  } else {
+    switch (input.compatibility.state) {
+      case 'unavailable':
+        state = 'unavailable'
+        break
+      case 'incompatible':
+        state = 'needs_attention'
+        break
+      case 'limited':
+        state =
+          input.backend?.state === 'ready'
+            ? 'limited'
+            : (input.backend?.state ?? 'unknown')
+        break
+      case 'verified':
+      case 'compatible_unverified':
+        state = input.backend?.state ?? 'unknown'
+        break
+    }
+  }
+  if (state !== 'ready' && state !== 'limited') return state
+  const health =
+    input.executionHealth?.freshness === 'current'
+      ? input.executionHealth
+      : undefined
+  if (
+    health?.state === 'unavailable' ||
+    health?.failure?.reason === 'provider_crashed' ||
+    health?.failure?.reason === 'runtime_error' ||
+    health?.failure?.reason === 'execution_lost'
+  ) {
+    return 'unavailable'
+  }
+  if (health?.state === 'degraded') return 'limited'
+  return state
+}
+
+function doctorSessionDiscoveryState(
+  compatibility: ProviderInstallationSummary['compatibility'] | undefined,
+): DoctorSessionDiscoveryState {
+  const capability = compatibility?.capabilities.nativeSessionDiscovery
+  if (capability === undefined) return 'unknown'
+  if (capability.effective) return 'supported'
+  if (capability.observed === 'unsupported') return 'unsupported'
+  if (capability.observed === 'unavailable') return 'unavailable'
+  return 'unknown'
+}
+
+function doctorProjectStatus(
+  project: ProjectRecord,
+  machines: readonly MachineSummary[],
+  checkedRemoteLocations?: ReadonlyMap<MachineId, DoctorComponentState>,
+): DoctorProjectStatus {
+  const locations = project.locations.map((location) => {
+    const machine = machines.find(
+      (candidate) => candidate.machineId === location.machineId,
+    )
+    const state: DoctorComponentState =
+      machine === undefined
+        ? 'unavailable'
+        : machine.kind === 'remote' && machine.connectionState !== 'online'
+          ? 'offline'
+          : machine.kind === 'remote'
+            ? (checkedRemoteLocations?.get(location.machineId) ?? 'unknown')
+            : location.availability !== 'available'
+              ? 'unavailable'
+              : 'ready'
+    return {
+      machineId: location.machineId,
+      machineName: machine?.displayName ?? 'Unknown computer',
+      machineKind: machine?.kind ?? ('remote' as const),
+      state,
+    }
+  })
+  const state: DoctorComponentState = locations.some(
+    (location) => location.state === 'ready',
+  )
+    ? 'ready'
+    : locations.some((location) => location.state === 'unknown')
+      ? 'unknown'
+      : locations.some((location) => location.state === 'offline')
+        ? 'offline'
+        : 'unavailable'
+  return {
+    projectId: project.projectId,
+    name: project.name,
+    state,
+    locations,
+  }
+}
+
+function doctorRemoteComputer(
+  detail: GetMachineResponse,
+): DoctorRemoteComputer {
+  if (
+    detail.machine.kind !== 'remote' ||
+    detail.machine.connectionState === 'local' ||
+    detail.connection === undefined ||
+    detail.relay === undefined
+  ) {
+    throw new Error('Remote Doctor detail requires a remote Machine response')
+  }
+  const providers = doctorProviderStatuses(detail)
+  const providerObservedAt =
+    detail.providerDiscovery?.state === 'current' ||
+    detail.providerDiscovery?.state === 'last_known'
+      ? detail.providerDiscovery.observedAt
+      : undefined
+  const state: DoctorComponentState =
+    detail.connection.state === 'online'
+      ? providers.some((provider) => provider.state === 'ready')
+        ? 'ready'
+        : providers.some((provider) => provider.state === 'limited')
+          ? 'limited'
+          : providers.some((provider) => provider.state === 'unknown')
+            ? 'unknown'
+            : 'needs_attention'
+      : detail.connection.state === 'connecting'
+        ? 'unknown'
+        : detail.connection.state === 'offline'
+          ? 'offline'
+          : 'needs_attention'
+  return {
+    machineId: detail.machine.machineId,
+    displayName: detail.machine.displayName,
+    platform: detail.machine.platform,
+    architecture: detail.machine.architecture,
+    state,
+    trust: 'trusted',
+    connectionState: detail.connection.state,
+    ...(detail.connection.executionTransport === undefined
+      ? {}
+      : { executionTransport: detail.connection.executionTransport }),
+    providerFreshness:
+      detail.providerDiscovery?.state === 'current'
+        ? 'current'
+        : detail.providerDiscovery?.state === 'last_known'
+          ? 'last_known'
+          : 'not_observed',
+    ...(providerObservedAt === undefined
+      ? {}
+      : { observedAt: providerObservedAt }),
+    providers,
+    relay: doctorRelayStatus(detail.relay),
+  }
+}
+
+function doctorRemoteComputerFallback(
+  machine: MachineSummary,
+  relay: RelayMachineConnectivity,
+): DoctorRemoteComputer {
+  if (machine.kind !== 'remote' || machine.connectionState === 'local') {
+    throw new Error('Remote Doctor fallback requires a remote Machine')
+  }
+  return {
+    machineId: machine.machineId,
+    displayName: machine.displayName,
+    platform: machine.platform,
+    architecture: machine.architecture,
+    state: machine.connectionState === 'offline' ? 'offline' : 'unknown',
+    trust: 'trusted',
+    connectionState: machine.connectionState,
+    providerFreshness: 'not_observed',
+    providers: doctorProviders.map((provider) => ({
+      provider,
+      state: machine.connectionState === 'offline' ? 'offline' : 'unknown',
+      installed: false,
+      selected: false,
+      alternateInstallations: 0,
+      freshness: 'not_observed',
+      sessionDiscovery: 'unknown',
+    })),
+    relay: doctorRelayStatus(relay),
+  }
+}
+
+function doctorRelayStatus(relay: RelayMachineConnectivity): DoctorRelayStatus {
+  const state: DoctorComponentState = relay.internetExecutionEnabled
+    ? 'ready'
+    : relay.state === 'connecting' || relay.state === 'reconnecting'
+      ? 'unknown'
+      : relay.state === 'not_configured' || relay.state === 'offline'
+        ? 'unavailable'
+        : 'needs_attention'
+  return {
+    state,
+    connectionState: relay.state,
+    enrollment: relay.enrollment,
+    nodePresence: relay.nodePresence,
+    internetExecutionEnabled: relay.internetExecutionEnabled,
+    ...(relay.failure === undefined ? {} : { failure: relay.failure }),
+  }
+}
+
+function doctorOverallState(
+  thisComputerState: DoctorComponentState,
+  providers: readonly DoctorProviderStatus[],
+  project: DoctorProjectStatus | undefined,
+  localMachineId: MachineId,
+  remoteComputers: readonly DoctorRemoteComputer[],
+): DoctorComponentState {
+  if (thisComputerState !== 'ready') return 'unavailable'
+  if (project !== undefined) {
+    let limitedPath = false
+    let unknownPath = false
+    for (const location of project.locations) {
+      if (location.state === 'unknown') {
+        unknownPath = true
+        continue
+      }
+      if (location.state !== 'ready') continue
+      const machineProviders =
+        location.machineId === localMachineId
+          ? providers
+          : (remoteComputers.find(
+              (machine) => machine.machineId === location.machineId,
+            )?.providers ?? [])
+      if (machineProviders.some((provider) => provider.state === 'ready')) {
+        return 'ready'
+      }
+      limitedPath ||= machineProviders.some(
+        (provider) => provider.state === 'limited',
+      )
+      unknownPath ||= machineProviders.some(
+        (provider) => provider.state === 'unknown',
+      )
+    }
+    if (limitedPath) return 'limited'
+    if (unknownPath) return 'unknown'
+    return 'needs_attention'
+  }
+  return 'needs_attention'
 }
 
 function shouldGenerateConversationTitle(

@@ -133,6 +133,11 @@ const migrations: readonly Migration[] = [
     name: 'provider_lifecycle',
     up: migrateProviderLifecycle,
   },
+  {
+    version: 17,
+    name: 'onboarding_progress',
+    up: migrateOnboardingProgress,
+  },
 ]
 
 export const currentSchemaVersion = migrations.at(-1)?.version ?? 0
@@ -2321,6 +2326,88 @@ function migrateProviderLifecycle(database: DatabaseSync): void {
       SELECT RAISE(ABORT, 'Conversation Provider installation is immutable');
     END;
   `)
+}
+
+/**
+ * Persists only resumable user-flow progress. Product readiness continues to
+ * come from the existing Machine, Project, Provider lifecycle, and backend
+ * authorities and is intentionally absent from this singleton.
+ */
+function migrateOnboardingProgress(database: DatabaseSync): void {
+  database.exec(`
+    CREATE TABLE onboarding_progress (
+      singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+      flow_version INTEGER NOT NULL CHECK (flow_version = 1),
+      step TEXT NOT NULL
+        CHECK (
+          step IN (
+            'welcome', 'computer_check', 'provider_check', 'project_setup',
+            'previous_conversations', 'remote_setup', 'ready'
+          )
+        ),
+      revision INTEGER NOT NULL CHECK (revision > 0),
+      project_id TEXT,
+      machine_id TEXT,
+      previous_conversations_disposition TEXT
+        CHECK (
+          previous_conversations_disposition IS NULL OR
+          previous_conversations_disposition IN ('reviewed', 'skipped')
+        ),
+      remote_setup_disposition TEXT
+        CHECK (
+          remote_setup_disposition IS NULL OR
+          remote_setup_disposition IN ('configured', 'skipped')
+        ),
+      last_action_id TEXT
+        CHECK (
+          last_action_id IS NULL OR (
+            length(last_action_id) BETWEEN 10 AND 100 AND
+            substr(last_action_id, 1, 4) = 'act_' AND
+            last_action_id = trim(last_action_id) AND
+            instr(last_action_id, char(0)) = 0
+          )
+        ),
+      started_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      completed_at TEXT,
+      CHECK ((project_id IS NULL) = (machine_id IS NULL)),
+      CHECK (step <> 'ready' OR completed_at IS NOT NULL),
+      FOREIGN KEY (project_id, machine_id)
+        REFERENCES project_locations(project_id, machine_id)
+        ON DELETE SET NULL
+    ) STRICT;
+  `)
+
+  const existing = database
+    .prepare(
+      `SELECT (
+        EXISTS(SELECT 1 FROM projects LIMIT 1) OR
+        EXISTS(SELECT 1 FROM conversations LIMIT 1) OR
+        EXISTS(SELECT 1 FROM provider_installations LIMIT 1) OR
+        EXISTS(
+          SELECT 1 FROM trusted_machine_peers
+          WHERE trust_state = 'active'
+          LIMIT 1
+        )
+      ) AS has_product_state`,
+    )
+    .get() as { readonly has_product_state: 0 | 1 }
+  const timestamp = new Date().toISOString()
+  const completedAt = existing.has_product_state === 1 ? timestamp : null
+  database
+    .prepare(
+      `INSERT INTO onboarding_progress (
+        singleton, flow_version, step, revision, project_id, machine_id,
+        previous_conversations_disposition, remote_setup_disposition,
+        last_action_id, started_at, updated_at, completed_at
+      ) VALUES (1, 1, ?, 1, NULL, NULL, NULL, NULL, NULL, ?, ?, ?)`,
+    )
+    .run(
+      existing.has_product_state === 1 ? 'ready' : 'welcome',
+      timestamp,
+      timestamp,
+      completedAt,
+    )
 }
 
 function parseLegacyTextInput(value: string, conversationId: string): string {

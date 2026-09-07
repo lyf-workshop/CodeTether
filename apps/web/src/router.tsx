@@ -6,6 +6,7 @@ import {
 } from '@tanstack/react-router'
 import {
   ConversationSearchQueryTextSchema,
+  ProjectIdSchema,
   TurnIdSchema,
   type TurnId,
 } from '@codetether/protocol'
@@ -18,6 +19,8 @@ import { InboxPage } from './components/inbox'
 import { MachineDetailRoute, MachinesPage } from './components/machines'
 import { ProjectDetailRoute, ProjectsPage } from './components/projects'
 import { DesktopNotificationSettings } from './components/settings'
+import { DoctorPage } from './components/doctor'
+import { OnboardingPage, StartupGate } from './components/onboarding'
 
 const rootRoute = createRootRoute({ component: RootLayout })
 
@@ -35,12 +38,23 @@ interface ProjectConversationsSearch {
 const homeRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/',
-  beforeLoad: () => {
-    throw redirect({
-      to: '/inbox',
-      replace: true,
-    })
+  component: StartupGate,
+})
+
+const setupRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/setup',
+  component: OnboardingPage,
+})
+
+const doctorRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/doctor',
+  validateSearch: (search: Record<string, unknown>) => {
+    const projectId = ProjectIdSchema.safeParse(search.projectId)
+    return projectId.success ? { projectId: projectId.data } : {}
   },
+  component: DoctorPage,
 })
 
 const conversationsRoute = createRoute({
@@ -134,6 +148,8 @@ const settingsRoute = createRoute({
 
 const routeTree = rootRoute.addChildren([
   homeRoute,
+  setupRoute,
+  doctorRoute,
   conversationsRoute,
   conversationRoute,
   inboxRoute,

@@ -314,6 +314,64 @@ test('ProjectLocation registration is exact, deduplicated, and refreshes Project
   )
 })
 
+test('remote-first Project creation is exact, deduplicated, and updates bounded caches', async () => {
+  const deferred = createDeferred()
+  const client = new FakeProjectClient({
+    remoteCreate: () => deferred.promise,
+  })
+  const queryClient = createQueryClient()
+  queryClient.setQueryData(projectQueryKeys.list, [])
+  queryClient.setQueryData(['host', 'machines', 'detail', 'machine_remote01'], {
+    stale: true,
+  })
+  const actions = new ProjectActions(client, idFactory(), queryClient)
+  const input = { rootPath: '  /srv/remote-only  ' }
+
+  const first = actions.createRemoteProject('machine_remote01', input)
+  const duplicate = actions.createRemoteProject('machine_remote01', input)
+  assert.strictEqual(first, duplicate)
+  assert.deepEqual(client.remoteCreateCalls, [
+    {
+      machineId: 'machine_remote01',
+      request: {
+        actionId: 'act_project_001',
+        path: '/srv/remote-only',
+      },
+    },
+  ])
+
+  const location = {
+    projectId: projectA.projectId,
+    machineId: 'machine_remote01',
+    rootPath: '/srv/remote-only',
+    availability: 'available',
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  }
+  const remoteProject = { ...projectA, locations: [location] }
+  deferred.resolve({
+    protocolVersion: 1,
+    actionId: 'act_project_001',
+    status: 'completed',
+    data: { project: remoteProject, location, created: true },
+  })
+  await first
+
+  assert.equal(
+    queryClient.getQueryState(projectQueryKeys.list).isInvalidated,
+    true,
+  )
+  assert.equal(
+    queryClient.getQueryState([
+      'host',
+      'machines',
+      'detail',
+      'machine_remote01',
+    ]).isInvalidated,
+    true,
+  )
+})
+
 test('ProjectLocation removal is exact, deduplicated, and refreshes Project and Machine truth', async () => {
   const remoteLocation = {
     projectId: projectA.projectId,
@@ -496,6 +554,7 @@ class FakeProjectClient {
     this.listCalls = []
     this.getCalls = []
     this.createCalls = []
+    this.remoteCreateCalls = []
     this.deleteCalls = []
     this.locationCalls = []
     this.removeLocationCalls = []
@@ -526,6 +585,15 @@ class FakeProjectClient {
     return (
       this.implementations.create?.(request) ??
       Promise.resolve(createResponse(request.actionId, projectA, true))
+    )
+  }
+
+  createRemoteProject(machineId, request) {
+    const call = { machineId, request }
+    this.remoteCreateCalls.push(call)
+    return (
+      this.implementations.remoteCreate?.(call) ??
+      Promise.reject(new Error('Unexpected remote Project creation'))
     )
   }
 

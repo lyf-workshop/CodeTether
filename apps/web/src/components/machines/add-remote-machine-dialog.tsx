@@ -25,6 +25,7 @@ import {
 } from '@codetether/ui'
 import {
   RemoteMachinePairingCodeSchema,
+  type MachineId,
   type RemoteMachinePairingCandidate,
 } from '@codetether/protocol'
 
@@ -41,10 +42,14 @@ import {
 } from './machine-presentation'
 
 interface AddRemoteMachineDialogProps {
+  onPaired?: (machineId: MachineId) => Promise<void> | void
+  presentation?: 'technical' | 'ordinary'
   trigger: ReactElement
 }
 
 export function AddRemoteMachineDialog({
+  onPaired,
+  presentation = 'technical',
   trigger,
 }: AddRemoteMachineDialogProps) {
   const navigate = useNavigate()
@@ -89,6 +94,10 @@ export function AddRemoteMachineDialog({
       const machineId = response.data.machine.machineId
       resetState()
       setOpen(false)
+      if (onPaired !== undefined) {
+        await onPaired(machineId)
+        return
+      }
       await navigate({
         to: '/machines/$machineId',
         params: { machineId },
@@ -103,13 +112,14 @@ export function AddRemoteMachineDialog({
     beginMutation.isPending ||
     confirmMutation.isPending ||
     cancelMutation.isPending
-  const error =
+  const rawError =
     validationError ||
     (beginMutation.isError
       ? machineErrorMessage(beginMutation.error, 'begin')
       : confirmMutation.isError
         ? machineErrorMessage(confirmMutation.error, 'confirm')
         : '')
+  const error = pairingErrorPresentation(rawError, presentation)
   const beginErrorCode =
     beginMutation.error instanceof CodeTetherResponseError
       ? beginMutation.error.envelope.code
@@ -226,9 +236,15 @@ export function AddRemoteMachineDialog({
               >
                 <Link2 className="size-5" />
               </span>
-              <DialogTitle>添加远程机器</DialogTitle>
+              <DialogTitle>
+                {presentation === 'ordinary'
+                  ? '添加另一台电脑'
+                  : '添加远程机器'}
+              </DialogTitle>
               <DialogDescription>
-                输入 CodeTether Node 显示的局域网地址和一次性配对码。
+                {presentation === 'ordinary'
+                  ? '在另一台电脑上打开 CodeTether，然后输入它显示的连接地址和一次性设置代码。'
+                  : '输入 CodeTether Node 显示的局域网地址和一次性配对码。'}
               </DialogDescription>
             </DialogHeader>
 
@@ -238,14 +254,15 @@ export function AddRemoteMachineDialog({
                   htmlFor="remote-machine-address"
                   className="text-sm font-medium text-text-primary"
                 >
-                  节点地址
+                  {presentation === 'ordinary' ? '连接地址' : '节点地址'}
                 </label>
                 <p
                   id="remote-machine-address-description"
                   className="mt-1 text-xs text-text-muted"
                 >
-                  使用节点显示的主机名或 IP 地址和端口。IPv6
-                  地址需要使用方括号。
+                  {presentation === 'ordinary'
+                    ? '输入另一台电脑上的 CodeTether 所显示的地址。'
+                    : '使用节点显示的主机名或 IP 地址和端口。IPv6 地址需要使用方括号。'}
                 </p>
                 <Input
                   ref={addressInputRef}
@@ -275,13 +292,15 @@ export function AddRemoteMachineDialog({
                   htmlFor="remote-machine-pairing-code"
                   className="text-sm font-medium text-text-primary"
                 >
-                  配对码
+                  {presentation === 'ordinary' ? '一次性设置代码' : '配对码'}
                 </label>
                 <p
                   id="remote-machine-pairing-code-description"
                   className="mt-1 text-xs text-text-muted"
                 >
-                  配对码仅在节点本次配对模式中短时有效，并且只能使用一次。
+                  {presentation === 'ordinary'
+                    ? '此代码短时有效，只能用于这一次安全连接。'
+                    : '配对码仅在节点本次配对模式中短时有效，并且只能使用一次。'}
                 </p>
                 <Input
                   id="remote-machine-pairing-code"
@@ -347,10 +366,12 @@ export function AddRemoteMachineDialog({
                 tabIndex={-1}
                 className="outline-none"
               >
-                确认远程机器
+                {presentation === 'ordinary' ? '确认这台电脑' : '确认远程机器'}
               </DialogTitle>
               <DialogDescription>
-                请确认以下信息和远程节点一致，再建立长期信任关系。
+                {presentation === 'ordinary'
+                  ? '请确认电脑名称、系统和安全校验码与另一台电脑上显示的信息一致。'
+                  : '请确认以下信息和远程节点一致，再建立长期信任关系。'}
               </DialogDescription>
             </DialogHeader>
 
@@ -404,8 +425,9 @@ export function AddRemoteMachineDialog({
               </dl>
 
               <p className="rounded-sm border border-warning/30 bg-warning-muted/45 px-3 py-2 text-sm text-text-secondary">
-                只有当远程节点显示相同的安全校验码时，才信任这台机器。CodeTether
-                不会因配对本身执行命令或访问文件；远程会话还必须满足独立的项目位置和智能体安全能力校验。
+                {presentation === 'ordinary'
+                  ? '只有当另一台电脑显示相同的安全校验码时才继续。设置代码不会成为长期凭据，连接也不会自动执行工作。'
+                  : '只有当远程节点显示相同的安全校验码时，才信任这台机器。CodeTether 不会因配对本身执行命令或访问文件；远程会话还必须满足独立的项目位置和智能体安全能力校验。'}
               </p>
 
               {error ? (
@@ -440,6 +462,18 @@ export function AddRemoteMachineDialog({
       </DialogContent>
     </Dialog>
   )
+}
+
+function pairingErrorPresentation(
+  message: string,
+  presentation: 'technical' | 'ordinary',
+): string {
+  return presentation === 'ordinary'
+    ? message
+        .replaceAll('远程节点', '另一台电脑上的 CodeTether')
+        .replaceAll('节点地址', '连接地址')
+        .replaceAll('节点', '另一台电脑')
+    : message
 }
 
 class PairingInputError extends Error {

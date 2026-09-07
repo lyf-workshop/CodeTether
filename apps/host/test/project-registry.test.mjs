@@ -164,6 +164,88 @@ test('ProjectRegistry projects retain all locations while Machine projections co
   }
 })
 
+test('ProjectRegistry creates and reuses a remote-only Project by canonical Machine location', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'codetether-remote-project-'))
+  const databasePath = join(directory, 'codetether.sqlite3')
+  let store
+
+  try {
+    store = ConversationStore.open({ databasePath })
+    const [localMachine] = store.listMachines()
+    assert.ok(localMachine)
+    const remote = remoteCandidate('machine_remoteonlyproject01')
+    store.createRemoteMachineWithTrust(remote.machine, remote.trust)
+    store.activateTrustedMachinePeer(remote.machine.machineId, later)
+    const registry = new ProjectRegistry({
+      workspacePolicy: await WorkspacePolicy.create(),
+      persistence: store,
+      now: () => later,
+      localMachineId: localMachine.machineId,
+      machineAvailability: () => 'available',
+      writeDurable: (operation) => operation(),
+      hasRuntimeConversations: () => false,
+    })
+    const canonicalPath = String.raw`C:\Work\Remote only`
+
+    const created = await registry.createRemote(
+      remote.machine.machineId,
+      canonicalPath,
+      'Remote only',
+    )
+    assert.equal(created.created, true)
+    assert.equal(created.project.name, 'Remote only')
+    assert.deepEqual(created.project.locations, [
+      {
+        projectId: created.project.projectId,
+        machineId: remote.machine.machineId,
+        rootPath: canonicalPath,
+        availability: 'available',
+        createdAt: later,
+        updatedAt: later,
+      },
+    ])
+
+    const repeated = await registry.createRemote(
+      remote.machine.machineId,
+      canonicalPath,
+      'Ignored replacement name',
+    )
+    assert.equal(repeated.created, false)
+    assert.equal(repeated.project.projectId, created.project.projectId)
+    assert.equal(repeated.project.name, 'Remote only')
+    assert.equal((await registry.list()).length, 1)
+    assert.ok(
+      store.getProjectLocation(
+        created.project.projectId,
+        remote.machine.machineId,
+      ),
+    )
+    await assert.rejects(
+      registry.createRemote(localMachine.machineId, canonicalPath),
+      (error) =>
+        error instanceof ProjectRegistryError &&
+        error.code === 'location_conflict',
+    )
+    await assert.rejects(
+      registry.removeLocation(
+        created.project.projectId,
+        remote.machine.machineId,
+      ),
+      (error) =>
+        error instanceof ProjectRegistryError &&
+        error.code === 'local_location_required',
+    )
+  } finally {
+    store?.close()
+    rmSync(directory, {
+      recursive: true,
+      force: true,
+      maxRetries: 10,
+      retryDelay: 100,
+    })
+  }
+})
+
 test('legacy cwd resolution selects the deepest matching local Project Location', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'codetether-project-nesting-'))
   const databasePath = join(directory, 'codetether.sqlite3')

@@ -8,6 +8,8 @@ import {
   MachineIdSchema,
   type CreateProjectRequest,
   type CreateProjectResponse,
+  type CreateRemoteProjectRequest,
+  type CreateRemoteProjectResponse,
   type DeleteProjectRequest,
   type DeleteProjectResponse,
   type MachineId,
@@ -28,6 +30,11 @@ export interface ProjectMutationClient {
     request: CreateProjectRequest,
     options?: { readonly signal?: AbortSignal },
   ): Promise<CreateProjectResponse>
+  createRemoteProject(
+    machineId: MachineId,
+    request: CreateRemoteProjectRequest,
+    options?: { readonly signal?: AbortSignal },
+  ): Promise<CreateRemoteProjectResponse>
   deleteProject(
     projectId: ProjectId,
     request: DeleteProjectRequest,
@@ -47,7 +54,12 @@ export interface ProjectMutationClient {
 }
 
 export type ProjectOperation =
-  'load' | 'create' | 'register-location' | 'remove-location' | 'remove'
+  | 'load'
+  | 'create'
+  | 'create-remote'
+  | 'register-location'
+  | 'remove-location'
+  | 'remove'
 
 interface CreateAttempt {
   readonly identity: string
@@ -77,6 +89,10 @@ export class ProjectActions {
   readonly #createActionId: ActionIdFactory
   readonly #queryClient?: QueryClient
   #createAttempt?: CreateAttempt
+  readonly #remoteCreateAttempts = new Map<
+    string,
+    Promise<CreateRemoteProjectResponse>
+  >()
   readonly #deleteAttempts = new Map<
     ProjectId,
     Promise<DeleteProjectResponse>
@@ -146,6 +162,48 @@ export class ProjectActions {
         }
       })
     this.#locationAttempts.set(identity, promise)
+    return promise
+  }
+
+  createRemoteProject(
+    machineId: MachineId | string,
+    input: { readonly rootPath: string; readonly name?: string },
+  ): Promise<CreateRemoteProjectResponse> {
+    const machine = MachineIdSchema.parse(machineId)
+    const path = input.rootPath.trim()
+    if (path.length === 0) return Promise.reject(new ProjectInputError())
+    const name = input.name?.trim() || undefined
+    const identity = JSON.stringify([machine, path, name])
+    const current = this.#remoteCreateAttempts.get(identity)
+    if (current !== undefined) return current
+
+    const request: CreateRemoteProjectRequest = {
+      actionId: this.#createActionId(),
+      path,
+      ...(name === undefined ? {} : { name }),
+    }
+    const promise = this.#client
+      .createRemoteProject(machine, request)
+      .then((response) => {
+        if (this.#queryClient !== undefined) {
+          upsertProjectCache(this.#queryClient, response.data.project)
+          void this.#queryClient.invalidateQueries({
+            queryKey: projectQueryKeys.list,
+            exact: true,
+          })
+          void this.#queryClient.invalidateQueries({
+            queryKey: machineQueryKeys.detail(machine),
+            exact: true,
+          })
+        }
+        return response
+      })
+      .finally(() => {
+        if (this.#remoteCreateAttempts.get(identity) === promise) {
+          this.#remoteCreateAttempts.delete(identity)
+        }
+      })
+    this.#remoteCreateAttempts.set(identity, promise)
     return promise
   }
 
@@ -264,7 +322,7 @@ export function projectErrorMessage(
 
   switch (error.envelope.code) {
     case 'invalid_request':
-      return operation === 'create'
+      return operation === 'create' || operation === 'create-remote'
         ? '项目路径无效或当前无法访问，请确认它是允许访问的绝对目录。'
         : '项目请求无效，请刷新后重试。'
     case 'not_found':
@@ -327,7 +385,7 @@ export function projectErrorMessage(
     case 'internal':
       return operation === 'load'
         ? 'CodeTether 未能读取项目。'
-        : operation === 'create'
+        : operation === 'create' || operation === 'create-remote'
           ? 'CodeTether 未能添加项目。'
           : operation === 'remove-location'
             ? 'CodeTether 未能移除工作区位置。'

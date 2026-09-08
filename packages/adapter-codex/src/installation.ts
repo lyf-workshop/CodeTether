@@ -281,17 +281,22 @@ function boundedCandidatePaths(options: {
   return { paths, truncated }
 }
 
-function defaultKnownPaths(
+export function defaultKnownPaths(
   environment: NodeJS.ProcessEnv,
   platform: NodeJS.Platform,
 ): readonly string[] {
   const home =
     environmentValue(environment, 'HOME') ??
     environmentValue(environment, 'USERPROFILE')
-  if (home === undefined || !isAbsolute(home)) return []
+  const system =
+    platform === 'darwin'
+      ? ['/opt/homebrew/bin/codex', '/usr/local/bin/codex']
+      : []
+  if (home === undefined || !isAbsolute(home)) return system
   return platform === 'win32'
     ? [join(home, '.local', 'bin', 'codex.exe')]
     : [
+        ...system,
         join(home, '.local', 'bin', 'codex'),
         join(home, '.codex', 'bin', 'codex'),
       ]

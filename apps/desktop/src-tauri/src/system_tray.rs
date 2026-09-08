@@ -46,7 +46,7 @@ pub fn create(app: &AppHandle) -> Result<(), String> {
         .icon(icon)
         .tooltip("CodeTether")
         .menu(&menu)
-        .show_menu_on_left_click(false)
+        .show_menu_on_left_click(cfg!(target_os = "macos"))
         .on_menu_event(|app, event| match tray_menu_action(event.id().as_ref()) {
             TrayMenuAction::Show => {
                 if let Err(error) = show_main_window(app) {

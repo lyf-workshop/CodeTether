@@ -2,6 +2,22 @@
 
 ## Status
 
+Owner accepted and froze **Phase 8C** at `67c71f2e3ad390004cc60fe30925224a02aba485`
+with 129 / 129 criteria passing. **Phase 8D** is now authorized for implementation
+only: distribution, POSIX sidecar supervision, user-service installation, native
+bundle configuration, bounded platform discovery and release identity/checksums.
+REAL macOS and physical Linux acceptance is pending. This supersedes older
+current-scope wording below, without changing any frozen product authority.
+See [Phase 8D architecture, support matrix and REAL handoff](PHASE8D-CROSS-PLATFORM-DISTRIBUTION.md).
+
+Distribution adds no SQLite migration, Provider profile or Machine protocol.
+Windows Job Objects remain unchanged. A private POSIX guardian reserves the owned
+Host process-group leader until cleanup, accepts only the packaged Host launch,
+and observes the Desktop parent pipe. Linux systemd user and macOS LaunchAgent
+installers retain durable identity and do not import shell credentials. The root
+product version and clean Git build identity bind release artifacts; SHA-256 and
+native receipt checks never turn build success into REAL platform support.
+
 Phase 1 Frontend Experience is accepted and frozen as **CodeTether V2 Frontend Core v1**. Phase 2A and Phase 2A.1 are accepted and frozen as **Phase 2A Codex Runtime v1**. Phase 2B is accepted as the versioned local Client-to-Host boundary: HTTP commands, an SSE event stream, CodeTether-owned public identities, in-memory snapshot/replay, and a non-React client.
 
 Phase 2C.1 is accepted, and Phase 2C.1.1 is frozen as **Live Conversation Read Model v1**: one application-scoped Web runtime connects the frozen Conversation Detail to Protocol v1, while bounded Host-owned history reconstructs the same retained multi-Turn view after initial load, refresh, reconnect reset, or live event application. Phase 2C.2 is accepted and frozen as **CodeTether Local Codex Alpha v0.1**, connecting only the existing text Composer, one-shot Approval actions, and Interrupt control. Phase 2D audited and stabilized this boundary without adding product scope.

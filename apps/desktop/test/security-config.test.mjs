@@ -170,7 +170,10 @@ test('Web UI exposes only the narrow Project picker, Provider guidance, and Atte
   assert.match(desktopRust, /window\.show\(\)/u)
   assert.match(desktopRust, /window\.set_focus\(\)/u)
   assert.match(desktopRust, /TrayIconBuilder::with_id/u)
-  assert.match(desktopRust, /\.show_menu_on_left_click\(false\)/u)
+  assert.match(
+    desktopRust,
+    /\.show_menu_on_left_click\(cfg!\(target_os = "macos"\)\)/u,
+  )
   assert.match(desktopRust, /"打开 CodeTether"/u)
   assert.match(desktopRust, /"退出 CodeTether"/u)
   assert.match(desktopRust, /window\.hide\(\)/u)

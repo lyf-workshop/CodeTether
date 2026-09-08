@@ -1,0 +1,10 @@
+{
+  "name": "@codetether/distribution",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "typecheck": "node --check src/release.mjs && node --check src/build.mjs"
+  }
+}

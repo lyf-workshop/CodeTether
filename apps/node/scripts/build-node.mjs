@@ -4,6 +4,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { build } from 'esbuild'
+import { productVersion } from '../../distribution/src/identity.mjs'
 
 const nodeDirectory = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const repositoryDirectory = resolve(nodeDirectory, '..', '..')
@@ -75,6 +76,7 @@ async function main() {
     },
     define: {
       __CODETETHER_NODE_VERSION__: JSON.stringify(buildId),
+      __CODETETHER_PRODUCT_VERSION__: JSON.stringify(productVersion()),
     },
     logLevel: 'info',
     sourcemap: false,

@@ -15,12 +15,9 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, RunEvent, WindowEvent};
-use tauri_plugin_shell::{
-    ShellExt,
-    process::{CommandChild, CommandEvent},
-};
+use tauri_plugin_shell::{ShellExt, process::CommandEvent};
 
-use self::process_tree::ProcessTreeGuard;
+use self::process_tree::{CommandChild, ProcessTreeGuard};
 use crate::{
     attention_notifications::AttentionNotificationState,
     desktop_lifecycle::{
@@ -240,16 +237,24 @@ impl HostSupervisor {
         }
 
         let origin = desktop_origin();
+        #[cfg(windows)]
         let command = app
             .shell()
             .sidecar("codetether-host")
-            .map_err(|error| StartError::Spawn(error.to_string()))?
+            .map_err(|error| StartError::Spawn(error.to_string()))?;
+        #[cfg(unix)]
+        let command = app
+            .shell()
+            .command(std::env::current_exe().map_err(|error| StartError::Spawn(error.to_string()))?)
+            .args([codetether_posix_supervisor::GUARDIAN_ARGUMENT]);
+        let command = command
             .args(["--port", "4317", "--origin", origin])
             .env("CODETETHER_DESKTOP_MANAGED", "1");
-        let (mut events, mut child) = command
+        let (mut events, child) = command
             .spawn()
             .map_err(|error| StartError::Spawn(error.to_string()))?;
-        let process_tree = match ProcessTreeGuard::assign(child.pid()) {
+        let mut child = CommandChild::new(child);
+        let process_tree = match ProcessTreeGuard::assign(&child) {
             Ok(guard) => guard,
             Err(error) => {
                 let _ = child.write(b"shutdown\n");
@@ -1183,6 +1188,13 @@ fn shutdown_exit_code(outcome: ShutdownOutcome, requested_code: i32) -> i32 {
 }
 
 pub fn run_desktop() {
+    eprintln!(
+        "[codetether:desktop] version={} build={} platform={} architecture={}",
+        env!("CARGO_PKG_VERSION"),
+        env!("CODETETHER_BUILD_ID"),
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    );
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Err(error) = show_main_window(app) {
@@ -1223,7 +1235,7 @@ pub fn run_desktop() {
 
             if let Err(error) = windows_lifecycle::install(app.handle()) {
                 eprintln!(
-                    "[codetether:desktop] could not initialize Windows lifecycle handling: {error}"
+                    "[codetether:desktop] could not initialize platform lifecycle handling: {error}"
                 );
                 finish_startup_failure(
                     app.handle().clone(),
@@ -1279,6 +1291,10 @@ pub fn run_desktop() {
         .expect("failed to build CodeTether Desktop");
 
     app.run(|app_handle, event| match event {
+        #[cfg(target_os = "macos")]
+        RunEvent::Reopen { .. } => {
+            let _ = show_main_window(app_handle);
+        }
         RunEvent::WindowEvent {
             label,
             event: WindowEvent::CloseRequested { api, .. },

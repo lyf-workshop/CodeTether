@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { spawnCodexCompatibilityProcess } from './probe-supervision.js'
 import { lstat, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
@@ -612,15 +613,11 @@ export function runBoundedCodexProbe(options: {
   }
   options.signal?.throwIfAborted()
   return new Promise((resolve, reject) => {
-    const processGroupOwned = process.platform !== 'win32'
-    const child = spawn(options.executable, [...options.arguments], {
-      env: sanitizeCodexProbeEnvironment(options.environment),
-      shell: false,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      windowsHide: true,
-      // A dedicated POSIX process group lets timeout/abort/output cleanup
-      // remove descendants without relying on a process-name search.
-      detached: processGroupOwned,
+    const { child, processGroupOwned } = spawnCodexCompatibilityProcess({
+      executable: options.executable,
+      arguments: options.arguments,
+      environment: sanitizeCodexProbeEnvironment(options.environment),
+      timeoutMs,
     })
     const stdout: Buffer[] = []
     let outputBytes = 0

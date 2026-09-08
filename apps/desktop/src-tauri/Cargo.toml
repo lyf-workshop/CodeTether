@@ -11,6 +11,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "=2.6.3", features = [] }
+serde_json = "1"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -20,6 +21,15 @@ tauri-plugin-dialog = "=2.7.2"
 tauri-plugin-notification = "=2.3.3"
 tauri-plugin-shell = "=2.3.5"
 tauri-plugin-single-instance = "=2.4.3"
+
+[target.'cfg(unix)'.dependencies]
+codetether-posix-supervisor = { path = "../posix-supervisor" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "=0.6.2"
+objc2 = "=0.6.4"
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSWorkspace", "block2"] }
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSNotification", "NSOperation", "NSString", "block2"] }
 
 [target.'cfg(windows)'.dependencies]
 tauri-winrt-notification = "=0.7.3"

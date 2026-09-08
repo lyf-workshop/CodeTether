@@ -13,6 +13,9 @@ apps/desktop/src-tauri/binaries/*
 !apps/desktop/src-tauri/binaries/.gitkeep
 apps/desktop/src-tauri/icons/*
 !apps/desktop/src-tauri/icons/icon.ico
+!apps/desktop/src-tauri/icons/icon.icns
+!apps/desktop/src-tauri/icons/128x128.png
+!apps/desktop/src-tauri/icons/128x128@2x.png
 *.tsbuildinfo
 *.sqlite
 *.sqlite3

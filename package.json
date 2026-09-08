@@ -1,6 +1,6 @@
 {
   "name": "codetether-v2",
-  "version": "0.0.0",
+  "version": "0.1.0-alpha.0",
   "private": true,
   "type": "module",
   "description": "A control center for AI coding agents.",
@@ -10,6 +10,14 @@
     "pnpm": ">=10"
   },
   "scripts": {
+    "distribution:check": "node apps/distribution/src/validate.mjs",
+    "release:desktop:windows-x64": "node apps/distribution/src/build.mjs desktop windows x64",
+    "release:desktop:macos-arm64": "node apps/distribution/src/build.mjs desktop macos arm64",
+    "release:desktop:linux-x64": "node apps/distribution/src/build.mjs desktop linux x64",
+    "release:node:linux-x64": "node apps/distribution/src/build.mjs node linux x64",
+    "release:node:linux-arm64": "node apps/distribution/src/build.mjs node linux arm64",
+    "release:node:macos-arm64": "node apps/distribution/src/build.mjs node macos arm64",
+    "release:manifest": "node apps/distribution/src/release.mjs",
     "dev": "pnpm --filter @codetether/web dev",
     "build": "pnpm -r --workspace-concurrency=1 --if-present build",
     "typecheck": "pnpm -r --workspace-concurrency=1 --if-present typecheck",

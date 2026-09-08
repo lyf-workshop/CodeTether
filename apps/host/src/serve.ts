@@ -10,7 +10,25 @@ import {
   resolveRemoteMachineTransportPolicy,
 } from './serve-config.js'
 
+declare const __CODETETHER_PRODUCT_VERSION__: string | undefined
+
 async function main(): Promise<void> {
+  if (process.argv.length === 3 && process.argv[2] === '--version') {
+    process.stdout.write(
+      `${JSON.stringify({
+        product: 'CodeTether',
+        component: 'host',
+        version:
+          typeof __CODETETHER_PRODUCT_VERSION__ === 'string'
+            ? __CODETETHER_PRODUCT_VERSION__
+            : 'development',
+        build: await resolveHostVersion(),
+        platform: process.platform,
+        architecture: process.arch,
+      })}\n`,
+    )
+    return
+  }
   const desktopManaged = isDesktopManaged()
   let host: RunningLocalCodexHost | undefined
   const lifecycle = createHostProcessLifecycle({

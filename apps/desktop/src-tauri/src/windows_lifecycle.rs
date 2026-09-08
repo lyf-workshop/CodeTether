@@ -279,7 +279,10 @@ mod platform {
 #[cfg(windows)]
 pub(crate) use platform::install;
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+pub(crate) use crate::macos_lifecycle::install;
+
+#[cfg(not(any(windows, target_os = "macos")))]
 pub(crate) fn install(_app: &tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }

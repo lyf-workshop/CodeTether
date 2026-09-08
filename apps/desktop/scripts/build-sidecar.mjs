@@ -1,10 +1,11 @@
 import { execFileSync } from 'node:child_process'
-import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, rm, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { build } from 'esbuild'
+import { productVersion } from '../../distribution/src/identity.mjs'
 
 const desktopDirectory = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const repositoryDirectory = resolve(desktopDirectory, '..', '..')
@@ -74,6 +75,7 @@ async function main() {
     banner: { js: commonJsSeaBanner },
     define: {
       __CODETETHER_HOST_VERSION__: JSON.stringify(buildId),
+      __CODETETHER_PRODUCT_VERSION__: JSON.stringify(productVersion()),
     },
     logLevel: 'info',
     sourcemap: false,
@@ -91,6 +93,7 @@ async function main() {
     cwd: temporaryDirectory,
     stdio: 'inherit',
   })
+  if (process.platform !== 'win32') await chmod(sidecarPath, 0o755)
   await writeFile(
     join(binariesDirectory, 'build-id.txt'),
     `${buildId}\n`,

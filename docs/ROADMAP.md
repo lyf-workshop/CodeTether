@@ -1266,7 +1266,7 @@ Exit gate:
 
 ## Phase 8C — Zero-Config Onboarding & Doctor
 
-**Status:** current approved implementation scope; not accepted, frozen, or declared ready.
+**Status:** Phase 8C = ACCEPTED AND FROZEN by Owner at `67c71f2e3ad390004cc60fe30925224a02aba485` (129 / 129 PASS).
 
 **Goal:** make the accepted local and remote CodeTether foundation usable and diagnosable without requiring ordinary users to understand Host, Node, Relay, TLS, ProjectLocation, ProviderInstallation, or canonical diagnostic internals.
 
@@ -1295,7 +1295,7 @@ Exit gate:
 
 ## Phase 8D — Cross-Platform Distribution
 
-**Status:** planned; unimplemented and unauthorized during Phase 8C.
+**Status:** authorized implementation-only pass. REAL Apple Silicon macOS and physical Linux validation remains mandatory before acceptance. See [Phase 8D distribution](PHASE8D-CROSS-PLATFORM-DISTRIBUTION.md).
 
 **Goal:** distribute the established Desktop/Node and onboarding architecture across the supported Windows, macOS, and Linux matrix with platform-appropriate packaging, signing, credential storage, background/tray behavior, sleep/wake handling, path semantics, and update delivery.
 

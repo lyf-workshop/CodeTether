@@ -1,4 +1,4 @@
-import { arch, homedir, platform } from 'node:os'
+import { arch, platform } from 'node:os'
 import { isAbsolute, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
@@ -12,8 +12,11 @@ import {
 } from './provider-process-guardian.js'
 import { NodeStateStore } from './state-store.js'
 import { readNodeRelayConfiguration } from './relay-state.js'
+import { runServiceCommand } from './service-installation.js'
+import { resolveNodeDataDirectory } from './data-directory.js'
 
 declare const __CODETETHER_NODE_VERSION__: string | undefined
+declare const __CODETETHER_PRODUCT_VERSION__: string | undefined
 
 export interface NodeCliOptions {
   readonly bindAddress: string
@@ -27,7 +30,7 @@ export interface NodeCliOptions {
 export function parseNodeCli(arguments_: readonly string[]): NodeCliOptions {
   let bindAddress = '127.0.0.1'
   let port = 4318
-  let dataDirectory = resolve(homedir(), '.codetether-node')
+  let dataDirectory: string | undefined
   let displayName = 'CodeTether Node'
   let pairing = false
   let json = false
@@ -54,6 +57,7 @@ export function parseNodeCli(arguments_: readonly string[]): NodeCliOptions {
       throw new Error(`Unknown argument: ${argument}`)
     }
   }
+  dataDirectory ??= resolveNodeDataDirectory()
   if (!isAbsolute(dataDirectory)) {
     throw new Error('--data-dir must be an absolute path')
   }
@@ -255,7 +259,31 @@ if (
   import.meta.url === pathToFileURL(resolve(process.argv[1])).href
 ) {
   const arguments_ = process.argv.slice(2)
-  if (isProviderGuardianInvocation(arguments_)) {
+  if (arguments_.length === 1 && arguments_[0] === '--version') {
+    process.stdout.write(
+      `${JSON.stringify({
+        product: 'CodeTether',
+        component: 'node',
+        version:
+          typeof __CODETETHER_PRODUCT_VERSION__ === 'string'
+            ? __CODETETHER_PRODUCT_VERSION__
+            : 'development',
+        build:
+          typeof __CODETETHER_NODE_VERSION__ === 'string'
+            ? __CODETETHER_NODE_VERSION__
+            : 'development',
+        platform: platform(),
+        architecture: arch(),
+      })}\n`,
+    )
+  } else if (arguments_[0] === 'service') {
+    await runServiceCommand(arguments_.slice(1)).catch(() => {
+      process.stderr.write(
+        'CodeTether user-service operation failed. Check the installation instructions and user service status.\n',
+      )
+      process.exitCode = 1
+    })
+  } else if (isProviderGuardianInvocation(arguments_)) {
     try {
       await runProviderProcessGuardian()
     } catch {

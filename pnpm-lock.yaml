@@ -45,6 +45,8 @@ importers:
         specifier: 0.28.2
         version: 0.28.2
 
+  apps/distribution: {}
+
   apps/host:
     dependencies:
       '@codetether/adapter-claude':

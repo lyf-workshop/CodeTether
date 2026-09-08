@@ -227,7 +227,15 @@ pub fn deliver_attention_notification(
     #[cfg(windows)]
     let result = show_windows_notification(&app, state.inner().clone(), intent.clone());
     #[cfg(not(windows))]
-    let result: Result<(), String> = Err("Desktop notifications are unavailable.".to_owned());
+    let result: Result<(), String> = {
+        use tauri_plugin_notification::NotificationExt;
+        app.notification()
+            .builder()
+            .title(&intent.title)
+            .body(&intent.body)
+            .show()
+            .map_err(|error| error.to_string())
+    };
 
     match result {
         Ok(()) => {

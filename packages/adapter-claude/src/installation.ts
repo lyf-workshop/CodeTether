@@ -266,15 +266,20 @@ async function boundedClaudeCandidatePaths(options: {
   return { paths, truncated }
 }
 
-function defaultKnownPaths(
+export function defaultKnownPaths(
   environment: NodeJS.ProcessEnv,
   platform: NodeJS.Platform,
 ): readonly string[] {
   const home = homeDirectory(environment)
-  if (home === undefined) return []
+  const system =
+    platform === 'darwin'
+      ? ['/opt/homebrew/bin/claude', '/usr/local/bin/claude']
+      : []
+  if (home === undefined) return system
   return platform === 'win32'
     ? [join(home, '.local', 'bin', 'claude.exe')]
     : [
+        ...system,
         join(home, '.local', 'bin', 'claude'),
         join(home, '.claude', 'local', 'claude'),
       ]

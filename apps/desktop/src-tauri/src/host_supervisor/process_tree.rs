@@ -1,3 +1,40 @@
+use std::sync::{Arc, Mutex};
+
+/// Private pipe ownership is shareable, numeric process authority is not.
+pub struct CommandChild(Arc<Mutex<Option<tauri_plugin_shell::process::CommandChild>>>);
+
+impl CommandChild {
+    pub fn new(child: tauri_plugin_shell::process::CommandChild) -> Self {
+        Self(Arc::new(Mutex::new(Some(child))))
+    }
+    pub fn pid(&self) -> u32 {
+        self.0.lock().unwrap().as_ref().expect("owned child").pid()
+    }
+    pub fn write(&mut self, bytes: &[u8]) -> Result<(), tauri_plugin_shell::Error> {
+        self.0
+            .lock()
+            .unwrap()
+            .as_mut()
+            .expect("owned child")
+            .write(bytes)
+    }
+    pub fn kill(self) -> Result<(), tauri_plugin_shell::Error> {
+        #[cfg(windows)]
+        {
+            self.0.lock().unwrap().take().expect("owned child").kill()
+        }
+        #[cfg(unix)]
+        {
+            self.0
+                .lock()
+                .unwrap()
+                .as_mut()
+                .expect("owned child")
+                .write(b"terminate-tree\n")
+        }
+    }
+}
+
 #[cfg(windows)]
 mod platform {
     use std::{io, mem::size_of};
@@ -21,7 +58,8 @@ mod platform {
     unsafe impl Send for ProcessTreeGuard {}
 
     impl ProcessTreeGuard {
-        pub fn assign(process_id: u32) -> io::Result<Self> {
+        pub fn assign(child: &super::CommandChild) -> io::Result<Self> {
+            let process_id = child.pid();
             unsafe {
                 let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
                 if job.is_null() {
@@ -75,18 +113,28 @@ mod platform {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(unix)]
 mod platform {
     use std::io;
 
-    pub struct ProcessTreeGuard;
+    pub struct ProcessTreeGuard(super::CommandChild);
 
     impl ProcessTreeGuard {
-        pub fn assign(_process_id: u32) -> io::Result<Self> {
-            Ok(Self)
+        pub fn assign(child: &super::CommandChild) -> io::Result<Self> {
+            // The launched private guardian creates the group before forwarding
+            // `start`. This handle carries only that launch's pipe, never a PID.
+            Ok(Self(super::CommandChild(child.0.clone())))
         }
 
-        pub fn terminate(self) {}
+        pub fn terminate(self) {
+            drop(self);
+        }
+    }
+
+    impl Drop for ProcessTreeGuard {
+        fn drop(&mut self) {
+            let _ = self.0.write(b"terminate-tree\n");
+        }
     }
 }
 

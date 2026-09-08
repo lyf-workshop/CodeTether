@@ -15,6 +15,7 @@ import { createConnection } from 'node:net'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { productVersion } from '../../distribution/src/identity.mjs'
 
 const HOST = '127.0.0.1'
 const PORT = 4317
@@ -348,7 +349,7 @@ async function readDesktopConfiguration() {
     identifier: config.identifier,
     manufacturer,
     productName: config.productName,
-    version: config.version,
+    version: productVersion(),
   }
 }
 

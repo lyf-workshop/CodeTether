@@ -37,13 +37,17 @@ export interface CodexHostRuntimeOptions {
   readonly ephemeralThreads?: boolean
   readonly providerInstallationId?: ProviderInstallationId
   readonly installationRevision?: ProviderInstallationRevision
+  /** Internal deterministic-test seam; never accepted by a product request. */
+  readonly processFactory?: typeof spawnCodexAppServer
 }
 
 /** One long-running Codex App Server behind the Host-facing runtime boundary. */
 export class CodexHostRuntime implements AgentHostRuntime {
   readonly provider = 'codex' as const
   readonly installation
-  readonly #client: CodexAppServerClient
+  readonly #options: CodexHostRuntimeOptions
+  #client?: CodexAppServerClient
+  #initialization?: Promise<void>
   readonly #queue = new BoundedAgentEventQueue()
   readonly #integrity = new IncrementalDeltaIntegrityTracker()
   readonly #eventListeners = new Set<(event: AgentEvent) => void>()
@@ -58,6 +62,7 @@ export class CodexHostRuntime implements AgentHostRuntime {
   #providerDiagnosticSuppressionReported = false
 
   private constructor(options: CodexHostRuntimeOptions) {
+    this.#options = options
     if (
       (options.providerInstallationId === undefined) !==
       (options.installationRevision === undefined)
@@ -80,15 +85,47 @@ export class CodexHostRuntime implements AgentHostRuntime {
       for (const listener of this.#eventListeners) listener(event)
     })
     this.#pump.catch((error: unknown) => this.#fail(toError(error)))
+  }
 
-    const child = spawnCodexAppServer(options.executable, {
-      // CodeTether must remain the approval authority for every Alpha Host
-      // launch path. Callers may opt back in only as an explicit decision.
-      disableHooks: options.disableHooks ?? true,
-      ...(options.environment === undefined
-        ? {}
-        : { environment: options.environment }),
-    })
+  /** Lifecycle metadata already verifies this exact installation. No child yet. */
+  static deferred(options: CodexHostRuntimeOptions): CodexHostRuntime {
+    return new CodexHostRuntime(options)
+  }
+
+  get available(): boolean {
+    // An explicit lifecycle refresh may replace a closed runtime after verified
+    // cleanup. It must never reuse a failed deferred initialization as live.
+    return this.#failure === undefined && this.#closePromise === undefined
+  }
+
+  async #initialize(): Promise<void> {
+    try {
+      this.#openClient()
+      await this.#requireClient().initialize({
+        name: 'codetether',
+        title: 'CodeTether',
+        version: this.#options.version,
+      })
+    } catch (error) {
+      // Keep the failed attempt latched. No automatic replacement or replay.
+      await this.close()
+      throw error
+    }
+  }
+
+  #openClient(): void {
+    const options = this.#options
+    const child = (options.processFactory ?? spawnCodexAppServer)(
+      options.executable,
+      {
+        // CodeTether must remain the approval authority for every Alpha Host
+        // launch path. Callers may opt back in only as an explicit decision.
+        disableHooks: options.disableHooks ?? true,
+        ...(options.environment === undefined
+          ? {}
+          : { environment: options.environment }),
+      },
+    )
     this.#client = new CodexAppServerClient(child, {
       requestTimeoutMs: 30_000,
       onEvent: (event) => this.#enqueue(event),
@@ -129,17 +166,8 @@ export class CodexHostRuntime implements AgentHostRuntime {
     options: CodexHostRuntimeOptions,
   ): Promise<CodexHostRuntime> {
     const runtime = new CodexHostRuntime(options)
-    try {
-      await runtime.#client.initialize({
-        name: 'codetether',
-        title: 'CodeTether',
-        version: options.version,
-      })
-      return runtime
-    } catch (error) {
-      await runtime.close()
-      throw error
-    }
+    await runtime.#readyClient()
+    return runtime
   }
 
   subscribeEvents(listener: (event: AgentEvent) => void): () => void {
@@ -183,8 +211,8 @@ export class CodexHostRuntime implements AgentHostRuntime {
     readonly model?: string
     readonly reasoning?: string
   }): Promise<ProviderConversationResult> {
-    this.#assertHealthy()
-    const result = await this.#client.startThread({
+    const client = await this.#readyClient()
+    const result = await client.startThread({
       cwd: options.cwd,
       ephemeral: this.#ephemeralThreads,
       approvalPolicy: 'on-request',
@@ -202,8 +230,8 @@ export class CodexHostRuntime implements AgentHostRuntime {
     readonly cwd: string
     readonly providerSessionMaterialized: boolean
   }): Promise<ProviderConversationResult> {
-    this.#assertHealthy()
-    return await resumeCodexConversation(this.#client, options)
+    const client = await this.#readyClient()
+    return await resumeCodexConversation(client, options)
   }
 
   async startTurn(options: {
@@ -214,7 +242,7 @@ export class CodexHostRuntime implements AgentHostRuntime {
     readonly reasoning?: string
   }): Promise<ProviderTurnResult> {
     this.#assertHealthy()
-    const result = await this.#client.startTurn({
+    const result = await this.#requireClient().startTurn({
       threadId: options.providerThreadId,
       prompt: options.input,
       ...(options.model === undefined ? {} : { model: options.model }),
@@ -230,7 +258,7 @@ export class CodexHostRuntime implements AgentHostRuntime {
     readonly providerTurnId: string
   }): Promise<void> {
     this.#assertHealthy()
-    await this.#client.interruptTurn({
+    await this.#requireClient().interruptTurn({
       threadId: options.providerThreadId,
       turnId: options.providerTurnId,
     })
@@ -321,7 +349,7 @@ export class CodexHostRuntime implements AgentHostRuntime {
 
     let shutdownError: Error | undefined
     try {
-      await this.#client.shutdown()
+      await this.#client?.shutdown()
     } catch (error) {
       shutdownError = toError(error)
     } finally {
@@ -348,6 +376,21 @@ export class CodexHostRuntime implements AgentHostRuntime {
     if (this.#closePromise !== undefined) {
       throw new Error('Codex Host runtime is closing')
     }
+  }
+
+  async #readyClient(): Promise<CodexAppServerClient> {
+    this.#assertHealthy()
+    this.#initialization ??= this.#initialize()
+    await this.#initialization
+    this.#assertHealthy()
+    return this.#requireClient()
+  }
+
+  #requireClient(): CodexAppServerClient {
+    if (this.#client === undefined) {
+      throw new Error('Codex runtime has no admitted execution session')
+    }
+    return this.#client
   }
 
   #fail(error: Error): void {

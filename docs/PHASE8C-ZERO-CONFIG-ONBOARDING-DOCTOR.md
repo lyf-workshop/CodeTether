@@ -303,6 +303,15 @@ A custom-gateway outage does not recommend reinstalling Claude or signing in to 
 
 ## Validation boundary
 
+Installed validation found that the legacy local Codex execution App Server was
+started eagerly while assembling lifecycle metadata. Phase 8C defers that exact
+execution runtime until an admitted native conversation create/resume needs it.
+The existing bounded Phase 8B probes still establish compatibility; metadata reads,
+setup, Doctor, and metadata refresh leave no execution child. Concurrent first
+admissions share one initialization, shutdown owns any opening child, and a failed
+initialization stays closed without retry or replay. The executable, environment,
+installation/revision binding, execution profile, and remote runtimes are unchanged.
+
 Phase 8C is ready for Owner review only after the specification's complete deterministic and REAL matrix is observed. In particular, mandatory evidence includes a clean installed Windows NSIS first-run and returning-user flow, current exact Codex and Claude rendering, current custom-gateway runtime/backend separation, isolated Project and Phase 8A discovery/adoption without inference, offline startup, guided isolated remote pairing/Provider/Project setup, truthful Relay-only readiness, Direct/Relay execution regressions, adopted-session native resume, accessibility, stress/coalescing, secret sentinels, package gates, cleanup, Owner-state preservation, production-Relay preservation, and a clean tracked worktree.
 
 Fixture results must be classified as AUTOMATED or SIMULATED, never REAL. Mandatory observations that cannot be made remain NOT OBSERVED and require a `NOT READY` assessment. Final evidence belongs under `output/playwright/phase8c/final-evidence/` and must not reuse or modify the frozen Phase 8B evidence.

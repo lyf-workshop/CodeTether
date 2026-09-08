@@ -1120,6 +1120,13 @@ New and adopted Conversations acquire one private immutable installation binding
 
 ## Zero-config onboarding and Doctor
 
+The exact local Codex execution runtime is deferred until an admitted native
+conversation create/resume requires it. Lifecycle assembly and metadata refresh
+retain Phase 8B's bounded compatibility probes but do not retain an idle execution
+App Server. Concurrent first admissions share one initialization; failed or closing
+initialization remains closed without automatic retry/replay. Exact installation,
+revision, environment, and execution policy remain unchanged.
+
 Phase 8C composes existing product truth instead of creating another source of truth. Migration 017 (`onboarding_progress`) creates one revision-guarded singleton containing the flow version, last valid step, optional exact Project/Machine context, explicit optional dispositions, timestamps, and the latest bounded action identity. It contains no Provider, backend, trust, connectivity, or readiness copy. Existing durable Phase 8B product state initializes as completed; a genuinely fresh database starts at Welcome. Every resume re-reads current Machine, Provider lifecycle, backend, Project Location, and discovery facts. Migration and reads require no Provider process, backend inference, trust change, or destructive reset.
 
 The approved state progression is `welcome -> computer_check -> provider_check -> project_setup -> previous_conversations -> remote_setup -> ready`; the `remote_setup` screen itself is explicitly optional. Local-only setup can reach Ready without Relay or another Machine when at least one actual execution path and an exact Project Location are usable. Codex and Claude Code are individually optional. Provider cards consume Phase 8B's selected installation and current/last-known observations, map compatibility into ordinary copy, and continue to distinguish executable/runtime compatibility from the effective AI-service backend. A custom gateway never inherits first-party sign-in requirements merely from Provider auth status. If a selected Location is removed while setup is paused, its existing foreign key clears only the flow context and a narrow `project_reselect` transition returns the user to Project setup; later steps cannot complete without a valid retained context.

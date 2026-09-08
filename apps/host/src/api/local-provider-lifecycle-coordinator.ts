@@ -788,7 +788,7 @@ export class LocalProviderLifecycleCoordinator {
     if (provider === 'codex') {
       const candidate = selected.candidate as CodexInstallationCandidate
       try {
-        return await CodexHostRuntime.launch({
+        return CodexHostRuntime.deferred({
           version: this.#options.hostVersion,
           executable: candidate.executable,
           environment: selected.runtimeEnvironment(),

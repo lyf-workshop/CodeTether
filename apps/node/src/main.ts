@@ -294,23 +294,28 @@ if (
     }
   } else {
     let service: CodeTetherNodeService | undefined
+    let stopping = false
+    let stopRequested = false
+    const stop = () => {
+      stopRequested = true
+      if (service === undefined || stopping) return
+      stopping = true
+      void service.close().then(
+        () => process.exit(0),
+        () => {
+          process.stderr.write('CodeTether Node cleanup did not complete\n')
+          process.exit(1)
+        },
+      )
+    }
+    // A service manager may stop us as soon as node.ready is published. Own
+    // termination before startup; defer only cleanup until its service exists.
+    process.once('SIGINT', stop)
+    process.once('SIGTERM', stop)
     try {
       const options = parseNodeCli(arguments_)
       service = await runNode(options)
-      let stopping = false
-      const stop = () => {
-        if (stopping) return
-        stopping = true
-        void service?.close().then(
-          () => process.exit(0),
-          () => {
-            process.stderr.write('CodeTether Node cleanup did not complete\n')
-            process.exit(1)
-          },
-        )
-      }
-      process.once('SIGINT', stop)
-      process.once('SIGTERM', stop)
+      if (stopRequested) stop()
     } catch (error) {
       process.stderr.write(
         `${error instanceof Error ? error.message : 'CodeTether Node failed to start'}\n`,

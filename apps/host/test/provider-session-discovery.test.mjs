@@ -380,13 +380,10 @@ test('identical concurrent scans coalesce and partial Provider failure remains i
     fixture.machineId,
     { limit: 50, rescan: false },
   )
-  for (
-    let attempt = 0;
-    attempt < 50 && fixture.discovery.discoverCalls === 0;
-    attempt += 1
-  ) {
-    await new Promise((resolve) => setImmediate(resolve))
-  }
+  await waitFor(
+    () => fixture.discovery.discoverCalls > 0,
+    'coalesced Provider session scan entry',
+  )
   const callsBeforeRelease = fixture.discovery.discoverCalls
   gate.resolve()
   assert.equal(callsBeforeRelease, 1)
@@ -424,13 +421,10 @@ test('coalesced scans keep independent caller cancellation and release the share
     { provider: 'codex', limit: 50, rescan: false },
     secondAbort.signal,
   )
-  for (
-    let attempt = 0;
-    attempt < 50 && fixture.discovery.discoverCalls === 0;
-    attempt += 1
-  ) {
-    await new Promise((resolve) => setImmediate(resolve))
-  }
+  await waitFor(
+    () => fixture.discovery.discoverCalls > 0,
+    'cancellable Provider session scan entry',
+  )
 
   firstAbort.abort()
   await assert.rejects(first, (error) => error?.name === 'AbortError')

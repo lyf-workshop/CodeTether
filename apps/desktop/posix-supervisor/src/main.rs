@@ -22,17 +22,14 @@ fn main() {
         return;
     }
     if std::env::args().nth(1).as_deref() == Some("--test-descendants") {
-        let _descendant = std::process::Command::new("sleep")
+        let mut descendant = std::process::Command::new("sleep")
             .arg("30")
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .spawn()
-            .map(|child| {
-                println!("{}", child.id());
-                child
-            })
             .unwrap();
-        std::thread::sleep(std::time::Duration::from_secs(30));
+        println!("{}", descendant.id());
+        descendant.wait().unwrap();
         return;
     }
     #[cfg(unix)]

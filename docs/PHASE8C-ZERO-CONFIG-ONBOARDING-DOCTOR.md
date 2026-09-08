@@ -312,6 +312,16 @@ A custom-gateway outage does not recommend reinstalling Claude or signing in to 
 
 ## Validation boundary
 
+Closure validation reproduced a remote-only readiness interaction: Doctor's
+ProjectLocation check reused execution admission validation, which restarted
+metadata discovery and correctly demoted a just-observed backend success under
+Phase 8B. Doctor now requests only the existing exact-folder validation on a
+bounded, independently pinned Machine connection, leaving the current heartbeat
+and Provider observation generation intact. Canonical ProjectLocation checks,
+Machine trust, transport bounds, execution authorization, and explicit lifecycle
+refresh semantics are unchanged. No Provider work is started and no last-known
+backend state is promoted to current.
+
 Installed validation found that the legacy local Codex execution App Server was
 started eagerly while assembling lifecycle metadata. Phase 8C defers that exact
 execution runtime until an admitted native conversation create/resume needs it.

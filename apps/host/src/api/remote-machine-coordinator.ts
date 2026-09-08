@@ -227,6 +227,7 @@ export interface RemoteMachineCoordinator extends RemoteMachineStatusSource {
     machine: DurableMachine,
     trust: DurableTrustedMachinePeer,
     rootPath: string,
+    options?: { readonly preserveProviderDiscovery?: boolean },
   ): Promise<ValidatedRemoteProjectLocation>
   discoverProviders?(
     machine: DurableMachine,
@@ -975,10 +976,34 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
     machine: DurableMachine,
     trust: DurableTrustedMachinePeer,
     rootPath: string,
+    options?: { readonly preserveProviderDiscovery?: boolean },
   ): Promise<ValidatedRemoteProjectLocation> {
     const id = MachineIdSchema.parse(machine.machineId)
     return await this.#serializeMachineOperation(id, async () => {
       const current = this.#requireCurrentActiveTrust(machine, trust)
+      if (options?.preserveProviderDiscovery === true) {
+        // Doctor checks the same exact Node-canonical folder, but is not an
+        // execution admission or Provider refresh. Keep the authenticated
+        // heartbeat/discovery generation intact: replacing it would trigger
+        // metadata discovery and demote a just-observed backend success.
+        // This bounded purpose-specific connection admits no Provider work.
+        let validationRoute: RoutedMachineConnection | undefined
+        try {
+          const controller = await this.#loadController(current.trust)
+          validationRoute = await this.#connectMachineByPolicy(
+            current.machine,
+            current.trust,
+            controller,
+          )
+          return await validationRoute.connection.validateProjectLocation(
+            rootPath,
+          )
+        } catch (error) {
+          throw coordinatorError(error)
+        } finally {
+          validationRoute?.connection.close()
+        }
+      }
       // Validation temporarily replaces the heartbeat connection.  If this
       // Machine was execution-eligible, restore Provider freshness on the
       // same pinned connection before returning; otherwise Start Turn would

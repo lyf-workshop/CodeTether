@@ -958,6 +958,8 @@ export class HostService {
             await this.#projects.authorizeConversation(
               project.projectId,
               location.machineId,
+              undefined,
+              { preserveProviderDiscovery: true },
             )
             results.set(location.machineId, 'ready')
           } catch {
@@ -5174,6 +5176,7 @@ export class HostService {
     readonly projectId: ProjectId
     readonly machineId: MachineId
     readonly rootPath: string
+    readonly preserveProviderDiscovery?: boolean
   }): Promise<string> {
     const { durable, trust } = this.#requireRemoteMachineTrust(input.machineId)
     const machine = this.#machines.requireAvailable(input.machineId)
@@ -5196,6 +5199,9 @@ export class HostService {
         durable,
         trust,
         input.rootPath,
+        input.preserveProviderDiscovery === true
+          ? { preserveProviderDiscovery: true }
+          : undefined,
       )
       return validated.canonicalPath
     } catch {

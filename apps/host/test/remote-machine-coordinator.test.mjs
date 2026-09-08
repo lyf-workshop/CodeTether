@@ -599,6 +599,28 @@ test('current Codex discovery survives authenticated Location validation and adm
     assert.ok(trust)
     const discoveryBeforeValidation = f.counts.discovery
 
+    const observationBeforeDoctor = f.store.getRemoteProviderObservation(
+      machine.machineId,
+    )
+    const doctorLocation = await coordinator.validateProjectLocation(
+      machine,
+      trust,
+      '/srv/projects/workspace',
+      { preserveProviderDiscovery: true },
+    )
+    assert.equal(doctorLocation.canonicalPath, '/srv/projects/workspace')
+    assert.equal(f.counts.discovery, discoveryBeforeValidation)
+    assert.deepEqual(
+      f.store.getRemoteProviderObservation(machine.machineId),
+      observationBeforeDoctor,
+      'Doctor folder validation must not replace authoritative lifecycle facts',
+    )
+    assert.equal(
+      coordinator.providerExecutionAvailable(machine.machineId),
+      true,
+    )
+    assert.deepEqual(validationStates, [])
+
     const validated = await coordinator.validateProjectLocation(
       machine,
       trust,
@@ -1505,6 +1527,18 @@ test('serializes purpose-specific ProjectLocation validation and keeps pinned tr
       coordinator.connectionState(confirmed.machine.machineId),
       'online',
     )
+    const discoveriesBeforeDoctorFailure = f.counts.discovery
+    await assert.rejects(
+      coordinator.validateProjectLocation(
+        machine,
+        f.store.getTrustedMachinePeer(confirmed.machine.machineId),
+        '/srv/projects/missing',
+        { preserveProviderDiscovery: true },
+      ),
+      (error) => error.code === 'project_location_missing',
+    )
+    assert.equal(f.counts.discovery, discoveriesBeforeDoctorFailure)
+    assert.equal(coordinator.connectionState(machine.machineId), 'online')
     assert.deepEqual(
       f.store
         .getTrustedMachinePeer(confirmed.machine.machineId)

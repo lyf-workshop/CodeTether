@@ -922,6 +922,9 @@ test('remote-only Project creation validates one exact trusted Machine path and 
     )
     assert.equal(checkedDoctor.doctor.project.locations[0].state, 'ready')
     assert.equal(checkedDoctor.doctor.project.state, 'ready')
+    assert.deepEqual(coordinator.validationCalls.at(-1).options, {
+      preserveProviderDiscovery: true,
+    })
     assert.equal(
       coordinator.validationCalls.length,
       validationCallsBeforeDoctor + 1,
@@ -2847,8 +2850,8 @@ class FakeRemoteMachineCoordinator {
     return observation
   }
 
-  async validateProjectLocation(machine, trust, path) {
-    this.validationCalls.push({ machine, trust, path })
+  async validateProjectLocation(machine, trust, path, options) {
+    this.validationCalls.push({ machine, trust, path, options })
     if (this.validationError !== undefined) throw this.validationError
     const canonicalPath = this.validationCanonicalPath ?? path
     return {

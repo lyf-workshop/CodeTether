@@ -58,6 +58,7 @@ interface ProjectRegistryOptions {
     readonly projectId: ProjectId
     readonly machineId: MachineId
     readonly rootPath: string
+    readonly preserveProviderDiscovery?: boolean
   }) => Promise<string>
   readonly writeDurable: (operation: () => void) => void
   readonly hasRuntimeConversations: (projectId: ProjectId) => boolean
@@ -408,6 +409,7 @@ export class ProjectRegistry {
     projectId: ProjectId,
     machineId: MachineId,
     cwd?: string,
+    options?: { readonly preserveProviderDiscovery?: boolean },
   ): Promise<{ readonly project: DurableProject; readonly cwd: string }> {
     const project = this.require(projectId)
     const machine = MachineIdSchema.parse(machineId)
@@ -453,6 +455,9 @@ export class ProjectRegistry {
           projectId: project.projectId,
           machineId: machine,
           rootPath: location.rootPath,
+          ...(options?.preserveProviderDiscovery === true
+            ? { preserveProviderDiscovery: true }
+            : {}),
         })
       } catch (error) {
         if (error instanceof ProjectRegistryError) throw error

@@ -9,7 +9,9 @@ import {
   isClaudeCodeTestedVersion,
   type ClaudeCodeLauncher,
 } from '@codetether/adapter-claude'
+import { CodexOwnedProcessCleanupError } from '@codetether/adapter-codex'
 import {
+  MachineTransportError,
   machineTransportLimits,
   type RemoteProviderCapabilities,
   type RemoteProviderDescriptor,
@@ -18,6 +20,11 @@ import {
 
 import { NodeClaudeInstallation } from './claude-installation.js'
 import type { NodeProviderLifecycleCoordinator } from './provider-lifecycle.js'
+import {
+  armAbortDeadline,
+  consumeSharedAbortableOperation,
+  type SharedAbortableOperation,
+} from './shared-abortable-operation.js'
 
 const NO_REMOTE_EXECUTION_CAPABILITIES: RemoteProviderCapabilities =
   Object.freeze({
@@ -92,6 +99,8 @@ export interface RemoteProviderDetectorOptions {
   readonly timeoutMs?: number
   readonly maximumOutputBytes?: number
   readonly now?: () => Date
+  /** Internal deterministic-test seam; Machine input cannot set this bound. */
+  readonly lifecycleWorkTimeoutMs?: number
   /** Internal test seam; remote callers cannot select the Node platform. */
   readonly platform?: NodeJS.Platform
   /** Internal test seam; remote callers cannot influence authentication. */
@@ -168,6 +177,7 @@ export class RemoteProviderDetector {
   readonly #timeoutMs: number
   readonly #maximumOutputBytes: number
   readonly #now: () => Date
+  readonly #lifecycleWorkTimeoutMs: number
   readonly #executionPlatformSupported: boolean
   readonly #claudeExecutionPlatformSupported: boolean
   readonly #claudeExecutionProbe: RemoteClaudeExecutionProbe
@@ -176,8 +186,11 @@ export class RemoteProviderDetector {
   readonly #providerLifecycle?: NodeProviderLifecycleCoordinator
   readonly #lifecycleAbort = new AbortController()
   readonly #children = new Set<ChildProcess>()
-  #inFlight?: Promise<RemoteProviderDiscovery>
-  #cleanupFailure: ClaudeCodeOwnedProcessCleanupError | undefined
+  readonly #cleanupFailures = new Map<
+    RemoteProviderId,
+    ProviderOwnedProcessCleanupError
+  >()
+  #inFlight?: SharedAbortableOperation<RemoteProviderDiscovery>
   #closed = false
   #closePromise: Promise<void> | undefined
 
@@ -199,6 +212,11 @@ export class RemoteProviderDetector {
       'Provider probe output limit',
     )
     this.#now = options.now ?? (() => new Date())
+    this.#lifecycleWorkTimeoutMs = positiveInteger(
+      options.lifecycleWorkTimeoutMs ??
+        machineTransportLimits.providerLifecycleDiscoveryWorkTimeoutMs,
+      'Provider lifecycle work timeout',
+    )
     this.#executionPlatformSupported = supportsRemoteCodexExecutionPlatform(
       options.platform,
     )
@@ -227,25 +245,72 @@ export class RemoteProviderDetector {
       })
   }
 
-  discover(): Promise<RemoteProviderDiscovery> {
-    if (this.#cleanupFailure !== undefined) {
-      return Promise.reject(this.#cleanupFailure)
-    }
+  discover(signal?: AbortSignal): Promise<RemoteProviderDiscovery> {
     if (this.#closed) {
       return Promise.reject(new Error('Provider detector is closed'))
     }
-    this.#inFlight ??= this.#discoverOnce()
-      .catch((error: unknown) => {
-        if (error instanceof ClaudeCodeOwnedProcessCleanupError) {
-          this.#cleanupFailure ??= error
-          this.#lifecycleAbort.abort()
-        }
-        throw error
-      })
-      .finally(() => {
-        this.#inFlight = undefined
-      })
-    return this.#inFlight
+    if (signal?.aborted === true) {
+      return Promise.reject(abortReason(signal))
+    }
+    let operation = this.#inFlight
+    if (operation?.abort.signal.aborted === true) {
+      return operation.task.then(
+        () => this.discover(signal),
+        () => this.discover(signal),
+      )
+    }
+    if (operation === undefined) {
+      const abort = new AbortController()
+      const workDeadline = armAbortDeadline(abort, this.#lifecycleWorkTimeoutMs)
+      const combinedSignal = AbortSignal.any([
+        this.#lifecycleAbort.signal,
+        abort.signal,
+      ])
+      const task = this.#discoverOnce(combinedSignal)
+        .catch((error: unknown) => {
+          // An owned-process cleanup failure is stronger than the lifecycle
+          // deadline that may have initiated cleanup. Latch it by Provider
+          // before timeout classification; the lifecycle coordinator normally
+          // converts attributed failures to a partial descriptor, while this
+          // guard preserves failures from legacy/test adapters.
+          if (isProviderOwnedProcessCleanupError(error)) {
+            throw this.#latchCleanupFailure(error)
+          }
+          if (
+            workDeadline.expired() &&
+            !this.#lifecycleAbort.signal.aborted &&
+            abort.signal.aborted
+          ) {
+            throw new MachineTransportError(
+              'provider_start_failed',
+              'Remote Provider lifecycle check timed out',
+              {
+                cause: error,
+                peerAuthenticated: true,
+                failureReason: 'provider_start_failed',
+              },
+            )
+          }
+          throw error
+        })
+        .finally(() => {
+          workDeadline.clear()
+          if (this.#inFlight?.task === task) {
+            this.#inFlight.settled = true
+            this.#inFlight = undefined
+          }
+        })
+      const created: SharedAbortableOperation<RemoteProviderDiscovery> = {
+        abort,
+        task,
+        consumers: 0,
+        persistentConsumer: false,
+        settled: false,
+      }
+      operation = created
+      this.#inFlight = operation
+    }
+    return consumeSharedAbortableOperation(operation, signal)
   }
 
   async close(): Promise<void> {
@@ -258,24 +323,61 @@ export class RemoteProviderDetector {
     this.#lifecycleAbort.abort()
     for (const child of this.#children) terminateExactChild(child)
     try {
-      await this.#inFlight
+      await this.#inFlight?.task
     } catch (error) {
-      if (error instanceof ClaudeCodeOwnedProcessCleanupError) {
-        this.#cleanupFailure ??= error
-      } else {
+      if (isProviderOwnedProcessCleanupError(error)) {
+        this.#latchCleanupFailure(error)
+      } else if (!isAbortError(error)) {
         throw error
       }
     }
-    if (this.#cleanupFailure !== undefined) throw this.#cleanupFailure
+    throwCleanupFailures(this.#cleanupFailures)
   }
 
-  async #discoverOnce(): Promise<RemoteProviderDiscovery> {
+  async #discoverOnce(signal: AbortSignal): Promise<RemoteProviderDiscovery> {
+    signal.throwIfAborted()
     if (this.#providerLifecycle !== undefined) {
-      return await this.#providerLifecycle.describe()
+      return await this.#providerLifecycle.describe(signal)
     }
-    const providers = await Promise.all(
-      this.#probes.map(async (probe) => await this.#probe(probe)),
+    const settled = await Promise.allSettled(
+      this.#probes.map(async (probe) => await this.#probe(probe, signal)),
     )
+    const cleanupFailures = settled.flatMap((result, index) => {
+      if (
+        result.status !== 'rejected' ||
+        !isProviderOwnedProcessCleanupError(result.reason)
+      ) {
+        return []
+      }
+      const probe = this.#probes[index]
+      if (
+        probe === undefined ||
+        providerForCleanupError(result.reason) !== probe.provider
+      ) {
+        throw new Error('Provider cleanup failure identity changed')
+      }
+      this.#latchCleanupFailure(result.reason)
+      return [result.reason]
+    })
+    if (signal.aborted && cleanupFailures.length > 0) {
+      throw cleanupFailures[0]
+    }
+    signal.throwIfAborted()
+    const providers = settled.map((result, index) => {
+      if (result.status === 'fulfilled') return result.value
+      const probe = this.#probes[index]
+      if (probe === undefined) {
+        throw new Error('Provider probe result identity changed')
+      }
+      if (!isProviderOwnedProcessCleanupError(result.reason)) {
+        throw result.reason
+      }
+      if (providerForCleanupError(result.reason) !== probe.provider) {
+        throw new Error('Provider cleanup failure identity changed')
+      }
+      this.#latchCleanupFailure(result.reason)
+      return providerCleanupFailureDescriptor(probe)
+    })
     return {
       providers,
       observedAt: this.#now().toISOString(),
@@ -284,7 +386,12 @@ export class RemoteProviderDetector {
 
   async #probe(
     probe: ProviderProbeDefinition,
+    signal: AbortSignal,
   ): Promise<RemoteProviderDescriptor> {
+    signal.throwIfAborted()
+    if (this.#cleanupFailures.has(probe.provider)) {
+      return providerCleanupFailureDescriptor(probe)
+    }
     const base = {
       provider: probe.provider,
       displayName: probe.displayName,
@@ -295,6 +402,7 @@ export class RemoteProviderDetector {
       let launcher: ClaudeCodeLauncher
       try {
         launcher = await this.#claudeInstallation.launcher()
+        signal.throwIfAborted()
       } catch (error) {
         if (error instanceof ClaudeCodeNotInstalledError) {
           return { ...base, availability: 'not_installed' }
@@ -312,6 +420,7 @@ export class RemoteProviderDetector {
       timeoutMs: this.#timeoutMs,
       maximumOutputBytes: this.#maximumOutputBytes,
       children: this.#children,
+      signal,
     })
     if (outcome.kind === 'not_installed') {
       return { ...base, availability: 'not_installed' }
@@ -338,11 +447,10 @@ export class RemoteProviderDetector {
     ) {
       let execution: RemoteClaudeExecutionProbeResult
       try {
-        execution = await this.#claudeExecutionProbe(
-          this.#lifecycleAbort.signal,
-        )
+        execution = await this.#claudeExecutionProbe(signal)
       } catch (error) {
         if (error instanceof ClaudeCodeOwnedProcessCleanupError) throw error
+        if (signal.aborted) throw error
         execution = { available: false }
       }
       claudeExecutionAvailable =
@@ -378,6 +486,16 @@ export class RemoteProviderDetector {
         : {}),
     }
   }
+
+  #latchCleanupFailure(
+    error: ProviderOwnedProcessCleanupError,
+  ): ProviderOwnedProcessCleanupError {
+    const provider = providerForCleanupError(error)
+    const current = this.#cleanupFailures.get(provider)
+    if (current !== undefined) return current
+    this.#cleanupFailures.set(provider, error)
+    return error
+  }
 }
 
 function probeForClaudeLauncher(
@@ -403,10 +521,15 @@ function runBoundedVersionProbe(options: {
   readonly timeoutMs: number
   readonly maximumOutputBytes: number
   readonly children: Set<ChildProcess>
+  readonly signal: AbortSignal
 }): Promise<ProbeOutcome> {
-  return new Promise((resolve) => {
+  if (options.signal.aborted) {
+    return Promise.reject(abortReason(options.signal))
+  }
+  return new Promise((resolve, reject) => {
     let settled = false
     let forcedFailure: ProbeOutcome | undefined
+    let forcedAbort: Error | undefined
     let stdoutBytes = 0
     let stderrBytes = 0
     const stdout: Buffer[] = []
@@ -427,7 +550,12 @@ function runBoundedVersionProbe(options: {
       if (settled) return
       settled = true
       clearTimeout(timer)
+      options.signal.removeEventListener('abort', onAbort)
       options.children.delete(child)
+      if (forcedAbort !== undefined) {
+        reject(forcedAbort)
+        return
+      }
       resolve(outcome)
     }
     const failAndTerminate = (outcome: ProbeOutcome) => {
@@ -439,6 +567,13 @@ function runBoundedVersionProbe(options: {
       () => failAndTerminate({ kind: 'unavailable' }),
       options.timeoutMs,
     )
+    const onAbort = (): void => {
+      if (settled || forcedAbort !== undefined) return
+      forcedAbort = abortReason(options.signal)
+      terminateExactChild(child)
+    }
+    options.signal.addEventListener('abort', onAbort, { once: true })
+    if (options.signal.aborted) onAbort()
 
     child.stdout?.on('data', (chunk: Buffer) => {
       stdoutBytes += chunk.byteLength
@@ -479,6 +614,64 @@ function runBoundedVersionProbe(options: {
       }
     })
   })
+}
+
+function abortReason(signal: AbortSignal): Error {
+  return signal.reason instanceof Error
+    ? signal.reason
+    : new DOMException('Operation aborted', 'AbortError')
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError'
+}
+
+type ProviderOwnedProcessCleanupError =
+  ClaudeCodeOwnedProcessCleanupError | CodexOwnedProcessCleanupError
+
+function isProviderOwnedProcessCleanupError(
+  error: unknown,
+): error is ProviderOwnedProcessCleanupError {
+  return (
+    error instanceof ClaudeCodeOwnedProcessCleanupError ||
+    error instanceof CodexOwnedProcessCleanupError
+  )
+}
+
+function providerForCleanupError(
+  error: ProviderOwnedProcessCleanupError,
+): RemoteProviderId {
+  return error instanceof CodexOwnedProcessCleanupError
+    ? 'codex'
+    : 'claude-code'
+}
+
+function providerCleanupFailureDescriptor(
+  probe: ProviderProbeDefinition,
+): RemoteProviderDescriptor {
+  return {
+    provider: probe.provider,
+    displayName: probe.displayName,
+    availability: 'unavailable',
+    capabilities: NO_REMOTE_EXECUTION_CAPABILITIES,
+    executionFailureReason: 'provider_start_failed',
+  }
+}
+
+function throwCleanupFailures(
+  failures: ReadonlyMap<RemoteProviderId, ProviderOwnedProcessCleanupError>,
+): void {
+  const ordered = (['codex', 'claude-code'] as const).flatMap((provider) => {
+    const failure = failures.get(provider)
+    return failure === undefined ? [] : [failure]
+  })
+  if (ordered.length === 1) throw ordered[0]
+  if (ordered.length > 1) {
+    throw new AggregateError(
+      ordered,
+      'Provider owned process cleanup could not be verified',
+    )
+  }
 }
 
 function terminateExactChild(child: ChildProcess): void {

@@ -5,7 +5,11 @@ import { join } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 
-import { CLAUDE_CODE_CAPABILITIES } from '@codetether/adapter-claude'
+import {
+  CLAUDE_CODE_CAPABILITIES,
+  ClaudeCodeOwnedProcessCleanupError,
+  ClaudeCodeSessionRuntime,
+} from '@codetether/adapter-claude'
 
 import { ClaudeCodeHostRuntime } from '../dist/api/claude-code-host-runtime.js'
 import { HostEventPublisher } from '../dist/api/host-event-publisher.js'
@@ -155,6 +159,29 @@ test('bridges a cold Claude session into canonical streaming Host events', async
     })
   } finally {
     await runtime.close()
+    await rm(cwd, { recursive: true, force: true })
+  }
+})
+
+test('Host runtime preserves a typed Claude session cleanup barrier across close attempts', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'codetether-claude-host-cleanup-'))
+  const runtime = createRuntime()
+  const cleanupFailure = new ClaudeCodeOwnedProcessCleanupError()
+  const originalClose = ClaudeCodeSessionRuntime.prototype.close
+  try {
+    await runtime.startConversation({ cwd })
+    ClaudeCodeSessionRuntime.prototype.close = async () => {
+      throw cleanupFailure
+    }
+    const results = await Promise.allSettled([runtime.close(), runtime.close()])
+    assert.deepEqual(
+      results.map((result) => result.status),
+      ['rejected', 'rejected'],
+    )
+    for (const result of results) assert.equal(result.reason, cleanupFailure)
+    await assert.rejects(runtime.close(), (error) => error === cleanupFailure)
+  } finally {
+    ClaudeCodeSessionRuntime.prototype.close = originalClose
     await rm(cwd, { recursive: true, force: true })
   }
 })

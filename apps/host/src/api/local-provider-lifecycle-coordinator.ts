@@ -2,6 +2,7 @@ import { isAbsolute, normalize } from 'node:path'
 
 import {
   CLAUDE_CODE_CAPABILITIES,
+  ClaudeCodeOwnedProcessCleanupError,
   ClaudeSessionDiscovery,
   discoverClaudeCodeInstallations,
   fingerprintClaudeCodeInstallation,
@@ -11,6 +12,7 @@ import {
   type ClaudeCodeInstallationObservation,
 } from '@codetether/adapter-claude'
 import {
+  CodexOwnedProcessCleanupError,
   CodexSessionDiscovery,
   discoverCodexInstallations,
   fingerprintCodexInstallation,
@@ -118,6 +120,10 @@ export class LocalProviderLifecycleCoordinator {
     Promise<LocalProviderLifecycleState>
   >()
   readonly #preparations = new Set<PreparedLocalProviderLifecycleState>()
+  readonly #cleanupFailures = new Map<
+    AgentProvider,
+    ProviderOwnedProcessCleanupError
+  >()
 
   private constructor(options: LocalProviderLifecycleCoordinatorOptions) {
     this.#options = options
@@ -127,30 +133,67 @@ export class LocalProviderLifecycleCoordinator {
     options: LocalProviderLifecycleCoordinatorOptions,
   ): Promise<LocalProviderLifecycleCoordinator> {
     const coordinator = new LocalProviderLifecycleCoordinator(options)
-    try {
-      await Promise.all([
-        coordinator.refresh('codex'),
-        coordinator.refresh('claude-code'),
-      ])
-      return coordinator
-    } catch (error) {
-      await coordinator.close().catch(() => undefined)
-      throw error
+    const providers = ['codex', 'claude-code'] as const
+    const results = await Promise.allSettled(
+      providers.map(async (provider) => await coordinator.refresh(provider)),
+    )
+    for (const [index, result] of results.entries()) {
+      if (result.status === 'fulfilled') continue
+      const provider = providers[index]
+      if (
+        provider !== undefined &&
+        isProviderOwnedProcessCleanupError(result.reason) &&
+        providerForCleanupError(result.reason) === provider
+      ) {
+        coordinator.#installCleanupBarrierState(provider)
+        continue
+      }
+      try {
+        await coordinator.close()
+      } catch (cleanupError) {
+        if (containsProviderOwnedProcessCleanupError(cleanupError)) {
+          throw cleanupError
+        }
+      }
+      throw result.reason
     }
+    return coordinator
   }
 
   states(): readonly LocalProviderLifecycleState[] {
     return (['codex', 'claude-code'] as const).flatMap((provider) => {
-      const state = this.#states.get(provider)
+      const state = this.state(provider)
       return state === undefined ? [] : [state]
     })
   }
 
   state(provider: AgentProvider): LocalProviderLifecycleState | undefined {
-    return this.#states.get(provider)
+    const state = this.#states.get(provider)
+    if (state === undefined || !this.#cleanupFailures.has(provider)) {
+      return state
+    }
+    const installation =
+      state.lifecycle.selectedInstallationId === undefined
+        ? undefined
+        : this.#options.persistence.getProviderInstallation(
+            state.lifecycle.selectedInstallationId,
+          )
+    const observedAt = TimestampSchema.parse(
+      (this.#options.now ?? (() => new Date()))().toISOString(),
+    )
+    return {
+      lifecycle: state.lifecycle,
+      runtime: unavailableRuntime(
+        provider,
+        installation,
+        observedAt,
+        'execution_ownership_uncertain',
+      ),
+    }
   }
 
   refresh(provider: AgentProvider): Promise<LocalProviderLifecycleState> {
+    this.#assertProviderAvailable(provider)
     this.#abort.signal.throwIfAborted()
     const current = this.#refreshes.get(provider)
     if (current !== undefined) return current
@@ -172,22 +215,76 @@ export class LocalProviderLifecycleCoordinator {
   async prepareRefresh(
     provider: AgentProvider,
   ): Promise<PreparedLocalProviderLifecycleState> {
+    this.#assertProviderAvailable(provider)
     this.#abort.signal.throwIfAborted()
     return await this.#prepareRefresh(provider)
+  }
+
+  /** Extends the Provider-scoped barrier to metadata-only session adapters. */
+  latchOwnedProcessCleanupFailure(
+    provider: AgentProvider,
+    error: unknown,
+  ): Error {
+    if (
+      !isProviderOwnedProcessCleanupError(error) ||
+      providerForCleanupError(error) !== provider
+    ) {
+      throw new TypeError('Provider cleanup failure identity changed')
+    }
+    return this.#latchCleanupFailure(provider, error)
   }
 
   async close(): Promise<void> {
     this.#abort.abort()
     await Promise.allSettled(this.#refreshes.values())
-    await Promise.allSettled(
+    const preparationResults = await Promise.allSettled(
       [...this.#preparations].map(
         async (preparation) => await preparation.discard(),
       ),
     )
-    await Promise.allSettled(
-      this.states().map(async ({ runtime }) => await runtime.close()),
+    for (const result of preparationResults) {
+      if (
+        result.status === 'rejected' &&
+        isProviderOwnedProcessCleanupError(result.reason)
+      ) {
+        this.#latchCleanupFailure(
+          providerForCleanupError(result.reason),
+          result.reason,
+        )
+      }
+    }
+    // Close the exact owned runtimes, not their presentation-only cleanup
+    // barrier projections returned by `states()`.
+    const states = (['codex', 'claude-code'] as const).flatMap((provider) => {
+      const state = this.#states.get(provider)
+      return state === undefined ? [] : [state]
+    })
+    const runtimeResults = await Promise.allSettled(
+      states.map(async ({ runtime }) => await runtime.close()),
     )
+    const otherCloseFailures: unknown[] = []
+    for (const [index, result] of runtimeResults.entries()) {
+      if (result.status === 'fulfilled') continue
+      const provider = states[index]?.runtime.provider
+      if (provider === undefined) continue
+      if (isProviderOwnedProcessCleanupError(result.reason)) {
+        this.#latchCleanupFailure(provider, result.reason)
+      } else {
+        // A Codex runtime can rethrow its already-terminal fatal failure after
+        // verified client shutdown. Preserve that outcome rather than falsely
+        // relabeling it as cleanup uncertainty.
+        otherCloseFailures.push(result.reason)
+      }
+    }
     this.#states.clear()
+    throwCleanupFailures(this.#cleanupFailures)
+    if (otherCloseFailures.length === 1) throw otherCloseFailures[0]
+    if (otherCloseFailures.length > 1) {
+      throw new AggregateError(
+        otherCloseFailures,
+        'Provider runtimes failed to close',
+      )
+    }
   }
 
   async #refreshAndCommit(
@@ -204,7 +301,7 @@ export class LocalProviderLifecycleCoordinator {
           : { sessionDiscovery: prepared.sessionDiscovery }),
       }
     } catch (error) {
-      await prepared.discard().catch(() => undefined)
+      await prepared.discard()
       throw error
     }
   }
@@ -262,7 +359,10 @@ export class LocalProviderLifecycleCoordinator {
               previousInstallations,
               timestamp,
             )
-    } catch {
+    } catch (error) {
+      if (isProviderOwnedProcessCleanupError(error)) {
+        throw this.#latchCleanupFailure(provider, error)
+      }
       // A Provider-owned discovery/probe failure is scoped to that Provider.
       // Persistence reads/writes remain outside this boundary and still abort
       // startup because they represent shared durable-state corruption.
@@ -380,6 +480,7 @@ export class LocalProviderLifecycleCoordinator {
           throw new Error('Discarded Provider lifecycle refresh cannot commit')
         }
         if (committedState !== undefined) return committedState.lifecycle
+        this.#assertProviderAvailable(provider)
         this.#abort.signal.throwIfAborted()
         const persisted = MachineProviderLifecycleSchema.parse(
           this.#options.persistence.recordProviderLifecycle(observation),
@@ -410,7 +511,16 @@ export class LocalProviderLifecycleCoordinator {
         if (disposition !== 'pending') return
         disposition = 'discarded'
         this.#preparations.delete(prepared)
-        if (runtime !== existing?.runtime) await runtime.close()
+        if (runtime !== existing?.runtime) {
+          try {
+            await runtime.close()
+          } catch (error) {
+            throw this.#latchCleanupFailure(
+              provider,
+              cleanupErrorForProvider(provider, error),
+            )
+          }
+        }
       },
     }
     this.#preparations.add(prepared)
@@ -691,7 +801,10 @@ export class LocalProviderLifecycleCoordinator {
             ? {}
             : { ephemeralThreads: this.#options.ephemeralCodexThreads }),
         })
-      } catch {
+      } catch (error) {
+        if (isProviderOwnedProcessCleanupError(error)) {
+          throw this.#latchCleanupFailure(provider, error)
+        }
         return unavailableRuntime(provider, installation, observedAt)
       }
     }
@@ -723,17 +836,87 @@ export class LocalProviderLifecycleCoordinator {
     ) {
       return undefined
     }
-    return provider === 'codex'
-      ? new CodexSessionDiscovery({
-          executable: (selected.candidate as CodexInstallationCandidate)
-            .executable,
-          environment: selected.runtimeEnvironment(),
-          providerVersion: selected.durable.version,
-        })
-      : new ClaudeSessionDiscovery({
-          environment: selected.runtimeEnvironment(),
-          providerVersion: selected.durable.version,
-        })
+    const discovery: ProviderSessionDiscovery =
+      provider === 'codex'
+        ? new CodexSessionDiscovery({
+            executable: (selected.candidate as CodexInstallationCandidate)
+              .executable,
+            environment: selected.runtimeEnvironment(),
+            providerVersion: selected.durable.version,
+          })
+        : new ClaudeSessionDiscovery({
+            environment: selected.runtimeEnvironment(),
+            providerVersion: selected.durable.version,
+          })
+    return {
+      provider,
+      discover: async (request) => {
+        try {
+          return await discovery.discover(request)
+        } catch (error) {
+          if (isProviderOwnedProcessCleanupError(error)) {
+            throw this.latchOwnedProcessCleanupFailure(provider, error)
+          }
+          throw error
+        }
+      },
+      validateCandidate: async (request) => {
+        try {
+          return await discovery.validateCandidate(request)
+        } catch (error) {
+          if (isProviderOwnedProcessCleanupError(error)) {
+            throw this.latchOwnedProcessCleanupFailure(provider, error)
+          }
+          throw error
+        }
+      },
+    }
+  }
+
+  #assertProviderAvailable(provider: AgentProvider): void {
+    const cleanupFailure = this.#cleanupFailures.get(provider)
+    if (cleanupFailure !== undefined) throw cleanupFailure
+  }
+
+  #installCleanupBarrierState(provider: AgentProvider): void {
+    if (this.#states.has(provider)) return
+    const observedAt = TimestampSchema.parse(
+      (this.#options.now ?? (() => new Date()))().toISOString(),
+    )
+    const lifecycle =
+      this.#options.persistence.getProviderLifecycle(
+        this.#options.machineId,
+        provider,
+      ) ?? MachineProviderLifecycleSchema.parse({ provider, installations: [] })
+    const installation =
+      lifecycle.selectedInstallationId === undefined
+        ? undefined
+        : this.#options.persistence.getProviderInstallation(
+            lifecycle.selectedInstallationId,
+          )
+    this.#states.set(provider, {
+      lifecycle,
+      runtime: unavailableRuntime(
+        provider,
+        installation,
+        observedAt,
+        'execution_ownership_uncertain',
+      ),
+    })
+  }
+
+  #latchCleanupFailure(
+    provider: AgentProvider,
+    error: ProviderOwnedProcessCleanupError,
+  ): ProviderOwnedProcessCleanupError {
+    if (providerForCleanupError(error) !== provider) {
+      throw new Error('Provider cleanup failure identity changed')
+    }
+    const current = this.#cleanupFailures.get(provider)
+    if (current !== undefined) return current
+    this.#cleanupFailures.set(provider, error)
+    this.#installCleanupBarrierState(provider)
+    return error
   }
 }
 
@@ -781,12 +964,74 @@ export async function observeLocalProviderCandidates<TCandidate, TObservation>(
     try {
       results.push({ candidate, observation: await observe(candidate) })
     } catch (error) {
+      if (isProviderOwnedProcessCleanupError(error)) throw error
       if (signal.aborted) throw error
       // One malformed, replaced, or inaccessible installation cannot hide a
       // second valid installation of the same Provider on this Machine.
     }
   }
   return results
+}
+
+type ProviderOwnedProcessCleanupError =
+  ClaudeCodeOwnedProcessCleanupError | CodexOwnedProcessCleanupError
+
+function isProviderOwnedProcessCleanupError(
+  error: unknown,
+): error is ProviderOwnedProcessCleanupError {
+  return (
+    error instanceof ClaudeCodeOwnedProcessCleanupError ||
+    error instanceof CodexOwnedProcessCleanupError
+  )
+}
+
+function containsProviderOwnedProcessCleanupError(error: unknown): boolean {
+  if (isProviderOwnedProcessCleanupError(error)) return true
+  return (
+    error instanceof AggregateError &&
+    error.errors.some((nested) =>
+      containsProviderOwnedProcessCleanupError(nested),
+    )
+  )
+}
+
+function providerForCleanupError(
+  error: ProviderOwnedProcessCleanupError,
+): AgentProvider {
+  return error instanceof CodexOwnedProcessCleanupError
+    ? 'codex'
+    : 'claude-code'
+}
+
+function cleanupErrorForProvider(
+  provider: AgentProvider,
+  cause: unknown,
+): ProviderOwnedProcessCleanupError {
+  if (
+    isProviderOwnedProcessCleanupError(cause) &&
+    providerForCleanupError(cause) === provider
+  ) {
+    return cause
+  }
+  return provider === 'codex'
+    ? new CodexOwnedProcessCleanupError({ cause })
+    : new ClaudeCodeOwnedProcessCleanupError({ cause })
+}
+
+function throwCleanupFailures(
+  failures: ReadonlyMap<AgentProvider, ProviderOwnedProcessCleanupError>,
+): void {
+  const ordered = (['codex', 'claude-code'] as const).flatMap((provider) => {
+    const failure = failures.get(provider)
+    return failure === undefined ? [] : [failure]
+  })
+  if (ordered.length === 1) throw ordered[0]
+  if (ordered.length > 1) {
+    throw new AggregateError(
+      ordered,
+      'Provider owned process cleanup could not be verified',
+    )
+  }
 }
 
 function publicLifecycleFromObservation(
@@ -1125,7 +1370,8 @@ function unavailableRuntime(
   failureReasonOverride?:
     | 'provider_not_installed'
     | 'provider_unsupported_version'
-    | 'provider_start_failed',
+    | 'provider_start_failed'
+    | 'execution_ownership_uncertain',
 ): AgentHostRuntime {
   const failureReason =
     failureReasonOverride ??

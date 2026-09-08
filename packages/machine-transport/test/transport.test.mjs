@@ -41,23 +41,51 @@ import {
 const providerInstallationId = 'pinst_transportfixture01'
 const installationRevision = 'prev_transportfixture01'
 
-test('Provider session-ready waits use one distinct bounded cold-start budget', async () => {
+test('Provider lifecycle and session-ready waits use distinct bounded budgets', async () => {
+  assert.equal(
+    machineTransportLimits.providerLifecycleDiscoveryWorkTimeoutMs,
+    85_000,
+    'one cold lifecycle generation has an explicit overall work budget',
+  )
+  assert.equal(
+    machineTransportLimits.providerDiscoveryTimeoutMs,
+    110_000,
+    'authenticated delivery keeps a bounded exact-cleanup margin after Node work ends',
+  )
   assert.equal(
     machineTransportLimits.providerSessionOpenTimeoutMs,
-    3 * 5_000 + 2 * 30_000 + 15_000,
-    'three discovery probes, two cold Codex requests, and margin are bounded',
+    110_000 + 3 * 5_000 + 2 * 30_000 + 15_000,
+    'complete lifecycle response, three probes, two cold Codex requests, and margin are bounded',
   )
   assert.ok(
-    machineTransportLimits.providerSessionOpenTimeoutMs >
-      machineTransportLimits.providerDiscoveryTimeoutMs,
+    machineTransportLimits.providerDiscoveryTimeoutMs >
+      machineTransportLimits.providerLifecycleDiscoveryWorkTimeoutMs,
   )
   assert.ok(
-    machineTransportLimits.providerSessionOpenTimeoutMs <
-      machineTransportLimits.remoteCodexSessionIdleTimeoutMs,
+    machineTransportLimits.providerDiscoveryTimeoutMs -
+      machineTransportLimits.providerLifecycleDiscoveryWorkTimeoutMs >=
+      3 * 5_000 + 10_000,
+    'deadline-triggered exact cleanup has its full three-wait bound plus delivery slack',
+  )
+  assert.ok(
+    machineTransportLimits.providerSessionOpenTimeoutMs -
+      machineTransportLimits.providerDiscoveryTimeoutMs >=
+      3 * 5_000 + 2 * 30_000 + 15_000,
+    'near-budget lifecycle and cleanup still leave the complete cold Provider handshake budget',
   )
   assert.ok(
     machineTransportLimits.providerSessionOpenTimeoutMs <
       machineTransportLimits.remoteClaudeSessionIdleTimeoutMs,
+  )
+  assert.equal(
+    machineTransportLimits.providerSessionDiscoveryTimeoutMs,
+    110_000 + 30_000,
+    'a cold first page composes lifecycle response and native-store work',
+  )
+  assert.equal(
+    machineTransportLimits.providerSessionDiscoveryTotalTimeoutMs,
+    110_000 + 60_000,
+    'the complete paginated scan preserves a cold lifecycle envelope',
   )
 
   const machine = {
@@ -231,6 +259,39 @@ test('remote failure payloads carry only a canonical controlled diagnostic', () 
       failure,
     }).success,
     true,
+  )
+  assert.equal(
+    MachineErrorMessageSchema.safeParse({
+      type: 'machine.error',
+      protocolVersion: 1,
+      code: 'provider_start_failed',
+      message: 'Remote Provider lifecycle check could not complete',
+      failure: canonicalFailure('provider_start_failed', occurredAt),
+    }).success,
+    true,
+    'lifecycle timeouts reuse the strict Protocol v1 Provider start code',
+  )
+  assert.equal(
+    MachineErrorMessageSchema.safeParse({
+      type: 'machine.error',
+      protocolVersion: 1,
+      code: 'provider_probe_failed',
+      message: 'Remote Provider lifecycle check could not complete',
+      failure: canonicalFailure('provider_start_failed', occurredAt),
+    }).success,
+    false,
+    'Protocol v1 rejects an unnegotiated lifecycle error-code expansion',
+  )
+  assert.equal(
+    MachineErrorMessageSchema.safeParse({
+      type: 'machine.error',
+      protocolVersion: 1,
+      code: 'provider_start_failed',
+      message: 'Remote Provider cleanup could not be verified',
+      failure: canonicalFailure('execution_ownership_uncertain', occurredAt),
+    }).success,
+    true,
+    'the existing v1 Provider operation code retains stronger cleanup truth',
   )
   assert.equal(
     MachineErrorMessageSchema.safeParse({
@@ -726,7 +787,6 @@ test('Provider discovery messages are purpose-specific and presentation-safe', (
     'machine_offline',
     'project_location_missing',
     'conversation_busy',
-    'execution_ownership_uncertain',
   ]) {
     assert.equal(
       RemoteProviderDescriptorSchema.safeParse({
@@ -736,6 +796,14 @@ test('Provider discovery messages are purpose-specific and presentation-safe', (
       false,
     )
   }
+  assert.equal(
+    RemoteProviderDescriptorSchema.safeParse({
+      ...descriptor,
+      executionFailureReason: 'execution_ownership_uncertain',
+    }).success,
+    false,
+    'Protocol v1 rejects unnegotiated descriptor-reason expansion',
+  )
   assert.equal(
     MachineWireMessageSchema.safeParse({
       ...request,

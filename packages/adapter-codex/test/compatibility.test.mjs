@@ -4,8 +4,12 @@ import { tmpdir } from 'node:os'
 import test from 'node:test'
 
 import {
+  CodexOwnedProcessCleanupError,
+  initializeCodexClientForLaunch,
   observeCodexBackendConfiguration,
   observeCodexInstallation,
+  probeCodexSessionDiscoveryContract,
+  shutdownCodexCompatibilityClient,
 } from '../dist/index.js'
 
 const executable = join(tmpdir(), 'codetether-codex-compatibility-fixture')
@@ -79,6 +83,166 @@ test('unavailable Codex observation preserves enabled policy while effective sup
     assert.equal(capability.enabled, true)
     assert.equal(capability.effective, false)
   }
+})
+
+test('Codex lifecycle observation preserves owned-process cleanup failures', async () => {
+  const versionCleanupFailure = new CodexOwnedProcessCleanupError()
+  await assert.rejects(
+    observeCodexInstallation({
+      installation,
+      probeVersion: async () => {
+        throw versionCleanupFailure
+      },
+      fingerprint: async () => 'f'.repeat(64),
+    }),
+    (error) => error === versionCleanupFailure,
+  )
+
+  const discoveryCleanupFailure = new CodexOwnedProcessCleanupError()
+  await assert.rejects(
+    observeCodexInstallation({
+      installation,
+      probeVersion: async () => 'codex-cli 0.152.0',
+      probeRuntimeContract: async () => ({
+        execution: true,
+        streaming: true,
+        nativeResume: true,
+        nativeSessionDiscovery: true,
+      }),
+      probeSessionDiscoveryContract: async () => {
+        throw discoveryCleanupFailure
+      },
+      fingerprint: async () => '0'.repeat(64),
+    }),
+    (error) => error === discoveryCleanupFailure,
+  )
+})
+
+test('Codex compatibility-client shutdown preserves one typed ownership barrier', async () => {
+  const genericFailure = new Error('test-owned private shutdown failure')
+  await assert.rejects(
+    shutdownCodexCompatibilityClient({
+      async shutdown() {
+        throw genericFailure
+      },
+    }),
+    (error) =>
+      error instanceof CodexOwnedProcessCleanupError &&
+      error.failureReason === 'execution_ownership_uncertain' &&
+      error.cause === genericFailure,
+  )
+
+  const typedFailure = new CodexOwnedProcessCleanupError()
+  await assert.rejects(
+    shutdownCodexCompatibilityClient({
+      async shutdown() {
+        throw typedFailure
+      },
+    }),
+    (error) => error === typedFailure,
+  )
+})
+
+test('Codex discovery contract cancellation awaits exact cleanup and preserves cleanup uncertainty', async () => {
+  const controller = new AbortController()
+  const listed = deferred()
+  const releaseCleanup = deferred()
+  const cleanupFailure = new CodexOwnedProcessCleanupError()
+  const probe = probeCodexSessionDiscoveryContract({
+    installation,
+    signal: controller.signal,
+    clientFactory: async () => ({
+      async listStoredThreads() {
+        listed.resolve()
+        return await new Promise(() => undefined)
+      },
+      async shutdown() {
+        await releaseCleanup.promise
+        throw cleanupFailure
+      },
+    }),
+  })
+  await listed.promise
+  controller.abort()
+  let settled = false
+  void probe
+    .finally(() => {
+      settled = true
+    })
+    .catch(() => undefined)
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(settled, false)
+  releaseCleanup.resolve()
+  await assert.rejects(probe, (error) => error === cleanupFailure)
+})
+
+test('Codex discovery contract cancellation cannot mask late launch cleanup uncertainty', async () => {
+  const controller = new AbortController()
+  const launch = deferred()
+  const cleanupFailure = new CodexOwnedProcessCleanupError()
+  const probe = probeCodexSessionDiscoveryContract({
+    installation,
+    signal: controller.signal,
+    clientFactory: async () => await launch.promise,
+  })
+  controller.abort()
+  launch.reject(cleanupFailure)
+  await assert.rejects(probe, (error) => error === cleanupFailure)
+})
+
+test('failed Codex initialize preserves shutdown cleanup ownership uncertainty', async () => {
+  const initializeFailure = new Error('test-owned initialize failure')
+  const cleanupFailure = new Error('test-owned shutdown failure')
+  const client = {
+    async shutdown() {
+      throw cleanupFailure
+    },
+  }
+
+  await assert.rejects(
+    initializeCodexClientForLaunch(client, async () => {
+      throw initializeFailure
+    }),
+    (error) =>
+      error instanceof CodexOwnedProcessCleanupError &&
+      error.failureReason === 'execution_ownership_uncertain' &&
+      error.cause === cleanupFailure,
+  )
+
+  const typedCleanupFailure = new CodexOwnedProcessCleanupError()
+  await assert.rejects(
+    initializeCodexClientForLaunch(
+      {
+        async shutdown() {
+          throw typedCleanupFailure
+        },
+      },
+      async () => {
+        throw initializeFailure
+      },
+    ),
+    (error) => error === typedCleanupFailure,
+  )
+})
+
+test('failed Codex initialize keeps its original error after verified shutdown', async () => {
+  const initializeFailure = new Error('test-owned initialize failure')
+  let shutdowns = 0
+
+  await assert.rejects(
+    initializeCodexClientForLaunch(
+      {
+        async shutdown() {
+          shutdowns += 1
+        },
+      },
+      async () => {
+        throw initializeFailure
+      },
+    ),
+    (error) => error === initializeFailure,
+  )
+  assert.equal(shutdowns, 1)
 })
 
 test('backend revisions describe safe configuration shape and never credential values', () => {
@@ -231,3 +395,13 @@ test('a shipped Codex version may use its shipped method contract after exact in
     false,
   )
 })
+
+function deferred() {
+  let resolve
+  let reject
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}

@@ -3,6 +3,7 @@ import {
   type ClaudeCodeBackendConfigurationObservation,
 } from './backend.js'
 import { resolveClaudeCodeRestrictedEnvironment } from './configuration.js'
+import { ClaudeCodeOwnedProcessCleanupError } from './errors.js'
 import {
   probeClaudeCodeAuthStatus,
   probeClaudeCodeHelp,
@@ -147,7 +148,9 @@ export async function observeClaudeCodeInstallation(
       options.installation.launcherKind !== 'wrapper' &&
         options.installation.launcherKind !== 'unknown',
     )
-  } catch {
+  } catch (error) {
+    if (error instanceof ClaudeCodeOwnedProcessCleanupError) throw error
+    options.signal?.throwIfAborted()
     compatibility = unavailableCompatibility()
   }
 
@@ -162,7 +165,9 @@ export async function observeClaudeCodeInstallation(
       const loggedIn = await (options.probeAuthStatus?.() ??
         probeClaudeCodeAuthStatus(options.installation.launcher, probeOptions))
       readiness = loggedIn ? 'ready' : 'authentication_required'
-    } catch {
+    } catch (error) {
+      if (error instanceof ClaudeCodeOwnedProcessCleanupError) throw error
+      options.signal?.throwIfAborted()
       readiness = 'unknown'
     }
   }

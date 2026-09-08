@@ -521,6 +521,34 @@ test('remote pairing stages private trust before publication and unpair rolls ba
     const discoveredDetail = await service.getMachine(coordinator.machineId)
     assert.equal(discoveredDetail.providerDiscovery.state, 'current')
     assert.equal(discoveredDetail.providers[0].version, '1.2.3')
+    coordinator.discoveryError = new RemoteMachineCoordinatorError(
+      'provider_start_failed',
+      'private probe detail must not cross the Host boundary',
+      { failure: canonicalFailure('provider_start_failed', timestamp) },
+    )
+    const timedOutRefresh = await requestJson(
+      baseUrl,
+      `/api/v1/machines/${coordinator.machineId}/providers/refresh`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          actionId: 'act_remote_provider_refresh_timeout01',
+        }),
+      },
+    )
+    assert.equal(timedOutRefresh.status, 503)
+    assert.equal(timedOutRefresh.body.code, 'provider_start_failed')
+    assert.equal(
+      timedOutRefresh.body.message,
+      'Remote Provider lifecycle check could not complete',
+    )
+    assert.equal(timedOutRefresh.body.failure.reason, 'provider_start_failed')
+    assert.equal(
+      JSON.stringify(timedOutRefresh.body).includes('private probe detail'),
+      false,
+    )
+    coordinator.discoveryError = undefined
     const executionFailure = canonicalFailure('rate_limited', timestamp)
     persistence.recordProviderExecutionHealth({
       machineId: coordinator.machineId,
@@ -557,7 +585,7 @@ test('remote pairing stages private trust before publication and unpair rolls ba
     )
     assert.equal(offlineRefresh.status, 503)
     assert.equal(offlineRefresh.body.code, 'machine_unreachable')
-    assert.equal(coordinator.discoveryCalls, 1)
+    assert.equal(coordinator.discoveryCalls, 2)
     coordinator.setConnection(updated.body.data.connection)
     const reconnectedDetail = await service.getMachine(coordinator.machineId)
     assert.equal(
@@ -2087,6 +2115,159 @@ test('remote adopted native session keeps the frozen private binding across resc
   }
 })
 
+test('automatic authenticated Provider observation clears only the recovered remote ownership barrier', async () => {
+  const fixture = await createRemoteAcquisitionFixture('codex')
+  const nativeSessionId = 'native-external-remote-cleanup-recovery'
+  try {
+    fixture.coordinator.providerSessionCandidate = {
+      provider: 'codex',
+      nativeSessionId,
+      revision: 'revision_remote_cleanup_recovery',
+      workingDirectory: fixture.coordinator.validationCanonicalPath,
+      title: 'Remote cleanup recovery fixture',
+      providerVersion: '1.2.3',
+      resumeStatus: 'supported',
+      historicalTranscript: 'unavailable',
+    }
+    const discovered = await fixture.service.discoverProviderSessions(
+      fixture.project.projectId,
+      fixture.coordinator.machineId,
+      { provider: 'codex', limit: 50, rescan: true },
+    )
+    assert.equal(discovered.candidates.length, 1)
+    const codexCleanupFailure = canonicalFailure(
+      'execution_ownership_uncertain',
+      timestamp,
+    )
+    fixture.coordinator.providerSessionValidationError = new HostServiceError(
+      'provider_unavailable',
+      'Test-owned remote cleanup uncertainty',
+      503,
+      undefined,
+      codexCleanupFailure,
+    )
+
+    await assert.rejects(
+      fixture.service.adoptProviderSession(
+        fixture.project.projectId,
+        fixture.coordinator.machineId,
+        {
+          actionId: 'act_remote_cleanup_recovery_blocked',
+          discoveryCandidateId: discovered.candidates[0].discoveryCandidateId,
+        },
+      ),
+      (error) =>
+        error instanceof HostServiceError &&
+        error.failure?.reason === 'execution_ownership_uncertain',
+    )
+    fixture.coordinator.providerSessionValidationError = undefined
+    const callsAtBarrier = fixture.coordinator.providerSessionDiscoveryCalls
+    await assert.rejects(
+      fixture.service.discoverProviderSessions(
+        fixture.project.projectId,
+        fixture.coordinator.machineId,
+        { provider: 'codex', limit: 50, rescan: true },
+      ),
+      (error) =>
+        error instanceof HostServiceError &&
+        error.failure?.reason === 'execution_ownership_uncertain',
+    )
+    assert.equal(
+      fixture.coordinator.providerSessionDiscoveryCalls,
+      callsAtBarrier,
+    )
+
+    const stillBlockedAt = new Date(Date.parse(timestamp) + 500).toISOString()
+    const stillBlockedProviders = remoteProviderDescriptors(true, false).map(
+      (descriptor) =>
+        descriptor.provider === 'codex'
+          ? {
+              ...descriptor,
+              availability: 'unavailable',
+              capabilities: Object.fromEntries(
+                Object.keys(descriptor.capabilities).map((name) => [
+                  name,
+                  false,
+                ]),
+              ),
+              executionHealth: {
+                state: 'unavailable',
+                freshness: 'current',
+                observedAt: stillBlockedAt,
+                failure: canonicalFailure(
+                  'provider_start_failed',
+                  stillBlockedAt,
+                ),
+              },
+            }
+          : descriptor,
+    )
+    fixture.coordinator.emitProviderDiscovery(
+      stillBlockedProviders,
+      stillBlockedAt,
+    )
+    await assert.rejects(
+      fixture.service.discoverProviderSessions(
+        fixture.project.projectId,
+        fixture.coordinator.machineId,
+        { provider: 'codex', limit: 50, rescan: true },
+      ),
+      (error) =>
+        error instanceof HostServiceError &&
+        error.failure?.reason === 'execution_ownership_uncertain',
+    )
+    assert.equal(
+      fixture.coordinator.providerSessionDiscoveryCalls,
+      callsAtBarrier,
+    )
+
+    const recoveredAt = new Date(Date.parse(timestamp) + 1_000).toISOString()
+    const claudeCleanupFailure = canonicalFailure(
+      'execution_ownership_uncertain',
+      recoveredAt,
+    )
+    const providers = remoteProviderDescriptors(true, false).map(
+      (descriptor) =>
+        descriptor.provider === 'claude-code'
+          ? {
+              ...descriptor,
+              executionHealth: {
+                state: 'unavailable',
+                freshness: 'current',
+                observedAt: recoveredAt,
+                failure: claudeCleanupFailure,
+              },
+            }
+          : descriptor,
+    )
+    fixture.coordinator.emitProviderDiscovery(providers, recoveredAt)
+
+    const recovered = await fixture.service.discoverProviderSessions(
+      fixture.project.projectId,
+      fixture.coordinator.machineId,
+      { provider: 'codex', limit: 50, rescan: true },
+    )
+    assert.equal(recovered.candidates.length, 1)
+    assert.equal(
+      fixture.coordinator.providerSessionDiscoveryCalls,
+      callsAtBarrier + 1,
+    )
+    await assert.rejects(
+      fixture.service.discoverProviderSessions(
+        fixture.project.projectId,
+        fixture.coordinator.machineId,
+        { provider: 'claude-code', limit: 50, rescan: true },
+      ),
+      (error) =>
+        error instanceof HostServiceError &&
+        error.failure?.reason === 'execution_ownership_uncertain' &&
+        error.failure.occurredAt === recoveredAt,
+    )
+  } finally {
+    await fixture.close()
+  }
+})
+
 test('remote adopted binding survives Relay generation replacement and resumes only on the replacement route', async () => {
   const fixture = await createRemoteAcquisitionFixture('codex')
   const nativeSessionId = 'native-external-phase8a-relay-restart'
@@ -2462,6 +2643,7 @@ class FakeRemoteMachineCoordinator {
     this.validationError = undefined
     this.unpairCalls = 0
     this.discoveryCalls = 0
+    this.discoveryError = undefined
     this.discoveryListeners = new Set()
     this.currentProviderObservedAt = undefined
     this.remoteExecution = false
@@ -2483,6 +2665,8 @@ class FakeRemoteMachineCoordinator {
     this.offlineAfterStart = false
     this.remoteTurnEventGate = undefined
     this.providerSessionCandidate = undefined
+    this.providerSessionDiscoveryCalls = 0
+    this.providerSessionValidationError = undefined
     this.statusListeners = new Set()
     this.confirmed = {
       machine: {
@@ -2549,6 +2733,17 @@ class FakeRemoteMachineCoordinator {
   subscribeProviderDiscovery(listener) {
     this.discoveryListeners.add(listener)
     return () => this.discoveryListeners.delete(listener)
+  }
+
+  emitProviderDiscovery(providers, observedAt) {
+    const observation = this.persistence.recordRemoteProviderObservation({
+      machineId: this.machineId,
+      providers,
+      observedAt,
+    })
+    this.currentProviderObservedAt = observation.observedAt
+    for (const listener of this.discoveryListeners) listener(observation)
+    return observation
   }
 
   providerDiscoveryCurrent(machineId, observedAt) {
@@ -2628,6 +2823,7 @@ class FakeRemoteMachineCoordinator {
     assert.equal(machine.machineId, this.machineId)
     assert.equal(trust.machineId, this.machineId)
     this.discoveryCalls += 1
+    if (this.discoveryError !== undefined) throw this.discoveryError
     const observedAt = new Date(
       Date.parse(timestamp) + this.discoveryCalls - 1,
     ).toISOString()
@@ -2666,6 +2862,7 @@ class FakeRemoteMachineCoordinator {
   async discoverProviderSessions(machine, trust, input) {
     assert.equal(machine.machineId, this.machineId)
     assert.equal(trust.machineId, this.machineId)
+    this.providerSessionDiscoveryCalls += 1
     const candidate = this.providerSessionCandidate
     const candidates =
       candidate?.provider === input.provider &&
@@ -2691,6 +2888,9 @@ class FakeRemoteMachineCoordinator {
   async validateProviderSession(machine, trust, input) {
     assert.equal(machine.machineId, this.machineId)
     assert.equal(trust.machineId, this.machineId)
+    if (this.providerSessionValidationError !== undefined) {
+      throw this.providerSessionValidationError
+    }
     const candidate = this.providerSessionCandidate
     if (
       candidate === undefined ||

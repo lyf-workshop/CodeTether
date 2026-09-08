@@ -20,6 +20,7 @@ import {
   PrivateProviderSessionCandidateSchema,
 } from '@codetether/machine-transport'
 import { ClaudeSessionDiscovery } from '@codetether/adapter-claude'
+import { CodexOwnedProcessCleanupError } from '@codetether/adapter-codex'
 
 import { CodeTetherNodeService } from '../dist/node-service.js'
 import { RemoteProviderSessionDiscoveryRegistry } from '../dist/provider-session-discovery.js'
@@ -151,6 +152,91 @@ test('default Claude discovery uses the Node lifecycle configuration root only',
     await Promise.all([readFile(selectedFile), readFile(decoyFile)]),
     before,
   )
+})
+
+test('cold exact-installation resolution receives caller cancellation before native-session scanning', async () => {
+  let observedSignal
+  let activeResolutions = 0
+  const providerLifecycle = {
+    async resolveSelected(_provider, _installationId, _revision, signal) {
+      observedSignal = signal
+      activeResolutions += 1
+      return await new Promise((_, reject) => {
+        const onAbort = () => {
+          activeResolutions -= 1
+          reject(signal.reason)
+        }
+        if (signal.aborted) onAbort()
+        else signal.addEventListener('abort', onAbort, { once: true })
+      })
+    },
+  }
+  const registry = new RemoteProviderSessionDiscoveryRegistry({
+    providerLifecycle,
+  })
+  const abort = new AbortController()
+  const pending = registry.discover({
+    provider: 'codex',
+    providerInstallationId,
+    expectedInstallationRevision: installationRevision,
+    projectRoot: process.cwd(),
+    limit: 1,
+    signal: abort.signal,
+  })
+  await eventually(() => observedSignal instanceof AbortSignal)
+  abort.abort(new DOMException('request closed', 'AbortError'))
+
+  await assert.rejects(pending, (error) => error?.name === 'AbortError')
+  assert.equal(observedSignal, abort.signal)
+  assert.equal(activeResolutions, 0)
+})
+
+test('Node-owned metadata deadline waits adapter cleanup before returning optional unavailability', async () => {
+  const aborted = deferred()
+  const cleanup = deferred()
+  const registry = new RemoteProviderSessionDiscoveryRegistry({
+    discoveryWorkTimeoutMs: 10,
+    discoveries: [
+      {
+        provider: 'codex',
+        async discover(request) {
+          return await new Promise((_, reject) => {
+            const onAbort = async () => {
+              aborted.resolve()
+              await cleanup.promise
+              const error = new Error('metadata work deadline')
+              error.name = 'AbortError'
+              reject(error)
+            }
+            if (request.signal.aborted) void onAbort()
+            else
+              request.signal.addEventListener('abort', onAbort, { once: true })
+          })
+        },
+        async validateCandidate() {
+          return undefined
+        },
+      },
+    ],
+  })
+  const pending = registry.discover({
+    provider: 'codex',
+    providerInstallationId,
+    expectedInstallationRevision: installationRevision,
+    projectRoot: process.cwd(),
+    limit: 1,
+  })
+  await aborted.promise
+  let settled = false
+  void pending.finally(() => {
+    settled = true
+  })
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(settled, false)
+  cleanup.resolve()
+  const page = await pending
+  assert.equal(page.status, 'unavailable')
+  assert.equal(page.failureReason, 'provider_session_discovery_unavailable')
 })
 
 async function controller() {
@@ -579,6 +665,114 @@ test(
   },
 )
 
+for (const operation of ['discover', 'validate']) {
+  test(
+    `Node close awaits ${operation} route cleanup and surfaces exact uncertainty`,
+    { timeout: 10_000 },
+    async () => {
+      const directory = await mkdtemp(
+        join(tmpdir(), 'codetether-node-route-cleanup-'),
+      )
+      const projectDirectory = join(directory, 'project')
+      await mkdir(projectDirectory)
+      const projectRoot = await realpath(projectDirectory)
+      const localController = await controller()
+      const guard = executionGuard()
+      const started = deferred()
+      const cleanup = deferred()
+      const cleanupFailure = new CodexOwnedProcessCleanupError()
+      const adapter = {
+        provider: 'codex',
+        async discover(request) {
+          if (operation !== 'discover') {
+            return {
+              provider: 'codex',
+              status: 'supported',
+              resumeStatus: 'supported',
+              candidates: [candidate('codex', request.projectRoot)],
+              metrics: metrics(),
+            }
+          }
+          return await failCleanupAfterAbort(request.signal)
+        },
+        async validateCandidate(request) {
+          if (operation !== 'validate') return undefined
+          return await failCleanupAfterAbort(request.signal)
+        },
+      }
+      async function failCleanupAfterAbort(signal) {
+        started.resolve()
+        return await new Promise((_, reject) => {
+          const onAbort = async () => {
+            await cleanup.promise
+            reject(cleanupFailure)
+          }
+          if (signal.aborted) void onAbort()
+          else signal.addEventListener('abort', onAbort, { once: true })
+        })
+      }
+      let running
+      let connected
+      try {
+        running = await startNode({
+          dataDirectory: join(directory, 'state'),
+          providerSessionDiscoveries:
+            new RemoteProviderSessionDiscoveryRegistry({
+              discoveries: [adapter],
+            }),
+          providerDetector: guard.providerDetector,
+          codexRunners: guard.codexRunners,
+          claudeRunners: guard.claudeRunners,
+        })
+        ;({ connected } = await pairAndConnect(running, localController))
+        const pending =
+          operation === 'discover'
+            ? connected.discoverProviderSessions({
+                provider: 'codex',
+                providerInstallationId,
+                expectedInstallationRevision: installationRevision,
+                projectId,
+                rootPath: projectRoot,
+                limit: 1,
+              })
+            : connected.validateProviderSession({
+                provider: 'codex',
+                providerInstallationId,
+                expectedInstallationRevision: installationRevision,
+                projectId,
+                rootPath: projectRoot,
+                nativeSessionId: candidate('codex', projectRoot)
+                  .nativeSessionId,
+                revision: candidate('codex', projectRoot).revision,
+              })
+        void pending.catch(() => undefined)
+        await started.promise
+        const closing = running.service.close()
+        let closed = false
+        void closing
+          .finally(() => {
+            closed = true
+          })
+          .catch(() => undefined)
+        await new Promise((resolve) => setImmediate(resolve))
+        assert.equal(closed, false)
+        cleanup.resolve()
+        await assert.rejects(
+          closing,
+          (error) =>
+            error instanceof AggregateError &&
+            error.errors.includes(cleanupFailure),
+        )
+        await assert.rejects(pending)
+      } finally {
+        connected?.close()
+        await running?.service.close().catch(() => undefined)
+        await rm(directory, { recursive: true, force: true })
+      }
+    },
+  )
+}
+
 async function eventually(predicate, timeoutMs = 1_000) {
   const deadline = performance.now() + timeoutMs
   while (!predicate()) {
@@ -587,4 +781,14 @@ async function eventually(predicate, timeoutMs = 1_000) {
     }
     await new Promise((resolve) => setTimeout(resolve, 5))
   }
+}
+
+function deferred() {
+  let resolve
+  let reject
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
 }

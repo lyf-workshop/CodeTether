@@ -39,6 +39,18 @@ export class CodexProcessExitError extends CodexProcessError {
   }
 }
 
+/** Exact owned compatibility-probe cleanup could not be proven complete. */
+export class CodexOwnedProcessCleanupError extends CodexProcessError {
+  override readonly name: string = 'CodexOwnedProcessCleanupError'
+
+  constructor(options?: ErrorOptions) {
+    super('Codex owned process cleanup could not be verified.', {
+      ...options,
+      failureReason: 'execution_ownership_uncertain',
+    })
+  }
+}
+
 export class CodexProtocolError extends Error {
   override readonly name: string = 'CodexProtocolError'
 

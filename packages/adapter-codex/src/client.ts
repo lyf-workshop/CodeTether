@@ -3,7 +3,11 @@ import { isAbsolute, resolve } from 'node:path'
 
 import type { AgentEvent, ApprovalRequestedEvent } from '@codetether/agent-core'
 
-import { CodexProcessError, CodexProtocolError } from './errors.js'
+import {
+  CodexOwnedProcessCleanupError,
+  CodexProcessError,
+  CodexProtocolError,
+} from './errors.js'
 import type { ProtocolLogger } from './logging.js'
 import { CodexEventNormalizer, normalizeApprovalRequest } from './normalizer.js'
 import {
@@ -215,13 +219,9 @@ export class CodexAppServerClient {
         : { environment: options.environment }),
     })
     const client = new CodexAppServerClient(process, options)
-    try {
-      await client.initialize(options.clientInfo)
-      return client
-    } catch (error) {
-      await client.shutdown()
-      throw error
-    }
+    return await initializeCodexClientForLaunch(client, () =>
+      client.initialize(options.clientInfo),
+    )
   }
 
   static async launchRemote(
@@ -233,13 +233,9 @@ export class CodexAppServerClient {
       options,
       'remote-text-only',
     )
-    try {
-      await client.initialize(options.clientInfo, { experimentalApi: true })
-      return client
-    } catch (error) {
-      await client.shutdown()
-      throw error
-    }
+    return await initializeCodexClientForLaunch(client, () =>
+      client.initialize(options.clientInfo, { experimentalApi: true }),
+    )
   }
 
   get observedRawMethods(): readonly string[] {
@@ -834,6 +830,30 @@ export class CodexAppServerClient {
     } finally {
       if (timer !== undefined) clearTimeout(timer)
     }
+  }
+}
+
+/**
+ * @internal Test seam for the launch handshake's exact cleanup invariant.
+ * A client is never returned unless initialize succeeds, and failed initialize
+ * does not relinquish ownership until shutdown has completed successfully.
+ */
+export async function initializeCodexClientForLaunch<
+  Client extends Pick<CodexAppServerClient, 'shutdown'>,
+>(client: Client, initialize: () => Promise<unknown>): Promise<Client> {
+  try {
+    await initialize()
+    return client
+  } catch (initializationError) {
+    try {
+      await client.shutdown()
+    } catch (cleanupError) {
+      if (cleanupError instanceof CodexOwnedProcessCleanupError) {
+        throw cleanupError
+      }
+      throw new CodexOwnedProcessCleanupError({ cause: cleanupError })
+    }
+    throw initializationError
   }
 }
 

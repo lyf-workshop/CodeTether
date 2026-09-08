@@ -292,7 +292,7 @@ export function startClaudeCodeTurnProcess(
         signalOwnedClaudeProcess(child, 'SIGTERM', processOwnership)
       } else {
         void controller.close(DEFAULT_CLOSE_GRACE_MS).catch((cleanupError) => {
-          processingError ??= cleanupError
+          processingError = asOwnedProcessCleanupError(cleanupError)
         })
       }
     }
@@ -427,7 +427,7 @@ export function startClaudeCodeTurnProcess(
               )
             } else await controller.close(DEFAULT_CLOSE_GRACE_MS)
           } catch (error) {
-            processingError ??= error
+            processingError = asOwnedProcessCleanupError(error)
           }
         }
 
@@ -481,9 +481,25 @@ export function startClaudeCodeTurnProcess(
           DEFAULT_CLOSE_GRACE_MS,
           processOwnership,
         )
-      } else await controller.close(DEFAULT_CLOSE_GRACE_MS)
+      } else {
+        try {
+          await controller.close(DEFAULT_CLOSE_GRACE_MS)
+        } catch (error) {
+          throw asOwnedProcessCleanupError(error)
+        }
+      }
     },
   }
+}
+
+function asOwnedProcessCleanupError(
+  error: unknown,
+): ClaudeCodeOwnedProcessCleanupError {
+  return error instanceof ClaudeCodeOwnedProcessCleanupError
+    ? error
+    : new ClaudeCodeOwnedProcessCleanupError({
+        ...(error instanceof Error ? { cause: error } : {}),
+      })
 }
 
 export async function closeOwnedClaudeProcess(

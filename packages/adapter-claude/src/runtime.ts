@@ -6,6 +6,7 @@ import type { AgentEvent } from '@codetether/agent-core'
 import {
   asClaudeCodeError,
   ClaudeCodeError,
+  ClaudeCodeOwnedProcessCleanupError,
   ClaudeCodeStartError,
   ClaudeCodeTurnInterruptedError,
 } from './errors.js'
@@ -72,6 +73,8 @@ export class ClaudeCodeSessionRuntime {
   #resume: boolean
   #closed = false
   #active?: ClaudeCodeTurnProcessHandle
+  #closePromise?: Promise<void>
+  #cleanupFailure?: ClaudeCodeOwnedProcessCleanupError
 
   private constructor(
     options: ClaudeCodeSessionOptions & {
@@ -126,6 +129,7 @@ export class ClaudeCodeSessionRuntime {
   startTurnExecution(
     options: ClaudeCodeStartTurnOptions,
   ): ClaudeCodeTurnExecution {
+    if (this.#cleanupFailure !== undefined) throw this.#cleanupFailure
     if (this.#closed) throw new ClaudeCodeStartError()
     if (this.#active !== undefined) {
       throw new ClaudeCodeError(
@@ -168,6 +172,9 @@ export class ClaudeCodeSessionRuntime {
       } catch (error) {
         if (error instanceof ClaudeCodeTurnInterruptedError) throw error
         const safeError = asClaudeCodeError(error)
+        if (safeError instanceof ClaudeCodeOwnedProcessCleanupError) {
+          this.#cleanupFailure ??= safeError
+        }
         const failure: ClaudeCodeFailure = {
           sessionId: this.sessionId,
           turnId: options.turnId,
@@ -178,19 +185,46 @@ export class ClaudeCodeSessionRuntime {
         for (const listener of this.#failureListeners) await listener(failure)
         throw safeError
       } finally {
-        if (this.#active === handle) this.#active = undefined
+        if (this.#active === handle && this.#cleanupFailure === undefined) {
+          this.#active = undefined
+        }
       }
     })()
     return { ownershipEstablished: handle.ownershipEstablished, completion }
   }
 
   async close(): Promise<void> {
+    this.#closePromise ??= this.#closeOwnedProcess()
+    await this.#closePromise
+  }
+
+  async #closeOwnedProcess(): Promise<void> {
+    if (this.#cleanupFailure !== undefined) throw this.#cleanupFailure
     if (this.#closed) return
     this.#closed = true
     const active = this.#active
     if (active === undefined) return
-    await active.close()
-    await active.completion.catch(() => undefined)
+    try {
+      await active.close()
+    } catch (error) {
+      const cleanupFailure =
+        error instanceof ClaudeCodeOwnedProcessCleanupError
+          ? error
+          : new ClaudeCodeOwnedProcessCleanupError({
+              ...(error instanceof Error ? { cause: error } : {}),
+            })
+      this.#cleanupFailure ??= cleanupFailure
+      throw this.#cleanupFailure
+    }
+    try {
+      await active.completion
+    } catch (error) {
+      if (error instanceof ClaudeCodeOwnedProcessCleanupError) {
+        this.#cleanupFailure ??= error
+        throw this.#cleanupFailure
+      }
+    }
+    if (this.#cleanupFailure !== undefined) throw this.#cleanupFailure
   }
 }
 

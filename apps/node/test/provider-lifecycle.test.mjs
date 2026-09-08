@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os'
 import { delimiter, dirname, join } from 'node:path'
 import test from 'node:test'
 
+import { ClaudeCodeOwnedProcessCleanupError } from '@codetether/adapter-claude'
+import { CodexOwnedProcessCleanupError } from '@codetether/adapter-codex'
 import {
   ProvidersDescribedMessageSchema,
   RemoteProviderDescriptorSchema,
@@ -305,6 +307,372 @@ test('a whole-Provider probe failure preserves the other Provider result without
   })
   t.after(async () => corrupt.close().catch(() => undefined))
   await assert.rejects(corrupt.describe(), SyntaxError)
+})
+
+test('cold multi-install lifecycle work has one creation-time deadline and a fresh retry generation', async (t) => {
+  const directory = await fixtureDirectory(t, 'cold-deadline')
+  const candidates = []
+  for (
+    let index = 0;
+    index < machineTransportLimits.maximumProviderInstallationsPerProvider;
+    index += 1
+  ) {
+    const executable = await executableFixture(
+      directory,
+      `codex-deadline-${String(index)}`,
+      `revision-${String(index)}`,
+    )
+    candidates.push(codexCandidate(executable, `file:deadline-${index}`))
+  }
+  let slow = true
+  let observedAbort = false
+  let observationCalls = 0
+  const coordinator = new NodeProviderLifecycleCoordinator({
+    machineId: 'machine_provider_lifecycle_deadline',
+    dataDirectory: directory,
+    platform: process.platform,
+    lifecycleWorkTimeoutMs: 40,
+    discoverCodex: async () => discovery(candidates),
+    observeCodex: async (options) => {
+      observationCalls += 1
+      if (slow) {
+        await new Promise((_, reject) => {
+          const abort = () => {
+            observedAbort = true
+            reject(options.signal.reason)
+          }
+          if (options.signal.aborted) abort()
+          else options.signal.addEventListener('abort', abort, { once: true })
+        })
+      }
+      return await codexObservation(options)
+    },
+  })
+  t.after(async () => coordinator.close())
+
+  await assert.rejects(
+    coordinator.refreshProvider('codex'),
+    (error) =>
+      error?.code === 'provider_start_failed' &&
+      error?.failureReason === 'provider_start_failed',
+  )
+  assert.equal(observedAbort, true)
+  assert.equal(observationCalls, 1)
+
+  slow = false
+  const recovered = await coordinator.refreshProvider('codex')
+  assert.equal(
+    recovered.descriptor.installations.length,
+    machineTransportLimits.maximumProviderInstallationsPerProvider,
+  )
+  assert.equal(
+    observationCalls,
+    machineTransportLimits.maximumProviderInstallationsPerProvider + 1,
+  )
+})
+
+test('Claude cleanup failure wins a lifecycle deadline and permanently blocks direct replacement', async (t) => {
+  const directory = await fixtureDirectory(t, 'cleanup-deadline')
+  const executable = await executableFixture(
+    directory,
+    'claude-cleanup-deadline',
+    'revision',
+  )
+  const candidate = claudeCandidate(executable, 'file:claude-cleanup-deadline')
+  const cleanupFailure = new ClaudeCodeOwnedProcessCleanupError()
+  let observedAbort = false
+  const coordinator = new NodeProviderLifecycleCoordinator({
+    machineId: 'machine_provider_lifecycle_cleanup_deadline',
+    dataDirectory: directory,
+    platform: process.platform,
+    lifecycleWorkTimeoutMs: 20,
+    discoverClaude: async () => discovery([candidate]),
+    observeClaude: async (options) => {
+      return await new Promise((_, reject) => {
+        const onAbort = () => {
+          observedAbort = true
+          reject(cleanupFailure)
+        }
+        if (options.signal.aborted) onAbort()
+        else options.signal.addEventListener('abort', onAbort, { once: true })
+      })
+    },
+  })
+  t.after(async () => coordinator.close().catch(() => undefined))
+
+  await assert.rejects(
+    coordinator.refreshProvider('claude-code'),
+    (error) => error === cleanupFailure,
+  )
+  assert.equal(observedAbort, true)
+  assert.throws(
+    () => coordinator.refreshProvider('claude-code'),
+    (error) => error === cleanupFailure,
+  )
+  await assert.rejects(
+    coordinator.resolveSelected(
+      'claude-code',
+      'pinst_cleanup_failure_fixture',
+      'prev_cleanup_failure_fixture',
+    ),
+    (error) => error === cleanupFailure,
+  )
+  await assert.rejects(coordinator.close(), (error) => error === cleanupFailure)
+  await assert.rejects(coordinator.close(), (error) => error === cleanupFailure)
+})
+
+test('per-installation Claude cleanup failure is not isolated and permanently blocks direct refresh', async (t) => {
+  const directory = await fixtureDirectory(t, 'cleanup-direct')
+  const executable = await executableFixture(
+    directory,
+    'claude-cleanup-direct',
+    'revision',
+  )
+  const cleanupFailure = new ClaudeCodeOwnedProcessCleanupError()
+  const coordinator = new NodeProviderLifecycleCoordinator({
+    machineId: 'machine_provider_lifecycle_cleanup_direct',
+    dataDirectory: directory,
+    platform: process.platform,
+    discoverClaude: async () =>
+      discovery([claudeCandidate(executable, 'file:claude-cleanup-direct')]),
+    observeClaude: async () => {
+      throw cleanupFailure
+    },
+  })
+  t.after(async () => coordinator.close().catch(() => undefined))
+
+  await assert.rejects(
+    coordinator.refreshProvider('claude-code'),
+    (error) => error === cleanupFailure,
+  )
+  assert.throws(
+    () => coordinator.refreshProvider('claude-code'),
+    (error) => error === cleanupFailure,
+  )
+  await assert.rejects(coordinator.close(), (error) => error === cleanupFailure)
+})
+
+test('Codex cleanup failure wins a lifecycle deadline and permanently blocks direct replacement', async (t) => {
+  const directory = await fixtureDirectory(t, 'codex-cleanup-deadline')
+  const executable = await executableFixture(
+    directory,
+    'codex-cleanup-deadline',
+    'revision',
+  )
+  const candidate = codexCandidate(executable, 'file:codex-cleanup-deadline')
+  const cleanupFailure = new CodexOwnedProcessCleanupError()
+  const coordinator = new NodeProviderLifecycleCoordinator({
+    machineId: 'machine_provider_lifecycle_codex_cleanup_deadline',
+    dataDirectory: directory,
+    platform: process.platform,
+    lifecycleWorkTimeoutMs: 20,
+    discoverCodex: async () => discovery([candidate]),
+    observeCodex: async (options) => {
+      return await new Promise((_, reject) => {
+        const onAbort = () => reject(cleanupFailure)
+        if (options.signal.aborted) onAbort()
+        else options.signal.addEventListener('abort', onAbort, { once: true })
+      })
+    },
+  })
+  t.after(async () => coordinator.close().catch(() => undefined))
+
+  await assert.rejects(
+    coordinator.refreshProvider('codex'),
+    (error) => error === cleanupFailure,
+  )
+  assert.throws(
+    () => coordinator.refreshProvider('codex'),
+    (error) => error === cleanupFailure,
+  )
+  await assert.rejects(coordinator.close(), (error) => error === cleanupFailure)
+})
+
+for (const [affectedProvider, CleanupError] of [
+  ['codex', CodexOwnedProcessCleanupError],
+  ['claude-code', ClaudeCodeOwnedProcessCleanupError],
+]) {
+  test(`${affectedProvider} cleanup uncertainty remains Provider-scoped across repeated descriptions and exact selection`, async (t) => {
+    const directory = await fixtureDirectory(
+      t,
+      `${affectedProvider}-cleanup-isolation`,
+    )
+    const codexPath = await executableFixture(
+      directory,
+      'codex-isolated',
+      'codex-revision',
+    )
+    const claudePath = await executableFixture(
+      directory,
+      'claude-isolated',
+      'claude-revision',
+    )
+    const cleanupFailure = new CleanupError()
+    const observationCounts = { codex: 0, 'claude-code': 0 }
+    const coordinator = new NodeProviderLifecycleCoordinator({
+      machineId: `machine_provider_isolation_${affectedProvider.replace('-', '_')}`,
+      dataDirectory: directory,
+      platform: process.platform,
+      discoverCodex: async () =>
+        discovery([codexCandidate(codexPath, 'file:codex-isolated')]),
+      discoverClaude: async () =>
+        discovery([claudeCandidate(claudePath, 'file:claude-isolated')]),
+      observeCodex: async (options) => {
+        observationCounts.codex += 1
+        if (affectedProvider === 'codex') throw cleanupFailure
+        return codexObservation(options)
+      },
+      observeClaude: async (options) => {
+        observationCounts['claude-code'] += 1
+        if (affectedProvider === 'claude-code') throw cleanupFailure
+        return claudeObservation(options, { version: '2.1.263' })
+      },
+    })
+    t.after(async () => coordinator.close().catch(() => undefined))
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const described = await coordinator.describe()
+      const affected = described.providers.find(
+        ({ provider }) => provider === affectedProvider,
+      )
+      const healthy = described.providers.find(
+        ({ provider }) => provider !== affectedProvider,
+      )
+      assert.equal(affected.availability, 'unavailable')
+      assert.equal(affected.executionFailureReason, 'provider_start_failed')
+      assert.equal(healthy.availability, 'available')
+    }
+
+    const healthyProvider =
+      affectedProvider === 'codex' ? 'claude-code' : 'codex'
+    assert.equal(observationCounts[affectedProvider], 1)
+    assert.equal(observationCounts[healthyProvider], 2)
+    assert.throws(
+      () => coordinator.refreshProvider(affectedProvider),
+      (error) => error === cleanupFailure,
+    )
+    await assert.rejects(
+      coordinator.resolveSelected(
+        affectedProvider,
+        'pinst_cleanup_barrier_selected_fixture',
+        'prev_cleanup_barrier_selected_fixture',
+      ),
+      (error) => error === cleanupFailure,
+    )
+
+    const healthy = await coordinator.refreshProvider(healthyProvider)
+    const selected = healthy.descriptor.installations.find(
+      ({ selected }) => selected,
+    )
+    const resolved = await coordinator.resolveSelected(
+      healthyProvider,
+      healthy.descriptor.selectedInstallationId,
+      selected.revision,
+    )
+    assert.equal(resolved.provider, healthyProvider)
+    await assert.rejects(
+      coordinator.close(),
+      (error) => error === cleanupFailure,
+    )
+  })
+}
+
+test('simultaneous Provider deadlines never downgrade exact cleanup uncertainty to a sibling probe timeout', async (t) => {
+  const directory = await fixtureDirectory(t, 'cleanup-deadline-precedence')
+  const codexPath = await executableFixture(
+    directory,
+    'codex-cleanup-precedence',
+    'codex-revision',
+  )
+  const claudePath = await executableFixture(
+    directory,
+    'claude-cleanup-precedence',
+    'claude-revision',
+  )
+  const cleanupFailure = new CodexOwnedProcessCleanupError()
+  const waitForAbort = (signal, failure) =>
+    new Promise((_, reject) => {
+      const onAbort = () => reject(failure)
+      if (signal.aborted) onAbort()
+      else signal.addEventListener('abort', onAbort, { once: true })
+    })
+  const coordinator = new NodeProviderLifecycleCoordinator({
+    machineId: 'machine_provider_deadline_precedence',
+    dataDirectory: directory,
+    platform: process.platform,
+    lifecycleWorkTimeoutMs: 20,
+    discoverCodex: async () =>
+      discovery([codexCandidate(codexPath, 'file:codex-cleanup-precedence')]),
+    discoverClaude: async () =>
+      discovery([
+        claudeCandidate(claudePath, 'file:claude-cleanup-precedence'),
+      ]),
+    observeCodex: async ({ signal }) =>
+      await waitForAbort(signal, cleanupFailure),
+    observeClaude: async ({ signal }) =>
+      await waitForAbort(signal, new DOMException('deadline', 'AbortError')),
+  })
+  t.after(async () => coordinator.close().catch(() => undefined))
+
+  const described = await coordinator.describe()
+  const codex = described.providers.find(({ provider }) => provider === 'codex')
+  const claude = described.providers.find(
+    ({ provider }) => provider === 'claude-code',
+  )
+  assert.equal(codex.executionFailureReason, 'provider_start_failed')
+  assert.equal(claude.executionFailureReason, 'provider_start_failed')
+})
+
+test('a shared request abort surfaces exact cleanup uncertainty ahead of a sibling abort', async (t) => {
+  const directory = await fixtureDirectory(t, 'shared-abort-cleanup-precedence')
+  const codexPath = await executableFixture(
+    directory,
+    'codex-shared-abort',
+    'codex-revision',
+  )
+  const claudePath = await executableFixture(
+    directory,
+    'claude-shared-abort',
+    'claude-revision',
+  )
+  const cleanupFailure = new CodexOwnedProcessCleanupError()
+  const codexStarted = deferred()
+  const waitForAbort = (signal, failure) =>
+    new Promise((_, reject) => {
+      const onAbort = () => reject(failure)
+      if (signal.aborted) onAbort()
+      else signal.addEventListener('abort', onAbort, { once: true })
+    })
+  const coordinator = new NodeProviderLifecycleCoordinator({
+    machineId: 'machine_provider_shared_abort_precedence',
+    dataDirectory: directory,
+    platform: process.platform,
+    lifecycleWorkTimeoutMs: 5_000,
+    discoverCodex: async () =>
+      discovery([codexCandidate(codexPath, 'file:codex-shared-abort')]),
+    discoverClaude: async () =>
+      discovery([claudeCandidate(claudePath, 'file:claude-shared-abort')]),
+    observeCodex: async ({ signal }) => {
+      codexStarted.resolve()
+      return await waitForAbort(signal, cleanupFailure)
+    },
+    observeClaude: async ({ signal }) =>
+      await waitForAbort(
+        signal,
+        new DOMException('request closed', 'AbortError'),
+      ),
+  })
+  t.after(async () => coordinator.close().catch(() => undefined))
+  const abort = new AbortController()
+  const describing = coordinator.describe(abort.signal)
+  await codexStarted.promise
+  abort.abort(new DOMException('deadline', 'AbortError'))
+
+  await assert.rejects(describing, (error) => error === cleanupFailure)
+  assert.throws(
+    () => coordinator.refreshProvider('codex'),
+    (error) => error === cleanupFailure,
+  )
 })
 
 test('many lifecycle candidates remain inside the frozen Machine frame bound without dropping either selected installation', async (t) => {

@@ -23,6 +23,8 @@ import {
   machineTransportAlpn,
   newControllerId,
 } from '@codetether/machine-transport'
+import { ClaudeCodeOwnedProcessCleanupError } from '@codetether/adapter-claude'
+import { CodexOwnedProcessCleanupError } from '@codetether/adapter-codex'
 
 import { parseNodeCli, runNode } from '../dist/main.js'
 import { CodeTetherNodeService } from '../dist/node-service.js'
@@ -206,6 +208,61 @@ test('trusted Provider discovery is identity-bound, deduplicated, and non-execut
     connected?.close()
     await running?.service.close().catch(() => undefined)
     await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('owned Provider cleanup uncertainty crosses the authenticated wire without poisoning Machine trust', async (t) => {
+  for (const [provider, CleanupError] of [
+    ['codex', CodexOwnedProcessCleanupError],
+    ['claude-code', ClaudeCodeOwnedProcessCleanupError],
+  ]) {
+    await t.test(provider, async () => {
+      const directory = await mkdtemp(
+        join(tmpdir(), 'codetether-node-cleanup-'),
+      )
+      const localController = await controller()
+      const cleanupFailure = new CleanupError()
+      let running
+      let connected
+      try {
+        running = await startNode(
+          directory,
+          'Cleanup Wire Node',
+          undefined,
+          0,
+          {
+            async discover() {
+              throw cleanupFailure
+            },
+            async close() {},
+          },
+        )
+        const mode = await running.service.enablePairing()
+        const pending = await beginRemoteMachinePairing({
+          endpoint: running.endpoint,
+          pairingCode: mode.code,
+          controller: localController,
+        })
+        const trusted = await pending.confirm()
+        connected = await connectTrustedRemoteMachine({
+          peer: trusted,
+          controller: localController,
+        })
+
+        await assert.rejects(
+          connected.discoverProviders(),
+          (error) =>
+            error?.code === 'provider_start_failed' &&
+            error?.failureReason === 'execution_ownership_uncertain' &&
+            error?.peerAuthenticated === true,
+        )
+        await connected.ping()
+      } finally {
+        connected?.close()
+        await running?.service.close().catch(() => undefined)
+        await rm(directory, { recursive: true, force: true })
+      }
+    })
   }
 })
 

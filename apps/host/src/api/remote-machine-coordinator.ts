@@ -1076,13 +1076,9 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
         const pages: RemoteProviderSessionDiscoveryPage[] = []
         let cursor: string | undefined
         const observedCursors = new Set<string>()
-        const scanDeadline = AbortSignal.timeout(
-          machineTransportLimits.providerSessionDiscoveryTotalTimeoutMs,
-        )
-        const scanSignal =
-          input.signal === undefined
-            ? scanDeadline
-            : AbortSignal.any([input.signal, scanDeadline])
+        const scanDeadlineAt =
+          this.#monotonicNow() +
+          machineTransportLimits.providerSessionDiscoveryTotalTimeoutMs
         let scanDeadlineReached = false
         let remaining =
           machineTransportLimits.providerSessionDiscoveryMaximumCandidates
@@ -1090,32 +1086,30 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
           machineTransportLimits.providerSessionDiscoveryMaximumPages
         do {
           input.signal?.throwIfAborted()
-          let page: RemoteProviderSessionDiscoveryPage
-          try {
-            page = await connection.discoverProviderSessions({
-              provider: input.provider,
-              providerInstallationId: input.providerInstallationId,
-              expectedInstallationRevision: input.expectedInstallationRevision,
-              projectId: MachineTransportProjectIdSchema.parse(input.projectId),
-              rootPath: input.rootPath,
-              ...(cursor === undefined ? {} : { cursor }),
-              limit: Math.min(
-                remaining,
-                machineTransportLimits.providerSessionDiscoveryPageSize,
-              ),
-              signal: scanSignal,
-            })
-          } catch (error) {
-            if (
-              scanDeadline.aborted &&
-              input.signal?.aborted !== true &&
-              pages.length > 0
-            ) {
-              scanDeadlineReached = true
-              break
-            }
-            throw error
+          // Never start a Machine page unless the complete cold-lifecycle,
+          // metadata-work, exact-cleanup, and response-delivery envelope still
+          // fits. The aggregate scan budget may truncate between pages, but it
+          // cannot abort an already-owned Provider metadata process.
+          if (
+            scanDeadlineAt - this.#monotonicNow() <
+            machineTransportLimits.providerSessionDiscoveryTimeoutMs
+          ) {
+            scanDeadlineReached = true
+            break
           }
+          const page = await connection.discoverProviderSessions({
+            provider: input.provider,
+            providerInstallationId: input.providerInstallationId,
+            expectedInstallationRevision: input.expectedInstallationRevision,
+            projectId: MachineTransportProjectIdSchema.parse(input.projectId),
+            rootPath: input.rootPath,
+            ...(cursor === undefined ? {} : { cursor }),
+            limit: Math.min(
+              remaining,
+              machineTransportLimits.providerSessionDiscoveryPageSize,
+            ),
+            ...(input.signal === undefined ? {} : { signal: input.signal }),
+          })
           pages.push(page)
           remainingPages -= 1
           if (page.status !== 'supported') break
@@ -1132,7 +1126,15 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
           }
         } while (cursor !== undefined && remaining > 0 && remainingPages > 0)
         if (restoreExecutionDiscovery) {
-          if (!scanDeadlineReached) {
+          // Restoring current execution discovery is itself a full bounded
+          // lifecycle request. Skip it when the aggregate metadata budget no
+          // longer contains that complete envelope; the restarted durable
+          // worker will refresh later without extending this user operation.
+          if (
+            !scanDeadlineReached &&
+            scanDeadlineAt - this.#monotonicNow() >=
+              machineTransportLimits.providerDiscoveryTimeoutMs
+          ) {
             await this.#discoverAndPersist(
               current.machine,
               connection,
@@ -3602,9 +3604,14 @@ function coordinatorError(error: unknown): RemoteMachineCoordinatorError {
         message = 'Remote Provider execution failed'
         break
     }
+    const failure =
+      error.failure ??
+      (isCanonicalFailureReason(error.failureReason)
+        ? canonicalFailure(error.failureReason, new Date().toISOString())
+        : undefined)
     return new RemoteMachineCoordinatorError(code, message, {
       cause: error,
-      ...(error.failure === undefined ? {} : { failure: error.failure }),
+      ...(failure === undefined ? {} : { failure }),
     })
   }
   return new RemoteMachineCoordinatorError(

@@ -1,7 +1,11 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { isAbsolute } from 'node:path'
 
-import { CodexExecutableNotFoundError, CodexProcessError } from './errors.js'
+import {
+  CodexExecutableNotFoundError,
+  CodexOwnedProcessCleanupError,
+  CodexProcessError,
+} from './errors.js'
 
 const PARENT_CODEX_CONTROL_VARIABLES = new Set([
   'CODEX_CI',
@@ -325,7 +329,7 @@ export async function stopCodexAppServer(
   child.kill('SIGKILL')
   if (await waitForProcessExit(child, graceMs)) return
 
-  throw new CodexProcessError('Codex App Server did not exit during shutdown')
+  throw new CodexOwnedProcessCleanupError()
 }
 
 export async function stopRemoteCodexAppServer(
@@ -355,9 +359,7 @@ export async function stopRemoteCodexAppServer(
   signalExactProcessGroup(processGroupId, 'SIGKILL')
   if (await waitForProcessGroupExit(processGroupId, graceMs)) return
 
-  throw new CodexProcessError(
-    'Remote Codex App Server process group did not exit during shutdown',
-  )
+  throw new CodexOwnedProcessCleanupError()
 }
 
 async function waitForProcessExit(

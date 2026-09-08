@@ -5,6 +5,7 @@ import test from 'node:test'
 
 import {
   CLAUDE_CODE_RUNTIME_CLI_CONTRACT,
+  ClaudeCodeOwnedProcessCleanupError,
   observeClaudeCodeBackendConfiguration,
   observeClaudeCodeInstallation,
 } from '../dist/index.js'
@@ -287,6 +288,49 @@ test('first-party auth observation is readiness only and does not alter runtime 
     assert.equal(observation.backend.mode, 'first_party')
     assert.equal(observation.backend.readiness, expected)
   }
+})
+
+test('version and help probes preserve unverified owned-process cleanup', async () => {
+  for (const failingProbe of ['version', 'help']) {
+    const cleanupFailure = new ClaudeCodeOwnedProcessCleanupError()
+    await assert.rejects(
+      observeClaudeCodeInstallation({
+        installation,
+        environment: { HOME: tmpdir(), PATH: process.env.PATH },
+        settingsPath: join(tmpdir(), 'codetether-missing-claude-settings.json'),
+        probeVersion: async () => {
+          if (failingProbe === 'version') throw cleanupFailure
+          return '2.1.263 (Claude Code)'
+        },
+        probeHelp: async () => {
+          if (failingProbe === 'help') throw cleanupFailure
+          return requiredHelp
+        },
+        fingerprint: async () => 'a'.repeat(64),
+      }),
+      (error) => error === cleanupFailure,
+      `${failingProbe} cleanup failure must not become an unavailable observation`,
+    )
+  }
+})
+
+test('first-party auth probe preserves unverified owned-process cleanup', async () => {
+  const cleanupFailure = new ClaudeCodeOwnedProcessCleanupError()
+  await assert.rejects(
+    observeClaudeCodeInstallation({
+      installation,
+      environment: { HOME: tmpdir(), PATH: process.env.PATH },
+      settingsPath: join(tmpdir(), 'codetether-missing-claude-settings.json'),
+      checkFirstPartyAuth: true,
+      probeVersion: async () => '2.1.263 (Claude Code)',
+      probeHelp: async () => requiredHelp,
+      probeAuthStatus: async () => {
+        throw cleanupFailure
+      },
+      fingerprint: async () => 'b'.repeat(64),
+    }),
+    (error) => error === cleanupFailure,
+  )
 })
 
 test('reachable backend readiness cannot make an incompatible runtime executable', async () => {

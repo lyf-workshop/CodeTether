@@ -1,5 +1,6 @@
 import {
   CLAUDE_CODE_TESTED_VERSION,
+  ClaudeCodeOwnedProcessCleanupError,
   ClaudeSessionDiscovery,
   classifyClaudeCodeDetectionFailure,
   prepareClaudeCode,
@@ -9,7 +10,10 @@ import {
   canonicalFailure,
   type ProviderSessionDiscovery,
 } from '@codetether/agent-core'
-import { CodexSessionDiscovery } from '@codetether/adapter-codex'
+import {
+  CodexOwnedProcessCleanupError,
+  CodexSessionDiscovery,
+} from '@codetether/adapter-codex'
 import type {
   MachineProviderLifecycle,
   ProviderDescriptor,
@@ -127,11 +131,18 @@ export async function startLocalCodexHost(
               : { ephemeralCodexThreads: options.ephemeralThreads }),
           })
   } catch (error) {
+    let lifecycleCloseFailure: unknown
+    try {
+      await lifecycleCoordinator?.close()
+    } catch (closeError) {
+      lifecycleCloseFailure = closeError
+    }
     try {
       persistence?.close()
     } catch {
       // Preserve the lifecycle assembly failure.
     }
+    if (lifecycleCloseFailure !== undefined) throw lifecycleCloseFailure
     throw error
   }
   const lifecycleStates = lifecycleCoordinator?.states()
@@ -154,7 +165,7 @@ export async function startLocalCodexHost(
       new ClaudeSessionDiscovery(),
     ]
   try {
-    return await startLocalCodexHostWithRuntime(
+    const runningHost = await startLocalCodexHostWithRuntime(
       options,
       runtimes,
       workspacePolicy,
@@ -170,14 +181,67 @@ export async function startLocalCodexHost(
         : async (provider) =>
             await lifecycleCoordinator.prepareRefresh(provider),
     )
+    if (lifecycleCoordinator === undefined) return runningHost
+    return {
+      ...runningHost,
+      close: composeLocalHostLifecycleClose(runningHost, lifecycleCoordinator),
+    }
   } catch (error) {
+    let lifecycleCloseFailure: unknown
+    try {
+      await lifecycleCoordinator?.close()
+    } catch (closeError) {
+      lifecycleCloseFailure = closeError
+    }
     try {
       persistence?.close()
     } catch {
       // Preserve the launch/assembly failure.
     }
+    if (lifecycleCloseFailure !== undefined) throw lifecycleCloseFailure
     throw error
   }
+}
+
+/** @internal Idempotently composes normal Host and lifecycle ownership cleanup. */
+export function composeLocalHostLifecycleClose(
+  host: Pick<RunningLocalCodexHost, 'close'>,
+  lifecycleCoordinator: Pick<LocalProviderLifecycleCoordinator, 'close'>,
+): () => Promise<void> {
+  let closePromise: Promise<void> | undefined
+  return async () => {
+    closePromise ??= closeLocalHostAndProviderLifecycle(
+      host,
+      lifecycleCoordinator,
+    )
+    await closePromise
+  }
+}
+
+async function closeLocalHostAndProviderLifecycle(
+  host: Pick<RunningLocalCodexHost, 'close'>,
+  lifecycleCoordinator: Pick<LocalProviderLifecycleCoordinator, 'close'>,
+): Promise<void> {
+  let hostFailure: unknown
+  try {
+    await host.close()
+  } catch (error) {
+    hostFailure = error
+  }
+
+  let lifecycleFailure: unknown
+  try {
+    await lifecycleCoordinator.close()
+  } catch (error) {
+    lifecycleFailure = error
+  }
+
+  if (isProviderOwnedProcessCleanupFailure(hostFailure)) throw hostFailure
+  if (isProviderOwnedProcessCleanupFailure(lifecycleFailure)) {
+    throw lifecycleFailure
+  }
+  if (hostFailure !== undefined) throw hostFailure
+  if (lifecycleFailure !== undefined) throw lifecycleFailure
 }
 
 /** Converts a local Codex launch failure into installation and health truth. */
@@ -385,24 +449,56 @@ export async function startLocalCodexHostWithRuntime(
       close: async () => await localServer.close(),
     }
   } catch (error) {
+    let providerCleanupFailure: unknown
     if (server !== undefined) {
-      await server.close().catch(() => undefined)
+      try {
+        await server.close()
+      } catch (closeError) {
+        if (isProviderOwnedProcessCleanupFailure(closeError)) {
+          providerCleanupFailure = closeError
+        }
+      }
     } else if (service !== undefined) {
-      await service.close().catch(() => undefined)
+      try {
+        await service.close()
+      } catch (closeError) {
+        if (isProviderOwnedProcessCleanupFailure(closeError)) {
+          providerCleanupFailure = closeError
+        }
+      }
     } else {
       await remoteMachineCoordinator?.close?.().catch(() => undefined)
       await controllerRelayCoordinator?.close().catch(() => undefined)
-      await Promise.allSettled(
+      const runtimeResults = await Promise.allSettled(
         runtimes.map(async (providerRuntime) => await providerRuntime.close()),
       )
+      providerCleanupFailure = runtimeResults.find(
+        (result): result is PromiseRejectedResult =>
+          result.status === 'rejected' &&
+          isProviderOwnedProcessCleanupFailure(result.reason),
+      )?.reason
       try {
         persistence?.close()
       } catch {
         // Preserve the assembly failure.
       }
     }
+    if (providerCleanupFailure !== undefined) throw providerCleanupFailure
     throw error
   }
+}
+
+function isProviderOwnedProcessCleanupFailure(error: unknown): boolean {
+  if (
+    error instanceof ClaudeCodeOwnedProcessCleanupError ||
+    error instanceof CodexOwnedProcessCleanupError
+  ) {
+    return true
+  }
+  return (
+    error instanceof AggregateError &&
+    error.errors.some((entry) => isProviderOwnedProcessCleanupFailure(entry))
+  )
 }
 
 async function createLocalProviderRuntime(

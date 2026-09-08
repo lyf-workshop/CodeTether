@@ -8,6 +8,7 @@ import {
   MachineTransportError,
   deleteMachineTlsIdentityFile,
   generateMachineTlsIdentity,
+  machineTransportLimits,
 } from '@codetether/machine-transport'
 import { canonicalFailure } from '@codetether/agent-core'
 
@@ -819,6 +820,64 @@ test('remote Provider session pagination saturates aggregate safe metrics', asyn
       truncated: false,
     })
   } finally {
+    await f.close(coordinator)
+  }
+})
+
+test('a near-deadline final metadata page does not start an unbudgeted lifecycle restore', async () => {
+  let monotonicNow = 0
+  let metadataOperationActive = false
+  let metadataConnection = -1
+  let sameConnectionRestoreCalls = 0
+  let f
+  f = await fixture({
+    discoveryEnabled: true,
+    providerSessionDiscoveryEnabled: true,
+    async discoveryHandler() {
+      if (metadataOperationActive && f.counts.connect === metadataConnection) {
+        sameConnectionRestoreCalls += 1
+      }
+      return remoteProviderDiscovery(true)
+    },
+    async providerSessionDiscoveryHandler(input) {
+      metadataConnection = f.counts.connect
+      monotonicNow +=
+        machineTransportLimits.providerSessionDiscoveryTotalTimeoutMs -
+        machineTransportLimits.providerDiscoveryTimeoutMs +
+        1
+      return remoteProviderSessionDiscoveryPage(input)
+    },
+  })
+  let coordinator
+  try {
+    coordinator = await SecureRemoteMachineCoordinator.create({
+      persistence: f.store,
+      transport: f.transport,
+      heartbeatIntervalMs: 60_000,
+      reconnectMaximumDelayMs: 20,
+      monotonicNow: () => monotonicNow,
+    })
+    const confirmed = await pairAndActivate(coordinator, f)
+    await waitFor(() => f.counts.discovery >= 1, 'initial Provider discovery')
+    const machine = f.store.getMachine(confirmed.machine.machineId)
+    const trust = f.store.getTrustedMachinePeer(confirmed.machine.machineId)
+    assert.ok(machine)
+    assert.ok(trust)
+
+    metadataOperationActive = true
+    const page = await coordinator.discoverProviderSessions(machine, trust, {
+      provider: 'codex',
+      providerInstallationId: 'pinst_remote_metadata_budget_selected_fixture',
+      expectedInstallationRevision:
+        'prev_remote_metadata_budget_selected_fixture',
+      projectId: 'proj_remote_metadata_budget',
+      rootPath: '/srv/projects/workspace',
+    })
+    metadataOperationActive = false
+    assert.equal(page.status, 'supported')
+    assert.equal(sameConnectionRestoreCalls, 0)
+  } finally {
+    metadataOperationActive = false
     await f.close(coordinator)
   }
 })

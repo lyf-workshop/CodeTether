@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 
 import { CodexAppServerClient } from './client.js'
+import { CodexOwnedProcessCleanupError } from './errors.js'
 import {
   fingerprintCodexInstallation,
   type CodexInstallationCandidate,
@@ -56,6 +57,7 @@ export interface CodexCompatibilityObservation {
     readonly toolEvents: CodexCapabilityObservation
     readonly reasoningControl: CodexCapabilityObservation
   }
+  /** Private probe classification; public Protocol v1 maps it to provider_start_failed. */
   readonly failureCode?: 'provider_probe_failed' | 'provider_protocol_error'
 }
 
@@ -186,7 +188,10 @@ export async function observeCodexInstallation(
       ) {
         try {
           if (options.probeSessionDiscoveryContract !== undefined) {
-            discoveryContract = await options.probeSessionDiscoveryContract()
+            discoveryContract = await raceCodexContractWithAbort(
+              options.probeSessionDiscoveryContract(),
+              options.signal,
+            )
           } else if (runtimeContract.nativeSessionDiscovery === true) {
             discoveryContract = await probeCodexSessionDiscoveryContract({
               installation: options.installation,
@@ -201,9 +206,13 @@ export async function observeCodexInstallation(
                 ? {}
                 : { processFactory: options.processFactory }),
               timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+              ...(options.signal === undefined
+                ? {}
+                : { signal: options.signal }),
             })
           }
-        } catch {
+        } catch (error) {
+          if (error instanceof CodexOwnedProcessCleanupError) throw error
           options.signal?.throwIfAborted()
           // Enumeration is optional. A failed metadata-only contract probe
           // limits Phase 8A discovery without blocking normal execution.
@@ -230,7 +239,9 @@ export async function observeCodexInstallation(
             )
           : incompatibleCompatibility(runtimeContract)
     }
-  } catch {
+  } catch (error) {
+    if (error instanceof CodexOwnedProcessCleanupError) throw error
+    options.signal?.throwIfAborted()
     compatibility = unavailableCompatibility()
   }
   const backend = observeCodexBackendConfiguration(environment)
@@ -258,15 +269,26 @@ export async function probeCodexSessionDiscoveryContract(options: {
   readonly workingDirectory?: string
   readonly processFactory?: RemoteCodexProcessFactory
   readonly timeoutMs?: number
+  readonly signal?: AbortSignal
+  /** Internal deterministic-test seam; product code launches the exact client. */
+  readonly clientFactory?: () => Promise<{
+    listStoredThreads(options: {
+      readonly cwd: string
+      readonly limit: number
+    }): Promise<unknown>
+    shutdown(): Promise<void>
+  }>
 }): Promise<boolean> {
   const workingDirectory = options.workingDirectory ?? process.cwd()
   if (!isAbsolute(workingDirectory)) {
     throw new TypeError('Codex metadata probe directory must be absolute')
   }
+  options.signal?.throwIfAborted()
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
-  const client =
-    options.codexHome === undefined
-      ? await CodexAppServerClient.launch({
+  const clientPromise =
+    options.clientFactory?.() ??
+    (options.codexHome === undefined
+      ? CodexAppServerClient.launch({
           executable: options.installation.executable,
           ...(options.environment === undefined
             ? {}
@@ -274,7 +296,7 @@ export async function probeCodexSessionDiscoveryContract(options: {
           requestTimeoutMs: timeoutMs,
           clientInfo: CODEX_COMPATIBILITY_CLIENT_INFO,
         })
-      : await CodexAppServerClient.launchRemote({
+      : CodexAppServerClient.launchRemote({
           executable: options.installation.executable,
           codexHome: options.codexHome,
           ...(options.environment === undefined
@@ -285,13 +307,53 @@ export async function probeCodexSessionDiscoveryContract(options: {
             : { processFactory: options.processFactory }),
           requestTimeoutMs: timeoutMs,
           clientInfo: CODEX_COMPATIBILITY_CLIENT_INFO,
-        })
+        }))
+  let client: Awaited<typeof clientPromise>
   try {
-    await client.listStoredThreads({ cwd: workingDirectory, limit: 1 })
+    client = await raceCodexContractWithAbort(clientPromise, options.signal)
+  } catch (error) {
+    if (options.signal?.aborted === true) {
+      try {
+        const lateClient = await clientPromise
+        await shutdownCodexCompatibilityClient(lateClient)
+      } catch (lateError) {
+        if (lateError instanceof CodexOwnedProcessCleanupError) throw lateError
+      }
+    }
+    throw error
+  }
+  try {
+    await raceCodexContractWithAbort(
+      client.listStoredThreads({ cwd: workingDirectory, limit: 1 }),
+      options.signal,
+    )
     return true
   } finally {
-    await client.shutdown()
+    await shutdownCodexCompatibilityClient(client)
   }
+}
+
+async function raceCodexContractWithAbort<TResult>(
+  task: Promise<TResult>,
+  signal?: AbortSignal,
+): Promise<TResult> {
+  if (signal === undefined) return await task
+  signal.throwIfAborted()
+  return await new Promise<TResult>((resolve, reject) => {
+    const abort = (): void =>
+      reject(new DOMException('Operation aborted', 'AbortError'))
+    signal.addEventListener('abort', abort, { once: true })
+    void task.then(
+      (result) => {
+        signal.removeEventListener('abort', abort)
+        resolve(result)
+      },
+      (error: unknown) => {
+        signal.removeEventListener('abort', abort)
+        reject(error)
+      },
+    )
+  })
 }
 
 const CODEX_COMPATIBILITY_CLIENT_INFO = {
@@ -364,7 +426,7 @@ export async function probeCodexRuntimeContracts(options: {
     // handshake. Keeping the exact client alive until here makes shutdown
     // ownership explicit even when schema metadata is unavailable.
   } finally {
-    await client.shutdown()
+    await shutdownCodexCompatibilityClient(client)
   }
   options.signal?.throwIfAborted()
 
@@ -387,6 +449,18 @@ export async function probeCodexRuntimeContracts(options: {
   return schema
 }
 
+/** @internal Converts compatibility-client cleanup uncertainty to one type. */
+export async function shutdownCodexCompatibilityClient(
+  client: Pick<CodexAppServerClient, 'shutdown'>,
+): Promise<void> {
+  try {
+    await client.shutdown()
+  } catch (error) {
+    if (error instanceof CodexOwnedProcessCleanupError) throw error
+    throw new CodexOwnedProcessCleanupError({ cause: error })
+  }
+}
+
 async function probeCodexProtocolSchema(options: {
   readonly installation: CodexInstallationCandidate
   readonly environment: NodeJS.ProcessEnv
@@ -406,7 +480,8 @@ async function probeCodexProtocolSchema(options: {
         maximumOutputBytes: options.maximumOutputBytes,
         ...(options.signal === undefined ? {} : { signal: options.signal }),
       })
-    } catch {
+    } catch (error) {
+      if (error instanceof CodexOwnedProcessCleanupError) throw error
       options.signal?.throwIfAborted()
       // Schema generation is a metadata enhancement, not an execution
       // requirement. The initialized exact runtime remains usable, while the
@@ -519,6 +594,8 @@ export function runBoundedCodexProbe(options: {
   readonly timeoutMs?: number
   readonly maximumOutputBytes?: number
   readonly signal?: AbortSignal
+  /** Internal deterministic-test seam; production uses exact owned cleanup. */
+  readonly closeOwnedProcess?: typeof closeOwnedProbeProcess
 }): Promise<string> {
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
   const maximumOutputBytes =
@@ -564,21 +641,14 @@ export function runBoundedCodexProbe(options: {
       forcedFailure = error
       clearTimeout(timer)
       options.signal?.removeEventListener('abort', abort)
-      void closeOwnedProbeProcess(
+      void (options.closeOwnedProcess ?? closeOwnedProbeProcess)(
         child,
         Math.min(timeoutMs, MAXIMUM_CLOSE_GRACE_MS),
         processGroupOwned,
       ).then(
         () => finish(error),
         (cleanupError: unknown) =>
-          finish(
-            new Error(
-              'Codex compatibility probe cleanup could not be verified',
-              {
-                cause: cleanupError,
-              },
-            ),
-          ),
+          finish(new CodexOwnedProcessCleanupError({ cause: cleanupError })),
       )
     }
     const abort = (): void =>
@@ -629,16 +699,12 @@ export function runBoundedCodexProbe(options: {
       cleanupStarted = true
       clearTimeout(timer)
       options.signal?.removeEventListener('abort', abort)
-      void closeOwnedProbeProcess(
+      void (options.closeOwnedProcess ?? closeOwnedProbeProcess)(
         child,
         Math.min(timeoutMs, MAXIMUM_CLOSE_GRACE_MS),
         true,
       ).then(complete, (cleanupError: unknown) =>
-        finish(
-          new Error('Codex compatibility probe cleanup could not be verified', {
-            cause: cleanupError,
-          }),
-        ),
+        finish(new CodexOwnedProcessCleanupError({ cause: cleanupError })),
       )
     })
   })

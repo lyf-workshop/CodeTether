@@ -2,7 +2,10 @@ import assert from 'node:assert/strict'
 import { resolve } from 'node:path'
 import test from 'node:test'
 
-import { CodexSessionDiscovery } from '../dist/index.js'
+import {
+  CodexOwnedProcessCleanupError,
+  CodexSessionDiscovery,
+} from '../dist/index.js'
 
 function storedThread(overrides = {}) {
   return {
@@ -418,6 +421,122 @@ test('cancellation during metadata-client initialization awaits exact late clean
   await assert.rejects(pending, { name: 'AbortError' })
   assert.equal(listCount, 0)
   assert.equal(shutdownCount, 1)
+})
+
+test('discovery cleanup uncertainty is typed, latched, and blocks later validation', async () => {
+  const projectRoot = resolve('project-a')
+  const privateCleanupFailure = new Error('test-owned metadata cleanup failure')
+  let factoryCalls = 0
+  const discovery = new CodexSessionDiscovery({
+    canonicalizePath,
+    clientFactory: async () => {
+      factoryCalls += 1
+      return {
+        async listStoredThreads() {
+          return { threads: [], invalidEntryCount: 0 }
+        },
+        async readStoredThread() {
+          return storedThread()
+        },
+        async shutdown() {
+          throw privateCleanupFailure
+        },
+      }
+    },
+  })
+
+  let cleanupBarrier
+  await assert.rejects(
+    discovery.discover({ projectRoot, limit: 10 }),
+    (error) => {
+      cleanupBarrier = error
+      return (
+        error instanceof CodexOwnedProcessCleanupError &&
+        error.failureReason === 'execution_ownership_uncertain' &&
+        error.cause === privateCleanupFailure
+      )
+    },
+  )
+  await assert.rejects(
+    discovery.validateCandidate({
+      projectRoot,
+      nativeSessionId: 'thread-a',
+      revision: 'valid_revision',
+    }),
+    (error) => error === cleanupBarrier,
+  )
+  assert.equal(factoryCalls, 1)
+})
+
+test('candidate-validation cleanup uncertainty blocks later discovery', async () => {
+  const projectRoot = resolve('project-a')
+  const cleanupBarrier = new CodexOwnedProcessCleanupError()
+  let factoryCalls = 0
+  const discovery = new CodexSessionDiscovery({
+    canonicalizePath,
+    clientFactory: async () => {
+      factoryCalls += 1
+      return {
+        async listStoredThreads() {
+          return { threads: [], invalidEntryCount: 0 }
+        },
+        async readStoredThread() {
+          return storedThread()
+        },
+        async shutdown() {
+          throw cleanupBarrier
+        },
+      }
+    },
+  })
+
+  await assert.rejects(
+    discovery.validateCandidate({
+      projectRoot,
+      nativeSessionId: 'thread-a',
+      revision: 'valid_revision',
+    }),
+    (error) => error === cleanupBarrier,
+  )
+  await assert.rejects(
+    discovery.discover({ projectRoot, limit: 10 }),
+    (error) => error === cleanupBarrier,
+  )
+  assert.equal(factoryCalls, 1)
+})
+
+test('cancellation cannot mask a late metadata-client ownership failure', async () => {
+  const projectRoot = resolve('project-a')
+  const controller = new AbortController()
+  const cleanupBarrier = new CodexOwnedProcessCleanupError()
+  let rejectClient
+  let markFactoryStarted
+  const factoryStarted = new Promise((resolvePromise) => {
+    markFactoryStarted = resolvePromise
+  })
+  const discovery = new CodexSessionDiscovery({
+    canonicalizePath,
+    clientFactory: () => {
+      markFactoryStarted()
+      return new Promise((_, rejectPromise) => {
+        rejectClient = rejectPromise
+      })
+    },
+  })
+
+  const pending = discovery.discover({
+    projectRoot,
+    limit: 10,
+    signal: controller.signal,
+  })
+  await factoryStarted
+  controller.abort()
+  rejectClient(cleanupBarrier)
+  await assert.rejects(pending, (error) => error === cleanupBarrier)
+  await assert.rejects(
+    discovery.discover({ projectRoot, limit: 10 }),
+    (error) => error === cleanupBarrier,
+  )
 })
 
 test('candidate revalidation rejects unbounded or malformed private identity before launch', async () => {

@@ -11,6 +11,7 @@ import {
   buildClaudeCodeArguments,
   CLAUDE_CODE_RUNTIME_CLI_CONTRACT,
   closeOwnedClaudeProcess,
+  ClaudeCodeOwnedProcessCleanupError,
   ClaudeCodeSessionRuntime,
   encodeClaudeUserMessage,
   sanitizeClaudeChildEnvironment,
@@ -545,6 +546,72 @@ test('owner close emits interrupted without reporting a Provider failure', async
   assert.equal(events.at(-1).type, 'turn.interrupted')
   assert.equal(events.filter((event) => event.type === 'turn.failed').length, 0)
   assert.equal(failures.length, 0)
+})
+
+test('unverified exact child cleanup permanently blocks the Claude session and preserves the typed failure', async (t) => {
+  const cwd = await mkdtemp(
+    join(tmpdir(), 'codetether-claude-cleanup-barrier-'),
+  )
+  t.after(async () => {
+    await import('node:fs/promises').then(({ rm }) =>
+      rm(cwd, { recursive: true, force: true }),
+    )
+  })
+  const cleanupFailure = new ClaudeCodeOwnedProcessCleanupError()
+  let spawns = 0
+  const runtime = ClaudeCodeSessionRuntime.createSession({
+    launcher: fixtureLauncher('--fixture-scenario=hang'),
+    sessionId,
+    cwd,
+    environment: { ...process.env },
+    processFactory: (specification) => {
+      spawns += 1
+      const child = spawn(specification.executable, specification.arguments, {
+        cwd: specification.cwd,
+        env: specification.environment,
+        shell: false,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      })
+      return {
+        child,
+        async close(graceMs) {
+          await closeOwnedClaudeProcess(child, graceMs)
+          throw cleanupFailure
+        },
+      }
+    },
+  })
+  const execution = runtime.startTurnExecution({
+    turnId: 'turn_cleanup_barrier',
+    prompt: 'bounded input',
+  })
+  await execution.ownershipEstablished
+
+  const closeResults = await Promise.allSettled([
+    runtime.close(),
+    runtime.close(),
+  ])
+  assert.deepEqual(
+    closeResults.map((result) => result.status),
+    ['rejected', 'rejected'],
+  )
+  for (const result of closeResults) {
+    assert.equal(result.reason, cleanupFailure)
+  }
+  await assert.rejects(
+    execution.completion,
+    (error) => error === cleanupFailure,
+  )
+  assert.throws(
+    () =>
+      runtime.startTurnExecution({
+        turnId: 'turn_cleanup_replacement_forbidden',
+        prompt: 'must not execute',
+      }),
+    (error) => error === cleanupFailure,
+  )
+  await assert.rejects(runtime.close(), (error) => error === cleanupFailure)
+  assert.equal(spawns, 1)
 })
 
 test('close terminates only the exact owned Claude child', async () => {

@@ -1,16 +1,20 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
+import { EventEmitter } from 'node:events'
 import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { PassThrough } from 'node:stream'
 import test from 'node:test'
 
+import { CodexOwnedProcessCleanupError } from '../dist/errors.js'
 import {
   codexAppServerArguments,
   remoteCodexAppServerArguments,
   sanitizeCodexChildEnvironment,
   sanitizeRemoteCodexChildEnvironment,
   spawnRemoteCodexAppServer,
+  stopCodexAppServer,
   stopRemoteCodexAppServer,
 } from '../dist/process.js'
 
@@ -209,6 +213,23 @@ test('remote App Server rejects a relative Codex home', () => {
   assert.throws(
     () => sanitizeRemoteCodexChildEnvironment({}, 'relative/codex-home'),
     /Remote Codex home must be an absolute path/,
+  )
+})
+
+test('local App Server stop failure preserves exact ownership uncertainty', async () => {
+  const child = new EventEmitter()
+  child.stdin = new PassThrough()
+  child.stdout = new PassThrough()
+  child.stderr = new PassThrough()
+  child.exitCode = null
+  child.signalCode = null
+  child.kill = () => true
+
+  await assert.rejects(
+    stopCodexAppServer(child, 1),
+    (error) =>
+      error instanceof CodexOwnedProcessCleanupError &&
+      error.failureReason === 'execution_ownership_uncertain',
   )
 })
 

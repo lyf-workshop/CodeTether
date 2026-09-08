@@ -285,9 +285,15 @@ interface PendingProviderStartFailure {
 
 interface InFlightProviderSessionScan {
   readonly abort: AbortController
-  promise: Promise<ProviderSessionDiscoveryPage>
+  promise: Promise<ProviderSessionScanResult>
   waiters: number
   settled: boolean
+}
+
+interface ProviderSessionScanResult {
+  readonly page: ProviderSessionDiscoveryPage
+  /** Exact selected installation used by this scan, captured under handoff. */
+  readonly installation?: ProviderRuntimeInstallation
 }
 
 export class HostServiceError extends Error {
@@ -384,6 +390,7 @@ export class HostService {
   ) => Promise<AgentHostRuntime>
   readonly #refreshLocalProviderLifecycle?: HostServiceOptions['refreshLocalProviderLifecycle']
   readonly #localProviderRefreshes = new Map<AgentProvider, Promise<void>>()
+  readonly #localProviderHandoffGates = new Map<AgentProvider, ExclusiveGate>()
   readonly #doctorChecks = new Map<string, Promise<GetDoctorResponse>>()
   readonly #projects: ProjectRegistry
   readonly #persistenceFlushMs: number
@@ -414,6 +421,14 @@ export class HostService {
   #unsubscribeControllerRelay?: () => void
   readonly #runtimeFailures = new Map<AgentProvider, Error>()
   readonly #machineRuntimeFailures = new Map<string, Error>()
+  /**
+   * Exact Provider-owned cleanup uncertainty is a stronger, provider-scoped
+   * execution barrier than advisory execution health. It never terminates an
+   * unrelated active Turn and is cleared only by a new authenticated remote
+   * lifecycle observation (local ownership remains latched by its coordinator
+   * until Host restart).
+   */
+  readonly #providerOwnershipFailures = new Map<string, CanonicalFailure>()
   readonly #providerExecutionHealth = new Map<
     string,
     DurableProviderExecutionHealthObservation
@@ -500,6 +515,17 @@ export class HostService {
       },
       remoteStatus: this.#remoteMachines,
     })
+    for (const descriptor of this.#providers.descriptors()) {
+      const failure = executionOwnershipFailure(
+        descriptor.executionHealth,
+        this.#timestamp(),
+      )
+      if (failure === undefined) continue
+      this.#providerOwnershipFailures.set(
+        machineRuntimeKey(this.#machines.localMachineId(), descriptor.provider),
+        failure,
+      )
+    }
     this.#machineRuntimes = new MachineProviderRuntimeResolver({
       localMachineId: this.#machines.localMachineId(),
       localProviders: this.#providers,
@@ -626,6 +652,14 @@ export class HostService {
         try {
           const durable = this.#persistence?.getMachine(observation.machineId)
           if (durable?.kind !== 'remote') return
+          // This callback is emitted only after the coordinator accepted a
+          // current authenticated Node observation. Keep cleanup ownership
+          // barriers aligned with that same authority even when recovery is
+          // driven by reconnect rather than an explicit Doctor refresh.
+          this.#reconcileRemoteProviderOwnershipFailures(
+            observation.machineId,
+            observation.providers,
+          )
           const machine = this.#refreshRemoteMachine(durable)
           this.#publish({
             conversationId: null,
@@ -1283,12 +1317,23 @@ export class HostService {
               409,
             )
           }
-          await Promise.all(
+          const refreshResults = await Promise.allSettled(
             (['codex', 'claude-code'] as const).map(
               async (provider) =>
                 await this.#refreshLocalProviderForExplicitStart(id, provider),
             ),
           )
+          const cleanupFailure = refreshResults.find(
+            (result): result is PromiseRejectedResult =>
+              result.status === 'rejected' &&
+              isExecutionOwnershipUncertain(result.reason),
+          )
+          if (cleanupFailure !== undefined) throw cleanupFailure.reason
+          const refreshFailure = refreshResults.find(
+            (result): result is PromiseRejectedResult =>
+              result.status === 'rejected',
+          )
+          if (refreshFailure !== undefined) throw refreshFailure.reason
           const providerLifecycles = this.#providers.lifecycles()
           const observedAt = providerLifecycles
             .flatMap((lifecycle) =>
@@ -1335,6 +1380,10 @@ export class HostService {
             durable,
             trust,
           )
+          this.#reconcileRemoteProviderOwnershipFailures(
+            id,
+            observation.providers,
+          )
           return {
             protocolVersion,
             actionId: request.actionId,
@@ -1351,7 +1400,7 @@ export class HostService {
             },
           }
         } catch (error) {
-          throw remoteMachineServiceError(error)
+          throw remoteProviderRefreshServiceError(error)
         }
       },
       false,
@@ -1920,62 +1969,59 @@ export class HostService {
       options.provider === undefined
         ? ['codex', 'claude-code']
         : [options.provider]
-    const discoveryInstallations = new Map<
-      AgentProvider,
-      ProviderRuntimeInstallation
-    >()
-    for (const provider of providers) {
-      const lifecycle = this.#providerLifecyclesForMachine(machineRecord).find(
-        (candidate) => candidate.provider === provider,
-      )
-      if (lifecycle === undefined) continue
-      const installation = this.#providerInstallation(
-        machine,
-        provider,
-        lifecycle.selectedInstallationId,
-      )
-      if (
-        installation?.revision !== undefined &&
-        installation.availability === 'available'
-      ) {
-        discoveryInstallations.set(provider, {
-          installationId: installation.installationId,
-          installationRevision: installation.revision,
-        })
-      }
-    }
-    const pages = await Promise.all(
+    const scans = await Promise.all(
       providers.map(async (provider) => {
         if (
           machineRecord.kind === 'remote' &&
           machineRecord.connectionState !== 'online'
         ) {
-          return unavailableProviderSessionDiscoveryPage(
-            provider,
-            'machine_offline',
-          )
+          return {
+            page: unavailableProviderSessionDiscoveryPage(
+              provider,
+              'machine_offline',
+            ),
+          }
         }
         try {
-          return this.#withCurrentProviderSessionResumeStatus(
+          const scan = await this.#scanProviderSessions(
+            project,
             machine,
+            location.rootPath,
             provider,
-            await this.#scanProviderSessions(
-              project,
+            signal,
+          )
+          return {
+            ...scan,
+            page: this.#withCurrentProviderSessionResumeStatus(
               machine,
-              location.rootPath,
               provider,
-              signal,
+              scan.page,
             ),
-          )
+          }
         } catch (error) {
+          if (isExecutionOwnershipUncertain(error)) {
+            throw this.#latchProviderOwnershipFailure(machine, provider, error)
+          }
           if (signal?.aborted || isAbortError(error)) throw error
-          return unavailableProviderSessionDiscoveryPage(
-            provider,
-            'provider_session_discovery_unavailable',
-          )
+          return {
+            page: unavailableProviderSessionDiscoveryPage(
+              provider,
+              'provider_session_discovery_unavailable',
+            ),
+          }
         }
       }),
     )
+    const pages = scans.map(({ page }) => page)
+    const discoveryInstallations = new Map<
+      AgentProvider,
+      ProviderRuntimeInstallation
+    >()
+    for (const scan of scans) {
+      if (scan.installation !== undefined) {
+        discoveryInstallations.set(scan.page.provider, scan.installation)
+      }
+    }
     const response = this.#providerSessionCandidates.createSnapshot({
       projectId: project,
       machineId: machine,
@@ -2478,276 +2524,289 @@ export class HostService {
         } catch (error) {
           throw machineServiceError(error)
         }
-        await this.#refreshLocalProviderForExplicitStart(
+        return await this.#withLocalProviderHandoff(
           machine.machineId,
           request.provider,
-        )
-        const machineProvider = this.#providerDescriptorForMachine(
-          machine.machineId,
-          request.provider,
-        )
-        if (
-          machineProvider === undefined ||
-          machineProvider.availability !== 'available' ||
-          !this.#machineRuntimeAvailable(machine.machineId, request.provider)
-        ) {
-          throw providerUnavailableError(request.provider, machineProvider)
-        }
-        const runtime = this.#requireMachineProviderRuntime(
-          machine.machineId,
-          request.provider,
-        )
-        assertProviderConfiguration(
-          machineProvider,
-          request.model,
-          request.reasoning,
-        )
-        const workspace = await this.#reserveConversationProject(request)
-        try {
-          const releaseRuntimeSlot = await this.#reserveRuntimeSlot()
-          try {
-            const projectId = workspace.project.projectId
-            const cwd = workspace.cwd
-            const timestamp = this.#timestamp()
-            const conversationId = newConversationId()
-            const creatingConversation: DurableConversation = {
-              conversationId,
-              projectId,
-              machineId: machine.machineId,
-              title: DEFAULT_CONVERSATION_TITLE,
-              titleSource: 'generated',
-              provider: request.provider,
-              ...(runtime.installation === undefined
-                ? {}
-                : {
-                    providerInstallationId: runtime.installation.installationId,
-                  }),
-              origin: 'codetether',
-              providerSessionMaterialized: false,
-              cwd,
-              ...(request.model === undefined ? {} : { model: request.model }),
-              ...(request.reasoning === undefined
-                ? {}
-                : { reasoning: request.reasoning }),
-              status: 'creating',
-              createdAt: timestamp,
-              updatedAt: timestamp,
-              lastActivityAt: timestamp,
-            }
-            this.#writeDurable(() => {
-              this.#persistence?.createConversation(creatingConversation)
-            })
-
-            if (machine.kind === 'remote') {
-              const record = ConversationRecordSchema.parse({
-                conversationId,
-                projectId,
-                machineId: machine.machineId,
-                title: DEFAULT_CONVERSATION_TITLE,
-                titleSource: 'generated',
-                origin: 'codetether',
-                provider: request.provider,
-                cwd,
-                ...(request.model === undefined
-                  ? {}
-                  : { model: request.model }),
-                ...(request.reasoning === undefined
-                  ? {}
-                  : { reasoning: request.reasoning }),
-                status: 'idle',
-                createdAt: timestamp,
-                updatedAt: timestamp,
-                lastActivityAt: timestamp,
-              })
-              const state: ConversationState = {
-                record,
-                origin: 'codetether',
-                ...(runtime.installation === undefined
-                  ? {}
-                  : {
-                      providerInstallationId:
-                        runtime.installation.installationId,
-                    }),
-                turns: new Map(),
-                providerTurnIds: new Map(),
-                providerSessionMaterialized: false,
-                providerSession: 'uninitialized',
-                startingTurn: false,
-              }
-              this.#writeDurable(() => {
-                this.#persistence?.updateConversation(
-                  this.#durableConversation(state),
-                )
-              })
-              this.#conversations.set(conversationId, state)
-              this.#publish({
-                conversationId,
-                timestamp,
-                type: 'conversation.started',
-                payload: { conversation: record },
-              })
-              this.#touchConversation(conversationId)
-              return {
-                protocolVersion,
-                actionId: request.actionId,
-                status: 'completed',
-                data: { conversation: record },
-              }
-            }
-
-            let provider:
-              | Awaited<ReturnType<AgentHostRuntime['startConversation']>>
-              | undefined
-            try {
-              provider = await runtime.startConversation({
-                cwd,
-                ...(request.model === undefined
-                  ? {}
-                  : { model: request.model }),
-                ...(request.reasoning === undefined
-                  ? {}
-                  : { reasoning: request.reasoning }),
-              })
-            } catch (error) {
-              this.#rollbackCreatingConversation(conversationId)
-              if (
-                !this.#machineRuntimeAvailable(
-                  machine.machineId,
-                  request.provider,
-                )
-              ) {
-                throw providerUnavailableError(request.provider)
-              }
-              const observedAt = this.#timestamp()
-              const failure = classifyCanonicalFailure(
-                error,
-                observedAt,
-                'provider_start_failed',
-              )
-              if (failureAffectsProviderExecutionHealth(failure)) {
-                this.#recordProviderExecutionHealth({
-                  machineId: machine.machineId,
-                  provider: request.provider,
-                  state: providerExecutionHealthState(failure),
-                  failure,
-                  observedAt: TimestampSchema.parse(observedAt),
-                })
-              }
-              throw hostServiceErrorForFailure(request.provider, failure)
-            }
-            try {
-              this.#assertMachineRuntimeAvailable(
+          async () => {
+            await this.#refreshLocalProviderForExplicitStart(
+              machine.machineId,
+              request.provider,
+              true,
+            )
+            const machineProvider = this.#providerDescriptorForMachine(
+              machine.machineId,
+              request.provider,
+            )
+            if (
+              machineProvider === undefined ||
+              machineProvider.availability !== 'available' ||
+              !this.#machineRuntimeAvailable(
                 machine.machineId,
                 request.provider,
               )
-
-              const sessionKey = providerSessionKey(
-                machine.machineId,
-                request.provider,
-                provider.providerThreadId,
-              )
-              if (
-                provider.providerThreadId.trim().length === 0 ||
-                this.#providerThreads.has(sessionKey) ||
-                this.#persistence
-                  ?.listConversations()
-                  .some(
-                    (conversation) =>
-                      conversation.machineId === machine.machineId &&
-                      conversation.provider === request.provider &&
-                      conversation.providerThreadId ===
-                        provider.providerThreadId,
-                  ) === true
-              ) {
-                throw new HostServiceError(
-                  'provider_error',
-                  `${providerDisplayName(request.provider)} returned an invalid or reused Session identity`,
-                  500,
-                )
-              }
-
-              let record
+            ) {
+              throw providerUnavailableError(request.provider, machineProvider)
+            }
+            const runtime = this.#requireMachineProviderRuntime(
+              machine.machineId,
+              request.provider,
+            )
+            assertProviderConfiguration(
+              machineProvider,
+              request.model,
+              request.reasoning,
+            )
+            const workspace = await this.#reserveConversationProject(request)
+            try {
+              const releaseRuntimeSlot = await this.#reserveRuntimeSlot()
               try {
-                record = ConversationRecordSchema.parse({
+                const projectId = workspace.project.projectId
+                const cwd = workspace.cwd
+                const timestamp = this.#timestamp()
+                const conversationId = newConversationId()
+                const creatingConversation: DurableConversation = {
                   conversationId,
                   projectId,
                   machineId: machine.machineId,
                   title: DEFAULT_CONVERSATION_TITLE,
                   titleSource: 'generated',
-                  origin: 'codetether',
                   provider: request.provider,
-                  cwd,
-                  ...(provider.model === undefined &&
-                  request.model === undefined
+                  ...(runtime.installation === undefined
                     ? {}
-                    : { model: provider.model ?? request.model }),
+                    : {
+                        providerInstallationId:
+                          runtime.installation.installationId,
+                      }),
+                  origin: 'codetether',
+                  providerSessionMaterialized: false,
+                  cwd,
+                  ...(request.model === undefined
+                    ? {}
+                    : { model: request.model }),
                   ...(request.reasoning === undefined
                     ? {}
                     : { reasoning: request.reasoning }),
-                  status: 'idle',
+                  status: 'creating',
                   createdAt: timestamp,
                   updatedAt: timestamp,
                   lastActivityAt: timestamp,
+                }
+                this.#writeDurable(() => {
+                  this.#persistence?.createConversation(creatingConversation)
                 })
-              } catch (error) {
-                throw providerCommandError(
-                  request.provider,
-                  'return valid conversation metadata',
-                  error,
-                )
+
+                if (machine.kind === 'remote') {
+                  const record = ConversationRecordSchema.parse({
+                    conversationId,
+                    projectId,
+                    machineId: machine.machineId,
+                    title: DEFAULT_CONVERSATION_TITLE,
+                    titleSource: 'generated',
+                    origin: 'codetether',
+                    provider: request.provider,
+                    cwd,
+                    ...(request.model === undefined
+                      ? {}
+                      : { model: request.model }),
+                    ...(request.reasoning === undefined
+                      ? {}
+                      : { reasoning: request.reasoning }),
+                    status: 'idle',
+                    createdAt: timestamp,
+                    updatedAt: timestamp,
+                    lastActivityAt: timestamp,
+                  })
+                  const state: ConversationState = {
+                    record,
+                    origin: 'codetether',
+                    ...(runtime.installation === undefined
+                      ? {}
+                      : {
+                          providerInstallationId:
+                            runtime.installation.installationId,
+                        }),
+                    turns: new Map(),
+                    providerTurnIds: new Map(),
+                    providerSessionMaterialized: false,
+                    providerSession: 'uninitialized',
+                    startingTurn: false,
+                  }
+                  this.#writeDurable(() => {
+                    this.#persistence?.updateConversation(
+                      this.#durableConversation(state),
+                    )
+                  })
+                  this.#conversations.set(conversationId, state)
+                  this.#publish({
+                    conversationId,
+                    timestamp,
+                    type: 'conversation.started',
+                    payload: { conversation: record },
+                  })
+                  this.#touchConversation(conversationId)
+                  return {
+                    protocolVersion,
+                    actionId: request.actionId,
+                    status: 'completed',
+                    data: { conversation: record },
+                  }
+                }
+
+                let provider:
+                  | Awaited<ReturnType<AgentHostRuntime['startConversation']>>
+                  | undefined
+                try {
+                  provider = await runtime.startConversation({
+                    cwd,
+                    ...(request.model === undefined
+                      ? {}
+                      : { model: request.model }),
+                    ...(request.reasoning === undefined
+                      ? {}
+                      : { reasoning: request.reasoning }),
+                  })
+                } catch (error) {
+                  this.#rollbackCreatingConversation(conversationId)
+                  if (
+                    !this.#machineRuntimeAvailable(
+                      machine.machineId,
+                      request.provider,
+                    )
+                  ) {
+                    throw providerUnavailableError(request.provider)
+                  }
+                  const observedAt = this.#timestamp()
+                  const failure = classifyCanonicalFailure(
+                    error,
+                    observedAt,
+                    'provider_start_failed',
+                  )
+                  if (failureAffectsProviderExecutionHealth(failure)) {
+                    this.#recordProviderExecutionHealth({
+                      machineId: machine.machineId,
+                      provider: request.provider,
+                      state: providerExecutionHealthState(failure),
+                      failure,
+                      observedAt: TimestampSchema.parse(observedAt),
+                    })
+                  }
+                  throw hostServiceErrorForFailure(request.provider, failure)
+                }
+                try {
+                  this.#assertMachineRuntimeAvailable(
+                    machine.machineId,
+                    request.provider,
+                  )
+
+                  const sessionKey = providerSessionKey(
+                    machine.machineId,
+                    request.provider,
+                    provider.providerThreadId,
+                  )
+                  if (
+                    provider.providerThreadId.trim().length === 0 ||
+                    this.#providerThreads.has(sessionKey) ||
+                    this.#persistence
+                      ?.listConversations()
+                      .some(
+                        (conversation) =>
+                          conversation.machineId === machine.machineId &&
+                          conversation.provider === request.provider &&
+                          conversation.providerThreadId ===
+                            provider.providerThreadId,
+                      ) === true
+                  ) {
+                    throw new HostServiceError(
+                      'provider_error',
+                      `${providerDisplayName(request.provider)} returned an invalid or reused Session identity`,
+                      500,
+                    )
+                  }
+
+                  let record
+                  try {
+                    record = ConversationRecordSchema.parse({
+                      conversationId,
+                      projectId,
+                      machineId: machine.machineId,
+                      title: DEFAULT_CONVERSATION_TITLE,
+                      titleSource: 'generated',
+                      origin: 'codetether',
+                      provider: request.provider,
+                      cwd,
+                      ...(provider.model === undefined &&
+                      request.model === undefined
+                        ? {}
+                        : { model: provider.model ?? request.model }),
+                      ...(request.reasoning === undefined
+                        ? {}
+                        : { reasoning: request.reasoning }),
+                      status: 'idle',
+                      createdAt: timestamp,
+                      updatedAt: timestamp,
+                      lastActivityAt: timestamp,
+                    })
+                  } catch (error) {
+                    throw providerCommandError(
+                      request.provider,
+                      'return valid conversation metadata',
+                      error,
+                    )
+                  }
+                  const state: ConversationState = {
+                    record,
+                    origin: 'codetether',
+                    ...(runtime.installation === undefined
+                      ? {}
+                      : {
+                          providerInstallationId:
+                            runtime.installation.installationId,
+                        }),
+                    providerThreadId: provider.providerThreadId,
+                    turns: new Map(),
+                    providerTurnIds: new Map(),
+                    providerSessionMaterialized: false,
+                    providerSession: 'ready',
+                    startingTurn: false,
+                  }
+                  this.#writeDurable(() => {
+                    this.#persistence?.updateConversation(
+                      this.#durableConversation(state),
+                    )
+                  })
+                  this.#conversations.set(conversationId, state)
+                  this.#providerThreads.set(sessionKey, conversationId)
+                  this.#publish({
+                    conversationId,
+                    timestamp,
+                    type: 'conversation.started',
+                    payload: { conversation: record },
+                  })
+                  this.#flushProviderEvents()
+                  this.#touchConversation(conversationId)
+                  return {
+                    protocolVersion,
+                    actionId: request.actionId,
+                    status: 'completed',
+                    data: { conversation: record },
+                  }
+                } catch (error) {
+                  return await this.#rollbackAcquiredProviderConversation(
+                    conversationId,
+                    request.provider,
+                    provider.providerThreadId,
+                    runtime,
+                    error,
+                  )
+                }
+              } finally {
+                releaseRuntimeSlot()
               }
-              const state: ConversationState = {
-                record,
-                origin: 'codetether',
-                ...(runtime.installation === undefined
-                  ? {}
-                  : {
-                      providerInstallationId:
-                        runtime.installation.installationId,
-                    }),
-                providerThreadId: provider.providerThreadId,
-                turns: new Map(),
-                providerTurnIds: new Map(),
-                providerSessionMaterialized: false,
-                providerSession: 'ready',
-                startingTurn: false,
-              }
-              this.#writeDurable(() => {
-                this.#persistence?.updateConversation(
-                  this.#durableConversation(state),
-                )
-              })
-              this.#conversations.set(conversationId, state)
-              this.#providerThreads.set(sessionKey, conversationId)
-              this.#publish({
-                conversationId,
-                timestamp,
-                type: 'conversation.started',
-                payload: { conversation: record },
-              })
-              this.#flushProviderEvents()
-              this.#touchConversation(conversationId)
-              return {
-                protocolVersion,
-                actionId: request.actionId,
-                status: 'completed',
-                data: { conversation: record },
-              }
-            } catch (error) {
-              return await this.#rollbackAcquiredProviderConversation(
-                conversationId,
-                request.provider,
-                provider.providerThreadId,
-                runtime,
-                error,
-              )
+            } finally {
+              workspace.release()
             }
-          } finally {
-            releaseRuntimeSlot()
-          }
-        } finally {
-          workspace.release()
-        }
+          },
+        )
       },
       false,
     )
@@ -2857,62 +2916,70 @@ export class HostService {
         } catch (error) {
           throw machineServiceError(error)
         }
-        await this.#refreshLocalProviderForExplicitStart(
-          conversationMachineId,
-          conversationProvider,
-        )
-        this.#assertMachineRuntimeAvailable(
-          conversationMachineId,
-          conversationProvider,
-        )
-        const admittedTransportGeneration = this.#remoteTransportGeneration(
-          conversationMachineId,
-        )
-        assertProviderConfiguration(
-          this.#providerDescriptorsForMachine(conversationMachineId).find(
-            (descriptor) => descriptor.provider === conversationProvider,
-          ),
-          durableConversation?.model ?? runtimeConversation?.model,
-          durableConversation?.reasoning ?? runtimeConversation?.reasoning,
-        )
-        const releaseRuntimePin =
-          this.#pinRuntimeConversation(parsedConversationId)
-        let conversation: ConversationState
-        try {
-          conversation =
-            await this.#ensureConversationHydrated(parsedConversationId)
-          if (conversation.record.archivedAt !== undefined) {
-            throw archivedConversationControlError()
-          }
-          if (
-            conversation.startingTurn ||
-            conversation.record.activeTurnId !== undefined
-          ) {
-            const failure = canonicalFailure(
-              'conversation_busy',
-              this.#timestamp(),
-            )
-            throw new HostServiceError(
-              'conflict',
-              'Conversation already has an active Turn',
-              409,
-              undefined,
-              failure,
-            )
-          }
-          this.#assertProviderInstallationCapabilities(
-            conversation.record.machineId,
-            conversation.record.provider,
-            conversation.providerInstallationId,
-            conversation.providerSession !== 'ready' &&
-              conversation.providerSession !== 'uninitialized',
-            conversation.record.provider === 'claude-code' &&
-              conversation.record.reasoning !== undefined,
+        const { admittedTransportGeneration, conversation } =
+          await this.#withLocalProviderHandoff(
+            conversationMachineId,
+            conversationProvider,
+            async () => {
+              await this.#refreshLocalProviderForExplicitStart(
+                conversationMachineId,
+                conversationProvider,
+                true,
+              )
+              this.#assertMachineRuntimeAvailable(
+                conversationMachineId,
+                conversationProvider,
+              )
+              const admittedTransportGeneration =
+                this.#remoteTransportGeneration(conversationMachineId)
+              assertProviderConfiguration(
+                this.#providerDescriptorsForMachine(conversationMachineId).find(
+                  (descriptor) => descriptor.provider === conversationProvider,
+                ),
+                durableConversation?.model ?? runtimeConversation?.model,
+                durableConversation?.reasoning ??
+                  runtimeConversation?.reasoning,
+              )
+              const releaseRuntimePin =
+                this.#pinRuntimeConversation(parsedConversationId)
+              try {
+                const conversation =
+                  await this.#ensureConversationHydrated(parsedConversationId)
+                if (conversation.record.archivedAt !== undefined) {
+                  throw archivedConversationControlError()
+                }
+                if (
+                  conversation.startingTurn ||
+                  conversation.record.activeTurnId !== undefined
+                ) {
+                  const failure = canonicalFailure(
+                    'conversation_busy',
+                    this.#timestamp(),
+                  )
+                  throw new HostServiceError(
+                    'conflict',
+                    'Conversation already has an active Turn',
+                    409,
+                    undefined,
+                    failure,
+                  )
+                }
+                this.#assertProviderInstallationCapabilities(
+                  conversation.record.machineId,
+                  conversation.record.provider,
+                  conversation.providerInstallationId,
+                  conversation.providerSession !== 'ready' &&
+                    conversation.providerSession !== 'uninitialized',
+                  conversation.record.provider === 'claude-code' &&
+                    conversation.record.reasoning !== undefined,
+                )
+                conversation.startingTurn = true
+                return { admittedTransportGeneration, conversation }
+              } finally {
+                releaseRuntimePin()
+              }
+            },
           )
-          conversation.startingTurn = true
-        } finally {
-          releaseRuntimePin()
-        }
         this.#touchConversation(conversation.record.conversationId)
         const timestamp = this.#timestamp()
         const turnId = newTurnId()
@@ -5316,12 +5383,16 @@ export class HostService {
     rootPath: string,
     provider: AgentProvider,
     signal?: AbortSignal,
-  ): Promise<ProviderSessionDiscoveryPage> {
+  ): Promise<ProviderSessionScanResult> {
     signal?.throwIfAborted()
     const key = `${projectId}\0${machineId}\0${provider}\0${rootPath}`
     let scan = this.#providerSessionScans.get(key)
     if (scan?.abort.signal.aborted === true) {
-      await scan.promise.catch(() => undefined)
+      try {
+        await scan.promise
+      } catch (error) {
+        if (isExecutionOwnershipUncertain(error)) throw error
+      }
       signal?.throwIfAborted()
       return await this.#scanProviderSessions(
         projectId,
@@ -5336,22 +5407,24 @@ export class HostService {
         this.#providerSessionScans.size >=
         this.#maxConcurrentProviderSessionScans
       ) {
-        return unavailableProviderSessionDiscoveryPage(
-          provider,
-          'provider_session_discovery_unavailable',
-        )
+        return {
+          page: unavailableProviderSessionDiscoveryPage(
+            provider,
+            'provider_session_discovery_unavailable',
+          ),
+        }
       }
       const abort = new AbortController()
       const created: InFlightProviderSessionScan = {
         abort,
         waiters: 0,
         settled: false,
-        promise: Promise.resolve(
-          unavailableProviderSessionDiscoveryPage(
+        promise: Promise.resolve({
+          page: unavailableProviderSessionDiscoveryPage(
             provider,
             'provider_session_discovery_unavailable',
           ),
-        ),
+        }),
       }
       created.promise = this.#scanProviderSessionsOnce(
         projectId,
@@ -5368,13 +5441,7 @@ export class HostService {
       this.#providerSessionScans.set(key, created)
       scan = created
     }
-    scan.waiters += 1
-    try {
-      return await waitForProviderSessionScan(scan.promise, signal)
-    } finally {
-      scan.waiters -= 1
-      if (scan.waiters === 0 && !scan.settled) scan.abort.abort()
-    }
+    return await waitForProviderSessionScan(scan, signal)
   }
 
   #materializeProviderSessionBinding(
@@ -5460,64 +5527,145 @@ export class HostService {
     rootPath: string,
     provider: AgentProvider,
     signal?: AbortSignal,
-  ): Promise<ProviderSessionDiscoveryPage> {
+  ): Promise<ProviderSessionScanResult> {
+    this.#assertProviderOwnershipVerified(machineId, provider)
     const installation = this.#providerInstallation(machineId, provider)
+    if (machineId === this.#machines.localMachineId()) {
+      return await this.#withLocalProviderHandoff(
+        machineId,
+        provider,
+        async () => {
+          // The ownership barrier or active-Turn state may have changed while
+          // this metadata request waited behind local Provider admission.
+          // Never start a sidecar metadata process beside a newly admitted
+          // Prompt, and latch cleanup uncertainty before releasing the gate.
+          this.#assertProviderOwnershipVerified(machineId, provider)
+          const currentInstallation = this.#providerInstallation(
+            machineId,
+            provider,
+          )
+          if (
+            currentInstallation?.compatibility !== undefined &&
+            currentInstallation.compatibility.capabilities
+              .nativeSessionDiscovery.effective !== true
+          ) {
+            return {
+              page: unavailableProviderSessionDiscoveryPage(
+                provider,
+                'provider_session_format_unsupported',
+                'unsupported',
+              ),
+            }
+          }
+          const scanInstallation =
+            currentInstallation?.availability === 'available' &&
+            currentInstallation.revision !== undefined
+              ? {
+                  installationId: currentInstallation.installationId,
+                  installationRevision: currentInstallation.revision,
+                }
+              : undefined
+          if (this.#localProviderHasActiveTurn(provider)) {
+            return {
+              page: unavailableProviderSessionDiscoveryPage(
+                provider,
+                'provider_session_discovery_unavailable',
+              ),
+              ...(scanInstallation === undefined
+                ? {}
+                : { installation: scanInstallation }),
+            }
+          }
+          const authorized = await this.#projects.authorizeConversation(
+            projectId,
+            machineId,
+            rootPath,
+          )
+          const discovery = this.#providerSessionDiscoveries.get(provider)
+          if (discovery === undefined) {
+            return {
+              page: unavailableProviderSessionDiscoveryPage(
+                provider,
+                'provider_session_discovery_unavailable',
+                'unsupported',
+              ),
+              ...(scanInstallation === undefined
+                ? {}
+                : { installation: scanInstallation }),
+            }
+          }
+          try {
+            return {
+              page: await collectProviderSessionDiscovery(
+                discovery,
+                authorized.cwd,
+                signal,
+                this.#providerSessionDiscoveryTimeoutMs,
+              ),
+              ...(scanInstallation === undefined
+                ? {}
+                : { installation: scanInstallation }),
+            }
+          } catch (error) {
+            if (isExecutionOwnershipUncertain(error)) {
+              throw this.#latchProviderOwnershipFailure(
+                machineId,
+                provider,
+                error,
+              )
+            }
+            throw error
+          }
+        },
+      )
+    }
     if (
       installation?.compatibility !== undefined &&
       installation.compatibility.capabilities.nativeSessionDiscovery
         .effective !== true
     ) {
-      return unavailableProviderSessionDiscoveryPage(
-        provider,
-        'provider_session_format_unsupported',
-        'unsupported',
-      )
-    }
-    if (machineId === this.#machines.localMachineId()) {
-      const authorized = await this.#projects.authorizeConversation(
-        projectId,
-        machineId,
-        rootPath,
-      )
-      const discovery = this.#providerSessionDiscoveries.get(provider)
-      if (discovery === undefined) {
-        return unavailableProviderSessionDiscoveryPage(
+      return {
+        page: unavailableProviderSessionDiscoveryPage(
           provider,
-          'provider_session_discovery_unavailable',
+          'provider_session_format_unsupported',
           'unsupported',
-        )
+        ),
       }
-      return await collectProviderSessionDiscovery(
-        discovery,
-        authorized.cwd,
-        signal,
-        this.#providerSessionDiscoveryTimeoutMs,
-      )
     }
     const { durable, trust } = this.#requireRemoteMachineTrust(machineId)
     if (installation?.revision === undefined) {
-      return unavailableProviderSessionDiscoveryPage(
-        provider,
-        'provider_session_discovery_unavailable',
-        'unavailable',
-      )
+      return {
+        page: unavailableProviderSessionDiscoveryPage(
+          provider,
+          'provider_session_discovery_unavailable',
+          'unavailable',
+        ),
+      }
     }
     const discover = this.#remoteMachines.discoverProviderSessions
     if (discover === undefined) {
-      return unavailableProviderSessionDiscoveryPage(
-        provider,
-        'provider_session_discovery_unavailable',
-        'unsupported',
-      )
+      return {
+        page: unavailableProviderSessionDiscoveryPage(
+          provider,
+          'provider_session_discovery_unavailable',
+          'unsupported',
+        ),
+      }
     }
-    return await discover.call(this.#remoteMachines, durable, trust, {
-      provider,
-      projectId,
-      rootPath,
-      providerInstallationId: installation.installationId,
-      expectedInstallationRevision: installation.revision,
-      ...(signal === undefined ? {} : { signal }),
-    })
+    return {
+      page: await discover.call(this.#remoteMachines, durable, trust, {
+        provider,
+        projectId,
+        rootPath,
+        providerInstallationId: installation.installationId,
+        expectedInstallationRevision: installation.revision,
+        ...(signal === undefined ? {} : { signal }),
+      }),
+      installation: {
+        installationId: installation.installationId,
+        installationRevision: installation.revision,
+      },
+    }
   }
 
   async #validateProviderSessionCandidate(candidate: {
@@ -5528,44 +5676,70 @@ export class HostService {
     readonly installationRevision?: ProviderInstallationRevision
     readonly native: NativeProviderSessionCandidate
   }): Promise<NativeProviderSessionCandidate | undefined> {
-    if (candidate.providerInstallationId !== undefined) {
-      const current = this.#providerInstallation(
-        candidate.machineId,
-        candidate.native.provider,
-        candidate.providerInstallationId,
-      )
-      if (
-        current?.revision === undefined ||
-        current.revision !== candidate.installationRevision
-      ) {
-        return undefined
-      }
+    this.#assertProviderOwnershipVerified(
+      candidate.machineId,
+      candidate.native.provider,
+    )
+    if (!this.#providerSessionCandidateInstallationIsCurrent(candidate)) {
+      return undefined
     }
     if (candidate.machineId === this.#machines.localMachineId()) {
-      const discovery = this.#providerSessionDiscoveries.get(
-        candidate.native.provider,
-      )
-      if (discovery === undefined) return undefined
-      // Revalidate current ProjectLocation authorization before reading the
-      // exact Provider-owned native metadata again.
-      await this.#projects.authorizeConversation(
-        candidate.projectId,
+      return await this.#withLocalProviderHandoff(
         candidate.machineId,
-        candidate.native.workingDirectory,
+        candidate.native.provider,
+        async () => {
+          this.#assertProviderOwnershipVerified(
+            candidate.machineId,
+            candidate.native.provider,
+          )
+          // A lifecycle refresh may have been ahead of this validation in the
+          // Provider handoff queue. Re-check both selected identity and exact
+          // revision only after acquiring the gate so stale discovery results
+          // can never validate against a replaced runtime installation.
+          if (!this.#providerSessionCandidateInstallationIsCurrent(candidate)) {
+            return undefined
+          }
+          if (this.#localProviderHasActiveTurn(candidate.native.provider)) {
+            return undefined
+          }
+          const discovery = this.#providerSessionDiscoveries.get(
+            candidate.native.provider,
+          )
+          if (discovery === undefined) return undefined
+          // Revalidate current ProjectLocation authorization before reading
+          // the exact Provider-owned native metadata again.
+          await this.#projects.authorizeConversation(
+            candidate.projectId,
+            candidate.machineId,
+            candidate.native.workingDirectory,
+          )
+          let validated: NativeProviderSessionCandidate | undefined
+          try {
+            validated = await discovery.validateCandidate({
+              projectRoot: candidate.rootPath,
+              nativeSessionId: candidate.native.nativeSessionId,
+              revision: candidate.native.revision,
+            })
+          } catch (error) {
+            if (isExecutionOwnershipUncertain(error)) {
+              throw this.#latchProviderOwnershipFailure(
+                candidate.machineId,
+                candidate.native.provider,
+                error,
+              )
+            }
+            throw error
+          }
+          return validated !== undefined &&
+            isValidNativeProviderSessionCandidate(
+              validated,
+              candidate.native.provider,
+              candidate.rootPath,
+            )
+            ? validated
+            : undefined
+        },
       )
-      const validated = await discovery.validateCandidate({
-        projectRoot: candidate.rootPath,
-        nativeSessionId: candidate.native.nativeSessionId,
-        revision: candidate.native.revision,
-      })
-      return validated !== undefined &&
-        isValidNativeProviderSessionCandidate(
-          validated,
-          candidate.native.provider,
-          candidate.rootPath,
-        )
-        ? validated
-        : undefined
     }
     const { durable, trust } = this.#requireRemoteMachineTrust(
       candidate.machineId,
@@ -5578,11 +5752,9 @@ export class HostService {
     ) {
       return undefined
     }
-    const validated = await validate.call(
-      this.#remoteMachines,
-      durable,
-      trust,
-      {
+    let validated: NativeProviderSessionCandidate | undefined
+    try {
+      validated = await validate.call(this.#remoteMachines, durable, trust, {
         provider: candidate.native.provider,
         projectId: candidate.projectId,
         rootPath: candidate.rootPath,
@@ -5590,8 +5762,17 @@ export class HostService {
         revision: candidate.native.revision,
         providerInstallationId: candidate.providerInstallationId,
         expectedInstallationRevision: candidate.installationRevision,
-      },
-    )
+      })
+    } catch (error) {
+      if (isExecutionOwnershipUncertain(error)) {
+        throw this.#latchProviderOwnershipFailure(
+          candidate.machineId,
+          candidate.native.provider,
+          error,
+        )
+      }
+      throw error
+    }
     return validated !== undefined &&
       isValidNativeProviderSessionCandidate(
         validated,
@@ -5656,14 +5837,36 @@ export class HostService {
       failures.push(error)
     }
     await Promise.allSettled([...this.#inFlightActions])
+    const localProviderRefreshResults = await Promise.allSettled([
+      ...this.#localProviderRefreshes.values(),
+    ])
+    const localProviderCleanupFailure = localProviderRefreshResults.find(
+      (result): result is PromiseRejectedResult =>
+        result.status === 'rejected' &&
+        isExecutionOwnershipUncertain(result.reason),
+    )
+    if (localProviderCleanupFailure !== undefined) {
+      failures.push(localProviderCleanupFailure.reason)
+    }
     // Discovery is request-scoped and bounded. Let any exact scan already in
     // progress release its Provider metadata client/file handles before the
     // owning registries are torn down; no reconnect or background scan is
     // created during shutdown.
     for (const scan of this.#providerSessionScans.values()) scan.abort.abort()
-    await Promise.allSettled(
+    const providerSessionScanResults = await Promise.allSettled(
       [...this.#providerSessionScans.values()].map(({ promise }) => promise),
     )
+    for (const result of providerSessionScanResults) {
+      if (
+        result.status === 'rejected' &&
+        isExecutionOwnershipUncertain(result.reason)
+      ) {
+        // Cancellation does not weaken exact sidecar-process ownership. A
+        // cleanup barrier discovered while closing must be visible to the
+        // Desktop/package lifecycle instead of being discarded with the scan.
+        failures.push(result.reason)
+      }
+    }
     this.#closingRuntime = true
     // A shutdown-only decline releases the live Provider request, but it is
     // not a user decision. Stop consuming Provider resolution callbacks first
@@ -5837,6 +6040,9 @@ export class HostService {
       runtime.available !== false &&
       descriptor?.availability === 'available' &&
       lifecycleReady &&
+      !this.#providerOwnershipFailures.has(
+        machineRuntimeKey(this.#machines.localMachineId(), provider),
+      ) &&
       !this.#runtimeFailures.has(provider)
     )
   }
@@ -5844,6 +6050,7 @@ export class HostService {
   async #refreshLocalProviderForExplicitStart(
     machineId: MachineId,
     provider: AgentProvider,
+    handoffOwned = false,
   ): Promise<void> {
     if (
       machineId !== this.#machines.localMachineId() ||
@@ -5864,10 +6071,21 @@ export class HostService {
     }
     const inFlight = this.#localProviderRefreshes.get(provider)
     if (inFlight !== undefined) {
-      await inFlight
+      try {
+        await inFlight
+      } catch (error) {
+        if (isExecutionOwnershipUncertain(error)) {
+          throw this.#latchProviderOwnershipFailure(machineId, provider, error)
+        }
+        throw error
+      }
       return
     }
-    const refresh = (async (): Promise<void> => {
+    const performRefresh = async (): Promise<void> => {
+      // Admission may have started while an external refresh waited for the
+      // Provider handoff gate. Re-check under the gate so a stale pre-wait
+      // observation cannot replace the runtime now owning that Turn.
+      if (this.#localProviderHasActiveTurn(provider)) return
       const previous = this.#providers.get(provider)
       if (previous === undefined) return
       const knownFatalFailure = this.#runtimeFailures.get(provider)
@@ -5878,10 +6096,10 @@ export class HostService {
         (await this.#refreshUnavailableLocalProvider?.(provider))
       const discardReplacement = async (): Promise<void> => {
         if (lifecycleResult?.discard !== undefined) {
-          await lifecycleResult.discard().catch(() => undefined)
+          await lifecycleResult.discard()
           return
         }
-        await replacement?.close().catch(() => undefined)
+        await replacement?.close()
       }
       if (replacement === undefined || replacement.provider !== provider) {
         await discardReplacement()
@@ -5936,20 +6154,34 @@ export class HostService {
         }
         this.#providers.setLifecycle(lifecycle)
       }
-      if (lifecycleResult?.sessionDiscovery !== undefined) {
-        this.#providerSessionDiscoveries.set(
-          provider,
-          lifecycleResult.sessionDiscovery,
-        )
+      if (lifecycleResult !== undefined) {
+        if (lifecycleResult.sessionDiscovery === undefined) {
+          // The selected exact installation no longer admits native metadata.
+          // Never retain an adapter captured for the replaced lifecycle.
+          this.#providerSessionDiscoveries.delete(provider)
+        } else {
+          this.#providerSessionDiscoveries.set(
+            provider,
+            lifecycleResult.sessionDiscovery,
+          )
+        }
       }
       this.#runtimeFailures.delete(provider)
       if (replacement.available !== false) {
         this.#subscribeRuntime(replacement, machineId)
       }
-    })()
+    }
+    const refresh = handoffOwned
+      ? performRefresh()
+      : this.#withLocalProviderHandoff(machineId, provider, performRefresh)
     this.#localProviderRefreshes.set(provider, refresh)
     try {
       await refresh
+    } catch (error) {
+      if (isExecutionOwnershipUncertain(error)) {
+        throw this.#latchProviderOwnershipFailure(machineId, provider, error)
+      }
+      throw error
     } finally {
       if (this.#localProviderRefreshes.get(provider) === refresh) {
         this.#localProviderRefreshes.delete(provider)
@@ -5966,6 +6198,27 @@ export class HostService {
           conversation.record.activeTurnId !== undefined ||
           conversation.record.status === 'running'),
     )
+  }
+
+  async #withLocalProviderHandoff<TResult>(
+    machineId: MachineId,
+    provider: AgentProvider,
+    operation: () => Promise<TResult>,
+  ): Promise<TResult> {
+    if (machineId !== this.#machines.localMachineId()) {
+      return await operation()
+    }
+    let gate = this.#localProviderHandoffGates.get(provider)
+    if (gate === undefined) {
+      gate = new ExclusiveGate()
+      this.#localProviderHandoffGates.set(provider, gate)
+    }
+    const release = await gate.acquire()
+    try {
+      return await operation()
+    } finally {
+      release()
+    }
   }
 
   #invalidateLocalProviderSessions(provider: AgentProvider): void {
@@ -6071,6 +6324,34 @@ export class HostService {
         )
   }
 
+  #providerSessionCandidateInstallationIsCurrent(candidate: {
+    readonly machineId: MachineId
+    readonly providerInstallationId?: ProviderInstallationId
+    readonly installationRevision?: ProviderInstallationRevision
+    readonly native: Pick<NativeProviderSessionCandidate, 'provider'>
+  }): boolean {
+    if (candidate.providerInstallationId === undefined) {
+      return candidate.installationRevision === undefined
+    }
+    const machine = this.#machines.get(candidate.machineId)
+    const lifecycle = this.#providerLifecyclesForMachine(machine).find(
+      ({ provider }) => provider === candidate.native.provider,
+    )
+    if (
+      lifecycle?.selectedInstallationId !== candidate.providerInstallationId
+    ) {
+      return false
+    }
+    const current = lifecycle.installations.find(
+      ({ installationId }) =>
+        installationId === candidate.providerInstallationId,
+    )
+    return (
+      current?.revision !== undefined &&
+      current.revision === candidate.installationRevision
+    )
+  }
+
   #requireProviderRuntimeInstallation(
     machineId: MachineId,
     provider: AgentProvider,
@@ -6167,6 +6448,9 @@ export class HostService {
         ) &&
         !this.#machineRuntimeFailures.has(
           machineRuntimeKey(machine.machineId, descriptor.provider),
+        ) &&
+        !this.#providerOwnershipFailures.has(
+          machineRuntimeKey(machine.machineId, descriptor.provider),
         ),
     )
   }
@@ -6217,6 +6501,19 @@ export class HostService {
     providerDiscoveryFreshness?: 'current' | 'last_known',
   ): ProviderExecutionHealth {
     const key = machineRuntimeKey(machine.machineId, provider)
+    const ownershipFailure = this.#providerOwnershipFailures.get(key)
+    if (ownershipFailure !== undefined) {
+      const remoteTruthIsStale =
+        machine.kind === 'remote' &&
+        (machine.connectionState !== 'online' ||
+          providerDiscoveryFreshness === 'last_known')
+      return {
+        state: 'unavailable',
+        freshness: remoteTruthIsStale ? 'last_known' : 'current',
+        observedAt: ownershipFailure.occurredAt,
+        failure: ownershipFailure,
+      }
+    }
     const observation =
       this.#providerExecutionHealth.get(key) ??
       this.#persistence?.getProviderExecutionHealth(machine.machineId, provider)
@@ -6298,6 +6595,13 @@ export class HostService {
     machineId: MachineId,
     provider: AgentProvider,
   ): boolean {
+    if (
+      this.#providerOwnershipFailures.has(
+        machineRuntimeKey(machineId, provider),
+      )
+    ) {
+      return false
+    }
     if (machineId === this.#machines.localMachineId()) {
       return this.#runtimeAvailable(provider)
     }
@@ -6592,6 +6896,77 @@ export class HostService {
         type: 'turn.failed',
         payload: { error },
       })
+    }
+  }
+
+  #latchProviderOwnershipFailure(
+    machineId: MachineId,
+    provider: AgentProvider,
+    error: unknown,
+  ): HostServiceError {
+    const occurredAt = TimestampSchema.parse(this.#timestamp())
+    const failure =
+      executionOwnershipFailure(error, occurredAt) ??
+      canonicalFailure('execution_ownership_uncertain', occurredAt)
+    const key = machineRuntimeKey(machineId, provider)
+    const retained = this.#providerOwnershipFailures.get(key) ?? failure
+    this.#providerOwnershipFailures.set(key, retained)
+    try {
+      this.#recordProviderExecutionHealth({
+        machineId,
+        provider,
+        state: 'unavailable',
+        failure: retained,
+        observedAt: TimestampSchema.parse(retained.occurredAt),
+      })
+    } catch {
+      // Durability failure is independently latched by #writeDurableResult;
+      // exact cleanup uncertainty still wins this Provider boundary.
+    }
+    return hostServiceErrorForFailure(provider, retained)
+  }
+
+  #assertProviderOwnershipVerified(
+    machineId: MachineId,
+    provider: AgentProvider,
+  ): void {
+    const failure = this.#providerOwnershipFailures.get(
+      machineRuntimeKey(machineId, provider),
+    )
+    if (failure !== undefined) {
+      throw hostServiceErrorForFailure(provider, failure)
+    }
+  }
+
+  #reconcileRemoteProviderOwnershipFailures(
+    machineId: MachineId,
+    providers: readonly ProviderDescriptor[],
+  ): void {
+    for (const descriptor of providers) {
+      const key = machineRuntimeKey(machineId, descriptor.provider)
+      if (
+        descriptor.executionHealth?.failure?.reason ===
+        'execution_ownership_uncertain'
+      ) {
+        const failure = descriptor.executionHealth.failure
+        this.#providerOwnershipFailures.set(key, failure)
+        continue
+      }
+      if (
+        this.#providerOwnershipFailures.has(key) &&
+        (descriptor.availability !== 'available' ||
+          (descriptor.executionHealth?.freshness === 'current' &&
+            descriptor.executionHealth.state !== 'healthy'))
+      ) {
+        // Protocol v1 cannot add cleanup uncertainty to the strict remote
+        // descriptor reason enum. A Node with an internal cleanup barrier
+        // therefore projects the already-admitted provider_start_failed value.
+        // Retain the stronger Host barrier until an authenticated observation
+        // positively restores this exact Provider, rather than weakening it
+        // merely because the current descriptor remains unavailable.
+        continue
+      }
+      this.#providerOwnershipFailures.delete(key)
     }
   }
 
@@ -7081,6 +7456,7 @@ async function collectProviderSessionDiscovery(
       }
       page = discovered
     } catch (error) {
+      if (isExecutionOwnershipUncertain(error)) throw error
       if (scanDeadline.aborted && signal?.aborted !== true) {
         if (pages.length === 0) {
           return unavailableProviderSessionDiscoveryPage(
@@ -7390,28 +7766,55 @@ function unavailableProviderSessionDiscoveryPage(
 }
 
 async function waitForProviderSessionScan(
-  promise: Promise<ProviderSessionDiscoveryPage>,
+  scan: InFlightProviderSessionScan,
   signal?: AbortSignal,
-): Promise<ProviderSessionDiscoveryPage> {
-  if (signal === undefined) return await promise
-  signal.throwIfAborted()
-  return await new Promise<ProviderSessionDiscoveryPage>((resolve, reject) => {
-    let settled = false
-    const finish = (action: () => void): void => {
-      if (settled) return
-      settled = true
+): Promise<ProviderSessionScanResult> {
+  signal?.throwIfAborted()
+  scan.waiters += 1
+  if (signal === undefined) {
+    try {
+      return await scan.promise
+    } finally {
+      scan.waiters -= 1
+    }
+  }
+  return await new Promise<ProviderSessionScanResult>((resolve, reject) => {
+    let released = false
+    const release = (): boolean => {
+      if (released) return false
+      released = true
       signal.removeEventListener('abort', abort)
-      action()
+      scan.waiters -= 1
+      return true
     }
     const abort = (): void => {
       const error = new Error('Provider session discovery was cancelled')
       error.name = 'AbortError'
-      finish(() => reject(error))
+      if (!release()) return
+      if (scan.waiters > 0 || scan.settled) {
+        reject(error)
+        return
+      }
+      scan.abort.abort(error)
+      void scan.promise.then(
+        () => reject(error),
+        (scanError: unknown) => reject(scanError),
+      )
     }
     signal.addEventListener('abort', abort, { once: true })
-    void promise.then(
-      (page) => finish(() => resolve(page)),
-      (error: unknown) => finish(() => reject(error)),
+    if (signal.aborted) {
+      abort()
+      return
+    }
+    void scan.promise.then(
+      (page) => {
+        if (!release()) return
+        resolve(page)
+      },
+      (error: unknown) => {
+        if (!release()) return
+        reject(error)
+      },
     )
   })
 }
@@ -7616,6 +8019,26 @@ function nonNegativeInteger(
   return resolved
 }
 
+class ExclusiveGate {
+  #tail: Promise<void> = Promise.resolve()
+
+  async acquire(): Promise<() => void> {
+    const previous = this.#tail
+    let release!: () => void
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    this.#tail = previous.then(() => held)
+    await previous
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      release()
+    }
+  }
+}
+
 function providerCommandError(
   provider: AgentProvider,
   operation: string,
@@ -7631,6 +8054,45 @@ function providerCommandError(
     failureHttpStatus(failure),
     undefined,
     failure,
+  )
+}
+
+function isExecutionOwnershipUncertain(error: unknown): boolean {
+  return (
+    executionOwnershipFailure(error, '1970-01-01T00:00:00.000Z') !== undefined
+  )
+}
+
+function executionOwnershipFailure(
+  error: unknown,
+  occurredAt: string,
+  visited = new Set<object>(),
+): CanonicalFailure | undefined {
+  if (typeof error !== 'object' || error === null || visited.has(error)) {
+    return undefined
+  }
+  visited.add(error)
+
+  const classified = classifyCanonicalFailure(
+    error,
+    occurredAt,
+    'unknown_failure',
+  )
+  if (classified.reason === 'execution_ownership_uncertain') {
+    return classified
+  }
+
+  if (error instanceof AggregateError) {
+    for (const nested of error.errors) {
+      const failure = executionOwnershipFailure(nested, occurredAt, visited)
+      if (failure !== undefined) return failure
+    }
+  }
+
+  return executionOwnershipFailure(
+    (error as { readonly cause?: unknown }).cause,
+    occurredAt,
+    visited,
   )
 }
 
@@ -8188,6 +8650,25 @@ function remoteMachineServiceError(error: unknown): Error {
     case 'duplicate_action_conflict':
       return remoteProviderCommandError(error)
   }
+}
+
+function remoteProviderRefreshServiceError(error: unknown): Error {
+  if (
+    error instanceof RemoteMachineCoordinatorError &&
+    error.code === 'provider_start_failed'
+  ) {
+    const failure =
+      error.failure ??
+      canonicalFailure('provider_start_failed', new Date().toISOString())
+    return new HostServiceError(
+      'provider_start_failed',
+      'Remote Provider lifecycle check could not complete',
+      503,
+      undefined,
+      failure,
+    )
+  }
+  return remoteMachineServiceError(error)
 }
 
 function infrastructureFailureError(

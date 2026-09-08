@@ -1,5 +1,24 @@
 export const machineProtocolVersion = 1 as const
 
+const providerProbeTimeoutMs = 5_000
+const maximumProviderInstallationsPerProvider = 8
+const providerLifecycleDiscoveryWorkTimeoutMs =
+  providerProbeTimeoutMs * (2 * maximumProviderInstallationsPerProvider + 1)
+// Claude's lifecycle probe cleanup may perform three exact child/process-group
+// exit waits. Codex compatibility cleanup is bounded below that ceiling. Keep
+// the response reserve at the complete longest lifecycle cleanup bound.
+const providerLifecycleMaximumCleanupMs = 3 * providerProbeTimeoutMs
+const providerLifecycleResponseDeliveryMarginMs = 10_000
+const providerLifecycleResponseMarginMs =
+  providerLifecycleMaximumCleanupMs + providerLifecycleResponseDeliveryMarginMs
+const providerLifecycleResponseTimeoutMs =
+  providerLifecycleDiscoveryWorkTimeoutMs + providerLifecycleResponseMarginMs
+const providerSessionDiscoveryWorkTimeoutMs = 30_000
+const providerSessionDiscoveryResponseTimeoutMs =
+  providerLifecycleResponseTimeoutMs + providerSessionDiscoveryWorkTimeoutMs
+const providerSessionHandshakeTimeoutMs =
+  3 * providerProbeTimeoutMs + 2 * 30_000 + 15_000
+
 export const machineTransportLimits = {
   maximumFrameBytes: 16 * 1024,
   maximumBufferedBytes: 32 * 1024,
@@ -12,12 +31,16 @@ export const machineTransportLimits = {
   maximumConnections: 16,
   maximumConnectionsPerAddress: 4,
   maximumProjectLocationPathBytes: 4 * 1024,
-  providerDiscoveryTimeoutMs: 8_000,
-  providerSessionDiscoveryTimeoutMs: 30_000,
+  // A cold Node restart may need the complete exact-installation lifecycle
+  // response before the existing bounded read-only native-store operation.
+  providerSessionDiscoveryWorkTimeoutMs,
+  providerSessionDiscoveryTimeoutMs: providerSessionDiscoveryResponseTimeoutMs,
   // A complete paginated discovery operation is bounded independently from
   // each Machine request so empty/slow cursor chains cannot monopolize the
-  // per-Machine operation authority for hours.
-  providerSessionDiscoveryTotalTimeoutMs: 60_000,
+  // per-Machine operation authority for hours. A cold first page receives the
+  // complete lifecycle response envelope before the existing 60s scan budget.
+  providerSessionDiscoveryTotalTimeoutMs:
+    providerLifecycleResponseTimeoutMs + 60_000,
   providerSessionDiscoveryMaximumPages: 128,
   // Eight worst-case private candidates remain below the 16 KiB frame bound.
   providerSessionDiscoveryPageSize: 8,
@@ -26,16 +49,32 @@ export const machineTransportLimits = {
   maximumProviderSessionDiscoveryCursorBytes: 512,
   maximumProviderSessionDiscoveryTitleBytes: 512,
   maximumProviderSessionDiscoveryRevisionBytes: 128,
-  providerProbeTimeoutMs: 5_000,
-  maximumProviderInstallationsPerProvider: 8,
+  providerProbeTimeoutMs,
+  maximumProviderInstallationsPerProvider,
   maximumProviderInstallationCandidates: 32,
   maximumProviderInstallationPathEntries: 64,
-  // Session admission may run the outer Claude version probe, preparation
-  // version probe, and auth-status probe serially (3 * 5s), followed on a
-  // cold Codex open by initialize and thread start/resume (2 * 30s), with a
-  // bounded 15s transport/scheduling margin. It is intentionally distinct
-  // from the already-running Provider discovery response budget above.
-  providerSessionOpenTimeoutMs: 90_000,
+  // A cold lifecycle scan observes Codex and Claude concurrently and may run
+  // several zero-inference contracts per retained installation. This is an
+  // explicit overall budget, not a claim that every pathological eight-item
+  // scan can finish: it permits substantially more than the old 8s envelope
+  // while still ending a slow scan and its owned children. Reserve an explicit
+  // exact-cleanup/transport margin strictly beyond Claude's three bounded
+  // cleanup waits so a deadline-triggered stop and typed authenticated reply
+  // can finish before Controller closes the response channel.
+  providerLifecycleDiscoveryWorkTimeoutMs,
+  providerDiscoveryTimeoutMs: providerLifecycleResponseTimeoutMs,
+  // Session admission first revalidates the exact selected installation using
+  // the full lifecycle budget. It may then run the outer Claude version probe,
+  // preparation version probe, and auth-status probe serially (3 * 5s), or a
+  // cold Codex initialize plus thread start/resume (2 * 30s), with the existing
+  // bounded 15s transport/scheduling margin. Compose the complete lifecycle
+  // response envelope (work plus exact cleanup/delivery) with that handshake
+  // budget so Controller cannot destroy a connection while Node may already
+  // own native session state created after a near-budget lifecycle refresh.
+  providerSessionOpenTimeoutMs:
+    providerLifecycleDiscoveryWorkTimeoutMs +
+    providerLifecycleResponseMarginMs +
+    providerSessionHandshakeTimeoutMs,
   maximumProviderProbeOutputBytes: 4 * 1024,
   maximumRemoteCodexPromptBytes: 8 * 1024,
   maximumRemoteCodexDeltaBytes: 8 * 1024,

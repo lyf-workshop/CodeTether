@@ -11,6 +11,7 @@ import { homedir } from 'node:os'
 import { isAbsolute, join, normalize } from 'node:path'
 
 import {
+  ClaudeCodeOwnedProcessCleanupError,
   discoverClaudeCodeInstallations,
   fingerprintClaudeCodeInstallation,
   observeClaudeCodeInstallation,
@@ -19,6 +20,7 @@ import {
   type ClaudeCodeInstallationObservation,
 } from '@codetether/adapter-claude'
 import {
+  CodexOwnedProcessCleanupError,
   discoverCodexInstallations,
   fingerprintCodexInstallation,
   observeCodexInstallation,
@@ -47,6 +49,11 @@ import {
 import { z } from 'zod'
 
 import { spawnNodeProviderProcess } from './provider-process-guardian.js'
+import {
+  armAbortDeadline,
+  consumeSharedAbortableOperation,
+  type SharedAbortableOperation,
+} from './shared-abortable-operation.js'
 
 const STATE_FILE = 'provider-installations.json'
 const MAXIMUM_STATE_BYTES = 128 * 1024
@@ -110,6 +117,8 @@ export interface NodeProviderLifecycleCoordinatorOptions {
   readonly environment?: NodeJS.ProcessEnv
   readonly platform?: NodeJS.Platform
   readonly now?: () => Date
+  /** Internal deterministic-test seam; Machine input cannot set this bound. */
+  readonly lifecycleWorkTimeoutMs?: number
   /** Internal deterministic-test seam. */
   readonly discoverCodex?: (
     options: Parameters<typeof discoverCodexInstallations>[0],
@@ -199,6 +208,7 @@ export class NodeProviderLifecycleCoordinator {
   readonly #environment: NodeJS.ProcessEnv
   readonly #platform: NodeJS.Platform
   readonly #now: () => Date
+  readonly #lifecycleWorkTimeoutMs: number
   readonly #discoverCodex: NonNullable<
     NodeProviderLifecycleCoordinatorOptions['discoverCodex']
   >
@@ -214,12 +224,16 @@ export class NodeProviderLifecycleCoordinator {
   readonly #abort = new AbortController()
   readonly #inFlight = new Map<
     AgentProvider,
-    Promise<CurrentProviderLifecycle>
+    SharedAbortableOperation<CurrentProviderLifecycle>
   >()
   readonly #current = new Map<AgentProvider, CurrentProviderLifecycle>()
   readonly #generation = new Map<AgentProvider, number>()
   #statePromise: Promise<ProviderLifecycleState> | undefined
   #stateMutation: Promise<void> = Promise.resolve()
+  readonly #cleanupFailures = new Map<
+    AgentProvider,
+    ProviderOwnedProcessCleanupError
+  >()
   #closed = false
 
   constructor(options: NodeProviderLifecycleCoordinatorOptions) {
@@ -234,6 +248,11 @@ export class NodeProviderLifecycleCoordinator {
     this.#environment = { ...(options.environment ?? process.env) }
     this.#platform = options.platform ?? process.platform
     this.#now = options.now ?? (() => new Date())
+    this.#lifecycleWorkTimeoutMs = positiveInteger(
+      options.lifecycleWorkTimeoutMs ??
+        machineTransportLimits.providerLifecycleDiscoveryWorkTimeoutMs,
+      'Provider lifecycle work timeout',
+    )
     this.#discoverCodex = options.discoverCodex ?? discoverCodexInstallations
     this.#discoverClaude =
       options.discoverClaude ?? discoverClaudeCodeInstallations
@@ -241,13 +260,32 @@ export class NodeProviderLifecycleCoordinator {
     this.#observeClaude = options.observeClaude ?? observeClaudeCodeInstallation
   }
 
-  async describe(): Promise<RemoteProviderDiscovery> {
+  async describe(signal?: AbortSignal): Promise<RemoteProviderDiscovery> {
     this.#assertOpen()
     const previous = new Map(this.#current)
     const [codexResult, claudeResult] = await Promise.allSettled([
-      this.refreshProvider('codex'),
-      this.refreshProvider('claude-code'),
+      Promise.resolve().then(() => this.refreshProvider('codex', signal)),
+      Promise.resolve().then(() => this.refreshProvider('claude-code', signal)),
     ])
+    const cleanupFailures = [codexResult, claudeResult].flatMap((result) =>
+      result.status === 'rejected' &&
+      isProviderOwnedProcessCleanupError(result.reason)
+        ? [result.reason]
+        : [],
+    )
+    if (signal?.aborted === true && cleanupFailures.length > 0) {
+      for (const cleanupFailure of cleanupFailures) {
+        this.#latchCleanupFailure(
+          providerForCleanupError(cleanupFailure),
+          cleanupFailure,
+        )
+      }
+      // A shared request deadline can abort both Providers at once. If one
+      // exact cleanup becomes uncertain while its sibling reports an ordinary
+      // abort, ownership uncertainty is the authoritative response and must
+      // not be downgraded to a retryable aggregate probe timeout.
+      throw cleanupFailures[0]
+    }
     const codex = this.#settledProviderLifecycle(
       'codex',
       codexResult,
@@ -264,21 +302,63 @@ export class NodeProviderLifecycleCoordinator {
     })
   }
 
-  refreshProvider(provider: AgentProvider): Promise<CurrentProviderLifecycle> {
-    this.#assertOpen()
-    const existing = this.#inFlight.get(provider)
-    if (existing !== undefined) return existing
-    const generation = (this.#generation.get(provider) ?? 0) + 1
-    this.#generation.set(provider, generation)
-    const operation = this.#refreshProvider(provider, generation).finally(
-      () => {
-        if (this.#inFlight.get(provider) === operation) {
-          this.#inFlight.delete(provider)
-        }
-      },
-    )
-    this.#inFlight.set(provider, operation)
-    return operation
+  refreshProvider(
+    provider: AgentProvider,
+    signal?: AbortSignal,
+  ): Promise<CurrentProviderLifecycle> {
+    this.#assertOpen(provider)
+    if (signal?.aborted === true) {
+      return Promise.reject(abortReason(signal))
+    }
+    let operation = this.#inFlight.get(provider)
+    if (operation?.abort.signal.aborted === true) {
+      return operation.task.then(
+        () => this.refreshProvider(provider, signal),
+        () => this.refreshProvider(provider, signal),
+      )
+    }
+    if (operation === undefined) {
+      const generation = (this.#generation.get(provider) ?? 0) + 1
+      this.#generation.set(provider, generation)
+      const abort = new AbortController()
+      const workDeadline = armAbortDeadline(abort, this.#lifecycleWorkTimeoutMs)
+      const combinedSignal = AbortSignal.any([this.#abort.signal, abort.signal])
+      const task = this.#refreshProvider(provider, generation, combinedSignal)
+        .catch((error: unknown) => {
+          // The lifecycle deadline may be what requested child cleanup, but an
+          // unverified owned-process cleanup is the authoritative outcome. It
+          // permanently blocks only this Provider before timeout wrapping.
+          if (isProviderOwnedProcessCleanupError(error)) {
+            throw this.#latchCleanupFailure(provider, error)
+          }
+          if (
+            workDeadline.expired() &&
+            !this.#abort.signal.aborted &&
+            abort.signal.aborted
+          ) {
+            throw providerProbeTimeout(error)
+          }
+          throw error
+        })
+        .finally(() => {
+          workDeadline.clear()
+          const current = this.#inFlight.get(provider)
+          if (current?.task === task) {
+            current.settled = true
+            this.#inFlight.delete(provider)
+          }
+        })
+      const created: SharedAbortableOperation<CurrentProviderLifecycle> = {
+        abort,
+        task,
+        consumers: 0,
+        persistentConsumer: false,
+        settled: false,
+      }
+      operation = created
+      this.#inFlight.set(provider, operation)
+    }
+    return consumeSharedAbortableOperation(operation, signal)
   }
 
   async selected(
@@ -310,18 +390,24 @@ export class NodeProviderLifecycleCoordinator {
     provider: AgentProvider,
     installationId: ProviderInstallationId,
     expectedRevision: ProviderInstallationRevision,
+    signal?: AbortSignal,
   ): Promise<NodeSelectedProviderInstallation> {
-    this.#assertOpen()
+    this.#assertOpen(provider)
+    signal?.throwIfAborted()
+    const operationSignal =
+      signal === undefined
+        ? this.#abort.signal
+        : AbortSignal.any([this.#abort.signal, signal])
     let lifecycle = this.#current.get(provider)
     if (lifecycle === undefined)
-      lifecycle = await this.refreshProvider(provider)
+      lifecycle = await this.refreshProvider(provider, operationSignal)
     let selected = lifecycle.selected
     if (
       selected === undefined ||
       selected.installationId !== installationId ||
       selected.installationRevision !== expectedRevision
     ) {
-      lifecycle = await this.refreshProvider(provider)
+      lifecycle = await this.refreshProvider(provider, operationSignal)
       selected = lifecycle.selected
     }
     if (
@@ -339,11 +425,11 @@ export class NodeProviderLifecycleCoordinator {
       selected.provider === 'codex'
         ? await fingerprintCodexInstallation(
             selected.observation.installation,
-            this.#abort.signal,
+            operationSignal,
           )
         : await fingerprintClaudeCodeInstallation(
             selected.observation.installation,
-            this.#abort.signal,
+            operationSignal,
           )
     const currentWireRevision = providerInstallationRevisionFor(
       this.#machineId,
@@ -391,18 +477,43 @@ export class NodeProviderLifecycleCoordinator {
         }
   }
 
+  /**
+   * Extends the exact Provider ownership barrier to metadata-only adapters.
+   * Native-session discovery may own a separate App Server process after
+   * lifecycle selection, so uncertain cleanup must block later lifecycle,
+   * discovery, and execution for only that Provider until Node restart.
+   */
+  latchOwnedProcessCleanupFailure(
+    provider: AgentProvider,
+    error: unknown,
+  ): Error {
+    if (
+      !isProviderOwnedProcessCleanupError(error) ||
+      providerForCleanupError(error) !== provider
+    ) {
+      throw new TypeError('Provider cleanup failure identity changed')
+    }
+    return this.#latchCleanupFailure(provider, error)
+  }
+
   async close(): Promise<void> {
-    if (this.#closed) return
-    this.#closed = true
-    this.#abort.abort()
-    await Promise.allSettled(this.#inFlight.values())
-    await this.#stateMutation
+    if (!this.#closed) {
+      this.#closed = true
+      this.#abort.abort()
+      await Promise.allSettled(
+        [...this.#inFlight.values()].map(({ task }) => task),
+      )
+      await this.#stateMutation
+    }
+    throwCleanupFailures(this.#cleanupFailures)
   }
 
   async #refreshProvider(
     provider: AgentProvider,
     generation: number,
+    signal: AbortSignal,
   ): Promise<CurrentProviderLifecycle> {
+    signal.throwIfAborted()
     const state = await this.#state()
     const known = state.installations.filter(
       (entry) => entry.provider === provider,
@@ -422,10 +533,11 @@ export class NodeProviderLifecycleCoordinator {
     try {
       scan =
         provider === 'codex'
-          ? await this.#observeCodexInstallations(previousPaths)
-          : await this.#observeClaudeInstallations(previousPaths)
+          ? await this.#observeCodexInstallations(previousPaths, signal)
+          : await this.#observeClaudeInstallations(previousPaths, signal)
     } catch (error) {
-      if (this.#abort.signal.aborted) throw error
+      if (isProviderOwnedProcessCleanupError(error)) throw error
+      if (signal.aborted) throw error
       // Installation enumeration/probing belongs to only this Provider. Mark
       // the private current result unusable and let describe() return a narrow
       // failure descriptor without overwriting the Controller's durable
@@ -437,6 +549,7 @@ export class NodeProviderLifecycleCoordinator {
     if (this.#generation.get(provider) !== generation) {
       throw new Error('Stale Provider lifecycle observation was discarded')
     }
+    signal.throwIfAborted()
     const lifecycle = await this.#commitObservation(
       provider,
       scan.installations,
@@ -447,6 +560,7 @@ export class NodeProviderLifecycleCoordinator {
     if (this.#generation.get(provider) !== generation) {
       throw new Error('Stale Provider lifecycle observation was discarded')
     }
+    signal.throwIfAborted()
     this.#current.set(provider, lifecycle)
     return lifecycle
   }
@@ -457,6 +571,29 @@ export class NodeProviderLifecycleCoordinator {
     previous: CurrentProviderLifecycle | undefined,
   ): CurrentProviderLifecycle {
     if (result.status === 'fulfilled') return result.value
+    if (isProviderOwnedProcessCleanupError(result.reason)) {
+      if (providerForCleanupError(result.reason) !== provider) {
+        throw new Error('Provider cleanup failure identity changed')
+      }
+      this.#latchCleanupFailure(provider, result.reason)
+      return {
+        descriptor: providerLifecycleFailureDescriptor(
+          provider,
+          previous?.descriptor.version,
+        ),
+      }
+    }
+    if (
+      result.reason instanceof MachineTransportError &&
+      result.reason.code === 'provider_start_failed'
+    ) {
+      return {
+        descriptor: providerLifecycleFailureDescriptor(
+          provider,
+          previous?.descriptor.version,
+        ),
+      }
+    }
     if (!(result.reason instanceof ProviderLifecycleProbeError)) {
       throw result.reason
     }
@@ -464,7 +601,7 @@ export class NodeProviderLifecycleCoordinator {
       throw new Error('Provider lifecycle failure identity changed')
     }
     return {
-      descriptor: providerProbeFailedDescriptor(
+      descriptor: providerLifecycleFailureDescriptor(
         provider,
         previous?.descriptor.version,
       ),
@@ -473,6 +610,7 @@ export class NodeProviderLifecycleCoordinator {
 
   async #observeCodexInstallations(
     previousPaths: readonly string[],
+    signal: AbortSignal,
   ): Promise<CurrentInstallationScan> {
     const discovery = await this.#discoverCodex({
       environment: this.#environment,
@@ -482,7 +620,7 @@ export class NodeProviderLifecycleCoordinator {
         machineTransportLimits.maximumProviderInstallationPathEntries,
       maximumInstallations:
         machineTransportLimits.maximumProviderInstallationsPerProvider,
-      signal: this.#abort.signal,
+      signal,
     })
     const result: CurrentCodexInstallation[] = []
     for (const installation of boundedUniqueInstallations(
@@ -490,9 +628,10 @@ export class NodeProviderLifecycleCoordinator {
     )) {
       let observation: CodexInstallationObservation
       try {
-        observation = await this.#stableCodexObservation(installation)
+        observation = await this.#stableCodexObservation(installation, signal)
       } catch (error) {
-        if (this.#abort.signal.aborted) throw error
+        if (isProviderOwnedProcessCleanupError(error)) throw error
+        if (signal.aborted) throw error
         // One malformed, hung, or concurrently replaced installation must not
         // hide another usable installation of the same Provider. A previously
         // selected failed installation is retained as unavailable by
@@ -531,6 +670,7 @@ export class NodeProviderLifecycleCoordinator {
 
   async #observeClaudeInstallations(
     previousPaths: readonly string[],
+    signal: AbortSignal,
   ): Promise<CurrentInstallationScan> {
     const discovery = await this.#discoverClaude({
       environment: this.#environment,
@@ -540,7 +680,7 @@ export class NodeProviderLifecycleCoordinator {
         machineTransportLimits.maximumProviderInstallationPathEntries,
       maximumInstallations:
         machineTransportLimits.maximumProviderInstallationsPerProvider,
-      signal: this.#abort.signal,
+      signal,
     })
     const result: CurrentClaudeInstallation[] = []
     for (const installation of boundedUniqueInstallations(
@@ -548,9 +688,10 @@ export class NodeProviderLifecycleCoordinator {
     )) {
       let observation: ClaudeCodeInstallationObservation
       try {
-        observation = await this.#stableClaudeObservation(installation)
+        observation = await this.#stableClaudeObservation(installation, signal)
       } catch (error) {
-        if (this.#abort.signal.aborted) throw error
+        if (isProviderOwnedProcessCleanupError(error)) throw error
+        if (signal.aborted) throw error
         // Provider-installation failures are isolated exactly as on Codex.
         continue
       }
@@ -585,12 +726,10 @@ export class NodeProviderLifecycleCoordinator {
 
   async #stableCodexObservation(
     installation: CodexInstallationCandidate,
+    signal: AbortSignal,
   ): Promise<CodexInstallationObservation> {
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const before = await fingerprintCodexInstallation(
-        installation,
-        this.#abort.signal,
-      )
+      const before = await fingerprintCodexInstallation(installation, signal)
       const observation = await this.#observeCodex({
         installation,
         environment: this.#environment,
@@ -604,13 +743,10 @@ export class NodeProviderLifecycleCoordinator {
                   ...specification,
                 }),
             }),
-        signal: this.#abort.signal,
+        signal,
         fingerprint: async () => before,
       })
-      const after = await fingerprintCodexInstallation(
-        installation,
-        this.#abort.signal,
-      )
+      const after = await fingerprintCodexInstallation(installation, signal)
       if (before === after) return observation
     }
     throw new Error('Codex installation changed during compatibility probing')
@@ -618,16 +754,17 @@ export class NodeProviderLifecycleCoordinator {
 
   async #stableClaudeObservation(
     installation: ClaudeCodeInstallationCandidate,
+    signal: AbortSignal,
   ): Promise<ClaudeCodeInstallationObservation> {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const before = await fingerprintClaudeCodeInstallation(
         installation,
-        this.#abort.signal,
+        signal,
       )
       const observation = await this.#observeClaude({
         installation,
         environment: this.#environment,
-        signal: this.#abort.signal,
+        signal,
         processOwnership:
           this.#platform === 'win32' ? 'direct-child' : 'posix-process-group',
         checkFirstPartyAuth: true,
@@ -635,7 +772,7 @@ export class NodeProviderLifecycleCoordinator {
       })
       const after = await fingerprintClaudeCodeInstallation(
         installation,
-        this.#abort.signal,
+        signal,
       )
       if (before === after) return observation
     }
@@ -853,10 +990,81 @@ export class NodeProviderLifecycleCoordinator {
     }
   }
 
-  #assertOpen(): void {
+  #assertOpen(provider?: AgentProvider): void {
+    if (provider !== undefined) {
+      const cleanupFailure = this.#cleanupFailures.get(provider)
+      if (cleanupFailure !== undefined) throw cleanupFailure
+    }
     if (this.#closed)
       throw new Error('Provider lifecycle coordinator is closed')
   }
+
+  #latchCleanupFailure(
+    provider: AgentProvider,
+    error: ProviderOwnedProcessCleanupError,
+  ): ProviderOwnedProcessCleanupError {
+    if (providerForCleanupError(error) !== provider) {
+      throw new Error('Provider cleanup failure identity changed')
+    }
+    const current = this.#cleanupFailures.get(provider)
+    if (current !== undefined) return current
+    this.#cleanupFailures.set(provider, error)
+    return error
+  }
+}
+
+type ProviderOwnedProcessCleanupError =
+  ClaudeCodeOwnedProcessCleanupError | CodexOwnedProcessCleanupError
+
+function isProviderOwnedProcessCleanupError(
+  error: unknown,
+): error is ProviderOwnedProcessCleanupError {
+  return (
+    error instanceof ClaudeCodeOwnedProcessCleanupError ||
+    error instanceof CodexOwnedProcessCleanupError
+  )
+}
+
+function providerForCleanupError(
+  error: ProviderOwnedProcessCleanupError,
+): AgentProvider {
+  return error instanceof CodexOwnedProcessCleanupError
+    ? 'codex'
+    : 'claude-code'
+}
+
+function throwCleanupFailures(
+  failures: ReadonlyMap<AgentProvider, ProviderOwnedProcessCleanupError>,
+): void {
+  const ordered = (['codex', 'claude-code'] as const).flatMap((provider) => {
+    const failure = failures.get(provider)
+    return failure === undefined ? [] : [failure]
+  })
+  if (ordered.length === 1) throw ordered[0]
+  if (ordered.length > 1) {
+    throw new AggregateError(
+      ordered,
+      'Provider owned process cleanup could not be verified',
+    )
+  }
+}
+
+function abortReason(signal: AbortSignal): Error {
+  return signal.reason instanceof Error
+    ? signal.reason
+    : new DOMException('Operation aborted', 'AbortError')
+}
+
+function providerProbeTimeout(cause: unknown): MachineTransportError {
+  return new MachineTransportError(
+    'provider_start_failed',
+    'Remote Provider lifecycle check timed out',
+    {
+      cause,
+      peerAuthenticated: true,
+      failureReason: 'provider_start_failed',
+    },
+  )
 }
 
 function nodeCodexHome(environment: NodeJS.ProcessEnv): string {
@@ -1145,7 +1353,7 @@ function providerDescriptor(
   }
 }
 
-function providerProbeFailedDescriptor(
+function providerLifecycleFailureDescriptor(
   provider: AgentProvider,
   lastKnownVersion: string | undefined,
 ): RemoteProviderDescriptor {
@@ -1322,4 +1530,11 @@ function hasCode(error: unknown, code: string): boolean {
     'code' in error &&
     error.code === code
   )
+}
+
+function positiveInteger(value: number, label: string): number {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new TypeError(`${label} must be a positive safe integer`)
+  }
+  return value
 }

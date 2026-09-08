@@ -5,6 +5,8 @@ import { join } from 'node:path'
 import test from 'node:test'
 
 import { canonicalFailure } from '@codetether/agent-core'
+import { ClaudeCodeOwnedProcessCleanupError } from '@codetether/adapter-claude'
+import { CodexOwnedProcessCleanupError } from '@codetether/adapter-codex'
 
 import { HostEventPublisher } from '../dist/api/host-event-publisher.js'
 import {
@@ -18,6 +20,7 @@ import {
   newEpoch,
 } from '../dist/api/host-service.js'
 import { MachineProviderRuntimeResolver } from '../dist/api/machine-provider-runtime-resolver.js'
+import { composeLocalHostLifecycleClose } from '../dist/api/local-codex-host.js'
 import { ProviderRegistry } from '../dist/api/provider-registry.js'
 import { WorkspacePolicy } from '../dist/api/workspace-policy.js'
 import { ConversationStore } from '../dist/persistence/index.js'
@@ -33,6 +36,311 @@ const revisionB = 'prev_phase8b_host_revision_B_0001'
 const remoteMachineId = 'machine_phase8bhostremotefresh01'
 const remoteInstallationId = 'pinst_phase8b_host_remote_installation_A'
 const remoteRevision = 'prev_phase8b_host_remote_revision_A_0001'
+
+test('normal local Host close awaits lifecycle cleanup and preserves its exact barrier', async () => {
+  const cleanupFailure = new CodexOwnedProcessCleanupError()
+  const inFlightLifecycleCleanup = deferred()
+  const order = []
+  let hostCloseCalls = 0
+  let lifecycleCloseCalls = 0
+  const close = composeLocalHostLifecycleClose(
+    {
+      close: async () => {
+        hostCloseCalls += 1
+        order.push('host')
+      },
+    },
+    {
+      close: async () => {
+        lifecycleCloseCalls += 1
+        order.push('lifecycle')
+        await inFlightLifecycleCleanup.promise
+        throw cleanupFailure
+      },
+    },
+  )
+
+  const firstClose = close()
+  const secondClose = close()
+  await waitFor(() => lifecycleCloseCalls === 1, 'lifecycle close')
+  assert.deepEqual(order, ['host', 'lifecycle'])
+  assert.equal(hostCloseCalls, 1)
+  inFlightLifecycleCleanup.resolve()
+
+  const results = await Promise.allSettled([firstClose, secondClose])
+  assert.deepEqual(
+    results.map((result) => result.status),
+    ['rejected', 'rejected'],
+  )
+  for (const result of results) {
+    assert.equal(result.reason, cleanupFailure)
+  }
+  assert.equal(hostCloseCalls, 1)
+  assert.equal(lifecycleCloseCalls, 1)
+})
+
+test('Host close surfaces session-scan cleanup uncertainty discovered during cancellation', async (t) => {
+  const scanStarted = deferred()
+  const cleanupFailure = new CodexOwnedProcessCleanupError()
+  const discovery = {
+    provider: 'codex',
+    discover: async ({ signal }) => {
+      scanStarted.resolve()
+      await new Promise((_, reject) => {
+        const aborted = () => reject(cleanupFailure)
+        if (signal.aborted) aborted()
+        else signal.addEventListener('abort', aborted, { once: true })
+      })
+    },
+    validateCandidate: async () => undefined,
+  }
+  const fixture = await createFixture(t, { discovery })
+  const scanning = fixture.service.discoverProviderSessions(
+    fixture.projectId,
+    fixture.machineId,
+    { provider: 'codex', limit: 50, rescan: true },
+  )
+  const scanRejected = assert.rejects(
+    scanning,
+    (error) =>
+      error instanceof HostServiceError &&
+      error.failure?.reason === 'execution_ownership_uncertain',
+  )
+  await scanStarted.promise
+
+  const closeRejected = assert.rejects(
+    fixture.service.close(),
+    (error) =>
+      error instanceof HostServiceError &&
+      error.failure?.reason === 'execution_ownership_uncertain',
+  )
+  await Promise.all([scanRejected, closeRejected])
+})
+
+test('local lifecycle permanently latches unverified Codex and Claude probe cleanup', async (t) => {
+  for (const [provider, CleanupError] of [
+    ['codex', CodexOwnedProcessCleanupError],
+    ['claude-code', ClaudeCodeOwnedProcessCleanupError],
+  ]) {
+    await t.test(provider, async () => {
+      const directory = await mkdtemp(
+        join(tmpdir(), `codetether-phase8b-local-${provider}-cleanup-`),
+      )
+      const databasePath = join(directory, 'codetether.sqlite3')
+      const executable = join(directory, `test-owned-${provider}`)
+      await writeFile(executable, 'test-owned-provider-fixture', 'utf8')
+      await chmod(executable, 0o755)
+      const persistence = ConversationStore.open({ databasePath })
+      const machine = persistence.listMachines()[0]
+      assert.ok(machine)
+      const cleanupFailure = new CleanupError()
+      let exposeCandidate = false
+      let coordinator
+      const codexCandidate = {
+        launcherPath: executable,
+        executable,
+        fileIdentity: 'test-owned-codex-cleanup',
+        launcherKind: 'native',
+        installMethod: 'manual',
+      }
+      const claudeCandidate = {
+        launcherPath: executable,
+        launcher: {
+          kind: 'native',
+          launcherPath: executable,
+          executable,
+          prefixArguments: [],
+          sourcePath: executable,
+        },
+        fileIdentity: 'test-owned-claude-cleanup',
+        launcherKind: 'native',
+        installMethod: 'manual',
+      }
+      try {
+        coordinator = await LocalProviderLifecycleCoordinator.create({
+          machineId: machine.machineId,
+          persistence,
+          hostVersion: 'phase8b-local-cleanup-barrier-test',
+          environment: { PATH: '' },
+          platform: process.platform,
+          discoverCodex: async () => ({
+            installations:
+              exposeCandidate && provider === 'codex' ? [codexCandidate] : [],
+            pathsInspected: exposeCandidate && provider === 'codex' ? 1 : 0,
+            truncated: false,
+          }),
+          discoverClaude: async () => ({
+            installations:
+              exposeCandidate && provider === 'claude-code'
+                ? [claudeCandidate]
+                : [],
+            pathsInspected:
+              exposeCandidate && provider === 'claude-code' ? 1 : 0,
+            truncated: false,
+          }),
+          observeCodex: async () => {
+            throw cleanupFailure
+          },
+          observeClaude: async () => {
+            throw cleanupFailure
+          },
+        })
+        exposeCandidate = true
+        await assert.rejects(
+          coordinator.refresh(provider),
+          (error) => error === cleanupFailure,
+        )
+        const blockedState = coordinator.state(provider)
+        assert.ok(blockedState)
+        assert.equal(blockedState.runtime.available, false)
+        assert.equal(
+          blockedState.runtime.descriptor.executionHealth.failure.reason,
+          'execution_ownership_uncertain',
+        )
+        assert.throws(
+          () => coordinator.refresh(provider),
+          (error) => error === cleanupFailure,
+        )
+        await assert.rejects(
+          coordinator.prepareRefresh(provider),
+          (error) => error === cleanupFailure,
+        )
+        const otherProvider = provider === 'codex' ? 'claude-code' : 'codex'
+        const otherState = await coordinator.refresh(otherProvider)
+        assert.equal(otherState.runtime.provider, otherProvider)
+        await assert.rejects(
+          coordinator.close(),
+          (error) => error === cleanupFailure,
+        )
+      } finally {
+        await coordinator?.close().catch(() => undefined)
+        persistence.close()
+        await rm(directory, { recursive: true, force: true, maxRetries: 5 })
+      }
+    })
+  }
+})
+
+test('local lifecycle startup isolates one Provider cleanup barrier and preserves the other Provider state', async (t) => {
+  for (const [provider, CleanupError] of [
+    ['codex', CodexOwnedProcessCleanupError],
+    ['claude-code', ClaudeCodeOwnedProcessCleanupError],
+  ]) {
+    await t.test(provider, async () => {
+      const directory = await mkdtemp(
+        join(tmpdir(), `codetether-local-startup-isolation-${provider}-`),
+      )
+      const databasePath = join(directory, 'codetether.sqlite3')
+      const executable = join(directory, `test-owned-${provider}`)
+      await writeFile(executable, 'test-owned-provider-fixture', 'utf8')
+      await chmod(executable, 0o755)
+      const persistence = ConversationStore.open({ databasePath })
+      const machine = persistence.listMachines()[0]
+      const cleanupFailure = new CleanupError()
+      const codexCandidate = {
+        launcherPath: executable,
+        executable,
+        fileIdentity: 'test-owned-codex-startup-cleanup',
+        launcherKind: 'native',
+        installMethod: 'manual',
+      }
+      const claudeCandidate = {
+        launcherPath: executable,
+        launcher: {
+          kind: 'native',
+          launcherPath: executable,
+          executable,
+          prefixArguments: [],
+          sourcePath: executable,
+        },
+        fileIdentity: 'test-owned-claude-startup-cleanup',
+        launcherKind: 'native',
+        installMethod: 'manual',
+      }
+      let coordinator
+      try {
+        coordinator = await LocalProviderLifecycleCoordinator.create({
+          machineId: machine.machineId,
+          persistence,
+          hostVersion: 'phase8c-local-startup-isolation-test',
+          environment: { PATH: '' },
+          platform: process.platform,
+          discoverCodex: async () => ({
+            installations: provider === 'codex' ? [codexCandidate] : [],
+            pathsInspected: provider === 'codex' ? 1 : 0,
+            truncated: false,
+          }),
+          discoverClaude: async () => ({
+            installations: provider === 'claude-code' ? [claudeCandidate] : [],
+            pathsInspected: provider === 'claude-code' ? 1 : 0,
+            truncated: false,
+          }),
+          observeCodex: async () => {
+            throw cleanupFailure
+          },
+          observeClaude: async () => {
+            throw cleanupFailure
+          },
+        })
+        assert.equal(coordinator.states().length, 2)
+        assert.equal(coordinator.state(provider).runtime.available, false)
+        assert.equal(
+          coordinator.state(provider).runtime.descriptor.executionHealth.failure
+            .reason,
+          'execution_ownership_uncertain',
+        )
+        const otherProvider = provider === 'codex' ? 'claude-code' : 'codex'
+        assert.equal(
+          coordinator.state(otherProvider).runtime.provider,
+          otherProvider,
+        )
+        assert.throws(
+          () => coordinator.refresh(provider),
+          (error) => error === cleanupFailure,
+        )
+        await coordinator.refresh(otherProvider)
+      } finally {
+        await coordinator?.close().catch(() => undefined)
+        persistence.close()
+        await rm(directory, { recursive: true, force: true, maxRetries: 5 })
+      }
+    })
+  }
+})
+
+test('Host startup retains a local lifecycle ownership barrier in eligibility and public health', async (t) => {
+  const failure = canonicalFailure('execution_ownership_uncertain', observedAt)
+  const fixture = await createFixture(t, {
+    executionHealth: {
+      state: 'unavailable',
+      freshness: 'current',
+      observedAt,
+      failure,
+    },
+  })
+
+  const bootstrap = fixture.service.bootstrap()
+  assert.equal(bootstrap.capabilities.codex, false)
+  const provider = bootstrap.providers.find(
+    (candidate) => candidate.provider === 'codex',
+  )
+  assert.ok(provider)
+  assert.deepEqual(provider.executionHealth?.failure, failure)
+
+  await assert.rejects(
+    fixture.service.createConversation({
+      actionId: 'act_phase8c_startup_cleanup_barrier',
+      projectId: fixture.projectId,
+      machineId: fixture.machineId,
+      provider: 'codex',
+    }),
+    (error) =>
+      error instanceof HostServiceError &&
+      error.failure?.reason === 'execution_ownership_uncertain',
+  )
+  assert.equal(fixture.runtime.startConversationCalls.length, 0)
+  assert.deepEqual(fixture.persistence.listConversations(), [])
+})
 
 test('Host selection ignores candidate ordering and keeps runtime compatibility separate from backend readiness', async (t) => {
   const discovery = new CountingDiscovery()
@@ -1485,6 +1793,95 @@ test('failed local runtime handoff discards the staged replacement and preserves
   )
 })
 
+for (const failurePoint of ['replacement assertion', 'lifecycle commit']) {
+  test(`${failurePoint} preserves staged cleanup uncertainty ahead of the original handoff error`, async (t) => {
+    const cleanupFailure = new CodexOwnedProcessCleanupError()
+    const originalFailure = new Error(`test-owned ${failurePoint} failure`)
+    const replacement = new TrackingRuntime(installationAId, revisionA2)
+    let discardCalls = 0
+    let fixture
+    fixture = await createFixture(t, {
+      refreshLocalProviderLifecycle: async (provider) => {
+        assert.equal(provider, 'codex')
+        const lifecycle = publicLifecycle({
+          revision:
+            failurePoint === 'replacement assertion' ? revisionB : revisionA2,
+        })
+        return {
+          runtime: replacement,
+          lifecycle,
+          commit: () => {
+            if (failurePoint === 'lifecycle commit') throw originalFailure
+            return lifecycle
+          },
+          discard: async () => {
+            discardCalls += 1
+            throw cleanupFailure
+          },
+        }
+      },
+    })
+
+    await assert.rejects(
+      fixture.service.refreshMachineProviders(fixture.machineId, {
+        actionId: `act_phase8c_${failurePoint.replace(' ', '_')}_cleanup`,
+      }),
+      (error) =>
+        error instanceof HostServiceError &&
+        error.failure?.reason === 'execution_ownership_uncertain',
+    )
+    assert.equal(discardCalls, 1)
+    assert.equal(replacement.startConversationCalls.length, 0)
+    assert.equal(replacement.startTurnCalls.length, 0)
+  })
+}
+
+test('aggregated teardown retains its nested canonical ownership barrier ahead of unrelated failures', async (t) => {
+  const retainedFailure = canonicalFailure(
+    'execution_ownership_uncertain',
+    changedAt,
+  )
+  const cleanupFailure = new HostServiceError(
+    'provider_unavailable',
+    'test-owned cleanup barrier',
+    503,
+    undefined,
+    retainedFailure,
+  )
+  const replacement = new TrackingRuntime(installationAId, revisionA2)
+  let fixture
+  fixture = await createFixture(t, {
+    refreshLocalProviderLifecycle: async () => ({
+      runtime: replacement,
+      lifecycle: publicLifecycle({ revision: revisionB }),
+      discard: async () => {
+        throw new AggregateError(
+          [new Error('test-owned unrelated teardown failure'), cleanupFailure],
+          'test-owned aggregated teardown failure',
+        )
+      },
+    }),
+  })
+
+  await assert.rejects(
+    fixture.service.refreshMachineProviders(fixture.machineId, {
+      actionId: 'act_phase8c_aggregated_cleanup_barrier',
+    }),
+    (error) =>
+      error instanceof HostServiceError &&
+      error.failure?.reason === 'execution_ownership_uncertain' &&
+      error.failure.occurredAt === changedAt,
+  )
+  const machine = await fixture.service.getMachine(fixture.machineId)
+  const provider = machine.providers.find(
+    (candidate) => candidate.provider === 'codex',
+  )
+  assert.ok(provider)
+  assert.deepEqual(provider.executionHealth?.failure, retainedFailure)
+  assert.equal(replacement.startConversationCalls.length, 0)
+  assert.equal(replacement.startTurnCalls.length, 0)
+})
+
 test('concurrent local lifecycle refreshes coalesce and create no Conversation, Turn, or Provider execution ownership', async (t) => {
   const gate = deferred()
   const replacement = new TrackingRuntime(installationAId, revisionA2)
@@ -1530,6 +1927,433 @@ test('concurrent local lifecycle refreshes coalesce and create no Conversation, 
     assert.equal(runtime.resumeConversationCalls.length, 0)
     assert.equal(runtime.startTurnCalls.length, 0)
   }
+})
+
+test('local Conversation creation holds Provider handoff ownership through native session binding', async (t) => {
+  const nativeStartGate = deferred()
+  const replacement = new TrackingRuntime(installationAId, revisionA2)
+  let refreshCalls = 0
+  let fixture
+  fixture = await createFixture(t, {
+    refreshLocalProviderLifecycle: async (provider) => {
+      assert.equal(provider, 'codex')
+      refreshCalls += 1
+      if (refreshCalls === 1) {
+        return {
+          runtime: fixture.runtime,
+          lifecycle: recordLifecycle(fixture),
+        }
+      }
+      return {
+        runtime: replacement,
+        lifecycle: recordLifecycle(fixture, {
+          revision: revisionA2,
+          timestamp: changedAt,
+        }),
+      }
+    },
+  })
+  fixture.runtime.startConversationGate = nativeStartGate.promise
+
+  const creating = fixture.service.createConversation({
+    actionId: 'act_phase8c_local_create_handoff',
+    projectId: fixture.projectId,
+    machineId: fixture.machineId,
+    provider: 'codex',
+  })
+  await waitFor(
+    () => fixture.runtime.startConversationCalls.length === 1,
+    'native Conversation creation',
+  )
+  const refreshing = fixture.service.refreshMachineProviders(
+    fixture.machineId,
+    { actionId: 'act_phase8c_local_create_handoff_refresh' },
+  )
+  await new Promise((resolve) => setImmediate(resolve))
+
+  assert.equal(refreshCalls, 1)
+  assert.equal(fixture.runtime.closeCalls, 0)
+  nativeStartGate.resolve()
+  const [created] = await Promise.all([creating, refreshing])
+
+  assert.equal(created.status, 'completed')
+  assert.equal(refreshCalls, 2)
+  assert.equal(fixture.runtime.closeCalls, 1)
+  assert.equal(replacement.startConversationCalls.length, 0)
+  assert.equal(replacement.startTurnCalls.length, 0)
+  assert.equal(fixture.persistence.listConversations().length, 1)
+})
+
+test('local Turn admission blocks a changed-runtime refresh until starting ownership is visible', async (t) => {
+  const hydrationCleanupGate = deferred()
+  const replacement = new TrackingRuntime(installationAId, revisionA2)
+  let refreshCalls = 0
+  let fixture
+  fixture = await createFixture(t, {
+    seedLegacyConversation: true,
+    seedHydrationContention: true,
+    maxConversations: 1,
+    refreshLocalProviderLifecycle: async (provider) => {
+      assert.equal(provider, 'codex')
+      refreshCalls += 1
+      return {
+        runtime: refreshCalls === 1 ? fixture.runtime : replacement,
+        lifecycle: recordLifecycle(fixture, {
+          revision: refreshCalls === 1 ? revisionA1 : revisionA2,
+          timestamp: refreshCalls === 1 ? observedAt : changedAt,
+        }),
+      }
+    },
+  })
+  fixture.runtime.disposeConversationGate = hydrationCleanupGate.promise
+
+  const starting = fixture.service.startTurn(fixture.legacyConversationId, {
+    actionId: 'act_phase8c_local_turn_handoff',
+    input: { type: 'text', text: 'Admit this exact local Turn once.' },
+  })
+  await waitFor(
+    () => fixture.runtime.disposeConversationCalls.length === 1,
+    'hydration cleanup handoff',
+  )
+  const refreshing = fixture.service.refreshMachineProviders(
+    fixture.machineId,
+    { actionId: 'act_phase8c_local_turn_handoff_refresh' },
+  )
+  await new Promise((resolve) => setImmediate(resolve))
+
+  assert.equal(refreshCalls, 1)
+  assert.equal(fixture.runtime.closeCalls, 0)
+  hydrationCleanupGate.resolve()
+  const [started] = await Promise.all([starting, refreshing])
+
+  assert.equal(started.status, 'accepted')
+  assert.equal(refreshCalls, 1)
+  assert.equal(fixture.runtime.closeCalls, 0)
+  assert.equal(fixture.runtime.resumeConversationCalls.length, 1)
+  assert.equal(fixture.runtime.startTurnCalls.length, 1)
+  assert.equal(replacement.resumeConversationCalls.length, 0)
+  assert.equal(replacement.startTurnCalls.length, 0)
+})
+
+test('local session scan cleanup uncertainty wins before concurrent Turn admission sends a Prompt', async (t) => {
+  const scanStarted = deferred()
+  const releaseScanCleanup = deferred()
+  const cleanupFailure = new CodexOwnedProcessCleanupError()
+  const discovery = {
+    provider: 'codex',
+    discover: async () => {
+      scanStarted.resolve()
+      await releaseScanCleanup.promise
+      throw cleanupFailure
+    },
+    validateCandidate: async () => undefined,
+  }
+  const fixture = await createFixture(t, {
+    seedLegacyConversation: true,
+    discovery,
+  })
+
+  const scanning = fixture.service.discoverProviderSessions(
+    fixture.projectId,
+    fixture.machineId,
+    { provider: 'codex', limit: 50, rescan: true },
+  )
+  const scanRejected = assert.rejects(
+    scanning,
+    (error) =>
+      error instanceof HostServiceError &&
+      error.failure?.reason === 'execution_ownership_uncertain',
+  )
+  await scanStarted.promise
+
+  const actionId = 'act_phase8c_scan_cleanup_before_turn'
+  const starting = fixture.service.startTurn(fixture.legacyConversationId, {
+    actionId,
+    input: {
+      type: 'text',
+      text: 'This Prompt must remain unsent behind uncertain scan cleanup.',
+    },
+  })
+  const startRejected = assert.rejects(
+    starting,
+    (error) =>
+      error instanceof HostServiceError &&
+      error.failure?.reason === 'execution_ownership_uncertain',
+  )
+  await new Promise((resolve) => setImmediate(resolve))
+
+  assert.equal(fixture.runtime.resumeConversationCalls.length, 0)
+  assert.equal(fixture.runtime.startConversationCalls.length, 0)
+  assert.equal(fixture.runtime.startTurnCalls.length, 0)
+  releaseScanCleanup.resolve()
+  await Promise.all([scanRejected, startRejected])
+
+  assert.equal(fixture.runtime.resumeConversationCalls.length, 0)
+  assert.equal(fixture.runtime.startConversationCalls.length, 0)
+  assert.equal(fixture.runtime.startTurnCalls.length, 0)
+  assert.equal(fixture.persistence.getTurnForStartAction(actionId), undefined)
+})
+
+test('local session scan rechecks refreshed compatibility and drops the replaced discovery adapter', async (t) => {
+  const refreshEntered = deferred()
+  const releaseRefresh = deferred()
+  const staleDiscovery = {
+    provider: 'codex',
+    discoverCalls: 0,
+    async discover() {
+      this.discoverCalls += 1
+      throw new Error('A replaced discovery adapter must not be invoked')
+    },
+    async validateCandidate() {
+      throw new Error('A replaced discovery adapter must not validate')
+    },
+  }
+  const replacement = new TrackingRuntime(installationAId, revisionA2)
+  let fixture
+  fixture = await createFixture(t, {
+    discovery: staleDiscovery,
+    refreshLocalProviderLifecycle: async (provider) => {
+      assert.equal(provider, 'codex')
+      refreshEntered.resolve()
+      await releaseRefresh.promise
+      return {
+        runtime: replacement,
+        lifecycle: recordLifecycle(fixture, {
+          revision: revisionA2,
+          timestamp: changedAt,
+          discoverySupported: false,
+        }),
+      }
+    },
+  })
+
+  const refreshing = fixture.service.refreshMachineProviders(
+    fixture.machineId,
+    { actionId: 'act_phase8c_refresh_removes_stale_discovery' },
+  )
+  await refreshEntered.promise
+  const scanning = fixture.service.discoverProviderSessions(
+    fixture.projectId,
+    fixture.machineId,
+    { provider: 'codex', limit: 50, rescan: true },
+  )
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(staleDiscovery.discoverCalls, 0)
+
+  releaseRefresh.resolve()
+  const [, discovered] = await Promise.all([refreshing, scanning])
+  assert.equal(discovered.candidates.length, 0)
+  assert.equal(discovered.providers[0].status, 'unsupported')
+  assert.equal(
+    discovered.providers[0].failureReason,
+    'provider_session_format_unsupported',
+  )
+  assert.equal(staleDiscovery.discoverCalls, 0)
+})
+
+test('local session candidate rechecks selected installation after waiting behind lifecycle refresh', async (t) => {
+  const refreshEntered = deferred()
+  const releaseRefresh = deferred()
+  let validateCalls = 0
+  const discovery = {
+    provider: 'codex',
+    async discover({ projectRoot }) {
+      return {
+        provider: 'codex',
+        status: 'supported',
+        resumeStatus: 'supported',
+        candidates: [
+          {
+            provider: 'codex',
+            nativeSessionId: 'private-stale-installation-session',
+            revision: 'native-stale-installation-revision',
+            workingDirectory: projectRoot,
+            title: 'Stale installation candidate',
+            resumeStatus: 'supported',
+            historicalTranscript: 'unavailable',
+          },
+        ],
+        metrics: {
+          filesInspected: 1,
+          candidatesParsed: 1,
+          candidatesMatched: 1,
+          corruptEntriesSkipped: 0,
+          elapsedMs: 1,
+          truncated: false,
+        },
+      }
+    },
+    async validateCandidate() {
+      validateCalls += 1
+      throw new Error('A stale installation candidate must not be validated')
+    },
+  }
+  const replacement = new TrackingRuntime(installationAId, revisionA2)
+  let fixture
+  fixture = await createFixture(t, {
+    discovery,
+    refreshLocalProviderLifecycle: async () => {
+      refreshEntered.resolve()
+      await releaseRefresh.promise
+      return {
+        runtime: replacement,
+        lifecycle: recordLifecycle(fixture, {
+          revision: revisionA2,
+          timestamp: changedAt,
+          discoverySupported: false,
+        }),
+      }
+    },
+  })
+  const discovered = await fixture.service.discoverProviderSessions(
+    fixture.projectId,
+    fixture.machineId,
+    { provider: 'codex', limit: 50, rescan: true },
+  )
+  assert.equal(discovered.candidates.length, 1)
+
+  const refreshing = fixture.service.refreshMachineProviders(
+    fixture.machineId,
+    { actionId: 'act_phase8c_refresh_before_candidate_validation' },
+  )
+  await refreshEntered.promise
+  const adopting = fixture.service.adoptProviderSession(
+    fixture.projectId,
+    fixture.machineId,
+    {
+      actionId: 'act_phase8c_stale_candidate_after_refresh',
+      discoveryCandidateId: discovered.candidates[0].discoveryCandidateId,
+    },
+  )
+  const adoptRejected = assert.rejects(
+    adopting,
+    (error) =>
+      error instanceof HostServiceError &&
+      error.code === 'provider_session_candidate_expired',
+  )
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(validateCalls, 0)
+
+  releaseRefresh.resolve()
+  await Promise.all([refreshing, adoptRejected])
+  assert.equal(validateCalls, 0)
+  assert.equal(fixture.persistence.listConversations().length, 0)
+})
+
+test('queued local scan snapshots candidates with the supported replacement installation revision', async (t) => {
+  const refreshEntered = deferred()
+  const releaseRefresh = deferred()
+  const staleDiscovery = {
+    provider: 'codex',
+    discoverCalls: 0,
+    async discover() {
+      this.discoverCalls += 1
+      throw new Error('The replaced discovery adapter must not run')
+    },
+    async validateCandidate() {
+      throw new Error('The replaced discovery adapter must not validate')
+    },
+  }
+  const nativeSessionId = 'private-supported-replacement-session'
+  const nativeRevision = 'native-supported-replacement-revision'
+  const replacementDiscovery = {
+    provider: 'codex',
+    discoverCalls: 0,
+    validateCalls: 0,
+    async discover({ projectRoot }) {
+      this.discoverCalls += 1
+      return {
+        provider: 'codex',
+        status: 'supported',
+        resumeStatus: 'supported',
+        candidates: [
+          {
+            provider: 'codex',
+            nativeSessionId,
+            revision: nativeRevision,
+            workingDirectory: projectRoot,
+            title: 'Supported replacement candidate',
+            resumeStatus: 'supported',
+            historicalTranscript: 'unavailable',
+          },
+        ],
+        metrics: {
+          filesInspected: 1,
+          candidatesParsed: 1,
+          candidatesMatched: 1,
+          corruptEntriesSkipped: 0,
+          elapsedMs: 1,
+          truncated: false,
+        },
+      }
+    },
+    async validateCandidate({ projectRoot }) {
+      this.validateCalls += 1
+      return {
+        provider: 'codex',
+        nativeSessionId,
+        revision: nativeRevision,
+        workingDirectory: projectRoot,
+        title: 'Supported replacement candidate',
+        resumeStatus: 'supported',
+        historicalTranscript: 'unavailable',
+      }
+    },
+  }
+  const replacement = new TrackingRuntime(installationAId, revisionA2)
+  let fixture
+  fixture = await createFixture(t, {
+    discovery: staleDiscovery,
+    refreshLocalProviderLifecycle: async () => {
+      refreshEntered.resolve()
+      await releaseRefresh.promise
+      return {
+        runtime: replacement,
+        lifecycle: recordLifecycle(fixture, {
+          revision: revisionA2,
+          timestamp: changedAt,
+          discoverySupported: true,
+        }),
+        sessionDiscovery: replacementDiscovery,
+      }
+    },
+  })
+
+  const refreshing = fixture.service.refreshMachineProviders(
+    fixture.machineId,
+    { actionId: 'act_phase8c_refresh_before_supported_scan' },
+  )
+  await refreshEntered.promise
+  const scanning = fixture.service.discoverProviderSessions(
+    fixture.projectId,
+    fixture.machineId,
+    { provider: 'codex', limit: 50, rescan: true },
+  )
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(staleDiscovery.discoverCalls, 0)
+
+  releaseRefresh.resolve()
+  const [, discovered] = await Promise.all([refreshing, scanning])
+  assert.equal(discovered.candidates.length, 1)
+  assert.equal(replacementDiscovery.discoverCalls, 1)
+  assert.equal(staleDiscovery.discoverCalls, 0)
+
+  const adopted = await fixture.service.adoptProviderSession(
+    fixture.projectId,
+    fixture.machineId,
+    {
+      actionId: 'act_phase8c_adopt_supported_replacement_scan',
+      discoveryCandidateId: discovered.candidates[0].discoveryCandidateId,
+    },
+  )
+  assert.equal(adopted.status, 'completed')
+  assert.equal(replacementDiscovery.validateCalls, 1)
+  const durable = fixture.persistence.getConversation(
+    adopted.data.conversation.conversationId,
+  )
+  assert.equal(durable.providerInstallationId, installationAId)
+  assert.equal(replacement.startConversationCalls.length, 0)
+  assert.equal(replacement.startTurnCalls.length, 0)
 })
 
 test('an active old installation runtime stays pinned until exact-session cleanup, then one new revision resumes it', async () => {
@@ -1808,6 +2632,26 @@ async function createFixture(t, options = {}) {
       updatedAt: observedAt,
       lastActivityAt: observedAt,
     })
+    if (options.seedHydrationContention === true) {
+      fixture.hydrationBlockerConversationId =
+        'conv_phase8c_host_hydration_blocker'
+      persistence.createConversation({
+        conversationId: fixture.hydrationBlockerConversationId,
+        projectId: fixture.projectId,
+        machineId: fixture.machineId,
+        title: 'Hydration capacity blocker',
+        titleSource: 'generated',
+        provider: 'codex',
+        origin: 'codetether',
+        providerThreadId: 'private-provider-thread-hydration-blocker',
+        providerSessionMaterialized: true,
+        cwd: root.rootPath,
+        status: 'idle',
+        createdAt: changedAt,
+        updatedAt: changedAt,
+        lastActivityAt: changedAt,
+      })
+    }
   }
 
   if (options.seedNativeBoundConversation === true) {
@@ -1869,6 +2713,9 @@ async function createFixture(t, options = {}) {
     workspacePolicy: await WorkspacePolicy.create([workspace]),
     publisher: new HostEventPublisher({ epoch: newEpoch() }),
     hostVersion: 'phase8b-host-test',
+    ...(options.maxConversations === undefined
+      ? {}
+      : { maxConversations: options.maxConversations }),
     now: options.now ?? (() => new Date(observedAt)),
   })
   fixture.service = service
@@ -2266,8 +3113,11 @@ class TrackingRuntime {
   startConversationCalls = []
   resumeConversationCalls = []
   startTurnCalls = []
+  disposeConversationCalls = []
   closeCalls = 0
   closeError = undefined
+  startConversationGate = undefined
+  disposeConversationGate = undefined
   #conversationSequence = 0
   #eventListeners = new Set()
 
@@ -2290,6 +3140,7 @@ class TrackingRuntime {
 
   async startConversation(options) {
     this.startConversationCalls.push(options)
+    await this.startConversationGate
     this.#conversationSequence += 1
     return {
       providerThreadId: `private-new-session-${String(this.#conversationSequence)}`,
@@ -2309,6 +3160,11 @@ class TrackingRuntime {
   }
 
   async interruptTurn() {}
+
+  async disposeConversation(options) {
+    this.disposeConversationCalls.push(options)
+    await this.disposeConversationGate
+  }
 
   emit(event) {
     for (const listener of this.#eventListeners) listener(event)

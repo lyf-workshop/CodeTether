@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import test from 'node:test'
 
 import { ClaudeCodeOwnedProcessCleanupError } from '@codetether/adapter-claude'
+import { CodexOwnedProcessCleanupError } from '@codetether/adapter-codex'
 
 import {
   RemoteProviderDetector,
@@ -338,13 +339,7 @@ test('closing detection terminates its exact hanging children', async () => {
   const startedAt = performance.now()
   await instance.close()
   assert.ok(performance.now() - startedAt < 2_000)
-  const result = await discovery
-  assert.equal(
-    result.providers.every(
-      ({ availability }) => availability === 'misconfigured',
-    ),
-    true,
-  )
+  await assert.rejects(discovery, (error) => error?.name === 'AbortError')
 })
 
 test('closing detection aborts and awaits an in-flight Claude auth gate', async () => {
@@ -375,17 +370,10 @@ test('closing detection aborts and awaits an in-flight Claude auth gate', async 
 
   await instance.close()
   assert.equal(observedSignal.aborted, true)
-  const result = await discovery
-  const claude = result.providers.find(
-    ({ provider }) => provider === 'claude-code',
-  )
-  assert.equal(
-    Object.values(claude.capabilities).some((enabled) => enabled),
-    false,
-  )
+  await assert.rejects(discovery, (error) => error?.name === 'AbortError')
 })
 
-test('Claude probe cleanup failure remains fatal through detector close', async () => {
+test('Claude probe cleanup failure is Provider-scoped while detector close preserves the barrier', async () => {
   const cleanupFailure = new ClaudeCodeOwnedProcessCleanupError()
   const instance = detector(
     "process.stdout.write('codex-cli 0.149.1')",
@@ -398,8 +386,109 @@ test('Claude probe cleanup failure remains fatal through detector close', async 
     },
   )
 
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const result = await instance.discover()
+    const codex = result.providers.find(({ provider }) => provider === 'codex')
+    const claude = result.providers.find(
+      ({ provider }) => provider === 'claude-code',
+    )
+    assert.equal(codex.availability, 'available')
+    assert.equal(claude.availability, 'unavailable')
+    assert.equal(claude.executionFailureReason, 'provider_start_failed')
+  }
+  await assert.rejects(instance.close(), (error) => error === cleanupFailure)
+  await assert.rejects(instance.close(), (error) => error === cleanupFailure)
+})
+
+test('deadline-triggered Claude cleanup failure remains authoritative and permanently latched', async () => {
+  const cleanupFailure = new ClaudeCodeOwnedProcessCleanupError()
+  let observedAbort = false
+  const providerLifecycle = {
+    async describe(signal) {
+      return await new Promise((_, reject) => {
+        const onAbort = () => {
+          observedAbort = true
+          reject(cleanupFailure)
+        }
+        if (signal.aborted) onAbort()
+        else signal.addEventListener('abort', onAbort, { once: true })
+      })
+    },
+  }
+  const instance = new RemoteProviderDetector({
+    providerLifecycle,
+    lifecycleWorkTimeoutMs: 20,
+  })
+
   await assert.rejects(instance.discover(), (error) => error === cleanupFailure)
+  assert.equal(observedAbort, true)
   await assert.rejects(instance.discover(), (error) => error === cleanupFailure)
   await assert.rejects(instance.close(), (error) => error === cleanupFailure)
   await assert.rejects(instance.close(), (error) => error === cleanupFailure)
 })
+
+test('deadline-triggered Codex cleanup failure remains authoritative and permanently latched', async () => {
+  const cleanupFailure = new CodexOwnedProcessCleanupError()
+  const providerLifecycle = {
+    async describe(signal) {
+      return await new Promise((_, reject) => {
+        const onAbort = () => reject(cleanupFailure)
+        if (signal.aborted) onAbort()
+        else signal.addEventListener('abort', onAbort, { once: true })
+      })
+    },
+  }
+  const instance = new RemoteProviderDetector({
+    providerLifecycle,
+    lifecycleWorkTimeoutMs: 20,
+  })
+
+  await assert.rejects(instance.discover(), (error) => error === cleanupFailure)
+  await assert.rejects(instance.discover(), (error) => error === cleanupFailure)
+  await assert.rejects(instance.close(), (error) => error === cleanupFailure)
+})
+
+test('a fresh discovery waits for cancelled shared cleanup and starts one new generation', async () => {
+  let calls = 0
+  let firstCleanupComplete = false
+  const expected = { providers: [], observedAt: fixedNow.toISOString() }
+  const providerLifecycle = {
+    async describe(signal) {
+      calls += 1
+      if (calls > 1) return expected
+      return await new Promise((_, reject) => {
+        signal.addEventListener(
+          'abort',
+          () => {
+            setTimeout(() => {
+              firstCleanupComplete = true
+              reject(signal.reason)
+            }, 25)
+          },
+          { once: true },
+        )
+      })
+    },
+  }
+  const instance = new RemoteProviderDetector({ providerLifecycle })
+  const caller = new AbortController()
+  const first = instance.discover(caller.signal)
+  await waitFor(() => calls === 1)
+  caller.abort()
+  const second = instance.discover()
+
+  assert.equal(calls, 1, 'fresh generation must not overlap exact cleanup')
+  await assert.rejects(first, (error) => error?.name === 'AbortError')
+  assert.equal(firstCleanupComplete, true)
+  assert.deepEqual(await second, expected)
+  assert.equal(calls, 2)
+  await instance.close()
+})
+
+async function waitFor(predicate) {
+  const deadline = Date.now() + 2_000
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error('Timed out waiting for fixture')
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+}

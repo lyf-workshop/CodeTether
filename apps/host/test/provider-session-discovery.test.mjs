@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import test from 'node:test'
 
 import { canonicalFailure } from '@codetether/agent-core'
+import { CodexOwnedProcessCleanupError } from '@codetether/adapter-codex'
 
 import { HostEventPublisher } from '../dist/api/host-event-publisher.js'
 import {
@@ -16,6 +17,60 @@ import { WorkspacePolicy } from '../dist/api/workspace-policy.js'
 import { ConversationStore } from '../dist/persistence/index.js'
 
 const timestamp = '2026-10-02T12:00:00.000Z'
+
+test('metadata cleanup uncertainty blocks only the exact Provider and is projected as not ready', async (t) => {
+  const cleanupFailure = new CodexOwnedProcessCleanupError()
+  let discoveryCalls = 0
+  const fixture = await createFixture(t, {
+    candidates: [],
+    discoveryImplementation: async () => {
+      discoveryCalls += 1
+      throw cleanupFailure
+    },
+  })
+
+  await assert.rejects(
+    fixture.service.discoverProviderSessions(
+      fixture.projectId,
+      fixture.machineId,
+      { provider: 'codex', limit: 50, rescan: true },
+    ),
+    (error) =>
+      error instanceof HostServiceError &&
+      error.failure?.reason === 'execution_ownership_uncertain',
+  )
+
+  const detail = await fixture.service.getMachine(fixture.machineId)
+  const codex = detail.providers.find(({ provider }) => provider === 'codex')
+  assert.equal(codex.executionHealth.state, 'unavailable')
+  assert.equal(codex.executionHealth.freshness, 'current')
+  assert.equal(
+    codex.executionHealth.failure.reason,
+    'execution_ownership_uncertain',
+  )
+  await assert.rejects(
+    fixture.service.createConversation({
+      actionId: 'act_metadata_cleanup_barrier_create',
+      projectId: fixture.projectId,
+      machineId: fixture.machineId,
+      provider: 'codex',
+    }),
+    (error) =>
+      error instanceof HostServiceError &&
+      error.code === 'provider_unavailable',
+  )
+  await assert.rejects(
+    fixture.service.discoverProviderSessions(
+      fixture.projectId,
+      fixture.machineId,
+      { provider: 'codex', limit: 50, rescan: true },
+    ),
+    (error) =>
+      error instanceof HostServiceError &&
+      error.failure?.reason === 'execution_ownership_uncertain',
+  )
+  assert.equal(discoveryCalls, 1)
+})
 
 test('discovery exposes bounded opaque metadata and adoption starts no Provider', async (t) => {
   const fixture = await createFixture(t, {
@@ -441,7 +496,10 @@ test('last-waiter cancellation cleans up before one fresh identical scan starts'
   await waitFor(() => discoverCalls === 1, 'first Provider session scan')
 
   cancelled.abort()
-  await assert.rejects(first, (error) => error?.name === 'AbortError')
+  const cancelledResult = assert.rejects(
+    first,
+    (error) => error?.name === 'AbortError',
+  )
   await firstAbortObserved.promise
   const fresh = fixture.service.discoverProviderSessions(
     fixture.projectId,
@@ -453,14 +511,14 @@ test('last-waiter cancellation cleans up before one fresh identical scan starts'
   assert.equal(activeWorkers, 1)
 
   firstCleanup.resolve()
-  const result = await fresh
+  const [, result] = await Promise.all([cancelledResult, fresh])
   assert.equal(result.candidates.length, 1)
   assert.equal(discoverCalls, 2)
   assert.equal(maximumActiveWorkers, 1)
   assert.equal(activeWorkers, 0)
 })
 
-test('distinct concurrent Project scans respect the admission cap and release capacity after cleanup', async (t) => {
+test('distinct local Project scans respect the admission cap while Provider metadata ownership stays serialized', async (t) => {
   const gates = new Map()
   let activeWorkers = 0
   let maximumActiveWorkers = 0
@@ -535,12 +593,12 @@ test('distinct concurrent Project scans respect the admission cap and release ca
     { provider: 'codex', limit: 50, rescan: false },
   )
   await waitFor(
-    () => fixture.discovery.discoverCalls === 2,
-    'two admitted distinct Project scans',
+    () => fixture.discovery.discoverCalls === 1,
+    'first admitted Project scan',
   )
   assert.equal(gates.has(fixture.projectRoot), true)
-  assert.equal(gates.has(projectBRoot), true)
-  assert.equal(activeWorkers, 2)
+  assert.equal(gates.has(projectBRoot), false)
+  assert.equal(activeWorkers, 1)
 
   const saturated = await fixture.service.discoverProviderSessions(
     projectC.projectId,
@@ -556,7 +614,7 @@ test('distinct concurrent Project scans respect the admission cap and release ca
     corruptEntriesSkipped: 0,
     failureReason: 'provider_session_discovery_unavailable',
   })
-  assert.equal(fixture.discovery.discoverCalls, 2)
+  assert.equal(fixture.discovery.discoverCalls, 1)
   assert.equal(gates.has(projectCRoot), false)
   assert.equal(fixture.runtime.startConversationCalls, 0)
   assert.equal(fixture.runtime.resumeConversationCalls, 0)
@@ -570,6 +628,11 @@ test('distinct concurrent Project scans respect the admission cap and release ca
   const [resultA, coalescedResultA] = await Promise.all([scanA, coalescedA])
   assert.equal(resultA.candidates.length, 1)
   assert.equal(coalescedResultA.candidates.length, 1)
+  await waitFor(
+    () => fixture.discovery.discoverCalls === 2,
+    'second serialized Project scan',
+  )
+  assert.equal(gates.has(projectBRoot), true)
   assert.equal(activeWorkers, 1)
 
   const retryC = fixture.service.discoverProviderSessions(
@@ -577,18 +640,23 @@ test('distinct concurrent Project scans respect the admission cap and release ca
     fixture.machineId,
     { provider: 'codex', limit: 50, rescan: true },
   )
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(fixture.discovery.discoverCalls, 2)
+  assert.equal(gates.has(projectCRoot), false)
+  assert.equal(activeWorkers, 1)
+  gates.get(projectBRoot).resolve()
+  const resultB = await scanB
   await waitFor(
     () => fixture.discovery.discoverCalls === 3,
-    'Project scan admitted after capacity cleanup',
+    'Project scan admitted after serialized cleanup',
   )
   assert.equal(gates.has(projectCRoot), true)
-  assert.equal(activeWorkers, 2)
-  gates.get(projectBRoot).resolve()
+  assert.equal(activeWorkers, 1)
   gates.get(projectCRoot).resolve()
-  const [resultB, resultC] = await Promise.all([scanB, retryC])
+  const resultC = await retryC
   assert.equal(resultB.candidates.length, 1)
   assert.equal(resultC.candidates.length, 1)
-  assert.equal(maximumActiveWorkers, 2)
+  assert.equal(maximumActiveWorkers, 1)
   assert.equal(activeWorkers, 0)
   assert.equal(fixture.discovery.discoverCalls, 3)
 })

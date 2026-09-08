@@ -8,6 +8,8 @@ import {
   type CanonicalFailure,
   type NativeProviderSessionCandidate,
 } from '@codetether/agent-core'
+import { ClaudeCodeOwnedProcessCleanupError } from '@codetether/adapter-claude'
+import { CodexOwnedProcessCleanupError } from '@codetether/adapter-codex'
 import {
   ClaudeSessionHeartbeatMessageSchema,
   ClaudeSessionDisposeMessageSchema,
@@ -73,6 +75,7 @@ import {
   type RemoteCodexRunnerTurn,
 } from './remote-codex-runner.js'
 import type { RemoteProviderSessionConnectionOwner } from './remote-provider-session-owner.js'
+import { armAbortDeadline } from './shared-abortable-operation.js'
 import { NodeStateStore, type TrustedController } from './state-store.js'
 
 const AuthenticatedRequestSchema = z.discriminatedUnion('type', [
@@ -142,6 +145,8 @@ export class CodeTetherNodeService extends EventEmitter {
   readonly #authenticatedConnections = new Map<string, Set<TLSSocket>>()
   readonly #pendingRelayStreams = new Map<Duplex, PublicKeyFingerprint>()
   readonly #relayConnections = new Map<TLSSocket, PublicKeyFingerprint>()
+  readonly #routeTasks = new Set<Promise<void>>()
+  readonly #routeCleanupFailures = new Set<unknown>()
   readonly #providerDetector: RemoteProviderDetector
   readonly #providerLifecycle: NodeProviderLifecycleCoordinator
   readonly #providerSessionDiscoveries: RemoteProviderSessionDiscoveryRegistry
@@ -327,11 +332,14 @@ export class CodeTetherNodeService extends EventEmitter {
     for (const stream of this.#pendingRelayStreams.keys()) stream.destroy()
     for (const socket of this.#connections) socket.destroy()
     const failures: unknown[] = []
+    const recordFailure = (error: unknown): void => {
+      if (!failures.includes(error)) failures.push(error)
+    }
     const attempt = async (operation: () => Promise<void>) => {
       try {
         await operation()
       } catch (error) {
-        failures.push(error)
+        recordFailure(error)
       }
     }
     const server = this.#server
@@ -357,6 +365,14 @@ export class CodeTetherNodeService extends EventEmitter {
     if (relayControl !== undefined) {
       await attempt(async () => await relayControl.close())
     }
+    const routeResults = await Promise.allSettled([...this.#routeTasks])
+    for (const result of routeResults) {
+      if (result.status === 'rejected') {
+        const cleanupFailure = providerOwnedProcessCleanupFailure(result.reason)
+        if (cleanupFailure !== undefined) recordFailure(cleanupFailure)
+      }
+    }
+    for (const failure of this.#routeCleanupFailures) recordFailure(failure)
     await attempt(async () => await this.#providerDetector.close())
     await attempt(async () => await this.#remoteCodexRunners.close())
     await attempt(async () => await this.#remoteClaudeRunners.close())
@@ -414,7 +430,18 @@ export class CodeTetherNodeService extends EventEmitter {
       if (remaining <= 0) this.#connectionsByAddress.delete(remoteAddress)
       else this.#connectionsByAddress.set(remoteAddress, remaining)
     })
-    void this.#route(socket).catch(() => socket.destroy())
+    const route = this.#route(socket)
+      .catch((error: unknown) => {
+        const cleanupFailure = providerOwnedProcessCleanupFailure(error)
+        if (cleanupFailure !== undefined) {
+          this.#routeCleanupFailures.add(cleanupFailure)
+        }
+        socket.destroy()
+        throw cleanupFailure ?? error
+      })
+      .finally(() => this.#routeTasks.delete(route))
+    this.#routeTasks.add(route)
+    void route.catch(() => undefined)
   }
 
   async #route(socket: TLSSocket): Promise<void> {
@@ -587,9 +614,12 @@ export class CodeTetherNodeService extends EventEmitter {
     // trust revocation also closes sockets stalled in the hello window.
     this.#trackAuthenticatedConnection(trusted.controllerId, socket)
     const providerSessionDiscoveryAbort = new AbortController()
-    const abortProviderSessionDiscovery = (): void =>
+    const providerLifecycleAbort = new AbortController()
+    const abortProviderOperations = (): void => {
       providerSessionDiscoveryAbort.abort()
-    socket.once('close', abortProviderSessionDiscovery)
+      providerLifecycleAbort.abort()
+    }
+    socket.once('close', abortProviderOperations)
     try {
       const hello = await receiveStrict(connection, MachineHelloMessageSchema)
       const currentTrust = this.state.controllerByFingerprint(
@@ -673,7 +703,46 @@ export class CodeTetherNodeService extends EventEmitter {
               'Provider discovery request did not match durable Node identity',
             )
           }
-          const discovery = await this.#providerDetector.discover()
+          const requestAbort = new AbortController()
+          const deadline = armAbortDeadline(
+            requestAbort,
+            machineTransportLimits.providerLifecycleDiscoveryWorkTimeoutMs,
+          )
+          const signal = AbortSignal.any([
+            providerLifecycleAbort.signal,
+            requestAbort.signal,
+          ])
+          let discovery
+          try {
+            discovery = await this.#providerDetector.discover(signal)
+          } catch (error) {
+            // A lifecycle timeout can initiate exact Provider-child cleanup,
+            // but inability to verify that cleanup is the stronger result.
+            // Preserve the permanent ownership barrier through the wire rather
+            // than replacing it with an ordinary retryable probe timeout.
+            if (isProviderOwnedProcessCleanupError(error)) {
+              await sendSafeError(connection, error)
+              continue
+            }
+            if (deadline.expired() && !providerLifecycleAbort.signal.aborted) {
+              await sendSafeError(
+                connection,
+                new MachineTransportError(
+                  'provider_start_failed',
+                  'Remote Provider lifecycle check timed out',
+                  {
+                    cause: error,
+                    peerAuthenticated: true,
+                    failureReason: 'provider_start_failed',
+                  },
+                ),
+              )
+              continue
+            }
+            throw error
+          } finally {
+            deadline.clear()
+          }
           await connection.send({
             type: 'providers.described',
             protocolVersion: machineProtocolVersion,
@@ -773,7 +842,9 @@ export class CodeTetherNodeService extends EventEmitter {
               'Remote Codex request did not match durable Node identity',
             )
           }
-          const discovery = await this.#providerDetector.discover()
+          const discovery = await this.#providerDetector.discover(
+            providerLifecycleAbort.signal,
+          )
           assertRemoteCodexExecutionAdmission(discovery)
           await this.#serveRemoteCodexSession(
             connection,
@@ -792,7 +863,9 @@ export class CodeTetherNodeService extends EventEmitter {
               'Remote Claude request did not match durable Node identity',
             )
           }
-          const discovery = await this.#providerDetector.discover()
+          const discovery = await this.#providerDetector.discover(
+            providerLifecycleAbort.signal,
+          )
           assertRemoteClaudeExecutionAdmission(discovery)
           await this.#serveRemoteClaudeSession(
             connection,
@@ -825,11 +898,19 @@ export class CodeTetherNodeService extends EventEmitter {
         return
       }
     } catch (error) {
-      if (!connection.closed) await sendSafeError(connection, error)
+      const cleanupFailure = providerOwnedProcessCleanupFailure(error)
+      if (!connection.closed) {
+        try {
+          await sendSafeError(connection, cleanupFailure ?? error)
+        } catch (sendError) {
+          if (cleanupFailure === undefined) throw sendError
+        }
+      }
       connection.destroy()
+      if (cleanupFailure !== undefined) throw cleanupFailure
     } finally {
-      providerSessionDiscoveryAbort.abort()
-      socket.off('close', abortProviderSessionDiscovery)
+      abortProviderOperations()
+      socket.off('close', abortProviderOperations)
       this.#untrackAuthenticatedConnection(trusted.controllerId, socket)
     }
   }
@@ -1542,6 +1623,12 @@ async function sendSafeError(
 }
 
 function canonicalFailureForWire(error: unknown): CanonicalFailure | undefined {
+  if (providerOwnedProcessCleanupFailure(error) !== undefined) {
+    return canonicalFailure(
+      'execution_ownership_uncertain',
+      new Date().toISOString(),
+    )
+  }
   if (
     !(error instanceof MachineTransportError) ||
     !isCanonicalFailureReason(error.failureReason)
@@ -1552,11 +1639,47 @@ function canonicalFailureForWire(error: unknown): CanonicalFailure | undefined {
 }
 
 function wireErrorCode(error: unknown): MachineWireErrorCode {
+  if (providerOwnedProcessCleanupFailure(error) !== undefined) {
+    return 'provider_start_failed'
+  }
   if (!(error instanceof MachineTransportError)) return 'authentication_failed'
   if (error.code === 'connection_failed' || error.code === 'timeout') {
     return 'authentication_failed'
   }
   return error.code
+}
+
+function isProviderOwnedProcessCleanupError(
+  error: unknown,
+): error is ClaudeCodeOwnedProcessCleanupError | CodexOwnedProcessCleanupError {
+  return (
+    error instanceof ClaudeCodeOwnedProcessCleanupError ||
+    error instanceof CodexOwnedProcessCleanupError
+  )
+}
+
+function providerOwnedProcessCleanupFailure(
+  error: unknown,
+  visited = new Set<object>(),
+):
+  | ClaudeCodeOwnedProcessCleanupError
+  | CodexOwnedProcessCleanupError
+  | undefined {
+  if (isProviderOwnedProcessCleanupError(error)) return error
+  if (typeof error !== 'object' || error === null || visited.has(error)) {
+    return undefined
+  }
+  visited.add(error)
+  if (error instanceof AggregateError) {
+    for (const nested of error.errors) {
+      const failure = providerOwnedProcessCleanupFailure(nested, visited)
+      if (failure !== undefined) return failure
+    }
+  }
+  return providerOwnedProcessCleanupFailure(
+    (error as { readonly cause?: unknown }).cause,
+    visited,
+  )
 }
 
 function isProjectLocationValidationError(

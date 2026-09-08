@@ -18,7 +18,7 @@ import {
   MAX_CODEX_STORED_THREAD_ID_CODE_UNITS,
   MAX_CODEX_STORED_THREAD_PAGE_SIZE,
 } from './client.js'
-import { CodexProtocolError } from './errors.js'
+import { CodexOwnedProcessCleanupError, CodexProtocolError } from './errors.js'
 import type { RemoteCodexProcessFactory } from './process.js'
 import type { CodexStoredThread, CodexStoredThreadPage } from './protocol.js'
 
@@ -69,6 +69,7 @@ export class CodexSessionDiscovery implements ProviderSessionDiscovery {
   readonly #clientFactory: CodexSessionMetadataClientFactory
   readonly #canonicalizePath: (path: string) => Promise<string>
   readonly #providerVersion?: string
+  #cleanupFailure?: CodexOwnedProcessCleanupError
 
   constructor(options: CodexSessionDiscoveryOptions = {}) {
     if (options.codexHome !== undefined && !isAbsolute(options.codexHome)) {
@@ -83,6 +84,7 @@ export class CodexSessionDiscovery implements ProviderSessionDiscovery {
   async discover(
     request: ProviderSessionDiscoveryRequest,
   ): Promise<ProviderSessionDiscoveryPage> {
+    this.#assertCleanupVerified()
     const startedAt = performance.now()
     assertDiscoveryRequest(request)
     throwIfAborted(request.signal)
@@ -94,6 +96,9 @@ export class CodexSessionDiscovery implements ProviderSessionDiscovery {
         request.signal,
       )
     } catch (error) {
+      if (error instanceof CodexOwnedProcessCleanupError) {
+        throw this.#latchCleanupFailure(error)
+      }
       if (isAbortError(error)) throw error
       return this.#failurePage(startedAt, 'provider_session_store_unreadable')
     }
@@ -170,6 +175,9 @@ export class CodexSessionDiscovery implements ProviderSessionDiscovery {
         },
       }
     } catch (error) {
+      if (error instanceof CodexOwnedProcessCleanupError) {
+        throw this.#latchCleanupFailure(error)
+      }
       if (isAbortError(error)) throw error
       return this.#failurePage(startedAt, failureReason(error))
     }
@@ -178,6 +186,7 @@ export class CodexSessionDiscovery implements ProviderSessionDiscovery {
   async validateCandidate(
     request: ProviderSessionCandidateValidationRequest,
   ): Promise<NativeProviderSessionCandidate | undefined> {
+    this.#assertCleanupVerified()
     assertValidationRequest(request)
     throwIfAborted(request.signal)
 
@@ -205,6 +214,9 @@ export class CodexSessionDiscovery implements ProviderSessionDiscovery {
       const candidate = candidateFromThread(thread, canonicalThreadRoot)
       return candidate.revision === request.revision ? candidate : undefined
     } catch (error) {
+      if (error instanceof CodexOwnedProcessCleanupError) {
+        throw this.#latchCleanupFailure(error)
+      }
       if (isAbortError(error)) throw error
       return undefined
     }
@@ -236,16 +248,46 @@ export class CodexSessionDiscovery implements ProviderSessionDiscovery {
     } catch (error) {
       // If cancellation wins while initialization is in flight, wait for the
       // bounded launch and close the exact resulting child before returning.
-      const lateClient = await clientPromise.catch(() => undefined)
-      if (lateClient !== undefined) await lateClient.shutdown()
+      let lateClient: CodexSessionMetadataClient | undefined
+      try {
+        lateClient = await clientPromise
+      } catch (lateError) {
+        if (lateError instanceof CodexOwnedProcessCleanupError) {
+          throw this.#latchCleanupFailure(lateError)
+        }
+      }
+      if (lateClient !== undefined) await this.#shutdownClient(lateClient)
       throw error
     }
 
     try {
       return await raceWithAbort(operation(client), signal)
     } finally {
-      await client.shutdown()
+      await this.#shutdownClient(client)
     }
+  }
+
+  async #shutdownClient(client: CodexSessionMetadataClient): Promise<void> {
+    try {
+      await client.shutdown()
+    } catch (error) {
+      throw this.#latchCleanupFailure(
+        error instanceof CodexOwnedProcessCleanupError
+          ? error
+          : new CodexOwnedProcessCleanupError({ cause: error }),
+      )
+    }
+  }
+
+  #assertCleanupVerified(): void {
+    if (this.#cleanupFailure !== undefined) throw this.#cleanupFailure
+  }
+
+  #latchCleanupFailure(
+    error: CodexOwnedProcessCleanupError,
+  ): CodexOwnedProcessCleanupError {
+    this.#cleanupFailure ??= error
+    return this.#cleanupFailure
   }
 
   #failurePage(

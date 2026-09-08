@@ -10,6 +10,7 @@ import {
   CLAUDE_CODE_CAPABILITIES,
   CLAUDE_CODE_EFFORT_LEVELS,
   CLAUDE_CODE_TESTED_VERSION,
+  ClaudeCodeOwnedProcessCleanupError,
   ClaudeCodeSessionRuntime,
   type ClaudeCodeAvailableDetection,
   type ClaudeCodeEffort,
@@ -55,6 +56,8 @@ export class ClaudeCodeHostRuntime implements AgentHostRuntime {
   readonly #failureListeners = new Set<(failure: Error) => void>()
   readonly #terminalTurns = new Set<string>()
   #closed = false
+  #closePromise?: Promise<void>
+  #cleanupFailure?: ClaudeCodeOwnedProcessCleanupError
 
   constructor(
     detection: ClaudeCodeAvailableDetection,
@@ -177,6 +180,9 @@ export class ClaudeCodeHostRuntime implements AgentHostRuntime {
     })
     void completion
       .catch((error: unknown) => {
+        if (error instanceof ClaudeCodeOwnedProcessCleanupError) {
+          this.#cleanupFailure ??= error
+        }
         if (this.#terminalTurns.has(providerTurnId) || this.#closed) return
         const timestamp = new Date().toISOString()
         const failureReason = safeProviderFailureReason(error)
@@ -206,21 +212,49 @@ export class ClaudeCodeHostRuntime implements AgentHostRuntime {
   }): Promise<void> {
     const session = this.#sessions.get(options.providerThreadId)
     if (session === undefined) return
+    try {
+      await session.close()
+    } catch (error) {
+      if (error instanceof ClaudeCodeOwnedProcessCleanupError) {
+        this.#cleanupFailure ??= error
+      }
+      throw error
+    }
     this.#sessions.delete(options.providerThreadId)
-    await session.close()
   }
 
   async close(): Promise<void> {
-    if (this.#closed) return
+    this.#closePromise ??= this.#closeOwnedSessions()
+    await this.#closePromise
+  }
+
+  async #closeOwnedSessions(): Promise<void> {
+    if (this.#closed) {
+      if (this.#cleanupFailure !== undefined) throw this.#cleanupFailure
+      return
+    }
     this.#closed = true
     const sessions = [...this.#sessions.values()]
-    this.#sessions.clear()
-    await Promise.allSettled(
+    const results = await Promise.allSettled(
       sessions.map(async (session) => await session.close()),
     )
+    const cleanupFailure = results.find(
+      (result): result is PromiseRejectedResult =>
+        result.status === 'rejected' &&
+        result.reason instanceof ClaudeCodeOwnedProcessCleanupError,
+    )?.reason
+    if (cleanupFailure !== undefined) {
+      this.#cleanupFailure = cleanupFailure
+    }
+    this.#sessions.clear()
     this.#eventListeners.clear()
     this.#failureListeners.clear()
     this.#terminalTurns.clear()
+    if (this.#cleanupFailure !== undefined) throw this.#cleanupFailure
+    const otherFailure = results.find(
+      (result): result is PromiseRejectedResult => result.status === 'rejected',
+    )?.reason
+    if (otherFailure !== undefined) throw otherFailure
   }
 
   #installSession(session: ClaudeCodeSessionRuntime): void {
@@ -243,6 +277,7 @@ export class ClaudeCodeHostRuntime implements AgentHostRuntime {
   }
 
   #assertOpen(): void {
+    if (this.#cleanupFailure !== undefined) throw this.#cleanupFailure
     if (this.#closed) throw new Error('Claude Code runtime is closed')
   }
 }

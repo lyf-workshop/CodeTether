@@ -1,4 +1,15 @@
 fn main() {
+    #[cfg(unix)]
+    if std::env::args().nth(1).as_deref() == Some("--test-auto-reap") {
+        unsafe {
+            libc::signal(libc::SIGCHLD, libc::SIG_IGN);
+        }
+        assert!(
+            codetether_posix_supervisor::OwnedGroup::spawn(&mut std::process::Command::new("true"))
+                .is_err()
+        );
+        return;
+    }
     if std::env::args().nth(1).as_deref() == Some("--port") {
         use std::io::BufRead;
         for line in std::io::stdin().lock().lines() {

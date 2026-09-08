@@ -22,6 +22,19 @@ pub struct OwnedGroup {
 
 impl OwnedGroup {
     pub fn spawn(command: &mut Command) -> io::Result<Self> {
+        unsafe {
+            let mut disposition: libc::sigaction = std::mem::zeroed();
+            if libc::sigaction(libc::SIGCHLD, std::ptr::null(), &mut disposition) != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            if disposition.sa_sigaction != libc::SIG_DFL
+                || disposition.sa_flags & libc::SA_NOCLDWAIT != 0
+            {
+                return Err(io::Error::other(
+                    "owned groups require exclusive child reaping",
+                ));
+            }
+        }
         // Applied in the child before exec; never assign an arbitrary live PID.
         command.process_group(0);
         Ok(Self {
@@ -57,6 +70,12 @@ impl OwnedGroup {
     }
 
     pub fn finish(&mut self) -> io::Result<i32> {
+        // If another reaper ever broke the reservation, fail closed instead of
+        // signalling a numeric ID that could now belong to another launch.
+        if let Err(error) = self.exited() {
+            self.child.take();
+            return Err(error);
+        }
         let Some(mut child) = self.child.take() else {
             return Ok(0);
         };
@@ -95,6 +114,21 @@ impl Drop for OwnedGroup {
 pub fn guardian_entry() -> Option<i32> {
     let mut arguments = std::env::args().skip(1);
     let argument = arguments.next();
+    if matches!(
+        argument.as_deref(),
+        Some(GUARDIAN_ARGUMENT | PROBE_ARGUMENT)
+    ) {
+        // An inherited SIG_IGN/SA_NOCLDWAIT would auto-reap the group leader.
+        // This is a private, pre-Tauri process; it owns all its child waits.
+        unsafe {
+            let mut disposition: libc::sigaction = std::mem::zeroed();
+            disposition.sa_sigaction = libc::SIG_DFL;
+            libc::sigemptyset(&mut disposition.sa_mask);
+            if libc::sigaction(libc::SIGCHLD, &disposition, std::ptr::null_mut()) != 0 {
+                return Some(1);
+            }
+        }
+    }
     if argument.as_deref() == Some(PROBE_ARGUMENT) && arguments.next().is_none() {
         return Some(run_probe_guardian().unwrap_or(1));
     }

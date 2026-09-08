@@ -40,6 +40,9 @@ The guardian observes owner-pipe EOF even after hard Desktop termination.
 The leader is observed using `waitid(WNOWAIT)` and is not reaped before the final
 group signal. This reserves the group identity across normal leader exit, avoids
 PID-reuse targeting, and makes consumed guards unable to signal later launches.
+Exclusive child-reaping policy is checked before spawn; private guardians reset
+inherited SIGCHLD auto-reaping. Loss of the reservation fails closed without a
+numeric group signal. The inherited-auto-reap failure has a deterministic regression.
 Graceful shutdown has a 12-second bound, followed by group termination and a
 bounded two-second exit observation. No shell kill, process-name matching, or
 arbitrary PID assignment is exposed. Automated tests cover normal exit,

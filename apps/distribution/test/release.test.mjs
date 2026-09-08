@@ -10,7 +10,7 @@ import {
   sha256,
   scanReleaseContents,
 } from '../src/release.mjs'
-import { assertNativeTarget } from '../src/build.mjs'
+import { assertNativeTarget, reserveArtifact } from '../src/build.mjs'
 
 const identity = { version: '0.1.0-alpha.0', commit: 'a'.repeat(40) }
 const descriptor = {
@@ -20,6 +20,13 @@ const descriptor = {
   artifactType: 'tar.gz',
   signingState: 'unsigned',
 }
+
+test('repeated release attempts cannot overwrite historical artifact bytes', async (t) => {
+  const { artifact } = await fixture(t)
+  const before = await sha256(artifact)
+  await assert.rejects(reserveArtifact(artifact), /EEXIST/u)
+  assert.equal(await sha256(artifact), before)
+})
 
 async function fixture(t) {
   const directory = await mkdtemp(join(tmpdir(), 'codetether-release-test-'))

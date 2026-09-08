@@ -141,6 +141,17 @@ fn sleeper() -> OwnedGroup {
 }
 
 #[test]
+fn auto_reaping_cannot_invalidate_the_ownership_reservation() {
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_codetether-supervision-test"))
+            .arg("--test-auto-reap")
+            .status()
+            .unwrap()
+            .success()
+    );
+}
+
+#[test]
 fn normal_exit_is_observed_without_reaping() {
     let mut owned = OwnedGroup::spawn(&mut Command::new("true")).unwrap();
     let deadline = Instant::now() + Duration::from_secs(2);

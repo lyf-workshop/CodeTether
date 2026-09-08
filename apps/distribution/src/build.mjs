@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process'
+import { constants } from 'node:fs'
 import {
   copyFile,
   mkdir,
@@ -8,12 +9,18 @@ import {
   rm,
   readFile,
   chmod,
+  open,
 } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
 import { artifactFilename, scanReleaseContents, sha256 } from './release.mjs'
 import { buildIdentity, repository } from './identity.mjs'
+
+export async function reserveArtifact(path) {
+  const handle = await open(path, 'wx', 0o600)
+  await handle.close()
+}
 
 export function assertNativeTarget(
   platform,
@@ -91,7 +98,11 @@ async function main() {
       }
       const filename = artifactFilename(descriptor, identity.version)
       const destination = join(directory, filename)
-      await copyFile(join(bundle, matches[0]), destination)
+      await copyFile(
+        join(bundle, matches[0]),
+        destination,
+        constants.COPYFILE_EXCL,
+      )
       await writeFile(
         `${destination}.build.json`,
         `${JSON.stringify({ ...descriptor, ...identity, sha256: await sha256(destination), classification: 'BUILD ONLY', installedValidation: 'NOT OBSERVED' }, null, 2)}\n`,
@@ -130,85 +141,89 @@ async function main() {
   )
     throw new Error('Native artifact identity mismatch')
   const staging = await mkdtemp(join(tmpdir(), 'codetether-distribution-'))
-  await copyFile(source, join(staging, 'codetether-node'))
-  const target = `${platform === 'macos' ? 'Darwin' : 'Linux'}/${architecture === 'x64' ? 'x86_64' : platform === 'macos' ? 'arm64' : 'aarch64'}`
-  const installer = (
-    await readFile(
-      new URL('../assets/install-node.sh', import.meta.url),
-      'utf8',
+  try {
+    await copyFile(source, join(staging, 'codetether-node'))
+    const target = `${platform === 'macos' ? 'Darwin' : 'Linux'}/${architecture === 'x64' ? 'x86_64' : platform === 'macos' ? 'arm64' : 'aarch64'}`
+    const installer = (
+      await readFile(
+        new URL('../assets/install-node.sh', import.meta.url),
+        'utf8',
+      )
     )
-  )
-    .replace('@NATIVE_TARGET@', target)
-    .replace('@NODE_SHA256@', await sha256(source))
-  await writeFile(join(staging, 'install.sh'), installer, { mode: 0o700 })
-  await chmod(join(staging, 'codetether-node'), 0o700)
-  await writeFile(
-    join(staging, 'INSTALL.txt'),
-    'Run ./codetether-node service install as the intended non-root user.\nUse service start|stop|restart|status|uninstall. Uninstall retains durable identity.\nSee docs/PHASE8D-CROSS-PLATFORM-DISTRIBUTION.md for pairing, endpoint-local configuration, and Alpha limitations.\n',
-  )
-  await writeFile(
-    join(staging, 'build.json'),
-    `${JSON.stringify({ version: identity.version, commit: identity.commit, platform, architecture })}\n`,
-  )
-  const privacy = await scanReleaseContents(staging, [
-    'CODETETHER_SYNTHETIC_RELEASE_SECRET_8D',
-  ])
-  const descriptor = {
-    component,
-    platform,
-    architecture,
-    artifactType: 'tar.gz',
-    signingState: 'not-observed',
+      .replace('@NATIVE_TARGET@', target)
+      .replace('@NODE_SHA256@', await sha256(source))
+    await writeFile(join(staging, 'install.sh'), installer, { mode: 0o700 })
+    await chmod(join(staging, 'codetether-node'), 0o700)
+    await writeFile(
+      join(staging, 'INSTALL.txt'),
+      'After verifying the archive checksum, run ./install.sh as the intended non-root user. It verifies architecture and the Node checksum before installation.\nUse service start|stop|restart|status|uninstall. Uninstall retains durable identity.\nSee docs/PHASE8D-CROSS-PLATFORM-DISTRIBUTION.md for pairing, endpoint-local configuration, and Alpha limitations.\n',
+    )
+    await writeFile(
+      join(staging, 'build.json'),
+      `${JSON.stringify({ version: identity.version, commit: identity.commit, platform, architecture })}\n`,
+    )
+    const privacy = await scanReleaseContents(staging, [
+      'CODETETHER_SYNTHETIC_RELEASE_SECRET_8D',
+    ])
+    const descriptor = {
+      component,
+      platform,
+      architecture,
+      artifactType: 'tar.gz',
+      signingState: 'not-observed',
+    }
+    const filename = artifactFilename(descriptor, identity.version)
+    const archive = join(directory, filename)
+    await reserveArtifact(archive)
+    // Fixed allowlist, no repository tree, dotfiles, Provider installations, or
+    // developer environment are packaged. Never recursively archive the cwd.
+    execFileSync(
+      'tar',
+      [
+        '-czf',
+        archive,
+        '-C',
+        staging,
+        'codetether-node',
+        'install.sh',
+        'INSTALL.txt',
+        'build.json',
+      ],
+      { timeout: 60_000 },
+    )
+    await writeFile(
+      join(directory, `${filename}.receipt.json`),
+      `${JSON.stringify(
+        {
+          ...descriptor,
+          ...identity,
+          sha256: await sha256(archive),
+          launchSmoke: 'PASS',
+          privacy: privacy.status,
+          classification: 'BUILD ONLY',
+          serviceLifecycle: 'NOT OBSERVED',
+        },
+        null,
+        2,
+      )}\n`,
+      { flag: 'wx' },
+    )
+    await writeFile(
+      join(directory, `${filename}.descriptor.json`),
+      `${JSON.stringify([descriptor], null, 2)}\n`,
+      { flag: 'wx' },
+    )
+    process.stdout.write(
+      `${filename}: native CLI smoke passed; service/REAL platform validation pending.\n`,
+    )
+  } finally {
+    if (
+      dirname(staging) !== resolve(tmpdir()) ||
+      !basename(staging).startsWith('codetether-distribution-')
+    )
+      throw new Error('Unexpected staging cleanup path')
+    await rm(staging, { recursive: true })
   }
-  const filename = artifactFilename(descriptor, identity.version)
-  const archive = join(directory, filename)
-  // Fixed allowlist, no repository tree, dotfiles, Provider installations, or
-  // developer environment are packaged. Never recursively archive the cwd.
-  execFileSync(
-    'tar',
-    [
-      '-czf',
-      archive,
-      '-C',
-      staging,
-      'codetether-node',
-      'install.sh',
-      'INSTALL.txt',
-      'build.json',
-    ],
-    { timeout: 60_000 },
-  )
-  await writeFile(
-    join(directory, `${filename}.receipt.json`),
-    `${JSON.stringify(
-      {
-        ...descriptor,
-        ...identity,
-        sha256: await sha256(archive),
-        launchSmoke: 'PASS',
-        privacy: privacy.status,
-        classification: 'BUILD ONLY',
-        serviceLifecycle: 'NOT OBSERVED',
-      },
-      null,
-      2,
-    )}\n`,
-    { flag: 'wx' },
-  )
-  await writeFile(
-    join(directory, `${filename}.descriptor.json`),
-    `${JSON.stringify([descriptor], null, 2)}\n`,
-    { flag: 'wx' },
-  )
-  process.stdout.write(
-    `${filename}: native CLI smoke passed; service/REAL platform validation pending.\n`,
-  )
-  if (
-    dirname(staging) !== resolve(tmpdir()) ||
-    !basename(staging).startsWith('codetether-distribution-')
-  )
-    throw new Error('Unexpected staging cleanup path')
-  await rm(staging, { recursive: true })
 }
 
 if (

@@ -10,12 +10,7 @@ import {
 } from '../dist/service-installation.js'
 
 test('user units serialize absolute paths without shell interpolation or secrets', () => {
-  const paths = servicePaths(
-    'linux',
-    process.platform === 'win32'
-      ? 'C:\\Test User\\项目'
-      : '/home/Test User/项目',
-  )
+  const paths = servicePaths('linux', '/home/Test User/项目')
   paths.executable += '$%"<>&'
   const unit = generateService('linux', paths)
   assert.match(unit, /ExecStart="/u)
@@ -35,6 +30,23 @@ test('user units serialize absolute paths without shell interpolation or secrets
   assert.throws(() =>
     generateService('darwin', { ...paths, data: '/tmp/bad\npath' }),
   )
+})
+
+test('service paths use POSIX target semantics on a Windows builder', () => {
+  const paths = servicePaths('darwin', '/Users/Test User/项目')
+  assert.equal(
+    paths.data,
+    '/Users/Test User/项目/Library/Application Support/CodeTether/Node/state',
+  )
+  assert.equal(
+    paths.registration,
+    '/Users/Test User/项目/Library/LaunchAgents/com.codetether.node.plist',
+  )
+  assert.equal(
+    servicePaths('linux', '/home/Test').registration,
+    '/home/Test/.config/systemd/user/codetether-node.service',
+  )
+  assert.throws(() => servicePaths('linux', 'C:\\Users\\Test'), /absolute/u)
 })
 test(
   'installation rejects symlink targets without touching preserved state',

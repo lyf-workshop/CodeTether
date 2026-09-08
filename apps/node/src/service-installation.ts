@@ -13,7 +13,7 @@ import {
 import { homedir } from 'node:os'
 import { isSea } from 'node:sea'
 import { resolveNodeDataDirectory } from './data-directory.js'
-import { dirname, isAbsolute, join, parse } from 'node:path'
+import { dirname, join, parse, posix } from 'node:path'
 
 export type ServicePlatform = 'linux' | 'darwin'
 const label = 'com.codetether.node'
@@ -22,7 +22,7 @@ const marker = 'CodeTether owned user service; durable state is retained'
 
 function safePath(value: string): string {
   if (
-    !isAbsolute(value) ||
+    !posix.isAbsolute(value) ||
     [...value].some(
       (character) =>
         character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127,
@@ -34,6 +34,7 @@ function safePath(value: string): string {
 
 export function servicePaths(platform: ServicePlatform, home: string) {
   safePath(home)
+  const join = posix.join
   const application =
     platform === 'darwin'
       ? join(home, 'Library', 'Application Support', 'CodeTether', 'Node')

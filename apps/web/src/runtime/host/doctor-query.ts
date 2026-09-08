@@ -28,7 +28,9 @@ export function doctorQueryOptions(
     queryFn: async ({ signal }) =>
       (
         await client.getDoctor({
-          ...(projectId === undefined ? {} : { projectId }),
+          // A plain remote projection intentionally has no current folder fact.
+          // Validate the selected context without refreshing Provider metadata.
+          ...(projectId === undefined ? {} : { projectId, check: true }),
           signal,
         })
       ).doctor,

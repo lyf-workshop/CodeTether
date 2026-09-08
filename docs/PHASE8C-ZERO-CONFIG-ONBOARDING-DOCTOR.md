@@ -322,6 +322,14 @@ Machine trust, transport bounds, execution authorization, and explicit lifecycle
 refresh semantics are unchanged. No Provider work is started and no last-known
 backend state is promoted to current.
 
+Closure also reproduced loss of the checked remote-folder projection when moving
+from Ready to Doctor: the plain Host read intentionally reports remote access as
+unknown, because a separate earlier check is not current authority. Contextual
+Doctor queries now request the existing bounded `check=true` read for the exact
+selected Project. Global reads remain metadata-only. Concurrent queries coalesce;
+opening Doctor does not refresh Provider installations or backend observations,
+start inference, or introduce polling. No stale folder result is cached as truth.
+
 Installed validation found that the legacy local Codex execution App Server was
 started eagerly while assembling lifecycle metadata. Phase 8C defers that exact
 execution runtime until an admitted native conversation create/resume needs it.

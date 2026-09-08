@@ -208,7 +208,40 @@ test('Doctor queries isolate global and Project context and forward cancellation
   assert.deepEqual(Object.keys(calls[0]), ['signal'])
   assert.ok(calls[0].signal instanceof AbortSignal)
   assert.equal(calls[1].projectId, 'proj_onboarding01')
+  assert.equal(calls[1].check, true)
   assert.ok(calls[1].signal instanceof AbortSignal)
+})
+
+test('contextual Doctor opening validates the exact folder once without Provider refresh or inference', async () => {
+  const pending = Promise.withResolvers()
+  const calls = []
+  const client = {
+    getDoctor(options) {
+      calls.push(options)
+      return pending.promise
+    },
+    refreshMachineProviders() {
+      assert.fail('Opening Doctor must not refresh Provider observations')
+    },
+    startTurn() {
+      assert.fail('Opening Doctor must not start inference')
+    },
+  }
+  const queryClient = createQueryClient()
+  const options = doctorQueryOptions(client, 'proj_onboarding01')
+  const reads = Array.from({ length: 100 }, () =>
+    queryClient.fetchQuery(options),
+  )
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].projectId, 'proj_onboarding01')
+  assert.equal(calls[0].check, true)
+  assert.equal(options.retry, false)
+  assert.equal(options.refetchInterval, undefined)
+  const report = doctorReport()
+  pending.resolve({ protocolVersion: 1, doctor: report })
+  for (const result of await Promise.all(reads))
+    assert.strictEqual(result, report)
+  queryClient.clear()
 })
 
 function createQueryClient() {

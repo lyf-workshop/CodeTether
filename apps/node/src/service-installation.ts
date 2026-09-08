@@ -13,7 +13,7 @@ import {
 import { homedir } from 'node:os'
 import { isSea } from 'node:sea'
 import { resolveNodeDataDirectory } from './data-directory.js'
-import { dirname, join, parse, posix } from 'node:path'
+import { dirname, parse, posix } from 'node:path'
 
 export type ServicePlatform = 'linux' | 'darwin'
 const label = 'com.codetether.node'

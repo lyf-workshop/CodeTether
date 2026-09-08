@@ -141,6 +141,11 @@ async function main() {
   )
     throw new Error('Native artifact identity mismatch')
   const staging = await mkdtemp(join(tmpdir(), 'codetether-distribution-'))
+  if (
+    dirname(staging) !== resolve(tmpdir()) ||
+    !basename(staging).startsWith('codetether-distribution-')
+  )
+    throw new Error('Unexpected staging cleanup path')
   try {
     await copyFile(source, join(staging, 'codetether-node'))
     const target = `${platform === 'macos' ? 'Darwin' : 'Linux'}/${architecture === 'x64' ? 'x86_64' : platform === 'macos' ? 'arm64' : 'aarch64'}`
@@ -217,11 +222,6 @@ async function main() {
       `${filename}: native CLI smoke passed; service/REAL platform validation pending.\n`,
     )
   } finally {
-    if (
-      dirname(staging) !== resolve(tmpdir()) ||
-      !basename(staging).startsWith('codetether-distribution-')
-    )
-      throw new Error('Unexpected staging cleanup path')
     await rm(staging, { recursive: true })
   }
 }

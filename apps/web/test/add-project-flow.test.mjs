@@ -11,6 +11,12 @@ test('one Add Project dialog owns Desktop picker and Browser path fallback', asy
 
   assert.match(source, /directoryPicker = nativeCapabilities\.directoryPicker/u)
   assert.match(source, /directoryPicker\.available \? \(/u)
+  assert.match(
+    source,
+    /directoryPicker\.available \? \(\s*<span className="text-sm font-medium text-text-primary">/u,
+  )
+  assert.match(source, /<label\s+htmlFor="add-project-path"/u)
+  assert.doesNotMatch(source, /htmlFor=\{\s*directoryPicker\.available/u)
   assert.match(source, /id="add-project-directory-picker"/u)
   assert.match(source, /id="add-project-path"/u)
   assert.match(source, /\u9009\u62e9\u6587\u4ef6\u5939|选择文件夹/u)

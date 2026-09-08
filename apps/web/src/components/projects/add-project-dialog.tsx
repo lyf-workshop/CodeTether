@@ -289,16 +289,18 @@ export function AddProjectDialog({
 
             <div className="mt-5 min-w-0 space-y-4">
               <div className="min-w-0">
-                <label
-                  htmlFor={
-                    directoryPicker.available
-                      ? 'add-project-directory-picker'
-                      : 'add-project-path'
-                  }
-                  className="text-sm font-medium text-text-primary"
-                >
-                  项目目录
-                </label>
+                {directoryPicker.available ? (
+                  <span className="text-sm font-medium text-text-primary">
+                    项目目录
+                  </span>
+                ) : (
+                  <label
+                    htmlFor="add-project-path"
+                    className="text-sm font-medium text-text-primary"
+                  >
+                    项目目录
+                  </label>
+                )}
                 <p
                   id="add-project-path-description"
                   className="mt-1 text-xs font-regular text-text-muted"

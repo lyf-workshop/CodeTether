@@ -147,6 +147,15 @@ Ready summarizes only the facts necessary to begin:
 
 Onboarding completion requires no test Prompt. It persists only flow completion and does not suppress future real lifecycle or connectivity changes. Setup remains safely reopenable from Settings without resetting Projects, Conversations, Provider authentication, Machine trust, selected installations, native bindings, or Relay enrollment.
 
+On entry to Ready, CodeTether revalidates the exact ProjectLocation and reads
+current authoritative Provider facts without automatically repeating installation
+detection. Installed remote validation showed that the redundant metadata scan
+demoted newly successful backend observations to last-known, as Phase 8B correctly
+requires for a metadata-only check. The Ready transition now preserves that frozen
+freshness rule by avoiding the redundant scan, not by treating stale health as
+current. Explicit Check Again and remote Project selection still refresh Providers;
+unknown or last-known backend readiness still cannot become Ready by itself.
+
 ## Add another computer
 
 The guided remote flow uses product language:

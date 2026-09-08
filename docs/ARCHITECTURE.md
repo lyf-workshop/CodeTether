@@ -1193,6 +1193,13 @@ Phase 8B migration 016 (`provider_lifecycle`) adds a bounded current lifecycle g
 
 Phase 8C migration 017 (`onboarding_progress`) adds only one durable setup-flow singleton. It stores the flow version, current step, monotonic revision, optional Project/Machine context, optional previous-conversation and remote-setup dispositions, one bounded last action identity, and timestamps. It stores no readiness result, Provider installation or backend state, Project path/name, pairing/Relay secret, native-session identity, Prompt, or output. Existing product state is preserved and initialized as completed without launching a Provider; fresh state begins at Welcome.
 
+Entering the onboarding Ready step revalidates the exact ProjectLocation and
+composes current Provider lifecycle facts without another automatic installation
+scan. Under frozen Phase 8B semantics a metadata-only scan retains known backend
+health as last-known; it cannot re-check an AI service. Avoiding that redundant
+scan preserves a current observation established by normal execution without
+promoting unknown or stale evidence. Explicit Check Again still refreshes facts.
+
 ## Event Streaming
 
 The verified runtime is event-driven:

@@ -389,6 +389,22 @@ test('setup and Doctor compose existing bounded operations without inference or 
   )
 })
 
+test('entering Ready revalidates the project without downgrading backend observations through a redundant metadata scan', () => {
+  const setup = source('../src/components/onboarding/onboarding-page.tsx')
+  assert.match(setup, /refreshProviderFacts = true/u)
+  assert.match(
+    setup,
+    /const refresh = refreshProviderFacts\s*\? await refreshMachinesBounded/u,
+  )
+  assert.match(setup, /void checkSelectedContext\(onboarding, false\)/u)
+  assert.match(
+    setup,
+    /onCheckSelectedContext=\{\(\) =>\s*void checkSelectedContext\(onboarding\)/u,
+  )
+  assert.match(setup, /runtime\.getDoctor\(\{\s*projectId,\s*check: true/u)
+  assert.doesNotMatch(setup, /backend\.(?:freshness|readiness)\s*=(?!=)/u)
+})
+
 test('routing and settings expose setup and permanent Doctor access', () => {
   const router = source('../src/router.tsx')
   const shell = source('../src/components/app-shell/app-shell.tsx')

@@ -167,7 +167,10 @@ export function OnboardingPage() {
   }
 
   const checkSelectedContext = useCallback(
-    (progress: OnboardingProgress): Promise<void> => {
+    (
+      progress: OnboardingProgress,
+      refreshProviderFacts = true,
+    ): Promise<void> => {
       if (
         progress.projectId === undefined ||
         progress.machineId === undefined
@@ -189,21 +192,21 @@ export function OnboardingPage() {
             const remote = currentDoctor?.remoteComputers.find(
               (machine) => machine.machineId === machineId,
             )
-            const refresh = await refreshMachinesBounded(
-              [machineId],
-              async (machineId) => {
-                if (
-                  machineId !== currentDoctor?.thisComputer.machineId &&
-                  remote?.connectionState !== 'online'
-                ) {
-                  const retry = await runtime.retryMachineConnection(machineId)
-                  if (retry.data.machine.connectionState !== 'online') {
-                    throw new Error('remote_machine_not_online')
+            const refresh = refreshProviderFacts
+              ? await refreshMachinesBounded([machineId], async (machineId) => {
+                  if (
+                    machineId !== currentDoctor?.thisComputer.machineId &&
+                    remote?.connectionState !== 'online'
+                  ) {
+                    const retry =
+                      await runtime.retryMachineConnection(machineId)
+                    if (retry.data.machine.connectionState !== 'online') {
+                      throw new Error('remote_machine_not_online')
+                    }
                   }
-                }
-                await runtime.refreshMachineProviders(machineId)
-              },
-            )
+                  await runtime.refreshMachineProviders(machineId)
+                })
+              : { failedMachineIds: [] }
             const response = await runtime.getDoctor({
               projectId,
               check: true,
@@ -236,7 +239,11 @@ export function OnboardingPage() {
     const checkKey = `${onboarding.revision}:${onboarding.projectId}:${onboarding.machineId}`
     if (readyCheckKeyRef.current === checkKey) return
     readyCheckKeyRef.current = checkKey
-    void checkSelectedContext(onboarding)
+    // Revalidate the exact ProjectLocation and consume current lifecycle facts.
+    // A redundant metadata scan would intentionally make successful backend
+    // observations last-known under Phase 8B, without checking the AI service.
+    // Explicit Check Again and remote Project selection still refresh Providers.
+    void checkSelectedContext(onboarding, false)
   }, [checkSelectedContext, onboarding])
 
   function refreshProviders(): Promise<void> {

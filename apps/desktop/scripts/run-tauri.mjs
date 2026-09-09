@@ -4,6 +4,7 @@ import { delimiter, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const desktopDirectory = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+const repositoryDirectory = resolve(desktopDirectory, '..', '..')
 const cargoBin = join(process.env.USERPROFILE ?? homedir(), '.cargo', 'bin')
 const tauriCli = join(
   desktopDirectory,
@@ -24,6 +25,14 @@ execFileSync(process.execPath, [tauriCli, ...arguments_], {
   cwd: desktopDirectory,
   env: {
     ...process.env,
+    // Keep local build locations out of packaged panic/debug strings. This is
+    // process-local build metadata and never changes runtime authority.
+    RUSTFLAGS: [
+      process.env.RUSTFLAGS?.trim(),
+      `--remap-path-prefix=${repositoryDirectory}=.`,
+    ]
+      .filter(Boolean)
+      .join(' '),
     PATH: `${cargoBin}${delimiter}${process.env.PATH ?? ''}`,
   },
   stdio: 'inherit',

@@ -18,7 +18,10 @@ mod platform {
         fn drop(&mut self) {
             for token in &self.tokens {
                 unsafe {
-                    self.center.removeObserver(token);
+                    let observer = <ProtocolObject<dyn NSObjectProtocol> as AsRef<
+                        objc2::runtime::AnyObject,
+                    >>::as_ref(token);
+                    self.center.removeObserver(observer);
                 }
             }
         }

@@ -40,6 +40,7 @@ pub(crate) enum RuntimeState {
 #[serde(rename_all = "camelCase")]
 pub(crate) enum SessionState {
     Unlocked,
+    #[cfg_attr(not(windows), allow(dead_code))]
     Locked,
 }
 
@@ -237,6 +238,7 @@ impl DesktopLifecycle {
         true
     }
 
+    #[cfg(any(windows, test))]
     pub(crate) fn mark_session_locked(&mut self, locked: bool) {
         if self.snapshot.system != SystemState::SessionEnding && !self.shutdown_claimed {
             self.snapshot.session = if locked {
@@ -247,6 +249,7 @@ impl DesktopLifecycle {
         }
     }
 
+    #[cfg(any(windows, test))]
     pub(crate) fn query_session_end(&mut self) -> bool {
         let changed = self.snapshot.system != SystemState::SessionEnding;
         if changed {
@@ -256,6 +259,7 @@ impl DesktopLifecycle {
         changed
     }
 
+    #[cfg(any(windows, test))]
     pub(crate) fn cancel_session_end(&mut self) -> bool {
         if self.snapshot.system != SystemState::SessionEnding || self.shutdown_claimed {
             return false;

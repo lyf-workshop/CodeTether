@@ -1,15 +1,24 @@
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashSet, VecDeque},
     sync::{Arc, Mutex},
 };
 
-use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, State};
+#[cfg(any(windows, test))]
+use std::collections::HashMap;
 
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, State};
+
+#[cfg(windows)]
+use tauri::Emitter;
+
+#[cfg(windows)]
 use crate::host_supervisor::show_main_window;
 
+#[cfg(windows)]
 const NOTIFICATION_INTENT_EVENT: &str = "codetether://notification-intent";
 const MAX_DELIVERED_ATTENTION_IDS: usize = 2_048;
+#[cfg(any(windows, test))]
 const MAX_PENDING_INTENTS: usize = 256;
 #[cfg(windows)]
 const MAX_ACTIVE_WINDOWS_TOASTS: usize = 256;
@@ -74,6 +83,7 @@ struct DeliveryState {
     delivered_order: VecDeque<String>,
 }
 
+#[cfg_attr(not(windows), derive(Default))]
 struct AttentionNotificationStateInner {
     delivery: Mutex<DeliveryState>,
     pending: Mutex<VecDeque<NotificationIntent>>,
@@ -81,6 +91,7 @@ struct AttentionNotificationStateInner {
     active_toasts: Mutex<BoundedRegistry<ActiveWindowsToast>>,
 }
 
+#[cfg(windows)]
 impl Default for AttentionNotificationStateInner {
     fn default() -> Self {
         Self {
@@ -116,6 +127,7 @@ impl AttentionNotificationState {
         lock(&self.0.delivery).attention_ids.remove(attention_id);
     }
 
+    #[cfg(any(windows, test))]
     fn enqueue_intent(&self, intent: NotificationIntent) {
         let mut pending = lock(&self.0.pending);
         if pending.len() == MAX_PENDING_INTENTS {
@@ -156,12 +168,14 @@ impl AttentionNotificationState {
     }
 }
 
+#[cfg(any(windows, test))]
 struct BoundedRegistry<T> {
     entries: HashMap<String, T>,
     order: VecDeque<String>,
     limit: usize,
 }
 
+#[cfg(any(windows, test))]
 impl<T> BoundedRegistry<T> {
     fn new(limit: usize) -> Self {
         assert!(limit > 0, "bounded registry limit must be positive");
@@ -369,6 +383,7 @@ fn create_windows_toast(
     ToastNotification::CreateToastNotification(&document).map_err(|error| error.to_string())
 }
 
+#[cfg(any(windows, test))]
 fn windows_toast_xml(title: &str, context: &str, message: Option<&str>) -> String {
     let message = message.map_or_else(String::new, |message| {
         format!("<text id=\"3\">{}</text>", escape_xml_text(message))
@@ -380,6 +395,7 @@ fn windows_toast_xml(title: &str, context: &str, message: Option<&str>) -> Strin
     )
 }
 
+#[cfg(any(windows, test))]
 fn escape_xml_text(value: &str) -> String {
     let mut escaped = String::with_capacity(value.len());
     for character in value.chars() {
@@ -453,6 +469,7 @@ fn activate_notification(
     }
 }
 
+#[cfg(any(windows, test))]
 fn split_notification_body(body: &str) -> (&str, Option<&str>) {
     match body.split_once('\n') {
         Some((context, message)) => (context, Some(message)),

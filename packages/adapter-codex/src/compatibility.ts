@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process'
 import { spawnCodexCompatibilityProcess } from './probe-supervision.js'
 import { lstat, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
+import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 
 import { CodexAppServerClient } from './client.js'
@@ -12,7 +13,9 @@ import {
 } from './installation.js'
 import {
   observeCodexBackendConfiguration,
+  unobservedCodexBackendProviderSettings,
   type CodexBackendConfigurationObservation,
+  type CodexBackendProviderSettingsObservation,
 } from './backend.js'
 import {
   sanitizeCodexProbeEnvironment,
@@ -120,6 +123,8 @@ export interface ObserveCodexInstallationOptions {
   readonly probeRuntimeContract?: () => Promise<CodexRuntimeContractProbeResult>
   /** Optional metadata-only thread list/read compatibility probe. */
   readonly probeSessionDiscoveryContract?: () => Promise<boolean | undefined>
+  /** Internal deterministic-test seam for effective Provider settings. */
+  readonly probeBackendConfiguration?: () => Promise<CodexBackendProviderSettingsObservation>
   /** Internal deterministic-test seam for synthetic executable revisions. */
   readonly fingerprint?: () => Promise<string>
 }
@@ -129,6 +134,10 @@ export async function observeCodexInstallation(
   options: ObserveCodexInstallationOptions,
 ): Promise<CodexInstallationObservation> {
   const environment = { ...(options.environment ?? process.env) }
+  const providerSettings = await observeCodexProviderSettings(
+    options,
+    environment,
+  )
   const probe = (arguments_: readonly string[]): Promise<string> =>
     runBoundedCodexProbe({
       executable: options.installation.executable,
@@ -245,7 +254,10 @@ export async function observeCodexInstallation(
     options.signal?.throwIfAborted()
     compatibility = unavailableCompatibility()
   }
-  const backend = observeCodexBackendConfiguration(environment)
+  const backend = observeCodexBackendConfiguration(
+    environment,
+    providerSettings,
+  )
   return {
     installation: options.installation,
     ...(version === undefined ? {} : { version }),
@@ -257,6 +269,58 @@ export async function observeCodexInstallation(
     },
     runtimeEnvironment: () => ({ ...environment }),
   }
+}
+
+async function observeCodexProviderSettings(
+  options: ObserveCodexInstallationOptions,
+  environment: NodeJS.ProcessEnv,
+): Promise<CodexBackendProviderSettingsObservation> {
+  if (options.probeBackendConfiguration !== undefined) {
+    return await options.probeBackendConfiguration()
+  }
+  if (
+    options.probeVersion !== undefined ||
+    options.probeContract !== undefined ||
+    options.probeRuntimeContract !== undefined
+  ) {
+    return unobservedCodexBackendProviderSettings()
+  }
+  const codexHome = effectiveCodexHome(environment, options.codexHome)
+  let client: CodexAppServerClient | undefined
+  try {
+    client = await CodexAppServerClient.launchConfigurationProbe({
+      executable: options.installation.executable,
+      codexHome,
+      environment,
+      ...(options.processFactory === undefined
+        ? {}
+        : { processFactory: options.processFactory }),
+      requestTimeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    })
+    return await client.readBackendConfiguration(environment)
+  } catch (error) {
+    if (error instanceof CodexOwnedProcessCleanupError) throw error
+    options.signal?.throwIfAborted()
+    return unobservedCodexBackendProviderSettings()
+  } finally {
+    if (client !== undefined) await shutdownCodexCompatibilityClient(client)
+  }
+}
+
+function effectiveCodexHome(
+  environment: NodeJS.ProcessEnv,
+  configured: string | undefined,
+): string {
+  if (configured !== undefined && isAbsolute(configured)) return configured
+  const fromEnvironment = environment.CODEX_HOME
+  if (fromEnvironment !== undefined && isAbsolute(fromEnvironment)) {
+    return fromEnvironment
+  }
+  const home = environment.HOME?.trim() || environment.USERPROFILE?.trim()
+  return join(
+    home === undefined || home.length === 0 ? homedir() : home,
+    '.codex',
+  )
 }
 
 /**

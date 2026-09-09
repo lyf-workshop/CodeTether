@@ -8,8 +8,10 @@ import {
   initializeCodexClientForLaunch,
   observeCodexBackendConfiguration,
   observeCodexInstallation,
+  parseCodexBackendProviderSettings,
   probeCodexSessionDiscoveryContract,
   shutdownCodexCompatibilityClient,
+  unobservedCodexBackendProviderSettings,
 } from '../dist/index.js'
 
 const executable = join(tmpdir(), 'codetether-codex-compatibility-fixture')
@@ -263,6 +265,87 @@ test('backend revisions describe safe configuration shape and never credential v
   assert.equal(JSON.stringify(second).includes('second-secret-value'), false)
   assert.equal(JSON.stringify(second).includes('/private'), false)
   assert.equal(JSON.stringify(second).includes('token=two'), false)
+})
+
+test('Codex backend observation uses the effective selected Provider settings without retaining secrets', () => {
+  const rawSecret = 'provider-settings-secret-sentinel'
+  const environmentSecret = 'environment-secret-sentinel'
+  const providerSettings = parseCodexBackendProviderSettings(
+    {
+      config: {
+        model_provider: 'custom',
+        model_providers: {
+          custom: {
+            base_url: 'https://gateway.example.test/private?token=hidden',
+            env_key: 'CUSTOM_CODEX_API_KEY',
+            experimental_bearer_token: rawSecret,
+            http_headers: { Authorization: rawSecret },
+          },
+        },
+      },
+      layers: null,
+    },
+    { CUSTOM_CODEX_API_KEY: environmentSecret },
+  )
+  const observation = observeCodexBackendConfiguration(
+    { CUSTOM_CODEX_API_KEY: environmentSecret },
+    providerSettings,
+  )
+
+  assert.deepEqual(observation, {
+    mode: 'custom_gateway',
+    source: 'provider_settings',
+    hasBaseUrl: true,
+    hasApiKey: true,
+    hasAuthToken: true,
+    hasOAuthToken: false,
+    bedrockConfigured: false,
+    vertexConfigured: false,
+    configurationValid: true,
+    sanitizedOrigin: 'gateway.example.test',
+    privateConfigurationRevision: observation.privateConfigurationRevision,
+  })
+  const serialized = JSON.stringify({ providerSettings, observation })
+  assert.equal(serialized.includes(rawSecret), false)
+  assert.equal(serialized.includes(environmentSecret), false)
+  assert.equal(serialized.includes('/private'), false)
+  assert.equal(serialized.includes('token=hidden'), false)
+})
+
+test('unavailable Codex Provider settings remain unknown instead of claiming first-party routing', () => {
+  const observation = observeCodexBackendConfiguration(
+    {},
+    unobservedCodexBackendProviderSettings(),
+  )
+
+  assert.equal(observation.mode, 'unknown')
+  assert.equal(observation.source, 'unknown')
+  assert.equal(observation.configurationValid, true)
+})
+
+test('malformed selected Codex Provider settings are misconfigured', async () => {
+  const observation = await observeCodexInstallation({
+    installation,
+    probeBackendConfiguration: async () =>
+      parseCodexBackendProviderSettings(
+        {
+          config: {
+            model_provider: 'missing',
+            model_providers: {},
+          },
+        },
+        {},
+      ),
+    probeVersion: async () => 'codex-cli 0.152.0',
+    probeContract: async () => true,
+    probeSessionDiscoveryContract: async () => true,
+    fingerprint: async () => 'a'.repeat(64),
+  })
+
+  assert.equal(observation.compatibility.state, 'compatible_unverified')
+  assert.equal(observation.backend.mode, 'unknown')
+  assert.equal(observation.backend.configurationValid, false)
+  assert.equal(observation.backend.readiness, 'misconfigured')
 })
 
 test('malformed version output continues bounded capability probing without guessing a version', async () => {

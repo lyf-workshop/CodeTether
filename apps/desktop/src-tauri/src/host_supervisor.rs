@@ -203,6 +203,7 @@ enum ShutdownOutcome {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg(windows)]
 pub(crate) struct SessionEndReason {
     pub(crate) critical: bool,
     pub(crate) logoff: bool,
@@ -677,6 +678,7 @@ pub(crate) fn confirm_windows_suspend(app: &AppHandle) {
     log_lifecycle_event("system_suspended", &state, serde_json::json!({}));
 }
 
+#[cfg(windows)]
 pub(crate) fn handle_windows_session_change(app: &AppHandle, locked: bool) {
     let Some(state) = app.try_state::<DesktopState>() else {
         return;
@@ -693,6 +695,7 @@ pub(crate) fn handle_windows_session_change(app: &AppHandle, locked: bool) {
     );
 }
 
+#[cfg(windows)]
 pub(crate) fn query_windows_session_end(app: &AppHandle, reason: SessionEndReason) {
     let Some(state) = app.try_state::<DesktopState>() else {
         return;
@@ -704,6 +707,7 @@ pub(crate) fn query_windows_session_end(app: &AppHandle, reason: SessionEndReaso
     let _ = reason;
 }
 
+#[cfg(windows)]
 pub(crate) fn confirm_windows_session_end(app: &AppHandle, reason: SessionEndReason) {
     let session_end_started_at = Instant::now();
     let Some(state) = app.try_state::<DesktopState>() else {
@@ -723,6 +727,7 @@ pub(crate) fn confirm_windows_session_end(app: &AppHandle, reason: SessionEndRea
     app.exit(0);
 }
 
+#[cfg(windows)]
 pub(crate) fn cancel_windows_session_end(app: &AppHandle) {
     let Some(state) = app.try_state::<DesktopState>() else {
         return;

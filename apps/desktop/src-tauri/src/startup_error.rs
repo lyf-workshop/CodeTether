@@ -48,7 +48,10 @@ pub fn show_for_window<R: tauri::Runtime>(
     #[cfg(windows)]
     let owner = window.hwnd().ok().map(|handle| handle.0);
     #[cfg(not(windows))]
-    let owner = None;
+    let owner = {
+        let _ = window;
+        None
+    };
     show_with_optional_owner(kind, owner);
 }
 
@@ -60,6 +63,9 @@ type NativeWindow = *mut std::ffi::c_void;
 
 fn show_with_optional_owner(kind: StartupFailureKind, owner: Option<NativeWindow>) {
     eprintln!("[codetether:desktop] {}: {}", kind.title(), kind.message());
+    #[cfg(not(windows))]
+    let _ = owner;
+    #[cfg(windows)]
     if std::env::var_os("CODETETHER_DESKTOP_TEST_SUPPRESS_DIALOG").is_some() {
         return;
     }

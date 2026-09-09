@@ -21,7 +21,7 @@
     "dev": "pnpm --filter @codetether/web dev",
     "build": "pnpm -r --workspace-concurrency=1 --if-present build",
     "typecheck": "pnpm -r --workspace-concurrency=1 --if-present typecheck",
-    "test": "pnpm -r --workspace-concurrency=1 --if-present test",
+    "test": "node apps/distribution/scripts/test-workspace.mjs",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

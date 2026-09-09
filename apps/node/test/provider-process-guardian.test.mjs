@@ -156,6 +156,15 @@ async function waitUntilStopped(pids) {
 
 function processIsRunning(pid) {
   if (!Number.isSafeInteger(pid) || pid <= 0) return false
+  if (process.platform !== 'linux') {
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch (error) {
+      if (error?.code === 'ESRCH') return false
+      throw error
+    }
+  }
   try {
     const stat = readFileSync(`/proc/${String(pid)}/stat`, 'utf8')
     return stat.split(' ')[2] !== 'Z'

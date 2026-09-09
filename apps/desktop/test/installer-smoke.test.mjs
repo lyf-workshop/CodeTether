@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 
@@ -16,7 +17,7 @@ import {
   waitForChildSpawn,
 } from '../scripts/installer-smoke.mjs'
 
-const temporaryDirectory = 'C:\\Temp'
+const temporaryDirectory = tmpdir()
 const root = join(temporaryDirectory, 'codetether-installed-smoke-test')
 
 test('installer smoke modes are explicit', () => {
@@ -77,14 +78,9 @@ test('installer smoke state keeps every mutable path under its owned root', () =
 })
 
 test('quoted NSIS registry paths normalize without shell parsing', () => {
-  assert.equal(
-    normalizeRegistryPath('  "C:\\Temp\\CodeTether App"  '),
-    'C:\\Temp\\CodeTether App',
-  )
-  assert.equal(
-    normalizeRegistryPath('C:\\Temp\\CodeTether App'),
-    'C:\\Temp\\CodeTether App',
-  )
+  const installation = join(temporaryDirectory, 'CodeTether App')
+  assert.equal(normalizeRegistryPath(`  "${installation}"  `), installation)
+  assert.equal(normalizeRegistryPath(installation), installation)
 })
 
 test('installer smoke keeps shortcut registration enabled', () => {

@@ -6,6 +6,7 @@ import {
   createSeaConfiguration,
   nodeArtifactName,
 } from '../scripts/build-node.mjs'
+import { isNodeCliEntry } from '../dist/main.js'
 
 test('Node artifact and build identity are deterministic and dirty-aware', () => {
   assert.equal(createNodeBuildId('0858fc77605263df', false), 'git-0858fc776052')
@@ -33,4 +34,23 @@ test('SEA configuration uses direct module build without runtime flags', () => {
     useCodeCache: false,
     execArgvExtension: 'none',
   })
+})
+
+test('SEA entry is independent from the distributed executable filename', () => {
+  assert.equal(
+    isNodeCliEntry(
+      true,
+      'file:///build/codetether-node.mjs',
+      '/installed/bin/codetether-node',
+    ),
+    true,
+  )
+  assert.equal(
+    isNodeCliEntry(
+      false,
+      'file:///build/codetether-node.mjs',
+      '/installed/bin/codetether-node',
+    ),
+    false,
+  )
 })

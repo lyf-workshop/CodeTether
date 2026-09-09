@@ -1,5 +1,6 @@
 import { arch, platform } from 'node:os'
 import { isAbsolute, resolve } from 'node:path'
+import { isSea } from 'node:sea'
 import { pathToFileURL } from 'node:url'
 
 import { formatPairingCode } from '@codetether/machine-transport'
@@ -254,10 +255,18 @@ function helpText(): string {
   ].join('\n')
 }
 
-if (
-  process.argv[1] !== undefined &&
-  import.meta.url === pathToFileURL(resolve(process.argv[1])).href
-) {
+export function isNodeCliEntry(
+  sea = isSea(),
+  moduleUrl = import.meta.url,
+  argument = process.argv[1],
+): boolean {
+  return (
+    sea ||
+    (argument !== undefined && moduleUrl === pathToFileURL(resolve(argument)).href)
+  )
+}
+
+if (isNodeCliEntry()) {
   const arguments_ = process.argv.slice(2)
   if (arguments_.length === 1 && arguments_[0] === '--version') {
     process.stdout.write(

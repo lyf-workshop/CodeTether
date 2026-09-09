@@ -262,7 +262,8 @@ export function isNodeCliEntry(
 ): boolean {
   return (
     sea ||
-    (argument !== undefined && moduleUrl === pathToFileURL(resolve(argument)).href)
+    (argument !== undefined &&
+      moduleUrl === pathToFileURL(resolve(argument)).href)
   )
 }
 

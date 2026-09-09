@@ -1405,6 +1405,11 @@ test('Provider session discovery and adoption stay opaque and non-executable ove
     assert.equal(harness.runtime.startConversationCalls.length, 0)
     assert.equal(harness.runtime.resumeConversationCalls.length, 0)
     assert.equal(harness.runtime.startTurnCalls.length, 0)
+
+    const snapshot = await getJson(harness.baseUrl, '/api/v1/snapshot')
+    assert.equal(snapshot.status, 200, JSON.stringify(snapshot.body))
+    assert.deepEqual(snapshot.body.conversations, [])
+    assert.deepEqual(snapshot.body.conversationRuntimes, [])
   } finally {
     await harness.close()
   }

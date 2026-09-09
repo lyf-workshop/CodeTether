@@ -2187,12 +2187,16 @@ export class HostService {
             conversation.conversationId,
           )
           if (adoption.created) {
-            this.#publish({
-              conversationId: conversation.conversationId,
-              timestamp,
-              type: 'conversation.started',
-              payload: { conversation },
-            })
+            // Adoption is metadata-only and must not consume hydrated runtime
+            // capacity before the user's first explicit Turn.
+            this.publisher.publish(
+              HostEventSchema.parse({
+                conversationId: conversation.conversationId,
+                timestamp,
+                type: 'conversation.started',
+                payload: { conversation },
+              }),
+            )
           }
           return AdoptProviderSessionResponseSchema.parse({
             protocolVersion,

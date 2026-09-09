@@ -6,6 +6,7 @@ import {
   createBuildId,
   createSeaConfiguration,
   sidecarFileName,
+  shouldAdHocSignSea,
 } from '../scripts/build-sidecar.mjs'
 
 test('sidecar build identity is revision coupled', () => {
@@ -37,4 +38,10 @@ test('SEA entry stays relative so release binaries do not leak build paths', () 
 test('sidecar bundle supports CommonJS dependencies inside the ESM SEA', () => {
   assert.match(commonJsSeaBanner, /createRequire as __ctCreateRequire/u)
   assert.match(commonJsSeaBanner, /__ctCreateRequire\(import\.meta\.url\)/u)
+})
+
+test('macOS SEA sidecars require an ad-hoc signature before packaging', () => {
+  assert.equal(shouldAdHocSignSea('darwin'), true)
+  assert.equal(shouldAdHocSignSea('linux'), false)
+  assert.equal(shouldAdHocSignSea('win32'), false)
 })

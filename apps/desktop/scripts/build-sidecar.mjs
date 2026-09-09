@@ -43,6 +43,10 @@ export function createSeaConfiguration(output) {
   }
 }
 
+export function shouldAdHocSignSea(platform = process.platform) {
+  return platform === 'darwin'
+}
+
 async function main() {
   assertDirectSeaBuildAvailable()
   runPnpm([
@@ -94,6 +98,13 @@ async function main() {
     stdio: 'inherit',
   })
   if (process.platform !== 'win32') await chmod(sidecarPath, 0o755)
+  if (shouldAdHocSignSea()) {
+    // Current macOS policy refuses completely unsigned SEA executables. This
+    // local signature remains distinct from Developer ID release signing.
+    execFileSync('/usr/bin/codesign', ['--force', '--sign', '-', sidecarPath], {
+      stdio: 'inherit',
+    })
+  }
   await writeFile(
     join(binariesDirectory, 'build-id.txt'),
     `${buildId}\n`,

@@ -23,12 +23,46 @@ apps/desktop/src-tauri/icons/*
 *.sqlite-shm
 *.sqlite3-wal
 *.sqlite3-shm
+*.sqlite-journal
+*.sqlite3-journal
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+*.log
+
+# Endpoint-local runtime state and Provider-native credentials/history.
+.codetether-node/
+.codetether-relay/
+.codex/auth.json
+.codex/sessions/
+.codex/archived_sessions/
+.codex/history.jsonl
+.claude/.credentials.json
+.claude/projects/
+.claude/history.jsonl
+
+# Private signing/key material; public certificates and templates may be source.
+*.key
+*.p8
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.private.pem
+*-key.pem
+key.pem
+private.pem
+id_rsa
+id_ed25519
 
 .env
 .env.*
 !.env.example
 
 .DS_Store
+._*
+Desktop.ini
 Thumbs.db
 .idea/
 .vscode/*

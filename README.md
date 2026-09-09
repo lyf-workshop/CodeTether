@@ -2,7 +2,24 @@
 
 > A control center for AI coding agents.
 
-CodeTether is a Windows-first desktop workspace for supervising and controlling coding agents across projects, with a focused mobile companion planned for later. V1 is Codex-first, with provider-neutral boundaries for later Claude Code and OpenCode support.
+CodeTether is a Windows-first desktop workspace for supervising and controlling Codex and Claude Code across projects and trusted computers. Mobile remains future work.
+
+## Current publication status
+
+Canonical repository: [lyf-workshop/CodeTether](https://github.com/lyf-workshop/CodeTether).
+
+- **Phase 8C = ACCEPTED AND FROZEN**, baseline `67c71f2e3ad390004cc60fe30925224a02aba485` (Owner acceptance: 129 / 129 PASS).
+- **Phase 8D: IMPLEMENTATION READY FOR REAL PLATFORM VALIDATION**, implementation candidate `20d930866e13f43af76f5f01bc93e6c20f865f63`. Phase 8D is **not accepted or frozen**.
+- Windows has the accepted Desktop foundation. REAL Apple Silicon macOS and physical Linux validation remains pending; macOS and physical Linux are **not claimed Supported** by the implementation pass.
+- Phase 9 is **not started**. Backend/Profile Manager remains deferred.
+
+For current native prerequisites, locked build commands, support status, service installation, and the exact REAL validation handoff, use [Phase 8D distribution](docs/PHASE8D-CROSS-PLATFORM-DISTRIBUTION.md), [Architecture](docs/ARCHITECTURE.md), and [Roadmap](docs/ROADMAP.md). Install checkout dependencies with `pnpm install --frozen-lockfile` and use the package-manager version recorded in `package.json`. macOS release builds require a native Mac; source publication is not a signed binary release.
+
+Generated installers, local runtime state, credentials, and REAL evidence are not source-distribution inputs and must remain outside Git. Validation branches begin at the same publishable commit; their creation is not platform validation.
+
+## Historical Alpha notes
+
+The following milestone descriptions, capability lists, examples, and limitations record the earlier Phase 2–4 Alpha. They are retained for historical context, **not as the current feature/support matrix**; the current documents linked above take precedence.
 
 Phase 1 is accepted and frozen as **CodeTether V2 Frontend Core v1**, the accepted local runtime is frozen as **Phase 2A Codex Runtime v1**, and Phase 2B is accepted as the local-only Protocol v1 loopback HTTP/SSE boundary shared by Browser and Desktop clients. The complete read path is frozen as **Live Conversation Read Model v1**. Phase 2C.2 is accepted and frozen as **CodeTether Local Codex Alpha v0.1**: the existing Conversation Workspace can start real text Turns, stream results, resolve one-shot Approvals, interrupt, and continue while the Host remains canonical state owner.
 
@@ -14,7 +31,7 @@ Phase 1 is accepted and frozen as **CodeTether V2 Frontend Core v1**, the accept
 
 **Phase 4B — Native Folder Picker** adds one narrow native capability: Desktop users select one directory through the Windows folder picker, then the existing typed Project mutation sends that path to the Host. Browser mode retains manual absolute-path entry. Tauri does not canonicalize, authorize, inspect, or persist the directory; the Host remains the sole Project authority.
 
-## Current Alpha capabilities
+## Historical Alpha capabilities
 
 - Run one long-lived local Codex App Server behind a loopback-only Host.
 - Create durable local Codex Conversations and complete multiple UI-controlled Turns in Browser or Desktop.
@@ -175,7 +192,7 @@ POST /api/v1/approvals/:approvalId/resolve
 
 The Inbox requests up to 100 open items in Host-owned priority order. It shows only Approval, completed-review, and failed-Turn work, uses the returned summary for its cards and Sidebar badge, and refreshes only on Attention semantic events or stream reset. Opening a failed Conversation does not acknowledge it; reviewing completed work and acknowledging a failed item are explicit durable mutations.
 
-## Known Alpha limitations
+## Historical Alpha limitations
 
 - Phase 3A persists normalized Conversation/Turn snapshots, not raw Codex JSON-RPC events; it is intentionally not an event store.
 - The Host restores only the bounded recent runtime window (20 Turns by default) into memory. Older durable Turns remain in SQLite, but no history-pagination UI exists yet.
@@ -203,6 +220,6 @@ The Inbox requests up to 100 open items in Host-owned priority order. It shows o
 - [Roadmap](docs/ROADMAP.md)
 - [Agent development rules](AGENTS.md)
 
-## Status
+## Historical Phase 4B status
 
 **CodeTether Local Workspace Alpha** remains the frozen product/runtime baseline, **Phase 4A — Tauri Desktop Shell Foundation** is implemented and validated around it, and **Phase 4B — Native Folder Picker** is limited to explicit directory acquisition through the existing Project flow. Do not extend this into question inference, read/unread state, notifications, Activity, archive/rename/delete, pagination, discovery, drag-and-drop, tray/updater behavior, remote exposure, or another provider without a separately approved phase. See the roadmap for ordered gates.

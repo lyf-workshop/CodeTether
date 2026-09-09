@@ -175,7 +175,7 @@ async function main() {
       platform,
       architecture,
       artifactType: 'tar.gz',
-      signingState: 'not-observed',
+      signingState: platform === 'macos' ? 'ad-hoc' : 'not-observed',
     }
     const filename = artifactFilename(descriptor, identity.version)
     const archive = join(directory, filename)

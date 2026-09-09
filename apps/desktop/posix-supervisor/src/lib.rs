@@ -72,19 +72,31 @@ impl OwnedGroup {
     pub fn finish(&mut self) -> io::Result<i32> {
         // If another reaper ever broke the reservation, fail closed instead of
         // signalling a numeric ID that could now belong to another launch.
-        if let Err(error) = self.exited() {
-            self.child.take();
-            return Err(error);
-        }
+        let exited = match self.exited() {
+            Ok(exited) => exited,
+            Err(error) => {
+                self.child.take();
+                return Err(error);
+            }
+        };
         let Some(mut child) = self.child.take() else {
             return Ok(0);
         };
         // A live or unreaped owned leader reserves this PGID. Consume ownership
         // before signalling; neither delayed calls nor Drop can signal it again.
         let result = unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL) };
-        if result != 0 && io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH) {
-            self.child = Some(child);
-            return Err(io::Error::last_os_error());
+        if result != 0 {
+            let error = io::Error::last_os_error();
+            // Darwin reports EPERM when an already-exited leader has no
+            // remaining process group to signal. The WNOWAIT observation still
+            // reserves this exact child, so consume it below. A live group's
+            // EPERM remains a fail-closed ownership error.
+            let group_gone =
+                exited && matches!(error.raw_os_error(), Some(libc::ESRCH | libc::EPERM));
+            if !group_gone {
+                self.child = Some(child);
+                return Err(error);
+            }
         }
         // Do not wait indefinitely on uninterruptible kernel I/O.
         let deadline = Instant::now() + Duration::from_secs(2);
@@ -228,8 +240,8 @@ extern "C" fn stop_probe(_: i32) {
 fn run_probe_guardian() -> io::Result<i32> {
     use std::os::fd::FromRawFd;
     unsafe {
-        libc::signal(libc::SIGTERM, stop_probe as libc::sighandler_t);
-        libc::signal(libc::SIGINT, stop_probe as libc::sighandler_t);
+        libc::signal(libc::SIGTERM, stop_probe as *const () as libc::sighandler_t);
+        libc::signal(libc::SIGINT, stop_probe as *const () as libc::sighandler_t);
     }
     let mut bytes = Vec::new();
     unsafe { std::fs::File::from_raw_fd(3) }

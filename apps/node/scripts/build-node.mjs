@@ -94,6 +94,14 @@ async function main() {
     stdio: 'inherit',
   })
   if (process.platform !== 'win32') await chmod(artifactPath, 0o755)
+  if (process.platform === 'darwin') {
+    // macOS may terminate an unsigned Node SEA before it can run its embedded
+    // JavaScript. Ad-hoc signing makes native validation executable while
+    // preserving the separate Developer ID/notarization observation state.
+    execFileSync('/usr/bin/codesign', ['--force', '--sign', '-', artifactPath], {
+      stdio: 'inherit',
+    })
+  }
   await writeFile(join(outputDirectory, 'build-id.txt'), `${buildId}\n`, 'utf8')
   process.stdout.write(
     `${JSON.stringify({ buildId, platform: process.platform, architecture: process.arch, artifactPath })}\n`,

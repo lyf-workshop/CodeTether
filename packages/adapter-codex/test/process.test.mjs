@@ -178,6 +178,23 @@ test('remote App Server argv is fixed and disables executable capabilities', () 
   ])
 })
 
+test('configuration observation tolerates unknown settings without weakening remote execution strictness', () => {
+  const observationArguments = remoteCodexAppServerArguments({
+    strictConfig: false,
+  })
+
+  assert.equal(observationArguments.includes('--strict-config'), false)
+  assert.deepEqual(observationArguments.slice(-3), [
+    'app-server',
+    '--listen',
+    'stdio://',
+  ])
+  assert.equal(
+    remoteCodexAppServerArguments().includes('--strict-config'),
+    true,
+  )
+})
+
 test('remote App Server receives only Node-local runtime and auth variables', () => {
   const codexHome = resolve('isolated-remote-codex-home')
   assert.deepEqual(

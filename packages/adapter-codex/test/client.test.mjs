@@ -91,6 +91,52 @@ test('local initialization capabilities remain unchanged', async () => {
   assert.deepEqual(written[1], { method: 'initialized' })
 })
 
+test('backend config reads return only a secret-safe selected Provider projection', async () => {
+  const { child, client, written } = createHarness()
+  const result = client.readBackendConfiguration({
+    CUSTOM_CODEX_KEY: 'environment-secret',
+  })
+  await nextTurn()
+
+  assert.deepEqual(written[0], {
+    id: written[0].id,
+    method: 'config/read',
+    params: { includeLayers: false },
+  })
+  child.stdout.write(
+    `${JSON.stringify({
+      id: written[0].id,
+      result: {
+        config: {
+          model_provider: 'custom',
+          model_providers: {
+            custom: {
+              base_url: 'https://gateway.example.test/private',
+              env_key: 'CUSTOM_CODEX_KEY',
+              experimental_bearer_token: 'inline-secret',
+              http_headers: { Authorization: 'header-secret' },
+            },
+          },
+        },
+        layers: null,
+      },
+    })}\n`,
+  )
+
+  const observation = await result
+  assert.deepEqual(observation, {
+    observed: true,
+    mode: 'custom_gateway',
+    hasBaseUrl: true,
+    hasApiKey: true,
+    hasAuthToken: true,
+    configurationValid: true,
+    sanitizedOrigin: 'gateway.example.test',
+  })
+  assert.equal(JSON.stringify(observation).includes('secret'), false)
+  assert.equal(JSON.stringify(observation).includes('/private'), false)
+})
+
 test('remote text-only thread, resume, and turn requests are fixed', async () => {
   const cwd = resolve('remote project with spaces')
   const { child, client, written } = createHarness({}, 'remote-text-only')

@@ -11,12 +11,17 @@ import {
 import type { ProtocolLogger } from './logging.js'
 import { CodexEventNormalizer, normalizeApprovalRequest } from './normalizer.js'
 import {
+  spawnCodexConfigurationProbe,
   spawnCodexAppServer,
   spawnRemoteCodexAppServer,
   stopCodexAppServer,
   stopRemoteCodexAppServer,
   type RemoteCodexProcessFactory,
 } from './process.js'
+import {
+  parseCodexBackendProviderSettings,
+  type CodexBackendProviderSettingsObservation,
+} from './backend.js'
 import type {
   CodexStoredThread,
   CodexStoredThreadPage,
@@ -120,6 +125,14 @@ export interface LaunchRemoteCodexClientOptions extends Omit<
     readonly title: string
     readonly version: string
   }
+}
+
+export interface LaunchCodexConfigurationProbeOptions {
+  readonly executable?: string
+  readonly codexHome: string
+  readonly environment: NodeJS.ProcessEnv
+  readonly processFactory?: RemoteCodexProcessFactory
+  readonly requestTimeoutMs?: number
 }
 
 export type CodexExecutionProfile = 'local' | 'remote-text-only'
@@ -235,6 +248,24 @@ export class CodexAppServerClient {
     )
     return await initializeCodexClientForLaunch(client, () =>
       client.initialize(options.clientInfo, { experimentalApi: true }),
+    )
+  }
+
+  static async launchConfigurationProbe(
+    options: LaunchCodexConfigurationProbeOptions,
+  ): Promise<CodexAppServerClient> {
+    const process = spawnCodexConfigurationProbe(options)
+    const client = new CodexAppServerClient(
+      process,
+      { requestTimeoutMs: options.requestTimeoutMs },
+      'remote-text-only',
+    )
+    return await initializeCodexClientForLaunch(client, () =>
+      client.initialize({
+        name: 'codetether-provider-configuration',
+        title: 'CodeTether Provider Configuration',
+        version: '1',
+      }),
     )
   }
 
@@ -443,6 +474,16 @@ export class CodexAppServerClient {
       useStateDbOnly: true,
     })
     return parseStoredThreadPage(result, options.limit)
+  }
+
+  async readBackendConfiguration(
+    environment: NodeJS.ProcessEnv,
+  ): Promise<CodexBackendProviderSettingsObservation> {
+    this.#assertOpen()
+    const result = await this.#transport.request<unknown>('config/read', {
+      includeLayers: false,
+    })
+    return parseCodexBackendProviderSettings(result, environment)
   }
 
   /** Reads one stored thread's metadata without loading turns or resuming it. */

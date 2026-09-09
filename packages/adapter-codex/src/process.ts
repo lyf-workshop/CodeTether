@@ -228,8 +228,24 @@ export type RemoteCodexProcessFactory = (
 export function spawnRemoteCodexAppServer(
   options: SpawnRemoteCodexAppServerOptions,
 ): ChildProcessWithoutNullStreams {
+  return spawnOwnedCodexAppServer(options, remoteCodexAppServerArguments())
+}
+
+/** Starts a no-inference config/read probe without weakening execution argv. */
+export function spawnCodexConfigurationProbe(
+  options: SpawnRemoteCodexAppServerOptions,
+): ChildProcessWithoutNullStreams {
+  return spawnOwnedCodexAppServer(
+    options,
+    remoteCodexAppServerArguments({ strictConfig: false }),
+  )
+}
+
+function spawnOwnedCodexAppServer(
+  options: SpawnRemoteCodexAppServerOptions,
+  arguments_: readonly string[],
+): ChildProcessWithoutNullStreams {
   const executable = options.executable ?? 'codex'
-  const arguments_ = remoteCodexAppServerArguments()
   const environment = sanitizeRemoteCodexChildEnvironment(
     options.environment ?? process.env,
     options.codexHome,
@@ -259,7 +275,9 @@ export function spawnRemoteCodexAppServer(
   return child
 }
 
-export function remoteCodexAppServerArguments(): readonly string[] {
+export function remoteCodexAppServerArguments(
+  options: { readonly strictConfig?: boolean } = {},
+): readonly string[] {
   const arguments_: string[] = []
   for (const feature of REMOTE_CODEX_DISABLED_FEATURES) {
     arguments_.push('--disable', feature)
@@ -267,7 +285,8 @@ export function remoteCodexAppServerArguments(): readonly string[] {
   for (const override of REMOTE_CODEX_CONFIG_OVERRIDES) {
     arguments_.push('-c', override)
   }
-  arguments_.push('app-server', '--listen', 'stdio://', '--strict-config')
+  arguments_.push('app-server', '--listen', 'stdio://')
+  if (options.strictConfig !== false) arguments_.push('--strict-config')
   return arguments_
 }
 

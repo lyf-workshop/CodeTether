@@ -1455,6 +1455,39 @@ test('allows only configured origins and never emits wildcard CORS', async () =>
   }
 })
 
+test('allows only the exact macOS and Linux Tauri production origin', async () => {
+  const allowedOrigin = 'tauri://localhost'
+  const harness = await createHarness({ allowedOrigins: [allowedOrigin] })
+  try {
+    const allowed = await fetch(`${harness.baseUrl}/api/v1/bootstrap`, {
+      headers: { Origin: allowedOrigin },
+    })
+    assert.equal(allowed.status, 200)
+    assert.equal(
+      allowed.headers.get('access-control-allow-origin'),
+      allowedOrigin,
+    )
+    assert.notEqual(allowed.headers.get('access-control-allow-origin'), '*')
+    await allowed.body?.cancel()
+
+    for (const origin of [
+      'tauri://untrusted',
+      'tauri://localhost/',
+      'tauri://localhost:4317',
+      'tauri://localhost?unexpected=true',
+    ]) {
+      const denied = await getJson(harness.baseUrl, '/api/v1/bootstrap', {
+        Origin: origin,
+      })
+      assert.equal(denied.status, 403)
+      assert.equal(denied.body.code, 'invalid_request')
+      assert.equal(denied.headers.get('access-control-allow-origin'), null)
+    }
+  } finally {
+    await harness.close()
+  }
+})
+
 test('requires the exact loopback Host authority on every request', async () => {
   const harness = await createHarness()
   try {

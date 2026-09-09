@@ -15,6 +15,7 @@ import { safeErrorNameForLog } from './safe-log.js'
 import { HostServiceError } from './host-service.js'
 
 const DEFAULT_BODY_LIMIT = 64 * 1024
+const TAURI_POSIX_ORIGIN = 'tauri://localhost'
 
 interface ParseSchema<T> {
   safeParse(value: unknown):
@@ -320,6 +321,8 @@ export function singleHeader(
 }
 
 function normalizeOrigin(origin: string): string {
+  if (origin === TAURI_POSIX_ORIGIN) return origin
+
   const url = new URL(origin)
   if (
     (url.protocol !== 'http:' && url.protocol !== 'https:') ||
@@ -327,7 +330,7 @@ function normalizeOrigin(origin: string): string {
     url.username !== '' ||
     url.password !== ''
   ) {
-    throw new Error('Origin must be an exact HTTP origin')
+    throw new Error('Origin must be an exact HTTP or Tauri origin')
   }
   return url.origin
 }

@@ -25,10 +25,10 @@ raw diagnostics.
 The execution profile retains Claude's `--restricted` workspace confinement.
 Host startup reads only the user-scope `settings.json` `env` object and
 privately projects an exact allowlist of required operating-system/network
-context plus Claude authentication, endpoint, and model variables into the
-child environment. Explicit process environment values win. CodeTether does
-not load or copy user hooks, plugins, permissions, MCP, or Project/local
-settings; strict MCP and disabled slash commands provide additional product
-boundaries. Claude's own managed-policy settings may still apply and are not
-bypassed. Unrelated Host variables and credentials never enter the child;
-secrets never enter argv, public descriptors, or logs.
+context plus Claude authentication, endpoint, model, and proxy-routing
+variables into the child environment. Explicit process environment values win;
+CodeTether does not load or copy user hooks, plugins, permissions, MCP, or
+Project/local settings. Strict MCP and disabled slash commands provide
+additional product boundaries. Claude's own managed-policy settings may still
+apply and are not bypassed. Unrelated Host variables and credentials never
+enter the child; secrets never enter argv, public descriptors, or logs.

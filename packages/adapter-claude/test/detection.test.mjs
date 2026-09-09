@@ -331,6 +331,10 @@ test('prepares restricted turns with only allowlisted user configuration', async
       env: {
         ANTHROPIC_AUTH_TOKEN: 'fixture-auth-token',
         ANTHROPIC_BASE_URL: 'https://example.invalid',
+        ALL_PROXY: 'socks5://settings-proxy.invalid:1080',
+        HTTPS_PROXY: 'http://settings-proxy.invalid:8443',
+        HTTP_PROXY: 'http://settings-proxy.invalid:8080',
+        NO_PROXY: 'localhost,127.0.0.1',
         UNSAFE_ARBITRARY_VALUE: 'must-not-cross',
         CLAUDE_CODE_ENTRYPOINT: 'must-not-cross',
       },
@@ -360,6 +364,10 @@ test('prepares restricted turns with only allowlisted user configuration', async
   const environment = preparation.runtimeEnvironment()
   assert.equal(environment.ANTHROPIC_AUTH_TOKEN, 'fixture-auth-token')
   assert.equal(environment.ANTHROPIC_BASE_URL, 'https://example.invalid')
+  assert.equal(environment.ALL_PROXY, 'socks5://settings-proxy.invalid:1080')
+  assert.equal(environment.HTTPS_PROXY, 'http://settings-proxy.invalid:8443')
+  assert.equal(environment.HTTP_PROXY, 'http://settings-proxy.invalid:8080')
+  assert.equal(environment.NO_PROXY, 'localhost,127.0.0.1')
   assert.equal(environment.UNSAFE_ARBITRARY_VALUE, undefined)
   assert.equal(environment.CLAUDE_CODE_ENTRYPOINT, undefined)
   assert.equal(environment.GITHUB_TOKEN, undefined)
@@ -375,7 +383,12 @@ test('explicit process auth wins over the user settings projection', async (t) =
   const settingsPath = join(root, 'settings.json')
   await writeFile(
     settingsPath,
-    JSON.stringify({ env: { ANTHROPIC_API_KEY: 'settings-auth' } }),
+    JSON.stringify({
+      env: {
+        ANTHROPIC_API_KEY: 'settings-auth',
+        HTTP_PROXY: 'http://settings-proxy.invalid:8080',
+      },
+    }),
   )
   t.after(async () => {
     await import('node:fs/promises').then(({ rm }) =>
@@ -389,10 +402,15 @@ test('explicit process auth wins over the user settings projection', async (t) =
     environment: {
       ...process.env,
       ANTHROPIC_API_KEY: 'process-auth',
+      HTTP_PROXY: 'http://process-proxy.invalid:8080',
     },
   })
   assert.equal(
     preparation.runtimeEnvironment().ANTHROPIC_API_KEY,
     'process-auth',
+  )
+  assert.equal(
+    preparation.runtimeEnvironment().HTTP_PROXY,
+    'http://process-proxy.invalid:8080',
   )
 })

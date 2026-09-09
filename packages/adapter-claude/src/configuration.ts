@@ -9,11 +9,12 @@ const MAX_ENVIRONMENT_VALUE_CODE_UNITS = 16 * 1024
 
 /**
  * Restricted mode intentionally ignores Claude's user settings. CodeTether
- * restores only the inert authentication/model routing values required by the
- * installed CLI. Hooks, permissions, plugins, MCP servers, and arbitrary
- * environment variables never cross this boundary.
+ * restores only the inert authentication, Provider, and network routing values
+ * required by the installed CLI. Hooks, permissions, plugins, MCP servers,
+ * and arbitrary environment variables never cross this boundary.
  */
 const RESTRICTED_ENVIRONMENT_KEYS = new Set([
+  'ALL_PROXY',
   'ANTHROPIC_API_KEY',
   'ANTHROPIC_AUTH_TOKEN',
   'ANTHROPIC_BASE_URL',
@@ -26,6 +27,9 @@ const RESTRICTED_ENVIRONMENT_KEYS = new Set([
   'CLAUDE_CODE_USE_BEDROCK',
   'CLAUDE_CODE_USE_FOUNDRY',
   'CLAUDE_CODE_USE_VERTEX',
+  'HTTPS_PROXY',
+  'HTTP_PROXY',
+  'NO_PROXY',
 ])
 
 /**

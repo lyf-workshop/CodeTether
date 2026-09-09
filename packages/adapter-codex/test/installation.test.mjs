@@ -386,3 +386,89 @@ test('resolves the official POSIX npm symlink to its versioned native payload', 
   assert.equal(discovery.installations[0].installMethod, 'npm')
   assert.equal(discovery.installations[0].shellFreeLaunch, true)
 })
+
+test('resolves the current nested npm alias package to its exact native payload', async (t) => {
+  const root = await fixture(t, 'codetether-codex-npm-alias-')
+  const packageRoot = join(root, 'lib', 'node_modules', '@openai', 'codex')
+  const platformRoot = join(
+    packageRoot,
+    'node_modules',
+    '@openai',
+    'codex-darwin-arm64',
+  )
+  const version = '0.153.4'
+  await mkdir(join(packageRoot, 'bin'), { recursive: true })
+  await writeFile(
+    join(packageRoot, 'package.json'),
+    JSON.stringify({
+      name: '@openai/codex',
+      version,
+      bin: { codex: 'bin/codex.js' },
+      optionalDependencies: {
+        '@openai/codex-darwin-arm64': `npm:@openai/codex@${version}-darwin-arm64`,
+      },
+    }),
+  )
+  const script = await executable(
+    join(packageRoot, 'bin', 'codex.js'),
+    '#!/usr/bin/env node\n',
+  )
+  await mkdir(platformRoot, { recursive: true })
+  await writeFile(
+    join(platformRoot, 'package.json'),
+    JSON.stringify({
+      name: '@openai/codex',
+      version: `${version}-darwin-arm64`,
+    }),
+  )
+  await mkdir(join(platformRoot, 'vendor', 'aarch64-apple-darwin'), {
+    recursive: true,
+  })
+  await writeFile(
+    join(platformRoot, 'vendor', 'aarch64-apple-darwin', 'codex-package.json'),
+    JSON.stringify({
+      layoutVersion: 1,
+      version,
+      target: 'aarch64-apple-darwin',
+      variant: 'codex',
+      entrypoint: 'bin/codex',
+    }),
+  )
+  const native = await executable(
+    join(platformRoot, 'vendor', 'aarch64-apple-darwin', 'bin', 'codex'),
+    'native-a',
+  )
+  const bin = join(root, 'bin')
+  const launcher = join(bin, 'codex')
+  await mkdir(bin, { recursive: true })
+  await symlink(script, launcher, 'file')
+
+  const first = await discoverCodexInstallations({
+    platform: 'darwin',
+    architecture: 'arm64',
+    environment: { PATH: bin },
+    knownPaths: [],
+  })
+
+  const observed = first.installations.find(
+    (installation) => installation.launcherPath === launcher,
+  )
+  assert.ok(observed)
+  assert.equal(observed.executable, await realpath(native))
+  assert.equal(observed.launcherKind, 'npm_shim')
+  assert.equal(observed.installMethod, 'npm')
+  assert.equal(observed.shellFreeLaunch, true)
+  const revision = await fingerprintCodexInstallation(observed)
+  await writeFile(native, 'native-b')
+  const second = await discoverCodexInstallations({
+    platform: 'darwin',
+    architecture: 'arm64',
+    environment: { PATH: bin },
+    knownPaths: [],
+  })
+  const changed = second.installations.find(
+    (installation) => installation.launcherPath === launcher,
+  )
+  assert.ok(changed)
+  assert.notEqual(await fingerprintCodexInstallation(changed), revision)
+})

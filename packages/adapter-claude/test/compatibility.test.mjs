@@ -42,6 +42,31 @@ const requiredHelp = `Options:
   --no-chrome                          Disable browser integration
   --disable-slash-commands             Disable slash commands`
 
+const latestHelp = requiredHelp.replace(
+  'Specify tools such as Read, Glob, Grep',
+  'Specify tool names (e.g. "Bash,Edit,Read")',
+)
+
+test('admits the REAL-validated 2.1.266 profile despite its abbreviated tool help example', async () => {
+  const observation = await observeClaudeCodeInstallation({
+    installation,
+    environment: { HOME: tmpdir(), PATH: process.env.PATH },
+    settingsPath: join(tmpdir(), 'codetether-missing-claude-settings.json'),
+    probeVersion: async () => '2.1.266 (Claude Code)',
+    probeHelp: async () => latestHelp,
+    fingerprint: async () => '2'.repeat(64),
+  })
+
+  assert.equal(observation.compatibility.state, 'verified')
+  assert.equal(observation.compatibility.runtimeReadiness, 'ready')
+  for (const capability of Object.values(
+    observation.compatibility.capabilities,
+  )) {
+    assert.equal(capability.observed, 'supported')
+    assert.equal(capability.effective, true)
+  }
+})
+
 test('unknown Claude versions probe execution without inference and limit unsupported store discovery', async () => {
   let authProbes = 0
   const observation = await observeClaudeCodeInstallation({

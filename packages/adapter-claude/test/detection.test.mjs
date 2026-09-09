@@ -98,7 +98,7 @@ test('marks an unknown version unsupported instead of available', async () => {
 })
 
 test('keeps both accepted and current verified Claude versions available', async () => {
-  for (const version of ['2.1.250', '2.1.251', '2.1.263']) {
+  for (const version of ['2.1.250', '2.1.251', '2.1.263', '2.1.266']) {
     const result = await detectClaudeCode({
       launcher,
       environment: {

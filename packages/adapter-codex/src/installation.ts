@@ -465,30 +465,82 @@ async function resolveOfficialNpmExecutable(
   if (target === undefined) return undefined
   const binaryName = platform === 'win32' ? 'codex.exe' : 'codex'
   const packageScope = dirname(packageRoot)
-  const platformPackageRoot = join(packageScope, target.packageName)
-  const platformManifest = await readBoundedJson(
-    join(platformPackageRoot, 'package.json'),
-    io,
-  )
   const candidates = [
     join(packageRoot, 'vendor', target.triple, 'codex', binaryName),
-    ...(platformManifest?.name === `@openai/${target.packageName}`
-      ? [
-          join(
-            platformPackageRoot,
-            'vendor',
-            target.triple,
-            'codex',
-            binaryName,
-          ),
-        ]
-      : []),
   ]
+  const platformPackageRoots = [
+    join(packageScope, target.packageName),
+    join(packageRoot, 'node_modules', '@openai', target.packageName),
+  ]
+  for (const platformPackageRoot of platformPackageRoots) {
+    const platformManifest = await readBoundedJson(
+      join(platformPackageRoot, 'package.json'),
+      io,
+    )
+    if (platformManifest?.name === `@openai/${target.packageName}`) {
+      candidates.push(
+        join(platformPackageRoot, 'vendor', target.triple, 'codex', binaryName),
+      )
+    }
+    if (
+      await isOfficialAliasedPlatformPackage(
+        manifest,
+        platformManifest,
+        platformPackageRoot,
+        target,
+        binaryName,
+        io,
+      )
+    ) {
+      candidates.push(
+        join(platformPackageRoot, 'vendor', target.triple, 'bin', binaryName),
+      )
+    }
+  }
   for (const candidate of candidates) {
     if (!(await isExecutableFile(candidate, platform, io))) continue
     return await io.run(() => realpath(candidate))
   }
   return undefined
+}
+
+async function isOfficialAliasedPlatformPackage(
+  rootManifest: Record<string, unknown>,
+  platformManifest: Record<string, unknown> | undefined,
+  platformPackageRoot: string,
+  target: { readonly packageName: string; readonly triple: string },
+  binaryName: string,
+  io: CodexInstallationIoDeadline,
+): Promise<boolean> {
+  const version = rootManifest.version
+  const optionalDependencies = rootManifest.optionalDependencies
+  if (
+    typeof version !== 'string' ||
+    !isJsonRecord(optionalDependencies) ||
+    platformManifest?.name !== '@openai/codex'
+  ) {
+    return false
+  }
+  const platformTag = target.packageName.slice('codex-'.length)
+  const platformVersion = `${version}-${platformTag}`
+  if (
+    optionalDependencies[`@openai/${target.packageName}`] !==
+      `npm:@openai/codex@${platformVersion}` ||
+    platformManifest.version !== platformVersion
+  ) {
+    return false
+  }
+  const packageDescription = await readBoundedJson(
+    join(platformPackageRoot, 'vendor', target.triple, 'codex-package.json'),
+    io,
+  )
+  return (
+    packageDescription?.layoutVersion === 1 &&
+    packageDescription.version === version &&
+    packageDescription.target === target.triple &&
+    packageDescription.variant === 'codex' &&
+    packageDescription.entrypoint === `bin/${binaryName}`
+  )
 }
 
 async function officialNpmPackageRoot(
@@ -595,6 +647,10 @@ function isOfficialCodexBin(value: unknown): boolean {
     !Array.isArray(value) &&
     (value as Record<string, unknown>).codex === 'bin/codex.js'
   )
+}
+
+function isJsonRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 async function isExecutableFile(

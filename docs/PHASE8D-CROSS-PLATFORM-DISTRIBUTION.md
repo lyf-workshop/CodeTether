@@ -63,8 +63,16 @@ Tauri owns the native picker, application bundle, Dock and Single Instance.
 Dock reopen restores the existing window. Menu-bar left click opens its menu;
 Windows tray behavior is unchanged. NSWorkspace sleep/wake notifications feed
 the existing lifecycle generations and bounded reconciliation, not a new
-reconnect worker. Native notifications use the existing safe notification intent;
-macOS activation/deep-link behavior still requires REAL validation.
+reconnect worker. Native notifications use the existing safe notification intent.
+macOS delivery uses `UNUserNotificationCenter` with one lazy, coalesced Alert
+authorization request, a bounded pending queue, and a retained delegate that
+requests Banner/List presentation while the hidden-window application remains
+active. Request acceptance, rather than attempted delivery, commits the one-time
+background-runtime education marker. Notification activation restores the same
+ready, not-quitting window and consumes a bounded process-memory mapping to
+return the existing safe public Attention intent for exact routing. It never
+mutates Attention, approves work or retries a Prompt. Delivery and activation
+still require REAL validation.
 
 Finder discovery reuses Phase 8B configured/prior/PATH/known candidate ordering.
 The bounded known list adds `/opt/homebrew/bin` and `/usr/local/bin` for macOS;

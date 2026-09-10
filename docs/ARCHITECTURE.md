@@ -859,6 +859,18 @@ The command uses the official Rust `tauri-plugin-dialog` 2.7.2 API to open one f
 
 Tauri 2.11.5 registers the official Rust and JavaScript notification plugin 2.3.3 for the platform permission check. Windows display/click behavior uses the reviewed `tauri-winrt-notification` 0.7.3 boundary because the intent must restore the existing window and return exact public identities. Rust denies unknown fields, private/malformed identities, control characters, overlong content, and more than two body lines before delivery. Its queue and dedupe sets are bounded, and failure returns a safe error while logging only a Desktop diagnostic.
 
+On macOS, the plugin's deprecated desktop delivery path is not used. The Desktop
+uses the lockfile-pinned `objc2-user-notifications` 0.3.2 bindings to
+`UNUserNotificationCenter`, coalesces the first lazy Alert authorization request,
+and holds at most 256 notification requests while authorization is pending. Its
+retained delegate requests Banner/List presentation while the application is
+active after the main window hides. An accepted Attention notification retains
+its public intent in a 256-entry process-memory mapping; activation consumes it,
+restores only the existing ready, not-quitting window, and reuses the existing
+event/queue route to the exact Conversation. Attention IDs retain their
+process-scoped dedupe, and the background-runtime education marker is persisted
+only after the native request is accepted.
+
 There is no `invoke("run_command")`, generic `invoke("native_action")`, arbitrary shell argument bridge, or filesystem grant to Web content. Tauri's folder dialog is directory acquisition, and native notifications are best-effort Attention delivery; neither is a second Client-to-Host protocol.
 
 Production CSP allows HTTP/SSE connection only to `http://127.0.0.1:4317`; `script-src 'self'` permits only packaged same-origin entry and dynamic-import chunks, without remote scripts or `'unsafe-eval'`, and wildcard source directives are absent. `removeUnusedCommands` remains enabled. The Rust build manifest explicitly enumerates the three application commands, and the generated release allow-list contains exactly those commands even though the Browser-safe adapter is code-split. Development adds only the explicit Vite HTTP/WebSocket endpoints and its required eval allowance. The Host still binds loopback only and retains strict Host/Origin validation; Desktop-managed startup allowlists only its explicit WebView Origin rather than weakening CORS.

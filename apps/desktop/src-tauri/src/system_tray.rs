@@ -9,6 +9,7 @@ use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 };
+#[cfg(not(target_os = "macos"))]
 use tauri_plugin_notification::NotificationExt;
 
 use crate::host_supervisor::{request_app_quit, show_main_window};
@@ -101,37 +102,77 @@ pub fn background_education_was_shown(app: &AppHandle) -> bool {
 }
 
 pub fn persist_and_show_background_education(app: &AppHandle) {
-    match persist_background_education_marker(app) {
-        Ok(true) => {
-            if let Err(error) = app
-                .notification()
-                .builder()
-                .title("CodeTether 仍在后台运行")
-                .body("任务和审批会继续运行，可从系统托盘重新打开。")
-                .show()
-            {
-                eprintln!(
-                    "[codetether:desktop] could not show the background-runtime education notification: {error}"
-                );
-            }
+    let path = match background_education_marker_path(app) {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!(
+                "[codetether:desktop] could not resolve the background-runtime education preference: {error}"
+            );
+            return;
         }
-        Ok(false) => {}
+    };
+    if path.is_file() {
+        return;
+    }
+
+    #[cfg(target_os = "macos")]
+    if let Err(error) = crate::macos_notifications::show(
+        app,
+        "codetether-background-runtime-education-v1".to_owned(),
+        "CodeTether 仍在后台运行".to_owned(),
+        "任务和审批会继续运行，可从系统托盘重新打开。".to_owned(),
+        None,
+        move |result| match result {
+            Ok(()) => persist_background_education_marker_at(&path),
+            Err(error) => eprintln!(
+                "[codetether:desktop] could not show the background-runtime education notification: {error}"
+            ),
+        },
+    ) {
+        eprintln!(
+            "[codetether:desktop] could not queue the background-runtime education notification: {error}"
+        );
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    match app
+        .notification()
+        .builder()
+        .title("CodeTether 仍在后台运行")
+        .body("任务和审批会继续运行，可从系统托盘重新打开。")
+        .show()
+    {
+        Ok(()) => persist_background_education_marker_at(&path),
         Err(error) => eprintln!(
-            "[codetether:desktop] could not persist the background-runtime education preference: {error}"
+            "[codetether:desktop] could not show the background-runtime education notification: {error}"
         ),
     }
 }
 
-fn persist_background_education_marker(app: &AppHandle) -> Result<bool, String> {
-    let path = background_education_marker_path(app)?;
-    let directory = path
+fn persist_background_education_marker_at(path: &std::path::Path) {
+    let result = path
         .parent()
-        .ok_or_else(|| "Desktop preference path has no parent directory".to_owned())?;
-    fs::create_dir_all(directory).map_err(|error| error.to_string())?;
-    match OpenOptions::new().write(true).create_new(true).open(path) {
-        Ok(_) => Ok(true),
-        Err(error) if error.kind() == ErrorKind::AlreadyExists => Ok(false),
-        Err(error) => Err(error.to_string()),
+        .ok_or_else(|| "Desktop preference path has no parent directory".to_owned())
+        .and_then(|directory| fs::create_dir_all(directory).map_err(|error| error.to_string()))
+        .and_then(|()| {
+            OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(path)
+                .map(|_| ())
+                .or_else(|error| {
+                    if error.kind() == ErrorKind::AlreadyExists {
+                        Ok(())
+                    } else {
+                        Err(error)
+                    }
+                })
+                .map_err(|error| error.to_string())
+        });
+    if let Err(error) = result {
+        eprintln!(
+            "[codetether:desktop] could not persist the background-runtime education preference: {error}"
+        );
     }
 }
 

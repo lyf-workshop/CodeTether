@@ -9,16 +9,16 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 use tauri::Emitter;
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 use crate::host_supervisor::show_main_window;
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 const NOTIFICATION_INTENT_EVENT: &str = "codetether://notification-intent";
 const MAX_DELIVERED_ATTENTION_IDS: usize = 2_048;
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "macos", test))]
 const MAX_PENDING_INTENTS: usize = 256;
 #[cfg(windows)]
 const MAX_ACTIVE_WINDOWS_TOASTS: usize = 256;
@@ -127,7 +127,7 @@ impl AttentionNotificationState {
         lock(&self.0.delivery).attention_ids.remove(attention_id);
     }
 
-    #[cfg(any(windows, test))]
+    #[cfg(any(windows, target_os = "macos", test))]
     fn enqueue_intent(&self, intent: NotificationIntent) {
         let mut pending = lock(&self.0.pending);
         if pending.len() == MAX_PENDING_INTENTS {
@@ -240,7 +240,9 @@ pub fn deliver_attention_notification(
 
     #[cfg(windows)]
     let result = show_windows_notification(&app, state.inner().clone(), intent.clone());
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    let result = show_macos_notification(&app, state.inner().clone(), intent.clone());
+    #[cfg(not(any(windows, target_os = "macos")))]
     let result: Result<(), String> = {
         use tauri_plugin_notification::NotificationExt;
         app.notification()
@@ -253,6 +255,7 @@ pub fn deliver_attention_notification(
 
     match result {
         Ok(()) => {
+            #[cfg(not(target_os = "macos"))]
             state.mark_delivered(&intent.attention_id);
             Ok(true)
         }
@@ -262,6 +265,30 @@ pub fn deliver_attention_notification(
             Err("Desktop notification could not be delivered.".to_owned())
         }
     }
+}
+
+#[cfg(target_os = "macos")]
+fn show_macos_notification(
+    app: &AppHandle,
+    state: AttentionNotificationState,
+    intent: NotificationIntent,
+) -> Result<(), String> {
+    let completion_state = state.clone();
+    let completion_attention_id = intent.attention_id.clone();
+    crate::macos_notifications::show(
+        app,
+        format!("codetether-attention-{}", intent.attention_id),
+        intent.title.clone(),
+        intent.body.clone(),
+        Some(intent.clone()),
+        move |result| match result {
+            Ok(()) => completion_state.mark_delivered(&completion_attention_id),
+            Err(error) => {
+                completion_state.release_delivery(&completion_attention_id);
+                eprintln!("[codetether:desktop] macOS notification delivery failed: {error}");
+            }
+        },
+    )
 }
 
 #[tauri::command]
@@ -441,8 +468,8 @@ fn notification_app_id_for_executable(
     })
 }
 
-#[cfg(windows)]
-fn activate_notification(
+#[cfg(any(windows, target_os = "macos"))]
+pub(crate) fn activate_notification(
     app: &AppHandle,
     state: &AttentionNotificationState,
     intent: NotificationIntent,

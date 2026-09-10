@@ -155,6 +155,10 @@ test('Web UI exposes only the narrow Project picker, Provider guidance, and Atte
   )
   assert.match(desktopCargo, /tauri-plugin-notification = "=2\.3\.3"/u)
   assert.match(desktopCargo, /tauri-winrt-notification = "=0\.7\.3"/u)
+  assert.match(
+    desktopCargo,
+    /objc2-user-notifications = \{ version = "=0\.3\.2"/u,
+  )
   assert.match(desktopRust, /pick_project_directory/u)
   assert.match(desktopRust, /open_provider_guidance/u)
   assert.match(desktopRust, /provider_guidance_url/u)
@@ -166,6 +170,13 @@ test('Web UI exposes only the narrow Project picker, Provider guidance, and Atte
   assert.match(desktopRust, /deliver_attention_notification/u)
   assert.match(desktopRust, /take_pending_notification_intent/u)
   assert.match(desktopRust, /codetether:\/\/notification-intent/u)
+  assert.match(desktopRust, /UNUserNotificationCenter/u)
+  assert.match(desktopRust, /UNNotificationPresentationOptions::Banner/u)
+  assert.match(desktopRust, /UNNotificationPresentationOptions::List/u)
+  assert.match(
+    desktopRust,
+    /userNotificationCenter:didReceiveNotificationResponse:/u,
+  )
   assert.match(desktopRust, /window\.unminimize\(\)/u)
   assert.match(desktopRust, /window\.show\(\)/u)
   assert.match(desktopRust, /window\.set_focus\(\)/u)

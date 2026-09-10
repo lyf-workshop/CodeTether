@@ -85,6 +85,26 @@ export interface CodexStoredThreadItemPage {
   readonly backwardsCursor?: string
 }
 
+/**
+ * Provider-private retained-history projection from thread/turns/list. The
+ * adapter keeps the Turn grouping because its cursor advances by Turn rather
+ * than by individual item.
+ */
+export interface CodexStoredThreadTurn {
+  readonly id: string
+  readonly items: readonly CodexStoredThreadItem[]
+  readonly invalidEntryCount: number
+  readonly recordsScanned: number
+}
+
+export interface CodexStoredThreadTurnPage {
+  readonly turns: readonly CodexStoredThreadTurn[]
+  readonly invalidEntryCount: number
+  readonly recordsScanned: number
+  readonly nextCursor?: string
+  readonly backwardsCursor?: string
+}
+
 export interface CodexTurnError {
   readonly message: string
   readonly codexErrorInfo?: unknown

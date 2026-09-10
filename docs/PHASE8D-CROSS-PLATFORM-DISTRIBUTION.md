@@ -220,12 +220,14 @@ unchanged. This is not a Backend/Profile Manager.
 ## Native historical transcript projection
 
 Phase 8D includes one shared corrective read path for explicitly adopted native
-Conversations. Codex reads the official bounded `thread/items/list` metadata
-surface; Claude Code reads its bounded Machine-local JSONL session file. Each
-adapter owns native format validation, safe visible-content normalization,
-Provider-private pagination and its content-free adoption boundary. Unsupported
-or changed formats affect historical display only and do not poison execution or
-native resume compatibility.
+Conversations. Current Codex reads the official bounded `thread/turns/list`
+retained-history surface with full persisted items and retains a guarded
+`thread/items/list` compatibility path for Provider versions that exposed it;
+Claude Code reads its bounded Machine-local JSONL session file. Each adapter owns
+native format validation, safe visible-content normalization, Provider-private
+pagination and its content-free adoption boundary. Unsupported or changed
+formats affect historical display only and do not poison execution or native
+resume compatibility.
 
 Web requests the recent page only when an adopted Conversation is opened. Host
 authorizes the exact immutable Conversation, Machine, ProjectLocation, Provider

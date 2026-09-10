@@ -22,10 +22,18 @@ import {
   MAX_CODEX_STORED_THREAD_ID_CODE_UNITS,
   MAX_CODEX_STORED_THREAD_PAGE_SIZE,
 } from './client.js'
-import { CodexOwnedProcessCleanupError, CodexProtocolError } from './errors.js'
+import {
+  CodexOwnedProcessCleanupError,
+  CodexProtocolError,
+  JsonRpcRemoteError,
+} from './errors.js'
 import type { RemoteCodexProcessFactory } from './process.js'
-import type { CodexStoredThread, CodexStoredThreadPage } from './protocol.js'
-import type { CodexStoredThreadItemPage } from './protocol.js'
+import type {
+  CodexStoredThread,
+  CodexStoredThreadItemPage,
+  CodexStoredThreadPage,
+  CodexStoredThreadTurnPage,
+} from './protocol.js'
 
 const CODEX_DISCOVERY_CLIENT_INFO = {
   name: 'codetether-session-discovery',
@@ -37,6 +45,8 @@ const MAX_REVISION_CODE_UNITS = 128
 const REVISION_PATTERN = /^[A-Za-z0-9_-]+$/u
 const MAX_TRANSCRIPT_ENTRY_BYTES = 64 * 1024
 const MAX_TRANSCRIPT_PAGE_BYTES = 512 * 1024
+const MAX_CODEX_TRANSCRIPT_CURSOR_CODE_UNITS = 2_048
+const CODEX_TURN_CURSOR_PREFIX = 'codex-turn-v1:'
 
 export interface CodexSessionMetadataClient {
   listStoredThreads(options: {
@@ -47,6 +57,12 @@ export interface CodexSessionMetadataClient {
   readStoredThread(options: {
     readonly threadId: string
   }): Promise<CodexStoredThread>
+  listStoredThreadTurns?(options: {
+    readonly threadId: string
+    readonly cursor?: string
+    readonly limit: number
+    readonly sortDirection?: 'asc' | 'desc'
+  }): Promise<CodexStoredThreadTurnPage>
   listStoredThreadItems?(options: {
     readonly threadId: string
     readonly cursor?: string
@@ -272,7 +288,6 @@ export class CodexSessionDiscovery
         request.signal,
       )
       const result = await this.#withClient(request.signal, async (client) => {
-        if (client.listStoredThreadItems === undefined) return undefined
         const thread = await client.readStoredThread({
           threadId: request.nativeSessionId,
         })
@@ -283,49 +298,114 @@ export class CodexSessionDiscovery
         if (!sameMachinePath(canonicalThreadRoot, canonicalProjectRoot)) {
           return undefined
         }
-        return await client.listStoredThreadItems({
-          threadId: request.nativeSessionId,
-          cursor: request.cursor ?? boundary.cursor,
-          limit: request.limit,
-          sortDirection: 'desc',
-        })
+        if (boundary.version === 2) {
+          if (client.listStoredThreadTurns === undefined) return undefined
+          const cursor = decodeCodexTurnTranscriptCursor(
+            request.cursor,
+            boundary.cursor,
+          )
+          return {
+            format: 'turns' as const,
+            offset: cursor.offset,
+            page: await client.listStoredThreadTurns({
+              threadId: request.nativeSessionId,
+              cursor: cursor.providerCursor,
+              limit: Math.max(1, Math.floor(request.limit / 2)),
+              sortDirection: 'desc',
+            }),
+          }
+        }
+        if (client.listStoredThreadItems === undefined) return undefined
+        return {
+          format: 'items' as const,
+          page: await client.listStoredThreadItems({
+            threadId: request.nativeSessionId,
+            cursor: request.cursor ?? boundary.cursor,
+            limit: request.limit,
+            sortDirection: 'desc',
+          }),
+        }
       })
       if (result === undefined)
         return transcriptFailurePage('unsupported', startedAt)
-      if (
-        request.cursor === undefined &&
-        result.items[0]?.id !== boundary.anchorItemId
-      ) {
-        return transcriptFailurePage('malformed', startedAt)
+      if (request.cursor === undefined) {
+        if (result.format === 'turns' && boundary.version === 2) {
+          const anchorTurn = result.page.turns[0]
+          if (
+            anchorTurn?.id !== boundary.anchorTurnId ||
+            codexTurnItemsRevision(
+              anchorTurn?.items.map(({ id }) => id) ?? [],
+            ) !== boundary.anchorItemsRevision
+          ) {
+            return transcriptFailurePage('malformed', startedAt)
+          }
+        }
+        if (
+          result.format === 'items' &&
+          boundary.version === 1 &&
+          result.page.items[0]?.id !== boundary.anchorItemId
+        ) {
+          return transcriptFailurePage('malformed', startedAt)
+        }
       }
-      const bounded = normalizeCodexTranscriptItems(result, request.limit)
-      const incomplete = result.nextCursor !== undefined
+      let bounded: {
+        entries: NativeTranscriptEntry[]
+        bytes: number
+        truncated: boolean
+      }
+      let nextCursor: string | undefined
+      if (result.format === 'turns') {
+        const turnPage = normalizeCodexTranscriptTurns(
+          result.page,
+          result.offset,
+          request.limit,
+        )
+        bounded = turnPage
+        nextCursor = nextCodexTurnTranscriptCursor(
+          result.page,
+          result.offset,
+          turnPage.consumed,
+          turnPage.available,
+        )
+      } else {
+        bounded = normalizeCodexTranscriptItems(result.page, request.limit)
+        nextCursor = result.page.nextCursor
+      }
+      const incomplete = nextCursor !== undefined
       const status =
-        result.invalidEntryCount > 0 || bounded.truncated
+        result.page.invalidEntryCount > 0 || bounded.truncated
           ? 'partial'
           : bounded.entries.length === 0
-            ? 'empty'
+            ? incomplete
+              ? 'partial'
+              : 'empty'
             : 'available'
       return {
         provider: this.provider,
         status,
         entries: bounded.entries.reverse(),
-        ...(result.nextCursor === undefined
-          ? {}
-          : { nextCursor: result.nextCursor }),
+        ...(nextCursor === undefined ? {} : { nextCursor }),
         complete: !incomplete,
         metrics: {
           bytesRead: bounded.bytes,
-          recordsScanned: result.items.length + result.invalidEntryCount,
+          recordsScanned:
+            result.format === 'turns'
+              ? result.page.recordsScanned
+              : result.page.items.length + result.page.invalidEntryCount,
           entriesReturned: bounded.entries.length,
           elapsedMs: elapsedMilliseconds(startedAt),
           truncated:
-            incomplete || result.invalidEntryCount > 0 || bounded.truncated,
+            incomplete ||
+            result.page.invalidEntryCount > 0 ||
+            bounded.truncated,
         },
       }
     } catch (error) {
       if (error instanceof CodexOwnedProcessCleanupError) throw error
       if (isAbortError(error)) throw error
+      if (isMethodUnavailable(error)) {
+        return transcriptFailurePage('unsupported', startedAt)
+      }
       return transcriptFailurePage(
         error instanceof CodexProtocolError ? 'malformed' : 'unavailable',
         startedAt,
@@ -486,8 +566,12 @@ function candidateFromThread(
           canonicalRoot,
           thread.name ?? null,
           thread.createdAt,
-          thread.updatedAt,
-          thread.recencyAt ?? null,
+          // Current Codex versions expose different updatedAt projections for
+          // thread/list (state-db metadata) and thread/read (rollout metadata)
+          // even when the persisted session has not changed. recencyAt is the
+          // shared mutation/order authority when present; older stores fall
+          // back to updatedAt.
+          thread.recencyAt ?? thread.updatedAt,
           thread.cliVersion,
           thread.source,
           thread.status,
@@ -505,17 +589,62 @@ function candidateFromThread(
   }
 }
 
-interface CodexTranscriptBoundary {
+interface CodexItemTranscriptBoundary {
   readonly version: 1
   readonly empty: boolean
   readonly cursor?: string
   readonly anchorItemId?: string
 }
 
+interface CodexTurnTranscriptBoundary {
+  readonly version: 2
+  readonly empty: boolean
+  readonly cursor?: string
+  readonly anchorTurnId?: string
+  readonly anchorItemsRevision?: string
+}
+
+type CodexTranscriptBoundary =
+  CodexItemTranscriptBoundary | CodexTurnTranscriptBoundary
+
 async function captureCodexTranscriptBoundary(
   client: CodexSessionMetadataClient,
   threadId: string,
 ): Promise<string | undefined> {
+  if (client.listStoredThreadTurns !== undefined) {
+    try {
+      const page = await client.listStoredThreadTurns({
+        threadId,
+        limit: 1,
+        sortDirection: 'desc',
+      })
+      const turn = page.turns[0]
+      if (turn === undefined) {
+        if (page.invalidEntryCount > 0) {
+          throw new CodexProtocolError(
+            'thread/turns/list could not capture a valid boundary',
+          )
+        }
+        return encodeCodexTranscriptBoundary({ version: 2, empty: true })
+      }
+      if (page.backwardsCursor === undefined) {
+        throw new CodexProtocolError(
+          'thread/turns/list omitted its boundary cursor',
+        )
+      }
+      return encodeCodexTranscriptBoundary({
+        version: 2,
+        empty: false,
+        cursor: page.backwardsCursor,
+        anchorTurnId: turn.id,
+        anchorItemsRevision: codexTurnItemsRevision(
+          turn.items.map(({ id }) => id),
+        ),
+      })
+    } catch (error) {
+      if (!isMethodUnavailable(error)) throw error
+    }
+  }
   if (client.listStoredThreadItems === undefined) return undefined
   const page = await client.listStoredThreadItems({
     threadId,
@@ -538,27 +667,61 @@ async function captureCodexTranscriptBoundary(
 function encodeCodexTranscriptBoundary(
   boundary: CodexTranscriptBoundary,
 ): string {
-  return `codex-v1:${Buffer.from(JSON.stringify(boundary), 'utf8').toString('base64url')}`
+  return `codex-v${String(boundary.version)}:${Buffer.from(JSON.stringify(boundary), 'utf8').toString('base64url')}`
 }
 
 function decodeCodexTranscriptBoundary(value: string): CodexTranscriptBoundary {
-  if (!value.startsWith('codex-v1:') || value.length > 2_048) {
+  const prefix = value.startsWith('codex-v1:')
+    ? 'codex-v1:'
+    : value.startsWith('codex-v2:')
+      ? 'codex-v2:'
+      : undefined
+  if (
+    prefix === undefined ||
+    value.length > MAX_CODEX_TRANSCRIPT_CURSOR_CODE_UNITS
+  ) {
     throw new TypeError('Codex transcript boundary is invalid')
   }
   const parsed = JSON.parse(
-    Buffer.from(value.slice('codex-v1:'.length), 'base64url').toString('utf8'),
+    Buffer.from(value.slice(prefix.length), 'base64url').toString('utf8'),
   ) as unknown
   if (
     typeof parsed !== 'object' ||
     parsed === null ||
     !('version' in parsed) ||
-    parsed.version !== 1 ||
+    (parsed.version !== 1 && parsed.version !== 2) ||
+    (prefix === 'codex-v1:' ? parsed.version !== 1 : parsed.version !== 2) ||
     !('empty' in parsed) ||
     typeof parsed.empty !== 'boolean'
   ) {
     throw new TypeError('Codex transcript boundary is invalid')
   }
-  if (parsed.empty) return { version: 1, empty: true }
+  if (parsed.empty) return { version: parsed.version, empty: true }
+  if (parsed.version === 2) {
+    if (
+      !('cursor' in parsed) ||
+      typeof parsed.cursor !== 'string' ||
+      parsed.cursor.length === 0 ||
+      parsed.cursor.length > MAX_CODEX_STORED_THREAD_CURSOR_CODE_UNITS ||
+      !('anchorTurnId' in parsed) ||
+      typeof parsed.anchorTurnId !== 'string' ||
+      parsed.anchorTurnId.length === 0 ||
+      parsed.anchorTurnId.length > MAX_CODEX_STORED_THREAD_ID_CODE_UNITS ||
+      !('anchorItemsRevision' in parsed) ||
+      typeof parsed.anchorItemsRevision !== 'string' ||
+      parsed.anchorItemsRevision.length !== 43 ||
+      !REVISION_PATTERN.test(parsed.anchorItemsRevision)
+    ) {
+      throw new TypeError('Codex transcript boundary is invalid')
+    }
+    return {
+      version: 2,
+      empty: false,
+      cursor: parsed.cursor,
+      anchorTurnId: parsed.anchorTurnId,
+      anchorItemsRevision: parsed.anchorItemsRevision,
+    }
+  }
   if (
     !('cursor' in parsed) ||
     typeof parsed.cursor !== 'string' ||
@@ -577,6 +740,128 @@ function decodeCodexTranscriptBoundary(value: string): CodexTranscriptBoundary {
     cursor: parsed.cursor,
     anchorItemId: parsed.anchorItemId,
   }
+}
+
+function normalizeCodexTranscriptTurns(
+  page: CodexStoredThreadTurnPage,
+  offset: number,
+  limit: number,
+): {
+  entries: NativeTranscriptEntry[]
+  bytes: number
+  truncated: boolean
+  available: number
+  consumed: number
+} {
+  const descendingItems = page.turns.flatMap((turn) =>
+    [...turn.items].reverse(),
+  )
+  if (offset > descendingItems.length) {
+    throw new CodexProtocolError('Codex retained-turn cursor offset is stale')
+  }
+  const selected = descendingItems.slice(offset, offset + limit)
+  const normalized = normalizeCodexTranscriptItems(
+    {
+      items: selected,
+      invalidEntryCount: page.invalidEntryCount,
+      ...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }),
+      ...(page.backwardsCursor === undefined
+        ? {}
+        : { backwardsCursor: page.backwardsCursor }),
+    },
+    limit,
+  )
+  return {
+    ...normalized,
+    available: descendingItems.length,
+    consumed: selected.length,
+  }
+}
+
+interface CodexTurnTranscriptCursor {
+  readonly providerCursor: string
+  readonly offset: number
+}
+
+function decodeCodexTurnTranscriptCursor(
+  cursor: string | undefined,
+  boundaryCursor: string | undefined,
+): CodexTurnTranscriptCursor {
+  if (cursor === undefined) {
+    if (boundaryCursor === undefined) {
+      throw new TypeError('Codex retained-turn boundary cursor is missing')
+    }
+    return { providerCursor: boundaryCursor, offset: 0 }
+  }
+  if (!cursor.startsWith(CODEX_TURN_CURSOR_PREFIX)) {
+    throw new TypeError('Codex retained-turn cursor is invalid')
+  }
+  const parsed = JSON.parse(
+    Buffer.from(
+      cursor.slice(CODEX_TURN_CURSOR_PREFIX.length),
+      'base64url',
+    ).toString('utf8'),
+  ) as unknown
+  if (
+    typeof parsed !== 'object' ||
+    parsed === null ||
+    !('providerCursor' in parsed) ||
+    typeof parsed.providerCursor !== 'string' ||
+    parsed.providerCursor.length === 0 ||
+    parsed.providerCursor.length > MAX_CODEX_STORED_THREAD_CURSOR_CODE_UNITS ||
+    !('offset' in parsed) ||
+    !Number.isSafeInteger(parsed.offset) ||
+    (parsed.offset as number) < 0 ||
+    (parsed.offset as number) > MAX_CODEX_STORED_THREAD_PAGE_SIZE * 100
+  ) {
+    throw new TypeError('Codex retained-turn cursor is invalid')
+  }
+  return {
+    providerCursor: parsed.providerCursor,
+    offset: parsed.offset as number,
+  }
+}
+
+function nextCodexTurnTranscriptCursor(
+  page: CodexStoredThreadTurnPage,
+  offset: number,
+  consumed: number,
+  available: number,
+): string | undefined {
+  const nextOffset = offset + consumed
+  if (nextOffset < available) {
+    if (page.backwardsCursor === undefined) {
+      throw new CodexProtocolError(
+        'thread/turns/list omitted its stable page cursor',
+      )
+    }
+    return encodeCodexTurnTranscriptCursor({
+      providerCursor: page.backwardsCursor,
+      offset: nextOffset,
+    })
+  }
+  return page.nextCursor === undefined
+    ? undefined
+    : encodeCodexTurnTranscriptCursor({
+        providerCursor: page.nextCursor,
+        offset: 0,
+      })
+}
+
+function encodeCodexTurnTranscriptCursor(
+  cursor: CodexTurnTranscriptCursor,
+): string {
+  return `${CODEX_TURN_CURSOR_PREFIX}${Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url')}`
+}
+
+function codexTurnItemsRevision(itemIds: readonly string[]): string {
+  return createHash('sha256')
+    .update(JSON.stringify(itemIds))
+    .digest('base64url')
+}
+
+function isMethodUnavailable(error: unknown): boolean {
+  return error instanceof JsonRpcRemoteError && error.code === -32601
 }
 
 function normalizeCodexTranscriptItems(
@@ -636,7 +921,7 @@ function assertTranscriptRequest(
     request.limit > MAX_CODEX_STORED_THREAD_PAGE_SIZE ||
     (request.cursor !== undefined &&
       (request.cursor.length === 0 ||
-        request.cursor.length > MAX_CODEX_STORED_THREAD_CURSOR_CODE_UNITS))
+        request.cursor.length > MAX_CODEX_TRANSCRIPT_CURSOR_CODE_UNITS))
   ) {
     throw new TypeError('Codex transcript request is invalid')
   }

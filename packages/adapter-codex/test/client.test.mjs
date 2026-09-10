@@ -782,6 +782,173 @@ test('rejects unbounded stored-thread metadata pages', async () => {
   await assert.rejects(listed, /exceeded requested limit/)
 })
 
+test('reads bounded full retained turns while projecting only visible user and assistant text', async () => {
+  const { child, client, written } = createHarness()
+  const listed = client.listStoredThreadTurns({
+    threadId: 'private-thread-a',
+    cursor: 'turn-cursor',
+    limit: 2,
+    sortDirection: 'desc',
+  })
+  await nextTurn()
+  assert.deepEqual(written[0], {
+    id: written[0].id,
+    method: 'thread/turns/list',
+    params: {
+      threadId: 'private-thread-a',
+      cursor: 'turn-cursor',
+      limit: 2,
+      sortDirection: 'desc',
+      itemsView: 'full',
+    },
+  })
+  child.stdout.write(
+    `${JSON.stringify({
+      id: written[0].id,
+      result: {
+        data: [
+          {
+            id: 'turn-two',
+            status: 'completed',
+            itemsView: 'full',
+            items: [
+              {
+                id: 'user-two',
+                type: 'userMessage',
+                content: [
+                  { type: 'text', text: 'visible user' },
+                  { type: 'localImage', path: '/private/not-projected' },
+                ],
+              },
+              { id: 'reasoning-two', type: 'reasoning', summary: [] },
+              {
+                id: 'assistant-two',
+                type: 'agentMessage',
+                text: 'visible assistant',
+              },
+            ],
+          },
+          {
+            id: 'turn-one',
+            status: 'completed',
+            itemsView: 'full',
+            items: [{ id: 'broken-user', type: 'userMessage', content: null }],
+          },
+        ],
+        nextCursor: 'older-turns',
+        backwardsCursor: 'newer-turns',
+      },
+    })}\n`,
+  )
+
+  assert.deepEqual(await listed, {
+    turns: [
+      {
+        id: 'turn-two',
+        items: [
+          {
+            turnId: 'turn-two',
+            id: 'user-two',
+            type: 'userMessage',
+            text: 'visible user',
+          },
+          {
+            turnId: 'turn-two',
+            id: 'assistant-two',
+            type: 'agentMessage',
+            text: 'visible assistant',
+          },
+        ],
+        invalidEntryCount: 0,
+        recordsScanned: 3,
+      },
+      {
+        id: 'turn-one',
+        items: [],
+        invalidEntryCount: 1,
+        recordsScanned: 1,
+      },
+    ],
+    invalidEntryCount: 1,
+    recordsScanned: 6,
+    nextCursor: 'older-turns',
+    backwardsCursor: 'newer-turns',
+  })
+})
+
+test('rejects incomplete or oversized retained-turn pages', async () => {
+  const first = createHarness()
+  const incomplete = first.client.listStoredThreadTurns({
+    threadId: 'private-thread-a',
+    limit: 1,
+  })
+  await nextTurn()
+  first.child.stdout.write(
+    `${JSON.stringify({
+      id: first.written[0].id,
+      result: {
+        data: [
+          {
+            id: 'turn-one',
+            status: 'completed',
+            itemsView: 'summary',
+            items: [],
+          },
+        ],
+      },
+    })}\n`,
+  )
+  assert.deepEqual(await incomplete, {
+    turns: [],
+    invalidEntryCount: 1,
+    recordsScanned: 1,
+  })
+
+  const second = createHarness()
+  const oversized = second.client.listStoredThreadTurns({
+    threadId: 'private-thread-a',
+    limit: 1,
+  })
+  await nextTurn()
+  second.child.stdout.write(
+    `${JSON.stringify({
+      id: second.written[0].id,
+      result: { data: [{}, {}] },
+    })}\n`,
+  )
+  await assert.rejects(oversized, /invalid data/)
+
+  const third = createHarness()
+  const tooManyItems = third.client.listStoredThreadTurns({
+    threadId: 'private-thread-a',
+    limit: 1,
+  })
+  await nextTurn()
+  third.child.stdout.write(
+    `${JSON.stringify({
+      id: third.written[0].id,
+      result: {
+        data: [
+          {
+            id: 'turn-one',
+            status: 'completed',
+            itemsView: 'full',
+            items: Array.from({ length: 1_001 }, (_, index) => ({
+              id: `reasoning-${index}`,
+              type: 'reasoning',
+            })),
+          },
+        ],
+      },
+    })}\n`,
+  )
+  assert.deepEqual(await tooManyItems, {
+    turns: [],
+    invalidEntryCount: 1,
+    recordsScanned: 1,
+  })
+})
+
 function writeNotification(child, method, params) {
   child.stdout.write(`${JSON.stringify({ method, params })}\n`)
 }

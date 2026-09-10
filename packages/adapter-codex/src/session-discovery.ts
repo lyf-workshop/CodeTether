@@ -5,11 +5,15 @@ import { performance } from 'node:perf_hooks'
 
 import type {
   NativeProviderSessionCandidate,
+  NativeTranscriptEntry,
+  NativeTranscriptPage,
   ProviderSessionCandidateValidationRequest,
   ProviderSessionDiscovery,
   ProviderSessionDiscoveryFailureReason,
   ProviderSessionDiscoveryPage,
   ProviderSessionDiscoveryRequest,
+  ProviderSessionTranscriptReadRequest,
+  ProviderSessionTranscriptReader,
 } from '@codetether/agent-core'
 
 import {
@@ -21,6 +25,7 @@ import {
 import { CodexOwnedProcessCleanupError, CodexProtocolError } from './errors.js'
 import type { RemoteCodexProcessFactory } from './process.js'
 import type { CodexStoredThread, CodexStoredThreadPage } from './protocol.js'
+import type { CodexStoredThreadItemPage } from './protocol.js'
 
 const CODEX_DISCOVERY_CLIENT_INFO = {
   name: 'codetether-session-discovery',
@@ -30,6 +35,8 @@ const CODEX_DISCOVERY_CLIENT_INFO = {
 const MAX_TITLE_CODE_POINTS = 120
 const MAX_REVISION_CODE_UNITS = 128
 const REVISION_PATTERN = /^[A-Za-z0-9_-]+$/u
+const MAX_TRANSCRIPT_ENTRY_BYTES = 64 * 1024
+const MAX_TRANSCRIPT_PAGE_BYTES = 512 * 1024
 
 export interface CodexSessionMetadataClient {
   listStoredThreads(options: {
@@ -40,6 +47,12 @@ export interface CodexSessionMetadataClient {
   readStoredThread(options: {
     readonly threadId: string
   }): Promise<CodexStoredThread>
+  listStoredThreadItems?(options: {
+    readonly threadId: string
+    readonly cursor?: string
+    readonly limit: number
+    readonly sortDirection?: 'asc' | 'desc'
+  }): Promise<CodexStoredThreadItemPage>
   shutdown(): Promise<void>
 }
 
@@ -64,7 +77,9 @@ export interface CodexSessionDiscoveryOptions {
  * thread/list and thread/read APIs. Discovery never starts, resumes, or sends a
  * turn, and every purpose-scoped process is awaited during cleanup.
  */
-export class CodexSessionDiscovery implements ProviderSessionDiscovery {
+export class CodexSessionDiscovery
+  implements ProviderSessionDiscovery, ProviderSessionTranscriptReader
+{
   readonly provider = 'codex' as const
   readonly #clientFactory: CodexSessionMetadataClientFactory
   readonly #canonicalizePath: (path: string) => Promise<string>
@@ -196,29 +211,125 @@ export class CodexSessionDiscovery implements ProviderSessionDiscovery {
         request.projectRoot,
         request.signal,
       )
-      const thread = await this.#withClient(
-        request.signal,
-        async (client) =>
-          await client.readStoredThread({
-            threadId: request.nativeSessionId,
-          }),
-      )
-      if (thread.ephemeral || thread.status !== 'notLoaded') return undefined
-      const canonicalThreadRoot = await this.#canonicalizeAbsolutePath(
-        thread.cwd,
-        request.signal,
-      )
-      if (!sameMachinePath(canonicalThreadRoot, canonicalProjectRoot)) {
-        return undefined
-      }
-      const candidate = candidateFromThread(thread, canonicalThreadRoot)
-      return candidate.revision === request.revision ? candidate : undefined
+      return await this.#withClient(request.signal, async (client) => {
+        const thread = await client.readStoredThread({
+          threadId: request.nativeSessionId,
+        })
+        if (thread.ephemeral || thread.status !== 'notLoaded') return undefined
+        const canonicalThreadRoot = await this.#canonicalizeAbsolutePath(
+          thread.cwd,
+          request.signal,
+        )
+        if (!sameMachinePath(canonicalThreadRoot, canonicalProjectRoot)) {
+          return undefined
+        }
+        const candidate = candidateFromThread(thread, canonicalThreadRoot)
+        if (candidate.revision !== request.revision) return undefined
+        try {
+          const transcriptBoundary = await captureCodexTranscriptBoundary(
+            client,
+            thread.id,
+          )
+          return {
+            ...candidate,
+            ...(transcriptBoundary === undefined ? {} : { transcriptBoundary }),
+          }
+        } catch (error) {
+          if (isAbortError(error)) throw error
+          return { ...candidate, historicalTranscript: 'unavailable' }
+        }
+      })
     } catch (error) {
       if (error instanceof CodexOwnedProcessCleanupError) {
         throw this.#latchCleanupFailure(error)
       }
       if (isAbortError(error)) throw error
       return undefined
+    }
+  }
+
+  async readSessionTranscript(
+    request: ProviderSessionTranscriptReadRequest,
+  ): Promise<NativeTranscriptPage> {
+    const startedAt = performance.now()
+    this.#assertCleanupVerified()
+    assertTranscriptRequest(request)
+    throwIfAborted(request.signal)
+    if (request.boundary === undefined) {
+      return transcriptFailurePage('partial', startedAt)
+    }
+    let boundary: CodexTranscriptBoundary
+    try {
+      boundary = decodeCodexTranscriptBoundary(request.boundary)
+    } catch {
+      return transcriptFailurePage('malformed', startedAt)
+    }
+    if (boundary.empty) return transcriptFailurePage('empty', startedAt)
+
+    try {
+      const canonicalProjectRoot = await this.#canonicalizeAbsolutePath(
+        request.projectRoot,
+        request.signal,
+      )
+      const result = await this.#withClient(request.signal, async (client) => {
+        if (client.listStoredThreadItems === undefined) return undefined
+        const thread = await client.readStoredThread({
+          threadId: request.nativeSessionId,
+        })
+        const canonicalThreadRoot = await this.#canonicalizeAbsolutePath(
+          thread.cwd,
+          request.signal,
+        )
+        if (!sameMachinePath(canonicalThreadRoot, canonicalProjectRoot)) {
+          return undefined
+        }
+        return await client.listStoredThreadItems({
+          threadId: request.nativeSessionId,
+          cursor: request.cursor ?? boundary.cursor,
+          limit: request.limit,
+          sortDirection: 'desc',
+        })
+      })
+      if (result === undefined)
+        return transcriptFailurePage('unsupported', startedAt)
+      if (
+        request.cursor === undefined &&
+        result.items[0]?.id !== boundary.anchorItemId
+      ) {
+        return transcriptFailurePage('malformed', startedAt)
+      }
+      const bounded = normalizeCodexTranscriptItems(result, request.limit)
+      const incomplete = result.nextCursor !== undefined
+      const status =
+        result.invalidEntryCount > 0 || bounded.truncated
+          ? 'partial'
+          : bounded.entries.length === 0
+            ? 'empty'
+            : 'available'
+      return {
+        provider: this.provider,
+        status,
+        entries: bounded.entries.reverse(),
+        ...(result.nextCursor === undefined
+          ? {}
+          : { nextCursor: result.nextCursor }),
+        complete: !incomplete,
+        metrics: {
+          bytesRead: bounded.bytes,
+          recordsScanned: result.items.length + result.invalidEntryCount,
+          entriesReturned: bounded.entries.length,
+          elapsedMs: elapsedMilliseconds(startedAt),
+          truncated:
+            incomplete || result.invalidEntryCount > 0 || bounded.truncated,
+        },
+      }
+    } catch (error) {
+      if (error instanceof CodexOwnedProcessCleanupError) throw error
+      if (isAbortError(error)) throw error
+      return transcriptFailurePage(
+        error instanceof CodexProtocolError ? 'malformed' : 'unavailable',
+        startedAt,
+      )
     }
   }
 
@@ -390,7 +501,163 @@ function candidateFromThread(
     ...(lastActiveAt === undefined ? {} : { lastActiveAt }),
     providerVersion: thread.cliVersion,
     resumeStatus: 'supported',
-    historicalTranscript: 'unavailable',
+    historicalTranscript: 'supported',
+  }
+}
+
+interface CodexTranscriptBoundary {
+  readonly version: 1
+  readonly empty: boolean
+  readonly cursor?: string
+  readonly anchorItemId?: string
+}
+
+async function captureCodexTranscriptBoundary(
+  client: CodexSessionMetadataClient,
+  threadId: string,
+): Promise<string | undefined> {
+  if (client.listStoredThreadItems === undefined) return undefined
+  const page = await client.listStoredThreadItems({
+    threadId,
+    limit: 1,
+    sortDirection: 'desc',
+  })
+  const item = page.items[0]
+  return encodeCodexTranscriptBoundary(
+    item === undefined
+      ? { version: 1, empty: true }
+      : {
+          version: 1,
+          empty: false,
+          cursor: page.backwardsCursor,
+          anchorItemId: item.id,
+        },
+  )
+}
+
+function encodeCodexTranscriptBoundary(
+  boundary: CodexTranscriptBoundary,
+): string {
+  return `codex-v1:${Buffer.from(JSON.stringify(boundary), 'utf8').toString('base64url')}`
+}
+
+function decodeCodexTranscriptBoundary(value: string): CodexTranscriptBoundary {
+  if (!value.startsWith('codex-v1:') || value.length > 2_048) {
+    throw new TypeError('Codex transcript boundary is invalid')
+  }
+  const parsed = JSON.parse(
+    Buffer.from(value.slice('codex-v1:'.length), 'base64url').toString('utf8'),
+  ) as unknown
+  if (
+    typeof parsed !== 'object' ||
+    parsed === null ||
+    !('version' in parsed) ||
+    parsed.version !== 1 ||
+    !('empty' in parsed) ||
+    typeof parsed.empty !== 'boolean'
+  ) {
+    throw new TypeError('Codex transcript boundary is invalid')
+  }
+  if (parsed.empty) return { version: 1, empty: true }
+  if (
+    !('cursor' in parsed) ||
+    typeof parsed.cursor !== 'string' ||
+    parsed.cursor.length === 0 ||
+    parsed.cursor.length > MAX_CODEX_STORED_THREAD_CURSOR_CODE_UNITS ||
+    !('anchorItemId' in parsed) ||
+    typeof parsed.anchorItemId !== 'string' ||
+    parsed.anchorItemId.length === 0 ||
+    parsed.anchorItemId.length > MAX_CODEX_STORED_THREAD_ID_CODE_UNITS
+  ) {
+    throw new TypeError('Codex transcript boundary is invalid')
+  }
+  return {
+    version: 1,
+    empty: false,
+    cursor: parsed.cursor,
+    anchorItemId: parsed.anchorItemId,
+  }
+}
+
+function normalizeCodexTranscriptItems(
+  page: CodexStoredThreadItemPage,
+  limit: number,
+): { entries: NativeTranscriptEntry[]; bytes: number; truncated: boolean } {
+  const entries: NativeTranscriptEntry[] = []
+  let bytes = 0
+  let truncated = false
+  const entryByteLimit = Math.min(
+    MAX_TRANSCRIPT_ENTRY_BYTES,
+    Math.floor(MAX_TRANSCRIPT_PAGE_BYTES / Math.max(1, page.items.length)),
+  )
+  for (const [sequence, item] of page.items.entries()) {
+    const retained = retainUtf8(item.text, entryByteLimit)
+    bytes += retained.bytes
+    truncated ||= retained.truncated
+    entries.push({
+      id: item.id,
+      provider: 'codex',
+      role: item.type === 'userMessage' ? 'user' : 'assistant',
+      kind: 'message',
+      content: retained.text,
+      nativeSequence: Math.max(0, limit - sequence),
+      readOnly: true,
+    })
+  }
+  return { entries, bytes, truncated }
+}
+
+function retainUtf8(
+  value: string,
+  maximumBytes: number,
+): { text: string; bytes: number; truncated: boolean } {
+  const buffer = Buffer.from(value, 'utf8')
+  if (buffer.byteLength <= maximumBytes) {
+    return { text: value, bytes: buffer.byteLength, truncated: false }
+  }
+  let end = maximumBytes
+  while (end > 0 && ((buffer[end] ?? 0) & 0xc0) === 0x80) end -= 1
+  const text = buffer.subarray(0, end).toString('utf8')
+  return { text, bytes: Buffer.byteLength(text), truncated: true }
+}
+
+function assertTranscriptRequest(
+  request: ProviderSessionTranscriptReadRequest,
+): void {
+  assertValidationRequest({
+    projectRoot: request.projectRoot,
+    nativeSessionId: request.nativeSessionId,
+    revision: 'transcript',
+    ...(request.signal === undefined ? {} : { signal: request.signal }),
+  })
+  if (
+    !Number.isSafeInteger(request.limit) ||
+    request.limit <= 0 ||
+    request.limit > MAX_CODEX_STORED_THREAD_PAGE_SIZE ||
+    (request.cursor !== undefined &&
+      (request.cursor.length === 0 ||
+        request.cursor.length > MAX_CODEX_STORED_THREAD_CURSOR_CODE_UNITS))
+  ) {
+    throw new TypeError('Codex transcript request is invalid')
+  }
+}
+
+function transcriptFailurePage(
+  status: NativeTranscriptPage['status'],
+  startedAt: number,
+): NativeTranscriptPage {
+  return {
+    provider: 'codex',
+    status,
+    entries: [],
+    complete: true,
+    metrics: {
+      bytesRead: 0,
+      recordsScanned: 0,
+      entriesReturned: 0,
+      elapsedMs: elapsedMilliseconds(startedAt),
+      truncated: status === 'partial',
+    },
   }
 }
 

@@ -1,4 +1,5 @@
 import type { AgentProvider } from './events.js'
+import type { ProviderSessionTranscriptReader } from './native-transcript.js'
 
 export const providerSessionDiscoveryStatuses = [
   'supported',
@@ -53,6 +54,8 @@ export interface NativeProviderSessionCandidate {
   readonly providerVersion?: string
   readonly resumeStatus: ProviderSessionResumeStatus
   readonly historicalTranscript: ProviderHistoricalTranscriptStatus
+  /** Provider-private, content-free split captured during exact revalidation. */
+  readonly transcriptBoundary?: string
 }
 
 export interface ProviderSessionDiscoveryMetrics {
@@ -102,3 +105,10 @@ export interface ProviderSessionDiscovery {
     request: ProviderSessionCandidateValidationRequest,
   ): Promise<NativeProviderSessionCandidate | undefined>
 }
+
+/**
+ * A Provider metadata adapter may additionally expose read-only historical
+ * projection. Its absence affects transcript display only, never execution.
+ */
+export type ProviderSessionMetadataAdapter = ProviderSessionDiscovery &
+  Pick<Partial<ProviderSessionTranscriptReader>, 'readSessionTranscript'>

@@ -41,6 +41,7 @@ async function fixture(options = {}) {
   let discoveryCalls = 0
   let providerSessionDiscoveryCalls = 0
   let providerSessionValidationCalls = 0
+  let providerSessionTranscriptCalls = 0
   let openCodexCalls = 0
   let openClaudeCalls = 0
   let closedCodexSessions = 0
@@ -182,6 +183,17 @@ async function fixture(options = {}) {
               },
             }
           : {}),
+        ...(options.providerSessionTranscriptEnabled === true
+          ? {
+              async readProviderSessionTranscript(input) {
+                providerSessionTranscriptCalls += 1
+                if (options.providerSessionTranscriptHandler !== undefined) {
+                  return await options.providerSessionTranscriptHandler(input)
+                }
+                return remoteProviderSessionTranscriptPage(input)
+              },
+            }
+          : {}),
         close() {
           if (closed) return
           closed = true
@@ -288,6 +300,9 @@ async function fixture(options = {}) {
       },
       get providerSessionValidation() {
         return providerSessionValidationCalls
+      },
+      get providerSessionTranscript() {
+        return providerSessionTranscriptCalls
       },
       get openCodex() {
         return openCodexCalls
@@ -408,6 +423,37 @@ function remoteProviderSessionDiscoveryPage(input) {
       corruptEntriesSkipped: 0,
       elapsedMs: 1,
       truncated: false,
+    },
+  }
+}
+
+function remoteProviderSessionTranscriptPage(input, options = {}) {
+  const content = options.content ?? 'Historical remote message'
+  return {
+    provider: input.provider,
+    status: 'available',
+    entries: [
+      {
+        id: options.id ?? 'remote-provider-transcript-entry',
+        provider: input.provider,
+        role: 'assistant',
+        kind: 'message',
+        content,
+        occurredAt: '2026-09-05T11:00:00.000Z',
+        nativeSequence: options.sequence ?? 0,
+        readOnly: true,
+      },
+    ],
+    ...(options.nextCursor === undefined
+      ? {}
+      : { nextCursor: options.nextCursor }),
+    complete: options.nextCursor === undefined,
+    metrics: {
+      bytesRead: Buffer.byteLength(content, 'utf8'),
+      recordsScanned: 1,
+      entriesReturned: 1,
+      elapsedMs: 1,
+      truncated: options.nextCursor !== undefined,
     },
   }
 }
@@ -841,6 +887,239 @@ test('remote Provider session pagination saturates aggregate safe metrics', asyn
       elapsedMs: Number.MAX_SAFE_INTEGER,
       truncated: false,
     })
+  } finally {
+    await f.close(coordinator)
+  }
+})
+
+test('remote transcript pages preserve exact scope and aggregate oldest first', async () => {
+  const calls = []
+  const f = await fixture({
+    providerSessionTranscriptEnabled: true,
+    async providerSessionTranscriptHandler(input) {
+      calls.push(input)
+      return input.cursor === undefined
+        ? remoteProviderSessionTranscriptPage(input, {
+            id: 'remote-transcript-newest',
+            content: 'newest',
+            sequence: 3,
+            nextCursor: 'remote-transcript-older',
+          })
+        : {
+            ...remoteProviderSessionTranscriptPage(input, {
+              id: 'remote-transcript-oldest',
+              content: 'oldest',
+              sequence: 1,
+            }),
+            entries: [
+              {
+                id: 'remote-transcript-oldest',
+                provider: input.provider,
+                role: 'user',
+                kind: 'message',
+                content: 'oldest',
+                nativeSequence: 1,
+                readOnly: true,
+              },
+              {
+                id: 'remote-transcript-middle',
+                provider: input.provider,
+                role: 'assistant',
+                kind: 'message',
+                content: 'middle',
+                nativeSequence: 2,
+                readOnly: true,
+              },
+            ],
+            metrics: {
+              bytesRead: 12,
+              recordsScanned: 2,
+              entriesReturned: 2,
+              elapsedMs: 1,
+              truncated: false,
+            },
+          }
+    },
+  })
+  let coordinator
+  try {
+    coordinator = await SecureRemoteMachineCoordinator.create({
+      persistence: f.store,
+      transport: f.transport,
+      heartbeatIntervalMs: 60_000,
+      reconnectMaximumDelayMs: 20,
+    })
+    const confirmed = await pairAndActivate(coordinator, f)
+    await waitFor(
+      () =>
+        coordinator.connectionState(confirmed.machine.machineId) === 'online',
+      'online Machine before transcript aggregation',
+    )
+    const machine = f.store.getMachine(confirmed.machine.machineId)
+    const trust = f.store.getTrustedMachinePeer(confirmed.machine.machineId)
+    assert.ok(machine)
+    assert.ok(trust)
+
+    const input = {
+      conversationId: 'conv_remote_transcript_scope',
+      provider: 'codex',
+      projectId: 'proj_remote_transcript_scope',
+      rootPath: '/srv/projects/transcript-scope',
+      providerInstallationId: 'pinst_remote_transcript_scope',
+      expectedInstallationRevision: 'prev_remote_transcript_scope',
+      nativeSessionId: 'private-native-transcript-scope',
+      boundary: 'codex-v1:private-boundary',
+      adoptedAt: '2026-09-05T12:00:00.000Z',
+      limit: 3,
+    }
+    const page = await coordinator.readProviderSessionTranscript(
+      machine,
+      trust,
+      input,
+    )
+    assert.deepEqual(
+      page.entries.map(({ content }) => content),
+      ['oldest', 'middle', 'newest'],
+    )
+    assert.equal(page.nextCursor, undefined)
+    assert.equal(page.complete, true)
+    assert.equal(page.metrics.entriesReturned, 3)
+    assert.equal(f.counts.providerSessionTranscript, 2)
+    assert.deepEqual(
+      calls.map((call) => ({
+        conversationId: call.conversationId,
+        projectId: call.projectId,
+        rootPath: call.rootPath,
+        provider: call.provider,
+        providerInstallationId: call.providerInstallationId,
+        expectedInstallationRevision: call.expectedInstallationRevision,
+        nativeSessionId: call.nativeSessionId,
+        boundary: call.boundary,
+        adoptedAt: call.adoptedAt,
+        cursor: call.cursor,
+        limit: call.limit,
+      })),
+      [
+        { ...input, cursor: undefined, limit: 3 },
+        { ...input, cursor: 'remote-transcript-older', limit: 2 },
+      ],
+    )
+  } finally {
+    await f.close(coordinator)
+  }
+})
+
+test('remote transcript pagination rejects a cursor that does not advance', async () => {
+  const f = await fixture({
+    providerSessionTranscriptEnabled: true,
+    async providerSessionTranscriptHandler(input) {
+      return remoteProviderSessionTranscriptPage(input, {
+        id: `remote-transcript-${f.counts.providerSessionTranscript}`,
+        nextCursor: 'remote-transcript-repeated-cursor',
+      })
+    },
+  })
+  let coordinator
+  try {
+    coordinator = await SecureRemoteMachineCoordinator.create({
+      persistence: f.store,
+      transport: f.transport,
+      heartbeatIntervalMs: 60_000,
+      reconnectMaximumDelayMs: 20,
+    })
+    const confirmed = await pairAndActivate(coordinator, f)
+    await waitFor(
+      () =>
+        coordinator.connectionState(confirmed.machine.machineId) === 'online',
+      'online Machine before transcript cursor validation',
+    )
+    const machine = f.store.getMachine(confirmed.machine.machineId)
+    const trust = f.store.getTrustedMachinePeer(confirmed.machine.machineId)
+    assert.ok(machine)
+    assert.ok(trust)
+
+    await assert.rejects(
+      coordinator.readProviderSessionTranscript(machine, trust, {
+        conversationId: 'conv_remote_transcript_cursor',
+        provider: 'codex',
+        projectId: 'proj_remote_transcript_cursor',
+        rootPath: '/srv/projects/transcript-cursor',
+        providerInstallationId: 'pinst_remote_transcript_cursor',
+        expectedInstallationRevision: 'prev_remote_transcript_cursor',
+        nativeSessionId: 'private-native-transcript-cursor',
+        adoptedAt: '2026-09-05T12:00:00.000Z',
+        limit: 3,
+      }),
+      (error) =>
+        error instanceof RemoteMachineCoordinatorError &&
+        error.code === 'protocol_incompatible',
+    )
+    assert.equal(f.counts.providerSessionTranscript, 2)
+  } finally {
+    await f.close(coordinator)
+  }
+})
+
+test('cancelled remote transcript read releases its connection and restores online state', async () => {
+  const f = await fixture({
+    providerSessionTranscriptEnabled: true,
+    async providerSessionTranscriptHandler(input) {
+      input.signal.throwIfAborted()
+      await new Promise((resolve, reject) => {
+        const abort = () =>
+          reject(input.signal.reason ?? abortError('transcript cancellation'))
+        input.signal.addEventListener('abort', abort, { once: true })
+      })
+    },
+  })
+  let coordinator
+  try {
+    coordinator = await SecureRemoteMachineCoordinator.create({
+      persistence: f.store,
+      transport: f.transport,
+      heartbeatIntervalMs: 60_000,
+      reconnectMaximumDelayMs: 20,
+    })
+    const confirmed = await pairAndActivate(coordinator, f)
+    await waitFor(
+      () =>
+        coordinator.connectionState(confirmed.machine.machineId) === 'online',
+      'online Machine before transcript cancellation',
+    )
+    const machine = f.store.getMachine(confirmed.machine.machineId)
+    const trust = f.store.getTrustedMachinePeer(confirmed.machine.machineId)
+    assert.ok(machine)
+    assert.ok(trust)
+    const abort = new AbortController()
+    const read = coordinator.readProviderSessionTranscript(machine, trust, {
+      conversationId: 'conv_remote_transcript_cancel',
+      provider: 'codex',
+      projectId: 'proj_remote_transcript_cancel',
+      rootPath: '/srv/projects/transcript-cancel',
+      providerInstallationId: 'pinst_remote_transcript_cancel',
+      expectedInstallationRevision: 'prev_remote_transcript_cancel',
+      nativeSessionId: 'private-native-transcript-cancel',
+      adoptedAt: '2026-09-05T12:00:00.000Z',
+      limit: 3,
+      signal: abort.signal,
+    })
+    await waitFor(
+      () => f.counts.providerSessionTranscript === 1,
+      'active remote transcript read',
+    )
+    const operationConnection = f.connections.at(-1)
+    abort.abort()
+    await assert.rejects(read)
+    assert.equal(operationConnection.closed, true)
+    assert.equal(coordinator.connectionState(machine.machineId), 'online')
+    await waitFor(
+      () => f.counts.activeConnections === 1,
+      'single restored Machine worker',
+    )
+    assert.equal(
+      f.connections.filter((connection) => !connection.closed).length,
+      1,
+    )
   } finally {
     await f.close(coordinator)
   }

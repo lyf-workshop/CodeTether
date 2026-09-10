@@ -1077,6 +1077,190 @@ export type ProviderSessionValidatedMessage = z.infer<
   typeof ProviderSessionValidatedMessageSchema
 >
 
+const ProviderSessionTranscriptBoundarySchema = z
+  .string()
+  .min(1)
+  .refine(
+    (value) =>
+      !value.includes('\0') &&
+      Buffer.byteLength(value, 'utf8') <=
+        machineTransportLimits.maximumProviderSessionTranscriptBoundaryBytes,
+  )
+
+const ProviderSessionTranscriptCursorSchema = z
+  .string()
+  .min(1)
+  .refine(
+    (value) =>
+      !value.includes('\0') &&
+      Buffer.byteLength(value, 'utf8') <=
+        machineTransportLimits.maximumProviderSessionTranscriptCursorBytes,
+  )
+
+const PrivateNativeTranscriptEntrySchema = z
+  .object({
+    id: z
+      .string()
+      .min(1)
+      .refine(
+        (value) =>
+          !value.includes('\0') &&
+          Buffer.byteLength(value, 'utf8') <=
+            machineTransportLimits.maximumProviderSessionTranscriptEntryIdBytes,
+      ),
+    provider: z.enum(['codex', 'claude-code']),
+    role: z.enum(['user', 'assistant', 'system', 'tool']),
+    kind: z.enum([
+      'message',
+      'tool_call',
+      'tool_result',
+      'status',
+      'other_safe_event',
+    ]),
+    content: z
+      .string()
+      .refine(
+        (value) =>
+          Buffer.byteLength(value, 'utf8') <=
+          machineTransportLimits.maximumProviderSessionTranscriptEntryContentBytes,
+      ),
+    occurredAt: TimestampSchema.optional(),
+    nativeSequence: z.number().int().nonnegative().safe().optional(),
+    readOnly: z.literal(true),
+  })
+  .strict()
+export type PrivateNativeTranscriptEntry = z.infer<
+  typeof PrivateNativeTranscriptEntrySchema
+>
+
+const ProviderSessionTranscriptStatusSchema = z.enum([
+  'available',
+  'empty',
+  'partial',
+  'unsupported',
+  'unavailable',
+  'malformed',
+])
+
+export const ProviderSessionTranscriptReadMessageSchema = z
+  .object({
+    type: z.literal('provider_session_transcript.read'),
+    protocolVersion: VersionField,
+    requestId: NonceSchema,
+    expectedMachineId: MachineTransportMachineIdSchema,
+    expectedNodeId: NodeIdSchema,
+    conversationId: MachineTransportConversationIdSchema,
+    projectId: MachineTransportProjectIdSchema,
+    rootPath: RemoteProjectLocationPathSchema,
+    provider: z.enum(['codex', 'claude-code']),
+    providerInstallationId: ProviderInstallationIdSchema,
+    expectedInstallationRevision: ProviderInstallationRevisionSchema,
+    nativeSessionId: NativeProviderSessionIdentitySchema,
+    boundary: ProviderSessionTranscriptBoundarySchema.optional(),
+    adoptedAt: TimestampSchema,
+    cursor: ProviderSessionTranscriptCursorSchema.optional(),
+    limit: z
+      .number()
+      .int()
+      .min(1)
+      .max(machineTransportLimits.providerSessionTranscriptPageSize),
+  })
+  .strict()
+export type ProviderSessionTranscriptReadMessage = z.infer<
+  typeof ProviderSessionTranscriptReadMessageSchema
+>
+
+export const ProviderSessionTranscriptReadResultMessageSchema = z
+  .object({
+    type: z.literal('provider_session_transcript.read_result'),
+    protocolVersion: VersionField,
+    requestId: NonceSchema,
+    machineId: MachineTransportMachineIdSchema,
+    nodeId: NodeIdSchema,
+    conversationId: MachineTransportConversationIdSchema,
+    projectId: MachineTransportProjectIdSchema,
+    provider: z.enum(['codex', 'claude-code']),
+    providerInstallationId: ProviderInstallationIdSchema,
+    installationRevision: ProviderInstallationRevisionSchema,
+    status: ProviderSessionTranscriptStatusSchema,
+    entries: z
+      .array(PrivateNativeTranscriptEntrySchema)
+      .max(machineTransportLimits.providerSessionTranscriptPageSize),
+    nextCursor: ProviderSessionTranscriptCursorSchema.optional(),
+    complete: z.boolean(),
+    metrics: z
+      .object({
+        bytesRead: z.number().int().nonnegative().safe(),
+        recordsScanned: z.number().int().nonnegative().safe(),
+        entriesReturned: z.number().int().nonnegative().safe(),
+        elapsedMs: z.number().int().nonnegative().safe(),
+        truncated: z.boolean(),
+      })
+      .strict(),
+  })
+  .strict()
+  .superRefine((response, context) => {
+    if (response.metrics.entriesReturned !== response.entries.length) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Transcript metrics must match the returned entry count',
+        path: ['metrics', 'entriesReturned'],
+      })
+    }
+    if (response.complete === (response.nextCursor !== undefined)) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Only an incomplete transcript page may have a cursor',
+        path: ['nextCursor'],
+      })
+    }
+    if (
+      response.entries.some((entry) => entry.provider !== response.provider)
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Transcript entries must match the requested Provider',
+        path: ['entries'],
+      })
+    }
+    const contentBytes = response.entries.reduce(
+      (total, entry) => total + Buffer.byteLength(entry.content, 'utf8'),
+      0,
+    )
+    if (
+      contentBytes >
+      machineTransportLimits.maximumProviderSessionTranscriptPageContentBytes
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Transcript page exceeded its content byte bound',
+        path: ['entries'],
+      })
+    }
+    if (response.status === 'available' && response.entries.length === 0) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Available transcript pages require visible entries',
+        path: ['entries'],
+      })
+    }
+    if (
+      ['empty', 'unsupported', 'unavailable', 'malformed'].includes(
+        response.status,
+      ) &&
+      response.entries.length > 0
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Readable incomplete transcript content must be partial',
+        path: ['entries'],
+      })
+    }
+  })
+export type ProviderSessionTranscriptReadResultMessage = z.infer<
+  typeof ProviderSessionTranscriptReadResultMessageSchema
+>
+
 export const RemoteCodexExecutionProfileSchema = z.literal('codex-text-v1')
 export type RemoteCodexExecutionProfile = z.infer<
   typeof RemoteCodexExecutionProfileSchema
@@ -1607,6 +1791,8 @@ export const MachineWireMessageSchema = z.discriminatedUnion('type', [
   ProviderSessionsDiscoveredMessageSchema,
   ProviderSessionValidateMessageSchema,
   ProviderSessionValidatedMessageSchema,
+  ProviderSessionTranscriptReadMessageSchema,
+  ProviderSessionTranscriptReadResultMessageSchema,
   CodexSessionOpenMessageSchema,
   CodexSessionReadyMessageSchema,
   CodexTurnStartMessageSchema,

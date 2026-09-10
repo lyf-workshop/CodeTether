@@ -6,7 +6,12 @@ import {
   useState,
   type UIEvent,
 } from 'react'
-import { CheckCircle2, ChevronDown } from 'lucide-react'
+import {
+  CheckCircle2,
+  ChevronDown,
+  ChevronUp,
+  LoaderCircle,
+} from 'lucide-react'
 
 import type { MachineId, ProjectId } from '@codetether/protocol'
 import {
@@ -22,6 +27,7 @@ import type {
   ConversationApprovalViewModel,
   ConversationChangesViewModel,
   ConversationMessageViewModel,
+  ConversationNativeHistoryViewModel,
   ConversationRunExecutionViewModel,
   ConversationTimelineViewModel,
 } from './conversation-view-model'
@@ -285,6 +291,90 @@ function emptyRunMessage(
   return { id: `${id}-message`, author: 'agent', body: '', time, status }
 }
 
+function NativeConversationHistory({
+  agent,
+  history,
+  projectRootPath,
+}: {
+  readonly agent: AgentId
+  readonly history: ConversationNativeHistoryViewModel
+  readonly projectRootPath?: string
+}) {
+  const stateCopy = {
+    loading: '正在读取更早的消息…',
+    empty: '没有更早的消息。',
+    unsupported: `已找到原生会话，但当前 ${history.providerName} 版本的更早消息暂时无法显示。原生继续仍可正常使用。`,
+    unavailable: '暂时无法读取更早的消息。',
+    machine_offline: '更早的消息存储在所属电脑上。电脑重新连接后即可加载。',
+    malformed: '更早的消息格式无法安全读取。当前会话仍可继续使用。',
+    partial: '仅显示了能够安全读取的部分更早消息。',
+    available: undefined,
+  } as const
+  const copy = stateCopy[history.status]
+
+  return (
+    <section
+      aria-label={`来自 ${history.providerName} 的只读历史消息`}
+      data-native-history="true"
+      className="space-y-3"
+    >
+      <div className="flex min-h-8 items-center gap-3 text-xs text-text-muted">
+        <span className="h-px min-w-4 flex-1 bg-border/70" />
+        <span className="shrink-0">更早记录 · 来自 {history.providerName}</span>
+        <span className="h-px min-w-4 flex-1 bg-border/70" />
+      </div>
+      {history.hasOlder ? (
+        <div className="flex justify-center">
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            disabled={history.loadingOlder}
+            onClick={history.loadOlder}
+          >
+            {history.loadingOlder ? (
+              <LoaderCircle
+                aria-hidden="true"
+                className="size-4 animate-spin motion-reduce:animate-none"
+              />
+            ) : (
+              <ChevronUp aria-hidden="true" className="size-4" />
+            )}
+            {history.loadingOlder ? '正在加载' : '加载更早记录'}
+          </Button>
+        </div>
+      ) : null}
+      {copy === undefined ? null : (
+        <p
+          role="status"
+          className="rounded-sm border border-border/60 bg-surface-muted/25 px-3 py-2 text-center text-xs leading-normal text-text-secondary"
+        >
+          {copy}
+        </p>
+      )}
+      {history.entries.map((entry) => {
+        const message: ConversationMessageViewModel = {
+          id: entry.id,
+          author: entry.role === 'user' ? 'user' : 'agent',
+          body: entry.content,
+          time: historicalTime(entry.occurredAt),
+        }
+        return message.author === 'user' ? (
+          <UserMessage key={entry.id} message={message} className="min-h-19" />
+        ) : (
+          <AgentMessage
+            key={entry.id}
+            agent={agent}
+            message={message}
+            className="py-2"
+            projectRootPath={projectRootPath}
+          />
+        )
+      })}
+    </section>
+  )
+}
+
 export function ConversationTimeline({
   anchorRequestKey,
   agent,
@@ -326,8 +416,13 @@ export function ConversationTimeline({
   )
   const activityVersion = useMemo(
     () =>
-      timeline.blocks
-        .map((block) =>
+      [
+        timeline.nativeHistory === undefined
+          ? ''
+          : `${timeline.nativeHistory.status}:${timeline.nativeHistory.entries
+              .map((entry) => entry.id)
+              .join(',')}:${timeline.nativeHistory.loadingOlder}`,
+        ...timeline.blocks.map((block) =>
           block.kind === 'message'
             ? `${block.id}:${block.message.body.length}:${block.message.status ?? ''}`
             : `${block.id}:${block.status}:${block.executions
@@ -337,9 +432,9 @@ export function ConversationTimeline({
                     : execution.id,
                 )
                 .join(',')}:${block.outcome ?? ''}`,
-        )
-        .join('|'),
-    [timeline.blocks],
+        ),
+      ].join('|'),
+    [timeline.blocks, timeline.nativeHistory],
   )
   const approvalVersion = useMemo(
     () => pendingApprovals.map((approval) => approval.id).join('|'),
@@ -485,8 +580,32 @@ export function ConversationTimeline({
             {timeline.dayLabel}
           </p>
 
+          {timeline.nativeHistory === undefined ? null : (
+            <NativeConversationHistory
+              agent={agent}
+              history={timeline.nativeHistory}
+              projectRootPath={projectRootPath}
+            />
+          )}
+
+          {timeline.nativeHistory !== undefined &&
+          timeline.nativeHistory.entries.length > 0 &&
+          timeline.blocks.length > 0 ? (
+            <div className="my-3 flex min-h-8 items-center gap-3 text-xs text-text-muted">
+              <span className="h-px min-w-4 flex-1 bg-border/70" />
+              <span className="shrink-0">在 CodeTether 中继续</span>
+              <span className="h-px min-w-4 flex-1 bg-border/70" />
+            </div>
+          ) : null}
+
           {timeline.blocks.length > 0 ? (
-            <div className="space-y-3">
+            <div
+              className={
+                timeline.nativeHistory === undefined
+                  ? 'space-y-3'
+                  : 'mt-3 space-y-3'
+              }
+            >
               {timeline.blocks.map((block, index) => {
                 const firstBlockForTurn =
                   index === 0 ||
@@ -579,14 +698,14 @@ export function ConversationTimeline({
                 )
               })}
             </div>
-          ) : (
+          ) : timeline.nativeHistory === undefined ? (
             <p
               role="status"
               className="rounded-sm bg-surface-muted/25 px-4 py-8 text-center text-sm text-text-muted"
             >
               开始新会话
             </p>
-          )}
+          ) : null}
         </div>
       </ScrollArea>
       {showJumpToLatest ? (
@@ -602,6 +721,17 @@ export function ConversationTimeline({
       ) : null}
     </div>
   )
+}
+
+function historicalTime(value: string | undefined): string {
+  if (value === undefined) return '更早'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '更早'
+  return new Intl.DateTimeFormat('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(date)
 }
 
 function findTimelineAnchor(

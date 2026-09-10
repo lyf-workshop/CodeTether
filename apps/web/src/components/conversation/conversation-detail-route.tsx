@@ -1,5 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  useInfiniteQuery,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query'
 import {
   useNavigate,
   useParams,
@@ -42,13 +46,22 @@ import {
 } from '../../runtime/host/host-query'
 import { projectDetailQueryOptions } from '../../runtime/host/project-query'
 import {
+  flattenNativeTranscriptPages,
+  nativeTranscriptInfiniteQueryOptions,
+  nativeTranscriptStatus,
+  shouldReadNativeTranscript,
+} from '../../runtime/host/native-transcript-query'
+import {
   projectLocationAvailability,
   projectLocationForMachine,
 } from '../../runtime/host/project-location'
 import { ConversationDetailPage } from './conversation-detail-page'
 import { NewConversationDialog } from '../conversations/new-conversation-dialog'
 import { createDemoConversationDetailSource } from './demo-conversation-adapter'
-import { createLiveConversationDetailSource } from './live-conversation-adapter'
+import {
+  createLiveConversationDetailSource,
+  type LiveConversationMachineContext,
+} from './live-conversation-adapter'
 import { startComposerFocusHandoff } from './composer-focus-handoff'
 import {
   deriveComposerEligibility,
@@ -208,6 +221,13 @@ function LoadedLiveConversationDetail({
   const queryClient = useQueryClient()
   const projection = useHostProjection()
   const conversationId = detail.conversation.conversationId
+  const readsNativeHistory = shouldReadNativeTranscript(
+    detail.conversation.origin,
+  )
+  const nativeTranscriptQuery = useInfiniteQuery({
+    ...nativeTranscriptInfiniteQueryOptions(runtime, conversationId),
+    enabled: connectionState === 'connected' && readsNativeHistory,
+  })
   const projectId = detail.conversation.projectId
   const machineId = detail.conversation.machineId
   const hasProjectedConversation =
@@ -295,6 +315,23 @@ function LoadedLiveConversationDetail({
       machineProviders={machineQuery.data?.providers ?? []}
       providerLifecycle={detail.providerLifecycle}
       providerSessionRequiresResume={detail.providerSessionRequiresResume}
+      nativeHistory={
+        readsNativeHistory
+          ? {
+              status:
+                nativeTranscriptStatus(nativeTranscriptQuery.data?.pages) ??
+                (nativeTranscriptQuery.isError ? 'unavailable' : 'loading'),
+              entries: flattenNativeTranscriptPages(
+                nativeTranscriptQuery.data?.pages,
+              ),
+              hasOlder: nativeTranscriptQuery.hasNextPage,
+              loadingOlder: nativeTranscriptQuery.isFetchingNextPage,
+              loadOlder: () => {
+                void nativeTranscriptQuery.fetchNextPage()
+              },
+            }
+          : undefined
+      }
       initialInspectorTab={initialInspectorTab}
       targetTurnId={targetTurnId}
     />
@@ -316,6 +353,7 @@ interface ConnectedLiveConversationDetailProps {
   readonly machineProviders: readonly ProviderDescriptor[]
   readonly providerLifecycle?: ProviderInstallationSummary
   readonly providerSessionRequiresResume?: boolean
+  readonly nativeHistory?: LiveConversationMachineContext['nativeHistory']
   readonly initialInspectorTab?: 'changes'
   readonly targetTurnId?: TurnId
 }
@@ -335,6 +373,7 @@ function ConnectedLiveConversationDetail({
   machineProviders,
   providerLifecycle,
   providerSessionRequiresResume,
+  nativeHistory,
   initialInspectorTab,
   targetTurnId,
 }: ConnectedLiveConversationDetailProps) {
@@ -393,6 +432,7 @@ function ConnectedLiveConversationDetail({
       executionAvailable,
       executionUnavailableLabel: executionUnavailablePresentation.title,
       names: machineNames,
+      ...(nativeHistory === undefined ? {} : { nativeHistory }),
     },
   )
   const controls = useLiveConversationControls(

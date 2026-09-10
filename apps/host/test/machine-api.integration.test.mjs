@@ -1,5 +1,10 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, rm } from 'node:fs/promises'
+import {
+  mkdir,
+  mkdtemp as makeTemporaryDirectory,
+  realpath,
+  rm,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { performance } from 'node:perf_hooks'
@@ -40,6 +45,10 @@ const availableCapabilities = {
   toolEvents: true,
   modelSelection: false,
   reasoningControl: false,
+}
+
+async function mkdtemp(prefix) {
+  return await realpath(await makeTemporaryDirectory(prefix))
 }
 
 class TrackingRuntime {

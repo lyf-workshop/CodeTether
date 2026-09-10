@@ -161,8 +161,7 @@ function processIsRunning(pid) {
       process.kill(pid, 0)
       return true
     } catch (error) {
-      if (error?.code === 'ESRCH') return false
-      throw error
+      return error?.code !== 'ESRCH'
     }
   }
   try {

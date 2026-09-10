@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import {
   mkdir,
-  mkdtemp,
+  mkdtemp as makeTemporaryDirectory,
+  realpath,
   rename,
   rm,
   symlink,
@@ -42,6 +43,10 @@ import { NodeStateStore } from '../dist/state-store.js'
 
 const providerInstallationId = 'pinst_nodefixture01'
 const installationRevision = 'prev_nodefixture01'
+
+async function mkdtemp(prefix) {
+  return await realpath(await makeTemporaryDirectory(prefix))
+}
 
 function openRemoteCodexSession(options) {
   return openRemoteCodexSessionWithInstallation({

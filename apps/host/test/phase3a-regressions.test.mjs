@@ -1,5 +1,10 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, rm } from 'node:fs/promises'
+import {
+  mkdir,
+  mkdtemp as makeTemporaryDirectory,
+  realpath,
+  rm,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -17,6 +22,10 @@ import {
 } from '../dist/persistence/index.js'
 
 const timestamp = '2026-08-27T08:00:00.000Z'
+
+async function mkdtemp(prefix) {
+  return await realpath(await makeTemporaryDirectory(prefix))
+}
 
 class FakeRuntime {
   provider = 'codex'

@@ -13,7 +13,7 @@ import {
 import { request } from 'node:http'
 import { createConnection } from 'node:net'
 import { tmpdir } from 'node:os'
-import { basename, dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve, win32 } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { productVersion } from '../../distribution/src/identity.mjs'
 
@@ -63,9 +63,9 @@ export function normalizeRegistryPath(value) {
   if (typeof value !== 'string') return ''
   const trimmed = value.trim()
   if (trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"')) {
-    return resolve(trimmed.slice(1, -1))
+    return win32.resolve(trimmed.slice(1, -1))
   }
-  return resolve(trimmed)
+  return win32.resolve(trimmed)
 }
 
 export function installerArguments(installRoot) {
@@ -82,7 +82,7 @@ export function assertInstalledShortcuts(shortcuts, expectedExecutable) {
       shortcut !== null &&
         typeof shortcut === 'object' &&
         typeof shortcut.path === 'string' &&
-        basename(shortcut.path).toLocaleLowerCase('en-US') ===
+        win32.basename(shortcut.path).toLocaleLowerCase('en-US') ===
           `${PRODUCT_NAME}.lnk`.toLocaleLowerCase('en-US') &&
         typeof shortcut.target === 'string' &&
         sameWindowsPath(shortcut.target, expectedExecutable),
@@ -115,10 +115,10 @@ export function assertOwnedTemporaryRoot(
   directory,
   temporaryDirectory = tmpdir(),
 ) {
-  const resolved = resolve(directory)
+  const resolved = win32.resolve(directory)
   if (
-    dirname(resolved) !== resolve(temporaryDirectory) ||
-    !basename(resolved).startsWith(TEMPORARY_ROOT_PREFIX)
+    win32.dirname(resolved) !== win32.resolve(temporaryDirectory) ||
+    !win32.basename(resolved).startsWith(TEMPORARY_ROOT_PREFIX)
   ) {
     throw new Error(
       `Refusing to use unexpected installer-smoke root: ${resolved}`,
@@ -145,13 +145,13 @@ export function validateInstallerSmokeSession(
   )
   const root = assertOwnedTemporaryRoot(value.root, temporaryDirectory)
   const expectedPaths = {
-    dataDirectory: join(root, 'data'),
-    desktopExecutable: join(root, 'app', DESKTOP_EXECUTABLE_NAME),
-    hostExecutable: join(root, 'app', HOST_EXECUTABLE_NAME),
-    installRoot: join(root, 'app'),
-    projectDirectory: join(root, 'workspace', '项目测试 (Folder Picker)'),
-    uninstallExecutable: join(root, 'app', UNINSTALL_EXECUTABLE_NAME),
-    webViewDataDirectory: join(root, 'webview'),
+    dataDirectory: win32.join(root, 'data'),
+    desktopExecutable: win32.join(root, 'app', DESKTOP_EXECUTABLE_NAME),
+    hostExecutable: win32.join(root, 'app', HOST_EXECUTABLE_NAME),
+    installRoot: win32.join(root, 'app'),
+    projectDirectory: win32.join(root, 'workspace', '项目测试 (Folder Picker)'),
+    uninstallExecutable: win32.join(root, 'app', UNINSTALL_EXECUTABLE_NAME),
+    webViewDataDirectory: win32.join(root, 'webview'),
   }
   for (const [key, expected] of Object.entries(expectedPaths)) {
     ensure(
@@ -1567,7 +1567,7 @@ async function pathExists(path) {
 function sameWindowsPath(left, right) {
   if (typeof left !== 'string' || typeof right !== 'string') return false
   return (
-    resolve(left).localeCompare(resolve(right), 'en', {
+    win32.resolve(left).localeCompare(win32.resolve(right), 'en', {
       sensitivity: 'accent',
     }) === 0
   )

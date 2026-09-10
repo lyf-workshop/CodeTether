@@ -1,5 +1,11 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, rename, rm } from 'node:fs/promises'
+import {
+  mkdir,
+  mkdtemp as makeTemporaryDirectory,
+  realpath,
+  rename,
+  rm,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { performance } from 'node:perf_hooks'
@@ -20,6 +26,10 @@ const projectId = 'proj_hydration_fixture'
 const hostNow = '2026-09-30T12:00:00.000Z'
 const terminalTimestamp = '2026-09-30T12:00:01.000Z'
 const baseTimestamp = Date.parse('2026-08-27T08:00:00.000Z')
+
+async function mkdtemp(prefix) {
+  return await realpath(await makeTemporaryDirectory(prefix))
+}
 
 class FakeRuntime {
   provider = 'codex'

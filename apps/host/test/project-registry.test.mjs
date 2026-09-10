@@ -1,5 +1,10 @@
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import {
+  mkdirSync,
+  mkdtempSync as makeTemporaryDirectorySync,
+  realpathSync,
+  rmSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -14,6 +19,10 @@ import { normalizeTrustedProjectRoot } from '../dist/project-path.js'
 
 const timestamp = '2026-08-31T12:00:00.000Z'
 const later = '2026-08-31T12:01:00.000Z'
+
+function mkdtempSync(prefix) {
+  return realpathSync(makeTemporaryDirectorySync(prefix))
+}
 
 test('ProjectRegistry projects retain all locations while Machine projections contain only that Machine location', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'codetether-project-registry-'))

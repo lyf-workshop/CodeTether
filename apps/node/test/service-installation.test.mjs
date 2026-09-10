@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mkdtemp, mkdir, rm, symlink } from 'node:fs/promises'
+import {
+  mkdtemp as makeTemporaryDirectory,
+  mkdir,
+  realpath,
+  rm,
+  symlink,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -8,6 +14,10 @@ import {
   servicePaths,
   checkNoSymlinks,
 } from '../dist/service-installation.js'
+
+async function mkdtemp(prefix) {
+  return await realpath(await makeTemporaryDirectory(prefix))
+}
 
 test('user units serialize absolute paths without shell interpolation or secrets', () => {
   const paths = servicePaths('linux', '/home/Test User/项目')

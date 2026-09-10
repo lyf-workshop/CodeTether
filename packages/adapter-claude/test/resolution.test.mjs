@@ -25,7 +25,7 @@ test('resolves a native Windows executable without a shell', async (t) => {
     environment: { Path: `"${root}"` },
   })
   assert.equal(launcher.kind, 'native')
-  assert.equal(launcher.executable, executable)
+  assert.equal(launcher.executable, await realpath(executable))
   assert.deepEqual(launcher.prefixArguments, [])
 })
 
@@ -60,9 +60,9 @@ test('resolves only a verified standard npm shim layout', async (t) => {
     environment: { Path: root },
   })
   assert.equal(launcher.kind, 'npm')
-  assert.equal(launcher.executable, node)
-  assert.deepEqual(launcher.prefixArguments, [entry])
-  assert.equal(launcher.sourcePath, shim)
+  assert.equal(launcher.executable, await realpath(node))
+  assert.deepEqual(launcher.prefixArguments, [await realpath(entry)])
+  assert.equal(launcher.sourcePath, await realpath(shim))
 })
 
 test('rejects an npm manifest entry that escapes the package', async (t) => {

@@ -1,5 +1,12 @@
 import assert from 'node:assert/strict'
-import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import {
+  chmod,
+  mkdir,
+  mkdtemp as makeTemporaryDirectory,
+  realpath,
+  rm,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -36,6 +43,10 @@ const revisionB = 'prev_phase8b_host_revision_B_0001'
 const remoteMachineId = 'machine_phase8bhostremotefresh01'
 const remoteInstallationId = 'pinst_phase8b_host_remote_installation_A'
 const remoteRevision = 'prev_phase8b_host_remote_revision_A_0001'
+
+async function mkdtemp(prefix) {
+  return await realpath(await makeTemporaryDirectory(prefix))
+}
 
 test('normal local Host close awaits lifecycle cleanup and preserves its exact barrier', async () => {
   const cleanupFailure = new CodexOwnedProcessCleanupError()

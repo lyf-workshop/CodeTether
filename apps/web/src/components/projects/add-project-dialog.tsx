@@ -306,7 +306,7 @@ export function AddProjectDialog({
                   className="mt-1 text-xs font-regular text-text-muted"
                 >
                   {directoryPicker.available
-                    ? '使用 Windows 文件夹选择器选择一个本地工作区。'
+                    ? '使用系统文件夹选择器选择一个本地工作区。'
                     : '输入或粘贴本机上的绝对目录路径。'}
                 </p>
                 {directoryPicker.available ? (

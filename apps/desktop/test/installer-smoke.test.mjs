@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { join } from 'node:path'
+import { win32 } from 'node:path'
 import test from 'node:test'
 
 import {
@@ -17,7 +17,9 @@ import {
 } from '../scripts/installer-smoke.mjs'
 
 const temporaryDirectory = 'C:\\Temp'
-const root = join(temporaryDirectory, 'codetether-installed-smoke-test')
+const root = win32.join(temporaryDirectory, 'codetether-installed-smoke-test')
+
+const join = win32.join
 
 test('installer smoke modes are explicit', () => {
   assert.equal(parseInstallerSmokeMode([]), 'run')

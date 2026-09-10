@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { mkdtemp, readFile } from 'node:fs/promises'
+import { mkdtemp, readFile, realpath } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -32,6 +32,10 @@ const fixtureLauncher = (...prefixArguments) => ({
   prefixArguments: [fixture, ...prefixArguments],
 })
 const sessionId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+
+async function makeTemporaryDirectory(prefix) {
+  return await realpath(await mkdtemp(join(tmpdir(), prefix)))
+}
 
 test('builds the locked-down argv and never places a prompt in it', () => {
   const arguments_ = buildClaudeCodeArguments({ sessionId, resume: false })
@@ -124,7 +128,7 @@ test('admits only bounded Claude runtime context and explicit auth inputs', () =
 })
 
 test('creates cold, streams one child per turn, then resumes the exact session', async (t) => {
-  const cwd = await mkdtemp(join(tmpdir(), 'CodeTether Claude 测试 '))
+  const cwd = await makeTemporaryDirectory('CodeTether Claude 测试 ')
   const capturePath = join(cwd, 'capture.jsonl')
   t.after(async () => {
     await import('node:fs/promises').then(({ rm }) =>
@@ -315,7 +319,7 @@ test('post-Prompt event-consumer failure is ownership-uncertain, never replay-sa
 })
 
 test('post-ownership Provider exit is unavailable rather than startup failure', async (t) => {
-  const cwd = await mkdtemp(join(tmpdir(), 'codetether-claude-crash-'))
+  const cwd = await makeTemporaryDirectory('codetether-claude-crash-')
   t.after(async () => {
     await import('node:fs/promises').then(({ rm }) =>
       rm(cwd, { recursive: true, force: true }),
@@ -347,7 +351,7 @@ test('post-ownership Provider exit is unavailable rather than startup failure', 
 })
 
 test('slow async listeners apply bounded stdout pause and resume', async (t) => {
-  const cwd = await mkdtemp(join(tmpdir(), 'codetether-claude-backpressure-'))
+  const cwd = await makeTemporaryDirectory('codetether-claude-backpressure-')
   t.after(async () => {
     await import('node:fs/promises').then(({ rm }) =>
       rm(cwd, { recursive: true, force: true }),
@@ -402,7 +406,7 @@ test('slow async listeners apply bounded stdout pause and resume', async (t) => 
 })
 
 test('resumeSession uses native resume on its first lazy turn', async (t) => {
-  const cwd = await mkdtemp(join(tmpdir(), 'codetether-claude-resume-'))
+  const cwd = await makeTemporaryDirectory('codetether-claude-resume-')
   const capturePath = join(cwd, 'capture.jsonl')
   t.after(async () => {
     await import('node:fs/promises').then(({ rm }) =>
@@ -424,7 +428,7 @@ test('resumeSession uses native resume on its first lazy turn', async (t) => {
 })
 
 test('suppresses expired OAuth assistant diagnostics from canonical events', async (t) => {
-  const cwd = await mkdtemp(join(tmpdir(), 'codetether-claude-failure-'))
+  const cwd = await makeTemporaryDirectory('codetether-claude-failure-')
   t.after(async () => {
     await import('node:fs/promises').then(({ rm }) =>
       rm(cwd, { recursive: true, force: true }),
@@ -469,7 +473,7 @@ test('suppresses expired OAuth assistant diagnostics from canonical events', asy
 })
 
 test('reports malformed provider output as a safe start failure', async (t) => {
-  const cwd = await mkdtemp(join(tmpdir(), 'codetether-claude-malformed-'))
+  const cwd = await makeTemporaryDirectory('codetether-claude-malformed-')
   t.after(async () => {
     await import('node:fs/promises').then(({ rm }) =>
       rm(cwd, { recursive: true, force: true }),
@@ -507,7 +511,7 @@ test('reports malformed provider output as a safe start failure', async (t) => {
 })
 
 test('owner close emits interrupted without reporting a Provider failure', async (t) => {
-  const cwd = await mkdtemp(join(tmpdir(), 'codetether-claude-interrupt-'))
+  const cwd = await makeTemporaryDirectory('codetether-claude-interrupt-')
   t.after(async () => {
     await import('node:fs/promises').then(({ rm }) =>
       rm(cwd, { recursive: true, force: true }),

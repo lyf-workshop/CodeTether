@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import {
+  mkdtemp as makeTemporaryDirectory,
+  realpath,
+  rm,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -31,6 +35,10 @@ const capabilities = {
   toolEvents: true,
   modelSelection: false,
   reasoningControl: false,
+}
+
+async function mkdtemp(prefix) {
+  return await realpath(await makeTemporaryDirectory(prefix))
 }
 
 test('Provider session ownership keys include the exact Machine identity', () => {

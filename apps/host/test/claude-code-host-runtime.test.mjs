@@ -1,5 +1,10 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import {
+  mkdtemp as makeTemporaryDirectory,
+  readFile,
+  realpath,
+  rm,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -24,6 +29,10 @@ const fixture = fileURLToPath(
     import.meta.url,
   ),
 )
+
+async function mkdtemp(prefix) {
+  return await realpath(await makeTemporaryDirectory(prefix))
+}
 
 test('keeps a tested logged-out Claude installation separate from execution health', () => {
   const observedAt = '2026-09-02T20:00:00.000Z'

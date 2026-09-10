@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import {
+  mkdtemp as makeTemporaryDirectory,
+  realpath,
+  rm,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -19,6 +23,10 @@ import {
 import { normalizeTrustedProjectRoot } from '../dist/project-path.js'
 
 const timestamp = '2026-08-27T08:00:00.000Z'
+
+async function mkdtemp(prefix) {
+  return await realpath(await makeTemporaryDirectory(prefix))
+}
 
 class FakeRuntime {
   provider = 'codex'

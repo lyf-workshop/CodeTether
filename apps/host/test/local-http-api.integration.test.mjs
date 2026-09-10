@@ -1,5 +1,12 @@
 import assert from 'node:assert/strict'
-import { access, mkdir, mkdtemp, rename, rm } from 'node:fs/promises'
+import {
+  access,
+  mkdir,
+  mkdtemp as makeTemporaryDirectory,
+  realpath,
+  rename,
+  rm,
+} from 'node:fs/promises'
 import { request as httpRequest } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join, sep } from 'node:path'
@@ -20,6 +27,10 @@ import { ConversationStore } from '../dist/persistence/index.js'
 
 const epoch = '11111111-1111-4111-8111-111111111111'
 const wrongEpoch = '22222222-2222-4222-8222-222222222222'
+
+async function mkdtemp(prefix) {
+  return await realpath(await makeTemporaryDirectory(prefix))
+}
 
 test('closes an already-launched Runtime when Host assembly fails', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'codetether-assembly-test-'))

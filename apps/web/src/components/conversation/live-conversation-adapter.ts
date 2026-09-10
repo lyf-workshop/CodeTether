@@ -2,6 +2,8 @@ import type { ExecutionStatus } from '@codetether/ui'
 import type {
   Bootstrap,
   ConversationSummary,
+  NativeHistoricalTranscriptEntry,
+  NativeTranscriptStatus,
   ProjectAvailability,
   ProviderDescriptor,
 } from '@codetether/protocol'
@@ -65,6 +67,13 @@ export interface LiveConversationMachineContext {
   readonly executionAvailable?: boolean
   readonly executionUnavailableLabel?: string
   readonly names?: Readonly<Record<string, string>>
+  readonly nativeHistory?: {
+    readonly status: NativeTranscriptStatus | 'loading'
+    readonly entries: readonly NativeHistoricalTranscriptEntry[]
+    readonly hasOlder: boolean
+    readonly loadingOlder: boolean
+    readonly loadOlder?: () => void
+  }
 }
 
 export function createLiveConversationDetailSource(
@@ -91,6 +100,7 @@ export function createLiveConversationDetailSource(
       machineName,
       machineContext?.providerDescriptors,
       machineContext?.composerDisabled,
+      machineContext?.nativeHistory,
     ),
     rail: createLiveConversationRailViewModel(
       summaries,
@@ -185,6 +195,7 @@ export function createLiveConversationViewModel(
   machineName = '机器',
   machineProviderDescriptors?: readonly ProviderDescriptor[],
   composerDisabled?: ComposerDisabledPresentation,
+  nativeHistory?: LiveConversationMachineContext['nativeHistory'],
 ): ConversationViewModel {
   const presentationRoot = model.cwd ?? projectRootPath
   const files = model.changes.map((change) =>
@@ -248,6 +259,14 @@ export function createLiveConversationViewModel(
           model.updatedAt,
       ),
       blocks: projectTimeline(model, provider.displayName, machineName),
+      ...(nativeHistory === undefined
+        ? {}
+        : {
+            nativeHistory: {
+              providerName: provider.displayName,
+              ...nativeHistory,
+            },
+          }),
     },
     changes: { files, totals },
     terminal: {

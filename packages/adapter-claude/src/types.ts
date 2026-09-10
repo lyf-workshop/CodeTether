@@ -6,6 +6,7 @@ export const CLAUDE_CODE_TESTED_VERSIONS = [
   '2.1.250',
   '2.1.251',
   '2.1.263',
+  '2.1.266',
 ] as const
 export const CLAUDE_CODE_EFFORT_LEVELS = [
   'low',

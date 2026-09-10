@@ -24,24 +24,39 @@ function storedThread(overrides = {}) {
   }
 }
 
-function clientFactory({ threads = [], reads = new Map(), list, tracker }) {
-  return async () => ({
-    async listStoredThreads(options) {
-      tracker?.methods.push({ method: 'thread/list', options })
-      return list === undefined
-        ? { threads, invalidEntryCount: 0 }
-        : await list(options)
-    },
-    async readStoredThread(options) {
-      tracker?.methods.push({ method: 'thread/read', options })
-      const thread = reads.get(options.threadId)
-      if (thread === undefined) throw new Error('missing test thread')
-      return thread
-    },
-    async shutdown() {
-      if (tracker !== undefined) tracker.shutdownCount += 1
-    },
-  })
+function clientFactory({
+  threads = [],
+  reads = new Map(),
+  list,
+  listItems,
+  tracker,
+}) {
+  return async () => {
+    const client = {
+      async listStoredThreads(options) {
+        tracker?.methods.push({ method: 'thread/list', options })
+        return list === undefined
+          ? { threads, invalidEntryCount: 0 }
+          : await list(options)
+      },
+      async readStoredThread(options) {
+        tracker?.methods.push({ method: 'thread/read', options })
+        const thread = reads.get(options.threadId)
+        if (thread === undefined) throw new Error('missing test thread')
+        return thread
+      },
+      async shutdown() {
+        if (tracker !== undefined) tracker.shutdownCount += 1
+      },
+    }
+    if (listItems !== undefined) {
+      client.listStoredThreadItems = async (options) => {
+        tracker?.methods.push({ method: 'thread/items/list', options })
+        return await listItems(options)
+      }
+    }
+    return client
+  }
 }
 
 const canonicalizePath = async (path) => resolve(path)
@@ -567,4 +582,258 @@ test('candidate revalidation rejects unbounded or malformed private identity bef
     /identity and revision are required/,
   )
   assert.equal(factoryCalls, 0)
+})
+
+test('projects bounded official Codex history before the captured adoption boundary', async () => {
+  const projectRoot = resolve('project-a')
+  const thread = storedThread({ id: 'thread-history', cwd: projectRoot })
+  const pages = new Map([
+    [
+      'boundary',
+      {
+        items: [
+          {
+            turnId: 'turn-2',
+            id: 'item-4',
+            type: 'agentMessage',
+            text: 'same',
+          },
+        ],
+        invalidEntryCount: 0,
+        backwardsCursor: 'history-first',
+      },
+    ],
+    [
+      'history-first',
+      {
+        items: [
+          {
+            turnId: 'turn-2',
+            id: 'item-4',
+            type: 'agentMessage',
+            text: 'same',
+          },
+          { turnId: 'turn-2', id: 'item-3', type: 'userMessage', text: 'same' },
+        ],
+        invalidEntryCount: 0,
+        nextCursor: 'history-older',
+      },
+    ],
+    [
+      'history-older',
+      {
+        items: [
+          {
+            turnId: 'turn-1',
+            id: 'item-2',
+            type: 'agentMessage',
+            text: 'answer',
+          },
+          {
+            turnId: 'turn-1',
+            id: 'item-1',
+            type: 'userMessage',
+            text: 'prompt',
+          },
+        ],
+        invalidEntryCount: 1,
+      },
+    ],
+  ])
+  const tracker = { methods: [], shutdownCount: 0 }
+  const discovery = new CodexSessionDiscovery({
+    canonicalizePath,
+    clientFactory: clientFactory({
+      tracker,
+      reads: new Map([[thread.id, thread]]),
+      listItems: async ({ cursor, limit }) => {
+        const key = limit === 1 && cursor === undefined ? 'boundary' : cursor
+        const page = pages.get(key)
+        if (page === undefined) throw new Error('unexpected transcript cursor')
+        return page
+      },
+    }),
+  })
+  const discovered = await new CodexSessionDiscovery({
+    canonicalizePath,
+    clientFactory: clientFactory({ threads: [thread] }),
+  }).discover({ projectRoot, limit: 1 })
+  const adopted = await discovery.validateCandidate({
+    projectRoot,
+    nativeSessionId: thread.id,
+    revision: discovered.candidates[0].revision,
+  })
+  assert.match(adopted.transcriptBoundary, /^codex-v1:/u)
+
+  const recent = await discovery.readSessionTranscript({
+    projectRoot,
+    nativeSessionId: thread.id,
+    boundary: adopted.transcriptBoundary,
+    adoptedAt: '2026-09-05T12:00:00.000Z',
+    limit: 2,
+  })
+  assert.equal(recent.status, 'available')
+  assert.deepEqual(
+    recent.entries.map(({ id, role, content }) => [id, role, content]),
+    [
+      ['item-3', 'user', 'same'],
+      ['item-4', 'assistant', 'same'],
+    ],
+  )
+  assert.equal(new Set(recent.entries.map((entry) => entry.id)).size, 2)
+  assert.equal(recent.nextCursor, 'history-older')
+
+  const older = await discovery.readSessionTranscript({
+    projectRoot,
+    nativeSessionId: thread.id,
+    boundary: adopted.transcriptBoundary,
+    adoptedAt: '2026-09-05T12:00:00.000Z',
+    cursor: recent.nextCursor,
+    limit: 2,
+  })
+  assert.equal(older.status, 'partial')
+  assert.deepEqual(
+    older.entries.map((entry) => entry.id),
+    ['item-1', 'item-2'],
+  )
+  assert.equal(older.complete, true)
+  assert.equal(tracker.shutdownCount, 3)
+  assert.equal(
+    tracker.methods.some(({ method }) =>
+      ['thread/start', 'thread/resume', 'turn/start'].includes(method),
+    ),
+    false,
+  )
+})
+
+test('Codex transcript byte bounds retain every requested identity', async () => {
+  const projectRoot = resolve('project-a')
+  const thread = storedThread({ id: 'thread-huge', cwd: projectRoot })
+  const hugeItems = Array.from({ length: 100 }, (_, index) => ({
+    turnId: `turn-${index}`,
+    id: `item-${index}`,
+    type: index % 2 === 0 ? 'userMessage' : 'agentMessage',
+    text: '🙂'.repeat(40_000),
+  }))
+  const boundary = Buffer.from(
+    JSON.stringify({
+      version: 1,
+      empty: false,
+      cursor: 'history-huge',
+      anchorItemId: 'item-0',
+    }),
+  ).toString('base64url')
+  const discovery = new CodexSessionDiscovery({
+    canonicalizePath,
+    clientFactory: clientFactory({
+      reads: new Map([[thread.id, thread]]),
+      listItems: async () => ({ items: hugeItems, invalidEntryCount: 0 }),
+    }),
+  })
+  const page = await discovery.readSessionTranscript({
+    projectRoot,
+    nativeSessionId: thread.id,
+    boundary: `codex-v1:${boundary}`,
+    adoptedAt: '2026-09-05T12:00:00.000Z',
+    limit: 100,
+  })
+  assert.equal(page.status, 'partial')
+  assert.equal(page.entries.length, 100)
+  assert.equal(new Set(page.entries.map((entry) => entry.id)).size, 100)
+  assert.ok(
+    page.entries.reduce(
+      (total, entry) => total + Buffer.byteLength(entry.content, 'utf8'),
+      0,
+    ) <=
+      512 * 1024,
+  )
+})
+
+test('paginates 250 Codex transcript items with bounded stable ordering', async () => {
+  const projectRoot = resolve('project-a')
+  const thread = storedThread({ id: 'thread-long-history', cwd: projectRoot })
+  const items = Array.from({ length: 250 }, (_, index) => ({
+    turnId: `turn-long-${Math.floor(index / 2)}`,
+    id: `item-long-${String(index).padStart(3, '0')}`,
+    type: index % 2 === 0 ? 'userMessage' : 'agentMessage',
+    text: `visible-${String(index).padStart(3, '0')}`,
+  }))
+  const boundary = Buffer.from(
+    JSON.stringify({
+      version: 1,
+      empty: false,
+      cursor: 'cursor-long-250',
+      anchorItemId: items.at(-1).id,
+    }),
+  ).toString('base64url')
+  const tracker = { methods: [], shutdownCount: 0 }
+  const discovery = new CodexSessionDiscovery({
+    canonicalizePath,
+    clientFactory: clientFactory({
+      tracker,
+      reads: new Map([[thread.id, thread]]),
+      listItems: async ({ cursor, limit }) => {
+        const before = Number(cursor?.slice('cursor-long-'.length))
+        assert.ok(Number.isSafeInteger(before))
+        const start = Math.max(0, before - limit)
+        return {
+          items: items.slice(start, before).reverse(),
+          invalidEntryCount: 0,
+          ...(start === 0 ? {} : { nextCursor: `cursor-long-${start}` }),
+        }
+      },
+    }),
+  })
+
+  const pages = []
+  let cursor
+  do {
+    const page = await discovery.readSessionTranscript({
+      projectRoot,
+      nativeSessionId: thread.id,
+      boundary: `codex-v1:${boundary}`,
+      adoptedAt: '2026-09-05T12:00:00.000Z',
+      ...(cursor === undefined ? {} : { cursor }),
+      limit: 50,
+    })
+    assert.ok(page.entries.length <= 50)
+    assert.equal(page.status, 'available')
+    pages.push(page)
+    cursor = page.nextCursor
+  } while (cursor !== undefined)
+
+  const chronological = [...pages].reverse().flatMap((page) => page.entries)
+  assert.equal(pages.length, 5)
+  assert.equal(chronological.length, 250)
+  assert.deepEqual(
+    chronological.map(({ id }) => id),
+    items.map(({ id }) => id),
+  )
+  assert.equal(new Set(chronological.map(({ id }) => id)).size, 250)
+  assert.equal(tracker.shutdownCount, 5)
+  assert.equal(
+    tracker.methods.some(({ method }) =>
+      ['thread/start', 'thread/resume', 'turn/start'].includes(method),
+    ),
+    false,
+  )
+})
+
+test('legacy Codex adoption fails closed without parsing or replaying history', async () => {
+  let clientCalls = 0
+  const page = await new CodexSessionDiscovery({
+    canonicalizePath,
+    clientFactory: async () => {
+      clientCalls += 1
+      throw new Error('must not launch for an unbounded legacy split')
+    },
+  }).readSessionTranscript({
+    projectRoot: resolve('project-a'),
+    nativeSessionId: 'thread-legacy',
+    adoptedAt: '2026-09-05T12:00:00.000Z',
+    limit: 50,
+  })
+  assert.equal(page.status, 'partial')
+  assert.deepEqual(page.entries, [])
+  assert.equal(clientCalls, 0)
 })

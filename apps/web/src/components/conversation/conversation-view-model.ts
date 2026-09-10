@@ -2,6 +2,8 @@ import type {
   ConversationStatus,
   ConversationTitleSource,
   MachineId,
+  NativeHistoricalTranscriptEntry,
+  NativeTranscriptStatus,
   ProjectId,
   ProviderId,
 } from '@codetether/protocol'
@@ -121,7 +123,17 @@ export interface ConversationFailureViewModel extends ExecutionFailurePresentati
 
 export interface ConversationTimelineViewModel {
   readonly dayLabel: string
+  readonly nativeHistory?: ConversationNativeHistoryViewModel
   readonly blocks: readonly ConversationTimelineBlockViewModel[]
+}
+
+export interface ConversationNativeHistoryViewModel {
+  readonly providerName: string
+  readonly status: NativeTranscriptStatus | 'loading'
+  readonly entries: readonly NativeHistoricalTranscriptEntry[]
+  readonly hasOlder: boolean
+  readonly loadingOlder: boolean
+  readonly loadOlder?: () => void
 }
 
 export interface ConversationTerminalViewModel {

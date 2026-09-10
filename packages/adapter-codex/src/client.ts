@@ -19,6 +19,8 @@ import {
 } from './process.js'
 import type {
   CodexStoredThread,
+  CodexStoredThreadItem,
+  CodexStoredThreadItemPage,
   CodexStoredThreadPage,
   CodexStoredThreadSource,
   CodexStoredThreadStatus,
@@ -147,6 +149,13 @@ export interface ListStoredThreadsOptions {
 
 export interface ReadStoredThreadOptions {
   readonly threadId: string
+}
+
+export interface ListStoredThreadItemsOptions {
+  readonly threadId: string
+  readonly cursor?: string
+  readonly limit: number
+  readonly sortDirection?: 'asc' | 'desc'
 }
 
 const SERVER_REQUEST_DRAIN_TIMEOUT_MS = 2_000
@@ -463,6 +472,29 @@ export class CodexAppServerClient {
     })
     const record = requireRecord(result, 'thread/read response')
     return parseStoredThread(record.thread, 'thread/read response')
+  }
+
+  /** Uses Codex's official paginated read API; it never resumes the thread. */
+  async listStoredThreadItems(
+    options: ListStoredThreadItemsOptions,
+  ): Promise<CodexStoredThreadItemPage> {
+    this.#assertOpen()
+    if (
+      options.threadId.length === 0 ||
+      options.threadId.length > MAX_CODEX_STORED_THREAD_ID_CODE_UNITS ||
+      options.threadId.includes('\0')
+    ) {
+      throw new CodexProtocolError('thread/items/list threadId is invalid')
+    }
+    assertStoredThreadPageSize(options.limit)
+    assertStoredThreadCursor(options.cursor)
+    const result = await this.#transport.request<unknown>('thread/items/list', {
+      threadId: options.threadId,
+      ...(options.cursor === undefined ? {} : { cursor: options.cursor }),
+      limit: options.limit,
+      sortDirection: options.sortDirection ?? 'desc',
+    })
+    return parseStoredThreadItemPage(result, options.limit)
   }
 
   async interruptTurn(options: {
@@ -953,6 +985,86 @@ function parseStoredThreadPage(
       ? { nextCursor }
       : {}),
   }
+}
+
+function parseStoredThreadItemPage(
+  value: unknown,
+  requestedLimit: number,
+): CodexStoredThreadItemPage {
+  const record = requireRecord(value, 'thread/items/list response')
+  if (!Array.isArray(record.data) || record.data.length > requestedLimit) {
+    throw new CodexProtocolError('thread/items/list response has invalid data')
+  }
+  const items: CodexStoredThreadItem[] = []
+  let invalidEntryCount = 0
+  for (const value of record.data) {
+    try {
+      const entry = requireRecord(value, 'thread/items/list entry')
+      const item = requireRecord(entry.item, 'thread/items/list item')
+      const type = requireString(item, 'type', 'thread/items/list item')
+      let text: string
+      if (type === 'agentMessage') {
+        text = requireString(item, 'text', 'thread/items/list item')
+      } else if (type === 'userMessage') {
+        if (!Array.isArray(item.content)) {
+          throw new CodexProtocolError('Codex user message content is invalid')
+        }
+        const parts: string[] = []
+        for (const part of item.content) {
+          const content = requireRecord(part, 'Codex user message content')
+          if (content.type === 'text' && typeof content.text === 'string') {
+            parts.push(content.text)
+          }
+        }
+        text = parts.join('\n')
+      } else {
+        continue
+      }
+      if (text.length === 0) continue
+      items.push({
+        turnId: requireBoundedString(
+          entry,
+          'turnId',
+          'thread/items/list entry',
+          MAX_CODEX_STORED_THREAD_ID_CODE_UNITS,
+        ),
+        id: requireBoundedString(
+          item,
+          'id',
+          'thread/items/list item',
+          MAX_CODEX_STORED_THREAD_ID_CODE_UNITS,
+        ),
+        type,
+        text,
+      })
+    } catch {
+      invalidEntryCount += 1
+    }
+  }
+  return {
+    items,
+    invalidEntryCount,
+    ...readPageCursor(record, 'nextCursor'),
+    ...readPageCursor(record, 'backwardsCursor'),
+  }
+}
+
+function readPageCursor(
+  record: Record<string, unknown>,
+  key: 'nextCursor' | 'backwardsCursor',
+): Partial<Record<'nextCursor' | 'backwardsCursor', string>> {
+  const value = record[key]
+  if (value === undefined || value === null) return {}
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    value.length > MAX_CODEX_STORED_THREAD_CURSOR_CODE_UNITS
+  ) {
+    throw new CodexProtocolError(
+      `thread/items/list response has invalid ${key}`,
+    )
+  }
+  return { [key]: value }
 }
 
 function parseStoredThread(value: unknown, context: string): CodexStoredThread {

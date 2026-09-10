@@ -18,6 +18,8 @@ import {
   type LastEventId,
   type MachineId,
   type ProjectId,
+  type ReadNativeTranscriptQuery,
+  type ReadNativeTranscriptResponse,
 } from '@codetether/protocol'
 import type { QueryClient } from '@tanstack/react-query'
 
@@ -135,6 +137,14 @@ export interface HostRuntimeClient
     request: AdoptProviderSessionRequest,
     options?: { readonly signal?: AbortSignal },
   ): Promise<AdoptProviderSessionResponse>
+  readNativeTranscript(
+    conversationId: ConversationId,
+    options?: {
+      readonly limit?: ReadNativeTranscriptQuery['limit']
+      readonly cursor?: ReadNativeTranscriptQuery['cursor']
+      readonly signal?: AbortSignal
+    },
+  ): Promise<ReadNativeTranscriptResponse>
   connectEvents(options?: {
     readonly lastEventId?: LastEventId
     readonly signal?: AbortSignal
@@ -507,6 +517,13 @@ export class HostRuntime {
     options?: { readonly signal?: AbortSignal },
   ) {
     return this.#client.getConversation(conversationId, options)
+  }
+
+  readNativeTranscript(
+    conversationId: ConversationId,
+    options?: Parameters<HostRuntimeClient['readNativeTranscript']>[1],
+  ) {
+    return this.#client.readNativeTranscript(conversationId, options)
   }
 
   renameConversation(conversationId: ConversationId | string, title: string) {

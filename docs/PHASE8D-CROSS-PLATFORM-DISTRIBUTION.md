@@ -209,6 +209,31 @@ not copied; readiness must remain unknown/unavailable when unavailable to the
 service. Doctor's runtime/backend separation and custom-gateway semantics remain
 unchanged. This is not a Backend/Profile Manager.
 
+## Native historical transcript projection
+
+Phase 8D includes one shared corrective read path for explicitly adopted native
+Conversations. Codex reads the official bounded `thread/items/list` metadata
+surface; Claude Code reads its bounded Machine-local JSONL session file. Each
+adapter owns native format validation, safe visible-content normalization,
+Provider-private pagination and its content-free adoption boundary. Unsupported
+or changed formats affect historical display only and do not poison execution or
+native resume compatibility.
+
+Web requests the recent page only when an adopted Conversation is opened. Host
+authorizes the exact immutable Conversation, Machine, ProjectLocation, Provider
+and selected ProviderInstallation, then projects random scoped public cursors and
+opaque entry identities. Remote reads use one narrow Machine TLS transcript
+operation; no arbitrary file path or generic filesystem operation is exposed.
+Relay remains an opaque nested-TLS byte forwarder and stores no transcript data.
+
+Native historical entries render before durable CodeTether Turns and are always
+read-only. They are never inserted into Turn, action, execution, Attention,
+notification, failure or Search tables. New adoptions persist only migration
+018's nullable opaque boundary; existing adoptions use conservative Provider
+evidence and report partial history if they cannot be split reliably. Native
+resume continues by private Provider session identity and never by transcript
+replay.
+
 ## Signing and updates
 
 Tauri's [Windows signing configuration](https://v2.tauri.app/distribute/sign/windows/)

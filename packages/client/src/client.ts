@@ -36,6 +36,8 @@ import {
   RemoveProjectLocationResponseSchema,
   RefreshMachineProvidersRequestSchema,
   RefreshMachineProvidersResponseSchema,
+  ReadNativeTranscriptQuerySchema,
+  ReadNativeTranscriptResponseSchema,
   DeleteProjectRequestSchema,
   DeleteProjectResponseSchema,
   GetMachineResponseSchema,
@@ -122,6 +124,8 @@ import {
   type RemoveProjectLocationResponse,
   type RefreshMachineProvidersRequest,
   type RefreshMachineProvidersResponse,
+  type ReadNativeTranscriptQuery,
+  type ReadNativeTranscriptResponse,
   type DeleteProjectRequest,
   type DeleteProjectResponse,
   type GetMachineResponse,
@@ -226,6 +230,11 @@ export interface DiscoverProviderSessionsOptions extends RequestOptions {
   readonly limit?: DiscoverProviderSessionsQuery['limit']
   readonly cursor?: DiscoverProviderSessionsQuery['cursor']
   readonly rescan?: boolean
+}
+
+export interface ReadNativeTranscriptOptions extends RequestOptions {
+  readonly limit?: ReadNativeTranscriptQuery['limit']
+  readonly cursor?: ReadNativeTranscriptQuery['cursor']
 }
 
 export interface GetDoctorOptions extends RequestOptions {
@@ -831,6 +840,46 @@ export class CodeTetherClient {
       response.conversation.conversationId === conversation,
       'Conversation response does not match the requested Conversation',
     )
+    return response
+  }
+
+  async readNativeTranscript(
+    conversationId: ConversationId,
+    options: ReadNativeTranscriptOptions = {},
+  ): Promise<ReadNativeTranscriptResponse> {
+    const conversation = parseProtocol(
+      ConversationIdSchema,
+      conversationId,
+      'read-native-transcript conversation id',
+    )
+    const query = parseProtocol(
+      ReadNativeTranscriptQuerySchema,
+      {
+        ...(options.limit === undefined ? {} : { limit: options.limit }),
+        ...(options.cursor === undefined ? {} : { cursor: options.cursor }),
+      },
+      'read-native-transcript query',
+    )
+    const search = new URLSearchParams({ limit: String(query.limit) })
+    if (query.cursor !== undefined) search.set('cursor', query.cursor)
+    const response = await this.#request(
+      `/api/v1/conversations/${encodeURIComponent(conversation)}/native-transcript?${search.toString()}`,
+      ReadNativeTranscriptResponseSchema,
+      { method: 'GET', signal: options.signal },
+    )
+    assertProtocolIdentity(
+      response.conversationId === conversation &&
+        response.entries.every(
+          (entry) => entry.conversationId === conversation,
+        ),
+      'Native transcript response does not match the requested Conversation',
+    )
+    if (query.cursor !== undefined && response.nextCursor !== undefined) {
+      assertProtocolIdentity(
+        response.nextCursor !== query.cursor,
+        'Native transcript returned the same pagination cursor',
+      )
+    }
     return response
   }
 

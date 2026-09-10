@@ -2,7 +2,11 @@ import type { Duplex } from 'node:stream'
 
 import { z } from 'zod'
 
-import type { AgentProvider, CanonicalFailure } from '@codetether/agent-core'
+import type {
+  AgentProvider,
+  CanonicalFailure,
+  NativeTranscriptPage,
+} from '@codetether/agent-core'
 
 import { machineProtocolVersion, machineTransportLimits } from './constants.js'
 import { MachineTransportError } from './errors.js'
@@ -38,6 +42,7 @@ import {
   ProjectLocationValidatedMessageSchema,
   ProviderSessionsDiscoveredMessageSchema,
   ProviderSessionValidatedMessageSchema,
+  ProviderSessionTranscriptReadResultMessageSchema,
   ProvidersDescribedMessageSchema,
   RemoteProjectLocationPathSchema,
   TrustRevokedMessageSchema,
@@ -48,6 +53,7 @@ import {
   type PrivateProviderSessionCandidate,
   type ProviderSessionsDiscoveredMessage,
   type ProviderSessionValidatedMessage,
+  type ProviderSessionTranscriptReadResultMessage,
   type ProvidersDescribedMessage,
   type RemoteCodexProviderIdentity,
   type RemoteCodexPrompt,
@@ -878,6 +884,74 @@ export class AuthenticatedRemoteMachineConnection {
     return response.candidate
   }
 
+  async readProviderSessionTranscript(options: {
+    readonly conversationId: MachineTransportConversationId
+    readonly projectId: MachineTransportProjectId
+    readonly rootPath: string
+    readonly provider: AgentProvider
+    readonly providerInstallationId: ProviderInstallationId
+    readonly expectedInstallationRevision: ProviderInstallationRevision
+    readonly nativeSessionId: string
+    readonly boundary?: string
+    readonly adoptedAt: string
+    readonly cursor?: string
+    readonly limit: number
+    readonly signal?: AbortSignal
+  }): Promise<NativeTranscriptPage> {
+    this.#assertGeneralPurpose()
+    const rootPath = RemoteProjectLocationPathSchema.safeParse(options.rootPath)
+    if (!rootPath.success) {
+      throw new MachineTransportError(
+        'project_location_path_invalid',
+        'Project Location path is invalid',
+      )
+    }
+    const requestId = newMachineNonce()
+    await this.#connection.send({
+      type: 'provider_session_transcript.read',
+      protocolVersion: machineProtocolVersion,
+      requestId,
+      expectedMachineId: this.machine.machineId,
+      expectedNodeId: this.machine.nodeId,
+      conversationId: options.conversationId,
+      projectId: options.projectId,
+      rootPath: rootPath.data,
+      provider: options.provider,
+      providerInstallationId: options.providerInstallationId,
+      expectedInstallationRevision: options.expectedInstallationRevision,
+      nativeSessionId: options.nativeSessionId,
+      ...(options.boundary === undefined ? {} : { boundary: options.boundary }),
+      adoptedAt: options.adoptedAt,
+      ...(options.cursor === undefined ? {} : { cursor: options.cursor }),
+      limit: options.limit,
+    })
+    const response = await receiveCompatibleMachineMessage(
+      this.#connection,
+      z.union([
+        ProviderSessionTranscriptReadResultMessageSchema,
+        MachineErrorMessageSchema,
+      ]),
+      {
+        signal: options.signal,
+        timeoutMs: machineTransportLimits.providerSessionTranscriptTimeoutMs,
+      },
+    )
+    if (response.type === 'machine.error') {
+      throw remoteError(response.code, response.message, true, response.failure)
+    }
+    this.#assertProviderSessionTranscriptResponse(response, requestId, options)
+    return {
+      provider: response.provider,
+      status: response.status,
+      entries: response.entries,
+      ...(response.nextCursor === undefined
+        ? {}
+        : { nextCursor: response.nextCursor }),
+      complete: response.complete,
+      metrics: response.metrics,
+    }
+  }
+
   async revoke(signal?: AbortSignal): Promise<void> {
     this.#assertGeneralPurpose()
     const nonce = newMachineNonce()
@@ -1136,6 +1210,36 @@ export class AuthenticatedRemoteMachineConnection {
       throw new MachineTransportError(
         'identity_mismatch',
         'Provider session discovery did not match the trusted Machine',
+        { peerAuthenticated: true },
+      )
+    }
+  }
+
+  #assertProviderSessionTranscriptResponse(
+    response: ProviderSessionTranscriptReadResultMessage,
+    requestId: string,
+    options: {
+      readonly conversationId: MachineTransportConversationId
+      readonly projectId: MachineTransportProjectId
+      readonly provider: AgentProvider
+      readonly providerInstallationId: ProviderInstallationId
+      readonly expectedInstallationRevision: ProviderInstallationRevision
+    },
+  ): void {
+    if (
+      response.requestId !== requestId ||
+      response.machineId !== this.machine.machineId ||
+      response.nodeId !== this.machine.nodeId ||
+      response.conversationId !== options.conversationId ||
+      response.projectId !== options.projectId ||
+      response.provider !== options.provider ||
+      response.providerInstallationId !== options.providerInstallationId ||
+      response.installationRevision !== options.expectedInstallationRevision
+    ) {
+      this.#connection.destroy()
+      throw new MachineTransportError(
+        'identity_mismatch',
+        'Provider transcript response did not match the trusted scope',
         { peerAuthenticated: true },
       )
     }

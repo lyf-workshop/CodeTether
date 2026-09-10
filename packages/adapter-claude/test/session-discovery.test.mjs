@@ -6,6 +6,7 @@ import {
   mkdtemp,
   readFile,
   readdir,
+  realpath,
   rm,
   stat,
   writeFile,
@@ -23,7 +24,10 @@ function sessionId(index) {
 }
 
 async function createFixture(t, name = 'basic') {
-  const root = await mkdtemp(join(tmpdir(), `codetether-claude-${name}-`))
+  const temporaryRoot = await mkdtemp(
+    join(tmpdir(), `codetether-claude-${name}-`),
+  )
+  const root = await realpath(temporaryRoot)
   t.after(async () => {
     await rm(root, { recursive: true, force: true })
   })
@@ -53,6 +57,7 @@ async function writeSession(options) {
   const records = [
     {
       type: 'user',
+      uuid: options.userUuid ?? '11111111-1111-4111-8111-111111111111',
       sessionId: options.id,
       cwd: options.cwd,
       timestamp,
@@ -65,6 +70,7 @@ async function writeSession(options) {
     },
     {
       type: 'assistant',
+      uuid: options.assistantUuid ?? '22222222-2222-4222-8222-222222222222',
       sessionId: options.id,
       cwd: options.cwd,
       timestamp: new Date(Date.parse(timestamp) + 1_000).toISOString(),
@@ -231,7 +237,7 @@ test('discovers exact canonical project sessions without retaining content', asy
   assert.equal(page.candidates[0].title, 'Existing Claude session')
   assert.match(page.candidates[1].title, /^Claude conversation - /u)
   assert.equal(page.candidates[0].workingDirectory, fixture.projectRoot)
-  assert.equal(page.candidates[0].historicalTranscript, 'unavailable')
+  assert.equal(page.candidates[0].historicalTranscript, 'supported')
   assert.equal(page.candidates[0].resumeStatus, 'supported')
   assert.equal(JSON.stringify(page).includes(privateMarker), false)
   assert.equal(
@@ -352,7 +358,9 @@ test('keeps discovery and validation byte-for-byte read-only', async (t) => {
     nativeSessionId: candidate.nativeSessionId,
     revision: candidate.revision,
   })
-  assert.deepEqual(validated, candidate)
+  const { transcriptBoundary, ...validatedCandidate } = validated
+  assert.match(transcriptBoundary, /^claude-v1:/u)
+  assert.deepEqual(validatedCandidate, candidate)
   assert.deepEqual(await snapshotJsonl(fixture.projectsDirectory), before)
 
   await appendFile(
@@ -572,5 +580,212 @@ test('uses HOME default state root without reading settings or starting Claude',
   assert.deepEqual(
     await readFile(join(defaultState, 'settings.json')),
     settingsBefore,
+  )
+})
+
+test('projects identical Claude messages before an immutable adoption boundary', async (t) => {
+  const fixture = await createFixture(t, 'transcript-boundary')
+  const id = sessionId(90)
+  const path = await writeSession({
+    projectsDirectory: fixture.projectsDirectory,
+    id,
+    cwd: fixture.projectRoot,
+    privateContent: 'same visible marker',
+  })
+  const discovery = discoveryFor(fixture)
+  const page = await discovery.discover({
+    projectRoot: fixture.projectRoot,
+    limit: 10,
+  })
+  const adopted = await discovery.validateCandidate({
+    projectRoot: fixture.projectRoot,
+    nativeSessionId: id,
+    revision: page.candidates[0].revision,
+  })
+  assert.match(adopted.transcriptBoundary, /^claude-v1:/u)
+  const before = createHash('sha256')
+    .update(await readFile(path))
+    .digest('hex')
+
+  await appendFile(
+    path,
+    `${JSON.stringify({
+      type: 'user',
+      uuid: '33333333-3333-4333-8333-333333333333',
+      sessionId: id,
+      cwd: fixture.projectRoot,
+      timestamp: '2026-01-02T00:00:00.000Z',
+      version: TEST_PROVIDER_VERSION,
+      message: { role: 'user', content: 'CodeTether continuation' },
+    })}\n`,
+  )
+  const afterContinuation = createHash('sha256')
+    .update(await readFile(path))
+    .digest('hex')
+  assert.notEqual(afterContinuation, before)
+
+  const recent = await discovery.readSessionTranscript({
+    projectRoot: fixture.projectRoot,
+    nativeSessionId: id,
+    boundary: adopted.transcriptBoundary,
+    adoptedAt: '2026-01-02T00:00:00.000Z',
+    limit: 1,
+  })
+  assert.equal(recent.status, 'available')
+  assert.equal(recent.entries.length, 1)
+  assert.equal(recent.entries[0].role, 'assistant')
+  assert.equal(recent.entries[0].content, 'same visible marker')
+  assert.ok(recent.nextCursor)
+
+  const older = await discovery.readSessionTranscript({
+    projectRoot: fixture.projectRoot,
+    nativeSessionId: id,
+    boundary: adopted.transcriptBoundary,
+    adoptedAt: '2026-01-02T00:00:00.000Z',
+    cursor: recent.nextCursor,
+    limit: 1,
+  })
+  assert.equal(older.entries[0].role, 'user')
+  assert.equal(older.entries[0].content, 'same visible marker')
+  assert.notEqual(older.entries[0].id, recent.entries[0].id)
+  assert.equal(older.complete, true)
+  assert.equal(
+    createHash('sha256')
+      .update(await readFile(path))
+      .digest('hex'),
+    afterContinuation,
+  )
+  assert.equal(
+    [...recent.entries, ...older.entries].some((entry) =>
+      entry.content.includes('CodeTether continuation'),
+    ),
+    false,
+  )
+})
+
+test('Claude transcript parsing is bounded and fail-soft for huge and malformed history', async (t) => {
+  const fixture = await createFixture(t, 'transcript-bounds')
+  const hugeId = sessionId(91)
+  await writeSession({
+    projectsDirectory: fixture.projectsDirectory,
+    id: hugeId,
+    cwd: fixture.projectRoot,
+    privateContent: '🙂'.repeat(100_000),
+  })
+  const malformedId = sessionId(92)
+  const malformedPath = await writeSession({
+    projectsDirectory: fixture.projectsDirectory,
+    id: malformedId,
+    cwd: fixture.projectRoot,
+  })
+  await appendFile(malformedPath, '{"type":"assistant"')
+  const discovery = discoveryFor(fixture)
+
+  const huge = await discovery.readSessionTranscript({
+    projectRoot: fixture.projectRoot,
+    nativeSessionId: hugeId,
+    adoptedAt: '2026-01-02T00:00:00.000Z',
+    limit: 100,
+  })
+  assert.equal(huge.status, 'partial')
+  assert.equal(huge.entries.length, 2)
+  assert.ok(
+    huge.entries.reduce(
+      (total, entry) => total + Buffer.byteLength(entry.content, 'utf8'),
+      0,
+    ) <=
+      512 * 1024,
+  )
+
+  const malformed = await discovery.readSessionTranscript({
+    projectRoot: fixture.projectRoot,
+    nativeSessionId: malformedId,
+    adoptedAt: '2026-01-02T00:00:00.000Z',
+    limit: 100,
+  })
+  assert.equal(malformed.status, 'partial')
+  assert.equal(malformed.entries.length, 2)
+  assert.equal(malformed.metrics.recordsScanned, 3)
+})
+
+test('paginates 300 Claude transcript records with bounded stable ordering', async (t) => {
+  const fixture = await createFixture(t, 'long-transcript')
+  const id = sessionId(94)
+  const bucket = join(fixture.projectsDirectory, 'project')
+  await mkdir(bucket, { recursive: true })
+  const records = Array.from({ length: 300 }, (_, index) => ({
+    type: index % 2 === 0 ? 'user' : 'assistant',
+    uuid: `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
+    sessionId: id,
+    cwd: fixture.projectRoot,
+    timestamp: new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString(),
+    version: TEST_PROVIDER_VERSION,
+    message: {
+      role: index % 2 === 0 ? 'user' : 'assistant',
+      content: `visible-${String(index).padStart(3, '0')}`,
+    },
+  }))
+  await writeFile(
+    join(bucket, `${id}.jsonl`),
+    `${records.map((record) => JSON.stringify(record)).join('\n')}\n`,
+    { mode: 0o600 },
+  )
+  const discovery = discoveryFor(fixture)
+  const found = await discovery.discover({
+    projectRoot: fixture.projectRoot,
+    limit: 10,
+  })
+  const adopted = await discovery.validateCandidate({
+    projectRoot: fixture.projectRoot,
+    nativeSessionId: id,
+    revision: found.candidates[0].revision,
+  })
+  assert.match(adopted.transcriptBoundary, /^claude-v1:/u)
+
+  const pages = []
+  let cursor
+  do {
+    const page = await discovery.readSessionTranscript({
+      projectRoot: fixture.projectRoot,
+      nativeSessionId: id,
+      boundary: adopted.transcriptBoundary,
+      adoptedAt: '2026-01-02T00:00:00.000Z',
+      ...(cursor === undefined ? {} : { cursor }),
+      limit: 100,
+    })
+    assert.ok(page.entries.length <= 100)
+    assert.equal(page.status, 'available')
+    pages.push(page)
+    cursor = page.nextCursor
+  } while (cursor !== undefined)
+
+  const chronological = [...pages].reverse().flatMap((page) => page.entries)
+  assert.equal(pages.length, 3)
+  assert.equal(chronological.length, 300)
+  assert.deepEqual(
+    chronological.map(({ content }) => content),
+    records.map(({ message }) => message.content),
+  )
+  assert.equal(new Set(chronological.map(({ id }) => id)).size, 300)
+})
+
+test('legacy Claude adoption uses timestamp evidence and remains explicitly partial', async (t) => {
+  const fixture = await createFixture(t, 'legacy-transcript')
+  const id = sessionId(93)
+  await writeSession({
+    projectsDirectory: fixture.projectsDirectory,
+    id,
+    cwd: fixture.projectRoot,
+  })
+  const page = await discoveryFor(fixture).readSessionTranscript({
+    projectRoot: fixture.projectRoot,
+    nativeSessionId: id,
+    adoptedAt: '2026-01-01T00:00:02.000Z',
+    limit: 50,
+  })
+  assert.equal(page.status, 'partial')
+  assert.deepEqual(
+    page.entries.map((entry) => entry.role),
+    ['user', 'assistant'],
   )
 })

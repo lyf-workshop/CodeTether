@@ -26,6 +26,8 @@ export interface ConversationState {
   providerInstallationId?: ProviderInstallationId
   /** Absent only for a newly created lazy remote Conversation. */
   providerThreadId?: string
+  /** Private immutable adoption split; never projected in Conversation DTOs. */
+  readonly nativeTranscriptBoundary?: string
   readonly turns: Map<TurnId, TurnState>
   readonly providerTurnIds: Map<string, TurnId>
   providerSessionMaterialized: boolean

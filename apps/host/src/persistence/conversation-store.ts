@@ -349,6 +349,8 @@ export interface DurableConversation {
   /** Private Phase 8B execution binding; absent only for legacy v15 data. */
   readonly providerInstallationId?: ProviderInstallationId
   readonly providerThreadId?: string
+  /** Private content-free Provider boundary; never projected to Protocol v1. */
+  readonly nativeTranscriptBoundary?: string
   readonly origin: DurableConversationOrigin
   readonly providerSessionMaterialized: boolean
   readonly cwd: string
@@ -2030,8 +2032,8 @@ export class ConversationStore {
         conversation_id, project_id, machine_id, title, title_source,
         pinned_at, archived_at, provider, provider_thread_id, origin,
         provider_session_materialized, cwd, model, reasoning, status,
-        created_at, updated_at, last_activity_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        created_at, updated_at, last_activity_at, native_transcript_boundary
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       value.conversationId,
       value.projectId,
@@ -2051,6 +2053,7 @@ export class ConversationStore {
       value.createdAt,
       value.updatedAt,
       value.lastActivityAt,
+      value.nativeTranscriptBoundary ?? null,
     )
     if (value.providerInstallationId !== undefined) {
       this.#insertConversationProviderInstallationBinding(
@@ -2173,6 +2176,7 @@ export class ConversationStore {
       existing.provider !== value.provider ||
       existing.providerInstallationId !== value.providerInstallationId ||
       existing.origin !== value.origin ||
+      existing.nativeTranscriptBoundary !== value.nativeTranscriptBoundary ||
       (existing.providerThreadId !== undefined &&
         existing.providerThreadId !== value.providerThreadId) ||
       (existing.providerSessionMaterialized &&
@@ -3472,6 +3476,7 @@ interface ConversationRow {
   readonly provider: string
   readonly provider_installation_id: string | null
   readonly provider_thread_id: string | null
+  readonly native_transcript_boundary: string | null
   readonly origin: string
   readonly provider_session_materialized: number
   readonly cwd: string
@@ -4588,6 +4593,11 @@ function parseConversation(
   // Machine-scoped Location before every workspace-dependent operation.
   const cwd = parseCanonicalProjectRoot(value.cwd)
   assertOptionalBoundedText(value.providerThreadId, 'Provider Thread ID', 4096)
+  assertOptionalBoundedText(
+    value.nativeTranscriptBoundary,
+    'Native transcript boundary',
+    4096,
+  )
   assertOptionalBoundedText(value.model, 'Conversation model', 240)
   assertOptionalBoundedText(value.reasoning, 'Conversation reasoning', 120)
   const origin = value.origin ?? 'codetether'
@@ -4609,6 +4619,14 @@ function parseConversation(
   ) {
     throw new Error(
       'An adopted native Conversation requires a materialized Provider session',
+    )
+  }
+  if (
+    value.nativeTranscriptBoundary !== undefined &&
+    origin !== 'adopted_native'
+  ) {
+    throw new Error(
+      'Only an adopted Conversation can have a transcript boundary',
     )
   }
   if (!isOneOf(value.status, durableConversationStatuses)) {
@@ -4641,6 +4659,9 @@ function parseConversation(
     ...(value.providerThreadId === undefined
       ? {}
       : { providerThreadId: value.providerThreadId.trim() }),
+    ...(value.nativeTranscriptBoundary === undefined
+      ? {}
+      : { nativeTranscriptBoundary: value.nativeTranscriptBoundary.trim() }),
     origin,
     providerSessionMaterialized,
     cwd,
@@ -4803,6 +4824,15 @@ function conversationFromRow(row: ConversationRow): DurableConversation {
     ...(row.provider_thread_id === null
       ? {}
       : { providerThreadId: row.provider_thread_id }),
+    ...(row.native_transcript_boundary === null
+      ? {}
+      : {
+          nativeTranscriptBoundary: parseBoundedText(
+            row.native_transcript_boundary,
+            'Native transcript boundary',
+            4096,
+          ),
+        }),
     origin: parseConversationOrigin(row.origin),
     providerSessionMaterialized: parseStoredBoolean(
       row.provider_session_materialized,

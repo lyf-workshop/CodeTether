@@ -8,6 +8,92 @@ const projectId = 'proj_sessions01'
 const machineId = 'machine_sessions01'
 const candidateId = 'candidate_sessions00000001'
 
+test('reads one bounded native transcript page with opaque cursor and cancellation', async () => {
+  const calls = []
+  const controller = new AbortController()
+  const transcriptConversationId = 'conv_native_transcript_client'
+  const cursor = 'transcript_1234567890abcdef'
+  const client = new CodeTetherClient({
+    baseUrl: 'http://host.test',
+    fetch: async (input, init) => {
+      calls.push({ url: String(input), init })
+      return jsonResponse({
+        protocolVersion: 1,
+        conversationId: transcriptConversationId,
+        provider: 'codex',
+        status: 'available',
+        entries: [
+          {
+            id: 'native_12345678901234567890',
+            conversationId: transcriptConversationId,
+            source: 'native_provider',
+            provider: 'codex',
+            role: 'assistant',
+            kind: 'message',
+            content: 'Historical answer',
+            occurredAt: timestamp,
+            nativeSequence: 7,
+            historical: true,
+            readOnly: true,
+          },
+        ],
+        complete: true,
+        metrics: {
+          bytesRead: 17,
+          recordsScanned: 1,
+          entriesReturned: 1,
+          elapsedMs: 1,
+          truncated: false,
+        },
+      })
+    },
+  })
+
+  const page = await client.readNativeTranscript(transcriptConversationId, {
+    cursor,
+    limit: 25,
+    signal: controller.signal,
+  })
+  assert.equal(page.entries[0].content, 'Historical answer')
+  const url = new URL(calls[0].url)
+  assert.equal(
+    url.pathname,
+    `/api/v1/conversations/${transcriptConversationId}/native-transcript`,
+  )
+  assert.deepEqual(Object.fromEntries(url.searchParams), {
+    limit: '25',
+    cursor,
+  })
+  assert.equal(calls[0].init.method, 'GET')
+  assert.strictEqual(calls[0].init.signal, controller.signal)
+})
+
+test('rejects a native transcript response for another Conversation', async () => {
+  const client = new CodeTetherClient({
+    baseUrl: 'http://host.test',
+    fetch: async () =>
+      jsonResponse({
+        protocolVersion: 1,
+        conversationId: 'conv_native_transcript_other',
+        provider: 'codex',
+        status: 'empty',
+        entries: [],
+        complete: true,
+        metrics: {
+          bytesRead: 0,
+          recordsScanned: 0,
+          entriesReturned: 0,
+          elapsedMs: 0,
+          truncated: false,
+        },
+      }),
+  })
+  await assert.rejects(
+    client.readNativeTranscript('conv_native_transcript_requested'),
+    CodeTetherProtocolError,
+  )
+})
+
 test('discovers bounded Provider sessions for one exact ProjectLocation', async () => {
   const calls = []
   const controller = new AbortController()

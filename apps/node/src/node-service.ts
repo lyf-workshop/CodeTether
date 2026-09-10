@@ -31,6 +31,7 @@ import {
   PairingLoginStartMessageSchema,
   ProjectLocationValidateMessageSchema,
   ProviderSessionValidateMessageSchema,
+  ProviderSessionTranscriptReadMessageSchema,
   ProviderSessionsDiscoverMessageSchema,
   ProvidersDescribeMessageSchema,
   TrustRevokeMessageSchema,
@@ -63,7 +64,10 @@ import { PairingMode, type PairingModeView } from './pairing-mode.js'
 import { validateProjectLocationPath } from './project-location-validation.js'
 import { RemoteProviderDetector } from './provider-discovery.js'
 import { NodeProviderLifecycleCoordinator } from './provider-lifecycle.js'
-import { RemoteProviderSessionDiscoveryRegistry } from './provider-session-discovery.js'
+import {
+  RemoteProviderSessionDiscoveryRegistry,
+  privateTranscriptPage,
+} from './provider-session-discovery.js'
 import {
   RemoteClaudeRunnerPool,
   type RemoteClaudeRunner,
@@ -84,6 +88,7 @@ const AuthenticatedRequestSchema = z.discriminatedUnion('type', [
   ProvidersDescribeMessageSchema,
   ProviderSessionsDiscoverMessageSchema,
   ProviderSessionValidateMessageSchema,
+  ProviderSessionTranscriptReadMessageSchema,
   CodexSessionOpenMessageSchema,
   ClaudeSessionOpenMessageSchema,
   TrustRevokeMessageSchema,
@@ -829,6 +834,55 @@ export class CodeTetherNodeService extends EventEmitter {
             ...(candidate === undefined
               ? {}
               : { candidate: privateCandidate(candidate) }),
+          })
+          continue
+        }
+        if (request.type === 'provider_session_transcript.read') {
+          this.#assertProviderSessionDiscoveryIdentity(request)
+          const validated = await validateProjectLocationPath(request.rootPath)
+          if (validated.canonicalPath !== request.rootPath) {
+            throw new MachineTransportError(
+              'project_location_path_invalid',
+              'Provider transcript reading requires the canonical Project Location',
+            )
+          }
+          const transcript = privateTranscriptPage(
+            await this.#providerSessionDiscoveries.readTranscript({
+              provider: request.provider,
+              providerInstallationId: request.providerInstallationId,
+              expectedInstallationRevision:
+                request.expectedInstallationRevision,
+              projectRoot: validated.canonicalPath,
+              nativeSessionId: request.nativeSessionId,
+              ...(request.boundary === undefined
+                ? {}
+                : { boundary: request.boundary }),
+              adoptedAt: request.adoptedAt,
+              ...(request.cursor === undefined
+                ? {}
+                : { cursor: request.cursor }),
+              limit: request.limit,
+              signal: providerSessionDiscoveryAbort.signal,
+            }),
+          )
+          await connection.send({
+            type: 'provider_session_transcript.read_result',
+            protocolVersion: machineProtocolVersion,
+            requestId: request.requestId,
+            machineId: this.state.machine.machineId,
+            nodeId: this.state.machine.nodeId,
+            conversationId: request.conversationId,
+            projectId: request.projectId,
+            provider: request.provider,
+            providerInstallationId: request.providerInstallationId,
+            installationRevision: request.expectedInstallationRevision,
+            status: transcript.status,
+            entries: transcript.entries,
+            ...(transcript.nextCursor === undefined
+              ? {}
+              : { nextCursor: transcript.nextCursor }),
+            complete: transcript.complete,
+            metrics: transcript.metrics,
           })
           continue
         }

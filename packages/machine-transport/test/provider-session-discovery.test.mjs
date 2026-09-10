@@ -5,6 +5,8 @@ import {
   AuthenticatedRemoteMachineConnection,
   MachineWireMessageSchema,
   PrivateProviderSessionCandidateSchema,
+  ProviderSessionTranscriptReadMessageSchema,
+  ProviderSessionTranscriptReadResultMessageSchema,
   ProviderSessionsDiscoveredMessageSchema,
   ProviderSessionValidatedMessageSchema,
   encodeMachineFrame,
@@ -22,6 +24,7 @@ const projectId = 'proj_sessions01'
 const rootPath = '/srv/codetether-session-project'
 const providerInstallationId = 'pinst_sessions01'
 const installationRevision = 'prev_sessions01'
+const conversationId = 'conv_sessions01'
 
 function privateCandidate(provider, suffix = 'a') {
   return {
@@ -386,4 +389,167 @@ test('validated Provider-session responses bind validity to private metadata', (
     }).success,
     false,
   )
+})
+
+test('Provider transcript messages are narrow, frame-bounded, and identity-scoped', () => {
+  const request = {
+    type: 'provider_session_transcript.read',
+    protocolVersion: 1,
+    requestId: 'T'.repeat(43),
+    expectedMachineId: machine.machineId,
+    expectedNodeId: machine.nodeId,
+    conversationId,
+    projectId,
+    rootPath,
+    provider: 'codex',
+    providerInstallationId,
+    expectedInstallationRevision: installationRevision,
+    nativeSessionId: 'private-native-session',
+    boundary: 'codex-v1:private-boundary',
+    adoptedAt: '2026-09-05T12:00:00.000Z',
+    cursor: 'private-provider-cursor',
+    limit: machineTransportLimits.providerSessionTranscriptPageSize,
+  }
+  assert.equal(
+    ProviderSessionTranscriptReadMessageSchema.safeParse(request).success,
+    true,
+  )
+  for (const unsafe of [
+    { ...request, path: '/arbitrary/file' },
+    { ...request, nativeSessionId: 'private\0tail' },
+    {
+      ...request,
+      limit: machineTransportLimits.providerSessionTranscriptPageSize + 1,
+    },
+    {
+      ...request,
+      cursor: 'x'.repeat(
+        machineTransportLimits.maximumProviderSessionTranscriptCursorBytes + 1,
+      ),
+    },
+  ]) {
+    assert.equal(
+      ProviderSessionTranscriptReadMessageSchema.safeParse(unsafe).success,
+      false,
+    )
+  }
+
+  const entry = {
+    id: 'native-private-entry-a',
+    provider: 'codex',
+    role: 'user',
+    kind: 'message',
+    content: 'bounded visible history',
+    occurredAt: '2026-09-05T10:00:00.000Z',
+    nativeSequence: 1,
+    readOnly: true,
+  }
+  const response = {
+    type: 'provider_session_transcript.read_result',
+    protocolVersion: 1,
+    requestId: request.requestId,
+    machineId: machine.machineId,
+    nodeId: machine.nodeId,
+    conversationId,
+    projectId,
+    provider: 'codex',
+    providerInstallationId,
+    installationRevision,
+    status: 'available',
+    entries: [entry],
+    nextCursor: 'older-private-cursor',
+    complete: false,
+    metrics: {
+      bytesRead: 64,
+      recordsScanned: 1,
+      entriesReturned: 1,
+      elapsedMs: 2,
+      truncated: true,
+    },
+  }
+  assert.equal(
+    ProviderSessionTranscriptReadResultMessageSchema.safeParse(response)
+      .success,
+    true,
+  )
+  assert.ok(
+    encodeMachineFrame(response).length <=
+      machineTransportLimits.maximumFrameBytes + 4,
+  )
+  assert.equal(
+    ProviderSessionTranscriptReadResultMessageSchema.safeParse({
+      ...response,
+      conversationId: 'conv_other_scope',
+      entries: [{ ...entry, content: 'x'.repeat(2_000) }],
+    }).success,
+    false,
+  )
+  assert.equal(
+    ProviderSessionTranscriptReadResultMessageSchema.safeParse({
+      ...response,
+      metrics: { ...response.metrics, entriesReturned: 0 },
+    }).success,
+    false,
+  )
+})
+
+test('authenticated transcript reads reject a cross-conversation response', async () => {
+  let request
+  const framed = {
+    closed: false,
+    async send(message) {
+      request = message
+    },
+    async receive() {
+      return {
+        type: 'provider_session_transcript.read_result',
+        protocolVersion: 1,
+        requestId: request.requestId,
+        machineId: machine.machineId,
+        nodeId: machine.nodeId,
+        conversationId: 'conv_other_scope',
+        projectId,
+        provider: request.provider,
+        providerInstallationId: request.providerInstallationId,
+        installationRevision: request.expectedInstallationRevision,
+        status: 'empty',
+        entries: [],
+        complete: true,
+        metrics: {
+          bytesRead: 0,
+          recordsScanned: 0,
+          entriesReturned: 0,
+          elapsedMs: 1,
+          truncated: false,
+        },
+      }
+    },
+    end() {
+      this.closed = true
+    },
+    destroy() {
+      this.closed = true
+    },
+  }
+  const connection = new AuthenticatedRemoteMachineConnection(
+    framed,
+    'controller_sessions01',
+    machine,
+  )
+  await assert.rejects(
+    connection.readProviderSessionTranscript({
+      conversationId,
+      projectId,
+      rootPath,
+      provider: 'codex',
+      providerInstallationId,
+      expectedInstallationRevision: installationRevision,
+      nativeSessionId: 'private-native-session',
+      adoptedAt: '2026-09-05T12:00:00.000Z',
+      limit: 1,
+    }),
+    (error) =>
+      error.code === 'identity_mismatch' && error.peerAuthenticated === true,
+  )
+  assert.equal(framed.closed, true)
 })

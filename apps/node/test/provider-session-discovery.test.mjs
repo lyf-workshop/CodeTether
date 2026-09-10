@@ -317,6 +317,42 @@ function discoveryAdapter(provider, calls) {
         ? expected
         : undefined
     },
+    async readSessionTranscript(request) {
+      calls.transcript.push(request)
+      assert.ok(request.signal instanceof AbortSignal)
+      return {
+        provider,
+        status: 'available',
+        entries: [
+          {
+            id: `${provider}-history-a`,
+            provider,
+            role: 'user',
+            kind: 'message',
+            content: 'same visible marker',
+            nativeSequence: 0,
+            readOnly: true,
+          },
+          {
+            id: `${provider}-history-b`,
+            provider,
+            role: 'assistant',
+            kind: 'message',
+            content: 'x'.repeat(2_000),
+            nativeSequence: 1,
+            readOnly: true,
+          },
+        ],
+        complete: true,
+        metrics: {
+          bytesRead: 2_100,
+          recordsScanned: 2,
+          entriesReturned: 2,
+          elapsedMs: 1,
+          truncated: false,
+        },
+      }
+    },
   }
 }
 
@@ -402,8 +438,8 @@ test(
     const projectRoot = await realpath(projectDirectory)
     const localController = await controller()
     const calls = {
-      codex: { discover: [], validate: [] },
-      claude: { discover: [], validate: [] },
+      codex: { discover: [], validate: [], transcript: [] },
+      claude: { discover: [], validate: [], transcript: [] },
     }
     const guard = executionGuard()
     const providerSessionDiscoveries =
@@ -483,6 +519,44 @@ test(
         )
         assert.equal(providerCalls.validate.length, 2)
         assert.equal(providerCalls.validate[0].projectRoot, projectRoot)
+
+        const transcript = await connected.readProviderSessionTranscript({
+          conversationId: 'conv_sessiondiscovery',
+          projectId,
+          rootPath: projectRoot,
+          provider,
+          providerInstallationId,
+          expectedInstallationRevision: installationRevision,
+          nativeSessionId: page.candidates[0].nativeSessionId,
+          boundary: `${provider}-boundary`,
+          adoptedAt: '2026-09-05T12:00:00.000Z',
+          limit: 2,
+        })
+        assert.equal(transcript.entries.length, 2)
+        assert.equal(transcript.entries[0].content, 'same visible marker')
+        assert.equal(
+          Buffer.byteLength(transcript.entries[1].content, 'utf8'),
+          machineTransportLimits.maximumProviderSessionTranscriptEntryContentBytes,
+        )
+        assert.equal(transcript.status, 'partial')
+        assert.equal(transcript.metrics.truncated, true)
+        assert.equal(providerCalls.transcript.length, 1)
+        assert.deepEqual(
+          {
+            projectRoot: providerCalls.transcript[0].projectRoot,
+            nativeSessionId: providerCalls.transcript[0].nativeSessionId,
+            boundary: providerCalls.transcript[0].boundary,
+            adoptedAt: providerCalls.transcript[0].adoptedAt,
+            limit: providerCalls.transcript[0].limit,
+          },
+          {
+            projectRoot,
+            nativeSessionId: page.candidates[0].nativeSessionId,
+            boundary: `${provider}-boundary`,
+            adoptedAt: '2026-09-05T12:00:00.000Z',
+            limit: 2,
+          },
+        )
       }
 
       const unavailable = await connected.discoverProviderSessions({

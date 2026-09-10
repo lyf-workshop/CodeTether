@@ -16,6 +16,9 @@ const providerLifecycleResponseTimeoutMs =
 const providerSessionDiscoveryWorkTimeoutMs = 30_000
 const providerSessionDiscoveryResponseTimeoutMs =
   providerLifecycleResponseTimeoutMs + providerSessionDiscoveryWorkTimeoutMs
+const providerSessionTranscriptWorkTimeoutMs = 30_000
+const providerSessionTranscriptResponseTimeoutMs =
+  providerLifecycleResponseTimeoutMs + providerSessionTranscriptWorkTimeoutMs
 const providerSessionHandshakeTimeoutMs =
   3 * providerProbeTimeoutMs + 2 * 30_000 + 15_000
 
@@ -49,6 +52,21 @@ export const machineTransportLimits = {
   maximumProviderSessionDiscoveryCursorBytes: 512,
   maximumProviderSessionDiscoveryTitleBytes: 512,
   maximumProviderSessionDiscoveryRevisionBytes: 128,
+  providerSessionTranscriptWorkTimeoutMs,
+  providerSessionTranscriptTimeoutMs:
+    providerSessionTranscriptResponseTimeoutMs,
+  providerSessionTranscriptTotalTimeoutMs:
+    providerLifecycleResponseTimeoutMs + 60_000,
+  // Transcript content shares the existing 16 KiB Machine frame. Eight
+  // normalized entries capped at 1 KiB each leave room for identities,
+  // timestamps, metrics, and JSON framing without widening that boundary.
+  providerSessionTranscriptPageSize: 8,
+  maximumProviderSessionTranscriptPages: 128,
+  maximumProviderSessionTranscriptEntryIdBytes: 512,
+  maximumProviderSessionTranscriptEntryContentBytes: 1024,
+  maximumProviderSessionTranscriptPageContentBytes: 8 * 1024,
+  maximumProviderSessionTranscriptBoundaryBytes: 2 * 1024,
+  maximumProviderSessionTranscriptCursorBytes: 512,
   providerProbeTimeoutMs,
   maximumProviderInstallationsPerProvider,
   maximumProviderInstallationCandidates: 32,

@@ -8,7 +8,7 @@ import {
 } from '@codetether/adapter-claude'
 import {
   canonicalFailure,
-  type ProviderSessionDiscovery,
+  type ProviderSessionMetadataAdapter,
 } from '@codetether/agent-core'
 import {
   CodexOwnedProcessCleanupError,
@@ -153,7 +153,7 @@ export async function startLocalCodexHost(
         async (provider) => await createLocalProviderRuntime(provider, options),
       ),
     ))
-  const providerSessionDiscoveries: readonly ProviderSessionDiscovery[] =
+  const providerSessionDiscoveries: readonly ProviderSessionMetadataAdapter[] =
     lifecycleStates?.flatMap((state) =>
       state.sessionDiscovery === undefined ? [] : [state.sessionDiscovery],
     ) ?? [
@@ -350,7 +350,7 @@ export async function startLocalCodexHostWithRuntime(
   refreshUnavailableLocalProvider?: (
     provider: AgentHostRuntime['provider'],
   ) => Promise<AgentHostRuntime>,
-  providerSessionDiscoveries?: readonly ProviderSessionDiscovery[],
+  providerSessionDiscoveries?: readonly ProviderSessionMetadataAdapter[],
   providerLifecycles?: readonly MachineProviderLifecycle[],
   refreshLocalProviderLifecycle?: (
     provider: AgentHostRuntime['provider'],

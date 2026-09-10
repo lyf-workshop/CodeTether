@@ -23,7 +23,7 @@ import {
 import {
   canonicalFailure,
   type AgentProvider,
-  type ProviderSessionDiscovery,
+  type ProviderSessionMetadataAdapter,
 } from '@codetether/agent-core'
 import {
   MachineTransportMachineIdSchema,
@@ -84,7 +84,7 @@ export interface LocalProviderLifecycleCoordinatorOptions {
 export interface LocalProviderLifecycleState {
   readonly runtime: AgentHostRuntime
   readonly lifecycle: MachineProviderLifecycle
-  readonly sessionDiscovery?: ProviderSessionDiscovery
+  readonly sessionDiscovery?: ProviderSessionMetadataAdapter
 }
 
 export interface PreparedLocalProviderLifecycleState extends LocalProviderLifecycleState {
@@ -827,7 +827,7 @@ export class LocalProviderLifecycleCoordinator {
   #sessionDiscoveryFor(
     provider: AgentProvider,
     selected: ObservedInstallation | undefined,
-  ): ProviderSessionDiscovery | undefined {
+  ): ProviderSessionMetadataAdapter | undefined {
     if (
       selected === undefined ||
       selected.durable.compatibility?.freshness !== 'current' ||
@@ -836,7 +836,7 @@ export class LocalProviderLifecycleCoordinator {
     ) {
       return undefined
     }
-    const discovery: ProviderSessionDiscovery =
+    const discovery: ProviderSessionMetadataAdapter =
       provider === 'codex'
         ? new CodexSessionDiscovery({
             executable: (selected.candidate as CodexInstallationCandidate)
@@ -863,6 +863,16 @@ export class LocalProviderLifecycleCoordinator {
       validateCandidate: async (request) => {
         try {
           return await discovery.validateCandidate(request)
+        } catch (error) {
+          if (isProviderOwnedProcessCleanupError(error)) {
+            throw this.latchOwnedProcessCleanupFailure(provider, error)
+          }
+          throw error
+        }
+      },
+      readSessionTranscript: async (request) => {
+        try {
+          return await discovery.readSessionTranscript!(request)
         } catch (error) {
           if (isProviderOwnedProcessCleanupError(error)) {
             throw this.latchOwnedProcessCleanupFailure(provider, error)

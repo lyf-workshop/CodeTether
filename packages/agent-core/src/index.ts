@@ -32,6 +32,21 @@ export {
   providerExecutionHealthStates,
 } from './failures.js'
 export {
+  nativeTranscriptKinds,
+  nativeTranscriptRoles,
+  nativeTranscriptStatuses,
+} from './native-transcript.js'
+export type {
+  NativeTranscriptEntry,
+  NativeTranscriptKind,
+  NativeTranscriptPage,
+  NativeTranscriptReadMetrics,
+  NativeTranscriptRole,
+  NativeTranscriptStatus,
+  ProviderSessionTranscriptReader,
+  ProviderSessionTranscriptReadRequest,
+} from './native-transcript.js'
+export {
   providerHistoricalTranscriptStatuses,
   providerSessionDiscoveryFailureReasons,
   providerSessionDiscoveryStatuses,
@@ -44,6 +59,7 @@ export type {
   ProviderSessionDiscovery,
   ProviderSessionDiscoveryFailureReason,
   ProviderSessionDiscoveryMetrics,
+  ProviderSessionMetadataAdapter,
   ProviderSessionDiscoveryPage,
   ProviderSessionDiscoveryRequest,
   ProviderSessionDiscoveryStatus,

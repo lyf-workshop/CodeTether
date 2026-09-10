@@ -71,6 +71,20 @@ export interface CodexStoredThreadPage {
   readonly nextCursor?: string
 }
 
+export interface CodexStoredThreadItem {
+  readonly turnId: string
+  readonly id: string
+  readonly type: 'userMessage' | 'agentMessage'
+  readonly text: string
+}
+
+export interface CodexStoredThreadItemPage {
+  readonly items: readonly CodexStoredThreadItem[]
+  readonly invalidEntryCount: number
+  readonly nextCursor?: string
+  readonly backwardsCursor?: string
+}
+
 export interface CodexTurnError {
   readonly message: string
   readonly codexErrorInfo?: unknown

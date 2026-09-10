@@ -72,6 +72,8 @@ import {
   MachineIdSchema,
   MachinePairingAttemptIdSchema,
   ProjectIdSchema,
+  ReadNativeTranscriptQuerySchema,
+  ReadNativeTranscriptResponseSchema,
   RenameConversationRequestSchema,
   RenameConversationResponseSchema,
   StartTurnRequestSchema,
@@ -239,6 +241,10 @@ export class LocalHttpServer {
         url.pathname,
         /^\/api\/v1\/projects\/([^/]+)\/locations\/([^/]+)\/provider-sessions$/u,
       )
+      const nativeTranscriptRoute = this.#http.matchPath(
+        url.pathname,
+        /^\/api\/v1\/conversations\/([^/]+)\/native-transcript$/u,
+      )
       const remoteProjectsRoute = this.#http.matchPath(
         url.pathname,
         /^\/api\/v1\/machines\/([^/]+)\/projects$/u,
@@ -248,6 +254,7 @@ export class LocalHttpServer {
         (projectConversationsRoute !== undefined ||
           projectConversationSearchRoute !== undefined ||
           providerSessionsRoute !== undefined ||
+          nativeTranscriptRoute !== undefined ||
           url.pathname === '/api/v1/doctor' ||
           url.pathname === '/api/v1/attention')
       if (url.search !== '' && !acceptsQuery) {
@@ -954,6 +961,40 @@ export class LocalHttpServer {
           CreateConversationResponseSchema.parse(result),
           context.allowedOrigin,
         )
+        return
+      }
+
+      if (request.method === 'GET' && nativeTranscriptRoute !== undefined) {
+        const conversationId = this.#http.parseRouteId(
+          ConversationIdSchema,
+          nativeTranscriptRoute[0],
+          'conversationId',
+        )
+        const query = this.#http.parseValidatedQuery(
+          url.searchParams,
+          ReadNativeTranscriptQuerySchema,
+        )
+        const abort = new AbortController()
+        const cancel = () => abort.abort()
+        request.once('aborted', cancel)
+        response.once('close', cancel)
+        try {
+          this.#http.writeJson(
+            response,
+            200,
+            ReadNativeTranscriptResponseSchema.parse(
+              await this.#service.readNativeTranscript(
+                conversationId,
+                query,
+                abort.signal,
+              ),
+            ),
+            context.allowedOrigin,
+          )
+        } finally {
+          request.off('aborted', cancel)
+          response.off('close', cancel)
+        }
         return
       }
 

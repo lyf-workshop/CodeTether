@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { once } from 'node:events'
-import { mkdtemp, mkdir, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -25,6 +25,69 @@ import { normalizeTrustedProjectRoot } from '../dist/project-path.js'
 import { downgradeExistingProviderSessionsToVersionFourteen } from './fixtures/existing-provider-sessions-v14.mjs'
 
 const timestamp = '2026-10-01T12:00:00.000Z'
+
+test('migration 018 preserves existing adopted history and stores only an opaque adoption boundary', async (t) => {
+  const fixture = await createFixture(t)
+  let store = ConversationStore.open({ databasePath: fixture.databasePath })
+  const legacy = store.createOrGetAdoptedConversation(
+    adoptedConversation(fixture, 'conv_native_transcript_legacy'),
+  ).conversation
+  store.createTurn({
+    turnId: 'turn_native_transcript_preserved',
+    conversationId: legacy.conversationId,
+    providerTurnId: 'provider-turn-native-transcript-preserved',
+    input: { type: 'text', text: 'Preserved CodeTether Turn', timestamp },
+    status: 'completed',
+    startedAt: timestamp,
+    completedAt: timestamp,
+    snapshotVersion: 1,
+    snapshot: { preserved: true },
+  })
+  store.close()
+
+  const versionSeventeen = new DatabaseSync(fixture.databasePath)
+  versionSeventeen.exec(`
+    ALTER TABLE conversations DROP COLUMN native_transcript_boundary;
+    DELETE FROM schema_migrations WHERE version = 18;
+  `)
+  versionSeventeen.close()
+
+  store = ConversationStore.open({ databasePath: fixture.databasePath })
+  assert.equal(store.schemaVersion, 18)
+  assert.equal(
+    store.getConversation(legacy.conversationId)?.nativeTranscriptBoundary,
+    undefined,
+  )
+  assert.equal(store.listTurns(legacy.conversationId).length, 1)
+
+  const boundary = 'codex-v1:opaque-content-free-boundary'
+  const bounded = store.createOrGetAdoptedConversation({
+    ...adoptedConversation(fixture, 'conv_native_transcript_bounded'),
+    providerThreadId: 'native-session-phase8a-bounded',
+    nativeTranscriptBoundary: boundary,
+  }).conversation
+  assert.equal(bounded.nativeTranscriptBoundary, boundary)
+  assert.throws(
+    () =>
+      store.createConversation(
+        conversation(fixture, 'conv_native_transcript_not_adopted', {
+          nativeTranscriptBoundary: boundary,
+        }),
+      ),
+    /Only an adopted Conversation/u,
+  )
+  store.close()
+
+  const reopened = ConversationStore.open({
+    databasePath: fixture.databasePath,
+  })
+  assert.equal(
+    reopened.getConversation(bounded.conversationId)?.nativeTranscriptBoundary,
+    boundary,
+  )
+  assert.equal(reopened.listTurns(legacy.conversationId).length, 1)
+  reopened.close()
+})
 
 test('migration 015 backfills CodeTether origin and materialized native-session truth', async (t) => {
   const fixture = await createFixture(t)
@@ -59,8 +122,8 @@ test('migration 015 backfills CodeTether origin and materialized native-session 
   const migrated = ConversationStore.open({
     databasePath: fixture.databasePath,
   })
-  assert.equal(currentSchemaVersion, 17)
-  assert.equal(migrated.schemaVersion, 17)
+  assert.equal(currentSchemaVersion, 18)
+  assert.equal(migrated.schemaVersion, 18)
   assert.deepEqual(
     pickSessionState(migrated.getConversation('conv_phase8a_unmaterialized')),
     { origin: 'codetether', providerSessionMaterialized: false },
@@ -396,9 +459,10 @@ test('organization changes on an adopted Conversation never replace its private 
 
 async function createFixture(t) {
   const directory = await mkdtemp(join(tmpdir(), 'codetether-phase8a-store-'))
-  const workspace = join(directory, 'workspace')
+  const workspaceInput = join(directory, 'workspace')
   const databasePath = join(directory, 'codetether.sqlite3')
-  await mkdir(workspace, { recursive: true })
+  await mkdir(workspaceInput, { recursive: true })
+  const workspace = await realpath(workspaceInput)
   const store = ConversationStore.open({ databasePath })
   const machine = store.listMachines()[0]
   assert.ok(machine)

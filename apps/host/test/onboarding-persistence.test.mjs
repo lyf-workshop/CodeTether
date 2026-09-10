@@ -16,7 +16,7 @@ const startedAt = '2026-09-07T12:00:00.000Z'
 test('migration 017 distinguishes a fresh database from an existing user without copying readiness', async (t) => {
   const fixture = await createFixture(t)
   let store = ConversationStore.open({ databasePath: fixture.databasePath })
-  assert.equal(currentSchemaVersion, 17)
+  assert.equal(currentSchemaVersion, 18)
   assert.deepEqual(store.getOnboardingProgress(), {
     flowVersion: 1,
     step: 'welcome',
@@ -30,8 +30,9 @@ test('migration 017 distinguishes a fresh database from an existing user without
 
   const v16 = new DatabaseSync(fixture.databasePath)
   v16.exec(`
+    ALTER TABLE conversations DROP COLUMN native_transcript_boundary;
     DROP TABLE onboarding_progress;
-    DELETE FROM schema_migrations WHERE version = 17;
+    DELETE FROM schema_migrations WHERE version IN (17, 18);
   `)
   v16.close()
 

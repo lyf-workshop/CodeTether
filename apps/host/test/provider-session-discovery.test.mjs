@@ -855,6 +855,248 @@ test('unavailable local discovery cannot expose native candidates', async (t) =>
   assertUnsupportedFormat(result)
 })
 
+test('native transcript projection stays scoped, paginated, and creates no product work', async (t) => {
+  const candidate = nativeCandidate(
+    'native-transcript-one',
+    'revision-transcript-one',
+    {
+      historicalTranscript: 'supported',
+      transcriptBoundary: 'codex-v1:opaque-boundary-one',
+    },
+  )
+  const fixture = await createFixture(t, {
+    candidates: [candidate],
+    transcriptImplementation: async (request) => {
+      assert.equal(request.projectRoot, fixture.projectRoot)
+      assert.equal(request.nativeSessionId, candidate.nativeSessionId)
+      assert.equal(request.boundary, candidate.transcriptBoundary)
+      assert.equal(request.adoptedAt, timestamp)
+      assert.equal(request.limit, 1)
+      return request.cursor === undefined
+        ? nativeTranscriptPage('provider-entry-newer', 'newer', {
+            nextCursor: 'private-provider-cursor',
+            complete: false,
+            sequence: 2,
+          })
+        : nativeTranscriptPage('provider-entry-older', 'older', {
+            sequence: 1,
+          })
+    },
+  })
+  const adopted = await adoptFirstCandidate(fixture)
+  const before = fixture.service.getConversation(
+    adopted.data.conversation.conversationId,
+  )
+  const attentionBefore = fixture.service.listAttention({
+    status: 'open',
+    limit: 50,
+  }).items.length
+
+  const recent = await fixture.service.readNativeTranscript(
+    adopted.data.conversation.conversationId,
+    { limit: 1 },
+  )
+  assert.equal(recent.status, 'available')
+  assert.equal(recent.entries[0].content, 'newer')
+  assert.equal(recent.entries[0].historical, true)
+  assert.equal(recent.entries[0].readOnly, true)
+  assert.ok(recent.nextCursor?.startsWith('transcript_'))
+  assert.equal(JSON.stringify(recent).includes('native-transcript-one'), false)
+  assert.equal(
+    JSON.stringify(recent).includes('private-provider-cursor'),
+    false,
+  )
+
+  const older = await fixture.service.readNativeTranscript(
+    adopted.data.conversation.conversationId,
+    { limit: 1, cursor: recent.nextCursor },
+  )
+  assert.equal(older.status, 'available')
+  assert.equal(older.entries[0].content, 'older')
+  assert.equal(older.nextCursor, undefined)
+  assert.notEqual(older.entries[0].id, recent.entries[0].id)
+  assert.equal(fixture.discovery.transcriptCalls.length, 2)
+  assert.equal(
+    fixture.discovery.transcriptCalls[1].cursor,
+    'private-provider-cursor',
+  )
+
+  const after = fixture.service.getConversation(
+    adopted.data.conversation.conversationId,
+  )
+  assert.equal(after.runtime.turns.length, before.runtime.turns.length)
+  assert.equal(
+    fixture.service.listAttention({ status: 'open', limit: 50 }).items.length,
+    attentionBefore,
+  )
+  assert.equal(fixture.runtime.startConversationCalls, 0)
+  assert.equal(fixture.runtime.resumeConversationCalls, 0)
+  assert.equal(fixture.runtime.startTurnCalls, 0)
+})
+
+test('native transcript cursors cannot cross Conversation scope', async (t) => {
+  const firstCandidate = nativeCandidate(
+    'native-transcript-cursor-one',
+    'revision-transcript-cursor-one',
+    { historicalTranscript: 'supported' },
+  )
+  const fixture = await createFixture(t, {
+    candidates: [firstCandidate],
+    transcriptImplementation: async () =>
+      nativeTranscriptPage('provider-entry-cursor', 'history', {
+        nextCursor: 'private-cursor-scope',
+        complete: false,
+      }),
+  })
+  const first = await adoptFirstCandidate(fixture)
+  const second = fixture.persistence.createOrGetAdoptedConversation({
+    conversationId: 'conv_native_transcript_second',
+    projectId: fixture.projectId,
+    machineId: fixture.machineId,
+    title: 'Second adopted session',
+    titleSource: 'generated',
+    provider: 'codex',
+    providerThreadId: 'native-transcript-cursor-two',
+    nativeTranscriptBoundary: 'codex-v1:opaque-boundary-two',
+    cwd: fixture.projectRoot,
+    status: 'idle',
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    lastActivityAt: timestamp,
+  }).conversation
+
+  const page = await fixture.service.readNativeTranscript(
+    first.data.conversation.conversationId,
+    { limit: 1 },
+  )
+  assert.ok(page.nextCursor)
+  const callsBeforeForgery = fixture.discovery.transcriptCalls.length
+  const forged = await fixture.service.readNativeTranscript(
+    second.conversationId,
+    { limit: 1, cursor: page.nextCursor },
+  )
+  assert.equal(forged.status, 'malformed')
+  assert.equal(forged.entries.length, 0)
+  assert.equal(fixture.discovery.transcriptCalls.length, callsBeforeForgery)
+})
+
+test('identical transcript reads coalesce while caller cancellation stays independent', async (t) => {
+  const gate = deferred()
+  const fixture = await createFixture(t, {
+    candidates: [
+      nativeCandidate(
+        'native-transcript-coalesce',
+        'revision-transcript-coalesce',
+        {
+          historicalTranscript: 'supported',
+        },
+      ),
+    ],
+    transcriptGate: gate.promise,
+  })
+  const adopted = await adoptFirstCandidate(fixture)
+  const firstAbort = new AbortController()
+  const secondAbort = new AbortController()
+  const first = fixture.service.readNativeTranscript(
+    adopted.data.conversation.conversationId,
+    { limit: 50 },
+    firstAbort.signal,
+  )
+  const second = fixture.service.readNativeTranscript(
+    adopted.data.conversation.conversationId,
+    { limit: 50 },
+    secondAbort.signal,
+  )
+  await waitFor(
+    () => fixture.discovery.transcriptCalls.length === 1,
+    'one coalesced transcript read',
+  )
+  firstAbort.abort()
+  await assert.rejects(first, { name: 'AbortError' })
+  assert.equal(fixture.discovery.transcriptAbortCount, 0)
+  gate.resolve()
+  const page = await second
+  assert.equal(page.status, 'available')
+  assert.equal(fixture.discovery.transcriptCalls.length, 1)
+  assert.equal(fixture.discovery.transcriptAbortCount, 0)
+})
+
+test('last transcript waiter cancellation cleans the worker before a fresh read', async (t) => {
+  const gate = deferred()
+  const fixture = await createFixture(t, {
+    candidates: [
+      nativeCandidate(
+        'native-transcript-cleanup',
+        'revision-transcript-cleanup',
+        {
+          historicalTranscript: 'supported',
+        },
+      ),
+    ],
+    transcriptGate: gate.promise,
+  })
+  const adopted = await adoptFirstCandidate(fixture)
+  const abort = new AbortController()
+  const cancelled = fixture.service.readNativeTranscript(
+    adopted.data.conversation.conversationId,
+    { limit: 50 },
+    abort.signal,
+  )
+  await waitFor(
+    () => fixture.discovery.transcriptCalls.length === 1,
+    'transcript worker before cancellation',
+  )
+  abort.abort()
+  await assert.rejects(cancelled, { name: 'AbortError' })
+  await waitFor(
+    () => fixture.discovery.transcriptAbortCount === 1,
+    'transcript worker cleanup',
+  )
+
+  fixture.discovery.transcriptGate = undefined
+  const fresh = await fixture.service.readNativeTranscript(
+    adopted.data.conversation.conversationId,
+    { limit: 50 },
+  )
+  assert.equal(fresh.status, 'available')
+  assert.equal(fixture.discovery.transcriptCalls.length, 2)
+})
+
+test('malformed transcript adapter output fails soft without poisoning execution', async (t) => {
+  const fixture = await createFixture(t, {
+    candidates: [
+      nativeCandidate(
+        'native-transcript-malformed',
+        'revision-transcript-malformed',
+        {
+          historicalTranscript: 'supported',
+        },
+      ),
+    ],
+    transcriptImplementation: async () => ({
+      ...nativeTranscriptPage(
+        'provider-entry-malformed',
+        '<script>bad</script>',
+      ),
+      provider: 'claude-code',
+    }),
+  })
+  const adopted = await adoptFirstCandidate(fixture)
+  const providersBefore = (await fixture.service.getMachine(fixture.machineId))
+    .providers
+  const page = await fixture.service.readNativeTranscript(
+    adopted.data.conversation.conversationId,
+    { limit: 50 },
+  )
+  assert.equal(page.status, 'malformed')
+  assert.equal(page.entries.length, 0)
+  assert.deepEqual(
+    (await fixture.service.getMachine(fixture.machineId)).providers,
+    providersBefore,
+  )
+  assert.equal(fixture.runtime.startTurnCalls, 0)
+})
+
 async function createFixture(t, options) {
   const directory = await mkdtemp(join(tmpdir(), 'codetether-phase8a-host-'))
   const workspace = join(directory, 'workspace')
@@ -865,6 +1107,8 @@ async function createFixture(t, options) {
   const discovery = new FakeDiscovery('codex', options.candidates, {
     gate: options.discoveryGate,
     implementation: options.discoveryImplementation,
+    transcriptGate: options.transcriptGate,
+    transcriptImplementation: options.transcriptImplementation,
   })
   const claudeDiscovery = new FakeDiscovery('claude-code', [], {
     status: options.claudeStatus ?? 'unsupported',
@@ -905,6 +1149,23 @@ async function createFixture(t, options) {
   }
 }
 
+async function adoptFirstCandidate(fixture) {
+  const discovered = await fixture.service.discoverProviderSessions(
+    fixture.projectId,
+    fixture.machineId,
+    { provider: 'codex', limit: 50, rescan: true },
+  )
+  assert.ok(discovered.candidates[0])
+  return await fixture.service.adoptProviderSession(
+    fixture.projectId,
+    fixture.machineId,
+    {
+      actionId: 'act_native_transcript_adopt',
+      discoveryCandidateId: discovered.candidates[0].discoveryCandidateId,
+    },
+  )
+}
+
 function nativeCandidate(nativeSessionId, revision, overrides = {}) {
   return {
     provider: 'codex',
@@ -924,6 +1185,8 @@ function nativeCandidate(nativeSessionId, revision, overrides = {}) {
 class FakeDiscovery {
   discoverCalls = 0
   abortCount = 0
+  transcriptAbortCount = 0
+  transcriptCalls = []
   validated = undefined
   projectRoot = ''
 
@@ -933,6 +1196,8 @@ class FakeDiscovery {
     this.status = options.status ?? 'supported'
     this.gate = options.gate
     this.implementation = options.implementation
+    this.transcriptGate = options.transcriptGate
+    this.transcriptImplementation = options.transcriptImplementation
   }
 
   async discover(request) {
@@ -972,6 +1237,47 @@ class FakeDiscovery {
       provider: this.provider,
       workingDirectory: request.projectRoot,
     }
+  }
+
+  async readSessionTranscript(request) {
+    this.transcriptCalls.push(request)
+    await waitWithAbort(this.transcriptGate, request.signal, () => {
+      this.transcriptAbortCount += 1
+    })
+    if (this.transcriptImplementation !== undefined) {
+      return await this.transcriptImplementation(request)
+    }
+    return nativeTranscriptPage('provider-entry-default', 'Historical message')
+  }
+}
+
+function nativeTranscriptPage(id, content, options = {}) {
+  return {
+    provider: 'codex',
+    status: 'available',
+    entries: [
+      {
+        id,
+        provider: 'codex',
+        role: 'assistant',
+        kind: 'message',
+        content,
+        occurredAt: timestamp,
+        nativeSequence: options.sequence ?? 0,
+        readOnly: true,
+      },
+    ],
+    ...(options.nextCursor === undefined
+      ? {}
+      : { nextCursor: options.nextCursor }),
+    complete: options.complete ?? true,
+    metrics: {
+      bytesRead: Buffer.byteLength(content, 'utf8'),
+      recordsScanned: 1,
+      entriesReturned: 1,
+      elapsedMs: 1,
+      truncated: options.complete === false,
+    },
   }
 }
 

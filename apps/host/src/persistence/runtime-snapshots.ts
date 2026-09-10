@@ -51,6 +51,7 @@ export interface RestoredDurableConversation {
   /** Private Phase 8B installation binding retained across Host hydration. */
   readonly providerInstallationId?: DurableConversation['providerInstallationId']
   readonly origin: DurableConversation['origin']
+  readonly nativeTranscriptBoundary?: string
   readonly providerSessionMaterialized: boolean
   readonly runtime: ConversationRuntimeSnapshot
   readonly providerTurns: ReadonlyArray<{
@@ -394,6 +395,9 @@ function restoreConversation(
       ? {}
       : { providerInstallationId: conversation.providerInstallationId }),
     origin: conversation.origin,
+    ...(conversation.nativeTranscriptBoundary === undefined
+      ? {}
+      : { nativeTranscriptBoundary: conversation.nativeTranscriptBoundary }),
     providerSessionMaterialized: conversation.providerSessionMaterialized,
     runtime: reconstructed.runtime,
     providerTurns: reconstructed.providerTurns,

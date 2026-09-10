@@ -11,6 +11,7 @@ import {
   type AgentProvider,
   type CanonicalFailure,
   type NativeProviderSessionCandidate,
+  type NativeTranscriptPage,
   type ProviderSessionDiscoveryMetrics,
   type ProviderSessionDiscoveryPage,
 } from '@codetether/agent-core'
@@ -259,6 +260,24 @@ export interface RemoteMachineCoordinator extends RemoteMachineStatusSource {
       readonly signal?: AbortSignal
     },
   ): Promise<NativeProviderSessionCandidate | undefined>
+  readProviderSessionTranscript?(
+    machine: DurableMachine,
+    trust: DurableTrustedMachinePeer,
+    input: {
+      readonly conversationId: string
+      readonly provider: AgentProvider
+      readonly projectId: string
+      readonly rootPath: string
+      readonly providerInstallationId: ProviderInstallationId
+      readonly expectedInstallationRevision: ProviderInstallationRevision
+      readonly nativeSessionId: string
+      readonly boundary?: string
+      readonly adoptedAt: string
+      readonly cursor?: string
+      readonly limit: number
+      readonly signal?: AbortSignal
+    },
+  ): Promise<NativeTranscriptPage>
   close?(): Promise<void>
 }
 
@@ -311,6 +330,10 @@ export class UnavailableRemoteMachineCoordinator implements RemoteMachineCoordin
   async validateProviderSession(): Promise<
     NativeProviderSessionCandidate | undefined
   > {
+    throw unavailable()
+  }
+
+  async readProviderSessionTranscript(): Promise<NativeTranscriptPage> {
     throw unavailable()
   }
 }
@@ -1266,6 +1289,152 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
               provider: input.provider,
               workingDirectory: input.rootPath,
             }
+      } catch (error) {
+        route?.connection.close()
+        if (
+          wasOnline ||
+          route !== undefined ||
+          isCallerCancellation(error, input.signal) ||
+          isProjectLocationValidationError(error)
+        ) {
+          this.#setState(id, 'online')
+        } else {
+          this.#setState(id, connectionStateFor(error))
+        }
+        this.#scheduleDurableWorkerRestart(id)
+        throw coordinatorError(error)
+      }
+    })
+  }
+
+  async readProviderSessionTranscript(
+    machine: DurableMachine,
+    trust: DurableTrustedMachinePeer,
+    input: {
+      readonly conversationId: string
+      readonly provider: AgentProvider
+      readonly projectId: string
+      readonly rootPath: string
+      readonly providerInstallationId: ProviderInstallationId
+      readonly expectedInstallationRevision: ProviderInstallationRevision
+      readonly nativeSessionId: string
+      readonly boundary?: string
+      readonly adoptedAt: string
+      readonly cursor?: string
+      readonly limit: number
+      readonly signal?: AbortSignal
+    },
+  ): Promise<NativeTranscriptPage> {
+    const id = MachineIdSchema.parse(machine.machineId)
+    return await this.#serializeMachineOperation(id, async () => {
+      const current = this.#requireCurrentActiveTrust(machine, trust)
+      const restoreExecutionDiscovery = this.providerExecutionAvailable(id)
+      const previousState = this.#states.get(id) ?? 'offline'
+      const wasOnline = previousState === 'online'
+      await this.#stopWorker(id)
+      if (!wasOnline) this.#setState(id, 'connecting')
+      let route: RoutedMachineConnection | undefined
+      try {
+        const controller = await this.#loadController(current.trust)
+        route = await this.#connectMachineByPolicy(
+          current.machine,
+          current.trust,
+          controller,
+          input.signal,
+        )
+        const connection = route.connection
+        this.#recordAuthenticatedRoute(
+          id,
+          route,
+          TimestampSchema.parse(this.#now().toISOString()),
+        )
+        this.#setState(id, 'online')
+
+        const pages: NativeTranscriptPage[] = []
+        const observedCursors = new Set<string>()
+        const scanDeadlineAt =
+          this.#monotonicNow() +
+          machineTransportLimits.providerSessionTranscriptTotalTimeoutMs
+        let cursor = input.cursor
+        let remaining = input.limit
+        let remainingPages =
+          machineTransportLimits.maximumProviderSessionTranscriptPages
+        let scanDeadlineReached = false
+        do {
+          input.signal?.throwIfAborted()
+          if (
+            scanDeadlineAt - this.#monotonicNow() <
+            machineTransportLimits.providerSessionTranscriptTimeoutMs
+          ) {
+            scanDeadlineReached = true
+            break
+          }
+          const page = await connection.readProviderSessionTranscript({
+            conversationId: MachineTransportConversationIdSchema.parse(
+              input.conversationId,
+            ),
+            projectId: MachineTransportProjectIdSchema.parse(input.projectId),
+            rootPath: input.rootPath,
+            provider: input.provider,
+            providerInstallationId: input.providerInstallationId,
+            expectedInstallationRevision: input.expectedInstallationRevision,
+            nativeSessionId: input.nativeSessionId,
+            ...(input.boundary === undefined
+              ? {}
+              : { boundary: input.boundary }),
+            adoptedAt: input.adoptedAt,
+            ...(cursor === undefined ? {} : { cursor }),
+            limit: Math.min(
+              remaining,
+              machineTransportLimits.providerSessionTranscriptPageSize,
+            ),
+            ...(input.signal === undefined ? {} : { signal: input.signal }),
+          })
+          pages.push(page)
+          remaining -= page.entries.length
+          remainingPages -= 1
+          cursor = page.nextCursor
+          if (cursor !== undefined) {
+            if (observedCursors.has(cursor)) {
+              throw new RemoteMachineCoordinatorError(
+                'protocol_incompatible',
+                'Remote Provider transcript cursor did not advance',
+              )
+            }
+            observedCursors.add(cursor)
+          }
+          if (
+            page.status === 'unsupported' ||
+            page.status === 'unavailable' ||
+            page.status === 'machine_offline' ||
+            page.status === 'malformed' ||
+            page.status === 'empty'
+          ) {
+            break
+          }
+        } while (cursor !== undefined && remaining > 0 && remainingPages > 0)
+
+        if (
+          restoreExecutionDiscovery &&
+          !scanDeadlineReached &&
+          scanDeadlineAt - this.#monotonicNow() >=
+            machineTransportLimits.providerDiscoveryTimeoutMs
+        ) {
+          await this.#discoverAndPersist(
+            current.machine,
+            connection,
+            input.signal,
+          )
+        }
+        connection.close()
+        route = undefined
+        this.#scheduleDurableWorkerRestart(id)
+        return combineNativeTranscriptPages(
+          input.provider,
+          pages,
+          cursor,
+          scanDeadlineReached || remainingPages === 0,
+        )
       } catch (error) {
         route?.connection.close()
         if (
@@ -3168,6 +3337,76 @@ function combineProviderSessionDiscoveryPages(
       ? {}
       : { failureReason: first.failureReason }),
     metrics: { ...metrics, truncated: metrics.truncated || hitCandidateLimit },
+  }
+}
+
+function combineNativeTranscriptPages(
+  provider: AgentProvider,
+  pages: readonly NativeTranscriptPage[],
+  nextCursor: string | undefined,
+  boundedPartial: boolean,
+): NativeTranscriptPage {
+  const first = pages[0]
+  if (first === undefined) {
+    return {
+      provider,
+      status: 'unavailable',
+      entries: [],
+      complete: true,
+      metrics: {
+        bytesRead: 0,
+        recordsScanned: 0,
+        entriesReturned: 0,
+        elapsedMs: 0,
+        truncated: false,
+      },
+    }
+  }
+  if (pages.some((page) => page.provider !== provider)) {
+    throw new RemoteMachineCoordinatorError(
+      'protocol_incompatible',
+      'Remote Provider transcript changed Provider identity',
+    )
+  }
+  const entries = [...pages].reverse().flatMap((page) => [...page.entries])
+  const metrics = pages.reduce(
+    (total, page) => ({
+      bytesRead: safeMetricSum(total.bytesRead, page.metrics.bytesRead),
+      recordsScanned: safeMetricSum(
+        total.recordsScanned,
+        page.metrics.recordsScanned,
+      ),
+      entriesReturned: safeMetricSum(
+        total.entriesReturned,
+        page.metrics.entriesReturned,
+      ),
+      elapsedMs: safeMetricSum(total.elapsedMs, page.metrics.elapsedMs),
+      truncated: total.truncated || page.metrics.truncated,
+    }),
+    {
+      bytesRead: 0,
+      recordsScanned: 0,
+      entriesReturned: 0,
+      elapsedMs: 0,
+      truncated: false,
+    },
+  )
+  const readablePartial = pages.some((page) => page.status === 'partial')
+  return {
+    provider,
+    status:
+      readablePartial || (boundedPartial && entries.length > 0)
+        ? 'partial'
+        : first.status,
+    entries,
+    ...(nextCursor === undefined ? {} : { nextCursor }),
+    complete: nextCursor === undefined,
+    metrics: {
+      ...metrics,
+      entriesReturned: entries.length,
+      truncated:
+        metrics.truncated || boundedPartial || nextCursor !== undefined,
+    },
   }
 }
 

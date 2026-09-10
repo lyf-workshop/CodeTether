@@ -138,6 +138,11 @@ const migrations: readonly Migration[] = [
     name: 'onboarding_progress',
     up: migrateOnboardingProgress,
   },
+  {
+    version: 18,
+    name: 'native_transcript_boundary',
+    up: migrateNativeTranscriptBoundary,
+  },
 ]
 
 export const currentSchemaVersion = migrations.at(-1)?.version ?? 0
@@ -2408,6 +2413,22 @@ function migrateOnboardingProgress(database: DatabaseSync): void {
       timestamp,
       completedAt,
     )
+}
+
+/** Stores only a Provider-private, content-free adoption split token. */
+function migrateNativeTranscriptBoundary(database: DatabaseSync): void {
+  database.exec(`
+    ALTER TABLE conversations
+      ADD COLUMN native_transcript_boundary TEXT
+      CHECK (
+        native_transcript_boundary IS NULL OR (
+          origin = 'adopted_native' AND
+          length(native_transcript_boundary) BETWEEN 1 AND 4096 AND
+          native_transcript_boundary = trim(native_transcript_boundary) AND
+          instr(native_transcript_boundary, char(0)) = 0
+        )
+      );
+  `)
 }
 
 function parseLegacyTextInput(value: string, conversationId: string): string {

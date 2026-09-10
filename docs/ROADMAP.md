@@ -1299,6 +1299,8 @@ Exit gate:
 
 **Goal:** distribute the established Desktop/Node and onboarding architecture across the supported Windows, macOS, and Linux matrix with platform-appropriate packaging, signing, credential storage, background/tray behavior, sleep/wake handling, path semantics, and update delivery.
 
+The active Phase 8D closure also includes the shared native historical transcript projection required for adopted Conversations. Codex and Claude Code adapters own bounded fail-soft parsing; Host and Web consume only provider-neutral read-only entries. Local and remote reads remain tied to the immutable Conversation/Machine/ProjectLocation/Provider/ProviderInstallation binding, use opaque scoped pagination, start no inference, create no Turn or Attention, and never replay transcript content for resume. Migration 018 stores only an optional content-free adoption boundary. Windows and physical Linux REAL transcript validation remain delegated to their platform workers, and packaged Finder regression remains with the macOS distribution worker after integration.
+
 ## Phase 9 — Mobile Companion
 
 **Status:** planned; unimplemented and unauthorized during Phase 8C.

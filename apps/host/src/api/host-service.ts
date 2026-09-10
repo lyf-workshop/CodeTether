@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 
 import {
   canonicalFailure,
@@ -7,9 +7,12 @@ import {
   type CanonicalFailure,
   type CanonicalFailureReason,
   type NativeProviderSessionCandidate,
+  type NativeTranscriptPage,
   type ProviderSessionDiscovery,
+  type ProviderSessionMetadataAdapter,
   type ProviderSessionDiscoveryPage,
   type ProviderSessionResumeStatus,
+  type ProviderSessionTranscriptReader,
 } from '@codetether/agent-core'
 import {
   ActionIdSchema,
@@ -36,6 +39,9 @@ import {
   HostEventEnvelopeSchema,
   ListAttentionQuerySchema,
   ListMachinesResponseSchema,
+  NativeTranscriptEntryIdSchema,
+  ReadNativeTranscriptQuerySchema,
+  ReadNativeTranscriptResponseSchema,
   RemoveMachineRelayResponseSchema,
   RefreshMachineProvidersResponseSchema,
   RetryMachineRelayResponseSchema,
@@ -44,6 +50,7 @@ import {
   MachinePairingAttemptIdSchema,
   ListProjectConversationsQuerySchema,
   onboardingWireLimits,
+  nativeTranscriptWireLimits,
   providerSessionDiscoveryLimits,
   protocolVersion,
   DiscoverProviderSessionsQuerySchema,
@@ -117,6 +124,10 @@ import {
   type ListAttentionQuery,
   type ListProjectConversationsQuery,
   type MachineSummary,
+  type NativeHistoricalTranscriptEntry,
+  type NativeTranscriptCursor,
+  type ReadNativeTranscriptQuery,
+  type ReadNativeTranscriptResponse,
   type RemoteMachineConnection,
   type RelayMachineConnectivity,
   type MachinePairingAttemptId,
@@ -226,7 +237,11 @@ import {
 import { ProviderEventTranslator } from './provider-event-translator.js'
 import { ProviderRegistry, providerSessionKey } from './provider-registry.js'
 import { ProviderSessionDiscoveryRegistry } from './provider-session-discovery-registry.js'
-import { encodeRemoteProviderSessionBinding } from './remote-provider-session-binding.js'
+import { NativeTranscriptCursorRegistry } from './native-transcript-registry.js'
+import {
+  decodeRemoteProviderSessionBinding,
+  encodeRemoteProviderSessionBinding,
+} from './remote-provider-session-binding.js'
 import {
   RemoteClaudeHostRuntime,
   type RemoteClaudeRuntimeSession,
@@ -296,6 +311,13 @@ interface ProviderSessionScanResult {
   readonly installation?: ProviderRuntimeInstallation
 }
 
+interface InFlightNativeTranscriptRead {
+  readonly abort: AbortController
+  promise: Promise<NativeTranscriptPage>
+  waiters: number
+  settled: boolean
+}
+
 export class HostServiceError extends Error {
   constructor(
     readonly code: HostErrorCode,
@@ -317,7 +339,7 @@ export interface HostServiceOptions {
   /** Initial presentation-safe local lifecycle observations. */
   readonly providerLifecycles?: readonly MachineProviderLifecycle[]
   /** Read-only Machine-local native-session metadata adapters. */
-  readonly providerSessionDiscoveries?: readonly ProviderSessionDiscovery[]
+  readonly providerSessionDiscoveries?: readonly ProviderSessionMetadataAdapter[]
   readonly workspacePolicy: WorkspacePolicy
   readonly publisher: HostEventPublisher
   readonly hostVersion: string
@@ -348,7 +370,7 @@ export interface HostServiceOptions {
   ) => Promise<{
     readonly runtime: AgentHostRuntime
     readonly lifecycle: MachineProviderLifecycle
-    readonly sessionDiscovery?: ProviderSessionDiscovery
+    readonly sessionDiscovery?: ProviderSessionMetadataAdapter
     /** Optional two-phase lifecycle publication owned by the local coordinator. */
     readonly commit?: () => MachineProviderLifecycle
     /** Releases a staged runtime if Host handoff cannot be completed safely. */
@@ -364,10 +386,19 @@ export class HostService {
     AgentProvider,
     ProviderSessionDiscovery
   >()
+  readonly #providerSessionTranscriptReaders = new Map<
+    AgentProvider,
+    ProviderSessionTranscriptReader
+  >()
   readonly #providerSessionCandidates: ProviderSessionDiscoveryRegistry
+  readonly #nativeTranscriptCursors: NativeTranscriptCursorRegistry
   readonly #providerSessionScans = new Map<
     string,
     InFlightProviderSessionScan
+  >()
+  readonly #nativeTranscriptReads = new Map<
+    string,
+    InFlightNativeTranscriptRead
   >()
   readonly #machineRuntimes: MachineProviderRuntimeResolver
   readonly #workspacePolicy: WorkspacePolicy
@@ -462,6 +493,9 @@ export class HostService {
     this.#providerSessionCandidates = new ProviderSessionDiscoveryRegistry({
       now: () => this.#now().getTime(),
     })
+    this.#nativeTranscriptCursors = new NativeTranscriptCursorRegistry(() =>
+      this.#now().getTime(),
+    )
     for (const discovery of options.providerSessionDiscoveries ?? []) {
       if (this.#providerSessionDiscoveries.has(discovery.provider)) {
         throw new Error(
@@ -469,6 +503,13 @@ export class HostService {
         )
       }
       this.#providerSessionDiscoveries.set(discovery.provider, discovery)
+      if (discovery.readSessionTranscript !== undefined) {
+        this.#providerSessionTranscriptReaders.set(discovery.provider, {
+          provider: discovery.provider,
+          readSessionTranscript:
+            discovery.readSessionTranscript.bind(discovery),
+        })
+      }
     }
     this.#refreshUnavailableLocalProvider =
       options.refreshUnavailableLocalProvider
@@ -2160,6 +2201,9 @@ export class HostService {
                   validated.provider,
                   validated.nativeSessionId,
                 ),
+                ...(validated.transcriptBoundary === undefined
+                  ? {}
+                  : { nativeTranscriptBoundary: validated.transcriptBoundary }),
                 cwd: reservation.cwd,
                 status: 'idle',
                 createdAt: timestamp,
@@ -2209,6 +2253,89 @@ export class HostService {
       },
       false,
     )
+  }
+
+  async readNativeTranscript(
+    conversationId: ConversationId,
+    input: ReadNativeTranscriptQuery,
+    signal?: AbortSignal,
+  ): Promise<ReadNativeTranscriptResponse> {
+    const persistence = this.#persistence
+    if (persistence === undefined) {
+      throw new HostServiceError(
+        'runtime_unavailable',
+        'Durable Conversation history is unavailable',
+        503,
+      )
+    }
+    const id = ConversationIdSchema.parse(conversationId)
+    const query = ReadNativeTranscriptQuerySchema.parse(input)
+    const conversation = persistence.getConversation(id)
+    if (conversation === undefined || conversation.status === 'creating') {
+      throw new HostServiceError('not_found', 'Conversation was not found', 404)
+    }
+    if (
+      conversation.origin !== 'adopted_native' ||
+      conversation.providerThreadId === undefined
+    ) {
+      return projectNativeTranscriptPage(
+        conversation,
+        nativeTranscriptFailurePage(conversation.provider, 'empty'),
+      )
+    }
+
+    const scope = nativeTranscriptScope(conversation)
+    const providerCursor =
+      query.cursor === undefined
+        ? undefined
+        : this.#nativeTranscriptCursors.resolve(query.cursor, scope)
+    if (query.cursor !== undefined && providerCursor === undefined) {
+      return projectNativeTranscriptPage(
+        conversation,
+        nativeTranscriptFailurePage(conversation.provider, 'malformed'),
+      )
+    }
+    const key = JSON.stringify([scope, providerCursor ?? null, query.limit])
+    let read = this.#nativeTranscriptReads.get(key)
+    if (read?.abort.signal.aborted === true) {
+      try {
+        await read.promise
+      } catch (error) {
+        if (!isAbortError(error)) throw error
+      }
+      signal?.throwIfAborted()
+      return await this.readNativeTranscript(id, query, signal)
+    }
+    if (read === undefined) {
+      const abort = new AbortController()
+      const created: InFlightNativeTranscriptRead = {
+        abort,
+        waiters: 0,
+        settled: false,
+        promise: Promise.resolve(
+          nativeTranscriptFailurePage(conversation.provider, 'unavailable'),
+        ),
+      }
+      created.promise = this.#readNativeTranscriptOnce(
+        conversation,
+        providerCursor,
+        query.limit,
+        abort.signal,
+      ).finally(() => {
+        created.settled = true
+        if (this.#nativeTranscriptReads.get(key) === created) {
+          this.#nativeTranscriptReads.delete(key)
+        }
+      })
+      this.#nativeTranscriptReads.set(key, created)
+      read = created
+    }
+    const page = await waitForNativeTranscriptRead(read, signal)
+    const nextCursor =
+      page.nextCursor === undefined
+        ? undefined
+        : this.#nativeTranscriptCursors.create(scope, page.nextCursor)
+    return projectNativeTranscriptPage(conversation, page, nextCursor)
   }
 
   getConversation(conversationId: ConversationId): GetConversationResponse {
@@ -3985,6 +4112,9 @@ export class HostService {
         ? {}
         : { providerInstallationId: durable.providerInstallationId }),
       providerThreadId: durable.providerThreadId,
+      ...(durable.nativeTranscriptBoundary === undefined
+        ? {}
+        : { nativeTranscriptBoundary: durable.nativeTranscriptBoundary }),
       turns,
       providerTurnIds,
       providerSessionMaterialized: durable.providerSessionMaterialized,
@@ -4075,6 +4205,12 @@ export class HostService {
         this.#conversations.set(conversationId, {
           record: durable.record,
           origin: currentDurableConversation.origin,
+          ...(currentDurableConversation.nativeTranscriptBoundary === undefined
+            ? {}
+            : {
+                nativeTranscriptBoundary:
+                  currentDurableConversation.nativeTranscriptBoundary,
+              }),
           ...(currentDurableConversation.providerInstallationId === undefined
             ? {}
             : {
@@ -4106,6 +4242,12 @@ export class HostService {
           record: durable.record,
           providerThreadId: currentDurableConversation.providerThreadId,
           origin: currentDurableConversation.origin,
+          ...(currentDurableConversation.nativeTranscriptBoundary === undefined
+            ? {}
+            : {
+                nativeTranscriptBoundary:
+                  currentDurableConversation.nativeTranscriptBoundary,
+              }),
           ...(currentDurableConversation.providerInstallationId === undefined
             ? {}
             : {
@@ -4949,6 +5091,9 @@ export class HostService {
       ...(conversation.providerThreadId === undefined
         ? {}
         : { providerThreadId: conversation.providerThreadId }),
+      ...(conversation.nativeTranscriptBoundary === undefined
+        ? {}
+        : { nativeTranscriptBoundary: conversation.nativeTranscriptBoundary }),
       ...(conversation.providerInstallationId === undefined
         ? {}
         : {
@@ -5460,6 +5605,172 @@ export class HostService {
       : encodeRemoteProviderSessionBinding(provider, machineId, nativeSessionId)
   }
 
+  async #readNativeTranscriptOnce(
+    conversation: DurableConversation,
+    cursor: string | undefined,
+    limit: number,
+    signal: AbortSignal,
+  ): Promise<NativeTranscriptPage> {
+    signal.throwIfAborted()
+    const provider = conversation.provider
+    const providerThreadId = conversation.providerThreadId
+    if (providerThreadId === undefined) {
+      return nativeTranscriptFailurePage(provider, 'malformed')
+    }
+    const machine = this.#machines.get(conversation.machineId)
+    if (machine.kind === 'remote' && machine.connectionState !== 'online') {
+      return nativeTranscriptFailurePage(provider, 'machine_offline')
+    }
+    const lifecycle = this.#providerLifecyclesForMachine(machine).find(
+      (candidate) => candidate.provider === provider,
+    )
+    if (
+      conversation.providerInstallationId !== undefined &&
+      lifecycle?.selectedInstallationId !== conversation.providerInstallationId
+    ) {
+      return nativeTranscriptFailurePage(provider, 'unavailable')
+    }
+    const installation = this.#providerInstallation(
+      conversation.machineId,
+      provider,
+      conversation.providerInstallationId,
+    )
+    // Production assembly always has lifecycle truth. Preserve the existing
+    // additive pre-8B/test-runtime behavior only when no lifecycle or durable
+    // binding exists; remote reads always require an exact installation.
+    if (
+      machine.kind === 'remote' ||
+      lifecycle !== undefined ||
+      conversation.providerInstallationId !== undefined
+    ) {
+      if (
+        installation === undefined ||
+        installation.availability !== 'available' ||
+        installation.revision === undefined
+      ) {
+        return nativeTranscriptFailurePage(provider, 'unavailable')
+      }
+    }
+
+    let authorized: { readonly cwd: string }
+    try {
+      authorized = await this.#projects.authorizeConversation(
+        conversation.projectId,
+        conversation.machineId,
+        conversation.cwd,
+        { preserveProviderDiscovery: true },
+      )
+    } catch (error) {
+      if (isAbortError(error)) throw error
+      const current = this.#machines.get(conversation.machineId)
+      return nativeTranscriptFailurePage(
+        provider,
+        current.kind === 'remote' && current.connectionState !== 'online'
+          ? 'machine_offline'
+          : 'unavailable',
+      )
+    }
+
+    if (machine.kind === 'local') {
+      const reader = this.#providerSessionTranscriptReaders.get(provider)
+      if (reader === undefined) {
+        return nativeTranscriptFailurePage(provider, 'unsupported')
+      }
+      try {
+        return await this.#withLocalProviderHandoff(
+          conversation.machineId,
+          provider,
+          async () => {
+            this.#assertProviderOwnershipVerified(
+              conversation.machineId,
+              provider,
+            )
+            if (this.#localProviderHasActiveTurn(provider)) {
+              return nativeTranscriptFailurePage(provider, 'unavailable')
+            }
+            return normalizeNativeTranscriptPage(
+              await reader.readSessionTranscript({
+                projectRoot: authorized.cwd,
+                nativeSessionId: providerThreadId,
+                ...(conversation.nativeTranscriptBoundary === undefined
+                  ? {}
+                  : { boundary: conversation.nativeTranscriptBoundary }),
+                adoptedAt: conversation.createdAt,
+                ...(cursor === undefined ? {} : { cursor }),
+                limit,
+                signal,
+              }),
+              provider,
+              limit,
+            )
+          },
+        )
+      } catch (error) {
+        if (isAbortError(error)) throw error
+        if (isExecutionOwnershipUncertain(error)) {
+          this.#latchProviderOwnershipFailure(
+            conversation.machineId,
+            provider,
+            error,
+          )
+        }
+        return nativeTranscriptFailurePage(provider, 'unavailable')
+      }
+    }
+
+    const read = this.#remoteMachines.readProviderSessionTranscript
+    if (read === undefined) {
+      return nativeTranscriptFailurePage(provider, 'unsupported')
+    }
+    let nativeSessionId: string
+    try {
+      nativeSessionId = decodeRemoteProviderSessionBinding(
+        provider,
+        conversation.machineId,
+        providerThreadId,
+      )
+    } catch {
+      return nativeTranscriptFailurePage(provider, 'malformed')
+    }
+    try {
+      if (installation === undefined || installation.revision === undefined) {
+        return nativeTranscriptFailurePage(provider, 'unavailable')
+      }
+      const { durable, trust } = this.#requireRemoteMachineTrust(
+        conversation.machineId,
+      )
+      return normalizeNativeTranscriptPage(
+        await read.call(this.#remoteMachines, durable, trust, {
+          conversationId: conversation.conversationId,
+          provider,
+          projectId: conversation.projectId,
+          rootPath: authorized.cwd,
+          providerInstallationId: installation.installationId,
+          expectedInstallationRevision: installation.revision,
+          nativeSessionId,
+          ...(conversation.nativeTranscriptBoundary === undefined
+            ? {}
+            : { boundary: conversation.nativeTranscriptBoundary }),
+          adoptedAt: conversation.createdAt,
+          ...(cursor === undefined ? {} : { cursor }),
+          limit,
+          signal,
+        }),
+        provider,
+        limit,
+      )
+    } catch (error) {
+      if (isAbortError(error)) throw error
+      const current = this.#machines.get(conversation.machineId)
+      return nativeTranscriptFailurePage(
+        provider,
+        current.connectionState !== 'online'
+          ? 'machine_offline'
+          : 'unavailable',
+      )
+    }
+  }
+
   #withCurrentProviderSessionResumeStatus(
     machineId: MachineId,
     provider: AgentProvider,
@@ -5873,6 +6184,18 @@ export class HostService {
         failures.push(result.reason)
       }
     }
+    for (const read of this.#nativeTranscriptReads.values()) read.abort.abort()
+    const nativeTranscriptReadResults = await Promise.allSettled(
+      [...this.#nativeTranscriptReads.values()].map(({ promise }) => promise),
+    )
+    for (const result of nativeTranscriptReadResults) {
+      if (
+        result.status === 'rejected' &&
+        isExecutionOwnershipUncertain(result.reason)
+      ) {
+        failures.push(result.reason)
+      }
+    }
     this.#closingRuntime = true
     // A shutdown-only decline releases the live Provider request, but it is
     // not a user decision. Stop consuming Provider resolution callbacks first
@@ -5942,6 +6265,8 @@ export class HostService {
       this.#pendingProviderStartFailures.clear()
       this.#providerSessionScans.clear()
       this.#providerSessionCandidates.clear()
+      this.#nativeTranscriptReads.clear()
+      this.#nativeTranscriptCursors.clear()
     }
     if (failures.length === 1) throw failures[0]
     if (failures.length > 1) {
@@ -6165,11 +6490,25 @@ export class HostService {
           // The selected exact installation no longer admits native metadata.
           // Never retain an adapter captured for the replaced lifecycle.
           this.#providerSessionDiscoveries.delete(provider)
+          this.#providerSessionTranscriptReaders.delete(provider)
         } else {
           this.#providerSessionDiscoveries.set(
             provider,
             lifecycleResult.sessionDiscovery,
           )
+          if (
+            lifecycleResult.sessionDiscovery.readSessionTranscript === undefined
+          ) {
+            this.#providerSessionTranscriptReaders.delete(provider)
+          } else {
+            this.#providerSessionTranscriptReaders.set(provider, {
+              provider,
+              readSessionTranscript:
+                lifecycleResult.sessionDiscovery.readSessionTranscript.bind(
+                  lifecycleResult.sessionDiscovery,
+                ),
+            })
+          }
         }
       }
       this.#runtimeFailures.delete(provider)
@@ -7822,6 +8161,221 @@ async function waitForProviderSessionScan(
         reject(error)
       },
     )
+  })
+}
+
+async function waitForNativeTranscriptRead(
+  read: InFlightNativeTranscriptRead,
+  signal?: AbortSignal,
+): Promise<NativeTranscriptPage> {
+  signal?.throwIfAborted()
+  read.waiters += 1
+  if (signal === undefined) {
+    try {
+      return await read.promise
+    } finally {
+      read.waiters -= 1
+    }
+  }
+  return await new Promise<NativeTranscriptPage>((resolve, reject) => {
+    let released = false
+    const release = (): boolean => {
+      if (released) return false
+      released = true
+      signal.removeEventListener('abort', abort)
+      read.waiters -= 1
+      return true
+    }
+    const abort = (): void => {
+      const error = new Error('Native transcript read was cancelled')
+      error.name = 'AbortError'
+      if (!release()) return
+      if (read.waiters > 0 || read.settled) {
+        reject(error)
+        return
+      }
+      read.abort.abort(error)
+      void read.promise.then(
+        () => reject(error),
+        (readError: unknown) => reject(readError),
+      )
+    }
+    signal.addEventListener('abort', abort, { once: true })
+    if (signal.aborted) {
+      abort()
+      return
+    }
+    void read.promise.then(
+      (page) => {
+        if (!release()) return
+        resolve(page)
+      },
+      (error: unknown) => {
+        if (!release()) return
+        reject(error)
+      },
+    )
+  })
+}
+
+function nativeTranscriptScope(conversation: DurableConversation): string {
+  return JSON.stringify([
+    conversation.conversationId,
+    conversation.projectId,
+    conversation.machineId,
+    conversation.provider,
+    conversation.providerInstallationId ?? null,
+    conversation.nativeTranscriptBoundary ?? conversation.createdAt,
+  ])
+}
+
+function nativeTranscriptFailurePage(
+  provider: AgentProvider,
+  status: NativeTranscriptPage['status'],
+): NativeTranscriptPage {
+  return {
+    provider,
+    status,
+    entries: [],
+    complete: true,
+    metrics: {
+      bytesRead: 0,
+      recordsScanned: 0,
+      entriesReturned: 0,
+      elapsedMs: 0,
+      truncated: status === 'partial',
+    },
+  }
+}
+
+function normalizeNativeTranscriptPage(
+  page: NativeTranscriptPage,
+  provider: AgentProvider,
+  limit: number,
+): NativeTranscriptPage {
+  const validStatus = [
+    'available',
+    'empty',
+    'partial',
+    'unsupported',
+    'unavailable',
+    'machine_offline',
+    'malformed',
+  ].includes(page.status)
+  const contentBytes = page.entries.reduce(
+    (total, entry) =>
+      total +
+      (typeof entry.content === 'string'
+        ? Buffer.byteLength(entry.content, 'utf8')
+        : nativeTranscriptWireLimits.maximumPageContentBytes + 1),
+    0,
+  )
+  const entriesValid =
+    page.entries.length <= limit &&
+    page.entries.every(
+      (entry) =>
+        entry.provider === provider &&
+        entry.readOnly === true &&
+        typeof entry.id === 'string' &&
+        entry.id.length > 0 &&
+        entry.id.length <= 4_096 &&
+        ['user', 'assistant', 'system', 'tool'].includes(entry.role) &&
+        [
+          'message',
+          'tool_call',
+          'tool_result',
+          'status',
+          'other_safe_event',
+        ].includes(entry.kind) &&
+        typeof entry.content === 'string' &&
+        entry.content.length <=
+          nativeTranscriptWireLimits.maximumEntryContentCodeUnits &&
+        Buffer.byteLength(entry.content, 'utf8') <=
+          nativeTranscriptWireLimits.maximumEntryContentCodeUnits &&
+        (entry.occurredAt === undefined ||
+          TimestampSchema.safeParse(entry.occurredAt).success) &&
+        (entry.nativeSequence === undefined ||
+          (Number.isSafeInteger(entry.nativeSequence) &&
+            entry.nativeSequence >= 0)),
+    )
+  const metricsValid =
+    page.metrics.entriesReturned === page.entries.length &&
+    [
+      page.metrics.bytesRead,
+      page.metrics.recordsScanned,
+      page.metrics.entriesReturned,
+      page.metrics.elapsedMs,
+    ].every((value) => Number.isSafeInteger(value) && value >= 0) &&
+    typeof page.metrics.truncated === 'boolean'
+  const shapeValid =
+    page.provider === provider &&
+    validStatus &&
+    entriesValid &&
+    metricsValid &&
+    contentBytes <= nativeTranscriptWireLimits.maximumPageContentBytes &&
+    (page.nextCursor === undefined ||
+      (typeof page.nextCursor === 'string' &&
+        page.nextCursor.length > 0 &&
+        page.nextCursor.length <= 4_096)) &&
+    page.complete === (page.nextCursor === undefined) &&
+    (page.status !== 'available' || page.entries.length > 0) &&
+    (![
+      'empty',
+      'unsupported',
+      'unavailable',
+      'machine_offline',
+      'malformed',
+    ].includes(page.status) ||
+      page.entries.length === 0)
+  return shapeValid ? page : nativeTranscriptFailurePage(provider, 'malformed')
+}
+
+function projectNativeTranscriptPage(
+  conversation: DurableConversation,
+  page: NativeTranscriptPage,
+  nextCursor?: NativeTranscriptCursor,
+): ReadNativeTranscriptResponse {
+  const entries: NativeHistoricalTranscriptEntry[] = page.entries.map(
+    (entry) => ({
+      id: NativeTranscriptEntryIdSchema.parse(
+        `native_${createHash('sha256')
+          .update(
+            JSON.stringify([
+              conversation.conversationId,
+              conversation.projectId,
+              conversation.machineId,
+              conversation.provider,
+              entry.id,
+            ]),
+            'utf8',
+          )
+          .digest('base64url')}`,
+      ),
+      conversationId: conversation.conversationId,
+      source: 'native_provider',
+      provider: conversation.provider,
+      role: entry.role,
+      kind: entry.kind,
+      content: entry.content,
+      ...(entry.occurredAt === undefined
+        ? {}
+        : { occurredAt: entry.occurredAt }),
+      ...(entry.nativeSequence === undefined
+        ? {}
+        : { nativeSequence: entry.nativeSequence }),
+      historical: true,
+      readOnly: true,
+    }),
+  )
+  return ReadNativeTranscriptResponseSchema.parse({
+    protocolVersion,
+    conversationId: conversation.conversationId,
+    provider: conversation.provider,
+    status: page.status,
+    entries,
+    ...(nextCursor === undefined ? {} : { nextCursor }),
+    complete: page.complete,
+    metrics: page.metrics,
   })
 }
 

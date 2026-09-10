@@ -7,11 +7,15 @@ import { TextDecoder } from 'node:util'
 
 import type {
   NativeProviderSessionCandidate,
+  NativeTranscriptEntry,
+  NativeTranscriptPage,
   ProviderSessionCandidateValidationRequest,
   ProviderSessionDiscovery,
   ProviderSessionDiscoveryMetrics,
   ProviderSessionDiscoveryPage,
   ProviderSessionDiscoveryRequest,
+  ProviderSessionTranscriptReadRequest,
+  ProviderSessionTranscriptReader,
 } from '@codetether/agent-core'
 
 const CLAUDE_PROVIDER = 'claude-code' as const
@@ -26,6 +30,7 @@ const SUPPORTED_CLAUDE_STORE_WRITERS = new Set([
   '2.1.250',
   '2.1.251',
   '2.1.263',
+  '2.1.266',
 ])
 
 export function isClaudeSessionDiscoveryVersionSupported(
@@ -48,6 +53,9 @@ const MAXIMUM_PATH_CODE_UNITS = 4_096
 // private Machine protocol's 512 UTF-8-byte bound, including astral text.
 const MAXIMUM_TITLE_CODE_POINTS = 120
 const MAXIMUM_CURSOR_CODE_UNITS = 512
+const MAXIMUM_TRANSCRIPT_RECORDS = 20_000
+const MAXIMUM_TRANSCRIPT_ENTRY_BYTES = 64 * 1024
+const MAXIMUM_TRANSCRIPT_PAGE_BYTES = 512 * 1024
 
 type CanonicalizePath = (path: string, signal?: AbortSignal) => Promise<string>
 
@@ -106,6 +114,7 @@ interface CursorPayload {
 interface ParsedSessionFile {
   readonly candidate: NativeProviderSessionCandidate
   readonly bytesRead: number
+  readonly recordedWorkingDirectory: string
 }
 
 class ClaudeSessionStoreUnreadableError extends Error {}
@@ -120,7 +129,9 @@ class ClaudeSessionEntryCorruptError extends Error {}
  * inference backend, or retains transcript content after parsing a bounded
  * JSONL record.
  */
-export class ClaudeSessionDiscovery implements ProviderSessionDiscovery {
+export class ClaudeSessionDiscovery
+  implements ProviderSessionDiscovery, ProviderSessionTranscriptReader
+{
   readonly provider = CLAUDE_PROVIDER
 
   readonly #configurationDirectory: string | undefined
@@ -327,9 +338,174 @@ export class ClaudeSessionDiscovery implements ProviderSessionDiscovery {
       }
       if (parsed.candidate.revision !== request.revision) continue
       if (matched !== undefined) return undefined
-      matched = parsed.candidate
+      matched = {
+        ...parsed.candidate,
+        transcriptBoundary: encodeClaudeTranscriptBoundary({
+          version: 1,
+          bytes: parsed.bytesRead,
+          prefixDigest: parsed.candidate.revision,
+        }),
+      }
     }
     return matched
+  }
+
+  async readSessionTranscript(
+    request: ProviderSessionTranscriptReadRequest,
+  ): Promise<NativeTranscriptPage> {
+    const startedAt = this.#now()
+    throwIfAborted(request.signal)
+    validatePageSize(request.limit)
+    if (
+      this.#configurationDirectory === undefined ||
+      !UUID_PATTERN.test(request.nativeSessionId)
+    ) {
+      return claudeTranscriptFailure('unavailable', startedAt, this.#now)
+    }
+    if (isExplicitlyUnsupportedProviderVersion(this.#providerVersion)) {
+      return claudeTranscriptFailure('unsupported', startedAt, this.#now)
+    }
+
+    let canonicalRoot: string
+    let boundary: ClaudeTranscriptBoundary | undefined
+    try {
+      canonicalRoot = await this.#canonicalizePath(
+        validatePath(request.projectRoot, 'projectRoot'),
+        request.signal,
+      )
+      boundary =
+        request.boundary === undefined
+          ? undefined
+          : decodeClaudeTranscriptBoundary(request.boundary)
+    } catch (error) {
+      if (isAbortError(error)) throw error
+      return claudeTranscriptFailure('malformed', startedAt, this.#now)
+    }
+
+    let path: string | undefined
+    try {
+      const directories = await collectProjectDirectories(
+        join(this.#configurationDirectory, 'projects'),
+        this.#maximumProjectDirectories,
+        this.#maximumStoreEntries,
+        request.signal,
+      )
+      for (const directory of directories) {
+        const candidate = join(
+          directory,
+          `${request.nativeSessionId.toLowerCase()}.jsonl`,
+        )
+        try {
+          const info = await lstat(candidate)
+          if (!info.isFile() || info.isSymbolicLink()) continue
+        } catch (error) {
+          if (isAbortError(error)) throw error
+          continue
+        }
+        if (path !== undefined) {
+          return claudeTranscriptFailure('malformed', startedAt, this.#now)
+        }
+        path = candidate
+      }
+    } catch (error) {
+      if (isAbortError(error)) throw error
+      return claudeTranscriptFailure('unavailable', startedAt, this.#now)
+    }
+    if (path === undefined) {
+      return claudeTranscriptFailure('unavailable', startedAt, this.#now)
+    }
+
+    try {
+      let recordedWorkingDirectory: string
+      try {
+        const parsed = await this.#parseSessionFile(
+          path,
+          request.nativeSessionId.toLowerCase(),
+          canonicalRoot,
+          request.signal,
+        )
+        if (
+          !sameCanonicalPath(parsed.candidate.workingDirectory, canonicalRoot)
+        ) {
+          return claudeTranscriptFailure('malformed', startedAt, this.#now)
+        }
+        recordedWorkingDirectory = parsed.recordedWorkingDirectory
+      } catch (error) {
+        if (isAbortError(error)) throw error
+        recordedWorkingDirectory = await readClaudeTranscriptScope({
+          path,
+          nativeSessionId: request.nativeSessionId.toLowerCase(),
+          maximumLineBytes: this.#maximumSessionLineBytes,
+          signal: request.signal,
+        })
+        const canonicalRecordedWorkingDirectory = await this.#canonicalizePath(
+          recordedWorkingDirectory,
+          request.signal,
+        )
+        if (
+          !sameCanonicalPath(canonicalRecordedWorkingDirectory, canonicalRoot)
+        ) {
+          return claudeTranscriptFailure('malformed', startedAt, this.#now)
+        }
+      }
+      const parsed = await readClaudeTranscriptFile({
+        path,
+        nativeSessionId: request.nativeSessionId.toLowerCase(),
+        recordedWorkingDirectory,
+        boundary,
+        adoptedAt: request.adoptedAt,
+        maximumBytes: this.#maximumSessionFileBytes,
+        maximumLineBytes: this.#maximumSessionLineBytes,
+        signal: request.signal,
+      })
+      const scope = privateDigest(
+        `${request.nativeSessionId}\0${canonicalRoot}\0${request.boundary ?? request.adoptedAt}`,
+      )
+      const before =
+        request.cursor === undefined
+          ? parsed.entries.length
+          : decodeClaudeTranscriptCursor(request.cursor, scope)
+      if (before < 0 || before > parsed.entries.length) {
+        return claudeTranscriptFailure('malformed', startedAt, this.#now)
+      }
+      const start = Math.max(0, before - request.limit)
+      const selected = parsed.entries.slice(start, before)
+      const bounded = boundTranscriptPage(selected)
+      const nextCursor =
+        start === 0 ? undefined : encodeClaudeTranscriptCursor(scope, start)
+      const partial =
+        boundary === undefined ||
+        parsed.malformed ||
+        parsed.truncated ||
+        bounded.truncated
+      return {
+        provider: CLAUDE_PROVIDER,
+        status: partial
+          ? 'partial'
+          : bounded.entries.length === 0
+            ? 'empty'
+            : 'available',
+        entries: bounded.entries,
+        ...(nextCursor === undefined ? {} : { nextCursor }),
+        complete: nextCursor === undefined,
+        metrics: {
+          bytesRead: parsed.bytesRead,
+          recordsScanned: parsed.recordsScanned,
+          entriesReturned: bounded.entries.length,
+          elapsedMs: Math.max(0, this.#now() - startedAt),
+          truncated: partial || nextCursor !== undefined,
+        },
+      }
+    } catch (error) {
+      if (isAbortError(error)) throw error
+      return claudeTranscriptFailure(
+        error instanceof UnsupportedClaudeTranscriptError
+          ? 'unsupported'
+          : 'malformed',
+        startedAt,
+        this.#now,
+      )
+    }
   }
 
   async #joinScan(
@@ -681,9 +857,15 @@ export class ClaudeSessionDiscovery implements ProviderSessionDiscovery {
         )
           ? 'supported'
           : 'unavailable',
-      historicalTranscript: 'unavailable',
+      historicalTranscript:
+        writerVersions.size > 0 &&
+        [...writerVersions].every((version) =>
+          SUPPORTED_CLAUDE_STORE_WRITERS.has(version),
+        )
+          ? 'supported'
+          : 'unsupported',
     })
-    return { candidate, bytesRead }
+    return { candidate, bytesRead, recordedWorkingDirectory }
   }
 
   #pageFromCursor(
@@ -800,6 +982,409 @@ interface SessionLineObservation {
   readonly observeWriterVersion: (version: string) => void
   readonly observeTitle: (title: string) => void
   readonly observeTimestamp: (timestamp: number) => void
+}
+
+interface ClaudeTranscriptBoundary {
+  readonly version: 1
+  readonly bytes: number
+  readonly prefixDigest: string
+}
+
+interface ClaudeTranscriptParseResult {
+  readonly entries: readonly NativeTranscriptEntry[]
+  readonly bytesRead: number
+  readonly recordsScanned: number
+  readonly malformed: boolean
+  readonly truncated: boolean
+}
+
+class UnsupportedClaudeTranscriptError extends Error {}
+
+async function readClaudeTranscriptScope(options: {
+  readonly path: string
+  readonly nativeSessionId: string
+  readonly maximumLineBytes: number
+  readonly signal?: AbortSignal
+}): Promise<string> {
+  const stream = createReadStream(options.path, {
+    highWaterMark: 64 * 1024,
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
+  })
+  let remainder: Buffer<ArrayBufferLike> = Buffer.alloc(0)
+  let recordsScanned = 0
+  try {
+    for await (const rawChunk of stream) {
+      throwIfAborted(options.signal)
+      const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk)
+      let start = 0
+      for (;;) {
+        const newline = chunk.indexOf(0x0a, start)
+        if (newline === -1) break
+        const line = appendBounded(
+          remainder,
+          chunk.subarray(start, newline),
+          options.maximumLineBytes,
+        )
+        remainder = Buffer.alloc(0)
+        recordsScanned += 1
+        const workingDirectory = transcriptScopeFromLine(
+          line,
+          options.nativeSessionId,
+        )
+        if (workingDirectory !== undefined) return workingDirectory
+        if (recordsScanned >= 64) throw new ClaudeSessionEntryCorruptError()
+        start = newline + 1
+      }
+      remainder = appendBounded(
+        remainder,
+        chunk.subarray(start),
+        options.maximumLineBytes,
+      )
+    }
+    const workingDirectory = transcriptScopeFromLine(
+      remainder,
+      options.nativeSessionId,
+    )
+    if (workingDirectory !== undefined) return workingDirectory
+  } catch (error) {
+    if (isAbortError(error)) throw error
+    throw new ClaudeSessionEntryCorruptError()
+  }
+  throw new ClaudeSessionEntryCorruptError()
+}
+
+function transcriptScopeFromLine(
+  line: Buffer,
+  nativeSessionId: string,
+): string | undefined {
+  if (line.byteLength === 0) return undefined
+  let value: unknown
+  try {
+    value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(line))
+  } catch {
+    return undefined
+  }
+  if (
+    !isRecord(value) ||
+    typeof value.sessionId !== 'string' ||
+    value.sessionId.toLowerCase() !== nativeSessionId ||
+    typeof value.cwd !== 'string' ||
+    !isSafeAbsolutePath(value.cwd)
+  ) {
+    return undefined
+  }
+  return value.cwd
+}
+
+function encodeClaudeTranscriptBoundary(
+  boundary: ClaudeTranscriptBoundary,
+): string {
+  return `claude-v1:${Buffer.from(JSON.stringify(boundary), 'utf8').toString('base64url')}`
+}
+
+function decodeClaudeTranscriptBoundary(
+  value: string,
+): ClaudeTranscriptBoundary {
+  if (!value.startsWith('claude-v1:') || value.length > 512) {
+    throw new TypeError('Claude transcript boundary is invalid')
+  }
+  const decoded = JSON.parse(
+    Buffer.from(value.slice('claude-v1:'.length), 'base64url').toString('utf8'),
+  ) as unknown
+  if (
+    !isRecord(decoded) ||
+    decoded.version !== 1 ||
+    !Number.isSafeInteger(decoded.bytes) ||
+    (decoded.bytes as number) <= 0 ||
+    typeof decoded.prefixDigest !== 'string' ||
+    !REVISION_PATTERN.test(decoded.prefixDigest)
+  ) {
+    throw new TypeError('Claude transcript boundary is invalid')
+  }
+  return {
+    version: 1,
+    bytes: decoded.bytes as number,
+    prefixDigest: decoded.prefixDigest,
+  }
+}
+
+function encodeClaudeTranscriptCursor(scope: string, before: number): string {
+  return Buffer.from(
+    JSON.stringify({ version: 1, scope, before }),
+    'utf8',
+  ).toString('base64url')
+}
+
+function decodeClaudeTranscriptCursor(value: string, scope: string): number {
+  if (value.length === 0 || value.length > MAXIMUM_CURSOR_CODE_UNITS) {
+    throw new TypeError('Claude transcript cursor is invalid')
+  }
+  let decoded: unknown
+  try {
+    decoded = JSON.parse(Buffer.from(value, 'base64url').toString('utf8'))
+  } catch {
+    throw new TypeError('Claude transcript cursor is invalid')
+  }
+  if (
+    !isRecord(decoded) ||
+    decoded.version !== 1 ||
+    decoded.scope !== scope ||
+    !Number.isSafeInteger(decoded.before) ||
+    (decoded.before as number) <= 0
+  ) {
+    throw new TypeError('Claude transcript cursor is invalid')
+  }
+  return decoded.before as number
+}
+
+async function readClaudeTranscriptFile(options: {
+  readonly path: string
+  readonly nativeSessionId: string
+  readonly recordedWorkingDirectory: string
+  readonly boundary?: ClaudeTranscriptBoundary
+  readonly adoptedAt: string
+  readonly maximumBytes: number
+  readonly maximumLineBytes: number
+  readonly signal?: AbortSignal
+}): Promise<ClaudeTranscriptParseResult> {
+  throwIfAborted(options.signal)
+  const before = await lstat(options.path)
+  if (!before.isFile() || before.isSymbolicLink() || before.size <= 0) {
+    throw new ClaudeSessionEntryCorruptError()
+  }
+  const requestedBytes = options.boundary?.bytes ?? before.size
+  const truncated = requestedBytes > options.maximumBytes
+  const maximumBytes = Math.min(requestedBytes, options.maximumBytes)
+  if (maximumBytes <= 0 || maximumBytes > before.size) {
+    throw new ClaudeSessionEntryCorruptError()
+  }
+
+  const digest = createHash('sha256')
+  const entries: NativeTranscriptEntry[] = []
+  const writerVersions = new Set<string>()
+  let bytesRead = 0
+  let recordsScanned = 0
+  let malformed = false
+  let remainder: Buffer<ArrayBufferLike> = Buffer.alloc(0)
+  const stream = createReadStream(options.path, {
+    start: 0,
+    end: maximumBytes - 1,
+    highWaterMark: 64 * 1024,
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
+  })
+  const inspect = (line: Buffer, firstLine: boolean): void => {
+    if (recordsScanned >= MAXIMUM_TRANSCRIPT_RECORDS) {
+      malformed = true
+      return
+    }
+    recordsScanned += 1
+    let decoded: string
+    try {
+      decoded = new TextDecoder('utf-8', { fatal: true }).decode(line)
+      if (firstLine && decoded.charCodeAt(0) === 0xfeff)
+        decoded = decoded.slice(1)
+      const record = JSON.parse(decoded) as unknown
+      const entry = normalizeClaudeTranscriptRecord(
+        record,
+        options.nativeSessionId,
+        options.recordedWorkingDirectory,
+        options.boundary === undefined ? options.adoptedAt : undefined,
+        recordsScanned - 1,
+        writerVersions,
+      )
+      if (entry !== undefined) entries.push(entry)
+    } catch (error) {
+      if (error instanceof UnsupportedClaudeTranscriptError) throw error
+      malformed = true
+    }
+  }
+
+  try {
+    for await (const rawChunk of stream) {
+      throwIfAborted(options.signal)
+      if (recordsScanned >= MAXIMUM_TRANSCRIPT_RECORDS) break
+      const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk)
+      bytesRead += chunk.byteLength
+      digest.update(chunk)
+      let start = 0
+      for (;;) {
+        const newline = chunk.indexOf(0x0a, start)
+        if (newline === -1) break
+        const line = appendBounded(
+          remainder,
+          chunk.subarray(start, newline),
+          options.maximumLineBytes,
+        )
+        remainder = Buffer.alloc(0)
+        inspect(line, recordsScanned === 0)
+        start = newline + 1
+      }
+      remainder = appendBounded(
+        remainder,
+        chunk.subarray(start),
+        options.maximumLineBytes,
+      )
+    }
+    if (
+      remainder.byteLength > 0 &&
+      recordsScanned < MAXIMUM_TRANSCRIPT_RECORDS
+    ) {
+      inspect(remainder, recordsScanned === 0)
+    }
+  } catch (error) {
+    if (
+      isAbortError(error) ||
+      error instanceof UnsupportedClaudeTranscriptError
+    ) {
+      throw error
+    }
+    throw new ClaudeSessionEntryCorruptError()
+  }
+
+  if (
+    options.boundary !== undefined &&
+    (bytesRead !== options.boundary.bytes ||
+      digest.digest('hex') !== options.boundary.prefixDigest)
+  ) {
+    throw new ClaudeSessionEntryCorruptError()
+  }
+  if (
+    writerVersions.size > 0 &&
+    [...writerVersions].some(
+      (version) => !SUPPORTED_CLAUDE_STORE_WRITERS.has(version),
+    )
+  ) {
+    throw new UnsupportedClaudeTranscriptError()
+  }
+  return {
+    entries,
+    bytesRead,
+    recordsScanned,
+    malformed,
+    truncated: truncated || recordsScanned >= MAXIMUM_TRANSCRIPT_RECORDS,
+  }
+}
+
+function normalizeClaudeTranscriptRecord(
+  value: unknown,
+  expectedSessionId: string,
+  recordedWorkingDirectory: string,
+  legacyCutoff: string | undefined,
+  nativeSequence: number,
+  writerVersions: Set<string>,
+): NativeTranscriptEntry | undefined {
+  if (!isRecord(value)) throw new ClaudeSessionEntryCorruptError()
+  if (typeof value.version === 'string') {
+    if (!SEMANTIC_VERSION_PATTERN.test(value.version)) {
+      throw new ClaudeSessionEntryCorruptError()
+    }
+    writerVersions.add(value.version)
+  }
+  if (value.type !== 'user' && value.type !== 'assistant') return undefined
+  if (
+    value.isMeta === true ||
+    value.isSidechain === true ||
+    typeof value.sessionId !== 'string' ||
+    value.sessionId.toLowerCase() !== expectedSessionId ||
+    typeof value.cwd !== 'string' ||
+    !sameCanonicalPath(value.cwd, recordedWorkingDirectory) ||
+    typeof value.uuid !== 'string' ||
+    !UUID_PATTERN.test(value.uuid) ||
+    !isRecord(value.message) ||
+    value.message.role !== value.type
+  ) {
+    return undefined
+  }
+  const occurredAt =
+    typeof value.timestamp === 'string' &&
+    Number.isFinite(Date.parse(value.timestamp))
+      ? new Date(value.timestamp).toISOString()
+      : undefined
+  if (
+    legacyCutoff !== undefined &&
+    (occurredAt === undefined || occurredAt >= legacyCutoff)
+  ) {
+    return undefined
+  }
+  const text = visibleClaudeText(value.message.content)
+  if (text.length === 0) return undefined
+  return {
+    id: value.uuid.toLowerCase(),
+    provider: CLAUDE_PROVIDER,
+    role: value.type,
+    kind: 'message',
+    content: text,
+    ...(occurredAt === undefined ? {} : { occurredAt }),
+    nativeSequence,
+    readOnly: true,
+  }
+}
+
+function visibleClaudeText(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (!Array.isArray(value)) return ''
+  return value
+    .flatMap((part) =>
+      isRecord(part) && part.type === 'text' && typeof part.text === 'string'
+        ? [part.text]
+        : [],
+    )
+    .join('\n')
+}
+
+function boundTranscriptPage(entries: readonly NativeTranscriptEntry[]): {
+  readonly entries: readonly NativeTranscriptEntry[]
+  readonly truncated: boolean
+} {
+  const bounded: NativeTranscriptEntry[] = []
+  let truncated = false
+  const entryByteLimit = Math.min(
+    MAXIMUM_TRANSCRIPT_ENTRY_BYTES,
+    Math.floor(MAXIMUM_TRANSCRIPT_PAGE_BYTES / Math.max(1, entries.length)),
+  )
+  for (const entry of entries) {
+    const retained = retainTranscriptText(entry.content, entryByteLimit)
+    truncated ||= retained.truncated
+    bounded.push({ ...entry, content: retained.text })
+  }
+  return { entries: bounded, truncated }
+}
+
+function retainTranscriptText(
+  value: string,
+  maximumBytes: number,
+): {
+  readonly text: string
+  readonly truncated: boolean
+} {
+  const encoded = Buffer.from(value, 'utf8')
+  if (encoded.byteLength <= maximumBytes) {
+    return { text: value, truncated: false }
+  }
+  let end = maximumBytes
+  while (end > 0 && ((encoded[end] ?? 0) & 0xc0) === 0x80) end -= 1
+  const text = encoded.subarray(0, end).toString('utf8')
+  return { text, truncated: true }
+}
+
+function claudeTranscriptFailure(
+  status: NativeTranscriptPage['status'],
+  startedAt: number,
+  now: () => number,
+): NativeTranscriptPage {
+  return {
+    provider: CLAUDE_PROVIDER,
+    status,
+    entries: [],
+    complete: true,
+    metrics: {
+      bytesRead: 0,
+      recordsScanned: 0,
+      entriesReturned: 0,
+      elapsedMs: Math.max(0, now() - startedAt),
+      truncated: status === 'partial',
+    },
+  }
 }
 
 function inspectSessionLine(

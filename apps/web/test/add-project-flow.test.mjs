@@ -20,6 +20,8 @@ test('one Add Project dialog owns Desktop picker and Browser path fallback', asy
   assert.match(source, /id="add-project-directory-picker"/u)
   assert.match(source, /id="add-project-path"/u)
   assert.match(source, /\u9009\u62e9\u6587\u4ef6\u5939|选择文件夹/u)
+  assert.match(source, /使用系统文件夹选择器选择一个本地工作区。/u)
+  assert.doesNotMatch(source, /Windows 文件夹选择器/u)
   assert.match(source, /createSelectedDirectoryPresentation/u)
   assert.match(source, /title=\{selectedDirectory\.path\}/u)
 })

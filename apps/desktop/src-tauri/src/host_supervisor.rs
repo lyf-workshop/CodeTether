@@ -1236,7 +1236,13 @@ pub fn run_desktop() {
                 system_tray::background_education_was_shown(app.handle()),
             );
             app.manage(state.clone());
-            app.manage(AttentionNotificationState::default());
+            let attention_notification_state = AttentionNotificationState::default();
+            app.manage(attention_notification_state.clone());
+            #[cfg(target_os = "macos")]
+            app.manage(crate::macos_notifications::install(
+                app.handle(),
+                attention_notification_state,
+            ));
 
             if let Err(error) = windows_lifecycle::install(app.handle()) {
                 eprintln!(

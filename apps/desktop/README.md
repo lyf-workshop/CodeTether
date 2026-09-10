@@ -188,7 +188,7 @@ Production CSP permits `connect-src` only to the loopback Host. Development adds
 
 ## Native Capability Boundary
 
-The Desktop pins Tauri 2.11.5 with its built-in `tray-icon` feature and lockfile-pinned `tray-icon` 0.24.2 implementation, the official Rust Dialog plugin 2.7.2, the official Rust/JavaScript Notification plugin 2.3.3, and the Windows activation helper `tauri-winrt-notification` 0.7.3. `withGlobalTauri` remains disabled. Tray creation, Explorer recovery handling, events, and Quit stay entirely inside trusted Rust/Tauri. `capabilities/main.json` grants the `main` WebView only the reviewed Project-picker and Attention-notification application permissions; event listen/unlisten; focused/minimized/visible window reads; and the Notification plugin's permission-check/request commands. The Phase 4G.2 resume signal reuses event listen/unlisten and adds no invoke command. The capability does not grant app exit, `notification:default`, `notification:allow-notify`, a Dialog wildcard, or any shell, process, filesystem, clipboard, or global-shortcut permission.
+The Desktop pins Tauri 2.11.5 with its built-in `tray-icon` feature and lockfile-pinned `tray-icon` 0.24.2 implementation, the official Rust Dialog plugin 2.7.2, the official Rust/JavaScript Notification plugin 2.3.3, the Windows activation helper `tauri-winrt-notification` 0.7.3, and the macOS `objc2-user-notifications` 0.3.2 bindings. `withGlobalTauri` remains disabled. Tray creation, Explorer recovery handling, events, and Quit stay entirely inside trusted Rust/Tauri. `capabilities/main.json` grants the `main` WebView only the reviewed Project-picker and Attention-notification application permissions; event listen/unlisten; focused/minimized/visible window reads; and the Notification plugin's permission-check/request commands. The Phase 4G.2 resume signal reuses event listen/unlisten and adds no invoke command. The capability does not grant app exit, `notification:default`, `notification:allow-notify`, a Dialog wildcard, or any shell, process, filesystem, clipboard, or global-shortcut permission.
 
 Production keeps `removeUnusedCommands` enabled. `build.rs` explicitly enumerates `pick_project_directory`, `deliver_attention_notification`, and `take_pending_notification_intent` in the Tauri application manifest, and the generated release allow-list contains exactly those three application commands. The Web adapter's Tauri modules remain dynamic imports: Browser mode never executes them, while production packages them as same-origin chunks allowed by `script-src 'self'` without enabling remote scripts or `'unsafe-eval'`.
 
@@ -231,6 +231,15 @@ The Desktop suppresses a notification only when its focused, visible, non-minimi
 
 The official Notification plugin owns the platform permission check. Its current Windows desktop API does not expose notification activation, so a narrow Rust bridge displays the toast with the installed `com.codetether.desktop` AUMID, accepts only the validated public `NotificationIntent`, and queues a click for Web navigation. A click calls the same ready/not-quitting window restoration path as Tray and single-instance activation; it never approves, resolves, acknowledges, or retries Attention. Dedupe is process-scoped by `attentionId`, and all native delivery failures remain best-effort.
 
+macOS delivery uses `UNUserNotificationCenter` rather than the plugin's
+deprecated `NSUserNotificationCenter` path. The first real delivery lazily
+requests Alert authorization, concurrent requests share that one request, and
+the pending queue is capped at 256 entries. A retained native delegate requests
+Banner/List presentation while CodeTether remains active with its main window
+hidden. Accepted Attention notifications retain at most 256 public intents in
+process memory; activation consumes the matching intent, restores the same
+ready window, and reuses the existing exact-Conversation event/queue route.
+
 Windows WebView2 can suspend a minimized document and pause its SSE consumer. While the Desktop click-intent subscription is active, the adapter holds a shared `navigator.locks` lease using the Wry/WebView2 background-execution workaround and releases it during teardown. Environments without Web Locks safely no-op. A bounded native queue plus the Tauri event and focus/page-show/visibility wakeups recover clicks missed during suspension without polling or creating another Attention projection.
 
 ## System Tray and Background Runtime
@@ -245,7 +254,7 @@ The System Tray is created exactly once, after Host readiness and before the fir
 
 Tray click, Tray Open, notification click, and hidden second-instance launch all call the same Rust `show_main_window` path. That path restores only the existing ready window, unminimizes it when necessary, shows it, and requests focus. Once Quit begins it refuses restoration, so a notification, tray click, or second launch cannot reopen the application during shutdown.
 
-On the first successful close-to-tray, Rust atomically creates the versioned marker `background-runtime-education-v1` under Desktop application-local data. Isolated smoke runs place it beneath their absolute `CODETETHER_DATA_DIR`. Only the first writer attempts the native “CodeTether 仍在后台运行” explanation. This Desktop preference is not Project/Attention data. The shared native-capabilities adapter exposes a read-only `backgroundRuntime.available` value so Settings can show a compact Desktop explanation; Browser mode reports `false`, displays no background-runtime surface, and receives no native lifecycle command.
+On the first successful close-to-tray, Rust attempts the native “CodeTether 仍在后台运行” explanation and atomically creates the versioned `background-runtime-education-v1` marker only after the platform accepts that notification request. Isolated smoke runs place the marker beneath their absolute `CODETETHER_DATA_DIR`. This Desktop preference is not Project/Attention data. The shared native-capabilities adapter exposes a read-only `backgroundRuntime.available` value so Settings can show a compact Desktop explanation; Browser mode reports `false`, displays no background-runtime surface, and receives no native lifecycle command.
 
 Phase 4G.1 is accepted and frozen at `cee3a71`. Its tray does not add Start with Windows, minimize-to-tray, a close-behavior toggle, tray Attention counts/badges, recent Projects/Conversations, inline Approval actions, notifications after explicit Quit, an OS daemon, or automatic Host restart. Phase 4G.2 does not change that menu or product scope. Explorer taskbar recreation is handled by the pinned Tauri/`tray-icon` boundary rather than a CodeTether watcher or second tray.
 

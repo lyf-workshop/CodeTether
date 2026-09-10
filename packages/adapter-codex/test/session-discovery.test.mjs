@@ -5,6 +5,7 @@ import test from 'node:test'
 import {
   CodexOwnedProcessCleanupError,
   CodexSessionDiscovery,
+  JsonRpcRemoteError,
 } from '../dist/index.js'
 
 function storedThread(overrides = {}) {
@@ -28,6 +29,7 @@ function clientFactory({
   threads = [],
   reads = new Map(),
   list,
+  listTurns,
   listItems,
   tracker,
 }) {
@@ -48,6 +50,12 @@ function clientFactory({
       async shutdown() {
         if (tracker !== undefined) tracker.shutdownCount += 1
       },
+    }
+    if (listTurns !== undefined) {
+      client.listStoredThreadTurns = async (options) => {
+        tracker?.methods.push({ method: 'thread/turns/list', options })
+        return await listTurns(options)
+      }
     }
     if (listItems !== undefined) {
       client.listStoredThreadItems = async (options) => {
@@ -219,6 +227,51 @@ test('revalidates native identity, exact project, and metadata revision without 
       canonicalizePath,
       clientFactory: clientFactory({
         reads: new Map([[thread.id, { ...thread, cwd: resolve('project-b') }]]),
+      }),
+    }).validateCandidate({
+      projectRoot,
+      nativeSessionId: candidate.nativeSessionId,
+      revision: candidate.revision,
+    }),
+    undefined,
+  )
+})
+
+test('revalidates current Codex list/read metadata without treating their updatedAt projections as a session change', async () => {
+  const projectRoot = resolve('project-a')
+  const listed = storedThread({
+    updatedAt: 1_700_000_100,
+    recencyAt: 1_700_000_050,
+  })
+  const discoveryPage = await new CodexSessionDiscovery({
+    canonicalizePath,
+    clientFactory: clientFactory({ threads: [listed] }),
+  }).discover({ projectRoot, limit: 1 })
+  const candidate = discoveryPage.candidates[0]
+
+  assert.deepEqual(
+    await new CodexSessionDiscovery({
+      canonicalizePath,
+      clientFactory: clientFactory({
+        reads: new Map([
+          [listed.id, { ...listed, updatedAt: listed.updatedAt + 25 }],
+        ]),
+      }),
+    }).validateCandidate({
+      projectRoot,
+      nativeSessionId: candidate.nativeSessionId,
+      revision: candidate.revision,
+    }),
+    candidate,
+  )
+
+  assert.equal(
+    await new CodexSessionDiscovery({
+      canonicalizePath,
+      clientFactory: clientFactory({
+        reads: new Map([
+          [listed.id, { ...listed, recencyAt: listed.recencyAt + 1 }],
+        ]),
       }),
     }).validateCandidate({
       projectRoot,
@@ -584,7 +637,370 @@ test('candidate revalidation rejects unbounded or malformed private identity bef
   assert.equal(factoryCalls, 0)
 })
 
-test('projects bounded official Codex history before the captured adoption boundary', async () => {
+test('projects current retained-turn history before the captured adoption boundary with pagination', async () => {
+  const projectRoot = resolve('project-a')
+  const thread = storedThread({ id: 'thread-turn-history', cwd: projectRoot })
+  const turns = Array.from({ length: 3 }, (_, index) => ({
+    id: `turn-${index + 1}`,
+    items: [
+      {
+        turnId: `turn-${index + 1}`,
+        id: `item-${index + 1}-user`,
+        type: 'userMessage',
+        text: index === 1 ? 'same' : `prompt-${index + 1}`,
+      },
+      {
+        turnId: `turn-${index + 1}`,
+        id: `item-${index + 1}-assistant`,
+        type: 'agentMessage',
+        text: index === 1 ? 'same' : `answer-${index + 1}`,
+      },
+    ],
+    invalidEntryCount: 0,
+    recordsScanned: 2,
+  }))
+  const tracker = { methods: [], shutdownCount: 0 }
+  const discovery = new CodexSessionDiscovery({
+    canonicalizePath,
+    clientFactory: clientFactory({
+      tracker,
+      reads: new Map([[thread.id, thread]]),
+      listTurns: async ({ cursor, limit, sortDirection }) => {
+        assert.equal(sortDirection, 'desc')
+        if (limit === 1 && cursor === undefined) {
+          return {
+            turns: [turns[2]],
+            invalidEntryCount: 0,
+            recordsScanned: 3,
+            backwardsCursor: 'boundary-turn-3',
+          }
+        }
+        if (cursor === 'boundary-turn-3') {
+          assert.equal(limit, 2)
+          return {
+            turns: [turns[2], turns[1]],
+            invalidEntryCount: 0,
+            recordsScanned: 6,
+            nextCursor: 'older-than-turn-2',
+          }
+        }
+        if (cursor === 'older-than-turn-2') {
+          assert.equal(limit, 2)
+          return {
+            turns: [turns[0]],
+            invalidEntryCount: 0,
+            recordsScanned: 3,
+          }
+        }
+        throw new Error('unexpected retained-turn cursor')
+      },
+    }),
+  })
+  const discovered = await new CodexSessionDiscovery({
+    canonicalizePath,
+    clientFactory: clientFactory({ threads: [thread] }),
+  }).discover({ projectRoot, limit: 1 })
+  const adopted = await discovery.validateCandidate({
+    projectRoot,
+    nativeSessionId: thread.id,
+    revision: discovered.candidates[0].revision,
+  })
+  assert.match(adopted.transcriptBoundary, /^codex-v2:/u)
+
+  const recent = await discovery.readSessionTranscript({
+    projectRoot,
+    nativeSessionId: thread.id,
+    boundary: adopted.transcriptBoundary,
+    adoptedAt: '2026-09-05T12:00:00.000Z',
+    limit: 4,
+  })
+  assert.equal(recent.status, 'available')
+  assert.deepEqual(
+    recent.entries.map(({ id, role, content }) => [id, role, content]),
+    [
+      ['item-2-user', 'user', 'same'],
+      ['item-2-assistant', 'assistant', 'same'],
+      ['item-3-user', 'user', 'prompt-3'],
+      ['item-3-assistant', 'assistant', 'answer-3'],
+    ],
+  )
+  assert.match(recent.nextCursor, /^codex-turn-v1:/u)
+
+  const older = await discovery.readSessionTranscript({
+    projectRoot,
+    nativeSessionId: thread.id,
+    boundary: adopted.transcriptBoundary,
+    adoptedAt: '2026-09-05T12:00:00.000Z',
+    cursor: recent.nextCursor,
+    limit: 4,
+  })
+  assert.equal(older.status, 'available')
+  assert.deepEqual(
+    older.entries.map(({ id, role }) => [id, role]),
+    [
+      ['item-1-user', 'user'],
+      ['item-1-assistant', 'assistant'],
+    ],
+  )
+  assert.equal(older.complete, true)
+  assert.equal(
+    new Set([...older.entries, ...recent.entries].map(({ id }) => id)).size,
+    6,
+  )
+  assert.equal(tracker.shutdownCount, 3)
+  assert.equal(
+    tracker.methods.some(({ method }) =>
+      ['thread/start', 'thread/resume', 'turn/start'].includes(method),
+    ),
+    false,
+  )
+})
+
+test('rejects a changed retained-turn adoption anchor without exposing post-adoption items', async () => {
+  const projectRoot = resolve('project-a')
+  const thread = storedThread({ id: 'thread-anchor-change', cwd: projectRoot })
+  const originalTurn = {
+    id: 'turn-anchor',
+    items: [
+      {
+        turnId: 'turn-anchor',
+        id: 'item-anchor',
+        type: 'agentMessage',
+        text: 'visible',
+      },
+    ],
+    invalidEntryCount: 0,
+    recordsScanned: 1,
+  }
+  let calls = 0
+  const discovery = new CodexSessionDiscovery({
+    canonicalizePath,
+    clientFactory: clientFactory({
+      reads: new Map([[thread.id, thread]]),
+      listTurns: async ({ cursor }) => {
+        calls += 1
+        return calls === 1
+          ? {
+              turns: [originalTurn],
+              invalidEntryCount: 0,
+              recordsScanned: 2,
+              backwardsCursor: 'anchor-cursor',
+            }
+          : {
+              turns: [
+                {
+                  ...originalTurn,
+                  items: [{ ...originalTurn.items[0], id: 'changed-item' }],
+                },
+              ],
+              invalidEntryCount: 0,
+              recordsScanned: 2,
+              ...(cursor === undefined ? {} : {}),
+            }
+      },
+    }),
+  })
+  const candidate = (
+    await new CodexSessionDiscovery({
+      canonicalizePath,
+      clientFactory: clientFactory({ threads: [thread] }),
+    }).discover({ projectRoot, limit: 1 })
+  ).candidates[0]
+  const adopted = await discovery.validateCandidate({
+    projectRoot,
+    nativeSessionId: thread.id,
+    revision: candidate.revision,
+  })
+  const page = await discovery.readSessionTranscript({
+    projectRoot,
+    nativeSessionId: thread.id,
+    boundary: adopted.transcriptBoundary,
+    adoptedAt: '2026-09-05T12:00:00.000Z',
+    limit: 2,
+  })
+  assert.equal(page.status, 'malformed')
+  assert.deepEqual(page.entries, [])
+})
+
+test('paginates within one retained Turn without dropping visible messages', async () => {
+  const projectRoot = resolve('project-a')
+  const thread = storedThread({ id: 'thread-one-large-turn', cwd: projectRoot })
+  const turn = {
+    id: 'turn-large',
+    items: Array.from({ length: 3 }, (_, index) => ({
+      turnId: 'turn-large',
+      id: `item-large-${index + 1}`,
+      type: index === 0 ? 'userMessage' : 'agentMessage',
+      text: `visible-${index + 1}`,
+    })),
+    invalidEntryCount: 0,
+    recordsScanned: 3,
+  }
+  const discovery = new CodexSessionDiscovery({
+    canonicalizePath,
+    clientFactory: clientFactory({
+      reads: new Map([[thread.id, thread]]),
+      listTurns: async () => ({
+        turns: [turn],
+        invalidEntryCount: 0,
+        recordsScanned: 4,
+        backwardsCursor: 'large-turn-anchor',
+      }),
+    }),
+  })
+  const candidate = (
+    await new CodexSessionDiscovery({
+      canonicalizePath,
+      clientFactory: clientFactory({ threads: [thread] }),
+    }).discover({ projectRoot, limit: 1 })
+  ).candidates[0]
+  const adopted = await discovery.validateCandidate({
+    projectRoot,
+    nativeSessionId: thread.id,
+    revision: candidate.revision,
+  })
+
+  const recent = await discovery.readSessionTranscript({
+    projectRoot,
+    nativeSessionId: thread.id,
+    boundary: adopted.transcriptBoundary,
+    adoptedAt: '2026-09-05T12:00:00.000Z',
+    limit: 2,
+  })
+  assert.deepEqual(
+    recent.entries.map(({ id }) => id),
+    ['item-large-2', 'item-large-3'],
+  )
+  assert.match(recent.nextCursor, /^codex-turn-v1:/u)
+
+  const older = await discovery.readSessionTranscript({
+    projectRoot,
+    nativeSessionId: thread.id,
+    boundary: adopted.transcriptBoundary,
+    adoptedAt: '2026-09-05T12:00:00.000Z',
+    cursor: recent.nextCursor,
+    limit: 2,
+  })
+  assert.deepEqual(
+    older.entries.map(({ id }) => id),
+    ['item-large-1'],
+  )
+  assert.equal(older.complete, true)
+})
+
+test('falls back to the older item-history method only when retained-turn listing is unavailable', async () => {
+  const projectRoot = resolve('project-a')
+  const thread = storedThread({ id: 'thread-items-fallback', cwd: projectRoot })
+  const tracker = { methods: [], shutdownCount: 0 }
+  const discovery = new CodexSessionDiscovery({
+    canonicalizePath,
+    clientFactory: clientFactory({
+      tracker,
+      reads: new Map([[thread.id, thread]]),
+      listTurns: async () => {
+        throw new JsonRpcRemoteError(
+          'thread/turns/list',
+          -32601,
+          'method unavailable',
+        )
+      },
+      listItems: async () => ({
+        items: [
+          {
+            turnId: 'turn-fallback',
+            id: 'item-fallback',
+            type: 'agentMessage',
+            text: 'visible',
+          },
+        ],
+        invalidEntryCount: 0,
+        backwardsCursor: 'fallback-boundary',
+      }),
+    }),
+  })
+  const candidate = (
+    await new CodexSessionDiscovery({
+      canonicalizePath,
+      clientFactory: clientFactory({ threads: [thread] }),
+    }).discover({ projectRoot, limit: 1 })
+  ).candidates[0]
+  const adopted = await discovery.validateCandidate({
+    projectRoot,
+    nativeSessionId: thread.id,
+    revision: candidate.revision,
+  })
+  assert.match(adopted.transcriptBoundary, /^codex-v1:/u)
+  assert.deepEqual(
+    tracker.methods.map(({ method }) => method),
+    ['thread/read', 'thread/turns/list', 'thread/items/list'],
+  )
+})
+
+test('bounds current retained-turn history with many visible items in one page', async () => {
+  const projectRoot = resolve('project-a')
+  const thread = storedThread({
+    id: 'thread-turn-history-huge',
+    cwd: projectRoot,
+  })
+  const turns = Array.from({ length: 50 }, (_, turnIndex) => ({
+    id: `turn-${turnIndex}`,
+    items: Array.from({ length: 3 }, (_, itemIndex) => ({
+      turnId: `turn-${turnIndex}`,
+      id: `item-${turnIndex}-${itemIndex}`,
+      type: itemIndex === 0 ? 'userMessage' : 'agentMessage',
+      text: '🙂'.repeat(40_000),
+    })),
+    invalidEntryCount: 0,
+    recordsScanned: 3,
+  }))
+  let calls = 0
+  const discovery = new CodexSessionDiscovery({
+    canonicalizePath,
+    clientFactory: clientFactory({
+      reads: new Map([[thread.id, thread]]),
+      listTurns: async ({ limit }) => {
+        calls += 1
+        return calls === 1
+          ? {
+              turns: [turns[0]],
+              invalidEntryCount: 0,
+              recordsScanned: 4,
+              backwardsCursor: 'huge-turn-boundary',
+            }
+          : {
+              turns: turns.slice(0, limit),
+              invalidEntryCount: 0,
+              recordsScanned: limit * 4,
+              backwardsCursor: 'huge-turn-boundary',
+            }
+      },
+    }),
+  })
+  const candidate = (
+    await new CodexSessionDiscovery({
+      canonicalizePath,
+      clientFactory: clientFactory({ threads: [thread] }),
+    }).discover({ projectRoot, limit: 1 })
+  ).candidates[0]
+  const adopted = await discovery.validateCandidate({
+    projectRoot,
+    nativeSessionId: thread.id,
+    revision: candidate.revision,
+  })
+  const page = await discovery.readSessionTranscript({
+    projectRoot,
+    nativeSessionId: thread.id,
+    boundary: adopted.transcriptBoundary,
+    adoptedAt: '2026-09-05T12:00:00.000Z',
+    limit: 100,
+  })
+  assert.equal(page.status, 'partial')
+  assert.equal(page.entries.length, 100)
+  assert.ok(page.metrics.bytesRead <= 512 * 1024)
+  assert.equal(page.metrics.recordsScanned, 200)
+})
+
+test('projects bounded older item-history compatibility before the captured adoption boundary', async () => {
   const projectRoot = resolve('project-a')
   const thread = storedThread({ id: 'thread-history', cwd: projectRoot })
   const pages = new Map([

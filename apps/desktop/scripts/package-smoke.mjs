@@ -5,24 +5,13 @@ import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { packagedExecutablePaths } from './package-paths.mjs'
+
 const desktopDirectory = resolve(fileURLToPath(new URL('..', import.meta.url)))
-const executable = join(
-  desktopDirectory,
-  'src-tauri',
-  'target',
-  'release',
-  process.platform === 'win32'
-    ? 'codetether-desktop.exe'
-    : 'codetether-desktop',
-)
+const packageExecutables = packagedExecutablePaths(desktopDirectory)
+const executable = packageExecutables.desktop
 await stat(executable)
-const hostExecutable = join(
-  desktopDirectory,
-  'src-tauri',
-  'target',
-  'release',
-  process.platform === 'win32' ? 'codetether-host.exe' : 'codetether-host',
-)
+const hostExecutable = packageExecutables.host
 await stat(hostExecutable)
 
 if (await isListening(4317)) {

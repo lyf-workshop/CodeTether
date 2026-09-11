@@ -31,6 +31,7 @@ const SUPPORTED_CLAUDE_STORE_WRITERS = new Set([
   '2.1.251',
   '2.1.263',
   '2.1.266',
+  '2.1.268',
 ])
 
 export function isClaudeSessionDiscoveryVersionSupported(

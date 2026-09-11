@@ -57,7 +57,13 @@ test('validates init identity and emits canonical lifecycle events', () => {
 })
 
 test('accepts the exact revalidated Claude Code versions', () => {
-  for (const version of ['2.1.250', '2.1.251', '2.1.263', '2.1.266']) {
+  for (const version of [
+    '2.1.250',
+    '2.1.251',
+    '2.1.263',
+    '2.1.266',
+    '2.1.268',
+  ]) {
     const normalizer = createNormalizer()
     assert.deepEqual(
       normalizer

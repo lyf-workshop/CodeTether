@@ -17,7 +17,7 @@ import test from 'node:test'
 
 import { ClaudeSessionDiscovery } from '../dist/index.js'
 
-const TEST_PROVIDER_VERSION = '2.1.266'
+const TEST_PROVIDER_VERSION = '2.1.268'
 
 function sessionId(index) {
   return `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`

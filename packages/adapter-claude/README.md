@@ -15,7 +15,9 @@ same safe execution boundary and structured Tool envelopes against `2.1.251`.
 Phase 8A revalidated that frozen capability boundary against `2.1.263` while
 closing a multiple-installation selection mismatch. Phase 8D revalidated the
 same restricted execution, structured Read/Glob/Grep events, and read-only
-native-session format against `2.1.266`. All four exact versions remain
+native-session format against `2.1.266`, then revalidated fresh execution,
+native resume, and the same read-only session format against `2.1.268` on
+Apple Silicon macOS with the configured custom gateway. All five exact versions remain
 admitted; no additional Claude capability is exposed.
 Unknown versions fail closed.
 Detection is bounded to Host startup; later CLI launch or authentication

@@ -13,6 +13,7 @@ import {
   generateService,
   servicePaths,
   checkNoSymlinks,
+  waitForServiceState,
 } from '../dist/service-installation.js'
 
 async function mkdtemp(prefix) {
@@ -57,6 +58,26 @@ test('service paths use POSIX target semantics on a Windows builder', () => {
     '/home/Test/.config/systemd/user/codetether-node.service',
   )
   assert.throws(() => servicePaths('linux', 'C:\\Users\\Test'), /absolute/u)
+})
+
+test('service lifecycle waits through a transient launchd state', () => {
+  const observations = [true, true, false]
+  let pauses = 0
+  waitForServiceState(() => observations.shift(), false, {
+    attempts: 4,
+    pause: () => {
+      pauses += 1
+    },
+  })
+  assert.equal(pauses, 2)
+  assert.throws(
+    () =>
+      waitForServiceState(() => true, false, {
+        attempts: 2,
+        pause: () => undefined,
+      }),
+    /did not complete/u,
+  )
 })
 test(
   'installation rejects symlink targets without touching preserved state',

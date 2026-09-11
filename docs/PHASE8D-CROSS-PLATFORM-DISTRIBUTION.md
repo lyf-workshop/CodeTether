@@ -180,6 +180,19 @@ and use the installed binary's existing `--pair` operation with the exact same
 to a unit/plist. Administrator-assisted Relay provisioning remains separate.
 Fresh remote pairing/service handoff remains a mandatory REAL validation item.
 
+If every usable Controller credential is lost while the Node still retains its
+pinned Controller, the installed Node exposes only the local management commands
+`controller list` and `controller recover`. Recovery requires the service to be
+stopped, exclusive ownership of the existing state lock by the same OS user that
+owns the private state directory, an explicit Controller identity, and exact
+interactive confirmation containing the durable Machine identity and public-key
+fingerprint suffix. The targeted trust removal and its bounded safe audit record
+are committed by one atomic replacement of the trust file. The command cannot
+create state, is absent from Machine TLS and Relay protocols, does not enable a
+pairing code, and does not alter Machine/Node identity, Relay state, Provider
+state, Projects, or native sessions. A replacement Controller must subsequently
+complete the existing one-time pairing protocol.
+
 Unit/plist serialization escapes paths, `%`, `$`, quotes and XML characters.
 Paths must be absolute/control-free. Existing symlink ancestors and unowned
 registrations fail closed; exclusive staging prevents overwrite through a

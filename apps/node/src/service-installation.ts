@@ -87,6 +87,25 @@ export function generateService(
   return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict>\n<key>Comment</key><string>${marker}</string>\n<key>Label</key><string>${label}</string>\n<key>ProgramArguments</key><array>${args.map((value) => `<string>${xml(value)}</string>`).join('')}</array>\n<key>RunAtLoad</key><true/>\n<key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>\n<key>ThrottleInterval</key><integer>5</integer>\n<key>ExitTimeOut</key><integer>30</integer>\n<key>Umask</key><integer>63</integer>\n<key>EnvironmentVariables</key><dict><key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string></dict>\n<key>StandardOutPath</key><string>${xml(paths.log)}</string>\n<key>StandardErrorPath</key><string>${xml(paths.log)}</string>\n</dict></plist>\n`
 }
 
+export function waitForServiceState(
+  observe: () => boolean,
+  expected: boolean,
+  options: {
+    readonly attempts?: number
+    readonly pause?: () => void
+  } = {},
+): void {
+  const attempts = options.attempts ?? 200
+  const pause =
+    options.pause ??
+    (() => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25))
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (observe() === expected) return
+    pause()
+  }
+  throw new Error('User service state transition did not complete')
+}
+
 // Check every existing ancestor before product-owned writes. Never follow a
 // symlink/reparse target when writing a binary, unit, or private state.
 export async function checkNoSymlinks(path: string): Promise<void> {
@@ -212,11 +231,13 @@ export async function runServiceCommand(
       run('/usr/bin/systemctl', ['--user', operation, unit])
     else {
       const present = loaded()
-      if (operation === 'stop' && present)
+      if (operation === 'stop' && present) {
         run('/bin/launchctl', ['bootout', `${domain}/${label}`])
-      else if (operation !== 'stop' && !present)
+        waitForServiceState(loaded, false)
+      } else if (operation !== 'stop' && !present) {
         run('/bin/launchctl', ['bootstrap', domain, paths.registration])
-      else if (operation === 'restart')
+        waitForServiceState(loaded, true)
+      } else if (operation === 'restart')
         run('/bin/launchctl', ['kickstart', '-k', `${domain}/${label}`])
     }
   }

@@ -15,6 +15,12 @@ import { NodeStateStore } from './state-store.js'
 import { readNodeRelayConfiguration } from './relay-state.js'
 import { runServiceCommand } from './service-installation.js'
 import { resolveNodeDataDirectory } from './data-directory.js'
+import {
+  LocalControllerRecoveryError,
+  parseLocalControllerCommand,
+  runLocalControllerCommand,
+  writeLocalControllerCommandResult,
+} from './local-controller-recovery.js'
 
 declare const __CODETETHER_NODE_VERSION__: string | undefined
 declare const __CODETETHER_PRODUCT_VERSION__: string | undefined
@@ -241,6 +247,7 @@ function helpText(): string {
     'CodeTether Node',
     '',
     'Usage: codetether-node [options]',
+    '       codetether-node controller list|recover [options]',
     '',
     '  --bind <address>   Listen address (default 127.0.0.1)',
     '  --port <port>      Listen port; 0 chooses an ephemeral port (default 4318)',
@@ -249,6 +256,8 @@ function helpText(): string {
     '  --pair             Enable one short-lived pairing session at startup',
     '  --json             Emit bounded machine-readable lifecycle lines',
     '  --help             Show this help',
+    '',
+    'Local Controller recovery requires the Node service to be stopped and explicit interactive confirmation.',
     '',
     'The Node exposes identity, pairing, liveness, bounded Provider discovery, trust revocation, and optional outbound Relay transport for the same authenticated Machine protocol.',
     '',
@@ -293,6 +302,21 @@ if (isNodeCliEntry()) {
       )
       process.exitCode = 1
     })
+  } else if (arguments_[0] === 'controller') {
+    try {
+      const options = parseLocalControllerCommand(arguments_.slice(1))
+      const result = await runLocalControllerCommand(options)
+      writeLocalControllerCommandResult(options.json, result)
+    } catch (error) {
+      const code =
+        error instanceof LocalControllerRecoveryError
+          ? error.code
+          : 'controller_command_failed'
+      process.stderr.write(
+        `CodeTether Controller operation failed (${code}).\n`,
+      )
+      process.exitCode = 1
+    }
   } else if (isProviderGuardianInvocation(arguments_)) {
     try {
       await runProviderProcessGuardian()

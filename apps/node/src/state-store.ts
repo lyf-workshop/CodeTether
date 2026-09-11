@@ -53,10 +53,26 @@ const TrustedControllerSchema = z
   .strict()
 export type TrustedController = z.infer<typeof TrustedControllerSchema>
 
+const ControllerRecoveryAuditSchema = z
+  .object({
+    event: z.literal('controller.recovered'),
+    occurredAt: z.iso.datetime({ offset: true }),
+    machineId: MachineTransportMachineIdSchema,
+    controllerId: ControllerIdSchema,
+    publicKeyFingerprint: PublicKeyFingerprintSchema,
+    pairedAt: z.iso.datetime({ offset: true }),
+    result: z.literal('revoked'),
+  })
+  .strict()
+export type ControllerRecoveryAudit = z.infer<
+  typeof ControllerRecoveryAuditSchema
+>
+
 const TrustStoreSchema = z
   .object({
     schemaVersion: z.literal(1),
     controllers: z.array(TrustedControllerSchema).max(1),
+    recoveryAudit: z.array(ControllerRecoveryAuditSchema).max(32).optional(),
   })
   .strict()
 
@@ -65,6 +81,10 @@ export interface OpenNodeStateOptions {
   readonly displayName: string
   readonly platform: string
   readonly architecture: string
+  /** Local management commands must never create a replacement identity. */
+  readonly requireExisting?: boolean
+  /** Internal deterministic-test seam for atomic trust-write failures. */
+  readonly writeTrustState?: (path: string, value: unknown) => Promise<void>
 }
 
 export class NodeStateStore {
@@ -76,7 +96,9 @@ export class NodeStateStore {
   readonly #lockPath: string
   readonly #lockHandle: FileHandle
   readonly #lockNonce: string
+  readonly #writeTrustState: (path: string, value: unknown) => Promise<void>
   #controllers: TrustedController[]
+  #recoveryAudit: ControllerRecoveryAudit[]
   #closed = false
 
   private constructor(options: {
@@ -87,6 +109,8 @@ export class NodeStateStore {
     lockPath: string
     lockHandle: FileHandle
     lockNonce: string
+    recoveryAudit: ControllerRecoveryAudit[]
+    writeTrustState: (path: string, value: unknown) => Promise<void>
   }) {
     this.dataDirectory = options.dataDirectory
     this.machine = {
@@ -103,6 +127,8 @@ export class NodeStateStore {
     this.#lockPath = options.lockPath
     this.#lockHandle = options.lockHandle
     this.#lockNonce = options.lockNonce
+    this.#writeTrustState = options.writeTrustState
+    this.#recoveryAudit = [...options.recoveryAudit]
   }
 
   static async open(options: OpenNodeStateOptions): Promise<NodeStateStore> {
@@ -125,6 +151,9 @@ export class NodeStateStore {
       const trustExists = await regularFileExists(trustPath)
 
       if (!manifestExists) {
+        if (options.requireExisting === true) {
+          throw new Error('Existing Node state is required')
+        }
         if (identityExists || trustExists) {
           throw new Error(
             'Node state is incomplete; identity reset is required',
@@ -159,6 +188,8 @@ export class NodeStateStore {
           lockPath,
           lockHandle: lock.handle,
           lockNonce: lock.nonce,
+          recoveryAudit: [],
+          writeTrustState: options.writeTrustState ?? writePrivateJsonAtomic,
         })
       }
 
@@ -186,6 +217,8 @@ export class NodeStateStore {
         lockPath,
         lockHandle: lock.handle,
         lockNonce: lock.nonce,
+        recoveryAudit: trust.recoveryAudit ?? [],
+        writeTrustState: options.writeTrustState ?? writePrivateJsonAtomic,
       })
     } catch (error) {
       await releaseNodeLock(lockPath, lock).catch(() => undefined)
@@ -205,6 +238,19 @@ export class NodeStateStore {
   trustedController(): TrustedController | undefined {
     const [controller] = this.#controllers
     return controller === undefined ? undefined : { ...controller }
+  }
+
+  trustedControllers(): readonly TrustedController[] {
+    return this.#controllers.map((controller) => ({ ...controller }))
+  }
+
+  controllerRecoveryAudit(
+    controllerId: ControllerId,
+  ): ControllerRecoveryAudit | undefined {
+    const audit = this.#recoveryAudit.find(
+      (entry) => entry.controllerId === controllerId,
+    )
+    return audit === undefined ? undefined : { ...audit }
   }
 
   controllerByFingerprint(
@@ -241,9 +287,12 @@ export class NodeStateStore {
       )
     }
     const next = [...this.#controllers, parsed]
-    await writePrivateJsonAtomic(this.#trustPath, {
+    await this.#writeTrustState(this.#trustPath, {
       schemaVersion: 1,
       controllers: next,
+      ...(this.#recoveryAudit.length === 0
+        ? {}
+        : { recoveryAudit: this.#recoveryAudit }),
     })
     this.#controllers = next
   }
@@ -255,12 +304,49 @@ export class NodeStateStore {
       (entry) => entry.controllerId !== parsedId,
     )
     if (next.length === this.#controllers.length) return false
-    await writePrivateJsonAtomic(this.#trustPath, {
+    await this.#writeTrustState(this.#trustPath, {
       schemaVersion: 1,
       controllers: next,
+      ...(this.#recoveryAudit.length === 0
+        ? {}
+        : { recoveryAudit: this.#recoveryAudit }),
     })
     this.#controllers = next
     return true
+  }
+
+  /** Caller must hold this local state lock and obtain explicit confirmation. */
+  async recoverControllerLocally(
+    controllerId: ControllerId,
+    occurredAt: string,
+  ): Promise<ControllerRecoveryAudit | undefined> {
+    this.#assertOpen()
+    const parsedId = ControllerIdSchema.parse(controllerId)
+    const existingAudit = this.controllerRecoveryAudit(parsedId)
+    if (existingAudit !== undefined) return { ...existingAudit }
+    const target = this.controllerById(parsedId)
+    if (target === undefined) return undefined
+    const audit = ControllerRecoveryAuditSchema.parse({
+      event: 'controller.recovered',
+      occurredAt,
+      machineId: this.machine.machineId,
+      controllerId: target.controllerId,
+      publicKeyFingerprint: target.publicKeyFingerprint,
+      pairedAt: target.pairedAt,
+      result: 'revoked',
+    })
+    const recoveryAudit = [...this.#recoveryAudit, audit].slice(-32)
+    const controllers = this.#controllers.filter(
+      (controller) => controller.controllerId !== parsedId,
+    )
+    await this.#writeTrustState(this.#trustPath, {
+      schemaVersion: 1,
+      controllers,
+      recoveryAudit,
+    })
+    this.#controllers = controllers
+    this.#recoveryAudit = recoveryAudit
+    return { ...audit }
   }
 
   async close(): Promise<void> {

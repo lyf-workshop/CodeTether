@@ -47,12 +47,12 @@ const latestHelp = requiredHelp.replace(
   'Specify tool names (e.g. "Bash,Edit,Read")',
 )
 
-test('admits the REAL-validated 2.1.266 profile despite its abbreviated tool help example', async () => {
+test('admits the latest REAL-validated profile despite its abbreviated tool help example', async () => {
   const observation = await observeClaudeCodeInstallation({
     installation,
     environment: { HOME: tmpdir(), PATH: process.env.PATH },
     settingsPath: join(tmpdir(), 'codetether-missing-claude-settings.json'),
-    probeVersion: async () => '2.1.266 (Claude Code)',
+    probeVersion: async () => '2.1.268 (Claude Code)',
     probeHelp: async () => latestHelp,
     fingerprint: async () => '2'.repeat(64),
   })

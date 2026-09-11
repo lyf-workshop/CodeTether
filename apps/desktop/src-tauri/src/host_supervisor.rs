@@ -938,6 +938,21 @@ fn handle_resume_health_failure(app: AppHandle, state: DesktopState, failure: Re
     }
 }
 
+fn remove_tray_before_process_exit(app: &AppHandle) {
+    let (completed, completion) = sync_channel(1);
+    let tray_app = app.clone();
+    if let Err(error) = app.run_on_main_thread(move || {
+        system_tray::remove(&tray_app);
+        let _ = completed.send(());
+    }) {
+        eprintln!("[codetether:desktop] could not schedule tray cleanup: {error}");
+        return;
+    }
+    if completion.recv_timeout(Duration::from_secs(2)).is_err() {
+        eprintln!("[codetether:desktop] tray cleanup did not complete before process exit");
+    }
+}
+
 fn finish_owned_shutdown(state: DesktopState, app: AppHandle, code: i32) -> ! {
     // This is a final process-level guard around the normal bounded Host
     // shutdown. If a platform process primitive itself stalls, exiting the
@@ -960,7 +975,9 @@ fn finish_owned_shutdown(state: DesktopState, app: AppHandle, code: i32) -> ! {
     }
     let exit_code = shutdown_exit_code(outcome, code);
     state.allow_exit();
-    system_tray::remove(&app);
+    // AppKit requires NSStatusItem removal on the main thread. Shutdown runs
+    // on a worker so Host draining cannot block the native event loop.
+    remove_tray_before_process_exit(&app);
     // The Host and its owned process tree are fully drained at this point.
     // Exiting directly avoids a Windows/Tauri edge case where re-requesting
     // exit after preventing the original window-close event can leave a

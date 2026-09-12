@@ -934,6 +934,16 @@ const ProviderSessionDiscoveryTitleSchema = z
       machineTransportLimits.maximumProviderSessionDiscoveryTitleBytes,
   )
 
+const ProviderSessionTranscriptBoundarySchema = z
+  .string()
+  .min(1)
+  .refine(
+    (value) =>
+      !value.includes('\0') &&
+      Buffer.byteLength(value, 'utf8') <=
+        machineTransportLimits.maximumProviderSessionTranscriptBoundaryBytes,
+  )
+
 export const PrivateProviderSessionCandidateSchema = z
   .object({
     nativeSessionId: NativeProviderSessionIdentitySchema,
@@ -944,6 +954,7 @@ export const PrivateProviderSessionCandidateSchema = z
     providerVersion: z.string().trim().min(1).max(120).optional(),
     resumeStatus: z.enum(['supported', 'unsupported', 'unavailable']),
     historicalTranscript: z.enum(['supported', 'unsupported', 'unavailable']),
+    transcriptBoundary: ProviderSessionTranscriptBoundarySchema.optional(),
   })
   .strict()
 export type PrivateProviderSessionCandidate = z.infer<
@@ -1076,16 +1087,6 @@ export const ProviderSessionValidatedMessageSchema = z
 export type ProviderSessionValidatedMessage = z.infer<
   typeof ProviderSessionValidatedMessageSchema
 >
-
-const ProviderSessionTranscriptBoundarySchema = z
-  .string()
-  .min(1)
-  .refine(
-    (value) =>
-      !value.includes('\0') &&
-      Buffer.byteLength(value, 'utf8') <=
-        machineTransportLimits.maximumProviderSessionTranscriptBoundaryBytes,
-  )
 
 const ProviderSessionTranscriptCursorSchema = z
   .string()

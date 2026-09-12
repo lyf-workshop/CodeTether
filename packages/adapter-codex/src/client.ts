@@ -118,7 +118,7 @@ export interface LaunchRemoteCodexClientOptions extends Omit<
   'approvalHandler'
 > {
   readonly executable?: string
-  /** Isolated Node-owned auth and native-session state. */
+  /** Native store location metadata; Codex retains configuration authority. */
   readonly codexHome: string
   /** Node-local environment; it is reduced to the fixed safe allowlist. */
   readonly environment?: NodeJS.ProcessEnv

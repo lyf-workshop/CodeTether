@@ -230,6 +230,15 @@ not copied; readiness must remain unknown/unavailable when unavailable to the
 service. Doctor's runtime/backend separation and custom-gateway semantics remain
 unchanged. This is not a Backend/Profile Manager.
 
+Phase 8D treats a paired Node as a trusted execution endpoint. The exact selected
+Codex process runs as the Node's non-root operating-system user and retains that
+user's normal native backend, authentication, session-store, and configured MCP
+authority. CodeTether does not isolate, parse, copy, rewrite, enumerate, or expose
+that configuration. Private MCP startup lifecycle notifications are ignored by
+the remote text projection; they do not create a Machine-protocol Tool surface or
+relax Controller authentication, exact installation binding, Turn ownership, or
+no-replay rules.
+
 ## Native historical transcript projection
 
 Phase 8D includes one shared corrective read path for explicitly adopted native

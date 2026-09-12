@@ -995,12 +995,17 @@ function turnRequestHash(request: CodexTurnStartMessage): string {
  * This check runs before the shared normalizer, so an unknown Provider event
  * can never be silently ignored. Reasoning lifecycle is admitted only because
  * Codex can emit it while producing text; it is deliberately not normalized or
- * sent over the Machine transport.
+ * sent over the Machine transport. A trusted Node may inherit the local OS
+ * user's native Codex MCP configuration; its startup lifecycle stays private
+ * and is deliberately neither normalized nor exposed over Machine transport.
  */
 export function validateRemoteCodexTextNotification(
   notification: JsonRpcNotification,
 ): void {
   switch (notification.method) {
+    case 'mcpServer/startupStatus/updated':
+      requireRawRecord(notification.params)
+      return
     case 'configWarning': {
       const params = requireRawRecord(notification.params)
       requireAllowedRawKeys(params, ['details', 'path', 'range', 'summary'])

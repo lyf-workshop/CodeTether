@@ -28,6 +28,7 @@ const REMOTE_CODEX_ENVIRONMENT_VARIABLES = new Set([
   'OPENAI_BASE_URL',
   'OPENAI_ORGANIZATION',
   'OPENAI_PROJECT',
+  'CODEX_HOME',
   'PATH',
   'PATHEXT',
   'SSL_CERT_DIR',
@@ -49,9 +50,6 @@ const REMOTE_CODEX_DISABLED_FEATURES = [
   'plugin_hooks',
   'plugin_sharing',
   'apps',
-  'enable_mcp_apps',
-  'mcp_2026_07_28',
-  'non_prefixed_mcp_tool_names',
   'remote_plugin',
   'recommended_plugins',
   'browser_use',
@@ -96,8 +94,6 @@ const REMOTE_CODEX_DISABLED_FEATURES = [
   'search_tool',
   'unavailable_dummy_tools',
   'skill_search',
-  'skill_mcp_dependency_install',
-  'tool_call_mcp_elicitation',
   'auth_elicitation',
   'psp',
   'standalone_web_search',
@@ -111,7 +107,6 @@ const REMOTE_CODEX_CONFIG_OVERRIDES = [
   'tools.update_plan.enabled=false',
   'tools.experimental_request_user_input.enabled=false',
   'orchestrator.skills.enabled=false',
-  'orchestrator.mcp.enabled=false',
 ] as const
 
 const REMOTE_CODEX_PROCESS_GROUPS = new WeakMap<
@@ -202,7 +197,8 @@ export function codexAppServerArguments(
 
 export interface SpawnRemoteCodexAppServerOptions {
   readonly executable?: string
-  readonly codexHome: string
+  /** Native store location metadata; never overrides the process environment. */
+  readonly codexHome?: string
   readonly environment?: NodeJS.ProcessEnv
   /** Node-private ownership seam. It is never populated from a wire request. */
   readonly processFactory?: RemoteCodexProcessFactory
@@ -292,14 +288,13 @@ export function remoteCodexAppServerArguments(
 
 export function sanitizeRemoteCodexChildEnvironment(
   environment: NodeJS.ProcessEnv,
-  codexHome: string,
+  codexHome?: string,
 ): NodeJS.ProcessEnv {
-  if (!isAbsolute(codexHome)) {
+  if (codexHome !== undefined && !isAbsolute(codexHome)) {
     throw new CodexProcessError('Remote Codex home must be an absolute path')
   }
 
-  const sanitized = sanitizeCodexProbeEnvironment(environment)
-  return { ...sanitized, CODEX_HOME: codexHome }
+  return sanitizeCodexProbeEnvironment(environment)
 }
 
 /**

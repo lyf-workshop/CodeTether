@@ -33,7 +33,7 @@ test('local App Server argv remains unchanged', () => {
   ])
 })
 
-test('remote App Server argv is fixed and disables executable capabilities', () => {
+test('trusted remote App Server preserves MCP while disabling executable capabilities', () => {
   assert.deepEqual(remoteCodexAppServerArguments(), [
     '--disable',
     'apply_patch_freeform',
@@ -51,12 +51,6 @@ test('remote App Server argv is fixed and disables executable capabilities', () 
     'plugin_sharing',
     '--disable',
     'apps',
-    '--disable',
-    'enable_mcp_apps',
-    '--disable',
-    'mcp_2026_07_28',
-    '--disable',
-    'non_prefixed_mcp_tool_names',
     '--disable',
     'remote_plugin',
     '--disable',
@@ -146,10 +140,6 @@ test('remote App Server argv is fixed and disables executable capabilities', () 
     '--disable',
     'skill_search',
     '--disable',
-    'skill_mcp_dependency_install',
-    '--disable',
-    'tool_call_mcp_elicitation',
-    '--disable',
     'auth_elicitation',
     '--disable',
     'psp',
@@ -169,8 +159,6 @@ test('remote App Server argv is fixed and disables executable capabilities', () 
     'tools.experimental_request_user_input.enabled=false',
     '-c',
     'orchestrator.skills.enabled=false',
-    '-c',
-    'orchestrator.mcp.enabled=false',
     'app-server',
     '--listen',
     'stdio://',
@@ -195,7 +183,7 @@ test('configuration observation tolerates unknown settings without weakening rem
   )
 })
 
-test('remote App Server receives only Node-local runtime and auth variables', () => {
+test('remote App Server preserves the Node user native Codex home', () => {
   const codexHome = resolve('isolated-remote-codex-home')
   assert.deepEqual(
     sanitizeRemoteCodexChildEnvironment(
@@ -221,8 +209,13 @@ test('remote App Server receives only Node-local runtime and auth variables', ()
       OPENAI_BASE_URL: 'https://node-api.example.test',
       OPENAI_ORGANIZATION: 'node-org',
       OPENAI_PROJECT: 'node-project',
-      CODEX_HOME: codexHome,
+      CODEX_HOME: 'owner-codex-home',
     },
+  )
+  assert.deepEqual(
+    sanitizeRemoteCodexChildEnvironment({ PATH: 'runtime-path' }, codexHome),
+    { PATH: 'runtime-path' },
+    'an absent native CODEX_HOME must not be replaced by CodeTether',
   )
 })
 

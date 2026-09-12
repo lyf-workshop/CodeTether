@@ -530,7 +530,7 @@ test('runner rejects Tool events and closes only its exact client', async () => 
   }
 })
 
-test('raw notification policy admits only text lifecycle and private reasoning', () => {
+test('raw notification policy admits text, reasoning, and private native MCP startup', () => {
   const correlation = {
     threadId: 'provider-thread-a',
     turnId: 'provider-turn-a',
@@ -552,6 +552,25 @@ test('raw notification policy admits only text lifecycle and private reasoning',
         status: 'disabled',
       },
     }),
+  )
+  assert.doesNotThrow(() =>
+    validateRemoteCodexTextNotification({
+      method: 'mcpServer/startupStatus/updated',
+      params: {
+        name: 'private-native-server',
+        status: 'ready',
+        error: null,
+        failureReason: null,
+      },
+    }),
+  )
+  assert.throws(
+    () =>
+      validateRemoteCodexTextNotification({
+        method: 'mcpServer/startupStatus/updated',
+        params: null,
+      }),
+    (error) => error.code === 'remote_policy_violation',
   )
   assert.doesNotThrow(() =>
     validateRemoteCodexTextNotification({

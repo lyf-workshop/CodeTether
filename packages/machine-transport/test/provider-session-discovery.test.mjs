@@ -95,6 +95,13 @@ test('Provider session Machine messages are narrow, bounded, and private', () =>
     PrivateProviderSessionCandidateSchema.safeParse(candidate).success,
     true,
   )
+  assert.equal(
+    PrivateProviderSessionCandidateSchema.safeParse({
+      ...candidate,
+      transcriptBoundary: 'codex-v2:test-boundary',
+    }).success,
+    true,
+  )
   for (const unsafeCandidate of [
     { ...candidate, nativeSessionId: `${candidate.nativeSessionId}\0tail` },
     {

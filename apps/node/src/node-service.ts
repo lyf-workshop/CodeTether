@@ -1663,6 +1663,9 @@ function privateCandidate(candidate: NativeProviderSessionCandidate) {
       : { providerVersion: candidate.providerVersion }),
     resumeStatus: candidate.resumeStatus,
     historicalTranscript: candidate.historicalTranscript,
+    ...(candidate.transcriptBoundary === undefined
+      ? {}
+      : { transcriptBoundary: candidate.transcriptBoundary }),
   }
 }
 

@@ -314,7 +314,12 @@ function discoveryAdapter(provider, calls) {
       const expected = candidate(provider, request.projectRoot)
       return request.nativeSessionId === expected.nativeSessionId &&
         request.revision === expected.revision
-        ? expected
+        ? {
+            ...expected,
+            ...(provider === 'codex'
+              ? { transcriptBoundary: 'codex-v2:test-boundary' }
+              : {}),
+          }
         : undefined
     },
     async readSessionTranscript(request) {
@@ -504,7 +509,15 @@ test(
           nativeSessionId: page.candidates[0].nativeSessionId,
           revision: page.candidates[0].revision,
         })
-        assert.deepEqual(valid, page.candidates[0])
+        assert.deepEqual(valid, {
+          ...page.candidates[0],
+          ...(provider === 'codex'
+            ? { transcriptBoundary: 'codex-v2:test-boundary' }
+            : {}),
+        })
+        if (provider === 'codex') {
+          assert.equal(valid.transcriptBoundary, 'codex-v2:test-boundary')
+        }
         assert.equal(
           await connected.validateProviderSession({
             provider,

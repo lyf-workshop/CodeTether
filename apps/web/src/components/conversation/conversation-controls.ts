@@ -68,6 +68,7 @@ export interface LiveControlAvailability {
   readonly supportsApprovals: boolean
   readonly supportsDiff: boolean
   readonly supportsShell: boolean
+  readonly supportsToolOutput: boolean
   readonly supportsReasoningControl: boolean
   readonly composerDisabled?: ComposerDisabledPresentation
 }
@@ -149,6 +150,11 @@ export function deriveLiveControlAvailability(
   const supportsShell =
     capabilities !== undefined &&
     ('codex' in capabilities ? capabilities.codex : capabilities.shell)
+  const supportsToolOutput =
+    capabilities !== undefined &&
+    ('codex' in capabilities
+      ? capabilities.codex
+      : capabilities.toolEvents || capabilities.shell)
   const supportsReasoningControl =
     capabilities !== undefined &&
     ('codex' in capabilities
@@ -168,6 +174,7 @@ export function deriveLiveControlAvailability(
     supportsApprovals,
     supportsDiff,
     supportsShell,
+    supportsToolOutput,
     supportsReasoningControl,
     ...(composerDisabled === undefined ? {} : { composerDisabled }),
   }

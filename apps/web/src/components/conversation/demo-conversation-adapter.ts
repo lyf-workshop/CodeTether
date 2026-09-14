@@ -133,6 +133,7 @@ function createDemoConversation(conversationId: string): ConversationViewModel {
       supportsApprovals: false,
       supportsDiff: true,
       supportsShell: true,
+      supportsToolOutput: true,
       supportsReasoningControl: true,
     },
   }

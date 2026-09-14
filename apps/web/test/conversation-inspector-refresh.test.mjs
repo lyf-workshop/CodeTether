@@ -25,6 +25,8 @@ test('Inspector exposes only truthful Files, Changes, and Tool Output surfaces',
   assert.doesNotMatch(source, /<input[^>]*terminal/u)
   assert.match(source, /supportsDiff/u)
   assert.match(source, /supportsShell/u)
+  assert.match(source, /supportsToolOutput/u)
+  assert.match(source, /execution\.tool\.outputSummary/u)
 })
 
 test('Inspector collapse is a device UI preference and restores a wider workspace', async () => {

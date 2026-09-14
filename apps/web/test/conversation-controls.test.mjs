@@ -87,6 +87,7 @@ test('capabilities, connection and active Turn jointly gate controls', () => {
       supportsApprovals: true,
       supportsDiff: true,
       supportsShell: true,
+      supportsToolOutput: true,
       supportsReasoningControl: true,
     },
   )
@@ -101,6 +102,7 @@ test('capabilities, connection and active Turn jointly gate controls', () => {
       supportsApprovals: true,
       supportsDiff: true,
       supportsShell: true,
+      supportsToolOutput: true,
       supportsReasoningControl: true,
     },
   )
@@ -115,6 +117,7 @@ test('capabilities, connection and active Turn jointly gate controls', () => {
       supportsApprovals: true,
       supportsDiff: true,
       supportsShell: true,
+      supportsToolOutput: true,
       supportsReasoningControl: true,
     },
   )
@@ -155,6 +158,7 @@ test('Claude capabilities do not inherit unsupported Codex controls', () => {
       supportsApprovals: false,
       supportsDiff: false,
       supportsShell: false,
+      supportsToolOutput: true,
       supportsReasoningControl: true,
     },
   )

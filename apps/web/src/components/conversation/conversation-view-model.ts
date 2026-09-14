@@ -157,6 +157,7 @@ export interface ConversationCapabilitiesViewModel {
   readonly supportsApprovals: boolean
   readonly supportsDiff: boolean
   readonly supportsShell: boolean
+  readonly supportsToolOutput: boolean
   readonly supportsReasoningControl: boolean
   readonly composerDisabled?: ComposerDisabledPresentation
 }

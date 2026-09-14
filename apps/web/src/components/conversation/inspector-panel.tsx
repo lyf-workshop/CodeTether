@@ -238,10 +238,40 @@ function ChangesSummary({
 }
 
 function ToolOutputSummary({
+  conversation,
   terminal,
 }: {
+  conversation: ConversationViewModel
   terminal: ConversationTerminalViewModel
 }) {
+  const toolEntries = conversation.timeline.blocks.flatMap((block) =>
+    block.kind === 'agent-run'
+      ? block.executions.flatMap((execution) => {
+          if (execution.kind === 'tool') {
+            return [
+              {
+                id: execution.id,
+                title: execution.tool.title,
+                summary:
+                  execution.tool.outputSummary ?? execution.tool.description,
+                status: execution.tool.status,
+              },
+            ]
+          }
+          if (execution.kind === 'shell') {
+            return [
+              {
+                id: execution.id,
+                title: execution.shell.command,
+                summary: execution.shell.summary,
+                status: execution.shell.status,
+              },
+            ]
+          }
+          return []
+        })
+      : [],
+  )
   const output = [
     ...(terminal.command ? [terminal.command] : []),
     ...terminal.lines,
@@ -249,6 +279,32 @@ function ToolOutputSummary({
 
   return (
     <InspectorSection title="工具输出">
+      {toolEntries.length > 0 ? (
+        <ul aria-label="工具执行记录" className="mb-4 space-y-2">
+          {toolEntries.map((entry) => (
+            <li
+              key={entry.id}
+              className="min-w-0 border-b border-border/45 pb-2 last:border-b-0"
+            >
+              <div className="flex min-w-0 items-center justify-between gap-2">
+                <span className="min-w-0 truncate text-sm text-text-primary">
+                  {entry.title}
+                </span>
+                <StatusBadge
+                  status={entry.status}
+                  showIcon={false}
+                  className="h-auto shrink-0 border-0 bg-transparent p-0 text-xs"
+                />
+              </div>
+              {entry.summary === undefined ? null : (
+                <p className="mt-1 break-words text-xs leading-normal text-text-secondary">
+                  {entry.summary}
+                </p>
+              )}
+            </li>
+          ))}
+        </ul>
+      ) : null}
       {output.length > 0 ? (
         <>
           <pre
@@ -264,11 +320,11 @@ function ToolOutputSummary({
             </p>
           ) : null}
         </>
-      ) : (
+      ) : toolEntries.length === 0 ? (
         <p role="status" className="text-sm text-text-muted">
           暂无工具输出。
         </p>
-      )}
+      ) : null}
     </InspectorSection>
   )
 }
@@ -309,12 +365,15 @@ export function InspectorPanel({
 }: InspectorPanelProps) {
   const requestedTab = tab ?? initialTab
   const visibleTab = normalizeConversationInspectorTab(requestedTab)
+  const supportsToolOutput =
+    conversation.capabilities.supportsToolOutput ||
+    conversation.capabilities.supportsShell
   const effectiveTab =
     (requestedTab === 'changes' && !conversation.capabilities.supportsDiff) ||
     (visibleTab === 'changes' && !conversation.capabilities.supportsDiff) ||
-    (requestedTab === 'terminal' && !conversation.capabilities.supportsShell)
+    (requestedTab === 'terminal' && !supportsToolOutput)
       ? 'files'
-      : visibleTab === 'tools' && !conversation.capabilities.supportsShell
+      : visibleTab === 'tools' && !supportsToolOutput
         ? 'files'
         : visibleTab
 
@@ -384,7 +443,7 @@ export function InspectorPanel({
                 变更
               </TabsTrigger>
             ) : null}
-            {conversation.capabilities.supportsShell ? (
+            {supportsToolOutput ? (
               <TabsTrigger value="tools" className="h-9 flex-1 px-1 text-sm">
                 <SquareTerminal aria-hidden="true" />
                 工具输出
@@ -423,11 +482,14 @@ export function InspectorPanel({
           </TabsContent>
         ) : null}
 
-        {conversation.capabilities.supportsShell ? (
+        {supportsToolOutput ? (
           <TabsContent value="tools" className="min-h-0 overflow-hidden">
             <ScrollArea className="h-full">
               <div className="px-4 pb-4">
-                <ToolOutputSummary terminal={terminal} />
+                <ToolOutputSummary
+                  conversation={conversation}
+                  terminal={terminal}
+                />
               </div>
             </ScrollArea>
           </TabsContent>

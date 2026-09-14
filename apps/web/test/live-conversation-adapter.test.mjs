@@ -26,6 +26,7 @@ test('maps one Host read model to the frozen read-only Conversation ViewModel', 
     supportsApprovals: false,
     supportsDiff: false,
     supportsShell: false,
+    supportsToolOutput: false,
     supportsReasoningControl: false,
   })
   assert.equal(viewModel.pendingApprovals[0]?.id, 'approval_live01')
@@ -61,6 +62,7 @@ test('maps every pending Approval and enables only advertised live controls', ()
     supportsApprovals: true,
     supportsDiff: true,
     supportsShell: true,
+    supportsToolOutput: true,
     supportsReasoningControl: true,
   })
   assert.deepEqual(
@@ -463,6 +465,7 @@ test('uses exact Machine-scoped remote Codex capabilities and rail identities', 
     supportsApprovals: false,
     supportsDiff: false,
     supportsShell: false,
+    supportsToolOutput: false,
     supportsReasoningControl: false,
   })
   assert.deepEqual(
@@ -560,6 +563,7 @@ test('presents Remote Claude effort and canonical Read/Search tools without unsu
     supportsApprovals: false,
     supportsDiff: false,
     supportsShell: false,
+    supportsToolOutput: true,
     supportsReasoningControl: true,
   })
   const tools = source.conversation.timeline.blocks.flatMap((block) =>
@@ -769,6 +773,7 @@ test('keeps unavailable Project history visible while disabling controls', () =>
     supportsApprovals: true,
     supportsDiff: true,
     supportsShell: true,
+    supportsToolOutput: true,
     supportsReasoningControl: true,
   })
   assert.deepEqual(source.connectionIndicator, {

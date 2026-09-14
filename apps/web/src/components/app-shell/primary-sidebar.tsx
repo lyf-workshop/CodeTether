@@ -1,7 +1,6 @@
 import type { ComponentPropsWithoutRef } from 'react'
 import { Link } from '@tanstack/react-router'
 import {
-  ChevronDown,
   FolderOpen,
   Inbox,
   Monitor,
@@ -10,24 +9,13 @@ import {
 } from 'lucide-react'
 
 import {
-  Button,
-  Separator,
   Tooltip,
   TooltipContent,
   TooltipTrigger,
-  agentDefinitions,
   cn,
-  statusDefinitions,
 } from '@codetether/ui'
-import type { ProjectRecord } from '@codetether/protocol'
 
 import { formatInboxAttentionBadge } from '../inbox/inbox-model'
-import {
-  providerPresentations,
-  type ProviderPresentation,
-} from '../../provider/provider-presentation'
-
-const unavailableAgentProviders = providerPresentations(undefined)
 
 type SidebarDestination = '/inbox' | '/machines' | '/projects' | '/settings'
 
@@ -39,7 +27,7 @@ interface SidebarNavItem {
 
 const primaryNavItems = [
   { label: '项目', to: '/projects', icon: FolderOpen },
-  { label: '机器', to: '/machines', icon: Monitor },
+  { label: '电脑', to: '/machines', icon: Monitor },
   { label: '收件箱', to: '/inbox', icon: Inbox },
 ] as const satisfies readonly SidebarNavItem[]
 
@@ -121,16 +109,12 @@ export interface PrimarySidebarProps extends Omit<
   'children'
 > {
   currentPath: string
-  currentProject?: Pick<ProjectRecord, 'name' | 'projectId'>
-  agentProviders?: readonly ProviderPresentation[]
   inboxAttentionCount?: number
 }
 
-/** Shared desktop navigation with capability-backed Agent availability. */
+/** Shared desktop navigation for the product's primary destinations. */
 export function PrimarySidebar({
   currentPath,
-  currentProject,
-  agentProviders = unavailableAgentProviders,
   inboxAttentionCount = 0,
   className,
   'aria-label': ariaLabel = '主导航',
@@ -167,121 +151,7 @@ export function PrimarySidebar({
           </nav>
         </div>
 
-        <div className="hidden min-h-0 flex-1 overflow-y-auto lg:block">
-          <Separator className="my-3" />
-
-          <section aria-labelledby="sidebar-current-project-heading">
-            <h2
-              id="sidebar-current-project-heading"
-              className="px-2 text-xs font-semibold text-text-muted"
-            >
-              当前项目
-            </h2>
-            <Button
-              asChild
-              variant="outline"
-              className="mt-2 h-[var(--layout-sidebar-context-item-height)] w-full justify-start rounded-sm border-border-strong bg-primary-muted/40 px-2 text-left hover:bg-primary-muted/60"
-            >
-              <Link
-                to={
-                  currentProject === undefined
-                    ? '/projects'
-                    : '/projects/$projectId'
-                }
-                params={
-                  currentProject === undefined
-                    ? undefined
-                    : { projectId: currentProject.projectId }
-                }
-                aria-label={
-                  currentProject === undefined
-                    ? '选择项目'
-                    : `打开 ${currentProject.name} 项目详情`
-                }
-                aria-current={
-                  currentProject !== undefined &&
-                  currentPath === `/projects/${currentProject.projectId}`
-                    ? 'page'
-                    : undefined
-                }
-                title={currentProject?.name}
-              >
-                <FolderOpen
-                  aria-hidden="true"
-                  className="size-4 shrink-0 text-primary"
-                />
-                <span className="min-w-0 flex-1 truncate text-md font-semibold text-text-primary">
-                  {currentProject?.name ?? '选择项目'}
-                </span>
-                <ChevronDown
-                  aria-hidden="true"
-                  className="size-4 shrink-0 text-text-secondary"
-                />
-              </Link>
-            </Button>
-          </section>
-
-          <Separator className="my-3" />
-
-          <section aria-labelledby="sidebar-agents-heading">
-            <h2
-              id="sidebar-agents-heading"
-              className="px-2 text-xs font-semibold text-text-muted"
-            >
-              智能体
-            </h2>
-            <ul className="mt-2 space-y-0.5">
-              {agentProviders.map((provider) => {
-                const agent = agentDefinitions[provider.agent]
-                const status = provider.available ? 'idle' : 'offline'
-                return (
-                  <li
-                    key={provider.provider}
-                    className="flex min-h-[var(--layout-sidebar-presence-item-height)] min-w-0 items-center gap-1 py-1 pr-3 pl-2"
-                  >
-                    <span
-                      aria-hidden="true"
-                      className={cn(
-                        'grid size-[var(--layout-sidebar-mark-size)] shrink-0 place-items-center rounded-md border text-sm font-semibold',
-                        agent.accentClassName,
-                      )}
-                    >
-                      {agent.icon}
-                    </span>
-                    <span className="min-w-0 flex-1 truncate text-md font-medium text-text-primary">
-                      {provider.displayName}
-                    </span>
-                    <span className="grid max-w-24 shrink-0 justify-items-end text-2xs leading-tight text-text-muted">
-                      <span className="truncate">
-                        {provider.availabilityLabel}
-                      </span>
-                      {provider.version === undefined ? null : (
-                        <span
-                          className="max-w-24 truncate"
-                          title={provider.version}
-                        >
-                          {provider.version}
-                        </span>
-                      )}
-                    </span>
-                    <span
-                      role="img"
-                      aria-label={`${provider.displayName}：${provider.availabilityLabel}`}
-                      data-status={status}
-                      className={cn(
-                        'size-2 shrink-0 rounded-full bg-current motion-safe:animate-none',
-                        statusDefinitions[status].iconClassName,
-                      )}
-                    />
-                  </li>
-                )
-              })}
-            </ul>
-          </section>
-        </div>
-
         <div className="mt-auto pt-3">
-          <Separator className="mb-3" />
           <nav aria-label="应用">
             <SidebarLink item={settingsNavItem} currentPath={currentPath} />
           </nav>

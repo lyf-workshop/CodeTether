@@ -9,7 +9,6 @@ import { AddProjectDialog } from '../projects/add-project-dialog'
 import { MainContent } from './main-content'
 import { PrimarySidebar } from './primary-sidebar'
 import { TopBar, type TopBarBreadcrumb } from './top-bar'
-import type { ProviderPresentation } from '../../provider/provider-presentation'
 
 interface AppShellProps {
   children: ReactNode
@@ -17,7 +16,6 @@ interface AppShellProps {
   currentPage: string
   currentPath: string
   currentProject?: ProjectRecord
-  agentProviders?: readonly ProviderPresentation[]
   inboxAttentionCount?: number
 }
 
@@ -27,7 +25,6 @@ export function AppShell({
   currentPage,
   currentPath,
   currentProject,
-  agentProviders = [],
   inboxAttentionCount = 0,
 }: AppShellProps) {
   const navigate = useNavigate()
@@ -63,8 +60,6 @@ export function AppShell({
         <div className="grid min-h-0 grid-cols-[var(--layout-sidebar-current-width)_minmax(0,1fr)]">
           <PrimarySidebar
             currentPath={currentPath}
-            currentProject={currentProject}
-            agentProviders={agentProviders}
             inboxAttentionCount={inboxAttentionCount}
           />
           <MainContent>{children}</MainContent>

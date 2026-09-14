@@ -21,10 +21,6 @@ import {
 } from '../../runtime/host/host-runtime-hooks'
 import { projectDetailQueryOptions } from '../../runtime/host/project-query'
 import { machineDetailQueryOptions } from '../../runtime/host/machine-query'
-import {
-  providerPresentations,
-  type ProviderPresentation,
-} from '../../provider/provider-presentation'
 import { AppShell } from './app-shell'
 
 const pageTitles = {
@@ -83,9 +79,6 @@ function StandardRootLayout({ currentPath }: { readonly currentPath: string }) {
     connectionState === 'unavailable' || connectionState === 'incompatible'
       ? 0
       : (attentionQuery.data?.summary.totalOpen ?? 0)
-  const agentProviders = providerPresentations(
-    connectionState === 'connected' ? runtime.bootstrap : undefined,
-  )
   const projectRoute = parseProjectRoute(currentPath)
   const machineRoute = parseMachineRoute(currentPath)
   const conversationRoute = parseConversationRoute(currentPath)
@@ -94,7 +87,6 @@ function StandardRootLayout({ currentPath }: { readonly currentPath: string }) {
     return (
       <AppShell
         breadcrumbs={[{ label: '项目' }]}
-        agentProviders={agentProviders}
         currentPage="项目"
         currentPath={currentPath}
         inboxAttentionCount={inboxAttentionCount}
@@ -107,7 +99,6 @@ function StandardRootLayout({ currentPath }: { readonly currentPath: string }) {
   if (projectRoute?.projectId !== undefined) {
     return (
       <ProjectShellLayout
-        agentProviders={agentProviders}
         currentPath={currentPath}
         inboxAttentionCount={inboxAttentionCount}
         projectId={projectRoute.projectId}
@@ -125,7 +116,6 @@ function StandardRootLayout({ currentPath }: { readonly currentPath: string }) {
             label: projectRoute.view === 'conversations' ? '会话' : '项目详情',
           },
         ]}
-        agentProviders={agentProviders}
         currentPage={
           projectRoute.view === 'conversations' ? '会话' : '项目详情'
         }
@@ -140,7 +130,6 @@ function StandardRootLayout({ currentPath }: { readonly currentPath: string }) {
   if (machineRoute?.machineId !== undefined) {
     return (
       <MachineShellLayout
-        agentProviders={agentProviders}
         currentPath={currentPath}
         inboxAttentionCount={inboxAttentionCount}
         machineId={machineRoute.machineId}
@@ -155,7 +144,6 @@ function StandardRootLayout({ currentPath }: { readonly currentPath: string }) {
           { label: '机器', to: '/machines' },
           { label: '机器详情' },
         ]}
-        agentProviders={agentProviders}
         currentPage="机器详情"
         currentPath={currentPath}
         inboxAttentionCount={inboxAttentionCount}
@@ -168,7 +156,6 @@ function StandardRootLayout({ currentPath }: { readonly currentPath: string }) {
   if (conversationRoute?.conversationId !== undefined) {
     return (
       <LiveConversationShellLayout
-        agentProviders={agentProviders}
         connectionState={connectionState}
         conversationId={conversationRoute.conversationId}
         currentPath={currentPath}
@@ -185,7 +172,6 @@ function StandardRootLayout({ currentPath }: { readonly currentPath: string }) {
     return (
       <AppShell
         breadcrumbs={[{ label: '演示数据' }, { label: fixtureTitle }]}
-        agentProviders={agentProviders}
         currentPage={fixtureTitle}
         currentPath={currentPath}
         inboxAttentionCount={inboxAttentionCount}
@@ -200,7 +186,6 @@ function StandardRootLayout({ currentPath }: { readonly currentPath: string }) {
   return (
     <AppShell
       breadcrumbs={[{ label: currentPage }]}
-      agentProviders={agentProviders}
       currentPage={currentPage}
       currentPath={currentPath}
       inboxAttentionCount={inboxAttentionCount}
@@ -211,14 +196,12 @@ function StandardRootLayout({ currentPath }: { readonly currentPath: string }) {
 }
 
 interface MachineShellLayoutProps {
-  agentProviders: readonly ProviderPresentation[]
   currentPath: string
   inboxAttentionCount: number
   machineId: MachineId
 }
 
 function MachineShellLayout({
-  agentProviders,
   currentPath,
   inboxAttentionCount,
   machineId,
@@ -234,7 +217,6 @@ function MachineShellLayout({
   return (
     <AppShell
       breadcrumbs={[{ label: '机器', to: '/machines' }, { label: machineName }]}
-      agentProviders={agentProviders}
       currentPage={machineName}
       currentPath={currentPath}
       inboxAttentionCount={inboxAttentionCount}
@@ -245,7 +227,6 @@ function MachineShellLayout({
 }
 
 interface ProjectShellLayoutProps {
-  agentProviders: readonly ProviderPresentation[]
   currentPath: string
   inboxAttentionCount: number
   projectId: ProjectId
@@ -253,7 +234,6 @@ interface ProjectShellLayoutProps {
 }
 
 function ProjectShellLayout({
-  agentProviders,
   currentPath,
   inboxAttentionCount,
   projectId,
@@ -285,7 +265,6 @@ function ProjectShellLayout({
   return (
     <AppShell
       breadcrumbs={breadcrumbs}
-      agentProviders={agentProviders}
       currentPage={view === 'conversations' ? '会话' : projectName}
       currentPath={currentPath}
       currentProject={project}
@@ -297,7 +276,6 @@ function ProjectShellLayout({
 }
 
 interface LiveConversationShellLayoutProps {
-  agentProviders: readonly ProviderPresentation[]
   connectionState: ReturnType<typeof useHostConnectionState>
   conversationId: ConversationId
   currentPath: string
@@ -305,7 +283,6 @@ interface LiveConversationShellLayoutProps {
 }
 
 function LiveConversationShellLayout({
-  agentProviders,
   connectionState,
   conversationId,
   currentPath,
@@ -321,7 +298,6 @@ function LiveConversationShellLayout({
   if (conversation !== undefined) {
     return (
       <ResolvedConversationShellLayout
-        agentProviders={agentProviders}
         conversationTitle={conversation.title}
         currentPath={currentPath}
         inboxAttentionCount={inboxAttentionCount}
@@ -333,7 +309,6 @@ function LiveConversationShellLayout({
   return (
     <AppShell
       breadcrumbs={[{ label: '会话' }]}
-      agentProviders={agentProviders}
       currentPage="会话"
       currentPath={currentPath}
       inboxAttentionCount={inboxAttentionCount}
@@ -344,7 +319,6 @@ function LiveConversationShellLayout({
 }
 
 interface ResolvedConversationShellLayoutProps {
-  agentProviders: readonly ProviderPresentation[]
   conversationTitle: string
   currentPath: string
   inboxAttentionCount: number
@@ -352,7 +326,6 @@ interface ResolvedConversationShellLayoutProps {
 }
 
 function ResolvedConversationShellLayout({
-  agentProviders,
   conversationTitle,
   currentPath,
   inboxAttentionCount,
@@ -376,7 +349,6 @@ function ResolvedConversationShellLayout({
         },
         { label: conversationTitle },
       ]}
-      agentProviders={agentProviders}
       currentPage={conversationTitle}
       currentPath={currentPath}
       currentProject={project}

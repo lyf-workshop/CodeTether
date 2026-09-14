@@ -71,7 +71,6 @@ function LiveDuration({
 
   useEffect(() => {
     if (!running || conversation.durationStartedAt === undefined) return
-    setNow(Date.now())
     const timer = window.setInterval(() => setNow(Date.now()), 1000)
     return () => window.clearInterval(timer)
   }, [conversation.durationStartedAt, running])

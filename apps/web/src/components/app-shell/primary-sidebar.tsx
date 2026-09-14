@@ -8,12 +8,7 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-  cn,
-} from '@codetether/ui'
+import { Tooltip, TooltipContent, TooltipTrigger, cn } from '@codetether/ui'
 
 import { formatInboxAttentionBadge } from '../inbox/inbox-model'
 

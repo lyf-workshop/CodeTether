@@ -19,7 +19,10 @@ test('Primary Sidebar presents only the real Machines route', async () => {
   assert.match(source, /to: '\/machines'/u)
   assert.doesNotMatch(source, /agentDefinitions/u)
   assert.doesNotMatch(source, /agentProviders/u)
-  assert.doesNotMatch(source, /sidebar-current-project-heading|sidebar-agents-heading/u)
+  assert.doesNotMatch(
+    source,
+    /sidebar-current-project-heading|sidebar-agents-heading/u,
+  )
   assert.match(source, /label: '项目'/u)
   assert.match(source, /label: '电脑'/u)
   assert.match(source, /label: '收件箱'/u)

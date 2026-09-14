@@ -204,7 +204,7 @@ function MachineRow({
                 Agent 信息暂时不可用
               </span>
             ) : providers.length === 0 ? (
-                <span className="text-xs text-text-muted">未检测到 Agent</span>
+              <span className="text-xs text-text-muted">未检测到 Agent</span>
             ) : (
               providers.map((provider) => (
                 <span

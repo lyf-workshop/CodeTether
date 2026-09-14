@@ -216,7 +216,10 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
         </div>
       </header>
 
-      <div className="mt-5 flex min-w-0 flex-wrap items-center gap-2" aria-label="电脑操作">
+      <div
+        className="mt-5 flex min-w-0 flex-wrap items-center gap-2"
+        aria-label="电脑操作"
+      >
         <AddProjectDialog
           deferPreviousConversations
           trigger={
@@ -242,7 +245,9 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
 
       <div className="mt-6 grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_20rem]">
         <section className="min-w-0 rounded-lg border border-border bg-surface/65 p-5">
-          <h2 className="text-section font-semibold text-text-primary">电脑概览</h2>
+          <h2 className="text-section font-semibold text-text-primary">
+            电脑概览
+          </h2>
           <Separator className="my-5" />
           <dl className="grid min-w-0 gap-x-6 gap-y-5 sm:grid-cols-2">
             <MachineMetadata label="电脑名称" value={machine.displayName} />
@@ -552,7 +557,10 @@ function RemoteMachineDetail({
         </Button>
       </header>
 
-      <div className="mt-5 flex min-w-0 flex-wrap items-center gap-2" aria-label="电脑操作">
+      <div
+        className="mt-5 flex min-w-0 flex-wrap items-center gap-2"
+        aria-label="电脑操作"
+      >
         <AddProjectLocationDialog
           createNewProject
           deferPreviousConversations
@@ -599,15 +607,15 @@ function RemoteMachineDetail({
           </Link>
         </Button>
         <Button asChild variant="secondary" size="sm">
-          <a href="#remote-machine-providers-heading">
-            查看 Agent
-          </a>
+          <a href="#remote-machine-providers-heading">查看 Agent</a>
         </Button>
       </div>
 
       <div className="mt-6 grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_20rem]">
         <section className="min-w-0 rounded-lg border border-border bg-surface/65 p-5">
-          <h2 className="text-section font-semibold text-text-primary">电脑概览</h2>
+          <h2 className="text-section font-semibold text-text-primary">
+            电脑概览
+          </h2>
           <Separator className="my-5" />
           <dl className="grid min-w-0 gap-x-6 gap-y-5 sm:grid-cols-2">
             <MachineMetadata label="电脑名称" value={machine.displayName} />
@@ -731,7 +739,7 @@ function RemoteMachineDetail({
           当前能力
         </h2>
         <p className="mt-2 max-w-3xl text-sm leading-relaxed text-text-secondary">
-            可以在这台电脑上注册和查看项目位置。位置注册本身不会授予执行权限。
+          可以在这台电脑上注册和查看项目位置。位置注册本身不会授予执行权限。
           {machine.capabilities.providerExecution
             ? '当前仅启用上方已通过本次连接验证的智能体能力；未声明的写入、Shell、审批、中断和模型选择保持关闭。'
             : '当前连接或 Agent 尚未满足远程执行条件。'}

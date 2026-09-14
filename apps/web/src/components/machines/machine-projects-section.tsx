@@ -30,10 +30,10 @@ export function MachineProjectsSection({
             id="machine-projects-heading"
             className="text-section font-semibold text-text-primary"
           >
-            项目
+            这台电脑上的项目
           </h2>
           <p className="mt-0.5 text-sm text-text-secondary">
-            注册在这台机器上的工作区位置。
+            注册在这台电脑上的项目位置。
           </p>
         </div>
         <span className="shrink-0 text-xs text-text-muted">
@@ -42,7 +42,7 @@ export function MachineProjectsSection({
       </div>
       <Separator className="my-4" />
       {projects.length === 0 ? (
-        <p className="text-sm text-text-muted">这台机器上还没有项目位置。</p>
+        <p className="text-sm text-text-muted">这台电脑上还没有项目。</p>
       ) : (
         <ul className="grid min-w-0 gap-3 lg:grid-cols-2">
           {projects.map((project) => {

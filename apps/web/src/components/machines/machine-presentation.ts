@@ -61,6 +61,43 @@ export function machineConnectionStateLabel(
   }
 }
 
+/** Product-facing connection copy; the protocol state remains unchanged. */
+export function machineConnectionStatusLabel(
+  state: MachineConnectionState,
+): string {
+  switch (state) {
+    case 'local':
+    case 'online':
+      return '已连接'
+    case 'connecting':
+      return '正在连接'
+    case 'offline':
+      return '离线'
+    case 'recovery_required':
+      return '需要更新地址'
+    case 'authentication_failed':
+      return '连接未验证'
+    case 'incompatible':
+      return '版本不兼容'
+  }
+}
+
+export function machineConnectionTransportLabel(
+  state: MachineConnectionState,
+): string {
+  switch (state) {
+    case 'local':
+      return '本地电脑'
+    case 'online':
+    case 'connecting':
+    case 'offline':
+    case 'recovery_required':
+    case 'authentication_failed':
+    case 'incompatible':
+      return '远程电脑'
+  }
+}
+
 export function machineConnectionBadgeVariant(
   state: MachineConnectionState,
 ): MachineConnectionBadgeVariant {

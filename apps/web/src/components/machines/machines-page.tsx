@@ -61,9 +61,9 @@ export function MachinesPage() {
     <div className="flex min-h-full min-w-0 flex-col px-[var(--layout-content-inline-padding)] py-[var(--layout-content-block-padding)]">
       <header className="flex min-w-0 flex-wrap items-start justify-between gap-4">
         <div className="min-w-0">
-          <h1 className="text-page font-semibold text-text-primary">机器</h1>
+          <h1 className="text-page font-semibold text-text-primary">电脑</h1>
           <p className="mt-0.5 text-sm text-text-secondary">
-            查看 CodeTether 信任的本地和远程执行位置。
+            查看 CodeTether 信任的本地和远程电脑。
           </p>
         </div>
         <AddRemoteMachineDialog
@@ -74,7 +74,7 @@ export function MachinesPage() {
               className="w-full sm:w-auto"
             >
               <Plus aria-hidden="true" />
-              添加机器
+              添加电脑
             </Button>
           }
         />
@@ -100,10 +100,10 @@ export function MachinesPage() {
                   id="machine-list-heading"
                   className="text-sm font-medium text-text-primary"
                 >
-                  已注册位置
+                  已连接的电脑
                 </h2>
                 <p className="mt-0.5 text-xs text-text-muted">
-                  共 {machines.length} 台机器
+                  共 {machines.length} 台电脑
                 </p>
               </div>
               {connectionState === 'reconnecting' ? (
@@ -195,16 +195,16 @@ function MachineRow({
         {machine.kind === 'local' ? (
           <div
             className="mt-4 flex min-w-0 flex-wrap items-center gap-2"
-            aria-label="此机器上的智能体"
+            aria-label="这台电脑上的 Agent"
           >
             {detailPending ? (
-              <span className="text-xs text-text-muted">正在读取智能体…</span>
+              <span className="text-xs text-text-muted">正在读取 Agent…</span>
             ) : detailError || detail === undefined ? (
               <span className="text-xs text-text-muted">
-                智能体信息暂时不可用
+                Agent 信息暂时不可用
               </span>
             ) : providers.length === 0 ? (
-              <span className="text-xs text-text-muted">未检测到智能体</span>
+                <span className="text-xs text-text-muted">未检测到 Agent</span>
             ) : (
               providers.map((provider) => (
                 <span
@@ -226,25 +226,25 @@ function MachineRow({
           </div>
         ) : detailPending ? (
           <p className="mt-4 truncate text-xs text-text-muted">
-            正在读取智能体…
+            正在读取 Agent…
           </p>
         ) : detailError || detail === undefined ? (
           <p className="mt-4 truncate text-xs text-text-muted">
-            智能体信息暂时不可用
+            Agent 信息暂时不可用
           </p>
         ) : detail.providerDiscovery?.state === 'not_observed' ||
           detail.providerDiscovery === undefined ? (
           <p className="mt-4 truncate text-xs text-text-muted">
-            尚未检测智能体
+            尚未检测 Agent
           </p>
         ) : (
           <div className="mt-4 min-w-0 text-xs text-text-muted">
-            <p className="truncate" aria-label="此远程机器上检测到的智能体">
+            <p className="truncate" aria-label="这台远程电脑上检测到的 Agent">
               {detail.providerDiscovery.state === 'last_known'
                 ? '上次检测 · '
                 : ''}
               {installedProviders.length === 0
-                ? '未检测到已安装智能体'
+                ? '未检测到已安装 Agent'
                 : installedProviders
                     .map((provider) => provider.displayName)
                     .join(' · ')}
@@ -263,7 +263,7 @@ function MachineRow({
           to="/machines/$machineId"
           params={{ machineId: machine.machineId }}
         >
-          打开机器
+          打开电脑
           <ArrowUpRight aria-hidden="true" />
         </Link>
       </Button>

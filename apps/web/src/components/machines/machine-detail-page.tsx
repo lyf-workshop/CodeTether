@@ -61,6 +61,8 @@ import {
   machineArchitectureLabel,
   formatMachineLastSeen,
   machineConnectionBadgeVariant,
+  machineConnectionStatusLabel,
+  machineConnectionTransportLabel,
   machineConnectionStateLabel,
   machinePlatformLabel,
   remoteMachineAddressLabel,
@@ -179,7 +181,7 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
         className="mb-4 inline-flex w-fit items-center gap-1.5 rounded-xs text-sm font-medium text-text-secondary outline-none transition-colors hover:text-text-primary focus-visible:ring-2 focus-visible:ring-ring/60 motion-reduce:transition-none"
       >
         <ArrowLeft aria-hidden="true" className="size-4" />
-        返回机器
+        返回电脑
       </Link>
 
       <header className="flex min-w-0 flex-wrap items-start gap-4">
@@ -197,26 +199,28 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
             >
               {machine.displayName}
             </h1>
-            {machine.isLocal ? <Badge variant="secondary">本地</Badge> : null}
+            <Badge variant="secondary">
+              {machineConnectionTransportLabel(machine.connectionState)}
+            </Badge>
             <Badge variant={available ? 'success' : 'danger'}>
-              {machineConnectionStateLabel(machine.connectionState)}
+              {machineConnectionStatusLabel(machine.connectionState)}
             </Badge>
           </div>
           <p className="mt-1 text-sm text-text-secondary">
-            智能体在这台机器上访问项目并执行会话。
+            在这台电脑上运行项目中的 Agent 会话。
           </p>
         </div>
       </header>
 
       <div className="mt-6 grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_20rem]">
         <section className="min-w-0 rounded-lg border border-border bg-surface/65 p-5">
-          <h2 className="text-section font-semibold text-text-primary">概览</h2>
+          <h2 className="text-section font-semibold text-text-primary">电脑概览</h2>
           <Separator className="my-5" />
           <dl className="grid min-w-0 gap-x-6 gap-y-5 sm:grid-cols-2">
-            <MachineMetadata label="机器名称" value={machine.displayName} />
+            <MachineMetadata label="电脑名称" value={machine.displayName} />
             <MachineMetadata
               label="类型"
-              value={machine.isLocal ? '本地电脑' : machine.kind}
+              value={machine.isLocal ? '本地电脑' : '远程电脑'}
             />
             <MachineMetadata
               label="平台"
@@ -240,7 +244,7 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
                 id="local-machine-providers-heading"
                 className="text-section font-semibold text-text-primary"
               >
-                智能体
+                Agent
               </h2>
               <p className="mt-0.5 text-sm text-text-secondary">
                 安装、运行时兼容性、推理后端与最近执行健康彼此独立。
@@ -262,7 +266,7 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
               title={
                 localProviderRefreshAvailable
                   ? undefined
-                  : 'CodeTether Host 连接恢复后才能重新检测智能体'
+                  : 'CodeTether Host 连接恢复后才能刷新 Agent 信息'
               }
               onClick={() => {
                 rememberLocalProviderRefreshFocus()
@@ -278,11 +282,11 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
               />
               {localProviderRefreshMutation.isPending
                 ? '正在检测…'
-                : '重新检测智能体'}
+                : '刷新 Agent 信息'}
             </Button>
             {localProviderRefreshAvailable ? null : (
               <span id="local-provider-refresh-unavailable" className="sr-only">
-                CodeTether Host 连接恢复后才能重新检测智能体。
+                CodeTether Host 连接恢复后才能刷新 Agent 信息。
               </span>
             )}
           </div>
@@ -366,7 +370,7 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
               最近会话
             </h2>
             <p className="mt-0.5 text-sm text-text-secondary">
-              在这台机器上执行的最近会话。
+              在这台电脑上执行的最近会话。
             </p>
           </div>
           <span className="text-xs text-text-muted">
@@ -375,7 +379,7 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
         </div>
         <Separator className="my-4" />
         {conversations.length === 0 ? (
-          <p className="text-sm text-text-muted">这台机器上还没有会话。</p>
+          <p className="text-sm text-text-muted">这台电脑上还没有会话。</p>
         ) : (
           <ul className="space-y-3">
             {conversations.map((conversation) => {
@@ -473,7 +477,7 @@ function RemoteMachineDetail({
         className="mb-4 inline-flex w-fit items-center gap-1.5 rounded-xs text-sm font-medium text-text-secondary outline-none transition-colors hover:text-text-primary focus-visible:ring-2 focus-visible:ring-ring/60 motion-reduce:transition-none"
       >
         <ArrowLeft aria-hidden="true" className="size-4" />
-        返回机器
+        返回电脑
       </Link>
 
       <header className="flex min-w-0 flex-wrap items-start gap-4">
@@ -491,15 +495,15 @@ function RemoteMachineDetail({
             >
               {machine.displayName}
             </h1>
-            <Badge variant="secondary">远程</Badge>
+            <Badge variant="secondary">远程电脑</Badge>
             <Badge
               variant={machineConnectionBadgeVariant(machine.connectionState)}
             >
-              {machineConnectionStateLabel(machine.connectionState)}
+              {machineConnectionStatusLabel(machine.connectionState)}
             </Badge>
           </div>
           <p className="mt-1 text-sm text-text-secondary">
-            已与此 CodeTether Node 建立长期信任关系。
+            已连接到这台电脑，可使用其上安装的 Agent 和项目。
           </p>
         </div>
         <Button
@@ -509,7 +513,7 @@ function RemoteMachineDetail({
           disabled={projects.length > 0}
           title={
             projects.length > 0
-              ? '请先在项目详情中移除此机器上的工作区位置'
+              ? '请先在项目详情中移除这台电脑上的项目位置'
               : undefined
           }
           onClick={onUnpair}
@@ -521,11 +525,11 @@ function RemoteMachineDetail({
 
       <div className="mt-6 grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_20rem]">
         <section className="min-w-0 rounded-lg border border-border bg-surface/65 p-5">
-          <h2 className="text-section font-semibold text-text-primary">概览</h2>
+          <h2 className="text-section font-semibold text-text-primary">电脑概览</h2>
           <Separator className="my-5" />
           <dl className="grid min-w-0 gap-x-6 gap-y-5 sm:grid-cols-2">
-            <MachineMetadata label="机器名称" value={machine.displayName} />
-            <MachineMetadata label="类型" value="远程机器" />
+            <MachineMetadata label="电脑名称" value={machine.displayName} />
+            <MachineMetadata label="类型" value="远程电脑" />
             <MachineMetadata
               label="平台"
               value={machinePlatformLabel(machine.platform)}
@@ -539,7 +543,7 @@ function RemoteMachineDetail({
 
         <section className="min-w-0 rounded-lg border border-border bg-surface/65 p-5">
           <h2 className="text-section font-semibold text-text-primary">
-            Machine 连接
+            电脑连接
           </h2>
           <Separator className="my-4" />
           <div className="flex min-w-0 items-start gap-3">
@@ -645,10 +649,10 @@ function RemoteMachineDetail({
           当前能力
         </h2>
         <p className="mt-2 max-w-3xl text-sm leading-relaxed text-text-secondary">
-          可以在这台机器上注册和查看项目工作区位置。位置注册本身不会授予执行权限。
+            可以在这台电脑上注册和查看项目位置。位置注册本身不会授予执行权限。
           {machine.capabilities.providerExecution
             ? '当前仅启用上方已通过本次连接验证的智能体能力；未声明的写入、Shell、审批、中断和模型选择保持关闭。'
-            : '当前连接或智能体尚未满足远程执行条件。'}
+            : '当前连接或 Agent 尚未满足远程执行条件。'}
         </p>
       </section>
 
@@ -656,7 +660,7 @@ function RemoteMachineDetail({
 
       {projects.length > 0 ? (
         <p role="status" className="mt-3 text-xs text-text-muted">
-          这台机器仍有 {projects.length}{' '}
+          这台电脑仍有 {projects.length}{' '}
           个项目位置。请先在对应的项目详情中明确移除这些位置，再单独取消配对。
         </p>
       ) : null}
@@ -734,7 +738,7 @@ function RemoteMachineProvidersSection({
             id="remote-machine-providers-heading"
             className="text-section font-semibold text-text-primary"
           >
-            智能体
+            Agent
           </h2>
           <p className="mt-0.5 text-sm text-text-secondary">
             由受信任的 CodeTether Node 有界检测安装、兼容性与后端状态。
@@ -748,7 +752,7 @@ function RemoteMachineProvidersSection({
           aria-describedby={
             canRefresh ? undefined : 'remote-provider-refresh-unavailable'
           }
-          title={canRefresh ? undefined : '远程机器在线后才能重新检测智能体'}
+          title={canRefresh ? undefined : '远程电脑在线后才能刷新 Agent 信息'}
           onClick={() => {
             rememberProviderRefreshFocus()
             onRefresh()
@@ -760,11 +764,11 @@ function RemoteMachineProvidersSection({
               refreshPending && 'animate-spin motion-reduce:animate-none',
             )}
           />
-          {refreshPending ? '正在检测…' : '重新检测智能体'}
+          {refreshPending ? '正在检测…' : '刷新 Agent 信息'}
         </Button>
         {canRefresh ? null : (
           <span id="remote-provider-refresh-unavailable" className="sr-only">
-            远程机器在线后才能重新检测智能体。
+            远程电脑在线后才能刷新 Agent 信息。
           </span>
         )}
       </div>
@@ -772,7 +776,7 @@ function RemoteMachineProvidersSection({
 
       {discovery === undefined || discovery.state === 'not_observed' ? (
         <p className="text-sm text-text-muted">
-          尚未从这台机器检测智能体。远程会话执行仍未启用。
+          尚未从这台电脑检测 Agent。远程会话执行仍未启用。
         </p>
       ) : (
         <>
@@ -1104,13 +1108,13 @@ function MachineNotFound() {
       <section className="grid min-h-64 place-items-center rounded-lg border border-border bg-surface/45 px-6 py-10 text-center">
         <div className="max-w-md">
           <h1 className="text-section font-semibold text-text-primary">
-            机器不存在
+            电脑不存在
           </h1>
           <p className="mt-1.5 text-sm text-text-secondary">
-            该机器记录不存在，或链接中的机器标识无效。
+            该电脑记录不存在，或链接中的电脑标识无效。
           </p>
           <Button asChild variant="secondary" className="mt-5">
-            <Link to="/machines">返回机器列表</Link>
+            <Link to="/machines">返回电脑列表</Link>
           </Button>
         </div>
       </section>

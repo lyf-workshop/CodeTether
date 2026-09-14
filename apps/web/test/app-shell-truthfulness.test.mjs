@@ -8,10 +8,10 @@ const componentDirectory = new URL(
 )
 
 test('Primary Sidebar presents only the real Machines route', async () => {
-  const source = await readFile(
-    new URL('primary-sidebar.tsx', componentDirectory),
-    'utf8',
-  )
+  const [source, rootLayout] = await Promise.all([
+    readFile(new URL('primary-sidebar.tsx', componentDirectory), 'utf8'),
+    readFile(new URL('root-layout.tsx', componentDirectory), 'utf8'),
+  ])
 
   assert.doesNotMatch(source, /machinePresences|showMockMachines/u)
   assert.doesNotMatch(source, /MacBook Pro|开发服务器|树莓派设备/u)
@@ -28,6 +28,9 @@ test('Primary Sidebar presents only the real Machines route', async () => {
   assert.match(source, /label: '收件箱'/u)
   assert.match(source, /label: '设置'/u)
   assert.doesNotMatch(source, /即将支持/u)
+  assert.match(rootLayout, /'\/machines': '电脑'/u)
+  assert.match(rootLayout, /label: '电脑', to: '\/machines'/u)
+  assert.doesNotMatch(rootLayout, /label: '机器', to: '\/machines'/u)
 })
 
 test('Top Bar only renders optional product controls with real handlers', async () => {

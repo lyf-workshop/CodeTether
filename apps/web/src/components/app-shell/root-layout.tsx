@@ -29,7 +29,7 @@ const pageTitles = {
   '/agents': '智能体',
   '/doctor': 'CodeTether 检查',
   '/inbox': '收件箱',
-  '/machines': '机器',
+  '/machines': '电脑',
   '/projects': '项目',
   '/settings': '设置',
 } as const
@@ -141,10 +141,10 @@ function StandardRootLayout({ currentPath }: { readonly currentPath: string }) {
     return (
       <AppShell
         breadcrumbs={[
-          { label: '机器', to: '/machines' },
-          { label: '机器详情' },
+          { label: '电脑', to: '/machines' },
+          { label: '电脑详情' },
         ]}
-        currentPage="机器详情"
+        currentPage="电脑详情"
         currentPath={currentPath}
         inboxAttentionCount={inboxAttentionCount}
       >
@@ -212,11 +212,11 @@ function MachineShellLayout({
     ...machineDetailQueryOptions(runtime, machineId),
     enabled: connectionState === 'connected',
   })
-  const machineName = machineQuery.data?.machine.displayName ?? '机器'
+  const machineName = machineQuery.data?.machine.displayName ?? '电脑'
 
   return (
     <AppShell
-      breadcrumbs={[{ label: '机器', to: '/machines' }, { label: machineName }]}
+      breadcrumbs={[{ label: '电脑', to: '/machines' }, { label: machineName }]}
       currentPage={machineName}
       currentPath={currentPath}
       inboxAttentionCount={inboxAttentionCount}

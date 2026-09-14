@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 
 import {
@@ -140,6 +141,20 @@ test('Inbox model retains the Host summary instead of deriving it from rows', ()
   assert.strictEqual(model.summary, summary)
   assert.deepEqual(model.items, [failed])
   assert.equal(model.showsLimitNotice, true)
+})
+
+test('Inbox summary cards use the approved open-attention labels', async () => {
+  const source = await readFile(
+    new URL('../src/components/inbox/inbox-summary.tsx', import.meta.url),
+    'utf8',
+  )
+
+  assert.match(source, /label: '待处理'/u)
+  assert.match(source, /label: '需要审批'/u)
+  assert.match(source, /label: '完成待查看'/u)
+  assert.match(source, /label: '失败待处理'/u)
+  assert.match(source, /本轮工作失败，等待确认/u)
+  assert.doesNotMatch(source, /Turn 失败/u)
 })
 
 test('limit notice compares the global open total with the returned page', () => {

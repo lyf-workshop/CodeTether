@@ -192,7 +192,7 @@ export function createLiveConversationViewModel(
   bootstrap?: Bootstrap,
   connectionState: HostConnectionState = 'unavailable',
   projectRootPath?: string,
-  machineName = '机器',
+  machineName = '电脑',
   machineProviderDescriptors?: readonly ProviderDescriptor[],
   composerDisabled?: ComposerDisabledPresentation,
   nativeHistory?: LiveConversationMachineContext['nativeHistory'],

@@ -57,10 +57,10 @@ export function InboxSummary({
       value: summary.completedReviewOpen,
     },
     {
-      caption: 'Turn 失败，等待确认',
+      caption: '本轮工作失败，等待确认',
       filter: 'failed',
       icon: TriangleAlert,
-      label: '失败',
+      label: '失败待处理',
       tone: 'bg-danger-muted text-danger',
       value: summary.failedOpen,
     },

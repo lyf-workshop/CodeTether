@@ -231,7 +231,6 @@ export function AddRemoteMachineDialog({
       >
         {pairedMachineId !== undefined ? (
           <PairingSuccessStep
-            machineId={pairedMachineId}
             onClose={() => {
               resetState()
               setPairedMachineId(undefined)
@@ -495,12 +494,10 @@ export function AddRemoteMachineDialog({
 }
 
 function PairingSuccessStep({
-  machineId: _machineId,
   onClose,
   onOpenProject,
   onViewComputer,
 }: {
-  machineId: MachineId
   onClose: () => void
   onOpenProject: () => void
   onViewComputer: () => void

@@ -251,6 +251,13 @@ export function createLiveConversationViewModel(
       model.currentTurn?.startedAt,
       model.currentTurn?.completedAt ?? model.updatedAt,
     ),
+    ...(model.currentTurn?.startedAt === undefined
+      ? {}
+      : { durationStartedAt: model.currentTurn.startedAt }),
+    ...(model.currentTurn?.completedAt === undefined
+      ? {}
+      : { durationCompletedAt: model.currentTurn.completedAt }),
+    durationRunning: model.currentTurn?.status === 'running',
     ...(projectRootPath === undefined ? {} : { projectRootPath }),
     timeline: {
       dayLabel: formatDayLabel(

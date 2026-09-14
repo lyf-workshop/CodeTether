@@ -176,6 +176,9 @@ export interface ConversationViewModel {
   readonly machine: string
   readonly branch: string
   readonly duration: string
+  readonly durationStartedAt?: string
+  readonly durationCompletedAt?: string
+  readonly durationRunning?: boolean
   /** Presentation-only workspace context; never mutates durable message text. */
   readonly projectRootPath?: string
   readonly timeline: ConversationTimelineViewModel

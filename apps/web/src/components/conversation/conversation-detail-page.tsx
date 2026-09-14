@@ -1,6 +1,13 @@
-import { useRef, useState, type Ref } from 'react'
+import { useEffect, useRef, useState, type Ref } from 'react'
+import { PanelRightOpen } from 'lucide-react'
 
-import { Dialog, DialogContent, DialogTitle } from '@codetether/ui'
+import {
+  Dialog,
+  DialogContent,
+  DialogTitle,
+  IconButton,
+  cn,
+} from '@codetether/ui'
 import type { MachineId, ProjectId, TurnId } from '@codetether/protocol'
 import type { ConversationSummary } from '@codetether/protocol'
 
@@ -47,7 +54,7 @@ export function ConversationDetailPage({
   connectionIndicator,
   executionBoundary,
   projectBoundary,
-  initialInspectorTab = 'overview',
+  initialInspectorTab = 'files',
   machineId,
   controls,
   newConversationButtonRef,
@@ -60,8 +67,11 @@ export function ConversationDetailPage({
   const [inspector, setInspector] = useState(() =>
     createConversationInspectorState(
       initialInspectorTab,
-      initialInspectorTab !== 'overview' && usesInspectorDialogLayout(),
+      initialInspectorTab !== 'files' && usesInspectorDialogLayout(),
     ),
+  )
+  const [inspectorCollapsed, setInspectorCollapsed] = useState(
+    readInspectorCollapsedPreference,
   )
   const [selectedChangeId, setSelectedChangeId] = useState<string | undefined>(
     undefined,
@@ -69,6 +79,17 @@ export function ConversationDetailPage({
   const [changeNavigationRequest, setChangeNavigationRequest] = useState(0)
   const inspectorTriggerRef = useRef<HTMLButtonElement>(null)
   const pendingChangeNavigationRef = useRef<string | undefined>(undefined)
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        'codetether.conversation-inspector-collapsed',
+        inspectorCollapsed ? '1' : '0',
+      )
+    } catch {
+      // Storage is optional in embedded and private browser contexts.
+    }
+  }, [inspectorCollapsed])
 
   const commitChangeNavigation = (changeId: string) => {
     setSelectedChangeId(changeId)
@@ -103,7 +124,14 @@ export function ConversationDetailPage({
         setInspector((current) => setConversationInspectorOpen(current, open))
       }
     >
-      <div className="grid h-full min-h-0 min-w-0 grid-cols-[var(--layout-conversation-rail-compact-width)_minmax(0,1fr)] bg-background min-[1440px]:grid-cols-[var(--layout-conversation-rail-width)_minmax(0,1fr)_var(--layout-conversation-inspector-width)]">
+      <div
+        className={cn(
+          'relative grid h-full min-h-0 min-w-0 grid-cols-[var(--layout-conversation-rail-compact-width)_minmax(0,1fr)] bg-background',
+          inspectorCollapsed
+            ? 'min-[1440px]:grid-cols-[var(--layout-conversation-rail-width)_minmax(0,1fr)]'
+            : 'min-[1440px]:grid-cols-[var(--layout-conversation-rail-width)_minmax(0,1fr)_var(--layout-conversation-inspector-width)]',
+        )}
+      >
         <ConversationRail
           groups={rail.groups}
           currentConversationId={viewModel.id}
@@ -126,20 +154,22 @@ export function ConversationDetailPage({
           connectionIndicator={connectionIndicator}
           executionBoundary={executionBoundary}
           projectBoundary={projectBoundary}
-          onOpenInspector={() =>
+          onOpenInspector={() => {
+            if (usesInspectorDialogLayout()) {
+              setInspector((current) =>
+                setConversationInspectorOpen(current, true),
+              )
+            } else {
+              setInspectorCollapsed(false)
+            }
+          }}
+          onOpenChanges={() => {
+            const opensDialog = usesInspectorDialogLayout()
+            if (!opensDialog) setInspectorCollapsed(false)
             setInspector((current) =>
-              setConversationInspectorOpen(current, true),
+              openConversationInspectorTab(current, 'changes', opensDialog),
             )
-          }
-          onOpenChanges={() =>
-            setInspector((current) =>
-              openConversationInspectorTab(
-                current,
-                'changes',
-                usesInspectorDialogLayout(),
-              ),
-            )
-          }
+          }}
           inspectorTriggerRef={inspectorTriggerRef}
           controls={controls}
           machineId={machineId}
@@ -149,9 +179,26 @@ export function ConversationDetailPage({
           projectId={projectId}
           onArchived={onArchived}
         />
-        <div className="hidden min-h-0 min-w-0 min-[1440px]:block">
-          <InspectorPanel {...inspectorProps} />
-        </div>
+        {inspectorCollapsed ? null : (
+          <div className="hidden min-h-0 min-w-0 min-[1440px]:block">
+            <InspectorPanel
+              {...inspectorProps}
+              onCollapse={() => setInspectorCollapsed(true)}
+            />
+          </div>
+        )}
+        {inspectorCollapsed ? (
+          <IconButton
+            type="button"
+            label="展开会话检查器"
+            variant="ghost"
+            size="sm"
+            className="absolute right-3 top-3 z-10 hidden size-8 bg-surface-muted/80 text-text-secondary shadow-sm min-[1440px]:inline-flex"
+            onClick={() => setInspectorCollapsed(false)}
+          >
+            <PanelRightOpen aria-hidden="true" />
+          </IconButton>
+        ) : null}
       </div>
 
       <DialogContent
@@ -182,6 +229,19 @@ export function ConversationDetailPage({
       </DialogContent>
     </Dialog>
   )
+}
+
+function readInspectorCollapsedPreference(): boolean {
+  if (typeof window === 'undefined') return false
+  try {
+    return (
+      window.localStorage.getItem(
+        'codetether.conversation-inspector-collapsed',
+      ) === '1'
+    )
+  } catch {
+    return false
+  }
 }
 
 function usesInspectorDialogLayout(): boolean {

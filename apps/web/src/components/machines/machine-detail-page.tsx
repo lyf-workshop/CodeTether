@@ -6,11 +6,13 @@ import {
   type RefObject,
 } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { Link, useParams } from '@tanstack/react-router'
+import { Link, useNavigate, useParams } from '@tanstack/react-router'
 import {
   ArrowLeft,
+  FolderOpen,
   MapPin,
   Monitor,
+  Plus,
   RefreshCw,
   Server,
   ShieldCheck,
@@ -69,6 +71,8 @@ import {
 } from './machine-presentation'
 import { UnpairMachineDialog } from './unpair-machine-dialog'
 import { UpdateMachineAddressDialog } from './update-machine-address-dialog'
+import { AddProjectDialog } from '../projects/add-project-dialog'
+import { AddProjectLocationDialog } from '../projects/add-project-location-dialog'
 
 export function MachineDetailRoute() {
   const { machineId: rawMachineId } = useParams({
@@ -211,6 +215,30 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
           </p>
         </div>
       </header>
+
+      <div className="mt-5 flex min-w-0 flex-wrap items-center gap-2" aria-label="电脑操作">
+        <AddProjectDialog
+          deferPreviousConversations
+          trigger={
+            <Button size="sm">
+              <Plus aria-hidden="true" />
+              添加项目
+            </Button>
+          }
+        />
+        <Button asChild variant="secondary" size="sm">
+          <Link to="/projects">
+            <FolderOpen aria-hidden="true" />
+            打开项目
+          </Link>
+        </Button>
+        <Button asChild variant="secondary" size="sm">
+          <Link to="/doctor">
+            <ShieldCheck aria-hidden="true" />
+            检查状态
+          </Link>
+        </Button>
+      </div>
 
       <div className="mt-6 grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_20rem]">
         <section className="min-w-0 rounded-lg border border-border bg-surface/65 p-5">
@@ -454,6 +482,7 @@ function RemoteMachineDetail({
   onUnpairOpenChange,
   unpairOpen,
 }: RemoteMachineDetailProps) {
+  const navigate = useNavigate()
   const runtime = useHostRuntime()
   const [addressOpen, setAddressOpen] = useState(false)
   const directState = connection.directState ?? connection.state
@@ -522,6 +551,59 @@ function RemoteMachineDetail({
           取消配对
         </Button>
       </header>
+
+      <div className="mt-5 flex min-w-0 flex-wrap items-center gap-2" aria-label="电脑操作">
+        <AddProjectLocationDialog
+          createNewProject
+          deferPreviousConversations
+          machines={[machine]}
+          presentation="ordinary"
+          onProjectCreated={async (project) => {
+            await navigate({
+              to: '/projects/$projectId',
+              params: { projectId: project.projectId },
+            })
+          }}
+          trigger={
+            <Button
+              size="sm"
+              disabled={
+                machine.availability !== 'available' ||
+                machine.connectionState !== 'online' ||
+                !machine.capabilities.projectAccess
+              }
+              title={
+                machine.availability !== 'available' ||
+                machine.connectionState !== 'online'
+                  ? '电脑在线后才能添加项目'
+                  : !machine.capabilities.projectAccess
+                    ? '这台电脑暂不支持项目'
+                    : undefined
+              }
+            >
+              <Plus aria-hidden="true" />
+              添加项目
+            </Button>
+          }
+        />
+        <Button asChild variant="secondary" size="sm">
+          <Link to="/projects">
+            <FolderOpen aria-hidden="true" />
+            打开项目
+          </Link>
+        </Button>
+        <Button asChild variant="secondary" size="sm">
+          <Link to="/doctor">
+            <ShieldCheck aria-hidden="true" />
+            检查状态
+          </Link>
+        </Button>
+        <Button asChild variant="secondary" size="sm">
+          <a href="#remote-machine-providers-heading">
+            查看 Agent
+          </a>
+        </Button>
+      </div>
 
       <div className="mt-6 grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_20rem]">
         <section className="min-w-0 rounded-lg border border-border bg-surface/65 p-5">

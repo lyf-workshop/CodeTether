@@ -17,7 +17,6 @@ import {
   reviewCompletedAttention,
 } from './inbox-actions'
 import { InboxEmptyState } from './inbox-empty-state'
-import { InboxFilters } from './inbox-filters'
 import {
   InboxItem,
   type InboxItemMutationState,
@@ -49,7 +48,6 @@ export function InboxPage() {
   const mutationGuards = useRef(new Set<string>())
   const rowRefs = useRef(new Map<string, HTMLLIElement>())
   const focusedItem = useRef<InboxFocusAnchor | undefined>(undefined)
-  const filtersRef = useRef<HTMLDivElement>(null)
 
   const attentionQuery = useQuery({
     ...attentionListQueryOptions(runtime),
@@ -255,21 +253,6 @@ export function InboxPage() {
               summary={model.summary}
             />
 
-            <div
-              ref={filtersRef}
-              id="inbox-filter-controls"
-              className="mt-[var(--layout-inbox-summary-filter-gap)] flex min-h-7 min-w-0 items-center justify-between gap-4"
-            >
-              <InboxFilters
-                activeFilter={activeFilter}
-                onFilterChange={setActiveFilter}
-                summary={model.summary}
-              />
-              <p className="shrink-0 text-xs font-regular text-text-muted">
-                按处理优先级排序
-              </p>
-            </div>
-
             {model.showsLimitNotice ? (
               <p
                 className="mt-3 text-xs font-regular text-text-muted"
@@ -282,7 +265,7 @@ export function InboxPage() {
 
             <section
               aria-label="需要你处理的事项"
-              className="mt-[var(--layout-inbox-filter-list-gap)]"
+              className="mt-[var(--layout-inbox-summary-filter-gap)]"
             >
               {model.items.length > 0 ? (
                 <ol className="space-y-[var(--layout-inbox-item-gap)]">

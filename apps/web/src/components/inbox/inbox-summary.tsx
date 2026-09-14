@@ -36,7 +36,7 @@ export function InboxSummary({
       caption: '当前所有需要处理或查看的事项',
       filter: 'all',
       icon: ListTodo,
-      label: '待处理总数',
+      label: '待处理',
       tone: 'bg-primary-muted text-primary',
       value: summary.totalOpen,
     },

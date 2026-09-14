@@ -39,22 +39,16 @@ test('local Machine Detail separates Provider installation from execution health
     'function RemoteMachineDetail',
   )
 
-  assert.match(
-    localDetail,
-    /安装、运行时兼容性、推理后端与最近执行健康彼此独立/u,
-  )
+  assert.match(localDetail, /详细状态可按需查看/u)
   assert.match(localDetail, /providerExecutionHealthPresentation\(/u)
   assert.match(localDetail, /provider\.executionHealth/u)
   assert.match(localDetail, /provider\.availabilityLabel/u)
   assert.match(localDetail, /providerLifecycleForMachine\(/u)
   assert.match(localDetail, /providerLifecyclePresentation\(/u)
-  assert.match(localDetail, /安装状态/u)
-  assert.match(localDetail, /运行时/u)
-  assert.match(localDetail, /后端/u)
-  assert.match(localDetail, /执行状态/u)
-  assert.match(localDetail, /health\.stateLabel/u)
-  assert.match(localDetail, /health\.freshnessLabel/u)
+  assert.match(localDetail, /provider\.available\s*\? '可用'/u)
   assert.match(localDetail, /health=\{health\}/u)
+  assert.match(localDetail, /查看详细状态/u)
+  assert.match(localDetail, /<details/u)
   assert.match(detail, /health\.description/u)
   assert.match(detail, /health\.observedAt/u)
 })
@@ -73,7 +67,7 @@ test('Machine Provider lifecycle UI stays safe, status-readable, and refreshes t
   assert.match(detail, /label="后端"/u)
   assert.match(detail, /label="执行状态"/u)
   assert.match(detail, /另发现 .* 个安装；不会自动切换/u)
-  assert.match(detail, /aria-label=.*运行时 .*后端 .*执行状态/u)
+  assert.doesNotMatch(detail, /aria-label=.*运行时 .*后端 .*执行状态/u)
   assert.match(detail, /role="status"/u)
   assert.match(detail, /aria-busy=\{refreshPending\}/u)
   assert.match(detail, /disabled=\{!canRefresh \|\| refreshPending\}/u)

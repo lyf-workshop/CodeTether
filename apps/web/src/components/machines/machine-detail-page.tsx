@@ -280,7 +280,7 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
                 Agent
               </h2>
               <p className="mt-0.5 text-sm text-text-secondary">
-                安装、运行时兼容性、推理后端与最近执行健康彼此独立。
+                这台电脑上已检测到的 Agent。详细状态可按需查看。
               </p>
             </div>
             <Button
@@ -346,7 +346,6 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
               return (
                 <li
                   key={provider.provider}
-                  aria-label={`${provider.displayName}：安装状态 ${installationLabel}；运行时 ${lifecycle.runtime.stateLabel}，${lifecycle.runtime.freshnessLabel}；后端 ${lifecycle.backend.modeLabel}，${lifecycle.backend.readinessLabel}，${lifecycle.backend.freshnessLabel}；执行状态 ${health.stateLabel}，${health.freshnessLabel}`}
                   className="flex min-w-0 items-start gap-3 rounded-md border border-border bg-surface-muted/45 px-3 py-3"
                 >
                   <AgentBadge agent={provider.agent} variant="compact" />
@@ -362,13 +361,30 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
                         {version}
                       </p>
                     )}
-                    <MachineProviderLifecycleDetails
-                      health={health}
-                      installationLabel={installationLabel}
-                      lifecycle={lifecycle}
-                      lifecycleObserved={lifecycleGroup !== undefined}
-                      providerAvailable={provider.available}
-                    />
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <Badge
+                        variant={provider.available ? 'success' : 'danger'}
+                        className="h-6 rounded-sm px-2 text-xs"
+                      >
+                        {provider.available
+                          ? '可用'
+                          : provider.availabilityLabel}
+                      </Badge>
+                    </div>
+                    <details className="group/details mt-2">
+                      <summary className="w-fit cursor-pointer rounded-sm text-xs text-text-muted outline-none hover:text-text-primary focus-visible:ring-2 focus-visible:ring-ring">
+                        查看详细状态
+                      </summary>
+                      <div className="mt-2">
+                        <MachineProviderLifecycleDetails
+                          health={health}
+                          installationLabel={installationLabel}
+                          lifecycle={lifecycle}
+                          lifecycleObserved={lifecycleGroup !== undefined}
+                          providerAvailable={provider.available}
+                        />
+                      </div>
+                    </details>
                   </div>
                 </li>
               )
@@ -831,7 +847,7 @@ function RemoteMachineProvidersSection({
             Agent
           </h2>
           <p className="mt-0.5 text-sm text-text-secondary">
-            由受信任的 CodeTether Node 有界检测安装、兼容性与后端状态。
+            这台电脑上已检测到的 Agent。详细状态可按需查看。
           </p>
         </div>
         <Button
@@ -896,7 +912,6 @@ function RemoteMachineProvidersSection({
               return (
                 <li
                   key={provider.provider}
-                  aria-label={`${provider.displayName}：安装状态 ${installationLabel}；运行时 ${lifecycle.runtime.stateLabel}，${lifecycle.runtime.freshnessLabel}；后端 ${lifecycle.backend.modeLabel}，${lifecycle.backend.readinessLabel}，${lifecycle.backend.freshnessLabel}；执行状态 ${health.stateLabel}，${health.freshnessLabel}`}
                   className="flex min-w-0 items-start gap-3 rounded-md border border-border bg-surface-muted/45 px-3 py-3"
                 >
                   <AgentBadge agent={provider.agent} variant="compact" />
@@ -912,18 +927,35 @@ function RemoteMachineProvidersSection({
                         {version}
                       </p>
                     )}
-                    <MachineProviderLifecycleDetails
-                      health={health}
-                      installationLabel={installationLabel}
-                      lifecycle={lifecycle}
-                      lifecycleObserved={lifecycleGroup !== undefined}
-                      providerAvailable={provider.available}
-                    />
-                    {provider.available ? (
-                      <p className="mt-1 text-xs text-text-muted">
-                        {remoteProviderCapabilitySummary(provider)}
-                      </p>
-                    ) : null}
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <Badge
+                        variant={provider.available ? 'success' : 'danger'}
+                        className="h-6 rounded-sm px-2 text-xs"
+                      >
+                        {provider.available
+                          ? '可用'
+                          : provider.availabilityLabel}
+                      </Badge>
+                    </div>
+                    <details className="group/details mt-2">
+                      <summary className="w-fit cursor-pointer rounded-sm text-xs text-text-muted outline-none hover:text-text-primary focus-visible:ring-2 focus-visible:ring-ring">
+                        查看详细状态
+                      </summary>
+                      <div className="mt-2">
+                        <MachineProviderLifecycleDetails
+                          health={health}
+                          installationLabel={installationLabel}
+                          lifecycle={lifecycle}
+                          lifecycleObserved={lifecycleGroup !== undefined}
+                          providerAvailable={provider.available}
+                        />
+                        {provider.available ? (
+                          <p className="mt-1 text-xs text-text-muted">
+                            {remoteProviderCapabilitySummary(provider)}
+                          </p>
+                        ) : null}
+                      </div>
+                    </details>
                   </div>
                 </li>
               )

@@ -7,7 +7,7 @@ import {
 } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
-import { Link2, Server, ShieldCheck } from 'lucide-react'
+import { ArrowRight, Link2, Server, ShieldCheck } from 'lucide-react'
 
 import { CodeTetherResponseError } from '@codetether/client'
 import {
@@ -63,6 +63,7 @@ export function AddRemoteMachineDialog({
     RemoteMachinePairingCandidate | undefined
   >()
   const [validationError, setValidationError] = useState('')
+  const [pairedMachineId, setPairedMachineId] = useState<MachineId>()
 
   const beginMutation = useMutation({
     mutationFn: async () => {
@@ -92,10 +93,14 @@ export function AddRemoteMachineDialog({
     },
     onSuccess: async (response) => {
       const machineId = response.data.machine.machineId
+      setPairedMachineId(machineId)
+      if (onPaired !== undefined) {
+        await onPaired(machineId)
+      }
+      if (presentation === 'ordinary') return
       resetState()
       setOpen(false)
       if (onPaired !== undefined) {
-        await onPaired(machineId)
         return
       }
       await navigate({
@@ -156,6 +161,7 @@ export function AddRemoteMachineDialog({
     setPairingCode('')
     setCandidate(undefined)
     setValidationError('')
+    setPairedMachineId(undefined)
     resetMutations()
   }
 
@@ -223,7 +229,31 @@ export function AddRemoteMachineDialog({
           addressInputRef.current?.focus()
         }}
       >
-        {candidate === undefined ? (
+        {pairedMachineId !== undefined ? (
+          <PairingSuccessStep
+            machineId={pairedMachineId}
+            onClose={() => {
+              resetState()
+              setPairedMachineId(undefined)
+              setOpen(false)
+            }}
+            onOpenProject={() => {
+              resetState()
+              setPairedMachineId(undefined)
+              setOpen(false)
+              void navigate({ to: '/projects' })
+            }}
+            onViewComputer={() => {
+              resetState()
+              setPairedMachineId(undefined)
+              setOpen(false)
+              void navigate({
+                to: '/machines/$machineId',
+                params: { machineId: pairedMachineId },
+              })
+            }}
+          />
+        ) : candidate === undefined ? (
           <form
             className="min-w-0"
             data-machine-pairing-step="entry"
@@ -461,6 +491,50 @@ export function AddRemoteMachineDialog({
         )}
       </DialogContent>
     </Dialog>
+  )
+}
+
+function PairingSuccessStep({
+  machineId: _machineId,
+  onClose,
+  onOpenProject,
+  onViewComputer,
+}: {
+  machineId: MachineId
+  onClose: () => void
+  onOpenProject: () => void
+  onViewComputer: () => void
+}) {
+  return (
+    <section className="min-w-0" data-machine-pairing-step="success">
+      <DialogHeader>
+        <span
+          aria-hidden="true"
+          className="grid size-10 place-items-center rounded-md border border-success/30 bg-success-muted text-success"
+        >
+          <ShieldCheck className="size-5" />
+        </span>
+        <DialogTitle>电脑已连接</DialogTitle>
+        <DialogDescription>
+          现在可以使用这台电脑上安装的 Codex 或 Claude Code 运行项目。
+        </DialogDescription>
+      </DialogHeader>
+      <div className="mt-5 rounded-md border border-border bg-surface-muted/45 p-4 text-sm text-text-secondary">
+        配对已完成。下一步可以添加这台电脑上的项目，或打开已有项目开始会话。
+      </div>
+      <DialogFooter className="mt-6">
+        <Button variant="secondary" size="sm" onClick={onClose}>
+          完成
+        </Button>
+        <Button variant="secondary" size="sm" onClick={onViewComputer}>
+          查看电脑
+        </Button>
+        <Button size="sm" onClick={onOpenProject}>
+          <ArrowRight aria-hidden="true" />
+          打开项目
+        </Button>
+      </DialogFooter>
+    </section>
   )
 }
 

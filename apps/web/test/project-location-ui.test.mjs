@@ -111,7 +111,7 @@ test('Remote Machine keeps Projects readable while remote execution and destruct
     /<MachineProjectsSection machine=\{machine\} projects=\{projects\}/u,
   )
   assert.match(detail, /machine\.capabilities\.providerExecution/u)
-  assert.match(detail, /当前连接或智能体尚未满足远程执行条件/u)
+  assert.match(detail, /当前连接或 Agent 尚未满足远程执行条件/u)
   assert.match(detail, /disabled=\{projects\.length > 0\}/u)
   assert.match(projects, /projects\.map/u)
   assert.match(projects, /projectLocationForMachine/u)

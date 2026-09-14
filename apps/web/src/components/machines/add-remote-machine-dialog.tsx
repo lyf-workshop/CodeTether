@@ -7,7 +7,7 @@ import {
 } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
-import { ArrowRight, Link2, Server, ShieldCheck } from 'lucide-react'
+import { Link2, Server, ShieldCheck } from 'lucide-react'
 
 import { CodeTetherResponseError } from '@codetether/client'
 import {

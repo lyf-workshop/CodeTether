@@ -70,7 +70,11 @@ test('Remote Claude offline and archived history remain responsive and accessibl
     detail,
     /grid-cols-\[var\(--layout-conversation-rail-compact-width\)_minmax\(0,1fr\)\]/u,
   )
-  assert.match(detail, /window\.matchMedia\('\(max-width: 1439px\)'\)/u)
+  assert.match(
+    detail,
+    /const INSPECTOR_DIALOG_MEDIA_QUERY = '\(max-width: 1439px\)'/u,
+  )
+  assert.match(detail, /window\.matchMedia\(INSPECTOR_DIALOG_MEDIA_QUERY\)/u)
   assert.match(
     detail,
     /max-w-\[calc\(100vw-var\(--layout-sidebar-current-width\)\)\]/u,

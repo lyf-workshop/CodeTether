@@ -64,6 +64,9 @@ export function ConversationDetailPage({
   targetTurnId,
   onArchived,
 }: ConversationDetailPageProps) {
+  const [inspectorDialogLayout, setInspectorDialogLayout] = useState(
+    usesInspectorDialogLayout,
+  )
   const [inspector, setInspector] = useState(() =>
     createConversationInspectorState(
       initialInspectorTab,
@@ -79,6 +82,19 @@ export function ConversationDetailPage({
   const [changeNavigationRequest, setChangeNavigationRequest] = useState(0)
   const inspectorTriggerRef = useRef<HTMLButtonElement>(null)
   const pendingChangeNavigationRef = useRef<string | undefined>(undefined)
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia(INSPECTOR_DIALOG_MEDIA_QUERY)
+    const handleLayoutChange = (event: MediaQueryListEvent) => {
+      setInspectorDialogLayout(event.matches)
+      if (!event.matches) {
+        setInspector((current) => setConversationInspectorOpen(current, false))
+      }
+    }
+
+    mediaQuery.addEventListener('change', handleLayoutChange)
+    return () => mediaQuery.removeEventListener('change', handleLayoutChange)
+  }, [])
 
   useEffect(() => {
     try {
@@ -97,7 +113,7 @@ export function ConversationDetailPage({
   }
 
   const selectChange = (changeId: string) => {
-    if (usesInspectorDialogLayout()) {
+    if (inspectorDialogLayout) {
       pendingChangeNavigationRef.current = changeId
       setInspector((current) => setConversationInspectorOpen(current, false))
       return
@@ -119,7 +135,7 @@ export function ConversationDetailPage({
 
   return (
     <Dialog
-      open={inspector.open}
+      open={inspectorDialogLayout && inspector.open}
       onOpenChange={(open) =>
         setInspector((current) => setConversationInspectorOpen(current, open))
       }
@@ -155,7 +171,7 @@ export function ConversationDetailPage({
           executionBoundary={executionBoundary}
           projectBoundary={projectBoundary}
           onOpenInspector={() => {
-            if (usesInspectorDialogLayout()) {
+            if (inspectorDialogLayout) {
               setInspector((current) =>
                 setConversationInspectorOpen(current, true),
               )
@@ -164,7 +180,7 @@ export function ConversationDetailPage({
             }
           }}
           onOpenChanges={() => {
-            const opensDialog = usesInspectorDialogLayout()
+            const opensDialog = inspectorDialogLayout
             if (!opensDialog) setInspectorCollapsed(false)
             setInspector((current) =>
               openConversationInspectorTab(current, 'changes', opensDialog),
@@ -231,6 +247,8 @@ export function ConversationDetailPage({
   )
 }
 
+const INSPECTOR_DIALOG_MEDIA_QUERY = '(max-width: 1439px)'
+
 function readInspectorCollapsedPreference(): boolean {
   if (typeof window === 'undefined') return false
   try {
@@ -247,6 +265,6 @@ function readInspectorCollapsedPreference(): boolean {
 function usesInspectorDialogLayout(): boolean {
   return (
     typeof window !== 'undefined' &&
-    window.matchMedia('(max-width: 1439px)').matches
+    window.matchMedia(INSPECTOR_DIALOG_MEDIA_QUERY).matches
   )
 }

@@ -86,7 +86,7 @@ export function DesktopNotificationSettings({
   return (
     <section
       aria-labelledby="settings-heading"
-      className="mx-auto w-full max-w-xl px-[var(--layout-content-inline-padding)] py-[var(--layout-content-block-padding)]"
+      className="mx-auto w-full max-w-4xl px-[var(--layout-content-inline-padding)] py-[var(--layout-content-block-padding)]"
     >
       <h1
         id="settings-heading"
@@ -98,77 +98,110 @@ export function DesktopNotificationSettings({
         管理需要在后台提醒你的事项。
       </p>
 
-      <SetupAndDoctorSettings />
+      <div className="mt-5 grid min-w-0 gap-6 md:grid-cols-[10rem_minmax(0,1fr)] md:items-start">
+        <nav aria-label="设置分类" className="md:sticky md:top-0">
+          <p className="px-2 text-xs font-semibold text-text-muted">设置</p>
+          <div className="mt-2 grid gap-1">
+            <a
+              href="#settings-general"
+              className="rounded-sm px-2 py-1.5 text-sm text-text-secondary outline-none hover:bg-surface-muted hover:text-text-primary focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              常规
+            </a>
+            <a
+              href="#settings-notifications"
+              className="rounded-sm px-2 py-1.5 text-sm text-text-secondary outline-none hover:bg-surface-muted hover:text-text-primary focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              通知
+            </a>
+          </div>
+        </nav>
 
-      <Card className="mt-5">
-        <CardHeader className="pb-3">
-          <CardTitle id="desktop-notifications-heading">桌面通知</CardTitle>
-          <CardDescription>
-            仅在真正需要你处理或查看工作时发送系统通知。
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="pt-0">
-          {notificationAvailable && preferenceStorage !== undefined ? (
-            <fieldset aria-labelledby="desktop-notifications-heading">
-              <legend className="sr-only">桌面通知类型</legend>
-              <div className="divide-y divide-border">
-                {notificationOptions.map((option) => (
-                  <label
-                    key={option.type}
-                    className="flex min-h-14 cursor-pointer items-center gap-4 py-2.5"
-                  >
-                    <span className="min-w-0 flex-1">
-                      <span className="block text-base font-medium text-text-primary">
-                        {option.label}
-                      </span>
-                      <span className="mt-0.5 block text-sm text-text-secondary">
-                        {option.description}
-                      </span>
-                    </span>
-                    <input
-                      type="checkbox"
-                      checked={preferences[option.type]}
-                      className={cn(
-                        'size-4 shrink-0 cursor-pointer accent-primary-action',
-                        'outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface',
-                      )}
-                      onChange={(event) =>
-                        setPreference(option.type, event.currentTarget.checked)
-                      }
-                    />
-                  </label>
-                ))}
-              </div>
-              {saveFailed ? (
-                <p role="alert" className="mt-3 text-sm text-danger">
-                  无法保存通知偏好。当前设置未更改，请重试。
-                </p>
-              ) : null}
-            </fieldset>
-          ) : (
-            <div role="status" className="border-t border-border py-3">
-              <p className="text-base font-medium text-text-primary">
-                桌面通知需要 CodeTether Desktop
-              </p>
-              <p className="mt-1 text-sm text-text-secondary">
-                浏览器中仍可通过收件箱查看所有待处理事项。
-              </p>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+        <div className="min-w-0">
+          <div id="settings-general" className="scroll-mt-4">
+            <h2 className="sr-only">常规</h2>
+            <SetupAndDoctorSettings />
+            {backgroundRuntimeAvailable ? (
+              <Card className="mt-4">
+                <CardHeader>
+                  <CardTitle id="background-runtime-heading">
+                    后台运行
+                  </CardTitle>
+                  <CardDescription>
+                    关闭窗口后，CodeTether
+                    将继续在系统托盘运行，以便任务、审批和通知继续工作。
+                  </CardDescription>
+                </CardHeader>
+              </Card>
+            ) : null}
+          </div>
 
-      {backgroundRuntimeAvailable ? (
-        <Card className="mt-4">
-          <CardHeader>
-            <CardTitle id="background-runtime-heading">后台运行</CardTitle>
-            <CardDescription>
-              关闭窗口后，CodeTether
-              将继续在系统托盘运行，以便任务、审批和通知继续工作。
-            </CardDescription>
-          </CardHeader>
-        </Card>
-      ) : null}
+          <div id="settings-notifications" className="mt-5 scroll-mt-4">
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle id="desktop-notifications-heading">
+                  桌面通知
+                </CardTitle>
+                <CardDescription>
+                  仅在真正需要你处理或查看工作时发送系统通知。
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="pt-0">
+                {notificationAvailable && preferenceStorage !== undefined ? (
+                  <fieldset aria-labelledby="desktop-notifications-heading">
+                    <legend className="sr-only">桌面通知类型</legend>
+                    <div className="divide-y divide-border">
+                      {notificationOptions.map((option) => (
+                        <label
+                          key={option.type}
+                          className="flex min-h-14 cursor-pointer items-center gap-4 py-2.5"
+                        >
+                          <span className="min-w-0 flex-1">
+                            <span className="block text-base font-medium text-text-primary">
+                              {option.label}
+                            </span>
+                            <span className="mt-0.5 block text-sm text-text-secondary">
+                              {option.description}
+                            </span>
+                          </span>
+                          <input
+                            type="checkbox"
+                            checked={preferences[option.type]}
+                            className={cn(
+                              'size-4 shrink-0 cursor-pointer accent-primary-action',
+                              'outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface',
+                            )}
+                            onChange={(event) =>
+                              setPreference(
+                                option.type,
+                                event.currentTarget.checked,
+                              )
+                            }
+                          />
+                        </label>
+                      ))}
+                    </div>
+                    {saveFailed ? (
+                      <p role="alert" className="mt-3 text-sm text-danger">
+                        无法保存通知偏好。当前设置未更改，请重试。
+                      </p>
+                    ) : null}
+                  </fieldset>
+                ) : (
+                  <div role="status" className="border-t border-border py-3">
+                    <p className="text-base font-medium text-text-primary">
+                      桌面通知需要 CodeTether Desktop
+                    </p>
+                    <p className="mt-1 text-sm text-text-secondary">
+                      浏览器中仍可通过收件箱查看所有待处理事项。
+                    </p>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+      </div>
     </section>
   )
 }

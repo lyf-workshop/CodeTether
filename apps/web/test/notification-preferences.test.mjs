@@ -119,6 +119,10 @@ test('Settings exposes only the three real Desktop types and a truthful Browser 
   assert.match(source, /type: 'approval'/u)
   assert.match(source, /type: 'completed_review'/u)
   assert.match(source, /type: 'failed'/u)
+  assert.match(source, /href="#settings-general"/u)
+  assert.match(source, /href="#settings-notifications"/u)
+  assert.match(source, />\s*常规\s*</u)
+  assert.match(source, />\s*通知\s*</u)
   assert.match(source, /桌面通知需要 CodeTether Desktop/u)
   assert.match(source, /浏览器中仍可通过收件箱查看/u)
   assert.doesNotMatch(source, /__TAURI__|isTauri|plugin-notification/u)
@@ -134,7 +138,7 @@ test('Settings describes fixed Desktop background behavior without a Browser tra
   )
 
   assert.match(source, /backgroundRuntimeAvailable \?/u)
-  assert.match(source, />后台运行</u)
+  assert.match(source, />\s*后台运行\s*</u)
   assert.match(
     source,
     /关闭窗口后，CodeTether\s*将继续在系统托盘运行，以便任务、审批和通知继续工作。/u,

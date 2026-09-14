@@ -48,6 +48,7 @@ export function InboxPage() {
   const mutationGuards = useRef(new Set<string>())
   const rowRefs = useRef(new Map<string, HTMLLIElement>())
   const focusedItem = useRef<InboxFocusAnchor | undefined>(undefined)
+  const filtersRef = useRef<HTMLDivElement>(null)
 
   const attentionQuery = useQuery({
     ...attentionListQueryOptions(runtime),
@@ -247,11 +248,13 @@ export function InboxPage() {
           <InboxErrorState title="无法读取收件箱" onRetry={handleRetry} />
         ) : model === undefined ? null : (
           <>
-            <InboxSummary
-              activeFilter={activeFilter}
-              onFilterChange={setActiveFilter}
-              summary={model.summary}
-            />
+            <div ref={filtersRef}>
+              <InboxSummary
+                activeFilter={activeFilter}
+                onFilterChange={setActiveFilter}
+                summary={model.summary}
+              />
+            </div>
 
             {model.showsLimitNotice ? (
               <p

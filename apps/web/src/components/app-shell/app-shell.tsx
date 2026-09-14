@@ -1,7 +1,12 @@
-import { useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 
-import { TooltipProvider } from '@codetether/ui'
+import {
+  Dialog,
+  DialogContent,
+  DialogTitle,
+  TooltipProvider,
+} from '@codetether/ui'
 import type { ProjectRecord } from '@codetether/protocol'
 
 import { NewConversationDialog } from '../conversations/new-conversation-dialog'
@@ -9,6 +14,7 @@ import { AddProjectDialog } from '../projects/add-project-dialog'
 import { MainContent } from './main-content'
 import { PrimarySidebar } from './primary-sidebar'
 import { TopBar, type TopBarBreadcrumb } from './top-bar'
+import { DesktopNotificationSettings } from '../settings'
 
 interface AppShellProps {
   children: ReactNode
@@ -32,6 +38,18 @@ export function AppShell({
   const [globalDialog, setGlobalDialog] = useState<
     'add-project' | 'new-conversation' | null
   >(null)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+
+  useEffect(() => {
+    function handleShortcut(event: KeyboardEvent) {
+      if ((event.metaKey || event.ctrlKey) && event.key === ',') {
+        event.preventDefault()
+        setSettingsOpen(true)
+      }
+    }
+    window.addEventListener('keydown', handleShortcut)
+    return () => window.removeEventListener('keydown', handleShortcut)
+  }, [])
 
   return (
     <TooltipProvider>
@@ -61,6 +79,10 @@ export function AppShell({
           <PrimarySidebar
             currentPath={currentPath}
             inboxAttentionCount={inboxAttentionCount}
+            onSettingsClick={(event) => {
+              event.preventDefault()
+              setSettingsOpen(true)
+            }}
           />
           <MainContent>{children}</MainContent>
         </div>
@@ -80,6 +102,15 @@ export function AppShell({
           }
           onProjectCreated={() => setGlobalDialog('new-conversation')}
         />
+        <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+          <DialogContent
+            aria-describedby={undefined}
+            className="max-w-4xl overflow-y-auto p-0"
+          >
+            <DialogTitle className="sr-only">设置</DialogTitle>
+            <DesktopNotificationSettings />
+          </DialogContent>
+        </Dialog>
       </div>
     </TooltipProvider>
   )

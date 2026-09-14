@@ -207,7 +207,7 @@ export function DoctorPage() {
           ) : (
             <RefreshCw aria-hidden="true" />
           )}
-          重新检查
+          检查状态
         </Button>
       </div>
 

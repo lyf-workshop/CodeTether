@@ -1,4 +1,4 @@
-import type { ComponentPropsWithoutRef } from 'react'
+import type { ComponentPropsWithoutRef, MouseEvent } from 'react'
 import { Link } from '@tanstack/react-router'
 import {
   FolderOpen,
@@ -47,12 +47,14 @@ interface SidebarLinkProps {
   attentionCount?: number
   currentPath: string
   item: SidebarNavItem
+  onClick?: (event: MouseEvent<HTMLAnchorElement>) => void
 }
 
 function SidebarLink({
   attentionCount = 0,
   currentPath,
   item,
+  onClick,
 }: SidebarLinkProps) {
   const selected = isCurrentRoute(currentPath, item.to)
   const Icon = item.icon
@@ -69,6 +71,7 @@ function SidebarLink({
           to={item.to}
           aria-label={accessibleLabel}
           aria-current={selected ? 'page' : undefined}
+          onClick={onClick}
           data-selected={selected || undefined}
           className={cn(
             'group relative flex h-[var(--layout-sidebar-nav-item-height)] w-full min-w-0 items-center justify-center gap-[var(--layout-sidebar-nav-gap)] rounded-sm border px-2 text-md font-medium outline-none',
@@ -110,12 +113,14 @@ export interface PrimarySidebarProps extends Omit<
 > {
   currentPath: string
   inboxAttentionCount?: number
+  onSettingsClick?: (event: MouseEvent<HTMLAnchorElement>) => void
 }
 
 /** Shared desktop navigation for the product's primary destinations. */
 export function PrimarySidebar({
   currentPath,
   inboxAttentionCount = 0,
+  onSettingsClick,
   className,
   'aria-label': ariaLabel = '主导航',
   ...props
@@ -153,7 +158,11 @@ export function PrimarySidebar({
 
         <div className="mt-auto pt-3">
           <nav aria-label="应用">
-            <SidebarLink item={settingsNavItem} currentPath={currentPath} />
+            <SidebarLink
+              item={settingsNavItem}
+              currentPath={currentPath}
+              onClick={onSettingsClick}
+            />
           </nav>
         </div>
       </div>

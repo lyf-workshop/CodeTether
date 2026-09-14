@@ -20,6 +20,11 @@ test('Machines exposes one real two-step remote pairing flow', async () => {
   assert.match(dialog, /runtime\.cancelRemoteMachinePairing/u)
   assert.match(dialog, /信任这台机器/u)
   assert.match(dialog, /candidate\.verificationCode/u)
+  assert.match(dialog, /data-machine-pairing-step="success"/u)
+  assert.match(dialog, /电脑已连接/u)
+  assert.match(dialog, /添加这台电脑上的项目/u)
+  assert.match(dialog, /打开项目/u)
+  assert.match(dialog, /查看电脑/u)
   assert.match(dialog, /setPairingCode\(''\)/u)
   assert.doesNotMatch(
     dialog,

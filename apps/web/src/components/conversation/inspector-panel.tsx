@@ -21,6 +21,7 @@ import {
 } from '@codetether/ui'
 
 import { formatConversationDuration } from './conversation-duration'
+import { ConversationFilesSurface } from './conversation-files-surface'
 import type {
   ConversationChangesViewModel,
   ConversationTerminalViewModel,
@@ -397,9 +398,12 @@ export function InspectorPanel({
           <ScrollArea className="h-full">
             <div className="px-4 pb-4">
               <InspectorSection title="文件">
-                <p role="status" className="text-sm text-text-muted">
-                  暂无相关文件。
-                </p>
+                <ConversationFilesSurface
+                  changes={changes}
+                  onOpenChange={onChangeSelect}
+                  selectedChangeId={selectedChangeId}
+                  supportsDiff={conversation.capabilities.supportsDiff}
+                />
               </InspectorSection>
             </div>
           </ScrollArea>

@@ -37,9 +37,10 @@ test('Inspector collapse is a device UI preference and restores a wider workspac
   assert.match(source, /localStorage/u)
   assert.match(source, /setInspectorCollapsed\(true\)/u)
   assert.match(source, /展开会话检查器/u)
-  assert.match(
-    source,
-    /min-\[1440px\]:grid-cols-\[var\(--layout-conversation-rail-width\)_minmax\(0,1fr\)\]/u,
+  assert.ok(
+    source.includes(
+      'min-[1440px]:grid-cols-[var(--layout-conversation-rail-width)_minmax(0,1fr)]',
+    ),
   )
   assert.doesNotMatch(
     source,
@@ -73,4 +74,22 @@ test('legacy inspector values normalize without rendering legacy tabs', () => {
   assert.equal(normalizeConversationInspectorTab('context'), 'files')
   assert.equal(normalizeConversationInspectorTab('terminal'), 'tools')
   assert.equal(normalizeConversationInspectorTab('changes'), 'changes')
+})
+
+test('Files consumes only existing change evidence and opens the existing change view', async () => {
+  const source = await readFile(
+    new URL('conversation-files-surface.tsx', componentRoot),
+    'utf8',
+  )
+
+  assert.match(source, /changes\.files\.map/u)
+  assert.match(source, /change\.path/u)
+  assert.match(source, /change\.additions/u)
+  assert.match(source, /change\.deletions/u)
+  assert.match(source, /onOpenChange\?\.\(change\.id\)/u)
+  assert.match(source, /查看变更/u)
+  assert.match(source, /本次会话没有已知文件变更/u)
+  assert.match(source, /当前 Agent 未提供文件变更信息/u)
+  assert.doesNotMatch(source, /fetch\(|readProjectFile|absolutePath|directory/u)
+  assert.doesNotMatch(source, /<input|<textarea/u)
 })

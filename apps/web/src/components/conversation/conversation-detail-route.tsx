@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef } from 'react'
 import {
   useInfiniteQuery,
   useQuery,
@@ -56,7 +56,6 @@ import {
   projectLocationForMachine,
 } from '../../runtime/host/project-location'
 import { ConversationDetailPage } from './conversation-detail-page'
-import { NewConversationDialog } from '../conversations/new-conversation-dialog'
 import { createDemoConversationDetailSource } from './demo-conversation-adapter'
 import {
   createLiveConversationDetailSource,
@@ -149,7 +148,6 @@ export function ConversationDetailRoute() {
     <ConversationDetailPage
       anchorRequestKey={anchorRequestKey}
       viewModel={source.conversation}
-      rail={source.rail}
       connectionIndicator={source.connectionIndicator}
       initialInspectorTab={panel}
       targetTurnId={turn}
@@ -378,8 +376,6 @@ function ConnectedLiveConversationDetail({
   targetTurnId,
 }: ConnectedLiveConversationDetailProps) {
   const navigate = useNavigate()
-  const newConversationButtonRef = useRef<HTMLButtonElement>(null)
-  const [newConversationOpen, setNewConversationOpen] = useState(false)
   const machineProvider = machineProviders.find(
     (provider) => provider.provider === conversation.provider,
   )
@@ -441,69 +437,55 @@ function ConnectedLiveConversationDetail({
   )
 
   return (
-    <>
-      <ConversationDetailPage
-        anchorRequestKey={anchorRequestKey}
-        viewModel={source.conversation}
-        rail={source.rail}
-        connectionIndicator={source.connectionIndicator}
-        {...(executionAvailable ||
-        machine === undefined ||
-        (project !== undefined && projectBoundaryReason !== undefined)
-          ? {}
-          : {
-              executionBoundary: {
-                machineId: machine.machineId,
-                machineName: machine.displayName,
-                reason: executionUnavailableReason,
-              },
-            })}
-        {...(project === undefined || projectBoundaryReason === undefined
-          ? {}
-          : {
-              projectBoundary: {
-                projectId: project.projectId,
-                projectName: project.name,
-                reason: projectBoundaryReason,
-              },
-            })}
-        controls={controls}
-        initialInspectorTab={initialInspectorTab}
-        machineId={machine?.machineId}
-        targetTurnId={targetTurnId}
-        newConversationButtonRef={newConversationButtonRef}
-        newConversationDisabled={projectAvailability === 'unavailable'}
-        {...(project === undefined
-          ? {}
-          : {
+    <ConversationDetailPage
+      anchorRequestKey={anchorRequestKey}
+      viewModel={source.conversation}
+      connectionIndicator={source.connectionIndicator}
+      {...(executionAvailable ||
+      machine === undefined ||
+      (project !== undefined && projectBoundaryReason !== undefined)
+        ? {}
+        : {
+            executionBoundary: {
+              machineId: machine.machineId,
+              machineName: machine.displayName,
+              reason: executionUnavailableReason,
+            },
+          })}
+      {...(project === undefined || projectBoundaryReason === undefined
+        ? {}
+        : {
+            projectBoundary: {
               projectId: project.projectId,
-              onNewConversation: () => setNewConversationOpen(true),
-              onArchived: () => {
-                void navigate({
-                  to: '/projects/$projectId/conversations',
-                  params: { projectId: project.projectId },
-                  search: { view: 'archived' },
-                }).then(() => {
-                  window.requestAnimationFrame(() => {
-                    document
-                      .querySelector<HTMLElement>(
-                        '[data-conversation-view-control][aria-pressed="true"]',
-                      )
-                      ?.focus()
-                  })
+              projectName: project.name,
+              reason: projectBoundaryReason,
+            },
+          })}
+      controls={controls}
+      initialInspectorTab={initialInspectorTab}
+      machineId={machine?.machineId}
+      targetTurnId={targetTurnId}
+      {...(project === undefined
+        ? {}
+        : {
+            projectId: project.projectId,
+            onArchived: () => {
+              void navigate({
+                to: '/projects/$projectId/conversations',
+                params: { projectId: project.projectId },
+                search: { view: 'archived' },
+              }).then(() => {
+                window.requestAnimationFrame(() => {
+                  document
+                    .querySelector<HTMLElement>(
+                      '[data-conversation-view-control][aria-pressed="true"]',
+                    )
+                    ?.focus()
                 })
-              },
-            })}
-      />
-      {project === undefined ? null : (
-        <NewConversationDialog
-          currentProject={project}
-          open={newConversationOpen}
-          onOpenChange={setNewConversationOpen}
-          returnFocusRef={newConversationButtonRef}
-        />
-      )}
-    </>
+              })
+            },
+          })}
+    />
   )
 }
 

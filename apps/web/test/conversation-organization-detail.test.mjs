@@ -39,23 +39,25 @@ test('Detail organization actions use one shared control and archive into the UR
   assert.match(route, /if \(current\.archivedAt !== undefined\)/u)
 })
 
-test('Rail presents only the selected archived Conversation above Host-ordered active rows', async () => {
-  const [rail, adapter] = await Promise.all([
-    sourceOf('conversation-rail.tsx'),
-    sourceOf('live-conversation-adapter.ts'),
+test('Workspace Sidebar separates the current archived Conversation from active rows', async () => {
+  const [sidebar, rootLayout] = await Promise.all([
+    readFile(
+      new URL(
+        '../src/components/app-shell/workspace-sidebar.tsx',
+        import.meta.url,
+      ),
+      'utf8',
+    ),
+    readFile(
+      new URL('../src/components/app-shell/root-layout.tsx', import.meta.url),
+      'utf8',
+    ),
   ])
 
-  assert.match(rail, /currentArchivedConversation/u)
-  assert.match(rail, />\s*已归档\s*</u)
-  assert.match(rail, /aria-label="已置顶"/u)
-  assert.match(rail, /ConversationOrganizationMenu/u)
-  assert.match(rail, /scrollIntoView\(\{ block: 'nearest' \}\)/u)
-  assert.match(adapter, /activeSummaries\.map/u)
-  const railProjection = adapter.slice(
-    adapter.indexOf('export function createLiveConversationRailViewModel'),
-    adapter.indexOf('export function createLiveConversationViewModel'),
-  )
-  assert.doesNotMatch(railProjection, /\.sort\(/u)
+  assert.match(sidebar, /currentArchivedConversation/u)
+  assert.match(sidebar, /当前已归档/u)
+  assert.match(sidebar, /查看已归档会话/u)
+  assert.match(rootLayout, /currentConversation=\{currentConversation\}/u)
 })
 
 test('1100-width overlay boundary and stable Workspace rows remain intact', async () => {
@@ -70,9 +72,9 @@ test('1100-width overlay boundary and stable Workspace rows remain intact', asyn
   assert.match(workspace, /min-w-0/u)
 })
 
-test('Rail membership changes preserve a meaningful keyboard focus target', async () => {
-  const [rail, controls, route] = await Promise.all([
-    sourceOf('conversation-rail.tsx'),
+test('Conversation Rail is removed while detail organization controls remain available', async () => {
+  const [detail, controls, route] = await Promise.all([
+    sourceOf('conversation-detail-page.tsx'),
     readFile(
       new URL(
         '../src/components/conversations/conversation-organization-controls.tsx',
@@ -83,10 +85,7 @@ test('Rail membership changes preserve a meaningful keyboard focus target', asyn
     sourceOf('conversation-detail-route.tsx'),
   ])
 
-  assert.match(rail, /data-conversation-rail-row/u)
-  assert.match(rail, /data-conversation-rail-primary-action/u)
-  assert.match(rail, /focusAfterMembershipChange/u)
-  assert.match(rail, /tabIndex=\{-1\}/u)
+  assert.doesNotMatch(detail, /ConversationRail|conversation-rail/u)
   assert.match(controls, /if \(onUnarchived === undefined\)/u)
   assert.match(route, /data-conversation-view-control/u)
 })

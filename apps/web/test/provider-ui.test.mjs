@@ -409,7 +409,10 @@ test('existing UI surfaces consume Provider truth without adding a switch to Det
       new URL('components/conversations/new-conversation-dialog.tsx', root),
       'utf8',
     ),
-    readFile(new URL('components/app-shell/primary-sidebar.tsx', root), 'utf8'),
+    readFile(
+      new URL('components/app-shell/workspace-sidebar.tsx', root),
+      'utf8',
+    ),
     readFile(
       new URL('components/conversation/conversation-header.tsx', root),
       'utf8',
@@ -422,7 +425,7 @@ test('existing UI surfaces consume Provider truth without adding a switch to Det
       'utf8',
     ),
     readFile(
-      new URL('components/conversation/conversation-rail.tsx', root),
+      new URL('components/app-shell/workspace-sidebar.tsx', root),
       'utf8',
     ),
   ])
@@ -455,5 +458,6 @@ test('existing UI surfaces consume Provider truth without adding a switch to Det
   assert.match(inboxPage, /presentation\.capabilities\.approvals/u)
   assert.match(inboxMetadata, /allProjectConversationsQueryOptions/u)
   assert.match(search, /providerDisplayName\(conversation\.provider\)/u)
-  assert.match(rail, /providerDisplayName\(conversation\.provider\)/u)
+  assert.match(rail, /workspaceProviderPresentation\(conversation\.provider\)/u)
+  assert.match(rail, /data-provider=\{conversation\.provider\}/u)
 })

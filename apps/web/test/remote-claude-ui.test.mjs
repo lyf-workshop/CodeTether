@@ -66,10 +66,8 @@ test('Remote Claude offline and archived history remain responsive and accessibl
   assert.match(dialog, /aria-label="选择智能体"/u)
   assert.match(dialog, /aria-label="选择运行电脑"/u)
   assert.match(dialog, /onCloseAutoFocus/u)
-  assert.match(
-    detail,
-    /grid-cols-\[var\(--layout-conversation-rail-compact-width\)_minmax\(0,1fr\)\]/u,
-  )
+  assert.match(detail, /grid-cols-\[minmax\(0,1fr\)\]/u)
+  assert.doesNotMatch(detail, /ConversationRail|layout-conversation-rail/u)
   assert.match(
     detail,
     /const INSPECTOR_DIALOG_MEDIA_QUERY = '\(max-width: 1439px\)'/u,

@@ -12,7 +12,7 @@ const sourceRoot = new URL('../src/', import.meta.url)
 test('Machines routes and navigation expose only real Host-backed Machine pages', async () => {
   const [router, sidebar, list, detail, machineProjects] = await Promise.all([
     source('router.tsx'),
-    source('components/app-shell/primary-sidebar.tsx'),
+    source('components/app-shell/workspace-sidebar.tsx'),
     source('components/machines/machines-page.tsx'),
     source('components/machines/machine-detail-page.tsx'),
     source('components/machines/machine-projects-section.tsx'),
@@ -20,7 +20,7 @@ test('Machines routes and navigation expose only real Host-backed Machine pages'
 
   assert.match(router, /path: '\/machines'/u)
   assert.match(router, /path: '\/machines\/\$machineId'/u)
-  assert.match(sidebar, /to: '\/machines'/u)
+  assert.match(sidebar, /to="\/machines"/u)
   assert.match(list, /machineListQueryOptions/u)
   assert.match(list, /machineDetailQueryOptions/u)
   assert.match(detail, /machineDetailQueryOptions/u)

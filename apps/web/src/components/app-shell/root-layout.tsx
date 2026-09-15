@@ -7,6 +7,7 @@ import {
   MachineIdSchema,
   ProjectIdSchema,
   type ConversationId,
+  type ConversationSummary,
   type MachineId,
   type ProjectId,
 } from '@codetether/protocol'
@@ -299,6 +300,7 @@ function LiveConversationShellLayout({
     return (
       <ResolvedConversationShellLayout
         conversationTitle={conversation.title}
+        currentConversation={conversation}
         currentPath={currentPath}
         inboxAttentionCount={inboxAttentionCount}
         projectId={conversation.projectId}
@@ -320,6 +322,7 @@ function LiveConversationShellLayout({
 
 interface ResolvedConversationShellLayoutProps {
   conversationTitle: string
+  currentConversation: ConversationSummary
   currentPath: string
   inboxAttentionCount: number
   projectId: ProjectId
@@ -327,6 +330,7 @@ interface ResolvedConversationShellLayoutProps {
 
 function ResolvedConversationShellLayout({
   conversationTitle,
+  currentConversation,
   currentPath,
   inboxAttentionCount,
   projectId,
@@ -352,6 +356,7 @@ function ResolvedConversationShellLayout({
       currentPage={conversationTitle}
       currentPath={currentPath}
       currentProject={project}
+      currentConversation={currentConversation}
       inboxAttentionCount={inboxAttentionCount}
     >
       <Outlet />

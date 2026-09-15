@@ -7,26 +7,30 @@ const componentDirectory = new URL(
   import.meta.url,
 )
 
-test('Primary Sidebar presents only the real Machines route', async () => {
+test('Workspace Sidebar presents only approved global destinations', async () => {
   const [source, rootLayout] = await Promise.all([
-    readFile(new URL('primary-sidebar.tsx', componentDirectory), 'utf8'),
+    readFile(new URL('workspace-sidebar.tsx', componentDirectory), 'utf8'),
     readFile(new URL('root-layout.tsx', componentDirectory), 'utf8'),
   ])
 
   assert.doesNotMatch(source, /machinePresences|showMockMachines/u)
   assert.doesNotMatch(source, /MacBook Pro|开发服务器|树莓派设备/u)
   assert.doesNotMatch(source, /to: '\/(?:activity|agents)'/u)
-  assert.match(source, /to: '\/machines'/u)
+  assert.match(source, /to="\/projects"/u)
+  assert.match(source, /to="\/machines"/u)
+  assert.match(source, /to="\/inbox"/u)
+  assert.match(source, /to="\/settings"/u)
   assert.doesNotMatch(source, /agentDefinitions/u)
   assert.doesNotMatch(source, /agentProviders/u)
   assert.doesNotMatch(
     source,
     /sidebar-current-project-heading|sidebar-agents-heading/u,
   )
-  assert.match(source, /label: '项目'/u)
-  assert.match(source, /label: '电脑'/u)
-  assert.match(source, /label: '收件箱'/u)
-  assert.match(source, /label: '设置'/u)
+  assert.match(source, /label="电脑"/u)
+  assert.match(source, /label="收件箱"/u)
+  assert.match(source, /label="设置"/u)
+  assert.match(source, />项目</u)
+  assert.match(source, />新建会话</u)
   assert.doesNotMatch(source, /即将支持/u)
   assert.match(rootLayout, /'\/machines': '电脑'/u)
   assert.match(rootLayout, /label: '电脑', to: '\/machines'/u)
@@ -72,6 +76,7 @@ test('Top Bar only renders optional product controls with real handlers', async 
   assert.doesNotMatch(source, /defaultProfile|演示用户/u)
   assert.doesNotMatch(source, /未读/u)
   assert.match(source, /待处理事项/u)
+  assert.doesNotMatch(source, /新建会话/u)
 })
 
 test('Conversation shell hides unsupported controls and keeps long identities bounded', async () => {
@@ -79,10 +84,17 @@ test('Conversation shell hides unsupported controls and keeps long identities bo
     '../src/components/conversation/',
     import.meta.url,
   )
-  const [composer, header, rail] = await Promise.all([
+  const [composer, header, sidebar, detail] = await Promise.all([
     readFile(new URL('composer.tsx', componentDirectory), 'utf8'),
     readFile(new URL('conversation-header.tsx', componentDirectory), 'utf8'),
-    readFile(new URL('conversation-rail.tsx', componentDirectory), 'utf8'),
+    readFile(
+      new URL('../app-shell/workspace-sidebar.tsx', componentDirectory),
+      'utf8',
+    ),
+    readFile(
+      new URL('conversation-detail-page.tsx', componentDirectory),
+      'utf8',
+    ),
   ])
 
   assert.doesNotMatch(composer, /\/ 命令|@ 引用|! 终端|# 技能|附件/u)
@@ -94,10 +106,10 @@ test('Conversation shell hides unsupported controls and keeps long identities bo
   assert.match(header, /capabilities\.supportsInterrupt/u)
   assert.match(header, /title=\{conversation\.title\}/u)
   assert.match(header, /connectionIndicator\.state !== 'connected'/u)
-  assert.match(rail, /h-16 w-full/u)
-  assert.match(rail, /title=\{conversation\.title\}/u)
-  assert.match(rail, /ConversationOrganizationMenu/u)
-  assert.doesNotMatch(rail, /删除|分享|导出|复制会话|移动会话/u)
+  assert.match(sidebar, /title=\{conversation\.title\}/u)
+  assert.match(sidebar, /data-provider=\{conversation\.provider\}/u)
+  assert.doesNotMatch(detail, /<ConversationRail/u)
+  assert.doesNotMatch(sidebar, /删除|分享|导出|复制会话|移动会话/u)
 
   const timeline = await readFile(
     new URL('conversation-timeline.tsx', componentDirectory),

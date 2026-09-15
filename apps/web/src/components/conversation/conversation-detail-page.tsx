@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type Ref } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { PanelRightOpen } from 'lucide-react'
 
 import {
@@ -11,13 +11,11 @@ import {
 import type { MachineId, ProjectId, TurnId } from '@codetether/protocol'
 import type { ConversationSummary } from '@codetether/protocol'
 
-import { ConversationRail } from './conversation-rail'
 import type { ConversationControls } from './conversation-controls'
 import type {
   ConversationConnectionIndicatorViewModel,
   ConversationExecutionBoundaryViewModel,
   ConversationProjectBoundaryViewModel,
-  ConversationRailViewModel,
   ConversationViewModel,
 } from './conversation-view-model'
 import { ConversationWorkspace } from './conversation-workspace'
@@ -32,16 +30,12 @@ import {
 export interface ConversationDetailPageProps {
   anchorRequestKey?: string
   viewModel: ConversationViewModel
-  rail: ConversationRailViewModel
   connectionIndicator?: ConversationConnectionIndicatorViewModel
   executionBoundary?: ConversationExecutionBoundaryViewModel
   projectBoundary?: ConversationProjectBoundaryViewModel
   initialInspectorTab?: InspectorTab
   machineId?: MachineId
   controls?: ConversationControls
-  newConversationButtonRef?: Ref<HTMLButtonElement>
-  newConversationDisabled?: boolean
-  onNewConversation?: () => void
   projectId?: ProjectId
   targetTurnId?: TurnId
   onArchived?: (conversation: ConversationSummary) => void
@@ -50,16 +44,12 @@ export interface ConversationDetailPageProps {
 export function ConversationDetailPage({
   anchorRequestKey,
   viewModel,
-  rail,
   connectionIndicator,
   executionBoundary,
   projectBoundary,
   initialInspectorTab = 'files',
   machineId,
   controls,
-  newConversationButtonRef,
-  newConversationDisabled = false,
-  onNewConversation,
   projectId,
   targetTurnId,
   onArchived,
@@ -142,28 +132,12 @@ export function ConversationDetailPage({
     >
       <div
         className={cn(
-          'relative grid h-full min-h-0 min-w-0 grid-cols-[var(--layout-conversation-rail-compact-width)_minmax(0,1fr)] bg-background',
+          'relative grid h-full min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] bg-background',
           inspectorCollapsed
-            ? 'min-[1440px]:grid-cols-[var(--layout-conversation-rail-width)_minmax(0,1fr)]'
-            : 'min-[1440px]:grid-cols-[var(--layout-conversation-rail-width)_minmax(0,1fr)_var(--layout-conversation-inspector-width)]',
+            ? 'min-[1440px]:grid-cols-[minmax(0,1fr)]'
+            : 'min-[1440px]:grid-cols-[minmax(32rem,1fr)_var(--layout-conversation-inspector-width)]',
         )}
       >
-        <ConversationRail
-          groups={rail.groups}
-          currentConversationId={viewModel.id}
-          {...(rail.currentArchivedConversation === undefined
-            ? {}
-            : {
-                currentArchivedConversation: rail.currentArchivedConversation,
-              })}
-          newConversationDisabled={newConversationDisabled}
-          {...(newConversationButtonRef === undefined
-            ? {}
-            : { newConversationButtonRef })}
-          {...(onNewConversation === undefined ? {} : { onNewConversation })}
-          {...(projectId === undefined ? {} : { projectId })}
-          onArchived={onArchived}
-        />
         <ConversationWorkspace
           anchorRequestKey={anchorRequestKey}
           viewModel={viewModel}

@@ -1,6 +1,6 @@
-import type { ComponentPropsWithoutRef, MouseEventHandler, Ref } from 'react'
+import type { ComponentPropsWithoutRef, MouseEventHandler } from 'react'
 import { Link } from '@tanstack/react-router'
-import { Bell, CircleHelp, Plus, Search } from 'lucide-react'
+import { Bell, CircleHelp, Search } from 'lucide-react'
 
 import {
   Button,
@@ -39,12 +39,10 @@ interface TopBarProps extends Omit<
   breadcrumbs?: readonly TopBarBreadcrumb[]
   notificationCount?: number
   onHelp?: MouseEventHandler<HTMLButtonElement>
-  onNewConversation?: MouseEventHandler<HTMLButtonElement>
   onNotifications?: MouseEventHandler<HTMLButtonElement>
   onProfile?: MouseEventHandler<HTMLButtonElement>
   onSearch?: MouseEventHandler<HTMLButtonElement>
   profile?: TopBarProfile
-  newConversationButtonRef?: Ref<HTMLButtonElement>
 }
 
 /** Shared desktop header. Product actions are injected by the AppShell. */
@@ -54,12 +52,10 @@ function TopBar({
   currentPage,
   notificationCount = 0,
   onHelp,
-  onNewConversation,
   onNotifications,
   onProfile,
   onSearch,
   profile,
-  newConversationButtonRef,
   ...props
 }: TopBarProps) {
   const notificationsLabel =
@@ -120,17 +116,6 @@ function TopBar({
         </nav>
 
         <div className="flex shrink-0 items-center gap-4">
-          <Button
-            ref={newConversationButtonRef}
-            size="sm"
-            onClick={onNewConversation}
-            aria-label="新建会话"
-            className="h-[2.125rem] w-9 gap-2 px-0 md:w-26 md:px-3"
-          >
-            <Plus aria-hidden="true" />
-            <span className="hidden md:inline">新建会话</span>
-          </Button>
-
           {onSearch === undefined ? null : (
             <Button
               variant="outline"

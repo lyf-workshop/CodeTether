@@ -7,12 +7,12 @@ import {
   DialogTitle,
   TooltipProvider,
 } from '@codetether/ui'
-import type { ProjectRecord } from '@codetether/protocol'
+import type { ConversationSummary, ProjectRecord } from '@codetether/protocol'
 
 import { NewConversationDialog } from '../conversations/new-conversation-dialog'
 import { AddProjectDialog } from '../projects/add-project-dialog'
 import { MainContent } from './main-content'
-import { PrimarySidebar } from './primary-sidebar'
+import { WorkspaceSidebar } from './workspace-sidebar'
 import { TopBar, type TopBarBreadcrumb } from './top-bar'
 import { DesktopNotificationSettings } from '../settings'
 
@@ -21,6 +21,7 @@ interface AppShellProps {
   breadcrumbs?: readonly TopBarBreadcrumb[]
   currentPage: string
   currentPath: string
+  currentConversation?: ConversationSummary
   currentProject?: ProjectRecord
   inboxAttentionCount?: number
 }
@@ -30,11 +31,15 @@ export function AppShell({
   children,
   currentPage,
   currentPath,
+  currentConversation,
   currentProject,
   inboxAttentionCount = 0,
 }: AppShellProps) {
   const navigate = useNavigate()
-  const newConversationButtonRef = useRef<HTMLButtonElement>(null)
+  const newConversationTriggerRef = useRef<HTMLButtonElement>(null)
+  const [newConversationProject, setNewConversationProject] = useState<
+    ProjectRecord | undefined
+  >()
   const [globalDialog, setGlobalDialog] = useState<
     'add-project' | 'new-conversation' | null
   >(null)
@@ -63,8 +68,6 @@ export function AppShell({
         <TopBar
           breadcrumbs={breadcrumbs}
           currentPage={currentPage}
-          newConversationButtonRef={newConversationButtonRef}
-          onNewConversation={() => setGlobalDialog('new-conversation')}
           onHelp={() =>
             void navigate({
               to: '/doctor',
@@ -76,9 +79,17 @@ export function AppShell({
           }
         />
         <div className="grid min-h-0 overflow-hidden grid-cols-[var(--layout-sidebar-current-width)_minmax(0,1fr)]">
-          <PrimarySidebar
+          <WorkspaceSidebar
             currentPath={currentPath}
+            currentProjectId={currentProject?.projectId}
+            currentConversationId={conversationIdFromPath(currentPath)}
+            currentConversation={currentConversation}
             inboxAttentionCount={inboxAttentionCount}
+            onNewConversation={(project, trigger) => {
+              newConversationTriggerRef.current = trigger
+              setNewConversationProject(project)
+              setGlobalDialog('new-conversation')
+            }}
             onSettingsClick={(event) => {
               event.preventDefault()
               setSettingsOpen(true)
@@ -87,13 +98,14 @@ export function AppShell({
           <MainContent>{children}</MainContent>
         </div>
         <NewConversationDialog
-          currentProject={currentProject}
+          currentProject={newConversationProject}
           open={globalDialog === 'new-conversation'}
           onAddProject={() => setGlobalDialog('add-project')}
-          onOpenChange={(open) =>
+          onOpenChange={(open) => {
             setGlobalDialog(open ? 'new-conversation' : null)
-          }
-          returnFocusRef={newConversationButtonRef}
+            if (!open) setNewConversationProject(undefined)
+          }}
+          returnFocusRef={newConversationTriggerRef}
         />
         <AddProjectDialog
           open={globalDialog === 'add-project'}
@@ -117,3 +129,13 @@ export function AppShell({
 }
 
 export type { AppShellProps }
+
+function conversationIdFromPath(pathname: string): string | undefined {
+  const match = /^\/conversations\/([^/]+)\/?$/u.exec(pathname)
+  if (match?.[1] === undefined) return undefined
+  try {
+    return decodeURIComponent(match[1])
+  } catch {
+    return match[1]
+  }
+}

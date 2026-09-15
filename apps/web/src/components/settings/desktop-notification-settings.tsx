@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
-import { CircleHelp, RefreshCw } from 'lucide-react'
+import { RefreshCw, ShieldCheck } from 'lucide-react'
 
 import type { AttentionType } from '@codetether/protocol'
 import {
@@ -235,8 +235,8 @@ function SetupAndDoctorSettings() {
       <CardContent className="flex flex-wrap gap-2 pt-0">
         <Button asChild size="sm" variant="secondary">
           <Link to="/doctor">
-            <CircleHelp aria-hidden="true" />
-            打开 CodeTether 检查
+            <ShieldCheck aria-hidden="true" />
+            打开检查状态
           </Link>
         </Button>
         <Button

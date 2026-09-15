@@ -426,7 +426,7 @@ test('routing and settings expose setup and permanent Doctor access', () => {
   assert.match(startup, /startupGateRecoveryDelay/u)
   assert.match(startup, /window\.setTimeout/u)
   assert.doesNotMatch(startup, /setInterval/u)
-  assert.match(shell, /onHelp=/u)
+  assert.match(shell, /onDoctor=/u)
   assert.match(shell, /to: '\/doctor'/u)
   assert.match(settings, /kind: 'reopen'/u)
   assert.match(settings, /to="\/doctor"/u)

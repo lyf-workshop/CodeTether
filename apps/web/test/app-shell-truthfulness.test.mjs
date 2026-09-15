@@ -68,7 +68,10 @@ test('Top Bar only renders optional product controls with real handlers', async 
 
   assert.match(source, /onSearch === undefined \? null/u)
   assert.match(source, /onNotifications === undefined \? null/u)
-  assert.match(source, /onHelp === undefined \? null/u)
+  assert.match(source, /onDoctor === undefined \? null/u)
+  assert.match(source, /aria-label="检查状态"/u)
+  assert.match(source, /<ShieldCheck/u)
+  assert.doesNotMatch(source, /label="帮助"|<CircleHelp/u)
   assert.match(
     source,
     /onProfile === undefined \|\| profile === undefined \? null/u,

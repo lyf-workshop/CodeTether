@@ -6,6 +6,9 @@ import {
   DialogContent,
   DialogTitle,
   IconButton,
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
   cn,
 } from '@codetether/ui'
 import type { MachineId, ProjectId, TurnId } from '@codetether/protocol'
@@ -223,16 +226,22 @@ export function ConversationDetailPage({
           </div>
         )}
         {inspectorCollapsed ? (
-          <IconButton
-            type="button"
-            label="展开会话检查器"
-            variant="ghost"
-            size="sm"
-            className="absolute right-3 top-3 z-10 hidden size-8 bg-surface-muted/80 text-text-secondary shadow-sm min-[1440px]:inline-flex"
-            onClick={() => setInspectorCollapsed(false)}
-          >
-            <PanelRightOpen aria-hidden="true" />
-          </IconButton>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <IconButton
+                type="button"
+                label="展开会话检查器"
+                variant="ghost"
+                size="sm"
+                data-inspector-restore
+                className="absolute top-[calc(var(--layout-conversation-header-height)+0.75rem)] right-3 z-10 hidden size-8 bg-surface-muted/80 text-text-secondary shadow-sm min-[1440px]:inline-flex"
+                onClick={() => setInspectorCollapsed(false)}
+              >
+                <PanelRightOpen aria-hidden="true" />
+              </IconButton>
+            </TooltipTrigger>
+            <TooltipContent side="left">展开会话检查器</TooltipContent>
+          </Tooltip>
         ) : null}
       </div>
 

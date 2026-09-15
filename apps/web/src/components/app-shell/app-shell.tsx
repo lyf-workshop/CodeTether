@@ -108,7 +108,7 @@ export function AppShell({
           currentPage={currentPage}
           sidebarCollapsed={sidebarCollapsed}
           onRestoreSidebar={() => setSidebarCollapsed(false)}
-          onHelp={() =>
+          onDoctor={() =>
             void navigate({
               to: '/doctor',
               search:

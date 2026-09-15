@@ -1,6 +1,6 @@
 import type { ComponentPropsWithoutRef, MouseEventHandler } from 'react'
 import { Link } from '@tanstack/react-router'
-import { Bell, CircleHelp, PanelLeftOpen, Search } from 'lucide-react'
+import { Bell, PanelLeftOpen, Search, ShieldCheck } from 'lucide-react'
 
 import {
   Button,
@@ -38,7 +38,7 @@ interface TopBarProps extends Omit<
   currentPage: string
   breadcrumbs?: readonly TopBarBreadcrumb[]
   notificationCount?: number
-  onHelp?: MouseEventHandler<HTMLButtonElement>
+  onDoctor?: MouseEventHandler<HTMLButtonElement>
   onNotifications?: MouseEventHandler<HTMLButtonElement>
   onProfile?: MouseEventHandler<HTMLButtonElement>
   onSearch?: MouseEventHandler<HTMLButtonElement>
@@ -53,7 +53,7 @@ function TopBar({
   className,
   currentPage,
   notificationCount = 0,
-  onHelp,
+  onDoctor,
   onNotifications,
   onProfile,
   onSearch,
@@ -158,7 +158,7 @@ function TopBar({
           )}
 
           {onNotifications === undefined &&
-          onHelp === undefined &&
+          onDoctor === undefined &&
           (onProfile === undefined || profile === undefined) ? null : (
             <div className="flex items-center gap-1">
               {onNotifications === undefined ? null : (
@@ -183,20 +183,22 @@ function TopBar({
                 </Tooltip>
               )}
 
-              {onHelp === undefined ? null : (
+              {onDoctor === undefined ? null : (
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <IconButton
-                      label="帮助"
+                    <Button
+                      type="button"
+                      aria-label="检查状态"
                       size="sm"
                       variant="ghost"
-                      onClick={onHelp}
-                      className="text-text-secondary hover:text-text-primary"
+                      onClick={onDoctor}
+                      className="h-8 gap-2 px-2 text-text-secondary hover:text-text-primary"
                     >
-                      <CircleHelp aria-hidden="true" />
-                    </IconButton>
+                      <ShieldCheck aria-hidden="true" />
+                      <span className="max-[1180px]:sr-only">检查状态</span>
+                    </Button>
                   </TooltipTrigger>
-                  <TooltipContent side="bottom">帮助</TooltipContent>
+                  <TooltipContent side="bottom">检查状态</TooltipContent>
                 </Tooltip>
               )}
 

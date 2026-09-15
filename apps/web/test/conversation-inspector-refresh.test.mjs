@@ -48,6 +48,11 @@ test('Inspector collapse is a device UI preference and restores a wider workspac
   assert.match(source, /localStorage/u)
   assert.match(source, /setInspectorCollapsed\(true\)/u)
   assert.match(source, /展开会话检查器/u)
+  assert.match(source, /data-inspector-restore/u)
+  assert.match(
+    source,
+    /top-\[calc\(var\(--layout-conversation-header-height\)\+0\.75rem\)\]/u,
+  )
   assert.match(source, /mediaQuery\.addEventListener\('change'/u)
   assert.match(source, /open=\{inspectorDialogLayout && inspector\.open\}/u)
   assert.ok(source.includes('min-[1440px]:grid-cols-[minmax(0,1fr)]'))

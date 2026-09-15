@@ -24,6 +24,7 @@
     "src/components/conversation/conversation-duration.ts",
     "src/components/conversation/composer-focus-handoff.ts",
     "src/components/conversation/conversation-inspector-state.ts",
+    "src/components/conversation/conversation-inspector-layout.ts",
     "src/components/conversation/conversation-timeline-behavior.ts",
     "src/components/conversation/conversation-rail-search-model.ts",
     "src/components/conversation/live-conversation-adapter.ts",

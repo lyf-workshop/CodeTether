@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { PanelRightOpen } from 'lucide-react'
 
 import {
@@ -26,6 +26,12 @@ import {
   selectConversationInspectorTab,
   setConversationInspectorOpen,
 } from './conversation-inspector-state'
+import {
+  clampConversationInspectorWidth,
+  readConversationInspectorWidth,
+  writeConversationInspectorWidth,
+} from './conversation-inspector-layout'
+import { ConversationInspectorResizeHandle } from './conversation-inspector-resize-handle'
 
 export interface ConversationDetailPageProps {
   anchorRequestKey?: string
@@ -66,12 +72,18 @@ export function ConversationDetailPage({
   const [inspectorCollapsed, setInspectorCollapsed] = useState(
     readInspectorCollapsedPreference,
   )
+  const [inspectorWidth, setInspectorWidth] = useState(
+    readConversationInspectorWidth,
+  )
+  const [inspectorResizing, setInspectorResizing] = useState(false)
+  const [workspaceWidth, setWorkspaceWidth] = useState<number | undefined>()
   const [selectedChangeId, setSelectedChangeId] = useState<string | undefined>(
     undefined,
   )
   const [changeNavigationRequest, setChangeNavigationRequest] = useState(0)
   const inspectorTriggerRef = useRef<HTMLButtonElement>(null)
   const pendingChangeNavigationRef = useRef<string | undefined>(undefined)
+  const workspaceRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     const mediaQuery = window.matchMedia(INSPECTOR_DIALOG_MEDIA_QUERY)
@@ -96,6 +108,25 @@ export function ConversationDetailPage({
       // Storage is optional in embedded and private browser contexts.
     }
   }, [inspectorCollapsed])
+
+  useEffect(() => {
+    writeConversationInspectorWidth(optionalLocalStorage(), inspectorWidth)
+  }, [inspectorWidth])
+
+  useEffect(() => {
+    const workspace = workspaceRef.current
+    if (workspace === null || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(([entry]) => {
+      if (entry !== undefined) setWorkspaceWidth(entry.contentRect.width)
+    })
+    observer.observe(workspace)
+    return () => observer.disconnect()
+  }, [])
+
+  const resolvedInspectorWidth = clampConversationInspectorWidth(
+    inspectorWidth,
+    workspaceWidth,
+  )
 
   const commitChangeNavigation = (changeId: string) => {
     setSelectedChangeId(changeId)
@@ -131,12 +162,19 @@ export function ConversationDetailPage({
       }
     >
       <div
+        ref={workspaceRef}
+        data-inspector-resizing={inspectorResizing || undefined}
         className={cn(
           'relative grid h-full min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] bg-background',
           inspectorCollapsed
             ? 'min-[1440px]:grid-cols-[minmax(0,1fr)]'
             : 'min-[1440px]:grid-cols-[minmax(32rem,1fr)_var(--layout-conversation-inspector-width)]',
         )}
+        style={
+          {
+            '--layout-conversation-inspector-width': `${resolvedInspectorWidth}px`,
+          } as CSSProperties
+        }
       >
         <ConversationWorkspace
           anchorRequestKey={anchorRequestKey}
@@ -170,7 +208,14 @@ export function ConversationDetailPage({
           onArchived={onArchived}
         />
         {inspectorCollapsed ? null : (
-          <div className="hidden min-h-0 min-w-0 min-[1440px]:block">
+          <div className="relative hidden min-h-0 min-w-0 min-[1440px]:block">
+            <ConversationInspectorResizeHandle
+              resizing={inspectorResizing}
+              setResizing={setInspectorResizing}
+              setWidth={setInspectorWidth}
+              width={resolvedInspectorWidth}
+              workspaceWidth={workspaceWidth}
+            />
             <InspectorPanel
               {...inspectorProps}
               onCollapse={() => setInspectorCollapsed(true)}
@@ -204,7 +249,7 @@ export function ConversationDetailPage({
           }
           inspectorTriggerRef.current?.focus()
         }}
-        className="top-[var(--layout-topbar-height)] right-0 bottom-0 left-auto block h-[calc(100dvh-var(--layout-topbar-height))] max-h-none w-[var(--layout-conversation-inspector-width)] max-w-[calc(100vw-var(--layout-sidebar-current-width))] translate-x-0 translate-y-0 gap-0 overflow-hidden rounded-none border-y-0 border-r-0 bg-surface-inset p-0 duration-200 data-[state=closed]:translate-x-full data-[state=closed]:scale-100 data-[state=open]:scale-100 motion-reduce:transition-none"
+        className="top-[var(--layout-topbar-height)] right-0 bottom-0 left-auto block h-[calc(100dvh-var(--layout-topbar-height))] max-h-none w-[21.75rem] max-w-[calc(100vw-var(--layout-sidebar-current-width))] translate-x-0 translate-y-0 gap-0 overflow-hidden rounded-none border-y-0 border-r-0 bg-surface-inset p-0 duration-200 data-[state=closed]:translate-x-full data-[state=closed]:scale-100 data-[state=open]:scale-100 motion-reduce:transition-none"
       >
         <DialogTitle className="sr-only">会话检查器</DialogTitle>
         <InspectorPanel
@@ -233,6 +278,14 @@ function readInspectorCollapsedPreference(): boolean {
     )
   } catch {
     return false
+  }
+}
+
+function optionalLocalStorage(): Storage | undefined {
+  try {
+    return window.localStorage
+  } catch {
+    return undefined
   }
 }
 

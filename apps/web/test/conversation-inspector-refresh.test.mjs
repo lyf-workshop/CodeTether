@@ -4,6 +4,15 @@ import test from 'node:test'
 
 import { formatConversationDuration } from '../.tmp/test-dist/components/conversation/conversation-duration.js'
 import { normalizeConversationInspectorTab } from '../.tmp/test-dist/components/conversation/conversation-inspector-state.js'
+import {
+  clampConversationInspectorWidth,
+  conversationInspectorMaximumWidth,
+  conversationInspectorWidthBounds,
+  conversationInspectorWidthPreferenceKey,
+  parseConversationInspectorWidth,
+  readConversationInspectorWidth,
+  writeConversationInspectorWidth,
+} from '../.tmp/test-dist/components/conversation/conversation-inspector-layout.js'
 
 const componentRoot = new URL(
   '../src/components/conversation/',
@@ -47,6 +56,78 @@ test('Inspector collapse is a device UI preference and restores a wider workspac
     source,
     /inspectorCollapsed.*conversationId|conversationId.*inspectorCollapsed/u,
   )
+})
+
+test('Inspector width preferences clamp invalid values and preserve Conversation width', () => {
+  assert.equal(parseConversationInspectorWidth(null), 348)
+  assert.equal(parseConversationInspectorWidth(''), 348)
+  assert.equal(parseConversationInspectorWidth('NaN'), 348)
+  assert.equal(parseConversationInspectorWidth('-10'), 280)
+  assert.equal(parseConversationInspectorWidth('347.6'), 348)
+  assert.equal(parseConversationInspectorWidth('1000'), 560)
+  assert.equal(conversationInspectorMaximumWidth(1000), 488)
+  assert.equal(conversationInspectorMaximumWidth(800), 288)
+  assert.equal(conversationInspectorMaximumWidth(700), 280)
+  assert.equal(clampConversationInspectorWidth(540, 1000), 488)
+  assert.deepEqual(conversationInspectorWidthBounds, {
+    minimum: 280,
+    default: 348,
+    maximum: 560,
+    conversationMinimum: 512,
+  })
+})
+
+test('Inspector inline width persists while Sheet sizing remains independent', async () => {
+  const values = new Map()
+  const storage = {
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, value),
+  }
+
+  writeConversationInspectorWidth(storage, 480)
+  assert.equal(values.get(conversationInspectorWidthPreferenceKey), '480')
+  assert.equal(readConversationInspectorWidth(storage), 480)
+
+  const failedStorage = {
+    getItem() {
+      throw new Error('blocked')
+    },
+    setItem() {
+      throw new Error('blocked')
+    },
+  }
+  assert.equal(readConversationInspectorWidth(failedStorage), 348)
+  assert.doesNotThrow(() => writeConversationInspectorWidth(failedStorage, 480))
+
+  const source = await readFile(
+    new URL('conversation-detail-page.tsx', componentRoot),
+    'utf8',
+  )
+  assert.match(source, /readConversationInspectorWidth/u)
+  assert.match(source, /writeConversationInspectorWidth/u)
+  assert.match(source, /ResizeObserver/u)
+  assert.match(source, /width=\{resolvedInspectorWidth\}/u)
+  assert.match(source, /w-\[21\.75rem\]/u)
+  assert.doesNotMatch(
+    source,
+    /DialogContent[\s\S]*?w-\[var\(--layout-conversation-inspector-width\)\]/u,
+  )
+})
+
+test('Inspector resize handle owns pointer cleanup and keyboard resizing', async () => {
+  const source = await readFile(
+    new URL('conversation-inspector-resize-handle.tsx', componentRoot),
+    'utf8',
+  )
+
+  assert.match(source, /setPointerCapture\(event\.pointerId\)/u)
+  assert.match(source, /releasePointerCapture\(event\.pointerId\)/u)
+  assert.match(source, /onPointerCancel=\{finishResize\}/u)
+  assert.match(source, /onLostPointerCapture=\{finishResize\}/u)
+  assert.match(source, /document\.body\.style\.userSelect = 'none'/u)
+  assert.match(source, /case 'ArrowLeft'/u)
+  assert.match(source, /case 'ArrowRight'/u)
+  assert.match(source, /aria-label="调整检查器宽度"/u)
 })
 
 test('duration derives running time from the wall clock and terminal time from timestamps', () => {

@@ -10,6 +10,17 @@ import {
   workspaceProviderPresentation,
   workspaceSidebarRecentConversationLimit,
 } from '../.tmp/test-dist/components/app-shell/workspace-sidebar-model.js'
+import {
+  clampWorkspaceSidebarWidth,
+  parseWorkspaceSidebarWidth,
+  readWorkspaceSidebarCollapsed,
+  readWorkspaceSidebarWidth,
+  workspaceSidebarCollapsedPreferenceKey,
+  workspaceSidebarWidthBounds,
+  workspaceSidebarWidthPreferenceKey,
+  writeWorkspaceSidebarCollapsed,
+  writeWorkspaceSidebarWidth,
+} from '../.tmp/test-dist/components/app-shell/workspace-sidebar-layout.js'
 
 const timestamp = '2026-09-15T12:00:00.000Z'
 
@@ -89,6 +100,94 @@ test('Workspace Sidebar owns project navigation, scoped creation, and one lazy C
   assert.match(source, /查看已归档会话/u)
   assert.match(source, /展开显示/u)
   assert.doesNotMatch(detail, /ConversationRail|layout-conversation-rail/u)
+})
+
+test('Workspace Sidebar width preferences clamp invalid and incompatible values', () => {
+  assert.equal(parseWorkspaceSidebarWidth(null), 280)
+  assert.equal(parseWorkspaceSidebarWidth(''), 280)
+  assert.equal(parseWorkspaceSidebarWidth('NaN'), 280)
+  assert.equal(parseWorkspaceSidebarWidth('-20'), 220)
+  assert.equal(parseWorkspaceSidebarWidth('219'), 220)
+  assert.equal(parseWorkspaceSidebarWidth('281.6'), 282)
+  assert.equal(parseWorkspaceSidebarWidth('9999'), 420)
+  assert.equal(clampWorkspaceSidebarWidth(Number.POSITIVE_INFINITY), 280)
+  assert.deepEqual(workspaceSidebarWidthBounds, {
+    minimum: 220,
+    default: 280,
+    maximum: 420,
+  })
+})
+
+test('Workspace Sidebar layout preferences survive reload and inaccessible storage', () => {
+  const values = new Map()
+  const storage = {
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, value),
+  }
+
+  writeWorkspaceSidebarWidth(storage, 479)
+  writeWorkspaceSidebarCollapsed(storage, true)
+  assert.equal(values.get(workspaceSidebarWidthPreferenceKey), '420')
+  assert.equal(values.get(workspaceSidebarCollapsedPreferenceKey), '1')
+  assert.equal(readWorkspaceSidebarWidth(storage), 420)
+  assert.equal(readWorkspaceSidebarCollapsed(storage), true)
+
+  const failedStorage = {
+    getItem() {
+      throw new Error('blocked')
+    },
+    setItem() {
+      throw new Error('blocked')
+    },
+  }
+  assert.equal(readWorkspaceSidebarWidth(failedStorage), 280)
+  assert.equal(readWorkspaceSidebarCollapsed(failedStorage), false)
+  assert.doesNotThrow(() => writeWorkspaceSidebarWidth(failedStorage, 300))
+  assert.doesNotThrow(() =>
+    writeWorkspaceSidebarCollapsed(failedStorage, false),
+  )
+})
+
+test('Workspace Sidebar handle uses pointer capture, cleanup, and keyboard resizing', async () => {
+  const [handle, shell, sidebar, topBar] = await Promise.all([
+    readFile(
+      new URL(
+        '../src/components/app-shell/workspace-sidebar-resize-handle.tsx',
+        import.meta.url,
+      ),
+      'utf8',
+    ),
+    readFile(
+      new URL('../src/components/app-shell/app-shell.tsx', import.meta.url),
+      'utf8',
+    ),
+    readFile(
+      new URL(
+        '../src/components/app-shell/workspace-sidebar.tsx',
+        import.meta.url,
+      ),
+      'utf8',
+    ),
+    readFile(
+      new URL('../src/components/app-shell/top-bar.tsx', import.meta.url),
+      'utf8',
+    ),
+  ])
+
+  assert.match(handle, /setPointerCapture\(event\.pointerId\)/u)
+  assert.match(handle, /releasePointerCapture\(event\.pointerId\)/u)
+  assert.match(handle, /onPointerCancel=\{finishResize\}/u)
+  assert.match(handle, /onLostPointerCapture=\{finishResize\}/u)
+  assert.match(handle, /restoreDocumentStyles/u)
+  assert.match(handle, /document\.body\.style\.userSelect = 'none'/u)
+  assert.match(handle, /case 'ArrowLeft'/u)
+  assert.match(handle, /case 'ArrowRight'/u)
+  assert.match(handle, /aria-label="调整侧边栏宽度"/u)
+  assert.match(sidebar, /label="隐藏工作区侧边栏"/u)
+  assert.match(topBar, /label="显示工作区侧边栏"/u)
+  assert.match(shell, /sidebarCollapsed\s*\? '0px'/u)
+  assert.match(shell, /readWorkspaceSidebarWidth/u)
+  assert.match(shell, /readWorkspaceSidebarCollapsed/u)
 })
 
 function conversation(id, options = {}) {

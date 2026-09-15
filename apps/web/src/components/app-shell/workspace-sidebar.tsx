@@ -1,5 +1,4 @@
 import {
-  useEffect,
   useId,
   useState,
   type ComponentPropsWithoutRef,
@@ -18,6 +17,7 @@ import {
   Inbox,
   LoaderCircle,
   Monitor,
+  PanelLeftClose,
   Plus,
   Settings,
   Sparkles,
@@ -65,6 +65,7 @@ export interface WorkspaceSidebarProps extends Omit<
     project: ProjectRecord | undefined,
     trigger: HTMLButtonElement,
   ) => void
+  onCollapse: () => void
   onSettingsClick?: (event: MouseEvent<HTMLAnchorElement>) => void
 }
 
@@ -75,6 +76,7 @@ export function WorkspaceSidebar({
   currentProjectId,
   inboxAttentionCount = 0,
   onNewConversation,
+  onCollapse,
   onSettingsClick,
   className,
   'aria-label': ariaLabel = '工作区导航',
@@ -86,34 +88,52 @@ export function WorkspaceSidebar({
     ...projectListQueryOptions(runtime),
     enabled: connectionState === 'connected',
   })
-  const [expandedProjectId, setExpandedProjectId] = useState<
-    ProjectId | undefined
-  >(currentProjectId)
-
-  useEffect(() => {
-    if (currentProjectId !== undefined) setExpandedProjectId(currentProjectId)
-  }, [currentProjectId])
+  const [projectExpansion, setProjectExpansion] = useState<{
+    activeProjectId: ProjectId | undefined
+    expandedProjectId: ProjectId | undefined
+  }>(() => ({
+    activeProjectId: currentProjectId,
+    expandedProjectId: currentProjectId,
+  }))
+  const expandedProjectId =
+    projectExpansion.activeProjectId === currentProjectId
+      ? projectExpansion.expandedProjectId
+      : currentProjectId
 
   return (
     <aside
       aria-label={ariaLabel}
       data-slot="workspace-sidebar"
       className={cn(
-        'flex h-full min-h-0 w-[var(--layout-sidebar-width)] min-w-0 shrink-0 flex-col overflow-hidden border-r border-border bg-navigation text-text-primary',
+        'flex h-full min-h-0 w-full min-w-0 shrink-0 flex-col overflow-hidden border-r border-border bg-navigation text-text-primary',
         className,
       )}
       {...props}
     >
       <div className="shrink-0 px-3 pt-3 pb-2">
-        <Button
-          type="button"
-          size="sm"
-          className="h-9 w-full justify-start gap-2 px-3"
-          onClick={(event) => onNewConversation(undefined, event.currentTarget)}
-        >
-          <Plus aria-hidden="true" />
-          <span className="truncate">新建会话</span>
-        </Button>
+        <div className="flex min-w-0 items-center gap-1.5">
+          <Button
+            type="button"
+            size="sm"
+            className="h-9 min-w-0 flex-1 justify-start gap-2 px-3"
+            onClick={(event) =>
+              onNewConversation(undefined, event.currentTarget)
+            }
+          >
+            <Plus aria-hidden="true" />
+            <span className="truncate">新建会话</span>
+          </Button>
+          <IconButton
+            type="button"
+            size="sm"
+            variant="ghost"
+            label="隐藏工作区侧边栏"
+            className="size-9 shrink-0 text-text-secondary"
+            onClick={onCollapse}
+          >
+            <PanelLeftClose aria-hidden="true" />
+          </IconButton>
+        </div>
         <nav aria-label="全局导航" className="mt-2 space-y-0.5">
           <WorkspaceNavLink
             currentPath={currentPath}
@@ -172,9 +192,12 @@ export function WorkspaceSidebar({
                   }
                   expanded={project.projectId === expandedProjectId}
                   onExpandedChange={(expanded) =>
-                    setExpandedProjectId(
-                      expanded ? project.projectId : undefined,
-                    )
+                    setProjectExpansion({
+                      activeProjectId: currentProjectId,
+                      expandedProjectId: expanded
+                        ? project.projectId
+                        : undefined,
+                    })
                   }
                   onNewConversation={onNewConversation}
                 />
@@ -237,10 +260,6 @@ function WorkspaceProjectSection({
       ? undefined
       : currentConversation
 
-  useEffect(() => {
-    if (!expanded) setShowAll(false)
-  }, [expanded])
-
   return (
     <div data-workspace-project={project.projectId} data-active={active}>
       <div
@@ -257,7 +276,10 @@ function WorkspaceProjectSection({
           aria-expanded={expanded}
           label={`${expanded ? '折叠' : '展开'}项目：${project.name}`}
           className="size-7 shrink-0 text-text-muted"
-          onClick={() => onExpandedChange(!expanded)}
+          onClick={() => {
+            if (expanded) setShowAll(false)
+            onExpandedChange(!expanded)
+          }}
         >
           {expanded ? (
             <ChevronDown aria-hidden="true" />

@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import {
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from 'react'
 import { useNavigate } from '@tanstack/react-router'
 
 import {
@@ -13,6 +19,13 @@ import { NewConversationDialog } from '../conversations/new-conversation-dialog'
 import { AddProjectDialog } from '../projects/add-project-dialog'
 import { MainContent } from './main-content'
 import { WorkspaceSidebar } from './workspace-sidebar'
+import {
+  readWorkspaceSidebarCollapsed,
+  readWorkspaceSidebarWidth,
+  writeWorkspaceSidebarCollapsed,
+  writeWorkspaceSidebarWidth,
+} from './workspace-sidebar-layout'
+import { WorkspaceSidebarResizeHandle } from './workspace-sidebar-resize-handle'
 import { TopBar, type TopBarBreadcrumb } from './top-bar'
 import { DesktopNotificationSettings } from '../settings'
 
@@ -44,6 +57,19 @@ export function AppShell({
     'add-project' | 'new-conversation' | null
   >(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(
+    readWorkspaceSidebarCollapsed,
+  )
+  const [sidebarWidth, setSidebarWidth] = useState(readWorkspaceSidebarWidth)
+  const [sidebarResizing, setSidebarResizing] = useState(false)
+
+  useEffect(() => {
+    writeWorkspaceSidebarWidth(optionalLocalStorage(), sidebarWidth)
+  }, [sidebarWidth])
+
+  useEffect(() => {
+    writeWorkspaceSidebarCollapsed(optionalLocalStorage(), sidebarCollapsed)
+  }, [sidebarCollapsed])
 
   useEffect(() => {
     function handleShortcut(event: KeyboardEvent) {
@@ -58,7 +84,19 @@ export function AppShell({
 
   return (
     <TooltipProvider>
-      <div className="grid h-dvh grid-rows-[var(--layout-topbar-height)_minmax(0,1fr)] overflow-hidden bg-background text-text-primary">
+      <div
+        data-sidebar-collapsed={sidebarCollapsed || undefined}
+        data-sidebar-resizing={sidebarResizing || undefined}
+        className="grid h-dvh grid-rows-[var(--layout-topbar-height)_minmax(0,1fr)] overflow-hidden bg-background text-text-primary"
+        style={
+          {
+            '--layout-sidebar-width': `${sidebarWidth}px`,
+            '--layout-sidebar-current-width': sidebarCollapsed
+              ? '0px'
+              : `${sidebarWidth}px`,
+          } as CSSProperties
+        }
+      >
         <a
           href="#main-content"
           className="fixed top-2 left-2 z-50 -translate-y-20 rounded-sm bg-primary-action px-3 py-2 text-sm font-medium text-primary-foreground transition-transform focus-visible:translate-y-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -68,6 +106,8 @@ export function AppShell({
         <TopBar
           breadcrumbs={breadcrumbs}
           currentPage={currentPage}
+          sidebarCollapsed={sidebarCollapsed}
+          onRestoreSidebar={() => setSidebarCollapsed(false)}
           onHelp={() =>
             void navigate({
               to: '/doctor',
@@ -79,22 +119,35 @@ export function AppShell({
           }
         />
         <div className="grid min-h-0 overflow-hidden grid-cols-[var(--layout-sidebar-current-width)_minmax(0,1fr)]">
-          <WorkspaceSidebar
-            currentPath={currentPath}
-            currentProjectId={currentProject?.projectId}
-            currentConversationId={conversationIdFromPath(currentPath)}
-            currentConversation={currentConversation}
-            inboxAttentionCount={inboxAttentionCount}
-            onNewConversation={(project, trigger) => {
-              newConversationTriggerRef.current = trigger
-              setNewConversationProject(project)
-              setGlobalDialog('new-conversation')
-            }}
-            onSettingsClick={(event) => {
-              event.preventDefault()
-              setSettingsOpen(true)
-            }}
-          />
+          <div className="relative min-h-0 min-w-0">
+            {sidebarCollapsed ? null : (
+              <>
+                <WorkspaceSidebar
+                  currentPath={currentPath}
+                  currentProjectId={currentProject?.projectId}
+                  currentConversationId={conversationIdFromPath(currentPath)}
+                  currentConversation={currentConversation}
+                  inboxAttentionCount={inboxAttentionCount}
+                  onCollapse={() => setSidebarCollapsed(true)}
+                  onNewConversation={(project, trigger) => {
+                    newConversationTriggerRef.current = trigger
+                    setNewConversationProject(project)
+                    setGlobalDialog('new-conversation')
+                  }}
+                  onSettingsClick={(event) => {
+                    event.preventDefault()
+                    setSettingsOpen(true)
+                  }}
+                />
+                <WorkspaceSidebarResizeHandle
+                  resizing={sidebarResizing}
+                  setResizing={setSidebarResizing}
+                  setWidth={setSidebarWidth}
+                  width={sidebarWidth}
+                />
+              </>
+            )}
+          </div>
           <MainContent>{children}</MainContent>
         </div>
         <NewConversationDialog
@@ -137,5 +190,13 @@ function conversationIdFromPath(pathname: string): string | undefined {
     return decodeURIComponent(match[1])
   } catch {
     return match[1]
+  }
+}
+
+function optionalLocalStorage(): Storage | undefined {
+  try {
+    return window.localStorage
+  } catch {
+    return undefined
   }
 }

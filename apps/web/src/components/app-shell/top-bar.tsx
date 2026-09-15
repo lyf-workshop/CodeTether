@@ -1,6 +1,6 @@
 import type { ComponentPropsWithoutRef, MouseEventHandler } from 'react'
 import { Link } from '@tanstack/react-router'
-import { Bell, CircleHelp, Search } from 'lucide-react'
+import { Bell, CircleHelp, PanelLeftOpen, Search } from 'lucide-react'
 
 import {
   Button,
@@ -43,6 +43,8 @@ interface TopBarProps extends Omit<
   onProfile?: MouseEventHandler<HTMLButtonElement>
   onSearch?: MouseEventHandler<HTMLButtonElement>
   profile?: TopBarProfile
+  sidebarCollapsed?: boolean
+  onRestoreSidebar?: MouseEventHandler<HTMLButtonElement>
 }
 
 /** Shared desktop header. Product actions are injected by the AppShell. */
@@ -56,6 +58,8 @@ function TopBar({
   onProfile,
   onSearch,
   profile,
+  sidebarCollapsed = false,
+  onRestoreSidebar,
   ...props
 }: TopBarProps) {
   const notificationsLabel =
@@ -86,6 +90,23 @@ function TopBar({
       </div>
 
       <div className="flex min-w-0 flex-1 items-center gap-4 pr-[var(--layout-topbar-inline-padding)] pl-[var(--layout-content-inline-padding)]">
+        {sidebarCollapsed && onRestoreSidebar !== undefined ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <IconButton
+                type="button"
+                size="sm"
+                variant="ghost"
+                label="显示工作区侧边栏"
+                className="size-8 shrink-0 text-text-secondary"
+                onClick={onRestoreSidebar}
+              >
+                <PanelLeftOpen aria-hidden="true" />
+              </IconButton>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">显示工作区侧边栏</TooltipContent>
+          </Tooltip>
+        ) : null}
         <nav aria-label="当前位置" className="min-w-0 flex-1 overflow-hidden">
           <ol className="flex min-w-0 items-center gap-3 text-md font-medium">
             {resolvedBreadcrumbs.map((breadcrumb, index) => {

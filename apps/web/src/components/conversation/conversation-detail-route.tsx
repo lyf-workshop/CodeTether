@@ -305,7 +305,7 @@ function LoadedLiveConversationDetail({
           : projectLocationForMachine(projectQuery.data, machineId)?.rootPath
       }
       machine={machineQuery.data?.machine}
-      machineName={machineQuery.data?.machine.displayName ?? '机器'}
+      machineName={machineQuery.data?.machine.displayName ?? '电脑'}
       machineNames={Object.fromEntries(
         (machinesQuery.data ?? []).map((machine) => [
           machine.machineId,

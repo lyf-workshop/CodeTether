@@ -156,7 +156,7 @@ export function newConversationErrorMessage(
     case 'invalid_request':
       return '会话配置无效，请刷新后重试。'
     case 'not_found':
-      return '项目或机器不存在，或已被移除。'
+      return '项目或电脑不存在，或已被移除。'
     case 'conflict':
       return '项目状态已经变化，请刷新后重试。'
     case 'project_unavailable':

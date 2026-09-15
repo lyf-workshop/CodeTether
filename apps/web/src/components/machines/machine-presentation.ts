@@ -70,7 +70,7 @@ export function machineConnectionStatusLabel(
     case 'online':
       return '已连接'
     case 'connecting':
-      return '正在连接'
+      return '正在重新连接'
     case 'offline':
       return '离线'
     case 'recovery_required':
@@ -95,6 +95,32 @@ export function machineConnectionTransportLabel(
     case 'authentication_failed':
     case 'incompatible':
       return '远程电脑'
+  }
+}
+
+export function remoteMachineSummaryDescription(
+  state: MachineConnectionState,
+  freshness: 'current' | 'last_known' = 'current',
+): string {
+  if (freshness === 'last_known') {
+    return 'CodeTether 正在重新连接，当前显示这台电脑的上次已知状态；恢复连接后会重新确认项目和 Agent 状态。'
+  }
+
+  switch (state) {
+    case 'online':
+      return '已连接。可以查看这台电脑上的项目和 Agent；可用操作取决于各自当前状态。'
+    case 'connecting':
+      return '正在连接这台电脑。连接完成后会重新确认项目和 Agent 状态。'
+    case 'offline':
+      return '这台电脑当前离线。重新连接后会重新确认其上的项目和 Agent 状态。'
+    case 'recovery_required':
+      return '这台电脑当前无法连接。更新地址后可重新确认项目和 Agent 状态。'
+    case 'authentication_failed':
+      return '这台电脑的连接未通过身份验证，当前不能使用其上的项目或 Agent。'
+    case 'incompatible':
+      return '这台电脑的 CodeTether 版本不兼容，更新并重新连接后才能使用其上的项目或 Agent。'
+    case 'local':
+      return '这台电脑由本地 CodeTether 直接管理。'
   }
 }
 

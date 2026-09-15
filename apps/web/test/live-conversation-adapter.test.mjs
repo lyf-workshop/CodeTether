@@ -612,7 +612,7 @@ test('keeps offline remote history readable while disabling execution', () => {
     'Linux VM',
     {
       executionAvailable: false,
-      executionUnavailableLabel: '执行机器离线',
+      executionUnavailableLabel: '执行电脑离线',
     },
   )
 
@@ -620,7 +620,7 @@ test('keeps offline remote history readable while disabling execution', () => {
   assert.deepEqual(source.conversation.timeline.blocks, [])
   assert.deepEqual(source.connectionIndicator, {
     state: 'unavailable',
-    label: '执行机器离线',
+    label: '执行电脑离线',
   })
 })
 

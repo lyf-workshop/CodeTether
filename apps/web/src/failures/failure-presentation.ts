@@ -43,18 +43,18 @@ export interface FailurePresentationContext {
 const failureReasonCopy = {
   login_required: {
     title: '需要登录智能体',
-    cause: '执行机器上的智能体登录状态不可用。',
-    guidance: '请在执行机器上完成登录，然后再开始新一轮。',
+    cause: '执行电脑上的智能体登录状态不可用。',
+    guidance: '请在执行电脑上完成登录，然后再开始新一轮。',
   },
   authentication_expired: {
     title: '智能体登录已过期',
-    cause: '执行机器上的智能体凭据已过期。',
-    guidance: '请在执行机器上重新登录，然后再开始新一轮。',
+    cause: '执行电脑上的智能体凭据已过期。',
+    guidance: '请在执行电脑上重新登录，然后再开始新一轮。',
   },
   authentication_invalid: {
     title: '智能体验证失败',
-    cause: '执行机器无法使用当前智能体凭据。',
-    guidance: '请在执行机器上重新登录并确认账号状态。',
+    cause: '执行电脑无法使用当前智能体凭据。',
+    guidance: '请在执行电脑上重新登录并确认账号状态。',
   },
   account_unavailable: {
     title: '智能体账号不可用',
@@ -78,18 +78,18 @@ const failureReasonCopy = {
   },
   provider_not_installed: {
     title: '未安装智能体',
-    cause: '执行机器上没有检测到该智能体。',
-    guidance: '请在机器详情中确认安装状态。',
+    cause: '执行电脑上没有检测到该智能体。',
+    guidance: '请在电脑详情中确认安装状态。',
   },
   provider_unsupported_version: {
     title: '智能体版本不受支持',
-    cause: '执行机器上的智能体版本不在当前支持范围内。',
+    cause: '执行电脑上的智能体版本不在当前支持范围内。',
     guidance: '请更新智能体后重新检测。',
   },
   provider_misconfigured: {
     title: '智能体配置不可用',
     cause: '智能体已安装，但当前配置无法安全执行。',
-    guidance: '请在执行机器上检查配置，并在机器详情中重新检测。',
+    guidance: '请在执行电脑上检查配置，并在电脑详情中重新检测。',
   },
   provider_service_unavailable: {
     title: '智能体服务暂时不可用',
@@ -99,7 +99,7 @@ const failureReasonCopy = {
   provider_start_failed: {
     title: '智能体启动失败',
     cause: 'CodeTether 未能安全启动智能体进程。',
-    guidance: '请检查机器详情中的执行状态后再继续。',
+    guidance: '请检查电脑详情中的执行状态后再继续。',
   },
   provider_crashed: {
     title: '智能体意外退出',
@@ -109,37 +109,37 @@ const failureReasonCopy = {
   provider_session_lost: {
     title: '智能体会话已丢失',
     cause: '智能体无法继续识别这段原生会话。',
-    guidance: '请查看机器详情；CodeTether 不会假装恢复原生连续性。',
+    guidance: '请查看电脑详情；CodeTether 不会假装恢复原生连续性。',
   },
   provider_protocol_error: {
     title: '智能体协议不兼容',
     cause: '智能体返回了 CodeTether 无法安全接受的响应。',
-    guidance: '请更新智能体并在机器详情中重新检测。',
+    guidance: '请更新智能体并在电脑详情中重新检测。',
   },
   machine_offline: {
-    title: '执行机器离线',
-    cause: 'CodeTether 当前无法连接到这台执行机器。',
-    guidance: '请恢复机器连接并等待状态重新验证。',
+    title: '执行电脑离线',
+    cause: 'CodeTether 当前无法连接到这台执行电脑。',
+    guidance: '请恢复电脑连接并等待状态重新验证。',
   },
   node_disconnected: {
     title: 'CodeTether Node 已断开',
-    cause: '执行机器上的 CodeTether Node 不再连接。',
+    cause: '执行电脑上的 CodeTether Node 不再连接。',
     guidance: '请恢复 Node 运行并等待安全重连。',
   },
   machine_identity_mismatch: {
-    title: '机器身份验证失败',
-    cause: '远程端身份与已信任的机器不一致。',
-    guidance: '请在机器详情中检查连接；不要绕过身份验证。',
+    title: '电脑身份验证失败',
+    cause: '远程端身份与已信任的电脑不一致。',
+    guidance: '请在电脑详情中检查连接；不要绕过身份验证。',
   },
   remote_execution_unavailable: {
     title: '远程执行不可用',
-    cause: '这台机器当前不满足远程执行条件。',
-    guidance: '请在机器详情中检查连接和智能体执行状态。',
+    cause: '这台电脑当前不满足远程执行条件。',
+    guidance: '请在电脑详情中检查连接和智能体执行状态。',
   },
   project_location_missing: {
     title: '缺少项目位置',
-    cause: '这台机器上没有可用于本会话的已注册项目位置。',
-    guidance: '请在项目详情中注册或修复对应机器上的项目位置。',
+    cause: '这台电脑上没有可用于本会话的已注册项目位置。',
+    guidance: '请在项目详情中注册或修复对应电脑上的项目位置。',
   },
   project_location_invalid: {
     title: '项目位置已改变',
@@ -148,8 +148,8 @@ const failureReasonCopy = {
   },
   project_location_unavailable: {
     title: '项目位置不可用',
-    cause: '执行机器当前无法访问已注册的项目位置。',
-    guidance: '请在项目详情中检查该机器的项目位置。',
+    cause: '执行电脑当前无法访问已注册的项目位置。',
+    guidance: '请在项目详情中检查该电脑的项目位置。',
   },
   execution_capacity_reached: {
     title: '执行容量已满',
@@ -179,7 +179,7 @@ const failureReasonCopy = {
   protocol_limit_exceeded: {
     title: '执行数据超过安全上限',
     cause: '远程执行数据超过了协议允许的有界范围。',
-    guidance: '请查看已保存的结果和机器执行状态。',
+    guidance: '请查看已保存的结果和电脑执行状态。',
   },
   transport_lost: {
     title: '执行连接已中断',
@@ -189,11 +189,11 @@ const failureReasonCopy = {
   transport_authentication_failed: {
     title: '执行连接验证失败',
     cause: 'CodeTether 无法验证远程执行连接。',
-    guidance: '请在机器详情中检查受信任连接。',
+    guidance: '请在电脑详情中检查受信任连接。',
   },
   reconnecting: {
     title: '正在重新连接',
-    cause: 'CodeTether 正在恢复与执行机器的安全连接。',
+    cause: 'CodeTether 正在恢复与执行电脑的安全连接。',
     guidance: '请等待连接状态重新验证。',
   },
   relay_not_configured: {
@@ -259,7 +259,7 @@ const failureReasonCopy = {
   provider_error: {
     title: '智能体执行失败',
     cause: '智能体未能完成本轮工作。',
-    guidance: '请查看机器详情中的执行状态后再继续。',
+    guidance: '请查看电脑详情中的执行状态后再继续。',
   },
   runtime_error: {
     title: '运行时执行失败',
@@ -275,7 +275,7 @@ const failureReasonCopy = {
 
 const sourceLabels = {
   provider: '智能体',
-  machine: '机器',
+  machine: '电脑',
   transport: '安全连接',
   project: '项目位置',
   runtime: 'CodeTether 运行时',
@@ -344,8 +344,8 @@ function contextualizedCopy(
       machineName === undefined || machineName.length === 0
         ? providerCopy
         : providerCopy
-            .replaceAll('执行机器', contextualLabel(machineName))
-            .replaceAll('这台机器', contextualLabel(machineName))
+            .replaceAll('执行电脑', contextualLabel(machineName))
+            .replaceAll('这台电脑', contextualLabel(machineName))
     return machineCopy.replace(/\s+/gu, ' ').trim()
   }
   return {

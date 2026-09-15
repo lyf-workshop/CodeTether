@@ -138,7 +138,7 @@ test('canonical failure cards cover required user-facing categories without pars
     ['rate_limited', '请求过于频繁'],
     ['provider_not_installed', '未安装智能体'],
     ['provider_unsupported_version', '智能体版本不受支持'],
-    ['machine_offline', '执行机器离线'],
+    ['machine_offline', '执行电脑离线'],
     ['reconnecting', '正在重新连接'],
     ['relay_channel_open_failed', 'Internet Relay 通道无法建立'],
     ['relay_channel_lost', 'Internet Relay 执行通道已中断'],

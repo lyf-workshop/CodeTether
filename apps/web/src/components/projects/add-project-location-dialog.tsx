@@ -196,7 +196,7 @@ export function AddProjectLocationDialog({
                   ? createNewProject
                     ? '验证另一台已安全连接电脑上的现有项目文件夹。'
                     : `验证“${project?.name ?? '此项目'}”在另一台已安全连接电脑上的现有文件夹。`
-                  : `将“${project?.name ?? '此项目'}”在一台已配对远程机器上的真实目录注册为独立位置。`}
+                  : `将“${project?.name ?? '此项目'}”在一台已配对远程电脑上的真实目录注册为独立位置。`}
               </DialogDescription>
             </DialogHeader>
 
@@ -216,7 +216,7 @@ export function AddProjectLocationDialog({
 
               <div className="min-w-0">
                 <label className="text-sm font-medium text-text-primary">
-                  {presentation === 'ordinary' ? '电脑' : '机器'}
+                  电脑
                 </label>
                 {candidates.length === 0 ? (
                   <p
@@ -225,7 +225,7 @@ export function AddProjectLocationDialog({
                   >
                     {presentation === 'ordinary'
                       ? '没有可选择的电脑。请先安全连接另一台电脑，或检查这个项目是否已经添加。'
-                      : '没有可添加的位置。请先配对一台支持项目访问的远程机器，或检查该项目是否已在机器上注册。'}
+                      : '没有可添加的位置。请先配对一台支持项目访问的远程电脑，或检查该项目是否已在电脑上注册。'}
                   </p>
                 ) : (
                   <Select
@@ -240,13 +240,13 @@ export function AddProjectLocationDialog({
                   >
                     <SelectTrigger
                       className="mt-2 min-w-0"
-                      aria-label="选择远程机器"
+                      aria-label="选择远程电脑"
                     >
                       <SelectValue
                         placeholder={
                           presentation === 'ordinary'
                             ? '选择另一台电脑'
-                            : '选择远程机器'
+                            : '选择远程电脑'
                         }
                       >
                         {selectedMachine === undefined ? undefined : (
@@ -308,7 +308,7 @@ export function AddProjectLocationDialog({
                 >
                   {presentation === 'ordinary'
                     ? '输入这台电脑上已有项目文件夹的完整路径。CodeTether 只验证该文件夹，不会浏览文件或执行命令。'
-                    : '输入所选远程机器上的绝对目录路径。CodeTether 只验证并注册此目录，不浏览文件或执行命令。'}
+                    : '输入所选远程电脑上的绝对目录路径。CodeTether 只验证并注册此目录，不浏览文件或执行命令。'}
                 </p>
                 <Input
                   ref={pathInputRef}

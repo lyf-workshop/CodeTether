@@ -283,11 +283,11 @@ test('Machine errors expose stable actionable copy instead of transport diagnost
   )
   assert.equal(
     machineErrorMessage(error('machine_authentication_failed'), 'confirm'),
-    '无法验证这台机器的身份。',
+    '无法验证这台电脑的身份。',
   )
   assert.equal(
     machineErrorMessage(error('machine_identity_mismatch'), 'update-address'),
-    '该地址指向另一台机器；CodeTether 已拒绝连接，原信任关系未更改。',
+    '该地址指向另一台电脑；CodeTether 已拒绝连接，原信任关系未更改。',
   )
   assert.equal(
     machineErrorMessage(error('machine_protocol_incompatible'), 'begin'),
@@ -299,7 +299,7 @@ test('Machine errors expose stable actionable copy instead of transport diagnost
   )
   assert.equal(
     machineErrorMessage(error('machine_unreachable'), 'refresh-providers'),
-    '远程机器当前不可连接，无法重新检测智能体。',
+    '远程电脑当前不可连接，无法刷新 Agent 信息。',
   )
 })
 

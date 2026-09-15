@@ -194,7 +194,7 @@ const scenarios = [
   },
   {
     id: 'machine-offline',
-    label: '机器离线',
+    label: '电脑离线',
     reason: 'machine_offline',
     hostCode: 'machine_unreachable',
     providerName: 'Codex',
@@ -445,7 +445,7 @@ const fixtureShowcaseRoute = createRoute({
 const fixtureMachineRoute = createRoute({
   getParentRoute: () => fixtureRootRoute,
   path: '/machines/$machineId',
-  component: () => <NavigationConfirmation target="机器" />,
+  component: () => <NavigationConfirmation target="电脑" />,
 })
 const fixtureProjectRoute = createRoute({
   getParentRoute: () => fixtureRootRoute,

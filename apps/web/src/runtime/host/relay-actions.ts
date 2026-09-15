@@ -194,7 +194,7 @@ export class RelayActions {
 
 export function relayErrorMessage(error: unknown): string {
   if (error instanceof RelayMutationBusyError) {
-    return '这台机器的 Internet Relay 设置正在更新，请稍候。'
+    return '这台电脑的 Internet Relay 设置正在更新，请稍候。'
   }
   if (error instanceof CodeTetherIncompatibleProtocolError) {
     return '当前 CodeTether 版本与本地服务不兼容，请更新应用。'
@@ -213,7 +213,7 @@ export function relayErrorMessage(error: unknown): string {
     case 'timeout':
       return 'Internet Relay 暂时无法连接。局域网直连不受影响。'
     case 'relay_authentication_failed':
-      return 'Relay 无法验证此 Controller；现有机器信任关系未更改。'
+      return 'Relay 无法验证此 Controller；现有电脑信任关系未更改。'
     case 'relay_identity_mismatch':
       return 'Relay 身份与已确认指纹不一致，CodeTether 已拒绝连接。'
     case 'relay_protocol_incompatible':
@@ -225,7 +225,7 @@ export function relayErrorMessage(error: unknown): string {
     case 'invalid_request':
       return 'Relay 设置无效，请检查主机、端口、身份指纹和注册令牌。'
     case 'not_found':
-      return '这台远程机器已不存在。'
+      return '这台远程电脑已不存在。'
     case 'runtime_unavailable':
       return 'CodeTether 本地服务暂时不可用。'
     default:

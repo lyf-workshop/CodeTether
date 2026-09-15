@@ -91,9 +91,9 @@ export function ConversationFailureCard({
                 <Link
                   to="/machines/$machineId"
                   params={{ machineId }}
-                  aria-label="打开执行机器详情"
+                  aria-label="打开执行电脑详情"
                 >
-                  查看机器
+                  查看电脑
                 </Link>
               </Button>
             ) : null}

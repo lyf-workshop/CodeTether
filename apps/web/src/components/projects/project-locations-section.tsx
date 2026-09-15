@@ -74,7 +74,7 @@ export function ProjectLocationsSection({
             工作区位置
           </h2>
           <p className="mt-0.5 text-sm text-text-secondary">
-            每个位置都属于一台机器，并拥有独立的根目录与可用状态。
+            每个位置都属于一台电脑，并拥有独立的根目录与可用状态。
           </p>
         </div>
         <span className="shrink-0 text-xs text-text-muted">
@@ -148,13 +148,13 @@ function ProjectLocationCard({
         {machine === undefined ? (
           <span className="inline-flex min-w-0 items-center gap-1.5 text-sm text-text-secondary">
             <Monitor aria-hidden="true" className="size-3.5 shrink-0" />
-            机器信息不可用
+            电脑信息不可用
           </span>
         ) : (
           <Link
             to="/machines/$machineId"
             params={{ machineId: machine.machineId }}
-            aria-label={`打开机器：${machine.displayName}`}
+            aria-label={`打开电脑：${machine.displayName}`}
             className="min-w-0 rounded-xs outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
           >
             <MachineBadge
@@ -243,7 +243,7 @@ function ProjectLocationCard({
 
       {machine?.kind === 'remote' && !machineReachable ? (
         <p className="mt-3 text-xs leading-relaxed text-warning">
-          该目录已在注册时由远程节点验证。远程机器当前离线；位置元数据仍然保留，但不会在后台重新检查目录。
+          该目录已在注册时由远程节点验证。远程电脑当前离线；位置元数据仍然保留，但不会在后台重新检查目录。
         </p>
       ) : null}
       {copyState === 'failed' ? (

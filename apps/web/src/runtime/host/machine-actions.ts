@@ -333,13 +333,13 @@ export function machineErrorMessage(
   operation: MachineOperation,
 ): string {
   if (error instanceof MachineMutationBusyError) {
-    return '此机器操作正在处理中，请稍候。'
+    return '此电脑操作正在处理中，请稍候。'
   }
   if (error instanceof CodeTetherIncompatibleProtocolError) {
     return '当前 CodeTether 版本不兼容，请更新应用后重试。'
   }
   if (error instanceof CodeTetherProtocolError) {
-    return 'CodeTether 暂时无法读取机器数据，请重试。'
+    return 'CodeTether 暂时无法读取电脑数据，请重试。'
   }
   if (!(error instanceof CodeTetherResponseError)) {
     return 'CodeTether 暂时无法连接，请重试。'
@@ -356,16 +356,16 @@ export function machineErrorMessage(
         : '配对尝试过多，请稍后在远程节点生成新的配对码。'
     case 'machine_authentication_failed':
       return operation === 'update-address'
-        ? '无法验证新地址上的机器身份；原信任关系未更改。'
-        : '无法验证这台机器的身份。'
+        ? '无法验证新地址上的电脑身份；原信任关系未更改。'
+        : '无法验证这台电脑的身份。'
     case 'machine_identity_mismatch':
       return operation === 'update-address'
-        ? '该地址指向另一台机器；CodeTether 已拒绝连接，原信任关系未更改。'
-        : '远程机器的身份与已确认信息不一致。'
+        ? '该地址指向另一台电脑；CodeTether 已拒绝连接，原信任关系未更改。'
+        : '远程电脑的身份与已确认信息不一致。'
     case 'machine_unreachable':
       return operation === 'refresh-providers'
-        ? '远程机器当前不可连接，无法重新检测智能体。'
-        : '远程机器当前不可连接，请检查地址和局域网连接。'
+        ? '远程电脑当前不可连接，无法刷新 Agent 信息。'
+        : '远程电脑当前不可连接，请检查地址和局域网连接。'
     case 'machine_protocol_incompatible':
       return '远程节点版本不兼容，请更新 CodeTether Node。'
     case 'machine_connection_failed':
@@ -375,27 +375,27 @@ export function machineErrorMessage(
         ? '请输入有效的节点地址和六码配对码。'
         : operation === 'update-address'
           ? '请输入有效的局域网地址和端口。'
-          : '机器请求无效，请重试。'
+          : '电脑请求无效，请重试。'
     case 'not_found':
       return operation === 'unpair'
-        ? '该远程机器已不存在或已经取消配对。'
+        ? '该远程电脑已不存在或已经取消配对。'
         : operation === 'begin' || operation === 'confirm'
           ? '配对请求不存在或已过期，请重新开始。'
-          : '该远程机器已不存在。'
+          : '该远程电脑已不存在。'
     case 'conflict':
       return operation === 'unpair'
-        ? '机器状态已经变化，请返回列表后重试。'
+        ? '电脑状态已经变化，请返回列表后重试。'
         : operation === 'begin' || operation === 'confirm'
-          ? '这台机器已经配对，或配对状态已经变化。'
-          : '机器连接状态已经变化，请重试。'
+          ? '这台电脑已经配对，或配对状态已经变化。'
+          : '电脑连接状态已经变化，请重试。'
     case 'timeout':
-      return '机器操作等待超时，请重试。'
+      return '电脑操作等待超时，请重试。'
     case 'runtime_unavailable':
       return 'CodeTether 本地服务暂时不可用。'
     case 'unsupported':
-      return '当前 CodeTether 版本不支持此机器操作。'
+      return '当前 CodeTether 版本不支持此电脑操作。'
     case 'machine_has_project_locations':
-      return '这台机器仍有关联项目位置，请先移除这些位置再取消配对。'
+      return '这台电脑仍有关联项目位置，请先移除这些位置再取消配对。'
     case 'internal':
     case 'provider_error':
     case 'provider_not_installed':
@@ -426,11 +426,11 @@ export function machineErrorMessage(
     case 'provider_session_store_unreadable':
     case 'provider_session_candidate_expired':
       return operation === 'unpair'
-        ? 'CodeTether 未能取消机器配对。'
+        ? 'CodeTether 未能取消电脑配对。'
         : operation === 'refresh-providers'
-          ? 'CodeTether 未能重新检测这台机器上的智能体。'
+          ? 'CodeTether 未能刷新这台电脑上的 Agent 信息。'
           : operation === 'retry' || operation === 'update-address'
-            ? 'CodeTether 未能恢复机器连接。'
-            : 'CodeTether 未能完成机器配对。'
+            ? 'CodeTether 未能恢复电脑连接。'
+            : 'CodeTether 未能完成电脑配对。'
   }
 }

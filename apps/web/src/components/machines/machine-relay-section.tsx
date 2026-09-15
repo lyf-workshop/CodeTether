@@ -200,7 +200,7 @@ export function MachineRelaySection({
         <p className="min-w-0 leading-relaxed">
           {relay?.internetExecutionEnabled === true
             ? '当已验证的直连不可用时，新请求可以使用 Internet Relay。活动中的请求不会在直连与 Relay 之间迁移；Relay 在线也不单独代表项目位置或智能体可执行。'
-            : 'Internet Relay 当前不能承载新的 Machine 执行。Relay 在线状态本身不代表机器、项目位置或智能体可执行。'}
+            : 'Internet Relay 当前不能承载新的 Machine 执行。Relay 在线状态本身不代表电脑、项目位置或智能体可执行。'}
         </p>
       </div>
 
@@ -341,7 +341,7 @@ export function MachineRelaySection({
               <DialogTitle>移除 Relay 配置？</DialogTitle>
               <DialogDescription>
                 这只会从 CodeTether Desktop
-                移除这台机器的本地配置并断开控制连接。机器配对信任不会改变；Relay
+                移除这台电脑的本地配置并断开控制连接。电脑配对信任不会改变；Relay
                 端的基础设施撤销仍由 Relay 操作员单独管理。
               </DialogDescription>
             </DialogHeader>
@@ -679,8 +679,8 @@ function EnrollRelayDialog({
             </DialogTitle>
             <DialogDescription>
               {reenrollment
-                ? '撤销后的普通重连仍会被拒绝。只有 Relay 操作员签发的新一次性令牌才能重新注册同一 Controller 身份；机器配对信任不会改变。'
-                : '此令牌仅用于将现有 Controller 身份注册到 Relay，不会创建机器信任。'}
+                ? '撤销后的普通重连仍会被拒绝。只有 Relay 操作员签发的新一次性令牌才能重新注册同一 Controller 身份；电脑配对信任不会改变。'
+                : '此令牌仅用于将现有 Controller 身份注册到 Relay，不会创建电脑信任。'}
             </DialogDescription>
           </DialogHeader>
           <div className="mt-5 min-w-0 space-y-4">

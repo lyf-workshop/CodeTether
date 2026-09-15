@@ -221,7 +221,7 @@ export function AddRemoteMachineDialog({
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogTrigger asChild>{trigger}</DialogTrigger>
       <DialogContent
-        closeLabel="关闭添加机器对话框"
+        closeLabel="关闭添加电脑对话框"
         className="max-w-lg overflow-x-hidden"
         showCloseButton={!busy}
         onOpenAutoFocus={(event) => {
@@ -268,7 +268,7 @@ export function AddRemoteMachineDialog({
               <DialogTitle>
                 {presentation === 'ordinary'
                   ? '添加另一台电脑'
-                  : '添加远程机器'}
+                  : '添加远程电脑'}
               </DialogTitle>
               <DialogDescription>
                 {presentation === 'ordinary'
@@ -395,7 +395,7 @@ export function AddRemoteMachineDialog({
                 tabIndex={-1}
                 className="outline-none"
               >
-                {presentation === 'ordinary' ? '确认这台电脑' : '确认远程机器'}
+                {presentation === 'ordinary' ? '确认这台电脑' : '确认远程电脑'}
               </DialogTitle>
               <DialogDescription>
                 {presentation === 'ordinary'
@@ -456,7 +456,7 @@ export function AddRemoteMachineDialog({
               <p className="rounded-sm border border-warning/30 bg-warning-muted/45 px-3 py-2 text-sm text-text-secondary">
                 {presentation === 'ordinary'
                   ? '只有当另一台电脑显示相同的安全校验码时才继续。设置代码不会成为长期凭据，连接也不会自动执行工作。'
-                  : '只有当远程节点显示相同的安全校验码时，才信任这台机器。CodeTether 不会因配对本身执行命令或访问文件；远程会话还必须满足独立的项目位置和智能体安全能力校验。'}
+                  : '只有当远程节点显示相同的安全校验码时，才信任这台电脑。CodeTether 不会因配对本身执行命令或访问文件；远程会话还必须满足独立的项目位置和智能体安全能力校验。'}
               </p>
 
               {error ? (
@@ -483,7 +483,7 @@ export function AddRemoteMachineDialog({
                 disabled={busy}
                 onClick={() => confirmMutation.mutate()}
               >
-                {confirmMutation.isPending ? '正在建立信任…' : '信任这台机器'}
+                {confirmMutation.isPending ? '正在建立信任…' : '信任这台电脑'}
               </Button>
             </DialogFooter>
           </section>

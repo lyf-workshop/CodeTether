@@ -341,11 +341,11 @@ test('structured canonical failures control pre-Turn mutation copy without raw f
     ],
     [
       canonicalFailure('login_required'),
-      '执行机器上的智能体登录状态不可用。 请在执行机器上完成登录，然后再开始新一轮。',
+      '执行电脑上的智能体登录状态不可用。 请在执行电脑上完成登录，然后再开始新一轮。',
     ],
     [
       canonicalFailure('machine_offline'),
-      'CodeTether 当前无法连接到这台执行机器。 请恢复机器连接并等待状态重新验证。',
+      'CodeTether 当前无法连接到这台执行电脑。 请恢复电脑连接并等待状态重新验证。',
     ],
     [
       canonicalFailure('project_location_invalid'),

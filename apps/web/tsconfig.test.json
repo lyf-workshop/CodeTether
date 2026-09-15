@@ -40,6 +40,7 @@
     "src/components/projects/add-project-directory-interaction.ts",
     "src/components/projects/add-project-presentation.ts",
     "src/components/projects/project-format.ts",
+    "src/components/machines/machine-presentation.ts",
     "src/components/machines/machine-relay-presentation.ts",
     "src/components/onboarding/onboarding-model.ts",
     "src/components/onboarding/startup-gate-recovery.ts",

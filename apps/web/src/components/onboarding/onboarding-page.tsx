@@ -781,7 +781,7 @@ function SetupStep(props: SetupStepProps) {
           <StepHeading
             icon={<ShieldCheck aria-hidden="true" />}
             title="添加另一台电脑（可选）"
-            description="本机使用不需要网络远程设置。你可以以后随时从“机器”或“设置”中添加。"
+            description="本机使用不需要网络远程设置。你可以以后随时从“电脑”或“设置”中添加。"
           />
           <ol className="mt-5 grid gap-2 rounded-md border border-border bg-surface-muted p-4 text-sm text-text-secondary sm:grid-cols-3">
             <li>

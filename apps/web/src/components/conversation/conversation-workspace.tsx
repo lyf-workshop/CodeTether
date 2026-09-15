@@ -171,9 +171,9 @@ export function ConversationWorkspace({
               <Link
                 to="/machines/$machineId"
                 params={{ machineId: executionBoundary.machineId }}
-                aria-label={`查看${executionBoundary.machineName}的机器详情`}
+                aria-label={`查看${executionBoundary.machineName}的电脑详情`}
               >
-                查看机器
+                查看电脑
               </Link>
             </Button>
           </div>
@@ -222,9 +222,9 @@ interface ProjectLocationBoundaryProps {
 function ProjectLocationBoundary({ boundary }: ProjectLocationBoundaryProps) {
   const copy = {
     project_location_missing: {
-      title: '这台机器缺少项目位置',
+      title: '这台电脑缺少项目位置',
       description:
-        '历史记录仍可查看。请在项目详情中注册此机器的项目位置；CodeTether 不会改用其他目录。',
+        '历史记录仍可查看。请在项目详情中注册此电脑的项目位置；CodeTether 不会改用其他目录。',
     },
     project_location_invalid: {
       title: '已注册的项目位置已改变',

@@ -2,6 +2,11 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 
+import {
+  machineConnectionStatusLabel,
+  remoteMachineSummaryDescription,
+} from '../.tmp/test-dist/components/machines/machine-presentation.js'
+
 const sourceRoot = new URL('../src/', import.meta.url)
 
 test('Machines routes and navigation expose only real Host-backed Machine pages', async () => {
@@ -29,6 +34,21 @@ test('Machines routes and navigation expose only real Host-backed Machine pages'
   assert.match(machineProjects, /projects\.map/u)
   assert.match(detail, /conversations\.map/u)
   assert.doesNotMatch(detail, /SSH|remote terminal|CPU chart|GPU chart/u)
+})
+
+test('remote computer summary copy follows current and last-known connection truth', () => {
+  const online = remoteMachineSummaryDescription('online')
+  const offline = remoteMachineSummaryDescription('offline')
+  const lastKnown = remoteMachineSummaryDescription('offline', 'last_known')
+
+  assert.match(online, /已连接/u)
+  assert.match(online, /可以查看/u)
+  assert.match(offline, /当前离线/u)
+  assert.doesNotMatch(offline, /已连接/u)
+  assert.doesNotMatch(offline, /当前在线/u)
+  assert.match(lastKnown, /上次已知状态/u)
+  assert.doesNotMatch(lastKnown, /已连接/u)
+  assert.equal(machineConnectionStatusLabel('connecting'), '正在重新连接')
 })
 
 test('local Machine Detail separates Provider installation from execution health', async () => {
@@ -148,8 +168,8 @@ test('remote Machine Detail separates direct reachability from the Host-selected
   assert.match(remoteDetail, /label="局域网直连"/u)
   assert.match(remoteDetail, /machineConnectionStateLabel\(directState\)/u)
   assert.match(remoteDetail, /label="直连地址"/u)
-  assert.match(detail, /case 'direct':[\s\S]*return '局域网直连'/u)
-  assert.match(detail, /case 'relay':[\s\S]*return 'Internet Relay'/u)
+  assert.match(detail, /case 'direct':[\s\S]*return '本地网络连接'/u)
+  assert.match(detail, /case 'relay':[\s\S]*return '通过互联网连接'/u)
   assert.match(detail, /case 'unavailable':[\s\S]*return '当前不可用'/u)
   assert.doesNotMatch(
     remoteDetail,
@@ -171,7 +191,7 @@ test('New Conversation binds Machine identity and machine-scoped Provider truth'
   assert.match(providerSelection, /provider\.capabilities\.streaming/u)
   assert.match(providerSelection, /provider\.capabilities\.resume/u)
   assert.match(dialog, /machineId: selection\.machineId/u)
-  assert.match(dialog, /aria-label="选择机器"/u)
+  assert.match(dialog, /aria-label="选择运行电脑"/u)
   assert.match(actions, /current\.machineId === machine/u)
   assert.match(actions, /response\.data\.conversation\.machineId !== machine/u)
   assert.match(
@@ -224,7 +244,7 @@ test('Project and Conversation surfaces resolve Machine display without a switch
     /providerLifecycleSupportsConversationExecution/u,
   )
   assert.match(conversationRoute, /executionBoundary/u)
-  assert.match(controls, /远程执行机器当前离线/u)
+  assert.match(controls, /远程执行电脑当前离线/u)
   assert.match(workspace, /to="\/machines\/\$machineId"/u)
   assert.match(header, /name=\{conversation\.machine\}/u)
   assert.match(inspector, /conversation\.machine/u)

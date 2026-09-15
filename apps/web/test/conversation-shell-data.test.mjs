@@ -323,15 +323,15 @@ test('new Conversation errors prefer canonical failure recovery copy', () => {
     ],
     [
       canonicalFailure('login_required'),
-      '执行机器上的 Claude Code 登录状态不可用。 请在执行机器上完成登录，然后再开始新一轮。',
+      '执行电脑上的 Claude Code 登录状态不可用。 请在执行电脑上完成登录，然后再开始新一轮。',
     ],
     [
       canonicalFailure('machine_offline'),
-      'CodeTether 当前无法连接到这台执行机器。 请恢复机器连接并等待状态重新验证。',
+      'CodeTether 当前无法连接到这台执行电脑。 请恢复电脑连接并等待状态重新验证。',
     ],
     [
       canonicalFailure('project_location_missing'),
-      '这台机器上没有可用于本会话的已注册项目位置。 请在项目详情中注册或修复对应机器上的项目位置。',
+      '这台电脑上没有可用于本会话的已注册项目位置。 请在项目详情中注册或修复对应电脑上的项目位置。',
     ],
   ]
 

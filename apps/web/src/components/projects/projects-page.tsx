@@ -82,7 +82,7 @@ export function ProjectsPage() {
         <div className="min-w-0">
           <h1 className="text-page font-semibold text-text-primary">项目</h1>
           <p className="mt-0.5 text-sm font-regular text-text-secondary">
-            管理 CodeTether 可以访问的项目和机器工作区位置。
+            管理 CodeTether 可以访问的项目和电脑工作区位置。
           </p>
         </div>
 

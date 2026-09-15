@@ -269,7 +269,7 @@ export function DoctorPage() {
                 compact
               />
               <KeyValue
-                label="机器标识"
+                label="电脑标识"
                 value={doctor.thisComputer.machineId}
                 compact
                 mono

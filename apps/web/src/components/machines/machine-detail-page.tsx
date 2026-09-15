@@ -68,6 +68,7 @@ import {
   machineConnectionStateLabel,
   machinePlatformLabel,
   remoteMachineAddressLabel,
+  remoteMachineSummaryDescription,
 } from './machine-presentation'
 import { UnpairMachineDialog } from './unpair-machine-dialog'
 import { UpdateMachineAddressDialog } from './update-machine-address-dialog'
@@ -469,7 +470,7 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
             aria-hidden="true"
             className="size-3.5 animate-spin motion-reduce:animate-none"
           />
-          正在重新连接，当前显示最近读取的机器数据。
+          正在重新连接，当前显示最近读取的电脑数据。
         </p>
       ) : null}
     </MachinePageFrame>
@@ -553,7 +554,10 @@ function RemoteMachineDetail({
             </Badge>
           </div>
           <p className="mt-1 text-sm text-text-secondary">
-            已连接到这台电脑，可使用其上安装的 Agent 和项目。
+            {remoteMachineSummaryDescription(
+              machine.connectionState,
+              hostConnectionState === 'connected' ? 'current' : 'last_known',
+            )}
           </p>
         </div>
         <Button
@@ -780,7 +784,7 @@ function RemoteMachineDetail({
             aria-hidden="true"
             className="size-3.5 animate-spin motion-reduce:animate-none"
           />
-          正在重新连接，当前显示最近读取的机器数据。
+          正在重新连接，当前显示最近读取的电脑数据。
         </p>
       ) : null}
 
@@ -1203,9 +1207,9 @@ function executionTransportLabel(
 ): string {
   switch (transport) {
     case 'direct':
-      return '局域网直连'
+      return '本地网络连接'
     case 'relay':
-      return 'Internet Relay'
+      return '通过互联网连接'
     case 'unavailable':
       return '当前不可用'
     case undefined:

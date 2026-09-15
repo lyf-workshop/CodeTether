@@ -143,7 +143,7 @@ function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
             </span>
           </div>
           <p className="mt-1 text-sm text-text-secondary">
-            同一个项目可以在不同机器上拥有独立的工作区位置。
+            同一个项目可以在不同电脑上拥有独立的工作区位置。
           </p>
         </div>
 
@@ -217,7 +217,7 @@ function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
               当前没有可用的工作区位置
             </h2>
             <p className="mt-0.5 text-sm font-regular text-text-secondary">
-              已注册的位置当前均不可用。持久项目和历史仍可读取；恢复本地目录或远程机器连接后会重新计算位置状态。
+              已注册的位置当前均不可用。持久项目和历史仍可读取；恢复本地目录或远程电脑连接后会重新计算位置状态。
             </p>
           </div>
         </section>
@@ -267,7 +267,7 @@ function ProjectAvailabilityPanel({
       </div>
       <p className="mt-3 text-sm font-regular text-text-secondary">
         {available
-          ? '至少一个工作区位置当前可访问。智能体执行仍取决于所选机器的真实能力。'
+          ? '至少一个工作区位置当前可访问。智能体执行仍取决于所选电脑的真实能力。'
           : '持久项目记录仍可查看，但所有工作区相关操作会安全失败。'}
       </p>
       <Separator className="my-5" />
@@ -278,10 +278,10 @@ function ProjectAvailabilityPanel({
         />
         <div>
           <p className="text-sm font-medium text-text-primary">
-            机器范围的工作区授权
+            电脑范围的工作区授权
           </p>
           <p className="mt-1 text-xs font-regular text-text-muted">
-            每个位置都绑定到一台真实机器；路径授权不会在机器之间复制或推断。
+            每个位置都绑定到一台真实电脑；路径授权不会在电脑之间复制或推断。
           </p>
         </div>
       </div>

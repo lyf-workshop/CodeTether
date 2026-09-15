@@ -21,7 +21,7 @@ export function relayConnectivityPresentation(
     case 'not_configured':
       return {
         label: '未配置',
-        description: '尚未为这台远程机器配置 Internet Relay。',
+        description: '尚未为这台远程电脑配置 Internet Relay。',
         tone: 'neutral',
       }
     case 'enrollment_required':
@@ -64,7 +64,7 @@ export function relayConnectivityPresentation(
     case 'authentication_failed':
       return {
         label: '身份验证失败',
-        description: 'Relay 无法验证此 Controller；机器配对信任未发生变化。',
+        description: 'Relay 无法验证此 Controller；电脑配对信任未发生变化。',
         tone: 'danger',
       }
     case 'revoked':

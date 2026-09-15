@@ -64,7 +64,7 @@ test('Remote Claude offline and archived history remain responsive and accessibl
 
   assert.match(dialog, /max-w-lg overflow-x-hidden/u)
   assert.match(dialog, /aria-label="选择智能体"/u)
-  assert.match(dialog, /aria-label="选择机器"/u)
+  assert.match(dialog, /aria-label="选择运行电脑"/u)
   assert.match(dialog, /onCloseAutoFocus/u)
   assert.match(
     detail,
@@ -81,10 +81,10 @@ test('Remote Claude offline and archived history remain responsive and accessibl
   )
   assert.match(workspace, /grid-rows-\[auto_minmax\(0,1fr\)_auto_auto\]/u)
   assert.match(workspace, /role="status"/u)
-  assert.match(controls, /远程执行机器当前离线/u)
+  assert.match(controls, /远程执行电脑当前离线/u)
   assert.match(controls, /历史记录仍可查看/u)
   assert.match(workspace, /executionBoundary\.machineName/u)
-  assert.match(workspace, /的机器详情/u)
+  assert.match(workspace, /的电脑详情/u)
   assert.match(workspace, /aria-label="已归档会话"/u)
   assert.match(workspace, /<ArchivedComposer/u)
   assert.match(inspector, /aria-label="会话检查器"/u)

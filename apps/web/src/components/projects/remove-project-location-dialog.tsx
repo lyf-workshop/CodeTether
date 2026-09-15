@@ -95,7 +95,7 @@ export function RemoveProjectLocationDialog({
             {'”及其中的文件不会被删除。'}
           </p>
           <p className="mt-2">
-            此操作不会删除项目，也不会自动取消与这台机器的配对。
+            此操作不会删除项目，也不会自动取消与这台电脑的配对。
           </p>
         </div>
 

@@ -251,12 +251,12 @@ export function NewConversationDialog({
           machine.kind === 'remote' && !machine.capabilities.providerExecution,
       )
     ) {
-      return '此项目已有远程工作区位置，但远程机器当前未满足在线连接、当前智能体检测或安全执行条件。'
+      return '此项目已有远程工作区位置，但远程电脑当前未满足在线连接、当前智能体检测或安全执行条件。'
     }
     if (boundMachines.some((machine) => machine.availability !== 'available')) {
-      return '此项目的工作区位置所在机器当前离线或不可用。恢复连接后再创建会话。'
+      return '此项目的工作区位置所在电脑当前离线或不可用。恢复连接后再创建会话。'
     }
-    return '当前没有可执行此项目智能体会话的机器。'
+    return '当前没有可执行此项目智能体会话的电脑。'
   })()
   const noAvailableProjects =
     currentProject === undefined &&
@@ -376,7 +376,7 @@ export function NewConversationDialog({
             </span>
             <DialogTitle>新建会话</DialogTitle>
             <DialogDescription>
-              在已授权项目中创建一个会话。智能体和机器创建后将保持不变。
+              在已授权项目中创建一个会话。智能体和运行电脑创建后将保持不变。
             </DialogDescription>
           </DialogHeader>
 
@@ -529,7 +529,7 @@ export function NewConversationDialog({
                 }
               />
               <LockedSetting
-                label="机器"
+                label="运行位置"
                 value={
                   <Select
                     value={effectiveSelectedMachineId ?? ''}
@@ -547,8 +547,8 @@ export function NewConversationDialog({
                       machinesQuery.isPending || createMutation.isPending
                     }
                   >
-                    <SelectTrigger size="sm" aria-label="选择机器">
-                      <SelectValue placeholder="选择机器">
+                    <SelectTrigger size="sm" aria-label="选择运行电脑">
+                      <SelectValue placeholder="选择电脑">
                         {selectedMachine === undefined ? undefined : (
                           <span className="flex min-w-0 items-center gap-1.5">
                             <Monitor
@@ -669,7 +669,7 @@ export function NewConversationDialog({
             {noAvailableMachines ? (
               <InlineNotice>
                 {unavailableMachineExplanation ??
-                  '当前没有可执行此项目智能体会话的机器。'}
+                  '当前没有可执行此项目智能体会话的电脑。'}
               </InlineNotice>
             ) : null}
             {hostUnavailable ? (
@@ -683,7 +683,7 @@ export function NewConversationDialog({
             machineDetailQuery.isSuccess &&
             effectiveSelectedProvider === undefined ? (
               <InlineNotice>
-                此机器当前没有可通过 CodeTether 启动可恢复流式会话的智能体。
+                此电脑当前没有可通过 CodeTether 启动可恢复流式会话的智能体。
               </InlineNotice>
             ) : null}
             {noAvailableProjects ? (
@@ -704,7 +704,7 @@ export function NewConversationDialog({
                 role="alert"
                 className="rounded-sm border border-danger/30 bg-danger-muted px-3 py-2 text-sm text-danger"
               >
-                CodeTether 暂时无法读取机器，请重试。
+                CodeTether 暂时无法读取电脑，请重试。
               </p>
             ) : null}
             {createMutation.isError ? (

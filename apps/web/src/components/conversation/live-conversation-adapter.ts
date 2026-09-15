@@ -115,7 +115,7 @@ export function createLiveConversationDetailSource(
           ? {
               state: 'unavailable',
               label:
-                machineContext?.executionUnavailableLabel ?? '执行机器离线',
+                machineContext?.executionUnavailableLabel ?? '执行电脑离线',
             }
           : projectAvailability === 'available'
             ? connectionIndicator(connectionState)

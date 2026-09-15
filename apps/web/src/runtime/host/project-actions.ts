@@ -332,13 +332,13 @@ export function projectErrorMessage(
     case 'project_unavailable':
       return '项目目录当前不可用；恢复原目录后 CodeTether 会重新识别。'
     case 'project_location_invalid':
-      return '工作区路径无效；请输入所选机器上的绝对目录路径。'
+      return '工作区路径无效；请输入所选电脑上的绝对目录路径。'
     case 'project_location_missing':
-      return '所选机器上不存在该目录。'
+      return '所选电脑上不存在该目录。'
     case 'project_location_inaccessible':
-      return '所选机器当前无法访问该目录。'
+      return '所选电脑当前无法访问该目录。'
     case 'project_location_conflict':
-      return '此项目已在所选机器上注册了工作区位置。'
+      return '此项目已在所选电脑上注册了工作区位置。'
     case 'project_location_not_found':
       return '工作区位置不存在或已被移除。'
     case 'project_location_has_conversations':
@@ -346,7 +346,7 @@ export function projectErrorMessage(
     case 'project_location_local_required':
       return '本地工作区位置属于当前项目授权，不能单独移除。'
     case 'machine_has_project_locations':
-      return '这台机器仍有关联项目位置，当前不能取消配对。'
+      return '这台电脑仍有关联项目位置，当前不能取消配对。'
     case 'project_has_conversations':
       return '此项目仍有关联会话，当前不能移除。'
     case 'unsupported':

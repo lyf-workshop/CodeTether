@@ -212,7 +212,7 @@ export function deriveComposerEligibility(
   if (machine === undefined) {
     return disabled(
       'remote_execution_unavailable',
-      '无法读取执行机器状态，暂时不能开始新轮次。',
+      '无法读取执行电脑状态，暂时不能开始新轮次。',
       'machine',
     )
   }
@@ -221,26 +221,26 @@ export function deriveComposerEligibility(
       case 'connecting':
         return disabled(
           'reconnecting',
-          '正在验证并连接远程机器，请等待连接恢复。',
+          '正在验证并连接远程电脑，请等待连接恢复。',
           'machine',
         )
       case 'offline':
       case 'recovery_required':
         return disabled(
           'machine_offline',
-          '远程执行机器当前离线；历史记录仍可查看。',
+          '远程执行电脑当前离线；历史记录仍可查看。',
           'machine',
         )
       case 'authentication_failed':
         return disabled(
           'transport_authentication_failed',
-          '远程机器身份验证失败，请在机器详情中检查连接。',
+          '远程电脑身份验证失败，请在电脑详情中检查连接。',
           'machine',
         )
       case 'incompatible':
         return disabled(
           'remote_execution_unavailable',
-          '远程机器协议不兼容，请更新 CodeTether Node。',
+          '远程电脑协议不兼容，请更新 CodeTether Node。',
           'machine',
         )
       case 'online':
@@ -248,7 +248,7 @@ export function deriveComposerEligibility(
       case 'local':
         return disabled(
           'remote_execution_unavailable',
-          '远程机器连接状态无效，暂时不能开始新轮次。',
+          '远程电脑连接状态无效，暂时不能开始新轮次。',
           'machine',
         )
     }
@@ -257,7 +257,7 @@ export function deriveComposerEligibility(
   if (input.projectAvailability !== 'available') {
     return disabled(
       'project_location_unavailable',
-      '这台机器当前无法访问已注册的项目位置。',
+      '这台电脑当前无法访问已注册的项目位置。',
       'project',
     )
   }
@@ -266,7 +266,7 @@ export function deriveComposerEligibility(
   if (provider === undefined && providerLifecycle === undefined) {
     return disabled(
       'remote_execution_unavailable',
-      '这台机器尚未提供当前智能体的检测结果。',
+      '这台电脑尚未提供当前智能体的检测结果。',
       'machine',
     )
   }
@@ -283,25 +283,25 @@ export function deriveComposerEligibility(
       case 'not_installed':
         return disabled(
           'provider_not_installed',
-          '执行机器上未安装当前智能体。',
+          '执行电脑上未安装当前智能体。',
           'machine',
         )
       case 'unsupported_version':
         return disabled(
           'provider_unsupported_version',
-          '执行机器上的智能体版本不受支持。',
+          '执行电脑上的智能体版本不受支持。',
           'machine',
         )
       case 'misconfigured':
         return disabled(
           'provider_misconfigured',
-          '执行机器上的智能体配置当前不可用。',
+          '执行电脑上的智能体配置当前不可用。',
           'machine',
         )
       case 'unavailable':
         return disabled(
           'remote_execution_unavailable',
-          '当前智能体在这台机器上不可用。',
+          '当前智能体在这台电脑上不可用。',
           'machine',
         )
       case 'available':
@@ -450,7 +450,7 @@ function providerLifecycleComposerDisabled(
     case 'authentication_required':
       return disabled(
         'login_required',
-        '智能体运行时兼容，但当前推理后端需要在这台机器上登录。',
+        '智能体运行时兼容，但当前推理后端需要在这台电脑上登录。',
         'machine',
       )
     case 'misconfigured':
@@ -510,30 +510,30 @@ export function conversationExecutionBoundaryPresentation(
   switch (reason) {
     case 'machine_offline':
       return {
-        title: '远程执行机器当前离线',
-        description: '历史记录仍可查看；机器重新连接后才能开始新轮次。',
+        title: '远程执行电脑当前离线',
+        description: '历史记录仍可查看；电脑重新连接后才能开始新轮次。',
       }
     case 'reconnecting':
       return {
-        title: '正在重新连接远程执行机器',
+        title: '正在重新连接远程执行电脑',
         description: '历史记录仍可查看；请等待身份验证和连接完成。',
       }
     case 'transport_authentication_failed':
       return {
-        title: '远程执行机器身份验证失败',
-        description: '历史记录仍可查看；请在机器详情中检查受信任连接。',
+        title: '远程执行电脑身份验证失败',
+        description: '历史记录仍可查看；请在电脑详情中检查受信任连接。',
       }
     case 'remote_execution_unavailable':
       return {
         title: '远程执行当前不可用',
         description:
-          '历史记录仍可查看；请在机器详情中检查 CodeTether Node 版本和状态。',
+          '历史记录仍可查看；请在电脑详情中检查 CodeTether Node 版本和状态。',
       }
     case 'execution_unavailable':
       return {
-        title: '这台机器当前无法执行此智能体',
+        title: '这台电脑当前无法执行此智能体',
         description:
-          '历史记录仍可查看；请在机器详情确认连接和智能体状态后再继续。',
+          '历史记录仍可查看；请在电脑详情确认连接和智能体状态后再继续。',
       }
   }
 }

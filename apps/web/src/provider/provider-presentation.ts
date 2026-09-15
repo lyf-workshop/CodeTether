@@ -422,7 +422,7 @@ function providerBackendLifecyclePresentation(
     unknown: '尚未通过显式检查或实际执行确认推理后端。',
     ready: '当前推理后端已验证可用。',
     unavailable: '推理后端当前不可用；运行时兼容性保持独立。',
-    authentication_required: '当前后端需要在这台机器上完成身份验证。',
+    authentication_required: '当前后端需要在这台电脑上完成身份验证。',
     misconfigured: '当前后端配置无法用于 Provider 执行。',
   } as const satisfies Record<ProviderBackendReadiness, string>
   const failurePresentation =

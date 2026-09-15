@@ -42,7 +42,7 @@ export function RootLayout() {
   if (currentPath === '/') {
     return (
       <TooltipProvider>
-        <div className="min-h-dvh overflow-y-auto bg-background text-text-primary">
+        <div className="h-dvh overflow-y-auto bg-background text-text-primary">
           <Outlet />
         </div>
       </TooltipProvider>
@@ -52,7 +52,7 @@ export function RootLayout() {
   if (currentPath === '/setup') {
     return (
       <TooltipProvider>
-        <div className="min-h-dvh overflow-y-auto bg-background text-text-primary">
+        <div className="h-dvh overflow-y-auto bg-background text-text-primary">
           <a
             href="#setup-main"
             className="fixed top-2 left-2 z-50 -translate-y-20 rounded-sm bg-primary-action px-3 py-2 text-sm font-medium text-primary-foreground transition-transform focus-visible:translate-y-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"

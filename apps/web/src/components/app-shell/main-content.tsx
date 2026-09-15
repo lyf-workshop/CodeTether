@@ -10,7 +10,7 @@ export function MainContent({ className, ...props }: MainContentProps) {
       id="main-content"
       tabIndex={-1}
       className={cn(
-        'min-h-0 min-w-0 overflow-y-auto bg-background outline-none',
+        'h-full min-h-0 min-w-0 overflow-y-auto bg-background outline-none',
         className,
       )}
       {...props}

@@ -75,7 +75,7 @@ export function AppShell({
             })
           }
         />
-        <div className="grid min-h-0 grid-cols-[var(--layout-sidebar-current-width)_minmax(0,1fr)]">
+        <div className="grid min-h-0 overflow-hidden grid-cols-[var(--layout-sidebar-current-width)_minmax(0,1fr)]">
           <PrimarySidebar
             currentPath={currentPath}
             inboxAttentionCount={inboxAttentionCount}

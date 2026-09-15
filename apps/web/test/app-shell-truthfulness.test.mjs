@@ -33,6 +33,29 @@ test('Primary Sidebar presents only the real Machines route', async () => {
   assert.doesNotMatch(rootLayout, /label: '机器', to: '\/machines'/u)
 })
 
+test('Desktop shell gives ordinary routes one page-level scroll owner', async () => {
+  const [styles, shell, mainContent, rootLayout, machineDetail] =
+    await Promise.all([
+      readFile(new URL('../src/styles.css', import.meta.url), 'utf8'),
+      readFile(new URL('app-shell.tsx', componentDirectory), 'utf8'),
+      readFile(new URL('main-content.tsx', componentDirectory), 'utf8'),
+      readFile(new URL('root-layout.tsx', componentDirectory), 'utf8'),
+      readFile(
+        new URL(
+          '../src/components/machines/machine-detail-page.tsx',
+          import.meta.url,
+        ),
+        'utf8',
+      ),
+    ])
+
+  assert.match(styles, /html,\s*body,\s*#root\s*\{[^}]*overflow: hidden;/su)
+  assert.match(shell, /min-h-0 overflow-hidden/u)
+  assert.match(mainContent, /h-full min-h-0 min-w-0 overflow-y-auto/u)
+  assert.match(rootLayout, /h-dvh overflow-y-auto/u)
+  assert.doesNotMatch(machineDetail, /overflow-y-auto|overflow-auto/u)
+})
+
 test('Top Bar only renders optional product controls with real handlers', async () => {
   const source = await readFile(
     new URL('top-bar.tsx', componentDirectory),

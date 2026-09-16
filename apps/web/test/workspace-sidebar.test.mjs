@@ -15,7 +15,6 @@ import {
   parseWorkspaceSidebarWidth,
   readWorkspaceSidebarCollapsed,
   readWorkspaceSidebarWidth,
-  workspaceSidebarHeaderPresentation,
   workspaceSidebarCollapsedPreferenceKey,
   workspaceSidebarWidthBounds,
   workspaceSidebarWidthPreferenceKey,
@@ -149,19 +148,21 @@ test('Workspace Sidebar layout preferences survive reload and inaccessible stora
   )
 })
 
-test('native collapsed header removes the brand and keeps restore before breadcrumbs', async () => {
-  assert.deepEqual(workspaceSidebarHeaderPresentation(false), {
-    brandVisible: true,
-    restoreVisible: false,
-  })
-  assert.deepEqual(workspaceSidebarHeaderPresentation(true), {
-    brandVisible: false,
-    restoreVisible: true,
-  })
-
-  const [topBar, tauriConfiguration] = await Promise.all([
+test('Sidebar toggle owns one fixed chrome slot independent of panel state', async () => {
+  const [topBar, shell, sidebar, tauriConfiguration] = await Promise.all([
     readFile(
       new URL('../src/components/app-shell/top-bar.tsx', import.meta.url),
+      'utf8',
+    ),
+    readFile(
+      new URL('../src/components/app-shell/app-shell.tsx', import.meta.url),
+      'utf8',
+    ),
+    readFile(
+      new URL(
+        '../src/components/app-shell/workspace-sidebar.tsx',
+        import.meta.url,
+      ),
       'utf8',
     ),
     readFile(
@@ -169,14 +170,22 @@ test('native collapsed header removes the brand and keeps restore before breadcr
       'utf8',
     ),
   ])
-  const restoreSlot = topBar.indexOf('data-slot="top-bar-restore"')
+  const toggleSlot = topBar.indexOf('data-slot="workspace-sidebar-toggle"')
   const breadcrumb = topBar.indexOf('aria-label="当前位置"')
 
-  assert.match(topBar, /sidebarHeader\.brandVisible/u)
-  assert.match(topBar, /data-slot="top-bar-brand"/u)
-  assert.match(topBar, /sidebarHeader\.restoreVisible/u)
-  assert.ok(restoreSlot >= 0)
-  assert.ok(breadcrumb > restoreSlot)
+  assert.ok(toggleSlot >= 0)
+  assert.ok(breadcrumb > toggleSlot)
+  assert.equal(
+    topBar.match(/data-slot="workspace-sidebar-toggle"/gu)?.length,
+    1,
+  )
+  assert.match(topBar, /sidebarCollapsed \? '显示侧边栏' : '隐藏侧边栏'/u)
+  assert.match(topBar, /aria-pressed=\{!sidebarCollapsed\}/u)
+  assert.doesNotMatch(topBar, /top-bar-restore|top-bar-brand/u)
+  assert.match(shell, /onToggleSidebar=\{\(\) =>/u)
+  assert.match(shell, /setSidebarCollapsed\(\(current\) => !current\)/u)
+  assert.match(sidebar, /data-slot="workspace-sidebar-brand"/u)
+  assert.doesNotMatch(sidebar, /PanelLeftClose|隐藏工作区侧边栏/u)
   assert.equal(JSON.parse(tauriConfiguration).app.windows[0].decorations, true)
 })
 
@@ -215,14 +224,39 @@ test('Workspace Sidebar handle uses pointer capture, cleanup, and keyboard resiz
   assert.match(handle, /case 'ArrowLeft'/u)
   assert.match(handle, /case 'ArrowRight'/u)
   assert.match(handle, /aria-label="调整侧边栏宽度"/u)
-  assert.match(sidebar, /label="隐藏工作区侧边栏"/u)
-  assert.match(topBar, /label="显示工作区侧边栏"/u)
+  assert.match(topBar, /'显示侧边栏' : '隐藏侧边栏'/u)
+  assert.equal(
+    topBar.match(/data-slot="workspace-sidebar-toggle"/gu)?.length,
+    1,
+  )
   assert.match(topBar, /aria-label="检查状态"/u)
   assert.match(topBar, /max-\[1180px\]:sr-only/u)
   assert.doesNotMatch(topBar, /label="帮助"/u)
   assert.match(shell, /sidebarCollapsed\s*\? '0px'/u)
   assert.match(shell, /readWorkspaceSidebarWidth/u)
   assert.match(shell, /readWorkspaceSidebarCollapsed/u)
+  assert.match(shell, /WorkspaceChromeTargetProvider/u)
+})
+
+test('Top Bar owns stable left, center, and right chrome regions', async () => {
+  const source = await readFile(
+    new URL('../src/components/app-shell/top-bar.tsx', import.meta.url),
+    'utf8',
+  )
+  const left = source.indexOf('data-slot="top-bar-left-controls"')
+  const breadcrumb = source.indexOf('aria-label="当前位置"')
+  const right = source.indexOf('data-slot="top-bar-right-actions"')
+  const doctor = source.indexOf('aria-label="检查状态"')
+  const workspace = source.indexOf('data-slot="top-bar-workspace-actions"')
+
+  assert.ok(left >= 0)
+  assert.ok(breadcrumb > left)
+  assert.ok(right > breadcrumb)
+  assert.ok(doctor > right)
+  assert.ok(workspace > doctor)
+  assert.match(source, /min-w-0 flex-1 overflow-hidden/u)
+  assert.match(source, /flex min-w-0 shrink-0 items-center gap-2/u)
+  assert.match(source, /max-\[1180px\]:sr-only/u)
 })
 
 function conversation(id, options = {}) {

@@ -17,7 +17,6 @@ import {
   Inbox,
   LoaderCircle,
   Monitor,
-  PanelLeftClose,
   Plus,
   Settings,
   Sparkles,
@@ -65,7 +64,6 @@ export interface WorkspaceSidebarProps extends Omit<
     project: ProjectRecord | undefined,
     trigger: HTMLButtonElement,
   ) => void
-  onCollapse: () => void
   onSettingsClick?: (event: MouseEvent<HTMLAnchorElement>) => void
 }
 
@@ -76,7 +74,6 @@ export function WorkspaceSidebar({
   currentProjectId,
   inboxAttentionCount = 0,
   onNewConversation,
-  onCollapse,
   onSettingsClick,
   className,
   'aria-label': ariaLabel = '工作区导航',
@@ -110,8 +107,22 @@ export function WorkspaceSidebar({
       )}
       {...props}
     >
+      <div
+        data-slot="workspace-sidebar-brand"
+        className="flex h-12 shrink-0 items-center gap-3 px-3"
+      >
+        <span
+          aria-hidden="true"
+          className="grid size-[var(--layout-brand-mark-size)] shrink-0 place-items-center rounded-sm border border-primary bg-primary text-sm font-semibold text-text-inverse"
+        >
+          C
+        </span>
+        <span className="truncate text-brand font-semibold text-text-primary">
+          CodeTether
+        </span>
+      </div>
       <div className="shrink-0 px-3 pt-3 pb-2">
-        <div className="flex min-w-0 items-center gap-1.5">
+        <div className="flex min-w-0 items-center">
           <Button
             type="button"
             size="sm"
@@ -123,16 +134,6 @@ export function WorkspaceSidebar({
             <Plus aria-hidden="true" />
             <span className="truncate">新建会话</span>
           </Button>
-          <IconButton
-            type="button"
-            size="sm"
-            variant="ghost"
-            label="隐藏工作区侧边栏"
-            className="size-9 shrink-0 text-text-secondary"
-            onClick={onCollapse}
-          >
-            <PanelLeftClose aria-hidden="true" />
-          </IconButton>
         </div>
         <nav aria-label="全局导航" className="mt-2 space-y-0.5">
           <WorkspaceNavLink

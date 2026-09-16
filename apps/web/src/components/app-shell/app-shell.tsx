@@ -27,6 +27,7 @@ import {
 } from './workspace-sidebar-layout'
 import { WorkspaceSidebarResizeHandle } from './workspace-sidebar-resize-handle'
 import { TopBar, type TopBarBreadcrumb } from './top-bar'
+import { WorkspaceChromeTargetProvider } from './workspace-chrome'
 import { DesktopNotificationSettings } from '../settings'
 
 interface AppShellProps {
@@ -62,6 +63,8 @@ export function AppShell({
   )
   const [sidebarWidth, setSidebarWidth] = useState(readWorkspaceSidebarWidth)
   const [sidebarResizing, setSidebarResizing] = useState(false)
+  const [workspaceChromeTarget, setWorkspaceChromeTarget] =
+    useState<HTMLDivElement | null>(null)
 
   useEffect(() => {
     writeWorkspaceSidebarWidth(optionalLocalStorage(), sidebarWidth)
@@ -107,7 +110,8 @@ export function AppShell({
           breadcrumbs={breadcrumbs}
           currentPage={currentPage}
           sidebarCollapsed={sidebarCollapsed}
-          onRestoreSidebar={() => setSidebarCollapsed(false)}
+          onToggleSidebar={() => setSidebarCollapsed((current) => !current)}
+          workspaceActionsRef={setWorkspaceChromeTarget}
           onDoctor={() =>
             void navigate({
               to: '/doctor',
@@ -128,7 +132,6 @@ export function AppShell({
                   currentConversationId={conversationIdFromPath(currentPath)}
                   currentConversation={currentConversation}
                   inboxAttentionCount={inboxAttentionCount}
-                  onCollapse={() => setSidebarCollapsed(true)}
                   onNewConversation={(project, trigger) => {
                     newConversationTriggerRef.current = trigger
                     setNewConversationProject(project)
@@ -148,7 +151,9 @@ export function AppShell({
               </>
             )}
           </div>
-          <MainContent>{children}</MainContent>
+          <WorkspaceChromeTargetProvider target={workspaceChromeTarget}>
+            <MainContent>{children}</MainContent>
+          </WorkspaceChromeTargetProvider>
         </div>
         <NewConversationDialog
           currentProject={newConversationProject}

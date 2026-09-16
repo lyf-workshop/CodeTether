@@ -9,16 +9,6 @@ export const workspaceSidebarWidthBounds = {
   maximum: 420,
 } as const
 
-export function workspaceSidebarHeaderPresentation(collapsed: boolean): {
-  readonly brandVisible: boolean
-  readonly restoreVisible: boolean
-} {
-  return {
-    brandVisible: !collapsed,
-    restoreVisible: collapsed,
-  }
-}
-
 interface PreferenceStorage {
   getItem(key: string): string | null
   setItem(key: string, value: string): void

@@ -15,6 +15,7 @@ import {
   parseWorkspaceSidebarWidth,
   readWorkspaceSidebarCollapsed,
   readWorkspaceSidebarWidth,
+  workspaceSidebarHeaderPresentation,
   workspaceSidebarCollapsedPreferenceKey,
   workspaceSidebarWidthBounds,
   workspaceSidebarWidthPreferenceKey,
@@ -146,6 +147,37 @@ test('Workspace Sidebar layout preferences survive reload and inaccessible stora
   assert.doesNotThrow(() =>
     writeWorkspaceSidebarCollapsed(failedStorage, false),
   )
+})
+
+test('native collapsed header removes the brand and keeps restore before breadcrumbs', async () => {
+  assert.deepEqual(workspaceSidebarHeaderPresentation(false), {
+    brandVisible: true,
+    restoreVisible: false,
+  })
+  assert.deepEqual(workspaceSidebarHeaderPresentation(true), {
+    brandVisible: false,
+    restoreVisible: true,
+  })
+
+  const [topBar, tauriConfiguration] = await Promise.all([
+    readFile(
+      new URL('../src/components/app-shell/top-bar.tsx', import.meta.url),
+      'utf8',
+    ),
+    readFile(
+      new URL('../../desktop/src-tauri/tauri.conf.json', import.meta.url),
+      'utf8',
+    ),
+  ])
+  const restoreSlot = topBar.indexOf('data-slot="top-bar-restore"')
+  const breadcrumb = topBar.indexOf('aria-label="当前位置"')
+
+  assert.match(topBar, /sidebarHeader\.brandVisible/u)
+  assert.match(topBar, /data-slot="top-bar-brand"/u)
+  assert.match(topBar, /sidebarHeader\.restoreVisible/u)
+  assert.ok(restoreSlot >= 0)
+  assert.ok(breadcrumb > restoreSlot)
+  assert.equal(JSON.parse(tauriConfiguration).app.windows[0].decorations, true)
 })
 
 test('Workspace Sidebar handle uses pointer capture, cleanup, and keyboard resizing', async () => {

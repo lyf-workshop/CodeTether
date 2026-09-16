@@ -11,6 +11,8 @@ import {
   cn,
 } from '@codetether/ui'
 
+import { workspaceSidebarHeaderPresentation } from './workspace-sidebar-layout'
+
 interface TopBarProfile {
   initials: string
   name: string
@@ -67,6 +69,7 @@ function TopBar({
       ? `收件箱，${notificationCount} 个待处理事项`
       : '收件箱'
   const resolvedBreadcrumbs = breadcrumbs ?? [{ label: currentPage }]
+  const sidebarHeader = workspaceSidebarHeaderPresentation(sidebarCollapsed)
 
   return (
     <header
@@ -77,21 +80,26 @@ function TopBar({
       )}
       {...props}
     >
-      <div className="flex w-[var(--layout-sidebar-current-width)] shrink-0 items-center gap-3 overflow-hidden px-[var(--layout-topbar-inline-padding)]">
-        <span
-          aria-hidden="true"
-          className="grid size-[var(--layout-brand-mark-size)] shrink-0 place-items-center rounded-sm border border-primary bg-primary text-sm font-semibold text-text-inverse"
+      {sidebarHeader.brandVisible ? (
+        <div
+          data-slot="top-bar-brand"
+          className="flex w-[var(--layout-sidebar-current-width)] shrink-0 items-center gap-3 overflow-hidden px-[var(--layout-topbar-inline-padding)]"
         >
-          C
-        </span>
-        <span className="hidden truncate text-brand font-semibold text-text-primary lg:block">
-          CodeTether
-        </span>
-      </div>
+          <span
+            aria-hidden="true"
+            className="grid size-[var(--layout-brand-mark-size)] shrink-0 place-items-center rounded-sm border border-primary bg-primary text-sm font-semibold text-text-inverse"
+          >
+            C
+          </span>
+          <span className="hidden truncate text-brand font-semibold text-text-primary lg:block">
+            CodeTether
+          </span>
+        </div>
+      ) : null}
 
       <div className="flex min-w-0 flex-1 items-center gap-4 pr-[var(--layout-topbar-inline-padding)] pl-[var(--layout-content-inline-padding)]">
-        {sidebarCollapsed && onRestoreSidebar !== undefined ? (
-          <Tooltip>
+        {sidebarHeader.restoreVisible && onRestoreSidebar !== undefined ? (
+          <Tooltip data-slot="top-bar-restore">
             <TooltipTrigger asChild>
               <IconButton
                 type="button"

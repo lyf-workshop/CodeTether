@@ -1,6 +1,6 @@
-import { createContext, useContext, type ReactNode } from 'react'
+import type { ReactNode } from 'react'
 
-const WorkspaceChromeTargetContext = createContext<HTMLDivElement | null>(null)
+import { WorkspaceChromeTargetContext } from './workspace-chrome-context'
 
 export function WorkspaceChromeTargetProvider({
   children,
@@ -14,8 +14,4 @@ export function WorkspaceChromeTargetProvider({
       {children}
     </WorkspaceChromeTargetContext.Provider>
   )
-}
-
-export function useWorkspaceChromeTarget(): HTMLDivElement | null {
-  return useContext(WorkspaceChromeTargetContext)
 }

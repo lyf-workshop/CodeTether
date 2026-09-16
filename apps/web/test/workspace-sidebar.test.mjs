@@ -190,7 +190,7 @@ test('Sidebar toggle owns one fixed chrome slot independent of panel state', asy
 })
 
 test('Workspace Sidebar handle uses pointer capture, cleanup, and keyboard resizing', async () => {
-  const [handle, shell, sidebar, topBar] = await Promise.all([
+  const [handle, shell, topBar] = await Promise.all([
     readFile(
       new URL(
         '../src/components/app-shell/workspace-sidebar-resize-handle.tsx',
@@ -200,13 +200,6 @@ test('Workspace Sidebar handle uses pointer capture, cleanup, and keyboard resiz
     ),
     readFile(
       new URL('../src/components/app-shell/app-shell.tsx', import.meta.url),
-      'utf8',
-    ),
-    readFile(
-      new URL(
-        '../src/components/app-shell/workspace-sidebar.tsx',
-        import.meta.url,
-      ),
       'utf8',
     ),
     readFile(

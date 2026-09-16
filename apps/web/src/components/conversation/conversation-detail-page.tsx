@@ -26,7 +26,7 @@ import {
 } from './conversation-inspector-layout'
 import { ConversationInspectorResizeHandle } from './conversation-inspector-resize-handle'
 import { ConversationChromeActions } from './conversation-chrome-actions'
-import { useWorkspaceChromeTarget } from '../app-shell/workspace-chrome'
+import { useWorkspaceChromeTarget } from '../app-shell/workspace-chrome-context'
 
 export interface ConversationDetailPageProps {
   anchorRequestKey?: string
@@ -210,7 +210,6 @@ export function ConversationDetailPage({
           targetChangeRequestKey={changeNavigationRequest}
           targetTurnId={targetTurnId}
           projectId={projectId}
-          onArchived={onArchived}
         />
         {inspectorCollapsed ? null : (
           <div className="relative hidden min-h-0 min-w-0 min-[1440px]:block">

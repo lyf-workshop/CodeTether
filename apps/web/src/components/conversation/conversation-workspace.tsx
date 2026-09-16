@@ -3,7 +3,6 @@ import { Link } from '@tanstack/react-router'
 import { Archive, TriangleAlert, WifiOff } from 'lucide-react'
 import {
   ConversationIdSchema,
-  type ConversationSummary,
   type MachineId,
   type ProjectId,
 } from '@codetether/protocol'
@@ -38,7 +37,6 @@ interface ConversationWorkspaceProps {
   targetChangeRequestKey?: number
   targetTurnId?: string
   projectId?: ProjectId
-  onArchived?: (conversation: ConversationSummary) => void
 }
 
 export function ConversationWorkspace({
@@ -53,7 +51,6 @@ export function ConversationWorkspace({
   targetChangeRequestKey,
   targetTurnId,
   projectId,
-  onArchived,
 }: ConversationWorkspaceProps) {
   const wasArchivedRef = useRef(viewModel.archivedAt !== undefined)
   const conversationId = ConversationIdSchema.safeParse(viewModel.id)

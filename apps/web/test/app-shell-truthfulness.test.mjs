@@ -87,9 +87,13 @@ test('Conversation shell hides unsupported controls and keeps long identities bo
     '../src/components/conversation/',
     import.meta.url,
   )
-  const [composer, header, sidebar, detail] = await Promise.all([
+  const [composer, header, chromeActions, sidebar, detail] = await Promise.all([
     readFile(new URL('composer.tsx', componentDirectory), 'utf8'),
     readFile(new URL('conversation-header.tsx', componentDirectory), 'utf8'),
+    readFile(
+      new URL('conversation-chrome-actions.tsx', componentDirectory),
+      'utf8',
+    ),
     readFile(
       new URL('../app-shell/workspace-sidebar.tsx', componentDirectory),
       'utf8',
@@ -105,8 +109,8 @@ test('Conversation shell hides unsupported controls and keeps long identities bo
   assert.doesNotMatch(composer, /conversation\.timeline\.blocks/u)
   assert.doesNotMatch(composer, /conversation\.pendingApprovals/u)
   assert.doesNotMatch(header, /停止当前会话|<Square/u)
-  assert.match(header, /capabilities\.supportsDiff/u)
-  assert.match(header, /capabilities\.supportsInterrupt/u)
+  assert.doesNotMatch(chromeActions, /capabilities\.supportsDiff/u)
+  assert.match(chromeActions, /capabilities\.supportsInterrupt/u)
   assert.match(header, /title=\{conversation\.title\}/u)
   assert.match(header, /connectionIndicator\.state !== 'connected'/u)
   assert.match(sidebar, /title=\{conversation\.title\}/u)

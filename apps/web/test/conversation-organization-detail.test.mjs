@@ -28,13 +28,13 @@ test('Archived to active transition deliberately restores Composer focus without
 })
 
 test('Detail organization actions use one shared control and archive into the URL-addressable view', async () => {
-  const [header, route] = await Promise.all([
-    sourceOf('conversation-header.tsx'),
+  const [chromeActions, route] = await Promise.all([
+    sourceOf('conversation-chrome-actions.tsx'),
     sourceOf('conversation-detail-route.tsx'),
   ])
 
-  assert.match(header, /ConversationOrganizationMenu/u)
-  assert.match(header, /label="管理会话"/u)
+  assert.match(chromeActions, /ConversationOrganizationMenu/u)
+  assert.match(chromeActions, /label="管理会话"/u)
   assert.match(route, /search: \{ view: 'archived' \}/u)
   assert.match(route, /if \(current\.archivedAt !== undefined\)/u)
 })

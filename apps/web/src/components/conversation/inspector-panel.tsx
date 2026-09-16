@@ -343,7 +343,6 @@ export interface InspectorPanelProps extends Omit<
   onTabChange?: (tab: InspectorTab) => void
   onChangeSelect?: (changeId: string) => void
   onClose?: () => void
-  onCollapse?: () => void
   selectedChangeId?: string
 }
 
@@ -358,7 +357,6 @@ export function InspectorPanel({
   onTabChange,
   onChangeSelect,
   onClose,
-  onCollapse,
   selectedChangeId,
   className,
   ...props
@@ -397,17 +395,6 @@ export function InspectorPanel({
           </h2>
         </div>
         <div className="flex shrink-0 items-center gap-1">
-          {onCollapse ? (
-            <IconButton
-              label="折叠会话检查器"
-              variant="ghost"
-              size="sm"
-              onClick={onCollapse}
-              className="hidden min-[1440px]:inline-flex"
-            >
-              <PanelRightClose aria-hidden="true" />
-            </IconButton>
-          ) : null}
           {onClose ? (
             <IconButton
               label="关闭会话检查器"

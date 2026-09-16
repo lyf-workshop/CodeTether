@@ -32,10 +32,10 @@ test('Remote Claude creation is executable-gated and exposes only Provider effor
 })
 
 test('Remote Claude Detail keeps execution and Inspector controls capability-driven', async () => {
-  const [route, inspector, header] = await Promise.all([
+  const [route, inspector, chromeActions] = await Promise.all([
     source('components/conversation/conversation-detail-route.tsx'),
     source('components/conversation/inspector-panel.tsx'),
-    source('components/conversation/conversation-header.tsx'),
+    source('components/conversation/conversation-chrome-actions.tsx'),
   ])
 
   assert.match(route, /provider\.provider === conversation\.provider/u)
@@ -48,9 +48,9 @@ test('Remote Claude Detail keeps execution and Inspector controls capability-dri
   assert.match(inspector, /requestedTab === 'changes'/u)
   assert.match(inspector, /requestedTab === 'terminal'/u)
   assert.doesNotMatch(inspector, /provider === 'claude-code'/u)
-  assert.match(header, /capabilities\.supportsInterrupt/u)
-  assert.match(header, /capabilities\.supportsDiff/u)
-  assert.doesNotMatch(header, /switchProvider|switchMachine/u)
+  assert.match(chromeActions, /capabilities\.supportsInterrupt/u)
+  assert.doesNotMatch(chromeActions, /capabilities\.supportsDiff/u)
+  assert.doesNotMatch(chromeActions, /switchProvider|switchMachine/u)
 })
 
 test('Remote Claude offline and archived history remain responsive and accessible', async () => {

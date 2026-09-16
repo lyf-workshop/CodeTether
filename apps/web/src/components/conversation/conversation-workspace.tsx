@@ -1,4 +1,4 @@
-import { useEffect, useRef, type Ref } from 'react'
+import { useEffect, useRef } from 'react'
 import { Link } from '@tanstack/react-router'
 import { Archive, TriangleAlert, WifiOff } from 'lucide-react'
 import {
@@ -32,10 +32,7 @@ interface ConversationWorkspaceProps {
   connectionIndicator?: ConversationConnectionIndicatorViewModel
   executionBoundary?: ConversationExecutionBoundaryViewModel
   projectBoundary?: ConversationProjectBoundaryViewModel
-  inspectorTriggerRef?: Ref<HTMLButtonElement>
   machineId?: MachineId
-  onOpenInspector?: () => void
-  onOpenChanges?: () => void
   controls?: ConversationControls
   targetChangeId?: string
   targetChangeRequestKey?: number
@@ -50,10 +47,7 @@ export function ConversationWorkspace({
   connectionIndicator,
   executionBoundary,
   projectBoundary,
-  inspectorTriggerRef,
   machineId,
-  onOpenInspector,
-  onOpenChanges,
   controls,
   targetChangeId,
   targetChangeRequestKey,
@@ -112,14 +106,7 @@ export function ConversationWorkspace({
       <div className="min-w-0">
         <ConversationHeader
           conversation={viewModel}
-          capabilities={viewModel.capabilities}
           connectionIndicator={connectionIndicator}
-          inspectorTriggerRef={inspectorTriggerRef}
-          onOpenInspector={onOpenInspector}
-          onOpenChanges={onOpenChanges}
-          interruptController={controls?.interrupt}
-          projectId={projectId}
-          onArchived={onArchived}
         />
         {organizationConversation?.archivedAt === undefined ? null : (
           <div

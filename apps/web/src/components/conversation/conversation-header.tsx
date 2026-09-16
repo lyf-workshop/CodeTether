@@ -1,35 +1,10 @@
-import type { Ref } from 'react'
-import {
-  FileDiff,
-  LoaderCircle,
-  MoreHorizontal,
-  PanelRightOpen,
-  Pause,
-} from 'lucide-react'
-import {
-  ConversationIdSchema,
-  type ConversationSummary,
-  type ProjectId,
-} from '@codetether/protocol'
-
-import {
-  AgentBadge,
-  Badge,
-  Button,
-  IconButton,
-  MachineBadge,
-  StatusBadge,
-} from '@codetether/ui'
+import { AgentBadge, Badge, MachineBadge, StatusBadge } from '@codetether/ui'
 
 import type {
-  ConversationCapabilitiesViewModel,
   ConversationConnectionIndicatorViewModel,
   ConversationConnectionState,
   ConversationViewModel,
 } from './conversation-view-model'
-import { organizationConversationStatus } from './conversation-view-model'
-import type { InterruptController } from './conversation-controls'
-import { ConversationOrganizationMenu } from '../conversations/conversation-organization-controls'
 
 const connectionBadgeVariants = {
   connecting: 'info',
@@ -44,31 +19,15 @@ const connectionBadgeVariants = {
 
 interface ConversationHeaderProps {
   conversation: ConversationViewModel
-  capabilities: ConversationCapabilitiesViewModel
   connectionIndicator?: ConversationConnectionIndicatorViewModel
-  inspectorTriggerRef?: Ref<HTMLButtonElement>
-  onOpenInspector?: () => void
-  onOpenChanges?: () => void
-  interruptController?: InterruptController
-  projectId?: ProjectId
-  onArchived?: (conversation: ConversationSummary) => void
 }
 
 export function ConversationHeader({
   conversation,
-  capabilities,
   connectionIndicator,
-  inspectorTriggerRef,
-  onOpenInspector,
-  onOpenChanges,
-  interruptController,
-  projectId,
-  onArchived,
 }: ConversationHeaderProps) {
-  const conversationId = ConversationIdSchema.safeParse(conversation.id)
-
   return (
-    <header className="flex h-[var(--layout-conversation-header-height)] min-w-0 items-start justify-between gap-4 border-b border-border px-5 py-4">
+    <header className="flex h-[var(--layout-conversation-header-height)] min-w-0 items-start border-b border-border px-5 py-4">
       <div className="min-w-0">
         <h1
           title={conversation.title}
@@ -109,86 +68,6 @@ export function ConversationHeader({
             </Badge>
           ) : null}
         </div>
-      </div>
-
-      <div className="mr-2 flex shrink-0 items-center gap-1.5 pt-1">
-        <IconButton
-          ref={inspectorTriggerRef}
-          label="打开会话检查器"
-          variant="ghost"
-          size="sm"
-          className="size-8 text-text-secondary min-[1440px]:hidden"
-          onClick={onOpenInspector}
-        >
-          <PanelRightOpen aria-hidden="true" />
-        </IconButton>
-        {capabilities.supportsDiff ? (
-          <Button
-            variant="secondary"
-            size="sm"
-            className="h-8 border-border bg-surface-muted/65 px-3 text-sm"
-            aria-label="查看当前会话的变更"
-            onClick={onOpenChanges}
-          >
-            <FileDiff aria-hidden="true" />
-            <span className="max-[1180px]:sr-only">查看变更</span>
-          </Button>
-        ) : null}
-        {capabilities.supportsInterrupt ? (
-          <IconButton
-            label={
-              interruptController?.pending ? '正在中断当前运行' : '中断当前运行'
-            }
-            variant="ghost"
-            size="sm"
-            className="size-8 text-text-secondary"
-            disabled={
-              !capabilities.canInterrupt ||
-              interruptController?.pending === true
-            }
-            onClick={() => {
-              void interruptController?.execute()
-            }}
-          >
-            {interruptController?.pending ? (
-              <LoaderCircle
-                aria-hidden="true"
-                className="animate-spin motion-reduce:animate-none"
-              />
-            ) : (
-              <Pause aria-hidden="true" />
-            )}
-          </IconButton>
-        ) : null}
-        {projectId === undefined || !conversationId.success ? null : (
-          <ConversationOrganizationMenu
-            conversation={{
-              conversationId: conversationId.data,
-              projectId,
-              title: conversation.title,
-              titleSource: conversation.titleSource,
-              status: organizationConversationStatus(conversation.status),
-              ...(conversation.pinnedAt === undefined
-                ? {}
-                : { pinnedAt: conversation.pinnedAt }),
-              ...(conversation.archivedAt === undefined
-                ? {}
-                : { archivedAt: conversation.archivedAt }),
-            }}
-            align="end"
-            onArchived={onArchived}
-            trigger={
-              <IconButton
-                label="管理会话"
-                variant="ghost"
-                size="sm"
-                className="size-8 text-text-secondary"
-              >
-                <MoreHorizontal aria-hidden="true" />
-              </IconButton>
-            }
-          />
-        )}
       </div>
     </header>
   )

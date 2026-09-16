@@ -38,29 +38,57 @@ test('Inspector exposes only truthful Files, Changes, and Tool Output surfaces',
   assert.match(source, /execution\.tool\.outputSummary/u)
 })
 
-test('Inspector collapse is a device UI preference and restores a wider workspace', async () => {
-  const source = await readFile(
-    new URL('conversation-detail-page.tsx', componentRoot),
-    'utf8',
-  )
+test('Inspector toggle owns one fixed chrome slot and restores a wider workspace', async () => {
+  const [source, actions, panel, workspace] = await Promise.all([
+    readFile(new URL('conversation-detail-page.tsx', componentRoot), 'utf8'),
+    readFile(new URL('conversation-chrome-actions.tsx', componentRoot), 'utf8'),
+    readFile(new URL('inspector-panel.tsx', componentRoot), 'utf8'),
+    readFile(new URL('conversation-workspace.tsx', componentRoot), 'utf8'),
+  ])
 
   assert.match(source, /codetether\.conversation-inspector-collapsed/u)
   assert.match(source, /localStorage/u)
-  assert.match(source, /setInspectorCollapsed\(true\)/u)
-  assert.match(source, /展开会话检查器/u)
-  assert.match(source, /data-inspector-restore/u)
-  assert.match(
-    source,
-    /top-\[calc\(var\(--layout-conversation-header-height\)\+0\.75rem\)\]/u,
-  )
+  assert.match(source, /setInspectorCollapsed\(\(current\) => !current\)/u)
+  assert.match(source, /createPortal/u)
+  assert.match(source, /useWorkspaceChromeTarget/u)
+  assert.match(source, /inspectorOpen=\{inspectorOpen\}/u)
   assert.match(source, /mediaQuery\.addEventListener\('change'/u)
   assert.match(source, /open=\{inspectorDialogLayout && inspector\.open\}/u)
   assert.ok(source.includes('min-[1440px]:grid-cols-[minmax(0,1fr)]'))
+  assert.equal(
+    actions.match(/data-slot="conversation-inspector-toggle"/gu)?.length,
+    1,
+  )
+  assert.match(actions, /inspectorOpen \? '隐藏检查器' : '显示检查器'/u)
+  assert.match(actions, /aria-pressed=\{inspectorOpen\}/u)
+  assert.doesNotMatch(source, /data-inspector-restore|absolute top-/u)
+  assert.doesNotMatch(panel, /折叠会话检查器|onCollapse/u)
+  assert.doesNotMatch(workspace, /onOpenInspector|inspectorTriggerRef/u)
   assert.doesNotMatch(source, /ConversationRail|layout-conversation-rail/u)
   assert.doesNotMatch(
     source,
     /inspectorCollapsed.*conversationId|conversationId.*inspectorCollapsed/u,
   )
+})
+
+test('Conversation chrome keeps real execution and overflow actions without duplicate Changes action', async () => {
+  const [actions, header, topBar] = await Promise.all([
+    readFile(new URL('conversation-chrome-actions.tsx', componentRoot), 'utf8'),
+    readFile(new URL('conversation-header.tsx', componentRoot), 'utf8'),
+    readFile(
+      new URL('../src/components/app-shell/top-bar.tsx', import.meta.url),
+      'utf8',
+    ),
+  ])
+
+  assert.match(actions, /supportsInterrupt/u)
+  assert.match(actions, /中断当前运行/u)
+  assert.match(actions, /interruptController\?\.execute\(\)/u)
+  assert.match(actions, /ConversationOrganizationMenu/u)
+  assert.match(actions, /label="管理会话"/u)
+  assert.doesNotMatch(actions, /查看变更|FileDiff/u)
+  assert.doesNotMatch(header, /查看变更|supportsInterrupt|PanelRight/u)
+  assert.match(topBar, /data-slot="top-bar-workspace-actions"/u)
 })
 
 test('Inspector width preferences clamp invalid values and preserve Conversation width', () => {

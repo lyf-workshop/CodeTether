@@ -1,16 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
-import { PanelRightOpen } from 'lucide-react'
+import { createPortal } from 'react-dom'
 
-import {
-  Dialog,
-  DialogContent,
-  DialogTitle,
-  IconButton,
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-  cn,
-} from '@codetether/ui'
+import { Dialog, DialogContent, DialogTitle, cn } from '@codetether/ui'
 import type { MachineId, ProjectId, TurnId } from '@codetether/protocol'
 import type { ConversationSummary } from '@codetether/protocol'
 
@@ -25,7 +16,6 @@ import { ConversationWorkspace } from './conversation-workspace'
 import { InspectorPanel, type InspectorTab } from './inspector-panel'
 import {
   createConversationInspectorState,
-  openConversationInspectorTab,
   selectConversationInspectorTab,
   setConversationInspectorOpen,
 } from './conversation-inspector-state'
@@ -35,6 +25,8 @@ import {
   writeConversationInspectorWidth,
 } from './conversation-inspector-layout'
 import { ConversationInspectorResizeHandle } from './conversation-inspector-resize-handle'
+import { ConversationChromeActions } from './conversation-chrome-actions'
+import { useWorkspaceChromeTarget } from '../app-shell/workspace-chrome'
 
 export interface ConversationDetailPageProps {
   anchorRequestKey?: string
@@ -87,6 +79,7 @@ export function ConversationDetailPage({
   const inspectorTriggerRef = useRef<HTMLButtonElement>(null)
   const pendingChangeNavigationRef = useRef<string | undefined>(undefined)
   const workspaceRef = useRef<HTMLDivElement>(null)
+  const workspaceChromeTarget = useWorkspaceChromeTarget()
 
   useEffect(() => {
     const mediaQuery = window.matchMedia(INSPECTOR_DIALOG_MEDIA_QUERY)
@@ -130,6 +123,9 @@ export function ConversationDetailPage({
     inspectorWidth,
     workspaceWidth,
   )
+  const inspectorOpen = inspectorDialogLayout
+    ? inspector.open
+    : !inspectorCollapsed
 
   const commitChangeNavigation = (changeId: string) => {
     setSelectedChangeId(changeId)
@@ -179,29 +175,35 @@ export function ConversationDetailPage({
           } as CSSProperties
         }
       >
+        {workspaceChromeTarget === null
+          ? null
+          : createPortal(
+              <ConversationChromeActions
+                conversation={viewModel}
+                capabilities={viewModel.capabilities}
+                inspectorOpen={inspectorOpen}
+                inspectorTriggerRef={inspectorTriggerRef}
+                interruptController={controls?.interrupt}
+                projectId={projectId}
+                onArchived={onArchived}
+                onToggleInspector={() => {
+                  if (inspectorDialogLayout) {
+                    setInspector((current) =>
+                      setConversationInspectorOpen(current, !current.open),
+                    )
+                    return
+                  }
+                  setInspectorCollapsed((current) => !current)
+                }}
+              />,
+              workspaceChromeTarget,
+            )}
         <ConversationWorkspace
           anchorRequestKey={anchorRequestKey}
           viewModel={viewModel}
           connectionIndicator={connectionIndicator}
           executionBoundary={executionBoundary}
           projectBoundary={projectBoundary}
-          onOpenInspector={() => {
-            if (inspectorDialogLayout) {
-              setInspector((current) =>
-                setConversationInspectorOpen(current, true),
-              )
-            } else {
-              setInspectorCollapsed(false)
-            }
-          }}
-          onOpenChanges={() => {
-            const opensDialog = inspectorDialogLayout
-            if (!opensDialog) setInspectorCollapsed(false)
-            setInspector((current) =>
-              openConversationInspectorTab(current, 'changes', opensDialog),
-            )
-          }}
-          inspectorTriggerRef={inspectorTriggerRef}
           controls={controls}
           machineId={machineId}
           targetChangeId={selectedChangeId}
@@ -219,30 +221,9 @@ export function ConversationDetailPage({
               width={resolvedInspectorWidth}
               workspaceWidth={workspaceWidth}
             />
-            <InspectorPanel
-              {...inspectorProps}
-              onCollapse={() => setInspectorCollapsed(true)}
-            />
+            <InspectorPanel {...inspectorProps} />
           </div>
         )}
-        {inspectorCollapsed ? (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <IconButton
-                type="button"
-                label="展开会话检查器"
-                variant="ghost"
-                size="sm"
-                data-inspector-restore
-                className="absolute top-[calc(var(--layout-conversation-header-height)+0.75rem)] right-3 z-10 hidden size-8 bg-surface-muted/80 text-text-secondary shadow-sm min-[1440px]:inline-flex"
-                onClick={() => setInspectorCollapsed(false)}
-              >
-                <PanelRightOpen aria-hidden="true" />
-              </IconButton>
-            </TooltipTrigger>
-            <TooltipContent side="left">展开会话检查器</TooltipContent>
-          </Tooltip>
-        ) : null}
       </div>
 
       <DialogContent

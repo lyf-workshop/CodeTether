@@ -398,7 +398,7 @@ test('existing UI surfaces consume Provider truth without adding a switch to Det
   const [
     dialog,
     sidebar,
-    header,
+    chromeActions,
     inbox,
     inboxPage,
     inboxMetadata,
@@ -414,7 +414,7 @@ test('existing UI surfaces consume Provider truth without adding a switch to Det
       'utf8',
     ),
     readFile(
-      new URL('components/conversation/conversation-header.tsx', root),
+      new URL('components/conversation/conversation-chrome-actions.tsx', root),
       'utf8',
     ),
     readFile(new URL('components/inbox/inbox-item.tsx', root), 'utf8'),
@@ -447,9 +447,9 @@ test('existing UI surfaces consume Provider truth without adding a switch to Det
   assert.match(dialog, /reasoning: effectiveSelectedReasoning/u)
   assert.doesNotMatch(sidebar, /provider\.availabilityLabel/u)
   assert.doesNotMatch(sidebar, /provider\.version/u)
-  assert.match(header, /capabilities\.supportsInterrupt/u)
-  assert.match(header, /capabilities\.supportsDiff/u)
-  assert.doesNotMatch(header, /onProviderChange|switchProvider/u)
+  assert.match(chromeActions, /capabilities\.supportsInterrupt/u)
+  assert.doesNotMatch(chromeActions, /capabilities\.supportsDiff/u)
+  assert.doesNotMatch(chromeActions, /onProviderChange|switchProvider/u)
   assert.match(inbox, /metadata\?\.provider/u)
   assert.match(
     inboxPage,

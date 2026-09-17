@@ -21,6 +21,16 @@ export interface RelayAuthenticationTranscriptInput {
   readonly clientBuildIdentity: string
 }
 
+export interface RelayPairingAuthenticationTranscriptInput {
+  readonly challenge: RelayChallengeMessage
+  readonly rendezvousId: string
+  readonly rendezvousCapability: string
+  readonly targetNodeFingerprint: string
+  readonly peerPublicKeySpki: string
+  readonly peerFingerprint: string
+  readonly clientBuildIdentity: string
+}
+
 export function relayChallengeTranscript(
   challenge: Omit<RelayChallengeMessage, 'signature'>,
 ): Uint8Array {
@@ -59,6 +69,22 @@ export function relayAuthenticationTranscript(
     ...challengeFields(input.challenge),
     input.peerFingerprint,
     input.role,
+    input.clientBuildIdentity,
+  ])
+}
+
+export function relayPairingAuthenticationTranscript(
+  input: RelayPairingAuthenticationTranscriptInput,
+): Uint8Array {
+  return transcript('CodeTether Relay pairing authentication v1', [
+    ...challengeFields(input.challenge),
+    input.rendezvousId,
+    createHash('sha256')
+      .update(input.rendezvousCapability, 'utf8')
+      .digest('base64url'),
+    input.targetNodeFingerprint,
+    input.peerPublicKeySpki,
+    input.peerFingerprint,
     input.clientBuildIdentity,
   ])
 }

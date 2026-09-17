@@ -15,6 +15,7 @@ import {
   RelayNonceSchema,
   RelayPeerIdSchema,
   RelayPingIdSchema,
+  RelayPairingRendezvousIdSchema,
   RelayRequestIdSchema,
   RelayTimestampSchema,
 } from './ids.js'
@@ -24,7 +25,10 @@ const VersionSchema = z.literal(relayProtocolVersion)
 export const RelayPeerRoleSchema = z.enum(['controller', 'node'])
 export type RelayPeerRole = z.infer<typeof RelayPeerRoleSchema>
 
-export const RelayChannelPurposeSchema = z.literal('machine_tls_v1')
+export const RelayChannelPurposeSchema = z.enum([
+  'machine_tls_v1',
+  'pairing_opaque_v1',
+])
 export type RelayChannelPurpose = z.infer<typeof RelayChannelPurposeSchema>
 
 export const RelayChannelRejectReasonSchema = z.enum([
@@ -126,6 +130,20 @@ export const RelayEnrollmentTokenSchema = z
   .regex(/^relay_enroll_[A-Za-z0-9_-]{43}$/u)
 export type RelayEnrollmentToken = z.infer<typeof RelayEnrollmentTokenSchema>
 
+export const RelayPairingCapabilitySchema = z
+  .string()
+  .regex(/^[A-Za-z0-9_-]{43}$/u)
+export type RelayPairingCapability = z.infer<
+  typeof RelayPairingCapabilitySchema
+>
+
+export const RelayPairingCapabilityDigestSchema = z
+  .string()
+  .regex(/^[A-Za-z0-9_-]{43}$/u)
+export type RelayPairingCapabilityDigest = z.infer<
+  typeof RelayPairingCapabilityDigestSchema
+>
+
 export const RelayChallengeMessageSchema = z
   .object({
     type: z.literal('relay.challenge'),
@@ -195,6 +213,23 @@ export type RelayAuthenticateMessage = z.infer<
   typeof RelayAuthenticateMessageSchema
 >
 
+export const RelayPairingAuthenticateMessageSchema = z
+  .object({
+    type: z.literal('pairing.authenticate'),
+    protocolVersion: VersionSchema,
+    rendezvousId: RelayPairingRendezvousIdSchema,
+    rendezvousCapability: RelayPairingCapabilitySchema,
+    targetNodeFingerprint: RelayPublicKeyFingerprintSchema,
+    peerPublicKeySpki: RelayPublicKeySpkiSchema,
+    peerFingerprint: RelayPublicKeyFingerprintSchema,
+    clientBuildIdentity: RelayClientBuildIdentitySchema,
+    signature: RelaySignatureSchema,
+  })
+  .strict()
+export type RelayPairingAuthenticateMessage = z.infer<
+  typeof RelayPairingAuthenticateMessageSchema
+>
+
 export const RelayHeartbeatPongMessageSchema = z
   .object({
     type: z.literal('heartbeat.pong'),
@@ -246,6 +281,48 @@ export type RelayGrantReplaceMessage = z.infer<
   typeof RelayGrantReplaceMessageSchema
 >
 
+export const RelayTrustedControllerReconcileMessageSchema = z
+  .object({
+    type: z.literal('trusted-controller.reconcile'),
+    protocolVersion: VersionSchema,
+    connectionEpoch: RelayConnectionEpochSchema,
+    requestId: RelayRequestIdSchema,
+    controllerPublicKeySpki: RelayPublicKeySpkiSchema,
+    controllerFingerprint: RelayPublicKeyFingerprintSchema,
+  })
+  .strict()
+export type RelayTrustedControllerReconcileMessage = z.infer<
+  typeof RelayTrustedControllerReconcileMessageSchema
+>
+
+export const RelayPairingRendezvousRegisterMessageSchema = z
+  .object({
+    type: z.literal('pairing.rendezvous.register'),
+    protocolVersion: VersionSchema,
+    connectionEpoch: RelayConnectionEpochSchema,
+    requestId: RelayRequestIdSchema,
+    rendezvousId: RelayPairingRendezvousIdSchema,
+    capabilityDigest: RelayPairingCapabilityDigestSchema,
+    expiresAt: RelayTimestampSchema,
+  })
+  .strict()
+export type RelayPairingRendezvousRegisterMessage = z.infer<
+  typeof RelayPairingRendezvousRegisterMessageSchema
+>
+
+export const RelayPairingRendezvousRemoveMessageSchema = z
+  .object({
+    type: z.literal('pairing.rendezvous.remove'),
+    protocolVersion: VersionSchema,
+    connectionEpoch: RelayConnectionEpochSchema,
+    requestId: RelayRequestIdSchema,
+    rendezvousId: RelayPairingRendezvousIdSchema,
+  })
+  .strict()
+export type RelayPairingRendezvousRemoveMessage = z.infer<
+  typeof RelayPairingRendezvousRemoveMessageSchema
+>
+
 export const RelayGoodbyeMessageSchema = z
   .object({
     type: z.literal('peer.goodbye'),
@@ -255,16 +332,31 @@ export const RelayGoodbyeMessageSchema = z
   .strict()
 export type RelayGoodbyeMessage = z.infer<typeof RelayGoodbyeMessageSchema>
 
-export const RelayChannelOpenMessageSchema = z
+export const RelayMachineChannelOpenMessageSchema = z
   .object({
     type: z.literal('channel.open'),
     protocolVersion: VersionSchema,
     connectionEpoch: RelayConnectionEpochSchema,
     requestId: RelayRequestIdSchema,
     targetNodeFingerprint: RelayPublicKeyFingerprintSchema,
-    purpose: RelayChannelPurposeSchema,
+    purpose: z.literal('machine_tls_v1'),
   })
   .strict()
+export const RelayPairingChannelOpenMessageSchema = z
+  .object({
+    type: z.literal('channel.open'),
+    protocolVersion: VersionSchema,
+    connectionEpoch: RelayConnectionEpochSchema,
+    requestId: RelayRequestIdSchema,
+    targetNodeFingerprint: RelayPublicKeyFingerprintSchema,
+    purpose: z.literal('pairing_opaque_v1'),
+    rendezvousId: RelayPairingRendezvousIdSchema,
+  })
+  .strict()
+export const RelayChannelOpenMessageSchema = z.union([
+  RelayMachineChannelOpenMessageSchema,
+  RelayPairingChannelOpenMessageSchema,
+])
 export type RelayChannelOpenMessage = z.infer<
   typeof RelayChannelOpenMessageSchema
 >
@@ -332,10 +424,14 @@ export const RelayClientMessageSchema = z.union([
   RelayControllerEnrollMessageSchema,
   RelayNodeEnrollMessageSchema,
   RelayAuthenticateMessageSchema,
+  RelayPairingAuthenticateMessageSchema,
   RelayHeartbeatPongMessageSchema,
   RelayRendezvousSubscribeMessageSchema,
   RelayRendezvousUnsubscribeMessageSchema,
   RelayGrantReplaceMessageSchema,
+  RelayTrustedControllerReconcileMessageSchema,
+  RelayPairingRendezvousRegisterMessageSchema,
+  RelayPairingRendezvousRemoveMessageSchema,
   RelayGoodbyeMessageSchema,
   RelayChannelOpenMessageSchema,
   RelayChannelAcceptMessageSchema,
@@ -408,6 +504,61 @@ export const RelayGrantReplacedMessageSchema = z
   .strict()
 export type RelayGrantReplacedMessage = z.infer<
   typeof RelayGrantReplacedMessageSchema
+>
+
+export const RelayTrustedControllerReconciledMessageSchema = z
+  .object({
+    type: z.literal('trusted-controller.reconciled'),
+    protocolVersion: VersionSchema,
+    connectionEpoch: RelayConnectionEpochSchema,
+    requestId: RelayRequestIdSchema,
+    controllerFingerprint: RelayPublicKeyFingerprintSchema,
+    observedAt: RelayTimestampSchema,
+  })
+  .strict()
+export type RelayTrustedControllerReconciledMessage = z.infer<
+  typeof RelayTrustedControllerReconciledMessageSchema
+>
+
+export const RelayPairingRendezvousRegisteredMessageSchema = z
+  .object({
+    type: z.literal('pairing.rendezvous.registered'),
+    protocolVersion: VersionSchema,
+    connectionEpoch: RelayConnectionEpochSchema,
+    requestId: RelayRequestIdSchema,
+    rendezvousId: RelayPairingRendezvousIdSchema,
+    expiresAt: RelayTimestampSchema,
+  })
+  .strict()
+export type RelayPairingRendezvousRegisteredMessage = z.infer<
+  typeof RelayPairingRendezvousRegisteredMessageSchema
+>
+
+export const RelayPairingRendezvousRemovedMessageSchema = z
+  .object({
+    type: z.literal('pairing.rendezvous.removed'),
+    protocolVersion: VersionSchema,
+    connectionEpoch: RelayConnectionEpochSchema,
+    requestId: RelayRequestIdSchema,
+    rendezvousId: RelayPairingRendezvousIdSchema,
+  })
+  .strict()
+export type RelayPairingRendezvousRemovedMessage = z.infer<
+  typeof RelayPairingRendezvousRemovedMessageSchema
+>
+
+export const RelayPairingRendezvousRejectedMessageSchema = z
+  .object({
+    type: z.literal('pairing.rendezvous.rejected'),
+    protocolVersion: VersionSchema,
+    connectionEpoch: RelayConnectionEpochSchema,
+    requestId: RelayRequestIdSchema,
+    rendezvousId: RelayPairingRendezvousIdSchema,
+    reason: z.enum(['capacity_reached', 'invalid_expiry']),
+  })
+  .strict()
+export type RelayPairingRendezvousRejectedMessage = z.infer<
+  typeof RelayPairingRendezvousRejectedMessageSchema
 >
 
 export const RelayChannelOfferMessageSchema = z
@@ -505,6 +656,10 @@ export const RelayServerMessageSchema = z.union([
   RelayHeartbeatPingMessageSchema,
   RelayRendezvousStatusMessageSchema,
   RelayGrantReplacedMessageSchema,
+  RelayTrustedControllerReconciledMessageSchema,
+  RelayPairingRendezvousRegisteredMessageSchema,
+  RelayPairingRendezvousRemovedMessageSchema,
+  RelayPairingRendezvousRejectedMessageSchema,
   RelayChannelOfferMessageSchema,
   RelayChannelOpenedMessageSchema,
   RelayChannelRejectMessageSchema,

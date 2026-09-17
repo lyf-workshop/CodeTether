@@ -27,6 +27,7 @@ import {
   RemoteMachineConnectionSchema,
   MachineSummarySchema,
   RemoteMachineAddressSchema,
+  RemoteMachinePairingTargetSchema,
   RemoteMachinePairingCandidateSchema,
   RemoteMachinePairingCodeSchema,
   machineWireLimits,
@@ -320,10 +321,20 @@ export type GetMachineResponse = z.infer<typeof GetMachineResponseSchema>
 export const BeginRemoteMachinePairingRequestSchema = z
   .object({
     actionId: ActionIdSchema,
-    address: RemoteMachineAddressSchema,
+    address: RemoteMachineAddressSchema.optional(),
+    target: RemoteMachinePairingTargetSchema.optional(),
     pairingCode: RemoteMachinePairingCodeSchema,
   })
   .strict()
+  .superRefine((request, context) => {
+    if ((request.address === undefined) === (request.target === undefined)) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Pairing requires exactly one address or typed target',
+        path: ['target'],
+      })
+    }
+  })
 export type BeginRemoteMachinePairingRequest = z.infer<
   typeof BeginRemoteMachinePairingRequestSchema
 >

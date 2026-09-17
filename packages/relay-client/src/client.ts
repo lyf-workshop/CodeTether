@@ -5,6 +5,8 @@ import {
   RelayClientMessageSchema,
   RelayEnrollmentTokenSchema,
   RelayIdSchema,
+  RelayPairingCapabilitySchema,
+  RelayPairingRendezvousIdSchema,
   RelayPublicKeyFingerprintSchema,
   RelayPublicKeySpkiSchema,
   RelayServerMessageSchema,
@@ -13,6 +15,7 @@ import {
   relayAuthenticationTranscript,
   relayChallengeTranscript,
   relayEnrollmentTranscript,
+  relayPairingAuthenticationTranscript,
   relayProtocolLimits,
   relayProtocolVersion,
   signRelayTranscript,
@@ -27,12 +30,14 @@ import {
   type RelayId,
   type RelayPeerId,
   type RelayPeerRole,
+  type RelayPairingRendezvousId,
   type RelayPresenceState,
   type RelayPublicKeyFingerprint,
   type RelayPublicKeySpki,
   type RelayRequestId,
   type RelayServerMessage,
 } from '@codetether/relay-protocol'
+import { createHash } from 'node:crypto'
 import type { Duplex } from 'node:stream'
 import { z } from 'zod'
 
@@ -82,6 +87,12 @@ export interface ConnectRelayControlOptions {
   readonly enrollmentToken?: string
   /** Only a Node may publish the fingerprint already trusted by Machine pairing. */
   readonly authorizedControllerFingerprint?: string
+  /** Purpose-limited authentication for one pre-trust pairing rendezvous. */
+  readonly pairing?: {
+    readonly rendezvousId: string
+    readonly rendezvousCapability: string
+    readonly targetNodeFingerprint: string
+  }
   readonly signal?: AbortSignal
   readonly now?: () => Date
 }
@@ -100,8 +111,16 @@ export interface RelayIncomingMachineChannelOffer {
   reject(reason?: RelayChannelRejectReason): Promise<void>
 }
 
+export interface RelayIncomingPairingChannelOffer extends RelayIncomingMachineChannelOffer {
+  readonly purpose: 'pairing_opaque_v1'
+}
+
 export type RelayMachineChannelHandler = (
   offer: RelayIncomingMachineChannelOffer,
+) => void | Promise<void>
+
+export type RelayPairingChannelHandler = (
+  offer: RelayIncomingPairingChannelOffer,
 ) => void | Promise<void>
 
 type RelayMachineChannelDataPlaneMessage = Extract<
@@ -152,6 +171,28 @@ export async function connectRelayControl(
       : RelayPublicKeyFingerprintSchema.parse(
           options.authorizedControllerFingerprint,
         )
+  const pairing =
+    options.pairing === undefined
+      ? undefined
+      : {
+          rendezvousId: RelayPairingRendezvousIdSchema.parse(
+            options.pairing.rendezvousId,
+          ),
+          rendezvousCapability: RelayPairingCapabilitySchema.parse(
+            options.pairing.rendezvousCapability,
+          ),
+          targetNodeFingerprint: RelayPublicKeyFingerprintSchema.parse(
+            options.pairing.targetNodeFingerprint,
+          ),
+        }
+  if (
+    pairing !== undefined &&
+    (identity.role !== 'controller' || enrollmentToken !== undefined)
+  ) {
+    throw new TypeError(
+      'Relay pairing authentication requires an unenrolled Controller identity',
+    )
+  }
 
   const socket = await connectRelayTls({
     endpoint: options.endpoint,
@@ -180,7 +221,30 @@ export async function connectRelayControl(
       options.now?.() ?? new Date(),
     )
 
-    if (enrollmentToken === undefined) {
+    if (pairing !== undefined) {
+      await sendClientMessage(
+        framed,
+        {
+          type: 'pairing.authenticate',
+          protocolVersion: relayProtocolVersion,
+          ...pairing,
+          peerPublicKeySpki: identity.publicKeySpki,
+          peerFingerprint: identity.publicKeyFingerprint,
+          clientBuildIdentity,
+          signature: signRelayTranscript(
+            identity.privateKeyPem,
+            relayPairingAuthenticationTranscript({
+              challenge,
+              ...pairing,
+              peerPublicKeySpki: identity.publicKeySpki,
+              peerFingerprint: identity.publicKeyFingerprint,
+              clientBuildIdentity,
+            }),
+          ),
+        },
+        options.signal,
+      )
+    } else if (enrollmentToken === undefined) {
       await sendClientMessage(
         framed,
         {
@@ -246,7 +310,11 @@ export async function connectRelayControl(
         'Internet Relay returned an invalid authentication result',
       )
     }
-    const connection = new RelayControlConnection(framed, response)
+    const connection = new RelayControlConnection(
+      framed,
+      response,
+      pairing === undefined ? 'trusted' : 'pairing',
+    )
     return {
       connection,
       registration: {
@@ -270,10 +338,20 @@ export class RelayControlConnection {
   readonly connectionEpoch: RelayConnectionEpoch
   readonly heartbeatIntervalMs: number
   readonly heartbeatTimeoutMs: number
+  readonly scope: 'trusted' | 'pairing'
   readonly #framed: FramedRelayConnection
   readonly #grantRequests = new Map<
     RelayRequestId,
     {
+      readonly resolve: () => void
+      readonly reject: (error: Error) => void
+      readonly timer: ReturnType<typeof setTimeout>
+    }
+  >()
+  readonly #controllerReconciliationRequests = new Map<
+    RelayRequestId,
+    {
+      readonly fingerprint: RelayPublicKeyFingerprint
       readonly resolve: () => void
       readonly reject: (error: Error) => void
       readonly timer: ReturnType<typeof setTimeout>
@@ -290,10 +368,22 @@ export class RelayControlConnection {
     RelayPublicKeyFingerprint,
     RelayRequestId
   >()
+  readonly #pairingRendezvousRequests = new Map<
+    RelayRequestId,
+    {
+      readonly kind: 'register' | 'remove'
+      readonly rendezvousId: RelayPairingRendezvousId
+      readonly resolve: () => void
+      readonly reject: (error: Error) => void
+      readonly timer: ReturnType<typeof setTimeout>
+    }
+  >()
   readonly #machineChannelOpens = new Map<
     RelayRequestId,
     {
       readonly targetNodeFingerprint: RelayPublicKeyFingerprint
+      readonly purpose: 'machine_tls_v1' | 'pairing_opaque_v1'
+      readonly rendezvousId?: RelayPairingRendezvousId
       readonly resolve: (channel: Duplex) => void
       readonly reject: (error: Error) => void
       timer: ReturnType<typeof setTimeout>
@@ -332,6 +422,7 @@ export class RelayControlConnection {
   }> = []
   readonly #completion: Promise<void>
   #machineChannelHandler: RelayMachineChannelHandler | undefined
+  #pairingChannelHandler: RelayPairingChannelHandler | undefined
   #machineChannelSendActive = false
   #failure: RelayClientError | undefined
   #closing = false
@@ -345,6 +436,7 @@ export class RelayControlConnection {
       readonly heartbeatIntervalMs: number
       readonly heartbeatTimeoutMs: number
     },
+    scope: 'trusted' | 'pairing' = 'trusted',
   ) {
     this.#framed = framed
     this.peerId = ready.peerId
@@ -352,13 +444,14 @@ export class RelayControlConnection {
     this.connectionEpoch = ready.connectionEpoch
     this.heartbeatIntervalMs = ready.heartbeatIntervalMs
     this.heartbeatTimeoutMs = ready.heartbeatTimeoutMs
+    this.scope = scope
     this.#completion = this.#run()
   }
 
   async replaceAuthorizedController(
     fingerprint?: RelayPublicKeyFingerprint | string,
   ): Promise<void> {
-    if (this.role !== 'node') {
+    if (this.role !== 'node' || this.scope !== 'trusted') {
       throw new RelayClientError(
         'relay_protocol_error',
         'Only a Relay Node may replace its rendezvous grant',
@@ -412,11 +505,78 @@ export class RelayControlConnection {
     }
   }
 
+  async reconcileTrustedController(input: {
+    readonly publicKeySpki: RelayPublicKeySpki | string
+    readonly fingerprint: RelayPublicKeyFingerprint | string
+  }): Promise<void> {
+    if (this.role !== 'node' || this.scope !== 'trusted') {
+      throw new RelayClientError(
+        'relay_protocol_error',
+        'Only an enrolled Relay Node may reconcile Machine trust',
+      )
+    }
+    this.#assertOpen()
+    if (
+      this.#controllerReconciliationRequests.size >=
+      relayProtocolLimits.maximumPendingRequests
+    ) {
+      throw new RelayClientError(
+        'relay_capacity_reached',
+        'Internet Relay request capacity was reached',
+      )
+    }
+    const publicKeySpki = RelayPublicKeySpkiSchema.parse(input.publicKeySpki)
+    const fingerprint = RelayPublicKeyFingerprintSchema.parse(input.fingerprint)
+    if (fingerprintRelayPublicKeySpki(publicKeySpki) !== fingerprint) {
+      throw new RelayClientError(
+        'relay_identity_mismatch',
+        'Controller Relay identity does not match its public key',
+      )
+    }
+    const requestId = newRelayRequestId()
+    const result = new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.#controllerReconciliationRequests.delete(requestId)
+        reject(
+          new RelayClientError(
+            'relay_unreachable',
+            'Internet Relay Controller reconciliation timed out',
+          ),
+        )
+      }, relayProtocolLimits.messageTimeoutMs)
+      this.#controllerReconciliationRequests.set(requestId, {
+        fingerprint,
+        resolve,
+        reject,
+        timer,
+      })
+    })
+    void result.catch(() => undefined)
+    try {
+      await sendClientMessage(this.#framed, {
+        type: 'trusted-controller.reconcile',
+        protocolVersion: relayProtocolVersion,
+        connectionEpoch: this.connectionEpoch,
+        requestId,
+        controllerPublicKeySpki: publicKeySpki,
+        controllerFingerprint: fingerprint,
+      })
+      await result
+    } catch (error) {
+      const pending = this.#controllerReconciliationRequests.get(requestId)
+      if (pending !== undefined) {
+        clearTimeout(pending.timer)
+        this.#controllerReconciliationRequests.delete(requestId)
+      }
+      throw error
+    }
+  }
+
   async subscribeToNode(
     targetNodeFingerprint: RelayPublicKeyFingerprint | string,
     listener: (observation: RelayRendezvousObservation) => void,
   ): Promise<() => Promise<void>> {
-    if (this.role !== 'controller') {
+    if (this.role !== 'controller' || this.scope !== 'trusted') {
       throw new RelayClientError(
         'relay_protocol_error',
         'Only a Relay Controller may observe Node presence',
@@ -485,12 +645,45 @@ export class RelayControlConnection {
     targetNodeFingerprint: RelayPublicKeyFingerprint | string,
     options: { readonly signal?: AbortSignal } = {},
   ): Promise<Duplex> {
-    if (this.role !== 'controller') {
+    if (this.role !== 'controller' || this.scope !== 'trusted') {
       throw new RelayClientError(
         'relay_protocol_error',
         'Only a Relay Controller may open a Machine channel',
       )
     }
+    return await this.#openChannel(
+      targetNodeFingerprint,
+      'machine_tls_v1',
+      undefined,
+      options,
+    )
+  }
+
+  async openPairingChannel(
+    targetNodeFingerprint: RelayPublicKeyFingerprint | string,
+    rendezvousId: RelayPairingRendezvousId | string,
+    options: { readonly signal?: AbortSignal } = {},
+  ): Promise<Duplex> {
+    if (this.role !== 'controller' || this.scope !== 'pairing') {
+      throw new RelayClientError(
+        'relay_protocol_error',
+        'Only a pairing-scoped Relay Controller may open a pairing channel',
+      )
+    }
+    return await this.#openChannel(
+      targetNodeFingerprint,
+      'pairing_opaque_v1',
+      RelayPairingRendezvousIdSchema.parse(rendezvousId),
+      options,
+    )
+  }
+
+  async #openChannel(
+    targetNodeFingerprint: RelayPublicKeyFingerprint | string,
+    purpose: 'machine_tls_v1' | 'pairing_opaque_v1',
+    rendezvousId: RelayPairingRendezvousId | undefined,
+    options: { readonly signal?: AbortSignal },
+  ): Promise<Duplex> {
     this.#assertOpen()
     if (
       this.#machineChannels.size + this.#machineChannelOpens.size >=
@@ -549,6 +742,8 @@ export class RelayControlConnection {
       options.signal?.addEventListener('abort', abort, { once: true })
       this.#machineChannelOpens.set(requestId, {
         targetNodeFingerprint: fingerprint,
+        purpose,
+        ...(rendezvousId === undefined ? {} : { rendezvousId }),
         resolve,
         reject,
         timer,
@@ -565,7 +760,8 @@ export class RelayControlConnection {
         connectionEpoch: this.connectionEpoch,
         requestId,
         targetNodeFingerprint: fingerprint,
-        purpose: 'machine_tls_v1',
+        purpose,
+        ...(rendezvousId === undefined ? {} : { rendezvousId }),
       })
       return await result
     } catch (error) {
@@ -582,7 +778,7 @@ export class RelayControlConnection {
   }
 
   setMachineChannelHandler(handler: RelayMachineChannelHandler): () => void {
-    if (this.role !== 'node') {
+    if (this.role !== 'node' || this.scope !== 'trusted') {
       throw new RelayClientError(
         'relay_protocol_error',
         'Only a Relay Node may receive Machine channels',
@@ -603,6 +799,140 @@ export class RelayControlConnection {
       if (this.#machineChannelHandler === handler) {
         this.#machineChannelHandler = undefined
       }
+    }
+  }
+
+  setPairingChannelHandler(handler: RelayPairingChannelHandler): () => void {
+    if (this.role !== 'node' || this.scope !== 'trusted') {
+      throw new RelayClientError(
+        'relay_protocol_error',
+        'Only an enrolled Relay Node may receive pairing channels',
+      )
+    }
+    this.#assertOpen()
+    if (this.#pairingChannelHandler !== undefined) {
+      throw new RelayClientError(
+        'relay_protocol_error',
+        'Internet Relay pairing channel handler is already installed',
+      )
+    }
+    this.#pairingChannelHandler = handler
+    let removed = false
+    return () => {
+      if (removed) return
+      removed = true
+      if (this.#pairingChannelHandler === handler) {
+        this.#pairingChannelHandler = undefined
+      }
+    }
+  }
+
+  async registerPairingRendezvous(input: {
+    readonly rendezvousId: RelayPairingRendezvousId | string
+    readonly rendezvousCapability: string
+    readonly expiresAt: Date | string
+  }): Promise<() => Promise<void>> {
+    if (this.role !== 'node' || this.scope !== 'trusted') {
+      throw new RelayClientError(
+        'relay_protocol_error',
+        'Only an enrolled Relay Node may register a pairing rendezvous',
+      )
+    }
+    const rendezvousId = RelayPairingRendezvousIdSchema.parse(
+      input.rendezvousId,
+    )
+    const capability = RelayPairingCapabilitySchema.parse(
+      input.rendezvousCapability,
+    )
+    const expiresAt = new Date(input.expiresAt).toISOString()
+    await this.#sendPairingRendezvousRequest({
+      kind: 'register',
+      rendezvousId,
+      capabilityDigest: createHash('sha256')
+        .update(capability, 'utf8')
+        .digest('base64url'),
+      expiresAt,
+    })
+    let removed = false
+    return async () => {
+      if (removed) return
+      removed = true
+      if (this.#closing || this.#failure !== undefined) return
+      await this.#sendPairingRendezvousRequest({
+        kind: 'remove',
+        rendezvousId,
+      })
+    }
+  }
+
+  async #sendPairingRendezvousRequest(
+    input:
+      | {
+          readonly kind: 'register'
+          readonly rendezvousId: RelayPairingRendezvousId
+          readonly capabilityDigest: string
+          readonly expiresAt: string
+        }
+      | {
+          readonly kind: 'remove'
+          readonly rendezvousId: RelayPairingRendezvousId
+        },
+  ): Promise<void> {
+    this.#assertOpen()
+    if (
+      this.#pairingRendezvousRequests.size >=
+      relayProtocolLimits.maximumPendingRequests
+    ) {
+      throw new RelayClientError(
+        'relay_capacity_reached',
+        'Internet Relay request capacity was reached',
+      )
+    }
+    const requestId = newRelayRequestId()
+    const result = new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.#pairingRendezvousRequests.delete(requestId)
+        reject(
+          new RelayClientError(
+            'relay_unreachable',
+            'Internet Relay pairing rendezvous request timed out',
+          ),
+        )
+      }, relayProtocolLimits.messageTimeoutMs)
+      this.#pairingRendezvousRequests.set(requestId, {
+        kind: input.kind,
+        rendezvousId: input.rendezvousId,
+        resolve,
+        reject,
+        timer,
+      })
+    })
+    void result.catch(() => undefined)
+    try {
+      await sendClientMessage(this.#framed, {
+        type:
+          input.kind === 'register'
+            ? 'pairing.rendezvous.register'
+            : 'pairing.rendezvous.remove',
+        protocolVersion: relayProtocolVersion,
+        connectionEpoch: this.connectionEpoch,
+        requestId,
+        rendezvousId: input.rendezvousId,
+        ...(input.kind === 'register'
+          ? {
+              capabilityDigest: input.capabilityDigest,
+              expiresAt: input.expiresAt,
+            }
+          : {}),
+      })
+      await result
+    } catch (error) {
+      const pending = this.#pairingRendezvousRequests.get(requestId)
+      if (pending !== undefined) {
+        clearTimeout(pending.timer)
+        this.#pairingRendezvousRequests.delete(requestId)
+      }
+      throw error
     }
   }
 
@@ -662,6 +992,73 @@ export class RelayControlConnection {
           clearTimeout(pending.timer)
           this.#grantRequests.delete(message.requestId)
           pending.resolve()
+          continue
+        }
+        if (message.type === 'trusted-controller.reconciled') {
+          const pending = this.#controllerReconciliationRequests.get(
+            message.requestId,
+          )
+          if (
+            pending === undefined ||
+            pending.fingerprint !== message.controllerFingerprint
+          ) {
+            throw new RelayClientError(
+              'relay_protocol_error',
+              'Internet Relay returned an unknown Controller reconciliation',
+            )
+          }
+          clearTimeout(pending.timer)
+          this.#controllerReconciliationRequests.delete(message.requestId)
+          pending.resolve()
+          continue
+        }
+        if (
+          message.type === 'pairing.rendezvous.registered' ||
+          message.type === 'pairing.rendezvous.removed'
+        ) {
+          const pending = this.#pairingRendezvousRequests.get(message.requestId)
+          const expectedType =
+            pending?.kind === 'register'
+              ? 'pairing.rendezvous.registered'
+              : 'pairing.rendezvous.removed'
+          if (
+            pending === undefined ||
+            message.type !== expectedType ||
+            message.rendezvousId !== pending.rendezvousId
+          ) {
+            throw new RelayClientError(
+              'relay_protocol_error',
+              'Internet Relay returned an unknown pairing rendezvous request',
+            )
+          }
+          clearTimeout(pending.timer)
+          this.#pairingRendezvousRequests.delete(message.requestId)
+          pending.resolve()
+          continue
+        }
+        if (message.type === 'pairing.rendezvous.rejected') {
+          const pending = this.#pairingRendezvousRequests.get(message.requestId)
+          if (
+            pending === undefined ||
+            message.rendezvousId !== pending.rendezvousId
+          ) {
+            throw new RelayClientError(
+              'relay_protocol_error',
+              'Internet Relay returned an unknown pairing rendezvous request',
+            )
+          }
+          clearTimeout(pending.timer)
+          this.#pairingRendezvousRequests.delete(message.requestId)
+          pending.reject(
+            new RelayClientError(
+              message.reason === 'capacity_reached'
+                ? 'relay_capacity_reached'
+                : 'relay_protocol_error',
+              message.reason === 'capacity_reached'
+                ? 'Internet Relay pairing rendezvous capacity was reached'
+                : 'Internet Relay rejected the pairing rendezvous expiry',
+            ),
+          )
           continue
         }
         if (message.type === 'rendezvous.status') {
@@ -793,8 +1190,18 @@ export class RelayControlConnection {
         pending.reject(failure)
       }
       this.#grantRequests.clear()
+      for (const pending of this.#controllerReconciliationRequests.values()) {
+        clearTimeout(pending.timer)
+        pending.reject(failure)
+      }
+      this.#controllerReconciliationRequests.clear()
       this.#rendezvousSubscriptions.clear()
       this.#rendezvousTargets.clear()
+      for (const pending of this.#pairingRendezvousRequests.values()) {
+        clearTimeout(pending.timer)
+        pending.reject(failure)
+      }
+      this.#pairingRendezvousRequests.clear()
       for (const pending of this.#machineChannelOpens.values()) {
         clearTimeout(pending.timer)
         pending.removeAbortListener()
@@ -818,6 +1225,7 @@ export class RelayControlConnection {
       this.#machineChannels.clear()
       this.#rejectMachineChannelSendQueue(failure)
       this.#machineChannelHandler = undefined
+      this.#pairingChannelHandler = undefined
     }
   }
 
@@ -832,15 +1240,18 @@ export class RelayControlConnection {
         'Internet Relay returned an invalid Machine channel offer',
       )
     }
-    const handler = this.#machineChannelHandler
+    const hasHandler =
+      message.purpose === 'machine_tls_v1'
+        ? this.#machineChannelHandler !== undefined
+        : this.#pairingChannelHandler !== undefined
     if (
-      handler === undefined ||
+      !hasHandler ||
       this.#machineChannels.size + this.#incomingMachineOffers.size >=
         relayProtocolLimits.maximumChannelsPerPeer
     ) {
       void this.#sendMachineChannelRejection(
         message,
-        handler === undefined ? 'not_available' : 'capacity_reached',
+        !hasHandler ? 'not_available' : 'capacity_reached',
       )
       return
     }
@@ -860,8 +1271,18 @@ export class RelayControlConnection {
       reject: async (reason = 'not_available') =>
         await this.#rejectMachineChannelOffer(message, reason),
     }
+    const runHandler = async (): Promise<void> => {
+      if (message.purpose === 'pairing_opaque_v1') {
+        await this.#pairingChannelHandler?.({
+          ...offer,
+          purpose: 'pairing_opaque_v1',
+        })
+        return
+      }
+      await this.#machineChannelHandler?.(offer)
+    }
     void Promise.resolve()
-      .then(async () => await handler(offer))
+      .then(runHandler)
       .catch(() => undefined)
       .finally(() => {
         const current = this.#incomingMachineOffers.get(message.channelId)
@@ -972,7 +1393,7 @@ export class RelayControlConnection {
     readonly channelGeneration: RelayChannelGeneration
     readonly controllerConnectionEpoch: RelayConnectionEpoch
     readonly nodeConnectionEpoch: RelayConnectionEpoch
-    readonly purpose: 'machine_tls_v1'
+    readonly purpose: 'machine_tls_v1' | 'pairing_opaque_v1'
   }): void {
     if (this.role === 'node') {
       if (message.nodeConnectionEpoch !== this.connectionEpoch) {
@@ -1009,6 +1430,11 @@ export class RelayControlConnection {
     if (pending === undefined) {
       throw machineChannelProtocolError(
         'Internet Relay returned an unknown Machine channel opening',
+      )
+    }
+    if (pending.purpose !== message.purpose) {
+      throw machineChannelProtocolError(
+        'Internet Relay returned a wrong Machine channel purpose',
       )
     }
     clearTimeout(pending.timer)

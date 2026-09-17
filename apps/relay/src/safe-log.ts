@@ -17,6 +17,11 @@ export type RelayLogEvent =
   | 'rate_limit.applied'
   | 'heartbeat.timeout'
   | 'peer.revoked'
+  | 'pairing.rendezvous.registered'
+  | 'pairing.rendezvous.opened'
+  | 'pairing.rendezvous.expired'
+  | 'pairing.rendezvous.consumed'
+  | 'pairing.rendezvous.closed'
 
 export interface RelaySafeLogger {
   log(

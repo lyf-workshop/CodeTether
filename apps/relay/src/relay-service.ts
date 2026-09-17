@@ -22,16 +22,19 @@ import {
   type RelayConnectionEpoch,
   type RelayErrorCode,
   type RelayPingId,
+  type RelayPairingRendezvousId,
   type RelayPublicKeyFingerprint,
   RelayProtocolError,
   fingerprintRelayPublicKeySpki,
   newRelayChallengeId,
   newRelayConnectionEpoch,
   newRelayNonce,
+  newRelayPeerId,
   newRelayPingId,
   relayAuthenticationTranscript,
   relayChallengeTranscript,
   relayEnrollmentTranscript,
+  relayPairingAuthenticationTranscript,
   relayProtocolAlpn,
   relayProtocolLimits,
   relayProtocolVersion,
@@ -50,6 +53,10 @@ import {
 } from './connection-registry.js'
 import type { RelayPeerRecord } from './internal-types.js'
 import { BoundedTokenBucketRateLimiter } from './rate-limiter.js'
+import {
+  RelayPairingRendezvousRegistry,
+  type RelayPairingRendezvous,
+} from './pairing-rendezvous-registry.js'
 import { createJsonRelayLogger, type RelaySafeLogger } from './safe-log.js'
 import { RelayStateStore } from './state-store.js'
 
@@ -181,6 +188,7 @@ class ActiveConnection implements RelayOwnedConnection {
   readonly pendingPings = new Map<RelayPingId, number>()
   lastHeartbeatAcknowledgedAt: number
   staleChannelFrames = 0
+  pairingRendezvousConsumed = false
   invalidated = false
   readonly #invalidate: (reason: 'replaced' | 'revoked' | 'shutdown') => void
 
@@ -188,6 +196,13 @@ class ActiveConnection implements RelayOwnedConnection {
     readonly peer: RelayPeerRecord,
     readonly epoch: RelayConnectionEpoch,
     readonly channel: FramedRelayConnection,
+    readonly scope: 'trusted' | 'pairing',
+    readonly pairing:
+      | {
+          readonly rendezvousId: RelayPairingRendezvousId
+          readonly node: ActiveConnection
+        }
+      | undefined,
     invalidate: (reason: 'replaced' | 'revoked' | 'shutdown') => void,
     monotonicNow: number,
   ) {
@@ -228,6 +243,7 @@ export class RelayService {
   readonly #server: TlsServer
   readonly #registry = new RelayConnectionRegistry<ActiveConnection>()
   readonly #channels: RelayChannelRegistry<ActiveConnection>
+  readonly #pairingRendezvous: RelayPairingRendezvousRegistry<ActiveConnection>
   readonly #channelOpenTimers = new Map<RelayChannelId, NodeJS.Timeout>()
   readonly #channelAcknowledgementTimers = new Map<string, NodeJS.Timeout>()
   readonly #closedChannelTombstones = new Map<
@@ -326,6 +342,16 @@ export class RelayService {
     this.#channels = new RelayChannelRegistry(
       this.#options.maximumChannels,
       this.#options.maximumChannelsPerPeer,
+    )
+    this.#pairingRendezvous = new RelayPairingRendezvousRegistry(
+      relayProtocolLimits.maximumPairingRendezvous,
+      relayProtocolLimits.maximumPairingRendezvousPerNode,
+      relayProtocolLimits.maximumPairingOpenAttempts,
+      relayProtocolLimits.maximumPairingLifetimeMs,
+      (rendezvous) =>
+        this.#logger.log('pairing.rendezvous.expired', {
+          peerReference: rendezvous.rendezvousId,
+        }),
     )
     this.#admissionLimiter = new BoundedTokenBucketRateLimiter({
       capacity: 240,
@@ -492,6 +518,7 @@ export class RelayService {
     if (this.#closing) return
     this.#closing = true
     await this.#closeAllChannels('relay_shutdown')
+    this.#pairingRendezvous.clear()
     this.#clearClosedChannelTombstones()
     this.#registry.clear('shutdown')
     for (const socket of this.#rawSockets) socket.destroy()
@@ -540,7 +567,8 @@ export class RelayService {
       }
       if (
         parsed.data.type !== 'peer.enroll' &&
-        parsed.data.type !== 'peer.authenticate'
+        parsed.data.type !== 'peer.authenticate' &&
+        parsed.data.type !== 'pairing.authenticate'
       ) {
         throw new RelayProtocolError(
           'authentication_failed',
@@ -561,15 +589,30 @@ export class RelayService {
         this.#recordRateLimit()
         throw new RelayProtocolError('rate_limited', 'Relay rate limit reached')
       }
+      const pairingRendezvous =
+        parsed.data.type === 'pairing.authenticate'
+          ? this.#authenticatePairing(challenge, parsed.data)
+          : undefined
       const peer =
         parsed.data.type === 'peer.enroll'
           ? this.#enroll(challenge, parsed.data, address)
-          : this.#authenticate(challenge, parsed.data)
+          : parsed.data.type === 'peer.authenticate'
+            ? this.#authenticate(challenge, parsed.data)
+            : this.#pairingPeer(parsed.data)
+      const scope =
+        parsed.data.type === 'pairing.authenticate' ? 'pairing' : 'trusted'
       const epoch = newRelayConnectionEpoch()
       active = new ActiveConnection(
         peer,
         epoch,
         channel,
+        scope,
+        pairingRendezvous === undefined
+          ? undefined
+          : {
+              rendezvousId: pairingRendezvous.rendezvousId,
+              node: pairingRendezvous.node,
+            },
         (reason) => {
           if (active !== undefined) {
             void this.#closeChannelsForConnection(
@@ -603,7 +646,9 @@ export class RelayService {
           connectionEpoch: epoch,
         })
       }
-      this.#store.recordAuthenticated(peer.peerId, peer.clientBuildIdentity)
+      if (scope === 'trusted') {
+        this.#store.recordAuthenticated(peer.peerId, peer.clientBuildIdentity)
+      }
       await channel.send({
         type: 'peer.ready',
         protocolVersion: relayProtocolVersion,
@@ -619,7 +664,7 @@ export class RelayService {
         role: peer.role,
         connectionEpoch: epoch,
       })
-      if (peer.role === 'node')
+      if (peer.role === 'node' && scope === 'trusted')
         await this.#publishNodePresence(peer.fingerprint)
       await this.#authenticatedLoop(active)
     } catch (error) {
@@ -633,9 +678,17 @@ export class RelayService {
         await sendError(channel, failure.code, failure.message)
       this.#logger.log('connection.rejected', { code: failure.code })
     } finally {
+      if (active !== undefined) {
+        const removedRendezvous = this.#pairingRendezvous.removeForNode(active)
+        if (removedRendezvous !== undefined) {
+          this.#logger.log('pairing.rendezvous.closed', {
+            peerReference: removedRendezvous.rendezvousId,
+          })
+        }
+      }
       if (active !== undefined && this.#registry.remove(active)) {
         await this.#closeChannelsForConnection(active, 'peer_disconnected')
-        if (active.peer.role === 'node') {
+        if (active.peer.role === 'node' && active.scope === 'trusted') {
           await this.#publishNodePresence(active.peer.fingerprint)
         }
         this.#logger.log('connection.closed', {
@@ -778,6 +831,73 @@ export class RelayService {
     return { ...peer, clientBuildIdentity: message.clientBuildIdentity }
   }
 
+  #authenticatePairing(
+    challenge: RelayChallengeMessage,
+    message: Extract<
+      RelayClientMessage,
+      { readonly type: 'pairing.authenticate' }
+    >,
+  ): RelayPairingRendezvous<ActiveConnection> {
+    if (
+      fingerprintRelayPublicKeySpki(message.peerPublicKeySpki) !==
+        message.peerFingerprint ||
+      !verifyRelayTranscript(
+        message.peerPublicKeySpki,
+        relayPairingAuthenticationTranscript({
+          challenge,
+          rendezvousId: message.rendezvousId,
+          rendezvousCapability: message.rendezvousCapability,
+          targetNodeFingerprint: message.targetNodeFingerprint,
+          peerPublicKeySpki: message.peerPublicKeySpki,
+          peerFingerprint: message.peerFingerprint,
+          clientBuildIdentity: message.clientBuildIdentity,
+        }),
+        message.signature,
+      )
+    ) {
+      throw new RelayProtocolError(
+        'authentication_failed',
+        'Relay authentication failed',
+      )
+    }
+    const rendezvous = this.#pairingRendezvous.authorize({
+      rendezvousId: message.rendezvousId,
+      capability: message.rendezvousCapability,
+      targetNodeFingerprint: message.targetNodeFingerprint,
+    })
+    if (
+      rendezvous === undefined ||
+      !this.#registry.owns(rendezvous.node) ||
+      rendezvous.node.invalidated ||
+      rendezvous.node.scope !== 'trusted' ||
+      rendezvous.node.peer.role !== 'node'
+    ) {
+      throw new RelayProtocolError(
+        'authentication_failed',
+        'Relay authentication failed',
+      )
+    }
+    return rendezvous
+  }
+
+  #pairingPeer(
+    message: Extract<
+      RelayClientMessage,
+      { readonly type: 'pairing.authenticate' }
+    >,
+  ): RelayPeerRecord {
+    const now = new Date().toISOString()
+    return {
+      peerId: newRelayPeerId(),
+      role: 'controller',
+      publicKeySpki: message.peerPublicKeySpki,
+      fingerprint: message.peerFingerprint,
+      clientBuildIdentity: message.clientBuildIdentity,
+      enrolledAt: now,
+      lastSeenAt: now,
+    }
+  }
+
   async #authenticatedLoop(connection: ActiveConnection): Promise<void> {
     const heartbeat = setInterval(
       () => void this.#heartbeat(connection),
@@ -811,7 +931,8 @@ export class RelayService {
   ): Promise<void> {
     if (
       message.type === 'peer.enroll' ||
-      message.type === 'peer.authenticate'
+      message.type === 'peer.authenticate' ||
+      message.type === 'pairing.authenticate'
     ) {
       throw new RelayProtocolError(
         'malformed_message',
@@ -841,6 +962,18 @@ export class RelayService {
       await this.#handleChannelMessage(connection, message)
       return
     }
+    if (connection.scope === 'pairing') {
+      if (message.type === 'heartbeat.pong') {
+        if (!connection.pendingPings.delete(message.pingId)) return
+        connection.lastHeartbeatAcknowledgedAt = this.#monotonicNow()
+        return
+      }
+      if (message.type === 'peer.goodbye') {
+        connection.channel.end()
+        return
+      }
+      throw notAuthorized()
+    }
     if (message.type === 'heartbeat.pong') {
       if (!connection.pendingPings.delete(message.pingId)) return
       connection.lastHeartbeatAcknowledgedAt = this.#monotonicNow()
@@ -851,7 +984,9 @@ export class RelayService {
       return
     }
     if (message.type === 'grant.replace') {
-      if (connection.peer.role !== 'node') throw notAuthorized()
+      if (connection.peer.role !== 'node' || connection.scope !== 'trusted') {
+        throw notAuthorized()
+      }
       this.#store.replaceGrant(
         connection.peer.peerId,
         message.authorizedControllerFingerprint,
@@ -868,11 +1003,119 @@ export class RelayService {
       await this.#publishNodePresence(connection.peer.fingerprint)
       return
     }
+    if (message.type === 'trusted-controller.reconcile') {
+      if (connection.peer.role !== 'node' || connection.scope !== 'trusted') {
+        throw notAuthorized()
+      }
+      const existing = this.#store.getPeerByFingerprint(
+        message.controllerFingerprint,
+      )
+      const pairingController = this.#registry.current(
+        message.controllerFingerprint,
+      )
+      const exactExisting =
+        existing?.role === 'controller' &&
+        existing.revokedAt === undefined &&
+        existing.publicKeySpki === message.controllerPublicKeySpki
+      const exactConsumedPairing =
+        pairingController !== undefined &&
+        this.#registry.owns(pairingController) &&
+        !pairingController.invalidated &&
+        pairingController.scope === 'pairing' &&
+        pairingController.pairingRendezvousConsumed &&
+        pairingController.pairing?.node === connection &&
+        pairingController.peer.publicKeySpki === message.controllerPublicKeySpki
+      if (!exactExisting && !exactConsumedPairing) throw notAuthorized()
+      this.#store.reconcileTrustedController(connection.peer.peerId, {
+        publicKeySpki: message.controllerPublicKeySpki,
+        fingerprint: message.controllerFingerprint,
+      })
+      if (pairingController !== undefined) {
+        pairingController.pairingRendezvousConsumed = false
+      }
+      await this.#closeUnauthorizedChannelsForNode(connection)
+      if (!this.#registry.owns(connection) || connection.invalidated) return
+      await connection.channel.send({
+        type: 'trusted-controller.reconciled',
+        protocolVersion: relayProtocolVersion,
+        connectionEpoch: connection.epoch,
+        requestId: message.requestId,
+        controllerFingerprint: message.controllerFingerprint,
+        observedAt: new Date().toISOString(),
+      })
+      await this.#publishNodePresence(connection.peer.fingerprint)
+      return
+    }
+    if (
+      message.type === 'pairing.rendezvous.register' ||
+      message.type === 'pairing.rendezvous.remove'
+    ) {
+      if (connection.peer.role !== 'node' || connection.scope !== 'trusted') {
+        throw notAuthorized()
+      }
+      if (message.type === 'pairing.rendezvous.remove') {
+        const removed = this.#pairingRendezvous.remove(
+          message.rendezvousId,
+          connection,
+        )
+        if (removed) {
+          this.#logger.log('pairing.rendezvous.closed', {
+            peerReference: message.rendezvousId,
+          })
+        }
+        await connection.channel.send({
+          type: 'pairing.rendezvous.removed',
+          protocolVersion: relayProtocolVersion,
+          connectionEpoch: connection.epoch,
+          requestId: message.requestId,
+          rendezvousId: message.rendezvousId,
+        })
+        return
+      }
+      const registered = this.#pairingRendezvous.register({
+        rendezvousId: message.rendezvousId,
+        capabilityDigest: message.capabilityDigest,
+        nodeFingerprint: connection.peer.fingerprint,
+        node: connection,
+        expiresAt: message.expiresAt,
+      })
+      if (!registered.ok) {
+        await connection.channel.send({
+          type: 'pairing.rendezvous.rejected',
+          protocolVersion: relayProtocolVersion,
+          connectionEpoch: connection.epoch,
+          requestId: message.requestId,
+          rendezvousId: message.rendezvousId,
+          reason:
+            registered.reason === 'invalid_expiry'
+              ? 'invalid_expiry'
+              : 'capacity_reached',
+        })
+        return
+      }
+      this.#logger.log('pairing.rendezvous.registered', {
+        peerReference: message.rendezvousId,
+      })
+      await connection.channel.send({
+        type: 'pairing.rendezvous.registered',
+        protocolVersion: relayProtocolVersion,
+        connectionEpoch: connection.epoch,
+        requestId: message.requestId,
+        rendezvousId: message.rendezvousId,
+        expiresAt: message.expiresAt,
+      })
+      return
+    }
     if (
       message.type === 'rendezvous.subscribe' ||
       message.type === 'rendezvous.unsubscribe'
     ) {
-      if (connection.peer.role !== 'controller') throw notAuthorized()
+      if (
+        connection.peer.role !== 'controller' ||
+        connection.scope !== 'trusted'
+      ) {
+        throw notAuthorized()
+      }
       if (
         !this.#store.canControllerObserveNode(
           connection.peer.fingerprint,
@@ -996,12 +1239,27 @@ export class RelayService {
       controller.channel.destroy()
       return
     }
-    if (
-      controller.peer.role !== 'controller' ||
-      !this.#store.canControllerObserveNode(
-        controller.peer.fingerprint,
-        message.targetNodeFingerprint,
+    if (controller.peer.role !== 'controller') {
+      await this.#sendChannelOpenError(
+        controller,
+        message.requestId,
+        'not_authorized',
       )
+      return
+    }
+    const pairing =
+      message.purpose === 'pairing_opaque_v1' ? controller.pairing : undefined
+    if (
+      message.purpose === 'machine_tls_v1'
+        ? controller.scope !== 'trusted' ||
+          !this.#store.canControllerObserveNode(
+            controller.peer.fingerprint,
+            message.targetNodeFingerprint,
+          )
+        : controller.scope !== 'pairing' ||
+          pairing === undefined ||
+          pairing.rendezvousId !== message.rendezvousId ||
+          pairing.node.peer.fingerprint !== message.targetNodeFingerprint
     ) {
       await this.#sendChannelOpenError(
         controller,
@@ -1010,7 +1268,10 @@ export class RelayService {
       )
       return
     }
-    const node = this.#registry.current(message.targetNodeFingerprint)
+    const node =
+      message.purpose === 'pairing_opaque_v1'
+        ? pairing!.node
+        : this.#registry.current(message.targetNodeFingerprint)
     if (
       node === undefined ||
       node.peer.role !== 'node' ||
@@ -1039,6 +1300,24 @@ export class RelayService {
       return
     }
     const channel = created.channel
+    if (
+      message.purpose === 'pairing_opaque_v1' &&
+      this.#pairingRendezvous.consume(message.rendezvousId, node) === undefined
+    ) {
+      this.#removeChannel(channel)
+      await this.#sendChannelOpenError(
+        controller,
+        message.requestId,
+        'not_authorized',
+      )
+      return
+    }
+    if (message.purpose === 'pairing_opaque_v1') {
+      controller.pairingRendezvousConsumed = true
+      this.#logger.log('pairing.rendezvous.consumed', {
+        peerReference: message.rendezvousId,
+      })
+    }
     this.#startChannelOpenTimer(channel)
     try {
       await node.channel.send(
@@ -1503,8 +1782,20 @@ export class RelayService {
 
   async #heartbeat(connection: ActiveConnection): Promise<void> {
     if (!this.#registry.owns(connection) || connection.invalidated) return
-    const currentPeer = this.#store.getPeerById(connection.peer.peerId)
-    if (currentPeer?.revokedAt !== undefined || currentPeer === undefined) {
+    const authorityCurrent =
+      connection.scope === 'trusted'
+        ? (() => {
+            const currentPeer = this.#store.getPeerById(connection.peer.peerId)
+            return (
+              currentPeer !== undefined && currentPeer.revokedAt === undefined
+            )
+          })()
+        : connection.pairing !== undefined &&
+          this.#registry.owns(connection.pairing.node) &&
+          !connection.pairing.node.invalidated &&
+          connection.pairing.node.scope === 'trusted' &&
+          connection.pairing.node.peer.role === 'node'
+    if (!authorityCurrent) {
       connection.invalidate('revoked')
       return
     }

@@ -1,5 +1,7 @@
 import { z } from 'zod'
 
+import { RelayEndpointSchema, RelayIdentityFingerprintSchema } from './relay.js'
+
 import {
   MachineIdSchema,
   MachinePairingAttemptIdSchema,
@@ -112,6 +114,110 @@ export const RemoteMachineAddressSchema = z
   .strict()
 export type RemoteMachineAddress = z.infer<typeof RemoteMachineAddressSchema>
 
+export const RemoteMachineDirectPairingTargetSchema = z
+  .object({
+    kind: z.literal('direct'),
+    address: RemoteMachineAddressSchema,
+  })
+  .strict()
+
+export const RemoteMachineRelayPairingTargetSchema = z
+  .object({
+    kind: z.literal('relay'),
+    endpoint: RelayEndpointSchema,
+    relayIdentityFingerprint: RelayIdentityFingerprintSchema,
+    nodeFingerprint: RelayIdentityFingerprintSchema,
+    rendezvousId: z
+      .string()
+      .regex(/^relay_pairing_[A-Za-z0-9][A-Za-z0-9_-]{5,95}$/u),
+    rendezvousCapability: z.string().regex(/^[A-Za-z0-9_-]{43}$/u),
+  })
+  .strict()
+
+export const RemoteMachinePairingTargetSchema = z.discriminatedUnion('kind', [
+  RemoteMachineDirectPairingTargetSchema,
+  RemoteMachineRelayPairingTargetSchema,
+])
+export type RemoteMachinePairingTarget = z.infer<
+  typeof RemoteMachinePairingTargetSchema
+>
+
+const relayPairingTargetPrefix = 'codetether-pairing://relay/v1'
+
+export function serializeRemoteMachinePairingTarget(
+  value: RemoteMachinePairingTarget,
+): string {
+  const target = RemoteMachinePairingTargetSchema.parse(value)
+  if (target.kind === 'direct') {
+    const host = target.address.host.includes(':')
+      ? `[${target.address.host.replace(/^\[|\]$/gu, '')}]`
+      : target.address.host
+    return `${host}:${target.address.port}`
+  }
+  const parameters = new URLSearchParams({
+    host: target.endpoint.host,
+    port: String(target.endpoint.port),
+    security: target.endpoint.transportSecurity,
+    relay: target.relayIdentityFingerprint,
+    node: target.nodeFingerprint,
+    rendezvous: target.rendezvousId,
+    capability: target.rendezvousCapability,
+  })
+  return `${relayPairingTargetPrefix}?${parameters.toString()}`
+}
+
+export function parseRemoteMachinePairingTarget(
+  value: string,
+): RemoteMachinePairingTarget | undefined {
+  const input = value.trim()
+  if (!input.startsWith(`${relayPairingTargetPrefix}?`)) return undefined
+  let url: URL
+  try {
+    url = new URL(input)
+  } catch {
+    return undefined
+  }
+  if (
+    url.protocol !== 'codetether-pairing:' ||
+    url.hostname !== 'relay' ||
+    url.pathname !== '/v1' ||
+    url.username !== '' ||
+    url.password !== '' ||
+    url.port !== '' ||
+    url.hash !== '' ||
+    [...url.searchParams.keys()].some(
+      (key) =>
+        ![
+          'host',
+          'port',
+          'security',
+          'relay',
+          'node',
+          'rendezvous',
+          'capability',
+        ].includes(key),
+    ) ||
+    [...url.searchParams.keys()].some(
+      (key) => url.searchParams.getAll(key).length !== 1,
+    )
+  ) {
+    return undefined
+  }
+  const parsed = RemoteMachineRelayPairingTargetSchema.safeParse({
+    kind: 'relay',
+    endpoint: {
+      host: url.searchParams.get('host'),
+      port: Number(url.searchParams.get('port')),
+      transportSecurity: url.searchParams.get('security'),
+    },
+    relayIdentityFingerprint: url.searchParams.get('relay'),
+    nodeFingerprint: url.searchParams.get('node'),
+    rendezvousId: url.searchParams.get('rendezvous'),
+    rendezvousCapability: url.searchParams.get('capability'),
+  })
+  return parsed.success ? parsed.data : undefined
+}
+
 export const MachineExecutionTransportSchema = z.enum([
   'direct',
   'relay',
@@ -223,7 +329,7 @@ export const RemoteMachinePairingCandidateSchema = z
     displayName: z.string().trim().min(1).max(240),
     platform: z.string().trim().min(1).max(120),
     architecture: z.string().trim().min(1).max(120),
-    address: RemoteMachineAddressSchema,
+    address: RemoteMachineAddressSchema.optional(),
     protocolVersion: z.number().int().positive().safe(),
     expiresAt: TimestampSchema,
     verificationCode: z.string().regex(/^\d{3} \d{3}$/u),

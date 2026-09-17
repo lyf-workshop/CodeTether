@@ -7,6 +7,7 @@ import {
   RelayClientMessageSchema,
   RelayChannelDataSchema,
   RelayFrameDecoder,
+  RelayPairingAuthenticateMessageSchema,
   RelayPeerRoleSchema,
   RelayServerMessageSchema,
   RelayWireMessageSchema,
@@ -18,7 +19,9 @@ import {
   newRelayChannelId,
   newRelayConnectionEpoch,
   newRelayNonce,
+  newRelayPairingRendezvousId,
   newRelayRequestId,
+  relayPairingAuthenticationTranscript,
   relayAuthenticationTranscript,
   relayChallengeTranscript,
   relayProtocolLimits,
@@ -95,6 +98,84 @@ test('Relay application identity signs fixed challenge and authentication transc
     ),
     false,
   )
+})
+
+test('pairing authentication binds challenge, capability, target Node, and Controller identity', () => {
+  const relay = generateRelayApplicationIdentity()
+  const controller = generateRelayApplicationIdentity()
+  const otherController = generateRelayApplicationIdentity()
+  const challenge = signedChallenge(relay)
+  const input = {
+    challenge,
+    rendezvousId: 'pair_rendezvous_0123456789abcdef',
+    rendezvousCapability: 'A'.repeat(43),
+    targetNodeFingerprint: 'B'.repeat(43),
+    peerPublicKeySpki: controller.publicKeySpki,
+    peerFingerprint: controller.publicKeyFingerprint,
+    clientBuildIdentity: 'test-build',
+  }
+  const signature = signRelayTranscript(
+    controller.privateKeyPem,
+    relayPairingAuthenticationTranscript(input),
+  )
+  assert.equal(
+    verifyRelayTranscript(
+      controller.publicKeySpki,
+      relayPairingAuthenticationTranscript(input),
+      signature,
+    ),
+    true,
+  )
+  for (const mutation of [
+    { challenge: signedChallenge(relay) },
+    { rendezvousCapability: 'C'.repeat(43) },
+    { targetNodeFingerprint: 'D'.repeat(43) },
+    {
+      peerPublicKeySpki: otherController.publicKeySpki,
+      peerFingerprint: otherController.publicKeyFingerprint,
+    },
+  ]) {
+    assert.equal(
+      verifyRelayTranscript(
+        controller.publicKeySpki,
+        relayPairingAuthenticationTranscript({ ...input, ...mutation }),
+        signature,
+      ),
+      false,
+    )
+  }
+})
+
+test('pairing wire schemas expose a bounded capability but never a pairing code', () => {
+  const controller = generateRelayApplicationIdentity()
+  const rendezvousId = newRelayPairingRendezvousId()
+  const valid = {
+    type: 'pairing.authenticate',
+    protocolVersion: relayProtocolVersion,
+    rendezvousId,
+    rendezvousCapability: 'A'.repeat(43),
+    targetNodeFingerprint: 'B'.repeat(43),
+    peerPublicKeySpki: controller.publicKeySpki,
+    peerFingerprint: controller.publicKeyFingerprint,
+    clientBuildIdentity: 'test-build',
+    signature: 'C'.repeat(86),
+  }
+  assert.equal(
+    RelayPairingAuthenticateMessageSchema.safeParse(valid).success,
+    true,
+  )
+  for (const extra of [
+    { pairingCode: '123456' },
+    { code: '123456' },
+    { payload: 'opaque bytes' },
+    { purpose: 'machine_tls_v1' },
+  ]) {
+    assert.equal(
+      RelayPairingAuthenticateMessageSchema.safeParse({ ...valid, ...extra })
+        .success,
+      false,
+    )
+  }
 })
 
 test('control schemas cannot represent Agent execution or opaque payloads', () => {
@@ -179,6 +260,7 @@ test('machine TLS channels are purpose-bound, epoch-bound, and strictly bounded'
   const channelId = newRelayChannelId()
   const channelGeneration = newRelayChannelGeneration()
   const requestId = newRelayRequestId()
+  const rendezvousId = newRelayPairingRendezvousId()
   const binding = {
     protocolVersion: relayProtocolVersion,
     connectionEpoch: controllerConnectionEpoch,
@@ -206,6 +288,30 @@ test('machine TLS channels are purpose-bound, epoch-bound, and strictly bounded'
       purpose: 'machine_tls_v1',
     }).success,
     true,
+  )
+  assert.equal(
+    RelayClientMessageSchema.safeParse({
+      type: 'channel.open',
+      protocolVersion: relayProtocolVersion,
+      connectionEpoch: controllerConnectionEpoch,
+      requestId,
+      targetNodeFingerprint: 'A'.repeat(43),
+      purpose: 'pairing_opaque_v1',
+    }).success,
+    false,
+  )
+  assert.equal(
+    RelayClientMessageSchema.safeParse({
+      type: 'channel.open',
+      protocolVersion: relayProtocolVersion,
+      connectionEpoch: controllerConnectionEpoch,
+      requestId,
+      targetNodeFingerprint: 'A'.repeat(43),
+      purpose: 'pairing_opaque_v1',
+      rendezvousId,
+      pairingCode: '123456',
+    }).success,
+    false,
   )
   assert.equal(
     RelayClientMessageSchema.safeParse({

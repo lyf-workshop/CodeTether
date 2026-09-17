@@ -51,8 +51,10 @@ import {
   ProjectIdSchema,
   ProjectLocationSchema,
   ProjectRecordSchema,
+  parseRemoteMachinePairingTarget,
   RemoteMachineAddressSchema,
   RemoteMachineConnectionSchema,
+  RemoteMachinePairingTargetSchema,
   RemoteMachinePairingCandidateSchema,
   RegisterProjectLocationRequestSchema,
   RegisterProjectLocationResponseSchema,
@@ -72,6 +74,7 @@ import {
   ResolveAttentionResponseSchema,
   RenameConversationRequestSchema,
   RenameConversationResponseSchema,
+  serializeRemoteMachinePairingTarget,
   SafeErrorEnvelopeSchema,
   safeErrorDetailLimits,
   StartTurnRequestSchema,
@@ -698,6 +701,53 @@ test('validates presentation-safe remote pairing contracts', () => {
       data: { candidate: { ...candidate, peerPublicKey: 'private' } },
     }).success,
     false,
+  )
+
+  const relayTarget = RemoteMachinePairingTargetSchema.parse({
+    kind: 'relay',
+    endpoint: {
+      host: 'relay.example.test',
+      port: 443,
+      transportSecurity: 'public_ca',
+    },
+    relayIdentityFingerprint: 'R'.repeat(43),
+    nodeFingerprint: 'N'.repeat(43),
+    rendezvousId: 'relay_pairing_fixture01',
+    rendezvousCapability: 'C'.repeat(43),
+  })
+  const serialized = serializeRemoteMachinePairingTarget(relayTarget)
+  assert.deepEqual(parseRemoteMachinePairingTarget(serialized), relayTarget)
+  assert.equal(serialized.includes('482731'), false)
+  assert.deepEqual(
+    BeginRemoteMachinePairingRequestSchema.parse({
+      actionId,
+      target: relayTarget,
+      pairingCode: '482 731',
+    }).target,
+    relayTarget,
+  )
+  assert.equal(
+    BeginRemoteMachinePairingRequestSchema.safeParse({
+      actionId,
+      address,
+      target: relayTarget,
+      pairingCode: '482 731',
+    }).success,
+    false,
+  )
+  assert.equal(
+    parseRemoteMachinePairingTarget(
+      `${serialized}&capability=${'D'.repeat(43)}`,
+    ),
+    undefined,
+  )
+  assert.equal(
+    parseRemoteMachinePairingTarget(`${serialized}&unknown=value`),
+    undefined,
+  )
+  assert.equal(
+    serializeRemoteMachinePairingTarget({ kind: 'direct', address }),
+    '192.0.2.10:43217',
   )
 })
 

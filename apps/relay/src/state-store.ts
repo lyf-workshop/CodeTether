@@ -360,6 +360,88 @@ export class RelayStateStore {
     this.#replaceGrantWithinTransaction(nodePeerId, controllerFingerprint, now)
   }
 
+  /**
+   * Records only the Controller identity already trusted by an enrolled Node.
+   * The Node remains the Machine-trust authority; this transaction merely
+   * makes that exact identity eligible for the existing Relay grant path.
+   */
+  reconcileTrustedController(
+    nodePeerId: RelayPeerId,
+    input: {
+      readonly publicKeySpki: RelayPublicKeySpki
+      readonly fingerprint: RelayPublicKeyFingerprint
+      readonly now?: Date
+    },
+  ): RelayPeerRecord {
+    this.#assertOpen()
+    if (
+      fingerprintRelayPublicKeySpki(input.publicKeySpki) !== input.fingerprint
+    ) {
+      throw new RelayProtocolError(
+        'identity_mismatch',
+        'Relay Controller identity is invalid',
+      )
+    }
+    const now = input.now ?? new Date()
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      const node = this.#database
+        .prepare(
+          `SELECT peer_id, role, public_key_spki, fingerprint,
+                  client_build_identity, enrolled_at, last_seen_at, revoked_at
+           FROM peers WHERE peer_id = ?`,
+        )
+        .get(nodePeerId) as PeerRow | undefined
+      if (node?.role !== 'node' || node.revoked_at !== null) {
+        throw new RelayProtocolError(
+          'not_authorized',
+          'Relay action is not authorized',
+        )
+      }
+      const existing = this.#findPeerRowByFingerprint(input.fingerprint)
+      let controllerPeerId: RelayPeerId
+      if (existing !== undefined) {
+        if (
+          existing.role !== 'controller' ||
+          existing.public_key_spki !== input.publicKeySpki ||
+          existing.revoked_at !== null
+        ) {
+          throw new RelayProtocolError(
+            'identity_mismatch',
+            'Relay Controller identity conflicts with existing state',
+          )
+        }
+        controllerPeerId = existing.peer_id as RelayPeerId
+      } else {
+        controllerPeerId = newRelayPeerId()
+        this.#database
+          .prepare(
+            `INSERT INTO peers
+             (peer_id, role, public_key_spki, fingerprint, client_build_identity,
+              enrolled_at, last_seen_at, revoked_at)
+             VALUES (?, 'controller', ?, ?, 'machine-pairing', ?, ?, NULL)`,
+          )
+          .run(
+            controllerPeerId,
+            input.publicKeySpki,
+            input.fingerprint,
+            now.toISOString(),
+            now.toISOString(),
+          )
+      }
+      this.#replaceGrantWithinTransaction(nodePeerId, input.fingerprint, now)
+      this.#database.exec('COMMIT')
+      const controller = this.getPeerById(controllerPeerId)
+      if (controller === undefined) {
+        throw new Error('Reconciled Relay Controller disappeared')
+      }
+      return controller
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
   canControllerObserveNode(
     controllerFingerprint: RelayPublicKeyFingerprint,
     nodeFingerprint: RelayPublicKeyFingerprint,

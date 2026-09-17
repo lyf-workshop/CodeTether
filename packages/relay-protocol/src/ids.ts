@@ -44,6 +44,13 @@ export type RelayChannelGeneration = z.infer<
   typeof RelayChannelGenerationSchema
 >
 
+export const RelayPairingRendezvousIdSchema = z
+  .string()
+  .regex(/^relay_pairing_[A-Za-z0-9][A-Za-z0-9_-]{5,95}$/u)
+export type RelayPairingRendezvousId = z.infer<
+  typeof RelayPairingRendezvousIdSchema
+>
+
 export const RelayNonceSchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/u)
 export type RelayNonce = z.infer<typeof RelayNonceSchema>
 
@@ -82,6 +89,10 @@ export function newRelayChannelGeneration(): RelayChannelGeneration {
   return RelayChannelGenerationSchema.parse(
     `relay_channel_generation_${compactUuid()}`,
   )
+}
+
+export function newRelayPairingRendezvousId(): RelayPairingRendezvousId {
+  return RelayPairingRendezvousIdSchema.parse(`relay_pairing_${compactUuid()}`)
 }
 
 export function newRelayNonce(): RelayNonce {

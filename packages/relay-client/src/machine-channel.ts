@@ -167,8 +167,12 @@ export class RelayMachineChannelDuplex extends Duplex {
         ? Buffer.from(chunk, encoding)
         : Buffer.from(chunk)
     void this.#writeBytes(bytes).then(
-      () => callback(),
-      (error: unknown) => callback(asError(error)),
+      () => {
+        callback()
+      },
+      (error: unknown) => {
+        callback(asError(error))
+      },
     )
   }
 

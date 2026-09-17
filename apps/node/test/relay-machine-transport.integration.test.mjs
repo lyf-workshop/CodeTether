@@ -6,6 +6,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import test from 'node:test'
 
 import {
+  beginRemoteMachinePairingOverStream,
   connectTrustedRemoteMachineOverStream,
   generateMachineTlsIdentity,
   machineProtocolVersion,
@@ -25,6 +26,7 @@ import {
   generateRelayPinnedTlsIdentity,
 } from '../../relay/dist/index.js'
 import { CodeTetherNodeService } from '../dist/node-service.js'
+import { NodeRelayManager } from '../dist/node-relay-manager.js'
 import { NodeStateStore } from '../dist/state-store.js'
 
 test('real Relay brokers the existing pinned Machine TLS protocol without a direct dial or implicit resume', async () => {
@@ -253,6 +255,291 @@ test('real Relay brokers the existing pinned Machine TLS protocol without a dire
     await nodeRelay?.connection.close().catch(() => undefined)
     await controllerRelay?.connection.close().catch(() => undefined)
     await nodeService.close().catch(() => undefined)
+    await relay.close().catch(() => undefined)
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('Relay-assisted first pairing preserves OPAQUE confirmation and transitions to trusted Machine TLS', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'codetether-relay-pairing-e2e-'))
+  const relayStore = new RelayStateStore(join(root, 'relay-state'))
+  const relayTls = await generateRelayPinnedTlsIdentity(relayStore.identity)
+  const relay = new RelayService({
+    stateStore: relayStore,
+    tls: relayTls,
+    host: '127.0.0.1',
+    port: 0,
+    managementPort: null,
+    heartbeatIntervalMs: 100,
+    heartbeatTimeoutMs: 3_000,
+  })
+  const nodeState = await NodeStateStore.open({
+    dataDirectory: join(root, 'node-state'),
+    displayName: 'Loopback-only pairing Machine',
+    platform: 'macOS',
+    architecture: 'arm64',
+  })
+  const controller = {
+    controllerId: newControllerId(),
+    tls: await generateMachineTlsIdentity('CodeTether Controller'),
+  }
+  const rejectedController = {
+    controllerId: newControllerId(),
+    tls: await generateMachineTlsIdentity('Rejected CodeTether Controller'),
+  }
+  let nodeRelayManager
+  let nodeService
+  let rejectedPairingRelay
+  let rejectedPairingChannel
+  let pairingRelay
+  let trustedRelay
+  let pairingMachine
+  let trustedMachine
+  let pairingChannel
+  let trustedChannel
+  let pairingTarget
+  try {
+    await relay.start()
+    const endpoint = {
+      host: '127.0.0.1',
+      port: relay.listeningAddress.port,
+    }
+    const relayTlsPolicy = {
+      mode: 'pinned_certificate',
+      certificatePublicKeyFingerprint: relay.relayFingerprint,
+    }
+    const nodeEnrollmentToken = relayStore.createEnrollmentToken('node')
+    let enrollmentAvailable = true
+    nodeRelayManager = new NodeRelayManager({
+      state: nodeState,
+      configuration: {
+        schemaVersion: 1,
+        enabled: true,
+        endpoint,
+        relayIdentityFingerprint: relay.relayFingerprint,
+        tls: relayTlsPolicy,
+      },
+      clientBuildIdentity: 'relay-pairing-integration',
+      reconnectInitialDelayMs: 10,
+      reconnectMaximumDelayMs: 20,
+      reconnectStableResetMs: 50,
+      async readEnrollmentToken() {
+        if (!enrollmentAvailable) return undefined
+        return {
+          secret: nodeEnrollmentToken,
+          contentDigest: Buffer.alloc(32),
+        }
+      },
+      async readPendingEnrollmentToken() {
+        return undefined
+      },
+      async consumeEnrollmentToken() {
+        enrollmentAvailable = false
+      },
+      async readRegistration() {
+        return undefined
+      },
+      async writeRegistration() {},
+    })
+    nodeService = new CodeTetherNodeService({
+      state: nodeState,
+      bindAddress: '127.0.0.1',
+      port: 0,
+      relayControl: nodeRelayManager,
+    })
+    nodeRelayManager.setMachineChannelHandler(
+      async (channel) => await nodeService.acceptRelayMachineChannel(channel),
+    )
+    nodeRelayManager.setPairingChannelHandler(
+      async (channel) => await nodeService.acceptRelayPairingChannel(channel),
+    )
+    nodeService.on('paired', () => nodeRelayManager.synchronizeMachineTrust())
+    const directAddress = await nodeService.listen()
+    assert.equal(directAddress.address, '127.0.0.1')
+    assert.equal(nodeState.trustedControllerCount, 0)
+
+    nodeRelayManager.start()
+    await waitFor(() => nodeRelayManager.status === 'connected')
+    const pairing = await nodeService.enablePairing()
+    const pairingTargetAvailable = new Promise((resolve) => {
+      nodeRelayManager.enablePairingRendezvous(pairing.expiresAt, resolve)
+    })
+    pairingTarget = await pairingTargetAvailable
+    assert.equal(pairingTarget.kind, 'relay')
+    assert.equal(
+      pairingTarget.nodeFingerprint,
+      nodeState.identity.publicKeyFingerprint,
+    )
+    rejectedPairingRelay = await connectRelayControl({
+      endpoint,
+      tls: relayTlsPolicy,
+      expectedRelayIdentityFingerprint: relay.relayFingerprint,
+      identity: machineRelayIdentity('controller', rejectedController.tls),
+      clientBuildIdentity: 'relay-pairing-integration',
+      pairing: {
+        rendezvousId: pairingTarget.rendezvousId,
+        rendezvousCapability: pairingTarget.rendezvousCapability,
+        targetNodeFingerprint: pairingTarget.nodeFingerprint,
+      },
+    })
+    rejectedPairingChannel =
+      await rejectedPairingRelay.connection.openPairingChannel(
+        pairingTarget.nodeFingerprint,
+        pairingTarget.rendezvousId,
+      )
+    rejectedPairingChannel.on('error', () => undefined)
+    await assert.rejects(
+      beginRemoteMachinePairingOverStream({
+        stream: rejectedPairingChannel,
+        pairingCode: pairing.code === '000000' ? '111111' : '000000',
+        controller: rejectedController,
+      }),
+      (error) => error?.code === 'pairing_failed',
+    )
+    rejectedPairingChannel = undefined
+    await assert.rejects(
+      rejectedPairingRelay.connection.openPairingChannel(
+        pairingTarget.nodeFingerprint,
+        pairingTarget.rendezvousId,
+      ),
+      (error) =>
+        error instanceof RelayClientError &&
+        error.code === 'relay_channel_open_failed',
+    )
+    await rejectedPairingRelay.connection.close()
+    rejectedPairingRelay = undefined
+    assert.equal(nodeState.trustedControllerCount, 0)
+    assert.equal(
+      relayStore.getPeerByFingerprint(
+        rejectedController.tls.publicKeyFingerprint,
+      ),
+      undefined,
+    )
+
+    pairingTarget = await new Promise((resolve) => {
+      nodeRelayManager.enablePairingRendezvous(pairing.expiresAt, resolve)
+    })
+    const pairingCommon = {
+      endpoint,
+      tls: relayTlsPolicy,
+      expectedRelayIdentityFingerprint: relay.relayFingerprint,
+      identity: machineRelayIdentity('controller', controller.tls),
+      clientBuildIdentity: 'relay-pairing-integration',
+      pairing: {
+        rendezvousId: pairingTarget.rendezvousId,
+        rendezvousCapability: pairingTarget.rendezvousCapability,
+        targetNodeFingerprint: pairingTarget.nodeFingerprint,
+      },
+    }
+    pairingRelay = await connectRelayControl(pairingCommon)
+    assert.equal(pairingRelay.connection.scope, 'pairing')
+    await assert.rejects(
+      pairingRelay.connection.subscribeToNode(
+        pairingTarget.nodeFingerprint,
+        () => undefined,
+      ),
+      (error) =>
+        error instanceof RelayClientError &&
+        error.code === 'relay_protocol_error',
+    )
+    await assert.rejects(
+      pairingRelay.connection.openMachineChannel(pairingTarget.nodeFingerprint),
+      (error) =>
+        error instanceof RelayClientError &&
+        error.code === 'relay_protocol_error',
+    )
+
+    pairingChannel = await pairingRelay.connection.openPairingChannel(
+      pairingTarget.nodeFingerprint,
+      pairingTarget.rendezvousId,
+    )
+    pairingChannel.on('error', () => undefined)
+    pairingMachine = await beginRemoteMachinePairingOverStream({
+      stream: pairingChannel,
+      pairingCode: pairing.code,
+      controller,
+    })
+    pairingChannel = undefined
+    assert.deepEqual(pairingMachine.machine, nodeState.machine)
+    assert.equal(pairingMachine.endpoint, undefined)
+    assert.equal(nodeState.trustedControllerCount, 0)
+    assert.equal(
+      pairingMachine.trustCandidate.controllerId,
+      controller.controllerId,
+    )
+
+    const confirmed = await pairingMachine.confirm()
+    pairingMachine = undefined
+    assert.deepEqual(confirmed.machine, nodeState.machine)
+    assert.equal(nodeState.trustedControllerCount, 1)
+    assert.equal(
+      nodeState.trustedController()?.controllerId,
+      controller.controllerId,
+    )
+    assert.equal(
+      nodeState.trustedController()?.publicKeyFingerprint,
+      controller.tls.publicKeyFingerprint,
+    )
+    assert.equal(
+      nodeState.trustedController()?.publicKeySpki,
+      relayPublicKeySpkiFromCertificate(controller.tls.certificatePem),
+    )
+    await assert.rejects(
+      pairingRelay.connection.openPairingChannel(
+        pairingTarget.nodeFingerprint,
+        pairingTarget.rendezvousId,
+      ),
+      (error) =>
+        error instanceof RelayClientError &&
+        error.code === 'relay_channel_open_failed',
+    )
+    await pairingRelay.connection.close()
+    pairingRelay = undefined
+
+    trustedRelay = await connectRelayControl({
+      endpoint,
+      tls: relayTlsPolicy,
+      expectedRelayIdentityFingerprint: relay.relayFingerprint,
+      identity: machineRelayIdentity('controller', controller.tls),
+      clientBuildIdentity: 'relay-pairing-integration',
+    })
+    assert.equal(trustedRelay.connection.scope, 'trusted')
+    trustedChannel = await trustedRelay.connection.openMachineChannel(
+      nodeState.identity.publicKeyFingerprint,
+    )
+    trustedChannel.on('error', () => undefined)
+    trustedMachine = await connectTrustedRemoteMachineOverStream({
+      stream: trustedChannel,
+      controller,
+      peer: {
+        machine: nodeState.machine,
+        nodeFingerprint: nodeState.identity.publicKeyFingerprint,
+        protocolVersion: machineProtocolVersion,
+        controllerId: controller.controllerId,
+      },
+    })
+    trustedChannel = undefined
+    await trustedMachine.ping()
+    assert.deepEqual(trustedMachine.machine, nodeState.machine)
+    assert.equal(
+      relayStore.canControllerObserveNode(
+        controller.tls.publicKeyFingerprint,
+        nodeState.identity.publicKeyFingerprint,
+      ),
+      true,
+    )
+  } finally {
+    trustedMachine?.close()
+    await pairingMachine?.cancel().catch(() => undefined)
+    trustedChannel?.destroy()
+    pairingChannel?.destroy()
+    rejectedPairingChannel?.destroy()
+    await trustedRelay?.connection.close().catch(() => undefined)
+    await pairingRelay?.connection.close().catch(() => undefined)
+    await rejectedPairingRelay?.connection.close().catch(() => undefined)
+    await nodeService?.close().catch(() => undefined)
+    await nodeRelayManager?.close().catch(() => undefined)
+    await nodeState.close().catch(() => undefined)
     await relay.close().catch(() => undefined)
     await rm(root, { recursive: true, force: true })
   }

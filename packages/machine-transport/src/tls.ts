@@ -45,7 +45,7 @@ export interface MachineTlsConnection {
   readonly peerFingerprint: PublicKeyFingerprint
 }
 
-interface MachineTlsBaseStreamOptions {
+export interface MachineTlsBaseStreamOptions {
   /** An already-established byte stream owned by the caller. */
   readonly stream: Duplex
   readonly identity: MachineTlsIdentity
@@ -58,7 +58,7 @@ export interface MachineTlsStreamOptions extends MachineTlsBaseStreamOptions {
   readonly expectedPeerFingerprint: PublicKeyFingerprint
 }
 
-type MachineTlsClientStreamOptions = MachineTlsBaseStreamOptions & {
+export type MachineTlsClientStreamOptions = MachineTlsBaseStreamOptions & {
   readonly expectedPeerFingerprint?: PublicKeyFingerprint
 }
 
@@ -91,6 +91,17 @@ export async function connectMachineTlsOverStream(
   return await connectMachineTlsClientOverStream(
     requirePinnedMachineTlsStream(options),
   )
+}
+
+/**
+ * Establishes first-pairing Machine TLS over a purpose-bound byte stream.
+ * The peer fingerprint is learned and bound by the existing OPAQUE pairing
+ * transcript; callers must not use this helper for an already-trusted peer.
+ */
+export async function connectPairingMachineTlsOverStream(
+  options: MachineTlsBaseStreamOptions,
+): Promise<MachineTlsConnection> {
+  return await connectMachineTlsClientOverStream(options)
 }
 
 async function connectMachineTlsClientOverStream(
@@ -136,6 +147,23 @@ export async function acceptMachineTlsOverStream(
     throw connectionFailure(error)
   }
   return await verifyMachineTlsConnection(socket, 'secure', pinnedOptions)
+}
+
+/** Server side of first-pairing Machine TLS over a purpose-bound stream. */
+export async function acceptPairingMachineTlsOverStream(
+  options: MachineTlsClientStreamOptions,
+): Promise<MachineTlsConnection> {
+  let socket: TLSSocket
+  try {
+    socket = new TLSSocket(options.stream, {
+      ...machineTlsServerOptions(options.identity),
+      isServer: true,
+    })
+  } catch (error) {
+    options.stream.destroy()
+    throw connectionFailure(error)
+  }
+  return await verifyMachineTlsConnection(socket, 'secure', options)
 }
 
 async function verifyMachineTlsConnection(

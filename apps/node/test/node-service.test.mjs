@@ -84,6 +84,7 @@ test(
         controller: localController,
       })
       await pending.confirm()
+      assert.equal(running.state.trustedController()?.publicKeySpki, undefined)
 
       const clientOptions = {
         ...running.endpoint,

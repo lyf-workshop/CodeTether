@@ -1082,10 +1082,17 @@ export class HostService {
       async () => {
         this.#requireDurableMachineState()
         try {
-          const candidate = await this.#remoteMachines.beginPairing({
-            address: request.address,
-            pairingCode: request.pairingCode,
-          })
+          const candidate = await this.#remoteMachines.beginPairing(
+            request.target === undefined
+              ? {
+                  address: request.address!,
+                  pairingCode: request.pairingCode,
+                }
+              : {
+                  target: request.target,
+                  pairingCode: request.pairingCode,
+                },
+          )
           return {
             protocolVersion,
             actionId: request.actionId,
@@ -1119,10 +1126,18 @@ export class HostService {
               assertStagedRemoteMachine(candidate)
               try {
                 this.#writeDurable(() => {
-                  persistence.createRemoteMachineWithTrust(
-                    candidate.machine,
-                    candidate.trust,
-                  )
+                  if (candidate.relay === undefined) {
+                    persistence.createRemoteMachineWithTrust(
+                      candidate.machine,
+                      candidate.trust,
+                    )
+                  } else {
+                    persistence.createRemoteMachineWithTrustAndRelay(
+                      candidate.machine,
+                      candidate.trust,
+                      candidate.relay,
+                    )
+                  }
                 })
               } catch (error) {
                 if (error instanceof RemoteMachineTrustConflictError) {
@@ -1151,6 +1166,11 @@ export class HostService {
               activatedAt,
             )
           })
+          if (confirmed.relay !== undefined) {
+            this.#controllerRelay.activatePairedMachine?.(
+              confirmed.machine.machineId,
+            )
+          }
           const durable = persistence.getMachine(confirmed.machine.machineId)
           if (durable === undefined) {
             throw new Error('Paired remote Machine was not retained')

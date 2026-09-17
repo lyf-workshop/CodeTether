@@ -76,6 +76,7 @@ import {
 import type { PairingCode } from './pairing-code.js'
 import {
   connectMachineTls,
+  connectPairingMachineTlsOverStream,
   connectMachineTlsOverStream,
   exportMachineTlsBinding,
   newMachineNonce,
@@ -97,7 +98,8 @@ export interface MachineControllerIdentity {
 
 export interface TrustedRemotePeer {
   readonly machine: RemoteMachineMetadata
-  readonly endpoint: MachineEndpoint
+  /** Present only when pairing used a directly reachable Node endpoint. */
+  readonly endpoint?: MachineEndpoint
   readonly nodeFingerprint: PublicKeyFingerprint
   /** Present while pairing; reconnect needs only the pinned SPKI fingerprint. */
   readonly nodeCertificatePem?: string
@@ -112,11 +114,51 @@ export async function beginRemoteMachinePairing(options: {
   readonly signal?: AbortSignal
 }): Promise<PendingRemoteMachinePairing> {
   const endpoint = MachineEndpointSchema.parse(options.endpoint)
-  const tls = await connectMachineTls({
-    ...endpoint,
-    identity: options.controller.tls,
-    signal: options.signal,
-  })
+  return await beginRemoteMachinePairingWithTls(
+    options,
+    endpoint,
+    async () =>
+      await connectMachineTls({
+        ...endpoint,
+        identity: options.controller.tls,
+        signal: options.signal,
+      }),
+  )
+}
+
+export async function beginRemoteMachinePairingOverStream(options: {
+  readonly stream: Duplex
+  readonly pairingCode: PairingCode
+  readonly controller: MachineControllerIdentity
+  readonly signal?: AbortSignal
+}): Promise<PendingRemoteMachinePairing> {
+  try {
+    return await beginRemoteMachinePairingWithTls(
+      options,
+      undefined,
+      async () =>
+        await connectPairingMachineTlsOverStream({
+          stream: options.stream,
+          identity: options.controller.tls,
+          signal: options.signal,
+        }),
+    )
+  } catch (error) {
+    if (!options.stream.destroyed) options.stream.destroy()
+    throw error
+  }
+}
+
+async function beginRemoteMachinePairingWithTls(
+  options: {
+    readonly pairingCode: PairingCode
+    readonly controller: MachineControllerIdentity
+    readonly signal?: AbortSignal
+  },
+  endpoint: MachineEndpoint | undefined,
+  establishTls: () => Promise<MachineTlsConnection>,
+): Promise<PendingRemoteMachinePairing> {
+  const tls = await establishTls()
   const connection = new FramedMachineConnection(tls.socket)
   try {
     await connection.send({
@@ -210,7 +252,7 @@ export async function beginRemoteMachinePairing(options: {
 export class PendingRemoteMachinePairing {
   readonly pairingAttemptId: string
   readonly machine: RemoteMachineMetadata
-  readonly endpoint: MachineEndpoint
+  readonly endpoint?: MachineEndpoint
   readonly expiresAt: Date
   readonly verificationCode: string
   readonly #connection: FramedMachineConnection
@@ -223,7 +265,7 @@ export class PendingRemoteMachinePairing {
     connection: FramedMachineConnection
     sessionKey: Buffer
     transcript: PairingTranscript
-    endpoint: MachineEndpoint
+    endpoint?: MachineEndpoint
     expiresAt: Date
     nodeCertificatePem: string
   }) {
@@ -250,7 +292,7 @@ export class PendingRemoteMachinePairing {
   get trustCandidate(): TrustedRemotePeer {
     return {
       machine: this.machine,
-      endpoint: this.endpoint,
+      ...(this.endpoint === undefined ? {} : { endpoint: this.endpoint }),
       nodeFingerprint: this.#transcript.nodeFingerprint,
       nodeCertificatePem: this.#nodeCertificatePem,
       protocolVersion: machineProtocolVersion,

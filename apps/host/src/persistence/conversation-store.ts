@@ -646,8 +646,42 @@ export class ConversationStore {
     machine: DurableMachine,
     peer: NewDurableTrustedMachinePeer,
   ): void {
-    const value = parseMachine(machine)
     const trusted = parseTrustedMachinePeer(peer)
+    if (trusted.endpoints.length === 0) {
+      throw new Error('Direct Machine trust requires a durable endpoint')
+    }
+    this.#createRemoteMachineWithTrust(machine, trusted)
+  }
+
+  createRemoteMachineWithTrustAndRelay(
+    machine: DurableMachine,
+    peer: NewDurableTrustedMachinePeer,
+    relay: Pick<
+      DurableMachineRelayConfiguration,
+      'endpoint' | 'relayIdentityFingerprint'
+    >,
+  ): void {
+    const trusted = parseTrustedMachinePeer(peer)
+    if (trusted.endpoints.length !== 0) {
+      throw new Error('Relay-first Machine trust cannot stage Direct endpoints')
+    }
+    this.#createRemoteMachineWithTrust(machine, trusted, {
+      endpoint: RelayEndpointSchema.parse(relay.endpoint),
+      relayIdentityFingerprint: RelayIdentityFingerprintSchema.parse(
+        relay.relayIdentityFingerprint,
+      ),
+    })
+  }
+
+  #createRemoteMachineWithTrust(
+    machine: DurableMachine,
+    trusted: DurableTrustedMachinePeer,
+    relay?: Pick<
+      DurableMachineRelayConfiguration,
+      'endpoint' | 'relayIdentityFingerprint'
+    >,
+  ): void {
+    const value = parseMachine(machine)
     if (value.kind !== 'remote') {
       throw new Error('Only a remote Machine can have trusted peer material')
     }
@@ -716,6 +750,25 @@ export class ConversationStore {
           endpoint.updatedAt,
           endpoint.lastSuccessfulAt ?? null,
           endpoint.lastFailureAt ?? null,
+        )
+      }
+      if (relay !== undefined) {
+        this.#statement(
+          `INSERT INTO machine_relay_configurations (
+             machine_id, endpoint_host, endpoint_port, transport_security,
+             relay_identity_fingerprint, display_label, enabled,
+             enrollment_state, created_at, updated_at, enrolled_at,
+             last_connected_at, last_attempt_at
+           ) VALUES (?, ?, ?, ?, ?, NULL, 1, 'enrolled', ?, ?, ?, NULL, NULL)`,
+        ).run(
+          trusted.machineId,
+          relay.endpoint.host,
+          relay.endpoint.port,
+          relay.endpoint.transportSecurity,
+          relay.relayIdentityFingerprint,
+          trusted.updatedAt,
+          trusted.updatedAt,
+          trusted.updatedAt,
         )
       }
     })
@@ -1471,15 +1524,32 @@ export class ConversationStore {
         'Pending trusted Machine peer',
         id,
       )
-      assertChanged(
-        this.#statement(
-          `UPDATE trusted_machine_endpoints SET
-             last_successful_at = ?, last_failure_at = NULL, updated_at = ?
-           WHERE machine_id = ? AND preferred = 1`,
-        ).run(timestamp, timestamp, id).changes,
-        'Preferred trusted Machine endpoint',
-        id,
-      )
+      const endpointCount = this.#statement(
+        `SELECT COUNT(*) AS count FROM trusted_machine_endpoints
+         WHERE machine_id = ?`,
+      ).get(id) as { readonly count: number }
+      if (endpointCount.count > 0) {
+        assertChanged(
+          this.#statement(
+            `UPDATE trusted_machine_endpoints SET
+               last_successful_at = ?, last_failure_at = NULL, updated_at = ?
+             WHERE machine_id = ? AND preferred = 1`,
+          ).run(timestamp, timestamp, id).changes,
+          'Preferred trusted Machine endpoint',
+          id,
+        )
+      } else {
+        const relay = this.getMachineRelayConfiguration(id)
+        if (
+          relay === undefined ||
+          !relay.enabled ||
+          relay.enrollmentState !== 'enrolled'
+        ) {
+          throw new Error(
+            'Relay-first Machine trust requires an enabled enrolled Relay',
+          )
+        }
+      }
       assertChanged(
         this.#statement(
           `UPDATE machines SET last_seen_at = ?, updated_at = ?
@@ -4433,14 +4503,14 @@ function parseTrustedMachinePeer(
             updatedAt: value.updatedAt,
           },
         ])
-  if (
-    endpointInputs.length < 1 ||
-    endpointInputs.length > machineWireLimits.rememberedEndpoints
-  ) {
+  if (endpointInputs.length > machineWireLimits.rememberedEndpoints) {
     throw new Error('Trusted Machine endpoint count is invalid')
   }
   const endpoints = endpointInputs.map(parseTrustedMachineEndpoint)
-  if (endpoints.filter((endpoint) => endpoint.preferred).length !== 1) {
+  if (
+    endpoints.length > 0 &&
+    endpoints.filter((endpoint) => endpoint.preferred).length !== 1
+  ) {
     throw new Error('Trusted Machine must have exactly one preferred endpoint')
   }
   const keys = new Set<string>()
@@ -5033,14 +5103,23 @@ function assertDatabaseIntegrity(database: DatabaseSync): void {
          GROUP BY machine_id
        ) AS endpoint_summary
          ON endpoint_summary.machine_id = trusted_machine_peers.machine_id
+       LEFT JOIN machine_relay_configurations
+         ON machine_relay_configurations.machine_id =
+            trusted_machine_peers.machine_id
        WHERE
-         COALESCE(endpoint_summary.endpoint_count, 0) NOT BETWEEN 1 AND 8
-         OR COALESCE(endpoint_summary.preferred_count, 0) <> 1`,
+         NOT (
+           (COALESCE(endpoint_summary.endpoint_count, 0) BETWEEN 1 AND 8
+             AND COALESCE(endpoint_summary.preferred_count, 0) = 1)
+           OR
+           (COALESCE(endpoint_summary.endpoint_count, 0) = 0
+             AND machine_relay_configurations.enabled = 1
+             AND machine_relay_configurations.enrollment_state = 'enrolled')
+         )`,
     )
     .get() as { readonly count: number }
   if (invalidEndpoints.count !== 0) {
     throw new Error(
-      'SQLite trusted Machines must have one preferred bounded endpoint set',
+      'SQLite trusted Machines must have a Direct endpoint or enrolled Relay route',
     )
   }
   const locations = database

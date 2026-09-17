@@ -36,6 +36,7 @@ import {
   ProvidersDescribeMessageSchema,
   TrustRevokeMessageSchema,
   acceptMachineTlsOverStream,
+  acceptPairingMachineTlsOverStream,
   exportMachineTlsBinding,
   machineProtocolVersion,
   machineTlsServerOptions,
@@ -45,6 +46,7 @@ import {
   pairingConfirmationTag,
   pairingVerificationCode,
   peerFingerprint,
+  publicCertificateFromPeer,
   requireFreshMachineTlsSession,
   verifyPairingConfirmationTag,
   type MachineWireErrorCode,
@@ -113,7 +115,7 @@ export interface CodeTetherNodeOptions {
   readonly bindAddress: string
   readonly port: number
   /** Outbound Relay lifecycle; Machine traffic still enters through this service. */
-  readonly relayControl?: { close(): Promise<void> }
+  readonly relayControl?: NodeRelayControl
   readonly authenticatedIdleTimeoutMs?: number
   /** Internal test seam; production uses the fixed execution-session lease. */
   readonly executionSessionLeaseTimeoutMs?: number
@@ -138,6 +140,11 @@ export interface RelayMachineChannelInput {
   readonly controllerFingerprint: PublicKeyFingerprint
 }
 
+export interface NodeRelayControl {
+  close(): Promise<void>
+  reconcileTrustedController(controller: TrustedController): Promise<void>
+}
+
 export class CodeTetherNodeService extends EventEmitter {
   readonly state: NodeStateStore
   readonly pairing: PairingMode
@@ -157,7 +164,7 @@ export class CodeTetherNodeService extends EventEmitter {
   readonly #providerSessionDiscoveries: RemoteProviderSessionDiscoveryRegistry
   readonly #remoteCodexRunners: RemoteCodexRunnerPool
   readonly #remoteClaudeRunners: RemoteClaudeRunnerPool
-  readonly #relayControl: { close(): Promise<void> } | undefined
+  readonly #relayControl: NodeRelayControl | undefined
   #server: Server | undefined
   #closing = false
   #nextProviderSessionConnectionGeneration = 1n
@@ -320,6 +327,47 @@ export class CodeTetherNodeService extends EventEmitter {
       return
     }
     this.#relayConnections.set(tls.socket, trusted.publicKeyFingerprint)
+    tls.socket.once('close', () => {
+      this.#relayConnections.delete(tls.socket)
+    })
+    this.#accept(tls.socket)
+  }
+
+  /** Accepts only the first-pairing protocol over a pairing-scoped Relay stream. */
+  async acceptRelayPairingChannel(
+    input: RelayMachineChannelInput,
+  ): Promise<void> {
+    if (
+      this.#closing ||
+      input.stream.destroyed ||
+      this.state.trustedControllerCount !== 0 ||
+      this.#pendingRelayStreams.has(input.stream) ||
+      this.#connections.size + this.#pendingRelayStreams.size >=
+        machineTransportLimits.maximumConnections
+    ) {
+      input.stream.destroy()
+      return
+    }
+    this.#pendingRelayStreams.set(input.stream, input.controllerFingerprint)
+    let tls:
+      Awaited<ReturnType<typeof acceptPairingMachineTlsOverStream>> | undefined
+    try {
+      tls = await acceptPairingMachineTlsOverStream({
+        stream: input.stream,
+        identity: this.state.identity,
+        expectedPeerFingerprint: input.controllerFingerprint,
+      })
+    } catch {
+      input.stream.destroy()
+      return
+    } finally {
+      this.#pendingRelayStreams.delete(input.stream)
+    }
+    if (this.#closing || this.state.trustedControllerCount !== 0) {
+      tls.socket.destroy()
+      return
+    }
+    this.#relayConnections.set(tls.socket, input.controllerFingerprint)
     tls.socket.once('close', () => {
       this.#relayConnections.delete(tls.socket)
     })
@@ -586,13 +634,32 @@ export class CodeTetherNodeService extends EventEmitter {
         transcript,
         decision.tag,
       )
+      const peer = publicCertificateFromPeer(socket.getPeerCertificate(true))
+      const relayPairing = this.#relayConnections.has(socket)
       // Distributed commit ordering: durable Node trust precedes the signed ack.
-      await this.state.trustController({
+      const trustedController: TrustedController = {
         controllerId: start.controllerId,
         publicKeyFingerprint: controllerFingerprint,
+        ...(relayPairing
+          ? {
+              publicKeySpki: peer.certificate.publicKey
+                .export({ type: 'spki', format: 'der' })
+                .toString('base64url'),
+            }
+          : {}),
         pairedAt: new Date().toISOString(),
-      })
+      }
+      await this.state.trustController(trustedController)
       this.pairing.consume()
+      if (relayPairing) {
+        if (this.#relayControl === undefined) {
+          throw new MachineTransportError(
+            'connection_failed',
+            'Relay pairing trust could not be reconciled',
+          )
+        }
+        await this.#relayControl.reconcileTrustedController(trustedController)
+      }
       await connection.send({
         type: 'pair.ack',
         protocolVersion: machineProtocolVersion,

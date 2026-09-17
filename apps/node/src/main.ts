@@ -4,6 +4,7 @@ import { isSea } from 'node:sea'
 import { pathToFileURL } from 'node:url'
 
 import { formatPairingCode } from '@codetether/machine-transport'
+import { serializeRemoteMachinePairingTarget } from '@codetether/protocol'
 
 import { CodeTetherNodeService } from './node-service.js'
 import { NodeRelayManager } from './node-relay-manager.js'
@@ -133,6 +134,10 @@ export async function runNode(
       async (channel) =>
         await runningService.acceptRelayMachineChannel(channel),
     )
+    relayManager?.setPairingChannelHandler(
+      async (channel) =>
+        await runningService.acceptRelayPairingChannel(channel),
+    )
     const address = await service.listen()
     writeStatus(options.json, {
       event: 'node.ready',
@@ -153,15 +158,33 @@ export async function runNode(
         observedAt: new Date().toISOString(),
       })
     }
+    let cancelPairingRendezvous: (() => Promise<void>) | undefined
     if (options.pairing) {
       const pairing = await service.enablePairing()
+      const directTarget = serializeRemoteMachinePairingTarget({
+        kind: 'direct',
+        address: { host: address.address, port: address.port },
+      })
       writeStatus(options.json, {
         event: 'pairing.enabled',
         code: formatPairingCode(pairing.code),
         expiresAt: pairing.expiresAt.toISOString(),
+        targets: [{ kind: 'direct', target: directTarget }],
       })
+      cancelPairingRendezvous = relayManager?.enablePairingRendezvous(
+        pairing.expiresAt,
+        (target) => {
+          writeStatus(options.json, {
+            event: 'pairing.target.available',
+            kind: 'relay',
+            target: serializeRemoteMachinePairingTarget(target),
+            expiresAt: pairing.expiresAt.toISOString(),
+          })
+        },
+      )
     }
     service.on('paired', () => {
+      void cancelPairingRendezvous?.().catch(() => undefined)
       relayManager?.synchronizeMachineTrust()
       writeStatus(options.json, {
         event: 'pairing.completed',
@@ -219,9 +242,18 @@ function presentationPlatform(value: NodeJS.Platform): string {
 function writeStatus(json: boolean, value: Record<string, unknown>): void {
   if (json) process.stdout.write(`${JSON.stringify(value)}\n`)
   else if (value.event === 'pairing.enabled') {
+    const targets = Array.isArray(value.targets)
+      ? (value.targets as Array<{ readonly target?: unknown }>)
+      : []
     process.stdout.write(
-      `Pairing code: ${String(value.code)}\nExpires: ${String(value.expiresAt)}\n`,
+      `${targets
+        .map((entry) => `Pairing target: ${String(entry.target)}`)
+        .join(
+          '\n',
+        )}\nPairing code: ${String(value.code)}\nExpires: ${String(value.expiresAt)}\n`,
     )
+  } else if (value.event === 'pairing.target.available') {
+    process.stdout.write(`Relay pairing target: ${String(value.target)}\n`)
   } else if (value.event === 'node.ready') {
     process.stdout.write(
       `CodeTether Node ready on ${String(value.bindAddress)}:${String(value.port)}\n` +

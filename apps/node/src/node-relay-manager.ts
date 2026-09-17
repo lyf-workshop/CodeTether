@@ -1,4 +1,4 @@
-import { X509Certificate } from 'node:crypto'
+import { X509Certificate, randomBytes } from 'node:crypto'
 import { performance } from 'node:perf_hooks'
 import type { Duplex } from 'node:stream'
 
@@ -12,11 +12,15 @@ import {
   isPermanentRelayClientError,
   type ConnectRelayControlOptions,
   type RelayControlConnection,
+  type RelayIncomingPairingChannelOffer,
   type RelayIncomingMachineChannelOffer,
 } from '@codetether/relay-client'
 import {
+  RelayPairingCapabilitySchema,
+  newRelayPairingRendezvousId,
   relayProtocolLimits,
   relayPublicKeySpkiFromCertificate,
+  type RelayPairingRendezvousId,
   type RelayPublicKeyFingerprint,
 } from '@codetether/relay-protocol'
 
@@ -30,7 +34,7 @@ import {
   type NodeRelayEnrollmentToken,
   type NodeRelayRegistration,
 } from './relay-state.js'
-import type { NodeStateStore } from './state-store.js'
+import type { NodeStateStore, TrustedController } from './state-store.js'
 
 const DEFAULT_RECONNECT_STABLE_RESET_MS = 60_000
 
@@ -62,6 +66,34 @@ export interface NodeRelayMachineChannel {
 export type NodeRelayMachineChannelHandler = (
   channel: NodeRelayMachineChannel,
 ) => void | Promise<void>
+
+export type NodeRelayPairingChannelHandler = (
+  channel: NodeRelayMachineChannel,
+) => void | Promise<void>
+
+export interface NodeRelayPairingTarget {
+  readonly kind: 'relay'
+  readonly endpoint: {
+    readonly host: string
+    readonly port: number
+    readonly transportSecurity: 'public_ca' | 'pinned_identity'
+  }
+  readonly relayIdentityFingerprint: RelayPublicKeyFingerprint
+  readonly nodeFingerprint: RelayPublicKeyFingerprint
+  readonly rendezvousId: RelayPairingRendezvousId
+  readonly rendezvousCapability: string
+}
+
+interface PendingPairingRendezvous {
+  readonly target: NodeRelayPairingTarget
+  readonly expiresAt: Date
+  readonly onAvailable: (target: NodeRelayPairingTarget) => void
+  expirationTimer: NodeJS.Timeout
+  registeredConnection?: RelayControlConnection
+  removeRegistration?: () => Promise<void>
+  registrationTask?: Promise<void>
+  consumed: boolean
+}
 
 type ConnectRelay = typeof connectRelayControl
 
@@ -107,10 +139,13 @@ export class NodeRelayManager {
       readonly controllerFingerprint: PublicKeyFingerprint
     }
   >()
+  readonly #pairingChannels = new Map<Duplex, RelayControlConnection>()
   #worker: Promise<void> | undefined
   #connection: RelayControlConnection | undefined
   #cycleAbort: AbortController | undefined
   #machineChannelHandler: NodeRelayMachineChannelHandler | undefined
+  #pairingChannelHandler: NodeRelayPairingChannelHandler | undefined
+  #pairingRendezvous: PendingPairingRendezvous | undefined
   #registration: NodeRelayRegistration | undefined
   #grantRevision = 0
   #appliedGrantRevision = -1
@@ -189,6 +224,8 @@ export class NodeRelayManager {
     this.#connection = undefined
     if (connection !== undefined) {
       this.#destroyMachineChannels(connection)
+      this.#destroyPairingChannels(connection)
+      this.#detachPairingRegistration(connection)
     }
     this.#setStatus('reconnecting')
     this.#cycleAbort?.abort()
@@ -215,6 +252,112 @@ export class NodeRelayManager {
       if (this.#machineChannelHandler !== handler) return
       this.#machineChannelHandler = undefined
       this.#destroyMachineChannels()
+    }
+  }
+
+  setPairingChannelHandler(
+    handler: NodeRelayPairingChannelHandler,
+  ): () => void {
+    if (this.#closed) throw new Error('Node Relay manager is closed')
+    if (this.#pairingChannelHandler !== undefined) {
+      throw new Error('Node Relay pairing channel handler is already installed')
+    }
+    this.#pairingChannelHandler = handler
+    let removed = false
+    return () => {
+      if (removed) return
+      removed = true
+      if (this.#pairingChannelHandler !== handler) return
+      this.#pairingChannelHandler = undefined
+      this.#destroyPairingChannels()
+    }
+  }
+
+  /** Publishes one bounded pairing capability on the current or next live Relay connection. */
+  enablePairingRendezvous(
+    expiresAt: Date,
+    onAvailable: (target: NodeRelayPairingTarget) => void,
+  ): () => Promise<void> {
+    if (this.#closed) throw new Error('Node Relay manager is closed')
+    const previousCancellation = this.#cancelPairingRendezvous()
+    const expiry = new Date(expiresAt)
+    const lifetimeMs = expiry.getTime() - this.#now().getTime()
+    if (
+      !Number.isFinite(expiry.getTime()) ||
+      lifetimeMs <= 0 ||
+      lifetimeMs > relayProtocolLimits.maximumPairingLifetimeMs
+    ) {
+      throw new TypeError('Relay pairing rendezvous expiry is invalid')
+    }
+    const target: NodeRelayPairingTarget = {
+      kind: 'relay',
+      endpoint: {
+        ...this.#configuration.endpoint,
+        transportSecurity:
+          this.#configuration.tls.mode === 'public_ca'
+            ? 'public_ca'
+            : 'pinned_identity',
+      },
+      relayIdentityFingerprint: this.#configuration.relayIdentityFingerprint,
+      nodeFingerprint: this.#state.identity.publicKeyFingerprint,
+      rendezvousId: newRelayPairingRendezvousId(),
+      rendezvousCapability: RelayPairingCapabilitySchema.parse(
+        randomBytes(32).toString('base64url'),
+      ),
+    }
+    const rendezvous: PendingPairingRendezvous = {
+      target,
+      expiresAt: expiry,
+      onAvailable,
+      expirationTimer: setTimeout(() => {
+        void this.#cancelPairingRendezvous(rendezvous)
+      }, lifetimeMs),
+      consumed: false,
+    }
+    this.#pairingRendezvous = rendezvous
+    const connection = this.#connection
+    if (connection !== undefined) {
+      void previousCancellation
+        .then(
+          async () =>
+            await this.#registerPairingRendezvous(connection, rendezvous),
+        )
+        .catch(() => {
+          void connection.close().catch(() => undefined)
+        })
+    }
+    let cancelled = false
+    return async () => {
+      if (cancelled) return
+      cancelled = true
+      await this.#cancelPairingRendezvous(rendezvous)
+    }
+  }
+
+  async reconcileTrustedController(
+    controller: TrustedController,
+  ): Promise<void> {
+    const connection = this.#connection
+    if (
+      this.#closed ||
+      connection === undefined ||
+      controller.publicKeySpki === undefined
+    ) {
+      throw new RelayClientError(
+        'relay_unreachable',
+        'Internet Relay Controller reconciliation is unavailable',
+      )
+    }
+    try {
+      await connection.reconcileTrustedController({
+        publicKeySpki: controller.publicKeySpki,
+        fingerprint: controller.publicKeyFingerprint,
+      })
+    } catch (error) {
+      // Durable Machine trust remains authoritative. Reconnect retries only
+      // the idempotent Relay projection; it never replays pairing.
+      this.synchronizeMachineTrust()
+      throw error
     }
   }
 
@@ -260,11 +403,13 @@ export class NodeRelayManager {
       await this.#worker
       return
     }
+    await this.#cancelPairingRendezvous().catch(() => undefined)
     this.#closed = true
     this.#reconnect.close()
     this.#cycleAbort?.abort()
     this.#abort.abort()
     this.#destroyMachineChannels()
+    this.#destroyPairingChannels()
     await this.#connection?.close().catch(() => undefined)
     await this.#worker
     await this.#grantTask?.catch(() => undefined)
@@ -294,6 +439,7 @@ export class NodeRelayManager {
       let authenticatedConnection = false
       let retryAfterMs = 0
       let removeMachineChannelHandler: (() => void) | undefined
+      let removePairingChannelHandler: (() => void) | undefined
       let channelConnection: RelayControlConnection | undefined
       try {
         let connected
@@ -388,8 +534,23 @@ export class NodeRelayManager {
               cycleAbort.signal,
             ),
         )
+        removePairingChannelHandler = activeConnection.setPairingChannelHandler(
+          async (offer) =>
+            await this.#handlePairingChannelOffer(
+              activeConnection,
+              offer,
+              cycleAbort.signal,
+            ),
+        )
         this.#appliedGrantRevision = -1
         await this.#flushGrant(activeConnection)
+        const pairingRendezvous = this.#pairingRendezvous
+        if (pairingRendezvous !== undefined && !pairingRendezvous.consumed) {
+          await this.#registerPairingRendezvous(
+            activeConnection,
+            pairingRendezvous,
+          )
+        }
         if (
           cycleAbort.signal.aborted ||
           this.#connection !== activeConnection
@@ -423,8 +584,12 @@ export class NodeRelayManager {
         ownedConnection = undefined
         removeMachineChannelHandler?.()
         removeMachineChannelHandler = undefined
+        removePairingChannelHandler?.()
+        removePairingChannelHandler = undefined
         if (failedConnection !== undefined) {
           this.#destroyMachineChannels(failedConnection)
+          this.#destroyPairingChannels(failedConnection)
+          this.#detachPairingRegistration(failedConnection)
         }
         await failedConnection?.close().catch(() => undefined)
         const failure = relayManagerError(error)
@@ -461,8 +626,11 @@ export class NodeRelayManager {
           this.#reconnect.noteDisconnected(this.#monotonicNow())
         }
         removeMachineChannelHandler?.()
+        removePairingChannelHandler?.()
         if (channelConnection !== undefined) {
           this.#destroyMachineChannels(channelConnection)
+          this.#destroyPairingChannels(channelConnection)
+          this.#detachPairingRegistration(channelConnection)
         }
         const connection = this.#connection ?? ownedConnection
         this.#connection = undefined
@@ -564,6 +732,139 @@ export class NodeRelayManager {
     }
   }
 
+  async #registerPairingRendezvous(
+    connection: RelayControlConnection,
+    rendezvous: PendingPairingRendezvous,
+  ): Promise<void> {
+    if (rendezvous.registrationTask !== undefined) {
+      await rendezvous.registrationTask
+      return
+    }
+    if (
+      this.#closed ||
+      this.#connection !== connection ||
+      this.#pairingRendezvous !== rendezvous ||
+      rendezvous.consumed ||
+      rendezvous.expiresAt.getTime() <= this.#now().getTime()
+    ) {
+      return
+    }
+    if (rendezvous.registeredConnection === connection) return
+    const task = (async (): Promise<void> => {
+      const removeRegistration = await connection.registerPairingRendezvous({
+        rendezvousId: rendezvous.target.rendezvousId,
+        rendezvousCapability: rendezvous.target.rendezvousCapability,
+        expiresAt: rendezvous.expiresAt,
+      })
+      if (
+        this.#closed ||
+        this.#connection !== connection ||
+        this.#pairingRendezvous !== rendezvous ||
+        rendezvous.consumed ||
+        rendezvous.expiresAt.getTime() <= this.#now().getTime()
+      ) {
+        await removeRegistration().catch(() => undefined)
+        return
+      }
+      rendezvous.registeredConnection = connection
+      rendezvous.removeRegistration = removeRegistration
+      rendezvous.onAvailable(rendezvous.target)
+    })()
+    rendezvous.registrationTask = task
+    try {
+      await task
+    } finally {
+      if (rendezvous.registrationTask === task) {
+        rendezvous.registrationTask = undefined
+      }
+    }
+  }
+
+  async #cancelPairingRendezvous(
+    expected?: PendingPairingRendezvous,
+  ): Promise<void> {
+    const rendezvous = this.#pairingRendezvous
+    if (
+      rendezvous === undefined ||
+      (expected !== undefined && rendezvous !== expected)
+    ) {
+      return
+    }
+    this.#pairingRendezvous = undefined
+    rendezvous.consumed = true
+    clearTimeout(rendezvous.expirationTimer)
+    await rendezvous.registrationTask?.catch(() => undefined)
+    const removeRegistration = rendezvous.removeRegistration
+    rendezvous.registeredConnection = undefined
+    rendezvous.removeRegistration = undefined
+    this.#destroyPairingChannels()
+    await removeRegistration?.().catch(() => undefined)
+  }
+
+  #detachPairingRegistration(connection: RelayControlConnection): void {
+    const rendezvous = this.#pairingRendezvous
+    if (rendezvous?.registeredConnection !== connection) return
+    rendezvous.registeredConnection = undefined
+    rendezvous.removeRegistration = undefined
+  }
+
+  async #handlePairingChannelOffer(
+    connection: RelayControlConnection,
+    offer: RelayIncomingPairingChannelOffer,
+    cycleSignal: AbortSignal,
+  ): Promise<void> {
+    const handler = this.#pairingChannelHandler
+    const rendezvous = this.#pairingRendezvous
+    if (
+      this.#closed ||
+      cycleSignal.aborted ||
+      connection !== this.#connection ||
+      handler === undefined ||
+      rendezvous === undefined ||
+      rendezvous.consumed ||
+      rendezvous.registeredConnection !== connection ||
+      rendezvous.expiresAt.getTime() <= this.#now().getTime()
+    ) {
+      await offer.reject('not_available').catch(() => undefined)
+      return
+    }
+    let stream: Duplex
+    try {
+      stream = await offer.accept()
+    } catch {
+      return
+    }
+    if (
+      this.#closed ||
+      cycleSignal.aborted ||
+      connection !== this.#connection ||
+      handler !== this.#pairingChannelHandler ||
+      rendezvous !== this.#pairingRendezvous ||
+      rendezvous.consumed
+    ) {
+      stream.destroy()
+      return
+    }
+    rendezvous.consumed = true
+    clearTimeout(rendezvous.expirationTimer)
+    rendezvous.registeredConnection = undefined
+    rendezvous.removeRegistration = undefined
+    this.#pairingChannels.set(stream, connection)
+    stream.once('close', () => {
+      if (this.#pairingChannels.get(stream) === connection) {
+        this.#pairingChannels.delete(stream)
+      }
+    })
+    try {
+      await handler({
+        stream,
+        controllerFingerprint: offer.controllerFingerprint,
+      })
+    } catch {
+      stream.destroy()
+    }
+  }
+
   #closeUnauthorizedMachineChannels(): void {
     const current = this.#currentControllerFingerprint()
     for (const [stream, entry] of this.#machineChannels) {
@@ -578,6 +879,15 @@ export class NodeRelayManager {
     for (const [stream, entry] of this.#machineChannels) {
       if (connection === undefined || entry.connection === connection) {
         this.#machineChannels.delete(stream)
+        stream.destroy()
+      }
+    }
+  }
+
+  #destroyPairingChannels(connection?: RelayControlConnection): void {
+    for (const [stream, owner] of this.#pairingChannels) {
+      if (connection === undefined || owner === connection) {
+        this.#pairingChannels.delete(stream)
         stream.destroy()
       }
     }
@@ -611,8 +921,18 @@ export class NodeRelayManager {
       this.#appliedGrantRevision !== this.#grantRevision
     ) {
       const revision = this.#grantRevision
+      const controller = this.#state.trustedController()
+      if (controller?.publicKeySpki !== undefined) {
+        // Machine trust is already durable at this point. Reconciliation is
+        // idempotent so reconnect can recover a lost post-trust acknowledgement
+        // with the same Controller key before making the normal grant visible.
+        await connection.reconcileTrustedController({
+          publicKeySpki: controller.publicKeySpki,
+          fingerprint: controller.publicKeyFingerprint,
+        })
+      }
       await connection.replaceAuthorizedController(
-        this.#currentControllerFingerprint(),
+        controller?.publicKeyFingerprint,
       )
       this.#appliedGrantRevision = revision
     }

@@ -45,8 +45,11 @@ function registration() {
 
 class FakeRelayConnection {
   grants = []
+  reconciledControllers = []
+  pairingRegistrations = []
   closed = false
   machineChannelHandler
+  pairingChannelHandler
   #resolve
   #reject
   #lifetime = new Promise((resolve, reject) => {
@@ -57,6 +60,21 @@ class FakeRelayConnection {
   async replaceAuthorizedController(fingerprint) {
     if (this.closed) throw new Error('closed')
     this.grants.push(fingerprint)
+  }
+
+  async reconcileTrustedController(controller) {
+    if (this.closed) throw new Error('closed')
+    this.reconciledControllers.push(controller)
+  }
+
+  async registerPairingRendezvous(input) {
+    if (this.closed) throw new Error('closed')
+    const registration = { input, removed: false }
+    this.pairingRegistrations.push(registration)
+    return async () => {
+      if (registration.removed) return
+      registration.removed = true
+    }
   }
 
   async waitUntilClosed() {
@@ -72,6 +90,19 @@ class FakeRelayConnection {
       removed = true
       if (this.machineChannelHandler === handler) {
         this.machineChannelHandler = undefined
+      }
+    }
+  }
+
+  setPairingChannelHandler(handler) {
+    assert.equal(this.pairingChannelHandler, undefined)
+    this.pairingChannelHandler = handler
+    let removed = false
+    return () => {
+      if (removed) return
+      removed = true
+      if (this.pairingChannelHandler === handler) {
+        this.pairingChannelHandler = undefined
       }
     }
   }
@@ -1072,6 +1103,65 @@ test('authenticated Relay protocol failure reconnects without enrollment or trus
 
   await manager.close()
   assert.equal(connections[1].closed, true)
+})
+
+test('live pairing rendezvous re-registers once after Relay reconnect and cancellation removes it', async (t) => {
+  const directory = await mkdtemp(
+    join(tmpdir(), 'codetether-node-relay-pairing-reconnect-'),
+  )
+  const state = await openNodeState(directory)
+  t.after(async () => {
+    await state.close().catch(() => undefined)
+    await import('node:fs/promises').then(async ({ rm }) =>
+      rm(directory, { recursive: true, force: true }),
+    )
+  })
+  await writeNodeRelayRegistration(directory, {
+    schemaVersion: 1,
+    relayId: registration().relayId,
+    relayIdentityFingerprint: registration().relayIdentityFingerprint,
+    peerId: registration().peerId,
+    observedAt: registration().authenticatedAt,
+  })
+  const connections = [new FakeRelayConnection(), new FakeRelayConnection()]
+  let calls = 0
+  const manager = new NodeRelayManager({
+    state,
+    configuration: configuration(),
+    clientBuildIdentity: 'relay-pairing-reconnect-test',
+    reconnectInitialDelayMs: 1,
+    reconnectMaximumDelayMs: 2,
+    random: () => 0.5,
+    connect: async () => ({
+      connection: connections[calls++],
+      registration: registration(),
+      enrolled: false,
+    }),
+  })
+  const availableTargets = []
+  manager.start()
+  await waitFor(() => manager.status === 'connected')
+  const cancel = manager.enablePairingRendezvous(
+    new Date(Date.now() + 60_000),
+    (target) => availableTargets.push(target),
+  )
+  await waitFor(() => connections[0].pairingRegistrations.length === 1)
+
+  connections[0].disconnect()
+  await waitFor(
+    () =>
+      calls === 2 &&
+      manager.status === 'connected' &&
+      connections[1].pairingRegistrations.length === 1,
+  )
+
+  assert.equal(connections[0].closed, true)
+  assert.equal(availableTargets.length, 2)
+  assert.deepEqual(availableTargets[1], availableTargets[0])
+  assert.equal(connections[0].pairingRegistrations[0].removed, false)
+  await cancel()
+  assert.equal(connections[1].pairingRegistrations[0].removed, true)
+  await manager.close()
 })
 
 test('Node restart reuses the exact Node identity and Relay registration without a token', async (t) => {

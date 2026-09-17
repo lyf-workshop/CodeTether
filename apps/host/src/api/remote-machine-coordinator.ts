@@ -33,6 +33,9 @@ import {
   type RemoteMachineAddress,
   type RemoteMachineConnection,
   type RemoteMachinePairingCandidate,
+  type RemoteMachinePairingTarget,
+  type RelayEndpoint,
+  type RelayIdentityFingerprint,
   type ProviderDescriptor,
   type ProviderInstallationId,
   type ProviderInstallationRevision,
@@ -44,6 +47,7 @@ import {
   PairingCodeSchema,
   PublicKeyFingerprintSchema,
   beginRemoteMachinePairing,
+  beginRemoteMachinePairingOverStream,
   connectTrustedRemoteMachine,
   connectTrustedRemoteMachineOverStream,
   createMachineTlsIdentityFile,
@@ -74,6 +78,13 @@ import {
   type RemoteClaudeSession as MachineTransportRemoteClaudeSession,
   type RemoteCodexSession as MachineTransportRemoteCodexSession,
 } from '@codetether/machine-transport'
+import {
+  connectRelayControl,
+  type ConnectRelayControlOptions,
+  type ConnectedRelayControl,
+  type RelayControlConnection,
+} from '@codetether/relay-client'
+import { relayPublicKeySpkiFromCertificate } from '@codetether/relay-protocol'
 
 import type {
   ConversationStore,
@@ -143,6 +154,10 @@ export class RemoteMachineRevocationPendingError extends RemoteMachineCoordinato
 export interface ConfirmedRemoteMachine {
   readonly machine: DurableMachine
   readonly trust: DurableTrustedMachinePeer
+  readonly relay?: {
+    readonly endpoint: RelayEndpoint
+    readonly relayIdentityFingerprint: RelayIdentityFingerprint
+  }
 }
 
 /**
@@ -202,10 +217,9 @@ export interface RemoteMachineCoordinator extends RemoteMachineStatusSource {
       readonly effort?: RemoteClaudeEffort
     },
   ): Promise<RemoteClaudeRuntimeSession>
-  beginPairing(input: {
-    readonly address: RemoteMachineAddress
-    readonly pairingCode: string
-  }): Promise<RemoteMachinePairingCandidate>
+  beginPairing(
+    input: RemoteMachinePairingInput,
+  ): Promise<RemoteMachinePairingCandidate>
   confirmPairing(
     pairingAttemptId: MachinePairingAttemptId,
     stageTrust: (candidate: ConfirmedRemoteMachine) => void | Promise<void>,
@@ -343,8 +357,21 @@ interface PendingPairing {
   readonly controller: MachineControllerIdentity
   readonly credentialRef: string
   readonly credentialPath: string
+  readonly target: RemoteMachinePairingTarget
+  readonly relayConnection?: RelayControlConnection
   expirationTimer?: ReturnType<typeof setTimeout>
 }
+
+type RemoteMachinePairingInput = { readonly pairingCode: string } & (
+  | {
+      readonly target: RemoteMachinePairingTarget
+      readonly address?: never
+    }
+  | {
+      readonly address: RemoteMachineAddress
+      readonly target?: never
+    }
+)
 
 interface RemoteWorker {
   abort: AbortController
@@ -393,6 +420,7 @@ interface TrackedExecutionSession {
 
 interface CoordinatorTransport {
   beginPairing: typeof beginRemoteMachinePairing
+  beginPairingOverStream: typeof beginRemoteMachinePairingOverStream
   connectTrusted: typeof connectTrustedRemoteMachine
   openCodexSession?: typeof openRemoteCodexSession
   openClaudeSession?: typeof openRemoteClaudeSession
@@ -429,6 +457,7 @@ export type RemoteMachineTransportPolicy =
 
 export interface SecureRemoteMachineCoordinatorOptions {
   readonly persistence: ConversationStore
+  readonly clientBuildIdentity?: string
   readonly credentialDirectory?: string
   /** Explicitly test-only. Production pairing always rejects loopback. */
   readonly allowLoopbackForTests?: boolean
@@ -442,6 +471,8 @@ export interface SecureRemoteMachineCoordinatorOptions {
   readonly random?: () => number
   /** Narrow deterministic seam for Host coordinator tests. */
   readonly transport?: CoordinatorTransport
+  /** Narrow deterministic seam for purpose-bound pre-trust Relay pairing. */
+  readonly connectRelay?: typeof connectRelayControl
   readonly relayTransport?: RelayMachineTransport
   /** Internal validation seam; normal product policy is direct-first. */
   readonly transportPolicy?: RemoteMachineTransportPolicy
@@ -452,6 +483,7 @@ export interface SecureRemoteMachineCoordinatorOptions {
 /** Production Host coordinator for the bounded Host-to-Node transport. */
 export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator {
   readonly #persistence: ConversationStore
+  readonly #clientBuildIdentity: string
   readonly #credentialDirectory: string
   readonly #allowLoopback: boolean
   readonly #heartbeatIntervalMs: number
@@ -463,6 +495,7 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
   readonly #now: () => Date
   readonly #random: () => number
   readonly #transport: CoordinatorTransport
+  readonly #connectRelay: typeof connectRelayControl
   readonly #relayTransport: RelayMachineTransport | undefined
   readonly #transportPolicy: RemoteMachineTransportPolicy
   readonly #pending = new Map<MachinePairingAttemptId, PendingPairing>()
@@ -518,6 +551,7 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
 
   private constructor(options: SecureRemoteMachineCoordinatorOptions) {
     this.#persistence = options.persistence
+    this.#clientBuildIdentity = options.clientBuildIdentity ?? 'host-test'
     this.#credentialDirectory = resolve(
       options.credentialDirectory ??
         join(dirname(options.persistence.databasePath), 'machine-credentials'),
@@ -560,6 +594,7 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
     this.#random = options.random ?? Math.random
     this.#transport = options.transport ?? {
       beginPairing: beginRemoteMachinePairing,
+      beginPairingOverStream: beginRemoteMachinePairingOverStream,
       connectTrusted: connectTrustedRemoteMachine,
       openCodexSession: openRemoteCodexSession,
       openClaudeSession: openRemoteClaudeSession,
@@ -567,6 +602,7 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
       openCodexSessionOverStream: openRemoteCodexSessionOverStream,
       openClaudeSessionOverStream: openRemoteClaudeSessionOverStream,
     }
+    this.#connectRelay = options.connectRelay ?? connectRelayControl
     this.#relayTransport = options.relayTransport
     this.#transportPolicy = options.transportPolicy ?? 'direct_first'
     if (
@@ -753,10 +789,9 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
     )
   }
 
-  async beginPairing(input: {
-    readonly address: RemoteMachineAddress
-    readonly pairingCode: string
-  }): Promise<RemoteMachinePairingCandidate> {
+  async beginPairing(
+    input: RemoteMachinePairingInput,
+  ): Promise<RemoteMachinePairingCandidate> {
     this.#assertOpen()
     if (
       this.#pending.size + this.#pendingReservations >=
@@ -780,13 +815,21 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
     let credentialPath: string | undefined
     let controller: MachineControllerIdentity | undefined
     let pending: PendingRemoteMachinePairing | undefined
+    let relayConnection: RelayControlConnection | undefined
     let pairingAttemptId: MachinePairingAttemptId | undefined
     let registered = false
     try {
-      const endpoint = await resolveLanEndpoint(
-        input.address,
-        this.#allowLoopback,
-      )
+      const requestedTarget =
+        input.target ??
+        (input.address === undefined
+          ? undefined
+          : ({ kind: 'direct', address: input.address } as const))
+      if (requestedTarget === undefined) {
+        throw new RemoteMachineCoordinatorError(
+          'connection_failed',
+          'Remote Machine pairing target is unavailable',
+        )
+      }
       const controllerId = newControllerId()
       const credentialRef = `${controllerId}.json`
       credentialPath = this.#credentialPath(credentialRef)
@@ -797,11 +840,38 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
           'CodeTether Controller',
         ),
       }
-      pending = await this.#transport.beginPairing({
-        endpoint,
-        pairingCode,
-        controller,
-      })
+      let target: RemoteMachinePairingTarget
+      if (requestedTarget.kind === 'direct') {
+        const endpoint = await resolveLanEndpoint(
+          requestedTarget.address,
+          this.#allowLoopback,
+        )
+        target = { kind: 'direct', address: endpoint }
+        pending = await this.#transport.beginPairing({
+          endpoint,
+          pairingCode,
+          controller,
+        })
+      } else {
+        target = requestedTarget
+        const connected = await this.#connectRelayPairing(target, controller)
+        relayConnection = connected.connection
+        let stream: Duplex | undefined
+        try {
+          stream = await relayConnection.openPairingChannel(
+            target.nodeFingerprint,
+            target.rendezvousId,
+          )
+          pending = await this.#transport.beginPairingOverStream({
+            stream,
+            pairingCode,
+            controller,
+          })
+          stream = undefined
+        } finally {
+          stream?.destroy()
+        }
+      }
       pairingAttemptId = MachinePairingAttemptIdSchema.parse(
         pending.pairingAttemptId,
       )
@@ -811,7 +881,7 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
         displayName: pending.machine.displayName,
         platform: pending.machine.platform,
         architecture: pending.machine.architecture,
-        address: endpoint,
+        ...(target.kind === 'direct' ? { address: target.address } : {}),
         protocolVersion: machineProtocolVersion,
         expiresAt: TimestampSchema.parse(pending.expiresAt.toISOString()),
         verificationCode: formatVerificationCode(pending.verificationCode),
@@ -828,6 +898,8 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
         controller,
         credentialRef,
         credentialPath,
+        target,
+        ...(relayConnection === undefined ? {} : { relayConnection }),
       }
       const registeredAttemptId = pairingAttemptId
       this.#pending.set(registeredAttemptId, attempt)
@@ -842,6 +914,7 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
         this.#pending.delete(pairingAttemptId)
       }
       await pending?.cancel().catch(() => undefined)
+      await relayConnection?.close().catch(() => undefined)
       if (controller !== undefined && credentialPath !== undefined) {
         await this.#deleteCredentialFile(credentialPath).catch(() => undefined)
       }
@@ -881,10 +954,12 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
           'Remote Machine identity changed during confirmation',
         )
       }
+      await attempt.relayConnection?.close().catch(() => undefined)
       this.#scheduleDurableWorkerRestart(prepared.machine.machineId)
       return prepared
     } catch (error) {
       await attempt.pending.cancel().catch(() => undefined)
+      await attempt.relayConnection?.close().catch(() => undefined)
       if (!staged) {
         await this.#deleteCredentialFile(attempt.credentialPath).catch(
           () => undefined,
@@ -912,6 +987,7 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
     } catch (error) {
       cancellationError = error
     } finally {
+      await attempt.relayConnection?.close().catch(() => undefined)
       await this.#deleteCredentialFile(attempt.credentialPath).catch(
         () => undefined,
       )
@@ -1650,20 +1726,13 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
         let stream: Duplex | undefined
         try {
           const relayGeneration = this.#requireCurrentRelayGeneration(id)
-          const endpoint = current.trust.endpoints[0]
-          if (endpoint === undefined) {
-            throw new RemoteMachineCoordinatorError(
-              'connection_failed',
-              'Trusted Machine identity endpoint is unavailable',
-            )
-          }
           this.#recordAttempt(id)
           stream = await this.#relayTransport.openMachineChannel(current.trust)
           const open =
             this.#transport.openCodexSessionOverStream ??
             openRemoteCodexSessionOverStream
           const session = await open({
-            peer: trustedPeer(current.machine, current.trust, endpoint.address),
+            peer: trustedPeer(current.machine, current.trust),
             controller,
             stream,
             conversationId,
@@ -1835,20 +1904,13 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
         let stream: Duplex | undefined
         try {
           const relayGeneration = this.#requireCurrentRelayGeneration(id)
-          const endpoint = current.trust.endpoints[0]
-          if (endpoint === undefined) {
-            throw new RemoteMachineCoordinatorError(
-              'connection_failed',
-              'Trusted Machine identity endpoint is unavailable',
-            )
-          }
           this.#recordAttempt(id)
           stream = await this.#relayTransport.openMachineChannel(current.trust)
           const open =
             this.#transport.openClaudeSessionOverStream ??
             openRemoteClaudeSessionOverStream
           const baseInput = {
-            peer: trustedPeer(current.machine, current.trust, endpoint.address),
+            peer: trustedPeer(current.machine, current.trust),
             controller,
             stream,
             conversationId,
@@ -2518,12 +2580,10 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
       ) {
         return
       }
-      const identityEndpoint = current.endpoints[0]
-      if (identityEndpoint === undefined) return
       const controller = await this.#loadController(current)
       stream = await this.#relayTransport.openMachineChannel(current, signal)
       connection = await this.#transport.connectTrustedOverStream!({
-        peer: trustedPeer(machine, current, identityEndpoint.address),
+        peer: trustedPeer(machine, current),
         controller,
         stream,
         signal,
@@ -2684,20 +2744,13 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
         const relayGeneration = this.#requireCurrentRelayGeneration(
           machine.machineId,
         )
-        const identityEndpoint = trust.endpoints[0]
-        if (identityEndpoint === undefined) {
-          throw new RemoteMachineCoordinatorError(
-            'connection_failed',
-            'Trusted Machine has no durable identity endpoint',
-          )
-        }
         this.#recordAttempt(machine.machineId)
         stream = await openRevocation.call(this.#relayTransport, trust, signal)
         const open =
           this.#transport.connectTrustedOverStream ??
           connectTrustedRemoteMachineOverStream
         const connection = await open({
-          peer: trustedPeer(machine, trust, identityEndpoint.address),
+          peer: trustedPeer(machine, trust),
           controller,
           stream,
           ...(signal === undefined ? {} : { signal }),
@@ -2800,19 +2853,12 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
           const relayGeneration = this.#requireCurrentRelayGeneration(
             machine.machineId,
           )
-          const endpoint = trust.endpoints[0]
-          if (endpoint === undefined) {
-            throw new RemoteMachineCoordinatorError(
-              'connection_failed',
-              'Trusted Machine has no durable identity endpoint',
-            )
-          }
           stream = await this.#relayTransport.openMachineChannel(trust, signal)
           const open =
             this.#transport.connectTrustedOverStream ??
             connectTrustedRemoteMachineOverStream
           const connection = await open({
-            peer: trustedPeer(machine, trust, endpoint.address),
+            peer: trustedPeer(machine, trust),
             controller,
             stream,
             ...(signal === undefined ? {} : { signal }),
@@ -3167,19 +3213,66 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
         controllerKeyFingerprint: attempt.controller.tls.publicKeyFingerprint,
         trustState: 'pending',
         protocolVersion: trusted.protocolVersion,
-        endpoints: [
-          {
-            address: trusted.endpoint,
-            source: 'pairing',
-            preferred: true,
-            createdAt: timestamp,
-            updatedAt: timestamp,
-          },
-        ],
+        endpoints:
+          trusted.endpoint === undefined
+            ? []
+            : [
+                {
+                  address: trusted.endpoint,
+                  source: 'pairing',
+                  preferred: true,
+                  createdAt: timestamp,
+                  updatedAt: timestamp,
+                },
+              ],
         pairedAt: timestamp,
         updatedAt: timestamp,
       },
+      ...(attempt.target.kind === 'relay'
+        ? {
+            relay: {
+              endpoint: attempt.target.endpoint,
+              relayIdentityFingerprint: attempt.target.relayIdentityFingerprint,
+            },
+          }
+        : {}),
     }
+  }
+
+  async #connectRelayPairing(
+    target: Extract<RemoteMachinePairingTarget, { readonly kind: 'relay' }>,
+    controller: MachineControllerIdentity,
+  ): Promise<ConnectedRelayControl> {
+    const options: ConnectRelayControlOptions = {
+      endpoint: {
+        host: target.endpoint.host,
+        port: target.endpoint.port,
+      },
+      tls:
+        target.endpoint.transportSecurity === 'public_ca'
+          ? { mode: 'public_ca', serverName: target.endpoint.host }
+          : {
+              mode: 'pinned_certificate',
+              certificatePublicKeyFingerprint: target.relayIdentityFingerprint,
+            },
+      expectedRelayIdentityFingerprint: target.relayIdentityFingerprint,
+      identity: {
+        role: 'controller',
+        privateKeyPem: controller.tls.privateKeyPem,
+        publicKeySpki: relayPublicKeySpkiFromCertificate(
+          controller.tls.certificatePem,
+        ),
+        publicKeyFingerprint: controller.tls.publicKeyFingerprint,
+      },
+      clientBuildIdentity: this.#clientBuildIdentity,
+      pairing: {
+        rendezvousId: target.rendezvousId,
+        rendezvousCapability: target.rendezvousCapability,
+        targetNodeFingerprint: target.nodeFingerprint,
+      },
+      now: this.#now,
+    }
+    return await this.#connectRelay(options)
   }
 
   async #loadController(
@@ -3766,7 +3859,7 @@ function hasCode(error: unknown, code: string): boolean {
 function trustedPeer(
   machine: DurableMachine,
   trust: DurableTrustedMachinePeer,
-  endpoint: RemoteMachineAddress,
+  endpoint?: RemoteMachineAddress,
 ): TrustedRemotePeer {
   if (trust.protocolVersion !== machineProtocolVersion) {
     throw new RemoteMachineCoordinatorError(
@@ -3782,7 +3875,7 @@ function trustedPeer(
       platform: machine.platform,
       architecture: machine.architecture,
     },
-    endpoint,
+    ...(endpoint === undefined ? {} : { endpoint }),
     nodeFingerprint: PublicKeyFingerprintSchema.parse(trust.peerKeyFingerprint),
     protocolVersion: machineProtocolVersion,
     controllerId: ControllerIdSchema.parse(

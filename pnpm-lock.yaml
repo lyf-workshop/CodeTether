@@ -88,6 +88,9 @@ importers:
       '@codetether/machine-transport':
         specifier: workspace:*
         version: link:../../packages/machine-transport
+      '@codetether/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
       '@codetether/relay-client':
         specifier: workspace:*
         version: link:../../packages/relay-client

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { PassThrough } from 'node:stream'
 import test from 'node:test'
 
 import {
@@ -70,6 +71,30 @@ async function fixture(options = {}) {
           options.pairingAttemptId ?? `pairing_fixture_${beginCalls}`,
         machine,
         endpoint: input.endpoint,
+        expiresAt: new Date(Date.now() + 60_000),
+        verificationCode: '123456',
+        trustCandidate,
+        async confirm() {
+          if (options.confirmError !== undefined) throw options.confirmError
+          return trustCandidate
+        },
+        async cancel() {},
+      }
+    },
+    async beginPairingOverStream(input) {
+      beginCalls += 1
+      if (options.beginError !== undefined) throw options.beginError
+      const trustCandidate = {
+        machine,
+        nodeFingerprint: nodeIdentity.publicKeyFingerprint,
+        nodeCertificatePem: nodeIdentity.certificatePem,
+        protocolVersion: 1,
+        controllerId: input.controller.controllerId,
+      }
+      return {
+        pairingAttemptId:
+          options.pairingAttemptId ?? `pairing_fixture_${beginCalls}`,
+        machine,
         expiresAt: new Date(Date.now() + 60_000),
         verificationCode: '123456',
         trustCandidate,
@@ -276,6 +301,7 @@ async function fixture(options = {}) {
     store,
     transport,
     machine,
+    nodeFingerprint: nodeIdentity.publicKeyFingerprint,
     counts: {
       get begin() {
         return beginCalls
@@ -2310,6 +2336,101 @@ function abortError(message) {
   error.name = 'AbortError'
   return error
 }
+
+test('Relay pairing uses one explicit target and stages durable trust without a Direct endpoint', async () => {
+  const f = await fixture()
+  const openedStreams = []
+  const relayConnections = []
+  const relayTarget = {
+    kind: 'relay',
+    endpoint: {
+      host: 'relay.example.test',
+      port: 443,
+      transportSecurity: 'public_ca',
+    },
+    relayIdentityFingerprint: 'R'.repeat(43),
+    nodeFingerprint: f.nodeFingerprint,
+    rendezvousId: 'relay_pairing_fixture01',
+    rendezvousCapability: 'C'.repeat(43),
+  }
+  let coordinator
+  try {
+    coordinator = await SecureRemoteMachineCoordinator.create({
+      persistence: f.store,
+      transport: f.transport,
+      clientBuildIdentity: 'relay-pairing-host-test',
+      connectRelay: async (options) => {
+        assert.equal(options.enrollmentToken, undefined)
+        assert.deepEqual(options.pairing, {
+          rendezvousId: relayTarget.rendezvousId,
+          rendezvousCapability: relayTarget.rendezvousCapability,
+          targetNodeFingerprint: relayTarget.nodeFingerprint,
+        })
+        const connection = {
+          scope: 'pairing',
+          closed: false,
+          async openPairingChannel(nodeFingerprint, rendezvousId) {
+            assert.equal(nodeFingerprint, relayTarget.nodeFingerprint)
+            assert.equal(rendezvousId, relayTarget.rendezvousId)
+            const stream = new PassThrough()
+            openedStreams.push(stream)
+            return stream
+          },
+          async close() {
+            this.closed = true
+            for (const stream of openedStreams) stream.destroy()
+          },
+        }
+        relayConnections.push(connection)
+        return { connection }
+      },
+    })
+
+    const candidate = await coordinator.beginPairing({
+      target: relayTarget,
+      pairingCode: '123456',
+    })
+    assert.equal(candidate.address, undefined)
+    assert.equal(f.counts.begin, 1)
+    assert.equal(relayConnections.length, 1)
+
+    const confirmed = await coordinator.confirmPairing(
+      candidate.pairingAttemptId,
+      (staged) =>
+        f.store.createRemoteMachineWithTrustAndRelay(
+          staged.machine,
+          staged.trust,
+          staged.relay,
+        ),
+    )
+    assert.deepEqual(confirmed.trust.endpoints, [])
+    assert.deepEqual(confirmed.relay, {
+      endpoint: relayTarget.endpoint,
+      relayIdentityFingerprint: relayTarget.relayIdentityFingerprint,
+    })
+    assert.equal(relayConnections[0].closed, true)
+    assert.ok(f.store.getMachine(f.machine.machineId))
+    assert.deepEqual(
+      f.store.getTrustedMachinePeer(f.machine.machineId).endpoints,
+      [],
+    )
+    assert.deepEqual(
+      f.store.getMachineRelayConfiguration(f.machine.machineId),
+      {
+        machineId: f.machine.machineId,
+        endpoint: relayTarget.endpoint,
+        relayIdentityFingerprint: relayTarget.relayIdentityFingerprint,
+        enabled: true,
+        enrollmentState: 'enrolled',
+        createdAt: confirmed.trust.updatedAt,
+        updatedAt: confirmed.trust.updatedAt,
+        enrolledAt: confirmed.trust.updatedAt,
+      },
+    )
+  } finally {
+    await f.close(coordinator)
+  }
+})
 
 test('rejects public and loopback endpoints before transport, with explicit test-only loopback opt-in', async () => {
   const f = await fixture()

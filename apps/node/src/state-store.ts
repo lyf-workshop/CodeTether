@@ -27,6 +27,7 @@ import {
   type PublicKeyFingerprint,
   type RemoteMachineMetadata,
 } from '@codetether/machine-transport'
+import { RelayPublicKeySpkiSchema } from '@codetether/relay-protocol'
 import { z } from 'zod'
 
 const maximumStateFileBytes = 128 * 1024
@@ -48,6 +49,7 @@ const TrustedControllerSchema = z
   .object({
     controllerId: ControllerIdSchema,
     publicKeyFingerprint: PublicKeyFingerprintSchema,
+    publicKeySpki: RelayPublicKeySpkiSchema.optional(),
     pairedAt: z.iso.datetime({ offset: true }),
   })
   .strict()

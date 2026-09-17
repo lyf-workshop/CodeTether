@@ -87,6 +87,8 @@ export interface ControllerRelayCoordinator {
     token: RelayEnrollmentToken,
   ): Promise<RelayMachineConnectivity>
   retry(trust: DurableTrustedMachinePeer): Promise<RelayMachineConnectivity>
+  /** Starts the existing trusted worker after Relay-assisted pairing commits. */
+  activatePairedMachine?(machineId: MachineId): RelayMachineConnectivity
   openMachineChannel(
     trust: DurableTrustedMachinePeer,
     signal?: AbortSignal,
@@ -389,6 +391,25 @@ export class SecureControllerRelayCoordinator implements ControllerRelayCoordina
     )
     this.#startWorker(trust.machineId)
     return this.status(trust.machineId)
+  }
+
+  activatePairedMachine(machineId: MachineId): RelayMachineConnectivity {
+    this.#assertOpen()
+    const id = MachineIdSchema.parse(machineId)
+    const trust = this.#persistence.getTrustedMachinePeer(id)
+    const configuration = this.#requireConfiguration(id)
+    if (
+      trust?.trustState !== 'active' ||
+      !configuration.enabled ||
+      configuration.enrollmentState !== 'enrolled'
+    ) {
+      throw new ControllerRelayCoordinatorError(
+        'relay_not_configured',
+        'Paired Machine Relay state is not ready',
+      )
+    }
+    this.#startWorker(id)
+    return this.status(id)
   }
 
   async openMachineChannel(

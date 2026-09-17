@@ -370,6 +370,7 @@ export async function startLocalCodexHostWithRuntime(
         })
       remoteMachineCoordinator = await SecureRemoteMachineCoordinator.create({
         persistence,
+        clientBuildIdentity: options.hostVersion,
         allowLoopbackForTests: options.remoteMachineLoopbackForTests === true,
         relayTransport: controllerRelayCoordinator,
         transportPolicy: options.remoteMachineTransportPolicy ?? 'direct_first',

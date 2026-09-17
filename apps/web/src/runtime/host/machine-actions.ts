@@ -8,7 +8,9 @@ import {
 import {
   MachineIdSchema,
   MachinePairingAttemptIdSchema,
+  parseRemoteMachinePairingTarget,
   RemoteMachineAddressSchema,
+  RemoteMachinePairingTargetSchema,
   type BeginRemoteMachinePairingRequest,
   type BeginRemoteMachinePairingResponse,
   type CancelRemoteMachinePairingRequest,
@@ -20,6 +22,7 @@ import {
   type MachinePairingAttemptId,
   type MachineSummary,
   type RemoteMachineAddress,
+  type RemoteMachinePairingTarget,
   type RefreshMachineProvidersRequest,
   type RefreshMachineProvidersResponse,
   type RetryMachineConnectionRequest,
@@ -109,11 +112,14 @@ export class MachineActions {
   }
 
   beginRemoteMachinePairing(
-    address: RemoteMachineAddress,
+    target: RemoteMachinePairingTarget | RemoteMachineAddress,
     pairingCode: string,
   ): Promise<BeginRemoteMachinePairingResponse> {
-    const parsedAddress = RemoteMachineAddressSchema.parse(address)
-    const identity = JSON.stringify([parsedAddress, pairingCode])
+    const parsedTarget = RemoteMachinePairingTargetSchema.safeParse(target)
+    const requestTarget = parsedTarget.success
+      ? { target: parsedTarget.data }
+      : { address: RemoteMachineAddressSchema.parse(target) }
+    const identity = JSON.stringify([requestTarget, pairingCode])
     const current = this.#beginAttempt
     if (current !== undefined) {
       return current.identity === identity
@@ -124,7 +130,7 @@ export class MachineActions {
     const promise = this.#client
       .beginRemoteMachinePairing({
         actionId: this.#createActionId(),
-        address: parsedAddress,
+        ...requestTarget,
         pairingCode,
       })
       .finally(() => {
@@ -309,6 +315,15 @@ export function parseRemoteMachineAddressInput(
     input.slice(0, separator),
     input.slice(separator + 1),
   )
+}
+
+export function parseRemoteMachinePairingTargetInput(
+  value: string,
+): RemoteMachinePairingTarget | undefined {
+  const relay = parseRemoteMachinePairingTarget(value)
+  if (relay !== undefined) return relay
+  const direct = parseRemoteMachineAddressInput(value)
+  return direct === undefined ? undefined : { kind: 'direct', address: direct }
 }
 
 function parseRemoteMachineAddress(

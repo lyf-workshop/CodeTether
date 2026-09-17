@@ -1301,6 +1301,8 @@ Exit gate:
 
 The active Phase 8D closure also includes the shared native historical transcript projection required for adopted Conversations. Codex and Claude Code adapters own bounded fail-soft parsing; Host and Web consume only provider-neutral read-only entries. Local and remote reads remain tied to the immutable Conversation/Machine/ProjectLocation/Provider/ProviderInstallation binding, use opaque scoped pagination, start no inference, create no Turn or Attention, and never replay transcript content for resume. Migration 018 stores only an optional content-free adoption boundary. Windows and physical Linux REAL transcript validation remain delegated to their platform workers, and packaged Finder regression remains with the macOS distribution worker after integration.
 
+Phase 8D also implements [Relay-assisted first pairing](PHASE8D-RELAY-ASSISTED-FIRST-PAIRING.md) for a loopback-only, already-enrolled Node. One short-lived capability opens only a bounded `pairing_opaque_v1` stream; the existing inner Machine TLS, OPAQUE transcript, six-digit code, explicit confirmation, and Node-owned trust mutation remain authoritative. The pairing-scoped Controller cannot use presence or `machine_tls_v1`, and Relay cannot see the pairing code or create trust. No database migration is added. Automated integration is not REAL production or platform acceptance; coordinated Relay/Node/Desktop rollout and the physical Windows-to-macOS closure remain pending Owner authorization.
+
 ## Phase 9 — Mobile Companion
 
 **Status:** planned; unimplemented and unauthorized during Phase 8C.

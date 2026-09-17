@@ -33,7 +33,7 @@ import { useHostRuntime } from '../../runtime/host/host-runtime-hooks'
 import {
   machineErrorMessage,
   normalizePairingCodeInput,
-  parseRemoteMachineAddressInput,
+  parseRemoteMachinePairingTargetInput,
 } from '../../runtime/host/machine-actions'
 import {
   machineArchitectureLabel,
@@ -67,13 +67,13 @@ export function AddRemoteMachineDialog({
 
   const beginMutation = useMutation({
     mutationFn: async () => {
-      const parsedAddress = parseRemoteMachineAddressInput(address)
+      const parsedTarget = parseRemoteMachinePairingTargetInput(address)
       const parsedCode = RemoteMachinePairingCodeSchema.safeParse(pairingCode)
-      if (parsedAddress === undefined || !parsedCode.success) {
+      if (parsedTarget === undefined || !parsedCode.success) {
         throw new PairingInputError()
       }
       return await runtime.beginRemoteMachinePairing(
-        parsedAddress,
+        parsedTarget,
         parsedCode.data,
       )
     },
@@ -202,9 +202,9 @@ export function AddRemoteMachineDialog({
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (busy) return
-    const parsedAddress = parseRemoteMachineAddressInput(address)
+    const parsedTarget = parseRemoteMachinePairingTargetInput(address)
     const parsedCode = RemoteMachinePairingCodeSchema.safeParse(pairingCode)
-    if (parsedAddress === undefined) {
+    if (parsedTarget === undefined) {
       setValidationError('请输入“主机:端口”格式的节点地址。')
       return
     }
@@ -433,10 +433,10 @@ export function AddRemoteMachineDialog({
                 <div className="min-w-0">
                   <dt className="text-xs text-text-muted">本次连接地址</dt>
                   <dd
-                    title={remoteMachineAddressLabel(candidate.address)}
+                    title={pairingCandidateTransportLabel(candidate)}
                     className="mt-1 truncate font-mono text-text-primary"
                   >
-                    {remoteMachineAddressLabel(candidate.address)}
+                    {pairingCandidateTransportLabel(candidate)}
                   </dd>
                 </div>
                 <div className="min-w-0">
@@ -552,6 +552,14 @@ class PairingInputError extends Error {
     super('Remote Machine pairing input is invalid')
     this.name = 'PairingInputError'
   }
+}
+
+function pairingCandidateTransportLabel(
+  candidate: RemoteMachinePairingCandidate,
+): string {
+  return candidate.address === undefined
+    ? 'Internet Relay'
+    : remoteMachineAddressLabel(candidate.address)
 }
 
 function formatPairingExpiry(expiresAt: string): string {

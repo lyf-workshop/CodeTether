@@ -173,12 +173,18 @@ in `gui/UID`, `kickstart` for restart, RunAtLoad, throttled restart-on-failure a
 
 Services bind only loopback on an ephemeral port. Outbound enrolled Relay access
 remains the Internet path. No public inbound port/firewall rule is created.
-Secure pairing and current Alpha Relay provisioning still use Phase 8C's guided,
-explicit authorization flow. For an initial pairing session, stop the service
-and use the installed binary's existing `--pair` operation with the exact same
-`--data-dir`, then return to the service; no persistent pairing code is written
-to a unit/plist. Administrator-assisted Relay provisioning remains separate.
-Fresh remote pairing/service handoff remains a mandatory REAL validation item.
+Secure pairing retains Phase 8C's one-time code, cryptographic transcript, safe
+candidate, and explicit confirmation. A Relay-enrolled Node in pairing mode may
+also publish one short-lived, one-time Relay pairing target, allowing the same
+OPAQUE pairing state machine to run inside fresh end-to-end Machine TLS over a
+purpose-bound opaque Relay stream. Relay never receives the six-digit code and
+cannot create Controller trust or carry a pre-trust Machine operation. For an
+initial pairing session, stop the service and use the installed binary's existing
+`--pair` operation with the exact same `--data-dir`, then return to the service;
+no persistent pairing code or rendezvous capability is written to a unit/plist.
+Administrator-assisted Relay provisioning remains separate. See
+`PHASE8D-RELAY-ASSISTED-FIRST-PAIRING.md`. Fresh remote pairing/service handoff
+and production coordinated rollout remain mandatory REAL validation items.
 
 If every usable Controller credential is lost while the Node still retains its
 pinned Controller, the installed Node exposes only the local management commands

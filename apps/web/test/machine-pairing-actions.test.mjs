@@ -10,6 +10,7 @@ import {
   machineErrorMessage,
   normalizePairingCodeInput,
   parseRemoteMachineAddressInput,
+  parseRemoteMachinePairingTargetInput,
 } from '../.tmp/test-dist/runtime/host/machine-actions.js'
 import { machineQueryKeys } from '../.tmp/test-dist/runtime/host/machine-query.js'
 
@@ -41,6 +42,31 @@ test('pairing input accepts bounded host/port forms and normalizes only the visu
 
   assert.equal(normalizePairingCodeInput('４８２ ７３１'), '482731')
   assert.equal(normalizePairingCodeInput('482-731-999'), '482731')
+
+  const relayTarget =
+    `codetether-pairing://relay/v1?host=relay.example.test&port=443&security=public_ca` +
+    `&relay=${'R'.repeat(43)}&node=${'N'.repeat(43)}` +
+    `&rendezvous=relay_pairing_fixture01&capability=${'C'.repeat(43)}`
+  assert.deepEqual(parseRemoteMachinePairingTargetInput(relayTarget), {
+    kind: 'relay',
+    endpoint: {
+      host: 'relay.example.test',
+      port: 443,
+      transportSecurity: 'public_ca',
+    },
+    relayIdentityFingerprint: 'R'.repeat(43),
+    nodeFingerprint: 'N'.repeat(43),
+    rendezvousId: 'relay_pairing_fixture01',
+    rendezvousCapability: 'C'.repeat(43),
+  })
+  assert.deepEqual(parseRemoteMachinePairingTargetInput('node.lan:4318'), {
+    kind: 'direct',
+    address: { host: 'node.lan', port: 4318 },
+  })
+  assert.equal(
+    parseRemoteMachinePairingTargetInput(`${relayTarget}&code=482731`),
+    undefined,
+  )
 })
 
 test('Machine actions keep pairing preview ephemeral and accept only Host-confirmed Machine truth', async () => {
@@ -124,6 +150,43 @@ test('Machine actions keep pairing preview ephemeral and accept only Host-confir
       'update-address',
       'unpair',
     ],
+  )
+})
+
+test('Machine actions send Relay targets explicitly without placing capability data in caches', async () => {
+  const calls = []
+  const queryClient = new QueryClient()
+  const actions = new MachineActions(
+    mutationClient(calls),
+    queryClient,
+    actionIdFactory(),
+  )
+  const target = {
+    kind: 'relay',
+    endpoint: {
+      host: 'relay.example.test',
+      port: 443,
+      transportSecurity: 'public_ca',
+    },
+    relayIdentityFingerprint: 'R'.repeat(43),
+    nodeFingerprint: 'N'.repeat(43),
+    rendezvousId: 'relay_pairing_fixture01',
+    rendezvousCapability: 'C'.repeat(43),
+  }
+
+  await actions.beginRemoteMachinePairing(target, '482731')
+
+  assert.deepEqual(calls[0], {
+    operation: 'begin',
+    request: {
+      actionId: 'act_machine01',
+      target,
+      pairingCode: '482731',
+    },
+  })
+  assert.doesNotMatch(
+    JSON.stringify(queryClient.getQueryCache().getAll()),
+    /relay_pairing_fixture01|CCCCCCCC/u,
   )
 })
 

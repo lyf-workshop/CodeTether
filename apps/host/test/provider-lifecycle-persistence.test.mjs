@@ -683,7 +683,7 @@ test('explicit ProviderInstallation selection rejects an incompatible target and
       installationA(fixture, { lastObservedAt: laterObservedAt }),
       installationB(fixture, {
         lastObservedAt: laterObservedAt,
-        compatibility: compatibility('incompatible'),
+        compatibility: incompatibleCompatibility(),
       }),
     ],
   })
@@ -959,6 +959,31 @@ function compatibility(state) {
       search: supported(),
       toolEvents: supported(),
       reasoningControl: supported(),
+    },
+  }
+}
+
+function incompatibleCompatibility() {
+  const unsupported = (enabled = false) => ({
+    observed: 'unsupported',
+    enabled,
+    effective: false,
+  })
+  return {
+    state: 'incompatible',
+    runtimeReadiness: 'blocked',
+    freshness: 'current',
+    contractVersion: 1,
+    observedAt: laterObservedAt,
+    capabilities: {
+      execution: unsupported(),
+      streaming: unsupported(),
+      nativeResume: unsupported(),
+      nativeSessionDiscovery: unsupported(),
+      fileRead: unsupported(),
+      search: unsupported(),
+      toolEvents: unsupported(),
+      reasoningControl: unsupported(),
     },
   }
 }

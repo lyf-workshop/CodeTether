@@ -26,6 +26,11 @@ import {
   type ClaudeCodeLauncher,
   type ClaudeCodeTurnResult,
 } from './types.js'
+import {
+  recordTemporaryClaudeEncodedEvidence,
+  recordTemporaryClaudePromptEvidence,
+  recordTemporaryClaudeStdinEvidence,
+} from './temporary-real-evidence.js'
 
 export const MAX_CLAUDE_PROMPT_BYTES = 1024 * 1024
 const DEFAULT_CLOSE_GRACE_MS = 2000
@@ -384,12 +389,38 @@ export function startClaudeCodeTurnProcess(
   })
   // stderr is deliberately drained but never retained, logged, or surfaced.
   child.stderr.on('data', () => undefined)
-  child.stdin.on('error', (error) => rememberError(ownershipFailure(error)))
+  child.stdin.on('error', (error) => {
+    // TEMPORARY REAL EVIDENCE INSTRUMENTATION.
+    recordTemporaryClaudeStdinEvidence({
+      turnId: options.turnId,
+      resume: options.resume,
+      result: 'error',
+    })
+    rememberError(ownershipFailure(error))
+  })
   child.once('error', (error) => rememberError(ownershipFailure(error)))
   child.once('spawn', () => {
     try {
       promptDeliveryStarted = true
-      child.stdin.end(encodeClaudeUserMessage(options.prompt), () => {
+      // TEMPORARY REAL EVIDENCE INSTRUMENTATION.
+      recordTemporaryClaudePromptEvidence({
+        stage: 'adapter_pre_encoding',
+        turnId: options.turnId,
+        prompt: options.prompt,
+        resume: options.resume,
+      })
+      const encodedPrompt = encodeClaudeUserMessage(options.prompt)
+      recordTemporaryClaudeEncodedEvidence({
+        turnId: options.turnId,
+        encoded: encodedPrompt,
+        resume: options.resume,
+      })
+      child.stdin.end(encodedPrompt, () => {
+        recordTemporaryClaudeStdinEvidence({
+          turnId: options.turnId,
+          resume: options.resume,
+          result: 'success',
+        })
         void providerOwnershipOutcome.then((outcome) => {
           if (outcome.status === 'fulfilled') settleOwnership()
           else rememberError(ownershipFailure(outcome.error))

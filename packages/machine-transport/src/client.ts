@@ -82,6 +82,7 @@ import {
   newMachineNonce,
   type MachineTlsConnection,
 } from './tls.js'
+import { recordTemporaryClaudePromptEvidence } from './temporary-real-evidence.js'
 
 export const MachineEndpointSchema = z
   .object({
@@ -1702,6 +1703,13 @@ export class RemoteClaudeSession {
     options.signal?.throwIfAborted()
     let definitiveMachineError = false
     try {
+      // TEMPORARY REAL EVIDENCE INSTRUMENTATION.
+      recordTemporaryClaudePromptEvidence({
+        actionId: options.actionId,
+        conversationId: this.conversationId,
+        turnId: options.turnId,
+        prompt: options.prompt,
+      })
       await this.#connection.send({
         type: 'claude.turn.start',
         protocolVersion: machineProtocolVersion,

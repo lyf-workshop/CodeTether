@@ -709,6 +709,114 @@ test('refreshes remote Machine Providers with bounded current identity and cance
   }
 })
 
+test('selects one exact Machine ProviderInstallation through the typed route', async () => {
+  const remoteMachineId = 'machine_remote01'
+  const actionId = 'act_provider_selection01'
+  const providerInstallationId = 'pinst_demo_selection01'
+  const revision = 'prev_demo_selection_revision01'
+  const supported = {
+    observed: 'supported',
+    enabled: true,
+    effective: true,
+  }
+  const response = {
+    protocolVersion: 1,
+    actionId,
+    status: 'completed',
+    data: {
+      machineId: remoteMachineId,
+      provider: 'codex',
+      providerLifecycle: {
+        provider: 'codex',
+        selectedInstallationId: providerInstallationId,
+        installations: [
+          {
+            installationId: providerInstallationId,
+            provider: 'codex',
+            selected: true,
+            version: '0.149.1',
+            launcherKind: 'native',
+            installMethod: 'npm',
+            availability: 'available',
+            revision,
+            firstObservedAt: timestamp,
+            lastObservedAt: timestamp,
+            compatibility: {
+              state: 'verified',
+              runtimeReadiness: 'ready',
+              freshness: 'current',
+              contractVersion: 1,
+              observedAt: timestamp,
+              capabilities: {
+                execution: supported,
+                streaming: supported,
+                nativeResume: supported,
+                nativeSessionDiscovery: supported,
+                fileRead: supported,
+                search: supported,
+                toolEvents: supported,
+                reasoningControl: supported,
+              },
+            },
+          },
+        ],
+      },
+    },
+  }
+  const calls = []
+  const client = new CodeTetherClient({
+    baseUrl: 'http://host.test',
+    fetch: async (input, init) => {
+      calls.push({ url: String(input), init })
+      return jsonResponse(response)
+    },
+  })
+
+  const result = await client.selectMachineProviderInstallation(
+    remoteMachineId,
+    {
+      actionId,
+      provider: 'codex',
+      providerInstallationId,
+    },
+  )
+
+  assert.deepEqual(result, response)
+  assert.equal(
+    new URL(calls[0].url).pathname,
+    `/api/v1/machines/${remoteMachineId}/providers/selection`,
+  )
+  assert.equal(calls[0].init.method, 'POST')
+  assert.deepEqual(JSON.parse(calls[0].init.body), {
+    actionId,
+    provider: 'codex',
+    providerInstallationId,
+  })
+
+  const invalidClient = new CodeTetherClient({
+    baseUrl: 'http://host.test',
+    fetch: async () =>
+      jsonResponse({
+        ...response,
+        data: {
+          ...response.data,
+          providerLifecycle: {
+            ...response.data.providerLifecycle,
+            selectedInstallationId: 'pinst_other_selection01',
+          },
+        },
+      }),
+  })
+  await assert.rejects(
+    invalidClient.selectMachineProviderInstallation(remoteMachineId, {
+      actionId,
+      provider: 'codex',
+      providerInstallationId,
+    }),
+    CodeTetherProtocolError,
+  )
+})
+
 test('uses bounded remote Machine pairing and trust routes', async () => {
   const calls = []
   const pairingAttemptId = 'pairing_attempt01'

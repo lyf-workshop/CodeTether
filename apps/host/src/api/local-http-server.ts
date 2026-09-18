@@ -792,7 +792,10 @@ export class LocalHttpServer {
           response,
           200,
           SelectMachineProviderInstallationResponseSchema.parse(
-            await this.#service.selectMachineProviderInstallation(machineId, body),
+            await this.#service.selectMachineProviderInstallation(
+              machineId,
+              body,
+            ),
           ),
           context.allowedOrigin,
         )

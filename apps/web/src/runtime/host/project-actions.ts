@@ -381,6 +381,13 @@ export function projectErrorMessage(
     case 'provider_session_discovery_unavailable':
     case 'provider_session_format_unsupported':
     case 'provider_session_store_unreadable':
+    case 'installation_not_found':
+    case 'installation_machine_mismatch':
+    case 'installation_provider_mismatch':
+    case 'installation_incompatible':
+    case 'installation_not_ready':
+    case 'selection_conflict':
+    case 'selection_persistence_failed':
     case 'provider_session_candidate_expired':
     case 'internal':
       return operation === 'load'

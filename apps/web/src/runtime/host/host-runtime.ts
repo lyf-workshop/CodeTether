@@ -406,7 +406,9 @@ export class HostRuntime {
   }
 
   selectMachineProviderInstallation(
-    machineId: Parameters<MachineActions['selectMachineProviderInstallation']>[0],
+    machineId: Parameters<
+      MachineActions['selectMachineProviderInstallation']
+    >[0],
     input: Parameters<MachineActions['selectMachineProviderInstallation']>[1],
   ) {
     return this.#machineActions.selectMachineProviderInstallation(

@@ -1492,7 +1492,10 @@ export class HostService {
             409,
           )
         }
-        if (machine.kind === 'local' && this.#localProviderHasActiveTurn(request.provider)) {
+        if (
+          machine.kind === 'local' &&
+          this.#localProviderHasActiveTurn(request.provider)
+        ) {
           throw new HostServiceError(
             'selection_conflict',
             'Cannot change a Provider installation while a Turn is active',
@@ -1500,6 +1503,11 @@ export class HostService {
           )
         }
         const timestamp = TimestampSchema.parse(this.#timestamp())
+        const previousSelectedInstallationId =
+          this.#persistence.getProviderLifecycle(
+            id,
+            request.provider,
+          )?.selectedInstallationId
         let lifecycle: MachineProviderLifecycle
         try {
           lifecycle = this.#persistence.selectProviderInstallation(
@@ -1528,6 +1536,19 @@ export class HostService {
             )
             lifecycle = this.#providers.lifecycle(request.provider) ?? lifecycle
           } catch (error) {
+            try {
+              this.#persistence.restoreProviderInstallationSelection(
+                id,
+                request.provider,
+                previousSelectedInstallationId,
+                TimestampSchema.parse(this.#timestamp()),
+              )
+            } catch {
+              // Preserve the original typed activation failure. The durable
+              // selection primitive remains transactional for validation and
+              // persistence failures; runtime handoff failure is surfaced as
+              // a conflict and never silently switches again.
+            }
             throw new HostServiceError(
               'selection_conflict',
               'Provider installation selection could not be activated safely',

@@ -1,10 +1,6 @@
 import { Check, ShieldAlert } from 'lucide-react'
 
-import {
-  Badge,
-  Button,
-  cn,
-} from '@codetether/ui'
+import { Badge, Button, cn } from '@codetether/ui'
 import type {
   MachineProviderLifecycle,
   ProviderInstallationSummary,
@@ -53,7 +49,9 @@ export function ProviderInstallationSelector({
             key={String(installation.installationId)}
             installation={installation}
             disabled={disabled}
-            pending={pendingInstallationId === String(installation.installationId)}
+            pending={
+              pendingInstallationId === String(installation.installationId)
+            }
             onSelect={onSelect}
           />
         ))}
@@ -130,7 +128,13 @@ function ProviderInstallationOption({
         }
         onClick={() => onSelect(String(installation.installationId))}
       >
-        {pending ? '正在保存…' : selected ? '当前选择' : eligible ? '选择' : '不可用'}
+        {pending
+          ? '正在保存…'
+          : selected
+            ? '当前选择'
+            : eligible
+              ? '选择'
+              : '不可用'}
       </Button>
     </li>
   )

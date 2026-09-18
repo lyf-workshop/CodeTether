@@ -276,6 +276,13 @@ export function conversationOrganizationErrorMessage(
     case 'provider_session_format_unsupported':
     case 'provider_session_store_unreadable':
     case 'provider_session_candidate_expired':
+    case 'installation_not_found':
+    case 'installation_machine_mismatch':
+    case 'installation_provider_mismatch':
+    case 'installation_incompatible':
+    case 'installation_not_ready':
+    case 'selection_conflict':
+    case 'selection_persistence_failed':
     case 'internal':
       return 'CodeTether 未能完成此会话操作。'
   }

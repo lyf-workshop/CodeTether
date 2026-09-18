@@ -1066,6 +1066,46 @@ export class ConversationStore {
     })
   }
 
+  /** Restores a previously durable default after an uncommitted runtime handoff. */
+  restoreProviderInstallationSelection(
+    machineId: MachineId,
+    provider: ProviderId,
+    installationId: ProviderInstallationId | undefined,
+    selectedAt: Timestamp,
+  ): MachineProviderLifecycle {
+    const machine = MachineIdSchema.parse(machineId)
+    const providerId = ProviderIdSchema.parse(provider)
+    const id =
+      installationId === undefined
+        ? undefined
+        : ProviderInstallationIdSchema.parse(installationId)
+    const timestamp = TimestampSchema.parse(selectedAt)
+    return this.runInTransaction(() => {
+      this.#statement(
+        `INSERT INTO machine_provider_installation_selections (
+           machine_id, provider, installation_id, selected_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(machine_id, provider) DO UPDATE SET
+           installation_id = excluded.installation_id,
+           selected_at = excluded.selected_at,
+           updated_at = excluded.updated_at`,
+      ).run(
+        machine,
+        providerId,
+        id ?? null,
+        id === undefined ? null : timestamp,
+        timestamp,
+      )
+      return (
+        this.getProviderLifecycle(machine, providerId) ??
+        MachineProviderLifecycleSchema.parse({
+          provider: providerId,
+          installations: [],
+        })
+      )
+    })
+  }
+
   getProviderLifecycle(
     machineId: MachineId,
     provider: ProviderId,

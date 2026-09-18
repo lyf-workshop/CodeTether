@@ -65,6 +65,8 @@ import {
   RetryMachineRelayResponseSchema,
   RefreshMachineProvidersRequestSchema,
   RefreshMachineProvidersResponseSchema,
+  SelectMachineProviderInstallationRequestSchema,
+  SelectMachineProviderInstallationResponseSchema,
   ListProjectsResponseSchema,
   ListProjectConversationsQuerySchema,
   PinConversationRequestSchema,
@@ -763,6 +765,34 @@ export class LocalHttpServer {
           200,
           RefreshMachineProvidersResponseSchema.parse(
             await this.#service.refreshMachineProviders(machineId, body),
+          ),
+          context.allowedOrigin,
+        )
+        return
+      }
+      const machineProviderSelectionRoute = this.#http.matchPath(
+        url.pathname,
+        /^\/api\/v1\/machines\/([^/]+)\/providers\/selection$/u,
+      )
+      if (
+        request.method === 'POST' &&
+        machineProviderSelectionRoute !== undefined
+      ) {
+        const machineId = this.#http.parseRouteId(
+          MachineIdSchema,
+          machineProviderSelectionRoute[0],
+          'machineId',
+        )
+        const body = await this.#http.readValidatedBody(
+          request,
+          SelectMachineProviderInstallationRequestSchema,
+        )
+        context.actionId = body.actionId
+        this.#http.writeJson(
+          response,
+          200,
+          SelectMachineProviderInstallationResponseSchema.parse(
+            await this.#service.selectMachineProviderInstallation(machineId, body),
           ),
           context.allowedOrigin,
         )

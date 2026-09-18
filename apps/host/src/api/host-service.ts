@@ -44,6 +44,7 @@ import {
   ReadNativeTranscriptResponseSchema,
   RemoveMachineRelayResponseSchema,
   RefreshMachineProvidersResponseSchema,
+  SelectMachineProviderInstallationResponseSchema,
   RetryMachineRelayResponseSchema,
   ProjectIdSchema,
   MachineIdSchema,
@@ -160,6 +161,8 @@ import {
   type RetryMachineRelayResponse,
   type RefreshMachineProvidersRequest,
   type RefreshMachineProvidersResponse,
+  type SelectMachineProviderInstallationRequest,
+  type SelectMachineProviderInstallationResponse,
   type RemoveMachineRelayRequest,
   type RemoveMachineRelayResponse,
   type MachineProviderDiscovery,
@@ -187,6 +190,7 @@ import {
   RemoteMachineTrustConflictError,
   RemoteMachineProjectLocationConflictError,
   NativeProviderSessionBindingConflictError,
+  ProviderInstallationSelectionError,
   captureTurnPresentation,
   initialTurnPresentation,
   parseDurableTurnPresentation,
@@ -1465,6 +1469,82 @@ export class HostService {
         } catch (error) {
           throw remoteProviderRefreshServiceError(error)
         }
+      },
+      false,
+    )
+  }
+
+  async selectMachineProviderInstallation(
+    machineId: MachineId,
+    request: SelectMachineProviderInstallationRequest,
+  ): Promise<SelectMachineProviderInstallationResponse> {
+    const id = MachineIdSchema.parse(machineId)
+    return await this.#executeAction(
+      request.actionId,
+      `machine.providers.selection:${id}:${request.provider}`,
+      { machineId: id, request },
+      async () => {
+        const machine = this.#machines.get(id)
+        if (this.#persistence === undefined) {
+          throw new HostServiceError(
+            'unsupported',
+            'Provider installation selection is unavailable',
+            409,
+          )
+        }
+        if (machine.kind === 'local' && this.#localProviderHasActiveTurn(request.provider)) {
+          throw new HostServiceError(
+            'selection_conflict',
+            'Cannot change a Provider installation while a Turn is active',
+            409,
+          )
+        }
+        const timestamp = TimestampSchema.parse(this.#timestamp())
+        let lifecycle: MachineProviderLifecycle
+        try {
+          lifecycle = this.#persistence.selectProviderInstallation(
+            id,
+            request.provider,
+            request.providerInstallationId,
+            timestamp,
+          )
+        } catch (error) {
+          if (error instanceof ProviderInstallationSelectionError) {
+            throw new HostServiceError(error.code, error.message, 409)
+          }
+          throw new HostServiceError(
+            'selection_persistence_failed',
+            'Provider installation selection could not be persisted',
+            503,
+          )
+        }
+        if (machine.kind === 'local') {
+          try {
+            await this.#refreshLocalProviderForExplicitStart(
+              id,
+              request.provider,
+              true,
+              true,
+            )
+            lifecycle = this.#providers.lifecycle(request.provider) ?? lifecycle
+          } catch (error) {
+            throw new HostServiceError(
+              'selection_conflict',
+              'Provider installation selection could not be activated safely',
+              409,
+            )
+          }
+        }
+        return SelectMachineProviderInstallationResponseSchema.parse({
+          protocolVersion,
+          actionId: request.actionId,
+          status: 'completed',
+          data: {
+            machineId: id,
+            provider: request.provider,
+            providerLifecycle: lifecycle,
+          },
+        })
       },
       false,
     )
@@ -6406,6 +6486,7 @@ export class HostService {
     machineId: MachineId,
     provider: AgentProvider,
     handoffOwned = false,
+    force = false,
   ): Promise<void> {
     if (
       machineId !== this.#machines.localMachineId() ||
@@ -6415,9 +6496,10 @@ export class HostService {
     ) {
       return
     }
-    if (this.#localProviderHasActiveTurn(provider)) return
+    if (!force && this.#localProviderHasActiveTurn(provider)) return
     const current = this.#providers.get(provider)
     if (
+      !force &&
       this.#refreshLocalProviderLifecycle === undefined &&
       (current === undefined ||
         (current.available !== false && !this.#runtimeFailures.has(provider)))

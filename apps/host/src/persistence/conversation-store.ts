@@ -310,6 +310,26 @@ export interface DurableMachineProviderLifecycleObservation {
   readonly installationsTruncated?: boolean
 }
 
+/** Safe typed rejection for an explicit Provider installation selection. */
+export class ProviderInstallationSelectionError extends Error {
+  readonly code:
+    | 'installation_not_found'
+    | 'installation_machine_mismatch'
+    | 'installation_provider_mismatch'
+    | 'installation_incompatible'
+    | 'installation_not_ready'
+    | 'selection_persistence_failed'
+
+  constructor(
+    code: ProviderInstallationSelectionError['code'],
+    message: string,
+  ) {
+    super(message)
+    this.name = 'ProviderInstallationSelectionError'
+    this.code = code
+  }
+}
+
 /**
  * Presentation-safe Controller Relay configuration. Enrollment tokens,
  * Controller private keys, connection epochs, and presence never enter SQLite.
@@ -959,6 +979,91 @@ export class ConversationStore {
     return row === undefined
       ? undefined
       : this.#providerInstallationFromRow(row)
+  }
+
+  /** Atomically changes the durable Machine/Provider default installation. */
+  selectProviderInstallation(
+    machineId: MachineId,
+    provider: ProviderId,
+    installationId: ProviderInstallationId,
+    selectedAt: Timestamp,
+  ): MachineProviderLifecycle {
+    const machine = MachineIdSchema.parse(machineId)
+    const providerId = ProviderIdSchema.parse(provider)
+    const id = ProviderInstallationIdSchema.parse(installationId)
+    const timestamp = TimestampSchema.parse(selectedAt)
+    return this.runInTransaction(() => {
+      const installation = this.getProviderInstallation(id)
+      if (installation === undefined) {
+        throw new ProviderInstallationSelectionError(
+          'installation_not_found',
+          'Provider installation was not found',
+        )
+      }
+      if (installation.machineId !== machine) {
+        throw new ProviderInstallationSelectionError(
+          'installation_machine_mismatch',
+          'Provider installation belongs to another Machine',
+        )
+      }
+      if (installation.provider !== providerId) {
+        throw new ProviderInstallationSelectionError(
+          'installation_provider_mismatch',
+          'Provider installation belongs to another Provider',
+        )
+      }
+      const compatibility = installation.compatibility
+      if (
+        installation.availability !== 'available' ||
+        installation.revision === undefined ||
+        compatibility?.freshness !== 'current' ||
+        compatibility.state === undefined ||
+        compatibility.state === 'incompatible' ||
+        compatibility.state === 'unavailable'
+      ) {
+        throw new ProviderInstallationSelectionError(
+          compatibility?.state === 'incompatible'
+            ? 'installation_incompatible'
+            : 'installation_not_ready',
+          'Provider installation is not eligible for selection',
+        )
+      }
+      if (
+        compatibility.capabilities.execution.effective !== true ||
+        compatibility.capabilities.streaming.effective !== true ||
+        (providerId === 'claude-code' &&
+          (compatibility.capabilities.fileRead.effective !== true ||
+            compatibility.capabilities.search.effective !== true ||
+            compatibility.capabilities.toolEvents.effective !== true))
+      ) {
+        throw new ProviderInstallationSelectionError(
+          'installation_not_ready',
+          'Provider installation does not support required execution capabilities',
+        )
+      }
+      this.#statement(
+        `INSERT INTO machine_provider_installation_selections (
+           machine_id, provider, installation_id, selected_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(machine_id, provider) DO UPDATE SET
+           installation_id = excluded.installation_id,
+           selected_at = CASE
+             WHEN machine_provider_installation_selections.installation_id =
+               excluded.installation_id
+             THEN machine_provider_installation_selections.selected_at
+             ELSE excluded.selected_at
+           END,
+           updated_at = excluded.updated_at`,
+      ).run(machine, providerId, id, timestamp, timestamp)
+      const lifecycle = this.getProviderLifecycle(machine, providerId)
+      if (lifecycle === undefined) {
+        throw new ProviderInstallationSelectionError(
+          'selection_persistence_failed',
+          'Provider installation selection was not retained',
+        )
+      }
+      return lifecycle
+    })
   }
 
   getProviderLifecycle(

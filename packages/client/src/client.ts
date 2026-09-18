@@ -36,6 +36,8 @@ import {
   RemoveProjectLocationResponseSchema,
   RefreshMachineProvidersRequestSchema,
   RefreshMachineProvidersResponseSchema,
+  SelectMachineProviderInstallationResponseSchema,
+  SelectMachineProviderInstallationRequestSchema,
   ReadNativeTranscriptQuerySchema,
   ReadNativeTranscriptResponseSchema,
   DeleteProjectRequestSchema,
@@ -124,6 +126,8 @@ import {
   type RemoveProjectLocationResponse,
   type RefreshMachineProvidersRequest,
   type RefreshMachineProvidersResponse,
+  type SelectMachineProviderInstallationRequest,
+  type SelectMachineProviderInstallationResponse,
   type ReadNativeTranscriptQuery,
   type ReadNativeTranscriptResponse,
   type DeleteProjectRequest,
@@ -516,6 +520,38 @@ export class CodeTetherClient {
       response.data.machineId === machine &&
         response.data.providerDiscovery.state === 'current',
       'Provider refresh response does not match the requested Machine',
+    )
+    return response
+  }
+
+  async selectMachineProviderInstallation(
+    machineId: MachineId,
+    input: SelectMachineProviderInstallationRequest,
+    options: RequestOptions = {},
+  ): Promise<SelectMachineProviderInstallationResponse> {
+    const machine = parseProtocol(
+      MachineIdSchema,
+      machineId,
+      'select-machine-provider-installation id',
+    )
+    const request = parseProtocol(
+      SelectMachineProviderInstallationRequestSchema,
+      input,
+      'select-machine-provider-installation request',
+    )
+    const response = await this.#request(
+      `/api/v1/machines/${encodeURIComponent(machine)}/providers/selection`,
+      SelectMachineProviderInstallationResponseSchema,
+      jsonRequest(request, options.signal),
+      request.actionId,
+    )
+    assertProtocolIdentity(
+      response.data.machineId === machine &&
+        response.data.provider === request.provider &&
+        response.data.providerLifecycle.provider === request.provider &&
+        response.data.providerLifecycle.selectedInstallationId ===
+          request.providerInstallationId,
+      'Provider installation selection response does not match the request',
     )
     return response
   }

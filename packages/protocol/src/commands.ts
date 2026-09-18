@@ -5,6 +5,7 @@ import {
   MachineIdSchema,
   MachinePairingAttemptIdSchema,
   ProjectIdSchema,
+  ProviderInstallationIdSchema,
   ProtocolVersionSchema,
 } from './ids.js'
 import {
@@ -370,6 +371,18 @@ export const RefreshMachineProvidersRequestSchema = z
   .strict()
 export type RefreshMachineProvidersRequest = z.infer<
   typeof RefreshMachineProvidersRequestSchema
+>
+
+/** Explicit Owner action that changes the durable Machine/Provider default. */
+export const SelectMachineProviderInstallationRequestSchema = z
+  .object({
+    actionId: ActionIdSchema,
+    provider: ProviderIdSchema,
+    providerInstallationId: ProviderInstallationIdSchema,
+  })
+  .strict()
+export type SelectMachineProviderInstallationRequest = z.infer<
+  typeof SelectMachineProviderInstallationRequestSchema
 >
 
 export const UpdateMachineConnectionAddressRequestSchema = z
@@ -868,6 +881,23 @@ export const RefreshMachineProvidersResponseSchema = mutationResponseSchema(
 )
 export type RefreshMachineProvidersResponse = z.infer<
   typeof RefreshMachineProvidersResponseSchema
+>
+
+export const SelectMachineProviderInstallationDataSchema = z
+  .object({
+    machineId: MachineIdSchema,
+    provider: ProviderIdSchema,
+    providerLifecycle: MachineProviderLifecycleSchema,
+  })
+  .strict()
+export type SelectMachineProviderInstallationData = z.infer<
+  typeof SelectMachineProviderInstallationDataSchema
+>
+
+export const SelectMachineProviderInstallationResponseSchema =
+  mutationResponseSchema(SelectMachineProviderInstallationDataSchema)
+export type SelectMachineProviderInstallationResponse = z.infer<
+  typeof SelectMachineProviderInstallationResponseSchema
 >
 
 function validateProviderLifecycleGroups(

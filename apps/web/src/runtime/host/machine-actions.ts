@@ -25,6 +25,8 @@ import {
   type RemoteMachinePairingTarget,
   type RefreshMachineProvidersRequest,
   type RefreshMachineProvidersResponse,
+  type SelectMachineProviderInstallationRequest,
+  type SelectMachineProviderInstallationResponse,
   type RetryMachineConnectionRequest,
   type RetryMachineConnectionResponse,
   type UnpairMachineRequest,
@@ -66,6 +68,11 @@ export interface MachineMutationClient {
     request: RefreshMachineProvidersRequest,
     options?: { readonly signal?: AbortSignal },
   ): Promise<RefreshMachineProvidersResponse>
+  selectMachineProviderInstallation(
+    machineId: MachineId,
+    request: SelectMachineProviderInstallationRequest,
+    options?: { readonly signal?: AbortSignal },
+  ): Promise<SelectMachineProviderInstallationResponse>
   updateMachineConnectionAddress(
     machineId: MachineId,
     request: UpdateMachineConnectionAddressRequest,
@@ -81,6 +88,7 @@ export type MachineOperation =
   | 'unpair'
   | 'update-address'
   | 'refresh-providers'
+  | 'select-provider-installation'
 
 interface MutationAttempt<T> {
   readonly identity: string
@@ -223,6 +231,31 @@ export class MachineActions {
                     providerDiscovery: response.data.providerDiscovery,
                   },
           )
+          void this.#queryClient.invalidateQueries({
+            queryKey: machineQueryKeys.list,
+            exact: true,
+          })
+          return response
+        }),
+    )
+  }
+
+  selectMachineProviderInstallation(
+    machineId: MachineId | string,
+    input: Omit<SelectMachineProviderInstallationRequest, 'actionId'>,
+  ): Promise<SelectMachineProviderInstallationResponse> {
+    const machine = MachineIdSchema.parse(machineId)
+    const identity = `selection:${JSON.stringify(input)}`
+    return this.#run(`providers:${machine}`, identity, () =>
+      this.#client
+        .selectMachineProviderInstallation(machine, {
+          actionId: this.#createActionId(),
+          ...input,
+        })
+        .then((response) => {
+          void this.#queryClient.invalidateQueries({
+            queryKey: machineQueryKeys.detail(machine),
+          })
           void this.#queryClient.invalidateQueries({
             queryKey: machineQueryKeys.list,
             exact: true,
@@ -440,6 +473,13 @@ export function machineErrorMessage(
     case 'provider_session_format_unsupported':
     case 'provider_session_store_unreadable':
     case 'provider_session_candidate_expired':
+    case 'installation_not_found':
+    case 'installation_machine_mismatch':
+    case 'installation_provider_mismatch':
+    case 'installation_incompatible':
+    case 'installation_not_ready':
+    case 'selection_conflict':
+    case 'selection_persistence_failed':
       return operation === 'unpair'
         ? 'CodeTether 未能取消电脑配对。'
         : operation === 'refresh-providers'

@@ -5,7 +5,7 @@ import {
   type ReactNode,
   type RefObject,
 } from 'react'
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useParams } from '@tanstack/react-router'
 import {
   ArrowLeft,
@@ -29,6 +29,7 @@ import {
 } from '@codetether/ui'
 import {
   MachineIdSchema,
+  ProviderInstallationIdSchema,
   type GetMachineResponse,
   type MachineId,
   type MachineExecutionTransport,
@@ -46,7 +47,10 @@ import {
   useHostRuntime,
 } from '../../runtime/host/host-runtime-hooks'
 import { machineErrorMessage } from '../../runtime/host/machine-actions'
-import { machineDetailQueryOptions } from '../../runtime/host/machine-query'
+import {
+  machineDetailQueryOptions,
+  machineQueryKeys,
+} from '../../runtime/host/machine-query'
 import {
   providerExecutionHealthPresentation,
   providerLifecycleForMachine,
@@ -74,6 +78,7 @@ import { UnpairMachineDialog } from './unpair-machine-dialog'
 import { UpdateMachineAddressDialog } from './update-machine-address-dialog'
 import { AddProjectDialog } from '../projects/add-project-dialog'
 import { AddProjectLocationDialog } from '../projects/add-project-location-dialog'
+import { ProviderInstallationSelector } from './provider-installation-selector'
 
 export function MachineDetailRoute() {
   const { machineId: rawMachineId } = useParams({
@@ -94,6 +99,21 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
   })
   const localProviderRefreshMutation = useMutation({
     mutationFn: async () => await runtime.refreshMachineProviders(machineId),
+  })
+  const localProviderSelectionMutation = useMutation({
+    mutationFn: async (input: {
+      readonly provider: ProviderDescriptor['provider']
+      readonly providerInstallationId: string
+    }) =>
+      await runtime.selectMachineProviderInstallation(machineId, {
+        provider: input.provider,
+        providerInstallationId: ProviderInstallationIdSchema.parse(
+          input.providerInstallationId,
+        ),
+      }),
+    onSuccess: () => {
+      void machineQuery.refetch()
+    },
   })
   const [localProviderRefreshButtonRef, rememberLocalProviderRefreshFocus] =
     useProviderRefreshFocusRestoration(localProviderRefreshMutation.isPending)
@@ -384,6 +404,26 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
                           lifecycleObserved={lifecycleGroup !== undefined}
                           providerAvailable={provider.available}
                         />
+                        <ProviderInstallationSelector
+                          lifecycle={lifecycleGroup}
+                          disabled={
+                            hostConnectionState !== 'connected' ||
+                            localProviderSelectionMutation.isPending
+                          }
+                          pendingInstallationId={
+                            localProviderSelectionMutation.variables
+                              ?.provider === provider.provider
+                              ? localProviderSelectionMutation.variables
+                                  ?.providerInstallationId
+                              : undefined
+                          }
+                          onSelect={(providerInstallationId) =>
+                            localProviderSelectionMutation.mutate({
+                              provider: provider.provider,
+                              providerInstallationId,
+                            })
+                          }
+                        />
                       </div>
                     </details>
                   </div>
@@ -391,6 +431,17 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
               )
             })}
           </ul>
+          {localProviderSelectionMutation.isError ? (
+            <p
+              role="alert"
+              className="mt-3 break-words rounded-sm border border-danger/30 bg-danger-muted px-3 py-2 text-sm text-danger"
+            >
+              {machineErrorMessage(
+                localProviderSelectionMutation.error,
+                'select-provider-installation',
+              )}
+            </p>
+          ) : null}
           {localProviderRefreshMutation.isError ? (
             <p
               role="alert"
@@ -506,6 +557,7 @@ function RemoteMachineDetail({
 }: RemoteMachineDetailProps) {
   const navigate = useNavigate()
   const runtime = useHostRuntime()
+  const queryClient = useQueryClient()
   const [addressOpen, setAddressOpen] = useState(false)
   const directState = connection.directState ?? connection.state
   const lastSuccessful = formatMachineLastSeen(connection.lastSuccessfulAt)
@@ -517,6 +569,23 @@ function RemoteMachineDetail({
   const providerRefreshMutation = useMutation({
     mutationFn: async () =>
       await runtime.refreshMachineProviders(machine.machineId),
+  })
+  const providerSelectionMutation = useMutation({
+    mutationFn: async (input: {
+      readonly provider: ProviderDescriptor['provider']
+      readonly providerInstallationId: string
+    }) =>
+      await runtime.selectMachineProviderInstallation(machine.machineId, {
+        provider: input.provider,
+        providerInstallationId: ProviderInstallationIdSchema.parse(
+          input.providerInstallationId,
+        ),
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: machineQueryKeys.detail(machine.machineId),
+      })
+    },
   })
   const hostReadyForConnectionAction = hostConnectionState === 'connected'
   const canRetry = directState !== 'online' && directState !== 'connecting'
@@ -752,6 +821,14 @@ function RemoteMachineDetail({
         refreshError={providerRefreshMutation.error}
         refreshPending={providerRefreshMutation.isPending}
         onRefresh={() => providerRefreshMutation.mutate()}
+        onSelectInstallation={(provider, providerInstallationId) =>
+          providerSelectionMutation.mutate({ provider, providerInstallationId })
+        }
+        selectionPending={providerSelectionMutation.isPending}
+        selectionError={providerSelectionMutation.error}
+        pendingInstallationId={
+          providerSelectionMutation.variables?.providerInstallationId
+        }
       />
 
       <section className="mt-5 min-w-0 rounded-lg border border-border bg-surface/65 p-5">
@@ -813,6 +890,10 @@ function RemoteMachineProvidersSection({
   providers,
   refreshError,
   refreshPending,
+  onSelectInstallation,
+  selectionPending,
+  pendingInstallationId,
+  selectionError,
 }: {
   connection: RemoteMachineConnection
   discovery: MachineProviderDiscovery | undefined
@@ -822,6 +903,13 @@ function RemoteMachineProvidersSection({
   providers: readonly ProviderDescriptor[]
   refreshError: unknown
   refreshPending: boolean
+  onSelectInstallation: (
+    provider: ProviderDescriptor['provider'],
+    providerInstallationId: string,
+  ) => void
+  selectionPending: boolean
+  pendingInstallationId?: string
+  selectionError: unknown
 }) {
   const [providerRefreshButtonRef, rememberProviderRefreshFocus] =
     useProviderRefreshFocusRestoration(refreshPending)
@@ -958,6 +1046,17 @@ function RemoteMachineProvidersSection({
                             {remoteProviderCapabilitySummary(provider)}
                           </p>
                         ) : null}
+                        <ProviderInstallationSelector
+                          lifecycle={lifecycleGroup}
+                          disabled={!hostReady || selectionPending}
+                          pendingInstallationId={pendingInstallationId}
+                          onSelect={(providerInstallationId) =>
+                            onSelectInstallation(
+                              provider.provider,
+                              providerInstallationId,
+                            )
+                          }
+                        />
                       </div>
                     </details>
                   </div>
@@ -967,6 +1066,15 @@ function RemoteMachineProvidersSection({
           </ul>
         </>
       )}
+
+      {selectionError !== null && selectionError !== undefined ? (
+        <p
+          role="alert"
+          className="mt-3 break-words rounded-sm border border-danger/30 bg-danger-muted px-3 py-2 text-sm text-danger"
+        >
+          {machineErrorMessage(selectionError, 'select-provider-installation')}
+        </p>
+      ) : null}
 
       {refreshError !== null && refreshError !== undefined ? (
         <p

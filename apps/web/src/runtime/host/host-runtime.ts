@@ -405,6 +405,16 @@ export class HostRuntime {
     return this.#machineActions.refreshMachineProviders(machineId)
   }
 
+  selectMachineProviderInstallation(
+    machineId: Parameters<MachineActions['selectMachineProviderInstallation']>[0],
+    input: Parameters<MachineActions['selectMachineProviderInstallation']>[1],
+  ) {
+    return this.#machineActions.selectMachineProviderInstallation(
+      machineId,
+      input,
+    )
+  }
+
   updateMachineConnectionAddress(
     machineId: Parameters<MachineActions['updateMachineConnectionAddress']>[0],
     address: Parameters<MachineActions['updateMachineConnectionAddress']>[1],

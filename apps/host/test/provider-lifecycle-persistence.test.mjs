@@ -605,6 +605,107 @@ test('Conversation installation binding is atomic, durable, immutable, and indep
   reopened.close()
 })
 
+test('explicit ProviderInstallation selection changes only the Machine default and preserves Conversation bindings', async (t) => {
+  const fixture = await createFixture(t)
+  const store = ConversationStore.open({ databasePath: fixture.databasePath })
+  store.recordProviderLifecycle(lifecycleObservation(fixture))
+
+  store.createConversation(
+    conversation(fixture, 'conv_explicit_selection_before', {
+      providerInstallationId: installationAId,
+    }),
+  )
+
+  const selected = store.selectProviderInstallation(
+    fixture.machineId,
+    'claude-code',
+    installationBId,
+    laterObservedAt,
+  )
+  assert.equal(selected.selectedInstallationId, installationBId)
+  assert.equal(
+    selected.installations.find(
+      ({ installationId }) => installationId === installationAId,
+    ).selected,
+    false,
+  )
+  assert.equal(
+    selected.installations.find(
+      ({ installationId }) => installationId === installationBId,
+    ).selected,
+    true,
+  )
+
+  // The existing Conversation remains permanently bound to A.
+  assert.equal(
+    store.getConversation('conv_explicit_selection_before')
+      .providerInstallationId,
+    installationAId,
+  )
+
+  // New Conversations capture the then-current default B exactly once.
+  store.createConversation(
+    conversation(fixture, 'conv_explicit_selection_after', {
+      providerInstallationId: installationBId,
+    }),
+  )
+  assert.equal(
+    store.getConversation('conv_explicit_selection_after')
+      .providerInstallationId,
+    installationBId,
+  )
+
+  // Repeating the same selection is a safe durable no-op for identity.
+  const repeated = store.selectProviderInstallation(
+    fixture.machineId,
+    'claude-code',
+    installationBId,
+    latestObservedAt,
+  )
+  assert.equal(repeated.selectedInstallationId, installationBId)
+  assert.equal(
+    store.getConversation('conv_explicit_selection_before')
+      .providerInstallationId,
+    installationAId,
+  )
+  store.close()
+})
+
+test('explicit ProviderInstallation selection rejects an incompatible target and preserves the old default', async (t) => {
+  const fixture = await createFixture(t)
+  const store = ConversationStore.open({ databasePath: fixture.databasePath })
+  store.recordProviderLifecycle(lifecycleObservation(fixture))
+  store.recordProviderLifecycle({
+    ...lifecycleObservation(fixture),
+    observedAt: laterObservedAt,
+    selectedInstallationId: installationAId,
+    installations: [
+      installationA(fixture, { lastObservedAt: laterObservedAt }),
+      installationB(fixture, {
+        lastObservedAt: laterObservedAt,
+        compatibility: compatibility('incompatible'),
+      }),
+    ],
+  })
+
+  assert.throws(
+    () =>
+      store.selectProviderInstallation(
+        fixture.machineId,
+        'claude-code',
+        installationBId,
+        latestObservedAt,
+      ),
+    (error) => error?.code === 'installation_incompatible',
+  )
+  assert.equal(
+    store.getProviderLifecycle(fixture.machineId, 'claude-code')
+      .selectedInstallationId,
+    installationAId,
+  )
+  store.close()
+})
+
 test('durable installation alternatives are bounded while selected and Conversation-bound installations survive restart', async (t) => {
   const fixture = await createFixture(t)
   const store = ConversationStore.open({ databasePath: fixture.databasePath })

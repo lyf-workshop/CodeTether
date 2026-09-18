@@ -739,6 +739,69 @@ test('explicit ProviderInstallation selection rejects unknown and cross-Provider
   store.close()
 })
 
+test('explicit ProviderInstallation selection rejects a cross-Machine identity without mutation', async (t) => {
+  const fixture = await createFixture(t)
+  const store = ConversationStore.open({ databasePath: fixture.databasePath })
+  store.recordProviderLifecycle(lifecycleObservation(fixture))
+
+  const otherMachineId = 'machine_lifecycle_other01'
+  const otherInstallationId = 'pinst_claude_othermachine01'
+  store.createRemoteMachineWithTrust(
+    {
+      machineId: otherMachineId,
+      displayName: 'Lifecycle cross-Machine fixture',
+      kind: 'remote',
+      platform: 'Linux',
+      architecture: 'x64',
+      createdAt: firstObservedAt,
+    },
+    {
+      machineId: otherMachineId,
+      nodeIdentity: 'node_identity_lifecycle_other01',
+      peerPublicKeySpki: new Uint8Array(64).fill(9),
+      peerKeyFingerprint: 'o'.repeat(43),
+      controllerCredentialRef: 'controller-lifecycle-other.json',
+      controllerKeyFingerprint: 'p'.repeat(43),
+      trustState: 'pending',
+      protocolVersion: 1,
+      address: { host: '192.0.2.89', port: 43_217 },
+      pairedAt: firstObservedAt,
+      updatedAt: firstObservedAt,
+    },
+  )
+  store.activateTrustedMachinePeer(otherMachineId, firstObservedAt)
+  store.recordProviderLifecycle({
+    machineId: otherMachineId,
+    provider: 'claude-code',
+    observedAt: firstObservedAt,
+    selectedInstallationId: otherInstallationId,
+    installations: [
+      installationA(fixture, {
+        machineId: otherMachineId,
+        installationId: otherInstallationId,
+        selected: true,
+      }),
+    ],
+  })
+
+  assert.throws(
+    () =>
+      store.selectProviderInstallation(
+        fixture.machineId,
+        'claude-code',
+        otherInstallationId,
+        laterObservedAt,
+      ),
+    (error) => error?.code === 'installation_machine_mismatch',
+  )
+  assert.equal(
+    store.getProviderLifecycle(fixture.machineId, 'claude-code')
+      .selectedInstallationId,
+    installationAId,
+  )
+  store.close()
+})
+
 test('durable installation alternatives are bounded while selected and Conversation-bound installations survive restart', async (t) => {
   const fixture = await createFixture(t)
   const store = ConversationStore.open({ databasePath: fixture.databasePath })

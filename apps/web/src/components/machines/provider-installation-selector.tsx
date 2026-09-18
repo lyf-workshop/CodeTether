@@ -75,7 +75,8 @@ function ProviderInstallationOption({
   const eligible =
     installation.availability === 'available' &&
     compatibility?.freshness === 'current' &&
-    compatibility.runtimeReadiness === 'ready' &&
+    (compatibility.runtimeReadiness === 'ready' ||
+      compatibility.runtimeReadiness === 'limited') &&
     (compatibility.state === 'verified' ||
       compatibility.state === 'compatible_unverified' ||
       compatibility.state === 'limited')

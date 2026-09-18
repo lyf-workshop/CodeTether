@@ -4,6 +4,7 @@ import {
   ClaudeCodeError,
   ClaudeCodeOwnedProcessCleanupError,
   ClaudeCodeSessionRuntime,
+  recordTemporaryClaudePromptEvidence,
   type ClaudeCodeEffort,
   type ClaudeCodeLauncher,
   type ClaudeCodeProcessSpecification,
@@ -540,6 +541,14 @@ export class RemoteClaudeRunner {
       )
     }
     RemoteClaudePromptSchema.parse(request.prompt)
+    // TEMPORARY REAL EVIDENCE INSTRUMENTATION.
+    recordTemporaryClaudePromptEvidence({
+      stage: 'node_post_validation',
+      actionId: request.actionId,
+      conversationId: request.conversationId,
+      turnId: request.turnId,
+      prompt: request.prompt,
+    })
     const validated = await validateProjectLocationPath(this.canonicalRoot)
     if (validated.canonicalPath !== this.canonicalRoot) {
       throw new MachineTransportError(

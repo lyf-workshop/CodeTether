@@ -106,6 +106,39 @@ test('Machine Provider lifecycle UI stays safe, status-readable, and refreshes t
   )
 })
 
+test('Provider installation selection is explicit, lifecycle-gated, and refreshes durable Machine truth', async () => {
+  const [detail, selector, actions] = await Promise.all([
+    source('components/machines/machine-detail-page.tsx'),
+    source('components/machines/provider-installation-selector.tsx'),
+    source('runtime/host/machine-actions.ts'),
+  ])
+
+  assert.match(detail, /<ProviderInstallationSelector/u)
+  assert.match(detail, /localProviderSelectionMutation\.mutate\(/u)
+  assert.match(
+    detail,
+    /onSuccess:\s*\(\) => \{\s*void machineQuery\.refetch\(\)/u,
+  )
+  assert.match(selector, /lifecycle\.installations\.map/u)
+  assert.match(selector, /installation\.selected/u)
+  assert.match(selector, /installation\.availability === 'available'/u)
+  assert.match(selector, /compatibility\?\.freshness === 'current'/u)
+  assert.match(selector, /compatibility\.runtimeReadiness === 'ready'/u)
+  assert.match(selector, /compatibility\.runtimeReadiness === 'limited'/u)
+  assert.match(
+    selector,
+    /const actionDisabled = selected \|\| !eligible \|\| disabled \|\| pending/u,
+  )
+  assert.match(
+    selector,
+    /onClick=\{\(\) => onSelect\(String\(installation\.installationId\)\)\}/u,
+  )
+  assert.doesNotMatch(selector, /useEffect|useLayoutEffect|onMouseEnter/u)
+  assert.match(actions, /\.selectMachineProviderInstallation\(machine,/u)
+  assert.match(actions, /queryKey: machineQueryKeys\.detail\(machine\)/u)
+  assert.match(actions, /queryKey: machineQueryKeys\.list/u)
+})
+
 test('Provider refresh restores keyboard focus after its bounded pending state settles', async () => {
   const detail = await source('components/machines/machine-detail-page.tsx')
 

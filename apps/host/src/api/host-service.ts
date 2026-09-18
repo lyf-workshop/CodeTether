@@ -1535,7 +1535,7 @@ export class HostService {
               true,
             )
             lifecycle = this.#providers.lifecycle(request.provider) ?? lifecycle
-          } catch (error) {
+          } catch {
             try {
               this.#persistence.restoreProviderInstallationSelection(
                 id,

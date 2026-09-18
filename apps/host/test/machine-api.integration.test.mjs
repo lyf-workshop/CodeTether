@@ -2358,7 +2358,7 @@ test('remote adopted binding survives Relay generation replacement and resumes o
   }
 })
 
-test('remote metadata discovery remains available when current native resume capability is unsupported', async () => {
+test('remote metadata discovery remains available when the selected execution profile is incompatible', async () => {
   const fixture = await createRemoteAcquisitionFixture('codex')
   try {
     fixture.coordinator.providerSessionCandidate = {
@@ -2400,10 +2400,228 @@ test('remote metadata discovery remains available when current native resume cap
       ),
       (error) =>
         error instanceof HostServiceError &&
-        error.code === 'provider_unavailable',
+        error.code === 'provider_version_unsupported',
     )
     assert.equal(fixture.coordinator.openCodexCalls.length, 0)
     assert.equal(fixture.coordinator.remoteTurnCalls.length, 0)
+  } finally {
+    await fixture.close()
+  }
+})
+
+test('explicit remote installation selection immediately refreshes the effective descriptor and Conversation binding', async () => {
+  const fixture = await createRemoteAcquisitionFixture('claude-code')
+  try {
+    const existing = await fixture.service.createConversation({
+      actionId: 'act_remote_selection_existing_conversation',
+      machineId: fixture.coordinator.machineId,
+      projectId: fixture.project.projectId,
+      provider: 'claude-code',
+    })
+    assert.equal(
+      fixture.persistence.getConversation(
+        existing.data.conversation.conversationId,
+      )?.providerInstallationId,
+      remoteClaudeInstallationId,
+    )
+
+    const observedAt = new Date(Date.parse(timestamp) + 5).toISOString()
+    const incompatible = remoteProviderLifecycleFixture({
+      machineId: fixture.coordinator.machineId,
+      provider: 'claude-code',
+      installationId: remoteClaudeInstallationId,
+      revision: 'prev_remote_selection_A',
+      observedAt,
+      execution: false,
+      discovery: true,
+    }).installations[0]
+    const ready = remoteProviderLifecycleFixture({
+      machineId: fixture.coordinator.machineId,
+      provider: 'claude-code',
+      installationId: 'pinst_remote_selection_B',
+      revision: 'prev_remote_selection_B',
+      observedAt,
+      execution: true,
+      discovery: true,
+    }).installations[0]
+    incompatible.version = '2.1.276'
+    ready.version = '2.1.268'
+    fixture.persistence.recordProviderLifecycle({
+      machineId: fixture.coordinator.machineId,
+      provider: 'claude-code',
+      observedAt,
+      selectedInstallationId: incompatible.installationId,
+      installations: [
+        { ...incompatible, selected: true },
+        { ...ready, selected: false },
+      ],
+    })
+    const discovered = remoteProviderDescriptors(false, false)
+    discovered[1] = {
+      ...discovered[1],
+      availability: 'unsupported_version',
+      version: '2.1.276',
+    }
+    fixture.persistence.recordRemoteProviderObservation({
+      machineId: fixture.coordinator.machineId,
+      providers: discovered,
+      observedAt,
+    })
+    fixture.coordinator.currentProviderObservedAt = observedAt
+
+    const before = await fixture.service.getMachine(
+      fixture.coordinator.machineId,
+    )
+    const beforeDescriptor = before.providers.find(
+      ({ provider }) => provider === 'claude-code',
+    )
+    assert.equal(beforeDescriptor?.availability, 'unsupported_version')
+    assert.equal(beforeDescriptor?.version, '2.1.276')
+    await assert.rejects(
+      fixture.service.createConversation({
+        actionId: 'act_remote_selection_blocked_before_selection',
+        machineId: fixture.coordinator.machineId,
+        projectId: fixture.project.projectId,
+        provider: 'claude-code',
+      }),
+      (error) =>
+        error instanceof HostServiceError &&
+        error.failure?.reason === 'provider_unsupported_version',
+    )
+
+    const selectionEvents = []
+    const unsubscribe = fixture.service.publisher.subscribe((event) => {
+      if (event.type === 'machine.updated') selectionEvents.push(event)
+    })
+
+    const selectionRequest = {
+      actionId: 'act_remote_selection_projection_coherence',
+      provider: 'claude-code',
+      providerInstallationId: ready.installationId,
+    }
+    const selected = await fixture.service.selectMachineProviderInstallation(
+      fixture.coordinator.machineId,
+      selectionRequest,
+    )
+    assert.deepEqual(
+      await fixture.service.selectMachineProviderInstallation(
+        fixture.coordinator.machineId,
+        selectionRequest,
+      ),
+      selected,
+    )
+    unsubscribe()
+    assert.equal(selectionEvents.length, 1)
+
+    const after = await fixture.service.getMachine(
+      fixture.coordinator.machineId,
+    )
+    const afterDescriptor = after.providers.find(
+      ({ provider }) => provider === 'claude-code',
+    )
+    assert.equal(afterDescriptor?.availability, 'available')
+    assert.equal(afterDescriptor?.version, '2.1.268')
+    assert.equal(afterDescriptor?.capabilities.streaming, true)
+    assert.equal(afterDescriptor?.capabilities.fileRead, true)
+    assert.equal(
+      after.providerLifecycles.find(
+        ({ provider }) => provider === 'claude-code',
+      )?.selectedInstallationId,
+      ready.installationId,
+    )
+    const installations = after.providerLifecycles.find(
+      ({ provider }) => provider === 'claude-code',
+    )?.installations
+    const oldInstallation = installations?.find(
+      ({ installationId }) => installationId === incompatible.installationId,
+    )
+    const selectedInstallation = installations?.find(
+      ({ installationId }) => installationId === ready.installationId,
+    )
+    assert.equal(oldInstallation?.selected, false)
+    assert.equal(oldInstallation?.compatibility?.state, 'incompatible')
+    assert.equal(oldInstallation?.compatibility?.runtimeReadiness, 'blocked')
+    assert.equal(selectedInstallation?.selected, true)
+    assert.equal(selectedInstallation?.compatibility?.state, 'verified')
+    assert.equal(selectedInstallation?.compatibility?.runtimeReadiness, 'ready')
+
+    const created = await fixture.service.createConversation({
+      actionId: 'act_remote_selection_projection_conversation',
+      machineId: fixture.coordinator.machineId,
+      projectId: fixture.project.projectId,
+      provider: 'claude-code',
+    })
+    assert.equal(
+      fixture.persistence.getConversation(
+        created.data.conversation.conversationId,
+      )?.providerInstallationId,
+      ready.installationId,
+    )
+    assert.equal(
+      fixture.persistence.getConversation(
+        existing.data.conversation.conversationId,
+      )?.providerInstallationId,
+      incompatible.installationId,
+    )
+
+    const driftObservedAt = new Date(Date.parse(observedAt) + 5).toISOString()
+    const incompatibleDrift = remoteProviderLifecycleFixture({
+      machineId: fixture.coordinator.machineId,
+      provider: 'claude-code',
+      installationId: ready.installationId,
+      revision: 'prev_remote_selection_B_drift',
+      observedAt: driftObservedAt,
+      execution: false,
+      discovery: true,
+    }).installations[0]
+    incompatibleDrift.version = '2.1.277'
+    fixture.persistence.recordProviderLifecycle({
+      machineId: fixture.coordinator.machineId,
+      provider: 'claude-code',
+      observedAt: driftObservedAt,
+      selectedInstallationId: ready.installationId,
+      installations: [
+        { ...incompatible, selected: false },
+        { ...incompatibleDrift, selected: true },
+      ],
+    })
+    const driftDiscovery = remoteProviderDescriptors(false, true)
+    driftDiscovery[1] = {
+      ...driftDiscovery[1],
+      version: '2.1.268',
+    }
+    fixture.persistence.recordRemoteProviderObservation({
+      machineId: fixture.coordinator.machineId,
+      providers: driftDiscovery,
+      observedAt: driftObservedAt,
+    })
+    fixture.coordinator.currentProviderObservedAt = driftObservedAt
+
+    const afterDrift = await fixture.service.getMachine(
+      fixture.coordinator.machineId,
+    )
+    const driftDescriptor = afterDrift.providers.find(
+      ({ provider }) => provider === 'claude-code',
+    )
+    assert.equal(driftDescriptor?.availability, 'unsupported_version')
+    assert.equal(driftDescriptor?.version, '2.1.277')
+    assert.equal(
+      afterDrift.providerLifecycles.find(
+        ({ provider }) => provider === 'claude-code',
+      )?.selectedInstallationId,
+      ready.installationId,
+    )
+    await assert.rejects(
+      fixture.service.createConversation({
+        actionId: 'act_remote_selection_blocked_after_drift',
+        machineId: fixture.coordinator.machineId,
+        projectId: fixture.project.projectId,
+        provider: 'claude-code',
+      }),
+      (error) =>
+        error instanceof HostServiceError &&
+        error.failure?.reason === 'provider_unsupported_version',
+    )
   } finally {
     await fixture.close()
   }

@@ -239,6 +239,7 @@ import {
   type ProjectConversationReservation,
 } from './project-registry.js'
 import { ProviderEventTranslator } from './provider-event-translator.js'
+import { providerDescriptorForSelectedInstallation } from './provider-effective-descriptor.js'
 import { ProviderRegistry, providerSessionKey } from './provider-registry.js'
 import { ProviderSessionDiscoveryRegistry } from './provider-session-discovery-registry.js'
 import { NativeTranscriptCursorRegistry } from './native-transcript-registry.js'
@@ -1552,6 +1553,32 @@ export class HostService {
             throw new HostServiceError(
               'selection_conflict',
               'Provider installation selection could not be activated safely',
+              409,
+            )
+          }
+        }
+        // A remote Node observation is immutable discovery truth. The
+        // durable selection is Host authority, so publish the normal
+        // Machine update after the selection commit; subsequent reads derive
+        // the effective descriptor from that selection and the observation.
+        if (machine.kind === 'remote') {
+          const projection = this.#remoteProviderPresentation(machine)
+          const effective = projection.providers.find(
+            ({ provider }) => provider === request.provider,
+          )
+          const refreshed = this.#refreshRemoteMachine(
+            this.#requireDurableMachineState().getMachine(id) ?? machine,
+          )
+          this.#publish({
+            conversationId: null,
+            timestamp: this.#timestamp(),
+            type: 'machine.updated',
+            payload: { machine: refreshed },
+          })
+          if (effective?.availability !== 'available') {
+            throw new HostServiceError(
+              'selection_conflict',
+              'Provider installation selection could not be projected safely',
               409,
             )
           }
@@ -6708,7 +6735,7 @@ export class HostService {
   #providerDescriptors(): readonly ProviderDescriptor[] {
     const machine = this.#machines.get(this.#machines.localMachineId())
     return this.#providers.descriptors().map((descriptor) =>
-      providerDescriptorWithLifecycleCapabilities(
+      providerDescriptorForSelectedInstallation(
         {
           ...descriptor,
           executionHealth: this.#providerExecutionHealthPresentation(
@@ -6949,16 +6976,23 @@ export class HostService {
     const providerDiscoveryFreshness = current
       ? ('current' as const)
       : ('last_known' as const)
+    const lifecycles = this.#providerLifecyclesForMachine(machine)
     return {
-      providers: observation.providers.map((descriptor) => ({
-        ...descriptor,
-        executionHealth: this.#providerExecutionHealthPresentation(
-          machine,
-          descriptor.provider,
-          descriptor.executionHealth,
-          providerDiscoveryFreshness,
-        ),
-      })),
+      providers: observation.providers.map((descriptor) => {
+        const effective = providerDescriptorForSelectedInstallation(
+          descriptor,
+          lifecycles.find(({ provider }) => provider === descriptor.provider),
+        )
+        return {
+          ...effective,
+          executionHealth: this.#providerExecutionHealthPresentation(
+            machine,
+            descriptor.provider,
+            descriptor.executionHealth,
+            providerDiscoveryFreshness,
+          ),
+        }
+      }),
       providerDiscovery: {
         state: current ? 'current' : 'last_known',
         observedAt: observation.observedAt,
@@ -8578,58 +8612,6 @@ function backendReadinessForFailure(
       return 'unavailable'
     default:
       return undefined
-  }
-}
-
-function providerDescriptorWithLifecycleCapabilities(
-  descriptor: ProviderDescriptor,
-  lifecycle: MachineProviderLifecycle | undefined,
-): ProviderDescriptor {
-  const selected = lifecycle?.installations.find(
-    ({ installationId }) => installationId === lifecycle.selectedInstallationId,
-  )
-  const compatibility = selected?.compatibility
-  if (compatibility === undefined) return descriptor
-
-  const executionReady =
-    compatibility.capabilities.execution.effective === true &&
-    compatibility.capabilities.streaming.effective === true &&
-    (descriptor.provider === 'codex' ||
-      (compatibility.capabilities.fileRead.effective === true &&
-        compatibility.capabilities.search.effective === true &&
-        compatibility.capabilities.toolEvents.effective === true)) &&
-    (compatibility.state === 'verified' ||
-      compatibility.state === 'compatible_unverified' ||
-      compatibility.state === 'limited')
-  const effective = (
-    capability:
-      | 'streaming'
-      | 'nativeResume'
-      | 'fileRead'
-      | 'search'
-      | 'toolEvents'
-      | 'reasoningControl',
-  ): boolean =>
-    executionReady && compatibility.capabilities[capability].effective === true
-  const capabilities = {
-    ...descriptor.capabilities,
-    streaming: effective('streaming'),
-    resume: effective('nativeResume'),
-    fileRead: effective('fileRead'),
-    search: effective('search'),
-    toolEvents: effective('toolEvents'),
-    reasoningControl: effective('reasoningControl'),
-  }
-  const { reasoningLabel, reasoningOptions, ...withoutReasoning } = descriptor
-  return {
-    ...withoutReasoning,
-    capabilities,
-    ...(capabilities.reasoningControl
-      ? {
-          ...(reasoningLabel === undefined ? {} : { reasoningLabel }),
-          ...(reasoningOptions === undefined ? {} : { reasoningOptions }),
-        }
-      : {}),
   }
 }
 

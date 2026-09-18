@@ -100,6 +100,7 @@ import type {
   RemoteClaudeRuntimeSession,
 } from './remote-claude-host-runtime.js'
 import type { RemoteCodexRuntimeSession } from './remote-codex-host-runtime.js'
+import { providerDescriptorForSelectedInstallation } from './provider-effective-descriptor.js'
 
 export type RemoteMachineCoordinatorErrorCode =
   | 'not_found'
@@ -775,17 +776,23 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
     return (
       observation !== undefined &&
       this.providerDiscoveryCurrent(id, observation.observedAt) &&
-      observation.providers.some(
-        (descriptor) =>
-          (provider === undefined || descriptor.provider === provider) &&
+      observation.providers.some((descriptor) => {
+        const effective = providerDescriptorForSelectedInstallation(
+          descriptor,
+          this.#persistence.getProviderLifecycle(id, descriptor.provider),
+        )
+        if (effective === undefined) return false
+        return (
+          (provider === undefined || effective.provider === provider) &&
           remoteProviderExecutionProfileAvailable(
-            descriptor,
+            effective,
             this.#transport.openCodexSession !== undefined ||
               this.#transport.openCodexSessionOverStream !== undefined,
             this.#transport.openClaudeSession !== undefined ||
               this.#transport.openClaudeSessionOverStream !== undefined,
-          ),
-      )
+          )
+        )
+      })
     )
   }
 
@@ -1638,9 +1645,12 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
           'Remote Codex execution is unavailable on this Machine',
         )
       }
-      const descriptor = this.#persistence
-        .getRemoteProviderObservation(id)
-        ?.providers.find(({ provider }) => provider === 'codex')
+      const descriptor = providerDescriptorForSelectedInstallation(
+        this.#persistence
+          .getRemoteProviderObservation(id)
+          ?.providers.find(({ provider }) => provider === 'codex'),
+        this.#persistence.getProviderLifecycle(id, 'codex'),
+      )
       if (
         input.providerThreadId !== undefined &&
         descriptor?.capabilities.resume !== true
@@ -1808,9 +1818,12 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
           'Remote Claude Code session materialization state is invalid',
         )
       }
-      const descriptor = this.#persistence
-        .getRemoteProviderObservation(id)
-        ?.providers.find(({ provider }) => provider === 'claude-code')
+      const descriptor = providerDescriptorForSelectedInstallation(
+        this.#persistence
+          .getRemoteProviderObservation(id)
+          ?.providers.find(({ provider }) => provider === 'claude-code'),
+        this.#persistence.getProviderLifecycle(id, 'claude-code'),
+      )
       if (
         (input.providerSessionMaterialized === true &&
           descriptor?.capabilities.resume !== true) ||

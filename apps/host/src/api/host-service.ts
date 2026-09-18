@@ -658,7 +658,7 @@ export class HostService {
           let machine
           try {
             machine = this.#machines.refresh(durable)
-          } catch (error) {
+          } catch {
             if (!(error instanceof MachineRegistryError)) throw error
             machine = this.#machines.retainRemote(durable)
           }

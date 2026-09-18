@@ -706,6 +706,39 @@ test('explicit ProviderInstallation selection rejects an incompatible target and
   store.close()
 })
 
+test('explicit ProviderInstallation selection rejects unknown and cross-Provider identities without mutation', async (t) => {
+  const fixture = await createFixture(t)
+  const store = ConversationStore.open({ databasePath: fixture.databasePath })
+  store.recordProviderLifecycle(lifecycleObservation(fixture))
+
+  assert.throws(
+    () =>
+      store.selectProviderInstallation(
+        fixture.machineId,
+        'claude-code',
+        'pinst_missing_selection_target',
+        laterObservedAt,
+      ),
+    (error) => error?.code === 'installation_not_found',
+  )
+  assert.throws(
+    () =>
+      store.selectProviderInstallation(
+        fixture.machineId,
+        'codex',
+        installationAId,
+        laterObservedAt,
+      ),
+    (error) => error?.code === 'installation_provider_mismatch',
+  )
+  assert.equal(
+    store.getProviderLifecycle(fixture.machineId, 'claude-code')
+      .selectedInstallationId,
+    installationAId,
+  )
+  store.close()
+})
+
 test('durable installation alternatives are bounded while selected and Conversation-bound installations survive restart', async (t) => {
   const fixture = await createFixture(t)
   const store = ConversationStore.open({ databasePath: fixture.databasePath })

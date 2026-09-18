@@ -132,7 +132,28 @@ Install method is informational and never execution authority. An alternate inst
 
 The selected installation is the source for version observation, compatibility probing, fresh Conversation execution, native-session discovery, and native resume. Adapter layers do not independently resolve the Provider again.
 
-Phase 8B formalizes the current configured/runtime selection; it does not add a general installation picker or arbitrary rebinding command. Any future explicit selection change must be a separate user action, apply only at a safe boundary, and must not migrate an active Turn or an existing Conversation's immutable installation binding. A new Conversation may use the then-selected eligible installation.
+Phase 8B formalized the configured/runtime selection and intentionally shipped without a general installation picker. Phase 8D adds the bounded explicit-selection action described below; it is a separate user action, applies only at a safe boundary, and never migrates an active Turn or an existing Conversation's immutable installation binding. A new Conversation may use the then-selected eligible installation.
+
+## Explicit selection (Phase 8D)
+
+An Owner may explicitly select one discovered `ProviderInstallation` for a
+Machine/Provider pair through the normal typed product flow. The Host validates
+that the opaque installation identity exists on that exact Machine, belongs to
+that exact Provider, and is currently eligible for execution under the
+Provider lifecycle policy. Eligible compatibility states are the existing
+`verified`, `compatible_unverified`, and `limited` states when their current
+runtime observations expose the required execution capabilities; unavailable,
+incompatible, stale, and runtime-blocked installations are rejected with a
+typed failure. The operation is atomic and idempotent, and records only safe
+Machine/Provider/installation identities and action metadata.
+
+Selection changes CodeTether's durable default for future Conversations. It
+does not modify Provider files, PATH, configuration, credentials, gateway
+settings, or Node state. Existing Conversations retain their immutable
+installation binding, including when a Turn is active or later resumed. A
+refresh, PATH reorder, newly discovered installation, revision drift, or
+installation disappearance never changes the selected identity implicitly; an
+Owner must explicitly choose another eligible installation.
 
 ## Conversation installation consistency
 
@@ -278,7 +299,13 @@ Machine Detail presents compact Provider lifecycle status using product language
 
 Refresh is keyboard accessible, uses the one lifecycle coordinator, preserves focus, and displays refreshing/current/last-known truth without blocking the page synchronously. Status is not color-only. Existing Conversation Detail remains readable when execution is unavailable and its Composer explains the current bound-installation block.
 
-There is no **Update Provider** mutation or general installation picker in Phase 8B. The UI reports the deterministic selected installation and bounded alternatives; full installation management, backend/profile selection, and onboarding diagnosis remain later phases.
+Phase 8B had no **Update Provider** mutation or general installation picker.
+Phase 8D's Machine Provider surface adds the smallest explicit picker needed to
+choose an eligible discovered installation: it shows the current selection,
+bounded alternatives, safe version/compatibility/readiness state, and a
+user-confirmed select action. Blocked or incompatible alternatives remain
+visible for diagnosis but cannot be selected. Full installation management,
+backend/profile selection, and onboarding diagnosis remain outside this action.
 
 ## Privacy and security
 

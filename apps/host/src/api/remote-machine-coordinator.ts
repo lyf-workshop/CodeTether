@@ -3174,7 +3174,10 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
       discovery,
       receivedAt,
     )) {
-      this.#persistence.recordProviderLifecycle(lifecycle)
+      // The Node's selectedInstallationId is discovery metadata only. The
+      // Controller's durable selection is product authority and must survive
+      // every remote refresh, including a stale or incompatible Node report.
+      this.#persistence.recordProviderLifecycleObservation(lifecycle)
     }
     const observation = this.#persistence.recordRemoteProviderObservation(
       remoteProviderObservation(machine.machineId, discovery, receivedAt),

@@ -12,6 +12,7 @@ import {
   currentSchemaVersion,
   restoreDurableConversations,
 } from '../dist/persistence/index.js'
+import { providerDescriptorForSelectedInstallation } from '../dist/api/provider-effective-descriptor.js'
 import { normalizeTrustedProjectRoot } from '../dist/project-path.js'
 
 const firstObservedAt = '2026-10-05T12:00:00.000Z'
@@ -112,6 +113,153 @@ test('records bounded private installations and presentation-safe lifecycle obse
   assert.equal(tableCount(inspect, 'provider_installation_compatibility'), 2)
   assert.equal(tableCount(inspect, 'provider_backend_observations'), 2)
   inspect.close()
+})
+
+test('remote lifecycle observation cannot overwrite the Controller-selected installation', async (t) => {
+  const fixture = await createFixture(t)
+  const store = ConversationStore.open({ databasePath: fixture.databasePath })
+  store.recordProviderLifecycle(lifecycleObservation(fixture))
+  store.selectProviderInstallation(
+    fixture.machineId,
+    'claude-code',
+    installationBId,
+    laterObservedAt,
+  )
+
+  store.recordProviderLifecycleObservation({
+    ...lifecycleObservation(fixture),
+    observedAt: latestObservedAt,
+    selectedInstallationId: installationAId,
+  })
+
+  assert.equal(
+    store.getProviderLifecycle(fixture.machineId, 'claude-code')
+      ?.selectedInstallationId,
+    installationBId,
+  )
+  store.close()
+})
+
+test('remote lifecycle observation uses Host initial-selection policy instead of Node selected ID', async (t) => {
+  const fixture = await createFixture(t)
+  const store = ConversationStore.open({ databasePath: fixture.databasePath })
+  const observation = {
+    ...lifecycleObservation(fixture),
+    installations: [
+      installationA(fixture, { compatibility: incompatibleCompatibility() }),
+      installationB(fixture),
+    ],
+    selectedInstallationId: installationAId,
+  }
+
+  const persisted = store.recordProviderLifecycleObservation(observation)
+  assert.equal(persisted.selectedInstallationId, installationBId)
+  assert.equal(
+    persisted.installations.find(
+      ({ installationId }) => installationId === installationAId,
+    )?.selected,
+    false,
+  )
+  assert.equal(
+    persisted.installations.find(
+      ({ installationId }) => installationId === installationBId,
+    )?.selected,
+    true,
+  )
+  store.close()
+})
+
+test('remote stale selection preserves projection and immediate Conversation binding across restart', async (t) => {
+  const fixture = await createFixture(t)
+  const store = ConversationStore.open({ databasePath: fixture.databasePath })
+  store.recordProviderLifecycle(lifecycleObservation(fixture))
+  store.selectProviderInstallation(
+    fixture.machineId,
+    'claude-code',
+    installationBId,
+    laterObservedAt,
+  )
+
+  const staleRemote = {
+    machineId: fixture.machineId,
+    provider: 'claude-code',
+    observedAt: latestObservedAt,
+    selectedInstallationId: installationAId,
+    installations: [
+      installationA(fixture, {
+        version: '2.1.276',
+        lastObservedAt: latestObservedAt,
+        compatibility: incompatibleCompatibility(),
+      }),
+      installationB(fixture, {
+        version: '2.1.268',
+        lastObservedAt: latestObservedAt,
+      }),
+    ],
+  }
+  store.recordProviderLifecycleObservation(staleRemote)
+
+  const lifecycle = store.getProviderLifecycle(fixture.machineId, 'claude-code')
+  assert.equal(lifecycle?.selectedInstallationId, installationBId)
+  const effective = providerDescriptorForSelectedInstallation(
+    {
+      provider: 'claude-code',
+      displayName: 'Claude Code',
+      availability: 'unsupported_version',
+      version: '2.1.276',
+      capabilities: {
+        streaming: true,
+        resume: true,
+        interrupt: false,
+        approvals: false,
+        fileRead: true,
+        fileEdit: false,
+        shell: false,
+        search: true,
+        diff: false,
+        toolEvents: true,
+        modelSelection: false,
+        reasoningControl: true,
+      },
+    },
+    lifecycle,
+  )
+  assert.equal(effective.version, '2.1.268')
+  assert.equal(effective.availability, 'available')
+
+  store.createConversation(
+    conversation(fixture, 'conv_remote_stale_selection', {
+      providerInstallationId: installationBId,
+    }),
+  )
+  assert.equal(
+    store.getConversation('conv_remote_stale_selection').providerInstallationId,
+    installationBId,
+  )
+  store.close()
+
+  const reopened = ConversationStore.open({
+    databasePath: fixture.databasePath,
+  })
+  assert.equal(
+    reopened.getProviderLifecycle(fixture.machineId, 'claude-code')
+      ?.selectedInstallationId,
+    installationBId,
+  )
+  reopened.recordProviderLifecycleObservation({
+    ...staleRemote,
+    observedAt: configurationChangedAt,
+    installations: staleRemote.installations.map((installation) => ({
+      ...installation,
+      lastObservedAt: configurationChangedAt,
+    })),
+  })
+  assert.equal(
+    reopened.getProviderLifecycle(fixture.machineId, 'claude-code')
+      ?.selectedInstallationId,
+    installationBId,
+  )
+  reopened.close()
 })
 
 test('complete lifecycle scans tombstone omitted alternatives while truncated scans retain last-known truth', async (t) => {

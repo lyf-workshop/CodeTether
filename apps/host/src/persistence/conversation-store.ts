@@ -1169,6 +1169,13 @@ export class ConversationStore {
   recordProviderLifecycle(
     observation: DurableMachineProviderLifecycleObservation,
   ): MachineProviderLifecycle {
+    return this.#recordProviderLifecycle(observation, false)
+  }
+
+  #recordProviderLifecycle(
+    observation: DurableMachineProviderLifecycleObservation,
+    preserveSelection: boolean,
+  ): MachineProviderLifecycle {
     const value = parseProviderLifecycleObservation(observation)
     return this.runInTransaction(() => {
       const currentSnapshot = this.#statement(
@@ -1383,10 +1390,17 @@ export class ConversationStore {
         }
       }
 
-      const selected =
-        value.installationsTruncated === true &&
-        currentSnapshot?.installation_id !== undefined &&
-        currentSnapshot.installation_id !== null
+      const selected = preserveSelection
+        ? currentSnapshot === undefined
+          ? initialProviderInstallationId(value.provider, value.installations)
+          : currentSnapshot.installation_id === null
+            ? undefined
+            : ProviderInstallationIdSchema.parse(
+                currentSnapshot.installation_id,
+              )
+        : value.installationsTruncated === true &&
+            currentSnapshot?.installation_id !== undefined &&
+            currentSnapshot.installation_id !== null
           ? ProviderInstallationIdSchema.parse(currentSnapshot.installation_id)
           : value.selectedInstallationId
       this.#statement(
@@ -1422,6 +1436,28 @@ export class ConversationStore {
         })
       )
     })
+  }
+
+  /**
+   * Persists a remote Provider installation observation without allowing the
+   * peer's advertised default to mutate the Controller-owned selection.
+   */
+  recordProviderLifecycleObservation(
+    observation: DurableMachineProviderLifecycleObservation,
+  ): MachineProviderLifecycle {
+    const withoutSelection = {
+      machineId: observation.machineId,
+      provider: observation.provider,
+      observedAt: observation.observedAt,
+      ...(observation.installationsTruncated === undefined
+        ? {}
+        : { installationsTruncated: observation.installationsTruncated }),
+      installations: observation.installations.map((installation) => ({
+        ...installation,
+        selected: false,
+      })),
+    }
+    return this.#recordProviderLifecycle(withoutSelection, true)
   }
 
   /** Updates backend health without manufacturing a new binary observation. */
@@ -4313,6 +4349,46 @@ function parseProviderLifecycleObservation(
       ? {}
       : { installationsTruncated: value.installationsTruncated }),
   }
+}
+
+/**
+ * Host-owned first-selection policy for an observation that has no durable
+ * selection row. A remote peer's advertised selected ID is never consulted;
+ * only the current bounded installation facts and stable identity ordering
+ * establish the initial default.
+ */
+function initialProviderInstallationId(
+  provider: ProviderId,
+  installations: readonly DurableProviderInstallation[],
+): ProviderInstallationId | undefined {
+  return installations
+    .filter((installation) =>
+      providerInstallationExecutionReady(provider, installation),
+    )
+    .sort((left, right) =>
+      left.installationId.localeCompare(right.installationId),
+    )[0]?.installationId
+}
+
+function providerInstallationExecutionReady(
+  provider: ProviderId,
+  installation: DurableProviderInstallation,
+): boolean {
+  const compatibility = installation.compatibility
+  return (
+    installation.availability === 'available' &&
+    installation.revision !== undefined &&
+    compatibility?.freshness === 'current' &&
+    (compatibility.state === 'verified' ||
+      compatibility.state === 'compatible_unverified' ||
+      compatibility.state === 'limited') &&
+    compatibility.capabilities.execution.effective === true &&
+    compatibility.capabilities.streaming.effective === true &&
+    (provider === 'codex' ||
+      (compatibility.capabilities.fileRead.effective === true &&
+        compatibility.capabilities.search.effective === true &&
+        compatibility.capabilities.toolEvents.effective === true))
+  )
 }
 
 function unavailableProviderCompatibility(

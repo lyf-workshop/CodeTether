@@ -58,7 +58,7 @@ export interface RemoteClaudeRuntimeFactoryOptions {
   readonly cwd: string
   readonly providerSessionId?: string
   readonly resume: boolean
-  /** Exact Node-selected runtime; absent only in legacy fixture factories. */
+  /** Exact Node-admitted runtime; absent only in legacy fixture factories. */
   readonly launcher?: ClaudeCodeLauncher
   readonly environment?: NodeJS.ProcessEnv
   readonly version?: string
@@ -231,23 +231,24 @@ export class RemoteClaudeRunnerPool {
     owner?: RemoteProviderSessionConnectionOwner,
   ): Promise<RemoteClaudeRunner> {
     if (this.#closed) throw executionUnavailable()
-    const selected =
+    const installation =
       this.#providerLifecycle === undefined
         ? undefined
-        : await this.#providerLifecycle.selected(
+        : await this.#providerLifecycle.resolveExecutableInstallation(
             'claude-code',
             request.providerInstallationId,
             request.expectedInstallationRevision,
           )
-    if (selected !== undefined && selected.provider !== 'claude-code') {
+    if (installation !== undefined && installation.provider !== 'claude-code') {
       throw executionUnavailable()
     }
     if (
-      selected !== undefined &&
+      installation !== undefined &&
       ((request.providerSessionMaterialized === true &&
-        selected.compatibility.capabilities.nativeResume.effective !== true) ||
+        installation.compatibility.capabilities.nativeResume.effective !==
+          true) ||
         (request.effort !== undefined &&
-          selected.compatibility.capabilities.reasoningControl.effective !==
+          installation.compatibility.capabilities.reasoningControl.effective !==
             true))
     ) {
       throw executionUnavailable()
@@ -256,12 +257,12 @@ export class RemoteClaudeRunnerPool {
       request,
       canonicalRoot,
       runtimeFactory: this.#runtimeFactory,
-      ...(selected === undefined
+      ...(installation === undefined
         ? {}
         : {
-            launcher: selected.launcher,
-            environment: selected.environment,
-            version: selected.version,
+            launcher: installation.launcher,
+            environment: installation.environment,
+            version: installation.version,
           }),
       onFatal: (ownedRunner) => this.#releaseAfterFatal(ownedRunner),
       owner,

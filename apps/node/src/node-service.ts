@@ -963,10 +963,6 @@ export class CodeTetherNodeService extends EventEmitter {
               'Remote Codex request did not match durable Node identity',
             )
           }
-          const discovery = await this.#providerDetector.discover(
-            providerLifecycleAbort.signal,
-          )
-          assertRemoteCodexExecutionAdmission(discovery)
           await this.#serveRemoteCodexSession(
             connection,
             request,
@@ -984,10 +980,6 @@ export class CodeTetherNodeService extends EventEmitter {
               'Remote Claude request did not match durable Node identity',
             )
           }
-          const discovery = await this.#providerDetector.discover(
-            providerLifecycleAbort.signal,
-          )
-          assertRemoteClaudeExecutionAdmission(discovery)
           await this.#serveRemoteClaudeSession(
             connection,
             request,
@@ -1460,50 +1452,6 @@ export class CodeTetherNodeService extends EventEmitter {
         socket.destroy()
       }
     }
-  }
-}
-
-function assertRemoteCodexExecutionAdmission(
-  discovery: Awaited<ReturnType<RemoteProviderDetector['discover']>>,
-): void {
-  const codex = discovery.providers.find(({ provider }) => provider === 'codex')
-  if (
-    codex?.availability !== 'available' ||
-    codex.capabilities.streaming !== true ||
-    codex.capabilities.resume !== true
-  ) {
-    throw new MachineTransportError(
-      'remote_execution_unavailable',
-      'Remote Codex execution is unavailable',
-    )
-  }
-}
-
-function assertRemoteClaudeExecutionAdmission(
-  discovery: Awaited<ReturnType<RemoteProviderDetector['discover']>>,
-): void {
-  const claude = discovery.providers.find(
-    ({ provider }) => provider === 'claude-code',
-  )
-  if (
-    claude?.availability !== 'available' ||
-    claude.capabilities.streaming !== true ||
-    claude.capabilities.resume !== true ||
-    claude.capabilities.fileRead !== true ||
-    claude.capabilities.search !== true ||
-    claude.capabilities.toolEvents !== true ||
-    claude.capabilities.reasoningControl !== true ||
-    claude.capabilities.interrupt ||
-    claude.capabilities.approvals ||
-    claude.capabilities.fileEdit ||
-    claude.capabilities.shell ||
-    claude.capabilities.diff ||
-    claude.capabilities.modelSelection
-  ) {
-    throw new MachineTransportError(
-      'remote_execution_unavailable',
-      'Remote Claude execution is unavailable',
-    )
   }
 }
 

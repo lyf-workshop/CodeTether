@@ -813,7 +813,7 @@ test('selected installation capability loss rejects Claude resume and effort bef
   let reasoningControl = false
   const executable = join(root, 'claude-fixture')
   const providerLifecycle = {
-    selected: async () => ({
+    resolveExecutableInstallation: async () => ({
       provider: 'claude-code',
       launcher: {
         kind: 'native',

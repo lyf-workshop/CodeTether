@@ -196,6 +196,248 @@ test('first selection skips an earlier incompatible installation and then remain
   )
 })
 
+test('exact remote Claude admission resolves a valid requested installation without changing an unusable Node default', async (t) => {
+  const directory = await fixtureDirectory(t, 'exact-claude-admission')
+  const defaultExecutable = await executableFixture(
+    directory,
+    'claude-default',
+    'default-revision',
+  )
+  const requestedExecutable = await executableFixture(
+    directory,
+    'claude-requested',
+    'requested-revision',
+  )
+  const defaultCandidate = claudeCandidate(
+    defaultExecutable,
+    'file:claude-default',
+  )
+  const requestedCandidate = claudeCandidate(
+    requestedExecutable,
+    'file:claude-requested',
+  )
+  let defaultCompatible = true
+  let requestedMode = 'valid'
+  const coordinator = new NodeProviderLifecycleCoordinator({
+    machineId: 'machine_provider_lifecycle_exact_claude',
+    dataDirectory: directory,
+    discoverClaude: async () =>
+      discovery([defaultCandidate, requestedCandidate]),
+    observeClaude: async (options) => {
+      const observed = await claudeObservation(options)
+      if (
+        options.installation.fileIdentity === requestedCandidate.fileIdentity
+      ) {
+        return {
+          ...observed,
+          version: '2.1.268',
+          compatibility: exactAdmissionCompatibility(requestedMode),
+        }
+      }
+      if (
+        options.installation.fileIdentity !== defaultCandidate.fileIdentity ||
+        defaultCompatible
+      ) {
+        return observed
+      }
+      const unsupported = {
+        observed: 'unsupported',
+        enabled: true,
+        effective: false,
+      }
+      return {
+        ...observed,
+        version: '2.1.276',
+        compatibility: {
+          state: 'incompatible',
+          runtimeReadiness: 'blocked',
+          contractVersion: 1,
+          failureCode: 'provider_protocol_error',
+          capabilities: {
+            execution: unsupported,
+            streaming: unsupported,
+            nativeResume: unsupported,
+            nativeSessionDiscovery: unsupported,
+            fileRead: unsupported,
+            search: unsupported,
+            toolEvents: unsupported,
+            reasoningControl: unsupported,
+          },
+        },
+      }
+    },
+  })
+  t.after(async () => coordinator.close())
+
+  const initial = await coordinator.refreshProvider('claude-code')
+  const defaultInstallationId = initial.selected.installationId
+  const requestedInstallation = initial.descriptor.installations.find(
+    ({ installationId }) => installationId !== defaultInstallationId,
+  )
+  assert.ok(requestedInstallation)
+
+  defaultCompatible = false
+  const exact = await coordinator.resolveExecutableInstallation(
+    'claude-code',
+    requestedInstallation.installationId,
+    requestedInstallation.revision,
+  )
+
+  assert.equal(exact.provider, 'claude-code')
+  assert.equal(exact.launcher.executable, requestedExecutable)
+  assert.equal(exact.version, '2.1.268')
+
+  await assert.rejects(
+    coordinator.resolveExecutableInstallation(
+      'claude-code',
+      'pinst_missing_exact_claude',
+      requestedInstallation.revision,
+    ),
+    (error) => error?.code === 'provider_unavailable',
+  )
+  await assert.rejects(
+    coordinator.resolveExecutableInstallation(
+      'claude-code',
+      requestedInstallation.installationId,
+      'prev_stale_exact_claude',
+    ),
+    (error) => error?.code === 'provider_unavailable',
+  )
+  for (const mode of ['incompatible', 'blocked', 'capability-ineligible']) {
+    requestedMode = mode
+    await assert.rejects(
+      coordinator.resolveExecutableInstallation(
+        'claude-code',
+        requestedInstallation.installationId,
+        requestedInstallation.revision,
+      ),
+      (error) => error?.code === 'provider_unavailable',
+    )
+  }
+  requestedMode = 'valid'
+  await writeFile(requestedExecutable, 'requested-revision-drifted')
+  await assert.rejects(
+    coordinator.resolveExecutableInstallation(
+      'claude-code',
+      requestedInstallation.installationId,
+      requestedInstallation.revision,
+    ),
+    (error) => error?.code === 'provider_unavailable',
+  )
+
+  const after = await coordinator.refreshProvider('claude-code')
+  assert.equal(after.descriptor.selectedInstallationId, defaultInstallationId)
+  assert.equal(after.selected.installationId, defaultInstallationId)
+  assert.equal(after.selected.descriptor.compatibility.state, 'incompatible')
+})
+
+test('exact remote Codex admission resolves requested B while default A is unusable and rejects every invalid B without fallback', async (t) => {
+  const directory = await fixtureDirectory(t, 'exact-codex-admission')
+  const defaultExecutable = await executableFixture(
+    directory,
+    'codex-default',
+    'default-revision',
+  )
+  const requestedExecutable = await executableFixture(
+    directory,
+    'codex-requested',
+    'requested-revision',
+  )
+  const defaultCandidate = codexCandidate(
+    defaultExecutable,
+    'file:codex-default',
+  )
+  const requestedCandidate = codexCandidate(
+    requestedExecutable,
+    'file:codex-requested',
+  )
+  let defaultCompatible = true
+  let requestedMode = 'valid'
+  const coordinator = new NodeProviderLifecycleCoordinator({
+    machineId: 'machine_provider_lifecycle_exact_codex',
+    dataDirectory: directory,
+    discoverCodex: async () =>
+      discovery([defaultCandidate, requestedCandidate]),
+    observeCodex: async (options) => {
+      const observed = await codexObservation(options)
+      if (
+        options.installation.fileIdentity === requestedCandidate.fileIdentity
+      ) {
+        return {
+          ...observed,
+          compatibility: exactAdmissionCompatibility(requestedMode),
+        }
+      }
+      return defaultCompatible
+        ? observed
+        : {
+            ...observed,
+            compatibility: exactAdmissionCompatibility('incompatible'),
+          }
+    },
+  })
+  t.after(async () => coordinator.close())
+
+  const initial = await coordinator.refreshProvider('codex')
+  const defaultInstallationId = initial.selected.installationId
+  const requestedInstallation = initial.descriptor.installations.find(
+    ({ installationId }) => installationId !== defaultInstallationId,
+  )
+  assert.ok(requestedInstallation)
+
+  defaultCompatible = false
+  const exact = await coordinator.resolveExecutableInstallation(
+    'codex',
+    requestedInstallation.installationId,
+    requestedInstallation.revision,
+  )
+  assert.equal(exact.provider, 'codex')
+  assert.equal(exact.executable, requestedExecutable)
+
+  await assert.rejects(
+    coordinator.resolveExecutableInstallation(
+      'codex',
+      'pinst_missing_exact_codex',
+      requestedInstallation.revision,
+    ),
+    (error) => error?.code === 'provider_unavailable',
+  )
+  await assert.rejects(
+    coordinator.resolveExecutableInstallation(
+      'codex',
+      requestedInstallation.installationId,
+      'prev_stale_exact_codex',
+    ),
+    (error) => error?.code === 'provider_unavailable',
+  )
+  for (const mode of ['incompatible', 'blocked', 'capability-ineligible']) {
+    requestedMode = mode
+    await assert.rejects(
+      coordinator.resolveExecutableInstallation(
+        'codex',
+        requestedInstallation.installationId,
+        requestedInstallation.revision,
+      ),
+      (error) => error?.code === 'provider_unavailable',
+    )
+  }
+  requestedMode = 'valid'
+  await writeFile(requestedExecutable, 'requested-revision-drifted')
+  await assert.rejects(
+    coordinator.resolveExecutableInstallation(
+      'codex',
+      requestedInstallation.installationId,
+      requestedInstallation.revision,
+    ),
+    (error) => error?.code === 'provider_unavailable',
+  )
+
+  const after = await coordinator.refreshProvider('codex')
+  assert.equal(after.descriptor.selectedInstallationId, defaultInstallationId)
+  assert.equal(after.selected.installationId, defaultInstallationId)
+  assert.equal(after.selected.descriptor.compatibility.state, 'incompatible')
+})
+
 test('an unknown newer Claude revision remains selectable when the frozen execution contract passes', async (t) => {
   const directory = await fixtureDirectory(t, 'claude-newer-selection')
   const executable = await executableFixture(directory, 'claude', 'revision')
@@ -546,6 +788,34 @@ function compatibility() {
       reasoningControl: capability(),
     },
   }
+}
+
+function exactAdmissionCompatibility(mode) {
+  const result = compatibility()
+  if (mode === 'incompatible') {
+    return {
+      ...result,
+      state: 'incompatible',
+      runtimeReadiness: 'blocked',
+    }
+  }
+  if (mode === 'blocked') {
+    return { ...result, runtimeReadiness: 'blocked' }
+  }
+  if (mode === 'capability-ineligible') {
+    return {
+      ...result,
+      capabilities: {
+        ...result.capabilities,
+        nativeResume: {
+          observed: 'unsupported',
+          enabled: true,
+          effective: false,
+        },
+      },
+    }
+  }
+  return result
 }
 
 function backend(mode, privateConfigurationRevision) {

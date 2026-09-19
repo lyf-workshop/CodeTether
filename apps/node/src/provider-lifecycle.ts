@@ -185,6 +185,7 @@ interface CurrentInstallationScan {
 
 interface CurrentProviderLifecycle {
   readonly descriptor: RemoteProviderDescriptor
+  readonly installations: readonly CurrentInstallation[]
   readonly selected?: CurrentInstallation
 }
 
@@ -382,6 +383,54 @@ export class NodeProviderLifecycleCoordinator {
   }
 
   /**
+   * Resolves the exact installation authorized by a remote Conversation. A
+   * fresh inventory observation owns physical identity, compatibility, and
+   * readiness; the Node-local selected installation remains only its local
+   * default and is never consulted as execution authority here.
+   */
+  async resolveExecutableInstallation(
+    provider: AgentProvider,
+    installationId: ProviderInstallationId,
+    expectedRevision: ProviderInstallationRevision,
+    signal?: AbortSignal,
+  ): Promise<NodeSelectedProviderInstallation> {
+    this.#assertOpen(provider)
+    signal?.throwIfAborted()
+    const operationSignal =
+      signal === undefined
+        ? this.#abort.signal
+        : AbortSignal.any([this.#abort.signal, signal])
+    const lifecycle = await this.refreshProvider(provider, operationSignal)
+    const installation = lifecycle.installations.find(
+      (candidate) => candidate.installationId === installationId,
+    )
+    if (
+      installation === undefined ||
+      installation.installationRevision !== expectedRevision
+    ) {
+      throw new MachineTransportError(
+        'provider_unavailable',
+        'Requested Provider installation changed or is unavailable',
+        { peerAuthenticated: true },
+      )
+    }
+    if (!remoteExecutionReady(provider, installation.descriptor)) {
+      throw new MachineTransportError(
+        'provider_unavailable',
+        'Requested Provider installation is not execution compatible',
+        { peerAuthenticated: true },
+      )
+    }
+    return await this.#resolveCurrentInstallation(
+      provider,
+      installation,
+      installationId,
+      expectedRevision,
+      operationSignal,
+    )
+  }
+
+  /**
    * Resolves one exact selected installation without silently substituting a
    * PATH alternative. The revision is re-fingerprinted immediately before it
    * is handed to a discovery adapter or execution owner.
@@ -421,15 +470,42 @@ export class NodeProviderLifecycleCoordinator {
         { peerAuthenticated: true },
       )
     }
+    return await this.#resolveCurrentInstallation(
+      provider,
+      selected,
+      installationId,
+      expectedRevision,
+      operationSignal,
+    )
+  }
+
+  async #resolveCurrentInstallation(
+    provider: AgentProvider,
+    installation: CurrentInstallation,
+    installationId: ProviderInstallationId,
+    expectedRevision: ProviderInstallationRevision,
+    signal: AbortSignal,
+  ): Promise<NodeSelectedProviderInstallation> {
+    if (
+      installation.provider !== provider ||
+      installation.installationId !== installationId ||
+      installation.installationRevision !== expectedRevision
+    ) {
+      throw new MachineTransportError(
+        'provider_unavailable',
+        'Provider installation identity changed or is unavailable',
+        { peerAuthenticated: true },
+      )
+    }
     const currentPrivateRevision =
-      selected.provider === 'codex'
+      installation.provider === 'codex'
         ? await fingerprintCodexInstallation(
-            selected.observation.installation,
-            operationSignal,
+            installation.observation.installation,
+            signal,
           )
         : await fingerprintClaudeCodeInstallation(
-            selected.observation.installation,
-            operationSignal,
+            installation.observation.installation,
+            signal,
           )
     const currentWireRevision = providerInstallationRevisionFor(
       this.#machineId,
@@ -441,26 +517,26 @@ export class NodeProviderLifecycleCoordinator {
       void this.refreshProvider(provider).catch(() => undefined)
       throw new MachineTransportError(
         'provider_unavailable',
-        'Selected Provider installation changed and requires revalidation',
+        'Provider installation changed and requires revalidation',
         { peerAuthenticated: true },
       )
     }
-    const version = selected.descriptor.version
-    const compatibility = selected.descriptor.compatibility
+    const version = installation.descriptor.version
+    const compatibility = installation.descriptor.compatibility
     if (compatibility === undefined) {
       throw new MachineTransportError(
         'provider_unavailable',
-        'Selected Provider installation compatibility is unavailable',
+        'Provider installation compatibility is unavailable',
         { peerAuthenticated: true },
       )
     }
-    return selected.provider === 'codex'
+    return installation.provider === 'codex'
       ? {
           provider: 'codex',
           installationId,
           installationRevision: expectedRevision,
-          executable: selected.observation.installation.executable,
-          environment: selected.observation.runtimeEnvironment(),
+          executable: installation.observation.installation.executable,
+          environment: installation.observation.runtimeEnvironment(),
           ...(version === undefined ? {} : { version }),
           compatibility,
         }
@@ -469,9 +545,9 @@ export class NodeProviderLifecycleCoordinator {
           installationId,
           installationRevision: expectedRevision,
           launcher: copyClaudeLauncher(
-            selected.observation.installation.launcher,
+            installation.observation.installation.launcher,
           ),
-          environment: selected.observation.runtimeEnvironment(),
+          environment: installation.observation.runtimeEnvironment(),
           ...(version === undefined ? {} : { version }),
           compatibility,
         }
@@ -581,6 +657,7 @@ export class NodeProviderLifecycleCoordinator {
           provider,
           previous?.descriptor.version,
         ),
+        installations: [],
       }
     }
     if (
@@ -592,6 +669,7 @@ export class NodeProviderLifecycleCoordinator {
           provider,
           previous?.descriptor.version,
         ),
+        installations: [],
       }
     }
     if (!(result.reason instanceof ProviderLifecycleProbeError)) {
@@ -605,6 +683,7 @@ export class NodeProviderLifecycleCoordinator {
         provider,
         previous?.descriptor.version,
       ),
+      installations: [],
     }
   }
 
@@ -932,6 +1011,7 @@ export class NodeProviderLifecycleCoordinator {
                 )),
           scanTruncated,
         ),
+        installations: currentWithHistory,
         ...(selected === undefined ? {} : { selected }),
       }
     })
@@ -1416,6 +1496,30 @@ function executionReady(
       (compatibility.capabilities.fileRead.effective === true &&
         compatibility.capabilities.search.effective === true &&
         compatibility.capabilities.toolEvents.effective === true)) &&
+    (compatibility.state === 'verified' ||
+      compatibility.state === 'compatible_unverified' ||
+      compatibility.state === 'limited')
+  )
+}
+
+function remoteExecutionReady(
+  provider: AgentProvider,
+  installation: RemoteProviderInstallationDescriptor,
+): boolean {
+  const compatibility = installation.compatibility
+  return (
+    installation.availability === 'available' &&
+    compatibility?.freshness === 'current' &&
+    (compatibility.runtimeReadiness === 'ready' ||
+      compatibility.runtimeReadiness === 'limited') &&
+    compatibility.capabilities.execution.effective === true &&
+    compatibility.capabilities.streaming.effective === true &&
+    compatibility.capabilities.nativeResume.effective === true &&
+    (provider === 'codex' ||
+      (compatibility.capabilities.fileRead.effective === true &&
+        compatibility.capabilities.search.effective === true &&
+        compatibility.capabilities.toolEvents.effective === true &&
+        compatibility.capabilities.reasoningControl.effective === true)) &&
     (compatibility.state === 'verified' ||
       compatibility.state === 'compatible_unverified' ||
       compatibility.state === 'limited')

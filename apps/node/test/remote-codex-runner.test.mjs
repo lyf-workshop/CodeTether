@@ -21,6 +21,7 @@ import {
   connectMachineTls,
   generateMachineTlsIdentity,
   machineProtocolVersion,
+  MachineTransportError,
   machineTransportLimits,
   newControllerId,
   newMachineNonce,
@@ -1210,7 +1211,7 @@ test('selected installation native-resume loss rejects an existing Codex thread 
   )
   const fake = fakeClientFactory()
   const providerLifecycle = {
-    selected: async () => ({
+    resolveExecutableInstallation: async () => ({
       provider: 'codex',
       executable: join(directory, 'codex-fixture'),
       environment: { HOME: directory },
@@ -1741,15 +1742,42 @@ test('authenticated Node startup failure preserves canonical reason end to end',
   }
 })
 
-test('authenticated transport streams canonical restricted Claude events and resumes exact identity', async () => {
+test('authenticated Claude transport admits exact B and resumes it while the provider-wide default descriptor is unavailable', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'codetether-node-claude-'))
   const project = join(directory, 'project')
   await mkdir(project)
   const providerSessionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
   const factoryCalls = []
+  const exactRequests = []
   let processStarts = 0
   const runtimes = new Set()
   const runners = new RemoteClaudeRunnerPool({
+    providerLifecycle: {
+      resolveExecutableInstallation: async (...request) => {
+        exactRequests.push(request)
+        return {
+          provider: 'claude-code',
+          installationId: providerInstallationId,
+          installationRevision,
+          launcher: {
+            kind: 'native',
+            launcherPath: process.execPath,
+            executable: process.execPath,
+            prefixArguments: [],
+            sourcePath: process.execPath,
+          },
+          environment: { HOME: directory },
+          version: '2.1.268',
+          compatibility: {
+            state: 'verified',
+            capabilities: {
+              nativeResume: { effective: true },
+              reasoningControl: { effective: true },
+            },
+          },
+        }
+      },
+    },
     runtimeFactory: async (options) => {
       factoryCalls.push(options)
       let listener = () => undefined
@@ -1841,12 +1869,7 @@ test('authenticated transport streams canonical restricted Claude events and res
     state,
     bindAddress: '127.0.0.1',
     port: 0,
-    providerDetector: executionDetector({
-      claudeExecutionProbe: async () => ({
-        available: true,
-        version: '2.1.251',
-      }),
-    }),
+    providerDetector: executionDetector(),
     remoteClaudeRunners: runners,
   })
   const controller = {
@@ -1912,6 +1935,10 @@ test('authenticated transport streams canonical restricted Claude events and res
     assert.equal(factoryCalls[0].resume, false)
     assert.equal(factoryCalls[1].resume, true)
     assert.equal(factoryCalls[1].providerSessionId, providerSessionId)
+    assert.deepEqual(exactRequests, [
+      ['claude-code', providerInstallationId, installationRevision],
+      ['claude-code', providerInstallationId, installationRevision],
+    ])
     assert.equal(processStarts, 1)
     await session.close()
     session = undefined
@@ -1924,25 +1951,34 @@ test('authenticated transport streams canonical restricted Claude events and res
   }
 })
 
-test('execution admission re-probes and refuses Codex that disappeared after positive discovery', async () => {
+test('exact Codex session admission ignores an unusable provider-wide default descriptor and launches the requested installation', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'codetether-admission-'))
   const project = join(directory, 'project')
   const codexHome = join(directory, 'codex-home')
-  const codexExecutable = join(
-    directory,
-    process.platform === 'win32' ? 'codex-probe.exe' : 'codex-probe',
-  )
   await mkdir(project)
   await mkdir(codexHome)
-  await symlink(
-    process.execPath,
-    codexExecutable,
-    process.platform === 'win32' ? 'file' : undefined,
-  )
   const fake = fakeClientFactory()
+  const exactRequests = []
   const runners = new RemoteCodexRunnerPool({
     codexHome,
     clientFactory: fake.factory,
+    providerLifecycle: {
+      resolveExecutableInstallation: async (...request) => {
+        exactRequests.push(request)
+        return {
+          provider: 'codex',
+          installationId: providerInstallationId,
+          installationRevision,
+          executable: process.execPath,
+          environment: { HOME: directory },
+          version: '0.149.1',
+          compatibility: {
+            state: 'verified',
+            capabilities: { nativeResume: { effective: true } },
+          },
+        }
+      },
+    },
   })
   const state = await NodeStateStore.open({
     dataDirectory: join(directory, 'node-state'),
@@ -1954,7 +1990,9 @@ test('execution admission re-probes and refuses Codex that disappeared after pos
     state,
     bindAddress: '127.0.0.1',
     port: 0,
-    providerDetector: executionDetector({ codexExecutable }),
+    providerDetector: executionDetector({
+      codexScript: "process.stdout.write('codex-cli 0.151.0')",
+    }),
     remoteCodexRunners: runners,
   })
   const controller = {
@@ -1967,25 +2005,22 @@ test('execution admission re-probes and refuses Codex that disappeared after pos
     connected = await connectTrustedRemoteMachine({ peer, controller })
     const [codex] = (await connected.discoverProviders()).providers
     assert.equal(codex.availability, 'available')
-    assert.equal(codex.capabilities.streaming, true)
-    assert.equal(codex.capabilities.resume, true)
+    assert.equal(Object.values(codex.capabilities).some(Boolean), false)
     connected.close()
     connected = undefined
 
-    await rm(codexExecutable)
-    await assert.rejects(
-      openRemoteCodexSession({
-        peer,
-        controller,
-        conversationId: 'conv_remote_a',
-        projectId: 'proj_remote_a',
-        rootPath: project,
-      }),
-      (error) =>
-        error.code === 'remote_execution_unavailable' &&
-        error.peerAuthenticated === true,
-    )
-    assert.equal(fake.launches, 0)
+    const session = await openRemoteCodexSession({
+      peer,
+      controller,
+      conversationId: 'conv_remote_a',
+      projectId: 'proj_remote_a',
+      rootPath: project,
+    })
+    assert.deepEqual(exactRequests, [
+      ['codex', providerInstallationId, installationRevision],
+    ])
+    assert.equal(fake.launches, 1)
+    await session.close()
     assert.equal(runners.activeCount, 0)
   } finally {
     connected?.close()
@@ -1994,7 +2029,7 @@ test('execution admission re-probes and refuses Codex that disappeared after pos
   }
 })
 
-test('execution admission keeps an untested installed Codex discoverable but never launches it', async () => {
+test('exact Codex session admission propagates exact-installation rejection without default fallback', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'codetether-admission-'))
   const project = join(directory, 'project')
   const codexHome = join(directory, 'codex-home')
@@ -2004,6 +2039,22 @@ test('execution admission keeps an untested installed Codex discoverable but nev
   const runners = new RemoteCodexRunnerPool({
     codexHome,
     clientFactory: fake.factory,
+    providerLifecycle: {
+      resolveExecutableInstallation: async (
+        provider,
+        requestedInstallationId,
+        requestedRevision,
+      ) => {
+        assert.equal(provider, 'codex')
+        assert.equal(requestedInstallationId, providerInstallationId)
+        assert.equal(requestedRevision, installationRevision)
+        throw new MachineTransportError(
+          'provider_unavailable',
+          'Requested Provider installation is not execution compatible',
+          { peerAuthenticated: true },
+        )
+      },
+    },
   })
   const state = await NodeStateStore.open({
     dataDirectory: join(directory, 'node-state'),
@@ -2044,7 +2095,7 @@ test('execution admission keeps an untested installed Codex discoverable but nev
         rootPath: project,
       }),
       (error) =>
-        error.code === 'remote_execution_unavailable' &&
+        error.code === 'provider_unavailable' &&
         error.peerAuthenticated === true,
     )
     assert.equal(fake.launches, 0)

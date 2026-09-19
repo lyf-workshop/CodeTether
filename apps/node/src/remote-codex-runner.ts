@@ -56,7 +56,7 @@ interface RemoteCodexClient {
 export interface RemoteCodexClientFactoryOptions {
   readonly onEvent: (event: AgentEvent) => void
   readonly onError: (error: Error) => void
-  /** Exact Node-selected executable; absent only in legacy fixture factories. */
+  /** Exact Node-admitted executable; absent only in legacy fixture factories. */
   readonly executable?: string
   readonly environment?: NodeJS.ProcessEnv
   readonly codexHome?: string
@@ -234,21 +234,21 @@ export class RemoteCodexRunnerPool {
     owner?: RemoteProviderSessionConnectionOwner,
   ): Promise<RemoteCodexRunner> {
     if (this.#closed) throw executionUnavailable()
-    const selected =
+    const installation =
       this.#providerLifecycle === undefined
         ? undefined
-        : await this.#providerLifecycle.selected(
+        : await this.#providerLifecycle.resolveExecutableInstallation(
             'codex',
             request.providerInstallationId,
             request.expectedInstallationRevision,
           )
-    if (selected !== undefined && selected.provider !== 'codex') {
+    if (installation !== undefined && installation.provider !== 'codex') {
       throw executionUnavailable()
     }
     if (
-      selected !== undefined &&
+      installation !== undefined &&
       request.providerThreadId !== undefined &&
-      selected.compatibility.capabilities.nativeResume.effective !== true
+      installation.compatibility.capabilities.nativeResume.effective !== true
     ) {
       throw executionUnavailable()
     }
@@ -256,12 +256,12 @@ export class RemoteCodexRunnerPool {
       request,
       canonicalRoot,
       clientFactory: this.#clientFactory,
-      ...(selected === undefined
+      ...(installation === undefined
         ? {}
         : {
-            executable: selected.executable,
-            environment: selected.environment,
-            codexHome: defaultRemoteCodexHome(selected.environment),
+            executable: installation.executable,
+            environment: installation.environment,
+            codexHome: defaultRemoteCodexHome(installation.environment),
           }),
       onFatal: (ownedRunner) => this.#releaseAfterFatal(ownedRunner),
       owner,

@@ -3,11 +3,17 @@
 ## Status
 
 Owner accepted and froze **Phase 8C** at `67c71f2e3ad390004cc60fe30925224a02aba485`
-with 129 / 129 criteria passing. **Phase 8D** is now authorized for implementation
-only: distribution, POSIX sidecar supervision, user-service installation, native
-bundle configuration, bounded platform discovery and release identity/checksums.
-REAL macOS and physical Linux acceptance is pending. This supersedes older
-current-scope wording below, without changing any frozen product authority.
+with 129 / 129 criteria passing. **Phase 8D** functional integration
+`0248d0a0fda70fe62f0ab9f75088967c62ba63fe` has completed the Owner-defined
+final scope audit with `PHASE8D_SCOPE_CLOSURE_READY_FOR_OWNER_FREEZE`; the Owner
+has not yet frozen it. The supported matrix is Windows x64 Desktop/Host, Apple
+Silicon macOS Node/Desktop, and Raspberry Pi 5/Linux ARM64 Node with Provider
+execution capability-dependent and not currently claimed. Pi current-head
+physical revalidation and Windows full-OS-reboot REAL are deferred and
+non-blocking. Linux x64 Node, Linux Desktop, Windows Node, Windows ARM64, and
+Intel macOS are out of current scope; public macOS notarization is a distribution
+follow-up. This supersedes older current-scope wording below without changing any
+frozen product authority.
 See [Phase 8D architecture, support matrix and REAL handoff](PHASE8D-CROSS-PLATFORM-DISTRIBUTION.md)
 and [Relay-assisted first pairing](PHASE8D-RELAY-ASSISTED-FIRST-PAIRING.md).
 
@@ -18,6 +24,15 @@ and observes the Desktop parent pipe. Linux systemd user and macOS LaunchAgent
 installers retain durable identity and do not import shell credentials. The root
 product version and clean Git build identity bind release artifacts; SHA-256 and
 native receipt checks never turn build success into REAL platform support.
+
+The accepted support claims are evidence-scoped. Windows local Codex native
+history/adoption/resume is `WINDOWS_CODEX_NATIVE_HISTORY_ADOPT_RESUME_REAL_PASS`,
+and the Windows → macOS execution chain is
+`WINDOWS_MAC_REAL_PHYSICAL_CLOSURE_PASS`. Historical Raspberry Pi physical REAL
+covers Node/Relay/typed operations only; Codex/Claude execution on Pi is not
+claimed. A fresh Claude sentinel mismatch classified as
+`PROVIDER_RETURNED_NONCOMPLIANT_RESPONSE` is informational Provider semantics,
+not a transport, delivery, service, or Phase 8D infrastructure failure.
 
 Phase 1 Frontend Experience is accepted and frozen as **CodeTether V2 Frontend Core v1**. Phase 2A and Phase 2A.1 are accepted and frozen as **Phase 2A Codex Runtime v1**. Phase 2B is accepted as the versioned local Client-to-Host boundary: HTTP commands, an SSE event stream, CodeTether-owned public identities, in-memory snapshot/replay, and a non-React client.
 
@@ -1206,7 +1221,7 @@ Protocol v1 exposes the effective `ProviderDescriptor`—identity, display name,
 
 The registry scopes Runtime failures and Approval identity to the owning Provider. A Claude failure cannot fail a Codex Turn, and unknown Provider identity fails closed. Both Providers consume the same Host-wide hydrated-Conversation limit—eight by default—rather than receiving separate budgets. Idle eviction may dispose a cold adapter session object; durable identity and history remain in SQLite and the next real Turn performs native resume. Phase 6D execution-health observations are keyed by the same immutable Machine/Provider pair and cannot change installation discovery, capability admission, Conversation binding, or this shared capacity ownership.
 
-`packages/adapter-claude` performs bounded discovery of configured, previously selected, `PATH`, and known official launchers; resolves native, link, wrapper, or verified npm launch specifications; and fingerprints the exact execution artifacts. Phase 5A was accepted against Claude Code `2.1.250`; Phase 5B revalidated the same boundary against `2.1.251`; Phase 8A revalidated the unchanged capability boundary against `2.1.263`. Phase 8D additionally revalidated `2.1.266` and `2.1.268` restricted fresh execution, native resume, and the read-only native-session format on Apple Silicon macOS with a configured custom gateway; this Provider evidence does not itself establish macOS product support. These remain shipped verified versions, but Phase 8B no longer makes exact version equality the sole admission rule: an unknown version may be used only after its bounded zero-inference version/help contract passes. One local or Node lifecycle coordinator owns selection, revision validation, observation, and refresh; execution and session discovery consume that exact selected installation context and never independently fall through to another `PATH` candidate. Backend observation is separate and uses authentication status only for first-party mode when authoritative. The adapter never publishes a path, credential, or raw diagnostic. Available Claude sessions use a UUID with native `--session-id` creation and `--resume` after Host restart. One active Turn owns one child; canonical input is encoded as a JSONL SDK User message on stdin, not placed in argv, and the process uses structured arguments with `shell: false` in the already authorized Conversation working directory.
+`packages/adapter-claude` performs bounded discovery of configured, previously selected, `PATH`, and known official launchers; resolves native, link, wrapper, or verified npm launch specifications; and fingerprints the exact execution artifacts. Phase 5A was accepted against Claude Code `2.1.250`; Phase 5B revalidated the same boundary against `2.1.251`; Phase 8A revalidated the unchanged capability boundary against `2.1.263`. Phase 8D additionally revalidated `2.1.266` and `2.1.268` restricted fresh execution, native resume, and the read-only native-session format on Apple Silicon macOS with a configured custom gateway. Provider evidence alone did not establish platform support; the later accepted Windows → macOS physical product closure established the supported Apple Silicon boundary. These remain shipped verified versions, but Phase 8B no longer makes exact version equality the sole admission rule: an unknown version may be used only after its bounded zero-inference version/help contract passes. One local or Node lifecycle coordinator owns selection, revision validation, observation, and refresh; execution and session discovery consume that exact selected installation context and never independently fall through to another `PATH` candidate. Backend observation is separate and uses authentication status only for first-party mode when authoritative. The adapter never publishes a path, credential, or raw diagnostic. Available Claude sessions use a UUID with native `--session-id` creation and `--resume` after Host restart. One active Turn owns one child; canonical input is encoded as a JSONL SDK User message on stdin, not placed in argv, and the process uses structured arguments with `shell: false` in the already authorized Conversation working directory.
 
 `packages/adapter-codex` uses the same bounded installation/revision model around its exact executable and the CodeTether-owned App Server contract. A recognized version may be verified; an unknown newer or older version must expose the required local `app-server`/stdio surface rather than being rejected solely by number. The metadata-only thread list/read contract is optional for core execution, so losing it makes existing-session discovery unavailable without falsely classifying the execution runtime as incompatible. Codex backend configuration and current execution health remain separate from executable compatibility.
 

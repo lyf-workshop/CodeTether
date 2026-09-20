@@ -2,22 +2,32 @@
 
 ## Status and scope
 
-Implementation-only continuation of Owner-frozen Phase 8C, baseline
-`67c71f2e3ad390004cc60fe30925224a02aba485`. This document is not platform
-acceptance. The original 120 Phase 8D criteria remain unchanged. Mandatory REAL
-Mac/physical Linux receipts cannot be replaced by compilation, containers, or WSL.
-No Phase 9, backend/profile manager, new Provider capability, updater, or Tag.
+Owner-defined closure scope for the continuation of Owner-frozen Phase 8C,
+baseline `67c71f2e3ad390004cc60fe30925224a02aba485`. The accepted functional
+integration is `0248d0a0fda70fe62f0ab9f75088967c62ba63fe`. The final scope audit
+result is `PHASE8D_SCOPE_CLOSURE_READY_FOR_OWNER_FREEZE`; the Owner has not yet
+frozen Phase 8D. No Phase 9, backend/profile manager, new Provider capability,
+updater, or Tag is authorized.
 
-| Target              | Implementation                                              | REAL validation / support                                         |
-| ------------------- | ----------------------------------------------------------- | ----------------------------------------------------------------- |
-| Windows x64 Desktop | Existing NSIS plus shared release identity                  | Supported frozen foundation; current artifact regression required |
-| macOS arm64 Desktop | Native Tauri app/DMG configuration, icon, lifecycle bridge  | Pending; NOT Supported yet                                        |
-| Linux x64 Node      | SEA/archive and systemd user installer                      | Container/WSL automation only; physical machine pending           |
-| macOS arm64 Node    | SEA/archive and LaunchAgent installer                       | Pending; NOT Supported yet                                        |
-| Linux arm64 Node    | Native-target build entry                                   | Pending / preview target only                                     |
-| Linux x64 Desktop   | Tauri deb/AppImage configuration                            | Preview target, NOT AVAILABLE as a validated release              |
-| Intel macOS         | Existing native x64 SEA mapping; no universal build promise | NOT OBSERVED                                                      |
-| Windows Node        | Existing CLI/SEA; no user service implementation            | NOT Supported as a distributed background Node                    |
+| Target                             | Status                                        | Evidence boundary                                                                                        |
+| ---------------------------------- | --------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| Windows x64 Desktop / Host         | SUPPORTED                                     | Current functional integration plus accepted Windows REAL                                                |
+| macOS Apple Silicon Node / Desktop | SUPPORTED                                     | Accepted Windows → macOS physical REAL closure                                                           |
+| Raspberry Pi 5 / Linux ARM64 Node  | SUPPORTED_WITH_PROVIDER_CAPABILITY_LIMITATION | Historical physical Node/Relay/typed-operation REAL; current-head revalidation deferred and non-blocking |
+| Linux x64 Node                     | OUT_OF_CURRENT_SCOPE                          | No current Phase 8D support claim                                                                        |
+| Linux Desktop                      | OUT_OF_CURRENT_SCOPE                          | No current Phase 8D support claim                                                                        |
+| Windows Node                       | OUT_OF_CURRENT_SCOPE                          | No current Phase 8D support claim                                                                        |
+| Windows ARM64                      | OUT_OF_CURRENT_SCOPE                          | No current Phase 8D support claim                                                                        |
+| Intel macOS                        | OUT_OF_CURRENT_SCOPE                          | No current Phase 8D support claim                                                                        |
+
+Explicit non-blocking boundaries:
+
+- Windows full-OS-reboot recovery REAL: `DEFERRED_NON_BLOCKING`.
+- Raspberry Pi current-integration-head physical revalidation:
+  `DEFERRED_NON_BLOCKING`.
+- Raspberry Pi Codex/Claude execution:
+  `CAPABILITY_DEPENDENT_NOT_CURRENTLY_CLAIMED`.
+- Public macOS notarization: `DISTRIBUTION_FOLLOW_UP`.
 
 ## Architecture and authority
 
@@ -28,6 +38,16 @@ Resume remain authoritative. Build identity is metadata, never trust authority.
 Protocol incompatibility remains a CodeTether update issue, distinct from identity
 mismatch or Provider compatibility. Equal build commits are not required between
 compatible Controllers and Nodes. Unknown protocol versions still fail closed.
+
+Host durable ProviderInstallation selection is product authority. A Node's
+selected/default installation is observational or a local default only and cannot
+replace that Host decision. Existing Conversation bindings are immutable; new
+Conversations bind the current Owner-selected exact installation. Remote session
+open carries and independently validates the exact `providerInstallationId` plus
+`expectedInstallationRevision` against fresh physical inventory, current
+fingerprint, compatibility, readiness, and Provider-specific capabilities. There
+is no PATH-first, equivalent-version, Node-default, or alternate-installation
+fallback.
 
 ### POSIX supervision
 
@@ -55,7 +75,8 @@ private per-probe guardian using the same reserved-leader mechanism, since their
 separate groups cannot be contained by the outer Host group. Exact executable
 and bounded argv cross an inherited pipe; the adapter's sanitized environment
 is unchanged. EOF, timeout and explicit cancellation clean only that probe.
-The native installed Mac regression remains mandatory.
+For the supported Apple Silicon macOS scope, the accepted physical closure is the
+authority for installed behavior; no separate unrecorded guardian claim is made.
 
 ### macOS desktop lifecycle
 
@@ -71,8 +92,9 @@ active. Request acceptance, rather than attempted delivery, commits the one-time
 background-runtime education marker. Notification activation restores the same
 ready, not-quitting window and consumes a bounded process-memory mapping to
 return the existing safe public Attention intent for exact routing. It never
-mutates Attention, approves work or retries a Prompt. Delivery and activation
-still require REAL validation.
+mutates Attention, approves work or retries a Prompt. Public distribution polish,
+including notarization, remains a follow-up rather than a Phase 8D architecture
+closure blocker.
 
 Finder discovery reuses Phase 8B configured/prior/PATH/known candidate ordering.
 The bounded known list adds `/opt/homebrew/bin` and `/usr/local/bin` for macOS;
@@ -106,11 +128,16 @@ pnpm release:manifest generate output/release/COMMIT DESCRIPTORS.json
 pnpm release:manifest verify output/release/COMMIT release-manifest.json
 ```
 
+The presence of a release entry point does not establish a support claim. Linux
+x64 Node/Desktop, Windows Node/ARM64, and Intel macOS remain out of current scope.
+
 macOS builds require a Mac, Xcode/CLI tools and a native arm64 Node runtime.
 The minimum is macOS **13.5**, matching the embedded [Node 25.8.2 runtime](https://github.com/nodejs/node/blob/v25.8.2/BUILDING.md).
-Linux x64/arm64 require glibc 2.28+, kernel 4.18+, libstdc++ and libatomic;
-the release test target is Ubuntu 24.04 or Debian 12, not all Linux distributions.
-No Linux desktop WebKit/GTK dependency is silently omitted.
+The supported Linux target is Raspberry Pi 5 on Debian 12/aarch64 for the
+historically validated Node/Relay/typed-operation boundary. Existing Linux x64
+and Desktop build plumbing is implementation-only and out of current scope; it
+does not establish universal Linux support. No Linux desktop WebKit/GTK dependency
+is silently omitted.
 
 No repository CI existed at the baseline. Native, deterministic commands are
 provided for an approved future runner; no fictitious hosted Mac job is claimed.
@@ -134,15 +161,16 @@ BUILD ONLY. The manifest is metadata, not executable update authority.
 The content scanner checks unpacked release inputs against synthetic UTF-8 and
 UTF-16 sentinels, private-key payloads and forbidden filenames. Native app/archive
 contents must also be inspected after packaging/signing. Scanning compressed
-bytes alone is never a content audit. Final REAL artifact privacy and installed
-receipts are still required; this implementation does not scan Owner secrets.
+bytes alone is never a content audit. Accepted REAL receipts remain the authority
+for supported targets; build tooling does not scan Owner secrets.
 
 ## Installation and user services
 
 Windows retains current-user NSIS, Start Menu/shortcuts and isolated installer
 smoke. Desktop uninstall retains product data. macOS Desktop is installed by
 dragging the packaged app to Applications; ordinary use does not require source
-commands. Finder/upgrade/reinstall behavior must be observed on the final DMG.
+commands. Accepted support remains bound to the recorded physical receipts;
+public notarized distribution is a separate follow-up.
 
 For a verified Node archive, extract into a user-owned directory, then run:
 
@@ -183,8 +211,9 @@ initial pairing session, stop the service and use the installed binary's existin
 `--pair` operation with the exact same `--data-dir`, then return to the service;
 no persistent pairing code or rendezvous capability is written to a unit/plist.
 Administrator-assisted Relay provisioning remains separate. See
-`PHASE8D-RELAY-ASSISTED-FIRST-PAIRING.md`. Fresh remote pairing/service handoff
-and production coordinated rollout remain mandatory REAL validation items.
+`PHASE8D-RELAY-ASSISTED-FIRST-PAIRING.md`. Relay-assisted first pairing and the
+Windows → macOS service handoff have accepted REAL evidence for the supported
+scope.
 
 If every usable Controller credential is lost while the Node still retains its
 pinned Controller, the installed Node exposes only the local management commands
@@ -226,9 +255,9 @@ Keychain migration, cloud credential copy or destructive state migration exists.
 
 Linux service diagnostics use the user journal. macOS service logs are under
 the Node application's `logs/service.log`, with private parent directory/umask.
-Long-running macOS log retention/rotation still requires the platform lifecycle
-validation pass. Desktop uses its existing safe technical log/diagnostic channel;
-there is no newly invented persistent Desktop log path.
+Long-running log-retention policy and public distribution operations remain
+follow-up concerns. Desktop uses its existing safe technical log/diagnostic
+channel; there is no newly invented persistent Desktop log path.
 
 Service configuration sets only a bounded executable search path. Provider
 native credential/config files remain endpoint-local. Shell-only credentials are
@@ -272,6 +301,13 @@ evidence and report partial history if they cannot be split reliably. Native
 resume continues by private Provider session identity and never by transcript
 replay.
 
+The authority sequence is explicitly `discover != adopt != resume`. Discovery is
+read-only and starts no Provider work. Adoption creates one Conversation binding
+without converting native history into durable Turns. Native entries remain
+Provider-owned, read-only projections with no `actionId`, execution ownership, or
+retry semantics. Only a later explicit Turn uses Provider-native continuation;
+historical transcript text is never injected to reconstruct context.
+
 ## Signing and updates
 
 Tauri's [Windows signing configuration](https://v2.tauri.app/distribute/sign/windows/)
@@ -282,62 +318,79 @@ print them. No production credentials were requested or observed in this pass.
 Signed, unsigned, ad-hoc, notarized and not-observed remain separate manifest
 states. macOS SEA signing and required JIT entitlements must be checked on the
 native artifact; ad-hoc development signing is not public signing/notarization.
-Signing is not SmartScreen reputation. No silent update is implemented.
+Public macOS notarization is `DISTRIBUTION_FOLLOW_UP`, not an architecture closure
+blocker. Signing is not SmartScreen reputation. No silent update is implemented.
 
-## Later REAL validation checklist
+## Accepted REAL closure evidence
 
-### Approved Apple Silicon Mac
+### Windows x64 Desktop / Host
 
-Access needed: arm64 hardware, supported macOS 13.5+ with a logged-in GUI session,
-Xcode/CLI tools, repository build access or approved artifact transfer, permission
-to install an isolated test app and user LaunchAgent, compatible endpoint-local
-Codex/Claude availability, and explicit permission for sleep/wake testing. No
-passwords/private keys should be placed in chat or receipts.
+`WINDOWS_CODEX_NATIVE_HISTORY_ADOPT_RESUME_REAL_PASS`
 
-1. Build clean HEAD: locked install, repository gates, Rust fmt/check/clippy/test,
-   native arm64 Host/Node SEA, `.app` and DMG. Hash before testing; inspect resources
-   and signing state. Record `macos-desktop-artifact.json` / `macos-node-artifact.json`.
-2. Finder launch without Terminal PATH; keyboard onboarding, native picker with
-   spaces/Unicode/symlink/case variants, exact two Provider installations, Doctor.
-   Record `macos-first-launch-real.json` and actual platform/path observations.
-3. Isolated explicit local Codex and Claude Turns: streaming, one completion,
-   exact executable/revision/location/backend. No fallback. Record provider receipts.
-4. External native sessions created before discovery: store pre/post hash/count,
-   discover/adopt/rescan with zero inference, explicit native resume continuity,
-   no transcript replay/replacement. Record `macos-session-adoption-real.json`.
-5. Close/reopen/menu/Dock/Single Instance/Quit/restart; reinstall and upgrade
-   preserve Projects/history/native bindings/onboarding/selection/trust. Observe
-   sleep/wake/network change; uncertain active Turns never replay. Record lifecycle receipts.
-6. Install the final Node archive as the test user; verify LaunchAgent, actual
-   service environment, identity/permissions, pairing and Relay-only execution.
-   Restart/logout-login; identity and native resume persist. Test Windows Controller
-   to macOS Node. Record install/service/Relay/controller receipts.
-7. From packaged macOS Desktop control physical Linux over Direct and REAL Internet
-   Relay-only. Record exact provenance, zero Direct fallback, no active migration.
-8. Remove test LaunchAgent/binary/test-owned projects/sessions, retain or explicitly
-   dispose only authorized test state, audit processes/ports/privacy/Relay grants.
+Accepted evidence covers the clean functional build, normal Desktop/Host startup,
+local Codex execution, native-session discovery, read-only historical projection,
+adoption, Provider-native resume, cold reopen, and immutable exact
+ProviderInstallation binding. Historical entries converted into durable Turns,
+historical transcript replay, retries, and duplicate execution are all zero. The
+one post-adoption user action created exactly one durable Turn. Full Windows OS
+reboot recovery REAL remains `DEFERRED_NON_BLOCKING` and is not claimed.
 
-### Approved physical Linux machine
+### Windows → Apple Silicon macOS
 
-Access needed: Ubuntu 24.04 or Debian 12 preferred, actual distro/kernel/architecture
-recorded, x64 mandatory (arm64 optional), a non-root user with a working systemd
-user manager, installed compatible Providers, outbound TLS access to the accepted
-Relay and a permitted private Direct path. Obtain permission for real restart or
-reboot/login testing. Do not supply passwords or private keys as evidence.
+`WINDOWS_MAC_REAL_PHYSICAL_CLOSURE_PASS`
 
-1. Transfer the final hash-bound matching archive; verify checksum and `--version`.
-2. Install as intended user; verify service UID, 0700/0600 state, exact Providers,
-   endpoint-local auth/custom gateway, pairing and narrow ProjectLocation setup.
-3. Execute both Providers remotely across representative Windows/macOS Controllers;
-   Direct and REAL INTERNET Relay-only, exact installation/location/actionId,
-   one execution/completion, no replay/fallback. Record `linux-node-*-real.json`.
-4. Native session read-only discover/adopt/resume; restart service, real session
-   return/reboot where approved, upgrade and uninstall/reinstall with identity
-   preserved. Record state hashes/continuity without raw native session IDs.
-5. One safe active transport interruption fails closed; later explicit Turn works.
-6. Record timings/resources/privacy, remove test unit/processes/registrations and
-   temporary Relay peers/grants/tokens, verify Owner and production Relay preserved.
+Accepted evidence covers matching validation builds, Relay-assisted first pairing,
+durable Machine identity, Controller trust, `machine_tls_v1`, Relay-only typed
+transport with zero Direct fallback, Host-authoritative ProviderInstallation
+selection, exact Conversation installation binding and revision validation, the
+exact physical Claude runner, Prompt equality through the Adapter, physical stdin
+delivery, parsed Provider protocol execution, native resume, the exact two-Turn
+boundary, zero replay/duplicates, and the final relay-only
+`machine.providers.refresh` preserving Owner selection.
 
-All REAL receipts bind final commit and exact artifact SHA-256. Keep failed and
-superseded runs. Final hardware pass re-evaluates all original 120 criteria; this
-implementation document neither waives them nor claims acceptance.
+`PROVIDER_RETURNED_NONCOMPLIANT_RESPONSE` records one fresh Claude sentinel-text
+mismatch as informational Provider semantics only. Complete delivery and valid
+Provider execution were proven; it is not a transport, Prompt-delivery, Provider
+service, or Phase 8D infrastructure failure.
+
+### Raspberry Pi 5 / Linux ARM64 Node
+
+`RASPBERRY_PI_HISTORICAL_REAL = PASS`
+
+Historical physical Debian 12/aarch64 evidence covers Node build/install, durable
+Machine/Node identity, Controller trust, Relay connectivity, production Relay
+typed operations, one Windows relay-only `machine.providers.refresh`, one execution,
+one result, and no replay. The device is currently unavailable, so physical
+revalidation of integration `0248d0a0fda70fe62f0ab9f75088967c62ba63fe` is
+`DEFERRED_NON_BLOCKING`; current-head physical final REAL is not claimed.
+
+Codex and Claude installations on the Pi were not proven compatible for coding-
+agent execution. `PROVIDER_EXECUTION_ON_PI =
+CAPABILITY_DEPENDENT_NOT_CURRENTLY_CLAIMED`. Pi support is limited to Machine
+identity, Node runtime, pairing/trust, Relay connectivity, Machine TLS, typed Node
+operations, remote management/presence, and already evidenced reconnect behavior.
+
+## Product claim boundary
+
+Phase 8D may claim Windows Host control of an Apple Silicon macOS Node,
+Relay-assisted first pairing, durable Machine identity, exact ProviderInstallation
+selection and binding, provider-neutral Codex and Claude architecture,
+Provider-native session resume, Codex historical native-session adoption,
+read-only historical transcript projection, Relay-only typed Machine operations,
+and Provider lifecycle/readiness projection.
+
+It does not claim universal Linux support, Linux x64 validation, Pi Codex/Claude
+execution, Windows reboot recovery REAL, public notarized macOS distribution, or
+cross-agent Conversation handoff.
+
+## Validation artifacts are not product lineage
+
+Evidence-only commits `4ba9df456e5829ef91bdcd026e9e5cbaa643263b`,
+`18d8c98ccbcc7d2b67bb261f92843ac3c0e68df9`, and
+`6b92a1f7a9082809786023d00d5b1f63059af427` remain excluded from product
+integration. Temporary combined REAL heads, including `2825a2d41ebb`,
+`f2e4ca31a2ee`, and `280e2baaa08b`, are historical validation artifacts only.
+Their evidence instrumentation is not product functionality.
+
+Phase 8D remains ready for the Owner's freeze decision and is not frozen by this
+document.

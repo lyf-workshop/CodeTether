@@ -3,11 +3,12 @@
 ## Status and scope
 
 Owner-defined closure scope for the continuation of Owner-frozen Phase 8C,
-baseline `67c71f2e3ad390004cc60fe30925224a02aba485`. The accepted functional
-integration is `0248d0a0fda70fe62f0ab9f75088967c62ba63fe`. The final scope audit
-result is `PHASE8D_SCOPE_CLOSURE_READY_FOR_OWNER_FREEZE`; the Owner has not yet
-frozen Phase 8D. No Phase 9, backend/profile manager, new Provider capability,
-updater, or Tag is authorized.
+baseline `67c71f2e3ad390004cc60fe30925224a02aba485`. Phase 8D is Owner-frozen on
+`main` at `cba5b947c1a34f039b5767b999e85ddc64ebbd3d`, tagged
+`phase8d-freeze-2026-09-20`. Phase 9A.1 authorizes specification work only; it
+does not reopen or modify this architecture. No Phase 9 runtime, backend/profile
+manager, new Provider capability, updater, or additional Phase 8D behavior is
+authorized here.
 
 | Target                             | Status                                        | Evidence boundary                                                                                        |
 | ---------------------------------- | --------------------------------------------- | -------------------------------------------------------------------------------------------------------- |

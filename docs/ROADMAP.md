@@ -1295,7 +1295,7 @@ Exit gate:
 
 ## Phase 8D — Cross-Platform Distribution
 
-**Status:** functional integration `0248d0a0fda70fe62f0ab9f75088967c62ba63fe` has completed the Owner-defined final scope audit with `PHASE8D_SCOPE_CLOSURE_READY_FOR_OWNER_FREEZE`; the Owner has not yet frozen Phase 8D. See [Phase 8D distribution](PHASE8D-CROSS-PLATFORM-DISTRIBUTION.md).
+**Status:** Owner-frozen on `main` at `cba5b947c1a34f039b5767b999e85ddc64ebbd3d`, tagged `phase8d-freeze-2026-09-20`. See [Phase 8D distribution](PHASE8D-CROSS-PLATFORM-DISTRIBUTION.md).
 
 **Goal:** distribute the established Desktop/Node and onboarding architecture across the supported platform matrix with platform-appropriate packaging, signing, credential storage, background/tray behavior, sleep/wake handling, path semantics, and update delivery.
 
@@ -1307,20 +1307,40 @@ Phase 8D also implements [Relay-assisted first pairing](PHASE8D-RELAY-ASSISTED-F
 
 Host durable ProviderInstallation selection is authoritative. Node-local selection is observation/default only; existing Conversation bindings are immutable and new Conversations bind the current exact Owner selection. Remote session-open validates the exact installation ID and expected revision against fresh physical compatibility, readiness, and capabilities without PATH-first, equivalent-version, Node-default, or alternate-installation fallback.
 
-## Phase 9 — Mobile Companion
+## Phase 9 — Account Foundation and Mobile Companion
 
-**Status:** planned; unimplemented and unauthorized during Phase 8D.
+**Status:** Phase 9A.1 account-authority specification is authorized. Control Plane implementation and Mobile implementation remain paused until separately authorized.
 
-**Goal:** add focused mobile monitoring, approval, reply, and resume flows on the established Internet foundation.
+### Phase 9A — Account and Cloud Control Plane Foundation
+
+**Goal:** add human accounts, independent ProductDevice identity, explicit Host ownership and Host Supervisor authorization, and a minimal privacy-preserving Host directory without replacing any Phase 8D product or execution authority.
+
+Phase 9A.1 freezes the authority specification and ADR in [Account and Cloud Control Plane Authority](ACCOUNT-CONTROL-PLANE.md). Managed Supabase Auth is the sole MVP human-authentication authority. CodeTether device authorization, Host authorization, Machine Controller trust, and Relay enrollment remain separate and non-transitive. `apps/control-plane` is reserved as a future service boundary; no runtime, schema, Supabase, Relay, Host, or Mobile implementation is included in 9A.1.
+
+Planned later Phase 9A implementation outcomes require separate authorization:
+
+- Control Plane account/Space directory and bounded security events.
+- ProductDevice public identity, protected private key, request proof, and revocation.
+- Additive opt-in Host identity, claim, ownership, unlink, transfer, and recovery.
+- Privacy-preserving Host discovery and account-mediated rendezvous metadata.
+- Desktop account, device, Host, and active-session management.
+- REAL multi-device validation without changing Phase 8D execution identities.
+
+### Phase 9B — Mobile Supervisor
+
+**Status:** architecture audit is informative; implementation is paused until the Phase 9A Account Foundation is accepted.
+
+**Goal:** add focused mobile monitoring first, followed only by separately authorized approval, reply, and native-resume capabilities over an authenticated Host Supervisor boundary.
 
 Planned outcomes:
 
-- Refined Monitor, Approve, Reply, and Resume flows.
-- Notification deep links and urgency-aware navigation.
+- Read-only Machine, Project, Conversation, Turn, Tool, and status supervision.
+- Resilient live observation and snapshot convergence across mobile suspension and reconnect.
+- Later, separately authorized Approve, Reply, Resume, and notification flows.
 - Touch, small-screen, connectivity, latency, and accessibility polish.
 - Explicit separation from desktop-only dense workflows.
 
-Exit gate: core mobile tasks are fast, legible, safe, resilient, and validated on representative devices.
+Exit gate: account, ProductDevice, Host, Relay, and Machine authorities remain distinct; core mobile tasks are fast, legible, safe, resilient, and validated on representative devices.
 
 ## Deferred Beyond This Roadmap
 

@@ -3,19 +3,24 @@
 ## Status
 
 Owner accepted and froze **Phase 8C** at `67c71f2e3ad390004cc60fe30925224a02aba485`
-with 129 / 129 criteria passing. **Phase 8D** functional integration
-`0248d0a0fda70fe62f0ab9f75088967c62ba63fe` has completed the Owner-defined
-final scope audit with `PHASE8D_SCOPE_CLOSURE_READY_FOR_OWNER_FREEZE`; the Owner
-has not yet frozen it. The supported matrix is Windows x64 Desktop/Host, Apple
-Silicon macOS Node/Desktop, and Raspberry Pi 5/Linux ARM64 Node with Provider
-execution capability-dependent and not currently claimed. Pi current-head
-physical revalidation and Windows full-OS-reboot REAL are deferred and
-non-blocking. Linux x64 Node, Linux Desktop, Windows Node, Windows ARM64, and
+with 129 / 129 criteria passing. **Phase 8D** is Owner-frozen on `main` at
+`cba5b947c1a34f039b5767b999e85ddc64ebbd3d`, tagged
+`phase8d-freeze-2026-09-20`. The supported matrix is Windows x64 Desktop/Host,
+Apple Silicon macOS Node/Desktop, and Raspberry Pi 5/Linux ARM64 Node with
+Provider execution capability-dependent and not currently claimed. Pi
+current-head physical revalidation and Windows full-OS-reboot REAL are deferred
+and non-blocking. Linux x64 Node, Linux Desktop, Windows Node, Windows ARM64, and
 Intel macOS are out of current scope; public macOS notarization is a distribution
 follow-up. This supersedes older current-scope wording below without changing any
 frozen product authority.
 See [Phase 8D architecture, support matrix and REAL handoff](PHASE8D-CROSS-PLATFORM-DISTRIBUTION.md)
 and [Relay-assisted first pairing](PHASE8D-RELAY-ASSISTED-FIRST-PAIRING.md).
+
+**Phase 9A.1** authorizes and freezes only the Account/Cloud identity, ownership,
+trust, privacy, and session authority specification. Control Plane, Supabase,
+Relay, Host, database, and Mobile implementation remain unauthorized. See
+[Phase 9 Account and Cloud Control Plane Authority](ACCOUNT-CONTROL-PLANE.md) and
+[ADR-ACCOUNT-AUTHORITY](adr/ADR-ACCOUNT-AUTHORITY.md).
 
 Distribution adds no SQLite migration, Provider profile or Machine protocol.
 Windows Job Objects remain unchanged. A private POSIX guardian reserves the owned

@@ -4,11 +4,14 @@ import {
   HumanAuthNotConfiguredError,
   UnconfiguredHumanAuthVerifier,
   createHostId,
+  createLoginIdentityId,
   createProductDeviceId,
   createSpaceId,
   createUserId,
   hostIdSchema,
+  loginIdentityIdSchema,
   productDeviceIdSchema,
+  readControlPlaneDatabaseConfiguration,
   readControlPlaneConfiguration,
   spaceIdSchema,
   startControlPlaneServer,
@@ -17,36 +20,57 @@ import {
 
 test('account IDs are opaque, strongly namespaced, and mutually distinct', () => {
   const userId = createUserId()
+  const loginIdentityId = createLoginIdentityId()
   const spaceId = createSpaceId()
   const deviceId = createProductDeviceId()
   const hostId = createHostId()
 
   assert.equal(userIdSchema.parse(userId), userId)
+  assert.equal(loginIdentityIdSchema.parse(loginIdentityId), loginIdentityId)
   assert.equal(spaceIdSchema.parse(spaceId), spaceId)
   assert.equal(productDeviceIdSchema.parse(deviceId), deviceId)
   assert.equal(hostIdSchema.parse(hostId), hostId)
   assert.throws(() => hostIdSchema.parse('machine_0123456789abcdef'))
   assert.throws(() => userIdSchema.parse(spaceId))
-  assert.equal(new Set([userId, spaceId, deviceId, hostId]).size, 4)
+  assert.equal(
+    new Set([userId, loginIdentityId, spaceId, deviceId, hostId]).size,
+    5,
+  )
 })
 
 test('configuration requires PostgreSQL and defaults to loopback only', () => {
-  const configuration = readControlPlaneConfiguration({
+  const configuration = readControlPlaneDatabaseConfiguration({
     CODETETHER_CONTROL_PLANE_DATABASE_URL:
       'postgresql://control-plane.invalid/codetether',
   })
   assert.equal(configuration.listenHost, '127.0.0.1')
   assert.equal(configuration.listenPort, 4320)
+  assert.equal(configuration.databaseTls, 'verify-full')
   assert.throws(() =>
-    readControlPlaneConfiguration({
+    readControlPlaneDatabaseConfiguration({
       CODETETHER_CONTROL_PLANE_DATABASE_URL: 'sqlite:///unsafe.db',
     }),
   )
   assert.throws(() =>
-    readControlPlaneConfiguration({
+    readControlPlaneDatabaseConfiguration({
       CODETETHER_CONTROL_PLANE_DATABASE_URL:
         'postgresql://control-plane.invalid/codetether',
       CODETETHER_CONTROL_PLANE_LISTEN_HOST: '0.0.0.0',
+    }),
+  )
+  const authenticated = readControlPlaneConfiguration({
+    CODETETHER_CONTROL_PLANE_DATABASE_URL:
+      'postgresql://control-plane.invalid/codetether',
+    SUPABASE_URL: 'https://example.supabase.co',
+    SUPABASE_PUBLISHABLE_KEY: `sb_publishable_${'a'.repeat(32)}`,
+  })
+  assert.equal(authenticated.supabaseUrl, 'https://example.supabase.co')
+  assert.throws(() =>
+    readControlPlaneConfiguration({
+      CODETETHER_CONTROL_PLANE_DATABASE_URL:
+        'postgresql://control-plane.invalid/codetether',
+      SUPABASE_URL: 'https://example.supabase.co',
+      SUPABASE_PUBLISHABLE_KEY: `eyJ${'a'.repeat(40)}`,
     }),
   )
 })

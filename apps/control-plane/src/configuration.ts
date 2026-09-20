@@ -2,7 +2,34 @@ import { z } from 'zod'
 
 const positiveInteger = z.coerce.number().int().positive()
 
-const environmentSchema = z.object({
+const supabaseUrlSchema = z
+  .string()
+  .url()
+  .max(2_048)
+  .superRefine((value, context) => {
+    const url = new URL(value)
+    const local = url.hostname === 'localhost' || url.hostname === '127.0.0.1'
+    if (url.protocol !== 'https:' && !local) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Supabase URL must use HTTPS outside local development',
+      })
+    }
+    if (
+      url.pathname !== '/' ||
+      url.username !== '' ||
+      url.password !== '' ||
+      url.search ||
+      url.hash
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Supabase URL must contain only the project origin',
+      })
+    }
+  })
+
+const databaseEnvironmentSchema = z.object({
   CODETETHER_CONTROL_PLANE_DATABASE_URL: z
     .string()
     .min(1)
@@ -33,9 +60,21 @@ const environmentSchema = z.object({
   CODETETHER_CONTROL_PLANE_DATABASE_STATEMENT_TIMEOUT_MS: positiveInteger
     .max(120_000)
     .default(15_000),
+  CODETETHER_CONTROL_PLANE_DATABASE_TLS: z
+    .enum(['verify-full', 'disable'])
+    .default('verify-full'),
 })
 
-export interface ControlPlaneConfiguration {
+const environmentSchema = databaseEnvironmentSchema.extend({
+  SUPABASE_URL: supabaseUrlSchema,
+  SUPABASE_PUBLISHABLE_KEY: z
+    .string()
+    .min(32)
+    .max(512)
+    .startsWith('sb_publishable_'),
+})
+
+export interface ControlPlaneDatabaseConfiguration {
   readonly databaseUrl: string
   readonly environment: 'development' | 'test' | 'production'
   readonly listenHost: '127.0.0.1' | '::1' | 'localhost'
@@ -44,12 +83,17 @@ export interface ControlPlaneConfiguration {
   readonly databaseConnectTimeoutMilliseconds: number
   readonly databaseIdleTimeoutMilliseconds: number
   readonly databaseStatementTimeoutMilliseconds: number
+  readonly databaseTls: 'verify-full' | 'disable'
 }
 
-export function readControlPlaneConfiguration(
-  environment: NodeJS.ProcessEnv,
-): ControlPlaneConfiguration {
-  const value = environmentSchema.parse(environment)
+export interface ControlPlaneConfiguration extends ControlPlaneDatabaseConfiguration {
+  readonly supabaseUrl: string
+  readonly supabasePublishableKey: string
+}
+
+function databaseConfiguration(
+  value: z.infer<typeof databaseEnvironmentSchema>,
+): ControlPlaneDatabaseConfiguration {
   return {
     databaseUrl: value.CODETETHER_CONTROL_PLANE_DATABASE_URL,
     environment: value.CODETETHER_CONTROL_PLANE_ENVIRONMENT,
@@ -62,5 +106,23 @@ export function readControlPlaneConfiguration(
       value.CODETETHER_CONTROL_PLANE_DATABASE_IDLE_TIMEOUT_MS,
     databaseStatementTimeoutMilliseconds:
       value.CODETETHER_CONTROL_PLANE_DATABASE_STATEMENT_TIMEOUT_MS,
+    databaseTls: value.CODETETHER_CONTROL_PLANE_DATABASE_TLS,
+  }
+}
+
+export function readControlPlaneDatabaseConfiguration(
+  environment: NodeJS.ProcessEnv,
+): ControlPlaneDatabaseConfiguration {
+  return databaseConfiguration(databaseEnvironmentSchema.parse(environment))
+}
+
+export function readControlPlaneConfiguration(
+  environment: NodeJS.ProcessEnv,
+): ControlPlaneConfiguration {
+  const value = environmentSchema.parse(environment)
+  return {
+    ...databaseConfiguration(value),
+    supabaseUrl: value.SUPABASE_URL,
+    supabasePublishableKey: value.SUPABASE_PUBLISHABLE_KEY,
   }
 }

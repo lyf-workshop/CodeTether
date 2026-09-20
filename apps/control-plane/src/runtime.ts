@@ -1,7 +1,9 @@
 import { readControlPlaneConfiguration } from './configuration.js'
+import { SupabaseHumanAuthVerifier } from './auth/supabase-human-auth-verifier.js'
 import { runMigrations } from './persistence/migrations.js'
 import { PostgresDatabase } from './persistence/postgres-database.js'
 import { startControlPlaneServer } from './server.js'
+import { AuthenticatedAccountService } from './services/authenticated-account-service.js'
 
 export async function runControlPlane(
   environment: NodeJS.ProcessEnv = process.env,
@@ -15,13 +17,20 @@ export async function runControlPlane(
     idleTimeoutMilliseconds: configuration.databaseIdleTimeoutMilliseconds,
     statementTimeoutMilliseconds:
       configuration.databaseStatementTimeoutMilliseconds,
+    tls: configuration.databaseTls,
   })
 
   let server: Awaited<ReturnType<typeof startControlPlaneServer>> | undefined
   try {
     await runMigrations(database)
+    const humanAuthVerifier = new SupabaseHumanAuthVerifier({
+      supabaseUrl: configuration.supabaseUrl,
+      publishableKey: configuration.supabasePublishableKey,
+    })
     server = await startControlPlaneServer({
       database,
+      humanAuthVerifier,
+      authenticatedAccountService: new AuthenticatedAccountService(database),
       host: configuration.listenHost,
       port: configuration.listenPort,
     })

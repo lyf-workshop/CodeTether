@@ -15,9 +15,13 @@
     "lint": "eslint .",
     "test": "pnpm build && node --test --test-isolation=none test/*.test.mjs",
     "start": "node dist/main.js",
-    "migrate": "node dist/migrate-cli.js"
+    "migrate": "node dist/migrate-cli.js",
+    "auth:email-otp": "node dist/auth/email-otp-dev-cli.js",
+    "smoke:supabase-postgres": "node dist/native-postgres-smoke-cli.js"
   },
   "dependencies": {
+    "@supabase/supabase-js": "2.116.0",
+    "jose": "6.2.12",
     "pg": "8.23.0",
     "zod": "4.4.3"
   },

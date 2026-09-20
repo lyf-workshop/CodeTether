@@ -14,6 +14,9 @@ function opaqueIdSchema<const Prefix extends string>(prefix: Prefix) {
 export const userIdSchema = opaqueIdSchema('usr')
 export type UserId = z.infer<typeof userIdSchema>
 
+export const loginIdentityIdSchema = opaqueIdSchema('login')
+export type LoginIdentityId = z.infer<typeof loginIdentityIdSchema>
+
 export const spaceIdSchema = opaqueIdSchema('space')
 export type SpaceId = z.infer<typeof spaceIdSchema>
 
@@ -51,6 +54,8 @@ function createOpaqueId<Schema extends z.ZodType<string>>(
 }
 
 export const createUserId = (): UserId => createOpaqueId(userIdSchema, 'usr')
+export const createLoginIdentityId = (): LoginIdentityId =>
+  createOpaqueId(loginIdentityIdSchema, 'login')
 export const createSpaceId = (): SpaceId =>
   createOpaqueId(spaceIdSchema, 'space')
 export const createProductDeviceId = (): ProductDeviceId =>

@@ -18,13 +18,25 @@ test(
       /(?:_test|_ci)$/,
       'Native PostgreSQL test database name must end in _test or _ci',
     )
-    const database = new PostgresDatabase({ connectionString })
+    const database = new PostgresDatabase({
+      connectionString,
+      tls:
+        process.env.CODETETHER_CONTROL_PLANE_TEST_DATABASE_TLS === 'verify-full'
+          ? 'verify-full'
+          : 'disable',
+    })
     try {
       await database.exec('DROP SCHEMA IF EXISTS control_plane CASCADE')
       const first = await runMigrations(database)
       const second = await runMigrations(database)
-      assert.deepEqual(first.applied, ['0001_account_foundation.sql'])
-      assert.deepEqual(second.alreadyApplied, ['0001_account_foundation.sql'])
+      assert.deepEqual(first.applied, [
+        '0001_account_foundation.sql',
+        '0002_human_auth_identity.sql',
+      ])
+      assert.deepEqual(second.alreadyApplied, [
+        '0001_account_foundation.sql',
+        '0002_human_auth_identity.sql',
+      ])
     } finally {
       await database.close()
     }

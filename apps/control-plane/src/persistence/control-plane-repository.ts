@@ -9,8 +9,28 @@ import type {
   CreateRendezvousBinding,
   CreateUserWithPersonalSpace,
 } from '../domain/models.js'
-import type { EnrollmentChallengeId, ProductDeviceId } from '../domain/ids.js'
+import type {
+  EnrollmentChallengeId,
+  LoginIdentityId,
+  ProductDeviceId,
+  SpaceId,
+  UserId,
+} from '../domain/ids.js'
 import type { SqlExecutor } from './database.js'
+
+interface AuthenticatedAccountRow extends Record<string, unknown> {
+  readonly login_identity_id: string
+  readonly user_id: string
+  readonly status: string
+  readonly personal_space_id: string
+}
+
+export interface AuthenticatedAccountRecord {
+  readonly loginIdentityId: LoginIdentityId
+  readonly userId: UserId
+  readonly status: 'active' | 'suspended' | 'deletion_pending'
+  readonly personalSpaceId: SpaceId
+}
 
 export class ControlPlaneRepository {
   public constructor(private readonly executor: SqlExecutor) {}
@@ -35,6 +55,72 @@ export class ControlPlaneRepository {
          (space_id, user_id, role, created_at)
        VALUES ($1, $2, 'owner', $3)`,
       [input.spaceId, input.userId, input.now],
+    )
+  }
+
+  public async findAuthenticatedAccountByLoginIdentity(
+    issuer: string,
+    subject: string,
+  ): Promise<AuthenticatedAccountRecord | null> {
+    const result = await this.executor.query<AuthenticatedAccountRow>(
+      `SELECT li.login_identity_id, li.user_id, u.status,
+              s.space_id AS personal_space_id
+         FROM control_plane.login_identities li
+         JOIN control_plane.users u ON u.user_id = li.user_id
+         JOIN control_plane.spaces s
+           ON s.personal_owner_user_id = u.user_id AND s.kind = 'personal'
+         JOIN control_plane.space_memberships m
+           ON m.space_id = s.space_id
+          AND m.user_id = u.user_id
+          AND m.role = 'owner'
+        WHERE li.issuer = $1 AND li.subject = $2`,
+      [issuer, subject],
+    )
+    const row = result.rows[0]
+    if (!row) return null
+    return {
+      loginIdentityId: row.login_identity_id as LoginIdentityId,
+      userId: row.user_id as UserId,
+      status: row.status as AuthenticatedAccountRecord['status'],
+      personalSpaceId: row.personal_space_id as SpaceId,
+    }
+  }
+
+  public async createLoginIdentity(input: {
+    readonly loginIdentityId: LoginIdentityId
+    readonly userId: UserId
+    readonly issuer: string
+    readonly subject: string
+    readonly verifiedNormalizedEmail: string | null
+    readonly now: Date
+  }): Promise<void> {
+    await this.executor.query(
+      `INSERT INTO control_plane.login_identities (
+         login_identity_id, issuer, subject, user_id,
+         verified_normalized_email, created_at, last_used_at
+       ) VALUES ($1, $2, $3, $4, $5, $6, $6)`,
+      [
+        input.loginIdentityId,
+        input.issuer,
+        input.subject,
+        input.userId,
+        input.verifiedNormalizedEmail,
+        input.now,
+      ],
+    )
+  }
+
+  public async touchLoginIdentity(
+    loginIdentityId: LoginIdentityId,
+    verifiedNormalizedEmail: string | null,
+    now: Date,
+  ): Promise<void> {
+    await this.executor.query(
+      `UPDATE control_plane.login_identities
+          SET verified_normalized_email = COALESCE($2, verified_normalized_email),
+              last_used_at = $3
+        WHERE login_identity_id = $1`,
+      [loginIdentityId, verifiedNormalizedEmail, now],
     )
   }
 

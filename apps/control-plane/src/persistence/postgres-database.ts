@@ -14,6 +14,7 @@ export interface PostgresDatabaseOptions {
   readonly idleTimeoutMilliseconds?: number
   readonly statementTimeoutMilliseconds?: number
   readonly applicationName?: string
+  readonly tls?: 'verify-full' | 'disable'
 }
 
 function toSqlResult<Row extends Record<string, unknown>>(
@@ -51,6 +52,12 @@ export class PostgresDatabase implements ControlPlaneDatabase {
       idleTimeoutMillis: options.idleTimeoutMilliseconds ?? 30_000,
       statement_timeout: options.statementTimeoutMilliseconds ?? 15_000,
       application_name: options.applicationName ?? 'codetether-control-plane',
+      ssl:
+        options.tls === 'disable'
+          ? false
+          : {
+              rejectUnauthorized: true,
+            },
     })
   }
 

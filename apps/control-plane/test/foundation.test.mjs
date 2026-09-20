@@ -41,12 +41,16 @@ after(async () => {
 test('fresh PostgreSQL bootstrap is deterministic and repeatable', async () => {
   assert.deepEqual(initialMigrationResult.applied, [
     '0001_account_foundation.sql',
+    '0002_human_auth_identity.sql',
   ])
   assert.deepEqual(initialMigrationResult.alreadyApplied, [])
 
   const repeated = await runMigrations(database)
   assert.deepEqual(repeated.applied, [])
-  assert.deepEqual(repeated.alreadyApplied, ['0001_account_foundation.sql'])
+  assert.deepEqual(repeated.alreadyApplied, [
+    '0001_account_foundation.sql',
+    '0002_human_auth_identity.sql',
+  ])
 })
 
 test('concurrent migration demand serializes to one application', async () => {
@@ -58,14 +62,14 @@ test('concurrent migration demand serializes to one application', async () => {
     ])
     assert.equal(
       results.reduce((count, result) => count + result.applied.length, 0),
-      1,
+      2,
     )
     assert.equal(
       results.reduce(
         (count, result) => count + result.alreadyApplied.length,
         0,
       ),
-      1,
+      2,
     )
   } finally {
     await concurrentDatabase.close()

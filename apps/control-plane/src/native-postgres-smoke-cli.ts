@@ -1,8 +1,8 @@
 import { readControlPlaneDatabaseConfiguration } from './configuration.js'
-import { runMigrations } from './persistence/migrations.js'
+import { runNativePostgresSmoke } from './native-postgres-smoke.js'
 import { PostgresDatabase } from './persistence/postgres-database.js'
 
-async function migrate(): Promise<void> {
+async function smoke(): Promise<void> {
   const configuration = readControlPlaneDatabaseConfiguration(process.env)
   const database = new PostgresDatabase({
     connectionString: configuration.databaseUrl,
@@ -15,13 +15,17 @@ async function migrate(): Promise<void> {
     tls: configuration.databaseTls,
   })
   try {
-    const result = await runMigrations(database)
+    const result = await runNativePostgresSmoke(database)
     process.stdout.write(
       `${JSON.stringify({
         component: 'control-plane',
-        event: 'migrations_complete',
-        appliedCount: result.applied.length,
-        alreadyAppliedCount: result.alreadyApplied.length,
+        event: 'native_postgres_smoke_complete',
+        tls: result.tls,
+        appliedCount: result.firstMigration.applied.length,
+        repeatNoOp: result.repeatedMigration.applied.length === 0,
+        fixtureRolledBack: result.fixtureRolledBack,
+        constraintCount: result.constraintCount,
+        triggerCount: result.triggerCount,
       })}\n`,
     )
   } finally {
@@ -29,11 +33,11 @@ async function migrate(): Promise<void> {
   }
 }
 
-migrate().catch(() => {
+smoke().catch(() => {
   process.stderr.write(
     `${JSON.stringify({
       component: 'control-plane',
-      event: 'migrations_failed',
+      event: 'native_postgres_smoke_failed',
     })}\n`,
   )
   process.exitCode = 1

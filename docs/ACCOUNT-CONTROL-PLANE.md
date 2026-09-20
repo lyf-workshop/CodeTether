@@ -658,7 +658,35 @@ metadata, device-session bindings, enrollment challenges, opaque rendezvous
 bindings, and bounded append-only security events. It contains no human-auth
 token authority and no Host product or execution truth.
 
-Supabase Auth integration, native ProductDevice key generation, Host claim
-execution, remotely exposed authenticated APIs, Relay changes, Desktop account
-UI, and Mobile remain later work. Development, migration, configuration, and
-test-database instructions live in `apps/control-plane/README.md`.
+Phase 9A.2 did not include Supabase Auth integration, native ProductDevice key
+generation, Host claim execution, remotely exposed authenticated APIs, Relay
+changes, Desktop account UI, or Mobile. Development, migration, configuration,
+and test-database instructions live in `apps/control-plane/README.md`.
+
+## Phase 9A.3 Supabase Auth integration
+
+Phase 9A.3 keeps Supabase Auth as the sole human-session authority. The Control
+Plane verifies asymmetric Supabase user JWTs against the exact project issuer
+and JWKS, validates audience and lifetime, and maps the immutable
+`issuer + subject` pair to a random CodeTether `usr_*`. Email is only a verified,
+normalized projection and never a durable identity. If a development project
+still uses legacy symmetric signing, CodeTether validates the user token through
+the exact Supabase Auth `/user` endpoint with the publishable application key;
+it does not acquire or store the shared signing secret.
+
+The first authenticated bootstrap creates the User, one personal Space, one
+owner membership, and one `login_*` identity mapping transactionally. Repeated
+authentication returns the same User and Space. The Cloud schema stores no
+access token, refresh token, OTP, password, or second human session authority.
+
+`GET /v1/account/me` is a bounded development proof of this human-auth boundary.
+It returns only the CodeTether User status and personal Space identity and
+truthfully marks ProductDevice authentication as not implemented until Phase
+9A.4. It grants no Host, Machine, Controller, Relay, Provider, Conversation, or
+Turn authority.
+
+Production database access continues to use native PostgreSQL against the
+private `control_plane` schema with TLS certificate verification, pool/connect
+and statement timeouts, checksummed migrations, and advisory locking. That
+schema must not be exposed through the Supabase Data API. Supabase-managed
+`auth`, `storage`, and `extensions` schemas remain untouched.

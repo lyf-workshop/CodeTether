@@ -642,3 +642,23 @@ This specification does not implement or authorize:
 - teams, invitations, or RBAC;
 - billing or subscription enforcement; or
 - Provider or Machine execution changes.
+
+## Phase 9A.2 persistence foundation
+
+Phase 9A.2 adds an isolated `apps/control-plane` TypeScript service and a new
+PostgreSQL `control_plane` schema. It implements only the frozen account-domain
+IDs, constrained persistence, typed repository/service boundary, deterministic
+migration runner, and local health/readiness surface. Production persistence
+uses a bounded `pg` connection pool; the service remains loopback-only and has
+no public account mutation routes in this phase.
+
+The migration contains application User mirrors, Spaces and memberships,
+ProductDevice public metadata, Host public metadata, claim and Supervisor-grant
+metadata, device-session bindings, enrollment challenges, opaque rendezvous
+bindings, and bounded append-only security events. It contains no human-auth
+token authority and no Host product or execution truth.
+
+Supabase Auth integration, native ProductDevice key generation, Host claim
+execution, remotely exposed authenticated APIs, Relay changes, Desktop account
+UI, and Mobile remain later work. Development, migration, configuration, and
+test-database instructions live in `apps/control-plane/README.md`.

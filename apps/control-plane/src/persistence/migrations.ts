@@ -1,0 +1,90 @@
+import { createHash } from 'node:crypto'
+import { readdir, readFile } from 'node:fs/promises'
+import type { ControlPlaneDatabase, SqlExecutor } from './database.js'
+
+const migrationFilePattern = /^\d{4}_[a-z0-9_]+\.sql$/
+
+interface AppliedMigrationRow extends Record<string, unknown> {
+  readonly migration_name: string
+  readonly migration_sha256: string
+}
+
+export interface MigrationResult {
+  readonly applied: readonly string[]
+  readonly alreadyApplied: readonly string[]
+}
+
+async function ensureMigrationRegistry(
+  transaction: SqlExecutor,
+): Promise<void> {
+  await transaction.query(
+    'SELECT pg_advisory_xact_lock($1, $2)',
+    [112_926_829, 117_966_932],
+  )
+  await transaction.exec(`
+    CREATE SCHEMA IF NOT EXISTS control_plane;
+    CREATE TABLE IF NOT EXISTS control_plane.schema_migrations (
+      migration_name text PRIMARY KEY,
+      migration_sha256 text NOT NULL CHECK (migration_sha256 ~ '^[a-f0-9]{64}$'),
+      applied_at timestamptz NOT NULL
+    );
+  `)
+  await transaction.exec(
+    'LOCK TABLE control_plane.schema_migrations IN EXCLUSIVE MODE',
+  )
+}
+
+export async function runMigrations(
+  database: ControlPlaneDatabase,
+  migrationsDirectory = new URL('../migrations/', import.meta.url),
+): Promise<MigrationResult> {
+  const migrationNames = (await readdir(migrationsDirectory))
+    .filter((name) => migrationFilePattern.test(name))
+    .sort((left, right) => left.localeCompare(right))
+
+  if (migrationNames.length === 0) {
+    throw new Error('No Control Plane migrations were found')
+  }
+
+  return database.transaction(async (transaction) => {
+    await ensureMigrationRegistry(transaction)
+
+    const applied: string[] = []
+    const alreadyApplied: string[] = []
+
+    for (const migrationName of migrationNames) {
+      const sql = await readFile(
+        new URL(migrationName, migrationsDirectory),
+        'utf8',
+      )
+      const migrationSha256 = createHash('sha256').update(sql).digest('hex')
+      const existing = await transaction.query<AppliedMigrationRow>(
+        `SELECT migration_name, migration_sha256
+           FROM control_plane.schema_migrations
+          WHERE migration_name = $1`,
+        [migrationName],
+      )
+
+      if (existing.rowCount === 1) {
+        if (existing.rows[0]?.migration_sha256 !== migrationSha256) {
+          throw new Error(
+            `Applied migration checksum changed: ${migrationName}`,
+          )
+        }
+        alreadyApplied.push(migrationName)
+        continue
+      }
+
+      await transaction.exec(sql)
+      await transaction.query(
+        `INSERT INTO control_plane.schema_migrations
+           (migration_name, migration_sha256, applied_at)
+         VALUES ($1, $2, $3)`,
+        [migrationName, migrationSha256, new Date()],
+      )
+      applied.push(migrationName)
+    }
+
+    return { applied, alreadyApplied }
+  })
+}

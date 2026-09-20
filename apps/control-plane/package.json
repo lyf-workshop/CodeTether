@@ -1,0 +1,28 @@
+{
+  "name": "@codetether/control-plane",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && node scripts/copy-migrations.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit --pretty false",
+    "lint": "eslint .",
+    "test": "pnpm build && node --test --test-isolation=none test/*.test.mjs",
+    "start": "node dist/main.js",
+    "migrate": "node dist/migrate-cli.js"
+  },
+  "dependencies": {
+    "pg": "8.23.0",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.5.8",
+    "@types/pg": "8.23.1"
+  }
+}

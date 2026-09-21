@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import Image from 'next/image'
 import {
   ArrowUpRight,
   Check,
@@ -72,31 +73,14 @@ export function ProductPageContent() {
           title="Projects and Conversations stay connected."
           body="Organize the codebases agents work in, keep durable Conversation history, and find the exact question or attention state that needs you."
         >
-          <div className="detail-window">
-            <div className="detail-window-head">
-              <span>CodeTether workspace</span>
-              <b>3 active sessions</b>
-            </div>
-            <div className="detail-window-body">
-              <div className="detail-window-side">
-                <span className="active">CodeTether</span>
-                <span>TF-LLM</span>
-                <span>SkillsBench</span>
-                <hr />
-                <span>Website redesign</span>
-                <span>Account control plane</span>
-              </div>
-              <div className="detail-window-main">
-                <strong>Website redesign</strong>
-                <p>Codex is working through the current diff.</p>
-                <div className="detail-lines">
-                  <i />
-                  <i />
-                  <i />
-                  <i />
-                </div>
-              </div>
-            </div>
+          <div className="detail-window detail-window-image">
+            <Image
+              src="/product/codetether-workspace.png"
+              alt="Real CodeTether desktop workspace capture"
+              fill
+              sizes="(max-width: 900px) 100vw, 48vw"
+            />
+            <span className="capture-caption">REAL DESKTOP WORKSPACE</span>
           </div>
         </FeatureSection>
         <FeatureSection

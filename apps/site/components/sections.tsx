@@ -1,9 +1,9 @@
 import Link from 'next/link'
+import Image from 'next/image'
 import {
   ArrowUpRight,
   Bell,
   Check,
-  CircleDot,
   FolderGit2,
   GitBranch,
   LockKeyhole,
@@ -49,39 +49,14 @@ export function WorkspaceStory() {
         body="CodeTether brings together the work you already do: projects, conversations, search, attention, tools, files, diffs, and the state of every running session."
       />
       <div className="workspace-story-grid">
-        <div className="workspace-story-surface workspace-activity-surface">
-          <div className="surface-kicker">CURRENT CONVERSATION</div>
-          <div className="surface-title-row">
-            <strong>Implement account control plane</strong>
-            <span className="surface-live">
-              <i /> LIVE
-            </span>
-          </div>
-          <div className="surface-meta">
-            <span>Claude Code</span>
-            <span>Mac mini</span>
-            <span>Project: CodeTether</span>
-          </div>
-          <div className="mini-timeline">
-            <div>
-              <Check size={13} />
-              <span>Read architecture and durable boundaries</span>
-              <small>done</small>
-            </div>
-            <div>
-              <Check size={13} />
-              <span>Inspect existing account seams</span>
-              <small>done</small>
-            </div>
-            <div className="timeline-active">
-              <CircleDot size={13} />
-              <span>Waiting for a supervisor decision</span>
-              <small>attention</small>
-            </div>
-          </div>
-          <div className="surface-footer">
-            <Bell size={14} /> Attention is visible wherever you are.
-          </div>
+        <div className="workspace-story-surface workspace-story-capture">
+          <Image
+            src="/product/codetether-workspace.png"
+            alt="Real CodeTether desktop workspace capture"
+            fill
+            sizes="(max-width: 900px) 100vw, 62vw"
+          />
+          <div className="capture-caption">REAL DESKTOP WORKSPACE</div>
         </div>
         <div className="workspace-story-column">
           <div className="workspace-feature-card">

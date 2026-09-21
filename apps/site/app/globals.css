@@ -270,6 +270,41 @@ button {
   grid-template-columns: 220px minmax(0, 1fr) 260px;
   grid-template-rows: 48px 1fr;
 }
+.product-window-image {
+  display: block;
+  aspect-ratio: 1440 / 900;
+  height: auto;
+  min-height: 0;
+  background: #071525;
+}
+.product-window-image > img {
+  object-fit: contain;
+}
+.product-capture-badge {
+  position: absolute;
+  right: 16px;
+  bottom: 14px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 9px;
+  border: 1px solid rgba(151, 163, 182, 0.32);
+  border-radius: 999px;
+  background: rgba(7, 21, 37, 0.78);
+  color: #d6deeb;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  backdrop-filter: blur(8px);
+}
+.product-capture-badge span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #52e18c;
+  box-shadow: 0 0 0 3px rgba(82, 225, 140, 0.14);
+}
 .window-titlebar {
   grid-column: 1 / -1;
   display: flex;
@@ -772,6 +807,33 @@ button {
   border-radius: 18px;
   background: var(--dark);
   color: #f0f2f7;
+}
+.workspace-story-capture {
+  position: relative;
+  padding: 0;
+  overflow: hidden;
+  aspect-ratio: 1440 / 900;
+  min-height: 0;
+  background: #071525;
+}
+.workspace-story-capture > img {
+  object-fit: cover;
+  object-position: center top;
+}
+.capture-caption {
+  position: absolute;
+  right: 14px;
+  bottom: 12px;
+  z-index: 2;
+  padding: 6px 8px;
+  border: 1px solid rgba(151, 163, 182, 0.3);
+  border-radius: 999px;
+  background: rgba(7, 21, 37, 0.8);
+  color: #d6deeb;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  backdrop-filter: blur(8px);
 }
 .surface-kicker {
   color: var(--cyan);
@@ -1530,6 +1592,18 @@ button {
   border-radius: 18px;
   background: var(--dark);
   box-shadow: 0 18px 45px rgba(14, 15, 19, 0.13);
+}
+.detail-window-image {
+  position: relative;
+  min-height: 0;
+  aspect-ratio: 1440 / 900;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--dark-border);
+}
+.detail-window-image > img {
+  object-fit: cover;
+  object-position: center top;
 }
 .detail-window-head {
   display: flex;
@@ -2388,5 +2462,26 @@ button {
   }
   .page-hero h1 {
     font-size: 39px;
+  }
+}
+
+@media (max-width: 760px) {
+  .hero-stage {
+    min-height: 420px;
+  }
+  .product-window.product-window-image {
+    display: block;
+    height: auto;
+    aspect-ratio: 1440 / 900;
+    grid-template-columns: none;
+    grid-template-rows: none;
+  }
+  .workspace-story-surface.workspace-story-capture {
+    min-height: 0;
+    padding: 0;
+  }
+  .capture-caption,
+  .product-capture-badge {
+    font-size: 8px;
   }
 }

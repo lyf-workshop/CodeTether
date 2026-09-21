@@ -3,6 +3,7 @@ node_modules/
 dist/
 .turbo/
 .vite/
+**/.next/
 coverage/
 output/
 .tmp/

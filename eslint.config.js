@@ -12,6 +12,8 @@ export default tseslint.config(
       '**/coverage/**',
       '**/.tmp/**',
       '**/target/**',
+      '**/.next/**',
+      '**/next-env.d.ts',
       'output/**',
     ],
   },
@@ -38,6 +40,12 @@ export default tseslint.config(
         'warn',
         { allowConstantExport: true },
       ],
+    },
+  },
+  {
+    files: ['apps/site/**/*.{ts,tsx}'],
+    rules: {
+      'react-refresh/only-export-components': 'off',
     },
   },
 )

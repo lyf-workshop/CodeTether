@@ -46,11 +46,21 @@ test('production Desktop CSP and capabilities stay loopback-only and non-wildcar
     ),
     'utf8',
   )
+  const productDeviceKeyPermission = await readFile(
+    resolve(
+      desktopDirectory,
+      'src-tauri',
+      'permissions',
+      'product-device-key-store.toml',
+    ),
+    'utf8',
+  )
 
   assert.deepEqual(capability.permissions, [
     'allow-project-directory-picker',
     'allow-provider-guidance',
     'allow-attention-notifications',
+    'allow-product-device-key-store',
     'core:event:allow-listen',
     'core:event:allow-unlisten',
     'core:window:allow-is-focused',
@@ -87,6 +97,14 @@ test('production Desktop CSP and capabilities stay loopback-only and non-wildcar
     attentionNotificationPermission,
     /filesystem|shell|process|clipboard|global.shortcut|run_command|native_action/iu,
   )
+  assert.match(
+    productDeviceKeyPermission,
+    /commands\.allow = \[\s*"product_device_key_create",\s*"product_device_key_public",\s*"product_device_key_sign",\s*"product_device_key_destroy",?\s*\]/u,
+  )
+  assert.doesNotMatch(
+    productDeviceKeyPermission,
+    /filesystem|shell|process|clipboard|global.shortcut|run_command|native_action/iu,
+  )
   assert.deepEqual(config.bundle.externalBin, ['binaries/codetether-host'])
   assert.equal(config.app.windows[0].visible, false)
   assert.equal(config.app.windows[0].center, true)
@@ -106,7 +124,7 @@ test('production Desktop CSP and capabilities stay loopback-only and non-wildcar
   assert.equal(config.app.withGlobalTauri, false)
 })
 
-test('Web UI exposes only the narrow Project picker, Provider guidance, and Attention notification commands', async () => {
+test('Web UI exposes only the bounded Desktop product commands', async () => {
   const webPackage = JSON.parse(
     await readFile(
       resolve(repositoryDirectory, 'apps', 'web', 'package.json'),
@@ -169,6 +187,10 @@ test('Web UI exposes only the narrow Project picker, Provider guidance, and Atte
   assert.match(desktopRust, /tauri_plugin_notification::init/u)
   assert.match(desktopRust, /deliver_attention_notification/u)
   assert.match(desktopRust, /take_pending_notification_intent/u)
+  assert.match(desktopRust, /product_device_key_create/u)
+  assert.match(desktopRust, /product_device_key_public/u)
+  assert.match(desktopRust, /product_device_key_sign/u)
+  assert.match(desktopRust, /product_device_key_destroy/u)
   assert.match(desktopRust, /codetether:\/\/notification-intent/u)
   assert.match(desktopRust, /UNUserNotificationCenter/u)
   assert.match(desktopRust, /UNNotificationPresentationOptions::Banner/u)
@@ -197,7 +219,7 @@ test('Web UI exposes only the narrow Project picker, Provider guidance, and Atte
   assert.match(desktopRust, /invoke_handler/u)
   assert.match(
     buildScript,
-    /"pick_project_directory",\s*"open_provider_guidance",\s*"deliver_attention_notification",\s*"take_pending_notification_intent",/u,
+    /"pick_project_directory",\s*"open_provider_guidance",\s*"deliver_attention_notification",\s*"take_pending_notification_intent",\s*"product_device_key_create",\s*"product_device_key_public",\s*"product_device_key_sign",\s*"product_device_key_destroy",/u,
   )
   assert.match(buildScript, /tauri_build::try_build/u)
   assert.doesNotMatch(buildScript, /tauri_build::build\(\)/u)

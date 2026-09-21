@@ -16,6 +16,9 @@ serde_json = "1"
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+base64 = "0.22"
+sha2 = "0.10"
+uuid = { version = "1", features = ["v4"] }
 tauri = { version = "=2.11.5", features = ["tray-icon"] }
 tauri-plugin-dialog = "=2.7.2"
 tauri-plugin-notification = "=2.3.3"
@@ -37,6 +40,7 @@ tauri-winrt-notification = "=0.7.3"
 windows = { version = "=0.61.3", features = [
   "Data_Xml_Dom",
   "Foundation",
+  "Win32_Security_Cryptography",
   "UI_Notifications",
 ] }
 windows-sys = { version = "0.61", features = [
@@ -47,3 +51,6 @@ windows-sys = { version = "0.61", features = [
   "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging",
 ] }
+
+[dev-dependencies]
+p256 = { version = "0.13", features = ["ecdsa"] }

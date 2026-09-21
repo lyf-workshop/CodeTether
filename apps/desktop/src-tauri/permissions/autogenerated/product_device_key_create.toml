@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-product-device-key-create"
+description = "Enables the product_device_key_create command without any pre-configured scope."
+commands.allow = ["product_device_key_create"]
+
+[[permission]]
+identifier = "deny-product-device-key-create"
+description = "Denies the product_device_key_create command without any pre-configured scope."
+commands.deny = ["product_device_key_create"]

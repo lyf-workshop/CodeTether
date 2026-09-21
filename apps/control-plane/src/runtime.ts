@@ -4,6 +4,7 @@ import { runMigrations } from './persistence/migrations.js'
 import { PostgresDatabase } from './persistence/postgres-database.js'
 import { startControlPlaneServer } from './server.js'
 import { AuthenticatedAccountService } from './services/authenticated-account-service.js'
+import { ProductDeviceAuthenticationService } from './services/product-device-authentication-service.js'
 
 export async function runControlPlane(
   environment: NodeJS.ProcessEnv = process.env,
@@ -27,10 +28,15 @@ export async function runControlPlane(
       supabaseUrl: configuration.supabaseUrl,
       publishableKey: configuration.supabasePublishableKey,
     })
+    const authenticatedAccountService = new AuthenticatedAccountService(
+      database,
+    )
     server = await startControlPlaneServer({
       database,
       humanAuthVerifier,
-      authenticatedAccountService: new AuthenticatedAccountService(database),
+      authenticatedAccountService,
+      productDeviceAuthenticationService:
+        new ProductDeviceAuthenticationService(database),
       host: configuration.listenHost,
       port: configuration.listenPort,
     })

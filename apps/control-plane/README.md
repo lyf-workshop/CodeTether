@@ -1,18 +1,25 @@
 # CodeTether Account Control Plane
 
 `@codetether/control-plane` is the account-directory service introduced by
-Phase 9A.2 and connected to Supabase Auth in Phase 9A.3. It is separate from
-Host, Node, and Relay and owns only the Cloud metadata frozen in
+Phase 9A.2, connected to Supabase Auth in Phase 9A.3, and extended with
+ProductDevice authentication in Phase 9A.4. It is separate from Host, Node,
+and Relay and owns only the Cloud metadata frozen in
 `docs/ACCOUNT-CONTROL-PLANE.md`.
 
 Supabase is the sole human-authentication authority. CodeTether validates a
 Supabase user access JWT and maps its exact issuer/subject to a stable `usr_*`
 and personal `space_*`; it never stores access tokens, refresh tokens, OTPs,
-passwords, or JWT signing secrets. Full ProductDevice authentication, Host
-claiming, Supervisor transport, Relay enrollment, and public account mutation
-remain unimplemented. The only authenticated product route is the bounded
-development proof `GET /v1/account/me`, which explicitly reports that device
-authentication belongs to Phase 9A.4.
+passwords, or JWT signing secrets. ProductDevice registration combines a valid
+human session with ES256 candidate-key possession. Device-bound requests then
+require the human session and a signed, token-bound ProductDevice proof backed
+by shared PostgreSQL replay protection. Host claiming, Supervisor transport,
+Relay enrollment, and public account mutation remain unimplemented.
+
+`GET /v1/account/me` remains human-authenticated and does not assert a device.
+`GET /v1/device/me` requires both authorities. Bootstrap uses
+`POST /v1/devices/registration-challenge` and `POST /v1/devices/register`.
+`POST /v1/devices/:deviceId/revoke` requires a device-bound request from a
+ProductDevice owned by the same User.
 
 ## Layout
 
@@ -27,6 +34,50 @@ authentication belongs to Phase 9A.4.
   native PostgreSQL migration gate.
 
 No migration in this application touches the Host SQLite database.
+
+## ProductDevice proof contract
+
+Phase 9A.4 admits only ES256 over P-256. Public keys use a strict public EC JWK
+with exactly `kty`, `crv`, `x`, and `y`; the server computes its RFC 7638
+SHA-256 thumbprint. Private key fields and arbitrary algorithms are rejected.
+
+Registration challenges are short-lived, purpose-bound, one-use records in the
+existing enrollment-challenge authority. A candidate signs the exact challenge
+before its random `dev_*` identity is committed.
+
+The `x-codetether-device-proof` compact JWS signs a versioned, constrained RFC
+8785 JSON payload binding the exact human access-token hash, ProductDevice and
+key generation, uppercase method, canonical path and query, SHA-256 of the
+exact admitted request bytes, a random nonce of at least 128 bits, issuance
+time, protocol version, and audience. The server allows 120 seconds of clock
+skew. PostgreSQL atomically reserves the digest of each nonce for the exact
+device and generation for the proof's complete admissible lifetime. The token
+hash remains stored as bounded binding metadata, not as part of nonce
+uniqueness. A replay-store failure rejects the request. Registration challenge
+issuance is transaction-serialized per User and fingerprint, allows only one
+active challenge per fingerprint, and caps each User at five active challenges.
+Every request must carry the device's exact current positive key generation;
+old generations fail after a future rotation advances that record, while old
+replay rows remain valid replay evidence until their bounded expiry.
+
+The Control Plane stores the public JWK, public thumbprint, safe device
+metadata, revocation state, and nonce/token digests. It never stores the raw
+access token, proof, signature, nonce, or private key.
+
+## Windows ProductDevice key
+
+The Windows Desktop key store uses the Microsoft CNG Key Storage Provider to
+create a persisted ECDSA P-256 key with an explicit non-exportable policy.
+Normal application code receives only an opaque key handle, public JWK, and raw
+ES256 signature. It cannot export private-key bytes. The abstraction has
+create, public-key, sign, and explicit-destroy operations and leaves future
+macOS, iOS, and Android protected-key implementations outside this phase.
+
+ProductDevice authentication grants no Host, Machine, Node, Controller, Relay,
+Provider, Conversation, Turn, or Supervisor authority. Local CodeTether remains
+independent of Control Plane availability. Revocation blocks subsequent
+device-bound authentication without deleting the User, personal Space, Host,
+Machine trust, or local product data.
 
 ## Local PostgreSQL
 

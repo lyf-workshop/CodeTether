@@ -1232,7 +1232,11 @@ pub fn run_desktop() {
             crate::project_directory_picker::pick_project_directory,
             crate::provider_guidance::open_provider_guidance,
             crate::attention_notifications::deliver_attention_notification,
-            crate::attention_notifications::take_pending_notification_intent
+            crate::attention_notifications::take_pending_notification_intent,
+            crate::product_device_key_store::product_device_key_create,
+            crate::product_device_key_store::product_device_key_public,
+            crate::product_device_key_store::product_device_key_sign,
+            crate::product_device_key_store::product_device_key_destroy
         ])
         .setup(|app| {
             let host = match HostSupervisor::start(app.handle()) {

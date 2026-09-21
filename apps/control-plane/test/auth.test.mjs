@@ -288,7 +288,10 @@ test('authenticated account route returns only bounded application identity', as
     assert.match(body.userId, /^usr_/)
     assert.match(body.personalSpaceId, /^space_/)
     assert.equal(body.status, 'active')
-    assert.equal(body.deviceAuthentication, 'not_implemented_phase9a4')
+    assert.equal(
+      body.deviceAuthentication,
+      'not_asserted_on_human_account_route',
+    )
     assert.equal('accessToken' in body, false)
     assert.equal('refreshToken' in body, false)
   } finally {

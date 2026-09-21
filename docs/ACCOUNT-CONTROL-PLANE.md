@@ -679,14 +679,53 @@ owner membership, and one `login_*` identity mapping transactionally. Repeated
 authentication returns the same User and Space. The Cloud schema stores no
 access token, refresh token, OTP, password, or second human session authority.
 
-`GET /v1/account/me` is a bounded development proof of this human-auth boundary.
-It returns only the CodeTether User status and personal Space identity and
-truthfully marks ProductDevice authentication as not implemented until Phase
-9A.4. It grants no Host, Machine, Controller, Relay, Provider, Conversation, or
-Turn authority.
+`GET /v1/account/me` is a bounded proof of this human-auth boundary. It returns
+only the CodeTether User status and personal Space identity and explicitly does
+not assert ProductDevice authentication. It grants no Host, Machine,
+Controller, Relay, Provider, Conversation, or Turn authority.
 
 Production database access continues to use native PostgreSQL against the
 private `control_plane` schema with TLS certificate verification, pool/connect
 and statement timeouts, checksummed migrations, and advisory locking. That
 schema must not be exposed through the Supabase Data API. Supabase-managed
 `auth`, `storage`, and `extensions` schemas remain untouched.
+
+## Phase 9A.4 ProductDevice authentication
+
+Phase 9A.4 admits only ES256 with P-256 public EC JWKs. The Control Plane
+recomputes the RFC 7638 SHA-256 thumbprint and stores only the canonical public
+JWK. Windows Desktop creates a persisted, non-exportable ECDSA P-256 key through
+the Microsoft CNG Key Storage Provider and exposes only an opaque handle,
+public JWK, and signing operation.
+
+Device registration is the explicit bootstrap exception to ordinary
+device-bound authentication. A valid Supabase human session may request a
+five-minute `device_registration` challenge, but creation of the random
+`dev_*` record also requires an ES256 signature from the candidate key. The
+existing enrollment challenge owns expiry and one-use transactional
+consumption.
+
+Every device-bound request presents the current Supabase access token and a
+compact JWS whose constrained RFC 8785 payload binds the token SHA-256, device
+and key generation, method, canonical resource, exact request-body SHA-256,
+random nonce, issuance time, protocol version, and Control Plane audience.
+PostgreSQL atomically reserves the nonce digest for the exact device and key
+generation for the proof's complete admissible lifetime. The token hash is
+retained only as bounded binding metadata and cannot partition nonce
+uniqueness. Replay persistence is shared across service instances and fails
+closed when unavailable; bounded expiry cleanup is not part of correctness.
+Challenge issuance is transaction-serialized per User and candidate
+fingerprint, permits one active challenge per fingerprint, and caps each User
+at five active registration challenges.
+
+Authentication requires the exact current positive `keyGeneration`. Advancing
+that generation makes old proofs stale without deleting still-live replay
+evidence; the user-facing key-rotation workflow remains future work. Revoking a
+ProductDevice rejects all later device-bound requests and cannot delete its
+User, personal Space, Host, Machine trust, Projects, or Conversations.
+
+`GET /v1/device/me` proves the dual human/device context. The two registration
+bootstrap routes and exact owned-device revocation route are the only additional
+Phase 9A.4 surfaces. Registration or authentication does not claim a Host,
+authorize Supervisor access, trust a Machine, modify Relay enrollment, or grant
+Provider execution.

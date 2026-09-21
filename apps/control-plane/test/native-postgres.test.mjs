@@ -32,10 +32,12 @@ test(
       assert.deepEqual(first.applied, [
         '0001_account_foundation.sql',
         '0002_human_auth_identity.sql',
+        '0003_product_device_authentication.sql',
       ])
       assert.deepEqual(second.alreadyApplied, [
         '0001_account_foundation.sql',
         '0002_human_auth_identity.sql',
+        '0003_product_device_authentication.sql',
       ])
     } finally {
       await database.close()

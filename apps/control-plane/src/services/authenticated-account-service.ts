@@ -36,6 +36,10 @@ export interface AuthenticatedAccount {
   readonly personalSpaceId: SpaceId
 }
 
+export interface AuthenticatedHumanRequestContext extends AuthenticatedAccount {
+  readonly authTokenHash: string
+}
+
 function advisoryLockParts(issuer: string, subject: string): [number, number] {
   const digest = createHash('sha256')
     .update(issuer)
@@ -71,6 +75,20 @@ export class AuthenticatedAccountService {
     return this.resolveVerifiedHuman(
       await verifier.verifyAccessToken(accessToken),
     )
+  }
+
+  public async verifyAndResolveRequestContext(
+    verifier: HumanAuthVerifier,
+    accessToken: string,
+  ): Promise<AuthenticatedHumanRequestContext> {
+    const verified = await verifier.verifyAccessToken(accessToken)
+    const account = await this.resolveVerifiedHuman(verified)
+    return {
+      ...account,
+      authTokenHash: `sha256:${createHash('sha256')
+        .update(accessToken)
+        .digest('base64url')}`,
+    }
   }
 
   public async resolveVerifiedHuman(

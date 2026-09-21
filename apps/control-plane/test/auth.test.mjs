@@ -65,6 +65,15 @@ test('valid Supabase JWT verifies with issuer, audience, expiry, and normalized 
 
 test('JWT failures are canonical and never expose token contents', async () => {
   const wrongKey = await signingKey('primary-key')
+  const unknownKidKey = await signingKey('unknown-key-id')
+  const tokenWithoutKid = await new SignJWT({
+    aud: audience,
+    exp: nowSeconds + 3_600,
+    iss: issuer,
+    sub: 'supabase-subject-1',
+  })
+    .setProtectedHeader({ alg: 'ES256', typ: 'JWT' })
+    .sign(primaryKey.privateKey)
   const cases = [
     {
       token: await accessToken(wrongKey),
@@ -83,6 +92,14 @@ test('JWT failures are canonical and never expose token contents', async () => {
     {
       token: await accessToken(primaryKey, { aud: 'wrong-audience' }),
       code: 'malformed_token',
+    },
+    {
+      token: await accessToken(unknownKidKey),
+      code: 'invalid_signature',
+    },
+    {
+      token: tokenWithoutKid,
+      code: 'unsupported_signing_mode',
     },
     { token: 'not-a-jwt', code: 'malformed_token' },
   ]

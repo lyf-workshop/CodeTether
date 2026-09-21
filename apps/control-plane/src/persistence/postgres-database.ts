@@ -1,3 +1,4 @@
+import { TLSSocket } from 'node:tls'
 import pg from 'pg'
 import type {
   ControlPlaneDatabase,
@@ -15,6 +16,19 @@ export interface PostgresDatabaseOptions {
   readonly statementTimeoutMilliseconds?: number
   readonly applicationName?: string
   readonly tls?: 'verify-full' | 'disable'
+}
+
+export interface PostgresClientTlsEvidence {
+  readonly verificationMode: 'verified_ca' | 'disabled'
+  readonly encrypted: boolean
+  readonly authorized: boolean
+  readonly authorizationErrorPresent: boolean
+}
+
+export function postgresTlsConfiguration(
+  mode: 'verify-full' | 'disable',
+): false | { readonly rejectUnauthorized: true } {
+  return mode === 'disable' ? false : { rejectUnauthorized: true }
 }
 
 function toSqlResult<Row extends Record<string, unknown>>(
@@ -43,8 +57,10 @@ class PostgresExecutor implements SqlExecutor {
 
 export class PostgresDatabase implements ControlPlaneDatabase {
   readonly #pool: pg.Pool
+  readonly #tlsMode: 'verify-full' | 'disable'
 
   public constructor(options: PostgresDatabaseOptions) {
+    this.#tlsMode = options.tls ?? 'verify-full'
     this.#pool = new Pool({
       connectionString: options.connectionString,
       max: options.maxConnections ?? 10,
@@ -52,13 +68,26 @@ export class PostgresDatabase implements ControlPlaneDatabase {
       idleTimeoutMillis: options.idleTimeoutMilliseconds ?? 30_000,
       statement_timeout: options.statementTimeoutMilliseconds ?? 15_000,
       application_name: options.applicationName ?? 'codetether-control-plane',
-      ssl:
-        options.tls === 'disable'
-          ? false
-          : {
-              rejectUnauthorized: true,
-            },
+      ssl: postgresTlsConfiguration(this.#tlsMode),
     })
+  }
+
+  public async inspectClientTls(): Promise<PostgresClientTlsEvidence> {
+    const client = await this.#pool.connect()
+    try {
+      await client.query('SELECT 1')
+      const stream = client.connection.stream
+      const tlsSocket = stream instanceof TLSSocket ? stream : undefined
+      return {
+        verificationMode:
+          this.#tlsMode === 'verify-full' ? 'verified_ca' : 'disabled',
+        encrypted: tlsSocket?.encrypted === true,
+        authorized: tlsSocket?.authorized === true,
+        authorizationErrorPresent: tlsSocket?.authorizationError != null,
+      }
+    } finally {
+      client.release()
+    }
   }
 
   public async query<Row extends Record<string, unknown>>(

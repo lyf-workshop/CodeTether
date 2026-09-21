@@ -91,17 +91,28 @@ the database boundary and contain no unrestricted JSON payload.
 pnpm --filter @codetether/control-plane migrate
 ```
 
-For the non-destructive managed-PostgreSQL smoke, use the same environment and
-run:
+For the non-destructive managed-development PostgreSQL smoke, use the same
+environment and run:
 
 ```powershell
 pnpm --filter @codetether/control-plane smoke:supabase-postgres
 ```
 
-The smoke rejects unexpected private-schema conflicts and CodeTether table
-names in `public`, runs migrations twice to prove checksum/no-op behavior,
-checks TLS, and performs repository write/read inside a transaction that is
-always rolled back. It never drops a remote schema.
+This mode accepts a managed development database named `postgres`; it does not
+apply the disposable-database `_test`/`_ci` suffix rule. It rejects unexpected
+private-schema conflicts and CodeTether table names in `public`, runs migrations
+twice to prove checksum/no-op behavior, and performs repository write/read
+inside a transaction that is always rolled back. Before those database stages,
+it inspects the established node-postgres `TLSSocket` and requires encrypted,
+CA-authorized transport under the `verify-full` policy. For a Supabase shared or
+session pooler, `pg_stat_ssl` describes the pooler's separate PostgreSQL backend
+connection, so a missing/false backend observation is reported as informational
+rather than overriding proven client-to-pooler TLS. Direct Supabase PostgreSQL
+connections retain the backend observation as an additional consistency check.
+The smoke never drops a database or schema and never truncates
+Supabase-managed or shared tables. Failure output contains only a bounded stage,
+error class, PostgreSQL code when available, migration filename, and allowlisted
+safety reason. It does not echo connection or credential material.
 
 ## Email OTP development flow
 
@@ -129,8 +140,8 @@ production credentials:
 pnpm --filter @codetether/control-plane test
 ```
 
-For a native PostgreSQL migration/bootstrap gate, provide a dedicated,
-disposable database whose name ends in `_test` or `_ci`:
+The separate destructive native PostgreSQL migration/bootstrap test requires a
+dedicated, disposable database whose name ends in `_test` or `_ci`:
 
 ```powershell
 $env:CODETETHER_CONTROL_PLANE_TEST_DATABASE_URL = '<isolated PostgreSQL test URL>'

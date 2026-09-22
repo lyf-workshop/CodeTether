@@ -7,7 +7,7 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit --pretty false",
     "lint": "eslint .",
-    "test": "pnpm build && node --test --test-isolation=none test/*.test.mjs",
+    "test": "pnpm build && node --test --experimental-test-isolation=none test/*.test.mjs",
     "spike": "node dist/spike.js",
     "semantics": "node dist/semantics.js",
     "serve": "node dist/serve.js",

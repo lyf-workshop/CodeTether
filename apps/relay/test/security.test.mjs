@@ -19,6 +19,17 @@ import {
 
 const execFileAsync = promisify(execFile)
 
+const nodeExperimentalSqliteWarning =
+  /^\(node:\d+\) ExperimentalWarning: SQLite is an experimental feature and might change at any time$|^\(Use `node --trace-warnings \.\.\.` to show where the warning was created\)$/
+
+const unexpectedStderrLines = (stderr) =>
+  stderr
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(
+      (line) => line.length > 0 && !nodeExperimentalSqliteWarning.test(line),
+    )
+
 const collectTypeScriptFiles = async (directory) => {
   const entries = await readdir(directory, { withFileTypes: true })
   const files = []
@@ -221,7 +232,7 @@ test('operator CLI revokes one exact peer fingerprint without exposing a directo
       '--peer-fingerprint',
       identity.publicKeyFingerprint,
     ])
-    assert.equal(stderr, '')
+    assert.deepEqual(unexpectedStderrLines(stderr), [])
     assert.deepEqual(JSON.parse(stdout), {
       peerFingerprint: identity.publicKeyFingerprint,
       revoked: true,

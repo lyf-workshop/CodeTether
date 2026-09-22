@@ -226,6 +226,52 @@ test('verified client TLS passes when Supavisor backend does not report SSL', as
   }
 })
 
+test('current migration head accepts the Phase 9A.4 ProductDevice tables', async () => {
+  const database = await createManagedSmokeDatabase(false)
+  try {
+    const result = await runNativePostgresSmoke(database, {
+      clientTls: verifiedClientTls,
+      connectionKind: 'supabase_pooler',
+    })
+    assert.equal(result.repeatedMigration.applied.length, 0)
+    const tables = await database.query(
+      `SELECT table_name
+         FROM information_schema.tables
+        WHERE table_schema = 'control_plane'
+          AND table_name IN ('device_registration_challenges', 'device_request_nonces')
+        ORDER BY table_name`,
+    )
+    assert.deepEqual(
+      tables.rows.map((row) => row.table_name),
+      ['device_registration_challenges', 'device_request_nonces'],
+    )
+  } finally {
+    await database.close()
+  }
+})
+
+test('schema inspection still rejects an unexpected private Control Plane table', async () => {
+  const database = await PGliteControlPlaneDatabase.create()
+  try {
+    await runMigrations(database)
+    await database.exec(
+      'CREATE TABLE control_plane.unexpected_schema_drift (id integer PRIMARY KEY)',
+    )
+    await assert.rejects(
+      runNativePostgresSmoke(database, {
+        clientTls: verifiedClientTls,
+        connectionKind: 'supabase_pooler',
+      }),
+      (error) => {
+        assert.equal(error.stage, 'schema_inspection')
+        return true
+      },
+    )
+  } finally {
+    await database.close()
+  }
+})
+
 test('verified client TLS and a direct backend SSL observation both pass', async () => {
   const database = await createManagedSmokeDatabase(true)
   try {

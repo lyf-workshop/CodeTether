@@ -9,6 +9,8 @@ import {
 } from './persistence/migrations.js'
 
 const expectedTables = new Set([
+  'device_registration_challenges',
+  'device_request_nonces',
   'device_session_bindings',
   'enrollment_challenges',
   'host_claims',

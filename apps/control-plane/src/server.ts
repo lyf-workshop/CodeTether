@@ -16,6 +16,10 @@ import {
   ProductDeviceAuthFailure,
   type ProductDeviceAuthenticationService,
 } from './services/product-device-authentication-service.js'
+import {
+  HostIdentityFailure,
+  type HostIdentityService,
+} from './services/host-identity-service.js'
 
 export interface ControlPlaneServerOptions {
   readonly database: ControlPlaneDatabase
@@ -24,6 +28,7 @@ export interface ControlPlaneServerOptions {
   readonly humanAuthVerifier?: HumanAuthVerifier
   readonly authenticatedAccountService?: AuthenticatedAccountService
   readonly productDeviceAuthenticationService?: ProductDeviceAuthenticationService
+  readonly hostIdentityService?: HostIdentityService
 }
 
 export interface RunningControlPlaneServer {
@@ -126,6 +131,19 @@ function deviceAuthFailureStatus(error: ProductDeviceAuthFailure): number {
 function productDeviceProof(request: IncomingMessage): string | undefined {
   const value = request.headers[PRODUCT_DEVICE_PROOF_HEADER]
   return typeof value === 'string' ? value : undefined
+}
+
+function hostIdentityFailureStatus(error: HostIdentityFailure): number {
+  if (error.code.endsWith('_expired')) return 410
+  if (
+    error.code.endsWith('_consumed') ||
+    error.code === 'host_already_claimed' ||
+    error.code === 'host_claim_unavailable'
+  ) {
+    return 409
+  }
+  if (error.code === 'host_space_not_permitted') return 403
+  return error.code === 'host_identity_unavailable' ? 503 : 400
 }
 
 export async function startControlPlaneServer(
@@ -270,6 +288,179 @@ export async function startControlPlaneServer(
             response,
             deviceAuthFailureStatus(error),
             { status: 'device_authentication_failed', code: error.code },
+            false,
+          )
+          return
+        }
+        sendJson(response, 400, { status: 'invalid_request' }, false)
+      }
+      return
+    }
+
+    if (
+      pathname === '/v1/hosts/registration-challenge' ||
+      pathname === '/v1/hosts/register'
+    ) {
+      if (method !== 'POST') {
+        sendJson(response, 405, { status: 'method_not_allowed' }, false)
+        return
+      }
+      if (requestUrl.search) {
+        sendJson(response, 400, { status: 'invalid_request' }, false)
+        return
+      }
+      if (!options.hostIdentityService) {
+        sendJson(response, 503, { status: 'host_identity_unavailable' }, false)
+        return
+      }
+      try {
+        const input = parseJsonObject(await readBoundedBody(request, 16_384))
+        const result =
+          pathname === '/v1/hosts/registration-challenge'
+            ? await options.hostIdentityService.createRegistrationChallenge(
+                input,
+              )
+            : await options.hostIdentityService.registerHost(input)
+        sendJson(response, 201, result, false)
+      } catch (error) {
+        if (error instanceof InvalidRequestBodyError) {
+          sendJson(response, 400, { status: 'invalid_request' }, false)
+          return
+        }
+        if (error instanceof HostIdentityFailure) {
+          sendJson(
+            response,
+            hostIdentityFailureStatus(error),
+            { status: 'host_identity_failed', code: error.code },
+            false,
+          )
+          return
+        }
+        sendJson(response, 400, { status: 'invalid_request' }, false)
+      }
+      return
+    }
+
+    const claimChallengeMatch =
+      /^\/v1\/hosts\/(host_[A-Za-z0-9][A-Za-z0-9_-]{15,95})\/claim-challenge$/.exec(
+        pathname,
+      )
+    const claimConfirmMatch =
+      /^\/v1\/hosts\/(host_[A-Za-z0-9][A-Za-z0-9_-]{15,95})\/claim-confirm$/.exec(
+        pathname,
+      )
+    const claimStateMatch =
+      /^\/v1\/hosts\/(host_[A-Za-z0-9][A-Za-z0-9_-]{15,95})\/claims\/(hclaim_[A-Za-z0-9][A-Za-z0-9_-]{15,95})$/.exec(
+        pathname,
+      )
+    if (claimChallengeMatch || claimConfirmMatch || claimStateMatch) {
+      if (
+        ((claimChallengeMatch || claimConfirmMatch) && method !== 'POST') ||
+        (claimStateMatch && method !== 'GET')
+      ) {
+        sendJson(response, 405, { status: 'method_not_allowed' }, false)
+        return
+      }
+      if (
+        !options.humanAuthVerifier ||
+        !options.authenticatedAccountService ||
+        !options.productDeviceAuthenticationService ||
+        !options.hostIdentityService
+      ) {
+        sendJson(response, 503, { status: 'auth_unavailable' }, false)
+        return
+      }
+      try {
+        const body = await readBoundedBody(request, 16_384)
+        const input =
+          method === 'POST'
+            ? parseJsonObject(body)
+            : body.byteLength === 0
+              ? undefined
+              : (() => {
+                  throw new InvalidRequestBodyError(
+                    'This route requires an empty body',
+                  )
+                })()
+        const human =
+          await options.authenticatedAccountService.verifyAndResolveRequestContext(
+            options.humanAuthVerifier,
+            bearerToken(request.headers.authorization),
+          )
+        const device =
+          await options.productDeviceAuthenticationService.authenticateProductDeviceRequest(
+            human,
+            {
+              compactProof: productDeviceProof(request),
+              method,
+              rawResource: request.url ?? pathname,
+              body,
+            },
+          )
+        if (claimChallengeMatch?.[1]) {
+          const result = await options.hostIdentityService.requestClaim(
+            human,
+            device,
+            input,
+          )
+          sendJson(response, 201, result, false)
+        } else if (claimConfirmMatch?.[1]) {
+          const result = await options.hostIdentityService.confirmClaim(
+            human,
+            device,
+            claimConfirmMatch[1],
+            input,
+          )
+          sendJson(response, 200, result, false)
+        } else if (claimStateMatch?.[1] && claimStateMatch[2]) {
+          const claim = await options.hostIdentityService.readClaim(
+            claimStateMatch[2],
+          )
+          if (!claim || claim.hostId !== claimStateMatch[1]) {
+            sendJson(response, 404, { status: 'not_found' }, false)
+            return
+          }
+          sendJson(
+            response,
+            200,
+            {
+              claimId: claim.claimId,
+              hostId: claim.hostId,
+              state: claim.state,
+              expiresAt: claim.expiresAt.toISOString(),
+              completedAt: claim.completedAt?.toISOString() ?? null,
+            },
+            false,
+          )
+        }
+      } catch (error) {
+        if (error instanceof InvalidRequestBodyError) {
+          sendJson(response, 400, { status: 'invalid_request' }, false)
+          return
+        }
+        if (error instanceof HumanAuthFailure) {
+          sendJson(
+            response,
+            authFailureStatus(error),
+            { status: 'authentication_failed', code: error.code },
+            false,
+          )
+          return
+        }
+        if (error instanceof ProductDeviceAuthFailure) {
+          sendJson(
+            response,
+            deviceAuthFailureStatus(error),
+            { status: 'device_authentication_failed', code: error.code },
+            false,
+          )
+          return
+        }
+        if (error instanceof HostIdentityFailure) {
+          sendJson(
+            response,
+            hostIdentityFailureStatus(error),
+            { status: 'host_identity_failed', code: error.code },
             false,
           )
           return

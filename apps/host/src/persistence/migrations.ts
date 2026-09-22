@@ -143,6 +143,11 @@ const migrations: readonly Migration[] = [
     name: 'native_transcript_boundary',
     up: migrateNativeTranscriptBoundary,
   },
+  {
+    version: 19,
+    name: 'host_identity',
+    up: migrateHostIdentity,
+  },
 ]
 
 export const currentSchemaVersion = migrations.at(-1)?.version ?? 0
@@ -2428,6 +2433,35 @@ function migrateNativeTranscriptBoundary(database: DatabaseSync): void {
           instr(native_transcript_boundary, char(0)) = 0
         )
       );
+  `)
+}
+
+function migrateHostIdentity(database: DatabaseSync): void {
+  database.exec(`
+    CREATE TABLE host_identity (
+      singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+      host_id TEXT NOT NULL CHECK (
+        length(host_id) BETWEEN 20 AND 104 AND
+        substr(host_id, 1, 5) = 'host_' AND host_id = trim(host_id)
+      ),
+      public_jwk TEXT NOT NULL CHECK (json_valid(public_jwk)),
+      fingerprint TEXT NOT NULL CHECK (
+        fingerprint GLOB 'sha256:*' AND length(fingerprint) BETWEEN 43 AND 128
+      ),
+      key_algorithm TEXT NOT NULL CHECK (key_algorithm = 'ES256'),
+      key_handle TEXT NOT NULL CHECK (
+        length(key_handle) BETWEEN 20 AND 160 AND key_handle = trim(key_handle)
+      ),
+      identity_generation INTEGER NOT NULL CHECK (identity_generation >= 1),
+      safe_label TEXT NOT NULL CHECK (
+        length(safe_label) BETWEEN 1 AND 120 AND safe_label = trim(safe_label)
+      ),
+      platform TEXT NOT NULL CHECK (length(platform) BETWEEN 1 AND 64 AND platform = trim(platform)),
+      app_version TEXT NOT NULL CHECK (length(app_version) BETWEEN 1 AND 64 AND app_version = trim(app_version)),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      last_registered_at TEXT
+    ) STRICT;
   `)
 }
 

@@ -115,8 +115,8 @@ test('migration 007 preserves Codex organization, Turns, Attention, and Search b
     assertVersionSixRejectsClaude(databasePath)
 
     const migrated = ConversationStore.open({ databasePath })
-    assert.equal(migrated.schemaVersion, 18)
-    assert.equal(currentSchemaVersion, 18)
+    assert.equal(migrated.schemaVersion, 19)
+    assert.equal(currentSchemaVersion, 19)
     const migratedMachineId = migrated.listMachines()[0].machineId
 
     const preserved = migrated.getConversation(codex.conversationId)

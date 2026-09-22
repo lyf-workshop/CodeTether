@@ -1,0 +1,8 @@
+[[permission]]
+identifier = "allow-host-identity-key-store"
+description = "Allows the main CodeTether window to create, load, and sign with its non-exportable durable Host identity key without receiving private-key bytes."
+commands.allow = [
+  "host_identity_key_create",
+  "host_identity_key_public",
+  "host_identity_key_sign",
+]

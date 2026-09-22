@@ -1,5 +1,6 @@
 mod attention_notifications;
 mod desktop_lifecycle;
+mod host_identity_key_store;
 mod host_supervisor;
 mod macos_lifecycle;
 #[cfg(target_os = "macos")]

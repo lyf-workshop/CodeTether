@@ -32,6 +32,9 @@ fn main() {
             "product_device_key_public",
             "product_device_key_sign",
             "product_device_key_destroy",
+            "host_identity_key_create",
+            "host_identity_key_public",
+            "host_identity_key_sign",
         ]));
 
     tauri_build::try_build(attributes).expect("failed to run CodeTether desktop build script")

@@ -59,6 +59,10 @@ import {
   type TurnInputRecord,
   type UpdateOnboardingRequest,
 } from '@codetether/protocol'
+import {
+  validateDurableHostIdentity,
+  type DurableHostIdentity,
+} from './host-identity.js'
 
 import {
   attentionFromRow,
@@ -565,6 +569,63 @@ export class ConversationStore {
       throw new Error('Durable onboarding singleton does not exist')
     }
     return onboardingProgressFromRow(row)
+  }
+
+  getHostIdentity(): DurableHostIdentity | undefined {
+    const row = this.#statement(
+      'SELECT * FROM host_identity WHERE singleton = 1',
+    ).get() as HostIdentityRow | undefined
+    return row === undefined ? undefined : hostIdentityFromRow(row)
+  }
+
+  createHostIdentity(identity: DurableHostIdentity): DurableHostIdentity {
+    const value = validateDurableHostIdentity(identity)
+    return this.runInTransaction(() => {
+      const existing = this.getHostIdentity()
+      if (existing !== undefined) {
+        if (
+          existing.hostId !== value.hostId ||
+          existing.fingerprint !== value.fingerprint
+        ) {
+          throw new Error('Durable Host identity cannot be replaced')
+        }
+        return existing
+      }
+      this.#statement(
+        `INSERT INTO host_identity (
+           singleton, host_id, public_jwk, fingerprint, key_algorithm,
+           key_handle, identity_generation, safe_label, platform, app_version,
+           created_at, updated_at, last_registered_at
+         ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        value.hostId,
+        value.publicJwk,
+        value.fingerprint,
+        value.keyAlgorithm,
+        value.keyHandle,
+        value.identityGeneration,
+        value.safeLabel,
+        value.platform,
+        value.appVersion,
+        value.createdAt,
+        value.updatedAt,
+        value.lastRegisteredAt ?? null,
+      )
+      return value
+    })
+  }
+
+  markHostIdentityRegistered(registeredAt: Timestamp): DurableHostIdentity {
+    const timestamp = TimestampSchema.parse(registeredAt)
+    return this.runInTransaction(() => {
+      const existing = this.getHostIdentity()
+      if (existing === undefined)
+        throw new Error('Durable Host identity is missing')
+      this.#statement(
+        'UPDATE host_identity SET last_registered_at = ?, updated_at = ? WHERE singleton = 1',
+      ).run(timestamp, timestamp)
+      return this.getHostIdentity() ?? existing
+    })
   }
 
   updateOnboardingProgress(
@@ -3798,6 +3859,21 @@ interface MachineRow {
   readonly last_seen_at: string | null
 }
 
+interface HostIdentityRow {
+  readonly host_id: string
+  readonly public_jwk: string
+  readonly fingerprint: string
+  readonly key_algorithm: 'ES256'
+  readonly key_handle: string
+  readonly identity_generation: number
+  readonly safe_label: string
+  readonly platform: string
+  readonly app_version: string
+  readonly created_at: string
+  readonly updated_at: string
+  readonly last_registered_at: string | null
+}
+
 interface OnboardingProgressRow {
   readonly singleton: 1
   readonly flow_version: 1
@@ -4020,6 +4096,25 @@ function machineFromRow(row: MachineRow): DurableMachine {
     ...(row.last_seen_at === null
       ? {}
       : { lastSeenAt: TimestampSchema.parse(row.last_seen_at) }),
+  })
+}
+
+function hostIdentityFromRow(row: HostIdentityRow): DurableHostIdentity {
+  return validateDurableHostIdentity({
+    hostId: row.host_id,
+    publicJwk: row.public_jwk,
+    fingerprint: row.fingerprint,
+    keyAlgorithm: row.key_algorithm,
+    keyHandle: row.key_handle,
+    identityGeneration: row.identity_generation,
+    safeLabel: row.safe_label,
+    platform: row.platform,
+    appVersion: row.app_version,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    ...(row.last_registered_at === null
+      ? {}
+      : { lastRegisteredAt: row.last_registered_at }),
   })
 }
 

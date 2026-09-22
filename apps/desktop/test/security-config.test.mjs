@@ -61,6 +61,7 @@ test('production Desktop CSP and capabilities stay loopback-only and non-wildcar
     'allow-provider-guidance',
     'allow-attention-notifications',
     'allow-product-device-key-store',
+    'allow-host-identity-key-store',
     'core:event:allow-listen',
     'core:event:allow-unlisten',
     'core:window:allow-is-focused',

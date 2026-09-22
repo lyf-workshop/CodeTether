@@ -2,7 +2,8 @@
 export function downgradeExistingProviderSessionsToVersionFourteen(database) {
   database.exec(`
     ALTER TABLE conversations DROP COLUMN native_transcript_boundary;
-    DELETE FROM schema_migrations WHERE version = 18;
+    DROP TABLE host_identity;
+    DELETE FROM schema_migrations WHERE version IN (18, 19);
     DROP TABLE onboarding_progress;
     DELETE FROM schema_migrations WHERE version = 17;
     DROP TABLE conversation_provider_installation_bindings;

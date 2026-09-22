@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-host-identity-key-sign"
+description = "Enables the host_identity_key_sign command without any pre-configured scope."
+commands.allow = ["host_identity_key_sign"]
+
+[[permission]]
+identifier = "deny-host-identity-key-sign"
+description = "Denies the host_identity_key_sign command without any pre-configured scope."
+commands.deny = ["host_identity_key_sign"]

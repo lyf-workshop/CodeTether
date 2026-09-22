@@ -1237,6 +1237,9 @@ pub fn run_desktop() {
             crate::product_device_key_store::product_device_key_public,
             crate::product_device_key_store::product_device_key_sign,
             crate::product_device_key_store::product_device_key_destroy
+            ,crate::host_identity_key_store::host_identity_key_create
+            ,crate::host_identity_key_store::host_identity_key_public
+            ,crate::host_identity_key_store::host_identity_key_sign
         ])
         .setup(|app| {
             let host = match HostSupervisor::start(app.handle()) {

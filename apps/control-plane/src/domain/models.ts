@@ -53,7 +53,7 @@ export type CreateProductDevice = z.infer<typeof createProductDeviceSchema>
 export const createHostSchema = z
   .object({
     hostId: hostIdSchema,
-    owningSpaceId: spaceIdSchema,
+    owningSpaceId: spaceIdSchema.nullable(),
     publicKey: publicKeySchema,
     keyAlgorithm: keyAlgorithmSchema,
     fingerprint: fingerprintSchema,
@@ -62,7 +62,13 @@ export const createHostSchema = z
     protocolVersionMin: z.number().int().positive(),
     protocolVersionMax: z.number().int().positive(),
     claimGeneration: z.number().int().nonnegative(),
-    claimState: z.enum(['pending', 'claimed', 'unlinked', 'revoked']),
+    claimState: z.enum([
+      'unclaimed',
+      'pending',
+      'claimed',
+      'unlinked',
+      'revoked',
+    ]),
     createdAt: z.date(),
   })
   .refine(
@@ -135,6 +141,29 @@ export const createHostClaimSchema = z.object({
 })
 export type CreateHostClaim = z.infer<typeof createHostClaimSchema>
 
+export const createHostRegistrationChallengeSchema = z
+  .object({
+    challengeId: enrollmentChallengeIdSchema,
+    hostId: hostIdSchema,
+    publicKey: publicKeySchema,
+    keyAlgorithm: z.literal('ES256'),
+    fingerprint: fingerprintSchema,
+    safeLabel: safeLabelSchema,
+    coarsePlatform: z.enum(['windows', 'macos', 'linux', 'unknown']),
+    protocolVersionMin: z.number().int().positive(),
+    protocolVersionMax: z.number().int().positive(),
+    nonceHash: fingerprintSchema,
+    createdAt: z.date(),
+    expiresAt: z.date(),
+  })
+  .refine(
+    ({ protocolVersionMax, protocolVersionMin }) =>
+      protocolVersionMax >= protocolVersionMin,
+  )
+export type CreateHostRegistrationChallenge = z.infer<
+  typeof createHostRegistrationChallengeSchema
+>
+
 export const createHostDeviceAuthorizationSchema = z.object({
   authorizationId: hostAuthorizationIdSchema,
   hostId: hostIdSchema,
@@ -187,7 +216,12 @@ export const securityEventTypes = [
   'sign_out',
   'device_registered',
   'device_revoked',
+  'host_identity_registered',
   'host_claim_requested',
+  'host_claim_confirmed',
+  'host_claim_completed',
+  'host_claim_rejected',
+  'host_claim_expired',
   'host_claimed',
   'host_unlinked',
   'host_transfer_requested',

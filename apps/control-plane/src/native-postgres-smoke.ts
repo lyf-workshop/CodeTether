@@ -15,6 +15,7 @@ const expectedTables = new Set([
   'enrollment_challenges',
   'host_claims',
   'host_device_authorizations',
+  'host_registration_challenges',
   'hosts',
   'login_identities',
   'product_devices',

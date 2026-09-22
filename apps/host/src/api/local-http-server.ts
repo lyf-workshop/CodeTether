@@ -110,6 +110,73 @@ import {
 const LOOPBACK_HOST = '127.0.0.1'
 const DEFAULT_HEARTBEAT_MS = 20_000
 
+interface HostIdentityKeyDescriptionBody {
+  readonly keyHandle: string
+  readonly publicKey: {
+    readonly kty: 'EC'
+    readonly crv: 'P-256'
+    readonly x: string
+    readonly y: string
+  }
+  readonly keyAlgorithm: 'ES256'
+  readonly keyGeneration: number
+  readonly privateKeyExportable: false
+  readonly protection: 'windows_cng_software_ksp_non_exportable'
+}
+
+const hostIdentityKeyDescriptionSchema = {
+  safeParse(
+    value: unknown,
+  ):
+    | { readonly success: true; readonly data: HostIdentityKeyDescriptionBody }
+    | {
+        readonly success: false
+        readonly error: { readonly issues: readonly unknown[] }
+      } {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      return { success: false, error: { issues: [{}] } }
+    }
+    const input = value as Record<string, unknown>
+    const publicKey = input.publicKey
+    const key =
+      typeof publicKey === 'object' &&
+      publicKey !== null &&
+      !Array.isArray(publicKey)
+        ? (publicKey as Record<string, unknown>)
+        : undefined
+    const valid =
+      typeof input.keyHandle === 'string' &&
+      /^CodeTether\.HostIdentity\.[a-f0-9]{32}$/u.test(input.keyHandle) &&
+      input.keyAlgorithm === 'ES256' &&
+      input.keyGeneration === 1 &&
+      input.privateKeyExportable === false &&
+      input.protection === 'windows_cng_software_ksp_non_exportable' &&
+      key?.kty === 'EC' &&
+      key.crv === 'P-256' &&
+      typeof key.x === 'string' &&
+      /^[A-Za-z0-9_-]{32,64}$/u.test(key.x) &&
+      typeof key.y === 'string' &&
+      /^[A-Za-z0-9_-]{32,64}$/u.test(key.y)
+    if (!valid) return { success: false, error: { issues: [{}] } }
+    return {
+      success: true,
+      data: {
+        keyHandle: input.keyHandle as string,
+        publicKey: {
+          kty: 'EC',
+          crv: 'P-256',
+          x: key.x as string,
+          y: key.y as string,
+        },
+        keyAlgorithm: 'ES256',
+        keyGeneration: 1,
+        privateKeyExportable: false,
+        protection: 'windows_cng_software_ksp_non_exportable',
+      },
+    }
+  },
+}
+
 export interface LocalHttpServerOptions extends SseConnectionPoolOptions {
   readonly service: HostService
   readonly allowedOrigins: readonly string[]
@@ -265,6 +332,44 @@ export class LocalHttpServer {
           'Query parameters are not supported for this endpoint',
           400,
         )
+      }
+
+      if (
+        (request.method === 'GET' || request.method === 'POST') &&
+        url.pathname === '/api/v1/host/identity'
+      ) {
+        if (request.method === 'GET') {
+          const identity = this.#service.getHostIdentity()
+          if (identity === undefined) {
+            this.#http.writeJson(
+              response,
+              404,
+              { status: 'host_identity_uninitialized' },
+              context.allowedOrigin,
+            )
+          } else {
+            this.#http.writeJson(
+              response,
+              200,
+              { status: 'ready', identity },
+              context.allowedOrigin,
+            )
+          }
+          return
+        }
+        const body = await this.#http.readValidatedBody(
+          request,
+          hostIdentityKeyDescriptionSchema,
+        )
+        const existing = this.#service.getHostIdentity()
+        const identity = this.#service.initializeHostIdentity(body)
+        this.#http.writeJson(
+          response,
+          existing === undefined ? 201 : 200,
+          { status: 'ready', identity },
+          context.allowedOrigin,
+        )
+        return
       }
 
       if (request.method === 'GET' && url.pathname === '/api/v1/bootstrap') {

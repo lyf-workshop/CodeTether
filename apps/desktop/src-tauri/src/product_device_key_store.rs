@@ -480,7 +480,7 @@ mod tests {
             "windows_cng_software_ksp_non_exportable"
         );
 
-        let result = (|| {
+        let result = {
             let restarted_process = WindowsCngProductDeviceKeyStore::new();
             let loaded = restarted_process
                 .public_key(&created.key_handle)
@@ -513,7 +513,7 @@ mod tests {
                 .verify_prehash(&Sha256::digest(signing_input), &signature)
                 .expect("signature verifies against exported public key");
             Ok::<(), ProductDeviceKeyError>(())
-        })();
+        };
 
         first_process
             .destroy_key(&created.key_handle)

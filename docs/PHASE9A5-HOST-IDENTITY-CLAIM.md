@@ -7,7 +7,8 @@ directory and claim protocol. It does not authorize Host Supervisor access,
 Machine trust, Node pairing, Controller credentials, Relay enrollment, or
 Provider execution.
 
-The accepted implementation baseline is `ce75ad29e459704235b49b72c21a06ae1c32e8ef`.
+The Phase 9A.5 implementation baseline is `5a683ae5d3c2418aff9dfc79c347a318cf5900fb`.
+This is an implementation checkpoint, not a Phase 9A.5 closure or freeze.
 
 ## Host and Machine are different authorities
 
@@ -54,6 +55,25 @@ and the database transaction. Completion records bounded
 `host_claim_requested`, `host_claim_confirmed`, and `host_claim_completed`
 events without secrets.
 
+The ignored Windows validation harness keeps the authenticated session and
+challenge in its running process. It writes only bounded public metadata to
+`apps/control-plane/.tmp/phase9a5-host-claim/pending-claim.json`, including a
+named-pipe handoff. `confirm-host-claim.ps1` displays the Host, fingerprint,
+requesting user/device, target Space, claim id, and expiry. It exits before
+signing unless the Owner explicitly reruns it with `-Confirm`. After that
+action, the running harness reloads the canonical Host CNG key, signs the
+canonical confirmation payload, submits it through the Control Plane claim
+route with the existing human plus ProductDevice authentication, verifies
+atomic completion and authority boundaries, checks replay rejection, reloads
+the Host identity, and writes a privacy-safe receipt plus SHA-256 manifest.
+
+`preflight.ps1` runs the Node 22, verified-TLS, migration/checksum, and local
+Host readiness checks without email, OTP, Supabase session acquisition, claim
+creation, or other mutation. The current development Host readiness result is
+stable host identity generation 1 with a non-exportable Windows CNG Software
+KSP key. Owner REAL claim execution remains gated on the private migration
+preflight and explicit local confirmation.
+
 No claim creates a `host_device_authorizations` row. ProductDevice
 authentication therefore remains separate from Supervisor authorization.
 No claim changes Machine, Controller, Node, Relay, Project, Conversation, or
@@ -77,4 +97,6 @@ paths, Provider credentials, or Controller private keys.
 
 Host Supervisor authorization, Host transfer, user-facing key rotation,
 cross-platform protected key implementations, hardware attestation, recovery,
-and account linking remain outside Phase 9A.5.
+and account linking remain outside Phase 9A.5. Phase 9A.5 also does not modify
+Machine trust, Node pairing, Controller or Relay authority, Provider
+execution, or Mobile surfaces.

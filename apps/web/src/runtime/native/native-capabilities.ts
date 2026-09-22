@@ -38,6 +38,26 @@ export interface ProviderGuidanceCapability {
   open(provider: ProviderId): Promise<void>
 }
 
+export interface HostIdentityKeyDescription {
+  readonly keyHandle: string
+  readonly publicKey: {
+    readonly kty: 'EC'
+    readonly crv: 'P-256'
+    readonly x: string
+    readonly y: string
+  }
+  readonly keyAlgorithm: 'ES256'
+  readonly keyGeneration: 1
+  readonly privateKeyExportable: false
+  readonly protection: 'windows_cng_software_ksp_non_exportable'
+}
+
+export interface HostIdentityCapability {
+  readonly available: boolean
+  createKey(): Promise<HostIdentityKeyDescription>
+  readPublic(keyHandle: string): Promise<HostIdentityKeyDescription>
+}
+
 export interface DesktopResumeIntent {
   readonly hostEpoch: EpochId
 }
@@ -47,6 +67,7 @@ export interface NativeCapabilities {
   readonly notifications: DesktopNotifications
   readonly backgroundRuntime: BackgroundRuntimeCapability
   readonly providerGuidance: ProviderGuidanceCapability
+  readonly hostIdentity: HostIdentityCapability
 }
 
 interface TauriCoreModule {
@@ -132,6 +153,14 @@ const unavailableProviderGuidance: ProviderGuidanceCapability = {
     Promise.reject(new Error('Native Provider guidance is unavailable.')),
 }
 
+const unavailableHostIdentity: HostIdentityCapability = {
+  available: false,
+  createKey: () =>
+    Promise.reject(new Error('Native Host identity is unavailable.')),
+  readPublic: () =>
+    Promise.reject(new Error('Native Host identity is unavailable.')),
+}
+
 /** Tauri v2 exposes this public marker even when `withGlobalTauri` is off. */
 export function hasTauriRuntime(scope: unknown = globalThis): boolean {
   return (
@@ -152,6 +181,7 @@ export function createNativeCapabilities(
       notifications: unavailableDesktopNotifications,
       backgroundRuntime: unavailableBackgroundRuntime,
       providerGuidance: unavailableProviderGuidance,
+      hostIdentity: unavailableHostIdentity,
     }
   }
 
@@ -364,11 +394,31 @@ export function createNativeCapabilities(
     },
   }
 
+  const hostIdentity: HostIdentityCapability = {
+    available: true,
+    async createKey() {
+      const { invoke } = await loadCore()
+      return await invoke<HostIdentityKeyDescription>(
+        'host_identity_key_create',
+      )
+    },
+    async readPublic(keyHandle) {
+      const { invoke } = await loadCore()
+      return await invoke<HostIdentityKeyDescription>(
+        'host_identity_key_public',
+        {
+          keyHandle,
+        },
+      )
+    },
+  }
+
   return {
     directoryPicker,
     notifications,
     backgroundRuntime,
     providerGuidance,
+    hostIdentity,
   }
 }
 

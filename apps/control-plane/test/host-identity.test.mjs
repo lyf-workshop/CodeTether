@@ -46,6 +46,7 @@ after(async () => {
 test('registers an unclaimed Host with proof of its public-key possession', async () => {
   const publicKey = await exportJWK(hostKeyPair.publicKey)
   const challenge = await service.createRegistrationChallenge({
+    hostId: 'host_hostidentityregistration000000000001',
     publicKey,
     keyAlgorithm: 'ES256',
     safeLabel: 'Development Host',
@@ -73,6 +74,7 @@ test('requires a local Host signature and completes one claim atomically', async
   const secondHostKeyPair = await generateKeyPair('ES256')
   const publicKey = await exportJWK(secondHostKeyPair.publicKey)
   const registration = await service.createRegistrationChallenge({
+    hostId: 'host_hostidentityclaim0000000000000001',
     publicKey,
     keyAlgorithm: 'ES256',
     safeLabel: 'Claimable Host',
@@ -163,6 +165,7 @@ test('rejects substituted Host signatures and never grants Supervisor authority'
   const hostPair = await generateKeyPair('ES256')
   const wrongPair = await generateKeyPair('ES256')
   const registration = await service.createRegistrationChallenge({
+    hostId: 'host_hostidentitynegative00000000000001',
     publicKey: await exportJWK(hostPair.publicKey),
     keyAlgorithm: 'ES256',
     safeLabel: 'Negative Host',
@@ -220,7 +223,9 @@ test('rejects substituted Host signatures and never grants Supervisor authority'
         HOST_CLAIM_PROOF_TYPE,
       ),
     }),
-    (error) => error instanceof HostIdentityFailure && error.code === 'host_signature_invalid',
+    (error) =>
+      error instanceof HostIdentityFailure &&
+      error.code === 'host_signature_invalid',
   )
   const authorization = await database.query(
     'SELECT COUNT(*)::int AS count FROM control_plane.host_device_authorizations WHERE host_id = $1',
@@ -232,6 +237,7 @@ test('rejects substituted Host signatures and never grants Supervisor authority'
 test('serializes concurrent claim attempts for one Host', async () => {
   const hostPair = await generateKeyPair('ES256')
   const registration = await service.createRegistrationChallenge({
+    hostId: 'host_hostidentityconcurrent000000000001',
     publicKey: await exportJWK(hostPair.publicKey),
     keyAlgorithm: 'ES256',
     safeLabel: 'Concurrent Host',
@@ -251,7 +257,8 @@ test('serializes concurrent claim attempts for one Host', async () => {
     userId: account.userId,
     status: 'active',
     personalSpaceId: account.spaceId,
-    authTokenHash: 'sha256:hostidentityconcurrentauthhashhostidentityconcurrent',
+    authTokenHash:
+      'sha256:hostidentityconcurrentauthhashhostidentityconcurrent',
   }
   const deviceContext = {
     userId: account.userId,
@@ -271,8 +278,14 @@ test('serializes concurrent claim attempts for one Host', async () => {
       spaceId: account.spaceId,
     }),
   ])
-  assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1)
-  assert.equal(results.filter((result) => result.status === 'rejected').length, 1)
+  assert.equal(
+    results.filter((result) => result.status === 'fulfilled').length,
+    1,
+  )
+  assert.equal(
+    results.filter((result) => result.status === 'rejected').length,
+    1,
+  )
   const host = await service.readHost(registered.hostId)
   assert.equal(host?.claimState, 'pending')
 })

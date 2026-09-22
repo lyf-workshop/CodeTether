@@ -144,6 +144,68 @@ test('local Host assembly generates a new epoch and restores its API snapshot fr
   }
 })
 
+test('local Host identity bootstrap persists public metadata and is idempotent', async () => {
+  const directory = await mkdtemp(
+    join(tmpdir(), 'codetether-host-identity-api-'),
+  )
+  const workspace = join(directory, 'workspace')
+  const databasePath = join(directory, 'data', 'codetether.sqlite3')
+  await mkdir(workspace, { recursive: true })
+  let host
+  try {
+    host = await startLocalCodexHostWithRuntime(
+      {
+        allowedWorkspaceRoots: [workspace],
+        allowedOrigins: ['http://localhost:5173'],
+        hostVersion: '0.0.0-test',
+        port: 0,
+      },
+      new FakeAgentRuntime(),
+      await WorkspacePolicy.create([workspace]),
+      ConversationStore.open({ databasePath }),
+    )
+    const absent = await getJson(host.baseUrl, '/api/v1/host/identity')
+    assert.equal(absent.status, 404)
+    const description = {
+      keyHandle: 'CodeTether.HostIdentity.0123456789abcdef0123456789abcdef',
+      publicKey: {
+        kty: 'EC',
+        crv: 'P-256',
+        x: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+        y: 'BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB',
+      },
+      keyAlgorithm: 'ES256',
+      keyGeneration: 1,
+      privateKeyExportable: false,
+      protection: 'windows_cng_software_ksp_non_exportable',
+    }
+    const created = await postJson(
+      host.baseUrl,
+      '/api/v1/host/identity',
+      description,
+    )
+    assert.equal(created.status, 201)
+    assert.match(created.body.identity.hostId, /^host_[A-Za-z0-9]/u)
+    assert.equal(created.body.identity.keyHandle, description.keyHandle)
+    const repeated = await postJson(
+      host.baseUrl,
+      '/api/v1/host/identity',
+      description,
+    )
+    assert.equal(repeated.status, 200)
+    assert.equal(repeated.body.identity.hostId, created.body.identity.hostId)
+    const loaded = await getJson(host.baseUrl, '/api/v1/host/identity')
+    assert.equal(loaded.status, 200)
+    assert.equal(
+      loaded.body.identity.fingerprint,
+      created.body.identity.fingerprint,
+    )
+  } finally {
+    await host?.close()
+    await rm(directory, { force: true, recursive: true })
+  }
+})
+
 test('starts a read-only durable API when the Codex executable is unavailable', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'codetether-read-only-host-'))
   const workspace = join(directory, 'workspace')

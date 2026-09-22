@@ -17,7 +17,6 @@ import { sha256Digest } from '../auth/product-device-protocol.js'
 import {
   createEnrollmentChallengeId,
   createHostClaimId,
-  createHostId,
   createSecurityEventId,
   hostClaimIdSchema,
   hostIdSchema,
@@ -39,6 +38,7 @@ import type { AuthenticatedProductDeviceContext } from './product-device-authent
 
 const registrationCandidateSchema = z
   .object({
+    hostId: hostIdSchema,
     publicKey: z.unknown(),
     keyAlgorithm: z.literal(HOST_KEY_ALGORITHM),
     safeLabel: z.string().trim().min(1).max(120),
@@ -143,7 +143,7 @@ export class HostIdentityService {
       aud: HOST_AUDIENCE,
       purpose: 'host_registration',
       challengeId: createEnrollmentChallengeId(),
-      hostId: createHostId(),
+      hostId: input.hostId,
       publicKeyFingerprint: admitted.fingerprint,
       keyAlgorithm: HOST_KEY_ALGORITHM,
       safeLabel: input.safeLabel,

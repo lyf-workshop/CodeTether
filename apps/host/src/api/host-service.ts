@@ -204,6 +204,9 @@ import {
   type DurableProviderInstallation,
   type RestoredDurableConversation,
   type DurableTurnSnapshot,
+  type DurableHostIdentity,
+  type HostIdentityKeyDescription,
+  durableHostIdentityFromKeyDescription,
 } from '../persistence/index.js'
 
 import {
@@ -803,6 +806,47 @@ export class HostService {
       },
       providers: this.#providerDescriptors(),
     }
+  }
+
+  /** Public local Host identity metadata; the private key never crosses this boundary. */
+  getHostIdentity(): DurableHostIdentity | undefined {
+    return this.#persistence?.getHostIdentity()
+  }
+
+  /**
+   * Persists the identity produced by the platform key store. The operation is
+   * idempotent and refuses to replace an existing identity or key handle.
+   */
+  initializeHostIdentity(
+    description: HostIdentityKeyDescription,
+  ): DurableHostIdentity {
+    if (this.#persistence === undefined) {
+      throw new HostServiceError(
+        'invalid_request',
+        'Durable Host identity requires Host persistence',
+        409,
+      )
+    }
+    const existing = this.#persistence.getHostIdentity()
+    if (existing !== undefined) {
+      if (
+        existing.keyHandle !== description.keyHandle ||
+        existing.identityGeneration !== description.keyGeneration
+      ) {
+        throw new HostServiceError(
+          'invalid_request',
+          'Durable Host identity cannot be replaced',
+          409,
+        )
+      }
+      return existing
+    }
+    return this.#persistence.createHostIdentity(
+      durableHostIdentityFromKeyDescription(description, {
+        safeLabel: 'CodeTether Host',
+        appVersion: this.#hostVersion,
+      }),
+    )
   }
 
   getOnboarding(): GetOnboardingResponse {

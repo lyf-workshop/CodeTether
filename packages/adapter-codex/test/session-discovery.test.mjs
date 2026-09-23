@@ -112,8 +112,10 @@ test('discovers only exact, unloaded, durable Codex sessions with bounded metada
   assert.equal(page.providerVersion, '0.149.1')
   assert.equal(page.candidates.length, 3)
   assert.equal(page.candidates[0].title, 'Existing Codex conversation')
+  assert.equal(page.candidates[0].providerTitle, 'Existing Codex conversation')
   assert.equal(page.candidates[1].title, 'Existing Codex conversation')
   assert.match(page.candidates[2].title, /^Codex conversation \u2014 /)
+  assert.equal(page.candidates[2].providerTitle, undefined)
   assert.deepEqual(
     page.candidates.map(({ provider, workingDirectory, resumeStatus }) => ({
       provider,
@@ -235,6 +237,36 @@ test('revalidates native identity, exact project, and metadata revision without 
     }),
     undefined,
   )
+})
+
+test('reads a later Provider-native title without resuming the session', async () => {
+  const projectRoot = resolve('project-a')
+  const thread = storedThread({
+    id: 'thread-later-title',
+    cwd: projectRoot,
+    status: 'idle',
+    name: 'Native title generated later',
+  })
+  const tracker = { methods: [], shutdownCount: 0 }
+  const discovery = new CodexSessionDiscovery({
+    canonicalizePath,
+    clientFactory: clientFactory({
+      tracker,
+      reads: new Map([[thread.id, thread]]),
+    }),
+  })
+
+  const candidate = await discovery.readSessionMetadata({
+    projectRoot,
+    nativeSessionId: thread.id,
+  })
+  assert.equal(candidate.providerTitle, 'Native title generated later')
+  assert.equal(candidate.nativeSessionId, thread.id)
+  assert.deepEqual(
+    tracker.methods.map(({ method }) => method),
+    ['thread/read'],
+  )
+  assert.equal(tracker.shutdownCount, 1)
 })
 
 test('revalidates current Codex list/read metadata without treating their updatedAt projections as a session change', async () => {
@@ -886,6 +918,98 @@ test('paginates within one retained Turn without dropping visible messages', asy
     ['item-large-1'],
   )
   assert.equal(older.complete, true)
+})
+
+test('paginates a long retained-turn transcript to the true beginning without gaps', async () => {
+  const projectRoot = resolve('project-a')
+  const thread = storedThread({ id: 'thread-long-retained', cwd: projectRoot })
+  const turns = Array.from({ length: 130 }, (_, index) => ({
+    id: `turn-long-${String(index + 1).padStart(3, '0')}`,
+    items: [
+      {
+        turnId: `turn-long-${String(index + 1).padStart(3, '0')}`,
+        id: `item-long-${String(index * 2 + 1).padStart(3, '0')}`,
+        type: 'userMessage',
+        text: `prompt-${index + 1}`,
+      },
+      {
+        turnId: `turn-long-${String(index + 1).padStart(3, '0')}`,
+        id: `item-long-${String(index * 2 + 2).padStart(3, '0')}`,
+        type: 'agentMessage',
+        text: `answer-${index + 1}`,
+      },
+    ],
+    invalidEntryCount: 0,
+    recordsScanned: 2,
+  }))
+  const discovery = new CodexSessionDiscovery({
+    canonicalizePath,
+    clientFactory: clientFactory({
+      reads: new Map([[thread.id, thread]]),
+      listTurns: async ({ cursor, limit }) => {
+        if (limit === 1 && cursor === undefined) {
+          return {
+            turns: [turns.at(-1)],
+            invalidEntryCount: 0,
+            recordsScanned: 2,
+            backwardsCursor: 'long:0',
+          }
+        }
+        const pageIndex = Number((cursor ?? 'long:0').split(':')[1])
+        const newestExclusive = turns.length - pageIndex * limit
+        const oldestInclusive = Math.max(0, newestExclusive - limit)
+        const pageTurns = turns
+          .slice(oldestInclusive, newestExclusive)
+          .reverse()
+        return {
+          turns: pageTurns,
+          invalidEntryCount: 0,
+          recordsScanned: pageTurns.length * 2,
+          ...(oldestInclusive === 0
+            ? {}
+            : { nextCursor: `long:${pageIndex + 1}` }),
+        }
+      },
+    }),
+  })
+  const candidate = (
+    await new CodexSessionDiscovery({
+      canonicalizePath,
+      clientFactory: clientFactory({ threads: [thread] }),
+    }).discover({ projectRoot, limit: 1 })
+  ).candidates[0]
+  const adopted = await discovery.validateCandidate({
+    projectRoot,
+    nativeSessionId: thread.id,
+    revision: candidate.revision,
+  })
+
+  const pages = []
+  let cursor
+  do {
+    const page = await discovery.readSessionTranscript({
+      projectRoot,
+      nativeSessionId: thread.id,
+      boundary: adopted.transcriptBoundary,
+      adoptedAt: '2026-09-05T12:00:00.000Z',
+      ...(cursor === undefined ? {} : { cursor }),
+      limit: 50,
+    })
+    assert.equal(page.status, 'available')
+    pages.push(page)
+    cursor = page.nextCursor
+  } while (cursor !== undefined)
+
+  const chronological = pages
+    .slice()
+    .reverse()
+    .flatMap(({ entries }) => entries)
+  assert.equal(chronological.length, 260)
+  assert.equal(new Set(chronological.map(({ id }) => id)).size, 260)
+  assert.equal(chronological[0].content, 'prompt-1')
+  assert.equal(chronological[129].content, 'answer-65')
+  assert.equal(chronological.at(-1).content, 'answer-130')
+  assert.equal(pages.at(-1).complete, true)
 })
 
 test('falls back to the older item-history method only when retained-turn listing is unavailable', async () => {

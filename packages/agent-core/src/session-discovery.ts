@@ -49,6 +49,8 @@ export interface NativeProviderSessionCandidate {
   readonly revision: string
   readonly workingDirectory: string
   readonly title: string
+  /** Exact Provider naming metadata, absent when title is only a local fallback. */
+  readonly providerTitle?: string
   readonly createdAt?: string
   readonly lastActiveAt?: string
   readonly providerVersion?: string
@@ -96,6 +98,12 @@ export interface ProviderSessionCandidateValidationRequest {
   readonly signal?: AbortSignal
 }
 
+export interface ProviderSessionMetadataReadRequest {
+  readonly projectRoot: string
+  readonly nativeSessionId: string
+  readonly signal?: AbortSignal
+}
+
 export interface ProviderSessionDiscovery {
   readonly provider: AgentProvider
   discover(
@@ -111,4 +119,8 @@ export interface ProviderSessionDiscovery {
  * projection. Its absence affects transcript display only, never execution.
  */
 export type ProviderSessionMetadataAdapter = ProviderSessionDiscovery &
-  Pick<Partial<ProviderSessionTranscriptReader>, 'readSessionTranscript'>
+  Pick<Partial<ProviderSessionTranscriptReader>, 'readSessionTranscript'> & {
+    readSessionMetadata?(
+      request: ProviderSessionMetadataReadRequest,
+    ): Promise<NativeProviderSessionCandidate | undefined>
+  }

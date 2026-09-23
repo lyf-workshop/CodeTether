@@ -132,6 +132,7 @@ export interface ConversationNativeHistoryViewModel {
   readonly status: NativeTranscriptStatus | 'loading'
   readonly entries: readonly NativeHistoricalTranscriptEntry[]
   readonly hasOlder: boolean
+  readonly historyComplete: boolean
   readonly loadingOlder: boolean
   readonly loadOlder?: () => void
 }

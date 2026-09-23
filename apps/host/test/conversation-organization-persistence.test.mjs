@@ -146,6 +146,38 @@ test('manual rename normalizes NFC and whitespace without changing activity or p
   })
 })
 
+test('Provider-native title replaces only a generated fallback', () => {
+  withFixture(({ store, workspace }) => {
+    const generated = seedConversation(store, workspace, 1)
+    const reconciled = store.reconcileGeneratedConversationTitle(
+      generated.conversationId,
+      'Native Codex title',
+      timeAt(40),
+    )
+    assert.equal(reconciled.changed, true)
+    assert.equal(reconciled.conversation.title, 'Native Codex title')
+    assert.equal(reconciled.conversation.titleSource, 'generated')
+    assert.equal(
+      reconciled.conversation.lastActivityAt,
+      generated.lastActivityAt,
+    )
+
+    store.renameConversation(
+      generated.conversationId,
+      'Owner title',
+      timeAt(50),
+    )
+    const preserved = store.reconcileGeneratedConversationTitle(
+      generated.conversationId,
+      'Later native title',
+      timeAt(60),
+    )
+    assert.equal(preserved.changed, false)
+    assert.equal(preserved.conversation.title, 'Owner title')
+    assert.equal(preserved.conversation.titleSource, 'manual')
+  })
+})
+
 test('pin, archive, and all-list ordering are stable and never advance activity', () => {
   withFixture(({ store, workspace }) => {
     const conversations = Array.from({ length: 8 }, (_, index) =>

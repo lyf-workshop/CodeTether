@@ -125,9 +125,7 @@ interface HostIdentityKeyDescriptionBody {
 }
 
 const hostIdentityKeyDescriptionSchema = {
-  safeParse(
-    value: unknown,
-  ):
+  safeParse(value: unknown):
     | { readonly success: true; readonly data: HostIdentityKeyDescriptionBody }
     | {
         readonly success: false
@@ -1147,6 +1145,7 @@ export class LocalHttpServer {
           'conversationId',
         )
         if (request.method === 'GET') {
+          await this.#service.reconcileConversationProviderTitle(conversationId)
           this.#http.writeJson(
             response,
             200,

@@ -60,6 +60,7 @@ export type {
   ProviderSessionDiscoveryFailureReason,
   ProviderSessionDiscoveryMetrics,
   ProviderSessionMetadataAdapter,
+  ProviderSessionMetadataReadRequest,
   ProviderSessionDiscoveryPage,
   ProviderSessionDiscoveryRequest,
   ProviderSessionDiscoveryStatus,

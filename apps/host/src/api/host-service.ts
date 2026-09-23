@@ -392,7 +392,7 @@ export class HostService {
   readonly #providers: ProviderRegistry
   readonly #providerSessionDiscoveries = new Map<
     AgentProvider,
-    ProviderSessionDiscovery
+    ProviderSessionMetadataAdapter
   >()
   readonly #providerSessionTranscriptReaders = new Map<
     AgentProvider,
@@ -2601,6 +2601,66 @@ export class HostService {
       ...(providerLifecycle === undefined ? {} : { providerLifecycle }),
       providerSessionRequiresResume,
     })
+  }
+
+  async reconcileConversationProviderTitle(
+    conversationId: ConversationId,
+  ): Promise<void> {
+    const store = this.#persistence
+    if (store === undefined || this.#persistenceFailure !== undefined) return
+    const id = ConversationIdSchema.parse(conversationId)
+    const conversation = store.getConversation(id)
+    if (
+      conversation === undefined ||
+      conversation.provider !== 'codex' ||
+      conversation.providerThreadId === undefined ||
+      conversation.titleSource !== 'generated' ||
+      conversation.machineId !== this.#machines.localMachineId() ||
+      this.#localProviderHasActiveTurn('codex')
+    ) {
+      return
+    }
+    const metadata = this.#providerSessionDiscoveries.get('codex')
+    if (metadata?.readSessionMetadata === undefined) return
+    try {
+      const authorized = await this.#projects.authorizeConversation(
+        conversation.projectId,
+        conversation.machineId,
+        conversation.cwd,
+        { preserveProviderDiscovery: true },
+      )
+      const candidate = await this.#withLocalProviderHandoff(
+        conversation.machineId,
+        'codex',
+        async () =>
+          await metadata.readSessionMetadata!({
+            projectRoot: authorized.cwd,
+            nativeSessionId: conversation.providerThreadId!,
+          }),
+      )
+      if (candidate?.providerTitle === undefined) return
+      const result = store.reconcileGeneratedConversationTitle(
+        id,
+        candidate.providerTitle,
+        TimestampSchema.parse(this.#timestamp()),
+      )
+      this.#syncRuntimeOrganization(result.conversation)
+      if (result.changed) {
+        this.#publishConversationUpdated(
+          conversationSummary(result.conversation),
+        )
+      }
+    } catch (error) {
+      if (isExecutionOwnershipUncertain(error)) {
+        this.#latchProviderOwnershipFailure(
+          conversation.machineId,
+          conversation.provider,
+          error,
+        )
+      }
+      // Native title availability is presentation metadata. A failed bounded
+      // read never makes durable history unavailable or starts the Provider.
+    }
   }
 
   async renameConversation(

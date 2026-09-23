@@ -316,6 +316,7 @@ function NativeConversationHistory({
     <section
       aria-label={`来自 ${history.providerName} 的只读历史消息`}
       data-native-history="true"
+      data-history-complete={history.historyComplete || undefined}
       className="space-y-3"
     >
       <div className="flex min-h-8 items-center gap-3 text-xs text-text-muted">

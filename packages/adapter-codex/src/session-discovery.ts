@@ -8,6 +8,7 @@ import type {
   NativeTranscriptEntry,
   NativeTranscriptPage,
   ProviderSessionCandidateValidationRequest,
+  ProviderSessionMetadataReadRequest,
   ProviderSessionDiscovery,
   ProviderSessionDiscoveryFailureReason,
   ProviderSessionDiscoveryPage,
@@ -254,6 +255,44 @@ export class CodexSessionDiscovery
           if (isAbortError(error)) throw error
           return { ...candidate, historicalTranscript: 'unavailable' }
         }
+      })
+    } catch (error) {
+      if (error instanceof CodexOwnedProcessCleanupError) {
+        throw this.#latchCleanupFailure(error)
+      }
+      if (isAbortError(error)) throw error
+      return undefined
+    }
+  }
+
+  async readSessionMetadata(
+    request: ProviderSessionMetadataReadRequest,
+  ): Promise<NativeProviderSessionCandidate | undefined> {
+    this.#assertCleanupVerified()
+    if (
+      !isAbsolute(request.projectRoot) ||
+      request.nativeSessionId.length === 0
+    ) {
+      throw new TypeError('Codex session metadata request is invalid')
+    }
+    throwIfAborted(request.signal)
+    try {
+      const canonicalProjectRoot = await this.#canonicalizeAbsolutePath(
+        request.projectRoot,
+        request.signal,
+      )
+      return await this.#withClient(request.signal, async (client) => {
+        const thread = await client.readStoredThread({
+          threadId: request.nativeSessionId,
+        })
+        if (thread.ephemeral) return undefined
+        const canonicalThreadRoot = await this.#canonicalizeAbsolutePath(
+          thread.cwd,
+          request.signal,
+        )
+        return sameMachinePath(canonicalThreadRoot, canonicalProjectRoot)
+          ? candidateFromThread(thread, canonicalThreadRoot)
+          : undefined
       })
     } catch (error) {
       if (error instanceof CodexOwnedProcessCleanupError) {
@@ -581,6 +620,9 @@ function candidateFromThread(
       .digest('base64url'),
     workingDirectory: canonicalRoot,
     title,
+    ...(thread.name === undefined
+      ? {}
+      : { providerTitle: boundedTitle(thread.name, thread.createdAt) }),
     ...(createdAt === undefined ? {} : { createdAt }),
     ...(lastActiveAt === undefined ? {} : { lastActiveAt }),
     providerVersion: thread.cliVersion,

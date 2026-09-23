@@ -2618,6 +2618,35 @@ export class ConversationStore {
     }
   }
 
+  reconcileGeneratedConversationTitle(
+    conversationId: ConversationId,
+    title: string,
+    updatedAt: Timestamp,
+  ): DurableConversationMutationResult {
+    const id = ConversationIdSchema.parse(conversationId)
+    const normalizedTitle = normalizeManualConversationTitle(title)
+    const timestamp = TimestampSchema.parse(updatedAt)
+    const existing = requireConversation(this.getConversation(id), id)
+    if (
+      existing.titleSource !== 'generated' ||
+      existing.title === normalizedTitle
+    ) {
+      return { conversation: existing, changed: false }
+    }
+    assertChanged(
+      this.#statement(
+        `UPDATE conversations SET title = ?, updated_at = ?
+         WHERE conversation_id = ? AND title_source = 'generated'`,
+      ).run(normalizedTitle, timestamp, id).changes,
+      'Conversation',
+      id,
+    )
+    return {
+      conversation: requireConversation(this.getConversation(id), id),
+      changed: true,
+    }
+  }
+
   pinConversation(
     conversationId: ConversationId,
     pinnedAt: Timestamp,

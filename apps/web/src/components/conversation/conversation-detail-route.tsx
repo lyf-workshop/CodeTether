@@ -226,6 +226,11 @@ function LoadedLiveConversationDetail({
     ...nativeTranscriptInfiniteQueryOptions(runtime, conversationId),
     enabled: connectionState === 'connected' && readsNativeHistory,
   })
+  const nativeTranscriptPageCount = nativeTranscriptQuery.data?.pages.length
+  const nativeTranscriptHasNextPage = nativeTranscriptQuery.hasNextPage
+  const nativeTranscriptIsFetchingNextPage =
+    nativeTranscriptQuery.isFetchingNextPage
+  const fetchNextNativeTranscriptPage = nativeTranscriptQuery.fetchNextPage
   const projectId = detail.conversation.projectId
   const machineId = detail.conversation.machineId
   const hasProjectedConversation =
@@ -253,6 +258,27 @@ function LoadedLiveConversationDetail({
     const next = includeConversationDetail(current, detail)
     if (next !== current) replaceHostProjection(queryClient, next)
   }, [detail, hasProjectedConversation, projection?.cursor.epoch, queryClient])
+
+  // A selected native Conversation is the only scope hydrated here. Continue
+  // through every opaque Provider cursor so the UI never mistakes the newest
+  // page for a complete transcript. Cursor-cycle defense remains in the query
+  // boundary and no Provider process is started by list/detail reads.
+  useEffect(() => {
+    if (
+      !readsNativeHistory ||
+      nativeTranscriptIsFetchingNextPage ||
+      !nativeTranscriptHasNextPage
+    ) {
+      return
+    }
+    void fetchNextNativeTranscriptPage()
+  }, [
+    fetchNextNativeTranscriptPage,
+    nativeTranscriptHasNextPage,
+    nativeTranscriptIsFetchingNextPage,
+    nativeTranscriptPageCount,
+    readsNativeHistory,
+  ])
 
   const conversation = projection?.conversations[conversationId]
   if (conversation === undefined) {
@@ -323,6 +349,10 @@ function LoadedLiveConversationDetail({
                 nativeTranscriptQuery.data?.pages,
               ),
               hasOlder: nativeTranscriptQuery.hasNextPage,
+              historyComplete:
+                nativeTranscriptQuery.data !== undefined &&
+                !nativeTranscriptQuery.hasNextPage &&
+                !nativeTranscriptQuery.isFetching,
               loadingOlder: nativeTranscriptQuery.isFetchingNextPage,
               loadOlder: () => {
                 void nativeTranscriptQuery.fetchNextPage()

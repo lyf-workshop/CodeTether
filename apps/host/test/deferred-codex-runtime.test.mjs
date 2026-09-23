@@ -62,6 +62,24 @@ test('concurrent first native admissions share exact initialization and retain f
         modelProvider: 'openai',
       })
     }
+    await fixture.waitForMethod('thread/read', 1)
+    fixture.respond(
+      fixture.written.find((entry) => entry.method === 'thread/read'),
+      {
+        thread: {
+          id: 'test-native-start',
+          cwd,
+          name: null,
+          createdAt: 1,
+          updatedAt: 1,
+          cliVersion: 'phase9b-test',
+          modelProvider: 'openai',
+          source: 'appServer',
+          status: { type: 'active' },
+          ephemeral: false,
+        },
+      },
+    )
     assert.equal((await started).providerThreadId, 'test-native-start')
     assert.equal((await resumed).providerThreadId, 'test-native-resume')
     assert.equal(
@@ -70,6 +88,10 @@ test('concurrent first native admissions share exact initialization and retain f
     )
     assert.equal(
       fixture.written.filter((entry) => entry.method === 'initialize').length,
+      1,
+    )
+    assert.equal(
+      fixture.written.filter((entry) => entry.method === 'thread/read').length,
       1,
     )
   } finally {

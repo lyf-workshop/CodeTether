@@ -870,6 +870,19 @@ export class LocalProviderLifecycleCoordinator {
           throw error
         }
       },
+      readSessionMetadata:
+        discovery.readSessionMetadata === undefined
+          ? undefined
+          : async (request) => {
+              try {
+                return await discovery.readSessionMetadata!(request)
+              } catch (error) {
+                if (isProviderOwnedProcessCleanupError(error)) {
+                  throw this.latchOwnedProcessCleanupFailure(provider, error)
+                }
+                throw error
+              }
+            },
       readSessionTranscript: async (request) => {
         try {
           return await discovery.readSessionTranscript!(request)

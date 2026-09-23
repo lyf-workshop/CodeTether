@@ -166,6 +166,45 @@ test('discovery exposes bounded opaque metadata and adoption starts no Provider'
   assert.equal(JSON.stringify(rescanned).includes('native-private'), false)
 })
 
+test('opening a Codex Conversation reconciles generated fallback to Provider-native title', async (t) => {
+  const native = nativeCandidate('native-title-reconcile', 'revision-title', {
+    title: 'Local fallback title',
+  })
+  const fixture = await createFixture(t, {
+    candidates: [native],
+    metadata: {
+      ...native,
+      title: 'Official Codex title',
+      providerTitle: 'Official Codex title',
+    },
+  })
+  const adopted = await adoptFirstCandidate(fixture)
+  const conversationId = adopted.data.conversation.conversationId
+
+  await fixture.service.reconcileConversationProviderTitle(conversationId)
+  assert.equal(
+    fixture.service.getConversation(conversationId).conversation.title,
+    'Official Codex title',
+  )
+  assert.equal(fixture.runtime.resumeConversationCalls, 0)
+  assert.equal(fixture.runtime.startTurnCalls, 0)
+
+  await fixture.service.renameConversation(conversationId, {
+    actionId: 'act_native_title_manual_override',
+    title: 'Owner title',
+  })
+  fixture.discovery.metadata = {
+    ...native,
+    title: 'Later official title',
+    providerTitle: 'Later official title',
+  }
+  await fixture.service.reconcileConversationProviderTitle(conversationId)
+  assert.equal(
+    fixture.service.getConversation(conversationId).conversation.title,
+    'Owner title',
+  )
+})
+
 test('adoption binding conflict stays a 409 and leaves durability healthy', async (t) => {
   const nativeSessionId = 'native-private-binding-conflict'
   const fixture = await createFixture(t, {
@@ -1109,6 +1148,7 @@ async function createFixture(t, options) {
     implementation: options.discoveryImplementation,
     transcriptGate: options.transcriptGate,
     transcriptImplementation: options.transcriptImplementation,
+    metadata: options.metadata,
   })
   const claudeDiscovery = new FakeDiscovery('claude-code', [], {
     status: options.claudeStatus ?? 'unsupported',
@@ -1198,6 +1238,7 @@ class FakeDiscovery {
     this.implementation = options.implementation
     this.transcriptGate = options.transcriptGate
     this.transcriptImplementation = options.transcriptImplementation
+    this.metadata = options.metadata
   }
 
   async discover(request) {
@@ -1234,6 +1275,15 @@ class FakeDiscovery {
     if (this.validated === undefined) return undefined
     return {
       ...this.validated,
+      provider: this.provider,
+      workingDirectory: request.projectRoot,
+    }
+  }
+
+  async readSessionMetadata(request) {
+    if (this.metadata === undefined) return undefined
+    return {
+      ...this.metadata,
       provider: this.provider,
       workingDirectory: request.projectRoot,
     }

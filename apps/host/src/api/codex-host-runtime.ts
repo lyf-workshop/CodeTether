@@ -1,4 +1,5 @@
 import type { AgentEvent } from '@codetether/agent-core'
+import { resolve } from 'node:path'
 import {
   CodexAppServerClient,
   JsonRpcRemoteError,
@@ -219,6 +220,24 @@ export class CodexHostRuntime implements AgentHostRuntime {
       sandbox: 'workspace-write',
       ...(options.model === undefined ? {} : { model: options.model }),
     })
+    if (!this.#ephemeralThreads) {
+      const stored = await client.readStoredThread({
+        threadId: result.thread.id,
+      })
+      const expectedRoot = resolve(options.cwd)
+      const storedRoot = resolve(stored.cwd)
+      const rootMatches =
+        process.platform === 'win32'
+          ? storedRoot.toLocaleLowerCase('en-US') ===
+            expectedRoot.toLocaleLowerCase('en-US')
+          : storedRoot === expectedRoot
+      if (stored.id !== result.thread.id || stored.ephemeral || !rootMatches) {
+        throw new ProviderConversationUnavailableError(
+          'codex',
+          result.thread.id,
+        )
+      }
+    }
     return {
       providerThreadId: result.thread.id,
       model: result.model,

@@ -4,6 +4,7 @@ import test from 'node:test'
 
 import {
   flattenNativeTranscriptPages,
+  nativeTranscriptHistoryComplete,
   nativeTranscriptInfiniteQueryOptions,
   nativeTranscriptStatus,
   shouldReadNativeTranscript,
@@ -117,6 +118,40 @@ test('native transcript status preserves every truthful history state', () => {
     'partial',
   )
   assert.equal(nativeTranscriptStatus(undefined), undefined)
+})
+
+test('native transcript completeness requires a truthful terminal page', () => {
+  const complete = response(
+    [entry('native_66666666666666666666', 'complete')],
+    undefined,
+  )
+  assert.equal(nativeTranscriptHistoryComplete([complete], false, false), true)
+  assert.equal(nativeTranscriptHistoryComplete([complete], true, false), false)
+  assert.equal(nativeTranscriptHistoryComplete([complete], false, true), false)
+  assert.equal(nativeTranscriptHistoryComplete(undefined, false, false), false)
+
+  const partial = response(
+    [entry('native_77777777777777777777', 'partial')],
+    undefined,
+    'partial',
+  )
+  assert.equal(nativeTranscriptHistoryComplete([partial], false, false), false)
+
+  const malformedAfterReadable = response([], undefined, 'malformed')
+  assert.equal(
+    nativeTranscriptHistoryComplete(
+      [complete, malformedAfterReadable],
+      false,
+      false,
+    ),
+    false,
+  )
+
+  const unfinished = { ...complete, complete: false }
+  assert.equal(
+    nativeTranscriptHistoryComplete([unfinished], false, false),
+    false,
+  )
 })
 
 test('automatic history reads are restricted to explicitly adopted native Conversations', () => {

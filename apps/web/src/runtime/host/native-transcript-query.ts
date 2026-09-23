@@ -93,3 +93,19 @@ export function nativeTranscriptStatus(
   }
   return pages[0]?.status
 }
+
+export function nativeTranscriptHistoryComplete(
+  pages: readonly ReadNativeTranscriptResponse[] | undefined,
+  hasNextPage: boolean,
+  isFetching: boolean,
+): boolean {
+  if (pages === undefined || pages.length === 0 || hasNextPage || isFetching) {
+    return false
+  }
+
+  const status = nativeTranscriptStatus(pages)
+  return (
+    (status === 'available' || status === 'empty') &&
+    pages.at(-1)?.complete === true
+  )
+}

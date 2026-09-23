@@ -47,6 +47,7 @@ import {
 import { projectDetailQueryOptions } from '../../runtime/host/project-query'
 import {
   flattenNativeTranscriptPages,
+  nativeTranscriptHistoryComplete,
   nativeTranscriptInfiniteQueryOptions,
   nativeTranscriptStatus,
   shouldReadNativeTranscript,
@@ -349,10 +350,11 @@ function LoadedLiveConversationDetail({
                 nativeTranscriptQuery.data?.pages,
               ),
               hasOlder: nativeTranscriptQuery.hasNextPage,
-              historyComplete:
-                nativeTranscriptQuery.data !== undefined &&
-                !nativeTranscriptQuery.hasNextPage &&
-                !nativeTranscriptQuery.isFetching,
+              historyComplete: nativeTranscriptHistoryComplete(
+                nativeTranscriptQuery.data?.pages,
+                nativeTranscriptQuery.hasNextPage,
+                nativeTranscriptQuery.isFetching,
+              ),
               loadingOlder: nativeTranscriptQuery.isFetchingNextPage,
               loadOlder: () => {
                 void nativeTranscriptQuery.fetchNextPage()

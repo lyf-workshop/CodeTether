@@ -33,6 +33,7 @@ import {
   type HostClaimRecord,
   type HostRegistrationChallengeRecord,
 } from '../persistence/host-identity-repository.js'
+import { ProductDeviceRepository } from '../persistence/product-device-repository.js'
 import type { AuthenticatedHumanRequestContext } from './authenticated-account-service.js'
 import type { AuthenticatedProductDeviceContext } from './product-device-authentication-service.js'
 
@@ -64,6 +65,13 @@ const claimCompletionSchema = z
   .object({
     payload: hostClaimConfirmationPayloadSchema,
     proof: z.string().min(1).max(8192),
+  })
+  .strict()
+const claimExpirationSchema = z
+  .object({
+    spaceId: spaceIdSchema,
+    hostFingerprint: fingerprintSchema,
+    claimGeneration: z.number().int().nonnegative(),
   })
   .strict()
 const CHALLENGE_LIFETIME_MS = 5 * 60 * 1000
@@ -341,13 +349,6 @@ export class HostIdentityService {
     if (claim.state !== 'requested')
       throw new HostIdentityFailure('host_claim_consumed')
     if (claim.expiresAt <= now) {
-      await this.database.transaction((transaction) =>
-        new HostIdentityRepository(transaction).expireClaim(
-          claim.claimId,
-          claim.hostId,
-          now,
-        ),
-      )
       throw new HostIdentityFailure('host_claim_expired')
     }
     const host = await repository.findHost(hostId)
@@ -423,6 +424,175 @@ export class HostIdentityService {
       ownerSpaceId: claim.spaceId,
       state: 'completed' as const,
     }
+  }
+
+  public async expireExactHostClaim(
+    human: AuthenticatedHumanRequestContext,
+    device: AuthenticatedProductDeviceContext,
+    untrustedHostId: string,
+    untrustedClaimId: string,
+    untrusted: unknown,
+  ) {
+    const hostId = hostIdSchema.parse(untrustedHostId)
+    const claimId = hostClaimIdSchema.parse(untrustedClaimId)
+    const input = claimExpirationSchema.parse(untrusted)
+    if (
+      input.spaceId !== human.personalSpaceId ||
+      device.userId !== human.userId
+    ) {
+      throw new HostIdentityFailure('host_space_not_permitted')
+    }
+
+    return this.database.transaction(async (transaction) => {
+      const repository = new HostIdentityRepository(transaction)
+      const host = await repository.findHostForUpdate(hostId)
+      if (!host) throw new HostIdentityFailure('host_claim_identity_mismatch')
+
+      const claim = await repository.findClaimForUpdate(claimId)
+      if (!claim) throw new HostIdentityFailure('host_claim_not_found')
+
+      const currentDevice = await new ProductDeviceRepository(
+        transaction,
+      ).findProductDeviceForUpdate(device.deviceId)
+      if (
+        !currentDevice ||
+        currentDevice.ownerUserId !== human.userId ||
+        currentDevice.revokedAt ||
+        currentDevice.keyGeneration !== device.keyGeneration
+      ) {
+        throw new HostIdentityFailure('host_claim_device_unavailable')
+      }
+      if (
+        claim.requestingUserId !== human.userId ||
+        claim.requestingDeviceId !== device.deviceId ||
+        claim.spaceId !== input.spaceId
+      ) {
+        throw new HostIdentityFailure('host_claim_requester_mismatch')
+      }
+      if (!(await repository.userCanOwnSpace(input.spaceId, human.userId))) {
+        throw new HostIdentityFailure('host_space_not_permitted')
+      }
+      if (
+        claim.hostId !== hostId ||
+        claim.claimGeneration !== input.claimGeneration ||
+        claim.challengePurpose !== 'host_claim' ||
+        claim.challengeTargetHostId !== hostId ||
+        claim.challengeTargetSpaceId !== input.spaceId ||
+        claim.challengeTargetUserId !== human.userId ||
+        claim.challengeTargetDeviceId !== device.deviceId ||
+        claim.challengeExpiresAt.getTime() !== claim.expiresAt.getTime() ||
+        host.claimGeneration !== input.claimGeneration ||
+        host.fingerprint !== input.hostFingerprint ||
+        host.revokedAt
+      ) {
+        throw new HostIdentityFailure('host_claim_identity_mismatch')
+      }
+      if (claim.challengeConsumedAt !== null) {
+        throw new HostIdentityFailure('host_claim_state_conflict')
+      }
+
+      const activeReservationClaimIds =
+        await repository.findActiveReservationClaimIds(
+          hostId,
+          input.claimGeneration,
+        )
+      const expirationEvents =
+        await repository.findClaimExpirationEvents(claimId)
+      const serverTime = await repository.readServerTime()
+      const expiredByServerTime =
+        serverTime > claim.expiresAt && serverTime > claim.challengeExpiresAt
+
+      if (claim.state === 'expired') {
+        if (
+          !expiredByServerTime ||
+          host.owningSpaceId !== null ||
+          host.claimState !== 'unclaimed' ||
+          claim.confirmedAt !== null ||
+          claim.completedAt !== null ||
+          claim.revokedAt !== null ||
+          activeReservationClaimIds.length !== 0 ||
+          expirationEvents.length !== 1 ||
+          expirationEvents[0]?.actorKind !== 'device' ||
+          expirationEvents[0].actorId !== device.deviceId ||
+          expirationEvents[0].targetKind !== 'host' ||
+          expirationEvents[0].targetId !== hostId ||
+          expirationEvents[0].outcome !== 'success' ||
+          expirationEvents[0].reasonCode !== null
+        ) {
+          throw new HostIdentityFailure('host_claim_state_conflict')
+        }
+        return {
+          result: 'already_expired' as const,
+          claimId,
+          hostId,
+          state: 'expired' as const,
+          hostState: 'unclaimed' as const,
+          ownerSpaceId: null,
+        }
+      }
+      if (claim.state === 'confirmed' || claim.confirmedAt !== null) {
+        throw new HostIdentityFailure(
+          'host_claim_confirmation_recovery_required',
+        )
+      }
+      if (
+        claim.state !== 'requested' ||
+        claim.completedAt !== null ||
+        claim.revokedAt !== null ||
+        host.owningSpaceId !== null ||
+        host.claimState !== 'pending' ||
+        activeReservationClaimIds.length !== 1 ||
+        activeReservationClaimIds[0] !== claimId ||
+        expirationEvents.length !== 0
+      ) {
+        throw new HostIdentityFailure('host_claim_state_conflict')
+      }
+      if (!expiredByServerTime) {
+        throw new HostIdentityFailure('host_claim_not_expired')
+      }
+
+      if (
+        !(await repository.expireRequestedClaim({
+          claimId,
+          hostId,
+          spaceId: input.spaceId,
+          requestingUserId: human.userId,
+          requestingDeviceId: device.deviceId,
+          claimGeneration: input.claimGeneration,
+          serverTime,
+        })) ||
+        !(await repository.releasePendingHostReservation({
+          hostId,
+          fingerprint: input.hostFingerprint,
+          claimGeneration: input.claimGeneration,
+          serverTime,
+        }))
+      ) {
+        throw new HostIdentityFailure('host_claim_state_conflict')
+      }
+
+      await new ControlPlaneRepository(transaction).appendSecurityEvent(
+        event({
+          eventType: 'host_claim_expired',
+          actorKind: 'device',
+          actorId: device.deviceId,
+          targetKind: 'host',
+          targetId: hostId,
+          outcome: 'success',
+          reasonCode: null,
+          correlationId: claimId,
+          occurredAt: serverTime,
+        }),
+      )
+      return {
+        result: 'expired' as const,
+        claimId,
+        hostId,
+        state: 'expired' as const,
+        hostState: 'unclaimed' as const,
+        ownerSpaceId: null,
+      }
+    })
   }
 
   public async readClaim(untrusted: string): Promise<HostClaimRecord | null> {

@@ -134,6 +134,22 @@ function productDeviceProof(request: IncomingMessage): string | undefined {
 }
 
 function hostIdentityFailureStatus(error: HostIdentityFailure): number {
+  if (error.code === 'host_claim_not_found') return 404
+  if (
+    error.code === 'host_claim_requester_mismatch' ||
+    error.code === 'host_claim_device_unavailable' ||
+    error.code === 'host_space_not_permitted'
+  ) {
+    return 403
+  }
+  if (
+    error.code === 'host_claim_not_expired' ||
+    error.code === 'host_claim_state_conflict' ||
+    error.code === 'host_claim_confirmation_recovery_required' ||
+    error.code === 'host_claim_identity_mismatch'
+  ) {
+    return 409
+  }
   if (error.code.endsWith('_expired')) return 410
   if (
     error.code.endsWith('_consumed') ||
@@ -353,9 +369,19 @@ export async function startControlPlaneServer(
       /^\/v1\/hosts\/(host_[A-Za-z0-9][A-Za-z0-9_-]{15,95})\/claims\/(hclaim_[A-Za-z0-9][A-Za-z0-9_-]{15,95})$/.exec(
         pathname,
       )
-    if (claimChallengeMatch || claimConfirmMatch || claimStateMatch) {
+    const claimExpirationMatch =
+      /^\/v1\/hosts\/(host_[A-Za-z0-9][A-Za-z0-9_-]{15,95})\/claims\/(hclaim_[A-Za-z0-9][A-Za-z0-9_-]{15,95})\/expire$/.exec(
+        pathname,
+      )
+    if (
+      claimChallengeMatch ||
+      claimConfirmMatch ||
+      claimStateMatch ||
+      claimExpirationMatch
+    ) {
       if (
-        ((claimChallengeMatch || claimConfirmMatch) && method !== 'POST') ||
+        ((claimChallengeMatch || claimConfirmMatch || claimExpirationMatch) &&
+          method !== 'POST') ||
         (claimStateMatch && method !== 'GET')
       ) {
         sendJson(response, 405, { status: 'method_not_allowed' }, false)
@@ -409,6 +435,15 @@ export async function startControlPlaneServer(
             human,
             device,
             claimConfirmMatch[1],
+            input,
+          )
+          sendJson(response, 200, result, false)
+        } else if (claimExpirationMatch?.[1] && claimExpirationMatch[2]) {
+          const result = await options.hostIdentityService.expireExactHostClaim(
+            human,
+            device,
+            claimExpirationMatch[1],
+            claimExpirationMatch[2],
             input,
           )
           sendJson(response, 200, result, false)

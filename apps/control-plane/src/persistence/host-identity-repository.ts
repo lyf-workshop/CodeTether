@@ -61,9 +61,21 @@ interface ClaimRow extends Record<string, unknown> {
   readonly expires_at: Date | string
   readonly confirmed_at: Date | string | null
   readonly completed_at: Date | string | null
+  readonly revoked_at: Date | string | null
   readonly proof_version: number
   readonly audience: string
   readonly nonce_hash: string
+  readonly challenge_expires_at: Date | string
+  readonly challenge_consumed_at: Date | string | null
+  readonly challenge_purpose: 'host_claim'
+  readonly challenge_target_user_id: UserId
+  readonly challenge_target_space_id: SpaceId
+  readonly challenge_target_device_id: ProductDeviceId
+  readonly challenge_target_host_id: HostId
+}
+
+interface ServerTimeRow extends Record<string, unknown> {
+  readonly server_time: Date | string
 }
 export interface HostRecord {
   readonly hostId: HostId
@@ -113,9 +125,26 @@ export interface HostClaimRecord {
   readonly expiresAt: Date
   readonly confirmedAt: Date | null
   readonly completedAt: Date | null
+  readonly revokedAt: Date | null
   readonly proofVersion: number
   readonly audience: string
   readonly nonceHash: string
+  readonly challengeExpiresAt: Date
+  readonly challengeConsumedAt: Date | null
+  readonly challengePurpose: 'host_claim'
+  readonly challengeTargetUserId: UserId
+  readonly challengeTargetSpaceId: SpaceId
+  readonly challengeTargetDeviceId: ProductDeviceId
+  readonly challengeTargetHostId: HostId
+}
+
+export interface HostClaimExpirationEventRecord {
+  readonly actorKind: string
+  readonly actorId: string
+  readonly targetKind: string | null
+  readonly targetId: string | null
+  readonly outcome: string
+  readonly reasonCode: string | null
 }
 
 function hostFromRow(row: HostRow): HostRecord {
@@ -171,9 +200,17 @@ function claimFromRow(row: ClaimRow): HostClaimRecord {
     expiresAt: asDate(row.expires_at),
     confirmedAt: optionalDate(row.confirmed_at),
     completedAt: optionalDate(row.completed_at),
+    revokedAt: optionalDate(row.revoked_at),
     proofVersion: row.proof_version,
     audience: row.audience,
     nonceHash: row.nonce_hash,
+    challengeExpiresAt: asDate(row.challenge_expires_at),
+    challengeConsumedAt: optionalDate(row.challenge_consumed_at),
+    challengePurpose: row.challenge_purpose,
+    challengeTargetUserId: row.challenge_target_user_id,
+    challengeTargetSpaceId: row.challenge_target_space_id,
+    challengeTargetDeviceId: row.challenge_target_device_id,
+    challengeTargetHostId: row.challenge_target_host_id,
   }
 }
 
@@ -253,6 +290,14 @@ export class HostIdentityRepository {
     return result.rows[0] ? hostFromRow(result.rows[0]) : null
   }
 
+  public async findHostForUpdate(hostId: HostId): Promise<HostRecord | null> {
+    const result = await this.executor.query<HostRow>(
+      'SELECT * FROM control_plane.hosts WHERE host_id=$1 FOR UPDATE',
+      [hostId],
+    )
+    return result.rows[0] ? hostFromRow(result.rows[0]) : null
+  }
+
   public async createClaim(input: {
     claimId: HostClaimId
     hostId: HostId
@@ -309,10 +354,117 @@ export class HostIdentityRepository {
     claimId: HostClaimId,
   ): Promise<HostClaimRecord | null> {
     const result = await this.executor.query<ClaimRow>(
-      `SELECT c.*, e.nonce_hash FROM control_plane.host_claims c JOIN control_plane.enrollment_challenges e ON e.challenge_id=c.challenge_id WHERE c.claim_id=$1`,
+      `SELECT c.*, e.nonce_hash, e.expires_at AS challenge_expires_at,
+              e.consumed_at AS challenge_consumed_at,
+              e.purpose AS challenge_purpose,
+              e.target_user_id AS challenge_target_user_id,
+              e.target_space_id AS challenge_target_space_id,
+              e.target_device_id AS challenge_target_device_id,
+              e.target_host_id AS challenge_target_host_id
+         FROM control_plane.host_claims c
+         JOIN control_plane.enrollment_challenges e
+           ON e.challenge_id=c.challenge_id
+        WHERE c.claim_id=$1`,
       [claimId],
     )
     return result.rows[0] ? claimFromRow(result.rows[0]) : null
+  }
+
+  public async findClaimForUpdate(
+    claimId: HostClaimId,
+  ): Promise<HostClaimRecord | null> {
+    const result = await this.executor.query<ClaimRow>(
+      `SELECT c.*, e.nonce_hash, e.expires_at AS challenge_expires_at,
+              e.consumed_at AS challenge_consumed_at,
+              e.purpose AS challenge_purpose,
+              e.target_user_id AS challenge_target_user_id,
+              e.target_space_id AS challenge_target_space_id,
+              e.target_device_id AS challenge_target_device_id,
+              e.target_host_id AS challenge_target_host_id
+         FROM control_plane.host_claims c
+         JOIN control_plane.enrollment_challenges e
+           ON e.challenge_id=c.challenge_id
+        WHERE c.claim_id=$1
+        FOR UPDATE OF c`,
+      [claimId],
+    )
+    return result.rows[0] ? claimFromRow(result.rows[0]) : null
+  }
+
+  public async readServerTime(): Promise<Date> {
+    const result = await this.executor.query<ServerTimeRow>(
+      'SELECT clock_timestamp() AS server_time',
+    )
+    const value = result.rows[0]?.server_time
+    if (!value) throw new Error('Control Plane server time unavailable')
+    return asDate(value)
+  }
+
+  public async userCanOwnSpace(
+    spaceId: SpaceId,
+    userId: UserId,
+  ): Promise<boolean> {
+    const result = await this.executor.query<{ permitted: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1
+           FROM control_plane.spaces s
+           JOIN control_plane.space_memberships m
+             ON m.space_id=s.space_id
+           JOIN control_plane.users u
+             ON u.user_id=m.user_id
+          WHERE s.space_id=$1
+            AND m.user_id=$2
+            AND m.role='owner'
+            AND u.status='active'
+       ) AS permitted`,
+      [spaceId, userId],
+    )
+    return result.rows[0]?.permitted === true
+  }
+
+  public async findActiveReservationClaimIds(
+    hostId: HostId,
+    claimGeneration: number,
+  ): Promise<readonly HostClaimId[]> {
+    const result = await this.executor.query<{ claim_id: HostClaimId }>(
+      `SELECT claim_id
+         FROM control_plane.host_claims
+        WHERE host_id=$1
+          AND claim_generation=$2
+          AND state IN ('requested','confirmed')
+        ORDER BY claim_id
+        FOR UPDATE`,
+      [hostId, claimGeneration],
+    )
+    return result.rows.map((row) => row.claim_id)
+  }
+
+  public async findClaimExpirationEvents(
+    claimId: HostClaimId,
+  ): Promise<readonly HostClaimExpirationEventRecord[]> {
+    const result = await this.executor.query<{
+      actor_kind: string
+      actor_id: string
+      target_kind: string | null
+      target_id: string | null
+      outcome: string
+      reason_code: string | null
+    }>(
+      `SELECT actor_kind, actor_id, target_kind, target_id, outcome, reason_code
+         FROM control_plane.security_events
+        WHERE event_type='host_claim_expired'
+          AND correlation_id=$1
+        ORDER BY occurred_at, event_id`,
+      [claimId],
+    )
+    return result.rows.map((row) => ({
+      actorKind: row.actor_kind,
+      actorId: row.actor_id,
+      targetKind: row.target_kind,
+      targetId: row.target_id,
+      outcome: row.outcome,
+      reasonCode: row.reason_code,
+    }))
   }
 
   public async completeClaim(
@@ -336,20 +488,66 @@ export class HostIdentityRepository {
     return completed.rowCount === 1
   }
 
-  public async expireClaim(
-    claimId: HostClaimId,
-    hostId: HostId,
-    now: Date,
-  ): Promise<boolean> {
-    const result = await this.executor.query<ClaimRow>(
-      `UPDATE control_plane.host_claims SET state='expired' WHERE claim_id=$1 AND state='requested' AND expires_at<=$3 RETURNING claim_id`,
-      [claimId, hostId, now],
+  public async expireRequestedClaim(input: {
+    claimId: HostClaimId
+    hostId: HostId
+    spaceId: SpaceId
+    requestingUserId: UserId
+    requestingDeviceId: ProductDeviceId
+    claimGeneration: number
+    serverTime: Date
+  }): Promise<boolean> {
+    const result = await this.executor.query<{ claim_id: HostClaimId }>(
+      `UPDATE control_plane.host_claims
+          SET state='expired'
+        WHERE claim_id=$1
+          AND host_id=$2
+          AND space_id=$3
+          AND requesting_user_id=$4
+          AND requesting_device_id=$5
+          AND claim_generation=$6
+          AND state='requested'
+          AND confirmed_at IS NULL
+          AND completed_at IS NULL
+          AND revoked_at IS NULL
+          AND expires_at<$7
+      RETURNING claim_id`,
+      [
+        input.claimId,
+        input.hostId,
+        input.spaceId,
+        input.requestingUserId,
+        input.requestingDeviceId,
+        input.claimGeneration,
+        input.serverTime,
+      ],
     )
-    if (result.rowCount === 1)
-      await this.executor.query(
-        `UPDATE control_plane.hosts SET claim_state='unclaimed',updated_at=$2 WHERE host_id=$1 AND claim_state='pending' AND owning_space_id IS NULL`,
-        [hostId, now],
-      )
+    return result.rowCount === 1
+  }
+
+  public async releasePendingHostReservation(input: {
+    hostId: HostId
+    fingerprint: string
+    claimGeneration: number
+    serverTime: Date
+  }): Promise<boolean> {
+    const result = await this.executor.query<HostRow>(
+      `UPDATE control_plane.hosts
+          SET claim_state='unclaimed', updated_at=$4
+        WHERE host_id=$1
+          AND fingerprint=$2
+          AND claim_generation=$3
+          AND claim_state='pending'
+          AND owning_space_id IS NULL
+          AND revoked_at IS NULL
+      RETURNING host_id`,
+      [
+        input.hostId,
+        input.fingerprint,
+        input.claimGeneration,
+        input.serverTime,
+      ],
+    )
     return result.rowCount === 1
   }
 }

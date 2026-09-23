@@ -279,6 +279,17 @@ export class ProductDeviceRepository {
     return row ? toDevice(row) : null
   }
 
+  public async findProductDeviceForUpdate(
+    deviceId: ProductDeviceId,
+  ): Promise<ProductDeviceRecord | null> {
+    const result = await this.executor.query<ProductDeviceRow>(
+      `${deviceProjection} WHERE device_id = $1 FOR UPDATE`,
+      [deviceId],
+    )
+    const row = result.rows[0]
+    return row ? toDevice(row) : null
+  }
+
   public async fingerprintIsRegistered(fingerprint: string): Promise<boolean> {
     const result = await this.executor.query<{ present: boolean }>(
       `SELECT EXISTS (

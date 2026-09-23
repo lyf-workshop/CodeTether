@@ -74,10 +74,23 @@ create, public-key, sign, and explicit-destroy operations and leaves future
 macOS, iOS, and Android protected-key implementations outside this phase.
 
 ProductDevice authentication grants no Host, Machine, Node, Controller, Relay,
-Provider, Conversation, Turn, or Supervisor authority. Local CodeTether remains
-independent of Control Plane availability. Revocation blocks subsequent
-device-bound authentication without deleting the User, personal Space, Host,
-Machine trust, or local product data.
+Provider, Conversation, Turn, or Supervisor authority. Host registration and
+Owner-confirmed claiming are separate Phase 9A.5 operations; a registered
+ProductDevice does not receive Host access merely by existing. Local
+CodeTether remains independent of Control Plane availability. Revocation
+blocks subsequent device-bound authentication without deleting the User,
+personal Space, Host, Machine trust, or local product data.
+
+An exact expired Host claim can be released through
+`POST /v1/hosts/:hostId/claims/:claimId/expire`. The route requires both the
+Supabase human session and a ProductDevice-bound request proof. PostgreSQL
+server time is authoritative. One transaction validates the original
+User/device/Space and Host identity, marks only the eligible requested claim
+expired, returns only its still-unowned pending Host to `unclaimed`, and emits
+one `host_claim_expired` security event. It does not consume the already-expired
+challenge, reconstruct its nonce, grant ownership, or create Supervisor,
+Machine, Node, Relay, or Provider authority. A later claim is a distinct action
+with a new challenge and Owner confirmation.
 
 ## Local PostgreSQL
 

@@ -79,6 +79,44 @@ authentication therefore remains separate from Supervisor authorization.
 No claim changes Machine, Controller, Node, Relay, Project, Conversation, or
 Provider state.
 
+## Expired claim recovery
+
+An interrupted claim can outlive its five-minute deadline while the still
+unowned Host remains reserved in `pending`. Recovery is an explicit,
+device-bound de-authorization operation:
+
+`POST /v1/hosts/:hostId/claims/:claimId/expire`
+
+The request requires a valid Supabase human session and a current,
+non-revoked ProductDevice proof. Its signed body binds the exact target Space,
+Host fingerprint, and claim generation; the service also requires that the
+authenticated User and ProductDevice are the original claim requester. The
+transaction locks and revalidates the exact Host and claim, current device,
+Space membership, active reservation, and prior expiration event. PostgreSQL
+server time—not a client clock—must be strictly later than both the claim and
+challenge deadlines.
+
+Only a `requested`, unconfirmed, unconsumed claim for a still-unowned
+`pending` Host can make the transition. The same transaction marks that exact
+claim `expired`, returns the exact Host to `unclaimed`, leaves
+`owning_space_id` null, and appends one bounded `host_claim_expired` event. A
+repeat after the complete transition is deterministic and does not append a
+second event. Conflicting ownership, confirmation, identity, generation,
+reservation, or event state fails closed; it is never repaired
+opportunistically.
+
+Expiration does not consume the enrollment challenge. Its `expires_at`
+deadline already makes it unusable, while `consumed_at` remains null because
+no Host confirmation occurred. The raw nonce is intentionally never persisted
+and is neither reconstructed nor required: a Host signature would add no
+security to an operation that can only remove an expired reservation and
+cannot grant ownership or execution authority.
+
+Expiration and a later claim are separate actions. A released Host may accept
+a new claim with a new claim id, challenge, nonce, expiry, ProductDevice proof,
+and explicit Owner confirmation. An old confirmation cannot complete an
+expired claim or transfer to the new claim.
+
 ## Outage behavior
 
 An unclaimed Host continues local operation and retains its local Machine and

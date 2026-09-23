@@ -1,5 +1,6 @@
 import type {
   EnrollmentChallengeId,
+  HostAuthorizationId,
   HostClaimId,
   HostId,
   ProductDeviceId,
@@ -77,6 +78,36 @@ interface ClaimRow extends Record<string, unknown> {
 interface ServerTimeRow extends Record<string, unknown> {
   readonly server_time: Date | string
 }
+
+interface AuthorizationChallengeRow extends Record<string, unknown> {
+  readonly challenge_id: EnrollmentChallengeId
+  readonly purpose: 'host_device_authorization'
+  readonly target_user_id: UserId
+  readonly target_space_id: SpaceId
+  readonly target_device_id: ProductDeviceId
+  readonly target_host_id: HostId
+  readonly nonce_hash: string
+  readonly created_at: Date | string
+  readonly expires_at: Date | string
+  readonly consumed_at: Date | string | null
+}
+
+interface AuthorizationRow extends Record<string, unknown> {
+  readonly authorization_id: HostAuthorizationId
+  readonly host_id: HostId
+  readonly claim_generation: number
+  readonly device_id: ProductDeviceId
+  readonly device_key_generation: number
+  readonly device_fingerprint: string
+  readonly user_id: UserId
+  readonly space_id: SpaceId
+  readonly scope: 'supervisor_read'
+  readonly authorization_serial: string | number | bigint
+  readonly authorization_generation: number
+  readonly issued_at: Date | string
+  readonly expires_at: Date | string
+  readonly revoked_at: Date | string | null
+}
 export interface HostRecord {
   readonly hostId: HostId
   readonly owningSpaceId: SpaceId | null
@@ -147,6 +178,36 @@ export interface HostClaimExpirationEventRecord {
   readonly reasonCode: string | null
 }
 
+export interface HostDeviceAuthorizationChallengeRecord {
+  readonly challengeId: EnrollmentChallengeId
+  readonly purpose: 'host_device_authorization'
+  readonly userId: UserId
+  readonly spaceId: SpaceId
+  readonly deviceId: ProductDeviceId
+  readonly hostId: HostId
+  readonly nonceHash: string
+  readonly createdAt: Date
+  readonly expiresAt: Date
+  readonly consumedAt: Date | null
+}
+
+export interface HostDeviceAuthorizationRecord {
+  readonly authorizationId: HostAuthorizationId
+  readonly hostId: HostId
+  readonly hostIdentityGeneration: number
+  readonly deviceId: ProductDeviceId
+  readonly deviceKeyGeneration: number
+  readonly deviceFingerprint: string
+  readonly userId: UserId
+  readonly spaceId: SpaceId
+  readonly scope: 'supervisor_read'
+  readonly authorizationSerial: bigint
+  readonly authorizationGeneration: number
+  readonly issuedAt: Date
+  readonly expiresAt: Date
+  readonly revokedAt: Date | null
+}
+
 function hostFromRow(row: HostRow): HostRecord {
   return {
     hostId: row.host_id,
@@ -211,6 +272,44 @@ function claimFromRow(row: ClaimRow): HostClaimRecord {
     challengeTargetSpaceId: row.challenge_target_space_id,
     challengeTargetDeviceId: row.challenge_target_device_id,
     challengeTargetHostId: row.challenge_target_host_id,
+  }
+}
+
+function authorizationChallengeFromRow(
+  row: AuthorizationChallengeRow,
+): HostDeviceAuthorizationChallengeRecord {
+  return {
+    challengeId: row.challenge_id,
+    purpose: row.purpose,
+    userId: row.target_user_id,
+    spaceId: row.target_space_id,
+    deviceId: row.target_device_id,
+    hostId: row.target_host_id,
+    nonceHash: row.nonce_hash,
+    createdAt: asDate(row.created_at),
+    expiresAt: asDate(row.expires_at),
+    consumedAt: optionalDate(row.consumed_at),
+  }
+}
+
+function authorizationFromRow(
+  row: AuthorizationRow,
+): HostDeviceAuthorizationRecord {
+  return {
+    authorizationId: row.authorization_id,
+    hostId: row.host_id,
+    hostIdentityGeneration: row.claim_generation,
+    deviceId: row.device_id,
+    deviceKeyGeneration: row.device_key_generation,
+    deviceFingerprint: row.device_fingerprint,
+    userId: row.user_id,
+    spaceId: row.space_id,
+    scope: row.scope,
+    authorizationSerial: BigInt(row.authorization_serial),
+    authorizationGeneration: row.authorization_generation,
+    issuedAt: asDate(row.issued_at),
+    expiresAt: asDate(row.expires_at),
+    revokedAt: optionalDate(row.revoked_at),
   }
 }
 
@@ -398,6 +497,172 @@ export class HostIdentityRepository {
     const value = result.rows[0]?.server_time
     if (!value) throw new Error('Control Plane server time unavailable')
     return asDate(value)
+  }
+
+  public async createDeviceAuthorizationChallenge(input: {
+    challengeId: EnrollmentChallengeId
+    userId: UserId
+    spaceId: SpaceId
+    deviceId: ProductDeviceId
+    hostId: HostId
+    nonceHash: string
+    createdAt: Date
+    expiresAt: Date
+  }): Promise<void> {
+    await this.executor.query(
+      `INSERT INTO control_plane.enrollment_challenges (
+         challenge_id, purpose, target_user_id, target_space_id,
+         target_device_id, target_host_id, nonce_hash, created_at, expires_at
+       ) VALUES ($1,'host_device_authorization',$2,$3,$4,$5,$6,$7,$8)`,
+      [
+        input.challengeId,
+        input.userId,
+        input.spaceId,
+        input.deviceId,
+        input.hostId,
+        input.nonceHash,
+        input.createdAt,
+        input.expiresAt,
+      ],
+    )
+  }
+
+  public async findDeviceAuthorizationChallenge(
+    challengeId: EnrollmentChallengeId,
+    forUpdate = false,
+  ): Promise<HostDeviceAuthorizationChallengeRecord | null> {
+    const result = await this.executor.query<AuthorizationChallengeRow>(
+      `SELECT challenge_id, purpose, target_user_id, target_space_id,
+              target_device_id, target_host_id, nonce_hash, created_at,
+              expires_at, consumed_at
+         FROM control_plane.enrollment_challenges
+        WHERE challenge_id=$1
+          AND purpose='host_device_authorization'
+        ${forUpdate ? 'FOR UPDATE' : ''}`,
+      [challengeId],
+    )
+    return result.rows[0] ? authorizationChallengeFromRow(result.rows[0]) : null
+  }
+
+  public async consumeDeviceAuthorizationChallenge(
+    challengeId: EnrollmentChallengeId,
+    consumedAt: Date,
+  ): Promise<boolean> {
+    const result = await this.executor.query<{ challenge_id: string }>(
+      `UPDATE control_plane.enrollment_challenges
+          SET consumed_at=$2
+        WHERE challenge_id=$1
+          AND purpose='host_device_authorization'
+          AND consumed_at IS NULL
+          AND expires_at>$2
+      RETURNING challenge_id`,
+      [challengeId, consumedAt],
+    )
+    return result.rowCount === 1
+  }
+
+  public async findDeviceAuthorization(
+    authorizationId: HostAuthorizationId,
+  ): Promise<HostDeviceAuthorizationRecord | null> {
+    const result = await this.executor.query<AuthorizationRow>(
+      `SELECT * FROM control_plane.host_device_authorizations
+        WHERE authorization_id=$1`,
+      [authorizationId],
+    )
+    return result.rows[0] ? authorizationFromRow(result.rows[0]) : null
+  }
+
+  public async findEffectiveDeviceAuthorization(
+    hostId: HostId,
+    deviceId: ProductDeviceId,
+    userId: UserId,
+    spaceId: SpaceId,
+    now: Date,
+  ): Promise<HostDeviceAuthorizationRecord | null> {
+    const result = await this.executor.query<AuthorizationRow>(
+      `SELECT a.*
+         FROM control_plane.host_device_authorizations a
+         JOIN control_plane.hosts h ON h.host_id=a.host_id
+         JOIN control_plane.product_devices d ON d.device_id=a.device_id
+         JOIN control_plane.users u ON u.user_id=a.user_id
+         JOIN control_plane.space_memberships m
+           ON m.space_id=a.space_id AND m.user_id=a.user_id AND m.role='owner'
+        WHERE a.host_id=$1
+          AND a.device_id=$2
+          AND a.user_id=$3
+          AND a.space_id=$4
+          AND a.scope='supervisor_read'
+          AND a.revoked_at IS NULL
+          AND a.expires_at>$5
+          AND h.owning_space_id=a.space_id
+          AND h.claim_generation=a.claim_generation
+          AND h.claim_state='claimed'
+          AND h.revoked_at IS NULL
+          AND d.owner_user_id=a.user_id
+          AND d.key_generation=a.device_key_generation
+          AND d.fingerprint=a.device_fingerprint
+          AND d.revoked_at IS NULL
+          AND u.status='active'
+        ORDER BY a.authorization_generation DESC, a.authorization_id
+        LIMIT 1`,
+      [hostId, deviceId, userId, spaceId, now],
+    )
+    return result.rows[0] ? authorizationFromRow(result.rows[0]) : null
+  }
+
+  public async nextDeviceAuthorizationSequence(
+    hostId: HostId,
+    deviceId: ProductDeviceId,
+  ): Promise<{ serial: bigint; generation: number }> {
+    const result = await this.executor.query<{
+      next_serial: string | number | bigint
+      next_generation: number
+    }>(
+      `SELECT
+         (SELECT COALESCE(MAX(authorization_serial),0)+1
+            FROM control_plane.host_device_authorizations
+           WHERE host_id=$1) AS next_serial,
+         (SELECT COALESCE(MAX(authorization_generation),0)+1
+            FROM control_plane.host_device_authorizations
+           WHERE host_id=$1 AND device_id=$2) AS next_generation`,
+      [hostId, deviceId],
+    )
+    const row = result.rows[0]
+    if (!row) throw new Error('Authorization sequence unavailable')
+    return {
+      serial: BigInt(row.next_serial),
+      generation: Number(row.next_generation),
+    }
+  }
+
+  public async revokeDeviceAuthorization(input: {
+    authorizationId: HostAuthorizationId
+    hostId: HostId
+    deviceId: ProductDeviceId
+    userId: UserId
+    spaceId: SpaceId
+    revokedAt: Date
+  }): Promise<boolean> {
+    const result = await this.executor.query<{ authorization_id: string }>(
+      `UPDATE control_plane.host_device_authorizations
+          SET revoked_at=$6
+        WHERE authorization_id=$1
+          AND host_id=$2
+          AND device_id=$3
+          AND user_id=$4
+          AND space_id=$5
+          AND revoked_at IS NULL
+      RETURNING authorization_id`,
+      [
+        input.authorizationId,
+        input.hostId,
+        input.deviceId,
+        input.userId,
+        input.spaceId,
+        input.revokedAt,
+      ],
+    )
+    return result.rowCount === 1
   }
 
   public async userCanOwnSpace(

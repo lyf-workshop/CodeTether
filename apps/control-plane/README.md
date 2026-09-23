@@ -2,8 +2,9 @@
 
 `@codetether/control-plane` is the account-directory service introduced by
 Phase 9A.2, connected to Supabase Auth in Phase 9A.3, and extended with
-ProductDevice authentication in Phase 9A.4. It is separate from Host, Node,
-and Relay and owns only the Cloud metadata frozen in
+ProductDevice authentication in Phase 9A.4, Host ownership in Phase 9A.5, and
+explicit ProductDevice-to-Host authorization in Phase 9A.6. It is separate
+from Host, Node, and Relay and owns only the Cloud metadata frozen in
 `docs/ACCOUNT-CONTROL-PLANE.md`.
 
 Supabase is the sole human-authentication authority. CodeTether validates a
@@ -12,14 +13,22 @@ and personal `space_*`; it never stores access tokens, refresh tokens, OTPs,
 passwords, or JWT signing secrets. ProductDevice registration combines a valid
 human session with ES256 candidate-key possession. Device-bound requests then
 require the human session and a signed, token-bound ProductDevice proof backed
-by shared PostgreSQL replay protection. Host claiming, Supervisor transport,
-Relay enrollment, and public account mutation remain unimplemented.
+by shared PostgreSQL replay protection. Supervisor transport, Relay
+enrollment, and public account mutation remain unimplemented.
 
 `GET /v1/account/me` remains human-authenticated and does not assert a device.
 `GET /v1/device/me` requires both authorities. Bootstrap uses
 `POST /v1/devices/registration-challenge` and `POST /v1/devices/register`.
 `POST /v1/devices/:deviceId/revoke` requires a device-bound request from a
 ProductDevice owned by the same User.
+
+Host control admission uses the existing Host identity and
+`host_device_authorizations` authority. The narrow
+`/v1/hosts/:hostId/device-authorization` route family requests an exact
+authorization, confirms it with the Host's existing ES256 key after explicit
+local Owner action, reads its effective state, and revokes it. Every route
+requires the human session plus the existing ProductDevice-bound proof. See
+`docs/PHASE9A6-HOST-CONTROL-AUTHORIZATION.md` for the exact MVP boundary.
 
 ## Layout
 
@@ -73,13 +82,15 @@ ES256 signature. It cannot export private-key bytes. The abstraction has
 create, public-key, sign, and explicit-destroy operations and leaves future
 macOS, iOS, and Android protected-key implementations outside this phase.
 
-ProductDevice authentication grants no Host, Machine, Node, Controller, Relay,
-Provider, Conversation, Turn, or Supervisor authority. Host registration and
-Owner-confirmed claiming are separate Phase 9A.5 operations; a registered
-ProductDevice does not receive Host access merely by existing. Local
-CodeTether remains independent of Control Plane availability. Revocation
-blocks subsequent device-bound authentication without deleting the User,
-personal Space, Host, Machine trust, or local product data.
+ProductDevice authentication alone grants no Host, Machine, Node, Controller,
+Relay, Provider, Conversation, Turn, or Supervisor authority. Host registration
+and Owner-confirmed claiming are separate Phase 9A.5 operations. Phase 9A.6
+adds a separate explicit ProductDevice-to-Host authorization, which still does
+not create Machine Controller trust or another execution identity. Local
+CodeTether remains independent of Control Plane availability. Device
+revocation blocks subsequent device-bound authentication and effective Host
+authorization without deleting the User, personal Space, Host, Machine trust,
+or local product data.
 
 An exact expired Host claim can be released through
 `POST /v1/hosts/:hostId/claims/:claimId/expire`. The route requires both the

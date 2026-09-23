@@ -7,6 +7,7 @@ import {
 import { z } from 'zod'
 import {
   enrollmentChallengeIdSchema,
+  hostAuthorizationIdSchema,
   hostClaimIdSchema,
   hostIdSchema,
   productDeviceIdSchema,
@@ -23,6 +24,8 @@ export const HOST_AUDIENCE = 'codetether-control-plane-host' as const
 export const HOST_REGISTRATION_PROOF_TYPE =
   'codetether-host-registration+jws' as const
 export const HOST_CLAIM_PROOF_TYPE = 'codetether-host-claim+jws' as const
+export const HOST_DEVICE_AUTHORIZATION_PROOF_TYPE =
+  'codetether-host-device-authorization+jws' as const
 
 const nonceSchema = z.string().regex(/^[A-Za-z0-9_-]{22,86}$/)
 const safeText = (maximum: number) =>
@@ -78,6 +81,35 @@ export type HostClaimConfirmationPayload = z.infer<
   typeof hostClaimConfirmationPayloadSchema
 >
 
+export const hostDeviceAuthorizationPayloadSchema = z
+  .object({
+    v: z.literal(HOST_PROOF_VERSION),
+    aud: z.literal(HOST_AUDIENCE),
+    purpose: z.literal('host_device_authorization'),
+    authorizationId: hostAuthorizationIdSchema,
+    challengeId: enrollmentChallengeIdSchema,
+    hostId: hostIdSchema,
+    hostFingerprint: fingerprintSchema,
+    hostIdentityGeneration: z.number().int().nonnegative(),
+    spaceId: spaceIdSchema,
+    userId: userIdSchema,
+    deviceId: productDeviceIdSchema,
+    deviceKeyGeneration: z.number().int().nonnegative(),
+    deviceFingerprint: fingerprintSchema,
+    scope: z.literal('supervisor_read'),
+    nonce: nonceSchema,
+    iat: z.number().int().nonnegative(),
+    exp: z.number().int().positive(),
+    authorizationExpiresAt: z.number().int().positive(),
+  })
+  .strict()
+  .refine(({ authorizationExpiresAt, exp, iat }) => {
+    return exp > iat && authorizationExpiresAt > exp
+  })
+export type HostDeviceAuthorizationPayload = z.infer<
+  typeof hostDeviceAuthorizationPayloadSchema
+>
+
 function canonicalJsonBytes(
   value: Record<string, string | number>,
 ): Uint8Array {
@@ -90,9 +122,7 @@ export function hostPublicJwkSchema() {
   return productDevicePublicJwkSchema
 }
 
-export async function admitHostPublicJwk(
-  untrusted: unknown,
-): Promise<{
+export async function admitHostPublicJwk(untrusted: unknown): Promise<{
   readonly publicJwk: z.infer<typeof productDevicePublicJwkSchema>
   readonly canonicalPublicJwk: string
   readonly fingerprint: string
@@ -156,6 +186,32 @@ export function encodeHostClaimConfirmationPayload(
   })
 }
 
+export function encodeHostDeviceAuthorizationPayload(
+  untrusted: HostDeviceAuthorizationPayload,
+): Uint8Array {
+  const p = hostDeviceAuthorizationPayloadSchema.parse(untrusted)
+  return canonicalJsonBytes({
+    aud: p.aud,
+    authorizationExpiresAt: p.authorizationExpiresAt,
+    authorizationId: p.authorizationId,
+    challengeId: p.challengeId,
+    deviceFingerprint: p.deviceFingerprint,
+    deviceId: p.deviceId,
+    deviceKeyGeneration: p.deviceKeyGeneration,
+    exp: p.exp,
+    hostFingerprint: p.hostFingerprint,
+    hostId: p.hostId,
+    hostIdentityGeneration: p.hostIdentityGeneration,
+    iat: p.iat,
+    nonce: p.nonce,
+    purpose: p.purpose,
+    scope: p.scope,
+    spaceId: p.spaceId,
+    userId: p.userId,
+    v: p.v,
+  })
+}
+
 async function verify(
   compact: string,
   publicJwk: z.infer<typeof productDevicePublicJwkSchema>,
@@ -210,5 +266,18 @@ export async function verifyHostClaimConfirmationProof(
     publicJwk,
     HOST_CLAIM_PROOF_TYPE,
     encodeHostClaimConfirmationPayload(payload),
+  )
+}
+
+export async function verifyHostDeviceAuthorizationProof(
+  compact: string,
+  publicJwk: z.infer<typeof productDevicePublicJwkSchema>,
+  payload: HostDeviceAuthorizationPayload,
+): Promise<void> {
+  await verify(
+    compact,
+    publicJwk,
+    HOST_DEVICE_AUTHORIZATION_PROOF_TYPE,
+    encodeHostDeviceAuthorizationPayload(payload),
   )
 }

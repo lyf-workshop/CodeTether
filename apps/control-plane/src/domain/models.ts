@@ -81,7 +81,11 @@ export type CreateHost = z.infer<typeof createHostSchema>
 export const createEnrollmentChallengeSchema = z
   .object({
     challengeId: enrollmentChallengeIdSchema,
-    purpose: z.enum(['device_registration', 'host_claim']),
+    purpose: z.enum([
+      'device_registration',
+      'host_claim',
+      'host_device_authorization',
+    ]),
     targetUserId: userIdSchema,
     targetSpaceId: spaceIdSchema.nullable(),
     targetDeviceId: productDeviceIdSchema.nullable(),
@@ -98,12 +102,14 @@ export const createEnrollmentChallengeSchema = z
       })
     }
     if (
-      value.purpose === 'host_claim' &&
+      (value.purpose === 'host_claim' ||
+        value.purpose === 'host_device_authorization') &&
       (!value.targetSpaceId || !value.targetDeviceId || !value.targetHostId)
     ) {
       context.addIssue({
         code: 'custom',
-        message: 'Host claim challenges require exact space, device, and host',
+        message:
+          'Host challenges require exact space, device, and host identities',
       })
     }
     if (

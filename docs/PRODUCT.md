@@ -210,6 +210,24 @@ Explicitly deferred:
 
 ## Current Phase
 
+**Phase 9A — Account Foundation MVP** is accepted at `59debca`. Supabase owns
+human authentication; stable CodeTether Users and personal Spaces own Hosts;
+protected ProductDevices prove device possession; and explicit Host-signed
+authorization admits one ProductDevice to one Host. These relationships do not
+create Machine trust or move Project, Conversation, Turn, Provider, source, or
+transcript authority into the cloud.
+
+**Phase 9B.1 — Authenticated Host Directory and Codex Compatibility** is the
+active product scope. Desktop can sign into the existing account, use the
+existing protected ProductDevice, and list only currently owned and authorized
+Hosts. An exact Desktop-owned local Host can open the existing Machines view;
+non-local rows remain unreachable until a real Host Supervisor transport exists.
+Opening one adopted Codex Conversation may lazily load all native transcript
+pages and reconcile a generated fallback title from the exact native Codex name.
+New CodeTether Codex Conversations must prove a persistent native thread before
+creation succeeds. See
+[`PHASE9B1-PRODUCT-DIRECTORY-CODEX-COMPATIBILITY.md`](PHASE9B1-PRODUCT-DIRECTORY-CODEX-COMPATIBILITY.md).
+
 Phase 1 Frontend Experience is accepted and frozen as **CodeTether V2 Frontend Core v1**. Phase 2A and Phase 2A.1 are accepted and frozen as **Phase 2A Codex Runtime v1**. Phase 2B is accepted as the local-only Client-to-Host Protocol v1 boundary.
 
 **Phase 2C.1 — Live Conversation Read Model** is accepted. It connects only the frozen Desktop Conversation Detail read path to that Host boundary. A real `conv_*` route loads bootstrap and an in-memory Snapshot, follows normalized Host events over one application-scoped SSE runtime, projects them into the same view model used by the Demo, and renders the result read-only.

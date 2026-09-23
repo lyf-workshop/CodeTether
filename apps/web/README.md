@@ -6,6 +6,15 @@ The accepted Phase 1 visual surface is frozen. `/conversations/demo` continues t
 
 The development Host URL defaults to `http://127.0.0.1:4317` and can be overridden once with `VITE_CODETETHER_HOST_URL`. Bootstrap, Snapshot, and projection records use TanStack Query. One SSE runtime owns reconnect and the browser-memory cursor; components do not parse SSE, sequence numbers, provider IDs, or Codex JSON-RPC.
 
+The Phase 9B.1 Desktop account entry uses `VITE_CODETETHER_CONTROL_PLANE_URL`,
+`VITE_SUPABASE_URL`, and `VITE_SUPABASE_PUBLISHABLE_KEY`. These are public
+application coordinates; no Supabase secret key is used. Supabase remains the
+human-session authority, while an existing non-exportable ProductDevice CNG key
+signs the established device request proof. `/hosts` lists only effective
+owned Host authorizations and never starts a Provider. Only an exact match to
+the Desktop-owned local Host can currently open the existing Machines surface;
+arbitrary ProductDevice-to-Host Supervisor transport remains unimplemented.
+
 On a live route, the existing Composer starts text Turns, pending Approval rows resolve one-shot `accept` or `decline` decisions by exact Host identity, and the Header interrupts the exact active Turn. The controller never creates an optimistic canonical User message and waits for Host events before treating Approval or Turn terminal state as final. Unsupported quick actions, model/reasoning/permission changes, and Stop remain disabled. Inbox and Conversations remain Mock data, and all runtime history is process-local rather than persistent.
 
 `/__ui` remains a development-only component showcase rather than a product route.

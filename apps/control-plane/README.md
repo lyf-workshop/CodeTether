@@ -123,6 +123,13 @@ For a plaintext PostgreSQL server bound only to the local development machine,
 set `CODETETHER_CONTROL_PLANE_DATABASE_TLS=disable` explicitly; managed
 PostgreSQL keeps the certificate-verified default.
 
+The authenticated Desktop directory uses `GET /v1/devices` to match an
+existing local protected ProductDevice key and `GET /v1/hosts/directory` to
+return only the exact current ProductDevice's effective, owned Host
+authorizations. The latter requires the established ProductDevice request
+proof. Neither endpoint returns Machine, Project, Conversation, Provider, or
+filesystem state.
+
 ## Configuration
 
 | Variable                                                 | Required | Default       | Meaning                                                                                  |
@@ -136,6 +143,7 @@ PostgreSQL keeps the certificate-verified default.
 | `CODETETHER_CONTROL_PLANE_DATABASE_IDLE_TIMEOUT_MS`      | no       | `30000`       | idle connection timeout                                                                  |
 | `CODETETHER_CONTROL_PLANE_DATABASE_STATEMENT_TIMEOUT_MS` | no       | `15000`       | PostgreSQL statement timeout                                                             |
 | `CODETETHER_CONTROL_PLANE_DATABASE_TLS`                  | no       | `verify-full` | certificate-verified TLS; use `disable` only for an explicitly local disposable database |
+| `CODETETHER_CONTROL_PLANE_ALLOWED_ORIGINS`               | no       | Tauri + Vite  | comma-separated exact HTTPS or local Desktop development origins                         |
 | `SUPABASE_URL`                                           | service  | none          | exact HTTPS Supabase project origin                                                      |
 | `SUPABASE_PUBLISHABLE_KEY`                               | service  | none          | `sb_publishable_*` application key                                                       |
 

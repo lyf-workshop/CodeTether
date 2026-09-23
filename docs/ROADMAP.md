@@ -1307,17 +1307,19 @@ Phase 8D also implements [Relay-assisted first pairing](PHASE8D-RELAY-ASSISTED-F
 
 Host durable ProviderInstallation selection is authoritative. Node-local selection is observation/default only; existing Conversation bindings are immutable and new Conversations bind the current exact Owner selection. Remote session-open validates the exact installation ID and expected revision against fresh physical compatibility, readiness, and capabilities without PATH-first, equivalent-version, Node-default, or alternate-installation fallback.
 
-## Phase 9 — Account Foundation and Mobile Companion
+## Phase 9 — Account-Connected Product
 
-**Status:** Phase 9A.1 account-authority specification is authorized. Control Plane implementation and Mobile implementation remain paused until separately authorized.
+**Status:** Phase 9A Account Foundation MVP is accepted at `59debca`. Phase
+9B.1 authenticated Desktop directory and Codex compatibility work is in
+progress. Mobile remains paused.
 
 ### Phase 9A — Account and Cloud Control Plane Foundation
 
 **Goal:** add human accounts, independent ProductDevice identity, explicit Host ownership and Host Supervisor authorization, and a minimal privacy-preserving Host directory without replacing any Phase 8D product or execution authority.
 
-Phase 9A.1 freezes the authority specification and ADR in [Account and Cloud Control Plane Authority](ACCOUNT-CONTROL-PLANE.md). Managed Supabase Auth is the sole MVP human-authentication authority. CodeTether device authorization, Host authorization, Machine Controller trust, and Relay enrollment remain separate and non-transitive. `apps/control-plane` is reserved as a future service boundary; no runtime, schema, Supabase, Relay, Host, or Mobile implementation is included in 9A.1.
+Phase 9A.1 freezes the authority specification and ADR in [Account and Cloud Control Plane Authority](ACCOUNT-CONTROL-PLANE.md). Managed Supabase Auth is the sole MVP human-authentication authority. CodeTether device authorization, Host authorization, Machine Controller trust, and Relay enrollment remain separate and non-transitive. The accepted `apps/control-plane` implementation provides the private-schema account, ProductDevice, Host ownership, and explicit Host authorization foundation without replacing Host product authority.
 
-Planned later Phase 9A implementation outcomes require separate authorization:
+Accepted Phase 9A implementation outcomes:
 
 - Control Plane account/Space directory and bounded security events.
 - ProductDevice public identity, protected private key, request proof, and revocation.
@@ -1326,9 +1328,27 @@ Planned later Phase 9A implementation outcomes require separate authorization:
 - Desktop account, device, Host, and active-session management.
 - REAL multi-device validation without changing Phase 8D execution identities.
 
-### Phase 9B — Mobile Supervisor
+### Phase 9B.1 — Authenticated Desktop Host Directory
 
-**Status:** architecture audit is informative; implementation is paused until the Phase 9A Account Foundation is accepted.
+**Status:** implementation and automated validation in progress; Owner REAL
+Desktop and official Codex discovery evidence remains required.
+
+**Goal:** connect the existing Desktop human session and protected
+ProductDevice to a privacy-preserving authorized Host directory, then read live
+state only from the exact Host authority. The same phase restores complete
+paginated native Codex history, verifies persistent native thread creation, and
+reconciles generated CodeTether titles from native Codex names where exposed.
+
+The existing Controller-to-Node Direct/Relay transport is not a
+ProductDevice-to-Host Supervisor transport. Until that separately authorized
+boundary exists, non-local directory rows remain unreachable; ProductDevice
+identity is never converted into Machine Controller trust.
+
+See [Phase 9B.1 Product Directory and Codex Compatibility](PHASE9B1-PRODUCT-DIRECTORY-CODEX-COMPATIBILITY.md).
+
+### Later Phase 9B — Mobile Supervisor
+
+**Status:** implementation paused until Owner direction after Phase 9B.1.
 
 **Goal:** add focused mobile monitoring first, followed only by separately authorized approval, reply, and native-resume capabilities over an authenticated Host Supervisor boundary.
 

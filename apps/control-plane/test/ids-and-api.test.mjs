@@ -46,6 +46,10 @@ test('configuration requires PostgreSQL and defaults to loopback only', () => {
   assert.equal(configuration.listenHost, '127.0.0.1')
   assert.equal(configuration.listenPort, 4320)
   assert.equal(configuration.databaseTls, 'verify-full')
+  assert.deepEqual(configuration.allowedOrigins, [
+    'http://tauri.localhost',
+    'http://127.0.0.1:5173',
+  ])
   assert.throws(() =>
     readControlPlaneDatabaseConfiguration({
       CODETETHER_CONTROL_PLANE_DATABASE_URL: 'sqlite:///unsafe.db',
@@ -65,6 +69,17 @@ test('configuration requires PostgreSQL and defaults to loopback only', () => {
     SUPABASE_PUBLISHABLE_KEY: `sb_publishable_${'a'.repeat(32)}`,
   })
   assert.equal(authenticated.supabaseUrl, 'https://example.supabase.co')
+  assert.deepEqual(
+    readControlPlaneConfiguration({
+      CODETETHER_CONTROL_PLANE_DATABASE_URL:
+        'postgresql://control-plane.invalid/codetether',
+      CODETETHER_CONTROL_PLANE_ALLOWED_ORIGINS:
+        'http://tauri.localhost,https://desktop.example.test',
+      SUPABASE_URL: 'https://example.supabase.co',
+      SUPABASE_PUBLISHABLE_KEY: `sb_publishable_${'a'.repeat(32)}`,
+    }).allowedOrigins,
+    ['http://tauri.localhost', 'https://desktop.example.test'],
+  )
   assert.throws(() =>
     readControlPlaneConfiguration({
       CODETETHER_CONTROL_PLANE_DATABASE_URL:

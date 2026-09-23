@@ -208,6 +208,11 @@ export interface HostDeviceAuthorizationRecord {
   readonly revokedAt: Date | null
 }
 
+export interface AuthorizedHostDirectoryRecord {
+  readonly host: HostRecord
+  readonly authorization: HostDeviceAuthorizationRecord
+}
+
 function hostFromRow(row: HostRow): HostRecord {
   return {
     hostId: row.host_id,
@@ -608,6 +613,63 @@ export class HostIdentityRepository {
       [hostId, deviceId, userId, spaceId, now],
     )
     return result.rows[0] ? authorizationFromRow(result.rows[0]) : null
+  }
+
+  /**
+   * Directory projection for one exact authenticated User/ProductDevice pair.
+   * Relational joins repeat the effective-access checks so a stale grant can
+   * never make an unowned, revoked, or generation-mismatched Host visible.
+   */
+  public async listEffectiveAuthorizedHosts(
+    deviceId: ProductDeviceId,
+    userId: UserId,
+    spaceId: SpaceId,
+    now: Date,
+  ): Promise<readonly AuthorizedHostDirectoryRecord[]> {
+    const result = await this.executor.query<HostRow & AuthorizationRow>(
+      `SELECT h.*,
+              a.authorization_id, a.host_id, a.claim_generation,
+              a.device_id, a.device_key_generation, a.device_fingerprint,
+              a.user_id, a.space_id, a.scope, a.authorization_serial,
+              a.authorization_generation, a.issued_at, a.expires_at,
+              a.revoked_at
+         FROM control_plane.host_device_authorizations a
+         JOIN control_plane.hosts h ON h.host_id=a.host_id
+         JOIN control_plane.product_devices d ON d.device_id=a.device_id
+         JOIN control_plane.users u ON u.user_id=a.user_id
+         JOIN control_plane.space_memberships m
+           ON m.space_id=a.space_id AND m.user_id=a.user_id AND m.role='owner'
+        WHERE a.device_id=$1
+          AND a.user_id=$2
+          AND a.space_id=$3
+          AND a.scope='supervisor_read'
+          AND a.revoked_at IS NULL
+          AND a.expires_at>$4
+          AND h.owning_space_id=a.space_id
+          AND h.claim_generation=a.claim_generation
+          AND h.claim_state='claimed'
+          AND h.revoked_at IS NULL
+          AND d.owner_user_id=a.user_id
+          AND d.key_generation=a.device_key_generation
+          AND d.fingerprint=a.device_fingerprint
+          AND d.revoked_at IS NULL
+          AND u.status='active'
+        ORDER BY h.safe_label, h.host_id,
+                 a.authorization_generation DESC, a.authorization_id`,
+      [deviceId, userId, spaceId, now],
+    )
+
+    const seen = new Set<HostId>()
+    const directory: AuthorizedHostDirectoryRecord[] = []
+    for (const row of result.rows) {
+      if (seen.has(row.host_id)) continue
+      seen.add(row.host_id)
+      directory.push({
+        host: hostFromRow(row),
+        authorization: authorizationFromRow(row),
+      })
+    }
+    return directory
   }
 
   public async nextDeviceAuthorizationSequence(

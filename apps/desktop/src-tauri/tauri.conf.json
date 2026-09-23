@@ -32,7 +32,7 @@
       "csp": {
         "base-uri": "'none'",
         "default-src": "'self'",
-        "connect-src": "http://127.0.0.1:4317",
+        "connect-src": "http://127.0.0.1:4317 http://127.0.0.1:4320 https://*.supabase.co",
         "font-src": "'self' data:",
         "form-action": "'none'",
         "frame-ancestors": "'none'",
@@ -44,7 +44,7 @@
       "devCsp": {
         "base-uri": "'none'",
         "default-src": "'self'",
-        "connect-src": "http://127.0.0.1:4317 http://127.0.0.1:5173 ws://127.0.0.1:5173",
+        "connect-src": "http://127.0.0.1:4317 http://127.0.0.1:4320 http://127.0.0.1:5173 ws://127.0.0.1:5173 https://*.supabase.co",
         "font-src": "'self' data:",
         "form-action": "'none'",
         "frame-ancestors": "'none'",

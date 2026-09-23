@@ -56,7 +56,7 @@ export function StartupGate() {
 
   if (onboardingQuery.data !== undefined) {
     return onboardingQuery.data.step === 'ready' ? (
-      <Navigate to="/inbox" replace />
+      <Navigate to="/hosts" replace />
     ) : (
       <Navigate to="/setup" replace />
     )

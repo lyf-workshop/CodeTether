@@ -224,6 +224,24 @@ export class ProductDeviceRepository {
     return row ? toChallenge(row) : null
   }
 
+  /**
+   * Human-authenticated key discovery for the owner's existing Desktop.
+   * This returns public device metadata only; it does not authenticate a
+   * ProductDevice and intentionally excludes revoked devices.
+   */
+  public async listActiveProductDevicesForUser(
+    userId: UserId,
+  ): Promise<readonly ProductDeviceRecord[]> {
+    const result = await this.executor.query<ProductDeviceRow>(
+      `${deviceProjection}
+        WHERE owner_user_id = $1
+          AND revoked_at IS NULL
+        ORDER BY created_at, device_id`,
+      [userId],
+    )
+    return result.rows.map(toDevice)
+  }
+
   public async consumeRegistrationChallenge(
     challengeId: EnrollmentChallengeId,
     userId: UserId,

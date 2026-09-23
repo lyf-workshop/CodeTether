@@ -29,6 +29,7 @@ export interface ControlPlaneServerOptions {
   readonly authenticatedAccountService?: AuthenticatedAccountService
   readonly productDeviceAuthenticationService?: ProductDeviceAuthenticationService
   readonly hostIdentityService?: HostIdentityService
+  readonly allowedOrigins?: readonly string[]
 }
 
 export interface RunningControlPlaneServer {
@@ -179,6 +180,27 @@ export async function startControlPlaneServer(
     const headOnly = method === 'HEAD'
     const requestUrl = new URL(request.url ?? '/', 'http://control-plane.local')
     const pathname = requestUrl.pathname
+    const origin = request.headers.origin
+    const originAllowed =
+      typeof origin === 'string' && options.allowedOrigins?.includes(origin)
+    if (originAllowed) {
+      response.setHeader('access-control-allow-origin', origin)
+      response.setHeader('vary', 'Origin')
+    }
+    if (method === 'OPTIONS') {
+      if (!originAllowed) {
+        sendJson(response, 403, { status: 'origin_not_allowed' }, false)
+        return
+      }
+      response.writeHead(204, {
+        'access-control-allow-headers':
+          'Authorization, Content-Type, X-CodeTether-Device-Proof',
+        'access-control-allow-methods': 'GET, POST, OPTIONS',
+        'access-control-max-age': '600',
+      })
+      response.end()
+      return
+    }
     if (pathname === '/healthz') {
       if (method !== 'GET' && !headOnly) {
         sendJson(response, 405, { status: 'method_not_allowed' }, false)
@@ -244,6 +266,58 @@ export async function startControlPlaneServer(
         }
         if (error instanceof HumanAuthNotConfiguredError) {
           sendJson(response, 503, { status: 'auth_unavailable' }, false)
+          return
+        }
+        sendJson(response, 500, { status: 'internal_error' }, false)
+      }
+      return
+    }
+
+    if (pathname === '/v1/devices') {
+      if (method !== 'GET') {
+        sendJson(response, 405, { status: 'method_not_allowed' }, false)
+        return
+      }
+      if (requestUrl.search) {
+        sendJson(response, 400, { status: 'invalid_request' }, false)
+        return
+      }
+      if (
+        !options.humanAuthVerifier ||
+        !options.authenticatedAccountService ||
+        !options.productDeviceAuthenticationService
+      ) {
+        sendJson(response, 503, { status: 'auth_unavailable' }, false)
+        return
+      }
+      try {
+        const human =
+          await options.authenticatedAccountService.verifyAndResolveRequestContext(
+            options.humanAuthVerifier,
+            bearerToken(request.headers.authorization),
+          )
+        const devices =
+          await options.productDeviceAuthenticationService.listActiveProductDevices(
+            human,
+          )
+        sendJson(response, 200, { devices }, false)
+      } catch (error) {
+        if (error instanceof HumanAuthFailure) {
+          sendJson(
+            response,
+            authFailureStatus(error),
+            { status: 'authentication_failed', code: error.code },
+            false,
+          )
+          return
+        }
+        if (error instanceof ProductDeviceAuthFailure) {
+          sendJson(
+            response,
+            deviceAuthFailureStatus(error),
+            { status: 'device_authentication_failed', code: error.code },
+            false,
+          )
           return
         }
         sendJson(response, 500, { status: 'internal_error' }, false)
@@ -362,6 +436,87 @@ export async function startControlPlaneServer(
           return
         }
         sendJson(response, 400, { status: 'invalid_request' }, false)
+      }
+      return
+    }
+
+    if (pathname === '/v1/hosts/directory') {
+      if (method !== 'GET') {
+        sendJson(response, 405, { status: 'method_not_allowed' }, false)
+        return
+      }
+      if (requestUrl.search) {
+        sendJson(response, 400, { status: 'invalid_request' }, false)
+        return
+      }
+      if (
+        !options.humanAuthVerifier ||
+        !options.authenticatedAccountService ||
+        !options.productDeviceAuthenticationService ||
+        !options.hostIdentityService
+      ) {
+        sendJson(response, 503, { status: 'auth_unavailable' }, false)
+        return
+      }
+      try {
+        const body = await readBoundedBody(request, 1_024)
+        if (body.byteLength !== 0) {
+          throw new InvalidRequestBodyError('This route requires an empty body')
+        }
+        const human =
+          await options.authenticatedAccountService.verifyAndResolveRequestContext(
+            options.humanAuthVerifier,
+            bearerToken(request.headers.authorization),
+          )
+        const device =
+          await options.productDeviceAuthenticationService.authenticateProductDeviceRequest(
+            human,
+            {
+              compactProof: productDeviceProof(request),
+              method,
+              rawResource: request.url ?? pathname,
+              body,
+            },
+          )
+        const directory =
+          await options.hostIdentityService.listAuthorizedHostDirectory(
+            human,
+            device,
+          )
+        sendJson(response, 200, directory, false)
+      } catch (error) {
+        if (error instanceof InvalidRequestBodyError) {
+          sendJson(response, 400, { status: 'invalid_request' }, false)
+          return
+        }
+        if (error instanceof HumanAuthFailure) {
+          sendJson(
+            response,
+            authFailureStatus(error),
+            { status: 'authentication_failed', code: error.code },
+            false,
+          )
+          return
+        }
+        if (error instanceof ProductDeviceAuthFailure) {
+          sendJson(
+            response,
+            deviceAuthFailureStatus(error),
+            { status: 'device_authentication_failed', code: error.code },
+            false,
+          )
+          return
+        }
+        if (error instanceof HostIdentityFailure) {
+          sendJson(
+            response,
+            hostIdentityFailureStatus(error),
+            { status: 'host_identity_failed', code: error.code },
+            false,
+          )
+          return
+        }
+        sendJson(response, 500, { status: 'internal_error' }, false)
       }
       return
     }

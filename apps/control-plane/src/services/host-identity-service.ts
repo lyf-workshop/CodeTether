@@ -1022,6 +1022,40 @@ export class HostIdentityService {
     return publicAuthorization(authorization)
   }
 
+  public async listAuthorizedHostDirectory(
+    human: AuthenticatedHumanRequestContext,
+    device: AuthenticatedProductDeviceContext,
+  ) {
+    if (human.status !== 'active' || device.userId !== human.userId) {
+      throw new HostIdentityFailure('host_device_authorization_owner_mismatch')
+    }
+    const rows = await new HostIdentityRepository(
+      this.database,
+    ).listEffectiveAuthorizedHosts(
+      device.deviceId,
+      human.userId,
+      human.personalSpaceId,
+      this.now(),
+    )
+    return {
+      hosts: rows.map(({ host, authorization }) => ({
+        hostId: host.hostId,
+        safeLabel: host.safeLabel,
+        coarsePlatform: host.coarsePlatform,
+        identityGeneration: host.claimGeneration,
+        fingerprint: host.fingerprint,
+        protocolVersionMin: host.protocolVersionMin,
+        protocolVersionMax: host.protocolVersionMax,
+        authorization: {
+          state: 'authorized' as const,
+          authorizationId: authorization.authorizationId,
+          scope: authorization.scope,
+          expiresAt: authorization.expiresAt.toISOString(),
+        },
+      })),
+    }
+  }
+
   public async readDeviceAuthorization(
     human: AuthenticatedHumanRequestContext,
     device: AuthenticatedProductDeviceContext,

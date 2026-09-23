@@ -26,6 +26,7 @@ test('Browser capability stays unavailable without loading Tauri code', async ()
   assert.equal(hasTauriRuntime({ isTauri: false }), false)
   assert.equal(capabilities.directoryPicker.available, false)
   assert.equal(capabilities.providerGuidance.available, false)
+  assert.equal(capabilities.productDeviceIdentity.available, false)
   await assert.rejects(
     capabilities.directoryPicker.pickDirectory(),
     /unavailable/u,
@@ -35,6 +36,54 @@ test('Browser capability stays unavailable without loading Tauri code', async ()
     /unavailable/u,
   )
   assert.equal(loadCalls, 0)
+})
+
+test('Desktop exposes only existing ProductDevice public metadata and bounded signing commands', async () => {
+  const calls = []
+  const description = {
+    keyHandle: `CodeTether.ProductDevice.${'a'.repeat(32)}`,
+    publicKey: { kty: 'EC', crv: 'P-256', x: 'x', y: 'y' },
+    keyAlgorithm: 'ES256',
+    keyGeneration: 1,
+    privateKeyExportable: false,
+    protection: 'windows_cng_software_ksp_non_exportable',
+  }
+  const capabilities = createNativeCapabilities({
+    tauriAvailable: true,
+    loadTauriCore: async () => ({
+      async invoke(command, input) {
+        calls.push({ command, input })
+        if (command === 'product_device_key_list') return [description]
+        if (command === 'product_device_key_public') return description
+        if (command === 'product_device_key_sign') {
+          return { signatureBase64Url: 'signature', keyAlgorithm: 'ES256' }
+        }
+      },
+    }),
+  })
+
+  assert.deepEqual(await capabilities.productDeviceIdentity.listKeys(), [
+    description,
+  ])
+  await capabilities.productDeviceIdentity.readPublic(description.keyHandle)
+  await capabilities.productDeviceIdentity.sign(
+    description.keyHandle,
+    'cGF5bG9hZA',
+  )
+  assert.deepEqual(calls, [
+    { command: 'product_device_key_list', input: undefined },
+    {
+      command: 'product_device_key_public',
+      input: { keyHandle: description.keyHandle },
+    },
+    {
+      command: 'product_device_key_sign',
+      input: {
+        keyHandle: description.keyHandle,
+        payloadBase64Url: 'cGF5bG9hZA',
+      },
+    },
+  ])
 })
 
 test('Desktop opens only a typed allowlisted Provider guidance command', async () => {

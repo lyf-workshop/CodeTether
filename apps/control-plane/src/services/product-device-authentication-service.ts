@@ -587,4 +587,16 @@ export class ProductDeviceAuthenticationService {
     ).findProductDevice(deviceId)
     return device ? toPublicDevice(device) : null
   }
+
+  public async listActiveProductDevices(
+    human: AuthenticatedHumanRequestContext,
+  ): Promise<readonly ReturnType<typeof toPublicDevice>[]> {
+    if (human.status !== 'active') {
+      throw new ProductDeviceAuthFailure('device_owner_mismatch')
+    }
+    const devices = await new ProductDeviceRepository(
+      this.database,
+    ).listActiveProductDevicesForUser(human.userId)
+    return devices.map(toPublicDevice)
+  }
 }

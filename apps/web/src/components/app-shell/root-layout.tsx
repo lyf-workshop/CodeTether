@@ -29,6 +29,7 @@ const pageTitles = {
   '/activity': '活动',
   '/agents': '智能体',
   '/doctor': 'CodeTether 检查',
+  '/hosts': 'My Hosts',
   '/inbox': '收件箱',
   '/machines': '电脑',
   '/projects': '项目',

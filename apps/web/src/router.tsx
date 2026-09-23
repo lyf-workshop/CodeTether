@@ -20,6 +20,7 @@ import { MachineDetailRoute, MachinesPage } from './components/machines'
 import { ProjectDetailRoute, ProjectsPage } from './components/projects'
 import { DesktopNotificationSettings } from './components/settings'
 import { DoctorPage } from './components/doctor'
+import { HostDirectoryPage } from './components/hosts'
 import { OnboardingPage, StartupGate } from './components/onboarding'
 
 const rootRoute = createRootRoute({ component: RootLayout })
@@ -134,6 +135,12 @@ const machinesRoute = createRoute({
   component: MachinesPage,
 })
 
+const hostsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/hosts',
+  component: HostDirectoryPage,
+})
+
 const machineDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/machines/$machineId',
@@ -158,6 +165,7 @@ const routeTree = rootRoute.addChildren([
   projectDetailRoute,
   projectConversationsRoute,
   agentsRoute,
+  hostsRoute,
   machinesRoute,
   machineDetailRoute,
   settingsRoute,

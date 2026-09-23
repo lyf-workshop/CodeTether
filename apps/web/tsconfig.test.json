@@ -76,6 +76,7 @@
     "src/runtime/host/project-query.ts",
     "src/runtime/host/project-view-state.ts",
     "src/runtime/host/relay-actions.ts",
+    "src/runtime/account/control-plane-client.ts",
     "src/runtime/native/native-capabilities.ts",
     "src/runtime/native/notification-preferences.ts",
     "src/runtime/notifications/attention-notification-coordinator.ts",

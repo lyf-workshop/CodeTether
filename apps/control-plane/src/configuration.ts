@@ -63,6 +63,7 @@ const databaseEnvironmentSchema = z.object({
   CODETETHER_CONTROL_PLANE_DATABASE_TLS: z
     .enum(['verify-full', 'disable'])
     .default('verify-full'),
+  CODETETHER_CONTROL_PLANE_ALLOWED_ORIGINS: z.string().max(4_096).optional(),
 })
 
 const environmentSchema = databaseEnvironmentSchema.extend({
@@ -84,6 +85,7 @@ export interface ControlPlaneDatabaseConfiguration {
   readonly databaseIdleTimeoutMilliseconds: number
   readonly databaseStatementTimeoutMilliseconds: number
   readonly databaseTls: 'verify-full' | 'disable'
+  readonly allowedOrigins: readonly string[]
 }
 
 export interface ControlPlaneConfiguration extends ControlPlaneDatabaseConfiguration {
@@ -107,7 +109,40 @@ function databaseConfiguration(
     databaseStatementTimeoutMilliseconds:
       value.CODETETHER_CONTROL_PLANE_DATABASE_STATEMENT_TIMEOUT_MS,
     databaseTls: value.CODETETHER_CONTROL_PLANE_DATABASE_TLS,
+    allowedOrigins: parseAllowedOrigins(
+      value.CODETETHER_CONTROL_PLANE_ALLOWED_ORIGINS,
+      value.CODETETHER_CONTROL_PLANE_ENVIRONMENT,
+    ),
   }
+}
+
+function parseAllowedOrigins(
+  configured: string | undefined,
+  environment: 'development' | 'test' | 'production',
+): readonly string[] {
+  const defaults =
+    environment === 'development'
+      ? ['http://tauri.localhost', 'http://127.0.0.1:5173']
+      : ['http://tauri.localhost']
+  const candidates = configured?.split(',') ?? defaults
+  return candidates.map((candidate) => {
+    const value = candidate.trim()
+    const url = new URL(value)
+    if (
+      value.length === 0 ||
+      value.length > 512 ||
+      url.origin !== value ||
+      url.username !== '' ||
+      url.password !== '' ||
+      (url.protocol !== 'https:' &&
+        url.hostname !== 'tauri.localhost' &&
+        url.hostname !== '127.0.0.1' &&
+        url.hostname !== 'localhost')
+    ) {
+      throw new Error('Control Plane allowed origins contain an invalid origin')
+    }
+    return value
+  })
 }
 
 export function readControlPlaneDatabaseConfiguration(

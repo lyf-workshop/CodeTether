@@ -18,6 +18,7 @@ import {
   LoaderCircle,
   Monitor,
   Plus,
+  Server,
   Settings,
   Sparkles,
 } from 'lucide-react'
@@ -136,6 +137,12 @@ export function WorkspaceSidebar({
           </Button>
         </div>
         <nav aria-label="全局导航" className="mt-2 space-y-0.5">
+          <WorkspaceNavLink
+            currentPath={currentPath}
+            label="My Hosts"
+            to="/hosts"
+            icon={Server}
+          />
           <WorkspaceNavLink
             currentPath={currentPath}
             label="收件箱"
@@ -495,7 +502,7 @@ function WorkspaceNavLink({
   icon: typeof Inbox
   label: string
   onClick?: (event: MouseEvent<HTMLAnchorElement>) => void
-  to: '/inbox' | '/machines' | '/settings'
+  to: '/hosts' | '/inbox' | '/machines' | '/settings'
 }) {
   const selected = currentPath === to || currentPath.startsWith(`${to}/`)
   const attentionLabel = formatInboxAttentionBadge(attentionCount)

@@ -219,6 +219,66 @@ test('owned Host requires explicit confirmation and grants one authorization', a
   })
 })
 
+test('Host directory returns only current owned authorization for the exact ProductDevice', async () => {
+  const fixture = await createFixture('directory-owner')
+  const other = await createFixture('directory-other')
+  const service = new HostIdentityService(database, () => now)
+  const request = await requestAuthorization(service, fixture)
+  const confirmed = await confirmAuthorization(service, fixture, request)
+
+  const unlistedHostKeys = await generateKeyPair('ES256')
+  const unlistedHostIdentity = await admitHostPublicJwk(
+    await exportJWK(unlistedHostKeys.publicKey),
+  )
+  const unlistedHost = {
+    ...fixture.host,
+    hostId: id('host', 'directory-unlisted-host'),
+    publicKey: unlistedHostIdentity.canonicalPublicJwk,
+    fingerprint: unlistedHostIdentity.fingerprint,
+    safeLabel: 'Owned without authorization',
+  }
+  await new ControlPlaneRepository(database).createHost(unlistedHost)
+
+  const directory = await service.listAuthorizedHostDirectory(
+    fixture.human,
+    fixture.deviceContext,
+  )
+  assert.deepEqual(
+    directory.hosts.map(({ hostId }) => hostId),
+    [fixture.host.hostId],
+  )
+  assert.equal(directory.hosts[0].safeLabel, fixture.host.safeLabel)
+  assert.equal(directory.hosts[0].authorization.state, 'authorized')
+  assert.equal(
+    directory.hosts[0].authorization.authorizationId,
+    confirmed.authorization.authorizationId,
+  )
+  assert.equal(
+    directory.hosts.some(({ hostId }) => hostId === unlistedHost.hostId),
+    false,
+  )
+  assert.equal(
+    directory.hosts.some(({ hostId }) => hostId === other.host.hostId),
+    false,
+  )
+
+  await service.revokeDeviceAuthorization(
+    fixture.human,
+    fixture.deviceContext,
+    fixture.host.hostId,
+    { authorizationId: confirmed.authorization.authorizationId },
+  )
+  assert.deepEqual(
+    (
+      await service.listAuthorizedHostDirectory(
+        fixture.human,
+        fixture.deviceContext,
+      )
+    ).hosts,
+    [],
+  )
+})
+
 test('invalid Host signature cannot create an authorization', async () => {
   const fixture = await createFixture('authorization-signature')
   const wrongKeys = await generateKeyPair('ES256')
@@ -351,6 +411,15 @@ test('authorization and ProductDevice revocation independently deny access', asy
   const deviceRequest = await requestAuthorization(service, deviceFixture)
   await confirmAuthorization(service, deviceFixture, deviceRequest)
   await foundation.revokeProductDevice(deviceFixture.device.deviceId, now)
+  assert.deepEqual(
+    (
+      await service.listAuthorizedHostDirectory(
+        deviceFixture.human,
+        deviceFixture.deviceContext,
+      )
+    ).hosts,
+    [],
+  )
   await expectHostFailure(
     service.authorizeHostRequest(
       deviceFixture.human,
@@ -383,6 +452,7 @@ test('HTTP request, confirmation, access check, and revocation stay device-bound
     authenticatedAccountService: accountService,
     productDeviceAuthenticationService: deviceService,
     hostIdentityService: hostService,
+    allowedOrigins: ['http://tauri.localhost'],
     host: '127.0.0.1',
     port: 0,
   })
@@ -461,6 +531,43 @@ test('HTTP request, confirmation, access check, and revocation stay device-bound
     assert.equal(confirmedResponse.status, 200)
     const confirmed = await confirmedResponse.json()
     assert.equal(confirmed.result, 'authorized')
+
+    const devicesResponse = await fetch(
+      `http://127.0.0.1:${running.address.port}/v1/devices`,
+      { headers: { authorization: `Bearer ${accessToken}` } },
+    )
+    assert.equal(devicesResponse.status, 200)
+    const devices = await devicesResponse.json()
+    assert.deepEqual(
+      devices.devices.map(({ deviceId }) => deviceId),
+      [fixture.device.deviceId],
+    )
+
+    const directoryResponse = await call('GET', '/v1/hosts/directory')
+    assert.equal(directoryResponse.status, 200)
+    const directory = await directoryResponse.json()
+    assert.deepEqual(
+      directory.hosts.map(({ hostId }) => hostId),
+      [fixture.host.hostId],
+    )
+
+    const preflight = await fetch(
+      `http://127.0.0.1:${running.address.port}/v1/hosts/directory`,
+      {
+        method: 'OPTIONS',
+        headers: {
+          origin: 'http://tauri.localhost',
+          'access-control-request-method': 'GET',
+          'access-control-request-headers':
+            'authorization,x-codetether-device-proof',
+        },
+      },
+    )
+    assert.equal(preflight.status, 204)
+    assert.equal(
+      preflight.headers.get('access-control-allow-origin'),
+      'http://tauri.localhost',
+    )
 
     const stateResource = `/v1/hosts/${fixture.host.hostId}/device-authorization`
     const stateResponse = await call('GET', stateResource)

@@ -41,6 +41,7 @@ export async function runControlPlane(
       hostIdentityService: new HostIdentityService(database),
       host: configuration.listenHost,
       port: configuration.listenPort,
+      allowedOrigins: configuration.allowedOrigins,
     })
     process.stdout.write(
       `${JSON.stringify({

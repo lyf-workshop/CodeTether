@@ -2,6 +2,7 @@
 identifier = "allow-product-device-key-store"
 description = "Allows the main CodeTether window to create, load, sign with, and explicitly destroy its non-exportable platform ProductDevice key without receiving private-key bytes."
 commands.allow = [
+  "product_device_key_list",
   "product_device_key_create",
   "product_device_key_public",
   "product_device_key_sign",

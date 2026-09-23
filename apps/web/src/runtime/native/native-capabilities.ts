@@ -58,6 +58,35 @@ export interface HostIdentityCapability {
   readPublic(keyHandle: string): Promise<HostIdentityKeyDescription>
 }
 
+export interface ProductDeviceKeyDescription {
+  readonly keyHandle: string
+  readonly publicKey: {
+    readonly kty: 'EC'
+    readonly crv: 'P-256'
+    readonly x: string
+    readonly y: string
+  }
+  readonly keyAlgorithm: 'ES256'
+  readonly keyGeneration: 1
+  readonly privateKeyExportable: false
+  readonly protection: 'windows_cng_software_ksp_non_exportable'
+}
+
+export interface ProductDeviceSignature {
+  readonly signatureBase64Url: string
+  readonly keyAlgorithm: 'ES256'
+}
+
+export interface ProductDeviceIdentityCapability {
+  readonly available: boolean
+  listKeys(): Promise<readonly ProductDeviceKeyDescription[]>
+  readPublic(keyHandle: string): Promise<ProductDeviceKeyDescription>
+  sign(
+    keyHandle: string,
+    payloadBase64Url: string,
+  ): Promise<ProductDeviceSignature>
+}
+
 export interface DesktopResumeIntent {
   readonly hostEpoch: EpochId
 }
@@ -68,6 +97,7 @@ export interface NativeCapabilities {
   readonly backgroundRuntime: BackgroundRuntimeCapability
   readonly providerGuidance: ProviderGuidanceCapability
   readonly hostIdentity: HostIdentityCapability
+  readonly productDeviceIdentity: ProductDeviceIdentityCapability
 }
 
 interface TauriCoreModule {
@@ -161,6 +191,16 @@ const unavailableHostIdentity: HostIdentityCapability = {
     Promise.reject(new Error('Native Host identity is unavailable.')),
 }
 
+const unavailableProductDeviceIdentity: ProductDeviceIdentityCapability = {
+  available: false,
+  listKeys: () =>
+    Promise.reject(new Error('Native ProductDevice identity is unavailable.')),
+  readPublic: () =>
+    Promise.reject(new Error('Native ProductDevice identity is unavailable.')),
+  sign: () =>
+    Promise.reject(new Error('Native ProductDevice identity is unavailable.')),
+}
+
 /** Tauri v2 exposes this public marker even when `withGlobalTauri` is off. */
 export function hasTauriRuntime(scope: unknown = globalThis): boolean {
   return (
@@ -182,6 +222,7 @@ export function createNativeCapabilities(
       backgroundRuntime: unavailableBackgroundRuntime,
       providerGuidance: unavailableProviderGuidance,
       hostIdentity: unavailableHostIdentity,
+      productDeviceIdentity: unavailableProductDeviceIdentity,
     }
   }
 
@@ -413,12 +454,37 @@ export function createNativeCapabilities(
     },
   }
 
+  const productDeviceIdentity: ProductDeviceIdentityCapability = {
+    available: true,
+    async listKeys() {
+      const { invoke } = await loadCore()
+      return await invoke<readonly ProductDeviceKeyDescription[]>(
+        'product_device_key_list',
+      )
+    },
+    async readPublic(keyHandle) {
+      const { invoke } = await loadCore()
+      return await invoke<ProductDeviceKeyDescription>(
+        'product_device_key_public',
+        { keyHandle },
+      )
+    },
+    async sign(keyHandle, payloadBase64Url) {
+      const { invoke } = await loadCore()
+      return await invoke<ProductDeviceSignature>('product_device_key_sign', {
+        keyHandle,
+        payloadBase64Url,
+      })
+    },
+  }
+
   return {
     directoryPicker,
     notifications,
     backgroundRuntime,
     providerGuidance,
     hostIdentity,
+    productDeviceIdentity,
   }
 }
 

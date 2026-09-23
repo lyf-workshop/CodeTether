@@ -51,6 +51,7 @@ impl ProductDeviceKeyError {
 }
 
 trait ProductDeviceKeyStore {
+    fn list_keys(&self) -> Result<Vec<ProductDeviceKeyDescription>, ProductDeviceKeyError>;
     fn create_key(&self) -> Result<ProductDeviceKeyDescription, ProductDeviceKeyError>;
     fn public_key(
         &self,
@@ -78,19 +79,24 @@ fn validate_key_handle(key_handle: &str) -> Result<(), ProductDeviceKeyError> {
 mod platform {
     use super::*;
     use sha2::{Digest, Sha256};
+    use std::{ffi::c_void, ptr};
     use uuid::Uuid;
     use windows::{
-        Win32::Security::{
-            Cryptography::{
-                BCRYPT_ECCPUBLIC_BLOB, BCRYPT_ECDSA_PUBLIC_P256_MAGIC, CERT_KEY_SPEC,
-                MS_KEY_STORAGE_PROVIDER, NCRYPT_ALLOW_EXPORT_FLAG,
-                NCRYPT_ALLOW_PLAINTEXT_EXPORT_FLAG, NCRYPT_ECDSA_P256_ALGORITHM,
-                NCRYPT_EXPORT_POLICY_PROPERTY, NCRYPT_FLAGS, NCRYPT_HANDLE, NCRYPT_KEY_HANDLE,
-                NCRYPT_PROV_HANDLE, NCRYPT_SILENT_FLAG, NCryptCreatePersistedKey, NCryptDeleteKey,
-                NCryptExportKey, NCryptFinalizeKey, NCryptFreeObject, NCryptGetProperty,
-                NCryptOpenKey, NCryptOpenStorageProvider, NCryptSetProperty, NCryptSignHash,
+        Win32::{
+            Foundation::NTE_NO_MORE_ITEMS,
+            Security::{
+                Cryptography::{
+                    BCRYPT_ECCPUBLIC_BLOB, BCRYPT_ECDSA_PUBLIC_P256_MAGIC, CERT_KEY_SPEC,
+                    MS_KEY_STORAGE_PROVIDER, NCRYPT_ALLOW_EXPORT_FLAG,
+                    NCRYPT_ALLOW_PLAINTEXT_EXPORT_FLAG, NCRYPT_ECDSA_P256_ALGORITHM,
+                    NCRYPT_EXPORT_POLICY_PROPERTY, NCRYPT_FLAGS, NCRYPT_HANDLE, NCRYPT_KEY_HANDLE,
+                    NCRYPT_PROV_HANDLE, NCRYPT_SILENT_FLAG, NCryptCreatePersistedKey,
+                    NCryptDeleteKey, NCryptEnumKeys, NCryptExportKey, NCryptFinalizeKey,
+                    NCryptFreeBuffer, NCryptFreeObject, NCryptGetProperty, NCryptKeyName,
+                    NCryptOpenKey, NCryptOpenStorageProvider, NCryptSetProperty, NCryptSignHash,
+                },
+                OBJECT_SECURITY_INFORMATION,
             },
-            OBJECT_SECURITY_INFORMATION,
         },
         core::PCWSTR,
     };
@@ -267,6 +273,51 @@ mod platform {
     }
 
     impl ProductDeviceKeyStore for WindowsCngProductDeviceKeyStore {
+        fn list_keys(&self) -> Result<Vec<ProductDeviceKeyDescription>, ProductDeviceKeyError> {
+            let provider = open_provider()?;
+            let mut enumeration_state: *mut c_void = ptr::null_mut();
+            let mut descriptions = Vec::new();
+            loop {
+                let mut key_name: *mut NCryptKeyName = ptr::null_mut();
+                // SAFETY: provider is live and both output pointers are valid for CNG allocation.
+                let enumerated = unsafe {
+                    NCryptEnumKeys(
+                        provider.0,
+                        PCWSTR::null(),
+                        &mut key_name,
+                        &mut enumeration_state,
+                        NCRYPT_SILENT_FLAG,
+                    )
+                };
+                match enumerated {
+                    Ok(()) => {
+                        if key_name.is_null() {
+                            return Err(ProductDeviceKeyError::PlatformKeyOperationFailed);
+                        }
+                        // SAFETY: CNG returned a live, terminated key name.
+                        let name = unsafe { (*key_name).pszName.to_string() }
+                            .map_err(|_| ProductDeviceKeyError::PlatformKeyOperationFailed)?;
+                        // SAFETY: key_name was allocated by CNG for this enumeration call.
+                        unsafe { NCryptFreeBuffer(key_name.cast()) }
+                            .map_err(|_| ProductDeviceKeyError::PlatformKeyOperationFailed)?;
+                        if name.starts_with(KEY_HANDLE_PREFIX) {
+                            let key = open_key(&provider, &name)?;
+                            descriptions.push(self.description(&name, key.get())?);
+                        }
+                    }
+                    Err(error) if error.code() == NTE_NO_MORE_ITEMS => break,
+                    Err(_) => return Err(ProductDeviceKeyError::PlatformKeyOperationFailed),
+                }
+            }
+            if !enumeration_state.is_null() {
+                // SAFETY: enumeration_state was allocated by CNG during NCryptEnumKeys.
+                unsafe { NCryptFreeBuffer(enumeration_state) }
+                    .map_err(|_| ProductDeviceKeyError::PlatformKeyOperationFailed)?;
+            }
+            descriptions.sort_by(|left, right| left.key_handle.cmp(&right.key_handle));
+            Ok(descriptions)
+        }
+
         fn create_key(&self) -> Result<ProductDeviceKeyDescription, ProductDeviceKeyError> {
             let provider = open_provider()?;
             let key_name = format!("{KEY_HANDLE_PREFIX}{}", Uuid::new_v4().simple());
@@ -389,6 +440,10 @@ mod platform {
     }
 
     impl ProductDeviceKeyStore for WindowsCngProductDeviceKeyStore {
+        fn list_keys(&self) -> Result<Vec<ProductDeviceKeyDescription>, ProductDeviceKeyError> {
+            Err(ProductDeviceKeyError::PlatformKeyStorageUnavailable)
+        }
+
         fn create_key(&self) -> Result<ProductDeviceKeyDescription, ProductDeviceKeyError> {
             Err(ProductDeviceKeyError::PlatformKeyStorageUnavailable)
         }
@@ -415,6 +470,13 @@ mod platform {
 }
 
 use platform::WindowsCngProductDeviceKeyStore;
+
+#[tauri::command]
+pub fn product_device_key_list() -> Result<Vec<ProductDeviceKeyDescription>, String> {
+    WindowsCngProductDeviceKeyStore::new()
+        .list_keys()
+        .map_err(|error| error.code().to_owned())
+}
 
 #[tauri::command]
 pub fn product_device_key_create() -> Result<ProductDeviceKeyDescription, String> {
@@ -478,6 +540,13 @@ mod tests {
         assert_eq!(
             created.protection,
             "windows_cng_software_ksp_non_exportable"
+        );
+        assert!(
+            first_process
+                .list_keys()
+                .expect("enumerate persisted ProductDevice keys")
+                .iter()
+                .any(|candidate| candidate.key_handle == created.key_handle)
         );
 
         let result = {

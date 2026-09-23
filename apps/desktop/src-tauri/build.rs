@@ -28,6 +28,7 @@ fn main() {
             "open_provider_guidance",
             "deliver_attention_notification",
             "take_pending_notification_intent",
+            "product_device_key_list",
             "product_device_key_create",
             "product_device_key_public",
             "product_device_key_sign",

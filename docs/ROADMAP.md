@@ -1350,8 +1350,8 @@ See [Phase 9B.1 Product Directory and Codex Compatibility](PHASE9B1-PRODUCT-DIRE
 
 ### Phase 9B.2 — Remote ProductDevice to Host Supervisor Transport
 
-**Status:** direct read-only transport implemented and automated; Owner
-forced-remote REAL and purpose-bound Relay fallback pending.
+**Status:** Direct read-only REAL accepted; purpose-bound opaque Relay fallback
+implemented and automated; Owner forced Relay REAL pending.
 
 **Goal:** let the authenticated existing ProductDevice open an owned and
 authorized non-local Host through an exact-Host-pinned Supervisor session and

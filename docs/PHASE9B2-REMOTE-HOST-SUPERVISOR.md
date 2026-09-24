@@ -2,10 +2,11 @@
 
 ## Status
 
-Phase 9B.2 has a distinct ProductDevice-to-Host direct transport and a bounded
-read-only Supervisor surface. Automated validation is complete for the direct
-path. Owner forced-remote REAL validation and a purpose-bound Relay route remain
-pending; this document does not claim Phase 9B.2 closure.
+Phase 9B.2 has a distinct ProductDevice-to-Host Direct/Relay transport and a
+bounded read-only Supervisor surface. Direct REAL is accepted at `a30c764`.
+The purpose-bound opaque Relay fallback is implemented and automated; forced
+Relay Owner REAL remains the phase gate. This document does not claim Phase
+9B.2 closure.
 
 Baseline: `6cb762931e9e76b57c3a0c69c94dab9f30f590c0` on
 `phase9/remote-host-supervisor`.
@@ -17,8 +18,8 @@ The transport preserves these separations:
 - ProductDevice identity is not Machine Controller identity.
 - Host identity is not Node or Machine identity.
 - Control Plane admission is not sufficient without a Host-signed grant.
-- Relay transport, when added, may carry opaque records but cannot authorize a
-  ProductDevice or mint a Host approval.
+- Relay carries only opaque records and cannot authorize a ProductDevice or
+  mint a Host approval.
 
 The accepted `host_device_authorization` remains the Control Plane admission
 record. Migration `0006_host_supervisor_transport.sql` adds only the exact
@@ -86,27 +87,52 @@ the same real Host and ProductDevice identities. The loopback broker still
 coordinates the outbound Supervisor socket; the Host/Machine response travels
 through the pinned 4318 Supervisor connection.
 
-## Relay status
+## Opaque Relay fallback
 
-The existing Phase 7 Relay channels authenticate a paired Controller and Node.
-Using those channels for Phase 9B.2 would improperly convert ProductDevice
-identity into Controller trust. The implementation therefore does not fall
-back to that channel and returns `relay_unavailable` truthfully when no direct
-endpoint succeeds.
+The existing Relay TLS, framing, heartbeat, flow-control, timeout, queue, and
+connection lifecycle are reused. Controller/Node enrollment, Machine pairing,
+and `machine_tls_v1` authorization are not reused. A separate ephemeral
+`srv_*` rendezvous matches one Host outbound presence with one ProductDevice
+attempt using a random capability from the Host-signed transport descriptor.
+The Relay stores only the capability digest in memory and persists no
+Supervisor presence, channel, or payload.
 
-A future completion change may add one bounded capability-scoped opaque
-Supervisor rendezvous to the existing Relay, authenticated end to end by the
-same Host-signed descriptor and ProductDevice proof. Relay must not learn or
-decide Host authorization. No such Relay REAL evidence is claimed here.
+The existing Supervisor TLS 1.3 connection runs inside the Relay byte stream.
+Consequently the ProductDevice still pins the exact Host transport identity,
+both peers derive the same inner TLS exporter, and the Host still delegates the
+one-use ProductDevice proof and current authorization decision to the Control
+Plane. Relay outer authentication proves only ownership of the ephemeral
+transport key used for routing; it is not ProductDevice or Host authorization.
+
+Normal selection is Direct first. Only bounded network-establishment failures
+may fall back to Relay. Host identity, descriptor, protocol, ProductDevice,
+replay, expiry, and authorization failures stop without fallback. An active
+session never migrates between Direct and Relay. A configured Host establishes
+and maintains its outbound Relay presence with bounded reconnect for the Host
+process lifetime. An authenticated Desktop coordinator keeps the signed Control
+Plane transport descriptor fresh regardless of which product page is visible.
+
+The Host configuration is intentionally bounded and contains no credential:
+
+- `CODETETHER_SUPERVISOR_RELAY_ENDPOINT` (`tls://` for public CA or
+  `tls+pinned://` for an explicitly pinned deployment)
+- `CODETETHER_SUPERVISOR_RELAY_ID`
+- `CODETETHER_SUPERVISOR_RELAY_FINGERPRINT`
+
+All three must be present or all absent. `VITE_CODETETHER_FORCE_RELAY=1` (or
+`?forceRelay=1`) is validation-only: it bypasses the local and Direct data
+paths but retains the normal end-to-end authentication.
 
 ## Validation
 
-Focused tests cover the direct TLS handshake, exact identity binding,
-ProductDevice proof, replay rejection, Controller/ProductDevice identity
-separation, allowlisted reads, durable public-grant persistence, migration
-behavior, directory projection, and cold Host/Machine reads. Full repository
-gates must pass before an implementation commit.
+Focused tests cover Direct and actual Relay-service transport, exact identity
+binding, ProductDevice proof, replay/expiry/revocation rejection,
+Controller/ProductDevice identity separation, opaque payload handling,
+Direct-to-Relay fallback, security-failure no-fallback, clean reconnect,
+allowlisted reads, durable public-grant persistence, migration behavior,
+directory projection, and cold Host/Machine reads. Full repository gates must
+pass before the implementation commit.
 
-Owner forced-remote REAL and physical cross-device validation remain pending.
-No Account Foundation enrollment, Host claim, or Host authorization flow is to
-be repeated for that validation.
+Forced Relay REAL and physical cross-device validation remain pending. No
+Account Foundation enrollment, Host claim, or Host authorization flow is to be
+repeated for that validation.

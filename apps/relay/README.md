@@ -75,6 +75,36 @@ Host qualification channel described below. A post-write loss remains
 execution-ownership uncertainty and is not safe replay merely because a Relay
 frame was acknowledged.
 
+## Phase 9B.2 Host Supervisor channel boundary
+
+Phase 9B.2 also uses the same outer Relay TLS, bounded framing, heartbeat,
+flow-control, and channel lifecycle for an independent ephemeral Supervisor
+rendezvous. It does not reuse Relay peer enrollment, Controller/Node identities,
+Machine pairing, or `machine_tls_v1` authorization.
+
+```text
+ProductDevice
+  -> Relay TLS and opaque srv_* rendezvous
+  -> end-to-end codetether-supervisor/1 TLS
+  -> Host
+  -> exact Host pin + ProductDevice proof + current Host authorization
+```
+
+The Host registers an outbound presence using a random rendezvous capability
+and its ephemeral Supervisor TLS identity. The authorized ProductDevice learns
+that bounded routing metadata only through the Host-signed Control Plane
+descriptor. The Relay hashes the capability in memory, persists none of this
+state, and never decodes the inner Supervisor TLS records. Possession of the
+capability can open only an opaque byte path; it cannot satisfy ProductDevice
+proof, verify Host authorization, mint a read session, or access Machine data.
+
+Supervisor channels retain the Relay's global/per-peer channel bounds,
+stop-and-wait acknowledgements, frame limits, open/ACK deadlines, heartbeat,
+and exact terminal tombstones. Only `host.bootstrap`, `machine.list`, and
+`machine.get` exist inside the end-to-end Supervisor protocol. Relay logs and
+persistence contain no Supervisor payload, token, signature, nonce, Machine
+state, Project path, Provider credential, or transcript.
+
 Relay presence alone does not publish Internet execution as available. For the
 current Host process and live Relay epoch, the Host first opens a bounded
 `machine_tls_v1` channel, completes the existing pinned Controller-to-Node

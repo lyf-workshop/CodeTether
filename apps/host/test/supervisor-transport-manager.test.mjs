@@ -22,6 +22,7 @@ import {
   SupervisorTransportManager,
   discoverSupervisorDirectHosts,
 } from '../dist/api/supervisor-transport-manager.js'
+import { LocalHttpServer } from '../dist/api/local-http-server.js'
 
 const hostId = `host_${'h'.repeat(32)}`
 const deviceId = `dev_${'d'.repeat(32)}`
@@ -232,7 +233,7 @@ test('forced-remote manager reads Host state without using local HTTP product da
   }
 })
 
-test('unreachable Direct falls back to opaque Relay while security failure does not', async () => {
+test('forced Relay HTTP admission stays single-session while Direct fallback remains security-bounded', async () => {
   const root = await mkdtemp(
     join(tmpdir(), 'codetether-host-supervisor-relay-'),
   )
@@ -271,18 +272,27 @@ test('unreachable Direct falls back to opaque Relay while security failure does 
     fingerprint: hostFingerprint,
     identityGeneration: 1,
   }
+  const reads = { machines: 0, detail: 0 }
   const service = {
+    publisher: { subscribe: () => () => undefined },
+    close: async () => undefined,
     getHostIdentity: () => identity,
-    listMachines: () => ({
-      protocolVersion: 1,
-      machines: [{ machineId: `machine_${'m'.repeat(32)}` }],
-    }),
-    getMachine: async () => ({
-      protocolVersion: 1,
-      machine: { machineId: `machine_${'m'.repeat(32)}` },
-      providers: [{ provider: 'codex', availability: 'available' }],
-      providerLifecycles: [],
-    }),
+    listMachines: () => {
+      reads.machines += 1
+      return {
+        protocolVersion: 1,
+        machines: [{ machineId: `machine_${'m'.repeat(32)}` }],
+      }
+    },
+    getMachine: async () => {
+      reads.detail += 1
+      return {
+        protocolVersion: 1,
+        machine: { machineId: `machine_${'m'.repeat(32)}` },
+        providers: [{ provider: 'codex', availability: 'available' }],
+        providerLifecycles: [],
+      }
+    },
   }
   const persistence = { storeHostSupervisorGrant: (grant) => grant }
   const manager = await SupervisorTransportManager.create({
@@ -298,6 +308,7 @@ test('unreachable Direct falls back to opaque Relay while security failure does 
       relayFingerprint: relay.relayFingerprint,
     },
   })
+  let localHttp
   await waitFor(() =>
     relayLogs.some(
       (entry) =>
@@ -374,26 +385,67 @@ test('unreachable Direct falls back to opaque Relay while security failure does 
         }),
         { status: 200, headers: { 'content-type': 'application/json' } },
       )
-    const pending = await manager.beginRemote({
-      hostId,
-      hostFingerprint,
-      hostIdentityGeneration: 1,
-      hostPublicJwk: publicJwk,
-      deviceId,
-      deviceKeyGeneration: 1,
-      grant,
-      descriptor,
+    localHttp = new LocalHttpServer({
+      service,
+      allowedOrigins: [],
+      heartbeatMs: 60_000,
+      supervisorTransport: manager,
     })
+    const localBaseUrl = await localHttp.start(0)
+    const pendingResponse = await originalFetch(
+      `${localBaseUrl}/api/v1/remote-supervisor/connections`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          hostId,
+          hostFingerprint,
+          hostIdentityGeneration: 1,
+          hostPublicJwk: publicJwk,
+          deviceId,
+          deviceKeyGeneration: 1,
+          grant,
+          descriptor,
+          forceRelay: true,
+        }),
+      },
+    )
+    assert.equal(pendingResponse.status, 201)
+    const pending = await pendingResponse.json()
     assert.equal(pending.transport, 'relay')
-    const authenticated = await manager.authenticateRemote(
-      pending.connectionId,
-      { accessToken: 'access-token', deviceProof: 'relay-device-proof' },
+    const authenticationResponse = await originalFetch(
+      `${localBaseUrl}/api/v1/remote-supervisor/connections/${pending.connectionId}/authenticate`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          accessToken: 'access-token',
+          deviceProof: 'relay-device-proof',
+        }),
+      },
     )
+    assert.equal(authenticationResponse.status, 200)
+    const authenticated = await authenticationResponse.json()
+    const bootstrapResponse = await originalFetch(
+      `${localBaseUrl}/api/v1/remote-supervisor/sessions/${authenticated.sessionId}/bootstrap`,
+    )
+    assert.equal(bootstrapResponse.status, 200)
+    assert.equal((await bootstrapResponse.json()).identity.hostId, hostId)
+    const machineListResponse = await originalFetch(
+      `${localBaseUrl}/api/v1/remote-supervisor/sessions/${authenticated.sessionId}/machines`,
+    )
+    assert.equal(machineListResponse.status, 200)
+    const machineId = (await machineListResponse.json()).machines[0].machineId
+    const machineDetailResponse = await originalFetch(
+      `${localBaseUrl}/api/v1/remote-supervisor/sessions/${authenticated.sessionId}/machines/${machineId}`,
+    )
+    assert.equal(machineDetailResponse.status, 200)
     assert.equal(
-      (await manager.readRemote(authenticated.sessionId, 'host.bootstrap'))
-        .identity.hostId,
-      hostId,
+      (await machineDetailResponse.json()).machine.machineId,
+      machineId,
     )
+    assert.equal(reads.machines, 1)
+    assert.equal(reads.detail, 1)
     manager.closeRemote(authenticated.sessionId)
     await new Promise((resolve) => setTimeout(resolve, 30))
     const deviceConnections = relayLogs.filter(
@@ -401,6 +453,7 @@ test('unreachable Direct falls back to opaque Relay while security failure does 
         entry.event === 'supervisor.connection.authenticated' &&
         entry.role === 'device',
     ).length
+    assert.equal(deviceConnections, 1)
     await assert.rejects(
       manager.beginRemote({
         hostId,
@@ -462,6 +515,7 @@ test('unreachable Direct falls back to opaque Relay while security failure does 
     )
   } finally {
     globalThis.fetch = originalFetch
+    await localHttp?.close()
     await manager.close()
     await relay.close()
     await rm(root, { recursive: true, force: true })

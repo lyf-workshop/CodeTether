@@ -122,7 +122,6 @@ const supervisorActivationSchema = z
     hostPublicJwk: supervisorPublicJwkSchema,
     grant: signedSupervisorGrantSchema,
     descriptor: signedSupervisorTransportDescriptorSchema,
-    forceRelay: z.boolean().optional(),
   })
   .strict()
 const supervisorConnectionSchema = z
@@ -135,6 +134,7 @@ const supervisorConnectionSchema = z
     deviceKeyGeneration: z.number().int().positive(),
     grant: signedSupervisorGrantSchema,
     descriptor: signedSupervisorTransportDescriptorSchema,
+    forceRelay: z.boolean().optional(),
   })
   .strict()
 const supervisorAuthenticationSchema = z

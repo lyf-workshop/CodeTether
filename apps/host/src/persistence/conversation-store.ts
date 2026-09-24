@@ -60,6 +60,11 @@ import {
   type UpdateOnboardingRequest,
 } from '@codetether/protocol'
 import {
+  signedSupervisorGrantSchema,
+  supervisorGrantDigest,
+  type SignedSupervisorGrant,
+} from '@codetether/supervisor-transport'
+import {
   validateDurableHostIdentity,
   type DurableHostIdentity,
 } from './host-identity.js'
@@ -625,6 +630,58 @@ export class ConversationStore {
         'UPDATE host_identity SET last_registered_at = ?, updated_at = ? WHERE singleton = 1',
       ).run(timestamp, timestamp)
       return this.getHostIdentity() ?? existing
+    })
+  }
+
+  getHostSupervisorGrant(
+    authorizationId: string,
+  ): SignedSupervisorGrant | undefined {
+    const row = this.#statement(
+      'SELECT * FROM host_supervisor_grants WHERE authorization_id = ?',
+    ).get(authorizationId) as HostSupervisorGrantRow | undefined
+    if (row === undefined) return undefined
+    return signedSupervisorGrantSchema.parse({
+      payload: JSON.parse(row.grant_payload_json) as unknown,
+      proof: row.grant_proof,
+    })
+  }
+
+  storeHostSupervisorGrant(
+    grant: SignedSupervisorGrant,
+    materializedAt: Timestamp,
+  ): SignedSupervisorGrant {
+    const value = signedSupervisorGrantSchema.parse(grant)
+    const timestamp = TimestampSchema.parse(materializedAt)
+    return this.runInTransaction(() => {
+      const existing = this.getHostSupervisorGrant(
+        value.payload.authorizationId,
+      )
+      if (existing !== undefined) {
+        if (supervisorGrantDigest(existing) !== supervisorGrantDigest(value)) {
+          throw new Error('Durable Host Supervisor grant cannot be replaced')
+        }
+        return existing
+      }
+      this.#statement(
+        `INSERT INTO host_supervisor_grants (
+           authorization_id, host_id, host_identity_generation, device_id,
+           device_key_generation, user_id, space_id, grant_payload_json,
+           grant_proof, expires_at, materialized_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        value.payload.authorizationId,
+        value.payload.hostId,
+        value.payload.hostIdentityGeneration,
+        value.payload.deviceId,
+        value.payload.deviceKeyGeneration,
+        value.payload.userId,
+        value.payload.spaceId,
+        JSON.stringify(value.payload),
+        value.proof,
+        new Date(value.payload.expiresAt * 1_000).toISOString(),
+        timestamp,
+      )
+      return value
     })
   }
 
@@ -3901,6 +3958,12 @@ interface HostIdentityRow {
   readonly created_at: string
   readonly updated_at: string
   readonly last_registered_at: string | null
+}
+
+interface HostSupervisorGrantRow {
+  readonly authorization_id: string
+  readonly grant_payload_json: string
+  readonly grant_proof: string
 }
 
 interface OnboardingProgressRow {

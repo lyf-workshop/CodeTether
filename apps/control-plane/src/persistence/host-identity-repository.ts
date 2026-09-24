@@ -8,7 +8,11 @@ import type {
   UserId,
 } from '../domain/ids.js'
 import type { SqlExecutor } from './database.js'
-
+import {
+  supervisorGrantDigest,
+  type SignedSupervisorGrant,
+  type SignedSupervisorTransportDescriptor,
+} from '@codetether/supervisor-transport'
 const asDate = (value: Date | string): Date =>
   value instanceof Date ? value : new Date(value)
 const optionalDate = (value: Date | string | null): Date | null =>
@@ -107,6 +111,12 @@ interface AuthorizationRow extends Record<string, unknown> {
   readonly issued_at: Date | string
   readonly expires_at: Date | string
   readonly revoked_at: Date | string | null
+  readonly supervisor_grant_payload: unknown | null
+  readonly supervisor_grant_proof: string | null
+  readonly supervisor_grant_materialized_at: Date | string | null
+  readonly supervisor_transport_payload: unknown | null
+  readonly supervisor_transport_proof: string | null
+  readonly supervisor_transport_expires_at: Date | string | null
 }
 export interface HostRecord {
   readonly hostId: HostId
@@ -206,6 +216,10 @@ export interface HostDeviceAuthorizationRecord {
   readonly issuedAt: Date
   readonly expiresAt: Date
   readonly revokedAt: Date | null
+  readonly supervisorGrant: SignedSupervisorGrant | null
+  readonly supervisorGrantMaterializedAt: Date | null
+  readonly supervisorTransport: SignedSupervisorTransportDescriptor | null
+  readonly supervisorTransportExpiresAt: Date | null
 }
 
 export interface AuthorizedHostDirectoryRecord {
@@ -315,6 +329,30 @@ function authorizationFromRow(
     issuedAt: asDate(row.issued_at),
     expiresAt: asDate(row.expires_at),
     revokedAt: optionalDate(row.revoked_at),
+    supervisorGrant:
+      row.supervisor_grant_payload === null ||
+      row.supervisor_grant_proof === null
+        ? null
+        : {
+            payload:
+              row.supervisor_grant_payload as SignedSupervisorGrant['payload'],
+            proof: row.supervisor_grant_proof,
+          },
+    supervisorGrantMaterializedAt: optionalDate(
+      row.supervisor_grant_materialized_at,
+    ),
+    supervisorTransport:
+      row.supervisor_transport_payload === null ||
+      row.supervisor_transport_proof === null
+        ? null
+        : {
+            payload:
+              row.supervisor_transport_payload as SignedSupervisorTransportDescriptor['payload'],
+            proof: row.supervisor_transport_proof,
+          },
+    supervisorTransportExpiresAt: optionalDate(
+      row.supervisor_transport_expires_at,
+    ),
   }
 }
 
@@ -577,6 +615,68 @@ export class HostIdentityRepository {
     return result.rows[0] ? authorizationFromRow(result.rows[0]) : null
   }
 
+  public async materializeSupervisorGrant(input: {
+    authorizationId: HostAuthorizationId
+    grant: SignedSupervisorGrant
+    materializedAt: Date
+  }): Promise<'stored' | 'same' | 'conflict'> {
+    const existing = await this.findDeviceAuthorization(input.authorizationId)
+    if (!existing) return 'conflict'
+    if (existing.supervisorGrant !== null) {
+      // JSONB does not preserve key insertion order.
+      return supervisorGrantDigest(existing.supervisorGrant) ===
+        supervisorGrantDigest(input.grant)
+        ? 'same'
+        : 'conflict'
+    }
+    const result = await this.executor.query<{ authorization_id: string }>(
+      `UPDATE control_plane.host_device_authorizations
+          SET supervisor_grant_payload=$2::jsonb,
+              supervisor_grant_proof=$3,
+              supervisor_grant_materialized_at=$4
+        WHERE authorization_id=$1
+          AND supervisor_grant_payload IS NULL
+          AND supervisor_grant_proof IS NULL
+          AND supervisor_grant_materialized_at IS NULL
+      RETURNING authorization_id`,
+      [
+        input.authorizationId,
+        JSON.stringify(input.grant.payload),
+        input.grant.proof,
+        input.materializedAt,
+      ],
+    )
+    return result.rowCount === 1 ? 'stored' : 'conflict'
+  }
+
+  public async publishSupervisorTransport(input: {
+    authorizationId: HostAuthorizationId
+    descriptor: SignedSupervisorTransportDescriptor
+    expiresAt: Date
+    now: Date
+  }): Promise<boolean> {
+    const result = await this.executor.query<{ authorization_id: string }>(
+      `UPDATE control_plane.host_device_authorizations
+          SET supervisor_transport_payload=$2::jsonb,
+              supervisor_transport_proof=$3,
+              supervisor_transport_expires_at=$4
+        WHERE authorization_id=$1
+          AND supervisor_grant_payload IS NOT NULL
+          AND supervisor_grant_proof IS NOT NULL
+          AND revoked_at IS NULL
+          AND expires_at>$5
+      RETURNING authorization_id`,
+      [
+        input.authorizationId,
+        JSON.stringify(input.descriptor.payload),
+        input.descriptor.proof,
+        input.expiresAt,
+        input.now,
+      ],
+    )
+    return result.rowCount === 1
+  }
+
   public async findEffectiveDeviceAuthorization(
     hostId: HostId,
     deviceId: ProductDeviceId,
@@ -632,7 +732,10 @@ export class HostIdentityRepository {
               a.device_id, a.device_key_generation, a.device_fingerprint,
               a.user_id, a.space_id, a.scope, a.authorization_serial,
               a.authorization_generation, a.issued_at, a.expires_at,
-              a.revoked_at
+              a.revoked_at, a.supervisor_grant_payload,
+              a.supervisor_grant_proof, a.supervisor_grant_materialized_at,
+              a.supervisor_transport_payload, a.supervisor_transport_proof,
+              a.supervisor_transport_expires_at
          FROM control_plane.host_device_authorizations a
          JOIN control_plane.hosts h ON h.host_id=a.host_id
          JOIN control_plane.product_devices d ON d.device_id=a.device_id

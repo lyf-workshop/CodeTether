@@ -521,6 +521,107 @@ export async function startControlPlaneServer(
       return
     }
 
+    const supervisorRouteMatch =
+      /^\/v1\/hosts\/(host_[A-Za-z0-9][A-Za-z0-9_-]{15,95})\/(supervisor-grant\/materialize|supervisor-presence|supervisor-admission)$/.exec(
+        pathname,
+      )
+    if (supervisorRouteMatch?.[1] && supervisorRouteMatch[2]) {
+      if (method !== 'POST') {
+        sendJson(response, 405, { status: 'method_not_allowed' }, false)
+        return
+      }
+      if (requestUrl.search) {
+        sendJson(response, 400, { status: 'invalid_request' }, false)
+        return
+      }
+      if (
+        !options.humanAuthVerifier ||
+        !options.authenticatedAccountService ||
+        !options.productDeviceAuthenticationService ||
+        !options.hostIdentityService
+      ) {
+        sendJson(response, 503, { status: 'auth_unavailable' }, false)
+        return
+      }
+      try {
+        const body = await readBoundedBody(request, 48_000)
+        const input = parseJsonObject(body)
+        const human =
+          await options.authenticatedAccountService.verifyAndResolveRequestContext(
+            options.humanAuthVerifier,
+            bearerToken(request.headers.authorization),
+          )
+        const device =
+          await options.productDeviceAuthenticationService.authenticateProductDeviceRequest(
+            human,
+            {
+              compactProof: productDeviceProof(request),
+              method,
+              rawResource: request.url ?? pathname,
+              body,
+            },
+          )
+        const hostId = supervisorRouteMatch[1]
+        const operation = supervisorRouteMatch[2]
+        const result =
+          operation === 'supervisor-grant/materialize'
+            ? await options.hostIdentityService.materializeSupervisorGrant(
+                human,
+                device,
+                hostId,
+                input,
+              )
+            : operation === 'supervisor-presence'
+              ? await options.hostIdentityService.publishSupervisorTransport(
+                  human,
+                  device,
+                  hostId,
+                  input,
+                )
+              : await options.hostIdentityService.authorizeSupervisorAdmission(
+                  human,
+                  device,
+                  hostId,
+                  input,
+                )
+        sendJson(response, 200, result, false)
+      } catch (error) {
+        if (error instanceof InvalidRequestBodyError) {
+          sendJson(response, 400, { status: 'invalid_request' }, false)
+          return
+        }
+        if (error instanceof HumanAuthFailure) {
+          sendJson(
+            response,
+            authFailureStatus(error),
+            { status: 'authentication_failed', code: error.code },
+            false,
+          )
+          return
+        }
+        if (error instanceof ProductDeviceAuthFailure) {
+          sendJson(
+            response,
+            deviceAuthFailureStatus(error),
+            { status: 'device_authentication_failed', code: error.code },
+            false,
+          )
+          return
+        }
+        if (error instanceof HostIdentityFailure) {
+          sendJson(
+            response,
+            hostIdentityFailureStatus(error),
+            { status: 'host_identity_failed', code: error.code },
+            false,
+          )
+          return
+        }
+        sendJson(response, 400, { status: 'invalid_request' }, false)
+      }
+      return
+    }
+
     const deviceAuthorizationMatch =
       /^\/v1\/hosts\/(host_[A-Za-z0-9][A-Za-z0-9_-]{15,95})\/device-authorization(?:\/(request|confirm|revoke))?$/.exec(
         pathname,

@@ -35,6 +35,7 @@ test(
         '0003_product_device_authentication.sql',
         '0004_host_identity_claim.sql',
         '0005_host_device_authorization.sql',
+        '0006_host_supervisor_transport.sql',
       ])
       assert.deepEqual(second.alreadyApplied, [
         '0001_account_foundation.sql',
@@ -42,6 +43,7 @@ test(
         '0003_product_device_authentication.sql',
         '0004_host_identity_claim.sql',
         '0005_host_device_authorization.sql',
+        '0006_host_supervisor_transport.sql',
       ])
     } finally {
       await database.close()

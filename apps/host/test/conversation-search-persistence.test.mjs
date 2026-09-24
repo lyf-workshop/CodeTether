@@ -41,8 +41,8 @@ test('migration 006 backfills titles and canonical inputs without reading snapsh
     raw.close()
 
     const migrated = ConversationStore.open({ databasePath })
-    assert.equal(currentSchemaVersion, 19)
-    assert.equal(migrated.schemaVersion, 19)
+    assert.equal(currentSchemaVersion, 20)
+    assert.equal(migrated.schemaVersion, 20)
     assert.equal(
       migrated.searchProjectConversations(projectId, { query: '登录' })
         .results[0].matchedField,

@@ -1,6 +1,18 @@
 import { randomBytes } from 'node:crypto'
 import { z } from 'zod'
 import {
+  sha256Digest as supervisorSha256Digest,
+  signedSupervisorGrantSchema,
+  signedSupervisorTransportDescriptorSchema,
+  supervisorChallengeSchema,
+  supervisorGrantDigest,
+  supervisorTransportLimits,
+  verifySupervisorDescriptor,
+  verifySupervisorGrant,
+  type SignedSupervisorGrant,
+  type SupervisorGrantPayload,
+} from '@codetether/supervisor-transport'
+import {
   HOST_AUDIENCE,
   HOST_KEY_ALGORITHM,
   HOST_PROOF_VERSION,
@@ -95,6 +107,13 @@ const authorizationCompletionSchema = z
   .strict()
 const authorizationRevocationSchema = z
   .object({ authorizationId: hostAuthorizationIdSchema })
+  .strict()
+const supervisorGrantMaterializationSchema = signedSupervisorGrantSchema
+const supervisorTransportPublicationSchema = z
+  .object({
+    grant: signedSupervisorGrantSchema,
+    descriptor: signedSupervisorTransportDescriptorSchema,
+  })
   .strict()
 const CHALLENGE_LIFETIME_MS = 5 * 60 * 1000
 const AUTHORIZATION_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000
@@ -211,6 +230,37 @@ function publicAuthorization(authorization: HostDeviceAuthorizationRecord) {
     expiresAt: authorization.expiresAt.toISOString(),
     revokedAt: authorization.revokedAt?.toISOString() ?? null,
   }
+}
+
+function supervisorGrantMatchesAuthorization(
+  payload: SupervisorGrantPayload,
+  authorization: HostDeviceAuthorizationRecord,
+  host: { readonly fingerprint: string },
+): boolean {
+  return (
+    payload.authorizationId === authorization.authorizationId &&
+    payload.hostId === authorization.hostId &&
+    payload.hostFingerprint === host.fingerprint &&
+    payload.hostIdentityGeneration === authorization.hostIdentityGeneration &&
+    payload.deviceId === authorization.deviceId &&
+    payload.deviceFingerprint === authorization.deviceFingerprint &&
+    payload.deviceKeyGeneration === authorization.deviceKeyGeneration &&
+    payload.userId === authorization.userId &&
+    payload.spaceId === authorization.spaceId &&
+    payload.scope === authorization.scope &&
+    payload.authorizationSerial ===
+      authorization.authorizationSerial.toString() &&
+    payload.authorizationGeneration === authorization.authorizationGeneration &&
+    sameSecond(authorization.issuedAt, payload.issuedAt) &&
+    sameSecond(authorization.expiresAt, payload.expiresAt)
+  )
+}
+
+function sameSignedGrant(
+  left: SignedSupervisorGrant,
+  right: SignedSupervisorGrant,
+): boolean {
+  return supervisorGrantDigest(left) === supervisorGrantDigest(right)
 }
 
 export class HostIdentityFailure extends Error {
@@ -1040,10 +1090,12 @@ export class HostIdentityService {
     return {
       hosts: rows.map(({ host, authorization }) => ({
         hostId: host.hostId,
+        spaceId: human.personalSpaceId,
         safeLabel: host.safeLabel,
         coarsePlatform: host.coarsePlatform,
         identityGeneration: host.claimGeneration,
         fingerprint: host.fingerprint,
+        publicKey: JSON.parse(host.publicKey) as unknown,
         protocolVersionMin: host.protocolVersionMin,
         protocolVersionMax: host.protocolVersionMax,
         authorization: {
@@ -1051,8 +1103,197 @@ export class HostIdentityService {
           authorizationId: authorization.authorizationId,
           scope: authorization.scope,
           expiresAt: authorization.expiresAt.toISOString(),
+          issuedAt: authorization.issuedAt.toISOString(),
+          serial: authorization.authorizationSerial.toString(),
+          generation: authorization.authorizationGeneration,
         },
+        supervisor:
+          authorization.supervisorGrant !== null &&
+          authorization.supervisorTransport !== null &&
+          authorization.supervisorTransportExpiresAt !== null &&
+          authorization.supervisorTransportExpiresAt > this.now() &&
+          authorization.supervisorTransport.payload.grantDigest ===
+            supervisorGrantDigest(authorization.supervisorGrant)
+            ? {
+                grant: authorization.supervisorGrant,
+                transport: authorization.supervisorTransport,
+              }
+            : null,
       })),
+    }
+  }
+
+  /**
+   * Materializes the Host signature that the accepted authorization flow
+   * proved but its original schema did not retain. This does not create,
+   * renew, revoke, or widen an authorization.
+   */
+  public async materializeSupervisorGrant(
+    human: AuthenticatedHumanRequestContext,
+    device: AuthenticatedProductDeviceContext,
+    untrustedHostId: string,
+    untrusted: unknown,
+  ) {
+    const hostId = hostIdSchema.parse(untrustedHostId)
+    const grant = supervisorGrantMaterializationSchema.parse(untrusted)
+    const authorization = await this.authorizeHostRequest(human, device, hostId)
+    const repository = new HostIdentityRepository(this.database)
+    const [record, host] = await Promise.all([
+      repository.findDeviceAuthorization(authorization.authorizationId),
+      repository.findHost(hostId),
+    ])
+    if (!record || !host || host.publicKey.length > 8_192) {
+      throw new HostIdentityFailure('host_device_authorization_required')
+    }
+    if (!supervisorGrantMatchesAuthorization(grant.payload, record, host)) {
+      throw new HostIdentityFailure('host_supervisor_grant_mismatch')
+    }
+    try {
+      const admitted = await admitHostPublicJwk(JSON.parse(host.publicKey))
+      if (
+        admitted.fingerprint !== host.fingerprint ||
+        admitted.canonicalPublicJwk !== host.publicKey
+      ) {
+        throw new Error('Host identity mismatch')
+      }
+      await verifySupervisorGrant(grant, admitted.publicJwk)
+    } catch {
+      throw new HostIdentityFailure('host_supervisor_grant_signature_invalid')
+    }
+    const result = await repository.materializeSupervisorGrant({
+      authorizationId: record.authorizationId,
+      grant,
+      materializedAt: this.now(),
+    })
+    if (result === 'conflict') {
+      throw new HostIdentityFailure('host_supervisor_grant_conflict')
+    }
+    const current = await repository.findDeviceAuthorization(
+      record.authorizationId,
+    )
+    if (
+      !current?.supervisorGrant ||
+      !sameSignedGrant(current.supervisorGrant, grant)
+    ) {
+      throw new HostIdentityFailure('host_supervisor_grant_conflict')
+    }
+    return {
+      result: result === 'stored' ? 'materialized' : 'already_materialized',
+      grant,
+    }
+  }
+
+  public async publishSupervisorTransport(
+    human: AuthenticatedHumanRequestContext,
+    device: AuthenticatedProductDeviceContext,
+    untrustedHostId: string,
+    untrusted: unknown,
+  ) {
+    const hostId = hostIdSchema.parse(untrustedHostId)
+    const input = supervisorTransportPublicationSchema.parse(untrusted)
+    const effective = await this.authorizeHostRequest(human, device, hostId)
+    const repository = new HostIdentityRepository(this.database)
+    const [authorization, host] = await Promise.all([
+      repository.findDeviceAuthorization(effective.authorizationId),
+      repository.findHost(hostId),
+    ])
+    if (
+      !authorization?.supervisorGrant ||
+      !host ||
+      !sameSignedGrant(authorization.supervisorGrant, input.grant)
+    ) {
+      throw new HostIdentityFailure('host_supervisor_grant_required')
+    }
+    const payload = input.descriptor.payload
+    const now = this.now()
+    const expiresAt = new Date(payload.exp * 1_000)
+    if (
+      payload.authorizationId !== authorization.authorizationId ||
+      payload.hostId !== hostId ||
+      payload.hostFingerprint !== host.fingerprint ||
+      payload.hostIdentityGeneration !== host.claimGeneration ||
+      payload.deviceId !== device.deviceId ||
+      payload.deviceKeyGeneration !== device.keyGeneration ||
+      payload.grantDigest !== supervisorGrantDigest(input.grant) ||
+      payload.iat > Math.floor((now.getTime() + 120_000) / 1_000) ||
+      expiresAt <= now ||
+      expiresAt.getTime() - now.getTime() >
+        supervisorTransportLimits.descriptorLifetimeMs ||
+      expiresAt > authorization.expiresAt
+    ) {
+      throw new HostIdentityFailure('host_supervisor_transport_mismatch')
+    }
+    try {
+      const admitted = await admitHostPublicJwk(JSON.parse(host.publicKey))
+      await verifySupervisorDescriptor(input.descriptor, admitted.publicJwk)
+    } catch {
+      throw new HostIdentityFailure(
+        'host_supervisor_transport_signature_invalid',
+      )
+    }
+    if (
+      !(await repository.publishSupervisorTransport({
+        authorizationId: authorization.authorizationId,
+        descriptor: input.descriptor,
+        expiresAt,
+        now,
+      }))
+    ) {
+      throw new HostIdentityFailure('host_supervisor_transport_conflict')
+    }
+    return { result: 'published' as const, expiresAt: expiresAt.toISOString() }
+  }
+
+  public async authorizeSupervisorAdmission(
+    human: AuthenticatedHumanRequestContext,
+    device: AuthenticatedProductDeviceContext,
+    untrustedHostId: string,
+    untrusted: unknown,
+  ) {
+    const hostId = hostIdSchema.parse(untrustedHostId)
+    const challenge = supervisorChallengeSchema.parse(untrusted)
+    const now = this.now()
+    if (
+      challenge.hostId !== hostId ||
+      challenge.deviceId !== device.deviceId ||
+      challenge.deviceKeyGeneration !== device.keyGeneration ||
+      Date.parse(challenge.issuedAt) >
+        now.getTime() + supervisorTransportLimits.maximumClockSkewMs ||
+      Date.parse(challenge.expiresAt) <= now.getTime() ||
+      Date.parse(challenge.expiresAt) - Date.parse(challenge.issuedAt) >
+        supervisorTransportLimits.handshakeTimeoutMs * 2
+    ) {
+      throw new HostIdentityFailure('host_supervisor_admission_invalid')
+    }
+    const effective = await this.authorizeHostRequest(human, device, hostId)
+    const repository = new HostIdentityRepository(this.database)
+    const [authorization, host] = await Promise.all([
+      repository.findDeviceAuthorization(effective.authorizationId),
+      repository.findHost(hostId),
+    ])
+    if (
+      !authorization?.supervisorGrant ||
+      !host ||
+      challenge.authorizationId !== authorization.authorizationId ||
+      challenge.hostIdentityGeneration !== host.claimGeneration
+    ) {
+      throw new HostIdentityFailure('host_supervisor_grant_required')
+    }
+    return {
+      admitted: true as const,
+      hostId,
+      hostFingerprint: host.fingerprint,
+      hostIdentityGeneration: host.claimGeneration,
+      userId: human.userId,
+      spaceId: human.personalSpaceId,
+      deviceId: device.deviceId,
+      deviceKeyGeneration: device.keyGeneration,
+      authorizationId: authorization.authorizationId,
+      scope: authorization.scope,
+      authorizationExpiresAt: authorization.expiresAt.toISOString(),
+      challengeDigest: supervisorSha256Digest(
+        Buffer.from(JSON.stringify(challenge), 'utf8'),
+      ),
     }
   }
 

@@ -129,7 +129,7 @@ test('migration 012 adds durable Turn start actions transactionally', () => {
     rolledBack.close()
 
     const migrated = ConversationStore.open({ databasePath })
-    assert.equal(migrated.schemaVersion, 19)
+    assert.equal(migrated.schemaVersion, 20)
     assert.equal(
       migrated.getTurnForStartAction('act_migration_start01'),
       undefined,

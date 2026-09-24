@@ -24,16 +24,78 @@ export interface ResolvedProductDevice {
 
 export interface AuthorizedHostDirectoryEntry {
   readonly hostId: string
+  readonly spaceId: string
   readonly safeLabel: string
   readonly coarsePlatform: string
   readonly fingerprint: string
   readonly identityGeneration: number
+  readonly publicKey: ProductDeviceKeyDescription['publicKey']
   readonly authorization: {
     readonly state: 'authorized'
     readonly authorizationId: string
     readonly scope: 'supervisor_read'
     readonly expiresAt: string
+    readonly issuedAt: string
+    readonly serial: string
+    readonly generation: number
   }
+  readonly supervisor: {
+    readonly grant: SignedSupervisorGrant
+    readonly transport: SignedSupervisorTransportDescriptor
+  } | null
+}
+
+export interface SupervisorGrantPayload {
+  readonly v: 1
+  readonly aud: 'codetether-host-supervisor'
+  readonly purpose: 'host_supervisor_grant'
+  readonly authorizationId: string
+  readonly hostId: string
+  readonly hostFingerprint: string
+  readonly hostIdentityGeneration: number
+  readonly deviceId: string
+  readonly deviceFingerprint: string
+  readonly deviceKeyGeneration: number
+  readonly userId: string
+  readonly spaceId: string
+  readonly scope: 'supervisor_read'
+  readonly authorizationSerial: string
+  readonly authorizationGeneration: number
+  readonly issuedAt: number
+  readonly expiresAt: number
+}
+
+export interface SignedSupervisorGrant {
+  readonly payload: SupervisorGrantPayload
+  readonly proof: string
+}
+
+export interface SupervisorTransportDescriptorPayload {
+  readonly v: 1
+  readonly aud: 'codetether-host-supervisor'
+  readonly purpose: 'host_supervisor_transport'
+  readonly authorizationId: string
+  readonly grantDigest: string
+  readonly hostId: string
+  readonly hostFingerprint: string
+  readonly hostIdentityGeneration: number
+  readonly deviceId: string
+  readonly deviceKeyGeneration: number
+  readonly transportTlsFingerprint: string
+  readonly controlPlaneOrigin: string
+  readonly directEndpoints: readonly {
+    readonly host: string
+    readonly port: number
+  }[]
+  readonly relay: null
+  readonly iat: number
+  readonly exp: number
+  readonly protocolVersion: 1
+}
+
+export interface SignedSupervisorTransportDescriptor {
+  readonly payload: SupervisorTransportDescriptorPayload
+  readonly proof: string
 }
 
 export class ControlPlaneClientError extends Error {
@@ -119,6 +181,41 @@ export async function listAuthorizedHosts(options: {
   return parseHostDirectory(body)
 }
 
+export async function postAuthenticatedProductDeviceJson(options: {
+  readonly accessToken: string
+  readonly baseUrl: string
+  readonly identity: ProductDeviceIdentityCapability
+  readonly productDevice: ResolvedProductDevice
+  readonly resource: string
+  readonly value: unknown
+  readonly signal?: AbortSignal
+}): Promise<unknown> {
+  const bodyBytes = canonicalJsonBytes(options.value)
+  const proof = await createDeviceRequestProof({
+    accessToken: options.accessToken,
+    deviceId: options.productDevice.device.deviceId,
+    keyGeneration: options.productDevice.device.keyGeneration,
+    keyHandle: options.productDevice.key.keyHandle,
+    identity: options.identity,
+    method: 'POST',
+    resource: options.resource,
+    body: bodyBytes,
+  })
+  const response = await fetch(`${options.baseUrl}${options.resource}`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${options.accessToken}`,
+      'content-type': 'application/json',
+      [DEVICE_PROOF_HEADER]: proof,
+    },
+    body: new TextDecoder().decode(bodyBytes),
+    signal: options.signal,
+  })
+  const body = await readJson(response)
+  if (!response.ok) throw responseError(response, body)
+  return body
+}
+
 export async function createDeviceRequestProof(options: {
   readonly accessToken: string
   readonly deviceId: string
@@ -127,6 +224,7 @@ export async function createDeviceRequestProof(options: {
   readonly identity: ProductDeviceIdentityCapability
   readonly method: string
   readonly resource: string
+  readonly body?: Uint8Array
 }): Promise<string> {
   const protectedHeader = base64Url(
     utf8(JSON.stringify({ alg: 'ES256', typ: 'codetether-device-proof+jws' })),
@@ -141,7 +239,10 @@ export async function createDeviceRequestProof(options: {
     keyGeneration: options.keyGeneration,
     method: options.method,
     resource: options.resource,
-    bodySha256: EMPTY_BODY_DIGEST,
+    bodySha256:
+      options.body === undefined
+        ? EMPTY_BODY_DIGEST
+        : await sha256Digest(options.body),
     nonce: base64Url(nonce),
     iat: Math.floor(Date.now() / 1_000),
     protocolVersion: 1,
@@ -173,15 +274,11 @@ export async function publicJwkFingerprint(
   return await sha256Digest(canonical)
 }
 
-function canonicalJsonBytes(
-  value: Readonly<Record<string, string | number>>,
-): Uint8Array {
-  const canonical: Record<string, string | number> = {}
-  for (const key of Object.keys(value).sort()) canonical[key] = value[key]!
-  return utf8(JSON.stringify(canonical))
+export function canonicalJsonBytes(value: unknown): Uint8Array {
+  return utf8(canonicalJson(value))
 }
 
-async function sha256Digest(value: Uint8Array): Promise<string> {
+export async function sha256Digest(value: Uint8Array): Promise<string> {
   const digest = await crypto.subtle.digest(
     'SHA-256',
     Uint8Array.from(value).buffer,
@@ -189,7 +286,7 @@ async function sha256Digest(value: Uint8Array): Promise<string> {
   return `sha256:${base64Url(new Uint8Array(digest))}`
 }
 
-function base64Url(value: Uint8Array): string {
+export function base64Url(value: Uint8Array): string {
   let binary = ''
   for (const byte of value) binary += String.fromCharCode(byte)
   return btoa(binary)
@@ -198,8 +295,28 @@ function base64Url(value: Uint8Array): string {
     .replace(/=+$/gu, '')
 }
 
-function utf8(value: string): Uint8Array {
+export function utf8(value: string): Uint8Array {
   return new TextEncoder().encode(value)
+}
+
+function canonicalJson(value: unknown): string {
+  if (value === null) return 'null'
+  if (typeof value === 'string' || typeof value === 'boolean') {
+    return JSON.stringify(value)
+  }
+  if (typeof value === 'number') {
+    if (!Number.isSafeInteger(value)) throw new TypeError('Unsafe JSON number')
+    return String(value)
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => canonicalJson(entry)).join(',')}]`
+  }
+  if (typeof value !== 'object') throw new TypeError('Unsupported JSON value')
+  const record = value as Record<string, unknown>
+  return `{${Object.keys(record)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`)
+    .join(',')}}`
 }
 
 async function readJson(response: Response): Promise<unknown> {
@@ -256,20 +373,62 @@ function parseHostDirectory(
     if (
       !isRecord(candidate) ||
       !isId(candidate.hostId, 'host_') ||
+      !isId(candidate.spaceId, 'space_') ||
       !isBoundedString(candidate.safeLabel, 120) ||
       !isBoundedString(candidate.coarsePlatform, 64) ||
       !isBoundedString(candidate.fingerprint, 128) ||
       !isPositiveInteger(candidate.identityGeneration) ||
+      !isPublicJwk(candidate.publicKey) ||
       !isRecord(candidate.authorization) ||
       candidate.authorization.state !== 'authorized' ||
       candidate.authorization.scope !== 'supervisor_read' ||
       !isId(candidate.authorization.authorizationId, 'hauth_') ||
-      !isBoundedString(candidate.authorization.expiresAt, 64)
+      !isBoundedString(candidate.authorization.expiresAt, 64) ||
+      !isBoundedString(candidate.authorization.issuedAt, 64) ||
+      !/^(?:0|[1-9][0-9]{0,19})$/u.test(
+        String(candidate.authorization.serial),
+      ) ||
+      !isPositiveInteger(candidate.authorization.generation) ||
+      !isSupervisorDirectoryValue(candidate.supervisor)
     ) {
       invalidResponse()
     }
     return candidate as unknown as AuthorizedHostDirectoryEntry
   })
+}
+
+function isPublicJwk(
+  value: unknown,
+): value is ProductDeviceKeyDescription['publicKey'] {
+  return (
+    isRecord(value) &&
+    value.kty === 'EC' &&
+    value.crv === 'P-256' &&
+    typeof value.x === 'string' &&
+    /^[A-Za-z0-9_-]{43}$/u.test(value.x) &&
+    typeof value.y === 'string' &&
+    /^[A-Za-z0-9_-]{43}$/u.test(value.y)
+  )
+}
+
+function isSupervisorDirectoryValue(value: unknown): boolean {
+  if (value === null) return true
+  if (
+    !isRecord(value) ||
+    !isRecord(value.grant) ||
+    !isRecord(value.transport)
+  ) {
+    return false
+  }
+  return (
+    isRecord(value.grant.payload) &&
+    value.grant.payload.purpose === 'host_supervisor_grant' &&
+    isBoundedString(value.grant.proof, 8_192) &&
+    isRecord(value.transport.payload) &&
+    value.transport.payload.purpose === 'host_supervisor_transport' &&
+    Array.isArray(value.transport.payload.directEndpoints) &&
+    isBoundedString(value.transport.proof, 8_192)
+  )
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

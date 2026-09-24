@@ -1310,8 +1310,9 @@ Host durable ProviderInstallation selection is authoritative. Node-local selecti
 ## Phase 9 — Account-Connected Product
 
 **Status:** Phase 9A Account Foundation MVP is accepted at `59debca`. Phase
-9B.1 authenticated Desktop directory and Codex compatibility work is in
-progress. Mobile remains paused.
+9B.1 authenticated Desktop directory and Codex compatibility is accepted at
+`6cb7629`. Phase 9B.2 remote Host Supervisor read transport is in progress.
+Mobile remains paused.
 
 ### Phase 9A — Account and Cloud Control Plane Foundation
 
@@ -1330,8 +1331,9 @@ Accepted Phase 9A implementation outcomes:
 
 ### Phase 9B.1 — Authenticated Desktop Host Directory
 
-**Status:** implementation and automated validation in progress; Owner REAL
-Desktop and official Codex discovery evidence remains required.
+**Status:** accepted at `6cb7629` with Host-directory, Machine-read, Provider
+cold-read, complete native-history, native persistence/resume, official Codex
+discovery, and title compatibility REAL evidence.
 
 **Goal:** connect the existing Desktop human session and protected
 ProductDevice to a privacy-preserving authorized Host directory, then read live
@@ -1346,9 +1348,27 @@ identity is never converted into Machine Controller trust.
 
 See [Phase 9B.1 Product Directory and Codex Compatibility](PHASE9B1-PRODUCT-DIRECTORY-CODEX-COMPATIBILITY.md).
 
+### Phase 9B.2 — Remote ProductDevice to Host Supervisor Transport
+
+**Status:** direct read-only transport implemented and automated; Owner
+forced-remote REAL and purpose-bound Relay fallback pending.
+
+**Goal:** let the authenticated existing ProductDevice open an owned and
+authorized non-local Host through an exact-Host-pinned Supervisor session and
+read Host, Machine, and Provider availability without converting ProductDevice
+identity into Machine Controller trust.
+
+The local 4317 product endpoint remains loopback-only. The separate transport
+uses a Host-signed authorization grant and short-lived descriptor, TLS 1.3
+endpoint pinning, a TLS-exporter-bound ProductDevice proof, current Control Plane
+authorization/replay checks, and only three read operations. Project,
+Conversation, Provider execution, shell, filesystem, pairing, approval, and
+generic RPC operations remain out of scope. See [Phase 9B.2 Remote Host
+Supervisor Transport](PHASE9B2-REMOTE-HOST-SUPERVISOR.md).
+
 ### Later Phase 9B — Mobile Supervisor
 
-**Status:** implementation paused until Owner direction after Phase 9B.1.
+**Status:** implementation paused until Owner direction after Phase 9B.2.
 
 **Goal:** add focused mobile monitoring first, followed only by separately authorized approval, reply, and native-resume capabilities over an authenticated Host Supervisor boundary.
 

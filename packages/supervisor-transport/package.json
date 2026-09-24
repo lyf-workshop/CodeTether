@@ -1,0 +1,24 @@
+{
+  "name": "@codetether/supervisor-transport",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit --pretty false",
+    "lint": "eslint .",
+    "test": "pnpm build && node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@codetether/machine-transport": "workspace:*",
+    "jose": "6.2.12",
+    "selfsigned": "5.5.0",
+    "zod": "4.4.3"
+  }
+}

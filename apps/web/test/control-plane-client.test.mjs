@@ -120,16 +120,22 @@ test('authorized Host directory sends the exact device proof and admits only bou
         hosts: [
           {
             hostId: `host_${'4'.repeat(32)}`,
+            spaceId: `space_${'6'.repeat(32)}`,
             safeLabel: 'Owner Windows Host',
             coarsePlatform: 'windows',
             fingerprint: `sha256:${'a'.repeat(43)}`,
             identityGeneration: 1,
+            publicKey,
             authorization: {
               state: 'authorized',
               authorizationId: `hauth_${'5'.repeat(32)}`,
               scope: 'supervisor_read',
               expiresAt: '2026-10-23T00:00:00.000Z',
+              issuedAt: '2026-09-23T00:00:00.000Z',
+              serial: '1',
+              generation: 1,
             },
+            supervisor: null,
           },
         ],
       }),

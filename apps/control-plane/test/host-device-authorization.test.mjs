@@ -22,6 +22,12 @@ import {
 } from '../dist/index.js'
 import { accountInput, id } from './fixtures.mjs'
 import { PGliteControlPlaneDatabase } from './pglite-database.mjs'
+import {
+  canonicalJsonBytes as supervisorCanonicalJsonBytes,
+  supervisorDescriptorProofType,
+  supervisorGrantDigest,
+  supervisorGrantProofType,
+} from '@codetether/supervisor-transport'
 
 const now = new Date('2026-09-23T12:00:00.000Z')
 
@@ -277,6 +283,122 @@ test('Host directory returns only current owned authorization for the exact Prod
     ).hosts,
     [],
   )
+})
+
+test('Host-signed Supervisor grant and presence admit only the exact active ProductDevice', async () => {
+  const fixture = await createFixture('supervisor-transport')
+  const service = new HostIdentityService(database, () => now)
+  const request = await requestAuthorization(service, fixture)
+  await confirmAuthorization(service, fixture, request)
+  const directory = await service.listAuthorizedHostDirectory(
+    fixture.human,
+    fixture.deviceContext,
+  )
+  const host = directory.hosts[0]
+  assert.equal(host.supervisor, null)
+  assert.equal(host.spaceId, fixture.account.spaceId)
+
+  const grantPayload = {
+    v: 1,
+    aud: 'codetether-host-supervisor',
+    purpose: 'host_supervisor_grant',
+    authorizationId: host.authorization.authorizationId,
+    hostId: host.hostId,
+    hostFingerprint: host.fingerprint,
+    hostIdentityGeneration: host.identityGeneration,
+    deviceId: fixture.device.deviceId,
+    deviceFingerprint: fixture.device.fingerprint,
+    deviceKeyGeneration: fixture.device.keyGeneration,
+    userId: fixture.account.userId,
+    spaceId: fixture.account.spaceId,
+    scope: 'supervisor_read',
+    authorizationSerial: host.authorization.serial,
+    authorizationGeneration: host.authorization.generation,
+    issuedAt: Math.floor(Date.parse(host.authorization.issuedAt) / 1_000),
+    expiresAt: Math.floor(Date.parse(host.authorization.expiresAt) / 1_000),
+  }
+  const grant = {
+    payload: grantPayload,
+    proof: await new CompactSign(supervisorCanonicalJsonBytes(grantPayload))
+      .setProtectedHeader({ alg: 'ES256', typ: supervisorGrantProofType })
+      .sign(fixture.hostKeys.privateKey),
+  }
+  assert.equal(
+    (
+      await service.materializeSupervisorGrant(
+        fixture.human,
+        fixture.deviceContext,
+        fixture.host.hostId,
+        grant,
+      )
+    ).result,
+    'materialized',
+  )
+
+  const descriptorPayload = {
+    v: 1,
+    aud: 'codetether-host-supervisor',
+    purpose: 'host_supervisor_transport',
+    authorizationId: grantPayload.authorizationId,
+    grantDigest: supervisorGrantDigest(grant),
+    hostId: fixture.host.hostId,
+    hostFingerprint: fixture.host.fingerprint,
+    hostIdentityGeneration: fixture.host.claimGeneration,
+    deviceId: fixture.device.deviceId,
+    deviceKeyGeneration: fixture.device.keyGeneration,
+    transportTlsFingerprint: 'T'.repeat(43),
+    controlPlaneOrigin: 'https://control-plane.example.test',
+    directEndpoints: [{ host: 'host.example.test', port: 4318 }],
+    relay: null,
+    iat: Math.floor(now.getTime() / 1_000),
+    exp: Math.floor((now.getTime() + 10 * 60_000) / 1_000),
+    protocolVersion: 1,
+  }
+  const descriptor = {
+    payload: descriptorPayload,
+    proof: await new CompactSign(
+      supervisorCanonicalJsonBytes(descriptorPayload),
+    )
+      .setProtectedHeader({ alg: 'ES256', typ: supervisorDescriptorProofType })
+      .sign(fixture.hostKeys.privateKey),
+  }
+  await service.publishSupervisorTransport(
+    fixture.human,
+    fixture.deviceContext,
+    fixture.host.hostId,
+    { grant, descriptor },
+  )
+  const published = await service.listAuthorizedHostDirectory(
+    fixture.human,
+    fixture.deviceContext,
+  )
+  assert.equal(
+    published.hosts[0].supervisor.transport.payload.transportTlsFingerprint,
+    descriptorPayload.transportTlsFingerprint,
+  )
+  const challenge = {
+    type: 'supervisor.challenge',
+    protocolVersion: 1,
+    audience: 'codetether-host-supervisor',
+    sessionId: `ssn_${'s'.repeat(32)}`,
+    authorizationId: grantPayload.authorizationId,
+    hostId: fixture.host.hostId,
+    hostIdentityGeneration: fixture.host.claimGeneration,
+    deviceId: fixture.device.deviceId,
+    deviceKeyGeneration: fixture.device.keyGeneration,
+    tlsExporter: 'E'.repeat(43),
+    nonce: 'N'.repeat(43),
+    issuedAt: now.toISOString(),
+    expiresAt: new Date(now.getTime() + 8_000).toISOString(),
+  }
+  const admission = await service.authorizeSupervisorAdmission(
+    fixture.human,
+    fixture.deviceContext,
+    fixture.host.hostId,
+    challenge,
+  )
+  assert.equal(admission.admitted, true)
+  assert.equal(admission.authorizationId, grantPayload.authorizationId)
 })
 
 test('invalid Host signature cannot create an authorization', async () => {

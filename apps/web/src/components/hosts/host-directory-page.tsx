@@ -21,6 +21,11 @@ import {
   resolveExistingProductDevice,
   type AuthorizedHostDirectoryEntry,
 } from '../../runtime/account/control-plane-client.js'
+import {
+  connectRemoteSupervisor,
+  publishLocalSupervisorPresence,
+  type LocalHostIdentityRecord,
+} from '../../runtime/account/remote-supervisor.js'
 import { getSupabaseAccountClient } from '../../runtime/account/supabase-account.js'
 import { hostBaseUrl } from '../../runtime/host/host-config.js'
 import { useHostConnectionState } from '../../runtime/host/host-runtime-hooks.js'
@@ -275,19 +280,21 @@ function AuthenticatedHostDirectory({
               localIdentity.data?.hostId === host.hostId &&
               localIdentity.data.fingerprint === host.fingerprint &&
               localIdentity.data.identityGeneration === host.identityGeneration
-            const checking =
-              connectionState === 'connecting' ||
-              connectionState === 'reconnecting' ||
-              (connectionState === 'connected' && localIdentity.isPending)
-            const online = connectionState === 'connected' && exactLocalHost
             return (
-              <HostCard
+              <ConnectedHostCard
                 key={host.hostId}
                 host={host}
-                checking={checking}
-                online={online}
-                onOpen={
-                  online ? () => void navigate({ to: '/machines' }) : undefined
+                exactLocalHost={exactLocalHost}
+                localIdentity={localIdentity.data}
+                localConnectionState={connectionState}
+                productDevice={directory.data!.productDevice}
+                session={session}
+                onOpenLocal={() => void navigate({ to: '/machines' })}
+                onOpenRemote={() =>
+                  void navigate({
+                    to: '/hosts/$hostId',
+                    params: { hostId: host.hostId },
+                  })
                 }
               />
             )
@@ -295,6 +302,112 @@ function AuthenticatedHostDirectory({
         </div>
       )}
     </PageFrame>
+  )
+}
+
+function ConnectedHostCard({
+  host,
+  exactLocalHost,
+  localIdentity,
+  localConnectionState,
+  productDevice,
+  session,
+  onOpenLocal,
+  onOpenRemote,
+}: {
+  readonly host: AuthorizedHostDirectoryEntry
+  readonly exactLocalHost: boolean
+  readonly localIdentity: LocalHostIdentityRecord | undefined
+  readonly localConnectionState: ReturnType<typeof useHostConnectionState>
+  readonly productDevice: Awaited<
+    ReturnType<typeof resolveExistingProductDevice>
+  >
+  readonly session: Session
+  readonly onOpenLocal: () => void
+  readonly onOpenRemote: () => void
+}) {
+  const forceRemote =
+    import.meta.env.VITE_CODETETHER_FORCE_REMOTE === '1' ||
+    new URLSearchParams(globalThis.location?.search ?? '').get(
+      'forceRemote',
+    ) === '1'
+  const presence = useQuery({
+    queryKey: ['account', 'host-supervisor-presence', host.hostId],
+    queryFn: async ({ signal }) => {
+      if (localIdentity === undefined) throw new Error('local_host_unavailable')
+      await publishLocalSupervisorPresence({
+        session,
+        controlPlaneBaseUrl,
+        host,
+        localIdentity,
+        productDevice,
+        deviceIdentity: nativeCapabilities.productDeviceIdentity,
+        hostIdentity: nativeCapabilities.hostIdentity,
+        signal,
+      })
+      return true
+    },
+    enabled:
+      exactLocalHost &&
+      localIdentity !== undefined &&
+      localConnectionState === 'connected',
+    retry: false,
+    staleTime: 4 * 60_000,
+    refetchInterval: 4 * 60_000,
+  })
+  const remoteConnection = useQuery({
+    queryKey: [
+      'account',
+      'remote-supervisor',
+      host.hostId,
+      host.supervisor?.transport.payload.exp,
+      forceRemote,
+    ],
+    queryFn: async ({ signal }) => {
+      let remoteHost = host
+      if (exactLocalHost) {
+        await presence.refetch()
+        const refreshed = await listAuthorizedHosts({
+          accessToken: session.access_token,
+          baseUrl: controlPlaneBaseUrl,
+          identity: nativeCapabilities.productDeviceIdentity,
+          productDevice,
+          signal,
+        })
+        remoteHost =
+          refreshed.find((candidate) => candidate.hostId === host.hostId) ??
+          host
+      }
+      return await connectRemoteSupervisor({
+        session,
+        host: remoteHost,
+        productDevice,
+        deviceIdentity: nativeCapabilities.productDeviceIdentity,
+        signal,
+      })
+    },
+    enabled:
+      (!exactLocalHost || forceRemote) &&
+      (!exactLocalHost ? host.supervisor !== null : presence.isSuccess),
+    retry: false,
+    staleTime: 60_000,
+  })
+
+  const localOnline =
+    exactLocalHost && !forceRemote && localConnectionState === 'connected'
+  const online = localOnline || remoteConnection.isSuccess
+  const checking =
+    localConnectionState === 'connecting' ||
+    localConnectionState === 'reconnecting' ||
+    remoteConnection.isFetching ||
+    (forceRemote && presence.isPending)
+  return (
+    <HostCard
+      host={host}
+      checking={checking}
+      online={online}
+      onOpen={online ? (localOnline ? onOpenLocal : onOpenRemote) : undefined}
+    />
   )
 }
 
@@ -439,12 +552,7 @@ function AccountSessionUnavailable() {
 }
 
 async function readLocalHostIdentity(): Promise<
-  | {
-      readonly hostId: string
-      readonly fingerprint: string
-      readonly identityGeneration: number
-    }
-  | undefined
+  LocalHostIdentityRecord | undefined
 > {
   const response = await fetch(`${hostBaseUrl}/api/v1/host/identity`, {
     headers: { accept: 'application/json' },
@@ -456,20 +564,20 @@ async function readLocalHostIdentity(): Promise<
       readonly hostId?: unknown
       readonly fingerprint?: unknown
       readonly identityGeneration?: unknown
+      readonly publicJwk?: unknown
+      readonly keyHandle?: unknown
     }
   }
   const identity = value.identity
   if (
     typeof identity?.hostId !== 'string' ||
     typeof identity.fingerprint !== 'string' ||
-    !Number.isSafeInteger(identity.identityGeneration)
+    !Number.isSafeInteger(identity.identityGeneration) ||
+    typeof identity.publicJwk !== 'string' ||
+    typeof identity.keyHandle !== 'string'
   )
     throw new Error('local_host_identity_invalid')
-  return identity as {
-    readonly hostId: string
-    readonly fingerprint: string
-    readonly identityGeneration: number
-  }
+  return identity as LocalHostIdentityRecord
 }
 
 function hostDirectoryErrorMessage(error: unknown): string {

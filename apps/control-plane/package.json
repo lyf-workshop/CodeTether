@@ -20,6 +20,7 @@
     "smoke:supabase-postgres": "node dist/native-postgres-smoke-cli.js"
   },
   "dependencies": {
+    "@codetether/supervisor-transport": "workspace:*",
     "@supabase/supabase-js": "2.116.0",
     "jose": "6.2.12",
     "pg": "8.23.0",

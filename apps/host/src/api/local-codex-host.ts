@@ -57,6 +57,7 @@ import {
   SecureControllerRelayCoordinator,
   type ControllerRelayCoordinator,
 } from './controller-relay-coordinator.js'
+import { SupervisorTransportManager } from './supervisor-transport-manager.js'
 
 export interface LocalCodexHostOptions {
   readonly allowedWorkspaceRoots?: readonly string[]
@@ -84,6 +85,9 @@ export interface LocalCodexHostOptions {
   readonly remoteMachineLoopbackForTests?: boolean
   /** Internal validation/operator override; normal product routing is direct-first. */
   readonly remoteMachineTransportPolicy?: RemoteMachineTransportPolicy
+  readonly supervisorPort?: number
+  readonly supervisorBindHost?: string
+  readonly supervisorAdvertiseHost?: string
 }
 
 export interface RunningLocalCodexHost {
@@ -361,6 +365,7 @@ export async function startLocalCodexHostWithRuntime(
   let server: LocalHttpServer | undefined
   let remoteMachineCoordinator: RemoteMachineCoordinator | undefined
   let controllerRelayCoordinator: ControllerRelayCoordinator | undefined
+  let supervisorTransport: SupervisorTransportManager | undefined
   try {
     if (persistence !== undefined) {
       controllerRelayCoordinator =
@@ -415,9 +420,28 @@ export async function startLocalCodexHostWithRuntime(
     await service.registerInitialProjectRoots(
       options.allowedWorkspaceRoots ?? [],
     )
+    if (
+      persistence !== undefined &&
+      (options.desktopManaged === true || options.supervisorPort !== undefined)
+    ) {
+      supervisorTransport = await SupervisorTransportManager.create({
+        service,
+        persistence,
+        port:
+          options.supervisorPort ??
+          (options.desktopManaged === true ? 4318 : 0),
+        ...(options.supervisorBindHost === undefined
+          ? {}
+          : { bindHost: options.supervisorBindHost }),
+        ...(options.supervisorAdvertiseHost === undefined
+          ? {}
+          : { advertiseHost: options.supervisorAdvertiseHost }),
+      })
+    }
     const serverOptions: LocalHttpServerOptions = {
       service,
       allowedOrigins: options.allowedOrigins,
+      ...(supervisorTransport === undefined ? {} : { supervisorTransport }),
       ...(options.maxClients === undefined
         ? {}
         : { maxClients: options.maxClients }),
@@ -447,12 +471,16 @@ export async function startLocalCodexHostWithRuntime(
       ...(persistence === undefined
         ? {}
         : { databasePath: persistence.databasePath }),
-      close: async () => await localServer.close(),
+      close: async () => {
+        await supervisorTransport?.close()
+        await localServer.close()
+      },
     }
   } catch (error) {
     let providerCleanupFailure: unknown
     if (server !== undefined) {
       try {
+        await supervisorTransport?.close().catch(() => undefined)
         await server.close()
       } catch (closeError) {
         if (isProviderOwnedProcessCleanupFailure(closeError)) {
@@ -461,6 +489,7 @@ export async function startLocalCodexHostWithRuntime(
       }
     } else if (service !== undefined) {
       try {
+        await supervisorTransport?.close().catch(() => undefined)
         await service.close()
       } catch (closeError) {
         if (isProviderOwnedProcessCleanupFailure(closeError)) {

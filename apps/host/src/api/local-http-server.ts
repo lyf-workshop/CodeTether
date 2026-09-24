@@ -94,6 +94,12 @@ import {
   UpdateOnboardingRequestSchema,
   UpdateOnboardingResponseSchema,
 } from '@codetether/protocol'
+import {
+  signedSupervisorGrantSchema,
+  signedSupervisorTransportDescriptorSchema,
+  supervisorPublicJwkSchema,
+} from '@codetether/supervisor-transport'
+import { z } from 'zod'
 
 import { HostService } from './host-service.js'
 import {
@@ -106,9 +112,36 @@ import {
   SseConnectionPool,
   type SseConnectionPoolOptions,
 } from './sse-connections.js'
+import type { SupervisorTransportManager } from './supervisor-transport-manager.js'
 
 const LOOPBACK_HOST = '127.0.0.1'
 const DEFAULT_HEARTBEAT_MS = 20_000
+
+const supervisorActivationSchema = z
+  .object({
+    hostPublicJwk: supervisorPublicJwkSchema,
+    grant: signedSupervisorGrantSchema,
+    descriptor: signedSupervisorTransportDescriptorSchema,
+  })
+  .strict()
+const supervisorConnectionSchema = z
+  .object({
+    hostId: z.string().min(1).max(160),
+    hostFingerprint: z.string().min(1).max(160),
+    hostIdentityGeneration: z.number().int().positive(),
+    hostPublicJwk: supervisorPublicJwkSchema,
+    deviceId: z.string().min(1).max(160),
+    deviceKeyGeneration: z.number().int().positive(),
+    grant: signedSupervisorGrantSchema,
+    descriptor: signedSupervisorTransportDescriptorSchema,
+  })
+  .strict()
+const supervisorAuthenticationSchema = z
+  .object({
+    accessToken: z.string().min(1).max(16_384),
+    deviceProof: z.string().min(1).max(16_384),
+  })
+  .strict()
 
 interface HostIdentityKeyDescriptionBody {
   readonly keyHandle: string
@@ -180,6 +213,7 @@ export interface LocalHttpServerOptions extends SseConnectionPoolOptions {
   readonly allowedOrigins: readonly string[]
   readonly bodyLimitBytes?: number
   readonly heartbeatMs?: number
+  readonly supervisorTransport?: SupervisorTransportManager
 }
 
 export class LocalHttpServer {
@@ -187,6 +221,7 @@ export class LocalHttpServer {
   readonly #http: HttpBoundary
   readonly #heartbeatMs: number
   readonly #sse: SseConnectionPool
+  readonly #supervisorTransport: SupervisorTransportManager | undefined
   readonly #server = createServer((request, response) => {
     this.#acceptRequest(request, response)
   })
@@ -210,6 +245,7 @@ export class LocalHttpServer {
       DEFAULT_HEARTBEAT_MS,
       'heartbeatMs',
     )
+    this.#supervisorTransport = options.supervisorTransport
     this.#sse = new SseConnectionPool(options)
   }
 
@@ -375,6 +411,139 @@ export class LocalHttpServer {
           response,
           200,
           BootstrapResponseSchema.parse(this.#service.bootstrap()),
+          context.allowedOrigin,
+        )
+        return
+      }
+      if (
+        request.method === 'GET' &&
+        url.pathname === '/api/v1/supervisor/presence' &&
+        this.#supervisorTransport !== undefined
+      ) {
+        this.#http.writeJson(
+          response,
+          200,
+          this.#supervisorTransport.presence(),
+          context.allowedOrigin,
+        )
+        return
+      }
+      if (
+        request.method === 'POST' &&
+        url.pathname === '/api/v1/supervisor/activate' &&
+        this.#supervisorTransport !== undefined
+      ) {
+        const body = await this.#http.readValidatedBody(
+          request,
+          supervisorActivationSchema,
+        )
+        await this.#supervisorTransport.activate(body)
+        this.#http.writeJson(
+          response,
+          200,
+          { status: 'active' },
+          context.allowedOrigin,
+        )
+        return
+      }
+      if (
+        request.method === 'POST' &&
+        url.pathname === '/api/v1/remote-supervisor/connections' &&
+        this.#supervisorTransport !== undefined
+      ) {
+        const body = await this.#http.readValidatedBody(
+          request,
+          supervisorConnectionSchema,
+        )
+        this.#http.writeJson(
+          response,
+          201,
+          await this.#supervisorTransport.beginRemote(body),
+          context.allowedOrigin,
+        )
+        return
+      }
+      const supervisorAuthenticateRoute = this.#http.matchPath(
+        url.pathname,
+        /^\/api\/v1\/remote-supervisor\/connections\/([^/]+)\/authenticate$/u,
+      )
+      if (
+        request.method === 'POST' &&
+        supervisorAuthenticateRoute !== undefined &&
+        this.#supervisorTransport !== undefined
+      ) {
+        const body = await this.#http.readValidatedBody(
+          request,
+          supervisorAuthenticationSchema,
+        )
+        this.#http.writeJson(
+          response,
+          200,
+          await this.#supervisorTransport.authenticateRemote(
+            supervisorAuthenticateRoute[0]!,
+            body,
+          ),
+          context.allowedOrigin,
+        )
+        return
+      }
+      const supervisorSessionRoute = this.#http.matchPath(
+        url.pathname,
+        /^\/api\/v1\/remote-supervisor\/sessions\/([^/]+)\/(bootstrap|machines)$/u,
+      )
+      if (
+        request.method === 'GET' &&
+        supervisorSessionRoute !== undefined &&
+        this.#supervisorTransport !== undefined
+      ) {
+        this.#http.writeJson(
+          response,
+          200,
+          await this.#supervisorTransport.readRemote(
+            supervisorSessionRoute[0]!,
+            supervisorSessionRoute[1] === 'bootstrap'
+              ? 'host.bootstrap'
+              : 'machine.list',
+          ),
+          context.allowedOrigin,
+        )
+        return
+      }
+      const supervisorMachineRoute = this.#http.matchPath(
+        url.pathname,
+        /^\/api\/v1\/remote-supervisor\/sessions\/([^/]+)\/machines\/([^/]+)$/u,
+      )
+      if (
+        request.method === 'GET' &&
+        supervisorMachineRoute !== undefined &&
+        this.#supervisorTransport !== undefined
+      ) {
+        this.#http.writeJson(
+          response,
+          200,
+          await this.#supervisorTransport.readRemote(
+            supervisorMachineRoute[0]!,
+            'machine.get',
+            supervisorMachineRoute[1]!,
+          ),
+          context.allowedOrigin,
+        )
+        return
+      }
+      const supervisorCloseRoute = this.#http.matchPath(
+        url.pathname,
+        /^\/api\/v1\/remote-supervisor\/(?:connections|sessions)\/([^/]+)$/u,
+      )
+      if (
+        request.method === 'DELETE' &&
+        supervisorCloseRoute !== undefined &&
+        this.#supervisorTransport !== undefined
+      ) {
+        this.#supervisorTransport.closeRemote(supervisorCloseRoute[0]!)
+        this.#http.writeJson(
+          response,
+          200,
+          { status: 'closed' },
           context.allowedOrigin,
         )
         return

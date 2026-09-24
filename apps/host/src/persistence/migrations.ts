@@ -148,6 +148,11 @@ const migrations: readonly Migration[] = [
     name: 'host_identity',
     up: migrateHostIdentity,
   },
+  {
+    version: 20,
+    name: 'host_supervisor_grants',
+    up: migrateHostSupervisorGrants,
+  },
 ]
 
 export const currentSchemaVersion = migrations.at(-1)?.version ?? 0
@@ -2462,6 +2467,32 @@ function migrateHostIdentity(database: DatabaseSync): void {
       updated_at TEXT NOT NULL,
       last_registered_at TEXT
     ) STRICT;
+  `)
+}
+
+function migrateHostSupervisorGrants(database: DatabaseSync): void {
+  database.exec(`
+    CREATE TABLE host_supervisor_grants (
+      authorization_id TEXT PRIMARY KEY
+        CHECK (authorization_id GLOB 'hauth_*' AND length(authorization_id) BETWEEN 22 AND 101),
+      host_id TEXT NOT NULL
+        CHECK (host_id GLOB 'host_*' AND length(host_id) BETWEEN 21 AND 101),
+      host_identity_generation INTEGER NOT NULL CHECK (host_identity_generation > 0),
+      device_id TEXT NOT NULL
+        CHECK (device_id GLOB 'dev_*' AND length(device_id) BETWEEN 20 AND 100),
+      device_key_generation INTEGER NOT NULL CHECK (device_key_generation > 0),
+      user_id TEXT NOT NULL
+        CHECK (user_id GLOB 'usr_*' AND length(user_id) BETWEEN 20 AND 100),
+      space_id TEXT NOT NULL
+        CHECK (space_id GLOB 'space_*' AND length(space_id) BETWEEN 22 AND 102),
+      grant_payload_json TEXT NOT NULL CHECK (length(grant_payload_json) BETWEEN 64 AND 16384),
+      grant_proof TEXT NOT NULL CHECK (length(grant_proof) BETWEEN 64 AND 8192),
+      expires_at TEXT NOT NULL,
+      materialized_at TEXT NOT NULL
+    ) STRICT;
+
+    CREATE UNIQUE INDEX host_supervisor_grants_device_host
+      ON host_supervisor_grants(device_id, host_id);
   `)
 }
 

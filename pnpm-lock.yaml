@@ -38,6 +38,9 @@ importers:
 
   apps/control-plane:
     dependencies:
+      '@codetether/supervisor-transport':
+        specifier: workspace:*
+        version: link:../../packages/supervisor-transport
       '@supabase/supabase-js':
         specifier: 2.116.0
         version: 2.116.0
@@ -95,6 +98,12 @@ importers:
       '@codetether/relay-protocol':
         specifier: workspace:*
         version: link:../../packages/relay-protocol
+      '@codetether/supervisor-transport':
+        specifier: workspace:*
+        version: link:../../packages/supervisor-transport
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
 
   apps/node:
     dependencies:
@@ -263,6 +272,21 @@ importers:
 
   packages/relay-protocol:
     dependencies:
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
+
+  packages/supervisor-transport:
+    dependencies:
+      '@codetether/machine-transport':
+        specifier: workspace:*
+        version: link:../machine-transport
+      jose:
+        specifier: 6.2.12
+        version: 6.2.12
+      selfsigned:
+        specifier: 5.5.0
+        version: 5.5.0
       zod:
         specifier: 4.4.3
         version: 4.4.3

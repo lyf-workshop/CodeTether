@@ -56,6 +56,10 @@ export interface HostIdentityCapability {
   readonly available: boolean
   createKey(): Promise<HostIdentityKeyDescription>
   readPublic(keyHandle: string): Promise<HostIdentityKeyDescription>
+  sign(
+    keyHandle: string,
+    payloadBase64Url: string,
+  ): Promise<ProductDeviceSignature>
 }
 
 export interface ProductDeviceKeyDescription {
@@ -189,6 +193,7 @@ const unavailableHostIdentity: HostIdentityCapability = {
     Promise.reject(new Error('Native Host identity is unavailable.')),
   readPublic: () =>
     Promise.reject(new Error('Native Host identity is unavailable.')),
+  sign: () => Promise.reject(new Error('Native Host identity is unavailable.')),
 }
 
 const unavailableProductDeviceIdentity: ProductDeviceIdentityCapability = {
@@ -451,6 +456,13 @@ export function createNativeCapabilities(
           keyHandle,
         },
       )
+    },
+    async sign(keyHandle, payloadBase64Url) {
+      const { invoke } = await loadCore()
+      return await invoke<ProductDeviceSignature>('host_identity_key_sign', {
+        keyHandle,
+        payloadBase64Url,
+      })
     },
   }
 

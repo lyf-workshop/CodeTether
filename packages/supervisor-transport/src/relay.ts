@@ -183,7 +183,9 @@ export class SupervisorRelayControlConnection {
     }
     if (
       message.type === 'supervisor.channel.reject' ||
-      message.type === 'supervisor.channel.error'
+      message.type === 'supervisor.channel.error' ||
+      (message.type === 'supervisor.channel.closed' &&
+        this.#channel === undefined)
     ) {
       this.#handleRejected(message.requestId)
       return
@@ -194,6 +196,7 @@ export class SupervisorRelayControlConnection {
       throw new SupervisorClientError('relay_protocol_error')
     }
     if (!channel.matchesBinding(message)) {
+      if (this.#acceptClosedChannelFrame(message)) return
       throw new SupervisorClientError('relay_protocol_error')
     }
     if (message.type === 'supervisor.channel.data') {
@@ -214,11 +217,25 @@ export class SupervisorRelayControlConnection {
     if (
       this.role !== 'host' ||
       message.connectionEpoch !== this.connectionEpoch ||
-      message.hostConnectionEpoch !== this.connectionEpoch ||
+      message.hostConnectionEpoch !== this.connectionEpoch
+    ) {
+      throw new SupervisorClientError('relay_protocol_error')
+    }
+    if (
       this.#channel !== undefined ||
       this.#hostOffers.size >= relayProtocolLimits.maximumChannelsPerPeer
     ) {
-      throw new SupervisorClientError('relay_protocol_error')
+      const binding = bindingOf(message)
+      await this.#send({
+        type: 'supervisor.channel.reject',
+        protocolVersion: relayProtocolVersion,
+        connectionEpoch: this.connectionEpoch as never,
+        ...binding,
+        requestId: message.requestId,
+        reason: 'not_available',
+      })
+      this.#rememberClosedChannel(binding)
+      return
     }
     const opened = deferred<Duplex>()
     const pending = {
@@ -343,9 +360,10 @@ export class SupervisorRelayControlConnection {
     }
   }
 
-  #acceptClosedChannelFrame(message: RelaySupervisorChannelBinding): boolean {
+  #acceptClosedChannelFrame(message: RelaySupervisorServerMessage): boolean {
     const closed = this.#closedChannel
     if (
+      message.type !== 'supervisor.channel.closed' ||
       closed === undefined ||
       closed.remainingExactFrames <= 0 ||
       !sameBinding(closed.binding, message)

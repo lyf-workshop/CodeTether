@@ -76,6 +76,10 @@ export class SupervisorTransportManager {
   readonly #relayRendezvousCapability: string
   readonly #pending = new Map<string, PendingSupervisorConnection>()
   readonly #sessions = new Map<string, ConnectedSupervisorSession>()
+  readonly #sessionExpiryTimers = new Map<
+    string,
+    ReturnType<typeof setTimeout>
+  >()
   #relayAbort: AbortController | undefined
   #relayConnection: SupervisorRelayControlConnection | undefined
   #relayTask: Promise<void> | undefined
@@ -383,6 +387,12 @@ export class SupervisorTransportManager {
       })
       const sessionId = `sclient_${randomUUID().replaceAll('-', '')}`
       this.#sessions.set(sessionId, session)
+      const timer = setTimeout(
+        () => this.closeRemote(sessionId),
+        Math.max(0, Date.parse(session.expiresAt) - Date.now()),
+      )
+      timer.unref()
+      this.#sessionExpiryTimers.set(sessionId, timer)
       return { sessionId, expiresAt: session.expiresAt }
     } catch (error) {
       pending.close()
@@ -416,6 +426,9 @@ export class SupervisorTransportManager {
   }
 
   closeRemote(id: string): void {
+    const expiryTimer = this.#sessionExpiryTimers.get(id)
+    if (expiryTimer !== undefined) clearTimeout(expiryTimer)
+    this.#sessionExpiryTimers.delete(id)
     const pending = this.#pending.get(id)
     pending?.close()
     this.#pending.delete(id)

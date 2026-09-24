@@ -454,6 +454,41 @@ test('forced Relay HTTP admission stays single-session while Direct fallback rem
         entry.role === 'device',
     ).length
     assert.equal(deviceConnections, 1)
+
+    const replacementPending = await manager.beginRemote({
+      hostId,
+      hostFingerprint,
+      hostIdentityGeneration: 1,
+      hostPublicJwk: publicJwk,
+      deviceId,
+      deviceKeyGeneration: 1,
+      grant,
+      descriptor,
+      forceRelay: true,
+    })
+    const replacementSession = await manager.authenticateRemote(
+      replacementPending.connectionId,
+      {
+        accessToken: 'access-token',
+        deviceProof: 'replacement-relay-device-proof',
+      },
+    )
+    assert.equal(
+      (await manager.readRemote(replacementSession.sessionId, 'host.bootstrap'))
+        .identity.hostId,
+      hostId,
+    )
+    manager.closeRemote(replacementSession.sessionId)
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    assert.equal(
+      relayLogs.filter(
+        (entry) =>
+          entry.event === 'supervisor.connection.authenticated' &&
+          entry.role === 'device',
+      ).length,
+      deviceConnections + 1,
+    )
+
     await assert.rejects(
       manager.beginRemote({
         hostId,
@@ -473,7 +508,7 @@ test('forced Relay HTTP admission stays single-session while Direct fallback rem
           entry.event === 'supervisor.connection.authenticated' &&
           entry.role === 'device',
       ).length,
-      deviceConnections,
+      deviceConnections + 1,
     )
     const directDescriptorPayload = {
       ...descriptorPayload,

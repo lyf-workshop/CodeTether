@@ -29,6 +29,16 @@ test('forced Relay is validation-only and bypasses local and Direct selection', 
   assert.match(directory, /forceRelay,\s*\n\s*signal/u)
   assert.match(remote, /\{ forceRelay: true \}/u)
   assert.match(remote, /transport !== 'direct' && transport !== 'relay'/u)
+  assert.match(remote, /async function closeRemoteSupervisorSession/u)
+  assert.match(remote, /method: 'DELETE'/u)
+  assert.match(
+    remote,
+    /const cached = remoteSessions\.get\(options\.host\.hostId\)/u,
+  )
+  assert.match(
+    remote,
+    /await closeRemoteSupervisorSession\(options\.host\.hostId, cached\)/u,
+  )
 })
 
 test('Supervisor Relay presence is maintained outside the My Hosts route', async () => {

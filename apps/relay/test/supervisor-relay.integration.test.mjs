@@ -171,6 +171,45 @@ test('Relay disconnect terminates the owned session and a fresh connection can a
   }
 })
 
+test('a second channel offer cannot terminate a healthy Supervisor Relay session', async () => {
+  const fixture = await createFixture()
+  try {
+    const active = await connectThroughRelay(fixture, 'active-session-proof')
+    assert.deepEqual(await active.readHostBootstrap(), {
+      hostId: ids.hostId,
+      transportAuthority: 'host',
+    })
+
+    await assert.rejects(
+      connectThroughRelay(fixture, 'overlapping-session-proof'),
+      (error) =>
+        error instanceof SupervisorClientError &&
+        error.code === 'relay_unavailable',
+    )
+    assert.deepEqual(await active.listMachines(), {
+      machines: [{ machineId: `machine_${'m'.repeat(32)}` }],
+    })
+    assert.equal(
+      fixture.logs.some((entry) => entry.event === 'host.control.failed'),
+      false,
+    )
+
+    active.close()
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    const reconnected = await connectThroughRelay(
+      fixture,
+      'replacement-session-proof',
+    )
+    assert.deepEqual(
+      await reconnected.getMachine(`machine_${'m'.repeat(32)}`),
+      { providers: ['codex', 'claude-code'] },
+    )
+    reconnected.close()
+  } finally {
+    await fixture.close()
+  }
+})
+
 async function createFixture() {
   const root = await mkdtemp(join(tmpdir(), 'codetether-supervisor-relay-'))
   const store = new RelayStateStore(join(root, 'state'))

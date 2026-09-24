@@ -78,8 +78,18 @@ export function currentRemoteSupervisorSession(
   if (session !== undefined && Date.parse(session.expiresAt) > Date.now()) {
     return session
   }
-  remoteSessions.delete(hostId)
   return undefined
+}
+
+async function closeRemoteSupervisorSession(
+  hostId: string,
+  session: RemoteSupervisorSession,
+): Promise<void> {
+  await fetch(
+    `${hostBaseUrl}/api/v1/remote-supervisor/sessions/${encodeURIComponent(session.sessionId)}`,
+    { method: 'DELETE' },
+  ).catch(() => undefined)
+  if (remoteSessions.get(hostId) === session) remoteSessions.delete(hostId)
 }
 
 export async function publishLocalSupervisorPresence(options: {
@@ -215,6 +225,7 @@ export async function connectRemoteSupervisor(options: {
   readonly forceRelay?: boolean
   readonly signal?: AbortSignal
 }): Promise<RemoteSupervisorSession> {
+  const cached = remoteSessions.get(options.host.hostId)
   const existing = currentRemoteSupervisorSession(options.host.hostId)
   if (
     existing !== undefined &&
@@ -222,12 +233,8 @@ export async function connectRemoteSupervisor(options: {
   ) {
     return existing
   }
-  if (existing !== undefined) {
-    await fetch(
-      `${hostBaseUrl}/api/v1/remote-supervisor/sessions/${encodeURIComponent(existing.sessionId)}`,
-      { method: 'DELETE' },
-    ).catch(() => undefined)
-    remoteSessions.delete(options.host.hostId)
+  if (cached !== undefined) {
+    await closeRemoteSupervisorSession(options.host.hostId, cached)
   }
   if (options.host.supervisor === null) {
     throw new Error('remote_supervisor_presence_unavailable')
@@ -293,8 +300,13 @@ export async function readRemoteMachine(
   machineId: string,
 ): Promise<unknown> {
   const session = currentRemoteSupervisorSession(hostId)
-  if (session === undefined)
+  if (session === undefined) {
+    const expired = remoteSessions.get(hostId)
+    if (expired !== undefined) {
+      await closeRemoteSupervisorSession(hostId, expired)
+    }
     throw new Error('remote_supervisor_session_expired')
+  }
   return await readJson(
     `${hostBaseUrl}/api/v1/remote-supervisor/sessions/${encodeURIComponent(session.sessionId)}/machines/${encodeURIComponent(machineId)}`,
   )

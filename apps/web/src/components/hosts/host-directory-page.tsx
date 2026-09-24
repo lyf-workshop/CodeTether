@@ -1,4 +1,10 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
+import {
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import {
@@ -326,6 +332,7 @@ function ConnectedHostCard({
   readonly onOpenLocal: () => void
   readonly onOpenRemote: () => void
 }) {
+  const validationOpened = useRef(false)
   const forceRelay =
     import.meta.env.VITE_CODETETHER_FORCE_RELAY === '1' ||
     new URLSearchParams(globalThis.location?.search ?? '').get('forceRelay') ===
@@ -408,6 +415,19 @@ function ConnectedHostCard({
     localConnectionState === 'reconnecting' ||
     remoteConnection.isFetching ||
     (forceRemote && presence.isPending)
+  useEffect(() => {
+    const validationHostId = import.meta.env
+      .VITE_CODETETHER_VALIDATE_REMOTE_DIRECTORY_HOST_ID
+    if (
+      validationOpened.current ||
+      validationHostId !== host.hostId ||
+      !remoteConnection.isSuccess
+    ) {
+      return
+    }
+    validationOpened.current = true
+    onOpenRemote()
+  }, [host.hostId, onOpenRemote, remoteConnection.isSuccess])
   return (
     <HostCard
       host={host}

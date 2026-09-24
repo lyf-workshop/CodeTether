@@ -39,6 +39,44 @@ export interface RemoteSupervisorSession {
   readonly machines: unknown
 }
 
+export interface RemoteProjectDirectoryItem {
+  readonly projectId: string
+  readonly machineId: string
+  readonly name: string
+  readonly conversationCount: number
+  readonly createdAt: string
+  readonly updatedAt: string
+}
+
+export interface RemoteProjectDirectoryPage {
+  readonly projects: readonly RemoteProjectDirectoryItem[]
+  readonly hasMore: boolean
+  readonly nextCursor?: string
+}
+
+export interface RemoteConversationDirectoryItem {
+  readonly conversationId: string
+  readonly projectId: string
+  readonly machineId: string
+  readonly title: string
+  readonly titleSource: 'generated' | 'manual'
+  readonly origin: 'codetether' | 'adopted_native'
+  readonly provider: 'codex' | 'claude-code'
+  readonly status: 'idle' | 'running' | 'waiting' | 'completed' | 'failed'
+  readonly archived: boolean
+  readonly nativeSessionBound: boolean
+  readonly resumability: 'resumable' | 'unavailable'
+  readonly createdAt: string
+  readonly updatedAt: string
+  readonly lastActivityAt: string
+}
+
+export interface RemoteConversationDirectoryPage {
+  readonly conversations: readonly RemoteConversationDirectoryItem[]
+  readonly hasMore: boolean
+  readonly nextCursor?: string
+}
+
 export async function readLocalHostIdentity(): Promise<
   LocalHostIdentityRecord | undefined
 > {
@@ -310,6 +348,220 @@ export async function readRemoteMachine(
   return await readJson(
     `${hostBaseUrl}/api/v1/remote-supervisor/sessions/${encodeURIComponent(session.sessionId)}/machines/${encodeURIComponent(machineId)}`,
   )
+}
+
+export async function readRemoteProjects(
+  hostId: string,
+  machineId: string,
+  page: { readonly limit: number; readonly cursor?: string },
+): Promise<RemoteProjectDirectoryPage> {
+  const session = requireRemoteSupervisorSession(hostId)
+  const query = directoryQuery(page)
+  const value = await readJson(
+    `${remoteMachineBaseUrl(session, machineId)}/projects?${query}`,
+  )
+  const result = parseProjectPage(value)
+  if (result.projects.some((project) => project.machineId !== machineId)) {
+    throw new Error('remote_supervisor_response_invalid')
+  }
+  return result
+}
+
+export async function readRemoteProject(
+  hostId: string,
+  machineId: string,
+  projectId: string,
+): Promise<RemoteProjectDirectoryItem> {
+  const session = requireRemoteSupervisorSession(hostId)
+  const value = await readJson(
+    `${remoteMachineBaseUrl(session, machineId)}/projects/${encodeURIComponent(projectId)}`,
+  )
+  const project = parseProject(asRecord(value.project))
+  if (project.machineId !== machineId || project.projectId !== projectId) {
+    throw new Error('remote_supervisor_response_invalid')
+  }
+  return project
+}
+
+export async function readRemoteConversations(
+  hostId: string,
+  machineId: string,
+  projectId: string,
+  page: { readonly limit: number; readonly cursor?: string },
+): Promise<RemoteConversationDirectoryPage> {
+  const session = requireRemoteSupervisorSession(hostId)
+  const query = directoryQuery(page)
+  const value = await readJson(
+    `${remoteMachineBaseUrl(session, machineId)}/projects/${encodeURIComponent(projectId)}/conversations?${query}`,
+  )
+  const result = parseConversationPage(value)
+  if (
+    result.conversations.some(
+      (conversation) =>
+        conversation.machineId !== machineId ||
+        conversation.projectId !== projectId,
+    )
+  ) {
+    throw new Error('remote_supervisor_response_invalid')
+  }
+  return result
+}
+
+export async function readRemoteConversation(
+  hostId: string,
+  machineId: string,
+  projectId: string,
+  conversationId: string,
+): Promise<RemoteConversationDirectoryItem> {
+  const session = requireRemoteSupervisorSession(hostId)
+  const value = await readJson(
+    `${remoteMachineBaseUrl(session, machineId)}/projects/${encodeURIComponent(projectId)}/conversations/${encodeURIComponent(conversationId)}`,
+  )
+  const conversation = parseConversation(asRecord(value.conversation))
+  if (
+    conversation.machineId !== machineId ||
+    conversation.projectId !== projectId ||
+    conversation.conversationId !== conversationId
+  ) {
+    throw new Error('remote_supervisor_response_invalid')
+  }
+  return conversation
+}
+
+function requireRemoteSupervisorSession(
+  hostId: string,
+): RemoteSupervisorSession {
+  const session = currentRemoteSupervisorSession(hostId)
+  if (session === undefined)
+    throw new Error('remote_supervisor_session_expired')
+  return session
+}
+
+function remoteMachineBaseUrl(
+  session: RemoteSupervisorSession,
+  machineId: string,
+): string {
+  return `${hostBaseUrl}/api/v1/remote-supervisor/sessions/${encodeURIComponent(session.sessionId)}/machines/${encodeURIComponent(machineId)}`
+}
+
+function directoryQuery(page: {
+  readonly limit: number
+  readonly cursor?: string
+}): string {
+  const query = new URLSearchParams({ limit: String(page.limit) })
+  if (page.cursor !== undefined) query.set('cursor', page.cursor)
+  return query.toString()
+}
+
+function parseProjectPage(
+  value: Record<string, unknown>,
+): RemoteProjectDirectoryPage {
+  if (!Array.isArray(value.projects) || typeof value.hasMore !== 'boolean') {
+    throw new Error('remote_supervisor_response_invalid')
+  }
+  const nextCursor = optionalString(value, 'nextCursor')
+  if (value.hasMore !== (nextCursor !== undefined)) {
+    throw new Error('remote_supervisor_response_invalid')
+  }
+  return {
+    projects: value.projects.map((project) => parseProject(asRecord(project))),
+    hasMore: value.hasMore,
+    ...(nextCursor === undefined ? {} : { nextCursor }),
+  }
+}
+
+function parseProject(
+  value: Record<string, unknown>,
+): RemoteProjectDirectoryItem {
+  const conversationCount = value.conversationCount
+  if (
+    !Number.isSafeInteger(conversationCount) ||
+    Number(conversationCount) < 0
+  ) {
+    throw new Error('remote_supervisor_response_invalid')
+  }
+  return {
+    projectId: boundedString(value, 'projectId'),
+    machineId: boundedString(value, 'machineId'),
+    name: boundedString(value, 'name'),
+    conversationCount: Number(conversationCount),
+    createdAt: timestampField(value, 'createdAt'),
+    updatedAt: timestampField(value, 'updatedAt'),
+  }
+}
+
+function parseConversationPage(
+  value: Record<string, unknown>,
+): RemoteConversationDirectoryPage {
+  if (
+    !Array.isArray(value.conversations) ||
+    typeof value.hasMore !== 'boolean'
+  ) {
+    throw new Error('remote_supervisor_response_invalid')
+  }
+  const nextCursor = optionalString(value, 'nextCursor')
+  if (value.hasMore !== (nextCursor !== undefined)) {
+    throw new Error('remote_supervisor_response_invalid')
+  }
+  return {
+    conversations: value.conversations.map((conversation) =>
+      parseConversation(asRecord(conversation)),
+    ),
+    hasMore: value.hasMore,
+    ...(nextCursor === undefined ? {} : { nextCursor }),
+  }
+}
+
+function parseConversation(
+  value: Record<string, unknown>,
+): RemoteConversationDirectoryItem {
+  const titleSource = boundedString(value, 'titleSource')
+  const origin = boundedString(value, 'origin')
+  const provider = boundedString(value, 'provider')
+  const status = boundedString(value, 'status')
+  const resumability = boundedString(value, 'resumability')
+  if (
+    (titleSource !== 'generated' && titleSource !== 'manual') ||
+    (origin !== 'codetether' && origin !== 'adopted_native') ||
+    (provider !== 'codex' && provider !== 'claude-code') ||
+    !['idle', 'running', 'waiting', 'completed', 'failed'].includes(status) ||
+    (resumability !== 'resumable' && resumability !== 'unavailable') ||
+    typeof value.archived !== 'boolean' ||
+    typeof value.nativeSessionBound !== 'boolean'
+  ) {
+    throw new Error('remote_supervisor_response_invalid')
+  }
+  return {
+    conversationId: boundedString(value, 'conversationId'),
+    projectId: boundedString(value, 'projectId'),
+    machineId: boundedString(value, 'machineId'),
+    title: boundedString(value, 'title'),
+    titleSource,
+    origin,
+    provider,
+    status: status as RemoteConversationDirectoryItem['status'],
+    archived: value.archived,
+    nativeSessionBound: value.nativeSessionBound,
+    resumability,
+    createdAt: timestampField(value, 'createdAt'),
+    updatedAt: timestampField(value, 'updatedAt'),
+    lastActivityAt: timestampField(value, 'lastActivityAt'),
+  }
+}
+
+function timestampField(value: Record<string, unknown>, key: string): string {
+  const timestamp = boundedString(value, key)
+  if (!Number.isFinite(Date.parse(timestamp))) {
+    throw new Error('remote_supervisor_response_invalid')
+  }
+  return timestamp
+}
+
+function optionalString(
+  value: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  return value[key] === undefined ? undefined : boundedString(value, key)
 }
 
 async function signHostProof(

@@ -180,26 +180,65 @@ export const supervisorAuthenticatedSchema = z
   })
   .strict()
 
-export const supervisorRequestSchema = z
-  .object({
-    type: z.literal('supervisor.request'),
-    protocolVersion: z.literal(supervisorProtocolVersion),
-    requestId: opaqueId('sreq'),
-    operation: z.enum(['host.bootstrap', 'machine.list', 'machine.get']),
-    machineId: opaqueId('machine').optional(),
-  })
-  .strict()
-  .superRefine((value, context) => {
-    if (
-      (value.operation === 'machine.get') !==
-      (value.machineId !== undefined)
-    ) {
-      context.addIssue({
-        code: 'custom',
-        message: 'machineId is required only for machine.get',
-      })
-    }
-  })
+const supervisorRequestBaseSchema = z.object({
+  type: z.literal('supervisor.request'),
+  protocolVersion: z.literal(supervisorProtocolVersion),
+  requestId: opaqueId('sreq'),
+})
+
+const supervisorDirectoryLimitSchema = z.number().int().min(1).max(100)
+const supervisorDirectoryCursorSchema = z
+  .string()
+  .min(1)
+  .max(2_048)
+  .regex(/^[A-Za-z0-9_-]+$/u)
+
+export const supervisorRequestSchema = z.discriminatedUnion('operation', [
+  supervisorRequestBaseSchema
+    .extend({ operation: z.literal('host.bootstrap') })
+    .strict(),
+  supervisorRequestBaseSchema
+    .extend({ operation: z.literal('machine.list') })
+    .strict(),
+  supervisorRequestBaseSchema
+    .extend({
+      operation: z.literal('machine.get'),
+      machineId: opaqueId('machine'),
+    })
+    .strict(),
+  supervisorRequestBaseSchema
+    .extend({
+      operation: z.literal('project.list'),
+      machineId: opaqueId('machine'),
+      limit: supervisorDirectoryLimitSchema,
+      cursor: supervisorDirectoryCursorSchema.optional(),
+    })
+    .strict(),
+  supervisorRequestBaseSchema
+    .extend({
+      operation: z.literal('project.get'),
+      machineId: opaqueId('machine'),
+      projectId: opaqueId('proj'),
+    })
+    .strict(),
+  supervisorRequestBaseSchema
+    .extend({
+      operation: z.literal('conversation.list'),
+      machineId: opaqueId('machine'),
+      projectId: opaqueId('proj'),
+      limit: supervisorDirectoryLimitSchema,
+      cursor: supervisorDirectoryCursorSchema.optional(),
+    })
+    .strict(),
+  supervisorRequestBaseSchema
+    .extend({
+      operation: z.literal('conversation.get'),
+      machineId: opaqueId('machine'),
+      projectId: opaqueId('proj'),
+      conversationId: opaqueId('conv'),
+    })
+    .strict(),
+])
 export type SupervisorRequest = z.infer<typeof supervisorRequestSchema>
 
 export const supervisorResponseSchema = z

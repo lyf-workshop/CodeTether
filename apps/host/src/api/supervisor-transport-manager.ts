@@ -181,6 +181,25 @@ export class SupervisorTransportManager {
             ...('relay' in detail ? { relay: detail.relay } : {}),
           }
         },
+        listProjects: (machineId, page) =>
+          options.service.listSupervisorProjects(machineId as never, page),
+        getProject: (machineId, projectId) =>
+          options.service.getSupervisorProject(
+            machineId as never,
+            projectId as never,
+          ),
+        listConversations: (machineId, projectId, page) =>
+          options.service.listSupervisorConversations(
+            machineId as never,
+            projectId as never,
+            page,
+          ),
+        getConversation: (machineId, projectId, conversationId) =>
+          options.service.getSupervisorConversation(
+            machineId as never,
+            projectId as never,
+            conversationId as never,
+          ),
       },
       onDiagnostic(event, fields) {
         process.stderr.write(
@@ -414,6 +433,67 @@ export class SupervisorTransportManager {
       if (machineId === undefined)
         throw new Error('Machine identity is required')
       return await session.getMachine(machineId)
+    } catch (error) {
+      if (
+        error instanceof SupervisorClientError &&
+        error.code === 'session_expired'
+      ) {
+        this.closeRemote(sessionId)
+      }
+      throw error
+    }
+  }
+
+  async listRemoteProjects(
+    sessionId: string,
+    machineId: string,
+    page: { readonly limit: number; readonly cursor?: string },
+  ): Promise<unknown> {
+    return await this.#withRemoteSession(sessionId, (session) =>
+      session.listProjects(machineId, page),
+    )
+  }
+
+  async getRemoteProject(
+    sessionId: string,
+    machineId: string,
+    projectId: string,
+  ): Promise<unknown> {
+    return await this.#withRemoteSession(sessionId, (session) =>
+      session.getProject(machineId, projectId),
+    )
+  }
+
+  async listRemoteConversations(
+    sessionId: string,
+    machineId: string,
+    projectId: string,
+    page: { readonly limit: number; readonly cursor?: string },
+  ): Promise<unknown> {
+    return await this.#withRemoteSession(sessionId, (session) =>
+      session.listConversations(machineId, projectId, page),
+    )
+  }
+
+  async getRemoteConversation(
+    sessionId: string,
+    machineId: string,
+    projectId: string,
+    conversationId: string,
+  ): Promise<unknown> {
+    return await this.#withRemoteSession(sessionId, (session) =>
+      session.getConversation(machineId, projectId, conversationId),
+    )
+  }
+
+  async #withRemoteSession(
+    sessionId: string,
+    read: (session: ConnectedSupervisorSession) => Promise<unknown>,
+  ): Promise<unknown> {
+    const session = this.#sessions.get(sessionId)
+    if (session === undefined) throw new Error('Supervisor session not found')
+    try {
+      return await read(session)
     } catch (error) {
       if (
         error instanceof SupervisorClientError &&

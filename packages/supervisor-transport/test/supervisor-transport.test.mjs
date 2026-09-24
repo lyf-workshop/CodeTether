@@ -41,6 +41,36 @@ test('direct Supervisor transport verifies exact identities and exposes only rea
     assert.deepEqual(await connected.getMachine(`machine_${'m'.repeat(32)}`), {
       providers: ['codex', 'claude-code'],
     })
+    assert.deepEqual(
+      await connected.listProjects(`machine_${'m'.repeat(32)}`, { limit: 25 }),
+      { projects: [{ projectId: `proj_${'p'.repeat(32)}` }], hasMore: false },
+    )
+    assert.deepEqual(
+      await connected.getProject(
+        `machine_${'m'.repeat(32)}`,
+        `proj_${'p'.repeat(32)}`,
+      ),
+      { projectId: `proj_${'p'.repeat(32)}` },
+    )
+    assert.deepEqual(
+      await connected.listConversations(
+        `machine_${'m'.repeat(32)}`,
+        `proj_${'p'.repeat(32)}`,
+        { limit: 25 },
+      ),
+      {
+        conversations: [{ conversationId: `conv_${'c'.repeat(32)}` }],
+        hasMore: false,
+      },
+    )
+    assert.deepEqual(
+      await connected.getConversation(
+        `machine_${'m'.repeat(32)}`,
+        `proj_${'p'.repeat(32)}`,
+        `conv_${'c'.repeat(32)}`,
+      ),
+      { conversationId: `conv_${'c'.repeat(32)}` },
+    )
     connected.close()
     assert.equal(
       supervisorRequestSchema.safeParse({
@@ -51,6 +81,25 @@ test('direct Supervisor transport verifies exact identities and exposes only rea
       }).success,
       false,
     )
+    for (const operation of [
+      'conversation.history',
+      'conversation.send',
+      'conversation.resume',
+      'conversation.create',
+      'provider.start',
+      'shell.execute',
+      'filesystem.write',
+    ]) {
+      assert.equal(
+        supervisorRequestSchema.safeParse({
+          type: 'supervisor.request',
+          protocolVersion: 1,
+          requestId: `sreq_${'r'.repeat(32)}`,
+          operation,
+        }).success,
+        false,
+      )
+    }
     assert.equal(
       supervisorClientAuthenticateSchema.safeParse({
         type: 'supervisor.authenticate',
@@ -131,6 +180,16 @@ async function createFixture(options = {}) {
         machines: [{ machineId: `machine_${'m'.repeat(32)}` }],
       }),
       getMachine: () => ({ providers: ['codex', 'claude-code'] }),
+      listProjects: () => ({
+        projects: [{ projectId: `proj_${'p'.repeat(32)}` }],
+        hasMore: false,
+      }),
+      getProject: () => ({ projectId: `proj_${'p'.repeat(32)}` }),
+      listConversations: () => ({
+        conversations: [{ conversationId: `conv_${'c'.repeat(32)}` }],
+        hasMore: false,
+      }),
+      getConversation: () => ({ conversationId: `conv_${'c'.repeat(32)}` }),
     },
   })
   const address = await server.start()

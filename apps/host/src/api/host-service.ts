@@ -203,6 +203,8 @@ import {
   type DurableProviderExecutionHealthObservation,
   type DurableProviderInstallation,
   type RestoredDurableConversation,
+  type SupervisorConversationDirectoryPage,
+  type SupervisorProjectDirectoryPage,
   type DurableTurnSnapshot,
   type DurableHostIdentity,
   type HostIdentityKeyDescription,
@@ -1883,6 +1885,92 @@ export class HostService {
     } catch (error) {
       throw projectServiceError(error)
     }
+  }
+
+  listSupervisorProjects(
+    machineId: MachineId,
+    page: { readonly limit: number; readonly cursor?: string },
+  ): SupervisorProjectDirectoryPage & { readonly protocolVersion: 1 } {
+    const persistence = this.#requireSupervisorDirectoryPersistence()
+    const machine = MachineIdSchema.parse(machineId)
+    if (persistence.getMachine(machine) === undefined) {
+      throw new HostServiceError('not_found', 'Machine was not found', 404)
+    }
+    return {
+      protocolVersion,
+      ...persistence.listSupervisorProjects(machine, page),
+    }
+  }
+
+  getSupervisorProject(
+    machineId: MachineId,
+    projectId: ProjectId,
+  ): {
+    readonly protocolVersion: 1
+    readonly project: NonNullable<
+      ReturnType<ConversationStore['getSupervisorProject']>
+    >
+  } {
+    const persistence = this.#requireSupervisorDirectoryPersistence()
+    const project = persistence.getSupervisorProject(
+      MachineIdSchema.parse(machineId),
+      ProjectIdSchema.parse(projectId),
+    )
+    if (project === undefined) {
+      throw new HostServiceError(
+        'not_found',
+        'Project is not registered on the selected Machine',
+        404,
+      )
+    }
+    return { protocolVersion, project }
+  }
+
+  listSupervisorConversations(
+    machineId: MachineId,
+    projectId: ProjectId,
+    page: { readonly limit: number; readonly cursor?: string },
+  ): SupervisorConversationDirectoryPage & { readonly protocolVersion: 1 } {
+    const persistence = this.#requireSupervisorDirectoryPersistence()
+    const machine = MachineIdSchema.parse(machineId)
+    const project = ProjectIdSchema.parse(projectId)
+    if (persistence.getSupervisorProject(machine, project) === undefined) {
+      throw new HostServiceError(
+        'not_found',
+        'Project is not registered on the selected Machine',
+        404,
+      )
+    }
+    return {
+      protocolVersion,
+      ...persistence.listSupervisorConversations(machine, project, page),
+    }
+  }
+
+  getSupervisorConversation(
+    machineId: MachineId,
+    projectId: ProjectId,
+    conversationId: ConversationId,
+  ): {
+    readonly protocolVersion: 1
+    readonly conversation: NonNullable<
+      ReturnType<ConversationStore['getSupervisorConversation']>
+    >
+  } {
+    const persistence = this.#requireSupervisorDirectoryPersistence()
+    const conversation = persistence.getSupervisorConversation(
+      MachineIdSchema.parse(machineId),
+      ProjectIdSchema.parse(projectId),
+      ConversationIdSchema.parse(conversationId),
+    )
+    if (conversation === undefined) {
+      throw new HostServiceError(
+        'not_found',
+        'Conversation was not found in the selected Project and Machine',
+        404,
+      )
+    }
+    return { protocolVersion, conversation }
   }
 
   async registerProjectLocation(
@@ -5160,6 +5248,17 @@ export class HostService {
         })
       }
     }
+  }
+
+  #requireSupervisorDirectoryPersistence(): ConversationStore {
+    if (this.#persistence === undefined) {
+      throw new HostServiceError(
+        'runtime_unavailable',
+        'Durable Project and Conversation directory is unavailable',
+        503,
+      )
+    }
+    return this.#persistence
   }
 
   #recordProviderExecutionHealth(

@@ -92,7 +92,14 @@ test('forced-remote manager reads Host state without using local HTTP product da
     fingerprint: hostFingerprint,
     identityGeneration: 1,
   }
-  const reads = { machines: 0, detail: 0 }
+  const reads = {
+    machines: 0,
+    detail: 0,
+    projects: 0,
+    project: 0,
+    conversations: 0,
+    conversation: 0,
+  }
   const service = {
     getHostIdentity: () => identity,
     listMachines: () => {
@@ -111,6 +118,38 @@ test('forced-remote manager reads Host state without using local HTTP product da
         providerLifecycles: [],
         projects: [{ path: 'must-not-cross-remote-boundary' }],
         conversations: [{ title: 'must-not-cross-remote-boundary' }],
+      }
+    },
+    listSupervisorProjects: (_machineId, page) => {
+      reads.projects += 1
+      assert.deepEqual(page, { limit: 25 })
+      return {
+        protocolVersion: 1,
+        projects: [{ projectId: `proj_${'p'.repeat(32)}` }],
+        hasMore: false,
+      }
+    },
+    getSupervisorProject: () => {
+      reads.project += 1
+      return {
+        protocolVersion: 1,
+        project: { projectId: `proj_${'p'.repeat(32)}` },
+      }
+    },
+    listSupervisorConversations: (_machineId, _projectId, page) => {
+      reads.conversations += 1
+      assert.deepEqual(page, { limit: 25 })
+      return {
+        protocolVersion: 1,
+        conversations: [{ conversationId: `conv_${'c'.repeat(32)}` }],
+        hasMore: false,
+      }
+    },
+    getSupervisorConversation: () => {
+      reads.conversation += 1
+      return {
+        protocolVersion: 1,
+        conversation: { conversationId: `conv_${'c'.repeat(32)}` },
       }
     },
   }
@@ -227,6 +266,57 @@ test('forced-remote manager reads Host state without using local HTTP product da
     assert.equal(reads.detail, 1)
     assert.equal('projects' in detail, false)
     assert.equal('conversations' in detail, false)
+    const machineId = `machine_${'m'.repeat(32)}`
+    const projectId = `proj_${'p'.repeat(32)}`
+    const conversationId = `conv_${'c'.repeat(32)}`
+    assert.equal(
+      (
+        await manager.listRemoteProjects(authenticated.sessionId, machineId, {
+          limit: 25,
+        })
+      ).projects[0].projectId,
+      projectId,
+    )
+    assert.equal(
+      (
+        await manager.getRemoteProject(
+          authenticated.sessionId,
+          machineId,
+          projectId,
+        )
+      ).project.projectId,
+      projectId,
+    )
+    assert.equal(
+      (
+        await manager.listRemoteConversations(
+          authenticated.sessionId,
+          machineId,
+          projectId,
+          { limit: 25 },
+        )
+      ).conversations[0].conversationId,
+      conversationId,
+    )
+    assert.equal(
+      (
+        await manager.getRemoteConversation(
+          authenticated.sessionId,
+          machineId,
+          projectId,
+          conversationId,
+        )
+      ).conversation.conversationId,
+      conversationId,
+    )
+    assert.deepEqual(reads, {
+      machines: 1,
+      detail: 1,
+      projects: 1,
+      project: 1,
+      conversations: 1,
+      conversation: 1,
+    })
   } finally {
     globalThis.fetch = originalFetch
     await manager.close()
@@ -293,6 +383,24 @@ test('forced Relay HTTP admission stays single-session while Direct fallback rem
         providerLifecycles: [],
       }
     },
+    listSupervisorProjects: () => ({
+      protocolVersion: 1,
+      projects: [{ projectId: `proj_${'p'.repeat(32)}` }],
+      hasMore: false,
+    }),
+    getSupervisorProject: () => ({
+      protocolVersion: 1,
+      project: { projectId: `proj_${'p'.repeat(32)}` },
+    }),
+    listSupervisorConversations: () => ({
+      protocolVersion: 1,
+      conversations: [{ conversationId: `conv_${'c'.repeat(32)}` }],
+      hasMore: false,
+    }),
+    getSupervisorConversation: () => ({
+      protocolVersion: 1,
+      conversation: { conversationId: `conv_${'c'.repeat(32)}` },
+    }),
   }
   const persistence = { storeHostSupervisorGrant: (grant) => grant }
   const manager = await SupervisorTransportManager.create({
@@ -443,6 +551,34 @@ test('forced Relay HTTP admission stays single-session while Direct fallback rem
     assert.equal(
       (await machineDetailResponse.json()).machine.machineId,
       machineId,
+    )
+    const projectListResponse = await originalFetch(
+      `${localBaseUrl}/api/v1/remote-supervisor/sessions/${authenticated.sessionId}/machines/${machineId}/projects?limit=25`,
+    )
+    const projectListBody = await projectListResponse.json()
+    assert.equal(
+      projectListResponse.status,
+      200,
+      JSON.stringify(projectListBody),
+    )
+    const projectId = projectListBody.projects[0].projectId
+    const projectDetailResponse = await originalFetch(
+      `${localBaseUrl}/api/v1/remote-supervisor/sessions/${authenticated.sessionId}/machines/${machineId}/projects/${projectId}`,
+    )
+    assert.equal(projectDetailResponse.status, 200)
+    const conversationListResponse = await originalFetch(
+      `${localBaseUrl}/api/v1/remote-supervisor/sessions/${authenticated.sessionId}/machines/${machineId}/projects/${projectId}/conversations?limit=25`,
+    )
+    assert.equal(conversationListResponse.status, 200)
+    const conversationId = (await conversationListResponse.json())
+      .conversations[0].conversationId
+    const conversationDetailResponse = await originalFetch(
+      `${localBaseUrl}/api/v1/remote-supervisor/sessions/${authenticated.sessionId}/machines/${machineId}/projects/${projectId}/conversations/${conversationId}`,
+    )
+    assert.equal(conversationDetailResponse.status, 200)
+    assert.equal(
+      (await conversationDetailResponse.json()).conversation.conversationId,
+      conversationId,
     )
     assert.equal(reads.machines, 1)
     assert.equal(reads.detail, 1)

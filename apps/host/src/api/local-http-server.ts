@@ -143,6 +143,17 @@ const supervisorAuthenticationSchema = z
     deviceProof: z.string().min(1).max(16_384),
   })
   .strict()
+const supervisorDirectoryQuerySchema = z
+  .object({
+    limit: z.coerce.number().int().min(1).max(100).default(50),
+    cursor: z
+      .string()
+      .min(1)
+      .max(2_048)
+      .regex(/^(?:spd|scd)_[A-Za-z0-9_-]+$/u)
+      .optional(),
+  })
+  .strict()
 
 interface HostIdentityKeyDescriptionBody {
   readonly keyHandle: string
@@ -353,12 +364,17 @@ export class LocalHttpServer {
         url.pathname,
         /^\/api\/v1\/machines\/([^/]+)\/projects$/u,
       )
+      const supervisorDirectoryListRoute =
+        /^\/api\/v1\/remote-supervisor\/sessions\/[^/]+\/machines\/[^/]+\/projects(?:\/[^/]+\/conversations)?$/u.test(
+          url.pathname,
+        )
       const acceptsQuery =
         request.method === 'GET' &&
         (projectConversationsRoute !== undefined ||
           projectConversationSearchRoute !== undefined ||
           providerSessionsRoute !== undefined ||
           nativeTranscriptRoute !== undefined ||
+          supervisorDirectoryListRoute ||
           url.pathname === '/api/v1/doctor' ||
           url.pathname === '/api/v1/attention')
       if (url.search !== '' && !acceptsQuery) {
@@ -526,6 +542,100 @@ export class LocalHttpServer {
             supervisorMachineRoute[0]!,
             'machine.get',
             supervisorMachineRoute[1]!,
+          ),
+          context.allowedOrigin,
+        )
+        return
+      }
+      const supervisorConversationDetailRoute = this.#http.matchPath(
+        url.pathname,
+        /^\/api\/v1\/remote-supervisor\/sessions\/([^/]+)\/machines\/([^/]+)\/projects\/([^/]+)\/conversations\/([^/]+)$/u,
+      )
+      if (
+        request.method === 'GET' &&
+        supervisorConversationDetailRoute !== undefined &&
+        this.#supervisorTransport !== undefined
+      ) {
+        this.#http.writeJson(
+          response,
+          200,
+          await this.#supervisorTransport.getRemoteConversation(
+            supervisorConversationDetailRoute[0]!,
+            supervisorConversationDetailRoute[1]!,
+            supervisorConversationDetailRoute[2]!,
+            supervisorConversationDetailRoute[3]!,
+          ),
+          context.allowedOrigin,
+        )
+        return
+      }
+      const supervisorConversationListRoute = this.#http.matchPath(
+        url.pathname,
+        /^\/api\/v1\/remote-supervisor\/sessions\/([^/]+)\/machines\/([^/]+)\/projects\/([^/]+)\/conversations$/u,
+      )
+      if (
+        request.method === 'GET' &&
+        supervisorConversationListRoute !== undefined &&
+        this.#supervisorTransport !== undefined
+      ) {
+        const query = this.#http.parseValidatedQuery(
+          url.searchParams,
+          supervisorDirectoryQuerySchema,
+        )
+        this.#http.writeJson(
+          response,
+          200,
+          await this.#supervisorTransport.listRemoteConversations(
+            supervisorConversationListRoute[0]!,
+            supervisorConversationListRoute[1]!,
+            supervisorConversationListRoute[2]!,
+            query,
+          ),
+          context.allowedOrigin,
+        )
+        return
+      }
+      const supervisorProjectDetailRoute = this.#http.matchPath(
+        url.pathname,
+        /^\/api\/v1\/remote-supervisor\/sessions\/([^/]+)\/machines\/([^/]+)\/projects\/([^/]+)$/u,
+      )
+      if (
+        request.method === 'GET' &&
+        supervisorProjectDetailRoute !== undefined &&
+        this.#supervisorTransport !== undefined
+      ) {
+        this.#http.writeJson(
+          response,
+          200,
+          await this.#supervisorTransport.getRemoteProject(
+            supervisorProjectDetailRoute[0]!,
+            supervisorProjectDetailRoute[1]!,
+            supervisorProjectDetailRoute[2]!,
+          ),
+          context.allowedOrigin,
+        )
+        return
+      }
+      const supervisorProjectListRoute = this.#http.matchPath(
+        url.pathname,
+        /^\/api\/v1\/remote-supervisor\/sessions\/([^/]+)\/machines\/([^/]+)\/projects$/u,
+      )
+      if (
+        request.method === 'GET' &&
+        supervisorProjectListRoute !== undefined &&
+        this.#supervisorTransport !== undefined
+      ) {
+        const query = this.#http.parseValidatedQuery(
+          url.searchParams,
+          supervisorDirectoryQuerySchema,
+        )
+        this.#http.writeJson(
+          response,
+          200,
+          await this.#supervisorTransport.listRemoteProjects(
+            supervisorProjectListRoute[0]!,
+            supervisorProjectListRoute[1]!,
+            query,
           ),
           context.allowedOrigin,
         )

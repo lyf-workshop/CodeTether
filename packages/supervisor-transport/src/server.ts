@@ -49,6 +49,21 @@ export interface SupervisorHostReadSurface {
   readHostBootstrap(): unknown | Promise<unknown>
   listMachines(): unknown | Promise<unknown>
   getMachine(machineId: string): unknown | Promise<unknown>
+  listProjects(
+    machineId: string,
+    page: { readonly limit: number; readonly cursor?: string },
+  ): unknown | Promise<unknown>
+  getProject(machineId: string, projectId: string): unknown | Promise<unknown>
+  listConversations(
+    machineId: string,
+    projectId: string,
+    page: { readonly limit: number; readonly cursor?: string },
+  ): unknown | Promise<unknown>
+  getConversation(
+    machineId: string,
+    projectId: string,
+    conversationId: string,
+  ): unknown | Promise<unknown>
 }
 
 export interface SupervisorServerActivation {
@@ -308,7 +323,7 @@ export class SupervisorServer {
           })
           break
         }
-        await this.#respond(connection, request)
+        await this.#respond(connection, request, transport)
       }
     } catch (error) {
       const rejectionCode =
@@ -338,14 +353,53 @@ export class SupervisorServer {
   async #respond(
     connection: FramedMachineConnection,
     request: SupervisorRequest,
+    transport: 'direct' | 'relay',
   ): Promise<void> {
+    const startedAt = Date.now()
     try {
-      const data =
-        request.operation === 'host.bootstrap'
-          ? await this.#options.reads.readHostBootstrap()
-          : request.operation === 'machine.list'
-            ? await this.#options.reads.listMachines()
-            : await this.#options.reads.getMachine(request.machineId!)
+      let data: unknown
+      switch (request.operation) {
+        case 'host.bootstrap':
+          data = await this.#options.reads.readHostBootstrap()
+          break
+        case 'machine.list':
+          data = await this.#options.reads.listMachines()
+          break
+        case 'machine.get':
+          data = await this.#options.reads.getMachine(request.machineId)
+          break
+        case 'project.list':
+          data = await this.#options.reads.listProjects(request.machineId, {
+            limit: request.limit,
+            ...(request.cursor === undefined ? {} : { cursor: request.cursor }),
+          })
+          break
+        case 'project.get':
+          data = await this.#options.reads.getProject(
+            request.machineId,
+            request.projectId,
+          )
+          break
+        case 'conversation.list':
+          data = await this.#options.reads.listConversations(
+            request.machineId,
+            request.projectId,
+            {
+              limit: request.limit,
+              ...(request.cursor === undefined
+                ? {}
+                : { cursor: request.cursor }),
+            },
+          )
+          break
+        case 'conversation.get':
+          data = await this.#options.reads.getConversation(
+            request.machineId,
+            request.projectId,
+            request.conversationId,
+          )
+          break
+      }
       await connection.send({
         type: 'supervisor.response',
         protocolVersion: supervisorProtocolVersion,
@@ -353,8 +407,12 @@ export class SupervisorServer {
         ok: true,
         data,
       })
-      this.#options.onDiagnostic?.('supervisor.machine.read', {
+      this.#options.onDiagnostic?.('supervisor.read', {
         operation: request.operation,
+        transport,
+        latencyMs: Date.now() - startedAt,
+        ...supervisorReadRequestFields(request),
+        ...supervisorReadResultFields(data),
       })
     } catch (error) {
       await connection.send({
@@ -362,13 +420,69 @@ export class SupervisorServer {
         protocolVersion: supervisorProtocolVersion,
         requestId: request.requestId,
         ok: false,
-        code:
-          error instanceof Error && error.message === 'not_found'
-            ? 'not_found'
-            : 'internal',
+        code: supervisorReadErrorCode(error),
       })
     }
   }
+}
+
+function supervisorReadRequestFields(
+  request: SupervisorRequest,
+): Readonly<Record<string, string>> {
+  switch (request.operation) {
+    case 'host.bootstrap':
+    case 'machine.list':
+      return {}
+    case 'machine.get':
+    case 'project.list':
+      return { machineId: request.machineId }
+    case 'project.get':
+    case 'conversation.list':
+      return {
+        machineId: request.machineId,
+        projectId: request.projectId,
+      }
+    case 'conversation.get':
+      return {
+        machineId: request.machineId,
+        projectId: request.projectId,
+        conversationId: request.conversationId,
+      }
+  }
+}
+
+function supervisorReadResultFields(
+  data: unknown,
+): Readonly<Record<string, number | boolean>> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data))
+    return {}
+  const value = data as Record<string, unknown>
+  const collection =
+    Array.isArray(value.projects) || Array.isArray(value.conversations)
+      ? (value.projects ?? value.conversations)
+      : Array.isArray(value.machines)
+        ? value.machines
+        : undefined
+  return {
+    ...(Array.isArray(collection) ? { resultCount: collection.length } : {}),
+    ...(typeof value.hasMore === 'boolean' ? { hasMore: value.hasMore } : {}),
+  }
+}
+
+function supervisorReadErrorCode(
+  error: unknown,
+): 'invalid_request' | 'operation_not_allowed' | 'not_found' | 'internal' {
+  if (!(error instanceof Error)) return 'internal'
+  const publicCode = (error as Error & { readonly code?: unknown }).code
+  const code = typeof publicCode === 'string' ? publicCode : error.message
+  if (
+    code === 'invalid_request' ||
+    code === 'operation_not_allowed' ||
+    code === 'not_found'
+  ) {
+    return code
+  }
+  return 'internal'
 }
 
 class SupervisorRejection extends Error {

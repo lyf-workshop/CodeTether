@@ -23,6 +23,7 @@ import {
   type SignedSupervisorTransportDescriptor,
   type SupervisorChallenge,
   type SupervisorPublicJwk,
+  type SupervisorRequest,
   type SupervisorResponse,
 } from './protocol.js'
 import {
@@ -50,6 +51,12 @@ export interface ConnectSupervisorDirectOptions {
   readonly signal?: AbortSignal
   readonly now?: () => Date
 }
+
+type SupervisorRequestInput = SupervisorRequest extends infer Request
+  ? Request extends SupervisorRequest
+    ? Omit<Request, 'type' | 'protocolVersion' | 'requestId'>
+    : never
+  : never
 
 export class PendingSupervisorConnection {
   readonly challenge: SupervisorChallenge
@@ -148,15 +155,66 @@ export class ConnectedSupervisorSession {
   }
 
   async readHostBootstrap(signal?: AbortSignal): Promise<unknown> {
-    return await this.#request('host.bootstrap', undefined, signal)
+    return await this.#request({ operation: 'host.bootstrap' }, signal)
   }
 
   async listMachines(signal?: AbortSignal): Promise<unknown> {
-    return await this.#request('machine.list', undefined, signal)
+    return await this.#request({ operation: 'machine.list' }, signal)
   }
 
   async getMachine(machineId: string, signal?: AbortSignal): Promise<unknown> {
-    return await this.#request('machine.get', machineId, signal)
+    return await this.#request({ operation: 'machine.get', machineId }, signal)
+  }
+
+  async listProjects(
+    machineId: string,
+    page: { readonly limit: number; readonly cursor?: string },
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    return await this.#request(
+      { operation: 'project.list', machineId, ...page },
+      signal,
+    )
+  }
+
+  async getProject(
+    machineId: string,
+    projectId: string,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    return await this.#request(
+      { operation: 'project.get', machineId, projectId },
+      signal,
+    )
+  }
+
+  async listConversations(
+    machineId: string,
+    projectId: string,
+    page: { readonly limit: number; readonly cursor?: string },
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    return await this.#request(
+      { operation: 'conversation.list', machineId, projectId, ...page },
+      signal,
+    )
+  }
+
+  async getConversation(
+    machineId: string,
+    projectId: string,
+    conversationId: string,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    return await this.#request(
+      {
+        operation: 'conversation.get',
+        machineId,
+        projectId,
+        conversationId,
+      },
+      signal,
+    )
   }
 
   close(): void {
@@ -167,8 +225,7 @@ export class ConnectedSupervisorSession {
   }
 
   async #request(
-    operation: 'host.bootstrap' | 'machine.list' | 'machine.get',
-    machineId: string | undefined,
+    input: SupervisorRequestInput,
     signal?: AbortSignal,
   ): Promise<unknown> {
     const requestId = `sreq_${randomUUID().replaceAll('-', '')}`
@@ -179,8 +236,7 @@ export class ConnectedSupervisorSession {
           type: 'supervisor.request',
           protocolVersion: supervisorProtocolVersion,
           requestId,
-          operation,
-          ...(machineId === undefined ? {} : { machineId }),
+          ...input,
         },
         { signal },
       )

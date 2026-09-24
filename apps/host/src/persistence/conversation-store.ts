@@ -244,6 +244,44 @@ export interface DurableProjectLocation {
   readonly updatedAt: Timestamp
 }
 
+export interface SupervisorProjectDirectoryItem {
+  readonly projectId: ProjectId
+  readonly machineId: MachineId
+  readonly name: string
+  readonly conversationCount: number
+  readonly createdAt: Timestamp
+  readonly updatedAt: Timestamp
+}
+
+export interface SupervisorProjectDirectoryPage {
+  readonly projects: readonly SupervisorProjectDirectoryItem[]
+  readonly hasMore: boolean
+  readonly nextCursor?: string
+}
+
+export interface SupervisorConversationDirectoryItem {
+  readonly conversationId: ConversationId
+  readonly projectId: ProjectId
+  readonly machineId: MachineId
+  readonly title: string
+  readonly titleSource: ConversationTitleSource
+  readonly origin: DurableConversationOrigin
+  readonly provider: ProviderId
+  readonly status: Exclude<DurableConversationStatus, 'creating'>
+  readonly archived: boolean
+  readonly nativeSessionBound: boolean
+  readonly resumability: 'resumable' | 'unavailable'
+  readonly createdAt: Timestamp
+  readonly updatedAt: Timestamp
+  readonly lastActivityAt: Timestamp
+}
+
+export interface SupervisorConversationDirectoryPage {
+  readonly conversations: readonly SupervisorConversationDirectoryItem[]
+  readonly hasMore: boolean
+  readonly nextCursor?: string
+}
+
 export interface DurableMachine {
   readonly machineId: MachineId
   readonly displayName: string
@@ -2318,6 +2356,140 @@ export class ConversationStore {
     return projectsFromRows(rows)
   }
 
+  listSupervisorProjects(
+    machineId: MachineId,
+    options: { readonly limit: number; readonly cursor?: string },
+  ): SupervisorProjectDirectoryPage {
+    const machine = MachineIdSchema.parse(machineId)
+    const limit = parseSupervisorDirectoryLimit(options.limit)
+    const cursor =
+      options.cursor === undefined
+        ? undefined
+        : decodeSupervisorProjectCursor(options.cursor, machine)
+    const cursorFilter =
+      cursor === undefined
+        ? ''
+        : `WHERE
+             sort_at < ? OR
+             (sort_at = ? AND project_id > ?)`
+    const parameters: Array<string | number> = [machine]
+    if (cursor !== undefined) {
+      parameters.push(cursor.sortAt, cursor.sortAt, cursor.projectId)
+    }
+    parameters.push(limit + 1)
+    const rows = this.#statement(
+      `WITH project_base AS (
+         SELECT
+           projects.project_id,
+           projects.name,
+           projects.created_at,
+           projects.updated_at AS project_updated_at,
+           project_locations.updated_at AS location_updated_at,
+           COUNT(conversations.conversation_id) AS conversation_count,
+           MAX(conversations.last_activity_at) AS conversation_activity_at
+         FROM project_locations
+         INNER JOIN projects
+           ON projects.project_id = project_locations.project_id
+         LEFT JOIN conversations
+           ON conversations.project_id = projects.project_id
+          AND conversations.machine_id = project_locations.machine_id
+          AND conversations.status <> 'creating'
+         WHERE project_locations.machine_id = ?
+         GROUP BY
+           projects.project_id,
+           projects.name,
+           projects.created_at,
+           projects.updated_at,
+           project_locations.updated_at
+       ), project_directory AS (
+         SELECT
+           project_id,
+           name,
+           created_at,
+           conversation_count,
+           max(
+             project_updated_at,
+             location_updated_at,
+             COALESCE(conversation_activity_at, project_updated_at)
+           ) AS sort_at
+         FROM project_base
+       )
+       SELECT
+         project_id, name, created_at, conversation_count, sort_at
+       FROM project_directory
+       ${cursorFilter}
+       ORDER BY sort_at DESC, project_id ASC
+       LIMIT ?`,
+    ).all(...parameters) as unknown as SupervisorProjectDirectoryRow[]
+    const hasMore = rows.length > limit
+    const pageRows = rows.slice(0, limit)
+    const projects = pageRows.map((row) =>
+      supervisorProjectDirectoryItemFromRow(row, machine),
+    )
+    const last = pageRows.at(-1)
+    return {
+      projects,
+      hasMore,
+      ...(hasMore && last !== undefined
+        ? {
+            nextCursor: encodeSupervisorProjectCursor(machine, {
+              sortAt: TimestampSchema.parse(last.sort_at),
+              projectId: ProjectIdSchema.parse(last.project_id),
+            }),
+          }
+        : {}),
+    }
+  }
+
+  getSupervisorProject(
+    machineId: MachineId,
+    projectId: ProjectId,
+  ): SupervisorProjectDirectoryItem | undefined {
+    const machine = MachineIdSchema.parse(machineId)
+    const project = ProjectIdSchema.parse(projectId)
+    const row = this.#statement(
+      `WITH project_base AS (
+         SELECT
+           projects.project_id,
+           projects.name,
+           projects.created_at,
+           projects.updated_at AS project_updated_at,
+           project_locations.updated_at AS location_updated_at,
+           COUNT(conversations.conversation_id) AS conversation_count,
+           MAX(conversations.last_activity_at) AS conversation_activity_at
+         FROM project_locations
+         INNER JOIN projects
+           ON projects.project_id = project_locations.project_id
+         LEFT JOIN conversations
+           ON conversations.project_id = projects.project_id
+          AND conversations.machine_id = project_locations.machine_id
+          AND conversations.status <> 'creating'
+         WHERE project_locations.machine_id = ?
+           AND projects.project_id = ?
+         GROUP BY
+           projects.project_id,
+           projects.name,
+           projects.created_at,
+           projects.updated_at,
+           project_locations.updated_at
+       )
+       SELECT
+         project_id,
+         name,
+         created_at,
+         conversation_count,
+         max(
+           project_updated_at,
+           location_updated_at,
+           COALESCE(conversation_activity_at, project_updated_at)
+         ) AS sort_at
+       FROM project_base`,
+    ).get(machine, project) as SupervisorProjectDirectoryRow | undefined
+    return row === undefined
+      ? undefined
+      : supervisorProjectDirectoryItemFromRow(row, machine)
+  }
+
   countConversationsForProject(projectId: ProjectId): number {
     const id = ProjectIdSchema.parse(projectId)
     const row = this.#statement(
@@ -2890,6 +3062,114 @@ export class ConversationStore {
        LIMIT ?`,
     ).all(...parameters) as unknown as ConversationSummaryRow[]
     return rows.map(conversationSummaryFromRow)
+  }
+
+  listSupervisorConversations(
+    machineId: MachineId,
+    projectId: ProjectId,
+    options: { readonly limit: number; readonly cursor?: string },
+  ): SupervisorConversationDirectoryPage {
+    const machine = MachineIdSchema.parse(machineId)
+    const project = ProjectIdSchema.parse(projectId)
+    const limit = parseSupervisorDirectoryLimit(options.limit)
+    const cursor =
+      options.cursor === undefined
+        ? undefined
+        : decodeSupervisorConversationCursor(options.cursor, machine, project)
+    const cursorFilter =
+      cursor === undefined
+        ? ''
+        : `AND (
+             last_activity_at < ? OR
+             (last_activity_at = ? AND conversation_id > ?)
+           )`
+    const parameters: Array<string | number> = [machine, project]
+    if (cursor !== undefined) {
+      parameters.push(
+        cursor.lastActivityAt,
+        cursor.lastActivityAt,
+        cursor.conversationId,
+      )
+    }
+    parameters.push(limit + 1)
+    const rows = this.#statement(
+      `SELECT
+         conversation_id,
+         project_id,
+         machine_id,
+         title,
+         title_source,
+         origin,
+         provider,
+         status,
+         archived_at,
+         provider_thread_id,
+         provider_session_materialized,
+         created_at,
+         updated_at,
+         last_activity_at
+       FROM conversations
+       WHERE machine_id = ?
+         AND project_id = ?
+         AND status <> 'creating'
+         ${cursorFilter}
+       ORDER BY last_activity_at DESC, conversation_id ASC
+       LIMIT ?`,
+    ).all(...parameters) as unknown as SupervisorConversationDirectoryRow[]
+    const hasMore = rows.length > limit
+    const pageRows = rows.slice(0, limit)
+    const conversations = pageRows.map(
+      supervisorConversationDirectoryItemFromRow,
+    )
+    const last = pageRows.at(-1)
+    return {
+      conversations,
+      hasMore,
+      ...(hasMore && last !== undefined
+        ? {
+            nextCursor: encodeSupervisorConversationCursor(machine, project, {
+              lastActivityAt: TimestampSchema.parse(last.last_activity_at),
+              conversationId: ConversationIdSchema.parse(last.conversation_id),
+            }),
+          }
+        : {}),
+    }
+  }
+
+  getSupervisorConversation(
+    machineId: MachineId,
+    projectId: ProjectId,
+    conversationId: ConversationId,
+  ): SupervisorConversationDirectoryItem | undefined {
+    const machine = MachineIdSchema.parse(machineId)
+    const project = ProjectIdSchema.parse(projectId)
+    const conversation = ConversationIdSchema.parse(conversationId)
+    const row = this.#statement(
+      `SELECT
+         conversation_id,
+         project_id,
+         machine_id,
+         title,
+         title_source,
+         origin,
+         provider,
+         status,
+         archived_at,
+         provider_thread_id,
+         provider_session_materialized,
+         created_at,
+         updated_at,
+         last_activity_at
+       FROM conversations
+       WHERE conversation_id = ?
+         AND project_id = ?
+         AND machine_id = ?
+         AND status <> 'creating'`,
+    ).get(conversation, project, machine) as
+      SupervisorConversationDirectoryRow | undefined
+    return row === undefined
+      ? undefined
+      : supervisorConversationDirectoryItemFromRow(row)
   }
 
   listMachineConversations(
@@ -3932,6 +4212,31 @@ interface ProjectLocationRow {
   readonly root_path_key: string
   readonly created_at: string
   readonly updated_at: string
+}
+
+interface SupervisorProjectDirectoryRow {
+  readonly project_id: string
+  readonly name: string
+  readonly created_at: string
+  readonly conversation_count: number
+  readonly sort_at: string
+}
+
+interface SupervisorConversationDirectoryRow {
+  readonly conversation_id: string
+  readonly project_id: string
+  readonly machine_id: string
+  readonly title: string
+  readonly title_source: string
+  readonly origin: string
+  readonly provider: string
+  readonly status: string
+  readonly archived_at: string | null
+  readonly provider_thread_id: string | null
+  readonly provider_session_materialized: number
+  readonly created_at: string
+  readonly updated_at: string
+  readonly last_activity_at: string
 }
 
 interface MachineRow {
@@ -5213,6 +5518,26 @@ function projectLocationFromRow(
   })
 }
 
+function supervisorProjectDirectoryItemFromRow(
+  row: SupervisorProjectDirectoryRow,
+  machineId: MachineId,
+): SupervisorProjectDirectoryItem {
+  if (
+    !Number.isSafeInteger(row.conversation_count) ||
+    row.conversation_count < 0
+  ) {
+    throw new Error('Project Conversation count is invalid')
+  }
+  return {
+    projectId: ProjectIdSchema.parse(row.project_id),
+    machineId,
+    name: parseBoundedText(row.name, 'Project name', 240),
+    conversationCount: row.conversation_count,
+    createdAt: TimestampSchema.parse(row.created_at),
+    updatedAt: TimestampSchema.parse(row.sort_at),
+  }
+}
+
 function sameProjectLocations(
   left: readonly DurableProjectLocation[],
   right: readonly DurableProjectLocation[],
@@ -5345,6 +5670,36 @@ function conversationSummaryFromRow(
     updatedAt: row.updated_at,
     lastActivityAt: row.last_activity_at,
   })
+}
+
+function supervisorConversationDirectoryItemFromRow(
+  row: SupervisorConversationDirectoryRow,
+): SupervisorConversationDirectoryItem {
+  const status = parseConversationStatus(row.status)
+  if (status === 'creating') {
+    throw new Error('Creating Conversations are not directory entries')
+  }
+  const materialized = parseStoredBoolean(
+    row.provider_session_materialized,
+    'Provider session materialization',
+  )
+  const nativeSessionBound = materialized && row.provider_thread_id !== null
+  return {
+    conversationId: ConversationIdSchema.parse(row.conversation_id),
+    projectId: ProjectIdSchema.parse(row.project_id),
+    machineId: MachineIdSchema.parse(row.machine_id),
+    title: parseBoundedText(row.title, 'Conversation title', 240),
+    titleSource: parseConversationTitleSource(row.title_source),
+    origin: parseConversationOrigin(row.origin),
+    provider: parseProvider(row.provider),
+    status,
+    archived: row.archived_at !== null,
+    nativeSessionBound,
+    resumability: nativeSessionBound ? 'resumable' : 'unavailable',
+    createdAt: TimestampSchema.parse(row.created_at),
+    updatedAt: TimestampSchema.parse(row.updated_at),
+    lastActivityAt: TimestampSchema.parse(row.last_activity_at),
+  }
 }
 
 function conversationSearchResultFromRow(
@@ -5690,6 +6045,128 @@ function parseConversationListLimit(value: number | undefined): number {
     )
   }
   return limit
+}
+
+function parseSupervisorDirectoryLimit(value: number): number {
+  if (!Number.isSafeInteger(value) || value < 1 || value > 100) {
+    throw new Error('invalid_request')
+  }
+  return value
+}
+
+function encodeSupervisorProjectCursor(
+  machineId: MachineId,
+  value: { readonly sortAt: Timestamp; readonly projectId: ProjectId },
+): string {
+  return `spd_${Buffer.from(
+    JSON.stringify({ version: 1, machineId, ...value }),
+    'utf8',
+  ).toString('base64url')}`
+}
+
+function decodeSupervisorProjectCursor(
+  cursor: string,
+  machineId: MachineId,
+): { readonly sortAt: Timestamp; readonly projectId: ProjectId } {
+  const parsed = decodeSupervisorDirectoryCursor(cursor, 'spd')
+  const keys = ['version', 'machineId', 'sortAt', 'projectId']
+  if (
+    !hasExactKeys(parsed, keys) ||
+    parsed.version !== 1 ||
+    parsed.machineId !== machineId
+  ) {
+    throw new Error('invalid_request')
+  }
+  const sortAt = TimestampSchema.safeParse(parsed.sortAt)
+  const projectId = ProjectIdSchema.safeParse(parsed.projectId)
+  if (!sortAt.success || !projectId.success) throw new Error('invalid_request')
+  return { sortAt: sortAt.data, projectId: projectId.data }
+}
+
+function encodeSupervisorConversationCursor(
+  machineId: MachineId,
+  projectId: ProjectId,
+  value: {
+    readonly lastActivityAt: Timestamp
+    readonly conversationId: ConversationId
+  },
+): string {
+  return `scd_${Buffer.from(
+    JSON.stringify({ version: 1, machineId, projectId, ...value }),
+    'utf8',
+  ).toString('base64url')}`
+}
+
+function decodeSupervisorConversationCursor(
+  cursor: string,
+  machineId: MachineId,
+  projectId: ProjectId,
+): {
+  readonly lastActivityAt: Timestamp
+  readonly conversationId: ConversationId
+} {
+  const parsed = decodeSupervisorDirectoryCursor(cursor, 'scd')
+  const keys = [
+    'version',
+    'machineId',
+    'projectId',
+    'lastActivityAt',
+    'conversationId',
+  ]
+  if (
+    !hasExactKeys(parsed, keys) ||
+    parsed.version !== 1 ||
+    parsed.machineId !== machineId ||
+    parsed.projectId !== projectId
+  ) {
+    throw new Error('invalid_request')
+  }
+  const lastActivityAt = TimestampSchema.safeParse(parsed.lastActivityAt)
+  const conversationId = ConversationIdSchema.safeParse(parsed.conversationId)
+  if (!lastActivityAt.success || !conversationId.success) {
+    throw new Error('invalid_request')
+  }
+  return {
+    lastActivityAt: lastActivityAt.data,
+    conversationId: conversationId.data,
+  }
+}
+
+function decodeSupervisorDirectoryCursor(
+  cursor: string,
+  prefix: 'spd' | 'scd',
+): Record<string, unknown> {
+  if (
+    cursor.length > 2_048 ||
+    !new RegExp(`^${prefix}_[A-Za-z0-9_-]+$`, 'u').test(cursor)
+  ) {
+    throw new Error('invalid_request')
+  }
+  try {
+    const parsed = JSON.parse(
+      Buffer.from(cursor.slice(4), 'base64url').toString('utf8'),
+    ) as unknown
+    if (
+      typeof parsed !== 'object' ||
+      parsed === null ||
+      Array.isArray(parsed)
+    ) {
+      throw new Error('invalid_request')
+    }
+    return parsed as Record<string, unknown>
+  } catch {
+    throw new Error('invalid_request')
+  }
+}
+
+function hasExactKeys(
+  value: Record<string, unknown>,
+  keys: readonly string[],
+): boolean {
+  return (
+    Object.keys(value).length === keys.length &&
+    keys.every((key) => Object.hasOwn(value, key))
+  )
 }
 
 function parseConversationSearchLimit(value: number | undefined): number {

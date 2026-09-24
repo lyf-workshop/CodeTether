@@ -1,11 +1,12 @@
-import { hostname } from 'node:os'
 import { randomUUID } from 'node:crypto'
+import { networkInterfaces } from 'node:os'
 
 import {
   connectSupervisorDirect,
   signedSupervisorGrantSchema,
   signedSupervisorTransportDescriptorSchema,
   supervisorPublicJwkSchema,
+  supervisorTransportLimits,
   SupervisorClientError,
   SupervisorServer,
   type ConnectedSupervisorSession,
@@ -45,7 +46,7 @@ export class SupervisorTransportManager {
   readonly #service: HostService
   readonly #persistence: ConversationStore
   readonly #server: SupervisorServer
-  readonly #advertiseHost: string
+  readonly #advertiseHosts: readonly string[]
   readonly #pending = new Map<string, PendingSupervisorConnection>()
   readonly #sessions = new Map<string, ConnectedSupervisorSession>()
 
@@ -56,7 +57,10 @@ export class SupervisorTransportManager {
     this.#service = options.service
     this.#persistence = options.persistence
     this.#server = server
-    this.#advertiseHost = options.advertiseHost ?? hostname()
+    this.#advertiseHosts =
+      options.advertiseHost === undefined
+        ? discoverSupervisorDirectHosts()
+        : [options.advertiseHost]
   }
 
   static async create(
@@ -157,7 +161,10 @@ export class SupervisorTransportManager {
       throw new Error('Supervisor transport is not listening')
     return {
       transportTlsFingerprint: this.#server.tlsIdentity.publicKeyFingerprint,
-      directEndpoints: [{ host: this.#advertiseHost, port: address.port }],
+      directEndpoints: this.#advertiseHosts.map((host) => ({
+        host,
+        port: address.port,
+      })),
     }
   }
 
@@ -321,6 +328,25 @@ export class SupervisorTransportManager {
       throw new Error('Supervisor connection capacity reached')
     }
   }
+}
+
+export function discoverSupervisorDirectHosts(
+  interfaces: ReturnType<typeof networkInterfaces> = networkInterfaces(),
+): readonly string[] {
+  const externalIpv4 = Object.values(interfaces)
+    .flatMap((entries) => entries ?? [])
+    .filter(
+      (entry) =>
+        entry.family === 'IPv4' &&
+        entry.internal === false &&
+        entry.address !== '0.0.0.0',
+    )
+    .map((entry) => entry.address)
+    .sort()
+  return [...new Set(['127.0.0.1', ...externalIpv4])].slice(
+    0,
+    supervisorTransportLimits.maximumEndpoints,
+  )
 }
 
 function stringField(value: Record<string, unknown>, name: string): string {

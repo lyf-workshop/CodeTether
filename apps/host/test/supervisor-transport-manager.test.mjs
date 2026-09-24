@@ -9,11 +9,61 @@ import {
   supervisorGrantProofType,
 } from '@codetether/supervisor-transport'
 
-import { SupervisorTransportManager } from '../dist/api/supervisor-transport-manager.js'
+import {
+  SupervisorTransportManager,
+  discoverSupervisorDirectHosts,
+} from '../dist/api/supervisor-transport-manager.js'
 
 const hostId = `host_${'h'.repeat(32)}`
 const deviceId = `dev_${'d'.repeat(32)}`
 const authorizationId = `hauth_${'a'.repeat(32)}`
+
+test('direct endpoint discovery is bounded and uses concrete IPv4 addresses', () => {
+  assert.deepEqual(
+    discoverSupervisorDirectHosts({
+      Ethernet: [
+        {
+          address: '192.168.1.20',
+          netmask: '255.255.255.0',
+          family: 'IPv4',
+          mac: '00:00:00:00:00:01',
+          internal: false,
+          cidr: '192.168.1.20/24',
+        },
+        {
+          address: 'fe80::1',
+          netmask: 'ffff:ffff:ffff:ffff::',
+          family: 'IPv6',
+          mac: '00:00:00:00:00:01',
+          internal: false,
+          cidr: 'fe80::1/64',
+          scopeid: 4,
+        },
+      ],
+      Loopback: [
+        {
+          address: '127.0.0.1',
+          netmask: '255.0.0.0',
+          family: 'IPv4',
+          mac: '00:00:00:00:00:00',
+          internal: true,
+          cidr: '127.0.0.1/8',
+        },
+      ],
+      Duplicate: [
+        {
+          address: '192.168.1.20',
+          netmask: '255.255.255.0',
+          family: 'IPv4',
+          mac: '00:00:00:00:00:02',
+          internal: false,
+          cidr: '192.168.1.20/24',
+        },
+      ],
+    }),
+    ['127.0.0.1', '192.168.1.20'],
+  )
+})
 
 test('forced-remote manager reads Host state without using local HTTP product data', async () => {
   const { privateKey, publicKey } = generateKeyPairSync('ec', {

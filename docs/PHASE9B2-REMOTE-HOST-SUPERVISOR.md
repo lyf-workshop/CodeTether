@@ -40,7 +40,10 @@ default). The existing loopback product API remains bound to 127.0.0.1:4317 and
 is not exposed remotely.
 
 The Host publishes a short-lived signed descriptor containing its ephemeral
-Supervisor TLS public-key fingerprint and bounded direct endpoints. A client:
+Supervisor TLS public-key fingerprint and bounded concrete IPv4 endpoints.
+Loopback supports the explicit same-machine forced-remote validation path;
+current non-internal IPv4 addresses support direct LAN entry without relying on
+machine-name resolution. A client:
 
 1. verifies the grant and descriptor with the selected Host's durable ES256
    public key;

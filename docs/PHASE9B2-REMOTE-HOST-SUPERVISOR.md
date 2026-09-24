@@ -3,10 +3,10 @@
 ## Status
 
 Phase 9B.2 has a distinct ProductDevice-to-Host Direct/Relay transport and a
-bounded read-only Supervisor surface. Direct REAL is accepted at `a30c764`.
-The purpose-bound opaque Relay fallback is implemented and automated; forced
-Relay Owner REAL remains the phase gate. This document does not claim Phase
-9B.2 closure.
+bounded read-only Supervisor surface. Direct REAL is accepted at `a30c764`,
+and forced Relay REAL is accepted at `7329ae7`. The closure evidence and final
+classification are recorded in
+`PHASE9B2-REMOTE-HOST-SUPERVISOR-REAL-CLOSURE.md`.
 
 Baseline: `6cb762931e9e76b57c3a0c69c94dab9f30f590c0` on
 `phase9/remote-host-supervisor`.
@@ -133,6 +133,8 @@ allowlisted reads, durable public-grant persistence, migration behavior,
 directory projection, and cold Host/Machine reads. Full repository gates must
 pass before the implementation commit.
 
-Forced Relay REAL and physical cross-device validation remain pending. No
-Account Foundation enrollment, Host claim, or Host authorization flow is to be
-repeated for that validation.
+Forced Relay REAL passed through the exact ProductDevice/Host cryptographic
+path. Physical second-ProductDevice validation remains a release/pre-Mobile
+follow-up and is not a Phase 9B.2 closure blocker. No Account Foundation
+enrollment, Host claim, or Host authorization flow is to be repeated for that
+follow-up.

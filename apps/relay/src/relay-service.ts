@@ -17,6 +17,7 @@ import {
   type RelayChannelClosedReason,
   type RelayChannelId,
   RelayClientMessageSchema,
+  RelaySupervisorAuthenticateMessageSchema,
   type RelayChallengeMessage,
   type RelayClientMessage,
   type RelayConnectionEpoch,
@@ -59,6 +60,7 @@ import {
 } from './pairing-rendezvous-registry.js'
 import { createJsonRelayLogger, type RelaySafeLogger } from './safe-log.js'
 import { RelayStateStore } from './state-store.js'
+import { RelaySupervisorHub } from './supervisor-rendezvous.js'
 
 const unknownSchema = z.unknown()
 const maximumPendingHeartbeatPings = 8
@@ -244,6 +246,7 @@ export class RelayService {
   readonly #registry = new RelayConnectionRegistry<ActiveConnection>()
   readonly #channels: RelayChannelRegistry<ActiveConnection>
   readonly #pairingRendezvous: RelayPairingRendezvousRegistry<ActiveConnection>
+  readonly #supervisorHub: RelaySupervisorHub
   readonly #channelOpenTimers = new Map<RelayChannelId, NodeJS.Timeout>()
   readonly #channelAcknowledgementTimers = new Map<string, NodeJS.Timeout>()
   readonly #closedChannelTombstones = new Map<
@@ -353,6 +356,28 @@ export class RelayService {
           peerReference: rendezvous.rendezvousId,
         }),
     )
+    this.#supervisorHub = new RelaySupervisorHub({
+      heartbeatIntervalMs: this.#options.heartbeatIntervalMs,
+      heartbeatTimeoutMs: this.#options.heartbeatTimeoutMs,
+      channelOpenTimeoutMs: this.#options.channelOpenTimeoutMs,
+      channelAcknowledgementTimeoutMs:
+        this.#options.channelAcknowledgementTimeoutMs,
+      maximumChannels: this.#options.maximumChannels,
+      maximumChannelsPerPeer: this.#options.maximumChannelsPerPeer,
+      monotonicNow: this.#monotonicNow,
+      log: (event, fields) => {
+        const role = fields.role
+        const reason = fields.reason
+        const rendezvousId = fields.rendezvousId
+        this.#logger.log(event as never, {
+          ...(role === 'host' || role === 'device' ? { role } : {}),
+          ...(typeof reason === 'string' ? { code: reason } : {}),
+          ...(typeof rendezvousId === 'string'
+            ? { peerReference: rendezvousId }
+            : {}),
+        })
+      },
+    })
     this.#admissionLimiter = new BoundedTokenBucketRateLimiter({
       capacity: 240,
       refillIntervalMs: 60_000,
@@ -519,6 +544,7 @@ export class RelayService {
     this.#closing = true
     await this.#closeAllChannels('relay_shutdown')
     this.#pairingRendezvous.clear()
+    this.#supervisorHub.close()
     this.#clearClosedChannelTombstones()
     this.#registry.clear('shutdown')
     for (const socket of this.#rawSockets) socket.destroy()
@@ -558,6 +584,33 @@ export class RelayService {
         timeoutMs: this.#options.handshakeTimeoutMs,
       })
       assertCompatibleProtocol(raw)
+      const supervisorAuthentication =
+        RelaySupervisorAuthenticateMessageSchema.safeParse(raw)
+      if (supervisorAuthentication.success) {
+        if (Date.now() >= Date.parse(challenge.expiresAt)) {
+          throw new RelayProtocolError(
+            'authentication_failed',
+            'Relay authentication failed',
+          )
+        }
+        const authRate = this.#authenticationLimiter.consume(address)
+        const identityRate = this.#authenticationIdentityLimiter.consume(
+          supervisorAuthentication.data.transportFingerprint,
+        )
+        if (!authRate.allowed || !identityRate.allowed) {
+          this.#recordRateLimit()
+          throw new RelayProtocolError(
+            'rate_limited',
+            'Relay rate limit reached',
+          )
+        }
+        await this.#supervisorHub.handle(
+          challenge,
+          supervisorAuthentication.data,
+          channel,
+        )
+        return
+      }
       const parsed = RelayClientMessageSchema.safeParse(raw)
       if (!parsed.success) {
         throw new RelayProtocolError(

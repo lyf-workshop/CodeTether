@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 
 import './styles.css'
 import { hostBaseUrl } from './runtime/host/host-config'
+import { LocalSupervisorPresenceCoordinator } from './runtime/account/local-supervisor-presence'
 
 const rootElement = document.getElementById('root')
 
@@ -139,6 +140,7 @@ async function renderApp() {
     <StrictMode>
       <QueryClientProvider client={queryClient}>
         <HostRuntimeProvider runtime={runtime}>
+          <LocalSupervisorPresenceCoordinator />
           <RouterProvider router={router} />
         </HostRuntimeProvider>
       </QueryClientProvider>

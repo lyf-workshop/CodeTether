@@ -1,6 +1,15 @@
 import assert from 'node:assert/strict'
 import { generateKeyPairSync, sign } from 'node:crypto'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import test from 'node:test'
+
+import {
+  RelayService,
+  RelayStateStore,
+  generateRelayPinnedTlsIdentity,
+} from '@codetether/relay'
 
 import {
   canonicalJsonBytes,
@@ -117,6 +126,7 @@ test('forced-remote manager reads Host state without using local HTTP product da
     bindHost: '127.0.0.1',
     advertiseHost: '127.0.0.1',
     port: 0,
+    clientBuildIdentity: 'test-host',
   })
   const originalFetch = globalThis.fetch
   try {
@@ -222,6 +232,242 @@ test('forced-remote manager reads Host state without using local HTTP product da
   }
 })
 
+test('unreachable Direct falls back to opaque Relay while security failure does not', async () => {
+  const root = await mkdtemp(
+    join(tmpdir(), 'codetether-host-supervisor-relay-'),
+  )
+  const relayStore = new RelayStateStore(join(root, 'relay-state'))
+  const relayTls = await generateRelayPinnedTlsIdentity(relayStore.identity)
+  const relayLogs = []
+  const relay = new RelayService({
+    stateStore: relayStore,
+    tls: relayTls,
+    host: '127.0.0.1',
+    port: 0,
+    managementHost: '127.0.0.1',
+    managementPort: 0,
+    heartbeatIntervalMs: 500,
+    heartbeatTimeoutMs: 2_000,
+    logger: {
+      log(event, fields = {}) {
+        relayLogs.push({ event, ...fields })
+      },
+    },
+  })
+  await relay.start()
+  const { privateKey, publicKey } = generateKeyPairSync('ec', {
+    namedCurve: 'P-256',
+  })
+  const publicJwk = publicKey.export({ format: 'jwk' })
+  const hostFingerprint = `sha256:${'H'.repeat(43)}`
+  const identity = {
+    hostId,
+    publicJwk: JSON.stringify({
+      crv: publicJwk.crv,
+      kty: publicJwk.kty,
+      x: publicJwk.x,
+      y: publicJwk.y,
+    }),
+    fingerprint: hostFingerprint,
+    identityGeneration: 1,
+  }
+  const service = {
+    getHostIdentity: () => identity,
+    listMachines: () => ({
+      protocolVersion: 1,
+      machines: [{ machineId: `machine_${'m'.repeat(32)}` }],
+    }),
+    getMachine: async () => ({
+      protocolVersion: 1,
+      machine: { machineId: `machine_${'m'.repeat(32)}` },
+      providers: [{ provider: 'codex', availability: 'available' }],
+      providerLifecycles: [],
+    }),
+  }
+  const persistence = { storeHostSupervisorGrant: (grant) => grant }
+  const manager = await SupervisorTransportManager.create({
+    service,
+    persistence,
+    bindHost: '127.0.0.1',
+    advertiseHost: '127.0.0.1',
+    port: 0,
+    clientBuildIdentity: 'test-host',
+    relay: {
+      endpoint: `tls+pinned://127.0.0.1:${String(relay.listeningAddress.port)}/`,
+      relayId: relay.relayId,
+      relayFingerprint: relay.relayFingerprint,
+    },
+  })
+  await waitFor(() =>
+    relayLogs.some(
+      (entry) =>
+        entry.event === 'supervisor.connection.authenticated' &&
+        entry.role === 'host',
+    ),
+  )
+  const originalFetch = globalThis.fetch
+  try {
+    const now = Math.floor(Date.now() / 1_000)
+    const grantPayload = {
+      v: 1,
+      aud: 'codetether-host-supervisor',
+      purpose: 'host_supervisor_grant',
+      authorizationId,
+      hostId,
+      hostFingerprint,
+      hostIdentityGeneration: 1,
+      deviceId,
+      deviceFingerprint: `sha256:${'D'.repeat(43)}`,
+      deviceKeyGeneration: 1,
+      userId: `usr_${'u'.repeat(32)}`,
+      spaceId: `space_${'s'.repeat(32)}`,
+      scope: 'supervisor_read',
+      authorizationSerial: '1',
+      authorizationGeneration: 1,
+      issuedAt: now,
+      expiresAt: now + 3_600,
+    }
+    const grant = {
+      payload: grantPayload,
+      proof: compactSign(privateKey, supervisorGrantProofType, grantPayload),
+    }
+    const presence = manager.presence()
+    assert.notEqual(presence.relay, null)
+    const descriptorPayload = {
+      v: 1,
+      aud: 'codetether-host-supervisor',
+      purpose: 'host_supervisor_transport',
+      authorizationId,
+      grantDigest: supervisorGrantDigest(grant),
+      hostId,
+      hostFingerprint,
+      hostIdentityGeneration: 1,
+      deviceId,
+      deviceKeyGeneration: 1,
+      transportTlsFingerprint: presence.transportTlsFingerprint,
+      controlPlaneOrigin: 'https://control-plane.example.test',
+      directEndpoints: [{ host: '127.0.0.1', port: 1 }],
+      relay: presence.relay,
+      iat: now,
+      exp: now + 600,
+      protocolVersion: 1,
+    }
+    const descriptor = {
+      payload: descriptorPayload,
+      proof: compactSign(
+        privateKey,
+        supervisorDescriptorProofType,
+        descriptorPayload,
+      ),
+    }
+    await manager.activate({ hostPublicJwk: publicJwk, grant, descriptor })
+    globalThis.fetch = async () =>
+      new Response(
+        JSON.stringify({
+          admitted: true,
+          hostId,
+          hostIdentityGeneration: 1,
+          deviceId,
+          deviceKeyGeneration: 1,
+          authorizationId,
+          authorizationExpiresAt: new Date((now + 3_600) * 1_000).toISOString(),
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )
+    const pending = await manager.beginRemote({
+      hostId,
+      hostFingerprint,
+      hostIdentityGeneration: 1,
+      hostPublicJwk: publicJwk,
+      deviceId,
+      deviceKeyGeneration: 1,
+      grant,
+      descriptor,
+    })
+    assert.equal(pending.transport, 'relay')
+    const authenticated = await manager.authenticateRemote(
+      pending.connectionId,
+      { accessToken: 'access-token', deviceProof: 'relay-device-proof' },
+    )
+    assert.equal(
+      (await manager.readRemote(authenticated.sessionId, 'host.bootstrap'))
+        .identity.hostId,
+      hostId,
+    )
+    manager.closeRemote(authenticated.sessionId)
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    const deviceConnections = relayLogs.filter(
+      (entry) =>
+        entry.event === 'supervisor.connection.authenticated' &&
+        entry.role === 'device',
+    ).length
+    await assert.rejects(
+      manager.beginRemote({
+        hostId,
+        hostFingerprint: `sha256:${'Z'.repeat(43)}`,
+        hostIdentityGeneration: 1,
+        hostPublicJwk: publicJwk,
+        deviceId,
+        deviceKeyGeneration: 1,
+        grant,
+        descriptor,
+      }),
+      (error) => error?.code === 'host_identity_mismatch',
+    )
+    assert.equal(
+      relayLogs.filter(
+        (entry) =>
+          entry.event === 'supervisor.connection.authenticated' &&
+          entry.role === 'device',
+      ).length,
+      deviceConnections,
+    )
+    const directDescriptorPayload = {
+      ...descriptorPayload,
+      directEndpoints: presence.directEndpoints,
+    }
+    const directDescriptor = {
+      payload: directDescriptorPayload,
+      proof: compactSign(
+        privateKey,
+        supervisorDescriptorProofType,
+        directDescriptorPayload,
+      ),
+    }
+    await manager.activate({
+      hostPublicJwk: publicJwk,
+      grant,
+      descriptor: directDescriptor,
+    })
+    const directPending = await manager.beginRemote({
+      hostId,
+      hostFingerprint,
+      hostIdentityGeneration: 1,
+      hostPublicJwk: publicJwk,
+      deviceId,
+      deviceKeyGeneration: 1,
+      grant,
+      descriptor: directDescriptor,
+    })
+    assert.equal(directPending.transport, 'direct')
+    const directSession = await manager.authenticateRemote(
+      directPending.connectionId,
+      { accessToken: 'access-token', deviceProof: 'direct-device-proof' },
+    )
+    await relay.close()
+    assert.equal(
+      (await manager.readRemote(directSession.sessionId, 'host.bootstrap'))
+        .identity.hostId,
+      hostId,
+    )
+  } finally {
+    globalThis.fetch = originalFetch
+    await manager.close()
+    await relay.close()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
 function compactSign(privateKey, type, payload) {
   const header = Buffer.from(
     JSON.stringify({ alg: 'ES256', typ: type }),
@@ -235,4 +481,14 @@ function compactSign(privateKey, type, payload) {
     dsaEncoding: 'ieee-p1363',
   }).toString('base64url')
   return `${signingInput}.${signature}`
+}
+
+async function waitFor(predicate, timeoutMs = 2_000) {
+  const startedAt = Date.now()
+  while (!predicate()) {
+    if (Date.now() - startedAt >= timeoutMs) {
+      throw new Error('Timed out waiting for Supervisor Relay presence')
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
 }

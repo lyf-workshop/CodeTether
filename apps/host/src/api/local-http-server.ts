@@ -122,6 +122,7 @@ const supervisorActivationSchema = z
     hostPublicJwk: supervisorPublicJwkSchema,
     grant: signedSupervisorGrantSchema,
     descriptor: signedSupervisorTransportDescriptorSchema,
+    forceRelay: z.boolean().optional(),
   })
   .strict()
 const supervisorConnectionSchema = z

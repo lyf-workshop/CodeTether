@@ -1,5 +1,6 @@
 import { randomBytes, randomUUID } from 'node:crypto'
 import type { AddressInfo } from 'node:net'
+import type { Duplex } from 'node:stream'
 import { createServer, type Server, type TLSSocket } from 'node:tls'
 
 import { FramedMachineConnection } from '@codetether/machine-transport'
@@ -29,6 +30,7 @@ import {
 } from './protocol.js'
 import {
   generateSupervisorTlsIdentity,
+  acceptSupervisorTlsOverStream,
   supervisorTlsExporter,
   supervisorTlsServerOptions,
   type SupervisorTlsIdentity,
@@ -93,7 +95,7 @@ export class SupervisorServer {
     this.tlsIdentity = tlsIdentity
     this.#server = createServer(
       supervisorTlsServerOptions(tlsIdentity),
-      (socket) => void this.#handle(socket),
+      (socket) => void this.#handle(socket, 'direct'),
     )
     this.#server.on('connection', (socket) => {
       const tls = socket as TLSSocket
@@ -178,6 +180,22 @@ export class SupervisorServer {
     })
   }
 
+  async acceptRelayStream(stream: Duplex, signal?: AbortSignal): Promise<void> {
+    if (this.#closing || this.#activation === undefined) {
+      stream.destroy()
+      return
+    }
+    const tls = await acceptSupervisorTlsOverStream({
+      stream,
+      identity: this.tlsIdentity,
+      signal,
+      timeoutMs: supervisorTransportLimits.handshakeTimeoutMs,
+    })
+    this.#sockets.add(tls.socket)
+    tls.socket.once('close', () => this.#sockets.delete(tls.socket))
+    await this.#handle(tls.socket, 'relay')
+  }
+
   async close(): Promise<void> {
     if (this.#closing) return
     this.#closing = true
@@ -191,7 +209,10 @@ export class SupervisorServer {
     })
   }
 
-  async #handle(socket: TLSSocket): Promise<void> {
+  async #handle(
+    socket: TLSSocket,
+    transport: 'direct' | 'relay',
+  ): Promise<void> {
     const activation = this.#activation
     if (this.#closing || activation === undefined) {
       socket.destroy()
@@ -271,7 +292,7 @@ export class SupervisorServer {
         hostId: challenge.hostId,
         deviceId: challenge.deviceId,
         authorizationId: challenge.authorizationId,
-        transport: 'direct',
+        transport,
       })
       while (!connection.closed) {
         const request = await connection.receive(supervisorRequestSchema, {

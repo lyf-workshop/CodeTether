@@ -30,5 +30,8 @@
     "@codetether/relay-protocol": "workspace:*",
     "@codetether/supervisor-transport": "workspace:*",
     "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@codetether/relay": "workspace:*"
   }
 }

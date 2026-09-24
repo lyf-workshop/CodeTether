@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 
 const safeEventPattern = /^[a-z][a-z0-9_.-]{0,63}$/u
-const safeRolePattern = /^(controller|node)$/u
+const safeRolePattern = /^(controller|node|host|device)$/u
 const safeCodePattern = /^[a-z][a-z0-9_]{0,63}$/u
 
 export type RelayLogEvent =
@@ -22,13 +22,16 @@ export type RelayLogEvent =
   | 'pairing.rendezvous.expired'
   | 'pairing.rendezvous.consumed'
   | 'pairing.rendezvous.closed'
+  | 'supervisor.connection.authenticated'
+  | 'supervisor.connection.closed'
+  | 'supervisor.channel.opened'
 
 export interface RelaySafeLogger {
   log(
     event: RelayLogEvent,
     fields?: {
       readonly code?: string
-      readonly role?: 'controller' | 'node'
+      readonly role?: 'controller' | 'node' | 'host' | 'device'
       readonly peerReference?: string
       readonly connectionEpoch?: string
     },

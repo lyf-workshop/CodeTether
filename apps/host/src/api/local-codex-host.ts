@@ -57,7 +57,10 @@ import {
   SecureControllerRelayCoordinator,
   type ControllerRelayCoordinator,
 } from './controller-relay-coordinator.js'
-import { SupervisorTransportManager } from './supervisor-transport-manager.js'
+import {
+  parseSupervisorRelayConfiguration,
+  SupervisorTransportManager,
+} from './supervisor-transport-manager.js'
 
 export interface LocalCodexHostOptions {
   readonly allowedWorkspaceRoots?: readonly string[]
@@ -427,6 +430,8 @@ export async function startLocalCodexHostWithRuntime(
       supervisorTransport = await SupervisorTransportManager.create({
         service,
         persistence,
+        clientBuildIdentity: options.hostVersion,
+        relay: parseSupervisorRelayConfiguration(process.env),
         port:
           options.supervisorPort ??
           (options.desktopManaged === true ? 4318 : 0),

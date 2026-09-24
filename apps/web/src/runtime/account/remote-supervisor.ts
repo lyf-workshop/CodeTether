@@ -34,9 +34,39 @@ export interface RemoteSupervisorSession {
   readonly hostId: string
   readonly sessionId: string
   readonly expiresAt: string
-  readonly transport: 'direct'
+  readonly transport: 'direct' | 'relay'
   readonly bootstrap: unknown
   readonly machines: unknown
+}
+
+export async function readLocalHostIdentity(): Promise<
+  LocalHostIdentityRecord | undefined
+> {
+  const response = await fetch(`${hostBaseUrl}/api/v1/host/identity`, {
+    headers: { accept: 'application/json' },
+  })
+  if (response.status === 404) return undefined
+  if (!response.ok) throw new Error('local_host_identity_unavailable')
+  const value = (await response.json()) as {
+    readonly identity?: {
+      readonly hostId?: unknown
+      readonly fingerprint?: unknown
+      readonly identityGeneration?: unknown
+      readonly publicJwk?: unknown
+      readonly keyHandle?: unknown
+    }
+  }
+  const identity = value.identity
+  if (
+    typeof identity?.hostId !== 'string' ||
+    typeof identity.fingerprint !== 'string' ||
+    !Number.isSafeInteger(identity.identityGeneration) ||
+    typeof identity.publicJwk !== 'string' ||
+    typeof identity.keyHandle !== 'string'
+  ) {
+    throw new Error('local_host_identity_invalid')
+  }
+  return identity as LocalHostIdentityRecord
 }
 
 const remoteSessions = new Map<string, RemoteSupervisorSession>()
@@ -131,6 +161,7 @@ export async function publishLocalSupervisorPresence(options: {
     'transportTlsFingerprint',
   )
   const directEndpoints = parseDirectEndpoints(presence.directEndpoints)
+  const relay = parseRelayPresence(presence.relay)
   const now = Math.floor(Date.now() / 1_000)
   const descriptorPayload: SupervisorTransportDescriptorPayload = {
     v: 1,
@@ -146,7 +177,7 @@ export async function publishLocalSupervisorPresence(options: {
     transportTlsFingerprint,
     controlPlaneOrigin: new URL(options.controlPlaneBaseUrl).origin,
     directEndpoints,
-    relay: null,
+    relay,
     iat: now,
     exp: Math.min(now + 600, grant.payload.expiresAt),
     protocolVersion: 1,
@@ -181,10 +212,23 @@ export async function connectRemoteSupervisor(options: {
   readonly host: AuthorizedHostDirectoryEntry
   readonly productDevice: ResolvedProductDevice
   readonly deviceIdentity: ProductDeviceIdentityCapability
+  readonly forceRelay?: boolean
   readonly signal?: AbortSignal
 }): Promise<RemoteSupervisorSession> {
   const existing = currentRemoteSupervisorSession(options.host.hostId)
-  if (existing !== undefined) return existing
+  if (
+    existing !== undefined &&
+    (options.forceRelay !== true || existing.transport === 'relay')
+  ) {
+    return existing
+  }
+  if (existing !== undefined) {
+    await fetch(
+      `${hostBaseUrl}/api/v1/remote-supervisor/sessions/${encodeURIComponent(existing.sessionId)}`,
+      { method: 'DELETE' },
+    ).catch(() => undefined)
+    remoteSessions.delete(options.host.hostId)
+  }
   if (options.host.supervisor === null) {
     throw new Error('remote_supervisor_presence_unavailable')
   }
@@ -197,6 +241,7 @@ export async function connectRemoteSupervisor(options: {
     deviceKeyGeneration: options.productDevice.device.keyGeneration,
     grant: options.host.supervisor.grant,
     descriptor: options.host.supervisor.transport,
+    ...(options.forceRelay === true ? { forceRelay: true } : {}),
   })
   const connectionId = boundedString(pending, 'connectionId')
   const admissionResource = boundedString(pending, 'admissionResource')
@@ -219,6 +264,10 @@ export async function connectRemoteSupervisor(options: {
   )
   const sessionId = boundedString(authenticated, 'sessionId')
   const expiresAt = boundedString(authenticated, 'expiresAt')
+  const transport = boundedString(pending, 'transport')
+  if (transport !== 'direct' && transport !== 'relay') {
+    throw new Error('Supervisor response is invalid')
+  }
   const [bootstrap, machines] = await Promise.all([
     readJson(
       `${hostBaseUrl}/api/v1/remote-supervisor/sessions/${encodeURIComponent(sessionId)}/bootstrap`,
@@ -231,7 +280,7 @@ export async function connectRemoteSupervisor(options: {
     hostId: options.host.hostId,
     sessionId,
     expiresAt,
-    transport: 'direct',
+    transport,
     bootstrap,
     machines,
   }
@@ -326,6 +375,39 @@ function parseDirectEndpoints(value: unknown): readonly {
     }
     return { host, port: Number(record.port) }
   })
+}
+
+function parseRelayPresence(
+  value: unknown,
+): SupervisorTransportDescriptorPayload['relay'] {
+  if (value === null) return null
+  const relay = asRecord(value)
+  const endpoint = boundedString(relay, 'endpoint')
+  const relayId = boundedString(relay, 'relayId')
+  const relayFingerprint = boundedString(relay, 'relayFingerprint')
+  const rendezvousId = boundedString(relay, 'rendezvousId')
+  const rendezvousCapability = boundedString(relay, 'rendezvousCapability')
+  const hostTransportFingerprint = boundedString(
+    relay,
+    'hostTransportFingerprint',
+  )
+  if (
+    !/^relay_[A-Za-z0-9][A-Za-z0-9_-]{15,95}$/u.test(relayId) ||
+    !/^srv_[A-Za-z0-9][A-Za-z0-9_-]{15,95}$/u.test(rendezvousId) ||
+    !/^[A-Za-z0-9_-]{43}$/u.test(relayFingerprint) ||
+    !/^[A-Za-z0-9_-]{43}$/u.test(rendezvousCapability) ||
+    !/^[A-Za-z0-9_-]{43}$/u.test(hostTransportFingerprint)
+  ) {
+    throw new Error('Supervisor presence is invalid')
+  }
+  return {
+    endpoint,
+    relayId,
+    relayFingerprint,
+    rendezvousId,
+    rendezvousCapability,
+    hostTransportFingerprint,
+  }
 }
 
 function boundedString(value: Record<string, unknown>, key: string): string {

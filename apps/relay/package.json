@@ -23,6 +23,7 @@
     "zod": "4.4.3"
   },
   "devDependencies": {
+    "@codetether/supervisor-transport": "workspace:*",
     "esbuild": "0.28.2"
   }
 }

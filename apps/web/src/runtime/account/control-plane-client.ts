@@ -87,7 +87,14 @@ export interface SupervisorTransportDescriptorPayload {
     readonly host: string
     readonly port: number
   }[]
-  readonly relay: null
+  readonly relay: {
+    readonly endpoint: string
+    readonly relayId: string
+    readonly relayFingerprint: string
+    readonly rendezvousId: string
+    readonly rendezvousCapability: string
+    readonly hostTransportFingerprint: string
+  } | null
   readonly iat: number
   readonly exp: number
   readonly protocolVersion: 1

@@ -24,10 +24,10 @@ import {
 import {
   connectRemoteSupervisor,
   publishLocalSupervisorPresence,
+  readLocalHostIdentity,
   type LocalHostIdentityRecord,
 } from '../../runtime/account/remote-supervisor.js'
 import { getSupabaseAccountClient } from '../../runtime/account/supabase-account.js'
-import { hostBaseUrl } from '../../runtime/host/host-config.js'
 import { useHostConnectionState } from '../../runtime/host/host-runtime-hooks.js'
 import { nativeCapabilities } from '../../runtime/native/native-capabilities.js'
 
@@ -326,7 +326,12 @@ function ConnectedHostCard({
   readonly onOpenLocal: () => void
   readonly onOpenRemote: () => void
 }) {
+  const forceRelay =
+    import.meta.env.VITE_CODETETHER_FORCE_RELAY === '1' ||
+    new URLSearchParams(globalThis.location?.search ?? '').get('forceRelay') ===
+      '1'
   const forceRemote =
+    forceRelay ||
     import.meta.env.VITE_CODETETHER_FORCE_REMOTE === '1' ||
     new URLSearchParams(globalThis.location?.search ?? '').get(
       'forceRemote',
@@ -362,6 +367,7 @@ function ConnectedHostCard({
       host.hostId,
       host.supervisor?.transport.payload.exp,
       forceRemote,
+      forceRelay,
     ],
     queryFn: async ({ signal }) => {
       let remoteHost = host
@@ -383,6 +389,7 @@ function ConnectedHostCard({
         host: remoteHost,
         productDevice,
         deviceIdentity: nativeCapabilities.productDeviceIdentity,
+        forceRelay,
         signal,
       })
     },
@@ -549,35 +556,6 @@ function AccountSessionUnavailable() {
       </div>
     </PageFrame>
   )
-}
-
-async function readLocalHostIdentity(): Promise<
-  LocalHostIdentityRecord | undefined
-> {
-  const response = await fetch(`${hostBaseUrl}/api/v1/host/identity`, {
-    headers: { accept: 'application/json' },
-  })
-  if (response.status === 404) return undefined
-  if (!response.ok) throw new Error('local_host_identity_unavailable')
-  const value = (await response.json()) as {
-    readonly identity?: {
-      readonly hostId?: unknown
-      readonly fingerprint?: unknown
-      readonly identityGeneration?: unknown
-      readonly publicJwk?: unknown
-      readonly keyHandle?: unknown
-    }
-  }
-  const identity = value.identity
-  if (
-    typeof identity?.hostId !== 'string' ||
-    typeof identity.fingerprint !== 'string' ||
-    !Number.isSafeInteger(identity.identityGeneration) ||
-    typeof identity.publicJwk !== 'string' ||
-    typeof identity.keyHandle !== 'string'
-  )
-    throw new Error('local_host_identity_invalid')
-  return identity as LocalHostIdentityRecord
 }
 
 function hostDirectoryErrorMessage(error: unknown): string {

@@ -1,8 +1,12 @@
-import { randomUUID } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import { networkInterfaces } from 'node:os'
 
 import {
   connectSupervisorDirect,
+  connectSupervisorRelayDevice,
+  connectSupervisorRelayHost,
+  connectSupervisorRelayOverStream,
+  generateSupervisorTlsIdentity,
   signedSupervisorGrantSchema,
   signedSupervisorTransportDescriptorSchema,
   supervisorPublicJwkSchema,
@@ -14,6 +18,7 @@ import {
   type SignedSupervisorGrant,
   type SignedSupervisorTransportDescriptor,
   type SupervisorPublicJwk,
+  type SupervisorRelayControlConnection,
 } from '@codetether/supervisor-transport'
 import { TimestampSchema } from '@codetether/protocol'
 
@@ -21,6 +26,14 @@ import type { HostService } from './host-service.js'
 import type { ConversationStore } from '../persistence/index.js'
 
 const MAX_OUTBOUND_CONNECTIONS = 8
+const RELAY_RECONNECT_MINIMUM_MS = 1_000
+const RELAY_RECONNECT_MAXIMUM_MS = 60_000
+
+export interface SupervisorRelayConfiguration {
+  readonly endpoint: string
+  readonly relayId: string
+  readonly relayFingerprint: string
+}
 
 export interface SupervisorTransportManagerOptions {
   readonly service: HostService
@@ -28,6 +41,8 @@ export interface SupervisorTransportManagerOptions {
   readonly bindHost?: string
   readonly port?: number
   readonly advertiseHost?: string
+  readonly clientBuildIdentity: string
+  readonly relay?: SupervisorRelayConfiguration
 }
 
 export interface SupervisorTransportPresence {
@@ -36,6 +51,14 @@ export interface SupervisorTransportPresence {
     readonly host: string
     readonly port: number
   }[]
+  readonly relay: {
+    readonly endpoint: string
+    readonly relayId: string
+    readonly relayFingerprint: string
+    readonly rendezvousId: string
+    readonly rendezvousCapability: string
+    readonly hostTransportFingerprint: string
+  } | null
 }
 
 /**
@@ -47,8 +70,15 @@ export class SupervisorTransportManager {
   readonly #persistence: ConversationStore
   readonly #server: SupervisorServer
   readonly #advertiseHosts: readonly string[]
+  readonly #clientBuildIdentity: string
+  readonly #relay: SupervisorRelayConfiguration | undefined
+  readonly #relayRendezvousId: string
+  readonly #relayRendezvousCapability: string
   readonly #pending = new Map<string, PendingSupervisorConnection>()
   readonly #sessions = new Map<string, ConnectedSupervisorSession>()
+  #relayAbort: AbortController | undefined
+  #relayConnection: SupervisorRelayControlConnection | undefined
+  #relayTask: Promise<void> | undefined
 
   private constructor(
     options: SupervisorTransportManagerOptions,
@@ -57,6 +87,10 @@ export class SupervisorTransportManager {
     this.#service = options.service
     this.#persistence = options.persistence
     this.#server = server
+    this.#clientBuildIdentity = options.clientBuildIdentity
+    this.#relay = options.relay
+    this.#relayRendezvousId = `srv_${randomBytes(16).toString('hex')}`
+    this.#relayRendezvousCapability = randomBytes(32).toString('base64url')
     this.#advertiseHosts =
       options.advertiseHost === undefined
         ? discoverSupervisorDirectHosts()
@@ -152,6 +186,7 @@ export class SupervisorTransportManager {
     })
     const manager = new SupervisorTransportManager(options, server)
     await server.start()
+    manager.#startRelayPresence()
     return manager
   }
 
@@ -165,6 +200,16 @@ export class SupervisorTransportManager {
         host,
         port: address.port,
       })),
+      relay:
+        this.#relay === undefined
+          ? null
+          : {
+              ...this.#relay,
+              rendezvousId: this.#relayRendezvousId,
+              rendezvousCapability: this.#relayRendezvousCapability,
+              hostTransportFingerprint:
+                this.#server.tlsIdentity.publicKeyFingerprint,
+            },
     }
   }
 
@@ -192,11 +237,13 @@ export class SupervisorTransportManager {
     const descriptor = signedSupervisorTransportDescriptorSchema.parse(
       input.descriptor,
     )
+    this.#assertRelayDescriptor(descriptor)
     this.#persistence.storeHostSupervisorGrant(
       grant,
       TimestampSchema.parse(new Date().toISOString()),
     )
     await this.#server.activate({ hostPublicJwk: publicJwk, grant, descriptor })
+    this.#startRelayPresence()
   }
 
   async beginRemote(input: {
@@ -208,19 +255,22 @@ export class SupervisorTransportManager {
     readonly deviceKeyGeneration: number
     readonly grant: SignedSupervisorGrant
     readonly descriptor: SignedSupervisorTransportDescriptor
+    readonly forceRelay?: boolean
   }): Promise<{
     readonly connectionId: string
     readonly challenge: unknown
     readonly challengeBodyBase64Url: string
     readonly admissionResource: string
-    readonly transport: 'direct'
+    readonly transport: 'direct' | 'relay'
   }> {
     this.#assertCapacity()
     const descriptor = signedSupervisorTransportDescriptorSchema.parse(
       input.descriptor,
     )
     let lastError: unknown
-    for (const endpoint of descriptor.payload.directEndpoints) {
+    for (const endpoint of input.forceRelay === true
+      ? []
+      : descriptor.payload.directEndpoints) {
       try {
         const pending = await connectSupervisorDirect({
           endpoint,
@@ -250,11 +300,69 @@ export class SupervisorTransportManager {
           transport: 'direct',
         }
       } catch (error) {
+        if (!isRelayFallbackEligible(error)) throw error
         lastError = error
       }
     }
-    if (descriptor.payload.relay !== null) {
-      throw new SupervisorClientError('relay_unavailable')
+    const relay = descriptor.payload.relay
+    if (relay !== null) {
+      const route = parseSupervisorRelayEndpoint(
+        relay.endpoint,
+        relay.relayFingerprint,
+      )
+      const identity = await generateSupervisorTlsIdentity(
+        'CodeTether Supervisor Device',
+      )
+      let control: SupervisorRelayControlConnection | undefined
+      try {
+        control = await connectSupervisorRelayDevice({
+          ...route,
+          expectedRelayId: relay.relayId,
+          expectedRelayFingerprint: relay.relayFingerprint,
+          rendezvousId: relay.rendezvousId,
+          rendezvousCapability: relay.rendezvousCapability,
+          hostTransportFingerprint: relay.hostTransportFingerprint,
+          identity,
+          clientBuildIdentity: this.#clientBuildIdentity,
+          signal: AbortSignal.timeout(10_000),
+        })
+        const stream = await control.openDeviceChannel(
+          AbortSignal.timeout(10_000),
+        )
+        const relayControl = control
+        const pending = await connectSupervisorRelayOverStream({
+          stream,
+          tlsIdentity: identity,
+          expectedHost: {
+            hostId: input.hostId,
+            fingerprint: input.hostFingerprint,
+            identityGeneration: input.hostIdentityGeneration,
+            publicJwk: supervisorPublicJwkSchema.parse(input.hostPublicJwk),
+          },
+          expectedDevice: {
+            deviceId: input.deviceId,
+            keyGeneration: input.deviceKeyGeneration,
+          },
+          grant: input.grant,
+          descriptor,
+          signal: AbortSignal.timeout(10_000),
+          onClose: () => relayControl.close(),
+        })
+        const connectionId = `sconn_${randomUUID().replaceAll('-', '')}`
+        this.#pending.set(connectionId, pending)
+        return {
+          connectionId,
+          challenge: pending.challenge,
+          challengeBodyBase64Url: Buffer.from(pending.challengeBody).toString(
+            'base64url',
+          ),
+          admissionResource: pending.admissionResource,
+          transport: 'relay',
+        }
+      } catch (error) {
+        control?.close()
+        throw error
+      }
     }
     throw lastError ?? new SupervisorClientError('remote_host_unreachable')
   }
@@ -317,6 +425,9 @@ export class SupervisorTransportManager {
   }
 
   async close(): Promise<void> {
+    this.#relayAbort?.abort()
+    this.#relayConnection?.close()
+    await this.#relayTask?.catch(() => undefined)
     for (const id of [...this.#pending.keys(), ...this.#sessions.keys()]) {
       this.closeRemote(id)
     }
@@ -328,6 +439,213 @@ export class SupervisorTransportManager {
       throw new Error('Supervisor connection capacity reached')
     }
   }
+
+  #assertRelayDescriptor(
+    descriptor: SignedSupervisorTransportDescriptor,
+  ): void {
+    const relay = descriptor.payload.relay
+    const presence = this.presence().relay
+    if (relay === null && presence === null) return
+    if (
+      relay === null ||
+      presence === null ||
+      relay.endpoint !== presence.endpoint ||
+      relay.relayId !== presence.relayId ||
+      relay.relayFingerprint !== presence.relayFingerprint ||
+      relay.rendezvousId !== presence.rendezvousId ||
+      relay.rendezvousCapability !== presence.rendezvousCapability ||
+      relay.hostTransportFingerprint !== presence.hostTransportFingerprint
+    ) {
+      throw new Error('Supervisor Relay descriptor mismatch')
+    }
+  }
+
+  #startRelayPresence(): void {
+    const relay = this.presence().relay
+    if (relay === null) return
+    if (this.#relayTask !== undefined) return
+    const abort = new AbortController()
+    this.#relayAbort = abort
+    this.#relayTask = this.#maintainRelayPresence(relay, abort)
+    void this.#relayTask.catch(() => undefined)
+  }
+
+  async #connectRelayHost(
+    relay: NonNullable<SignedSupervisorTransportDescriptor['payload']['relay']>,
+    signal: AbortSignal,
+  ): Promise<SupervisorRelayControlConnection> {
+    const connection = await connectSupervisorRelayHost({
+      ...parseSupervisorRelayEndpoint(relay.endpoint, relay.relayFingerprint),
+      expectedRelayId: relay.relayId,
+      expectedRelayFingerprint: relay.relayFingerprint,
+      rendezvousId: relay.rendezvousId,
+      rendezvousCapability: relay.rendezvousCapability,
+      hostTransportFingerprint: relay.hostTransportFingerprint,
+      identity: this.#server.tlsIdentity,
+      clientBuildIdentity: this.#clientBuildIdentity,
+      signal,
+    })
+    connection.setChannelHandler(async (offer) => {
+      const stream = await offer.accept()
+      void this.#server.acceptRelayStream(stream, signal).catch(() => {
+        stream.destroy()
+      })
+    })
+    process.stderr.write(
+      `${JSON.stringify({ component: 'host', event: 'supervisor.relay.presence', state: 'online' })}\n`,
+    )
+    return connection
+  }
+
+  async #maintainRelayPresence(
+    relay: NonNullable<SignedSupervisorTransportDescriptor['payload']['relay']>,
+    abort: AbortController,
+  ): Promise<void> {
+    let delayMs = RELAY_RECONNECT_MINIMUM_MS
+    while (!abort.signal.aborted) {
+      try {
+        const connection = await this.#connectRelayHost(relay, abort.signal)
+        this.#relayConnection = connection
+        delayMs = RELAY_RECONNECT_MINIMUM_MS
+        await connection.completion.catch(() => undefined)
+        if (this.#relayConnection === connection) {
+          this.#relayConnection = undefined
+        }
+      } catch {
+        delayMs = Math.min(delayMs * 2, RELAY_RECONNECT_MAXIMUM_MS)
+      }
+      if (abort.signal.aborted) return
+      process.stderr.write(
+        `${JSON.stringify({ component: 'host', event: 'supervisor.relay.presence', state: 'reconnecting' })}\n`,
+      )
+      await waitForReconnect(delayMs, abort.signal)
+    }
+  }
+}
+
+export function parseSupervisorRelayConfiguration(
+  environment: Readonly<Record<string, string | undefined>>,
+): SupervisorRelayConfiguration | undefined {
+  const endpoint = environment.CODETETHER_SUPERVISOR_RELAY_ENDPOINT?.trim()
+  const relayId = environment.CODETETHER_SUPERVISOR_RELAY_ID?.trim()
+  const relayFingerprint =
+    environment.CODETETHER_SUPERVISOR_RELAY_FINGERPRINT?.trim()
+  if (
+    endpoint === undefined &&
+    relayId === undefined &&
+    relayFingerprint === undefined
+  ) {
+    return undefined
+  }
+  if (
+    endpoint === undefined ||
+    relayId === undefined ||
+    relayFingerprint === undefined ||
+    !/^relay_[A-Za-z0-9][A-Za-z0-9_-]{15,95}$/u.test(relayId) ||
+    !/^[A-Za-z0-9_-]{43}$/u.test(relayFingerprint)
+  ) {
+    throw new Error('Supervisor Relay environment is incomplete or invalid')
+  }
+  const parsed = new URL(endpoint)
+  parseSupervisorRelayEndpoint(parsed.toString(), relayFingerprint)
+  return { endpoint: parsed.toString(), relayId, relayFingerprint }
+}
+
+function parseSupervisorRelayEndpoint(
+  value: string,
+  relayFingerprint: string,
+): {
+  readonly endpoint: { readonly host: string; readonly port: number }
+  readonly tls:
+    | { readonly mode: 'public_ca'; readonly serverName: string }
+    | {
+        readonly mode: 'pinned_certificate'
+        readonly certificatePublicKeyFingerprint: string
+        readonly serverName?: string
+      }
+} {
+  const url = new URL(value)
+  if (
+    (url.protocol !== 'tls:' && url.protocol !== 'tls+pinned:') ||
+    url.username !== '' ||
+    url.password !== '' ||
+    (url.pathname !== '' && url.pathname !== '/') ||
+    url.search !== '' ||
+    url.hash !== ''
+  ) {
+    throw new Error('Supervisor Relay endpoint is invalid')
+  }
+  const port = url.port === '' ? 443 : Number(url.port)
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    throw new Error('Supervisor Relay endpoint is invalid')
+  }
+  const endpoint = { host: url.hostname, port }
+  return url.protocol === 'tls:'
+    ? { endpoint, tls: { mode: 'public_ca', serverName: url.hostname } }
+    : {
+        endpoint,
+        tls: {
+          mode: 'pinned_certificate',
+          certificatePublicKeyFingerprint: relayFingerprint,
+        },
+      }
+}
+
+function isRelayFallbackEligible(error: unknown): boolean {
+  if (error instanceof SupervisorClientError) {
+    return error.code === 'remote_host_unreachable'
+  }
+  let current: unknown = error
+  for (let depth = 0; depth < 5; depth += 1) {
+    if (!(current instanceof Error)) break
+    const code = (current as Error & { readonly code?: unknown }).code
+    if (
+      typeof code === 'string' &&
+      [
+        'ABORT_ERR',
+        'EADDRNOTAVAIL',
+        'EAFNOSUPPORT',
+        'EAI_AGAIN',
+        'ECONNREFUSED',
+        'ECONNRESET',
+        'EHOSTUNREACH',
+        'ENETDOWN',
+        'ENETUNREACH',
+        'ENOTFOUND',
+        'ETIMEDOUT',
+      ].includes(code)
+    ) {
+      return true
+    }
+    if (
+      current.name === 'AbortError' ||
+      current.name === 'TimeoutError' ||
+      /timed out|timeout/iu.test(current.message)
+    ) {
+      return true
+    }
+    current = current.cause
+  }
+  return false
+}
+
+async function waitForReconnect(
+  delayMs: number,
+  signal: AbortSignal,
+): Promise<void> {
+  if (signal.aborted) return
+  await new Promise<void>((resolve) => {
+    let settled = false
+    const finish = () => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      signal.removeEventListener('abort', finish)
+      resolve()
+    }
+    const timer = setTimeout(finish, delayMs)
+    signal.addEventListener('abort', finish, { once: true })
+  })
 }
 
 export function discoverSupervisorDirectHosts(

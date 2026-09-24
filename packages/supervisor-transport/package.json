@@ -17,6 +17,8 @@
   },
   "dependencies": {
     "@codetether/machine-transport": "workspace:*",
+    "@codetether/relay-client": "workspace:*",
+    "@codetether/relay-protocol": "workspace:*",
     "jose": "6.2.12",
     "selfsigned": "5.5.0",
     "zod": "4.4.3"

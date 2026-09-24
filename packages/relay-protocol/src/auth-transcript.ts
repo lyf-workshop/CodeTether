@@ -31,6 +31,18 @@ export interface RelayPairingAuthenticationTranscriptInput {
   readonly clientBuildIdentity: string
 }
 
+export interface RelaySupervisorAuthenticationTranscriptInput {
+  readonly challenge: RelayChallengeMessage
+  readonly role: 'host' | 'device'
+  readonly rendezvousId: string
+  readonly rendezvousCapability: string
+  readonly hostTransportFingerprint: string
+  readonly transportPublicKeySpki: string
+  readonly transportFingerprint: string
+  readonly clientBuildIdentity: string
+  readonly requestId?: string
+}
+
 export function relayChallengeTranscript(
   challenge: Omit<RelayChallengeMessage, 'signature'>,
 ): Uint8Array {
@@ -86,6 +98,24 @@ export function relayPairingAuthenticationTranscript(
     input.peerPublicKeySpki,
     input.peerFingerprint,
     input.clientBuildIdentity,
+  ])
+}
+
+export function relaySupervisorAuthenticationTranscript(
+  input: RelaySupervisorAuthenticationTranscriptInput,
+): Uint8Array {
+  return transcript('CodeTether Relay Supervisor authentication v1', [
+    ...challengeFields(input.challenge),
+    input.role,
+    input.rendezvousId,
+    createHash('sha256')
+      .update(input.rendezvousCapability, 'utf8')
+      .digest('base64url'),
+    input.hostTransportFingerprint,
+    input.transportPublicKeySpki,
+    input.transportFingerprint,
+    input.clientBuildIdentity,
+    input.requestId ?? null,
   ])
 }
 

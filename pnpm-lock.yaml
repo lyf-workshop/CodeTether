@@ -104,6 +104,10 @@ importers:
       zod:
         specifier: 4.4.3
         version: 4.4.3
+    devDependencies:
+      '@codetether/relay':
+        specifier: workspace:*
+        version: link:../relay
 
   apps/node:
     dependencies:
@@ -148,6 +152,9 @@ importers:
         specifier: 4.4.3
         version: 4.4.3
     devDependencies:
+      '@codetether/supervisor-transport':
+        specifier: workspace:*
+        version: link:../../packages/supervisor-transport
       esbuild:
         specifier: 0.28.2
         version: 0.28.2
@@ -281,6 +288,12 @@ importers:
       '@codetether/machine-transport':
         specifier: workspace:*
         version: link:../machine-transport
+      '@codetether/relay-client':
+        specifier: workspace:*
+        version: link:../relay-client
+      '@codetether/relay-protocol':
+        specifier: workspace:*
+        version: link:../relay-protocol
       jose:
         specifier: 6.2.12
         version: 6.2.12

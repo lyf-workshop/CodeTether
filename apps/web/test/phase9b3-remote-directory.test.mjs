@@ -24,7 +24,10 @@ test('remote directory uses the authenticated Supervisor session and bounded cur
   assert.match(runtime, /remote-supervisor\/sessions/u)
   assert.match(runtime, /new URLSearchParams\(\{ limit:/u)
   assert.doesNotMatch(runtime, /providerThreadId/u)
-  assert.doesNotMatch(runtime, /conversation\.history/u)
+  assert.match(runtime, /readRemoteConversationHistory/u)
+  assert.match(runtime, /readRemoteConversationLive/u)
+  assert.match(runtime, /reconnectRemoteSupervisor/u)
+  assert.match(runtime, /const reconnects = new Map/u)
 })
 
 test('remote Host UI exposes Project and Conversation metadata without write actions', async () => {
@@ -36,11 +39,13 @@ test('remote Host UI exposes Project and Conversation metadata without write act
   assert.match(page, /title="Conversations"/u)
   assert.match(page, /Load more Projects/u)
   assert.match(page, /Load more Conversations/u)
-  assert.match(page, /Conversation metadata/u)
-  assert.match(
-    page,
-    /Transcript and live Provider hydration are intentionally unavailable/u,
-  )
+  assert.match(page, /Remote read-only Conversation/u)
+  assert.match(page, /Load earlier/u)
+  assert.match(page, /Observing the active Turn/u)
+  assert.match(page, /await reconnectRemoteSupervisor/u)
+  assert.match(page, /cursor = refreshed\.liveCursor/u)
+  assert.match(page, /VITE_CODETETHER_VALIDATE_REMOTE_CONVERSATION_ID/u)
+  assert.match(page, /void history\.fetchNextPage/u)
   assert.doesNotMatch(
     page,
     /sendMessage|startProvider|resumeConversation|createConversation/u,

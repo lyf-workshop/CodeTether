@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { Link, useParams } from '@tanstack/react-router'
 import {
@@ -11,18 +11,30 @@ import {
 } from 'lucide-react'
 
 import { Badge, Button } from '@codetether/ui'
+import type { RemoteConversationHistoryPage } from '@codetether/protocol'
 
 import {
   currentRemoteSupervisorSession,
+  reconnectRemoteSupervisor,
   readRemoteConversation,
+  readRemoteConversationHistory,
+  readRemoteConversationLive,
   readRemoteConversations,
   readRemoteMachine,
   readRemoteProject,
   readRemoteProjects,
   type RemoteConversationDirectoryItem,
 } from '../../runtime/account/remote-supervisor.js'
+import {
+  applyRemoteConversationLiveEvents,
+  flattenRemoteConversationHistory,
+  mergeRemoteTranscriptEntries,
+  type RemoteLiveTranscriptState,
+  type RemoteTranscriptEntry,
+} from '../../runtime/account/remote-conversation-read-model.js'
 
 const DIRECTORY_PAGE_SIZE = 25
+const HISTORY_PAGE_SIZE = 20
 
 export function RemoteHostPage() {
   const { hostId } = useParams({ from: '/hosts/$hostId' })
@@ -33,8 +45,17 @@ export function RemoteHostPage() {
   const machines = session === undefined ? [] : machineRows(session.machines)
   const validationMode =
     import.meta.env.VITE_CODETETHER_VALIDATE_REMOTE_DIRECTORY_HOST_ID === hostId
+  const validationMachineId = import.meta.env
+    .VITE_CODETETHER_VALIDATE_REMOTE_CONVERSATION_MACHINE_ID
+  const validationProjectId = import.meta.env
+    .VITE_CODETETHER_VALIDATE_REMOTE_CONVERSATION_PROJECT_ID
+  const validationConversationId = import.meta.env
+    .VITE_CODETETHER_VALIDATE_REMOTE_CONVERSATION_ID
   const activeMachineId =
-    selectedMachineId ?? (validationMode ? machines[0]?.machineId : undefined)
+    selectedMachineId ??
+    (validationMode
+      ? (validationMachineId ?? machines[0]?.machineId)
+      : undefined)
   const detail = useQuery({
     queryKey: ['remote-supervisor', hostId, 'machine', activeMachineId],
     queryFn: async () =>
@@ -61,7 +82,9 @@ export function RemoteHostPage() {
     projects.data?.pages.flatMap((page) => page.projects) ?? []
   const activeProjectId =
     selectedProjectId ??
-    (validationMode ? projectRows[0]?.projectId : undefined)
+    (validationMode
+      ? (validationProjectId ?? projectRows[0]?.projectId)
+      : undefined)
   const projectDetail = useQuery({
     queryKey: [
       'remote-supervisor',
@@ -109,7 +132,9 @@ export function RemoteHostPage() {
     conversations.data?.pages.flatMap((page) => page.conversations) ?? []
   const activeConversationId =
     selectedConversationId ??
-    (validationMode ? conversationRows[0]?.conversationId : undefined)
+    (validationMode
+      ? (validationConversationId ?? conversationRows[0]?.conversationId)
+      : undefined)
   const conversationDetail = useQuery({
     queryKey: [
       'remote-supervisor',
@@ -127,6 +152,32 @@ export function RemoteHostPage() {
         activeConversationId as string,
       ),
     enabled: projectDetail.isSuccess && activeConversationId !== undefined,
+    retry: false,
+  })
+  const history = useInfiniteQuery({
+    queryKey: [
+      'remote-supervisor',
+      hostId,
+      'conversation-history',
+      activeMachineId,
+      activeProjectId,
+      activeConversationId,
+    ],
+    queryFn: async ({ pageParam, signal }) =>
+      await readRemoteConversationHistory(
+        hostId,
+        activeMachineId as string,
+        activeProjectId as string,
+        activeConversationId as string,
+        {
+          limit: HISTORY_PAGE_SIZE,
+          ...(pageParam === undefined ? {} : { cursor: pageParam }),
+        },
+        signal,
+      ),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage.beforeCursor,
+    enabled: conversationDetail.isSuccess,
     retry: false,
   })
 
@@ -290,13 +341,20 @@ export function RemoteHostPage() {
       ) : conversationDetail.isError ? (
         <ErrorText label="Conversation metadata is stale or unavailable." />
       ) : conversationDetail.data === undefined ? null : (
-        <ConversationMetadata conversation={conversationDetail.data} />
+        <RemoteConversationReadView
+          key={conversationDetail.data.conversationId}
+          hostId={hostId}
+          machineId={activeMachineId as string}
+          projectId={activeProjectId as string}
+          conversation={conversationDetail.data}
+          history={history}
+          validationMode={validationMode}
+        />
       )}
 
       <p className="mt-5 inline-flex items-center gap-2 text-xs text-text-muted">
-        <Server aria-hidden="true" /> Directory reads do not load transcripts,
-        start Providers, send messages, resume sessions, or expose filesystem
-        actions.
+        <Server aria-hidden="true" /> Transcript reads do not start Providers,
+        send messages, resume sessions, or expose write actions.
       </p>
     </main>
   )
@@ -366,17 +424,162 @@ function DirectoryButton({
   )
 }
 
-function ConversationMetadata({
+function RemoteConversationReadView({
+  hostId,
+  machineId,
+  projectId,
   conversation,
+  history,
+  validationMode,
 }: {
+  readonly hostId: string
+  readonly machineId: string
+  readonly projectId: string
   readonly conversation: RemoteConversationDirectoryItem
+  readonly validationMode: boolean
+  readonly history: {
+    readonly data?: { readonly pages: readonly RemoteConversationHistoryPage[] }
+    readonly isPending: boolean
+    readonly isError: boolean
+    readonly isFetchingNextPage: boolean
+    readonly hasNextPage: boolean
+    readonly fetchNextPage: () => Promise<unknown>
+    readonly refetch: () => Promise<unknown>
+  }
 }) {
+  const historyPages = history.data?.pages
+  const historical = useMemo(
+    () => flattenRemoteConversationHistory(historyPages),
+    [historyPages],
+  )
+  const [live, setLive] = useState<RemoteLiveTranscriptState>({
+    entries: [],
+    eventIds: new Set(),
+  })
+  const [liveState, setLiveState] = useState<
+    'idle' | 'connecting' | 'live' | 'disconnected'
+  >(() =>
+    conversation.status === 'running' || conversation.status === 'waiting'
+      ? 'connecting'
+      : 'idle',
+  )
+  const initialPage = historyPages?.[0]
+  const initialLiveCursor = initialPage?.liveCursor
+  const {
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+    refetch: refetchHistory,
+  } = history
+
+  useEffect(() => {
+    if (!validationMode || !hasNextPage || isFetchingNextPage) {
+      return
+    }
+    void fetchNextPage()
+  }, [fetchNextPage, hasNextPage, isFetchingNextPage, validationMode])
+
+  useEffect(() => {
+    if (
+      initialLiveCursor === undefined ||
+      (conversation.status !== 'running' && conversation.status !== 'waiting')
+    ) {
+      return
+    }
+    const abort = new AbortController()
+    let cursor = initialLiveCursor
+    let active = true
+    let reconnectAvailable = true
+    const observe = async (): Promise<void> => {
+      while (!abort.signal.aborted && active) {
+        try {
+          const page = await readRemoteConversationLive(
+            hostId,
+            machineId,
+            projectId,
+            conversation.conversationId,
+            { cursor, waitMs: 10_000 },
+            abort.signal,
+          )
+          if (page.resetRequired) {
+            setLive({ entries: [], eventIds: new Set() })
+            const refreshed = await readRemoteConversationHistory(
+              hostId,
+              machineId,
+              projectId,
+              conversation.conversationId,
+              { limit: HISTORY_PAGE_SIZE },
+              abort.signal,
+            )
+            cursor = refreshed.liveCursor
+            await refetchHistory()
+            continue
+          }
+          cursor = page.cursor
+          if (page.events.length > 0) {
+            setLive((current) =>
+              applyRemoteConversationLiveEvents(current, page.events),
+            )
+          }
+          setLiveState(page.active ? 'live' : 'idle')
+          active = page.active
+        } catch {
+          if (abort.signal.aborted) {
+            active = false
+            continue
+          }
+          if (reconnectAvailable) {
+            reconnectAvailable = false
+            setLiveState('connecting')
+            try {
+              await reconnectRemoteSupervisor(hostId, abort.signal)
+              const refreshed = await readRemoteConversationHistory(
+                hostId,
+                machineId,
+                projectId,
+                conversation.conversationId,
+                { limit: HISTORY_PAGE_SIZE },
+                abort.signal,
+              )
+              cursor = refreshed.liveCursor
+              setLive({ entries: [], eventIds: new Set() })
+              await refetchHistory()
+              continue
+            } catch {
+              // The bounded fresh-authentication attempt failed below.
+            }
+          }
+          setLiveState('disconnected')
+          active = false
+        }
+      }
+    }
+    void observe()
+    return () => abort.abort()
+  }, [
+    conversation.conversationId,
+    conversation.status,
+    hostId,
+    initialLiveCursor,
+    machineId,
+    projectId,
+    refetchHistory,
+  ])
+
+  const entries = useMemo(
+    () => mergeRemoteTranscriptEntries(historical, live.entries),
+    [historical, live.entries],
+  )
+  const lastPage = historyPages?.at(-1)
+  const historyComplete =
+    lastPage?.historyComplete === true && history.hasNextPage !== true
+
   return (
     <section className="mt-4 rounded-lg border border-border bg-surface p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <p className="text-xs font-medium uppercase tracking-wide text-text-muted">
-            Conversation metadata
+            Remote read-only Conversation
           </p>
           <h2 className="mt-1 font-semibold text-text-primary">
             {conversation.title}
@@ -402,11 +605,184 @@ function ConversationMetadata({
           }
         />
       </dl>
-      <p className="mt-4 text-xs text-text-muted">
-        Transcript and live Provider hydration are intentionally unavailable in
-        this read-only phase.
-      </p>
+      {history.isPending ? (
+        <LoadingText label="Loading latest transcript…" />
+      ) : history.isError ? (
+        <ErrorText label="Transcript could not be read from the Host." />
+      ) : (
+        <RemoteTranscript
+          entries={entries}
+          historyComplete={historyComplete}
+          partial={
+            lastPage !== undefined &&
+            !lastPage.historyComplete &&
+            lastPage.beforeCursor === undefined
+          }
+          loadingEarlier={history.isFetchingNextPage}
+          loadEarlier={
+            history.hasNextPage
+              ? async () => await history.fetchNextPage()
+              : undefined
+          }
+          liveState={liveState}
+        />
+      )}
     </section>
+  )
+}
+
+function RemoteTranscript({
+  entries,
+  historyComplete,
+  partial,
+  loadingEarlier,
+  loadEarlier,
+  liveState,
+}: {
+  readonly entries: readonly RemoteTranscriptEntry[]
+  readonly historyComplete: boolean
+  readonly partial: boolean
+  readonly loadingEarlier: boolean
+  readonly loadEarlier?: () => Promise<unknown>
+  readonly liveState: 'idle' | 'connecting' | 'live' | 'disconnected'
+}) {
+  const viewport = useRef<HTMLDivElement>(null)
+  const followsLatest = useRef(true)
+  const prependingEarlier = useRef(false)
+  const [newOutput, setNewOutput] = useState(false)
+  const previousCount = useRef(0)
+
+  useEffect(() => {
+    const element = viewport.current
+    if (element === null || entries.length <= previousCount.current) {
+      previousCount.current = entries.length
+      return
+    }
+    previousCount.current = entries.length
+    if (prependingEarlier.current) return
+    if (followsLatest.current) {
+      element.scrollTop = element.scrollHeight
+      setNewOutput(false)
+    } else {
+      setNewOutput(true)
+    }
+  }, [entries.length])
+
+  const earlier = async (): Promise<void> => {
+    const element = viewport.current
+    const previousHeight = element?.scrollHeight ?? 0
+    const previousTop = element?.scrollTop ?? 0
+    prependingEarlier.current = true
+    try {
+      await loadEarlier?.()
+    } finally {
+      requestAnimationFrame(() => {
+        if (element !== null) {
+          element.scrollTop =
+            previousTop + element.scrollHeight - previousHeight
+        }
+        prependingEarlier.current = false
+      })
+    }
+  }
+
+  return (
+    <div className="mt-5 border-t border-border pt-4">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div className="text-xs text-text-muted">
+          {historyComplete
+            ? 'Beginning of available history reached'
+            : partial
+              ? 'Available history is partial'
+              : 'Earlier history is available'}
+        </div>
+        {loadEarlier === undefined ? null : (
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={loadingEarlier}
+            onClick={() => void earlier()}
+          >
+            {loadingEarlier ? 'Loading earlier…' : 'Load earlier'}
+          </Button>
+        )}
+      </div>
+      <div
+        ref={viewport}
+        className="max-h-[36rem] space-y-3 overflow-y-auto rounded-md bg-surface-inset p-3"
+        onScroll={(event) => {
+          const element = event.currentTarget
+          followsLatest.current =
+            element.scrollHeight - element.scrollTop - element.clientHeight < 80
+          if (followsLatest.current) setNewOutput(false)
+        }}
+      >
+        {entries.length === 0 ? (
+          <EmptyText>No supported transcript entries are available.</EmptyText>
+        ) : (
+          entries.map((entry) => (
+            <TranscriptEntry key={entry.id} entry={entry} />
+          ))
+        )}
+      </div>
+      <div className="mt-3 flex items-center justify-between gap-3 text-xs text-text-muted">
+        <span>
+          {liveState === 'live'
+            ? 'Observing the active Turn'
+            : liveState === 'connecting'
+              ? 'Connecting to live output…'
+              : liveState === 'disconnected'
+                ? 'Live output disconnected. Return to My Hosts to retry.'
+                : 'No active Turn'}
+        </span>
+        {newOutput ? (
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => {
+              const element = viewport.current
+              if (element !== null) element.scrollTop = element.scrollHeight
+              followsLatest.current = true
+              setNewOutput(false)
+            }}
+          >
+            New output
+          </Button>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
+function TranscriptEntry({ entry }: { readonly entry: RemoteTranscriptEntry }) {
+  const label =
+    entry.role === 'user'
+      ? 'You'
+      : entry.role === 'assistant'
+        ? 'Agent'
+        : entry.role === 'tool'
+          ? entry.kind === 'change'
+            ? 'Change'
+            : 'Tool'
+          : 'Status'
+  return (
+    <article
+      className={`rounded-md border px-3 py-2 ${
+        entry.role === 'user'
+          ? 'border-accent/30 bg-accent/5'
+          : 'border-border bg-surface'
+      }`}
+    >
+      <div className="flex items-center justify-between gap-3 text-xs text-text-muted">
+        <span className="font-medium">{label}</span>
+        <span>
+          {entry.timestamp === undefined ? '' : formatActivity(entry.timestamp)}
+        </span>
+      </div>
+      <p className="mt-2 whitespace-pre-wrap break-words text-sm text-text-primary">
+        {entry.content}
+      </p>
+    </article>
   )
 }
 

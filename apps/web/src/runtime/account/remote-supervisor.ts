@@ -1,4 +1,10 @@
 import type { Session } from '@supabase/supabase-js'
+import {
+  RemoteConversationHistoryPageSchema,
+  RemoteConversationLivePageSchema,
+  type RemoteConversationHistoryPage,
+  type RemoteConversationLivePage,
+} from '@codetether/protocol'
 
 import { hostBaseUrl } from '../host/host-config.js'
 import type {
@@ -108,6 +114,16 @@ export async function readLocalHostIdentity(): Promise<
 }
 
 const remoteSessions = new Map<string, RemoteSupervisorSession>()
+const reconnectContexts = new Map<string, RemoteSupervisorReconnectContext>()
+const reconnects = new Map<string, Promise<RemoteSupervisorSession>>()
+
+interface RemoteSupervisorReconnectContext {
+  readonly session: Session
+  readonly host: AuthorizedHostDirectoryEntry
+  readonly productDevice: ResolvedProductDevice
+  readonly deviceIdentity: ProductDeviceIdentityCapability
+  readonly forceRelay?: boolean
+}
 
 export function currentRemoteSupervisorSession(
   hostId: string,
@@ -263,6 +279,15 @@ export async function connectRemoteSupervisor(options: {
   readonly forceRelay?: boolean
   readonly signal?: AbortSignal
 }): Promise<RemoteSupervisorSession> {
+  reconnectContexts.set(options.host.hostId, {
+    session: options.session,
+    host: options.host,
+    productDevice: options.productDevice,
+    deviceIdentity: options.deviceIdentity,
+    ...(options.forceRelay === undefined
+      ? {}
+      : { forceRelay: options.forceRelay }),
+  })
   const cached = remoteSessions.get(options.host.hostId)
   const existing = currentRemoteSupervisorSession(options.host.hostId)
   if (
@@ -331,6 +356,36 @@ export async function connectRemoteSupervisor(options: {
   }
   remoteSessions.set(options.host.hostId, connected)
   return connected
+}
+
+/**
+ * Replaces a lost read session through the same authenticated Direct/Relay
+ * selection. Calls for one Host coalesce so React retries cannot create
+ * parallel ProductDevice sessions.
+ */
+export async function reconnectRemoteSupervisor(
+  hostId: string,
+  signal?: AbortSignal,
+): Promise<RemoteSupervisorSession> {
+  const pending = reconnects.get(hostId)
+  if (pending !== undefined) return await pending
+  const context = reconnectContexts.get(hostId)
+  if (context === undefined) {
+    throw new Error('remote_supervisor_reconnect_unavailable')
+  }
+  const reconnect = (async () => {
+    const current = remoteSessions.get(hostId)
+    if (current !== undefined) {
+      await closeRemoteSupervisorSession(hostId, current)
+    }
+    return await connectRemoteSupervisor({ ...context, signal })
+  })()
+  reconnects.set(hostId, reconnect)
+  try {
+    return await reconnect
+  } finally {
+    if (reconnects.get(hostId) === reconnect) reconnects.delete(hostId)
+  }
 }
 
 export async function readRemoteMachine(
@@ -426,6 +481,56 @@ export async function readRemoteConversation(
     throw new Error('remote_supervisor_response_invalid')
   }
   return conversation
+}
+
+export async function readRemoteConversationHistory(
+  hostId: string,
+  machineId: string,
+  projectId: string,
+  conversationId: string,
+  page: { readonly limit: number; readonly cursor?: string },
+  signal?: AbortSignal,
+): Promise<RemoteConversationHistoryPage> {
+  const session = requireRemoteSupervisorSession(hostId)
+  const query = directoryQuery(page)
+  const value = await readJson(
+    `${remoteMachineBaseUrl(session, machineId)}/projects/${encodeURIComponent(projectId)}/conversations/${encodeURIComponent(conversationId)}/history?${query}`,
+    { signal },
+  )
+  const result = RemoteConversationHistoryPageSchema.parse(value)
+  if (result.conversationId !== conversationId) {
+    throw new Error('remote_supervisor_response_invalid')
+  }
+  return result
+}
+
+export async function readRemoteConversationLive(
+  hostId: string,
+  machineId: string,
+  projectId: string,
+  conversationId: string,
+  query: {
+    readonly cursor: string
+    readonly limit?: number
+    readonly waitMs?: number
+  },
+  signal?: AbortSignal,
+): Promise<RemoteConversationLivePage> {
+  const session = requireRemoteSupervisorSession(hostId)
+  const search = new URLSearchParams({
+    cursor: query.cursor,
+    limit: String(query.limit ?? 64),
+    waitMs: String(query.waitMs ?? 10_000),
+  })
+  const value = await readJson(
+    `${remoteMachineBaseUrl(session, machineId)}/projects/${encodeURIComponent(projectId)}/conversations/${encodeURIComponent(conversationId)}/live?${search.toString()}`,
+    { signal },
+  )
+  const result = RemoteConversationLivePageSchema.parse(value)
+  if (result.conversationId !== conversationId) {
+    throw new Error('remote_supervisor_response_invalid')
+  }
+  return result
 }
 
 function requireRemoteSupervisorSession(

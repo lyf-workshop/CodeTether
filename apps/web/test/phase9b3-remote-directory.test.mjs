@@ -45,7 +45,8 @@ test('remote Host UI exposes Project and Conversation metadata without write act
   assert.match(page, /await reconnectRemoteSupervisor/u)
   assert.match(page, /cursor = refreshed\.liveCursor/u)
   assert.match(page, /VITE_CODETETHER_VALIDATE_REMOTE_CONVERSATION_ID/u)
-  assert.match(page, /void history\.fetchNextPage/u)
+  assert.match(page, /async \(\) => await history\.fetchNextPage\(\)/u)
+  assert.match(page, /previousTop \+ element\.scrollHeight - previousHeight/u)
   assert.doesNotMatch(
     page,
     /sendMessage|startProvider|resumeConversation|createConversation/u,

@@ -2018,6 +2018,80 @@ test('Supervisor history watermark feeds bounded live replay without owning exec
   }
 })
 
+test('slow Supervisor observers page 130 live events without gaps or execution ownership', async () => {
+  const environment = await createEnvironment()
+  try {
+    const fixture = await createService(
+      environment,
+      'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    )
+    const created = await createConversation(
+      fixture.service,
+      environment.workspace,
+      'act_remote_slow_create01',
+    )
+    const conversation = created.data.conversation
+    const machine = fixture.service.listMachines().machines[0]
+    assert.ok(machine)
+    const history = await fixture.service.readSupervisorConversationHistory(
+      machine.machineId,
+      conversation.projectId,
+      conversation.conversationId,
+      { limit: 20 },
+    )
+    const started = await startTurn(
+      fixture.service,
+      conversation.conversationId,
+      'act_remote_slow_turn01',
+      'Observe a bounded stream',
+    )
+
+    for (let index = 0; index < 130; index += 1) {
+      fixture.publisher.publish({
+        conversationId: conversation.conversationId,
+        turnId: started.data.turn.turnId,
+        itemId: 'item_remote_slow_stream',
+        timestamp,
+        type: 'message.delta',
+        payload: { delta: `chunk-${String(index).padStart(3, '0')}` },
+      })
+    }
+
+    let cursor = history.liveCursor
+    const events = []
+    let pages = 0
+    while (pages < 20) {
+      const page = await fixture.service.readSupervisorConversationLive(
+        machine.machineId,
+        conversation.projectId,
+        conversation.conversationId,
+        { cursor, limit: 17, waitMs: 0 },
+      )
+      pages += 1
+      cursor = page.cursor
+      events.push(
+        ...page.events.filter((event) => event.type === 'message.delta'),
+      )
+      if (page.events.length === 0) break
+    }
+
+    assert.equal(pages, 9)
+    assert.equal(events.length, 130)
+    assert.equal(new Set(events.map(({ eventId }) => eventId)).size, 130)
+    assert.deepEqual(
+      events.map(({ payload }) => payload.delta),
+      Array.from(
+        { length: 130 },
+        (_, index) => `chunk-${String(index).padStart(3, '0')}`,
+      ),
+    )
+    assert.equal(fixture.runtime.turnCalls.length, 1)
+    await fixture.service.close()
+  } finally {
+    await removeEnvironment(environment.directory)
+  }
+})
+
 async function removeEnvironment(directory) {
   await rm(directory, {
     recursive: true,

@@ -55,6 +55,30 @@ test('opaque Relay carries the same authenticated read-only Supervisor protocol'
     assert.deepEqual(await session.getMachine(`machine_${'m'.repeat(32)}`), {
       providers: ['codex', 'claude-code'],
     })
+    assert.deepEqual(
+      await session.readConversationHistory(
+        `machine_${'m'.repeat(32)}`,
+        `proj_${'p'.repeat(32)}`,
+        `conv_${'c'.repeat(32)}`,
+        { limit: 20 },
+      ),
+      { entries: 20, historyComplete: false },
+    )
+    const live = await session.readConversationLive(
+      `machine_${'m'.repeat(32)}`,
+      `proj_${'p'.repeat(32)}`,
+      `conv_${'c'.repeat(32)}`,
+      {
+        cursor: '123e4567-e89b-42d3-a456-426614174000:0',
+        limit: 64,
+        waitMs: 0,
+      },
+    )
+    assert.deepEqual(
+      live.events.map(({ type }) => type),
+      ['message.completed', 'turn.completed'],
+    )
+    assert.equal(live.active, false)
     assert.equal(
       fixture.logs.some((entry) =>
         JSON.stringify(entry).includes('machine.list'),
@@ -262,6 +286,11 @@ async function createFixture() {
         machines: [{ machineId: `machine_${'m'.repeat(32)}` }],
       }),
       getMachine: () => ({ providers: ['codex', 'claude-code'] }),
+      readConversationHistory: () => ({
+        entries: 20,
+        historyComplete: false,
+      }),
+      readConversationLive: () => terminalLivePage(),
     },
   })
   await supervisor.start()
@@ -436,4 +465,43 @@ function compactSign(privateKey, type, payload) {
     dsaEncoding: 'ieee-p1363',
   }).toString('base64url')
   return `${signingInput}.${signature}`
+}
+
+function terminalLivePage() {
+  const epoch = '123e4567-e89b-42d3-a456-426614174000'
+  const conversationId = `conv_${'c'.repeat(32)}`
+  const turnId = `turn_${'t'.repeat(32)}`
+  return {
+    protocolVersion: 1,
+    conversationId,
+    cursor: `${epoch}:2`,
+    events: [
+      {
+        protocolVersion: 1,
+        epoch,
+        seq: 1,
+        eventId: `${epoch}:1`,
+        conversationId,
+        turnId,
+        itemId: `item_${'i'.repeat(32)}`,
+        timestamp: '2026-09-24T12:00:00.000Z',
+        type: 'message.completed',
+        payload: { message: 'complete' },
+      },
+      {
+        protocolVersion: 1,
+        epoch,
+        seq: 2,
+        eventId: `${epoch}:2`,
+        conversationId,
+        turnId,
+        timestamp: '2026-09-24T12:00:00.000Z',
+        type: 'turn.completed',
+        payload: { finalMessage: 'complete' },
+      },
+    ],
+    resetRequired: false,
+    active: false,
+    timedOut: false,
+  }
 }

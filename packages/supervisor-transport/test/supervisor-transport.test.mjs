@@ -91,7 +91,7 @@ test('direct Supervisor transport verifies exact identities and exposes only rea
           waitMs: 0,
         },
       ),
-      { events: [], active: false },
+      terminalLivePage(),
     )
     connected.close()
     assert.equal(
@@ -217,7 +217,7 @@ async function createFixture(options = {}) {
         entries: 20,
         historyComplete: false,
       }),
-      readConversationLive: () => ({ events: [], active: false }),
+      readConversationLive: () => terminalLivePage(),
     },
   })
   const address = await server.start()
@@ -287,6 +287,45 @@ async function createFixture(options = {}) {
       descriptor,
       now: () => now,
     },
+  }
+}
+
+function terminalLivePage() {
+  const epoch = '123e4567-e89b-42d3-a456-426614174000'
+  const conversationId = `conv_${'c'.repeat(32)}`
+  const turnId = `turn_${'t'.repeat(32)}`
+  return {
+    protocolVersion: 1,
+    conversationId,
+    cursor: `${epoch}:2`,
+    events: [
+      {
+        protocolVersion: 1,
+        epoch,
+        seq: 1,
+        eventId: `${epoch}:1`,
+        conversationId,
+        turnId,
+        itemId: `item_${'i'.repeat(32)}`,
+        timestamp: '2026-09-24T12:00:00.000Z',
+        type: 'message.completed',
+        payload: { message: 'complete' },
+      },
+      {
+        protocolVersion: 1,
+        epoch,
+        seq: 2,
+        eventId: `${epoch}:2`,
+        conversationId,
+        turnId,
+        timestamp: '2026-09-24T12:00:00.000Z',
+        type: 'turn.completed',
+        payload: { finalMessage: 'complete' },
+      },
+    ],
+    resetRequired: false,
+    active: false,
+    timedOut: false,
   }
 }
 

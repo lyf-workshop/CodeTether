@@ -200,6 +200,18 @@ test('read-only Supervisor sessions cannot control Conversations', async () => {
         error instanceof SupervisorClientError &&
         error.code === 'operation_not_allowed',
     )
+    await assert.rejects(
+      session.createConversation({
+        actionId: `act_${'c'.repeat(32)}`,
+        machineId: `machine_${'m'.repeat(32)}`,
+        projectId: `proj_${'p'.repeat(32)}`,
+        provider: 'codex',
+        input: { type: 'text', text: 'safe' },
+      }),
+      (error) =>
+        error instanceof SupervisorClientError &&
+        error.code === 'operation_not_allowed',
+    )
     session.close()
   } finally {
     await fixture.server.close()

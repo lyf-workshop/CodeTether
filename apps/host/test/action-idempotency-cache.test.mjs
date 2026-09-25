@@ -50,6 +50,15 @@ test('rejects action id reuse with another operation or input', async () => {
     ),
     ActionIdConflictError,
   )
+  await assert.rejects(
+    cache.execute(
+      'action-a',
+      'turn.start',
+      { conversationId: 'conversation-b', prompt: 'first' },
+      () => 'bad',
+    ),
+    ActionIdConflictError,
+  )
 })
 
 test('replays the original rejected Promise without executing again', async () => {

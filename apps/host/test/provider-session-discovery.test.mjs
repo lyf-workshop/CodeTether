@@ -973,6 +973,82 @@ test('native transcript projection stays scoped, paginated, and creates no produ
   assert.equal(fixture.runtime.startTurnCalls, 0)
 })
 
+test('Supervisor adopted history reuses native cursors through the true beginning', async (t) => {
+  const candidate = nativeCandidate(
+    'native-supervisor-history',
+    'revision-supervisor-history',
+    {
+      historicalTranscript: 'supported',
+      transcriptBoundary: 'codex-v1:opaque-supervisor-boundary',
+    },
+  )
+  const fixture = await createFixture(t, {
+    candidates: [candidate],
+    transcriptImplementation: async (request) =>
+      request.cursor === undefined
+        ? nativeTranscriptPage('provider-entry-supervisor-newer', 'newer', {
+            nextCursor: 'private-supervisor-cursor',
+            complete: false,
+            sequence: 2,
+          })
+        : nativeTranscriptPage('provider-entry-supervisor-older', 'older', {
+            sequence: 1,
+          }),
+  })
+  const adopted = await adoptFirstCandidate(fixture)
+  const conversationId = adopted.data.conversation.conversationId
+  const recent = await fixture.service.readSupervisorConversationHistory(
+    fixture.machineId,
+    fixture.projectId,
+    conversationId,
+    { limit: 1 },
+  )
+  assert.equal(recent.source, 'native_provider')
+  assert.equal(recent.historyComplete, false)
+  assert.equal(recent.hasMoreBefore, true)
+  assert.ok(recent.beforeCursor)
+  assert.equal(recent.native.entries[0].content, 'newer')
+  const second = fixture.persistence.createOrGetAdoptedConversation({
+    conversationId: 'conv_supervisor_history_scope',
+    projectId: fixture.projectId,
+    machineId: fixture.machineId,
+    title: 'Second Supervisor history scope',
+    titleSource: 'generated',
+    provider: 'codex',
+    providerThreadId: 'native-supervisor-history-scope',
+    nativeTranscriptBoundary: 'codex-v1:opaque-supervisor-boundary-two',
+    cwd: fixture.projectRoot,
+    status: 'idle',
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    lastActivityAt: timestamp,
+  }).conversation
+  await assert.rejects(
+    fixture.service.readSupervisorConversationHistory(
+      fixture.machineId,
+      fixture.projectId,
+      second.conversationId,
+      { limit: 1, cursor: recent.beforeCursor },
+    ),
+    (error) =>
+      error instanceof HostServiceError && error.code === 'invalid_request',
+  )
+  const older = await fixture.service.readSupervisorConversationHistory(
+    fixture.machineId,
+    fixture.projectId,
+    conversationId,
+    { limit: 1, cursor: recent.beforeCursor },
+  )
+  assert.equal(older.source, 'native_provider')
+  assert.equal(older.historyComplete, true)
+  assert.equal(older.hasMoreBefore, false)
+  assert.equal(older.native.entries[0].content, 'older')
+  assert.equal(fixture.discovery.transcriptCalls.length, 2)
+  assert.equal(fixture.runtime.startConversationCalls, 0)
+  assert.equal(fixture.runtime.resumeConversationCalls, 0)
+  assert.equal(fixture.runtime.startTurnCalls, 0)
+})
+
 test('native transcript cursors cannot cross Conversation scope', async (t) => {
   const firstCandidate = nativeCandidate(
     'native-transcript-cursor-one',

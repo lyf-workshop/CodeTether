@@ -520,6 +520,18 @@ export interface DurableTurnSnapshot {
   readonly snapshot: unknown
 }
 
+export interface DurableTurnPageCursor {
+  readonly startedAt: Timestamp
+  readonly turnId: TurnId
+}
+
+export interface DurableTurnPage {
+  /** Chronological order within this newest-to-oldest page window. */
+  readonly turns: readonly DurableTurnSnapshot[]
+  readonly hasMoreBefore: boolean
+  readonly before?: DurableTurnPageCursor
+}
+
 export interface CreateDurableTurnForStartAction {
   readonly actionId: ActionId
   readonly turn: DurableTurnSnapshot
@@ -3723,6 +3735,58 @@ export class ConversationStore {
     }
     const descending = this.#listTurns(conversationId, limit, true)
     return descending.reverse()
+  }
+
+  listTurnHistoryPage(
+    conversationId: ConversationId,
+    limit: number,
+    before?: DurableTurnPageCursor,
+  ): DurableTurnPage {
+    const id = ConversationIdSchema.parse(conversationId)
+    if (!Number.isSafeInteger(limit) || limit <= 0) {
+      throw new Error('Turn history page limit must be a positive integer')
+    }
+    const cursor =
+      before === undefined
+        ? undefined
+        : {
+            startedAt: TimestampSchema.parse(before.startedAt),
+            turnId: TurnIdSchema.parse(before.turnId),
+          }
+    const rows = (cursor === undefined
+      ? this.#statement(
+          `SELECT * FROM turns
+           WHERE conversation_id = ?
+           ORDER BY started_at DESC, turn_id DESC
+           LIMIT ?`,
+        ).all(id, limit + 1)
+      : this.#statement(
+          `SELECT * FROM turns
+           WHERE conversation_id = ?
+             AND (started_at < ? OR (started_at = ? AND turn_id < ?))
+           ORDER BY started_at DESC, turn_id DESC
+           LIMIT ?`,
+        ).all(
+          id,
+          cursor.startedAt,
+          cursor.startedAt,
+          cursor.turnId,
+          limit + 1,
+        )) as unknown as TurnRow[]
+    const selected = rows.slice(0, limit)
+    const oldest = selected.at(-1)
+    return {
+      turns: selected.map(turnFromRow).reverse(),
+      hasMoreBefore: rows.length > limit,
+      ...(rows.length <= limit || oldest === undefined
+        ? {}
+        : {
+            before: {
+              startedAt: TimestampSchema.parse(oldest.started_at),
+              turnId: TurnIdSchema.parse(oldest.turn_id),
+            },
+          }),
+    }
   }
 
   countTurns(conversationId: ConversationId): number {

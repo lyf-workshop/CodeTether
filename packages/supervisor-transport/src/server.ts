@@ -64,6 +64,22 @@ export interface SupervisorHostReadSurface {
     projectId: string,
     conversationId: string,
   ): unknown | Promise<unknown>
+  readConversationHistory(
+    machineId: string,
+    projectId: string,
+    conversationId: string,
+    page: { readonly limit: number; readonly cursor?: string },
+  ): unknown | Promise<unknown>
+  readConversationLive(
+    machineId: string,
+    projectId: string,
+    conversationId: string,
+    query: {
+      readonly cursor: string
+      readonly limit: number
+      readonly waitMs: number
+    },
+  ): unknown | Promise<unknown>
 }
 
 export interface SupervisorServerActivation {
@@ -399,6 +415,31 @@ export class SupervisorServer {
             request.conversationId,
           )
           break
+        case 'conversation.history':
+          data = await this.#options.reads.readConversationHistory(
+            request.machineId,
+            request.projectId,
+            request.conversationId,
+            {
+              limit: request.limit,
+              ...(request.cursor === undefined
+                ? {}
+                : { cursor: request.cursor }),
+            },
+          )
+          break
+        case 'conversation.live.read':
+          data = await this.#options.reads.readConversationLive(
+            request.machineId,
+            request.projectId,
+            request.conversationId,
+            {
+              cursor: request.cursor,
+              limit: request.limit,
+              waitMs: request.waitMs,
+            },
+          )
+          break
       }
       await connection.send({
         type: 'supervisor.response',
@@ -443,6 +484,8 @@ function supervisorReadRequestFields(
         projectId: request.projectId,
       }
     case 'conversation.get':
+    case 'conversation.history':
+    case 'conversation.live.read':
       return {
         machineId: request.machineId,
         projectId: request.projectId,
@@ -463,10 +506,74 @@ function supervisorReadResultFields(
       : Array.isArray(value.machines)
         ? value.machines
         : undefined
+  const transcriptEntries = remoteTranscriptEntryCount(value)
   return {
     ...(Array.isArray(collection) ? { resultCount: collection.length } : {}),
+    ...(transcriptEntries === undefined
+      ? {}
+      : { resultCount: transcriptEntries }),
     ...(typeof value.hasMore === 'boolean' ? { hasMore: value.hasMore } : {}),
+    ...(typeof value.hasMoreBefore === 'boolean'
+      ? { hasMoreBefore: value.hasMoreBefore }
+      : {}),
+    ...(typeof value.historyComplete === 'boolean'
+      ? { historyComplete: value.historyComplete }
+      : {}),
+    ...(Array.isArray(value.events)
+      ? { resultCount: value.events.length }
+      : {}),
+    ...(typeof value.resetRequired === 'boolean'
+      ? { resetRequired: value.resetRequired }
+      : {}),
+    ...(typeof value.active === 'boolean' ? { active: value.active } : {}),
+    ...(typeof value.timedOut === 'boolean'
+      ? { timedOut: value.timedOut }
+      : {}),
   }
+}
+
+function remoteTranscriptEntryCount(
+  value: Record<string, unknown>,
+): number | undefined {
+  if (value.source === 'native_provider') {
+    const native = record(value.native)
+    return native === undefined || !Array.isArray(native.entries)
+      ? undefined
+      : native.entries.length
+  }
+  if (value.source !== 'durable') return undefined
+  const runtime = record(value.runtime)
+  if (runtime === undefined || !Array.isArray(runtime.turns)) return undefined
+  const messages = Array.isArray(runtime.messages) ? runtime.messages : []
+  const tools = Array.isArray(runtime.tools) ? runtime.tools : []
+  const changes = Array.isArray(runtime.changes) ? runtime.changes : []
+  let count = 0
+  for (const candidate of runtime.turns) {
+    const turn = record(candidate)
+    if (turn === undefined || typeof turn.turnId !== 'string') continue
+    if (record(turn.input) !== undefined) count += 1
+    const activities = [messages, tools, changes].reduce(
+      (total, values) =>
+        total +
+        values.filter((entry) => record(entry)?.turnId === turn.turnId).length,
+      0,
+    )
+    count += activities
+    if (
+      activities === 0 &&
+      typeof turn.finalMessage === 'string' &&
+      turn.finalMessage.length > 0
+    ) {
+      count += 1
+    }
+  }
+  return count
+}
+
+function record(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined
 }
 
 function supervisorReadErrorCode(

@@ -141,6 +141,7 @@ export class ConnectedSupervisorSession {
   readonly transport: 'direct' | 'relay'
   readonly #connection: FramedMachineConnection
   readonly #onClose: (() => void) | undefined
+  #requestQueue: Promise<void> = Promise.resolve()
   #closed = false
 
   constructor(
@@ -217,6 +218,48 @@ export class ConnectedSupervisorSession {
     )
   }
 
+  async readConversationHistory(
+    machineId: string,
+    projectId: string,
+    conversationId: string,
+    page: { readonly limit: number; readonly cursor?: string },
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    return await this.#request(
+      {
+        operation: 'conversation.history',
+        machineId,
+        projectId,
+        conversationId,
+        ...page,
+      },
+      signal,
+    )
+  }
+
+  async readConversationLive(
+    machineId: string,
+    projectId: string,
+    conversationId: string,
+    query: {
+      readonly cursor: string
+      readonly limit: number
+      readonly waitMs: number
+    },
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    return await this.#request(
+      {
+        operation: 'conversation.live.read',
+        machineId,
+        projectId,
+        conversationId,
+        ...query,
+      },
+      signal,
+    )
+  }
+
   close(): void {
     if (this.#closed) return
     this.#closed = true
@@ -225,6 +268,21 @@ export class ConnectedSupervisorSession {
   }
 
   async #request(
+    input: SupervisorRequestInput,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    const read = this.#requestQueue.then(async () => {
+      signal?.throwIfAborted()
+      return await this.#requestNow(input, signal)
+    })
+    this.#requestQueue = read.then(
+      () => undefined,
+      () => undefined,
+    )
+    return await read
+  }
+
+  async #requestNow(
     input: SupervisorRequestInput,
     signal?: AbortSignal,
   ): Promise<unknown> {

@@ -76,6 +76,8 @@ import {
   ProjectIdSchema,
   ReadNativeTranscriptQuerySchema,
   ReadNativeTranscriptResponseSchema,
+  ReadRemoteConversationHistoryQuerySchema,
+  ReadRemoteConversationLiveQuerySchema,
   RenameConversationRequestSchema,
   RenameConversationResponseSchema,
   StartTurnRequestSchema,
@@ -364,8 +366,8 @@ export class LocalHttpServer {
         url.pathname,
         /^\/api\/v1\/machines\/([^/]+)\/projects$/u,
       )
-      const supervisorDirectoryListRoute =
-        /^\/api\/v1\/remote-supervisor\/sessions\/[^/]+\/machines\/[^/]+\/projects(?:\/[^/]+\/conversations)?$/u.test(
+      const supervisorReadQueryRoute =
+        /^\/api\/v1\/remote-supervisor\/sessions\/[^/]+\/machines\/[^/]+\/projects(?:\/[^/]+\/conversations(?:\/[^/]+\/(?:history|live))?)?$/u.test(
           url.pathname,
         )
       const acceptsQuery =
@@ -374,7 +376,7 @@ export class LocalHttpServer {
           projectConversationSearchRoute !== undefined ||
           providerSessionsRoute !== undefined ||
           nativeTranscriptRoute !== undefined ||
-          supervisorDirectoryListRoute ||
+          supervisorReadQueryRoute ||
           url.pathname === '/api/v1/doctor' ||
           url.pathname === '/api/v1/attention')
       if (url.search !== '' && !acceptsQuery) {
@@ -551,6 +553,60 @@ export class LocalHttpServer {
         url.pathname,
         /^\/api\/v1\/remote-supervisor\/sessions\/([^/]+)\/machines\/([^/]+)\/projects\/([^/]+)\/conversations\/([^/]+)$/u,
       )
+      const supervisorConversationHistoryRoute = this.#http.matchPath(
+        url.pathname,
+        /^\/api\/v1\/remote-supervisor\/sessions\/([^/]+)\/machines\/([^/]+)\/projects\/([^/]+)\/conversations\/([^/]+)\/history$/u,
+      )
+      if (
+        request.method === 'GET' &&
+        supervisorConversationHistoryRoute !== undefined &&
+        this.#supervisorTransport !== undefined
+      ) {
+        const query = this.#http.parseValidatedQuery(
+          url.searchParams,
+          ReadRemoteConversationHistoryQuerySchema,
+        )
+        this.#http.writeJson(
+          response,
+          200,
+          await this.#supervisorTransport.readRemoteConversationHistory(
+            supervisorConversationHistoryRoute[0]!,
+            supervisorConversationHistoryRoute[1]!,
+            supervisorConversationHistoryRoute[2]!,
+            supervisorConversationHistoryRoute[3]!,
+            query,
+          ),
+          context.allowedOrigin,
+        )
+        return
+      }
+      const supervisorConversationLiveRoute = this.#http.matchPath(
+        url.pathname,
+        /^\/api\/v1\/remote-supervisor\/sessions\/([^/]+)\/machines\/([^/]+)\/projects\/([^/]+)\/conversations\/([^/]+)\/live$/u,
+      )
+      if (
+        request.method === 'GET' &&
+        supervisorConversationLiveRoute !== undefined &&
+        this.#supervisorTransport !== undefined
+      ) {
+        const query = this.#http.parseValidatedQuery(
+          url.searchParams,
+          ReadRemoteConversationLiveQuerySchema,
+        )
+        this.#http.writeJson(
+          response,
+          200,
+          await this.#supervisorTransport.readRemoteConversationLive(
+            supervisorConversationLiveRoute[0]!,
+            supervisorConversationLiveRoute[1]!,
+            supervisorConversationLiveRoute[2]!,
+            supervisorConversationLiveRoute[3]!,
+            query,
+          ),
+          context.allowedOrigin,
+        )
+        return
+      }
       if (
         request.method === 'GET' &&
         supervisorConversationDetailRoute !== undefined &&

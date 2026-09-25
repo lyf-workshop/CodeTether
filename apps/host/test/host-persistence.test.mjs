@@ -15,6 +15,7 @@ import {
   DURABLE_TURN_SNAPSHOT_VERSION,
   initialTurnPresentation,
   readDurableConversationDetail,
+  readDurableConversationHistoryPage,
 } from '../dist/persistence/index.js'
 import { normalizeTrustedProjectRoot } from '../dist/project-path.js'
 
@@ -1778,6 +1779,240 @@ test('startup loads only the recent runtime window while SQLite keeps full histo
     assert.equal(runtime.history.evictedTurns, 5)
     assert.equal(serviceFixture.store.countTurns(conversationId), 25)
     await serviceFixture.service.close()
+  } finally {
+    await removeEnvironment(environment.directory)
+  }
+})
+
+test('durable transcript keyset pages reach all 130 Turns without gaps or duplicates', async () => {
+  const environment = await createEnvironment()
+  try {
+    const store = ConversationStore.open({
+      databasePath: environment.databasePath,
+    })
+    const conversationId = 'conv_long_remote_history'
+    const projectId = 'proj_long_remote_history'
+    const projectRoot = normalizeTrustedProjectRoot(environment.workspace)
+    const machine = store.listMachines()[0]
+    assert.ok(machine)
+    store.createProject({
+      projectId,
+      name: 'Long transcript',
+      location: {
+        projectId,
+        machineId: machine.machineId,
+        rootPath: projectRoot.rootPath,
+        rootPathKey: projectRoot.rootPathKey,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    })
+    store.createConversation({
+      conversationId,
+      projectId,
+      machineId: machine.machineId,
+      title: 'Long remote history',
+      provider: 'codex',
+      providerThreadId: 'provider-thread-long-remote-history',
+      cwd: environment.workspace,
+      status: 'completed',
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      lastActivityAt: timestamp,
+    })
+    for (let index = 0; index < 130; index += 1) {
+      const turnId = `turn_long_remote_${String(index).padStart(3, '0')}`
+      const turnTimestamp = new Date(
+        Date.parse(timestamp) + index * 1_000,
+      ).toISOString()
+      const input = {
+        type: 'text',
+        text: `Prompt ${String(index)}`,
+        timestamp: turnTimestamp,
+      }
+      const turn = {
+        turnId,
+        conversationId,
+        status: 'completed',
+        input,
+        startedAt: turnTimestamp,
+        completedAt: turnTimestamp,
+        finalMessage: `Result ${String(index)}`,
+      }
+      store.createTurn({
+        turnId,
+        conversationId,
+        providerTurnId: `provider-turn-long-${String(index)}`,
+        input,
+        status: 'completed',
+        startedAt: turnTimestamp,
+        completedAt: turnTimestamp,
+        snapshotVersion: DURABLE_TURN_SNAPSHOT_VERSION,
+        snapshot: initialTurnPresentation(turn),
+      })
+    }
+
+    const ids = []
+    let before
+    let pages = 0
+    do {
+      const page = readDurableConversationHistoryPage(store, conversationId, {
+        limit: 17,
+        ...(before === undefined ? {} : { before }),
+      })
+      assert.ok(page)
+      pages += 1
+      ids.unshift(...page.runtime.turns.map((turn) => String(turn.turnId)))
+      before = page.before
+      assert.equal(page.hasMoreBefore, before !== undefined)
+    } while (before !== undefined)
+
+    assert.equal(pages, 8)
+    assert.equal(ids.length, 130)
+    assert.equal(new Set(ids).size, 130)
+    assert.equal(ids[0], 'turn_long_remote_000')
+    assert.equal(ids[64], 'turn_long_remote_064')
+    assert.equal(ids[129], 'turn_long_remote_129')
+    store.close()
+  } finally {
+    await removeEnvironment(environment.directory)
+  }
+})
+
+test('Supervisor history watermark feeds bounded live replay without owning execution', async () => {
+  const environment = await createEnvironment()
+  try {
+    const fixture = await createService(
+      environment,
+      '99999999-9999-4999-8999-999999999999',
+    )
+    const created = await createConversation(
+      fixture.service,
+      environment.workspace,
+      'act_remote_live_create01',
+    )
+    const conversation = created.data.conversation
+    const machine = fixture.service.listMachines().machines[0]
+    assert.ok(machine)
+    const providerCreates = fixture.runtime.conversationCalls.length
+    const history = await fixture.service.readSupervisorConversationHistory(
+      machine.machineId,
+      conversation.projectId,
+      conversation.conversationId,
+      { limit: 20 },
+    )
+    assert.equal(history.source, 'durable')
+    assert.equal(history.historyComplete, true)
+    assert.equal(fixture.runtime.conversationCalls.length, providerCreates)
+    await assert.rejects(
+      fixture.service.readSupervisorConversationHistory(
+        machine.machineId,
+        'proj_wrong_remote_history',
+        conversation.conversationId,
+        { limit: 20 },
+      ),
+      (error) =>
+        error instanceof HostServiceError && error.code === 'not_found',
+    )
+    await assert.rejects(
+      fixture.service.readSupervisorConversationHistory(
+        'machine_wrong_remote_history',
+        conversation.projectId,
+        conversation.conversationId,
+        { limit: 20 },
+      ),
+      (error) =>
+        error instanceof HostServiceError && error.code === 'not_found',
+    )
+
+    const started = await startTurn(
+      fixture.service,
+      conversation.conversationId,
+      'act_remote_live_turn01',
+      'Observe this Turn',
+    )
+    const providerTurnId = fixture.runtime.turnCalls.at(-1).providerTurnId
+    fixture.runtime.emit(
+      providerEvent('message.delta', 'provider-thread-1', providerTurnId, {
+        itemId: 'provider-live-message',
+        delta: 'live one',
+      }),
+    )
+    const firstLive = await fixture.service.readSupervisorConversationLive(
+      machine.machineId,
+      conversation.projectId,
+      conversation.conversationId,
+      { cursor: history.liveCursor, limit: 1, waitMs: 0 },
+    )
+    assert.equal(firstLive.resetRequired, false)
+    assert.equal(firstLive.active, true)
+    assert.equal(firstLive.events.length, 1)
+    const live = await fixture.service.readSupervisorConversationLive(
+      machine.machineId,
+      conversation.projectId,
+      conversation.conversationId,
+      { cursor: firstLive.cursor, limit: 64, waitMs: 0 },
+    )
+    assert.equal(live.resetRequired, false)
+    assert.equal(live.active, true)
+    assert.equal(
+      [...firstLive.events, ...live.events].some(
+        (event) => event.type === 'turn.started',
+      ),
+      true,
+    )
+    assert.equal(
+      [...firstLive.events, ...live.events].some(
+        (event) => event.type === 'message.delta',
+      ),
+      true,
+    )
+    assert.equal(
+      new Set(
+        [...firstLive.events, ...live.events].map(({ eventId }) => eventId),
+      ).size,
+      firstLive.events.length + live.events.length,
+    )
+    assert.equal(fixture.runtime.turnCalls.length, 1)
+
+    completeRichTurn(
+      fixture.runtime,
+      'provider-thread-1',
+      providerTurnId,
+      'live',
+    )
+    const terminal = await fixture.service.readSupervisorConversationLive(
+      machine.machineId,
+      conversation.projectId,
+      conversation.conversationId,
+      { cursor: live.cursor, limit: 64, waitMs: 0 },
+    )
+    assert.equal(terminal.active, false)
+    assert.equal(
+      terminal.events.some((event) => event.type === 'message.completed'),
+      true,
+    )
+    assert.equal(
+      terminal.events.some((event) => event.type === 'turn.completed'),
+      true,
+    )
+    const reset = await fixture.service.readSupervisorConversationLive(
+      machine.machineId,
+      conversation.projectId,
+      conversation.conversationId,
+      {
+        cursor: '00000000-0000-4000-8000-000000000000:0',
+        limit: 64,
+        waitMs: 0,
+      },
+    )
+    assert.equal(reset.resetRequired, true)
+    assert.deepEqual(reset.events, [])
+    assert.equal(reset.active, false)
+    assert.equal(started.status, 'accepted')
+    await fixture.service.close()
   } finally {
     await removeEnvironment(environment.directory)
   }

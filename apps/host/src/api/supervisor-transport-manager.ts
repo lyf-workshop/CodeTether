@@ -200,6 +200,20 @@ export class SupervisorTransportManager {
             projectId as never,
             conversationId as never,
           ),
+        readConversationHistory: (machineId, projectId, conversationId, page) =>
+          options.service.readSupervisorConversationHistory(
+            machineId as never,
+            projectId as never,
+            conversationId as never,
+            page as never,
+          ),
+        readConversationLive: (machineId, projectId, conversationId, query) =>
+          options.service.readSupervisorConversationLive(
+            machineId as never,
+            projectId as never,
+            conversationId as never,
+            query as never,
+          ),
       },
       onDiagnostic(event, fields) {
         process.stderr.write(
@@ -483,6 +497,39 @@ export class SupervisorTransportManager {
   ): Promise<unknown> {
     return await this.#withRemoteSession(sessionId, (session) =>
       session.getConversation(machineId, projectId, conversationId),
+    )
+  }
+
+  async readRemoteConversationHistory(
+    sessionId: string,
+    machineId: string,
+    projectId: string,
+    conversationId: string,
+    page: { readonly limit: number; readonly cursor?: string },
+  ): Promise<unknown> {
+    return await this.#withRemoteSession(sessionId, (session) =>
+      session.readConversationHistory(
+        machineId,
+        projectId,
+        conversationId,
+        page,
+      ),
+    )
+  }
+
+  async readRemoteConversationLive(
+    sessionId: string,
+    machineId: string,
+    projectId: string,
+    conversationId: string,
+    query: {
+      readonly cursor: string
+      readonly limit: number
+      readonly waitMs: number
+    },
+  ): Promise<unknown> {
+    return await this.#withRemoteSession(sessionId, (session) =>
+      session.readConversationLive(machineId, projectId, conversationId, query),
     )
   }
 

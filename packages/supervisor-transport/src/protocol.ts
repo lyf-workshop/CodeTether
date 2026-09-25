@@ -192,6 +192,18 @@ const supervisorDirectoryCursorSchema = z
   .min(1)
   .max(2_048)
   .regex(/^[A-Za-z0-9_-]+$/u)
+const supervisorHistoryCursorSchema = z
+  .string()
+  .min(1)
+  .max(256)
+  .regex(/^history_[A-Za-z0-9_-]+$/u)
+const supervisorLiveCursorSchema = z
+  .string()
+  .min(1)
+  .max(128)
+  .regex(
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}:(?:0|[1-9][0-9]*)$/iu,
+  )
 
 export const supervisorRequestSchema = z.discriminatedUnion('operation', [
   supervisorRequestBaseSchema
@@ -236,6 +248,27 @@ export const supervisorRequestSchema = z.discriminatedUnion('operation', [
       machineId: opaqueId('machine'),
       projectId: opaqueId('proj'),
       conversationId: opaqueId('conv'),
+    })
+    .strict(),
+  supervisorRequestBaseSchema
+    .extend({
+      operation: z.literal('conversation.history'),
+      machineId: opaqueId('machine'),
+      projectId: opaqueId('proj'),
+      conversationId: opaqueId('conv'),
+      limit: z.number().int().min(1).max(50),
+      cursor: supervisorHistoryCursorSchema.optional(),
+    })
+    .strict(),
+  supervisorRequestBaseSchema
+    .extend({
+      operation: z.literal('conversation.live.read'),
+      machineId: opaqueId('machine'),
+      projectId: opaqueId('proj'),
+      conversationId: opaqueId('conv'),
+      cursor: supervisorLiveCursorSchema,
+      limit: z.number().int().min(1).max(64),
+      waitMs: z.number().int().min(0).max(15_000),
     })
     .strict(),
 ])

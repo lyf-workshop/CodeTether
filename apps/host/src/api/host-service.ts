@@ -31,6 +31,7 @@ import {
   EnrollMachineRelayResponseSchema,
   EpochIdSchema,
   formatLastEventId,
+  parseLastEventId,
   GetConversationResponseSchema,
   GetDoctorResponseSchema,
   GetMachineResponseSchema,
@@ -42,6 +43,10 @@ import {
   NativeTranscriptEntryIdSchema,
   ReadNativeTranscriptQuerySchema,
   ReadNativeTranscriptResponseSchema,
+  ReadRemoteConversationHistoryQuerySchema,
+  ReadRemoteConversationLiveQuerySchema,
+  RemoteConversationHistoryPageSchema,
+  RemoteConversationLivePageSchema,
   RemoveMachineRelayResponseSchema,
   RefreshMachineProvidersResponseSchema,
   SelectMachineProviderInstallationResponseSchema,
@@ -87,6 +92,7 @@ import {
   type DisconnectMachineRelayResponse,
   type EnrollMachineRelayRequest,
   type EnrollMachineRelayResponse,
+  type EventCursor,
   type HostError,
   type HostErrorCode,
   type HostEvent,
@@ -129,6 +135,10 @@ import {
   type NativeTranscriptCursor,
   type ReadNativeTranscriptQuery,
   type ReadNativeTranscriptResponse,
+  type ReadRemoteConversationHistoryQuery,
+  type ReadRemoteConversationLiveQuery,
+  type RemoteConversationHistoryPage,
+  type RemoteConversationLivePage,
   type RemoteMachineConnection,
   type RelayMachineConnectivity,
   type MachinePairingAttemptId,
@@ -195,6 +205,7 @@ import {
   initialTurnPresentation,
   parseDurableTurnPresentation,
   readDurableConversationDetail,
+  readDurableConversationHistoryPage,
   restoreDurableConversations,
   type DurableApprovalHistoryRecord,
   type DurableConversation,
@@ -248,6 +259,7 @@ import { providerDescriptorForSelectedInstallation } from './provider-effective-
 import { ProviderRegistry, providerSessionKey } from './provider-registry.js'
 import { ProviderSessionDiscoveryRegistry } from './provider-session-discovery-registry.js'
 import { NativeTranscriptCursorRegistry } from './native-transcript-registry.js'
+import { ConversationHistoryCursorRegistry } from './conversation-history-registry.js'
 import {
   decodeRemoteProviderSessionBinding,
   encodeRemoteProviderSessionBinding,
@@ -402,6 +414,7 @@ export class HostService {
   >()
   readonly #providerSessionCandidates: ProviderSessionDiscoveryRegistry
   readonly #nativeTranscriptCursors: NativeTranscriptCursorRegistry
+  readonly #conversationHistoryCursors: ConversationHistoryCursorRegistry
   readonly #providerSessionScans = new Map<
     string,
     InFlightProviderSessionScan
@@ -505,6 +518,9 @@ export class HostService {
     })
     this.#nativeTranscriptCursors = new NativeTranscriptCursorRegistry(() =>
       this.#now().getTime(),
+    )
+    this.#conversationHistoryCursors = new ConversationHistoryCursorRegistry(
+      () => this.#now().getTime(),
     )
     for (const discovery of options.providerSessionDiscoveries ?? []) {
       if (this.#providerSessionDiscoveries.has(discovery.provider)) {
@@ -1971,6 +1987,288 @@ export class HostService {
       )
     }
     return { protocolVersion, conversation }
+  }
+
+  async readSupervisorConversationHistory(
+    machineId: MachineId,
+    projectId: ProjectId,
+    conversationId: ConversationId,
+    input: ReadRemoteConversationHistoryQuery,
+  ): Promise<RemoteConversationHistoryPage> {
+    const persistence = this.#requireSupervisorDirectoryPersistence()
+    const machine = MachineIdSchema.parse(machineId)
+    const project = ProjectIdSchema.parse(projectId)
+    const conversation = ConversationIdSchema.parse(conversationId)
+    const directory = this.getSupervisorConversation(
+      machine,
+      project,
+      conversation,
+    ).conversation
+    const query = ReadRemoteConversationHistoryQuerySchema.parse(input)
+    const scope = `${String(machine)}\0${String(project)}\0${String(conversation)}`
+    const position =
+      query.cursor === undefined
+        ? undefined
+        : this.#conversationHistoryCursors.resolve(query.cursor, scope)
+    if (query.cursor !== undefined && position === undefined) {
+      throw new HostServiceError(
+        'invalid_request',
+        'Conversation history cursor is invalid or expired',
+        400,
+      )
+    }
+
+    const durableCount = persistence.countTurns(conversation)
+    if (
+      position?.source === 'durable' ||
+      (position === undefined && durableCount > 0)
+    ) {
+      const page = readDurableConversationHistoryPage(
+        persistence,
+        conversation,
+        {
+          limit: query.limit,
+          ...(position?.source !== 'durable'
+            ? {}
+            : {
+                before: {
+                  startedAt: position.startedAt,
+                  turnId: position.turnId,
+                },
+              }),
+          maxEntries: 2_048,
+        },
+      )
+      if (page === undefined) {
+        throw new HostServiceError(
+          'not_found',
+          'Conversation history was not found',
+          404,
+        )
+      }
+      const beforeCursor =
+        page.hasMoreBefore && page.before !== undefined
+          ? this.#conversationHistoryCursors.create(scope, {
+              source: 'durable',
+              ...page.before,
+            })
+          : directory.origin === 'adopted_native'
+            ? this.#conversationHistoryCursors.create(scope, {
+                source: 'native_provider',
+              })
+            : undefined
+      return RemoteConversationHistoryPageSchema.parse({
+        protocolVersion,
+        conversationId: conversation,
+        source: 'durable',
+        runtime: page.runtime,
+        ...(beforeCursor === undefined ? {} : { beforeCursor }),
+        hasMoreBefore: beforeCursor !== undefined,
+        historyComplete: beforeCursor === undefined,
+        liveCursor: formatLastEventId({
+          epoch: this.publisher.epoch,
+          seq: this.publisher.currentSeq,
+        }),
+      })
+    }
+
+    if (
+      directory.origin === 'adopted_native' &&
+      (position === undefined || position.source === 'native_provider')
+    ) {
+      const native = await this.readNativeTranscript(conversation, {
+        limit: query.limit,
+        ...(position?.source !== 'native_provider' ||
+        position.cursor === undefined
+          ? {}
+          : { cursor: position.cursor }),
+      })
+      const beforeCursor =
+        native.nextCursor === undefined
+          ? undefined
+          : this.#conversationHistoryCursors.create(scope, {
+              source: 'native_provider',
+              cursor: native.nextCursor,
+            })
+      return RemoteConversationHistoryPageSchema.parse({
+        protocolVersion,
+        conversationId: conversation,
+        source: 'native_provider',
+        native,
+        ...(beforeCursor === undefined ? {} : { beforeCursor }),
+        hasMoreBefore: beforeCursor !== undefined,
+        historyComplete: native.complete && beforeCursor === undefined,
+        liveCursor: formatLastEventId({
+          epoch: this.publisher.epoch,
+          seq: this.publisher.currentSeq,
+        }),
+      })
+    }
+
+    const empty = readDurableConversationHistoryPage(
+      persistence,
+      conversation,
+      { limit: query.limit, maxEntries: 2_048 },
+    )
+    if (empty === undefined) {
+      throw new HostServiceError(
+        'not_found',
+        'Conversation history was not found',
+        404,
+      )
+    }
+    return RemoteConversationHistoryPageSchema.parse({
+      protocolVersion,
+      conversationId: conversation,
+      source: 'durable',
+      runtime: empty.runtime,
+      hasMoreBefore: false,
+      historyComplete: true,
+      liveCursor: formatLastEventId({
+        epoch: this.publisher.epoch,
+        seq: this.publisher.currentSeq,
+      }),
+    })
+  }
+
+  async readSupervisorConversationLive(
+    machineId: MachineId,
+    projectId: ProjectId,
+    conversationId: ConversationId,
+    input: ReadRemoteConversationLiveQuery,
+  ): Promise<RemoteConversationLivePage> {
+    const machine = MachineIdSchema.parse(machineId)
+    const project = ProjectIdSchema.parse(projectId)
+    const conversation = ConversationIdSchema.parse(conversationId)
+    this.getSupervisorConversation(machine, project, conversation)
+    const query = ReadRemoteConversationLiveQuerySchema.parse(input)
+    const cursor = parseLastEventId(query.cursor)
+    if (cursor === null) {
+      throw new HostServiceError(
+        'invalid_request',
+        'Conversation live cursor is invalid',
+        400,
+      )
+    }
+    const initial = this.#conversationLiveReplay(
+      conversation,
+      cursor,
+      query.limit,
+    )
+    if (
+      initial.resetRequired ||
+      initial.events.length > 0 ||
+      !initial.active ||
+      query.waitMs === 0
+    ) {
+      return RemoteConversationLivePageSchema.parse({
+        ...initial,
+        timedOut: false,
+      })
+    }
+
+    return await new Promise<RemoteConversationLivePage>((resolve) => {
+      let settled = false
+      const finish = (value: RemoteConversationLivePage): void => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        unsubscribe()
+        resolve(value)
+      }
+      const unsubscribe = this.publisher.subscribe((event) => {
+        if (
+          event.type !== 'stream.reset' &&
+          event.conversationId !== conversation
+        ) {
+          return
+        }
+        const next = this.#conversationLiveReplay(
+          conversation,
+          cursor,
+          query.limit,
+        )
+        finish(
+          RemoteConversationLivePageSchema.parse({
+            ...next,
+            timedOut: false,
+          }),
+        )
+      })
+      const timer = setTimeout(() => {
+        const next = this.#conversationLiveReplay(
+          conversation,
+          cursor,
+          query.limit,
+        )
+        finish(
+          RemoteConversationLivePageSchema.parse({
+            ...next,
+            timedOut:
+              !next.resetRequired && next.events.length === 0 && next.active,
+          }),
+        )
+      }, query.waitMs)
+      timer.unref()
+    })
+  }
+
+  #conversationLiveReplay(
+    conversationId: ConversationId,
+    cursor: EventCursor,
+    limit: number,
+  ): Omit<RemoteConversationLivePage, 'timedOut'> {
+    const replay = this.publisher.replayAfter(cursor)
+    const currentCursor = formatLastEventId({
+      epoch: replay.epoch,
+      seq: replay.currentSeq,
+    })
+    const active = this.#supervisorConversationActive(conversationId)
+    if (replay.kind === 'reset') {
+      return {
+        protocolVersion,
+        conversationId,
+        cursor: currentCursor,
+        events: [],
+        resetRequired: true,
+        active,
+      }
+    }
+    if (replay.events.some((event) => event.type === 'stream.reset')) {
+      return {
+        protocolVersion,
+        conversationId,
+        cursor: currentCursor,
+        events: [],
+        resetRequired: true,
+        active,
+      }
+    }
+    const matching = replay.events.filter(
+      (event) => event.conversationId === conversationId,
+    )
+    const events = matching.slice(0, limit)
+    return {
+      protocolVersion,
+      conversationId,
+      cursor:
+        matching.length > limit && events.at(-1) !== undefined
+          ? formatLastEventId({
+              epoch: replay.epoch,
+              seq: events.at(-1)!.seq,
+            })
+          : currentCursor,
+      events,
+      resetRequired: false,
+      active,
+    }
+  }
+
+  #supervisorConversationActive(conversationId: ConversationId): boolean {
+    const conversation = this.#persistence?.getConversation(conversationId)
+    return (
+      conversation?.status === 'running' || conversation?.status === 'waiting'
+    )
   }
 
   async registerProjectLocation(
@@ -6622,6 +6920,7 @@ export class HostService {
       this.#providerSessionCandidates.clear()
       this.#nativeTranscriptReads.clear()
       this.#nativeTranscriptCursors.clear()
+      this.#conversationHistoryCursors.clear()
     }
     if (failures.length === 1) throw failures[0]
     if (failures.length > 1) {

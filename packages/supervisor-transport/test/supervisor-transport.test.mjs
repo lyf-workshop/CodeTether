@@ -71,6 +71,28 @@ test('direct Supervisor transport verifies exact identities and exposes only rea
       ),
       { conversationId: `conv_${'c'.repeat(32)}` },
     )
+    assert.deepEqual(
+      await connected.readConversationHistory(
+        `machine_${'m'.repeat(32)}`,
+        `proj_${'p'.repeat(32)}`,
+        `conv_${'c'.repeat(32)}`,
+        { limit: 20 },
+      ),
+      { entries: 20, historyComplete: false },
+    )
+    assert.deepEqual(
+      await connected.readConversationLive(
+        `machine_${'m'.repeat(32)}`,
+        `proj_${'p'.repeat(32)}`,
+        `conv_${'c'.repeat(32)}`,
+        {
+          cursor: '123e4567-e89b-42d3-a456-426614174000:0',
+          limit: 64,
+          waitMs: 0,
+        },
+      ),
+      { events: [], active: false },
+    )
     connected.close()
     assert.equal(
       supervisorRequestSchema.safeParse({
@@ -82,11 +104,12 @@ test('direct Supervisor transport verifies exact identities and exposes only rea
       false,
     )
     for (const operation of [
-      'conversation.history',
       'conversation.send',
       'conversation.resume',
       'conversation.create',
+      'turn.cancel',
       'provider.start',
+      'tool.approve',
       'shell.execute',
       'filesystem.write',
     ]) {
@@ -190,6 +213,11 @@ async function createFixture(options = {}) {
         hasMore: false,
       }),
       getConversation: () => ({ conversationId: `conv_${'c'.repeat(32)}` }),
+      readConversationHistory: () => ({
+        entries: 20,
+        historyComplete: false,
+      }),
+      readConversationLive: () => ({ events: [], active: false }),
     },
   })
   const address = await server.start()

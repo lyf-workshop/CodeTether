@@ -22,6 +22,7 @@ import {
 import {
   type ConversationStore,
   type DurableConversation,
+  type DurableTurnPageCursor,
   type DurableTurnSnapshot,
 } from './conversation-store.js'
 
@@ -78,6 +79,13 @@ export interface DurableConversationDetail {
     readonly retainedTurns: number
     readonly hasOlder: boolean
   }
+}
+
+export interface DurableConversationHistoryPage {
+  readonly record: ConversationRecord
+  readonly runtime: ConversationRuntimeSnapshot
+  readonly hasMoreBefore: boolean
+  readonly before?: DurableTurnPageCursor
 }
 
 export interface RestoreDurableOptions {
@@ -378,6 +386,66 @@ export function readDurableConversationDetail(
   }
 }
 
+/**
+ * Reads one stable newest-to-oldest Turn window without hydrating or resuming
+ * its Provider. Entries stay in the same normalized runtime representation
+ * used by the local Conversation detail surface.
+ */
+export function readDurableConversationHistoryPage(
+  store: ConversationStore,
+  conversationId: ConversationId,
+  options: {
+    readonly limit: number
+    readonly before?: DurableTurnPageCursor
+    readonly maxEntries?: number
+  },
+): DurableConversationHistoryPage | undefined {
+  assertBoundedPositiveInteger(
+    options.limit,
+    conversationRuntimeWireLimits.turns,
+    'limit',
+  )
+  const maxEntries =
+    options.maxEntries ?? DURABLE_CONVERSATION_DETAIL_DEFAULT_ENTRIES
+  assertBoundedPositiveInteger(
+    maxEntries,
+    Math.min(
+      conversationRuntimeWireLimits.messages,
+      conversationRuntimeWireLimits.tools,
+      conversationRuntimeWireLimits.changes,
+    ),
+    'maxEntries',
+  )
+  const conversation = store.getConversation(conversationId)
+  if (conversation === undefined) return undefined
+  if (conversation.status === 'creating') {
+    throw new Error(
+      `Durable Conversation ${String(conversationId)} is not ready`,
+    )
+  }
+  const page = store.listTurnHistoryPage(
+    conversation.conversationId,
+    options.limit,
+    options.before,
+  )
+  const reconstructed = reconstructDurableConversation(
+    store,
+    conversation,
+    {
+      maxTurns: options.limit,
+      maxEntries,
+      compactOrders: true,
+    },
+    page.turns,
+  )
+  return {
+    record: reconstructed.record,
+    runtime: reconstructed.runtime,
+    hasMoreBefore: page.hasMoreBefore,
+    ...(page.before === undefined ? {} : { before: page.before }),
+  }
+}
+
 function restoreConversation(
   store: ConversationStore,
   conversation: DurableConversation & { readonly providerThreadId: string },
@@ -421,11 +489,11 @@ function reconstructDurableConversation(
   options: Pick<RestoreDurableOptions, 'maxTurns' | 'maxEntries'> & {
     readonly compactOrders?: boolean
   },
+  selectedTurns?: readonly DurableTurnSnapshot[],
 ): ReconstructedDurableConversation {
-  const durableTurns = store.listRecentTurns(
-    conversation.conversationId,
-    options.maxTurns,
-  )
+  const durableTurns =
+    selectedTurns ??
+    store.listRecentTurns(conversation.conversationId, options.maxTurns)
   const presentations = durableTurns.map((turn) => ({
     durable: turn,
     presentation: parseSnapshot(turn),

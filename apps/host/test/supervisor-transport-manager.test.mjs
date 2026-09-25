@@ -99,6 +99,8 @@ test('forced-remote manager reads Host state without using local HTTP product da
     project: 0,
     conversations: 0,
     conversation: 0,
+    history: 0,
+    live: 0,
   }
   const service = {
     getHostIdentity: () => identity,
@@ -151,6 +153,34 @@ test('forced-remote manager reads Host state without using local HTTP product da
         protocolVersion: 1,
         conversation: { conversationId: `conv_${'c'.repeat(32)}` },
       }
+    },
+    readSupervisorConversationHistory: (
+      _machineId,
+      _projectId,
+      _conversationId,
+      page,
+    ) => {
+      reads.history += 1
+      assert.deepEqual(page, { limit: 20 })
+      return {
+        marker: 'direct-history',
+        historyComplete: true,
+        liveCursor: '123e4567-e89b-42d3-a456-426614174000:0',
+      }
+    },
+    readSupervisorConversationLive: (
+      _machineId,
+      _projectId,
+      _conversationId,
+      query,
+    ) => {
+      reads.live += 1
+      assert.deepEqual(query, {
+        cursor: '123e4567-e89b-42d3-a456-426614174000:0',
+        limit: 64,
+        waitMs: 0,
+      })
+      return { marker: 'direct-live', events: [], active: false }
     },
   }
   let storedGrant
@@ -309,6 +339,34 @@ test('forced-remote manager reads Host state without using local HTTP product da
       ).conversation.conversationId,
       conversationId,
     )
+    assert.equal(
+      (
+        await manager.readRemoteConversationHistory(
+          authenticated.sessionId,
+          machineId,
+          projectId,
+          conversationId,
+          { limit: 20 },
+        )
+      ).marker,
+      'direct-history',
+    )
+    assert.equal(
+      (
+        await manager.readRemoteConversationLive(
+          authenticated.sessionId,
+          machineId,
+          projectId,
+          conversationId,
+          {
+            cursor: '123e4567-e89b-42d3-a456-426614174000:0',
+            limit: 64,
+            waitMs: 0,
+          },
+        )
+      ).marker,
+      'direct-live',
+    )
     assert.deepEqual(reads, {
       machines: 1,
       detail: 1,
@@ -316,6 +374,8 @@ test('forced-remote manager reads Host state without using local HTTP product da
       project: 1,
       conversations: 1,
       conversation: 1,
+      history: 1,
+      live: 1,
     })
   } finally {
     globalThis.fetch = originalFetch
@@ -362,7 +422,7 @@ test('forced Relay HTTP admission stays single-session while Direct fallback rem
     fingerprint: hostFingerprint,
     identityGeneration: 1,
   }
-  const reads = { machines: 0, detail: 0 }
+  const reads = { machines: 0, detail: 0, history: 0, live: 0 }
   const service = {
     publisher: { subscribe: () => () => undefined },
     close: async () => undefined,
@@ -401,6 +461,18 @@ test('forced Relay HTTP admission stays single-session while Direct fallback rem
       protocolVersion: 1,
       conversation: { conversationId: `conv_${'c'.repeat(32)}` },
     }),
+    readSupervisorConversationHistory: () => {
+      reads.history += 1
+      return {
+        marker: 'relay-history',
+        historyComplete: true,
+        liveCursor: '123e4567-e89b-42d3-a456-426614174000:0',
+      }
+    },
+    readSupervisorConversationLive: () => {
+      reads.live += 1
+      return { marker: 'relay-live', events: [], active: false }
+    },
   }
   const persistence = { storeHostSupervisorGrant: (grant) => grant }
   const manager = await SupervisorTransportManager.create({
@@ -580,8 +652,22 @@ test('forced Relay HTTP admission stays single-session while Direct fallback rem
       (await conversationDetailResponse.json()).conversation.conversationId,
       conversationId,
     )
+    const historyResponse = await originalFetch(
+      `${localBaseUrl}/api/v1/remote-supervisor/sessions/${authenticated.sessionId}/machines/${machineId}/projects/${projectId}/conversations/${conversationId}/history?limit=20`,
+    )
+    const historyBody = await historyResponse.json()
+    assert.equal(historyResponse.status, 200, JSON.stringify(historyBody))
+    assert.equal(historyBody.marker, 'relay-history')
+    const liveResponse = await originalFetch(
+      `${localBaseUrl}/api/v1/remote-supervisor/sessions/${authenticated.sessionId}/machines/${machineId}/projects/${projectId}/conversations/${conversationId}/live?cursor=123e4567-e89b-42d3-a456-426614174000%3A0&limit=64&waitMs=0`,
+    )
+    const liveBody = await liveResponse.json()
+    assert.equal(liveResponse.status, 200, JSON.stringify(liveBody))
+    assert.equal(liveBody.marker, 'relay-live')
     assert.equal(reads.machines, 1)
     assert.equal(reads.detail, 1)
+    assert.equal(reads.history, 1)
+    assert.equal(reads.live, 1)
     manager.closeRemote(authenticated.sessionId)
     await new Promise((resolve) => setTimeout(resolve, 30))
     const deviceConnections = relayLogs.filter(

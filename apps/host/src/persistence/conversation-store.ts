@@ -478,6 +478,13 @@ export interface DurableConversationMutationResult {
   readonly changed: boolean
 }
 
+export interface DurableConversationCreateAction {
+  readonly actionId: ActionId
+  readonly conversationId: ConversationId
+  readonly requestDigest: string
+  readonly createdAt: Timestamp
+}
+
 export interface ListProjectConversationsOptions {
   readonly provider?: ProviderId
   readonly status?: ConversationSummary['status']
@@ -733,6 +740,37 @@ export class ConversationStore {
       )
       return value
     })
+  }
+
+  approveHostSupervisorControl(
+    authorizationId: string,
+    approvedAt: Timestamp,
+  ): void {
+    const timestamp = TimestampSchema.parse(approvedAt)
+    this.runInTransaction(() => {
+      const grant = this.getHostSupervisorGrant(authorizationId)
+      if (grant === undefined) {
+        throw new Error('Host Supervisor grant is not materialized')
+      }
+      this.#statement(
+        `INSERT INTO host_supervisor_control (
+           authorization_id, host_id, device_id, approved_at
+         ) VALUES (?, ?, ?, ?)
+         ON CONFLICT(authorization_id) DO NOTHING`,
+      ).run(
+        grant.payload.authorizationId,
+        grant.payload.hostId,
+        grant.payload.deviceId,
+        timestamp,
+      )
+    })
+  }
+
+  hasHostSupervisorControl(authorizationId: string): boolean {
+    const row = this.#statement(
+      'SELECT authorization_id FROM host_supervisor_control WHERE authorization_id = ?',
+    ).get(authorizationId) as { readonly authorization_id?: string } | undefined
+    return row?.authorization_id === authorizationId
   }
 
   updateOnboardingProgress(
@@ -2779,6 +2817,49 @@ export class ConversationStore {
        WHERE conversations.conversation_id = ?`,
     ).get(id) as ConversationRow | undefined
     return row === undefined ? undefined : conversationFromRow(row)
+  }
+
+  getConversationCreateAction(
+    actionId: ActionId,
+  ): DurableConversationCreateAction | undefined {
+    const id = ActionIdSchema.parse(actionId)
+    const row = this.#statement(
+      `SELECT action_id, conversation_id, request_digest, created_at
+       FROM conversation_create_actions WHERE action_id = ?`,
+    ).get(id) as
+      | {
+          readonly action_id: string
+          readonly conversation_id: string
+          readonly request_digest: string
+          readonly created_at: string
+        }
+      | undefined
+    if (row === undefined) return undefined
+    return {
+      actionId: ActionIdSchema.parse(row.action_id),
+      conversationId: ConversationIdSchema.parse(row.conversation_id),
+      requestDigest: row.request_digest,
+      createdAt: TimestampSchema.parse(row.created_at),
+    }
+  }
+
+  bindConversationCreateAction(input: DurableConversationCreateAction): void {
+    const value = {
+      actionId: ActionIdSchema.parse(input.actionId),
+      conversationId: ConversationIdSchema.parse(input.conversationId),
+      requestDigest: input.requestDigest,
+      createdAt: TimestampSchema.parse(input.createdAt),
+    }
+    this.#statement(
+      `INSERT INTO conversation_create_actions
+         (action_id, conversation_id, request_digest, created_at)
+       VALUES (?, ?, ?, ?)`,
+    ).run(
+      value.actionId,
+      value.conversationId,
+      value.requestDigest,
+      value.createdAt,
+    )
   }
 
   listConversations(): DurableConversation[] {

@@ -93,6 +93,11 @@ test('direct Supervisor transport verifies exact identities and exposes only rea
       ),
       terminalLivePage(),
     )
+    assert.deepEqual(await connected.getAction(`act_${'a'.repeat(32)}`), {
+      protocolVersion: 1,
+      actionId: `act_${'a'.repeat(32)}`,
+      status: 'not_found',
+    })
     connected.close()
     assert.equal(
       supervisorRequestSchema.safeParse({
@@ -175,6 +180,66 @@ test('Host identity mismatch and replayed ProductDevice proof fail closed', asyn
   }
 })
 
+test('read-only Supervisor sessions cannot control Conversations', async () => {
+  const fixture = await createFixture()
+  try {
+    const pending = await connectSupervisorDirect(fixture.clientOptions)
+    const session = await pending.authenticate({
+      accessToken: 'test-access-token',
+      deviceProof: 'control-denied-proof',
+    })
+    await assert.rejects(
+      session.startConversationTurn({
+        actionId: `act_${'a'.repeat(32)}`,
+        machineId: `machine_${'m'.repeat(32)}`,
+        projectId: `proj_${'p'.repeat(32)}`,
+        conversationId: `conv_${'c'.repeat(32)}`,
+        input: { type: 'text', text: 'safe' },
+      }),
+      (error) =>
+        error instanceof SupervisorClientError &&
+        error.code === 'operation_not_allowed',
+    )
+    session.close()
+  } finally {
+    await fixture.server.close()
+  }
+})
+
+test('Host-local control approval admits only the fixed Conversation control union', async () => {
+  const fixture = await createFixture({ controlEnabled: true })
+  try {
+    const pending = await connectSupervisorDirect(fixture.clientOptions)
+    const session = await pending.authenticate({
+      accessToken: 'test-access-token',
+      deviceProof: 'control-allowed-proof',
+    })
+    assert.deepEqual(
+      await session.startConversationTurn({
+        actionId: `act_${'b'.repeat(32)}`,
+        machineId: `machine_${'m'.repeat(32)}`,
+        projectId: `proj_${'p'.repeat(32)}`,
+        conversationId: `conv_${'c'.repeat(32)}`,
+        input: { type: 'text', text: 'safe' },
+      }),
+      { accepted: true, operation: 'conversation.turn.start' },
+    )
+    assert.deepEqual(
+      await session.createConversation({
+        actionId: `act_${'d'.repeat(32)}`,
+        machineId: `machine_${'m'.repeat(32)}`,
+        projectId: `proj_${'p'.repeat(32)}`,
+        provider: 'codex',
+        input: { type: 'text', text: 'safe' },
+      }),
+      { accepted: true, operation: 'conversation.create' },
+    )
+    session.close()
+  } finally {
+    await fixture.server.close()
+  }
+})
+
 async function createFixture(options = {}) {
   const now = new Date('2026-09-24T12:00:00.000Z')
   const { privateKey, publicKey } = await generateKeyPair('ES256')
@@ -218,7 +283,23 @@ async function createFixture(options = {}) {
         historyComplete: false,
       }),
       readConversationLive: () => terminalLivePage(),
+      getAction: (actionId) => ({
+        protocolVersion: 1,
+        actionId,
+        status: 'not_found',
+      }),
     },
+    control: {
+      startConversationTurn: () => ({
+        accepted: true,
+        operation: 'conversation.turn.start',
+      }),
+      createConversation: () => ({
+        accepted: true,
+        operation: 'conversation.create',
+      }),
+    },
+    authorizeControl: async () => options.controlEnabled === true,
   })
   const address = await server.start()
   const grantPayload = {

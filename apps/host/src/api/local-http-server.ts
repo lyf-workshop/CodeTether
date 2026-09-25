@@ -6,6 +6,7 @@ import {
 import type { AddressInfo } from 'node:net'
 
 import {
+  ActionIdSchema,
   ApprovalIdSchema,
   AdoptProviderSessionRequestSchema,
   AdoptProviderSessionResponseSchema,
@@ -145,6 +146,13 @@ const supervisorAuthenticationSchema = z
     deviceProof: z.string().min(1).max(16_384),
   })
   .strict()
+const supervisorControlApprovalSchema = z
+  .object({
+    authorizationId: z
+      .string()
+      .regex(/^hauth_[A-Za-z0-9][A-Za-z0-9_-]{15,95}$/u),
+  })
+  .strict()
 const supervisorDirectoryQuerySchema = z
   .object({
     limit: z.coerce.number().int().min(1).max(100).default(50),
@@ -154,6 +162,37 @@ const supervisorDirectoryQuerySchema = z
       .max(2_048)
       .regex(/^(?:spd|scd)_[A-Za-z0-9_-]+$/u)
       .optional(),
+  })
+  .strict()
+const supervisorRemoteTurnStartSchema = z
+  .object({
+    actionId: z.string().regex(/^act_[A-Za-z0-9][A-Za-z0-9_-]{5,95}$/u),
+    input: z
+      .object({
+        type: z.literal('text'),
+        text: z
+          .string()
+          .min(1)
+          .max(1024 * 1024),
+      })
+      .strict(),
+  })
+  .strict()
+const supervisorRemoteConversationCreateSchema = z
+  .object({
+    actionId: z.string().regex(/^act_[A-Za-z0-9][A-Za-z0-9_-]{5,95}$/u),
+    provider: z.enum(['codex', 'claude-code']),
+    input: z
+      .object({
+        type: z.literal('text'),
+        text: z
+          .string()
+          .min(1)
+          .max(1024 * 1024),
+      })
+      .strict(),
+    model: z.string().trim().min(1).max(240).optional(),
+    reasoning: z.string().trim().min(1).max(120).optional(),
   })
   .strict()
 
@@ -467,6 +506,24 @@ export class LocalHttpServer {
       }
       if (
         request.method === 'POST' &&
+        url.pathname === '/api/v1/supervisor/control/approve' &&
+        this.#supervisorTransport !== undefined
+      ) {
+        const body = await this.#http.readValidatedBody(
+          request,
+          supervisorControlApprovalSchema,
+        )
+        this.#supervisorTransport.approveControl(body.authorizationId)
+        this.#http.writeJson(
+          response,
+          200,
+          { status: 'approved', authorizationId: body.authorizationId },
+          context.allowedOrigin,
+        )
+        return
+      }
+      if (
+        request.method === 'POST' &&
         url.pathname === '/api/v1/remote-supervisor/connections' &&
         this.#supervisorTransport !== undefined
       ) {
@@ -532,6 +589,26 @@ export class LocalHttpServer {
         url.pathname,
         /^\/api\/v1\/remote-supervisor\/sessions\/([^/]+)\/machines\/([^/]+)$/u,
       )
+      const supervisorActionRoute = this.#http.matchPath(
+        url.pathname,
+        /^\/api\/v1\/remote-supervisor\/sessions\/([^/]+)\/actions\/([^/]+)$/u,
+      )
+      if (
+        request.method === 'GET' &&
+        supervisorActionRoute !== undefined &&
+        this.#supervisorTransport !== undefined
+      ) {
+        this.#http.writeJson(
+          response,
+          200,
+          await this.#supervisorTransport.getRemoteAction(
+            supervisorActionRoute[0]!,
+            ActionIdSchema.parse(supervisorActionRoute[1]!),
+          ),
+          context.allowedOrigin,
+        )
+        return
+      }
       if (
         request.method === 'GET' &&
         supervisorMachineRoute !== undefined &&
@@ -557,6 +634,36 @@ export class LocalHttpServer {
         url.pathname,
         /^\/api\/v1\/remote-supervisor\/sessions\/([^/]+)\/machines\/([^/]+)\/projects\/([^/]+)\/conversations\/([^/]+)\/history$/u,
       )
+      const supervisorConversationTurnRoute = this.#http.matchPath(
+        url.pathname,
+        /^\/api\/v1\/remote-supervisor\/sessions\/([^/]+)\/machines\/([^/]+)\/projects\/([^/]+)\/conversations\/([^/]+)\/turns$/u,
+      )
+      if (
+        request.method === 'POST' &&
+        supervisorConversationTurnRoute !== undefined &&
+        this.#supervisorTransport !== undefined
+      ) {
+        const body = await this.#http.readValidatedBody(
+          request,
+          supervisorRemoteTurnStartSchema,
+        )
+        context.actionId = ActionIdSchema.parse(body.actionId)
+        this.#http.writeJson(
+          response,
+          202,
+          await this.#supervisorTransport.startRemoteConversationTurn(
+            supervisorConversationTurnRoute[0]!,
+            {
+              ...body,
+              machineId: supervisorConversationTurnRoute[1]!,
+              projectId: supervisorConversationTurnRoute[2]!,
+              conversationId: supervisorConversationTurnRoute[3]!,
+            },
+          ),
+          context.allowedOrigin,
+        )
+        return
+      }
       if (
         request.method === 'GET' &&
         supervisorConversationHistoryRoute !== undefined &&
@@ -629,6 +736,31 @@ export class LocalHttpServer {
         url.pathname,
         /^\/api\/v1\/remote-supervisor\/sessions\/([^/]+)\/machines\/([^/]+)\/projects\/([^/]+)\/conversations$/u,
       )
+      if (
+        request.method === 'POST' &&
+        supervisorConversationListRoute !== undefined &&
+        this.#supervisorTransport !== undefined
+      ) {
+        const body = await this.#http.readValidatedBody(
+          request,
+          supervisorRemoteConversationCreateSchema,
+        )
+        context.actionId = ActionIdSchema.parse(body.actionId)
+        this.#http.writeJson(
+          response,
+          202,
+          await this.#supervisorTransport.createRemoteConversation(
+            supervisorConversationListRoute[0]!,
+            {
+              ...body,
+              machineId: supervisorConversationListRoute[1]!,
+              projectId: supervisorConversationListRoute[2]!,
+            },
+          ),
+          context.allowedOrigin,
+        )
+        return
+      }
       if (
         request.method === 'GET' &&
         supervisorConversationListRoute !== undefined &&

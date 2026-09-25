@@ -80,6 +80,26 @@ export interface SupervisorHostReadSurface {
       readonly waitMs: number
     },
   ): unknown | Promise<unknown>
+  getAction(actionId: string): unknown | Promise<unknown>
+}
+
+export interface SupervisorHostControlSurface {
+  startConversationTurn(input: {
+    readonly actionId: string
+    readonly machineId: string
+    readonly projectId: string
+    readonly conversationId: string
+    readonly input: { readonly type: 'text'; readonly text: string }
+  }): unknown | Promise<unknown>
+  createConversation(input: {
+    readonly actionId: string
+    readonly machineId: string
+    readonly projectId: string
+    readonly provider: 'codex' | 'claude-code'
+    readonly input: { readonly type: 'text'; readonly text: string }
+    readonly model?: string
+    readonly reasoning?: string
+  }): unknown | Promise<unknown>
 }
 
 export interface SupervisorServerActivation {
@@ -101,6 +121,10 @@ export interface SupervisorServerOptions {
     readonly controlPlaneOrigin: string
   }) => Promise<SupervisorAdmissionResult>
   readonly reads: SupervisorHostReadSurface
+  readonly control?: SupervisorHostControlSurface
+  readonly authorizeControl?: (
+    authorizationId: string,
+  ) => boolean | Promise<boolean>
   readonly onDiagnostic?: (
     event: string,
     fields: Readonly<Record<string, string | number | boolean>>,
@@ -308,6 +332,9 @@ export class SupervisorServer {
           descriptor.exp * 1_000,
         ),
       )
+      const controlAuthorized =
+        this.#options.control !== undefined &&
+        (await this.#options.authorizeControl?.(challenge.authorizationId))
       const authenticated = supervisorAuthenticatedSchema.parse({
         type: 'supervisor.authenticated',
         protocolVersion: supervisorProtocolVersion,
@@ -315,6 +342,7 @@ export class SupervisorServer {
         hostId: challenge.hostId,
         deviceId: challenge.deviceId,
         authorizationId: challenge.authorizationId,
+        control: controlAuthorized ? 'control' : 'read',
         expiresAt: sessionExpiresAt.toISOString(),
       })
       await connection.send(authenticated)
@@ -373,6 +401,15 @@ export class SupervisorServer {
   ): Promise<void> {
     const startedAt = Date.now()
     try {
+      if (
+        isSupervisorControlOperation(request) &&
+        (this.#options.control === undefined ||
+          !(await this.#options.authorizeControl?.(
+            this.#activation?.grant.payload.authorizationId ?? '',
+          )))
+      ) {
+        throw new Error('operation_not_allowed')
+      }
       let data: unknown
       switch (request.operation) {
         case 'host.bootstrap':
@@ -440,6 +477,21 @@ export class SupervisorServer {
             },
           )
           break
+        case 'action.get':
+          data = await this.#options.reads.getAction(request.actionId)
+          break
+        case 'conversation.turn.start':
+          if (this.#options.control === undefined) {
+            throw new Error('operation_not_allowed')
+          }
+          data = await this.#options.control.startConversationTurn(request)
+          break
+        case 'conversation.create':
+          if (this.#options.control === undefined) {
+            throw new Error('operation_not_allowed')
+          }
+          data = await this.#options.control.createConversation(request)
+          break
       }
       await connection.send({
         type: 'supervisor.response',
@@ -491,7 +543,32 @@ function supervisorReadRequestFields(
         projectId: request.projectId,
         conversationId: request.conversationId,
       }
+    case 'action.get':
+      return { actionId: request.actionId }
+    case 'conversation.turn.start':
+      return {
+        machineId: request.machineId,
+        projectId: request.projectId,
+        conversationId: request.conversationId,
+      }
+    case 'conversation.create':
+      return {
+        machineId: request.machineId,
+        projectId: request.projectId,
+      }
   }
+}
+
+function isSupervisorControlOperation(
+  request: SupervisorRequest,
+): request is Extract<
+  SupervisorRequest,
+  { operation: 'conversation.turn.start' | 'conversation.create' }
+> {
+  return (
+    request.operation === 'conversation.turn.start' ||
+    request.operation === 'conversation.create'
+  )
 }
 
 function supervisorReadResultFields(
@@ -578,14 +655,22 @@ function record(value: unknown): Record<string, unknown> | undefined {
 
 function supervisorReadErrorCode(
   error: unknown,
-): 'invalid_request' | 'operation_not_allowed' | 'not_found' | 'internal' {
+):
+  | 'invalid_request'
+  | 'operation_not_allowed'
+  | 'not_found'
+  | 'conflict'
+  | 'unavailable'
+  | 'internal' {
   if (!(error instanceof Error)) return 'internal'
   const publicCode = (error as Error & { readonly code?: unknown }).code
   const code = typeof publicCode === 'string' ? publicCode : error.message
   if (
     code === 'invalid_request' ||
     code === 'operation_not_allowed' ||
-    code === 'not_found'
+    code === 'not_found' ||
+    code === 'conflict' ||
+    code === 'unavailable'
   ) {
     return code
   }

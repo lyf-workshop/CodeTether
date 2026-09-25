@@ -45,7 +45,7 @@ export const supervisorGrantPayloadSchema = z
     deviceKeyGeneration: z.number().int().positive(),
     userId: opaqueId('usr'),
     spaceId: opaqueId('space'),
-    scope: z.literal('supervisor_read'),
+    scope: z.enum(['supervisor_read', 'supervisor_control']),
     authorizationSerial: z.string().regex(/^(?:0|[1-9][0-9]{0,19})$/u),
     authorizationGeneration: z.number().int().positive(),
     issuedAt: timestampSeconds,
@@ -176,6 +176,7 @@ export const supervisorAuthenticatedSchema = z
     hostId: opaqueId('host'),
     deviceId: opaqueId('dev'),
     authorizationId: opaqueId('hauth'),
+    control: z.enum(['read', 'control']),
     expiresAt: z.string().datetime({ offset: true }),
   })
   .strict()
@@ -204,6 +205,21 @@ const supervisorLiveCursorSchema = z
   .regex(
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}:(?:0|[1-9][0-9]*)$/iu,
   )
+
+const supervisorActionIdSchema = z
+  .string()
+  .regex(/^act_[A-Za-z0-9][A-Za-z0-9_-]{5,95}$/u)
+const supervisorProviderSchema = z.enum(['codex', 'claude-code'])
+const supervisorTurnInputSchema = z
+  .object({
+    type: z.literal('text'),
+    text: z
+      .string()
+      .min(1)
+      .max(1024 * 1024)
+      .refine((value) => value.trim().length > 0),
+  })
+  .strict()
 
 export const supervisorRequestSchema = z.discriminatedUnion('operation', [
   supervisorRequestBaseSchema
@@ -271,6 +287,34 @@ export const supervisorRequestSchema = z.discriminatedUnion('operation', [
       waitMs: z.number().int().min(0).max(15_000),
     })
     .strict(),
+  supervisorRequestBaseSchema
+    .extend({
+      operation: z.literal('action.get'),
+      actionId: supervisorActionIdSchema,
+    })
+    .strict(),
+  supervisorRequestBaseSchema
+    .extend({
+      operation: z.literal('conversation.turn.start'),
+      actionId: supervisorActionIdSchema,
+      machineId: opaqueId('machine'),
+      projectId: opaqueId('proj'),
+      conversationId: opaqueId('conv'),
+      input: supervisorTurnInputSchema,
+    })
+    .strict(),
+  supervisorRequestBaseSchema
+    .extend({
+      operation: z.literal('conversation.create'),
+      actionId: supervisorActionIdSchema,
+      machineId: opaqueId('machine'),
+      projectId: opaqueId('proj'),
+      provider: supervisorProviderSchema,
+      input: supervisorTurnInputSchema,
+      model: z.string().trim().min(1).max(240).optional(),
+      reasoning: z.string().trim().min(1).max(120).optional(),
+    })
+    .strict(),
 ])
 export type SupervisorRequest = z.infer<typeof supervisorRequestSchema>
 
@@ -286,6 +330,8 @@ export const supervisorResponseSchema = z
         'invalid_request',
         'operation_not_allowed',
         'not_found',
+        'conflict',
+        'unavailable',
         'session_expired',
         'internal',
       ])

@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
+import {
+  useInfiniteQuery,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query'
 import { Link, useParams } from '@tanstack/react-router'
 import {
   ChevronRight,
@@ -15,6 +19,8 @@ import type { RemoteConversationHistoryPage } from '@codetether/protocol'
 
 import {
   currentRemoteSupervisorSession,
+  createRemoteConversation,
+  readRemoteAction,
   reconnectRemoteSupervisor,
   readRemoteConversation,
   readRemoteConversationHistory,
@@ -23,6 +29,7 @@ import {
   readRemoteMachine,
   readRemoteProject,
   readRemoteProjects,
+  startRemoteConversationTurn,
   type RemoteConversationDirectoryItem,
 } from '../../runtime/account/remote-supervisor.js'
 import {
@@ -42,6 +49,12 @@ export function RemoteHostPage() {
   const [selectedMachineId, setSelectedMachineId] = useState<string>()
   const [selectedProjectId, setSelectedProjectId] = useState<string>()
   const [selectedConversationId, setSelectedConversationId] = useState<string>()
+  const [newProvider, setNewProvider] = useState<'codex' | 'claude-code'>(
+    'codex',
+  )
+  const [newMessage, setNewMessage] = useState('')
+  const [creatingConversation, setCreatingConversation] = useState(false)
+  const [createError, setCreateError] = useState<string>()
   const machines = session === undefined ? [] : machineRows(session.machines)
   const validationMode =
     import.meta.env.VITE_CODETETHER_VALIDATE_REMOTE_DIRECTORY_HOST_ID === hostId
@@ -182,6 +195,61 @@ export function RemoteHostPage() {
   })
 
   const providers = detail.data === undefined ? [] : providerRows(detail.data)
+  const availableProviders = providers.filter(
+    (
+      provider,
+    ): provider is typeof provider & { provider: 'codex' | 'claude-code' } =>
+      (provider.provider === 'codex' || provider.provider === 'claude-code') &&
+      provider.availability === 'available',
+  )
+
+  const selectedProvider = availableProviders.some(
+    (provider) => provider.provider === newProvider,
+  )
+    ? newProvider
+    : (availableProviders[0]?.provider ?? 'codex')
+
+  const createConversation = async (): Promise<void> => {
+    const text = newMessage.trim()
+    if (
+      session?.control !== 'control' ||
+      activeMachineId === undefined ||
+      activeProjectId === undefined ||
+      text.length === 0 ||
+      creatingConversation
+    ) {
+      return
+    }
+    setCreatingConversation(true)
+    setCreateError(undefined)
+    try {
+      const result = await createRemoteConversation({
+        hostId,
+        machineId: activeMachineId,
+        projectId: activeProjectId,
+        provider: selectedProvider,
+        actionId: newRemoteActionId(),
+        input: { type: 'text', text },
+      })
+      const resultRecord = asRecord(result)
+      const data = asRecord(resultRecord.data)
+      const conversation = asRecord(data.conversation)
+      const conversationId =
+        typeof conversation.conversationId === 'string'
+          ? conversation.conversationId
+          : undefined
+      setNewMessage('')
+      await conversations.refetch()
+      if (conversationId !== undefined)
+        setSelectedConversationId(conversationId)
+    } catch {
+      setCreateError(
+        'The Host did not confirm Conversation creation. Refresh to recover its state.',
+      )
+    } finally {
+      setCreatingConversation(false)
+    }
+  }
 
   if (session === undefined) return <DisconnectedHost />
 
@@ -336,6 +404,67 @@ export function RemoteHostPage() {
         </section>
       ) : null}
 
+      {session.control === 'control' &&
+      activeMachineId !== undefined &&
+      activeProjectId !== undefined ? (
+        <section className="mt-4 rounded-lg border border-border bg-surface p-4">
+          <h2 className="font-semibold text-text-primary">New Conversation</h2>
+          <p className="mt-1 text-sm text-text-secondary">
+            The Machine and Project come from the selected directory context.
+          </p>
+          {availableProviders.length === 0 ? (
+            <p className="mt-3 text-sm text-text-secondary">
+              No available Provider is reported for this Machine.
+            </p>
+          ) : (
+            <>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {availableProviders.map((provider) => (
+                  <Button
+                    key={provider.provider}
+                    size="sm"
+                    variant={
+                      selectedProvider === provider.provider
+                        ? 'default'
+                        : 'secondary'
+                    }
+                    onClick={() => setNewProvider(provider.provider)}
+                  >
+                    {providerLabel(provider.provider)}
+                  </Button>
+                ))}
+              </div>
+              <textarea
+                className="mt-3 min-h-24 w-full resize-y rounded-md border border-border bg-surface-inset px-3 py-2 text-sm text-text-primary outline-none focus:border-accent"
+                value={newMessage}
+                disabled={creatingConversation}
+                onChange={(event) => setNewMessage(event.target.value)}
+                placeholder="First message"
+              />
+              <div className="mt-2 flex items-center justify-between gap-3">
+                <p className="text-xs text-text-muted">
+                  This explicitly starts one Provider session and first Turn.
+                </p>
+                <Button
+                  size="sm"
+                  disabled={
+                    creatingConversation || newMessage.trim().length === 0
+                  }
+                  onClick={() => void createConversation()}
+                >
+                  {creatingConversation ? 'Creating…' : 'Create and send'}
+                </Button>
+              </div>
+              {createError === undefined ? null : (
+                <p className="mt-2 text-sm text-danger" role="alert">
+                  {createError}
+                </p>
+              )}
+            </>
+          )}
+        </section>
+      ) : null}
+
       {conversationDetail.isPending ? (
         <LoadingText label="Loading Conversation metadata…" />
       ) : conversationDetail.isError ? (
@@ -348,6 +477,7 @@ export function RemoteHostPage() {
           projectId={activeProjectId as string}
           conversation={conversationDetail.data}
           history={history}
+          control={session.control}
           validationMode={validationMode}
         />
       )}
@@ -430,12 +560,14 @@ function RemoteConversationReadView({
   projectId,
   conversation,
   history,
+  control,
   validationMode,
 }: {
   readonly hostId: string
   readonly machineId: string
   readonly projectId: string
   readonly conversation: RemoteConversationDirectoryItem
+  readonly control: 'read' | 'control'
   readonly validationMode: boolean
   readonly history: {
     readonly data?: { readonly pages: readonly RemoteConversationHistoryPage[] }
@@ -447,6 +579,10 @@ function RemoteConversationReadView({
     readonly refetch: () => Promise<unknown>
   }
 }) {
+  const queryClient = useQueryClient()
+  const [message, setMessage] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState<string>()
   const historyPages = history.data?.pages
   const historical = useMemo(
     () => flattenRemoteConversationHistory(historyPages),
@@ -574,6 +710,95 @@ function RemoteConversationReadView({
   const historyComplete =
     lastPage?.historyComplete === true && history.hasNextPage !== true
 
+  const active =
+    conversation.status === 'running' || conversation.status === 'waiting'
+  const send = async (): Promise<void> => {
+    const text = message.trim()
+    if (control !== 'control' || active || submitting || text.length === 0) {
+      return
+    }
+    setSubmitting(true)
+    setSubmitError(undefined)
+    const actionId = newRemoteActionId()
+    try {
+      await startRemoteConversationTurn({
+        hostId,
+        machineId,
+        projectId,
+        conversationId: conversation.conversationId,
+        actionId,
+        input: { type: 'text', text },
+      })
+      setMessage('')
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: [
+            'remote-supervisor',
+            hostId,
+            'conversation',
+            machineId,
+            projectId,
+            conversation.conversationId,
+          ],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: [
+            'remote-supervisor',
+            hostId,
+            'conversation-history',
+            machineId,
+            projectId,
+            conversation.conversationId,
+          ],
+        }),
+      ])
+    } catch (error) {
+      try {
+        const state = await readRemoteAction(hostId, actionId)
+        if (state.status !== 'not_found') {
+          setMessage('')
+          await Promise.all([
+            queryClient.invalidateQueries({
+              queryKey: [
+                'remote-supervisor',
+                hostId,
+                'conversation',
+                machineId,
+                projectId,
+                conversation.conversationId,
+              ],
+            }),
+            queryClient.invalidateQueries({
+              queryKey: [
+                'remote-supervisor',
+                hostId,
+                'conversation-history',
+                machineId,
+                projectId,
+                conversation.conversationId,
+              ],
+            }),
+          ])
+          setSubmitError(
+            'Action state recovered from the Host; refresh live output if needed.',
+          )
+        } else {
+          setSubmitError(
+            error instanceof Error && error.message.includes('409')
+              ? 'The Conversation is busy or control is no longer authorized.'
+              : 'The Host did not admit this action. No message was replayed.',
+          )
+        }
+      } catch {
+        setSubmitError(
+          'The action result is uncertain. Reconnect and inspect its Host action state; the message was not replayed.',
+        )
+      }
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
   return (
     <section className="mt-4 rounded-lg border border-border bg-surface p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -605,6 +830,55 @@ function RemoteConversationReadView({
           }
         />
       </dl>
+      <div className="mt-4 rounded-md border border-border bg-surface-inset p-3">
+        {control !== 'control' ? (
+          <p className="text-sm text-text-secondary">
+            Remote control not authorized. This Conversation remains readable.
+          </p>
+        ) : (
+          <>
+            <label
+              className="text-xs font-medium uppercase tracking-wide text-text-muted"
+              htmlFor="remote-conversation-composer"
+            >
+              Send a message
+            </label>
+            <textarea
+              id="remote-conversation-composer"
+              className="mt-2 min-h-24 w-full resize-y rounded-md border border-border bg-surface px-3 py-2 text-sm text-text-primary outline-none focus:border-accent"
+              value={message}
+              disabled={active || submitting}
+              onChange={(event) => setMessage(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+                  event.preventDefault()
+                  void send()
+                }
+              }}
+              placeholder={active ? 'Running' : 'Type a message'}
+            />
+            <div className="mt-2 flex items-center justify-between gap-3">
+              <p className="text-xs text-text-muted">
+                {active
+                  ? 'Running. A second Send is disabled.'
+                  : 'Ctrl+Enter to send.'}
+              </p>
+              <Button
+                size="sm"
+                disabled={active || submitting || message.trim().length === 0}
+                onClick={() => void send()}
+              >
+                {submitting ? 'Submitting…' : 'Send'}
+              </Button>
+            </div>
+            {submitError === undefined ? null : (
+              <p className="mt-2 text-sm text-danger" role="alert">
+                {submitError}
+              </p>
+            )}
+          </>
+        )}
+      </div>
       {history.isPending ? (
         <LoadingText label="Loading latest transcript…" />
       ) : history.isError ? (
@@ -830,6 +1104,10 @@ function formatActivity(timestamp: string): string {
     dateStyle: 'medium',
     timeStyle: 'short',
   }).format(new Date(timestamp))
+}
+
+function newRemoteActionId(): string {
+  return `act_${crypto.randomUUID().replaceAll('-', '')}`
 }
 
 function machineRows(value: unknown): readonly {

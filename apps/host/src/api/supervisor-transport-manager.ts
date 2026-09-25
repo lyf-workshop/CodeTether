@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { networkInterfaces } from 'node:os'
 
 import {
@@ -20,7 +20,12 @@ import {
   type SupervisorPublicJwk,
   type SupervisorRelayControlConnection,
 } from '@codetether/supervisor-transport'
-import { TimestampSchema } from '@codetether/protocol'
+import {
+  ActionIdSchema,
+  TimestampSchema,
+  type CreateConversationRequest,
+  type StartTurnRequest,
+} from '@codetether/protocol'
 
 import type { HostService } from './host-service.js'
 import type { ConversationStore } from '../persistence/index.js'
@@ -214,6 +219,88 @@ export class SupervisorTransportManager {
             conversationId as never,
             query as never,
           ),
+        getAction: (actionId) => {
+          const turn = options.persistence.getTurnForStartAction(
+            ActionIdSchema.parse(actionId),
+          )
+          if (turn === undefined) {
+            return {
+              protocolVersion: 1,
+              actionId,
+              status: 'not_found',
+            }
+          }
+          const terminal =
+            turn.status === 'completed' ||
+            turn.status === 'failed' ||
+            turn.status === 'interrupted'
+          return {
+            protocolVersion: 1,
+            actionId,
+            status: terminal
+              ? turn.status === 'completed'
+                ? 'completed'
+                : 'failed'
+              : turn.status === 'starting'
+                ? 'accepted'
+                : 'running',
+            conversationId: turn.conversationId,
+            turnId: turn.turnId,
+          }
+        },
+      },
+      authorizeControl: (authorizationId) =>
+        typeof options.persistence.hasHostSupervisorControl === 'function' &&
+        options.persistence.hasHostSupervisorControl(authorizationId),
+      control: {
+        startConversationTurn: async (request) => {
+          await options.service.getSupervisorConversation(
+            request.machineId as never,
+            request.projectId as never,
+            request.conversationId as never,
+          )
+          const input: StartTurnRequest = {
+            actionId: ActionIdSchema.parse(request.actionId),
+            input: request.input,
+          }
+          return await options.service.startTurn(
+            request.conversationId as never,
+            input,
+          )
+        },
+        createConversation: async (request) => {
+          const createRequest: CreateConversationRequest = {
+            actionId: ActionIdSchema.parse(request.actionId),
+            machineId: request.machineId as never,
+            projectId: request.projectId as never,
+            provider: request.provider,
+            ...(request.model === undefined ? {} : { model: request.model }),
+            ...(request.reasoning === undefined
+              ? {}
+              : { reasoning: request.reasoning }),
+          }
+          const created =
+            await options.service.createConversation(createRequest)
+          const conversationId = created.data.conversation.conversationId
+          const firstTurnActionId = ActionIdSchema.parse(
+            `act_${createHash('sha256')
+              .update(`${request.actionId}:first-turn`, 'utf8')
+              .digest('hex')}`,
+          )
+          const started = await options.service.startTurn(conversationId, {
+            actionId: firstTurnActionId,
+            input: request.input,
+          })
+          return {
+            protocolVersion: 1,
+            actionId: request.actionId,
+            status: started.status,
+            data: {
+              conversation: created.data.conversation,
+              turn: started.data.turn,
+            },
+          }
+        },
       },
       onDiagnostic(event, fields) {
         process.stderr.write(
@@ -407,7 +494,11 @@ export class SupervisorTransportManager {
   async authenticateRemote(
     connectionId: string,
     input: { readonly accessToken: string; readonly deviceProof: string },
-  ): Promise<{ readonly sessionId: string; readonly expiresAt: string }> {
+  ): Promise<{
+    readonly sessionId: string
+    readonly expiresAt: string
+    readonly control: 'read' | 'control'
+  }> {
     const pending = this.#pending.get(connectionId)
     if (pending === undefined)
       throw new Error('Supervisor connection not found')
@@ -426,7 +517,11 @@ export class SupervisorTransportManager {
       )
       timer.unref()
       this.#sessionExpiryTimers.set(sessionId, timer)
-      return { sessionId, expiresAt: session.expiresAt }
+      return {
+        sessionId,
+        expiresAt: session.expiresAt,
+        control: session.control,
+      }
     } catch (error) {
       pending.close()
       throw error
@@ -530,6 +625,51 @@ export class SupervisorTransportManager {
   ): Promise<unknown> {
     return await this.#withRemoteSession(sessionId, (session) =>
       session.readConversationLive(machineId, projectId, conversationId, query),
+    )
+  }
+
+  async getRemoteAction(sessionId: string, actionId: string): Promise<unknown> {
+    return await this.#withRemoteSession(sessionId, (session) =>
+      session.getAction(actionId),
+    )
+  }
+
+  async startRemoteConversationTurn(
+    sessionId: string,
+    input: {
+      readonly actionId: string
+      readonly machineId: string
+      readonly projectId: string
+      readonly conversationId: string
+      readonly input: { readonly type: 'text'; readonly text: string }
+    },
+  ): Promise<unknown> {
+    return await this.#withRemoteSession(sessionId, (session) =>
+      session.startConversationTurn(input),
+    )
+  }
+
+  async createRemoteConversation(
+    sessionId: string,
+    input: {
+      readonly actionId: string
+      readonly machineId: string
+      readonly projectId: string
+      readonly provider: 'codex' | 'claude-code'
+      readonly input: { readonly type: 'text'; readonly text: string }
+      readonly model?: string
+      readonly reasoning?: string
+    },
+  ): Promise<unknown> {
+    return await this.#withRemoteSession(sessionId, (session) =>
+      session.createConversation(input),
+    )
+  }
+
+  approveControl(authorizationId: string): void {
+    this.#persistence.approveHostSupervisorControl(
+      authorizationId,
+      TimestampSchema.parse(new Date().toISOString()),
     )
   }
 

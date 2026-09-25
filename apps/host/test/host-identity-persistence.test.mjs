@@ -55,7 +55,7 @@ test('durable Host identity remains distinct from Machine identity across restar
   let restarted
   try {
     first = ConversationStore.open({ databasePath })
-    assert.equal(currentSchemaVersion, 20)
+    assert.equal(currentSchemaVersion, 22)
     assert.equal(first.getHostIdentity(), undefined)
     const machineId = first.listMachines()[0].machineId
     assert.notEqual(identity.hostId, machineId)
@@ -63,6 +63,18 @@ test('durable Host identity remains distinct from Machine identity across restar
     assert.deepEqual(
       first.storeHostSupervisorGrant(grant, '2026-09-22T12:00:00.000Z'),
       grant,
+    )
+    assert.equal(
+      first.hasHostSupervisorControl(grant.payload.authorizationId),
+      false,
+    )
+    first.approveHostSupervisorControl(
+      grant.payload.authorizationId,
+      '2026-09-22T12:00:01.000Z',
+    )
+    assert.equal(
+      first.hasHostSupervisorControl(grant.payload.authorizationId),
+      true,
     )
     first.close()
     first = undefined
@@ -73,6 +85,10 @@ test('durable Host identity remains distinct from Machine identity across restar
     assert.deepEqual(
       restarted.getHostSupervisorGrant(grant.payload.authorizationId),
       grant,
+    )
+    assert.equal(
+      restarted.hasHostSupervisorControl(grant.payload.authorizationId),
+      true,
     )
     assert.throws(
       () =>

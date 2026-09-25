@@ -120,6 +120,7 @@ export class PendingSupervisorConnection {
       return new ConnectedSupervisorSession(
         this.#connection,
         response.expiresAt,
+        response.control,
         this.transport,
         this.#onClose,
       )
@@ -147,6 +148,7 @@ export class ConnectedSupervisorSession {
   constructor(
     connection: FramedMachineConnection,
     readonly expiresAt: string,
+    readonly control: 'read' | 'control' = 'read',
     transport: 'direct' | 'relay' = 'direct',
     onClose?: () => void,
   ) {
@@ -255,6 +257,56 @@ export class ConnectedSupervisorSession {
         projectId,
         conversationId,
         ...query,
+      },
+      signal,
+    )
+  }
+
+  async getAction(actionId: string, signal?: AbortSignal): Promise<unknown> {
+    return await this.#request(
+      {
+        operation: 'action.get',
+        actionId,
+      },
+      signal,
+    )
+  }
+
+  async startConversationTurn(
+    input: {
+      readonly actionId: string
+      readonly machineId: string
+      readonly projectId: string
+      readonly conversationId: string
+      readonly input: { readonly type: 'text'; readonly text: string }
+    },
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    return await this.#request(
+      {
+        operation: 'conversation.turn.start',
+        ...input,
+      },
+      signal,
+    )
+  }
+
+  async createConversation(
+    input: {
+      readonly actionId: string
+      readonly machineId: string
+      readonly projectId: string
+      readonly provider: 'codex' | 'claude-code'
+      readonly input: { readonly type: 'text'; readonly text: string }
+      readonly model?: string
+      readonly reasoning?: string
+    },
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    return await this.#request(
+      {
+        operation: 'conversation.create',
+        ...input,
       },
       signal,
     )

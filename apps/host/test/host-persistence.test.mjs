@@ -367,6 +367,49 @@ test('Conversation identity, rich multi-Turn history, and Provider identity surv
   }
 })
 
+test('Conversation create action replays durably after Host restart without a second native session', async () => {
+  const environment = await createEnvironment()
+  let first
+  let second
+  try {
+    first = await createService(
+      environment,
+      '33333333-3333-4333-8333-333333333333',
+    )
+    const created = await createConversation(
+      first.service,
+      environment.workspace,
+      'act_durable_create_restart01',
+    )
+    await first.service.close()
+    first.store.close()
+    first = undefined
+
+    const runtime = new FakeRuntime()
+    second = await createService(
+      environment,
+      '44444444-4444-4444-8444-444444444444',
+      runtime,
+    )
+    const replay = await createConversation(
+      second.service,
+      environment.workspace,
+      'act_durable_create_restart01',
+    )
+    assert.equal(
+      replay.data.conversation.conversationId,
+      created.data.conversation.conversationId,
+    )
+    assert.equal(runtime.conversationCalls.length, 0)
+  } finally {
+    await first?.service.close().catch(() => undefined)
+    first?.store.close()
+    await second?.service.close().catch(() => undefined)
+    second?.store.close()
+    await rm(environment.directory, { force: true, recursive: true })
+  }
+})
+
 test('completed Start action replay survives Host restart without Provider hydration or resend', async () => {
   const environment = await createEnvironment()
   try {

@@ -1,10 +1,12 @@
 /** Test-only reverse fixture yielding the exact Conversation columns at v14. */
 export function downgradeExistingProviderSessionsToVersionFourteen(database) {
   database.exec(`
+    DROP TABLE conversation_create_actions;
+    DROP TABLE host_supervisor_control;
     DROP TABLE host_supervisor_grants;
     ALTER TABLE conversations DROP COLUMN native_transcript_boundary;
     DROP TABLE host_identity;
-    DELETE FROM schema_migrations WHERE version IN (18, 19, 20);
+    DELETE FROM schema_migrations WHERE version IN (18, 19, 20, 21, 22);
     DROP TABLE onboarding_progress;
     DELETE FROM schema_migrations WHERE version = 17;
     DROP TABLE conversation_provider_installation_bindings;

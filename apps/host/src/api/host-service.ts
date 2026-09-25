@@ -3286,6 +3286,36 @@ export class HostService {
       'conversation.create',
       request,
       async () => {
+        const requestDigest = conversationCreateRequestDigest(request)
+        const priorAction =
+          typeof this.#persistence?.getConversationCreateAction === 'function'
+            ? this.#persistence.getConversationCreateAction(request.actionId)
+            : undefined
+        if (priorAction !== undefined) {
+          if (priorAction.requestDigest !== requestDigest) {
+            throw new HostServiceError(
+              'conflict',
+              'Action id was already used for a different Conversation create',
+              409,
+            )
+          }
+          const existing = this.#persistence?.getConversation(
+            priorAction.conversationId,
+          )
+          if (existing === undefined) {
+            throw new HostServiceError(
+              'runtime_unavailable',
+              'Conversation create ownership is uncertain',
+              503,
+            )
+          }
+          return {
+            protocolVersion,
+            actionId: request.actionId,
+            status: 'completed',
+            data: { conversation: conversationRecordFromDurable(existing) },
+          }
+        }
         let machine: MachineSummary
         try {
           machine = this.#machines.get(request.machineId)
@@ -3364,6 +3394,17 @@ export class HostService {
                 }
                 this.#writeDurable(() => {
                   this.#persistence?.createConversation(creatingConversation)
+                  if (
+                    typeof this.#persistence?.bindConversationCreateAction ===
+                    'function'
+                  ) {
+                    this.#persistence.bindConversationCreateAction({
+                      actionId: request.actionId,
+                      conversationId,
+                      requestDigest,
+                      createdAt: timestamp,
+                    })
+                  }
                 })
 
                 if (machine.kind === 'remote') {
@@ -9081,6 +9122,36 @@ function conversationRecordFromDurable(
     updatedAt: conversation.updatedAt,
     lastActivityAt: conversation.lastActivityAt,
   })
+}
+
+function conversationCreateRequestDigest(
+  request: CreateConversationRequest,
+): string {
+  const value =
+    'projectId' in request
+      ? {
+          actionId: request.actionId,
+          machineId: request.machineId,
+          projectId: request.projectId,
+          provider: request.provider,
+          ...(request.model === undefined ? {} : { model: request.model }),
+          ...(request.reasoning === undefined
+            ? {}
+            : { reasoning: request.reasoning }),
+        }
+      : {
+          actionId: request.actionId,
+          machineId: request.machineId,
+          cwd: request.cwd,
+          provider: request.provider,
+          ...(request.model === undefined ? {} : { model: request.model }),
+          ...(request.reasoning === undefined
+            ? {}
+            : { reasoning: request.reasoning }),
+        }
+  return createHash('sha256')
+    .update(JSON.stringify(value), 'utf8')
+    .digest('hex')
 }
 
 function archiveFilterForStore(

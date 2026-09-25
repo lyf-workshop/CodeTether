@@ -153,6 +153,16 @@ const migrations: readonly Migration[] = [
     name: 'host_supervisor_grants',
     up: migrateHostSupervisorGrants,
   },
+  {
+    version: 21,
+    name: 'host_supervisor_control',
+    up: migrateHostSupervisorControl,
+  },
+  {
+    version: 22,
+    name: 'conversation_create_actions',
+    up: migrateConversationCreateActions,
+  },
 ]
 
 export const currentSchemaVersion = migrations.at(-1)?.version ?? 0
@@ -2493,6 +2503,36 @@ function migrateHostSupervisorGrants(database: DatabaseSync): void {
 
     CREATE UNIQUE INDEX host_supervisor_grants_device_host
       ON host_supervisor_grants(device_id, host_id);
+  `)
+}
+
+function migrateHostSupervisorControl(database: DatabaseSync): void {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS host_supervisor_control (
+      authorization_id TEXT PRIMARY KEY,
+      host_id TEXT NOT NULL,
+      device_id TEXT NOT NULL,
+      approved_at TEXT NOT NULL,
+      FOREIGN KEY (authorization_id)
+        REFERENCES host_supervisor_grants(authorization_id)
+        ON DELETE CASCADE
+    ) STRICT;
+    CREATE INDEX IF NOT EXISTS host_supervisor_control_host_device
+      ON host_supervisor_control(host_id, device_id);
+  `)
+}
+
+function migrateConversationCreateActions(database: DatabaseSync): void {
+  database.exec(`
+    CREATE TABLE conversation_create_actions (
+      action_id TEXT PRIMARY KEY,
+      conversation_id TEXT NOT NULL UNIQUE,
+      request_digest TEXT NOT NULL CHECK (length(request_digest) = 64),
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (conversation_id)
+        REFERENCES conversations(conversation_id)
+        ON DELETE CASCADE
+    ) STRICT;
   `)
 }
 

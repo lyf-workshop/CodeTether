@@ -41,6 +41,7 @@ export interface RemoteSupervisorSession {
   readonly sessionId: string
   readonly expiresAt: string
   readonly transport: 'direct' | 'relay'
+  readonly control: 'read' | 'control'
   readonly bootstrap: unknown
   readonly machines: unknown
 }
@@ -338,6 +339,10 @@ export async function connectRemoteSupervisor(options: {
   if (transport !== 'direct' && transport !== 'relay') {
     throw new Error('Supervisor response is invalid')
   }
+  const control = boundedString(authenticated, 'control')
+  if (control !== 'read' && control !== 'control') {
+    throw new Error('Supervisor response is invalid')
+  }
   const [bootstrap, machines] = await Promise.all([
     readJson(
       `${hostBaseUrl}/api/v1/remote-supervisor/sessions/${encodeURIComponent(sessionId)}/bootstrap`,
@@ -351,6 +356,7 @@ export async function connectRemoteSupervisor(options: {
     sessionId,
     expiresAt,
     transport,
+    control,
     bootstrap,
     machines,
   }
@@ -531,6 +537,84 @@ export async function readRemoteConversationLive(
     throw new Error('remote_supervisor_response_invalid')
   }
   return result
+}
+
+export interface RemoteActionState {
+  readonly actionId: string
+  readonly status: 'not_found' | 'accepted' | 'running' | 'completed' | 'failed'
+  readonly conversationId?: string
+  readonly turnId?: string
+}
+
+export async function readRemoteAction(
+  hostId: string,
+  actionId: string,
+): Promise<RemoteActionState> {
+  const session = requireRemoteSupervisorSession(hostId)
+  const value = await readJson(
+    `${hostBaseUrl}/api/v1/remote-supervisor/sessions/${encodeURIComponent(session.sessionId)}/actions/${encodeURIComponent(actionId)}`,
+  )
+  const returnedActionId = boundedString(value, 'actionId')
+  const status = boundedString(value, 'status')
+  if (
+    returnedActionId !== actionId ||
+    !['not_found', 'accepted', 'running', 'completed', 'failed'].includes(
+      status,
+    )
+  ) {
+    throw new Error('remote_supervisor_response_invalid')
+  }
+  const conversationId = optionalString(value, 'conversationId')
+  const turnId = optionalString(value, 'turnId')
+  return {
+    actionId: returnedActionId,
+    status: status as RemoteActionState['status'],
+    ...(conversationId === undefined ? {} : { conversationId }),
+    ...(turnId === undefined ? {} : { turnId }),
+  }
+}
+
+export async function startRemoteConversationTurn(options: {
+  readonly hostId: string
+  readonly machineId: string
+  readonly projectId: string
+  readonly conversationId: string
+  readonly actionId: string
+  readonly input: { readonly type: 'text'; readonly text: string }
+}): Promise<unknown> {
+  const session = requireRemoteSupervisorSession(options.hostId)
+  return await postLocalJson(
+    `/api/v1/remote-supervisor/sessions/${encodeURIComponent(session.sessionId)}/machines/${encodeURIComponent(options.machineId)}/projects/${encodeURIComponent(options.projectId)}/conversations/${encodeURIComponent(options.conversationId)}/turns`,
+    {
+      actionId: options.actionId,
+      input: options.input,
+    },
+  )
+}
+
+export async function createRemoteConversation(options: {
+  readonly hostId: string
+  readonly machineId: string
+  readonly projectId: string
+  readonly provider: 'codex' | 'claude-code'
+  readonly actionId: string
+  readonly input: { readonly type: 'text'; readonly text: string }
+  readonly model?: string
+  readonly reasoning?: string
+}): Promise<unknown> {
+  const session = requireRemoteSupervisorSession(options.hostId)
+  return await postLocalJson(
+    `/api/v1/remote-supervisor/sessions/${encodeURIComponent(session.sessionId)}/machines/${encodeURIComponent(options.machineId)}/projects/${encodeURIComponent(options.projectId)}/conversations`,
+    {
+      actionId: options.actionId,
+      provider: options.provider,
+      input: options.input,
+      ...(options.model === undefined ? {} : { model: options.model }),
+      ...(options.reasoning === undefined
+        ? {}
+        : { reasoning: options.reasoning }),
+    },
+  )
 }
 
 function requireRemoteSupervisorSession(

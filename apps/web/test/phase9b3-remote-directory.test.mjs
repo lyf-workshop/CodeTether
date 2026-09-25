@@ -30,7 +30,7 @@ test('remote directory uses the authenticated Supervisor session and bounded cur
   assert.match(runtime, /const reconnects = new Map/u)
 })
 
-test('remote Host UI exposes Project and Conversation metadata without write actions', async () => {
+test('remote Host UI keeps reads bounded and exposes only the fixed control actions', async () => {
   const [page, directory] = await Promise.all([
     readFile(remotePagePath, 'utf8'),
     readFile(hostDirectoryPath, 'utf8'),
@@ -47,10 +47,10 @@ test('remote Host UI exposes Project and Conversation metadata without write act
   assert.match(page, /VITE_CODETETHER_VALIDATE_REMOTE_CONVERSATION_ID/u)
   assert.match(page, /async \(\) => await history\.fetchNextPage\(\)/u)
   assert.match(page, /previousTop \+ element\.scrollHeight - previousHeight/u)
-  assert.doesNotMatch(
-    page,
-    /sendMessage|startProvider|resumeConversation|createConversation/u,
-  )
+  assert.match(page, /startRemoteConversationTurn/u)
+  assert.match(page, /createRemoteConversation/u)
+  assert.match(page, /Remote control not authorized/u)
+  assert.match(page, /conversation_busy|No message was replayed/u)
   assert.match(page, /VITE_CODETETHER_VALIDATE_REMOTE_DIRECTORY_HOST_ID/u)
   assert.match(directory, /VITE_CODETETHER_VALIDATE_REMOTE_DIRECTORY_HOST_ID/u)
   assert.match(directory, /validationHostId !== host\.hostId/u)

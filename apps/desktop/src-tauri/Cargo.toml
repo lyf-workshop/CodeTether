@@ -29,6 +29,10 @@ tauri-plugin-single-instance = "=2.4.3"
 codetether-posix-supervisor = { path = "../posix-supervisor" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+security-framework = { version = "=3.7.0", default-features = false, features = ["OSX_10_15"] }
+core-foundation = "=0.10.1"
+core-foundation-sys = "=0.8.7"
+security-framework-sys = { version = "=2.17.0", default-features = false, features = ["OSX_10_15"] }
 block2 = "=0.6.2"
 objc2 = "=0.6.4"
 objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSWorkspace", "block2"] }

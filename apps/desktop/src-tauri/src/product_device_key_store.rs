@@ -31,10 +31,15 @@ pub struct ProductDeviceSignature {
     key_algorithm: &'static str,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ProductDeviceKeyError {
     InvalidHandle,
     InvalidPayload,
+    KeyNotFound,
+    KeyAccessDenied,
+    KeyGenerationFailed,
+    KeySignFailed,
     PlatformKeyStorageUnavailable,
     PlatformKeyOperationFailed,
 }
@@ -44,6 +49,10 @@ impl ProductDeviceKeyError {
         match self {
             Self::InvalidHandle => "product_device_key_handle_invalid",
             Self::InvalidPayload => "product_device_signing_payload_invalid",
+            Self::KeyNotFound => "product_device_key_not_found",
+            Self::KeyAccessDenied => "product_device_key_access_denied",
+            Self::KeyGenerationFailed => "product_device_key_generation_failed",
+            Self::KeySignFailed => "product_device_key_sign_failed",
             Self::PlatformKeyStorageUnavailable => "platform_key_storage_unavailable",
             Self::PlatformKeyOperationFailed => "platform_key_operation_failed",
         }
@@ -427,7 +436,12 @@ mod platform {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+mod platform {
+    include!("product_device_key_store_macos.rs");
+}
+
+#[cfg(all(not(windows), not(target_os = "macos")))]
 mod platform {
     use super::*;
 

@@ -50,6 +50,14 @@ test('configuration requires PostgreSQL and defaults to loopback only', () => {
     'http://tauri.localhost',
     'http://127.0.0.1:5173',
   ])
+  assert.deepEqual(
+    readControlPlaneDatabaseConfiguration({
+      CODETETHER_CONTROL_PLANE_DATABASE_URL:
+        'postgresql://control-plane.invalid/codetether',
+      CODETETHER_CONTROL_PLANE_ENVIRONMENT: 'production',
+    }).allowedOrigins,
+    ['tauri://localhost', 'http://tauri.localhost'],
+  )
   assert.throws(() =>
     readControlPlaneDatabaseConfiguration({
       CODETETHER_CONTROL_PLANE_DATABASE_URL: 'sqlite:///unsafe.db',

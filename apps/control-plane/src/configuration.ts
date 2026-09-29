@@ -123,21 +123,25 @@ function parseAllowedOrigins(
   const defaults =
     environment === 'development'
       ? ['http://tauri.localhost', 'http://127.0.0.1:5173']
-      : ['http://tauri.localhost']
+      : ['tauri://localhost', 'http://tauri.localhost']
   const candidates = configured?.split(',') ?? defaults
   return candidates.map((candidate) => {
     const value = candidate.trim()
     const url = new URL(value)
+    const isMacTauriOrigin = value === 'tauri://localhost'
+    const isWebOrigin =
+      url.origin === value &&
+      url.username === '' &&
+      url.password === '' &&
+      (url.protocol === 'https:' ||
+        (url.protocol === 'http:' &&
+          (url.hostname === 'tauri.localhost' ||
+            url.hostname === '127.0.0.1' ||
+            url.hostname === 'localhost')))
     if (
       value.length === 0 ||
       value.length > 512 ||
-      url.origin !== value ||
-      url.username !== '' ||
-      url.password !== '' ||
-      (url.protocol !== 'https:' &&
-        url.hostname !== 'tauri.localhost' &&
-        url.hostname !== '127.0.0.1' &&
-        url.hostname !== 'localhost')
+      (!isMacTauriOrigin && !isWebOrigin)
     ) {
       throw new Error('Control Plane allowed origins contain an invalid origin')
     }

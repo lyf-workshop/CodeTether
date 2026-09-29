@@ -260,7 +260,7 @@ function AuthenticatedHostDirectory({
       }
     >
       {directory.isPending ? (
-        <DirectoryBoundary label="Loading authorized Hosts…" />
+        <DirectoryBoundary label="Setting up this Mac…" />
       ) : errorMessage !== undefined ? (
         <div
           role="alert"
@@ -588,6 +588,12 @@ function hostDirectoryErrorMessage(error: unknown): string {
     error.code === 'product_device_key_unavailable'
   )
     return 'This Desktop cannot find the existing protected ProductDevice key required for account access.'
+  if (
+    error.code.startsWith('product_device_registration_') ||
+    error.code === 'device_registration_challenge_invalid' ||
+    error.code === 'device_registration_challenge_expired'
+  )
+    return 'This Mac could not finish its secure device setup. Retry after checking the account connection.'
   if (error.code.includes('revoked') || error.code.includes('authorization'))
     return 'This ProductDevice no longer has effective Host authorization.'
   return 'The Control Plane is unavailable or returned an invalid response. Your local Host remains available.'

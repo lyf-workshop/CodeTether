@@ -49,7 +49,8 @@ export interface HostIdentityKeyDescription {
   readonly keyAlgorithm: 'ES256'
   readonly keyGeneration: 1
   readonly privateKeyExportable: false
-  readonly protection: 'windows_cng_software_ksp_non_exportable'
+  readonly protection:
+    'windows_cng_software_ksp_non_exportable' | 'macos_secure_enclave'
 }
 
 export interface HostIdentityCapability {
@@ -73,7 +74,9 @@ export interface ProductDeviceKeyDescription {
   readonly keyAlgorithm: 'ES256'
   readonly keyGeneration: 1
   readonly privateKeyExportable: false
-  readonly protection: 'windows_cng_software_ksp_non_exportable'
+  readonly protection:
+    | 'windows_cng_software_ksp_non_exportable'
+    | 'macOS_secure_enclave_wrapped_key_file_keychain'
 }
 
 export interface ProductDeviceSignature {
@@ -84,11 +87,19 @@ export interface ProductDeviceSignature {
 export interface ProductDeviceIdentityCapability {
   readonly available: boolean
   listKeys(): Promise<readonly ProductDeviceKeyDescription[]>
+  createKey(): Promise<ProductDeviceKeyDescription>
   readPublic(keyHandle: string): Promise<ProductDeviceKeyDescription>
   sign(
     keyHandle: string,
     payloadBase64Url: string,
   ): Promise<ProductDeviceSignature>
+  destroyKey(keyHandle: string): Promise<void>
+  bindDevice(
+    keyHandle: string,
+    deviceId: string,
+    fingerprint: string,
+    keyGeneration: number,
+  ): Promise<void>
 }
 
 export interface DesktopResumeIntent {
@@ -200,9 +211,15 @@ const unavailableProductDeviceIdentity: ProductDeviceIdentityCapability = {
   available: false,
   listKeys: () =>
     Promise.reject(new Error('Native ProductDevice identity is unavailable.')),
+  createKey: () =>
+    Promise.reject(new Error('Native ProductDevice identity is unavailable.')),
   readPublic: () =>
     Promise.reject(new Error('Native ProductDevice identity is unavailable.')),
   sign: () =>
+    Promise.reject(new Error('Native ProductDevice identity is unavailable.')),
+  destroyKey: () =>
+    Promise.reject(new Error('Native ProductDevice identity is unavailable.')),
+  bindDevice: () =>
     Promise.reject(new Error('Native ProductDevice identity is unavailable.')),
 }
 
@@ -474,6 +491,12 @@ export function createNativeCapabilities(
         'product_device_key_list',
       )
     },
+    async createKey() {
+      const { invoke } = await loadCore()
+      return await invoke<ProductDeviceKeyDescription>(
+        'product_device_key_create',
+      )
+    },
     async readPublic(keyHandle) {
       const { invoke } = await loadCore()
       return await invoke<ProductDeviceKeyDescription>(
@@ -486,6 +509,19 @@ export function createNativeCapabilities(
       return await invoke<ProductDeviceSignature>('product_device_key_sign', {
         keyHandle,
         payloadBase64Url,
+      })
+    },
+    async destroyKey(keyHandle) {
+      const { invoke } = await loadCore()
+      await invoke<void>('product_device_key_destroy', { keyHandle })
+    },
+    async bindDevice(keyHandle, deviceId, fingerprint, keyGeneration) {
+      const { invoke } = await loadCore()
+      await invoke<void>('product_device_key_bind', {
+        keyHandle,
+        deviceId,
+        fingerprint,
+        keyGeneration,
       })
     },
   }

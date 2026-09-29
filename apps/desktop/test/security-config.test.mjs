@@ -100,7 +100,7 @@ test('production Desktop CSP and capabilities stay loopback-only and non-wildcar
   )
   assert.match(
     productDeviceKeyPermission,
-    /commands\.allow = \[\s*"product_device_key_list",\s*"product_device_key_create",\s*"product_device_key_public",\s*"product_device_key_sign",\s*"product_device_key_destroy",?\s*\]/u,
+    /commands\.allow = \[\s*"product_device_key_list",\s*"product_device_key_create",\s*"product_device_key_public",\s*"product_device_key_sign",\s*"product_device_key_destroy",\s*"product_device_key_bind",?\s*\]/u,
   )
   assert.doesNotMatch(
     productDeviceKeyPermission,
@@ -114,6 +114,10 @@ test('production Desktop CSP and capabilities stay loopback-only and non-wildcar
   assert.match(
     config.app.security.csp['connect-src'],
     /http:\/\/127\.0\.0\.1:4317/u,
+  )
+  assert.match(
+    config.app.security.csp['connect-src'],
+    /https:\/\/api\.codetether\.org/u,
   )
   assert.doesNotMatch(
     JSON.stringify(config.app.security.csp),
@@ -192,6 +196,7 @@ test('Web UI exposes only the bounded Desktop product commands', async () => {
   assert.match(desktopRust, /product_device_key_public/u)
   assert.match(desktopRust, /product_device_key_sign/u)
   assert.match(desktopRust, /product_device_key_destroy/u)
+  assert.match(desktopRust, /product_device_key_bind/u)
   assert.match(desktopRust, /codetether:\/\/notification-intent/u)
   assert.match(desktopRust, /UNUserNotificationCenter/u)
   assert.match(desktopRust, /UNNotificationPresentationOptions::Banner/u)
@@ -220,7 +225,7 @@ test('Web UI exposes only the bounded Desktop product commands', async () => {
   assert.match(desktopRust, /invoke_handler/u)
   assert.match(
     buildScript,
-    /"pick_project_directory",\s*"open_provider_guidance",\s*"deliver_attention_notification",\s*"take_pending_notification_intent",\s*"product_device_key_list",\s*"product_device_key_create",\s*"product_device_key_public",\s*"product_device_key_sign",\s*"product_device_key_destroy",/u,
+    /"pick_project_directory",\s*"open_provider_guidance",\s*"deliver_attention_notification",\s*"take_pending_notification_intent",\s*"product_device_key_list",\s*"product_device_key_create",\s*"product_device_key_public",\s*"product_device_key_sign",\s*"product_device_key_destroy",\s*"product_device_key_bind",/u,
   )
   assert.match(buildScript, /tauri_build::try_build/u)
   assert.doesNotMatch(buildScript, /tauri_build::build\(\)/u)

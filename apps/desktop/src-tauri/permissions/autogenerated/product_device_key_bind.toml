@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-product-device-key-bind"
+description = "Enables the product_device_key_bind command without any pre-configured scope."
+commands.allow = ["product_device_key_bind"]
+
+[[permission]]
+identifier = "deny-product-device-key-bind"
+description = "Denies the product_device_key_bind command without any pre-configured scope."
+commands.deny = ["product_device_key_bind"]

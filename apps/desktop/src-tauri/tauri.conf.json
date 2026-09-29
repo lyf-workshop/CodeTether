@@ -32,7 +32,7 @@
       "csp": {
         "base-uri": "'none'",
         "default-src": "'self'",
-        "connect-src": "http://127.0.0.1:4317 http://127.0.0.1:4320 https://*.supabase.co",
+        "connect-src": "http://127.0.0.1:4317 http://127.0.0.1:4320 https://api.codetether.org https://*.supabase.co",
         "font-src": "'self' data:",
         "form-action": "'none'",
         "frame-ancestors": "'none'",

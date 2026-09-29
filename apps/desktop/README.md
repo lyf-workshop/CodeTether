@@ -182,7 +182,7 @@ The fixed business endpoint remains:
 http://127.0.0.1:4317
 ```
 
-Production WebView requests use the explicit `http://tauri.localhost` Origin. Development uses `http://127.0.0.1:5173`. Desktop-managed Host startup passes only the applicable Origin; wildcard CORS remains forbidden.
+Production WebView requests use the platform's explicit Tauri Origin: macOS uses `tauri://localhost`, while Windows uses `http://tauri.localhost`. Development uses `http://127.0.0.1:5173`. Desktop-managed Host startup passes only the applicable Origin; wildcard CORS remains forbidden.
 
 Production CSP permits `connect-src` only to the loopback Host. Development adds only the explicit Vite HTTP/WebSocket endpoints. Remote scripts and wildcard network sources are not enabled.
 

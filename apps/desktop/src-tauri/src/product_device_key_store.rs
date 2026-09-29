@@ -41,6 +41,7 @@ enum ProductDeviceKeyError {
     KeyGenerationFailed,
     KeySignFailed,
     PlatformKeyStorageUnavailable,
+    PlatformSecureKeyStorageUnavailable,
     PlatformKeyOperationFailed,
 }
 
@@ -54,6 +55,7 @@ impl ProductDeviceKeyError {
             Self::KeyGenerationFailed => "product_device_key_generation_failed",
             Self::KeySignFailed => "product_device_key_sign_failed",
             Self::PlatformKeyStorageUnavailable => "platform_key_storage_unavailable",
+            Self::PlatformSecureKeyStorageUnavailable => "platform_secure_key_storage_unavailable",
             Self::PlatformKeyOperationFailed => "platform_key_operation_failed",
         }
     }
@@ -483,18 +485,21 @@ mod platform {
     }
 }
 
-use platform::WindowsCngProductDeviceKeyStore;
+#[cfg(target_os = "macos")]
+use platform::MacosKeychainProductDeviceKeyStore as ProductDevicePlatformKeyStore;
+#[cfg(not(target_os = "macos"))]
+use platform::WindowsCngProductDeviceKeyStore as ProductDevicePlatformKeyStore;
 
 #[tauri::command]
 pub fn product_device_key_list() -> Result<Vec<ProductDeviceKeyDescription>, String> {
-    WindowsCngProductDeviceKeyStore::new()
+    ProductDevicePlatformKeyStore::new()
         .list_keys()
         .map_err(|error| error.code().to_owned())
 }
 
 #[tauri::command]
 pub fn product_device_key_create() -> Result<ProductDeviceKeyDescription, String> {
-    WindowsCngProductDeviceKeyStore::new()
+    ProductDevicePlatformKeyStore::new()
         .create_key()
         .map_err(|error| error.code().to_owned())
 }
@@ -503,7 +508,7 @@ pub fn product_device_key_create() -> Result<ProductDeviceKeyDescription, String
 pub fn product_device_key_public(
     key_handle: String,
 ) -> Result<ProductDeviceKeyDescription, String> {
-    WindowsCngProductDeviceKeyStore::new()
+    ProductDevicePlatformKeyStore::new()
         .public_key(&key_handle)
         .map_err(|error| error.code().to_owned())
 }
@@ -522,7 +527,7 @@ pub fn product_device_key_sign(
     if URL_SAFE_NO_PAD.encode(&payload) != payload_base64_url {
         return Err(ProductDeviceKeyError::InvalidPayload.code().to_owned());
     }
-    WindowsCngProductDeviceKeyStore::new()
+    ProductDevicePlatformKeyStore::new()
         .sign(&key_handle, &payload)
         .map(|signature| ProductDeviceSignature {
             signature_base64_url: URL_SAFE_NO_PAD.encode(signature),
@@ -533,9 +538,30 @@ pub fn product_device_key_sign(
 
 #[tauri::command]
 pub fn product_device_key_destroy(key_handle: String) -> Result<(), String> {
-    WindowsCngProductDeviceKeyStore::new()
+    ProductDevicePlatformKeyStore::new()
         .destroy_key(&key_handle)
         .map_err(|error| error.code().to_owned())
+}
+
+#[tauri::command]
+pub fn product_device_key_bind(
+    key_handle: String,
+    device_id: String,
+    fingerprint: String,
+    key_generation: u32,
+) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        return platform::bind_device(&key_handle, &device_id, &fingerprint, key_generation)
+            .map_err(|error| error.code().to_owned());
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (key_handle, device_id, fingerprint, key_generation);
+        Err(ProductDeviceKeyError::PlatformKeyStorageUnavailable
+            .code()
+            .to_owned())
+    }
 }
 
 #[cfg(all(test, windows))]

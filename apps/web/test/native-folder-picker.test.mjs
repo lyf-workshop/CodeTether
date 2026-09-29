@@ -38,7 +38,7 @@ test('Browser capability stays unavailable without loading Tauri code', async ()
   assert.equal(loadCalls, 0)
 })
 
-test('Desktop exposes only existing ProductDevice public metadata and bounded signing commands', async () => {
+test('Desktop exposes ProductDevice metadata, enrollment, and bounded signing commands', async () => {
   const calls = []
   const description = {
     keyHandle: `CodeTether.ProductDevice.${'a'.repeat(32)}`,
@@ -54,6 +54,7 @@ test('Desktop exposes only existing ProductDevice public metadata and bounded si
       async invoke(command, input) {
         calls.push({ command, input })
         if (command === 'product_device_key_list') return [description]
+        if (command === 'product_device_key_create') return description
         if (command === 'product_device_key_public') return description
         if (command === 'product_device_key_sign') {
           return { signatureBase64Url: 'signature', keyAlgorithm: 'ES256' }
@@ -65,13 +66,22 @@ test('Desktop exposes only existing ProductDevice public metadata and bounded si
   assert.deepEqual(await capabilities.productDeviceIdentity.listKeys(), [
     description,
   ])
+  await capabilities.productDeviceIdentity.createKey()
   await capabilities.productDeviceIdentity.readPublic(description.keyHandle)
   await capabilities.productDeviceIdentity.sign(
     description.keyHandle,
     'cGF5bG9hZA',
   )
+  await capabilities.productDeviceIdentity.bindDevice(
+    description.keyHandle,
+    'dev_' + '1'.repeat(32),
+    'sha256:' + 'a'.repeat(43),
+    1,
+  )
+  await capabilities.productDeviceIdentity.destroyKey(description.keyHandle)
   assert.deepEqual(calls, [
     { command: 'product_device_key_list', input: undefined },
+    { command: 'product_device_key_create', input: undefined },
     {
       command: 'product_device_key_public',
       input: { keyHandle: description.keyHandle },
@@ -82,6 +92,19 @@ test('Desktop exposes only existing ProductDevice public metadata and bounded si
         keyHandle: description.keyHandle,
         payloadBase64Url: 'cGF5bG9hZA',
       },
+    },
+    {
+      command: 'product_device_key_bind',
+      input: {
+        keyHandle: description.keyHandle,
+        deviceId: 'dev_' + '1'.repeat(32),
+        fingerprint: 'sha256:' + 'a'.repeat(43),
+        keyGeneration: 1,
+      },
+    },
+    {
+      command: 'product_device_key_destroy',
+      input: { keyHandle: description.keyHandle },
     },
   ])
 })

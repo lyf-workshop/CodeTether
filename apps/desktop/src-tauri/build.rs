@@ -22,6 +22,52 @@ fn main() {
     assert!(!build_id.is_empty(), "Desktop build ID must not be empty");
     println!("cargo:rustc-env=CODETETHER_BUILD_ID={build_id}");
 
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        let swift_source = manifest_dir.join("src/macos_secure_enclave_bridge.swift");
+        println!("cargo:rerun-if-changed={}", swift_source.display());
+        let target = env::var("TARGET").expect("Rust target triple");
+        let swift_arch = match target.as_str() {
+            "aarch64-apple-darwin" => "aarch64",
+            "x86_64-apple-darwin" => "x86_64",
+            _ => panic!("unsupported macOS target for CryptoKit bridge: {target}"),
+        };
+        let swift_target = format!("{swift_arch}-apple-macosx13.5");
+        let output = env::var_os("OUT_DIR").expect("Cargo OUT_DIR");
+        let output = PathBuf::from(output);
+        let bridge_library = output.join("libcodetether_secure_enclave_bridge.a");
+        let status = std::process::Command::new("swiftc")
+            .args([
+                "-emit-library",
+                "-static",
+                "-parse-as-library",
+                "-module-name",
+                "codetether_secure_enclave_bridge",
+                "-target",
+                &swift_target,
+                "-framework",
+                "CryptoKit",
+                "-framework",
+                "Security",
+                "-framework",
+                "Foundation",
+            ])
+            .arg(&swift_source)
+            .arg("-o")
+            .arg(&bridge_library)
+            .status()
+            .expect("failed to invoke swiftc for CryptoKit bridge");
+        assert!(
+            status.success(),
+            "swiftc failed to build CryptoKit Secure Enclave bridge"
+        );
+        println!("cargo:rustc-link-search=native={}", output.display());
+        println!("cargo:rustc-link-lib=static=codetether_secure_enclave_bridge");
+        println!("cargo:rustc-link-search=native=/usr/lib/swift/macosx");
+        println!("cargo:rustc-link-lib=framework=CryptoKit");
+        println!("cargo:rustc-link-lib=framework=Security");
+        println!("cargo:rustc-link-lib=framework=Foundation");
+    }
+
     let attributes =
         tauri_build::Attributes::new().app_manifest(tauri_build::AppManifest::new().commands(&[
             "pick_project_directory",
@@ -33,6 +79,7 @@ fn main() {
             "product_device_key_public",
             "product_device_key_sign",
             "product_device_key_destroy",
+            "product_device_key_bind",
             "host_identity_key_create",
             "host_identity_key_public",
             "host_identity_key_sign",

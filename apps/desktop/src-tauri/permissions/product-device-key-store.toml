@@ -7,4 +7,5 @@ commands.allow = [
   "product_device_key_public",
   "product_device_key_sign",
   "product_device_key_destroy",
+  "product_device_key_bind",
 ]

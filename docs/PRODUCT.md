@@ -358,3 +358,24 @@ The Phase 8D native historical transcript projection fixes the blank timeline of
 Phase 8D support is evidence-scoped to Windows x64 Desktop/Host, Apple Silicon macOS Node/Desktop, and Raspberry Pi 5/Linux ARM64 Node with Provider execution capability-dependent and not currently claimed. The product supports Windows Host control of an Apple Silicon macOS Node, Relay-assisted first pairing, durable Machine identity, exact ProviderInstallation selection/binding, provider-neutral Codex and Claude architecture, Provider-native resume, Codex historical-session adoption, read-only historical projection, Relay-only typed Machine operations, and Provider lifecycle/readiness projection. Host durable selection is authoritative; Node-local selection is observation/default only. Existing Conversation installation bindings are immutable, new Conversations bind the current exact Owner selection, and remote session-open validates that exact installation ID and revision without PATH-first, equivalent-version, or alternate-installation fallback. Discovery, adoption, and resume are distinct; resume never reconstructs context by replaying historical transcript text.
 
 Linux x64 Node, Linux Desktop, Windows Node, Windows ARM64, and Intel macOS are `OUT_OF_CURRENT_SCOPE`. Windows full-OS-reboot REAL and Raspberry Pi current-head physical revalidation are `DEFERRED_NON_BLOCKING`. Pi Codex/Claude execution is `CAPABILITY_DEPENDENT_NOT_CURRENTLY_CLAIMED`, and public macOS notarization is `DISTRIBUTION_FOLLOW_UP`. Tray Attention badges/counts, recent-item tray menus, close-behavior settings, notification delivery after explicit Quit, notification history, remote/mobile/browser push, email/chat delivery, custom sounds, schedules, automatic Provider or application updating, public signing/notarization, automatic Host restart, drag-and-drop, Project discovery, Project/Location relocation, synchronization, arbitrary Relay payloads or generic tunneling, NAT traversal/hole punching, captive-portal detection, enterprise proxy configuration, multi-Relay failover, richer remote execution/control, LAN discovery shipment, Provider backend/profile/account switching, OpenCode/third Providers, Mobile, cross-Provider handoff, Claude capability parity, traffic-analysis resistance, automatic Machine-key rotation, and later behavior remain unimplemented.
+### Phase 10A — Cross-Network Host Access Requests
+
+Phase 10A productizes access to an account-owned Host across unrelated
+networks. A signed-in ProductDevice may see minimal owned Host metadata before
+it is authorized. The Mac client shows `Access required` and submits one
+bounded `supervisor_read` request through the Control Plane. The temporary
+`hreq_*` workflow record expires, can be cancelled, and is deduplicated; it
+never grants Supervisor access by itself.
+
+The Windows owner sees pending requests through the Control Plane and must
+explicitly choose Allow or Deny. Allow asks the local Windows Host to sign the
+existing Host-authorization payload with its non-exportable CNG key. The
+Control Plane verifies the exact ProductDevice, Host, Space, generations,
+fingerprints, scope, challenge, and signature in one transaction before
+creating the existing `host_device_authorizations` record. Retries and double
+approval produce at most one authorization. After completion, the Mac uses the
+unchanged authorized directory and existing Relay Supervisor read path.
+
+No same-LAN route, public Windows listener, port 4331, temporary helper, new
+Host key, or second authorization authority is used. `supervisor_control`
+remains unavailable.

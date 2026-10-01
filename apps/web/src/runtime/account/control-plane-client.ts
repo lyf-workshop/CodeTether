@@ -1,4 +1,5 @@
 import type {
+  HostIdentityCapability,
   ProductDeviceIdentityCapability,
   ProductDeviceKeyDescription,
 } from '../native/native-capabilities.js'
@@ -50,6 +51,35 @@ export interface AuthorizedHostDirectoryEntry {
     readonly grant: SignedSupervisorGrant
     readonly transport: SignedSupervisorTransportDescriptor
   } | null
+}
+
+export interface OwnedHostAccessEntry {
+  readonly hostId: string
+  readonly spaceId: string
+  readonly safeLabel: string
+  readonly coarsePlatform: string
+  readonly fingerprint: string
+  readonly identityGeneration: number
+  readonly access: {
+    readonly state: 'authorized' | 'pending' | 'denied' | 'cancelled' | 'expired' | 'none'
+    readonly requestId: string | null
+    readonly expiresAt: string | null
+    readonly authorizationId: string | null
+  }
+}
+
+export interface HostAccessRequest {
+  readonly requestId: string
+  readonly hostId: string
+  readonly deviceId: string
+  readonly spaceId: string
+  readonly scope: 'supervisor_read'
+  readonly status: 'pending' | 'denied' | 'cancelled' | 'expired' | 'completed'
+  readonly createdAt: string
+  readonly updatedAt: string
+  readonly expiresAt: string
+  readonly completedAuthorizationId: string | null
+  readonly payload: Record<string, unknown>
 }
 
 export interface SupervisorGrantPayload {
@@ -505,6 +535,151 @@ export async function listAuthorizedHosts(options: {
   return parseHostDirectory(body)
 }
 
+export async function listOwnedHosts(options: {
+  readonly accessToken: string
+  readonly baseUrl: string
+  readonly identity: ProductDeviceIdentityCapability
+  readonly productDevice: ResolvedProductDevice
+  readonly signal?: AbortSignal
+}): Promise<readonly OwnedHostAccessEntry[]> {
+  const resource = '/v1/hosts/owned'
+  const proof = await createDeviceRequestProof({
+    accessToken: options.accessToken,
+    deviceId: options.productDevice.device.deviceId,
+    keyGeneration: options.productDevice.device.keyGeneration,
+    keyHandle: options.productDevice.key.keyHandle,
+    identity: options.identity,
+    method: 'GET',
+    resource,
+  })
+  const response = await fetch(`${options.baseUrl}${resource}`, {
+    headers: { authorization: `Bearer ${options.accessToken}`, [DEVICE_PROOF_HEADER]: proof },
+    signal: options.signal,
+  })
+  const body = await readJson(response)
+  if (!response.ok) throw responseError(response, body)
+  return parseOwnedHosts(body)
+}
+
+export async function requestHostAccess(options: {
+  readonly accessToken: string
+  readonly baseUrl: string
+  readonly identity: ProductDeviceIdentityCapability
+  readonly productDevice: ResolvedProductDevice
+  readonly host: OwnedHostAccessEntry
+  readonly signal?: AbortSignal
+}): Promise<{ readonly status: string; readonly request: HostAccessRequest | null }> {
+  const resource = `/v1/hosts/${options.host.hostId}/access-request`
+  const body = {
+    spaceId: options.host.spaceId,
+    hostFingerprint: options.host.fingerprint,
+    hostIdentityGeneration: options.host.identityGeneration,
+    scope: 'supervisor_read' as const,
+  }
+  const value = await postAuthenticatedProductDeviceJson({
+    accessToken: options.accessToken,
+    baseUrl: options.baseUrl,
+    identity: options.identity,
+    productDevice: options.productDevice,
+    resource,
+    value: body,
+    signal: options.signal,
+  })
+  return parseAccessRequestResult(value)
+}
+
+export async function cancelHostAccessRequest(options: {
+  readonly accessToken: string
+  readonly baseUrl: string
+  readonly identity: ProductDeviceIdentityCapability
+  readonly productDevice: ResolvedProductDevice
+  readonly requestId: string
+  readonly signal?: AbortSignal
+}): Promise<void> {
+  await postAuthenticatedProductDeviceEmpty({
+    accessToken: options.accessToken,
+    baseUrl: options.baseUrl,
+    identity: options.identity,
+    productDevice: options.productDevice,
+    resource: `/v1/hosts/access-requests/${options.requestId}/cancel`,
+    signal: options.signal,
+  })
+}
+
+export async function listPendingHostAccessRequests(options: {
+  readonly accessToken: string
+  readonly baseUrl: string
+  readonly identity: ProductDeviceIdentityCapability
+  readonly productDevice: ResolvedProductDevice
+  readonly signal?: AbortSignal
+}): Promise<readonly HostAccessRequest[]> {
+  const resource = '/v1/hosts/access-requests/pending'
+  const proof = await createDeviceRequestProof({
+    accessToken: options.accessToken,
+    deviceId: options.productDevice.device.deviceId,
+    keyGeneration: options.productDevice.device.keyGeneration,
+    keyHandle: options.productDevice.key.keyHandle,
+    identity: options.identity,
+    method: 'GET',
+    resource,
+  })
+  const response = await fetch(`${options.baseUrl}${resource}`, {
+    headers: { authorization: `Bearer ${options.accessToken}`, [DEVICE_PROOF_HEADER]: proof },
+    signal: options.signal,
+  })
+  const body = await readJson(response)
+  if (!response.ok) throw responseError(response, body)
+  if (!isRecord(body) || !Array.isArray(body.requests)) invalidResponse()
+  return body.requests.map(parseAccessRequest)
+}
+
+export async function denyHostAccessRequest(options: {
+  readonly accessToken: string
+  readonly baseUrl: string
+  readonly identity: ProductDeviceIdentityCapability
+  readonly productDevice: ResolvedProductDevice
+  readonly requestId: string
+  readonly signal?: AbortSignal
+}): Promise<void> {
+  await postAuthenticatedProductDeviceEmpty({
+    accessToken: options.accessToken,
+    baseUrl: options.baseUrl,
+    identity: options.identity,
+    productDevice: options.productDevice,
+    resource: `/v1/hosts/access-requests/${options.requestId}/deny`,
+    signal: options.signal,
+  })
+}
+
+export async function approveHostAccessRequest(options: {
+  readonly accessToken: string
+  readonly baseUrl: string
+  readonly identity: ProductDeviceIdentityCapability
+  readonly productDevice: ResolvedProductDevice
+  readonly hostIdentity: HostIdentityCapability
+  readonly hostKeyHandle: string
+  readonly request: HostAccessRequest
+  readonly signal?: AbortSignal
+}): Promise<void> {
+  const header = base64Url(utf8(JSON.stringify({ alg: 'ES256', typ: 'codetether-host-device-authorization+jws' })))
+  const encodedPayload = base64Url(canonicalJsonBytes(options.request.payload))
+  const signingInput = `${header}.${encodedPayload}`
+  const signed = await options.hostIdentity.sign(
+    options.hostKeyHandle,
+    base64Url(utf8(signingInput)),
+  )
+  const proof = `${signingInput}.${signed.signatureBase64Url}`
+  await postAuthenticatedProductDeviceJson({
+    accessToken: options.accessToken,
+    baseUrl: options.baseUrl,
+    identity: options.identity,
+    productDevice: options.productDevice,
+    resource: `/v1/hosts/access-requests/${options.request.requestId}/approve`,
+    value: { payload: options.request.payload, proof },
+    signal: options.signal,
+  })
+}
+
 export async function postAuthenticatedProductDeviceJson(options: {
   readonly accessToken: string
   readonly baseUrl: string
@@ -533,6 +708,36 @@ export async function postAuthenticatedProductDeviceJson(options: {
       [DEVICE_PROOF_HEADER]: proof,
     },
     body: new TextDecoder().decode(bodyBytes),
+    signal: options.signal,
+  })
+  const body = await readJson(response)
+  if (!response.ok) throw responseError(response, body)
+  return body
+}
+
+async function postAuthenticatedProductDeviceEmpty(options: {
+  readonly accessToken: string
+  readonly baseUrl: string
+  readonly identity: ProductDeviceIdentityCapability
+  readonly productDevice: ResolvedProductDevice
+  readonly resource: string
+  readonly signal?: AbortSignal
+}): Promise<unknown> {
+  const proof = await createDeviceRequestProof({
+    accessToken: options.accessToken,
+    deviceId: options.productDevice.device.deviceId,
+    keyGeneration: options.productDevice.device.keyGeneration,
+    keyHandle: options.productDevice.key.keyHandle,
+    identity: options.identity,
+    method: 'POST',
+    resource: options.resource,
+  })
+  const response = await fetch(`${options.baseUrl}${options.resource}`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${options.accessToken}`,
+      [DEVICE_PROOF_HEADER]: proof,
+    },
     signal: options.signal,
   })
   const body = await readJson(response)
@@ -719,6 +924,51 @@ function parseHostDirectory(
     }
     return candidate as unknown as AuthorizedHostDirectoryEntry
   })
+}
+
+function parseOwnedHosts(value: unknown): readonly OwnedHostAccessEntry[] {
+  if (!isRecord(value) || !Array.isArray(value.hosts)) invalidResponse()
+  return value.hosts.map((candidate) => {
+    if (
+      !isRecord(candidate) ||
+      !isId(candidate.hostId, 'host_') ||
+      !isId(candidate.spaceId, 'space_') ||
+      !isBoundedString(candidate.safeLabel, 120) ||
+      !isBoundedString(candidate.coarsePlatform, 64) ||
+      !isBoundedString(candidate.fingerprint, 128) ||
+      !isPositiveInteger(candidate.identityGeneration) ||
+      !isRecord(candidate.access) ||
+      !['authorized', 'pending', 'denied', 'cancelled', 'expired', 'none'].includes(String(candidate.access.state)) ||
+      (candidate.access.requestId !== null && !isId(candidate.access.requestId, 'hreq_')) ||
+      (candidate.access.authorizationId !== null && !isId(candidate.access.authorizationId, 'hauth_')) ||
+      (candidate.access.expiresAt !== null && !isBoundedString(candidate.access.expiresAt, 64))
+    ) invalidResponse()
+    return candidate as unknown as OwnedHostAccessEntry
+  })
+}
+
+function parseAccessRequest(value: unknown): HostAccessRequest {
+  if (
+    !isRecord(value) ||
+    !isId(value.requestId, 'hreq_') ||
+    !isId(value.hostId, 'host_') ||
+    !isId(value.deviceId, 'dev_') ||
+    !isId(value.spaceId, 'space_') ||
+    value.scope !== 'supervisor_read' ||
+    !['pending', 'denied', 'cancelled', 'expired', 'completed'].includes(String(value.status)) ||
+    !isBoundedString(value.createdAt, 64) ||
+    !isBoundedString(value.updatedAt, 64) ||
+    !isBoundedString(value.expiresAt, 64) ||
+    (value.completedAuthorizationId !== null && !isId(value.completedAuthorizationId, 'hauth_')) ||
+    !isRecord(value.payload)
+  ) invalidResponse()
+  return value as unknown as HostAccessRequest
+}
+
+function parseAccessRequestResult(value: unknown): { readonly status: string; readonly request: HostAccessRequest | null } {
+  if (!isRecord(value) || typeof value.status !== 'string') invalidResponse()
+  const request = value.request === null ? null : parseAccessRequest(value.request)
+  return { status: value.status, request }
 }
 
 function isPublicJwk(

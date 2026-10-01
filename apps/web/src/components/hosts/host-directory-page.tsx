@@ -5,7 +5,7 @@ import {
   type FormEvent,
   type ReactNode,
 } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import {
   CheckCircle2,
@@ -23,8 +23,15 @@ import { Badge, Button } from '@codetether/ui'
 import { controlPlaneBaseUrl } from '../../runtime/account/account-config.js'
 import {
   ControlPlaneClientError,
+  approveHostAccessRequest,
+  cancelHostAccessRequest,
+  denyHostAccessRequest,
   listAuthorizedHosts,
+  listPendingHostAccessRequests,
+  listOwnedHosts,
+  requestHostAccess,
   resolveExistingProductDevice,
+  type OwnedHostAccessEntry,
   type AuthorizedHostDirectoryEntry,
 } from '../../runtime/account/control-plane-client.js'
 import {
@@ -211,14 +218,23 @@ function AuthenticatedHostDirectory({
         identity: nativeCapabilities.productDeviceIdentity,
         signal,
       })
-      const hosts = await listAuthorizedHosts({
-        accessToken: session.access_token,
-        baseUrl: controlPlaneBaseUrl,
-        identity: nativeCapabilities.productDeviceIdentity,
-        productDevice,
-        signal,
-      })
-      return { hosts, productDevice }
+      const [hosts, ownedHosts] = await Promise.all([
+        listAuthorizedHosts({
+          accessToken: session.access_token,
+          baseUrl: controlPlaneBaseUrl,
+          identity: nativeCapabilities.productDeviceIdentity,
+          productDevice,
+          signal,
+        }),
+        listOwnedHosts({
+          accessToken: session.access_token,
+          baseUrl: controlPlaneBaseUrl,
+          identity: nativeCapabilities.productDeviceIdentity,
+          productDevice,
+          signal,
+        }),
+      ])
+      return { hosts, ownedHosts, productDevice }
     },
     retry: false,
     staleTime: 30_000,
@@ -230,6 +246,21 @@ function AuthenticatedHostDirectory({
     enabled: directory.data !== undefined && connectionState === 'connected',
     retry: false,
     staleTime: 30_000,
+  })
+  const pendingRequests = useQuery({
+    queryKey: ['account', 'host-access-requests', session.user.id],
+    queryFn: ({ signal }) =>
+      listPendingHostAccessRequests({
+        accessToken: session.access_token,
+        baseUrl: controlPlaneBaseUrl,
+        identity: nativeCapabilities.productDeviceIdentity,
+        productDevice: directory.data!.productDevice,
+        signal,
+      }),
+    enabled: directory.data !== undefined,
+    retry: false,
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
   })
 
   const errorMessage = directory.isError
@@ -269,7 +300,7 @@ function AuthenticatedHostDirectory({
           <h2 className="font-semibold text-text-primary">Hosts unavailable</h2>
           <p className="mt-2 text-sm text-text-secondary">{errorMessage}</p>
         </div>
-      ) : (directory.data?.hosts.length ?? 0) === 0 ? (
+      ) : (directory.data?.ownedHosts.length ?? 0) === 0 ? (
         <div className="mt-8 max-w-2xl rounded-lg border border-border bg-surface p-5">
           <h2 className="font-semibold text-text-primary">
             No authorized Hosts
@@ -280,34 +311,337 @@ function AuthenticatedHostDirectory({
           </p>
         </div>
       ) : (
-        <div className="mt-8 grid gap-4 xl:grid-cols-2">
-          {(directory.data?.hosts ?? []).map((host) => {
-            const exactLocalHost =
-              localIdentity.data?.hostId === host.hostId &&
-              localIdentity.data.fingerprint === host.fingerprint &&
-              localIdentity.data.identityGeneration === host.identityGeneration
-            return (
-              <ConnectedHostCard
-                key={host.hostId}
-                host={host}
-                exactLocalHost={exactLocalHost}
-                localIdentity={localIdentity.data}
-                localConnectionState={connectionState}
-                productDevice={directory.data!.productDevice}
-                session={session}
-                onOpenLocal={() => void navigate({ to: '/machines' })}
-                onOpenRemote={() =>
-                  void navigate({
-                    to: '/hosts/$hostId',
-                    params: { hostId: host.hostId },
-                  })
-                }
-              />
-            )
-          })}
-        </div>
+        <>
+          {localIdentity.data !== undefined &&
+          pendingRequests.data?.some(
+            (request) => request.payload.hostId === localIdentity.data?.hostId,
+          ) ? (
+            <PendingAccessRequestPanel
+              requests={pendingRequests.data.filter(
+                (request) =>
+                  request.payload.hostId === localIdentity.data?.hostId,
+              )}
+              localIdentity={localIdentity.data}
+              session={session}
+              productDevice={directory.data!.productDevice}
+              onChanged={() => void pendingRequests.refetch()}
+            />
+          ) : null}
+          <div className="mt-8 grid gap-4 xl:grid-cols-2">
+            {(directory.data?.ownedHosts ?? []).map((ownedHost) => {
+              const host = directory.data?.hosts.find(
+                (candidate) => candidate.hostId === ownedHost.hostId,
+              )
+              if (
+                ownedHost.access.state === 'authorized' &&
+                host !== undefined
+              ) {
+                const exactLocalHost =
+                  localIdentity.data?.hostId === host.hostId &&
+                  localIdentity.data.fingerprint === host.fingerprint &&
+                  localIdentity.data.identityGeneration ===
+                    host.identityGeneration
+                return (
+                  <ConnectedHostCard
+                    key={host.hostId}
+                    host={host}
+                    exactLocalHost={exactLocalHost}
+                    localIdentity={localIdentity.data}
+                    localConnectionState={connectionState}
+                    productDevice={directory.data!.productDevice}
+                    session={session}
+                    onOpenLocal={() => void navigate({ to: '/machines' })}
+                    onOpenRemote={() =>
+                      void navigate({
+                        to: '/hosts/$hostId',
+                        params: { hostId: host.hostId },
+                      })
+                    }
+                  />
+                )
+              }
+              return (
+                <AccessRequiredHostCard
+                  key={ownedHost.hostId}
+                  host={ownedHost}
+                  session={session}
+                  productDevice={directory.data!.productDevice}
+                  onChanged={() => void directory.refetch()}
+                />
+              )
+            })}
+          </div>
+        </>
       )}
     </PageFrame>
+  )
+}
+
+function AccessRequiredHostCard({
+  host,
+  session,
+  productDevice,
+  onChanged,
+}: {
+  readonly host: OwnedHostAccessEntry
+  readonly session: Session
+  readonly productDevice: Awaited<
+    ReturnType<typeof resolveExistingProductDevice>
+  >
+  readonly onChanged: () => void
+}) {
+  const mutation = useMutation({
+    mutationFn: () =>
+      requestHostAccess({
+        accessToken: session.access_token,
+        baseUrl: controlPlaneBaseUrl,
+        identity: nativeCapabilities.productDeviceIdentity,
+        productDevice,
+        host,
+      }),
+    onSuccess: onChanged,
+  })
+  const cancelMutation = useMutation({
+    mutationFn: async () => {
+      if (host.access.requestId === null)
+        throw new Error('access_request_id_unavailable')
+      await cancelHostAccessRequest({
+        accessToken: session.access_token,
+        baseUrl: controlPlaneBaseUrl,
+        identity: nativeCapabilities.productDeviceIdentity,
+        productDevice,
+        requestId: host.access.requestId,
+      })
+    },
+    onSuccess: onChanged,
+  })
+  const state = host.access.state
+  const pending = state === 'pending'
+  const denied = state === 'denied'
+  const expired = state === 'expired' || state === 'cancelled'
+  return (
+    <article className="rounded-lg border border-border bg-surface p-5 shadow-sm">
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex min-w-0 gap-3">
+          <span className="grid size-10 shrink-0 place-items-center rounded-md border border-border bg-surface-inset">
+            <Monitor aria-hidden="true" />
+          </span>
+          <div className="min-w-0">
+            <h2 className="truncate font-semibold text-text-primary">
+              {host.safeLabel}
+            </h2>
+            <p className="mt-0.5 text-xs text-text-muted">
+              {host.coarsePlatform}
+            </p>
+          </div>
+        </div>
+        <Badge variant={pending ? 'secondary' : denied ? 'danger' : 'warning'}>
+          {pending
+            ? 'Waiting for approval'
+            : denied
+              ? 'Access denied'
+              : 'Access required'}
+        </Badge>
+      </div>
+      <p className="mt-5 text-sm text-text-secondary">
+        {pending
+          ? 'The Windows owner will see this request the next time CodeTether is open.'
+          : denied
+            ? 'The owner denied this request. You can submit a new request when appropriate.'
+            : 'Request read-only workspace access from the Host owner.'}
+      </p>
+      {!pending && !denied && !expired ? (
+        <Button
+          className="mt-5"
+          size="sm"
+          disabled={mutation.isPending}
+          onClick={() => mutation.mutate()}
+        >
+          {mutation.isPending ? (
+            <LoaderCircle
+              aria-hidden="true"
+              className="animate-spin motion-reduce:animate-none"
+            />
+          ) : null}
+          Request Access
+        </Button>
+      ) : null}
+      {expired ? (
+        <Button
+          className="mt-5"
+          size="sm"
+          disabled={mutation.isPending}
+          onClick={() => mutation.mutate()}
+        >
+          Request Access again
+        </Button>
+      ) : null}
+      {denied ? (
+        <Button
+          className="mt-5"
+          size="sm"
+          disabled={mutation.isPending}
+          onClick={() => mutation.mutate()}
+        >
+          Request Access again
+        </Button>
+      ) : null}
+      {pending ? (
+        <Button
+          className="mt-5"
+          variant="outline"
+          size="sm"
+          disabled={cancelMutation.isPending || host.access.requestId === null}
+          onClick={() => cancelMutation.mutate()}
+        >
+          {cancelMutation.isPending ? (
+            <LoaderCircle
+              aria-hidden="true"
+              className="animate-spin motion-reduce:animate-none"
+            />
+          ) : null}
+          Cancel request
+        </Button>
+      ) : null}
+      {mutation.isError || cancelMutation.isError ? (
+        <p role="alert" className="mt-3 text-sm text-danger">
+          The access request could not be updated. Retry when the Control Plane
+          is reachable.
+        </p>
+      ) : null}
+    </article>
+  )
+}
+
+function PendingAccessRequestPanel({
+  requests,
+  localIdentity,
+  session,
+  productDevice,
+  onChanged,
+}: {
+  readonly requests: readonly import('../../runtime/account/control-plane-client.js').HostAccessRequest[]
+  readonly localIdentity: LocalHostIdentityRecord | undefined
+  readonly session: Session
+  readonly productDevice: Awaited<
+    ReturnType<typeof resolveExistingProductDevice>
+  >
+  readonly onChanged: () => void
+}) {
+  return (
+    <section className="mt-8 rounded-lg border border-warning/30 bg-warning/5 p-5">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h2 className="font-semibold text-text-primary">
+            Host access requests
+          </h2>
+          <p className="mt-1 text-sm text-text-secondary">
+            Review requests for this account-owned Host. Allow signs with the
+            local Host key; Deny never grants access.
+          </p>
+        </div>
+        <Badge variant="warning">{requests.length} pending</Badge>
+      </div>
+      <div className="mt-4 space-y-3">
+        {requests.map((request) => (
+          <PendingAccessRequestRow
+            key={request.requestId}
+            request={request}
+            localIdentity={localIdentity}
+            session={session}
+            productDevice={productDevice}
+            onChanged={onChanged}
+          />
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function PendingAccessRequestRow({
+  request,
+  localIdentity,
+  session,
+  productDevice,
+  onChanged,
+}: {
+  readonly request: import('../../runtime/account/control-plane-client.js').HostAccessRequest
+  readonly localIdentity: LocalHostIdentityRecord | undefined
+  readonly session: Session
+  readonly productDevice: Awaited<
+    ReturnType<typeof resolveExistingProductDevice>
+  >
+  readonly onChanged: () => void
+}) {
+  const approve = useMutation({
+    mutationFn: async () => {
+      if (localIdentity === undefined)
+        throw new Error('local_host_identity_unavailable')
+      await approveHostAccessRequest({
+        accessToken: session.access_token,
+        baseUrl: controlPlaneBaseUrl,
+        identity: nativeCapabilities.productDeviceIdentity,
+        productDevice,
+        hostIdentity: nativeCapabilities.hostIdentity,
+        hostKeyHandle: localIdentity.keyHandle,
+        request,
+      })
+    },
+    onSuccess: onChanged,
+  })
+  const deny = useMutation({
+    mutationFn: () =>
+      denyHostAccessRequest({
+        accessToken: session.access_token,
+        baseUrl: controlPlaneBaseUrl,
+        identity: nativeCapabilities.productDeviceIdentity,
+        productDevice,
+        requestId: request.requestId,
+      }),
+    onSuccess: onChanged,
+  })
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-surface p-4">
+      <div>
+        <p className="font-medium text-text-primary">
+          A device requests read-only workspace access
+        </p>
+        <p className="mt-1 text-xs text-text-muted">
+          Permission: Read workspace · expires{' '}
+          {new Date(request.expiresAt).toLocaleString()}
+        </p>
+      </div>
+      <div className="flex gap-2">
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={approve.isPending || deny.isPending}
+          onClick={() => deny.mutate()}
+        >
+          Deny
+        </Button>
+        <Button
+          size="sm"
+          disabled={
+            approve.isPending || deny.isPending || localIdentity === undefined
+          }
+          onClick={() => approve.mutate()}
+        >
+          {approve.isPending ? (
+            <LoaderCircle
+              aria-hidden="true"
+              className="animate-spin motion-reduce:animate-none"
+            />
+          ) : null}
+          Allow
+        </Button>
+      </div>
+      {approve.isError || deny.isError ? (
+        <p role="alert" className="basis-full text-sm text-danger">
+          The request could not be updated. Refresh and try again.
+        </p>
+      ) : null}
+    </div>
   )
 }
 

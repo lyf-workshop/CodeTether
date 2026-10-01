@@ -20,6 +20,7 @@ import {
   HostIdentityFailure,
   type HostIdentityService,
 } from './services/host-identity-service.js'
+import { ZodError } from 'zod'
 
 export interface ControlPlaneServerOptions {
   readonly database: ControlPlaneDatabase
@@ -137,7 +138,8 @@ function productDeviceProof(request: IncomingMessage): string | undefined {
 function hostIdentityFailureStatus(error: HostIdentityFailure): number {
   if (
     error.code === 'host_claim_not_found' ||
-    error.code === 'host_device_authorization_not_found'
+    error.code === 'host_device_authorization_not_found' ||
+    error.code === 'host_access_request_not_found'
   )
     return 404
   if (
@@ -146,7 +148,10 @@ function hostIdentityFailureStatus(error: HostIdentityFailure): number {
     error.code === 'host_space_not_permitted' ||
     error.code === 'host_device_authorization_required' ||
     error.code === 'host_device_authorization_owner_mismatch' ||
-    error.code === 'host_device_authorization_device_unavailable'
+    error.code === 'host_device_authorization_device_unavailable' ||
+    error.code === 'host_access_request_owner_mismatch' ||
+    error.code === 'host_access_request_device_unavailable' ||
+    error.code === 'host_access_request_host_mismatch'
   ) {
     return 403
   }
@@ -156,7 +161,11 @@ function hostIdentityFailureStatus(error: HostIdentityFailure): number {
     error.code === 'host_claim_confirmation_recovery_required' ||
     error.code === 'host_claim_identity_mismatch' ||
     error.code === 'host_device_authorization_request_consumed' ||
-    error.code === 'host_device_authorization_conflict'
+    error.code === 'host_device_authorization_conflict' ||
+    error.code === 'host_access_request_conflict' ||
+    error.code === 'host_access_request_not_pending' ||
+    error.code === 'host_access_request_payload_mismatch' ||
+    error.code === 'host_access_request_challenge_consumed'
   ) {
     return 409
   }
@@ -514,6 +523,178 @@ export async function startControlPlaneServer(
             { status: 'host_identity_failed', code: error.code },
             false,
           )
+          return
+        }
+        sendJson(response, 500, { status: 'internal_error' }, false)
+      }
+      return
+    }
+
+    const ownedHostsRoute = pathname === '/v1/hosts/owned'
+    const pendingAccessRequestsRoute =
+      pathname === '/v1/hosts/access-requests/pending'
+    const accessRequestCollectionMatch =
+      /^\/v1\/hosts\/(host_[A-Za-z0-9][A-Za-z0-9_-]{15,95})\/access-request$/.exec(
+        pathname,
+      )
+    const accessRequestCollectionRoute = accessRequestCollectionMatch !== null
+    const accessRequestItemMatch =
+      /^\/v1\/hosts\/access-requests\/(hreq_[A-Za-z0-9][A-Za-z0-9_-]{15,95})(?:\/(approve|deny|cancel))?$/.exec(
+        pathname,
+      )
+    if (
+      ownedHostsRoute ||
+      pendingAccessRequestsRoute ||
+      accessRequestCollectionRoute ||
+      accessRequestItemMatch
+    ) {
+      const operation =
+        accessRequestItemMatch?.[2] ??
+        (ownedHostsRoute
+          ? 'owned'
+          : pendingAccessRequestsRoute
+            ? 'pending'
+            : accessRequestCollectionRoute
+              ? 'request'
+              : 'read')
+      const expectsGet =
+        operation === 'owned' || operation === 'pending' || operation === 'read'
+      if (
+        (expectsGet && method !== 'GET') ||
+        (!expectsGet && method !== 'POST')
+      ) {
+        sendJson(response, 405, { status: 'method_not_allowed' }, false)
+        return
+      }
+      if (requestUrl.search) {
+        sendJson(response, 400, { status: 'invalid_request' }, false)
+        return
+      }
+      if (
+        !options.humanAuthVerifier ||
+        !options.authenticatedAccountService ||
+        !options.productDeviceAuthenticationService ||
+        !options.hostIdentityService
+      ) {
+        sendJson(response, 503, { status: 'auth_unavailable' }, false)
+        return
+      }
+      try {
+        const body = await readBoundedBody(request, 24_000)
+        const input =
+          operation === 'owned' ||
+          operation === 'pending' ||
+          operation === 'read' ||
+          operation === 'cancel' ||
+          operation === 'deny'
+            ? body.byteLength === 0
+              ? undefined
+              : (() => {
+                  throw new InvalidRequestBodyError(
+                    'This route requires an empty body',
+                  )
+                })()
+            : parseJsonObject(body)
+        const human =
+          await options.authenticatedAccountService.verifyAndResolveRequestContext(
+            options.humanAuthVerifier,
+            bearerToken(request.headers.authorization),
+          )
+        const device =
+          await options.productDeviceAuthenticationService.authenticateProductDeviceRequest(
+            human,
+            {
+              compactProof: productDeviceProof(request),
+              method,
+              rawResource: request.url ?? pathname,
+              body,
+            },
+          )
+        let result: unknown
+        if (operation === 'owned') {
+          result = await options.hostIdentityService.listOwnedHostAccess(
+            human,
+            device,
+          )
+        } else if (operation === 'pending') {
+          result =
+            await options.hostIdentityService.listPendingHostAccessRequests(
+              human,
+              device,
+            )
+        } else if (operation === 'request') {
+          result = await options.hostIdentityService.requestHostAccess(
+            human,
+            device,
+            accessRequestCollectionMatch?.[1] ??
+              (() => {
+                throw new InvalidRequestBodyError('Host id is required')
+              })(),
+            input,
+          )
+        } else if (!accessRequestItemMatch?.[1]) {
+          throw new InvalidRequestBodyError('Request id is required')
+        } else if (operation === 'read') {
+          result = await options.hostIdentityService.readHostAccessRequest(
+            human,
+            device,
+            accessRequestItemMatch[1],
+          )
+        } else if (operation === 'cancel') {
+          result = await options.hostIdentityService.cancelHostAccessRequest(
+            human,
+            device,
+            accessRequestItemMatch[1],
+          )
+        } else if (operation === 'deny') {
+          result = await options.hostIdentityService.denyHostAccessRequest(
+            human,
+            device,
+            accessRequestItemMatch[1],
+          )
+        } else {
+          result = await options.hostIdentityService.approveHostAccessRequest(
+            human,
+            device,
+            accessRequestItemMatch[1],
+            input,
+          )
+        }
+        sendJson(response, 200, result as object, false)
+      } catch (error) {
+        if (error instanceof InvalidRequestBodyError) {
+          sendJson(response, 400, { status: 'invalid_request' }, false)
+          return
+        }
+        if (error instanceof HumanAuthFailure) {
+          sendJson(
+            response,
+            authFailureStatus(error),
+            { status: 'authentication_failed', code: error.code },
+            false,
+          )
+          return
+        }
+        if (error instanceof ProductDeviceAuthFailure) {
+          sendJson(
+            response,
+            deviceAuthFailureStatus(error),
+            { status: 'device_authentication_failed', code: error.code },
+            false,
+          )
+          return
+        }
+        if (error instanceof HostIdentityFailure) {
+          sendJson(
+            response,
+            hostIdentityFailureStatus(error),
+            { status: 'host_identity_failed', code: error.code },
+            false,
+          )
+          return
+        }
+        if (error instanceof ZodError) {
+          sendJson(response, 400, { status: 'invalid_request' }, false)
           return
         }
         sendJson(response, 500, { status: 'internal_error' }, false)

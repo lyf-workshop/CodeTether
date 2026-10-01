@@ -604,6 +604,18 @@ export class HostIdentityRepository {
     return result.rowCount === 1
   }
 
+  public async deleteUnconsumedDeviceAuthorizationChallenge(
+    challengeId: EnrollmentChallengeId,
+  ): Promise<void> {
+    await this.executor.query(
+      `DELETE FROM control_plane.enrollment_challenges
+        WHERE challenge_id=$1
+          AND purpose='host_device_authorization'
+          AND consumed_at IS NULL`,
+      [challengeId],
+    )
+  }
+
   public async findDeviceAuthorization(
     authorizationId: HostAuthorizationId,
   ): Promise<HostDeviceAuthorizationRecord | null> {

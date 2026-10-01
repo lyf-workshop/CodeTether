@@ -31,8 +31,10 @@ import {
 import { sha256Digest } from '../auth/product-device-protocol.js'
 import {
   createEnrollmentChallengeId,
+  createHostAccessRequestId,
   createHostClaimId,
   createSecurityEventId,
+  hostAccessRequestIdSchema,
   hostAuthorizationIdSchema,
   hostClaimIdSchema,
   hostIdSchema,
@@ -51,6 +53,10 @@ import {
   type HostDeviceAuthorizationRecord,
   type HostRegistrationChallengeRecord,
 } from '../persistence/host-identity-repository.js'
+import {
+  HostAccessRequestRepository,
+  type HostAccessRequestRecord,
+} from '../persistence/host-access-request-repository.js'
 import { ProductDeviceRepository } from '../persistence/product-device-repository.js'
 import type { AuthenticatedHumanRequestContext } from './authenticated-account-service.js'
 import type { AuthenticatedProductDeviceContext } from './product-device-authentication-service.js'
@@ -108,6 +114,20 @@ const authorizationCompletionSchema = z
 const authorizationRevocationSchema = z
   .object({ authorizationId: hostAuthorizationIdSchema })
   .strict()
+const accessRequestSchema = z
+  .object({
+    spaceId: spaceIdSchema,
+    hostFingerprint: fingerprintSchema,
+    hostIdentityGeneration: z.number().int().positive(),
+    scope: z.literal('supervisor_read'),
+  })
+  .strict()
+const accessRequestApprovalSchema = z
+  .object({
+    payload: hostDeviceAuthorizationPayloadSchema,
+    proof: z.string().min(1).max(8192),
+  })
+  .strict()
 const supervisorGrantMaterializationSchema = signedSupervisorGrantSchema
 const supervisorTransportPublicationSchema = z
   .object({
@@ -116,6 +136,7 @@ const supervisorTransportPublicationSchema = z
   })
   .strict()
 const CHALLENGE_LIFETIME_MS = 5 * 60 * 1000
+const ACCESS_REQUEST_LIFETIME_MS = 30 * 60 * 1000
 const AUTHORIZATION_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000
 
 function sameSecond(date: Date, value: number): boolean {
@@ -193,6 +214,45 @@ function authorizationChallengeMatches(
   )
 }
 
+function buildAuthorizationPayload(input: {
+  readonly challengeId: HostDeviceAuthorizationChallengeRecord['challengeId']
+  readonly hostId: string
+  readonly hostFingerprint: string
+  readonly hostIdentityGeneration: number
+  readonly spaceId: string
+  readonly userId: string
+  readonly deviceId: string
+  readonly deviceKeyGeneration: number
+  readonly deviceFingerprint: string
+  readonly nonce: string
+  readonly createdAt: Date
+  readonly challengeExpiresAt: Date
+  readonly authorizationExpiresAt: Date
+}): HostDeviceAuthorizationPayload {
+  return hostDeviceAuthorizationPayloadSchema.parse({
+    v: HOST_PROOF_VERSION,
+    aud: HOST_AUDIENCE,
+    purpose: 'host_device_authorization',
+    authorizationId: authorizationIdForChallenge(input.challengeId),
+    challengeId: input.challengeId,
+    hostId: input.hostId,
+    hostFingerprint: input.hostFingerprint,
+    hostIdentityGeneration: input.hostIdentityGeneration,
+    spaceId: input.spaceId,
+    userId: input.userId,
+    deviceId: input.deviceId,
+    deviceKeyGeneration: input.deviceKeyGeneration,
+    deviceFingerprint: input.deviceFingerprint,
+    scope: 'supervisor_read',
+    nonce: input.nonce,
+    iat: Math.floor(input.createdAt.getTime() / 1000),
+    exp: Math.floor(input.challengeExpiresAt.getTime() / 1000),
+    authorizationExpiresAt: Math.floor(
+      input.authorizationExpiresAt.getTime() / 1000,
+    ),
+  })
+}
+
 function authorizationMatchesPayload(
   authorization: HostDeviceAuthorizationRecord,
   payload: HostDeviceAuthorizationPayload,
@@ -209,6 +269,45 @@ function authorizationMatchesPayload(
     authorization.scope === payload.scope &&
     sameSecond(authorization.issuedAt, payload.iat) &&
     sameSecond(authorization.expiresAt, payload.authorizationExpiresAt)
+  )
+}
+
+function publicAccessRequest(request: HostAccessRequestRecord) {
+  return {
+    requestId: request.requestId,
+    hostId: request.targetHostId,
+    deviceId: request.requestingDeviceId,
+    spaceId: request.spaceId,
+    scope: request.requestedScope,
+    status: request.status,
+    createdAt: request.createdAt.toISOString(),
+    updatedAt: request.updatedAt.toISOString(),
+    expiresAt: request.expiresAt.toISOString(),
+    completedAuthorizationId: request.completedAuthorizationId,
+    payload: request.authorizationPayload,
+  }
+}
+
+function accessPayloadMatches(
+  expected: HostDeviceAuthorizationPayload,
+  actual: HostDeviceAuthorizationPayload,
+): boolean {
+  return (
+    expected.authorizationId === actual.authorizationId &&
+    expected.challengeId === actual.challengeId &&
+    expected.hostId === actual.hostId &&
+    expected.hostFingerprint === actual.hostFingerprint &&
+    expected.hostIdentityGeneration === actual.hostIdentityGeneration &&
+    expected.spaceId === actual.spaceId &&
+    expected.userId === actual.userId &&
+    expected.deviceId === actual.deviceId &&
+    expected.deviceKeyGeneration === actual.deviceKeyGeneration &&
+    expected.deviceFingerprint === actual.deviceFingerprint &&
+    expected.scope === actual.scope &&
+    expected.nonce === actual.nonce &&
+    expected.iat === actual.iat &&
+    expected.exp === actual.exp &&
+    expected.authorizationExpiresAt === actual.authorizationExpiresAt
   )
 }
 
@@ -844,6 +943,418 @@ export class HostIdentityService {
       }
     })
     return result
+  }
+
+  /**
+   * Account-owned Host discovery and the cloud-mediated Phase 10A request
+   * workflow. This deliberately keeps the existing authorized directory
+   * unchanged: an owned Host is only metadata until the Host signs the
+   * request and the Control Plane creates the normal authorization record.
+   */
+  public async listOwnedHostAccess(
+    human: AuthenticatedHumanRequestContext,
+    device: AuthenticatedProductDeviceContext,
+  ) {
+    if (human.status !== 'active' || device.userId !== human.userId) {
+      throw new HostIdentityFailure('host_access_request_owner_mismatch')
+    }
+    const rows = await new HostAccessRequestRepository(this.database).listOwnedHostsForDevice(
+      human.userId,
+      human.personalSpaceId,
+      device.deviceId,
+      this.now(),
+    )
+    return {
+      hosts: rows.map((row) => ({
+        hostId: row.hostId,
+        spaceId: row.spaceId,
+        safeLabel: row.safeLabel,
+        coarsePlatform: row.coarsePlatform,
+        fingerprint: row.fingerprint,
+        identityGeneration: row.identityGeneration,
+        access: {
+          state: row.authorizationState,
+          requestId: row.requestId,
+          expiresAt: row.requestExpiresAt?.toISOString() ?? null,
+          authorizationId: row.authorizationId,
+        },
+      })),
+    }
+  }
+
+  public async requestHostAccess(
+    human: AuthenticatedHumanRequestContext,
+    device: AuthenticatedProductDeviceContext,
+    untrustedHostId: string,
+    untrusted: unknown,
+  ) {
+    const hostId = hostIdSchema.parse(untrustedHostId)
+    const input = accessRequestSchema.parse(untrusted)
+    if (
+      human.status !== 'active' ||
+      human.personalSpaceId !== input.spaceId ||
+      device.userId !== human.userId
+    ) {
+      throw new HostIdentityFailure('host_access_request_owner_mismatch')
+    }
+    const now = this.now()
+    return this.database.transaction(async (transaction) => {
+      const hostRepository = new HostIdentityRepository(transaction)
+      const requestRepository = new HostAccessRequestRepository(transaction)
+      const host = await hostRepository.findHostForUpdate(hostId)
+      const currentDevice = await new ProductDeviceRepository(
+        transaction,
+      ).findProductDeviceForUpdate(device.deviceId)
+      if (
+        !currentDevice ||
+        currentDevice.ownerUserId !== human.userId ||
+        currentDevice.keyGeneration !== device.keyGeneration ||
+        currentDevice.revokedAt
+      ) {
+        throw new HostIdentityFailure('host_access_request_device_unavailable')
+      }
+      if (
+        !host ||
+        host.owningSpaceId !== input.spaceId ||
+        host.claimState !== 'claimed' ||
+        host.revokedAt ||
+        host.fingerprint !== input.hostFingerprint ||
+        host.claimGeneration !== input.hostIdentityGeneration
+      ) {
+        throw new HostIdentityFailure('host_access_request_host_mismatch')
+      }
+      if (!(await hostRepository.userCanOwnSpace(input.spaceId, human.userId))) {
+        throw new HostIdentityFailure('host_access_request_owner_mismatch')
+      }
+      const existingAuthorization = await hostRepository.findEffectiveDeviceAuthorization(
+        hostId,
+        device.deviceId,
+        human.userId,
+        input.spaceId,
+        now,
+      )
+      if (existingAuthorization) {
+        return {
+          status: 'authorized' as const,
+          request: null,
+          authorization: publicAuthorization(existingAuthorization),
+        }
+      }
+      await requestRepository.expireEquivalent(
+        device.deviceId,
+        hostId,
+        input.scope,
+        now,
+      )
+      const pending = await requestRepository.findPendingEquivalent(
+        device.deviceId,
+        hostId,
+        input.scope,
+        now,
+      )
+      if (pending) {
+        return { status: 'pending' as const, request: publicAccessRequest(pending) }
+      }
+
+      const challengeId = createEnrollmentChallengeId()
+      const createdAt = now
+      const expiresAt = new Date(createdAt.getTime() + ACCESS_REQUEST_LIFETIME_MS)
+      const authorizationExpiresAt = new Date(
+        createdAt.getTime() + AUTHORIZATION_LIFETIME_MS,
+      )
+      const payload = buildAuthorizationPayload({
+        challengeId,
+        hostId,
+        hostFingerprint: host.fingerprint,
+        hostIdentityGeneration: host.claimGeneration,
+        spaceId: input.spaceId,
+        userId: human.userId,
+        deviceId: currentDevice.deviceId,
+        deviceKeyGeneration: currentDevice.keyGeneration,
+        deviceFingerprint: currentDevice.fingerprint,
+        nonce: this.random(32).toString('base64url'),
+        createdAt,
+        challengeExpiresAt: expiresAt,
+        authorizationExpiresAt,
+      })
+      await hostRepository.createDeviceAuthorizationChallenge({
+        challengeId,
+        userId: human.userId,
+        spaceId: input.spaceId,
+        deviceId: currentDevice.deviceId,
+        hostId,
+        nonceHash: sha256Digest(payload.nonce),
+        createdAt,
+        expiresAt,
+      })
+      const requestId = createHostAccessRequestId()
+      const inserted = await requestRepository.create({
+        requestId,
+        requestingDeviceId: currentDevice.deviceId,
+        targetHostId: hostId,
+        spaceId: input.spaceId,
+        requestedScope: input.scope,
+        challengeId,
+        authorizationPayload: payload,
+        createdAt,
+        expiresAt,
+      })
+      if (!inserted) {
+        await hostRepository.deleteUnconsumedDeviceAuthorizationChallenge(
+          challengeId,
+        )
+        const raced = await requestRepository.findPendingEquivalent(
+          device.deviceId,
+          hostId,
+          input.scope,
+          now,
+        )
+        if (raced) return { status: 'pending' as const, request: publicAccessRequest(raced) }
+        throw new HostIdentityFailure('host_access_request_conflict')
+      }
+      const created = await requestRepository.findById(requestId)
+      if (!created) throw new HostIdentityFailure('host_access_request_conflict')
+      return { status: 'pending' as const, request: publicAccessRequest(created) }
+    })
+  }
+
+  public async readHostAccessRequest(
+    human: AuthenticatedHumanRequestContext,
+    device: AuthenticatedProductDeviceContext,
+    untrustedRequestId: string,
+  ) {
+    const requestId = hostAccessRequestIdSchema.parse(untrustedRequestId)
+    if (human.status !== 'active' || device.userId !== human.userId) {
+      throw new HostIdentityFailure('host_access_request_owner_mismatch')
+    }
+    const request = await new HostAccessRequestRepository(this.database).findById(requestId)
+    if (!request || request.requestingDeviceId !== device.deviceId || request.spaceId !== human.personalSpaceId) {
+      throw new HostIdentityFailure('host_access_request_not_found')
+    }
+    if (request.status === 'pending' && request.expiresAt <= this.now()) {
+      await new HostAccessRequestRepository(this.database).expirePending(requestId, this.now())
+      return { ...publicAccessRequest(request), status: 'expired' as const }
+    }
+    return publicAccessRequest(request)
+  }
+
+  public async cancelHostAccessRequest(
+    human: AuthenticatedHumanRequestContext,
+    device: AuthenticatedProductDeviceContext,
+    untrustedRequestId: string,
+  ) {
+    const requestId = hostAccessRequestIdSchema.parse(untrustedRequestId)
+    if (human.status !== 'active' || device.userId !== human.userId) {
+      throw new HostIdentityFailure('host_access_request_owner_mismatch')
+    }
+    const now = this.now()
+    const result = await this.database.transaction(async (transaction) => {
+      const repository = new HostAccessRequestRepository(transaction)
+      const request = await repository.findById(requestId, true)
+      if (!request || request.requestingDeviceId !== device.deviceId || request.spaceId !== human.personalSpaceId) {
+        throw new HostIdentityFailure('host_access_request_not_found')
+      }
+      if (request.status === 'pending' && request.expiresAt <= now) {
+        await repository.expirePending(requestId, now)
+        return 'expired' as const
+      }
+      if (request.status !== 'pending') return request.status
+      if (!(await repository.transitionPending({ requestId, status: 'cancelled', updatedAt: now }))) {
+        throw new HostIdentityFailure('host_access_request_conflict')
+      }
+      return 'cancelled' as const
+    })
+    return { requestId, status: result }
+  }
+
+  public async listPendingHostAccessRequests(
+    human: AuthenticatedHumanRequestContext,
+    device: AuthenticatedProductDeviceContext,
+  ) {
+    if (human.status !== 'active' || device.userId !== human.userId) {
+      throw new HostIdentityFailure('host_access_request_owner_mismatch')
+    }
+    const requests = await new HostAccessRequestRepository(this.database).listPendingForOwnedHosts(
+      human.userId,
+      human.personalSpaceId,
+      this.now(),
+    )
+    return {
+      requests: requests.map((request) => publicAccessRequest(request)),
+    }
+  }
+
+  public async denyHostAccessRequest(
+    human: AuthenticatedHumanRequestContext,
+    device: AuthenticatedProductDeviceContext,
+    untrustedRequestId: string,
+  ) {
+    const requestId = hostAccessRequestIdSchema.parse(untrustedRequestId)
+    if (human.status !== 'active' || device.userId !== human.userId) {
+      throw new HostIdentityFailure('host_access_request_owner_mismatch')
+    }
+    const now = this.now()
+    const status = await this.database.transaction(async (transaction) => {
+      const repository = new HostAccessRequestRepository(transaction)
+      const request = await repository.findById(requestId, true)
+      if (!request || request.spaceId !== human.personalSpaceId) {
+        throw new HostIdentityFailure('host_access_request_not_found')
+      }
+      if (request.status === 'pending' && request.expiresAt <= now) {
+        await repository.expirePending(requestId, now)
+        return 'expired' as const
+      }
+      if (request.status !== 'pending') return request.status
+      if (!(await repository.transitionPending({ requestId, status: 'denied', updatedAt: now }))) {
+        throw new HostIdentityFailure('host_access_request_conflict')
+      }
+      return 'denied' as const
+    })
+    return { requestId, status }
+  }
+
+  public async approveHostAccessRequest(
+    human: AuthenticatedHumanRequestContext,
+    actorDevice: AuthenticatedProductDeviceContext,
+    untrustedRequestId: string,
+    untrusted: unknown,
+  ) {
+    const requestId = hostAccessRequestIdSchema.parse(untrustedRequestId)
+    const input = accessRequestApprovalSchema.parse(untrusted)
+    const payload = input.payload
+    if (human.status !== 'active' || actorDevice.userId !== human.userId) {
+      throw new HostIdentityFailure('host_access_request_owner_mismatch')
+    }
+    const requestRepository = new HostAccessRequestRepository(this.database)
+    const request = await requestRepository.findById(requestId)
+    if (!request || request.spaceId !== human.personalSpaceId) {
+      throw new HostIdentityFailure('host_access_request_not_found')
+    }
+    const storedPayload = hostDeviceAuthorizationPayloadSchema.parse(request.authorizationPayload)
+    if (
+      !accessPayloadMatches(storedPayload, payload) ||
+      payload.scope !== 'supervisor_read' ||
+      payload.challengeId !== request.challengeId ||
+      payload.hostId !== request.targetHostId ||
+      payload.deviceId !== request.requestingDeviceId ||
+      payload.spaceId !== request.spaceId
+    ) {
+      throw new HostIdentityFailure('host_access_request_payload_mismatch')
+    }
+    const hostRepository = new HostIdentityRepository(this.database)
+    const host = await hostRepository.findHost(request.targetHostId)
+    if (!host || host.owningSpaceId !== human.personalSpaceId) {
+      throw new HostIdentityFailure('host_access_request_host_mismatch')
+    }
+    try {
+      const admitted = await admitHostPublicJwk(JSON.parse(host.publicKey))
+      if (admitted.canonicalPublicJwk !== host.publicKey || admitted.fingerprint !== host.fingerprint) throw new Error('identity mismatch')
+      await verifyHostDeviceAuthorizationProof(input.proof, admitted.publicJwk, payload)
+    } catch {
+      throw new HostIdentityFailure('host_access_request_signature_invalid')
+    }
+
+    const now = this.now()
+    return this.database.transaction(async (transaction) => {
+      const txRequests = new HostAccessRequestRepository(transaction)
+      const txHosts = new HostIdentityRepository(transaction)
+      const currentRequest = await txRequests.findById(requestId, true)
+      if (!currentRequest) throw new HostIdentityFailure('host_access_request_not_found')
+      if (currentRequest.status === 'completed' && currentRequest.completedAuthorizationId) {
+        const existing = await txHosts.findDeviceAuthorization(currentRequest.completedAuthorizationId)
+        if (existing) return { result: 'already_authorized' as const, authorization: publicAuthorization(existing), requestId }
+      }
+      if (currentRequest.status !== 'pending') {
+        throw new HostIdentityFailure(
+          currentRequest.status === 'expired'
+            ? 'host_access_request_expired'
+            : 'host_access_request_not_pending',
+        )
+      }
+      if (currentRequest.expiresAt <= now) {
+        await txRequests.expirePending(requestId, now)
+        throw new HostIdentityFailure('host_access_request_expired')
+      }
+      const currentHost = await txHosts.findHostForUpdate(request.targetHostId)
+      const currentDevice = await new ProductDeviceRepository(transaction).findProductDeviceForUpdate(payload.deviceId)
+      const currentChallenge = await txHosts.findDeviceAuthorizationChallenge(payload.challengeId, true)
+      if (
+        !currentHost ||
+        currentHost.owningSpaceId !== human.personalSpaceId ||
+        currentHost.claimState !== 'claimed' ||
+        currentHost.revokedAt ||
+        currentHost.fingerprint !== payload.hostFingerprint ||
+        currentHost.claimGeneration !== payload.hostIdentityGeneration
+      ) throw new HostIdentityFailure('host_access_request_host_mismatch')
+      if (
+        !currentDevice ||
+        currentDevice.ownerUserId !== human.userId ||
+        currentDevice.keyGeneration !== payload.deviceKeyGeneration ||
+        currentDevice.fingerprint !== payload.deviceFingerprint ||
+        currentDevice.revokedAt
+      ) throw new HostIdentityFailure('host_access_request_device_unavailable')
+      if (!(await txHosts.userCanOwnSpace(payload.spaceId, human.userId))) {
+        throw new HostIdentityFailure('host_access_request_owner_mismatch')
+      }
+      if (!currentChallenge || !authorizationChallengeMatches(currentChallenge, payload)) {
+        throw new HostIdentityFailure('host_access_request_challenge_invalid')
+      }
+      const existing = await txHosts.findEffectiveDeviceAuthorization(
+        payload.hostId,
+        payload.deviceId,
+        payload.userId,
+        payload.spaceId,
+        now,
+      )
+      if (currentChallenge.consumedAt) {
+        if (existing && authorizationMatchesPayload(existing, payload)) {
+          await txRequests.transitionPending({ requestId, status: 'completed', updatedAt: now, completedAuthorizationId: existing.authorizationId })
+          return { result: 'already_authorized' as const, authorization: publicAuthorization(existing), requestId }
+        }
+        throw new HostIdentityFailure('host_access_request_challenge_consumed')
+      }
+      if (!(await txHosts.consumeDeviceAuthorizationChallenge(payload.challengeId, now))) {
+        throw new HostIdentityFailure('host_access_request_challenge_consumed')
+      }
+      if (existing) {
+        await txRequests.transitionPending({ requestId, status: 'completed', updatedAt: now, completedAuthorizationId: existing.authorizationId })
+        return { result: 'already_authorized' as const, authorization: publicAuthorization(existing), requestId }
+      }
+      const sequence = await txHosts.nextDeviceAuthorizationSequence(payload.hostId, payload.deviceId)
+      const created = await new ControlPlaneRepository(transaction).createHostDeviceAuthorization({
+        authorizationId: payload.authorizationId,
+        hostId: payload.hostId,
+        claimGeneration: payload.hostIdentityGeneration,
+        deviceId: payload.deviceId,
+        deviceKeyGeneration: payload.deviceKeyGeneration,
+        deviceFingerprint: payload.deviceFingerprint,
+        userId: payload.userId,
+        spaceId: payload.spaceId,
+        scope: payload.scope,
+        authorizationSerial: sequence.serial,
+        authorizationGeneration: sequence.generation,
+        issuedAt: new Date(payload.iat * 1000),
+        expiresAt: new Date(payload.authorizationExpiresAt * 1000),
+      })
+      if (!created) throw new HostIdentityFailure('host_access_request_conflict')
+      await new ControlPlaneRepository(transaction).appendSecurityEvent(event({
+        eventType: 'supervisor_authorized',
+        actorKind: 'host',
+        actorId: payload.hostId,
+        targetKind: 'authorization',
+        targetId: payload.authorizationId,
+        outcome: 'success',
+        reasonCode: null,
+        correlationId: requestId,
+        occurredAt: now,
+      }))
+      if (!(await txRequests.transitionPending({ requestId, status: 'completed', updatedAt: now, completedAuthorizationId: payload.authorizationId }))) {
+        throw new HostIdentityFailure('host_access_request_conflict')
+      }
+      const authorization = await txHosts.findDeviceAuthorization(payload.authorizationId)
+      if (!authorization) throw new HostIdentityFailure('host_access_request_conflict')
+      return { result: 'authorized' as const, authorization: publicAuthorization(authorization), requestId }
+    })
   }
 
   public async confirmDeviceAuthorization(

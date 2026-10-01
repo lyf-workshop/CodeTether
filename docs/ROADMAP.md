@@ -1382,6 +1382,25 @@ Planned outcomes:
 
 Exit gate: account, ProductDevice, Host, Relay, and Machine authorities remain distinct; core mobile tasks are fast, legible, safe, resilient, and validated on representative devices.
 
+### Phase 10A — Cross-Network Host Authorization
+
+**Status:** implementation in progress on `phase10/cloud-host-authorization`.
+
+See [Phase 10A Cross-Network Host Authorization](PHASE10A-CROSS-NETWORK-HOST-AUTHORIZATION.md)
+for the request/approval boundary and the Owner-only retirement steps for the
+temporary Phase 9C LAN helper.
+
+**Goal:** replace the temporary same-LAN authorization helper with a
+cloud-mediated request and explicit Windows-owner approval while preserving
+the existing Host signature and authorization authorities.
+
+The phase adds one forward-only access-request migration, account-level owned
+Host discovery, Mac Request Access / waiting / denied states, a Windows pending
+request inbox, explicit Allow/Deny, local non-exportable Host signing, and
+transactional Control Plane confirmation. It does not add a direct Windows
+listener, port 4331, LAN dependency, generic Relay behavior, or
+`supervisor_control`.
+
 ## Deferred Beyond This Roadmap
 
 - Advanced Provider backend/profile/account management, including ccswitch-like switching, multiple gateways/accounts, credential profiles, quota-driven routing, and automatic backend failover.

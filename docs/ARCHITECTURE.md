@@ -1347,3 +1347,22 @@ Phase 8B treats executable paths, file identities, binary hashes, Provider setti
 - SQLite retains normalized per-Turn snapshots without a disk retention policy in this phase, so database size grows with durable history until a later archive/retention design.
 - Generated protocol artifacts and real-agent workspace files remain ignored under `.tmp/`.
 - Legacy CodeTether code and structure are not architectural inputs.
+### Phase 10A cloud-mediated Host authorization
+
+The account Control Plane owns only temporary Host Access Request workflow and
+minimal owned-Host discovery. It does not become Host or Machine authority.
+`host_access_requests` stores the requesting ProductDevice, target owned Host,
+Space, fixed `supervisor_read` scope, bounded expiry, challenge payload, and
+terminal workflow state. Existing `host_device_authorizations` remains the
+only final authorization authority.
+
+The requesting ProductDevice creates a request through the authenticated cloud
+boundary. The Windows owner polls pending requests there. Allow signs the
+existing `host_device_authorization` payload through the local Windows Host /
+CNG boundary; the private Host key never enters Web, Control Plane, Mac, or
+Relay. Final generation, fingerprint, scope, challenge, and signature checks
+are transactional. Denial, cancellation, expiry, replay, and concurrent Allow
+are terminal and idempotent. The normal authorized directory and purpose-bound
+Supervisor transport are unchanged. There is no direct Mac-to-Windows
+authorization connection, same-LAN requirement, port 4331, generic Relay, or
+automatic approval.

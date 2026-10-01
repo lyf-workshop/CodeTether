@@ -32,6 +32,9 @@ export type HostClaimId = z.infer<typeof hostClaimIdSchema>
 export const hostAuthorizationIdSchema = opaqueIdSchema('hauth')
 export type HostAuthorizationId = z.infer<typeof hostAuthorizationIdSchema>
 
+export const hostAccessRequestIdSchema = opaqueIdSchema('hreq')
+export type HostAccessRequestId = z.infer<typeof hostAccessRequestIdSchema>
+
 export const deviceSessionBindingIdSchema = opaqueIdSchema('dsb')
 export type DeviceSessionBindingId = z.infer<
   typeof deviceSessionBindingIdSchema
@@ -65,6 +68,8 @@ export const createHostClaimId = (): HostClaimId =>
   createOpaqueId(hostClaimIdSchema, 'hclaim')
 export const createHostAuthorizationId = (): HostAuthorizationId =>
   createOpaqueId(hostAuthorizationIdSchema, 'hauth')
+export const createHostAccessRequestId = (): HostAccessRequestId =>
+  createOpaqueId(hostAccessRequestIdSchema, 'hreq')
 export const createDeviceSessionBindingId = (): DeviceSessionBindingId =>
   createOpaqueId(deviceSessionBindingIdSchema, 'dsb')
 export const createEnrollmentChallengeId = (): EnrollmentChallengeId =>

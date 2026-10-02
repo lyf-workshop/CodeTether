@@ -72,12 +72,60 @@ test('presence reads cannot populate the My Hosts directory cache with a partial
 
   const { QueryClient } = await import('@tanstack/react-query')
   const queryClient = new QueryClient()
-  queryClient.setQueryData(['account', presenceKey, 'usr_test'], {
-    hosts: [],
-    productDevice: {},
-  })
-  assert.equal(
-    queryClient.getQueryData(['account', directoryKey, 'usr_test']),
-    undefined,
+  const userId = 'usr_test'
+  const presenceQueryKey = ['account', presenceKey, userId]
+  const directoryQueryKey = ['account', directoryKey, userId]
+  const authorizedHost = { hostId: 'host_authorized' }
+  const ownedHosts = [
+    { hostId: 'host_authorized', access: { state: 'authorized' } },
+    { hostId: 'host_needs_access', access: { state: 'none' } },
+  ]
+  const productDevice = { deviceId: 'dev_test' }
+
+  await Promise.all([
+    queryClient.fetchQuery({
+      queryKey: presenceQueryKey,
+      queryFn: async () => ({ hosts: [authorizedHost], productDevice }),
+    }),
+    queryClient.fetchQuery({
+      queryKey: directoryQueryKey,
+      queryFn: async () => ({
+        hosts: [authorizedHost],
+        ownedHosts,
+        productDevice,
+      }),
+    }),
+  ])
+  const authenticatedDirectory = queryClient.getQueryData(directoryQueryKey)
+  assert.equal(authenticatedDirectory.ownedHosts.length, 2)
+  assert.equal(authenticatedDirectory.hosts[0].hostId, 'host_authorized')
+  assert.deepEqual(
+    authenticatedDirectory.ownedHosts.map((host) => host.access.state),
+    ['authorized', 'none'],
   )
+
+  await queryClient.fetchQuery({
+    queryKey: presenceQueryKey,
+    queryFn: async () => ({ hosts: [], productDevice }),
+  })
+  assert.deepEqual(queryClient.getQueryData(presenceQueryKey).hosts, [])
+  assert.strictEqual(
+    queryClient.getQueryData(directoryQueryKey),
+    authenticatedDirectory,
+  )
+  assert.equal(authenticatedDirectory.ownedHosts.length, 2)
+})
+
+test('authenticated My Hosts retains authorized and access-required render branches', async () => {
+  const directory = await readFile(directoryPath, 'utf8')
+  assert.match(directory, /function AuthenticatedHostDirectory\(/u)
+  assert.match(directory, /title="My Hosts"/u)
+  assert.match(
+    directory,
+    /ownedHost\.access\.state === 'authorized' &&\s*host !== undefined/u,
+  )
+  assert.match(directory, /<ConnectedHostCard/u)
+  assert.match(directory, /<AccessRequiredHostCard/u)
+  assert.match(directory, /'Access required'/u)
+  assert.match(directory, /<CheckCircle2 aria-hidden="true" \/> Online/u)
 })

@@ -45,6 +45,7 @@
     "src/components/projects/project-format.ts",
     "src/components/machines/machine-presentation.ts",
     "src/components/machines/machine-relay-presentation.ts",
+    "src/components/hosts/requesting-device-presentation.ts",
     "src/components/onboarding/onboarding-model.ts",
     "src/components/onboarding/startup-gate-recovery.ts",
     "src/components/inbox/inbox-actions.ts",

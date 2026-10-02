@@ -1180,7 +1180,10 @@ export class HostIdentityService {
       this.now(),
     )
     return {
-      requests: requests.map((request) => publicAccessRequest(request)),
+      requests: requests.map((request) => ({
+        ...publicAccessRequest(request),
+        requestingDevice: request.requestingDevice,
+      })),
     }
   }
 

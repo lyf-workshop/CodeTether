@@ -161,6 +161,17 @@ test('duplicate Mac requests are idempotent and Windows sees the pending request
   ).listPendingHostAccessRequests(fixture.human, fixture.windowsContext)
   assert.equal(pending.requests.length, 1)
   assert.equal(pending.requests[0].requestId, first.request.requestId)
+  assert.deepEqual(pending.requests[0].requestingDevice, {
+    deviceId: fixture.mac.device.deviceId,
+    label: fixture.mac.device.label,
+    platform: fixture.mac.device.platform,
+    fingerprint: fixture.mac.device.fingerprint,
+    keyGeneration: fixture.mac.device.keyGeneration,
+  })
+  assert.notEqual(
+    pending.requests[0].requestingDevice.fingerprint,
+    fixture.windows.device.fingerprint,
+  )
 })
 
 test('Windows Host signature approval creates one normal authorization and replay is idempotent', async () => {
@@ -442,7 +453,7 @@ test('HTTP access-request routes require both human and ProductDevice proofs', a
         'content-type': 'application/json',
         'x-codetether-device-proof': proof,
       },
-      body: bodyBytes,
+      body: method === 'GET' ? undefined : bodyBytes,
     })
   }
   try {
@@ -468,6 +479,33 @@ test('HTTP access-request routes require both human and ProductDevice proofs', a
     })
     assert.equal(invalidScope.status, 400)
     assert.deepEqual(await invalidScope.json(), { status: 'invalid_request' })
+
+    const presentationHost = await createAdditionalHost('http-presentation')
+    const presentationResource = `/v1/hosts/${presentationHost.host.hostId}/access-request`
+    const created = await signedCall('POST', presentationResource, {
+      ...body,
+      hostFingerprint: presentationHost.host.fingerprint,
+    })
+    assert.equal(created.ok, true)
+    const createdBody = await created.json()
+    const pendingResponse = await signedCall(
+      'GET',
+      '/v1/hosts/access-requests/pending',
+    )
+    assert.equal(pendingResponse.status, 200)
+    const pendingBody = await pendingResponse.json()
+    const exactRequest = pendingBody.requests.find(
+      (request) => request.requestId === createdBody.request.requestId,
+    )
+    assert.equal(exactRequest.deviceId, fixture.mac.device.deviceId)
+    assert.equal(exactRequest.scope, 'supervisor_read')
+    assert.deepEqual(exactRequest.requestingDevice, {
+      deviceId: fixture.mac.device.deviceId,
+      label: fixture.mac.device.label,
+      platform: fixture.mac.device.platform,
+      fingerprint: fixture.mac.device.fingerprint,
+      keyGeneration: fixture.mac.device.keyGeneration,
+    })
   } finally {
     await running.close()
   }

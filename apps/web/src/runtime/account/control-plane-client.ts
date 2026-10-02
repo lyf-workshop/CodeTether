@@ -82,6 +82,13 @@ export interface HostAccessRequest {
   readonly payload: Record<string, unknown>
 }
 
+export interface PendingHostAccessRequest extends HostAccessRequest {
+  readonly requestingDevice: Pick<
+    AccountProductDevice,
+    'deviceId' | 'label' | 'platform' | 'fingerprint' | 'keyGeneration'
+  >
+}
+
 export interface SupervisorGrantPayload {
   readonly v: 1
   readonly aud: 'codetether-host-supervisor'
@@ -612,7 +619,7 @@ export async function listPendingHostAccessRequests(options: {
   readonly identity: ProductDeviceIdentityCapability
   readonly productDevice: ResolvedProductDevice
   readonly signal?: AbortSignal
-}): Promise<readonly HostAccessRequest[]> {
+}): Promise<readonly PendingHostAccessRequest[]> {
   const resource = '/v1/hosts/access-requests/pending'
   const proof = await createDeviceRequestProof({
     accessToken: options.accessToken,
@@ -630,7 +637,7 @@ export async function listPendingHostAccessRequests(options: {
   const body = await readJson(response)
   if (!response.ok) throw responseError(response, body)
   if (!isRecord(body) || !Array.isArray(body.requests)) invalidResponse()
-  return body.requests.map(parseAccessRequest)
+  return body.requests.map(parsePendingAccessRequest)
 }
 
 export async function denyHostAccessRequest(options: {
@@ -963,6 +970,26 @@ function parseAccessRequest(value: unknown): HostAccessRequest {
     !isRecord(value.payload)
   ) invalidResponse()
   return value as unknown as HostAccessRequest
+}
+
+function parsePendingAccessRequest(value: unknown): PendingHostAccessRequest {
+  const request = parseAccessRequest(value)
+  if (!isRecord(value) || !isRecord(value.requestingDevice)) invalidResponse()
+  const device = value.requestingDevice
+  if (
+    !isId(device.deviceId, 'dev_') ||
+    !isBoundedString(device.label, 120) ||
+    !isBoundedString(device.platform, 64) ||
+    typeof device.fingerprint !== 'string' ||
+    !/^sha256:[A-Za-z0-9_-]{32,128}$/u.test(device.fingerprint) ||
+    !isPositiveInteger(device.keyGeneration) ||
+    device.deviceId !== request.deviceId ||
+    device.deviceId !== request.payload.deviceId ||
+    device.fingerprint !== request.payload.deviceFingerprint ||
+    device.keyGeneration !== request.payload.deviceKeyGeneration ||
+    request.payload.scope !== 'supervisor_read'
+  ) invalidResponse()
+  return value as unknown as PendingHostAccessRequest
 }
 
 function parseAccessRequestResult(value: unknown): { readonly status: string; readonly request: HostAccessRequest | null } {

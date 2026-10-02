@@ -31,6 +31,7 @@ import {
   listOwnedHosts,
   requestHostAccess,
   resolveExistingProductDevice,
+  type PendingHostAccessRequest,
   type OwnedHostAccessEntry,
   type AuthorizedHostDirectoryEntry,
 } from '../../runtime/account/control-plane-client.js'
@@ -43,6 +44,7 @@ import {
 import { getSupabaseAccountClient } from '../../runtime/account/supabase-account.js'
 import { useHostConnectionState } from '../../runtime/host/host-runtime-hooks.js'
 import { nativeCapabilities } from '../../runtime/native/native-capabilities.js'
+import { presentRequestingDevice } from './requesting-device-presentation.js'
 
 export function HostDirectoryPage() {
   const supabase = getSupabaseAccountClient()
@@ -520,7 +522,7 @@ function PendingAccessRequestPanel({
   productDevice,
   onChanged,
 }: {
-  readonly requests: readonly import('../../runtime/account/control-plane-client.js').HostAccessRequest[]
+  readonly requests: readonly PendingHostAccessRequest[]
   readonly localIdentity: LocalHostIdentityRecord | undefined
   readonly session: Session
   readonly productDevice: Awaited<
@@ -565,7 +567,7 @@ function PendingAccessRequestRow({
   productDevice,
   onChanged,
 }: {
-  readonly request: import('../../runtime/account/control-plane-client.js').HostAccessRequest
+  readonly request: PendingHostAccessRequest
   readonly localIdentity: LocalHostIdentityRecord | undefined
   readonly session: Session
   readonly productDevice: Awaited<
@@ -573,6 +575,7 @@ function PendingAccessRequestRow({
   >
   readonly onChanged: () => void
 }) {
+  const requestingDevice = presentRequestingDevice(request)
   const approve = useMutation({
     mutationFn: async () => {
       if (localIdentity === undefined)
@@ -604,8 +607,17 @@ function PendingAccessRequestRow({
     <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-surface p-4">
       <div>
         <p className="font-medium text-text-primary">
-          A device requests read-only workspace access
+          {requestingDevice?.name ?? 'Device identity unavailable'}
         </p>
+        <p className="mt-1 text-xs text-text-muted">
+          {requestingDevice?.platform ??
+            'Requesting device could not be verified'}
+        </p>
+        {requestingDevice !== null ? (
+          <p className="mt-1 text-xs text-text-muted">
+            Device identity: {requestingDevice.shortFingerprint}
+          </p>
+        ) : null}
         <p className="mt-1 text-xs text-text-muted">
           Permission: Read workspace · expires{' '}
           {new Date(request.expiresAt).toLocaleString()}
@@ -623,7 +635,10 @@ function PendingAccessRequestRow({
         <Button
           size="sm"
           disabled={
-            approve.isPending || deny.isPending || localIdentity === undefined
+            approve.isPending ||
+            deny.isPending ||
+            localIdentity === undefined ||
+            requestingDevice === null
           }
           onClick={() => approve.mutate()}
         >

@@ -25,6 +25,16 @@ export interface HostAccessRequestRecord {
   readonly completedAuthorizationId: HostAuthorizationId | null
 }
 
+export interface PendingHostAccessRequestRecord extends HostAccessRequestRecord {
+  readonly requestingDevice: {
+    readonly deviceId: ProductDeviceId
+    readonly label: string
+    readonly platform: string
+    readonly fingerprint: string
+    readonly keyGeneration: number
+  }
+}
+
 export interface OwnedHostAccessRecord {
   readonly hostId: HostId
   readonly spaceId: SpaceId
@@ -52,6 +62,14 @@ interface RequestRow extends Record<string, unknown> {
   readonly updated_at: Date | string
   readonly expires_at: Date | string
   readonly completed_authorization_id: HostAuthorizationId | null
+}
+
+interface PendingRequestRow extends RequestRow {
+  readonly requester_device_id: ProductDeviceId
+  readonly requester_label: string
+  readonly requester_platform: string
+  readonly requester_fingerprint: string
+  readonly requester_key_generation: number
 }
 
 interface OwnedHostRow extends Record<string, unknown> {
@@ -230,9 +248,12 @@ export class HostAccessRequestRepository {
     userId: string,
     spaceId: SpaceId,
     now: Date,
-  ): Promise<readonly HostAccessRequestRecord[]> {
-    const result = await this.executor.query<RequestRow>(
-      `SELECT r.*
+  ): Promise<readonly PendingHostAccessRequestRecord[]> {
+    const result = await this.executor.query<PendingRequestRow>(
+      `SELECT r.*, d.device_id AS requester_device_id,
+              d.label AS requester_label, d.platform AS requester_platform,
+              d.fingerprint AS requester_fingerprint,
+              d.key_generation AS requester_key_generation
          FROM control_plane.host_access_requests r
          JOIN control_plane.hosts h ON h.host_id=r.target_host_id AND h.owning_space_id=r.space_id
          JOIN control_plane.product_devices d ON d.device_id=r.requesting_device_id
@@ -244,7 +265,16 @@ export class HostAccessRequestRepository {
         ORDER BY r.created_at, r.request_id`,
       [spaceId, now, userId],
     )
-    return result.rows.map(requestFromRow)
+    return result.rows.map((row) => ({
+      ...requestFromRow(row),
+      requestingDevice: {
+        deviceId: row.requester_device_id,
+        label: row.requester_label,
+        platform: row.requester_platform,
+        fingerprint: row.requester_fingerprint,
+        keyGeneration: row.requester_key_generation,
+      },
+    }))
   }
 
   public async listOwnedHostsForDevice(

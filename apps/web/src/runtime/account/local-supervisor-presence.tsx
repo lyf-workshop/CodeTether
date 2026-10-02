@@ -48,7 +48,11 @@ export function LocalSupervisorPresenceCoordinator() {
   }, [supabase])
 
   const directory = useQuery({
-    queryKey: ['account', 'host-directory', session?.user.id],
+    queryKey: [
+      'account',
+      'supervisor-presence-authorized-hosts',
+      session?.user.id,
+    ],
     queryFn: async ({ signal }) => {
       if (session === null || session === undefined) {
         throw new Error('account_session_unavailable')

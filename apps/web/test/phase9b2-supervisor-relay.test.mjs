@@ -52,3 +52,32 @@ test('Supervisor Relay presence is maintained outside the My Hosts route', async
   assert.match(presence, /connectionState === 'connected'/u)
   assert.doesNotMatch(presence, /Controller|Node pairing|machine_tls_v1/u)
 })
+
+test('presence reads cannot populate the My Hosts directory cache with a partial shape', async () => {
+  const [directory, presence] = await Promise.all([
+    readFile(directoryPath, 'utf8'),
+    readFile(presencePath, 'utf8'),
+  ])
+  const directoryKey = directory.match(
+    /queryKey:\s*\[\s*'account',\s*'([^']+)',/u,
+  )?.[1]
+  const presenceKey = presence.match(
+    /queryKey:\s*\[\s*'account',\s*'([^']+)',/u,
+  )?.[1]
+  assert.equal(directoryKey, 'host-directory')
+  assert.equal(presenceKey, 'supervisor-presence-authorized-hosts')
+  assert.notEqual(directoryKey, presenceKey)
+  assert.match(directory, /return \{ hosts, ownedHosts, productDevice \}/u)
+  assert.match(presence, /return \{ hosts, productDevice \}/u)
+
+  const { QueryClient } = await import('@tanstack/react-query')
+  const queryClient = new QueryClient()
+  queryClient.setQueryData(['account', presenceKey, 'usr_test'], {
+    hosts: [],
+    productDevice: {},
+  })
+  assert.equal(
+    queryClient.getQueryData(['account', directoryKey, 'usr_test']),
+    undefined,
+  )
+})

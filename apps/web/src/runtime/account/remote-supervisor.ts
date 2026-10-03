@@ -15,14 +15,15 @@ import {
   base64Url,
   canonicalJsonBytes,
   createDeviceRequestProof,
+  listHostSupervisorAuthorizations,
   postAuthenticatedProductDeviceJson,
-  sha256Digest,
   utf8,
   type AuthorizedHostDirectoryEntry,
+  type OwnedHostAccessEntry,
   type ResolvedProductDevice,
   type SignedSupervisorGrant,
   type SignedSupervisorTransportDescriptor,
-  type SupervisorTransportDescriptorPayload,
+  type SupervisorHostPresencePayload,
 } from './control-plane-client.js'
 
 const GRANT_TYPE = 'codetether-host-supervisor-grant+jws'
@@ -150,7 +151,10 @@ async function closeRemoteSupervisorSession(
 export async function publishLocalSupervisorPresence(options: {
   readonly session: Session
   readonly controlPlaneBaseUrl: string
-  readonly host: AuthorizedHostDirectoryEntry
+  readonly host: Pick<
+    OwnedHostAccessEntry,
+    'hostId' | 'spaceId' | 'fingerprint' | 'identityGeneration'
+  >
   readonly localIdentity: LocalHostIdentityRecord
   readonly productDevice: ResolvedProductDevice
   readonly deviceIdentity: ProductDeviceIdentityCapability
@@ -161,63 +165,19 @@ export async function publishLocalSupervisorPresence(options: {
   if (
     options.host.hostId !== options.localIdentity.hostId ||
     options.host.fingerprint !== options.localIdentity.fingerprint ||
-    options.host.identityGeneration !==
-      options.localIdentity.identityGeneration ||
-    hostPublicJwk.crv !== options.host.publicKey.crv ||
-    hostPublicJwk.kty !== options.host.publicKey.kty ||
-    hostPublicJwk.x !== options.host.publicKey.x ||
-    hostPublicJwk.y !== options.host.publicKey.y
+    options.host.identityGeneration !== options.localIdentity.identityGeneration
   ) {
     throw new Error('local_host_identity_mismatch')
   }
 
-  let grant: SignedSupervisorGrant
-  if (options.host.supervisor === null) {
-    const payload = {
-      v: 1 as const,
-      aud: 'codetether-host-supervisor' as const,
-      purpose: 'host_supervisor_grant' as const,
-      authorizationId: options.host.authorization.authorizationId,
-      hostId: options.host.hostId,
-      hostFingerprint: options.host.fingerprint,
-      hostIdentityGeneration: options.host.identityGeneration,
-      deviceId: options.productDevice.device.deviceId,
-      deviceFingerprint: options.productDevice.device.fingerprint,
-      deviceKeyGeneration: options.productDevice.device.keyGeneration,
-      userId: options.productDevice.device.ownerUserId,
-      spaceId: options.host.spaceId,
-      scope: 'supervisor_read' as const,
-      authorizationSerial: options.host.authorization.serial,
-      authorizationGeneration: options.host.authorization.generation,
-      issuedAt: Math.floor(
-        Date.parse(options.host.authorization.issuedAt) / 1_000,
-      ),
-      expiresAt: Math.floor(
-        Date.parse(options.host.authorization.expiresAt) / 1_000,
-      ),
-    }
-    grant = {
-      payload,
-      proof: await signHostProof(
-        options.hostIdentity,
-        options.localIdentity.keyHandle,
-        GRANT_TYPE,
-        payload,
-      ),
-    }
-    await postAuthenticatedProductDeviceJson({
-      accessToken: options.session.access_token,
-      baseUrl: options.controlPlaneBaseUrl,
-      identity: options.deviceIdentity,
-      productDevice: options.productDevice,
-      resource: `/v1/hosts/${options.host.hostId}/supervisor-grant/materialize`,
-      value: grant,
-      signal: options.signal,
-    })
-  } else {
-    grant = options.host.supervisor.grant
-  }
-
+  const authorizations = await listHostSupervisorAuthorizations({
+    accessToken: options.session.access_token,
+    baseUrl: options.controlPlaneBaseUrl,
+    identity: options.deviceIdentity,
+    productDevice: options.productDevice,
+    hostId: options.host.hostId,
+    signal: options.signal,
+  })
   const presence = await readJson(`${hostBaseUrl}/api/v1/supervisor/presence`, {
     signal: options.signal,
   })
@@ -228,24 +188,21 @@ export async function publishLocalSupervisorPresence(options: {
   const directEndpoints = parseDirectEndpoints(presence.directEndpoints)
   const relay = parseRelayPresence(presence.relay)
   const now = Math.floor(Date.now() / 1_000)
-  const descriptorPayload: SupervisorTransportDescriptorPayload = {
+  const descriptorPayload: SupervisorHostPresencePayload = {
     v: 1,
     aud: 'codetether-host-supervisor',
-    purpose: 'host_supervisor_transport',
-    authorizationId: grant.payload.authorizationId,
-    grantDigest: await sha256Digest(canonicalJsonBytes(grant.payload)),
-    hostId: grant.payload.hostId,
-    hostFingerprint: grant.payload.hostFingerprint,
-    hostIdentityGeneration: grant.payload.hostIdentityGeneration,
-    deviceId: grant.payload.deviceId,
-    deviceKeyGeneration: grant.payload.deviceKeyGeneration,
+    purpose: 'host_supervisor_presence',
+    hostId: options.host.hostId,
+    hostFingerprint: options.host.fingerprint,
+    hostIdentityGeneration: options.host.identityGeneration,
+    spaceId: options.host.spaceId,
     transportTlsFingerprint,
     controlPlaneOrigin: new URL(options.controlPlaneBaseUrl).origin,
     directEndpoints,
     relay,
     iat: now,
-    exp: Math.min(now + 600, grant.payload.expiresAt),
-    protocolVersion: 1,
+    exp: now + 600,
+    protocolVersion: 2,
   }
   const descriptor: SignedSupervisorTransportDescriptor = {
     payload: descriptorPayload,
@@ -256,18 +213,86 @@ export async function publishLocalSupervisorPresence(options: {
       descriptorPayload,
     ),
   }
-  await postLocalJson('/api/v1/supervisor/activate', {
-    hostPublicJwk,
-    grant,
-    descriptor,
+  for (const authorization of authorizations) {
+    if (
+      authorization.hostId !== options.host.hostId ||
+      authorization.hostIdentityGeneration !==
+        options.host.identityGeneration ||
+      authorization.spaceId !== options.host.spaceId ||
+      authorization.userId !== options.productDevice.device.ownerUserId ||
+      authorization.scope !== 'supervisor_read' ||
+      Date.parse(authorization.expiresAt) <= Date.now()
+    ) {
+      throw new Error('host_supervisor_authorization_mismatch')
+    }
+  }
+  // Remove revoked/expired activations before any signing or publication work.
+  // A later transient failure cannot leave a removed device active locally.
+  await postLocalJson('/api/v1/supervisor/activations/prune', {
+    authorizationIds: authorizations.map(
+      ({ authorizationId }) => authorizationId,
+    ),
   })
+  for (const authorization of authorizations) {
+    const payload = {
+      v: 1 as const,
+      aud: 'codetether-host-supervisor' as const,
+      purpose: 'host_supervisor_grant' as const,
+      authorizationId: authorization.authorizationId,
+      hostId: authorization.hostId,
+      hostFingerprint: options.host.fingerprint,
+      hostIdentityGeneration: authorization.hostIdentityGeneration,
+      deviceId: authorization.deviceId,
+      deviceFingerprint: authorization.deviceFingerprint,
+      deviceKeyGeneration: authorization.deviceKeyGeneration,
+      userId: authorization.userId,
+      spaceId: authorization.spaceId,
+      scope: authorization.scope,
+      authorizationSerial: authorization.serial,
+      authorizationGeneration: authorization.generation,
+      issuedAt: Math.floor(Date.parse(authorization.issuedAt) / 1_000),
+      expiresAt: Math.floor(Date.parse(authorization.expiresAt) / 1_000),
+    }
+    if (
+      authorization.grant !== null &&
+      canonicalJsonBytes(authorization.grant.payload).toString() !==
+        canonicalJsonBytes(payload).toString()
+    ) {
+      throw new Error('host_supervisor_grant_mismatch')
+    }
+    const grant: SignedSupervisorGrant = authorization.grant ?? {
+      payload,
+      proof: await signHostProof(
+        options.hostIdentity,
+        options.localIdentity.keyHandle,
+        GRANT_TYPE,
+        payload,
+      ),
+    }
+    if (authorization.grant === null) {
+      await postAuthenticatedProductDeviceJson({
+        accessToken: options.session.access_token,
+        baseUrl: options.controlPlaneBaseUrl,
+        identity: options.deviceIdentity,
+        productDevice: options.productDevice,
+        resource: `/v1/hosts/${options.host.hostId}/supervisor-grant/materialize`,
+        value: grant,
+        signal: options.signal,
+      })
+    }
+    await postLocalJson('/api/v1/supervisor/activate', {
+      hostPublicJwk,
+      grant,
+      descriptor,
+    })
+  }
   await postAuthenticatedProductDeviceJson({
     accessToken: options.session.access_token,
     baseUrl: options.controlPlaneBaseUrl,
     identity: options.deviceIdentity,
     productDevice: options.productDevice,
-    resource: `/v1/hosts/${options.host.hostId}/supervisor-presence`,
-    value: { grant, descriptor },
+    resource: `/v1/hosts/${options.host.hostId}/supervisor-host-presence`,
+    value: descriptor,
     signal: options.signal,
   })
 }
@@ -832,7 +857,7 @@ function parseDirectEndpoints(value: unknown): readonly {
 
 function parseRelayPresence(
   value: unknown,
-): SupervisorTransportDescriptorPayload['relay'] {
+): SupervisorHostPresencePayload['relay'] {
   if (value === null) return null
   const relay = asRecord(value)
   const endpoint = boundedString(relay, 'endpoint')

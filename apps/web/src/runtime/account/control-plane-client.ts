@@ -61,7 +61,8 @@ export interface OwnedHostAccessEntry {
   readonly fingerprint: string
   readonly identityGeneration: number
   readonly access: {
-    readonly state: 'authorized' | 'pending' | 'denied' | 'cancelled' | 'expired' | 'none'
+    readonly state:
+      'authorized' | 'pending' | 'denied' | 'cancelled' | 'expired' | 'none'
     readonly requestId: string | null
     readonly expiresAt: string | null
     readonly authorizationId: string | null
@@ -144,9 +145,44 @@ export interface SupervisorTransportDescriptorPayload {
   readonly protocolVersion: 1
 }
 
+export interface SupervisorHostPresencePayload {
+  readonly v: 1
+  readonly aud: 'codetether-host-supervisor'
+  readonly purpose: 'host_supervisor_presence'
+  readonly hostId: string
+  readonly hostFingerprint: string
+  readonly hostIdentityGeneration: number
+  readonly spaceId: string
+  readonly transportTlsFingerprint: string
+  readonly controlPlaneOrigin: string
+  readonly directEndpoints: SupervisorTransportDescriptorPayload['directEndpoints']
+  readonly relay: SupervisorTransportDescriptorPayload['relay']
+  readonly iat: number
+  readonly exp: number
+  readonly protocolVersion: 2
+}
+
 export interface SignedSupervisorTransportDescriptor {
-  readonly payload: SupervisorTransportDescriptorPayload
+  readonly payload:
+    SupervisorTransportDescriptorPayload | SupervisorHostPresencePayload
   readonly proof: string
+}
+
+export interface HostSupervisorAuthorization {
+  readonly authorizationId: string
+  readonly hostId: string
+  readonly hostIdentityGeneration: number
+  readonly deviceId: string
+  readonly deviceFingerprint: string
+  readonly deviceKeyGeneration: number
+  readonly userId: string
+  readonly spaceId: string
+  readonly scope: 'supervisor_read'
+  readonly serial: string
+  readonly generation: number
+  readonly issuedAt: string
+  readonly expiresAt: string
+  readonly grant: SignedSupervisorGrant | null
 }
 
 export class ControlPlaneClientError extends Error {
@@ -542,6 +578,64 @@ export async function listAuthorizedHosts(options: {
   return parseHostDirectory(body)
 }
 
+export async function listHostSupervisorAuthorizations(options: {
+  readonly accessToken: string
+  readonly baseUrl: string
+  readonly identity: ProductDeviceIdentityCapability
+  readonly productDevice: ResolvedProductDevice
+  readonly hostId: string
+  readonly signal?: AbortSignal
+}): Promise<readonly HostSupervisorAuthorization[]> {
+  const resource = `/v1/hosts/${options.hostId}/supervisor-authorizations`
+  const proof = await createDeviceRequestProof({
+    accessToken: options.accessToken,
+    deviceId: options.productDevice.device.deviceId,
+    keyGeneration: options.productDevice.device.keyGeneration,
+    keyHandle: options.productDevice.key.keyHandle,
+    identity: options.identity,
+    method: 'GET',
+    resource,
+  })
+  const response = await fetch(`${options.baseUrl}${resource}`, {
+    headers: {
+      authorization: `Bearer ${options.accessToken}`,
+      [DEVICE_PROOF_HEADER]: proof,
+    },
+    signal: options.signal,
+  })
+  const body = await readJson(response)
+  if (!response.ok) throw responseError(response, body)
+  if (
+    !isRecord(body) ||
+    !Array.isArray(body.authorizations) ||
+    body.authorizations.length > 64
+  ) {
+    invalidResponse()
+  }
+  return body.authorizations.map((candidate) => {
+    if (
+      !isRecord(candidate) ||
+      !isId(candidate.authorizationId, 'hauth_') ||
+      candidate.hostId !== options.hostId ||
+      !isPositiveInteger(candidate.hostIdentityGeneration) ||
+      !isId(candidate.deviceId, 'dev_') ||
+      typeof candidate.deviceFingerprint !== 'string' ||
+      !/^sha256:[A-Za-z0-9_-]{43}$/u.test(candidate.deviceFingerprint) ||
+      !isPositiveInteger(candidate.deviceKeyGeneration) ||
+      !isId(candidate.userId, 'usr_') ||
+      !isId(candidate.spaceId, 'space_') ||
+      candidate.scope !== 'supervisor_read' ||
+      !/^(?:0|[1-9][0-9]{0,19})$/u.test(String(candidate.serial)) ||
+      !isPositiveInteger(candidate.generation) ||
+      !isBoundedString(candidate.issuedAt, 64) ||
+      !isBoundedString(candidate.expiresAt, 64) ||
+      (candidate.grant !== null && !isSupervisorGrantValue(candidate.grant))
+    )
+      invalidResponse()
+    return candidate as unknown as HostSupervisorAuthorization
+  })
+}
+
 export async function listOwnedHosts(options: {
   readonly accessToken: string
   readonly baseUrl: string
@@ -560,7 +654,10 @@ export async function listOwnedHosts(options: {
     resource,
   })
   const response = await fetch(`${options.baseUrl}${resource}`, {
-    headers: { authorization: `Bearer ${options.accessToken}`, [DEVICE_PROOF_HEADER]: proof },
+    headers: {
+      authorization: `Bearer ${options.accessToken}`,
+      [DEVICE_PROOF_HEADER]: proof,
+    },
     signal: options.signal,
   })
   const body = await readJson(response)
@@ -575,7 +672,10 @@ export async function requestHostAccess(options: {
   readonly productDevice: ResolvedProductDevice
   readonly host: OwnedHostAccessEntry
   readonly signal?: AbortSignal
-}): Promise<{ readonly status: string; readonly request: HostAccessRequest | null }> {
+}): Promise<{
+  readonly status: string
+  readonly request: HostAccessRequest | null
+}> {
   const resource = `/v1/hosts/${options.host.hostId}/access-request`
   const body = {
     spaceId: options.host.spaceId,
@@ -631,7 +731,10 @@ export async function listPendingHostAccessRequests(options: {
     resource,
   })
   const response = await fetch(`${options.baseUrl}${resource}`, {
-    headers: { authorization: `Bearer ${options.accessToken}`, [DEVICE_PROOF_HEADER]: proof },
+    headers: {
+      authorization: `Bearer ${options.accessToken}`,
+      [DEVICE_PROOF_HEADER]: proof,
+    },
     signal: options.signal,
   })
   const body = await readJson(response)
@@ -668,7 +771,14 @@ export async function approveHostAccessRequest(options: {
   readonly request: HostAccessRequest
   readonly signal?: AbortSignal
 }): Promise<void> {
-  const header = base64Url(utf8(JSON.stringify({ alg: 'ES256', typ: 'codetether-host-device-authorization+jws' })))
+  const header = base64Url(
+    utf8(
+      JSON.stringify({
+        alg: 'ES256',
+        typ: 'codetether-host-device-authorization+jws',
+      }),
+    ),
+  )
   const encodedPayload = base64Url(canonicalJsonBytes(options.request.payload))
   const signingInput = `${header}.${encodedPayload}`
   const signed = await options.hostIdentity.sign(
@@ -945,11 +1055,22 @@ function parseOwnedHosts(value: unknown): readonly OwnedHostAccessEntry[] {
       !isBoundedString(candidate.fingerprint, 128) ||
       !isPositiveInteger(candidate.identityGeneration) ||
       !isRecord(candidate.access) ||
-      !['authorized', 'pending', 'denied', 'cancelled', 'expired', 'none'].includes(String(candidate.access.state)) ||
-      (candidate.access.requestId !== null && !isId(candidate.access.requestId, 'hreq_')) ||
-      (candidate.access.authorizationId !== null && !isId(candidate.access.authorizationId, 'hauth_')) ||
-      (candidate.access.expiresAt !== null && !isBoundedString(candidate.access.expiresAt, 64))
-    ) invalidResponse()
+      ![
+        'authorized',
+        'pending',
+        'denied',
+        'cancelled',
+        'expired',
+        'none',
+      ].includes(String(candidate.access.state)) ||
+      (candidate.access.requestId !== null &&
+        !isId(candidate.access.requestId, 'hreq_')) ||
+      (candidate.access.authorizationId !== null &&
+        !isId(candidate.access.authorizationId, 'hauth_')) ||
+      (candidate.access.expiresAt !== null &&
+        !isBoundedString(candidate.access.expiresAt, 64))
+    )
+      invalidResponse()
     return candidate as unknown as OwnedHostAccessEntry
   })
 }
@@ -962,13 +1083,17 @@ function parseAccessRequest(value: unknown): HostAccessRequest {
     !isId(value.deviceId, 'dev_') ||
     !isId(value.spaceId, 'space_') ||
     value.scope !== 'supervisor_read' ||
-    !['pending', 'denied', 'cancelled', 'expired', 'completed'].includes(String(value.status)) ||
+    !['pending', 'denied', 'cancelled', 'expired', 'completed'].includes(
+      String(value.status),
+    ) ||
     !isBoundedString(value.createdAt, 64) ||
     !isBoundedString(value.updatedAt, 64) ||
     !isBoundedString(value.expiresAt, 64) ||
-    (value.completedAuthorizationId !== null && !isId(value.completedAuthorizationId, 'hauth_')) ||
+    (value.completedAuthorizationId !== null &&
+      !isId(value.completedAuthorizationId, 'hauth_')) ||
     !isRecord(value.payload)
-  ) invalidResponse()
+  )
+    invalidResponse()
   return value as unknown as HostAccessRequest
 }
 
@@ -988,13 +1113,18 @@ function parsePendingAccessRequest(value: unknown): PendingHostAccessRequest {
     device.fingerprint !== request.payload.deviceFingerprint ||
     device.keyGeneration !== request.payload.deviceKeyGeneration ||
     request.payload.scope !== 'supervisor_read'
-  ) invalidResponse()
+  )
+    invalidResponse()
   return value as unknown as PendingHostAccessRequest
 }
 
-function parseAccessRequestResult(value: unknown): { readonly status: string; readonly request: HostAccessRequest | null } {
+function parseAccessRequestResult(value: unknown): {
+  readonly status: string
+  readonly request: HostAccessRequest | null
+} {
   if (!isRecord(value) || typeof value.status !== 'string') invalidResponse()
-  const request = value.request === null ? null : parseAccessRequest(value.request)
+  const request =
+    value.request === null ? null : parseAccessRequest(value.request)
   return { status: value.status, request }
 }
 
@@ -1022,13 +1152,24 @@ function isSupervisorDirectoryValue(value: unknown): boolean {
     return false
   }
   return (
-    isRecord(value.grant.payload) &&
-    value.grant.payload.purpose === 'host_supervisor_grant' &&
+    isSupervisorGrantValue(value.grant) &&
     isBoundedString(value.grant.proof, 8_192) &&
     isRecord(value.transport.payload) &&
-    value.transport.payload.purpose === 'host_supervisor_transport' &&
+    (value.transport.payload.purpose === 'host_supervisor_transport' ||
+      value.transport.payload.purpose === 'host_supervisor_presence') &&
     Array.isArray(value.transport.payload.directEndpoints) &&
     isBoundedString(value.transport.proof, 8_192)
+  )
+}
+
+function isSupervisorGrantValue(
+  value: unknown,
+): value is SignedSupervisorGrant {
+  return (
+    isRecord(value) &&
+    isRecord(value.payload) &&
+    value.payload.purpose === 'host_supervisor_grant' &&
+    isBoundedString(value.proof, 8_192)
   )
 }
 

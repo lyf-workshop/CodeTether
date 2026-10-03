@@ -6,7 +6,7 @@ import { useHostConnectionState } from '../host/host-runtime-hooks.js'
 import { nativeCapabilities } from '../native/native-capabilities.js'
 import { controlPlaneBaseUrl } from './account-config.js'
 import {
-  listAuthorizedHosts,
+  listOwnedHosts,
   resolveExistingProductDevice,
 } from './control-plane-client.js'
 import {
@@ -15,7 +15,7 @@ import {
 } from './remote-supervisor.js'
 import { getSupabaseAccountClient } from './supabase-account.js'
 
-const PRESENCE_REFRESH_MS = 4 * 60_000
+const PRESENCE_REFRESH_MS = 60_000
 
 /**
  * Keeps the authenticated local Host's Control Plane transport descriptor
@@ -48,11 +48,7 @@ export function LocalSupervisorPresenceCoordinator() {
   }, [supabase])
 
   const directory = useQuery({
-    queryKey: [
-      'account',
-      'supervisor-presence-authorized-hosts',
-      session?.user.id,
-    ],
+    queryKey: ['account', 'supervisor-presence-owned-hosts', session?.user.id],
     queryFn: async ({ signal }) => {
       if (session === null || session === undefined) {
         throw new Error('account_session_unavailable')
@@ -63,7 +59,7 @@ export function LocalSupervisorPresenceCoordinator() {
         identity: nativeCapabilities.productDeviceIdentity,
         signal,
       })
-      const hosts = await listAuthorizedHosts({
+      const hosts = await listOwnedHosts({
         accessToken: session.access_token,
         baseUrl: controlPlaneBaseUrl,
         identity: nativeCapabilities.productDeviceIdentity,
@@ -74,7 +70,7 @@ export function LocalSupervisorPresenceCoordinator() {
     },
     enabled: session !== null && session !== undefined,
     retry: false,
-    staleTime: 30_000,
+    staleTime: 0,
     refetchInterval: PRESENCE_REFRESH_MS,
   })
   const localIdentity = useQuery({
@@ -82,7 +78,7 @@ export function LocalSupervisorPresenceCoordinator() {
     queryFn: readLocalHostIdentity,
     enabled: directory.data !== undefined && connectionState === 'connected',
     retry: false,
-    staleTime: 30_000,
+    staleTime: 0,
   })
   const localHost = directory.data?.hosts.find(
     (host) =>
@@ -119,7 +115,7 @@ export function LocalSupervisorPresenceCoordinator() {
       localIdentity.data !== undefined &&
       connectionState === 'connected',
     retry: false,
-    staleTime: PRESENCE_REFRESH_MS,
+    staleTime: 0,
     refetchInterval: PRESENCE_REFRESH_MS,
   })
 

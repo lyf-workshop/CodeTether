@@ -71,14 +71,15 @@ export class SupervisorRelayControlConnection {
       decided: boolean
     }
   >()
-  #channel: SupervisorRelayChannelDuplex | undefined
-  #closedChannel:
-    | {
-        readonly binding: RelaySupervisorChannelBinding
-        readonly timer: ReturnType<typeof setTimeout>
-        remainingExactFrames: number
-      }
-    | undefined
+  readonly #channels = new Map<string, SupervisorRelayChannelDuplex>()
+  readonly #closedChannels = new Map<
+    string,
+    {
+      readonly binding: RelaySupervisorChannelBinding
+      readonly timer: ReturnType<typeof setTimeout>
+      remainingExactFrames: number
+    }
+  >()
   #offerHandler:
     ((offer: SupervisorRelayChannelOffer) => void | Promise<void>) | undefined
   #failure: Error | undefined
@@ -122,11 +123,10 @@ export class SupervisorRelayControlConnection {
   close(): void {
     if (this.#closing) return
     this.#closing = true
-    if (this.#closedChannel !== undefined) {
-      clearTimeout(this.#closedChannel.timer)
-      this.#closedChannel = undefined
-    }
-    this.#channel?.destroy()
+    for (const closed of this.#closedChannels.values())
+      clearTimeout(closed.timer)
+    this.#closedChannels.clear()
+    for (const channel of this.#channels.values()) channel.destroy()
     this.#framed.end()
   }
 
@@ -152,7 +152,11 @@ export class SupervisorRelayControlConnection {
         pending.opened.reject(failure)
       }
       this.#hostOffers.clear()
-      this.#channel?.connectionLost(failure)
+      for (const channel of this.#channels.values())
+        channel.connectionLost(failure)
+      for (const closed of this.#closedChannels.values())
+        clearTimeout(closed.timer)
+      this.#closedChannels.clear()
       this.#framed.destroy()
     }
   }
@@ -183,14 +187,26 @@ export class SupervisorRelayControlConnection {
     }
     if (
       message.type === 'supervisor.channel.reject' ||
-      message.type === 'supervisor.channel.error' ||
-      (message.type === 'supervisor.channel.closed' &&
-        this.#channel === undefined)
+      message.type === 'supervisor.channel.error'
     ) {
       this.#handleRejected(message.requestId)
       return
     }
-    const channel = this.#channel
+    if (
+      message.type === 'supervisor.channel.closed' &&
+      !this.#channels.has(message.channelId)
+    ) {
+      if (this.#acceptClosedChannelFrame(message)) return
+      if (
+        this.#hostOffers.has(message.requestId) ||
+        (this.role === 'device' && message.requestId === this.#deviceRequestId)
+      ) {
+        this.#handleRejected(message.requestId)
+        return
+      }
+      throw new SupervisorClientError('relay_protocol_error')
+    }
+    const channel = this.#channels.get(message.channelId)
     if (channel === undefined) {
       if (this.#acceptClosedChannelFrame(message)) return
       throw new SupervisorClientError('relay_protocol_error')
@@ -222,8 +238,8 @@ export class SupervisorRelayControlConnection {
       throw new SupervisorClientError('relay_protocol_error')
     }
     if (
-      this.#channel !== undefined ||
-      this.#hostOffers.size >= relayProtocolLimits.maximumChannelsPerPeer
+      this.#channels.size + this.#hostOffers.size >=
+      relayProtocolLimits.maximumChannelsPerPeer
     ) {
       const binding = bindingOf(message)
       await this.#send({
@@ -273,6 +289,7 @@ export class SupervisorRelayControlConnection {
           requestId: message.requestId,
           reason: 'not_available',
         })
+        this.#rememberClosedChannel(pending.binding)
       },
     }
     const handler = this.#offerHandler
@@ -322,48 +339,63 @@ export class SupervisorRelayControlConnection {
     if (pending !== undefined) {
       this.#hostOffers.delete(requestId)
       pending.opened.reject(failure)
+      this.#rememberClosedChannel(pending.binding)
     }
   }
 
   #createChannel(
     binding: RelaySupervisorChannelBinding,
   ): SupervisorRelayChannelDuplex {
-    if (this.#channel !== undefined) {
+    if (
+      this.#channels.size >= relayProtocolLimits.maximumChannelsPerPeer ||
+      this.#channels.has(binding.channelId)
+    ) {
       throw new SupervisorClientError('relay_protocol_error')
     }
     const channel = new SupervisorRelayChannelDuplex(binding, {
       connectionEpoch: this.connectionEpoch,
       send: (message) => this.#send(message),
       release: (released) => {
-        if (this.#channel === released) {
-          this.#channel = undefined
+        if (this.#channels.get(binding.channelId) === released) {
+          this.#channels.delete(binding.channelId)
           this.#rememberClosedChannel(binding)
         }
       },
     })
-    this.#channel = channel
+    this.#channels.set(binding.channelId, channel)
     return channel
   }
 
   #rememberClosedChannel(binding: RelaySupervisorChannelBinding): void {
-    if (this.#closedChannel !== undefined) {
-      clearTimeout(this.#closedChannel.timer)
+    const key = bindingKey(binding)
+    const prior = this.#closedChannels.get(key)
+    if (prior !== undefined) clearTimeout(prior.timer)
+    if (
+      this.#closedChannels.size >= relayProtocolLimits.maximumChannelsPerPeer
+    ) {
+      const oldest = this.#closedChannels.keys().next().value
+      if (oldest !== undefined) {
+        clearTimeout(this.#closedChannels.get(oldest)!.timer)
+        this.#closedChannels.delete(oldest)
+      }
     }
     const timer = setTimeout(() => {
-      if (this.#closedChannel?.timer === timer) this.#closedChannel = undefined
+      if (this.#closedChannels.get(key)?.timer === timer) {
+        this.#closedChannels.delete(key)
+      }
     }, relayProtocolLimits.channelAcknowledgementTimeoutMs)
     timer.unref()
-    this.#closedChannel = {
+    this.#closedChannels.set(key, {
       binding,
       timer,
       remainingExactFrames: relayProtocolLimits.maximumTerminalChannelFrames,
-    }
+    })
   }
 
   #acceptClosedChannelFrame(message: RelaySupervisorServerMessage): boolean {
-    const closed = this.#closedChannel
+    if (message.type !== 'supervisor.channel.closed') return false
+    const closed = this.#closedChannels.get(bindingKey(message))
     if (
-      message.type !== 'supervisor.channel.closed' ||
       closed === undefined ||
       closed.remainingExactFrames <= 0 ||
       !sameBinding(closed.binding, message)
@@ -722,6 +754,10 @@ function bindingOf(
     deviceConnectionEpoch: value.deviceConnectionEpoch,
     hostConnectionEpoch: value.hostConnectionEpoch,
   }
+}
+
+function bindingKey(value: RelaySupervisorChannelBinding): string {
+  return `${value.channelId}:${value.channelGeneration}:${value.deviceConnectionEpoch}:${value.hostConnectionEpoch}`
 }
 
 function sameBinding(

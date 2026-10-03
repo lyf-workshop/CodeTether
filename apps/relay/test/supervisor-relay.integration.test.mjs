@@ -195,21 +195,81 @@ test('Relay disconnect terminates the owned session and a fresh connection can a
   }
 })
 
-test('a second channel offer cannot terminate a healthy Supervisor Relay session', async () => {
+test('one Host Relay registration carries two independent ProductDevice sessions', async () => {
   const fixture = await createFixture()
   try {
-    const active = await connectThroughRelay(fixture, 'active-session-proof')
+    const secondGrantPayload = {
+      ...fixture.grant.payload,
+      authorizationId: `hauth_${'b'.repeat(32)}`,
+      deviceId: `dev_${'e'.repeat(32)}`,
+      deviceFingerprint: `sha256:${'E'.repeat(43)}`,
+      authorizationSerial: '2',
+    }
+    const secondGrant = {
+      payload: secondGrantPayload,
+      proof: compactSign(
+        fixture.hostPrivateKey,
+        supervisorGrantProofType,
+        secondGrantPayload,
+      ),
+    }
+    const transport = fixture.descriptor.payload
+    const hostPresencePayload = {
+      v: transport.v,
+      aud: transport.aud,
+      purpose: 'host_supervisor_presence',
+      hostId: transport.hostId,
+      hostFingerprint: transport.hostFingerprint,
+      hostIdentityGeneration: transport.hostIdentityGeneration,
+      spaceId: ids.spaceId,
+      transportTlsFingerprint: transport.transportTlsFingerprint,
+      controlPlaneOrigin: transport.controlPlaneOrigin,
+      directEndpoints: transport.directEndpoints,
+      relay: transport.relay,
+      iat: transport.iat,
+      exp: transport.exp,
+      protocolVersion: 2,
+    }
+    const hostPresence = {
+      payload: hostPresencePayload,
+      proof: compactSign(
+        fixture.hostPrivateKey,
+        supervisorDescriptorProofType,
+        hostPresencePayload,
+      ),
+    }
+    await fixture.supervisor.activate({
+      hostPublicJwk: fixture.publicJwk,
+      grant: fixture.grant,
+      descriptor: hostPresence,
+    })
+    await fixture.supervisor.activate({
+      hostPublicJwk: fixture.publicJwk,
+      grant: secondGrant,
+      descriptor: hostPresence,
+    })
+    assert.equal(fixture.supervisor.activationCount, 2)
+    const active = await connectThroughRelay(fixture, 'active-session-proof', {
+      descriptor: hostPresence,
+    })
+    const second = await connectThroughRelay(
+      fixture,
+      'overlapping-session-proof',
+      {
+        deviceId: secondGrantPayload.deviceId,
+        grant: secondGrant,
+        descriptor: hostPresence,
+      },
+    )
     assert.deepEqual(await active.readHostBootstrap(), {
       hostId: ids.hostId,
       transportAuthority: 'host',
     })
-
-    await assert.rejects(
-      connectThroughRelay(fixture, 'overlapping-session-proof'),
-      (error) =>
-        error instanceof SupervisorClientError &&
-        error.code === 'relay_unavailable',
-    )
+    assert.deepEqual(await second.readHostBootstrap(), {
+      hostId: ids.hostId,
+      transportAuthority: 'host',
+    })
+    second.close()
     assert.deepEqual(await active.listMachines(), {
       machines: [{ machineId: `machine_${'m'.repeat(32)}` }],
     })
@@ -218,17 +278,12 @@ test('a second channel offer cannot terminate a healthy Supervisor Relay session
       false,
     )
 
+    fixture.supervisor.deactivate(secondGrantPayload.authorizationId)
+    assert.equal(fixture.supervisor.activationCount, 1)
+    assert.deepEqual(await active.getMachine(`machine_${'m'.repeat(32)}`), {
+      providers: ['codex', 'claude-code'],
+    })
     active.close()
-    await new Promise((resolve) => setTimeout(resolve, 50))
-    const reconnected = await connectThroughRelay(
-      fixture,
-      'replacement-session-proof',
-    )
-    assert.deepEqual(
-      await reconnected.getMachine(`machine_${'m'.repeat(32)}`),
-      { providers: ['codex', 'claude-code'] },
-    )
-    reconnected.close()
   } finally {
     await fixture.close()
   }
@@ -399,6 +454,7 @@ async function createFixture() {
     host,
     logs,
     publicJwk,
+    hostPrivateKey: privateKey,
     grant,
     descriptor,
     relayEndpoint,
@@ -436,9 +492,12 @@ async function connectThroughRelay(fixture, deviceProof, overrides = {}) {
       identityGeneration: 1,
       publicJwk: fixture.publicJwk,
     },
-    expectedDevice: { deviceId: ids.deviceId, keyGeneration: 1 },
-    grant: fixture.grant,
-    descriptor: fixture.descriptor,
+    expectedDevice: {
+      deviceId: overrides.deviceId ?? ids.deviceId,
+      keyGeneration: 1,
+    },
+    grant: overrides.grant ?? fixture.grant,
+    descriptor: overrides.descriptor ?? fixture.descriptor,
     onClose: () => device.close(),
   })
   try {

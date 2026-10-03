@@ -12,15 +12,18 @@ import {
   supervisorGrantDigest,
   verifySupervisorDescriptor,
   verifySupervisorGrant,
+  verifySupervisorHostPresence,
 } from './crypto.js'
 import {
   signedSupervisorGrantSchema,
+  signedSupervisorHostPresenceSchema,
   signedSupervisorTransportDescriptorSchema,
+  signedSupervisorTransportSchema,
   supervisorChallengeSchema,
   supervisorResponseSchema,
   supervisorServerHandshakeSchema,
   type SignedSupervisorGrant,
-  type SignedSupervisorTransportDescriptor,
+  type SignedSupervisorTransport,
   type SupervisorChallenge,
   type SupervisorPublicJwk,
   type SupervisorRequest,
@@ -46,7 +49,7 @@ export interface ConnectSupervisorDirectOptions {
     readonly keyGeneration: number
   }
   readonly grant: SignedSupervisorGrant
-  readonly descriptor: SignedSupervisorTransportDescriptor
+  readonly descriptor: SignedSupervisorTransport
   readonly tlsIdentity?: SupervisorTlsIdentity
   readonly signal?: AbortSignal
   readonly now?: () => Date
@@ -453,17 +456,23 @@ async function validateSupervisorConnection(
   options: Omit<ConnectSupervisorDirectOptions, 'endpoint'>,
 ): Promise<{
   readonly now: Date
-  readonly payload: SignedSupervisorTransportDescriptor['payload']
+  readonly payload: SignedSupervisorTransport['payload']
 }> {
   const now = options.now?.() ?? new Date()
   const grant = signedSupervisorGrantSchema.parse(options.grant)
-  const descriptor = signedSupervisorTransportDescriptorSchema.parse(
-    options.descriptor,
-  )
-  await Promise.all([
-    verifySupervisorGrant(grant, options.expectedHost.publicJwk),
-    verifySupervisorDescriptor(descriptor, options.expectedHost.publicJwk),
-  ])
+  const descriptor = signedSupervisorTransportSchema.parse(options.descriptor)
+  await verifySupervisorGrant(grant, options.expectedHost.publicJwk)
+  if (descriptor.payload.purpose === 'host_supervisor_presence') {
+    await verifySupervisorHostPresence(
+      signedSupervisorHostPresenceSchema.parse(descriptor),
+      options.expectedHost.publicJwk,
+    )
+  } else {
+    await verifySupervisorDescriptor(
+      signedSupervisorTransportDescriptorSchema.parse(descriptor),
+      options.expectedHost.publicJwk,
+    )
+  }
   const payload = descriptor.payload
   if (
     grant.payload.hostId !== options.expectedHost.hostId ||
@@ -477,10 +486,13 @@ async function validateSupervisorConnection(
     payload.hostFingerprint !== options.expectedHost.fingerprint ||
     payload.hostIdentityGeneration !==
       options.expectedHost.identityGeneration ||
-    payload.deviceId !== options.expectedDevice.deviceId ||
-    payload.deviceKeyGeneration !== options.expectedDevice.keyGeneration ||
-    payload.authorizationId !== grant.payload.authorizationId ||
-    payload.grantDigest !== supervisorGrantDigest(grant) ||
+    (payload.purpose === 'host_supervisor_transport' &&
+      (payload.deviceId !== options.expectedDevice.deviceId ||
+        payload.deviceKeyGeneration !== options.expectedDevice.keyGeneration ||
+        payload.authorizationId !== grant.payload.authorizationId ||
+        payload.grantDigest !== supervisorGrantDigest(grant))) ||
+    (payload.purpose === 'host_supervisor_presence' &&
+      payload.spaceId !== grant.payload.spaceId) ||
     payload.exp * 1_000 <= now.getTime()
   ) {
     throw new SupervisorClientError('host_identity_mismatch')
@@ -493,12 +505,19 @@ async function completeSupervisorHandshake(
   socket: import('node:tls').TLSSocket,
   exporter: string,
   now: Date,
-  payload: SignedSupervisorTransportDescriptor['payload'],
+  payload: SignedSupervisorTransport['payload'],
   transport: 'direct' | 'relay',
   onClose?: () => void,
 ): Promise<PendingSupervisorConnection> {
   const connection = new FramedMachineConnection(socket)
   try {
+    if (payload.purpose === 'host_supervisor_presence') {
+      await connection.send({
+        type: 'supervisor.select',
+        protocolVersion: supervisorProtocolVersion,
+        authorizationId: options.grant.payload.authorizationId,
+      })
+    }
     const first = await connection.receive(supervisorServerHandshakeSchema, {
       signal: options.signal,
       timeoutMs: supervisorTransportLimits.handshakeTimeoutMs,
@@ -512,9 +531,10 @@ async function completeSupervisorHandshake(
     if (
       challenge.hostId !== payload.hostId ||
       challenge.hostIdentityGeneration !== payload.hostIdentityGeneration ||
-      challenge.deviceId !== payload.deviceId ||
-      challenge.deviceKeyGeneration !== payload.deviceKeyGeneration ||
-      challenge.authorizationId !== payload.authorizationId ||
+      challenge.deviceId !== options.grant.payload.deviceId ||
+      challenge.deviceKeyGeneration !==
+        options.grant.payload.deviceKeyGeneration ||
+      challenge.authorizationId !== options.grant.payload.authorizationId ||
       challenge.tlsExporter !== exporter ||
       Date.parse(challenge.issuedAt) >
         now.getTime() + supervisorTransportLimits.maximumClockSkewMs ||

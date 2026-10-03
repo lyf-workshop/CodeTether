@@ -401,6 +401,180 @@ test('Host-signed Supervisor grant and presence admit only the exact active Prod
   assert.equal(admission.authorizationId, grantPayload.authorizationId)
 })
 
+test('one Host presence resolves for two exact grants and revocation isolates one device', async () => {
+  const fixture = await createFixture('shared-supervisor-presence')
+  const service = new HostIdentityService(database, () => now)
+  const firstRequest = await requestAuthorization(service, fixture)
+  await confirmAuthorization(service, fixture, firstRequest)
+
+  const secondKeys = await generateKeyPair('ES256')
+  const secondKey = await admitProductDevicePublicJwk(
+    await exportJWK(secondKeys.publicKey),
+  )
+  const secondDevice = {
+    ...fixture.device,
+    deviceId: id('dev', 'shared-supervisor-second'),
+    publicKey: secondKey.canonicalPublicJwk,
+    fingerprint: secondKey.fingerprint,
+    label: 'Second device',
+    platform: 'macos',
+  }
+  await new ControlPlaneRepository(database).createProductDevice(secondDevice)
+  const second = {
+    ...fixture,
+    device: secondDevice,
+    deviceContext: {
+      ...fixture.deviceContext,
+      deviceId: secondDevice.deviceId,
+    },
+  }
+  const secondRequest = await requestAuthorization(service, second)
+  await confirmAuthorization(service, second, secondRequest)
+
+  const authorizations = await service.listHostSupervisorAuthorizations(
+    fixture.human,
+    fixture.deviceContext,
+    fixture.host.hostId,
+  )
+  assert.equal(authorizations.authorizations.length, 2)
+  assert.deepEqual(
+    authorizations.authorizations.map(({ deviceId }) => deviceId).sort(),
+    [fixture.device.deviceId, secondDevice.deviceId].sort(),
+  )
+  for (const authorization of authorizations.authorizations) {
+    assert.equal(authorization.scope, 'supervisor_read')
+    assert.equal(authorization.grant, null)
+    const payload = {
+      v: 1,
+      aud: 'codetether-host-supervisor',
+      purpose: 'host_supervisor_grant',
+      authorizationId: authorization.authorizationId,
+      hostId: fixture.host.hostId,
+      hostFingerprint: fixture.host.fingerprint,
+      hostIdentityGeneration: 1,
+      deviceId: authorization.deviceId,
+      deviceFingerprint: authorization.deviceFingerprint,
+      deviceKeyGeneration: authorization.deviceKeyGeneration,
+      userId: fixture.account.userId,
+      spaceId: fixture.account.spaceId,
+      scope: authorization.scope,
+      authorizationSerial: authorization.serial,
+      authorizationGeneration: authorization.generation,
+      issuedAt: Math.floor(Date.parse(authorization.issuedAt) / 1_000),
+      expiresAt: Math.floor(Date.parse(authorization.expiresAt) / 1_000),
+    }
+    const grant = {
+      payload,
+      proof: await new CompactSign(supervisorCanonicalJsonBytes(payload))
+        .setProtectedHeader({ alg: 'ES256', typ: supervisorGrantProofType })
+        .sign(fixture.hostKeys.privateKey),
+    }
+    // The already-authorized Host-local actor reconciles the second device;
+    // the second ProductDevice does not need another Owner approval.
+    await service.materializeSupervisorGrant(
+      fixture.human,
+      fixture.deviceContext,
+      fixture.host.hostId,
+      grant,
+    )
+  }
+
+  const payload = {
+    v: 1,
+    aud: 'codetether-host-supervisor',
+    purpose: 'host_supervisor_presence',
+    hostId: fixture.host.hostId,
+    hostFingerprint: fixture.host.fingerprint,
+    hostIdentityGeneration: 1,
+    spaceId: fixture.account.spaceId,
+    transportTlsFingerprint: 'T'.repeat(43),
+    controlPlaneOrigin: 'https://control-plane.example.test',
+    directEndpoints: [{ host: 'host.example.test', port: 4318 }],
+    relay: null,
+    iat: Math.floor(now.getTime() / 1_000),
+    exp: Math.floor((now.getTime() + 10 * 60_000) / 1_000),
+    protocolVersion: 2,
+  }
+  const signedPresence = {
+    payload,
+    proof: await new CompactSign(supervisorCanonicalJsonBytes(payload))
+      .setProtectedHeader({ alg: 'ES256', typ: supervisorDescriptorProofType })
+      .sign(fixture.hostKeys.privateKey),
+  }
+  await service.publishHostSupervisorPresence(
+    fixture.human,
+    fixture.deviceContext,
+    fixture.host.hostId,
+    signedPresence,
+  )
+  const firstDirectory = await service.listAuthorizedHostDirectory(
+    fixture.human,
+    fixture.deviceContext,
+  )
+  const secondDirectory = await service.listAuthorizedHostDirectory(
+    fixture.human,
+    second.deviceContext,
+  )
+  for (const directory of [firstDirectory, secondDirectory]) {
+    assert.equal(directory.hosts.length, 1)
+    assert.equal(
+      directory.hosts[0].supervisor.transport.payload.purpose,
+      'host_supervisor_presence',
+    )
+  }
+  assert.notEqual(
+    firstDirectory.hosts[0].supervisor.grant.payload.authorizationId,
+    secondDirectory.hosts[0].supervisor.grant.payload.authorizationId,
+  )
+  await service.revokeDeviceAuthorization(
+    fixture.human,
+    second.deviceContext,
+    fixture.host.hostId,
+    { authorizationId: secondDirectory.hosts[0].authorization.authorizationId },
+  )
+  assert.equal(
+    (
+      await service.listAuthorizedHostDirectory(
+        fixture.human,
+        second.deviceContext,
+      )
+    ).hosts.length,
+    0,
+  )
+  assert.equal(
+    (
+      await service.listAuthorizedHostDirectory(
+        fixture.human,
+        fixture.deviceContext,
+      )
+    ).hosts.length,
+    1,
+  )
+  await service.revokeDeviceAuthorization(
+    fixture.human,
+    fixture.deviceContext,
+    fixture.host.hostId,
+    { authorizationId: firstDirectory.hosts[0].authorization.authorizationId },
+  )
+  assert.equal(
+    (
+      await service.listHostSupervisorAuthorizations(
+        fixture.human,
+        fixture.deviceContext,
+        fixture.host.hostId,
+      )
+    ).authorizations.length,
+    0,
+  )
+  // Presence remains a Host-owned capability, not a ProductDevice grant.
+  await service.publishHostSupervisorPresence(
+    fixture.human,
+    fixture.deviceContext,
+    fixture.host.hostId,
+    signedPresence,
+  )
+})
+
 test('invalid Host signature cannot create an authorization', async () => {
   const fixture = await createFixture('authorization-signature')
   const wrongKeys = await generateKeyPair('ES256')

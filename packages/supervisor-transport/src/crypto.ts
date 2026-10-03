@@ -7,11 +7,14 @@ import {
 } from './constants.js'
 import {
   supervisorGrantPayloadSchema,
+  supervisorHostPresencePayloadSchema,
   supervisorPublicJwkSchema,
   supervisorTransportDescriptorPayloadSchema,
   type SignedSupervisorGrant,
+  type SignedSupervisorHostPresence,
   type SignedSupervisorTransportDescriptor,
   type SupervisorGrantPayload,
+  type SupervisorHostPresencePayload,
   type SupervisorPublicJwk,
   type SupervisorTransportDescriptorPayload,
 } from './protocol.js'
@@ -58,6 +61,12 @@ export function supervisorDescriptorBytes(
   )
 }
 
+export function supervisorHostPresenceBytes(
+  value: SupervisorHostPresencePayload,
+): Uint8Array {
+  return canonicalJsonBytes(supervisorHostPresencePayloadSchema.parse(value))
+}
+
 export function supervisorGrantDigest(grant: SignedSupervisorGrant): string {
   const parsed = supervisorGrantPayloadSchema.parse(grant.payload)
   return sha256Digest(supervisorGrantBytes(parsed))
@@ -88,6 +97,19 @@ export async function verifySupervisorDescriptor(
     supervisorPublicJwkSchema.parse(publicJwk),
     supervisorDescriptorProofType,
     supervisorDescriptorBytes(payload),
+  )
+}
+
+export async function verifySupervisorHostPresence(
+  value: SignedSupervisorHostPresence,
+  publicJwk: SupervisorPublicJwk,
+): Promise<void> {
+  const payload = supervisorHostPresencePayloadSchema.parse(value.payload)
+  await verifyCompactProof(
+    value.proof,
+    supervisorPublicJwkSchema.parse(publicJwk),
+    supervisorDescriptorProofType,
+    supervisorHostPresenceBytes(payload),
   )
 }
 

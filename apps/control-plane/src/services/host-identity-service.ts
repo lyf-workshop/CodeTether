@@ -3,12 +3,14 @@ import { z } from 'zod'
 import {
   sha256Digest as supervisorSha256Digest,
   signedSupervisorGrantSchema,
+  signedSupervisorHostPresenceSchema,
   signedSupervisorTransportDescriptorSchema,
   supervisorChallengeSchema,
   supervisorGrantDigest,
   supervisorTransportLimits,
   verifySupervisorDescriptor,
   verifySupervisorGrant,
+  verifySupervisorHostPresence,
   type SignedSupervisorGrant,
   type SupervisorGrantPayload,
 } from '@codetether/supervisor-transport'
@@ -38,6 +40,7 @@ import {
   hostAuthorizationIdSchema,
   hostClaimIdSchema,
   hostIdSchema,
+  productDeviceIdSchema,
   spaceIdSchema,
 } from '../domain/ids.js'
 import {
@@ -958,7 +961,9 @@ export class HostIdentityService {
     if (human.status !== 'active' || device.userId !== human.userId) {
       throw new HostIdentityFailure('host_access_request_owner_mismatch')
     }
-    const rows = await new HostAccessRequestRepository(this.database).listOwnedHostsForDevice(
+    const rows = await new HostAccessRequestRepository(
+      this.database,
+    ).listOwnedHostsForDevice(
       human.userId,
       human.personalSpaceId,
       device.deviceId,
@@ -1023,16 +1028,19 @@ export class HostIdentityService {
       ) {
         throw new HostIdentityFailure('host_access_request_host_mismatch')
       }
-      if (!(await hostRepository.userCanOwnSpace(input.spaceId, human.userId))) {
+      if (
+        !(await hostRepository.userCanOwnSpace(input.spaceId, human.userId))
+      ) {
         throw new HostIdentityFailure('host_access_request_owner_mismatch')
       }
-      const existingAuthorization = await hostRepository.findEffectiveDeviceAuthorization(
-        hostId,
-        device.deviceId,
-        human.userId,
-        input.spaceId,
-        now,
-      )
+      const existingAuthorization =
+        await hostRepository.findEffectiveDeviceAuthorization(
+          hostId,
+          device.deviceId,
+          human.userId,
+          input.spaceId,
+          now,
+        )
       if (existingAuthorization) {
         return {
           status: 'authorized' as const,
@@ -1053,12 +1061,17 @@ export class HostIdentityService {
         now,
       )
       if (pending) {
-        return { status: 'pending' as const, request: publicAccessRequest(pending) }
+        return {
+          status: 'pending' as const,
+          request: publicAccessRequest(pending),
+        }
       }
 
       const challengeId = createEnrollmentChallengeId()
       const createdAt = now
-      const expiresAt = new Date(createdAt.getTime() + ACCESS_REQUEST_LIFETIME_MS)
+      const expiresAt = new Date(
+        createdAt.getTime() + ACCESS_REQUEST_LIFETIME_MS,
+      )
       const authorizationExpiresAt = new Date(
         createdAt.getTime() + AUTHORIZATION_LIFETIME_MS,
       )
@@ -1109,12 +1122,20 @@ export class HostIdentityService {
           input.scope,
           now,
         )
-        if (raced) return { status: 'pending' as const, request: publicAccessRequest(raced) }
+        if (raced)
+          return {
+            status: 'pending' as const,
+            request: publicAccessRequest(raced),
+          }
         throw new HostIdentityFailure('host_access_request_conflict')
       }
       const created = await requestRepository.findById(requestId)
-      if (!created) throw new HostIdentityFailure('host_access_request_conflict')
-      return { status: 'pending' as const, request: publicAccessRequest(created) }
+      if (!created)
+        throw new HostIdentityFailure('host_access_request_conflict')
+      return {
+        status: 'pending' as const,
+        request: publicAccessRequest(created),
+      }
     })
   }
 
@@ -1127,12 +1148,21 @@ export class HostIdentityService {
     if (human.status !== 'active' || device.userId !== human.userId) {
       throw new HostIdentityFailure('host_access_request_owner_mismatch')
     }
-    const request = await new HostAccessRequestRepository(this.database).findById(requestId)
-    if (!request || request.requestingDeviceId !== device.deviceId || request.spaceId !== human.personalSpaceId) {
+    const request = await new HostAccessRequestRepository(
+      this.database,
+    ).findById(requestId)
+    if (
+      !request ||
+      request.requestingDeviceId !== device.deviceId ||
+      request.spaceId !== human.personalSpaceId
+    ) {
       throw new HostIdentityFailure('host_access_request_not_found')
     }
     if (request.status === 'pending' && request.expiresAt <= this.now()) {
-      await new HostAccessRequestRepository(this.database).expirePending(requestId, this.now())
+      await new HostAccessRequestRepository(this.database).expirePending(
+        requestId,
+        this.now(),
+      )
       return { ...publicAccessRequest(request), status: 'expired' as const }
     }
     return publicAccessRequest(request)
@@ -1151,7 +1181,11 @@ export class HostIdentityService {
     const result = await this.database.transaction(async (transaction) => {
       const repository = new HostAccessRequestRepository(transaction)
       const request = await repository.findById(requestId, true)
-      if (!request || request.requestingDeviceId !== device.deviceId || request.spaceId !== human.personalSpaceId) {
+      if (
+        !request ||
+        request.requestingDeviceId !== device.deviceId ||
+        request.spaceId !== human.personalSpaceId
+      ) {
         throw new HostIdentityFailure('host_access_request_not_found')
       }
       if (request.status === 'pending' && request.expiresAt <= now) {
@@ -1159,7 +1193,13 @@ export class HostIdentityService {
         return 'expired' as const
       }
       if (request.status !== 'pending') return request.status
-      if (!(await repository.transitionPending({ requestId, status: 'cancelled', updatedAt: now }))) {
+      if (
+        !(await repository.transitionPending({
+          requestId,
+          status: 'cancelled',
+          updatedAt: now,
+        }))
+      ) {
         throw new HostIdentityFailure('host_access_request_conflict')
       }
       return 'cancelled' as const
@@ -1174,11 +1214,9 @@ export class HostIdentityService {
     if (human.status !== 'active' || device.userId !== human.userId) {
       throw new HostIdentityFailure('host_access_request_owner_mismatch')
     }
-    const requests = await new HostAccessRequestRepository(this.database).listPendingForOwnedHosts(
-      human.userId,
-      human.personalSpaceId,
-      this.now(),
-    )
+    const requests = await new HostAccessRequestRepository(
+      this.database,
+    ).listPendingForOwnedHosts(human.userId, human.personalSpaceId, this.now())
     return {
       requests: requests.map((request) => ({
         ...publicAccessRequest(request),
@@ -1208,7 +1246,13 @@ export class HostIdentityService {
         return 'expired' as const
       }
       if (request.status !== 'pending') return request.status
-      if (!(await repository.transitionPending({ requestId, status: 'denied', updatedAt: now }))) {
+      if (
+        !(await repository.transitionPending({
+          requestId,
+          status: 'denied',
+          updatedAt: now,
+        }))
+      ) {
         throw new HostIdentityFailure('host_access_request_conflict')
       }
       return 'denied' as const
@@ -1233,7 +1277,9 @@ export class HostIdentityService {
     if (!request || request.spaceId !== human.personalSpaceId) {
       throw new HostIdentityFailure('host_access_request_not_found')
     }
-    const storedPayload = hostDeviceAuthorizationPayloadSchema.parse(request.authorizationPayload)
+    const storedPayload = hostDeviceAuthorizationPayloadSchema.parse(
+      request.authorizationPayload,
+    )
     if (
       !accessPayloadMatches(storedPayload, payload) ||
       payload.scope !== 'supervisor_read' ||
@@ -1251,8 +1297,16 @@ export class HostIdentityService {
     }
     try {
       const admitted = await admitHostPublicJwk(JSON.parse(host.publicKey))
-      if (admitted.canonicalPublicJwk !== host.publicKey || admitted.fingerprint !== host.fingerprint) throw new Error('identity mismatch')
-      await verifyHostDeviceAuthorizationProof(input.proof, admitted.publicJwk, payload)
+      if (
+        admitted.canonicalPublicJwk !== host.publicKey ||
+        admitted.fingerprint !== host.fingerprint
+      )
+        throw new Error('identity mismatch')
+      await verifyHostDeviceAuthorizationProof(
+        input.proof,
+        admitted.publicJwk,
+        payload,
+      )
     } catch {
       throw new HostIdentityFailure('host_access_request_signature_invalid')
     }
@@ -1262,10 +1316,21 @@ export class HostIdentityService {
       const txRequests = new HostAccessRequestRepository(transaction)
       const txHosts = new HostIdentityRepository(transaction)
       const currentRequest = await txRequests.findById(requestId, true)
-      if (!currentRequest) throw new HostIdentityFailure('host_access_request_not_found')
-      if (currentRequest.status === 'completed' && currentRequest.completedAuthorizationId) {
-        const existing = await txHosts.findDeviceAuthorization(currentRequest.completedAuthorizationId)
-        if (existing) return { result: 'already_authorized' as const, authorization: publicAuthorization(existing), requestId }
+      if (!currentRequest)
+        throw new HostIdentityFailure('host_access_request_not_found')
+      if (
+        currentRequest.status === 'completed' &&
+        currentRequest.completedAuthorizationId
+      ) {
+        const existing = await txHosts.findDeviceAuthorization(
+          currentRequest.completedAuthorizationId,
+        )
+        if (existing)
+          return {
+            result: 'already_authorized' as const,
+            authorization: publicAuthorization(existing),
+            requestId,
+          }
       }
       if (currentRequest.status !== 'pending') {
         throw new HostIdentityFailure(
@@ -1279,8 +1344,13 @@ export class HostIdentityService {
         throw new HostIdentityFailure('host_access_request_expired')
       }
       const currentHost = await txHosts.findHostForUpdate(request.targetHostId)
-      const currentDevice = await new ProductDeviceRepository(transaction).findProductDeviceForUpdate(payload.deviceId)
-      const currentChallenge = await txHosts.findDeviceAuthorizationChallenge(payload.challengeId, true)
+      const currentDevice = await new ProductDeviceRepository(
+        transaction,
+      ).findProductDeviceForUpdate(payload.deviceId)
+      const currentChallenge = await txHosts.findDeviceAuthorizationChallenge(
+        payload.challengeId,
+        true,
+      )
       if (
         !currentHost ||
         currentHost.owningSpaceId !== human.personalSpaceId ||
@@ -1288,18 +1358,23 @@ export class HostIdentityService {
         currentHost.revokedAt ||
         currentHost.fingerprint !== payload.hostFingerprint ||
         currentHost.claimGeneration !== payload.hostIdentityGeneration
-      ) throw new HostIdentityFailure('host_access_request_host_mismatch')
+      )
+        throw new HostIdentityFailure('host_access_request_host_mismatch')
       if (
         !currentDevice ||
         currentDevice.ownerUserId !== human.userId ||
         currentDevice.keyGeneration !== payload.deviceKeyGeneration ||
         currentDevice.fingerprint !== payload.deviceFingerprint ||
         currentDevice.revokedAt
-      ) throw new HostIdentityFailure('host_access_request_device_unavailable')
+      )
+        throw new HostIdentityFailure('host_access_request_device_unavailable')
       if (!(await txHosts.userCanOwnSpace(payload.spaceId, human.userId))) {
         throw new HostIdentityFailure('host_access_request_owner_mismatch')
       }
-      if (!currentChallenge || !authorizationChallengeMatches(currentChallenge, payload)) {
+      if (
+        !currentChallenge ||
+        !authorizationChallengeMatches(currentChallenge, payload)
+      ) {
         throw new HostIdentityFailure('host_access_request_challenge_invalid')
       }
       const existing = await txHosts.findEffectiveDeviceAuthorization(
@@ -1311,20 +1386,48 @@ export class HostIdentityService {
       )
       if (currentChallenge.consumedAt) {
         if (existing && authorizationMatchesPayload(existing, payload)) {
-          await txRequests.transitionPending({ requestId, status: 'completed', updatedAt: now, completedAuthorizationId: existing.authorizationId })
-          return { result: 'already_authorized' as const, authorization: publicAuthorization(existing), requestId }
+          await txRequests.transitionPending({
+            requestId,
+            status: 'completed',
+            updatedAt: now,
+            completedAuthorizationId: existing.authorizationId,
+          })
+          return {
+            result: 'already_authorized' as const,
+            authorization: publicAuthorization(existing),
+            requestId,
+          }
         }
         throw new HostIdentityFailure('host_access_request_challenge_consumed')
       }
-      if (!(await txHosts.consumeDeviceAuthorizationChallenge(payload.challengeId, now))) {
+      if (
+        !(await txHosts.consumeDeviceAuthorizationChallenge(
+          payload.challengeId,
+          now,
+        ))
+      ) {
         throw new HostIdentityFailure('host_access_request_challenge_consumed')
       }
       if (existing) {
-        await txRequests.transitionPending({ requestId, status: 'completed', updatedAt: now, completedAuthorizationId: existing.authorizationId })
-        return { result: 'already_authorized' as const, authorization: publicAuthorization(existing), requestId }
+        await txRequests.transitionPending({
+          requestId,
+          status: 'completed',
+          updatedAt: now,
+          completedAuthorizationId: existing.authorizationId,
+        })
+        return {
+          result: 'already_authorized' as const,
+          authorization: publicAuthorization(existing),
+          requestId,
+        }
       }
-      const sequence = await txHosts.nextDeviceAuthorizationSequence(payload.hostId, payload.deviceId)
-      const created = await new ControlPlaneRepository(transaction).createHostDeviceAuthorization({
+      const sequence = await txHosts.nextDeviceAuthorizationSequence(
+        payload.hostId,
+        payload.deviceId,
+      )
+      const created = await new ControlPlaneRepository(
+        transaction,
+      ).createHostDeviceAuthorization({
         authorizationId: payload.authorizationId,
         hostId: payload.hostId,
         claimGeneration: payload.hostIdentityGeneration,
@@ -1339,24 +1442,41 @@ export class HostIdentityService {
         issuedAt: new Date(payload.iat * 1000),
         expiresAt: new Date(payload.authorizationExpiresAt * 1000),
       })
-      if (!created) throw new HostIdentityFailure('host_access_request_conflict')
-      await new ControlPlaneRepository(transaction).appendSecurityEvent(event({
-        eventType: 'supervisor_authorized',
-        actorKind: 'host',
-        actorId: payload.hostId,
-        targetKind: 'authorization',
-        targetId: payload.authorizationId,
-        outcome: 'success',
-        reasonCode: null,
-        correlationId: requestId,
-        occurredAt: now,
-      }))
-      if (!(await txRequests.transitionPending({ requestId, status: 'completed', updatedAt: now, completedAuthorizationId: payload.authorizationId }))) {
+      if (!created)
+        throw new HostIdentityFailure('host_access_request_conflict')
+      await new ControlPlaneRepository(transaction).appendSecurityEvent(
+        event({
+          eventType: 'supervisor_authorized',
+          actorKind: 'host',
+          actorId: payload.hostId,
+          targetKind: 'authorization',
+          targetId: payload.authorizationId,
+          outcome: 'success',
+          reasonCode: null,
+          correlationId: requestId,
+          occurredAt: now,
+        }),
+      )
+      if (
+        !(await txRequests.transitionPending({
+          requestId,
+          status: 'completed',
+          updatedAt: now,
+          completedAuthorizationId: payload.authorizationId,
+        }))
+      ) {
         throw new HostIdentityFailure('host_access_request_conflict')
       }
-      const authorization = await txHosts.findDeviceAuthorization(payload.authorizationId)
-      if (!authorization) throw new HostIdentityFailure('host_access_request_conflict')
-      return { result: 'authorized' as const, authorization: publicAuthorization(authorization), requestId }
+      const authorization = await txHosts.findDeviceAuthorization(
+        payload.authorizationId,
+      )
+      if (!authorization)
+        throw new HostIdentityFailure('host_access_request_conflict')
+      return {
+        result: 'authorized' as const,
+        authorization: publicAuthorization(authorization),
+        requestId,
+      }
     })
   }
 
@@ -1586,6 +1706,26 @@ export class HostIdentityService {
     return publicAuthorization(authorization)
   }
 
+  private async assertHostPresencePublisher(
+    human: AuthenticatedHumanRequestContext,
+    device: AuthenticatedProductDeviceContext,
+    hostId: ReturnType<typeof hostIdSchema.parse>,
+  ): Promise<void> {
+    if (human.status !== 'active' || device.userId !== human.userId) {
+      throw new HostIdentityFailure('host_device_authorization_owner_mismatch')
+    }
+    const repository = new HostIdentityRepository(this.database)
+    const host = await repository.findHost(hostId)
+    if (
+      host?.owningSpaceId !== human.personalSpaceId ||
+      host.claimState !== 'claimed' ||
+      host.revokedAt !== null ||
+      !(await repository.userCanOwnSpace(human.personalSpaceId, human.userId))
+    ) {
+      throw new HostIdentityFailure('host_device_authorization_owner_mismatch')
+    }
+  }
+
   public async listAuthorizedHostDirectory(
     human: AuthenticatedHumanRequestContext,
     device: AuthenticatedProductDeviceContext,
@@ -1602,7 +1742,7 @@ export class HostIdentityService {
       this.now(),
     )
     return {
-      hosts: rows.map(({ host, authorization }) => ({
+      hosts: rows.map(({ host, authorization, hostPresence }) => ({
         hostId: host.hostId,
         spaceId: human.personalSpaceId,
         safeLabel: host.safeLabel,
@@ -1623,16 +1763,59 @@ export class HostIdentityService {
         },
         supervisor:
           authorization.supervisorGrant !== null &&
-          authorization.supervisorTransport !== null &&
-          authorization.supervisorTransportExpiresAt !== null &&
-          authorization.supervisorTransportExpiresAt > this.now() &&
-          authorization.supervisorTransport.payload.grantDigest ===
-            supervisorGrantDigest(authorization.supervisorGrant)
-            ? {
-                grant: authorization.supervisorGrant,
-                transport: authorization.supervisorTransport,
-              }
-            : null,
+          hostPresence !== null &&
+          hostPresence.payload.hostId === host.hostId &&
+          hostPresence.payload.hostFingerprint === host.fingerprint &&
+          hostPresence.payload.hostIdentityGeneration ===
+            host.claimGeneration &&
+          hostPresence.payload.spaceId === human.personalSpaceId
+            ? { grant: authorization.supervisorGrant, transport: hostPresence }
+            : authorization.supervisorGrant !== null &&
+                authorization.supervisorTransport !== null &&
+                authorization.supervisorTransportExpiresAt !== null &&
+                authorization.supervisorTransportExpiresAt > this.now() &&
+                authorization.supervisorTransport.payload.grantDigest ===
+                  supervisorGrantDigest(authorization.supervisorGrant)
+              ? {
+                  grant: authorization.supervisorGrant,
+                  transport: authorization.supervisorTransport,
+                }
+              : null,
+      })),
+    }
+  }
+
+  public async listHostSupervisorAuthorizations(
+    human: AuthenticatedHumanRequestContext,
+    device: AuthenticatedProductDeviceContext,
+    untrustedHostId: string,
+  ) {
+    const hostId = hostIdSchema.parse(untrustedHostId)
+    await this.assertHostPresencePublisher(human, device, hostId)
+    const records = await new HostIdentityRepository(
+      this.database,
+    ).listEffectiveHostAuthorizations(
+      hostId,
+      human.userId,
+      human.personalSpaceId,
+      this.now(),
+    )
+    return {
+      authorizations: records.map((record) => ({
+        authorizationId: record.authorizationId,
+        hostId: record.hostId,
+        hostIdentityGeneration: record.hostIdentityGeneration,
+        deviceId: record.deviceId,
+        deviceFingerprint: record.deviceFingerprint,
+        deviceKeyGeneration: record.deviceKeyGeneration,
+        userId: record.userId,
+        spaceId: record.spaceId,
+        scope: record.scope,
+        serial: record.authorizationSerial.toString(),
+        generation: record.authorizationGeneration,
+        issuedAt: record.issuedAt.toISOString(),
+        expiresAt: record.expiresAt.toISOString(),
+        grant: record.supervisorGrant,
       })),
     }
   }
@@ -1650,13 +1833,24 @@ export class HostIdentityService {
   ) {
     const hostId = hostIdSchema.parse(untrustedHostId)
     const grant = supervisorGrantMaterializationSchema.parse(untrusted)
-    const authorization = await this.authorizeHostRequest(human, device, hostId)
+    await this.assertHostPresencePublisher(human, device, hostId)
     const repository = new HostIdentityRepository(this.database)
     const [record, host] = await Promise.all([
-      repository.findDeviceAuthorization(authorization.authorizationId),
+      repository.findEffectiveDeviceAuthorization(
+        hostId,
+        productDeviceIdSchema.parse(grant.payload.deviceId),
+        human.userId,
+        human.personalSpaceId,
+        this.now(),
+      ),
       repository.findHost(hostId),
     ])
-    if (!record || !host || host.publicKey.length > 8_192) {
+    if (
+      !record ||
+      record.authorizationId !== grant.payload.authorizationId ||
+      !host ||
+      host.publicKey.length > 8_192
+    ) {
       throw new HostIdentityFailure('host_device_authorization_required')
     }
     if (!supervisorGrantMatchesAuthorization(grant.payload, record, host)) {
@@ -1695,6 +1889,51 @@ export class HostIdentityService {
       result: result === 'stored' ? 'materialized' : 'already_materialized',
       grant,
     }
+  }
+
+  public async publishHostSupervisorPresence(
+    human: AuthenticatedHumanRequestContext,
+    device: AuthenticatedProductDeviceContext,
+    untrustedHostId: string,
+    untrusted: unknown,
+  ) {
+    const hostId = hostIdSchema.parse(untrustedHostId)
+    await this.assertHostPresencePublisher(human, device, hostId)
+    const presence = signedSupervisorHostPresenceSchema.parse(untrusted)
+    const repository = new HostIdentityRepository(this.database)
+    const host = await repository.findHost(hostId)
+    const now = this.now()
+    const payload = presence.payload
+    const expiresAt = new Date(payload.exp * 1_000)
+    if (
+      !host ||
+      host.owningSpaceId !== human.personalSpaceId ||
+      payload.hostId !== hostId ||
+      payload.hostFingerprint !== host.fingerprint ||
+      payload.hostIdentityGeneration !== host.claimGeneration ||
+      payload.spaceId !== human.personalSpaceId ||
+      payload.iat > Math.floor((now.getTime() + 120_000) / 1_000) ||
+      expiresAt <= now ||
+      expiresAt.getTime() - now.getTime() >
+        supervisorTransportLimits.descriptorLifetimeMs
+    ) {
+      throw new HostIdentityFailure('host_supervisor_transport_mismatch')
+    }
+    try {
+      const admitted = await admitHostPublicJwk(JSON.parse(host.publicKey))
+      await verifySupervisorHostPresence(presence, admitted.publicJwk)
+    } catch {
+      throw new HostIdentityFailure(
+        'host_supervisor_transport_signature_invalid',
+      )
+    }
+    await repository.publishHostSupervisorPresence({
+      hostId,
+      presence,
+      expiresAt,
+      now,
+    })
+    return { result: 'published' as const, expiresAt: expiresAt.toISOString() }
   }
 
   public async publishSupervisorTransport(

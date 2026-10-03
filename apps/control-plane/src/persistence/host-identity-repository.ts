@@ -10,7 +10,9 @@ import type {
 import type { SqlExecutor } from './database.js'
 import {
   supervisorGrantDigest,
+  supervisorTransportLimits,
   type SignedSupervisorGrant,
+  type SignedSupervisorHostPresence,
   type SignedSupervisorTransportDescriptor,
 } from '@codetether/supervisor-transport'
 const asDate = (value: Date | string): Date =>
@@ -225,6 +227,14 @@ export interface HostDeviceAuthorizationRecord {
 export interface AuthorizedHostDirectoryRecord {
   readonly host: HostRecord
   readonly authorization: HostDeviceAuthorizationRecord
+  readonly hostPresence: SignedSupervisorHostPresence | null
+}
+
+interface HostPresenceColumns extends Record<string, unknown> {
+  readonly supervisor_host_presence_payload:
+    SignedSupervisorHostPresence['payload'] | null
+  readonly supervisor_host_presence_proof: string | null
+  readonly supervisor_host_presence_expires_at: Date | string | null
 }
 
 function hostFromRow(row: HostRow): HostRecord {
@@ -689,6 +699,68 @@ export class HostIdentityRepository {
     return result.rowCount === 1
   }
 
+  public async publishHostSupervisorPresence(input: {
+    hostId: HostId
+    presence: SignedSupervisorHostPresence
+    expiresAt: Date
+    now: Date
+  }): Promise<void> {
+    await this.executor.query(
+      `INSERT INTO control_plane.host_supervisor_presence
+         (host_id, payload, proof, expires_at, updated_at)
+       VALUES ($1, $2::jsonb, $3, $4, $5)
+       ON CONFLICT (host_id) DO UPDATE
+         SET payload=EXCLUDED.payload,
+             proof=EXCLUDED.proof,
+             expires_at=EXCLUDED.expires_at,
+             updated_at=EXCLUDED.updated_at`,
+      [
+        input.hostId,
+        JSON.stringify(input.presence.payload),
+        input.presence.proof,
+        input.expiresAt,
+        input.now,
+      ],
+    )
+  }
+
+  public async listEffectiveHostAuthorizations(
+    hostId: HostId,
+    userId: UserId,
+    spaceId: SpaceId,
+    now: Date,
+  ): Promise<readonly HostDeviceAuthorizationRecord[]> {
+    const result = await this.executor.query<AuthorizationRow>(
+      `SELECT a.*
+         FROM control_plane.host_device_authorizations a
+         JOIN control_plane.hosts h ON h.host_id=a.host_id
+         JOIN control_plane.product_devices d ON d.device_id=a.device_id
+        WHERE a.host_id=$1 AND a.user_id=$2 AND a.space_id=$3
+          AND a.scope='supervisor_read'
+          AND a.revoked_at IS NULL AND a.expires_at>$4
+          AND h.owning_space_id=a.space_id
+          AND h.claim_generation=a.claim_generation
+          AND h.claim_state='claimed' AND h.revoked_at IS NULL
+          AND d.owner_user_id=a.user_id
+          AND d.key_generation=a.device_key_generation
+          AND d.fingerprint=a.device_fingerprint
+          AND d.revoked_at IS NULL
+        ORDER BY a.authorization_id
+        LIMIT $5`,
+      [
+        hostId,
+        userId,
+        spaceId,
+        now,
+        supervisorTransportLimits.maximumActivations + 1,
+      ],
+    )
+    if (result.rows.length > supervisorTransportLimits.maximumActivations) {
+      throw new Error('Host Supervisor authorization capacity exceeded')
+    }
+    return result.rows.map(authorizationFromRow)
+  }
+
   public async findEffectiveDeviceAuthorization(
     hostId: HostId,
     deviceId: ProductDeviceId,
@@ -738,7 +810,9 @@ export class HostIdentityRepository {
     spaceId: SpaceId,
     now: Date,
   ): Promise<readonly AuthorizedHostDirectoryRecord[]> {
-    const result = await this.executor.query<HostRow & AuthorizationRow>(
+    const result = await this.executor.query<
+      HostRow & AuthorizationRow & HostPresenceColumns
+    >(
       `SELECT h.*,
               a.authorization_id, a.host_id, a.claim_generation,
               a.device_id, a.device_key_generation, a.device_fingerprint,
@@ -747,9 +821,13 @@ export class HostIdentityRepository {
               a.revoked_at, a.supervisor_grant_payload,
               a.supervisor_grant_proof, a.supervisor_grant_materialized_at,
               a.supervisor_transport_payload, a.supervisor_transport_proof,
-              a.supervisor_transport_expires_at
+              a.supervisor_transport_expires_at,
+              p.payload AS supervisor_host_presence_payload,
+              p.proof AS supervisor_host_presence_proof,
+              p.expires_at AS supervisor_host_presence_expires_at
          FROM control_plane.host_device_authorizations a
          JOIN control_plane.hosts h ON h.host_id=a.host_id
+         LEFT JOIN control_plane.host_supervisor_presence p ON p.host_id=h.host_id
          JOIN control_plane.product_devices d ON d.device_id=a.device_id
          JOIN control_plane.users u ON u.user_id=a.user_id
          JOIN control_plane.space_memberships m
@@ -782,6 +860,16 @@ export class HostIdentityRepository {
       directory.push({
         host: hostFromRow(row),
         authorization: authorizationFromRow(row),
+        hostPresence:
+          row.supervisor_host_presence_payload !== null &&
+          row.supervisor_host_presence_proof !== null &&
+          row.supervisor_host_presence_expires_at !== null &&
+          asDate(row.supervisor_host_presence_expires_at) > now
+            ? {
+                payload: row.supervisor_host_presence_payload,
+                proof: row.supervisor_host_presence_proof,
+              }
+            : null,
       })
     }
     return directory

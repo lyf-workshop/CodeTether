@@ -99,7 +99,7 @@ import {
 } from '@codetether/protocol'
 import {
   signedSupervisorGrantSchema,
-  signedSupervisorTransportDescriptorSchema,
+  signedSupervisorTransportSchema,
   supervisorPublicJwkSchema,
 } from '@codetether/supervisor-transport'
 import { z } from 'zod'
@@ -124,7 +124,14 @@ const supervisorActivationSchema = z
   .object({
     hostPublicJwk: supervisorPublicJwkSchema,
     grant: signedSupervisorGrantSchema,
-    descriptor: signedSupervisorTransportDescriptorSchema,
+    descriptor: signedSupervisorTransportSchema,
+  })
+  .strict()
+const supervisorActivationPruneSchema = z
+  .object({
+    authorizationIds: z
+      .array(z.string().regex(/^hauth_[A-Za-z0-9][A-Za-z0-9_-]{15,95}$/u))
+      .max(64),
   })
   .strict()
 const supervisorConnectionSchema = z
@@ -136,7 +143,7 @@ const supervisorConnectionSchema = z
     deviceId: z.string().min(1).max(160),
     deviceKeyGeneration: z.number().int().positive(),
     grant: signedSupervisorGrantSchema,
-    descriptor: signedSupervisorTransportDescriptorSchema,
+    descriptor: signedSupervisorTransportSchema,
     forceRelay: z.boolean().optional(),
   })
   .strict()
@@ -500,6 +507,24 @@ export class LocalHttpServer {
           response,
           200,
           { status: 'active' },
+          context.allowedOrigin,
+        )
+        return
+      }
+      if (
+        request.method === 'POST' &&
+        url.pathname === '/api/v1/supervisor/activations/prune' &&
+        this.#supervisorTransport !== undefined
+      ) {
+        const body = await this.#http.readValidatedBody(
+          request,
+          supervisorActivationPruneSchema,
+        )
+        this.#supervisorTransport.pruneActivations(body.authorizationIds)
+        this.#http.writeJson(
+          response,
+          200,
+          { status: 'pruned' },
           context.allowedOrigin,
         )
         return

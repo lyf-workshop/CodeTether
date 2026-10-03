@@ -12,6 +12,8 @@ export const supervisorTransportLimits = {
   maximumFrameBytes: 256 * 1024,
   maximumQueuedFrames: 32,
   maximumEndpoints: 8,
+  maximumActivations: 64,
+  maximumInboundSockets: 64,
   maximumHostCharacters: 255,
   maximumProofBytes: 8 * 1024,
   maximumAccessTokenBytes: 16 * 1024,

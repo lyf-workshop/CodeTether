@@ -252,6 +252,212 @@ test('Host-local control approval admits only the fixed Conversation control uni
   }
 })
 
+test('one Host presence serves two independently scoped ProductDevices', async () => {
+  const fixture = await createFixture({
+    controlAuthorizationId: ids.authorizationId,
+  })
+  const macAuthorizationId = `hauth_${'b'.repeat(32)}`
+  const macDeviceId = `dev_${'e'.repeat(32)}`
+  const hostPresencePayload = {
+    v: 1,
+    aud: 'codetether-host-supervisor',
+    purpose: 'host_supervisor_presence',
+    hostId: ids.hostId,
+    hostFingerprint: fixture.clientOptions.expectedHost.fingerprint,
+    hostIdentityGeneration: 1,
+    spaceId: ids.spaceId,
+    transportTlsFingerprint: fixture.server.tlsIdentity.publicKeyFingerprint,
+    controlPlaneOrigin: 'https://control-plane.example.test',
+    directEndpoints: [fixture.clientOptions.endpoint],
+    relay: null,
+    iat: Math.floor(fixture.now.getTime() / 1_000),
+    exp: Math.floor((fixture.now.getTime() + 10 * 60_000) / 1_000),
+    protocolVersion: 2,
+  }
+  const presence = {
+    payload: hostPresencePayload,
+    proof: await sign(
+      fixture.privateKey,
+      supervisorDescriptorProofType,
+      hostPresencePayload,
+    ),
+  }
+  const macGrantPayload = {
+    ...fixture.clientOptions.grant.payload,
+    authorizationId: macAuthorizationId,
+    deviceId: macDeviceId,
+    deviceFingerprint: `sha256:${'E'.repeat(43)}`,
+    authorizationSerial: '2',
+  }
+  const macGrant = {
+    payload: macGrantPayload,
+    proof: await sign(
+      fixture.privateKey,
+      supervisorGrantProofType,
+      macGrantPayload,
+    ),
+  }
+  try {
+    await fixture.server.activate({
+      hostPublicJwk: fixture.publicJwk,
+      grant: fixture.clientOptions.grant,
+      descriptor: presence,
+    })
+    await fixture.server.activate({
+      hostPublicJwk: fixture.publicJwk,
+      grant: macGrant,
+      descriptor: presence,
+    })
+    assert.equal(fixture.server.activationCount, 2)
+    const [windowsPending, macPending] = await Promise.all([
+      connectSupervisorDirect({
+        ...fixture.clientOptions,
+        descriptor: presence,
+      }),
+      connectSupervisorDirect({
+        ...fixture.clientOptions,
+        expectedDevice: { deviceId: macDeviceId, keyGeneration: 1 },
+        grant: macGrant,
+        descriptor: presence,
+      }),
+    ])
+    const [windows, mac] = await Promise.all([
+      windowsPending.authenticate({
+        accessToken: 'windows-token',
+        deviceProof: 'windows-proof',
+      }),
+      macPending.authenticate({
+        accessToken: 'mac-token',
+        deviceProof: 'mac-proof',
+      }),
+    ])
+    assert.equal(windows.control, 'control')
+    assert.equal(mac.control, 'read')
+    assert.deepEqual(await windows.readHostBootstrap(), { hostId: ids.hostId })
+    assert.deepEqual(await mac.readHostBootstrap(), { hostId: ids.hostId })
+    await assert.rejects(
+      mac.startConversationTurn({
+        actionId: `act_${'q'.repeat(32)}`,
+        machineId: `machine_${'m'.repeat(32)}`,
+        projectId: `proj_${'p'.repeat(32)}`,
+        conversationId: `conv_${'c'.repeat(32)}`,
+        input: { type: 'text', text: 'safe' },
+      }),
+      (error) =>
+        error instanceof SupervisorClientError &&
+        error.code === 'operation_not_allowed',
+    )
+    fixture.server.deactivate(macAuthorizationId)
+    assert.equal(fixture.server.activationCount, 1)
+    assert.deepEqual(await windows.readHostBootstrap(), { hostId: ids.hostId })
+    windows.close()
+    mac.close()
+    await assert.rejects(
+      connectSupervisorDirect({
+        ...fixture.clientOptions,
+        expectedDevice: { deviceId: macDeviceId, keyGeneration: 1 },
+        grant: macGrant,
+        descriptor: presence,
+      }),
+    )
+  } finally {
+    await fixture.server.close()
+  }
+})
+
+test('a restarted Supervisor restores both exact grants under one renewed Host presence', async () => {
+  const fixture = await createFixture()
+  const secondGrantPayload = {
+    ...fixture.clientOptions.grant.payload,
+    authorizationId: `hauth_${'b'.repeat(32)}`,
+    deviceId: `dev_${'e'.repeat(32)}`,
+    deviceFingerprint: `sha256:${'E'.repeat(43)}`,
+    authorizationSerial: '2',
+  }
+  const secondGrant = {
+    payload: secondGrantPayload,
+    proof: await sign(
+      fixture.privateKey,
+      supervisorGrantProofType,
+      secondGrantPayload,
+    ),
+  }
+  await fixture.server.close()
+  const restarted = await SupervisorServer.create({
+    host: '127.0.0.1',
+    port: 0,
+    now: () => fixture.now,
+    authorize: async ({ challenge }) => ({
+      hostId: challenge.hostId,
+      hostIdentityGeneration: challenge.hostIdentityGeneration,
+      deviceId: challenge.deviceId,
+      deviceKeyGeneration: challenge.deviceKeyGeneration,
+      authorizationId: challenge.authorizationId,
+      authorizationExpiresAt: new Date(
+        fixture.now.getTime() + 60 * 60_000,
+      ).toISOString(),
+    }),
+    reads: { readHostBootstrap: () => ({ hostId: ids.hostId }) },
+  })
+  try {
+    const address = await restarted.start()
+    const payload = {
+      v: 1,
+      aud: 'codetether-host-supervisor',
+      purpose: 'host_supervisor_presence',
+      hostId: ids.hostId,
+      hostFingerprint: fixture.clientOptions.expectedHost.fingerprint,
+      hostIdentityGeneration: 1,
+      spaceId: ids.spaceId,
+      transportTlsFingerprint: restarted.tlsIdentity.publicKeyFingerprint,
+      controlPlaneOrigin: 'https://control-plane.example.test',
+      directEndpoints: [{ host: '127.0.0.1', port: address.port }],
+      relay: null,
+      iat: Math.floor(fixture.now.getTime() / 1_000),
+      exp: Math.floor((fixture.now.getTime() + 10 * 60_000) / 1_000),
+      protocolVersion: 2,
+    }
+    const presence = {
+      payload,
+      proof: await sign(
+        fixture.privateKey,
+        supervisorDescriptorProofType,
+        payload,
+      ),
+    }
+    for (const grant of [fixture.clientOptions.grant, secondGrant]) {
+      await restarted.activate({
+        hostPublicJwk: fixture.publicJwk,
+        grant,
+        descriptor: presence,
+      })
+    }
+    assert.equal(restarted.activationCount, 2)
+    for (const [grant, deviceId] of [
+      [fixture.clientOptions.grant, ids.deviceId],
+      [secondGrant, secondGrantPayload.deviceId],
+    ]) {
+      const pending = await connectSupervisorDirect({
+        ...fixture.clientOptions,
+        endpoint: payload.directEndpoints[0],
+        expectedDevice: { deviceId, keyGeneration: 1 },
+        grant,
+        descriptor: presence,
+      })
+      const session = await pending.authenticate({
+        accessToken: 'token',
+        deviceProof: `proof-${deviceId}`,
+      })
+      assert.deepEqual(await session.readHostBootstrap(), {
+        hostId: ids.hostId,
+      })
+      session.close()
+    }
+  } finally {
+    await restarted.close()
+  }
+})
+
 async function createFixture(options = {}) {
   const now = new Date('2026-09-24T12:00:00.000Z')
   const { privateKey, publicKey } = await generateKeyPair('ES256')
@@ -311,7 +517,9 @@ async function createFixture(options = {}) {
         operation: 'conversation.create',
       }),
     },
-    authorizeControl: async () => options.controlEnabled === true,
+    authorizeControl: async (authorizationId) =>
+      options.controlEnabled === true ||
+      options.controlAuthorizationId === authorizationId,
   })
   const address = await server.start()
   const grantPayload = {
@@ -367,6 +575,9 @@ async function createFixture(options = {}) {
   await server.activate({ hostPublicJwk: publicJwk, grant, descriptor })
   return {
     server,
+    privateKey,
+    publicJwk,
+    now,
     clientOptions: {
       endpoint: descriptorPayload.directEndpoints[0],
       expectedHost: {

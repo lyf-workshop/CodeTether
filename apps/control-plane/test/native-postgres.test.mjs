@@ -34,18 +34,20 @@ test(
         '0002_human_auth_identity.sql',
         '0003_product_device_authentication.sql',
         '0004_host_identity_claim.sql',
-    '0005_host_device_authorization.sql',
-    '0006_host_supervisor_transport.sql',
-    '0007_host_access_requests.sql',
+        '0005_host_device_authorization.sql',
+        '0006_host_supervisor_transport.sql',
+        '0007_host_access_requests.sql',
+        '0008_host_supervisor_presence.sql',
       ])
       assert.deepEqual(second.alreadyApplied, [
         '0001_account_foundation.sql',
         '0002_human_auth_identity.sql',
         '0003_product_device_authentication.sql',
         '0004_host_identity_claim.sql',
-    '0005_host_device_authorization.sql',
-    '0006_host_supervisor_transport.sql',
-    '0007_host_access_requests.sql',
+        '0005_host_device_authorization.sql',
+        '0006_host_supervisor_transport.sql',
+        '0007_host_access_requests.sql',
+        '0008_host_supervisor_presence.sql',
       ])
     } finally {
       await database.close()

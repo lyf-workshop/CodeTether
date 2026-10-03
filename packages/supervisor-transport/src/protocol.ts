@@ -113,6 +113,36 @@ export type SupervisorTransportDescriptorPayload = z.infer<
   typeof supervisorTransportDescriptorPayloadSchema
 >
 
+/** One Host transport, independent of the ProductDevices authorized to use it. */
+export const supervisorHostPresencePayloadSchema = z
+  .object({
+    v: z.literal(supervisorProofVersion),
+    aud: z.literal(supervisorAudience),
+    purpose: z.literal('host_supervisor_presence'),
+    hostId: opaqueId('host'),
+    hostFingerprint: digest,
+    hostIdentityGeneration: z.number().int().positive(),
+    spaceId: opaqueId('space'),
+    transportTlsFingerprint: base64Url32,
+    controlPlaneOrigin: z.string().url().max(2_048),
+    directEndpoints: z
+      .array(supervisorDirectEndpointSchema)
+      .max(supervisorTransportLimits.maximumEndpoints),
+    relay: supervisorRelayDescriptorSchema.nullable(),
+    iat: timestampSeconds,
+    exp: timestampSeconds,
+    protocolVersion: z.literal(2),
+  })
+  .strict()
+  .refine(({ exp, iat }) => exp > iat)
+  .refine(
+    ({ directEndpoints, relay }) =>
+      directEndpoints.length > 0 || relay !== null,
+  )
+export type SupervisorHostPresencePayload = z.infer<
+  typeof supervisorHostPresencePayloadSchema
+>
+
 export const signedSupervisorGrantSchema = z
   .object({
     payload: supervisorGrantPayloadSchema,
@@ -130,6 +160,32 @@ export const signedSupervisorTransportDescriptorSchema = z
 export type SignedSupervisorTransportDescriptor = z.infer<
   typeof signedSupervisorTransportDescriptorSchema
 >
+
+export const signedSupervisorHostPresenceSchema = z
+  .object({
+    payload: supervisorHostPresencePayloadSchema,
+    proof: z.string().min(1).max(supervisorTransportLimits.maximumProofBytes),
+  })
+  .strict()
+export type SignedSupervisorHostPresence = z.infer<
+  typeof signedSupervisorHostPresenceSchema
+>
+export const signedSupervisorTransportSchema = z.union([
+  signedSupervisorTransportDescriptorSchema,
+  signedSupervisorHostPresenceSchema,
+])
+export type SignedSupervisorTransport = z.infer<
+  typeof signedSupervisorTransportSchema
+>
+
+/** An untrusted routing hint inside end-to-end Supervisor TLS. */
+export const supervisorSelectSchema = z
+  .object({
+    type: z.literal('supervisor.select'),
+    protocolVersion: z.literal(supervisorProtocolVersion),
+    authorizationId: opaqueId('hauth'),
+  })
+  .strict()
 
 export const supervisorChallengeSchema = z
   .object({

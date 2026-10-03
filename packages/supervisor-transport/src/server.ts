@@ -3,7 +3,10 @@ import type { AddressInfo } from 'node:net'
 import type { Duplex } from 'node:stream'
 import { createServer, type Server, type TLSSocket } from 'node:tls'
 
-import { FramedMachineConnection } from '@codetether/machine-transport'
+import {
+  FramedMachineConnection,
+  MachineTransportError,
+} from '@codetether/machine-transport'
 
 import {
   supervisorProtocolVersion,
@@ -14,16 +17,19 @@ import {
   supervisorGrantDigest,
   verifySupervisorDescriptor,
   verifySupervisorGrant,
+  verifySupervisorHostPresence,
 } from './crypto.js'
 import {
   signedSupervisorGrantSchema,
+  signedSupervisorHostPresenceSchema,
   signedSupervisorTransportDescriptorSchema,
+  signedSupervisorTransportSchema,
+  supervisorSelectSchema,
   supervisorAuthenticatedSchema,
   supervisorClientAuthenticateSchema,
   supervisorRequestSchema,
-  supervisorTransportDescriptorPayloadSchema,
   type SignedSupervisorGrant,
-  type SignedSupervisorTransportDescriptor,
+  type SignedSupervisorTransport,
   type SupervisorChallenge,
   type SupervisorPublicJwk,
   type SupervisorRequest,
@@ -105,7 +111,7 @@ export interface SupervisorHostControlSurface {
 export interface SupervisorServerActivation {
   readonly hostPublicJwk: SupervisorPublicJwk
   readonly grant: SignedSupervisorGrant
-  readonly descriptor: SignedSupervisorTransportDescriptor
+  readonly descriptor: SignedSupervisorTransport
 }
 
 export interface SupervisorServerOptions {
@@ -137,7 +143,8 @@ export class SupervisorServer {
   readonly #options: SupervisorServerOptions
   readonly #now: () => Date
   readonly #sockets = new Set<TLSSocket>()
-  #activation: SupervisorServerActivation | undefined
+  readonly #activations = new Map<string, SupervisorServerActivation>()
+  readonly #socketsByAuthorization = new Map<string, Set<TLSSocket>>()
   #address: AddressInfo | undefined
   #closing = false
 
@@ -154,6 +161,12 @@ export class SupervisorServer {
     )
     this.#server.on('connection', (socket) => {
       const tls = socket as TLSSocket
+      if (
+        this.#sockets.size >= supervisorTransportLimits.maximumInboundSockets
+      ) {
+        tls.destroy()
+        return
+      }
       this.#sockets.add(tls)
       tls.once('close', () => this.#sockets.delete(tls))
     })
@@ -173,7 +186,11 @@ export class SupervisorServer {
   }
 
   get activation(): SupervisorServerActivation | undefined {
-    return this.#activation
+    return this.#activations.values().next().value
+  }
+
+  get activationCount(): number {
+    return this.#activations.size
   }
 
   async start(): Promise<AddressInfo> {
@@ -204,39 +221,89 @@ export class SupervisorServer {
 
   async activate(untrusted: SupervisorServerActivation): Promise<void> {
     const grant = signedSupervisorGrantSchema.parse(untrusted.grant)
-    const descriptor = signedSupervisorTransportDescriptorSchema.parse(
+    const descriptor = signedSupervisorTransportSchema.parse(
       untrusted.descriptor,
     )
     const publicJwk = untrusted.hostPublicJwk
-    await Promise.all([
-      verifySupervisorGrant(grant, publicJwk),
-      verifySupervisorDescriptor(descriptor, publicJwk),
-    ])
+    await verifySupervisorGrant(grant, publicJwk)
+    if (descriptor.payload.purpose === 'host_supervisor_presence') {
+      await verifySupervisorHostPresence(
+        signedSupervisorHostPresenceSchema.parse(descriptor),
+        publicJwk,
+      )
+    } else {
+      await verifySupervisorDescriptor(
+        signedSupervisorTransportDescriptorSchema.parse(descriptor),
+        publicJwk,
+      )
+    }
     const payload = descriptor.payload
     if (
-      payload.authorizationId !== grant.payload.authorizationId ||
+      (payload.purpose === 'host_supervisor_transport' &&
+        (payload.authorizationId !== grant.payload.authorizationId ||
+          payload.deviceId !== grant.payload.deviceId ||
+          payload.deviceKeyGeneration !== grant.payload.deviceKeyGeneration ||
+          payload.grantDigest !== supervisorGrantDigest(grant))) ||
+      (payload.purpose === 'host_supervisor_presence' &&
+        payload.spaceId !== grant.payload.spaceId) ||
       payload.hostId !== grant.payload.hostId ||
       payload.hostFingerprint !== grant.payload.hostFingerprint ||
       payload.hostIdentityGeneration !== grant.payload.hostIdentityGeneration ||
-      payload.deviceId !== grant.payload.deviceId ||
-      payload.deviceKeyGeneration !== grant.payload.deviceKeyGeneration ||
-      payload.grantDigest !== supervisorGrantDigest(grant) ||
       payload.transportTlsFingerprint !==
         this.tlsIdentity.publicKeyFingerprint ||
       payload.exp * 1_000 <= this.#now().getTime()
     ) {
       throw new Error('Supervisor activation binding is inconsistent')
     }
-    this.#activation = { hostPublicJwk: publicJwk, grant, descriptor }
-    this.#options.onDiagnostic?.('supervisor.transport.activated', {
-      hostId: payload.hostId,
-      deviceId: payload.deviceId,
-      authorizationId: payload.authorizationId,
+    const authorizationId = grant.payload.authorizationId
+    const existing = this.#activations.get(authorizationId)
+    if (
+      existing !== undefined &&
+      supervisorGrantDigest(existing.grant) !== supervisorGrantDigest(grant)
+    ) {
+      throw new Error('Supervisor grant cannot be replaced')
+    }
+    if (
+      existing === undefined &&
+      this.#activations.size >= supervisorTransportLimits.maximumActivations
+    ) {
+      throw new Error('Supervisor activation capacity reached')
+    }
+    this.#activations.set(authorizationId, {
+      hostPublicJwk: publicJwk,
+      grant,
+      descriptor,
     })
+    if (existing === undefined) {
+      this.#options.onDiagnostic?.('supervisor.transport.activated', {
+        hostId: payload.hostId,
+        deviceId: grant.payload.deviceId,
+        authorizationId,
+      })
+    }
+  }
+
+  deactivate(authorizationId: string): void {
+    if (!this.#activations.delete(authorizationId)) return
+    for (const socket of this.#socketsByAuthorization.get(authorizationId) ??
+      []) {
+      socket.destroy()
+    }
+    this.#socketsByAuthorization.delete(authorizationId)
+  }
+
+  pruneActivations(allowed: ReadonlySet<string>): void {
+    for (const authorizationId of this.#activations.keys()) {
+      if (!allowed.has(authorizationId)) this.deactivate(authorizationId)
+    }
   }
 
   async acceptRelayStream(stream: Duplex, signal?: AbortSignal): Promise<void> {
-    if (this.#closing || this.#activation === undefined) {
+    if (
+      this.#closing ||
+      this.#activations.size === 0 ||
+      this.#sockets.size >= supervisorTransportLimits.maximumInboundSockets
+    ) {
       stream.destroy()
       return
     }
@@ -268,31 +335,60 @@ export class SupervisorServer {
     socket: TLSSocket,
     transport: 'direct' | 'relay',
   ): Promise<void> {
-    const activation = this.#activation
-    if (this.#closing || activation === undefined) {
+    if (this.#closing || this.#activations.size === 0) {
       socket.destroy()
       return
     }
     const connection = new FramedMachineConnection(socket)
     let established = false
+    let authorizationId: string | undefined
     try {
+      let selected: string | undefined
+      try {
+        selected = (
+          await connection.receive(supervisorSelectSchema, { timeoutMs: 1_000 })
+        ).authorizationId
+      } catch (error) {
+        if (
+          !(error instanceof MachineTransportError) ||
+          error.code !== 'timeout'
+        ) {
+          throw error
+        }
+      }
+      const activation =
+        selected === undefined
+          ? [...this.#activations.values()].find(
+              (candidate) =>
+                candidate.descriptor.payload.purpose ===
+                'host_supervisor_transport',
+            )
+          : this.#activations.get(selected)
+      if (activation === undefined) {
+        throw new SupervisorRejection('authorization_revoked')
+      }
       const now = this.#now()
-      const descriptor = supervisorTransportDescriptorPayloadSchema.parse(
-        activation.descriptor.payload,
-      )
+      const descriptor = activation.descriptor.payload
       if (descriptor.exp * 1_000 <= now.getTime()) {
         throw new SupervisorRejection('authorization_revoked')
       }
+      authorizationId = activation.grant.payload.authorizationId
+      const selectedSockets =
+        this.#socketsByAuthorization.get(authorizationId) ??
+        new Set<TLSSocket>()
+      selectedSockets.add(socket)
+      this.#socketsByAuthorization.set(authorizationId, selectedSockets)
+      const grant = activation.grant.payload
       const challenge: SupervisorChallenge = {
         type: 'supervisor.challenge',
         protocolVersion: supervisorProtocolVersion,
         audience: 'codetether-host-supervisor',
         sessionId: `ssn_${randomUUID().replaceAll('-', '')}`,
-        authorizationId: descriptor.authorizationId,
-        hostId: descriptor.hostId,
-        hostIdentityGeneration: descriptor.hostIdentityGeneration,
-        deviceId: descriptor.deviceId,
-        deviceKeyGeneration: descriptor.deviceKeyGeneration,
+        authorizationId,
+        hostId: grant.hostId,
+        hostIdentityGeneration: grant.hostIdentityGeneration,
+        deviceId: grant.deviceId,
+        deviceKeyGeneration: grant.deviceKeyGeneration,
         tlsExporter: supervisorTlsExporter(socket),
         nonce: randomBytes(32).toString('base64url'),
         issuedAt: now.toISOString(),
@@ -317,6 +413,7 @@ export class SupervisorServer {
         controlPlaneOrigin: descriptor.controlPlaneOrigin,
       })
       if (
+        !this.#activations.has(authorizationId) ||
         admission.hostId !== challenge.hostId ||
         admission.hostIdentityGeneration !== challenge.hostIdentityGeneration ||
         admission.deviceId !== challenge.deviceId ||
@@ -332,6 +429,9 @@ export class SupervisorServer {
           descriptor.exp * 1_000,
         ),
       )
+      if (sessionExpiresAt <= this.#now()) {
+        throw new SupervisorRejection('authorization_revoked')
+      }
       const controlAuthorized =
         this.#options.control !== undefined &&
         (await this.#options.authorizeControl?.(challenge.authorizationId))
@@ -367,7 +467,7 @@ export class SupervisorServer {
           })
           break
         }
-        await this.#respond(connection, request, transport)
+        await this.#respond(connection, request, transport, authorizationId)
       }
     } catch (error) {
       const rejectionCode =
@@ -390,6 +490,12 @@ export class SupervisorServer {
         { reason: established ? 'peer_disconnected' : rejectionCode },
       )
     } finally {
+      if (authorizationId !== undefined) {
+        const sockets = this.#socketsByAuthorization.get(authorizationId)
+        sockets?.delete(socket)
+        if (sockets?.size === 0)
+          this.#socketsByAuthorization.delete(authorizationId)
+      }
       connection.destroy()
     }
   }
@@ -398,15 +504,14 @@ export class SupervisorServer {
     connection: FramedMachineConnection,
     request: SupervisorRequest,
     transport: 'direct' | 'relay',
+    authorizationId: string,
   ): Promise<void> {
     const startedAt = Date.now()
     try {
       if (
         isSupervisorControlOperation(request) &&
         (this.#options.control === undefined ||
-          !(await this.#options.authorizeControl?.(
-            this.#activation?.grant.payload.authorizationId ?? '',
-          )))
+          !(await this.#options.authorizeControl?.(authorizationId)))
       ) {
         throw new Error('operation_not_allowed')
       }

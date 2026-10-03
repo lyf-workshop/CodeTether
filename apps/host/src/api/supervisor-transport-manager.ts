@@ -8,7 +8,7 @@ import {
   connectSupervisorRelayOverStream,
   generateSupervisorTlsIdentity,
   signedSupervisorGrantSchema,
-  signedSupervisorTransportDescriptorSchema,
+  signedSupervisorTransportSchema,
   supervisorPublicJwkSchema,
   supervisorTransportLimits,
   SupervisorClientError,
@@ -16,7 +16,7 @@ import {
   type ConnectedSupervisorSession,
   type PendingSupervisorConnection,
   type SignedSupervisorGrant,
-  type SignedSupervisorTransportDescriptor,
+  type SignedSupervisorTransport,
   type SupervisorPublicJwk,
   type SupervisorRelayControlConnection,
 } from '@codetether/supervisor-transport'
@@ -340,7 +340,7 @@ export class SupervisorTransportManager {
   async activate(input: {
     readonly hostPublicJwk: SupervisorPublicJwk
     readonly grant: SignedSupervisorGrant
-    readonly descriptor: SignedSupervisorTransportDescriptor
+    readonly descriptor: SignedSupervisorTransport
   }): Promise<void> {
     const identity = this.#service.getHostIdentity()
     if (identity === undefined)
@@ -358,9 +358,7 @@ export class SupervisorTransportManager {
       throw new Error('Host identity mismatch')
     }
     const grant = signedSupervisorGrantSchema.parse(input.grant)
-    const descriptor = signedSupervisorTransportDescriptorSchema.parse(
-      input.descriptor,
-    )
+    const descriptor = signedSupervisorTransportSchema.parse(input.descriptor)
     this.#assertRelayDescriptor(descriptor)
     this.#persistence.storeHostSupervisorGrant(
       grant,
@@ -368,6 +366,10 @@ export class SupervisorTransportManager {
     )
     await this.#server.activate({ hostPublicJwk: publicJwk, grant, descriptor })
     this.#startRelayPresence()
+  }
+
+  pruneActivations(authorizationIds: readonly string[]): void {
+    this.#server.pruneActivations(new Set(authorizationIds))
   }
 
   async beginRemote(input: {
@@ -378,7 +380,7 @@ export class SupervisorTransportManager {
     readonly deviceId: string
     readonly deviceKeyGeneration: number
     readonly grant: SignedSupervisorGrant
-    readonly descriptor: SignedSupervisorTransportDescriptor
+    readonly descriptor: SignedSupervisorTransport
     readonly forceRelay?: boolean
   }): Promise<{
     readonly connectionId: string
@@ -388,9 +390,7 @@ export class SupervisorTransportManager {
     readonly transport: 'direct' | 'relay'
   }> {
     this.#assertCapacity()
-    const descriptor = signedSupervisorTransportDescriptorSchema.parse(
-      input.descriptor,
-    )
+    const descriptor = signedSupervisorTransportSchema.parse(input.descriptor)
     let lastError: unknown
     for (const endpoint of input.forceRelay === true
       ? []
@@ -720,9 +720,7 @@ export class SupervisorTransportManager {
     }
   }
 
-  #assertRelayDescriptor(
-    descriptor: SignedSupervisorTransportDescriptor,
-  ): void {
+  #assertRelayDescriptor(descriptor: SignedSupervisorTransport): void {
     const relay = descriptor.payload.relay
     const presence = this.presence().relay
     if (relay === null && presence === null) return
@@ -751,7 +749,7 @@ export class SupervisorTransportManager {
   }
 
   async #connectRelayHost(
-    relay: NonNullable<SignedSupervisorTransportDescriptor['payload']['relay']>,
+    relay: NonNullable<SignedSupervisorTransport['payload']['relay']>,
     signal: AbortSignal,
   ): Promise<SupervisorRelayControlConnection> {
     const connection = await connectSupervisorRelayHost({
@@ -778,7 +776,7 @@ export class SupervisorTransportManager {
   }
 
   async #maintainRelayPresence(
-    relay: NonNullable<SignedSupervisorTransportDescriptor['payload']['relay']>,
+    relay: NonNullable<SignedSupervisorTransport['payload']['relay']>,
     abort: AbortController,
   ): Promise<void> {
     let delayMs = RELAY_RECONNECT_MINIMUM_MS

@@ -703,11 +703,13 @@ export async function startControlPlaneServer(
     }
 
     const supervisorRouteMatch =
-      /^\/v1\/hosts\/(host_[A-Za-z0-9][A-Za-z0-9_-]{15,95})\/(supervisor-grant\/materialize|supervisor-presence|supervisor-admission)$/.exec(
+      /^\/v1\/hosts\/(host_[A-Za-z0-9][A-Za-z0-9_-]{15,95})\/(supervisor-grant\/materialize|supervisor-presence|supervisor-host-presence|supervisor-authorizations|supervisor-admission)$/.exec(
         pathname,
       )
     if (supervisorRouteMatch?.[1] && supervisorRouteMatch[2]) {
-      if (method !== 'POST') {
+      const operation = supervisorRouteMatch[2]
+      const expectsGet = operation === 'supervisor-authorizations'
+      if (method !== (expectsGet ? 'GET' : 'POST')) {
         sendJson(response, 405, { status: 'method_not_allowed' }, false)
         return
       }
@@ -726,7 +728,15 @@ export async function startControlPlaneServer(
       }
       try {
         const body = await readBoundedBody(request, 48_000)
-        const input = parseJsonObject(body)
+        const input = expectsGet
+          ? body.byteLength === 0
+            ? undefined
+            : (() => {
+                throw new InvalidRequestBodyError(
+                  'This route requires an empty body',
+                )
+              })()
+          : parseJsonObject(body)
         const human =
           await options.authenticatedAccountService.verifyAndResolveRequestContext(
             options.humanAuthVerifier,
@@ -743,28 +753,40 @@ export async function startControlPlaneServer(
             },
           )
         const hostId = supervisorRouteMatch[1]
-        const operation = supervisorRouteMatch[2]
         const result =
-          operation === 'supervisor-grant/materialize'
-            ? await options.hostIdentityService.materializeSupervisorGrant(
+          operation === 'supervisor-authorizations'
+            ? await options.hostIdentityService.listHostSupervisorAuthorizations(
                 human,
                 device,
                 hostId,
-                input,
               )
-            : operation === 'supervisor-presence'
-              ? await options.hostIdentityService.publishSupervisorTransport(
+            : operation === 'supervisor-host-presence'
+              ? await options.hostIdentityService.publishHostSupervisorPresence(
                   human,
                   device,
                   hostId,
                   input,
                 )
-              : await options.hostIdentityService.authorizeSupervisorAdmission(
-                  human,
-                  device,
-                  hostId,
-                  input,
-                )
+              : operation === 'supervisor-grant/materialize'
+                ? await options.hostIdentityService.materializeSupervisorGrant(
+                    human,
+                    device,
+                    hostId,
+                    input,
+                  )
+                : operation === 'supervisor-presence'
+                  ? await options.hostIdentityService.publishSupervisorTransport(
+                      human,
+                      device,
+                      hostId,
+                      input,
+                    )
+                  : await options.hostIdentityService.authorizeSupervisorAdmission(
+                      human,
+                      device,
+                      hostId,
+                      input,
+                    )
         sendJson(response, 200, result, false)
       } catch (error) {
         if (error instanceof InvalidRequestBodyError) {

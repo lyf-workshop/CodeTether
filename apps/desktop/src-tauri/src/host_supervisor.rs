@@ -1242,6 +1242,7 @@ pub fn run_desktop() {
             ,crate::host_identity_key_store::host_identity_key_create
             ,crate::host_identity_key_store::host_identity_key_public
             ,crate::host_identity_key_store::host_identity_key_sign
+            ,crate::host_identity_key_store::host_identity_key_destroy
         ])
         .setup(|app| {
             let host = match HostSupervisor::start(app.handle()) {

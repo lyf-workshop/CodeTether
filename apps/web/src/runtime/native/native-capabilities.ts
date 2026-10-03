@@ -61,6 +61,7 @@ export interface HostIdentityCapability {
     keyHandle: string,
     payloadBase64Url: string,
   ): Promise<ProductDeviceSignature>
+  destroyKey(keyHandle: string): Promise<void>
 }
 
 export interface ProductDeviceKeyDescription {
@@ -205,6 +206,8 @@ const unavailableHostIdentity: HostIdentityCapability = {
   readPublic: () =>
     Promise.reject(new Error('Native Host identity is unavailable.')),
   sign: () => Promise.reject(new Error('Native Host identity is unavailable.')),
+  destroyKey: () =>
+    Promise.reject(new Error('Native Host identity is unavailable.')),
 }
 
 const unavailableProductDeviceIdentity: ProductDeviceIdentityCapability = {
@@ -480,6 +483,10 @@ export function createNativeCapabilities(
         keyHandle,
         payloadBase64Url,
       })
+    },
+    async destroyKey(keyHandle) {
+      const { invoke } = await loadCore()
+      await invoke<void>('host_identity_key_destroy', { keyHandle })
     },
   }
 

@@ -206,6 +206,52 @@ test('local Host identity bootstrap persists public metadata and is idempotent',
   }
 })
 
+test('local Host identity bootstrap admits the macOS Secure Enclave profile', async () => {
+  const directory = await mkdtemp(
+    join(tmpdir(), 'codetether-macos-host-identity-api-'),
+  )
+  const workspace = join(directory, 'workspace')
+  const databasePath = join(directory, 'data', 'codetether.sqlite3')
+  await mkdir(workspace, { recursive: true })
+  let host
+  try {
+    host = await startLocalCodexHostWithRuntime(
+      {
+        allowedWorkspaceRoots: [workspace],
+        allowedOrigins: ['http://localhost:5173'],
+        hostVersion: '0.0.0-test',
+        port: 0,
+      },
+      new FakeAgentRuntime(),
+      await WorkspacePolicy.create([workspace]),
+      ConversationStore.open({ databasePath }),
+    )
+    const description = {
+      keyHandle: 'CodeTether.HostIdentity.fedcba9876543210fedcba9876543210',
+      publicKey: {
+        kty: 'EC',
+        crv: 'P-256',
+        x: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+        y: 'BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB',
+      },
+      keyAlgorithm: 'ES256',
+      keyGeneration: 1,
+      privateKeyExportable: false,
+      protection: 'macos_secure_enclave',
+    }
+    const created = await postJson(
+      host.baseUrl,
+      '/api/v1/host/identity',
+      description,
+    )
+    assert.equal(created.status, 201)
+    assert.equal(created.body.identity.keyHandle, description.keyHandle)
+  } finally {
+    await host?.close()
+    await rm(directory, { force: true, recursive: true })
+  }
+})
+
 test('starts a read-only durable API when the Codex executable is unavailable', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'codetether-read-only-host-'))
   const workspace = join(directory, 'workspace')

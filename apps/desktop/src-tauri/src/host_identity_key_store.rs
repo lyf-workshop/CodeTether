@@ -35,6 +35,8 @@ pub struct HostIdentitySignature {
 enum HostIdentityKeyError {
     InvalidHandle,
     InvalidPayload,
+    KeyNotFound,
+    KeyAccessDenied,
     PlatformKeyStorageUnavailable,
     PlatformKeyOperationFailed,
 }
@@ -44,6 +46,8 @@ impl HostIdentityKeyError {
         match self {
             Self::InvalidHandle => "host_identity_key_handle_invalid",
             Self::InvalidPayload => "host_identity_signing_payload_invalid",
+            Self::KeyNotFound => "host_identity_key_not_found",
+            Self::KeyAccessDenied => "host_identity_key_access_denied",
             Self::PlatformKeyStorageUnavailable => "platform_key_storage_unavailable",
             Self::PlatformKeyOperationFailed => "platform_key_operation_failed",
         }
@@ -57,6 +61,7 @@ trait HostIdentityKeyStore {
         key_handle: &str,
     ) -> Result<HostIdentityKeyDescription, HostIdentityKeyError>;
     fn sign(&self, key_handle: &str, payload: &[u8]) -> Result<Vec<u8>, HostIdentityKeyError>;
+    fn destroy_key(&self, key_handle: &str) -> Result<(), HostIdentityKeyError>;
 }
 
 fn validate_key_handle(key_handle: &str) -> Result<(), HostIdentityKeyError> {
@@ -367,22 +372,32 @@ mod platform {
             }
             Ok(signature)
         }
+
+        fn destroy_key(&self, key_handle: &str) -> Result<(), HostIdentityKeyError> {
+            let provider = open_provider()?;
+            open_key(&provider, key_handle)?.delete()
+        }
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+mod platform {
+    include!("host_identity_key_store_macos.rs");
+}
+
+#[cfg(all(not(windows), not(target_os = "macos")))]
 mod platform {
     use super::*;
 
-    pub struct WindowsCngHostIdentityKeyStore;
+    pub struct UnsupportedHostIdentityKeyStore;
 
-    impl WindowsCngHostIdentityKeyStore {
+    impl UnsupportedHostIdentityKeyStore {
         pub fn new() -> Self {
             Self
         }
     }
 
-    impl HostIdentityKeyStore for WindowsCngHostIdentityKeyStore {
+    impl HostIdentityKeyStore for UnsupportedHostIdentityKeyStore {
         fn create_key(&self) -> Result<HostIdentityKeyDescription, HostIdentityKeyError> {
             Err(HostIdentityKeyError::PlatformKeyStorageUnavailable)
         }
@@ -401,21 +416,30 @@ mod platform {
         ) -> Result<Vec<u8>, HostIdentityKeyError> {
             Err(HostIdentityKeyError::PlatformKeyStorageUnavailable)
         }
+
+        fn destroy_key(&self, _key_handle: &str) -> Result<(), HostIdentityKeyError> {
+            Err(HostIdentityKeyError::PlatformKeyStorageUnavailable)
+        }
     }
 }
 
-use platform::WindowsCngHostIdentityKeyStore;
+#[cfg(target_os = "macos")]
+use platform::MacosSecureEnclaveHostIdentityKeyStore as HostIdentityPlatformKeyStore;
+#[cfg(all(not(windows), not(target_os = "macos")))]
+use platform::UnsupportedHostIdentityKeyStore as HostIdentityPlatformKeyStore;
+#[cfg(windows)]
+use platform::WindowsCngHostIdentityKeyStore as HostIdentityPlatformKeyStore;
 
 #[tauri::command]
 pub fn host_identity_key_create() -> Result<HostIdentityKeyDescription, String> {
-    WindowsCngHostIdentityKeyStore::new()
+    HostIdentityPlatformKeyStore::new()
         .create_key()
         .map_err(|error| error.code().to_owned())
 }
 
 #[tauri::command]
 pub fn host_identity_key_public(key_handle: String) -> Result<HostIdentityKeyDescription, String> {
-    WindowsCngHostIdentityKeyStore::new()
+    HostIdentityPlatformKeyStore::new()
         .public_key(&key_handle)
         .map_err(|error| error.code().to_owned())
 }
@@ -434,12 +458,19 @@ pub fn host_identity_key_sign(
     if URL_SAFE_NO_PAD.encode(&payload) != payload_base64_url {
         return Err(HostIdentityKeyError::InvalidPayload.code().to_owned());
     }
-    WindowsCngHostIdentityKeyStore::new()
+    HostIdentityPlatformKeyStore::new()
         .sign(&key_handle, &payload)
         .map(|signature| HostIdentitySignature {
             signature_base64_url: URL_SAFE_NO_PAD.encode(signature),
             key_algorithm: ES256_ALGORITHM,
         })
+        .map_err(|error| error.code().to_owned())
+}
+
+#[tauri::command]
+pub fn host_identity_key_destroy(key_handle: String) -> Result<(), String> {
+    HostIdentityPlatformKeyStore::new()
+        .destroy_key(&key_handle)
         .map_err(|error| error.code().to_owned())
 }
 

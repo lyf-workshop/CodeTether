@@ -214,7 +214,8 @@ interface HostIdentityKeyDescriptionBody {
   readonly keyAlgorithm: 'ES256'
   readonly keyGeneration: number
   readonly privateKeyExportable: false
-  readonly protection: 'windows_cng_software_ksp_non_exportable'
+  readonly protection:
+    'windows_cng_software_ksp_non_exportable' | 'macos_secure_enclave'
 }
 
 const hostIdentityKeyDescriptionSchema = {
@@ -241,7 +242,8 @@ const hostIdentityKeyDescriptionSchema = {
       input.keyAlgorithm === 'ES256' &&
       input.keyGeneration === 1 &&
       input.privateKeyExportable === false &&
-      input.protection === 'windows_cng_software_ksp_non_exportable' &&
+      (input.protection === 'windows_cng_software_ksp_non_exportable' ||
+        input.protection === 'macos_secure_enclave') &&
       key?.kty === 'EC' &&
       key.crv === 'P-256' &&
       typeof key.x === 'string' &&
@@ -262,7 +264,8 @@ const hostIdentityKeyDescriptionSchema = {
         keyAlgorithm: 'ES256',
         keyGeneration: 1,
         privateKeyExportable: false,
-        protection: 'windows_cng_software_ksp_non_exportable',
+        protection: input.protection as
+          'windows_cng_software_ksp_non_exportable' | 'macos_secure_enclave',
       },
     }
   },

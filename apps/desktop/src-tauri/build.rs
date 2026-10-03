@@ -83,6 +83,7 @@ fn main() {
             "host_identity_key_create",
             "host_identity_key_public",
             "host_identity_key_sign",
+            "host_identity_key_destroy",
         ]));
 
     tauri_build::try_build(attributes).expect("failed to run CodeTether desktop build script")

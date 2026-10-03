@@ -41,6 +41,23 @@ test('forced Relay is validation-only and bypasses local and Direct selection', 
   )
 })
 
+test('remote Controller reads do not require the local Host identity', async () => {
+  const [directory, remote] = await Promise.all([
+    readFile(directoryPath, 'utf8'),
+    readFile(remotePath, 'utf8'),
+  ])
+  assert.match(
+    directory,
+    /enabled:\s*\n\s*\(!exactLocalHost \|\| forceRemote\)/u,
+  )
+  assert.match(directory, /connectRemoteSupervisor\(\{\s*\n\s*session,/u)
+  assert.doesNotMatch(
+    directory,
+    /deviceIdentity:\s*nativeCapabilities\.hostIdentity/u,
+  )
+  assert.match(remote, /deviceIdentity: ProductDeviceIdentityCapability/u)
+})
+
 test('Supervisor Relay presence is maintained outside the My Hosts route', async () => {
   const [main, presence] = await Promise.all([
     readFile(mainPath, 'utf8'),

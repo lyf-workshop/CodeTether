@@ -29,7 +29,10 @@ export interface HostIdentityKeyDescription {
   readonly protection: string
 }
 
-const HOST_IDENTITY_PROTECTION = 'windows_cng_software_ksp_non_exportable'
+const ADMITTED_HOST_IDENTITY_PROTECTIONS = new Set([
+  'windows_cng_software_ksp_non_exportable',
+  'macos_secure_enclave',
+])
 
 /** Build the durable public Host record from the platform key description. */
 export function durableHostIdentityFromKeyDescription(
@@ -45,7 +48,7 @@ export function durableHostIdentityFromKeyDescription(
     description.keyAlgorithm !== 'ES256' ||
     description.keyGeneration !== 1 ||
     description.privateKeyExportable ||
-    description.protection !== HOST_IDENTITY_PROTECTION
+    !ADMITTED_HOST_IDENTITY_PROTECTIONS.has(description.protection)
   ) {
     throw new Error('Host identity key description is not an admitted profile')
   }

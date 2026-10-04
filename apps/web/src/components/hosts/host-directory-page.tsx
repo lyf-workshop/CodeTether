@@ -37,6 +37,8 @@ import {
 } from '../../runtime/account/control-plane-client.js'
 import {
   connectRemoteSupervisor,
+  deriveLocalHostLifecycleState,
+  enableLocalHostIdentity,
   publishLocalSupervisorPresence,
   readLocalHostIdentity,
   type LocalHostIdentityRecord,
@@ -249,6 +251,14 @@ function AuthenticatedHostDirectory({
     retry: false,
     staleTime: 30_000,
   })
+  const localHostLifecycle = deriveLocalHostLifecycleState(
+    localIdentity.data,
+    directory.data?.ownedHosts ?? [],
+  )
+  const enableHostMutation = useMutation({
+    mutationFn: () => enableLocalHostIdentity(nativeCapabilities.hostIdentity),
+    onSuccess: () => void localIdentity.refetch(),
+  })
   const pendingRequests = useQuery({
     queryKey: ['account', 'host-access-requests', session.user.id],
     queryFn: ({ signal }) =>
@@ -292,6 +302,14 @@ function AuthenticatedHostDirectory({
         </div>
       }
     >
+      {localIdentity.isSuccess &&
+      localHostLifecycle === 'disabled' &&
+      nativeCapabilities.hostIdentity.available ? (
+        <HostCapabilityCard
+          mutation={enableHostMutation}
+          onRetry={() => void localIdentity.refetch()}
+        />
+      ) : null}
       {directory.isPending ? (
         <DirectoryBoundary label="Setting up this Mac…" />
       ) : errorMessage !== undefined ? (
@@ -376,6 +394,65 @@ function AuthenticatedHostDirectory({
         </>
       )}
     </PageFrame>
+  )
+}
+
+function HostCapabilityCard({
+  mutation,
+  onRetry,
+}: {
+  readonly mutation: {
+    readonly isError: boolean
+    readonly isPending: boolean
+    readonly mutate: () => void
+  }
+  readonly onRetry: () => void
+}) {
+  return (
+    <section className="mt-8 max-w-2xl rounded-lg border border-border bg-surface p-5">
+      <div className="flex items-start gap-3">
+        <span className="grid size-10 shrink-0 place-items-center rounded-md border border-border bg-surface-inset">
+          <Server aria-hidden="true" />
+        </span>
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="font-semibold text-text-primary">Host capability</h2>
+            <Badge variant="secondary">Controller-only</Badge>
+          </div>
+          <p className="mt-2 text-sm text-text-secondary">
+            This Mac can control other Hosts without exposing itself as a Host.
+            Enabling this capability creates a separate protected Host key on
+            this Mac; it does not claim a cloud Host or grant remote access.
+          </p>
+        </div>
+      </div>
+      {mutation.isError ? (
+        <p role="alert" className="mt-4 text-sm text-danger">
+          The local Host capability could not be enabled. Check the local Host
+          service and try again.
+        </p>
+      ) : null}
+      <div className="mt-4 flex flex-wrap gap-2">
+        <Button
+          size="sm"
+          disabled={mutation.isPending}
+          onClick={() => mutation.mutate()}
+        >
+          {mutation.isPending ? (
+            <LoaderCircle
+              aria-hidden="true"
+              className="animate-spin motion-reduce:animate-none"
+            />
+          ) : null}
+          Enable this Mac as a Host
+        </Button>
+        {mutation.isError ? (
+          <Button variant="ghost" size="sm" onClick={onRetry}>
+            <RefreshCw aria-hidden="true" /> Check again
+          </Button>
+        ) : null}
+      </div>
+    </section>
   )
 }
 

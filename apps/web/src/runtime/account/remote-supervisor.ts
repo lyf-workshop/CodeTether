@@ -37,6 +37,19 @@ export interface LocalHostIdentityRecord {
   readonly identityGeneration: number
 }
 
+export type LocalHostLifecycleState =
+  'disabled' | 'enabled_unclaimed' | 'claimed'
+
+export function deriveLocalHostLifecycleState(
+  identity: LocalHostIdentityRecord | undefined,
+  ownedHosts: readonly Pick<OwnedHostAccessEntry, 'hostId'>[],
+): LocalHostLifecycleState {
+  if (identity === undefined) return 'disabled'
+  return ownedHosts.some((host) => host.hostId === identity.hostId)
+    ? 'claimed'
+    : 'enabled_unclaimed'
+}
+
 export interface RemoteSupervisorSession {
   readonly hostId: string
   readonly sessionId: string
@@ -113,6 +126,32 @@ export async function readLocalHostIdentity(): Promise<
     throw new Error('local_host_identity_invalid')
   }
   return identity as LocalHostIdentityRecord
+}
+
+/**
+ * Explicitly enables this Desktop's local Host capability. Startup and
+ * Controller reads never call this function. It creates only the local
+ * protected Host key and durable local Host record; cloud claim, presence,
+ * and Relay Host registration remain separate later actions.
+ */
+export async function enableLocalHostIdentity(
+  capability: HostIdentityCapability,
+): Promise<LocalHostIdentityRecord> {
+  if (!capability.available) throw new Error('native_host_identity_unavailable')
+  const existing = await readLocalHostIdentity()
+  if (existing !== undefined) return existing
+
+  const created = await capability.createKey()
+  const response = await fetch(`${hostBaseUrl}/api/v1/host/identity`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(created),
+  })
+  if (!response.ok) throw new Error('host_identity_persist_failed')
+
+  const identity = await readLocalHostIdentity()
+  if (identity === undefined) throw new Error('host_identity_persist_failed')
+  return identity
 }
 
 const remoteSessions = new Map<string, RemoteSupervisorSession>()

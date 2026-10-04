@@ -2,7 +2,6 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 
 import './styles.css'
-import { hostBaseUrl } from './runtime/host/host-config'
 import { LocalSupervisorPresenceCoordinator } from './runtime/account/local-supervisor-presence'
 
 const rootElement = document.getElementById('root')
@@ -73,7 +72,6 @@ async function renderApp() {
   ])
   const queryClient = createHostQueryClient()
   const runtime = getHostRuntime(queryClient)
-  await ensureDesktopHostIdentity(nativeCapabilities.hostIdentity)
   const releaseDesktopResumeSubscription = subscribeRuntimeToDesktopResume(
     runtime,
     nativeCapabilities.backgroundRuntime,
@@ -146,81 +144,6 @@ async function renderApp() {
       </QueryClientProvider>
     </StrictMode>,
   )
-}
-
-async function ensureDesktopHostIdentity(
-  capability: import('./runtime/native/native-capabilities').HostIdentityCapability,
-): Promise<void> {
-  if (!capability.available) return
-  try {
-    const existingResponse = await fetchDesktopHostIdentity()
-    if (existingResponse.status === 200) {
-      const existing = (await existingResponse.json()) as {
-        readonly identity?: {
-          readonly keyHandle?: unknown
-          readonly publicJwk?: unknown
-        }
-      }
-      const keyHandle = existing.identity?.keyHandle
-      const persistedJwk = existing.identity?.publicJwk
-      if (typeof keyHandle !== 'string' || typeof persistedJwk !== 'string') {
-        throw new Error('host_identity_metadata_invalid')
-      }
-      const loaded = await capability.readPublic(keyHandle)
-      const publicJwk = JSON.stringify({
-        crv: loaded.publicKey.crv,
-        kty: loaded.publicKey.kty,
-        x: loaded.publicKey.x,
-        y: loaded.publicKey.y,
-      })
-      if (publicJwk !== persistedJwk) {
-        throw new Error('host_identity_public_key_mismatch')
-      }
-      return
-    }
-    if (existingResponse.status !== 404) {
-      throw new Error('host_identity_read_failed')
-    }
-    const created = await capability.createKey()
-    const response = await fetch(`${hostBaseUrl}/api/v1/host/identity`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(created),
-    })
-    if (!response.ok) throw new Error('host_identity_persist_failed')
-  } catch (error) {
-    const code =
-      error instanceof Error ? error.message : 'host_identity_unavailable'
-    console.error(`[codetether] ${code}`)
-  }
-}
-
-const HOST_IDENTITY_BOOTSTRAP_ATTEMPTS = 20
-const HOST_IDENTITY_BOOTSTRAP_RETRY_DELAY_MS = 250
-
-async function fetchDesktopHostIdentity(): Promise<Response> {
-  let lastError: unknown
-  for (
-    let attempt = 0;
-    attempt < HOST_IDENTITY_BOOTSTRAP_ATTEMPTS;
-    attempt += 1
-  ) {
-    try {
-      return await fetch(`${hostBaseUrl}/api/v1/host/identity`, {
-        headers: { Accept: 'application/json' },
-      })
-    } catch (error) {
-      lastError = error
-      if (attempt + 1 < HOST_IDENTITY_BOOTSTRAP_ATTEMPTS) {
-        await new Promise((resolve) =>
-          setTimeout(resolve, HOST_IDENTITY_BOOTSTRAP_RETRY_DELAY_MS),
-        )
-      }
-    }
-  }
-  throw lastError instanceof Error
-    ? lastError
-    : new Error('host_identity_unavailable')
 }
 
 void renderApp()

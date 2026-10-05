@@ -452,7 +452,7 @@ export async function connectSupervisorRelayOverStream(
   )
 }
 
-async function validateSupervisorConnection(
+export async function validateSupervisorConnection(
   options: Omit<ConnectSupervisorDirectOptions, 'endpoint'>,
 ): Promise<{
   readonly now: Date
@@ -498,6 +498,22 @@ async function validateSupervisorConnection(
     throw new SupervisorClientError('host_identity_mismatch')
   }
   return { now, payload }
+}
+
+/**
+ * A loopback address identifies the Controller's own network namespace, not
+ * a different Host. It is therefore never a usable Direct candidate for a
+ * remote Supervisor connection.
+ */
+export function isLoopbackSupervisorHost(host: string): boolean {
+  const normalized = host.toLowerCase().replace(/\.$/u, '')
+  if (normalized === 'localhost' || normalized === '::1') return true
+  const octets = normalized.split('.')
+  return (
+    octets.length === 4 &&
+    octets[0] === '127' &&
+    octets.slice(1).every((octet) => /^(?:0|[1-9][0-9]{0,2})$/u.test(octet))
+  )
 }
 
 async function completeSupervisorHandshake(

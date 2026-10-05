@@ -7,12 +7,14 @@ import {
   connectSupervisorRelayHost,
   connectSupervisorRelayOverStream,
   generateSupervisorTlsIdentity,
+  isLoopbackSupervisorHost,
   signedSupervisorGrantSchema,
   signedSupervisorTransportSchema,
   supervisorPublicJwkSchema,
   supervisorTransportLimits,
   SupervisorClientError,
   SupervisorServer,
+  validateSupervisorConnection,
   type ConnectedSupervisorSession,
   type PendingSupervisorConnection,
   type SignedSupervisorGrant,
@@ -391,10 +393,46 @@ export class SupervisorTransportManager {
   }> {
     this.#assertCapacity()
     const descriptor = signedSupervisorTransportSchema.parse(input.descriptor)
+    const localHostIdentity = this.#service.getHostIdentity()
+    const targetsLocalHost =
+      localHostIdentity !== undefined &&
+      localHostIdentity.hostId === input.hostId &&
+      localHostIdentity.fingerprint === input.hostFingerprint &&
+      localHostIdentity.identityGeneration === input.hostIdentityGeneration
+    let remoteDescriptorValidated = false
     let lastError: unknown
     for (const endpoint of input.forceRelay === true
       ? []
       : descriptor.payload.directEndpoints) {
+      // A loopback address belongs to the Host that published the descriptor,
+      // not to a different Controller process. When Relay is available, skip
+      // it so a remote Controller cannot self-connect and turn the resulting
+      // host identity mismatch into a terminal failure before Relay fallback.
+      if (
+        descriptor.payload.relay !== null &&
+        isLoopbackSupervisorHost(endpoint.host) &&
+        !targetsLocalHost
+      ) {
+        if (!remoteDescriptorValidated) {
+          await validateSupervisorConnection({
+            expectedHost: {
+              hostId: input.hostId,
+              fingerprint: input.hostFingerprint,
+              identityGeneration: input.hostIdentityGeneration,
+              publicJwk: supervisorPublicJwkSchema.parse(input.hostPublicJwk),
+            },
+            expectedDevice: {
+              deviceId: input.deviceId,
+              keyGeneration: input.deviceKeyGeneration,
+            },
+            grant: input.grant,
+            descriptor,
+            signal: AbortSignal.timeout(10_000),
+          })
+          remoteDescriptorValidated = true
+        }
+        continue
+      }
       try {
         const pending = await connectSupervisorDirect({
           endpoint,

@@ -22,6 +22,7 @@ import {
   SupervisorTransportManager,
   discoverSupervisorDirectHosts,
 } from '../dist/api/supervisor-transport-manager.js'
+import { isLoopbackSupervisorHost } from '@codetether/supervisor-transport'
 import { LocalHttpServer } from '../dist/api/local-http-server.js'
 
 const hostId = `host_${'h'.repeat(32)}`
@@ -73,6 +74,14 @@ test('direct endpoint discovery is bounded and uses concrete IPv4 addresses', ()
     }),
     ['127.0.0.1', '192.168.1.20'],
   )
+})
+
+test('remote Supervisor loopback endpoints are recognized before Relay fallback', () => {
+  assert.equal(isLoopbackSupervisorHost('127.0.0.1'), true)
+  assert.equal(isLoopbackSupervisorHost('127.42.9.7'), true)
+  assert.equal(isLoopbackSupervisorHost('localhost.'), true)
+  assert.equal(isLoopbackSupervisorHost('::1'), true)
+  assert.equal(isLoopbackSupervisorHost('192.168.1.20'), false)
 })
 
 test('forced-remote manager reads Host state without using local HTTP product data', async () => {
@@ -586,7 +595,6 @@ test('forced Relay HTTP admission stays single-session while Direct fallback rem
           deviceKeyGeneration: 1,
           grant,
           descriptor,
-          forceRelay: true,
         }),
       },
     )

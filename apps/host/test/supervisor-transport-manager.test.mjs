@@ -72,7 +72,25 @@ test('direct endpoint discovery is bounded and uses concrete IPv4 addresses', ()
         },
       ],
     }),
-    ['127.0.0.1', '192.168.1.20'],
+    ['192.168.1.20'],
+  )
+})
+
+test('loopback-only Supervisor listeners publish no Direct endpoint', () => {
+  assert.deepEqual(
+    discoverSupervisorDirectHosts({
+      Loopback: [
+        {
+          address: '127.0.0.1',
+          netmask: '255.0.0.0',
+          family: 'IPv4',
+          mac: '00:00:00:00:00:00',
+          internal: true,
+          cidr: '127.0.0.1/8',
+        },
+      ],
+    }),
+    [],
   )
 })
 
@@ -204,6 +222,7 @@ test('forced-remote manager reads Host state without using local HTTP product da
     persistence,
     bindHost: '127.0.0.1',
     advertiseHost: '127.0.0.1',
+    allowLoopbackForTests: true,
     port: 0,
     clientBuildIdentity: 'test-host',
   })
@@ -489,6 +508,7 @@ test('forced Relay HTTP admission stays single-session while Direct fallback rem
     persistence,
     bindHost: '127.0.0.1',
     advertiseHost: '127.0.0.1',
+    allowLoopbackForTests: true,
     port: 0,
     clientBuildIdentity: 'test-host',
     relay: {

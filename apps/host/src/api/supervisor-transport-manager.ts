@@ -48,6 +48,8 @@ export interface SupervisorTransportManagerOptions {
   readonly bindHost?: string
   readonly port?: number
   readonly advertiseHost?: string
+  /** Test-only opt-in for in-process loopback Supervisor fixtures. */
+  readonly allowLoopbackForTests?: boolean
   readonly clientBuildIdentity: string
   readonly relay?: SupervisorRelayConfiguration
 }
@@ -77,6 +79,7 @@ export class SupervisorTransportManager {
   readonly #persistence: ConversationStore
   readonly #server: SupervisorServer
   readonly #advertiseHosts: readonly string[]
+  readonly #allowLoopbackForTests: boolean
   readonly #clientBuildIdentity: string
   readonly #relay: SupervisorRelayConfiguration | undefined
   readonly #relayRendezvousId: string
@@ -100,12 +103,16 @@ export class SupervisorTransportManager {
     this.#server = server
     this.#clientBuildIdentity = options.clientBuildIdentity
     this.#relay = options.relay
+    this.#allowLoopbackForTests = options.allowLoopbackForTests === true
     this.#relayRendezvousId = `srv_${randomBytes(16).toString('hex')}`
     this.#relayRendezvousCapability = randomBytes(32).toString('base64url')
-    this.#advertiseHosts =
+    const advertisedHosts =
       options.advertiseHost === undefined
         ? discoverSupervisorDirectHosts()
         : [options.advertiseHost]
+    this.#advertiseHosts = this.#allowLoopbackForTests
+      ? advertisedHosts
+      : advertisedHosts.filter((host) => !isLoopbackSupervisorHost(host))
   }
 
   static async create(
@@ -973,11 +980,12 @@ export function discoverSupervisorDirectHosts(
       (entry) =>
         entry.family === 'IPv4' &&
         entry.internal === false &&
-        entry.address !== '0.0.0.0',
+        entry.address !== '0.0.0.0' &&
+        !isLoopbackSupervisorHost(entry.address),
     )
     .map((entry) => entry.address)
     .sort()
-  return [...new Set(['127.0.0.1', ...externalIpv4])].slice(
+  return [...new Set(externalIpv4)].slice(
     0,
     supervisorTransportLimits.maximumEndpoints,
   )

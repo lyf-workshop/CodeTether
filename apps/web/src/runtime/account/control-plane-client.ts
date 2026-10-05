@@ -168,6 +168,53 @@ export interface SignedSupervisorTransportDescriptor {
   readonly proof: string
 }
 
+export interface HostRegistrationChallenge {
+  readonly v: 1
+  readonly aud: 'codetether-control-plane-host'
+  readonly purpose: 'host_registration'
+  readonly challengeId: string
+  readonly hostId: string
+  readonly publicKeyFingerprint: string
+  readonly keyAlgorithm: 'ES256'
+  readonly safeLabel: string
+  readonly coarsePlatform: 'windows' | 'macos' | 'linux' | 'unknown'
+  readonly protocolVersionMin: 1
+  readonly protocolVersionMax: 1
+  readonly nonce: string
+  readonly iat: number
+  readonly exp: number
+}
+
+export interface HostRegistrationResult {
+  readonly hostId: string
+  readonly fingerprint: string
+  readonly identityGeneration: number
+  readonly claimState: 'unclaimed'
+}
+
+export interface HostClaimChallenge {
+  readonly claimId: string
+  readonly challengeId: string
+  readonly hostId: string
+  readonly hostFingerprint: string
+  readonly claimGeneration: number
+  readonly spaceId: string
+  readonly userId: string
+  readonly deviceId: string
+  readonly nonce: string
+  readonly issuedAt: number
+  readonly expiresAt: number
+  readonly audience: 'codetether-control-plane-host'
+  readonly proofVersion: 1
+}
+
+export interface HostClaimResult {
+  readonly claimId: string
+  readonly hostId: string
+  readonly ownerSpaceId: string
+  readonly state: 'completed'
+}
+
 export interface HostSupervisorAuthorization {
   readonly authorizationId: string
   readonly hostId: string
@@ -797,6 +844,153 @@ export async function approveHostAccessRequest(options: {
   })
 }
 
+function hostProof(
+  type: 'codetether-host-registration+jws' | 'codetether-host-claim+jws',
+  payload: unknown,
+  keyHandle: string,
+  hostIdentity: HostIdentityCapability,
+): Promise<string> {
+  const header = base64Url(
+    canonicalJsonBytes({ alg: 'ES256', typ: type }),
+  )
+  const encodedPayload = base64Url(canonicalJsonBytes(payload))
+  const signingInput = `${header}.${encodedPayload}`
+  return hostIdentity
+    .sign(keyHandle, base64Url(utf8(signingInput)))
+    .then((signed) => {
+      if (signed.keyAlgorithm !== 'ES256') {
+        throw new ControlPlaneClientError('host_algorithm_mismatch', undefined)
+      }
+      return `${signingInput}.${signed.signatureBase64Url}`
+    })
+}
+
+export async function registerHostIdentity(options: {
+  readonly baseUrl: string
+  readonly hostIdentity: HostIdentityCapability
+  readonly hostKeyHandle: string
+  readonly hostId: string
+  readonly publicJwk: string
+  readonly safeLabel: string
+  readonly coarsePlatform: 'windows' | 'macos' | 'linux' | 'unknown'
+  readonly signal?: AbortSignal
+}): Promise<HostRegistrationResult> {
+  let publicKey: unknown
+  try {
+    publicKey = JSON.parse(options.publicJwk) as unknown
+  } catch {
+    throw new ControlPlaneClientError('host_public_key_invalid', undefined)
+  }
+  const candidate = {
+    hostId: options.hostId,
+    publicKey,
+    keyAlgorithm: 'ES256' as const,
+    safeLabel: options.safeLabel,
+    coarsePlatform: options.coarsePlatform,
+    protocolVersionMin: 1 as const,
+    protocolVersionMax: 1 as const,
+  }
+  const challengeResponse = await fetch(
+    `${options.baseUrl}/v1/hosts/registration-challenge`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(candidate),
+      signal: options.signal,
+    },
+  )
+  const challengeBody = await readJson(challengeResponse)
+  if (!challengeResponse.ok) {
+    throw responseError(challengeResponse, challengeBody)
+  }
+  const challenge = parseHostRegistrationChallenge(challengeBody)
+  const proof = await hostProof(
+    'codetether-host-registration+jws',
+    challenge,
+    options.hostKeyHandle,
+    options.hostIdentity,
+  )
+  const registerResponse = await fetch(`${options.baseUrl}/v1/hosts/register`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ challenge, proof }),
+    signal: options.signal,
+  })
+  const registerBody = await readJson(registerResponse)
+  if (!registerResponse.ok) throw responseError(registerResponse, registerBody)
+  return parseHostRegistrationResult(registerBody)
+}
+
+export async function requestHostClaim(options: {
+  readonly accessToken: string
+  readonly baseUrl: string
+  readonly identity: ProductDeviceIdentityCapability
+  readonly productDevice: ResolvedProductDevice
+  readonly hostId: string
+  readonly hostFingerprint: string
+  readonly spaceId: string
+  readonly signal?: AbortSignal
+}): Promise<HostClaimChallenge> {
+  const value = await postAuthenticatedProductDeviceJson({
+    accessToken: options.accessToken,
+    baseUrl: options.baseUrl,
+    identity: options.identity,
+    productDevice: options.productDevice,
+    resource: `/v1/hosts/${options.hostId}/claim-challenge`,
+    value: {
+      hostId: options.hostId,
+      hostFingerprint: options.hostFingerprint,
+      spaceId: options.spaceId,
+    },
+    signal: options.signal,
+  })
+  return parseHostClaimChallenge(value)
+}
+
+export async function confirmHostClaim(options: {
+  readonly accessToken: string
+  readonly baseUrl: string
+  readonly identity: ProductDeviceIdentityCapability
+  readonly productDevice: ResolvedProductDevice
+  readonly hostIdentity: HostIdentityCapability
+  readonly hostKeyHandle: string
+  readonly challenge: HostClaimChallenge
+  readonly signal?: AbortSignal
+}): Promise<HostClaimResult> {
+  const payload = {
+    v: 1 as const,
+    aud: options.challenge.audience,
+    purpose: 'host_claim_confirmation' as const,
+    claimId: options.challenge.claimId,
+    challengeId: options.challenge.challengeId,
+    hostId: options.challenge.hostId,
+    hostFingerprint: options.challenge.hostFingerprint,
+    claimGeneration: options.challenge.claimGeneration,
+    spaceId: options.challenge.spaceId,
+    userId: options.challenge.userId,
+    deviceId: options.challenge.deviceId,
+    nonce: options.challenge.nonce,
+    iat: options.challenge.issuedAt,
+    exp: options.challenge.expiresAt,
+  }
+  const proof = await hostProof(
+    'codetether-host-claim+jws',
+    payload,
+    options.hostKeyHandle,
+    options.hostIdentity,
+  )
+  const value = await postAuthenticatedProductDeviceJson({
+    accessToken: options.accessToken,
+    baseUrl: options.baseUrl,
+    identity: options.identity,
+    productDevice: options.productDevice,
+    resource: `/v1/hosts/${options.challenge.hostId}/claim-confirm`,
+    value: { payload, proof },
+    signal: options.signal,
+  })
+  return parseHostClaimResult(value)
+}
+
 export async function postAuthenticatedProductDeviceJson(options: {
   readonly accessToken: string
   readonly baseUrl: string
@@ -987,6 +1181,82 @@ function responseError(
         ? 'authentication_expired'
         : 'control_plane_unavailable'
   return new ControlPlaneClientError(code, response.status)
+}
+
+function parseHostRegistrationChallenge(
+  value: unknown,
+): HostRegistrationChallenge {
+  if (
+    !isRecord(value) ||
+    !isRecord(value.challenge) ||
+    value.challenge.v !== 1 ||
+    value.challenge.aud !== 'codetether-control-plane-host' ||
+    value.challenge.purpose !== 'host_registration' ||
+    !isId(value.challenge.challengeId, 'enroll_') ||
+    !isId(value.challenge.hostId, 'host_') ||
+    !isBoundedString(value.challenge.publicKeyFingerprint, 128) ||
+    value.challenge.keyAlgorithm !== 'ES256' ||
+    !isBoundedString(value.challenge.safeLabel, 120) ||
+    !['windows', 'macos', 'linux', 'unknown'].includes(
+      String(value.challenge.coarsePlatform),
+    ) ||
+    value.challenge.protocolVersionMin !== 1 ||
+    value.challenge.protocolVersionMax !== 1 ||
+    !isBoundedString(value.challenge.nonce, 86) ||
+    !isPositiveInteger(value.challenge.iat) ||
+    !isPositiveInteger(value.challenge.exp)
+  ) {
+    invalidResponse()
+  }
+  return value.challenge as unknown as HostRegistrationChallenge
+}
+
+function parseHostRegistrationResult(value: unknown): HostRegistrationResult {
+  if (
+    !isRecord(value) ||
+    !isId(value.hostId, 'host_') ||
+    !isBoundedString(value.fingerprint, 128) ||
+    !isPositiveInteger(value.identityGeneration) ||
+    value.claimState !== 'unclaimed'
+  ) {
+    invalidResponse()
+  }
+  return value as unknown as HostRegistrationResult
+}
+
+function parseHostClaimChallenge(value: unknown): HostClaimChallenge {
+  if (
+    !isRecord(value) ||
+    !isId(value.claimId, 'hclaim_') ||
+    !isId(value.challengeId, 'enroll_') ||
+    !isId(value.hostId, 'host_') ||
+    !isBoundedString(value.hostFingerprint, 128) ||
+    !Number.isSafeInteger(value.claimGeneration) ||
+    !isId(value.spaceId, 'space_') ||
+    !isId(value.userId, 'usr_') ||
+    !isId(value.deviceId, 'dev_') ||
+    !isBoundedString(value.nonce, 86) ||
+    !isPositiveInteger(value.issuedAt) ||
+    !isPositiveInteger(value.expiresAt) ||
+    value.audience !== 'codetether-control-plane-host' ||
+    value.proofVersion !== 1
+  ) {
+    invalidResponse()
+  }
+  return value as unknown as HostClaimChallenge
+}
+
+function parseHostClaimResult(value: unknown): HostClaimResult {
+  if (
+    !isRecord(value) ||
+    !isId(value.claimId, 'hclaim_') ||
+    !isId(value.hostId, 'host_') ||
+    !isId(value.ownerSpaceId, 'space_') ||
+    value.state !== 'completed'
+  ) {
+    invalidResponse()
+  }
+  return value as unknown as HostClaimResult
 }
 
 function parseProductDevices(value: unknown): readonly AccountProductDevice[] {

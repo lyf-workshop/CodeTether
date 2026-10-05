@@ -38,7 +38,7 @@ import {
 import {
   connectRemoteSupervisor,
   deriveLocalHostLifecycleState,
-  enableLocalHostIdentity,
+  enrollLocalHost,
   publishLocalSupervisorPresence,
   readLocalHostIdentity,
   type LocalHostIdentityRecord,
@@ -256,8 +256,25 @@ function AuthenticatedHostDirectory({
     directory.data?.ownedHosts ?? [],
   )
   const enableHostMutation = useMutation({
-    mutationFn: () => enableLocalHostIdentity(nativeCapabilities.hostIdentity),
-    onSuccess: () => void localIdentity.refetch(),
+    mutationFn: async () => {
+      const productDevice = directory.data?.productDevice
+      const spaceId = directory.data?.ownedHosts[0]?.spaceId
+      if (productDevice === undefined || spaceId === undefined) {
+        throw new Error('host_space_unavailable')
+      }
+      return await enrollLocalHost({
+        session,
+        controlPlaneBaseUrl,
+        productDevice,
+        productDeviceIdentity: nativeCapabilities.productDeviceIdentity,
+        hostIdentity: nativeCapabilities.hostIdentity,
+        spaceId,
+      })
+    },
+    onSuccess: () => {
+      void localIdentity.refetch()
+      void directory.refetch()
+    },
   })
   const pendingRequests = useQuery({
     queryKey: ['account', 'host-access-requests', session.user.id],
@@ -303,10 +320,12 @@ function AuthenticatedHostDirectory({
       }
     >
       {localIdentity.isSuccess &&
-      localHostLifecycle === 'disabled' &&
+      (localHostLifecycle === 'disabled' ||
+        localHostLifecycle === 'enabled_unclaimed') &&
       nativeCapabilities.hostIdentity.available ? (
         <HostCapabilityCard
           mutation={enableHostMutation}
+          lifecycle={localHostLifecycle}
           onRetry={() => void localIdentity.refetch()}
         />
       ) : null}
@@ -332,7 +351,7 @@ function AuthenticatedHostDirectory({
         </div>
       ) : (
         <>
-          {localIdentity.data !== undefined &&
+          {localIdentity.data !== null &&
           pendingRequests.data?.some(
             (request) => request.payload.hostId === localIdentity.data?.hostId,
           ) ? (
@@ -366,7 +385,7 @@ function AuthenticatedHostDirectory({
                     key={host.hostId}
                     host={host}
                     exactLocalHost={exactLocalHost}
-                    localIdentity={localIdentity.data}
+                    localIdentity={localIdentity.data ?? undefined}
                     localConnectionState={connectionState}
                     productDevice={directory.data!.productDevice}
                     session={session}
@@ -399,6 +418,7 @@ function AuthenticatedHostDirectory({
 
 function HostCapabilityCard({
   mutation,
+  lifecycle,
   onRetry,
 }: {
   readonly mutation: {
@@ -406,6 +426,7 @@ function HostCapabilityCard({
     readonly isPending: boolean
     readonly mutate: () => void
   }
+  readonly lifecycle: 'disabled' | 'enabled_unclaimed'
   readonly onRetry: () => void
 }) {
   return (
@@ -417,12 +438,14 @@ function HostCapabilityCard({
         <div>
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="font-semibold text-text-primary">Host capability</h2>
-            <Badge variant="secondary">Controller-only</Badge>
+            <Badge variant="secondary">
+              {lifecycle === 'disabled' ? 'Not enabled' : 'Setup incomplete'}
+            </Badge>
           </div>
           <p className="mt-2 text-sm text-text-secondary">
-            This Mac can control other Hosts without exposing itself as a Host.
-            Enabling this capability creates a separate protected Host key on
-            this Mac; it does not claim a cloud Host or grant remote access.
+            Enable this Mac as a production Host. CodeTether creates a
+            separate protected Host key, registers it, and claims it into your
+            existing Space without changing the ProductDevice identity.
           </p>
         </div>
       </div>
@@ -444,7 +467,9 @@ function HostCapabilityCard({
               className="animate-spin motion-reduce:animate-none"
             />
           ) : null}
-          Enable this Mac as a Host
+          {lifecycle === 'disabled'
+            ? 'Enable this Mac as a Host'
+            : 'Complete Host setup'}
         </Button>
         {mutation.isError ? (
           <Button variant="ghost" size="sm" onClick={onRetry}>

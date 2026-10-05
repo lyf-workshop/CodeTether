@@ -93,7 +93,7 @@ export function LocalSupervisorPresenceCoordinator() {
         session === null ||
         session === undefined ||
         localHost === undefined ||
-        localIdentity.data === undefined ||
+        localIdentity.data === null ||
         directory.data === undefined
       ) {
         throw new Error('local_host_unavailable')
@@ -102,7 +102,7 @@ export function LocalSupervisorPresenceCoordinator() {
         session,
         controlPlaneBaseUrl,
         host: localHost,
-        localIdentity: localIdentity.data,
+        localIdentity: localIdentity.data!,
         productDevice: directory.data.productDevice,
         deviceIdentity: nativeCapabilities.productDeviceIdentity,
         hostIdentity: nativeCapabilities.hostIdentity,
@@ -112,7 +112,7 @@ export function LocalSupervisorPresenceCoordinator() {
     },
     enabled:
       localHost !== undefined &&
-      localIdentity.data !== undefined &&
+      localIdentity.data !== null &&
       connectionState === 'connected',
     retry: false,
     staleTime: 0,

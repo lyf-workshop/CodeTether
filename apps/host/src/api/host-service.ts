@@ -867,6 +867,17 @@ export class HostService {
     )
   }
 
+  markHostIdentityRegistered(registeredAt: string): DurableHostIdentity {
+    if (this.#persistence === undefined) {
+      throw new HostServiceError(
+        'invalid_request',
+        'Durable Host identity requires Host persistence',
+        409,
+      )
+    }
+    return this.#persistence.markHostIdentityRegistered(registeredAt)
+  }
+
   getOnboarding(): GetOnboardingResponse {
     return GetOnboardingResponseSchema.parse({
       protocolVersion,

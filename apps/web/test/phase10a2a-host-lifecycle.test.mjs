@@ -32,6 +32,18 @@ test('Host lifecycle distinguishes disabled, enabled-unclaimed, and claimed stat
   )
 })
 
+test('Uninitialized Host identity uses null so TanStack Query can represent success', async () => {
+  const source = await readFile(remotePath, 'utf8')
+  assert.match(
+    source,
+    /response\.status === 404\) return null/u,
+  )
+  assert.match(
+    source,
+    /identity: LocalHostIdentityRecord \| null \| undefined/u,
+  )
+})
+
 test('Host key creation is an explicit action and does not claim or publish', async () => {
   const [remote, directory] = await Promise.all([
     readFile(remotePath, 'utf8'),
@@ -50,9 +62,9 @@ test('Host key creation is an explicit action and does not claim or publish', as
   assert.match(directory, /Enable this Mac as a Host/u)
   assert.match(
     directory,
-    /enableLocalHostIdentity\(nativeCapabilities\.hostIdentity\)/u,
+    /enrollLocalHost\(/u,
   )
-  assert.match(directory, /Controller-only/u)
+  assert.match(directory, /Complete Host setup/u)
 })
 
 test('Remote Controller path remains ProductDevice-scoped when local Host is disabled', async () => {

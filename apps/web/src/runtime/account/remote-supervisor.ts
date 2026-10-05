@@ -16,6 +16,10 @@ import {
   canonicalJsonBytes,
   createDeviceRequestProof,
   listHostSupervisorAuthorizations,
+  listOwnedHosts,
+  registerHostIdentity,
+  requestHostClaim,
+  confirmHostClaim,
   postAuthenticatedProductDeviceJson,
   utf8,
   type AuthorizedHostDirectoryEntry,
@@ -35,16 +39,17 @@ export interface LocalHostIdentityRecord {
   readonly fingerprint: string
   readonly keyHandle: string
   readonly identityGeneration: number
+  readonly lastRegisteredAt?: string | null
 }
 
 export type LocalHostLifecycleState =
   'disabled' | 'enabled_unclaimed' | 'claimed'
 
 export function deriveLocalHostLifecycleState(
-  identity: LocalHostIdentityRecord | undefined,
+  identity: LocalHostIdentityRecord | null | undefined,
   ownedHosts: readonly Pick<OwnedHostAccessEntry, 'hostId'>[],
 ): LocalHostLifecycleState {
-  if (identity === undefined) return 'disabled'
+  if (identity == null) return 'disabled'
   return ownedHosts.some((host) => host.hostId === identity.hostId)
     ? 'claimed'
     : 'enabled_unclaimed'
@@ -99,12 +104,14 @@ export interface RemoteConversationDirectoryPage {
 }
 
 export async function readLocalHostIdentity(): Promise<
-  LocalHostIdentityRecord | undefined
+  LocalHostIdentityRecord | null
 > {
   const response = await fetch(`${hostBaseUrl}/api/v1/host/identity`, {
     headers: { accept: 'application/json' },
   })
-  if (response.status === 404) return undefined
+  // TanStack Query treats an `undefined` query result as an error. `null`
+  // explicitly represents the supported, uninitialized Host state.
+  if (response.status === 404) return null
   if (!response.ok) throw new Error('local_host_identity_unavailable')
   const value = (await response.json()) as {
     readonly identity?: {
@@ -113,6 +120,7 @@ export async function readLocalHostIdentity(): Promise<
       readonly identityGeneration?: unknown
       readonly publicJwk?: unknown
       readonly keyHandle?: unknown
+      readonly lastRegisteredAt?: unknown
     }
   }
   const identity = value.identity
@@ -125,7 +133,14 @@ export async function readLocalHostIdentity(): Promise<
   ) {
     throw new Error('local_host_identity_invalid')
   }
-  return identity as LocalHostIdentityRecord
+  return {
+    ...(identity as LocalHostIdentityRecord),
+    lastRegisteredAt:
+      identity.lastRegisteredAt === null ||
+      typeof identity.lastRegisteredAt === 'string'
+        ? identity.lastRegisteredAt
+        : null,
+  }
 }
 
 /**
@@ -139,7 +154,7 @@ export async function enableLocalHostIdentity(
 ): Promise<LocalHostIdentityRecord> {
   if (!capability.available) throw new Error('native_host_identity_unavailable')
   const existing = await readLocalHostIdentity()
-  if (existing !== undefined) return existing
+  if (existing !== null) return existing
 
   const created = await capability.createKey()
   const response = await fetch(`${hostBaseUrl}/api/v1/host/identity`, {
@@ -150,8 +165,84 @@ export async function enableLocalHostIdentity(
   if (!response.ok) throw new Error('host_identity_persist_failed')
 
   const identity = await readLocalHostIdentity()
-  if (identity === undefined) throw new Error('host_identity_persist_failed')
+  if (identity === null) throw new Error('host_identity_persist_failed')
   return identity
+}
+
+async function markLocalHostIdentityRegistered(): Promise<void> {
+  const response = await fetch(`${hostBaseUrl}/api/v1/host/identity/registered`, {
+    method: 'POST',
+  })
+  if (!response.ok) throw new Error('host_identity_registration_persist_failed')
+}
+
+/**
+ * Completes the supported production Host lifecycle for this Desktop. The
+ * local protected key is created first and then the same identity is
+ * registered and claimed into the already authenticated personal Space.
+ */
+export async function enrollLocalHost(options: {
+  readonly session: Session
+  readonly controlPlaneBaseUrl: string
+  readonly productDevice: ResolvedProductDevice
+  readonly productDeviceIdentity: ProductDeviceIdentityCapability
+  readonly hostIdentity: HostIdentityCapability
+  readonly spaceId: string
+  readonly signal?: AbortSignal
+}): Promise<LocalHostIdentityRecord> {
+  let local = await enableLocalHostIdentity(options.hostIdentity)
+  if (local.lastRegisteredAt == null) {
+    const registration = await registerHostIdentity({
+      baseUrl: options.controlPlaneBaseUrl,
+      hostIdentity: options.hostIdentity,
+      hostKeyHandle: local.keyHandle,
+      hostId: local.hostId,
+      publicJwk: local.publicJwk,
+      safeLabel: 'CodeTether Host',
+      coarsePlatform: 'macos',
+      signal: options.signal,
+    })
+    if (
+      registration.hostId !== local.hostId ||
+      registration.fingerprint !== local.fingerprint ||
+      registration.identityGeneration !== local.identityGeneration
+    ) {
+      throw new Error('host_identity_registration_mismatch')
+    }
+    await markLocalHostIdentityRegistered()
+    local = (await readLocalHostIdentity()) ?? local
+  }
+
+  const owned = await listOwnedHosts({
+    accessToken: options.session.access_token,
+    baseUrl: options.controlPlaneBaseUrl,
+    identity: options.productDeviceIdentity,
+    productDevice: options.productDevice,
+    signal: options.signal,
+  })
+  if (owned.some((host) => host.hostId === local.hostId)) return local
+
+  const challenge = await requestHostClaim({
+    accessToken: options.session.access_token,
+    baseUrl: options.controlPlaneBaseUrl,
+    identity: options.productDeviceIdentity,
+    productDevice: options.productDevice,
+    hostId: local.hostId,
+    hostFingerprint: local.fingerprint,
+    spaceId: options.spaceId,
+    signal: options.signal,
+  })
+  await confirmHostClaim({
+    accessToken: options.session.access_token,
+    baseUrl: options.controlPlaneBaseUrl,
+    identity: options.productDeviceIdentity,
+    productDevice: options.productDevice,
+    hostIdentity: options.hostIdentity,
+    hostKeyHandle: local.keyHandle,
+    challenge,
+    signal: options.signal,
+  })
+  return local
 }
 
 const remoteSessions = new Map<string, RemoteSupervisorSession>()

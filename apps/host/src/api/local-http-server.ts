@@ -474,6 +474,37 @@ export class LocalHttpServer {
         return
       }
 
+      if (
+        request.method === 'POST' &&
+        url.pathname === '/api/v1/host/identity/registered'
+      ) {
+        if (Number(request.headers['content-length'] ?? 0) !== 0) {
+          throw new HttpBoundaryError(
+            'invalid_request',
+            'This endpoint requires an empty body',
+            400,
+          )
+        }
+        for await (const chunk of request) {
+          if (chunk.length === 0) continue
+          throw new HttpBoundaryError(
+            'invalid_request',
+            'This endpoint requires an empty body',
+            400,
+          )
+        }
+        const identity = this.#service.markHostIdentityRegistered(
+          new Date().toISOString(),
+        )
+        this.#http.writeJson(
+          response,
+          200,
+          { status: 'ready', identity },
+          context.allowedOrigin,
+        )
+        return
+      }
+
       if (request.method === 'GET' && url.pathname === '/api/v1/bootstrap') {
         this.#http.writeJson(
           response,

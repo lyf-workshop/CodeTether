@@ -68,6 +68,11 @@ test('Supervisor Relay presence is maintained outside the My Hosts route', async
   assert.match(presence, /publishLocalSupervisorPresence/u)
   assert.match(presence, /listOwnedHosts/u)
   assert.match(presence, /connectionState === 'connected'/u)
+  assert.equal(
+    (presence.match(/refetchIntervalInBackground:\s*true/gu) ?? []).length,
+    2,
+    'directory and presence polling must continue while the window is hidden',
+  )
   assert.doesNotMatch(presence, /Controller|Node pairing|machine_tls_v1/u)
 })
 

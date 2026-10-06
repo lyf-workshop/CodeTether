@@ -72,6 +72,9 @@ export function LocalSupervisorPresenceCoordinator() {
     retry: false,
     staleTime: 0,
     refetchInterval: PRESENCE_REFRESH_MS,
+    // Host presence must continue while the macOS window is hidden in the
+    // background; the tray-owned Host remains explicitly enabled.
+    refetchIntervalInBackground: true,
   })
   const localIdentity = useQuery({
     queryKey: ['host', 'local-identity-for-directory'],
@@ -117,6 +120,9 @@ export function LocalSupervisorPresenceCoordinator() {
     retry: false,
     staleTime: 0,
     refetchInterval: PRESENCE_REFRESH_MS,
+    // The Control Plane lease is owned by the background Host lifecycle, not
+    // by whether the main Desktop window is currently visible.
+    refetchIntervalInBackground: true,
   })
 
   return null

@@ -262,6 +262,15 @@ test('Host presence rejects tampering, ProductDevice/wrong Host keys and every i
     await assert.rejects(publish(await f.sign({ ...f.payload, ...delta })))
   }
   await assert.rejects(publish(valid, id('host', 'missing-host')))
+  await database.query(
+    'UPDATE control_plane.hosts SET claim_generation=2 WHERE host_id=$1',
+    [f.host.hostId],
+  )
+  await expectHostFailure(publish(valid), 'host_supervisor_transport_mismatch')
+  await database.query(
+    'UPDATE control_plane.hosts SET claim_generation=1 WHERE host_id=$1',
+    [f.host.hostId],
+  )
   for (const state of ['unclaimed', 'claimed']) {
     await database.query(
       'UPDATE control_plane.hosts SET claim_state=$2, revoked_at=$3 WHERE host_id=$1',

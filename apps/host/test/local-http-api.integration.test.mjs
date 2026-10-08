@@ -289,18 +289,36 @@ test('starts a read-only durable API when the Codex executable is unavailable', 
     readOnly = await startLocalCodexHost({
       ...options,
       executable: join(directory, 'missing-codex-executable'),
+      // Keep this missing-installation fixture deterministic; slow discovery is
+      // independently covered by startup-readiness.test.mjs. No real CLI probes.
+      providerDiscoveryForTests: {
+        discoverCodex: async () => ({ installations: [], truncated: false }),
+        discoverClaude: async () => ({ installations: [], truncated: false }),
+      },
     })
     const bootstrap = await getJson(readOnly.baseUrl, '/api/v1/bootstrap')
     assert.equal(bootstrap.status, 200)
     assert.equal(bootstrap.body.capabilities.codex, false)
     assert.equal(bootstrap.body.capabilities.resume, false)
-    const machine = await getJson(
-      readOnly.baseUrl,
-      `/api/v1/machines/${machineId}`,
-    )
-    const codex = machine.body.providers.find(
-      (provider) => provider.provider === 'codex',
-    )
+    // Local reads are ready before background discovery. Observe its eventual
+    // current result without making discovery a startup readiness prerequisite.
+    let codex
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const machine = await getJson(
+        readOnly.baseUrl,
+        `/api/v1/machines/${machineId}`,
+      )
+      assert.equal(machine.status, 200)
+      codex = machine.body.providers.find(
+        (provider) => provider.provider === 'codex',
+      )
+      if (
+        codex.availability === 'not_installed' &&
+        codex.executionHealth.freshness === 'current'
+      )
+        break
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
     assert.equal(codex.availability, 'not_installed')
     assert.equal(codex.executionHealth.state, 'unavailable')
     assert.equal(codex.executionHealth.freshness, 'current')

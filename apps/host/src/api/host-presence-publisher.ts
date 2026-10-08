@@ -28,6 +28,21 @@ export class HostPresencePublisher {
   #lastPresence: SignedSupervisorHostPresence | undefined
 
   constructor(options: HostPresencePublisherOptions) {
+    const minimum = options.retryMinimumMs ?? 1_000
+    const maximum = options.retryMaximumMs ?? 60_000
+    const renewal =
+      options.renewalMs ?? supervisorTransportLimits.descriptorLifetimeMs / 5
+    if (
+      !Number.isFinite(minimum) ||
+      !Number.isFinite(maximum) ||
+      !Number.isFinite(renewal) ||
+      minimum <= 0 ||
+      maximum < minimum ||
+      renewal <= 0 ||
+      renewal >= supervisorTransportLimits.descriptorLifetimeMs
+    ) {
+      throw new Error('Invalid Host presence scheduler bounds')
+    }
     this.#options = options
     this.#task = this.#run()
   }
@@ -53,14 +68,6 @@ export class HostPresencePublisher {
     const renewal =
       this.#options.renewalMs ??
       supervisorTransportLimits.descriptorLifetimeMs / 5
-    if (
-      minimum <= 0 ||
-      maximum < minimum ||
-      renewal <= 0 ||
-      renewal >= supervisorTransportLimits.descriptorLifetimeMs
-    ) {
-      throw new Error('Invalid Host presence scheduler bounds')
-    }
     let retry = minimum
     while (!this.#abort.signal.aborted) {
       this.#wakePending = false

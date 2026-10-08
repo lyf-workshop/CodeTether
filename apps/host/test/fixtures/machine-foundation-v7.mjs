@@ -6,12 +6,13 @@ export function downgradeMachineFoundationToVersionSeven(databasePath) {
   const database = new DatabaseSync(databasePath)
   database.exec('PRAGMA foreign_keys = OFF')
   database.exec(`
+    DROP TABLE host_presence_configuration;
     DROP TABLE conversation_create_actions;
     DROP TABLE host_supervisor_control;
     DROP TABLE host_supervisor_grants;
     DROP TABLE host_identity;
     DELETE FROM schema_migrations
-    WHERE version IN (8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22);
+    WHERE version IN (8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23);
     DROP TABLE onboarding_progress;
     DROP TABLE conversation_provider_installation_bindings;
     DROP TABLE provider_backend_observations;

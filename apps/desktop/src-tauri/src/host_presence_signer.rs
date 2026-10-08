@@ -120,6 +120,30 @@ fn sign(request: &Request) -> Result<String, ()> {
 mod tests {
     use super::*;
     #[test]
+    fn canonical_presence_only_and_lease_bounds() {
+        let payload = json!({"v":1,"aud":"codetether-host-supervisor","purpose":"host_supervisor_presence",
+            "hostId":"host_0123456789abcdef0123456789abcdef","hostFingerprint":"sha256:fixture",
+            "hostIdentityGeneration":1,"spaceId":"space_0123456789abcdef0123456789abcdef",
+            "transportTlsFingerprint":"fixture","controlPlaneOrigin":"https://example.test",
+            "directEndpoints":[{"host":"192.0.2.7","port":4318}],"relay":null,"iat":1000,"exp":1600,"protocolVersion":2});
+        let encoded = format!(
+            "{}.{}",
+            URL_SAFE_NO_PAD.encode(serde_json::to_vec(&json!({"alg":"ES256","typ":TYPE})).unwrap()),
+            URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).unwrap())
+        );
+        let mut request = Request {
+            id: uuid::Uuid::new_v4().to_string(),
+            key_handle: "CodeTether.HostIdentity.fixture".into(),
+            payload,
+            signing_input: encoded,
+        };
+        assert!(validate(&request).is_ok());
+        request.signing_input.push('x');
+        assert!(validate(&request).is_err());
+        request.payload["exp"] = json!(2099000000u64);
+        assert!(validate(&request).is_err());
+    }
+    #[test]
     fn pipe_signer_never_accepts_account_or_grant_signing() {
         let request = Request {
             id: uuid::Uuid::new_v4().to_string(),

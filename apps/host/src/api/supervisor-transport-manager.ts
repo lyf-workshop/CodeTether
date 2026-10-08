@@ -37,6 +37,7 @@ import {
 import type { HostService } from './host-service.js'
 import type { ConversationStore } from '../persistence/index.js'
 import { HostPresencePublisher } from './host-presence-publisher.js'
+import type { HostStartupTimeline } from './startup-timeline.js'
 
 const MAX_OUTBOUND_CONNECTIONS = 8
 const RELAY_RECONNECT_MINIMUM_MS = 1_000
@@ -49,6 +50,7 @@ export interface SupervisorRelayConfiguration {
 }
 
 export interface SupervisorTransportManagerOptions {
+  readonly startupTimeline?: HostStartupTimeline
   readonly service: HostService
   readonly persistence: ConversationStore
   readonly bindHost?: string
@@ -109,6 +111,7 @@ export class SupervisorTransportManager {
   #presenceConstruction:
     Promise<SignedSupervisorHostPresence | undefined> | undefined
   readonly #signHostPresence: SupervisorTransportManagerOptions['signHostPresence']
+  readonly #startupTimeline: HostStartupTimeline | undefined
 
   private constructor(
     options: SupervisorTransportManagerOptions,
@@ -120,6 +123,7 @@ export class SupervisorTransportManager {
     this.#clientBuildIdentity = options.clientBuildIdentity
     this.#relay = options.relay
     this.#signHostPresence = options.signHostPresence
+    this.#startupTimeline = options.startupTimeline
     this.#allowLoopbackForTests = options.allowLoopbackForTests === true
     this.#relayRendezvousId = `srv_${randomBytes(16).toString('hex')}`
     this.#relayRendezvousCapability = randomBytes(32).toString('base64url')
@@ -336,6 +340,7 @@ export class SupervisorTransportManager {
     })
     const manager = new SupervisorTransportManager(options, server)
     await server.start()
+    options.startupTimeline?.mark('SUPERVISOR_4318_LISTENING')
     manager.#startRelayPresence()
     await manager.#restorePresenceConfiguration(options.controlPlaneOrigin)
     manager.#ensurePresencePublisher()
@@ -361,6 +366,7 @@ export class SupervisorTransportManager {
           `${JSON.stringify({ component: 'host', event: 'supervisor.host_presence', state })}\n`,
         ),
     })
+    this.#startupTimeline?.mark('PRESENCE_PUBLISHER_START')
   }
 
   async configureHostPresence(input: {
@@ -389,7 +395,9 @@ export class SupervisorTransportManager {
       throw new Error('Invalid Host presence configuration')
     }
     const current = this.#persistence.getHostPresenceConfiguration()
-    const enabled = input.enabled !== false
+    // Periodic metadata reconciliation must not undo an explicit Host disable.
+    // Only an explicit enabled:true action may re-enable an existing disabled Host.
+    const enabled = input.enabled ?? current?.enabled ?? true
     if (
       current?.spaceId === input.spaceId &&
       current.controlPlaneOrigin === input.controlPlaneOrigin &&
@@ -973,6 +981,7 @@ export class SupervisorTransportManager {
     const abort = new AbortController()
     this.#relayAbort = abort
     this.#relayTask = this.#maintainRelayPresence(relay, abort)
+    this.#startupTimeline?.mark('RELAY_START')
     void this.#relayTask.catch(() => undefined)
   }
 

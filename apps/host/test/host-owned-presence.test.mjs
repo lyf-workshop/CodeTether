@@ -38,6 +38,24 @@ const flush = async () => {
   for (let n = 0; n < 12; n++) await Promise.resolve()
 }
 
+test('invalid scheduler bounds fail synchronously before starting a worker', () => {
+  for (const invalid of [
+    { retryMinimumMs: 0 },
+    { retryMaximumMs: 1, retryMinimumMs: 2 },
+    { renewalMs: 600_000 },
+    { renewalMs: Number.NaN },
+  ]) {
+    assert.throws(
+      () =>
+        new HostPresencePublisher({
+          createPresence: async () => undefined,
+          ...invalid,
+        }),
+      /Invalid Host presence scheduler bounds/u,
+    )
+  }
+})
+
 test('renderer disappears/window hidden beyond lease: only Host worker continues monotonic renewals', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
   const published = []
@@ -275,6 +293,25 @@ test('existing claimed Windows/macOS Host restores same identity/context and imm
           assert.equal(captured.at(-1).payload.hostId, identity.hostId)
           assert.equal(store.listEnabledHostSupervisorGrants().length, 1)
           assert.deepEqual(store.getHostIdentity(), identity)
+          if (restart === 1) {
+            const context = {
+              spaceId: payload().spaceId,
+              controlPlaneOrigin: payload().controlPlaneOrigin,
+            }
+            assert.equal(
+              await manager.configureHostPresence({
+                ...context,
+                enabled: false,
+              }),
+              null,
+            )
+            const stoppedAt = captured.length
+            assert.equal(await manager.configureHostPresence(context), null)
+            manager.requestPresenceRenewal()
+            await new Promise((resolve) => setTimeout(resolve, 20))
+            assert.equal(captured.length, stoppedAt)
+            assert.equal(store.getHostPresenceConfiguration().enabled, false)
+          }
         } finally {
           await manager.close()
         }
@@ -324,4 +361,21 @@ test('UI only reconciles grants; native Host pipe, not WebView, owns Host signin
     native,
     /product_device_key_sign|refresh_token|access_token|create_key/u,
   )
+})
+
+test('managed production serve wires native signer to runtime assembly, not argument parsing', async () => {
+  const source = await readFile(
+    new URL('../src/serve.ts', import.meta.url),
+    'utf8',
+  )
+  const assembly = source.slice(
+    source.indexOf('host = await startLocalCodexHost('),
+  )
+  assert.match(assembly, /signHostPresence:/u)
+  assert.match(assembly, /signer\.sign\(keyHandle, payload, signal\)/u)
+  const argumentsOnly = source.slice(
+    source.indexOf('const arguments_ = parseServeArguments'),
+    source.indexOf('const hostVersion ='),
+  )
+  assert.doesNotMatch(argumentsOnly, /signHostPresence/u)
 })

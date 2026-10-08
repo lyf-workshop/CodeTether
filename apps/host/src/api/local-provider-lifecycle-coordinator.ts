@@ -129,6 +129,69 @@ export class LocalProviderLifecycleCoordinator {
     this.#options = options
   }
 
+  /** Local readiness restores metadata only; current discovery is background work. */
+  static createPending(
+    options: LocalProviderLifecycleCoordinatorOptions,
+  ): LocalProviderLifecycleCoordinator {
+    const coordinator = new LocalProviderLifecycleCoordinator(options)
+    for (const provider of ['codex', 'claude-code'] as const) {
+      const lifecycle =
+        options.persistence.getProviderLifecycle(options.machineId, provider) ??
+        MachineProviderLifecycleSchema.parse({ provider, installations: [] })
+      const installation =
+        lifecycle.selectedInstallationId === undefined
+          ? undefined
+          : options.persistence.getProviderInstallation(
+              lifecycle.selectedInstallationId,
+            )
+      coordinator.#states.set(provider, {
+        lifecycle: {
+          ...lifecycle,
+          installations: lifecycle.installations.map((entry) => ({
+            ...entry,
+            ...(entry.compatibility === undefined
+              ? {}
+              : {
+                  compatibility: {
+                    ...entry.compatibility,
+                    freshness: 'last_known' as const,
+                  },
+                }),
+            ...(entry.backend === undefined
+              ? {}
+              : {
+                  backend: {
+                    ...entry.backend,
+                    freshness: 'last_known' as const,
+                  },
+                }),
+          })),
+        },
+        runtime: new UnavailableAgentRuntime(
+          provider,
+          {
+            provider,
+            displayName: provider === 'codex' ? 'Codex' : 'Claude Code',
+            availability: 'unavailable',
+            capabilities: UNAVAILABLE_PROVIDER_CAPABILITIES,
+            executionHealth: { state: 'unknown', freshness: 'last_known' },
+          },
+          installation?.revision === undefined
+            ? undefined
+            : {
+                installationId: installation.installationId,
+                installationRevision: installation.revision,
+              },
+        ),
+      })
+    }
+    return coordinator
+  }
+
+  cancelDiscovery(): void {
+    this.#abort.abort()
+  }
+
   static async create(
     options: LocalProviderLifecycleCoordinatorOptions,
   ): Promise<LocalProviderLifecycleCoordinator> {

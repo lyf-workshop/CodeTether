@@ -317,6 +317,7 @@ export async function reconcileLocalSupervisorGrants(options: {
       controlPlaneOrigin: new URL(options.controlPlaneBaseUrl).origin,
     },
   )
+  if (configured.descriptor === null) return // Explicitly disabled Host stays disabled.
   const descriptor = parseSignedTransport(configured.descriptor)
   if (
     descriptor.payload.hostId !== options.host.hostId ||

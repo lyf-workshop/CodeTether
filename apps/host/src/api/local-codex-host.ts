@@ -45,8 +45,10 @@ import {
 import { WorkspacePolicy } from './workspace-policy.js'
 import {
   LocalProviderLifecycleCoordinator,
+  type LocalProviderLifecycleCoordinatorOptions,
   type LocalProviderLifecycleState,
 } from './local-provider-lifecycle-coordinator.js'
+import { HostStartupTimeline } from './startup-timeline.js'
 import { safeErrorNameForLog } from './safe-log.js'
 import {
   SecureRemoteMachineCoordinator,
@@ -60,10 +62,17 @@ import {
 import {
   parseSupervisorRelayConfiguration,
   SupervisorTransportManager,
+  type SupervisorRelayConfiguration,
 } from './supervisor-transport-manager.js'
 import type { SupervisorHostPresencePayload } from '@codetether/supervisor-transport'
 
 export interface LocalCodexHostOptions {
+  readonly startupTimeline?: HostStartupTimeline
+  /** Test-only probes. Production uses the existing bounded discovery. */
+  readonly providerDiscoveryForTests?: Pick<
+    LocalProviderLifecycleCoordinatorOptions,
+    'discoverCodex' | 'discoverClaude' | 'observeCodex' | 'observeClaude'
+  >
   readonly allowedWorkspaceRoots?: readonly string[]
   readonly allowedOrigins: readonly string[]
   readonly hostVersion: string
@@ -92,6 +101,8 @@ export interface LocalCodexHostOptions {
   readonly supervisorPort?: number
   readonly supervisorBindHost?: string
   readonly supervisorAdvertiseHost?: string
+  /** Internal assembly/test override; null disables environment Relay config. */
+  readonly supervisorRelay?: SupervisorRelayConfiguration | null
   readonly signHostPresence?: (
     keyHandle: string,
     payload: SupervisorHostPresencePayload,
@@ -111,6 +122,8 @@ export interface RunningLocalCodexHost {
 export async function startLocalCodexHost(
   options: LocalCodexHostOptions,
 ): Promise<RunningLocalCodexHost> {
+  const timeline = options.startupTimeline ?? new HostStartupTimeline()
+  timeline.mark('PROCESS_START')
   const workspacePolicy = await WorkspacePolicy.create(
     options.allowedWorkspaceRoots ?? [],
   )
@@ -125,15 +138,20 @@ export async function startLocalCodexHost(
   const localMachine = persistence
     ?.listMachines()
     .find((machine) => machine.kind === 'local')
+  timeline.mark('LOCAL_STATE_OPEN')
+  // ProductDevice restore belongs to native/client identity, not this Host DB.
+  if (persistence?.getHostIdentity() !== undefined)
+    timeline.mark('HOST_IDENTITY_RESTORED')
   let lifecycleCoordinator: LocalProviderLifecycleCoordinator | undefined
   try {
     lifecycleCoordinator =
       persistence === undefined || localMachine === undefined
         ? undefined
-        : await LocalProviderLifecycleCoordinator.create({
+        : LocalProviderLifecycleCoordinator.createPending({
             machineId: localMachine.machineId,
             persistence,
             hostVersion: options.hostVersion,
+            ...options.providerDiscoveryForTests,
             ...(options.executable === undefined
               ? {}
               : { codexExecutable: options.executable }),
@@ -180,7 +198,7 @@ export async function startLocalCodexHost(
     ]
   try {
     const runningHost = await startLocalCodexHostWithRuntime(
-      options,
+      { ...options, startupTimeline: timeline },
       runtimes,
       workspacePolicy,
       persistence,
@@ -196,9 +214,34 @@ export async function startLocalCodexHost(
             await lifecycleCoordinator.prepareRefresh(provider),
     )
     if (lifecycleCoordinator === undefined) return runningHost
+    timeline.mark('PROVIDER_DISCOVERY_START')
+    let closing = false
+    const discovery = runningHost.service.discoverLocalProvidersOnStartup()
+    void discovery.then(
+      () => timeline.mark('PROVIDER_DISCOVERY_DONE'),
+      () => {
+        // No exception text or Provider diagnostics escape into startup logs.
+        if (!closing)
+          process.stderr.write(
+            `${JSON.stringify({ component: 'host', event: 'startup.provider_discovery_failed' })}\n`,
+          )
+      },
+    )
+    const closeOwned = composeLocalHostLifecycleClose(
+      runningHost,
+      lifecycleCoordinator,
+    )
+    let closePromise: Promise<void> | undefined
     return {
       ...runningHost,
-      close: composeLocalHostLifecycleClose(runningHost, lifecycleCoordinator),
+      close: () =>
+        (closePromise ??= (async () => {
+          // Cancel/join initial metadata probes BEFORE persistence is closed.
+          closing = true
+          lifecycleCoordinator.cancelDiscovery()
+          await discovery.catch(() => undefined)
+          await closeOwned()
+        })()),
     }
   } catch (error) {
     let lifecycleCloseFailure: unknown
@@ -438,7 +481,14 @@ export async function startLocalCodexHostWithRuntime(
         service,
         persistence,
         clientBuildIdentity: options.hostVersion,
-        relay: parseSupervisorRelayConfiguration(process.env),
+        ...(options.startupTimeline === undefined
+          ? {}
+          : { startupTimeline: options.startupTimeline }),
+        relay:
+          options.supervisorRelay === null
+            ? undefined
+            : (options.supervisorRelay ??
+              parseSupervisorRelayConfiguration(process.env)),
         ...(options.signHostPresence === undefined
           ? {}
           : { signHostPresence: options.signHostPresence }),
@@ -482,6 +532,8 @@ export async function startLocalCodexHostWithRuntime(
     const localServer = new LocalHttpServer(serverOptions)
     server = localServer
     const baseUrl = await localServer.start(options.port)
+    options.startupTimeline?.mark('PRODUCT_API_4317_LISTENING')
+    options.startupTimeline?.mark('LOCAL_READY')
     return {
       baseUrl,
       epoch: publisher.epoch,

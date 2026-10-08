@@ -1439,6 +1439,22 @@ export class HostService {
     )
   }
 
+  /** Startup-only discovery through the SAME serialized runtime handoff gate. */
+  async discoverLocalProvidersOnStartup(): Promise<void> {
+    const results = await Promise.allSettled(
+      (['codex', 'claude-code'] as const).map((provider) =>
+        this.#refreshLocalProviderForExplicitStart(
+          this.#machines.localMachineId(),
+          provider,
+        ),
+      ),
+    )
+    const failure = results.find(
+      (result): result is PromiseRejectedResult => result.status === 'rejected',
+    )
+    if (failure !== undefined) throw failure.reason
+  }
+
   async refreshMachineProviders(
     machineId: MachineId,
     request: RefreshMachineProvidersRequest,

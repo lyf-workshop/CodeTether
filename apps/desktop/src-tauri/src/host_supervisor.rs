@@ -226,6 +226,11 @@ enum ResumeHealthOutcome {
 
 impl HostSupervisor {
     fn start(app: &tauri::AppHandle) -> Result<Self, StartError> {
+        let launch_started = Instant::now();
+        eprintln!(
+            "{}",
+            serde_json::json!({"component":"desktop", "event":"startup.phase", "phase":"DESKTOP_LAUNCH", "elapsedMs":0})
+        );
         match inspect_host_port() {
             ExistingService::None => {}
             ExistingService::CodeTether => return Err(StartError::ExistingCodeTetherHost),
@@ -262,6 +267,10 @@ impl HostSupervisor {
             .spawn()
             .map_err(|error| StartError::Spawn(error.to_string()))?;
         let mut child = CommandChild::new(child);
+        eprintln!(
+            "{}",
+            serde_json::json!({"component":"desktop", "event":"startup.phase", "phase":"HOST_CHILD_SPAWN", "elapsedMs":launch_started.elapsed().as_millis()})
+        );
         let process_tree = match ProcessTreeGuard::assign(&child) {
             Ok(guard) => guard,
             Err(error) => {
@@ -1303,6 +1312,7 @@ pub fn run_desktop() {
                 match wait_for_readiness(&observation, STARTUP_TIMEOUT, env!("CODETETHER_BUILD_ID"))
                 {
                     Ok((elapsed, identity)) => {
+                        eprintln!("{}", serde_json::json!({"component":"desktop", "event":"startup.phase", "phase":"LOCAL_READY", "elapsedMs":elapsed.as_millis()}));
                         state.set_host_epoch(identity.epoch);
                         eprintln!(
                             "[codetether:desktop] Host ready at {HOST_URL} in {} ms",

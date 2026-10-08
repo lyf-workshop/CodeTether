@@ -79,8 +79,37 @@ sign-out signs out the UI account without unclaiming/disabling Host; this state
 is preserved. A future logout-to-disable policy requires a product decision.
 Explicit local disable stops the worker (last signed lease naturally expires).
 Server unclaim/revocation rejects further publications.
+Periodic UI grant reconciliation omits enablement and preserves a durable disabled
+state. Only an explicit `enabled: true` action can re-enable it.
+
+Security review conclusions: a ProductDevice signature cannot impersonate a Host;
+Host A cannot publish Host B's lease; obsolete generations fail; captured signatures
+cannot refresh signed expiry; Host-authenticated presence grants no general account
+API access. The Host signing pipe receives no account/refresh token, ProductDevice
+private key or Secure Enclave wrapped key representation.
 
 ## Evidence and deployment handoff
+
+### Local readiness versus background health
+
+Source-proven dependency: LocalProviderLifecycleCoordinator.create awaited both
+installation/backend probes BEFORE HTTP/Supervisor assembly. Current probe success
+is not required for cold local reads. Pending coordinator restores last-known
+installation metadata and unavailable/no-execution runtimes; discovery runs AFTER
+LOCAL_READY through the existing serialized Host handoff/commit/discard path.
+It cannot enable execution early. Shutdown aborts/joins probes before closing
+SQLite. The native 15-second timeout is unchanged. Historical physical timeout
+attribution remains unproven beyond this blocking dependency.
+
+Safe monotonic diagnostics cover native Desktop/child launch, Host process,
+SQLite, existing Host record, Supervisor/API listeners, optional Relay/Presence
+startup and Provider discovery. ProductDevice restore belongs to native/client
+identity and is not falsely reported by Host SQLite. Tests use ephemeral ports
+for the same services, NOT installed physical 4317/4318 processes. Three isolated
+Windows runs held discovery unresolved for 1200 ms after healthy APIs; LOCAL_READY
+was ~96/63/79 ms and Supervisor listener ~93/63/77 ms. These are not new installed
+Desktop/CNG/production Relay startup acceptance. Cloud session, Relay registration
+and Presence success are BACKGROUND_HEALTHY, not local launch prerequisites.
 
 Isolated tests use synthetic identities, temporary SQLite/Postgres and ephemeral
 ports. Deterministic clock tests cover renderer disappearance, hidden duration
@@ -90,7 +119,50 @@ These are NOT a new physical macOS Secure Enclave/hidden-window acceptance.
 Historical Mac expiry process/renderer/sleep/Relay/session evidence is UNKNOWN.
 machine.get HTTP 500 stays a separate follow-up.
 
-Not executed: review; deploy CP code first (migration head stays 0008); then build
+### Final implementation verification — 2026-10-07
+
+Branch: `phase10/host-authenticated-presence`.
+Presence implementation: `29d36eab2e7052d351c92bff7448f7ae412441aa`.
+Startup/final wiring hardening: `670d831ac2335da8d9c64214217ae5b51444b337`.
+Use the final branch HEAD containing BOTH commits, never an intermediate binary.
+
+`pnpm typecheck`, `pnpm lint`, `pnpm build`, `git diff --check`,
+`cargo fmt --check` and Windows `cargo check`: PASS.
+Final root `pnpm test`: 1843 tests, 1829 PASS, 0 FAIL, 14 skipped.
+Host: 544/544; Web: 455/455; Control Plane: 92 PASS/1 skipped;
+Supervisor: 6/6; Relay: 56/56. Focused Host ownership/transport suite: 14/14.
+Native purpose-limited pipe integration target: 2/2 PASS. Full Rust lib tests
+were not claimed; the separately known baseline test-module import defect is
+out of scope. Compiler dead-code and frontend bundle-size/import warnings remain.
+13 root skips are existing Windows/POSIX platform restrictions; 1 is the absent
+explicitly isolated native PostgreSQL URL. Embedded PostgreSQL contract tests ran.
+
+Latest three Windows isolated Host runs (milliseconds):
+
+| Phase                     |   Run 1 |   Run 2 |   Run 3 |
+| ------------------------- | ------: | ------: | ------: |
+| Local SQLite open         |   37.14 |   34.40 |   31.00 |
+| Supervisor listener       |   64.87 |   45.05 |   40.78 |
+| Product API listener      |   67.39 |   45.59 |   41.35 |
+| LOCAL_READY               |   67.40 |   45.59 |   41.36 |
+| Background discovery done | 1327.34 | 1278.38 | 1273.80 |
+
+These runs deliberately keep discovery unresolved after healthy API reads.
+They use ephemeral ports and temporary local state, not installed Desktop launch
+or physical CNG/Secure Enclave timing. Native ProductDevice/CNG restore timing and
+production sleep/wake/renderer-destruction acceptance remain deployment gates.
+The unchanged baseline missing-Codex integration test also passed in an isolated
+`2e153879` worktree (~15.84 seconds total test), confirming that its old readiness
+wait included real discovery. The new fixture uses deterministic empty scans;
+slow-discovery semantics are tested separately, not hidden by a longer timeout.
+
+During one preliminary startup test, inherited public Relay environment briefly
+connected synthetic test registrations; all those connections closed in cleanup.
+Final startup/managed smoke fixtures explicitly disable inherited production
+Relay configuration. No canonical production identity, authorization, request or
+Host claim was created/changed; no production deployment or Provider Turn occurred.
+
+Pending: Owner review; deploy CP code first (migration head stays 0008); then build
 and install reviewed exact Windows/macOS Desktop + Host with existing public
 Control Plane/Relay config, preserving SQLite/platform keys/authorizations.
 Local migration 23 follows normal upgrade. Verify physical background/reload/

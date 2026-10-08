@@ -1,5 +1,14 @@
 # CodeTether Roadmap
 
+## Phase 10.6A — Host-authenticated background availability
+
+Owner authorizes implementation/testing from `2e153879c779`, not deployment.
+Gate: own-presence-only Host authentication, bounded replay-safe leases,
+renderer-independent renewal/retry/restart, Controller-only preservation and
+deterministic local readiness independent of optional Provider discovery.
+Existing identities/read grants and Relay protocol remain frozen. Physical
+deployment/soak follows review. See [implementation](PHASE10-6A-HOST-AUTHENTICATED-PRESENCE.md).
+
 ## Phase Rules
 
 Work proceeds in strict phases. A phase must meet its exit gate and be explicitly completed before work begins on the next phase. Later-phase infrastructure must not be pulled forward for convenience. Each transition should update the `Current Scope` in `AGENTS.md` and record any approved scope change in the relevant specification.

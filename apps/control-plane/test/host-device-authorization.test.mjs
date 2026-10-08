@@ -153,6 +153,159 @@ async function expectHostFailure(promise, code) {
   )
 }
 
+async function presenceFixture(value) {
+  const fixture = await createFixture(value)
+  const payload = {
+    v: 1,
+    aud: 'codetether-host-supervisor',
+    purpose: 'host_supervisor_presence',
+    hostId: fixture.host.hostId,
+    hostFingerprint: fixture.host.fingerprint,
+    hostIdentityGeneration: 1,
+    spaceId: fixture.account.spaceId,
+    transportTlsFingerprint: 'T'.repeat(43),
+    controlPlaneOrigin: 'https://control-plane.example.test',
+    directEndpoints: [{ host: 'host.example.test', port: 4318 }],
+    relay: null,
+    iat: now.getTime() / 1_000,
+    exp: now.getTime() / 1_000 + 600,
+    protocolVersion: 2,
+  }
+  const sign = async (p = payload, key = fixture.hostKeys.privateKey) => ({
+    payload: p,
+    proof: await new CompactSign(supervisorCanonicalJsonBytes(p))
+      .setProtectedHeader({ alg: 'ES256', typ: supervisorDescriptorProofType })
+      .sign(key),
+  })
+  return { ...fixture, payload, sign }
+}
+
+test('Host-authenticated own presence requires no interactive session and cannot call account APIs', async () => {
+  const f = await presenceFixture('host-auth-http')
+  const server = await startControlPlaneServer({
+    hostIdentityService: new HostIdentityService(database, () => now),
+    port: 0,
+  })
+  try {
+    const signed = await f.sign()
+    const baseUrl = `http://127.0.0.1:${server.address.port}`
+    const response = await fetch(
+      `${baseUrl}/v1/hosts/${f.host.hostId}/supervisor-host-presence`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(signed),
+      },
+    )
+    assert.equal(response.status, 200)
+    assert.equal(
+      (await response.json()).expiresAt,
+      new Date(f.payload.exp * 1000).toISOString(),
+    )
+    for (const operation of [
+      'supervisor-authorizations',
+      'device-authorization/request',
+      'supervisor-grant/materialize',
+    ]) {
+      const denied = await fetch(
+        `${baseUrl}/v1/hosts/${f.host.hostId}/${operation}`,
+        {
+          method: operation === 'supervisor-authorizations' ? 'GET' : 'POST',
+          headers: { 'content-type': 'application/json' },
+          ...(operation === 'supervisor-authorizations'
+            ? {}
+            : { body: JSON.stringify(signed) }),
+        },
+      )
+      assert.notEqual(denied.status, 200)
+    }
+  } finally {
+    await server.close()
+  }
+})
+
+test('Host presence rejects tampering, ProductDevice/wrong Host keys and every invalid binding/time window', async () => {
+  const f = await presenceFixture('host-auth-security')
+  const service = new HostIdentityService(database, () => now)
+  const publish = (value, hostId = f.host.hostId) =>
+    service.publishHostAuthenticatedPresence(hostId, value)
+  const valid = await f.sign()
+  await publish(valid)
+  await expectHostFailure(
+    publish({
+      ...valid,
+      payload: {
+        ...valid.payload,
+        directEndpoints: [{ host: 'attacker.example', port: 4318 }],
+      },
+    }),
+    'host_supervisor_transport_signature_invalid',
+  )
+  await expectHostFailure(
+    publish(await f.sign(f.payload, f.deviceKeys.privateKey)),
+    'host_supervisor_transport_signature_invalid',
+  )
+  const wrong = await generateKeyPair('ES256')
+  await expectHostFailure(
+    publish(await f.sign(f.payload, wrong.privateKey)),
+    'host_supervisor_transport_signature_invalid',
+  )
+  for (const delta of [
+    { hostId: id('host', 'another-host') },
+    { hostIdentityGeneration: 2 },
+    { spaceId: id('space', 'another-space') },
+    { exp: f.payload.iat + 601 },
+    { exp: f.payload.iat - 1, iat: f.payload.iat - 60 },
+    { iat: f.payload.iat + 121, exp: f.payload.exp + 121 },
+    { iat: f.payload.iat - 121 },
+  ]) {
+    await assert.rejects(publish(await f.sign({ ...f.payload, ...delta })))
+  }
+  await assert.rejects(publish(valid, id('host', 'missing-host')))
+  for (const state of ['unclaimed', 'claimed']) {
+    await database.query(
+      'UPDATE control_plane.hosts SET claim_state=$2, revoked_at=$3 WHERE host_id=$1',
+      [f.host.hostId, state, state === 'claimed' ? now : null],
+    )
+    await expectHostFailure(
+      publish(valid),
+      'host_supervisor_transport_mismatch',
+    )
+  }
+})
+
+test('captured presence cannot refresh or roll back a lease and is rejected after signed expiry', async () => {
+  const f = await presenceFixture('host-auth-replay')
+  let time = now
+  const service = new HostIdentityService(database, () => time)
+  const original = await f.sign()
+  await service.publishHostAuthenticatedPresence(f.host.hostId, original)
+  time = new Date(now.getTime() + 60_000)
+  const newer = await f.sign({
+    ...f.payload,
+    iat: f.payload.iat + 60,
+    exp: f.payload.exp + 60,
+  })
+  await service.publishHostAuthenticatedPresence(f.host.hostId, newer)
+  const read = async () =>
+    (
+      await database.query(
+        'SELECT payload, expires_at, updated_at FROM control_plane.host_supervisor_presence WHERE host_id=$1',
+        [f.host.hostId],
+      )
+    ).rows[0]
+  const checkpoint = await read()
+  time = new Date(now.getTime() + 90_000)
+  await service.publishHostAuthenticatedPresence(f.host.hostId, original)
+  await service.publishHostAuthenticatedPresence(f.host.hostId, newer)
+  assert.deepEqual(await read(), checkpoint)
+  time = new Date(now.getTime() + 601_000)
+  await assert.rejects(
+    service.publishHostAuthenticatedPresence(f.host.hostId, original),
+  )
+  assert.deepEqual(await read(), checkpoint)
+})
+
 test('owned Host requires explicit confirmation and grants one authorization', async () => {
   const fixture = await createFixture('authorization-success')
   const service = new HostIdentityService(database, () => now)

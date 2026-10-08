@@ -1899,41 +1899,60 @@ export class HostIdentityService {
   ) {
     const hostId = hostIdSchema.parse(untrustedHostId)
     await this.assertHostPresencePublisher(human, device, hostId)
+    return this.publishHostAuthenticatedPresence(hostId, untrusted)
+  }
+
+  /** Host signature authorizes ONLY this Host's short-lived transport lease. */
+  public async publishHostAuthenticatedPresence(
+    untrustedHostId: string,
+    untrusted: unknown,
+  ) {
+    const hostId = hostIdSchema.parse(untrustedHostId)
     const presence = signedSupervisorHostPresenceSchema.parse(untrusted)
-    const repository = new HostIdentityRepository(this.database)
-    const host = await repository.findHost(hostId)
-    const now = this.now()
-    const payload = presence.payload
-    const expiresAt = new Date(payload.exp * 1_000)
-    if (
-      !host ||
-      host.owningSpaceId !== human.personalSpaceId ||
-      payload.hostId !== hostId ||
-      payload.hostFingerprint !== host.fingerprint ||
-      payload.hostIdentityGeneration !== host.claimGeneration ||
-      payload.spaceId !== human.personalSpaceId ||
-      payload.iat > Math.floor((now.getTime() + 120_000) / 1_000) ||
-      expiresAt <= now ||
-      expiresAt.getTime() - now.getTime() >
-        supervisorTransportLimits.descriptorLifetimeMs
-    ) {
-      throw new HostIdentityFailure('host_supervisor_transport_mismatch')
-    }
-    try {
-      const admitted = await admitHostPublicJwk(JSON.parse(host.publicKey))
-      await verifySupervisorHostPresence(presence, admitted.publicJwk)
-    } catch {
-      throw new HostIdentityFailure(
-        'host_supervisor_transport_signature_invalid',
-      )
-    }
-    await repository.publishHostSupervisorPresence({
-      hostId,
-      presence,
-      expiresAt,
-      now,
+    return this.database.transaction(async (transaction) => {
+      const repository = new HostIdentityRepository(transaction)
+      // Serialize against claim/generation/revocation changes, not just writes
+      // to the presence row. No user-supplied JWK or ownership is authoritative.
+      const host = await repository.findHostForUpdate(hostId)
+      const now = this.now()
+      const payload = presence.payload
+      const expiresAt = new Date(payload.exp * 1_000)
+      if (
+        !host ||
+        host.claimState !== 'claimed' ||
+        host.revokedAt !== null ||
+        host.owningSpaceId === null ||
+        payload.hostId !== hostId ||
+        payload.hostFingerprint !== host.fingerprint ||
+        payload.hostIdentityGeneration !== host.claimGeneration ||
+        payload.spaceId !== host.owningSpaceId ||
+        Math.abs(payload.iat * 1_000 - now.getTime()) >
+          supervisorTransportLimits.maximumClockSkewMs ||
+        expiresAt <= now ||
+        (payload.exp - payload.iat) * 1_000 >
+          supervisorTransportLimits.descriptorLifetimeMs
+      ) {
+        throw new HostIdentityFailure('host_supervisor_transport_mismatch')
+      }
+      try {
+        const admitted = await admitHostPublicJwk(JSON.parse(host.publicKey))
+        await verifySupervisorHostPresence(presence, admitted.publicJwk)
+      } catch {
+        throw new HostIdentityFailure(
+          'host_supervisor_transport_signature_invalid',
+        )
+      }
+      await repository.publishHostSupervisorPresence({
+        hostId,
+        presence,
+        expiresAt,
+        now,
+      })
+      return {
+        result: 'published' as const,
+        expiresAt: expiresAt.toISOString(),
+      }
     })
-    return { result: 'published' as const, expiresAt: expiresAt.toISOString() }
   }
 
   public async publishSupervisorTransport(

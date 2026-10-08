@@ -3,6 +3,8 @@ import {
   type RunningLocalCodexHost,
 } from './api/local-codex-host.js'
 import { createHostProcessLifecycle } from './host-process-lifecycle.js'
+import { HostPresenceSigningBridge } from './host-presence-signing.js'
+import type { SupervisorHostPresencePayload } from '@codetether/supervisor-transport'
 import {
   isDesktopManaged,
   parseServeArguments,
@@ -31,16 +33,30 @@ async function main(): Promise<void> {
   }
   const desktopManaged = isDesktopManaged()
   let host: RunningLocalCodexHost | undefined
+  const signer = new HostPresenceSigningBridge((line) =>
+    process.stdout.write(line),
+  )
   const lifecycle = createHostProcessLifecycle({
     desktopManaged,
     onNetworkRestored: () => {
       host?.service.requestNetworkRecovery('desktop_resume')
+      host?.requestPresenceRenewal?.()
     },
+    onPresenceSignature: (line) => signer.receive(line),
   })
   try {
     if (!(await lifecycle.activated) || lifecycle.isRequested) return
     const arguments_ = parseServeArguments(process.argv.slice(2), {
       desktopManaged,
+      ...(desktopManaged
+        ? {
+            signHostPresence: (
+              keyHandle: string,
+              payload: SupervisorHostPresencePayload,
+              signal: AbortSignal,
+            ) => signer.sign(keyHandle, payload, signal),
+          }
+        : {}),
     })
     const hostVersion = await resolveHostVersion()
     host = await startLocalCodexHost({

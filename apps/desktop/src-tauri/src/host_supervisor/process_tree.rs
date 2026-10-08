@@ -1,6 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 /// Private pipe ownership is shareable, numeric process authority is not.
+#[derive(Clone)]
 pub struct CommandChild(Arc<Mutex<Option<tauri_plugin_shell::process::CommandChild>>>);
 
 impl CommandChild {
@@ -11,12 +12,12 @@ impl CommandChild {
         self.0.lock().unwrap().as_ref().expect("owned child").pid()
     }
     pub fn write(&mut self, bytes: &[u8]) -> Result<(), tauri_plugin_shell::Error> {
-        self.0
-            .lock()
-            .unwrap()
-            .as_mut()
-            .expect("owned child")
-            .write(bytes)
+        match self.0.lock().unwrap().as_mut() {
+            Some(child) => child.write(bytes),
+            None => Err(
+                std::io::Error::new(std::io::ErrorKind::BrokenPipe, "owned child exited").into(),
+            ),
+        }
     }
     pub fn kill(self) -> Result<(), tauri_plugin_shell::Error> {
         #[cfg(windows)]

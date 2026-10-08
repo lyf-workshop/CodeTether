@@ -163,6 +163,21 @@ const migrations: readonly Migration[] = [
     name: 'conversation_create_actions',
     up: migrateConversationCreateActions,
   },
+  {
+    version: 23,
+    name: 'host_presence_configuration',
+    up: (database) =>
+      database.exec(`
+      CREATE TABLE host_presence_configuration (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        space_id TEXT NOT NULL,
+        control_plane_origin TEXT NOT NULL,
+        enabled INTEGER NOT NULL CHECK (enabled IN (0, 1))
+      ) STRICT;
+      ALTER TABLE host_supervisor_grants ADD COLUMN runtime_enabled INTEGER
+        NOT NULL DEFAULT 1 CHECK (runtime_enabled IN (0, 1));
+    `),
+  },
 ]
 
 export const currentSchemaVersion = migrations.at(-1)?.version ?? 0

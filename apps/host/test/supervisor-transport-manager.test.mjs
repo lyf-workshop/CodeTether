@@ -212,6 +212,8 @@ test('forced-remote manager reads Host state without using local HTTP product da
   }
   let storedGrant
   const persistence = {
+    enableHostSupervisorGrant() {},
+    pruneHostSupervisorGrants() {},
     storeHostSupervisorGrant(grant) {
       storedGrant = grant
       return grant
@@ -502,7 +504,11 @@ test('forced Relay HTTP admission stays single-session while Direct fallback rem
       return { marker: 'relay-live', events: [], active: false }
     },
   }
-  const persistence = { storeHostSupervisorGrant: (grant) => grant }
+  const persistence = {
+    storeHostSupervisorGrant: (grant) => grant,
+    enableHostSupervisorGrant() {},
+    pruneHostSupervisorGrants() {},
+  }
   const manager = await SupervisorTransportManager.create({
     service,
     persistence,

@@ -61,6 +61,7 @@ import {
   parseSupervisorRelayConfiguration,
   SupervisorTransportManager,
 } from './supervisor-transport-manager.js'
+import type { SupervisorHostPresencePayload } from '@codetether/supervisor-transport'
 
 export interface LocalCodexHostOptions {
   readonly allowedWorkspaceRoots?: readonly string[]
@@ -91,6 +92,11 @@ export interface LocalCodexHostOptions {
   readonly supervisorPort?: number
   readonly supervisorBindHost?: string
   readonly supervisorAdvertiseHost?: string
+  readonly signHostPresence?: (
+    keyHandle: string,
+    payload: SupervisorHostPresencePayload,
+    signal: AbortSignal,
+  ) => Promise<string>
 }
 
 export interface RunningLocalCodexHost {
@@ -98,6 +104,7 @@ export interface RunningLocalCodexHost {
   readonly epoch: string
   readonly service: HostService
   readonly databasePath?: string
+  requestPresenceRenewal?(): void
   close(): Promise<void>
 }
 
@@ -432,6 +439,12 @@ export async function startLocalCodexHostWithRuntime(
         persistence,
         clientBuildIdentity: options.hostVersion,
         relay: parseSupervisorRelayConfiguration(process.env),
+        ...(options.signHostPresence === undefined
+          ? {}
+          : { signHostPresence: options.signHostPresence }),
+        ...(process.env.CODETETHER_CONTROL_PLANE_URL === undefined
+          ? {}
+          : { controlPlaneOrigin: process.env.CODETETHER_CONTROL_PLANE_URL }),
         port:
           options.supervisorPort ??
           (options.desktopManaged === true ? 4318 : 0),
@@ -473,6 +486,8 @@ export async function startLocalCodexHostWithRuntime(
       baseUrl,
       epoch: publisher.epoch,
       service,
+      requestPresenceRenewal: () =>
+        supervisorTransport?.requestPresenceRenewal(),
       ...(persistence === undefined
         ? {}
         : { databasePath: persistence.databasePath }),

@@ -25,6 +25,7 @@ export interface HostProcessLifecycleOptions {
   readonly signalSource?: EventEmitter
   readonly maxDesktopCommandBytes?: number
   readonly onNetworkRestored?: (generation: number) => void
+  readonly onPresenceSignature?: (line: string) => void
 }
 
 /**
@@ -120,6 +121,10 @@ export function createHostProcessLifecycle(
       }
       if (line === 'start') {
         activate()
+        continue
+      }
+      if (line.startsWith('host-presence-signature ')) {
+        options.onPresenceSignature?.(line)
         continue
       }
       if (line.startsWith('network-restored')) {

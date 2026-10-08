@@ -10,17 +10,16 @@ import {
   resolveExistingProductDevice,
 } from './control-plane-client.js'
 import {
-  publishLocalSupervisorPresence,
+  reconcileLocalSupervisorGrants,
   readLocalHostIdentity,
 } from './remote-supervisor.js'
 import { getSupabaseAccountClient } from './supabase-account.js'
 
-const PRESENCE_REFRESH_MS = 60_000
+const GRANT_REFRESH_MS = 60_000
 
 /**
- * Keeps the authenticated local Host's Control Plane transport descriptor
- * fresh independent of which Desktop product page is currently visible. The
- * Host itself owns the configured outbound Relay presence for its lifetime.
+ * Authenticated OWNER grant reconciliation only. The Host runtime signs and
+ * publishes its own presence; losing this component cannot expire its lease.
  */
 export function LocalSupervisorPresenceCoordinator() {
   const supabase = getSupabaseAccountClient()
@@ -48,7 +47,7 @@ export function LocalSupervisorPresenceCoordinator() {
   }, [supabase])
 
   const directory = useQuery({
-    queryKey: ['account', 'supervisor-presence-owned-hosts', session?.user.id],
+    queryKey: ['account', 'supervisor-grants-owned-hosts', session?.user.id],
     queryFn: async ({ signal }) => {
       if (session === null || session === undefined) {
         throw new Error('account_session_unavailable')
@@ -71,9 +70,8 @@ export function LocalSupervisorPresenceCoordinator() {
     enabled: session !== null && session !== undefined,
     retry: false,
     staleTime: 0,
-    refetchInterval: PRESENCE_REFRESH_MS,
-    // Host presence must continue while the macOS window is hidden in the
-    // background; the tray-owned Host remains explicitly enabled.
+    refetchInterval: GRANT_REFRESH_MS,
+    // Grant metadata observation is not a Host liveness authority.
     refetchIntervalInBackground: true,
   })
   const localIdentity = useQuery({
@@ -90,7 +88,7 @@ export function LocalSupervisorPresenceCoordinator() {
       host.identityGeneration === localIdentity.data.identityGeneration,
   )
   useQuery({
-    queryKey: ['account', 'host-supervisor-presence', localHost?.hostId],
+    queryKey: ['account', 'host-supervisor-grants', localHost?.hostId],
     queryFn: async ({ signal }) => {
       if (
         session === null ||
@@ -101,7 +99,7 @@ export function LocalSupervisorPresenceCoordinator() {
       ) {
         throw new Error('local_host_unavailable')
       }
-      await publishLocalSupervisorPresence({
+      await reconcileLocalSupervisorGrants({
         session,
         controlPlaneBaseUrl,
         host: localHost,
@@ -119,9 +117,8 @@ export function LocalSupervisorPresenceCoordinator() {
       connectionState === 'connected',
     retry: false,
     staleTime: 0,
-    refetchInterval: PRESENCE_REFRESH_MS,
-    // The Control Plane lease is owned by the background Host lifecycle, not
-    // by whether the main Desktop window is currently visible.
+    refetchInterval: GRANT_REFRESH_MS,
+    // Host liveness continues even if this grant observation stops entirely.
     refetchIntervalInBackground: true,
   })
 

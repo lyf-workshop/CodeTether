@@ -31,7 +31,6 @@ import {
 } from './control-plane-client.js'
 
 const GRANT_TYPE = 'codetether-host-supervisor-grant+jws'
-const DESCRIPTOR_TYPE = 'codetether-host-supervisor-transport+jws'
 
 export interface LocalHostIdentityRecord {
   readonly hostId: string
@@ -103,9 +102,7 @@ export interface RemoteConversationDirectoryPage {
   readonly nextCursor?: string
 }
 
-export async function readLocalHostIdentity(): Promise<
-  LocalHostIdentityRecord | null
-> {
+export async function readLocalHostIdentity(): Promise<LocalHostIdentityRecord | null> {
   const response = await fetch(`${hostBaseUrl}/api/v1/host/identity`, {
     headers: { accept: 'application/json' },
   })
@@ -170,9 +167,12 @@ export async function enableLocalHostIdentity(
 }
 
 async function markLocalHostIdentityRegistered(): Promise<void> {
-  const response = await fetch(`${hostBaseUrl}/api/v1/host/identity/registered`, {
-    method: 'POST',
-  })
+  const response = await fetch(
+    `${hostBaseUrl}/api/v1/host/identity/registered`,
+    {
+      method: 'POST',
+    },
+  )
   if (!response.ok) throw new Error('host_identity_registration_persist_failed')
 }
 
@@ -278,7 +278,7 @@ async function closeRemoteSupervisorSession(
   if (remoteSessions.get(hostId) === session) remoteSessions.delete(hostId)
 }
 
-export async function publishLocalSupervisorPresence(options: {
+export async function reconcileLocalSupervisorGrants(options: {
   readonly session: Session
   readonly controlPlaneBaseUrl: string
   readonly host: Pick<
@@ -308,40 +308,24 @@ export async function publishLocalSupervisorPresence(options: {
     hostId: options.host.hostId,
     signal: options.signal,
   })
-  const presence = await readJson(`${hostBaseUrl}/api/v1/supervisor/presence`, {
-    signal: options.signal,
-  })
-  const transportTlsFingerprint = boundedString(
-    presence,
-    'transportTlsFingerprint',
+  // Configure public claim context, then consume the Host runtime's signed
+  // descriptor. This UI flow reconciles grants, NEVER publishes a cloud lease.
+  const configured = await postLocalJson(
+    '/api/v1/supervisor/presence/configure',
+    {
+      spaceId: options.host.spaceId,
+      controlPlaneOrigin: new URL(options.controlPlaneBaseUrl).origin,
+    },
   )
-  const directEndpoints = parseDirectEndpoints(presence.directEndpoints)
-  const relay = parseRelayPresence(presence.relay)
-  const now = Math.floor(Date.now() / 1_000)
-  const descriptorPayload: SupervisorHostPresencePayload = {
-    v: 1,
-    aud: 'codetether-host-supervisor',
-    purpose: 'host_supervisor_presence',
-    hostId: options.host.hostId,
-    hostFingerprint: options.host.fingerprint,
-    hostIdentityGeneration: options.host.identityGeneration,
-    spaceId: options.host.spaceId,
-    transportTlsFingerprint,
-    controlPlaneOrigin: new URL(options.controlPlaneBaseUrl).origin,
-    directEndpoints,
-    relay,
-    iat: now,
-    exp: now + 600,
-    protocolVersion: 2,
-  }
-  const descriptor: SignedSupervisorTransportDescriptor = {
-    payload: descriptorPayload,
-    proof: await signHostProof(
-      options.hostIdentity,
-      options.localIdentity.keyHandle,
-      DESCRIPTOR_TYPE,
-      descriptorPayload,
-    ),
+  const descriptor = parseSignedTransport(configured.descriptor)
+  if (
+    descriptor.payload.hostId !== options.host.hostId ||
+    descriptor.payload.hostFingerprint !== options.host.fingerprint ||
+    descriptor.payload.hostIdentityGeneration !==
+      options.host.identityGeneration ||
+    descriptor.payload.spaceId !== options.host.spaceId
+  ) {
+    throw new Error('local_host_identity_mismatch')
   }
   for (const authorization of authorizations) {
     if (
@@ -416,15 +400,6 @@ export async function publishLocalSupervisorPresence(options: {
       descriptor,
     })
   }
-  await postAuthenticatedProductDeviceJson({
-    accessToken: options.session.access_token,
-    baseUrl: options.controlPlaneBaseUrl,
-    identity: options.deviceIdentity,
-    productDevice: options.productDevice,
-    resource: `/v1/hosts/${options.host.hostId}/supervisor-host-presence`,
-    value: descriptor,
-    signal: options.signal,
-  })
 }
 
 export async function connectRemoteSupervisor(options: {
@@ -972,7 +947,7 @@ function parseDirectEndpoints(value: unknown): readonly {
   readonly host: string
   readonly port: number
 }[] {
-  if (!Array.isArray(value) || value.length === 0 || value.length > 8) {
+  if (!Array.isArray(value) || value.length > 8) {
     throw new Error('Supervisor presence is invalid')
   }
   return value.map((entry) => {
@@ -983,6 +958,49 @@ function parseDirectEndpoints(value: unknown): readonly {
     }
     return { host, port: Number(record.port) }
   })
+}
+
+function parseSignedTransport(
+  value: unknown,
+): SignedSupervisorTransportDescriptor & {
+  payload: SupervisorHostPresencePayload
+} {
+  const signed = asRecord(value)
+  const payload = asRecord(signed.payload)
+  if (
+    payload.v !== 1 ||
+    payload.aud !== 'codetether-host-supervisor' ||
+    payload.purpose !== 'host_supervisor_presence' ||
+    payload.protocolVersion !== 2 ||
+    !Number.isSafeInteger(payload.iat) ||
+    !Number.isSafeInteger(payload.exp) ||
+    Number(payload.exp) * 1_000 <= Date.now() ||
+    !Number.isSafeInteger(payload.hostIdentityGeneration)
+  ) {
+    throw new Error('Supervisor presence is invalid')
+  }
+  return {
+    proof: boundedString(signed, 'proof'),
+    payload: {
+      v: 1,
+      aud: 'codetether-host-supervisor',
+      purpose: 'host_supervisor_presence',
+      protocolVersion: 2,
+      hostId: boundedString(payload, 'hostId'),
+      hostFingerprint: boundedString(payload, 'hostFingerprint'),
+      hostIdentityGeneration: Number(payload.hostIdentityGeneration),
+      spaceId: boundedString(payload, 'spaceId'),
+      transportTlsFingerprint: boundedString(
+        payload,
+        'transportTlsFingerprint',
+      ),
+      controlPlaneOrigin: boundedString(payload, 'controlPlaneOrigin'),
+      directEndpoints: parseDirectEndpoints(payload.directEndpoints),
+      relay: parseRelayPresence(payload.relay),
+      iat: Number(payload.iat),
+      exp: Number(payload.exp),
+    },
+  }
 }
 
 function parseRelayPresence(

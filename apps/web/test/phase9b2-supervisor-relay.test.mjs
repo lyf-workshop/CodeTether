@@ -58,20 +58,21 @@ test('remote Controller reads do not require the local Host identity', async () 
   assert.match(remote, /deviceIdentity: ProductDeviceIdentityCapability/u)
 })
 
-test('Supervisor Relay presence is maintained outside the My Hosts route', async () => {
+test('UI grant reconciliation is outside My Hosts but does not own cloud presence renewal', async () => {
   const [main, presence] = await Promise.all([
     readFile(mainPath, 'utf8'),
     readFile(presencePath, 'utf8'),
   ])
   assert.match(main, /<LocalSupervisorPresenceCoordinator \/>/u)
-  assert.match(presence, /PRESENCE_REFRESH_MS = 60_000/u)
-  assert.match(presence, /publishLocalSupervisorPresence/u)
+  assert.match(presence, /GRANT_REFRESH_MS = 60_000/u)
+  assert.match(presence, /reconcileLocalSupervisorGrants/u)
+  assert.doesNotMatch(presence, /publishLocalSupervisorPresence/u)
   assert.match(presence, /listOwnedHosts/u)
   assert.match(presence, /connectionState === 'connected'/u)
   assert.equal(
     (presence.match(/refetchIntervalInBackground:\s*true/gu) ?? []).length,
     2,
-    'directory and presence polling must continue while the window is hidden',
+    'directory and grant observation may continue while hidden, but do not renew the lease',
   )
   assert.doesNotMatch(presence, /Controller|Node pairing|machine_tls_v1/u)
 })
@@ -88,7 +89,7 @@ test('presence reads cannot populate the My Hosts directory cache with a partial
     /queryKey:\s*\[\s*'account',\s*'([^']+)',/u,
   )?.[1]
   assert.equal(directoryKey, 'host-directory')
-  assert.equal(presenceKey, 'supervisor-presence-owned-hosts')
+  assert.equal(presenceKey, 'supervisor-grants-owned-hosts')
   assert.notEqual(directoryKey, presenceKey)
   assert.match(directory, /return \{ hosts, ownedHosts, productDevice \}/u)
   assert.match(presence, /return \{ hosts, productDevice \}/u)

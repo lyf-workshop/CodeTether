@@ -1,5 +1,13 @@
 # CodeTether Product Specification
 
+## Phase 10.6A availability decision
+
+An enabled, claimed Host must remain discoverable while its native background
+runtime is alive without a mounted/visible renderer or usable interactive account
+session. Controller-only installs publish no Host presence. Real OS sleep may
+expire leases; wake must recover. Existing sign-out does not unclaim/disable a
+Host; no destructive logout policy is added. See [Phase 10.6A](PHASE10-6A-HOST-AUTHENTICATED-PRESENCE.md).
+
 ## Vision
 
 CodeTether will become **a control center for AI coding agents**: a coherent workspace where developers can see what agents are doing, guide their work, control risk, and continue tasks across their own machines without separately managing every provider CLI.

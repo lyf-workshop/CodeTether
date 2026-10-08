@@ -713,7 +713,14 @@ export class HostIdentityRepository {
          SET payload=EXCLUDED.payload,
              proof=EXCLUDED.proof,
              expires_at=EXCLUDED.expires_at,
-             updated_at=EXCLUDED.updated_at`,
+             updated_at=EXCLUDED.updated_at
+       WHERE (EXCLUDED.payload->>'hostIdentityGeneration')::bigint >
+                 (host_supervisor_presence.payload->>'hostIdentityGeneration')::bigint
+          OR ((EXCLUDED.payload->>'hostIdentityGeneration')::bigint =
+                 (host_supervisor_presence.payload->>'hostIdentityGeneration')::bigint
+              AND (EXCLUDED.payload->>'iat')::bigint >
+                 (host_supervisor_presence.payload->>'iat')::bigint
+              AND EXCLUDED.expires_at > host_supervisor_presence.expires_at)`,
       [
         input.hostId,
         JSON.stringify(input.presence.payload),

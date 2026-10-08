@@ -251,6 +251,13 @@ impl HostSupervisor {
         let command = command
             .args(["--port", "4317", "--origin", origin])
             .env("CODETETHER_DESKTOP_MANAGED", "1");
+        let command = match std::env::var("CODETETHER_CONTROL_PLANE_URL")
+            .ok()
+            .or_else(|| option_env!("VITE_CODETETHER_CONTROL_PLANE_URL").map(str::to_owned))
+        {
+            Some(origin) => command.env("CODETETHER_CONTROL_PLANE_URL", origin),
+            None => command,
+        };
         let (mut events, child) = command
             .spawn()
             .map_err(|error| StartError::Spawn(error.to_string()))?;
@@ -275,11 +282,18 @@ impl HostSupervisor {
         let observation = ProcessObservation::new();
         let monitor_observation = observation.clone();
         let monitor_app = app.clone();
+        let mut signing_pipe = child.clone();
         tauri::async_runtime::spawn(async move {
             while let Some(event) = events.recv().await {
                 match event {
                     CommandEvent::Stdout(line) => {
                         if let Ok(text) = std::str::from_utf8(&line) {
+                            if let Some(reply) = crate::host_presence_signer::respond(text.trim()) {
+                                if !reply.is_empty() {
+                                    let _ = signing_pipe.write(reply.as_bytes());
+                                }
+                                continue;
+                            }
                             eprintln!("[codetether:host] {}", text.trim());
                         }
                     }

@@ -127,6 +127,13 @@ const supervisorActivationSchema = z
     descriptor: signedSupervisorTransportSchema,
   })
   .strict()
+const hostPresenceConfigurationSchema = z
+  .object({
+    spaceId: z.string().regex(/^space_[A-Za-z0-9][A-Za-z0-9_-]{15,95}$/u),
+    controlPlaneOrigin: z.string().url().max(2048),
+    enabled: z.boolean().optional(),
+  })
+  .strict()
 const supervisorActivationPruneSchema = z
   .object({
     authorizationIds: z
@@ -523,6 +530,25 @@ export class LocalHttpServer {
           response,
           200,
           this.#supervisorTransport.presence(),
+          context.allowedOrigin,
+        )
+        return
+      }
+      if (
+        request.method === 'POST' &&
+        url.pathname === '/api/v1/supervisor/presence/configure' &&
+        this.#supervisorTransport !== undefined
+      ) {
+        const body = await this.#http.readValidatedBody(
+          request,
+          hostPresenceConfigurationSchema,
+        )
+        const descriptor =
+          await this.#supervisorTransport.configureHostPresence(body)
+        this.#http.writeJson(
+          response,
+          200,
+          { descriptor },
           context.allowedOrigin,
         )
         return

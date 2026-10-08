@@ -1,5 +1,13 @@
 # CodeTether Architecture
 
+## Phase 10.6A approved Host presence boundary
+
+Own short-lived Host presence uses only the existing Host signature and canonical
+Control Plane Host record. A Host background worker, not renderer/account
+refresh, owns renewal. All account/device/claim/authorization APIs keep user and
+ProductDevice authentication. Relay remains opaque transport; Host remains
+workspace authority. See [Phase 10.6A](PHASE10-6A-HOST-AUTHENTICATED-PRESENCE.md).
+
 ## Status
 
 Owner accepted and froze **Phase 8C** at `67c71f2e3ad390004cc60fe30925224a02aba485`

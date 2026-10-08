@@ -48,8 +48,8 @@ test('migration 014 creates the bounded Relay configuration atomically', () => {
     rolledBack.close()
 
     const migrated = ConversationStore.open({ databasePath })
-    assert.equal(currentSchemaVersion, 22)
-    assert.equal(migrated.schemaVersion, 22)
+    assert.equal(currentSchemaVersion, 23)
+    assert.equal(migrated.schemaVersion, 23)
     migrated.close()
 
     const inspect = new DatabaseSync(databasePath)

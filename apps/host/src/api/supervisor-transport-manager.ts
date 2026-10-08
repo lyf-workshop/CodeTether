@@ -9,12 +9,17 @@ import {
   generateSupervisorTlsIdentity,
   isLoopbackSupervisorHost,
   signedSupervisorGrantSchema,
+  signedSupervisorHostPresenceSchema,
   signedSupervisorTransportSchema,
   supervisorPublicJwkSchema,
   supervisorTransportLimits,
   SupervisorClientError,
   SupervisorServer,
   validateSupervisorConnection,
+  verifySupervisorGrant,
+  verifySupervisorHostPresence,
+  type SignedSupervisorHostPresence,
+  type SupervisorHostPresencePayload,
   type ConnectedSupervisorSession,
   type PendingSupervisorConnection,
   type SignedSupervisorGrant,
@@ -31,6 +36,7 @@ import {
 
 import type { HostService } from './host-service.js'
 import type { ConversationStore } from '../persistence/index.js'
+import { HostPresencePublisher } from './host-presence-publisher.js'
 
 const MAX_OUTBOUND_CONNECTIONS = 8
 const RELAY_RECONNECT_MINIMUM_MS = 1_000
@@ -52,6 +58,12 @@ export interface SupervisorTransportManagerOptions {
   readonly allowLoopbackForTests?: boolean
   readonly clientBuildIdentity: string
   readonly relay?: SupervisorRelayConfiguration
+  readonly controlPlaneOrigin?: string
+  readonly signHostPresence?: (
+    keyHandle: string,
+    payload: SupervisorHostPresencePayload,
+    signal: AbortSignal,
+  ) => Promise<string>
 }
 
 export interface SupervisorTransportPresence {
@@ -93,6 +105,10 @@ export class SupervisorTransportManager {
   #relayAbort: AbortController | undefined
   #relayConnection: SupervisorRelayControlConnection | undefined
   #relayTask: Promise<void> | undefined
+  #presencePublisher: HostPresencePublisher | undefined
+  #presenceConstruction:
+    Promise<SignedSupervisorHostPresence | undefined> | undefined
+  readonly #signHostPresence: SupervisorTransportManagerOptions['signHostPresence']
 
   private constructor(
     options: SupervisorTransportManagerOptions,
@@ -103,6 +119,7 @@ export class SupervisorTransportManager {
     this.#server = server
     this.#clientBuildIdentity = options.clientBuildIdentity
     this.#relay = options.relay
+    this.#signHostPresence = options.signHostPresence
     this.#allowLoopbackForTests = options.allowLoopbackForTests === true
     this.#relayRendezvousId = `srv_${randomBytes(16).toString('hex')}`
     this.#relayRendezvousCapability = randomBytes(32).toString('base64url')
@@ -320,7 +337,170 @@ export class SupervisorTransportManager {
     const manager = new SupervisorTransportManager(options, server)
     await server.start()
     manager.#startRelayPresence()
+    await manager.#restorePresenceConfiguration(options.controlPlaneOrigin)
+    manager.#ensurePresencePublisher()
     return manager
+  }
+
+  requestPresenceRenewal(): void {
+    this.#presencePublisher?.requestRenewal()
+  }
+
+  #ensurePresencePublisher(): void {
+    if (
+      this.#presencePublisher !== undefined ||
+      this.#signHostPresence === undefined ||
+      !this.#service.getHostIdentity()?.lastRegisteredAt ||
+      !this.#persistence.getHostPresenceConfiguration()?.enabled
+    )
+      return
+    this.#presencePublisher = new HostPresencePublisher({
+      createPresence: (signal) => this.#createHostPresence(signal),
+      onState: (state) =>
+        process.stderr.write(
+          `${JSON.stringify({ component: 'host', event: 'supervisor.host_presence', state })}\n`,
+        ),
+    })
+  }
+
+  async configureHostPresence(input: {
+    spaceId: string
+    controlPlaneOrigin: string
+    enabled?: boolean
+  }): Promise<SignedSupervisorHostPresence | null> {
+    const identity = this.#service.getHostIdentity()
+    if (
+      identity?.lastRegisteredAt === undefined ||
+      this.#signHostPresence === undefined
+    )
+      throw new Error('Registered Host signer is unavailable')
+    const origin = new URL(input.controlPlaneOrigin)
+    if (
+      !/^space_[A-Za-z0-9][A-Za-z0-9_-]{15,95}$/u.test(input.spaceId) ||
+      origin.origin !== input.controlPlaneOrigin ||
+      origin.username ||
+      origin.password ||
+      (origin.protocol !== 'https:' &&
+        !(
+          origin.protocol === 'http:' &&
+          ['localhost', '127.0.0.1', '[::1]'].includes(origin.hostname)
+        ))
+    ) {
+      throw new Error('Invalid Host presence configuration')
+    }
+    const current = this.#persistence.getHostPresenceConfiguration()
+    const enabled = input.enabled !== false
+    if (
+      current?.spaceId === input.spaceId &&
+      current.controlPlaneOrigin === input.controlPlaneOrigin &&
+      current.enabled === enabled
+    ) {
+      const last = this.#presencePublisher?.lastPresence
+      if (last !== undefined && last.payload.exp * 1_000 > Date.now())
+        return last
+    }
+    this.#persistence.configureHostPresence({ ...input, enabled })
+    if (!enabled) {
+      await this.#presencePublisher?.close()
+      this.#presencePublisher = undefined
+      return null
+    }
+    // Local signing/configuration is not an HTTP publication or a renewal owner.
+    const result =
+      (await this.#createHostPresence(AbortSignal.timeout(10_000))) ?? null
+    this.#ensurePresencePublisher()
+    this.requestPresenceRenewal()
+    return result
+  }
+
+  async #restorePresenceConfiguration(origin?: string): Promise<void> {
+    if (
+      origin === undefined ||
+      this.#persistence.getHostPresenceConfiguration() !== undefined
+    )
+      return
+    const identity = this.#service.getHostIdentity()
+    if (identity?.lastRegisteredAt === undefined) return
+    const jwk = supervisorPublicJwkSchema.parse(JSON.parse(identity.publicJwk))
+    for (const grant of this.#persistence.listEnabledHostSupervisorGrants()) {
+      if (
+        grant.payload.hostId !== identity.hostId ||
+        grant.payload.hostFingerprint !== identity.fingerprint ||
+        grant.payload.hostIdentityGeneration !== identity.identityGeneration
+      )
+        continue
+      try {
+        await verifySupervisorGrant(grant, jwk)
+      } catch {
+        continue
+      }
+      this.#persistence.configureHostPresence({
+        spaceId: grant.payload.spaceId,
+        controlPlaneOrigin: new URL(origin).origin,
+        enabled: true,
+      })
+      return
+    }
+  }
+
+  async #createHostPresence(
+    signal: AbortSignal,
+  ): Promise<SignedSupervisorHostPresence | undefined> {
+    this.#presenceConstruction ??= this.#buildHostPresence(signal).finally(
+      () => {
+        this.#presenceConstruction = undefined
+      },
+    )
+    return await this.#presenceConstruction
+  }
+
+  async #buildHostPresence(
+    signal: AbortSignal,
+  ): Promise<SignedSupervisorHostPresence | undefined> {
+    const identity = this.#service.getHostIdentity()
+    const config = this.#persistence.getHostPresenceConfiguration()
+    if (
+      !identity?.lastRegisteredAt ||
+      !config?.enabled ||
+      this.#signHostPresence === undefined
+    )
+      return undefined
+    const now = Math.floor(Date.now() / 1_000)
+    const payload = signedSupervisorHostPresenceSchema.shape.payload.parse({
+      v: 1,
+      aud: 'codetether-host-supervisor',
+      purpose: 'host_supervisor_presence',
+      hostId: identity.hostId,
+      hostFingerprint: identity.fingerprint,
+      hostIdentityGeneration: identity.identityGeneration,
+      spaceId: config.spaceId,
+      controlPlaneOrigin: config.controlPlaneOrigin,
+      ...this.presence(),
+      iat: now,
+      exp: now + supervisorTransportLimits.descriptorLifetimeMs / 1_000,
+      protocolVersion: 2,
+    })
+    const descriptor = {
+      payload,
+      proof: await this.#signHostPresence(identity.keyHandle, payload, signal),
+    }
+    const hostPublicJwk = supervisorPublicJwkSchema.parse(
+      JSON.parse(identity.publicJwk),
+    )
+    await verifySupervisorHostPresence(descriptor, hostPublicJwk)
+    for (const grant of this.#persistence.listEnabledHostSupervisorGrants()) {
+      if (grant.payload.expiresAt * 1_000 <= Date.now()) continue
+      // Server activation verifies all Host/grant/scope bindings. Cloud admission
+      // still checks revocation on EVERY incoming session; no cloud row is made.
+      try {
+        await this.#server.activate({ hostPublicJwk, grant, descriptor })
+      } catch {
+        process.stderr.write(
+          `${JSON.stringify({ component: 'host', event: 'supervisor.grant.restore_rejected', authorizationId: grant.payload.authorizationId })}\n`,
+        )
+      }
+    }
+    return descriptor
   }
 
   presence(): SupervisorTransportPresence {
@@ -374,10 +554,12 @@ export class SupervisorTransportManager {
       TimestampSchema.parse(new Date().toISOString()),
     )
     await this.#server.activate({ hostPublicJwk: publicJwk, grant, descriptor })
+    this.#persistence.enableHostSupervisorGrant(grant.payload.authorizationId)
     this.#startRelayPresence()
   }
 
   pruneActivations(authorizationIds: readonly string[]): void {
+    this.#persistence.pruneHostSupervisorGrants(authorizationIds)
     this.#server.pruneActivations(new Set(authorizationIds))
   }
 
@@ -750,6 +932,7 @@ export class SupervisorTransportManager {
   }
 
   async close(): Promise<void> {
+    await this.#presencePublisher?.close()
     this.#relayAbort?.abort()
     this.#relayConnection?.close()
     await this.#relayTask?.catch(() => undefined)

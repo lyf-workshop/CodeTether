@@ -717,6 +717,34 @@ export async function startControlPlaneServer(
         sendJson(response, 400, { status: 'invalid_request' }, false)
         return
       }
+      // This sole route accepts Host authentication. No account API inherits it.
+      if (operation === 'supervisor-host-presence') {
+        if (!options.hostIdentityService) {
+          sendJson(response, 503, { status: 'auth_unavailable' }, false)
+          return
+        }
+        try {
+          const body = await readBoundedBody(request, 48_000)
+          const result =
+            await options.hostIdentityService.publishHostAuthenticatedPresence(
+              supervisorRouteMatch[1],
+              parseJsonObject(body),
+            )
+          sendJson(response, 200, result, false)
+        } catch (error) {
+          if (error instanceof HostIdentityFailure) {
+            sendJson(
+              response,
+              hostIdentityFailureStatus(error),
+              { status: 'host_identity_failed', code: error.code },
+              false,
+            )
+          } else {
+            sendJson(response, 400, { status: 'invalid_request' }, false)
+          }
+        }
+        return
+      }
       if (
         !options.humanAuthVerifier ||
         !options.authenticatedAccountService ||
@@ -760,33 +788,26 @@ export async function startControlPlaneServer(
                 device,
                 hostId,
               )
-            : operation === 'supervisor-host-presence'
-              ? await options.hostIdentityService.publishHostSupervisorPresence(
+            : operation === 'supervisor-grant/materialize'
+              ? await options.hostIdentityService.materializeSupervisorGrant(
                   human,
                   device,
                   hostId,
                   input,
                 )
-              : operation === 'supervisor-grant/materialize'
-                ? await options.hostIdentityService.materializeSupervisorGrant(
+              : operation === 'supervisor-presence'
+                ? await options.hostIdentityService.publishSupervisorTransport(
                     human,
                     device,
                     hostId,
                     input,
                   )
-                : operation === 'supervisor-presence'
-                  ? await options.hostIdentityService.publishSupervisorTransport(
-                      human,
-                      device,
-                      hostId,
-                      input,
-                    )
-                  : await options.hostIdentityService.authorizeSupervisorAdmission(
-                      human,
-                      device,
-                      hostId,
-                      input,
-                    )
+                : await options.hostIdentityService.authorizeSupervisorAdmission(
+                    human,
+                    device,
+                    hostId,
+                    input,
+                  )
         sendJson(response, 200, result, false)
       } catch (error) {
         if (error instanceof InvalidRequestBodyError) {

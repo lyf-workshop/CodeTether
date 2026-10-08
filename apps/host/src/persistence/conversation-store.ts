@@ -703,6 +703,62 @@ export class ConversationStore {
     })
   }
 
+  getHostPresenceConfiguration():
+    | { spaceId: string; controlPlaneOrigin: string; enabled: boolean }
+    | undefined {
+    const row = this.#statement(
+      'SELECT * FROM host_presence_configuration WHERE singleton=1',
+    ).get() as
+      | { space_id: string; control_plane_origin: string; enabled: number }
+      | undefined
+    return row === undefined
+      ? undefined
+      : {
+          spaceId: row.space_id,
+          controlPlaneOrigin: row.control_plane_origin,
+          enabled: row.enabled === 1,
+        }
+  }
+
+  configureHostPresence(value: {
+    spaceId: string
+    controlPlaneOrigin: string
+    enabled: boolean
+  }): void {
+    this.#statement(
+      `INSERT INTO host_presence_configuration VALUES (1, ?, ?, ?)
+      ON CONFLICT(singleton) DO UPDATE SET space_id=excluded.space_id,
+        control_plane_origin=excluded.control_plane_origin, enabled=excluded.enabled`,
+    ).run(value.spaceId, value.controlPlaneOrigin, value.enabled ? 1 : 0)
+  }
+
+  listEnabledHostSupervisorGrants(): readonly SignedSupervisorGrant[] {
+    const rows = this.#statement(
+      'SELECT authorization_id FROM host_supervisor_grants WHERE runtime_enabled=1 ORDER BY authorization_id LIMIT 65',
+    ).all() as { authorization_id: string }[]
+    if (rows.length > 64) throw new Error('Host grant capacity exceeded')
+    return rows.map((row) => this.getHostSupervisorGrant(row.authorization_id)!)
+  }
+
+  enableHostSupervisorGrant(authorizationId: string): void {
+    this.#statement(
+      'UPDATE host_supervisor_grants SET runtime_enabled=1 WHERE authorization_id=?',
+    ).run(authorizationId)
+  }
+
+  pruneHostSupervisorGrants(authorizationIds: readonly string[]): void {
+    const allowed = new Set(authorizationIds)
+    this.runInTransaction(() => {
+      for (const grant of this.listEnabledHostSupervisorGrants()) {
+        if (!allowed.has(grant.payload.authorizationId)) {
+          this.#statement(
+            'UPDATE host_supervisor_grants SET runtime_enabled=0 WHERE authorization_id=?',
+          ).run(grant.payload.authorizationId)
+        }
+      }
+    })
+  }
+
   storeHostSupervisorGrant(
     grant: SignedSupervisorGrant,
     materializedAt: Timestamp,

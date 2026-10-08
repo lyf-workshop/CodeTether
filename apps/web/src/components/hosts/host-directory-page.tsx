@@ -39,7 +39,7 @@ import {
   connectRemoteSupervisor,
   deriveLocalHostLifecycleState,
   enrollLocalHost,
-  publishLocalSupervisorPresence,
+  reconcileLocalSupervisorGrants,
   readLocalHostIdentity,
   type LocalHostIdentityRecord,
 } from '../../runtime/account/remote-supervisor.js'
@@ -798,7 +798,7 @@ function ConnectedHostCard({
     queryKey: ['account', 'host-supervisor-presence', host.hostId],
     queryFn: async ({ signal }) => {
       if (localIdentity === undefined) throw new Error('local_host_unavailable')
-      await publishLocalSupervisorPresence({
+      await reconcileLocalSupervisorGrants({
         session,
         controlPlaneBaseUrl,
         host,

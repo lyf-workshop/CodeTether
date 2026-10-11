@@ -1247,6 +1247,8 @@ fn shutdown_exit_code(outcome: ShutdownOutcome, requested_code: i32) -> i32 {
 }
 
 pub fn run_desktop() {
+    #[cfg(target_os = "macos")]
+    crate::macos_lifecycle::protect_background_runtime();
     eprintln!(
         "[codetether:desktop] version={} build={} platform={} architecture={}",
         env!("CARGO_PKG_VERSION"),

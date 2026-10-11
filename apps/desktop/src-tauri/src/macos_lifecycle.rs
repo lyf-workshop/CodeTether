@@ -7,7 +7,9 @@ mod platform {
     use objc2_app_kit::{
         NSWorkspace, NSWorkspaceDidWakeNotification, NSWorkspaceWillSleepNotification,
     };
-    use objc2_foundation::{NSNotification, NSNotificationCenter, NSObjectProtocol};
+    use objc2_foundation::{
+        NSNotification, NSNotificationCenter, NSObjectProtocol, NSProcessInfo, ns_string,
+    };
     use std::{cell::RefCell, ptr::NonNull};
 
     struct Observers {
@@ -65,7 +67,13 @@ mod platform {
             Ok(())
         })
     }
+
+    pub fn protect_background_runtime() {
+        let process_info = NSProcessInfo::processInfo();
+        process_info.setAutomaticTerminationSupportEnabled(true);
+        process_info.disableAutomaticTermination(ns_string!("CodeTether managed Host runtime"));
+    }
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) use platform::install;
+pub(crate) use platform::{install, protect_background_runtime};

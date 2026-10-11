@@ -201,6 +201,12 @@ enum ShutdownOutcome {
     Failed,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ExitRequestDisposition {
+    Prevent,
+    Allow,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg(windows)]
@@ -646,6 +652,14 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn exit_request_disposition(state: &DesktopState) -> ExitRequestDisposition {
+    if state.should_prevent_exit() {
+        ExitRequestDisposition::Prevent
+    } else {
+        ExitRequestDisposition::Allow
+    }
 }
 
 fn smoke_exit_delay(arguments: impl IntoIterator<Item = String>) -> Option<Duration> {
@@ -1417,12 +1431,15 @@ pub fn run_desktop() {
                 }
             }
         }
-        RunEvent::ExitRequested { code, api, .. } => {
+        RunEvent::ExitRequested { api, .. } => {
             if let Some(state) = app_handle.try_state::<DesktopState>()
-                && state.should_prevent_exit()
+                && exit_request_disposition(&state) == ExitRequestDisposition::Prevent
             {
+                // macOS may request termination while the startup window is
+                // still hidden and the tray has not been created. Keep the
+                // event loop alive; explicit product Quit already owns the
+                // bounded Host shutdown path through `request_app_quit`.
                 api.prevent_exit();
-                request_app_quit(app_handle, code.unwrap_or(0));
             }
         }
         RunEvent::Exit => {
@@ -1501,6 +1518,27 @@ mod tests {
         );
         state.allow_exit();
         assert!(!state.should_prevent_exit());
+    }
+
+    #[test]
+    fn implicit_exit_request_only_allows_exit_after_owned_shutdown_finishes() {
+        let state = desktop_state();
+        assert_eq!(
+            exit_request_disposition(&state),
+            ExitRequestDisposition::Prevent
+        );
+        assert!(!state.is_shutting_down());
+
+        assert!(state.begin_shutdown());
+        assert_eq!(
+            exit_request_disposition(&state),
+            ExitRequestDisposition::Prevent
+        );
+        state.allow_exit();
+        assert_eq!(
+            exit_request_disposition(&state),
+            ExitRequestDisposition::Allow
+        );
     }
 
     #[test]

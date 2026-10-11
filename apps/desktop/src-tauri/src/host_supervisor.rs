@@ -1370,6 +1370,10 @@ pub fn run_desktop() {
 
     app.run(|app_handle, event| match event {
         #[cfg(target_os = "macos")]
+        RunEvent::Ready => {
+            crate::macos_notifications::initialize(app_handle);
+        }
+        #[cfg(target_os = "macos")]
         RunEvent::Reopen { .. } => {
             let _ = show_main_window(app_handle);
         }

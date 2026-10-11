@@ -160,6 +160,40 @@ test('macOS automatic termination protection is installed after AppKit setup', a
   )
 })
 
+test('macOS UserNotifications initialization waits for AppKit readiness', async () => {
+  const desktopSupervisor = await readFile(
+    resolve(desktopDirectory, 'src-tauri', 'src', 'host_supervisor.rs'),
+    'utf8',
+  )
+  const notificationSource = await readFile(
+    resolve(desktopDirectory, 'src-tauri', 'src', 'macos_notifications.rs'),
+    'utf8',
+  )
+  const readyEvent = desktopSupervisor.indexOf('RunEvent::Ready')
+  const initializeCall = desktopSupervisor.indexOf(
+    'crate::macos_notifications::initialize(app_handle);',
+  )
+  const setupStart = desktopSupervisor.indexOf('.setup(|app| {')
+  const setupInstall = desktopSupervisor.indexOf(
+    'crate::macos_notifications::install(',
+    setupStart,
+  )
+  const centerAccess = notificationSource.indexOf(
+    'UNUserNotificationCenter::currentNotificationCenter()',
+  )
+  const initializeFunction = notificationSource.indexOf(
+    'pub fn initialize(app: &AppHandle)',
+  )
+
+  assert.notEqual(readyEvent, -1)
+  assert.ok(initializeCall > readyEvent)
+  assert.ok(setupInstall > setupStart)
+  assert.ok(
+    centerAccess > initializeFunction,
+    'UserNotifications must only be touched by the post-ready initializer and delivery paths',
+  )
+})
+
 test('Web UI exposes only the bounded Desktop product commands', async () => {
   const webPackage = JSON.parse(
     await readFile(

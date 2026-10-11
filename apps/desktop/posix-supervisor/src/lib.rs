@@ -207,6 +207,16 @@ fn run_guardian(arguments: Vec<String>) -> io::Result<i32> {
                 }
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
+                // LaunchServices may start a GUI app with stdin already at
+                // EOF. On macOS, keep the guardian owned while its Desktop
+                // parent is still alive; a reparent to launchd (PID 1) is the
+                // hard-death signal. Explicit Desktop Quit still sends the
+                // bounded `shutdown` command before closing the pipe.
+                #[cfg(target_os = "macos")]
+                if unsafe { libc::getppid() } != 1 {
+                    thread::sleep(Duration::from_millis(20));
+                    continue;
+                }
                 if ending.is_none() {
                     let _ = input.write_all(b"shutdown\n");
                     ending = Some(Instant::now());

@@ -39,6 +39,10 @@ fn descendants_are_cleaned_when_the_owner_drops() {
 }
 
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "macOS LaunchServices may start the GUI with stdin already at EOF"
+)]
 fn private_guardian_cleans_up_on_parent_pipe_eof() {
     use std::{fs, io::Write, process::Stdio};
     let root =
@@ -77,6 +81,46 @@ fn private_guardian_cleans_up_on_parent_pipe_eof() {
         assert!(Instant::now() < deadline);
         thread::sleep(Duration::from_millis(10));
     }
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn private_guardian_ignores_launchservices_stdin_eof_while_owner_is_alive() {
+    use std::{fs, io::Write, process::Stdio};
+    let root = std::env::temp_dir().join(format!(
+        "codetether-guardian-macos-test-{}",
+        std::process::id()
+    ));
+    fs::create_dir(&root).unwrap();
+    let source = env!("CARGO_BIN_EXE_codetether-supervision-test");
+    let guardian = root.join("guardian");
+    fs::copy(source, &guardian).unwrap();
+    fs::copy(source, root.join("codetether-host")).unwrap();
+    let mut child = Command::new(&guardian)
+        .args([
+            codetether_posix_supervisor::GUARDIAN_ARGUMENT,
+            "--port",
+            "4317",
+            "--origin",
+            "tauri://localhost",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut pipe = child.stdin.take().unwrap();
+    pipe.write_all(b"start\n").unwrap();
+    let mut line = String::new();
+    BufReader::new(child.stdout.take().unwrap())
+        .read_line(&mut line)
+        .unwrap();
+    assert_eq!(line, "started\n");
+    drop(pipe);
+    thread::sleep(Duration::from_millis(100));
+    assert!(child.try_wait().unwrap().is_none());
+    child.kill().unwrap();
+    child.wait().unwrap();
     fs::remove_dir_all(root).unwrap();
 }
 

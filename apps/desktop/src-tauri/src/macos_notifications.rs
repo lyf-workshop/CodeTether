@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, VecDeque},
     ptr::NonNull,
+    sync::atomic::{AtomicBool, Ordering},
     sync::{Arc, Mutex},
 };
 
@@ -176,6 +177,7 @@ impl DeliveryState {
 struct DeliveryInner {
     state: Mutex<DeliveryState>,
     active: Mutex<ActiveNotificationIntents>,
+    initialized: AtomicBool,
     attention_state: AttentionNotificationState,
 }
 
@@ -191,14 +193,27 @@ pub fn install(
     let inner = Arc::new(DeliveryInner {
         state: Mutex::new(DeliveryState::default()),
         active: Mutex::new(ActiveNotificationIntents::default()),
+        initialized: AtomicBool::new(false),
         attention_state,
     });
     let delegate = NotificationDelegate::new(app.clone(), inner.clone());
-    let center = UNUserNotificationCenter::currentNotificationCenter();
-    center.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
     MacOSNotificationState {
         inner,
         _delegate: delegate,
+    }
+}
+
+/// AppKit must finish launching before UserNotifications is touched on macOS.
+/// Tauri invokes `setup` from the native launch callback, so initialization is
+/// deliberately completed from the later `RunEvent::Ready` callback.
+pub fn initialize(app: &AppHandle) {
+    let Some(state) = app.try_state::<MacOSNotificationState>() else {
+        return;
+    };
+    let state = state.inner();
+    if !state.inner.initialized.swap(true, Ordering::AcqRel) {
+        let value = UNUserNotificationCenter::currentNotificationCenter();
+        value.setDelegate(Some(ProtocolObject::from_ref(&*state._delegate)));
     }
 }
 
@@ -213,6 +228,9 @@ pub fn show(
     let state = app
         .try_state::<MacOSNotificationState>()
         .ok_or_else(|| "macOS notification state is unavailable".to_owned())?;
+    if !state.inner().inner.initialized.load(Ordering::Acquire) {
+        return Err("macOS notification state is not initialized".to_owned());
+    }
     let notification = PendingNotification {
         identifier,
         title,
@@ -220,18 +238,27 @@ pub fn show(
         activation,
         completion: Box::new(completion),
     };
-    let decision = lock(&state.inner.state).schedule(notification)?;
-    let inner = state.inner.clone();
+    let decision = lock(&state.inner().inner.state).schedule(notification)?;
+    let inner = state.inner().inner.clone();
 
     match decision {
-        ScheduleDecision::RequestAuthorization => request_authorization(inner),
+        ScheduleDecision::RequestAuthorization => {
+            let app = app.clone();
+            app.run_on_main_thread(move || request_authorization(inner))
+                .map_err(|error| error.to_string())?;
+        }
         ScheduleDecision::Queued => {}
-        ScheduleDecision::Deliver(notification) => deliver(inner, *notification),
+        ScheduleDecision::Deliver(notification) => {
+            let app = app.clone();
+            app.run_on_main_thread(move || deliver(inner, *notification))
+                .map_err(|error| error.to_string())?;
+        }
     }
     Ok(())
 }
 
 fn request_authorization(inner: Arc<DeliveryInner>) {
+    let center = UNUserNotificationCenter::currentNotificationCenter();
     let completion = RcBlock::new(move |granted: objc2::runtime::Bool, error: *mut NSError| {
         let error = error_description(error);
         let (authorization, failure) = if let Some(error) = error {
@@ -253,14 +280,14 @@ fn request_authorization(inner: Arc<DeliveryInner>) {
             }
         }
     });
-    UNUserNotificationCenter::currentNotificationCenter()
-        .requestAuthorizationWithOptions_completionHandler(
-            UNAuthorizationOptions::Alert,
-            &completion,
-        );
+    center.requestAuthorizationWithOptions_completionHandler(
+        UNAuthorizationOptions::Alert,
+        &completion,
+    );
 }
 
 fn deliver(inner: Arc<DeliveryInner>, notification: PendingNotification) {
+    let center = UNUserNotificationCenter::currentNotificationCenter();
     let content = UNMutableNotificationContent::new();
     content.setTitle(&NSString::from_str(&notification.title));
     content.setBody(&NSString::from_str(&notification.body));
@@ -283,8 +310,7 @@ fn deliver(inner: Arc<DeliveryInner>, notification: PendingNotification) {
             completion(result);
         }
     });
-    UNUserNotificationCenter::currentNotificationCenter()
-        .addNotificationRequest_withCompletionHandler(&request, Some(&completion));
+    center.addNotificationRequest_withCompletionHandler(&request, Some(&completion));
 }
 
 #[derive(Default)]

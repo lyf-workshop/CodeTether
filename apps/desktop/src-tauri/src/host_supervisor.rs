@@ -1247,8 +1247,6 @@ fn shutdown_exit_code(outcome: ShutdownOutcome, requested_code: i32) -> i32 {
 }
 
 pub fn run_desktop() {
-    #[cfg(target_os = "macos")]
-    crate::macos_lifecycle::protect_background_runtime();
     eprintln!(
         "[codetether:desktop] version={} build={} platform={} architecture={}",
         env!("CARGO_PKG_VERSION"),
@@ -1284,6 +1282,8 @@ pub fn run_desktop() {
             ,crate::host_identity_key_store::host_identity_key_destroy
         ])
         .setup(|app| {
+            #[cfg(target_os = "macos")]
+            crate::macos_lifecycle::protect_background_runtime();
             let host = match HostSupervisor::start(app.handle()) {
                 Ok(host) => host,
                 Err(error) => {

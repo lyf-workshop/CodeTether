@@ -129,6 +129,37 @@ test('production Desktop CSP and capabilities stay loopback-only and non-wildcar
   assert.equal(config.app.withGlobalTauri, false)
 })
 
+test('macOS automatic termination protection is installed after AppKit setup', async () => {
+  const desktopSupervisor = await readFile(
+    resolve(desktopDirectory, 'src-tauri', 'src', 'host_supervisor.rs'),
+    'utf8',
+  )
+  const setupStart = desktopSupervisor.indexOf('.setup(|app| {')
+  const protectionCall = desktopSupervisor.indexOf(
+    'crate::macos_lifecycle::protect_background_runtime();',
+  )
+  const hostStart = desktopSupervisor.indexOf(
+    'let host = match HostSupervisor::start',
+    setupStart,
+  )
+
+  assert.notEqual(setupStart, -1)
+  assert.notEqual(protectionCall, -1)
+  assert.notEqual(hostStart, -1)
+  assert.ok(
+    protectionCall > setupStart && protectionCall < hostStart,
+    'automatic termination protection must run after NSApplication setup and before Host startup',
+  )
+  assert.equal(
+    desktopSupervisor.indexOf(
+      'crate::macos_lifecycle::protect_background_runtime();',
+      protectionCall + 1,
+    ),
+    -1,
+    'automatic termination protection should have one authoritative call site',
+  )
+})
+
 test('Web UI exposes only the bounded Desktop product commands', async () => {
   const webPackage = JSON.parse(
     await readFile(

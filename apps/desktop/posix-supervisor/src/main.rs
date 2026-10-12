@@ -16,6 +16,7 @@ fn main() {
             match line.as_deref() {
                 Ok("start") => println!("started"),
                 Ok("shutdown") => return,
+                Ok(value) if value.starts_with("echo ") => println!("{}", &value[5..]),
                 _ => {}
             }
         }

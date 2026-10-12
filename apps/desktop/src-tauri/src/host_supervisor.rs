@@ -305,7 +305,15 @@ impl HostSupervisor {
                         if let Ok(text) = std::str::from_utf8(&line) {
                             if let Some(reply) = crate::host_presence_signer::respond(text.trim()) {
                                 if !reply.is_empty() {
-                                    let _ = signing_pipe.write(reply.as_bytes());
+                                    let result = signing_pipe.write(reply.as_bytes());
+                                    eprintln!(
+                                        "{}",
+                                        serde_json::json!({
+                                            "component": "desktop",
+                                            "event": "host_presence_sign_response_write",
+                                            "result": if result.is_ok() { "ok" } else { "error" },
+                                        })
+                                    );
                                 }
                                 continue;
                             }

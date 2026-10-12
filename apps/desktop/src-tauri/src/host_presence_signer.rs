@@ -18,6 +18,14 @@ struct Request {
 
 pub(crate) fn respond(line: &str) -> Option<String> {
     let body = line.strip_prefix(PREFIX)?;
+    eprintln!(
+        "{}",
+        json!({
+            "component": "desktop",
+            "event": "host_presence_sign_request",
+            "bodyBytes": body.len(),
+        })
+    );
     // Intercept even malformed requests BEFORE normal Host log forwarding.
     let result = (|| {
         if body.len() > 8192 {
@@ -27,7 +35,21 @@ pub(crate) fn respond(line: &str) -> Option<String> {
         if uuid::Uuid::parse_str(&request.id).is_err() {
             return None;
         }
-        let signature = sign(&request).ok();
+        let signature = match sign(&request) {
+            Ok(signature) => Some(signature),
+            Err(category) => {
+                eprintln!(
+                    "{}",
+                    json!({
+                        "component": "desktop",
+                        "event": "host_presence_sign",
+                        "result": "error",
+                        "category": category,
+                    })
+                );
+                None
+            }
+        };
         Some(format!(
             "host-presence-signature {}\n",
             json!({ "id": request.id, "signature": signature })
@@ -36,7 +58,7 @@ pub(crate) fn respond(line: &str) -> Option<String> {
     Some(result.unwrap_or_default())
 }
 
-fn validate(request: &Request) -> Result<(), ()> {
+fn validate(request: &Request) -> Result<(), &'static str> {
     let p = &request.payload;
     let fields = [
         "v",
@@ -54,7 +76,7 @@ fn validate(request: &Request) -> Result<(), ()> {
         "exp",
         "protocolVersion",
     ];
-    let object = p.as_object().ok_or(())?;
+    let object = p.as_object().ok_or("request_validation")?;
     if object.len() != fields.len()
         || fields.iter().any(|f| !object.contains_key(*f))
         || p["v"] != 1
@@ -69,24 +91,27 @@ fn validate(request: &Request) -> Result<(), ()> {
             .as_str()
             .is_some_and(|s| s.starts_with("space_") && s.len() <= 102)
     {
-        return Err(());
+        return Err("request_validation");
     }
-    let iat = p["iat"].as_u64().ok_or(())?;
-    let exp = p["exp"].as_u64().ok_or(())?;
+    let iat = p["iat"].as_u64().ok_or("request_validation")?;
+    let exp = p["exp"].as_u64().ok_or("request_validation")?;
     if exp <= iat || exp - iat > 600 {
-        return Err(());
+        return Err("request_validation");
     }
     // Reconstruct the exact RFC 8785-like constrained JSON form used by the
     // TypeScript supervisor package. serde_json preserves input object order,
     // which is not the canonical order used by the JWS signing input.
-    let header = URL_SAFE_NO_PAD.encode(canonical_json_bytes(&json!({
-        "alg": "ES256",
-        "typ": TYPE,
-    }))?);
-    let payload = URL_SAFE_NO_PAD.encode(canonical_json_bytes(p)?);
+    let header = URL_SAFE_NO_PAD.encode(
+        canonical_json_bytes(&json!({
+            "alg": "ES256",
+            "typ": TYPE,
+        }))
+        .map_err(|_| "canonical_json")?,
+    );
+    let payload = URL_SAFE_NO_PAD.encode(canonical_json_bytes(p).map_err(|_| "canonical_json")?);
     if request.signing_input != format!("{header}.{payload}") || request.signing_input.len() > 4096
     {
-        return Err(());
+        return Err("canonical_mismatch");
     }
     Ok(())
 }
@@ -131,32 +156,97 @@ fn write_canonical_json(output: &mut String, value: &Value) -> Result<(), ()> {
     Ok(())
 }
 
-fn sign(request: &Request) -> Result<String, ()> {
+fn sign(request: &Request) -> Result<String, &'static str> {
     validate(request)?;
-    let description =
-        crate::host_identity_key_store::host_identity_key_public(request.key_handle.clone())
-            .map_err(|_| ())?;
-    let description = serde_json::to_value(description).map_err(|_| ())?;
+    eprintln!(
+        "{}",
+        json!({
+            "component": "desktop",
+            "event": "host_presence_sign_stage",
+            "stage": "before_host_key_public",
+        })
+    );
+    let description = match crate::host_identity_key_store::host_identity_key_public(
+        request.key_handle.clone(),
+    ) {
+        Ok(description) => {
+            eprintln!(
+                "{}",
+                json!({
+                    "component": "desktop",
+                    "event": "host_presence_sign_stage",
+                    "stage": "after_host_key_public",
+                    "result": "ok",
+                })
+            );
+            description
+        }
+        Err(_) => {
+            eprintln!(
+                "{}",
+                json!({
+                    "component": "desktop",
+                    "event": "host_presence_sign_stage",
+                    "stage": "after_host_key_public",
+                    "result": "error",
+                })
+            );
+            return Err("host_key_public");
+        }
+    };
+    let description = serde_json::to_value(description).map_err(|_| "serialization")?;
     if description["privateKeyExportable"] != false || description["keyAlgorithm"] != "ES256" {
-        return Err(());
+        return Err("host_key_policy");
     }
-    let public = serde_json::to_vec(&description["publicKey"]).map_err(|_| ())?;
+    let public = serde_json::to_vec(&description["publicKey"]).map_err(|_| "serialization")?;
     let fingerprint = format!("sha256:{}", URL_SAFE_NO_PAD.encode(Sha256::digest(public)));
     if request.payload["hostFingerprint"] != fingerprint
         || request.payload["hostIdentityGeneration"] != description["keyGeneration"]
     {
-        return Err(());
+        return Err("host_identity_mismatch");
     }
-    let result = crate::host_identity_key_store::host_identity_key_sign(
+    eprintln!(
+        "{}",
+        json!({
+            "component": "desktop",
+            "event": "host_presence_sign_stage",
+            "stage": "before_host_key_sign",
+        })
+    );
+    let result = match crate::host_identity_key_store::host_identity_key_sign(
         request.key_handle.clone(),
         URL_SAFE_NO_PAD.encode(request.signing_input.as_bytes()),
-    )
-    .map_err(|_| ())?;
-    let result = serde_json::to_value(result).map_err(|_| ())?;
+    ) {
+        Ok(result) => {
+            eprintln!(
+                "{}",
+                json!({
+                    "component": "desktop",
+                    "event": "host_presence_sign_stage",
+                    "stage": "after_host_key_sign",
+                    "result": "ok",
+                })
+            );
+            result
+        }
+        Err(_) => {
+            eprintln!(
+                "{}",
+                json!({
+                    "component": "desktop",
+                    "event": "host_presence_sign_stage",
+                    "stage": "after_host_key_sign",
+                    "result": "error",
+                })
+            );
+            return Err("host_key_sign");
+        }
+    };
+    let result = serde_json::to_value(result).map_err(|_| "serialization")?;
     result["signatureBase64Url"]
         .as_str()
         .map(str::to_owned)
-        .ok_or(())
+        .ok_or("signature_output")
 }
 
 #[cfg(test)]

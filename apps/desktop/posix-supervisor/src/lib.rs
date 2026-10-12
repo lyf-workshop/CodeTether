@@ -15,6 +15,10 @@ use std::{
 pub const GUARDIAN_ARGUMENT: &str = "--codetether-private-host-guardian";
 pub const PROBE_ARGUMENT: &str = "--codetether-private-probe-guardian";
 const GRACE: Duration = Duration::from_secs(12);
+// Host lifecycle messages stay on a private, purpose-limited line protocol.
+// The bound is large enough for the signed Host Presence response while still
+// making malformed input fail closed without allowing unbounded buffering.
+const MAX_PRIVATE_PIPE_LINE: usize = 512;
 
 pub struct OwnedGroup {
     child: Option<Child>,
@@ -182,8 +186,10 @@ fn run_guardian(arguments: Vec<String>) -> io::Result<i32> {
         loop {
             let mut line = Vec::new();
             // Private commands are bounded; never buffer an unbounded line.
-            let read = (&mut reader).take(129).read_until(b'\n', &mut line);
-            if !matches!(read, Ok(1..=128)) || !line.ends_with(b"\n") {
+            let read = (&mut reader)
+                .take((MAX_PRIVATE_PIPE_LINE + 1) as u64)
+                .read_until(b'\n', &mut line);
+            if !matches!(read, Ok(1..=MAX_PRIVATE_PIPE_LINE)) || !line.ends_with(b"\n") {
                 break;
             }
             if sender.send(line).is_err() {
@@ -228,6 +234,39 @@ fn run_guardian(arguments: Vec<String>) -> io::Result<i32> {
         if ending.is_some_and(|time| time.elapsed() >= GRACE) {
             return owned.finish();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MAX_PRIVATE_PIPE_LINE;
+    use std::io::{BufRead, Cursor, Read};
+
+    fn read_private_line<R: BufRead>(reader: &mut R, line: &mut Vec<u8>) -> bool {
+        line.clear();
+        let read = reader
+            .take((MAX_PRIVATE_PIPE_LINE + 1) as u64)
+            .read_until(b'\n', line);
+        matches!(read, Ok(1..=MAX_PRIVATE_PIPE_LINE)) && line.ends_with(b"\n")
+    }
+
+    #[test]
+    fn private_pipe_accepts_host_presence_sized_response() {
+        let mut payload = vec![b'x'; 300];
+        payload.push(b'\n');
+        let mut reader = Cursor::new(payload.clone());
+        let mut line = Vec::new();
+        assert!(read_private_line(&mut reader, &mut line));
+        assert_eq!(line, payload);
+    }
+
+    #[test]
+    fn private_pipe_rejects_lines_over_the_safety_bound() {
+        let mut payload = vec![b'x'; MAX_PRIVATE_PIPE_LINE + 1];
+        payload.push(b'\n');
+        let mut reader = Cursor::new(payload);
+        let mut line = Vec::new();
+        assert!(!read_private_line(&mut reader, &mut line));
     }
 }
 

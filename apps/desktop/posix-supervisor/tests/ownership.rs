@@ -125,6 +125,56 @@ fn private_guardian_ignores_launchservices_stdin_eof_while_owner_is_alive() {
 }
 
 #[test]
+fn private_guardian_forwards_host_presence_sized_response() {
+    use std::{fs, io::Write, process::Stdio};
+    let root = std::env::temp_dir().join(format!(
+        "codetether-guardian-presence-test-{}",
+        std::process::id()
+    ));
+    fs::create_dir(&root).unwrap();
+    let source = env!("CARGO_BIN_EXE_codetether-supervision-test");
+    let guardian = root.join("guardian");
+    fs::copy(source, &guardian).unwrap();
+    fs::copy(source, root.join("codetether-host")).unwrap();
+    let mut child = Command::new(&guardian)
+        .args([
+            codetether_posix_supervisor::GUARDIAN_ARGUMENT,
+            "--port",
+            "4317",
+            "--origin",
+            "tauri://localhost",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut pipe = child.stdin.take().unwrap();
+    let mut output = BufReader::new(child.stdout.take().unwrap());
+    pipe.write_all(b"start\n").unwrap();
+    let mut line = String::new();
+    output.read_line(&mut line).unwrap();
+    assert_eq!(line, "started\n");
+
+    let response = "x".repeat(300);
+    writeln!(pipe, "echo {response}").unwrap();
+    line.clear();
+    output.read_line(&mut line).unwrap();
+    assert_eq!(line, format!("{response}\n"));
+
+    pipe.write_all(b"terminate-tree\n").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            assert!(status.code().is_some());
+            break;
+        }
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(10));
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn detached_probe_has_exact_parent_death_ownership() {
     use std::{
         io::Write,

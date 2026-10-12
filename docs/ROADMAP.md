@@ -1,5 +1,9 @@
 # CodeTether Roadmap
 
+## Phase 10.6C.3 — Physical Mac Host Presence production closure
+
+Owner authorizes this narrow continuation from `10b378276a59b7eb85a68e0fb238c61e33cfd811` to diagnose and fix the existing claimed Mac Host's own Presence publication, add privacy-safe local diagnostics, and perform the specified signed-app deployment, renewal, hidden-window, restart, and soak acceptance. This is the sole deployment exception to Phase 10.6A's implementation-only handoff. Do not deploy the Control Plane or Relay, alter identities/authorizations, update Windows, or execute Providers/Turns. See [Phase 10.6A Host-authenticated presence](PHASE10-6A-HOST-AUTHENTICATED-PRESENCE.md) and the Owner-provided Phase 10.6C.3 execution request.
+
 ## Phase 10.6A — Host-authenticated background availability
 
 Owner authorizes implementation/testing from `2e153879c779`, not deployment.

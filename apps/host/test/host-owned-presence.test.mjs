@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { createHash, generateKeyPairSync, sign } from 'node:crypto'
-import { mkdtemp, rm, readFile } from 'node:fs/promises'
+import { mkdtemp, rm, readFile, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -15,6 +15,7 @@ import {
   publishHostPresence,
 } from '../dist/api/host-presence-publisher.js'
 import { SupervisorTransportManager } from '../dist/api/supervisor-transport-manager.js'
+import { HostPresenceDiagnostics } from '../dist/api/host-presence-diagnostics.js'
 import { HostPresenceSigningBridge } from '../dist/host-presence-signing.js'
 import { ConversationStore } from '../dist/persistence/index.js'
 
@@ -87,6 +88,7 @@ test('renderer disappears/window hidden beyond lease: only Host worker continues
 test('transient network failures back off, recover, and wake coalesces without tight loops', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
   const times = []
+  const diagnostics = []
   const worker = new HostPresencePublisher({
     createPresence: async () => ({
       payload: payload(),
@@ -96,6 +98,7 @@ test('transient network failures back off, recover, and wake coalesces without t
       times.push(Date.now())
       if (times.length < 4) throw Error('private failure not logged')
     },
+    onDiagnostic: (event, fields) => diagnostics.push({ event, fields }),
   })
   await flush()
   for (const wait of [1000, 2000, 4000]) {
@@ -105,6 +108,15 @@ test('transient network failures back off, recover, and wake coalesces without t
   assert.deepEqual(
     times.map((time) => time - times[0]),
     [0, 1000, 3000, 7000],
+  )
+  assert.deepEqual(
+    diagnostics
+      .filter(({ event }) => event === 'PRESENCE_RETRY_SCHEDULED')
+      .map(({ fields }) => fields.retryDelayMs),
+    [1000, 2000, 4000],
+  )
+  assert.ok(
+    diagnostics.some(({ event }) => event === 'PRESENCE_RENEWAL_SCHEDULED'),
   )
   t.mock.timers.tick(120_000)
   await flush()
@@ -146,6 +158,7 @@ test('Controller-only/unclaimed Host never signs/publishes; late enable and real
 test('HTTP publisher sends only Host envelope, no token/proof/cookies and no redirect fallback', async () => {
   const original = globalThis.fetch
   let seen = false
+  const diagnostics = []
   globalThis.fetch = async (url, init) => {
     seen = true
     assert.equal(
@@ -164,10 +177,51 @@ test('HTTP publisher sends only Host envelope, no token/proof/cookies and no red
     await publishHostPresence(
       { payload: payload(), proof: 'test'.repeat(24) },
       new AbortController().signal,
+      (event, fields) => diagnostics.push({ event, fields }),
     )
     assert.ok(seen)
+    assert.deepEqual(
+      diagnostics.map(({ event, fields }) => [event, fields.statusClass]),
+      [
+        ['PRESENCE_HTTP_START', undefined],
+        ['PRESENCE_HTTP_RESULT', '2xx'],
+      ],
+    )
   } finally {
     globalThis.fetch = original
+  }
+})
+
+test('presence diagnostics retain only allowlisted fields in a bounded owner-only file', async () => {
+  const directory = await mkdtemp(
+    join(tmpdir(), 'codetether-presence-diagnostics-'),
+  )
+  try {
+    const diagnostics = new HostPresenceDiagnostics(
+      join(directory, 'state.sqlite3'),
+    )
+    diagnostics.record('PRESENCE_HTTP_RESULT', {
+      hostId: payload().hostId,
+      generation: 1,
+      endpointOrigin: 'https://api.codetether.org',
+      authMode: 'host_es256_jws',
+      statusClass: '4xx',
+      errorCategory: 'http_rejected',
+      retryDelayMs: 1000,
+      proof: 'NEVER-LOG-THIS',
+      authorization: 'NEVER-LOG-THIS',
+    })
+    const file = join(directory, 'logs', 'host-presence.jsonl')
+    const entry = JSON.parse(await readFile(file, 'utf8'))
+    assert.equal(entry.event, 'PRESENCE_HTTP_RESULT')
+    assert.equal(entry.statusClass, '4xx')
+    assert.equal(entry.errorCategory, 'http_rejected')
+    assert.equal(entry.endpointOrigin, 'https://api.codetether.org')
+    assert.equal(entry.proof, undefined)
+    assert.equal(entry.authorization, undefined)
+    assert.equal((await stat(file)).mode & 0o777, 0o600)
+  } finally {
+    await rm(directory, { recursive: true, force: true })
   }
 })
 
@@ -281,7 +335,11 @@ test('existing claimed Windows/macOS Host restores same identity/context and imm
           bindHost: '127.0.0.1',
           advertiseHost: '192.0.2.7',
           clientBuildIdentity: 'fixture',
-          controlPlaneOrigin: payload().controlPlaneOrigin,
+          // The first startup may seed migration-23 context from the verified
+          // grant; later restarts must use the durable Host-owned config alone.
+          ...(restart === 0
+            ? { controlPlaneOrigin: payload().controlPlaneOrigin }
+            : {}),
           signHostPresence: async (_handle, p) =>
             signPayload(p, supervisorDescriptorProofType),
         })

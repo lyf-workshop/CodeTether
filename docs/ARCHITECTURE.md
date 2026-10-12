@@ -8,6 +8,11 @@ refresh, owns renewal. All account/device/claim/authorization APIs keep user and
 ProductDevice authentication. Relay remains opaque transport; Host remains
 workspace authority. See [Phase 10.6A](PHASE10-6A-HOST-AUTHENTICATED-PRESENCE.md).
 
+The Owner's Phase 10.6C.3 authorization permits only production correction and
+physical macOS validation of this existing Host-owned Presence path. It does not
+change Control Plane or Relay behavior and does not authorize identity,
+authorization, Provider, or Windows changes.
+
 ## Status
 
 Owner accepted and froze **Phase 8C** at `67c71f2e3ad390004cc60fe30925224a02aba485`
@@ -1355,6 +1360,7 @@ Phase 8B treats executable paths, file identities, binary hashes, Provider setti
 - SQLite retains normalized per-Turn snapshots without a disk retention policy in this phase, so database size grows with durable history until a later archive/retention design.
 - Generated protocol artifacts and real-agent workspace files remain ignored under `.tmp/`.
 - Legacy CodeTether code and structure are not architectural inputs.
+
 ### Phase 10A cloud-mediated Host authorization
 
 The account Control Plane owns only temporary Host Access Request workflow and

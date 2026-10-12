@@ -36,7 +36,11 @@ import {
 
 import type { HostService } from './host-service.js'
 import type { ConversationStore } from '../persistence/index.js'
-import { HostPresencePublisher } from './host-presence-publisher.js'
+import {
+  HostPresenceDiagnosticError,
+  HostPresencePublisher,
+} from './host-presence-publisher.js'
+import { HostPresenceDiagnostics } from './host-presence-diagnostics.js'
 import type { HostStartupTimeline } from './startup-timeline.js'
 
 const MAX_OUTBOUND_CONNECTIONS = 8
@@ -112,6 +116,7 @@ export class SupervisorTransportManager {
     Promise<SignedSupervisorHostPresence | undefined> | undefined
   readonly #signHostPresence: SupervisorTransportManagerOptions['signHostPresence']
   readonly #startupTimeline: HostStartupTimeline | undefined
+  readonly #presenceDiagnostics: HostPresenceDiagnostics
 
   private constructor(
     options: SupervisorTransportManagerOptions,
@@ -124,6 +129,9 @@ export class SupervisorTransportManager {
     this.#relay = options.relay
     this.#signHostPresence = options.signHostPresence
     this.#startupTimeline = options.startupTimeline
+    this.#presenceDiagnostics = new HostPresenceDiagnostics(
+      options.persistence.databasePath,
+    )
     this.#allowLoopbackForTests = options.allowLoopbackForTests === true
     this.#relayRendezvousId = `srv_${randomBytes(16).toString('hex')}`
     this.#relayRendezvousCapability = randomBytes(32).toString('base64url')
@@ -352,15 +360,48 @@ export class SupervisorTransportManager {
   }
 
   #ensurePresencePublisher(): void {
-    if (
-      this.#presencePublisher !== undefined ||
-      this.#signHostPresence === undefined ||
-      !this.#service.getHostIdentity()?.lastRegisteredAt ||
-      !this.#persistence.getHostPresenceConfiguration()?.enabled
-    )
+    if (this.#presencePublisher !== undefined) return
+    const identity = this.#service.getHostIdentity()
+    const config = this.#persistence.getHostPresenceConfiguration()
+    const diagnosticFields = {
+      ...(identity === undefined
+        ? {}
+        : {
+            hostId: identity.hostId,
+            generation: identity.identityGeneration,
+          }),
+      ...(config === undefined
+        ? {}
+        : { endpointOrigin: config.controlPlaneOrigin }),
+      authMode: 'host_es256_jws' as const,
+    }
+    if (this.#signHostPresence === undefined) {
+      this.#presenceDiagnostics.record('PRESENCE_PUBLISHER_SKIP', {
+        ...diagnosticFields,
+        errorCategory: 'configuration_missing',
+      })
       return
+    }
+    if (identity?.lastRegisteredAt === undefined) {
+      this.#presenceDiagnostics.record('PRESENCE_PUBLISHER_SKIP', {
+        ...diagnosticFields,
+        errorCategory: 'configuration_missing',
+      })
+      return
+    }
+    if (!config?.enabled) {
+      this.#presenceDiagnostics.record('PRESENCE_PUBLISHER_SKIP', {
+        ...diagnosticFields,
+        errorCategory: 'configuration_missing',
+      })
+      return
+    }
+    this.#presenceDiagnostics.record('PRESENCE_CONFIG_READY', diagnosticFields)
     this.#presencePublisher = new HostPresencePublisher({
       createPresence: (signal) => this.#createHostPresence(signal),
+      diagnosticFields,
+      onDiagnostic: (event, fields) =>
+        this.#presenceDiagnostics.record(event, fields),
       onState: (state) =>
         process.stderr.write(
           `${JSON.stringify({ component: 'host', event: 'supervisor.host_presence', state })}\n`,
@@ -488,14 +529,38 @@ export class SupervisorTransportManager {
       exp: now + supervisorTransportLimits.descriptorLifetimeMs / 1_000,
       protocolVersion: 2,
     })
-    const descriptor = {
-      payload,
-      proof: await this.#signHostPresence(identity.keyHandle, payload, signal),
+    const diagnosticFields = {
+      hostId: identity.hostId,
+      generation: identity.identityGeneration,
+      endpointOrigin: config.controlPlaneOrigin,
+      authMode: 'host_es256_jws' as const,
     }
+    this.#presenceDiagnostics.record('PRESENCE_SIGN_START', diagnosticFields)
+    let proof: string
+    try {
+      proof = await this.#signHostPresence(identity.keyHandle, payload, signal)
+    } catch {
+      this.#presenceDiagnostics.record('PRESENCE_ERROR', {
+        ...diagnosticFields,
+        errorCategory: 'signing',
+      })
+      throw new HostPresenceDiagnosticError('signing')
+    }
+    const descriptor = { payload, proof }
     const hostPublicJwk = supervisorPublicJwkSchema.parse(
       JSON.parse(identity.publicJwk),
     )
-    await verifySupervisorHostPresence(descriptor, hostPublicJwk)
+    this.#presenceDiagnostics.record('PRESENCE_SIGN_OK', diagnosticFields)
+    try {
+      await verifySupervisorHostPresence(descriptor, hostPublicJwk)
+    } catch {
+      this.#presenceDiagnostics.record('PRESENCE_ERROR', {
+        ...diagnosticFields,
+        errorCategory: 'jws_validation',
+      })
+      throw new HostPresenceDiagnosticError('jws_validation')
+    }
+    this.#presenceDiagnostics.record('PRESENCE_JWS_CREATED', diagnosticFields)
     for (const grant of this.#persistence.listEnabledHostSupervisorGrants()) {
       if (grant.payload.expiresAt * 1_000 <= Date.now()) continue
       // Server activation verifies all Host/grant/scope bindings. Cloud admission

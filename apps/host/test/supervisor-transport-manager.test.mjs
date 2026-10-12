@@ -212,6 +212,7 @@ test('forced-remote manager reads Host state without using local HTTP product da
   }
   let storedGrant
   const persistence = {
+    getHostPresenceConfiguration: () => undefined,
     enableHostSupervisorGrant() {},
     pruneHostSupervisorGrants() {},
     storeHostSupervisorGrant(grant) {
@@ -505,6 +506,7 @@ test('forced Relay HTTP admission stays single-session while Direct fallback rem
     },
   }
   const persistence = {
+    getHostPresenceConfiguration: () => undefined,
     storeHostSupervisorGrant: (grant) => grant,
     enableHostSupervisorGrant() {},
     pruneHostSupervisorGrants() {},

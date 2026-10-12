@@ -76,14 +76,57 @@ fn validate(request: &Request) -> Result<(), ()> {
     if exp <= iat || exp - iat > 600 {
         return Err(());
     }
-    // serde_json's default ordered object map is the existing canonical sorted
-    // JSON convention. The native signer reconstructs, not trusts, JWS bytes.
-    let header = URL_SAFE_NO_PAD
-        .encode(serde_json::to_vec(&json!({"alg":"ES256", "typ":TYPE})).map_err(|_| ())?);
-    let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(p).map_err(|_| ())?);
+    // Reconstruct the exact RFC 8785-like constrained JSON form used by the
+    // TypeScript supervisor package. serde_json preserves input object order,
+    // which is not the canonical order used by the JWS signing input.
+    let header = URL_SAFE_NO_PAD.encode(canonical_json_bytes(&json!({
+        "alg": "ES256",
+        "typ": TYPE,
+    }))?);
+    let payload = URL_SAFE_NO_PAD.encode(canonical_json_bytes(p)?);
     if request.signing_input != format!("{header}.{payload}") || request.signing_input.len() > 4096
     {
         return Err(());
+    }
+    Ok(())
+}
+
+fn canonical_json_bytes(value: &Value) -> Result<Vec<u8>, ()> {
+    let mut output = String::new();
+    write_canonical_json(&mut output, value)?;
+    Ok(output.into_bytes())
+}
+
+fn write_canonical_json(output: &mut String, value: &Value) -> Result<(), ()> {
+    match value {
+        Value::Null => output.push_str("null"),
+        Value::Bool(value) => output.push_str(if *value { "true" } else { "false" }),
+        Value::Number(value) => output.push_str(&serde_json::to_string(value).map_err(|_| ())?),
+        Value::String(value) => output.push_str(&serde_json::to_string(value).map_err(|_| ())?),
+        Value::Array(values) => {
+            output.push('[');
+            for (index, value) in values.iter().enumerate() {
+                if index > 0 {
+                    output.push(',');
+                }
+                write_canonical_json(output, value)?;
+            }
+            output.push(']');
+        }
+        Value::Object(values) => {
+            let mut keys = values.keys().collect::<Vec<_>>();
+            keys.sort_unstable();
+            output.push('{');
+            for (index, key) in keys.into_iter().enumerate() {
+                if index > 0 {
+                    output.push(',');
+                }
+                output.push_str(&serde_json::to_string(key).map_err(|_| ())?);
+                output.push(':');
+                write_canonical_json(output, &values[key])?;
+            }
+            output.push('}');
+        }
     }
     Ok(())
 }
@@ -128,8 +171,9 @@ mod tests {
             "directEndpoints":[{"host":"192.0.2.7","port":4318}],"relay":null,"iat":1000,"exp":1600,"protocolVersion":2});
         let encoded = format!(
             "{}.{}",
-            URL_SAFE_NO_PAD.encode(serde_json::to_vec(&json!({"alg":"ES256","typ":TYPE})).unwrap()),
-            URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).unwrap())
+            URL_SAFE_NO_PAD
+                .encode(canonical_json_bytes(&json!({"alg":"ES256","typ":TYPE})).unwrap()),
+            URL_SAFE_NO_PAD.encode(canonical_json_bytes(&payload).unwrap())
         );
         let mut request = Request {
             id: uuid::Uuid::new_v4().to_string(),
@@ -157,5 +201,38 @@ mod tests {
             respond("host-presence-sign sensitive-malformed"),
             Some(String::new())
         );
+    }
+
+    #[test]
+    fn canonical_presence_accepts_runtime_field_order() {
+        let payload = json!({
+            "v": 1,
+            "aud": "codetether-host-supervisor",
+            "purpose": "host_supervisor_presence",
+            "hostId": "host_0123456789abcdef0123456789abcdef",
+            "hostFingerprint": "sha256:fixture",
+            "hostIdentityGeneration": 1,
+            "spaceId": "space_0123456789abcdef0123456789abcdef",
+            "controlPlaneOrigin": "https://example.test",
+            "transportTlsFingerprint": "fixture",
+            "directEndpoints": [{"port": 4318, "host": "192.0.2.7"}],
+            "relay": null,
+            "iat": 1000,
+            "exp": 1600,
+            "protocolVersion": 2,
+        });
+        let signing_input = format!(
+            "{}.{}",
+            URL_SAFE_NO_PAD
+                .encode(canonical_json_bytes(&json!({"typ": TYPE, "alg": "ES256"})).unwrap()),
+            URL_SAFE_NO_PAD.encode(canonical_json_bytes(&payload).unwrap())
+        );
+        let request = Request {
+            id: uuid::Uuid::new_v4().to_string(),
+            key_handle: "CodeTether.HostIdentity.fixture".into(),
+            payload,
+            signing_input,
+        };
+        assert!(validate(&request).is_ok());
     }
 }

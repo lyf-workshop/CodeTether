@@ -535,6 +535,19 @@ export class LocalHttpServer {
         return
       }
       if (
+        request.method === 'GET' &&
+        url.pathname === '/api/v1/supervisor/presence/diagnostics' &&
+        this.#supervisorTransport !== undefined
+      ) {
+        this.#http.writeJson(
+          response,
+          200,
+          { snapshot: this.#supervisorTransport.presenceDiagnostics() },
+          context.allowedOrigin,
+        )
+        return
+      }
+      if (
         request.method === 'POST' &&
         url.pathname === '/api/v1/supervisor/presence/configure' &&
         this.#supervisorTransport !== undefined

@@ -4,6 +4,7 @@ import {
   type SignedSupervisorHostPresence,
 } from '@codetether/supervisor-transport'
 import {
+  type HostPresenceDiagnosticSnapshot,
   type HostPresenceDiagnosticEvent,
   type HostPresenceDiagnosticFields,
   type HostPresenceErrorCategory,
@@ -42,6 +43,22 @@ export class HostPresencePublisher {
   #wake: (() => void) | undefined
   #wakePending = false
   #lastPresence: SignedSupervisorHostPresence | undefined
+  #publisherStartedAt = new Date().toISOString()
+  #publisherTaskAlive = true
+  #lastLoopIterationAt: string | null = null
+  #lastPublishAttemptAt: string | null = null
+  #lastPublishSuccessAt: string | null = null
+  #lastPublishFailureAt: string | null = null
+  #lastPublishFailureCategory: HostPresenceErrorCategory | null = null
+  #lastHttpStatusClass: HostPresenceDiagnosticSnapshot['lastHttpStatusClass'] =
+    null
+  #nextScheduledAttemptAt: string | null = null
+  #consecutiveFailures = 0
+  #totalAttempts = 0
+  #totalSuccesses = 0
+  #totalFailures = 0
+  #currentBackoffMs = 0
+  #currentRequestInFlight = false
 
   constructor(options: HostPresencePublisherOptions) {
     const minimum = options.retryMinimumMs ?? 1_000
@@ -60,12 +77,53 @@ export class HostPresencePublisher {
       throw new Error('Invalid Host presence scheduler bounds')
     }
     this.#options = options
+    this.#record('PRESENCE_PUBLISHER_CREATED')
     this.#record('PRESENCE_PUBLISHER_START')
     this.#task = this.#run()
+    void this.#task.then(
+      () => {
+        this.#publisherTaskAlive = false
+        this.#record('PRESENCE_PUBLISHER_EXIT', {
+          exitReason: this.#abort.signal.aborted
+            ? 'shutdown'
+            : 'unexpected_return',
+          shutdownExpected: this.#abort.signal.aborted,
+        })
+      },
+      () => {
+        this.#publisherTaskAlive = false
+        this.#record('PRESENCE_PUBLISHER_EXIT', {
+          exitReason: this.#abort.signal.aborted
+            ? 'shutdown'
+            : 'uncaught_error',
+          shutdownExpected: this.#abort.signal.aborted,
+        })
+      },
+    )
   }
 
   get lastPresence(): SignedSupervisorHostPresence | undefined {
     return this.#lastPresence
+  }
+
+  diagnosticSnapshot(): HostPresenceDiagnosticSnapshot {
+    return {
+      publisherStartedAt: this.#publisherStartedAt,
+      publisherTaskAlive: this.#publisherTaskAlive,
+      lastLoopIterationAt: this.#lastLoopIterationAt,
+      lastPublishAttemptAt: this.#lastPublishAttemptAt,
+      lastPublishSuccessAt: this.#lastPublishSuccessAt,
+      lastPublishFailureAt: this.#lastPublishFailureAt,
+      lastPublishFailureCategory: this.#lastPublishFailureCategory,
+      lastHttpStatusClass: this.#lastHttpStatusClass,
+      nextScheduledAttemptAt: this.#nextScheduledAttemptAt,
+      consecutiveFailures: this.#consecutiveFailures,
+      totalAttempts: this.#totalAttempts,
+      totalSuccesses: this.#totalSuccesses,
+      totalFailures: this.#totalFailures,
+      currentBackoffMs: this.#currentBackoffMs,
+      currentRequestInFlight: this.#currentRequestInFlight,
+    }
   }
 
   requestRenewal(): void {
@@ -74,6 +132,10 @@ export class HostPresencePublisher {
   }
 
   async close(): Promise<void> {
+    this.#record('PRESENCE_SHUTDOWN_REQUESTED', {
+      exitReason: 'shutdown',
+      shutdownExpected: true,
+    })
     this.#abort.abort()
     this.#wake?.()
     await this.#task
@@ -89,6 +151,8 @@ export class HostPresencePublisher {
     let retry = minimum
     let initial = true
     while (!this.#abort.signal.aborted) {
+      this.#lastLoopIterationAt = new Date().toISOString()
+      this.#record('PRESENCE_LOOP_ITERATION')
       this.#wakePending = false
       let delay = renewal
       try {
@@ -96,9 +160,14 @@ export class HostPresencePublisher {
           this.#record('PRESENCE_INITIAL_PUBLISH_START')
           initial = false
         }
+        this.#totalAttempts++
+        this.#lastPublishAttemptAt = new Date().toISOString()
+        this.#currentRequestInFlight = true
+        this.#record('PRESENCE_PUBLISH_ATTEMPT')
         const presence = await this.#options.createPresence(this.#abort.signal)
         if (this.#abort.signal.aborted) return
         if (presence === undefined) {
+          this.#currentRequestInFlight = false
           this.#lastPresence = undefined
           this.#options.onState?.('disabled')
         } else {
@@ -124,26 +193,49 @@ export class HostPresencePublisher {
           } else {
             await this.#options.publish(presence, this.#abort.signal)
           }
+          this.#currentRequestInFlight = false
           if (this.#abort.signal.aborted) return
           retry = minimum
+          this.#currentBackoffMs = 0
+          this.#consecutiveFailures = 0
+          this.#totalSuccesses++
+          this.#lastPublishSuccessAt = new Date().toISOString()
+          this.#record('PRESENCE_PUBLISH_SUCCESS')
           this.#options.onState?.('published')
+          this.#nextScheduledAttemptAt = new Date(
+            Date.now() + renewal,
+          ).toISOString()
           this.#record('PRESENCE_RENEWAL_SCHEDULED', {
             retryDelayMs: renewal,
           })
         }
       } catch (error) {
+        this.#currentRequestInFlight = false
         if (this.#abort.signal.aborted) return
         // Never print exception bodies, signed envelopes, rendezvous capabilities,
         // or HTTP headers. Temporary HTTP/key/Relay failures cannot kill the loop.
+        const category =
+          error instanceof HostPresenceDiagnosticError
+            ? error.category
+            : 'unknown'
+        this.#consecutiveFailures++
+        this.#totalFailures++
+        this.#lastPublishFailureAt = new Date().toISOString()
+        this.#lastPublishFailureCategory = category
+        this.#currentBackoffMs = retry
+        this.#record('PRESENCE_PUBLISH_FAILURE', {
+          errorCategory: category,
+        })
         this.#options.onState?.('retrying')
         delay = retry
         this.#record('PRESENCE_ERROR', {
           errorCategory:
-            error instanceof HostPresenceDiagnosticError
-              ? error.category
-              : 'unknown',
+            category,
         })
         this.#record('PRESENCE_RETRY_SCHEDULED', { retryDelayMs: delay })
+        this.#nextScheduledAttemptAt = new Date(
+          Date.now() + delay,
+        ).toISOString()
         retry = Math.min(maximum, retry * 2)
       }
       if (this.#wakePending) continue
@@ -155,6 +247,9 @@ export class HostPresencePublisher {
           resolve()
         }
         const timer = setTimeout(done, delay)
+        this.#nextScheduledAttemptAt = new Date(
+          Date.now() + delay,
+        ).toISOString()
         this.#wake = done
         this.#abort.signal.addEventListener('abort', done, { once: true })
         if (this.#abort.signal.aborted || this.#wakePending) done()
@@ -166,10 +261,16 @@ export class HostPresencePublisher {
     event: HostPresenceDiagnosticEvent,
     fields: HostPresenceDiagnosticFields = {},
   ): void {
-    this.#options.onDiagnostic?.(event, {
-      ...this.#options.diagnosticFields,
-      ...fields,
-    })
+    if (fields.statusClass !== undefined)
+      this.#lastHttpStatusClass = fields.statusClass
+    try {
+      this.#options.onDiagnostic?.(event, {
+        ...this.#options.diagnosticFields,
+        ...fields,
+      })
+    } catch {
+      // Diagnostics are observational and must never terminate the publisher.
+    }
   }
 }
 

@@ -11,11 +11,15 @@ import {
   verifySupervisorHostPresence,
 } from '@codetether/supervisor-transport'
 import {
+  HostPresenceDiagnosticError,
   HostPresencePublisher,
   publishHostPresence,
 } from '../dist/api/host-presence-publisher.js'
 import { SupervisorTransportManager } from '../dist/api/supervisor-transport-manager.js'
-import { HostPresenceDiagnostics } from '../dist/api/host-presence-diagnostics.js'
+import {
+  HostPresenceDiagnostics,
+  HOST_PRESENCE_DIAGNOSTIC_MAX_FILE_BYTES,
+} from '../dist/api/host-presence-diagnostics.js'
 import { HostPresenceSigningBridge } from '../dist/host-presence-signing.js'
 import { ConversationStore } from '../dist/persistence/index.js'
 
@@ -129,6 +133,71 @@ test('transient network failures back off, recover, and wake coalesces without t
   await worker.close()
 })
 
+test('Presence lifecycle snapshot remains alive across a post-publish failure', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  const diagnostics = []
+  let attempts = 0
+  const worker = new HostPresencePublisher({
+    createPresence: async () => ({
+      payload: payload(),
+      proof: 'test'.repeat(24),
+    }),
+    publish: async () => {
+      attempts++
+      if (attempts === 1) throw Error('post-publish fixture failure')
+    },
+    onDiagnostic: (event, fields) => diagnostics.push({ event, fields }),
+  })
+  await flush()
+  let snapshot = worker.diagnosticSnapshot()
+  assert.equal(snapshot.publisherTaskAlive, true)
+  assert.equal(snapshot.totalAttempts, 1)
+  assert.equal(snapshot.totalFailures, 1)
+  assert.equal(snapshot.lastPublishFailureCategory, 'unknown')
+  assert.equal(snapshot.currentRequestInFlight, false)
+  t.mock.timers.tick(1_000)
+  await flush()
+  snapshot = worker.diagnosticSnapshot()
+  assert.equal(attempts, 2)
+  assert.equal(snapshot.totalSuccesses, 1)
+  assert.equal(snapshot.consecutiveFailures, 0)
+  assert.equal(snapshot.publisherTaskAlive, true)
+  assert.ok(diagnostics.some(({ event }) => event === 'PRESENCE_LOOP_ITERATION'))
+  assert.ok(diagnostics.some(({ event }) => event === 'PRESENCE_PUBLISH_ATTEMPT'))
+  assert.ok(diagnostics.some(({ event }) => event === 'PRESENCE_PUBLISH_FAILURE'))
+  assert.ok(diagnostics.some(({ event }) => event === 'PRESENCE_PUBLISH_SUCCESS'))
+  const closing = worker.close()
+  await closing
+  assert.ok(
+    diagnostics.some(
+      ({ event, fields }) =>
+        event === 'PRESENCE_PUBLISHER_EXIT' &&
+        fields.exitReason === 'shutdown' &&
+        fields.shutdownExpected === true,
+    ),
+  )
+})
+
+test('descriptor/configuration failure is observed and does not terminate the publisher', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  let attempts = 0
+  const worker = new HostPresencePublisher({
+    createPresence: async () => {
+      attempts++
+      if (attempts === 1) throw new HostPresenceDiagnosticError('signing')
+      return { payload: payload(), proof: 'test'.repeat(24) }
+    },
+    publish: async () => undefined,
+  })
+  await flush()
+  assert.equal(worker.diagnosticSnapshot().lastPublishFailureCategory, 'signing')
+  t.mock.timers.tick(1_000)
+  await flush()
+  assert.equal(attempts, 2)
+  assert.equal(worker.diagnosticSnapshot().publisherTaskAlive, true)
+  await worker.close()
+})
+
 test('Controller-only/unclaimed Host never signs/publishes; late enable and real disable are respected', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   let claimed = false,
@@ -220,6 +289,31 @@ test('presence diagnostics retain only allowlisted fields in a bounded owner-onl
     assert.equal(entry.proof, undefined)
     assert.equal(entry.authorization, undefined)
     assert.equal((await stat(file)).mode & 0o777, 0o600)
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('presence diagnostics rotate instead of stopping at one full file', async () => {
+  const directory = await mkdtemp(
+    join(tmpdir(), 'codetether-presence-rotation-'),
+  )
+  try {
+    const diagnostics = new HostPresenceDiagnostics(
+      join(directory, 'state.sqlite3'),
+    )
+    for (let n = 0; n < 2_000; n++) {
+      diagnostics.record('PRESENCE_LOOP_ITERATION', {
+        hostId: payload().hostId,
+        generation: 1,
+        endpointOrigin: 'https://api.codetether.org',
+        authMode: 'host_es256_jws',
+      })
+    }
+    const file = join(directory, 'logs', 'host-presence.jsonl')
+    const rotated = `${file}.1`
+    assert.ok((await stat(rotated)).size > 0)
+    assert.ok((await stat(file)).size <= HOST_PRESENCE_DIAGNOSTIC_MAX_FILE_BYTES)
   } finally {
     await rm(directory, { recursive: true, force: true })
   }

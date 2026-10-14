@@ -5,23 +5,33 @@ import {
   fstatSync,
   mkdirSync,
   openSync,
+  renameSync,
+  unlinkSync,
   writeSync,
 } from 'node:fs'
 import { dirname, join } from 'node:path'
 
 export type HostPresenceDiagnosticEvent =
+  | 'PRESENCE_PUBLISHER_CREATED'
   | 'PRESENCE_PUBLISHER_START'
   | 'PRESENCE_CONFIG_READY'
   | 'PRESENCE_INITIAL_PUBLISH_START'
   | 'PRESENCE_SIGN_START'
   | 'PRESENCE_SIGN_OK'
   | 'PRESENCE_JWS_CREATED'
+  | 'PRESENCE_LOOP_ITERATION'
+  | 'PRESENCE_PUBLISH_ATTEMPT'
   | 'PRESENCE_HTTP_START'
   | 'PRESENCE_HTTP_RESULT'
+  | 'PRESENCE_PUBLISH_SUCCESS'
+  | 'PRESENCE_PUBLISH_FAILURE'
   | 'PRESENCE_RENEWAL_SCHEDULED'
   | 'PRESENCE_RETRY_SCHEDULED'
   | 'PRESENCE_PUBLISHER_SKIP'
   | 'PRESENCE_PUBLISHER_STOP'
+  | 'PRESENCE_SHUTDOWN_REQUESTED'
+  | 'PRESENCE_PUBLISHER_EXIT'
+  | 'PRESENCE_CONFIG_CHANGED'
   | 'PRESENCE_ERROR'
 
 export type HostPresenceErrorCategory =
@@ -41,14 +51,47 @@ export interface HostPresenceDiagnosticFields {
   readonly statusClass?: '2xx' | '3xx' | '4xx' | '5xx' | 'other'
   readonly errorCategory?: HostPresenceErrorCategory
   readonly retryDelayMs?: number
+  readonly exitReason?:
+    | 'shutdown'
+    | 'unexpected_return'
+    | 'uncaught_error'
+    | 'configuration_missing'
+  readonly shutdownExpected?: boolean
 }
 
-const MAX_LOG_BYTES = 256 * 1024
+export const HOST_PRESENCE_DIAGNOSTIC_MAX_FILE_BYTES = 256 * 1024
+export const HOST_PRESENCE_DIAGNOSTIC_MAX_FILES = 8
+export const HOST_PRESENCE_DIAGNOSTIC_MAX_TOTAL_BYTES =
+  HOST_PRESENCE_DIAGNOSTIC_MAX_FILE_BYTES * HOST_PRESENCE_DIAGNOSTIC_MAX_FILES
+
+export interface HostPresenceDiagnosticSnapshot {
+  readonly publisherStartedAt: string | null
+  readonly publisherTaskAlive: boolean
+  readonly lastLoopIterationAt: string | null
+  readonly lastPublishAttemptAt: string | null
+  readonly lastPublishSuccessAt: string | null
+  readonly lastPublishFailureAt: string | null
+  readonly lastPublishFailureCategory: HostPresenceErrorCategory | null
+  readonly lastHttpStatusClass:
+    | '2xx'
+    | '3xx'
+    | '4xx'
+    | '5xx'
+    | 'other'
+    | null
+  readonly nextScheduledAttemptAt: string | null
+  readonly consecutiveFailures: number
+  readonly totalAttempts: number
+  readonly totalSuccesses: number
+  readonly totalFailures: number
+  readonly currentBackoffMs: number
+  readonly currentRequestInFlight: boolean
+}
 
 /**
- * Writes a deliberately narrow local trace for Host-owned Presence only.
- * The file is bounded, user-readable, owner-only, and never contains envelopes
- * or exception text. Failure to write diagnostics never changes liveness.
+ * Writes a deliberately narrow local trace for Host-owned Presence only. The
+ * trace is a bounded eight-file ring so a long-running Host keeps recent
+ * lifecycle evidence instead of silently stopping at one full file.
  */
 export class HostPresenceDiagnostics {
   readonly #path: string | undefined
@@ -86,19 +129,28 @@ export class HostPresenceDiagnostics {
       const directory = dirname(this.#path)
       mkdirSync(directory, { recursive: true, mode: 0o700 })
       const noFollow = constants.O_NOFOLLOW ?? 0
+      const bytes = Buffer.byteLength(line, 'utf8')
       descriptor = openSync(
         this.#path,
         constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | noFollow,
         0o600,
       )
       const stat = fstatSync(descriptor)
-      if (
-        !stat.isFile() ||
-        (typeof process.getuid === 'function' &&
-          stat.uid !== process.getuid()) ||
-        stat.size + Buffer.byteLength(line, 'utf8') > MAX_LOG_BYTES
-      ) {
+      if (!stat.isFile() ||
+        (typeof process.getuid === 'function' && stat.uid !== process.getuid())) {
         return
+      }
+      if (
+        stat.size + bytes > HOST_PRESENCE_DIAGNOSTIC_MAX_FILE_BYTES
+      ) {
+        closeSync(descriptor)
+        descriptor = undefined
+        this.#rotate()
+        descriptor = openSync(
+          this.#path,
+          constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | noFollow,
+          0o600,
+        )
       }
       fchmodSync(descriptor, 0o600)
       writeSync(descriptor, line, undefined, 'utf8')
@@ -114,6 +166,34 @@ export class HostPresenceDiagnostics {
       }
     }
   }
+
+  #rotate(): void {
+    const path = this.#path
+    if (path === undefined) return
+    try {
+      try {
+        unlinkSync(`${path}.${HOST_PRESENCE_DIAGNOSTIC_MAX_FILES}`)
+      } catch {
+        // The oldest generation may not exist yet.
+      }
+      for (
+        let index = HOST_PRESENCE_DIAGNOSTIC_MAX_FILES - 2;
+        index >= 1;
+        index--
+      ) {
+        const source = `${path}.${index}`
+        const target = `${path}.${index + 1}`
+        try {
+          renameSync(source, target)
+        } catch {
+          // Missing older generations are normal during initial rotation.
+        }
+      }
+      renameSync(path, `${path}.1`)
+    } catch {
+      // A failed rotation must never affect Host liveness.
+    }
+  }
 }
 
 function sanitizeFields(
@@ -127,6 +207,12 @@ function sanitizeFields(
     statusClass?: '2xx' | '3xx' | '4xx' | '5xx' | 'other'
     errorCategory?: HostPresenceErrorCategory
     retryDelayMs?: number
+    exitReason?:
+      | 'shutdown'
+      | 'unexpected_return'
+      | 'uncaught_error'
+      | 'configuration_missing'
+    shutdownExpected?: boolean
   } = {}
   if (
     fields.hostId !== undefined &&
@@ -181,5 +267,15 @@ function sanitizeFields(
   ) {
     result.retryDelayMs = fields.retryDelayMs
   }
+  if (
+    fields.exitReason === 'shutdown' ||
+    fields.exitReason === 'unexpected_return' ||
+    fields.exitReason === 'uncaught_error' ||
+    fields.exitReason === 'configuration_missing'
+  ) {
+    result.exitReason = fields.exitReason
+  }
+  if (fields.shutdownExpected !== undefined)
+    result.shutdownExpected = fields.shutdownExpected === true
   return result
 }

@@ -359,6 +359,10 @@ export class SupervisorTransportManager {
     this.#presencePublisher?.requestRenewal()
   }
 
+  presenceDiagnostics() {
+    return this.#presencePublisher?.diagnosticSnapshot() ?? null
+  }
+
   #ensurePresencePublisher(): void {
     if (this.#presencePublisher !== undefined) return
     const identity = this.#service.getHostIdentity()
@@ -449,6 +453,12 @@ export class SupervisorTransportManager {
         return last
     }
     this.#persistence.configureHostPresence({ ...input, enabled })
+    this.#presenceDiagnostics.record('PRESENCE_CONFIG_CHANGED', {
+      hostId: identity.hostId,
+      generation: identity.identityGeneration,
+      endpointOrigin: input.controlPlaneOrigin,
+      authMode: 'host_es256_jws',
+    })
     if (!enabled) {
       await this.#presencePublisher?.close()
       this.#presencePublisher = undefined

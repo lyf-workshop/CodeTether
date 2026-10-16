@@ -20,7 +20,10 @@ import type { Session } from '@supabase/supabase-js'
 
 import { Badge, Button } from '@codetether/ui'
 
-import { controlPlaneBaseUrl } from '../../runtime/account/account-config.js'
+import {
+  accountConfigurationErrors,
+  controlPlaneBaseUrl,
+} from '../../runtime/account/account-config.js'
 import {
   ControlPlaneClientError,
   approveHostAccessRequest,
@@ -443,9 +446,9 @@ function HostCapabilityCard({
             </Badge>
           </div>
           <p className="mt-2 text-sm text-text-secondary">
-            Enable this Mac as a production Host. CodeTether creates a
-            separate protected Host key, registers it, and claims it into your
-            existing Space without changing the ProductDevice identity.
+            Enable this Mac as a production Host. CodeTether creates a separate
+            protected Host key, registers it, and claims it into your existing
+            Space without changing the ProductDevice identity.
           </p>
         </div>
       </div>
@@ -1007,6 +1010,9 @@ function AccountConfigurationRequired() {
       >
         Set the Desktop Supabase project URL, publishable key, and Control Plane
         URL. No account secret key is required.
+        {accountConfigurationErrors.length > 0 && (
+          <p className="mt-2">{accountConfigurationErrors.join('; ')}.</p>
+        )}
       </div>
     </PageFrame>
   )

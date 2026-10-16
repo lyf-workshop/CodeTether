@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:desktop": "node scripts/check-desktop-account-config.mjs && pnpm build",
     "typecheck": "tsc -b --pretty false",
     "lint": "eslint .",
     "test": "pnpm exec tsc -p tsconfig.test.json && node --test --test-concurrency=1 test/*.test.mjs"

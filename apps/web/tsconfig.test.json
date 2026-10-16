@@ -78,6 +78,8 @@
     "src/runtime/host/project-view-state.ts",
     "src/runtime/host/relay-actions.ts",
     "src/runtime/account/control-plane-client.ts",
+    "src/runtime/account/account-config.ts",
+    "src/runtime/account/supabase-account.ts",
     "src/runtime/account/remote-conversation-read-model.ts",
     "src/runtime/native/native-capabilities.ts",
     "src/runtime/native/notification-preferences.ts",

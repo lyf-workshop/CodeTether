@@ -33,9 +33,16 @@ export type HostPresenceDiagnosticEvent =
   | 'PRESENCE_PUBLISHER_EXIT'
   | 'PRESENCE_CONFIG_CHANGED'
   | 'PRESENCE_ERROR'
+  | 'TRANSPORT_REFRESH_START'
+  | 'DIRECT_DISCOVERY_RESULT'
+  | 'RELAY_RECONNECT_START'
+  | 'RELAY_RECONNECT_RESULT'
+  | 'TRANSPORT_STATE_UPDATED'
+  | 'TRANSPORT_REFRESH_RETRY'
 
 export type HostPresenceErrorCategory =
   | 'configuration_missing'
+  | 'transport_unavailable'
   | 'signing'
   | 'jws_validation'
   | 'http_rejected'
@@ -51,6 +58,8 @@ export interface HostPresenceDiagnosticFields {
   readonly statusClass?: '2xx' | '3xx' | '4xx' | '5xx' | 'other'
   readonly errorCategory?: HostPresenceErrorCategory
   readonly retryDelayMs?: number
+  readonly directEndpointCount?: number
+  readonly relayConnected?: boolean
   readonly exitReason?:
     | 'shutdown'
     | 'unexpected_return'
@@ -207,6 +216,8 @@ function sanitizeFields(
     statusClass?: '2xx' | '3xx' | '4xx' | '5xx' | 'other'
     errorCategory?: HostPresenceErrorCategory
     retryDelayMs?: number
+    directEndpointCount?: number
+    relayConnected?: boolean
     exitReason?:
       | 'shutdown'
       | 'unexpected_return'
@@ -250,6 +261,7 @@ function sanitizeFields(
   }
   if (
     fields.errorCategory === 'configuration_missing' ||
+    fields.errorCategory === 'transport_unavailable' ||
     fields.errorCategory === 'signing' ||
     fields.errorCategory === 'jws_validation' ||
     fields.errorCategory === 'http_rejected' ||
@@ -266,6 +278,17 @@ function sanitizeFields(
     fields.retryDelayMs <= 60_000
   ) {
     result.retryDelayMs = fields.retryDelayMs
+  }
+  if (
+    fields.directEndpointCount !== undefined &&
+    Number.isSafeInteger(fields.directEndpointCount) &&
+    fields.directEndpointCount >= 0 &&
+    fields.directEndpointCount <= 8
+  ) {
+    result.directEndpointCount = fields.directEndpointCount
+  }
+  if (typeof fields.relayConnected === 'boolean') {
+    result.relayConnected = fields.relayConnected
   }
   if (
     fields.exitReason === 'shutdown' ||

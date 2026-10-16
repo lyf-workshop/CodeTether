@@ -94,6 +94,84 @@ test('loopback-only Supervisor listeners publish no Direct endpoint', () => {
   )
 })
 
+test('Host-owned recovery replaces Direct endpoints after repeated network changes', async () => {
+  const ipv4 = (address) => ({
+    address,
+    netmask: '255.255.255.0',
+    family: 'IPv4',
+    mac: '00:00:00:00:00:01',
+    internal: false,
+    cidr: `${address}/24`,
+  })
+  let interfaces = { Ethernet: [ipv4('192.0.2.7')] }
+  let discoveries = 0
+  const manager = await SupervisorTransportManager.create({
+    service: { getHostIdentity: () => undefined },
+    persistence: { getHostPresenceConfiguration: () => undefined },
+    port: 0,
+    bindHost: '127.0.0.1',
+    clientBuildIdentity: 'test-host',
+    discoverNetworkInterfaces: () => {
+      discoveries++
+      return interfaces
+    },
+  })
+  try {
+    const port = manager.presence().directEndpoints[0].port
+    assert.deepEqual(manager.presence().directEndpoints, [
+      { host: '192.0.2.7', port },
+    ])
+    interfaces = {}
+    manager.requestTransportRecovery()
+    assert.deepEqual(manager.presence().directEndpoints, [])
+    interfaces = { Ethernet: [ipv4('192.0.2.8'), ipv4('192.0.2.8')] }
+    manager.requestTransportRecovery()
+    manager.requestTransportRecovery()
+    assert.deepEqual(manager.presence().directEndpoints, [
+      { host: '192.0.2.8', port },
+    ])
+    assert.equal(discoveries, 4)
+  } finally {
+    await manager.close()
+  }
+  manager.requestTransportRecovery()
+  assert.equal(discoveries, 4)
+})
+
+test('an initial interface enumeration error leaves Host alive for later recovery', async () => {
+  let available = false
+  const manager = await SupervisorTransportManager.create({
+    service: { getHostIdentity: () => undefined },
+    persistence: { getHostPresenceConfiguration: () => undefined },
+    port: 0,
+    bindHost: '127.0.0.1',
+    clientBuildIdentity: 'test-host',
+    discoverNetworkInterfaces: () => {
+      if (!available) throw new Error('synthetic network failure')
+      return {
+        Ethernet: [
+          {
+            address: '192.0.2.10',
+            netmask: '255.255.255.0',
+            family: 'IPv4',
+            mac: '00:00:00:00:00:01',
+            internal: false,
+            cidr: '192.0.2.10/24',
+          },
+        ],
+      }
+    },
+  })
+  try {
+    assert.deepEqual(manager.presence().directEndpoints, [])
+    available = true
+    manager.requestTransportRecovery()
+    assert.equal(manager.presence().directEndpoints[0].host, '192.0.2.10')
+  } finally {
+    await manager.close()
+  }
+})
+
 test('remote Supervisor loopback endpoints are recognized before Relay fallback', () => {
   assert.equal(isLoopbackSupervisorHost('127.0.0.1'), true)
   assert.equal(isLoopbackSupervisorHost('127.42.9.7'), true)

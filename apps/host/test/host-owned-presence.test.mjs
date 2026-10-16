@@ -5,6 +5,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import {
+  RelayService,
+  RelayStateStore,
+  generateRelayPinnedTlsIdentity,
+} from '@codetether/relay'
+import {
   canonicalJsonBytes,
   supervisorDescriptorProofType,
   supervisorGrantProofType,
@@ -162,10 +167,18 @@ test('Presence lifecycle snapshot remains alive across a post-publish failure', 
   assert.equal(snapshot.totalSuccesses, 1)
   assert.equal(snapshot.consecutiveFailures, 0)
   assert.equal(snapshot.publisherTaskAlive, true)
-  assert.ok(diagnostics.some(({ event }) => event === 'PRESENCE_LOOP_ITERATION'))
-  assert.ok(diagnostics.some(({ event }) => event === 'PRESENCE_PUBLISH_ATTEMPT'))
-  assert.ok(diagnostics.some(({ event }) => event === 'PRESENCE_PUBLISH_FAILURE'))
-  assert.ok(diagnostics.some(({ event }) => event === 'PRESENCE_PUBLISH_SUCCESS'))
+  assert.ok(
+    diagnostics.some(({ event }) => event === 'PRESENCE_LOOP_ITERATION'),
+  )
+  assert.ok(
+    diagnostics.some(({ event }) => event === 'PRESENCE_PUBLISH_ATTEMPT'),
+  )
+  assert.ok(
+    diagnostics.some(({ event }) => event === 'PRESENCE_PUBLISH_FAILURE'),
+  )
+  assert.ok(
+    diagnostics.some(({ event }) => event === 'PRESENCE_PUBLISH_SUCCESS'),
+  )
   const closing = worker.close()
   await closing
   assert.ok(
@@ -190,7 +203,10 @@ test('descriptor/configuration failure is observed and does not terminate the pu
     publish: async () => undefined,
   })
   await flush()
-  assert.equal(worker.diagnosticSnapshot().lastPublishFailureCategory, 'signing')
+  assert.equal(
+    worker.diagnosticSnapshot().lastPublishFailureCategory,
+    'signing',
+  )
   t.mock.timers.tick(1_000)
   await flush()
   assert.equal(attempts, 2)
@@ -280,14 +296,25 @@ test('presence diagnostics retain only allowlisted fields in a bounded owner-onl
       proof: 'NEVER-LOG-THIS',
       authorization: 'NEVER-LOG-THIS',
     })
+    diagnostics.record('TRANSPORT_STATE_UPDATED', {
+      directEndpointCount: 1,
+      relayConnected: false,
+      host: 'NEVER-LOG-THIS',
+    })
     const file = join(directory, 'logs', 'host-presence.jsonl')
-    const entry = JSON.parse(await readFile(file, 'utf8'))
+    const [entry, transport] = (await readFile(file, 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line))
     assert.equal(entry.event, 'PRESENCE_HTTP_RESULT')
     assert.equal(entry.statusClass, '4xx')
     assert.equal(entry.errorCategory, 'http_rejected')
     assert.equal(entry.endpointOrigin, 'https://api.codetether.org')
     assert.equal(entry.proof, undefined)
     assert.equal(entry.authorization, undefined)
+    assert.equal(transport.directEndpointCount, 1)
+    assert.equal(transport.relayConnected, false)
+    assert.equal(transport.host, undefined)
     assert.equal((await stat(file)).mode & 0o777, 0o600)
   } finally {
     await rm(directory, { recursive: true, force: true })
@@ -313,7 +340,9 @@ test('presence diagnostics rotate instead of stopping at one full file', async (
     const file = join(directory, 'logs', 'host-presence.jsonl')
     const rotated = `${file}.1`
     assert.ok((await stat(rotated)).size > 0)
-    assert.ok((await stat(file)).size <= HOST_PRESENCE_DIAGNOSTIC_MAX_FILE_BYTES)
+    assert.ok(
+      (await stat(file)).size <= HOST_PRESENCE_DIAGNOSTIC_MAX_FILE_BYTES,
+    )
   } finally {
     await rm(directory, { recursive: true, force: true })
   }
@@ -377,6 +406,18 @@ test('existing claimed Windows/macOS Host restores same identity/context and imm
   try {
     for (const platform of ['windows', 'macos']) {
       const dbPath = join(directory, `${platform}.sqlite3`)
+      let interfaces = {
+        Ethernet: [
+          {
+            address: '192.0.2.7',
+            netmask: '255.255.255.0',
+            family: 'IPv4',
+            mac: '00:00:00:00:00:01',
+            internal: false,
+            cidr: '192.0.2.7/24',
+          },
+        ],
+      }
       let store = ConversationStore.open({ databasePath: dbPath })
       const time = new Date().toISOString()
       const identity = {
@@ -427,7 +468,9 @@ test('existing claimed Windows/macOS Host restores same identity/context and imm
           persistence: store,
           port: 0,
           bindHost: '127.0.0.1',
-          advertiseHost: '192.0.2.7',
+          ...(platform === 'macos'
+            ? { discoverNetworkInterfaces: () => interfaces }
+            : { advertiseHost: '192.0.2.7' }),
           clientBuildIdentity: 'fixture',
           // The first startup may seed migration-23 context from the verified
           // grant; later restarts must use the durable Host-owned config alone.
@@ -445,6 +488,44 @@ test('existing claimed Windows/macOS Host restores same identity/context and imm
           assert.equal(captured.at(-1).payload.hostId, identity.hostId)
           assert.equal(store.listEnabledHostSupervisorGrants().length, 1)
           assert.deepEqual(store.getHostIdentity(), identity)
+          if (platform === 'macos' && restart === 0) {
+            interfaces = {}
+            manager.requestTransportRecovery()
+            await waitForPresence(
+              () => manager.presenceDiagnostics().totalFailures >= 1,
+            )
+            assert.deepEqual(manager.presence().directEndpoints, [])
+            assert.equal(captured.length, before + 1)
+            assert.equal(manager.presenceDiagnostics().publisherTaskAlive, true)
+            assert.equal(
+              manager.presenceDiagnostics().lastPublishFailureCategory,
+              'transport_unavailable',
+            )
+            assert.equal(manager.presenceDiagnostics().currentBackoffMs, 1_000)
+            await new Promise((resolve) => setTimeout(resolve, 50))
+            assert.equal(manager.presenceDiagnostics().totalFailures, 1)
+
+            interfaces = {
+              Ethernet: [
+                {
+                  address: '192.0.2.8',
+                  netmask: '255.255.255.0',
+                  family: 'IPv4',
+                  mac: '00:00:00:00:00:01',
+                  internal: false,
+                  cidr: '192.0.2.8/24',
+                },
+              ],
+            }
+            await waitForPresence(() => captured.length === before + 2)
+            assert.deepEqual(captured.at(-1).payload.directEndpoints, [
+              {
+                host: '192.0.2.8',
+                port: manager.presence().directEndpoints[0].port,
+              },
+            ])
+            assert.equal(manager.presenceDiagnostics().totalSuccesses, 2)
+          }
           if (restart === 1) {
             const context = {
               spaceId: payload().spaceId,
@@ -479,6 +560,163 @@ test('existing claimed Windows/macOS Host restores same identity/context and imm
   } finally {
     globalThis.fetch = originalFetch
     await rm(directory, { recursive: true, force: true })
+  }
+})
+
+async function waitForPresence(predicate, timeoutMs = 2_000) {
+  const startedAt = Date.now()
+  while (!predicate()) {
+    if (Date.now() - startedAt >= timeoutMs) {
+      throw new Error('Timed out waiting for local Presence state')
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+}
+
+test('Relay reconnect restores descriptor and Presence; either transport can recover alone', async () => {
+  const root = await mkdtemp(
+    join(tmpdir(), 'codetether-host-transport-recovery-'),
+  )
+  const statePath = join(root, 'relay-state')
+  const relayLogs = []
+  const makeRelay = async (port) => {
+    const stateStore = new RelayStateStore(statePath)
+    const relay = new RelayService({
+      stateStore,
+      tls: await generateRelayPinnedTlsIdentity(stateStore.identity),
+      host: '127.0.0.1',
+      port,
+      managementPort: 0,
+      logger: {
+        log: (event, fields = {}) => relayLogs.push({ event, ...fields }),
+      },
+    })
+    await relay.start()
+    return relay
+  }
+  let relay = await makeRelay(0)
+  let manager
+  const originalFetch = globalThis.fetch
+  const captured = []
+  let interfaces = {}
+  const { privateKey, publicKey } = generateKeyPairSync('ec', {
+    namedCurve: 'P-256',
+  })
+  const publicJwk = publicKey.export({ format: 'jwk' })
+  const canonical = JSON.stringify({
+    crv: publicJwk.crv,
+    kty: publicJwk.kty,
+    x: publicJwk.x,
+    y: publicJwk.y,
+  })
+  const store = ConversationStore.open({
+    databasePath: join(root, 'host.sqlite3'),
+  })
+  const now = new Date().toISOString()
+  store.createHostIdentity({
+    hostId: payload().hostId,
+    publicJwk: canonical,
+    fingerprint: `sha256:${createHash('sha256').update(canonical).digest('base64url')}`,
+    keyAlgorithm: 'ES256',
+    keyHandle: `CodeTether.HostIdentity.${'0'.repeat(32)}`,
+    identityGeneration: 1,
+    safeLabel: 'Synthetic Host',
+    platform: 'macos',
+    appVersion: 'test',
+    createdAt: now,
+    updatedAt: now,
+    lastRegisteredAt: now,
+  })
+  store.configureHostPresence({
+    spaceId: payload().spaceId,
+    controlPlaneOrigin: payload().controlPlaneOrigin,
+    enabled: true,
+  })
+  globalThis.fetch = async (_url, init) => {
+    captured.push(JSON.parse(init.body))
+    return new Response('{}', { status: 200 })
+  }
+  try {
+    const relayPort = relay.listeningAddress.port
+    manager = await SupervisorTransportManager.create({
+      service: { getHostIdentity: () => store.getHostIdentity() },
+      persistence: store,
+      port: 0,
+      bindHost: '127.0.0.1',
+      clientBuildIdentity: 'fixture',
+      discoverNetworkInterfaces: () => interfaces,
+      relay: {
+        endpoint: `tls+pinned://127.0.0.1:${relayPort}/`,
+        relayId: relay.relayId,
+        relayFingerprint: relay.relayFingerprint,
+      },
+      signHostPresence: async (_handle, p) => {
+        const encoded = `${Buffer.from(JSON.stringify({ alg: 'ES256', typ: supervisorDescriptorProofType })).toString('base64url')}.${Buffer.from(canonicalJsonBytes(p)).toString('base64url')}`
+        return `${encoded}.${sign('sha256', Buffer.from(encoded), { key: privateKey, dsaEncoding: 'ieee-p1363' }).toString('base64url')}`
+      },
+    })
+    await waitForPresence(() => captured.length >= 1, 5_000)
+    assert.deepEqual(captured.at(-1).payload.directEndpoints, [])
+    const descriptor = captured.at(-1).payload.relay
+    assert.notEqual(descriptor, null)
+
+    await relay.close()
+    await waitForPresence(() => manager.presence().relay === null)
+    const beforeOutage = captured.length
+    await waitForPresence(
+      () => manager.presenceDiagnostics().totalFailures >= 1,
+    )
+    assert.equal(captured.length, beforeOutage)
+
+    relay = await makeRelay(relayPort)
+    await waitForPresence(() => captured.length > beforeOutage, 5_000)
+    assert.deepEqual(captured.at(-1).payload.directEndpoints, [])
+    assert.deepEqual(captured.at(-1).payload.relay, descriptor)
+    const reconnects = relayLogs.filter(
+      (entry) =>
+        entry.event === 'supervisor.connection.authenticated' &&
+        entry.role === 'host',
+    ).length
+    for (let index = 0; index < 5; index++) manager.requestTransportRecovery()
+    assert.equal(
+      relayLogs.filter(
+        (entry) =>
+          entry.event === 'supervisor.connection.authenticated' &&
+          entry.role === 'host',
+      ).length,
+      reconnects,
+    )
+
+    await relay.close()
+    await waitForPresence(() => manager.presence().relay === null)
+    interfaces = {
+      Ethernet: [
+        {
+          address: '192.0.2.9',
+          netmask: '255.255.255.0',
+          family: 'IPv4',
+          mac: '00:00:00:00:00:01',
+          internal: false,
+          cidr: '192.0.2.9/24',
+        },
+      ],
+    }
+    const beforeDirect = captured.length
+    manager.requestTransportRecovery()
+    await waitForPresence(() => captured.length > beforeDirect)
+    assert.deepEqual(captured.at(-1).payload.directEndpoints, [
+      { host: '192.0.2.9', port: manager.presence().directEndpoints[0].port },
+    ])
+    assert.equal(captured.at(-1).payload.relay, null)
+    await manager.close()
+    assert.equal(manager.presenceDiagnostics().publisherTaskAlive, false)
+    manager = undefined
+  } finally {
+    globalThis.fetch = originalFetch
+    await manager?.close()
+    await relay.close()
+    store.close()
+    await rm(root, { recursive: true, force: true })
   }
 })
 

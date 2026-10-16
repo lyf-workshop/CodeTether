@@ -60,6 +60,8 @@ export interface SupervisorTransportManagerOptions {
   readonly bindHost?: string
   readonly port?: number
   readonly advertiseHost?: string
+  /** Test-only network snapshot source; production uses node:os. */
+  readonly discoverNetworkInterfaces?: typeof networkInterfaces
   /** Test-only opt-in for in-process loopback Supervisor fixtures. */
   readonly allowLoopbackForTests?: boolean
   readonly clientBuildIdentity: string
@@ -96,7 +98,9 @@ export class SupervisorTransportManager {
   readonly #service: HostService
   readonly #persistence: ConversationStore
   readonly #server: SupervisorServer
-  readonly #advertiseHosts: readonly string[]
+  #advertiseHosts: readonly string[]
+  readonly #discoverNetworkInterfaces: typeof networkInterfaces
+  readonly #fixedAdvertiseHost: string | undefined
   readonly #allowLoopbackForTests: boolean
   readonly #clientBuildIdentity: string
   readonly #relay: SupervisorRelayConfiguration | undefined
@@ -111,6 +115,7 @@ export class SupervisorTransportManager {
   #relayAbort: AbortController | undefined
   #relayConnection: SupervisorRelayControlConnection | undefined
   #relayTask: Promise<void> | undefined
+  #closed = false
   #presencePublisher: HostPresencePublisher | undefined
   #presenceConstruction:
     Promise<SignedSupervisorHostPresence | undefined> | undefined
@@ -133,12 +138,13 @@ export class SupervisorTransportManager {
       options.persistence.databasePath,
     )
     this.#allowLoopbackForTests = options.allowLoopbackForTests === true
+    this.#discoverNetworkInterfaces =
+      options.discoverNetworkInterfaces ?? networkInterfaces
+    this.#fixedAdvertiseHost = options.advertiseHost
     this.#relayRendezvousId = `srv_${randomBytes(16).toString('hex')}`
     this.#relayRendezvousCapability = randomBytes(32).toString('base64url')
     const advertisedHosts =
-      options.advertiseHost === undefined
-        ? discoverSupervisorDirectHosts()
-        : [options.advertiseHost]
+      options.advertiseHost === undefined ? [] : [options.advertiseHost]
     this.#advertiseHosts = this.#allowLoopbackForTests
       ? advertisedHosts
       : advertisedHosts.filter((host) => !isLoopbackSupervisorHost(host))
@@ -349,6 +355,7 @@ export class SupervisorTransportManager {
     const manager = new SupervisorTransportManager(options, server)
     await server.start()
     options.startupTimeline?.mark('SUPERVISOR_4318_LISTENING')
+    manager.#refreshDirectHosts()
     manager.#startRelayPresence()
     await manager.#restorePresenceConfiguration(options.controlPlaneOrigin)
     manager.#ensurePresencePublisher()
@@ -357,6 +364,44 @@ export class SupervisorTransportManager {
 
   requestPresenceRenewal(): void {
     this.#presencePublisher?.requestRenewal()
+  }
+
+  requestTransportRecovery(): void {
+    if (this.#closed) return
+    this.#refreshDirectHosts()
+    this.requestPresenceRenewal()
+  }
+
+  #refreshDirectHosts(): void {
+    if (this.#closed || this.#fixedAdvertiseHost !== undefined) return
+    this.#presenceDiagnostics.record('TRANSPORT_REFRESH_START')
+    let hosts: readonly string[]
+    try {
+      hosts = discoverSupervisorDirectHosts(this.#discoverNetworkInterfaces())
+    } catch {
+      // An unavailable interface snapshot must not retain an obsolete address.
+      hosts = []
+      this.#presenceDiagnostics.record('TRANSPORT_REFRESH_RETRY', {
+        errorCategory: 'network_error',
+      })
+    }
+    this.#presenceDiagnostics.record('DIRECT_DISCOVERY_RESULT', {
+      directEndpointCount: hosts.length,
+    })
+    if (
+      hosts.length === this.#advertiseHosts.length &&
+      hosts.every((host, index) => host === this.#advertiseHosts[index])
+    )
+      return
+    this.#advertiseHosts = hosts
+    this.#recordTransportState()
+  }
+
+  #recordTransportState(): void {
+    this.#presenceDiagnostics.record('TRANSPORT_STATE_UPDATED', {
+      directEndpointCount: this.#advertiseHosts.length,
+      relayConnected: this.#relayConnection !== undefined,
+    })
   }
 
   presenceDiagnostics() {
@@ -524,6 +569,14 @@ export class SupervisorTransportManager {
       this.#signHostPresence === undefined
     )
       return undefined
+    this.#refreshDirectHosts()
+    const transport = this.presence()
+    if (transport.directEndpoints.length === 0 && transport.relay === null) {
+      this.#presenceDiagnostics.record('TRANSPORT_REFRESH_RETRY', {
+        errorCategory: 'transport_unavailable',
+      })
+      throw new HostPresenceDiagnosticError('transport_unavailable')
+    }
     const now = Math.floor(Date.now() / 1_000)
     const payload = signedSupervisorHostPresenceSchema.shape.payload.parse({
       v: 1,
@@ -534,7 +587,7 @@ export class SupervisorTransportManager {
       hostIdentityGeneration: identity.identityGeneration,
       spaceId: config.spaceId,
       controlPlaneOrigin: config.controlPlaneOrigin,
-      ...this.presence(),
+      ...transport,
       iat: now,
       exp: now + supervisorTransportLimits.descriptorLifetimeMs / 1_000,
       protocolVersion: 2,
@@ -571,6 +624,9 @@ export class SupervisorTransportManager {
       throw new HostPresenceDiagnosticError('jws_validation')
     }
     this.#presenceDiagnostics.record('PRESENCE_JWS_CREATED', diagnosticFields)
+    if (!sameTransportState(transport, this.presence())) {
+      throw new HostPresenceDiagnosticError('transport_unavailable')
+    }
     for (const grant of this.#persistence.listEnabledHostSupervisorGrants()) {
       if (grant.payload.expiresAt * 1_000 <= Date.now()) continue
       // Server activation verifies all Host/grant/scope bindings. Cloud admission
@@ -582,6 +638,9 @@ export class SupervisorTransportManager {
           `${JSON.stringify({ component: 'host', event: 'supervisor.grant.restore_rejected', authorizationId: grant.payload.authorizationId })}\n`,
         )
       }
+    }
+    if (!sameTransportState(transport, this.presence())) {
+      throw new HostPresenceDiagnosticError('transport_unavailable')
     }
     return descriptor
   }
@@ -597,16 +656,22 @@ export class SupervisorTransportManager {
         port: address.port,
       })),
       relay:
-        this.#relay === undefined
+        this.#relayConnection === undefined
           ? null
-          : {
-              ...this.#relay,
-              rendezvousId: this.#relayRendezvousId,
-              rendezvousCapability: this.#relayRendezvousCapability,
-              hostTransportFingerprint:
-                this.#server.tlsIdentity.publicKeyFingerprint,
-            },
+          : this.#configuredRelayDescriptor(),
     }
+  }
+
+  #configuredRelayDescriptor(): SupervisorTransportPresence['relay'] {
+    return this.#relay === undefined
+      ? null
+      : {
+          ...this.#relay,
+          rendezvousId: this.#relayRendezvousId,
+          rendezvousCapability: this.#relayRendezvousCapability,
+          hostTransportFingerprint:
+            this.#server.tlsIdentity.publicKeyFingerprint,
+        }
   }
 
   async activate(input: {
@@ -1015,6 +1080,7 @@ export class SupervisorTransportManager {
   }
 
   async close(): Promise<void> {
+    this.#closed = true
     await this.#presencePublisher?.close()
     this.#relayAbort?.abort()
     this.#relayConnection?.close()
@@ -1033,7 +1099,7 @@ export class SupervisorTransportManager {
 
   #assertRelayDescriptor(descriptor: SignedSupervisorTransport): void {
     const relay = descriptor.payload.relay
-    const presence = this.presence().relay
+    const presence = this.#configuredRelayDescriptor()
     if (relay === null && presence === null) return
     if (
       relay === null ||
@@ -1050,7 +1116,7 @@ export class SupervisorTransportManager {
   }
 
   #startRelayPresence(): void {
-    const relay = this.presence().relay
+    const relay = this.#configuredRelayDescriptor()
     if (relay === null) return
     if (this.#relayTask !== undefined) return
     const abort = new AbortController()
@@ -1081,9 +1147,6 @@ export class SupervisorTransportManager {
         stream.destroy()
       })
     })
-    process.stderr.write(
-      `${JSON.stringify({ component: 'host', event: 'supervisor.relay.presence', state: 'online' })}\n`,
-    )
     return connection
   }
 
@@ -1093,15 +1156,33 @@ export class SupervisorTransportManager {
   ): Promise<void> {
     let delayMs = RELAY_RECONNECT_MINIMUM_MS
     while (!abort.signal.aborted) {
+      this.#presenceDiagnostics.record('RELAY_RECONNECT_START')
       try {
         const connection = await this.#connectRelayHost(relay, abort.signal)
+        if (abort.signal.aborted) {
+          connection.close()
+          return
+        }
         this.#relayConnection = connection
+        this.#presenceDiagnostics.record('RELAY_RECONNECT_RESULT', {
+          relayConnected: true,
+        })
+        this.#recordTransportState()
+        this.requestPresenceRenewal()
+        process.stderr.write(
+          `${JSON.stringify({ component: 'host', event: 'supervisor.relay.presence', state: 'online' })}\n`,
+        )
         delayMs = RELAY_RECONNECT_MINIMUM_MS
         await connection.completion.catch(() => undefined)
         if (this.#relayConnection === connection) {
           this.#relayConnection = undefined
+          this.#recordTransportState()
+          this.requestPresenceRenewal()
         }
       } catch {
+        this.#presenceDiagnostics.record('RELAY_RECONNECT_RESULT', {
+          relayConnected: false,
+        })
         delayMs = Math.min(delayMs * 2, RELAY_RECONNECT_MAXIMUM_MS)
       }
       if (abort.signal.aborted) return
@@ -1255,6 +1336,25 @@ export function discoverSupervisorDirectHosts(
   return [...new Set(externalIpv4)].slice(
     0,
     supervisorTransportLimits.maximumEndpoints,
+  )
+}
+
+function sameTransportState(
+  first: SupervisorTransportPresence,
+  second: SupervisorTransportPresence,
+): boolean {
+  return (
+    first.directEndpoints.length === second.directEndpoints.length &&
+    first.directEndpoints.every(
+      (endpoint, index) =>
+        endpoint.host === second.directEndpoints[index]?.host &&
+        endpoint.port === second.directEndpoints[index]?.port,
+    ) &&
+    (first.relay === null
+      ? second.relay === null
+      : second.relay !== null &&
+        first.relay.rendezvousId === second.relay.rendezvousId &&
+        first.relay.rendezvousCapability === second.relay.rendezvousCapability)
   )
 }
 

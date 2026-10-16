@@ -47,7 +47,7 @@ async function main(): Promise<void> {
     desktopManaged,
     onNetworkRestored: () => {
       host?.service.requestNetworkRecovery('desktop_resume')
-      host?.requestPresenceRenewal?.()
+      host?.requestTransportRecovery?.()
     },
     onPresenceSignature: (line) => signer.receive(line),
   })

@@ -116,6 +116,7 @@ export interface RunningLocalCodexHost {
   readonly service: HostService
   readonly databasePath?: string
   requestPresenceRenewal?(): void
+  requestTransportRecovery?(): void
   close(): Promise<void>
 }
 
@@ -540,6 +541,8 @@ export async function startLocalCodexHostWithRuntime(
       service,
       requestPresenceRenewal: () =>
         supervisorTransport?.requestPresenceRenewal(),
+      requestTransportRecovery: () =>
+        supervisorTransport?.requestTransportRecovery(),
       ...(persistence === undefined
         ? {}
         : { databasePath: persistence.databasePath }),

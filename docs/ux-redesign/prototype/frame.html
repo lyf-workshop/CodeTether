@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>Device frame</title>
+<style>html,body{margin:0;background:#000;overflow:hidden}iframe{border:0;display:block}</style></head>
+<body><script>
+  // frame.html?w=390&h=844#/route — renders index.html at an exact viewport width.
+  const p = new URLSearchParams(location.search);
+  const f = document.createElement('iframe');
+  f.width = p.get('w') || 390; f.height = p.get('h') || 844;
+  f.src = 'index.html?os=' + (p.get('os') || 'win') + location.hash;
+  document.body.appendChild(f);
+</script></body></html>

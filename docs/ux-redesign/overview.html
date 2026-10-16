@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>CodeTether 重设计 · 截图总览</title>
+<style>
+  body { margin: 0; background: #06111f; color: #e6edf5; font: 14px/1.5 Inter, "Microsoft YaHei", system-ui, sans-serif; }
+  header { padding: 24px 32px 8px; } h1 { margin: 0 0 4px; font-size: 22px; } p { margin: 0; color: #a7b5c7; }
+  h2 { font-size: 16px; margin: 28px 32px 12px; color: #37b8ff; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; padding: 0 32px; }
+  .grid.phone { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
+  a { color: inherit; text-decoration: none; display: block; background: #0c1a2c; border: 1px solid #1d2d44; border-radius: 10px; overflow: hidden; }
+  a:hover, a:focus-visible { border-color: #37b8ff; outline: none; }
+  img { display: block; width: 100%; background: #000; } span { display: block; padding: 8px 10px; font-size: 12px; font-family: ui-monospace, Consolas, monospace; color: #a7b5c7; }
+  footer { padding: 32px; color: #6b7c93; font-size: 12px; }
+</style></head>
+<body>
+<header><h1>CodeTether 重设计 · 截图总览</h1>
+<p>由 <code>prototype/</code> 本地可点击原型导出（演示数据）。尚未写入 Figma，Frame 命名计划见 02-dev-handoff.md §6。点击缩略图查看原图。</p></header>
+<main id="m"></main>
+<footer>重新导出：<code>bash docs/ux-redesign/export-png.sh</code> · 打开原型：<code>docs/ux-redesign/prototype/index.html</code></footer>
+<script>
+const groups = [
+  ['02 · 桌面全部页面（1440×900）', '', ['02-01-onboarding-welcome','02-02-onboarding-tools','02-03-onboarding-project','02-04-onboarding-ready','02-05-sessions-home','02-06-sessions-archived','02-07-search','02-08-devices','02-09-device-detail-mac','02-10-device-detail-local','02-11-device-tools','02-12-device-access','02-13-conv-local-running','02-14-conv-remote-review','02-15-conv-inspector','02-16-projects','02-17-project-detail','02-18-inbox','02-19-pair-1-prepare','02-20-pair-2-code','02-21-pair-3-verify','02-22-pair-4-done','02-23-settings-general','02-24-settings-notify','02-25-settings-background','02-26-settings-advanced','02-27-doctor']],
+  ['02 · 账号、其他主机与只读查看（supervisor_read，当前已实现）', '', ['02-28-host-detail','02-29-remote-conv-readonly','02-30-connect-choose','02-31-connect-desktop','02-32-account-email','02-33-account-code','02-34-account-signed-in','02-35-account-enable-host','02-36-settings-account']],
+  ['03 · 关键交互状态', '', ['03-01-sessions-loading','03-02-sessions-partial-error','03-03-sessions-empty','03-04-device-offline','03-05-device-proj-error','03-06-conv-offline-failed','03-07-conv-adopted-native','03-08-inbox-empty','03-09-narrow-desktop-1100','03-10-narrow-conv-1100','03-11-host-unreachable','03-12-remote-live-disconnected','03-13-devices-signed-out','03-14-account-unconfigured','03-15-devices-access-states']],
+  ['04 · 平板（1024×768）', '', ['04-01-tablet-sessions','04-02-tablet-conv','04-03-tablet-device']],
+  ['04 · 手机（390×844）', 'phone', ['04-04-phone-sessions','04-05-phone-devices','04-06-phone-device-detail','04-07-phone-conv','04-08-phone-inbox','04-09-phone-conv-offline','04-10-phone-host-detail','04-11-phone-remote-conv','04-12-phone-connect']],
+  ['05 · 后续规划（尚未实现 / 部分实现，与当前设计隔离）', '', ['05-01-remote-control-roadmap']],
+];
+document.getElementById('m').innerHTML = groups.map(([t, cls, items]) =>
+  `<h2>${t}</h2><div class="grid ${cls}">${items.map((n) => `<a href="png/${n}.png" target="_blank"><img loading="lazy" src="png/${n}.png" alt="${n}"><span>${n}</span></a>`).join('')}</div>`).join('');
+</script>
+</body></html>

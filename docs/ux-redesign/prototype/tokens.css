@@ -1,0 +1,60 @@
+/* CodeTether UX redesign — design tokens (mirror of Figma variables "CT/*").
+ * Brand colors derive from packages/ui/src/styles/globals.css and the app icon (#37b8ff). */
+:root {
+  /* Color / surface */
+  --ct-bg: #06111f;
+  --ct-nav: #071321;
+  --ct-surface: #0a1728;
+  --ct-surface-2: #0d1c30;
+  --ct-surface-3: #10233b;
+  --ct-inset: #081625;
+  --ct-code: #07111d;
+  --ct-border: #1d3552;
+  --ct-border-strong: #29496e;
+  --ct-ring: #5aa2ff;
+
+  /* Color / text */
+  --ct-text: #f5f8fc;
+  --ct-text-2: #a7b5c7;
+  --ct-text-3: #7a8ca3;
+
+  /* Color / brand & intent */
+  --ct-brand: #37b8ff;
+  --ct-primary: #2f7bff;
+  --ct-primary-action: #155dd9;
+  --ct-primary-muted: #0d2a50;
+  --ct-success: #22c55e;
+  --ct-success-muted: #0e3524;
+  --ct-warning: #f59e0b;
+  --ct-warning-muted: #3a2a0b;
+  --ct-danger: #ef4444;
+  --ct-danger-muted: #3a1420;
+  --ct-info: #65c7ff;
+  --ct-thinking: #8b5cf6;
+  --ct-thinking-muted: #241b45;
+  --ct-offline: #8391a7;
+  --ct-offline-muted: #202938;
+
+  /* Agent identity (visual only) */
+  --ct-agent-codex: #2f7bff;
+  --ct-agent-claude: #cb7938;
+
+  /* Type */
+  --ct-font: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --ct-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  --ct-fs-xs: 11px; --ct-fs-sm: 12px; --ct-fs-md: 13px; --ct-fs-base: 14px;
+  --ct-fs-lg: 16px; --ct-fs-xl: 20px; --ct-fs-page: 24px; --ct-fs-display: 30px;
+
+  /* Space (4px base) */
+  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 20px; --s6: 24px; --s8: 32px; --s10: 40px;
+
+  /* Radius */
+  --r-sm: 4px; --r-md: 8px; --r-lg: 12px; --r-full: 999px;
+
+  /* Layout */
+  --titlebar-h: 36px;
+  --nav-w: 216px;
+  --nav-w-collapsed: 64px;
+  --row-h: 56px;
+  --shadow: 0 16px 48px rgb(0 0 0 / .32);
+}

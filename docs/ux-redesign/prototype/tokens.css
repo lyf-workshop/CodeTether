@@ -1,60 +1,94 @@
-/* CodeTether UX redesign — design tokens (mirror of Figma variables "CT/*").
- * Brand colors derive from packages/ui/src/styles/globals.css and the app icon (#37b8ff). */
+/* CodeTether design tokens v2 — 浅色为主，深色可切换（data-theme 写在 <html> 上）
+   Figma: 01 · 视觉规范与组件 / Variables（Light / Dark 两个 mode，变量名一致） */
+:root, [data-theme="light"] {
+  color-scheme: light;
+  /* 表面：暖灰侧栏 + 近白画布 + 纯白卡片 */
+  --ct-bg: #fbfaf8;            /* 内容画布 */
+  --ct-side: #f3f1ed;          /* 侧栏 */
+  --ct-surface: #ffffff;       /* 卡片、输入框、弹窗 */
+  --ct-hover: #ece9e3;         /* 侧栏悬停 */
+  --ct-hover-2: #f5f3ef;       /* 画布上的行悬停 */
+  --ct-selected: #e6e2db;      /* 侧栏选中 */
+  --ct-inset: #f4f2ee;         /* 代码块、凹陷区域 */
+  --ct-line: #e9e5de;          /* 细分隔线 */
+  --ct-line-strong: #d8d3ca;   /* 输入框边框 */
+  --ct-ring: #1f8ad8;          /* 焦点环 */
+  /* 文字：墨色三级 */
+  --ct-text: #1d1c1a;
+  --ct-text-2: #5c5852;
+  --ct-text-3: #8c877f;
+  --ct-on-accent: #ffffff;
+  /* 主按钮用墨色，强调色只用于链接、焦点、运行中 */
+  --ct-ink: #1d1c1a;
+  --ct-ink-hover: #3a3834;
+  --ct-on-ink: #ffffff;
+  --ct-accent: #1a7fd0;
+  --ct-accent-hover: #146bb2;
+  --ct-accent-soft: #e7f1fa;
+  --ct-accent-text: #135e9c;
+  /* 状态：圆点用基色，文字用 -text（满足 4.5:1） */
+  --ct-ok: #1e9a55;   --ct-ok-soft: #e5f3ea;   --ct-ok-text: #17703f;
+  --ct-warn: #c98512; --ct-warn-soft: #fbf1de; --ct-warn-text: #8a5806;
+  --ct-err: #cc3f36;  --ct-err-soft: #fbe9e7;  --ct-err-text: #a8322a;
+  --ct-off: #a29c93;  --ct-off-soft: #efece7;
+  --ct-run: #1a7fd0;
+  /* Agent 标识 */
+  --ct-agent-codex: #1d1c1a;
+  --ct-agent-claude: #d97757;
+  /* 阴影：只用于浮层与可点击卡片悬停 */
+  --ct-shadow-1: 0 1px 2px rgb(29 28 26 / .05);
+  --ct-shadow-2: 0 2px 6px rgb(29 28 26 / .06), 0 8px 24px rgb(29 28 26 / .06);
+  --ct-shadow-3: 0 12px 40px rgb(29 28 26 / .16), 0 2px 8px rgb(29 28 26 / .08);
+  --ct-scrim: rgb(29 28 26 / .28);
+}
+[data-theme="dark"] {
+  color-scheme: dark;
+  --ct-bg: #1b1a19;
+  --ct-side: #151413;
+  --ct-surface: #232221;
+  --ct-hover: #24231f;
+  --ct-hover-2: #22211f;
+  --ct-selected: #2d2b28;
+  --ct-inset: #161514;
+  --ct-line: #2e2c29;
+  --ct-line-strong: #3d3a36;
+  --ct-ring: #5ab0ef;
+  --ct-text: #ecebe8;
+  --ct-text-2: #aeaaa3;
+  --ct-text-3: #7f7b74;
+  --ct-on-accent: #0d1b26;
+  --ct-ink: #ecebe8;
+  --ct-ink-hover: #ffffff;
+  --ct-on-ink: #1b1a19;
+  --ct-accent: #3c9be3;
+  --ct-accent-hover: #5ab0ef;
+  --ct-accent-soft: #1a2835;
+  --ct-accent-text: #7cc0f2;
+  --ct-ok: #3fbf74;   --ct-ok-soft: #172a1f;   --ct-ok-text: #6fd59a;
+  --ct-warn: #e0a341; --ct-warn-soft: #2f2516; --ct-warn-text: #edbd6c;
+  --ct-err: #ec6a60;  --ct-err-soft: #341c1a;  --ct-err-text: #f39087;
+  --ct-off: #77736c;  --ct-off-soft: #272624;
+  --ct-run: #5ab0ef;
+  --ct-agent-codex: #ecebe8;
+  --ct-agent-claude: #e08a6b;
+  --ct-shadow-1: 0 1px 2px rgb(0 0 0 / .3);
+  --ct-shadow-2: 0 2px 6px rgb(0 0 0 / .3), 0 8px 24px rgb(0 0 0 / .25);
+  --ct-shadow-3: 0 16px 48px rgb(0 0 0 / .5), 0 2px 8px rgb(0 0 0 / .3);
+  --ct-scrim: rgb(0 0 0 / .5);
+}
 :root {
-  /* Color / surface */
-  --ct-bg: #06111f;
-  --ct-nav: #071321;
-  --ct-surface: #0a1728;
-  --ct-surface-2: #0d1c30;
-  --ct-surface-3: #10233b;
-  --ct-inset: #081625;
-  --ct-code: #07111d;
-  --ct-border: #1d3552;
-  --ct-border-strong: #29496e;
-  --ct-ring: #5aa2ff;
-
-  /* Color / text */
-  --ct-text: #f5f8fc;
-  --ct-text-2: #a7b5c7;
-  --ct-text-3: #7a8ca3;
-
-  /* Color / brand & intent */
-  --ct-brand: #37b8ff;
-  --ct-primary: #2f7bff;
-  --ct-primary-action: #155dd9;
-  --ct-primary-muted: #0d2a50;
-  --ct-success: #22c55e;
-  --ct-success-muted: #0e3524;
-  --ct-warning: #f59e0b;
-  --ct-warning-muted: #3a2a0b;
-  --ct-danger: #ef4444;
-  --ct-danger-muted: #3a1420;
-  --ct-info: #65c7ff;
-  --ct-thinking: #8b5cf6;
-  --ct-thinking-muted: #241b45;
-  --ct-offline: #8391a7;
-  --ct-offline-muted: #202938;
-
-  /* Agent identity (visual only) */
-  --ct-agent-codex: #2f7bff;
-  --ct-agent-claude: #cb7938;
-
-  /* Type */
-  --ct-font: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
-  --ct-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
-  --ct-fs-xs: 11px; --ct-fs-sm: 12px; --ct-fs-md: 13px; --ct-fs-base: 14px;
-  --ct-fs-lg: 16px; --ct-fs-xl: 20px; --ct-fs-page: 24px; --ct-fs-display: 30px;
-
-  /* Space (4px base) */
-  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 20px; --s6: 24px; --s8: 32px; --s10: 40px;
-
-  /* Radius */
-  --r-sm: 4px; --r-md: 8px; --r-lg: 12px; --r-full: 999px;
-
-  /* Layout */
-  --titlebar-h: 36px;
-  --nav-w: 216px;
-  --nav-w-collapsed: 64px;
-  --row-h: 56px;
-  --shadow: 0 16px 48px rgb(0 0 0 / .32);
+  /* 字体：跟随系统。Windows 用 Segoe UI Variable + 微软雅黑，Mac 用 SF + 苹方 */
+  --ct-font: 'Segoe UI Variable Text', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei UI', 'Microsoft YaHei', sans-serif;
+  --ct-display: 'Segoe UI Variable Display', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei UI', 'Microsoft YaHei', sans-serif;
+  --ct-mono: 'Cascadia Code', 'SF Mono', 'JetBrains Mono', Consolas, monospace;
+  --fs-xs: 11.5px; --fs-sm: 12.5px; --fs-md: 13.5px; --fs-base: 14.5px;
+  --fs-lg: 16px; --fs-xl: 19px; --fs-2xl: 24px; --fs-3xl: 30px;
+  /* 4px 间距网格 */
+  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 20px; --s6: 24px; --s8: 32px; --s10: 40px; --s12: 48px;
+  --r-sm: 6px; --r-md: 8px; --r-lg: 12px; --r-xl: 16px; --r-full: 999px;
+  /* 布局 */
+  --titlebar-h: 44px;
+  --side-w: 248px;
+  --read-w: 740px;
+  --page-w: 1040px;
 }

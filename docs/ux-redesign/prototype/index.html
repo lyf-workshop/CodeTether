@@ -1,64 +1,27 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="light">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>CodeTether 重设计原型</title>
+<title>CodeTether 原型 v2</title>
 <link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="base.css">
 <link rel="stylesheet" href="components.css">
-<style>
-  .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--ct-offline); }
-  .dot.online { background: var(--ct-success); } .dot.warn, .dot.reconnecting { background: var(--ct-warning); } .dot.err { background: var(--ct-danger); }
-  h2 { font-size: 18px; margin: 0 0 12px; } mark { background: #f59e0b44; color: inherit; border-radius: 2px; }
-  code { font-family: var(--ct-mono); font-size: 12px; background: var(--ct-inset); padding: 1px 4px; border-radius: 4px; }
-
-  /* 较窄桌面（< 1200）：导航仅图标，设备详情单列 */
-  @media (max-width: 1199px) {
-    :root { --nav-w: var(--nav-w-collapsed); }
-    .nav .nav-label, .nav-item .trunc, .nav-sec, .nav-item .count { display: none; }
-    .nav-item { justify-content: center; padding: 0; } .nav .btn.primary { padding: 0; justify-content: center; }
-    .page [style*="grid-template-columns:1.4fr 1fr"] { grid-template-columns: minmax(0,1fr) !important; }
-  }
-  /* 平板（≤ 1024）：会话详情的项目侧栏收起 */
-  @media (max-width: 1024px) {
-    .main > div[style*="grid-template-columns:260px"] { grid-template-columns: minmax(0,1fr) !important; }
-    .main > div[style*="grid-template-columns:260px"] > aside:first-child { display: none; }
-    .page { padding: 20px; }
-  }
-  /* 手机（≤ 600）：底部 Tab 导航，标题栏隐藏，列表单列 */
-  @media (max-width: 600px) {
-    .titlebar { display: none; } .window { grid-template-rows: 1fr; }
-    .shell { grid-template-columns: minmax(0,1fr); grid-template-rows: minmax(0,1fr) 60px; } .main { overflow-x: hidden; } .chips { max-width: 100%; }
-    .nav { grid-row: 2; flex-direction: row; justify-content: space-around; padding: 4px; border-right: 0; border-top: 1px solid var(--ct-border); }
-    .nav .brand, .nav .btn.primary, .nav-sec, .nav a[href^="#/devices/"], .nav a[href*="archived"], .nav a[href="#/projects"], .nav a[href^="#/hosts/"] { display: none; }
-    .nav-foot { margin: 0; border: 0; padding: 0; }
-    .nav-item { flex-direction: column; height: 52px; gap: 2px; font-size: 11px; width: 72px; }
-    .nav-item .trunc { display: block !important; } .nav-item .count { display: inline !important; position: absolute; margin: -4px 0 0 18px; }
-    .nav-item[aria-current="page"] { box-shadow: inset 0 2px 0 var(--ct-primary); }
-    .page { padding: 16px; } .page-head { flex-wrap: wrap; } .page-head h1 { font-size: 22px; }
-    .page-head .btn.primary { width: 100%; justify-content: center; }
-    .row[style*="flex-wrap:wrap"] .search-wrap { width: 100% !important; }
-    .row[style*="flex-wrap:wrap"] select { flex: 1; }
-    .chips { flex-wrap: nowrap; overflow-x: auto; }
-    .srow .hover-act { display: none !important; } .srow .right { visibility: visible !important; }
-    .dev-grid { grid-template-columns: 1fr; }
-    .page[style*="grid-template-columns:200px"] { grid-template-columns: minmax(0,1fr) !important; }
-    .main > div[style*="grid-template-columns"] > aside:last-child:not(:first-child) { display: none; }
-    .main > div[style*="grid-template-columns"] header, .main > div[style*="grid-template-columns"] footer, .main > div[style*="grid-template-columns"] > section > div { padding-left: 14px !important; padding-right: 14px !important; }
-    .drawer { width: 100%; }
-    .demo-flag { bottom: 66px; right: auto; left: 50%; transform: translateX(-50%); font-size: 10px; padding: 2px 8px; opacity: .85; }
-    .agent, .ctxbar .seg, .chip, .meta > span { white-space: nowrap; }
-    .srow .meta .agent { font-size: 0; gap: 0; } .srow .meta .agent b { font-size: 10px; }
-    .ctxbar .seg { flex: none; }
-    .ctxbar { flex-wrap: nowrap; overflow-x: auto; } .ctxbar .slash { display: none; }
-    .msg.user .bubble { max-width: 92%; }
-  }
-</style>
+<link rel="stylesheet" href="conversation.css">
+<link rel="stylesheet" href="screens.css">
 </head>
 <body>
 <div id="app"></div>
+<!-- 原型：只修改内存中的演示数据，不调用任何真实接口。参数：?theme=light|dark|system  ?os=win|mac  #/路由?状态参数 -->
 <script src="icons.js"></script>
 <script src="data.js"></script>
-<script src="app.js"></script>
+<script src="core.js"></script>
+<script src="home.js"></script>
+<script src="projects.js"></script>
+<script src="computers.js"></script>
+<script src="add.js"></script>
+<script src="conv.js"></script>
+<script src="more.js"></script>
+<script src="router.js"></script>
 </body>
 </html>

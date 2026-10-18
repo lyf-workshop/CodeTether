@@ -52,7 +52,7 @@ function pageOnboarding() {
       <div class="item static">${ag('codex', false, 'lg')}<div class="grow"><div class="t">Codex</div><div class="sub">已安装</div></div><span class="status ok">可用</span></div>
       <div class="item static">${ag('claude', false, 'lg')}<div class="grow"><div class="t">Claude Code</div><div class="sub">已安装，需要先在终端登录</div></div><span class="status warn">需要登录</span><a class="btn sm" href="#/onboarding?step=tools">查看登录说明</a></div></div>
       ${foot(`<a class="btn primary lg" href="${nx}">继续</a>`, `<button class="btn ghost" onclick="this.innerHTML='正在检查…'">${I('refresh')}重新检查</button>`)}`,
-    project: `<h1>选择一个项目</h1><p class="lead">Codex 和 Claude Code 只会在你选择的文件夹里工作。</p><div class="card pad row" style="margin-top:28px;gap:14px"><span class="glyph">${I('folder')}</span><div class="grow"><b>agenthub</b><p class="help mono trunc">D:\\Projects\\Software\\agenthub</p></div><span class="pill ok">${I('check')}已选择</span><button class="btn sm ghost">更换</button></div>
+    project: `<h1>添加第一个项目文件夹</h1><p class="lead">以后新建会话时选这个文件夹，CodeTether 会直接在里面启动 Codex 或 Claude Code，不用先在终端里打开它。AI 工具只会在你登记的文件夹里工作。</p><div class="card pad row" style="margin-top:28px;gap:14px"><span class="glyph">${I('folder')}</span><div class="grow"><b>agenthub</b><p class="help mono trunc">D:\\Projects\\Software\\agenthub</p></div><span class="pill ok">${I('check')}已选择</span><button class="btn sm ghost">更换</button></div>
       ${foot(`<a class="btn primary lg" href="${nx}">继续</a>`)}`,
     previous: `<h1>继续以前的会话</h1><p class="lead">在 agenthub 中找到 3 个以前的会话。导入后可以在 CodeTether 中继续。</p><div class="list" style="margin-top:28px">
       ${[['codex', '重构登录模块', '3 天前', 1], ['claude', '整理 README', '上周', 1], ['codex', '修复 CI', '已导入', 0]].map(([a, t, w, can]) => `<label class="item ${can ? '' : 'static'}"><input type="checkbox" class="check" ${can ? 'checked' : 'checked disabled'}>${ag(a, false)}<div class="grow"><div class="t">${t}</div><div class="sub">${agentName(a)} · ${w}</div></div></label>`).join('')}</div>
@@ -61,7 +61,7 @@ function pageOnboarding() {
       ${opt('#/add/desktop', 'laptop', 'Mac 或 Windows 电脑', '登录同一个账号，申请查看', `<span class="pill line">${I('eye')}仅查看</span>`)}${opt('#/add/node?step=1', 'server', '服务器（CodeTether Node）', '运行一条命令，输入配对码', `<span class="pill ok">${I('check')}可以继续工作</span>`)}</div>
       ${foot(`<a class="btn primary lg" href="${nx}">以后再说</a>`)}`,
     ready: `<span class="glyph xl ok">${I('check')}</span><h1 style="margin-top:24px">一切就绪</h1><p class="lead">从“新建会话”开始，或者打开刚导入的会话。</p>
-      <div style="margin-top:28px">${feat('edit', '新建会话', '按 Ctrl N，选择电脑、项目和 AI 工具。')}${feat('search', '快速跳转', '按 Ctrl K 搜索会话、电脑和项目。')}</div>${foot(`<a class="btn primary lg" href="#/home">打开 CodeTether</a>`)}`,
+      <div style="margin-top:28px">${feat('folder', '会话按项目和文件夹整理', '侧栏里每个项目下是它在各台电脑上的文件夹，会话就在对应的文件夹下面。')}${feat('edit', '新建会话', '按 Ctrl N，选择项目、文件夹和 AI 工具。')}${feat('search', '快速跳转', '按 Ctrl K 搜索会话标题、项目和电脑。')}</div>${foot(`<a class="btn primary lg" href="#/projects">打开 CodeTether</a>`)}`,
   }[step];
   const body = `<div class="window bare os-${ui.os}"><span class="traffic"><i></i><i></i><i></i></span><header class="bare-top"><span class="demo-pill">演示数据</span>${WINCTL}</header>
     <div class="onb"><div class="onb-in"><div class="progress">${order.map((_, k) => `<i class="${k <= i ? 'on' : ''}"></i>`).join('')}</div>${v}</div></div></div>`;
@@ -80,7 +80,9 @@ function pageRoadmap() {
       ${it('远程审批', '远程会话中显示审批卡，并同步到“待处理”。', 'Node 执行固定不审批；supervisor 协议没有审批操作')}
       ${it('删除会话', '永久删除已归档的会话；删完后可以移除对应的项目或文件夹。', 'Host 没有删除会话的接口；仍有会话的项目和文件夹不能移除')}
       ${it('运行中排队、补充指令', '运行时可以追加下一条消息。', 'ProviderDescriptor 没有对应能力；AGENTS.md 明确不做排队和插话')}
-      ${it('全局会话与跨项目搜索', '首页一次取得所有电脑的会话；搜索不限项目。', 'Host 聚合列表与跨项目搜索接口')}
+      ${it('跨项目按内容搜索', '一次搜索所有项目中发送过的内容。现在按内容搜索只在一个项目里进行，Ctrl K 只匹配标题。', 'Host 跨项目搜索接口（当前 search 按项目，查询最长 160 字）')}
+      ${it('选择模型与 Codex 推理强度', '新建会话时选择模型；Codex 也可以设置推理强度。', 'Codex 描述里没有 models / reasoningOptions；Claude Code 只提供推理强度，没有模型列表')}
+      ${it('浏览其他电脑上的文件夹', '给配对的电脑添加项目文件夹时，可以像这台电脑一样浏览目录。', 'Node 没有列目录接口；现在只能输入完整路径')}
       ${it('Claude Code 编辑、终端与变更', '变更面板对 Claude Code 开放。', 'Provider 能力扩展（明确延后）')}
       ${it('开机启动、托盘快捷入口', '在设置中提供开关和常用入口。', 'Tauri autostart 插件')}</div></section>
     <section class="sec"><div class="sec-h"><h2>远程控制示意</h2><span class="pill line">仅示意</span></div><div class="card pad col" style="max-width:740px;gap:14px">

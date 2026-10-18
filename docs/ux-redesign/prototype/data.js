@@ -17,21 +17,24 @@ window.DEMO = {
   projects: [
     { id: 'p-web', name: 'CodeTether', locations: [{ m: 'm-local', path: 'D:\\Projects\\Software\\agenthub', ok: true }, { m: 'm-mac', path: '/Users/lin/code/agenthub', ok: true }] },
     { id: 'p-api', name: 'payments-api', locations: [{ m: 'm-mac', path: '/Users/lin/work/payments/services/payments-api-gateway', ok: true }] },
-    { id: 'p-ml', name: 'model-eval', locations: [{ m: 'm-linux', path: '/srv/workspaces/research/model-eval-pipeline', ok: false }] },
-    // 还没有会话：演示可以移除的项目和文件夹
-    { id: 'p-docs', name: 'docs-site', locations: [{ m: 'm-local', path: 'D:\\Projects\\docs-site', ok: true }, { m: 'm-mac', path: '/Users/lin/code/docs-site', ok: true }] },
+    { id: 'p-ml', name: 'model-eval', locations: [{ m: 'm-linux', path: '/srv/workspaces/research/model-eval-pipeline', ok: true }] },
+    // 还没有会话：演示可以移除的项目和文件夹；MacBook Pro 上的文件夹演示「无法访问」（ok 对应 location availability）
+    { id: 'p-docs', name: 'docs-site', locations: [{ m: 'm-local', path: 'D:\\Projects\\docs-site', ok: true }, { m: 'm-mac', path: '/Users/lin/code/docs-site', ok: false }] },
   ],
-  // ago：分钟数，仅用于原型排序
+  // ago：分钟数，仅用于原型排序。会话通过 p（projectId）+ m（machineId）绑定到项目在这台电脑上的文件夹。
+  // status 与 ConversationRecord 一致：idle | running | waiting（等待批准）| completed | failed
   conversations: [
-    { id: 'c1', title: '修复会话列表在窄窗口下的截断问题', agent: 'codex', p: 'p-web', m: 'm-local', status: 'running', at: '刚刚', ago: 0, pinned: true,
+    { id: 'c1', title: '修复会话列表在窄窗口下的截断问题', agent: 'codex', p: 'p-web', m: 'm-local', status: 'waiting', at: '刚刚', ago: 0,
       step: '等待你批准：运行测试', elapsed: '已运行 6 分钟' },
+    { id: 'c9', title: '把设置页拆成独立路由', agent: 'codex', p: 'p-web', m: 'm-local', status: 'completed', at: '1 小时前', ago: 90 },
     { id: 'c8', title: '为 Relay 连接添加往返延迟统计', agent: 'codex', p: 'p-web', m: 'm-mac', status: 'running', at: '刚刚', ago: 1,
       step: '正在编辑 relay-connection.ts', elapsed: '已运行 12 分钟' },
-    { id: 'c2', title: '评审 Relay 重连的退避策略', agent: 'claude', p: 'p-web', m: 'm-mac', status: 'waiting', at: '3 分钟前', ago: 3, pinned: true, waitingReason: 'completed_review' },
+    { id: 'c2', title: '评审 Relay 重连的退避策略', agent: 'claude', p: 'p-web', m: 'm-mac', status: 'completed', at: '3 分钟前', ago: 3, pinned: true },
     { id: 'c3', title: '重构支付回调签名校验，并补齐幂等键的边界测试用例（含超长标题演示）', agent: 'codex', p: 'p-api', m: 'm-mac', status: 'completed', at: '26 分钟前', ago: 26 },
     { id: 'c4', title: '分析评测流水线的显存峰值', agent: 'codex', p: 'p-ml', m: 'm-linux', status: 'failed', at: '昨天 18:40', ago: 1200, failure: 'machine_offline' },
     { id: 'c5', title: '梳理 AI 工具安装检测的文档缺口', agent: 'claude', p: 'p-web', m: 'm-local', status: 'idle', at: '昨天 10:12', ago: 1600, origin: 'adopted_native' },
     { id: 'c6', title: '升级 TanStack Router 并处理类型告警', agent: 'codex', p: 'p-web', m: 'm-local', status: 'completed', at: '10月14日', ago: 4000 },
+    { id: 'c10', title: '解释 Host 快照的增量合并逻辑', agent: 'claude', p: 'p-web', m: 'm-local', status: 'completed', at: '10月10日', ago: 6000 },
     { id: 'c7', title: '旧版 CI 迁移草稿', agent: 'codex', p: 'p-api', m: 'm-mac', status: 'completed', at: '9月30日', ago: 20000, archived: true },
   ],
   attention: [
@@ -61,7 +64,7 @@ DEMO.hostConversations = [
 // 本机作为主机时收到的访问申请（PendingAccessRequestPanel）
 DEMO.accessRequests = [{ id: 'ar1', device: 'MacBook Air', platform: 'macOS', fp: 'SHA256:9c:41:…:7e', expires: '23 小时后过期', open: true }];
 // 状态词表：[样式, 文案]
-window.STATUS = { running: ['run', '运行中'], waiting: ['warn', '待查看'], completed: ['ok', '已完成'], failed: ['err', '失败'], idle: ['off', '空闲'] };
+window.STATUS = { running: ['run', '运行中'], waiting: ['warn', '等待批准'], completed: ['ok', '已完成'], failed: ['err', '失败'], idle: ['off', '空闲'] };
 window.CONN = {
   local: ['ok', '这台电脑'], online: ['ok', '在线'], connecting: ['warn', '连接中'], offline: ['off', '离线'],
   recovery_required: ['warn', '需要更新地址'], authentication_failed: ['err', '身份验证失败'], incompatible: ['err', '版本不兼容'],

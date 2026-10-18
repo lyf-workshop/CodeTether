@@ -63,6 +63,7 @@
 .chipbtn { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 9px; border-radius: 7px; color: var(--ct-text-2); font-size: var(--fs-sm); border: 0; background: none; cursor: pointer; }
 .chipbtn:hover { background: var(--ct-hover-2); color: var(--ct-text); }
 .chipbtn .ic { width: 13px; height: 13px; }
+.chipbtn.static { cursor: default; max-width: 60%; } .chipbtn.static:hover { background: none; color: var(--ct-text-2); } /* 会话所在的文件夹，只显示 */
 .send { width: 32px; height: 32px; border-radius: 10px; border: 0; background: var(--ct-ink); color: var(--ct-on-ink); display: grid; place-items: center; cursor: pointer; }
 .send .ic { width: 16px; height: 16px; stroke-width: 2.2; }
 .dock .hint { text-align: center; font-size: var(--fs-xs); color: var(--ct-text-3); margin-top: 8px; }

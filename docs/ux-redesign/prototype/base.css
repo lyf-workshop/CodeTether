@@ -52,13 +52,38 @@ mark { background: var(--ct-warn-soft); color: inherit; border-radius: 3px; padd
 .nav-item .ic { color: var(--ct-text-3); } .nav-item[aria-current="page"] .ic, .nav-item:hover .ic { color: var(--ct-text); }
 .badge { margin-left: auto; min-width: 20px; height: 18px; padding: 0 6px; border-radius: var(--r-full); background: var(--ct-warn-soft); color: var(--ct-warn-text);
   font-size: 11px; font-weight: 600; display: inline-grid; place-items: center; line-height: 1; }
-.side-label { display: flex; align-items: center; padding: var(--s5) 10px 6px; font-size: var(--fs-xs); font-weight: 600; color: var(--ct-text-3); letter-spacing: .02em; }
-.side-label a { margin-left: auto; color: var(--ct-text-3); font-weight: 500; }
-.recent { display: flex; align-items: center; gap: 9px; height: 32px; padding: 0 10px; border-radius: var(--r-md); color: var(--ct-text-2); font-size: var(--fs-md); text-decoration: none; }
-.recent:hover { background: var(--ct-hover); color: var(--ct-text); text-decoration: none; }
-.recent[aria-current="page"] { background: var(--ct-selected); color: var(--ct-text); }
-.recent .ro { color: var(--ct-text-3); margin-left: auto; }
-.side-empty { padding: 6px 10px; font-size: var(--fs-sm); color: var(--ct-text-3); }
+.side-label { display: flex; align-items: center; gap: var(--s1); padding: var(--s5) 4px 6px 10px; font-size: var(--fs-xs); font-weight: 600; color: var(--ct-text-3); letter-spacing: .02em; }
+.side-label a { color: inherit; } .side-label a:hover, .side-label a[aria-current="page"] { color: var(--ct-text); text-decoration: none; }
+.side-label .tr-add { margin-left: auto; }
+.side-empty { display: flex; flex-direction: column; align-items: flex-start; gap: var(--s2); padding: 6px 10px; font-size: var(--fs-sm); color: var(--ct-text-3); }
+/* 项目树：项目 › 文件夹（电脑）› 会话。缩进：电脑图标 30px；电脑名、会话标题、“显示全部”都对齐到 52px，会话圆点 35px */
+.tree-row { display: flex; align-items: center; gap: 6px; width: 100%; height: 30px; padding: 0 4px; border: 0; border-radius: var(--r-md); background: none;
+  color: var(--ct-text-2); font-size: var(--fs-md); text-align: left; text-decoration: none; cursor: pointer; }
+.tree-row:hover, .tree-row:focus-within { background: var(--ct-hover); color: var(--ct-text); text-decoration: none; }
+.tree-row > a { color: inherit; height: 100%; gap: 8px; } .tree-row > a:hover { text-decoration: none; }
+.tree-row > a:focus-visible { outline-offset: -2px; }
+.tree-row.proj { height: 32px; color: var(--ct-text); font-weight: 500; }
+.tree-row.proj.flat { padding-left: 10px; gap: 8px; font-weight: 400; } .tree-row.proj.flat > .ic { color: var(--ct-text-3); }
+.tree-row.proj[data-current], .tree-row[aria-current="page"] { background: var(--ct-selected); color: var(--ct-text); }
+.tree-row.loc { height: 28px; padding-left: 30px; font-size: var(--fs-sm); color: var(--ct-text-3); }
+.tree-row.loc .ic { width: 14px; height: 14px; }
+.tree-row.ses { padding-left: 35px; gap: 10px; }
+.tree-row.more, .tree-row.none { height: 26px; padding-left: 52px; font-size: var(--fs-sm); color: var(--ct-text-3); }
+.tree-row.none { cursor: default; } .tree-row.none:hover { background: none; color: var(--ct-text-3); }
+.tree-row.dim > a { color: var(--ct-text-3); }
+.dot.none { background: transparent; }
+.twist { width: 22px; height: 22px; flex: none; display: grid; place-items: center; border: 0; padding: 0; border-radius: var(--r-sm); background: none; color: var(--ct-text-3); cursor: pointer; }
+.twist .ic { width: 14px; height: 14px; transition: transform .15s; }
+.twist[aria-expanded="true"] .ic, [aria-expanded="true"] > .twist .ic { transform: rotate(90deg); }
+.twist:hover { color: var(--ct-text); }
+.tr-add { width: 24px; height: 24px; flex: none; display: grid; place-items: center; border: 0; padding: 0; border-radius: var(--r-sm); background: none; color: var(--ct-text-3); cursor: pointer; opacity: 0; }
+.tr-add .ic { width: 14px; height: 14px; }
+.tr-add:hover { background: var(--ct-hover-2); color: var(--ct-text); }
+.tree-row:hover .tr-add, .tree-row:focus-within .tr-add, .tr-add:focus-visible, .tr-add.on { opacity: 1; }
+.tr-ic { flex: none; display: inline-flex; color: var(--ct-text-3); } .tr-ic .ic { width: 13px; height: 13px; }
+.tr-tag { flex: none; font-size: var(--fs-xs); color: var(--ct-text-3); padding-right: 4px; white-space: nowrap; }
+.tr-tag.err { color: var(--ct-err-text); }
+.tr-host { flex: none; max-width: 40%; font-size: var(--fs-xs); font-weight: 400; color: var(--ct-text-3); }
 .side-foot { border-top: 1px solid var(--ct-line); padding: var(--s2); display: flex; align-items: center; gap: var(--s1); flex: none; }
 .me { flex: 1; display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: var(--r-md); color: var(--ct-text); text-decoration: none; min-width: 0; }
 .me:hover { background: var(--ct-hover); text-decoration: none; }

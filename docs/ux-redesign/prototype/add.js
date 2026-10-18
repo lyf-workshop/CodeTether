@@ -26,10 +26,10 @@ function pageAddNode() {
   const term = (cmd) => `<div class="term-block"><span class="grow">${cmd}</span><button class="btn sm" onclick="this.innerHTML='已复制'">${I('copy')}复制</button></div>`;
   const panel = {
     1: `<b style="font-size:var(--fs-lg)">在服务器的终端里运行</b><p class="muted" style="margin:6px 0 16px">需要先安装 CodeTether Node（Linux x64 / arm64、macOS arm64）。</p>${term('codetether-node --pair')}
-      <p class="help" style="margin-top:10px">命令会显示一个地址（或 codetether-pairing:// 链接）和 6 位配对码，几分钟内有效。</p>
+      <p class="help" style="margin-top:10px">命令会显示一个地址（或 <span class="mono">codetether-pairing://</span> 链接）和 6 位配对码，几分钟内有效。</p>
       <details class="tech" style="margin-top:20px"><summary>需要长期在线？</summary><div style="margin-top:10px">${term('codetether-node service install')}<p class="help" style="margin-top:8px">配对后安装为 systemd 用户服务，开机后自动运行。</p></div></details>
       ${nav('', '#/add/node?step=2', '已显示配对码，下一步')}`,
-    2: `<div class="col" style="gap:18px"><label class="field">地址或配对链接<input class="input mono" value="10.0.0.12:4318"><span class="help">局域网地址，或 Node 显示的 codetether-pairing://relay/v1?… 链接（通过 Relay）。</span></label>
+    2: `<div class="col" style="gap:18px"><label class="field">地址或配对链接<input class="input mono" value="10.0.0.12:4318"><span class="help">局域网地址，或 Node 显示的 <span class="mono">codetether-pairing://relay/v1?…</span> 链接（通过 Relay）。</span></label>
       <label class="field">6 位配对码<input class="input code" value="482731" maxlength="6" inputmode="numeric"></label></div>${nav('#/add/node?step=1', '#/add/node?step=3', '连接')}`,
     3: `<b style="font-size:var(--fs-lg)">确认是你的服务器</b><p class="muted" style="margin:6px 0 16px">服务器终端里显示的验证码和这里一致时再确认。不一致请取消。</p><div class="bigcode">391 044</div>
       <dl class="facts" style="margin-top:18px"><dt>名称</dt><dd>dev-box</dd><dt>系统</dt><dd>Ubuntu 24.04 · x64</dd></dl>
@@ -55,7 +55,7 @@ function pageSignin() {
       <input class="input code" value="824615" maxlength="6" aria-label="登录码" inputmode="numeric"><a class="btn primary lg block" href="#/settings/account">验证并登录</a>
       <div class="row small"><a href="#/signin">更换邮箱</a><span class="sp"></span><span class="faint">52 秒后可重新发送</span></div>`,
     unconfigured: `<span class="tile warn" style="width:44px;height:44px;border-radius:12px">${I('info', 'lg')}</span><h1>这个版本没有配置账号服务</h1>
-      <p class="muted">这台电脑和配对的服务器仍可正常使用。需要查看其他电脑时，请安装正式版本。</p><a class="btn lg block" href="#/home">知道了</a>`,
+      <p class="muted">这台电脑和配对的服务器仍可正常使用。需要查看其他电脑时，请安装正式版本。</p><a class="btn lg block" href="#/projects">知道了</a>`,
   }[step];
   const body = `<div class="page" style="max-width:440px;padding-top:56px"><div class="card col signin" style="padding:32px;gap:16px">${step === 'unconfigured' ? '' : `<span class="mark xl" style="margin-bottom:4px">${MARK_SVG}</span>`}${v}</div></div>`;
   return { active: 'settings', crumbs: crumbs(['设置', '#/settings/account'], '登录'), body };

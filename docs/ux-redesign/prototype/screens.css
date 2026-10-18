@@ -149,7 +149,8 @@ details.tech summary { cursor: pointer; } details.tech pre { margin: 6px 0 0; fo
   .grid2, .grid3 { grid-template-columns: minmax(0, 1fr); gap: var(--s3); }
   .sec { margin-top: var(--s8); }
   .item .when { display: block; } .item:hover .acts { display: none; } .item:hover .when { display: block; }
-  .item .end .status { display: none; }
+  /* 手机上只保留需要注意的状态（运行中、等待批准、失败），已完成、空闲等只看时间 */
+  .item .end .status { min-width: 0; } .item .end .status.ok, .item .end .status.off { display: none; }
   .settings { grid-template-columns: minmax(0, 1fr); } .settings nav { display: none; } .set-tabs { display: flex; overflow-x: auto; max-width: 100%; }
   .set-tabs a { flex: 1; justify-content: center; padding: 0 8px; }
   .prose code { white-space: nowrap; }
@@ -164,8 +165,9 @@ details.tech summary { cursor: pointer; } details.tech pre { margin: 6px 0 0; fo
   .read { padding: var(--s3) var(--s4) var(--s6); } .dock { padding: 0 var(--s3) var(--s3); }
   .conv-head h1 { font-size: var(--fs-xl); }
   .msg.user .bubble { max-width: 92%; }
-  .runcard { min-height: 0; } .pc { min-height: 0; }
-  .toolbar .seg { overflow-x: auto; max-width: 100%; }
+  .pc { min-height: 0; }
+  .toolbar .search.narrow { width: 100%; }
+  .toolbar .seg { overflow-x: auto; max-width: 100%; scrollbar-width: none; } .toolbar .seg::-webkit-scrollbar { display: none; }
   .gate { flex-wrap: wrap; } .gate .txt { flex-basis: calc(100% - 48px); } .gate .btn { flex: 1; }
   .item.attn { flex-wrap: wrap; align-items: flex-start; } .item.attn > .grow { flex-basis: calc(100% - 44px); }
   .item.attn .end { width: 100%; padding-left: 44px; } .item.attn .end > .row { margin-left: auto; } .item.attn .when { min-width: 0; text-align: left; }

@@ -23,6 +23,10 @@ The desktop experience is the primary environment for development and management
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) is the source of truth for system boundaries and technical architecture.
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) is the source of truth for phase order and exit gates.
 
+- [`docs/DEVELOPMENT-PROCESS.md`](docs/DEVELOPMENT-PROCESS.md) defines how work moves from requirement to release: branches, review, acceptance, and what every coding prompt must state.
+
+Interim exception (user decision, 2026-10-19): Figma sync is paused. Until it resumes, the prototype, requirements, and plan under [`docs/ux-redesign`](docs/ux-redesign) are the authorized UI source; a task prompt that cites them overrides "Figma is the sole source".
+
 If sources conflict, stop and resolve the conflict instead of inventing a compromise. Keep these documents updated when an approved decision changes.
 
 ## Current Scope

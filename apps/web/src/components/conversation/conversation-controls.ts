@@ -197,12 +197,12 @@ export function deriveComposerEligibility(
     case 'unavailable':
       return disabled(
         'host_unavailable',
-        'CodeTether Host 当前不可用，暂时无法开始新轮次。',
+        'CodeTether 当前不可用，暂时无法开始新轮次。',
       )
     case 'incompatible':
       return disabled(
         'host_incompatible',
-        'CodeTether Host 版本不兼容，请先更新应用。',
+        'CodeTether 版本不兼容，请先更新应用。',
       )
     case 'connected':
       break

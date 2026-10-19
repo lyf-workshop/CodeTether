@@ -1,11 +1,6 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useNavigate } from '@tanstack/react-router'
-import {
-  Dialog,
-  DialogContent,
-  DialogTitle,
-  TooltipProvider,
-} from '@codetether/ui'
+import { TooltipProvider } from '@codetether/ui'
 import type {
   ConversationSummary,
   MachineId,
@@ -26,7 +21,12 @@ import { useWorkspaceSidebarWidth } from './use-workspace-sidebar-width'
 import { WorkspaceSidebarResizeHandle } from './workspace-sidebar-resize-handle'
 import { TopBar, type TopBarBreadcrumb } from './top-bar'
 import { WorkspaceChromeTargetProvider } from './workspace-chrome'
-import { DesktopNotificationSettings } from '../settings'
+import { CommandPalette } from './command-palette'
+import { MobileWorkspaceNavigation } from './mobile-workspace-navigation'
+import {
+  workspaceNavigationBlocked,
+  workspaceShortcut,
+} from './workspace-shortcuts'
 
 interface AppShellProps {
   children: ReactNode
@@ -49,20 +49,25 @@ export function AppShell({
   currentProject,
   currentProjectId: requestedProjectId,
   currentMachineId,
-  inboxAttentionCount = 0,
+  inboxAttentionCount,
 }: AppShellProps) {
   const navigate = useNavigate()
   const newConversationTriggerRef = useRef<HTMLElement>(null)
+  const commandPaletteTriggerRef = useRef<HTMLElement>(null)
   const [newConversationContext, setNewConversationContext] =
     useState<NewConversationLaunchContext>()
   const [addProjectMachineId, setAddProjectMachineId] = useState<
     MachineId | undefined
   >()
   const [returnToConversation, setReturnToConversation] = useState(false)
-  const [globalDialog, setGlobalDialog] = useState<
-    'add-project' | 'new-conversation' | null
-  >(null)
-  const [settingsOpen, setSettingsOpen] = useState(false)
+  type GlobalDialog =
+    'add-project' | 'new-conversation' | 'command-palette' | null
+  const [globalDialog, setGlobalDialogState] = useState<GlobalDialog>(null)
+  const globalDialogRef = useRef<GlobalDialog>(null)
+  const setGlobalDialog = useCallback((nextDialog: GlobalDialog) => {
+    globalDialogRef.current = nextDialog
+    setGlobalDialogState(nextDialog)
+  }, [])
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
     readWorkspaceSidebarCollapsed,
   )
@@ -78,23 +83,38 @@ export function AppShell({
   useEffect(() => {
     writeWorkspaceSidebarCollapsed(optionalLocalStorage(), sidebarCollapsed)
   }, [sidebarCollapsed])
+  function openPalette(trigger?: HTMLElement) {
+    if (
+      globalDialogRef.current !== null ||
+      document.querySelector('[role="dialog"][data-state="open"]')
+    )
+      return
+    commandPaletteTriggerRef.current =
+      trigger ??
+      (document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null)
+    setGlobalDialog('command-palette')
+  }
+
   useEffect(() => {
     function handleShortcut(event: KeyboardEvent) {
+      const shortcut = workspaceShortcut(event)
+      if (shortcut === undefined) return
+      event.preventDefault()
       if (
-        !(event.metaKey || event.ctrlKey) ||
-        event.altKey ||
-        event.shiftKey ||
-        event.repeat
-      )
+        shortcut === 'palette' &&
+        globalDialogRef.current === 'command-palette'
+      ) {
+        setGlobalDialog(null)
         return
+      }
+      const modalBlocksNavigation = workspaceNavigationBlocked(
+        globalDialogRef.current,
+        document.querySelector('[role="dialog"][data-state="open"]') !== null,
+      )
+      if (globalDialog !== null || modalBlocksNavigation) return
       if (event.key.toLowerCase() === 'n') {
-        event.preventDefault()
-        if (
-          globalDialog !== null ||
-          settingsOpen ||
-          document.querySelector('[role="dialog"][data-state="open"]')
-        )
-          return
         newConversationTriggerRef.current =
           document.activeElement instanceof HTMLElement &&
           document.activeElement !== document.body
@@ -112,16 +132,28 @@ export function AppShell({
             : { machineId: currentMachineId }),
         })
         setGlobalDialog('new-conversation')
-        return
-      }
-      if (event.key === ',') {
-        event.preventDefault()
-        setSettingsOpen(true)
+      } else if (shortcut === 'palette') {
+        commandPaletteTriggerRef.current =
+          document.activeElement instanceof HTMLElement
+            ? document.activeElement
+            : null
+        setGlobalDialog('command-palette')
+      } else {
+        void navigate({
+          to: '/settings/$section',
+          params: { section: 'appearance' },
+        })
       }
     }
     window.addEventListener('keydown', handleShortcut)
     return () => window.removeEventListener('keydown', handleShortcut)
-  }, [currentMachineId, currentProjectId, globalDialog, settingsOpen])
+  }, [
+    currentMachineId,
+    currentProjectId,
+    globalDialog,
+    navigate,
+    setGlobalDialog,
+  ])
 
   return (
     <TooltipProvider>
@@ -151,7 +183,12 @@ export function AppShell({
                 currentConversationId={conversationIdFromPath(currentPath)}
                 currentConversation={currentConversation}
                 inboxAttentionCount={inboxAttentionCount}
+                onSearch={(event) => openPalette(event.currentTarget)}
                 onAddProject={(machineId) => {
+                  commandPaletteTriggerRef.current =
+                    document.activeElement instanceof HTMLElement
+                      ? document.activeElement
+                      : null
                   setAddProjectMachineId(machineId)
                   setReturnToConversation(false)
                   setGlobalDialog('add-project')
@@ -179,7 +216,15 @@ export function AppShell({
                 }}
                 onSettingsClick={(event) => {
                   event.preventDefault()
-                  setSettingsOpen(true)
+                  if (
+                    globalDialogRef.current !== null ||
+                    document.querySelector('[role="dialog"][data-state="open"]')
+                  )
+                    return
+                  void navigate({
+                    to: '/settings/$section',
+                    params: { section: 'appearance' },
+                  })
                 }}
               />
               <WorkspaceSidebarResizeHandle
@@ -201,20 +246,50 @@ export function AppShell({
             sidebarCollapsed={sidebarCollapsed}
             onToggleSidebar={() => setSidebarCollapsed((current) => !current)}
             workspaceActionsRef={setWorkspaceChromeTarget}
-            onDoctor={() =>
-              void navigate({
-                to: '/doctor',
-                search:
-                  currentProject === undefined
-                    ? {}
-                    : { projectId: currentProject.projectId },
-              })
-            }
+            onSearch={(event) => openPalette(event.currentTarget)}
           />
           <WorkspaceChromeTargetProvider target={workspaceChromeTarget}>
             <MainContent>{children}</MainContent>
           </WorkspaceChromeTargetProvider>
         </div>
+        <MobileWorkspaceNavigation
+          currentPath={currentPath}
+          attentionCount={inboxAttentionCount}
+        />
+        <CommandPalette
+          open={globalDialog === 'command-palette'}
+          onOpenChange={(open) =>
+            setGlobalDialog(open ? 'command-palette' : null)
+          }
+          returnFocusRef={commandPaletteTriggerRef}
+          onNewConversation={() => {
+            newConversationTriggerRef.current = commandPaletteTriggerRef.current
+            setNewConversationContext({
+              kind: 'preselected',
+              ...(currentProjectId === undefined
+                ? {}
+                : { projectId: currentProjectId }),
+              ...(currentMachineId === undefined
+                ? {}
+                : { machineId: currentMachineId }),
+            })
+            setGlobalDialog('new-conversation')
+          }}
+          onAddProject={() => {
+            setAddProjectMachineId(currentMachineId)
+            setReturnToConversation(false)
+            setGlobalDialog('add-project')
+          }}
+          onAddDevice={() => {
+            void navigate({ to: '/add' })
+          }}
+          onSettings={() => {
+            void navigate({
+              to: '/settings/$section',
+              params: { section: 'appearance' },
+            })
+          }}
+        />
         <NewConversationDialog
           key={
             newConversationContext === undefined
@@ -245,6 +320,9 @@ export function AppShell({
           returnFocusRef={newConversationTriggerRef}
         />
         <AddProjectDialog
+          returnFocusRef={
+            returnToConversation ? undefined : commandPaletteTriggerRef
+          }
           fixedMachineId={addProjectMachineId}
           open={globalDialog === 'add-project'}
           onOpenChange={(open) =>
@@ -274,15 +352,6 @@ export function AppShell({
             }
           }}
         />
-        <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
-          <DialogContent
-            aria-describedby={undefined}
-            className="max-w-4xl overflow-y-auto p-0"
-          >
-            <DialogTitle className="sr-only">设置</DialogTitle>
-            <DesktopNotificationSettings />
-          </DialogContent>
-        </Dialog>
       </div>
     </TooltipProvider>
   )

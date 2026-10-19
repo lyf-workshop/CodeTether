@@ -198,8 +198,8 @@ const failureReasonCopy = {
   },
   relay_not_configured: {
     title: 'Internet Relay 尚未配置',
-    cause: '这台 Machine 尚未配置用于互联网连通性的 CodeTether Relay。',
-    guidance: '请在 Machine 详情中配置并确认 Relay 身份。',
+    cause: '这台设备尚未配置用于互联网连通性的 CodeTether Relay。',
+    guidance: '请在设备详情中配置并确认 Relay 身份。',
   },
   relay_unreachable: {
     title: 'Internet Relay 暂时无法连接',
@@ -209,7 +209,7 @@ const failureReasonCopy = {
   relay_authentication_failed: {
     title: 'Internet Relay 验证失败',
     cause: 'Relay 无法验证这个已注册的 CodeTether 身份。',
-    guidance: '请在 Machine 详情中检查注册状态；不要绕过身份验证。',
+    guidance: '请在设备详情中检查注册状态；不要绕过身份验证。',
   },
   relay_identity_mismatch: {
     title: 'Internet Relay 身份不匹配',
@@ -224,7 +224,7 @@ const failureReasonCopy = {
   relay_revoked: {
     title: 'Internet Relay 注册已撤销',
     cause: 'Relay 已撤销这个基础设施身份的连接权限。',
-    guidance: 'Machine trust 未被修改；如需恢复，请使用新的单次注册流程。',
+    guidance: '设备信任未被修改；如需恢复，请使用新的单次注册流程。',
   },
   relay_rate_limited: {
     title: 'Internet Relay 暂时限制连接',
@@ -233,7 +233,7 @@ const failureReasonCopy = {
   },
   relay_channel_open_failed: {
     title: 'Internet Relay 通道无法建立',
-    cause: 'CodeTether 无法为这台受信任的 Machine 建立执行通道。',
+    cause: 'CodeTether 无法为这台受信任的设备建立执行通道。',
     guidance: '请等待 Relay 与远程 Node 恢复后，再开始新的请求。',
   },
   relay_channel_lost: {
@@ -243,17 +243,17 @@ const failureReasonCopy = {
   },
   relay_peer_offline: {
     title: '远程 Node 未连接到 Internet Relay',
-    cause: 'Relay 当前无法到达这台受信任 Machine 的 Node。',
+    cause: 'Relay 当前无法到达这台受信任设备的 Node。',
     guidance: '请等待 Node 重新连接；会话历史仍可查看。',
   },
   relay_transport_capacity_reached: {
     title: 'Internet Relay 执行通道已满',
-    cause: '当前 Relay Machine 通道已达到有界容量。',
+    cause: '当前 Relay 设备通道已达到有界容量。',
     guidance: '请等待其他远程任务结束后再试。',
   },
   relay_protocol_error: {
     title: 'Internet Relay 执行协议异常',
-    cause: 'CodeTether 拒绝了无效或不兼容的 Relay Machine 通道数据。',
+    cause: 'CodeTether 拒绝了无效或不兼容的 Relay 设备通道数据。',
     guidance: '请检查 Relay、Desktop 与 Node 版本后再试。',
   },
   provider_error: {

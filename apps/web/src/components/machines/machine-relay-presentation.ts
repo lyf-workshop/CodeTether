@@ -39,7 +39,7 @@ export function relayConnectivityPresentation(
     case 'connected':
       return {
         label: '已连接',
-        description: 'Controller 已通过身份验证连接到 Internet Relay。',
+        description: '本地控制端已通过身份验证连接到 Internet Relay。',
         tone: 'success',
       }
     case 'reconnecting':
@@ -64,14 +64,14 @@ export function relayConnectivityPresentation(
     case 'authentication_failed':
       return {
         label: '身份验证失败',
-        description: 'Relay 无法验证此 Controller；电脑配对信任未发生变化。',
+        description: 'Relay 无法验证此本地控制端；电脑配对信任未发生变化。',
         tone: 'danger',
       }
     case 'revoked':
       return {
         label: '注册已撤销',
         description:
-          '此 Controller 已被 Relay 撤销；普通重连会被拒绝，需要使用新的一次性令牌明确重新注册。',
+          '此本地控制端已被 Relay 撤销；普通重连会被拒绝，需要使用新的一次性令牌明确重新注册。',
         tone: 'danger',
       }
     case 'incompatible':

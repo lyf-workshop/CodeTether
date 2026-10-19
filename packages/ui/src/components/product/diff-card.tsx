@@ -58,7 +58,7 @@ export function DiffCard({
 }: DiffCardProps) {
   return (
     <section
-      aria-label={`${fileName} 的 Diff`}
+      aria-label={`${fileName} 的变更`}
       data-slot="diff-card"
       className={cn(
         'w-full min-w-0 overflow-hidden rounded-xs border border-border/70 bg-surface-code/80',
@@ -74,7 +74,7 @@ export function DiffCard({
           variant="info"
           className="h-7 shrink-0 rounded-sm border-info/20 bg-info-muted/30 px-2"
         >
-          Diff
+          变更
         </Badge>
       </header>
       <pre

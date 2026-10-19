@@ -123,7 +123,7 @@ test('Machine Detail Relay UI stays Host-owned, accessible, bounded, and truthfu
     section,
     /requestAnimationFrame\(\(\) => trigger\.current\?\.focus\(\{ preventScroll: true \}\)\)/u,
   )
-  assert.match(section, /label="Internet 执行"/u)
+  assert.match(section, /label="互联网执行"/u)
   assert.match(section, /relay\?\.internetExecutionEnabled === true/u)
   assert.match(section, /可用（按需选择）/u)
   assert.match(section, /当前不可用/u)
@@ -133,8 +133,8 @@ test('Machine Detail Relay UI stays Host-owned, accessible, bounded, and truthfu
   )
   assert.match(section, /活动中的请求不会在直连与 Relay 之间迁移/u)
   assert.match(section, /Relay 在线也不单独代表项目位置或智能体可执行/u)
-  assert.match(section, /Internet Relay 当前不能承载新的 Machine 执行/u)
-  assert.match(section, /Machine 传输/u)
+  assert.match(section, /Internet Relay 当前不能承载新的设备执行/u)
+  assert.match(section, /设备传输/u)
   assert.match(section, /'eligible' : 'unavailable'/u)
   assert.match(section, /使用新令牌重新注册/u)
   assert.match(section, /撤销后的普通重连仍会被拒绝/u)

@@ -37,7 +37,7 @@ test('maps only durable Attention type and safe product metadata to notification
     conversationId,
     turnId,
     title: 'CodeTether · 需要批准',
-    body: '中文项目 · 修复 Windows 登录后的自动重连问题 🚀\n智能体正在等待你的确认',
+    body: '中文项目\nAI 工具正在等待你的确认',
   })
   assert.doesNotMatch(approval.body, /secret-wrapper/u)
 
@@ -48,7 +48,7 @@ test('maps only durable Attention type and safe product metadata to notification
     metadata,
   )
   assert.equal(completed.title, 'CodeTether · 工作已完成')
-  assert.match(completed.body, /智能体已完成本轮工作$/u)
+  assert.match(completed.body, /AI 工具已完成本轮工作$/u)
 
   const failed = createNotificationIntent(
     attention('failed', {
@@ -124,7 +124,7 @@ test('clamps long labels by grapheme without splitting Unicode emoji', () => {
     },
   )
   const [contextLine] = intent.body.split('\n')
-  assert.ok(contextLine.includes('… · '))
+  assert.equal(contextLine.includes(' · '), false)
   assert.ok(contextLine.endsWith('…'))
   assert.equal(contextLine.includes('\uFFFD'), false)
   assert.ok(Array.from(intent.body).length <= 256)
@@ -258,4 +258,37 @@ test('short and legacy Conversation URLs suppress the same exact foreground noti
     notificationSurfaceFromPathname('/c/' + conversationId + '/other'),
     { kind: 'other' },
   )
+})
+
+test('all system notification types omit every Prompt-derived title even from hostile metadata getters', () => {
+  for (const type of ['approval', 'completed_review', 'failed']) {
+    const payload =
+      type === 'approval'
+        ? {
+            approvalId: 'approval_safe',
+            kind: 'command',
+            actionTitle: 'secret command',
+          }
+        : type === 'failed'
+          ? {
+              conversationTitle: 'secret prompt',
+              error: { code: 'provider_error', message: 'private diagnostic' },
+            }
+          : { conversationTitle: 'secret prompt' }
+    const metadata = {
+      projectName: '安全项目',
+      get conversationTitle() {
+        throw new Error('Conversation title must never be read')
+      },
+    }
+    const intent = createNotificationIntent(attention(type, payload), metadata)
+    assert.match(intent.body, /^安全项目\n/u)
+    assert.doesNotMatch(
+      intent.title + intent.body,
+      /secret|private diagnostic|command|prompt/u,
+    )
+    assert.equal(intent.conversationId, conversationId)
+    assert.equal(intent.projectId, projectId)
+    assert.equal(intent.turnId, turnId)
+  }
 })

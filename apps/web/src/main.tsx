@@ -54,7 +54,6 @@ async function renderApp() {
       resolveNotificationPreferenceStorage,
     },
     { projectDetailQueryOptions },
-    { conversationListQueryOptions },
     { createHostQueryClient },
   ] = await Promise.all([
     import('@tanstack/react-query'),
@@ -68,7 +67,6 @@ async function renderApp() {
     import('./runtime/native/native-capabilities'),
     import('./runtime/native/notification-preferences'),
     import('./runtime/host/project-query'),
-    import('./runtime/host/conversation-list-query'),
     import('./runtime/host/host-query-client'),
   ])
   const queryClient = createHostQueryClient()
@@ -87,33 +85,10 @@ async function renderApp() {
     readSurface: () =>
       notificationSurfaceFromPathname(router.state.location.pathname),
     resolveMetadata: async (attention) => {
-      const projectPromise = queryClient.fetchQuery(
+      const project = await queryClient.fetchQuery(
         projectDetailQueryOptions(runtime, attention.projectId),
       )
-      const conversationTitlePromise =
-        attention.type === 'approval'
-          ? queryClient
-              .fetchQuery(
-                conversationListQueryOptions(runtime, attention.projectId),
-              )
-              .then((conversations) => {
-                const conversation = conversations.find(
-                  (candidate) =>
-                    candidate.conversationId === attention.conversationId,
-                )
-                if (conversation === undefined) {
-                  throw new Error(
-                    'Attention Conversation is missing from its Project index.',
-                  )
-                }
-                return conversation.title
-              })
-          : Promise.resolve(attention.payload.conversationTitle)
-      const [project, conversationTitle] = await Promise.all([
-        projectPromise,
-        conversationTitlePromise,
-      ])
-      return { projectName: project.name, conversationTitle }
+      return { projectName: project.name }
     },
     navigate: async (intent) => {
       notificationNavigationSequence += 1

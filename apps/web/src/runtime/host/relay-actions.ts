@@ -213,13 +213,13 @@ export function relayErrorMessage(error: unknown): string {
     case 'timeout':
       return 'Internet Relay 暂时无法连接。局域网直连不受影响。'
     case 'relay_authentication_failed':
-      return 'Relay 无法验证此 Controller；现有电脑信任关系未更改。'
+      return 'Relay 无法验证此本地控制端；现有电脑信任关系未更改。'
     case 'relay_identity_mismatch':
       return 'Relay 身份与已确认指纹不一致，CodeTether 已拒绝连接。'
     case 'relay_protocol_incompatible':
       return 'Relay 协议版本不兼容，请更新 CodeTether 或 Relay。'
     case 'relay_revoked':
-      return '此 Controller 的 Relay 注册已被撤销，需要重新注册。'
+      return '此本地控制端的 Relay 注册已被撤销，需要重新注册。'
     case 'relay_rate_limited':
       return 'Relay 暂时限制新的连接或注册请求，请稍后重试。'
     case 'invalid_request':

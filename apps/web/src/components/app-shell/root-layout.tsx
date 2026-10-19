@@ -18,6 +18,7 @@ import { resolveProjectWorkspaceContext } from '../projects/project-workspace-mo
 import { machineDetailQueryOptions } from '../../runtime/host/machine-query'
 import { AppShell } from './app-shell'
 import type { TopBarBreadcrumb } from './top-bar'
+import { parseSettingsSearch } from '../settings/settings-model'
 
 const unavailableProjectId = ProjectIdSchema.parse('proj_unavailable')
 const unavailableMachineId = MachineIdSchema.parse('machine_unavailable')
@@ -27,17 +28,30 @@ const pageTitles: Readonly<Record<string, string>> = {
   '/inbox': '待处理',
   '/settings': '设置',
   '/doctor': '关于与检查',
+  '/add': '添加设备',
+  '/add/node': '配对设备',
+  '/signin': '登录',
+  '/roadmap': '后续规划',
+  '/settings/appearance': '外观',
+  '/settings/account': '账号',
+  '/settings/notify': '通知',
+  '/settings/background': '后台运行',
+  '/settings/about': '关于与检查',
 }
 
 export function RootLayout() {
   const currentPath = useRouterState({
     select: (state) => state.location.pathname,
   })
-  if (currentPath === '/' || currentPath === '/setup') {
+  if (
+    currentPath === '/' ||
+    currentPath === '/setup' ||
+    currentPath === '/onboarding'
+  ) {
     return (
       <TooltipProvider>
         <div className="h-dvh overflow-y-auto bg-background text-text-primary">
-          {currentPath === '/setup' ? (
+          {currentPath === '/setup' || currentPath === '/onboarding' ? (
             <a
               href="#setup-main"
               className="fixed top-2 left-2 z-50 -translate-y-20 rounded-sm bg-primary-action px-3 py-2 text-sm font-medium text-primary-foreground focus-visible:translate-y-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -162,6 +176,24 @@ function StandardRootLayout({ currentPath }: { currentPath: string }) {
     })
   } else if (machineMatch !== null) {
     breadcrumbs.push({ label: '设备', to: '/devices' }, { label: machineName })
+  } else if (currentPath === '/add/node') {
+    breadcrumbs.push({ label: '添加设备', to: '/add' }, { label: currentPage })
+  } else if (currentPath === '/add' || currentPath === '/roadmap') {
+    breadcrumbs.push({ label: '设备', to: '/devices' }, { label: currentPage })
+  } else if (currentPath === '/signin') {
+    breadcrumbs.push(
+      {
+        label: '账号',
+        to: '/settings/$section',
+        params: { section: 'account' },
+      },
+      { label: currentPage },
+    )
+  } else if (currentPath.startsWith('/settings/')) {
+    breadcrumbs.push(
+      { label: '设置', to: '/settings', search: parseSettingsSearch(search) },
+      { label: currentPage },
+    )
   } else breadcrumbs.push({ label: currentPage })
 
   return (

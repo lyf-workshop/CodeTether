@@ -353,11 +353,18 @@ test('setup and Doctor compose existing bounded operations without inference or 
   assert.match(setup, /AddProjectDialog/u)
   assert.match(setup, /PreviousConversationsStep/u)
   assert.match(setup, /AddRemoteMachineDialog/u)
-  assert.match(setup, /AddProjectLocationDialog/u)
-  assert.match(setup, /createNewProject/u)
-  assert.match(setup, /const selectedLocation =\s*localLocation \?\?/u)
+  assert.doesNotMatch(setup, /AddProjectLocationDialog/u)
+  assert.match(setup, /fixedMachineId=\{machine\.machineId\}/u)
+  assert.match(
+    setup,
+    /onboardingProjectChoices\(props\.projects, props\.machines\)/u,
+  )
+  assert.doesNotMatch(setup, /localLocation \?\?|legacyProjectLocation/u)
   assert.match(setup, /machine\.connectionState === 'online'/u)
-  assert.match(setup, /使用另一台电脑上的项目/u)
+  assert.match(
+    setup,
+    /props\.onProjectSelected\(project, machine\.machineId\)/u,
+  )
   assert.match(setup, /presentation="ordinary"/u)
   assert.match(doctor, /refreshMachinesBounded/u)
   assert.match(doctor, /refreshMachineProviders/u)
@@ -410,9 +417,7 @@ test('routing and settings expose setup and permanent Doctor access', () => {
   const shell = source('../src/components/app-shell/app-shell.tsx')
   const startup = source('../src/components/onboarding/startup-gate.tsx')
   const setup = source('../src/components/onboarding/onboarding-page.tsx')
-  const settings = source(
-    '../src/components/settings/desktop-notification-settings.tsx',
-  )
+  const settings = source('../src/components/settings/about-settings.tsx')
 
   assert.match(router, /path: '\/setup'/u)
   assert.match(router, /path: '\/doctor'/u)
@@ -426,14 +431,18 @@ test('routing and settings expose setup and permanent Doctor access', () => {
   assert.match(startup, /startupGateRecoveryDelay/u)
   assert.match(startup, /window\.setTimeout/u)
   assert.doesNotMatch(startup, /setInterval/u)
-  assert.match(shell, /onDoctor=/u)
-  assert.match(shell, /to: '\/doctor'/u)
+  assert.doesNotMatch(shell, /onDoctor=/u)
+  const settingsNavigation = source(
+    '../src/components/settings/settings-page.tsx',
+  )
+  assert.match(settingsNavigation, /id: 'about'/u)
+  assert.match(settingsNavigation, /to="\/settings\/\$section"/u)
   assert.match(settings, /kind: 'reopen'/u)
-  assert.match(settings, /to="\/doctor"/u)
+  assert.match(settings, /<DoctorPage embedded/u)
   assert.match(setup, /isDoctorExecutionContextReady/u)
   assert.match(setup, /onError:[\s\S]*onboardingQuery\.refetch/u)
   assert.match(setup, /onboardingContentReady/u)
-  assert.match(setup, /\[onboardingContentReady, onboardingStep\]/u)
+  assert.match(setup, /\[onboardingContentReady, onboardingVisualStep\]/u)
 })
 
 test('legacy admission pressure copy is narrowed for refresh without changing pairing copy', () => {

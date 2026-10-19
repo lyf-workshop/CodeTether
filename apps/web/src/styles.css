@@ -1,4 +1,5 @@
 @import '@codetether/ui/styles.css';
+@import './components/app-shell/workspace-responsive.css';
 
 html,
 body,

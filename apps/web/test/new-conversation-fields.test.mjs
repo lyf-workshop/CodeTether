@@ -159,3 +159,33 @@ test('busy creation prevents both project and provider changes without hiding se
   assert.match(html, /type="radio"[^>]*disabled=""/u)
   assert.match(html, /Folder With A Long Name/u)
 })
+
+test('provider capability copy states only the actual descriptor capabilities', () => {
+  for (const [enabled, expected] of [
+    [['fileRead'], '可以读取文件'],
+    [['search'], '可以搜索文件'],
+    [['fileRead', 'search'], '可以读取和搜索文件'],
+    [['fileEdit'], '可以编辑文件'],
+    [['shell'], '可以运行命令'],
+    [['fileEdit', 'shell'], '可以编辑文件和运行命令'],
+    [[], '可恢复的流式会话'],
+  ]) {
+    const capabilities = {
+      reasoningControl: false,
+      fileRead: enabled.includes('fileRead'),
+      search: enabled.includes('search'),
+      fileEdit: enabled.includes('fileEdit'),
+      shell: enabled.includes('shell'),
+    }
+    const selected = { ...option, provider: { ...provider, capabilities } }
+    const html = render({
+      providerOptions: [selected],
+      selectedProvider: selected,
+    })
+    assert.ok(html.includes(expected), enabled.join('+') + ': ' + expected)
+    if (!capabilities.fileRead) assert.doesNotMatch(html, /可以读取/u)
+    if (!capabilities.search) assert.doesNotMatch(html, /搜索文件/u)
+    if (!capabilities.fileEdit) assert.doesNotMatch(html, /可以编辑/u)
+    if (!capabilities.shell) assert.doesNotMatch(html, /运行命令/u)
+  }
+})

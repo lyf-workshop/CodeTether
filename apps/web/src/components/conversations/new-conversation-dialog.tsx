@@ -8,7 +8,6 @@ import {
 } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
-import { Plus } from 'lucide-react'
 import {
   Button,
   Dialog,
@@ -279,12 +278,6 @@ export function NewConversationDialog({
       >
         <form onSubmit={handleSubmit}>
           <DialogHeader>
-            <span
-              aria-hidden="true"
-              className="grid size-10 place-items-center rounded-md border border-primary/30 bg-primary-muted text-primary"
-            >
-              <Plus className="size-5" />
-            </span>
             <DialogTitle>新建会话</DialogTitle>
             <DialogDescription>
               选择项目和 AI 工具，CodeTether 会在对应文件夹里启动一个会话。

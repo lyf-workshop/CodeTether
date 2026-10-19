@@ -3,8 +3,9 @@ import {
   useState,
   type ComponentPropsWithoutRef,
   type ReactElement,
+  type MouseEvent,
 } from 'react'
-import { useMutation } from '@tanstack/react-query'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import {
   Archive,
   ArchiveRestore,
@@ -29,16 +30,24 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
   IconButton,
-  Input,
   cn,
 } from '@codetether/ui'
-import type { ConversationSummary } from '@codetether/protocol'
+import {
+  ManualConversationTitleSchema,
+  type ConversationSummary,
+} from '@codetether/protocol'
 
 import {
   conversationOrganizationErrorMessage,
   type ConversationOrganizationOperation,
 } from '../../runtime/host/conversation-organization-actions'
 import { useHostRuntime } from '../../runtime/host/host-runtime-hooks'
+import { conversationDetailQueryOptions } from '../../runtime/host/conversation-detail-query'
+import { projectDetailQueryOptions } from '../../runtime/host/project-query'
+import { machineListQueryOptions } from '../../runtime/host/machine-query'
+import { projectLocationForMachine } from '../../runtime/host/project-location'
+import { providerDisplayName } from './conversation-list-model'
+import { ConversationSettingsFields } from './conversation-settings-fields'
 
 export type OrganizationConversation = Pick<
   ConversationSummary,
@@ -58,6 +67,7 @@ interface ConversationOrganizationMenuProps {
   onRenamed?: (conversation: ConversationSummary) => void
   onUnarchived?: (conversation: ConversationSummary) => void
   showRestoreAction?: boolean
+  quickActions?: boolean
   trigger?: ReactElement
 }
 
@@ -68,21 +78,28 @@ export function ConversationOrganizationMenu({
   onRenamed,
   onUnarchived,
   showRestoreAction = true,
+  quickActions = false,
   trigger,
 }: ConversationOrganizationMenuProps) {
   const runtime = useHostRuntime()
   const triggerRef = useRef<HTMLButtonElement>(null)
+  const archiveTriggerRef = useRef<HTMLButtonElement>(null)
   const dialogOpeningRef = useRef(false)
   const [menuOpen, setMenuOpen] = useState(false)
+  const menuOperationPendingRef = useRef(false)
   const [menuError, setMenuError] = useState<string>()
-  const [renameOpen, setRenameOpen] = useState(false)
-  const [archiveOpen, setArchiveOpen] = useState(false)
+  const [organizationDialog, setOrganizationDialog] = useState<
+    'settings' | 'archive' | null
+  >(null)
 
   const pinMutation = useMutation({
     mutationFn: async () =>
       conversation.pinnedAt === undefined
         ? await runtime.pinConversation(conversation.conversationId)
         : await runtime.unpinConversation(conversation.conversationId),
+    onSettled: () => {
+      menuOperationPendingRef.current = false
+    },
     onSuccess: () => setMenuOpen(false),
     onError: (error) => {
       setMenuError(
@@ -95,6 +112,9 @@ export function ConversationOrganizationMenu({
     },
   })
   const unarchiveMutation = useMutation({
+    onSettled: () => {
+      menuOperationPendingRef.current = false
+    },
     mutationFn: async () =>
       await runtime.unarchiveConversation(conversation.conversationId),
     onSuccess: (response) => {
@@ -113,18 +133,67 @@ export function ConversationOrganizationMenu({
   const archiveBlockedReason = conversationArchiveBlockedReason(conversation)
   const menuBusy = pinMutation.isPending || unarchiveMutation.isPending
 
+  function togglePin() {
+    if (menuOperationPendingRef.current || menuBusy) return
+    menuOperationPendingRef.current = true
+    pinMutation.mutate()
+  }
+
   function openRenameDialog() {
+    if (menuOperationPendingRef.current || menuBusy) return
     dialogOpeningRef.current = true
-    setRenameOpen(true)
+    setOrganizationDialog('settings')
   }
 
   function openArchiveDialog() {
-    dialogOpeningRef.current = true
-    setArchiveOpen(true)
+    if (
+      menuOperationPendingRef.current ||
+      menuBusy ||
+      archiveBlockedReason !== undefined
+    )
+      return
+    dialogOpeningRef.current = menuOpen
+    if (menuOpen) archiveTriggerRef.current = triggerRef.current
+    setOrganizationDialog('archive')
+  }
+
+  function openQuickArchive(event: MouseEvent<HTMLButtonElement>) {
+    archiveTriggerRef.current = event.currentTarget
+    openArchiveDialog()
   }
 
   return (
     <>
+      {quickActions && conversation.archivedAt === undefined ? (
+        <>
+          <IconButton
+            data-slot="conversation-quick-pin"
+            label={conversation.pinnedAt === undefined ? '置顶' : '取消置顶'}
+            aria-pressed={conversation.pinnedAt !== undefined}
+            size="sm"
+            variant="ghost"
+            disabled={menuBusy}
+            onClick={togglePin}
+          >
+            {conversation.pinnedAt === undefined ? (
+              <Pin aria-hidden="true" />
+            ) : (
+              <PinOff aria-hidden="true" />
+            )}
+          </IconButton>
+          <IconButton
+            data-slot="conversation-quick-archive"
+            label="归档"
+            title={archiveBlockedReason}
+            size="sm"
+            variant="ghost"
+            disabled={archiveBlockedReason !== undefined || menuBusy}
+            onClick={openQuickArchive}
+          >
+            <Archive aria-hidden="true" />
+          </IconButton>
+        </>
+      ) : null}
       <DropdownMenu
         open={menuOpen}
         onOpenChange={(nextOpen) => {
@@ -157,7 +226,7 @@ export function ConversationOrganizationMenu({
                 disabled={menuBusy}
                 onSelect={(event) => {
                   event.preventDefault()
-                  pinMutation.mutate()
+                  togglePin()
                 }}
               >
                 {conversation.pinnedAt === undefined ? (
@@ -173,7 +242,7 @@ export function ConversationOrganizationMenu({
               </DropdownMenuItem>
               <DropdownMenuItem disabled={menuBusy} onSelect={openRenameDialog}>
                 <Pencil aria-hidden="true" />
-                重命名
+                会话设置
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
@@ -205,6 +274,8 @@ export function ConversationOrganizationMenu({
                   disabled={menuBusy}
                   onSelect={(event) => {
                     event.preventDefault()
+                    if (menuOperationPendingRef.current || menuBusy) return
+                    menuOperationPendingRef.current = true
                     unarchiveMutation.mutate()
                   }}
                 >
@@ -215,7 +286,7 @@ export function ConversationOrganizationMenu({
               {showRestoreAction ? <DropdownMenuSeparator /> : null}
               <DropdownMenuItem disabled={menuBusy} onSelect={openRenameDialog}>
                 <Pencil aria-hidden="true" />
-                重命名
+                会话设置
               </DropdownMenuItem>
             </>
           )}
@@ -230,21 +301,27 @@ export function ConversationOrganizationMenu({
         </DropdownMenuContent>
       </DropdownMenu>
 
-      {renameOpen ? (
-        <RenameConversationDialog
+      {organizationDialog === 'settings' ? (
+        <ConversationSettingsDialog
           conversation={conversation}
           open
           returnFocus={() => triggerRef.current}
-          onOpenChange={setRenameOpen}
+          onOpenChange={(open) =>
+            setOrganizationDialog(open ? 'settings' : null)
+          }
           onRenamed={onRenamed}
+          onArchived={onArchived}
+          onUnarchived={onUnarchived}
         />
       ) : null}
-      {archiveOpen ? (
+      {organizationDialog === 'archive' ? (
         <ArchiveConversationDialog
           conversation={conversation}
           open
-          returnFocus={() => triggerRef.current}
-          onOpenChange={setArchiveOpen}
+          returnFocus={() => archiveTriggerRef.current ?? triggerRef.current}
+          onOpenChange={(open) =>
+            setOrganizationDialog(open ? 'archive' : null)
+          }
           onArchived={onArchived}
         />
       ) : null}
@@ -306,69 +383,161 @@ export function ConversationRestoreButton({
   )
 }
 
-interface RenameConversationDialogProps {
+interface ConversationSettingsDialogProps {
   conversation: OrganizationConversation
   onOpenChange: (open: boolean) => void
   onRenamed?: (conversation: ConversationSummary) => void
+  onArchived?: (conversation: ConversationSummary) => void
+  onUnarchived?: (conversation: ConversationSummary) => void
   open: boolean
   returnFocus: () => HTMLButtonElement | null
 }
 
-function RenameConversationDialog({
+function ConversationSettingsDialog({
   conversation,
   onOpenChange,
   onRenamed,
+  onArchived,
+  onUnarchived,
   open,
   returnFocus,
-}: RenameConversationDialogProps) {
+}: ConversationSettingsDialogProps) {
   const runtime = useHostRuntime()
   const [title, setTitle] = useState(conversation.title)
   const [localError, setLocalError] = useState<string>()
+  const operationPendingRef = useRef(false)
+  const organizationMovedRef = useRef(false)
+  const detail = useQuery(
+    conversationDetailQueryOptions(runtime, conversation.conversationId),
+  )
+  const project = useQuery({
+    ...projectDetailQueryOptions(
+      runtime,
+      detail.data?.conversation.projectId ?? conversation.projectId,
+    ),
+    enabled: detail.data !== undefined,
+  })
+  const machines = useQuery(machineListQueryOptions(runtime))
+  const current = detail.data?.conversation ?? conversation
+  const location =
+    project.data === undefined || detail.data === undefined
+      ? undefined
+      : projectLocationForMachine(
+          project.data,
+          detail.data.conversation.machineId,
+        )
+  const machine = machines.data?.find(
+    (candidate) => candidate.machineId === detail.data?.conversation.machineId,
+  )
+  const archiveBlockedReason =
+    conversationArchiveBlockedReason(conversation) ??
+    conversationArchiveBlockedReason(current)
   const mutation = useMutation({
     mutationFn: async (nextTitle: string) =>
       await runtime.renameConversation(conversation.conversationId, nextTitle),
     onSuccess: (response) => {
-      const updated = response.data.conversation
       onOpenChange(false)
-      onRenamed?.(updated)
+      onRenamed?.(response.data.conversation)
       restoreTriggerFocus(returnFocus())
     },
+    onSettled: () => {
+      operationPendingRef.current = false
+    },
   })
+  const organization = useMutation({
+    mutationFn: async (
+      operation: Exclude<ConversationOrganizationOperation, 'rename'>,
+    ) => {
+      switch (operation) {
+        case 'pin':
+          return await runtime.pinConversation(conversation.conversationId)
+        case 'unpin':
+          return await runtime.unpinConversation(conversation.conversationId)
+        case 'archive':
+          return await runtime.archiveConversation(conversation.conversationId)
+        case 'unarchive':
+          return await runtime.unarchiveConversation(
+            conversation.conversationId,
+          )
+      }
+    },
+    onSuccess: (response, operation) => {
+      if (operation !== 'archive' && operation !== 'unarchive') return
+      const callback = operation === 'archive' ? onArchived : onUnarchived
+      organizationMovedRef.current = callback !== undefined
+      onOpenChange(false)
+      callback?.(response.data.conversation)
+      if (callback === undefined) restoreTriggerFocus(returnFocus())
+    },
+    onSettled: () => {
+      operationPendingRef.current = false
+    },
+  })
+  const pending = mutation.isPending || organization.isPending
 
   function handleOpenChange(nextOpen: boolean) {
-    if (!nextOpen && mutation.isPending) return
-    if (nextOpen) {
-      setTitle(conversation.title)
-      setLocalError(undefined)
-      mutation.reset()
-    }
+    if (!nextOpen && operationPendingRef.current) return
     onOpenChange(nextOpen)
     if (!nextOpen) restoreTriggerFocus(returnFocus())
   }
-
   function submitRename() {
-    if (title.trim().length === 0) {
-      setLocalError('请输入会话标题。')
+    if (operationPendingRef.current) return
+    if (!ManualConversationTitleSchema.safeParse(title).success) {
+      setLocalError('请输入有效的会话标题；名称过长时请缩短后重试。')
       return
     }
     setLocalError(undefined)
+    operationPendingRef.current = true
     mutation.mutate(title)
   }
-
+  function changeOrganization(
+    operation: Exclude<ConversationOrganizationOperation, 'rename'>,
+  ) {
+    if (operationPendingRef.current) return
+    if (operation === 'archive' && archiveBlockedReason !== undefined) return
+    if (operation === 'pin' && current.archivedAt !== undefined) return
+    operationPendingRef.current = true
+    setLocalError(undefined)
+    mutation.reset()
+    organization.mutate(operation)
+  }
   const error =
     localError ??
     (mutation.isError
       ? conversationOrganizationErrorMessage(mutation.error, 'rename')
-      : undefined)
-
+      : organization.isError
+        ? conversationOrganizationErrorMessage(
+            organization.error,
+            organization.variables ?? 'pin',
+          )
+        : undefined)
+  const knownLocation =
+    location === undefined ||
+    machine === undefined ||
+    project.data === undefined ||
+    detail.data === undefined
+      ? undefined
+      : {
+          machineName:
+            machine.kind === 'local' ? '这台电脑' : machine.displayName,
+          projectName: project.data.name,
+          rootPath: location.rootPath,
+          providerName: providerDisplayName(detail.data.conversation.provider),
+        }
+  const locationMessage =
+    detail.isError || project.isError || machines.isError
+      ? '位置暂时无法读取。'
+      : detail.isPending || project.isPending || machines.isPending
+        ? '正在读取位置…'
+        : '这个设备上的项目位置登记不可用。'
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
-        closeLabel="关闭重命名会话"
-        className="max-w-md"
+        closeLabel="关闭会话设置"
+        className="max-w-(--layout-conversation-settings-width)"
         onCloseAutoFocus={(event) => {
           event.preventDefault()
-          restoreTriggerFocus(returnFocus())
+          if (!organizationMovedRef.current) restoreTriggerFocus(returnFocus())
         }}
       >
         <form
@@ -379,68 +548,45 @@ function RenameConversationDialog({
           }}
         >
           <DialogHeader>
-            <DialogTitle>重命名会话</DialogTitle>
-            <DialogDescription>
-              设置一个容易辨认的标题，历史记录与智能体上下文不会改变。
+            <DialogTitle>会话设置</DialogTitle>
+            <DialogDescription className="sr-only">
+              重命名、置顶或归档会话。位置和 AI 工具不会改变。
             </DialogDescription>
           </DialogHeader>
-
-          <div className="mt-5 min-w-0">
-            <label
-              htmlFor={`conversation-title-${conversation.conversationId}`}
-              className="text-sm font-medium text-text-primary"
-            >
-              会话标题
-            </label>
-            <Input
-              autoFocus
-              id={`conversation-title-${conversation.conversationId}`}
-              value={title}
-              aria-invalid={error === undefined ? undefined : true}
-              aria-describedby={
-                error === undefined
-                  ? `conversation-title-count-${conversation.conversationId}`
-                  : `conversation-title-error-${conversation.conversationId} conversation-title-count-${conversation.conversationId}`
-              }
-              className="mt-2"
-              disabled={mutation.isPending}
-              onChange={(event) => {
-                setTitle(event.target.value)
-                setLocalError(undefined)
-                mutation.reset()
-              }}
-            />
-            <p
-              id={`conversation-title-count-${conversation.conversationId}`}
-              className={cn(
-                'mt-1 text-right text-xs tabular-nums text-text-muted',
-                title.length > 240 && 'text-danger',
-              )}
-            >
-              {title.length} / 240
-            </p>
-            {error === undefined ? null : (
-              <p
-                id={`conversation-title-error-${conversation.conversationId}`}
-                role="alert"
-                className="mt-2 rounded-sm border border-danger/30 bg-danger-muted px-3 py-2 text-sm text-danger"
-              >
-                {error}
-              </p>
-            )}
-          </div>
-
+          <ConversationSettingsFields
+            conversationId={conversation.conversationId}
+            title={title}
+            pinned={current.pinnedAt !== undefined}
+            archived={current.archivedAt !== undefined}
+            pending={pending}
+            archiveBlockedReason={archiveBlockedReason}
+            location={knownLocation}
+            locationMessage={locationMessage}
+            error={error}
+            onTitleChange={(value) => {
+              setTitle(value)
+              setLocalError(undefined)
+              mutation.reset()
+              organization.reset()
+            }}
+            onPinChange={() =>
+              changeOrganization(
+                current.pinnedAt === undefined ? 'pin' : 'unpin',
+              )
+            }
+            onArchiveChange={() =>
+              changeOrganization(
+                current.archivedAt === undefined ? 'archive' : 'unarchive',
+              )
+            }
+          />
           <DialogFooter className="mt-5">
             <DialogClose asChild>
-              <Button
-                size="sm"
-                variant="secondary"
-                disabled={mutation.isPending}
-              >
+              <Button size="sm" variant="secondary" disabled={pending}>
                 取消
               </Button>
             </DialogClose>
-            <Button size="sm" type="submit" disabled={mutation.isPending}>
+            <Button size="sm" type="submit" disabled={pending}>
               {mutation.isPending ? '正在保存…' : '保存'}
             </Button>
           </DialogFooter>

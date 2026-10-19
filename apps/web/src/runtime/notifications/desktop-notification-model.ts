@@ -10,9 +10,7 @@ import type {
 import { executionFailurePresentation } from '../../failures/failure-presentation.js'
 
 const PROJECT_NAME_GRAPHEME_LIMIT = 24
-const CONVERSATION_TITLE_GRAPHEME_LIMIT = 36
 const PROJECT_NAME_CODE_POINT_LIMIT = 64
-const CONVERSATION_TITLE_CODE_POINT_LIMIT = 128
 
 export interface DesktopNotificationPreferences {
   readonly approval: boolean
@@ -39,7 +37,8 @@ export interface NotificationIntent {
 
 export interface AttentionNotificationMetadata {
   readonly projectName: string
-  readonly conversationTitle: string
+  /** Compatibility input only; never used in system notification copy. */
+  readonly conversationTitle?: string
 }
 
 export interface DesktopWindowState {
@@ -72,14 +71,6 @@ export function createNotificationIntent(
     PROJECT_NAME_GRAPHEME_LIMIT,
     PROJECT_NAME_CODE_POINT_LIMIT,
   )
-  const conversationTitle =
-    attention.type === 'failed'
-      ? undefined
-      : truncateNotificationLabel(
-          metadata.conversationTitle,
-          CONVERSATION_TITLE_GRAPHEME_LIMIT,
-          CONVERSATION_TITLE_CODE_POINT_LIMIT,
-        )
 
   return {
     attentionId: attention.attentionId,
@@ -88,13 +79,9 @@ export function createNotificationIntent(
     conversationId: attention.conversationId,
     ...(attention.turnId === undefined ? {} : { turnId: attention.turnId }),
     title: copy.title,
-    // A generated Conversation title can be derived from the first Prompt.
-    // Failure notifications can appear on a lock screen, so they intentionally
-    // omit that title while approval/completion retain their frozen copy.
-    body:
-      conversationTitle === undefined
-        ? `${projectName}\n${copy.detail}`
-        : `${projectName} · ${conversationTitle}\n${copy.detail}`,
+    // All notification types can appear on a lock screen. Titles may contain
+    // the first Prompt, so no Conversation title or raw payload is rendered.
+    body: `${projectName}\n${copy.detail}`,
   }
 }
 
@@ -187,12 +174,12 @@ function notificationCopy(attention: AttentionItem): {
     case 'approval':
       return {
         title: 'CodeTether · 需要批准',
-        detail: '智能体正在等待你的确认',
+        detail: 'AI 工具正在等待你的确认',
       }
     case 'completed_review':
       return {
         title: 'CodeTether · 工作已完成',
-        detail: '智能体已完成本轮工作',
+        detail: 'AI 工具已完成本轮工作',
       }
     case 'failed': {
       const failure = executionFailurePresentation(attention.payload.error)

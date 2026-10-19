@@ -58,7 +58,7 @@ export function StartupGate() {
     return onboardingQuery.data.step === 'ready' ? (
       <Navigate to="/devices" replace />
     ) : (
-      <Navigate to="/setup" replace />
+      <Navigate to="/onboarding" replace />
     )
   }
 

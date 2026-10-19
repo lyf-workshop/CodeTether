@@ -28,6 +28,7 @@ import type {
   DoctorProviderStatus,
   DoctorRemoteComputer,
 } from '@codetether/protocol'
+import { ProjectIdSchema } from '@codetether/protocol'
 
 import {
   useHostConnectionState,
@@ -61,12 +62,12 @@ import {
 } from '../onboarding/onboarding-model'
 import { ProviderGuidanceLink } from '../onboarding/provider-guidance-link'
 
-export function DoctorPage() {
+export function DoctorPage({ embedded = false }: { embedded?: boolean }) {
   const runtime = useHostRuntime()
   const queryClient = useQueryClient()
   const connectionState = useHostConnectionState()
   const navigate = useNavigate()
-  const search = useSearch({ from: '/doctor' })
+  const search = useSearch({ strict: false })
   const checkButtonRef = useRef<HTMLButtonElement>(null)
   const restoreCheckFocusRef = useRef(false)
   const refreshCoordinatorRef = useRef(new DoctorRefreshCoordinator())
@@ -76,12 +77,15 @@ export function DoctorPage() {
     ...onboardingQueryOptions(runtime),
     enabled: connectionState === 'connected',
   })
-  const projectId = search.projectId ?? onboardingQuery.data?.projectId
+  const selectedProject = ProjectIdSchema.safeParse(search.projectId)
+  const projectId = selectedProject.success
+    ? selectedProject.data
+    : onboardingQuery.data?.projectId
   const doctorQuery = useQuery({
     ...doctorQueryOptions(runtime, projectId),
     enabled:
       connectionState === 'connected' &&
-      (search.projectId !== undefined ||
+      (selectedProject.success ||
         onboardingQuery.data !== undefined ||
         onboardingQuery.isError),
   })
@@ -172,21 +176,26 @@ export function DoctorPage() {
 
   const doctor = doctorQuery.data
   const overallPresentation = doctorOverallPresentation(doctor)
+  const Heading = embedded ? 'h3' : 'h1'
 
   return (
     <section
       aria-labelledby="doctor-heading"
       aria-busy={checking || doctorQuery.isFetching}
-      className="mx-auto w-full max-w-5xl px-[var(--layout-content-inline-padding)] py-[var(--layout-content-block-padding)]"
+      className={
+        embedded
+          ? 'min-w-0'
+          : 'mx-auto w-full max-w-5xl px-[var(--layout-content-inline-padding)] py-[var(--layout-content-block-padding)]'
+      }
     >
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1
+          <Heading
             id="doctor-heading"
             className="text-page font-semibold text-text-primary"
           >
-            CodeTether 检查
-          </h1>
+            {embedded ? '状态检查' : 'CodeTether 检查'}
+          </Heading>
           <p className="mt-1 max-w-2xl text-sm leading-relaxed text-text-secondary">
             查看电脑、AI 工具、AI
             服务、项目和远程连接分别是否可用。检查不会发送提示或创建对话。
@@ -370,7 +379,7 @@ export function DoctorPage() {
                 尚未添加其他电脑。本机使用不需要远程连接。
               </p>
               <Link
-                to="/machines"
+                to="/devices"
                 className="mt-3 inline-flex rounded-sm text-sm font-medium text-primary outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
               >
                 添加另一台电脑
@@ -515,7 +524,7 @@ function DoctorProviderCard({
       {authRequired ? (
         <p className="mt-3 rounded-sm border border-warning/30 bg-warning-muted/30 px-3 py-2 text-sm text-text-secondary">
           {provider.backend?.mode === 'first_party'
-            ? '此 AI 服务需要完成 Provider 的第一方登录。'
+            ? '此 AI 服务需要完成 AI 工具的官方登录。'
             : '自定义 AI 服务需要检查凭据或配置；CodeTether 不会要求第一方登录。'}
         </p>
       ) : null}
@@ -714,7 +723,7 @@ function RemoteComputerCard({
             mono
           />
           <KeyValue
-            label="Provider 状态"
+            label="AI 工具状态"
             value={machine.providerFreshness}
             compact
             mono
@@ -726,13 +735,13 @@ function RemoteComputerCard({
             mono
           />
           <KeyValue
-            label="Relay enrollment"
+            label="Relay 注册状态"
             value={machine.relay.enrollment}
             compact
             mono
           />
           <KeyValue
-            label="Node presence"
+            label="Node 在线状态"
             value={machine.relay.nodePresence}
             compact
             mono
@@ -748,7 +757,7 @@ function RemoteComputerCard({
         </div>
       </details>
       <Link
-        to="/machines/$machineId"
+        to="/devices/$machineId"
         params={{ machineId: machine.machineId }}
         className="mt-3 inline-flex rounded-sm text-sm font-medium text-primary outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
       >
@@ -798,7 +807,7 @@ function sessionDiscoveryLabel(
     case 'supported':
       return '可用'
     case 'unsupported':
-      return '此 Provider 版本不支持'
+      return '此 AI 工具版本不受支持'
     case 'unavailable':
       return '暂时不可用'
     case 'unknown':

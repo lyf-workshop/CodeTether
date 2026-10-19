@@ -301,7 +301,7 @@ export function backendModeLabel(
   if (backend === undefined) return 'AI 服务尚未检查'
   switch (backend.mode) {
     case 'first_party':
-      return 'Provider AI 服务'
+      return '官方 AI 服务'
     case 'custom_gateway':
       return '自定义 AI 服务'
     case 'bedrock':
@@ -375,7 +375,7 @@ export function providerRepairText(provider: DoctorProviderStatus): string {
   }
   if (provider.backend?.readiness === 'authentication_required') {
     return provider.backend.mode === 'first_party'
-      ? '请按 Provider 的官方登录流程完成登录，然后重新检查。'
+      ? '请按 AI 工具的官方登录流程完成登录，然后重新检查。'
       : '自定义 AI 服务需要检查凭据或配置；无需登录第一方服务。'
   }
   if (provider.backend?.readiness === 'unavailable') {

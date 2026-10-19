@@ -476,11 +476,15 @@ test('existing UI surfaces consume Provider truth without adding a switch to Det
   assert.doesNotMatch(chromeActions, /capabilities\.supportsDiff/u)
   assert.doesNotMatch(chromeActions, /onProviderChange|switchProvider/u)
   assert.match(inbox, /metadata\?\.provider/u)
-  assert.match(
-    inboxPage,
-    /providerPresentation\(runtime\.bootstrap, provider\)/u,
+  const inboxContext = await readFile(
+    new URL('components/inbox/inbox-context.ts', root),
+    'utf8',
   )
-  assert.match(inboxPage, /presentation\.capabilities\.approvals/u)
+  assert.match(inboxPage, /approvalSupported/u)
+  assert.match(inboxContext, /providerPresentationForMachine/u)
+  assert.match(inboxContext, /deriveLiveControlAvailability/u)
+  assert.match(inboxMetadata, /machineDetailQueryOptions/u)
+  assert.doesNotMatch(inboxPage, /providerPresentation\(runtime\.bootstrap/u)
   assert.match(inboxMetadata, /allProjectConversationsQueryOptions/u)
   assert.match(search, /providerDisplayName\(conversation\.provider\)/u)
   assert.match(rail, /workspaceProviderPresentation\(conversation\.provider\)/u)

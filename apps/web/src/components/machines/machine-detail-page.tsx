@@ -222,7 +222,7 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
           </Notice>
         </div>
       ) : null}
-      <div className="grid min-w-0 gap-8 min-[1001px]:grid-cols-[minmax(0,1.65fr)_minmax(17.5rem,1fr)]">
+      <div className="grid min-w-0 gap-8 min-[1001px]:grid-cols-[var(--layout-device-detail-columns)]">
         <div className="min-w-0 space-y-10">
           <MachineProjectsSection
             machine={machine}

@@ -66,11 +66,16 @@ test('rows expose only durable organization actions with bounded titles', async 
 })
 
 test('Rename and Archive dialogs preserve input, errors, and keyboard focus', async () => {
-  const controls = await sourceOf(
-    'components/conversations/conversation-organization-controls.tsx',
-  )
+  const controls = (
+    await Promise.all([
+      sourceOf(
+        'components/conversations/conversation-organization-controls.tsx',
+      ),
+      sourceOf('components/conversations/conversation-settings-fields.tsx'),
+    ])
+  ).join('\n')
 
-  assert.match(controls, /<DialogTitle>重命名会话<\/DialogTitle>/u)
+  assert.match(controls, /<DialogTitle>会话设置<\/DialogTitle>/u)
   assert.match(controls, /autoFocus/u)
   assert.match(controls, /onSubmit=/u)
   assert.match(controls, /role="alert"/u)

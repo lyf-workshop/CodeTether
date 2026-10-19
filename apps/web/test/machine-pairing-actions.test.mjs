@@ -362,7 +362,7 @@ test('Machine errors expose stable actionable copy instead of transport diagnost
   )
   assert.equal(
     machineErrorMessage(error('machine_unreachable'), 'refresh-providers'),
-    '远程电脑当前不可连接，无法刷新 Agent 信息。',
+    '远程电脑当前不可连接，无法刷新 AI 工具信息。',
   )
 })
 

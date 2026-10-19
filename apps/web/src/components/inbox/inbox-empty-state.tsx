@@ -26,12 +26,12 @@ export function InboxEmptyState({
           <CheckCircle2 className="size-5" />
         </span>
         <h2 className="mt-3 text-base font-semibold text-text-primary">
-          {isFiltered ? '当前筛选下没有待处理事项' : '暂无待处理事项'}
+          {isFiltered ? '当前筛选下没有待处理事项' : '都处理完了'}
         </h2>
         <p className="mt-1 text-sm font-regular text-text-secondary">
           {isFiltered
-            ? '可以切换筛选条件，查看其他需要关注的 Agent 事项。'
-            : '当前没有需要你审批、查看或确认的 Agent 事项。'}
+            ? '可以切换筛选条件，查看其他需要关注的 AI 工具事项。'
+            : '需要批准的命令、已完成的工作和失败都会出现在这里。'}
         </p>
         <div className="mt-4 flex items-center justify-center gap-2">
           {isFiltered ? (
@@ -41,9 +41,9 @@ export function InboxEmptyState({
             </Button>
           ) : null}
           <Button asChild size="sm" variant={isFiltered ? 'ghost' : 'outline'}>
-            <Link to="/projects">
+            <Link to="/devices">
               <FolderOpen aria-hidden="true" />
-              查看会话
+              查看设备
             </Link>
           </Button>
         </div>

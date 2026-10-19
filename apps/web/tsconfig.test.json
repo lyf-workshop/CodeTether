@@ -19,6 +19,9 @@
     "types": ["node"]
   },
   "include": [
+    "src/components/app-shell/command-palette-model.ts",
+    "src/components/app-shell/command-palette-cache.ts",
+    "src/components/inbox/inbox-context.ts",
     "src/components/conversations/new-conversation-selection.ts",
     "src/components/projects/previous-conversations-selection.ts",
     "src/components/projects/add-project-model.ts",
@@ -94,6 +97,9 @@
     "src/runtime/native/notification-preferences.ts",
     "src/runtime/notifications/attention-notification-coordinator.ts",
     "src/runtime/notifications/desktop-notification-model.ts",
+    "src/components/onboarding/onboarding-presentation.ts",
+    "src/runtime/account/account-auth-actions.ts",
+    "src/components/settings/settings-model.ts",
     "src/components/machines/device-project-model.ts",
     "src/components/projects/project-workspace-model.ts"
   ]

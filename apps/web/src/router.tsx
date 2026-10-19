@@ -4,11 +4,7 @@ import {
   createRouter,
   redirect,
 } from '@tanstack/react-router'
-import {
-  ProjectIdSchema,
-  TurnIdSchema,
-  type TurnId,
-} from '@codetether/protocol'
+import { TurnIdSchema, type TurnId } from '@codetether/protocol'
 import { RootLayout } from './components/app-shell/root-layout'
 import { ProjectSearchRoute } from './components/projects/project-detail-page'
 import {
@@ -19,8 +15,8 @@ import { ConversationDetailRoute } from './components/conversation/conversation-
 import { InboxPage } from './components/inbox'
 import { MachineDetailRoute, MachinesPage } from './components/machines'
 import { ProjectDetailRoute } from './components/projects'
-import { DesktopNotificationSettings } from './components/settings'
-import { DoctorPage } from './components/doctor'
+import { SettingsRoute, SignInPage } from './components/settings'
+import { parseSettingsSearch } from './components/settings/settings-model'
 import { OnboardingPage, StartupGate } from './components/onboarding'
 
 import { AddDevicePage } from './components/machines/add-device-page'
@@ -59,16 +55,27 @@ const homeRoute = createRoute({
 const setupRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/setup',
+  beforeLoad: () => {
+    throw redirect({ to: '/onboarding', replace: true })
+  },
+})
+const onboardingRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/onboarding',
   component: OnboardingPage,
 })
 const doctorRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/doctor',
-  validateSearch: (search: Record<string, unknown>) => {
-    const projectId = ProjectIdSchema.safeParse(search.projectId)
-    return projectId.success ? { projectId: projectId.data } : {}
+  validateSearch: parseSettingsSearch,
+  beforeLoad: ({ search }) => {
+    throw redirect({
+      to: '/settings/$section',
+      params: { section: 'about' },
+      search: parseSettingsSearch(search),
+      replace: true,
+    })
   },
-  component: DoctorPage,
 })
 const conversationRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -137,7 +144,26 @@ const roadmapRoute = createRoute({
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/settings',
-  component: DesktopNotificationSettings,
+  validateSearch: parseSettingsSearch,
+  beforeLoad: ({ search }) => {
+    throw redirect({
+      to: '/settings/$section',
+      params: { section: 'appearance' },
+      search: parseSettingsSearch(search),
+      replace: true,
+    })
+  },
+})
+const settingsSectionRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/settings/$section',
+  validateSearch: parseSettingsSearch,
+  component: SettingsRoute,
+})
+const signInRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/signin',
+  component: SignInPage,
 })
 
 // Legacy URLs remain accepted without exposing account Host read surfaces.
@@ -202,9 +228,71 @@ const agentsRoute = createRoute({
   },
 })
 
+// Compatibility destinations do not recreate removed account/Host access pages.
+const legacyDeviceRoutes = (
+  [
+    '/home',
+    '/sessions',
+    '/search',
+    '/computers',
+    '/connect',
+    '/add/desktop',
+  ] as const
+).map((pathname) =>
+  createRoute({
+    getParentRoute: () => rootRoute,
+    path: pathname,
+    beforeLoad: () => {
+      throw redirect({
+        to:
+          pathname === '/connect' || pathname === '/add/desktop'
+            ? '/add'
+            : '/devices',
+        replace: true,
+      })
+    },
+  }),
+)
+const legacyComputerRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/computers/$machineId',
+  beforeLoad: ({ params }) => {
+    throw redirect({
+      to: '/devices/$machineId',
+      params: { machineId: params.machineId },
+      replace: true,
+    })
+  },
+})
+const legacyPairRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/pair',
+  beforeLoad: () => {
+    throw redirect({ to: '/add/node', search: { step: 1 }, replace: true })
+  },
+})
+const legacyAccountRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/account',
+  validateSearch: parseSettingsSearch,
+  beforeLoad: ({ search }) => {
+    throw redirect({
+      to: '/settings/$section',
+      params: { section: 'account' },
+      search: parseSettingsSearch(search),
+      replace: true,
+    })
+  },
+})
+
 const routeTree = rootRoute.addChildren([
+  ...legacyDeviceRoutes,
+  legacyComputerRoute,
+  legacyPairRoute,
+  legacyAccountRoute,
   homeRoute,
   setupRoute,
+  onboardingRoute,
   doctorRoute,
   conversationRoute,
   shortConversationRoute,
@@ -215,6 +303,8 @@ const routeTree = rootRoute.addChildren([
   projectConversationsRoute,
   projectSearchRoute,
   settingsRoute,
+  settingsSectionRoute,
+  signInRoute,
   addDeviceRoute,
   nodePairingRoute,
   roadmapRoute,

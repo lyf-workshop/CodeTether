@@ -130,6 +130,17 @@
   --page-w: 1040px;
   --page-narrow-w: 760px;
   --pairing-w: 680px;
+  --layout-onboarding-width: 560px;
+  --layout-onboarding-progress-height: 3px;
+  --layout-onboarding-progress-radius: 2px;
+  --layout-onboarding-title-size: 32px;
+  --layout-onboarding-title-weight: 650;
+  --layout-onboarding-title-tracking: -0.025em;
+  --layout-onboarding-title-leading: 1.25;
+  --layout-onboarding-lead-leading: 1.6;
+  --layout-onboarding-brand-size: 52px;
+  --layout-onboarding-completion-size: 56px;
+  --layout-onboarding-feature-spacing: 14px;
   --tree-device-h: 32px;
   --tree-project-h: 30px;
   --tree-conversation-h: 30px;
@@ -258,8 +269,19 @@
   --layout-topbar-inline-padding: 1.25rem;
   --layout-content-inline-padding: 1.75rem;
   --layout-content-block-padding: 1.5rem;
+  --layout-device-detail-columns: minmax(0, 1.65fr) minmax(17.5rem, 1fr);
   --layout-brand-mark-size: 24px;
   --layout-brand-mark-radius: 7px;
+
+  /* Approved v4 palette, mobile and settings dimensions. */
+  --layout-command-palette-width: 40rem;
+  --layout-command-list-max-height: 26.25rem;
+  --layout-mobile-navigation-height: 4rem;
+  --layout-mobile-dialog-max-height: 92dvh;
+  --layout-settings-width: 960px;
+  --layout-settings-navigation-width: 208px;
+  --layout-settings-navigation-compact-width: 180px;
+  --layout-conversation-settings-width: 480px;
 
   /* Conversation Detail geometry — Figma 07 Desktop at 1536 × 1024 */
   --layout-conversation-rail-width: 18rem;

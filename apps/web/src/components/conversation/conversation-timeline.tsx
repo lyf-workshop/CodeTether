@@ -223,7 +223,7 @@ function AgentRunExecutions({
             <div className="mt-3 border-t border-border/50">
               <ToolCallCard
                 title={change.path}
-                description="文件已变更，CodeTether 未提供可展示的 Diff"
+                description="文件已变更，CodeTether 未提供可展示的差异内容"
                 status="completed"
                 delta={{
                   additions: change.additions,

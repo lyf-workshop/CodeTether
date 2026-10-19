@@ -133,6 +133,7 @@ function ConversationRow({
     <ConversationOrganizationMenu
       conversation={conversation}
       showRestoreAction={!archived}
+      quickActions={!archived}
       onArchived={focusAdjacentRow}
       onUnarchived={focusAdjacentRow}
     />
@@ -150,7 +151,7 @@ function ConversationRow({
       {menu}
     </div>
   ) : (
-    <div className="flex w-max items-center gap-1">
+    <div className="flex w-max items-center gap-1 min-[601px]:opacity-0 min-[601px]:group-hover/conversation-row:opacity-100 min-[601px]:group-focus-within/conversation-row:opacity-100">
       {conversation.pinnedAt === undefined ? null : (
         <Pin aria-label="已置顶" className="size-3.5 text-text-muted" />
       )}
@@ -170,7 +171,11 @@ function ConversationRow({
           <span className="h-px flex-1 bg-border" />
         </li>
       ) : null}
-      <li ref={rowRef} data-conversation-row={conversation.conversationId}>
+      <li
+        ref={rowRef}
+        className="group/conversation-row"
+        data-conversation-row={conversation.conversationId}
+      >
         {showProvider ? (
           <SessionItem
             title={conversation.title}

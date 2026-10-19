@@ -1,0 +1,106 @@
+/* Approved v4 prototype sizes: palette 640px/420px, phone navigation 64px, phone titlebar 48px. */
+.ct-command-palette {
+  max-width: var(--layout-command-palette-width);
+}
+
+.ct-mobile-workspace-navigation,
+[data-slot='mobile-breadcrumb'] {
+  display: none;
+}
+
+[data-slot='workspace-global-search'] {
+  display: none;
+}
+.ct-workspace-shell[data-sidebar-collapsed]
+  [data-slot='workspace-global-search'] {
+  display: inline-flex;
+}
+
+@media (width <= 37.5rem) {
+  [data-slot='workspace-global-search'] {
+    display: inline-flex;
+  }
+  .ct-workspace-shell {
+    --layout-topbar-height: var(--s12);
+    --layout-content-inline-padding: var(--s4);
+    --layout-inbox-page-block-padding: var(--s4);
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto;
+  }
+
+  .ct-workspace-shell [data-slot='workspace-sidebar-column'],
+  .ct-workspace-shell [data-slot='top-bar-left-controls'],
+  .ct-workspace-shell [data-slot='desktop-breadcrumbs'] {
+    display: none;
+  }
+
+  .ct-workspace-shell [data-slot='workspace-content-column'] {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .ct-mobile-workspace-navigation {
+    display: flex;
+    grid-column: 1;
+    grid-row: 2;
+    min-height: calc(
+      var(--layout-mobile-navigation-height) + env(safe-area-inset-bottom, 0px)
+    );
+    padding: calc(var(--s1) * 1.5) var(--s2)
+      calc(var(--s1) * 2.5 + env(safe-area-inset-bottom, 0px));
+  }
+
+  [data-slot='mobile-breadcrumb'] {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    align-items: center;
+    gap: var(--s2);
+  }
+
+  [data-slot='mobile-back-link'] a {
+    display: grid;
+    width: var(--s8);
+    height: var(--s8);
+    place-items: center;
+  }
+
+  .ct-add-project-dialog,
+  .ct-new-conversation-dialog {
+    top: auto;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    max-width: none;
+    max-height: var(--layout-mobile-dialog-max-height);
+    transform: none;
+    border-bottom: 0;
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+    padding-bottom: calc(var(--s6) + env(safe-area-inset-bottom, 0px));
+  }
+
+  .ct-add-project-dialog [data-slot='dialog-footer'],
+  .ct-new-conversation-dialog [data-slot='dialog-footer'] {
+    position: sticky;
+    bottom: 0;
+    background: var(--ct-surface);
+    padding-top: var(--s3);
+  }
+
+  [data-slot='attention-body'] {
+    grid-column: 2 / -1;
+  }
+
+  [data-slot='attention-time'] {
+    grid-column: 2;
+    grid-row: 3;
+    align-self: center;
+    text-align: left;
+  }
+
+  [data-slot='attention-actions'] {
+    grid-column: 3;
+    grid-row: 3;
+  }
+}

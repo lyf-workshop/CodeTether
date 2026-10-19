@@ -1,23 +1,23 @@
 import { Link } from '@tanstack/react-router'
-
-import { AgentIdentityMark, Badge, Button, cn } from '@codetether/ui'
+import {
+  Check,
+  Folder,
+  Monitor,
+  ShieldCheck,
+  TriangleAlert,
+} from 'lucide-react'
+import { AttentionRow, Button, cn } from '@codetether/ui'
 import type { ApprovalDecision, AttentionItem } from '@codetether/protocol'
-
 import type { InboxItemMetadata } from './use-inbox-metadata'
 import { createInboxItemPresentation } from './inbox-model'
-import {
-  providerAgentId,
-  providerDisplayName,
-} from '../../provider/provider-presentation'
+import { providerDisplayName } from '../../provider/provider-presentation'
 
 export type InboxMutationAction = ApprovalDecision | 'acknowledge' | 'review'
-
 export interface InboxItemMutationState {
   readonly action?: InboxMutationAction
   readonly error?: string
   readonly pending: boolean
 }
-
 interface InboxItemProps {
   approvalEnabled: boolean
   controlsEnabled: boolean
@@ -53,122 +53,129 @@ export function InboxItem({
     item,
     metadata?.conversationTitle,
   )
-  const unavailable = metadata?.projectAvailability === 'unavailable'
-  const provider = metadata?.provider ?? 'codex'
-  const agent = providerAgentId(provider)
-
+  const provider =
+    metadata?.provider === undefined
+      ? 'AI 工具'
+      : providerDisplayName(metadata.provider)
+  const conversationTitle =
+    metadata?.conversationTitle ??
+    (item.type === 'approval'
+      ? presentation.conversation
+      : item.payload.conversationTitle)
+  const Icon =
+    item.type === 'approval'
+      ? ShieldCheck
+      : item.type === 'completed_review'
+        ? Check
+        : TriangleAlert
+  const stateLabel =
+    item.type === 'approval'
+      ? '等待批准'
+      : item.type === 'completed_review'
+        ? '待查看'
+        : '失败'
+  const tone =
+    item.type === 'approval'
+      ? 'bg-warning-muted text-warning'
+      : item.type === 'completed_review'
+        ? 'bg-primary-muted text-primary'
+        : 'bg-danger-muted text-danger'
   return (
-    <article
+    <AttentionRow
       aria-busy={mutation.pending || undefined}
-      className={cn(
-        'relative grid min-h-[var(--layout-inbox-item-height)] min-w-0 grid-cols-[var(--avatar-size-md)_minmax(0,1fr)_var(--layout-inbox-state-width)_var(--layout-inbox-actions-width)] items-center gap-4 overflow-hidden rounded-md border border-border bg-surface/55 px-4 py-3',
-        'transition-colors duration-150 motion-reduce:transition-none hover:border-border-strong hover:bg-surface/75',
-      )}
-    >
-      <AgentIdentityMark
-        agent={agent}
-        className={cn(
-          'self-start mt-2',
-          item.type === 'failed' &&
-            'border-danger/60 bg-danger-muted text-danger',
-        )}
-      />
-
-      <div className="min-w-0 self-center">
-        <div className="flex min-w-0 items-center gap-2 text-xs font-regular text-text-muted">
-          <span className="truncate font-medium text-text-secondary">
-            {providerDisplayName(provider)}
-          </span>
-          <span aria-hidden="true">·</span>
-          <time dateTime={item.createdAt} className="shrink-0 tabular-nums">
-            {formatAttentionTime(item.createdAt)}
-          </time>
-        </div>
-
-        <h2 className="mt-1 truncate text-base font-semibold text-text-primary">
-          {presentation.title}
-        </h2>
-        <p
+      mark={
+        <span
+          role="img"
+          aria-label={stateLabel}
           className={cn(
-            'mt-0.5 truncate text-sm font-regular',
-            mutation.error === undefined
-              ? 'text-text-secondary'
-              : 'text-danger',
+            'grid size-[var(--avatar-size-md)] place-items-center rounded-md',
+            tone,
           )}
+        >
+          <Icon aria-hidden="true" className="size-4" />
+        </span>
+      }
+      title={
+        <Link
+          to="/c/$conversationId"
+          params={{ conversationId: item.conversationId }}
+          search={item.turnId === undefined ? {} : { turn: item.turnId }}
+          title={conversationTitle}
+          className="rounded-xs outline-none hover:text-primary focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          {conversationTitle}
+        </Link>
+      }
+      description={
+        <span
           title={mutation.error ?? presentation.description}
           role={mutation.error === undefined ? undefined : 'alert'}
+          className={mutation.error === undefined ? undefined : 'text-danger'}
         >
-          {mutation.error ?? presentation.description}
-        </p>
-        <div className="mt-1.5 flex min-w-0 items-center gap-2 text-xs font-regular text-text-muted">
-          <Badge
-            variant="outline"
-            className={cn(
-              'h-5 max-w-32 rounded-xs bg-surface-elevated px-2 text-xs font-regular text-text-muted',
-              unavailable && 'border-warning/35 text-warning',
-            )}
-          >
+          {mutation.error ??
+            (item.type === 'approval'
+              ? provider + ' 请求执行：' + presentation.description
+              : item.type === 'completed_review'
+                ? provider + ' 已完成，等你查看'
+                : presentation.description)}
+        </span>
+      }
+      context={
+        <>
+          <Monitor aria-hidden="true" className="size-3.5 shrink-0" />
+          {metadata?.machineId === undefined ? (
+            <span className="truncate">设备未知</span>
+          ) : (
+            <Link
+              to="/devices/$machineId"
+              params={{ machineId: metadata.machineId }}
+              className="max-w-40 truncate rounded-xs outline-none hover:text-primary focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              {metadata.machineName ?? '设备未知'}
+            </Link>
+          )}
+          <span aria-hidden="true">·</span>
+          <Folder aria-hidden="true" className="size-3.5 shrink-0" />
+          {metadata?.machineId === undefined ? (
             <span className="truncate">
-              {metadata?.projectName ?? String(item.projectId)}
+              {metadata?.projectName ?? '项目未知'}
             </span>
-          </Badge>
-          <span className="max-w-44 truncate" title={presentation.conversation}>
-            {presentation.conversation}
-          </span>
-          {unavailable ? (
-            <span className="shrink-0 text-warning">目录不可用</span>
+          ) : (
+            <Link
+              to="/projects/$projectId"
+              params={{ projectId: item.projectId }}
+              search={{ machineId: metadata.machineId }}
+              className="max-w-40 truncate rounded-xs outline-none hover:text-primary focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              {metadata.projectName ?? '项目未知'}
+            </Link>
+          )}
+          {metadata?.projectAvailability === 'unavailable' ? (
+            <span className="shrink-0 text-warning">无法访问</span>
           ) : null}
-        </div>
-      </div>
-
-      <div className="flex min-w-0 justify-start self-center">
-        <AttentionState item={item} />
-      </div>
-
-      <div className="flex min-w-0 items-center justify-end gap-2">
+        </>
+      }
+      time={
+        <time
+          dateTime={item.createdAt}
+          className="whitespace-nowrap tabular-nums"
+        >
+          {formatAttentionTime(item.createdAt)}
+        </time>
+      }
+      actions={
         <AttentionActions
           approvalEnabled={approvalEnabled}
           controlsEnabled={controlsEnabled}
           item={item}
+          metadata={metadata}
           mutation={mutation}
-          onAcknowledge={onAcknowledge}
           onApproval={onApproval}
+          onAcknowledge={onAcknowledge}
           onReview={onReview}
         />
-      </div>
-    </article>
-  )
-}
-
-function AttentionState({ item }: { item: AttentionItem }) {
-  const state =
-    item.type === 'approval'
-      ? {
-          className: 'border-warning/30 bg-warning-muted text-warning',
-          label:
-            item.payload.kind === 'command'
-              ? '命令审批'
-              : item.payload.kind === 'file-change'
-                ? '文件审批'
-                : '需要审批',
-        }
-      : item.type === 'completed_review'
-        ? {
-            className: 'border-success/30 bg-success-muted text-success',
-            label: '待查看',
-          }
-        : {
-            className: 'border-danger/30 bg-danger-muted text-danger',
-            label: '失败',
-          }
-
-  return (
-    <Badge
-      variant="outline"
-      className={cn('h-6 rounded-sm px-2 text-xs', state.className)}
-    >
-      {state.label}
-    </Badge>
+      }
+    />
   )
 }
 
@@ -177,22 +184,19 @@ function AttentionActions({
   controlsEnabled,
   item,
   mutation,
-  onAcknowledge,
   onApproval,
+  onAcknowledge,
   onReview,
 }: InboxItemProps) {
   const disabled = !controlsEnabled || mutation?.pending === true
-
-  if (item.type === 'approval') {
-    const approvalDisabled = !approvalEnabled || mutation?.pending === true
+  if (item.type === 'approval' && approvalEnabled)
     return (
       <>
         <Button
           size="sm"
           variant="outline"
-          disabled={approvalDisabled}
+          disabled={mutation?.pending === true}
           onClick={() => onApproval(item, 'decline')}
-          className="h-9 px-3 text-sm"
         >
           {mutation?.pending && mutation.action === 'decline'
             ? '正在拒绝…'
@@ -200,9 +204,8 @@ function AttentionActions({
         </Button>
         <Button
           size="sm"
-          disabled={approvalDisabled}
+          disabled={mutation?.pending === true}
           onClick={() => onApproval(item, 'accept')}
-          className="h-9 px-3 text-sm"
         >
           {mutation?.pending && mutation.action === 'accept'
             ? '正在允许…'
@@ -210,40 +213,33 @@ function AttentionActions({
         </Button>
       </>
     )
-  }
-
-  if (item.type === 'completed_review') {
+  if (item.type === 'completed_review')
     return (
-      <Button
-        size="sm"
-        disabled={disabled}
-        onClick={() => onReview(item)}
-        className="h-9 min-w-28 px-3 text-sm"
-      >
+      <Button size="sm" disabled={disabled} onClick={() => onReview(item)}>
         {mutation?.pending ? '正在打开…' : '查看结果'}
       </Button>
     )
-  }
-
   return (
     <>
-      <Button asChild size="sm" variant="outline" className="h-9 px-3 text-sm">
+      <Button asChild size="sm" variant="outline">
         <Link
-          to="/conversations/$conversationId"
+          to="/c/$conversationId"
           params={{ conversationId: item.conversationId }}
           search={item.turnId === undefined ? {} : { turn: item.turnId }}
         >
           打开会话
         </Link>
       </Button>
-      <Button
-        size="sm"
-        disabled={disabled}
-        onClick={() => onAcknowledge(item)}
-        className="h-9 px-3 text-sm"
-      >
-        {mutation?.pending ? '正在确认…' : '知道了'}
-      </Button>
+      {item.type !== 'failed' ? null : (
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={disabled}
+          onClick={() => onAcknowledge(item)}
+        >
+          {mutation?.pending ? '正在确认…' : '知道了'}
+        </Button>
+      )}
     </>
   )
 }

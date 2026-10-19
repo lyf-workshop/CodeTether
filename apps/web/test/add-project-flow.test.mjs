@@ -107,7 +107,10 @@ test('TopBar no-project flow swaps sibling dialogs and returns to New Conversati
   const newConversation = await readSource(
     'components/conversations/new-conversation-dialog.tsx',
   )
-  assert.match(shell, /'add-project' \| 'new-conversation' \| null/u)
+  assert.match(
+    shell,
+    /'add-project' \| 'new-conversation' \| 'command-palette' \| null/u,
+  )
   assert.match(
     shell,
     /onAddProject=\{\(machineId\) => \{[\s\S]*setReturnToConversation\(true\)[\s\S]*setGlobalDialog\('add-project'\)/u,

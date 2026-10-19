@@ -374,3 +374,49 @@ function canonicalFailure(reason) {
     technicalCode: reason,
   }
 }
+
+test('Relay failure ordinary copy uses device nouns while technical facts stay exact', () => {
+  for (const [reason, expected] of [
+    ['relay_not_configured', '这台设备尚未配置'],
+    ['relay_authentication_failed', '请在设备详情中检查注册状态'],
+    ['relay_revoked', '设备信任未被修改'],
+    ['relay_channel_open_failed', '这台受信任的设备建立执行通道'],
+    ['relay_peer_offline', '这台受信任设备的 Node'],
+    ['relay_transport_capacity_reached', 'Relay 设备通道已达到有界容量'],
+    ['relay_protocol_error', 'Relay 设备通道数据'],
+  ]) {
+    const failure = {
+      ...canonicalFailure('relay_channel_open_failed'),
+      reason,
+      technicalCode: 'RAW_MACHINE_HOST_CODE',
+    }
+    const presentation = executionFailurePresentation({
+      code: 'internal',
+      message: 'private Host diagnostic',
+      failure,
+    })
+    const ordinaryCopy = [
+      presentation.title,
+      presentation.cause,
+      presentation.guidance,
+    ].join(' ')
+    assert.ok(ordinaryCopy.includes(expected), reason)
+    assert.doesNotMatch(
+      ordinaryCopy,
+      /\bHost\b|\bMachine\b|private Host diagnostic/u,
+    )
+    assert.equal(presentation.canStartNewTurn, false)
+    assert.equal(
+      presentation.technicalDetails.find(
+        (detail) => detail.label === '故障代码',
+      ).value,
+      'RAW_MACHINE_HOST_CODE',
+    )
+    assert.equal(
+      presentation.technicalDetails.find(
+        (detail) => detail.label === '发生时间',
+      ).value,
+      timestamp,
+    )
+  }
+})

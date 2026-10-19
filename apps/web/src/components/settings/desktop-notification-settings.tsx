@@ -1,19 +1,7 @@
 import { useMemo, useState } from 'react'
-import { useMutation, useQuery } from '@tanstack/react-query'
-import { Link, useNavigate } from '@tanstack/react-router'
-import { RefreshCw, ShieldCheck } from 'lucide-react'
-
 import type { AttentionType } from '@codetether/protocol'
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-  Button,
-  cn,
-} from '@codetether/ui'
 
+import { Notice, SettingsRow, Switch } from '@codetether/ui'
 import { nativeCapabilities } from '../../runtime/native/native-capabilities'
 import {
   persistDesktopNotificationPreferences,
@@ -22,28 +10,19 @@ import {
   updateDesktopNotificationPreference,
   type NotificationPreferenceStorage,
 } from '../../runtime/native/notification-preferences'
-import {
-  useHostConnectionState,
-  useHostRuntime,
-} from '../../runtime/host/host-runtime-hooks'
-import { onboardingQueryOptions } from '../../runtime/host/onboarding-query'
 
 const notificationOptions = [
   {
     type: 'approval',
     label: '需要批准',
-    description: '智能体等待你的确认时通知。',
+    description: 'Codex 请求批准命令或文件操作时提醒。',
   },
   {
     type: 'completed_review',
     label: '工作完成',
-    description: '智能体完成本轮工作时通知。',
+    description: '一轮工作完成、等你查看时提醒。',
   },
-  {
-    type: 'failed',
-    label: '执行失败',
-    description: '本轮执行失败并需要查看时通知。',
-  },
+  { type: 'failed', label: '执行失败', description: '一轮工作失败时提醒。' },
 ] as const satisfies readonly {
   readonly type: AttentionType
   readonly label: string
@@ -52,13 +31,13 @@ const notificationOptions = [
 
 export interface DesktopNotificationSettingsProps {
   readonly notificationAvailable?: boolean
+  /** Kept for existing callers; background behavior has its own settings section. */
   readonly backgroundRuntimeAvailable?: boolean
   readonly storage?: NotificationPreferenceStorage
 }
 
 export function DesktopNotificationSettings({
   notificationAvailable = nativeCapabilities.notifications.available,
-  backgroundRuntimeAvailable = nativeCapabilities.backgroundRuntime.available,
   storage,
 }: DesktopNotificationSettingsProps) {
   const preferenceStorage = useMemo(
@@ -72,7 +51,6 @@ export function DesktopNotificationSettings({
     readDesktopNotificationPreferences(preferenceStorage),
   )
   const [saveFailed, setSaveFailed] = useState(false)
-
   function setPreference(type: AttentionType, enabled: boolean) {
     const next = updateDesktopNotificationPreference(preferences, type, enabled)
     if (!persistDesktopNotificationPreferences(preferenceStorage, next)) {
@@ -82,183 +60,58 @@ export function DesktopNotificationSettings({
     setPreferences(next)
     setSaveFailed(false)
   }
-
   return (
-    <section
-      aria-labelledby="settings-heading"
-      className="mx-auto w-full max-w-4xl px-[var(--layout-content-inline-padding)] py-[var(--layout-content-block-padding)]"
-    >
-      <h1
-        id="settings-heading"
-        className="text-page font-semibold text-text-primary"
+    <section aria-labelledby="desktop-notifications-heading">
+      <h2
+        id="desktop-notifications-heading"
+        className="mb-5 text-xl font-semibold"
       >
-        设置
-      </h1>
-      <p className="mt-1 text-sm text-text-secondary">
-        管理需要在后台提醒你的事项。
-      </p>
-
-      <div className="mt-5 grid min-w-0 gap-6 md:grid-cols-[10rem_minmax(0,1fr)] md:items-start">
-        <nav aria-label="设置分类" className="md:sticky md:top-0">
-          <p className="px-2 text-xs font-semibold text-text-muted">设置</p>
-          <div className="mt-2 grid gap-1">
-            <a
-              href="#settings-general"
-              className="rounded-sm px-2 py-1.5 text-sm text-text-secondary outline-none hover:bg-surface-muted hover:text-text-primary focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              常规
-            </a>
-            <a
-              href="#settings-notifications"
-              className="rounded-sm px-2 py-1.5 text-sm text-text-secondary outline-none hover:bg-surface-muted hover:text-text-primary focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              通知
-            </a>
-          </div>
-        </nav>
-
-        <div className="min-w-0">
-          <div id="settings-general" className="scroll-mt-4">
-            <h2 className="sr-only">常规</h2>
-            <SetupAndDoctorSettings />
-            {backgroundRuntimeAvailable ? (
-              <Card className="mt-4">
-                <CardHeader>
-                  <CardTitle id="background-runtime-heading">
-                    后台运行
-                  </CardTitle>
-                  <CardDescription>
-                    关闭窗口后，CodeTether
-                    将继续在系统托盘运行，以便任务、审批和通知继续工作。
-                  </CardDescription>
-                </CardHeader>
-              </Card>
-            ) : null}
-          </div>
-
-          <div id="settings-notifications" className="mt-5 scroll-mt-4">
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle id="desktop-notifications-heading">
-                  桌面通知
-                </CardTitle>
-                <CardDescription>
-                  仅在真正需要你处理或查看工作时发送系统通知。
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="pt-0">
-                {notificationAvailable && preferenceStorage !== undefined ? (
-                  <fieldset aria-labelledby="desktop-notifications-heading">
-                    <legend className="sr-only">桌面通知类型</legend>
-                    <div className="divide-y divide-border">
-                      {notificationOptions.map((option) => (
-                        <label
-                          key={option.type}
-                          className="flex min-h-14 cursor-pointer items-center gap-4 py-2.5"
-                        >
-                          <span className="min-w-0 flex-1">
-                            <span className="block text-base font-medium text-text-primary">
-                              {option.label}
-                            </span>
-                            <span className="mt-0.5 block text-sm text-text-secondary">
-                              {option.description}
-                            </span>
-                          </span>
-                          <input
-                            type="checkbox"
-                            checked={preferences[option.type]}
-                            className={cn(
-                              'size-4 shrink-0 cursor-pointer accent-primary-action',
-                              'outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface',
-                            )}
-                            onChange={(event) =>
-                              setPreference(
-                                option.type,
-                                event.currentTarget.checked,
-                              )
-                            }
-                          />
-                        </label>
-                      ))}
-                    </div>
-                    {saveFailed ? (
-                      <p role="alert" className="mt-3 text-sm text-danger">
-                        无法保存通知偏好。当前设置未更改，请重试。
-                      </p>
-                    ) : null}
-                  </fieldset>
-                ) : (
-                  <div role="status" className="border-t border-border py-3">
-                    <p className="text-base font-medium text-text-primary">
-                      桌面通知需要 CodeTether Desktop
-                    </p>
-                    <p className="mt-1 text-sm text-text-secondary">
-                      浏览器中仍可通过收件箱查看所有待处理事项。
-                    </p>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </div>
-        </div>
-      </div>
-    </section>
-  )
-}
-
-function SetupAndDoctorSettings() {
-  const runtime = useHostRuntime()
-  const connectionState = useHostConnectionState()
-  const navigate = useNavigate()
-  const onboardingQuery = useQuery({
-    ...onboardingQueryOptions(runtime),
-    enabled: connectionState === 'connected',
-  })
-  const reopenMutation = useMutation({
-    mutationFn: async () => {
-      const progress = onboardingQuery.data
-      if (progress !== undefined && progress.step === 'ready') {
-        await runtime.updateOnboarding(progress.revision, { kind: 'reopen' })
-      }
-    },
-    onSuccess: async () => await navigate({ to: '/setup' }),
-  })
-
-  return (
-    <Card className="mt-5">
-      <CardHeader className="pb-3">
-        <CardTitle>设置与检查</CardTitle>
-        <CardDescription>
-          检查电脑、AI 工具、AI 服务、项目和远程连接，或安全地重新打开设置流程。
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-wrap gap-2 pt-0">
-        <Button asChild size="sm" variant="secondary">
-          <Link to="/doctor">
-            <ShieldCheck aria-hidden="true" />
-            打开检查状态
-          </Link>
-        </Button>
-        <Button
-          type="button"
-          size="sm"
-          variant="secondary"
-          disabled={
-            reopenMutation.isPending ||
-            connectionState !== 'connected' ||
-            onboardingQuery.data === undefined
+        通知
+      </h2>
+      {notificationAvailable && preferenceStorage !== undefined ? (
+        <fieldset className="overflow-hidden rounded-lg border border-border bg-surface">
+          <legend className="sr-only">桌面通知类型</legend>
+          {notificationOptions.map((option) => (
+            <SettingsRow
+              key={option.type}
+              title={option.label}
+              description={option.description}
+              control={
+                <Switch
+                  aria-label={option.label}
+                  checked={preferences[option.type]}
+                  onCheckedChange={(enabled) =>
+                    setPreference(option.type, enabled)
+                  }
+                />
+              }
+            />
+          ))}
+        </fieldset>
+      ) : (
+        <Notice
+          title={
+            notificationAvailable
+              ? '暂时无法保存通知偏好'
+              : '桌面通知需要 CodeTether Desktop'
           }
-          onClick={() => reopenMutation.mutate()}
         >
-          <RefreshCw aria-hidden="true" />
-          重新运行设置
-        </Button>
-        {reopenMutation.isError ? (
-          <p role="alert" className="basis-full text-sm text-danger">
-            暂时无法重新打开设置。已有配置没有改变。
-          </p>
-        ) : null}
-      </CardContent>
-    </Card>
+          {notificationAvailable
+            ? '此窗口无法访问偏好存储。现有设置没有改变。'
+            : '浏览器中请查看“待处理”，不会发送系统通知。'}
+        </Notice>
+      )}
+      {saveFailed ? (
+        <div className="mt-4">
+          <Notice tone="err" title="无法保存通知偏好">
+            当前设置未更改，请重试。
+          </Notice>
+        </div>
+      ) : null}
+      <p className="mt-4 text-sm text-text-muted">
+        通知中不包含会话标题、消息或命令内容。只有桌面版 CodeTether
+        提供系统通知，浏览器中请查看“待处理”。
+      </p>
+    </section>
   )
 }

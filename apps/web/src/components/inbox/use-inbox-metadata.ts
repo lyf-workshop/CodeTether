@@ -1,30 +1,22 @@
 import { useMemo } from 'react'
 import { useQueries, useQuery } from '@tanstack/react-query'
-
 import type {
   AttentionItem,
   ConversationSummary,
-  ProjectAvailability,
+  GetMachineResponse,
+  MachineId,
   ProjectId,
   ProjectRecord,
 } from '@codetether/protocol'
-
 import { allProjectConversationsQueryOptions } from '../../runtime/host/conversation-list-query'
 import type { HostRuntime } from '../../runtime/host/host-runtime'
 import { projectListQueryOptions } from '../../runtime/host/project-query'
-import { projectLocationAvailability } from '../../runtime/host/project-location'
+import { machineDetailQueryOptions } from '../../runtime/host/machine-query'
+import { inboxItemContext, type InboxItemMetadata } from './inbox-context'
 
-export interface InboxItemMetadata {
-  readonly conversationTitle?: string
-  readonly projectAvailability?: ProjectAvailability
-  readonly projectName?: string
-  readonly provider?: ConversationSummary['provider']
-}
+export type { InboxItemMetadata } from './inbox-context'
 
-/**
- * Enriches bounded Attention rows with existing Project and Conversation
- * indexes. One provider-neutral active+archived index query is made per Project.
- */
+/** Existing bounded indexes own identities; only exact referenced machine details enrich approval truth. */
 export function useInboxMetadata(
   runtime: HostRuntime,
   items: readonly AttentionItem[],
@@ -44,40 +36,50 @@ export function useInboxMetadata(
       enabled,
     })),
   })
-
-  return useMemo(() => {
-    const projects = new Map<ProjectId, ProjectRecord>(
-      (projectsQuery.data ?? []).map((project) => [project.projectId, project]),
-    )
-    const conversations = new Map<string, ConversationSummary>()
-    for (const query of conversationQueries) {
-      for (const conversation of query.data ?? []) {
-        conversations.set(conversation.conversationId, conversation)
-      }
-    }
-
-    return new Map(
-      items.map((item) => {
-        const project = projects.get(item.projectId)
+  const conversations = new Map<string, ConversationSummary>()
+  for (const query of conversationQueries)
+    for (const conversation of query.data ?? [])
+      conversations.set(conversation.conversationId, conversation)
+  const machineIds = [
+    ...new Set(
+      items.flatMap((item) => {
         const conversation = conversations.get(item.conversationId)
-        return [
-          item.attentionId,
-          {
-            ...(conversation === undefined
-              ? {}
-              : {
-                  conversationTitle: conversation.title,
-                  provider: conversation.provider,
-                }),
-            ...(project === undefined
-              ? {}
-              : {
-                  projectAvailability: projectLocationAvailability(project),
-                  projectName: project.name,
-                }),
-          },
-        ]
+        return conversation?.projectId === item.projectId
+          ? [conversation.machineId]
+          : []
       }),
-    )
-  }, [conversationQueries, items, projectsQuery.data])
+    ),
+  ]
+  const machineQueries = useQueries({
+    queries: machineIds.map((machineId) => ({
+      ...machineDetailQueryOptions(runtime, machineId),
+      enabled,
+    })),
+  })
+  const machineDetails = new Map<MachineId, GetMachineResponse>()
+  for (const query of machineQueries)
+    if (query.data !== undefined)
+      machineDetails.set(query.data.machine.machineId, query.data)
+  const projects = new Map<ProjectId, ProjectRecord>(
+    (projectsQuery.data ?? []).map((project) => [project.projectId, project]),
+  )
+  return new Map(
+    items.map((item) => {
+      const conversation = conversations.get(item.conversationId)
+      const detail =
+        conversation === undefined
+          ? undefined
+          : machineDetails.get(conversation.machineId)
+      return [
+        item.attentionId,
+        inboxItemContext(
+          item,
+          projects.get(item.projectId),
+          conversation,
+          detail?.machine,
+          detail?.providers,
+        ),
+      ]
+    }),
+  )
 }

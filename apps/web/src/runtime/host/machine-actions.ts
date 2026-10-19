@@ -412,7 +412,7 @@ export function machineErrorMessage(
         : '远程电脑的身份与已确认信息不一致。'
     case 'machine_unreachable':
       return operation === 'refresh-providers'
-        ? '远程电脑当前不可连接，无法刷新 Agent 信息。'
+        ? '远程电脑当前不可连接，无法刷新 AI 工具信息。'
         : '远程电脑当前不可连接，请检查地址和局域网连接。'
     case 'machine_protocol_incompatible':
       return '远程节点版本不兼容，请更新 CodeTether Node。'
@@ -483,7 +483,7 @@ export function machineErrorMessage(
       return operation === 'unpair'
         ? 'CodeTether 未能取消电脑配对。'
         : operation === 'refresh-providers'
-          ? 'CodeTether 未能刷新这台电脑上的 Agent 信息。'
+          ? 'CodeTether 未能刷新这台电脑上的 AI 工具信息。'
           : operation === 'retry' || operation === 'update-address'
             ? 'CodeTether 未能恢复电脑连接。'
             : 'CodeTether 未能完成电脑配对。'

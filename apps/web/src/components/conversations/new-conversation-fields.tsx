@@ -192,10 +192,18 @@ export function NewConversationFields({
                   : provider.capabilities.fileEdit &&
                       provider.capabilities.shell
                     ? '可以编辑文件和运行命令'
-                    : provider.capabilities.fileRead ||
-                        provider.capabilities.search
-                      ? '可以读取和搜索文件'
-                      : '可恢复的流式会话'
+                    : provider.capabilities.fileEdit
+                      ? '可以编辑文件'
+                      : provider.capabilities.shell
+                        ? '可以运行命令'
+                        : provider.capabilities.fileRead &&
+                            provider.capabilities.search
+                          ? '可以读取和搜索文件'
+                          : provider.capabilities.fileRead
+                            ? '可以读取文件'
+                            : provider.capabilities.search
+                              ? '可以搜索文件'
+                              : '可恢复的流式会话'
                 return (
                   <label key={provider.provider} className="min-w-0">
                     <input

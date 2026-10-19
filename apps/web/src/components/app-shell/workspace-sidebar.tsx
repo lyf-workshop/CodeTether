@@ -16,6 +16,8 @@ import {
   Pin,
   Plus,
   Server,
+  Search,
+  CircleUserRound,
   Settings,
   SquarePen,
 } from 'lucide-react'
@@ -77,6 +79,7 @@ export interface WorkspaceSidebarProps extends Omit<
     machineId?: MachineId,
     mode?: 'fixed' | 'preselected',
   ) => void
+  onSearch?: (event: MouseEvent<HTMLButtonElement>) => void
   onSettingsClick?: (event: MouseEvent<HTMLAnchorElement>) => void
 }
 
@@ -90,6 +93,7 @@ export function WorkspaceSidebar({
   onAddProject,
   onNewConversation,
   onSettingsClick,
+  onSearch,
   className,
   'aria-label': ariaLabel = '工作区导航',
   ...props
@@ -145,7 +149,23 @@ export function WorkspaceSidebar({
         className="flex h-(--layout-topbar-height) shrink-0 items-center gap-2 px-4"
       >
         <CodeTetherMark />
-        <span className="truncate text-md font-semibold">CodeTether</span>
+        <span className="min-w-0 flex-1 truncate text-md font-semibold">
+          CodeTether
+        </span>
+        {onSearch === undefined ? null : (
+          <IconButton
+            type="button"
+            size="sm"
+            variant="ghost"
+            data-slot="workspace-sidebar-search"
+            label="搜索，快捷键 Ctrl K 或 ⌘ K"
+            aria-keyshortcuts="Meta+K Control+K"
+            className="size-8 shrink-0"
+            onClick={onSearch}
+          >
+            <Search aria-hidden="true" />
+          </IconButton>
+        )}
       </div>
       <div className="shrink-0 px-3 pt-3 pb-2">
         <Button
@@ -280,7 +300,18 @@ export function WorkspaceSidebar({
         </div>
       </section>
       <Separator />
-      <div className="shrink-0 p-3">
+      <div className="shrink-0 space-y-0.5 p-3">
+        <Link
+          to="/settings/$section"
+          params={{ section: 'account' }}
+          aria-current={
+            currentPath === '/settings/account' ? 'page' : undefined
+          }
+          className="flex min-w-0 items-center gap-2 rounded-sm px-3 py-2 text-sm text-text-secondary outline-none hover:bg-surface-muted focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <CircleUserRound aria-hidden="true" className="size-4 shrink-0" />
+          <span className="truncate">账号</span>
+        </Link>
         <WorkspaceNavLink
           currentPath={currentPath}
           label="设置"

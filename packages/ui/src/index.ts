@@ -21,3 +21,7 @@ export * from './components/textarea'
 export * from './components/tooltip'
 export { cn } from './lib/cn'
 export * from './tokens'
+export * from './components/switch'
+
+export * from './components/command-list'
+export * from './components/attention-row'

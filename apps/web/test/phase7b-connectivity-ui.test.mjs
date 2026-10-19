@@ -185,7 +185,7 @@ test('Machine connectivity surfaces keep responsive and accessible semantic cont
   assert.match(relaySection, /focus-visible:ring/u)
   assert.match(relaySection, /aria-hidden="true"/u)
   assert.match(relaySection, /label="Node 在线状态"/u)
-  assert.match(relaySection, /label="Internet 执行"/u)
+  assert.match(relaySection, /label="互联网执行"/u)
   assert.match(relaySection, /\{status\.description\}/u)
   assert.match(relaySection, /\{value\}[\s\S]*<\/dd>/u)
 

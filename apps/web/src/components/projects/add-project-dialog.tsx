@@ -1,4 +1,10 @@
-import { useRef, useState, type FormEvent, type ReactElement } from 'react'
+import {
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactElement,
+  type RefObject,
+} from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 
@@ -55,6 +61,7 @@ import {
 
 interface AddProjectDialogProps {
   fixedMachineId?: MachineId
+  returnFocusRef?: RefObject<HTMLElement | null>
   deferPreviousConversations?: boolean
   directoryPicker?: DirectoryPicker
   onOpenChange?: (open: boolean) => void
@@ -81,6 +88,7 @@ interface CreatedProjectContext {
 
 export function AddProjectDialog({
   fixedMachineId,
+  returnFocusRef,
   deferPreviousConversations = false,
   directoryPicker = nativeCapabilities.directoryPicker,
   onOpenChange,
@@ -98,6 +106,7 @@ export function AddProjectDialog({
     null,
   )
   const registrationInFlightRef = useRef(false)
+  const skipCloseFocusRestore = useRef(false)
   const completionInFlightRef = useRef<Promise<void> | null>(null)
   const [internalOpen, setInternalOpen] = useState(false)
   const [selectedMachineId, setSelectedMachineId] = useState<MachineId>()
@@ -224,6 +233,7 @@ export function AddProjectDialog({
     const current = completionInFlightRef.current
     if (current !== null) return await current
     const completion = (async () => {
+      skipCloseFocusRestore.current = true
       setDialogOpen(false)
       resetForm()
       if (onProjectCreated !== undefined) {
@@ -259,6 +269,7 @@ export function AddProjectDialog({
     )
       return
     setDialogOpen(nextOpen)
+    if (nextOpen) skipCloseFocusRestore.current = false
     clearErrors()
     if (!nextOpen) resetForm()
   }
@@ -353,6 +364,16 @@ export function AddProjectDialog({
         className="ct-add-project-dialog max-w-lg overflow-x-hidden"
         showCloseButton={createdProject === undefined && !busy}
         aria-busy={busy}
+        onCloseAutoFocus={(event) => {
+          if (skipCloseFocusRestore.current) {
+            skipCloseFocusRestore.current = false
+            if (returnFocusRef !== undefined) event.preventDefault()
+            return
+          }
+          if (!returnFocusRef?.current?.isConnected) return
+          event.preventDefault()
+          returnFocusRef.current.focus()
+        }}
         onOpenAutoFocus={(event) => {
           if (pathInputRef.current !== null) {
             event.preventDefault()

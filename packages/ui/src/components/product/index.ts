@@ -20,6 +20,7 @@ export { PermissionCard, type PermissionCardProps } from './permission-card'
 export { QuestionCard, type QuestionCardProps } from './question-card'
 export { ShellRunCard, type ShellRunCardProps } from './shell-run-card'
 export { TerminalCard, type TerminalCardProps } from './terminal-card'
+export { SettingsRow, type SettingsRowProps } from './settings-row'
 export {
   ToolCallCard,
   type ToolCallCardProps,

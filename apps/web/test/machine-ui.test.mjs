@@ -19,8 +19,14 @@ test('Machines routes and navigation expose only real Host-backed Machine pages'
   ])
 
   assert.match(router, /path: '\/machines'/u)
+  assert.match(router, /path: '\/devices'/u)
+  assert.match(router, /path: '\/devices\/\$machineId'/u)
+  assert.match(
+    router,
+    /throw redirect\(\{ to: '\/devices', replace: true \}\)/u,
+  )
   assert.match(router, /path: '\/machines\/\$machineId'/u)
-  assert.match(sidebar, /to="\/machines"/u)
+  assert.match(sidebar, /to="\/devices"/u)
   assert.match(list, /machineListQueryOptions/u)
   assert.match(list, /machineDetailQueryOptions/u)
   assert.match(detail, /machineDetailQueryOptions/u)

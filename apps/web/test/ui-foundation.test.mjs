@@ -5,6 +5,18 @@ import { createElement as h } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { loadUiComponent } from './fixtures/render-ui.mjs'
 
+test('the shared product mark preserves the approved editable tether geometry and ink tokens', () => {
+  const { CodeTetherMark } = loadUiComponent('components/code-tether-mark.tsx')
+  const markup = renderToStaticMarkup(h(CodeTetherMark))
+  assert.match(markup, /data-slot="code-tether-mark"/u)
+  assert.match(markup, /bg-ink/u)
+  assert.match(markup, /text-on-ink/u)
+  assert.match(markup, /<svg/u)
+  assert.equal(markup.match(/<circle/gu)?.length, 2)
+  assert.match(markup, /M10 12h4/u)
+  assert.doesNotMatch(markup, /bg-primary|<img|>C</u)
+})
+
 test('v4 light and dark semantic tokens retain the approved warm-neutral palette', async () => {
   const css = await readFile(
     new URL('../../../packages/ui/src/styles/globals.css', import.meta.url),

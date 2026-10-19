@@ -2,6 +2,21 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 
+test('the v4 sidebar has one device section and preserves the existing secure add-device action', async () => {
+  const sidebar = await readFile(
+    new URL(
+      '../src/components/app-shell/workspace-sidebar.tsx',
+      import.meta.url,
+    ),
+    'utf8',
+  )
+  assert.match(sidebar, /<CodeTetherMark/u)
+  assert.match(sidebar, /<AddRemoteMachineDialog/u)
+  assert.match(sidebar, /label="添加设备"/u)
+  assert.match(sidebar, /to="\/devices"/u)
+  assert.doesNotMatch(sidebar, /label="设备"/u)
+})
+
 import {
   activeWorkspaceConversations,
   hasMoreWorkspaceConversations,
@@ -66,8 +81,8 @@ test('Provider identity depends only on the immutable Conversation provider', ()
 
 test('Workspace status decoration is limited to actionable activity', () => {
   assert.equal(workspaceConversationStatusLabel('running'), '运行中')
-  assert.equal(workspaceConversationStatusLabel('waiting'), '需要处理')
-  assert.equal(workspaceConversationStatusLabel('failed'), '运行失败')
+  assert.equal(workspaceConversationStatusLabel('waiting'), '等待批准')
+  assert.equal(workspaceConversationStatusLabel('failed'), '失败')
   assert.equal(workspaceConversationStatusLabel('idle'), undefined)
   assert.equal(workspaceConversationStatusLabel('completed'), undefined)
 })
@@ -91,29 +106,35 @@ test('Workspace Sidebar owns project navigation, scoped creation, and one lazy C
   assert.match(source, /to="\/projects\/\$projectId"/u)
   assert.match(source, /to="\/conversations\/\$conversationId"/u)
   assert.match(source, /aria-expanded=\{expanded\}/u)
-  assert.match(source, /onNewConversation\(project, event\.currentTarget\)/u)
-  assert.match(source, /onNewConversation\(undefined, event\.currentTarget\)/u)
+  assert.match(
+    source,
+    /onNewConversation\(\s*project,\s*event\.currentTarget,\s*machine\.machineId/u,
+  )
+  assert.match(
+    source,
+    /onNewConversation\(\s*activeProject,\s*event\.currentTarget,\s*activeMachineId,/u,
+  )
   assert.match(source, /enabled: expanded && connectionState === 'connected'/u)
-  assert.match(source, /expandedProjectId/u)
+  assert.match(source, /expandedProjectKeys/u)
   assert.doesNotMatch(source, /useQueries|provider\.availability/u)
   assert.match(source, /data-selected=\{selected \|\| undefined\}/u)
   assert.match(source, /查看已归档会话/u)
-  assert.match(source, /展开显示/u)
+  assert.match(source, /显示全部/u)
   assert.doesNotMatch(detail, /ConversationRail|layout-conversation-rail/u)
 })
 
 test('Workspace Sidebar width preferences clamp invalid and incompatible values', () => {
-  assert.equal(parseWorkspaceSidebarWidth(null), 280)
-  assert.equal(parseWorkspaceSidebarWidth(''), 280)
-  assert.equal(parseWorkspaceSidebarWidth('NaN'), 280)
+  assert.equal(parseWorkspaceSidebarWidth(null), 248)
+  assert.equal(parseWorkspaceSidebarWidth(''), 248)
+  assert.equal(parseWorkspaceSidebarWidth('NaN'), 248)
   assert.equal(parseWorkspaceSidebarWidth('-20'), 220)
   assert.equal(parseWorkspaceSidebarWidth('219'), 220)
   assert.equal(parseWorkspaceSidebarWidth('281.6'), 282)
   assert.equal(parseWorkspaceSidebarWidth('9999'), 420)
-  assert.equal(clampWorkspaceSidebarWidth(Number.POSITIVE_INFINITY), 280)
+  assert.equal(clampWorkspaceSidebarWidth(Number.POSITIVE_INFINITY), 248)
   assert.deepEqual(workspaceSidebarWidthBounds, {
     minimum: 220,
-    default: 280,
+    default: 248,
     maximum: 420,
   })
 })
@@ -140,7 +161,7 @@ test('Workspace Sidebar layout preferences survive reload and inaccessible stora
       throw new Error('blocked')
     },
   }
-  assert.equal(readWorkspaceSidebarWidth(failedStorage), 280)
+  assert.equal(readWorkspaceSidebarWidth(failedStorage), 248)
   assert.equal(readWorkspaceSidebarCollapsed(failedStorage), false)
   assert.doesNotThrow(() => writeWorkspaceSidebarWidth(failedStorage, 300))
   assert.doesNotThrow(() =>
@@ -225,8 +246,12 @@ test('Workspace Sidebar handle uses pointer capture, cleanup, and keyboard resiz
   assert.match(topBar, /aria-label="检查状态"/u)
   assert.match(topBar, /max-\[1180px\]:sr-only/u)
   assert.doesNotMatch(topBar, /label="帮助"/u)
-  assert.match(shell, /sidebarCollapsed\s*\? '0px'/u)
-  assert.match(shell, /readWorkspaceSidebarWidth/u)
+  assert.match(
+    shell,
+    /data-sidebar-collapsed=\{sidebarCollapsed \|\| undefined\}/u,
+  )
+  assert.match(shell, /useWorkspaceSidebarWidth/u)
+  assert.doesNotMatch(shell, /style=\{/u)
   assert.match(shell, /readWorkspaceSidebarCollapsed/u)
   assert.match(shell, /WorkspaceChromeTargetProvider/u)
 })

@@ -1,5 +1,6 @@
 import type { ComponentPropsWithoutRef, MouseEventHandler, Ref } from 'react'
 import { Link } from '@tanstack/react-router'
+import type { MachineId } from '@codetether/protocol'
 import {
   Bell,
   PanelLeftClose,
@@ -25,16 +26,20 @@ interface TopBarProfile {
 type TopBarBreadcrumb =
   | { label: string; to?: undefined }
   | { label: string; to: '/machines' }
+  | { label: string; to: '/devices' }
+  | { label: string; to: '/devices/$machineId'; params: { machineId: string } }
   | { label: string; to: '/projects' }
   | {
       label: string
       params: { projectId: string }
       to: '/projects/$projectId'
+      search?: { machineId?: MachineId }
     }
   | {
       label: string
       params: { projectId: string }
       to: '/projects/$projectId/conversations'
+      search?: { machineId?: MachineId }
     }
 
 interface TopBarProps extends Omit<
@@ -81,7 +86,7 @@ function TopBar({
     <header
       data-slot="top-bar"
       className={cn(
-        'flex h-[var(--layout-topbar-height)] min-w-0 shrink-0 border-b border-border bg-navigation',
+        'flex h-[var(--layout-topbar-height)] min-w-0 shrink-0 border-b border-border bg-background',
         className,
       )}
       {...props}
@@ -271,9 +276,21 @@ function BreadcrumbContent({
       </Link>
     )
   }
-  if (breadcrumb.to === '/machines') {
+  if (breadcrumb.to === '/devices/$machineId') {
     return (
-      <Link to="/machines" className={className} title={breadcrumb.label}>
+      <Link
+        to="/devices/$machineId"
+        params={breadcrumb.params}
+        className={className}
+        title={breadcrumb.label}
+      >
+        {breadcrumb.label}
+      </Link>
+    )
+  }
+  if (breadcrumb.to === '/machines' || breadcrumb.to === '/devices') {
+    return (
+      <Link to={breadcrumb.to} className={className} title={breadcrumb.label}>
         {breadcrumb.label}
       </Link>
     )
@@ -283,6 +300,7 @@ function BreadcrumbContent({
       <Link
         to="/projects/$projectId"
         params={breadcrumb.params}
+        search={breadcrumb.search}
         className={className}
         title={breadcrumb.label}
       >
@@ -294,6 +312,7 @@ function BreadcrumbContent({
     <Link
       to="/projects/$projectId/conversations"
       params={breadcrumb.params}
+      search={breadcrumb.search}
       className={className}
       title={breadcrumb.label}
     >

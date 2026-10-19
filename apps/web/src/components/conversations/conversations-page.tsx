@@ -87,6 +87,7 @@ export function ConversationsPage({ projectId }: ConversationsPageProps) {
   const connectionState = useHostConnectionState()
   const navigate = useNavigate({ from: '/projects/$projectId/conversations' })
   const search = useSearch({ from: '/projects/$projectId/conversations' })
+  const currentMachineId = search.machineId
   const archiveView: ConversationArchiveView =
     search.view === 'archived' ? 'archived' : 'active'
   const query = search.q ?? ''
@@ -132,25 +133,47 @@ export function ConversationsPage({ projectId }: ConversationsPageProps) {
       debouncedQuery.length > 0,
   })
   const searchResults = useMemo(
-    () => flattenConversationSearchPages(durableSearchQuery.data?.pages ?? []),
-    [durableSearchQuery.data?.pages],
+    () =>
+      flattenConversationSearchPages(
+        durableSearchQuery.data?.pages ?? [],
+      ).filter(
+        (result) =>
+          currentMachineId === undefined ||
+          result.conversation.machineId === currentMachineId,
+      ),
+    [durableSearchQuery.data?.pages, currentMachineId],
   )
   const viewState = conversationListPageViewState(
     projectQuery,
     conversationsQuery,
   )
   const conversations =
-    viewState.kind === 'ready' ? viewState.conversations : emptyConversations
+    viewState.kind === 'ready'
+      ? viewState.conversations.filter(
+          (conversation) =>
+            currentMachineId === undefined ||
+            conversation.machineId === currentMachineId,
+        )
+      : emptyConversations
   const summary = useMemo(
     () => conversationStatusCounts(conversations),
     [conversations],
   )
   const knownConversations = useMemo(
-    () => [
-      ...(activeConversationsQuery.data ?? []),
-      ...(archivedConversationsQuery.data ?? []),
+    () =>
+      [
+        ...(activeConversationsQuery.data ?? []),
+        ...(archivedConversationsQuery.data ?? []),
+      ].filter(
+        (conversation) =>
+          currentMachineId === undefined ||
+          conversation.machineId === currentMachineId,
+      ),
+    [
+      activeConversationsQuery.data,
+      archivedConversationsQuery.data,
+      currentMachineId,
     ],
-    [activeConversationsQuery.data, archivedConversationsQuery.data],
   )
   const providers = useMemo(
     () => uniqueProviders(knownConversations),
@@ -218,6 +241,9 @@ export function ConversationsPage({ projectId }: ConversationsPageProps) {
     void navigate({
       params: { projectId },
       search: {
+        ...(currentMachineId === undefined
+          ? {}
+          : { machineId: currentMachineId }),
         ...(nextView === 'archived' ? { view: 'archived' as const } : {}),
         ...(query.length > 0 ? { q: query } : {}),
       },
@@ -231,6 +257,9 @@ export function ConversationsPage({ projectId }: ConversationsPageProps) {
       replace: searchMode === nextSearchMode,
       resetScroll: false,
       search: {
+        ...(currentMachineId === undefined
+          ? {}
+          : { machineId: currentMachineId }),
         ...(archiveView === 'archived' ? { view: 'archived' as const } : {}),
         ...(nextQuery.length > 0 ? { q: nextQuery } : {}),
       },
@@ -294,9 +323,13 @@ export function ConversationsPage({ projectId }: ConversationsPageProps) {
                 : undefined
             }
             hasNextPage={durableSearchQuery.hasNextPage === true}
-            hasArchivedConversations={
-              (archivedConversationsQuery.data?.length ?? 0) > 0
-            }
+            hasArchivedConversations={(
+              archivedConversationsQuery.data ?? []
+            ).some(
+              (conversation) =>
+                currentMachineId === undefined ||
+                conversation.machineId === currentMachineId,
+            )}
             isFetchingNextPage={durableSearchQuery.isFetchingNextPage}
             loading={durableSearchQuery.isPending}
             project={project}
@@ -339,9 +372,13 @@ export function ConversationsPage({ projectId }: ConversationsPageProps) {
             archiveView={archiveView}
             conversations={conversations}
             groupedConversations={groupedConversations}
-            hasArchivedConversations={
-              (archivedConversationsQuery.data?.length ?? 0) > 0
-            }
+            hasArchivedConversations={(
+              archivedConversationsQuery.data ?? []
+            ).some(
+              (conversation) =>
+                currentMachineId === undefined ||
+                conversation.machineId === currentMachineId,
+            )}
             project={viewState.project}
             providerFilter={providerFilter}
             providers={providers}
@@ -419,6 +456,9 @@ function ConversationSearchReadyContent({
   onRetry,
   onStatusFilterChange,
 }: ConversationSearchReadyContentProps) {
+  const { machineId: currentMachineId } = useSearch({
+    from: '/projects/$projectId/conversations',
+  })
   return (
     <>
       <ConversationToolbar
@@ -456,7 +496,8 @@ function ConversationSearchReadyContent({
         ) : null}
       </div>
 
-      {projectLocationAvailability(project) === 'unavailable' ? (
+      {projectLocationAvailability(project, currentMachineId) ===
+      'unavailable' ? (
         <ProjectUnavailableNotice />
       ) : null}
 
@@ -549,6 +590,9 @@ function ConversationReadyContent({
   onQueryChange,
   onStatusFilterChange,
 }: ConversationReadyContentProps) {
+  const { machineId: currentMachineId } = useSearch({
+    from: '/projects/$projectId/conversations',
+  })
   const empty = conversations.length === 0
 
   return (
@@ -573,7 +617,8 @@ function ConversationReadyContent({
         />
       </div>
 
-      {projectLocationAvailability(project) === 'unavailable' ? (
+      {projectLocationAvailability(project, currentMachineId) ===
+      'unavailable' ? (
         <ProjectUnavailableNotice />
       ) : null}
 
@@ -689,6 +734,9 @@ function ConversationToolbar({
   onQueryChange,
   onStatusFilterChange,
 }: ConversationToolbarProps) {
+  const { machineId: currentMachineId } = useSearch({
+    from: '/projects/$projectId/conversations',
+  })
   const currentProviderLabel =
     providerFilter === 'all'
       ? '全部智能体'
@@ -778,10 +826,12 @@ function ConversationToolbar({
 
           <NewConversationDialog
             currentProject={project}
+            currentMachineId={currentMachineId}
             trigger={
               <NewConversationButton
                 disabled={
-                  projectLocationAvailability(project) === 'unavailable'
+                  projectLocationAvailability(project, currentMachineId) ===
+                  'unavailable'
                 }
               />
             }
@@ -805,6 +855,9 @@ function ConversationOrganizationEmptyState({
   onArchiveViewChange,
   project,
 }: ConversationOrganizationEmptyStateProps) {
+  const { machineId: currentMachineId } = useSearch({
+    from: '/projects/$projectId/conversations',
+  })
   const archived = archiveView === 'archived'
   return (
     <section className="grid min-h-64 place-items-center rounded-md border border-dashed border-border bg-surface/35 px-6 py-10 text-center">
@@ -836,9 +889,11 @@ function ConversationOrganizationEmptyState({
             >
               返回活跃会话
             </Button>
-          ) : projectLocationAvailability(project) === 'available' ? (
+          ) : projectLocationAvailability(project, currentMachineId) ===
+            'available' ? (
             <NewConversationDialog
               currentProject={project}
+              currentMachineId={currentMachineId}
               trigger={<NewConversationButton />}
             />
           ) : null}

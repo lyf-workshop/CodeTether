@@ -82,7 +82,7 @@ import { ProviderInstallationSelector } from './provider-installation-selector'
 
 export function MachineDetailRoute() {
   const { machineId: rawMachineId } = useParams({
-    from: '/machines/$machineId',
+    from: '/devices/$machineId',
   })
   const machineId = MachineIdSchema.safeParse(rawMachineId)
   if (!machineId.success) return <MachineNotFound />

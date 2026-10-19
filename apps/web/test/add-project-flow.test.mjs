@@ -10,13 +10,13 @@ test('one Add Project dialog owns Desktop picker and Browser path fallback', asy
   const source = await readSource('components/projects/add-project-dialog.tsx')
 
   assert.match(source, /directoryPicker = nativeCapabilities\.directoryPicker/u)
-  assert.match(source, /directoryPicker\.available \? \(/u)
+  assert.match(source, /usesDirectoryPicker \? \(/u)
   assert.match(
     source,
-    /directoryPicker\.available \? \(\s*<span className="text-sm font-medium text-text-primary">/u,
+    /usesDirectoryPicker \? \(\s*<span className="text-sm font-medium text-text-primary">/u,
   )
   assert.match(source, /<label\s+htmlFor="add-project-path"/u)
-  assert.doesNotMatch(source, /htmlFor=\{\s*directoryPicker\.available/u)
+  assert.doesNotMatch(source, /htmlFor=\{\s*usesDirectoryPicker/u)
   assert.match(source, /id="add-project-directory-picker"/u)
   assert.match(source, /id="add-project-path"/u)
   assert.match(source, /\u9009\u62e9\u6587\u4ef6\u5939|选择文件夹/u)
@@ -84,12 +84,12 @@ test('TopBar no-project flow swaps sibling dialogs and returns to New Conversati
   assert.match(shell, /'add-project' \| 'new-conversation' \| null/u)
   assert.match(
     shell,
-    /onAddProject=\{\(\) => setGlobalDialog\('add-project'\)\}/u,
+    /onAddProject=\{\(\) => \{[\s\S]*setReturnToConversation\(true\)[\s\S]*setGlobalDialog\('add-project'\)/u,
   )
   assert.match(shell, /<AddProjectDialog/u)
   assert.match(
     shell,
-    /onProjectCreated=\{\(\) => setGlobalDialog\('new-conversation'\)\}/u,
+    /onProjectCreated=\{async \(project, _created, machineId\) => \{[\s\S]*setNewConversationProject\(project\)[\s\S]*setNewConversationMachineId\(machineId\)/u,
   )
   assert.match(newConversation, /onAddProject\?: \(\) => void/u)
   assert.match(newConversation, /onClick=\{onAddProject\}/u)

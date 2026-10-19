@@ -131,7 +131,7 @@ export function notificationSurfaceFromPathname(
 ): AttentionPresentationSurface {
   if (/^\/inbox\/?$/u.test(pathname)) return { kind: 'inbox' }
 
-  const match = /^\/conversations\/([^/]+)\/?$/u.exec(pathname)
+  const match = /^\/(?:conversations|c)\/([^/]+)\/?$/u.exec(pathname)
   if (match === null) return { kind: 'other' }
   return {
     kind: 'conversation',

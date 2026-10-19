@@ -6,21 +6,20 @@ import {
 } from '@tanstack/react-router'
 import {
   ConversationSearchQueryTextSchema,
+  MachineIdSchema,
   ProjectIdSchema,
   TurnIdSchema,
+  type MachineId,
   type TurnId,
 } from '@codetether/protocol'
-
 import { RootLayout } from './components/app-shell/root-layout'
-import { RoutePlaceholder } from './components/app-shell/route-placeholder'
 import { ConversationDetailRoute } from './components/conversation/conversation-detail-route'
 import { ProjectConversationsRoute } from './components/conversations'
 import { InboxPage } from './components/inbox'
 import { MachineDetailRoute, MachinesPage } from './components/machines'
-import { ProjectDetailRoute, ProjectsPage } from './components/projects'
+import { ProjectDetailRoute } from './components/projects'
 import { DesktopNotificationSettings } from './components/settings'
 import { DoctorPage } from './components/doctor'
-import { HostDirectoryPage, RemoteHostPage } from './components/hosts'
 import { OnboardingPage, StartupGate } from './components/onboarding'
 
 const rootRoute = createRootRoute({ component: RootLayout })
@@ -30,10 +29,27 @@ interface ConversationSearch {
   panel?: 'changes'
   turn?: TurnId
 }
-
-interface ProjectConversationsSearch {
+interface ProjectSearch {
+  machineId?: MachineId
+}
+interface ProjectConversationsSearch extends ProjectSearch {
   q?: string
   view?: 'archived'
+}
+
+function conversationSearch(
+  search: Record<string, unknown>,
+): ConversationSearch {
+  const turn = TurnIdSchema.safeParse(search.turn)
+  return {
+    focus: search.focus === 'composer' ? 'composer' : undefined,
+    panel: search.panel === 'changes' ? 'changes' : undefined,
+    ...(turn.success ? { turn: turn.data } : {}),
+  }
+}
+function projectSearch(search: Record<string, unknown>): ProjectSearch {
+  const machineId = MachineIdSchema.safeParse(search.machineId)
+  return machineId.success ? { machineId: machineId.data } : {}
 }
 
 const homeRoute = createRoute({
@@ -41,13 +57,11 @@ const homeRoute = createRoute({
   path: '/',
   component: StartupGate,
 })
-
 const setupRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/setup',
   component: OnboardingPage,
 })
-
 const doctorRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/doctor',
@@ -57,57 +71,41 @@ const doctorRoute = createRoute({
   },
   component: DoctorPage,
 })
-
-const conversationsRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/conversations',
-  beforeLoad: () => {
-    throw redirect({
-      to: '/projects',
-      replace: true,
-    })
-  },
-})
-
 const conversationRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/conversations/$conversationId',
   remountDeps: ({ params }) => params.conversationId,
-  validateSearch: (search: Record<string, unknown>): ConversationSearch => {
-    const turn = TurnIdSchema.safeParse(search.turn)
-    return {
-      focus: search.focus === 'composer' ? 'composer' : undefined,
-      panel: search.panel === 'changes' ? 'changes' : undefined,
-      ...(turn.success ? { turn: turn.data } : {}),
-    }
-  },
+  validateSearch: conversationSearch,
   component: ConversationDetailRoute,
 })
-
+const shortConversationRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/c/$conversationId',
+  remountDeps: ({ params }) => params.conversationId,
+  validateSearch: conversationSearch,
+  component: ConversationDetailRoute,
+})
 const inboxRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/inbox',
   component: InboxPage,
 })
-
-const activityRoute = createRoute({
+const devicesRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: '/activity',
-  component: () => <RoutePlaceholder title="活动" />,
+  path: '/devices',
+  component: MachinesPage,
 })
-
-const projectsRoute = createRoute({
+const deviceDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: '/projects',
-  component: ProjectsPage,
+  path: '/devices/$machineId',
+  component: MachineDetailRoute,
 })
-
 const projectDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/projects/$projectId',
+  validateSearch: projectSearch,
   component: ProjectDetailRoute,
 })
-
 const projectConversationsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/projects/$projectId/conversations',
@@ -116,74 +114,107 @@ const projectConversationsRoute = createRoute({
   ): ProjectConversationsSearch => {
     const query = ConversationSearchQueryTextSchema.safeParse(search.q)
     return {
+      ...projectSearch(search),
       ...(query.success ? { q: query.data } : {}),
       ...(search.view === 'archived' ? { view: 'archived' as const } : {}),
     }
   },
   component: ProjectConversationsRoute,
 })
-
-const agentsRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/agents',
-  component: () => <RoutePlaceholder title="智能体" />,
-})
-
-const machinesRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/machines',
-  component: MachinesPage,
-})
-
-const hostsRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/hosts',
-  component: HostDirectoryPage,
-})
-
-const remoteHostRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/hosts/$hostId',
-  component: RemoteHostPage,
-})
-
-const machineDetailRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/machines/$machineId',
-  component: MachineDetailRoute,
-})
-
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/settings',
   component: DesktopNotificationSettings,
 })
 
+// Legacy URLs remain accepted without exposing account Host read surfaces.
+const machinesRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/machines',
+  beforeLoad: () => {
+    throw redirect({ to: '/devices', replace: true })
+  },
+})
+const machineDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/machines/$machineId',
+  beforeLoad: ({ params }) => {
+    throw redirect({
+      to: '/devices/$machineId',
+      params: { machineId: params.machineId },
+      replace: true,
+    })
+  },
+})
+const hostsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/hosts',
+  beforeLoad: () => {
+    throw redirect({ to: '/devices', replace: true })
+  },
+})
+const remoteHostRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/hosts/$hostId',
+  beforeLoad: () => {
+    throw redirect({ to: '/devices', replace: true })
+  },
+})
+const projectsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/projects',
+  beforeLoad: () => {
+    throw redirect({ to: '/devices', replace: true })
+  },
+})
+const conversationsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/conversations',
+  beforeLoad: () => {
+    throw redirect({ to: '/devices', replace: true })
+  },
+})
+const activityRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/activity',
+  beforeLoad: () => {
+    throw redirect({ to: '/devices', replace: true })
+  },
+})
+const agentsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/agents',
+  beforeLoad: () => {
+    throw redirect({ to: '/devices', replace: true })
+  },
+})
+
 const routeTree = rootRoute.addChildren([
   homeRoute,
   setupRoute,
   doctorRoute,
-  conversationsRoute,
   conversationRoute,
+  shortConversationRoute,
   inboxRoute,
-  activityRoute,
-  projectsRoute,
+  devicesRoute,
+  deviceDetailRoute,
   projectDetailRoute,
   projectConversationsRoute,
-  agentsRoute,
-  hostsRoute,
-  remoteHostRoute,
+  settingsRoute,
   machinesRoute,
   machineDetailRoute,
-  settingsRoute,
+  hostsRoute,
+  remoteHostRoute,
+  projectsRoute,
+  conversationsRoute,
+  activityRoute,
+  agentsRoute,
 ])
-
 export const router = createRouter({
   defaultPreload: 'intent',
   routeTree,
   scrollRestoration: true,
 })
-
 declare module '@tanstack/react-router' {
   interface Register {
     router: typeof router

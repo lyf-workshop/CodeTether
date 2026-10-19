@@ -3,6 +3,21 @@ import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import test from 'node:test'
 
+test('clearing composer focus stays on the current canonical or legacy conversation route', async () => {
+  const route = await sourceOf(
+    'components/conversation/conversation-detail-route.tsx',
+  )
+  const start = route.indexOf('const clearIntent = () => {')
+  const end = route.indexOf('const handoff =', start)
+  assert.ok(start >= 0 && end > start)
+  const clearIntent = route.slice(start, end)
+  assert.match(clearIntent, /replace: true/u)
+  assert.match(clearIntent, /search:/u)
+  assert.match(clearIntent, /\{ panel \}/u)
+  assert.match(clearIntent, /\{ turn \}/u)
+  assert.doesNotMatch(clearIntent, /\bto:|\bparams:/u)
+})
+
 const webSource = resolve(import.meta.dirname, '../src')
 
 test('create navigation carries one transient Composer focus intent', async () => {

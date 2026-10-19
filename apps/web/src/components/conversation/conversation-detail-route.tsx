@@ -18,6 +18,7 @@ import {
   type ConversationSummary,
   type GetConversationResponse,
   type MachineSummary,
+  type MachineId,
   type ProjectRecord,
   type ProviderDescriptor,
   type ProviderInstallationSummary,
@@ -73,13 +74,21 @@ import {
 import { useLiveConversationControls } from './use-live-conversation-controls'
 
 export function ConversationDetailRoute() {
-  const { conversationId } = useParams({
-    from: '/conversations/$conversationId',
+  const { conversationId: routeConversationId } = useParams({
+    strict: false,
   })
+  const conversationId = routeConversationId ?? ''
   const { focus, panel, turn } = useSearch({
-    from: '/conversations/$conversationId',
+    strict: false,
   })
-  const navigate = useNavigate({ from: '/conversations/$conversationId' })
+  const currentPath = useRouterState({
+    select: (state) => state.location.pathname,
+  })
+  const navigate = useNavigate({
+    from: currentPath.startsWith('/c/')
+      ? '/c/$conversationId'
+      : '/conversations/$conversationId',
+  })
   const anchorRequestKey = useRouterState({
     select: (state) => state.location.state.__TSR_key ?? state.location.href,
   })
@@ -93,8 +102,6 @@ export function ConversationDetailRoute() {
     const clearIntent = () => {
       void navigate({
         replace: true,
-        to: '/conversations/$conversationId',
-        params: { conversationId },
         search: {
           ...(panel === undefined ? {} : { panel }),
           ...(turn === undefined ? {} : { turn }),
@@ -330,6 +337,7 @@ function LoadedLiveConversationDetail({
           : projectLocationForMachine(projectQuery.data, machineId)?.rootPath
       }
       machine={machineQuery.data?.machine}
+      owningMachineId={machineId}
       machineName={machineQuery.data?.machine.displayName ?? '电脑'}
       machineNames={Object.fromEntries(
         (machinesQuery.data ?? []).map((machine) => [
@@ -369,6 +377,7 @@ function LoadedLiveConversationDetail({
 }
 
 interface ConnectedLiveConversationDetailProps {
+  readonly owningMachineId: MachineId
   readonly anchorRequestKey: string
   readonly conversation: ConversationReadModel
   readonly summaries: readonly ConversationSummary[]
@@ -389,6 +398,7 @@ interface ConnectedLiveConversationDetailProps {
 }
 
 function ConnectedLiveConversationDetail({
+  owningMachineId,
   anchorRequestKey,
   conversation,
   summaries,
@@ -505,7 +515,7 @@ function ConnectedLiveConversationDetail({
               void navigate({
                 to: '/projects/$projectId/conversations',
                 params: { projectId: project.projectId },
-                search: { view: 'archived' },
+                search: { view: 'archived', machineId: owningMachineId },
               }).then(() => {
                 window.requestAnimationFrame(() => {
                   document

@@ -169,13 +169,15 @@ test('remote detail is truthful and unpair remains explicit and remote-only', as
 })
 
 test('New Conversation excludes identity-only remote Machines by canonical capabilities', async () => {
-  const [dialog, providerSelection] = await Promise.all([
+  const [dialog, providerSelection, machineSelection] = await Promise.all([
     source('components/conversations/new-conversation-dialog.tsx'),
     source('components/conversations/new-conversation-provider-selection.ts'),
+    source('components/conversations/new-conversation-machine-selection.ts'),
   ])
 
-  assert.match(dialog, /machine\.capabilities\.projectAccess/u)
-  assert.match(dialog, /machine\.capabilities\.providerExecution/u)
+  assert.match(machineSelection, /machine\.capabilities\.projectAccess/u)
+  assert.match(dialog, /selectNewConversationMachine/u)
+  assert.match(machineSelection, /machine\.capabilities\.providerExecution/u)
   assert.match(dialog, /projectLocationForMachine/u)
   assert.match(dialog, /executableConversationProviders/u)
   assert.match(

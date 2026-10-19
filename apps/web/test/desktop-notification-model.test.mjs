@@ -232,3 +232,30 @@ function attention(type, payload) {
     payload,
   }
 }
+
+test('short and legacy Conversation URLs suppress the same exact foreground notification', () => {
+  const item = attention('completed_review')
+  const window = { focused: true, visible: true, minimized: false }
+  for (const pathname of [
+    '/c/' + conversationId,
+    '/conversations/' + conversationId,
+  ]) {
+    const surface = notificationSurfaceFromPathname(pathname)
+    assert.deepEqual(surface, { kind: 'conversation', conversationId })
+    assert.equal(
+      shouldSuppressAttentionNotification(item, { surface, window }),
+      true,
+    )
+    assert.equal(
+      shouldSuppressAttentionNotification(item, {
+        surface,
+        window: { ...window, focused: false },
+      }),
+      false,
+    )
+  }
+  assert.deepEqual(
+    notificationSurfaceFromPathname('/c/' + conversationId + '/other'),
+    { kind: 'other' },
+  )
+})

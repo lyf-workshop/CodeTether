@@ -56,6 +56,10 @@ import {
 import { projectLocationForMachine } from '../../runtime/host/project-location'
 import { createProjectOptionPresentation } from './new-conversation-presentation'
 import {
+  newConversationMachineContextExplanation,
+  selectNewConversationMachine,
+} from './new-conversation-machine-selection'
+import {
   defaultProviderControls,
   defaultProviderModel,
   effectiveConversationProvider,
@@ -68,6 +72,7 @@ import {
 
 interface NewConversationDialogProps {
   currentProject?: ProjectRecord
+  currentMachineId?: MachineId
   onAddProject?: () => void
   onOpenChange?: (open: boolean) => void
   open?: boolean
@@ -80,6 +85,7 @@ const unavailableMachineQueryId = MachineIdSchema.parse('machine_unavailable')
 /** Minimal real create flow: one Project, Machine, and durable Provider. */
 export function NewConversationDialog({
   currentProject,
+  currentMachineId,
   onAddProject,
   onOpenChange,
   open: controlledOpen,
@@ -101,6 +107,7 @@ export function NewConversationDialog({
   const [selectedModel, setSelectedModel] = useState<string>()
   const [selectedReasoning, setSelectedReasoning] = useState<string>()
   const providerHealthNoticeId = useId()
+  const machineContextNoticeId = useId()
   const skipCloseFocusRestore = useRef(false)
   const open = controlledOpen ?? internalOpen
   const projectsQuery = useQuery({
@@ -112,29 +119,26 @@ export function NewConversationDialog({
     ...machineListQueryOptions(runtime),
     enabled: open && connectionState === 'connected',
   })
-  const candidateMachines = (machinesQuery.data ?? []).filter(
-    (machine) =>
-      machine.availability === 'available' &&
-      machine.capabilities.projectAccess &&
-      machine.capabilities.providerExecution &&
-      (currentProject === undefined ||
-        projectLocationForMachine(currentProject, machine.machineId) !==
-          undefined),
-  )
-  const effectiveSelectedMachineId =
-    selectedMachineId ?? candidateMachines[0]?.machineId
-  const selectedMachine = candidateMachines.find(
-    (machine) => machine.machineId === effectiveSelectedMachineId,
-  )
+  const {
+    candidateMachines,
+    machineId: effectiveSelectedMachineId,
+    machine: selectedMachine,
+    contextIssue: machineContextIssue,
+  } = selectNewConversationMachine({
+    machines: machinesQuery.data,
+    currentProject,
+    currentMachineId,
+    selectedMachineId,
+  })
+  const machineContextExplanation =
+    newConversationMachineContextExplanation(machineContextIssue)
   const machineDetailQuery = useQuery({
     ...machineDetailQueryOptions(
       runtime,
       effectiveSelectedMachineId ?? unavailableMachineQueryId,
     ),
     enabled:
-      open &&
-      connectionState === 'connected' &&
-      effectiveSelectedMachineId !== undefined,
+      open && connectionState === 'connected' && selectedMachine !== undefined,
   })
   const availableProjects = (projectsQuery.data ?? []).filter((project) => {
     if (effectiveSelectedMachineId === undefined) return false
@@ -237,7 +241,9 @@ export function NewConversationDialog({
   const projectUnavailable =
     selectedProjectLocation?.availability !== 'available'
   const noAvailableMachines =
-    machinesQuery.isSuccess && candidateMachines.length === 0
+    currentMachineId === undefined &&
+    machinesQuery.isSuccess &&
+    candidateMachines.length === 0
   const unavailableMachineExplanation = (() => {
     if (currentProject === undefined || !noAvailableMachines) return undefined
     const boundMachines = (machinesQuery.data ?? []).filter((machine) =>
@@ -260,6 +266,7 @@ export function NewConversationDialog({
   })()
   const noAvailableProjects =
     currentProject === undefined &&
+    machineContextIssue === undefined &&
     projectsQuery.isSuccess &&
     availableProjects.length === 0
   const canSubmit =
@@ -269,6 +276,7 @@ export function NewConversationDialog({
     selectedProviderPresentation.capabilities.streaming &&
     selectedProviderPresentation.capabilities.resume &&
     selectedProviderEligibility.eligible &&
+    machineContextIssue === undefined &&
     selectedMachine !== undefined &&
     machineDetailQuery.isSuccess &&
     selectedProject !== undefined &&
@@ -283,7 +291,7 @@ export function NewConversationDialog({
       skipCloseFocusRestore.current = false
       createMutation.reset()
       setSelectedProjectId(currentProject?.projectId)
-      setSelectedMachineId(undefined)
+      setSelectedMachineId(currentMachineId)
       setSelectedProvider('codex')
       const defaults = defaultProviderControls(
         providerPresentationForMachine(
@@ -544,11 +552,27 @@ export function NewConversationDialog({
                       createMutation.reset()
                     }}
                     disabled={
-                      machinesQuery.isPending || createMutation.isPending
+                      currentMachineId !== undefined ||
+                      machinesQuery.isPending ||
+                      createMutation.isPending
                     }
                   >
-                    <SelectTrigger size="sm" aria-label="选择运行电脑">
-                      <SelectValue placeholder="选择电脑">
+                    <SelectTrigger
+                      size="sm"
+                      aria-label="选择运行电脑"
+                      aria-describedby={
+                        machineContextExplanation === undefined
+                          ? undefined
+                          : machineContextNoticeId
+                      }
+                    >
+                      <SelectValue
+                        placeholder={
+                          currentMachineId === undefined
+                            ? '选择电脑'
+                            : '所选电脑不可用'
+                        }
+                      >
                         {selectedMachine === undefined ? undefined : (
                           <span className="flex min-w-0 items-center gap-1.5">
                             <Monitor
@@ -661,7 +685,12 @@ export function NewConversationDialog({
               </InlineNotice>
             )}
 
-            {projectUnavailable ? (
+            {machineContextExplanation === undefined ? null : (
+              <InlineNotice id={machineContextNoticeId}>
+                {machineContextExplanation}
+              </InlineNotice>
+            )}
+            {projectUnavailable && machineContextIssue === undefined ? (
               <InlineNotice>
                 项目目录当前不可用；恢复原目录后才能创建会话。
               </InlineNotice>

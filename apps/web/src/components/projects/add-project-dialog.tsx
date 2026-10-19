@@ -1,5 +1,5 @@
 import { useRef, useState, type FormEvent, type ReactElement } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { FolderOpen, FolderPlus } from 'lucide-react'
 
@@ -17,7 +17,15 @@ import {
 } from '@codetether/ui'
 import type { MachineId, ProjectRecord } from '@codetether/protocol'
 
-import { useHostRuntime } from '../../runtime/host/host-runtime-hooks'
+import {
+  useHostConnectionState,
+  useHostRuntime,
+} from '../../runtime/host/host-runtime-hooks'
+import { machineListQueryOptions } from '../../runtime/host/machine-query'
+import {
+  fixedProjectCreationMachineExplanation,
+  selectFixedProjectCreationMachine,
+} from './project-creation-machine'
 import {
   nativeCapabilities,
   type DirectoryPicker,
@@ -38,6 +46,7 @@ import { createSelectedDirectoryPresentation } from './add-project-presentation'
 import { PreviousConversationsStep } from './previous-conversations-step'
 
 interface AddProjectDialogProps {
+  fixedMachineId?: MachineId
   deferPreviousConversations?: boolean
   directoryPicker?: DirectoryPicker
   onOpenChange?: (open: boolean) => void
@@ -62,6 +71,7 @@ interface CreatedProjectContext {
 }
 
 export function AddProjectDialog({
+  fixedMachineId,
   deferPreviousConversations = false,
   directoryPicker = nativeCapabilities.directoryPicker,
   onOpenChange,
@@ -72,6 +82,7 @@ export function AddProjectDialog({
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const runtime = useHostRuntime()
+  const connectionState = useHostConnectionState()
   const pathInputRef = useRef<HTMLInputElement>(null)
   const pickerButtonRef = useRef<HTMLButtonElement>(null)
   const pickerInFlightRef = useRef<Promise<ProjectDirectoryPickOutcome> | null>(
@@ -86,8 +97,26 @@ export function AddProjectDialog({
   const [validationError, setValidationError] = useState('')
   const [createdProject, setCreatedProject] = useState<CreatedProjectContext>()
   const open = controlledOpen ?? internalOpen
+  const machinesQuery = useQuery({
+    ...machineListQueryOptions(runtime),
+    enabled:
+      open && fixedMachineId !== undefined && connectionState === 'connected',
+  })
+  const fixedTarget = selectFixedProjectCreationMachine(
+    machinesQuery.data,
+    fixedMachineId,
+  )
+  const targetReady =
+    connectionState === 'connected' &&
+    (fixedMachineId === undefined || fixedTarget.state === 'ready')
+  const targetExplanation = machinesQuery.isError
+    ? '暂时无法读取这台设备，请关闭弹窗后重试。'
+    : fixedProjectCreationMachineExplanation(fixedTarget.state)
+  const usesDirectoryPicker =
+    directoryPicker.available &&
+    (fixedMachineId === undefined || fixedTarget.machine?.kind === 'local')
   const selectedDirectory =
-    directoryPicker.available && path.length > 0
+    usesDirectoryPicker && path.length > 0
       ? createSelectedDirectoryPresentation(path)
       : undefined
 
@@ -95,8 +124,22 @@ export function AddProjectDialog({
     mutationFn: async ({
       name: projectName,
       path: projectPath,
-    }: AddProjectValues) =>
-      await runtime.createProject(projectPath, projectName),
+    }: AddProjectValues) => {
+      if (!targetReady)
+        throw new Error(
+          'Selected Machine is not available for Project registration',
+        )
+      if (
+        fixedMachineId !== undefined &&
+        fixedTarget.machine?.kind === 'remote'
+      ) {
+        return await runtime.createRemoteProject(fixedMachineId, {
+          rootPath: projectPath,
+          ...(projectName === undefined ? {} : { name: projectName }),
+        })
+      }
+      return await runtime.createProject(projectPath, projectName)
+    },
     onSuccess: async (response) => {
       const project = response.data.project
       upsertProjectCache(queryClient, project)
@@ -104,6 +147,22 @@ export function AddProjectDialog({
         queryKey: projectQueryKeys.list,
         exact: true,
       })
+      if (fixedMachineId !== undefined) {
+        if (deferPreviousConversations) {
+          await finishCreatedProject(
+            project,
+            response.data.created,
+            fixedMachineId,
+          )
+          return
+        }
+        setCreatedProject({
+          project,
+          created: response.data.created,
+          machineId: fixedMachineId,
+        })
+        return
+      }
       try {
         const machines = await runtime.listMachines()
         const localMachine = machines.machines.find(
@@ -141,7 +200,9 @@ export function AddProjectDialog({
   const errorMessage = createMutation.isError
     ? projectErrorMessage(
         createMutation.error,
-        'create' satisfies ProjectOperation,
+        (fixedTarget.machine?.kind === 'remote'
+          ? 'create-remote'
+          : 'create') satisfies ProjectOperation,
       )
     : pickerError || validationError
   const busy = pickerState === 'picking' || createMutation.isPending
@@ -180,6 +241,7 @@ export function AddProjectDialog({
       await navigate({
         to: '/projects/$projectId',
         params: { projectId: project.projectId },
+        search: machineId === undefined ? {} : { machineId },
       })
     })().finally(() => {
       if (completionInFlightRef.current === completion) {
@@ -206,7 +268,8 @@ export function AddProjectDialog({
 
   async function handlePickDirectory() {
     if (
-      !directoryPicker.available ||
+      !usesDirectoryPicker ||
+      !targetReady ||
       pickerInFlightRef.current !== null ||
       createMutation.isPending
     ) {
@@ -239,14 +302,16 @@ export function AddProjectDialog({
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (busy) return
+    if (!targetReady) {
+      setValidationError(targetExplanation ?? '这台设备当前不可用。')
+      return
+    }
     const normalizedPath = path.trim()
     const normalizedName = name.trim()
 
     if (normalizedPath.length === 0) {
       setValidationError(
-        directoryPicker.available
-          ? '请选择项目目录。'
-          : '请输入项目的绝对路径。',
+        usesDirectoryPicker ? '请选择项目目录。' : '请输入项目的绝对路径。',
       )
       return
     }
@@ -267,7 +332,7 @@ export function AddProjectDialog({
         showCloseButton={createdProject === undefined && !busy}
         onOpenAutoFocus={(event) => {
           event.preventDefault()
-          if (directoryPicker.available) pickerButtonRef.current?.focus()
+          if (usesDirectoryPicker) pickerButtonRef.current?.focus()
           else pathInputRef.current?.focus()
         }}
       >
@@ -282,14 +347,23 @@ export function AddProjectDialog({
               </span>
               <DialogTitle>添加项目</DialogTitle>
               <DialogDescription>
-                注册一个本地工作区，让 CodeTether
-                获得在该目录中运行智能体的授权。
+                {fixedTarget.machine?.kind === 'remote'
+                  ? '输入这台设备上的完整文件夹路径。配对设备暂不支持浏览文件夹。'
+                  : '添加一个项目文件夹，作为 AI 工具的工作目录。'}
               </DialogDescription>
             </DialogHeader>
 
             <div className="mt-5 min-w-0 space-y-4">
+              {fixedMachineId === undefined ? null : (
+                <p role="status" className="text-sm text-text-secondary">
+                  设备：{fixedTarget.machine?.displayName ?? '正在读取'}
+                  {targetExplanation === undefined
+                    ? ''
+                    : ' · ' + targetExplanation}
+                </p>
+              )}
               <div className="min-w-0">
-                {directoryPicker.available ? (
+                {usesDirectoryPicker ? (
                   <span className="text-sm font-medium text-text-primary">
                     项目目录
                   </span>
@@ -305,11 +379,11 @@ export function AddProjectDialog({
                   id="add-project-path-description"
                   className="mt-1 text-xs font-regular text-text-muted"
                 >
-                  {directoryPicker.available
+                  {usesDirectoryPicker
                     ? '使用系统文件夹选择器选择一个本地工作区。'
                     : '输入或粘贴本机上的绝对目录路径。'}
                 </p>
-                {directoryPicker.available ? (
+                {usesDirectoryPicker ? (
                   <div className="mt-2 min-w-0 space-y-2.5">
                     <Button
                       ref={pickerButtonRef}
@@ -324,7 +398,7 @@ export function AddProjectDialog({
                       }
                       aria-invalid={errorMessage ? true : undefined}
                       aria-busy={pickerState === 'picking'}
-                      disabled={busy}
+                      disabled={busy || !targetReady}
                       onClick={() => void handlePickDirectory()}
                     >
                       <FolderOpen aria-hidden="true" />
@@ -375,8 +449,12 @@ export function AddProjectDialog({
                     }
                     aria-invalid={errorMessage ? true : undefined}
                     autoComplete="off"
-                    disabled={createMutation.isPending}
-                    placeholder="E:\\Projects\\CodeTether"
+                    disabled={createMutation.isPending || !targetReady}
+                    placeholder={
+                      fixedTarget.machine?.kind === 'remote'
+                        ? '/home/user/project'
+                        : 'E:\\Projects\\CodeTether'
+                    }
                     spellCheck={false}
                     className="mt-2 font-mono text-sm"
                   />
@@ -421,7 +499,7 @@ export function AddProjectDialog({
                   取消
                 </Button>
               </DialogClose>
-              <Button type="submit" size="sm" disabled={busy}>
+              <Button type="submit" size="sm" disabled={busy || !targetReady}>
                 {createMutation.isPending ? '正在添加…' : '添加项目'}
               </Button>
             </DialogFooter>

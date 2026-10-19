@@ -35,11 +35,14 @@ test('Detail organization actions use one shared control and archive into the UR
 
   assert.match(chromeActions, /ConversationOrganizationMenu/u)
   assert.match(chromeActions, /label="管理会话"/u)
-  assert.match(route, /search: \{ view: 'archived' \}/u)
+  assert.match(
+    route,
+    /search: \{ view: 'archived', machineId: owningMachineId \}/u,
+  )
   assert.match(route, /if \(current\.archivedAt !== undefined\)/u)
 })
 
-test('Workspace Sidebar separates the current archived Conversation from active rows', async () => {
+test('Workspace Sidebar explicitly identifies the current archived Conversation beside active history', async () => {
   const [sidebar, rootLayout] = await Promise.all([
     readFile(
       new URL(
@@ -54,7 +57,7 @@ test('Workspace Sidebar separates the current archived Conversation from active 
     ),
   ])
 
-  assert.match(sidebar, /currentArchivedConversation/u)
+  assert.match(sidebar, /workspaceLocationConversations/u)
   assert.match(sidebar, /当前已归档/u)
   assert.match(sidebar, /查看已归档会话/u)
   assert.match(rootLayout, /currentConversation=\{currentConversation\}/u)

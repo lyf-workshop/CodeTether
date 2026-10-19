@@ -1,19 +1,16 @@
-import {
-  useEffect,
-  useRef,
-  useState,
-  type CSSProperties,
-  type ReactNode,
-} from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useNavigate } from '@tanstack/react-router'
-
 import {
   Dialog,
   DialogContent,
   DialogTitle,
   TooltipProvider,
 } from '@codetether/ui'
-import type { ConversationSummary, ProjectRecord } from '@codetether/protocol'
+import type {
+  ConversationSummary,
+  MachineId,
+  ProjectRecord,
+} from '@codetether/protocol'
 
 import { NewConversationDialog } from '../conversations/new-conversation-dialog'
 import { AddProjectDialog } from '../projects/add-project-dialog'
@@ -21,10 +18,9 @@ import { MainContent } from './main-content'
 import { WorkspaceSidebar } from './workspace-sidebar'
 import {
   readWorkspaceSidebarCollapsed,
-  readWorkspaceSidebarWidth,
   writeWorkspaceSidebarCollapsed,
-  writeWorkspaceSidebarWidth,
 } from './workspace-sidebar-layout'
+import { useWorkspaceSidebarWidth } from './use-workspace-sidebar-width'
 import { WorkspaceSidebarResizeHandle } from './workspace-sidebar-resize-handle'
 import { TopBar, type TopBarBreadcrumb } from './top-bar'
 import { WorkspaceChromeTargetProvider } from './workspace-chrome'
@@ -37,6 +33,7 @@ interface AppShellProps {
   currentPath: string
   currentConversation?: ConversationSummary
   currentProject?: ProjectRecord
+  currentMachineId?: MachineId
   inboxAttentionCount?: number
 }
 
@@ -47,6 +44,7 @@ export function AppShell({
   currentPath,
   currentConversation,
   currentProject,
+  currentMachineId,
   inboxAttentionCount = 0,
 }: AppShellProps) {
   const navigate = useNavigate()
@@ -54,6 +52,13 @@ export function AppShell({
   const [newConversationProject, setNewConversationProject] = useState<
     ProjectRecord | undefined
   >()
+  const [newConversationMachineId, setNewConversationMachineId] = useState<
+    MachineId | undefined
+  >()
+  const [addProjectMachineId, setAddProjectMachineId] = useState<
+    MachineId | undefined
+  >()
+  const [returnToConversation, setReturnToConversation] = useState(false)
   const [globalDialog, setGlobalDialog] = useState<
     'add-project' | 'new-conversation' | null
   >(null)
@@ -61,19 +66,14 @@ export function AppShell({
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
     readWorkspaceSidebarCollapsed,
   )
-  const [sidebarWidth, setSidebarWidth] = useState(readWorkspaceSidebarWidth)
   const [sidebarResizing, setSidebarResizing] = useState(false)
   const [workspaceChromeTarget, setWorkspaceChromeTarget] =
     useState<HTMLDivElement | null>(null)
-
-  useEffect(() => {
-    writeWorkspaceSidebarWidth(optionalLocalStorage(), sidebarWidth)
-  }, [sidebarWidth])
+  const sidebarLayout = useWorkspaceSidebarWidth()
 
   useEffect(() => {
     writeWorkspaceSidebarCollapsed(optionalLocalStorage(), sidebarCollapsed)
   }, [sidebarCollapsed])
-
   useEffect(() => {
     function handleShortcut(event: KeyboardEvent) {
       if ((event.metaKey || event.ctrlKey) && event.key === ',') {
@@ -88,17 +88,11 @@ export function AppShell({
   return (
     <TooltipProvider>
       <div
+        data-slot="app-shell"
+        data-workspace-layout={sidebarLayout.layoutId}
         data-sidebar-collapsed={sidebarCollapsed || undefined}
         data-sidebar-resizing={sidebarResizing || undefined}
-        className="grid h-dvh grid-rows-[var(--layout-topbar-height)_minmax(0,1fr)] overflow-hidden bg-background text-text-primary"
-        style={
-          {
-            '--layout-sidebar-width': `${sidebarWidth}px`,
-            '--layout-sidebar-current-width': sidebarCollapsed
-              ? '0px'
-              : `${sidebarWidth}px`,
-          } as CSSProperties
-        }
+        className="ct-workspace-shell grid h-dvh grid-cols-[var(--layout-sidebar-current-width)_minmax(0,1fr)] overflow-hidden bg-background text-text-primary"
       >
         <a
           href="#main-content"
@@ -106,71 +100,112 @@ export function AppShell({
         >
           跳到主要内容
         </a>
-        <TopBar
-          breadcrumbs={breadcrumbs}
-          currentPage={currentPage}
-          sidebarCollapsed={sidebarCollapsed}
-          onToggleSidebar={() => setSidebarCollapsed((current) => !current)}
-          workspaceActionsRef={setWorkspaceChromeTarget}
-          onDoctor={() =>
-            void navigate({
-              to: '/doctor',
-              search:
-                currentProject === undefined
-                  ? {}
-                  : { projectId: currentProject.projectId },
-            })
-          }
-        />
-        <div className="grid min-h-0 overflow-hidden grid-cols-[var(--layout-sidebar-current-width)_minmax(0,1fr)]">
-          <div className="relative min-h-0 min-w-0">
-            {sidebarCollapsed ? null : (
-              <>
-                <WorkspaceSidebar
-                  currentPath={currentPath}
-                  currentProjectId={currentProject?.projectId}
-                  currentConversationId={conversationIdFromPath(currentPath)}
-                  currentConversation={currentConversation}
-                  inboxAttentionCount={inboxAttentionCount}
-                  onNewConversation={(project, trigger) => {
-                    newConversationTriggerRef.current = trigger
-                    setNewConversationProject(project)
-                    setGlobalDialog('new-conversation')
-                  }}
-                  onSettingsClick={(event) => {
-                    event.preventDefault()
-                    setSettingsOpen(true)
-                  }}
-                />
-                <WorkspaceSidebarResizeHandle
-                  resizing={sidebarResizing}
-                  setResizing={setSidebarResizing}
-                  setWidth={setSidebarWidth}
-                  width={sidebarWidth}
-                />
-              </>
-            )}
-          </div>
+        <div
+          data-slot="workspace-sidebar-column"
+          className="relative min-h-0 min-w-0"
+        >
+          {sidebarCollapsed ? null : (
+            <>
+              <WorkspaceSidebar
+                currentPath={currentPath}
+                currentProjectId={currentProject?.projectId}
+                currentMachineId={currentMachineId}
+                currentConversationId={conversationIdFromPath(currentPath)}
+                currentConversation={currentConversation}
+                inboxAttentionCount={inboxAttentionCount}
+                onAddProject={(machineId) => {
+                  setAddProjectMachineId(machineId)
+                  setReturnToConversation(false)
+                  setGlobalDialog('add-project')
+                }}
+                onNewConversation={(project, trigger, machineId) => {
+                  newConversationTriggerRef.current = trigger
+                  setNewConversationProject(project)
+                  setNewConversationMachineId(machineId)
+                  setGlobalDialog('new-conversation')
+                }}
+                onSettingsClick={(event) => {
+                  event.preventDefault()
+                  setSettingsOpen(true)
+                }}
+              />
+              <WorkspaceSidebarResizeHandle
+                resizing={sidebarResizing}
+                setResizing={setSidebarResizing}
+                setWidth={sidebarLayout.setWidth}
+                width={sidebarLayout.width}
+              />
+            </>
+          )}
+        </div>
+        <div
+          data-slot="workspace-content-column"
+          className="grid min-h-0 min-w-0 grid-rows-[var(--layout-topbar-height)_minmax(0,1fr)] overflow-hidden"
+        >
+          <TopBar
+            breadcrumbs={breadcrumbs}
+            currentPage={currentPage}
+            sidebarCollapsed={sidebarCollapsed}
+            onToggleSidebar={() => setSidebarCollapsed((current) => !current)}
+            workspaceActionsRef={setWorkspaceChromeTarget}
+            onDoctor={() =>
+              void navigate({
+                to: '/doctor',
+                search:
+                  currentProject === undefined
+                    ? {}
+                    : { projectId: currentProject.projectId },
+              })
+            }
+          />
           <WorkspaceChromeTargetProvider target={workspaceChromeTarget}>
             <MainContent>{children}</MainContent>
           </WorkspaceChromeTargetProvider>
         </div>
         <NewConversationDialog
           currentProject={newConversationProject}
+          currentMachineId={newConversationMachineId}
           open={globalDialog === 'new-conversation'}
-          onAddProject={() => setGlobalDialog('add-project')}
+          onAddProject={() => {
+            setAddProjectMachineId(newConversationMachineId ?? currentMachineId)
+            setReturnToConversation(true)
+            setGlobalDialog('add-project')
+          }}
           onOpenChange={(open) => {
             setGlobalDialog(open ? 'new-conversation' : null)
-            if (!open) setNewConversationProject(undefined)
+            if (!open) {
+              setNewConversationProject(undefined)
+              setNewConversationMachineId(undefined)
+            }
           }}
           returnFocusRef={newConversationTriggerRef}
         />
         <AddProjectDialog
+          fixedMachineId={addProjectMachineId}
           open={globalDialog === 'add-project'}
           onOpenChange={(open) =>
-            setGlobalDialog(open ? 'add-project' : 'new-conversation')
+            setGlobalDialog(
+              open
+                ? 'add-project'
+                : returnToConversation
+                  ? 'new-conversation'
+                  : null,
+            )
           }
-          onProjectCreated={() => setGlobalDialog('new-conversation')}
+          onProjectCreated={async (project, _created, machineId) => {
+            if (returnToConversation) {
+              setNewConversationProject(project)
+              setNewConversationMachineId(machineId)
+              setGlobalDialog('new-conversation')
+            } else {
+              setGlobalDialog(null)
+              await navigate({
+                to: '/projects/$projectId',
+                params: { projectId: project.projectId },
+                search: machineId === undefined ? {} : { machineId },
+              })
+            }
+          }}
         />
         <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
           <DialogContent
@@ -187,9 +222,8 @@ export function AppShell({
 }
 
 export type { AppShellProps }
-
 function conversationIdFromPath(pathname: string): string | undefined {
-  const match = /^\/conversations\/([^/]+)\/?$/u.exec(pathname)
+  const match = /^\/(?:conversations|c)\/([^/]+)\/?$/u.exec(pathname)
   if (match?.[1] === undefined) return undefined
   try {
     return decodeURIComponent(match[1])
@@ -197,7 +231,6 @@ function conversationIdFromPath(pathname: string): string | undefined {
     return match[1]
   }
 }
-
 function optionalLocalStorage(): Storage | undefined {
   try {
     return window.localStorage

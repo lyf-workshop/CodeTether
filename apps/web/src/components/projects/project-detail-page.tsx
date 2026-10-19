@@ -1,6 +1,6 @@
 import { useRef, useState, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Link, useParams } from '@tanstack/react-router'
+import { Link, useParams, useSearch } from '@tanstack/react-router'
 import {
   ArrowLeft,
   MessageSquare,
@@ -12,7 +12,11 @@ import {
 } from 'lucide-react'
 
 import { Button, Separator } from '@codetether/ui'
-import { ProjectIdSchema, type ProjectId } from '@codetether/protocol'
+import {
+  ProjectIdSchema,
+  type MachineId,
+  type ProjectId,
+} from '@codetether/protocol'
 
 import {
   useHostConnectionState,
@@ -33,17 +37,21 @@ export function ProjectDetailRoute() {
   const { projectId: rawProjectId } = useParams({
     from: '/projects/$projectId',
   })
+  const { machineId } = useSearch({ from: '/projects/$projectId' })
   const parsedProjectId = ProjectIdSchema.safeParse(rawProjectId)
 
   if (!parsedProjectId.success) return <ProjectNotFound />
-  return <ProjectDetailPage projectId={parsedProjectId.data} />
+  return (
+    <ProjectDetailPage projectId={parsedProjectId.data} machineId={machineId} />
+  )
 }
 
 interface ProjectDetailPageProps {
   projectId: ProjectId
+  machineId?: MachineId
 }
 
-function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
+function ProjectDetailPage({ projectId, machineId }: ProjectDetailPageProps) {
   const runtime = useHostRuntime()
   const connectionState = useHostConnectionState()
   const removeButtonRef = useRef<HTMLButtonElement>(null)
@@ -99,8 +107,10 @@ function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
 
   const project = viewState.project
   const machines = machinesQuery.data ?? []
-  const availability = projectLocationAvailability(project)
+  const availability = projectLocationAvailability(project, machineId)
   const hasExecutableLocation = project.locations.some((location) => {
+    if (machineId !== undefined && location.machineId !== machineId)
+      return false
     const machine = machines.find(
       (candidate) => candidate.machineId === location.machineId,
     )
@@ -152,6 +162,7 @@ function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
             <Link
               to="/projects/$projectId/conversations"
               params={{ projectId: project.projectId }}
+              search={machineId === undefined ? {} : { machineId }}
             >
               <MessageSquare aria-hidden="true" />
               查看会话
@@ -159,6 +170,7 @@ function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
           </Button>
           <NewConversationDialog
             currentProject={project}
+            currentMachineId={machineId}
             trigger={
               <Button
                 size="sm"

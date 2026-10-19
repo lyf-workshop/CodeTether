@@ -256,7 +256,8 @@
   --layout-topbar-inline-padding: 1.25rem;
   --layout-content-inline-padding: 1.75rem;
   --layout-content-block-padding: 1.5rem;
-  --layout-brand-mark-size: 2.125rem;
+  --layout-brand-mark-size: 24px;
+  --layout-brand-mark-radius: 7px;
 
   /* Conversation Detail geometry — Figma 07 Desktop at 1536 × 1024 */
   --layout-conversation-rail-width: 18rem;

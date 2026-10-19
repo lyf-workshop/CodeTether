@@ -5,7 +5,7 @@ export const workspaceSidebarCollapsedPreferenceKey =
 
 export const workspaceSidebarWidthBounds = {
   minimum: 220,
-  default: 280,
+  default: 248,
   maximum: 420,
 } as const
 

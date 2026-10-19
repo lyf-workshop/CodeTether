@@ -1,4 +1,4 @@
-// 会话页：消息流、审批卡、输入区五种状态、右侧面板。会话固定在一个项目文件夹（项目 + 电脑）和一个 AI 工具上。
+// 会话页：消息流、审批卡、输入区四种状态、右侧面板。会话固定在一个项目（某台设备上的一个文件夹）和一个 AI 工具上。
 // 只有这台电脑上的 Codex 会话报告文件差异（变更），其他会话只显示读取、编辑等步骤。
 const U = (t, by = '') => `<div class="msg user">${by ? `<div class="by">${by}</div>` : ''}<div class="bubble">${t}</div></div>`;
 const A = (c, inner) => `<div class="msg ai"><div class="who">${ag(c.agent, false)}<b>${agentName(c.agent)}</b></div>${inner}</div>`;
@@ -10,15 +10,14 @@ const PR = (...ps) => `<div class="prose">${ps.map((p) => (p.startsWith('<') ? p
 const extra = {}; // 原型中发送的消息
 
 function approveCard(c, a) {
-  const m = cMach(c), loc = cProj(c).locations.find((l) => l.m === c.m);
+  const m = cMach(c), p = cProj(c);
   if (a.decided) return `<div class="toolcall"><span class="pill ${a.decided === 'allow' ? 'ok' : 'err'}">${a.decided === 'allow' ? '已允许' : '已拒绝'}</span><span class="cmd trunc">${esc(a.cmd)}</span></div>
     ${a.decided === 'allow' ? T('terminal', `运行 ${esc(a.cmd)}`, 'live') : A(c, PR('好的，我不运行测试。改动已经保存，你可以自己运行测试确认。'))}`;
   return `<div class="approve"><div class="ah">${I('shield')}Codex 请求运行命令</div><div class="ab"><div class="term">${esc(a.cmd)}</div>
-    <div class="small faint">在${nm(m.name)}的 <span class="mono">${esc(loc.path)}</span> 中运行</div></div>
+    <div class="small faint">在${nm(m.name)}的 <span class="mono">${esc(p.path)}</span> 中运行</div></div>
     <div class="af"><span class="small faint">${esc(a.at)}</span><span class="sp"></span><button class="btn sm" onclick="decide('${a.id}','deny')">拒绝</button><button class="btn sm primary" onclick="decide('${a.id}','allow')">${I('check')}允许一次</button></div></div>`;
 }
 function script(c) {
-  const by = isRO(c) ? `${nm(host(c.host).name, false)}上的消息` : '';
   switch (c.id) {
     case 'c1': return U('会话列表在窗口变窄时，标题会把右边的状态和时间挤出去。帮我修一下，长标题应该截断。')
       + A(c, PR('我先看一下列表项的布局。') + T('search', '搜索 SessionItem', 'done', '3 个结果') + T('file', '读取 session-item.tsx') + T('file', '读取 session-list.css')
@@ -26,13 +25,13 @@ function script(c) {
         + DIFF('apps/web/src/sessions/session-list.css', 3, 1, [['', '.session-row .title-col {'], ['del', '  flex: 1;'], ['add', '  flex: 1 1 auto;'], ['add', '  min-width: 0;'], ['', '}'], ['add', '.session-row .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }']])
         + PR('改好了。接下来运行这个包的测试，确认没有影响其他地方。'))
       + approveCard(c, D.attention.find((a) => a.id === 'a1'));
-    case 'c8': return U('给 Relay 连接加一个往返延迟统计，在电脑详情的“连接”里显示最近一次和平均值。')
-      + A(c, PR('我在心跳包上记录发送时间，收到回复时计算往返延迟，保留最近 20 次做滑动平均。') + T('file', '读取 relay-connection.ts') + T('search', '搜索 heartbeat', 'done', '7 个结果')
-        + T('edit', '编辑 relay-connection.ts') + T('edit', '新增 rtt-window.ts') + T('edit', '编辑 connection-facts.tsx', 'live'));
-    case 'c2': return U('帮我评审一下 Relay 断线重连的退避策略，先不要改代码。')
-      + A(c, PR('我读了重连相关的代码。') + T('file', '读取 reconnect.ts') + T('file', '读取 backoff.ts') + T('search', '搜索 retryCount', 'done', '4 个结果')
-        + PR('有两个问题值得处理：', '<ul><li><b>重试计数在连接成功后没有清零。</b>短暂恢复后再次断线，会直接从 30 秒的上限开始等待。建议在 <code>onOpen</code> 里重置。</li><li><b>30 秒上限没有加随机抖动。</b>Relay 重启时，所有电脑会在同一时刻重连。建议加入 ±20% 的随机量。</li></ul>',
-          '其余部分（指数增长、最大值、取消逻辑）没有问题。按你的要求，这次只做了分析，没有改代码。'));
+    case 'c8': return U('给 Webhook 重试加耗时统计：每次投递记录耗时，按商户汇总 P50 和 P95。')
+      + A(c, PR('我在每次投递前后记录时间，按商户保留最近 200 次，用来计算 P50 和 P95。') + T('file', '读取 webhook-retry.ts') + T('search', '搜索 deliverWebhook', 'done', '5 个结果')
+        + T('edit', '新增 latency-window.ts') + T('edit', '编辑 webhook-metrics.ts') + T('edit', '编辑 webhook-retry.ts', 'live'));
+    case 'c2': return U('帮我评审一下 Webhook 重试的退避策略，先不要改代码。')
+      + A(c, PR('我读了重试相关的代码。') + T('file', '读取 webhook-retry.ts') + T('file', '读取 backoff.ts') + T('search', '搜索 attempt', 'done', '6 个结果')
+        + PR('有两个问题值得处理：', '<ul><li><b>收到 429 时没有使用对方返回的 Retry-After。</b>现在总是按自己的退避时间重试，可能早于对方要求的时间再次请求。建议优先等待 Retry-After 指定的时间。</li><li><b>重试次数没有上限。</b>商户长期不可用时会一直重试。建议最多重试 8 次，之后标记为失败并通知商户。</li></ul>',
+          '其余部分（指数增长、随机抖动、幂等键）没有问题。按你的要求，这次只做了分析，没有改代码。'));
     case 'c3': return U('重构支付回调的签名校验，并补齐幂等键的边界测试。')
       + A(c, T('edit', '编辑 signature.ts') + T('edit', '新增 idempotency.test.ts') + T('terminal', '运行 pnpm test', 'done', '42 个通过')
         + PR('签名校验改为常量时间比较，并检查时间戳窗口。新增 6 个幂等键测试，覆盖重复请求、过期键和并发写入。全部 42 个测试通过。'));
@@ -41,33 +40,24 @@ function script(c) {
       + A(c, T('search', '搜索 provider-installation', 'done', '12 个结果') + T('file', '读取 docs/providers.md')
         + PR('文档缺三块内容：', '<ul><li>“已安装”和“可用”的区别。</li><li>健康状态要在工具实际运行过一次后才会显示。</li><li>多个安装路径同时存在时，选择的优先级。</li></ul>'));
     case 'c6': return U('升级 TanStack Router 并处理类型告警。') + A(c, T('edit', '编辑 8 个文件') + T('terminal', '运行 pnpm typecheck', 'done', '无告警') + PR('已升级，14 个类型告警全部处理完，构建通过。'));
-    case 'rc1': return U('把按钮组件迁移到新的 Token 体系。', by)
-      + A(c, PR('我把颜色换成语义 Token（<code>--ct-ink</code>、<code>--ct-accent</code>），尺寸换成间距刻度。') + T('file', '读取 Button.tsx') + T('search', '搜索 #1d1c1a', 'done', '23 个结果')
-        + T('edit', '编辑 tokens.ts') + (hq('live') === 'disconnected' ? `<div class="faint small synced">${I('clock')}以上是 18:42 同步的内容</div>` : T('edit', '编辑 Button.tsx', 'live')));
-    case 'rc2': return U('给训练流水线加断点续跑。', by) + A(c, PR('已完成。中断后会从最近一次保存的检查点继续。'));
     default: return c.fresh ? '' : U(esc(c.title));
   }
 }
 function pageConv(id) {
   const c = conv(id); if (!c) return null;
-  const g = gate(c), ro = isRO(c), m = cMach(c), p = cProj(c), panel = hq('panel');
+  const g = gate(c), m = cMach(c), p = cProj(c), panel = hq('panel');
   const href = (x) => `#/c/${id}${x ? `?panel=${x}` : ''}`;
-  // 会话所在：项目 › 电脑（悬停看完整路径）。其他主机上的会话链接到那台主机
-  const path = ro ? p.path : p.locations.find((l) => l.m === c.m).path;
-  const pjHref = ro ? `#/computers/${c.host}` : `#/projects/${c.p}`, locHref = ro ? `#/computers/${c.host}?m=${c.m}` : `#/projects/${c.p}?scroll=loc-${c.m}`;
+  // 会话所在：设备 › 项目（悬停看完整路径）
   const head = `<div class="conv-head"><h1>${esc(c.title)}</h1><div class="ctx">
-    <a class="cx" href="${pjHref}">${I('folder')}${esc(p.name)}</a><span class="arrow">${I('chev')}</span><a class="cx" href="${locHref}" title="${esc(path)}">${pcIcon(m)}${esc(where(c))}</a>
+    <a class="cx" href="#/devices/${m.id}">${pcIcon(m)}${esc(m.name)}</a><span class="arrow">${I('chev')}</span><a class="cx" href="#/projects/${p.id}" title="${esc(p.path)}">${I('folder')}${esc(p.name)}</a>
     <span class="cx">${ag(c.agent, false)}${agentName(c.agent)}${c.reasoning ? ` · 推理 ${reasonName(c.reasoning)}` : ''}</span>${c.origin === 'adopted_native' ? `<span class="pill line">从 ${agentName(c.agent)} 导入</span>` : ''}</div></div>`;
   const rev = D.attention.find((a) => a.c === id && a.type === 'completed_review' && a.open);
-  const pre = [ro && hq('live') === 'disconnected' ? notice('warn', 'wifi_off', `与${nm(host(c.host).name)}的实时连接已断开`, '显示的是最后同步的内容。恢复后会自动更新。', retry('重新连接')) : '',
-    rev ? notice('info', 'check', `${agentName(c.agent)} 已完成，等你查看`, '看完后标记为已查看，它会从待处理中移除。', `<button class="btn sm" onclick="reviewed('${rev.id}')">标记为已查看</button>`) : ''].filter(Boolean).join('');
-  const fail = c.status === 'failed' ? `<div class="failcard"><b>${I('alert')}这一轮没有开始</b><p class="small" style="margin-top:6px">${nm(m.name, false)}在发送前离线了，消息没有送达。电脑恢复在线后可以重试。</p>${techErr('machine_offline', 'node · ' + m.name)}</div>` : '';
+  const pre = rev ? notice('info', 'check', `${agentName(c.agent)} 已完成，等你查看`, '看完后标记为已查看，它会从待处理中移除。', `<button class="btn sm" onclick="reviewed('${rev.id}')">标记为已查看</button>`) : '';
+  const fail = c.status === 'failed' ? `<div class="failcard"><b>${I('alert')}这一轮没有开始</b><p class="small" style="margin-top:6px">${nm(m.name, false)}在发送前离线了，消息没有送达。设备恢复在线后可以重试。</p>${techErr('machine_offline', 'node · ' + m.name)}</div>` : '';
   const stream = `<div class="stream" id="stream"><div class="read">${head}${pre ? `<div class="col" style="gap:10px;margin-bottom:24px">${pre}</div>` : ''}${script(c)}${fail}${extra[id] || ''}${c.fresh && !extra[id] ? empty(c.agent === 'codex' ? 'codex' : 'claude', `告诉 ${agentName(c.agent)} 要做什么`, `它会在${nm(m.name)}的${nm(p.name)}中工作。`) : ''}</div></div>`;
   const body = `<div class="conv ${panel ? 'with-panel' : ''}"><div class="conv-main">${stream}<div class="dock"><div class="dock-in">${dock(c, g)}</div></div></div>${panel ? filePanel(c) : ''}</div>`;
-  const stale = ro && hq('live') === 'disconnected';
-  const actions = `${stale ? `<span class="status off" title="实时连接已断开">已断开 · 18:42</span>` : status(c)}<button class="btn ghost icon sm" title="${hasDiff(c) ? '变更、文件和工具输出' : '文件和工具输出'}" onclick="go('${href(panel ? '' : 'files')}')" ${panel ? 'aria-pressed="true"' : ''}>${I('panel')}</button>${ro ? '' : `<button class="btn ghost icon sm" title="更多" onclick="openModal('rename:${id}')">${I('more')}</button>`}`;
-  const cr = ro ? crumbs([host(c.host).name, `#/computers/${c.host}`], p.name, c.title) : crumbs([p.name, pjHref], [m.name, locHref], c.title);
-  return { active: ro ? '' : 'projects', proj: ro ? undefined : c.p, current: id, crumbs: cr, actions, body, raw: true };
+  const actions = `${status(c)}<button class="btn ghost icon sm" title="${hasDiff(c) ? '变更、文件和工具输出' : '文件和工具输出'}" onclick="go('${href(panel ? '' : 'files')}')" ${panel ? 'aria-pressed="true"' : ''}>${I('panel')}</button><button class="btn ghost icon sm" title="更多" onclick="openModal('rename:${id}')">${I('more')}</button>`;
+  return { active: 'devices', proj: c.p, current: id, crumbs: crumbs(...projCrumbs(p), c.title), actions, body, raw: true };
 }
 // 标记为已查看只关闭这条待处理（resolve attention），不改变会话状态
 window.reviewed = (id) => { D.attention.find((a) => a.id === id).open = false; render(); };
@@ -75,13 +65,12 @@ window.reviewed = (id) => { D.attention.find((a) => a.id === id).open = false; r
 /* ---------- 输入区：始终在同一位置 ---------- */
 function dock(c, g) {
   const gt = (cls, tile, ic, b, s, acts = '') => `<div class="gate ${cls}"><span class="tile ${tile}">${ic}</span><div class="txt"><b>${b}</b><span>${s}</span></div>${acts}</div>`;
-  if (g.kind === 'readonly') return gt('', '', I('eye'), `你对${nm(host(c.host).name)}只有查看权限`, '可以查看会话和进度。发送消息、审批或中断需要在那台电脑上进行。');
-  if (g.kind === 'offline') return gt('', '', I('wifi_off'), `${nm(g.m.name, false)}已离线`, `上次在线 ${esc(g.m.lastSeen)}。重新上线后可以继续这个会话。`, `${retry('重试连接')}<a class="btn sm ghost" href="#/computers/${g.m.id}">查看电脑</a>`);
+  if (g.kind === 'offline') { const d = devState(g.m); return gt('', '', I('wifi_off'), d.text === '离线' ? `${nm(g.m.name, false)}已离线` : esc(d.why), g.m.lastSeen ? `上次在线 ${esc(g.m.lastSeen)}。恢复后可以继续这个会话。` : '恢复后可以继续这个会话。', `${retry('重试连接')}<a class="btn sm ghost" href="#/devices/${g.m.id}">查看设备</a>`); }
   const stop = canInterrupt(c) ? `<button class="btn sm" onclick="this.innerHTML='正在停止…'">${I('stop')}停止</button>` : '';
   if (g.kind === 'wait') return gt('wait', 'warn', I('shield'), '等你批准一条命令', '批准或拒绝后，Codex 会继续。也可以停止这一轮。', stop);
-  if (g.kind === 'busy') return gt('run', 'info', '<span class="working mini"><i></i><i></i><i></i></span>', `${agentName(c.agent)} 正在工作`, canInterrupt(c) ? '这一轮完成后可以发送下一条消息。' : `这一轮完成后可以发送下一条消息。${c.agent === 'claude' ? 'Claude Code 会话' : '在其他电脑上运行的会话'}暂不支持停止。`, stop);
+  if (g.kind === 'busy') return gt('run', 'info', '<span class="working mini"><i></i><i></i><i></i></span>', `${agentName(c.agent)} 正在工作`, canInterrupt(c) ? '这一轮完成后可以发送下一条消息。' : `这一轮完成后可以发送下一条消息。${c.agent === 'claude' ? 'Claude Code 会话' : '在配对设备上运行的会话'}暂不支持停止。`, stop);
   return `<div class="composer"><textarea id="msg" rows="2" placeholder="继续和 ${agentName(c.agent)} 对话…" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMsg('${c.id}')}"></textarea>
-    <div class="bar"><span class="chipbtn static" title="${esc(cProj(c).locations.find((l) => l.m === c.m).path)}">${I('folder')}${esc(cProj(c).name)} · ${esc(cMach(c).name)}</span><span class="sp"></span><button class="send" title="发送（Enter）" onclick="sendMsg('${c.id}')">${I('send')}</button></div></div>
+    <div class="bar"><span class="chipbtn static" title="${esc(cProj(c).path)}">${I('folder')}${esc(cProj(c).name)} · ${esc(cMach(c).name)}</span><span class="sp"></span><button class="send" title="发送（Enter）" onclick="sendMsg('${c.id}')">${I('send')}</button></div></div>
     <div class="hint">${c.agent === 'claude' ? 'Claude Code 在这里只读取和搜索文件，不会修改代码。' : 'Enter 发送，Shift Enter 换行'}</div>`;
 }
 window.sendMsg = (id) => {
@@ -93,20 +82,20 @@ window.sendMsg = (id) => {
 
 /* ---------- 右侧面板：变更 / 文件 / 工具输出（inspector-panel.tsx） ---------- */
 // “变更”只在报告文件差异的会话里出现：这台电脑上的 Codex。Claude Code 只用 Read、Glob、Grep，没有变更
-const hasDiff = (c) => !isRO(c) && c.agent === 'codex' && mach(c.m).kind === 'local';
+const hasDiff = (c) => c.agent === 'codex' && cMach(c).kind === 'local';
 function filePanel(c) {
   const tabs = [...(hasDiff(c) ? [['changes', '变更']] : []), ['files', '文件'], ['output', '工具输出']];
   const t = tabs.some(([k]) => k === hq('tab')) ? hq('tab') : tabs[0][0];
   const fr = (ic, n, r = '') => `<div class="frow">${I(ic)}<span class="trunc">${n}</span><span class="n">${r}</span></div>`;
   const help = (s) => `<p class="help" style="padding:12px 10px">${s}</p>`;
   const term = (s) => `<div class="term-block" style="margin:4px 6px;align-items:flex-start;white-space:pre-wrap;font-size:12px">${esc(s)}</div>`;
-  const files = { c2: ['src/reconnect.ts', 'src/backoff.ts'], c5: ['docs/providers.md', 'apps/host/src/provider-installation.ts'], c8: ['src/relay-connection.ts', 'src/rtt-window.ts', 'src/connection-facts.tsx'],
-    rc1: ['src/components/Button.tsx', 'src/tokens.ts'] }[c.id] || ['apps/web/src/sessions/session-item.tsx', 'apps/web/src/sessions/session-list.css', 'apps/web/src/sessions/session-list.test.tsx'];
-  const out = c.agent === 'claude' ? 'Grep "retryCount"  src/\nsrc/reconnect.ts:41\nsrc/reconnect.ts:88\nsrc/backoff.ts:12\nsrc/backoff.ts:30'
-    : c.id === 'c8' ? 'rg -n "heartbeat" packages/relay/src\n7 个结果' : c.id === 'rc1' ? 'rg -n "#1d1c1a" src\n23 个结果' : 'rg -n "title-col" apps/web/src\napps/web/src/sessions/session-list.css:12\napps/web/src/sessions/session-item.tsx:48';
+  const files = { c2: ['src/webhooks/webhook-retry.ts', 'src/webhooks/retry-after.ts'], c5: ['docs/providers.md', 'apps/host/src/provider-installation.ts'], c8: ['src/webhooks/webhook-retry.ts', 'src/webhooks/latency-window.ts', 'src/webhooks/webhook-metrics.ts'] }[c.id]
+    || ['apps/web/src/sessions/session-item.tsx', 'apps/web/src/sessions/session-list.css', 'apps/web/src/sessions/session-list.test.tsx'];
+  const out = c.agent === 'claude' ? 'Grep "attempt"  src/webhooks/\nsrc/webhooks/webhook-retry.ts:41\nsrc/webhooks/webhook-retry.ts:88\nsrc/webhooks/retry-after.ts:12'
+    : c.id === 'c8' ? 'rg -n "deliverWebhook" src\n7 个结果' : 'rg -n "title-col" apps/web/src\napps/web/src/sessions/session-list.css:12\napps/web/src/sessions/session-item.tsx:48';
   const content = {
     changes: fr('file', 'session-list.css', '<span class="plus">+3</span> <span class="minus">−1</span>') + fr('file', 'session-item.tsx', '<span class="plus">+1</span>') + help('本轮共修改 2 个文件。'),
-    files: files.map((f) => fr('file', esc(f))).join('') + (c.agent === 'claude' ? help('Claude Code 在这里只读取和搜索文件，所以没有“变更”。') : hasDiff(c) ? '' : help('在其他电脑上运行的会话暂不报告文件差异，所以没有“变更”。')),
+    files: files.map((f) => fr('file', esc(f))).join('') + (c.agent === 'claude' ? help('Claude Code 在这里只读取和搜索文件，所以没有“变更”。') : hasDiff(c) ? '' : help('在配对设备上运行的会话暂不报告文件差异，所以没有“变更”。')),
     output: term(out),
   }[t];
   return `<aside class="panel"><div class="panel-h"><div class="tabs grow">${tabs.map(([k, l]) => `<button class="tab" aria-selected="${k === t}" onclick="go('#/c/${c.id}?panel=files&tab=${k}')">${l}</button>`).join('')}</div>

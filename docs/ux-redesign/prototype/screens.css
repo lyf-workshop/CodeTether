@@ -11,6 +11,7 @@
 .notice.info { background: var(--ct-accent-soft); border-color: transparent; } .notice.info > .ic { color: var(--ct-accent-text); }
 .notice.warn { background: var(--ct-warn-soft); border-color: transparent; } .notice.warn > .ic { color: var(--ct-warn-text); }
 .notice.err { background: var(--ct-err-soft); border-color: transparent; } .notice.err > .ic { color: var(--ct-err-text); }
+.notice.ok { background: var(--ct-ok-soft); border-color: transparent; } .notice.ok > .ic { color: var(--ct-ok-text); }
 .notice .acts { display: flex; gap: 6px; margin-left: auto; align-self: center; flex: none; }
 .notice.stack { flex-wrap: wrap; } .notice.stack .acts { flex-basis: 100%; margin-left: 28px; } /* 窄卡片：操作放到文字下面 */
 .set-row.fill > .notice { flex: 1; }
@@ -165,7 +166,7 @@ details.tech summary { cursor: pointer; } details.tech pre { margin: 6px 0 0; fo
   .read { padding: var(--s3) var(--s4) var(--s6); } .dock { padding: 0 var(--s3) var(--s3); }
   .conv-head h1 { font-size: var(--fs-xl); }
   .msg.user .bubble { max-width: 92%; }
-  .pc { min-height: 0; }
+  .pj { min-height: 0; }
   .toolbar .search.narrow { width: 100%; }
   .toolbar .seg { overflow-x: auto; max-width: 100%; scrollbar-width: none; } .toolbar .seg::-webkit-scrollbar { display: none; }
   .gate { flex-wrap: wrap; } .gate .txt { flex-basis: calc(100% - 48px); } .gate .btn { flex: 1; }

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN" data-theme="light"><head><meta charset="utf-8"><title>CodeTether 重设计 v3 · 截图总览</title>
+<html lang="zh-CN" data-theme="light"><head><meta charset="utf-8"><title>CodeTether 重设计 v4 · 截图总览</title>
 <link rel="stylesheet" href="prototype/tokens.css">
 <style>
   * { box-sizing: border-box; }
@@ -30,7 +30,7 @@
 </style></head>
 <body>
 <header><span class="mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="7" cy="12" r="3"/><circle cx="17" cy="12" r="3"/><path d="M10 12h4"/></svg></span>
-  <div><h1>CodeTether 重设计 v3 · 截图总览</h1><p>由 <code>prototype/</code> 本地可点击原型导出。会话按 项目 › 文件夹 › 会话 组织。浅色为主，深色可切换。点击缩略图查看原图。</p></div></header>
+  <div><h1>CodeTether 重设计 v4 · 截图总览</h1><p>由 <code>prototype/</code> 本地可点击原型导出。按 账号 › 设备 › 项目 › 会话 组织，一个项目就是一台设备上的一个文件夹。浅色为主，深色可切换。点击缩略图查看原图。</p></div></header>
 <div class="chips"><span class="chip dash">全部为演示数据</span><span class="chip">按已验收基线 bbcda69 校正</span><span class="chip" id="count"></span>
   <span class="chip warn">尚未写入 Figma</span><span class="chip warn">主题切换是新增能力，需确认范围</span><span class="chip warn">未开始生产前端重构</span></div>
 <main id="m"></main>
@@ -38,34 +38,31 @@
 <script>
 // [标题, 说明, 桌面截图, 手机截图]；每项为 [文件名, 中文说明]
 const groups = [
-  ['02 · 项目与会话', '1440×900 · 项目 › 文件夹 › 会话', [
-    ['02-01-projects', '项目'], ['02-02-project-detail', '项目详情 · 按文件夹分组'], ['02-03-project-archived', '项目 · 已归档'], ['02-04-project-search', '项目内搜索'], ['02-05-inbox', '待处理'],
-    ['02-06-palette', '命令面板 Ctrl K'], ['02-07-new-session', '新建会话 · 预选当前文件夹'], ['02-08-new-session-folder', '新建会话 · 从文件夹打开'], ['02-09-new-session-claude', '新建会话 · Claude Code 推理强度'], ['02-10-add-project', '添加项目文件夹'],
-    ['02-11-add-folder', '在另一台电脑上添加文件夹'], ['02-12-remove-folder', '移除文件夹'], ['02-13-conv-approval', '会话 · 等待批准'], ['02-14-conv-panel-changes', '会话 · 变更面板'], ['02-15-conv-panel-output', '会话 · 工具输出'],
-    ['02-16-conv-running', '会话 · 运行中（其他电脑）'], ['02-17-conv-claude-review', 'Claude Code 会话'], ['02-18-conv-remote-readonly', '其他主机会话 · 仅查看'], ['02-19-conv-rename', '会话设置']]],
-  ['02 · 电脑与连接', '1440×900', [
-    ['02-20-computers', '我的电脑'], ['02-21-computer-local', '这台电脑'], ['02-22-computer-paired', '已配对的电脑'], ['02-23-computer-add-folder', '在这台电脑上添加项目文件夹'], ['02-24-computer-unpair', '取消配对确认'],
-    ['02-25-host-readonly', '其他主机 · 仅查看'], ['02-26-host-pending', '其他主机 · 等待批准'], ['02-27-add-computer', '添加电脑'], ['02-28-add-desktop', '添加 Mac 或 Windows'], ['02-29-pair-1-prepare', '配对服务器 1 · 准备'],
-    ['02-30-pair-2-code', '配对服务器 2 · 配对码'], ['02-31-pair-3-verify', '配对服务器 3 · 核对'], ['02-32-pair-4-done', '配对服务器 4 · 完成'], ['02-33-signin-email', '登录 · 邮箱'], ['02-34-signin-code', '登录 · 登录码']]],
+  ['02 · 设备与项目', '1440×900 · 设备 › 项目 › 会话', [
+    ['02-01-devices', '设备（起始页）'], ['02-02-device-local', '这台电脑'], ['02-03-device-paired', '配对的设备'], ['02-04-project-detail', '项目详情'], ['02-05-project-previous', '项目 · 以前的会话'],
+    ['02-06-project-archived', '项目 · 已归档'], ['02-07-project-search', '项目内搜索'], ['02-08-add-project', '添加项目 · 这台电脑'], ['02-09-add-project-remote', '添加项目 · 配对设备'], ['02-10-add-project-found', '添加项目 · 找到以前的会话'],
+    ['02-11-inbox', '待处理'], ['02-12-palette', '命令面板 Ctrl K'], ['02-13-new-session', '新建会话 · 按设备分组'], ['02-14-new-session-project', '新建会话 · 固定项目'], ['02-15-conv-approval', '会话 · 等待批准'],
+    ['02-16-conv-panel-changes', '会话 · 变更面板'], ['02-17-conv-panel-output', '会话 · 工具输出'], ['02-18-conv-running-paired', '会话 · 在配对设备上运行'], ['02-19-conv-claude-review', 'Claude Code 会话'], ['02-20-conv-rename', '会话设置'],
+    ['02-21-device-unpair', '取消配对'], ['02-22-device-address', '更新地址'], ['02-23-add-device', '添加设备'], ['02-24-pair-1-prepare', '配对 1 · 准备'], ['02-25-pair-2-code', '配对 2 · 配对码'],
+    ['02-26-pair-3-verify', '配对 3 · 核对'], ['02-27-pair-4-done', '配对 4 · 完成'], ['02-28-signin-email', '登录 · 邮箱'], ['02-29-signin-code', '登录 · 登录码']]],
   ['02 · 设置与首次启动', '1440×900', [
-    ['02-35-settings-appearance', '设置 · 外观'], ['02-36-settings-account', '设置 · 账号与共享'], ['02-37-settings-account-host-off', '账号与共享 · 未允许查看'], ['02-38-settings-notify', '设置 · 通知'], ['02-39-settings-background', '设置 · 后台运行'],
-    ['02-40-settings-about', '设置 · 关于与检查'], ['02-41-onboarding-welcome', '首次启动 · 欢迎（mac）'], ['02-42-onboarding-tools', '首次启动 · AI 工具'], ['02-43-onboarding-project', '首次启动 · 项目'], ['02-44-onboarding-previous', '首次启动 · 以前的会话'],
-    ['02-45-onboarding-remote', '首次启动 · 其他电脑'], ['02-46-onboarding-ready', '首次启动 · 就绪']]],
+    ['02-30-settings-appearance', '设置 · 外观'], ['02-31-settings-account', '设置 · 账号'], ['02-32-settings-notify', '设置 · 通知'], ['02-33-settings-background', '设置 · 后台运行'], ['02-34-settings-about', '设置 · 关于与检查'],
+    ['02-35-onboarding-welcome', '首次启动 · 欢迎（mac）'], ['02-36-onboarding-tools', '首次启动 · AI 工具'], ['02-37-onboarding-project', '首次启动 · 项目'], ['02-38-onboarding-previous', '首次启动 · 以前的会话'], ['02-39-onboarding-remote', '首次启动 · 其他设备'],
+    ['02-40-onboarding-ready', '首次启动 · 就绪']]],
   ['03 · 关键状态', '1440×900，窄桌面 1100×760', [
-    ['03-01-projects-loading', '项目 · 加载中'], ['03-02-projects-empty', '项目 · 还没有项目'], ['03-03-projects-partial-error', '项目 · 部分读取失败'], ['03-04-new-session-no-folder', '新建会话 · 没有可用文件夹'], ['03-05-add-folder-none-free', '添加文件夹 · 在线电脑都已添加'],
-    ['03-06-remove-folder-blocked', '文件夹还有会话，不能移除'], ['03-07-remove-project-blocked', '项目还有会话，不能移除'], ['03-08-inbox-empty', '待处理 · 全部处理完'], ['03-09-computer-offline', '电脑离线'], ['03-10-computer-proj-error', '项目列表读取失败'],
-    ['03-11-host-unreachable', '其他主机 · 无法连接'], ['03-12-computers-access-states', '访问申请的各种状态'], ['03-13-computers-signed-out', '我的电脑 · 未登录'], ['03-14-conv-offline-failed', '会话 · 离线且失败'], ['03-15-conv-imported', '会话 · 从 Claude Code 导入'],
-    ['03-16-remote-disconnected', '仅查看 · 实时连接断开'], ['03-17-signin-unconfigured', '登录 · 未配置账号服务'], ['03-18-account-host-unclaimed', '账号与共享 · 设置未完成'], ['03-19-narrow-1100-project', '窄桌面 · 项目详情'], ['03-20-narrow-1100-computer', '窄桌面 · 电脑详情'],
-    ['03-21-narrow-1100-conv', '窄桌面 · 会话']]],
+    ['03-01-devices-loading', '设备 · 加载中'], ['03-02-devices-empty', '设备 · 还没有项目'], ['03-03-device-offline', '设备离线'], ['03-04-device-proj-error', '项目列表读取失败'], ['03-05-project-unreadable', '项目 · 文件夹无法访问'],
+    ['03-06-project-device-offline', '项目 · 设备离线'], ['03-07-new-session-unavailable', '新建会话 · 项目不可用'], ['03-08-remove-project', '移除项目'], ['03-09-remove-project-blocked', '项目还有会话，不能移除'], ['03-10-unpair-blocked', '设备还有项目，不能取消配对'],
+    ['03-11-inbox-empty', '待处理 · 全部处理完'], ['03-12-conv-offline-failed', '会话 · 离线且失败'], ['03-13-conv-imported', '会话 · 从 Claude Code 导入'], ['03-14-account-signed-out', '账号 · 未登录'], ['03-15-signin-unconfigured', '登录 · 未配置账号服务'],
+    ['03-16-narrow-1100-device', '窄桌面 · 设备详情'], ['03-17-narrow-1100-project', '窄桌面 · 项目详情'], ['03-18-narrow-1100-conv', '窄桌面 · 会话']]],
   ['04 · 平板与手机', '1024×768 · 390×844', [
-    ['04-01-tablet-project', '平板 · 项目详情'], ['04-02-tablet-conv-panel', '平板 · 会话 + 面板'], ['04-03-tablet-computers', '平板 · 我的电脑']], [
-    ['04-04-phone-projects', '项目'], ['04-05-phone-project', '项目详情'], ['04-06-phone-inbox', '待处理'], ['04-07-phone-conv', '会话'], ['04-08-phone-conv-readonly', '仅查看会话'],
-    ['04-09-phone-computers', '我的电脑'], ['04-10-phone-host', '其他主机'], ['04-11-phone-settings', '设置'], ['04-12-phone-new-session', '新建会话']]],
+    ['04-01-tablet-devices', '平板 · 设备'], ['04-02-tablet-project', '平板 · 项目详情'], ['04-03-tablet-conv-panel', '平板 · 会话 + 面板']], [
+    ['04-04-phone-devices', '设备'], ['04-05-phone-device', '设备详情'], ['04-06-phone-project', '项目详情'], ['04-07-phone-inbox', '待处理'], ['04-08-phone-conv', '会话'],
+    ['04-09-phone-add-project', '以前的会话'], ['04-10-phone-settings', '设置'], ['04-11-phone-new-session', '新建会话']]],
   ['05 · 后续规划', '与当前版本隔离，按钮均不可用', [['05-01-roadmap', '后续规划']]],
   ['06 · 深色主题', '同一套组件，只换 Token', [
-    ['06-01-dark-project', '项目详情'], ['06-02-dark-conv-approval', '会话 · 等待批准'], ['06-03-dark-conv-panel', '会话 · 面板'], ['06-04-dark-conv-claude', 'Claude Code 会话'], ['06-05-dark-new-session', '新建会话'],
-    ['06-06-dark-computers', '我的电脑'], ['06-07-dark-host', '其他主机'], ['06-08-dark-settings', '设置 · 外观'], ['06-09-dark-palette', '命令面板'], ['06-10-dark-onboarding', '首次启动（mac）']], [
-    ['06-11-dark-phone-project', '手机 · 项目详情'], ['06-12-dark-phone-conv', '手机 · 会话']]],
+    ['06-01-dark-devices', '设备'], ['06-02-dark-project', '项目详情'], ['06-03-dark-conv-approval', '会话 · 等待批准'], ['06-04-dark-conv-panel', '会话 · 面板'], ['06-05-dark-conv-claude', 'Claude Code 会话'],
+    ['06-06-dark-add-project-found', '添加项目 · 以前的会话'], ['06-07-dark-new-session', '新建会话'], ['06-08-dark-settings', '设置 · 外观'], ['06-09-dark-palette', '命令面板'], ['06-10-dark-onboarding', '首次启动（mac）']], [
+    ['06-11-dark-phone-devices', '手机 · 设备'], ['06-12-dark-phone-conv', '手机 · 会话']]],
 ];
 const card = ([n, t]) => `<a href="png/${n}.png" target="_blank" title="${t}"><img src="png/${n}.png" alt="${t}"><b>${t}</b><span>${n}</span></a>`;
 document.getElementById('m').innerHTML = groups.map(([t, sub, desk, phone]) =>

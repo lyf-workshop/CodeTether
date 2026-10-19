@@ -2,24 +2,20 @@
 function pageSettings(sec) {
   sec = sec || 'appearance';
   // 第四项是手机宽度下标签栏的短名称
-  const nav = [['appearance', 'sun', '外观', '外观'], ['account', 'user', '账号与共享', '账号'], ['notify', 'bell', '通知', '通知'], ['background', 'power', '后台运行', '后台'], ['about', 'info', '关于与检查', '关于']];
+  const nav = [['appearance', 'sun', '外观', '外观'], ['account', 'user', '账号', '账号'], ['notify', 'bell', '通知', '通知'], ['background', 'power', '后台运行', '后台'], ['about', 'info', '关于与检查', '关于']];
   const row = (l, d, r) => `<div class="set-row"><div class="l"><b>${l}</b>${d ? `<span>${d}</span>` : ''}</div>${r}</div>`;
   const sw = (on, dis = false) => `<button class="switch" role="switch" aria-checked="${on}" ${dis ? 'disabled' : ''} onclick="this.setAttribute('aria-checked',this.getAttribute('aria-checked')!=='true')"></button>`;
   const mini = (t) => `<span class="mini" data-theme="${t}"><span class="s"><i></i><i></i><i></i></span><span class="c"><i></i><i class="a"></i><i></i></span></span>`;
   const tile = (t, l, pv) => `<button class="theme" aria-pressed="${ui.theme === t}" onclick="setTheme('${t}')"><span class="pv">${pv}</span><span>${l}${ui.theme === t ? I('check') : ''}</span></button>`;
-  const out = hq('account') === 'out' || !D.account.signedIn, hs = hq('host') || D.account.localHost, reqs = D.accessRequests.filter((r) => r.open);
+  const out = hq('account') === 'out' || !D.account.signedIn;
   const content = {
     appearance: `<h2>外观</h2><div class="set-group"><div class="set-row" style="display:block"><div class="l" style="margin-bottom:14px"><b>主题</b><span>默认浅色。选择“跟随系统”会随系统的深浅色设置切换。</span></div>
       <div class="themes">${tile('light', '浅色', mini('light'))}${tile('dark', '深色', mini('dark'))}${tile('system', '跟随系统', `<span class="pv-split">${mini('light')}${mini('dark')}</span>`)}</div></div>
       ${row('语言', '目前只提供简体中文。', '<span class="muted">简体中文</span>')}</div>
       ${note('主题切换是新增的前端能力：当前产品固定 data-theme="dark"。浅色与深色两套 Token 见 tokens.css，实现前需要确认范围。')}`,
-    account: out ? `<h2>账号与共享</h2><div class="set-group">${row('未登录', '这台电脑和配对的服务器不需要账号。登录后可以查看同一账号下的其他电脑，或允许它们查看这台电脑。', `<a class="btn primary" href="#/signin">登录</a>`)}</div>`
-      : `<h2>账号与共享</h2><div class="set-group"><div class="set-row"><span class="avatar" style="width:40px;height:40px;font-size:16px">${esc(D.account.name)}</span><div class="l"><b>${esc(D.account.email)}</b><span>邮箱登录码登录</span></div><button class="btn">${I('logout')}退出登录</button></div></div>
-      <h2>这台电脑</h2><div class="set-group">${row('允许其他电脑查看这台电脑', '同一账号下的其他电脑可以申请查看这里的会话和进度。每个申请都需要你在这里批准，对方不能发送消息、审批或中断。', sw(hs !== 'disabled'))}
-        ${hs === 'enabled_unclaimed' ? `<div class="set-row fill">${notice('warn', 'alert', '设置还没有完成', '这台电脑还没有登记到你的账号，其他电脑暂时找不到它。', `<button class="btn sm primary">完成设置</button>`)}</div>` : ''}
-        ${hs === 'claimed' ? reqs.map((r) => row(`${esc(r.device)} 想查看这台电脑`, `${esc(r.platform)} · ${esc(r.expires)}<br><span class="mono">${esc(r.fp)}</span>`, `<div class="row"><button class="btn sm" onclick="reqDone('${r.id}')">拒绝</button><button class="btn sm primary" onclick="reqDone('${r.id}')">允许</button></div>`)).join('')
-          || row('访问申请', '没有等待处理的申请。', '') : ''}</div>
-      <p class="set-cap">已批准的设备暂时不能在这里撤销，见<a href="#/roadmap">后续规划</a>。</p>`,
+    account: out ? `<h2>账号</h2><div class="set-group">${row('未登录', '这台电脑和配对的设备不需要账号也能使用。', `<a class="btn primary" href="#/signin">登录</a>`)}</div>`
+      : `<h2>账号</h2><div class="set-group"><div class="set-row"><span class="avatar" style="width:40px;height:40px;font-size:16px">${esc(D.account.name)}</span><div class="l"><b>${esc(D.account.email)}</b><span>邮箱登录码登录</span></div><button class="btn">${I('logout')}退出登录</button></div></div>
+      <p class="set-cap">用同一账号登录的其他 Mac 或 Windows 电脑，目前还不能出现在“设备”里，见<a href="#/roadmap">后续规划</a>。</p>`,
     notify: `<h2>通知</h2><div class="set-group">${row('需要批准', 'Codex 请求运行命令或修改文件时提醒。', sw(true))}${row('工作完成', '一轮工作完成、等你查看时提醒。', sw(true))}${row('执行失败', '一轮工作失败时提醒。', sw(true))}</div>
       <p class="set-cap">通知中不包含会话标题。只有桌面版 CodeTether 提供系统通知，浏览器中请查看“待处理”。</p>`,
     background: `<h2>后台运行</h2><div class="set-group">${row('关闭窗口后继续运行', `关闭窗口（${ui.os === 'mac' ? '⌘ W' : '✕ 或 Alt F4'}）后，CodeTether 会留在${ui.os === 'mac' ? '菜单栏' : '系统托盘'}，正在进行的工作、审批和通知不会中断。`, '<span class="pill line">始终开启</span>')}
@@ -45,23 +41,24 @@ function pageOnboarding() {
   const feat = (ic, t, d) => `<div class="feat"><span class="glyph sm">${I(ic)}</span><div><b>${t}</b><span>${d}</span></div></div>`;
   const opt = (href, ic, t, d, pill) => `<a class="card click pad row" style="gap:14px" href="${href}"><span class="glyph">${I(ic)}</span><div class="grow"><b>${t}</b><p class="help" style="margin-top:2px">${d}</p></div>${pill}<span class="faint">${I('chev')}</span></a>`;
   const v = {
-    welcome: `<span class="mark xl">${MARK_SVG}</span><h1 style="margin-top:24px">你的 AI 编程助手，<br>在每台电脑上都能接着用</h1><p class="lead">CodeTether 把 Codex 和 Claude Code 的会话集中到一个地方，换一台电脑也能看到进度。</p>
-      <div style="margin-top:28px">${feat('monitor', '在这台电脑上工作', '用 Codex 或 Claude Code 处理你的项目。')}${feat('server', '连接你的其他电脑', '配对的服务器可以继续工作，其他电脑可以查看。')}${feat('inbox', '需要你的时候提醒你', '需要批准的命令、完成和失败都集中在“待处理”。')}</div>
+    welcome: `<span class="mark xl">${MARK_SVG}</span><h1 style="margin-top:24px">你的 AI 编程助手，<br>在你的每台设备上都能接着用</h1><p class="lead">CodeTether 把 Codex 和 Claude Code 的会话集中到一个地方，按设备和项目整理，每个项目里以前的会话也能接着用。</p>
+      <div style="margin-top:28px">${feat('monitor', '在这台电脑上工作', '用 Codex 或 Claude Code 处理你的项目。')}${feat('server', '你的所有设备在一处', '这台电脑和配对的设备各自列出自己的项目和会话。')}${feat('inbox', '需要你的时候提醒你', '需要批准的命令、完成和失败都集中在“待处理”。')}</div>
       ${foot(`<a class="btn primary lg" href="${nx}">开始设置${I('arrowr')}</a>`, '<span class="help" style="margin-right:8px">大约 1 分钟 · 在这台电脑上使用不需要账号</span>')}`,
     tools: `<h1>检查 AI 工具</h1><p class="lead">CodeTether 使用这台电脑上已经安装的工具。</p><div class="list" style="margin-top:28px">
       <div class="item static">${ag('codex', false, 'lg')}<div class="grow"><div class="t">Codex</div><div class="sub">已安装</div></div><span class="status ok">可用</span></div>
       <div class="item static">${ag('claude', false, 'lg')}<div class="grow"><div class="t">Claude Code</div><div class="sub">已安装，需要先在终端登录</div></div><span class="status warn">需要登录</span><a class="btn sm" href="#/onboarding?step=tools">查看登录说明</a></div></div>
       ${foot(`<a class="btn primary lg" href="${nx}">继续</a>`, `<button class="btn ghost" onclick="this.innerHTML='正在检查…'">${I('refresh')}重新检查</button>`)}`,
-    project: `<h1>添加第一个项目文件夹</h1><p class="lead">以后新建会话时选这个文件夹，CodeTether 会直接在里面启动 Codex 或 Claude Code，不用先在终端里打开它。AI 工具只会在你登记的文件夹里工作。</p><div class="card pad row" style="margin-top:28px;gap:14px"><span class="glyph">${I('folder')}</span><div class="grow"><b>agenthub</b><p class="help mono trunc">D:\\Projects\\Software\\agenthub</p></div><span class="pill ok">${I('check')}已选择</span><button class="btn sm ghost">更换</button></div>
+    project: `<h1>添加第一个项目</h1><p class="lead">选择你平时用 Codex 或 Claude Code 打开的文件夹。CodeTether 会在里面启动 AI 工具，并找出你以前在这个文件夹里的会话。AI 工具只会在你添加的文件夹里工作。</p><div class="card pad row" style="margin-top:28px;gap:14px"><span class="glyph">${I('folder')}</span><div class="grow"><b>agenthub</b><p class="help mono trunc">D:\\Projects\\Software\\agenthub</p></div><span class="pill ok">${I('check')}已选择</span><button class="btn sm ghost">更换</button></div>
       ${foot(`<a class="btn primary lg" href="${nx}">继续</a>`)}`,
-    previous: `<h1>继续以前的会话</h1><p class="lead">在 agenthub 中找到 3 个以前的会话。导入后可以在 CodeTether 中继续。</p><div class="list" style="margin-top:28px">
+    previous: `<h1>以前的会话</h1><p class="lead">在 agenthub 文件夹里找到 3 个以前的 Codex 和 Claude Code 会话。导入后可以在 CodeTether 中继续。</p><div class="list" style="margin-top:28px">
       ${[['codex', '重构登录模块', '3 天前', 1], ['claude', '整理 README', '上周', 1], ['codex', '修复 CI', '已导入', 0]].map(([a, t, w, can]) => `<label class="item ${can ? '' : 'static'}"><input type="checkbox" class="check" ${can ? 'checked' : 'checked disabled'}>${ag(a, false)}<div class="grow"><div class="t">${t}</div><div class="sub">${agentName(a)} · ${w}</div></div></label>`).join('')}</div>
       ${foot(`<a class="btn primary lg" href="${nx}">导入 2 个会话</a>`, `<a class="btn ghost" href="${nx}">跳过</a>`)}`,
-    remote: `<h1>还有其他电脑吗？</h1><p class="lead">可选。以后也可以在“我的电脑”里添加。</p><div class="col" style="margin-top:28px;gap:10px">
-      ${opt('#/add/desktop', 'laptop', 'Mac 或 Windows 电脑', '登录同一个账号，申请查看', `<span class="pill line">${I('eye')}仅查看</span>`)}${opt('#/add/node?step=1', 'server', '服务器（CodeTether Node）', '运行一条命令，输入配对码', `<span class="pill ok">${I('check')}可以继续工作</span>`)}</div>
+    remote: `<h1>还有其他设备吗？</h1><p class="lead">可选。以后也可以在“设备”里添加。</p><div class="col" style="margin-top:28px;gap:10px">
+      ${opt('#/add/node?step=1', 'server', '服务器或 Mac（CodeTether Node）', '运行一条命令，输入配对码。支持 Linux 和 Apple 芯片的 Mac', `<span class="pill ok">${I('check')}可以继续工作</span>`)}</div>
+      <p class="help" style="margin-top:12px">Windows 电脑和同一账号下的其他电脑目前还不能添加，见后续规划。</p>
       ${foot(`<a class="btn primary lg" href="${nx}">以后再说</a>`)}`,
     ready: `<span class="glyph xl ok">${I('check')}</span><h1 style="margin-top:24px">一切就绪</h1><p class="lead">从“新建会话”开始，或者打开刚导入的会话。</p>
-      <div style="margin-top:28px">${feat('folder', '会话按项目和文件夹整理', '侧栏里每个项目下是它在各台电脑上的文件夹，会话就在对应的文件夹下面。')}${feat('edit', '新建会话', '按 Ctrl N，选择项目、文件夹和 AI 工具。')}${feat('search', '快速跳转', '按 Ctrl K 搜索会话标题、项目和电脑。')}</div>${foot(`<a class="btn primary lg" href="#/projects">打开 CodeTether</a>`)}`,
+      <div style="margin-top:28px">${feat('folder', '设备 › 项目 › 会话', '侧栏按设备列出项目，每个项目就是那台设备上的一个文件夹，会话在项目下面。')}${feat('edit', '新建会话', '按 Ctrl N，选择项目和 AI 工具。')}${feat('search', '快速跳转', '按 Ctrl K 搜索会话标题、项目和设备。')}</div>${foot(`<a class="btn primary lg" href="#/devices">打开 CodeTether</a>`)}`,
   }[step];
   const body = `<div class="window bare os-${ui.os}"><span class="traffic"><i></i><i></i><i></i></span><header class="bare-top"><span class="demo-pill">演示数据</span>${WINCTL}</header>
     <div class="onb"><div class="onb-in"><div class="progress">${order.map((_, k) => `<i class="${k <= i ? 'on' : ''}"></i>`).join('')}</div>${v}</div></div></div>`;
@@ -73,16 +70,15 @@ function pageRoadmap() {
   const it = (t, d, dep, part) => `<div class="card pad col" style="gap:8px"><div class="row"><b class="grow">${t}</b><span class="pill ${part ? 'warn' : 'line'}">${part ? '部分实现' : '尚未实现'}</span></div><p class="muted small">${d}</p><p class="dep"><b>设计注释</b>依赖：${dep}</p></div>`;
   const body = `<div class="page"><div class="head"><div class="grow"><h1>后续规划</h1><p>远程控制和其他尚未提供的能力。</p></div></div>
     ${notice('info', 'map', '这些功能还在规划中', '以下是后续可能提供的能力，目前还不能使用，也没有确定的时间。')}
-    <section class="sec" style="margin-top:24px"><div class="grid2">${it('控制其他主机（发送、新建会话）', '申请“查看并控制”，批准后远程会话显示输入框。', 'supervisor_control 已在协议与 Host 中定义，但账号服务只签发 supervisor_read，也没有批准入口', 1)}
-      ${it('撤销已授权的设备', '在“账号与共享”中撤销某台设备，对方立即失去查看权限。', '账号服务撤销接口与界面')}
-      ${it('访问申请通知', '收到访问申请时发送系统通知，并进入“待处理”。', '新的 Attention 类型；当前只在“我的电脑”中显示')}
-      ${it('远程停止', '在其他电脑上运行的会话也可以停止。', 'Node 执行与 supervisor 协议都没有 interrupt')}
+    <section class="sec" style="margin-top:24px"><div class="grid2">${it('同一账号下的 Mac 和 Windows', '用同一账号登录的桌面版自动出现在“设备”里，可以添加项目、新建会话、发送消息。', 'supervisor_control 已在协议与 Host 中定义，但账号服务只签发 supervisor_read（只读），本版不做只读设备', 1)}
+      ${it('Windows 设备配对', '把另一台 Windows 电脑配对进来，像服务器一样使用。', 'CodeTether Node 只支持 Linux x64 / arm64 和 macOS arm64')}
+      ${it('远程停止', '在配对设备上运行的会话也可以停止。', 'Node 执行与 supervisor 协议都没有 interrupt')}
       ${it('远程审批', '远程会话中显示审批卡，并同步到“待处理”。', 'Node 执行固定不审批；supervisor 协议没有审批操作')}
-      ${it('删除会话', '永久删除已归档的会话；删完后可以移除对应的项目或文件夹。', 'Host 没有删除会话的接口；仍有会话的项目和文件夹不能移除')}
+      ${it('删除会话', '永久删除已归档的会话；删完后可以移除对应的项目。', 'Host 没有删除会话的接口；仍有会话的项目不能移除')}
       ${it('运行中排队、补充指令', '运行时可以追加下一条消息。', 'ProviderDescriptor 没有对应能力；AGENTS.md 明确不做排队和插话')}
       ${it('跨项目按内容搜索', '一次搜索所有项目中发送过的内容。现在按内容搜索只在一个项目里进行，Ctrl K 只匹配标题。', 'Host 跨项目搜索接口（当前 search 按项目，查询最长 160 字）')}
       ${it('选择模型与 Codex 推理强度', '新建会话时选择模型；Codex 也可以设置推理强度。', 'Codex 描述里没有 models / reasoningOptions；Claude Code 只提供推理强度，没有模型列表')}
-      ${it('浏览其他电脑上的文件夹', '给配对的电脑添加项目文件夹时，可以像这台电脑一样浏览目录。', 'Node 没有列目录接口；现在只能输入完整路径')}
+      ${it('浏览配对设备上的文件夹', '给配对设备添加项目时，可以像这台电脑一样浏览目录。', 'Node 没有列目录接口；现在只能输入完整路径')}
       ${it('Claude Code 编辑、终端与变更', '变更面板对 Claude Code 开放。', 'Provider 能力扩展（明确延后）')}
       ${it('开机启动、托盘快捷入口', '在设置中提供开关和常用入口。', 'Tauri autostart 插件')}</div></section>
     <section class="sec"><div class="sec-h"><h2>远程控制示意</h2><span class="pill line">仅示意</span></div><div class="card pad col" style="max-width:740px;gap:14px">

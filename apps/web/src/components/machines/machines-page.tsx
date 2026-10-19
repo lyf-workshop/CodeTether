@@ -1,5 +1,5 @@
 import { useQueries, useQuery } from '@tanstack/react-query'
-import { Link } from '@tanstack/react-router'
+import { Link, useNavigate } from '@tanstack/react-router'
 import { Monitor, Plus, Server } from 'lucide-react'
 
 import {
@@ -19,7 +19,6 @@ import {
   machineListQueryOptions,
 } from '../../runtime/host/machine-query'
 import { AddProjectDialog } from '../projects/add-project-dialog'
-import { AddRemoteMachineDialog } from './add-remote-machine-dialog'
 import { machineCanAddProject } from './device-project-model'
 import {
   MachinesEmptyState,
@@ -36,6 +35,7 @@ import { MachineProjectsSection } from './machine-projects-section'
 
 export function MachinesPage() {
   const runtime = useHostRuntime()
+  const navigate = useNavigate()
   const connectionState = useHostConnectionState()
   const machinesQuery = useQuery({
     ...machineListQueryOptions(runtime),
@@ -69,17 +69,16 @@ export function MachinesPage() {
             每台设备下面是你在上面添加的项目文件夹。打开项目就能查看会话，在里面新建会话时会直接使用这个文件夹。
           </p>
         </div>
-        <AddRemoteMachineDialog
-          trigger={
-            <Button
-              variant="secondary"
-              disabled={connectionState !== 'connected'}
-            >
-              <Plus aria-hidden="true" />
-              添加设备
-            </Button>
-          }
-        />
+        <Button
+          variant="secondary"
+          disabled={connectionState !== 'connected'}
+          onClick={() => {
+            void navigate({ to: '/add' })
+          }}
+        >
+          <Plus aria-hidden="true" />
+          添加设备
+        </Button>
       </header>
       {unavailable ? (
         <MachinesErrorState

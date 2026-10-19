@@ -1,45 +1,23 @@
-import {
-  useEffect,
-  useRef,
-  useState,
-  type FormEvent,
-  type ReactElement,
-} from 'react'
-import { useMutation } from '@tanstack/react-query'
+import { useEffect, useRef, useState, type ReactElement } from 'react'
 import { useNavigate } from '@tanstack/react-router'
-import { ArrowRight, Link2, Server, ShieldCheck } from 'lucide-react'
-
-import { CodeTetherResponseError } from '@codetether/client'
+import type { MachineId } from '@codetether/protocol'
 import {
-  Badge,
   Button,
   Dialog,
-  DialogClose,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
-  Input,
+  Notice,
 } from '@codetether/ui'
+import { AddProjectDialog } from '../projects/add-project-dialog'
 import {
-  RemoteMachinePairingCodeSchema,
-  type MachineId,
-  type RemoteMachinePairingCandidate,
-} from '@codetether/protocol'
-
-import { useHostRuntime } from '../../runtime/host/host-runtime-hooks'
-import {
-  machineErrorMessage,
-  normalizePairingCodeInput,
-  parseRemoteMachinePairingTargetInput,
-} from '../../runtime/host/machine-actions'
-import {
-  machineArchitectureLabel,
-  machinePlatformLabel,
-  remoteMachineAddressLabel,
-} from './machine-presentation'
+  MachinePairingComplete,
+  MachinePairingConfirmation,
+  MachinePairingEntry,
+} from './machine-pairing-steps'
+import { useRemoteMachinePairing } from './use-remote-machine-pairing'
 
 interface AddRemoteMachineDialogProps {
   onPaired?: (machineId: MachineId) => Promise<void> | void
@@ -47,527 +25,134 @@ interface AddRemoteMachineDialogProps {
   trigger: ReactElement
 }
 
+/** Compatibility entry for onboarding; guided /add/node shares this controller. */
 export function AddRemoteMachineDialog({
   onPaired,
   presentation = 'technical',
   trigger,
 }: AddRemoteMachineDialogProps) {
   const navigate = useNavigate()
-  const runtime = useHostRuntime()
+  const [open, setOpen] = useState(false)
+  const [projectMachineId, setProjectMachineId] = useState<MachineId>()
   const addressInputRef = useRef<HTMLInputElement>(null)
   const confirmationHeadingRef = useRef<HTMLHeadingElement>(null)
-  const [open, setOpen] = useState(false)
-  const [address, setAddress] = useState('')
-  const [pairingCode, setPairingCode] = useState('')
-  const [candidate, setCandidate] = useState<
-    RemoteMachinePairingCandidate | undefined
-  >()
-  const [validationError, setValidationError] = useState('')
-  const [pairedMachineId, setPairedMachineId] = useState<MachineId>()
-
-  const beginMutation = useMutation({
-    mutationFn: async () => {
-      const parsedTarget = parseRemoteMachinePairingTargetInput(address)
-      const parsedCode = RemoteMachinePairingCodeSchema.safeParse(pairingCode)
-      if (parsedTarget === undefined || !parsedCode.success) {
-        throw new PairingInputError()
-      }
-      return await runtime.beginRemoteMachinePairing(
-        parsedTarget,
-        parsedCode.data,
-      )
-    },
-    onSuccess: (response) => {
-      // The one-time secret is no longer needed after the Host returns a
-      // presentation-safe, cryptographically bound confirmation candidate.
-      setPairingCode('')
-      setCandidate(response.data.candidate)
-    },
-  })
-  const confirmMutation = useMutation({
-    mutationFn: async () => {
-      if (candidate === undefined) throw new PairingInputError()
-      return await runtime.confirmRemoteMachinePairing(
-        candidate.pairingAttemptId,
-      )
-    },
-    onSuccess: async (response) => {
-      const machineId = response.data.machine.machineId
-      setPairedMachineId(machineId)
-      if (onPaired !== undefined) {
-        await onPaired(machineId)
-      }
-      if (presentation === 'ordinary') return
-      resetState()
-      setOpen(false)
-      if (onPaired !== undefined) {
-        return
-      }
-      await navigate({
-        to: '/machines/$machineId',
-        params: { machineId },
-      })
-    },
-  })
-  const cancelMutation = useMutation({
-    mutationFn: async (attempt: RemoteMachinePairingCandidate) =>
-      await runtime.cancelRemoteMachinePairing(attempt.pairingAttemptId),
-  })
-  const busy =
-    beginMutation.isPending ||
-    confirmMutation.isPending ||
-    cancelMutation.isPending
-  const rawError =
-    validationError ||
-    (beginMutation.isError
-      ? machineErrorMessage(beginMutation.error, 'begin')
-      : confirmMutation.isError
-        ? machineErrorMessage(confirmMutation.error, 'confirm')
-        : '')
-  const error = pairingErrorPresentation(rawError, presentation)
-  const beginErrorCode =
-    beginMutation.error instanceof CodeTetherResponseError
-      ? beginMutation.error.envelope.code
-      : undefined
-  const addressInvalid =
-    validationError.startsWith('请输入“主机:端口”') ||
-    beginErrorCode === 'machine_unreachable' ||
-    beginErrorCode === 'machine_connection_failed'
-  const pairingCodeInvalid =
-    validationError.startsWith('请输入远程节点') ||
-    beginErrorCode === 'machine_pairing_code_invalid' ||
-    beginErrorCode === 'machine_pairing_code_expired' ||
-    beginErrorCode === 'machine_pairing_rate_limited'
-  const addressDescription = error
-    ? 'remote-machine-address-description remote-machine-pairing-error'
-    : 'remote-machine-address-description'
-  const pairingCodeDescription = error
-    ? 'remote-machine-pairing-code-description remote-machine-pairing-error'
-    : 'remote-machine-pairing-code-description'
-
+  const pairing = useRemoteMachinePairing({ onConfirmed: onPaired })
+  const { candidate, busy } = pairing
   useEffect(() => {
-    if (candidate === undefined) return
-    confirmationHeadingRef.current?.focus()
+    if (candidate !== undefined) confirmationHeadingRef.current?.focus()
   }, [candidate])
-
-  function resetMutations() {
-    beginMutation.reset()
-    confirmMutation.reset()
-    cancelMutation.reset()
-  }
-
-  function resetState() {
-    setAddress('')
-    setPairingCode('')
-    setCandidate(undefined)
-    setValidationError('')
-    setPairedMachineId(undefined)
-    resetMutations()
-  }
-
-  function closeWithoutAttempt() {
-    resetState()
-    setOpen(false)
-  }
-
-  function cancelAttempt(next: 'close' | 'entry') {
-    if (candidate === undefined) {
-      if (next === 'close') closeWithoutAttempt()
-      return
-    }
-    const pendingCandidate = candidate
-    cancelMutation.mutate(pendingCandidate, {
-      onSettled: () => {
-        resetState()
-        if (next === 'close') setOpen(false)
-        else requestAnimationFrame(() => addressInputRef.current?.focus())
-      },
-    })
-  }
-
-  function handleOpenChange(nextOpen: boolean) {
+  async function handleOpenChange(nextOpen: boolean) {
+    if (busy) return
     if (nextOpen) {
-      resetState()
+      pairing.resetState()
       setOpen(true)
       return
     }
-    if (busy) return
-    if (candidate !== undefined) {
-      cancelAttempt('close')
-      return
-    }
-    closeWithoutAttempt()
+    if (await pairing.cancel()) setOpen(false)
   }
-
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    if (busy) return
-    const parsedTarget = parseRemoteMachinePairingTargetInput(address)
-    const parsedCode = RemoteMachinePairingCodeSchema.safeParse(pairingCode)
-    if (parsedTarget === undefined) {
-      setValidationError('请输入“主机:端口”格式的节点地址。')
-      return
-    }
-    if (!parsedCode.success) {
-      setValidationError('请输入远程节点显示的六码配对码。')
-      return
-    }
-    setValidationError('')
-    beginMutation.reset()
-    beginMutation.mutate()
-  }
-
   return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogTrigger asChild>{trigger}</DialogTrigger>
-      <DialogContent
-        closeLabel="关闭添加电脑对话框"
-        className="max-w-lg overflow-x-hidden"
-        showCloseButton={!busy}
-        onOpenAutoFocus={(event) => {
-          event.preventDefault()
-          addressInputRef.current?.focus()
+    <>
+      <Dialog
+        open={open}
+        onOpenChange={(value) => {
+          void handleOpenChange(value)
         }}
       >
-        {pairedMachineId !== undefined ? (
-          <PairingSuccessStep
-            onClose={() => {
-              resetState()
-              setPairedMachineId(undefined)
-              setOpen(false)
-            }}
-            onOpenProject={() => {
-              resetState()
-              setPairedMachineId(undefined)
-              setOpen(false)
-              void navigate({ to: '/projects' })
-            }}
-            onViewComputer={() => {
-              resetState()
-              setPairedMachineId(undefined)
-              setOpen(false)
-              void navigate({
-                to: '/machines/$machineId',
-                params: { machineId: pairedMachineId },
-              })
-            }}
-          />
-        ) : candidate === undefined ? (
-          <form
-            className="min-w-0"
-            data-machine-pairing-step="entry"
-            onSubmit={handleSubmit}
-          >
-            <DialogHeader>
-              <span
-                aria-hidden="true"
-                className="grid size-10 place-items-center rounded-md border border-primary/30 bg-primary-muted text-primary"
-              >
-                <Link2 className="size-5" />
-              </span>
-              <DialogTitle>
-                {presentation === 'ordinary'
-                  ? '添加另一台电脑'
-                  : '添加远程电脑'}
-              </DialogTitle>
-              <DialogDescription>
-                {presentation === 'ordinary'
-                  ? '在另一台电脑上打开 CodeTether，然后输入它显示的连接地址和一次性设置代码。'
-                  : '输入 CodeTether Node 显示的局域网地址和一次性配对码。'}
-              </DialogDescription>
-            </DialogHeader>
-
-            <div className="mt-5 min-w-0 space-y-4">
-              <div className="min-w-0">
-                <label
-                  htmlFor="remote-machine-address"
-                  className="text-sm font-medium text-text-primary"
-                >
-                  {presentation === 'ordinary' ? '连接地址' : '节点地址'}
-                </label>
-                <p
-                  id="remote-machine-address-description"
-                  className="mt-1 text-xs text-text-muted"
-                >
-                  {presentation === 'ordinary'
-                    ? '输入另一台电脑上的 CodeTether 所显示的地址。'
-                    : '使用节点显示的主机名或 IP 地址和端口。IPv6 地址需要使用方括号。'}
-                </p>
-                <Input
-                  ref={addressInputRef}
-                  id="remote-machine-address"
-                  value={address}
-                  onChange={(event) => {
-                    setAddress(event.target.value)
-                    setValidationError('')
-                    beginMutation.reset()
-                  }}
-                  aria-describedby={addressDescription}
-                  aria-errormessage={
-                    addressInvalid ? 'remote-machine-pairing-error' : undefined
-                  }
-                  aria-invalid={addressInvalid || undefined}
-                  autoCapitalize="none"
-                  autoComplete="off"
-                  disabled={busy}
-                  placeholder="192.168.1.42:4318"
-                  spellCheck={false}
-                  className="mt-2 font-mono text-sm"
-                />
-              </div>
-
-              <div className="min-w-0">
-                <label
-                  htmlFor="remote-machine-pairing-code"
-                  className="text-sm font-medium text-text-primary"
-                >
-                  {presentation === 'ordinary' ? '一次性设置代码' : '配对码'}
-                </label>
-                <p
-                  id="remote-machine-pairing-code-description"
-                  className="mt-1 text-xs text-text-muted"
-                >
-                  {presentation === 'ordinary'
-                    ? '此代码短时有效，只能用于这一次安全连接。'
-                    : '配对码仅在节点本次配对模式中短时有效，并且只能使用一次。'}
-                </p>
-                <Input
-                  id="remote-machine-pairing-code"
-                  value={pairingCode}
-                  onChange={(event) => {
-                    setPairingCode(
-                      normalizePairingCodeInput(event.target.value),
-                    )
-                    setValidationError('')
-                    beginMutation.reset()
-                  }}
-                  aria-describedby={pairingCodeDescription}
-                  aria-errormessage={
-                    pairingCodeInvalid
-                      ? 'remote-machine-pairing-error'
-                      : undefined
-                  }
-                  aria-invalid={pairingCodeInvalid || undefined}
-                  autoComplete="one-time-code"
-                  disabled={busy}
-                  inputMode="numeric"
-                  maxLength={6}
-                  pattern="[0-9]{6}"
-                  placeholder="482731"
-                  spellCheck={false}
-                  className="mt-2 font-mono text-lg tracking-widest"
-                />
-              </div>
-
-              {error ? (
-                <p
-                  id="remote-machine-pairing-error"
-                  role="alert"
-                  className="break-words rounded-sm border border-danger/30 bg-danger-muted px-3 py-2 text-sm text-danger"
-                >
-                  {error}
-                </p>
-              ) : null}
-            </div>
-
-            <DialogFooter className="mt-6">
-              <DialogClose asChild>
-                <Button variant="secondary" size="sm" disabled={busy}>
-                  取消
-                </Button>
-              </DialogClose>
-              <Button type="submit" size="sm" disabled={busy}>
-                {beginMutation.isPending ? '正在验证…' : '继续'}
-              </Button>
-            </DialogFooter>
-          </form>
-        ) : (
-          <section className="min-w-0" data-machine-pairing-step="confirmation">
-            <DialogHeader>
-              <span
-                aria-hidden="true"
-                className="grid size-10 place-items-center rounded-md border border-success/30 bg-success-muted text-success"
-              >
-                <ShieldCheck className="size-5" />
-              </span>
-              <DialogTitle
-                ref={confirmationHeadingRef}
-                tabIndex={-1}
-                className="outline-none"
-              >
-                {presentation === 'ordinary' ? '确认这台电脑' : '确认远程电脑'}
-              </DialogTitle>
-              <DialogDescription>
-                {presentation === 'ordinary'
-                  ? '请确认电脑名称、系统和安全校验码与另一台电脑上显示的信息一致。'
-                  : '请确认以下信息和远程节点一致，再建立长期信任关系。'}
-              </DialogDescription>
-            </DialogHeader>
-
-            <div className="mt-5 min-w-0 space-y-4">
-              <div className="flex min-w-0 items-center gap-3 rounded-md border border-border bg-surface-muted/45 p-3">
-                <span
-                  aria-hidden="true"
-                  className="grid size-10 shrink-0 place-items-center rounded-sm border border-primary/30 bg-primary-muted text-primary"
-                >
-                  <Server className="size-5" />
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="flex min-w-0 items-center gap-2">
-                    <strong
-                      title={candidate.displayName}
-                      className="min-w-0 truncate text-sm text-text-primary"
-                    >
-                      {candidate.displayName}
-                    </strong>
-                    <Badge variant="secondary">远程</Badge>
-                  </span>
-                  <span className="mt-1 block truncate text-xs text-text-secondary">
-                    {machinePlatformLabel(candidate.platform)} ·{' '}
-                    {machineArchitectureLabel(candidate.architecture)}
-                  </span>
-                </span>
-              </div>
-
-              <dl className="grid min-w-0 gap-3 rounded-sm border border-border bg-surface/55 px-3 py-3 text-sm sm:grid-cols-2">
-                <div className="min-w-0">
-                  <dt className="text-xs text-text-muted">本次连接地址</dt>
-                  <dd
-                    title={pairingCandidateTransportLabel(candidate)}
-                    className="mt-1 truncate font-mono text-text-primary"
-                  >
-                    {pairingCandidateTransportLabel(candidate)}
-                  </dd>
-                </div>
-                <div className="min-w-0">
-                  <dt className="text-xs text-text-muted">安全校验码</dt>
-                  <dd className="mt-1 font-mono font-semibold tracking-widest text-text-primary">
-                    {candidate.verificationCode}
-                  </dd>
-                </div>
-                <div className="min-w-0 sm:col-span-2">
-                  <dt className="text-xs text-text-muted">确认有效期</dt>
-                  <dd className="mt-1 text-text-primary">
-                    {formatPairingExpiry(candidate.expiresAt)} 前
-                  </dd>
-                </div>
-              </dl>
-
-              <p className="rounded-sm border border-warning/30 bg-warning-muted/45 px-3 py-2 text-sm text-text-secondary">
-                {presentation === 'ordinary'
-                  ? '只有当另一台电脑显示相同的安全校验码时才继续。设置代码不会成为长期凭据，连接也不会自动执行工作。'
-                  : '只有当远程节点显示相同的安全校验码时，才信任这台电脑。CodeTether 不会因配对本身执行命令或访问文件；远程会话还必须满足独立的项目位置和智能体安全能力校验。'}
-              </p>
-
-              {error ? (
-                <p
-                  role="alert"
-                  className="break-words rounded-sm border border-danger/30 bg-danger-muted px-3 py-2 text-sm text-danger"
-                >
-                  {error}
-                </p>
-              ) : null}
-            </div>
-
-            <DialogFooter className="mt-6">
-              <Button
-                variant="secondary"
-                size="sm"
-                disabled={busy}
-                onClick={() => cancelAttempt('entry')}
-              >
-                重新输入
-              </Button>
-              <Button
-                size="sm"
-                disabled={busy}
-                onClick={() => confirmMutation.mutate()}
-              >
-                {confirmMutation.isPending ? '正在建立信任…' : '信任这台电脑'}
-              </Button>
-            </DialogFooter>
-          </section>
-        )}
-      </DialogContent>
-    </Dialog>
-  )
-}
-
-function PairingSuccessStep({
-  onClose,
-  onOpenProject,
-  onViewComputer,
-}: {
-  onClose: () => void
-  onOpenProject: () => void
-  onViewComputer: () => void
-}) {
-  return (
-    <section className="min-w-0" data-machine-pairing-step="success">
-      <DialogHeader>
-        <span
-          aria-hidden="true"
-          className="grid size-10 place-items-center rounded-md border border-success/30 bg-success-muted text-success"
+        <DialogTrigger asChild>{trigger}</DialogTrigger>
+        <DialogContent
+          closeLabel="关闭设备配对"
+          className="max-w-lg overflow-x-hidden"
+          showCloseButton={!busy}
+          onOpenAutoFocus={(event) => {
+            event.preventDefault()
+            addressInputRef.current?.focus()
+          }}
+          data-pairing-presentation={presentation}
         >
-          <ShieldCheck className="size-5" />
-        </span>
-        <DialogTitle>电脑已连接</DialogTitle>
-        <DialogDescription>
-          现在可以使用这台电脑上安装的 Codex 或 Claude Code 运行项目。
-        </DialogDescription>
-      </DialogHeader>
-      <div className="mt-5 rounded-md border border-border bg-surface-muted/45 p-4 text-sm text-text-secondary">
-        配对已完成。下一步可以添加这台电脑上的项目，或打开已有项目开始会话。
-      </div>
-      <DialogFooter className="mt-6">
-        <Button variant="secondary" size="sm" onClick={onClose}>
-          完成
-        </Button>
-        <Button variant="secondary" size="sm" onClick={onViewComputer}>
-          查看电脑
-        </Button>
-        <Button size="sm" onClick={onOpenProject}>
-          <ArrowRight aria-hidden="true" />
-          打开项目
-        </Button>
-      </DialogFooter>
-    </section>
+          <DialogHeader className="sr-only">
+            <DialogTitle>添加 Node 设备</DialogTitle>
+            <DialogDescription>
+              输入设备地址和一次性配对码，然后核对两端验证码。
+            </DialogDescription>
+          </DialogHeader>
+          {pairing.pairedMachine !== undefined ? (
+            <>
+              <MachinePairingComplete
+                machine={pairing.pairedMachine}
+                onAddProject={() => {
+                  if (pairing.pairedMachine === undefined) return
+                  setProjectMachineId(pairing.pairedMachine.machineId)
+                  setOpen(false)
+                  pairing.resetState()
+                }}
+                onViewDevice={() => {
+                  if (pairing.pairedMachine === undefined) return
+                  const machineId = pairing.pairedMachine.machineId
+                  setOpen(false)
+                  pairing.resetState()
+                  void navigate({
+                    to: '/devices/$machineId',
+                    params: { machineId },
+                  })
+                }}
+              />
+              {pairing.error ? (
+                <Notice tone="err">{pairing.error}</Notice>
+              ) : null}
+              <Button
+                className="w-full"
+                variant="ghost"
+                onClick={() => {
+                  setOpen(false)
+                  pairing.resetState()
+                }}
+              >
+                完成
+              </Button>
+            </>
+          ) : candidate !== undefined ? (
+            <MachinePairingConfirmation
+              candidate={candidate}
+              error={pairing.error}
+              busy={busy}
+              confirming={pairing.confirming}
+              headingRef={confirmationHeadingRef}
+              onBack={() => {
+                void pairing.cancel().then((cancelled) => {
+                  if (cancelled)
+                    requestAnimationFrame(() =>
+                      addressInputRef.current?.focus(),
+                    )
+                })
+              }}
+              onConfirm={pairing.confirm}
+            />
+          ) : (
+            <>
+              <Notice tone="info" className="mb-4">
+                需要先在 Linux x64 / ARM64 或 macOS ARM64 设备上安装并开启 Node
+                配对。Windows 暂不支持作为配对设备。
+              </Notice>
+              <MachinePairingEntry
+                pairing={pairing}
+                addressRef={addressInputRef}
+                onBack={() => {
+                  void handleOpenChange(false)
+                }}
+              />
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+      {projectMachineId !== undefined ? (
+        <AddProjectDialog
+          fixedMachineId={projectMachineId}
+          open
+          onOpenChange={(value) => {
+            if (!value) setProjectMachineId(undefined)
+          }}
+        />
+      ) : null}
+    </>
   )
-}
-
-function pairingErrorPresentation(
-  message: string,
-  presentation: 'technical' | 'ordinary',
-): string {
-  return presentation === 'ordinary'
-    ? message
-        .replaceAll('远程节点', '另一台电脑上的 CodeTether')
-        .replaceAll('节点地址', '连接地址')
-        .replaceAll('节点', '另一台电脑')
-    : message
-}
-
-class PairingInputError extends Error {
-  constructor() {
-    super('Remote Machine pairing input is invalid')
-    this.name = 'PairingInputError'
-  }
-}
-
-function pairingCandidateTransportLabel(
-  candidate: RemoteMachinePairingCandidate,
-): string {
-  return candidate.address === undefined
-    ? 'Internet Relay'
-    : remoteMachineAddressLabel(candidate.address)
-}
-
-function formatPairingExpiry(expiresAt: string): string {
-  const expires = new Date(expiresAt)
-  if (Number.isNaN(expires.getTime())) return '当前配对会话结束'
-  return new Intl.DateTimeFormat('zh-CN', {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  }).format(expires)
 }

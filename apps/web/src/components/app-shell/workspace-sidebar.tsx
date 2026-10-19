@@ -6,7 +6,7 @@ import {
   type ReactNode,
 } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Link } from '@tanstack/react-router'
+import { Link, useNavigate } from '@tanstack/react-router'
 import {
   Archive,
   ChevronDown,
@@ -43,7 +43,6 @@ import { conversationListQueryOptions } from '../../runtime/host/conversation-li
 import { machineListQueryOptions } from '../../runtime/host/machine-query'
 import { projectListQueryOptions } from '../../runtime/host/project-query'
 import { formatInboxAttentionBadge } from '../inbox/inbox-model'
-import { AddRemoteMachineDialog } from '../machines/add-remote-machine-dialog'
 import {
   formatMachineLastSeen,
   machineConnectionStateLabel,
@@ -96,6 +95,7 @@ export function WorkspaceSidebar({
   ...props
 }: WorkspaceSidebarProps) {
   const runtime = useHostRuntime()
+  const navigate = useNavigate()
   const connectionState = useHostConnectionState()
   const projectsQuery = useQuery({
     ...projectListQueryOptions(runtime),
@@ -187,20 +187,19 @@ export function WorkspaceSidebar({
           >
             设备
           </Link>
-          <AddRemoteMachineDialog
-            trigger={
-              <IconButton
-                type="button"
-                variant="ghost"
-                size="sm"
-                label="添加设备"
-                className="size-6"
-                disabled={connectionState !== 'connected'}
-              >
-                <Plus aria-hidden="true" />
-              </IconButton>
-            }
-          />
+          <IconButton
+            type="button"
+            variant="ghost"
+            size="sm"
+            label="添加设备"
+            className="size-6"
+            disabled={connectionState !== 'connected'}
+            onClick={() => {
+              void navigate({ to: '/add' })
+            }}
+          >
+            <Plus aria-hidden="true" />
+          </IconButton>
         </div>
         <div
           data-workspace-project-scroller

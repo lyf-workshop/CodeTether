@@ -23,6 +23,11 @@ import { DesktopNotificationSettings } from './components/settings'
 import { DoctorPage } from './components/doctor'
 import { OnboardingPage, StartupGate } from './components/onboarding'
 
+import { AddDevicePage } from './components/machines/add-device-page'
+import { NodePairingPage } from './components/machines/node-pairing-page'
+import { nodePairingSearch } from './components/machines/node-pairing-model'
+import { RoadmapPage } from './components/roadmap/roadmap-page'
+
 const rootRoute = createRootRoute({ component: RootLayout })
 
 interface ConversationSearch {
@@ -113,6 +118,22 @@ const projectSearchRoute = createRoute({
   component: ProjectSearchRoute,
 })
 
+const addDeviceRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/add',
+  component: AddDevicePage,
+})
+const nodePairingRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/add/node',
+  validateSearch: nodePairingSearch,
+  component: NodePairingPage,
+})
+const roadmapRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/roadmap',
+  component: RoadmapPage,
+})
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/settings',
@@ -194,6 +215,9 @@ const routeTree = rootRoute.addChildren([
   projectConversationsRoute,
   projectSearchRoute,
   settingsRoute,
+  addDeviceRoute,
+  nodePairingRoute,
+  roadmapRoute,
   machinesRoute,
   machineDetailRoute,
   hostsRoute,

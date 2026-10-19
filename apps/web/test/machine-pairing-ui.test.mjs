@@ -5,53 +5,65 @@ import test from 'node:test'
 
 const sourceRoot = resolve(import.meta.dirname, '../src')
 
-test('Machines exposes one real two-step remote pairing flow', async () => {
-  const [page, dialog] = await Promise.all([
+test('device entrances open the canonical wizard, onboarding shares its pairing actions', async () => {
+  const [page, dialog, hook, flow, steps, wizard] = await Promise.all([
     source('components/machines/machines-page.tsx'),
     source('components/machines/add-remote-machine-dialog.tsx'),
+    source('components/machines/use-remote-machine-pairing.ts'),
+    source('components/machines/machine-trust-flow.ts'),
+    source('components/machines/machine-pairing-steps.tsx'),
+    source('components/machines/node-pairing-page.tsx'),
   ])
-
-  assert.match(page, /<AddRemoteMachineDialog/u)
+  assert.match(page, /navigate\(\{ to: '\/add' \}\)/u)
   assert.match(page, /添加设备/u)
-  assert.match(dialog, /data-machine-pairing-step="entry"/u)
-  assert.match(dialog, /data-machine-pairing-step="confirmation"/u)
-  assert.match(dialog, /runtime\.beginRemoteMachinePairing/u)
-  assert.match(dialog, /runtime\.confirmRemoteMachinePairing/u)
-  assert.match(dialog, /runtime\.cancelRemoteMachinePairing/u)
-  assert.match(dialog, /信任这台电脑/u)
-  assert.match(dialog, /candidate\.verificationCode/u)
-  assert.match(dialog, /data-machine-pairing-step="success"/u)
-  assert.match(dialog, /电脑已连接/u)
-  assert.match(dialog, /添加这台电脑上的项目/u)
-  assert.match(dialog, /打开项目/u)
-  assert.match(dialog, /查看电脑/u)
-  assert.match(dialog, /setPairingCode\(''\)/u)
-  assert.doesNotMatch(
-    dialog,
-    /localStorage|sessionStorage|dangerouslySetInnerHTML/u,
-  )
-  assert.doesNotMatch(dialog, /candidate\.machineId/u)
+  assert.match(dialog, /useRemoteMachinePairing/u)
+  assert.match(wizard, /useRemoteMachinePairing/u)
+  for (const operation of [
+    'beginRemoteMachinePairing',
+    'confirmRemoteMachinePairing',
+    'cancelRemoteMachinePairing',
+  ])
+    assert.ok(flow.includes(operation))
+  for (const state of ['entry', 'confirmation', 'success'])
+    assert.ok(steps.includes('data-machine-pairing-step="' + state + '"'))
+  assert.match(steps, /candidate\.verificationCode/u)
+  assert.match(steps, /验证码一致，确认配对/u)
+  assert.match(steps, /已配对不等于可以执行/u)
+  assert.match(wizard, /fixedMachineId=\{pairing\.pairedMachine\.machineId\}/u)
+  assert.match(hook, /setPairingCode\(''\)/u)
+  for (const value of [dialog, hook, flow, wizard])
+    assert.doesNotMatch(
+      value,
+      /localStorage|sessionStorage|dangerouslySetInnerHTML/u,
+    )
+  assert.doesNotMatch(steps, /candidate\.machineId/u)
 })
 
-test('pairing inputs are keyboard-oriented, bounded, and restore deliberate focus', async () => {
-  const dialog = await source(
-    'components/machines/add-remote-machine-dialog.tsx',
-  )
-
-  assert.match(dialog, /ref=\{addressInputRef\}/u)
+test('shared pairing inputs preserve keyboard, bounded one-time code and deliberate focus', async () => {
+  const [dialog, steps, hook, wizard] = await Promise.all([
+    source('components/machines/add-remote-machine-dialog.tsx'),
+    source('components/machines/machine-pairing-steps.tsx'),
+    source('components/machines/use-remote-machine-pairing.ts'),
+    source('components/machines/node-pairing-page.tsx'),
+  ])
+  assert.match(dialog, /addressRef=\{addressInputRef\}/u)
   assert.match(dialog, /onOpenAutoFocus/u)
   assert.match(dialog, /confirmationHeadingRef\.current\?\.focus\(\)/u)
-  assert.match(dialog, /inputMode="numeric"/u)
-  assert.match(dialog, /autoComplete="one-time-code"/u)
-  assert.match(dialog, /maxLength=\{6\}/u)
-  assert.match(dialog, /pattern="\[0-9\]\{6\}"/u)
-  assert.match(dialog, /role="alert"/u)
-  assert.match(dialog, /aria-errormessage/u)
+  assert.match(steps, /inputMode="numeric"/u)
+  assert.match(steps, /autoComplete="one-time-code"/u)
+  assert.match(steps, /maxLength=\{6\}/u)
+  assert.match(steps, /pattern="\[0-9\]\{6\}"/u)
+  assert.match(steps, /aria-errormessage/u)
+  assert.match(steps, /tone="err"/u)
+  assert.match(steps, /min-w-0/u)
+  assert.match(steps, /truncate/u)
   assert.match(dialog, /showCloseButton=\{!busy\}/u)
   assert.match(dialog, /if \(busy\) return/u)
   assert.match(dialog, /max-w-lg overflow-x-hidden/u)
-  assert.match(dialog, /min-w-0/u)
-  assert.match(dialog, /truncate/u)
+  assert.match(hook, /submitted\.current/u)
+  assert.match(hook, /retry: false/u)
+  assert.match(wizard, /nodePairingStep/u)
+  assert.match(wizard, /confirmationHeadingRef\.current\?\.focus\(\)/u)
 })
 
 test('remote rows show bounded project data without triggering Provider detection', async () => {

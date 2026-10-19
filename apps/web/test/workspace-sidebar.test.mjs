@@ -11,7 +11,7 @@ test('the v4 sidebar has one device section and preserves the existing secure ad
     'utf8',
   )
   assert.match(sidebar, /<CodeTetherMark/u)
-  assert.match(sidebar, /<AddRemoteMachineDialog/u)
+  assert.match(sidebar, /navigate\(\{ to: '\/add' \}\)/u)
   assert.match(sidebar, /label="添加设备"/u)
   assert.match(sidebar, /to="\/devices"/u)
   assert.doesNotMatch(sidebar, /label="设备"/u)

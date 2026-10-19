@@ -17,6 +17,11 @@ import type { MachineSummary, ProjectRecord } from '@codetether/protocol'
 import { useHostRuntime } from '../../runtime/host/host-runtime-hooks'
 import { machineErrorMessage } from '../../runtime/host/machine-actions'
 import { machineQueryKeys } from '../../runtime/host/machine-query'
+import {
+  runMachineTrustMutation,
+  MachineTrustFlowBusyError,
+} from './machine-trust-flow'
+import { useMachineTrustBusy } from './use-remote-machine-pairing'
 import { unpairMachinePreflight } from './device-project-model'
 
 interface UnpairMachineDialogProps {
@@ -38,6 +43,7 @@ export function UnpairMachineDialog({
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const runtime = useHostRuntime()
+  const trustBusy = useMachineTrustBusy()
   const preflight = unpairMachinePreflight(projects ?? [], machine.machineId)
   const count =
     projects === undefined ? projectCount : preflight.projects.length
@@ -46,7 +52,10 @@ export function UnpairMachineDialog({
   const unpairMutation = useMutation({
     mutationFn: async () => {
       if (blocked) throw new Error('Unpair preflight is not clear')
-      return await runtime.unpairMachine(machine.machineId)
+      return await runMachineTrustMutation(
+        runtime,
+        async () => await runtime.unpairMachine(machine.machineId),
+      )
     },
     onSuccess: async () => {
       onOpenChange(false)
@@ -124,12 +133,19 @@ export function UnpairMachineDialog({
               : '需要连接到远程 Node 才能确认撤销信任。无法连接时会保留设备和信任记录。'}
           </p>
         )}
+        {trustBusy && !unpairMutation.isPending ? (
+          <p role="status" className="text-sm text-text-secondary">
+            另一项设备配对或取消配对正在进行，请先完成或取消那项操作。
+          </p>
+        ) : null}
         {unpairMutation.isError ? (
           <p
             role="alert"
             className="rounded-sm bg-danger-muted px-3 py-2 text-sm text-danger-text"
           >
-            {machineErrorMessage(unpairMutation.error, 'unpair')}
+            {unpairMutation.error instanceof MachineTrustFlowBusyError
+              ? '另一项设备信任操作正在进行，请稍后再试。'
+              : machineErrorMessage(unpairMutation.error, 'unpair')}
           </p>
         ) : null}
         <DialogFooter>
@@ -151,8 +167,11 @@ export function UnpairMachineDialog({
               <Button
                 variant="danger"
                 size="sm"
-                disabled={unpairMutation.isPending}
-                onClick={() => unpairMutation.mutate()}
+                disabled={unpairMutation.isPending || trustBusy}
+                onClick={() => {
+                  if (!trustBusy && !unpairMutation.isPending)
+                    unpairMutation.mutate()
+                }}
               >
                 {unpairMutation.isPending ? '正在取消…' : '取消配对'}
               </Button>

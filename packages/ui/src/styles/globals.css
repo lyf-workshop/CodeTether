@@ -128,6 +128,8 @@
   --side-w: 248px;
   --read-w: 740px;
   --page-w: 1040px;
+  --page-narrow-w: 760px;
+  --pairing-w: 680px;
   --tree-device-h: 32px;
   --tree-project-h: 30px;
   --tree-conversation-h: 30px;

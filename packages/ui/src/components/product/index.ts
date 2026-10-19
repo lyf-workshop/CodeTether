@@ -36,3 +36,4 @@ export {
 } from './project-card'
 
 export { SessionItem, type SessionItemProps } from './session-item'
+export { CommandBlock, type CommandBlockProps } from './command-block'

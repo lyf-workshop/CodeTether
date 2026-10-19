@@ -8,10 +8,8 @@ import {
 } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
-import { FolderOpen, LockKeyhole, Monitor, Plus } from 'lucide-react'
-
+import { Plus } from 'lucide-react'
 import {
-  AgentBadge,
   Button,
   Dialog,
   DialogClose,
@@ -21,16 +19,9 @@ import {
   DialogHeader,
   DialogTitle,
   DialogTrigger,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-  cn,
 } from '@codetether/ui'
 import {
   MachineIdSchema,
-  ProjectIdSchema,
   type MachineId,
   type ProjectId,
   type ProjectRecord,
@@ -49,43 +40,42 @@ import {
   machineListQueryOptions,
 } from '../../runtime/host/machine-query'
 import { projectListQueryOptions } from '../../runtime/host/project-query'
+import { providerPresentationsForMachine } from '../../provider/provider-presentation'
 import {
-  providerPresentationForMachine,
-  providerPresentationsForMachine,
-} from '../../provider/provider-presentation'
-import { projectLocationForMachine } from '../../runtime/host/project-location'
-import { createProjectOptionPresentation } from './new-conversation-presentation'
-import {
-  newConversationMachineContextExplanation,
-  selectNewConversationMachine,
-} from './new-conversation-machine-selection'
-import {
-  defaultProviderControls,
-  defaultProviderModel,
-  effectiveConversationProvider,
   effectiveProviderReasoning,
-  executableConversationProviders,
-  newConversationProviderEligibility,
   providerDefaultReasoningSelection,
   providerReasoningFromControl,
 } from './new-conversation-provider-selection'
+import { NewConversationFields } from './new-conversation-fields'
+import {
+  conversationCreationProviderOptions,
+  conversationProjectGroups,
+  eligibleConversationProjectSelection,
+  resolveConversationCreationProvider,
+  resolveConversationProject,
+  type ConversationProjectSelection,
+  type NewConversationLaunchContext,
+} from './new-conversation-selection'
 
 interface NewConversationDialogProps {
+  /** Legacy project-page callers remain fixed; global launchers use identifiers. */
   currentProject?: ProjectRecord
   currentMachineId?: MachineId
-  onAddProject?: () => void
+  launchContext?: NewConversationLaunchContext
+  onAddProject?: (machineId?: MachineId) => void
   onOpenChange?: (open: boolean) => void
   open?: boolean
-  returnFocusRef?: RefObject<HTMLButtonElement | null>
+  returnFocusRef?: RefObject<HTMLElement | null>
   trigger?: ReactElement
 }
 
 const unavailableMachineQueryId = MachineIdSchema.parse('machine_unavailable')
 
-/** Minimal real create flow: one Project, Machine, and durable Provider. */
+/** Selection is identifiers only; records, descriptors and installation state belong to Query. */
 export function NewConversationDialog({
   currentProject,
   currentMachineId,
+  launchContext,
   onAddProject,
   onOpenChange,
   open: controlledOpen,
@@ -97,264 +87,176 @@ export function NewConversationDialog({
   const runtime = useHostRuntime()
   const connectionState = useHostConnectionState()
   const [internalOpen, setInternalOpen] = useState(false)
-  const [selectedProjectId, setSelectedProjectId] = useState<
-    ProjectId | undefined
-  >()
-  const [selectedMachineId, setSelectedMachineId] = useState<
-    MachineId | undefined
-  >()
-  const [selectedProvider, setSelectedProvider] = useState<ProviderId>('codex')
-  const [selectedModel, setSelectedModel] = useState<string>()
+  const [selectedProject, setSelectedProject] =
+    useState<ConversationProjectSelection>()
+  const [selectedProviderId, setSelectedProviderId] = useState<ProviderId>()
   const [selectedReasoning, setSelectedReasoning] = useState<string>()
-  const providerHealthNoticeId = useId()
-  const machineContextNoticeId = useId()
+  const formId = useId()
   const skipCloseFocusRestore = useRef(false)
+  const submitRef = useRef(false)
   const open = controlledOpen ?? internalOpen
+  const context: NewConversationLaunchContext | undefined =
+    launchContext ??
+    (currentProject === undefined
+      ? currentMachineId === undefined
+        ? undefined
+        : { kind: 'preselected', machineId: currentMachineId }
+      : {
+          kind: 'fixed-project',
+          projectId: currentProject.projectId,
+          ...(currentMachineId === undefined
+            ? {}
+            : { machineId: currentMachineId }),
+        })
   const projectsQuery = useQuery({
     ...projectListQueryOptions(runtime),
-    enabled:
-      open && currentProject === undefined && connectionState === 'connected',
+    enabled: open && connectionState === 'connected',
   })
   const machinesQuery = useQuery({
     ...machineListQueryOptions(runtime),
     enabled: open && connectionState === 'connected',
   })
-  const {
-    candidateMachines,
-    machineId: effectiveSelectedMachineId,
-    machine: selectedMachine,
-    contextIssue: machineContextIssue,
-  } = selectNewConversationMachine({
-    machines: machinesQuery.data,
-    currentProject,
-    currentMachineId,
-    selectedMachineId,
-  })
-  const machineContextExplanation =
-    newConversationMachineContextExplanation(machineContextIssue)
+  const groups = conversationProjectGroups(
+    machinesQuery.data ?? [],
+    projectsQuery.data ?? [],
+  )
+  const projectSelection = resolveConversationProject(
+    groups,
+    context,
+    selectedProject,
+  )
+  const project = projectSelection.choice
+  const selectedMachineId = project?.machineId
   const machineDetailQuery = useQuery({
     ...machineDetailQueryOptions(
       runtime,
-      effectiveSelectedMachineId ?? unavailableMachineQueryId,
+      selectedMachineId ?? unavailableMachineQueryId,
     ),
     enabled:
-      open && connectionState === 'connected' && selectedMachine !== undefined,
+      open && connectionState === 'connected' && project?.machine !== undefined,
   })
-  const availableProjects = (projectsQuery.data ?? []).filter((project) => {
-    if (effectiveSelectedMachineId === undefined) return false
-    return (
-      projectLocationForMachine(project, effectiveSelectedMachineId)
-        ?.availability === 'available'
-    )
-  })
+  const providerOptions = conversationCreationProviderOptions(
+    providerPresentationsForMachine(machineDetailQuery.data?.providers ?? []),
+    machineDetailQuery.data?.providerLifecycles,
+  )
+  const selectedProvider = resolveConversationCreationProvider(
+    providerOptions,
+    selectedProviderId,
+  )
+  const presentation = selectedProvider?.provider
+  const reasoning =
+    presentation === undefined
+      ? undefined
+      : effectiveProviderReasoning(selectedReasoning, presentation)
+  const defaultReasoning =
+    presentation === undefined
+      ? '__provider_default__'
+      : providerDefaultReasoningSelection(presentation)
+  const loading =
+    projectsQuery.isPending ||
+    machinesQuery.isPending ||
+    (project?.machine !== undefined && machineDetailQuery.isPending)
+  const scopedGroups =
+    context?.kind !== 'fixed-project'
+      ? groups
+      : groups
+          .map((group) => ({
+            ...group,
+            choices: group.choices.filter(
+              (choice) =>
+                choice.projectId === context.projectId &&
+                (context.machineId === undefined ||
+                  choice.machineId === context.machineId),
+            ),
+          }))
+          .filter((group) => group.choices.length > 0)
+  const emptyProjectScope =
+    projectsQuery.isSuccess &&
+    machinesQuery.isSuccess &&
+    (context?.machineId === undefined
+      ? groups.length === 0
+      : !groups.some((group) => group.machineId === context.machineId))
 
   const createMutation = useMutation({
+    retry: false,
+    onSettled: () => {
+      submitRef.current = false
+    },
     mutationFn: (selection: {
       readonly projectId: ProjectId
       readonly machineId: MachineId
       readonly provider: ProviderId
-      readonly model?: string
       readonly reasoning?: string
     }) =>
       runtime.createConversation(selection.projectId, {
         machineId: selection.machineId,
         provider: selection.provider,
-        ...(selection.model === undefined ? {} : { model: selection.model }),
         ...(selection.reasoning === undefined
           ? {}
           : { reasoning: selection.reasoning }),
       }),
     onSuccess: async (response) => {
       const projectId = response.data.conversation.projectId
-      if (projectId !== undefined) {
+      if (projectId !== undefined)
         await queryClient.invalidateQueries({
           queryKey: conversationListQueryKeys.project(projectId),
           exact: true,
         })
-      }
       skipCloseFocusRestore.current = true
       await navigate({
-        to: '/conversations/$conversationId',
-        params: {
-          conversationId: response.data.conversation.conversationId,
-        },
+        to: '/c/$conversationId',
+        params: { conversationId: response.data.conversation.conversationId },
         search: { focus: 'composer' },
       })
       closeAfterSuccess()
     },
   })
-
-  const effectiveSelectedProjectId =
-    selectedProjectId ?? availableProjects[0]?.projectId
-  const selectedProject =
-    currentProject ??
-    availableProjects.find(
-      (project) => project.projectId === effectiveSelectedProjectId,
-    )
-  const machineProviderPresentations = providerPresentationsForMachine(
-    machineDetailQuery.data?.providers ?? [],
-  )
-  const providerOptions = machineProviderPresentations.map((provider) => ({
-    provider,
-    eligibility: newConversationProviderEligibility(provider),
-  }))
-  const providers = executableConversationProviders(
-    machineProviderPresentations,
-  )
-  const effectiveProvider = effectiveConversationProvider(
-    selectedProvider,
-    providers,
-  )
-  const effectiveSelectedProvider = effectiveProvider?.provider
-  const selectedProviderPresentation = providerPresentationForMachine(
-    machineDetailQuery.data?.providers ?? [],
-    effectiveSelectedProvider ?? selectedProvider,
-  )
-  const selectedProviderEligibility = newConversationProviderEligibility(
-    selectedProviderPresentation,
-  )
-  const showsModelSelection =
-    effectiveProvider !== undefined &&
-    selectedProviderPresentation.capabilities.modelSelection &&
-    selectedProviderPresentation.models.length > 0
-  const showsReasoning =
-    effectiveProvider !== undefined &&
-    selectedProviderPresentation.capabilities.reasoningControl
-  const supportsReasoningSelection =
-    showsReasoning && selectedProviderPresentation.reasoningOptions.length > 0
-  const effectiveSelectedReasoning = effectiveProviderReasoning(
-    selectedReasoning,
-    selectedProviderPresentation,
-  )
-  const defaultReasoningSelection = providerDefaultReasoningSelection(
-    selectedProviderPresentation,
-  )
-  const effectiveSelectedModel =
-    selectedModel ?? defaultProviderModel(selectedProviderPresentation)
-  const settingCount = 2 + Number(showsModelSelection) + Number(showsReasoning)
-  const hostUnavailable =
-    connectionState === 'unavailable' || connectionState === 'incompatible'
-  const selectedProjectLocation =
-    selectedProject === undefined || effectiveSelectedMachineId === undefined
-      ? undefined
-      : projectLocationForMachine(selectedProject, effectiveSelectedMachineId)
-  const projectUnavailable =
-    selectedProjectLocation?.availability !== 'available'
-  const noAvailableMachines =
-    currentMachineId === undefined &&
-    machinesQuery.isSuccess &&
-    candidateMachines.length === 0
-  const unavailableMachineExplanation = (() => {
-    if (currentProject === undefined || !noAvailableMachines) return undefined
-    const boundMachines = (machinesQuery.data ?? []).filter((machine) =>
-      currentProject.locations.some(
-        (location) => location.machineId === machine.machineId,
-      ),
-    )
-    if (
-      boundMachines.some(
-        (machine) =>
-          machine.kind === 'remote' && !machine.capabilities.providerExecution,
-      )
-    ) {
-      return '此项目已有远程工作区位置，但远程电脑当前未满足在线连接、当前智能体检测或安全执行条件。'
-    }
-    if (boundMachines.some((machine) => machine.availability !== 'available')) {
-      return '此项目的工作区位置所在电脑当前离线或不可用。恢复连接后再创建会话。'
-    }
-    return '当前没有可执行此项目智能体会话的电脑。'
-  })()
-  const noAvailableProjects =
-    currentProject === undefined &&
-    machineContextIssue === undefined &&
-    projectsQuery.isSuccess &&
-    availableProjects.length === 0
   const canSubmit =
     connectionState === 'connected' &&
-    effectiveSelectedProvider !== undefined &&
-    selectedProviderPresentation.available &&
-    selectedProviderPresentation.capabilities.streaming &&
-    selectedProviderPresentation.capabilities.resume &&
-    selectedProviderEligibility.eligible &&
-    machineContextIssue === undefined &&
-    selectedMachine !== undefined &&
+    projectsQuery.isSuccess &&
+    machinesQuery.isSuccess &&
+    project !== undefined &&
+    project.unavailableReason === undefined &&
     machineDetailQuery.isSuccess &&
-    selectedProject !== undefined &&
-    !projectUnavailable &&
+    selectedProvider?.eligibility.eligible === true &&
     !createMutation.isPending
 
-  function setDialogOpen(nextOpen: boolean) {
-    if (!nextOpen && createMutation.isPending) return
-    if (controlledOpen === undefined) setInternalOpen(nextOpen)
-    onOpenChange?.(nextOpen)
-    if (nextOpen) {
-      skipCloseFocusRestore.current = false
-      createMutation.reset()
-      setSelectedProjectId(currentProject?.projectId)
-      setSelectedMachineId(currentMachineId)
-      setSelectedProvider('codex')
-      const defaults = defaultProviderControls(
-        providerPresentationForMachine(
-          machineDetailQuery.data?.providers ?? [],
-          'codex',
-        ),
-      )
-      setSelectedModel(defaults.model)
-      setSelectedReasoning(defaults.reasoning)
-      return
-    }
-    createMutation.reset()
-    setSelectedProjectId(undefined)
-    setSelectedMachineId(undefined)
-    setSelectedProvider('codex')
-    setSelectedModel(undefined)
+  function resetSelection() {
+    setSelectedProject(undefined)
+    setSelectedProviderId(undefined)
     setSelectedReasoning(undefined)
   }
-
   function closeAfterSuccess() {
     if (controlledOpen === undefined) setInternalOpen(false)
     onOpenChange?.(false)
-    setSelectedProjectId(undefined)
-    setSelectedMachineId(undefined)
-    setSelectedProvider('codex')
-    setSelectedModel(undefined)
-    setSelectedReasoning(undefined)
+    resetSelection()
   }
-
+  function setDialogOpen(nextOpen: boolean) {
+    if (!nextOpen && (createMutation.isPending || submitRef.current)) return
+    if (controlledOpen === undefined) setInternalOpen(nextOpen)
+    onOpenChange?.(nextOpen)
+    createMutation.reset()
+    resetSelection()
+    if (nextOpen) skipCloseFocusRestore.current = false
+  }
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (
+      submitRef.current ||
       !canSubmit ||
-      selectedProject === undefined ||
-      selectedMachine === undefined ||
-      effectiveSelectedProvider === undefined
-    ) {
+      project === undefined ||
+      presentation === undefined
+    )
       return
-    }
+    submitRef.current = true
     createMutation.mutate({
-      projectId: selectedProject.projectId,
-      machineId: selectedMachine.machineId,
-      provider: effectiveSelectedProvider,
-      ...(showsModelSelection && effectiveSelectedModel !== undefined
-        ? { model: effectiveSelectedModel }
-        : {}),
-      ...(supportsReasoningSelection && effectiveSelectedReasoning !== undefined
-        ? { reasoning: effectiveSelectedReasoning }
+      projectId: project.projectId,
+      machineId: project.machineId,
+      provider: presentation.provider,
+      ...(presentation.capabilities.reasoningControl && reasoning !== undefined
+        ? { reasoning }
         : {}),
     })
-  }
-
-  function handleProviderChange(value: string) {
-    const provider = value as ProviderId
-    const presentation = providerPresentationForMachine(
-      machineDetailQuery.data?.providers ?? [],
-      provider,
-    )
-    const defaults = defaultProviderControls(presentation)
-    setSelectedProvider(provider)
-    setSelectedModel(defaults.model)
-    setSelectedReasoning(defaults.reasoning)
-    createMutation.reset()
   }
 
   return (
@@ -362,7 +264,8 @@ export function NewConversationDialog({
       {trigger ? <DialogTrigger asChild>{trigger}</DialogTrigger> : null}
       <DialogContent
         closeLabel="关闭新建会话对话框"
-        className="max-w-lg overflow-x-hidden"
+        showCloseButton={!createMutation.isPending}
+        className="ct-new-conversation-dialog overflow-x-hidden"
         onCloseAutoFocus={(event) => {
           if (skipCloseFocusRestore.current) {
             skipCloseFocusRestore.current = false
@@ -384,372 +287,139 @@ export function NewConversationDialog({
             </span>
             <DialogTitle>新建会话</DialogTitle>
             <DialogDescription>
-              在已授权项目中创建一个会话。智能体和运行电脑创建后将保持不变。
+              选择项目和 AI 工具，CodeTether 会在对应文件夹里启动一个会话。
             </DialogDescription>
           </DialogHeader>
-
           <div className="mt-5 space-y-4">
-            <div>
-              <p className="text-sm font-medium text-text-primary">项目</p>
-              {currentProject ? (
-                <div className="mt-2 flex min-w-0 items-center gap-2.5 rounded-sm border border-border-strong bg-surface-muted px-3 py-2.5">
-                  <FolderOpen
-                    aria-hidden="true"
-                    className="size-4 shrink-0 text-primary"
-                  />
-                  <span className="min-w-0 flex-1 truncate text-sm text-text-primary">
-                    {currentProject.name}
-                  </span>
-                  <LockKeyhole
-                    aria-label="当前项目已锁定"
-                    className="size-3.5 shrink-0 text-text-muted"
-                  />
-                </div>
-              ) : connectionState === 'connected' && !noAvailableProjects ? (
-                <Select
-                  value={effectiveSelectedProjectId ?? ''}
-                  onValueChange={(value) => {
-                    const projectId = ProjectIdSchema.safeParse(value)
-                    if (projectId.success) setSelectedProjectId(projectId.data)
-                  }}
-                  disabled={projectsQuery.isPending || createMutation.isPending}
-                >
-                  <SelectTrigger className="mt-2" aria-label="选择项目">
-                    <SelectValue placeholder="选择可用项目">
-                      {selectedProject === undefined
-                        ? undefined
-                        : createProjectOptionPresentation(
-                            selectedProject,
-                            effectiveSelectedMachineId,
-                          ).textValue}
-                    </SelectValue>
-                  </SelectTrigger>
-                  <SelectContent>
-                    {availableProjects.map((project) => {
-                      const presentation = createProjectOptionPresentation(
-                        project,
-                        effectiveSelectedMachineId,
-                      )
-
-                      return (
-                        <SelectItem
-                          key={project.projectId}
-                          value={project.projectId}
-                          textValue={presentation.textValue}
-                          className="py-2"
-                        >
-                          <span className="grid min-w-0 gap-0.5">
-                            <span className="truncate text-text-primary">
-                              {presentation.name}
-                            </span>
-                            <span
-                              className="truncate text-xs text-text-muted"
-                              title={presentation.rootPath}
-                            >
-                              {presentation.rootPath}
-                            </span>
-                          </span>
-                        </SelectItem>
-                      )
-                    })}
-                  </SelectContent>
-                </Select>
-              ) : null}
-            </div>
-
-            <dl
-              className={cn(
-                'grid gap-3 rounded-sm border border-border bg-surface/55 px-3 py-3 text-sm',
-                settingCount >= 4
-                  ? 'grid-cols-2'
-                  : settingCount === 3
-                    ? 'grid-cols-2 sm:grid-cols-3'
-                    : settingCount === 2
-                      ? 'grid-cols-2'
-                      : 'grid-cols-1',
-              )}
-            >
-              <LockedSetting
-                label="智能体"
-                value={
-                  <Select
-                    value={effectiveSelectedProvider ?? ''}
-                    onValueChange={handleProviderChange}
-                    disabled={createMutation.isPending}
-                  >
-                    <SelectTrigger
-                      size="sm"
-                      aria-label="选择智能体"
-                      aria-describedby={
-                        selectedProviderEligibility.executionAdvisory ===
-                        undefined
-                          ? undefined
-                          : providerHealthNoticeId
-                      }
-                    >
-                      <SelectValue placeholder="选择可执行智能体">
-                        {effectiveSelectedProvider === undefined ? undefined : (
-                          <span className="flex min-w-0 items-center gap-1.5">
-                            <AgentBadge
-                              agent={selectedProviderPresentation.agent}
-                              variant="compact"
-                            />
-                            <span className="truncate">
-                              {selectedProviderPresentation.displayName}
-                            </span>
-                          </span>
-                        )}
-                      </SelectValue>
-                    </SelectTrigger>
-                    <SelectContent>
-                      {providerOptions.map(({ provider, eligibility }) => (
-                        <SelectItem
-                          key={provider.provider}
-                          value={provider.provider}
-                          textValue={eligibility.label}
-                          disabled={!eligibility.eligible}
-                          className="py-2"
-                        >
-                          <span className="grid min-w-0 gap-0.5">
-                            <span className="flex min-w-0 items-center gap-1.5 text-text-primary">
-                              <AgentBadge
-                                agent={provider.agent}
-                                variant="compact"
-                              />
-                              <span className="truncate">
-                                {provider.displayName}
-                              </span>
-                            </span>
-                            <span className="truncate text-xs text-text-muted">
-                              {provider.availabilityLabel}
-                              {provider.version === undefined
-                                ? ''
-                                : ` · ${provider.version}`}
-                              {eligibility.executionLabel === undefined
-                                ? ''
-                                : ` · ${eligibility.executionLabel}`}
-                            </span>
-                          </span>
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                }
-              />
-              <LockedSetting
-                label="运行位置"
-                value={
-                  <Select
-                    value={effectiveSelectedMachineId ?? ''}
-                    onValueChange={(value) => {
-                      const machineId = MachineIdSchema.safeParse(value)
-                      if (!machineId.success) return
-                      setSelectedMachineId(machineId.data)
-                      setSelectedProjectId(undefined)
-                      setSelectedProvider('codex')
-                      setSelectedModel(undefined)
-                      setSelectedReasoning(undefined)
-                      createMutation.reset()
-                    }}
-                    disabled={
-                      currentMachineId !== undefined ||
-                      machinesQuery.isPending ||
-                      createMutation.isPending
-                    }
-                  >
-                    <SelectTrigger
-                      size="sm"
-                      aria-label="选择运行电脑"
-                      aria-describedby={
-                        machineContextExplanation === undefined
-                          ? undefined
-                          : machineContextNoticeId
-                      }
-                    >
-                      <SelectValue
-                        placeholder={
-                          currentMachineId === undefined
-                            ? '选择电脑'
-                            : '所选电脑不可用'
-                        }
-                      >
-                        {selectedMachine === undefined ? undefined : (
-                          <span className="flex min-w-0 items-center gap-1.5">
-                            <Monitor
-                              aria-hidden="true"
-                              className="size-3.5 shrink-0"
-                            />
-                            <span className="truncate">
-                              {selectedMachine.displayName}
-                            </span>
-                          </span>
-                        )}
-                      </SelectValue>
-                    </SelectTrigger>
-                    <SelectContent>
-                      {candidateMachines.map((machine) => (
-                        <SelectItem
-                          key={machine.machineId}
-                          value={machine.machineId}
-                          textValue={machine.displayName}
-                        >
-                          {machine.displayName}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                }
-              />
-              {showsModelSelection ? (
-                <LockedSetting
-                  label="模型"
-                  value={
-                    <Select
-                      value={effectiveSelectedModel}
-                      onValueChange={setSelectedModel}
-                      disabled={createMutation.isPending}
-                    >
-                      <SelectTrigger size="sm" aria-label="选择模型">
-                        <SelectValue placeholder="选择模型" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {selectedProviderPresentation.models.map((model) => (
-                          <SelectItem
-                            key={model.id}
-                            value={model.id}
-                            textValue={model.label}
-                          >
-                            {model.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  }
-                />
-              ) : null}
-              {showsReasoning ? (
-                <LockedSetting
-                  label={selectedProviderPresentation.reasoningLabel}
-                  value={
-                    supportsReasoningSelection ? (
-                      <Select
-                        value={
-                          effectiveSelectedReasoning ??
-                          defaultReasoningSelection
-                        }
-                        onValueChange={(value) =>
-                          setSelectedReasoning(
-                            providerReasoningFromControl(
-                              value,
-                              selectedProviderPresentation,
-                            ),
-                          )
-                        }
-                        disabled={createMutation.isPending}
-                      >
-                        <SelectTrigger
-                          size="sm"
-                          aria-label={`选择${selectedProviderPresentation.reasoningLabel}`}
-                        >
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value={defaultReasoningSelection}>
-                            默认
-                          </SelectItem>
-                          {selectedProviderPresentation.reasoningOptions.map(
-                            (option) => (
-                              <SelectItem
-                                key={option.id}
-                                value={option.id}
-                                textValue={option.label}
-                              >
-                                {option.label}
-                              </SelectItem>
-                            ),
-                          )}
-                        </SelectContent>
-                      </Select>
-                    ) : (
-                      '默认'
-                    )
-                  }
-                />
-              ) : null}
-            </dl>
-
-            {selectedProviderEligibility.executionAdvisory ===
+            <NewConversationFields
+              groups={scopedGroups}
+              project={project}
+              fixed={projectSelection.fixed}
+              loading={loading}
+              busy={createMutation.isPending}
+              providerOptions={providerOptions}
+              selectedProvider={selectedProvider}
+              reasoning={reasoning}
+              defaultReasoning={defaultReasoning}
+              formId={formId}
+              onProjectChange={(key) => {
+                if (submitRef.current) return
+                const selection = eligibleConversationProjectSelection(
+                  groups,
+                  key,
+                  context,
+                )
+                if (selection === undefined) return
+                setSelectedProject(selection)
+                if (selection.machineId !== selectedMachineId)
+                  setSelectedProviderId(undefined)
+                setSelectedReasoning(undefined)
+                createMutation.reset()
+              }}
+              onProviderChange={(providerId) => {
+                if (submitRef.current) return
+                if (
+                  !providerOptions.some(
+                    (option) =>
+                      option.provider.provider === providerId &&
+                      option.eligibility.eligible,
+                  )
+                )
+                  return
+                setSelectedProviderId(providerId)
+                setSelectedReasoning(undefined)
+                createMutation.reset()
+              }}
+              onReasoningChange={(value) => {
+                if (submitRef.current) return
+                if (presentation !== undefined)
+                  setSelectedReasoning(
+                    providerReasoningFromControl(value, presentation),
+                  )
+              }}
+            />
+            {project?.unavailableReason === undefined ? null : (
+              <InlineNotice>
+                {project.unavailableReason +
+                  '。请在设备详情恢复连接或目录访问后再创建会话。'}
+              </InlineNotice>
+            )}
+            {!loading && projectSelection.requiresSelection ? (
+              <InlineNotice>
+                {context?.kind === 'fixed-project'
+                  ? '此项目没有唯一可用的位置。请选择此项目所在的设备，或返回设备详情检查原位置。'
+                  : '原先选择的项目或设备不可用。请选择项目，不会自动改用其他设备。'}
+              </InlineNotice>
+            ) : null}
+            {selectedProvider?.eligibility.executionAdvisory ===
             undefined ? null : (
-              <InlineNotice id={providerHealthNoticeId}>
-                {selectedProviderEligibility.executionAdvisory}
+              <InlineNotice>
+                {selectedProvider.eligibility.executionAdvisory}
               </InlineNotice>
             )}
-
-            {machineContextExplanation === undefined ? null : (
-              <InlineNotice id={machineContextNoticeId}>
-                {machineContextExplanation}
-              </InlineNotice>
-            )}
-            {projectUnavailable && machineContextIssue === undefined ? (
+            {selectedProvider?.eligibility.eligible === false ? (
+              <InlineNotice>{selectedProvider.eligibility.label}</InlineNotice>
+            ) : null}
+            {!loading &&
+            project !== undefined &&
+            project.unavailableReason === undefined &&
+            selectedProvider === undefined ? (
               <InlineNotice>
-                项目目录当前不可用；恢复原目录后才能创建会话。
+                此设备当前没有可通过 CodeTether 启动可恢复流式会话的 AI
+                工具。请在设备详情检查当前安装，不会自动改用其他工具。
               </InlineNotice>
             ) : null}
-            {noAvailableMachines ? (
+            {emptyProjectScope ? (
               <InlineNotice>
-                {unavailableMachineExplanation ??
-                  '当前没有可执行此项目智能体会话的电脑。'}
+                此设备还没有项目。请先添加一个已授权文件夹。
               </InlineNotice>
             ) : null}
-            {hostUnavailable ? (
+            {connectionState !== 'connected' ? (
               <InlineNotice>
                 {connectionState === 'incompatible'
                   ? '当前 CodeTether 版本不兼容。'
-                  : 'CodeTether 暂时无法连接。'}
-              </InlineNotice>
-            ) : null}
-            {connectionState === 'connected' &&
-            machineDetailQuery.isSuccess &&
-            effectiveSelectedProvider === undefined ? (
-              <InlineNotice>
-                此电脑当前没有可通过 CodeTether 启动可恢复流式会话的智能体。
-              </InlineNotice>
-            ) : null}
-            {noAvailableProjects ? (
-              <InlineNotice>
-                还没有可用项目。请先添加或恢复一个本地工作区。
+                  : 'CodeTether 暂时无法连接，连接恢复后才能创建会话。'}
               </InlineNotice>
             ) : null}
             {projectsQuery.isError ? (
-              <p
-                role="alert"
-                className="rounded-sm border border-danger/30 bg-danger-muted px-3 py-2 text-sm text-danger"
-              >
+              <InlineError>
                 {projectErrorMessage(projectsQuery.error, 'load')}
-              </p>
+              </InlineError>
             ) : null}
             {machinesQuery.isError || machineDetailQuery.isError ? (
-              <p
-                role="alert"
-                className="rounded-sm border border-danger/30 bg-danger-muted px-3 py-2 text-sm text-danger"
-              >
-                CodeTether 暂时无法读取电脑，请重试。
-              </p>
+              <InlineError>CodeTether 暂时无法读取设备，请重试。</InlineError>
             ) : null}
             {createMutation.isError ? (
-              <p
-                role="alert"
-                className="rounded-sm border border-danger/30 bg-danger-muted px-3 py-2 text-sm text-danger"
-              >
-                {newConversationErrorMessage(
-                  createMutation.error,
-                  effectiveSelectedProvider ?? selectedProvider,
-                )}
-              </p>
+              <>
+                <InlineError>
+                  {newConversationErrorMessage(
+                    createMutation.error,
+                    presentation?.provider ?? selectedProviderId ?? 'codex',
+                  )}
+                </InlineError>
+                <p className="text-xs text-text-muted">
+                  不会自动重试。如果创建结果尚未确认，请先返回项目检查会话列表。
+                </p>
+              </>
             ) : null}
           </div>
-
           <DialogFooter className="mt-6">
+            {onAddProject === undefined ? null : (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="sm:mr-auto"
+                disabled={createMutation.isPending}
+                onClick={() => {
+                  if (submitRef.current) return
+                  skipCloseFocusRestore.current = true
+                  onAddProject(selectedMachineId ?? context?.machineId)
+                }}
+              >
+                添加项目
+              </Button>
+            )}
             <DialogClose asChild>
               <Button
                 variant="secondary"
@@ -759,20 +429,9 @@ export function NewConversationDialog({
                 取消
               </Button>
             </DialogClose>
-            {noAvailableProjects ? (
-              <Button
-                type="button"
-                size="sm"
-                disabled={onAddProject === undefined}
-                onClick={onAddProject}
-              >
-                添加项目
-              </Button>
-            ) : (
-              <Button type="submit" size="sm" disabled={!canSubmit}>
-                {createMutation.isPending ? '正在创建…' : '创建会话'}
-              </Button>
-            )}
+            <Button type="submit" size="sm" disabled={!canSubmit}>
+              {createMutation.isPending ? '正在创建…' : '创建会话'}
+            </Button>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -780,29 +439,21 @@ export function NewConversationDialog({
   )
 }
 
-function LockedSetting({
-  label,
-  value,
-}: {
-  label: string
-  value: ReactElement | string
-}) {
-  return (
-    <div className="min-w-0">
-      <dt className="text-xs text-text-muted">{label}</dt>
-      <dd className="mt-1 flex min-h-7 items-center truncate font-medium text-text-primary">
-        {value}
-      </dd>
-    </div>
-  )
-}
-
-function InlineNotice({ children, id }: { children: string; id?: string }) {
+function InlineNotice({ children }: { children: string }) {
   return (
     <p
-      id={id}
       role="status"
       className="rounded-sm border border-warning/30 bg-warning-muted/35 px-3 py-2 text-sm text-text-secondary"
+    >
+      {children}
+    </p>
+  )
+}
+function InlineError({ children }: { children: string }) {
+  return (
+    <p
+      role="alert"
+      className="rounded-sm border border-danger/30 bg-danger-muted px-3 py-2 text-sm text-danger"
     >
       {children}
     </p>

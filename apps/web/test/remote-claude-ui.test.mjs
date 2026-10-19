@@ -5,26 +5,30 @@ import test from 'node:test'
 const sourceRoot = new URL('../src/', import.meta.url)
 
 test('Remote Claude creation is executable-gated and exposes only Provider effort controls', async () => {
-  const [dialog, selection] = await Promise.all([
+  const [dialog, selection, fields, creationSelection] = await Promise.all([
     source('components/conversations/new-conversation-dialog.tsx'),
     source('components/conversations/new-conversation-provider-selection.ts'),
+    source('components/conversations/new-conversation-fields.tsx'),
+    source('components/conversations/new-conversation-selection.ts'),
   ])
 
   assert.match(
     selection,
     /provider\.available[\s\S]*provider\.capabilities\.streaming[\s\S]*provider\.capabilities\.resume/u,
   )
-  assert.match(dialog, /effectiveConversationProvider/u)
-  assert.match(dialog, /provider: effectiveSelectedProvider/u)
-  assert.match(dialog, /effectiveSelectedProvider === undefined/u)
-  assert.match(dialog, /启动可恢复流式会话的智能体/u)
-  assert.match(dialog, /capabilities\.modelSelection/u)
-  assert.match(dialog, /capabilities\.reasoningControl/u)
-  assert.match(dialog, /selectedProviderPresentation\.reasoningOptions\.map/u)
+  assert.match(dialog, /resolveConversationCreationProvider/u)
+  assert.match(dialog, /provider: presentation\.provider/u)
+  assert.match(dialog, /selectedProvider === undefined/u)
+  assert.match(dialog, /启动可恢复流式会话的 AI\s*工具/u)
+  assert.doesNotMatch(dialog + fields, /modelSelection|选择模型|selectedModel/u)
   assert.match(
-    dialog,
-    /aria-label=\{`选择\$\{selectedProviderPresentation\.reasoningLabel\}`\}/u,
+    creationSelection,
+    /providerLifecycleSupportsConversationExecution/u,
   )
+  assert.match(creationSelection, /selectedInstallationId/u)
+  assert.match(dialog, /capabilities\.reasoningControl/u)
+  assert.match(fields, /presentation\.reasoningOptions\.map/u)
+  assert.match(fields, /presentation\.reasoningLabel/u)
   assert.doesNotMatch(
     dialog,
     /approvalMode|shellPermission|interruptMode|diffMode/u,
@@ -54,17 +58,21 @@ test('Remote Claude Detail keeps execution and Inspector controls capability-dri
 })
 
 test('Remote Claude offline and archived history remain responsive and accessible', async () => {
-  const [dialog, detail, workspace, inspector, controls] = await Promise.all([
-    source('components/conversations/new-conversation-dialog.tsx'),
-    source('components/conversation/conversation-detail-page.tsx'),
-    source('components/conversation/conversation-workspace.tsx'),
-    source('components/conversation/inspector-panel.tsx'),
-    source('components/conversation/conversation-controls.ts'),
-  ])
+  const [dialog, detail, workspace, inspector, controls, fields] =
+    await Promise.all([
+      source('components/conversations/new-conversation-dialog.tsx'),
+      source('components/conversation/conversation-detail-page.tsx'),
+      source('components/conversation/conversation-workspace.tsx'),
+      source('components/conversation/inspector-panel.tsx'),
+      source('components/conversation/conversation-controls.ts'),
+      source('components/conversations/new-conversation-fields.tsx'),
+    ])
 
-  assert.match(dialog, /max-w-lg overflow-x-hidden/u)
-  assert.match(dialog, /aria-label="选择智能体"/u)
-  assert.match(dialog, /aria-label="选择运行电脑"/u)
+  assert.match(dialog, /ct-new-conversation-dialog overflow-x-hidden/u)
+  assert.match(fields, /<fieldset/u)
+  assert.match(fields, /type="radio"/u)
+  assert.match(fields, /aria-label="选择项目"/u)
+  assert.match(fields, /project\.location\.rootPath/u)
   assert.match(dialog, /onCloseAutoFocus/u)
   assert.match(detail, /grid-cols-\[minmax\(0,1fr\)\]/u)
   assert.doesNotMatch(detail, /ConversationRail|layout-conversation-rail/u)

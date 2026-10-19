@@ -104,6 +104,9 @@ function StandardRootLayout({ currentPath }: { currentPath: string }) {
   const currentMachineId =
     currentConversation?.machineId ??
     (parsedMachine.success ? parsedMachine.data : undefined) ??
+    (projectMatch !== null && selectedMachine.success
+      ? selectedMachine.data
+      : undefined) ??
     (projectMatch !== null && projectContext?.kind === 'selected'
       ? projectContext.location.machineId
       : undefined)
@@ -167,6 +170,7 @@ function StandardRootLayout({ currentPath }: { currentPath: string }) {
       currentPage={currentPage}
       currentPath={currentPath}
       currentProject={currentProject}
+      currentProjectId={projectId}
       currentConversation={currentConversation}
       currentMachineId={currentMachineId}
       inboxAttentionCount={attentionQuery.data?.summary.totalOpen}

@@ -76,6 +76,7 @@ export interface WorkspaceSidebarProps extends Omit<
     project: ProjectRecord | undefined,
     trigger: HTMLButtonElement,
     machineId?: MachineId,
+    mode?: 'fixed' | 'preselected',
   ) => void
   onSettingsClick?: (event: MouseEvent<HTMLAnchorElement>) => void
 }
@@ -149,6 +150,7 @@ export function WorkspaceSidebar({
       <div className="shrink-0 px-3 pt-3 pb-2">
         <Button
           type="button"
+          data-slot="workspace-new-conversation"
           size="sm"
           className="h-9 w-full justify-start gap-2 px-3"
           onClick={(event) =>
@@ -156,6 +158,7 @@ export function WorkspaceSidebar({
               activeProject,
               event.currentTarget,
               activeMachineId,
+              'preselected',
             )
           }
         >
@@ -500,7 +503,12 @@ function WorkspaceProjectSection({
             label={`在 ${project.name} 中新建会话`}
             className="size-6 shrink-0 text-text-muted opacity-0 group-hover/project:opacity-100 group-focus-within/project:opacity-100 focus-visible:opacity-100"
             onClick={(event) =>
-              onNewConversation(project, event.currentTarget, machine.machineId)
+              onNewConversation(
+                project,
+                event.currentTarget,
+                machine.machineId,
+                'fixed',
+              )
             }
           >
             <Plus aria-hidden="true" />

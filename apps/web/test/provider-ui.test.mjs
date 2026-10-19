@@ -432,19 +432,25 @@ test('existing UI surfaces consume Provider truth without adding a switch to Det
 
   assert.match(dialog, /providerPresentationsForMachine\(/u)
   assert.match(dialog, /machineDetailQuery\.data\?\.providers/u)
-  assert.match(dialog, /executableConversationProviders/u)
-  assert.match(dialog, /effectiveSelectedProvider/u)
-  assert.match(dialog, /newConversationProviderEligibility/u)
-  assert.match(dialog, /disabled=\{!eligibility\.eligible\}/u)
-  assert.match(dialog, /selectedProviderEligibility\.executionAdvisory/u)
-  assert.match(dialog, /aria-describedby/u)
-  assert.match(dialog, /capabilities\.resume/u)
-  assert.doesNotMatch(dialog, /disabled=\{!provider\.available\}/u)
-  assert.match(dialog, /capabilities\.modelSelection/u)
-  assert.match(dialog, /capabilities\.reasoningControl/u)
-  assert.match(dialog, /reasoningOptions/u)
-  assert.match(dialog, /supportsReasoningSelection/u)
-  assert.match(dialog, /reasoning: effectiveSelectedReasoning/u)
+  const fields = await readFile(
+    new URL('components/conversations/new-conversation-fields.tsx', root),
+    'utf8',
+  )
+  const selection = await readFile(
+    new URL('components/conversations/new-conversation-selection.ts', root),
+    'utf8',
+  )
+  assert.match(dialog, /conversationCreationProviderOptions/u)
+  assert.match(dialog, /resolveConversationCreationProvider/u)
+  assert.match(selection, /newConversationProviderEligibility/u)
+  assert.match(selection, /providerLifecycleSupportsConversationExecution/u)
+  assert.match(fields, /!option\.eligibility\.eligible/u)
+  assert.match(dialog, /selectedProvider\.eligibility\.executionAdvisory/u)
+  assert.match(fields, /aria-describedby/u)
+  assert.match(fields, /capabilities\.reasoningControl/u)
+  assert.match(fields, /reasoningOptions/u)
+  assert.match(dialog, /\{ reasoning \}/u)
+  assert.doesNotMatch(dialog + fields, /modelSelection|选择模型/u)
   assert.doesNotMatch(sidebar, /provider\.availabilityLabel/u)
   assert.doesNotMatch(sidebar, /provider\.version/u)
   assert.match(chromeActions, /capabilities\.supportsInterrupt/u)

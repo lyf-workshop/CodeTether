@@ -227,11 +227,16 @@ test('New Conversation binds Machine identity and machine-scoped Provider truth'
   assert.match(dialog, /machineListQueryOptions/u)
   assert.match(dialog, /machineDetailQueryOptions/u)
   assert.match(dialog, /providerPresentationsForMachine/u)
-  assert.match(dialog, /effectiveSelectedProvider/u)
+  assert.match(dialog, /resolveConversationCreationProvider/u)
   assert.match(providerSelection, /provider\.capabilities\.streaming/u)
   assert.match(providerSelection, /provider\.capabilities\.resume/u)
   assert.match(dialog, /machineId: selection\.machineId/u)
-  assert.match(dialog, /aria-label="选择运行电脑"/u)
+  const fields = await source(
+    'components/conversations/new-conversation-fields.tsx',
+  )
+  assert.match(fields, /aria-label="选择项目"/u)
+  assert.match(fields, /project\.location\.rootPath/u)
+  assert.doesNotMatch(fields, /选择运行电脑/u)
   assert.match(actions, /current\.machineId === machine/u)
   assert.match(actions, /response\.data\.conversation\.machineId !== machine/u)
   assert.match(

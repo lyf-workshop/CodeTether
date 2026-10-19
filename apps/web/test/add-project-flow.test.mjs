@@ -110,15 +110,22 @@ test('TopBar no-project flow swaps sibling dialogs and returns to New Conversati
   assert.match(shell, /'add-project' \| 'new-conversation' \| null/u)
   assert.match(
     shell,
-    /onAddProject=\{\(\) => \{[\s\S]*setReturnToConversation\(true\)[\s\S]*setGlobalDialog\('add-project'\)/u,
+    /onAddProject=\{\(machineId\) => \{[\s\S]*setReturnToConversation\(true\)[\s\S]*setGlobalDialog\('add-project'\)/u,
   )
   assert.match(shell, /<AddProjectDialog/u)
   assert.match(
     shell,
-    /onProjectCreated=\{async \(project, _created, machineId\) => \{[\s\S]*setNewConversationProject\(project\)[\s\S]*setNewConversationMachineId\(machineId\)/u,
+    /onProjectCreated=\{async \(project, _created, machineId\) => \{[\s\S]*setNewConversationContext\([\s\S]*kind: 'preselected'[\s\S]*projectId: project\.projectId/u,
   )
-  assert.match(newConversation, /onAddProject\?: \(\) => void/u)
-  assert.match(newConversation, /onClick=\{onAddProject\}/u)
+  assert.match(
+    newConversation,
+    /onAddProject\?: \(machineId\?: MachineId\) => void/u,
+  )
+  assert.match(
+    newConversation,
+    /skipCloseFocusRestore\.current = true[\s\S]*onAddProject\(selectedMachineId \?\? context\?\.machineId\)/u,
+  )
+  assert.doesNotMatch(shell, /useState<\s*ProjectRecord \| undefined/u)
   assert.doesNotMatch(newConversation, /to="\/projects"/u)
 })
 

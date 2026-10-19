@@ -9,10 +9,12 @@ import {
 import type {
   ConversationSummary,
   MachineId,
+  ProjectId,
   ProjectRecord,
 } from '@codetether/protocol'
 
 import { NewConversationDialog } from '../conversations/new-conversation-dialog'
+import type { NewConversationLaunchContext } from '../conversations/new-conversation-selection'
 import { AddProjectDialog } from '../projects/add-project-dialog'
 import { MainContent } from './main-content'
 import { WorkspaceSidebar } from './workspace-sidebar'
@@ -33,6 +35,7 @@ interface AppShellProps {
   currentPath: string
   currentConversation?: ConversationSummary
   currentProject?: ProjectRecord
+  currentProjectId?: ProjectId
   currentMachineId?: MachineId
   inboxAttentionCount?: number
 }
@@ -44,17 +47,14 @@ export function AppShell({
   currentPath,
   currentConversation,
   currentProject,
+  currentProjectId: requestedProjectId,
   currentMachineId,
   inboxAttentionCount = 0,
 }: AppShellProps) {
   const navigate = useNavigate()
-  const newConversationTriggerRef = useRef<HTMLButtonElement>(null)
-  const [newConversationProject, setNewConversationProject] = useState<
-    ProjectRecord | undefined
-  >()
-  const [newConversationMachineId, setNewConversationMachineId] = useState<
-    MachineId | undefined
-  >()
+  const newConversationTriggerRef = useRef<HTMLElement>(null)
+  const [newConversationContext, setNewConversationContext] =
+    useState<NewConversationLaunchContext>()
   const [addProjectMachineId, setAddProjectMachineId] = useState<
     MachineId | undefined
   >()
@@ -70,20 +70,58 @@ export function AppShell({
   const [workspaceChromeTarget, setWorkspaceChromeTarget] =
     useState<HTMLDivElement | null>(null)
   const sidebarLayout = useWorkspaceSidebarWidth()
+  const currentProjectId =
+    currentConversation?.projectId ??
+    requestedProjectId ??
+    currentProject?.projectId
 
   useEffect(() => {
     writeWorkspaceSidebarCollapsed(optionalLocalStorage(), sidebarCollapsed)
   }, [sidebarCollapsed])
   useEffect(() => {
     function handleShortcut(event: KeyboardEvent) {
-      if ((event.metaKey || event.ctrlKey) && event.key === ',') {
+      if (
+        !(event.metaKey || event.ctrlKey) ||
+        event.altKey ||
+        event.shiftKey ||
+        event.repeat
+      )
+        return
+      if (event.key.toLowerCase() === 'n') {
+        event.preventDefault()
+        if (
+          globalDialog !== null ||
+          settingsOpen ||
+          document.querySelector('[role="dialog"][data-state="open"]')
+        )
+          return
+        newConversationTriggerRef.current =
+          document.activeElement instanceof HTMLElement &&
+          document.activeElement !== document.body
+            ? document.activeElement
+            : document.querySelector<HTMLButtonElement>(
+                '[data-slot="workspace-new-conversation"]',
+              )
+        setNewConversationContext({
+          kind: 'preselected',
+          ...(currentProjectId === undefined
+            ? {}
+            : { projectId: currentProjectId }),
+          ...(currentMachineId === undefined
+            ? {}
+            : { machineId: currentMachineId }),
+        })
+        setGlobalDialog('new-conversation')
+        return
+      }
+      if (event.key === ',') {
         event.preventDefault()
         setSettingsOpen(true)
       }
     }
     window.addEventListener('keydown', handleShortcut)
     return () => window.removeEventListener('keydown', handleShortcut)
-  }, [])
+  }, [currentMachineId, currentProjectId, globalDialog, settingsOpen])
 
   return (
     <TooltipProvider>
@@ -108,7 +146,7 @@ export function AppShell({
             <>
               <WorkspaceSidebar
                 currentPath={currentPath}
-                currentProjectId={currentProject?.projectId}
+                currentProjectId={currentProjectId}
                 currentMachineId={currentMachineId}
                 currentConversationId={conversationIdFromPath(currentPath)}
                 currentConversation={currentConversation}
@@ -118,10 +156,25 @@ export function AppShell({
                   setReturnToConversation(false)
                   setGlobalDialog('add-project')
                 }}
-                onNewConversation={(project, trigger, machineId) => {
+                onNewConversation={(project, trigger, machineId, mode) => {
                   newConversationTriggerRef.current = trigger
-                  setNewConversationProject(project)
-                  setNewConversationMachineId(machineId)
+                  const contextProjectId =
+                    project?.projectId ?? currentProjectId
+                  setNewConversationContext(
+                    project !== undefined && mode !== 'preselected'
+                      ? {
+                          kind: 'fixed-project',
+                          projectId: project.projectId,
+                          ...(machineId === undefined ? {} : { machineId }),
+                        }
+                      : {
+                          kind: 'preselected',
+                          ...(contextProjectId === undefined
+                            ? {}
+                            : { projectId: contextProjectId }),
+                          ...(machineId === undefined ? {} : { machineId }),
+                        },
+                  )
                   setGlobalDialog('new-conversation')
                 }}
                 onSettingsClick={(event) => {
@@ -163,19 +216,30 @@ export function AppShell({
           </WorkspaceChromeTargetProvider>
         </div>
         <NewConversationDialog
-          currentProject={newConversationProject}
-          currentMachineId={newConversationMachineId}
+          key={
+            newConversationContext === undefined
+              ? 'global'
+              : [
+                  newConversationContext.kind,
+                  newConversationContext.projectId,
+                  newConversationContext.machineId,
+                ].join(':')
+          }
+          launchContext={newConversationContext}
           open={globalDialog === 'new-conversation'}
-          onAddProject={() => {
-            setAddProjectMachineId(newConversationMachineId ?? currentMachineId)
+          onAddProject={(machineId) => {
+            setAddProjectMachineId(
+              machineId ??
+                newConversationContext?.machineId ??
+                currentMachineId,
+            )
             setReturnToConversation(true)
             setGlobalDialog('add-project')
           }}
           onOpenChange={(open) => {
             setGlobalDialog(open ? 'new-conversation' : null)
             if (!open) {
-              setNewConversationProject(undefined)
-              setNewConversationMachineId(undefined)
+              setNewConversationContext(undefined)
             }
           }}
           returnFocusRef={newConversationTriggerRef}
@@ -194,8 +258,11 @@ export function AppShell({
           }
           onProjectCreated={async (project, _created, machineId) => {
             if (returnToConversation) {
-              setNewConversationProject(project)
-              setNewConversationMachineId(machineId)
+              setNewConversationContext({
+                kind: 'preselected',
+                projectId: project.projectId,
+                ...(machineId === undefined ? {} : { machineId }),
+              })
               setGlobalDialog('new-conversation')
             } else {
               setGlobalDialog(null)

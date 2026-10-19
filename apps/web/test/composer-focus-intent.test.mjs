@@ -34,6 +34,7 @@ test('create navigation carries one transient Composer focus intent', async () =
   assert.ok(navigationIndex >= 0)
   assert.ok(closeIndex > navigationIndex)
   assert.match(dialog, /search: \{ focus: 'composer' \}/u)
+  assert.match(dialog, /to: '\/c\/\$conversationId'/u)
   assert.match(dialog, /skipCloseFocusRestore\.current = true/u)
   assert.match(dialog, /event\.preventDefault\(\)/u)
   assert.match(router, /focus: search\.focus === 'composer'/u)

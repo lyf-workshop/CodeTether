@@ -174,15 +174,19 @@ test('New Conversation excludes identity-only remote Machines by canonical capab
   ])
 
   assert.match(machineSelection, /machine\.capabilities\.projectAccess/u)
-  assert.match(dialog, /selectNewConversationMachine/u)
+  const selection = await source(
+    'components/conversations/new-conversation-selection.ts',
+  )
+  assert.match(selection, /selectNewConversationMachine/u)
   assert.match(machineSelection, /machine\.capabilities\.providerExecution/u)
-  assert.match(dialog, /projectLocationForMachine/u)
-  assert.match(dialog, /executableConversationProviders/u)
+  assert.match(selection, /project\.locations\.map/u)
+  assert.match(dialog, /conversationCreationProviderOptions/u)
   assert.match(
     providerSelection,
     /provider\.available[\s\S]*provider\.capabilities\.streaming[\s\S]*provider\.capabilities\.resume/u,
   )
-  assert.match(dialog, /当前智能体检测或安全执行条件/u)
+  assert.match(selection, /设备不能运行 AI 工具/u)
+  assert.match(selection, /choice\.unavailableReason !== undefined/u)
   assert.doesNotMatch(dialog, /当前 Codex 检测/u)
 })
 

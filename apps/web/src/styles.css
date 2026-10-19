@@ -23,3 +23,9 @@ body,
     --side-w: 224px;
   }
 }
+
+/* Approved v4 prototype: new-conversation dialog is 560px wide. */
+.ct-new-conversation-dialog {
+  --layout-new-conversation-dialog-width: 35rem;
+  max-width: var(--layout-new-conversation-dialog-width);
+}

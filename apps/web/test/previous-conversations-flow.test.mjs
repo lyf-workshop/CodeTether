@@ -79,10 +79,13 @@ test('local Add Project preserves completion behavior after optional discovery',
   const source = await readSource('components/projects/add-project-dialog.tsx')
 
   assert.match(source, /<PreviousConversationsStep/u)
-  assert.match(source, /projectId=\{createdProject\.project\.projectId\}/u)
-  assert.match(source, /machineId=\{createdProject\.machineId\}/u)
+  assert.match(source, /projectId=\{context\.projectId\}/u)
+  assert.match(source, /machineId=\{context\.machineId\}/u)
   assert.match(source, /finishCreatedProject/u)
-  assert.match(source, /await onProjectCreated\(project, created\)/u)
+  assert.match(
+    source,
+    /await onProjectCreated\(project, created, exactMachineId\)/u,
+  )
   assert.match(source, /to: '\/projects\/\$projectId'/u)
 })
 
@@ -107,6 +110,20 @@ test('the Web runtime keeps adoption identity private and invalidates durable in
   assert.match(source, /discoveryCandidateId/u)
   assert.match(source, /this\.#client\.adoptProviderSession\(/u)
   assert.match(source, /invalidateConversationDurableQueries/u)
+})
+
+test('opening an adopted conversation cannot interrupt a pending import batch', async () => {
+  const source = await readSource(
+    'components/projects/previous-conversations-step.tsx',
+  )
+  assert.match(
+    source,
+    /async function openConversation\(conversationId: ConversationId\) \{\s*if \(importInFlightRef\.current\) return/u,
+  )
+  assert.match(
+    source,
+    /disabled=\{importing\}\s+onClick=\{\(\) =>\s+void openConversation/u,
+  )
 })
 
 async function readSource(relativePath) {

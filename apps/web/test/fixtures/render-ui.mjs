@@ -7,11 +7,15 @@ import ts from 'typescript'
 const sourceRoot = fileURLToPath(
   new URL('../../../../packages/ui/src/', import.meta.url),
 )
+const webSourceRoot = fileURLToPath(new URL('../../src/', import.meta.url))
 const cache = new Map()
 
-// Exercise the real shared TSX components without a browser or a second build.
 export function loadUiComponent(relativePath) {
   return load(resolve(sourceRoot, relativePath))
+}
+
+export function loadWebComponent(relativePath) {
+  return load(resolve(webSourceRoot, relativePath))
 }
 
 function load(path) {
@@ -27,6 +31,8 @@ function load(path) {
   cache.set(filename, module)
   const requireDependency = createRequire(filename)
   const localRequire = (specifier) => {
+    if (specifier === '@codetether/ui')
+      return load(resolve(sourceRoot, 'index.ts'))
     if (specifier.startsWith('@codetether/ui/'))
       return load(
         resolve(sourceRoot, specifier.slice('@codetether/ui/'.length)),

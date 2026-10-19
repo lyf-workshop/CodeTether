@@ -19,6 +19,8 @@
     "types": ["node"]
   },
   "include": [
+    "src/components/projects/previous-conversations-selection.ts",
+    "src/components/projects/add-project-model.ts",
     "src/components/conversations/new-conversation-machine-selection.ts",
     "src/components/projects/project-creation-machine.ts",
     "src/runtime/theme/theme-preference.ts",

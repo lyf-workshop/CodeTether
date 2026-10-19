@@ -8,6 +8,7 @@ export interface FixedProjectCreationMachine {
     | 'missing'
     | 'offline'
     | 'project_access_unavailable'
+    | 'execution_unavailable'
     | 'ready'
 }
 
@@ -31,6 +32,8 @@ export function selectFixedProjectCreationMachine(
   }
   if (!machine.capabilities.projectAccess)
     return { state: 'project_access_unavailable', machine }
+  if (!machine.capabilities.providerExecution)
+    return { state: 'execution_unavailable', machine }
   return { state: 'ready', machine }
 }
 
@@ -49,5 +52,7 @@ export function fixedProjectCreationMachineExplanation(
       return '恢复在线后才能在这台设备上添加项目。'
     case 'project_access_unavailable':
       return '这台设备当前没有开放项目访问。'
+    case 'execution_unavailable':
+      return '这台设备当前不能运行 AI 工具。请先在设备详情中检查。'
   }
 }

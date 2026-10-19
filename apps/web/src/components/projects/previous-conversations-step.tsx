@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import {
+  useInfiniteQuery,
+  useQueryClient,
+  type InfiniteData,
+} from '@tanstack/react-query'
+import {
   Bot,
   Check,
   ExternalLink,
@@ -24,6 +29,12 @@ import {
 } from '@codetether/protocol'
 
 import { useHostRuntime } from '../../runtime/host/host-runtime-hooks'
+import {
+  createPreviousConversationSelection,
+  reconcilePreviousConversationSelection,
+  setPreviousConversationSelection,
+  type PreviousConversationSelection,
+} from './previous-conversations-selection'
 
 interface PreviousConversationsStepProps {
   readonly machineId: MachineId
@@ -55,94 +66,203 @@ export function PreviousConversationsStep({
 }: PreviousConversationsStepProps) {
   const runtime = useHostRuntime()
   const navigate = useNavigate()
-  const [candidates, setCandidates] = useState<
-    readonly ProviderSessionDiscoveryCandidate[]
-  >([])
-  const [providers, setProviders] = useState<
-    readonly ProviderSessionDiscoveryProviderResult[]
-  >([])
-  const [nextCursor, setNextCursor] =
-    useState<DiscoverProviderSessionsResponse['nextCursor']>()
-  const [selected, setSelected] = useState<ReadonlySet<DiscoveryCandidateId>>(
-    new Set(),
+  const queryClient = useQueryClient()
+  const queryKey = useMemo(
+    () => ['host', 'provider-session-discovery', projectId, machineId] as const,
+    [machineId, projectId],
   )
+  const selectionScope = JSON.stringify([projectId, machineId])
+  const [selectionState, setSelectionState] = useState(() => ({
+    scope: selectionScope,
+    value: createPreviousConversationSelection(),
+  }))
+  const selectionRef = useRef(selectionState)
   const [activity, setActivity] = useState<
     ReadonlyMap<DiscoveryCandidateId, CandidateActivity>
   >(new Map())
-  const [scanState, setScanState] = useState<
-    'scanning' | 'loading-more' | 'ready' | 'failed'
-  >('scanning')
+  const [manualScanState, setManualScanState] = useState<
+    'idle' | 'scanning' | 'failed'
+  >('idle')
   const [importedCount, setImportedCount] = useState(0)
+  const [importing, setImporting] = useState(false)
+  const [scanNotice, setScanNotice] = useState('')
   const stepRef = useRef<HTMLDivElement>(null)
   const scanGenerationRef = useRef(0)
+  const lifecycleGenerationRef = useRef(0)
   const scanAbortRef = useRef<AbortController | undefined>(undefined)
+  const scanInFlightRef = useRef(false)
   const importInFlightRef = useRef(false)
+  const discoveryQuery = useInfiniteQuery({
+    queryKey,
+    queryFn: async ({ pageParam, signal }) =>
+      await runtime.discoverProviderSessions(projectId, machineId, {
+        limit: 50,
+        ...(pageParam === undefined ? {} : { cursor: pageParam }),
+        signal,
+      }),
+    initialPageParam:
+      undefined as DiscoverProviderSessionsResponse['nextCursor'],
+    getNextPageParam: (page) => page.nextCursor,
+    retry: false,
+    staleTime: Number.POSITIVE_INFINITY,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  })
+  const candidates = useMemo(
+    () =>
+      mergeCandidates(
+        [],
+        discoveryQuery.data?.pages.flatMap((page) => page.candidates) ?? [],
+      ),
+    [discoveryQuery.data],
+  )
+  const providers = discoveryQuery.data?.pages.at(-1)?.providers ?? []
+  const nextCursor = discoveryQuery.data?.pages.at(-1)?.nextCursor
+  const currentSelection = useMemo(
+    () =>
+      reconcilePreviousConversationSelection(
+        selectionState.scope === selectionScope
+          ? selectionState.value
+          : createPreviousConversationSelection(),
+        candidates,
+        maximumImportSelection,
+      ),
+    [candidates, selectionScope, selectionState],
+  )
+  const selected = currentSelection.selected
+  const scanState =
+    manualScanState === 'scanning' || discoveryQuery.isPending
+      ? 'scanning'
+      : discoveryQuery.isFetchingNextPage
+        ? 'loading-more'
+        : manualScanState === 'failed' || discoveryQuery.isError
+          ? 'failed'
+          : 'ready'
+
+  const updateSelection = useCallback(
+    (
+      update: (
+        current: PreviousConversationSelection,
+      ) => PreviousConversationSelection,
+    ) => {
+      const current = selectionRef.current
+      const next = {
+        scope: selectionScope,
+        value: update(
+          current.scope === selectionScope
+            ? current.value
+            : createPreviousConversationSelection(),
+        ),
+      }
+      selectionRef.current = next
+      setSelectionState(next)
+    },
+    [selectionScope],
+  )
 
   const runScan = useCallback(
-    async (options: { readonly append: boolean; readonly rescan: boolean }) => {
+    async (options: {
+      readonly append: boolean
+      readonly rescan: boolean
+      readonly afterExpiry?: boolean
+    }) => {
+      if (
+        scanInFlightRef.current ||
+        (importInFlightRef.current && !options.afterExpiry)
+      )
+        return
+      scanInFlightRef.current = true
       const generation = ++scanGenerationRef.current
       scanAbortRef.current?.abort()
       const abort = new AbortController()
       scanAbortRef.current = abort
-      setScanState(options.append ? 'loading-more' : 'scanning')
+      // Capture UI intent before Query replaces IDs or appends another page.
+      updateSelection((current) =>
+        reconcilePreviousConversationSelection(
+          current,
+          candidates,
+          maximumImportSelection,
+        ),
+      )
+      setScanNotice('')
       if (!options.append) {
-        setSelected(new Set())
+        setManualScanState('scanning')
         setActivity(new Map())
       }
 
       try {
-        const response = await runtime.discoverProviderSessions(
-          projectId,
-          machineId,
-          {
-            limit: 50,
-            ...(options.append && nextCursor !== undefined
-              ? { cursor: nextCursor }
-              : {}),
-            ...(options.rescan ? { rescan: true } : {}),
-            signal: abort.signal,
-          },
-        )
-        if (generation !== scanGenerationRef.current) return
-        setCandidates((current) =>
-          options.append
-            ? mergeCandidates(current, response.candidates)
-            : response.candidates,
-        )
-        setProviders(response.providers)
-        setNextCursor(response.nextCursor)
-        setScanState('ready')
+        if (options.append) {
+          const result = await discoveryQuery.fetchNextPage({
+            cancelRefetch: false,
+          })
+          if (result.isError) throw result.error
+        } else {
+          await queryClient.cancelQueries({ queryKey, exact: true })
+          if (abort.signal.aborted || generation !== scanGenerationRef.current)
+            return
+          const response = await runtime.discoverProviderSessions(
+            projectId,
+            machineId,
+            {
+              limit: 50,
+              ...(options.rescan ? { rescan: true } : {}),
+              signal: abort.signal,
+            },
+          )
+          if (abort.signal.aborted || generation !== scanGenerationRef.current)
+            return
+          queryClient.setQueryData<
+            InfiniteData<
+              DiscoverProviderSessionsResponse,
+              DiscoverProviderSessionsResponse['nextCursor']
+            >
+          >(queryKey, { pages: [response], pageParams: [undefined] })
+        }
+        if (abort.signal.aborted || generation !== scanGenerationRef.current)
+          return
+        setManualScanState('idle')
+        if (options.afterExpiry) {
+          setScanNotice('列表已更新，请检查所选会话后再导入。')
+        }
         if (options.rescan) {
-          globalThis.setTimeout(() => stepRef.current?.focus(), 0)
+          globalThis.setTimeout(() => {
+            if (generation === scanGenerationRef.current)
+              stepRef.current?.focus()
+          }, 0)
         }
       } catch (error) {
         if (abort.signal.aborted || isAbortError(error)) return
         if (generation !== scanGenerationRef.current) return
-        setScanState('failed')
-        if (options.rescan) {
-          globalThis.setTimeout(() => stepRef.current?.focus(), 0)
-        }
+        setManualScanState('failed')
       } finally {
-        if (scanAbortRef.current === abort) scanAbortRef.current = undefined
+        if (scanAbortRef.current === abort) {
+          scanAbortRef.current = undefined
+          scanInFlightRef.current = false
+        }
       }
     },
-    [machineId, nextCursor, projectId, runtime],
+    [
+      candidates,
+      discoveryQuery,
+      machineId,
+      projectId,
+      queryClient,
+      queryKey,
+      runtime,
+      updateSelection,
+    ],
   )
 
   useEffect(() => {
-    const start = globalThis.setTimeout(() => {
-      stepRef.current?.focus()
-      void runScan({ append: false, rescan: false })
-    }, 0)
+    const start = globalThis.setTimeout(() => stepRef.current?.focus(), 0)
     return () => {
       globalThis.clearTimeout(start)
+      lifecycleGenerationRef.current += 1
       scanGenerationRef.current += 1
       scanAbortRef.current?.abort()
     }
-    // A new ProjectLocation mounts a new step; pagination state must not make
-    // the initial request repeat.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [machineId, projectId, runtime])
+  }, [machineId, projectId])
 
   const selectable = useMemo(
     () =>
@@ -163,47 +283,59 @@ export function PreviousConversationsStep({
   const selectionBatchFull =
     selected.size > 0 &&
     (allVisibleSelected || selected.size >= maximumImportSelection)
-  const importing = [...activity.values()].some(
-    (entry) => entry.state === 'importing',
-  )
 
   function toggleCandidate(candidateId: DiscoveryCandidateId) {
-    if (importing) return
-    setSelected((current) => {
-      const next = new Set(current)
-      if (next.has(candidateId)) next.delete(candidateId)
-      else if (next.size < maximumImportSelection) next.add(candidateId)
-      return next
+    if (importInFlightRef.current) return
+    updateSelection((current) => {
+      const reconciled = reconcilePreviousConversationSelection(
+        current,
+        candidates,
+        maximumImportSelection,
+      )
+      return setPreviousConversationSelection(
+        reconciled,
+        candidates,
+        [candidateId],
+        !reconciled.selected.has(candidateId),
+        maximumImportSelection,
+      )
     })
   }
 
   function toggleAllVisible() {
-    if (importing) return
-    setSelected((current) => {
-      const next = new Set(current)
-      if (selectionBatchFull) {
-        for (const candidate of selectable) {
-          next.delete(candidate.discoveryCandidateId)
-        }
-      } else {
-        for (const candidate of selectable) {
-          if (next.size >= maximumImportSelection) break
-          next.add(candidate.discoveryCandidateId)
-        }
-      }
-      return next
-    })
+    if (importInFlightRef.current) return
+    updateSelection((current) =>
+      setPreviousConversationSelection(
+        reconcilePreviousConversationSelection(
+          current,
+          candidates,
+          maximumImportSelection,
+        ),
+        candidates,
+        selectable.map((candidate) => candidate.discoveryCandidateId),
+        !selectionBatchFull,
+        maximumImportSelection,
+      ),
+    )
   }
 
   async function importSelected() {
     if (
       importInFlightRef.current ||
+      scanInFlightRef.current ||
+      discoveryQuery.isFetching ||
+      scanState !== 'ready' ||
       selected.size === 0 ||
       selected.size > maximumImportSelection
     ) {
       return
     }
     importInFlightRef.current = true
+    setImporting(true)
+    const generation = scanGenerationRef.current
+    const lifecycleGeneration = lifecycleGenerationRef.current
+    updateSelection(() => currentSelection)
+    let refreshExpired = false
     try {
       let completed = 0
       for (const candidate of candidates) {
@@ -215,36 +347,81 @@ export function PreviousConversationsStep({
             machineId,
             candidate.discoveryCandidateId,
           )
-          setCandidates((current) =>
-            current.map((entry) =>
-              entry.discoveryCandidateId === candidate.discoveryCandidateId
-                ? {
-                    ...entry,
-                    alreadyAdopted: true,
-                    conversationId: response.data.conversation.conversationId,
-                  }
-                : entry,
+          if (generation !== scanGenerationRef.current) return
+          updateSelection((current) =>
+            setPreviousConversationSelection(
+              current,
+              candidates,
+              [candidate.discoveryCandidateId],
+              false,
+              maximumImportSelection,
             ),
+          )
+          queryClient.setQueryData<
+            InfiniteData<
+              DiscoverProviderSessionsResponse,
+              DiscoverProviderSessionsResponse['nextCursor']
+            >
+          >(queryKey, (current) =>
+            current === undefined
+              ? undefined
+              : {
+                  ...current,
+                  pages: current.pages.map((page) => ({
+                    ...page,
+                    candidates: page.candidates.map((entry) =>
+                      entry.discoveryCandidateId ===
+                      candidate.discoveryCandidateId
+                        ? {
+                            ...entry,
+                            alreadyAdopted: true,
+                            conversationId:
+                              response.data.conversation.conversationId,
+                          }
+                        : entry,
+                    ),
+                  })),
+                },
           )
           setCandidateActivity(candidate.discoveryCandidateId, 'idle')
           completed += 1
         } catch (error) {
+          if (generation !== scanGenerationRef.current) return
+          const expired = isCandidateExpired(error)
           setCandidateActivity(
             candidate.discoveryCandidateId,
-            isCandidateExpired(error) ? 'expired' : 'failed',
+            expired ? 'expired' : 'failed',
           )
-        } finally {
-          setSelected((current) => {
-            const next = new Set(current)
-            next.delete(candidate.discoveryCandidateId)
-            return next
-          })
+          if (expired) {
+            // Keep UI intent and stop this stale batch. One metadata-only read
+            // follows; importing again always needs another explicit action.
+            refreshExpired = true
+            break
+          }
+          updateSelection((current) =>
+            setPreviousConversationSelection(
+              current,
+              candidates,
+              [candidate.discoveryCandidateId],
+              false,
+              maximumImportSelection,
+            ),
+          )
         }
       }
       if (completed > 0) setImportedCount((current) => current + completed)
+      if (refreshExpired && generation === scanGenerationRef.current) {
+        await runScan({ append: false, rescan: true, afterExpiry: true })
+      }
     } finally {
       importInFlightRef.current = false
-      globalThis.setTimeout(() => stepRef.current?.focus(), 0)
+      if (lifecycleGeneration === lifecycleGenerationRef.current) {
+        setImporting(false)
+        globalThis.setTimeout(() => {
+          if (lifecycleGeneration === lifecycleGenerationRef.current)
+            stepRef.current?.focus()
+        }, 0)
+      }
     }
   }
 
@@ -260,6 +437,7 @@ export function PreviousConversationsStep({
   }
 
   async function openConversation(conversationId: ConversationId) {
+    if (importInFlightRef.current) return
     await onFinished('reviewed')
     await navigate({
       to: '/conversations/$conversationId',
@@ -333,6 +511,12 @@ export function PreviousConversationsStep({
           )}
         </p>
 
+        {scanNotice ? (
+          <p role="status" className="text-sm text-text-secondary">
+            {scanNotice}
+          </p>
+        ) : null}
+
         {scanState === 'scanning' ? (
           <div
             role="status"
@@ -351,7 +535,7 @@ export function PreviousConversationsStep({
             role="alert"
             className="rounded-md border border-warning/30 bg-warning-muted/35 px-4 py-3 text-sm text-text-secondary"
           >
-            <p>暂时无法检查以前的会话。项目已成功添加。</p>
+            <p>暂时无法检查以前的会话。项目与现有会话不受影响。</p>
             <Button
               className="mt-3"
               size="sm"
@@ -511,6 +695,7 @@ export function PreviousConversationsStep({
                             <Button
                               size="sm"
                               variant="ghost"
+                              disabled={importing}
                               onClick={() =>
                                 void openConversation(candidate.conversationId!)
                               }
@@ -584,7 +769,7 @@ export function PreviousConversationsStep({
         {selected.size > 0 ? (
           <Button
             size="sm"
-            disabled={importing}
+            disabled={importing || scanState !== 'ready'}
             onClick={() => void importSelected()}
           >
             {importing ? '正在导入…' : `导入所选（${selected.size}）`}

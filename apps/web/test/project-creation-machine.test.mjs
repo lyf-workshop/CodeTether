@@ -10,14 +10,14 @@ const local = {
   kind: 'local',
   availability: 'available',
   connectionState: 'local',
-  capabilities: { projectAccess: true },
+  capabilities: { projectAccess: true, providerExecution: true },
 }
 const remote = {
   machineId: 'machine_remote',
   kind: 'remote',
   availability: 'available',
   connectionState: 'online',
-  capabilities: { projectAccess: true },
+  capabilities: { projectAccess: true, providerExecution: true },
 }
 
 test('Project registration preserves the requested local or remote Device despite list order', () => {
@@ -97,6 +97,7 @@ test('Unavailable registration has an actionable explanation without private mac
     'missing',
     'offline',
     'project_access_unavailable',
+    'execution_unavailable',
   ])
     assert.equal(typeof fixedProjectCreationMachineExplanation(state), 'string')
   assert.equal(fixedProjectCreationMachineExplanation('ready'), undefined)

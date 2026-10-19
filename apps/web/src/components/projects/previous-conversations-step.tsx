@@ -42,7 +42,7 @@ interface PreviousConversationsStepProps {
   readonly onFinished: (
     disposition: 'reviewed' | 'skipped',
   ) => Promise<void> | void
-  readonly presentation?: 'dialog' | 'page'
+  readonly presentation?: 'dialog' | 'page' | 'embedded'
 }
 
 type CandidateActivity =
@@ -255,14 +255,17 @@ export function PreviousConversationsStep({
   )
 
   useEffect(() => {
-    const start = globalThis.setTimeout(() => stepRef.current?.focus(), 0)
+    const start =
+      presentation === 'embedded'
+        ? undefined
+        : globalThis.setTimeout(() => stepRef.current?.focus(), 0)
     return () => {
-      globalThis.clearTimeout(start)
+      if (start !== undefined) globalThis.clearTimeout(start)
       lifecycleGenerationRef.current += 1
       scanGenerationRef.current += 1
       scanAbortRef.current?.abort()
     }
-  }, [machineId, projectId])
+  }, [machineId, projectId, presentation])
 
   const selectable = useMemo(
     () =>
@@ -480,7 +483,7 @@ export function PreviousConversationsStep({
           <DialogTitle>以前的会话</DialogTitle>
           <p className="text-base leading-normal text-text-secondary">
             可选择此工作区中已有的 Codex 或 Claude Code 会话添加到 CodeTether。
-            导入不会启动智能体。
+            导入不会启动 AI 工具。
           </p>
         </DialogHeader>
       ) : (
@@ -496,7 +499,7 @@ export function PreviousConversationsStep({
           </h2>
           <p className="mt-2 text-base leading-normal text-text-secondary">
             可选择此工作区中已有的 Codex 或 Claude Code 会话添加到 CodeTether。
-            导入不会启动智能体，也不会发送任何提示词。
+            导入不会启动 AI 工具，也不会发送任何提示词。
           </p>
         </div>
       )}
@@ -756,16 +759,18 @@ export function PreviousConversationsStep({
             : 'mt-6 flex flex-wrap items-center justify-end gap-2 border-t border-border pt-4'
         }
       >
-        <Button
-          variant="secondary"
-          size="sm"
-          disabled={importing}
-          onClick={() =>
-            void onFinished(importedCount > 0 ? 'reviewed' : 'skipped')
-          }
-        >
-          {importedCount > 0 ? '完成' : '跳过'}
-        </Button>
+        {presentation !== 'embedded' ? (
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={importing}
+            onClick={() =>
+              void onFinished(importedCount > 0 ? 'reviewed' : 'skipped')
+            }
+          >
+            {importedCount > 0 ? '完成' : '跳过'}
+          </Button>
+        ) : null}
         {selected.size > 0 ? (
           <Button
             size="sm"

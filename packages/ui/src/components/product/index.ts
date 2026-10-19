@@ -34,3 +34,5 @@ export {
   type ProjectCardProps,
   type AddProjectCardProps,
 } from './project-card'
+
+export { SessionItem, type SessionItemProps } from './session-item'

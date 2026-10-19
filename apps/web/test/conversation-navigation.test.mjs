@@ -22,15 +22,18 @@ test('Conversation search accepts only a public Turn identity', async () => {
 })
 
 test('Project Conversation organization view is durable URL state, not browser storage', async () => {
-  const router = await sourceOf('router.tsx')
-
-  assert.match(router, /interface ProjectConversationsSearch/u)
-  assert.match(router, /view\?: 'archived'/u)
+  const [router, model] = await Promise.all([
+    sourceOf('router.tsx'),
+    sourceOf('components/projects/project-workspace-model.ts'),
+  ])
+  assert.match(router, /type ProjectSearch = ProjectWorkspaceSearch/u)
+  assert.match(router, /return parseProjectWorkspaceSearch\(search\)/u)
+  assert.match(model, /view\?: 'archived'/u)
   assert.match(
-    router,
+    model,
     /search\.view === 'archived' \? \{ view: 'archived' as const \} : \{\}/u,
   )
-  assert.doesNotMatch(router, /localStorage|sessionStorage/u)
+  assert.doesNotMatch(router + model, /localStorage|sessionStorage/u)
 })
 
 test('Inbox review and failed navigation preserve the Attention Turn anchor', async () => {

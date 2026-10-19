@@ -2,7 +2,13 @@ import { useRef, useState } from 'react'
 import { Link } from '@tanstack/react-router'
 import { MoreHorizontal, Pin } from 'lucide-react'
 
-import { Button, ConversationItem, IconButton, cn } from '@codetether/ui'
+import {
+  AgentIdentityMark,
+  Button,
+  IconButton,
+  SessionItem,
+  StatusBadge,
+} from '@codetether/ui'
 import type { ConversationSearchResult } from '@codetether/protocol'
 
 import {
@@ -18,6 +24,7 @@ import {
   conversationSearchTurnIntent,
 } from './conversation-search-presentation'
 import { conversationSearchFocusCandidates } from './conversation-search-focus'
+import { providerAgentId } from '../../provider/provider-presentation'
 
 interface ConversationSearchResultsProps {
   archiveView: 'active' | 'archived'
@@ -104,7 +111,10 @@ export function ConversationSearchResults({
         </div>
       </div>
 
-      <ol className="mt-3 space-y-2" data-conversation-search-results>
+      <ol
+        className="mt-3 overflow-hidden rounded-lg border border-border [&>li:first-child_article]:border-t-0"
+        data-conversation-search-results
+      >
         {results.map((result) => (
           <ConversationSearchResultRow
             key={result.conversation.conversationId}
@@ -157,7 +167,8 @@ function ConversationSearchResultRow({
 }: ConversationSearchResultRowProps) {
   const [restoreError, setRestoreError] = useState<string>()
   const conversation = result.conversation
-  const archived = archiveView === 'archived'
+  const archived =
+    archiveView === 'archived' || conversation.archivedAt !== undefined
   const matchDescription = `${providerDisplayName(conversation.provider)} · ${conversationSearchMatchDescription(result)}`
 
   const menu = (
@@ -185,18 +196,29 @@ function ConversationSearchResultRow({
       data-conversation-search-result={conversation.conversationId}
       className="min-w-0"
     >
-      <ConversationItem
-        appearance="row"
+      <SessionItem
         title={conversation.title}
-        description={matchDescription}
-        status={conversation.status}
-        model={conversation.model}
-        activity={formatConversationActivity(conversation.lastActivityAt)}
-        activityDetail={archived ? '已归档' : undefined}
-        className={cn('h-[4.5rem] pr-12', archived && 'pr-36')}
+        leading={
+          <AgentIdentityMark
+            agent={providerAgentId(conversation.provider)}
+            className="size-7 rounded-sm"
+          />
+        }
+        metadata={
+          <span className="block truncate">
+            {matchDescription}
+            {archived ? ' · 已归档' : ''}
+          </span>
+        }
+        status={<StatusBadge status={conversation.status} />}
+        activity={
+          <time dateTime={conversation.lastActivityAt}>
+            {formatConversationActivity(conversation.lastActivityAt)}
+          </time>
+        }
         primaryAction={
           <Link
-            to="/conversations/$conversationId"
+            to="/c/$conversationId"
             params={{ conversationId: conversation.conversationId }}
             search={conversationSearchTurnIntent(result)}
             data-conversation-search-primary-action
@@ -205,9 +227,9 @@ function ConversationSearchResultRow({
             className="absolute inset-0 z-0 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
           />
         }
-        action={
+        actions={
           archived ? (
-            <div className="absolute right-0 flex w-max items-center gap-1">
+            <div className="flex w-max items-center gap-1">
               <ConversationRestoreButton
                 conversation={conversation}
                 size="sm"
@@ -221,7 +243,7 @@ function ConversationSearchResultRow({
               {menu}
             </div>
           ) : (
-            <div className="absolute right-0 flex w-max items-center gap-1">
+            <div className="flex w-max items-center gap-1">
               {conversation.pinnedAt === undefined ? null : (
                 <Pin aria-label="已置顶" className="size-3.5 text-text-muted" />
               )}

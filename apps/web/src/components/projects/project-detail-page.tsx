@@ -1,61 +1,63 @@
 import { useRef, useState, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link, useParams, useSearch } from '@tanstack/react-router'
-import {
-  ArrowLeft,
-  MessageSquare,
-  Plus,
-  RefreshCw,
-  ShieldCheck,
-  Trash2,
-  TriangleAlert,
-} from 'lucide-react'
+import { ArrowLeft, Folder, Plus, Trash2 } from 'lucide-react'
 
-import { Button, Separator } from '@codetether/ui'
-import {
-  ProjectIdSchema,
-  type MachineId,
-  type ProjectId,
-} from '@codetether/protocol'
+import { Button, Notice, SectionState } from '@codetether/ui'
+import { ProjectIdSchema, type ProjectId } from '@codetether/protocol'
 
 import {
   useHostConnectionState,
   useHostRuntime,
 } from '../../runtime/host/host-runtime-hooks'
-import { projectDetailQueryOptions } from '../../runtime/host/project-query'
 import { machineListQueryOptions } from '../../runtime/host/machine-query'
-import { projectLocationAvailability } from '../../runtime/host/project-location'
+import { projectDetailQueryOptions } from '../../runtime/host/project-query'
 import { projectDetailViewState } from '../../runtime/host/project-view-state'
-import { ProjectAvailabilityBadge } from './project-availability-badge'
-import { ProjectsErrorState, ProjectsLoadingState } from './project-page-states'
-import { AddProjectLocationDialog } from './add-project-location-dialog'
-import { ProjectLocationsSection } from './project-locations-section'
-import { RemoveProjectDialog } from './remove-project-dialog'
 import { NewConversationDialog } from '../conversations/new-conversation-dialog'
+import { deviceProjectState } from '../machines/device-project-model'
+import { PreviousConversationsStep } from './previous-conversations-step'
+import { ProjectConversationCollection } from './project-conversation-collection'
+import { RemoveProjectDialog } from './remove-project-dialog'
+import {
+  parseProjectWorkspaceSearch,
+  resolveProjectWorkspaceContext,
+  type ProjectWorkspaceSearch,
+} from './project-workspace-model'
 
-export function ProjectDetailRoute() {
-  const { projectId: rawProjectId } = useParams({
-    from: '/projects/$projectId',
-  })
-  const { machineId } = useSearch({ from: '/projects/$projectId' })
-  const parsedProjectId = ProjectIdSchema.safeParse(rawProjectId)
-
-  if (!parsedProjectId.success) return <ProjectNotFound />
-  return (
-    <ProjectDetailPage projectId={parsedProjectId.data} machineId={machineId} />
+export function ProjectDetailRoute({
+  searchPage = false,
+}: {
+  searchPage?: boolean
+}) {
+  const { projectId: rawProjectId } = useParams({ strict: false })
+  const search = parseProjectWorkspaceSearch(useSearch({ strict: false }))
+  const projectId = ProjectIdSchema.safeParse(rawProjectId)
+  return projectId.success ? (
+    <ProjectDetailPage
+      projectId={projectId.data}
+      search={search}
+      searchPage={searchPage || Boolean(search.q)}
+    />
+  ) : (
+    <ProjectNotFound />
   )
 }
 
-interface ProjectDetailPageProps {
-  projectId: ProjectId
-  machineId?: MachineId
+export function ProjectSearchRoute() {
+  return <ProjectDetailRoute searchPage />
 }
 
-function ProjectDetailPage({ projectId, machineId }: ProjectDetailPageProps) {
+function ProjectDetailPage({
+  projectId,
+  search,
+  searchPage,
+}: {
+  projectId: ProjectId
+  search: ProjectWorkspaceSearch
+  searchPage: boolean
+}) {
   const runtime = useHostRuntime()
   const connectionState = useHostConnectionState()
-  const removeButtonRef = useRef<HTMLButtonElement>(null)
-  const [removeOpen, setRemoveOpen] = useState(false)
   const projectQuery = useQuery({
     ...projectDetailQueryOptions(runtime, projectId),
     enabled: connectionState === 'connected',
@@ -64,266 +66,274 @@ function ProjectDetailPage({ projectId, machineId }: ProjectDetailPageProps) {
     ...machineListQueryOptions(runtime),
     enabled: connectionState === 'connected',
   })
+  const removeTrigger = useRef<HTMLButtonElement>(null)
+  const [removeOpen, setRemoveOpen] = useState(false)
   const viewState = projectDetailViewState(projectQuery)
-  const connectionUnavailable =
-    connectionState === 'unavailable' || connectionState === 'incompatible'
 
-  function handleRetry() {
+  function retry() {
     runtime.retry()
-    if (connectionState === 'connected') void projectQuery.refetch()
+    if (connectionState === 'connected') {
+      void projectQuery.refetch()
+      void machinesQuery.refetch()
+    }
   }
-
-  if (connectionUnavailable) {
-    return (
-      <ProjectPageFrame>
-        <ProjectsErrorState
-          incompatible={connectionState === 'incompatible'}
-          onRetry={handleRetry}
-        />
-      </ProjectPageFrame>
-    )
-  }
-
+  if (viewState.kind === 'not-found') return <ProjectNotFound />
   if (
     viewState.kind === 'loading' ||
-    (connectionState !== 'connected' && projectQuery.data === undefined)
-  ) {
+    (projectQuery.data === undefined &&
+      !projectQuery.isError &&
+      connectionState !== 'unavailable' &&
+      connectionState !== 'incompatible')
+  )
     return (
-      <ProjectPageFrame>
-        <ProjectsLoadingState />
-      </ProjectPageFrame>
+      <ProjectFrame>
+        <SectionState state="loading" title="正在读取项目" />
+      </ProjectFrame>
     )
-  }
-
-  if (viewState.kind === 'not-found') return <ProjectNotFound />
-
-  if (viewState.kind === 'host-unavailable') {
+  if (viewState.kind === 'host-unavailable' || projectQuery.data === undefined)
     return (
-      <ProjectPageFrame>
-        <ProjectsErrorState title="无法读取项目" onRetry={handleRetry} />
-      </ProjectPageFrame>
+      <ProjectFrame>
+        <SectionState
+          state="error"
+          title="暂时无法读取项目"
+          description="项目和会话历史会继续保留，请恢复连接后重试。"
+          action={
+            <Button variant="secondary" onClick={retry}>
+              重试
+            </Button>
+          }
+        />
+      </ProjectFrame>
     )
-  }
-
-  const project = viewState.project
-  const machines = machinesQuery.data ?? []
-  const availability = projectLocationAvailability(project, machineId)
-  const hasExecutableLocation = project.locations.some((location) => {
-    if (machineId !== undefined && location.machineId !== machineId)
-      return false
-    const machine = machines.find(
-      (candidate) => candidate.machineId === location.machineId,
-    )
+  const project = projectQuery.data
+  const context = resolveProjectWorkspaceContext(
+    project,
+    search.machineId,
+    search.invalidMachineId === true,
+  )
+  if (context.kind !== 'selected')
     return (
-      location.availability === 'available' &&
-      machine?.availability === 'available' &&
-      machine.capabilities.providerExecution
+      <ProjectFrame>
+        <h1 className="mb-6 text-page font-semibold">{project.name}</h1>
+        <Notice
+          tone={context.kind === 'invalid-device' ? 'warn' : 'info'}
+          title={
+            context.kind === 'invalid-device'
+              ? '这个项目不在所选设备上'
+              : context.kind === 'missing-location'
+                ? '项目没有可用的位置记录'
+                : '选择要查看的设备'
+          }
+        >
+          {context.kind === 'choose-device'
+            ? '这个旧项目在多个设备上有独立的文件夹。请选择一个明确的位置，查看那台设备上的会话。'
+            : context.kind === 'invalid-device'
+              ? '所选设备没有这个项目的位置记录。请选择下面列出的设备。'
+              : '项目和已有会话仍然保留，当前没有可以明确关联到设备的位置记录。'}
+        </Notice>
+        <ul className="mt-4 space-y-3">
+          {project.locations.map((location) => (
+            <li key={location.machineId}>
+              <Link
+                to={
+                  searchPage
+                    ? '/projects/$projectId/search'
+                    : '/projects/$projectId'
+                }
+                params={{ projectId }}
+                search={{
+                  ...search,
+                  invalidMachineId: undefined,
+                  machineId: location.machineId,
+                }}
+                className="block min-w-0 rounded-lg border border-border bg-surface p-4 outline-none hover:bg-surface-muted focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <p className="text-base font-medium">
+                  {machinesQuery.data?.find(
+                    (machine) => machine.machineId === location.machineId,
+                  )?.displayName ?? '设备名称暂时未知'}
+                </p>
+                <p
+                  title={location.rootPath}
+                  className="mt-1 truncate font-mono text-sm text-text-muted"
+                >
+                  {location.rootPath}
+                </p>
+              </Link>
+            </li>
+          ))}
+        </ul>
+      </ProjectFrame>
     )
-  })
+  const location = context.location
+  const machine = machinesQuery.data?.find(
+    (candidate) => candidate.machineId === location.machineId,
+  )
+  const state =
+    machine === undefined
+      ? {
+          available: false,
+          label: '设备状态尚未取得',
+          reason: '暂时无法确认这台设备的当前状态。',
+        }
+      : deviceProjectState(machine, location)
+  const canCreate =
+    connectionState === 'connected' && machine !== undefined && state.available
+  const archived = search.view === 'archived'
 
-  function handleRemoveOpenChange(open: boolean) {
+  function closeRemoval(open: boolean) {
     setRemoveOpen(open)
-    if (!open) {
-      requestAnimationFrame(() => removeButtonRef.current?.focus())
-    }
+    if (!open) requestAnimationFrame(() => removeTrigger.current?.focus())
   }
 
   return (
-    <div className="flex min-h-full min-w-0 flex-col px-[var(--layout-content-inline-padding)] py-[var(--layout-content-block-padding)]">
+    <ProjectFrame>
       <Link
-        to="/projects"
-        className="mb-4 inline-flex w-fit items-center gap-1.5 rounded-xs text-sm font-medium text-text-secondary outline-none transition-colors hover:text-text-primary focus-visible:ring-2 focus-visible:ring-ring/60 motion-reduce:transition-none"
+        to={searchPage ? '/projects/$projectId' : '/devices/$machineId'}
+        params={searchPage ? { projectId } : { machineId: location.machineId }}
+        search={searchPage ? { machineId: location.machineId } : {}}
+        className="mb-4 inline-flex items-center gap-1.5 rounded-xs text-sm text-text-secondary outline-none hover:text-text-primary focus-visible:ring-2 focus-visible:ring-ring"
       >
         <ArrowLeft aria-hidden="true" className="size-4" />
-        返回项目
+        {searchPage ? '返回项目' : '返回设备'}
       </Link>
-
-      <header className="flex min-w-0 flex-wrap items-start justify-between gap-5">
-        <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 flex-wrap items-center gap-3">
-            <h1
-              title={project.name}
-              className="min-w-0 truncate text-page font-semibold text-text-primary"
+      <header className="mb-8 flex min-w-0 flex-wrap items-center gap-4">
+        <span
+          aria-hidden="true"
+          className="grid size-12 shrink-0 place-items-center rounded-lg border border-border bg-surface-inset text-text-muted"
+        >
+          <Folder className="size-6" />
+        </span>
+        <div className="min-w-0 flex-1 basis-48">
+          <h1 title={project.name} className="truncate text-page font-semibold">
+            {searchPage ? `在 ${project.name} 中搜索` : project.name}
+          </h1>
+          <div className="mt-2 flex min-w-0 flex-wrap items-center gap-2 text-sm text-text-muted">
+            <Link
+              to="/devices/$machineId"
+              params={{ machineId: location.machineId }}
+              className="rounded-xs outline-none hover:text-text-primary focus-visible:ring-2 focus-visible:ring-ring"
             >
-              {project.name}
-            </h1>
-            <ProjectAvailabilityBadge availability={availability} />
-            <span className="text-xs font-medium text-text-muted">
-              {project.locations.length} 个工作区位置
+              {machine?.displayName ?? '设备名称暂时未知'}
+            </Link>
+            <span aria-hidden="true">·</span>
+            <span
+              title={location.rootPath}
+              className="min-w-0 truncate font-mono"
+            >
+              {location.rootPath}
             </span>
           </div>
-          <p className="mt-1 text-sm text-text-secondary">
-            同一个项目可以在不同电脑上拥有独立的工作区位置。
-          </p>
         </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          <Button asChild variant="secondary" size="sm" className="h-9">
-            <Link
-              to="/projects/$projectId/conversations"
-              params={{ projectId: project.projectId }}
-              search={machineId === undefined ? {} : { machineId }}
-            >
-              <MessageSquare aria-hidden="true" />
-              查看会话
-            </Link>
-          </Button>
+        {!searchPage ? (
           <NewConversationDialog
             currentProject={project}
-            currentMachineId={machineId}
+            currentMachineId={location.machineId}
             trigger={
-              <Button
-                size="sm"
-                className="h-9"
-                disabled={!hasExecutableLocation}
-                title={
-                  !hasExecutableLocation
-                    ? '当前没有可执行智能体会话的工作区位置'
-                    : undefined
-                }
-              >
+              <Button disabled={!canCreate} title={state.reason}>
                 <Plus aria-hidden="true" />
                 新建会话
               </Button>
             }
           />
-          <AddProjectLocationDialog
-            project={project}
-            machines={machines}
-            trigger={
-              <Button
-                variant="secondary"
-                size="sm"
-                className="h-9"
-                disabled={connectionState !== 'connected'}
-              >
-                <Plus aria-hidden="true" />
-                添加位置
+        ) : null}
+      </header>
+      {!state.available ? (
+        <div className="mb-6">
+          <Notice
+            tone="warn"
+            title={state.label}
+            action={
+              <Button asChild size="sm" variant="secondary">
+                <Link
+                  to="/devices/$machineId"
+                  params={{ machineId: location.machineId }}
+                >
+                  查看设备
+                </Link>
               </Button>
             }
-          />
-          <Button
-            ref={removeButtonRef}
-            variant="danger"
-            size="sm"
-            className="h-9"
-            onClick={() => setRemoveOpen(true)}
           >
-            <Trash2 aria-hidden="true" />
-            移除项目
-          </Button>
+            {state.reason}
+          </Notice>
         </div>
-      </header>
-
-      {availability === 'unavailable' ? (
-        <section
-          role="status"
-          className="mt-6 flex min-w-0 items-start gap-3 rounded-md border border-warning/30 bg-warning-muted/45 px-4 py-3.5"
-        >
-          <TriangleAlert
-            aria-hidden="true"
-            className="mt-0.5 size-4 shrink-0 text-warning"
-          />
-          <div className="min-w-0">
-            <h2 className="text-sm font-medium text-text-primary">
-              当前没有可用的工作区位置
-            </h2>
-            <p className="mt-0.5 text-sm font-regular text-text-secondary">
-              已注册的位置当前均不可用。持久项目和历史仍可读取；恢复本地目录或远程电脑连接后会重新计算位置状态。
-            </p>
-          </div>
-        </section>
       ) : null}
-
-      <div className="mt-6 grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_18rem]">
-        <ProjectLocationsSection machines={machines} project={project} />
-        <ProjectAvailabilityPanel availability={availability} />
-      </div>
-
-      {connectionState === 'reconnecting' ? (
-        <p
-          role="status"
-          className="mt-4 inline-flex items-center gap-1.5 text-xs font-regular text-text-muted"
-        >
-          <RefreshCw
-            aria-hidden="true"
-            className="size-3.5 animate-spin motion-reduce:animate-none"
-          />
-          正在重新连接，当前显示最近读取的项目数据。
-        </p>
-      ) : null}
-
-      <RemoveProjectDialog
-        open={removeOpen}
-        project={project}
-        onOpenChange={handleRemoveOpenChange}
+      <ProjectConversationCollection
+        key={`${projectId}:${location.machineId}`}
+        projectId={projectId}
+        machineId={location.machineId}
+        projectName={project.name}
+        search={{ ...search, machineId: location.machineId }}
+        searchPage={searchPage}
       />
-    </div>
-  )
-}
-
-function ProjectAvailabilityPanel({
-  availability,
-}: {
-  availability: 'available' | 'unavailable'
-}) {
-  const available = availability === 'available'
-
-  return (
-    <section className="rounded-lg border border-border bg-surface/65 p-5">
-      <div className="flex items-center justify-between gap-3">
-        <h2 className="text-section font-semibold text-text-primary">
-          访问状态
-        </h2>
-        <ProjectAvailabilityBadge availability={availability} />
-      </div>
-      <p className="mt-3 text-sm font-regular text-text-secondary">
-        {available
-          ? '至少一个工作区位置当前可访问。智能体执行仍取决于所选电脑的真实能力。'
-          : '持久项目记录仍可查看，但所有工作区相关操作会安全失败。'}
-      </p>
-      <Separator className="my-5" />
-      <div className="flex items-start gap-2.5">
-        <ShieldCheck
-          aria-hidden="true"
-          className={available ? 'size-4 text-success' : 'size-4 text-warning'}
-        />
-        <div>
-          <p className="text-sm font-medium text-text-primary">
-            电脑范围的工作区授权
-          </p>
-          <p className="mt-1 text-xs font-regular text-text-muted">
-            每个位置都绑定到一台真实电脑；路径授权不会在电脑之间复制或推断。
-          </p>
-        </div>
-      </div>
-    </section>
+      {!searchPage && !archived ? (
+        <>
+          <section className="mt-10 min-w-0" aria-label="以前的会话">
+            <PreviousConversationsStep
+              key={`${projectId}:${location.machineId}`}
+              projectId={projectId}
+              machineId={location.machineId}
+              presentation="embedded"
+              onFinished={() => undefined}
+            />
+          </section>
+          <section
+            className="mt-10 flex min-w-0 flex-wrap items-center gap-3 rounded-lg border border-border bg-surface p-5"
+            aria-labelledby="project-removal-heading"
+          >
+            <div className="min-w-0 flex-1 basis-48">
+              <h2
+                id="project-removal-heading"
+                className="text-base font-semibold"
+              >
+                移除项目
+              </h2>
+              <p className="mt-1 text-sm text-text-secondary">
+                还有会话（包括已归档）时不能移除。只从 CodeTether
+                中移除，不删除任何文件。
+              </p>
+            </div>
+            <Button
+              ref={removeTrigger}
+              variant="danger"
+              size="sm"
+              onClick={() => setRemoveOpen(true)}
+            >
+              <Trash2 aria-hidden="true" />
+              移除
+            </Button>
+          </section>
+        </>
+      ) : null}
+      <RemoveProjectDialog
+        project={project}
+        open={removeOpen}
+        onOpenChange={closeRemoval}
+      />
+    </ProjectFrame>
   )
 }
 
 function ProjectNotFound() {
   return (
-    <ProjectPageFrame>
-      <section className="grid min-h-64 place-items-center rounded-lg border border-border bg-surface/45 px-6 py-10 text-center">
-        <div className="max-w-md">
-          <h1 className="text-section font-semibold text-text-primary">
-            项目不存在
-          </h1>
-          <p className="mt-1.5 text-base font-regular text-text-secondary">
-            该项目可能已从 CodeTether 中移除，或链接中的项目标识无效。
-          </p>
-          <Button asChild variant="secondary" className="mt-5">
-            <Link to="/projects">返回项目列表</Link>
+    <ProjectFrame>
+      <SectionState
+        state="empty"
+        title="项目不存在"
+        description="项目记录不存在，或链接中的项目标识无效。"
+        action={
+          <Button asChild variant="secondary">
+            <Link to="/devices">返回设备</Link>
           </Button>
-        </div>
-      </section>
-    </ProjectPageFrame>
+        }
+      />
+    </ProjectFrame>
   )
 }
 
-function ProjectPageFrame({ children }: { children: ReactNode }) {
+function ProjectFrame({ children }: { children: ReactNode }) {
   return (
-    <div className="min-h-full min-w-0 px-[var(--layout-content-inline-padding)] py-[var(--layout-content-block-padding)]">
+    <div className="mx-auto min-h-full w-full min-w-0 max-w-(--page-w) px-4 py-6 sm:px-8">
       {children}
     </div>
   )

@@ -5,25 +5,24 @@ import test from 'node:test'
 
 const sourceRoot = resolve(import.meta.dirname, '../src')
 
-test('Project Detail presents every durable Machine location without choosing a sole path', async () => {
-  const [detail, locations, row, projectsPage] = await Promise.all([
+test('Project Detail requires an explicit device for legacy multi-location Projects', async () => {
+  const [detail, model] = await Promise.all([
     source('components/projects/project-detail-page.tsx'),
-    source('components/projects/project-locations-section.tsx'),
-    source('components/projects/project-row.tsx'),
-    source('components/projects/projects-page.tsx'),
+    source('components/projects/project-workspace-model.ts'),
   ])
-
-  assert.match(detail, /<ProjectLocationsSection/u)
-  assert.match(detail, /project\.locations\.length/u)
-  assert.doesNotMatch(detail, /soleProjectLocation/u)
-  assert.match(locations, /project\.locations\.map/u)
-  assert.match(locations, /key=\{location\.machineId\}/u)
-  assert.match(locations, /to="\/machines\/\$machineId"/u)
-  assert.match(locations, /远程电脑当前离线/u)
-  assert.match(locations, /truncate/u)
-  assert.match(row, /primaryProjectLocation/u)
-  assert.match(row, /共 \{project\.locations\.length\} 个位置/u)
-  assert.doesNotMatch(projectsPage, /soleProjectLocation/u)
+  assert.match(detail, /resolveProjectWorkspaceContext\(/u)
+  assert.match(detail, /project\.locations\.map/u)
+  assert.match(detail, /key=\{location\.machineId\}/u)
+  assert.match(detail, /machineId: location\.machineId/u)
+  assert.match(detail, /currentMachineId=\{location\.machineId\}/u)
+  assert.match(detail, /title=\{location\.rootPath\}/u)
+  assert.match(detail, /选择要查看的设备/u)
+  assert.match(model, /project\.locations\.length !== 1/u)
+  assert.match(model, /kind: 'choose-device'/u)
+  assert.doesNotMatch(
+    detail,
+    /soleProjectLocation|primaryProjectLocation|AddProjectLocationDialog|RemoveProjectLocationDialog/u,
+  )
 })
 
 test('Add Location is a bounded, keyboard-accessible remote path registration flow', async () => {

@@ -7,15 +7,11 @@ import test from 'node:test'
 const webDirectory = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
 test('Conversation list exposes URL-backed Active and Archived views', async () => {
-  const [page, router] = await Promise.all([
-    sourceOf('components/conversations/conversations-page.tsx'),
+  const [page, model, router] = await Promise.all([
+    sourceOf('components/projects/project-conversation-collection.tsx'),
+    sourceOf('components/projects/project-workspace-model.ts'),
     sourceOf('router.tsx'),
   ])
-
-  assert.match(
-    page,
-    /useSearch\(\{ from: '\/projects\/\$projectId\/conversations' \}\)/u,
-  )
   assert.match(page, /search\.view === 'archived' \? 'archived' : 'active'/u)
   assert.match(
     page,
@@ -25,15 +21,17 @@ test('Conversation list exposes URL-backed Active and Archived views', async () 
     page,
     /conversationListQueryOptions\(runtime, projectId, 'archived'\)/u,
   )
-  assert.match(page, /\['active', '活跃'\]/u)
-  assert.match(page, /\['archived', '已归档'\]/u)
-  assert.match(router, /search\.view === 'archived'/u)
+  assert.match(page, /SegmentedControlItem value="active"/u)
+  assert.match(page, /SegmentedControlItem value="archived"/u)
+  assert.match(page, /value === 'archived' \? 'archived' : undefined/u)
+  assert.match(model, /search\.view === 'archived'/u)
+  assert.match(router, /path: '\/projects\/\$projectId\/conversations'/u)
 })
 
 test('Conversation list preserves Host ordering and has no local sort control', async () => {
   const [page, model] = await Promise.all([
-    sourceOf('components/conversations/conversations-page.tsx'),
-    sourceOf('components/conversations/conversation-list-model.ts'),
+    sourceOf('components/projects/project-conversation-collection.tsx'),
+    sourceOf('components/projects/project-workspace-model.ts'),
   ])
 
   assert.doesNotMatch(page, /SortAsc|sortLabels|onSortChange/u)
@@ -86,7 +84,7 @@ test('Rename and Archive dialogs preserve input, errors, and keyboard focus', as
 
 test('Archive safety and organization empty states are truthful', async () => {
   const [page, controls] = await Promise.all([
-    sourceOf('components/conversations/conversations-page.tsx'),
+    sourceOf('components/projects/project-conversation-collection.tsx'),
     sourceOf('components/conversations/conversation-organization-controls.tsx'),
   ])
 
@@ -94,10 +92,10 @@ test('Archive safety and organization empty states are truthful', async () => {
   assert.match(controls, /运行中的会话暂时不能归档/u)
   assert.match(controls, /conversation\.status === 'waiting'/u)
   assert.match(controls, /当前会话仍在等待你的确认/u)
-  assert.match(page, /还没有活跃会话/u)
-  assert.match(page, /暂无已归档会话/u)
-  assert.match(page, /查看已归档/u)
-  assert.match(page, /返回活跃会话/u)
+  assert.match(page, /还没有会话/u)
+  assert.match(page, /没有已归档的会话/u)
+  assert.match(page, /value="active"/u)
+  assert.match(page, /value="archived"/u)
 })
 
 test('removed list rows restore focus across the pinned divider', async () => {

@@ -261,10 +261,11 @@ test('Project and Conversation surfaces resolve Machine display without a switch
     source('components/conversation/conversation-controls.ts'),
   ])
 
-  assert.match(projectDetail, /<ProjectLocationsSection/u)
+  assert.match(projectDetail, /resolveProjectWorkspaceContext\(/u)
   assert.doesNotMatch(projectDetail, /soleProjectLocation\(project\)/u)
+  assert.match(projectDetail, /currentMachineId=\{location\.machineId\}/u)
+  assert.match(projectDetail, /to="\/devices\/\$machineId"/u)
   assert.match(projectLocations, /project\.locations\.map/u)
-  assert.match(projectLocations, /to="\/machines\/\$machineId"/u)
   assert.match(
     conversationRoute,
     /machineDetailQueryOptions\(runtime, machineId\)/u,

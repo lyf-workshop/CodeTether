@@ -5,16 +5,17 @@ import {
   redirect,
 } from '@tanstack/react-router'
 import {
-  ConversationSearchQueryTextSchema,
-  MachineIdSchema,
   ProjectIdSchema,
   TurnIdSchema,
-  type MachineId,
   type TurnId,
 } from '@codetether/protocol'
 import { RootLayout } from './components/app-shell/root-layout'
+import { ProjectSearchRoute } from './components/projects/project-detail-page'
+import {
+  parseProjectWorkspaceSearch,
+  type ProjectWorkspaceSearch,
+} from './components/projects/project-workspace-model.js'
 import { ConversationDetailRoute } from './components/conversation/conversation-detail-route'
-import { ProjectConversationsRoute } from './components/conversations'
 import { InboxPage } from './components/inbox'
 import { MachineDetailRoute, MachinesPage } from './components/machines'
 import { ProjectDetailRoute } from './components/projects'
@@ -29,13 +30,7 @@ interface ConversationSearch {
   panel?: 'changes'
   turn?: TurnId
 }
-interface ProjectSearch {
-  machineId?: MachineId
-}
-interface ProjectConversationsSearch extends ProjectSearch {
-  q?: string
-  view?: 'archived'
-}
+type ProjectSearch = ProjectWorkspaceSearch
 
 function conversationSearch(
   search: Record<string, unknown>,
@@ -48,8 +43,7 @@ function conversationSearch(
   }
 }
 function projectSearch(search: Record<string, unknown>): ProjectSearch {
-  const machineId = MachineIdSchema.safeParse(search.machineId)
-  return machineId.success ? { machineId: machineId.data } : {}
+  return parseProjectWorkspaceSearch(search)
 }
 
 const homeRoute = createRoute({
@@ -109,18 +103,16 @@ const projectDetailRoute = createRoute({
 const projectConversationsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/projects/$projectId/conversations',
-  validateSearch: (
-    search: Record<string, unknown>,
-  ): ProjectConversationsSearch => {
-    const query = ConversationSearchQueryTextSchema.safeParse(search.q)
-    return {
-      ...projectSearch(search),
-      ...(query.success ? { q: query.data } : {}),
-      ...(search.view === 'archived' ? { view: 'archived' as const } : {}),
-    }
-  },
-  component: ProjectConversationsRoute,
+  validateSearch: projectSearch,
+  component: ProjectDetailRoute,
 })
+const projectSearchRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/projects/$projectId/search',
+  validateSearch: projectSearch,
+  component: ProjectSearchRoute,
+})
+
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/settings',
@@ -200,6 +192,7 @@ const routeTree = rootRoute.addChildren([
   deviceDetailRoute,
   projectDetailRoute,
   projectConversationsRoute,
+  projectSearchRoute,
   settingsRoute,
   machinesRoute,
   machineDetailRoute,

@@ -40,7 +40,7 @@ test('selection stays accessible and adoption is an explicit per-candidate mutat
   assert.match(source, /\? 'alert'/u)
   assert.match(source, /for \(const candidate of candidates\)/u)
   assert.match(source, /runtime\.adoptProviderSession\(/u)
-  assert.match(source, /导入不会启动智能体/u)
+  assert.match(source, /导入不会启动 AI 工具/u)
   assert.match(source, /已在 CodeTether 中/u)
   assert.match(source, /会话已发生变化，请重新扫描/u)
   assert.doesNotMatch(source, /nativeSessionId/u)

@@ -14,6 +14,7 @@ import {
   useHostRuntime,
 } from '../../runtime/host/host-runtime-hooks'
 import { projectDetailQueryOptions } from '../../runtime/host/project-query'
+import { resolveProjectWorkspaceContext } from '../projects/project-workspace-model.js'
 import { machineDetailQueryOptions } from '../../runtime/host/machine-query'
 import { AppShell } from './app-shell'
 import type { TopBarBreadcrumb } from './top-bar'
@@ -59,9 +60,8 @@ function StandardRootLayout({ currentPath }: { currentPath: string }) {
   const conversationMatch = /^\/(?:conversations|c)\/([^/]+)\/?$/u.exec(
     currentPath,
   )
-  const projectMatch = /^\/projects\/([^/]+)(?:\/conversations)?\/?$/u.exec(
-    currentPath,
-  )
+  const projectMatch =
+    /^\/projects\/([^/]+)(?:\/(?:conversations|search))?\/?$/u.exec(currentPath)
   const machineMatch = /^\/(?:devices|machines)\/([^/]+)\/?$/u.exec(currentPath)
   const parsedConversation = ConversationIdSchema.safeParse(
     safeDecode(conversationMatch?.[1]),
@@ -92,15 +92,22 @@ function StandardRootLayout({ currentPath }: { currentPath: string }) {
     enabled: connectionState === 'connected' && projectId !== undefined,
   })
   const currentProject = projectQuery.data
+  const projectContext =
+    currentProject === undefined
+      ? undefined
+      : resolveProjectWorkspaceContext(
+          currentProject,
+          selectedMachine.success ? selectedMachine.data : undefined,
+          search.invalidMachineId === true ||
+            (search.machineId !== undefined && !selectedMachine.success),
+        )
   const currentMachineId =
     currentConversation?.machineId ??
     (parsedMachine.success ? parsedMachine.data : undefined) ??
-    (projectMatch !== null && selectedMachine.success
-      ? selectedMachine.data
-      : undefined) ??
-    (currentProject?.locations.length === 1
-      ? currentProject.locations[0]?.machineId
+    (projectMatch !== null && projectContext?.kind === 'selected'
+      ? projectContext.location.machineId
       : undefined)
+
   const machineQuery = useQuery({
     ...machineDetailQueryOptions(
       runtime,
@@ -114,7 +121,9 @@ function StandardRootLayout({ currentPath }: { currentPath: string }) {
     conversationMatch !== null
       ? (currentConversation?.title ?? '会话')
       : projectMatch !== null
-        ? projectName
+        ? currentPath.endsWith('/search')
+          ? '搜索'
+          : projectName
         : machineMatch !== null
           ? machineName
           : (pageTitles[currentPath] ?? 'CodeTether')
@@ -128,7 +137,9 @@ function StandardRootLayout({ currentPath }: { currentPath: string }) {
       })
     if (
       projectId !== undefined &&
-      (conversationMatch !== null || currentPath.endsWith('/conversations'))
+      (conversationMatch !== null ||
+        currentPath.endsWith('/conversations') ||
+        currentPath.endsWith('/search'))
     ) {
       breadcrumbs.push({
         label: projectName,
@@ -142,8 +153,8 @@ function StandardRootLayout({ currentPath }: { currentPath: string }) {
       label:
         conversationMatch !== null
           ? currentPage
-          : currentPath.endsWith('/conversations')
-            ? '会话'
+          : currentPath.endsWith('/search')
+            ? '搜索'
             : projectName,
     })
   } else if (machineMatch !== null) {

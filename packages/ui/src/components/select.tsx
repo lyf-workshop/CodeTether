@@ -37,13 +37,13 @@ function SelectTrigger({
       data-slot="select-trigger"
       data-size={size}
       className={cn(
-        'flex w-full items-center justify-between gap-2 rounded-sm border border-border-strong bg-surface-muted px-3 text-base text-text-primary',
+        'flex w-full items-center justify-between gap-2 rounded-sm border border-border-strong bg-surface px-3 text-md text-text-primary',
         'transition-colors duration-150 motion-reduce:transition-none',
         'outline-none hover:border-ring/70 hover:bg-surface-elevated',
         'focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40',
         'disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-40',
         'aria-invalid:border-danger aria-invalid:ring-2 aria-invalid:ring-danger/30',
-        'data-[placeholder]:text-text-muted data-[size=default]:h-10 data-[size=sm]:h-8',
+        'data-[placeholder]:text-text-muted data-[size=default]:h-(--control-input-height) data-[size=sm]:h-(--control-height-sm)',
         '[&_[data-slot=select-value]]:line-clamp-1 [&_svg]:pointer-events-none [&_svg]:shrink-0',
         className,
       )}

@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 
 import './styles.css'
 import { LocalSupervisorPresenceCoordinator } from './runtime/account/local-supervisor-presence'
+import { getThemeController } from './runtime/theme/theme-preference'
 
 const rootElement = document.getElementById('root')
 
@@ -12,7 +13,7 @@ if (!rootElement) {
 
 const appRoot = rootElement
 
-document.documentElement.dataset.theme = 'dark'
+getThemeController()
 
 async function renderApp() {
   if (import.meta.env.DEV && window.location.pathname === '/__phase6d') {

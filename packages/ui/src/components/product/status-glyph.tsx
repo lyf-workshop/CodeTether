@@ -55,7 +55,7 @@ export function StatusDot({ status, className, ...props }: StatusDotProps) {
       data-slot="status-dot"
       className={cn(
         'size-2 shrink-0 rounded-full bg-current',
-        definition.iconClassName,
+        definition.dotClassName,
         'motion-safe:animate-none',
         className,
       )}

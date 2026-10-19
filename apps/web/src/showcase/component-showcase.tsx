@@ -1,9 +1,9 @@
+import { useState, useSyncExternalStore } from 'react'
 import {
   AgentBadge,
   Badge,
   Button,
-  CodeBlock,
-  ConversationItem,
+  Card,
   Dialog,
   DialogContent,
   DialogDescription,
@@ -11,633 +11,321 @@ import {
   DialogHeader,
   DialogTitle,
   DialogTrigger,
-  DiffCard,
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuShortcut,
-  DropdownMenuTrigger,
-  IconButton,
   Input,
-  MachineBadge,
-  PermissionCard,
-  QuestionCard,
-  ScrollArea,
+  Notice,
   SearchInput,
+  SectionState,
+  SegmentedControl,
+  SegmentedControlItem,
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-  Separator,
-  ShellRunCard,
   StatusBadge,
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-  TerminalCard,
+  StatusTag,
   Textarea,
-  ToolCallCard,
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-  agentDefinitions,
   executionStatuses,
-  type AgentId,
-  type DiffLine,
 } from '@codetether/ui'
 
+import {
+  getThemeController,
+  type ThemePreference,
+} from '../runtime/theme/theme-preference'
 import { ShowcaseGroup, ShowcaseSection } from './showcase-section'
 
-const foundationColors = [
-  { label: 'Background', token: '--background', className: 'bg-background' },
-  { label: 'Surface', token: '--surface', className: 'bg-surface' },
-  {
-    label: 'Surface muted',
-    token: '--surface-muted',
-    className: 'bg-surface-muted',
-  },
-  {
-    label: 'Surface elevated',
-    token: '--surface-elevated',
-    className: 'bg-surface-elevated',
-  },
-  { label: 'Border', token: '--border', className: 'bg-border' },
-  {
-    label: 'Border strong',
-    token: '--border-strong',
-    className: 'bg-border-strong',
-  },
-  {
-    label: 'Text primary',
-    token: '--text-primary',
-    className: 'bg-text-primary',
-  },
-  {
-    label: 'Text secondary',
-    token: '--text-secondary',
-    className: 'bg-text-secondary',
-  },
-  {
-    label: 'Text muted',
-    token: '--text-muted',
-    className: 'bg-text-muted',
-  },
-  { label: 'Primary', token: '--primary', className: 'bg-primary' },
-  { label: 'Success', token: '--success', className: 'bg-success' },
-  { label: 'Warning', token: '--warning', className: 'bg-warning' },
-  { label: 'Danger', token: '--danger', className: 'bg-danger' },
-  { label: 'Info', token: '--info', className: 'bg-info' },
+const colors = [
+  { label: '画布', className: 'bg-background' },
+  { label: '侧栏', className: 'bg-navigation' },
+  { label: '表面', className: 'bg-surface' },
+  { label: '凹陷', className: 'bg-surface-inset' },
+  { label: '选中', className: 'bg-surface-selected' },
+  { label: '墨色', className: 'bg-ink' },
+  { label: '强调', className: 'bg-primary' },
+  { label: '成功', className: 'bg-success' },
+  { label: '警告', className: 'bg-warning' },
+  { label: '错误', className: 'bg-danger' },
 ] as const
 
-const spacingTokens = [
-  { label: '4', className: 'w-1' },
-  { label: '8', className: 'w-2' },
-  { label: '12', className: 'w-3' },
-  { label: '16', className: 'w-4' },
-  { label: '20', className: 'w-5' },
-  { label: '24', className: 'w-6' },
-  { label: '32', className: 'w-8' },
-  { label: '40', className: 'w-10' },
-  { label: '48', className: 'w-12' },
-] as const
+const themes: { value: ThemePreference; label: string }[] = [
+  { value: 'light', label: '浅色' },
+  { value: 'dark', label: '深色' },
+  { value: 'system', label: '跟随系统' },
+]
 
-const showcaseAgents = [
-  'codex',
-  'claude',
-  'opencode',
-] as const satisfies readonly AgentId[]
-
-const showcaseDiff = [
-  {
-    kind: 'context',
-    content: 'export function getStatusLabel(status: ExecutionStatus) {',
-    oldLineNumber: 18,
-    newLineNumber: 18,
-  },
-  {
-    kind: 'deletion',
-    content: '  return statusLabels[status]',
-    oldLineNumber: 19,
-  },
-  {
-    kind: 'addition',
-    content: '  return statusDefinitions[status].label',
-    newLineNumber: 19,
-  },
-  {
-    kind: 'context',
-    content: '}',
-    oldLineNumber: 20,
-    newLineNumber: 20,
-  },
-] as const satisfies readonly DiffLine[]
-
+/** Development-only visual catalog. It never calls Host or provider APIs. */
 export function ComponentShowcase() {
+  const themeController = getThemeController()
+  const preference = useSyncExternalStore(
+    themeController.subscribe,
+    themeController.getPreference,
+  )
+  const [scope, setScope] = useState('active')
+  const [dialogOpen, setDialogOpen] = useState(false)
+  const [choice, setChoice] = useState('codex')
+
   return (
-    <TooltipProvider>
-      <main className="min-h-screen bg-background px-4 py-8 text-text-primary sm:px-6 lg:px-10">
-        <div className="mx-auto flex w-full max-w-screen-2xl flex-col gap-6">
-          <header className="pb-2">
-            <p className="text-xs font-medium tracking-wide text-primary uppercase">
-              Phase 1A · Development only
+    <main className="h-dvh min-w-0 overflow-x-hidden overflow-y-auto bg-background px-4 py-6 text-text-primary sm:px-8">
+      <div className="mx-auto flex w-full max-w-(--page-w) flex-col gap-6">
+        <header className="flex min-w-0 flex-wrap items-end justify-between gap-4">
+          <div className="min-w-0">
+            <p className="text-sm text-text-secondary">CodeTether · 开发预览</p>
+            <h1 className="mt-2 text-page font-semibold">视觉规范与基础组件</h1>
+            <p className="mt-2 max-w-prose text-md text-text-secondary">
+              v4 基础组件展示。所有内容均为界面示例，不连接设备或运行 AI 工具。
             </p>
-            <h1 className="mt-2 text-display font-semibold">
-              CodeTether Design System
-            </h1>
-            <p className="mt-2 max-w-3xl text-base text-text-secondary">
-              A visual review surface for Figma 00 Foundations and 92
-              Components. This route is not part of the product experience.
-            </p>
-          </header>
-
-          <ShowcaseSection
-            id="foundations"
-            title="Foundations"
-            description="Dark-theme semantic tokens mapped from Figma. Components consume token names rather than one-off visual values."
+          </div>
+          <SegmentedControl
+            aria-label="主题"
+            value={preference}
+            onValueChange={(value) =>
+              themeController.setPreference(value as ThemePreference)
+            }
           >
-            <div className="grid gap-8 xl:grid-cols-3">
-              <ShowcaseGroup title="Typography">
-                <div className="space-y-4">
-                  <p className="text-display font-semibold">Display / 32</p>
-                  <p className="text-page font-semibold">Page title / 28</p>
-                  <p className="text-section font-semibold">Section / 18</p>
-                  <p className="text-base">Body / 14 / Regular</p>
-                  <p className="text-xs font-medium text-text-secondary">
-                    Caption / 11 / Medium
-                  </p>
-                  <code className="block font-mono text-sm text-info">
-                    Mono / code and terminal output
-                  </code>
-                </div>
-              </ShowcaseGroup>
+            {themes.map((theme) => (
+              <SegmentedControlItem key={theme.value} value={theme.value}>
+                {theme.label}
+              </SegmentedControlItem>
+            ))}
+          </SegmentedControl>
+        </header>
 
-              <ShowcaseGroup title="Colors">
-                <div className="grid gap-2 sm:grid-cols-2">
-                  {foundationColors.map((color) => (
+        <ShowcaseSection
+          id="foundations"
+          title="基础规范"
+          description="暖灰表面、系统字体与统一强调色。主按钮使用墨色。"
+        >
+          <div className="grid min-w-0 gap-6 md:grid-cols-2">
+            <ShowcaseGroup title="颜色">
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+                {colors.map((color) => (
+                  <div
+                    key={color.label}
+                    className="min-w-0 rounded-sm border border-border p-2"
+                  >
                     <div
-                      key={color.token}
-                      className="flex min-w-0 items-center gap-3 rounded-sm border border-border bg-surface-muted p-2"
-                    >
-                      <span
-                        aria-hidden="true"
-                        className={
-                          'size-6 shrink-0 rounded-xs border border-border ' +
-                          color.className
-                        }
-                      />
-                      <span className="min-w-0">
-                        <span className="block truncate text-sm text-text-primary">
-                          {color.label}
-                        </span>
-                        <code className="block truncate text-2xs text-text-muted">
-                          {color.token}
-                        </code>
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </ShowcaseGroup>
-
-              <div className="grid gap-6 sm:grid-cols-2 xl:grid-cols-1">
-                <ShowcaseGroup title="Spacing">
-                  <div className="space-y-2">
-                    {spacingTokens.map((space) => (
-                      <div
-                        key={space.label}
-                        className="flex items-center gap-3 text-xs text-text-secondary"
-                      >
-                        <span className="w-6 tabular-nums">{space.label}</span>
-                        <span
-                          aria-hidden="true"
-                          className={
-                            'h-1 rounded-full bg-primary ' + space.className
-                          }
-                        />
-                      </div>
-                    ))}
+                      aria-hidden="true"
+                      className={`h-8 rounded-xs border border-border ${color.className}`}
+                    />
+                    <p className="mt-2 text-sm text-text-secondary">
+                      {color.label}
+                    </p>
                   </div>
-                </ShowcaseGroup>
-
-                <ShowcaseGroup title="Radius & elevation">
-                  <div className="flex flex-wrap items-end gap-3">
-                    <span className="grid size-12 place-items-center rounded-xs border border-border-strong bg-surface-elevated text-2xs">
-                      Small
-                    </span>
-                    <span className="grid size-12 place-items-center rounded-sm border border-border-strong bg-surface-elevated text-2xs">
-                      Medium
-                    </span>
-                    <span className="grid size-12 place-items-center rounded-lg border border-border-strong bg-surface-elevated text-2xs">
-                      Large
-                    </span>
-                    <span className="grid size-12 place-items-center rounded-full border border-border-strong bg-surface-elevated text-2xs">
-                      Full
-                    </span>
-                  </div>
-                </ShowcaseGroup>
+                ))}
               </div>
-            </div>
-          </ShowcaseSection>
-
-          <ShowcaseSection
-            id="primitives"
-            title="Primitive components"
-            description="Shared controls use clear hover, active, focus-visible, and disabled states. Radix powers compound interactions."
-          >
-            <div className="grid gap-8 xl:grid-cols-2">
-              <ShowcaseGroup title="Buttons">
-                <div className="flex flex-wrap items-center gap-3">
-                  <Button>Default</Button>
-                  <Button className="bg-primary-hover">Hover reference</Button>
-                  <Button variant="secondary">Secondary</Button>
-                  <Button disabled>Disabled</Button>
-                  <Button variant="danger">Danger</Button>
-                  <IconButton
-                    label="More component actions"
-                    variant="secondary"
-                  >
-                    <span aria-hidden="true">•••</span>
-                  </IconButton>
-                </div>
-              </ShowcaseGroup>
-
-              <ShowcaseGroup title="Badges">
-                <div className="flex flex-wrap gap-2">
-                  <Badge>Default</Badge>
-                  <Badge variant="secondary">Secondary</Badge>
-                  <Badge variant="outline">Outline</Badge>
-                  <Badge variant="success">Success</Badge>
-                  <Badge variant="warning">Warning</Badge>
-                  <Badge variant="danger">Danger</Badge>
-                  <Badge variant="info">Info</Badge>
-                </div>
-              </ShowcaseGroup>
-
-              <ShowcaseGroup title="Inputs">
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <label className="grid gap-1.5 text-xs text-text-secondary">
-                    Project name
-                    <Input placeholder="CodeTether V2" />
-                  </label>
-                  <label className="grid gap-1.5 text-xs text-text-secondary">
-                    Search
-                    <SearchInput placeholder="Search conversations" />
-                  </label>
-                  <label className="grid gap-1.5 text-xs text-text-secondary sm:col-span-2">
-                    Message
-                    <Textarea placeholder="Reply to the agent…" />
-                  </label>
-                  <label className="grid gap-1.5 text-xs text-text-secondary">
-                    Disabled
-                    <Input disabled value="Unavailable" readOnly />
-                  </label>
-                  <label className="grid gap-1.5 text-xs text-text-secondary">
-                    Agent
-                    <Select defaultValue="codex">
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select an agent" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="codex">Codex</SelectItem>
-                        <SelectItem value="claude">Claude Code</SelectItem>
-                        <SelectItem value="opencode">OpenCode</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </label>
-                </div>
-              </ShowcaseGroup>
-
-              <ShowcaseGroup title="Tabs">
-                <Tabs defaultValue="activity">
-                  <TabsList>
-                    <TabsTrigger value="activity">Activity</TabsTrigger>
-                    <TabsTrigger value="changes">Changes</TabsTrigger>
-                    <TabsTrigger value="terminal">Terminal</TabsTrigger>
-                  </TabsList>
-                  <TabsContent
-                    value="activity"
-                    className="rounded-sm border border-border bg-surface-inset p-3 text-sm text-text-secondary"
-                  >
-                    Activity uses a compact segmented treatment.
-                  </TabsContent>
-                  <TabsContent
-                    value="changes"
-                    className="rounded-sm border border-border bg-surface-inset p-3 text-sm text-text-secondary"
-                  >
-                    Changes keep their own panel content.
-                  </TabsContent>
-                  <TabsContent
-                    value="terminal"
-                    className="rounded-sm border border-border bg-surface-inset p-3 text-sm text-text-secondary"
-                  >
-                    Terminal remains a distinct information surface.
-                  </TabsContent>
-                </Tabs>
-              </ShowcaseGroup>
-
-              <ShowcaseGroup title="Menus, tooltip, dialog">
-                <div className="flex flex-wrap gap-3">
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button variant="secondary">Open menu</Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent>
-                      <DropdownMenuLabel>Conversation</DropdownMenuLabel>
-                      <DropdownMenuItem>
-                        Resume
-                        <DropdownMenuShortcut>R</DropdownMenuShortcut>
-                      </DropdownMenuItem>
-                      <DropdownMenuItem>Mark unread</DropdownMenuItem>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem variant="danger">
-                        Terminate
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button variant="outline">Keyboard hint</Button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      Open command palette · Ctrl K
-                    </TooltipContent>
-                  </Tooltip>
-
-                  <Dialog>
-                    <DialogTrigger asChild>
-                      <Button>Open dialog</Button>
-                    </DialogTrigger>
-                    <DialogContent>
-                      <DialogHeader>
-                        <DialogTitle>Interrupt this run?</DialogTitle>
-                        <DialogDescription>
-                          The current command will stop. Conversation history is
-                          preserved.
-                        </DialogDescription>
-                      </DialogHeader>
-                      <DialogFooter>
-                        <Button variant="secondary">Keep running</Button>
-                        <Button variant="danger">Interrupt</Button>
-                      </DialogFooter>
-                    </DialogContent>
-                  </Dialog>
-                </div>
-              </ShowcaseGroup>
-
-              <ShowcaseGroup title="Separator & scroll area">
-                <ScrollArea className="h-40 rounded-sm border border-border bg-surface-inset">
-                  <div className="p-3">
-                    {executionStatuses.map((status, index) => (
-                      <div key={status}>
-                        <div className="flex items-center justify-between gap-3 py-2">
-                          <span className="text-sm text-text-secondary">
-                            Canonical status {index + 1}
-                          </span>
-                          <StatusBadge status={status} />
-                        </div>
-                        {index < executionStatuses.length - 1 ? (
-                          <Separator />
-                        ) : null}
-                      </div>
-                    ))}
-                  </div>
-                </ScrollArea>
-              </ShowcaseGroup>
-            </div>
-          </ShowcaseSection>
-
-          <ShowcaseSection
-            id="identity-status"
-            title="Status & identity"
-            description="Execution vocabulary and agent visuals are defined centrally. Product components do not branch on provider names."
-          >
-            <div className="grid gap-8 xl:grid-cols-2">
-              <ShowcaseGroup title="Canonical execution status">
-                <div className="flex flex-wrap gap-2">
-                  {executionStatuses.map((status) => (
-                    <StatusBadge key={status} status={status} />
-                  ))}
-                </div>
-              </ShowcaseGroup>
-
-              <ShowcaseGroup title="Agent & machine identity">
-                <div className="flex flex-wrap items-center gap-3">
-                  {showcaseAgents.map((agent) => (
-                    <AgentBadge key={agent} agent={agent} />
-                  ))}
-                  <MachineBadge name="Development Mac" />
-                  <MachineBadge name="Remote workstation" />
-                </div>
-                <p className="mt-3 text-xs text-text-muted">
-                  {showcaseAgents
-                    .map((agent) => agentDefinitions[agent].name)
-                    .join(' · ')}
+            </ShowcaseGroup>
+            <ShowcaseGroup title="文字与间距">
+              <div className="space-y-3">
+                <p className="text-page font-semibold">设备与项目</p>
+                <p className="text-section font-semibold">
+                  清晰、安静的工作空间
                 </p>
-              </ShowcaseGroup>
-            </div>
-          </ShowcaseSection>
+                <p className="text-base">正文使用系统字体，便于长时间阅读。</p>
+                <p className="text-sm text-text-secondary">
+                  次级信息 · 设备、项目与会话上下文
+                </p>
+                <p className="text-xs text-text-muted">
+                  间距：4 / 8 / 12 / 16 / 20 / 24 / 32 / 40 / 48
+                </p>
+              </div>
+            </ShowcaseGroup>
+          </div>
+        </ShowcaseSection>
 
-          <ShowcaseSection
-            id="activity"
-            title="Conversation & activity"
-            description="Presentational components accept mock props only. They do not own host state, persistence, or agent behavior."
-          >
-            <div className="grid gap-6 xl:grid-cols-2">
-              <ShowcaseGroup title="Conversation items">
-                <div className="space-y-3">
-                  <ConversationItem
-                    title="Polish the shared component library"
-                    description="CodeTether V2 · Codex · 2 minutes ago"
-                    status="running"
-                  />
-                  <ConversationItem
-                    title="Approve package installation"
-                    description="Design system · Claude Code · 8 minutes ago"
-                    status="waiting"
-                  />
-                  <ConversationItem
-                    title="Fix typecheck regressions"
-                    description="Web workspace · OpenCode · Yesterday"
-                    status="failed"
-                  />
-                </div>
-              </ShowcaseGroup>
-
-              <ShowcaseGroup title="Tool calls">
-                <div className="space-y-3">
-                  <ToolCallCard
-                    title="packages/ui/src/components/button.tsx"
-                    description="Read file"
-                    status="completed"
-                    metadata="4.2 KB"
-                  />
-                  <ToolCallCard
-                    title="packages/ui/src/styles/globals.css"
-                    description="Update file"
-                    status="running"
-                    delta={{ additions: 28, deletions: 6 }}
-                  />
-                  <ToolCallCard
-                    title="Inspect component exports"
-                    status="thinking"
-                    action={<span>View details</span>}
-                  />
-                </div>
-              </ShowcaseGroup>
-
-              <ShowcaseGroup title="Shell runs">
-                <div className="space-y-3">
-                  <ShellRunCard
-                    command="pnpm typecheck"
-                    status="running"
-                    summary="Running"
-                  />
-                  <ShellRunCard
-                    command="pnpm lint"
-                    status="completed"
-                    summary="0 issues · 1.8s"
-                  />
-                  <ShellRunCard
-                    command="pnpm test"
-                    status="failed"
-                    summary="Exit 1"
-                  />
-                </div>
-              </ShowcaseGroup>
-
-              <ShowcaseGroup title="Terminal">
-                <TerminalCard
-                  title="Quality checks"
-                  output={[
-                    '$ pnpm typecheck',
-                    'All workspaces passed',
-                    '',
-                    '$ pnpm lint',
-                    'No warnings or errors',
-                    '',
-                    '$ pnpm build',
-                    'Building production bundle…',
-                  ]}
-                  action={<span>Open terminal</span>}
+        <ShowcaseSection
+          id="controls"
+          title="按钮与输入"
+          description="保留键盘操作、焦点提示与禁用状态。"
+        >
+          <div className="grid min-w-0 gap-6 md:grid-cols-2">
+            <ShowcaseGroup title="按钮">
+              <div className="flex flex-wrap items-center gap-2">
+                <Button onClick={() => setDialogOpen(true)}>新建会话</Button>
+                <Button variant="secondary" onClick={() => setDialogOpen(true)}>
+                  添加项目
+                </Button>
+                <Button variant="ghost" onClick={() => setDialogOpen(true)}>
+                  查看说明
+                </Button>
+                <Button variant="danger" onClick={() => setDialogOpen(true)}>
+                  移除项目
+                </Button>
+                <Button disabled>暂时不可用</Button>
+                <Button size="sm" onClick={() => setDialogOpen(true)}>
+                  小按钮
+                </Button>
+                <Button size="lg" onClick={() => setDialogOpen(true)}>
+                  大按钮
+                </Button>
+              </div>
+              <div className="mt-4">
+                <SegmentedControl
+                  aria-label="会话范围"
+                  value={scope}
+                  onValueChange={setScope}
+                >
+                  <SegmentedControlItem value="active">
+                    会话
+                  </SegmentedControlItem>
+                  <SegmentedControlItem value="archived">
+                    已归档
+                  </SegmentedControlItem>
+                  <SegmentedControlItem value="unavailable" disabled>
+                    不可用
+                  </SegmentedControlItem>
+                </SegmentedControl>
+                <p className="mt-2 text-sm text-text-secondary">
+                  当前范围：{scope === 'active' ? '会话' : '已归档'}
+                </p>
+              </div>
+            </ShowcaseGroup>
+            <ShowcaseGroup title="输入框">
+              <div className="space-y-3">
+                <label
+                  htmlFor="showcase-name"
+                  className="block text-md font-medium"
+                >
+                  项目名称
+                </label>
+                <Input id="showcase-name" placeholder="输入项目名称" />
+                <SearchInput
+                  aria-label="搜索项目内的会话"
+                  placeholder="搜索项目内的会话"
                 />
-              </ShowcaseGroup>
-            </div>
-          </ShowcaseSection>
-
-          <ShowcaseSection
-            id="code-changes"
-            title="Code & changes"
-            description="Code, diff, and terminal surfaces preserve horizontal navigation and do not rely on color alone for meaning."
-          >
-            <div className="grid gap-6 xl:grid-cols-2">
-              <ShowcaseGroup title="Code block">
-                <CodeBlock
-                  language="tsx"
-                  code={[
-                    'export function StatusBadge({ status }: Props) {',
-                    '  const definition = statusDefinitions[status]',
-                    '',
-                    '  return <Badge>{definition.label}</Badge>',
-                    '}',
-                  ].join('\n')}
+                <Textarea
+                  aria-label="消息示例"
+                  placeholder="描述你希望完成的工作"
                 />
-              </ShowcaseGroup>
-              <ShowcaseGroup title="Diff card">
-                <DiffCard
-                  fileName="packages/ui/src/tokens/statuses.ts"
-                  lines={showcaseDiff}
-                />
-              </ShowcaseGroup>
-            </div>
-          </ShowcaseSection>
+              </div>
+            </ShowcaseGroup>
+          </div>
+        </ShowcaseSection>
 
-          <ShowcaseSection
-            id="decisions"
-            title="Permissions & questions"
-            description="Risk and response cards remain display-only compositions. Actions are supplied by the consuming mock surface."
-          >
-            <div className="grid gap-6 xl:grid-cols-3">
-              <PermissionCard
-                agent="codex"
-                title="Read project metadata"
-                description="Inspect package manifests in the workspace."
-                command="rg --files -g package.json"
-                risk="low"
-                secondaryAction={
-                  <Button size="sm" variant="secondary">
-                    Reject
-                  </Button>
-                }
-                primaryAction={<Button size="sm">Allow once</Button>}
-              />
-              <PermissionCard
-                agent="claude"
-                title="Install UI dependencies"
-                description="Run a package manager command in this project."
-                command="pnpm add radix-ui"
-                risk="medium"
-                secondaryAction={
-                  <Button size="sm" variant="secondary">
-                    Reject
-                  </Button>
-                }
-                primaryAction={<Button size="sm">Allow once</Button>}
-              />
-              <PermissionCard
-                agent="opencode"
-                title="Remove generated output"
-                description="Delete files from a selected output directory."
-                command="Remove-Item output -Recurse"
-                risk="high"
-                secondaryAction={
-                  <Button size="sm" variant="secondary">
-                    Reject
-                  </Button>
-                }
-                primaryAction={
-                  <Button size="sm" variant="danger">
-                    Allow once
-                  </Button>
-                }
-              />
-            </div>
+        <ShowcaseSection
+          id="statuses"
+          title="状态与 AI 工具"
+          description="运行中使用蓝色圆点；等待批准与失败保持独立。"
+        >
+          <div className="grid min-w-0 gap-6 md:grid-cols-2">
+            <ShowcaseGroup title="会话状态">
+              <div className="flex flex-wrap gap-4">
+                {executionStatuses.map((status) => (
+                  <StatusBadge key={status} status={status} />
+                ))}
+              </div>
+              <div className="mt-4 flex flex-wrap gap-4">
+                <StatusTag tone="ok">在线</StatusTag>
+                <StatusTag tone="off">离线</StatusTag>
+                <StatusTag tone="warn">需要更新地址</StatusTag>
+              </div>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <Badge variant="success">项目已添加</Badge>
+                <Badge variant="warning">设备离线</Badge>
+                <Badge variant="danger">无法访问</Badge>
+              </div>
+            </ShowcaseGroup>
+            <ShowcaseGroup title="AI 工具标识">
+              <div className="flex flex-wrap items-center gap-4">
+                {(['sm', 'md', 'lg'] as const).map((size) => (
+                  <AgentBadge key={size} agent="codex" size={size} />
+                ))}
+              </div>
+              <div className="mt-4 flex flex-wrap items-center gap-4">
+                {(['sm', 'md', 'lg'] as const).map((size) => (
+                  <AgentBadge key={size} agent="claude" size={size} />
+                ))}
+              </div>
+            </ShowcaseGroup>
+          </div>
+        </ShowcaseSection>
 
-            <Separator className="my-6" />
-
-            <div className="space-y-3">
-              <QuestionCard
-                agent="codex"
-                title="Which visual density should this panel use?"
-                question="The Figma frame shows the compact variant at the desktop target."
-                project="CodeTether V2"
-                machine="Development Mac"
-                timestamp="Just now"
-                status="waiting"
-                secondaryAction={
-                  <Button size="sm" variant="secondary">
-                    Reply later
-                  </Button>
+        <ShowcaseSection
+          id="feedback"
+          title="提示与局部状态"
+          description="加载、空内容和错误分别呈现，未知值不显示为零。"
+        >
+          <div className="space-y-3">
+            <Notice tone="info" title="通过 Relay 连接">
+              设备与项目的权限保持不变。
+            </Notice>
+            <Notice tone="warn" title="设备离线">
+              恢复连接后可以继续操作，已有会话仍然可读。
+            </Notice>
+            <Notice
+              tone="err"
+              title="暂时无法加载"
+              action={
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => setDialogOpen(true)}
+                >
+                  查看说明
+                </Button>
+              }
+            >
+              请检查设备连接后重试。
+            </Notice>
+            <Notice tone="ok" title="项目已添加">
+              现在可以查看以前的会话，或新建一个会话。
+            </Notice>
+          </div>
+          <div className="mt-6 grid min-w-0 gap-4 md:grid-cols-2">
+            <Card className="p-4">
+              <SectionState state="loading" />
+            </Card>
+            <Card>
+              <SectionState
+                state="empty"
+                title="还没有项目"
+                description="添加一个项目文件夹，开始新的工作。"
+                action={
+                  <Button onClick={() => setDialogOpen(true)}>添加项目</Button>
                 }
-                primaryAction={<Button size="sm">Reply</Button>}
               />
-              <QuestionCard
-                agent="claude"
-                title="Component naming confirmed"
-                question="Use the shared StatusBadge vocabulary across every provider."
-                project="Design system"
-                machine="Remote workstation"
-                timestamp="4 minutes ago"
-                status="completed"
-              />
-            </div>
-          </ShowcaseSection>
-        </div>
-      </main>
-    </TooltipProvider>
+            </Card>
+          </div>
+        </ShowcaseSection>
+
+        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+          <DialogTrigger asChild>
+            <Button variant="secondary">打开弹窗示例</Button>
+          </DialogTrigger>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>基础组件示例</DialogTitle>
+              <DialogDescription>
+                用于检查焦点、键盘导航和浮层布局，不会创建项目或会话。
+              </DialogDescription>
+            </DialogHeader>
+            <label
+              htmlFor="showcase-dialog-name"
+              className="text-md font-medium"
+            >
+              项目名称
+            </label>
+            <Input id="showcase-dialog-name" placeholder="输入项目名称" />
+            <label htmlFor="showcase-tool" className="text-md font-medium">
+              AI 工具
+            </label>
+            <Select value={choice} onValueChange={setChoice}>
+              <SelectTrigger id="showcase-tool">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="codex">Codex</SelectItem>
+                <SelectItem value="claude">Claude Code</SelectItem>
+              </SelectContent>
+            </Select>
+            <DialogFooter>
+              <Button variant="secondary" onClick={() => setDialogOpen(false)}>
+                取消
+              </Button>
+              <Button onClick={() => setDialogOpen(false)}>完成</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      </div>
+    </main>
   )
 }

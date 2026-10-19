@@ -1,6 +1,6 @@
 import type { ComponentPropsWithoutRef } from 'react'
+import { Bot, Code, Sparkles } from 'lucide-react'
 
-import { Badge } from '../badge'
 import { cn } from '../../lib/cn'
 import { agentDefinitions, type AgentId } from '../../tokens'
 
@@ -10,28 +10,36 @@ export interface AgentBadgeProps extends Omit<
 > {
   agent: AgentId
   variant?: 'default' | 'compact'
+  size?: 'sm' | 'md' | 'lg'
 }
 
-/** Visual-only agent badge based on 7:1449, with 14:137 as compact mode. */
+const agentIcons = { codex: Bot, claude: Sparkles, opencode: Code } as const
+const agentSizes = {
+  sm: 'size-(--avatar-size-xs) rounded-xs [&>svg]:size-2.5',
+  md: 'size-(--avatar-size-sm) rounded-xs [&>svg]:size-3',
+  lg: 'size-(--avatar-size-md) rounded-sm [&>svg]:size-4',
+} as const
+
+/** Provider identity only; marks are abstract interface icons, not brand logos. */
 export function AgentBadge({
   agent,
   variant = 'default',
+  size = 'md',
   className,
   ...props
 }: AgentBadgeProps) {
   const definition = agentDefinitions[agent]
   const isCompact = variant === 'compact'
+  const Icon = agentIcons[agent]
 
   return (
-    <Badge
-      variant="outline"
+    <span
       data-agent={agent}
       data-slot="agent-badge"
       data-appearance={variant}
+      data-size={size}
       className={cn(
-        isCompact
-          ? 'h-7 rounded-sm border-border-strong bg-surface-elevated px-2 text-xs font-medium text-text-secondary'
-          : 'h-9 min-w-31 justify-start gap-2.5 rounded-md border-border-strong bg-surface-muted py-1 pr-3 pl-1.5 text-md font-medium text-text-primary',
+        'inline-flex max-w-full shrink-0 items-center gap-1.5 whitespace-nowrap text-sm text-text-secondary',
         className,
       )}
       {...props}
@@ -40,15 +48,16 @@ export function AgentBadge({
         <span
           aria-hidden="true"
           className={cn(
-            'grid size-[var(--avatar-size-sm)] shrink-0 place-items-center rounded-md border text-base font-semibold',
+            'grid shrink-0 place-items-center',
+            agentSizes[size],
             definition.accentClassName,
           )}
         >
-          {definition.icon}
+          <Icon aria-hidden="true" />
         </span>
       )}
-      <span className="truncate">{definition.shortName}</span>
-    </Badge>
+      <span className="truncate">{definition.name}</span>
+    </span>
   )
 }
 
@@ -59,13 +68,14 @@ export interface AgentIdentityMarkProps extends Omit<
   agent: AgentId
 }
 
-/** Shared 42px identity mark used by Figma permission and question cards. */
+/** Shared identity mark for permission and question cards. */
 export function AgentIdentityMark({
   agent,
   className,
   ...props
 }: AgentIdentityMarkProps) {
   const definition = agentDefinitions[agent]
+  const Icon = agentIcons[agent]
 
   return (
     <div
@@ -80,7 +90,7 @@ export function AgentIdentityMark({
       )}
       {...props}
     >
-      {definition.icon}
+      <Icon aria-hidden="true" className="size-4" />
     </div>
   )
 }

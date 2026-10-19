@@ -7,10 +7,10 @@ import { cn } from '@codetether/ui/lib/cn'
 
 const buttonVariants = cva(
   [
-    'inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-sm border border-transparent font-medium',
+    'inline-flex shrink-0 items-center justify-center gap-(--control-gap-md) whitespace-nowrap rounded-sm border border-transparent font-medium',
     'transition-colors duration-150 motion-reduce:transition-none',
     'outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-offset-2 focus-visible:ring-offset-background',
-    'disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-40',
+    'disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-45',
     'aria-invalid:border-danger aria-invalid:ring-2 aria-invalid:ring-danger/30',
     '[&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*="size-"])]:size-4',
   ],
@@ -18,26 +18,26 @@ const buttonVariants = cva(
     variants: {
       variant: {
         default:
-          'bg-primary-action text-primary-foreground hover:bg-primary-hover active:bg-primary',
+          'border-ink bg-ink text-on-ink shadow-subtle hover:border-ink-hover hover:bg-ink-hover active:bg-ink',
         secondary:
-          'border-border-strong bg-surface-muted text-text-primary hover:bg-surface-elevated active:bg-surface',
+          'border-border-strong bg-surface text-text-primary shadow-subtle hover:bg-surface-muted active:bg-surface-selected',
         outline:
-          'border-border-strong bg-transparent text-text-primary hover:bg-surface-muted active:bg-surface-elevated',
+          'border-border-strong bg-transparent text-text-primary hover:bg-surface-muted active:bg-surface-selected',
         ghost:
-          'bg-transparent text-text-secondary hover:bg-surface-muted hover:text-text-primary active:bg-surface-elevated',
+          'bg-transparent text-text-secondary hover:bg-surface-hover hover:text-text-primary active:bg-surface-selected',
         danger:
-          'border-danger/40 bg-danger-muted text-danger hover:border-danger hover:bg-danger hover:text-text-inverse active:bg-danger/80',
+          'border-border-strong bg-surface text-danger-text hover:border-danger hover:bg-danger-muted active:bg-danger-muted',
         destructive:
-          'border-danger/40 bg-danger-muted text-danger hover:border-danger hover:bg-danger hover:text-text-inverse active:bg-danger/80',
-        link: 'h-auto rounded-xs border-0 p-0 text-primary hover:text-primary-hover hover:underline active:text-primary',
+          'border-border-strong bg-surface text-danger-text hover:border-danger hover:bg-danger-muted active:bg-danger-muted',
+        link: 'h-auto rounded-xs border-0 p-0 text-primary-text hover:text-primary-hover hover:underline active:text-primary-text',
       },
       size: {
-        sm: 'h-8 px-3 text-sm',
-        default: 'h-10 px-4 text-base',
-        lg: 'h-12 px-5 text-base',
-        icon: 'size-10 p-0',
-        'icon-sm': 'size-8 p-0',
-        'icon-lg': 'size-12 p-0',
+        sm: 'h-(--control-height-sm) gap-(--control-gap-sm) rounded-(--control-radius-sm) px-2.5 text-sm',
+        default: 'h-(--control-height-md) px-3.5 text-md',
+        lg: 'h-(--control-height-lg) rounded-(--control-radius-lg) px-5 text-base',
+        icon: 'size-(--control-icon-size) p-0',
+        'icon-sm': 'size-(--control-height-sm) p-0',
+        'icon-lg': 'size-(--control-height-lg) p-0',
       },
     },
     defaultVariants: {

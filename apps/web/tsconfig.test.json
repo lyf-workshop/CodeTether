@@ -19,6 +19,7 @@
     "types": ["node"]
   },
   "include": [
+    "src/runtime/theme/theme-preference.ts",
     "src/components/conversation/conversation-view-model.ts",
     "src/components/conversation/conversation-controls.ts",
     "src/components/conversation/conversation-duration.ts",

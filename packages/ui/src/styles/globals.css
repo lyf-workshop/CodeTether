@@ -298,6 +298,7 @@
 }
 
 @theme inline {
+  --breakpoint-desktop: 73.75rem;
   --font-sans: var(--ct-font);
   --font-display: var(--ct-display);
   --font-mono: var(--ct-mono);

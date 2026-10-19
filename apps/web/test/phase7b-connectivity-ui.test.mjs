@@ -162,10 +162,10 @@ test('Machine connectivity surfaces keep responsive and accessible semantic cont
   ])
 
   assert.match(detail, /connection\.directState \?\? connection\.state/u)
-  assert.match(detail, /label="当前执行路径"/u)
+  assert.match(detail, /label="连接方式"/u)
   assert.match(
     detail,
-    /value=\{executionTransportLabel\(connection\.executionTransport\)\}/u,
+    /machineExecutionTransportLabel\(connection\?\.executionTransport\)/u,
   )
   assert.match(detail, /label="局域网直连"/u)
   assert.match(detail, /<MachineRelaySection/u)
@@ -195,7 +195,7 @@ test('Machine connectivity surfaces keep responsive and accessible semantic cont
   assert.match(relaySection, /overflow-x-hidden/u)
   assert.match(relaySection, /break-words/u)
   assert.match(relaySection, /break-all/u)
-  assert.match(detail, /xl:grid-cols-\[minmax\(0,1fr\)_20rem\]/u)
+  assert.match(detail, /min-\[1001px\]:grid-cols-/u)
 
   assert.match(failureCard, /<article/u)
   assert.match(failureCard, /role="status"/u)

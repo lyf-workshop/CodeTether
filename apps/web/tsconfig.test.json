@@ -87,6 +87,7 @@
     "src/runtime/native/native-capabilities.ts",
     "src/runtime/native/notification-preferences.ts",
     "src/runtime/notifications/attention-notification-coordinator.ts",
-    "src/runtime/notifications/desktop-notification-model.ts"
+    "src/runtime/notifications/desktop-notification-model.ts",
+    "src/components/machines/device-project-model.ts"
   ]
 }

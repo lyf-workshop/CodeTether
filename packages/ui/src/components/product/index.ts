@@ -25,3 +25,12 @@ export {
   type ToolCallCardProps,
   type ToolCallDelta,
 } from './tool-call-card'
+
+export { DeviceSection, type DeviceSectionProps } from './device-section'
+
+export {
+  ProjectCard,
+  AddProjectCard,
+  type ProjectCardProps,
+  type AddProjectCardProps,
+} from './project-card'

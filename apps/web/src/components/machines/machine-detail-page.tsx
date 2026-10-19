@@ -1,44 +1,24 @@
-import {
-  useLayoutEffect,
-  useRef,
-  useState,
-  type ReactNode,
-  type RefObject,
-} from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link, useNavigate, useParams } from '@tanstack/react-router'
+import { useState, type ReactNode } from 'react'
+import { useMutation, useQuery } from '@tanstack/react-query'
+import { Link, useParams } from '@tanstack/react-router'
 import {
   ArrowLeft,
-  FolderOpen,
   MapPin,
   Monitor,
   Plus,
   RefreshCw,
   Server,
-  ShieldCheck,
   Unplug,
 } from 'lucide-react'
 
-import {
-  AgentBadge,
-  Badge,
-  Button,
-  ConversationItem,
-  Separator,
-  cn,
-} from '@codetether/ui'
+import { Button, Notice, SectionState, StatusTag, cn } from '@codetether/ui'
 import {
   MachineIdSchema,
   ProviderInstallationIdSchema,
-  type GetMachineResponse,
   type MachineId,
-  type MachineExecutionTransport,
-  type MachineProviderLifecycle,
-  type MachineProviderDiscovery,
-  type ProviderDescriptor,
-  type ProjectRecord,
-  type RemoteMachineConnection,
   type MachineSummary,
+  type ProviderDescriptor,
+  type RemoteMachineConnection,
 } from '@codetether/protocol'
 import { CodeTetherResponseError } from '@codetether/client'
 
@@ -47,60 +27,48 @@ import {
   useHostRuntime,
 } from '../../runtime/host/host-runtime-hooks'
 import { machineErrorMessage } from '../../runtime/host/machine-actions'
-import {
-  machineDetailQueryOptions,
-  machineQueryKeys,
-} from '../../runtime/host/machine-query'
-import {
-  providerExecutionHealthPresentation,
-  providerLifecycleForMachine,
-  providerLifecyclePresentation,
-  providerPresentationsForMachine,
-  type ProviderLifecyclePresentation,
-  type ProviderPresentation,
-} from '../../provider/provider-presentation'
-import { formatConversationActivity } from '../conversations/conversation-list-model'
+import { machineDetailQueryOptions } from '../../runtime/host/machine-query'
+import { AddProjectDialog } from '../projects/add-project-dialog'
+import { machineCanAddProject } from './device-project-model'
+import { MachineConversationsSection } from './machine-conversations-section'
 import { MachinesErrorState, MachinesLoadingState } from './machine-page-states'
-import { MachineProjectsSection } from './machine-projects-section'
-import { MachineRelaySection } from './machine-relay-section'
 import {
-  machineArchitectureLabel,
   formatMachineLastSeen,
-  machineConnectionBadgeVariant,
-  machineConnectionStatusLabel,
-  machineConnectionTransportLabel,
   machineConnectionStateLabel,
-  machinePlatformLabel,
+  machineConnectionTone,
+  machineEnvironmentLabel,
+  machineExecutionTransportLabel,
   remoteMachineAddressLabel,
   remoteMachineSummaryDescription,
 } from './machine-presentation'
+import { MachineProjectsSection } from './machine-projects-section'
+import { MachineProvidersSection } from './machine-providers-section'
+import { MachineRelaySection } from './machine-relay-section'
 import { UnpairMachineDialog } from './unpair-machine-dialog'
 import { UpdateMachineAddressDialog } from './update-machine-address-dialog'
-import { AddProjectDialog } from '../projects/add-project-dialog'
-import { AddProjectLocationDialog } from '../projects/add-project-location-dialog'
-import { ProviderInstallationSelector } from './provider-installation-selector'
 
 export function MachineDetailRoute() {
-  const { machineId: rawMachineId } = useParams({
-    from: '/devices/$machineId',
-  })
+  const { machineId: rawMachineId } = useParams({ strict: false })
   const machineId = MachineIdSchema.safeParse(rawMachineId)
-  if (!machineId.success) return <MachineNotFound />
-  return <MachineDetailPage machineId={machineId.data} />
+  return machineId.success ? (
+    <MachineDetailPage machineId={machineId.data} />
+  ) : (
+    <MachineNotFound />
+  )
 }
 
 function MachineDetailPage({ machineId }: { machineId: MachineId }) {
   const runtime = useHostRuntime()
   const hostConnectionState = useHostConnectionState()
-  const [unpairOpen, setUnpairOpen] = useState(false)
   const machineQuery = useQuery({
     ...machineDetailQueryOptions(runtime, machineId),
     enabled: hostConnectionState === 'connected',
   })
-  const localProviderRefreshMutation = useMutation({
+  const [unpairOpen, setUnpairOpen] = useState(false)
+  const providerRefreshMutation = useMutation({
     mutationFn: async () => await runtime.refreshMachineProviders(machineId),
   })
-  const localProviderSelectionMutation = useMutation({
+  const providerSelectionMutation = useMutation({
     mutationFn: async (input: {
       readonly provider: ProviderDescriptor['provider']
       readonly providerInstallationId: string
@@ -115,19 +83,17 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
       void machineQuery.refetch()
     },
   })
-  const [localProviderRefreshButtonRef, rememberLocalProviderRefreshFocus] =
-    useProviderRefreshFocusRestoration(localProviderRefreshMutation.isPending)
-  const localProviderRefreshAvailable = hostConnectionState === 'connected'
-  const connectionUnavailable =
+  const hostReady = hostConnectionState === 'connected'
+  const unavailable =
     hostConnectionState === 'unavailable' ||
     hostConnectionState === 'incompatible'
 
   function retry() {
     runtime.retry()
-    if (hostConnectionState === 'connected') void machineQuery.refetch()
+    if (hostReady) void machineQuery.refetch()
   }
 
-  if (connectionUnavailable) {
+  if (unavailable)
     return (
       <MachinePageFrame>
         <MachinesErrorState
@@ -136,615 +102,242 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
         />
       </MachinePageFrame>
     )
-  }
-  if (machineQuery.data === undefined && !machineQuery.isError) {
+  if (machineQuery.data === undefined && !machineQuery.isError)
     return (
       <MachinePageFrame>
         <MachinesLoadingState />
       </MachinePageFrame>
     )
-  }
   if (
     machineQuery.error instanceof CodeTetherResponseError &&
     machineQuery.error.envelope.code === 'not_found'
-  ) {
+  )
     return <MachineNotFound />
-  }
-  if (machineQuery.data === undefined) {
+  if (machineQuery.data === undefined)
     return (
       <MachinePageFrame>
         <MachinesErrorState onRetry={retry} />
       </MachinePageFrame>
     )
-  }
 
-  const { machine } = machineQuery.data
-  if (machine.kind === 'remote') {
-    const remoteConnection = machineQuery.data.connection
-    if (remoteConnection === undefined) {
-      return (
-        <MachinePageFrame>
-          <MachinesErrorState onRetry={retry} />
-        </MachinePageFrame>
-      )
-    }
-    return (
-      <RemoteMachineDetail
-        connection={remoteConnection}
-        hostConnectionState={hostConnectionState}
-        machine={machine}
-        providerDiscovery={machineQuery.data.providerDiscovery}
-        providerLifecycles={machineQuery.data.providerLifecycles ?? []}
-        providers={machineQuery.data.providers}
-        projects={machineQuery.data.projects}
-        relay={machineQuery.data.relay}
-        onUnpair={() => setUnpairOpen(true)}
-        unpairOpen={unpairOpen}
-        onUnpairOpenChange={setUnpairOpen}
-      />
-    )
-  }
   const {
-    providers,
-    providerLifecycles = [],
+    machine,
     projects,
     conversations,
+    providers,
+    providerLifecycles = [],
+    providerDiscovery,
+    connection,
+    relay,
   } = machineQuery.data
-  const providerPresentations = providerPresentationsForMachine(providers)
-  const providerById = new Map(
-    providerPresentations.map((provider) => [provider.provider, provider]),
-  )
-  const projectsById = new Map(
-    projects.map((project) => [project.projectId, project]),
-  )
-  const available = machine.availability === 'available'
+  if (machine.kind === 'remote' && connection === undefined)
+    return (
+      <MachinePageFrame>
+        <MachinesErrorState onRetry={retry} />
+      </MachinePageFrame>
+    )
+  const MachineIcon = machine.kind === 'local' ? Monitor : Server
+  const canAdd = hostReady && machineCanAddProject(machine)
+  const online =
+    machine.connectionState === 'local' || machine.connectionState === 'online'
+  const lastSeen = formatMachineLastSeen(machine.lastSeenAt)
 
   return (
     <MachinePageFrame>
       <Link
-        to="/machines"
-        className="mb-4 inline-flex w-fit items-center gap-1.5 rounded-xs text-sm font-medium text-text-secondary outline-none transition-colors hover:text-text-primary focus-visible:ring-2 focus-visible:ring-ring/60 motion-reduce:transition-none"
+        to="/devices"
+        className="mb-4 inline-flex w-fit items-center gap-1.5 rounded-xs text-sm text-text-secondary outline-none hover:text-text-primary focus-visible:ring-2 focus-visible:ring-ring"
       >
         <ArrowLeft aria-hidden="true" className="size-4" />
-        返回电脑
+        返回设备
       </Link>
-
-      <header className="flex min-w-0 flex-wrap items-start gap-4">
+      <header className="mb-8 flex min-w-0 flex-wrap items-center gap-4">
         <span
           aria-hidden="true"
-          className="grid size-11 shrink-0 place-items-center rounded-md border border-primary/35 bg-primary-muted text-primary"
+          className="grid size-12 shrink-0 place-items-center rounded-lg border border-border bg-surface-inset text-text-secondary"
         >
-          <Monitor className="size-5" />
+          <MachineIcon className="size-6" />
         </span>
-        <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 flex-wrap items-center gap-2.5">
-            <h1
-              title={machine.displayName}
-              className="min-w-0 truncate text-page font-semibold text-text-primary"
-            >
-              {machine.displayName}
-            </h1>
-            <Badge variant="secondary">
-              {machineConnectionTransportLabel(machine.connectionState)}
-            </Badge>
-            <Badge variant={available ? 'success' : 'danger'}>
-              {machineConnectionStatusLabel(machine.connectionState)}
-            </Badge>
+        <div className="min-w-0 flex-1 basis-40">
+          <h1
+            title={machine.displayName}
+            className="truncate text-page font-semibold"
+          >
+            {machine.displayName}
+          </h1>
+          <div className="mt-2 flex flex-wrap items-center gap-3">
+            <StatusTag tone={machineConnectionTone(machine.connectionState)}>
+              {machineConnectionStateLabel(machine.connectionState)}
+            </StatusTag>
+            <span className="text-sm text-text-muted">
+              {machineEnvironmentLabel(machine)}
+            </span>
           </div>
-          <p className="mt-1 text-sm text-text-secondary">
-            在这台电脑上运行项目中的 Agent 会话。
-          </p>
         </div>
-      </header>
-
-      <div
-        className="mt-5 flex min-w-0 flex-wrap items-center gap-2"
-        aria-label="电脑操作"
-      >
-        <AddProjectDialog
-          deferPreviousConversations
-          trigger={
-            <Button size="sm">
-              <Plus aria-hidden="true" />
-              添加项目
-            </Button>
-          }
-        />
-        <Button asChild variant="secondary" size="sm">
-          <Link to="/projects">
-            <FolderOpen aria-hidden="true" />
-            打开项目
-          </Link>
-        </Button>
-        <Button asChild variant="secondary" size="sm">
-          <Link to="/doctor">
-            <ShieldCheck aria-hidden="true" />
-            检查状态
-          </Link>
-        </Button>
-      </div>
-
-      <div className="mt-6 grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_20rem]">
-        <section className="min-w-0 rounded-lg border border-border bg-surface/65 p-5">
-          <h2 className="text-section font-semibold text-text-primary">
-            电脑概览
-          </h2>
-          <Separator className="my-5" />
-          <dl className="grid min-w-0 gap-x-6 gap-y-5 sm:grid-cols-2">
-            <MachineMetadata label="电脑名称" value={machine.displayName} />
-            <MachineMetadata
-              label="类型"
-              value={machine.isLocal ? '本地电脑' : '远程电脑'}
-            />
-            <MachineMetadata
-              label="平台"
-              value={machinePlatformLabel(machine.platform)}
-            />
-            <MachineMetadata
-              label="架构"
-              value={machineArchitectureLabel(machine.architecture)}
-            />
-          </dl>
-        </section>
-
-        <section
-          className="rounded-lg border border-border bg-surface/65 p-5"
-          aria-busy={localProviderRefreshMutation.isPending}
-          aria-labelledby="local-machine-providers-heading"
-        >
-          <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
-            <div className="min-w-0">
-              <h2
-                id="local-machine-providers-heading"
-                className="text-section font-semibold text-text-primary"
-              >
-                Agent
-              </h2>
-              <p className="mt-0.5 text-sm text-text-secondary">
-                这台电脑上已检测到的 Agent。详细状态可按需查看。
-              </p>
-            </div>
-            <Button
-              ref={localProviderRefreshButtonRef}
-              variant="secondary"
-              size="sm"
-              disabled={
-                !localProviderRefreshAvailable ||
-                localProviderRefreshMutation.isPending
-              }
-              aria-describedby={
-                localProviderRefreshAvailable
-                  ? undefined
-                  : 'local-provider-refresh-unavailable'
-              }
-              title={
-                localProviderRefreshAvailable
-                  ? undefined
-                  : 'CodeTether Host 连接恢复后才能刷新 Agent 信息'
-              }
-              onClick={() => {
-                rememberLocalProviderRefreshFocus()
-                localProviderRefreshMutation.mutate()
-              }}
-            >
-              <RefreshCw
-                aria-hidden="true"
-                className={cn(
-                  localProviderRefreshMutation.isPending &&
-                    'animate-spin motion-reduce:animate-none',
-                )}
-              />
-              {localProviderRefreshMutation.isPending
-                ? '正在检测…'
-                : '刷新 Agent 信息'}
-            </Button>
-            {localProviderRefreshAvailable ? null : (
-              <span id="local-provider-refresh-unavailable" className="sr-only">
-                CodeTether Host 连接恢复后才能刷新 Agent 信息。
-              </span>
-            )}
-          </div>
-          <Separator className="my-4" />
-          <ul className="space-y-3">
-            {providerPresentations.map((provider) => {
-              const health = providerExecutionHealthPresentation(
-                provider.executionHealth,
-                provider.displayName,
-              )
-              const lifecycleGroup = providerLifecycleForMachine(
-                providerLifecycles,
-                provider.provider,
-              )
-              const lifecycle = providerLifecyclePresentation(lifecycleGroup)
-              const installationLabel =
-                lifecycleGroup === undefined
-                  ? provider.available
-                    ? '已安装'
-                    : provider.availabilityLabel
-                  : lifecycle.installation.stateLabel
-              const version = lifecycle.installation.version ?? provider.version
-
-              return (
-                <li
-                  key={provider.provider}
-                  className="flex min-w-0 items-start gap-3 rounded-md border border-border bg-surface-muted/45 px-3 py-3"
-                >
-                  <AgentBadge agent={provider.agent} variant="compact" />
-                  <div className="min-w-0 flex-1">
-                    <span className="block min-w-0 truncate text-sm font-medium text-text-primary">
-                      {provider.displayName}
-                    </span>
-                    {version === undefined ? null : (
-                      <p
-                        title={version}
-                        className="mt-1 max-w-full truncate font-mono text-xs text-text-muted"
-                      >
-                        {version}
-                      </p>
-                    )}
-                    <div className="mt-2 flex flex-wrap items-center gap-2">
-                      <Badge
-                        variant={provider.available ? 'success' : 'danger'}
-                        className="h-6 rounded-sm px-2 text-xs"
-                      >
-                        {provider.available
-                          ? '可用'
-                          : provider.availabilityLabel}
-                      </Badge>
-                    </div>
-                    <details className="group/details mt-2">
-                      <summary className="w-fit cursor-pointer rounded-sm text-xs text-text-muted outline-none hover:text-text-primary focus-visible:ring-2 focus-visible:ring-ring">
-                        查看详细状态
-                      </summary>
-                      <div className="mt-2">
-                        <MachineProviderLifecycleDetails
-                          health={health}
-                          installationLabel={installationLabel}
-                          lifecycle={lifecycle}
-                          lifecycleObserved={lifecycleGroup !== undefined}
-                          providerAvailable={provider.available}
-                        />
-                        <ProviderInstallationSelector
-                          lifecycle={lifecycleGroup}
-                          disabled={
-                            hostConnectionState !== 'connected' ||
-                            localProviderSelectionMutation.isPending
-                          }
-                          pendingInstallationId={
-                            localProviderSelectionMutation.variables
-                              ?.provider === provider.provider
-                              ? localProviderSelectionMutation.variables
-                                  ?.providerInstallationId
-                              : undefined
-                          }
-                          onSelect={(providerInstallationId) =>
-                            localProviderSelectionMutation.mutate({
-                              provider: provider.provider,
-                              providerInstallationId,
-                            })
-                          }
-                        />
-                      </div>
-                    </details>
-                  </div>
-                </li>
-              )
-            })}
-          </ul>
-          {localProviderSelectionMutation.isError ? (
-            <p
-              role="alert"
-              className="mt-3 break-words rounded-sm border border-danger/30 bg-danger-muted px-3 py-2 text-sm text-danger"
-            >
-              {machineErrorMessage(
-                localProviderSelectionMutation.error,
-                'select-provider-installation',
-              )}
-            </p>
-          ) : null}
-          {localProviderRefreshMutation.isError ? (
-            <p
-              role="alert"
-              className="mt-3 break-words rounded-sm border border-danger/30 bg-danger-muted px-3 py-2 text-sm text-danger"
-            >
-              {machineErrorMessage(
-                localProviderRefreshMutation.error,
-                'refresh-providers',
-              )}
-            </p>
-          ) : null}
-        </section>
-      </div>
-
-      <MachineProjectsSection machine={machine} projects={projects} />
-
-      <section
-        className="mt-5 min-w-0 rounded-lg border border-border bg-surface/65 p-5"
-        aria-labelledby="machine-conversations-heading"
-      >
-        <div className="flex items-end justify-between gap-4">
-          <div>
-            <h2
-              id="machine-conversations-heading"
-              className="text-section font-semibold text-text-primary"
-            >
-              最近会话
-            </h2>
-            <p className="mt-0.5 text-sm text-text-secondary">
-              在这台电脑上执行的最近会话。
-            </p>
-          </div>
-          <span className="text-xs text-text-muted">
-            {conversations.length} 个
-          </span>
-        </div>
-        <Separator className="my-4" />
-        {conversations.length === 0 ? (
-          <p className="text-sm text-text-muted">这台电脑上还没有会话。</p>
-        ) : (
-          <ul className="space-y-3">
-            {conversations.map((conversation) => {
-              const project = projectsById.get(conversation.projectId)
-              return (
-                <li key={conversation.conversationId}>
-                  <ConversationItem
-                    appearance="row"
-                    title={conversation.title}
-                    description={`${project?.name ?? '项目'} · ${providerById.get(conversation.provider)?.displayName ?? conversation.provider}`}
-                    status={conversation.status}
-                    model={conversation.model}
-                    activity={formatConversationActivity(
-                      conversation.lastActivityAt,
-                    )}
-                    primaryAction={
-                      <Link
-                        to="/conversations/$conversationId"
-                        params={{ conversationId: conversation.conversationId }}
-                        aria-label={`打开会话：${conversation.title}`}
-                        className="absolute inset-0 z-0 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
-                      />
-                    }
-                  />
-                </li>
-              )
-            })}
-          </ul>
-        )}
-      </section>
-
-      {hostConnectionState === 'reconnecting' ? (
-        <p
-          role="status"
-          className="mt-4 inline-flex items-center gap-1.5 text-xs text-text-muted"
-        >
-          <RefreshCw
-            aria-hidden="true"
-            className="size-3.5 animate-spin motion-reduce:animate-none"
+        {canAdd ? (
+          <AddProjectDialog
+            fixedMachineId={machine.machineId}
+            trigger={
+              <Button variant="secondary">
+                <Plus aria-hidden="true" />
+                添加项目
+              </Button>
+            }
           />
-          正在重新连接，当前显示最近读取的电脑数据。
-        </p>
+        ) : null}
+      </header>
+      {!online ? (
+        <div className="mb-6">
+          <Notice tone="warn" title={`${machine.displayName}当前无法连接`}>
+            {lastSeen === undefined ? '' : `上次在线 ${lastSeen}。`}
+            可以查看以前的会话，但暂时不能发送消息、新建会话或添加项目。
+          </Notice>
+        </div>
+      ) : !machine.capabilities.providerExecution ? (
+        <div className="mb-6">
+          <Notice tone="warn" title="这台设备当前不能运行 AI 工具">
+            已有会话历史仍然可读。请在右侧查看 AI 工具的当前状态。
+          </Notice>
+        </div>
       ) : null}
+      {hostConnectionState === 'reconnecting' ? (
+        <div className="mb-6">
+          <Notice title="正在重新连接">
+            当前显示最近读取的设备数据，连接恢复后会重新确认。
+          </Notice>
+        </div>
+      ) : null}
+      {machineQuery.isError ? (
+        <div className="mb-6">
+          <Notice
+            tone="warn"
+            title="设备状态未能更新"
+            action={
+              <Button variant="secondary" size="sm" onClick={retry}>
+                重试
+              </Button>
+            }
+          >
+            当前显示最近读取的设备记录。
+          </Notice>
+        </div>
+      ) : null}
+      <div className="grid min-w-0 gap-8 min-[1001px]:grid-cols-[minmax(0,1.65fr)_minmax(17.5rem,1fr)]">
+        <div className="min-w-0 space-y-10">
+          <MachineProjectsSection
+            machine={machine}
+            projects={projects}
+            appearance="list"
+            showAddCard={false}
+          />
+          <MachineConversationsSection
+            machine={machine}
+            projects={projects}
+            conversations={conversations}
+          />
+        </div>
+        <aside className="min-w-0 space-y-4" aria-label="设备状态与连接">
+          <MachineProvidersSection
+            providers={providers}
+            lifecycles={providerLifecycles}
+            connection={connection}
+            discovery={providerDiscovery}
+            hostReady={hostReady}
+            onRefresh={() => providerRefreshMutation.mutate()}
+            refreshPending={providerRefreshMutation.isPending}
+            refreshError={providerRefreshMutation.error}
+            onSelectInstallation={(provider, providerInstallationId) =>
+              providerSelectionMutation.mutate({
+                provider,
+                providerInstallationId,
+              })
+            }
+            selectionPending={providerSelectionMutation.isPending}
+            selectionError={providerSelectionMutation.error}
+            pendingProvider={providerSelectionMutation.variables?.provider}
+            pendingInstallationId={
+              providerSelectionMutation.variables?.providerInstallationId
+            }
+          />
+          <MachineConnectionSection
+            machine={machine}
+            connection={connection}
+            hostReady={hostReady}
+            onUnpair={() => setUnpairOpen(true)}
+          />
+          {machine.kind === 'remote' ? (
+            <details className="min-w-0 rounded-lg border border-border bg-surface p-4">
+              <summary className="cursor-pointer rounded-xs text-md font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                Relay 高级连接设置
+              </summary>
+              <MachineRelaySection
+                hostReady={hostReady}
+                machine={machine}
+                relay={relay}
+              />
+            </details>
+          ) : null}
+        </aside>
+      </div>
+      <UnpairMachineDialog
+        machine={machine}
+        projects={projects}
+        open={unpairOpen}
+        onOpenChange={setUnpairOpen}
+      />
     </MachinePageFrame>
   )
 }
 
-interface RemoteMachineDetailProps {
-  connection: RemoteMachineConnection
-  hostConnectionState: ReturnType<typeof useHostConnectionState>
-  machine: MachineSummary
-  providerDiscovery: MachineProviderDiscovery | undefined
-  providerLifecycles: readonly MachineProviderLifecycle[]
-  providers: readonly ProviderDescriptor[]
-  projects: readonly ProjectRecord[]
-  relay: GetMachineResponse['relay']
-  onUnpair: () => void
-  onUnpairOpenChange: (open: boolean) => void
-  unpairOpen: boolean
-}
-
-function RemoteMachineDetail({
-  connection,
-  hostConnectionState,
+function MachineConnectionSection({
   machine,
-  providerDiscovery,
-  providerLifecycles,
-  providers,
-  projects,
-  relay,
+  connection,
+  hostReady,
   onUnpair,
-  onUnpairOpenChange,
-  unpairOpen,
-}: RemoteMachineDetailProps) {
-  const navigate = useNavigate()
+}: {
+  machine: MachineSummary
+  connection?: RemoteMachineConnection
+  hostReady: boolean
+  onUnpair: () => void
+}) {
   const runtime = useHostRuntime()
-  const queryClient = useQueryClient()
   const [addressOpen, setAddressOpen] = useState(false)
-  const directState = connection.directState ?? connection.state
-  const lastSuccessful = formatMachineLastSeen(connection.lastSuccessfulAt)
-  const lastAttempt = formatMachineLastSeen(connection.lastAttemptAt)
   const retryMutation = useMutation({
     mutationFn: async () =>
       await runtime.retryMachineConnection(machine.machineId),
   })
-  const providerRefreshMutation = useMutation({
-    mutationFn: async () =>
-      await runtime.refreshMachineProviders(machine.machineId),
-  })
-  const providerSelectionMutation = useMutation({
-    mutationFn: async (input: {
-      readonly provider: ProviderDescriptor['provider']
-      readonly providerInstallationId: string
-    }) =>
-      await runtime.selectMachineProviderInstallation(machine.machineId, {
-        provider: input.provider,
-        providerInstallationId: ProviderInstallationIdSchema.parse(
-          input.providerInstallationId,
-        ),
-      }),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({
-        queryKey: machineQueryKeys.detail(machine.machineId),
-      })
-    },
-  })
-  const hostReadyForConnectionAction = hostConnectionState === 'connected'
-  const canRetry = directState !== 'online' && directState !== 'connecting'
-
+  const directState = connection?.directState ?? connection?.state
+  const canRetry =
+    directState !== undefined &&
+    directState !== 'online' &&
+    directState !== 'connecting'
   return (
-    <MachinePageFrame>
-      <Link
-        to="/machines"
-        className="mb-4 inline-flex w-fit items-center gap-1.5 rounded-xs text-sm font-medium text-text-secondary outline-none transition-colors hover:text-text-primary focus-visible:ring-2 focus-visible:ring-ring/60 motion-reduce:transition-none"
+    <section
+      className="min-w-0 rounded-lg border border-border bg-surface p-5"
+      aria-labelledby="machine-connection-heading"
+    >
+      <h2
+        id="machine-connection-heading"
+        className="mb-4 text-lg font-semibold"
       >
-        <ArrowLeft aria-hidden="true" className="size-4" />
-        返回电脑
-      </Link>
-
-      <header className="flex min-w-0 flex-wrap items-start gap-4">
-        <span
-          aria-hidden="true"
-          className="grid size-11 shrink-0 place-items-center rounded-md border border-primary/35 bg-primary-muted text-primary"
-        >
-          <Server className="size-5" />
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 flex-wrap items-center gap-2.5">
-            <h1
-              title={machine.displayName}
-              className="min-w-0 truncate text-page font-semibold text-text-primary"
-            >
-              {machine.displayName}
-            </h1>
-            <Badge variant="secondary">远程电脑</Badge>
-            <Badge
-              variant={machineConnectionBadgeVariant(machine.connectionState)}
-            >
-              {machineConnectionStatusLabel(machine.connectionState)}
-            </Badge>
-          </div>
-          <p className="mt-1 text-sm text-text-secondary">
-            {remoteMachineSummaryDescription(
-              machine.connectionState,
-              hostConnectionState === 'connected' ? 'current' : 'last_known',
-            )}
-          </p>
-        </div>
-        <Button
-          variant="danger"
-          size="sm"
-          className="w-full sm:w-auto"
-          disabled={projects.length > 0}
-          title={
-            projects.length > 0
-              ? '请先在项目详情中移除这台电脑上的项目位置'
-              : undefined
-          }
-          onClick={onUnpair}
-        >
-          <Unplug aria-hidden="true" />
-          取消配对
-        </Button>
-      </header>
-
-      <div
-        className="mt-5 flex min-w-0 flex-wrap items-center gap-2"
-        aria-label="电脑操作"
-      >
-        <AddProjectLocationDialog
-          createNewProject
-          deferPreviousConversations
-          machines={[machine]}
-          presentation="ordinary"
-          onProjectCreated={async (project) => {
-            await navigate({
-              to: '/projects/$projectId',
-              params: { projectId: project.projectId },
-            })
-          }}
-          trigger={
-            <Button
-              size="sm"
-              disabled={
-                machine.availability !== 'available' ||
-                machine.connectionState !== 'online' ||
-                !machine.capabilities.projectAccess
-              }
-              title={
-                machine.availability !== 'available' ||
-                machine.connectionState !== 'online'
-                  ? '电脑在线后才能添加项目'
-                  : !machine.capabilities.projectAccess
-                    ? '这台电脑暂不支持项目'
-                    : undefined
-              }
-            >
-              <Plus aria-hidden="true" />
-              添加项目
-            </Button>
+        连接
+      </h2>
+      <dl className="space-y-3 text-md">
+        <MachineMetadata
+          label="连接方式"
+          value={
+            machine.kind === 'local'
+              ? '这台电脑'
+              : machineExecutionTransportLabel(connection?.executionTransport)
           }
         />
-        <Button asChild variant="secondary" size="sm">
-          <Link to="/projects">
-            <FolderOpen aria-hidden="true" />
-            打开项目
-          </Link>
-        </Button>
-        <Button asChild variant="secondary" size="sm">
-          <Link to="/doctor">
-            <ShieldCheck aria-hidden="true" />
-            检查状态
-          </Link>
-        </Button>
-        <Button asChild variant="secondary" size="sm">
-          <a href="#remote-machine-providers-heading">查看 Agent</a>
-        </Button>
-      </div>
-
-      <div className="mt-6 grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_20rem]">
-        <section className="min-w-0 rounded-lg border border-border bg-surface/65 p-5">
-          <h2 className="text-section font-semibold text-text-primary">
-            电脑概览
-          </h2>
-          <Separator className="my-5" />
-          <dl className="grid min-w-0 gap-x-6 gap-y-5 sm:grid-cols-2">
-            <MachineMetadata label="电脑名称" value={machine.displayName} />
-            <MachineMetadata label="类型" value="远程电脑" />
-            <MachineMetadata
-              label="平台"
-              value={machinePlatformLabel(machine.platform)}
-            />
-            <MachineMetadata
-              label="架构"
-              value={machineArchitectureLabel(machine.architecture)}
-            />
-          </dl>
-        </section>
-
-        <section className="min-w-0 rounded-lg border border-border bg-surface/65 p-5">
-          <h2 className="text-section font-semibold text-text-primary">
-            电脑连接
-          </h2>
-          <Separator className="my-4" />
-          <div className="flex min-w-0 items-start gap-3">
-            <ShieldCheck
-              aria-hidden="true"
-              className="mt-0.5 size-4 shrink-0 text-success"
-            />
-            <div className="min-w-0">
-              <p className="text-sm font-medium text-text-primary">已信任</p>
-              <p className="mt-1 text-xs leading-relaxed text-text-muted">
-                {remoteConnectionDescription(directState)}
-              </p>
-            </div>
-          </div>
-          <dl className="mt-4 min-w-0 space-y-3 border-t border-border pt-4">
-            <MachineMetadata
-              label="当前执行路径"
-              value={executionTransportLabel(connection.executionTransport)}
-            />
+        {connection ? (
+          <>
             <MachineMetadata
               label="局域网直连"
-              value={machineConnectionStateLabel(directState)}
+              value={machineConnectionStateLabel(
+                connection.directState ?? connection.state,
+              )}
             />
             <MachineMetadata
               label="直连地址"
@@ -755,22 +348,38 @@ function RemoteMachineDetail({
               }
             />
             <MachineMetadata
-              label="最近成功连接"
-              value={lastSuccessful ?? '暂无'}
+              label="上次成功连接"
+              value={
+                formatMachineLastSeen(connection.lastSuccessfulAt) ?? '未知'
+              }
             />
             <MachineMetadata
-              label="最近连接尝试"
-              value={lastAttempt ?? '暂无'}
+              label="上次连接尝试"
+              value={formatMachineLastSeen(connection.lastAttemptAt) ?? '未知'}
             />
-          </dl>
-          <div className="mt-4 flex min-w-0 flex-wrap gap-2">
+            <MachineMetadata label="配对方式" value="CodeTether Node" />
+          </>
+        ) : (
+          <MachineMetadata
+            label="服务状态"
+            value={hostReady ? '运行中' : '正在重新连接'}
+          />
+        )}
+      </dl>
+      {connection ? (
+        <>
+          <p className="mt-4 text-sm text-text-secondary">
+            {remoteMachineSummaryDescription(
+              machine.connectionState,
+              hostReady ? 'current' : 'last_known',
+            )}
+          </p>
+          <div className="mt-4 flex flex-wrap gap-2">
             {canRetry ? (
               <Button
                 variant="secondary"
                 size="sm"
-                disabled={
-                  retryMutation.isPending || !hostReadyForConnectionAction
-                }
+                disabled={retryMutation.isPending || !hostReady}
                 onClick={() => retryMutation.mutate()}
               >
                 <RefreshCw
@@ -780,556 +389,51 @@ function RemoteMachineDetail({
                       'animate-spin motion-reduce:animate-none',
                   )}
                 />
-                {retryMutation.isPending ? '正在重试…' : '重试'}
+                {retryMutation.isPending ? '正在重试…' : '重试连接'}
               </Button>
             ) : null}
             <Button
               variant="secondary"
               size="sm"
-              disabled={
-                retryMutation.isPending || !hostReadyForConnectionAction
-              }
+              disabled={retryMutation.isPending || !hostReady}
               onClick={() => setAddressOpen(true)}
             >
               <MapPin aria-hidden="true" />
-              更新连接地址
+              更新地址
+            </Button>
+            <Button variant="danger" size="sm" onClick={onUnpair}>
+              <Unplug aria-hidden="true" />
+              取消配对
             </Button>
           </div>
           {retryMutation.isError ? (
             <p
               role="alert"
-              className="mt-3 break-words rounded-sm border border-danger/30 bg-danger-muted px-3 py-2 text-sm text-danger"
+              className="mt-3 rounded-sm bg-danger-muted px-3 py-2 text-sm text-danger-text"
             >
               {machineErrorMessage(retryMutation.error, 'retry')}
             </p>
           ) : null}
-        </section>
-      </div>
-
-      <MachineRelaySection
-        hostReady={hostReadyForConnectionAction}
-        machine={machine}
-        relay={relay}
-      />
-
-      <RemoteMachineProvidersSection
-        connection={connection}
-        discovery={providerDiscovery}
-        hostReady={hostReadyForConnectionAction}
-        lifecycles={providerLifecycles}
-        providers={providers}
-        refreshError={providerRefreshMutation.error}
-        refreshPending={providerRefreshMutation.isPending}
-        onRefresh={() => providerRefreshMutation.mutate()}
-        onSelectInstallation={(provider, providerInstallationId) =>
-          providerSelectionMutation.mutate({ provider, providerInstallationId })
-        }
-        selectionPending={providerSelectionMutation.isPending}
-        selectionError={providerSelectionMutation.error}
-        pendingInstallationId={
-          providerSelectionMutation.variables?.providerInstallationId
-        }
-      />
-
-      <section className="mt-5 min-w-0 rounded-lg border border-border bg-surface/65 p-5">
-        <h2 className="text-section font-semibold text-text-primary">
-          当前能力
-        </h2>
-        <p className="mt-2 max-w-3xl text-sm leading-relaxed text-text-secondary">
-          可以在这台电脑上注册和查看项目位置。位置注册本身不会授予执行权限。
-          {machine.capabilities.providerExecution
-            ? '当前仅启用上方已通过本次连接验证的智能体能力；未声明的写入、Shell、审批、中断和模型选择保持关闭。'
-            : '当前连接或 Agent 尚未满足远程执行条件。'}
-        </p>
-      </section>
-
-      <MachineProjectsSection machine={machine} projects={projects} />
-
-      {projects.length > 0 ? (
-        <p role="status" className="mt-3 text-xs text-text-muted">
-          这台电脑仍有 {projects.length}{' '}
-          个项目位置。请先在对应的项目详情中明确移除这些位置，再单独取消配对。
-        </p>
-      ) : null}
-
-      {hostConnectionState === 'reconnecting' ? (
-        <p
-          role="status"
-          className="mt-4 inline-flex items-center gap-1.5 text-xs text-text-muted"
-        >
-          <RefreshCw
-            aria-hidden="true"
-            className="size-3.5 animate-spin motion-reduce:animate-none"
+          <UpdateMachineAddressDialog
+            currentEndpoint={connection.currentEndpoint}
+            machine={machine}
+            open={addressOpen}
+            onOpenChange={setAddressOpen}
           />
-          正在重新连接，当前显示最近读取的电脑数据。
-        </p>
-      ) : null}
-
-      <UnpairMachineDialog
-        machine={machine}
-        projectCount={projects.length}
-        open={unpairOpen}
-        onOpenChange={onUnpairOpenChange}
-      />
-      <UpdateMachineAddressDialog
-        currentEndpoint={connection.currentEndpoint}
-        machine={machine}
-        open={addressOpen}
-        onOpenChange={setAddressOpen}
-      />
-    </MachinePageFrame>
-  )
-}
-
-function RemoteMachineProvidersSection({
-  connection,
-  discovery,
-  hostReady,
-  lifecycles,
-  onRefresh,
-  providers,
-  refreshError,
-  refreshPending,
-  onSelectInstallation,
-  selectionPending,
-  pendingInstallationId,
-  selectionError,
-}: {
-  connection: RemoteMachineConnection
-  discovery: MachineProviderDiscovery | undefined
-  hostReady: boolean
-  lifecycles: readonly MachineProviderLifecycle[]
-  onRefresh: () => void
-  providers: readonly ProviderDescriptor[]
-  refreshError: unknown
-  refreshPending: boolean
-  onSelectInstallation: (
-    provider: ProviderDescriptor['provider'],
-    providerInstallationId: string,
-  ) => void
-  selectionPending: boolean
-  pendingInstallationId?: string
-  selectionError: unknown
-}) {
-  const [providerRefreshButtonRef, rememberProviderRefreshFocus] =
-    useProviderRefreshFocusRestoration(refreshPending)
-  const observed =
-    discovery?.state !== 'not_observed' && discovery !== undefined
-  const presentations = observed
-    ? providerPresentationsForMachine(providers)
-    : []
-  const observedAt =
-    discovery?.state === 'current' || discovery?.state === 'last_known'
-      ? formatMachineLastSeen(discovery.observedAt)
-      : undefined
-  const canRefresh = connection.state === 'online' && hostReady
-
-  return (
-    <section
-      className="mt-5 min-w-0 rounded-lg border border-border bg-surface/65 p-5"
-      aria-busy={refreshPending}
-      aria-labelledby="remote-machine-providers-heading"
-    >
-      <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h2
-            id="remote-machine-providers-heading"
-            className="text-section font-semibold text-text-primary"
-          >
-            Agent
-          </h2>
-          <p className="mt-0.5 text-sm text-text-secondary">
-            这台电脑上已检测到的 Agent。详细状态可按需查看。
-          </p>
-        </div>
-        <Button
-          ref={providerRefreshButtonRef}
-          variant="secondary"
-          size="sm"
-          disabled={!canRefresh || refreshPending}
-          aria-describedby={
-            canRefresh ? undefined : 'remote-provider-refresh-unavailable'
-          }
-          title={canRefresh ? undefined : '远程电脑在线后才能刷新 Agent 信息'}
-          onClick={() => {
-            rememberProviderRefreshFocus()
-            onRefresh()
-          }}
-        >
-          <RefreshCw
-            aria-hidden="true"
-            className={cn(
-              refreshPending && 'animate-spin motion-reduce:animate-none',
-            )}
-          />
-          {refreshPending ? '正在检测…' : '刷新 Agent 信息'}
-        </Button>
-        {canRefresh ? null : (
-          <span id="remote-provider-refresh-unavailable" className="sr-only">
-            远程电脑在线后才能刷新 Agent 信息。
-          </span>
-        )}
-      </div>
-      <Separator className="my-4" />
-
-      {discovery === undefined || discovery.state === 'not_observed' ? (
-        <p className="text-sm text-text-muted">
-          尚未从这台电脑检测 Agent。远程会话执行仍未启用。
-        </p>
-      ) : (
-        <>
-          <p className="mb-4 text-xs text-text-muted" role="status">
-            {discovery.state === 'current'
-              ? `当前连接已验证${observedAt === undefined ? '' : ` · ${observedAt}`}`
-              : `上次检测${observedAt === undefined ? '' : ` · ${observedAt}`} · 当前未重新验证`}
-          </p>
-          <ul className="grid min-w-0 gap-3 md:grid-cols-2">
-            {presentations.map((provider) => {
-              const health = providerExecutionHealthPresentation(
-                provider.executionHealth,
-                provider.displayName,
-              )
-              const lifecycleGroup = providerLifecycleForMachine(
-                lifecycles,
-                provider.provider,
-              )
-              const lifecycle = providerLifecyclePresentation(lifecycleGroup)
-              const installationLabel =
-                lifecycleGroup === undefined
-                  ? provider.available
-                    ? '已安装'
-                    : provider.availabilityLabel
-                  : lifecycle.installation.stateLabel
-              const version = lifecycle.installation.version ?? provider.version
-              return (
-                <li
-                  key={provider.provider}
-                  className="flex min-w-0 items-start gap-3 rounded-md border border-border bg-surface-muted/45 px-3 py-3"
-                >
-                  <AgentBadge agent={provider.agent} variant="compact" />
-                  <div className="min-w-0 flex-1">
-                    <span className="block min-w-0 truncate text-sm font-medium text-text-primary">
-                      {provider.displayName}
-                    </span>
-                    {version === undefined ? null : (
-                      <p
-                        title={version}
-                        className="mt-1 max-w-full truncate font-mono text-xs text-text-muted"
-                      >
-                        {version}
-                      </p>
-                    )}
-                    <div className="mt-2 flex flex-wrap items-center gap-2">
-                      <Badge
-                        variant={provider.available ? 'success' : 'danger'}
-                        className="h-6 rounded-sm px-2 text-xs"
-                      >
-                        {provider.available
-                          ? '可用'
-                          : provider.availabilityLabel}
-                      </Badge>
-                    </div>
-                    <details className="group/details mt-2">
-                      <summary className="w-fit cursor-pointer rounded-sm text-xs text-text-muted outline-none hover:text-text-primary focus-visible:ring-2 focus-visible:ring-ring">
-                        查看详细状态
-                      </summary>
-                      <div className="mt-2">
-                        <MachineProviderLifecycleDetails
-                          health={health}
-                          installationLabel={installationLabel}
-                          lifecycle={lifecycle}
-                          lifecycleObserved={lifecycleGroup !== undefined}
-                          providerAvailable={provider.available}
-                        />
-                        {provider.available ? (
-                          <p className="mt-1 text-xs text-text-muted">
-                            {remoteProviderCapabilitySummary(provider)}
-                          </p>
-                        ) : null}
-                        <ProviderInstallationSelector
-                          lifecycle={lifecycleGroup}
-                          disabled={!hostReady || selectionPending}
-                          pendingInstallationId={pendingInstallationId}
-                          onSelect={(providerInstallationId) =>
-                            onSelectInstallation(
-                              provider.provider,
-                              providerInstallationId,
-                            )
-                          }
-                        />
-                      </div>
-                    </details>
-                  </div>
-                </li>
-              )
-            })}
-          </ul>
         </>
-      )}
-
-      {selectionError !== null && selectionError !== undefined ? (
-        <p
-          role="alert"
-          className="mt-3 break-words rounded-sm border border-danger/30 bg-danger-muted px-3 py-2 text-sm text-danger"
-        >
-          {machineErrorMessage(selectionError, 'select-provider-installation')}
-        </p>
-      ) : null}
-
-      {refreshError !== null && refreshError !== undefined ? (
-        <p
-          role="alert"
-          className="mt-3 break-words rounded-sm border border-danger/30 bg-danger-muted px-3 py-2 text-sm text-danger"
-        >
-          {machineErrorMessage(refreshError, 'refresh-providers')}
-        </p>
       ) : null}
     </section>
   )
 }
 
-function useProviderRefreshFocusRestoration(
-  refreshPending: boolean,
-): readonly [RefObject<HTMLButtonElement | null>, () => void] {
-  const buttonRef = useRef<HTMLButtonElement>(null)
-  const previousPendingRef = useRef(refreshPending)
-  const restoreFocusRef = useRef(false)
-
-  useLayoutEffect(() => {
-    const wasPending = previousPendingRef.current
-    previousPendingRef.current = refreshPending
-
-    if (refreshPending && restoreFocusRef.current) {
-      const disarmFocusRestoration = (): void => {
-        restoreFocusRef.current = false
-      }
-      document.addEventListener('pointerdown', disarmFocusRestoration, true)
-      document.addEventListener('keydown', disarmFocusRestoration, true)
-      return () => {
-        document.removeEventListener(
-          'pointerdown',
-          disarmFocusRestoration,
-          true,
-        )
-        document.removeEventListener('keydown', disarmFocusRestoration, true)
-      }
-    }
-
-    if (!wasPending || !restoreFocusRef.current) return
-
-    restoreFocusRef.current = false
-    if (document.activeElement === document.body) {
-      buttonRef.current?.focus()
-    }
-  }, [refreshPending])
-
-  function rememberFocus(): void {
-    restoreFocusRef.current = document.activeElement === buttonRef.current
-  }
-
-  return [buttonRef, rememberFocus] as const
-}
-
-function MachineProviderLifecycleDetails({
-  health,
-  installationLabel,
-  lifecycle,
-  lifecycleObserved,
-  providerAvailable,
-}: {
-  health: ReturnType<typeof providerExecutionHealthPresentation>
-  installationLabel: string
-  lifecycle: ProviderLifecyclePresentation
-  lifecycleObserved: boolean
-  providerAvailable: boolean
-}) {
-  const installationDetail = lifecycleObserved
-    ? lifecycle.installation.detailLabel
-    : '此 Host 尚未提供安装生命周期详情'
-
-  return (
-    <>
-      <dl className="mt-2 grid min-w-0 gap-1.5 text-xs">
-        <MachineProviderStatusRow
-          label="安装状态"
-          tone={
-            (lifecycleObserved &&
-              lifecycle.installation.state === 'available') ||
-            (!lifecycleObserved && providerAvailable)
-              ? 'text-success'
-              : 'text-text-secondary'
-          }
-          value={installationLabel}
-        />
-        <MachineProviderStatusRow
-          label="运行时"
-          tone={providerRuntimeLifecycleTone(lifecycle.runtime.state)}
-          value={`${lifecycle.runtime.stateLabel} · ${lifecycle.runtime.freshnessLabel}`}
-        />
-        <MachineProviderStatusRow
-          label="后端"
-          tone={providerBackendLifecycleTone(lifecycle.backend.readiness)}
-          value={`${lifecycle.backend.modeLabel} · ${lifecycle.backend.readinessLabel} · ${lifecycle.backend.freshnessLabel}`}
-        />
-        <MachineProviderStatusRow
-          label="执行状态"
-          tone={providerExecutionHealthTone(health.state)}
-          value={`${health.stateLabel} · ${health.freshnessLabel}`}
-        />
-      </dl>
-      <p className="mt-2 break-words text-xs leading-relaxed text-text-muted">
-        安装 · {installationDetail}
-      </p>
-      {lifecycle.installation.alternateCount === 0 ? null : (
-        <p className="mt-1 text-xs text-text-muted">
-          另发现 {lifecycle.installation.alternateCount} 个安装；不会自动切换。
-        </p>
-      )}
-      <p className="mt-1 break-words text-xs leading-relaxed text-text-muted">
-        运行时 · {lifecycle.runtime.description}
-      </p>
-      <p className="mt-1 break-words text-xs leading-relaxed text-text-muted">
-        后端 · {lifecycle.backend.description}
-      </p>
-      <p className="mt-1 break-words text-xs leading-relaxed text-text-muted">
-        执行 · {health.description}
-      </p>
-      {health.observedAt === undefined ? null : (
-        <p className="mt-1 text-xs text-text-muted">
-          执行验证时间 · {formatMachineLastSeen(health.observedAt)}
-        </p>
-      )}
-    </>
-  )
-}
-
-function MachineProviderStatusRow({
-  label,
-  tone,
-  value,
-}: {
-  label: string
-  tone: string
-  value: string
-}) {
-  return (
-    <div className="flex min-w-0 items-baseline justify-between gap-3">
-      <dt className="shrink-0 text-text-muted">{label}</dt>
-      <dd className={cn('min-w-0 text-right font-medium', tone)}>{value}</dd>
-    </div>
-  )
-}
-
-function remoteProviderCapabilitySummary(
-  provider: ProviderPresentation,
-): string {
-  const { capabilities } = provider
-  if (!capabilities.streaming || !capabilities.resume) {
-    return '已检测到 CLI；未声明会话所需的远程能力'
-  }
-
-  const enabled = [
-    '文本流式',
-    '原生恢复',
-    capabilities.fileRead ? '读取' : undefined,
-    capabilities.search ? '搜索' : undefined,
-    capabilities.toolEvents ? '工具事件' : undefined,
-    capabilities.reasoningControl ? provider.reasoningLabel : undefined,
-  ].filter((value): value is string => value !== undefined)
-  const summary = enabled.join('、')
-  return `已声明能力 · ${summary}`
-}
-
-function providerExecutionHealthTone(
-  state: ReturnType<typeof providerExecutionHealthPresentation>['state'],
-): string {
-  switch (state) {
-    case 'healthy':
-      return 'text-success'
-    case 'degraded':
-      return 'text-warning'
-    case 'unavailable':
-      return 'text-danger'
-    case 'unknown':
-    case 'not_observed':
-      return 'text-text-secondary'
-  }
-}
-
-function providerRuntimeLifecycleTone(
-  state: ProviderLifecyclePresentation['runtime']['state'],
-): string {
-  switch (state) {
-    case 'verified':
-    case 'compatible_unverified':
-      return 'text-success'
-    case 'limited':
-      return 'text-warning'
-    case 'incompatible':
-    case 'unavailable':
-      return 'text-danger'
-    case 'not_observed':
-      return 'text-text-secondary'
-  }
-}
-
-function providerBackendLifecycleTone(
-  readiness: ProviderLifecyclePresentation['backend']['readiness'],
-): string {
-  switch (readiness) {
-    case 'ready':
-      return 'text-success'
-    case 'unavailable':
-    case 'authentication_required':
-    case 'misconfigured':
-      return 'text-danger'
-    case 'unknown':
-    case 'not_observed':
-      return 'text-text-secondary'
-  }
-}
-
-function remoteConnectionDescription(
-  state: MachineSummary['connectionState'],
-): string {
-  switch (state) {
-    case 'online':
-      return '远程节点当前在线，身份验证已通过。'
-    case 'connecting':
-      return '正在验证远程节点并建立安全连接。'
-    case 'offline':
-      return '远程节点当前离线；信任关系仍然保留。'
-    case 'recovery_required':
-      return '已保存的地址当前不可用；请重试或更新连接地址。'
-    case 'authentication_failed':
-      return '最近连接无法验证远程节点身份，CodeTether 已拒绝信任该连接。'
-    case 'incompatible':
-      return '远程节点协议版本不兼容，需要更新后才能重新连接。'
-    case 'local':
-      return '本地连接。'
-  }
-}
-
-function executionTransportLabel(
-  transport: MachineExecutionTransport | undefined,
-): string {
-  switch (transport) {
-    case 'direct':
-      return '本地网络连接'
-    case 'relay':
-      return '通过互联网连接'
-    case 'unavailable':
-      return '当前不可用'
-    case undefined:
-      return '旧版连接状态'
-  }
-}
-
 function MachineMetadata({ label, value }: { label: string; value: string }) {
   return (
-    <div className="min-w-0">
-      <dt className="text-xs text-text-muted">{label}</dt>
-      <dd title={value} className="mt-1.5 truncate text-base text-text-primary">
+    <div className="flex min-w-0 items-baseline gap-3">
+      <dt className="shrink-0 text-text-muted">{label}</dt>
+      <dd
+        title={value}
+        className="min-w-0 flex-1 truncate text-right text-text-primary"
+      >
         {value}
       </dd>
     </div>
@@ -1339,26 +443,23 @@ function MachineMetadata({ label, value }: { label: string; value: string }) {
 function MachineNotFound() {
   return (
     <MachinePageFrame>
-      <section className="grid min-h-64 place-items-center rounded-lg border border-border bg-surface/45 px-6 py-10 text-center">
-        <div className="max-w-md">
-          <h1 className="text-section font-semibold text-text-primary">
-            电脑不存在
-          </h1>
-          <p className="mt-1.5 text-sm text-text-secondary">
-            该电脑记录不存在，或链接中的电脑标识无效。
-          </p>
-          <Button asChild variant="secondary" className="mt-5">
-            <Link to="/machines">返回电脑列表</Link>
+      <SectionState
+        state="empty"
+        title="设备不存在"
+        description="这台设备的记录不存在，或链接中的设备标识无效。"
+        action={
+          <Button asChild variant="secondary">
+            <Link to="/devices">返回设备列表</Link>
           </Button>
-        </div>
-      </section>
+        }
+      />
     </MachinePageFrame>
   )
 }
 
 function MachinePageFrame({ children }: { children: ReactNode }) {
   return (
-    <div className="min-h-full min-w-0 px-[var(--layout-content-inline-padding)] py-[var(--layout-content-block-padding)]">
+    <div className="mx-auto min-h-full w-full min-w-0 max-w-(--page-w) px-4 py-6 sm:px-8">
       {children}
     </div>
   )

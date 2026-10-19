@@ -33,17 +33,17 @@ export function ProviderInstallationSelector({
       <div className="flex min-w-0 items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-xs font-medium text-text-secondary">
-            Provider 安装选择
+            AI 工具安装选择
           </p>
           <p className="mt-1 text-xs leading-relaxed text-text-muted">
-            仅在你明确选择后改变这台电脑未来新会话使用的安装。已有会话保持原绑定。
+            仅在你明确选择后改变这台设备未来新会话使用的安装。已有会话保持原绑定。
           </p>
         </div>
         <Badge variant="secondary" className="shrink-0">
           {lifecycle.installations.length} 个安装
         </Badge>
       </div>
-      <ul className="mt-3 space-y-2" aria-label="Provider 安装列表">
+      <ul className="mt-3 space-y-2" aria-label="AI 工具安装列表">
         {lifecycle.installations.map((installation) => (
           <ProviderInstallationOption
             key={String(installation.installationId)}
@@ -114,7 +114,7 @@ function ProviderInstallationOption({
         <p className="truncate text-xs font-medium text-text-primary">
           {version}
         </p>
-        <p className="mt-0.5 truncate text-[11px] text-text-muted">{status}</p>
+        <p className="mt-0.5 truncate text-xs text-text-muted">{status}</p>
       </div>
       <Button
         size="sm"

@@ -99,7 +99,7 @@ test('Machine Detail Relay UI stays Host-owned, accessible, bounded, and truthfu
   ])
 
   assert.match(detail, /<MachineRelaySection/u)
-  assert.match(detail, /relay=\{machineQuery\.data\.relay\}/u)
+  assert.match(detail, /relay=\{relay\}/u)
   assert.match(section, /aria-labelledby="machine-relay-heading"/u)
   assert.match(section, /role="status"/u)
   assert.match(section, /role="alert"/u)

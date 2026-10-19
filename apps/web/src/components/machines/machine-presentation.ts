@@ -1,5 +1,6 @@
 import type {
   MachineConnectionState,
+  MachineExecutionTransport,
   MachineSummary,
   RemoteMachineAddress,
 } from '@codetether/protocol'
@@ -45,7 +46,7 @@ export function machineConnectionStateLabel(
 ): string {
   switch (state) {
     case 'local':
-      return '可用'
+      return '这台电脑'
     case 'connecting':
       return '连接中'
     case 'online':
@@ -65,21 +66,7 @@ export function machineConnectionStateLabel(
 export function machineConnectionStatusLabel(
   state: MachineConnectionState,
 ): string {
-  switch (state) {
-    case 'local':
-    case 'online':
-      return '已连接'
-    case 'connecting':
-      return '正在重新连接'
-    case 'offline':
-      return '离线'
-    case 'recovery_required':
-      return '需要更新地址'
-    case 'authentication_failed':
-      return '连接未验证'
-    case 'incompatible':
-      return '版本不兼容'
-  }
+  return machineConnectionStateLabel(state)
 }
 
 export function machineConnectionTransportLabel(
@@ -87,14 +74,14 @@ export function machineConnectionTransportLabel(
 ): string {
   switch (state) {
     case 'local':
-      return '本地电脑'
+      return '这台设备'
     case 'online':
     case 'connecting':
     case 'offline':
     case 'recovery_required':
     case 'authentication_failed':
     case 'incompatible':
-      return '远程电脑'
+      return '配对设备'
   }
 }
 
@@ -103,24 +90,24 @@ export function remoteMachineSummaryDescription(
   freshness: 'current' | 'last_known' = 'current',
 ): string {
   if (freshness === 'last_known') {
-    return 'CodeTether 正在重新连接，当前显示这台电脑的上次已知状态；恢复连接后会重新确认项目和 Agent 状态。'
+    return 'CodeTether 正在重新连接，当前显示这台设备的上次已知状态；恢复连接后会重新确认项目和 AI 工具 状态。'
   }
 
   switch (state) {
     case 'online':
-      return '已连接。可以查看这台电脑上的项目和 Agent；可用操作取决于各自当前状态。'
+      return '已连接。可以查看这台设备上的项目和 AI 工具；可用操作取决于各自当前状态。'
     case 'connecting':
-      return '正在连接这台电脑。连接完成后会重新确认项目和 Agent 状态。'
+      return '正在连接这台设备。连接完成后会重新确认项目和 AI 工具 状态。'
     case 'offline':
-      return '这台电脑当前离线。重新连接后会重新确认其上的项目和 Agent 状态。'
+      return '这台设备当前离线。重新连接后会重新确认其上的项目和 AI 工具 状态。'
     case 'recovery_required':
-      return '这台电脑当前无法连接。更新地址后可重新确认项目和 Agent 状态。'
+      return '这台设备当前无法连接。更新地址后可重新确认项目和 AI 工具 状态。'
     case 'authentication_failed':
-      return '这台电脑的连接未通过身份验证，当前不能使用其上的项目或 Agent。'
+      return '这台设备的连接未通过身份验证，当前不能使用其上的项目或 AI 工具。'
     case 'incompatible':
-      return '这台电脑的 CodeTether 版本不兼容，更新并重新连接后才能使用其上的项目或 Agent。'
+      return '这台设备的 CodeTether 版本不兼容，更新并重新连接后才能使用其上的项目或 AI 工具。'
     case 'local':
-      return '这台电脑由本地 CodeTether 直接管理。'
+      return '这台设备由本地 CodeTether 直接管理。'
   }
 }
 
@@ -145,7 +132,7 @@ export function machineConnectionBadgeVariant(
 }
 
 export function machineKindLabel(machine: Pick<MachineSummary, 'kind'>) {
-  return machine.kind === 'local' ? '本地' : '远程'
+  return machine.kind === 'local' ? '这台电脑' : 'Node 配对'
 }
 
 export function remoteMachineAddressLabel(
@@ -163,4 +150,38 @@ export function formatMachineLastSeen(lastSeenAt?: string): string | undefined {
     dateStyle: 'medium',
     timeStyle: 'short',
   }).format(timestamp)
+}
+
+export function machineConnectionTone(
+  state: MachineConnectionState,
+): 'ok' | 'warn' | 'err' | 'off' | 'run' {
+  switch (state) {
+    case 'local':
+    case 'online':
+      return 'ok'
+    case 'connecting':
+      return 'run'
+    case 'offline':
+      return 'off'
+    case 'recovery_required':
+    case 'incompatible':
+      return 'warn'
+    case 'authentication_failed':
+      return 'err'
+  }
+}
+
+export function machineExecutionTransportLabel(
+  transport: MachineExecutionTransport | undefined,
+): string {
+  switch (transport) {
+    case 'direct':
+      return '局域网直连'
+    case 'relay':
+      return '通过 Relay'
+    case 'unavailable':
+      return '暂时无法连接'
+    case undefined:
+      return '未知'
+  }
 }

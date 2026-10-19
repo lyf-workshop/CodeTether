@@ -30,15 +30,15 @@ test('Machines routes and navigation expose only real Host-backed Machine pages'
   assert.match(list, /machineListQueryOptions/u)
   assert.match(list, /machineDetailQueryOptions/u)
   assert.match(detail, /machineDetailQueryOptions/u)
-  assert.match(detail, /providerPresentationsForMachine/u)
+  assert.match(detail, /MachineProvidersSection/u)
   assert.match(detail, /MachineProjectsSection/u)
-  assert.match(detail, /电脑概览/u)
-  assert.match(detail, /这台电脑上的项目/u)
-  assert.match(detail, /machineConnectionStatusLabel/u)
-  assert.match(detail, /检查状态/u)
+  assert.match(detail, /machineEnvironmentLabel/u)
+  assert.match(machineProjects, /项目/u)
+  assert.match(detail, /machineConnectionStateLabel/u)
+  assert.match(detail, /MachineConnectionSection/u)
   assert.match(machineProjects, /projectLocationForMachine/u)
-  assert.match(machineProjects, /projects\.map/u)
-  assert.match(detail, /conversations\.map/u)
+  assert.match(machineProjects, /ownProjects\.map/u)
+  assert.match(detail, /conversations=\{conversations\}/u)
   assert.doesNotMatch(detail, /SSH|remote terminal|CPU chart|GPU chart/u)
 })
 
@@ -54,73 +54,78 @@ test('remote computer summary copy follows current and last-known connection tru
   assert.doesNotMatch(offline, /当前在线/u)
   assert.match(lastKnown, /上次已知状态/u)
   assert.doesNotMatch(lastKnown, /已连接/u)
-  assert.equal(machineConnectionStatusLabel('connecting'), '正在重新连接')
+  assert.equal(machineConnectionStatusLabel('connecting'), '连接中')
 })
 
 test('local Machine Detail separates Provider installation from execution health', async () => {
-  const detail = await source('components/machines/machine-detail-page.tsx')
-  const localDetail = sourceSection(
-    detail,
-    'const providerPresentations = providerPresentationsForMachine(providers)',
-    'function RemoteMachineDetail',
+  const [detail, providers] = await Promise.all([
+    source('components/machines/machine-detail-page.tsx'),
+    source('components/machines/machine-providers-section.tsx'),
+  ])
+  assert.match(detail, /<MachineProvidersSection/u)
+  assert.match(detail, /lifecycles=\{providerLifecycles\}/u)
+  assert.match(providers, /详细状态可按需查看/u)
+  assert.match(
+    sourceSection(
+      providers,
+      'function MachineProviderCard',
+      'function useProviderRefreshFocusRestoration',
+    ),
+    /providerExecutionHealthPresentation\(/u,
   )
-
-  assert.match(localDetail, /详细状态可按需查看/u)
-  assert.match(localDetail, /providerExecutionHealthPresentation\(/u)
-  assert.match(localDetail, /provider\.executionHealth/u)
-  assert.match(localDetail, /provider\.availabilityLabel/u)
-  assert.match(localDetail, /providerLifecycleForMachine\(/u)
-  assert.match(localDetail, /providerLifecyclePresentation\(/u)
-  assert.match(localDetail, /provider\.available\s*\? '可用'/u)
-  assert.match(localDetail, /health=\{health\}/u)
-  assert.match(localDetail, /查看详细状态/u)
-  assert.match(localDetail, /<details/u)
-  assert.match(detail, /health\.description/u)
-  assert.match(detail, /health\.observedAt/u)
+  assert.match(providers, /provider\.executionHealth/u)
+  assert.match(providers, /provider\.availabilityLabel/u)
+  assert.match(providers, /providerLifecycleForMachine\(/u)
+  assert.match(providers, /providerLifecyclePresentation\(/u)
+  assert.match(providers, /provider\.available\s*\? '可用'/u)
+  assert.match(providers, /health=\{health\}/u)
+  assert.match(providers, /查看详细状态/u)
+  assert.match(providers, /<details/u)
+  assert.match(providers, /health\.description/u)
+  assert.match(providers, /health\.observedAt/u)
 })
 
 test('Machine Provider lifecycle UI stays safe, status-readable, and refreshes through one bounded action', async () => {
-  const [detail, actions] = await Promise.all([
+  const [detail, providers, actions] = await Promise.all([
     source('components/machines/machine-detail-page.tsx'),
+    source('components/machines/machine-providers-section.tsx'),
     source('runtime/host/machine-actions.ts'),
   ])
-
   assert.match(detail, /providerLifecycles/u)
-  assert.match(detail, /providerLifecycleForMachine/u)
-  assert.match(detail, /providerLifecyclePresentation/u)
-  assert.match(detail, /label="安装状态"/u)
-  assert.match(detail, /label="运行时"/u)
-  assert.match(detail, /label="后端"/u)
-  assert.match(detail, /label="执行状态"/u)
-  assert.match(detail, /另发现 .* 个安装；不会自动切换/u)
-  assert.doesNotMatch(detail, /aria-label=.*运行时 .*后端 .*执行状态/u)
-  assert.match(detail, /role="status"/u)
-  assert.match(detail, /aria-busy=\{refreshPending\}/u)
-  assert.match(detail, /disabled=\{!canRefresh \|\| refreshPending\}/u)
-  assert.match(detail, /aria-labelledby="local-machine-providers-heading"/u)
-  assert.match(detail, /local-provider-refresh-unavailable/u)
-  assert.match(detail, /motion-reduce:animate-none/u)
+  assert.match(providers, /providerLifecycleForMachine/u)
+  assert.match(providers, /providerLifecyclePresentation/u)
+  for (const label of ['安装状态', '运行时', '后端', '执行状态'])
+    assert.ok(providers.includes(`label="${label}"`))
+  assert.match(providers, /另发现 .* 个安装；不会自动切换/u)
+  assert.doesNotMatch(providers, /aria-label=.*运行时 .*后端 .*执行状态/u)
+  assert.match(providers, /role="status"/u)
+  assert.match(providers, /aria-busy=\{refreshPending\}/u)
+  assert.match(providers, /disabled=\{!canRefresh \|\| refreshPending\}/u)
+  assert.match(providers, /local-machine-providers-heading/u)
+  assert.match(providers, /refresh-unavailable/u)
+  assert.match(providers, /motion-reduce:animate-none/u)
   assert.match(actions, /`providers:\$\{machine\}`/u)
   assert.match(actions, /response\.data\.providerLifecycles/u)
   assert.doesNotMatch(
-    detail,
-    /selectedInstallationId|installationId|sanitizedOrigin|configurationRevision|hasAuthToken/u,
+    providers,
+    /selectedInstallationId|sanitizedOrigin|configurationRevision|hasAuthToken/u,
   )
   assert.doesNotMatch(
-    detail,
+    providers,
     /installationSelector|setSelectedInstallation|Update Provider|更新 Provider/u,
   )
 })
 
 test('Provider installation selection is explicit, lifecycle-gated, and refreshes durable Machine truth', async () => {
-  const [detail, selector, actions] = await Promise.all([
+  const [detail, providers, selector, actions] = await Promise.all([
     source('components/machines/machine-detail-page.tsx'),
+    source('components/machines/machine-providers-section.tsx'),
     source('components/machines/provider-installation-selector.tsx'),
     source('runtime/host/machine-actions.ts'),
   ])
 
-  assert.match(detail, /<ProviderInstallationSelector/u)
-  assert.match(detail, /localProviderSelectionMutation\.mutate\(/u)
+  assert.match(providers, /<ProviderInstallationSelector/u)
+  assert.match(detail, /providerSelectionMutation\.mutate\(/u)
   assert.match(
     detail,
     /onSuccess:\s*\(\) => \{\s*void machineQuery\.refetch\(\)/u,
@@ -146,72 +151,68 @@ test('Provider installation selection is explicit, lifecycle-gated, and refreshe
 })
 
 test('Provider refresh restores keyboard focus after its bounded pending state settles', async () => {
-  const detail = await source('components/machines/machine-detail-page.tsx')
-
-  assert.match(detail, /useProviderRefreshFocusRestoration\(/u)
+  const [detail, providers] = await Promise.all([
+    source('components/machines/machine-detail-page.tsx'),
+    source('components/machines/machine-providers-section.tsx'),
+  ])
+  assert.match(detail, /refreshPending=\{providerRefreshMutation\.isPending\}/u)
   assert.match(
-    detail,
-    /useProviderRefreshFocusRestoration\(\s*localProviderRefreshMutation\.isPending/u,
+    providers,
+    /useProviderRefreshFocusRestoration\(refreshPending\)/u,
   )
-  assert.match(detail, /useProviderRefreshFocusRestoration\(refreshPending\)/u)
-  assert.match(detail, /ref=\{localProviderRefreshButtonRef\}/u)
-  assert.match(detail, /ref=\{providerRefreshButtonRef\}/u)
+  assert.match(providers, /ref=\{providerRefreshButtonRef\}/u)
+  assert.match(providers, /rememberProviderRefreshFocus\(\);?\s*onRefresh\(\)/u)
   assert.match(
-    detail,
-    /rememberLocalProviderRefreshFocus\(\)\s*localProviderRefreshMutation\.mutate\(\)/u,
-  )
-  assert.match(detail, /rememberProviderRefreshFocus\(\)\s*onRefresh\(\)/u)
-  assert.match(
-    detail,
+    providers,
     /restoreFocusRef\.current = document\.activeElement === buttonRef\.current/u,
   )
-  assert.match(detail, /if \(refreshPending && restoreFocusRef\.current\)/u)
+  assert.match(providers, /if \(refreshPending && restoreFocusRef\.current\)/u)
   assert.match(
-    detail,
+    providers,
     /document\.addEventListener\('pointerdown', disarmFocusRestoration, true\)/u,
   )
   assert.match(
-    detail,
+    providers,
     /document\.addEventListener\('keydown', disarmFocusRestoration, true\)/u,
   )
   assert.match(
-    detail,
+    providers,
     /document\.removeEventListener\(\s*'pointerdown',\s*disarmFocusRestoration,\s*true,?\s*\)/u,
   )
   assert.match(
-    detail,
+    providers,
     /document\.removeEventListener\(\s*'keydown',\s*disarmFocusRestoration,\s*true,?\s*\)/u,
   )
   assert.match(
-    detail,
+    providers,
     /if \(!wasPending \|\| !restoreFocusRef\.current\) return/u,
   )
-  assert.match(detail, /document\.activeElement === document\.body/u)
-  assert.match(detail, /buttonRef\.current\?\.focus\(\)/u)
+  assert.match(providers, /document\.activeElement === document\.body/u)
+  assert.match(providers, /buttonRef\.current\?\.focus\(\)/u)
 })
 
 test('remote Machine Detail separates direct reachability from the Host-selected execution transport', async () => {
-  const detail = await source('components/machines/machine-detail-page.tsx')
-  const remoteDetail = sourceSection(
-    detail,
-    'function RemoteMachineDetail',
-    'function MachineNotFound',
-  )
-
-  assert.match(remoteDetail, /connection\.directState \?\? connection\.state/u)
-  assert.match(remoteDetail, /label="当前执行路径"/u)
+  const [detail, presentation] = await Promise.all([
+    source('components/machines/machine-detail-page.tsx'),
+    source('components/machines/machine-presentation.ts'),
+  ])
+  assert.match(detail, /connection\.directState \?\? connection\.state/u)
+  assert.match(detail, /label="连接方式"/u)
   assert.match(
-    remoteDetail,
-    /value=\{executionTransportLabel\(connection\.executionTransport\)\}/u,
+    detail,
+    /machineExecutionTransportLabel\(connection\?\.executionTransport\)/u,
   )
-  assert.match(remoteDetail, /label="局域网直连"/u)
-  assert.match(remoteDetail, /machineConnectionStateLabel\(directState\)/u)
-  assert.match(remoteDetail, /label="直连地址"/u)
-  assert.match(detail, /case 'direct':[\s\S]*return '本地网络连接'/u)
-  assert.match(detail, /case 'relay':[\s\S]*return '通过互联网连接'/u)
-  assert.match(detail, /case 'unavailable':[\s\S]*return '当前不可用'/u)
+  assert.match(detail, /label="局域网直连"/u)
+  assert.match(
+    detail,
+    /machineConnectionStateLabel\(\s*connection\.directState \?\? connection\.state,?\s*\)/u,
+  )
+  assert.match(detail, /label="直连地址"/u)
+  assert.match(presentation, /case 'direct':[\s\S]*return '局域网直连'/u)
+  assert.match(presentation, /case 'relay':[\s\S]*return '通过 Relay'/u)
+  assert.match(presentation, /case 'unavailable':[\s\S]*return '暂时无法连接'/u)
   assert.doesNotMatch(
-    remoteDetail,
+    detail,
     /transport(?:Mode)?Select|setExecutionTransport|onTransportChange/u,
   )
 })

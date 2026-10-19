@@ -69,8 +69,8 @@ test('failure surfaces retain bounded responsive layout at both required desktop
   assert.match(card, /flex-wrap/u)
   assert.match(card, /overflow-auto break-all/u)
   assert.match(timeline, /max-w-3xl/u)
-  assert.match(machine, /md:grid-cols-2/u)
-  assert.match(machine, /xl:grid-cols-\[minmax\(0,1fr\)_20rem\]/u)
+  assert.match(machine, /min-w-0/u)
+  assert.match(machine, /min-\[1001px\]:grid-cols-/u)
   assert.match(dialog, /max-w-lg overflow-x-hidden/u)
 })
 

@@ -98,26 +98,32 @@ test('Remote Location removal is explicit, metadata-only, and keyboard accessibl
   assert.match(actions, /project_location_local_required/u)
 })
 
-test('Remote Machine keeps Projects readable while remote execution and destructive unpair remain capability-gated', async () => {
-  const [detail, projects, unpair] = await Promise.all([
+test('Remote Machine keeps Projects readable while execution and unpair remain capability-gated', async () => {
+  const [detail, projects, unpair, model] = await Promise.all([
     source('components/machines/machine-detail-page.tsx'),
     source('components/machines/machine-projects-section.tsx'),
     source('components/machines/unpair-machine-dialog.tsx'),
+    source('components/machines/device-project-model.ts'),
   ])
-
-  assert.match(detail, /projects=\{machineQuery\.data\.projects\}/u)
   assert.match(
     detail,
-    /<MachineProjectsSection machine=\{machine\} projects=\{projects\}/u,
+    /<MachineProjectsSection\s+machine=\{machine\}\s+projects=\{projects\}/u,
   )
   assert.match(detail, /machine\.capabilities\.providerExecution/u)
-  assert.match(detail, /当前连接或 Agent 尚未满足远程执行条件/u)
-  assert.match(detail, /disabled=\{projects\.length > 0\}/u)
-  assert.match(projects, /projects\.map/u)
+  assert.match(detail, /这台设备当前不能运行 AI 工具/u)
+  assert.match(projects, /ownProjects\.map/u)
   assert.match(projects, /projectLocationForMachine/u)
-  assert.match(unpair, /projectCount > 0/u)
-  assert.match(unpair, /请先在对应的项目详情中明确移除这些位置/u)
-  assert.match(unpair, /取消配对不会自动删除位置/u)
+  assert.match(projects, /machineId: machine\.machineId/u)
+  assert.match(unpair, /unpairMachinePreflight/u)
+  assert.match(unpair, /preflight\.projects\.map/u)
+  assert.match(unpair, /blocked\s*\?\s*\(\s*<DialogClose/u)
+  assert.match(unpair, /知道了/u)
+  assert.match(unpair, /取消配对不会自动移除项目/u)
+  assert.match(model, /blocked: bound\.length > 0/u)
+  assert.doesNotMatch(
+    detail + projects,
+    /AddProjectLocationDialog|RemoveProjectLocationDialog/u,
+  )
 })
 
 async function source(relativePath) {

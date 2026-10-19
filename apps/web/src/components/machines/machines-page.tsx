@@ -1,9 +1,14 @@
 import { useQueries, useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { ArrowUpRight, Monitor, Plus, RefreshCw, Server } from 'lucide-react'
+import { Monitor, Plus, Server } from 'lucide-react'
 
-import { AgentBadge, Badge, Button, cn } from '@codetether/ui'
-import type { GetMachineResponse, MachineSummary } from '@codetether/protocol'
+import {
+  Button,
+  DeviceSection,
+  Notice,
+  SectionState,
+  StatusTag,
+} from '@codetether/ui'
 
 import {
   useHostConnectionState,
@@ -13,20 +18,21 @@ import {
   machineDetailQueryOptions,
   machineListQueryOptions,
 } from '../../runtime/host/machine-query'
-import { providerPresentationsForMachine } from '../../provider/provider-presentation'
-import {
-  formatMachineLastSeen,
-  machineConnectionBadgeVariant,
-  machineConnectionStateLabel,
-  machineEnvironmentLabel,
-  machineKindLabel,
-} from './machine-presentation'
+import { AddProjectDialog } from '../projects/add-project-dialog'
 import { AddRemoteMachineDialog } from './add-remote-machine-dialog'
+import { machineCanAddProject } from './device-project-model'
 import {
   MachinesEmptyState,
   MachinesErrorState,
   MachinesLoadingState,
 } from './machine-page-states'
+import {
+  formatMachineLastSeen,
+  machineConnectionStateLabel,
+  machineConnectionTone,
+  machineEnvironmentLabel,
+} from './machine-presentation'
+import { MachineProjectsSection } from './machine-projects-section'
 
 export function MachinesPage() {
   const runtime = useHostRuntime()
@@ -35,22 +41,19 @@ export function MachinesPage() {
     ...machineListQueryOptions(runtime),
     enabled: connectionState === 'connected',
   })
-  const machines = machinesQuery.data ?? []
+  const machines = [...(machinesQuery.data ?? [])].sort(
+    (a, b) => Number(b.kind === 'local') - Number(a.kind === 'local'),
+  )
   const detailQueries = useQueries({
     queries: machines.map((machine) => ({
       ...machineDetailQueryOptions(runtime, machine.machineId),
       enabled: connectionState === 'connected',
     })),
   })
-  const machineDetails = new Map(
-    machines.map((machine, index) => [machine.machineId, detailQueries[index]]),
-  )
-  const connectionUnavailable =
+  const unavailable =
     connectionState === 'unavailable' || connectionState === 'incompatible'
   const loading =
-    !connectionUnavailable &&
-    (machinesQuery.isPending ||
-      (connectionState !== 'connected' && machinesQuery.data === undefined))
+    !unavailable && machinesQuery.data === undefined && !machinesQuery.isError
 
   function retry() {
     runtime.retry()
@@ -58,215 +61,147 @@ export function MachinesPage() {
   }
 
   return (
-    <div className="flex min-h-full min-w-0 flex-col px-[var(--layout-content-inline-padding)] py-[var(--layout-content-block-padding)]">
-      <header className="flex min-w-0 flex-wrap items-start justify-between gap-4">
-        <div className="min-w-0">
-          <h1 className="text-page font-semibold text-text-primary">电脑</h1>
-          <p className="mt-0.5 text-sm text-text-secondary">
-            查看 CodeTether 信任的本地和远程电脑。
+    <div className="mx-auto min-h-full w-full min-w-0 max-w-(--page-w) px-4 py-6 sm:px-8">
+      <header className="mb-8 flex min-w-0 flex-wrap items-end justify-between gap-4">
+        <div className="min-w-0 flex-1 basis-64">
+          <h1 className="text-page font-semibold">设备</h1>
+          <p className="mt-2 max-w-prose text-base text-text-secondary">
+            每台设备下面是你在上面添加的项目文件夹。打开项目就能查看会话，在里面新建会话时会直接使用这个文件夹。
           </p>
         </div>
         <AddRemoteMachineDialog
           trigger={
             <Button
-              size="sm"
+              variant="secondary"
               disabled={connectionState !== 'connected'}
-              className="w-full sm:w-auto"
             >
               <Plus aria-hidden="true" />
-              添加电脑
+              添加设备
             </Button>
           }
         />
       </header>
-
-      <div className="mt-6 min-w-0 flex-1">
-        {connectionUnavailable ? (
-          <MachinesErrorState
-            incompatible={connectionState === 'incompatible'}
-            onRetry={retry}
-          />
-        ) : loading ? (
-          <MachinesLoadingState />
-        ) : machinesQuery.isError ? (
-          <MachinesErrorState onRetry={retry} />
-        ) : machines.length === 0 ? (
-          <MachinesEmptyState />
-        ) : (
-          <section aria-labelledby="machine-list-heading">
-            <div className="mb-3 flex min-w-0 items-center justify-between gap-4">
-              <div>
-                <h2
-                  id="machine-list-heading"
-                  className="text-sm font-medium text-text-primary"
-                >
-                  已连接的电脑
-                </h2>
-                <p className="mt-0.5 text-xs text-text-muted">
-                  共 {machines.length} 台电脑
-                </p>
-              </div>
-              {connectionState === 'reconnecting' ? (
-                <span
-                  role="status"
-                  className="inline-flex items-center gap-1.5 text-xs text-text-muted"
-                >
-                  <RefreshCw
-                    aria-hidden="true"
-                    className="size-3.5 animate-spin motion-reduce:animate-none"
-                  />
-                  正在重新连接
-                </span>
-              ) : null}
-            </div>
-            <div className="space-y-4">
-              {machines.map((machine) => {
-                const detailQuery = machineDetails.get(machine.machineId)
-                return (
-                  <MachineRow
-                    key={machine.machineId}
-                    machine={machine}
-                    detail={detailQuery?.data}
-                    detailError={detailQuery?.isError ?? false}
-                    detailPending={detailQuery?.isPending ?? false}
-                  />
-                )
-              })}
-            </div>
-          </section>
-        )}
-      </div>
-    </div>
-  )
-}
-
-function MachineRow({
-  detail,
-  detailError,
-  detailPending,
-  machine,
-}: {
-  detail?: GetMachineResponse
-  detailError: boolean
-  detailPending: boolean
-  machine: MachineSummary
-}) {
-  const providers = providerPresentationsForMachine(detail?.providers ?? [])
-  const installedProviders = providers.filter(
-    (provider) => provider.availability === 'available',
-  )
-  const online =
-    machine.connectionState === 'local' || machine.connectionState === 'online'
-  const lastSeen = formatMachineLastSeen(machine.lastSeenAt)
-  const MachineIcon = machine.kind === 'local' ? Monitor : Server
-
-  return (
-    <article className="grid min-w-0 gap-5 rounded-lg border border-border bg-surface/70 p-5 transition-colors duration-150 hover:border-border-strong hover:bg-surface/90 motion-reduce:transition-none sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center">
-      <span
-        aria-hidden="true"
-        className={cn(
-          'grid size-11 shrink-0 place-items-center rounded-md border',
-          online
-            ? 'border-primary/35 bg-primary-muted text-primary'
-            : 'border-border-strong bg-surface-muted text-text-muted',
-        )}
-      >
-        <MachineIcon className="size-5" />
-      </span>
-
-      <div className="min-w-0">
-        <div className="flex min-w-0 flex-wrap items-center gap-2.5">
-          <h2
-            title={machine.displayName}
-            className="min-w-0 truncate text-section font-semibold text-text-primary"
-          >
-            {machine.displayName}
-          </h2>
-          <Badge variant="secondary">{machineKindLabel(machine)}</Badge>
-          <Badge
-            variant={machineConnectionBadgeVariant(machine.connectionState)}
-          >
-            {machineConnectionStateLabel(machine.connectionState)}
-          </Badge>
-        </div>
-        <p className="mt-1.5 text-sm text-text-secondary">
-          {machineEnvironmentLabel(machine)}
-        </p>
-        {machine.kind === 'local' ? (
-          <div
-            className="mt-4 flex min-w-0 flex-wrap items-center gap-2"
-            aria-label="这台电脑上的 Agent"
-          >
-            {detailPending ? (
-              <span className="text-xs text-text-muted">正在读取 Agent…</span>
-            ) : detailError || detail === undefined ? (
-              <span className="text-xs text-text-muted">
-                Agent 信息暂时不可用
-              </span>
-            ) : providers.length === 0 ? (
-              <span className="text-xs text-text-muted">未检测到 Agent</span>
-            ) : (
-              providers.map((provider) => (
-                <span
-                  key={provider.provider}
-                  className="inline-flex min-w-0 items-center gap-1.5 text-xs text-text-secondary"
-                >
-                  <AgentBadge agent={provider.agent} variant="compact" />
-                  <span className="truncate">{provider.displayName}</span>
-                  <span
-                    className={
-                      provider.available ? 'text-success' : 'text-text-muted'
-                    }
+      {unavailable ? (
+        <MachinesErrorState
+          incompatible={connectionState === 'incompatible'}
+          onRetry={retry}
+        />
+      ) : loading ? (
+        <MachinesLoadingState />
+      ) : machinesQuery.isError && machinesQuery.data === undefined ? (
+        <MachinesErrorState onRetry={retry} />
+      ) : machines.length === 0 ? (
+        <MachinesEmptyState />
+      ) : (
+        <div className="space-y-10">
+          {connectionState === 'reconnecting' ? (
+            <Notice title="正在重新连接">
+              当前显示最近读取的设备数据，连接恢复后会重新确认。
+            </Notice>
+          ) : null}
+          {machinesQuery.isError ? (
+            <Notice
+              tone="warn"
+              title="设备列表未能更新"
+              action={
+                <Button size="sm" variant="secondary" onClick={retry}>
+                  重试
+                </Button>
+              }
+            >
+              当前显示最近读取的设备记录。
+            </Notice>
+          ) : null}
+          {machines.map((machine, index) => {
+            const detailQuery = detailQueries[index]
+            const detail = detailQuery?.data
+            const lastSeen = formatMachineLastSeen(machine.lastSeenAt)
+            const connected =
+              machine.connectionState === 'local' ||
+              machine.connectionState === 'online'
+            const MachineIcon = machine.kind === 'local' ? Monitor : Server
+            const canAdd =
+              connectionState === 'connected' && machineCanAddProject(machine)
+            return (
+              <DeviceSection
+                key={machine.machineId}
+                id={`device-${machine.machineId}`}
+                icon={<MachineIcon />}
+                title={
+                  <Link
+                    to="/devices/$machineId"
+                    params={{ machineId: machine.machineId }}
+                    title={machine.displayName}
+                    className="rounded-xs outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
                   >
-                    {provider.availabilityLabel}
-                  </span>
-                </span>
-              ))
-            )}
-          </div>
-        ) : detailPending ? (
-          <p className="mt-4 truncate text-xs text-text-muted">
-            正在读取 Agent…
-          </p>
-        ) : detailError || detail === undefined ? (
-          <p className="mt-4 truncate text-xs text-text-muted">
-            Agent 信息暂时不可用
-          </p>
-        ) : detail.providerDiscovery?.state === 'not_observed' ||
-          detail.providerDiscovery === undefined ? (
-          <p className="mt-4 truncate text-xs text-text-muted">
-            尚未检测 Agent
-          </p>
-        ) : (
-          <div className="mt-4 min-w-0 text-xs text-text-muted">
-            <p className="truncate" aria-label="这台远程电脑上检测到的 Agent">
-              {detail.providerDiscovery.state === 'last_known'
-                ? '上次检测 · '
-                : ''}
-              {installedProviders.length === 0
-                ? '未检测到已安装 Agent'
-                : installedProviders
-                    .map((provider) => provider.displayName)
-                    .join(' · ')}
-            </p>
-            <p className="mt-1 truncate">
-              {lastSeen === undefined
-                ? '已建立信任，尚未记录成功连接'
-                : `最近连接 ${lastSeen}`}
-            </p>
-          </div>
-        )}
-      </div>
-
-      <Button asChild size="sm" className="min-w-28">
-        <Link
-          to="/machines/$machineId"
-          params={{ machineId: machine.machineId }}
-        >
-          打开电脑
-          <ArrowUpRight aria-hidden="true" />
-        </Link>
-      </Button>
-    </article>
+                    {machine.displayName}
+                  </Link>
+                }
+                status={
+                  <StatusTag
+                    tone={machineConnectionTone(machine.connectionState)}
+                  >
+                    {machineConnectionStateLabel(machine.connectionState)}
+                  </StatusTag>
+                }
+                metadata={`${machineEnvironmentLabel(machine)}${machine.kind === 'remote' ? (detail?.connection?.executionTransport === 'relay' ? ' · 通过 Relay' : ' · Node 配对') : ''}`}
+                description={
+                  !connected
+                    ? `${lastSeen === undefined ? '' : `上次在线 ${lastSeen}。`}可以查看以前的会话，恢复后才能继续或新建。`
+                    : undefined
+                }
+                action={
+                  canAdd ? (
+                    <AddProjectDialog
+                      fixedMachineId={machine.machineId}
+                      trigger={
+                        <Button variant="secondary" size="sm">
+                          <Plus aria-hidden="true" />
+                          添加项目
+                        </Button>
+                      }
+                    />
+                  ) : undefined
+                }
+              >
+                {detail === undefined ? (
+                  detailQuery?.isError ? (
+                    <Notice
+                      tone="err"
+                      title="暂时无法读取项目"
+                      action={
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          disabled={connectionState !== 'connected'}
+                          onClick={() => {
+                            void detailQuery.refetch()
+                          }}
+                        >
+                          重试
+                        </Button>
+                      }
+                    >
+                      这台设备的项目列表暂时不可用。
+                    </Notice>
+                  ) : (
+                    <SectionState
+                      state="loading"
+                      title={`正在读取“${machine.displayName}”上的项目`}
+                    />
+                  )
+                ) : (
+                  <MachineProjectsSection
+                    machine={machine}
+                    projects={detail.projects}
+                    heading={false}
+                  />
+                )}
+              </DeviceSection>
+            )
+          })}
+        </div>
+      )}
+    </div>
   )
 }

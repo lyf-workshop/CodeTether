@@ -23,7 +23,7 @@ export function ConversationFilesSurface({
       <p role="status" className="text-sm text-text-muted">
         {supportsDiff
           ? '本次会话没有已知文件变更。'
-          : '当前 Agent 未提供文件变更信息。'}
+          : '当前 AI 工具未提供文件变更信息。'}
       </p>
     )
   }

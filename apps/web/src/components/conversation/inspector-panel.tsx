@@ -1,11 +1,5 @@
 import { useEffect, useState, type ComponentPropsWithoutRef } from 'react'
-import {
-  FileCode2,
-  Files,
-  PanelRightClose,
-  SquareTerminal,
-  Wrench,
-} from 'lucide-react'
+import { FileCode2, Files, PanelRightClose, SquareTerminal } from 'lucide-react'
 
 import {
   Badge,
@@ -21,6 +15,7 @@ import {
 } from '@codetether/ui'
 
 import { formatConversationDuration } from './conversation-duration'
+import type { ConversationDisplayContext } from './conversation-gate-presentation'
 import { ConversationFilesSurface } from './conversation-files-surface'
 import type {
   ConversationChangesViewModel,
@@ -334,6 +329,7 @@ export interface InspectorPanelProps extends Omit<
   'children'
 > {
   conversation: ConversationViewModel
+  displayContext?: ConversationDisplayContext
   changes: ConversationChangesViewModel
   terminal: ConversationTerminalViewModel
   /** Retained for API compatibility; Context is no longer rendered. */
@@ -350,6 +346,7 @@ export type { InspectorTab } from './conversation-inspector-state'
 
 export function InspectorPanel({
   conversation,
+  displayContext,
   changes,
   terminal,
   initialTab = 'files',
@@ -363,12 +360,15 @@ export function InspectorPanel({
 }: InspectorPanelProps) {
   const requestedTab = tab ?? initialTab
   const visibleTab = normalizeConversationInspectorTab(requestedTab)
+  const supportsDiff =
+    conversation.capabilities.supportsDiff &&
+    displayContext?.machineKind === 'local'
   const supportsToolOutput =
     conversation.capabilities.supportsToolOutput ||
     conversation.capabilities.supportsShell
   const effectiveTab =
-    (requestedTab === 'changes' && !conversation.capabilities.supportsDiff) ||
-    (visibleTab === 'changes' && !conversation.capabilities.supportsDiff) ||
+    (requestedTab === 'changes' && !supportsDiff) ||
+    (visibleTab === 'changes' && !supportsDiff) ||
     (requestedTab === 'terminal' && !supportsToolOutput)
       ? 'files'
       : visibleTab === 'tools' && !supportsToolOutput
@@ -377,27 +377,43 @@ export function InspectorPanel({
 
   return (
     <aside
-      aria-label="会话检查器"
+      aria-label="文件与工具输出"
       className={cn(
-        'flex h-full min-h-0 min-w-0 flex-col overflow-hidden border-l border-border bg-surface-inset',
+        'flex h-full min-h-0 min-w-0 flex-col overflow-hidden border-l border-border bg-surface',
         className,
       )}
       {...props}
     >
-      <header className="flex h-13 shrink-0 items-center justify-between gap-3 px-4">
-        <div className="flex min-w-0 items-center gap-2">
-          <Wrench
-            aria-hidden="true"
-            className="size-4 shrink-0 text-text-muted"
-          />
-          <h2 className="truncate text-lg font-semibold text-text-primary">
-            当前会话
-          </h2>
-        </div>
-        <div className="flex shrink-0 items-center gap-1">
+      <Tabs
+        value={effectiveTab}
+        onValueChange={(value) => onTabChange?.(value as InspectorTab)}
+        className="min-h-0 flex-1 gap-0"
+      >
+        <div className="flex shrink-0 items-center gap-2 px-4 pt-2 pb-2">
+          <TabsList
+            variant="line"
+            aria-label="文件面板视图"
+            className="h-9 w-full gap-1 bg-transparent"
+          >
+            {supportsDiff ? (
+              <TabsTrigger value="changes" className="h-9 flex-1 px-1 text-sm">
+                变更
+              </TabsTrigger>
+            ) : null}
+            <TabsTrigger value="files" className="h-9 flex-1 px-1 text-sm">
+              <Files aria-hidden="true" />
+              文件
+            </TabsTrigger>
+            {supportsToolOutput ? (
+              <TabsTrigger value="tools" className="h-9 flex-1 px-1 text-sm">
+                <SquareTerminal aria-hidden="true" />
+                工具输出
+              </TabsTrigger>
+            ) : null}
+          </TabsList>
           {onClose ? (
             <IconButton
-              label="关闭会话检查器"
+              label="关闭文件与工具输出"
               variant="ghost"
               size="sm"
               onClick={onClose}
@@ -406,55 +422,32 @@ export function InspectorPanel({
             </IconButton>
           ) : null}
         </div>
-      </header>
-
-      <ConversationMetadata conversation={conversation} />
-
-      <Tabs
-        value={effectiveTab}
-        onValueChange={(value) => onTabChange?.(value as InspectorTab)}
-        className="min-h-0 flex-1 gap-0"
-      >
-        <div className="shrink-0 px-4 pb-2">
-          <TabsList
-            variant="line"
-            aria-label="检查器视图"
-            className="h-9 w-full gap-1 bg-transparent"
-          >
-            <TabsTrigger value="files" className="h-9 flex-1 px-1 text-sm">
-              <Files aria-hidden="true" />
-              文件
-            </TabsTrigger>
-            {conversation.capabilities.supportsDiff ? (
-              <TabsTrigger value="changes" className="h-9 flex-1 px-1 text-sm">
-                变更
-              </TabsTrigger>
-            ) : null}
-            {supportsToolOutput ? (
-              <TabsTrigger value="tools" className="h-9 flex-1 px-1 text-sm">
-                <SquareTerminal aria-hidden="true" />
-                工具输出
-              </TabsTrigger>
-            ) : null}
-          </TabsList>
-        </div>
 
         <TabsContent value="files" className="min-h-0 overflow-hidden">
           <ScrollArea className="h-full">
             <div className="px-4 pb-4">
+              {!supportsDiff ? (
+                <p role="status" className="py-3 text-sm text-text-secondary">
+                  {displayContext?.readSearchOnly
+                    ? '这个 AI 工具在这里只读取和搜索文件，不会修改代码，因此没有“变更”。'
+                    : displayContext?.machineKind === 'remote'
+                      ? '在配对设备上运行的会话暂不报告文件差异，因此没有“变更”。'
+                      : '当前 AI 工具不报告文件差异，因此没有“变更”。'}
+                </p>
+              ) : null}
               <InspectorSection title="文件">
                 <ConversationFilesSurface
                   changes={changes}
                   onOpenChange={onChangeSelect}
                   selectedChangeId={selectedChangeId}
-                  supportsDiff={conversation.capabilities.supportsDiff}
+                  supportsDiff={supportsDiff}
                 />
               </InspectorSection>
             </div>
           </ScrollArea>
         </TabsContent>
 
-        {conversation.capabilities.supportsDiff ? (
+        {supportsDiff ? (
           <TabsContent value="changes" className="min-h-0 overflow-hidden">
             <ScrollArea className="h-full">
               <div className="px-4 pb-4">
@@ -482,6 +475,12 @@ export function InspectorPanel({
           </TabsContent>
         ) : null}
       </Tabs>
+      <details className="shrink-0 border-t border-border px-4 py-2 text-sm text-text-secondary">
+        <summary className="cursor-pointer rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring">
+          会话信息
+        </summary>
+        <ConversationMetadata conversation={conversation} />
+      </details>
     </aside>
   )
 }

@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   type UIEvent,
+  type ReactNode,
 } from 'react'
 import {
   CheckCircle2,
@@ -48,6 +49,7 @@ import { presentProjectPaths } from './message-presentation'
 import { AgentMessage, UserMessage } from './message'
 
 interface ConversationTimelineProps {
+  readonly header?: ReactNode
   anchorRequestKey?: string
   agent: AgentId
   timeline: ConversationTimelineViewModel
@@ -377,6 +379,7 @@ function NativeConversationHistory({
 }
 
 export function ConversationTimeline({
+  header,
   anchorRequestKey,
   agent,
   timeline,
@@ -576,7 +579,8 @@ export function ConversationTimeline({
         viewportRef={viewportRef}
         onViewportScroll={handleScroll}
       >
-        <div className="mx-auto w-full max-w-3xl px-5 pb-5">
+        <div className="mx-auto w-full min-w-0 max-w-(--read-w) px-8 pb-8 max-sm:px-4">
+          {header}
           <p className="flex h-[var(--layout-conversation-day-marker-height)] items-center justify-center text-center text-xs text-text-muted">
             {timeline.dayLabel}
           </p>

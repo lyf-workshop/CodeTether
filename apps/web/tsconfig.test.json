@@ -27,6 +27,7 @@
     "src/runtime/theme/theme-preference.ts",
     "src/components/conversation/conversation-view-model.ts",
     "src/components/conversation/conversation-controls.ts",
+    "src/components/conversation/conversation-gate-presentation.ts",
     "src/components/conversation/conversation-duration.ts",
     "src/components/conversation/composer-focus-handoff.ts",
     "src/components/conversation/conversation-inspector-state.ts",

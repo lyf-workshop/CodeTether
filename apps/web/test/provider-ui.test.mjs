@@ -453,7 +453,26 @@ test('existing UI surfaces consume Provider truth without adding a switch to Det
   assert.doesNotMatch(dialog + fields, /modelSelection|选择模型/u)
   assert.doesNotMatch(sidebar, /provider\.availabilityLabel/u)
   assert.doesNotMatch(sidebar, /provider\.version/u)
-  assert.match(chromeActions, /capabilities\.supportsInterrupt/u)
+  const [composer, gate] = await Promise.all([
+    readFile(new URL('components/conversation/composer.tsx', root), 'utf8'),
+    readFile(
+      new URL(
+        'components/conversation/conversation-gate-presentation.ts',
+        root,
+      ),
+      'utf8',
+    ),
+  ])
+  assert.match(
+    gate,
+    /machineKind === 'local' &&\s*capabilities\.supportsInterrupt &&\s*capabilities\.canInterrupt/u,
+  )
+  assert.match(
+    composer,
+    /gate\.canInterrupt && interruptController !== undefined/u,
+  )
+  assert.match(composer, /interruptController\.execute\(\)/u)
+  assert.doesNotMatch(chromeActions, /interruptController|supportsInterrupt/u)
   assert.doesNotMatch(chromeActions, /capabilities\.supportsDiff/u)
   assert.doesNotMatch(chromeActions, /onProviderChange|switchProvider/u)
   assert.match(inbox, /metadata\?\.provider/u)

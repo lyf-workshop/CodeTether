@@ -19,6 +19,7 @@ export function loadWebComponent(relativePath) {
 }
 
 function load(path) {
+  if (path.endsWith('.js')) path = path.slice(0, -3)
   const filename = [
     path,
     `${path}.ts`,
@@ -31,6 +32,18 @@ function load(path) {
   cache.set(filename, module)
   const requireDependency = createRequire(filename)
   const localRequire = (specifier) => {
+    if (
+      specifier === '@codetether/protocol' ||
+      specifier === '@codetether/client'
+    )
+      return requireDependency(
+        resolve(
+          sourceRoot,
+          '../..',
+          specifier.slice('@codetether/'.length),
+          'dist/index.js',
+        ),
+      )
     if (specifier === '@codetether/ui')
       return load(resolve(sourceRoot, 'index.ts'))
     if (specifier.startsWith('@codetether/ui/'))

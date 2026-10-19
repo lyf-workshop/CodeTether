@@ -111,7 +111,12 @@ test('Conversation shell hides unsupported controls and keeps long identities bo
   assert.doesNotMatch(composer, /conversation\.pendingApprovals/u)
   assert.doesNotMatch(header, /停止当前会话|<Square/u)
   assert.doesNotMatch(chromeActions, /capabilities\.supportsDiff/u)
-  assert.match(chromeActions, /capabilities\.supportsInterrupt/u)
+  const gate = await readFile(
+    new URL('conversation-gate-presentation.ts', componentDirectory),
+    'utf8',
+  )
+  assert.match(gate, /capabilities\.supportsInterrupt/u)
+  assert.doesNotMatch(chromeActions, /interruptController/u)
   assert.match(header, /title=\{conversation\.title\}/u)
   assert.match(header, /connectionIndicator\.state !== 'connected'/u)
   assert.match(sidebar, /title=\{\s*`\$\{conversation\.title\}/u)

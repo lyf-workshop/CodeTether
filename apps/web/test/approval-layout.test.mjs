@@ -14,8 +14,9 @@ test('Conversation Workspace owns stable Header, Timeline, Dock, Composer rows',
   const dock = source.indexOf('<PendingActionDock')
   const composer = source.indexOf('<Composer')
 
-  assert.match(source, /grid-rows-\[auto_minmax\(0,1fr\)_auto_auto\]/u)
-  assert.ok(header >= 0 && header < timeline)
+  assert.match(source, /grid-rows-\[minmax\(0,1fr\)_auto_auto\]/u)
+  assert.ok(timeline >= 0 && timeline < header && header < dock)
+  assert.match(source, /header=\{\s*<ConversationHeader/u)
   assert.ok(timeline < dock && dock < composer)
   assert.doesNotMatch(source, /pendingApprovals\.length\s*>\s*0\s*\?/u)
 })
@@ -41,8 +42,8 @@ test('Composer remains mounted while the Dock is conditional inside itself', asy
 test('Inspector breakpoints stay outside Workspace and do not resize the Dock', async () => {
   const source = await sourceOf('conversation-detail-page.tsx')
 
-  assert.match(source, /min-\[1440px\]:grid-cols-/u)
-  assert.match(source, /max-width: 1439px/u)
+  assert.match(source, /min-\[1001px\]:grid-cols-/u)
+  assert.match(source, /max-width: 1000px/u)
   assert.match(source, /layout-conversation-inspector-width/u)
   assert.doesNotMatch(source, /PendingActionDock/u)
 })

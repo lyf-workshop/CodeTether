@@ -10,10 +10,15 @@ const conversationComponents = new URL(
 test('Archived Detail keeps history visible and replaces input with explicit restore controls', async () => {
   const source = await sourceOf('conversation-workspace.tsx')
 
-  assert.match(source, /此会话已归档/u)
-  assert.match(source, /历史记录仍然可查看。恢复后可以继续与当前智能体对话。/u)
+  const composer = await sourceOf('composer.tsx')
+  const gate = await sourceOf('conversation-gate-presentation.ts')
+  assert.match(gate, /此会话已归档/u)
+  assert.match(gate, /历史记录仍可查看。恢复后可以继续发送消息。/u)
   assert.match(source, /<ConversationTimeline/u)
-  assert.match(source, /<ArchivedComposer/u)
+  assert.match(source, /<Composer/u)
+  assert.match(source, /archived=\{archived\}/u)
+  assert.match(composer, /hidden=\{gate !== undefined\}/u)
+  assert.match(composer, /<Textarea/u)
   assert.match(source, /<ConversationRestoreButton/u)
   assert.match(source, /viewModel\.archivedAt === undefined/u)
 })
@@ -63,15 +68,15 @@ test('Workspace Sidebar explicitly identifies the current archived Conversation 
   assert.match(rootLayout, /currentConversation=\{currentConversation\}/u)
 })
 
-test('1100-width overlay boundary and stable Workspace rows remain intact', async () => {
+test('1000-width overlay boundary and stable Workspace rows remain intact', async () => {
   const [detail, workspace] = await Promise.all([
     sourceOf('conversation-detail-page.tsx'),
     sourceOf('conversation-workspace.tsx'),
   ])
 
-  assert.match(detail, /max-width: 1439px/u)
+  assert.match(detail, /max-width: 1000px/u)
   assert.match(detail, /minmax\(0,1fr\)/u)
-  assert.match(workspace, /grid-rows-\[auto_minmax\(0,1fr\)_auto_auto\]/u)
+  assert.match(workspace, /grid-rows-\[minmax\(0,1fr\)_auto_auto\]/u)
   assert.match(workspace, /min-w-0/u)
 })
 

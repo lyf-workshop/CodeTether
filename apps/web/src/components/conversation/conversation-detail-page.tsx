@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 
 import { Dialog, DialogContent, DialogTitle, cn } from '@codetether/ui'
@@ -13,6 +13,8 @@ import type {
   ConversationViewModel,
 } from './conversation-view-model'
 import { ConversationWorkspace } from './conversation-workspace'
+import type { ConversationDisplayContext } from './conversation-gate-presentation'
+import { useConversationInspectorStyle } from './use-conversation-inspector-style'
 import { InspectorPanel, type InspectorTab } from './inspector-panel'
 import {
   createConversationInspectorState,
@@ -34,6 +36,7 @@ export interface ConversationDetailPageProps {
   connectionIndicator?: ConversationConnectionIndicatorViewModel
   executionBoundary?: ConversationExecutionBoundaryViewModel
   projectBoundary?: ConversationProjectBoundaryViewModel
+  displayContext?: ConversationDisplayContext
   initialInspectorTab?: InspectorTab
   machineId?: MachineId
   controls?: ConversationControls
@@ -48,6 +51,7 @@ export function ConversationDetailPage({
   connectionIndicator,
   executionBoundary,
   projectBoundary,
+  displayContext,
   initialInspectorTab = 'files',
   machineId,
   controls,
@@ -123,6 +127,7 @@ export function ConversationDetailPage({
     inspectorWidth,
     workspaceWidth,
   )
+  const layoutId = useConversationInspectorStyle(resolvedInspectorWidth)
   const inspectorOpen = inspectorDialogLayout
     ? inspector.open
     : !inspectorCollapsed
@@ -143,6 +148,7 @@ export function ConversationDetailPage({
 
   const inspectorProps = {
     conversation: viewModel,
+    displayContext,
     changes: viewModel.changes,
     terminal: viewModel.terminal,
     context: viewModel.context,
@@ -162,28 +168,22 @@ export function ConversationDetailPage({
     >
       <div
         ref={workspaceRef}
+        data-conversation-layout={layoutId}
         data-inspector-resizing={inspectorResizing || undefined}
         className={cn(
           'relative grid h-full min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] bg-background',
           inspectorCollapsed
-            ? 'min-[1440px]:grid-cols-[minmax(0,1fr)]'
-            : 'min-[1440px]:grid-cols-[minmax(32rem,1fr)_var(--layout-conversation-inspector-width)]',
+            ? 'min-[1001px]:grid-cols-[minmax(0,1fr)]'
+            : 'min-[1001px]:grid-cols-[minmax(0,1fr)_var(--layout-conversation-inspector-width)]',
         )}
-        style={
-          {
-            '--layout-conversation-inspector-width': `${resolvedInspectorWidth}px`,
-          } as CSSProperties
-        }
       >
         {workspaceChromeTarget === null
           ? null
           : createPortal(
               <ConversationChromeActions
                 conversation={viewModel}
-                capabilities={viewModel.capabilities}
                 inspectorOpen={inspectorOpen}
                 inspectorTriggerRef={inspectorTriggerRef}
-                interruptController={controls?.interrupt}
                 projectId={projectId}
                 onArchived={onArchived}
                 onToggleInspector={() => {
@@ -204,6 +204,7 @@ export function ConversationDetailPage({
           connectionIndicator={connectionIndicator}
           executionBoundary={executionBoundary}
           projectBoundary={projectBoundary}
+          displayContext={displayContext}
           controls={controls}
           machineId={machineId}
           targetChangeId={selectedChangeId}
@@ -212,7 +213,7 @@ export function ConversationDetailPage({
           projectId={projectId}
         />
         {inspectorCollapsed ? null : (
-          <div className="relative hidden min-h-0 min-w-0 min-[1440px]:block">
+          <div className="relative hidden min-h-0 min-w-0 min-[1001px]:block">
             <ConversationInspectorResizeHandle
               resizing={inspectorResizing}
               setResizing={setInspectorResizing}
@@ -238,9 +239,9 @@ export function ConversationDetailPage({
           }
           inspectorTriggerRef.current?.focus()
         }}
-        className="top-[var(--layout-topbar-height)] right-0 bottom-0 left-auto block h-[calc(100dvh-var(--layout-topbar-height))] max-h-none w-[21.75rem] max-w-[calc(100vw-var(--layout-sidebar-current-width))] translate-x-0 translate-y-0 gap-0 overflow-hidden rounded-none border-y-0 border-r-0 bg-surface-inset p-0 duration-200 data-[state=closed]:translate-x-full data-[state=closed]:scale-100 data-[state=open]:scale-100 motion-reduce:transition-none"
+        className="top-[var(--layout-topbar-height)] right-0 bottom-0 left-auto block h-[calc(100dvh-var(--layout-topbar-height))] max-h-none w-(--layout-conversation-inspector-width) max-w-[100vw] translate-x-0 translate-y-0 gap-0 overflow-hidden rounded-none border-y-0 border-r-0 bg-surface-inset p-0 duration-200 data-[state=closed]:translate-x-full data-[state=closed]:scale-100 data-[state=open]:scale-100 motion-reduce:transition-none"
       >
-        <DialogTitle className="sr-only">会话检查器</DialogTitle>
+        <DialogTitle className="sr-only">文件与工具输出</DialogTitle>
         <InspectorPanel
           {...inspectorProps}
           onClose={() =>
@@ -255,7 +256,7 @@ export function ConversationDetailPage({
   )
 }
 
-const INSPECTOR_DIALOG_MEDIA_QUERY = '(max-width: 1439px)'
+const INSPECTOR_DIALOG_MEDIA_QUERY = '(max-width: 1000px)'
 
 function readInspectorCollapsedPreference(): boolean {
   if (typeof window === 'undefined') return false

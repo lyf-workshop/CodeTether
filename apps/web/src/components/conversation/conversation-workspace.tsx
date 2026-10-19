@@ -1,26 +1,23 @@
 import { useEffect, useRef } from 'react'
 import { Link } from '@tanstack/react-router'
-import { Archive, TriangleAlert, WifiOff } from 'lucide-react'
 import {
   ConversationIdSchema,
   type MachineId,
   type ProjectId,
 } from '@codetether/protocol'
-import { Button, cn } from '@codetether/ui'
+import { Button, agentDefinitions } from '@codetether/ui'
 
 import { Composer } from './composer'
 import { ConversationHeader } from './conversation-header'
 import { ConversationTimeline } from './conversation-timeline'
-import {
-  conversationExecutionBoundaryPresentation,
-  type ConversationControls,
-} from './conversation-controls'
+import type { ConversationControls } from './conversation-controls'
 import type {
   ConversationConnectionIndicatorViewModel,
   ConversationExecutionBoundaryViewModel,
   ConversationProjectBoundaryViewModel,
   ConversationViewModel,
 } from './conversation-view-model'
+import type { ConversationDisplayContext } from './conversation-gate-presentation'
 import { organizationConversationStatus } from './conversation-view-model'
 import { PendingActionDock } from './pending-action-dock'
 import { ConversationRestoreButton } from '../conversations/conversation-organization-controls'
@@ -31,6 +28,7 @@ interface ConversationWorkspaceProps {
   connectionIndicator?: ConversationConnectionIndicatorViewModel
   executionBoundary?: ConversationExecutionBoundaryViewModel
   projectBoundary?: ConversationProjectBoundaryViewModel
+  displayContext?: ConversationDisplayContext
   machineId?: MachineId
   controls?: ConversationControls
   targetChangeId?: string
@@ -45,6 +43,7 @@ export function ConversationWorkspace({
   connectionIndicator,
   executionBoundary,
   projectBoundary,
+  displayContext,
   machineId,
   controls,
   targetChangeId,
@@ -70,10 +69,43 @@ export function ConversationWorkspace({
             ? {}
             : { archivedAt: viewModel.archivedAt }),
         }
-  const executionBoundaryCopy =
-    executionBoundary === undefined
-      ? undefined
-      : conversationExecutionBoundaryPresentation(executionBoundary.reason)
+  const archived = viewModel.archivedAt !== undefined
+  const recoveryMachineId =
+    displayContext?.machineId ?? machineId ?? executionBoundary?.machineId
+  const recoveryProjectId =
+    displayContext?.projectId ?? projectId ?? projectBoundary?.projectId
+  const recoveryProjectName =
+    projectBoundary?.projectName ?? displayContext?.projectName ?? '当前项目'
+  const recoveryAction =
+    archived && organizationConversation !== undefined ? (
+      <ConversationRestoreButton conversation={organizationConversation} />
+    ) : (viewModel.capabilities.composerDisabled?.navigation === 'project' ||
+        projectBoundary !== undefined) &&
+      recoveryProjectId !== undefined ? (
+      <Button asChild variant="secondary" size="sm">
+        <Link
+          to="/projects/$projectId"
+          params={{ projectId: recoveryProjectId }}
+          aria-label={`查看${recoveryProjectName}的项目详情`}
+          search={
+            recoveryMachineId === undefined
+              ? {}
+              : { machineId: recoveryMachineId }
+          }
+        >
+          查看项目
+        </Link>
+      </Button>
+    ) : recoveryMachineId === undefined ? undefined : (
+      <Button asChild variant="secondary" size="sm">
+        <Link
+          to="/devices/$machineId"
+          params={{ machineId: recoveryMachineId }}
+        >
+          查看设备
+        </Link>
+      </Button>
+    )
 
   useEffect(() => {
     const wasArchived = wasArchivedRef.current
@@ -84,13 +116,16 @@ export function ConversationWorkspace({
       isArchived ||
       !document.hasFocus() ||
       document.querySelector('[role="dialog"]') !== null
-    ) {
+    )
       return
-    }
-
     const frame = window.requestAnimationFrame(() => {
       const composer = document.getElementById('conversation-composer')
-      if (composer instanceof HTMLTextAreaElement) composer.focus()
+      if (
+        composer instanceof HTMLTextAreaElement &&
+        !composer.readOnly &&
+        composer.closest('[hidden]') === null
+      )
+        composer.focus()
     })
     return () => window.cancelAnimationFrame(frame)
   }, [viewModel.archivedAt])
@@ -98,72 +133,16 @@ export function ConversationWorkspace({
   return (
     <section
       aria-label="会话工作区"
-      className="grid h-full min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)_auto_auto] bg-background"
+      className="grid h-full min-h-0 min-w-0 grid-rows-[minmax(0,1fr)_auto_auto] bg-background"
     >
-      <div className="min-w-0">
-        <ConversationHeader
-          conversation={viewModel}
-          connectionIndicator={connectionIndicator}
-        />
-        {organizationConversation?.archivedAt === undefined ? null : (
-          <div
-            role="status"
-            className="flex min-w-0 items-center gap-3 border-b border-border bg-surface-muted/35 px-5 py-2.5"
-          >
-            <Archive
-              aria-hidden="true"
-              className="size-4 shrink-0 text-text-secondary"
-            />
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-medium text-text-primary">
-                此会话已归档
-              </p>
-              <p className="truncate text-xs text-text-secondary">
-                历史记录仍然可查看。恢复后可以继续与当前智能体对话。
-              </p>
-            </div>
-            <ConversationRestoreButton
-              conversation={organizationConversation}
-              size="sm"
-            />
-          </div>
-        )}
-        {organizationConversation?.archivedAt !== undefined ||
-        projectBoundary === undefined ? null : (
-          <ProjectLocationBoundary boundary={projectBoundary} />
-        )}
-        {organizationConversation?.archivedAt !== undefined ||
-        projectBoundary !== undefined ||
-        executionBoundary === undefined ? null : (
-          <div
-            role="status"
-            className="flex min-w-0 items-center gap-3 border-b border-border bg-warning-muted/30 px-5 py-2.5"
-          >
-            <WifiOff
-              aria-hidden="true"
-              className="size-4 shrink-0 text-warning"
-            />
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-medium text-text-primary">
-                {executionBoundaryCopy?.title}
-              </p>
-              <p className="truncate text-xs text-text-secondary">
-                {executionBoundaryCopy?.description}
-              </p>
-            </div>
-            <Button asChild variant="secondary" size="sm">
-              <Link
-                to="/machines/$machineId"
-                params={{ machineId: executionBoundary.machineId }}
-                aria-label={`查看${executionBoundary.machineName}的电脑详情`}
-              >
-                查看电脑
-              </Link>
-            </Button>
-          </div>
-        )}
-      </div>
       <ConversationTimeline
+        header={
+          <ConversationHeader
+            conversation={viewModel}
+            connectionIndicator={connectionIndicator}
+            context={displayContext}
+          />
+        }
         anchorRequestKey={anchorRequestKey}
         agent={viewModel.agent}
         timeline={viewModel.timeline}
@@ -177,103 +156,28 @@ export function ConversationWorkspace({
         targetChangeRequestKey={targetChangeRequestKey}
         targetTurnId={targetTurnId}
       />
-      {viewModel.capabilities.supportsApprovals ? (
-        <PendingActionDock
-          approvals={viewModel.pendingApprovals}
-          controller={controls?.approvals}
-          className="mx-4 mb-3"
-        />
-      ) : null}
-      <div className="min-h-0 px-4 pb-5">
-        {organizationConversation?.archivedAt === undefined ? (
-          <Composer
-            capabilities={viewModel.capabilities}
-            controller={controls?.composer}
-            externalError={controls?.interrupt.error}
+      {viewModel.capabilities.supportsApprovals &&
+      displayContext?.machineKind === 'local' ? (
+        <div className="mx-auto w-full min-w-0 max-w-(--read-w) px-8 max-sm:px-4">
+          <PendingActionDock
+            approvals={viewModel.pendingApprovals}
+            controller={controls?.approvals}
+            className="mb-3"
           />
-        ) : (
-          <ArchivedComposer conversation={organizationConversation} />
-        )}
+        </div>
+      ) : null}
+      <div className="mx-auto w-full min-w-0 max-w-(--read-w) px-8 pb-5 max-sm:px-4">
+        <Composer
+          capabilities={viewModel.capabilities}
+          controller={controls?.composer}
+          interruptController={controls?.interrupt}
+          context={displayContext}
+          providerName={agentDefinitions[viewModel.agent].name}
+          archived={archived}
+          projectBoundary={projectBoundary}
+          recoveryAction={recoveryAction}
+        />
       </div>
-    </section>
-  )
-}
-
-interface ProjectLocationBoundaryProps {
-  readonly boundary: ConversationProjectBoundaryViewModel
-}
-
-function ProjectLocationBoundary({ boundary }: ProjectLocationBoundaryProps) {
-  const copy = {
-    project_location_missing: {
-      title: '这台电脑缺少项目位置',
-      description:
-        '历史记录仍可查看。请在项目详情中注册此电脑的项目位置；CodeTether 不会改用其他目录。',
-    },
-    project_location_invalid: {
-      title: '已注册的项目位置已改变',
-      description:
-        '历史记录仍可查看。请修复原项目位置；CodeTether 未删除项目文件，也不会改用其他目录。',
-    },
-    project_location_unavailable: {
-      title: '项目位置当前不可用',
-      description:
-        '历史记录仍可查看。请检查已注册的位置；CodeTether 未删除项目文件，也不会改用其他目录。',
-    },
-  } as const
-  const current = copy[boundary.reason]
-
-  return (
-    <div
-      role="status"
-      aria-label="项目位置不可用"
-      className="flex min-w-0 flex-wrap items-center gap-3 border-b border-border bg-warning-muted/30 px-5 py-2.5 sm:flex-nowrap"
-    >
-      <TriangleAlert
-        aria-hidden="true"
-        className="size-4 shrink-0 text-warning"
-      />
-      <div className="min-w-0 flex-1">
-        <p className="text-sm font-medium text-text-primary">{current.title}</p>
-        <p className="break-words text-xs text-text-secondary">
-          {current.description}
-        </p>
-      </div>
-      <Button asChild variant="secondary" size="sm">
-        <Link
-          to="/projects/$projectId"
-          params={{ projectId: boundary.projectId }}
-          aria-label={`查看${boundary.projectName}的项目详情`}
-        >
-          查看项目
-        </Link>
-      </Button>
-    </div>
-  )
-}
-
-interface ArchivedComposerProps {
-  readonly conversation: Parameters<
-    typeof ConversationRestoreButton
-  >[0]['conversation']
-}
-
-function ArchivedComposer({ conversation }: ArchivedComposerProps) {
-  return (
-    <section
-      aria-label="已归档会话"
-      className={cn(
-        'flex h-[var(--layout-conversation-composer-height)] min-w-0 items-center justify-between gap-4 overflow-hidden rounded-md',
-        'border border-border-strong bg-surface/70 px-4',
-      )}
-    >
-      <div className="min-w-0">
-        <p className="text-sm font-medium text-text-primary">此会话已归档</p>
-        <p className="mt-1 truncate text-xs text-text-secondary">
-          恢复后可以继续发送消息。
-        </p>
-      </div>
-      <ConversationRestoreButton conversation={conversation} />
     </section>
   )
 }

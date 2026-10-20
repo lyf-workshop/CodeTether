@@ -4,6 +4,7 @@ import test from 'node:test'
 import {
   CodexEventNormalizer,
   MAX_FILE_CHANGES_PER_TURN,
+  normalizeApprovalRequest,
 } from '../dist/index.js'
 
 const timestamp = '2026-08-25T12:00:00.000Z'
@@ -13,6 +14,50 @@ const turnId = 'turn-1'
 function normalize(normalizer, method, params) {
   return normalizer.normalize({ method, params }, timestamp)
 }
+
+test('uses Chinese approval fallbacks without changing provider detail', () => {
+  const commandFallback = normalizeApprovalRequest(
+    {
+      id: 1,
+      method: 'item/commandExecution/requestApproval',
+      params: { threadId, turnId },
+    },
+    undefined,
+    timestamp,
+  )
+  const commandDetail = normalizeApprovalRequest(
+    {
+      id: 2,
+      method: 'item/commandExecution/requestApproval',
+      params: { threadId, turnId, command: 'git status --short' },
+    },
+    undefined,
+    timestamp,
+  )
+  const permissionFallback = normalizeApprovalRequest(
+    {
+      id: 3,
+      method: 'item/permissions/requestApproval',
+      params: { threadId, turnId },
+    },
+    undefined,
+    timestamp,
+  )
+  const permissionDetail = normalizeApprovalRequest(
+    {
+      id: 4,
+      method: 'item/fileChange/requestApproval',
+      params: { threadId, turnId, reason: 'Provider supplied reason' },
+    },
+    undefined,
+    timestamp,
+  )
+
+  assert.equal(commandFallback.summary, 'Codex 请求运行命令')
+  assert.equal(commandDetail.summary, 'git status --short')
+  assert.equal(permissionFallback.summary, 'Codex 请求访问文件或权限')
+  assert.equal(permissionDetail.summary, 'Provider supplied reason')
+})
 
 test('normalizes agent message delta and completion fixtures', () => {
   const normalizer = new CodexEventNormalizer()

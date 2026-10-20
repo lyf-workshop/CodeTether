@@ -7,6 +7,7 @@ import {
   ClaudeCodeProtocolError,
   ClaudeCodeSessionLostError,
   ClaudeStreamNormalizer,
+  MAX_CLAUDE_TOOL_SUMMARY_BYTES,
   normalizeClaudeTool,
 } from '../dist/index.js'
 
@@ -36,6 +37,24 @@ function init(overrides = {}) {
 test('bounds UTF-8 text with an unambiguous ASCII suffix', () => {
   assert.equal(boundUtf8('alpha beta', 8), 'alpha...')
   assert.equal(Buffer.byteLength(boundUtf8('你好世界', 8), 'utf8'), 6)
+})
+
+test('bounds a Chinese tool summary without splitting a character', () => {
+  const relativePath = `目录/${'界'.repeat(2_000)}.ts`
+  const normalized = normalizeClaudeTool(
+    'Read',
+    { file_path: join(cwd, relativePath) },
+    cwd,
+  )
+
+  assert.equal(normalized.command, `Read ${relativePath}`)
+  assert.match(normalized.summary, /^读取 目录\//u)
+  assert.match(normalized.summary, /界\.\.\.$/u)
+  assert.doesNotMatch(normalized.summary, /�/u)
+  assert.ok(
+    Buffer.byteLength(normalized.summary, 'utf8') <=
+      MAX_CLAUDE_TOOL_SUMMARY_BYTES,
+  )
 })
 
 test('validates init identity and emits canonical lifecycle events', () => {
@@ -160,7 +179,7 @@ test('maps only exact high-confidence tool names and pairs tool results', () => 
   assert.deepEqual(normalizeClaudeTool('Read'), {
     name: 'Read',
     kind: 'read',
-    summary: 'Read file',
+    summary: '读取文件',
   })
   assert.equal(normalizeClaudeTool('Write').kind, 'edit')
   assert.equal(normalizeClaudeTool('Edit').kind, 'edit')
@@ -169,6 +188,13 @@ test('maps only exact high-confidence tool names and pairs tool results', () => 
   assert.equal(normalizeClaudeTool('Glob').kind, 'search')
   assert.equal(normalizeClaudeTool('Grep').kind, 'search')
   assert.equal(normalizeClaudeTool('ReadFile').kind, 'generic')
+  assert.equal(normalizeClaudeTool('Write').summary, '编辑文件')
+  assert.equal(normalizeClaudeTool('Edit').summary, '编辑文件')
+  assert.equal(normalizeClaudeTool('Bash').summary, '命令工具不可用')
+  assert.equal(normalizeClaudeTool('PowerShell').summary, '命令工具不可用')
+  assert.equal(normalizeClaudeTool('Glob').summary, '搜索项目文件')
+  assert.equal(normalizeClaudeTool('Grep').summary, '搜索项目文件')
+  assert.equal(normalizeClaudeTool('ReadFile').summary, '使用工具')
 
   const normalizer = createNormalizer()
   normalizer.consume(init())
@@ -257,6 +283,7 @@ test('delays tool start until structured input can produce a safe command clue',
   assert.equal(started[0].type, 'tool.started')
   assert.equal(started[0].kind, 'read')
   assert.equal(started[0].command, 'Read src/hello world.ts')
+  assert.equal(started[0].summary, '读取 src/hello world.ts')
   assert.doesNotMatch(started[0].command, /fixture-workspace/u)
 })
 
@@ -270,8 +297,21 @@ test('normalizes edit and search inputs while failing shell closed', () => {
     {
       name: 'Edit',
       kind: 'edit',
-      summary: 'Write nested/你好 file.ts',
+      summary: '写入 nested/你好 file.ts',
       command: 'Write nested/你好 file.ts',
+    },
+  )
+  assert.deepEqual(
+    normalizeClaudeTool(
+      'Edit',
+      { file_path: join(cwd, 'nested', 'hello.ts') },
+      cwd,
+    ),
+    {
+      name: 'Edit',
+      kind: 'edit',
+      summary: '编辑 nested/hello.ts',
+      command: 'Edit nested/hello.ts',
     },
   )
   assert.deepEqual(
@@ -283,7 +323,7 @@ test('normalizes edit and search inputs while failing shell closed', () => {
     {
       name: 'Generic Tool',
       kind: 'generic',
-      summary: 'Run unavailable tool',
+      summary: '命令工具不可用',
     },
   )
   assert.deepEqual(
@@ -295,7 +335,7 @@ test('normalizes edit and search inputs while failing shell closed', () => {
     {
       name: 'Search',
       kind: 'search',
-      summary: 'Search workspace',
+      summary: '搜索项目文件',
       command: 'Grep reconnect in src',
     },
   )
@@ -308,7 +348,7 @@ test('normalizes edit and search inputs while failing shell closed', () => {
   assert.deepEqual(outside, {
     name: 'Edit',
     kind: 'edit',
-    summary: 'Edit file',
+    summary: '编辑文件',
   })
   assert.doesNotMatch(JSON.stringify(outside), /private|secret/u)
 
@@ -336,7 +376,7 @@ test('rejects foreign-platform absolute paths from safe Tool clues', () => {
     assert.deepEqual(normalized, {
       name: 'Read',
       kind: 'read',
-      summary: 'Read file',
+      summary: '读取文件',
     })
     assert.doesNotMatch(
       JSON.stringify(normalized),
@@ -476,7 +516,53 @@ test('emits a bounded start before a result when the full tool snapshot is absen
   )
   assert.ok(events.every((event) => event.itemId === events[0].itemId))
   assert.equal(events[0].kind, 'read')
+  assert.equal(events[2].success, true)
   assert.doesNotMatch(JSON.stringify(events), /provider-read-without-snapshot/u)
+})
+
+test('localizes a failed tool result summary', () => {
+  const normalizer = createNormalizer()
+  normalizer.consume(init())
+  normalizer.consume({
+    type: 'stream_event',
+    session_id: sessionId,
+    event: {
+      type: 'content_block_start',
+      content_block: {
+        type: 'tool_use',
+        id: 'provider-read-failure-without-snapshot',
+        name: 'Read',
+        input: {},
+      },
+    },
+  })
+
+  const events = normalizer.consume({
+    type: 'user',
+    session_id: sessionId,
+    message: {
+      role: 'user',
+      content: [
+        {
+          type: 'tool_result',
+          tool_use_id: 'provider-read-failure-without-snapshot',
+          content: 'fixture failure',
+          is_error: true,
+        },
+      ],
+    },
+  })
+
+  assert.deepEqual(
+    events.map((event) => event.type),
+    ['tool.started', 'tool.output', 'tool.completed'],
+  )
+  assert.equal(events[2].success, false)
+  assert.equal(events[2].summary, '读取文件失败')
+  assert.doesNotMatch(
+    JSON.stringify(events),
+    /provider-read-failure-without-snapshot/u,
+  )
 })
 
 test('maps authentication and terminal errors to bounded safe failures', () => {

@@ -356,7 +356,7 @@ export class ClaudeStreamNormalizer {
         success,
         summary: success
           ? tool.summary
-          : boundUtf8(`${tool.summary} failed`, MAX_CLAUDE_TOOL_SUMMARY_BYTES),
+          : boundUtf8(`${tool.summary}失败`, MAX_CLAUDE_TOOL_SUMMARY_BYTES),
       })
     }
     return events
@@ -521,7 +521,7 @@ export function normalizeClaudeTool(
   switch (providerName) {
     case 'Read':
       return withSafePath(
-        { name: 'Read', kind: 'read', summary: 'Read file' },
+        { name: 'Read', kind: 'read', summary: '读取文件' },
         'Read',
         readString(input, 'file_path'),
         cwd,
@@ -529,7 +529,7 @@ export function normalizeClaudeTool(
     case 'Edit':
     case 'Write':
       return withSafePath(
-        { name: 'Edit', kind: 'edit', summary: 'Edit file' },
+        { name: 'Edit', kind: 'edit', summary: '编辑文件' },
         providerName,
         readString(input, 'file_path'),
         cwd,
@@ -539,7 +539,7 @@ export function normalizeClaudeTool(
       return {
         name: 'Generic Tool',
         kind: 'generic',
-        summary: 'Run unavailable tool',
+        summary: '命令工具不可用',
       }
     case 'Glob':
       return normalizeSearchTool(
@@ -559,7 +559,7 @@ export function normalizeClaudeTool(
       return {
         name: 'Generic Tool',
         kind: 'generic',
-        summary: 'Run tool',
+        summary: '使用工具',
       }
   }
 }
@@ -586,7 +586,7 @@ function normalizeSearchTool(
   return {
     name: 'Search',
     kind: 'search',
-    summary: 'Search workspace',
+    summary: '搜索项目文件',
     ...(parts === providerName
       ? {}
       : { command: boundUtf8(parts, MAX_CLAUDE_TOOL_COMMAND_BYTES) }),
@@ -605,10 +605,16 @@ function withSafePath(
     `${providerName} ${path}`,
     MAX_CLAUDE_TOOL_COMMAND_BYTES,
   )
+  const summaryVerb =
+    providerName === 'Read'
+      ? '读取'
+      : providerName === 'Write'
+        ? '写入'
+        : '编辑'
   return {
     ...fallback,
     command,
-    summary: boundUtf8(command, MAX_CLAUDE_TOOL_SUMMARY_BYTES),
+    summary: boundUtf8(`${summaryVerb} ${path}`, MAX_CLAUDE_TOOL_SUMMARY_BYTES),
   }
 }
 

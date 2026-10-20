@@ -114,7 +114,7 @@ test('discovers only exact, unloaded, durable Codex sessions with bounded metada
   assert.equal(page.candidates[0].title, 'Existing Codex conversation')
   assert.equal(page.candidates[0].providerTitle, 'Existing Codex conversation')
   assert.equal(page.candidates[1].title, 'Existing Codex conversation')
-  assert.match(page.candidates[2].title, /^Codex conversation \u2014 /)
+  assert.match(page.candidates[2].title, /^Codex 会话 \u2014 /)
   assert.equal(page.candidates[2].providerTitle, undefined)
   assert.deepEqual(
     page.candidates.map(({ provider, workingDirectory, resumeStatus }) => ({

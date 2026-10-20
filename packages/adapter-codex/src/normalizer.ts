@@ -425,16 +425,14 @@ function approvalSummary(
   params: Record<string, unknown>,
 ): string {
   if (method.includes('commandExecution')) {
-    return readString(params, 'command') ?? 'Codex requested command approval'
+    return readString(params, 'command') ?? 'Codex 请求运行命令'
   }
   if (method === 'execCommandApproval' && Array.isArray(params.command)) {
     return params.command
       .filter((value): value is string => typeof value === 'string')
       .join(' ')
   }
-  return (
-    readString(params, 'reason') ?? 'Codex requested file or permission access'
-  )
+  return readString(params, 'reason') ?? 'Codex 请求访问文件或权限'
 }
 
 function normalizeChangeKind(value: unknown): FileChangeKind {

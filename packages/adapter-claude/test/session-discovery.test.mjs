@@ -235,7 +235,7 @@ test('discovers exact canonical project sessions without retaining content', asy
   assert.equal(page.metrics.corruptEntriesSkipped, 1)
   assert.equal(page.nextCursor, undefined)
   assert.equal(page.candidates[0].title, 'Existing Claude session')
-  assert.match(page.candidates[1].title, /^Claude conversation - /u)
+  assert.match(page.candidates[1].title, /^Claude 会话 · /u)
   assert.equal(page.candidates[0].workingDirectory, fixture.projectRoot)
   assert.equal(page.candidates[0].historicalTranscript, 'supported')
   assert.equal(page.candidates[0].resumeStatus, 'supported')

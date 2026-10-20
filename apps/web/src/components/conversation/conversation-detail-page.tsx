@@ -39,7 +39,7 @@ export interface ConversationDetailPageProps {
   displayContext?: ConversationDisplayContext
   initialInspectorTab?: InspectorTab
   machineId?: MachineId
-  controls?: ConversationControls
+  controls: ConversationControls
   projectId?: ProjectId
   targetTurnId?: TurnId
   onArchived?: (conversation: ConversationSummary) => void

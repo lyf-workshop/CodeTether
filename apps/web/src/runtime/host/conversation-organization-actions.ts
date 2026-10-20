@@ -25,6 +25,7 @@ import { createBrowserActionId, type ActionIdFactory } from './action-id.js'
 import { conversationDetailQueryKeys } from './conversation-detail-query.js'
 import { conversationListQueryKeys } from './conversation-list-query.js'
 import { conversationSearchQueryKeys } from './conversation-search-query.js'
+import { conversationDrafts } from '../../components/conversation/conversation-drafts.js'
 
 export interface ConversationOrganizationMutationClient {
   renameConversation(
@@ -183,6 +184,8 @@ export class ConversationOrganizationActions {
   }
 
   #acceptSummary(summary: ConversationSummary): void {
+    if (summary.archivedAt !== undefined)
+      conversationDrafts.clear(summary.conversationId)
     this.#queryClient.setQueryData<GetConversationResponse>(
       conversationDetailQueryKeys.detail(summary.conversationId),
       (current) =>

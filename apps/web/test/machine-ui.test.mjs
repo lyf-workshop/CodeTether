@@ -237,7 +237,8 @@ test('New Conversation binds Machine identity and machine-scoped Provider truth'
   assert.match(fields, /aria-label="选择项目"/u)
   assert.match(fields, /project\.location\.rootPath/u)
   assert.doesNotMatch(fields, /选择运行电脑/u)
-  assert.match(actions, /current\.machineId === machine/u)
+  assert.match(actions, /sameCreation\(current, project, machine, options\)/u)
+  assert.match(actions, /identity\.machineId === machineId/u)
   assert.match(actions, /response\.data\.conversation\.machineId !== machine/u)
   assert.match(
     actions,

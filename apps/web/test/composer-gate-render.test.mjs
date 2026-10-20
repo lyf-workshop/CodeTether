@@ -37,6 +37,17 @@ test('ready composer renders the real editable textarea and canonical form', () 
   assert.match(markup, /支付项目 · 这台电脑/u)
 })
 
+test('submitting keeps the mounted editor visible and readonly with Send disabled', () => {
+  const markup = render({ controller: controller('submitting') })
+  assert.match(markup, /data-composer-state="submitting"/u)
+  assert.doesNotMatch(markup, /hidden=""/u)
+  assert.match(markup, /<textarea[^>]*readOnly=""/u)
+  assert.match(markup, /aria-disabled="true"/u)
+  assert.match(markup, /<button[^>]*aria-label="发送消息"[^>]*disabled=""/u)
+  assert.match(markup, /正在发送消息/u)
+  assert.doesNotMatch(markup, /演示/u)
+})
+
 test('running gate keeps the draft editor mounted but hidden and readonly', () => {
   const markup = render({
     capabilities: { ...capabilities, canCompose: false },
@@ -113,6 +124,7 @@ test('canonical errors remain visible and do not replace state or invent retry w
 function render(overrides = {}) {
   return renderToStaticMarkup(
     h(Composer, {
+      conversationId: 'conv_gate01',
       capabilities,
       controller: controller('idle'),
       context,

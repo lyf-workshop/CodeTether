@@ -30,7 +30,7 @@ interface ConversationWorkspaceProps {
   projectBoundary?: ConversationProjectBoundaryViewModel
   displayContext?: ConversationDisplayContext
   machineId?: MachineId
-  controls?: ConversationControls
+  controls: ConversationControls
   targetChangeId?: string
   targetChangeRequestKey?: number
   targetTurnId?: string
@@ -168,9 +168,11 @@ export function ConversationWorkspace({
       ) : null}
       <div className="mx-auto w-full min-w-0 max-w-(--read-w) px-8 pb-5 max-sm:px-4">
         <Composer
+          key={`${viewModel.id}:${archived ? 'archived' : 'active'}`}
+          conversationId={viewModel.id}
           capabilities={viewModel.capabilities}
-          controller={controls?.composer}
-          interruptController={controls?.interrupt}
+          controller={controls.composer}
+          interruptController={controls.interrupt}
           context={displayContext}
           providerName={agentDefinitions[viewModel.agent].name}
           archived={archived}

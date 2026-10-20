@@ -76,7 +76,8 @@ test('global and keyboard launches preselect identifiers while project plus fixe
 
 test('baseline action identity, inflight dedup and response validation remain runtime authorities', async () => {
   const actions = await source('runtime/host/new-conversation-actions.ts')
-  assert.match(actions, /actionId: this\.#createActionId\(\)/u)
+  assert.match(actions, /this\.#createActionId\(\)/u)
+  assert.match(actions, /retry\.actionId/u)
   assert.match(actions, /current\.promise/u)
   for (const field of ['projectId', 'machineId', 'provider'])
     assert.ok(actions.includes('response.data.conversation.' + field + ' !=='))

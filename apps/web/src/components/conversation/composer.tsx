@@ -1,4 +1,6 @@
 import {
+  useCallback,
+  useEffect,
   useId,
   useRef,
   useState,
@@ -32,10 +34,12 @@ import {
   composerGatePresentation,
   type ConversationDisplayContext,
 } from './conversation-gate-presentation'
+import { conversationDrafts } from './conversation-drafts'
 
 interface ComposerProps {
+  conversationId: string
   capabilities: ConversationCapabilitiesViewModel
-  controller?: ComposerController
+  controller: ComposerController
   interruptController?: InterruptController
   context?: ConversationDisplayContext
   providerName?: string
@@ -46,6 +50,7 @@ interface ComposerProps {
 }
 
 export function Composer({
+  conversationId,
   capabilities,
   controller,
   interruptController,
@@ -57,10 +62,14 @@ export function Composer({
   externalError,
 }: ComposerProps) {
   const statusId = useId()
-  const [value, setValue] = useState('')
+  const [value, setValue] = useState(() =>
+    archived ? '' : conversationDrafts.read(conversationId),
+  )
+  const editorRef = useRef<HTMLTextAreaElement>(null)
+  const restoreFocusRef = useRef(false)
   const compositionActive = useRef(false)
   const submitActive = useRef(false)
-  const controlState = controller?.state ?? 'idle'
+  const controlState = controller.state
   const gate = composerGatePresentation({
     capabilities,
     state: controlState,
@@ -70,20 +79,81 @@ export function Composer({
     projectBoundary,
   })
   const canEdit = gate === undefined
+  const editorHidden = gate !== undefined && gate.kind !== 'submitting'
   const canSend = canEdit && value.trim().length > 0
   const feedback =
-    controller?.error ?? interruptController?.error ?? externalError
+    controller.error ?? interruptController?.error ?? externalError
+
+  const restoreSubmitFocus = useCallback(() => {
+    const editor = editorRef.current
+    if (
+      !restoreFocusRef.current ||
+      editor === null ||
+      !editor.isConnected ||
+      editor.readOnly ||
+      editor.closest('[hidden]') !== null
+    )
+      return
+    restoreFocusRef.current = false
+    if (
+      !document.hasFocus() ||
+      document.querySelector('[role="dialog"]') !== null ||
+      (document.activeElement !== document.body &&
+        document.activeElement !== editor)
+    )
+      return
+    editor.focus()
+  }, [])
+
+  useEffect(() => {
+    const abandonFocus = (event: FocusEvent) => {
+      if (event.target !== editorRef.current && event.target !== document.body)
+        restoreFocusRef.current = false
+    }
+    const abandonWindowFocus = () => {
+      restoreFocusRef.current = false
+    }
+    document.addEventListener('focusin', abandonFocus)
+    window.addEventListener('blur', abandonWindowFocus)
+    return () => {
+      restoreFocusRef.current = false
+      document.removeEventListener('focusin', abandonFocus)
+      window.removeEventListener('blur', abandonWindowFocus)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (canEdit) restoreSubmitFocus()
+  }, [canEdit, restoreSubmitFocus])
+
+  useEffect(() => {
+    if (archived) {
+      restoreFocusRef.current = false
+      conversationDrafts.clear(conversationId)
+    }
+  }, [archived, conversationId])
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (!canSend || submitActive.current || controller === undefined) return
+    if (!canSend || submitActive.current) return
     const submittedValue = value
+    restoreFocusRef.current = document.activeElement === editorRef.current
     submitActive.current = true
     try {
       const accepted = await controller.submit(submittedValue)
-      setValue((current) => draftAfterSubmit(current, submittedValue, accepted))
+      if (
+        accepted &&
+        conversationDrafts.read(conversationId) === submittedValue
+      )
+        conversationDrafts.clear(conversationId)
+      if (!archived) {
+        setValue((current) =>
+          draftAfterSubmit(current, submittedValue, accepted),
+        )
+      }
     } finally {
       submitActive.current = false
+      restoreSubmitFocus()
     }
   }
 
@@ -126,10 +196,10 @@ export function Composer({
           gate?.kind === 'waiting' && 'border-warning/45',
         )}
       >
-        {/* Keep this editor mounted even when the gate replaces its visible UI.
-            A blocked/archived state must never discard or replay the draft. */}
+        {/* Pending submission stays visible and read-only. Other gates replace
+            the visible UI without unmounting it or replaying any draft. */}
         <div
-          hidden={gate !== undefined}
+          hidden={editorHidden}
           data-composer-editor
           className="min-w-0 p-3 pl-4"
         >
@@ -137,9 +207,15 @@ export function Composer({
             输入消息
           </label>
           <Textarea
+            ref={editorRef}
             id="conversation-composer"
             value={value}
-            onChange={(event) => setValue(event.currentTarget.value)}
+            onChange={(event) => {
+              if (!canEdit || submitActive.current) return
+              const next = event.currentTarget.value
+              conversationDrafts.write(conversationId, next)
+              setValue(next)
+            }}
             onKeyDown={handleKeyDown}
             onCompositionStart={() => {
               compositionActive.current = true
@@ -169,7 +245,7 @@ export function Composer({
             </span>
             <IconButton
               type="submit"
-              label={controller === undefined ? '发送消息（演示）' : '发送消息'}
+              label="发送消息"
               disabled={!canSend}
               aria-describedby={statusId}
               className="shrink-0"

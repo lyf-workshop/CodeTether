@@ -117,7 +117,8 @@ test('Remote Claude offline and archived history remain responsive and accessibl
   assert.match(workspace, /<ConversationRestoreButton/u)
   assert.match(gate, /title: '此会话已归档'/u)
   assert.match(gate, /历史记录仍可查看/u)
-  assert.match(composer, /hidden=\{gate !== undefined\}/u)
+  assert.match(composer, /hidden=\{editorHidden\}/u)
+  assert.match(composer, /gate !== undefined && gate\.kind !== 'submitting'/u)
   assert.match(inspector, /aria-label="文件与工具输出"/u)
 })
 

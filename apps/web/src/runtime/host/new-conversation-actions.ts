@@ -8,6 +8,7 @@ import {
   MachineIdSchema,
   type CreateConversationRequest,
   type CreateConversationResponse,
+  type ActionId,
   type ProjectId,
   type MachineId,
   type ProviderId,
@@ -24,13 +25,20 @@ export interface NewConversationMutationClient {
   ): Promise<CreateConversationResponse>
 }
 
-interface CreationAttempt {
+interface CreationIdentity {
   readonly projectId: ProjectId
   readonly machineId: MachineId
   readonly provider: ProviderId
   readonly model?: string
   readonly reasoning?: string
+}
+
+interface CreationAttempt extends CreationIdentity {
   readonly promise: Promise<CreateConversationResponse>
+}
+
+interface CreationRetry extends CreationIdentity {
+  readonly actionId: ActionId
 }
 
 export interface CreateConversationOptions {
@@ -47,11 +55,12 @@ export class ConversationCreationBusyError extends Error {
   }
 }
 
-/** Owns one fresh action identity and one in-flight create per user submit. */
+/** One create intent survives duplicate submits and ambiguous manual retries. */
 export class NewConversationActions {
   readonly #client: NewConversationMutationClient
   readonly #createActionId: ActionIdFactory
   #attempt?: CreationAttempt
+  #retry?: CreationRetry
 
   constructor(
     client: NewConversationMutationClient,
@@ -69,17 +78,17 @@ export class NewConversationActions {
     const machine = MachineIdSchema.parse(options.machineId)
     const current = this.#attempt
     if (current !== undefined) {
-      return current.projectId === project &&
-        current.machineId === machine &&
-        current.provider === options.provider &&
-        current.model === options.model &&
-        current.reasoning === options.reasoning
+      return sameCreation(current, project, machine, options)
         ? current.promise
         : Promise.reject(new ConversationCreationBusyError())
     }
 
+    const retry = this.#retry
     const request: CreateConversationRequest = {
-      actionId: this.#createActionId(),
+      actionId:
+        retry !== undefined && sameCreation(retry, project, machine, options)
+          ? retry.actionId
+          : this.#createActionId(),
       provider: options.provider,
       machineId: machine,
       projectId: project,
@@ -106,7 +115,16 @@ export class NewConversationActions {
             'Created Conversation does not belong to the requested Provider',
           )
         }
+        this.#retry = undefined
         return response
+      })
+      .catch((error: unknown) => {
+        // An explicit Host response is definitive. Any lost or malformed reply
+        // may already have created the conversation: only a user retry reuses
+        // this exact identity, never an automatic request.
+        this.#retry =
+          error instanceof CodeTetherResponseError ? undefined : request
+        throw error
       })
       .finally(() => {
         if (this.#attempt?.promise === promise) this.#attempt = undefined
@@ -123,6 +141,21 @@ export class NewConversationActions {
     }
     return promise
   }
+}
+
+function sameCreation(
+  identity: CreationIdentity,
+  projectId: ProjectId,
+  machineId: MachineId,
+  options: CreateConversationOptions,
+): boolean {
+  return (
+    identity.projectId === projectId &&
+    identity.machineId === machineId &&
+    identity.provider === options.provider &&
+    identity.model === options.model &&
+    identity.reasoning === options.reasoning
+  )
 }
 
 /** Stable product copy; raw Host and provider diagnostics remain private. */

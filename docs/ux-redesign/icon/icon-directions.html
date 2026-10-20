@@ -1,0 +1,174 @@
+<title>CodeTether 图标方向</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --bg:#fbfaf8;--surface:#ffffff;--ink:#1d1c1a;--muted:#68635c;--line:#e6e2db;--accent:#1a7fd0;
+  --tile:#f3f1ed;--brand:#1a7fd0;
+  --sans:"Noto Sans SC","Microsoft YaHei","PingFang SC",system-ui,sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#1b1a19;--surface:#232221;--ink:#ecebe8;--muted:#96928b;--line:#34322f;--accent:#3c9be3;--tile:#2a2927;
+}}
+:root[data-theme="dark"]{--bg:#1b1a19;--surface:#232221;--ink:#ecebe8;--muted:#96928b;--line:#34322f;--accent:#3c9be3;--tile:#2a2927}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.65 var(--sans);padding-inline:24px;padding-block:40px 64px}
+.wrap{max-width:1120px;margin:0 auto;display:grid;gap:48px}
+h1{font-size:30px;line-height:1.25;margin:0 0 10px;font-weight:700;text-wrap:balance}
+h2{font-size:19px;margin:0;font-weight:700}
+h3{font-size:13px;margin:0;font-weight:500;color:var(--muted);letter-spacing:.06em}
+p{margin:0;max-width:65ch}
+.lede{color:var(--muted)}
+.mono{font-family:var(--mono);font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.dirs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px}
+.dir{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:22px;display:grid;gap:16px;align-content:start}
+.hero{background:var(--tile);border-radius:10px;display:grid;place-items:center;padding-block:28px}
+.tag{display:inline-grid;place-items:center;width:26px;height:26px;border-radius:7px;background:var(--ink);color:var(--bg);font:500 13px var(--mono);margin-right:10px;vertical-align:2px}
+.ladder{display:flex;align-items:flex-end;gap:14px;padding:14px;border-radius:8px;flex-wrap:wrap}
+.ladder.l{background:#f3f3f3}.ladder.d{background:#202020}
+.ladder figure{margin:0;display:grid;justify-items:center;gap:6px}
+.ladder figcaption{font:11px var(--mono);color:#77736d}
+.ladder.d figcaption{color:#9a968f}
+.notes{margin:0;padding-left:18px;display:grid;gap:4px;color:var(--muted);font-size:14px}
+.notes b{color:var(--ink);font-weight:500}
+.env{display:grid;gap:14px}
+.envrow{display:grid;grid-template-columns:150px repeat(3,minmax(0,1fr));gap:14px;align-items:stretch}
+.envrow>.name{display:grid;align-content:center;gap:2px}
+.envrow>.name b{font-weight:500}
+.cell{border-radius:10px;display:flex;align-items:center;justify-content:center;gap:10px;min-height:76px;padding:10px;position:relative}
+.cell .k{position:absolute;top:6px;left:8px;font:11px var(--mono)}
+.taskbar-d{background:#202020}.taskbar-d .k{color:#9a968f}
+.taskbar-l{background:#eef0f3}.taskbar-l .k{color:#6f6c67}
+.tray-d{background:#1c1c1c;justify-content:flex-end;padding-right:18px;color:#fff;font:12px var(--sans)}
+.tray-l{background:#f6f6f6;justify-content:flex-end;padding-right:18px;color:#1d1c1a;font:12px var(--sans)}
+.dock{background:linear-gradient(#cfd8e3,#b9c6d6);min-height:118px;align-items:flex-end;padding-bottom:14px}
+.dock .shelf{display:flex;gap:10px;align-items:flex-end;background:rgba(255,255,255,.42);border:1px solid rgba(255,255,255,.6);border-radius:18px;padding:7px 10px;backdrop-filter:blur(8px)}
+.dock .k{color:#3c4a5c}
+.mac{width:64px;height:64px;padding:6.4px;filter:drop-shadow(0 2px 3px rgba(0,0,0,.25))}
+.ph{border-radius:6px;background:#5b5f66;opacity:.7}
+.folder{background:var(--tile);flex-direction:column;gap:6px;color:var(--ink);font-size:12px}
+.folder .k{color:var(--muted)}
+.ghost{width:24px;height:24px;border-radius:5px;background:#4a4a4a}
+.taskbar-l .ghost{background:#c9ccd1}
+.active{position:relative}
+.active::after{content:"";position:absolute;left:50%;bottom:-7px;width:14px;height:3px;margin-left:-7px;border-radius:2px;background:#5ea7e8}
+.next{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:24px;display:grid;gap:12px}
+.next ul{margin:0;padding-left:18px;display:grid;gap:4px;max-width:80ch}
+code{font-family:var(--mono);font-size:13px}
+.scroll{overflow-x:auto}
+@media (max-width:900px){.dirs{grid-template-columns:1fr}.envrow{grid-template-columns:110px repeat(3,minmax(150px,1fr))}.env{min-width:640px}}
+</style>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="ic-a" viewBox="0 0 1024 1024">
+    <rect width="1024" height="1024" rx="228" fill="#1a7fd0"/>
+    <path d="M332 692 C332 470 692 554 692 332" fill="none" stroke="#fff" stroke-width="72" stroke-linecap="round"/>
+    <circle cx="332" cy="692" r="118" fill="#fff"/>
+    <circle cx="692" cy="332" r="96" fill="#1a7fd0" stroke="#fff" stroke-width="64"/>
+  </symbol>
+  <symbol id="ic-b" viewBox="0 0 1024 1024">
+    <rect width="1024" height="1024" rx="228" fill="#1a7fd0"/>
+    <path d="M340 236 H684 A140 140 0 0 1 824 376 V588 A140 140 0 0 1 684 728 H430 L282 840 V728 A140 140 0 0 1 200 588 V376 A140 140 0 0 1 340 236 Z" fill="none" stroke="#fff" stroke-width="64" stroke-linejoin="round"/>
+    <line x1="392" y1="482" x2="632" y2="482" stroke="#fff" stroke-width="44" stroke-linecap="round"/>
+    <circle cx="392" cy="482" r="64" fill="#fff"/>
+    <circle cx="632" cy="482" r="64" fill="#fff"/>
+  </symbol>
+  <symbol id="ic-c" viewBox="0 0 1024 1024">
+    <rect width="1024" height="1024" rx="228" fill="#1a7fd0"/>
+    <polyline points="392,316 220,512 392,708" fill="none" stroke="#fff" stroke-width="80" stroke-linecap="round" stroke-linejoin="round"/>
+    <polyline points="632,316 804,512 632,708" fill="none" stroke="#fff" stroke-width="80" stroke-linecap="round" stroke-linejoin="round"/>
+    <line x1="332" y1="512" x2="692" y2="512" stroke="#fff" stroke-width="40" stroke-linecap="round"/>
+    <circle cx="512" cy="512" r="74" fill="#fff"/>
+  </symbol>
+</svg>
+
+<div class="wrap">
+  <header>
+    <h1>CodeTether 图标：三个方向</h1>
+    <p class="lede">现在的图标是 Tauri 外壳搭起来时留下的，没有设计过。下面三个方向都用产品的主色 <span class="mono">#1a7fd0</span> 做底、白色图形，在 16 像素的托盘、任务栏和 Mac 程序坞里看是否还认得出。这是草图，选定后再细修线条粗细和小尺寸版本。</p>
+  </header>
+
+  <section class="dirs" aria-label="三个方向">
+    <article class="dir">
+      <h2><span class="tag">A</span>连线</h2>
+      <div class="hero"><svg width="160" height="160" role="img" aria-label="方向 A"><use href="#ic-a"/></svg></div>
+      <p>实心圆是你面前这台电脑，空心圆是另一头，中间一条线连着。直接对应名字里的 Tether（系绳）。</p>
+      <ul class="notes">
+        <li><b>16 像素：</b>两个点和一条斜线还能分辨</li>
+        <li><b>好处：</b>不像别的聊天或代码工具</li>
+        <li><b>风险：</b>单看图形不知道和 AI 有关</li>
+      </ul>
+    </article>
+    <article class="dir">
+      <h2><span class="tag">B</span>对话框</h2>
+      <div class="hero"><svg width="160" height="160" role="img" aria-label="方向 B"><use href="#ic-b"/></svg></div>
+      <p>一个对话框，里面两个点连在一起：和 AI 工具对话，同时连着另一台电脑。</p>
+      <ul class="notes">
+        <li><b>16 像素：</b>只剩一个白框，里面的连线看不出</li>
+        <li><b>好处：</b>一看就知道是对话类应用</li>
+        <li><b>风险：</b>和很多聊天应用撞形</li>
+      </ul>
+    </article>
+    <article class="dir">
+      <h2><span class="tag">C</span>代码括号</h2>
+      <div class="hero"><svg width="160" height="160" role="img" aria-label="方向 C"><use href="#ic-c"/></svg></div>
+      <p>代码的尖括号，中间一条线穿过一个点：代码和连接。</p>
+      <ul class="notes">
+        <li><b>16 像素：</b>两个尖括号清楚，中间的点还在</li>
+        <li><b>好处：</b>明确是写代码的工具</li>
+        <li><b>风险：</b>&lt; &gt; 是开发工具最常见的图形，辨识度一般</li>
+      </ul>
+    </article>
+  </section>
+
+  <section class="env" aria-label="尺寸对比">
+    <div>
+      <h2>从大到小</h2>
+      <p class="lede">左边浅色任务栏，右边深色任务栏。数字是像素。</p>
+    </div>
+    <div id="ladders" class="env"></div>
+  </section>
+
+  <section aria-label="放进实际位置">
+    <div style="display:grid;gap:6px;margin-bottom:16px">
+      <h2>放进实际位置</h2>
+      <p class="lede">灰块是旁边的其他应用，蓝色短线表示正在运行。Mac 程序坞里的图标按 Apple 的规格四周留了边。</p>
+    </div>
+    <div class="scroll"><div class="env" id="places"></div></div>
+  </section>
+
+  <section class="next">
+    <h2>我的建议：A</h2>
+    <p>A 最贴合名字，小尺寸最稳，也最不容易和别的工具混在一起。缺点是图形本身不说明“AI”，这一点交给名字和应用里的内容。B 在 16 像素时细节全丢；C 清楚但太常见。</p>
+    <p>选定一个以后：</p>
+    <ul>
+      <li>我修细节：16 和 24 像素单独画一版加粗的；Mac 版按 1024 网格留边；看要不要深色底的变体。</li>
+      <li>交给智能体生成所有尺寸：Windows 的 <code>icon.ico</code>（16 到 256）、Mac 的 <code>icon.icns</code>、托盘图标、网页 favicon，替换 <code>apps/desktop/src-tauri/icons/</code>，重新打包安装后在真实任务栏和托盘里检查。</li>
+    </ul>
+  </section>
+</div>
+
+<script>
+const dirs=[['a','A 连线'],['b','B 对话框'],['c','C 代码括号']];
+const icon=(id,s,cls='')=>`<svg class="${cls}" width="${s}" height="${s}" aria-hidden="true"><use href="#ic-${id}"/></svg>`;
+const ladders=document.getElementById('ladders');
+for(const [id,name] of dirs){
+  const row=document.createElement('div');row.className='envrow';
+  const sizes=[64,48,32,24,16];
+  const lad=bg=>`<div class="ladder ${bg}">${sizes.map(s=>`<figure>${icon(id,s)}<figcaption>${s}</figcaption></figure>`).join('')}</div>`;
+  row.innerHTML=`<div class="name"><b>${name}</b></div>${lad('l')}${lad('d')}<div class="ladder l" style="background:var(--tile)"><figure>${icon(id,128)}<figcaption>128</figcaption></figure></div>`;
+  ladders.appendChild(row);
+}
+const places=document.getElementById('places');
+const head=document.createElement('div');head.className='envrow';
+head.innerHTML='<div></div><h3>WINDOWS 任务栏（深色）</h3><h3>WINDOWS 托盘（浅色，16 像素）</h3><h3>MAC 程序坞</h3>';
+places.appendChild(head);
+for(const [id,name] of dirs){
+  const row=document.createElement('div');row.className='envrow';
+  row.innerHTML=`<div class="name"><b>${name}</b></div>
+  <div class="cell taskbar-d"><span class="k">24</span><span class="ghost"></span><span class="ghost"></span><span class="active">${icon(id,24)}</span><span class="ghost"></span></div>
+  <div class="cell tray-l"><span class="k">16</span><span style="display:flex;gap:12px;align-items:center"><span class="ghost" style="width:16px;height:16px;border-radius:3px"></span>${icon(id,16)}<span>中</span><span class="mono" style="color:#1d1c1a">10:24</span></span></div>
+  <div class="cell dock"><span class="k">64</span><div class="shelf"><span class="ph" style="width:51px;height:51px;border-radius:12px"></span>${icon(id,64,'mac')}<span class="ph" style="width:51px;height:51px;border-radius:12px"></span></div></div>`;
+  places.appendChild(row);
+}
+</script>

@@ -3,7 +3,7 @@
 - 分支：`ux/v4-device-first`，工作区 `D:/Projects/Software/agenthub-ux-v4-device-first`
 - 审核范围：`bbcda69..df91601`（9 个功能提交；3562f12 是平台权限测试，不在本轮范围）
 - 依据：`docs/ux-redesign/04-requirements.md`（第三版）、`02-dev-handoff.md`、原型；AGENTS.md
-- 当前级别：代码完成，审核未通过（见 DEVELOPMENT-PROCESS §2）
+- 当前级别：代码完成，第 2 轮审核未通过（见 DEVELOPMENT-PROCESS §2）
 
 ## 第 1 轮（D1，2026-10-19）
 
@@ -104,3 +104,59 @@
 ### 结论
 
 不能合并。共 8 个必须改（M1–M8），36 个建议改。修完 M1–M8、S1，以及提示词列出的建议改后进第 2 轮审核。修复提示词：`ux-v4-device-first-fix-prompt.md`。
+
+## 第 2 轮（2026-10-20，审 df91601..33f5b5d，13 个提交）
+
+审核方式：两路只读代码审核（逐条核实修复；删除、拆分和第 1 轮没审到的部分），我抽查核实了下面每一条“要修”。没有在桌面应用、Mac 或手机上实际操作。
+
+### 质量检查（我重跑，去掉 ANTHROPIC_* 环境变量）
+
+typecheck、lint、test、build 退出码都是 0。测试 2255 项：2241 通过，0 失败。改动的 203 个文件 Prettier 检查通过（第一次一次传入 203 个文件，Windows 报命令行太长，分批重跑为 0）。日志在 `D:/Projects/Software/agenthub-archive/d1r2-*.log`。
+
+### 第 1 轮问题的状态
+
+| 编号 | 状态 | 说明 |
+|---|---|---|
+| M1 | 已修 | 设备详情和解除配对弹窗都能“从这台设备移除”，按这台设备上的会话（含已归档）门控，移除后重新预检。测试是改 props 重渲染，不是点完整流程 |
+| M2、S19 | 已修 | 删掉的模块在 df91601 只被同一提交改过的 barrel 引用；路由和 `main.tsx` 不引用 |
+| M3 | 已修 | `ct-workspace-tree-expansion` 只存 ID，严格校验，坏数据当空 |
+| M4 | 已修 | Ctrl B / ⌘B，组字中和输入框里不触发 |
+| M5 | 部分 | 已用 `machineCanAddProject`；设备在线但不能添加时“+”直接消失，不说原因（`workspace-device-section.tsx:89-97`） |
+| M6、M7 | 已修 | 新值浅色 `#68635c`、深色 `#96928b`，`token-contrast.test.mjs` 读真实 CSS |
+| M8 | 已修 | 不能批准时写原因；已完成有“知道了”；批准类没有 |
+| S1 | 部分 | 提交中改为只读；但 AI 工具运行中（`running`/`waiting`）编辑器仍隐藏（`composer.tsx:82`），整个运行期间焦点在 body |
+| S2、S14、S17、S24 | 已修 | 通知正文“设备 · 项目”，不含标题 |
+| S6 | 接受偏离 | |
+| S18 | 未做，合理 | 原生打开命令只接受 Codex、Claude Code 两个固定入口，要改原生命令，超出本轮授权。另开任务 |
+| 状态标签 | 核实无误 | Host 只在请求批准时设 `waiting`（`approval-registry.ts:185`），显示“等待批准”是对的 |
+
+关于新建会话：现在电脑上新建不带首条消息、不选模型，这符合 04 C1 和 W13。第 1 轮提示词第 10 步写的“缺首条输入或模型时不能创建”是审核方写错了，以 C1 为准。编码智能体报告里写“按用户确认”，依据应写 C1。
+
+### 要修（第 3 轮）
+
+| 编号 | 位置 | 问题 |
+|---|---|---|
+| R2-1 | `composer.tsx:82` | S1 未完：运行中隐藏编辑器，焦点丢失。改成运行中也只读不隐藏，补 submitting → running → idle 的测试。可访问性退步，必须修 |
+| R2-2 | `globals.css:40`；`conversation-files-surface.tsx:54`、`inspector-panel.tsx:215`、`conversation-timeline.tsx:134` | `text-success` 当文字色，浅色 3.47（我算的），和 M7 同类。改 `text-success-text`，并把 success 加进对比度测试 |
+| R2-3 | `machine-actions.ts:384,398,400,404,418,444` | 机械替换出的病句：“这台电脑操作正在处理中”“不支持这台电脑操作”“请检查Node显示的六码” |
+| R2-4 | `workspace-device-section.tsx:89-97` | M5 未完：补不能添加的原因 |
+| R2-5 | `workspace-responsive.css:91-105` | S30 没生效：旧规则不在 CSS layer 里，覆盖了新的 Tailwind 类，窄屏按钮成了第三列。测试只查类名 |
+| R2-6 | `workspace-responsive.css:68-81` | 宽度 ≤ 600px 时添加项目、新建会话弹层一半在屏幕外：只重置了 `transform`，Tailwind v4 的 `translate`、`scale` 是独立属性。桌面应用最小宽 1100 不受影响 |
+| R2-7 | `machine-projects-section.tsx:131-134` | S7 改成了挂载就加载每张卡片的指标，应是可见时加载 |
+| R2-8 | `attention-notification-metadata.ts:30-34` | 每条通知都重新请求最多 100 条会话，先读缓存 |
+| R2-9 | `apps/web/test/user-visible-copy.test.mjs:8,47` | 文案扫描没扫 `packages/ui/src` |
+| R2-10 | `project-location-removal-ui.test.mjs:307-335` | M1 补一条点击到底的测试：移除 → 确认 → Host 返回更新 → 弹窗变成可解除配对 |
+| R2-11 | `new-conversation-provider-selection.ts:91-107` | 只剩测试在用的 `defaultProviderControls`、`defaultProviderModel` 删掉 |
+
+### 记下不修（本次合并后再看）
+
+- N4“已经在屏幕上”的判断：待处理页一律不通知（即使被筛选隐藏），项目页和设备页一律通知。
+- `ProjectCard`、`SessionItem`、`DeviceSection` 写死标题级别；复制按钮挂载后 `role` 从 status 变 alert。
+- `apps/web/src` 还有 24 个文件超过 400 行（最大 `control-plane-client.ts` 1470），这次没要求拆。
+- 树展开状态里过期的 ID 不清理；Mac 上 Ctrl B 也生效。
+- S18 Node 文档原生打开（另开任务）。
+- adapter-claude 测试不隔离 ANTHROPIC_* 环境变量（另开任务）。
+
+### 结论
+
+还不能合并，但离验收很近。没有新的必须改；R2-1、R2-2 属于可访问性必须修，其余是小修。修完 R2-1 到 R2-11 后我做第 3 轮（只看这些改动），通过后进入你的验收。修复提示词：`ux-v4-device-first-fix-prompt-r2.md`。

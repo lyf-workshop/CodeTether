@@ -27,11 +27,13 @@ export async function resolveAttentionNotificationMetadata(
   const project = await queryClient.fetchQuery(
     projectDetailQueryOptions(runtime, attention.projectId),
   )
-  const conversations = await queryClient
-    .fetchQuery(
-      allProjectConversationsQueryOptions(runtime, attention.projectId),
-    )
-    .catch(() => undefined)
+  const conversationsOptions = allProjectConversationsQueryOptions(
+    runtime,
+    attention.projectId,
+  )
+  const conversations =
+    queryClient.getQueryData(conversationsOptions.queryKey) ??
+    (await queryClient.fetchQuery(conversationsOptions).catch(() => undefined))
   const conversation = conversations?.find(
     (candidate) =>
       candidate.conversationId === attention.conversationId &&

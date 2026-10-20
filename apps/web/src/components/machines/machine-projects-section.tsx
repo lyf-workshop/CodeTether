@@ -1,4 +1,4 @@
-import { useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 
@@ -129,9 +129,33 @@ function MachineProjectCard({
 }) {
   const runtime = useHostRuntime()
   const connectionState = useHostConnectionState()
+  const cardRef = useRef<HTMLDivElement>(null)
+  const [hasBeenVisible, setHasBeenVisible] = useState(
+    () => typeof IntersectionObserver === 'undefined',
+  )
+  useEffect(() => {
+    const card = cardRef.current
+    if (hasBeenVisible || card === null) return
+    let observing = true
+    const observer = new IntersectionObserver((entries) => {
+      if (
+        !observing ||
+        !entries.some((entry) => entry.target === card && entry.isIntersecting)
+      )
+        return
+      observing = false
+      setHasBeenVisible(true)
+      observer.disconnect()
+    })
+    observer.observe(card)
+    return () => {
+      observing = false
+      observer.disconnect()
+    }
+  }, [hasBeenVisible])
   const conversationsQuery = useQuery({
     ...allProjectConversationsQueryOptions(runtime, project.projectId),
-    enabled: connectionState === 'connected',
+    enabled: connectionState === 'connected' && hasBeenVisible,
   })
   const location = projectLocationForMachine(project, machine.machineId)
   const state = deviceProjectState(machine, location)
@@ -141,44 +165,46 @@ function MachineProjectCard({
     project.locations.length > 1,
   )
   return (
-    <ProjectCard
-      name={project.name}
-      rootPath={location?.rootPath ?? '文件夹位置未知'}
-      dimmed={!state.available}
-      appearance={appearance === 'list' ? 'row' : 'card'}
-      status={
-        state.label ? (
-          <Badge
-            variant={state.label === '无法访问' ? 'danger' : 'secondary'}
-            title={state.reason}
-          >
-            {state.label}
-          </Badge>
-        ) : metrics !== undefined && metrics.runningCount > 0 ? (
-          <StatusTag tone="run">
-            {metrics.capped ? '已加载 ' : ''}
-            {metrics.runningCount} 个进行中
-          </StatusTag>
-        ) : undefined
-      }
-      metrics={metrics === undefined ? undefined : metrics.countLabel}
-      activity={
-        metrics?.lastActivityAt ? (
-          <time dateTime={metrics.lastActivityAt}>
-            {formatConversationActivity(metrics.lastActivityAt)}
-          </time>
-        ) : undefined
-      }
-      primaryAction={
-        <Link
-          to="/projects/$projectId"
-          params={{ projectId: project.projectId }}
-          search={{ machineId: machine.machineId }}
-          title={location?.rootPath}
-          aria-label={`打开项目：${project.name} · ${machine.displayName}`}
-          className="absolute inset-0 z-0 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
-        />
-      }
-    />
+    <div ref={cardRef}>
+      <ProjectCard
+        name={project.name}
+        rootPath={location?.rootPath ?? '文件夹位置未知'}
+        dimmed={!state.available}
+        appearance={appearance === 'list' ? 'row' : 'card'}
+        status={
+          state.label ? (
+            <Badge
+              variant={state.label === '无法访问' ? 'danger' : 'secondary'}
+              title={state.reason}
+            >
+              {state.label}
+            </Badge>
+          ) : metrics !== undefined && metrics.runningCount > 0 ? (
+            <StatusTag tone="run">
+              {metrics.capped ? '已加载 ' : ''}
+              {metrics.runningCount} 个进行中
+            </StatusTag>
+          ) : undefined
+        }
+        metrics={metrics === undefined ? undefined : metrics.countLabel}
+        activity={
+          metrics?.lastActivityAt ? (
+            <time dateTime={metrics.lastActivityAt}>
+              {formatConversationActivity(metrics.lastActivityAt)}
+            </time>
+          ) : undefined
+        }
+        primaryAction={
+          <Link
+            to="/projects/$projectId"
+            params={{ projectId: project.projectId }}
+            search={{ machineId: machine.machineId }}
+            title={location?.rootPath}
+            aria-label={`打开项目：${project.name} · ${machine.displayName}`}
+            className="absolute inset-0 z-0 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+          />
+        }
+      />
+    </div>
   )
 }

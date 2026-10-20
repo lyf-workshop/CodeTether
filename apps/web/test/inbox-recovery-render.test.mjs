@@ -221,9 +221,10 @@ test('notification context uses cached Machine metadata and never guesses when c
   }
   const client = {
     fetchQuery: (options) => options.queryFn({ signal: undefined }),
-    getQueryData: () => [
-      { machineId: 'machine_recovery01', displayName: '缓存设备' },
-    ],
+    getQueryData: (queryKey) =>
+      queryKey[1] === 'machines'
+        ? [{ machineId: 'machine_recovery01', displayName: '缓存设备' }]
+        : undefined,
   }
   assert.deepEqual(
     await resolveAttentionNotificationMetadata(client, runtime, item('failed')),

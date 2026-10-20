@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { readFile, readdir } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import test from 'node:test'
+import { readProjectFlowSource } from './fixtures/project-flow-source.mjs'
 
 const webDirectory = resolve(import.meta.dirname, '..')
 const sourceDirectory = resolve(webDirectory, 'src')
@@ -175,7 +176,5 @@ test('the second step is exact-location metadata only and duplicate responses sk
 })
 
 async function readSource(relativePath) {
-  return (
-    await readFile(resolve(sourceDirectory, relativePath), 'utf8')
-  ).replace(/\s+/gu, ' ')
+  return (await readProjectFlowSource(relativePath)).replace(/\s+/gu, ' ')
 }

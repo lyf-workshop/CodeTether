@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
+import { readWorkspaceSidebarSource } from './fixtures/workspace-sidebar-source.mjs'
 
 import {
   providerPresentation,
@@ -409,10 +410,7 @@ test('existing UI surfaces consume Provider truth without adding a switch to Det
       new URL('components/conversations/new-conversation-dialog.tsx', root),
       'utf8',
     ),
-    readFile(
-      new URL('components/app-shell/workspace-sidebar.tsx', root),
-      'utf8',
-    ),
+    readWorkspaceSidebarSource(),
     readFile(
       new URL('components/conversation/conversation-chrome-actions.tsx', root),
       'utf8',
@@ -424,10 +422,7 @@ test('existing UI surfaces consume Provider truth without adding a switch to Det
       new URL('components/conversations/conversation-search-results.tsx', root),
       'utf8',
     ),
-    readFile(
-      new URL('components/app-shell/workspace-sidebar.tsx', root),
-      'utf8',
-    ),
+    readWorkspaceSidebarSource(),
   ])
 
   assert.match(dialog, /providerPresentationsForMachine\(/u)

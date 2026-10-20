@@ -1,85 +1,337 @@
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
 import test from 'node:test'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import * as query from '@tanstack/react-query'
+import { CodeTetherResponseError } from '@codetether/client'
+import { createDom, h } from './fixtures/dom.mjs'
+import { loadUiComponent, loadWebComponent } from './fixtures/render-ui.mjs'
 
-const source = (relative) =>
-  readFile(new URL('../src/' + relative, import.meta.url), 'utf8')
+const machineId = 'machine_dom01',
+  projectId = 'proj_dom01'
+const machine = {
+  machineId,
+  kind: 'local',
+  connectionState: 'local',
+  availability: 'available',
+  displayName: '这台电脑',
+  capabilities: { projectAccess: true, providerExecution: true },
+}
+const project = {
+  projectId,
+  name: '测试项目',
+  locations: [
+    { machineId, availability: 'available', rootPath: 'C:/isolated/project' },
+  ],
+}
+const descriptor = {
+  provider: 'codex',
+  displayName: 'Codex',
+  availability: 'available',
+  capabilities: { streaming: true, resume: true },
+  models: [],
+  reasoningOptions: [],
+}
 
-test('global entry preserves a known project ID even before project list or detail is available', async () => {
-  const [shell, root] = await Promise.all([
-    source('components/app-shell/app-shell.tsx'),
-    source('components/app-shell/root-layout.tsx'),
+async function dialogFixture({
+  projects = [project],
+  providers = [descriptor],
+  create,
+} = {}) {
+  const dom = await createDom()
+  const calls = [],
+    navigations = []
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false, gcTime: Infinity },
+      mutations: { retry: false },
+    },
+  })
+  const ui = loadUiComponent('index.ts')
+  const tag =
+    (name) =>
+    ({ children }) =>
+      h(name, null, children)
+  const runtime = {
+    listProjects: async () => ({ projects }),
+    listMachines: async () => ({ machines: [machine] }),
+    getMachine: async () => ({ machine, providers }),
+    createConversation: async (...args) => {
+      calls.push(args)
+      return await create?.(...args)
+    },
+  }
+  const dependencies = new Map([
+    ['@tanstack/react-query', query],
+    [
+      '../../runtime/host/host-runtime-hooks',
+      {
+        useHostRuntime: () => runtime,
+        useHostConnectionState: () => 'connected',
+      },
+    ],
+    [
+      '@tanstack/react-router',
+      {
+        useNavigate: () => async (options) => {
+          navigations.push(options)
+        },
+      },
+    ],
+    [
+      '@codetether/ui',
+      {
+        ...ui,
+        Dialog: ({ open, children }) =>
+          open ? h('section', { role: 'dialog' }, children) : null,
+        DialogContent: tag('div'),
+        DialogHeader: tag('header'),
+        DialogFooter: tag('footer'),
+        DialogTitle: tag('h2'),
+        DialogDescription: tag('p'),
+        DialogClose: ({ children }) => children,
+      },
+    ],
   ])
-  assert.match(root, /currentProjectId=\{projectId\}/u)
-  assert.match(shell, /currentProjectId: requestedProjectId/u)
-  assert.match(
-    shell,
-    /currentConversation\?\.projectId \?\?\s*requestedProjectId \?\?\s*currentProject\?\.projectId/u,
-  )
-  assert.match(shell, /currentProjectId=\{currentProjectId\}/u)
-  assert.match(shell, /project\?\.projectId \?\? currentProjectId/u)
-})
-
-test('create uses only exact chosen identifiers and descriptor reasoning, without first input or model', async () => {
-  const dialog = await source(
+  const { NewConversationDialog } = loadWebComponent(
     'components/conversations/new-conversation-dialog.tsx',
+    dependencies,
   )
-  assert.match(dialog, /projectId: project\.projectId/u)
-  assert.match(dialog, /machineId: project\.machineId/u)
-  assert.match(dialog, /provider: presentation\.provider/u)
-  assert.match(dialog, /capabilities\.reasoningControl/u)
-  assert.match(dialog, /retry: false/u)
-  assert.match(dialog, /to: '\/c\/\$conversationId'/u)
-  assert.match(dialog, /search: \{ focus: 'composer' \}/u)
-  assert.doesNotMatch(
-    dialog,
-    /selectedModel|model:|textarea|sendMessage|submitTurn|setQueryData/u,
+  await dom.render(
+    h(
+      QueryClientProvider,
+      { client: queryClient },
+      h(NewConversationDialog, {
+        open: true,
+        currentProject: project,
+        currentMachineId: machineId,
+      }),
+    ),
   )
+  const submit = () => dom.container.querySelector('button[type="submit"]')
+  return {
+    ...dom,
+    calls,
+    navigations,
+    submit,
+    async close() {
+      await dom.close()
+      queryClient.clear()
+    },
+  }
+}
+
+test('real dialog double-submit dispatches one exact empty conversation without model or initial message', async () => {
+  let complete
+  const fixture = await dialogFixture({
+    create: () =>
+      new Promise((resolve) => {
+        complete = resolve
+      }),
+  })
+  try {
+    await fixture.until(() => fixture.submit()?.disabled === false)
+    assert.equal(fixture.container.querySelector('textarea'), null)
+    await fixture.perform(() => {
+      const form = fixture.submit().closest('form')
+      form.dispatchEvent(
+        new fixture.window.Event('submit', { bubbles: true, cancelable: true }),
+      )
+      form.dispatchEvent(
+        new fixture.window.Event('submit', { bubbles: true, cancelable: true }),
+      )
+    })
+    assert.deepEqual(fixture.calls, [
+      [projectId, { machineId, provider: 'codex' }],
+    ])
+    await fixture.perform(() =>
+      complete({
+        data: { conversation: { conversationId: 'conv_dom01', projectId } },
+      }),
+    )
+    await fixture.until(() => fixture.navigations.length === 1)
+    assert.deepEqual(fixture.navigations[0].search, { focus: 'composer' })
+  } finally {
+    await fixture.close()
+  }
 })
 
-test('synchronous submit guard closes the pre-render double-click window and releases only on settlement', async () => {
-  const dialog = await source(
-    'components/conversations/new-conversation-dialog.tsx',
-  )
-  const submit = dialog.slice(
-    dialog.indexOf('function handleSubmit'),
-    dialog.indexOf('return (', dialog.indexOf('function handleSubmit')),
-  )
-  assert.match(submit, /if \([\s\S]*submitRef\.current/u)
-  assert.ok(
-    submit.indexOf('submitRef.current = true') <
-      submit.indexOf('createMutation.mutate'),
-  )
-  assert.match(dialog, /onSettled: \(\) => \{\s*submitRef\.current = false/u)
-  assert.match(
-    dialog,
-    /!nextOpen && \(createMutation\.isPending \|\| submitRef\.current\)/u,
-  )
-  assert.match(dialog, /不会自动重试/u)
+for (const [name, options] of [
+  ['missing exact project', { projects: [] }],
+  ['no usable AI tool', { providers: [] }],
+]) {
+  test('real dialog blocks creation for ' + name, async () => {
+    const fixture = await dialogFixture(options)
+    try {
+      await fixture.until(
+        () => !fixture.container.textContent.includes('正在读取'),
+      )
+      assert.equal(fixture.submit().disabled, true)
+      await fixture.perform(() =>
+        fixture
+          .submit()
+          .closest('form')
+          .dispatchEvent(
+            new fixture.window.Event('submit', {
+              bubbles: true,
+              cancelable: true,
+            }),
+          ),
+      )
+      assert.equal(fixture.calls.length, 0)
+    } finally {
+      await fixture.close()
+    }
+  })
+}
+
+test('real dialog keeps selection after 409 and never retries or navigates automatically', async () => {
+  const fixture = await dialogFixture({
+    create: async () => {
+      throw new CodeTetherResponseError(409, {
+        protocolVersion: 1,
+        actionId: 'act_dom01',
+        code: 'conflict',
+        message: 'private fixture diagnostic',
+      })
+    },
+  })
+  try {
+    await fixture.until(() => fixture.submit()?.disabled === false)
+    await fixture.perform(() => fixture.submit().click())
+    await fixture.until(() =>
+      fixture.container.textContent.includes('项目状态已经变化'),
+    )
+    assert.match(fixture.container.textContent, /测试项目/u)
+    assert.match(fixture.container.textContent, /不会自动重试/u)
+    assert.doesNotMatch(
+      fixture.container.textContent,
+      /private fixture diagnostic/u,
+    )
+    assert.equal(fixture.calls.length, 1)
+    assert.equal(fixture.navigations.length, 0)
+  } finally {
+    await fixture.close()
+  }
 })
 
-test('global and keyboard launches preselect identifiers while project plus fixes the project/device pair', async () => {
-  const [shell, sidebar] = await Promise.all([
-    source('components/app-shell/app-shell.tsx'),
-    source('components/app-shell/workspace-sidebar.tsx'),
-  ])
-  assert.match(shell, /useState<NewConversationLaunchContext>/u)
-  assert.doesNotMatch(shell, /useState<\s*ProjectRecord \| undefined/u)
-  assert.match(shell, /event\.key\.toLowerCase\(\) === 'n'/u)
-  assert.match(shell, /globalDialog !== null/u)
-  assert.match(shell, /role="dialog"/u)
-  assert.match(shell, /removeEventListener\('keydown', handleShortcut\)/u)
-  assert.match(sidebar, /activeMachineId,\s*'preselected'/u)
-  assert.match(sidebar, /machine\.machineId,\s*'fixed'/u)
-  assert.match(sidebar, /data-slot="workspace-new-conversation"/u)
-})
+const capabilities = {
+  canCompose: true,
+  canInterrupt: false,
+  canStop: false,
+  canResolveApproval: false,
+  supportsInterrupt: false,
+  supportsApprovals: false,
+  supportsDiff: false,
+  supportsShell: false,
+  supportsToolOutput: false,
+  supportsReasoningControl: false,
+}
 
-test('baseline action identity, inflight dedup and response validation remain runtime authorities', async () => {
-  const actions = await source('runtime/host/new-conversation-actions.ts')
-  assert.match(actions, /this\.#createActionId\(\)/u)
-  assert.match(actions, /retry\.actionId/u)
-  assert.match(actions, /current\.promise/u)
-  for (const field of ['projectId', 'machineId', 'provider'])
-    assert.ok(actions.includes('response.data.conversation.' + field + ' !=='))
-  assert.doesNotMatch(actions, /setQueryData|autoRetry|setInterval/u)
+for (const movedFocus of [false, true]) {
+  test(
+    'real composer ' +
+      (movedFocus
+        ? 'does not steal moved focus'
+        : 'restores original editor focus') +
+      ' after submit',
+    async () => {
+      const dom = await createDom()
+      const { Composer } = loadWebComponent(
+        'components/conversation/composer.tsx',
+      )
+      let complete,
+        calls = 0
+      const controller = {
+        state: 'idle',
+        submit: () => {
+          calls += 1
+          return new Promise((resolve) => {
+            complete = resolve
+          })
+        },
+      }
+      const view = () =>
+        h(Composer, {
+          conversationId: 'conv_focus_' + movedFocus,
+          capabilities,
+          controller,
+        })
+      try {
+        await dom.render(view())
+        const editor = dom.container.querySelector('textarea')
+        await dom.perform(() => editor.focus())
+        await dom.input(editor, 'synthetic draft')
+        await dom.perform(() =>
+          dom.container.querySelector('form').dispatchEvent(
+            new dom.window.Event('submit', {
+              bubbles: true,
+              cancelable: true,
+            }),
+          ),
+        )
+        assert.equal(calls, 1)
+        controller.state = 'submitting'
+        await dom.render(view())
+        assert.equal(editor.readOnly, true)
+        assert.equal(editor.closest('[hidden]'), null)
+        await dom.perform(() =>
+          movedFocus
+            ? dom.window.document.getElementById('outside').focus()
+            : editor.blur(),
+        )
+        controller.state = 'idle'
+        await dom.perform(() => complete(true))
+        await dom.render(view())
+        assert.equal(
+          dom.window.document.activeElement,
+          movedFocus ? dom.window.document.getElementById('outside') : editor,
+        )
+        assert.equal(editor.value, '')
+      } finally {
+        await dom.close()
+      }
+    },
+  )
+}
+
+test('real composer preserves session draft after rejected submission without replay', async () => {
+  const dom = await createDom()
+  const { Composer } = loadWebComponent('components/conversation/composer.tsx')
+  let calls = 0
+  try {
+    await dom.render(
+      h(Composer, {
+        conversationId: 'conv_rejected',
+        capabilities,
+        controller: {
+          state: 'idle',
+          error: '项目状态已经变化，请刷新后重试。',
+          submit: async () => {
+            calls += 1
+            return false
+          },
+        },
+      }),
+    )
+    const editor = dom.container.querySelector('textarea')
+    await dom.input(editor, 'synthetic retained draft')
+    await dom.perform(() =>
+      dom.container
+        .querySelector('form')
+        .dispatchEvent(
+          new dom.window.Event('submit', { bubbles: true, cancelable: true }),
+        ),
+    )
+    assert.equal(calls, 1)
+    assert.equal(editor.value, 'synthetic retained draft')
+    assert.match(dom.container.textContent, /项目状态已经变化/u)
+    assert.equal(
+      dom.window.sessionStorage.getItem(
+        'codetether.conversation-draft.conv_rejected',
+      ),
+      'synthetic retained draft',
+    )
+  } finally {
+    await dom.close()
+  }
 })

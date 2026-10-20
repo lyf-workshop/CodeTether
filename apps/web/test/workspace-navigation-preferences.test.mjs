@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { createRequire } from 'node:module'
-import { dirname, relative, resolve } from 'node:path'
+import { resolve } from 'node:path'
 import test from 'node:test'
 import { createElement as h } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import ts from 'typescript'
+import * as query from '@tanstack/react-query'
 import { loadUiComponent, loadWebComponent } from './fixtures/render-ui.mjs'
 
 const model = loadWebComponent(
@@ -236,71 +236,52 @@ test('actual AppShell keyboard handler toggles the sidebar instead of navigating
   assert.deepEqual(navigations, [])
 })
 
-const sidebarPath = resolve(
-  import.meta.dirname,
-  '../src/components/app-shell/workspace-sidebar.tsx',
-)
-const webRoot = resolve(import.meta.dirname, '../src')
-const requireDependency = createRequire(sidebarPath)
 const ui = loadUiComponent('index.ts')
 let hostState = 'connected'
 let fixtureMachines = []
 let fixtureProjects = []
-const module = { exports: {} }
-const output = ts.transpileModule(readFileSync(sidebarPath, 'utf8'), {
-  fileName: sidebarPath,
-  compilerOptions: {
-    module: ts.ModuleKind.CommonJS,
-    jsx: ts.JsxEmit.ReactJSX,
-    target: ts.ScriptTarget.ES2023,
-  },
-}).outputText
-new Function('require', 'module', 'exports', output)(
-  (specifier) => {
-    if (specifier === '@codetether/ui') return ui
-    if (specifier === '@tanstack/react-router')
-      return {
-        useNavigate: () => () => {},
-        Link: ({
-          to,
+const dependencies = new Map([
+  ['@codetether/ui', ui],
+  [
+    '@tanstack/react-router',
+    {
+      useNavigate: () => () => {},
+      Link: ({ to, children, className, title, 'aria-current': ariaCurrent }) =>
+        h(
+          'a',
+          { className, title, 'aria-current': ariaCurrent, href: to },
           children,
-          className,
-          title,
-          'aria-current': ariaCurrent,
-        }) =>
-          h(
-            'a',
-            { className, title, 'aria-current': ariaCurrent, href: to },
-            children,
-          ),
-      }
-    if (specifier === '@tanstack/react-query')
-      return {
-        useQuery: (options) => ({
-          data:
-            options.queryKey[1] === 'machines'
-              ? fixtureMachines
-              : options.queryKey[1] === 'projects'
-                ? fixtureProjects
-                : options.enabled === false
-                  ? undefined
-                  : [],
-          isError: false,
-        }),
-      }
-    if (specifier === '../../runtime/host/host-runtime-hooks')
-      return {
-        useHostRuntime: () => ({}),
-        useHostConnectionState: () => hostState,
-      }
-    if (specifier.startsWith('.'))
-      return loadWebComponent(
-        relative(webRoot, resolve(dirname(sidebarPath), specifier)),
-      )
-    return requireDependency(specifier)
-  },
-  module,
-  module.exports,
+        ),
+    },
+  ],
+  [
+    '@tanstack/react-query',
+    {
+      ...query,
+      useQuery: (options) => ({
+        data:
+          options.queryKey[1] === 'machines'
+            ? fixtureMachines
+            : options.queryKey[1] === 'projects'
+              ? fixtureProjects
+              : options.enabled === false
+                ? undefined
+                : [],
+        isError: false,
+      }),
+    },
+  ],
+  [
+    '../../runtime/host/host-runtime-hooks',
+    {
+      useHostRuntime: () => ({}),
+      useHostConnectionState: () => hostState,
+    },
+  ],
+])
+const { WorkspaceSidebar } = loadWebComponent(
+  'components/app-shell/workspace-sidebar.tsx',
+  dependencies,
 )
 
 const stamp = '2026-10-19T12:00:00.000Z'
@@ -342,7 +323,7 @@ function renderSidebar({
   })
   try {
     return renderToStaticMarkup(
-      h(module.exports.WorkspaceSidebar, {
+      h(WorkspaceSidebar, {
         currentPath: '/devices',
         onNewConversation() {},
         onAddProject() {},
@@ -404,7 +385,13 @@ test('actual sidebar add-project entry uses canonical device capability includin
 })
 
 test('sidebar project creation is gated by typed capability and location facts rather than reason copy', () => {
-  const source = readFileSync(sidebarPath, 'utf8')
+  const source = readFileSync(
+    resolve(
+      import.meta.dirname,
+      '../src/components/app-shell/workspace-project-section.tsx',
+    ),
+    'utf8',
+  )
   assert.match(source, /machineCanAddProject\(machine\)/u)
   const create = source.slice(
     source.indexOf('  const canCreate ='),

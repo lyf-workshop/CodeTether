@@ -1,9 +1,6 @@
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
-import { resolve } from 'node:path'
 import test from 'node:test'
-
-const sourceDirectory = resolve(import.meta.dirname, '..', 'src')
+import { readProjectFlowSource } from './fixtures/project-flow-source.mjs'
 
 test('Previous Conversations is a bounded explicit discovery and adoption step', async () => {
   const source = await readSource(
@@ -129,5 +126,5 @@ test('opening an adopted conversation cannot interrupt a pending import batch', 
 })
 
 async function readSource(relativePath) {
-  return await readFile(resolve(sourceDirectory, relativePath), 'utf8')
+  return await readProjectFlowSource(relativePath)
 }

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
+import { readWorkspaceSidebarSource } from './fixtures/workspace-sidebar-source.mjs'
 
 test('the v4 sidebar has one device section and preserves the existing secure add-device action', async () => {
   const sidebar = await readFile(
@@ -88,13 +89,7 @@ test('Workspace status decoration is limited to actionable activity', () => {
 })
 
 test('Workspace Sidebar owns project navigation, scoped creation, and one lazy Conversation query', async () => {
-  const source = await readFile(
-    new URL(
-      '../src/components/app-shell/workspace-sidebar.tsx',
-      import.meta.url,
-    ),
-    'utf8',
-  )
+  const source = await readWorkspaceSidebarSource()
   const detail = await readFile(
     new URL(
       '../src/components/conversation/conversation-detail-page.tsx',

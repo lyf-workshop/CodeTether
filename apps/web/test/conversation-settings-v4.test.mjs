@@ -4,9 +4,12 @@ import test from 'node:test'
 import { createElement as h } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { loadWebComponent } from './fixtures/render-ui.mjs'
+import { conversationOrganizationSource } from './fixtures/conversation-organization-source.mjs'
 
 const source = (name) =>
-  readFile(new URL('../src/' + name, import.meta.url), 'utf8')
+  name.endsWith('/conversation-organization-controls.tsx')
+    ? conversationOrganizationSource()
+    : readFile(new URL('../src/' + name, import.meta.url), 'utf8')
 const prefix = 'components/conversations/'
 
 test('F14–16 use one settings dialog with the original canonical mutation and synchronous close guards', async () => {

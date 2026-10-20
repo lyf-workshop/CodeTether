@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
+import { readWorkspaceSidebarSource } from './fixtures/workspace-sidebar-source.mjs'
 
 const conversationComponents = new URL(
   '../src/components/conversation/',
@@ -50,13 +51,7 @@ test('Detail organization actions use one shared control and archive into the UR
 
 test('Workspace Sidebar explicitly identifies the current archived Conversation beside active history', async () => {
   const [sidebar, rootLayout] = await Promise.all([
-    readFile(
-      new URL(
-        '../src/components/app-shell/workspace-sidebar.tsx',
-        import.meta.url,
-      ),
-      'utf8',
-    ),
+    readWorkspaceSidebarSource(),
     readFile(
       new URL('../src/components/app-shell/root-layout.tsx', import.meta.url),
       'utf8',

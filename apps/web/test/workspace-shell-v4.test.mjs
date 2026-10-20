@@ -1,10 +1,9 @@
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import { loadWebComponent } from './fixtures/render-ui.mjs'
+import { readProjectFlowSource } from './fixtures/project-flow-source.mjs'
 
-const source = (name) =>
-  readFile(new URL('../src/' + name, import.meta.url), 'utf8')
+const source = readProjectFlowSource
 
 test('workspace shortcuts admit only explicit non-composing unhandled modifiers', () => {
   const { workspaceShortcut } = loadWebComponent(

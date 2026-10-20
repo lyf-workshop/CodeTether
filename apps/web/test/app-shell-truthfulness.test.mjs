@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
+import { readWorkspaceSidebarSource } from './fixtures/workspace-sidebar-source.mjs'
 
 const componentDirectory = new URL(
   '../src/components/app-shell/',
@@ -95,10 +96,7 @@ test('Conversation shell hides unsupported controls and keeps long identities bo
       new URL('conversation-chrome-actions.tsx', componentDirectory),
       'utf8',
     ),
-    readFile(
-      new URL('../app-shell/workspace-sidebar.tsx', componentDirectory),
-      'utf8',
-    ),
+    readWorkspaceSidebarSource(),
     readFile(
       new URL('conversation-detail-page.tsx', componentDirectory),
       'utf8',

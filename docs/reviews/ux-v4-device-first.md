@@ -3,7 +3,7 @@
 - 分支：`ux/v4-device-first`，工作区 `D:/Projects/Software/agenthub-ux-v4-device-first`
 - 审核范围：`bbcda69..df91601`（9 个功能提交；3562f12 是平台权限测试，不在本轮范围）
 - 依据：`docs/ux-redesign/04-requirements.md`（第三版）、`02-dev-handoff.md`、原型；AGENTS.md
-- 当前级别：审核通过（第 3 轮，b1e1ccf），等待验收（见 DEVELOPMENT-PROCESS §2）
+- 当前级别：审核通过（第 3 轮，b1e1ccf），已装到 Windows，等待验收（见 DEVELOPMENT-PROCESS §2）
 
 ## 第 1 轮（D1，2026-10-19）
 
@@ -185,18 +185,18 @@ typecheck、lint、test、build 退出码都是 0。测试 2255 项：2241 通�
 
 ## 验收（你来做）
 
-### 怎么运行，不动已安装的版本
+### 在已安装的版本上验收
 
-开发版和已安装的 CodeTether 都用 4317 端口，不能同时运行。
+按你的要求（2026-10-20），Windows 上已安装的版本已经换成这个分支：
 
-1. 从托盘退出已安装的 CodeTether（不要卸载）。
-2. 在本会话里输入（数据放在单独的目录，不碰已安装版本的数据）：
-   `! cd D:/Projects/Software/agenthub-ux-v4-device-first && CODETETHER_DATA_DIR=D:/Projects/Software/agenthub-work/v4-accept-data pnpm desktop:dev`
-3. 验收完关掉开发版窗口，再从开始菜单打开已安装的版本。
+- 来源：b1e1ccf。还没合并、没打标签，版本号仍显示 0.1.0-alpha.0。这和“安装版来自 main 的标签”不一致，是这次的例外。
+- 安装包 SHA256 以 CBD7BC93B7A40C61 开头，未签名。
+- 我在运行中核对过：Host 报告 `hostVersion` 为 `git-b1e1ccf123c7`，协议版本 1。只有一个 Desktop 和一个 Host，都在安装目录下运行，4317 端口由这个 Host 监听。
+- 卸载时保留了原数据，包括数据库、配对凭据和 WebView 数据，新版本接着用。所以首次设置可能不会再出现，以前的项目和配对设备都还在。
+- 旧版本和数据的备份在 `D:/Projects/Software/agenthub-archive/windows-install-backup-20261020-pre-v4`，回退步骤见其中的 RESTORE.txt。
+- 安装报告：`D:/Projects/Software/agenthub-archive/v4-install-report-20261020.md`。
 
-用单独的数据目录意味着从首次设置开始，看不到已安装版本里的项目和配对设备。Codex 和 Claude Code 以前的会话会从它们自己的目录里读出来，可以导入。
-
-我没有在这台电脑上跑过 `desktop:dev`，不确定 Rust 工具链是否就绪；报错就把输出贴给我。
+从开始菜单打开 CodeTether，按下面的清单验收即可。
 
 ### Windows 验收清单
 
@@ -218,7 +218,9 @@ typecheck、lint、test、build 退出码都是 0。测试 2255 项：2241 通�
 | 14 | 界面没有英文句子和“智能体”“此电脑” | 中文界面 | |
 | 15 | 项目卡片高度是否整齐 | 第 3 轮记录 | |
 
-有配对的 Node 时再加：从这台设备移除项目后能解除配对（M1）。用新数据目录时没有配对设备，这一项可以跳过或之后补。
+有配对的 Node 时再加：从这台设备移除项目后能解除配对（M1）。
+
+第 1 项：数据保留后，首次设置可能不再出现。如果设置里能看到 AI 工具状态，就在那里看安装、运行、服务是否分开显示（我没确认设置里有这个入口）。否则之后用空数据目录补测。
 
 ### Mac
 
@@ -226,4 +228,4 @@ Mac 上需要拿到这个分支。分支只在本机，没有推送。要在 Mac
 
 ### 验收结果
 
-（你验收后填写：通过 / 问题列表。通过后合并进 main、打标签、打包替换已安装版本，每一步再问你。）
+（你验收后填写：通过 / 问题列表。通过后合并进 main、打标签，每一步再问你。已安装的版本已经是 b1e1ccf，合并后如果代码没变，就不用重装。）

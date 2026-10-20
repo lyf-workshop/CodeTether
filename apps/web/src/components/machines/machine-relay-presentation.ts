@@ -104,9 +104,9 @@ export function relayStatusTone(
       return 'text-success'
     case 'warning':
     case 'progress':
-      return 'text-warning'
+      return 'text-warning-text'
     case 'danger':
-      return 'text-danger'
+      return 'text-danger-text'
     case 'neutral':
       return 'text-text-secondary'
   }

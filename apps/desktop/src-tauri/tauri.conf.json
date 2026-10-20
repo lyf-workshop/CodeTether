@@ -23,7 +23,7 @@
         "fullscreen": false,
         "decorations": true,
         "visible": false,
-        "backgroundColor": "#07111f",
+        "backgroundColor": "#fbfaf8",
         "useHttpsScheme": false
       }
     ],

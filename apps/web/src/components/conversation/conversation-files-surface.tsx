@@ -53,7 +53,9 @@ export function ConversationFilesSurface({
               <span className="flex shrink-0 items-center gap-1 text-xs tabular-nums">
                 <span className="text-success/90">+{change.additions}</span>
                 {change.deletions > 0 ? (
-                  <span className="text-danger/90">-{change.deletions}</span>
+                  <span className="text-danger-text/90">
+                    -{change.deletions}
+                  </span>
                 ) : null}
               </span>
               {canOpen ? (

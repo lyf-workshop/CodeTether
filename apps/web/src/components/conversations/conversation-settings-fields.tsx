@@ -60,7 +60,7 @@ export function ConversationSettingsFields({
           id={`conversation-title-count-${conversationId}`}
           className={cn(
             'mt-1 text-right text-xs tabular-nums text-text-muted',
-            title.length > 240 && 'text-danger',
+            title.length > 240 && 'text-danger-text',
           )}
         >
           {title.length} / 240
@@ -134,7 +134,7 @@ export function ConversationSettingsFields({
         <p
           id={`conversation-title-error-${conversationId}`}
           role="alert"
-          className="rounded-sm border border-danger/30 bg-danger-muted px-3 py-2 text-sm text-danger"
+          className="rounded-sm border border-danger/30 bg-danger-muted px-3 py-2 text-sm text-danger-text"
         >
           {error}
         </p>

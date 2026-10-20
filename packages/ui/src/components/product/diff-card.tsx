@@ -37,7 +37,7 @@ const diffLineDefinitions = {
     prefix: '-',
     ariaLabel: '删除',
     rowClassName: 'bg-danger-muted/15 text-text-secondary',
-    prefixClassName: 'text-danger',
+    prefixClassName: 'text-danger-text',
   },
 } satisfies Record<
   DiffLineKind,

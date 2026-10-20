@@ -24,11 +24,11 @@ export const riskDefinitions = {
   medium: {
     label: '中风险',
     icon: ShieldQuestion,
-    badgeClassName: 'border-warning/30 bg-warning-muted text-warning',
+    badgeClassName: 'border-warning/30 bg-warning-muted text-warning-text',
   },
   high: {
     label: '高风险',
     icon: ShieldAlert,
-    badgeClassName: 'border-danger/30 bg-danger-muted text-danger',
+    badgeClassName: 'border-danger/30 bg-danger-muted text-danger-text',
   },
 } satisfies Record<PermissionRisk, RiskDefinition>

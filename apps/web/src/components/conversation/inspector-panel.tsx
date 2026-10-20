@@ -215,7 +215,7 @@ function ChangesSummary({
                   <span className="shrink-0 font-medium tabular-nums text-success/90">
                     +{change.additions}
                   </span>
-                  <span className="w-5 shrink-0 font-medium tabular-nums text-danger/90">
+                  <span className="w-5 shrink-0 font-medium tabular-nums text-danger-text/90">
                     {change.deletions > 0 ? `-${change.deletions}` : ''}
                   </span>
                 </button>

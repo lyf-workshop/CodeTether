@@ -128,7 +128,7 @@ export function ConversationSearchResults({
       {fetchNextError === undefined ? null : (
         <div
           role="alert"
-          className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-sm border border-danger/30 bg-danger-muted px-3 py-2 text-sm text-danger"
+          className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-sm border border-danger/30 bg-danger-muted px-3 py-2 text-sm text-danger-text"
         >
           <span>{fetchNextError}</span>
           <Button size="sm" variant="secondary" onClick={onResetPagination}>
@@ -259,7 +259,7 @@ function ConversationSearchResultRow({
       {restoreError === undefined ? null : (
         <p
           role="alert"
-          className="mt-1 rounded-sm border border-danger/30 bg-danger-muted px-3 py-2 text-sm text-danger"
+          className="mt-1 rounded-sm border border-danger/30 bg-danger-muted px-3 py-2 text-sm text-danger-text"
         >
           {restoreError}
         </p>

@@ -72,7 +72,9 @@ export function ToolCallCard({
         {delta ? (
           <span className="inline-flex shrink-0 items-center gap-2 tabular-nums">
             <span className="text-success">+{Math.abs(delta.additions)}</span>
-            <span className="text-danger">-{Math.abs(delta.deletions)}</span>
+            <span className="text-danger-text">
+              -{Math.abs(delta.deletions)}
+            </span>
           </span>
         ) : null}
         {action ? (

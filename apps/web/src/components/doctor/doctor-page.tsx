@@ -324,7 +324,7 @@ export function DoctorPage({ embedded = false }: { embedded?: boolean }) {
               </div>
               {doctor.project.state !== 'ready' ? (
                 <div className="mt-3">
-                  <p className="text-sm text-warning">
+                  <p className="text-sm text-warning-text">
                     {doctor.project.state === 'unknown'
                       ? '远程项目文件夹尚未完成当前检查。选择“重新检查”不会发送提示或创建对话。'
                       : doctor.project.state === 'offline'

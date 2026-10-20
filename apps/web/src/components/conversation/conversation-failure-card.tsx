@@ -47,7 +47,7 @@ export function ConversationFailureCard({
       <div className="flex min-w-0 items-start gap-3">
         <AlertTriangle
           aria-hidden="true"
-          className="mt-0.5 size-4 shrink-0 text-danger"
+          className="mt-0.5 size-4 shrink-0 text-danger-text"
         />
         <div className="min-w-0 flex-1">
           <h3 id={titleId} className="text-sm font-semibold text-text-primary">
@@ -116,7 +116,7 @@ export function ConversationFailureCard({
             </p>
           ) : null}
           {retryError === undefined ? null : (
-            <p role="alert" className="mt-2 text-xs text-danger">
+            <p role="alert" className="mt-2 text-xs text-danger-text">
               {retryError}
             </p>
           )}

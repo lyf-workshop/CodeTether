@@ -80,7 +80,7 @@ export function RemoveProjectLocationDialog({
         <DialogHeader>
           <span
             aria-hidden="true"
-            className="grid size-10 place-items-center rounded-md border border-danger/30 bg-danger-muted text-danger"
+            className="grid size-10 place-items-center rounded-md border border-danger/30 bg-danger-muted text-danger-text"
           >
             <Trash2 className="size-5" />
           </span>
@@ -107,7 +107,7 @@ export function RemoveProjectLocationDialog({
           <p
             id="remove-project-location-error"
             role="alert"
-            className="break-words rounded-sm border border-danger/30 bg-danger-muted px-3 py-2 text-sm text-danger"
+            className="break-words rounded-sm border border-danger/30 bg-danger-muted px-3 py-2 text-sm text-danger-text"
           >
             {errorMessage}
           </p>

@@ -176,7 +176,7 @@ export function UpdateMachineAddressDialog({
               <p
                 id="remote-machine-recovery-error"
                 role="alert"
-                className="break-words rounded-sm border border-danger/30 bg-danger-muted px-3 py-2 text-sm text-danger"
+                className="break-words rounded-sm border border-danger/30 bg-danger-muted px-3 py-2 text-sm text-danger-text"
               >
                 {error}
               </p>

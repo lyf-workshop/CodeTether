@@ -109,7 +109,7 @@ test('production Desktop CSP and capabilities stay loopback-only and non-wildcar
   assert.deepEqual(config.bundle.externalBin, ['binaries/codetether-host'])
   assert.equal(config.app.windows[0].visible, false)
   assert.equal(config.app.windows[0].center, true)
-  assert.equal(config.app.windows[0].backgroundColor, '#07111f')
+  assert.equal(config.app.windows[0].backgroundColor, '#fbfaf8')
   assert.equal(config.app.windows[0].useHttpsScheme, false)
   assert.match(
     config.app.security.csp['connect-src'],

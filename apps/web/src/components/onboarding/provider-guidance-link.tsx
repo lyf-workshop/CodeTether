@@ -45,7 +45,7 @@ export function ProviderGuidanceLink({
         <ExternalLink aria-hidden="true" className="size-3.5" />
       </a>
       {failed ? (
-        <p role="alert" className="mt-2 text-xs text-danger">
+        <p role="alert" className="mt-2 text-xs text-danger-text">
           无法打开官方指南。请稍后重试。
         </p>
       ) : null}

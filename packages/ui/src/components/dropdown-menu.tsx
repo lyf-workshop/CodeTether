@@ -81,7 +81,7 @@ function DropdownMenuItem({
         'relative flex min-h-8 cursor-default items-center gap-2 rounded-xs px-2 py-1.5 text-sm text-text-secondary outline-none select-none',
         'data-[highlighted]:bg-surface-muted data-[highlighted]:text-text-primary',
         'data-[disabled]:pointer-events-none data-[disabled]:opacity-40 data-[inset]:pl-8',
-        'data-[variant=danger]:text-danger data-[variant=destructive]:text-danger',
+        'data-[variant=danger]:text-danger-text data-[variant=destructive]:text-danger-text',
         'data-[variant=danger]:data-[highlighted]:bg-danger-muted data-[variant=destructive]:data-[highlighted]:bg-danger-muted',
         '[&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0',
         className,

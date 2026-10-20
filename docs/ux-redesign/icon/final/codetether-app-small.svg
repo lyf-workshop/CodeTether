@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- Hinted variant for 16, 24 and 32 px: straight tether, heavier strokes, pixel-grid centres -->
+  <rect width="32" height="32" rx="7" fill="#1a7fd0"/>
+  <line x1="10.5" y1="21.5" x2="21.5" y2="10.5" stroke="#ffffff" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="10.5" cy="21.5" r="5" fill="#ffffff"/>
+  <circle cx="21.5" cy="10.5" r="3.5" fill="#1a7fd0" stroke="#ffffff" stroke-width="3"/>
+</svg>

@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- CodeTether app icon, full-bleed master for Windows and PNG sizes 48 px and up -->
+  <rect width="1024" height="1024" rx="228" fill="#1a7fd0"/>
+  <path d="M340 684 C340 480 684 544 684 340" fill="none" stroke="#ffffff" stroke-width="72" stroke-linecap="round"/>
+  <circle cx="340" cy="684" r="120" fill="#ffffff"/>
+  <circle cx="684" cy="340" r="92" fill="#1a7fd0" stroke="#ffffff" stroke-width="64"/>
+</svg>

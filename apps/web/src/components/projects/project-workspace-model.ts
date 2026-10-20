@@ -68,14 +68,9 @@ export function resolveProjectWorkspaceContext(
 export function filterProjectLocationConversations(
   conversations: readonly ConversationSummary[],
   machineId: MachineId,
-  status: ConversationStatus | 'all',
-  provider: ProviderId | 'all',
 ) {
   return conversations.filter(
-    (conversation) =>
-      conversation.machineId === machineId &&
-      (status === 'all' || conversation.status === status) &&
-      (provider === 'all' || conversation.provider === provider),
+    (conversation) => conversation.machineId === machineId,
   )
 }
 

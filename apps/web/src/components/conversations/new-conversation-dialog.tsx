@@ -1,7 +1,9 @@
 import {
   useId,
+  useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type FormEvent,
   type ReactElement,
   type RefObject,
@@ -41,6 +43,10 @@ import {
 import { projectListQueryOptions } from '../../runtime/host/project-query'
 import { providerPresentationsForMachine } from '../../provider/provider-presentation'
 import {
+  commandPaletteCacheSubscription,
+  readCommandPaletteCache,
+} from '../app-shell/command-palette-cache'
+import {
   effectiveProviderReasoning,
   providerDefaultReasoningSelection,
   providerReasoningFromControl,
@@ -49,6 +55,7 @@ import { NewConversationFields } from './new-conversation-fields'
 import {
   conversationCreationProviderOptions,
   conversationProjectGroups,
+  conversationProjectMenuGroups,
   eligibleConversationProjectSelection,
   resolveConversationCreationProvider,
   resolveConversationProject,
@@ -69,6 +76,8 @@ interface NewConversationDialogProps {
 }
 
 const unavailableMachineQueryId = MachineIdSchema.parse('machine_unavailable')
+const noCacheSubscription = () => () => {}
+const emptyCacheVersion = () => ''
 
 /** Selection is identifiers only; records, descriptors and installation state belong to Query. */
 export function NewConversationDialog({
@@ -94,6 +103,15 @@ export function NewConversationDialog({
   const skipCloseFocusRestore = useRef(false)
   const submitRef = useRef(false)
   const open = controlledOpen ?? internalOpen
+  const activitySubscription = useMemo(
+    () => commandPaletteCacheSubscription(queryClient),
+    [queryClient],
+  )
+  useSyncExternalStore(
+    open ? activitySubscription.subscribe : noCacheSubscription,
+    open ? activitySubscription.getSnapshot : emptyCacheVersion,
+    emptyCacheVersion,
+  )
   const context: NewConversationLaunchContext | undefined =
     launchContext ??
     (currentProject === undefined
@@ -175,6 +193,10 @@ export function NewConversationDialog({
     (context?.machineId === undefined
       ? groups.length === 0
       : !groups.some((group) => group.machineId === context.machineId))
+  const menuGroups = conversationProjectMenuGroups(
+    scopedGroups,
+    open ? readCommandPaletteCache(queryClient).conversations : [],
+  )
 
   const createMutation = useMutation({
     retry: false,
@@ -198,8 +220,7 @@ export function NewConversationDialog({
       const projectId = response.data.conversation.projectId
       if (projectId !== undefined)
         await queryClient.invalidateQueries({
-          queryKey: conversationListQueryKeys.project(projectId),
-          exact: true,
+          queryKey: conversationListQueryKeys.projectScope(projectId),
         })
       skipCloseFocusRestore.current = true
       await navigate({
@@ -286,6 +307,7 @@ export function NewConversationDialog({
           <div className="mt-5 space-y-4">
             <NewConversationFields
               groups={scopedGroups}
+              menuGroups={menuGroups}
               project={project}
               fixed={projectSelection.fixed}
               loading={loading}
@@ -446,7 +468,7 @@ function InlineError({ children }: { children: string }) {
   return (
     <p
       role="alert"
-      className="rounded-sm border border-danger/30 bg-danger-muted px-3 py-2 text-sm text-danger"
+      className="rounded-sm border border-danger/30 bg-danger-muted px-3 py-2 text-sm text-danger-text"
     >
       {children}
     </p>

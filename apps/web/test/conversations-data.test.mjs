@@ -71,10 +71,11 @@ test('Archived Conversation query requests only the Host archived index', async 
 test('the live project location filter preserves exact Machine identity and Host order', () => {
   const other = { ...completed, machineId: 'machine_other01' }
   const source = Object.freeze([waiting, other, running, completed])
-  assert.deepEqual(
-    filterProjectLocationConversations(source, machineId, 'all', 'all'),
-    [waiting, running, completed],
-  )
+  assert.deepEqual(filterProjectLocationConversations(source, machineId), [
+    waiting,
+    running,
+    completed,
+  ])
   assert.deepEqual(source, [waiting, other, running, completed])
 })
 
@@ -87,18 +88,15 @@ test('live location filters retain status and Provider facts without mutating Ho
     'claude-code',
   )
   const source = Object.freeze([waiting, claude, running, completed])
+  assert.deepEqual(filterProjectLocationConversations(source, machineId), [
+    waiting,
+    claude,
+    running,
+    completed,
+  ])
   assert.deepEqual(
-    filterProjectLocationConversations(
-      source,
-      machineId,
-      'completed',
-      'claude-code',
-    ),
-    [claude],
-  )
-  assert.deepEqual(
-    filterProjectLocationConversations(source, machineId, 'running', 'all'),
-    [running],
+    filterProjectLocationConversations([claude, running], machineId),
+    [claude, running],
   )
   assert.deepEqual(source, [waiting, claude, running, completed])
 })

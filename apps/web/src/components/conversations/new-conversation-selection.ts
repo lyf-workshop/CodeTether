@@ -1,4 +1,5 @@
 import type {
+  ConversationId,
   MachineId,
   MachineProviderLifecycle,
   MachineSummary,
@@ -42,6 +43,25 @@ export interface ConversationProjectGroup {
   readonly machineId: MachineId
   readonly label: string
   readonly choices: readonly ConversationProjectChoice[]
+}
+
+export interface ConversationProjectMenuGroup {
+  readonly key: string
+  readonly kind: 'recent' | 'device'
+  readonly label: string
+  readonly choices: readonly ConversationProjectChoice[]
+}
+
+interface LoadedConversationActivity {
+  readonly conversationId: ConversationId
+  readonly projectId?: ProjectId
+  readonly machineId: MachineId
+  readonly lastActivityAt?: string
+}
+
+interface ConversationActivitySource {
+  readonly records: readonly LoadedConversationActivity[]
+  readonly observedAt: number
 }
 
 export function conversationProjectChoiceKey(
@@ -124,6 +144,63 @@ export function conversationProjectGroups(
       choices: choices.filter((choice) => choice.machineId === machineId),
     })),
   ].filter((group) => group.choices.length > 0)
+}
+
+/** Menu ordering only: never changes canonical choices, eligibility or launch context. */
+export function conversationProjectMenuGroups(
+  groups: readonly ConversationProjectGroup[],
+  activitySources: readonly ConversationActivitySource[],
+): readonly ConversationProjectMenuGroup[] {
+  const latest = new Map<
+    ConversationId,
+    { record: LoadedConversationActivity; observedAt: number }
+  >()
+  for (const source of activitySources) {
+    for (const record of source.records) {
+      const current = latest.get(record.conversationId)
+      if (current === undefined || source.observedAt > current.observedAt)
+        latest.set(record.conversationId, {
+          record,
+          observedAt: source.observedAt,
+        })
+    }
+  }
+  const activityByPair = new Map<string, string>()
+  for (const { record } of latest.values()) {
+    if (record.projectId === undefined || record.lastActivityAt === undefined)
+      continue
+    const key = conversationProjectChoiceKey({
+      projectId: record.projectId,
+      machineId: record.machineId,
+    })
+    const current = activityByPair.get(key)
+    if (current === undefined || record.lastActivityAt > current)
+      activityByPair.set(key, record.lastActivityAt)
+  }
+  const recent = groups
+    .flatMap((group) => group.choices)
+    .filter((choice) => activityByPair.has(choice.key))
+    .sort((left, right) =>
+      activityByPair
+        .get(right.key)!
+        .localeCompare(activityByPair.get(left.key)!),
+    )
+    .slice(0, 5)
+  const recentKeys = new Set(recent.map((choice) => choice.key))
+  const remaining = groups
+    .map<ConversationProjectMenuGroup>((group) => ({
+      key: 'device:' + group.machineId,
+      kind: 'device',
+      label: group.label,
+      choices: group.choices.filter((choice) => !recentKeys.has(choice.key)),
+    }))
+    .filter((group) => group.choices.length > 0)
+  return recent.length === 0
+    ? remaining
+    : [
+        { key: 'recent', kind: 'recent', label: '最近使用', choices: recent },
+        ...remaining,
+      ]
 }
 
 export function resolveConversationProject(

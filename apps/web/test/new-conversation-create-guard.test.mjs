@@ -83,6 +83,7 @@ function renderDialog({
   connectionState = 'connected',
 } = {}) {
   const calls = []
+  const queryClient = new reactQuery.QueryClient()
   let handleSubmit
   const capture = (jsx) => (type, props, key) => {
     if (type === 'form') handleSubmit = props.onSubmit
@@ -121,7 +122,7 @@ function renderDialog({
       '@tanstack/react-query',
       {
         ...reactQuery,
-        useQueryClient: () => ({}),
+        useQueryClient: () => queryClient,
         useQuery: ({ queryKey }) => ({
           isPending: false,
           isError: false,
@@ -154,6 +155,7 @@ function renderDialog({
     dependencies,
   )
   const markup = renderToStaticMarkup(h(NewConversationDialog, { open: true }))
+  queryClient.clear()
   assert.equal(typeof handleSubmit, 'function')
   return { markup, calls, submit: () => handleSubmit({ preventDefault() {} }) }
 }

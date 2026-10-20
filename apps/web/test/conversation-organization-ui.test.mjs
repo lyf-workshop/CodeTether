@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
+import { conversationOrganizationSource } from './fixtures/conversation-organization-source.mjs'
 
 const webDirectory = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -15,11 +16,11 @@ test('Conversation list exposes URL-backed Active and Archived views', async () 
   assert.match(page, /search\.view === 'archived' \? 'archived' : 'active'/u)
   assert.match(
     page,
-    /conversationListQueryOptions\(runtime, projectId, 'active'\)/u,
+    /conversationListQueryOptions\(runtime, projectId, 'active', filters\)/u,
   )
   assert.match(
     page,
-    /conversationListQueryOptions\(runtime, projectId, 'archived'\)/u,
+    /conversationListQueryOptions\(runtime, projectId, 'archived', filters\)/u,
   )
   assert.match(page, /SegmentedControlItem value="active"/u)
   assert.match(page, /SegmentedControlItem value="archived"/u)
@@ -118,5 +119,7 @@ test('removed list rows restore focus across the pinned divider', async () => {
 })
 
 async function sourceOf(relativePath) {
+  if (relativePath.endsWith('/conversation-organization-controls.tsx'))
+    return conversationOrganizationSource()
   return await readFile(resolve(webDirectory, 'src', relativePath), 'utf8')
 }

@@ -87,11 +87,11 @@ test('Conversation page uses durable infinite Search only for nonblank q and kee
   assert.match(page, /useInfiniteQuery\(/u)
   assert.match(
     page,
-    /conversationListQueryOptions\(runtime, projectId, 'active'\)/u,
+    /conversationListQueryOptions\(runtime, projectId, 'active', filters\)/u,
   )
   assert.match(
     page,
-    /conversationListQueryOptions\(runtime, projectId, 'archived'\)/u,
+    /conversationListQueryOptions\(runtime, projectId, 'archived', filters\)/u,
   )
   assert.match(page, /enabled: ready && !searchPage/u)
   assert.match(page, /filterProjectLocationSearchResults\(/u)

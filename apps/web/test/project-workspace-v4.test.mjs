@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
+import { readProjectFlowSource } from './fixtures/project-flow-source.mjs'
 
 import {
   filterProjectLocationConversations,
@@ -68,23 +69,12 @@ test('machine filtering preserves Host ordering and search match data', () => {
     provider: 'codex',
   }
   assert.deepEqual(
-    filterProjectLocationConversations(
-      [three, two, one],
-      firstId,
-      'all',
-      'all',
-    ),
+    filterProjectLocationConversations([three, two, one], firstId),
     [three, one],
   )
-  assert.deepEqual(
-    filterProjectLocationConversations(
-      [three, two, one],
-      firstId,
-      'waiting',
-      'codex',
-    ),
-    [three],
-  )
+  assert.deepEqual(filterProjectLocationConversations([three, two], firstId), [
+    three,
+  ])
   const result = {
     conversation: three,
     matchedField: 'user_input',
@@ -148,7 +138,9 @@ test('project workspace reuses bounded Host history, cursor search and native ad
     source('components/projects/project-conversation-collection.tsx'),
     source('components/projects/remove-project-dialog.tsx'),
     source('router.tsx'),
-    source('components/projects/previous-conversations-step.tsx'),
+    readProjectFlowSource(
+      'components/projects/previous-conversations-step.tsx',
+    ),
   ])
   assert.match(page, /resolveProjectWorkspaceContext/u)
   assert.match(page, /presentation="embedded"/u)

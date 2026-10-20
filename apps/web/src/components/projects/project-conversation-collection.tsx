@@ -26,7 +26,10 @@ import type {
   ProviderId,
 } from '@codetether/protocol'
 
-import { conversationListQueryOptions } from '../../runtime/host/conversation-list-query'
+import {
+  conversationListQueryOptions,
+  type ConversationListFilters,
+} from '../../runtime/host/conversation-list-query'
 import {
   conversationSearchInfiniteQueryOptions,
   flattenConversationSearchPages,
@@ -82,12 +85,13 @@ export function ProjectConversationCollection({
   const provider = search.provider ?? 'all'
   const status = search.status ?? 'all'
   const ready = connectionState === 'connected'
+  const filters: ConversationListFilters = { provider, status }
   const activeQuery = useQuery({
-    ...conversationListQueryOptions(runtime, projectId, 'active'),
+    ...conversationListQueryOptions(runtime, projectId, 'active', filters),
     enabled: ready && !searchPage,
   })
   const archivedQuery = useQuery({
-    ...conversationListQueryOptions(runtime, projectId, 'archived'),
+    ...conversationListQueryOptions(runtime, projectId, 'archived', filters),
     enabled: ready && !searchPage,
   })
   const browseQuery = archiveView === 'archived' ? archivedQuery : activeQuery
@@ -112,8 +116,6 @@ export function ProjectConversationCollection({
   const conversations = filterProjectLocationConversations(
     browseQuery.data ?? [],
     machineId,
-    status,
-    provider,
   )
   const pendingSearch =
     query.trim() !== debouncedQuery || durableSearchQuery.isFetching
@@ -245,7 +247,7 @@ export function ProjectConversationCollection({
         </p>
       ) : null}
       {connectionState !== 'connected' ? (
-        <Notice title="连接尚未恢复">
+        <Notice role="status" title="连接尚未恢复">
           当前只显示已经读取的历史，恢复连接后可以重新加载。
         </Notice>
       ) : null}
@@ -276,7 +278,7 @@ export function ProjectConversationCollection({
           ) : results.length > 0 || durableSearchQuery.hasNextPage ? (
             <>
               {results.length === 0 ? (
-                <Notice title="当前已加载的页面没有匹配项">
+                <Notice role="status" title="当前已加载的页面没有匹配项">
                   可以继续加载，查找这台设备上更早的匹配会话。
                 </Notice>
               ) : null}
@@ -317,6 +319,7 @@ export function ProjectConversationCollection({
           durableSearchQuery.data !== undefined &&
           !durableSearchQuery.isFetchNextPageError ? (
             <Notice
+              role="status"
               tone="warn"
               title="搜索结果未能更新"
               action={
@@ -365,6 +368,7 @@ export function ProjectConversationCollection({
           ) : null}
           {browseQuery.isError && browseQuery.data !== undefined ? (
             <Notice
+              role="status"
               tone="warn"
               title="会话列表未能更新"
               action={

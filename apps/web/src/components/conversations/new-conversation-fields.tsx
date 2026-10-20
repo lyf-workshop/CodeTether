@@ -15,10 +15,12 @@ import type {
   ConversationCreationProviderOption,
   ConversationProjectChoice,
   ConversationProjectGroup,
+  ConversationProjectMenuGroup,
 } from './new-conversation-selection'
 
 interface NewConversationFieldsProps {
   groups: readonly ConversationProjectGroup[]
+  menuGroups?: readonly ConversationProjectMenuGroup[]
   project?: ConversationProjectChoice
   fixed: boolean
   loading: boolean
@@ -36,6 +38,7 @@ interface NewConversationFieldsProps {
 /** Presentation-only fields, also rendered directly in accessibility checks. */
 export function NewConversationFields({
   groups,
+  menuGroups,
   project,
   fixed,
   loading,
@@ -49,6 +52,14 @@ export function NewConversationFields({
   onProviderChange,
   onReasoningChange,
 }: NewConversationFieldsProps) {
+  const displayGroups: readonly ConversationProjectMenuGroup[] =
+    menuGroups ??
+    groups.map((group) => ({
+      key: 'device:' + group.machineId,
+      kind: 'device',
+      label: group.label,
+      choices: group.choices,
+    }))
   const presentation = selectedProvider?.provider
   const supportsReasoning =
     presentation?.capabilities.reasoningControl === true &&
@@ -111,8 +122,8 @@ export function NewConversationFields({
               </SelectValue>
             </SelectTrigger>
             <SelectContent>
-              {groups.map((group) => (
-                <SelectGroup key={group.machineId}>
+              {displayGroups.map((group) => (
+                <SelectGroup key={group.key}>
                   <SelectLabel>{group.label}</SelectLabel>
                   {group.choices.map((choice) => (
                     <SelectItem
@@ -122,7 +133,7 @@ export function NewConversationFields({
                       textValue={
                         choice.project.name +
                         ' · ' +
-                        group.label +
+                        (choice.machine?.displayName ?? '设备不可用') +
                         ' · ' +
                         choice.location.rootPath
                       }
@@ -138,6 +149,10 @@ export function NewConversationFields({
                           className="truncate font-mono text-xs text-text-muted"
                           title={choice.location.rootPath}
                         >
+                          {group.kind === 'recent'
+                            ? (choice.machine?.displayName ?? '设备不可用') +
+                              ' · '
+                            : ''}
                           {choice.location.rootPath}
                         </span>
                       </span>

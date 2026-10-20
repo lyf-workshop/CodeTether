@@ -79,7 +79,7 @@ export function Composer({
     projectBoundary,
   })
   const canEdit = gate === undefined
-  const editorHidden = gate !== undefined && gate.kind !== 'submitting'
+  const editorHidden = gate?.kind === 'archived' || gate?.kind === 'unavailable'
   const canSend = canEdit && value.trim().length > 0
   const feedback =
     controller.error ?? interruptController?.error ?? externalError
@@ -196,8 +196,8 @@ export function Composer({
           gate?.kind === 'waiting' && 'border-warning/45',
         )}
       >
-        {/* Pending submission stays visible and read-only. Other gates replace
-            the visible UI without unmounting it or replaying any draft. */}
+        {/* Submission and active work keep the same focused, read-only editor.
+            Only archived/unavailable gates replace the visible input. */}
         <div
           hidden={editorHidden}
           data-composer-editor

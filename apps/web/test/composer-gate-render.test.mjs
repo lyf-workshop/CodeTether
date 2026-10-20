@@ -48,13 +48,13 @@ test('submitting keeps the mounted editor visible and readonly with Send disable
   assert.doesNotMatch(markup, /演示/u)
 })
 
-test('running gate keeps the draft editor mounted but hidden and readonly', () => {
+test('running gate keeps the draft editor mounted, visible and readonly', () => {
   const markup = render({
     capabilities: { ...capabilities, canCompose: false },
     controller: controller('running'),
   })
   assert.match(markup, /data-composer-state="running"/u)
-  assert.match(markup, /hidden=""[^>]*data-composer-editor/u)
+  assert.doesNotMatch(markup, /hidden=""[^>]*data-composer-editor/u)
   assert.match(markup, /<textarea[^>]*readOnly=""/u)
   assert.match(markup, /Codex 正在工作/u)
   assert.match(markup, /草稿会保留/u)

@@ -175,7 +175,10 @@ test('Conversation ProjectLocation boundary is truthful, accessible, and navigat
   assert.match(composer, /role="status"/u)
   assert.match(composer, /\{gate\.description\}/u)
   assert.match(composer, /hidden=\{editorHidden\}/u)
-  assert.match(composer, /gate !== undefined && gate\.kind !== 'submitting'/u)
+  assert.match(
+    composer,
+    /gate\?\.kind === 'archived' \|\| gate\?\.kind === 'unavailable'/u,
+  )
   assert.match(composer, /readOnly=\{!canEdit\}/u)
   assert.match(composer, /flex-wrap/u)
   assert.match(composer, /break-words/u)

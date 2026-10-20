@@ -19,7 +19,10 @@ test('Archived Detail keeps history visible and replaces input with explicit res
   assert.match(source, /<Composer/u)
   assert.match(source, /archived=\{archived\}/u)
   assert.match(composer, /hidden=\{editorHidden\}/u)
-  assert.match(composer, /gate !== undefined && gate\.kind !== 'submitting'/u)
+  assert.match(
+    composer,
+    /gate\?\.kind === 'archived' \|\| gate\?\.kind === 'unavailable'/u,
+  )
   assert.match(composer, /<Textarea/u)
   assert.match(source, /<ConversationRestoreButton/u)
   assert.match(source, /viewModel\.archivedAt === undefined/u)

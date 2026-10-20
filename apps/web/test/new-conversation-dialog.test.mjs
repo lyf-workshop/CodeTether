@@ -227,6 +227,80 @@ const capabilities = {
   supportsReasoningControl: false,
 }
 
+for (const activeState of ['running', 'waiting']) {
+  test(`real composer keeps focus through submitting → ${activeState} → idle without sending again`, async () => {
+    const dom = await createDom()
+    const { Composer } = loadWebComponent(
+      'components/conversation/composer.tsx',
+    )
+    let complete,
+      calls = 0
+    const controller = {
+      state: 'idle',
+      submit: () => {
+        calls += 1
+        return new Promise((resolve) => {
+          complete = resolve
+        })
+      },
+    }
+    const view = () =>
+      h(Composer, {
+        conversationId: `conv_active_focus_${activeState}`,
+        capabilities,
+        controller,
+      })
+    const submitForm = () =>
+      dom.container
+        .querySelector('form')
+        .dispatchEvent(
+          new dom.window.Event('submit', { bubbles: true, cancelable: true }),
+        )
+    try {
+      await dom.render(view())
+      const editor = dom.container.querySelector('textarea')
+      await dom.perform(() => editor.focus())
+      await dom.input(editor, 'synthetic active draft')
+      await dom.perform(submitForm)
+      for (const state of ['submitting', activeState]) {
+        controller.state = state
+        await dom.render(view())
+        assert.equal(dom.container.querySelector('textarea'), editor)
+        assert.ok(
+          editor.closest('[hidden]') === null,
+          `${state}: editor must stay visible`,
+        )
+        assert.equal(editor.readOnly, true)
+        assert.equal(dom.window.document.activeElement, editor)
+        assert.equal(
+          dom.container.querySelector('button[type="submit"]').disabled,
+          true,
+        )
+        await dom.perform(submitForm)
+        await dom.perform(() =>
+          editor.dispatchEvent(
+            new dom.window.KeyboardEvent('keydown', {
+              key: 'Enter',
+              bubbles: true,
+            }),
+          ),
+        )
+        assert.equal(calls, 1)
+      }
+      await dom.perform(() => complete(true))
+      assert.equal(dom.window.document.activeElement, editor)
+      controller.state = 'idle'
+      await dom.render(view())
+      assert.equal(dom.window.document.activeElement, editor)
+      assert.equal(editor.readOnly, false)
+      assert.equal(editor.value, '')
+      assert.equal(calls, 1)
+    } finally {
+      await dom.close()
+    }
+  })
+}
+
 for (const movedFocus of [false, true]) {
   test(
     'real composer ' +

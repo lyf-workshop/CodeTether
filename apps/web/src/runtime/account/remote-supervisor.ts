@@ -23,6 +23,7 @@ import {
   postAuthenticatedProductDeviceJson,
   utf8,
   type AuthorizedHostDirectoryEntry,
+  type HostSupervisorAuthorization,
   type OwnedHostAccessEntry,
   type ResolvedProductDevice,
   type SignedSupervisorGrant,
@@ -290,7 +291,7 @@ export async function reconcileLocalSupervisorGrants(options: {
   readonly deviceIdentity: ProductDeviceIdentityCapability
   readonly hostIdentity: HostIdentityCapability
   readonly signal?: AbortSignal
-}): Promise<void> {
+}): Promise<readonly HostSupervisorAuthorization[]> {
   const hostPublicJwk = parsePublicJwk(options.localIdentity.publicJwk)
   if (
     options.host.hostId !== options.localIdentity.hostId ||
@@ -317,7 +318,7 @@ export async function reconcileLocalSupervisorGrants(options: {
       controlPlaneOrigin: new URL(options.controlPlaneBaseUrl).origin,
     },
   )
-  if (configured.descriptor === null) return // Explicitly disabled Host stays disabled.
+  if (configured.descriptor === null) return [] // Explicitly disabled Host stays disabled.
   const descriptor = parseSignedTransport(configured.descriptor)
   if (
     descriptor.payload.hostId !== options.host.hostId ||
@@ -401,6 +402,7 @@ export async function reconcileLocalSupervisorGrants(options: {
       descriptor,
     })
   }
+  return authorizations
 }
 
 export async function connectRemoteSupervisor(options: {

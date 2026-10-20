@@ -27,6 +27,7 @@ const key = {
 test('existing ProductDevice discovery matches the server-derived public thumbprint only', async () => {
   const fingerprint = await publicJwkFingerprint(publicKey)
   const previousFetch = globalThis.fetch
+  let observedDevices
   globalThis.fetch = async () =>
     new Response(
       JSON.stringify({
@@ -49,6 +50,9 @@ test('existing ProductDevice discovery matches the server-derived public thumbpr
     const resolved = await resolveExistingProductDevice({
       accessToken: 'test-access-token',
       baseUrl: 'https://control-plane.test',
+      onDevicesObserved: (devices) => {
+        observedDevices = devices
+      },
       identity: {
         available: true,
         listKeys: async () => [key],
@@ -59,6 +63,8 @@ test('existing ProductDevice discovery matches the server-derived public thumbpr
     })
     assert.equal(resolved.device.deviceId, `dev_${'1'.repeat(32)}`)
     assert.equal(resolved.key.keyHandle, key.keyHandle)
+    assert.equal(observedDevices.length, 1)
+    assert.equal(observedDevices[0].deviceId, resolved.device.deviceId)
   } finally {
     globalThis.fetch = previousFetch
   }

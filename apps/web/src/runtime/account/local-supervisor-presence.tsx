@@ -8,7 +8,12 @@ import { controlPlaneBaseUrl } from './account-config.js'
 import {
   listOwnedHosts,
   resolveExistingProductDevice,
+  type AccountProductDevice,
 } from './control-plane-client.js'
+import {
+  authorizedMobileDevices,
+  localAuthorizedMobileDevicesKey,
+} from './authorized-mobile-devices.js'
 import {
   reconcileLocalSupervisorGrants,
   readLocalHostIdentity,
@@ -52,11 +57,15 @@ export function LocalSupervisorPresenceCoordinator() {
       if (session === null || session === undefined) {
         throw new Error('account_session_unavailable')
       }
+      let devices: readonly AccountProductDevice[] = []
       const productDevice = await resolveExistingProductDevice({
         accessToken: session.access_token,
         baseUrl: controlPlaneBaseUrl,
         identity: nativeCapabilities.productDeviceIdentity,
         signal,
+        onDevicesObserved: (observed) => {
+          devices = observed
+        },
       })
       const hosts = await listOwnedHosts({
         accessToken: session.access_token,
@@ -65,7 +74,7 @@ export function LocalSupervisorPresenceCoordinator() {
         productDevice,
         signal,
       })
-      return { hosts, productDevice }
+      return { hosts, productDevice, devices }
     },
     enabled: session !== null && session !== undefined,
     retry: false,
@@ -88,7 +97,10 @@ export function LocalSupervisorPresenceCoordinator() {
       host.identityGeneration === localIdentity.data.identityGeneration,
   )
   useQuery({
-    queryKey: ['account', 'host-supervisor-grants', localHost?.hostId],
+    queryKey: localAuthorizedMobileDevicesKey(
+      session?.user.id,
+      localHost?.hostId,
+    ),
     queryFn: async ({ signal }) => {
       if (
         session === null ||
@@ -99,7 +111,7 @@ export function LocalSupervisorPresenceCoordinator() {
       ) {
         throw new Error('local_host_unavailable')
       }
-      await reconcileLocalSupervisorGrants({
+      const authorizations = await reconcileLocalSupervisorGrants({
         session,
         controlPlaneBaseUrl,
         host: localHost,
@@ -109,7 +121,14 @@ export function LocalSupervisorPresenceCoordinator() {
         hostIdentity: nativeCapabilities.hostIdentity,
         signal,
       })
-      return true
+      return {
+        devices: authorizedMobileDevices(
+          { hostId: localHost.hostId, ownerUserId: session.user.id },
+          authorizations,
+          directory.data.devices,
+        ),
+        observedAt: new Date().toISOString(),
+      }
     },
     enabled:
       localHost !== undefined &&

@@ -4,6 +4,7 @@ import { LogOut, UserRound } from 'lucide-react'
 
 import { Button, Notice, SectionState, SettingsRow } from '@codetether/ui'
 import { useAccountSession } from '../../runtime/account/use-account-session'
+import { AuthorizedMobileDevices } from './authorized-mobile-devices'
 
 export function AccountSettings() {
   const { supabase, query } = useAccountSession()
@@ -87,6 +88,9 @@ export function AccountSettings() {
             登录状态没有更改，请稍后重试。
           </Notice>
         </div>
+      ) : null}
+      {query.data ? (
+        <AuthorizedMobileDevices userId={query.data.userId} />
       ) : null}
       <p className="mt-4 text-sm text-text-muted">
         用同一账号登录的其他 Mac 或 Windows

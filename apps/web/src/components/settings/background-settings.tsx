@@ -1,4 +1,4 @@
-import { Notice, SettingsRow, StatusTag } from '@codetether/ui'
+import { Notice, SettingsRow } from '@codetether/ui'
 import { Link } from '@tanstack/react-router'
 import { nativeCapabilities } from '../../runtime/native/native-capabilities'
 
@@ -15,7 +15,9 @@ export function BackgroundSettings({
           <SettingsRow
             title="关闭窗口后继续运行"
             description="关闭窗口后，CodeTether 仍在后台运行，正在进行的工作、审批和通知不会中断。"
-            control={<StatusTag tone="off">始终开启</StatusTag>}
+            control={
+              <span className="text-sm text-text-secondary">始终开启</span>
+            }
           />
           <SettingsRow
             title="打开或退出"

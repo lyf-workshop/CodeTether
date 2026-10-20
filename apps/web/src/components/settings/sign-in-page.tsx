@@ -14,6 +14,11 @@ import {
   useAccountSession,
 } from '../../runtime/account/use-account-session'
 import { AccountConfigurationNotice } from './account-settings'
+import {
+  SIGN_IN_RESEND_COOLDOWN_MS,
+  SIGN_IN_RESEND_TICK_MS,
+  signInResendSeconds,
+} from './sign-in-cooldown'
 
 export function SignInPage() {
   const { supabase, query } = useAccountSession()
@@ -23,6 +28,8 @@ export function SignInPage() {
   const [otp, setOtp] = useState('')
   const [stage, setStage] = useState<'email' | 'otp'>('email')
   const [error, setError] = useState<string>()
+  const [resendSeconds, setResendSeconds] = useState(0)
+  const resendAvailableAtRef = useRef(0)
   const busyRef = useRef(false)
   const otpRef = useRef<HTMLInputElement>(null)
   const emailRef = useRef<HTMLInputElement>(null)
@@ -48,14 +55,30 @@ export function SignInPage() {
     if (stage === 'otp') otpRef.current?.focus()
   }, [stage])
 
+  useEffect(() => {
+    if (resendSeconds === 0) return
+    const timer = window.setTimeout(() => {
+      setResendSeconds(signInResendSeconds(resendAvailableAtRef.current))
+    }, SIGN_IN_RESEND_TICK_MS)
+    return () => window.clearTimeout(timer)
+  }, [resendSeconds])
+
   async function run(action: 'request' | 'verify') {
     if (busyRef.current || supabase === undefined) return
+    if (
+      action === 'request' &&
+      signInResendSeconds(resendAvailableAtRef.current) > 0
+    )
+      return
     busyRef.current = true
     setError(undefined)
     try {
       await mutation.mutateAsync(action)
-      if (action === 'request') setStage('otp')
-      else
+      if (action === 'request') {
+        resendAvailableAtRef.current = Date.now() + SIGN_IN_RESEND_COOLDOWN_MS
+        setResendSeconds(signInResendSeconds(resendAvailableAtRef.current))
+        setStage('otp')
+      } else
         await queryClient.invalidateQueries({
           queryKey: accountSessionQueryKey,
           exact: true,
@@ -183,14 +206,22 @@ export function SignInPage() {
                 {error}
               </p>
             ) : null}
-            <Button type="submit" disabled={busy} className="w-full">
+            <Button
+              type="submit"
+              disabled={busy || (stage === 'email' && resendSeconds > 0)}
+              className="w-full"
+            >
               {busy ? (
                 <LoaderCircle
                   aria-hidden="true"
                   className="animate-spin motion-reduce:animate-none"
                 />
               ) : null}
-              {stage === 'email' ? '发送登录码' : '验证并登录'}
+              {stage === 'email'
+                ? resendSeconds > 0
+                  ? `发送登录码（${resendSeconds} 秒）`
+                  : '发送登录码'
+                : '验证并登录'}
             </Button>
             {stage === 'otp' ? (
               <div className="flex flex-wrap justify-between gap-2">
@@ -212,12 +243,14 @@ export function SignInPage() {
                   type="button"
                   variant="ghost"
                   size="sm"
-                  disabled={busy}
+                  disabled={busy || resendSeconds > 0}
                   onClick={() => {
                     void run('request')
                   }}
                 >
-                  重新发送登录码
+                  {resendSeconds > 0
+                    ? `重新发送登录码（${resendSeconds} 秒）`
+                    : '重新发送登录码'}
                 </Button>
               </div>
             ) : null}

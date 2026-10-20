@@ -156,6 +156,7 @@ export function CommandPalette({
           只匹配已加载的会话、项目、设备标题和可用操作，不搜索会话内容。
         </DialogDescription>
         <CommandList
+          expanded={open}
           groups={groups.map((group) => ({
             id: group.id,
             label: group.label,

@@ -28,7 +28,7 @@ export function AttentionRow({
     <article
       data-slot="attention-row"
       className={cn(
-        'grid min-w-0 grid-cols-[var(--avatar-size-md)_minmax(0,1fr)_auto] items-start gap-x-3 gap-y-2 bg-surface px-4 py-3',
+        'grid min-w-0 grid-cols-[var(--avatar-size-md)_minmax(0,1fr)_auto] items-start gap-x-3 gap-y-2 bg-surface px-4 py-3 max-[600px]:grid-cols-[var(--avatar-size-md)_minmax(0,1fr)]',
         className,
       )}
       {...props}
@@ -36,7 +36,10 @@ export function AttentionRow({
       <div data-slot="attention-mark" className="row-span-2 pt-0.5">
         {mark}
       </div>
-      <div data-slot="attention-body" className="row-span-2 min-w-0">
+      <div
+        data-slot="attention-body"
+        className="row-span-2 min-w-0 max-[600px]:row-span-1"
+      >
         <h2 className="truncate text-base font-medium text-text-primary">
           {title}
         </h2>
@@ -49,13 +52,13 @@ export function AttentionRow({
       </div>
       <div
         data-slot="attention-time"
-        className="pt-0.5 text-right text-xs text-text-muted"
+        className="pt-0.5 text-right text-xs text-text-muted max-[600px]:col-start-2 max-[600px]:row-start-2 max-[600px]:text-left"
       >
         {time}
       </div>
       <div
         data-slot="attention-actions"
-        className="col-start-3 row-start-2 flex min-w-0 flex-wrap items-center justify-end gap-2"
+        className="col-start-3 row-start-2 flex min-w-0 flex-wrap items-center justify-end gap-2 max-[600px]:col-start-2 max-[600px]:row-start-3 max-[600px]:justify-start"
       >
         {actions}
       </div>

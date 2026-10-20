@@ -241,6 +241,7 @@ function ProjectDetailPage({
       {!state.available ? (
         <div className="mb-6">
           <Notice
+            role="status"
             tone="warn"
             title={state.label}
             action={

@@ -36,7 +36,7 @@ export function Notice({
     <div
       data-slot="notice"
       data-tone={tone}
-      role={role ?? (tone === 'err' ? 'alert' : 'status')}
+      role={role ?? (tone === 'err' ? 'alert' : undefined)}
       className={cn(
         'flex min-w-0 flex-wrap items-start gap-3 rounded-lg px-3.5 py-3 text-md',
         toneClassName,

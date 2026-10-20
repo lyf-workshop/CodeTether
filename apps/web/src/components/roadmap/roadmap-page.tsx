@@ -66,7 +66,7 @@ const roadmapItems = [
 /** Design directions only: no runtime import, request, or execution entry. */
 export function RoadmapPage() {
   return (
-    <main className="mx-auto w-full min-w-0 max-w-(--page-w) space-y-6 px-4 py-6 sm:px-8">
+    <section className="mx-auto w-full min-w-0 max-w-(--page-w) space-y-6 px-4 py-6 sm:px-8">
       <header>
         <h1 className="text-page font-semibold">后续规划</h1>
         <p className="mt-2 text-base text-text-secondary">
@@ -99,6 +99,6 @@ export function RoadmapPage() {
           </section>
         ))}
       </div>
-    </main>
+    </section>
   )
 }

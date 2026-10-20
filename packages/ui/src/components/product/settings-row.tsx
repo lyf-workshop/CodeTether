@@ -8,12 +8,14 @@ export interface SettingsRowProps extends Omit<
 > {
   title: ReactNode
   description?: ReactNode
+  descriptionId?: string
   control?: ReactNode
 }
 
 export function SettingsRow({
   title,
   description,
+  descriptionId,
   control,
   children,
   className,
@@ -30,7 +32,9 @@ export function SettingsRow({
       <div className="min-w-0 flex-1 basis-48">
         <div className="text-base font-medium text-text-primary">{title}</div>
         {description ? (
-          <div className="mt-1 text-sm text-text-secondary">{description}</div>
+          <div id={descriptionId} className="mt-1 text-sm text-text-secondary">
+            {description}
+          </div>
         ) : null}
       </div>
       {control ? (

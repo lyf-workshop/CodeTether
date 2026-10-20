@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { createDom, h } from './fixtures/dom.mjs'
+import { loadWebComponent } from './fixtures/render-ui.mjs'
 
 import {
   normalizeAccountEmail,
@@ -156,21 +159,65 @@ test('account action failures are localized and never reveal provider credential
 })
 
 test('settings uses one theme owner, existing desktop preference persistence, real session and Doctor actions', async () => {
-  const [appearance, account, notification, about, session, signin] =
-    await Promise.all([
-      source('components/settings/appearance-settings.tsx'),
-      source('components/settings/account-settings.tsx'),
-      source('components/settings/desktop-notification-settings.tsx'),
-      source('components/settings/about-settings.tsx'),
-      source('runtime/account/use-account-session.ts'),
-      source('components/settings/sign-in-page.tsx'),
-    ])
+  const [appearance, account, about, session, signin] = await Promise.all([
+    source('components/settings/appearance-settings.tsx'),
+    source('components/settings/account-settings.tsx'),
+    source('components/settings/about-settings.tsx'),
+    source('runtime/account/use-account-session.ts'),
+    source('components/settings/sign-in-page.tsx'),
+  ])
   assert.match(appearance, /useSyncExternalStore/u)
   assert.match(appearance, /getThemeController\(\)\.setPreference/u)
   assert.doesNotMatch(appearance, /localStorage|dataset\.theme/u)
-  assert.match(notification, /persistDesktopNotificationPreferences/u)
-  assert.match(notification, /通知中不包含会话标题/u)
-  assert.match(notification, /浏览器中请查看“待处理”/u)
+  const dom = await createDom()
+  const { DesktopNotificationSettings } = loadWebComponent(
+    'components/settings/desktop-notification-settings.tsx',
+  )
+  const saved = new Map()
+  let saveFails = false
+  const storage = {
+    getItem: (key) => saved.get(key) ?? null,
+    setItem(key, value) {
+      if (saveFails) throw new Error('fixture storage unavailable')
+      saved.set(key, value)
+    },
+  }
+  try {
+    await dom.render(
+      h(DesktopNotificationSettings, { notificationAvailable: true, storage }),
+    )
+    const switches = [...dom.container.querySelectorAll('[role="switch"]')]
+    assert.equal(switches.length, 3)
+    for (const control of switches) {
+      assert.equal(control.getAttribute('aria-checked'), 'true')
+      assert.ok(
+        document.getElementById(control.getAttribute('aria-describedby'))
+          ?.textContent,
+      )
+    }
+    await dom.perform(() => switches[0].click())
+    assert.equal(switches[0].getAttribute('aria-checked'), 'false')
+    assert.equal(JSON.parse([...saved.values()][0]).enabled.approval, false)
+    saveFails = true
+    await dom.perform(() => switches[0].click())
+    assert.equal(
+      switches[0].getAttribute('aria-checked'),
+      'false',
+      'failed persistence must retain the previous preference',
+    )
+    assert.match(
+      dom.container.querySelector('[role="alert"]').textContent,
+      /当前设置未更改/u,
+    )
+    await dom.render(
+      h(DesktopNotificationSettings, { notificationAvailable: false }),
+    )
+    assert.equal(dom.container.querySelector('[role="switch"]'), null)
+    assert.match(dom.container.textContent, /通知中不包含会话标题/u)
+    assert.match(dom.container.textContent, /浏览器中请查看“待处理”/u)
+  } finally {
+    await dom.close()
+  }
   assert.match(account, /supabase\.auth\.signOut\(\)/u)
   assert.match(session, /auth\.getSession\(\)/u)
   assert.match(session, /onAuthStateChange/u)
@@ -195,11 +242,25 @@ test('settings uses one theme owner, existing desktop preference persistence, re
 })
 
 test('background settings links unavailable autostart only to the roadmap without a fake toggle', async () => {
-  const background = await source('components/settings/background-settings.tsx')
-  assert.match(background, /to="\/roadmap"/u)
-  assert.match(background, /查看后续规划/u)
-  assert.doesNotMatch(background, /<Switch|role="switch"|onCheckedChange/u)
-  assert.match(background, /backgroundRuntime\.available/u)
+  const { BackgroundSettings } = loadWebComponent(
+    'components/settings/background-settings.tsx',
+    new Map([
+      [
+        '@tanstack/react-router',
+        { Link: ({ to, children }) => h('a', { href: to }, children) },
+      ],
+    ]),
+  )
+  const desktop = renderToStaticMarkup(
+    h(BackgroundSettings, { available: true }),
+  )
+  assert.match(desktop, /href="\/roadmap"/u)
+  assert.match(desktop, /查看后续规划/u)
+  assert.doesNotMatch(desktop, /role="switch"|data-tone="off"/u)
+  assert.match(desktop, /始终开启/u)
+  const browser = renderToStaticMarkup(h(BackgroundSettings))
+  assert.match(browser, /浏览器没有桌面后台运行能力/u)
+  assert.doesNotMatch(browser, /始终开启|role="switch"/u)
 })
 
 test('notification metadata uses only cold device/project context and never hydrates conversation titles', async () => {

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useId, useMemo, useState } from 'react'
 import type { AttentionType } from '@codetether/protocol'
 
 import { Notice, SettingsRow, Switch } from '@codetether/ui'
@@ -31,8 +31,6 @@ const notificationOptions = [
 
 export interface DesktopNotificationSettingsProps {
   readonly notificationAvailable?: boolean
-  /** Kept for existing callers; background behavior has its own settings section. */
-  readonly backgroundRuntimeAvailable?: boolean
   readonly storage?: NotificationPreferenceStorage
 }
 
@@ -40,6 +38,7 @@ export function DesktopNotificationSettings({
   notificationAvailable = nativeCapabilities.notifications.available,
   storage,
 }: DesktopNotificationSettingsProps) {
+  const descriptionId = useId()
   const preferenceStorage = useMemo(
     () =>
       notificationAvailable
@@ -76,9 +75,11 @@ export function DesktopNotificationSettings({
               key={option.type}
               title={option.label}
               description={option.description}
+              descriptionId={`${descriptionId}-${option.type}-description`}
               control={
                 <Switch
                   aria-label={option.label}
+                  aria-describedby={`${descriptionId}-${option.type}-description`}
                   checked={preferences[option.type]}
                   onCheckedChange={(enabled) =>
                     setPreference(option.type, enabled)

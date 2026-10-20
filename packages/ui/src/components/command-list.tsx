@@ -1,4 +1,11 @@
-import { useEffect, useId, useRef, type ReactNode, type Ref } from 'react'
+import {
+  Fragment,
+  useEffect,
+  useId,
+  useRef,
+  type ReactNode,
+  type Ref,
+} from 'react'
 import { Search } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { commandListHighlight } from '../lib/command-list-navigation'
@@ -19,6 +26,7 @@ interface CommandListProps {
   readonly groups: readonly CommandListGroup[]
   readonly query: string
   readonly highlightedId?: string
+  readonly expanded?: boolean
   readonly inputRef?: Ref<HTMLInputElement>
   readonly onQueryChange: (query: string) => void
   readonly onHighlightChange: (id: string | undefined) => void
@@ -30,6 +38,7 @@ export function CommandList({
   groups,
   query,
   highlightedId,
+  expanded = true,
   inputRef,
   onQueryChange,
   onHighlightChange,
@@ -37,9 +46,14 @@ export function CommandList({
 }: CommandListProps) {
   const baseId = useId()
   const listRef = useRef<HTMLDivElement>(null)
-  const ids = groups.flatMap((group) => group.items.map((item) => item.id))
-  const activeId =
-    highlightedId !== undefined && ids.includes(highlightedId)
+  const visibleGroups = groups.filter((group) => group.items.length > 0)
+  const ids = visibleGroups.flatMap((group) =>
+    group.items.map((item) => item.id),
+  )
+  const popupOpen = expanded && ids.length > 0
+  const activeId = !popupOpen
+    ? undefined
+    : highlightedId !== undefined && ids.includes(highlightedId)
       ? highlightedId
       : ids[0]
   const optionId = (id: string) => baseId + '-option-' + ids.indexOf(id)
@@ -61,7 +75,7 @@ export function CommandList({
           role="combobox"
           aria-label="搜索会话、项目、设备或操作"
           aria-autocomplete="list"
-          aria-expanded="true"
+          aria-expanded={popupOpen}
           aria-controls={baseId + '-results'}
           aria-activedescendant={
             activeId === undefined ? undefined : optionId(activeId)
@@ -71,6 +85,7 @@ export function CommandList({
           onChange={(event) => onQueryChange(event.currentTarget.value)}
           onKeyDown={(event) => {
             if (
+              !popupOpen ||
               event.nativeEvent.isComposing ||
               event.altKey ||
               event.ctrlKey ||
@@ -102,76 +117,91 @@ export function CommandList({
       </div>
       <div
         ref={listRef}
-        role="listbox"
-        id={baseId + '-results'}
-        aria-label="搜索结果"
+        hidden={!popupOpen}
         className="max-h-[var(--layout-command-list-max-height)] overflow-y-auto p-2"
       >
-        {groups.map((group) => (
-          <div
-            key={group.id}
-            role="group"
-            aria-labelledby={baseId + '-group-' + group.id}
-          >
+        {/* Headings stay outside the listbox; its owned groups contain only
+            options. Input focus and aria-activedescendant share that owner. */}
+        <div
+          role="listbox"
+          id={baseId + '-results'}
+          aria-label="搜索结果"
+          tabIndex={-1}
+          aria-owns={
+            popupOpen
+              ? visibleGroups
+                  .map((_, index) => baseId + '-group-' + index)
+                  .join(' ')
+              : undefined
+          }
+        />
+        {visibleGroups.map((group, index) => (
+          <Fragment key={group.id}>
             <h3
-              id={baseId + '-group-' + group.id}
+              id={baseId + '-heading-' + index}
               className="px-2.5 pt-2 pb-1 text-xs font-semibold text-text-muted"
             >
               {group.label}
             </h3>
-            {group.items.map((item) => (
-              <button
-                type="button"
-                role="option"
-                id={optionId(item.id)}
-                aria-selected={activeId === item.id}
-                tabIndex={-1}
-                key={item.id}
-                onMouseDown={(event) => event.preventDefault()}
-                onPointerMove={() => onHighlightChange(item.id)}
-                onClick={() => onSelect(item.id)}
-                className={cn(
-                  'flex h-10 w-full min-w-0 items-center gap-2.5 rounded-md px-2.5 text-left text-sm text-text-primary outline-none hover:bg-surface-muted',
-                  activeId === item.id && 'bg-surface-muted',
-                )}
-              >
-                {item.icon === undefined ? null : (
-                  <span
-                    aria-hidden="true"
-                    className="shrink-0 text-text-muted [&>svg]:size-4"
-                  >
-                    {item.icon}
+            <div
+              id={baseId + '-group-' + index}
+              role="group"
+              aria-labelledby={baseId + '-heading-' + index}
+            >
+              {group.items.map((item) => (
+                <button
+                  type="button"
+                  role="option"
+                  id={optionId(item.id)}
+                  aria-selected={activeId === item.id}
+                  tabIndex={-1}
+                  key={item.id}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onPointerMove={() => onHighlightChange(item.id)}
+                  onClick={() => onSelect(item.id)}
+                  className={cn(
+                    'flex h-10 w-full min-w-0 items-center gap-2.5 rounded-md px-2.5 text-left text-sm text-text-primary outline-none hover:bg-surface-muted',
+                    activeId === item.id && 'bg-surface-muted',
+                  )}
+                >
+                  {item.icon === undefined ? null : (
+                    <span
+                      aria-hidden="true"
+                      className="shrink-0 text-text-muted [&>svg]:size-4"
+                    >
+                      {item.icon}
+                    </span>
+                  )}
+                  <span className="min-w-0 flex-1 truncate" title={item.label}>
+                    {item.label}
                   </span>
-                )}
-                <span className="min-w-0 flex-1 truncate" title={item.label}>
-                  {item.label}
-                </span>
-                {item.description === undefined ? null : (
-                  <span
-                    className="max-w-1/2 truncate text-xs text-text-muted"
-                    title={item.description}
-                  >
-                    {item.description}
-                  </span>
-                )}
-                {item.shortcut === undefined ? null : (
-                  <kbd className="shrink-0 text-xs text-text-muted">
-                    {item.shortcut}
-                  </kbd>
-                )}
-              </button>
-            ))}
-          </div>
+                  {item.description === undefined ? null : (
+                    <span
+                      className="max-w-1/2 truncate text-xs text-text-muted"
+                      title={item.description}
+                    >
+                      {item.description}
+                    </span>
+                  )}
+                  {item.shortcut === undefined ? null : (
+                    <kbd className="shrink-0 text-xs text-text-muted">
+                      {item.shortcut}
+                    </kbd>
+                  )}
+                </button>
+              ))}
+            </div>
+          </Fragment>
         ))}
-        {ids.length === 0 ? (
-          <p
-            role="status"
-            className="px-4 py-8 text-center text-sm text-text-muted"
-          >
-            没有找到匹配的已加载标题或操作。
-          </p>
-        ) : null}
       </div>
+      {expanded && ids.length === 0 ? (
+        <p
+          role="status"
+          className="px-4 py-8 text-center text-sm text-text-muted"
+        >
+          没有找到匹配的已加载标题或操作。
+        </p>
+      ) : null}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-border px-4 py-2.5 text-xs text-text-muted">
         <span>↑ ↓ 选择</span>
         <span>Enter 打开</span>

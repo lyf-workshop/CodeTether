@@ -23,6 +23,7 @@ import { ProjectLocationRemovalAction } from '../projects/project-location-remov
 import {
   deviceProjectState,
   machineCanAddProject,
+  machineCannotAddProjectReason,
   projectConversationMetrics,
 } from './device-project-model'
 
@@ -110,7 +111,7 @@ export function MachineProjectsSection({
         <Notice title="这台设备上还没有项目">
           {canAdd
             ? '选择这台设备上的一个文件夹，添加项目后就能查看以前的会话。'
-            : '设备恢复在线并可以运行 AI 工具后，即可添加项目。'}
+            : machineCannotAddProjectReason()}
         </Notice>
       ) : null}
     </section>

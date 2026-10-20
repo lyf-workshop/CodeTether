@@ -7,7 +7,10 @@ import {
   formatMachineLastSeen,
   machineConnectionStateLabel,
 } from '../machines/machine-presentation'
-import { machineCanAddProject } from '../machines/device-project-model'
+import {
+  machineCanAddProject,
+  machineCannotAddProjectReason,
+} from '../machines/device-project-model'
 import type { WorkspaceSidebarProps } from './workspace-sidebar'
 import type { WorkspaceDeviceGroup } from './workspace-sidebar-model'
 
@@ -93,6 +96,13 @@ export function WorkspaceDeviceSection({
             title={lastSeen === undefined ? status : `上次在线 ${lastSeen}`}
           >
             {status}
+          </span>
+        ) : !machineCanAddProject(machine) ? (
+          <span
+            className="min-w-0 max-w-1/2 truncate text-2xs font-normal text-text-muted"
+            title={machineCannotAddProjectReason()}
+          >
+            {machineCannotAddProjectReason()}
           </span>
         ) : null}
       </div>

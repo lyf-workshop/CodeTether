@@ -21,6 +21,10 @@ export function machineCanAddProject(machine: DeviceState): boolean {
   )
 }
 
+export function machineCannotAddProjectReason(): string {
+  return '设备恢复在线并可以运行 AI 工具后，即可添加项目。'
+}
+
 export function deviceProjectState(
   machine: DeviceState,
   location: ProjectRecord['locations'][number] | undefined,

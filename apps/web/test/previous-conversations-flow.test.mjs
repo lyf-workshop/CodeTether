@@ -90,17 +90,17 @@ test('local Add Project preserves completion behavior after optional discovery',
 })
 
 test('remote ProjectLocation discovery starts only after validated registration', async () => {
-  const source = await readSource(
-    'components/projects/add-project-location-dialog.tsx',
-  )
+  const source = await readSource('components/projects/add-project-dialog.tsx')
 
-  assert.match(source, /onSuccess: async \(response\) =>/u)
-  assert.match(source, /machineId: response\.data\.location\.machineId/u)
-  assert.match(source, /project: response\.data\.project/u)
-  assert.match(source, /setRegisteredLocation\(context\)/u)
-  assert.match(source, /registeredLocation === undefined \? \(/u)
+  assert.match(source, /onSuccess: async \(response, values\) =>/u)
+  assert.match(source, /const project = response\.data\.project/u)
+  assert.match(source, /projectId: project\.projectId/u)
+  assert.match(source, /machineId: values\.machineId/u)
+  assert.match(source, /setCreatedProject\(\{/u)
+  assert.match(source, /createdProject === undefined \? \(/u)
   assert.match(source, /<PreviousConversationsStep/u)
-  assert.match(source, /onFinished=\{\(\) => setDialogOpen\(false\)\}/u)
+  assert.match(source, /machineId=\{context\.machineId\}/u)
+  assert.match(source, /nextProjectCreationStep\(/u)
 })
 
 test('the Web runtime keeps adoption identity private and invalidates durable indexes', async () => {

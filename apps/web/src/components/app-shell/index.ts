@@ -4,7 +4,6 @@ export {
   WorkspaceSidebar,
   type WorkspaceSidebarProps,
 } from './workspace-sidebar'
-export { RoutePlaceholder } from './route-placeholder'
 export { RootLayout } from './root-layout'
 export {
   TopBar,

@@ -1,35 +1,20 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-
 import { QueryClient } from '@tanstack/react-query'
-import { CodeTetherResponseError } from '@codetether/client'
-
 import {
-  conversationStatusCounts,
-  groupProjectConversations,
   providerDisplayName,
-  uniqueProviders,
-  visibleProjectConversations,
+  formatConversationActivity,
 } from '../.tmp/test-dist/components/conversations/conversation-list-model.js'
+import { filterProjectLocationConversations } from '../.tmp/test-dist/components/projects/project-workspace-model.js'
 import {
   conversationListQueryKeys,
   conversationListQueryOptions,
 } from '../.tmp/test-dist/runtime/host/conversation-list-query.js'
-import {
-  conversationListErrorMessage,
-  conversationListPageViewState,
-} from '../.tmp/test-dist/runtime/host/conversation-list-view-state.js'
+import { renderProjectCollection } from './fixtures/render-project-collection.mjs'
 
 const projectId = 'proj_conversations_ui'
+const machineId = 'machine_collection01'
 const timestamp = '2026-08-27T12:00:00.000Z'
-const project = {
-  projectId,
-  name: 'Alpha',
-  rootPath: 'C:\\workspaces\\alpha',
-  availability: 'available',
-  createdAt: timestamp,
-  updatedAt: timestamp,
-}
 const waiting = conversation('conv_waiting_ui', '等待授权', 'waiting', 3)
 const running = conversation('conv_running_ui', '实现连接恢复', 'running', 2)
 const completed = conversation(
@@ -42,11 +27,9 @@ const completed = conversation(
 test('Conversation query requests the bounded 100-row Host index and preserves Host order', async () => {
   const client = new FakeConversationListClient([waiting, running, completed])
   const queryClient = createQueryClient()
-
   const result = await queryClient.fetchQuery(
     conversationListQueryOptions(client, projectId),
   )
-
   assert.deepEqual(
     result.map((entry) => entry.conversationId),
     [waiting.conversationId, running.conversationId, completed.conversationId],
@@ -72,11 +55,9 @@ test('Conversation query cache is isolated by Project identity and archive view'
 test('Archived Conversation query requests only the Host archived index', async () => {
   const client = new FakeConversationListClient([completed])
   const queryClient = createQueryClient()
-
   await queryClient.fetchQuery(
     conversationListQueryOptions(client, projectId, 'archived'),
   )
-
   assert.equal(client.calls.length, 1)
   assert.equal(client.calls[0].options.archived, true)
   assert.deepEqual(conversationListQueryKeys.project(projectId, 'archived'), [
@@ -87,184 +68,134 @@ test('Archived Conversation query requests only the Host archived index', async 
   ])
 })
 
-test('local search matches only real title/provider fields and keeps Host ordering by default', () => {
-  const source = [waiting, running, completed]
-  const defaults = controls()
-
+test('the live project location filter preserves exact Machine identity and Host order', () => {
+  const other = { ...completed, machineId: 'machine_other01' }
+  const source = Object.freeze([waiting, other, running, completed])
   assert.deepEqual(
-    visibleProjectConversations(source, defaults).map(
-      (entry) => entry.conversationId,
-    ),
-    source.map((entry) => entry.conversationId),
+    filterProjectLocationConversations(source, machineId, 'all', 'all'),
+    [waiting, running, completed],
   )
-  assert.deepEqual(
-    visibleProjectConversations(source, {
-      ...defaults,
-      query: 'codex',
-    }).map((entry) => entry.conversationId),
-    source.map((entry) => entry.conversationId),
-  )
-  assert.deepEqual(
-    visibleProjectConversations(source, {
-      ...defaults,
-      query: 'websocket',
-    }).map((entry) => entry.conversationId),
-    [completed.conversationId],
-  )
-  assert.deepEqual(
-    visibleProjectConversations(source, {
-      ...defaults,
-      query: 'local-machine-that-is-not-a-wire-field',
-    }),
-    [],
-  )
+  assert.deepEqual(source, [waiting, other, running, completed])
 })
 
-test('status/provider filters preserve Host organization order and do not mutate the source', () => {
-  const source = [waiting, running, completed]
-  const original = [...source]
-
-  assert.deepEqual(
-    visibleProjectConversations(source, {
-      ...controls(),
-      status: 'waiting',
-    }),
-    [waiting],
-  )
-  assert.deepEqual(
-    visibleProjectConversations(source, {
-      ...controls(),
-      provider: 'codex',
-    }),
-    source,
-  )
-  assert.deepEqual(source, original)
-})
-
-test('real provider groups and summary counts contain no speculative agents or metrics', () => {
-  const source = [waiting, running, completed]
-
-  assert.deepEqual(uniqueProviders(source), ['codex'])
-  assert.deepEqual(groupProjectConversations(source), [
-    { provider: 'codex', conversations: source },
-  ])
-  assert.deepEqual(conversationStatusCounts(source), {
-    total: 3,
-    idle: 0,
-    running: 1,
-    waiting: 1,
-    completed: 1,
-    failed: 0,
-  })
-})
-
-test('mixed Provider groups and filters preserve durable identity and Host order', () => {
+test('live location filters retain status and Provider facts without mutating Host records', () => {
   const claude = conversation(
     'conv_claude_ui',
-    '完成 Claude 基础链路',
+    'Claude 会话',
     'completed',
     4,
     'claude-code',
   )
-  const source = [waiting, claude, running]
-
-  assert.deepEqual(uniqueProviders(source), ['codex', 'claude-code'])
+  const source = Object.freeze([waiting, claude, running, completed])
   assert.deepEqual(
-    groupProjectConversations(source).map((group) => [
-      group.provider,
-      group.conversations.map((item) => item.conversationId),
-    ]),
-    [
-      ['codex', [waiting.conversationId, running.conversationId]],
-      ['claude-code', [claude.conversationId]],
-    ],
-  )
-  assert.deepEqual(
-    visibleProjectConversations(source, {
-      ...controls(),
-      provider: 'claude-code',
-    }),
+    filterProjectLocationConversations(
+      source,
+      machineId,
+      'completed',
+      'claude-code',
+    ),
     [claude],
   )
-  assert.equal(providerDisplayName('claude-code'), 'Claude Code')
+  assert.deepEqual(
+    filterProjectLocationConversations(source, machineId, 'running', 'all'),
+    [running],
+  )
+  assert.deepEqual(source, [waiting, claude, running, completed])
 })
 
-test('50 Conversation fixture keeps the complete Host organization order while filtering', () => {
+test('live Provider labels and activity formatting use real product metadata', () => {
+  assert.equal(providerDisplayName('codex'), 'Codex')
+  assert.equal(providerDisplayName('claude-code'), 'Claude Code')
+  assert.match(formatConversationActivity(timestamp), /08|8/u)
+})
+
+test('live collection renders both Providers in Host order without invented summary totals', () => {
+  const claude = conversation(
+    'conv_claude_ui',
+    'Claude 历史',
+    'completed',
+    4,
+    'claude-code',
+  )
+  const { html } = renderProjectCollection({
+    conversations: [waiting, claude, running],
+  })
+  assert.ok(html.indexOf('等待授权') < html.indexOf('Claude 历史'))
+  assert.ok(html.indexOf('Claude 历史') < html.indexOf('实现连接恢复'))
+  assert.match(html, /Claude Code/u)
+  assert.doesNotMatch(html, /共 3|总计|尚未实现/u)
+})
+
+test('50 Conversation fixture keeps the complete Host organization order in the live collection', () => {
   const source = Array.from({ length: 50 }, (_, index) =>
     conversation(
       `conv_stress_${String(index).padStart(2, '0')}`,
-      index % 5 === 0 ? `置顶会话 ${index}` : `会话 ${index}`,
-      index % 7 === 0 ? 'waiting' : 'completed',
+      `会话 ${index}`,
+      'completed',
       50 - index,
     ),
   )
+  const { html } = renderProjectCollection({ conversations: source })
+  assert.equal((html.match(/data-conversation-row=/gu) ?? []).length, 50)
+  let previous = -1
+  for (const entry of source) {
+    const current = html.indexOf(
+      `data-conversation-row="${entry.conversationId}"`,
+    )
+    assert.ok(current > previous, entry.conversationId)
+    previous = current
+  }
+})
 
-  assert.deepEqual(
-    visibleProjectConversations(source, controls()).map(
-      (entry) => entry.conversationId,
+test('live collection distinguishes loading, empty, ready and exact-query failure', () => {
+  assert.match(renderProjectCollection({ pending: true }).html, /正在读取会话/u)
+  assert.match(renderProjectCollection().html, /还没有会话/u)
+  assert.match(
+    renderProjectCollection({ search: { view: 'archived' } }).html,
+    /没有已归档的会话/u,
+  )
+  assert.match(
+    renderProjectCollection({ conversations: [completed] }).html,
+    /整理 WebSocket 测试/u,
+  )
+  const failure = renderProjectCollection({
+    pending: true,
+    error: new Error('private SQLite C:\\secret\\workspace'),
+  }).html
+  assert.match(failure, /暂时无法读取会话/u)
+  assert.doesNotMatch(failure, /private|SQLite|secret/u)
+})
+
+test('live collection retains stale records with safe failure copy and explains the bounded index', () => {
+  const source = Array.from({ length: 100 }, (_, index) =>
+    conversation(
+      `conv_bounded_${String(index).padStart(3, '0')}`,
+      `历史 ${index}`,
+      'completed',
+      100 - index,
     ),
-    source.map((entry) => entry.conversationId),
   )
-  assert.equal(
-    visibleProjectConversations(source, {
-      ...controls(),
-      query: '置顶会话',
-    }).length,
-    10,
-  )
-})
-
-test('view state distinguishes loading, empty, ready, unavailable Project, and not found', () => {
-  assert.deepEqual(conversationListPageViewState(pending(), pending()), {
-    kind: 'loading',
+  const { html } = renderProjectCollection({
+    conversations: source,
+    error: new Error('private Host diagnostic'),
   })
-  assert.deepEqual(
-    conversationListPageViewState(success(project), success([])),
-    { kind: 'empty', project },
-  )
-  assert.deepEqual(
-    conversationListPageViewState(success(project), success([waiting])),
-    { kind: 'ready', project, conversations: [waiting] },
-  )
-
-  const unavailable = { ...project, availability: 'unavailable' }
-  assert.deepEqual(
-    conversationListPageViewState(success(unavailable), success([waiting])),
-    { kind: 'ready', project: unavailable, conversations: [waiting] },
-  )
-
-  const notFound = responseError(404, 'not_found', 'private diagnostics')
-  assert.deepEqual(conversationListPageViewState(failed(notFound), pending()), {
-    kind: 'not-found',
-  })
-})
-
-test('Conversation list errors expose stable copy without Host diagnostics', () => {
-  const error = responseError(
-    500,
-    'provider_error',
-    'C:\\secret\\workspace and SQLite diagnostics',
-  )
-  const state = conversationListPageViewState(success(project), failed(error))
-
-  assert.equal(state.kind, 'error')
-  assert.equal(state.message, conversationListErrorMessage())
-  assert.doesNotMatch(state.message, /secret|SQLite|workspace/u)
+  assert.match(html, /历史 0/u)
+  assert.match(html, /会话列表未能更新/u)
+  assert.match(html, /最多最近 100/u)
+  assert.match(html, /项目内搜索查找更早的记录/u)
+  assert.doesNotMatch(html, /private Host diagnostic/u)
 })
 
 class FakeConversationListClient {
   calls = []
-
   constructor(conversations) {
     this.conversations = conversations
   }
-
   async listProjectConversations(requestedProjectId, options) {
     this.calls.push({ projectId: requestedProjectId, options })
     return { protocolVersion: 1, conversations: this.conversations }
   }
 }
-
 function conversation(
   conversationId,
   title,
@@ -278,6 +209,7 @@ function conversation(
   return {
     conversationId,
     projectId,
+    machineId,
     title,
     provider,
     model: 'gpt-5.6-sol',
@@ -288,34 +220,6 @@ function conversation(
     lastActivityAt,
   }
 }
-
-function controls() {
-  return { provider: 'all', query: '', status: 'all' }
-}
-
-function pending() {
-  return { status: 'pending' }
-}
-
-function success(data) {
-  return { status: 'success', data }
-}
-
-function failed(error) {
-  return { status: 'error', error }
-}
-
-function responseError(status, code, message) {
-  return new CodeTetherResponseError(status, {
-    protocolVersion: 1,
-    actionId: 'act_conversation_list_error',
-    code,
-    message,
-  })
-}
-
 function createQueryClient() {
-  return new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  })
+  return new QueryClient({ defaultOptions: { queries: { retry: false } } })
 }

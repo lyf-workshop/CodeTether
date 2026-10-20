@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { loadWebComponent } from './fixtures/render-ui.mjs'
 
 import {
   createConversationInspectorState,
@@ -7,7 +10,6 @@ import {
   selectConversationInspectorTab,
   setConversationInspectorOpen,
 } from '../.tmp/test-dist/components/conversation/conversation-inspector-state.js'
-import { createProjectOptionPresentation } from '../.tmp/test-dist/components/conversations/new-conversation-presentation.js'
 
 test('view changes opens the Inspector and selects its Changes tab', () => {
   const initial = createConversationInspectorState('overview', false)
@@ -29,17 +31,35 @@ test('view changes opens the Inspector and selects its Changes tab', () => {
 })
 
 test('global Project choices disambiguate identical names with canonical paths', () => {
-  const first = createProjectOptionPresentation({
-    name: 'api',
-    locations: [{ rootPath: 'C:\\workspaces\\alpha\\api' }],
-  })
-  const second = createProjectOptionPresentation({
-    name: 'api',
-    locations: [{ rootPath: 'D:\\workspaces\\beta\\api' }],
-  })
-
-  assert.equal(first.name, second.name)
-  assert.notEqual(first.textValue, second.textValue)
-  assert.equal(first.textValue, 'api — C:\\workspaces\\alpha\\api')
-  assert.equal(second.textValue, 'api — D:\\workspaces\\beta\\api')
+  const { NewConversationFields } = loadWebComponent(
+    'components/conversations/new-conversation-fields.tsx',
+  )
+  const render = (rootPath) =>
+    renderToStaticMarkup(
+      createElement(NewConversationFields, {
+        project: {
+          key: rootPath,
+          project: { name: 'api' },
+          location: { rootPath },
+          machine: { kind: 'local', displayName: '这台电脑' },
+        },
+        groups: [],
+        fixed: true,
+        loading: false,
+        busy: false,
+        providerOptions: [],
+        defaultReasoning: '__provider_default__',
+        formId: 'canonical-path',
+        onProjectChange() {},
+        onProviderChange() {},
+        onReasoningChange() {},
+      }),
+    )
+  const first = render('C:\\workspaces\\alpha\\api')
+  const second = render('D:\\workspaces\\beta\\api')
+  assert.match(first, /title="api"/u)
+  assert.match(second, /title="api"/u)
+  assert.ok(first.includes('C:\\workspaces\\alpha\\api'))
+  assert.ok(second.includes('D:\\workspaces\\beta\\api'))
+  assert.notEqual(first, second)
 })

@@ -2,6 +2,9 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import test from 'node:test'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { loadWebComponent } from './fixtures/render-ui.mjs'
 
 const sourceRoot = resolve(import.meta.dirname, '../src')
 
@@ -25,54 +28,68 @@ test('Project Detail requires an explicit device for legacy multi-location Proje
   )
 })
 
-test('Add Location is a bounded, keyboard-accessible remote path registration flow', async () => {
-  const dialog = await source(
-    'components/projects/add-project-location-dialog.tsx',
+test('Add Project uses keyboard-accessible exact remote path entry without local directory browsing', () => {
+  const { AddProjectFields } = loadWebComponent(
+    'components/projects/add-project-fields.tsx',
   )
-
-  assert.match(dialog, /runtime\.registerProjectLocation/u)
-  assert.match(dialog, /runtime\.createRemoteProject/u)
-  assert.match(dialog, /createNewProject/u)
-  assert.match(dialog, /machine\.capabilities\.projectAccess/u)
-  assert.match(dialog, /machine\.connectionState === 'online'/u)
-  assert.match(dialog, /registeredMachineIds\.has/u)
-  assert.match(dialog, /candidates\.find/u)
-  assert.match(dialog, /machine\.connectionState === 'online'/u)
-  assert.match(dialog, /aria-label="选择远程电脑"/u)
-  assert.match(dialog, /ref=\{pathInputRef\}/u)
-  assert.match(dialog, /onOpenAutoFocus/u)
-  assert.match(dialog, /if \(!machineReady\) return/u)
-  assert.match(dialog, /aria-invalid/u)
-  assert.match(dialog, /aria-describedby/u)
-  assert.match(dialog, /aria-busy=\{busy\}/u)
-  assert.match(dialog, /role="alert"/u)
-  assert.match(
-    dialog,
-    /showCloseButton=\{!busy && registeredLocation === undefined\}/u,
-  )
-  assert.match(dialog, /if \(!nextOpen && busy\) return/u)
-  assert.match(dialog, /max-w-lg overflow-x-hidden/u)
-  assert.match(dialog, /不浏览文件或执行命令/u)
-  assert.doesNotMatch(
-    dialog,
-    /directoryPicker|nativeCapabilities|shell|invoke/u,
-  )
+  const render = (busy = false) =>
+    renderToStaticMarkup(
+      createElement(AddProjectFields, {
+        machines: [],
+        machine: {
+          machineId: 'machine_remote01',
+          kind: 'remote',
+          displayName: '配对设备',
+        },
+        fixedMachine: true,
+        ready: true,
+        busy,
+        canPickDirectory: false,
+        picking: false,
+        path: '/srv/项目',
+        name: '项目',
+        hasError: false,
+        pathInputRef: { current: null },
+        pickerButtonRef: { current: null },
+        onMachineChange() {},
+        onPathChange() {},
+        onNameChange() {},
+        onPickDirectory() {
+          throw new Error('remote paths must not invoke a local picker')
+        },
+      }),
+    )
+  const html = render()
+  assert.match(html, /aria-label="已固定的设备"/u)
+  assert.match(html, /配对设备/u)
+  assert.match(html, /for="add-project-path"/u)
+  assert.match(html, /value="\/srv\/项目"/u)
+  assert.match(html, /aria-describedby="add-project-path-description"/u)
+  assert.match(html, /配对设备暂不支持浏览文件夹/u)
+  assert.doesNotMatch(html, /id="add-project-directory-picker"/u)
+  assert.match(render(true), /id="add-project-path"[^>]*disabled=""/u)
 })
 
 test('Remote Location removal is explicit, metadata-only, and keyboard accessible', async () => {
   const [locations, dialog, actions] = await Promise.all([
-    source('components/projects/project-locations-section.tsx'),
+    source('components/projects/project-location-removal-action.tsx'),
     source('components/projects/remove-project-location-dialog.tsx'),
     source('runtime/host/project-actions.ts'),
   ])
 
-  assert.match(locations, /machine\?\.kind === 'remote'/u)
-  assert.match(locations, /DropdownMenuTrigger/u)
-  assert.match(locations, /更多工作区位置操作/u)
-  assert.match(locations, /移除位置/u)
-  assert.match(locations, /onCloseAutoFocus/u)
-  assert.match(locations, /tabIndex=\{-1\}/u)
-  assert.doesNotMatch(locations, /disabled=\{!machineReachable\}/u)
+  assert.match(
+    locations,
+    /machine\.kind !== 'remote' \|\| location === undefined/u,
+  )
+  assert.match(
+    locations,
+    /projectLocationForMachine\(project, machine\.machineId\)/u,
+  )
+  assert.match(locations, /从这台设备移除/u)
+  assert.match(locations, /allProjectConversationsQueryOptions/u)
+  assert.match(locations, /conversation\.machineId === machine\.machineId/u)
+  assert.match(locations, /conversation\.archivedAt !== undefined/u)
+  assert.match(locations, /triggerRef\.current \?\? returnFocus\?\.\(\)/u)
 
   assert.match(dialog, /runtime\.removeProjectLocation/u)
   assert.match(dialog, /从这台设备移除项目/u)

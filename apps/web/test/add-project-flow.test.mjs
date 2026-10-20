@@ -95,11 +95,15 @@ test('long Windows paths remain in bounded editable controls with full-path affo
   assert.match(fields, /title=\{path \|\| undefined\}/u)
 })
 
-test('Projects empty state adapts its single real Add Project flow', async () => {
-  const source = await readSource('components/projects/projects-page.tsx')
-  assert.equal((source.match(/<AddProjectDialog/gu) ?? []).length, 2)
-  assert.match(source, /projectAddActionLabel\(/u)
-  assert.match(source, /nativeCapabilities\.directoryPicker\.available/u)
+test('device project empty state adapts its single real Add Project flow', async () => {
+  const source = await readSource(
+    'components/machines/machine-projects-section.tsx',
+  )
+  assert.equal((source.match(/<AddProjectDialog/gu) ?? []).length, 1)
+  assert.match(source, /fixedMachineId=\{machine\.machineId\}/u)
+  assert.match(source, /ownProjects\.length === 0/u)
+  assert.match(source, /machineCanAddProject\(machine\)/u)
+  assert.match(source, /这台设备上还没有项目/u)
 })
 
 test('TopBar no-project flow swaps sibling dialogs and returns to New Conversation', async () => {

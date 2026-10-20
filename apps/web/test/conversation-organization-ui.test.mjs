@@ -104,16 +104,17 @@ test('Archive safety and organization empty states are truthful', async () => {
 })
 
 test('removed list rows restore focus across the pinned divider', async () => {
-  const [group, states] = await Promise.all([
+  const [group, collection] = await Promise.all([
     sourceOf('components/conversations/conversation-group.tsx'),
-    sourceOf('components/conversations/conversation-page-states.tsx'),
+    sourceOf('components/projects/project-conversation-collection.tsx'),
   ])
 
   assert.match(group, /findAdjacentConversationAction/u)
   assert.match(group, /while \(candidate !== null\)/u)
   assert.match(group, /candidate = candidate\[direction\]/u)
-  assert.match(states, /100 个会话/u)
-  assert.doesNotMatch(states, /最近 100/u)
+  assert.match(collection, /browseQuery\.data\.length >= 100/u)
+  assert.match(collection, /最多最近 100/u)
+  assert.match(collection, /可以使用项目内搜索查找更早的记录/u)
 })
 
 async function sourceOf(relativePath) {

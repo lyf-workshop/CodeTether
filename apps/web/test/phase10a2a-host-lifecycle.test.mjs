@@ -7,10 +7,6 @@ const remotePath = new URL(
   '../src/runtime/account/remote-supervisor.ts',
   import.meta.url,
 )
-const directoryPath = new URL(
-  '../src/components/hosts/host-directory-page.tsx',
-  import.meta.url,
-)
 
 test('Controller-only startup never creates a local Host identity', async () => {
   const source = await readFile(mainPath, 'utf8')
@@ -42,10 +38,7 @@ test('Uninitialized Host identity uses null so TanStack Query can represent succ
 })
 
 test('Host key creation is an explicit action and does not claim or publish', async () => {
-  const [remote, directory] = await Promise.all([
-    readFile(remotePath, 'utf8'),
-    readFile(directoryPath, 'utf8'),
-  ])
+  const remote = await readFile(remotePath, 'utf8')
   const normalizedRemote = remote.replace(/\r\n/gu, '\n')
   const start = normalizedRemote.indexOf(
     'export async function enableLocalHostIdentity',
@@ -59,22 +52,17 @@ test('Host key creation is an explicit action and does not claim or publish', as
   assert.doesNotMatch(enableAction, /supervisor-host-presence/u)
   assert.doesNotMatch(enableAction, /publishLocalSupervisorPresence/u)
   assert.doesNotMatch(enableAction, /claim|authorization/u)
-  assert.match(directory, /Enable this Mac as a Host/u)
-  assert.match(directory, /enrollLocalHost\(/u)
-  assert.match(directory, /Complete Host setup/u)
 })
 
 test('Remote Controller path remains ProductDevice-scoped when local Host is disabled', async () => {
-  const [main, remote, directory] = await Promise.all([
+  const [main, remote] = await Promise.all([
     readFile(mainPath, 'utf8'),
     readFile(remotePath, 'utf8'),
-    readFile(directoryPath, 'utf8'),
   ])
   assert.doesNotMatch(main, /nativeCapabilities\.hostIdentity/u)
   assert.match(remote, /deviceIdentity: ProductDeviceIdentityCapability/u)
-  assert.match(directory, /!exactLocalHost \|\| forceRemote/u)
   assert.doesNotMatch(
-    directory,
+    remote,
     /deviceIdentity:\s*nativeCapabilities\.hostIdentity/u,
   )
 })

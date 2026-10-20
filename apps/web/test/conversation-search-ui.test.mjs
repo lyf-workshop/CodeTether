@@ -176,10 +176,9 @@ test('Search organization focus waits for refreshed membership and falls back de
     ['conv_only'],
   )
 
-  const [page, results, railSearch] = await Promise.all([
+  const [page, results] = await Promise.all([
     sourceOf('components/projects/project-conversation-collection.tsx'),
     sourceOf('components/conversations/conversation-search-results.tsx'),
-    sourceOf('components/conversation/conversation-rail-search.tsx'),
   ])
 
   assert.match(page, /onRefreshMembership=\{\(\) =>/u)
@@ -187,24 +186,17 @@ test('Search organization focus waits for refreshed membership and falls back de
   assert.match(results, /onRefreshMembership\(\)\.finally/u)
   assert.match(results, /data-conversation-search-organization-trigger/u)
   assert.match(results, /data-conversation-search-input/u)
-  assert.match(railSearch, /refetch\(\{ cancelRefetch: false \}\)\.finally/u)
-  assert.match(railSearch, /data-conversation-rail-organization-trigger/u)
-  assert.match(railSearch, /data-conversation-rail-search-input/u)
 })
 
 test('Search retains stale results with an explicit exact-query refresh error', async () => {
-  const [page, railSearch] = await Promise.all([
-    sourceOf('components/projects/project-conversation-collection.tsx'),
-    sourceOf('components/conversation/conversation-rail-search.tsx'),
-  ])
+  const page = await sourceOf(
+    'components/projects/project-conversation-collection.tsx',
+  )
 
   assert.match(page, /durableSearchQuery\.isRefetchError/u)
   assert.match(page, /!durableSearchQuery\.isFetchNextPageError/u)
   assert.match(page, /当前显示上次已经读取的结果/u)
   assert.match(page, /<Notice[\s\S]*?title="搜索结果未能更新"/u)
-  assert.match(railSearch, /search\.isRefetchError/u)
-  assert.match(railSearch, /!search\.isFetchNextPageError/u)
-  assert.match(railSearch, /当前仍显示上一次读取的内容/u)
 })
 
 test('Search empty, filtered-page and responsive states preserve discovery without false totals', async () => {

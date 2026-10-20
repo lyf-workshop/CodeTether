@@ -6,14 +6,6 @@ const remoteRuntimePath = new URL(
   '../src/runtime/account/remote-supervisor.ts',
   import.meta.url,
 )
-const remotePagePath = new URL(
-  '../src/components/hosts/remote-host-page.tsx',
-  import.meta.url,
-)
-const hostDirectoryPath = new URL(
-  '../src/components/hosts/host-directory-page.tsx',
-  import.meta.url,
-)
 
 test('remote directory uses the authenticated Supervisor session and bounded cursors', async () => {
   const runtime = await readFile(remoteRuntimePath, 'utf8')
@@ -30,28 +22,10 @@ test('remote directory uses the authenticated Supervisor session and bounded cur
   assert.match(runtime, /const reconnects = new Map/u)
 })
 
-test('remote Host UI keeps reads bounded and exposes only the fixed control actions', async () => {
-  const [page, directory] = await Promise.all([
-    readFile(remotePagePath, 'utf8'),
-    readFile(hostDirectoryPath, 'utf8'),
-  ])
-  assert.match(page, /title="Projects"/u)
-  assert.match(page, /title="Conversations"/u)
-  assert.match(page, /Load more Projects/u)
-  assert.match(page, /Load more Conversations/u)
-  assert.match(page, /Remote read-only Conversation/u)
-  assert.match(page, /Load earlier/u)
-  assert.match(page, /Observing the active Turn/u)
-  assert.match(page, /await reconnectRemoteSupervisor/u)
-  assert.match(page, /cursor = refreshed\.liveCursor/u)
-  assert.match(page, /VITE_CODETETHER_VALIDATE_REMOTE_CONVERSATION_ID/u)
-  assert.match(page, /async \(\) => await history\.fetchNextPage\(\)/u)
-  assert.match(page, /previousTop \+ element\.scrollHeight - previousHeight/u)
-  assert.match(page, /startRemoteConversationTurn/u)
-  assert.match(page, /createRemoteConversation/u)
-  assert.match(page, /Remote control not authorized/u)
-  assert.match(page, /conversation_busy|No message was replayed/u)
-  assert.match(page, /VITE_CODETETHER_VALIDATE_REMOTE_DIRECTORY_HOST_ID/u)
-  assert.match(directory, /VITE_CODETETHER_VALIDATE_REMOTE_DIRECTORY_HOST_ID/u)
-  assert.match(directory, /validationHostId !== host\.hostId/u)
+test('remote Supervisor mutations retain explicit fixed create and start control actions', async () => {
+  const runtime = await readFile(remoteRuntimePath, 'utf8')
+  assert.match(runtime, /export async function startRemoteConversationTurn\(/u)
+  assert.match(runtime, /export async function createRemoteConversation\(/u)
+  assert.match(runtime, /control: 'read' \| 'control'/u)
+  assert.doesNotMatch(runtime, /VITE_CODETETHER_VALIDATE_REMOTE/u)
 })

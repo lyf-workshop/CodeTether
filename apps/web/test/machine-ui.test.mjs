@@ -258,7 +258,7 @@ test('Project and Conversation surfaces resolve Machine display without a switch
     controls,
   ] = await Promise.all([
     source('components/projects/project-detail-page.tsx'),
-    source('components/projects/project-locations-section.tsx'),
+    source('components/projects/project-location-removal-action.tsx'),
     source('components/conversation/conversation-detail-route.tsx'),
     source('components/conversation/live-conversation-adapter.ts'),
     source('components/conversation/conversation-header.tsx'),
@@ -271,7 +271,10 @@ test('Project and Conversation surfaces resolve Machine display without a switch
   assert.doesNotMatch(projectDetail, /soleProjectLocation\(project\)/u)
   assert.match(projectDetail, /currentMachineId=\{location\.machineId\}/u)
   assert.match(projectDetail, /to="\/devices\/\$machineId"/u)
-  assert.match(projectLocations, /project\.locations\.map/u)
+  assert.match(
+    projectLocations,
+    /projectLocationForMachine\(project, machine\.machineId\)/u,
+  )
   assert.match(
     conversationRoute,
     /machineDetailQueryOptions\(runtime, machineId\)/u,

@@ -80,27 +80,27 @@
     padding-bottom: calc(var(--s6) + env(safe-area-inset-bottom, 0px));
   }
 
+  /* Keep individual resets separate: the production CSS optimizer otherwise
+     folds them into transform and leaves layered translate/scale active. */
+  @supports (translate: none) {
+    .ct-add-project-dialog,
+    .ct-new-conversation-dialog {
+      translate: none;
+    }
+  }
+
+  @supports (scale: none) {
+    .ct-add-project-dialog,
+    .ct-new-conversation-dialog {
+      scale: none;
+    }
+  }
+
   .ct-add-project-dialog [data-slot='dialog-footer'],
   .ct-new-conversation-dialog [data-slot='dialog-footer'] {
     position: sticky;
     bottom: 0;
     background: var(--ct-surface);
     padding-top: var(--s3);
-  }
-
-  [data-slot='attention-body'] {
-    grid-column: 2 / -1;
-  }
-
-  [data-slot='attention-time'] {
-    grid-column: 2;
-    grid-row: 3;
-    align-self: center;
-    text-align: left;
-  }
-
-  [data-slot='attention-actions'] {
-    grid-column: 3;
-    grid-row: 3;
   }
 }

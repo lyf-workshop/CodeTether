@@ -186,10 +186,10 @@ test('AttentionRow gives narrow-screen actions their own row below the full-widt
   const actions = /data-slot="attention-actions"[^>]*class="([^"]+)"/u.exec(
     html,
   )?.[1]
-  assert.ok(actions?.includes('max-[600px]:col-start-2'))
-  assert.ok(actions?.includes('max-[600px]:row-start-3'))
-  assert.ok(actions?.includes('max-[600px]:justify-start'))
-  assert.match(html, /max-\[600px\]:grid-cols-/u)
+  assert.ok(actions?.includes('phone:col-start-2'))
+  assert.ok(actions?.includes('phone:row-start-3'))
+  assert.ok(actions?.includes('phone:justify-start'))
+  assert.match(html, /phone:grid-cols-/u)
 })
 
 function commands(overrides = {}) {

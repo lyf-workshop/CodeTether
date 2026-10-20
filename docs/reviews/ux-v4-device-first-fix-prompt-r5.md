@@ -43,7 +43,8 @@
 
 按 `D:/Projects/Software/agenthub/docs/reviews/ux-v4-device-first-icon-prompt.md` 的第 1、2 节做。
 
-- 图标已经重新设计成风筝，源文件在 `D:/Projects/Software/agenthub/docs/ux-redesign/icon/final/`。之前的方向 A 已放弃。
+- 图标已经重新设计成双卡片，源文件在 `D:/Projects/Software/agenthub/docs/ux-redesign/icon/final/`。之前的方向 A 和风筝都已放弃。
+- 如果这一部分已经按风筝做过并提交了，再加一个提交，用新的源文件重新生成图标，覆盖风筝版。
 - 那份文件第 3 节的打包和安装检查不单独做，放到本文件第四、第五部分。
 - 那份文件的报告内容写进本次报告的“图标”一节，不另写 `v4-icon-report.md`。
 

@@ -1,24 +1,34 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
   <!-- CodeTether app icon, full-bleed master for Windows and PNG sizes 48 px and up.
-       A kite on a string: the AI tool works far away, the string stays in your hand. -->
+       Two stacked device cards: the front one runs the AI tool (prompt and cursor),
+       the frosted one behind is your other device. Apple-style light-from-top gradient. -->
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0.8" y2="1">
-      <stop offset="0" stop-color="#165566"/>
-      <stop offset="1" stop-color="#0a2731"/>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#66a8ff"/>
+      <stop offset="1" stop-color="#4b55e8"/>
     </linearGradient>
-    <radialGradient id="glow" cx="600" cy="380" r="360" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#2a7d8c" stop-opacity="0.55"/>
-      <stop offset="1" stop-color="#2a7d8c" stop-opacity="0"/>
-    </radialGradient>
+    <linearGradient id="card" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#eef1f8"/>
+    </linearGradient>
+    <linearGradient id="ink" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4f8cff"/>
+      <stop offset="1" stop-color="#5a46e6"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.18"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="20" stdDeviation="28" flood-color="#1c2470" flood-opacity="0.35"/>
+    </filter>
   </defs>
   <rect width="1024" height="1024" rx="228" fill="url(#bg)"/>
-  <rect width="1024" height="1024" rx="228" fill="url(#glow)"/>
-  <path d="M544 603 C500 720 380 690 330 770 S262 846 240 852" fill="none" stroke="#f4efe6" stroke-width="36" stroke-linecap="round"/>
-  <circle cx="240" cy="852" r="50" fill="#f4efe6"/>
-  <g transform="rotate(14 600 380)">
-    <path d="M600 150 L430 320 L600 320 Z" fill="#ffd38f"/>
-    <path d="M600 150 L770 320 L600 320 Z" fill="#ffb347"/>
-    <path d="M430 320 L600 610 L600 320 Z" fill="#ff9457"/>
-    <path d="M770 320 L600 610 L600 320 Z" fill="#f2643f"/>
+  <rect width="1024" height="1024" rx="228" fill="url(#sheen)"/>
+  <rect x="304" y="236" width="480" height="380" rx="72" fill="#ffffff" fill-opacity="0.32"/>
+  <g filter="url(#shadow)">
+    <rect x="224" y="356" width="500" height="404" rx="80" fill="url(#card)"/>
   </g>
+  <polyline points="334,478 434,558 334,638" fill="none" stroke="url(#ink)" stroke-width="56" stroke-linecap="round" stroke-linejoin="round"/>
+  <line x1="484" y1="638" x2="604" y2="638" stroke="url(#ink)" stroke-width="56" stroke-linecap="round"/>
 </svg>

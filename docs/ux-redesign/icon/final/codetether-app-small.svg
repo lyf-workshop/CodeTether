@@ -1,8 +1,14 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <!-- Hinted variant for 16, 24 and 32 px: upright kite, two tones, straight heavier string -->
-  <rect width="32" height="32" rx="7" fill="#0f3d4a"/>
-  <path d="M20 3 L13 10 L20 21 Z" fill="#ffc061"/>
-  <path d="M20 3 L27 10 L20 21 Z" fill="#f2643f"/>
-  <line x1="20" y1="21" x2="8.5" y2="26.5" stroke="#f4efe6" stroke-width="2.6" stroke-linecap="round"/>
-  <circle cx="7.5" cy="26.5" r="3.2" fill="#f4efe6"/>
+  <!-- Hinted variant for 16, 24 and 32 px: larger front card, no shadow, heavier prompt -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5f9fff"/>
+      <stop offset="1" stop-color="#4b55e8"/>
+    </linearGradient>
+  </defs>
+  <rect width="32" height="32" rx="7" fill="url(#bg)"/>
+  <rect x="9" y="4" width="19" height="15" rx="3.5" fill="#ffffff" fill-opacity="0.4"/>
+  <rect x="4" y="9" width="21" height="19" rx="4" fill="#ffffff"/>
+  <polyline points="9,14 13,18 9,22" fill="none" stroke="#4f63f0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <line x1="15.5" y1="22" x2="20" y2="22" stroke="#4f63f0" stroke-width="3" stroke-linecap="round"/>
 </svg>

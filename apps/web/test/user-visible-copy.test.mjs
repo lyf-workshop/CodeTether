@@ -5,8 +5,12 @@ import { relative } from 'node:path'
 import test from 'node:test'
 import ts from 'typescript'
 
-const sourceRoot = new URL('../src/', import.meta.url)
-const forbiddenCopy = /智能体|推理后端|此电脑|\bProvider\b/u
+const sourceRoots = [
+  new URL('../src/', import.meta.url),
+  new URL('../../../packages/ui/src/', import.meta.url),
+]
+const forbiddenCopy =
+  /智能体|推理后端|此电脑|\bProvider\b|这台电脑操作|Node显示|在Node|检查Node|Node版本/u
 
 /** Ignore implementation identifiers/imports and internal typed-error diagnostics. */
 function isVisibleLiteral(node) {
@@ -42,26 +46,28 @@ async function sourceFiles(directory) {
   return result
 }
 
-test('visible Web copy uses AI tools, this computer and folders instead of legacy technical terms', async () => {
+test('visible Web and UI copy avoids legacy technical terms and mechanical replacement remnants', async () => {
   const violations = []
-  for (const url of await sourceFiles(sourceRoot)) {
-    const source = ts.createSourceFile(
-      fileURLToPath(url),
-      await readFile(url, 'utf8'),
-      ts.ScriptTarget.Latest,
-      true,
-    )
-    function visit(node) {
-      if (isVisibleLiteral(node) && forbiddenCopy.test(node.text)) {
-        const line =
-          source.getLineAndCharacterOfPosition(node.getStart()).line + 1
-        violations.push(
-          `${relative(fileURLToPath(sourceRoot), fileURLToPath(url))}:${line}: ${node.text.trim()}`,
-        )
+  for (const sourceRoot of sourceRoots) {
+    for (const url of await sourceFiles(sourceRoot)) {
+      const source = ts.createSourceFile(
+        fileURLToPath(url),
+        await readFile(url, 'utf8'),
+        ts.ScriptTarget.Latest,
+        true,
+      )
+      function visit(node) {
+        if (isVisibleLiteral(node) && forbiddenCopy.test(node.text)) {
+          const line =
+            source.getLineAndCharacterOfPosition(node.getStart()).line + 1
+          violations.push(
+            `${relative(fileURLToPath(sourceRoot), fileURLToPath(url))}:${line}: ${node.text.trim()}`,
+          )
+        }
+        ts.forEachChild(node, visit)
       }
-      ts.forEachChild(node, visit)
+      visit(source)
     }
-    visit(source)
   }
   assert.deepEqual(violations, [])
 })

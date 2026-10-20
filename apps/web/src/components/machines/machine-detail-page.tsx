@@ -229,6 +229,8 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
             projects={projects}
             appearance="list"
             showAddCard={false}
+            showLocationRemoval
+            onLocationRemoved={() => void machineQuery.refetch()}
           />
           <MachineConversationsSection
             machine={machine}
@@ -284,6 +286,7 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
         projects={projects}
         open={unpairOpen}
         onOpenChange={setUnpairOpen}
+        onLocationRemoved={() => void machineQuery.refetch()}
       />
     </MachinePageFrame>
   )

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 
@@ -19,6 +19,7 @@ import {
 import { projectLocationForMachine } from '../../runtime/host/project-location'
 import { formatConversationActivity } from '../conversations/conversation-list-model'
 import { AddProjectDialog } from '../projects/add-project-dialog'
+import { ProjectLocationRemovalAction } from '../projects/project-location-removal-action'
 import {
   deviceProjectState,
   machineCanAddProject,
@@ -31,6 +32,8 @@ interface MachineProjectsSectionProps {
   heading?: boolean
   appearance?: 'cards' | 'list'
   showAddCard?: boolean
+  showLocationRemoval?: boolean
+  onLocationRemoved?: () => void
 }
 
 export function MachineProjectsSection({
@@ -39,7 +42,10 @@ export function MachineProjectsSection({
   heading = true,
   appearance = 'cards',
   showAddCard = true,
+  showLocationRemoval = false,
+  onLocationRemoved,
 }: MachineProjectsSectionProps) {
+  const sectionRef = useRef<HTMLElement>(null)
   const connectionState = useHostConnectionState()
   const canAdd =
     connectionState === 'connected' && machineCanAddProject(machine)
@@ -48,7 +54,12 @@ export function MachineProjectsSection({
       projectLocationForMachine(project, machine.machineId) !== undefined,
   )
   return (
-    <section className="min-w-0" aria-label={`${machine.displayName}上的项目`}>
+    <section
+      ref={sectionRef}
+      tabIndex={-1}
+      className="min-w-0 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      aria-label={`${machine.displayName}上的项目`}
+    >
       {heading ? (
         <h2 className="mb-3 text-lg font-semibold">
           项目{' '}
@@ -65,12 +76,24 @@ export function MachineProjectsSection({
         }
       >
         {ownProjects.map((project) => (
-          <MachineProjectCard
+          <div
             key={`${machine.machineId}:${project.projectId}`}
-            machine={machine}
-            project={project}
-            appearance={appearance}
-          />
+            className="min-w-0 space-y-2"
+          >
+            <MachineProjectCard
+              machine={machine}
+              project={project}
+              appearance={appearance}
+            />
+            {showLocationRemoval && machine.kind === 'remote' ? (
+              <ProjectLocationRemovalAction
+                machine={machine}
+                project={project}
+                onRemoved={onLocationRemoved}
+                returnFocus={() => sectionRef.current}
+              />
+            ) : null}
+          </div>
         ))}
         {canAdd && showAddCard ? (
           <AddProjectDialog

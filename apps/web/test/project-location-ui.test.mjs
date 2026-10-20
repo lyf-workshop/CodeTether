@@ -75,7 +75,7 @@ test('Remote Location removal is explicit, metadata-only, and keyboard accessibl
   assert.doesNotMatch(locations, /disabled=\{!machineReachable\}/u)
 
   assert.match(dialog, /runtime\.removeProjectLocation/u)
-  assert.match(dialog, /移除工作区位置/u)
+  assert.match(dialog, /从这台设备移除项目/u)
   assert.match(dialog, /远程目录/u)
   assert.match(dialog, /其中的文件不会被删除/u)
   assert.match(dialog, /不会删除项目/u)

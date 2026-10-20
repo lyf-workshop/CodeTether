@@ -14,11 +14,15 @@ export function loadUiComponent(relativePath) {
   return load(resolve(sourceRoot, relativePath))
 }
 
-export function loadWebComponent(relativePath) {
-  return load(resolve(webSourceRoot, relativePath))
+export function loadWebComponent(relativePath, dependencies = new Map()) {
+  return load(
+    resolve(webSourceRoot, relativePath),
+    dependencies,
+    dependencies.size > 0 ? new Map() : cache,
+  )
 }
 
-function load(path) {
+function load(path, dependencies = new Map(), moduleCache = cache) {
   if (path.endsWith('.js')) path = path.slice(0, -3)
   const filename = [
     path,
@@ -27,11 +31,12 @@ function load(path) {
     resolve(path, 'index.ts'),
   ].find((candidate) => existsSync(candidate) && statSync(candidate).isFile())
   if (!filename) throw new Error(`UI test module was not found: ${path}`)
-  if (cache.has(filename)) return cache.get(filename).exports
+  if (moduleCache.has(filename)) return moduleCache.get(filename).exports
   const module = { exports: {} }
-  cache.set(filename, module)
+  moduleCache.set(filename, module)
   const requireDependency = createRequire(filename)
   const localRequire = (specifier) => {
+    if (dependencies.has(specifier)) return dependencies.get(specifier)
     if (
       specifier === '@codetether/protocol' ||
       specifier === '@codetether/client'
@@ -45,13 +50,19 @@ function load(path) {
         ),
       )
     if (specifier === '@codetether/ui')
-      return load(resolve(sourceRoot, 'index.ts'))
+      return load(resolve(sourceRoot, 'index.ts'), dependencies, moduleCache)
     if (specifier.startsWith('@codetether/ui/'))
       return load(
         resolve(sourceRoot, specifier.slice('@codetether/ui/'.length)),
+        dependencies,
+        moduleCache,
       )
     if (specifier.startsWith('.'))
-      return load(resolve(dirname(filename), specifier))
+      return load(
+        resolve(dirname(filename), specifier),
+        dependencies,
+        moduleCache,
+      )
     return requireDependency(specifier)
   }
   const { outputText } = ts.transpileModule(readFileSync(filename, 'utf8'), {

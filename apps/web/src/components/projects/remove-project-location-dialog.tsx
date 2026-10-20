@@ -20,6 +20,7 @@ import { projectErrorMessage } from '../../runtime/host/project-actions'
 interface RemoveProjectLocationDialogProps {
   location: ProjectRecord['locations'][number]
   machine: MachineSummary
+  onRemoved?: () => void
   onOpenChange: (open: boolean) => void
   open: boolean
   project: ProjectRecord
@@ -29,6 +30,7 @@ interface RemoveProjectLocationDialogProps {
 export function RemoveProjectLocationDialog({
   location,
   machine,
+  onRemoved,
   onOpenChange,
   open,
   project,
@@ -37,6 +39,7 @@ export function RemoveProjectLocationDialog({
   const runtime = useHostRuntime()
   const removedRef = useRef(false)
   const removeMutation = useMutation({
+    retry: false,
     mutationFn: async () =>
       await runtime.removeProjectLocation(
         project.projectId,
@@ -45,6 +48,7 @@ export function RemoveProjectLocationDialog({
     onSuccess: () => {
       removedRef.current = true
       onOpenChange(false)
+      onRemoved?.()
     },
   })
   const busy = removeMutation.isPending
@@ -64,7 +68,7 @@ export function RemoveProjectLocationDialog({
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
-        closeLabel="关闭移除工作区位置确认"
+        closeLabel="关闭从这台设备移除项目确认"
         className="max-w-md overflow-x-hidden"
         showCloseButton={!busy}
         onCloseAutoFocus={(event) => {
@@ -80,9 +84,9 @@ export function RemoveProjectLocationDialog({
           >
             <Trash2 className="size-5" />
           </span>
-          <DialogTitle>移除工作区位置</DialogTitle>
+          <DialogTitle>从这台设备移除项目</DialogTitle>
           <DialogDescription className="break-words">
-            {`将从 CodeTether 中移除“${project.name}”在“${machine.displayName}”上的工作区位置。`}
+            {`将取消“${project.name}”在“${machine.displayName}”上的文件夹登记。`}
           </DialogDescription>
         </DialogHeader>
 
@@ -95,7 +99,7 @@ export function RemoveProjectLocationDialog({
             {'”及其中的文件不会被删除。'}
           </p>
           <p className="mt-2">
-            此操作不会删除项目，也不会自动取消与这台电脑的配对。
+            此操作不会删除项目或其他设备上的会话，也不会自动取消与这台设备的配对。
           </p>
         </div>
 
@@ -124,7 +128,7 @@ export function RemoveProjectLocationDialog({
             disabled={busy}
             onClick={() => removeMutation.mutate()}
           >
-            {busy ? '正在移除…' : '移除位置'}
+            {busy ? '正在移除…' : '从这台设备移除'}
           </Button>
         </DialogFooter>
       </DialogContent>

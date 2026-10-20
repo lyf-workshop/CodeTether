@@ -1,3 +1,4 @@
+import { useRef } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { Unplug } from 'lucide-react'
@@ -23,6 +24,7 @@ import {
 } from './machine-trust-flow'
 import { useMachineTrustBusy } from './use-remote-machine-pairing'
 import { unpairMachinePreflight } from './device-project-model'
+import { ProjectLocationRemovalAction } from '../projects/project-location-removal-action'
 
 interface UnpairMachineDialogProps {
   machine: MachineSummary
@@ -31,6 +33,7 @@ interface UnpairMachineDialogProps {
   projects?: readonly ProjectRecord[]
   /** Compatibility for earlier callers; exact projects are preferred. */
   projectCount?: number
+  onLocationRemoved?: () => void
 }
 
 export function UnpairMachineDialog({
@@ -39,7 +42,9 @@ export function UnpairMachineDialog({
   open,
   projects,
   projectCount,
+  onLocationRemoved,
 }: UnpairMachineDialogProps) {
+  const contentRef = useRef<HTMLDivElement>(null)
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const runtime = useHostRuntime()
@@ -78,6 +83,8 @@ export function UnpairMachineDialog({
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
+        ref={contentRef}
+        tabIndex={-1}
         closeLabel="关闭取消配对确认"
         className="max-w-md"
         showCloseButton={!unpairMutation.isPending}
@@ -104,26 +111,41 @@ export function UnpairMachineDialog({
           <>
             {preflight.projects.length > 0 ? (
               <ul className="max-h-64 space-y-3 overflow-y-auto rounded-sm border border-border bg-surface-inset p-3">
-                {preflight.projects.map((project) => (
-                  <li key={project.projectId} className="min-w-0">
-                    <p
-                      title={project.name}
-                      className="truncate text-md font-medium"
-                    >
-                      {project.name}
-                    </p>
-                    <p
-                      title={project.rootPath}
-                      className="mt-1 truncate font-mono text-xs text-text-muted"
-                    >
-                      {project.rootPath}
-                    </p>
-                  </li>
-                ))}
+                {preflight.projects.map((project) => {
+                  const record = projects?.find(
+                    (candidate) => candidate.projectId === project.projectId,
+                  )
+                  return (
+                    <li key={project.projectId} className="min-w-0">
+                      <p
+                        title={project.name}
+                        className="truncate text-md font-medium"
+                      >
+                        {project.name}
+                      </p>
+                      <p
+                        title={project.rootPath}
+                        className="mt-1 truncate font-mono text-xs text-text-muted"
+                      >
+                        {project.rootPath}
+                      </p>
+                      {record ? (
+                        <div className="mt-2">
+                          <ProjectLocationRemovalAction
+                            machine={machine}
+                            project={record}
+                            onRemoved={onLocationRemoved}
+                            returnFocus={() => contentRef.current}
+                          />
+                        </div>
+                      ) : null}
+                    </li>
+                  )
+                })}
               </ul>
             ) : null}
             <p className="text-sm text-text-secondary">
-              项目的会话历史会继续保留。此处只能关闭说明，不能移除项目或更改配对。
+              先明确移除这台设备上没有会话的项目登记，再取消配对。其他设备的项目、会话和远程文件都会保留。
             </p>
           </>
         ) : (

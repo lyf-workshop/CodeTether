@@ -3,7 +3,7 @@
 - 分支：`ux/v4-device-first`，工作区 `D:/Projects/Software/agenthub-ux-v4-device-first`
 - 审核范围：`bbcda69..df91601`（9 个功能提交；3562f12 是平台权限测试，不在本轮范围）
 - 依据：`docs/ux-redesign/04-requirements.md`（第三版）、`02-dev-handoff.md`、原型；AGENTS.md
-- 当前级别：审核通过（第 3 轮，b1e1ccf），已装到 Windows；安装版检查发现 R4-1，待修复和补测（见 DEVELOPMENT-PROCESS §2）
+- 当前级别：第 4 轮修复（2d9ad41）审核通过，已装到 Windows；安装版验收 8 项通过、1 项不通过、6 项未测，待 R5 修复和补测（见 DEVELOPMENT-PROCESS §2）
 
 ## 第 1 轮（D1，2026-10-19）
 
@@ -251,4 +251,31 @@ Mac 上需要拿到这个分支。分支只在本机，没有推送。要在 Mac
   - 草稿；
   - 控制台错误。
 
-下一步：按 `ux-v4-device-first-fix-prompt-r4.md` 修 R4-1，重装，然后在安装版上补测上面没测的项目。补测通过后合并进 main、打标签，每一步再问你。
+R4 之后的结果见下一节。
+
+## 第 4 轮（2026-10-20，审 b1e1ccf..2d9ad41，1 个提交，4 个文件）
+
+修 R4-1。我看过提交：
+
+- 新增 `machinePlatformFamily`，不区分大小写，写法和 `machinePlatformLabel` 一致。
+- 本机示例：Windows `C:\Projects\我的项目`，macOS `/Users/user/project`，其他和远程设备 `/home/user/project`。
+- 测试夹具改成 Host 实际发出的 `Windows`，加了归类函数的单元测试。
+- 检查全部为 0：2307 项测试，2293 通过，0 失败，14 项原有跳过。
+
+结论：审核通过。新安装包 SHA256 以 34F4A788CD6F51DB 开头，运行中 `hostVersion` 为 `git-2d9ad41f7e38`。报告：`D:/Projects/Software/agenthub-archive/v4-acceptance-report-r4.md`。
+
+### 安装版验收（第 2 次，智能体在安装窗口上检查）
+
+- R4-1：通过。
+- 通过 8 项：3、4、5、7、11、12、13、15。
+- 不通过 1 项：14。Claude Code 的搜索步骤显示英文 `Search workspace`。
+  - 来源是 `packages/adapter-claude/src/normalizer.ts` 的固定摘要。同一个函数里还有 `Read file`、`Edit file`、`Run unavailable tool`、`Run tool`。
+  - Codex 适配器批准摘要的兜底文字也是英文：`Codex requested command approval`、`Codex requested file or permission access`（`packages/adapter-codex/src/normalizer.ts:428`、`436`）。
+- 未测 6 项：
+  - 1、2：没有重置首次设置，也没有导入旧会话。这是 R4 的限制。
+  - 6：Codex 第一个回合失败，错误码 `provider_error`，测试文件夹仍是空的，停止、批准、变更都没法测。本机 PATH 上的 Codex 现在是 0.162.1，适配器验证过的是 0.149.1，第一次安装检查时看到的也是 0.149.1。这是线索，还没证实是原因。
+  - 8：没有等待批准的项目，原因同 6。
+  - 9：90 秒内没有收到系统通知。没有核对 Windows 的通知设置，Desktop 的错误输出也没有记录。
+  - 10：最早约 1.4 秒没有截到。
+
+下一步：按 `ux-v4-device-first-fix-prompt-r5.md` 修中文摘要、换图标、查 Codex 失败原因，重装一次，然后补测 1、2、6、8、9、10、14。补测通过后合并进 main、打标签，每一步再问你。

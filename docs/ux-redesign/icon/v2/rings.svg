@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- Two interlocked rings: this computer (cream) and the other device (amber) -->
+  <rect width="1024" height="1024" rx="228" fill="#1f2a44"/>
+  <circle cx="420" cy="512" r="190" fill="none" stroke="#f3e9d7" stroke-width="64"/>
+  <circle cx="604" cy="512" r="190" fill="none" stroke="#1f2a44" stroke-width="104"/>
+  <circle cx="604" cy="512" r="190" fill="none" stroke="#e8a33d" stroke-width="64"/>
+  <path d="M542.1 657.5 A190 190 0 0 1 478.7 692.7" fill="none" stroke="#1f2a44" stroke-width="104"/>
+  <path d="M542.1 657.5 A190 190 0 0 1 478.7 692.7" fill="none" stroke="#f3e9d7" stroke-width="64"/>
+</svg>

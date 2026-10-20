@@ -1,0 +1,13 @@
+<!doctype html><meta charset="utf-8"><title>CodeTether 图标 v2</title>
+<style>
+body{margin:0;background:#fbfaf8;color:#1d1c1a;font:14px/1.6 "Microsoft YaHei",system-ui,sans-serif;padding:24px}
+.row{display:flex;gap:22px;align-items:flex-end;padding:16px 20px;border-radius:10px;margin-bottom:10px;flex-wrap:wrap}
+.l{background:#f1efea}.d{background:#1e1e1e;color:#ddd}
+.n{width:120px;font-weight:600}
+</style>
+<script>
+const sets=[['K 风筝','kite'],['R 双环','rings'],['P 命令提示符','prompt']];
+document.write(sets.map(([n,f])=>['l','d'].map(c=>`<div class="row ${c}"><div class="n">${n}</div>`+
+ [256,128,64,48].map(s=>`<img src="${f}.svg" width="${s}">`).join('')+
+ [32,24,16].map(s=>`<img src="${f}-small.svg" width="${s}">`).join('')+'</div>').join('')).join(''));
+</script>

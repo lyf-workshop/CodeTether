@@ -1,9 +1,25 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
   <!-- macOS master: 824 px body on the 1024 grid, transparent margin as in Apple's app icon template -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0.8" y2="1">
+      <stop offset="0" stop-color="#165566"/>
+      <stop offset="1" stop-color="#0a2731"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="600" cy="380" r="360" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2a7d8c" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#2a7d8c" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
   <g transform="translate(100 100) scale(0.8046875)">
-    <rect width="1024" height="1024" rx="230" fill="#1a7fd0"/>
-    <path d="M340 684 C340 480 684 544 684 340" fill="none" stroke="#ffffff" stroke-width="72" stroke-linecap="round"/>
-    <circle cx="340" cy="684" r="120" fill="#ffffff"/>
-    <circle cx="684" cy="340" r="92" fill="#1a7fd0" stroke="#ffffff" stroke-width="64"/>
+    <rect width="1024" height="1024" rx="230" fill="url(#bg)"/>
+    <rect width="1024" height="1024" rx="230" fill="url(#glow)"/>
+    <path d="M544 603 C500 720 380 690 330 770 S262 846 240 852" fill="none" stroke="#f4efe6" stroke-width="36" stroke-linecap="round"/>
+    <circle cx="240" cy="852" r="50" fill="#f4efe6"/>
+    <g transform="rotate(14 600 380)">
+      <path d="M600 150 L430 320 L600 320 Z" fill="#ffd38f"/>
+      <path d="M600 150 L770 320 L600 320 Z" fill="#ffb347"/>
+      <path d="M430 320 L600 610 L600 320 Z" fill="#ff9457"/>
+      <path d="M770 320 L600 610 L600 320 Z" fill="#f2643f"/>
+    </g>
   </g>
 </svg>

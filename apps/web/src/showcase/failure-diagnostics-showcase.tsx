@@ -357,7 +357,7 @@ function FailureDiagnosticsShowcase() {
 
           <output
             aria-live="polite"
-            className="mt-3 block min-h-5 text-xs text-success"
+            className="mt-3 block min-h-5 text-xs text-success-text"
           >
             {newTurnCount > 0
               ? `已通过明确操作创建新的逻辑轮次与 actionId（次数 ${newTurnCount}）；旧失败轮次保持不变。`

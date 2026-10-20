@@ -31,7 +31,7 @@ const diffLineDefinitions = {
     prefix: '+',
     ariaLabel: '新增',
     rowClassName: 'bg-success-muted/15 text-text-secondary',
-    prefixClassName: 'text-success',
+    prefixClassName: 'text-success-text',
   },
   deletion: {
     prefix: '-',

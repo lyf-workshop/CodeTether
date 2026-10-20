@@ -19,7 +19,7 @@ export const riskDefinitions = {
   low: {
     label: '低风险',
     icon: ShieldCheck,
-    badgeClassName: 'border-success/30 bg-success-muted text-success',
+    badgeClassName: 'border-success/30 bg-success-muted text-success-text',
   },
   medium: {
     label: '中风险',

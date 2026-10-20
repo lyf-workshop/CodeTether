@@ -165,7 +165,7 @@ export function UpdateMachineAddressDialog({
             <div className="flex min-w-0 items-start gap-2.5 rounded-sm border border-border bg-surface-muted/55 px-3 py-3 text-sm text-text-secondary">
               <ShieldCheck
                 aria-hidden="true"
-                className="mt-0.5 size-4 shrink-0 text-success"
+                className="mt-0.5 size-4 shrink-0 text-success-text"
               />
               <p className="min-w-0 leading-relaxed">
                 新地址只有在通过现有加密身份验证后才会保存。身份不匹配时，原信任关系和当前地址保持不变。

@@ -212,7 +212,7 @@ function ChangesSummary({
                   >
                     {change.path}
                   </span>
-                  <span className="shrink-0 font-medium tabular-nums text-success/90">
+                  <span className="shrink-0 font-medium tabular-nums text-success-text">
                     +{change.additions}
                   </span>
                   <span className="w-5 shrink-0 font-medium tabular-nums text-danger-text/90">

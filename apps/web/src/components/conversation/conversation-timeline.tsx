@@ -131,7 +131,7 @@ function RoutineToolGroup({
       >
         <CheckCircle2
           aria-hidden="true"
-          className="size-4 shrink-0 text-success"
+          className="size-4 shrink-0 text-success-text"
         />
         <span className="min-w-0 flex-1 truncate font-medium">{label}</span>
         <span className="shrink-0 text-xs text-text-muted">

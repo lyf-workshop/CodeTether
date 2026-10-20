@@ -51,7 +51,7 @@ export function ConversationFilesSurface({
                 {change.path}
               </span>
               <span className="flex shrink-0 items-center gap-1 text-xs tabular-nums">
-                <span className="text-success/90">+{change.additions}</span>
+                <span className="text-success-text">+{change.additions}</span>
                 {change.deletions > 0 ? (
                   <span className="text-danger-text/90">
                     -{change.deletions}

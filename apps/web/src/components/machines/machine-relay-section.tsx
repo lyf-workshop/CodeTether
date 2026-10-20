@@ -122,7 +122,7 @@ export function MachineRelaySection({
           {status.tone === 'success' ? (
             <Cloud
               aria-hidden="true"
-              className="mt-0.5 size-4 shrink-0 text-success"
+              className="mt-0.5 size-4 shrink-0 text-success-text"
             />
           ) : (
             <CloudOff

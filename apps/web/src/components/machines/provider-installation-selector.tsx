@@ -100,7 +100,7 @@ function ProviderInstallationOption({
           selected
             ? 'border-primary/45 bg-primary-muted text-primary'
             : eligible
-              ? 'border-success/40 bg-success-muted text-success'
+              ? 'border-success/40 bg-success-muted text-success-text'
               : 'border-border text-text-muted',
         )}
       >

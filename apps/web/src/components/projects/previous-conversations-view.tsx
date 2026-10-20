@@ -235,7 +235,7 @@ export function PreviousConversationsView({
                               className="grid size-4 shrink-0 place-items-center"
                             >
                               {candidate.alreadyAdopted ? (
-                                <Check className="size-4 text-success" />
+                                <Check className="size-4 text-success-text" />
                               ) : null}
                             </span>
                           )}

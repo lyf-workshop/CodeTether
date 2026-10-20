@@ -21,7 +21,7 @@ export function InboxEmptyState({
       <div className="max-w-md">
         <span
           aria-hidden="true"
-          className="mx-auto grid size-10 place-items-center rounded-full bg-success-muted text-success"
+          className="mx-auto grid size-10 place-items-center rounded-full bg-success-muted text-success-text"
         >
           <CheckCircle2 className="size-5" />
         </span>

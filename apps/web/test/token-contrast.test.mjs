@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
+import { readdir, readFile } from 'node:fs/promises'
+import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 
 const css = await readFile(
@@ -72,16 +73,49 @@ for (const theme of ['light', 'dark']) {
         )
       }
     }
-    for (const tone of ['warning', 'danger']) {
+    for (const tone of ['success', 'warning', 'danger']) {
       for (const background of [
         '--background',
         '--surface',
+        '--surface-muted',
+        '--surface-inset',
+        '--surface-code',
         `--${tone}-muted`,
       ]) {
         const a = luminance(resolve(tokens, `--${tone}-text`))
         const b = luminance(resolve(tokens, background))
-        assert.ok((Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05) >= 4.5)
+        const ratio = (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)
+        assert.ok(
+          ratio >= 4.5,
+          `${tone}-text on ${background}: ${ratio.toFixed(3)}:1`,
+        )
       }
     }
   })
 }
+
+test('Web and UI source use contrast-safe semantic status text utilities', async () => {
+  const violations = []
+  async function scan(directory) {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const url = new URL(
+        entry.name + (entry.isDirectory() ? '/' : ''),
+        directory,
+      )
+      if (entry.isDirectory()) await scan(url)
+      else if (/\.(?:ts|tsx|css)$/u.test(entry.name)) {
+        const source = await readFile(url, 'utf8')
+        for (const match of source.matchAll(
+          /\btext-(?:success|warning|danger)(?![\w-])/gu,
+        )) {
+          violations.push(
+            `${fileURLToPath(url)}:${source.slice(0, match.index).split('\n').length}: ${match[0]}`,
+          )
+        }
+      }
+    }
+  }
+  await scan(new URL('../src/', import.meta.url))
+  await scan(new URL('../../../packages/ui/src/', import.meta.url))
+  assert.deepEqual(violations, [])
+})

@@ -101,7 +101,7 @@ export function relayStatusTone(
 ): string {
   switch (tone) {
     case 'success':
-      return 'text-success'
+      return 'text-success-text'
     case 'warning':
     case 'progress':
       return 'text-warning-text'

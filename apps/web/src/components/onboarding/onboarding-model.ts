@@ -227,6 +227,125 @@ export function isProviderUsable(provider: DoctorProviderStatus): boolean {
   )
 }
 
+/** Presentation only: this permits continuing setup, never claiming readiness. */
+export function onboardingProviderServiceUnverified(
+  provider: DoctorProviderStatus,
+): boolean {
+  const health =
+    provider.executionHealth?.freshness === 'current'
+      ? provider.executionHealth
+      : undefined
+  return (
+    provider.freshness === 'current' &&
+    provider.installed &&
+    provider.selected &&
+    (provider.runtimeReadiness === 'ready' ||
+      provider.runtimeReadiness === 'limited') &&
+    (provider.backend === undefined ||
+      provider.backend.readiness === 'unknown') &&
+    provider.failure === undefined &&
+    provider.backend?.failure === undefined &&
+    health?.state !== 'unavailable' &&
+    health?.state !== 'degraded'
+  )
+}
+
+export const onboardingUnverifiedServiceGuidance =
+  '开始首次对话时验证 AI 服务；设置过程不会发送消息或消耗模型额度。无需为了完成设置专门发送测试消息。'
+
+export function onboardingProviderInstallationLabel(
+  provider: DoctorProviderStatus,
+): string {
+  if (provider.freshness === 'not_observed') return '尚未检查'
+  const label = !provider.installed
+    ? '未安装'
+    : provider.selected
+      ? '已安装'
+      : '已安装 · 未选择'
+  return provider.freshness === 'last_known' ? `上次检查：${label}` : label
+}
+
+export function onboardingProviderRuntimeLabel(
+  provider: DoctorProviderStatus,
+): string {
+  if (provider.freshness === 'not_observed') return '尚未检查'
+  const compatibility =
+    provider.compatibility === 'compatible_unverified'
+      ? '兼容的新版本，尚未完整验证'
+      : providerCompatibilityLabel({ ...provider, freshness: 'current' })
+  const readiness =
+    provider.runtimeReadiness === 'ready'
+      ? '可用'
+      : provider.runtimeReadiness === 'limited'
+        ? '部分功能可用'
+        : undefined
+  const label =
+    readiness === undefined ? compatibility : `${readiness} · ${compatibility}`
+  return provider.freshness === 'last_known' ? `上次检查：${label}` : label
+}
+
+export function onboardingProviderServiceLabel(
+  provider: DoctorProviderStatus,
+): string {
+  if (provider.backend === undefined) return '尚未验证'
+  if (provider.backend.readiness !== 'unknown')
+    return backendReadinessLabel(provider.backend)
+  return provider.backend.freshness === 'last_known'
+    ? '上次检查：尚未验证'
+    : '尚未验证'
+}
+
+export function onboardingProviderGuidance(
+  provider: DoctorProviderStatus,
+): string {
+  if (onboardingProviderServiceUnverified(provider))
+    return onboardingUnverifiedServiceGuidance
+  if (
+    provider.freshness === 'current' &&
+    provider.backend?.freshness === 'current' &&
+    provider.backend.readiness === 'misconfigured'
+  )
+    return 'AI 服务配置需要检查。请检查当前服务配置后重新检查；CodeTether 不会自动切换服务或安装。'
+  return providerRepairText(provider)
+}
+
+export function onboardingSessionDiscoveryLabel(
+  state: DoctorProviderStatus['sessionDiscovery'],
+): string {
+  return {
+    supported: '支持查找',
+    unsupported: '暂不支持查找',
+    unavailable: '暂时无法查找',
+    unknown: '尚未检查',
+  }[state]
+}
+
+export function onboardingInstallMethodLabel(
+  method: NonNullable<DoctorProviderStatus['installMethod']>,
+): string {
+  return {
+    native_installer: '系统安装程序',
+    npm: '软件包管理器安装',
+    homebrew: '系统包管理器安装',
+    package_manager: '包管理器安装',
+    manual: '手动安装',
+    unknown: '未知',
+  }[method]
+}
+
+export function onboardingConnectionStateLabel(state: string): string {
+  const labels: Record<string, string> = {
+    idle: '尚未连接',
+    connecting: '连接中',
+    connected: '已连接',
+    reconnecting: '重新连接中',
+    incompatible: '版本不兼容',
+    unavailable: '无法连接',
+    stopped: '已停止',
+  }
+  return labels[state] ?? '未知'
+}
+
 /**
  * Evaluates the exact Project/Machine context selected during onboarding.
  * Doctor.overall may be ready because a different Location on the same

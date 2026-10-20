@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import { QueryClient } from '@tanstack/react-query'
+import { onboardingPresentationSource } from './fixtures/onboarding-source.mjs'
 
 import {
   continueOnboardingChecks,
@@ -238,13 +238,7 @@ test('legacy project choices flatten exact immutable device locations without fa
 })
 
 test('onboarding source preserves exact Ready gates, explicit-only probes and error recovery', async () => {
-  const source = await readFile(
-    new URL(
-      '../src/components/onboarding/onboarding-page.tsx',
-      import.meta.url,
-    ),
-    'utf8',
-  )
+  const source = onboardingPresentationSource()
   assert.match(source, /createOnboardingTransitionGate/u)
   assert.match(source, /transitionGateRef\.current\.run/u)
   assert.match(source, /continueOnboardingChecks\(progress, commit\)/u)

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
+import { onboardingPresentationSource } from './fixtures/onboarding-source.mjs'
 
 import {
   backendReadinessLabel,
@@ -346,7 +347,7 @@ test('missing providers point only to verified official guidance', () => {
 })
 
 test('setup and Doctor compose existing bounded operations without inference or install commands', () => {
-  const setup = source('../src/components/onboarding/onboarding-page.tsx')
+  const setup = onboardingPresentationSource()
   const doctor = source('../src/components/doctor/doctor-page.tsx')
   const combined = `${setup}\n${doctor}`
 
@@ -416,7 +417,7 @@ test('routing and settings expose setup and permanent Doctor access', () => {
   const router = source('../src/router.tsx')
   const shell = source('../src/components/app-shell/app-shell.tsx')
   const startup = source('../src/components/onboarding/startup-gate.tsx')
-  const setup = source('../src/components/onboarding/onboarding-page.tsx')
+  const setup = onboardingPresentationSource()
   const settings = source('../src/components/settings/about-settings.tsx')
 
   assert.match(router, /path: '\/setup'/u)

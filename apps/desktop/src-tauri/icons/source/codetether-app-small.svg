@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- Hinted variant for 16, 24 and 32 px: upright kite, two tones, straight heavier string -->
+  <rect width="32" height="32" rx="7" fill="#0f3d4a"/>
+  <path d="M20 3 L13 10 L20 21 Z" fill="#ffc061"/>
+  <path d="M20 3 L27 10 L20 21 Z" fill="#f2643f"/>
+  <line x1="20" y1="21" x2="8.5" y2="26.5" stroke="#f4efe6" stroke-width="2.6" stroke-linecap="round"/>
+  <circle cx="7.5" cy="26.5" r="3.2" fill="#f4efe6"/>
+</svg>

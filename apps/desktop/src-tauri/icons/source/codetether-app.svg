@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- CodeTether app icon, full-bleed master for Windows and PNG sizes 48 px and up.
+       A kite on a string: the AI tool works far away, the string stays in your hand. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0.8" y2="1">
+      <stop offset="0" stop-color="#165566"/>
+      <stop offset="1" stop-color="#0a2731"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="600" cy="380" r="360" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2a7d8c" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#2a7d8c" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1024" height="1024" rx="228" fill="url(#bg)"/>
+  <rect width="1024" height="1024" rx="228" fill="url(#glow)"/>
+  <path d="M544 603 C500 720 380 690 330 770 S262 846 240 852" fill="none" stroke="#f4efe6" stroke-width="36" stroke-linecap="round"/>
+  <circle cx="240" cy="852" r="50" fill="#f4efe6"/>
+  <g transform="rotate(14 600 380)">
+    <path d="M600 150 L430 320 L600 320 Z" fill="#ffd38f"/>
+    <path d="M600 150 L770 320 L600 320 Z" fill="#ffb347"/>
+    <path d="M430 320 L600 610 L600 320 Z" fill="#ff9457"/>
+    <path d="M770 320 L600 610 L600 320 Z" fill="#f2643f"/>
+  </g>
+</svg>

@@ -114,6 +114,10 @@ export function AppShell({
         document.querySelector('[role="dialog"][data-state="open"]') !== null,
       )
       if (globalDialog !== null || modalBlocksNavigation) return
+      if (shortcut === 'toggle-sidebar') {
+        setSidebarCollapsed((current) => !current)
+        return
+      }
       if (event.key.toLowerCase() === 'n') {
         newConversationTriggerRef.current =
           document.activeElement instanceof HTMLElement &&

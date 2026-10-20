@@ -1,4 +1,5 @@
-type WorkspaceShortcut = 'palette' | 'new-conversation' | 'settings'
+type WorkspaceShortcut =
+  'palette' | 'new-conversation' | 'settings' | 'toggle-sidebar'
 
 export function workspaceNavigationBlocked(
   activeDialog: string | null,
@@ -18,6 +19,7 @@ export function workspaceShortcut(event: {
   readonly isComposing?: boolean
   readonly defaultPrevented?: boolean
   readonly keyCode?: number
+  readonly target?: EventTarget | null
 }): WorkspaceShortcut | undefined {
   if (
     !(event.metaKey || event.ctrlKey) ||
@@ -33,5 +35,19 @@ export function workspaceShortcut(event: {
   if (key === 'k') return 'palette'
   if (key === 'n') return 'new-conversation'
   if (key === ',') return 'settings'
+  if (key === 'b') {
+    const target = event.target
+    if (
+      target !== undefined &&
+      target !== null &&
+      'closest' in target &&
+      typeof target.closest === 'function' &&
+      (target as Element).closest(
+        'input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="searchbox"], [role="combobox"]',
+      ) !== null
+    )
+      return undefined
+    return 'toggle-sidebar'
+  }
   return undefined
 }

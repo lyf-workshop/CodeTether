@@ -49,9 +49,9 @@ import {
   formatMachineLastSeen,
   machineConnectionStateLabel,
 } from '../machines/machine-presentation'
+import { machineCanAddProject } from '../machines/device-project-model'
+import { useWorkspaceTreeExpansion } from './use-workspace-tree-expansion'
 import {
-  emptyWorkspaceTreeExpansion,
-  revealWorkspacePath,
   toggleWorkspaceMachine,
   toggleWorkspaceProject,
   workspaceConversationStatusLabel,
@@ -119,13 +119,8 @@ export function WorkspaceSidebar({
     (activeProject?.locations.length === 1
       ? activeProject.locations[0]?.machineId
       : undefined)
-  const [expansion, setExpansion] = useState(emptyWorkspaceTreeExpansion)
-  const revealedExpansion = revealWorkspacePath(
-    expansion,
-    activeMachineId,
-    activeProjectId,
-  )
-  if (revealedExpansion !== expansion) setExpansion(revealedExpansion)
+  const { expansion: revealedExpansion, setExpansion } =
+    useWorkspaceTreeExpansion(activeMachineId, activeProjectId)
   const groups = workspaceDeviceGroups(
     machinesQuery.data ?? [],
     projectsQuery.data ?? [],
@@ -344,11 +339,7 @@ function WorkspaceDeviceSection({
   const connectionState = useHostConnectionState()
   const Icon = machine.kind === 'local' ? Monitor : Server
   const canAddProject =
-    connectionState === 'connected' &&
-    machine.availability === 'available' &&
-    (machine.connectionState === 'local' ||
-      machine.connectionState === 'online') &&
-    machine.capabilities.projectAccess
+    connectionState === 'connected' && machineCanAddProject(machine)
   const status =
     machine.connectionState === 'local'
       ? '这台电脑'
@@ -476,9 +467,9 @@ function WorkspaceProjectSection({
         ? '无法访问'
         : undefined
   const canCreate =
-    unavailableReason === undefined &&
-    machine.capabilities.projectAccess &&
-    connectionState === 'connected'
+    connectionState === 'connected' &&
+    machineCanAddProject(machine) &&
+    location.availability === 'available'
   return (
     <div
       data-workspace-project={project.projectId}

@@ -1,3 +1,4 @@
+import { MachineIdSchema, ProjectIdSchema } from '@codetether/protocol'
 import type {
   ConversationStatus,
   ConversationSummary,
@@ -224,4 +225,104 @@ export function toggleWorkspaceProject(
   if (expandedProjectKeys.has(entryKey)) expandedProjectKeys.delete(entryKey)
   else expandedProjectKeys.add(entryKey)
   return { ...expansion, expandedProjectKeys }
+}
+
+export const workspaceTreeExpansionPreferenceKey = 'ct-workspace-tree-expansion'
+
+interface WorkspaceTreePreferenceStorage {
+  getItem(key: string): string | null
+  setItem(key: string, value: string): void
+}
+
+/** Optional local UI preference: no labels, paths, records or route authority. */
+export function parseWorkspaceTreeExpansion(
+  raw: string | null,
+): WorkspaceTreeExpansion {
+  if (raw === null) return emptyWorkspaceTreeExpansion()
+  try {
+    const value: unknown = JSON.parse(raw)
+    if (typeof value !== 'object' || value === null || Array.isArray(value))
+      return emptyWorkspaceTreeExpansion()
+    const stored = value as Record<string, unknown>
+    if (
+      Object.keys(stored).length !== 3 ||
+      stored.version !== 1 ||
+      !Array.isArray(stored.collapsedMachineIds) ||
+      !Array.isArray(stored.expandedProjectKeys)
+    )
+      return emptyWorkspaceTreeExpansion()
+    const collapsedMachineIds = new Set<MachineId>()
+    for (const value of stored.collapsedMachineIds) {
+      const machine = MachineIdSchema.safeParse(value)
+      if (!machine.success) return emptyWorkspaceTreeExpansion()
+      collapsedMachineIds.add(machine.data)
+    }
+    const expandedProjectKeys = new Set<string>()
+    for (const key of stored.expandedProjectKeys) {
+      if (typeof key !== 'string') return emptyWorkspaceTreeExpansion()
+      const parts = key.split(':')
+      if (
+        parts.length !== 2 ||
+        !ProjectIdSchema.safeParse(parts[0]).success ||
+        !MachineIdSchema.safeParse(parts[1]).success
+      )
+        return emptyWorkspaceTreeExpansion()
+      expandedProjectKeys.add(key)
+    }
+    return { collapsedMachineIds, expandedProjectKeys }
+  } catch {
+    return emptyWorkspaceTreeExpansion()
+  }
+}
+
+export function serializeWorkspaceTreeExpansion(
+  expansion: WorkspaceTreeExpansion,
+): string {
+  const valid = parseWorkspaceTreeExpansion(
+    JSON.stringify({
+      version: 1,
+      collapsedMachineIds: [...expansion.collapsedMachineIds],
+      expandedProjectKeys: [...expansion.expandedProjectKeys],
+    }),
+  )
+  return JSON.stringify({
+    version: 1,
+    collapsedMachineIds: [...valid.collapsedMachineIds],
+    expandedProjectKeys: [...valid.expandedProjectKeys],
+  })
+}
+
+export function readWorkspaceTreeExpansion(
+  storage: WorkspaceTreePreferenceStorage | undefined = workspaceTreeStorage(),
+): WorkspaceTreeExpansion {
+  try {
+    return parseWorkspaceTreeExpansion(
+      storage?.getItem(workspaceTreeExpansionPreferenceKey) ?? null,
+    )
+  } catch {
+    return emptyWorkspaceTreeExpansion()
+  }
+}
+
+export function writeWorkspaceTreeExpansion(
+  storage: WorkspaceTreePreferenceStorage | undefined,
+  expansion: WorkspaceTreeExpansion,
+): void {
+  try {
+    ;(storage ?? workspaceTreeStorage())?.setItem(
+      workspaceTreeExpansionPreferenceKey,
+      serializeWorkspaceTreeExpansion(expansion),
+    )
+  } catch {
+    // Optional preference storage never blocks workspace navigation.
+  }
+}
+
+function workspaceTreeStorage(): WorkspaceTreePreferenceStorage | undefined {
+  if (typeof window === 'undefined') return undefined
+  try {
+    return window.localStorage
+  } catch {
+    return undefined
+  }
 }

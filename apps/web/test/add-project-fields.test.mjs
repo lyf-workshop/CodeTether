@@ -10,6 +10,31 @@ const { AddProjectFields } = loadWebComponent(
 const local = machine('machine_local01', 'local')
 const remote = machine('machine_remote01', 'remote')
 
+for (const [platform, placeholder] of [
+  ['Windows', 'C:\\Projects\\我的项目'],
+  ['windows', 'C:\\Projects\\我的项目'],
+  ['win32', 'C:\\Projects\\我的项目'],
+  ['WIN32', 'C:\\Projects\\我的项目'],
+  ['macOS', '/Users/user/project'],
+  ['darwin', '/Users/user/project'],
+  ['Linux', '/home/user/project'],
+  ['linux', '/home/user/project'],
+  ['FreeBSD', '/home/user/project'],
+]) {
+  test(`local ${platform} project form uses the matching platform path example`, () => {
+    const markup = render({ machine: { ...local, platform } })
+    assert.ok(markup.includes(`placeholder="${placeholder}"`))
+  })
+}
+
+for (const platform of ['Windows', 'macOS', 'Linux']) {
+  test(`remote ${platform} project form preserves the complete remote path example`, () => {
+    const markup = render({ machine: { ...remote, platform } })
+    assert.match(markup, /placeholder="\/home\/user\/project"/u)
+    assert.doesNotMatch(markup, /id="add-project-directory-picker"/u)
+  })
+}
+
 test('Desktop local project form presents an editable path and native picker together', () => {
   const markup = render({ canPickDirectory: true })
   assert.match(markup, /<input[^>]+id="add-project-path"/u)
@@ -93,7 +118,7 @@ function machine(machineId, kind) {
     machineId,
     kind,
     displayName: kind === 'local' ? 'Windows 电脑' : '配对设备',
-    platform: kind === 'local' ? 'windows' : 'linux',
+    platform: kind === 'local' ? 'Windows' : 'Linux',
     architecture: 'x64',
     availability: 'available',
     connectionState: kind === 'local' ? 'local' : 'online',

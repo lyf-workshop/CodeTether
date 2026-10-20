@@ -12,6 +12,7 @@ import {
 } from '@codetether/ui'
 import type { MachineId, MachineSummary } from '@codetether/protocol'
 
+import { machinePlatformFamily } from '../machines/machine-presentation'
 import {
   fixedProjectCreationMachineExplanation,
   selectFixedProjectCreationMachine,
@@ -56,6 +57,7 @@ export function AddProjectFields({
   onPickDirectory,
 }: AddProjectFieldsProps) {
   const remote = machine?.kind === 'remote'
+  const platformFamily = machinePlatformFamily(machine?.platform ?? '')
   const pathDescription = hasError
     ? 'add-project-path-description add-project-error'
     : 'add-project-path-description'
@@ -157,10 +159,11 @@ export function AddProjectFields({
             placeholder={
               remote
                 ? '/home/user/project'
-                : machine?.platform === 'windows' ||
-                    machine?.platform === 'win32'
+                : platformFamily === 'windows'
                   ? 'C:\\Projects\\我的项目'
-                  : '/Users/user/project'
+                  : platformFamily === 'macos'
+                    ? '/Users/user/project'
+                    : '/home/user/project'
             }
             aria-describedby={pathDescription}
             aria-invalid={hasError || undefined}

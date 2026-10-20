@@ -15,6 +15,23 @@ const architectureLabels: Record<string, string> = {
   i686: 'x86',
 }
 
+export function machinePlatformFamily(
+  platform: string,
+): 'windows' | 'macos' | 'linux' | 'other' {
+  switch (platform.toLocaleLowerCase('en-US')) {
+    case 'windows':
+    case 'win32':
+      return 'windows'
+    case 'macos':
+    case 'darwin':
+      return 'macos'
+    case 'linux':
+      return 'linux'
+    default:
+      return 'other'
+  }
+}
+
 export function machinePlatformLabel(platform: string): string {
   if (platform.toLocaleLowerCase('en-US') === 'windows') return 'Windows'
   return platform

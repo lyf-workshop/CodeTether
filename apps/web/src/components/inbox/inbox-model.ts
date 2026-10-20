@@ -63,16 +63,16 @@ export function createInboxItemPresentation(
       const command = item.payload.actionSubtitle
       const tool = createToolPresentation({ command, status: 'running' })
       return {
-        conversation: conversationTitle ?? '智能体会话',
+        conversation: conversationTitle ?? 'AI 工具会话',
         description: createToolCommandSubtitle(command),
         title: tool.title,
       }
     }
 
     return {
-      conversation: conversationTitle ?? '智能体会话',
+      conversation: conversationTitle ?? 'AI 工具会话',
       description:
-        item.payload.actionSubtitle ?? '智能体请求执行一项需要你确认的操作。',
+        item.payload.actionSubtitle ?? 'AI 工具请求执行一项需要你确认的操作。',
       title: item.payload.actionTitle,
     }
   }
@@ -80,7 +80,7 @@ export function createInboxItemPresentation(
   if (item.type === 'completed_review') {
     return {
       conversation: item.payload.conversationTitle,
-      description: '智能体已完成本轮工作，等待你查看结果。',
+      description: 'AI 工具已完成本轮工作，等待你查看结果。',
       title: item.payload.conversationTitle,
     }
   }

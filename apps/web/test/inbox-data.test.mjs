@@ -109,7 +109,7 @@ test('non-command Approval presentation keeps normalized Host metadata', () => {
   }
 
   assert.deepEqual(createInboxItemPresentation(item), {
-    conversation: '智能体会话',
+    conversation: 'AI 工具会话',
     description: 'src/example.ts',
     title: '修改文件',
   })
@@ -118,7 +118,7 @@ test('non-command Approval presentation keeps normalized Host metadata', () => {
 test('failed Attention uses canonical product copy without Provider diagnostics', () => {
   const presentation = createInboxItemPresentation(failed)
 
-  assert.equal(presentation.title, '智能体意外退出')
+  assert.equal(presentation.title, 'AI 工具意外退出')
   assert.match(presentation.description, /本轮工作可能不完整/u)
   assert.doesNotMatch(presentation.description, /RAW|stderr/u)
 })

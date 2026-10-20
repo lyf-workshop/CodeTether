@@ -338,11 +338,11 @@ test('Machine errors expose stable actionable copy instead of transport diagnost
 
   assert.equal(
     machineErrorMessage(error('machine_pairing_code_invalid'), 'begin'),
-    '配对码无效，请检查远程节点显示的六码。',
+    '配对码无效，请检查Node显示的六码。',
   )
   assert.equal(
     machineErrorMessage(error('machine_pairing_code_expired'), 'confirm'),
-    '配对码已过期，请在远程节点重新开启配对。',
+    '配对码已过期，请在Node重新开启配对。',
   )
   assert.equal(
     machineErrorMessage(error('machine_authentication_failed'), 'confirm'),
@@ -354,7 +354,7 @@ test('Machine errors expose stable actionable copy instead of transport diagnost
   )
   assert.equal(
     machineErrorMessage(error('machine_protocol_incompatible'), 'begin'),
-    '远程节点版本不兼容，请更新 CodeTether Node。',
+    'Node版本不兼容，请更新 CodeTether Node。',
   )
   assert.doesNotMatch(
     machineErrorMessage(error('machine_connection_failed'), 'confirm'),

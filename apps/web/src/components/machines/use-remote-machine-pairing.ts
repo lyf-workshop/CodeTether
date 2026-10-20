@@ -143,9 +143,7 @@ export function useRemoteMachinePairing({
                   : confirmMutation.isError
                     ? 'confirm'
                     : 'begin',
-              )
-                .replaceAll('远程节点', 'Node')
-                .replaceAll('智能体', 'AI 工具'))
+              ))
   const beginErrorCode =
     beginMutation.error instanceof CodeTetherResponseError
       ? beginMutation.error.envelope.code

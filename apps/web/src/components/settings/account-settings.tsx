@@ -91,6 +91,12 @@ export function AccountSettings() {
       <p className="mt-4 text-sm text-text-muted">
         用同一账号登录的其他 Mac 或 Windows
         电脑，目前还不能出现在“设备”里。账号登录不会开启其他电脑的查看或控制权限。
+        <Link
+          to="/roadmap"
+          className="ml-1 text-primary underline underline-offset-4"
+        >
+          查看后续规划
+        </Link>
       </p>
     </>
   )

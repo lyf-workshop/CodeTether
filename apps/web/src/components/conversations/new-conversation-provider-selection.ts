@@ -40,7 +40,7 @@ export function newConversationProviderEligibility(
         eligible: false,
         label: `${provider.displayName} · ${provider.availabilityLabel}`,
         executionLabel: `${health.stateLabel} · ${health.freshnessLabel}`,
-        executionAdvisory: `${health.description} 完成所需操作并通过现有刷新流程重新验证后，才能选择此智能体。`,
+        executionAdvisory: `${health.description} 完成所需操作并通过现有刷新流程重新验证后，才能选择此AI 工具。`,
       }
     }
     return {

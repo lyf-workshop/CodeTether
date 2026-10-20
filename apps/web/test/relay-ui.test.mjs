@@ -132,7 +132,7 @@ test('Machine Detail Relay UI stays Host-owned, accessible, bounded, and truthfu
     /当已验证的直连不可用时，新请求可以使用 Internet Relay/u,
   )
   assert.match(section, /活动中的请求不会在直连与 Relay 之间迁移/u)
-  assert.match(section, /Relay 在线也不单独代表项目位置或智能体可执行/u)
+  assert.match(section, /Relay 在线也不单独代表项目位置或AI 工具可执行/u)
   assert.match(section, /Internet Relay 当前不能承载新的设备执行/u)
   assert.match(section, /设备传输/u)
   assert.match(section, /'eligible' : 'unavailable'/u)

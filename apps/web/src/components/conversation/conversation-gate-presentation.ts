@@ -178,10 +178,7 @@ export function composerGatePresentation({
       title: projectExplanation?.title ?? '当前不能发送消息',
       description:
         projectExplanation?.description ??
-        disabled?.message
-          .replaceAll('CodeTether Host', 'CodeTether')
-          .replaceAll('智能体', 'AI 工具')
-          .replaceAll('推理后端', 'AI 服务') ??
+        disabled?.message ??
         'CodeTether 暂时无法连接。恢复连接后可以继续这个会话。',
       canInterrupt,
       ...(disabled?.navigation === undefined

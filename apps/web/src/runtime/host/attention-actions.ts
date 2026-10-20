@@ -151,12 +151,12 @@ export function attentionErrorMessage(error: unknown): string {
     case 'provider_not_installed':
     case 'provider_version_unsupported':
     case 'provider_unavailable':
-      return '智能体当前不可用。'
+      return 'AI 工具当前不可用。'
     case 'invalid_request':
       return '请求无效，请刷新后重试。'
     case 'provider_session_lost':
     case 'provider_conversation_unavailable':
-      return '智能体已无法恢复此会话；会话历史仍可查看。'
+      return 'AI 工具已无法恢复此会话；会话历史仍可查看。'
     case 'provider_error':
     case 'provider_start_failed':
     case 'conversation_archived':

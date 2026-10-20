@@ -266,7 +266,7 @@ export function deriveComposerEligibility(
   if (provider === undefined && providerLifecycle === undefined) {
     return disabled(
       'remote_execution_unavailable',
-      '这台电脑尚未提供当前智能体的检测结果。',
+      '这台电脑尚未提供当前AI 工具的检测结果。',
       'machine',
     )
   }
@@ -283,25 +283,25 @@ export function deriveComposerEligibility(
       case 'not_installed':
         return disabled(
           'provider_not_installed',
-          '执行电脑上未安装当前智能体。',
+          '执行电脑上未安装当前AI 工具。',
           'machine',
         )
       case 'unsupported_version':
         return disabled(
           'provider_unsupported_version',
-          '执行电脑上的智能体版本不受支持。',
+          '执行电脑上的AI 工具版本不受支持。',
           'machine',
         )
       case 'misconfigured':
         return disabled(
           'provider_misconfigured',
-          '执行电脑上的智能体配置当前不可用。',
+          '执行电脑上的AI 工具配置当前不可用。',
           'machine',
         )
       case 'unavailable':
         return disabled(
           'remote_execution_unavailable',
-          '当前智能体在这台电脑上不可用。',
+          '当前AI 工具在这台电脑上不可用。',
           'machine',
         )
       case 'available':
@@ -337,12 +337,15 @@ export function deriveComposerEligibility(
     }
     return disabled(
       'provider_capability_unsupported',
-      '当前智能体不支持此会话所需的远程执行能力。',
+      '当前AI 工具不支持此会话所需的远程执行能力。',
       'machine',
     )
   }
   if (input.currentTurnStatus === 'running') {
-    return disabled('conversation_busy', '智能体正在执行当前轮次，请等待完成。')
+    return disabled(
+      'conversation_busy',
+      'AI 工具正在执行当前轮次，请等待完成。',
+    )
   }
   return undefined
 }
@@ -389,7 +392,7 @@ function providerLifecycleComposerDisabled(
   if (lifecycle.availability !== 'available') {
     return disabled(
       'provider_not_installed',
-      '此会话绑定的智能体安装当前不可用；历史记录仍可查看。',
+      '此会话绑定的AI 工具安装当前不可用；历史记录仍可查看。',
       'machine',
     )
   }
@@ -411,8 +414,8 @@ function providerLifecycleComposerDisabled(
         ? 'provider_unsupported_version'
         : 'provider_start_failed',
       compatibility.state === 'incompatible'
-        ? '此会话绑定的智能体安装需要 CodeTether 更新后才能继续；历史记录仍然安全。'
-        : '此会话绑定的智能体安装当前无法运行；历史记录仍可查看。',
+        ? '此会话绑定的AI 工具安装需要 CodeTether 更新后才能继续；历史记录仍然安全。'
+        : '此会话绑定的AI 工具安装当前无法运行；历史记录仍可查看。',
       'machine',
     )
   }
@@ -425,7 +428,7 @@ function providerLifecycleComposerDisabled(
     ) {
       return disabled(
         'provider_capability_unsupported',
-        '此会话绑定的智能体安装不再支持安全执行和原生恢复；不会重放历史记录。',
+        '此会话绑定的AI 工具安装不再支持安全执行和原生恢复；不会重放历史记录。',
         'machine',
       )
     }
@@ -450,19 +453,19 @@ function providerLifecycleComposerDisabled(
     case 'authentication_required':
       return disabled(
         'login_required',
-        '智能体运行时兼容，但当前推理后端需要在这台电脑上登录。',
+        'AI 工具运行时兼容，但当前AI 服务需要在这台电脑上登录。',
         'machine',
       )
     case 'misconfigured':
       return disabled(
         'provider_misconfigured',
-        '智能体运行时兼容，但当前推理后端配置不可用。',
+        'AI 工具运行时兼容，但当前AI 服务配置不可用。',
         'machine',
       )
     case 'unavailable':
       return disabled(
         'provider_service_unavailable',
-        '智能体运行时兼容，但推理后端当前不可用。',
+        'AI 工具运行时兼容，但AI 服务当前不可用。',
         'machine',
       )
   }
@@ -531,9 +534,9 @@ export function conversationExecutionBoundaryPresentation(
       }
     case 'execution_unavailable':
       return {
-        title: '这台电脑当前无法执行此智能体',
+        title: '这台电脑当前无法执行此AI 工具',
         description:
-          '历史记录仍可查看；请在电脑详情确认连接和智能体状态后再继续。',
+          '历史记录仍可查看；请在电脑详情确认连接和AI 工具状态后再继续。',
       }
   }
 }

@@ -133,11 +133,11 @@ const profiles = {
 
 test('canonical failure cards cover required user-facing categories without parsing messages', () => {
   const cases = [
-    ['login_required', '需要登录智能体'],
+    ['login_required', '需要登录AI 工具'],
     ['usage_limit_reached', '已达到使用限额'],
     ['rate_limited', '请求过于频繁'],
-    ['provider_not_installed', '未安装智能体'],
-    ['provider_unsupported_version', '智能体版本不受支持'],
+    ['provider_not_installed', '未安装AI 工具'],
+    ['provider_unsupported_version', 'AI 工具版本不受支持'],
     ['machine_offline', '执行电脑离线'],
     ['reconnecting', '正在重新连接'],
     ['relay_channel_open_failed', 'Internet Relay 通道无法建立'],
@@ -147,7 +147,7 @@ test('canonical failure cards cover required user-facing categories without pars
     ['relay_protocol_error', 'Internet Relay 执行协议异常'],
     ['execution_capacity_reached', '执行容量已满'],
     ['project_location_unavailable', '项目位置不可用'],
-    ['provider_crashed', '智能体意外退出'],
+    ['provider_crashed', 'AI 工具意外退出'],
     ['execution_ownership_uncertain', '执行归属无法确认'],
     ['unknown_failure', '执行失败'],
   ]
@@ -225,7 +225,7 @@ test('validated Provider and Machine labels contextualize generic product copy',
   )
   assert.match(provider.title, /Claude Code/u)
   assert.match(provider.cause, /Linux VM/u)
-  assert.doesNotMatch(provider.title, /智能体/u)
+  assert.doesNotMatch(provider.title, /AI 工具/u)
 
   const machine = executionFailurePresentation(
     {
@@ -307,7 +307,7 @@ test('technical details contain only CodeTether-owned bounded fields', () => {
   assert.deepEqual(presentation.technicalDetails, [
     { label: '主机错误代码', value: 'provider_error' },
     { label: '故障代码', value: 'provider_crashed' },
-    { label: '来源', value: '智能体' },
+    { label: '来源', value: 'AI 工具' },
     { label: '发生时间', value: timestamp },
   ])
 })
@@ -318,7 +318,7 @@ test('legacy errors use structured Host codes and never expose message text', ()
     message: 'provider executable at private path',
   })
 
-  assert.equal(presentation.title, '未安装智能体')
+  assert.equal(presentation.title, '未安装AI 工具')
   assert.equal(presentation.canStartNewTurn, false)
   assert.doesNotMatch(JSON.stringify(presentation), /private path/u)
 })

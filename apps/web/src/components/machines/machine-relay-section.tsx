@@ -195,12 +195,12 @@ export function MachineRelaySection({
       <div className="mt-4 flex min-w-0 items-start gap-2.5 rounded-sm border border-warning/30 bg-warning-muted px-3 py-3 text-sm text-text-secondary">
         <ShieldCheck
           aria-hidden="true"
-          className="mt-0.5 size-4 shrink-0 text-warning"
+          className="mt-0.5 size-4 shrink-0 text-warning-text"
         />
         <p className="min-w-0 leading-relaxed">
           {relay?.internetExecutionEnabled === true
-            ? '当已验证的直连不可用时，新请求可以使用 Internet Relay。活动中的请求不会在直连与 Relay 之间迁移；Relay 在线也不单独代表项目位置或智能体可执行。'
-            : 'Internet Relay 当前不能承载新的设备执行。Relay 在线状态本身不代表电脑、项目位置或智能体可执行。'}
+            ? '当已验证的直连不可用时，新请求可以使用 Internet Relay。活动中的请求不会在直连与 Relay 之间迁移；Relay 在线也不单独代表项目位置或AI 工具可执行。'
+            : 'Internet Relay 当前不能承载新的设备执行。Relay 在线状态本身不代表电脑、项目位置或AI 工具可执行。'}
         </p>
       </div>
 
@@ -262,7 +262,7 @@ export function MachineRelaySection({
       {operationError === null || operationError === undefined ? null : (
         <p
           role="alert"
-          className="mt-3 break-words rounded-sm border border-danger/30 bg-danger-muted px-3 py-2 text-sm text-danger"
+          className="mt-3 break-words rounded-sm border border-danger/30 bg-danger-muted px-3 py-2 text-sm text-danger-text"
         >
           {relayErrorMessage(operationError)}
         </p>
@@ -581,7 +581,7 @@ function ConfigureRelayDialog({
               <p
                 id="relay-configuration-error"
                 role="alert"
-                className="break-words rounded-sm border border-danger/30 bg-danger-muted px-3 py-2 text-sm text-danger"
+                className="break-words rounded-sm border border-danger/30 bg-danger-muted px-3 py-2 text-sm text-danger-text"
               >
                 {error}
               </p>
@@ -730,7 +730,7 @@ function EnrollRelayDialog({
               <p
                 id="relay-enrollment-error"
                 role="alert"
-                className="break-words rounded-sm border border-danger/30 bg-danger-muted px-3 py-2 text-sm text-danger"
+                className="break-words rounded-sm border border-danger/30 bg-danger-muted px-3 py-2 text-sm text-danger-text"
               >
                 {error}
               </p>

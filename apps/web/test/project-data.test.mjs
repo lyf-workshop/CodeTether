@@ -483,7 +483,7 @@ test('Project errors use stable safe copy and never expose Host diagnostics', ()
   )
   assert.equal(
     projectErrorMessage(locationConflict, 'remove-location'),
-    '此工作区位置仍有关联会话，当前不能移除。',
+    '这个文件夹仍有会话，当前不能从这台设备移除。',
   )
   assert.equal(
     projectErrorMessage(new TypeError('fetch internals'), 'load'),

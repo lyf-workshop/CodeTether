@@ -77,11 +77,11 @@ export function newConversationMachineContextExplanation(
     case 'machine_missing':
       return '所选电脑当前不可用。请返回设备列表确认电脑状态后再创建会话。'
     case 'machine_unavailable':
-      return '所选电脑当前离线或不可用。恢复连接后才能在此电脑创建会话。'
+      return '所选电脑当前离线或不可用。恢复连接后才能在这台电脑创建会话。'
     case 'project_access_unavailable':
       return '所选电脑当前不支持访问项目工作区，暂时无法创建会话。'
     case 'provider_execution_unavailable':
-      return '所选电脑当前未满足在线连接、当前智能体检测或安全执行条件。'
+      return '所选电脑当前未满足在线连接、当前AI 工具检测或安全执行条件。'
     case 'project_location_missing':
       return '此项目在所选电脑上没有已授权的工作区位置，暂时无法创建会话。'
     case 'project_location_unavailable':

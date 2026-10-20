@@ -338,15 +338,15 @@ export function projectErrorMessage(
     case 'project_location_inaccessible':
       return '所选电脑当前无法访问该目录。'
     case 'project_location_conflict':
-      return '此项目已在所选电脑上注册了工作区位置。'
+      return '这个项目已在所选设备上添加了文件夹。'
     case 'project_location_not_found':
-      return '工作区位置不存在或已被移除。'
+      return '这个文件夹的关联不存在或已被移除。'
     case 'project_location_has_conversations':
-      return '此工作区位置仍有关联会话，当前不能移除。'
+      return '这个文件夹仍有会话，当前不能从这台设备移除。'
     case 'project_location_local_required':
-      return '本地工作区位置属于当前项目授权，不能单独移除。'
+      return '这台电脑上的文件夹不能单独移除，请使用移除项目。'
     case 'machine_has_project_locations':
-      return '这台电脑仍有关联项目位置，当前不能取消配对。'
+      return '这台电脑仍有已添加的项目，当前不能取消配对。'
     case 'project_has_conversations':
       return '此项目仍有关联会话，当前不能移除。'
     case 'unsupported':
@@ -395,7 +395,7 @@ export function projectErrorMessage(
         : operation === 'create' || operation === 'create-remote'
           ? 'CodeTether 未能添加项目。'
           : operation === 'remove-location'
-            ? 'CodeTether 未能移除工作区位置。'
+            ? 'CodeTether 未能移除这个文件夹的关联。'
             : 'CodeTether 未能移除项目。'
   }
 }

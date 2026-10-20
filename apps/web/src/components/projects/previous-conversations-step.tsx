@@ -552,7 +552,7 @@ export function PreviousConversationsStep({
         ) : null}
 
         {scanState !== 'scanning' && providerProblems.length > 0 ? (
-          <div className="space-y-2" aria-label="部分提供商不可用">
+          <div className="space-y-2" aria-label="部分 AI 工具不可用">
             {providerProblems.map((provider) => (
               <p
                 key={provider.provider}
@@ -807,7 +807,7 @@ function providerProblemText(
 ): string {
   const label = providerLabel(provider.provider)
   if (provider.failureReason === 'machine_offline') {
-    return `${label}：此电脑离线，暂时无法查看以前的会话。`
+    return `${label}：这台电脑离线，暂时无法查看以前的会话。`
   }
   if (
     provider.status === 'unsupported' ||
@@ -816,7 +816,7 @@ function providerProblemText(
     return `${label}：当前版本不支持查找以前的会话。`
   }
   if (provider.failureReason === 'provider_session_store_unreadable') {
-    return `${label}：无法读取以前的会话。不会更改提供商文件。`
+    return `${label}：无法读取以前的会话。不会更改 AI 工具的文件。`
   }
   return `${label}：以前的会话暂时不可用。`
 }

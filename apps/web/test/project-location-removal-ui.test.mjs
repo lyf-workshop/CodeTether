@@ -291,7 +291,7 @@ test('Host refusal remains visible and exact removal cannot auto-retry or claim 
     returnFocus: () => null,
   })
   assert.match(html, /role="alert"/u)
-  assert.match(html, /仍有关联会话，当前不能移除/u)
+  assert.match(html, /仍有会话，当前不能从这台设备移除/u)
   assert.doesNotMatch(html, /synthetic private diagnostic/u)
   const mutation = f.mutationOptions.at(-1)
   assert.equal(mutation.retry, false)

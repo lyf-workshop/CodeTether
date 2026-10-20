@@ -400,16 +400,16 @@ function providerBackendLifecyclePresentation(
       readiness: 'not_observed',
       readinessLabel: '尚未验证',
       freshnessLabel: '尚未观察',
-      description: '后端就绪状态与 Provider 运行时兼容性分开验证。',
+      description: 'AI 服务就绪状态与 AI 工具 运行时兼容性分开验证。',
     }
   }
 
   const modeLabels = {
-    first_party: 'Provider 官方服务',
+    first_party: 'AI 工具官方服务',
     custom_gateway: '自定义网关',
     bedrock: 'Amazon Bedrock',
     vertex: 'Google Vertex AI',
-    unknown: '后端模式未知',
+    unknown: 'AI 服务类型未知',
   } as const satisfies Record<ProviderBackendMode, string>
   const readinessLabels = {
     unknown: '尚未验证',
@@ -419,11 +419,11 @@ function providerBackendLifecyclePresentation(
     misconfigured: '配置不可用',
   } as const satisfies Record<ProviderBackendReadiness, string>
   const readinessDescriptions = {
-    unknown: '尚未通过显式检查或实际执行确认推理后端。',
-    ready: '当前推理后端已验证可用。',
-    unavailable: '推理后端当前不可用；运行时兼容性保持独立。',
-    authentication_required: '当前后端需要在这台电脑上完成身份验证。',
-    misconfigured: '当前后端配置无法用于 Provider 执行。',
+    unknown: '尚未通过显式检查或实际执行确认AI 服务。',
+    ready: '当前AI 服务已验证可用。',
+    unavailable: 'AI 服务当前不可用；运行时兼容性保持独立。',
+    authentication_required: '当前 AI 服务需要在这台电脑上完成身份验证。',
+    misconfigured: '当前 AI 服务配置无法用于 AI 工具执行。',
   } as const satisfies Record<ProviderBackendReadiness, string>
   const failurePresentation =
     backend.failure === undefined

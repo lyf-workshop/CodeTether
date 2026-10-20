@@ -119,7 +119,7 @@ export function PendingActionDock({
             等待你的审批
           </h2>
           <p className="truncate text-xs text-text-muted">
-            请确认每项操作后，智能体才会继续。
+            请确认每项操作后，AI 工具才会继续。
           </p>
         </div>
         <Badge
@@ -202,7 +202,7 @@ export function PendingActionDock({
             </details>
 
             {item.controls.error ? (
-              <p role="alert" className="mt-2 text-xs text-danger">
+              <p role="alert" className="mt-2 text-xs text-danger-text">
                 {item.controls.error}
               </p>
             ) : null}

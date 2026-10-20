@@ -36,7 +36,7 @@ export function createToolPresentation({
   status,
   outputSummary,
 }: ToolPresentationInput): ToolPresentation {
-  const rawCommand = command.trim() || 'Command execution'
+  const rawCommand = command.trim() || '执行命令'
   const inspectedCommand = unwrapPowerShellCommand(rawCommand)
   const tokens = tokenizeCommandPrefix(inspectedCommand, 6)
   const executable = normalizeExecutable(tokens[0]?.value)
@@ -102,7 +102,7 @@ function canonicalToolSubject(
 
 /** Compact, wrapper-free command text suitable for a secondary UI label. */
 export function createToolCommandSubtitle(command: string): string {
-  const normalized = command.trim() || 'Command execution'
+  const normalized = command.trim() || '执行命令'
   return compactSubtitle(unwrapPowerShellCommand(normalized))
 }
 
@@ -207,38 +207,38 @@ function readFileTarget(tokens: readonly CommandToken[]): string | undefined {
 
 function summarizeToolFailure(output: string | undefined): string {
   const normalized = output?.replace(/\s+/gu, ' ').trim() ?? ''
-  if (normalized.length === 0) return 'Command failed'
+  if (normalized.length === 0) return '命令执行失败'
   if (
     /cannot find (?:the )?path|path (?:was )?not found|pathnotfound|no such file|\benoent\b/iu.test(
       normalized,
     )
   ) {
-    return 'Path not found'
+    return '找不到路径'
   }
   if (
     /command not found|commandnotfoundexception|is not recognized as (?:the name of |an )?(?:a )?cmdlet|not recognized as an internal or external command/iu.test(
       normalized,
     )
   ) {
-    return 'Command not found'
+    return '找不到命令'
   }
   if (
     /permission denied|access (?:is )?denied|unauthorizedaccessexception/iu.test(
       normalized,
     )
   ) {
-    return 'Permission denied'
+    return '没有访问权限'
   }
-  if (/timed out|timeout/iu.test(normalized)) return 'Timed out'
-  if (/tests? failed|failed tests?/iu.test(normalized)) return 'Tests failed'
+  if (/timed out|timeout/iu.test(normalized)) return '操作超时'
+  if (/tests? failed|failed tests?/iu.test(normalized)) return '测试未通过'
 
   const exitCode =
     /(?:exit(?:ed)?(?: with)?(?: code)?|process exited with code)\s*[:=]?\s*(-?\d+)/iu.exec(
       normalized,
     )?.[1]
-  if (exitCode !== undefined) return `Exited with code ${exitCode}`
+  if (exitCode !== undefined) return `命令已退出，退出码 ${exitCode}`
 
-  return 'Command failed'
+  return '命令执行失败'
 }
 
 function unwrapPowerShellCommand(command: string): string {

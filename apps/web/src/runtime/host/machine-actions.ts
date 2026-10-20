@@ -381,7 +381,7 @@ export function machineErrorMessage(
   operation: MachineOperation,
 ): string {
   if (error instanceof MachineMutationBusyError) {
-    return '此电脑操作正在处理中，请稍候。'
+    return '这台电脑操作正在处理中，请稍候。'
   }
   if (error instanceof CodeTetherIncompatibleProtocolError) {
     return '当前 CodeTether 版本不兼容，请更新应用后重试。'
@@ -395,13 +395,13 @@ export function machineErrorMessage(
 
   switch (error.envelope.code) {
     case 'machine_pairing_code_invalid':
-      return '配对码无效，请检查远程节点显示的六码。'
+      return '配对码无效，请检查Node显示的六码。'
     case 'machine_pairing_code_expired':
-      return '配对码已过期，请在远程节点重新开启配对。'
+      return '配对码已过期，请在Node重新开启配对。'
     case 'machine_pairing_rate_limited':
       return operation === 'refresh-providers'
         ? '这台电脑暂时忙碌，无法完成检查。请稍后再试。'
-        : '配对尝试过多，请稍后在远程节点生成新的配对码。'
+        : '配对尝试过多，请稍后在Node生成新的配对码。'
     case 'machine_authentication_failed':
       return operation === 'update-address'
         ? '无法验证新地址上的电脑身份；原信任关系未更改。'
@@ -415,7 +415,7 @@ export function machineErrorMessage(
         ? '远程电脑当前不可连接，无法刷新 AI 工具信息。'
         : '远程电脑当前不可连接，请检查地址和局域网连接。'
     case 'machine_protocol_incompatible':
-      return '远程节点版本不兼容，请更新 CodeTether Node。'
+      return 'Node版本不兼容，请更新 CodeTether Node。'
     case 'machine_connection_failed':
       return '无法建立安全连接，请重试。'
     case 'invalid_request':
@@ -441,9 +441,9 @@ export function machineErrorMessage(
     case 'runtime_unavailable':
       return 'CodeTether 本地服务暂时不可用。'
     case 'unsupported':
-      return '当前 CodeTether 版本不支持此电脑操作。'
+      return '当前 CodeTether 版本不支持这台电脑操作。'
     case 'machine_has_project_locations':
-      return '这台电脑仍有关联项目位置，请先移除这些位置再取消配对。'
+      return '这台电脑仍有已添加的项目，请先从这台设备移除这些项目，再取消配对。'
     case 'internal':
     case 'provider_error':
     case 'provider_not_installed':

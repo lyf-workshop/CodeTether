@@ -30,6 +30,7 @@ interface ConversationSearch {
   focus?: 'composer'
   panel?: 'changes'
   turn?: TurnId
+  attentionReview?: 'unresolved'
 }
 type ProjectSearch = ProjectWorkspaceSearch
 
@@ -41,6 +42,9 @@ function conversationSearch(
     focus: search.focus === 'composer' ? 'composer' : undefined,
     panel: search.panel === 'changes' ? 'changes' : undefined,
     ...(turn.success ? { turn: turn.data } : {}),
+    ...(search.attentionReview === 'unresolved'
+      ? { attentionReview: 'unresolved' as const }
+      : {}),
   }
 }
 function projectSearch(search: Record<string, unknown>): ProjectSearch {

@@ -202,19 +202,34 @@ test('background settings links unavailable autostart only to the roadmap withou
   assert.match(background, /backgroundRuntime\.available/u)
 })
 
-test('notification metadata needs only the project and never fetches conversation titles', async () => {
-  const [main, model] = await Promise.all([
+test('notification metadata uses only cold device/project context and never hydrates conversation titles', async () => {
+  const [main, metadataReader, model] = await Promise.all([
     source('main.tsx'),
+    source('runtime/notifications/attention-notification-metadata.ts'),
     source('runtime/notifications/desktop-notification-model.ts'),
   ])
   const metadata = main.slice(
     main.indexOf('resolveMetadata:'),
     main.indexOf('navigate: async'),
   )
-  assert.match(metadata, /projectDetailQueryOptions/u)
+  assert.match(metadata, /resolveAttentionNotificationMetadata/u)
+  assert.match(metadataReader, /projectDetailQueryOptions/u)
+  assert.match(metadataReader, /allProjectConversationsQueryOptions/u)
+  assert.match(
+    metadataReader,
+    /candidate\.conversationId === attention\.conversationId/u,
+  )
+  assert.match(
+    metadataReader,
+    /candidate\.machineId === conversation\.machineId/u,
+  )
   assert.doesNotMatch(
     metadata,
     /conversationTitle|conversationListQueryOptions|getConversation|payload/u,
+  )
+  assert.doesNotMatch(
+    metadataReader,
+    /conversationTitle|getConversation|\.title|payload/u,
   )
   assert.doesNotMatch(model, /metadata\.conversationTitle|CONVERSATION_TITLE_/u)
 })

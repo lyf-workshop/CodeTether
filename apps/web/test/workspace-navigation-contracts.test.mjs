@@ -49,7 +49,7 @@ test('Inbox retains exact bound actions, server-event removal, mutation guards a
   for (const authority of [
     'resolveInboxApproval',
     'reviewCompletedAttention',
-    'acknowledgeFailedAttention',
+    'acknowledgeInboxAttention',
     'mutationGuards.current.has',
     'getInboxFocusRecoveryTarget',
     'attention.resolved',

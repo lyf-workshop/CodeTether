@@ -18,6 +18,7 @@ const turnId = 'turn_notification01'
 test('maps only durable Attention type and safe product metadata to notification copy', () => {
   const metadata = {
     projectName: '中文项目',
+    machineName: 'Windows 电脑',
     conversationTitle: '修复 Windows 登录后的自动重连问题 🚀',
   }
 
@@ -37,7 +38,7 @@ test('maps only durable Attention type and safe product metadata to notification
     conversationId,
     turnId,
     title: 'CodeTether · 需要批准',
-    body: '中文项目\nAI 工具正在等待你的确认',
+    body: 'Windows 电脑 · 中文项目\nAI 工具正在等待你的确认',
   })
   assert.doesNotMatch(approval.body, /secret-wrapper/u)
 
@@ -102,7 +103,7 @@ test('failure notifications never expose a Prompt-derived Conversation title', (
     },
   )
 
-  assert.match(failed.body, /^Safe project\n/u)
+  assert.match(failed.body, /^设备 · Safe project\n/u)
   assert.doesNotMatch(
     `${failed.title}\n${failed.body}`,
     /Prompt|Authorization|Bearer|owner-token|script|alert/u,
@@ -124,7 +125,7 @@ test('clamps long labels by grapheme without splitting Unicode emoji', () => {
     },
   )
   const [contextLine] = intent.body.split('\n')
-  assert.equal(contextLine.includes(' · '), false)
+  assert.equal(contextLine.includes(' · '), true)
   assert.ok(contextLine.endsWith('…'))
   assert.equal(contextLine.includes('\uFFFD'), false)
   assert.ok(Array.from(intent.body).length <= 256)
@@ -282,7 +283,7 @@ test('all system notification types omit every Prompt-derived title even from ho
       },
     }
     const intent = createNotificationIntent(attention(type, payload), metadata)
-    assert.match(intent.body, /^安全项目\n/u)
+    assert.match(intent.body, /^设备 · 安全项目\n/u)
     assert.doesNotMatch(
       intent.title + intent.body,
       /secret|private diagnostic|command|prompt/u,

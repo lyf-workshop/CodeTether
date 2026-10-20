@@ -28,7 +28,9 @@ interface InboxItemProps {
     item: Extract<AttentionItem, { type: 'approval' }>,
     decision: ApprovalDecision,
   ) => void
-  onAcknowledge: (item: Extract<AttentionItem, { type: 'failed' }>) => void
+  onAcknowledge: (
+    item: Extract<AttentionItem, { type: 'failed' | 'completed_review' }>,
+  ) => void
   onReview: (item: Extract<AttentionItem, { type: 'completed_review' }>) => void
 }
 
@@ -76,10 +78,10 @@ export function InboxItem({
         : '失败'
   const tone =
     item.type === 'approval'
-      ? 'bg-warning-muted text-warning'
+      ? 'bg-warning-muted text-warning-text'
       : item.type === 'completed_review'
         ? 'bg-primary-muted text-primary'
-        : 'bg-danger-muted text-danger'
+        : 'bg-danger-muted text-danger-text'
   return (
     <AttentionRow
       aria-busy={mutation.pending || undefined}
@@ -110,7 +112,10 @@ export function InboxItem({
         <span
           title={mutation.error ?? presentation.description}
           role={mutation.error === undefined ? undefined : 'alert'}
-          className={mutation.error === undefined ? undefined : 'text-danger'}
+          className={cn(
+            'block whitespace-normal break-words',
+            mutation.error === undefined ? undefined : 'text-danger-text',
+          )}
         >
           {mutation.error ??
             (item.type === 'approval'
@@ -118,6 +123,11 @@ export function InboxItem({
               : item.type === 'completed_review'
                 ? provider + ' 已完成，等你查看'
                 : presentation.description)}
+          {item.type === 'approval' && !approvalEnabled ? (
+            <span className="mt-1 block text-text-secondary">
+              当前不能在这里批准。请打开会话查看这台设备和 AI 工具的状态。
+            </span>
+          ) : null}
         </span>
       }
       context={
@@ -151,7 +161,7 @@ export function InboxItem({
             </Link>
           )}
           {metadata?.projectAvailability === 'unavailable' ? (
-            <span className="shrink-0 text-warning">无法访问</span>
+            <span className="shrink-0 text-warning-text">无法访问</span>
           ) : null}
         </>
       }
@@ -215,9 +225,23 @@ function AttentionActions({
     )
   if (item.type === 'completed_review')
     return (
-      <Button size="sm" disabled={disabled} onClick={() => onReview(item)}>
-        {mutation?.pending ? '正在打开…' : '查看结果'}
-      </Button>
+      <>
+        <Button size="sm" disabled={disabled} onClick={() => onReview(item)}>
+          {mutation?.pending && mutation.action === 'review'
+            ? '正在打开…'
+            : '查看结果'}
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={disabled}
+          onClick={() => onAcknowledge(item)}
+        >
+          {mutation?.pending && mutation.action === 'acknowledge'
+            ? '正在确认…'
+            : '知道了'}
+        </Button>
+      </>
     )
   return (
     <>

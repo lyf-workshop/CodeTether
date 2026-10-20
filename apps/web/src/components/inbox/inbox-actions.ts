@@ -30,23 +30,33 @@ export async function resolveInboxApproval(
   await client.resolveApproval(item.payload.approvalId, decision)
 }
 
-/** A completed review is durably resolved before real Conversation navigation. */
+/** Attempt canonical resolution; reading the result must survive its failure. */
 export async function reviewCompletedAttention(
   client: InboxActionClient,
   item: CompletedAttentionItem,
   navigate: (
     conversationId: ConversationId,
     turnId: TurnId | undefined,
+    reviewFailed?: true,
   ) => void | Promise<void>,
 ): Promise<void> {
-  await client.resolveAttention(item.attentionId)
-  await navigate(item.conversationId, item.turnId)
+  let reviewFailed = false
+  try {
+    await client.resolveAttention(item.attentionId)
+  } catch {
+    reviewFailed = true
+  }
+  if (reviewFailed) await navigate(item.conversationId, item.turnId, true)
+  else await navigate(item.conversationId, item.turnId)
 }
 
-/** A failed acknowledgement changes only Attention, never the Turn outcome. */
-export async function acknowledgeFailedAttention(
+/** Acknowledgement changes only Attention, never the Turn or an approval. */
+export async function acknowledgeInboxAttention(
   client: InboxActionClient,
-  item: FailedAttentionItem,
+  item: FailedAttentionItem | CompletedAttentionItem,
 ): Promise<void> {
+  if (item.type !== 'failed' && item.type !== 'completed_review') {
+    throw new Error('Only completed or failed Attention can be acknowledged')
+  }
   await client.resolveAttention(item.attentionId)
 }

@@ -53,7 +53,7 @@ async function renderApp() {
       readDesktopNotificationPreferences,
       resolveNotificationPreferenceStorage,
     },
-    { projectDetailQueryOptions },
+    { resolveAttentionNotificationMetadata },
     { createHostQueryClient },
   ] = await Promise.all([
     import('@tanstack/react-query'),
@@ -66,7 +66,7 @@ async function renderApp() {
     import('./runtime/notifications/desktop-notification-model'),
     import('./runtime/native/native-capabilities'),
     import('./runtime/native/notification-preferences'),
-    import('./runtime/host/project-query'),
+    import('./runtime/notifications/attention-notification-metadata'),
     import('./runtime/host/host-query-client'),
   ])
   const queryClient = createHostQueryClient()
@@ -84,12 +84,8 @@ async function renderApp() {
       readDesktopNotificationPreferences(notificationStorage),
     readSurface: () =>
       notificationSurfaceFromPathname(router.state.location.pathname),
-    resolveMetadata: async (attention) => {
-      const project = await queryClient.fetchQuery(
-        projectDetailQueryOptions(runtime, attention.projectId),
-      )
-      return { projectName: project.name }
-    },
+    resolveMetadata: (attention) =>
+      resolveAttentionNotificationMetadata(queryClient, runtime, attention),
     navigate: async (intent) => {
       notificationNavigationSequence += 1
       await router.navigate({

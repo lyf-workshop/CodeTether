@@ -60,6 +60,7 @@ import {
   projectLocationForMachine,
 } from '../../runtime/host/project-location'
 import { ConversationDetailPage } from './conversation-detail-page'
+import { AttentionReviewNotice } from './attention-review-notice'
 import {
   createLiveConversationDetailSource,
   type LiveConversationMachineContext,
@@ -84,7 +85,7 @@ export function ConversationDetailRoute() {
     strict: false,
   })
   const conversationId = routeConversationId ?? ''
-  const { focus, panel, turn } = useSearch({
+  const { focus, panel, turn, attentionReview } = useSearch({
     strict: false,
   })
   const currentPath = useRouterState({
@@ -111,6 +112,7 @@ export function ConversationDetailRoute() {
         search: {
           ...(panel === undefined ? {} : { panel }),
           ...(turn === undefined ? {} : { turn }),
+          ...(attentionReview === undefined ? {} : { attentionReview }),
         },
       })
     }
@@ -147,16 +149,29 @@ export function ConversationDetailRoute() {
       },
     })
     return () => handoff.dispose()
-  }, [anchorRequestKey, conversationId, focus, navigate, panel, turn])
+  }, [
+    anchorRequestKey,
+    attentionReview,
+    conversationId,
+    focus,
+    navigate,
+    panel,
+    turn,
+  ])
 
   if (liveConversationId.success) {
     return (
-      <LiveConversationDetailRoute
-        anchorRequestKey={anchorRequestKey}
-        conversationId={liveConversationId.data}
-        initialInspectorTab={panel}
-        targetTurnId={turn}
-      />
+      <div className="flex h-full min-h-0 flex-col">
+        {attentionReview === 'unresolved' ? <AttentionReviewNotice /> : null}
+        <div className="min-h-0 flex-1">
+          <LiveConversationDetailRoute
+            anchorRequestKey={anchorRequestKey}
+            conversationId={liveConversationId.data}
+            initialInspectorTab={panel}
+            targetTurnId={turn}
+          />
+        </div>
+      </div>
     )
   }
 

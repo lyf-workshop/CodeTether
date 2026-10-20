@@ -37,6 +37,7 @@ export interface NotificationIntent {
 
 export interface AttentionNotificationMetadata {
   readonly projectName: string
+  readonly machineName?: string
   /** Compatibility input only; never used in system notification copy. */
   readonly conversationTitle?: string
 }
@@ -67,7 +68,12 @@ export function createNotificationIntent(
 ): NotificationIntent {
   const copy = notificationCopy(attention)
   const projectName = truncateNotificationLabel(
-    metadata.projectName,
+    metadata.projectName.replace(/[\r\n\t]+/gu, ' '),
+    PROJECT_NAME_GRAPHEME_LIMIT,
+    PROJECT_NAME_CODE_POINT_LIMIT,
+  )
+  const machineName = truncateNotificationLabel(
+    metadata.machineName?.replace(/[\r\n\t]+/gu, ' ').trim() || '设备',
     PROJECT_NAME_GRAPHEME_LIMIT,
     PROJECT_NAME_CODE_POINT_LIMIT,
   )
@@ -81,7 +87,7 @@ export function createNotificationIntent(
     title: copy.title,
     // All notification types can appear on a lock screen. Titles may contain
     // the first Prompt, so no Conversation title or raw payload is rendered.
-    body: `${projectName}\n${copy.detail}`,
+    body: `${machineName} · ${projectName}\n${copy.detail}`,
   }
 }
 

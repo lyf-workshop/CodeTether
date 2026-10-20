@@ -12,7 +12,7 @@ import {
 import { attentionErrorMessage } from '../../runtime/host/attention-actions'
 import { mutationErrorMessage } from '../../runtime/host/live-conversation-actions'
 import {
-  acknowledgeFailedAttention,
+  acknowledgeInboxAttention,
   resolveInboxApproval,
   reviewCompletedAttention,
 } from './inbox-actions'
@@ -174,19 +174,24 @@ export function InboxPage() {
     mutationGuards.current.add(attentionId)
     setMutation(attentionId, { pending: true, action })
     try {
-      if (item.type === 'completed_review') {
+      if (item.type === 'completed_review' && action === 'review') {
         await reviewCompletedAttention(
           runtime,
           item,
-          async (conversationId, turnId) =>
+          async (conversationId, turnId, reviewFailed) =>
             await navigate({
               to: '/c/$conversationId',
               params: { conversationId },
-              search: turnId === undefined ? {} : { turn: turnId },
+              search: {
+                ...(turnId === undefined ? {} : { turn: turnId }),
+                ...(reviewFailed
+                  ? { attentionReview: 'unresolved' as const }
+                  : {}),
+              },
             }),
         )
       } else {
-        await acknowledgeFailedAttention(runtime, item)
+        await acknowledgeInboxAttention(runtime, item)
       }
       // Failed Attention remains visible until attention.resolved is observed.
     } catch (error) {
@@ -225,7 +230,7 @@ export function InboxPage() {
         {connectionState === 'reconnecting' && response !== undefined ? (
           <p
             role="status"
-            className="shrink-0 rounded-full border border-warning/30 bg-warning-muted px-3 py-1 text-xs text-warning"
+            className="shrink-0 rounded-full border border-warning/30 bg-warning-muted px-3 py-1 text-xs text-warning-text"
           >
             正在重新连接
           </p>
@@ -241,7 +246,10 @@ export function InboxPage() {
         ) : loading ? (
           <InboxLoadingState />
         ) : response === undefined ? (
-          <InboxErrorState title="无法读取待处理事项" onRetry={handleRetry} />
+          <InboxErrorState
+            readFailure={connectionState === 'connected'}
+            onRetry={handleRetry}
+          />
         ) : model === undefined ? null : (
           <>
             <div ref={filtersRef}>

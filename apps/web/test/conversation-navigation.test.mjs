@@ -45,7 +45,11 @@ test('Inbox review and failed navigation preserve the Attention Turn anchor', as
 
   assert.match(
     page,
-    /search: turnId === undefined \? \{\} : \{ turn: turnId \}/u,
+    /search: \{\s*\.\.\.\(turnId === undefined \? \{\} : \{ turn: turnId \}\)/u,
+  )
+  assert.match(
+    page,
+    /reviewFailed\s+\? \{ attentionReview: 'unresolved' as const \}\s+: \{\}/u,
   )
   assert.match(
     item,

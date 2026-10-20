@@ -4,12 +4,14 @@ import { Button } from '@codetether/ui'
 
 interface InboxErrorStateProps {
   incompatible?: boolean
+  readFailure?: boolean
   onRetry: () => void
   title?: string
 }
 
 export function InboxErrorState({
   incompatible = false,
+  readFailure = false,
   onRetry,
   title,
 }: InboxErrorStateProps) {
@@ -29,12 +31,16 @@ export function InboxErrorState({
           {title ??
             (incompatible
               ? 'CodeTether 版本不兼容'
-              : 'CodeTether 暂时无法连接')}
+              : readFailure
+                ? '待处理列表暂时读不到'
+                : 'CodeTether 暂时无法连接')}
         </h2>
         <p className="mt-1.5 text-base font-regular text-text-secondary">
           {incompatible
             ? '当前应用与本地服务版本不兼容，请更新 CodeTether 后重试。'
-            : '本地服务暂时不可用，请稍后重试。'}
+            : readFailure
+              ? '连接正常，但待处理列表暂时读不到，请稍后重试。'
+              : '本地服务暂时不可用，请稍后重试。'}
         </p>
         <Button variant="secondary" className="mt-5" onClick={onRetry}>
           <RefreshCw aria-hidden="true" />

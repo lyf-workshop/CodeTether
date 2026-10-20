@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
-  acknowledgeFailedAttention,
+  acknowledgeInboxAttention,
   resolveInboxApproval,
   reviewCompletedAttention,
 } from '../.tmp/test-dist/components/inbox/inbox-actions.js'
@@ -52,21 +52,21 @@ test('completed review resolves durably before real Conversation navigation', as
   ])
 })
 
-test('completed review failure keeps navigation closed', async () => {
+test('completed review failure preserves result navigation and reports unresolved state', async () => {
   const calls = []
   const client = actionClient(calls, new Error('Host unavailable'))
 
-  await assert.rejects(
-    reviewCompletedAttention(
-      client,
-      completedItem(),
-      (conversationId, turnId) => {
-        calls.push(['navigate', conversationId, turnId])
-      },
-    ),
-    /Host unavailable/,
+  await reviewCompletedAttention(
+    client,
+    completedItem(),
+    (conversationId, turnId, reviewFailed) => {
+      calls.push(['navigate', conversationId, turnId, reviewFailed])
+    },
   )
-  assert.deepEqual(calls, [['attention', 'attn_completed01']])
+  assert.deepEqual(calls, [
+    ['attention', 'attn_completed01'],
+    ['navigate', 'conv_inbox02', 'turn_inbox02', true],
+  ])
 })
 
 test('failed acknowledgement resolves only Attention identity', async () => {
@@ -87,7 +87,7 @@ test('failed acknowledgement resolves only Attention identity', async () => {
     },
   }
 
-  await acknowledgeFailedAttention(client, item)
+  await acknowledgeInboxAttention(client, item)
 
   assert.deepEqual(calls, [['attention', 'attn_failed01']])
   assert.equal(item.status, 'open')

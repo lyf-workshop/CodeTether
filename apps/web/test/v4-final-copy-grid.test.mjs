@@ -66,7 +66,7 @@ test('device detail grid uses one named central token with identical columns and
   )
   assert.ok(
     detail.includes(
-      'min-[1001px]:grid-cols-[var(--layout-device-detail-columns)]',
+      'expanded-workspace:grid-cols-[var(--layout-device-detail-columns)]',
     ),
   )
   assert.ok(!detail.includes('minmax(0,1.65fr)_minmax(17.5rem,1fr)'))

@@ -35,7 +35,7 @@ export function AppearanceSettings() {
           description="默认浅色。选择“跟随系统”会随系统的深浅色设置切换。"
         >
           <div
-            className="grid grid-cols-1 gap-3 min-[390px]:grid-cols-3"
+            className="grid grid-cols-1 gap-3 theme-grid:grid-cols-3"
             role="group"
             aria-label="主题"
           >

@@ -11,11 +11,13 @@ import {
   workspaceSidebarWidthBounds,
   workspaceSidebarWidthPreferenceKey,
 } from './workspace-sidebar-layout'
-
-const narrowDesktopQuery = '(max-width: 1180px)'
+import {
+  workspaceLayoutMedia,
+  workspaceLayoutTokens,
+} from './workspace-layout-tokens'
 
 function subscribeNarrowDesktop(onChange: () => void) {
-  const media = window.matchMedia(narrowDesktopQuery)
+  const media = window.matchMedia(workspaceLayoutMedia.narrowDesktop)
   media.addEventListener('change', onChange)
   return () => media.removeEventListener('change', onChange)
 }
@@ -38,7 +40,7 @@ export function useWorkspaceSidebarWidth() {
   const stylesheet = useRef<CSSStyleSheet | undefined>(undefined)
   const narrow = useSyncExternalStore(
     subscribeNarrowDesktop,
-    () => window.matchMedia(narrowDesktopQuery).matches,
+    () => window.matchMedia(workspaceLayoutMedia.narrowDesktop).matches,
     () => false,
   )
 
@@ -79,7 +81,11 @@ export function useWorkspaceSidebarWidth() {
   }
   return {
     layoutId,
-    width: storedWidth ?? (narrow ? 224 : workspaceSidebarWidthBounds.default),
+    width:
+      storedWidth ??
+      (narrow
+        ? workspaceLayoutTokens.compactSidebarWidth
+        : workspaceSidebarWidthBounds.default),
     setWidth,
   }
 }

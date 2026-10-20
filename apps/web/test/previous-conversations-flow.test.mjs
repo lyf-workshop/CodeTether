@@ -30,7 +30,9 @@ test('selection stays accessible and adoption is an explicit per-candidate mutat
     'components/projects/previous-conversations-step.tsx',
   )
 
-  assert.match(source, /type="checkbox"/u)
+  assert.match(source, /<Checkbox/u)
+  assert.match(source, /onCheckedChange/u)
+  assert.match(source, /htmlFor=\{\s*selectableCandidate/u)
   assert.match(source, /aria-label=\{`选择 \$\{candidate\.title\}`\}/u)
   assert.match(source, /role="status" aria-live="polite"/u)
   assert.match(source, /scanState === 'loading-more'/u)

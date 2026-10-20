@@ -64,6 +64,7 @@ function fixture({
     requests = [],
     readOptions = []
   const runtime = {
+    getConnectionState: () => connection,
     removeProjectLocation: async (...args) => {
       requests.push(['remove', ...args])
       return {

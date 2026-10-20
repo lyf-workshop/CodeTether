@@ -245,7 +245,7 @@ function TopBar({
                     className="h-8 gap-2 px-2 text-text-secondary hover:text-text-primary"
                   >
                     <ShieldCheck aria-hidden="true" />
-                    <span className="max-[1180px]:sr-only">检查状态</span>
+                    <span className="narrow-desktop:sr-only">检查状态</span>
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom">检查状态</TooltipContent>

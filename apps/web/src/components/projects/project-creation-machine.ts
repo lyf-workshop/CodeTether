@@ -12,6 +12,21 @@ export interface FixedProjectCreationMachine {
     | 'ready'
 }
 
+/** A bounded frontend validation failure, not a Host or transport failure. */
+export class ProjectCreationMachineUnavailableError extends Error {
+  constructor(
+    readonly reason: FixedProjectCreationMachine['state'] | 'host_unavailable',
+  ) {
+    super(
+      reason === 'host_unavailable'
+        ? 'CodeTether 暂时无法连接。恢复连接后可以继续添加项目。'
+        : (fixedProjectCreationMachineExplanation(reason) ??
+            '请先选择一台可以添加项目的设备。'),
+    )
+    this.name = 'ProjectCreationMachineUnavailableError'
+  }
+}
+
 /** Registration remains bound to the explicitly requested durable Machine. */
 export function selectFixedProjectCreationMachine(
   machines: readonly MachineSummary[] | undefined,

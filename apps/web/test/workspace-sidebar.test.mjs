@@ -244,7 +244,7 @@ test('Workspace Sidebar handle uses pointer capture, cleanup, and keyboard resiz
     1,
   )
   assert.match(topBar, /aria-label="检查状态"/u)
-  assert.match(topBar, /max-\[1180px\]:sr-only/u)
+  assert.match(topBar, /narrow-desktop:sr-only/u)
   assert.doesNotMatch(topBar, /label="帮助"/u)
   assert.match(
     shell,
@@ -274,7 +274,7 @@ test('Top Bar owns stable left, center, and right chrome regions', async () => {
   assert.ok(workspace > doctor)
   assert.match(source, /min-w-0 flex-1 overflow-hidden/u)
   assert.match(source, /flex min-w-0 shrink-0 items-center gap-2/u)
-  assert.match(source, /max-\[1180px\]:sr-only/u)
+  assert.match(source, /narrow-desktop:sr-only/u)
 })
 
 function conversation(id, options = {}) {

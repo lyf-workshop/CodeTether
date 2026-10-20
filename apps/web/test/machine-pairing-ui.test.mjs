@@ -73,9 +73,10 @@ test('remote rows show bounded project data without triggering Provider detectio
     source('runtime/host/machine-query.ts'),
     source('runtime/host/host-runtime.ts'),
   ])
-  assert.match(page, /queries: machines\.map/u)
+  assert.match(page, /projectListQueryOptions/u)
+  assert.doesNotMatch(page, /useQueries|machineDetailQueryOptions/u)
   assert.match(page, /MachineProjectsSection/u)
-  assert.match(page, /detail\.projects/u)
+  assert.match(page, /projects=\{projectsQuery\.data\}/u)
   assert.match(page, /machineConnectionStateLabel/u)
   assert.match(page, /lastSeenAt/u)
   assert.match(providers, /discovery\.state !== 'not_observed'/u)

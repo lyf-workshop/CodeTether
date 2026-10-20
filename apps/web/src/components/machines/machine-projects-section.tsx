@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 
@@ -128,10 +128,9 @@ function MachineProjectCard({
 }) {
   const runtime = useHostRuntime()
   const connectionState = useHostConnectionState()
-  const [metricsRequested, setMetricsRequested] = useState(false)
   const conversationsQuery = useQuery({
     ...allProjectConversationsQueryOptions(runtime, project.projectId),
-    enabled: connectionState === 'connected' && metricsRequested,
+    enabled: connectionState === 'connected',
   })
   const location = projectLocationForMachine(project, machine.machineId)
   const state = deviceProjectState(machine, location)
@@ -142,8 +141,6 @@ function MachineProjectCard({
   )
   return (
     <ProjectCard
-      onPointerEnter={() => setMetricsRequested(true)}
-      onFocusCapture={() => setMetricsRequested(true)}
       name={project.name}
       rootPath={location?.rootPath ?? '文件夹位置未知'}
       dimmed={!state.available}

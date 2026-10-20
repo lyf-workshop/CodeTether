@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import {
   useInfiniteQuery,
@@ -14,7 +14,7 @@ import {
   RefreshCw,
 } from 'lucide-react'
 
-import { Button, DialogHeader, DialogTitle } from '@codetether/ui'
+import { Button, Checkbox, DialogHeader, DialogTitle } from '@codetether/ui'
 import { CodeTetherResponseError } from '@codetether/client'
 import {
   providerSessionDiscoveryLimits,
@@ -87,6 +87,7 @@ export function PreviousConversationsStep({
   const [importing, setImporting] = useState(false)
   const [scanNotice, setScanNotice] = useState('')
   const stepRef = useRef<HTMLDivElement>(null)
+  const selectionId = useId()
   const scanGenerationRef = useRef(0)
   const lifecycleGenerationRef = useRef(0)
   const scanAbortRef = useRef<AbortController | undefined>(undefined)
@@ -637,9 +638,8 @@ export function PreviousConversationsStep({
                           }`}
                         >
                           {selectableCandidate ? (
-                            <input
-                              type="checkbox"
-                              className="size-4 shrink-0 accent-[var(--color-primary-action)]"
+                            <Checkbox
+                              id={`${selectionId}-${candidate.discoveryCandidateId}`}
                               checked={selected.has(
                                 candidate.discoveryCandidateId,
                               )}
@@ -649,7 +649,7 @@ export function PreviousConversationsStep({
                                   !selected.has(candidate.discoveryCandidateId))
                               }
                               aria-label={`选择 ${candidate.title}`}
-                              onChange={() =>
+                              onCheckedChange={() =>
                                 toggleCandidate(candidate.discoveryCandidateId)
                               }
                             />
@@ -664,9 +664,16 @@ export function PreviousConversationsStep({
                             </span>
                           )}
                           <span className="min-w-0 flex-1">
-                            <span className="block truncate text-sm font-medium text-text-primary">
+                            <label
+                              htmlFor={
+                                selectableCandidate
+                                  ? `${selectionId}-${candidate.discoveryCandidateId}`
+                                  : undefined
+                              }
+                              className="block truncate text-sm font-medium text-text-primary"
+                            >
                               {candidate.title}
-                            </span>
+                            </label>
                             <span
                               className="mt-0.5 block text-xs text-text-muted"
                               role={

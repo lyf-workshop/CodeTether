@@ -4,8 +4,12 @@ import type {
   MachineId,
   MachineSummary,
 } from '@codetether/protocol'
+import { CodeTetherResponseError } from '@codetether/client'
 
-import { selectFixedProjectCreationMachine } from './project-creation-machine.js'
+import {
+  ProjectCreationMachineUnavailableError,
+  selectFixedProjectCreationMachine,
+} from './project-creation-machine.js'
 
 interface ProjectCreationActions {
   createProject(path: string, name?: string): Promise<CreateProjectResponse>
@@ -13,6 +17,40 @@ interface ProjectCreationActions {
     machineId: MachineId,
     input: { readonly rootPath: string; readonly name?: string },
   ): Promise<CreateRemoteProjectResponse>
+}
+
+export class ProjectFolderRegistrationConflictError extends Error {
+  constructor(
+    readonly listUpdated: boolean,
+    cause: unknown,
+  ) {
+    super(
+      listUpdated
+        ? '这个文件夹刚被添加过，列表已更新。请打开已有项目。'
+        : '这个文件夹刚被添加过，但列表暂时无法更新。请重新读取项目后重试。',
+      { cause },
+    )
+    this.name = 'ProjectFolderRegistrationConflictError'
+  }
+}
+
+/** Only the canonical create-folder conflict permits this one metadata refresh. */
+export async function refreshProjectRegistrationConflict(
+  error: unknown,
+  refresh: () => Promise<unknown>,
+): Promise<ProjectFolderRegistrationConflictError | undefined> {
+  if (
+    !(error instanceof CodeTetherResponseError) ||
+    error.status !== 409 ||
+    error.envelope.code !== 'project_location_conflict'
+  )
+    return undefined
+  try {
+    await refresh()
+    return new ProjectFolderRegistrationConflictError(true, error)
+  } catch {
+    return new ProjectFolderRegistrationConflictError(false, error)
+  }
 }
 
 /** Presentation ordering only; disabled devices remain visible with a reason. */
@@ -40,14 +78,9 @@ export async function createProjectForMachine(
   machine: MachineSummary,
   input: { readonly path: string; readonly name?: string },
 ): Promise<CreateProjectResponse | CreateRemoteProjectResponse> {
-  if (
-    selectFixedProjectCreationMachine([machine], machine.machineId).state !==
-    'ready'
-  ) {
-    throw new Error(
-      'Selected Machine is not available for Project registration',
-    )
-  }
+  const target = selectFixedProjectCreationMachine([machine], machine.machineId)
+  if (target.state !== 'ready')
+    throw new ProjectCreationMachineUnavailableError(target.state)
   // The existing Runtime actions still own actionId, canonicalization and
   // idempotency. There is no generic filesystem call or alternative target.
   if (machine.kind === 'remote') {

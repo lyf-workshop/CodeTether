@@ -1,4 +1,4 @@
-import { useQueries, useQuery } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
 import { Monitor, Plus, Server } from 'lucide-react'
 
@@ -14,10 +14,8 @@ import {
   useHostConnectionState,
   useHostRuntime,
 } from '../../runtime/host/host-runtime-hooks'
-import {
-  machineDetailQueryOptions,
-  machineListQueryOptions,
-} from '../../runtime/host/machine-query'
+import { machineListQueryOptions } from '../../runtime/host/machine-query'
+import { projectListQueryOptions } from '../../runtime/host/project-query'
 import { AddProjectDialog } from '../projects/add-project-dialog'
 import { machineCanAddProject } from './device-project-model'
 import {
@@ -44,11 +42,9 @@ export function MachinesPage() {
   const machines = [...(machinesQuery.data ?? [])].sort(
     (a, b) => Number(b.kind === 'local') - Number(a.kind === 'local'),
   )
-  const detailQueries = useQueries({
-    queries: machines.map((machine) => ({
-      ...machineDetailQueryOptions(runtime, machine.machineId),
-      enabled: connectionState === 'connected',
-    })),
+  const projectsQuery = useQuery({
+    ...projectListQueryOptions(runtime),
+    enabled: connectionState === 'connected',
   })
   const unavailable =
     connectionState === 'unavailable' || connectionState === 'incompatible'
@@ -57,7 +53,10 @@ export function MachinesPage() {
 
   function retry() {
     runtime.retry()
-    if (connectionState === 'connected') void machinesQuery.refetch()
+    if (connectionState === 'connected') {
+      void machinesQuery.refetch()
+      void projectsQuery.refetch()
+    }
   }
 
   return (
@@ -94,12 +93,13 @@ export function MachinesPage() {
       ) : (
         <div className="space-y-10">
           {connectionState === 'reconnecting' ? (
-            <Notice title="正在重新连接">
+            <Notice role="status" title="正在重新连接">
               当前显示最近读取的设备数据，连接恢复后会重新确认。
             </Notice>
           ) : null}
           {machinesQuery.isError ? (
             <Notice
+              role="status"
               tone="warn"
               title="设备列表未能更新"
               action={
@@ -111,9 +111,26 @@ export function MachinesPage() {
               当前显示最近读取的设备记录。
             </Notice>
           ) : null}
-          {machines.map((machine, index) => {
-            const detailQuery = detailQueries[index]
-            const detail = detailQuery?.data
+          {projectsQuery.isError && projectsQuery.data !== undefined ? (
+            <Notice
+              role="status"
+              tone="warn"
+              title="项目列表未能更新"
+              action={
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={connectionState !== 'connected'}
+                  onClick={() => void projectsQuery.refetch()}
+                >
+                  重试
+                </Button>
+              }
+            >
+              当前显示最近读取的项目记录。
+            </Notice>
+          ) : null}
+          {machines.map((machine) => {
             const lastSeen = formatMachineLastSeen(machine.lastSeenAt)
             const connected =
               machine.connectionState === 'local' ||
@@ -143,7 +160,7 @@ export function MachinesPage() {
                     {machineConnectionStateLabel(machine.connectionState)}
                   </StatusTag>
                 }
-                metadata={`${machineEnvironmentLabel(machine)}${machine.kind === 'remote' ? (detail?.connection?.executionTransport === 'relay' ? ' · 通过 Relay' : ' · Node 配对') : ''}`}
+                metadata={`${machineEnvironmentLabel(machine)}${machine.kind === 'remote' ? ' · Node 配对' : ''}`}
                 description={
                   !connected
                     ? `${lastSeen === undefined ? '' : `上次在线 ${lastSeen}。`}可以查看以前的会话，恢复后才能继续或新建。`
@@ -163,8 +180,8 @@ export function MachinesPage() {
                   ) : undefined
                 }
               >
-                {detail === undefined ? (
-                  detailQuery?.isError ? (
+                {projectsQuery.data === undefined ? (
+                  projectsQuery.isError ? (
                     <Notice
                       tone="err"
                       title="暂时无法读取项目"
@@ -174,7 +191,7 @@ export function MachinesPage() {
                           size="sm"
                           disabled={connectionState !== 'connected'}
                           onClick={() => {
-                            void detailQuery.refetch()
+                            void projectsQuery.refetch()
                           }}
                         >
                           重试
@@ -192,7 +209,7 @@ export function MachinesPage() {
                 ) : (
                   <MachineProjectsSection
                     machine={machine}
-                    projects={detail.projects}
+                    projects={projectsQuery.data}
                     heading={false}
                   />
                 )}

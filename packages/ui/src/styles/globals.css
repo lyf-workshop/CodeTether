@@ -5,6 +5,14 @@
 
 @custom-variant dark (&:is([data-theme='dark'], [data-theme='dark'] *));
 
+/* v4 named layout variants: preserve the approved inclusive breakpoint edges. */
+@custom-variant narrow-desktop (@media (width <= 73.75rem));
+@custom-variant compact-workspace (@media (width <= 62.5rem));
+@custom-variant expanded-workspace (@media (width >= 62.5625rem));
+@custom-variant phone (@media (width <= 37.5rem));
+@custom-variant above-phone (@media (width >= 37.5625rem));
+@custom-variant theme-grid (@media (width >= 24.375rem));
+
 :root,
 [data-theme='light'] {
   color-scheme: light;
@@ -282,6 +290,7 @@
   --layout-settings-navigation-width: 208px;
   --layout-settings-navigation-compact-width: 180px;
   --layout-conversation-settings-width: 480px;
+  --layout-startup-min-height: 50vh;
 
   /* Conversation Detail geometry — Figma 07 Desktop at 1536 × 1024 */
   --layout-conversation-rail-width: 18rem;

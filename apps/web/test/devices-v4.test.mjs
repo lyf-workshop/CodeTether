@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
+import { metadataUiFixture } from './fixtures/metadata-ui.mjs'
 
 import {
   deviceProjectState,
@@ -136,7 +137,8 @@ test('device pages preserve machine queries, bounded indexes, provider controls 
     source('components/machines/unpair-machine-dialog.tsx'),
   ])
   assert.match(list, /machineListQueryOptions/u)
-  assert.match(list, /machineDetailQueryOptions/u)
+  assert.match(list, /projectListQueryOptions/u)
+  assert.doesNotMatch(list, /machineDetailQueryOptions|useQueries/u)
   assert.match(projects, /allProjectConversationsQueryOptions/u)
   assert.match(projects, /projectLocationForMachine/u)
   assert.doesNotMatch(
@@ -156,30 +158,48 @@ test('device pages preserve machine queries, bounded indexes, provider controls 
   assert.match(unpair, /machineErrorMessage\(unpairMutation.error, 'unpair'\)/u)
 })
 
-test('project metrics fetch only after interest in that exact card, preventing page-load fanout', async () => {
-  const source = await readFile(
-    new URL(
-      '../src/components/machines/machine-projects-section.tsx',
-      import.meta.url,
-    ),
-    'utf8',
+test('visible card metrics use one exact cold index without requiring hover or Provider activity', async () => {
+  const machine = {
+    machineId: localId,
+    displayName: '这台电脑',
+    kind: 'local',
+    connectionState: 'local',
+    availability: 'available',
+    capabilities: { projectAccess: true, providerExecution: true },
+  }
+  const project = {
+    projectId: 'proj_one',
+    name: '项目',
+    locations: [
+      { machineId: localId, rootPath: 'D:\\项目', availability: 'available' },
+    ],
+  }
+  const f = metadataUiFixture({
+    machines: [machine],
+    projects: [project],
+    conversations: [conversation('one', localId)],
+  })
+  const { MachineProjectsSection } = f.load(
+    'components/machines/machine-projects-section.tsx',
   )
-  assert.match(
-    source,
-    /metricsRequested, setMetricsRequested\] = useState\(false\)/u,
+  const html = f.render(MachineProjectsSection, {
+    machine,
+    projects: [project],
+    showAddCard: false,
+  })
+  assert.match(html, /1 个会话/u)
+  const read = f.reads.find(
+    (options) => options.enabled && options.queryKey.at(-1) === 'all',
   )
-  assert.match(
-    source,
-    /enabled: connectionState === 'connected' && metricsRequested/u,
-  )
-  assert.match(
-    source,
-    /onPointerEnter=\{\(\) => setMetricsRequested\(true\)\}/u,
-  )
-  assert.match(
-    source,
-    /onFocusCapture=\{\(\) => setMetricsRequested\(true\)\}/u,
-  )
+  assert.ok(read)
+  await read.queryFn({ signal: undefined })
+  assert.deepEqual(f.requests, [
+    [
+      'conversations',
+      project.projectId,
+      { archived: 'all', limit: 100, signal: undefined },
+    ],
+  ])
 })
 
 test('provider cards wrap identities and diagnostic values in narrow layouts', async () => {

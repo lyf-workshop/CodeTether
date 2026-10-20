@@ -15,7 +15,10 @@ import {
 } from '@codetether/ui'
 import type { MachineSummary, ProjectRecord } from '@codetether/protocol'
 
-import { useHostRuntime } from '../../runtime/host/host-runtime-hooks'
+import {
+  useHostConnectionState,
+  useHostRuntime,
+} from '../../runtime/host/host-runtime-hooks'
 import { machineErrorMessage } from '../../runtime/host/machine-actions'
 import { machineQueryKeys } from '../../runtime/host/machine-query'
 import {
@@ -48,6 +51,7 @@ export function UnpairMachineDialog({
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const runtime = useHostRuntime()
+  const hostReady = useHostConnectionState() === 'connected'
   const trustBusy = useMachineTrustBusy()
   const preflight = unpairMachinePreflight(projects ?? [], machine.machineId)
   const count =
@@ -55,7 +59,10 @@ export function UnpairMachineDialog({
   const unknown = count === undefined
   const blocked = unknown || (count !== undefined && count > 0)
   const unpairMutation = useMutation({
+    retry: false,
     mutationFn: async () => {
+      if (runtime.getConnectionState() !== 'connected')
+        throw new Error('恢复连接后才能取消设备配对。')
       if (blocked) throw new Error('Unpair preflight is not clear')
       return await runMachineTrustMutation(
         runtime,
@@ -155,6 +162,11 @@ export function UnpairMachineDialog({
               : '需要连接到远程 Node 才能确认撤销信任。无法连接时会保留设备和信任记录。'}
           </p>
         )}
+        {!hostReady ? (
+          <p role="status" className="text-sm text-text-secondary">
+            CodeTether 暂时无法连接。恢复连接后才能取消配对。
+          </p>
+        ) : null}
         {trustBusy && !unpairMutation.isPending ? (
           <p role="status" className="text-sm text-text-secondary">
             另一项设备配对或取消配对正在进行，请先完成或取消那项操作。
@@ -189,9 +201,9 @@ export function UnpairMachineDialog({
               <Button
                 variant="danger"
                 size="sm"
-                disabled={unpairMutation.isPending || trustBusy}
+                disabled={!hostReady || unpairMutation.isPending || trustBusy}
                 onClick={() => {
-                  if (!trustBusy && !unpairMutation.isPending)
+                  if (hostReady && !trustBusy && !unpairMutation.isPending)
                     unpairMutation.mutate()
                 }}
               >

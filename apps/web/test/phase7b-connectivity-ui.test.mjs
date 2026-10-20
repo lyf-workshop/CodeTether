@@ -195,7 +195,7 @@ test('Machine connectivity surfaces keep responsive and accessible semantic cont
   assert.match(relaySection, /overflow-x-hidden/u)
   assert.match(relaySection, /break-words/u)
   assert.match(relaySection, /break-all/u)
-  assert.match(detail, /min-\[1001px\]:grid-cols-/u)
+  assert.match(detail, /expanded-workspace:grid-cols-/u)
 
   assert.match(failureCard, /<article/u)
   assert.match(failureCard, /role="status"/u)

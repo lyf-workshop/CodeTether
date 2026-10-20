@@ -38,6 +38,7 @@ import {
 import { projectErrorMessage } from '../../runtime/host/project-actions'
 import {
   projectDetailQueryOptions,
+  projectListQueryOptions,
   projectQueryKeys,
   upsertProjectCache,
 } from '../../runtime/host/project-query'
@@ -51,11 +52,14 @@ import {
   chooseInitialProjectMachineId,
   createProjectForMachine,
   nextProjectCreationStep,
+  ProjectFolderRegistrationConflictError,
   projectCreationMachines,
+  refreshProjectRegistrationConflict,
 } from './add-project-model'
 import { PreviousConversationsStep } from './previous-conversations-step'
 import {
   fixedProjectCreationMachineExplanation,
+  ProjectCreationMachineUnavailableError,
   selectFixedProjectCreationMachine,
 } from './project-creation-machine'
 
@@ -160,16 +164,25 @@ export function AddProjectDialog({
         queryClient.getQueryData(machineQueryKeys.list),
         values.machineId,
       )
-      if (
-        connectionState !== 'connected' ||
-        current.machine === undefined ||
-        current.state !== 'ready'
-      ) {
-        throw new Error(
-          'Selected Machine is not available for Project registration',
+      if (runtime.getConnectionState() !== 'connected')
+        throw new ProjectCreationMachineUnavailableError('host_unavailable')
+      if (current.machine === undefined || current.state !== 'ready')
+        throw new ProjectCreationMachineUnavailableError(current.state)
+      try {
+        return await createProjectForMachine(runtime, current.machine, values)
+      } catch (error) {
+        const conflict = await refreshProjectRegistrationConflict(
+          error,
+          async () => {
+            await queryClient.fetchQuery(projectListQueryOptions(runtime))
+            void queryClient.invalidateQueries({
+              queryKey: machineQueryKeys.detail(values.machineId),
+              exact: true,
+            })
+          },
         )
+        throw conflict ?? error
       }
-      return await createProjectForMachine(runtime, current.machine, values)
     },
     onSuccess: async (response, values) => {
       const project = response.data.project
@@ -204,10 +217,13 @@ export function AddProjectDialog({
   })
 
   const errorMessage = createMutation.isError
-    ? projectErrorMessage(
-        createMutation.error,
-        target.machine?.kind === 'remote' ? 'create-remote' : 'create',
-      )
+    ? createMutation.error instanceof ProjectCreationMachineUnavailableError ||
+      createMutation.error instanceof ProjectFolderRegistrationConflictError
+      ? createMutation.error.message
+      : projectErrorMessage(
+          createMutation.error,
+          target.machine?.kind === 'remote' ? 'create-remote' : 'create',
+        )
     : pickerError || validationError
   const busy = pickerState === 'picking' || createMutation.isPending
 
@@ -512,7 +528,7 @@ function CreatedProjectStep({
           可以选择导入以前的会话，也可以跳过并直接开始。
         </DialogDescription>
       </DialogHeader>
-      <Notice tone="ok" title="项目已添加">
+      <Notice role="status" tone="ok" title="项目已添加">
         <span className="block break-words">{machineName}</span>
         {location ? (
           <span

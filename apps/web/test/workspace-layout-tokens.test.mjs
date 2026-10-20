@@ -119,10 +119,10 @@ test('settings uses approved desktop and tablet columns and only phone tabs', as
     )
   }
   assert.match(settings, /gap-\[var\(--s10\)\]/u)
-  assert.match(settings, /max-\[1000px\]:gap-6/u)
-  assert.match(settings, /max-\[600px\]:grid-cols-1/u)
-  assert.match(settings, /max-\[600px\]:hidden/u)
-  assert.match(settings, /min-\[601px\]:hidden/u)
+  assert.match(settings, /compact-workspace:gap-6/u)
+  assert.match(settings, /phone:grid-cols-1/u)
+  assert.match(settings, /phone:hidden/u)
+  assert.match(settings, /above-phone:hidden/u)
   assert.doesNotMatch(settings, /11rem|min-\[1001px\]|max-w-\(--page-w\)/u)
 })
 

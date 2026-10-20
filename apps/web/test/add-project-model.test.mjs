@@ -126,7 +126,12 @@ test('machine readiness is checked immediately before submission without any alt
   }
   await assert.rejects(
     createProjectForMachine(actions(calls), offline, { path: '/srv/test' }),
-    /not available/u,
+    (error) => {
+      assert.equal(error.name, 'ProjectCreationMachineUnavailableError')
+      assert.equal(error.reason, 'offline')
+      assert.match(error.message, /恢复在线后才能在这台设备上添加项目/u)
+      return true
+    },
   )
   assert.deepEqual(calls, [])
 })

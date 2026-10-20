@@ -188,7 +188,11 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
       </header>
       {!online ? (
         <div className="mb-6">
-          <Notice tone="warn" title={`${machine.displayName}当前无法连接`}>
+          <Notice
+            role="status"
+            tone="warn"
+            title={`${machine.displayName}当前无法连接`}
+          >
             {lastSeen === undefined ? '' : `上次在线 ${lastSeen}。`}
             可以查看以前的会话，但暂时不能发送消息、新建会话或添加项目。
           </Notice>
@@ -202,7 +206,7 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
       ) : null}
       {hostConnectionState === 'reconnecting' ? (
         <div className="mb-6">
-          <Notice title="正在重新连接">
+          <Notice role="status" title="正在重新连接">
             当前显示最近读取的设备数据，连接恢复后会重新确认。
           </Notice>
         </div>
@@ -210,6 +214,7 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
       {machineQuery.isError ? (
         <div className="mb-6">
           <Notice
+            role="status"
             tone="warn"
             title="设备状态未能更新"
             action={
@@ -222,7 +227,7 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
           </Notice>
         </div>
       ) : null}
-      <div className="grid min-w-0 gap-8 min-[1001px]:grid-cols-[var(--layout-device-detail-columns)]">
+      <div className="grid min-w-0 gap-8 expanded-workspace:grid-cols-[var(--layout-device-detail-columns)]">
         <div className="min-w-0 space-y-10">
           <MachineProjectsSection
             machine={machine}
@@ -292,7 +297,7 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
   )
 }
 
-function MachineConnectionSection({
+export function MachineConnectionSection({
   machine,
   connection,
   hostReady,
@@ -404,7 +409,12 @@ function MachineConnectionSection({
               <MapPin aria-hidden="true" />
               更新地址
             </Button>
-            <Button variant="danger" size="sm" onClick={onUnpair}>
+            <Button
+              variant="danger"
+              size="sm"
+              disabled={!hostReady}
+              onClick={onUnpair}
+            >
               <Unplug aria-hidden="true" />
               取消配对
             </Button>

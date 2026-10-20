@@ -8,7 +8,6 @@ import {
   providerPresentations,
 } from '../.tmp/test-dist/provider/provider-presentation.js'
 import {
-  defaultProviderControls,
   effectiveConversationProvider,
   effectiveProviderReasoning,
   executableConversationProviders,
@@ -149,13 +148,6 @@ test('Provider reasoning selection omits defaults and rejects stale values', () 
   )
   assert.equal(providerReasoningFromControl('high', provider), 'high')
   assert.equal(providerReasoningFromControl('stale', provider), undefined)
-
-  const providerSwitchDefaults = defaultProviderControls({
-    ...provider,
-    models: [{ id: 'provider-default', label: 'Default', isDefault: true }],
-  })
-  assert.deepEqual(providerSwitchDefaults, { model: 'provider-default' })
-  assert.equal(providerSwitchDefaults.reasoning, undefined)
 })
 
 test('New Conversation falls back to executable Remote Claude and preserves its effort controls', () => {

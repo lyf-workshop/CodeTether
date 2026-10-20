@@ -3,11 +3,6 @@ import {
   type ProviderPresentation,
 } from '../../provider/provider-presentation.js'
 
-export interface NewConversationProviderDefaults {
-  readonly model?: string
-  readonly reasoning?: string
-}
-
 export interface NewConversationProviderEligibility {
   readonly eligible: boolean
   readonly label: string
@@ -86,24 +81,6 @@ export function effectiveConversationProvider(
     providers.find((provider) => provider.provider === selectedProvider) ??
     providers[0]
   )
-}
-
-export function defaultProviderControls(
-  provider: ProviderPresentation,
-): NewConversationProviderDefaults {
-  const model = defaultProviderModel(provider)
-  return {
-    ...(model === undefined ? {} : { model }),
-  }
-}
-
-export function defaultProviderModel(
-  provider: ProviderPresentation,
-): string | undefined {
-  return (
-    provider.models.find((model) => model.isDefault === true) ??
-    provider.models[0]
-  )?.id
 }
 
 export function effectiveProviderReasoning(

@@ -992,7 +992,7 @@ function boundedTitle(value: string | undefined, createdAt: number): string {
   const normalized = value?.normalize('NFC').replace(/\s+/gu, ' ').trim()
   if (normalized === undefined || normalized.length === 0) {
     const timestamp = timestampToIso(createdAt)
-    return `Codex 会话${timestamp === undefined ? '' : ` — ${timestamp}`}`
+    return `Codex 会话${timestamp === undefined ? '' : ` · ${timestamp}`}`
   }
   const codePoints = [...normalized]
   return codePoints.length <= MAX_TITLE_CODE_POINTS

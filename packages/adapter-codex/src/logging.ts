@@ -1,3 +1,5 @@
+import type { CanonicalFailureReason } from '@codetether/agent-core'
+
 import type {
   JsonRpcId,
   JsonRpcIncoming,
@@ -16,6 +18,36 @@ export interface ProtocolLogEntry {
 export type ProtocolLogger = (entry: ProtocolLogEntry) => void
 
 const SECRET_KEY = /authorization|credential|password|secret|token|api.?key/i
+const FAILURE_VARIANT = /^[A-Za-z][A-Za-z0-9]{0,63}$/u
+
+/** Local diagnostics only: never serialize Provider prose, details or identity. */
+export function logCodexFailure(
+  codexErrorInfo: unknown,
+  reason: CanonicalFailureReason,
+): void {
+  const entries = isRecord(codexErrorInfo) ? Object.entries(codexErrorInfo) : []
+  const entry = entries.length === 1 ? entries[0] : undefined
+  const candidate =
+    typeof codexErrorInfo === 'string' ? codexErrorInfo : entry?.[0]
+  const variant =
+    typeof candidate === 'string' &&
+    FAILURE_VARIANT.exec(candidate)?.[0] === candidate
+      ? candidate
+      : 'unknown'
+  const details = entry?.[1]
+  const status = isRecord(details) ? details.httpStatusCode : undefined
+  const httpStatus =
+    typeof status === 'number' && Number.isInteger(status)
+      ? String(status)
+      : 'none'
+  try {
+    process.stderr.write(
+      `[codex:failure] variant=${variant} httpStatus=${httpStatus} reason=${reason}\n`,
+    )
+  } catch {
+    // A failed diagnostic sink must not change terminal failure semantics.
+  }
+}
 
 export function redactProtocolValue(value: unknown, depth = 0): unknown {
   if (depth > 8) return '[depth-limited]'

@@ -3,7 +3,7 @@
 - 分支：`ux/v4-device-first`，工作区 `D:/Projects/Software/agenthub-ux-v4-device-first`
 - 审核范围：`bbcda69..df91601`（9 个功能提交；3562f12 是平台权限测试，不在本轮范围）
 - 依据：`docs/ux-redesign/04-requirements.md`（第三版）、`02-dev-handoff.md`、原型；AGENTS.md
-- 当前级别：第 6 轮修复（a2f78db、4f30416）审核通过，已装到 Windows；安装版验收 12 项通过、0 项不通过、3 项未测，待 R7 改用 Codex 0.162.1、修通知注册并补测（见 DEVELOPMENT-PROCESS §2）
+- 当前级别：第 7 轮补测完成（无代码改动），Windows 安装版验收 14 项通过、0 项不通过、1 项未测（第 9 项），待 R8 修新增文件差异、在 Codex 应用外重装并补测（见 DEVELOPMENT-PROCESS §2）
 
 ## 第 1 轮（D1，2026-10-19）
 
@@ -358,3 +358,32 @@ R4 之后的结果见下一节。
 - 本机账号是内置 Administrator，CodeTether、Explorer 都以提升权限运行。这一点先记下，还没证据说明和通知有关。
 
 下一步：按 `ux-v4-device-first-fix-prompt-r7.md` 改选 Codex 0.162.1 补测 6、8，恢复开始菜单快捷方式后查通知并补测 9，补齐托盘和开始菜单图标。
+
+## 第 7 轮（2026-10-21，补测，HEAD 仍是 4f30416，没有新提交）
+
+报告：`D:/Projects/Software/agenthub-archive/v4-acceptance-report-r7.md`。用 R6 原安装包重装一次，数据前后一致，`hostVersion` 为 `git-4f30416e4307`。
+
+### 安装版验收（第 5 次）
+
+- 新通过 2 项：
+  - 6：改选 Codex 0.162.1 后 4 个回合正常。停止后状态是 interrupted，输入框恢复可编辑；批准请求在待处理页出现，拒绝后归零；新文件出现在变更列表，点开能跳到对应位置。
+  - 8：等待批准 1、待查看 13、失败 11 同时出现，对本轮的一个已完成项点了“知道了”，以前的项目没动。
+- 累计 14 项通过，0 项不通过，1 项未测（9）。
+- 图标：托盘是新版双卡片。任务栏没有新截图，开始菜单搜不到。
+
+### 我补查的两件事（只读）
+
+1. 新增文件没有逐行差异，原因找到了。
+   - Codex 对新增文件给的 `diff` 是文件全文，不是统一差异格式。测试文件 27 字节，报告里 `diffLength=27`，正好一致。
+   - 前端 `parseUnifiedDiff`（`apps/web/src/runtime/host/conversation-projection.ts:1344`）只认 `+`、`-`、空格开头的行，所以全文一行也认不出来，显示 `+0` 和“未提供可展示的差异内容”。
+   - 删除文件很可能一样。修改文件给的是统一差异，不受影响。
+   - 第 6 项要求的是“变更面板能用”，我仍算通过，但新增文件显示 +0 是真实缺陷，R8 修。
+2. 开始菜单快捷方式“消失”和通知被禁用，原因很可能是安装是在 Codex 桌面应用里执行的。
+   - Codex 桌面应用是商店（MSIX）应用，它启动的安装程序写 `%APPDATA%` 时被重定向到了 Codex 自己的目录：`%LOCALAPPDATA%\Packages\OpenAI.Codex_2p2nqsd0c76g0\LocalCache\Roaming\Microsoft\Windows\Start Menu\Programs\CodeTether.lnk`，时间 09:12:53 UTC，正是 R7 安装的时刻。
+   - 智能体在 Codex 里看到的是合并后的视图，所以九次检查都说快捷方式在。真实的开始菜单目录里没有，Windows 也就没有登记这个应用：`Get-StartApps` 为 0，开始菜单搜不到，通知返回 `DisabledForApplication`，Windows 通知列表里没有 CodeTether。
+   - NTFS 日志里真实开始菜单目录没有 CodeTether.lnk 的任何记录，而安装目录里的文件有，这和重定向一致。桌面快捷方式在 E 盘，没有被重定向。
+   - 同一个目录里还有更早的 `CodeTether-rollback` 和 `com.codetether.v4-preview`，说明以前也有在 Codex 里装的情况。
+   - 安装目录 `%LOCALAPPDATA%\CodeTether` 和数据是真实位置，没有受影响。
+   - 修法：安装和第一次启动都不能在 Codex 桌面应用里做，由用户双击安装包，或在普通终端里运行。
+
+下一步：按 `ux-v4-device-first-fix-prompt-r8.md` 修新增和删除文件的差异显示，打包后由用户在 Codex 应用外安装，然后补测第 9 项、新增文件差异和开始菜单、任务栏图标。

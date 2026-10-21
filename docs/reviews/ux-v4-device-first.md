@@ -3,7 +3,7 @@
 - 分支：`ux/v4-device-first`，工作区 `D:/Projects/Software/agenthub-ux-v4-device-first`
 - 审核范围：`bbcda69..df91601`（9 个功能提交；3562f12 是平台权限测试，不在本轮范围）
 - 依据：`docs/ux-redesign/04-requirements.md`（第三版）、`02-dev-handoff.md`、原型；AGENTS.md
-- 当前级别：第 5 轮修复（57a30ec、9de2279）审核通过，已装到 Windows；安装版验收 10 项通过、0 项不通过、5 项未测，待 R6 查 Codex 和通知并补测（见 DEVELOPMENT-PROCESS §2）
+- 当前级别：第 6 轮修复（a2f78db、4f30416）审核通过，已装到 Windows；安装版验收 12 项通过、0 项不通过、3 项未测，待 R7 改用 Codex 0.162.1、修通知注册并补测（见 DEVELOPMENT-PROCESS §2）
 
 ## 第 1 轮（D1，2026-10-19）
 
@@ -318,3 +318,43 @@ R4 之后的结果见下一节。
 - 5：用 Claude Code 回合测，窗口保持在前台，用 Enter 发送。
 
 下一步：按 `ux-v4-device-first-fix-prompt-r6.md` 加诊断输出、统一兜底标题、重装一次，然后补测 5、6、8、9、14 和四处图标。补测通过后合并进 main、打标签，每一步再问你。
+
+## 第 6 轮（2026-10-21，审 9de2279..4f30416，2 个提交）
+
+报告：`D:/Projects/Software/agenthub-archive/v4-acceptance-report-r6.md`。
+
+### 代码
+
+- a2f78db `fix(adapter-codex): log Codex failure variant`：通过。
+  - 失败时 stderr 只写类型名、HTTP 状态码和规范原因，类型名有字符和长度限制，写日志出错不影响失败结果。
+  - Codex 兜底标题改成 ` · `。
+  - 分类结果没改，符合 R6 要求。
+- 4f30416 `fix(desktop): log attention notification delivery`：通过。
+  - Windows 接受通知后记录类型和 AppID，去重跳过时记录原因，测试确认不含标题、正文和各类标识。
+  - 另外两个 Rust 文件各加一行测试用导入，修 Windows 下测试编译错误，用户已同意。
+- 检查全部为 0：2317 项测试，2303 通过，0 失败，14 项原有跳过。Rust 69 项通过。
+- 安装包 SHA256 以 56A1841DDD8BCF93 开头，运行中 `hostVersion` 为 `git-4f30416e4307`。
+
+### 安装版验收（第 4 次）
+
+- 新通过 2 项：
+  - 5：第三次尝试用真实 Enter 发送，运行中焦点留在同一输入框且只读，结束后直接用键盘输入成功。前两次没进入输入框，没产生回合，如实记录。
+  - 14：按 R6 定的边界检查了设备、项目、待处理、设置 5 页、会话、后续规划和首次设置，产品固定文字都是中文，没有禁用词。
+- 累计 12 项通过，0 项不通过，3 项未测（6、8、9）。
+- 6：复现得到 `variant=other httpStatus=none reason=provider_error`。`other` 是 Codex 协议里自己的兜底类别，看不出原因。用户已决定改用最新版 Codex。
+- 8：等待批准一类还没有出现，要等 Codex 能跑。
+- 9：两条 Windows 对照通知都是 `DisabledForApplication`，见下。
+- 图标：
+  - 标题栏、Explorer 是新版双卡片；
+  - 任务栏还是风筝，是图标缓存；
+  - 托盘截图后窗口位置变了，没有保存；
+  - 开始菜单搜不到。
+
+### 我补查的通知情况（只读，没改任何设置）
+
+- 报告说 Start 菜单快捷方式存在，这只在重装那一刻成立。现在 `%APPDATA%\Microsoft\Windows\Start Menu\Programs\CodeTether.lnk` 不存在，全局开始菜单里也没有，只剩桌面快捷方式。什么时候、被什么删的不知道。开始菜单搜不到 CodeTether、`Get-StartApps` 不列出它，都和这一点一致。
+- PowerShell 不是有效对照：它的通知设置 `Enabled=0`，本来就被关了。Chrome、QQ、Claude、Codex 等应用查到的都是 `Enabled`，所以 Windows 的通知整体是好的，问题只在 CodeTether 这个应用标识。
+- CodeTether 的通知设置 `Enabled=1`，但系统仍返回 `DisabledForApplication`。最后一次收到它的通知是 2026-08-29。
+- 本机账号是内置 Administrator，CodeTether、Explorer 都以提升权限运行。这一点先记下，还没证据说明和通知有关。
+
+下一步：按 `ux-v4-device-first-fix-prompt-r7.md` 改选 Codex 0.162.1 补测 6、8，恢复开始菜单快捷方式后查通知并补测 9，补齐托盘和开始菜单图标。

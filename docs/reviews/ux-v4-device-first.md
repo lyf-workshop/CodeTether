@@ -3,7 +3,7 @@
 - 分支：`ux/v4-device-first`，工作区 `D:/Projects/Software/agenthub-ux-v4-device-first`
 - 审核范围：`bbcda69..df91601`（9 个功能提交；3562f12 是平台权限测试，不在本轮范围）
 - 依据：`docs/ux-redesign/04-requirements.md`（第三版）、`02-dev-handoff.md`、原型；AGENTS.md
-- 当前级别：第 4 轮修复（2d9ad41）审核通过，已装到 Windows；安装版验收 8 项通过、1 项不通过、6 项未测，待 R5 修复和补测（见 DEVELOPMENT-PROCESS §2）
+- 当前级别：第 5 轮修复（57a30ec、9de2279）审核通过，已装到 Windows；安装版验收 10 项通过、0 项不通过、5 项未测，待 R6 查 Codex 和通知并补测（见 DEVELOPMENT-PROCESS §2）
 
 ## 第 1 轮（D1，2026-10-19）
 
@@ -279,3 +279,42 @@ R4 之后的结果见下一节。
   - 10：最早约 1.4 秒没有截到。
 
 下一步：按 `ux-v4-device-first-fix-prompt-r5.md` 修中文摘要、换图标、查 Codex 失败原因，重装一次，然后补测 1、2、6、8、9、10、14。补测通过后合并进 main、打标签，每一步再问你。
+
+## 第 5 轮（2026-10-21，审 2d9ad41..9de2279，3 个提交）
+
+报告：`D:/Projects/Software/agenthub-archive/v4-acceptance-report-r5.md`。
+
+### 代码
+
+- 57a30ec `fix(adapters): use Chinese tool summaries`：通过。
+  - Claude Code 摘要按 R5 表改成中文，失败摘要是“<摘要>失败”，有路径时仍按字节上限截断，加了 2000 字中文长路径用例。
+  - Codex 批准兜底改成“Codex 请求运行命令”“Codex 请求访问文件或权限”。
+  - 兜底会话标题改成“Claude 会话”“Codex 会话”。小问题：Codex 的兜底标题用 ` — ` 连接时间，Claude 用 ` · `，R6 统一成 ` · `。
+- c350190：风筝图标，已被否决，保留为历史提交，不再作为验收依据。
+- 9de2279 `feat(desktop): replace app icon with CodeTether stacked cards mark`：通过。
+  - `icons/source/*.svg` 和 `docs/ux-redesign/icon/final/` 逐字节一致。
+  - ICO 6 层，第一层 32 像素（窗口和托盘默认取第一层），ICNS 用 PNG 类型。
+- 检查全部为 0：2314 项测试，2300 通过，0 失败，14 项原有跳过。
+- 安装包 SHA256 以 51A5EC704F84FD3C 开头，运行中 `hostVersion` 为 `git-9de227968aa7`。
+
+### 安装版验收（第 3 次）
+
+- 通过 10 项：1、2、3、4、7、10、11、12、13、15。
+  - 1 用空数据目录 `CODETETHER_DATA_DIR` 测，之后不带变量启动，原数据都在。
+  - 10 由采样脚本自己启动应用，首帧没有深蓝。
+- 不通过：无。
+- 未测 5 项：
+  - 5：成功的那次发送用了按钮，随后最小化；用键盘的那次没有产生回合。
+  - 6、8：选定的 Codex 0.149.1 回合仍是 `provider_error`，没有批准和文件变更。PATH 上的 0.162.1 直接运行成功，协议关键结构一致。公开接口没有原始 `codexErrorInfo`，原因还没查明。
+  - 9：应用通知 Enabled=1，系统通知开，勿扰关，90 秒内没有通知，Desktop 错误输出里没有 `notification delivery failed`。开始菜单快捷方式的 AppID 是 `com.codetether.desktop`，但 `Get-StartApps` 不列出 CodeTether。
+  - 14：新产生的摘要是中文。旧版本留下的英文历史没有迁移，验收边界没定，所以没判。
+- 图标：双卡片只确认了标题栏。任务栏、托盘、开始菜单、Explorer 没有取得新截图。风筝版时任务栏还显示旧蓝 C，像是图标缓存。
+
+### 我对未测项的判断
+
+- Codex：现在所有失败路径最后都落到 `provider_error`，看不出是哪一类。下一步先让适配器把原始错误类型名（只有类型名和 HTTP 状态码，不含文字）写进 Host 错误输出，复现一次再决定。如果是旧版 0.149.1 本身的问题，修法是请用户同意后在设置里改选 0.162.1。
+- 通知：Desktop 只在失败时打日志，成功调用 Windows 也没有记录，所以分不清是前端没调用，还是 Windows 收到后没显示。`Get-StartApps` 不列出应用时，Windows 可能会丢掉这个 AppID 的通知。下一步先用同一个 AppID 发一条系统测试通知，再加成功日志复测。
+- 14：边界定为“当前版本产生的固定文字”。旧版本留下的历史、AI 工具原文、工具名、命令、路径和“故障代码”的值不算，列进报告。
+- 5：用 Claude Code 回合测，窗口保持在前台，用 Enter 发送。
+
+下一步：按 `ux-v4-device-first-fix-prompt-r6.md` 加诊断输出、统一兜底标题、重装一次，然后补测 5、6、8、9、14 和四处图标。补测通过后合并进 main、打标签，每一步再问你。

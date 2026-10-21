@@ -566,6 +566,7 @@ pub fn product_device_key_bind(
 
 #[cfg(all(test, windows))]
 mod tests {
+    use super::platform::WindowsCngProductDeviceKeyStore;
     use super::*;
     use p256::ecdsa::{Signature, VerifyingKey, signature::hazmat::PrehashVerifier};
     use sha2::{Digest, Sha256};

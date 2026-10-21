@@ -24,6 +24,8 @@ const MAX_PENDING_INTENTS: usize = 256;
 const MAX_ACTIVE_WINDOWS_TOASTS: usize = 256;
 const MAX_TITLE_CHARACTERS: usize = 96;
 const MAX_BODY_CHARACTERS: usize = 256;
+const NOTIFICATION_SKIPPED_LOG: &str =
+    "[codetether:desktop] notification skipped: already delivered";
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -31,6 +33,16 @@ pub enum AttentionNotificationType {
     Approval,
     CompletedReview,
     Failed,
+}
+
+#[cfg(any(windows, test))]
+fn notification_shown_log(attention_type: &AttentionNotificationType, app_id: &str) -> String {
+    let attention_type = match attention_type {
+        AttentionNotificationType::Approval => "approval",
+        AttentionNotificationType::CompletedReview => "completed_review",
+        AttentionNotificationType::Failed => "failed",
+    };
+    format!("[codetether:desktop] notification shown type={attention_type} app_id={app_id}")
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -235,6 +247,7 @@ pub fn deliver_attention_notification(
         .map_err(|message| format!("Invalid notification intent: {message}."))?;
 
     if !state.reserve_delivery(&intent.attention_id) {
+        eprintln!("{NOTIFICATION_SKIPPED_LOG}");
         return Ok(false);
     }
 
@@ -362,11 +375,17 @@ fn show_windows_notification(
         dismissed_token,
     };
 
-    let notifier = ToastNotificationManager::CreateToastNotifierWithId(&app_id.into())
+    let notifier = ToastNotificationManager::CreateToastNotifierWithId(&app_id.as_str().into())
         .map_err(|error| error.to_string())?;
     notifier
         .Show(&active_toast.notification)
         .map_err(|error| error.to_string())?;
+    // Show returning successfully means Windows accepted the request, not that
+    // a banner was displayed. Do not log notification content or identities.
+    eprintln!(
+        "{}",
+        notification_shown_log(&intent.attention_type, &app_id)
+    );
     state.retain_active_toast_if_pending(&intent.attention_id, active_toast, &activated);
     Ok(())
 }
@@ -623,6 +642,65 @@ mod tests {
         assert_eq!(value.turn_id, None);
         let encoded = serde_json::to_value(value).unwrap();
         assert!(encoded.get("turnId").is_none());
+    }
+
+    #[test]
+    fn notification_delivery_log_uses_only_type_and_the_actual_app_id() {
+        #[cfg(windows)]
+        let app_ids = [
+            "com.codetether.desktop",
+            tauri_winrt_notification::Toast::POWERSHELL_APP_ID,
+        ];
+        #[cfg(not(windows))]
+        let app_ids = ["com.codetether.desktop"];
+
+        for (attention_type, expected_type) in [
+            (AttentionNotificationType::Approval, "approval"),
+            (
+                AttentionNotificationType::CompletedReview,
+                "completed_review",
+            ),
+            (AttentionNotificationType::Failed, "failed"),
+        ] {
+            let mut value = intent("attn_log_sentinel");
+            value.attention_type = attention_type;
+            value.title = "TITLE_PRIVACY_SENTINEL".to_owned();
+            value.body = "DEVICE_PROJECT_PRIVACY_SENTINEL\nBODY_PRIVACY_SENTINEL".to_owned();
+            value.project_id = "proj_privacy_sentinel".to_owned();
+            value.conversation_id = "conv_privacy_sentinel".to_owned();
+            value.turn_id = Some("turn_privacy_sentinel".to_owned());
+            assert_eq!(value.validate(), Ok(()));
+
+            for app_id in app_ids {
+                let log = notification_shown_log(&value.attention_type, app_id);
+                assert_eq!(
+                    log,
+                    format!(
+                        "[codetether:desktop] notification shown type={expected_type} app_id={app_id}"
+                    )
+                );
+                for private_value in [
+                    value.title.as_str(),
+                    "DEVICE_PROJECT_PRIVACY_SENTINEL",
+                    "BODY_PRIVACY_SENTINEL",
+                    value.attention_id.as_str(),
+                    value.project_id.as_str(),
+                    value.conversation_id.as_str(),
+                    value.turn_id.as_deref().unwrap(),
+                ] {
+                    assert!(!log.contains(private_value));
+                }
+                assert!(!log.contains('\n'));
+            }
+        }
+    }
+
+    #[test]
+    fn notification_skipped_log_contains_no_notification_content_or_identity() {
+        assert_eq!(
+            NOTIFICATION_SKIPPED_LOG,
+            "[codetether:desktop] notification skipped: already delivered"
+        );
     }
 
     #[test]

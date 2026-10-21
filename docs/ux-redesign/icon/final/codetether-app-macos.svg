@@ -2,23 +2,23 @@
   <!-- macOS master: 824 px body on the 1024 grid, transparent margin with the soft drop shadow of Apple's template -->
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#66a8ff"/>
-      <stop offset="1" stop-color="#4b55e8"/>
+      <stop offset="0" stop-color="#b28cff"/>
+      <stop offset="1" stop-color="#7146f0"/>
     </linearGradient>
     <linearGradient id="card" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#ffffff"/>
       <stop offset="1" stop-color="#eef1f8"/>
     </linearGradient>
     <linearGradient id="ink" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#4f8cff"/>
-      <stop offset="1" stop-color="#5a46e6"/>
+      <stop offset="0" stop-color="#9a6bff"/>
+      <stop offset="1" stop-color="#6a3ce8"/>
     </linearGradient>
     <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#ffffff" stop-opacity="0.18"/>
       <stop offset="0.5" stop-color="#ffffff" stop-opacity="0"/>
     </linearGradient>
     <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
-      <feDropShadow dx="0" dy="20" stdDeviation="28" flood-color="#1c2470" flood-opacity="0.35"/>
+      <feDropShadow dx="0" dy="20" stdDeviation="28" flood-color="#2c1670" flood-opacity="0.35"/>
     </filter>
     <filter id="body-shadow" x="-10%" y="-10%" width="120%" height="125%">
       <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#000000" flood-opacity="0.28"/>

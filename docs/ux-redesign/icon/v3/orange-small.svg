@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- Hinted variant for 16, 24 and 32 px: larger front card, no shadow, heavier prompt -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffbe4d"/>
+      <stop offset="1" stop-color="#ff7a1f"/>
+    </linearGradient>
+  </defs>
+  <rect width="32" height="32" rx="7" fill="url(#bg)"/>
+  <rect x="9" y="4" width="19" height="15" rx="3.5" fill="#ffffff" fill-opacity="0.4"/>
+  <rect x="4" y="9" width="21" height="19" rx="4" fill="#ffffff"/>
+  <polyline points="9,14 13,18 9,22" fill="none" stroke="#f2701c" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <line x1="15.5" y1="22" x2="20" y2="22" stroke="#f2701c" stroke-width="3" stroke-linecap="round"/>
+</svg>

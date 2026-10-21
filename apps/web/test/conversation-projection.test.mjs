@@ -863,6 +863,35 @@ test('parses unified file diffs, ignores headers, and upserts one shared change'
   )
 })
 
+test('projects a normalized added-file diff through the generic file-change contract', () => {
+  let projection = projectSnapshot(snapshot())
+  projection = apply(
+    projection,
+    envelope(1, 'file.changed', {
+      path: 'src/added-example.txt',
+      kind: 'added',
+      diff: '@@ -0,0 +1,3 @@\n+first line\n+第二行\n+third line\n',
+    }),
+  )
+
+  const change = projection.conversations[conversationId].changes[0]
+  assert.equal(change.additions, 3)
+  assert.equal(change.deletions, 0)
+  assert.deepEqual(
+    change.diffLines.map((line) => [
+      line.kind,
+      line.oldLineNumber,
+      line.newLineNumber,
+      line.content,
+    ]),
+    [
+      ['addition', undefined, 1, 'first line'],
+      ['addition', undefined, 2, '第二行'],
+      ['addition', undefined, 3, 'third line'],
+    ],
+  )
+})
+
 test('tracks multiple pending approvals and returns to running after the last resolution', () => {
   let projection = projectSnapshot(snapshot())
   projection = apply(

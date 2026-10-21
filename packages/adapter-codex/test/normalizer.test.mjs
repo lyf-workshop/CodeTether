@@ -214,6 +214,239 @@ test('normalizes and de-duplicates file patch fixtures', () => {
   assert.deepEqual(duplicate.events, [])
 })
 
+for (const fixture of [
+  { name: 'multiple lines', content: 'first\nsecond\nthird\n', lines: 3 },
+  { name: 'one line', content: 'single\n', lines: 1 },
+  { name: 'no final LF', content: 'first\nsecond', lines: 2 },
+  { name: 'one line without LF', content: 'single', lines: 1 },
+  { name: 'empty file', content: '', lines: 0 },
+  { name: 'one blank line', content: '\n', lines: 1 },
+  { name: 'leading blank line', content: '\nsecond\n', lines: 2 },
+  { name: 'trailing blank lines', content: 'first\n\n\n', lines: 3 },
+  { name: 'CRLF', content: 'first\r\nsecond\r\n', lines: 2 },
+  { name: 'CRLF without final LF', content: 'first\r\nsecond', lines: 2 },
+  { name: 'Chinese and emoji', content: '第一行\n第二行🪁\n', lines: 2 },
+  {
+    name: 'inline patch-like text',
+    content: 'text @@ -1 +1 @@\ntext --- old\ntext +++ new\n',
+    lines: 3,
+  },
+  {
+    name: 'Unicode line separators inside content',
+    content: 'text\u2028@@ -1 +1 @@\u2029--- old\n',
+    lines: 1,
+  },
+]) {
+  for (const [type, kind, prefix] of [
+    ['add', 'added', '+'],
+    ['delete', 'deleted', '-'],
+  ]) {
+    test(`converts ${kind} full content with ${fixture.name} to unified diff`, () => {
+      const event = normalizeFilePatch({ type }, fixture.content)
+      const rows = fixture.content.split('\n')
+      if (fixture.content.endsWith('\n') || fixture.content === '') rows.pop()
+      const header =
+        kind === 'added'
+          ? `@@ -0,0 +1,${String(fixture.lines)} @@`
+          : `@@ -1,${String(fixture.lines)} +0,0 @@`
+      const expected =
+        fixture.content === ''
+          ? ''
+          : `${header}\n${rows.map((row) => `${prefix}${row}`).join('\n')}\n${
+              fixture.content.endsWith('\n')
+                ? ''
+                : '\\ No newline at end of file\n'
+            }`
+
+      assert.deepEqual(stripRaw(event), {
+        type: 'file.changed',
+        provider: 'codex',
+        timestamp,
+        threadId,
+        turnId,
+        itemId: 'file-content',
+        path: 'src/content.txt',
+        kind,
+        diff: expected,
+      })
+      assert.equal(event.raw.payload.changes[0].diff, fixture.content)
+    })
+  }
+}
+
+test('preserves existing unified additions and deletions exactly', () => {
+  for (const type of ['add', 'delete']) {
+    for (const diff of [
+      '@@ -0,0 +1,1 @@\n+added\n',
+      '@@ -1 +0,0 @@\n-deleted\n\\ No newline at end of file\n',
+      'diff --git a/file b/file\n--- a/file\n+++ b/file\n@@ -1 +1 @@\n-old\n+new\n',
+      '--- a/file\r\n+++ b/file\r\n',
+      '+++ b/file\n',
+    ]) {
+      assert.equal(normalizeFilePatch({ type }, diff).diff, diff)
+    }
+  }
+})
+
+test('does not transform modified, renamed, unknown or absent file content', () => {
+  const diff = 'first\n第二行'
+  for (const [kind, expectedKind] of [
+    [{ type: 'update', move_path: null }, 'modified'],
+    [{ type: 'update', move_path: 'src/moved.txt' }, 'renamed'],
+    [{ type: 'future' }, 'unknown'],
+  ]) {
+    const event = normalizeFilePatch(kind, diff)
+    assert.equal(event.kind, expectedKind)
+    assert.equal(event.diff, diff)
+  }
+  for (const type of ['add', 'delete']) {
+    const event = normalizeFilePatch({ type }, undefined)
+    assert.equal(Object.hasOwn(event, 'diff'), false)
+  }
+})
+
+test('normalizes full file content from completed fileChange items', () => {
+  const normalizer = new CodexEventNormalizer()
+  const result = normalize(normalizer, 'item/completed', {
+    threadId,
+    turnId,
+    item: {
+      id: 'completed-file',
+      type: 'fileChange',
+      changes: [
+        { path: 'added.txt', kind: { type: 'add' }, diff: 'added\n' },
+        { path: 'deleted.txt', kind: { type: 'delete' }, diff: 'deleted\n' },
+      ],
+    },
+  })
+  assert.equal(result.events.length, 2)
+  assert.equal(result.events[0].diff, '@@ -0,0 +1,1 @@\n+added\n')
+  assert.equal(result.events[1].diff, '@@ -1,1 +0,0 @@\n-deleted\n')
+  assert.equal(result.events[0].itemId, 'completed-file')
+  assert.equal(result.events[1].itemId, 'completed-file')
+})
+
+test('keeps original Provider content as the file-change de-duplication identity', () => {
+  const normalizer = new CodexEventNormalizer()
+  const params = {
+    threadId,
+    turnId,
+    itemId: 'file-content',
+    changes: [{ path: 'same.txt', kind: { type: 'add' }, diff: 'content\n' }],
+  }
+  const first = normalize(normalizer, 'item/fileChange/patchUpdated', params)
+  const unified = {
+    ...params,
+    changes: [{ ...params.changes[0], diff: '@@ -0,0 +1,1 @@\n+content\n' }],
+  }
+  const second = normalize(normalizer, 'item/fileChange/patchUpdated', unified)
+  assert.equal(first.events.length, 1)
+  assert.equal(second.events.length, 1)
+  assert.equal(first.events[0].diff, second.events[0].diff)
+  assert.deepEqual(
+    normalize(normalizer, 'item/fileChange/patchUpdated', params).events,
+    [],
+  )
+  assert.deepEqual(
+    normalize(normalizer, 'item/fileChange/patchUpdated', unified).events,
+    [],
+  )
+})
+
+test('accepts synthesized diffs exactly at the public UTF-16 size bound', () => {
+  const limit = 4 * 1024 * 1024
+  for (const type of ['add', 'delete']) {
+    const header = type === 'add' ? '@@ -0,0 +1,1 @@\n' : '@@ -1,1 +0,0 @@\n'
+    const content = `${'中'.repeat(limit - header.length - 2)}\n`
+    const event = normalizeFilePatch({ type }, content)
+    assert.equal(event.diff.length, limit)
+    assert.equal(event.diff.startsWith(header), true)
+    assert.equal(event.diff.endsWith('中\n'), true)
+    assert.equal(Buffer.byteLength(event.diff, 'utf8') > limit, true)
+  }
+})
+
+test('includes the missing-final-LF marker in the synthesized size bound', () => {
+  const limit = 4 * 1024 * 1024
+  const header = '@@ -0,0 +1,1 @@\n'
+  const suffix = '\n\\ No newline at end of file\n'
+  const content = 'a'.repeat(limit - header.length - 1 - suffix.length)
+  const exact = normalizeFilePatch({ type: 'add' }, content)
+  assert.equal(exact.diff.length, limit)
+  assert.equal(exact.diff.endsWith(suffix), true)
+  const over = normalizeFilePatch({ type: 'add' }, `${content}a`)
+  assert.equal(Object.hasOwn(over, 'diff'), false)
+  assert.equal(over.type, 'file.changed')
+  assert.equal(over.kind, 'added')
+})
+
+test('omits only expanded diff content when prefixes exceed the public bound', () => {
+  const limit = 4 * 1024 * 1024
+  const header = '@@ -0,0 +1,1 @@\n'
+  const contents = [
+    `${'a'.repeat(limit - header.length - 1)}\n`,
+    '\n'.repeat(Math.floor(limit / 2) + 1),
+  ]
+  for (const content of contents) {
+    assert.equal(content.length <= limit, true)
+    const event = normalizeFilePatch({ type: 'add' }, content)
+    assert.equal(Object.hasOwn(event, 'diff'), false)
+    assert.deepEqual(stripRaw(event), {
+      type: 'file.changed',
+      provider: 'codex',
+      timestamp,
+      threadId,
+      turnId,
+      itemId: 'file-content',
+      path: 'src/content.txt',
+      kind: 'added',
+    })
+    assert.equal(event.raw.payload.changes[0].diff, content)
+  }
+})
+
+test('does not apply the synthesis limit to existing unified or modified diffs', () => {
+  const diff = `@@ -1 +1 @@\n+${'a'.repeat(4 * 1024 * 1024)}`
+  for (const type of ['add', 'delete', 'update']) {
+    const event = normalizeFilePatch({ type }, diff)
+    assert.equal(event.diff === diff, true)
+  }
+})
+
+test('retains metadata and original identities for oversized additions and deletions', () => {
+  for (const type of ['add', 'delete']) {
+    const normalizer = new CodexEventNormalizer()
+    const content = 'a'.repeat(4 * 1024 * 1024 + 1)
+    const params = {
+      threadId,
+      turnId,
+      itemId: 'large-file',
+      changes: [
+        { path: 'large.txt', kind: { type }, diff: content },
+        { path: 'large.txt', kind: { type }, diff: `${content}b` },
+      ],
+    }
+    const first = normalize(normalizer, 'item/fileChange/patchUpdated', params)
+    assert.equal(first.events.length, 2)
+    for (const event of first.events) {
+      assert.equal(Object.hasOwn(event, 'diff'), false)
+      assert.equal(event.type, 'file.changed')
+      assert.equal(event.kind, type === 'add' ? 'added' : 'deleted')
+      assert.equal(event.path, 'large.txt')
+      assert.equal(event.itemId, 'large-file')
+    }
+    assert.deepEqual(
+      normalize(normalizer, 'item/fileChange/patchUpdated', params).events,
+      [],
+    )
+    const completion = normalize(normalizer, 'turn/completed', {
+      threadId,
+      turn: { id: turnId, status: 'completed', error: null },
+    })
+    assert.equal(completion.events[0].type, 'turn.completed')
+  }
+})
+
 test('bounds hashed file-change identities for one active Turn', () => {
   const normalizer = new CodexEventNormalizer()
   for (let index = 0; index < MAX_FILE_CHANGES_PER_TURN; index += 1) {
@@ -390,4 +623,23 @@ function stripRaw(event) {
   const normalized = { ...event }
   delete normalized.raw
   return normalized
+}
+
+function normalizeFilePatch(kind, diff) {
+  const normalizer = new CodexEventNormalizer()
+  const result = normalize(normalizer, 'item/fileChange/patchUpdated', {
+    threadId,
+    turnId,
+    itemId: 'file-content',
+    changes: [
+      {
+        path: 'src/content.txt',
+        kind,
+        ...(diff === undefined ? {} : { diff }),
+      },
+    ],
+  })
+  assert.equal(result.recognized, true)
+  assert.equal(result.events.length, 1)
+  return result.events[0]
 }

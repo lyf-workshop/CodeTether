@@ -115,14 +115,14 @@ function readIco(bytes) {
   return layers
 }
 
-test('approved kite SVG sources remain reproducible without changing their artwork', async () => {
+test('approved stacked-cards SVG sources remain reproducible without changing their artwork', async () => {
   const hashes = {
     'codetether-app.svg':
-      '2e3dcd6501b6f3f27431b6f6c61d82701093416a905af6ee9c09eb960d1b8644',
+      '43bfec80c287beddefbad619eea866916445d72ad233475fceb3e0f200533560',
     'codetether-app-small.svg':
-      'd01143ad147143ce0deea71fed406a4d2d95245d27b997baa2a985f42f895562',
+      '972fa919d752966b74bdef28dadca440b33b6c1534f528ff747d7c11037e42b6',
     'codetether-app-macos.svg':
-      '5e8f4a6d719508a11ebd0a8c49f84d0f3da9f80596f5b8cdbc6dd9a50ff56109',
+      'ad86442a40410c55d0d2e2aad90425b428d626123eacba8e48906af3ef0ccf17',
   }
   for (const [name, expectedHash] of Object.entries(hashes)) {
     const source = (
@@ -163,19 +163,24 @@ test('Windows ICO keeps all six PNG layers with the 32px Tauri default first', a
   )
   const pixel = readPng(layers.get(16), 16)
   assert.deepEqual(
-    pixel(9, 5),
-    [255, 192, 97, 255],
-    'hinted yellow kite face stays distinct at 16px',
+    pixel(13, 4),
+    [197, 174, 253, 255],
+    'hinted rear card stays distinct at 16px',
   )
   assert.deepEqual(
-    pixel(11, 5),
-    [242, 100, 63, 255],
-    'hinted red kite face stays distinct at 16px',
+    pixel(3, 6),
+    [255, 255, 255, 255],
+    'hinted front card stays distinct at 16px',
   )
   assert.deepEqual(
-    pixel(3, 13),
-    [244, 239, 230, 255],
-    'hinted lower-left string endpoint remains visible',
+    pixel(5, 9),
+    [122, 76, 242, 255],
+    'hinted prompt mark remains visible at 16px',
+  )
+  assert.deepEqual(
+    pixel(8, 10),
+    [155, 121, 245, 255],
+    'hinted cursor remains visible at 16px',
   )
 })
 

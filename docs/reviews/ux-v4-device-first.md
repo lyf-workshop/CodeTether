@@ -398,3 +398,9 @@ R4 之后的结果见下一节。
 - 小问题，不阻塞：新文件内容里如果有以 `--- `、`+++ ` 或 `@@ -n +n @@` 开头的行，会被当成已有统一差异而不转换，显示回到 `+0`。CRLF 文件的行内容会带 `\r`。等实测后再定要不要处理。
 
 打包：Desktop 打包被工具策略拒绝，由用户在 Codex 应用外的普通 PowerShell 里运行 `.tmp/v4-r8-desktop-build.sh`。脚本我看过：只检查三项环境变量是否存在，不打印值，要求工作树干净，日志用 sed 脱敏，不覆盖已有日志。R6 安装包已归档到 `agenthub-archive/installers/4f30416/`，SHA256 与 R6 一致。
+
+安装后核对（我只读复核）：
+
+- 用户在 Codex 应用外运行安装程序（Claude Code 的 `!` 命令）。真实开始菜单有 `CodeTether.lnk`（02:25），`Get-StartApps` 列出 `com.codetether.desktop`，运行版本 `git-9800ae2f8b7d`。R7 的开始菜单问题确认由 Codex 应用的重定向造成，已解决。
+- Desktop 文件哈希不同的原因已查清：两份文件大小相同，只差 3 个字节，在 `__TAURI_BUNDLE_TYPE_VAR_` 标记处，构建目录里是 `UNK`，安装版里是 `NSS`。这是 Tauri 打包时写进安装包副本的安装类型标记，属于正常现象，不是缺陷。
+- 通知状态：从普通 PowerShell 读 `CreateToastNotifier(...).Setting` 得到空值，这个查询方法不可靠，不再作为判断依据。注册表 `Notifications\Settings\com.codetether.desktop` 是 `Enabled=1`，没有全局关闭项。第 9 项改为直接实测。

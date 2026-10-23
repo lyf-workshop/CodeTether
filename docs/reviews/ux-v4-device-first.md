@@ -3,7 +3,7 @@
 - 分支：`ux/v4-device-first`，工作区 `D:/Projects/Software/agenthub-ux-v4-device-first`
 - 审核范围：`bbcda69..df91601`（9 个功能提交；3562f12 是平台权限测试，不在本轮范围）
 - 依据：`docs/ux-redesign/04-requirements.md`（第三版）、`02-dev-handoff.md`、原型；AGENTS.md
-- 当前级别：第 10 轮诊断完成（bb1d55b 已装机），Windows 安装版验收 14 项通过、1 项未完成（第 9 项点击通知），通知中心点击收不到回调，用户选了登记 codetether:// 链接，待 R11（见 DEVELOPMENT-PROCESS §2）
+- 当前级别：第 11 轮完成（835489d 已装机），Windows 安装版验收 15 项全部通过，审核通过，可以合并（见 DEVELOPMENT-PROCESS §2）
 
 ## 第 1 轮（D1，2026-10-19）
 
@@ -453,3 +453,19 @@ R4 之后的结果见下一节。
 - 小问题，不阻塞：前端只查最近 100 条，再旧的提醒点开只恢复窗口。可以接受。
 
 安装包 `37712481…1589`，26,739,086 字节，我复核过。日志里没有 key。R10 安装包已备份到 `installers/bb1d55b/`，有 SHA256SUMS.txt。
+
+实测结果（`v4-acceptance-report-r11.md`，我核对过脱敏日志）：
+
+- 安装和登记：`HKCU\Software\Classes\codetether` 已登记，打开命令是安装目录里的 `codetether-desktop.exe "%1"`。
+- 测试 B，通知中心：日志依次是 `shown`、`dismissed reason=TimedOut`、`activated repeat=false`、`main_window_restored`（22 毫秒）、`link received result=matched`。窗口恢复到前台，路由带这一轮的 `turn` 和唯一的 `notification-1`，只跳转一次。通过。
+- 测试 C，应用没在运行：用户退出后确认 Desktop 和 Host 都是 0。用户点了保留的通知，Windows 启动了新进程（10:43:10），窗口可见、在前台，路由指向正确的会话和回合，只跳转一次，数据数量不变。通过。这次启动没有重定向日志，所以 C 没有日志行。
+- 测试 A，横幅：两个回合都给了 B 和 C，没有测。B 已经证明点击这条路是通的，A 不影响结论。
+- 链接安全：`codetether://notification/attn_invalid` 结果 `unmatched`，`codetether://other` 结果 `invalid`，都只恢复窗口，路由和提醒状态不变。通过。
+- 截图：B 和 C 的标题栏截图都没拿到，因为补拍时窗口已经被最小化。功能结论以 Codex 当时记录的窗口状态、路由和日志为准，不缺截图以外的证据。
+- 原始日志已脱敏并删除。
+
+第 9 项通过：通知文案在第 8 轮核实过，点开进入会话在这一轮核实了。Windows 清单 15 项全部通过。
+
+格式检查：全仓 `pnpm format:check` 报的 617 个文件，原因是本机 `core.autocrlf=true`，工作区里是 CRLF，索引里是 LF。加 `--end-of-line auto` 再查只剩 3 个文件（`host-presence-diagnostics.ts`、`host-presence-publisher.ts`、`docs/PRODUCT.md`），这 3 个在 main 上就没格式化，这个分支没改过它们。所以不挡合并，以后单独处理。
+
+合并：`ux/v4-device-first` 在 main 之后 39 个提交，可以快进。用户同意后本地快进合并 main 到 835489d。推送和打标签另外征求同意。Mac 安装版没有验收，要先推送分支。

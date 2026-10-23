@@ -425,3 +425,9 @@ R4 之后的结果见下一节。
 - 现在没有 `activated` 日志，分不清是回调没触发，还是 `show_main_window` 失败（后者会打 `could not restore`，但 R9 没抓日志）。
 
 下一步：按 `ux-v4-device-first-fix-prompt-r10.md` 加激活和关闭日志，重装后分别测点横幅和在通知中心点，再决定修法。
+
+## 第 10 轮（进行中）
+
+代码审核：`bb1d55b fix(desktop): log notification activation and dismissal`，通过。只改了 `attention_notifications.rs`：激活回调一进来就打 `notification activated type=… repeat=…`，在去重判断前面；关闭回调打 `notification dismissed reason=…`。两行都不含标题、正文和任何标识，测试里用哨兵值核过。原有激活逻辑不变。
+
+安装包 `D210320D…A411`，26,725,660 字节，我复核过。日志里没有 key。R8 安装包已备份到 `installers/9800ae2/`，哈希一致，那个目录少了一个 SHA256SUMS.txt，不影响。

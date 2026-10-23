@@ -3,7 +3,7 @@
 - 分支：`ux/v4-device-first`，工作区 `D:/Projects/Software/agenthub-ux-v4-device-first`
 - 审核范围：`bbcda69..df91601`（9 个功能提交；3562f12 是平台权限测试，不在本轮范围）
 - 依据：`docs/ux-redesign/04-requirements.md`（第三版）、`02-dev-handoff.md`、原型；AGENTS.md
-- 当前级别：第 8 轮完成（9800ae2 已装机），Windows 安装版验收 14 项通过、0 项不通过、1 项未完成（第 9 项只差点击通知），待 R9 补测（见 DEVELOPMENT-PROCESS §2）
+- 当前级别：第 9 轮补测完成（无代码改动），Windows 安装版验收 14 项通过、1 项未完成（第 9 项点击通知没有打开会话），待 R10 加日志定位（见 DEVELOPMENT-PROCESS §2）
 
 ## 第 1 轮（D1，2026-10-19）
 
@@ -414,3 +414,14 @@ R4 之后的结果见下一节。
 - 原始日志在用户退出后脱敏并删除，进程和 4317 端口都已清零，R5、R7 测试文件保留。
 
 下一步：按 `ux-v4-device-first-fix-prompt-r9.md` 用 1 个 Codex 回合触发完成通知，点开验证路由。不改代码，不重装。
+
+## 第 9 轮
+
+补测，不改代码。报告见 `v4-acceptance-report-r8.md` 第 22 节。
+
+- Codex 只读回合 01:33 发送，01:35 完成。生成了 1 条 `completed_review` 提醒，通知历史多了 1 条“CodeTether · 工作已完成 / 本地电脑 · v4-accept-project / AI 工具已完成本轮工作”，没有会话标题。通知文案这一半通过。
+- 智能体用 Win+N 没找到唯一的通知卡片，没有点。用户在 01:45 左右从通知中心点了通知。之后 23 次采样，窗口都还是最小化，路由仍是 `/c/conv_…`，没有 `turn` 参数和 `notification-N`。第 9 项未通过。
+- 我读了代码：Windows 下点击只靠进程内 `ToastNotification.Activated` 回调（`attention_notifications.rs:336`）。通知 XML 没有 `launch`，快捷方式没有 `ToastActivatorCLSID`，没有 COM 激活器。点击发生在横幅超时 10 分钟后，点的是通知中心里的那一条。微软文档说这种情况下不保证回调进程内事件，`:354` 注释里“超时后仍可点击”的假设没有实测过。
+- 现在没有 `activated` 日志，分不清是回调没触发，还是 `show_main_window` 失败（后者会打 `could not restore`，但 R9 没抓日志）。
+
+下一步：按 `ux-v4-device-first-fix-prompt-r10.md` 加激活和关闭日志，重装后分别测点横幅和在通知中心点，再决定修法。

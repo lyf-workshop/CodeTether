@@ -3,7 +3,7 @@
 - 分支：`ux/v4-device-first`，工作区 `D:/Projects/Software/agenthub-ux-v4-device-first`
 - 审核范围：`bbcda69..df91601`（9 个功能提交；3562f12 是平台权限测试，不在本轮范围）
 - 依据：`docs/ux-redesign/04-requirements.md`（第三版）、`02-dev-handoff.md`、原型；AGENTS.md
-- 当前级别：第 9 轮补测完成（无代码改动），Windows 安装版验收 14 项通过、1 项未完成（第 9 项点击通知没有打开会话），待 R10 加日志定位（见 DEVELOPMENT-PROCESS §2）
+- 当前级别：第 10 轮诊断完成（bb1d55b 已装机），Windows 安装版验收 14 项通过、1 项未完成（第 9 项点击通知），通知中心点击收不到回调，待用户选修法后写 R11（见 DEVELOPMENT-PROCESS §2）
 
 ## 第 1 轮（D1，2026-10-19）
 
@@ -431,3 +431,13 @@ R4 之后的结果见下一节。
 代码审核：`bb1d55b fix(desktop): log notification activation and dismissal`，通过。只改了 `attention_notifications.rs`：激活回调一进来就打 `notification activated type=… repeat=…`，在去重判断前面；关闭回调打 `notification dismissed reason=…`。两行都不含标题、正文和任何标识，测试里用哨兵值核过。原有激活逻辑不变。
 
 安装包 `D210320D…A411`，26,725,660 字节，我复核过。日志里没有 key。R8 安装包已备份到 `installers/9800ae2/`，哈希一致，那个目录少了一个 SHA256SUMS.txt，不影响。
+
+实测结果（`v4-acceptance-report-r10.md`，我核对过脱敏日志）：
+
+- 两轮 Codex 回合都完成了，各生成一条 `completed_review` 通知。日志里每轮都是先 `shown`，约 6 秒后 `dismissed reason=TimedOut`，横幅只停留 6 秒左右。
+- 测试 A：用户没赶上横幅，没有点，结果未观察到。
+- 测试 B：横幅超时后，用户在通知中心点了最新那条。之后没有 `notification activated`，也没有 `main_window_restored` 或 `could not restore`，窗口一直最小化。整份日志 `activated` 为 0。
+- 结论：点通知中心里的通知，Windows 没有回调到进程内的 `Activated`，也没有重新启动应用（否则单实例插件会恢复窗口）。这和第 9 轮的假设一致，和微软文档对未打包桌面应用的说明也一致。A 没有对照，所以只证明了通知中心这条路不通，没证明横幅能点通。用户离开电脑后回来点通知中心，正是这个功能最主要的用法，所以不管 A 结果如何都要修。
+- 其他：R10 报告里全仓 `pnpm format:check` 有 617 个文件不通过，抽查是 Windows checkout 的 CRLF 造成的，不是这轮引入的，合并前另外处理。
+
+下一步：修法要改安装程序或系统登记，请用户选方案后写 R11。

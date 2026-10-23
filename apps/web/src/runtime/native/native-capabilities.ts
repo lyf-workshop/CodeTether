@@ -1,5 +1,8 @@
 import {
+  AttentionIdSchema,
+  ConversationIdSchema,
   EpochIdSchema,
+  ProjectIdSchema,
   ProviderIdSchema,
   TurnIdSchema,
   type EpochId,
@@ -8,6 +11,7 @@ import {
 
 import type {
   DesktopWindowState,
+  NotificationClickIntent,
   NotificationIntent,
 } from '../notifications/desktop-notification-model.js'
 
@@ -22,7 +26,7 @@ export interface DesktopNotifications {
   ensurePermission(): Promise<boolean>
   getWindowState(): DesktopWindowState | Promise<DesktopWindowState>
   subscribeToIntents(
-    listener: (intent: NotificationIntent) => void | Promise<void>,
+    listener: (intent: NotificationClickIntent) => void | Promise<void>,
   ): Promise<() => void>
 }
 
@@ -343,7 +347,7 @@ export function createNativeCapabilities(
       const recentIntentIds = new Set<string>()
       const recentIntentOrder: string[] = []
 
-      const forward = (intent: NotificationIntent): Promise<void> => {
+      const forward = (intent: NotificationClickIntent): Promise<void> => {
         if (recentIntentIds.has(intent.attentionId)) return Promise.resolve()
         recentIntentIds.add(intent.attentionId)
         recentIntentOrder.push(intent.attentionId)
@@ -605,18 +609,35 @@ function acquireDesktopBackgroundExecutionLease(): BackgroundExecutionLease {
   }
 }
 
-function parseNotificationIntent(value: unknown): NotificationIntent {
+function parseNotificationIntent(value: unknown): NotificationClickIntent {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new Error('Native notification intent is invalid.')
   }
   const record = value as Record<string, unknown>
+  const keys = Object.keys(record)
+  const attentionId = AttentionIdSchema.parse(record.attentionId)
+  if (keys.length === 1 && keys[0] === 'attentionId') {
+    return { attentionId }
+  }
+  const allowedKeys = new Set([
+    'attentionId',
+    'type',
+    'projectId',
+    'conversationId',
+    'turnId',
+    'title',
+    'body',
+  ])
+  if (keys.some((key) => !allowedKeys.has(key))) {
+    throw new Error('Native notification intent is invalid.')
+  }
   const turnId =
     record.turnId === undefined ? undefined : TurnIdSchema.parse(record.turnId)
   const intent = {
-    attentionId: requiredString(record.attentionId, 160),
+    attentionId,
     type: notificationType(record.type),
-    projectId: requiredString(record.projectId, 160),
-    conversationId: requiredString(record.conversationId, 160),
+    projectId: ProjectIdSchema.parse(record.projectId),
+    conversationId: ConversationIdSchema.parse(record.conversationId),
     ...(turnId === undefined ? {} : { turnId }),
     title: requiredString(record.title, 120),
     body: requiredString(record.body, 512),
@@ -634,10 +655,10 @@ function parseDesktopResumeIntent(value: unknown): DesktopResumeIntent {
 }
 
 function assertNotificationIntent(intent: NotificationIntent): void {
-  requiredString(intent.attentionId, 160)
+  AttentionIdSchema.parse(intent.attentionId)
   notificationType(intent.type)
-  requiredString(intent.projectId, 160)
-  requiredString(intent.conversationId, 160)
+  ProjectIdSchema.parse(intent.projectId)
+  ConversationIdSchema.parse(intent.conversationId)
   if (intent.turnId !== undefined) TurnIdSchema.parse(intent.turnId)
   requiredString(intent.title, 120)
   requiredString(intent.body, 512)

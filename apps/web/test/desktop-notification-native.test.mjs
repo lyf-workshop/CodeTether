@@ -440,6 +440,96 @@ test('Notification click rejects a malformed optional Turn identity', async () =
   }
 })
 
+test('ID-only protocol clicks and complete callbacks share native queue/event deduplication', async () => {
+  for (const first of [intent, { attentionId: intent.attentionId }]) {
+    const queued = [null]
+    const received = []
+    let eventListener
+    const capabilities = createNativeCapabilities({
+      tauriAvailable: true,
+      loadTauriCore: async () => ({
+        invoke: async (command) => {
+          assert.equal(command, 'take_pending_notification_intent')
+          return queued.shift() ?? null
+        },
+      }),
+      loadTauriEvent: async () => ({
+        listen: async (event, listener) => {
+          assert.equal(event, 'codetether://notification-intent')
+          eventListener = listener
+          return () => undefined
+        },
+      }),
+    })
+    const unsubscribe = await capabilities.notifications.subscribeToIntents(
+      (value) => received.push(value),
+    )
+    queued.push({ attentionId: intent.attentionId }, intent, null)
+    eventListener({ payload: first })
+    await waitFor(() => received.length === 1)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    assert.deepEqual(received, [first])
+    unsubscribe()
+  }
+})
+
+test('only a strict public ID-only or a complete native intent may cross the click boundary', async () => {
+  const received = []
+  const warnings = []
+  let eventListener
+  const originalWarn = console.warn
+  console.warn = (...values) => warnings.push(values)
+  try {
+    const capabilities = createNativeCapabilities({
+      tauriAvailable: true,
+      loadTauriCore: async () => ({ invoke: async () => null }),
+      loadTauriEvent: async () => ({
+        listen: async (_event, listener) => {
+          eventListener = listener
+          return () => undefined
+        },
+      }),
+    })
+    const unsubscribe = await capabilities.notifications.subscribeToIntents(
+      (value) => received.push(value),
+    )
+    const malformed = [
+      {},
+      [],
+      { attentionId: 'attn_x' },
+      { attentionId: 'ATTN_target01' },
+      { attentionId: 'attn_target%20' },
+      { attentionId: 'attn_' + 'x'.repeat(97) },
+      {
+        attentionId: intent.attentionId,
+        conversationId: intent.conversationId,
+      },
+      { attentionId: intent.attentionId, resolve: true },
+      { ...intent, extra: 'not allowed' },
+      { ...intent, projectId: 'provider_private01' },
+      { ...intent, conversationId: 'provider_private01' },
+    ]
+    for (const payload of malformed) eventListener({ payload })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    assert.deepEqual(received, [])
+    assert.equal(warnings.length, malformed.length)
+    assert.ok(
+      warnings.every(
+        (values) =>
+          values.length === 1 &&
+          values[0] ===
+            '[CodeTether] A notification click could not be delivered.',
+      ),
+    )
+    eventListener({ payload: { attentionId: 'attn_valid_link01' } })
+    await waitFor(() => received.length === 1)
+    assert.deepEqual(received, [{ attentionId: 'attn_valid_link01' }])
+    unsubscribe()
+  } finally {
+    console.warn = originalWarn
+  }
+})
+
 function deferred() {
   let resolve
   const promise = new Promise((resolvePromise) => {

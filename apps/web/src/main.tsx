@@ -53,7 +53,7 @@ async function renderApp() {
       readDesktopNotificationPreferences,
       resolveNotificationPreferenceStorage,
     },
-    { resolveAttentionNotificationMetadata },
+    { resolveAttentionNotificationMetadata, resolveNotificationClickTarget },
     { createHostQueryClient },
   ] = await Promise.all([
     import('@tanstack/react-query'),
@@ -86,6 +86,8 @@ async function renderApp() {
       notificationSurfaceFromPathname(router.state.location.pathname),
     resolveMetadata: (attention) =>
       resolveAttentionNotificationMetadata(queryClient, runtime, attention),
+    resolveClickTarget: (attentionId, signal) =>
+      resolveNotificationClickTarget(queryClient, runtime, attentionId, signal),
     navigate: async (intent) => {
       notificationNavigationSequence += 1
       await router.navigate({

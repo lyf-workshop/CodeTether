@@ -1,12 +1,13 @@
 import { queryOptions, type QueryClient } from '@tanstack/react-query'
 import type {
   AttentionListResponse,
+  AttentionStatus,
   HostEventEnvelope,
 } from '@codetether/protocol'
 
 export interface AttentionReadClient {
   listAttention(options?: {
-    readonly status?: 'open'
+    readonly status?: AttentionStatus
     readonly limit?: number
     readonly signal?: AbortSignal
   }): Promise<AttentionListResponse>

@@ -35,6 +35,16 @@ export interface NotificationIntent {
   readonly body: string
 }
 
+/** A restarted Desktop can recover a clicked notification using only its ID. */
+export type NotificationClickIntent =
+  NotificationIntent | { readonly attentionId: AttentionId }
+
+/** Navigation never needs notification copy or any Provider/session state. */
+export type NotificationNavigationTarget = Pick<
+  NotificationIntent,
+  'attentionId' | 'projectId' | 'conversationId' | 'turnId'
+>
+
 export interface AttentionNotificationMetadata {
   readonly projectName: string
   readonly machineName?: string

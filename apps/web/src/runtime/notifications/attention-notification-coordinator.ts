@@ -14,6 +14,8 @@ import {
   type DesktopNotificationPreferences,
   type DesktopWindowState,
   type NotificationIntent,
+  type NotificationClickIntent,
+  type NotificationNavigationTarget,
 } from './desktop-notification-model.js'
 
 type MaybePromise<T> = Promise<T> | T
@@ -29,7 +31,7 @@ export interface DesktopNotificationAdapter {
   ensurePermission(): Promise<boolean>
   deliver(intent: NotificationIntent): Promise<void>
   subscribeToIntents(
-    listener: (intent: NotificationIntent) => void | Promise<void>,
+    listener: (intent: NotificationClickIntent) => void | Promise<void>,
   ): Promise<() => void>
 }
 
@@ -59,7 +61,9 @@ export interface DesktopNotificationDiagnostic {
 export interface AttentionNotificationCoordinatorOptions {
   readonly adapter: DesktopNotificationAdapter
   readonly eventSource: AppliedHostEventSource
-  readonly navigate: (intent: NotificationIntent) => MaybePromise<void>
+  readonly navigate: (
+    intent: NotificationNavigationTarget,
+  ) => MaybePromise<void>
   readonly readPreferences?: () => DesktopNotificationPreferences
   readonly readSurface: () => AttentionPresentationSurface
   readonly recentIds?: RecentNotificationIdStore
@@ -67,6 +71,10 @@ export interface AttentionNotificationCoordinatorOptions {
   readonly resolveMetadata: (
     attention: AttentionItem,
   ) => Promise<AttentionNotificationMetadata>
+  readonly resolveClickTarget?: (
+    attentionId: AttentionId,
+    signal: AbortSignal,
+  ) => Promise<NotificationNavigationTarget | undefined>
 }
 
 /**
@@ -77,7 +85,9 @@ export interface AttentionNotificationCoordinatorOptions {
 export class AttentionNotificationCoordinator {
   readonly #adapter: DesktopNotificationAdapter
   readonly #eventSource: AppliedHostEventSource
-  readonly #navigate: (intent: NotificationIntent) => MaybePromise<void>
+  readonly #navigate: (
+    intent: NotificationNavigationTarget,
+  ) => MaybePromise<void>
   readonly #readPreferences: () => DesktopNotificationPreferences
   readonly #readSurface: () => AttentionPresentationSurface
   readonly #recentIds?: RecentNotificationIdStore
@@ -85,8 +95,12 @@ export class AttentionNotificationCoordinator {
   readonly #resolveMetadata: (
     attention: AttentionItem,
   ) => Promise<AttentionNotificationMetadata>
+  readonly #resolveClickTarget?: AttentionNotificationCoordinatorOptions['resolveClickTarget']
   readonly #seenAttentionIds = new Set<AttentionId>()
   readonly #seenAttentionOrder: AttentionId[] = []
+  readonly #clickedAttentionIds = new Set<AttentionId>()
+  readonly #clickedAttentionOrder: AttentionId[] = []
+  readonly #clickResolutions = new Set<AbortController>()
   #generation = 0
   #started = false
   #unsubscribeEvents?: () => void
@@ -103,6 +117,7 @@ export class AttentionNotificationCoordinator {
     this.#recentIds = options.recentIds
     this.#reportFailure = options.reportFailure ?? reportSafeDiagnostic
     this.#resolveMetadata = options.resolveMetadata
+    this.#resolveClickTarget = options.resolveClickTarget
   }
 
   start(): void {
@@ -120,7 +135,7 @@ export class AttentionNotificationCoordinator {
         async () =>
           await this.#adapter.subscribeToIntents(async (intent) => {
             if (!this.#isActive(generation)) return
-            await this.#navigateToIntent(intent)
+            await this.#navigateToIntent(intent, generation)
           }),
       )
       .then((unsubscribe) => {
@@ -147,6 +162,8 @@ export class AttentionNotificationCoordinator {
     if (!this.#started && this.#intentSubscription === undefined) return
     this.#started = false
     this.#generation += 1
+    for (const controller of this.#clickResolutions) controller.abort()
+    this.#clickResolutions.clear()
     this.#unsubscribeEvents?.()
     this.#unsubscribeEvents = undefined
     this.#unsubscribeIntents?.()
@@ -279,14 +296,47 @@ export class AttentionNotificationCoordinator {
     }
   }
 
-  async #navigateToIntent(intent: NotificationIntent): Promise<void> {
+  async #navigateToIntent(
+    intent: NotificationClickIntent,
+    generation: number,
+  ): Promise<void> {
+    if (!this.#isActive(generation)) return
+    if (this.#clickedAttentionIds.has(intent.attentionId)) return
+    // The in-process callback and protocol-link fallback can race. Claim the
+    // same public ID before either read-only resolution or navigation awaits.
+    this.#clickedAttentionIds.add(intent.attentionId)
+    this.#clickedAttentionOrder.push(intent.attentionId)
+    if (this.#clickedAttentionOrder.length > MAX_SEEN_ATTENTION_IDS) {
+      const expired = this.#clickedAttentionOrder.shift()
+      if (expired !== undefined) this.#clickedAttentionIds.delete(expired)
+    }
+    const controller = new AbortController()
+    this.#clickResolutions.add(controller)
     try {
-      await this.#navigate(intent)
+      const target =
+        'conversationId' in intent
+          ? intent
+          : await this.#resolveClickTarget?.(
+              intent.attentionId,
+              controller.signal,
+            )
+      if (
+        !this.#isActive(generation) ||
+        target === undefined ||
+        target.attentionId !== intent.attentionId
+      ) {
+        return
+      }
+      await this.#navigate(target)
     } catch {
-      this.#report({
-        attentionId: intent.attentionId,
-        stage: 'navigation',
-      })
+      if (this.#isActive(generation)) {
+        this.#report({
+          attentionId: intent.attentionId,
+          stage: 'navigation',
+        })
+      }
+    } finally {
+      this.#clickResolutions.delete(controller)
     }
   }
 

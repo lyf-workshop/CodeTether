@@ -262,6 +262,168 @@ test('click intents navigate without resolving Attention and listener lifecycle 
   await fixture.coordinator.stop()
 })
 
+test('an ID-only click resolves only a read-only navigation target, not a delivery', async (t) => {
+  const item = openAttention('attn_link_target01')
+  const target = {
+    attentionId: item.attentionId,
+    projectId: item.projectId,
+    conversationId: item.conversationId,
+    turnId: item.turnId,
+  }
+  const resolutions = []
+  const navigations = []
+  const fixture = createFixture({
+    resolveClickTarget: async (attentionId, signal) => {
+      resolutions.push({ attentionId, aborted: signal.aborted })
+      return target
+    },
+    navigate: (value) => navigations.push(value),
+  })
+  t.after(async () => await fixture.coordinator.stop())
+  fixture.coordinator.start()
+  await waitFor(() => fixture.adapter.intentSubscribeCalls === 1)
+
+  fixture.adapter.click({ attentionId: item.attentionId })
+  await waitFor(() => navigations.length === 1)
+  assert.deepEqual(resolutions, [
+    { attentionId: item.attentionId, aborted: false },
+  ])
+  assert.strictEqual(navigations[0], target)
+  assert.deepEqual(fixture.metadataCalls, [])
+  assert.equal(fixture.adapter.permissionCalls, 0)
+  assert.deepEqual(fixture.adapter.deliveries, [])
+  assert.deepEqual(fixture.diagnostics, [])
+})
+
+test('callback and protocol clicks claim the same ID before concurrent lookup finishes', async (t) => {
+  const lookup = deferred()
+  const resolutions = []
+  const navigations = []
+  const intent = notificationIntent('attn_link_race01')
+  const fixture = createFixture({
+    resolveClickTarget: async (attentionId) => {
+      resolutions.push(attentionId)
+      return await lookup.promise
+    },
+    navigate: (value) => navigations.push(value),
+  })
+  t.after(async () => await fixture.coordinator.stop())
+  fixture.coordinator.start()
+  await waitFor(() => fixture.adapter.intentSubscribeCalls === 1)
+
+  fixture.adapter.click({ attentionId: intent.attentionId })
+  fixture.adapter.click(intent)
+  fixture.adapter.click({ attentionId: intent.attentionId })
+  assert.deepEqual(resolutions, [intent.attentionId])
+  assert.deepEqual(navigations, [])
+  lookup.resolve(intent)
+  await waitFor(() => navigations.length === 1)
+  fixture.adapter.click(intent)
+  await nextTask()
+  assert.deepEqual(navigations, [intent])
+  assert.deepEqual(fixture.adapter.deliveries, [])
+})
+
+test('a complete callback arriving first never starts a fallback lookup for that ID', async (t) => {
+  let lookups = 0
+  const navigations = []
+  const intent = notificationIntent('attn_callback_first01')
+  const fixture = createFixture({
+    resolveClickTarget: async () => {
+      lookups += 1
+      return undefined
+    },
+    navigate: (value) => navigations.push(value),
+  })
+  t.after(async () => await fixture.coordinator.stop())
+  fixture.coordinator.start()
+  await waitFor(() => fixture.adapter.intentSubscribeCalls === 1)
+  fixture.adapter.click(intent)
+  fixture.adapter.click({ attentionId: intent.attentionId })
+  await nextTask()
+  assert.equal(lookups, 0)
+  assert.deepEqual(navigations, [intent])
+})
+
+test('unknown, absent or mismatched ID-only results leave the current page unchanged', async (t) => {
+  for (const result of [undefined, notificationIntent('attn_different01')]) {
+    const navigations = []
+    const fixture = createFixture({
+      resolveClickTarget: async () => result,
+      navigate: (value) => navigations.push(value),
+    })
+    t.after(async () => await fixture.coordinator.stop())
+    fixture.coordinator.start()
+    await waitFor(() => fixture.adapter.intentSubscribeCalls === 1)
+    fixture.adapter.click({ attentionId: 'attn_not_found01' })
+    await nextTask()
+    assert.deepEqual(navigations, [])
+    assert.deepEqual(fixture.adapter.deliveries, [])
+    assert.equal(fixture.adapter.permissionCalls, 0)
+    assert.deepEqual(fixture.metadataCalls, [])
+  }
+  const fixture = createFixture({
+    navigate: () => assert.fail('No resolver must not guess a target'),
+  })
+  t.after(async () => await fixture.coordinator.stop())
+  fixture.coordinator.start()
+  await waitFor(() => fixture.adapter.intentSubscribeCalls === 1)
+  fixture.adapter.click({ attentionId: 'attn_no_resolver01' })
+  await nextTask()
+})
+
+test('a failed link lookup reports no payload and does not prevent another click', async (t) => {
+  const navigations = []
+  const fixture = createFixture({
+    resolveClickTarget: async () => {
+      throw new Error('Private upstream details must not escape')
+    },
+    navigate: (value) => navigations.push(value),
+  })
+  t.after(async () => await fixture.coordinator.stop())
+  fixture.coordinator.start()
+  await waitFor(() => fixture.adapter.intentSubscribeCalls === 1)
+  fixture.adapter.click({ attentionId: 'attn_lookup_error01' })
+  await waitFor(() => fixture.diagnostics.length === 1)
+  assert.deepEqual(fixture.diagnostics, [
+    { attentionId: 'attn_lookup_error01', stage: 'navigation' },
+  ])
+  const other = notificationIntent('attn_after_lookup_error01')
+  fixture.adapter.click(other)
+  await waitFor(() => navigations.length === 1)
+  assert.deepEqual(navigations, [other])
+})
+
+test('stop aborts a pending lookup and its old generation can never navigate', async () => {
+  const lookup = deferred()
+  let signal
+  const navigations = []
+  const stale = notificationIntent('attn_unmounted_link01')
+  const fixture = createFixture({
+    resolveClickTarget: async (_attentionId, value) => {
+      signal = value
+      return await lookup.promise
+    },
+    navigate: (value) => navigations.push(value),
+  })
+  fixture.coordinator.start()
+  await waitFor(() => fixture.adapter.intentSubscribeCalls === 1)
+  fixture.adapter.click({ attentionId: stale.attentionId })
+  assert.equal(signal.aborted, false)
+  await fixture.coordinator.stop()
+  assert.equal(signal.aborted, true)
+  fixture.coordinator.start()
+  await waitFor(() => fixture.adapter.intentSubscribeCalls === 2)
+  lookup.resolve(stale)
+  await nextTask()
+  assert.deepEqual(navigations, [])
+  const current = notificationIntent('attn_current_link01')
+  fixture.adapter.click(current)
+  await waitFor(() => navigations.length === 1)
+  assert.deepEqual(navigations, [current])
+  await fixture.coordinator.stop()
+})
+
 class FakeEventSource {
   activeListeners = 0
   subscribeCalls = 0
@@ -368,6 +530,7 @@ function createFixture(options = {}) {
     recentIds: options.recentIds,
     reportFailure: (diagnostic) => diagnostics.push(diagnostic),
     resolveMetadata,
+    resolveClickTarget: options.resolveClickTarget,
   })
   return fixture
 }

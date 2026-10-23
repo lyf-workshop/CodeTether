@@ -1192,6 +1192,8 @@ fn finish_desktop_initialization(
         state.surface_initialized.store(true, Ordering::Release);
         lock(&state.lifecycle).mark_window_visible();
         log_lifecycle_event("desktop_ready", &state, serde_json::json!({}));
+        #[cfg(windows)]
+        crate::notification_links::handle_arguments(&app, &std::env::args().collect::<Vec<_>>());
         Ok::<(), (StartupFailureKind, String)>(())
     })();
     if let Err((failure, error)) = initialization {
@@ -1262,15 +1264,24 @@ pub fn run_desktop() {
         std::env::consts::OS,
         std::env::consts::ARCH
     );
-    let app = tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+    let builder = tauri::Builder::default()
+        .manage(AttentionNotificationState::default())
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            #[cfg(windows)]
+            if crate::notification_links::handle_arguments(app, &args) {
+                return;
+            }
+            #[cfg(not(windows))]
+            let _ = args;
             if let Err(error) = show_main_window(app) {
                 eprintln!(
                     "[codetether:desktop] could not restore the main window for a second launch: {error}"
                 );
             }
-        }))
-        .plugin(tauri_plugin_notification::init())
+        }));
+    #[cfg(windows)]
+    let builder = builder.plugin(tauri_plugin_deep_link::init());
+    let app = builder.plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
@@ -1310,8 +1321,8 @@ pub fn run_desktop() {
                 system_tray::background_education_was_shown(app.handle()),
             );
             app.manage(state.clone());
-            let attention_notification_state = AttentionNotificationState::default();
-            app.manage(attention_notification_state.clone());
+            #[cfg(target_os = "macos")]
+            let attention_notification_state = app.state::<AttentionNotificationState>().inner().clone();
             #[cfg(target_os = "macos")]
             app.manage(crate::macos_notifications::install(
                 app.handle(),

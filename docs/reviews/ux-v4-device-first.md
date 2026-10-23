@@ -3,7 +3,7 @@
 - 分支：`ux/v4-device-first`，工作区 `D:/Projects/Software/agenthub-ux-v4-device-first`
 - 审核范围：`bbcda69..df91601`（9 个功能提交；3562f12 是平台权限测试，不在本轮范围）
 - 依据：`docs/ux-redesign/04-requirements.md`（第三版）、`02-dev-handoff.md`、原型；AGENTS.md
-- 当前级别：第 10 轮诊断完成（bb1d55b 已装机），Windows 安装版验收 14 项通过、1 项未完成（第 9 项点击通知），通知中心点击收不到回调，待用户选修法后写 R11（见 DEVELOPMENT-PROCESS §2）
+- 当前级别：第 10 轮诊断完成（bb1d55b 已装机），Windows 安装版验收 14 项通过、1 项未完成（第 9 项点击通知），通知中心点击收不到回调，用户选了登记 codetether:// 链接，待 R11（见 DEVELOPMENT-PROCESS §2）
 
 ## 第 1 轮（D1，2026-10-19）
 
@@ -440,4 +440,4 @@ R4 之后的结果见下一节。
 - 结论：点通知中心里的通知，Windows 没有回调到进程内的 `Activated`，也没有重新启动应用（否则单实例插件会恢复窗口）。这和第 9 轮的假设一致，和微软文档对未打包桌面应用的说明也一致。A 没有对照，所以只证明了通知中心这条路不通，没证明横幅能点通。用户离开电脑后回来点通知中心，正是这个功能最主要的用法，所以不管 A 结果如何都要修。
 - 其他：R10 报告里全仓 `pnpm format:check` 有 617 个文件不通过，抽查是 Windows checkout 的 CRLF 造成的，不是这轮引入的，合并前另外处理。
 
-下一步：修法要改安装程序或系统登记，请用户选方案后写 R11。
+下一步：用户选了登记 `codetether://` 链接（不选 COM 组件），按 `ux-v4-device-first-fix-prompt-r11.md` 实现并测通知中心、横幅和应用未运行三种点击。

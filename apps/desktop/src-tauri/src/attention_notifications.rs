@@ -45,6 +45,31 @@ fn notification_shown_log(attention_type: &AttentionNotificationType, app_id: &s
     format!("[codetether:desktop] notification shown type={attention_type} app_id={app_id}")
 }
 
+#[cfg(any(windows, test))]
+fn notification_activated_log(attention_type: &AttentionNotificationType, repeat: bool) -> String {
+    let attention_type = match attention_type {
+        AttentionNotificationType::Approval => "approval",
+        AttentionNotificationType::CompletedReview => "completed_review",
+        AttentionNotificationType::Failed => "failed",
+    };
+    format!("[codetether:desktop] notification activated type={attention_type} repeat={repeat}")
+}
+
+#[cfg(windows)]
+fn notification_dismissed_log(
+    reason: Option<windows::UI::Notifications::ToastDismissalReason>,
+) -> String {
+    use windows::UI::Notifications::ToastDismissalReason;
+
+    let reason = match reason {
+        Some(ToastDismissalReason::TimedOut) => "TimedOut",
+        Some(ToastDismissalReason::UserCanceled) => "UserCanceled",
+        Some(ToastDismissalReason::ApplicationHidden) => "ApplicationHidden",
+        _ => "unknown",
+    };
+    format!("[codetether:desktop] notification dismissed reason={reason}")
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct NotificationIntent {
@@ -335,9 +360,12 @@ fn show_windows_notification(
     let activation_attention_id = intent.attention_id.clone();
     let activated_handler: TypedEventHandler<ToastNotification, IInspectable> =
         TypedEventHandler::new(move |_, _| {
-            if !activation_flag.swap(true, Ordering::AcqRel)
-                && let Some(inner) = activation_state.upgrade()
-            {
+            let repeat = activation_flag.swap(true, Ordering::AcqRel);
+            eprintln!(
+                "{}",
+                notification_activated_log(&activation_intent.attention_type, repeat)
+            );
+            if !repeat && let Some(inner) = activation_state.upgrade() {
                 let state = AttentionNotificationState(inner);
                 state.remove_active_toast(&activation_attention_id);
                 activate_notification(&activation_app, &state, activation_intent.clone());
@@ -351,6 +379,7 @@ fn show_windows_notification(
         TypedEventHandler::new(
             move |_, args: windows::core::Ref<'_, ToastDismissedEventArgs>| {
                 let reason = args.as_ref().and_then(|args| args.Reason().ok());
+                eprintln!("{}", notification_dismissed_log(reason));
                 // A timed-out banner remains clickable in Windows Notification Center,
                 // so retain its source object until activation or bounded eviction.
                 if should_remove_after_dismissal(reason)
@@ -701,6 +730,83 @@ mod tests {
             NOTIFICATION_SKIPPED_LOG,
             "[codetether:desktop] notification skipped: already delivered"
         );
+    }
+
+    #[test]
+    fn notification_activation_log_contains_only_type_and_repeat() {
+        for (attention_type, expected_type) in [
+            (AttentionNotificationType::Approval, "approval"),
+            (
+                AttentionNotificationType::CompletedReview,
+                "completed_review",
+            ),
+            (AttentionNotificationType::Failed, "failed"),
+        ] {
+            let mut value = intent("attn_activation_sentinel");
+            value.attention_type = attention_type;
+            value.title = "TITLE_PRIVACY_SENTINEL".to_owned();
+            value.body = "DEVICE_PROJECT_PRIVACY_SENTINEL\nBODY_PRIVACY_SENTINEL".to_owned();
+            for repeat in [false, true] {
+                let log = notification_activated_log(&value.attention_type, repeat);
+                assert_eq!(
+                    log,
+                    format!(
+                        "[codetether:desktop] notification activated type={expected_type} repeat={repeat}"
+                    )
+                );
+                for private_value in [
+                    value.title.as_str(),
+                    "DEVICE_PROJECT_PRIVACY_SENTINEL",
+                    "BODY_PRIVACY_SENTINEL",
+                    value.attention_id.as_str(),
+                    value.project_id.as_str(),
+                    value.conversation_id.as_str(),
+                    value.turn_id.as_deref().unwrap(),
+                ] {
+                    assert!(!log.contains(private_value));
+                }
+                assert!(!log.contains('\n'));
+            }
+        }
+    }
+
+    #[test]
+    fn notification_activation_log_records_repeated_atomic_admission() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let activated = AtomicBool::new(false);
+        for expected_repeat in [false, true, true] {
+            let repeat = activated.swap(true, Ordering::AcqRel);
+            assert_eq!(repeat, expected_repeat);
+            assert_eq!(
+                notification_activated_log(&AttentionNotificationType::CompletedReview, repeat),
+                format!(
+                    "[codetether:desktop] notification activated type=completed_review repeat={expected_repeat}"
+                )
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn notification_dismissal_log_uses_only_controlled_reason_labels() {
+        use windows::UI::Notifications::ToastDismissalReason;
+
+        for (reason, label) in [
+            (Some(ToastDismissalReason::TimedOut), "TimedOut"),
+            (Some(ToastDismissalReason::UserCanceled), "UserCanceled"),
+            (
+                Some(ToastDismissalReason::ApplicationHidden),
+                "ApplicationHidden",
+            ),
+            (None, "unknown"),
+            (Some(ToastDismissalReason(12345)), "unknown"),
+        ] {
+            assert_eq!(
+                notification_dismissed_log(reason),
+                format!("[codetether:desktop] notification dismissed reason={label}")
+            );
+        }
     }
 
     #[test]

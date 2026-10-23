@@ -441,3 +441,15 @@ R4 之后的结果见下一节。
 - 其他：R10 报告里全仓 `pnpm format:check` 有 617 个文件不通过，抽查是 Windows checkout 的 CRLF 造成的，不是这轮引入的，合并前另外处理。
 
 下一步：用户选了登记 `codetether://` 链接（不选 COM 组件），按 `ux-v4-device-first-fix-prompt-r11.md` 实现并测通知中心、横幅和应用未运行三种点击。
+
+## 第 11 轮（进行中）
+
+代码审核：`835489d fix(desktop): activate notifications through protocol links`，通过。17 个文件，没有改 Host。
+
+- 登记方式：用官方 `tauri-plugin-deep-link` 2.4.9 和现有 NSIS 模板，只放在 Windows 配置 `tauri.windows.conf.json` 里。单实例插件打开 `deep-link` 功能，排在第一个。开发构建不在运行时登记。
+- 链接解析（`notification_links.rs`）：严格前缀，不解码、不改大小写，ID 用 `is_public_id(…, "attn_")` 校验，有长度上限。参数个数不是 2 时按无效处理，不从单实例转来的参数里拼链接。无效链接只恢复窗口。日志只有 matched、unmatched、invalid 三种。
+- 点击处理：内存里按 attention ID 找到通知意图就走原来的 `activate_notification`。找不到就交给前端，前端只在 open、resolved、expired 三个列表里各查一次（每次最多 100 条），ID 唯一匹配才跳转，否则不跳。另加了按 attention ID 的激活去重，回调和链接都到时只放行一次。
+- 应用没在运行时，`desktop_ready` 之后再处理启动参数，顺序正确。
+- 小问题，不阻塞：前端只查最近 100 条，再旧的提醒点开只恢复窗口。可以接受。
+
+安装包 `37712481…1589`，26,739,086 字节，我复核过。日志里没有 key。R10 安装包已备份到 `installers/bb1d55b/`，有 SHA256SUMS.txt。

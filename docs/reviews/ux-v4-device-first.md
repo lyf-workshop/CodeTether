@@ -3,7 +3,7 @@
 - 分支：`ux/v4-device-first`，工作区 `D:/Projects/Software/agenthub-ux-v4-device-first`
 - 审核范围：`bbcda69..df91601`（9 个功能提交；3562f12 是平台权限测试，不在本轮范围）
 - 依据：`docs/ux-redesign/04-requirements.md`（第三版）、`02-dev-handoff.md`、原型；AGENTS.md
-- 当前级别：第 7 轮补测完成（无代码改动），Windows 安装版验收 14 项通过、0 项不通过、1 项未测（第 9 项），待 R8 修新增文件差异、在 Codex 应用外重装并补测（见 DEVELOPMENT-PROCESS §2）
+- 当前级别：第 8 轮完成（9800ae2 已装机），Windows 安装版验收 14 项通过、0 项不通过、1 项未完成（第 9 项只差点击通知），待 R9 补测（见 DEVELOPMENT-PROCESS §2）
 
 ## 第 1 轮（D1，2026-10-19）
 
@@ -404,3 +404,13 @@ R4 之后的结果见下一节。
 - 用户在 Codex 应用外运行安装程序（Claude Code 的 `!` 命令）。真实开始菜单有 `CodeTether.lnk`（02:25），`Get-StartApps` 列出 `com.codetether.desktop`，运行版本 `git-9800ae2f8b7d`。R7 的开始菜单问题确认由 Codex 应用的重定向造成，已解决。
 - Desktop 文件哈希不同的原因已查清：两份文件大小相同，只差 3 个字节，在 `__TAURI_BUNDLE_TYPE_VAR_` 标记处，构建目录里是 `UNK`，安装版里是 `NSS`。这是 Tauri 打包时写进安装包副本的安装类型标记，属于正常现象，不是缺陷。
 - 通知状态：从普通 PowerShell 读 `CreateToastNotifier(...).Setting` 得到空值，这个查询方法不可靠，不再作为判断依据。注册表 `Notifications\Settings\com.codetether.desktop` 是 `Enabled=1`，没有全局关闭项。第 9 项改为直接实测。
+
+实测结果（R8 报告第 16 至 21 节，我核对过）：
+
+- 新增和删除差异通过：Codex 新建 3 行文件显示 `+3` 和 3 行新增，删除后显示 `-3` 和 3 行删除。截图 `30-r8-diff-add.png`、`31-r8-diff-delete.png`。
+- 图标通过：任务栏和开始菜单搜索结果都是新版紫色双卡片（`icons-taskbar-01.png`、`icons-start-menu-visual-08.png`），没有清图标缓存。至此标题栏、托盘、Explorer、任务栏、开始菜单五处都已确认。
+- 第 9 项大部分通过：日志有 `notification shown type=completed_review` 和 `type=failed`，没有 skipped。原生通知历史里有 2 条 CodeTether 通知，文案是“本地电脑 · v4-accept-project”加一句说明，没有会话标题。R7 之前通知发不出来，原因确认是开始菜单没登记。
+- 第 9 项还差一步：Claude Code 那个回合因 gateway 返回 `provider_service_unavailable` 失败，弹出的是失败通知。UIAutomation 没找到唯一的通知卡片，没有点击，点开进入会话没有验证。gateway 故障不归这个分支，不改代码。
+- 原始日志在用户退出后脱敏并删除，进程和 4317 端口都已清零，R5、R7 测试文件保留。
+
+下一步：按 `ux-v4-device-first-fix-prompt-r9.md` 用 1 个 Codex 回合触发完成通知，点开验证路由。不改代码，不重装。

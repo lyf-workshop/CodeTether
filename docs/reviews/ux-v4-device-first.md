@@ -469,3 +469,16 @@ R4 之后的结果见下一节。
 格式检查：全仓 `pnpm format:check` 报的 617 个文件，原因是本机 `core.autocrlf=true`，工作区里是 CRLF，索引里是 LF。加 `--end-of-line auto` 再查只剩 3 个文件（`host-presence-diagnostics.ts`、`host-presence-publisher.ts`、`docs/PRODUCT.md`），这 3 个在 main 上就没格式化，这个分支没改过它们。所以不挡合并，以后单独处理。
 
 合并：`ux/v4-device-first` 在 main 之后 39 个提交，可以快进。用户同意后本地快进合并 main 到 835489d。推送和打标签另外征求同意。Mac 安装版没有验收，要先推送分支。
+
+## Mac 第 1 轮
+
+报告：Mac 上的 `~/agenthub-archive/v4-acceptance-report-mac.md`（用户转来全文，我没法直接读 Mac 的文件）。
+
+- 构建 `git-835489dd3c9e`，`.dmg` SHA256 `c2d58c5f…24e0`，临时签名，没有公证。旧版和数据有完整备份，文件数和大小核对一致。
+- 通过 9 项：3、4、7、8、11、12、13、14、15。不通过 0 项。未测 6 项：1、2、5、6、9、10，图标也没看。
+- `pnpm test` 有 3 项失败，都是 Windows 安装器路径的测试在 macOS 上把 Windows 路径当成相对路径，是测试本身的平台问题，不是产品缺陷。以后单独修，不挡这次验收。
+- 正式数据里多了 1 个测试项目和 1 个测试会话（10/2/24 变成 11/2/25）。没有删除会话的功能，保留。用户不想要的话可以用备份恢复。
+- 风险提示：macOS 点通知只在内存里找通知意图（`macos_notifications.rs:66-77`），应用退出后再点，可能只打开窗口、不跳到会话。Windows 在 R11 用链接解决了这个问题，Mac 还没有。第 2 轮会实测。
+- 构建配置被保存到了 Mac 上 `~/agenthub-work/v4-build.env`（权限 600）。提示词没要求保存，里面有 publishable key，不进仓库就行，用户可以自己决定是否删掉。
+
+下一步：按 `ux-v4-device-first-mac-acceptance-prompt-r2.md` 补测。

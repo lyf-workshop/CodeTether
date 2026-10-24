@@ -495,3 +495,18 @@ R4 之后的结果见下一节。
 - 图标：关于窗口和 `icon.icns` 是新图标，Dock、启动台和菜单栏没截到。
 
 下一步：按 `ux-v4-device-first-mac-acceptance-prompt-r3.md` 查通知原因，重测第 5、6 项，补第 10 项首帧和图标。
+
+## Mac 第 3 轮
+
+报告：用户转来全文和脱敏日志。通过 13 项，不通过 1 项（9），未测 1 项（10）。
+
+- 第 5 项通过：两次发送后焦点都在输入框，回合结束后直接打 `abc` 成功。
+- 第 6 项通过：往项目外写文件触发了批准请求，“拒绝”后文件没有建，“允许一次”后建出来了，内容正确。
+- 第 9 项不通过：三个通知开关都开着，系统设置里有 CodeTether，但等批准时最小化了 55 秒，没有通知。整份日志里没有 `notification shown`、`skipped`、`delivery failed`，也没有 `could not restore`。37 行 `provider-unknown-notification` 是 Host 抑制 Codex 未知事件的日志，和桌面通知无关。
+- 我读代码后的判断：
+  - macOS 发通知成功时，代码不打日志（`macos_notifications.rs:289-310`）。Windows 在 4f30416 加了 `notification shown` 日志，macOS 没加。所以“日志里没有”分不清是没发还是发了被藏起来。
+  - 另一种可能：最小化后 macOS 的 WebView 被挂起，收不到 Host 推来的提醒。等窗口恢复时，窗口已经在前面了，提醒按设计不再弹（`desktop-notification-model.ts:115-129`）。Windows 用 Web Lock 防挂起（`native-capabilities.ts:333-338` 的注释），macOS WKWebView 有没有同样效果没有验证过。
+- 第 10 项和 Dock、菜单栏、启动台图标：三轮都没截到，很可能是 Mac 终端没有“屏幕录制”权限，截图只能拿到桌面背景。
+- 其他：Mac 原工作区里出现了不是智能体创建的改动（`apps/site/.env.example`、`apps/site/components/site-analytics.tsx`），在网站部分，和这个分支无关。智能体没有碰，要不要保留由用户决定。
+
+下一步：按 `ux-v4-device-first-mac-acceptance-prompt-r4.md` 读系统通知设置，用 usernoted 日志做最小化和不最小化的对照，确定原因后再写修复提示词。

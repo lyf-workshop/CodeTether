@@ -510,3 +510,16 @@ R4 之后的结果见下一节。
 - 其他：Mac 原工作区里出现了不是智能体创建的改动（`apps/site/.env.example`、`apps/site/components/site-analytics.tsx`），在网站部分，和这个分支无关。智能体没有碰，要不要保留由用户决定。
 
 下一步：按 `ux-v4-device-first-mac-acceptance-prompt-r4.md` 读系统通知设置，用 usernoted 日志做最小化和不最小化的对照，确定原因后再写修复提示词。
+
+## Mac 第 4 轮
+
+报告：用户转来全文和脱敏日志。还是 13 项通过，第 9 项不通过，第 10 项未测。
+
+- 系统设置：允许通知开着，通知中心和锁屏显示开着，专注模式关着，提醒样式不是“无”。所以不是 B（系统把通知藏了）。
+- 被挡住（不最小化）和最小化两次都没出通知。Desktop 日志没有任何通知行，usernoted 日志是空的。
+- 我的判断：A（网页在后台被挂起）的可能性最大。WKWebView 的 `inactiveSchedulingPolicy` 默认是 suspend，窗口不在前台就会挂起网页。被挡住和最小化都会触发，和两次结果都吻合。Windows 的 Web Lock 办法（`native-capabilities.ts:333-338`）在 macOS 上没用。Tauri 2.11.5 有 `backgroundThrottling` 窗口配置（tauri-utils 2.9.3 `config.rs:2194-2200`），macOS 14 以上生效，现在没设。
+- 也不能排除 C：日志太少，看不出原生这条路有没有被调用。macOS 成功发通知时不打日志，网页的失败诊断只写到 WebView 控制台。
+- 另外，旧的 macOS 通知代码是 Phase 8D 写的，当时的 README 写明 macOS 通知没有实机验证过（`apps/desktop/README.md:298`）。所以这是一直没验证的问题，不是这个分支改坏的。
+- 截图权限没问题。第 10 项和 Dock、菜单栏图标没补做，原因是我第 4 轮提示词写的条件只在没有权限时才要求补做。
+
+下一步：按 `ux-v4-device-first-mac-fix-prompt-r5.md`，由 Mac 上的智能体在 `fix/macos-notifications` 分支上加通知日志、设 `backgroundThrottling: disabled`、让退出后点通知走按 ID 查找的路径，打包替换后测四种情况，再补第 10 项和图标。代码由我审核。

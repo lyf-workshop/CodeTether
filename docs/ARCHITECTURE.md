@@ -917,6 +917,13 @@ event/queue route to the exact Conversation. Attention IDs retain their
 process-scoped dedupe, and the background-runtime education marker is persisted
 only after the native request is accepted.
 
+On macOS 14 and later, the main WKWebView disables background throttling so
+Host SSE Attention delivery continues while the window is covered or minimized.
+After process exit, a notification identifier with the exact
+`codetether-attention-` prefix and a validated public Attention ID reuses the
+existing read-only Host lookup and deduplicated click route; it never persists
+notification content or trusts routing data from the notification identifier.
+
 There is no `invoke("run_command")`, generic `invoke("native_action")`, arbitrary shell argument bridge, or filesystem grant to Web content. Tauri's folder dialog is directory acquisition, and native notifications are best-effort Attention delivery; neither is a second Client-to-Host protocol.
 
 Production CSP allows HTTP/SSE connection only to `http://127.0.0.1:4317`; `script-src 'self'` permits only packaged same-origin entry and dynamic-import chunks, without remote scripts or `'unsafe-eval'`, and wildcard source directives are absent. `removeUnusedCommands` remains enabled. The Rust build manifest explicitly enumerates the three application commands, and the generated release allow-list contains exactly those commands even though the Browser-safe adapter is code-split. Development adds only the explicit Vite HTTP/WebSocket endpoints and its required eval allowance. The Host still binds loopback only and retains strict Host/Origin validation; Desktop-managed startup allowlists only its explicit WebView Origin rather than weakening CORS.

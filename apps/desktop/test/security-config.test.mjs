@@ -110,6 +110,7 @@ test('production Desktop CSP and capabilities stay loopback-only and non-wildcar
   assert.equal(config.app.windows[0].visible, false)
   assert.equal(config.app.windows[0].center, true)
   assert.equal(config.app.windows[0].backgroundColor, '#fbfaf8')
+  assert.equal(config.app.windows[0].backgroundThrottling, 'disabled')
   assert.equal(config.app.windows[0].useHttpsScheme, false)
   assert.match(
     config.app.security.csp['connect-src'],

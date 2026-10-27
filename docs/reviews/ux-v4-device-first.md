@@ -523,3 +523,21 @@ R4 之后的结果见下一节。
 - 截图权限没问题。第 10 项和 Dock、菜单栏图标没补做，原因是我第 4 轮提示词写的条件只在没有权限时才要求补做。
 
 下一步：按 `ux-v4-device-first-mac-fix-prompt-r5.md`，由 Mac 上的智能体在 `fix/macos-notifications` 分支上加通知日志、设 `backgroundThrottling: disabled`、让退出后点通知走按 ID 查找的路径，打包替换后测四种情况，再补第 10 项和图标。代码由我审核。
+
+## Mac 第 5 轮（进行中）
+
+材料：用户转来报告、完整 diff 和检查日志（Mac 上的 `v4-mac-r5-review-materials.md`）。分支 `fix/macos-notifications`，两个本地提交 `469f58a`、`0076c37`，基于 835489d，没推送。macOS 27.0。
+
+代码审核：通过，6 个文件 +204 −5。
+- 日志：`notification requested`、`authorization result=granted/denied/error`、启动时 `authorization status=…`、`notification shown … platform=macos`，只有类型和状态，测试用哨兵值核过。`requested` 打在校验和去重之前，被拒或跳过时也会有一行，排查时有用。
+- `backgroundThrottling: "disabled"` 写在基础配置里。Tauri 和 wry 文档写的是 Windows、Linux 不支持这项，会被忽略，和 `native-capabilities.ts` 里 Web Lock 的注释一致，Windows 行为不变。
+- 退出后点击：先查内存，找不到再用 `codetether-attention-` 严格前缀加 `is_public_id(…, "attn_")` 取出 ID，走 R11 的 `activate_notification_link`（cfg 放宽到 macOS）。只用 ID 去 Host 查，不信任通知里的其他内容。ID 解析的反例测试覆盖了前缀、大小写、类型、长度、路径、查询串和换行。
+- Cargo 只多开了 `UNNotificationSettings` 一个 feature，没加依赖。
+
+检查：clippy 被两处 main 上已有的警告挡住，都只在 macOS 上出现，Windows 的 clippy 编不到这两段代码，所以以前没发现。
+- `attention_notifications.rs:161` 手写 `Default`：在 macOS 非测试构建里，剩下的字段都能 `Default`，所以被提示 derivable。但 Windows 和测试构建里有 `BoundedRegistry::new(MAX_…)` 字段，要指定容量，照 clippy 的建议改成 `#[derive(Default)]` 会改坏 Windows。正确改法是在这个 impl 上加 `#[allow(clippy::derivable_impls)]`，并注明原因。
+- `product_device_key_store.rs:555` cfg 块里的 `return`：去掉 `return` 和分号，两个 cfg 块都作为结尾表达式，两个平台行为不变。
+- 我同意它在第三个提交里改这两处。改动超出了第二部分的范围，但只是机械修改，不改变行为。
+- `pnpm test` 有两类已知失败：Windows 安装器路径测试在 macOS 上失败；Claude 测试在 macOS 上因为 `/var` 和 `/private/var` 是同一个目录的两个路径而失败，用规范的 `TMPDIR` 重跑后全部通过。都是测试本身的跨平台问题，这个分支没有引起，这一轮不修，以后单独处理。
+
+下一步：Mac 上改好 clippy，提交并推送 `fix/macos-notifications`，然后打包、替换、做四项实测。分支推上来以后，我在 Windows 上跑 cargo check、clippy 和 test。

@@ -172,6 +172,8 @@ struct AttentionNotificationStateInner {
     active_toasts: Mutex<BoundedRegistry<ActiveWindowsToast>>,
 }
 
+// Windows and test builds require explicit capacities for their bounded registries.
+#[allow(clippy::derivable_impls)]
 impl Default for AttentionNotificationStateInner {
     fn default() -> Self {
         Self {

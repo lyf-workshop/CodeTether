@@ -524,7 +524,7 @@ R4 之后的结果见下一节。
 
 下一步：按 `ux-v4-device-first-mac-fix-prompt-r5.md`，由 Mac 上的智能体在 `fix/macos-notifications` 分支上加通知日志、设 `backgroundThrottling: disabled`、让退出后点通知走按 ID 查找的路径，打包替换后测四种情况，再补第 10 项和图标。代码由我审核。
 
-## Mac 第 5 轮（进行中）
+## Mac 第 5 轮
 
 材料：用户转来报告、完整 diff 和检查日志（Mac 上的 `v4-mac-r5-review-materials.md`）。分支 `fix/macos-notifications`，两个本地提交 `469f58a`、`0076c37`，基于 835489d，没推送。macOS 27.0。
 
@@ -541,3 +541,20 @@ R4 之后的结果见下一节。
 - `pnpm test` 有两类已知失败：Windows 安装器路径测试在 macOS 上失败；Claude 测试在 macOS 上因为 `/var` 和 `/private/var` 是同一个目录的两个路径而失败，用规范的 `TMPDIR` 重跑后全部通过。都是测试本身的跨平台问题，这个分支没有引起，这一轮不修，以后单独处理。
 
 下一步：Mac 上改好 clippy，提交并推送 `fix/macos-notifications`，然后打包、替换、做四项实测。分支推上来以后，我在 Windows 上跑 cargo check、clippy 和 test。
+
+结果：14 项通过，第 9 项不通过，未测 0 项。
+- 第三个提交 `a8abbec` 只改那两处 clippy，和我给的改法一致。已推送 `fix/macos-notifications`（a8abbecc），没推 main，没打标签。
+- 第 10 项通过：浅色启动的首帧没有深蓝。
+- 第 9 项：日志依次是 `notification requested type=completed_review`、`authorization result=granted`、`notification shown … platform=macos`，重启后有 `authorization status=authorized`。
+  - 后台挂起的问题解决了：网页在后台已经能调用发通知，第 3、4 轮完全没有这一行。
+  - 但横幅和通知中心都没有显示。代码里没有删除已送达通知的调用，通知内容只有标题和正文。剩下的原因都在系统那边，见第 6 轮提示词。
+- 第 4 轮的 `log stream` 没加 `--level debug`，usernoted 的 info 和 debug 记录都被过滤掉了，所以那次日志是空的，不能说明系统没收到通知。
+- Windows 编译复核：分支已推送，但本会话的权限服务暂时不可用，fetch 和 cargo 都还没跑，之后补上。
+
+下一步：按 `ux-v4-device-first-mac-acceptance-prompt-r6.md` 查系统层面的原因，不改代码：
+- 签名和 LaunchServices 里同一 bundle id 的多份登记；
+- ncprefs 里 CodeTether 的设置；
+- 屏幕共享或镜像时不弹通知；
+- 用 `osascript` 发一条对照通知；
+- 用 `open -a … --stderr` 通过系统正常启动后再测，带 debug 级 usernoted 日志；
+- 用户同意后，注销备份和构建目录里那几份副本的登记。

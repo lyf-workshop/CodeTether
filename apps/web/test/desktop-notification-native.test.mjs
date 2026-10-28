@@ -130,6 +130,24 @@ test('Desktop window state uses native getters instead of stale WebView state', 
   assert.deepEqual(calls.sort(), ['focused', 'minimized', 'visible'])
 })
 
+test('Desktop window state falls back when a native getter stalls', async () => {
+  const capabilities = createNativeCapabilities({
+    tauriAvailable: true,
+    loadTauriWindow: async () => ({
+      getCurrentWindow: () => ({
+        isFocused: () => new Promise(() => {}),
+        isMinimized: async () => false,
+        isVisible: async () => true,
+      }),
+    }),
+  })
+
+  const state = await capabilities.notifications.getWindowState()
+  assert.equal(typeof state.focused, 'boolean')
+  assert.equal(typeof state.minimized, 'boolean')
+  assert.equal(typeof state.visible, 'boolean')
+})
+
 test('Desktop permission is requested lazily and concurrent checks are shared', async () => {
   let pluginLoads = 0
   let permissionChecks = 0
@@ -166,6 +184,19 @@ test('Desktop permission is requested lazily and concurrent checks are shared', 
   assert.equal(permissionRequests, 1)
   assert.equal(await capabilities.notifications.ensurePermission(), true)
   assert.equal(pluginLoads, 1)
+})
+
+test('macOS permission falls back to the native delivery queue when the plugin stalls', async () => {
+  const capabilities = createNativeCapabilities({
+    tauriAvailable: true,
+    platform: 'macos',
+    loadTauriNotification: async () => ({
+      isPermissionGranted: () => new Promise(() => {}),
+      requestPermission: () => new Promise(() => {}),
+    }),
+  })
+
+  assert.equal(await capabilities.notifications.ensurePermission(), true)
 })
 
 test('Desktop delivery invokes only the bounded Attention command', async () => {

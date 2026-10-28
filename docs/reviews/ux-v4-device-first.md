@@ -569,3 +569,13 @@ R4 之后的结果见下一节。
 - 我读代码后的判断：从 SSE `attention.created`（`host-runtime.ts:821-822`）到协调器（`attention-notification-coordinator.ts:174-297`），中间所有提前返回的分支都不记日志。权限检查（`native-capabilities.ts` 的 `ensurePermission`）、元数据、窗口状态、`invoke` 都可能卡住或静默返回，现有日志区分不了。只看代码定不了是哪一处，盲修有风险。
 
 下一步：按 `ux-v4-device-first-mac-fix-prompt-r7.md`，在 `fix/macos-notifications` 上加一个只做诊断的提交：协调器每一步打一行，只记阶段和原因，加上 SSE 断开重连的日志，再在 Mac 上打包实测，按日志定位。修复在下一轮做。
+
+## Mac 第 7 轮
+
+- 诊断提交 `aeb0b5f` 已在本地完成，各项检查都通过，没有推送。
+- 新构建 `git-aeb0b5fbd229` 装上以后，Host 以退出码 1 退出：日志里只有 3 次 `sse-unavailable`，没有 `sse-connected`。按停止条件，三次实测都没有做，CodeTether 现在用不了。
+- 退出原因不在脱敏日志里。Host 的报错是 `[codetether:host]` 开头的行（`host_supervisor.rs:320-325`），但 r7 的脱敏规则只保留 desktop、lifecycle 和 notification 三类，这一行被过滤掉了。原始日志还在 Mac 上。这是我写 r7 规则时漏掉的。
+- 我的推测，还没证实：这一轮没改 Host 代码，变的是打包环境。r7 用 `/tmp` 里的 Node 25.5.0 打的 Host，第 1 轮用的是 Node 26.4.0。App 从 157.8 MB 降到 145.6 MB，差的 12 MB 像是内嵌的 Node 换了版本。`build-sidecar.mjs:119-122` 只要求 Node 25.5 以上，没有固定版本。
+- 为什么一直验收不过：一部分是真的问题，后台挂起和多份登记都已修好或清掉；另一部分是我的提示词每轮只放一个小步骤，每步都要等用户和我来回确认，很慢。我还写错过三次：第 2 轮的焦点标准、第 4 轮漏了 `--level debug`、第 7 轮的截断。
+
+下一步：按 `ux-v4-device-first-mac-fix-prompt-r8.md` 一轮做完。先查清 Host 退出并恢复能用的版本，再做诊断实测。日志指向网页链路的缺陷时，在限定的文件范围内直接修，然后做第 9 项完整验收、推送分支。用户同意给 Mac 智能体更大的自主权，可以自己切换窗口、退出和启动应用、下载并核对官方 Node、多次打包和替换。

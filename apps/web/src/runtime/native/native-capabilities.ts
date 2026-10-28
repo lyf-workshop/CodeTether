@@ -25,10 +25,43 @@ export interface DesktopNotifications {
   deliver(intent: NotificationIntent): Promise<void>
   ensurePermission(): Promise<boolean>
   getWindowState(): DesktopWindowState | Promise<DesktopWindowState>
+  logStage?(stage: NotificationStage): void | Promise<void>
   subscribeToIntents(
     listener: (intent: NotificationClickIntent) => void | Promise<void>,
   ): Promise<() => void>
 }
+
+export type NotificationStage =
+  | 'received'
+  | 'skip-inactive'
+  | 'skip-recent'
+  | 'skip-disabled'
+  | 'skip-suppressed'
+  | 'skip-permission-denied'
+  | 'window-state-start'
+  | 'window-state-done'
+  | 'window-state-timeout'
+  | 'metadata-start'
+  | 'metadata-done'
+  | 'permission-start'
+  | 'permission-done'
+  | 'permission-timeout'
+  | 'deliver-start'
+  | 'deliver-done'
+  | 'failed-recent-id-read'
+  | 'failed-preferences'
+  | 'failed-window-state'
+  | 'failed-presentation'
+  | 'failed-metadata'
+  | 'failed-permission'
+  | 'failed-delivery'
+  | 'failed-recent-id-write'
+  | 'failed-click-listener'
+  | 'failed-navigation'
+  | 'sse-connected'
+  | 'sse-reconnecting'
+  | 'sse-reset'
+  | 'sse-unavailable'
 
 export interface BackgroundRuntimeCapability {
   readonly available: boolean
@@ -189,6 +222,7 @@ const unavailableDesktopNotifications: DesktopNotifications = {
     Promise.reject(new Error('Desktop notifications are unavailable.')),
   ensurePermission: () => Promise.resolve(false),
   getWindowState: readDocumentWindowState,
+  logStage: () => undefined,
   subscribeToIntents: () => Promise.resolve(() => undefined),
 }
 
@@ -328,6 +362,14 @@ export function createNativeCapabilities(
       assertNotificationIntent(intent)
       const { invoke } = await loadCore()
       await invoke<void>('deliver_attention_notification', { intent })
+    },
+    async logStage(stage) {
+      try {
+        const { invoke } = await loadCore()
+        await invoke<void>('log_notification_stage', { stage })
+      } catch {
+        // Diagnostic logging is best-effort and cannot affect notifications.
+      }
     },
     async subscribeToIntents(listener) {
       // WebView2 can suspend a minimized document and therefore pause its SSE

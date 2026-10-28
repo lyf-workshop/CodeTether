@@ -99,10 +99,30 @@ async function renderApp() {
     },
   })
   notificationCoordinator.start()
+  let lastConnectionState = runtime.getConnectionState()
+  const logConnectionState = () => {
+    const state = runtime.getConnectionState()
+    if (state === lastConnectionState) return
+    lastConnectionState = state
+    if (state === 'connected') {
+      void nativeCapabilities.notifications.logStage?.('sse-connected')
+    } else if (state === 'reconnecting') {
+      void nativeCapabilities.notifications.logStage?.('sse-reconnecting')
+    } else if (state === 'unavailable') {
+      void nativeCapabilities.notifications.logStage?.('sse-unavailable')
+    }
+  }
+  const unsubscribeRuntime = runtime.subscribe(logConnectionState)
+  const unsubscribeStreamResets = runtime.subscribeStreamResets(() => {
+    void nativeCapabilities.notifications.logStage?.('sse-reset')
+  })
+  logConnectionState()
   window.addEventListener(
     'pagehide',
     () => {
       releaseDesktopResumeSubscription()
+      unsubscribeRuntime()
+      unsubscribeStreamResets()
       void notificationCoordinator.stop()
     },
     { once: true },

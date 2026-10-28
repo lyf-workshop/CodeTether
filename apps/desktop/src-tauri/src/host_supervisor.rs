@@ -1288,6 +1288,7 @@ pub fn run_desktop() {
             crate::project_directory_picker::pick_project_directory,
             crate::provider_guidance::open_provider_guidance,
             crate::attention_notifications::deliver_attention_notification,
+            crate::attention_notifications::log_notification_stage,
             crate::attention_notifications::take_pending_notification_intent,
             crate::product_device_key_store::product_device_key_list,
             crate::product_device_key_store::product_device_key_create,
@@ -1444,16 +1445,57 @@ pub fn run_desktop() {
                 app_handle.get_webview_window("main"),
             ) {
                 match window.is_minimized() {
-                    Ok(true) => lock(&state.lifecycle).mark_window_minimized(),
+                    Ok(true) => {
+                        let mut lifecycle = lock(&state.lifecycle);
+                        let changed = lifecycle.snapshot().window
+                            != crate::desktop_lifecycle::WindowState::Minimized;
+                        lifecycle.mark_window_minimized();
+                        drop(lifecycle);
+                        if changed {
+                            log_lifecycle_event(
+                                "main_window_minimized",
+                                &state,
+                                serde_json::json!({}),
+                            );
+                        }
+                    }
                     Ok(false) => {
                         if window.is_visible().unwrap_or(false) {
-                            lock(&state.lifecycle).mark_window_visible();
+                            let mut lifecycle = lock(&state.lifecycle);
+                            let changed = lifecycle.snapshot().window
+                                == crate::desktop_lifecycle::WindowState::Minimized;
+                            lifecycle.mark_window_visible();
+                            drop(lifecycle);
+                            if changed {
+                                log_lifecycle_event(
+                                    "main_window_restored",
+                                    &state,
+                                    serde_json::json!({}),
+                                );
+                            }
                         }
                     }
                     Err(error) => eprintln!(
                         "[codetether:desktop] could not observe the main window state: {error}"
                     ),
                 }
+            }
+        }
+        RunEvent::WindowEvent {
+            label,
+            event: WindowEvent::Focused(focused),
+            ..
+        } if label == "main" => {
+            if let Some(state) = app_handle.try_state::<DesktopState>() {
+                log_lifecycle_event(
+                    if focused {
+                        "main_window_focused"
+                    } else {
+                        "main_window_blurred"
+                    },
+                    &state,
+                    serde_json::json!({}),
+                );
             }
         }
         RunEvent::ExitRequested { api, .. } => {

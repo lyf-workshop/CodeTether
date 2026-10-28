@@ -55,6 +55,7 @@ test('Browser notifications stay unavailable without loading Tauri modules', asy
     capabilities.notifications.deliver(intent),
     /unavailable/u,
   )
+  await capabilities.notifications.logStage?.('received')
   assert.equal(loads, 0)
 })
 
@@ -183,6 +184,26 @@ test('Desktop delivery invokes only the bounded Attention command', async () => 
     {
       command: 'deliver_attention_notification',
       args: { intent },
+    },
+  ])
+})
+
+test('Desktop diagnostic stages invoke only the bounded stage command', async () => {
+  const calls = []
+  const capabilities = createNativeCapabilities({
+    tauriAvailable: true,
+    loadTauriCore: async () => ({
+      invoke: async (command, args) => {
+        calls.push({ command, args })
+      },
+    }),
+  })
+
+  await capabilities.notifications.logStage?.('sse-connected')
+  assert.deepEqual(calls, [
+    {
+      command: 'log_notification_stage',
+      args: { stage: 'sse-connected' },
     },
   ])
 })

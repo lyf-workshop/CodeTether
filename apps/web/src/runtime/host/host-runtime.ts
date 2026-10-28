@@ -178,6 +178,7 @@ export interface HostRuntimeOptions {
 }
 
 type ConnectionListener = () => void
+type StreamResetListener = () => void
 export type AppliedHostEvent = Exclude<
   HostEventEnvelope,
   { readonly type: 'stream.reset' }
@@ -200,6 +201,7 @@ export class HostRuntime {
   readonly #random: () => number
   readonly #monotonicNow: () => number
   readonly #listeners = new Set<ConnectionListener>()
+  readonly #streamResetListeners = new Set<StreamResetListener>()
   readonly #appliedEventListeners = new Set<AppliedHostEventListener>()
   readonly #actions: LiveConversationActions
   readonly #projectActions: ProjectActions
@@ -299,6 +301,13 @@ export class HostRuntime {
   }
 
   readonly getConnectionState = (): HostConnectionState => this.#connectionState
+
+  readonly subscribeStreamResets = (
+    listener: StreamResetListener,
+  ): (() => void) => {
+    this.#streamResetListeners.add(listener)
+    return () => this.#streamResetListeners.delete(listener)
+  }
 
   /**
    * Observes only envelopes that passed epoch/sequence validation and advanced
@@ -797,6 +806,7 @@ export class HostRuntime {
             this.#increment('hostEvents')
             if (event.type === 'stream.reset') {
               this.#increment('resetRecoveries')
+              this.#publishStreamReset()
               snapshotRequired = true
               break
             }
@@ -976,6 +986,16 @@ export class HostRuntime {
     for (const listener of this.#appliedEventListeners) {
       try {
         listener(event)
+      } catch {
+        // A best-effort application observer cannot stop Host streaming.
+      }
+    }
+  }
+
+  #publishStreamReset(): void {
+    for (const listener of this.#streamResetListeners) {
+      try {
+        listener()
       } catch {
         // A best-effort application observer cannot stop Host streaming.
       }

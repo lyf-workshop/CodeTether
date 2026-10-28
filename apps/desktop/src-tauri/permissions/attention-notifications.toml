@@ -3,5 +3,6 @@ identifier = "allow-attention-notifications"
 description = "Allows the main CodeTether window to deliver bounded Attention notifications and consume click intents."
 commands.allow = [
   "deliver_attention_notification",
+  "log_notification_stage",
   "take_pending_notification_intent",
 ]

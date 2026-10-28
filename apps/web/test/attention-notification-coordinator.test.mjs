@@ -88,6 +88,7 @@ test('foreground suppression skips permission and delivery only for direct UI', 
   await nextTask()
   assert.equal(fixture.adapter.permissionCalls, 0)
   assert.equal(fixture.adapter.deliveries.length, 0)
+  assert.equal(fixture.adapter.stages.includes('skip-suppressed'), true)
 
   fixture.surface = {
     kind: 'conversation',
@@ -141,6 +142,44 @@ test('window state failure cannot silently drop a new Attention', async (t) => {
   assert.deepEqual(fixture.diagnostics, [
     { attentionId: 'attn_window_error01', stage: 'window-state' },
   ])
+  assert.equal(fixture.adapter.stages.includes('failed-window-state'), true)
+})
+
+test('window state timeout keeps delivery moving', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const fixture = createFixture({ windowStatePending: true })
+  t.after(async () => await fixture.coordinator.stop())
+  fixture.coordinator.start()
+  fixture.source.emit(
+    attentionCreated(openAttention('attn_window_timeout01'), 1),
+  )
+  await waitForStage(fixture.adapter, 'window-state-start')
+  t.mock.timers.tick(5_000)
+  await new Promise((resolve) => setImmediate(resolve))
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.deepEqual(
+    fixture.adapter.stages.filter((stage) => stage.startsWith('window-state')),
+    ['window-state-start', 'window-state-timeout'],
+  )
+  assert.equal(fixture.adapter.stages.includes('failed-window-state'), true)
+  assert.equal(fixture.adapter.stages.includes('deliver-start'), true)
+})
+
+test('permission timeout ends only that notification', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const fixture = createFixture({ permissionPending: true })
+  t.after(async () => await fixture.coordinator.stop())
+  fixture.coordinator.start()
+  fixture.source.emit(
+    attentionCreated(openAttention('attn_permission_timeout01'), 1),
+  )
+  await waitForStage(fixture.adapter, 'permission-start')
+  t.mock.timers.tick(5_000)
+  await new Promise((resolve) => setImmediate(resolve))
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(fixture.adapter.deliveries.length, 0)
+  assert.equal(fixture.adapter.stages.includes('permission-timeout'), true)
+  assert.equal(fixture.adapter.stages.includes('failed-permission'), true)
 })
 
 test('reads current preferences for each new Attention without affecting Inbox truth', async (t) => {
@@ -157,6 +196,7 @@ test('reads current preferences for each new Attention without affecting Inbox t
   await nextTask()
   assert.equal(fixture.adapter.deliveries.length, 0)
   assert.equal(fixture.adapter.permissionCalls, 0)
+  assert.equal(fixture.adapter.stages.includes('skip-disabled'), true)
 
   preferences = { ...preferences, completed_review: true }
   fixture.source.emit(attentionCreated(openAttention('attn_enabled01'), 2))
@@ -173,6 +213,7 @@ test('checks permission only for a real delivery need and tolerates denial', asy
   await waitFor(() => fixture.adapter.permissionCalls === 1)
   assert.equal(fixture.adapter.deliveries.length, 0)
   assert.deepEqual(fixture.diagnostics, [])
+  assert.equal(fixture.adapter.stages.includes('skip-permission-denied'), true)
 })
 
 test('uses optional recent delivered IDs without creating a second Attention store', async (t) => {
@@ -196,6 +237,7 @@ test('uses optional recent delivered IDs without creating a second Attention sto
   await waitFor(() => rememberCalls.length === 1)
   assert.equal(fixture.adapter.deliveries[0].attentionId, 'attn_fresh01')
   assert.deepEqual(rememberCalls, ['attn_fresh01'])
+  assert.equal(fixture.adapter.stages.includes('skip-recent'), true)
 })
 
 test('adapter and plugin failures stay best-effort and never stop later arrivals', async (t) => {
@@ -449,27 +491,44 @@ class FakeEventSource {
 
 class FakeAdapter {
   deliveries = []
+  stages = []
   intentSubscribeCalls = 0
   intentUnsubscribeCalls = 0
   permissionCalls = 0
   #deliveryFailures
   #intentListener
   #permissionGranted
+  #permissionPending
 
-  constructor({ available, deliveryFailures, permissionGranted, windowState }) {
+  constructor({
+    available,
+    deliveryFailures,
+    permissionGranted,
+    permissionPending,
+    windowState,
+    windowStatePending,
+  }) {
     this.available = available
     this.#deliveryFailures = deliveryFailures
     this.#permissionGranted = permissionGranted
+    this.#permissionPending = permissionPending
+    this.windowStatePending = windowStatePending
     this.windowState = windowState
   }
 
   getWindowState() {
+    if (this.windowStatePending) return new Promise(() => {})
     return this.windowState
   }
 
   async ensurePermission() {
     this.permissionCalls += 1
+    if (this.#permissionPending) return await new Promise(() => {})
     return this.#permissionGranted
+  }
+
+  logStage(stage) {
+    this.stages.push(stage)
   }
 
   async deliver(intent) {
@@ -503,7 +562,9 @@ function createFixture(options = {}) {
     available: options.available ?? true,
     deliveryFailures: options.deliveryFailures ?? 0,
     permissionGranted: options.permissionGranted ?? true,
+    permissionPending: options.permissionPending ?? false,
     windowState: options.windowState ?? backgroundWindow,
+    windowStatePending: options.windowStatePending ?? false,
   })
   const metadataCalls = []
   const diagnostics = []
@@ -649,6 +710,14 @@ function deferred() {
 
 async function nextTask() {
   await new Promise((resolve) => setTimeout(resolve, 0))
+}
+
+async function waitForStage(adapter, stage) {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if (adapter.stages.includes(stage)) return
+    await new Promise((resolve) => setImmediate(resolve))
+  }
+  assert.fail(`Timed out waiting for notification stage ${stage}`)
 }
 
 async function waitFor(predicate, timeoutMs = 2_000) {

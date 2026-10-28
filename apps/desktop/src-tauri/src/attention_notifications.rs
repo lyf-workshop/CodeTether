@@ -37,6 +37,82 @@ pub enum AttentionNotificationType {
     Failed,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum NotificationStage {
+    Received,
+    SkipInactive,
+    SkipRecent,
+    SkipDisabled,
+    SkipSuppressed,
+    SkipPermissionDenied,
+    WindowStateStart,
+    WindowStateDone,
+    WindowStateTimeout,
+    MetadataStart,
+    MetadataDone,
+    PermissionStart,
+    PermissionDone,
+    PermissionTimeout,
+    DeliverStart,
+    DeliverDone,
+    FailedRecentIdRead,
+    FailedPreferences,
+    FailedWindowState,
+    FailedPresentation,
+    FailedMetadata,
+    FailedPermission,
+    FailedDelivery,
+    FailedRecentIdWrite,
+    FailedClickListener,
+    FailedNavigation,
+    SseConnected,
+    SseReconnecting,
+    SseReset,
+    SseUnavailable,
+}
+
+fn notification_stage_log(stage: NotificationStage) -> String {
+    let stage = match stage {
+        NotificationStage::Received => "received",
+        NotificationStage::SkipInactive => "skip-inactive",
+        NotificationStage::SkipRecent => "skip-recent",
+        NotificationStage::SkipDisabled => "skip-disabled",
+        NotificationStage::SkipSuppressed => "skip-suppressed",
+        NotificationStage::SkipPermissionDenied => "skip-permission-denied",
+        NotificationStage::WindowStateStart => "window-state-start",
+        NotificationStage::WindowStateDone => "window-state-done",
+        NotificationStage::WindowStateTimeout => "window-state-timeout",
+        NotificationStage::MetadataStart => "metadata-start",
+        NotificationStage::MetadataDone => "metadata-done",
+        NotificationStage::PermissionStart => "permission-start",
+        NotificationStage::PermissionDone => "permission-done",
+        NotificationStage::PermissionTimeout => "permission-timeout",
+        NotificationStage::DeliverStart => "deliver-start",
+        NotificationStage::DeliverDone => "deliver-done",
+        NotificationStage::FailedRecentIdRead => "failed-recent-id-read",
+        NotificationStage::FailedPreferences => "failed-preferences",
+        NotificationStage::FailedWindowState => "failed-window-state",
+        NotificationStage::FailedPresentation => "failed-presentation",
+        NotificationStage::FailedMetadata => "failed-metadata",
+        NotificationStage::FailedPermission => "failed-permission",
+        NotificationStage::FailedDelivery => "failed-delivery",
+        NotificationStage::FailedRecentIdWrite => "failed-recent-id-write",
+        NotificationStage::FailedClickListener => "failed-click-listener",
+        NotificationStage::FailedNavigation => "failed-navigation",
+        NotificationStage::SseConnected => "sse-connected",
+        NotificationStage::SseReconnecting => "sse-reconnecting",
+        NotificationStage::SseReset => "sse-reset",
+        NotificationStage::SseUnavailable => "sse-unavailable",
+    };
+    format!("[codetether:desktop] notification stage={stage}")
+}
+
+#[tauri::command]
+pub fn log_notification_stage(stage: NotificationStage) {
+    eprintln!("{}", notification_stage_log(stage));
+}
+
 fn notification_requested_log(attention_type: &AttentionNotificationType) -> String {
     let attention_type = match attention_type {
         AttentionNotificationType::Approval => "approval",
@@ -881,6 +957,72 @@ mod tests {
                 assert!(!log.contains(private_value));
             }
             assert!(!log.contains('\n'));
+        }
+    }
+
+    #[test]
+    fn notification_stage_log_is_bounded_and_fixed() {
+        let stages = [
+            (NotificationStage::Received, "received"),
+            (NotificationStage::SkipInactive, "skip-inactive"),
+            (NotificationStage::SkipRecent, "skip-recent"),
+            (NotificationStage::SkipDisabled, "skip-disabled"),
+            (NotificationStage::SkipSuppressed, "skip-suppressed"),
+            (
+                NotificationStage::SkipPermissionDenied,
+                "skip-permission-denied",
+            ),
+            (NotificationStage::WindowStateStart, "window-state-start"),
+            (NotificationStage::WindowStateDone, "window-state-done"),
+            (
+                NotificationStage::WindowStateTimeout,
+                "window-state-timeout",
+            ),
+            (NotificationStage::MetadataStart, "metadata-start"),
+            (NotificationStage::MetadataDone, "metadata-done"),
+            (NotificationStage::PermissionStart, "permission-start"),
+            (NotificationStage::PermissionDone, "permission-done"),
+            (NotificationStage::PermissionTimeout, "permission-timeout"),
+            (NotificationStage::DeliverStart, "deliver-start"),
+            (NotificationStage::DeliverDone, "deliver-done"),
+            (
+                NotificationStage::FailedRecentIdRead,
+                "failed-recent-id-read",
+            ),
+            (NotificationStage::FailedPreferences, "failed-preferences"),
+            (NotificationStage::FailedWindowState, "failed-window-state"),
+            (NotificationStage::FailedPresentation, "failed-presentation"),
+            (NotificationStage::FailedMetadata, "failed-metadata"),
+            (NotificationStage::FailedPermission, "failed-permission"),
+            (NotificationStage::FailedDelivery, "failed-delivery"),
+            (
+                NotificationStage::FailedRecentIdWrite,
+                "failed-recent-id-write",
+            ),
+            (
+                NotificationStage::FailedClickListener,
+                "failed-click-listener",
+            ),
+            (NotificationStage::FailedNavigation, "failed-navigation"),
+            (NotificationStage::SseConnected, "sse-connected"),
+            (NotificationStage::SseReconnecting, "sse-reconnecting"),
+            (NotificationStage::SseReset, "sse-reset"),
+            (NotificationStage::SseUnavailable, "sse-unavailable"),
+        ];
+
+        for (stage, expected) in stages {
+            assert_eq!(
+                notification_stage_log(stage),
+                format!("[codetether:desktop] notification stage={expected}")
+            );
+            assert!(!notification_stage_log(stage).contains('\n'));
+        }
+    }
+
+    #[test]
+    fn notification_stage_deserialization_rejects_unknown_or_unsafe_values() {
+        for value in ["unknown", "", "received\nsecret"] {
+            assert!(serde_json::from_value::<NotificationStage>(serde_json::json!(value)).is_err());
         }
     }
 

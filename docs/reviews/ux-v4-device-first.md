@@ -558,3 +558,14 @@ R4 之后的结果见下一节。
 - 用 `osascript` 发一条对照通知；
 - 用 `open -a … --stderr` 通过系统正常启动后再测，带 debug 级 usernoted 日志；
 - 用户同意后，注销备份和构建目录里那几份副本的登记。
+
+## Mac 第 6 轮
+
+报告：用户转来全文。仍是 14 项通过，第 9 项不通过。
+
+- 系统层面：签名是 adhoc，`com.codetether.desktop` 在 LaunchServices 里有 86 份登记，用户同意后注销了 17 份旧备份和构建目录的，剩 69 份。用户确认没有屏幕共享或镜像。`osascript` 发的对照通知能显示。用 `open -a` 正常启动后，usernoted 授予 alert、badge、sound。
+- 第一次回合（访达遮挡）：Desktop 日志有 requested、granted、shown，屏幕和通知中心都能看到通知，点击后回到对应会话。所以原生发送、显示、点击这条路是通的。第 5 轮看不到通知，最可能是因为当时在终端里直接运行 App 里的程序，没有走 LaunchServices，系统对不上身份。这一点只是推断，没有对照实验。
+- 之后的回合：Host 生成了新的待处理（24 变成 26），但没有新的 `notification requested`，说明网页没有调到原生命令。最小化那一次没有可靠证据证明窗口真的最小化了，切到设备页那一次窗口在前台，按设计也会发。
+- 我读代码后的判断：从 SSE `attention.created`（`host-runtime.ts:821-822`）到协调器（`attention-notification-coordinator.ts:174-297`），中间所有提前返回的分支都不记日志。权限检查（`native-capabilities.ts` 的 `ensurePermission`）、元数据、窗口状态、`invoke` 都可能卡住或静默返回，现有日志区分不了。只看代码定不了是哪一处，盲修有风险。
+
+下一步：按 `ux-v4-device-first-mac-fix-prompt-r7.md`，在 `fix/macos-notifications` 上加一个只做诊断的提交：协调器每一步打一行，只记阶段和原因，加上 SSE 断开重连的日志，再在 Mac 上打包实测，按日志定位。修复在下一轮做。

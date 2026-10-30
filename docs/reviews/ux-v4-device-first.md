@@ -579,3 +579,34 @@ R4 之后的结果见下一节。
 - 为什么一直验收不过：一部分是真的问题，后台挂起和多份登记都已修好或清掉；另一部分是我的提示词每轮只放一个小步骤，每步都要等用户和我来回确认，很慢。我还写错过三次：第 2 轮的焦点标准、第 4 轮漏了 `--level debug`、第 7 轮的截断。
 
 下一步：按 `ux-v4-device-first-mac-fix-prompt-r8.md` 一轮做完。先查清 Host 退出并恢复能用的版本，再做诊断实测。日志指向网页链路的缺陷时，在限定的文件范围内直接修，然后做第 9 项完整验收、推送分支。用户同意给 Mac 智能体更大的自主权，可以自己切换窗口、退出和启动应用、下载并核对官方 Node、多次打包和替换。
+
+## Mac 第 8 轮
+
+结果：安装版 `git-111f1b08e5f3`，15 项全部通过。用户只转来了总结，分支是我自己拉下来看的。
+
+分支 `fix/macos-notifications` 在 a8abbec 之后新增两个提交：
+- `aeb0b5f`：诊断日志，就是 r7 的设计。
+- `111f1b0`：`fix(desktop): bound macOS notification native calls`。
+
+改动共 13 个文件，+582 −30。Host 的退出原因 Mac 智能体没有写进总结，报告里有没有我还没看到。不过 a8abbec 之后没有改 Host，安装版现在能起来，说明换打包用的 Node 版本已经解决了。
+
+代码审核：通过，有下面几处要跟进。
+- 修复本身（`native-capabilities.ts`）：
+  - 原生的窗口状态、权限检查加了 1 秒上限，协调器那层是 5 秒。
+  - 窗口状态超时，改用网页自己的 `document` 状态（`readDocumentWindowState`）。
+  - 权限检查在 macOS 上超时或出错，就当作已授权，交给 Rust 那边的发送队列。真正的授权由 `macos_notifications.rs` 申请，系统拒绝时它会安全地失败。
+  - Windows 上出错的行为不变。
+  - 这说明之前就是 Tauri 通知插件 JS 端的权限调用一直不返回，卡住了后面所有的通知。这是这一轮找到的根因。
+- 要跟进 1：macOS 上权限出错会被缓存成“已授权”（`permissionResult = true`），一直保留到应用重启。代价只是多一次 Rust 调用，Rust 那边被拒绝时会安全地失败，所以可以接受。
+- 要跟进 2：窗口状态超时后，改用 `document.hasFocus()` 判断，可能和原生的状态不一致。窗口在前台却被误判，最多多弹一条通知，不会漏掉。可以接受。
+- 要跟进 3：`detectMacOSRuntime` 是根据 userAgent 判断平台的。Tauri 的 WebView 在 macOS 上 userAgent 里有 `Macintosh`，可以用。以后最好改成从原生那边拿平台信息。
+- 诊断日志：保留。`log_notification_stage` 只接受固定的阶段名，测试覆盖了全部阶段和非法值。命令清单、权限清单、`generate_handler!`、配置测试、`ARCHITECTURE.md` 五处一致。
+- 窗口事件：最小化、恢复只在状态变化时记一次，获得和失去焦点每次都记。Mac 实测没出现 `main_window_minimized`，可能是 macOS 上最小化不会触发 `Resized` 事件。这只是日志缺了一行，功能没问题，记为以后的观测缺口。
+
+Windows 复核（工作区 `agenthub-fix-macos-notifications`，HEAD `111f1b0`）：
+- cargo fmt 通过，cargo test 共 80 项通过。
+- clippy 只报 main 上原有的那一处（`host_identity_key_store.rs:38`），这个分支没碰。
+- 网页测试 929 项全部通过，desktop 的 JS 测试 26 项全部通过。
+- Windows 安装版上的通知还没测。协调器代码是两个平台共用的，这一轮在 Windows 上新加了超时和 `logStage` 调用，合并前要在 Windows 安装版上测一次第 9 项。
+
+下一步：打包 `111f1b0` 的 Windows 安装版，由用户在 Codex 外安装，测一次第 9 项的 B 和 C（Windows R11 的测法）。通过后合并 main，合并要征得用户同意。

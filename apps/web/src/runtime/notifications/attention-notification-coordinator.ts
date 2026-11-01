@@ -17,9 +17,11 @@ import {
   type NotificationClickIntent,
   type NotificationNavigationTarget,
 } from './desktop-notification-model.js'
+import type { NotificationStage } from '../native/native-capabilities.js'
 
 type MaybePromise<T> = Promise<T> | T
 const MAX_SEEN_ATTENTION_IDS = 2_048
+const NATIVE_NOTIFICATION_TIMEOUT_MS = 5_000
 
 export interface AppliedHostEventSource {
   subscribeAppliedEvents(listener: AppliedHostEventListener): () => void
@@ -29,6 +31,7 @@ export interface DesktopNotificationAdapter {
   readonly available: boolean
   getWindowState(): MaybePromise<DesktopWindowState>
   ensurePermission(): Promise<boolean>
+  logStage?(stage: NotificationStage): MaybePromise<void>
   deliver(intent: NotificationIntent): Promise<void>
   subscribeToIntents(
     listener: (intent: NotificationClickIntent) => void | Promise<void>,
@@ -175,6 +178,7 @@ export class AttentionNotificationCoordinator {
     if (event.type !== 'attention.created') return
     const attention = event.payload.attention
     if (this.#seenAttentionIds.has(attention.attentionId)) return
+    this.#logStage('received')
 
     // Claim synchronously before any async work. Suppressed, disabled, denied,
     // and failed attempts must not become a later replay notification.
@@ -194,18 +198,27 @@ export class AttentionNotificationCoordinator {
     attention: AttentionItem,
     generation: number,
   ): Promise<void> {
-    if (!this.#isActive(generation)) return
+    if (!this.#isActive(generation)) {
+      this.#logStage('skip-inactive')
+      return
+    }
 
     if (this.#recentIds !== undefined) {
       try {
-        if (await this.#recentIds.has(attention.attentionId)) return
+        if (await this.#recentIds.has(attention.attentionId)) {
+          this.#logStage('skip-recent')
+          return
+        }
       } catch {
         this.#report({
           attentionId: attention.attentionId,
           stage: 'recent-id-read',
         })
       }
-      if (!this.#isActive(generation)) return
+      if (!this.#isActive(generation)) {
+        this.#logStage('skip-inactive')
+        return
+      }
     }
 
     let preferences: DesktopNotificationPreferences
@@ -218,11 +231,18 @@ export class AttentionNotificationCoordinator {
       })
       preferences = defaultDesktopNotificationPreferences
     }
-    if (!isAttentionNotificationEnabled(attention.type, preferences)) return
+    if (!isAttentionNotificationEnabled(attention.type, preferences)) {
+      this.#logStage('skip-disabled')
+      return
+    }
 
     let window: DesktopWindowState
     try {
-      window = await this.#adapter.getWindowState()
+      this.#logStage('window-state-start')
+      window = await withTimeout(this.#adapter.getWindowState(), () =>
+        this.#logStage('window-state-timeout'),
+      )
+      this.#logStage('window-state-done')
     } catch {
       this.#report({
         attentionId: attention.attentionId,
@@ -245,12 +265,15 @@ export class AttentionNotificationCoordinator {
       return
     }
     if (shouldSuppressAttentionNotification(attention, { surface, window })) {
+      this.#logStage('skip-suppressed')
       return
     }
 
     let metadata: AttentionNotificationMetadata
     try {
+      this.#logStage('metadata-start')
       metadata = await this.#resolveMetadata(attention)
+      this.#logStage('metadata-done')
     } catch {
       this.#report({
         attentionId: attention.attentionId,
@@ -258,12 +281,20 @@ export class AttentionNotificationCoordinator {
       })
       return
     }
-    if (!this.#isActive(generation)) return
+    if (!this.#isActive(generation)) {
+      this.#logStage('skip-inactive')
+      return
+    }
 
     let permissionGranted: boolean
     try {
       // Permission is intentionally checked only for a real unsuppressed need.
-      permissionGranted = await this.#adapter.ensurePermission()
+      this.#logStage('permission-start')
+      permissionGranted = await withTimeout(
+        this.#adapter.ensurePermission(),
+        () => this.#logStage('permission-timeout'),
+      )
+      this.#logStage('permission-done')
     } catch {
       this.#report({
         attentionId: attention.attentionId,
@@ -271,11 +302,20 @@ export class AttentionNotificationCoordinator {
       })
       return
     }
-    if (!permissionGranted || !this.#isActive(generation)) return
+    if (!permissionGranted) {
+      this.#logStage('skip-permission-denied')
+      return
+    }
+    if (!this.#isActive(generation)) {
+      this.#logStage('skip-inactive')
+      return
+    }
 
     const intent = createNotificationIntent(attention, metadata)
     try {
+      this.#logStage('deliver-start')
       await this.#adapter.deliver(intent)
+      this.#logStage('deliver-done')
     } catch {
       this.#report({
         attentionId: attention.attentionId,
@@ -345,11 +385,57 @@ export class AttentionNotificationCoordinator {
   }
 
   #report(diagnostic: DesktopNotificationDiagnostic): void {
+    const failureStage = {
+      'click-listener': 'failed-click-listener',
+      delivery: 'failed-delivery',
+      metadata: 'failed-metadata',
+      navigation: 'failed-navigation',
+      permission: 'failed-permission',
+      presentation: 'failed-presentation',
+      preferences: 'failed-preferences',
+      'recent-id-read': 'failed-recent-id-read',
+      'recent-id-write': 'failed-recent-id-write',
+      'window-state': 'failed-window-state',
+    } as const satisfies Record<
+      DesktopNotificationFailureStage,
+      NotificationStage
+    >
+    this.#logStage(failureStage[diagnostic.stage])
     try {
       this.#reportFailure(diagnostic)
     } catch {
       // Diagnostics are best-effort and cannot affect product state.
     }
+  }
+
+  #logStage(stage: NotificationStage): void {
+    try {
+      void Promise.resolve(this.#adapter.logStage?.(stage)).catch(() => {
+        // Native diagnostics are best-effort and cannot affect delivery.
+      })
+    } catch {
+      // Native diagnostics are best-effort and cannot affect delivery.
+    }
+  }
+}
+
+async function withTimeout<T>(
+  value: MaybePromise<T>,
+  onTimeout: () => void,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      Promise.resolve(value),
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => {
+          onTimeout()
+          reject(new Error('Desktop notification native operation timed out.'))
+        }, NATIVE_NOTIFICATION_TIMEOUT_MS)
+      }),
+    ])
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
   }
 }
 

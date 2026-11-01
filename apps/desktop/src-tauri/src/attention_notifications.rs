@@ -37,6 +37,91 @@ pub enum AttentionNotificationType {
     Failed,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum NotificationStage {
+    Received,
+    SkipInactive,
+    SkipRecent,
+    SkipDisabled,
+    SkipSuppressed,
+    SkipPermissionDenied,
+    WindowStateStart,
+    WindowStateDone,
+    WindowStateTimeout,
+    MetadataStart,
+    MetadataDone,
+    PermissionStart,
+    PermissionDone,
+    PermissionTimeout,
+    DeliverStart,
+    DeliverDone,
+    FailedRecentIdRead,
+    FailedPreferences,
+    FailedWindowState,
+    FailedPresentation,
+    FailedMetadata,
+    FailedPermission,
+    FailedDelivery,
+    FailedRecentIdWrite,
+    FailedClickListener,
+    FailedNavigation,
+    SseConnected,
+    SseReconnecting,
+    SseReset,
+    SseUnavailable,
+}
+
+fn notification_stage_log(stage: NotificationStage) -> String {
+    let stage = match stage {
+        NotificationStage::Received => "received",
+        NotificationStage::SkipInactive => "skip-inactive",
+        NotificationStage::SkipRecent => "skip-recent",
+        NotificationStage::SkipDisabled => "skip-disabled",
+        NotificationStage::SkipSuppressed => "skip-suppressed",
+        NotificationStage::SkipPermissionDenied => "skip-permission-denied",
+        NotificationStage::WindowStateStart => "window-state-start",
+        NotificationStage::WindowStateDone => "window-state-done",
+        NotificationStage::WindowStateTimeout => "window-state-timeout",
+        NotificationStage::MetadataStart => "metadata-start",
+        NotificationStage::MetadataDone => "metadata-done",
+        NotificationStage::PermissionStart => "permission-start",
+        NotificationStage::PermissionDone => "permission-done",
+        NotificationStage::PermissionTimeout => "permission-timeout",
+        NotificationStage::DeliverStart => "deliver-start",
+        NotificationStage::DeliverDone => "deliver-done",
+        NotificationStage::FailedRecentIdRead => "failed-recent-id-read",
+        NotificationStage::FailedPreferences => "failed-preferences",
+        NotificationStage::FailedWindowState => "failed-window-state",
+        NotificationStage::FailedPresentation => "failed-presentation",
+        NotificationStage::FailedMetadata => "failed-metadata",
+        NotificationStage::FailedPermission => "failed-permission",
+        NotificationStage::FailedDelivery => "failed-delivery",
+        NotificationStage::FailedRecentIdWrite => "failed-recent-id-write",
+        NotificationStage::FailedClickListener => "failed-click-listener",
+        NotificationStage::FailedNavigation => "failed-navigation",
+        NotificationStage::SseConnected => "sse-connected",
+        NotificationStage::SseReconnecting => "sse-reconnecting",
+        NotificationStage::SseReset => "sse-reset",
+        NotificationStage::SseUnavailable => "sse-unavailable",
+    };
+    format!("[codetether:desktop] notification stage={stage}")
+}
+
+#[tauri::command]
+pub fn log_notification_stage(stage: NotificationStage) {
+    eprintln!("{}", notification_stage_log(stage));
+}
+
+fn notification_requested_log(attention_type: &AttentionNotificationType) -> String {
+    let attention_type = match attention_type {
+        AttentionNotificationType::Approval => "approval",
+        AttentionNotificationType::CompletedReview => "completed_review",
+        AttentionNotificationType::Failed => "failed",
+    };
+    format!("[codetether:desktop] notification requested type={attention_type}")
+}
+
 #[cfg(any(windows, test))]
 fn notification_shown_log(attention_type: &AttentionNotificationType, app_id: &str) -> String {
     let attention_type = match attention_type {
@@ -87,6 +172,11 @@ pub struct NotificationIntent {
 }
 
 impl NotificationIntent {
+    #[cfg(target_os = "macos")]
+    pub(crate) fn attention_type(&self) -> &AttentionNotificationType {
+        &self.attention_type
+    }
+
     fn validate(&self) -> Result<(), &'static str> {
         if !is_public_id(&self.attention_id, "attn_") {
             return Err("attentionId is not a CodeTether Attention identity");
@@ -158,6 +248,8 @@ struct AttentionNotificationStateInner {
     active_toasts: Mutex<BoundedRegistry<ActiveWindowsToast>>,
 }
 
+// Windows and test builds require explicit capacities for their bounded registries.
+#[allow(clippy::derivable_impls)]
 impl Default for AttentionNotificationStateInner {
     fn default() -> Self {
         Self {
@@ -335,6 +427,7 @@ pub fn deliver_attention_notification(
     state: State<'_, AttentionNotificationState>,
     intent: NotificationIntent,
 ) -> Result<bool, String> {
+    eprintln!("{}", notification_requested_log(&intent.attention_type));
     intent
         .validate()
         .map_err(|message| format!("Invalid notification intent: {message}."))?;
@@ -607,7 +700,7 @@ pub(crate) fn activate_notification(
     activate_click(app, state, NotificationClickIntent::Known(intent));
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 pub(crate) fn activate_notification_link(
     app: &AppHandle,
     state: &AttentionNotificationState,
@@ -830,6 +923,106 @@ mod tests {
                 }
                 assert!(!log.contains('\n'));
             }
+        }
+    }
+
+    #[test]
+    fn notification_requested_log_contains_only_the_controlled_type() {
+        for (attention_type, expected_type) in [
+            (AttentionNotificationType::Approval, "approval"),
+            (
+                AttentionNotificationType::CompletedReview,
+                "completed_review",
+            ),
+            (AttentionNotificationType::Failed, "failed"),
+        ] {
+            let mut value = intent("attn_request_sentinel");
+            value.attention_type = attention_type;
+            value.title = "TITLE_PRIVACY_SENTINEL".to_owned();
+            value.body = "DEVICE_PROJECT_PRIVACY_SENTINEL\nBODY_PRIVACY_SENTINEL".to_owned();
+            let log = notification_requested_log(&value.attention_type);
+            assert_eq!(
+                log,
+                format!("[codetether:desktop] notification requested type={expected_type}")
+            );
+            for private_value in [
+                value.title.as_str(),
+                "DEVICE_PROJECT_PRIVACY_SENTINEL",
+                "BODY_PRIVACY_SENTINEL",
+                value.attention_id.as_str(),
+                value.project_id.as_str(),
+                value.conversation_id.as_str(),
+                value.turn_id.as_deref().unwrap(),
+            ] {
+                assert!(!log.contains(private_value));
+            }
+            assert!(!log.contains('\n'));
+        }
+    }
+
+    #[test]
+    fn notification_stage_log_is_bounded_and_fixed() {
+        let stages = [
+            (NotificationStage::Received, "received"),
+            (NotificationStage::SkipInactive, "skip-inactive"),
+            (NotificationStage::SkipRecent, "skip-recent"),
+            (NotificationStage::SkipDisabled, "skip-disabled"),
+            (NotificationStage::SkipSuppressed, "skip-suppressed"),
+            (
+                NotificationStage::SkipPermissionDenied,
+                "skip-permission-denied",
+            ),
+            (NotificationStage::WindowStateStart, "window-state-start"),
+            (NotificationStage::WindowStateDone, "window-state-done"),
+            (
+                NotificationStage::WindowStateTimeout,
+                "window-state-timeout",
+            ),
+            (NotificationStage::MetadataStart, "metadata-start"),
+            (NotificationStage::MetadataDone, "metadata-done"),
+            (NotificationStage::PermissionStart, "permission-start"),
+            (NotificationStage::PermissionDone, "permission-done"),
+            (NotificationStage::PermissionTimeout, "permission-timeout"),
+            (NotificationStage::DeliverStart, "deliver-start"),
+            (NotificationStage::DeliverDone, "deliver-done"),
+            (
+                NotificationStage::FailedRecentIdRead,
+                "failed-recent-id-read",
+            ),
+            (NotificationStage::FailedPreferences, "failed-preferences"),
+            (NotificationStage::FailedWindowState, "failed-window-state"),
+            (NotificationStage::FailedPresentation, "failed-presentation"),
+            (NotificationStage::FailedMetadata, "failed-metadata"),
+            (NotificationStage::FailedPermission, "failed-permission"),
+            (NotificationStage::FailedDelivery, "failed-delivery"),
+            (
+                NotificationStage::FailedRecentIdWrite,
+                "failed-recent-id-write",
+            ),
+            (
+                NotificationStage::FailedClickListener,
+                "failed-click-listener",
+            ),
+            (NotificationStage::FailedNavigation, "failed-navigation"),
+            (NotificationStage::SseConnected, "sse-connected"),
+            (NotificationStage::SseReconnecting, "sse-reconnecting"),
+            (NotificationStage::SseReset, "sse-reset"),
+            (NotificationStage::SseUnavailable, "sse-unavailable"),
+        ];
+
+        for (stage, expected) in stages {
+            assert_eq!(
+                notification_stage_log(stage),
+                format!("[codetether:desktop] notification stage={expected}")
+            );
+            assert!(!notification_stage_log(stage).contains('\n'));
+        }
+    }
+
+    #[test]
+    fn notification_stage_deserialization_rejects_unknown_or_unsafe_values() {
+        for value in ["unknown", "", "received\nsecret"] {
+            assert!(serde_json::from_value::<NotificationStage>(serde_json::json!(value)).is_err());
         }
     }
 

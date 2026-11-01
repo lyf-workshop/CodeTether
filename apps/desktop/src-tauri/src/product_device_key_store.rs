@@ -552,8 +552,8 @@ pub fn product_device_key_bind(
 ) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        return platform::bind_device(&key_handle, &device_id, &fingerprint, key_generation)
-            .map_err(|error| error.code().to_owned());
+        platform::bind_device(&key_handle, &device_id, &fingerprint, key_generation)
+            .map_err(|error| error.code().to_owned())
     }
     #[cfg(not(target_os = "macos"))]
     {

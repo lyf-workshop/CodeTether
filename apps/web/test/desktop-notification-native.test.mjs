@@ -55,6 +55,7 @@ test('Browser notifications stay unavailable without loading Tauri modules', asy
     capabilities.notifications.deliver(intent),
     /unavailable/u,
   )
+  await capabilities.notifications.logStage?.('received')
   assert.equal(loads, 0)
 })
 
@@ -129,6 +130,24 @@ test('Desktop window state uses native getters instead of stale WebView state', 
   assert.deepEqual(calls.sort(), ['focused', 'minimized', 'visible'])
 })
 
+test('Desktop window state falls back when a native getter stalls', async () => {
+  const capabilities = createNativeCapabilities({
+    tauriAvailable: true,
+    loadTauriWindow: async () => ({
+      getCurrentWindow: () => ({
+        isFocused: () => new Promise(() => {}),
+        isMinimized: async () => false,
+        isVisible: async () => true,
+      }),
+    }),
+  })
+
+  const state = await capabilities.notifications.getWindowState()
+  assert.equal(typeof state.focused, 'boolean')
+  assert.equal(typeof state.minimized, 'boolean')
+  assert.equal(typeof state.visible, 'boolean')
+})
+
 test('Desktop permission is requested lazily and concurrent checks are shared', async () => {
   let pluginLoads = 0
   let permissionChecks = 0
@@ -167,6 +186,19 @@ test('Desktop permission is requested lazily and concurrent checks are shared', 
   assert.equal(pluginLoads, 1)
 })
 
+test('macOS permission falls back to the native delivery queue when the plugin stalls', async () => {
+  const capabilities = createNativeCapabilities({
+    tauriAvailable: true,
+    platform: 'macos',
+    loadTauriNotification: async () => ({
+      isPermissionGranted: () => new Promise(() => {}),
+      requestPermission: () => new Promise(() => {}),
+    }),
+  })
+
+  assert.equal(await capabilities.notifications.ensurePermission(), true)
+})
+
 test('Desktop delivery invokes only the bounded Attention command', async () => {
   const calls = []
   const capabilities = createNativeCapabilities({
@@ -183,6 +215,26 @@ test('Desktop delivery invokes only the bounded Attention command', async () => 
     {
       command: 'deliver_attention_notification',
       args: { intent },
+    },
+  ])
+})
+
+test('Desktop diagnostic stages invoke only the bounded stage command', async () => {
+  const calls = []
+  const capabilities = createNativeCapabilities({
+    tauriAvailable: true,
+    loadTauriCore: async () => ({
+      invoke: async (command, args) => {
+        calls.push({ command, args })
+      },
+    }),
+  })
+
+  await capabilities.notifications.logStage?.('sse-connected')
+  assert.deepEqual(calls, [
+    {
+      command: 'log_notification_stage',
+      args: { stage: 'sse-connected' },
     },
   ])
 })

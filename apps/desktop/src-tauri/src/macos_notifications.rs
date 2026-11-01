@@ -11,18 +11,57 @@ use objc2::{
 };
 use objc2_foundation::{NSError, NSObject, NSObjectProtocol, NSString};
 use objc2_user_notifications::{
-    UNAuthorizationOptions, UNMutableNotificationContent, UNNotification,
+    UNAuthorizationOptions, UNAuthorizationStatus, UNMutableNotificationContent, UNNotification,
     UNNotificationPresentationOptions, UNNotificationRequest, UNNotificationResponse,
-    UNUserNotificationCenter, UNUserNotificationCenterDelegate,
+    UNNotificationSettings, UNUserNotificationCenter, UNUserNotificationCenterDelegate,
 };
 use tauri::{AppHandle, Manager};
 
-use crate::attention_notifications::{AttentionNotificationState, NotificationIntent};
+use crate::attention_notifications::{
+    AttentionNotificationState, AttentionNotificationType, NotificationIntent,
+};
 
 const MAX_PENDING_NOTIFICATIONS: usize = 256;
 const PERMISSION_DENIED: &str = "macOS notification permission is not granted";
 
 type Completion = Box<dyn FnOnce(Result<(), String>) + Send + 'static>;
+
+fn authorization_result_log(granted: bool, has_error: bool) -> &'static str {
+    if has_error {
+        "[codetether:desktop] macOS notification authorization result=error"
+    } else if granted {
+        "[codetether:desktop] macOS notification authorization result=granted"
+    } else {
+        "[codetether:desktop] macOS notification authorization result=denied"
+    }
+}
+
+fn authorization_status_log(status: UNAuthorizationStatus) -> String {
+    let status = match status {
+        UNAuthorizationStatus::NotDetermined => "notDetermined",
+        UNAuthorizationStatus::Denied => "denied",
+        UNAuthorizationStatus::Authorized => "authorized",
+        UNAuthorizationStatus::Provisional => "provisional",
+        UNAuthorizationStatus::Ephemeral => "ephemeral",
+        _ => "unknown",
+    };
+    format!("[codetether:desktop] macOS notification authorization status={status}")
+}
+
+fn notification_shown_log(attention_type: &AttentionNotificationType) -> String {
+    let attention_type = match attention_type {
+        AttentionNotificationType::Approval => "approval",
+        AttentionNotificationType::CompletedReview => "completed_review",
+        AttentionNotificationType::Failed => "failed",
+    };
+    format!("[codetether:desktop] notification shown type={attention_type} platform=macos")
+}
+
+fn attention_id_from_identifier(identifier: &str) -> Option<&str> {
+    identifier
+        .strip_prefix("codetether-attention-")
+        .filter(|attention_id| crate::attention_notifications::is_public_id(attention_id, "attn_"))
+}
 
 struct NotificationDelegateIvars {
     app: AppHandle,
@@ -70,6 +109,13 @@ define_class!(
                     &self.ivars().app,
                     &self.ivars().delivery.attention_state,
                     intent,
+                );
+                Ok(true)
+            } else if let Some(attention_id) = attention_id_from_identifier(&identifier) {
+                crate::attention_notifications::activate_notification_link(
+                    &self.ivars().app,
+                    &self.ivars().delivery.attention_state,
+                    attention_id,
                 );
                 Ok(true)
             } else {
@@ -214,6 +260,12 @@ pub fn initialize(app: &AppHandle) {
     if !state.inner.initialized.swap(true, Ordering::AcqRel) {
         let value = UNUserNotificationCenter::currentNotificationCenter();
         value.setDelegate(Some(ProtocolObject::from_ref(&*state._delegate)));
+        let completion = RcBlock::new(|settings: NonNull<UNNotificationSettings>| {
+            // SAFETY: UserNotifications provides valid settings for this callback.
+            let status = unsafe { settings.as_ref() }.authorizationStatus();
+            eprintln!("{}", authorization_status_log(status));
+        });
+        value.getNotificationSettingsWithCompletionHandler(&completion);
     }
 }
 
@@ -260,6 +312,10 @@ pub fn show(
 fn request_authorization(inner: Arc<DeliveryInner>) {
     let center = UNUserNotificationCenter::currentNotificationCenter();
     let completion = RcBlock::new(move |granted: objc2::runtime::Bool, error: *mut NSError| {
+        eprintln!(
+            "{}",
+            authorization_result_log(granted.as_bool(), !error.is_null())
+        );
         let error = error_description(error);
         let (authorization, failure) = if let Some(error) = error {
             (AuthorizationState::Unknown, Some(error))
@@ -304,6 +360,7 @@ fn deliver(inner: Arc<DeliveryInner>, notification: PendingNotification) {
         if result.is_ok()
             && let Some(intent) = activation.clone()
         {
+            eprintln!("{}", notification_shown_log(intent.attention_type()));
             lock(&inner.active).insert(identifier.clone(), intent);
         }
         if let Some(completion) = lock(&completion).take() {
@@ -380,6 +437,90 @@ mod tests {
             "body": "Test notification"
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn diagnostic_logs_use_only_controlled_status_and_type_labels() {
+        let mut logs = Vec::new();
+        for (granted, has_error, expected) in [
+            (true, false, "granted"),
+            (false, false, "denied"),
+            (true, true, "error"),
+            (false, true, "error"),
+        ] {
+            let log = authorization_result_log(granted, has_error);
+            assert_eq!(
+                log,
+                format!("[codetether:desktop] macOS notification authorization result={expected}")
+            );
+            logs.push(log.to_owned());
+        }
+        for (status, expected) in [
+            (UNAuthorizationStatus::NotDetermined, "notDetermined"),
+            (UNAuthorizationStatus::Denied, "denied"),
+            (UNAuthorizationStatus::Authorized, "authorized"),
+            (UNAuthorizationStatus::Provisional, "provisional"),
+            (UNAuthorizationStatus::Ephemeral, "ephemeral"),
+            (UNAuthorizationStatus(999), "unknown"),
+        ] {
+            let log = authorization_status_log(status);
+            assert_eq!(
+                log,
+                format!("[codetether:desktop] macOS notification authorization status={expected}")
+            );
+            logs.push(log);
+        }
+        for (attention_type, expected) in [
+            (AttentionNotificationType::Approval, "approval"),
+            (
+                AttentionNotificationType::CompletedReview,
+                "completed_review",
+            ),
+            (AttentionNotificationType::Failed, "failed"),
+        ] {
+            let value: NotificationIntent = serde_json::from_value(serde_json::json!({
+                "attentionId": "attn_PRIVACY_SENTINEL",
+                "type": attention_type,
+                "projectId": "proj_PRIVACY_SENTINEL",
+                "conversationId": "conv_PRIVACY_SENTINEL",
+                "turnId": "turn_PRIVACY_SENTINEL",
+                "title": "TITLE_PRIVACY_SENTINEL",
+                "body": "DEVICE_PROJECT_PRIVACY_SENTINEL\nBODY_PRIVACY_SENTINEL"
+            }))
+            .unwrap();
+            let log = notification_shown_log(value.attention_type());
+            assert_eq!(
+                log,
+                format!("[codetether:desktop] notification shown type={expected} platform=macos")
+            );
+            logs.push(log);
+        }
+        for log in logs {
+            assert!(!log.contains("PRIVACY_SENTINEL"));
+            assert!(!log.contains('\n'));
+        }
+    }
+
+    #[test]
+    fn notification_identifier_recovers_only_a_valid_public_attention_id() {
+        assert_eq!(
+            attention_id_from_identifier("codetether-attention-attn_123456"),
+            Some("attn_123456")
+        );
+        for identifier in [
+            "other-attention-attn_123456",
+            "prefix-codetether-attention-attn_123456",
+            "CodeTether-attention-attn_123456",
+            "codetether-attention-conv_123456",
+            "codetether-attention-attn_short",
+            "codetether-attention-attn_123456/path",
+            "codetether-attention-attn_123456?turn=123456",
+            "codetether-attention-attn_123456\n",
+            "codetether-attention-",
+            "",
+        ] {
+            assert_eq!(attention_id_from_identifier(identifier), None);
+        }
     }
 
     #[test]

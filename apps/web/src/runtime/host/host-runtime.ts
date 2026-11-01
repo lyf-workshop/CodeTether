@@ -229,6 +229,13 @@ export class HostRuntime {
 
   constructor(options: HostRuntimeOptions) {
     this.#queryClient = options.queryClient
+    // The Conversation projection is runtime-owned state, not a disposable
+    // cached read. Default gcTime would drop it after 5 minutes without a
+    // mounted Conversation page and leave the composer gated as reconnecting.
+    this.#queryClient.setQueryDefaults(hostQueryKeys.projection, {
+      gcTime: Number.POSITIVE_INFINITY,
+      staleTime: Number.POSITIVE_INFINITY,
+    })
     this.#client =
       options.client ??
       new CodeTetherClient({ baseUrl: options.baseUrl ?? hostBaseUrl })

@@ -18,20 +18,20 @@ The desktop experience is the primary environment for development and management
 
 ## Source of Truth
 
-- **Figma** is the sole source of truth for UI design. Implement approved designs faithfully; do not redesign them in code.
+- [`docs/ux-redesign`](docs/ux-redesign) is the source of truth for UI design: the prototype, screenshots, and dev handoff (02), the requirements (04), and the stage plan (03). Implement approved designs faithfully; do not redesign them in code. Figma is no longer used (Owner decision, 2026-11-02).
 - [`docs/PRODUCT.md`](docs/PRODUCT.md) is the source of truth for product behavior and scope.
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) is the source of truth for system boundaries and technical architecture.
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) is the source of truth for phase order and exit gates.
 
 - [`docs/DEVELOPMENT-PROCESS.md`](docs/DEVELOPMENT-PROCESS.md) defines how work moves from requirement to release: branches, review, acceptance, and what every coding prompt must state.
 
-Interim exception (user decision, 2026-10-19): Figma sync is paused. Until it resumes, the prototype, requirements, and plan under [`docs/ux-redesign`](docs/ux-redesign) are the authorized UI source; a task prompt that cites them overrides "Figma is the sole source".
-
 If sources conflict, stop and resolve the conflict instead of inventing a compromise. Keep these documents updated when an approved decision changes.
 
 ## Current Scope
 
-**Phase 10.6C.3 — Production Host-owned Presence closure** is authorized from `10b378276a59b7eb85a68e0fb238c61e33cfd811`. This narrowly extends Phase 10.6A's implementation-only approval to diagnose and correct the existing physical Mac's Host-owned Presence path, add privacy-safe local diagnostics, build/install the signed Mac app, perform the specified Presence/restart/soak validation, and commit/push the fix. The scope is only the existing claimed Host and its own Presence; Control Plane/Relay deployments, identities, authorizations, Provider state/Turns, and Windows remain frozen. Phase 9 and Advanced Provider Management remain unauthorized. See `docs/PHASE8D-CROSS-PLATFORM-DISTRIBUTION.md` for frozen Phase 8D boundaries.
+Work now follows the v4 product stages at the top of [`docs/ROADMAP.md`](docs/ROADMAP.md) (detail in `docs/ux-redesign/03-project-plan.md`). D1 (desktop v4) is accepted and released as `v0.1.0-alpha.2`. The current stages are **U1 — desktop one-click update** (design in `docs/ux-redesign/05-desktop-update.md`, awaiting Owner review) and **B0 — remote access go-live** (code merged; deployment of Control Plane migration 0008 and the public Relay, then the Phase 9B.2 forced-Relay validation, pending). Each stage is authorized only by its own task prompt. Where the frozen-boundary text below lists something as unauthorized or out of scope, it stays so until a v4 stage authorizes it.
+
+Earlier status, kept for the frozen boundaries below: **Phase 10.6C.3 — Production Host-owned Presence closure** was authorized from `10b378276a59b7eb85a68e0fb238c61e33cfd811`; its branches are merged into `main`, and its closure is unconfirmed. This narrowly extends Phase 10.6A's implementation-only approval to diagnose and correct the existing physical Mac's Host-owned Presence path, add privacy-safe local diagnostics, build/install the signed Mac app, perform the specified Presence/restart/soak validation, and commit/push the fix. The scope is only the existing claimed Host and its own Presence; Control Plane/Relay deployments, identities, authorizations, Provider state/Turns, and Windows remain frozen. Phase 9 and Advanced Provider Management remain unauthorized. See `docs/PHASE8D-CROSS-PLATFORM-DISTRIBUTION.md` for frozen Phase 8D boundaries.
 
 The following Phase 8C foundation remains frozen. Phase 8B is accepted and frozen at `89808b2f2ffaddf2ab26552671176a3e5487483d`, Phase 8A is accepted and frozen at `5d2f67c0d007b416d6bcd143fcdca9905fffd915`, Phase 7D is accepted and frozen at `abbcf38be98efbbecfa0db0874d9adc033b608e4`, Phase 7C is accepted and frozen at `f42a9880090068ee8dcc1ad0d6bb4862f15dedea`, Phase 7B is accepted and frozen at `b0f74f51a1816ebe20745948da7192028c3216e6`, Phase 7A is accepted and frozen at `67e2a98011546e2eb2c52c84f14ffbae4628a469`, Phase 6D is accepted and frozen at `cb2c412`, and the earlier accepted baselines remain frozen. Protocol v1 remains the only Web ↔ local Host product boundary, and durable Machine/Project-location/Conversation/Turn/Attention/Provider-lifecycle data remains authoritative. Phase 8C added only durable resumable setup progress, bounded typed onboarding and Doctor projections, and progressive-disclosure orchestration over the accepted Machine, Provider lifecycle, Project Location, native-session discovery/adoption, Direct/Relay, and secure-pairing authorities. It may not duplicate those authorities, weaken trust, switch Provider installations or backends, start inference by default, auto-import sessions, expose generic command/filesystem APIs, or retry/replay Provider work. The frozen implementation boundary includes:
 
@@ -149,7 +149,7 @@ Phase 4C notification delivery remains bounded to the lifetime of the Desktop pr
 
 ## Out of Scope
 
-During the current Phase 8D scope, do not implement without a separately approved phase:
+Do not implement the following unless a v4 stage in `docs/ROADMAP.md` authorizes it through its own task prompt (for example, U1 covers desktop auto-update and update signing, and the M series covers mobile):
 
 - Visual redesigns or unrelated refactors to the frozen Design System, AppShell, Inbox, Conversations, Conversation Workspace, or accepted Projects UI.
 - Activity, a standalone Agent-management page, a Settings redesign beyond the narrow Setup/Doctor entry points and accepted settings surfaces, an advanced New Conversation flow beyond truthful Machine/Provider installation, health, and capability gating, or unrelated new product-page content.
@@ -163,8 +163,8 @@ During the current Phase 8D scope, do not implement without a separately approve
 - Filesystem deletion, recursive cleanup, cascading Project deletion, or automatic reassignment of existing Conversations to another Project.
 - Turn queueing, steering, automatic Prompt replay, attachments, images, voice, Skill upload, or a Provider-specific React/HTTP write path. Phase 6D's frozen explicit safe fresh-Turn action remains the only retry mechanism where its canonical failure policy permits it; Claude Code interrupt and Approval controls remain unavailable unless a later parity phase establishes stable machine-readable semantics, and existing Codex control remains unchanged.
 - Actionable Approval recovery across restart, `Always Allow`, automatic approval, or a production permission-policy system. Expired Approval history may be retained only to explain what happened.
-- Claude Code capability parity beyond the approved restricted foundation, OpenCode or any third Provider, speculative Provider implementations, Provider switching on an existing Conversation, or cross-agent conversation handoff.
-- Mobile screens, mobile background/push/battery behavior, team, enterprise, a commercial CodeTether cloud/account Relay control plane, or other later-phase platform features. The current Phase 8D scope is limited to the supported distribution and frozen authority boundaries described above.
+- Claude Code capability parity beyond the approved restricted foundation, OpenCode or any third Provider before stage P1 (multi-tool support, after M2), speculative Provider implementations, Provider switching on an existing Conversation, or cross-agent conversation handoff.
+- Mobile screens and mobile background/push/battery behavior outside the M-series stage being executed (Android first; see `docs/ux-redesign/03-project-plan.md` and `04-requirements.md`). Team, enterprise, a commercial CodeTether cloud/account Relay control plane, or other platform features not in a v4 stage.
 - Event sourcing, CQRS, an ORM, a repository hierarchy, a durable provider-event log, or generalized durable exactly-once command processing. Migration 012 remains limited to restart-safe exactly-once admission for the existing Turn-start `actionId`; migration 013 retains only one bounded execution-health observation per Machine/Provider pair; all other mutations retain their accepted bounded process-local idempotency semantics.
 - Durable Approval resolution across restart. A pre-restart provider request is no longer actionable after its process dies.
 
@@ -238,7 +238,7 @@ Never:
 - Change architecture or source-of-truth decisions without approval.
 - Delete or weaken functionality merely to make tests pass.
 - Implement features outside the requested task or current phase.
-- Redesign a Figma-defined UI based on personal preference.
+- Redesign a UI defined in `docs/ux-redesign` based on personal preference.
 - Copy legacy CodeTether code or use its directory structure as the basis for V2.
 
 Legacy CodeTether may be consulted only when explicitly requested, and only for a previously validated low-level capability.

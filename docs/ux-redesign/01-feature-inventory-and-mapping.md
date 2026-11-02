@@ -2,7 +2,7 @@
 
 依据：已验收产品基线 **`bbcda690a081`**（Mac、Windows 均为此版本）的 `apps/web/src`（路由、组件、runtime/host、runtime/account）、`packages/protocol`、`apps/host`、`apps/desktop/src-tauri`、`apps/node`。
 状态：✅ 已实现 · ◐ 部分实现 · ✕ 尚未实现。
-“原型 Frame” 列对应 `png/` 编号（`prototype/` 中的同名页面）；Figma 写入后 Frame 名称与 PNG 名相同（见 02 文档 §7）。标“缺口”的条目是原型没有画、但实现必须保留的现有能力。
+本文是设计时（基线 `bbcda69`）的盘点记录；“现状”列指当时的基线，电脑端 v4 已发布为 `v0.1.0-alpha.2`。“原型 Frame” 列对应 `png/` 编号（`prototype/` 中的同名页面）。标“缺口”的条目是原型没有画、但实现必须保留的现有能力。
 
 v4 的核心：**账号 › 设备 › 项目 › 会话**。登录后看到自己的设备（这台电脑 + 用 CodeTether Node 配对的设备），每台设备下是它自己的项目；一个项目就是一台设备上的一个文件夹（一个 ProjectLocation），Host 用它作为 AI 工具的工作目录。添加项目时自动找出这个文件夹里以前的 Codex / Claude Code 会话。没有只读设备。
 

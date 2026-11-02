@@ -2,7 +2,7 @@
 
 面向下一轮按设计稿重构前端的实现者。功能映射和前端审核见 [01-feature-inventory-and-mapping.md](01-feature-inventory-and-mapping.md)，可点击原型见 `prototype/index.html`，截图见 `png/` 与 [overview.html](overview.html)。
 
-**仍未写入 Figma**。会话中没有暴露 Figma MCP 写入工具（`use_figma`、`create_new_file`），所以在“创建文件”这一步受阻。§7 是写入计划。AGENTS.md 规定 Figma 是 UI 唯一事实来源，因此在 Figma 文件建好并审批前，原型与截图只是设计提案，不能作为实现依据。
+原型、截图和本文就是 UI 的事实来源（AGENTS.md，2026-11-02 起不再使用 Figma）。电脑端已按本文实现并发布为 `v0.1.0-alpha.2`；§0 的决定都已做出，§7 的 Figma 写入计划已取消。
 
 v4 的核心：**账号 › 设备 › 项目 › 会话**。一个项目就是一台设备上的一个文件夹；设备是这台电脑和用 CodeTether Node 配对的设备，都能完整使用；添加项目时自动找出这个文件夹里以前的 Codex / Claude Code 会话。
 
@@ -12,7 +12,7 @@ v3 的更正：v3 让一个项目挂多台电脑上的文件夹，还画了“�
 
 | 事项 | 现状 | 需要的决定 |
 |---|---|---|
-| 设计事实来源 | Figma 未写入，只有本地原型 | 先补 Figma 再实现；或者临时以原型为准，事后补 Figma（需修改 AGENTS.md 约定） |
+| 设计事实来源 | Figma 未写入，只有本地原型 | 已定：以原型为准，不再使用 Figma（2026-11-02 已改 AGENTS.md） |
 | 起始页 | 基线 StartupGate 完成后进入 `/hosts`（startup-gate.tsx:59，英文、需要登录）；首次启动结束进入选中的项目或 `/inbox` | v4 进入 **设备** `/devices`（首次启动选了项目时进入该项目） |
 | 一个项目一台设备 | Host 允许一个项目有多台设备上的位置（`registerProjectLocation`） | 界面不再提供“给项目添加另一台设备上的位置”。已有多位置的项目（老数据）怎么显示：建议按位置拆成“设备 › 项目”下的多个条目，同名并存，各自列出 `machineId` 对应的会话 |
 | 同一账号下的其他桌面版 | 账号服务只给同账号的其他 Host 签发 `supervisor_read`，`supervisor_control` 不签发 | v4 不显示它们（不做只读设备）。基线 `/hosts` 的“申请查看”“允许其他电脑查看”在新导航里没有入口，需要确认是否可以先下线 |
@@ -201,9 +201,9 @@ UI 只读 descriptor 里的 `supportsInterrupt / supportsApprovals / supportsDif
 | D11 | 待处理 | `GET /attention`：approval、completed_review、failed | 直接使用；侧栏角标与待处理页同源 |
 | D12 | 同一账号的其他桌面版（后续） | 只签发 `supervisor_read`；`supervisor_control` 有协议和 Host 路由但不签发 | v4 不接；要让它们像配对设备一样出现在“设备”里，需要账号服务签发 control 并补批准流程，见 `#/roadmap` |
 
-## 7. Figma 待写入（本轮未完成）
+## 7. Figma 写入计划（已取消）
 
-文件名建议为 `CodeTether · UX Redesign v4`，页面与 Frame 命名同 PNG：
+2026-11-02 起不再使用 Figma，下面的计划只作记录。原来的计划：文件名建议为 `CodeTether · UX Redesign v4`，页面与 Frame 命名同 PNG：
 
 - `00 · 页面清单与核心流程`：01 文档的清单表和 README 的 9 条检查流程。
 - `01 · 视觉规范与组件`：变量集合 `CT/color`（Light / Dark 两个 mode）、`CT/space`、`CT/radius`、`CT/type`，取值来自 tokens.css。§3 的全部组件，带 variant（状态、平台、尺寸、主题）；DeviceTree 的行类型单独做组件。

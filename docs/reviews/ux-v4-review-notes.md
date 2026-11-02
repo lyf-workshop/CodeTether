@@ -6,7 +6,8 @@
 
 - 记录日期：2026-10-19。
 - 观察版本：`ux/v4-device-first`，`df91601c33e791e4d923c731a104c9136e25ea07`。
-- 状态：已修复，待复核；前端模型、静态渲染与隔离浏览器布局回归已完成，尚待原生预览与真实首次执行复核。
+- 状态：已验收（2026-11-02 用户确认），随 D1 发布为 `v0.1.0-alpha.2`。下面两项未勾选的验收条件没有单独记录复核结果，按 D1 安装版验收结论关闭。
+- 原状态：已修复，待复核；前端模型、静态渲染与隔离浏览器布局回归已完成，尚待原生预览与真实首次执行复核。
 - 场景：使用独立测试数据目录和独立 WebView 资料的 Windows 原生桌面预览。
 - 用户反馈：已安装 Codex 和 Claude Code，但首次设置看起来没有检测到；普通用户不知道该如何继续。
 
@@ -70,9 +71,9 @@
 
 ### 实现定位
 
-- [首次设置流程编排](../apps/web/src/components/onboarding/onboarding-page.tsx)。
-- [AI 工具卡片、按钮和提示](../apps/web/src/components/onboarding/onboarding-provider-check.tsx)。
-- [完成屏的真实就绪状态与提示](../apps/web/src/components/onboarding/onboarding-ready-step.tsx)。
-- [严格就绪判断及状态文案](../apps/web/src/components/onboarding/onboarding-model.ts)。
-- [正常会话的控制门控，仅供核对，不纳入本次建议修改](../apps/web/src/components/conversation/conversation-controls.ts)。
-- [Doctor 权威状态组合，仅供核对，不纳入本次建议修改](../apps/host/src/api/host-service.ts)。
+- [首次设置流程编排](../../apps/web/src/components/onboarding/onboarding-page.tsx)。
+- [AI 工具卡片、按钮和提示](../../apps/web/src/components/onboarding/onboarding-provider-check.tsx)。
+- [完成屏的真实就绪状态与提示](../../apps/web/src/components/onboarding/onboarding-ready-step.tsx)。
+- [严格就绪判断及状态文案](../../apps/web/src/components/onboarding/onboarding-model.ts)。
+- [正常会话的控制门控，仅供核对，不纳入本次建议修改](../../apps/web/src/components/conversation/conversation-controls.ts)。
+- [Doctor 权威状态组合，仅供核对，不纳入本次建议修改](../../apps/host/src/api/host-service.ts)。

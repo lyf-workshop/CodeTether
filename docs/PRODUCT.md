@@ -43,7 +43,7 @@ CodeTether provides one interaction model for those responsibilities while prese
 - **Fast feedback:** streaming work, state transitions, and user actions should feel immediate.
 - **Desktop depth, mobile focus:** each device serves its best use cases.
 - **Provider-neutral product language:** users may know the active provider, but core workflows remain consistent.
-- **Design fidelity:** Figma is the only source of truth for visual design.
+- **Design fidelity:** `docs/ux-redesign` (prototype, screenshots, dev handoff) is the only source of truth for visual design.
 
 ## Core Objects
 
@@ -93,14 +93,18 @@ Phase 4A packages the accepted local workspace as one Windows-first CodeTether D
 
 ## Mobile Experience
 
-Mobile is a companion, not a miniature desktop application. Its primary jobs are:
+Mobile is a companion, not a miniature desktop application. Phone and tablet are native apps, Android first and iOS/iPadOS later. They sign in to the same account to view and control the user's computers. They never run AI tools themselves and do not appear in the device list. Closing, backgrounding, or disconnecting the app never stops work on a computer; only an explicit Stop does. Detailed requirements and the per-device feature table are in `docs/ux-redesign/04-requirements.md`, and the stage order (M0–M3, T1, X1) is in `docs/ux-redesign/03-project-plan.md`.
 
-- **Monitor** current status and recent progress.
-- **Approve** or reject pending operations safely.
-- **Reply** to agent questions or provide short guidance.
-- **Resume** a paused or waiting conversation.
+The phone is chat-first. Its jobs, in priority order:
 
-Dense code review, project setup, and complex configuration remain desktop-first. Mobile screens should prioritize urgency, legibility, and quick completion.
+- **Converse:** create a Conversation in an existing Project and reply with a full composer.
+- **Act on what needs attention:** see pending items, approve or reject, and stop, after unlocking the device. Approve, reject, and stop are offered only where the backend supports them.
+- **Get notified:** notifications come over the app's own background connection to the computer, not through a third-party push service. Notifications never contain Conversation titles, prompts, commands, or paths, and a notification can't approve anything directly.
+- **Browse:** Device › Project › Conversation, grouped by device. A change list is a summary only.
+
+The tablet is a reading and review screen. It shows full Conversations and line-by-line changes, supports Project-scoped search, and can also create Conversations and reply.
+
+Adding Projects, importing previous sessions, pairing devices, setup, and Doctor remain desktop-only.
 
 ## Product Areas
 

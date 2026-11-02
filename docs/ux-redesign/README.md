@@ -1,11 +1,14 @@
 # CodeTether UX 重设计 v4（设计交付）
 
-状态：设计提案，按已验收基线 `bbcda690a081` 校正。v4 把信息架构改成 **账号 › 设备 › 项目 › 会话**：登录后看到自己的设备，每台设备列出它上面的项目，一个项目就是那台设备上的一个文件夹。只画后端已经支持的能力；浅色为主、深色可切换的视觉沿用 v2。**尚未写入 Figma**（会话中没有 Figma 写入工具，见 02 文档开头），未开始生产前端重构。
+状态：这里是 UI 设计的事实来源（AGENTS.md，2026-11-02 起不再使用 Figma）。电脑端 v4 已实现、验收并发布为 `v0.1.0-alpha.2`。v4 把信息架构改成 **账号 › 设备 › 项目 › 会话**：登录后看到自己的设备，每台设备列出它上面的项目，一个项目就是那台设备上的一个文件夹。只画后端已经支持的能力；浅色为主、深色可切换的视觉沿用 v2。01 和 02 是按基线 `bbcda690a081` 写的设计时记录，里面的“现状”指当时的基线。
 
 | 文件 | 内容 |
 |---|---|
 | [01-feature-inventory-and-mapping.md](01-feature-inventory-and-mapping.md) | 关键事实、前端审核、功能盘点 F01–F68、旧入口 → 新入口 → 原型截图 → 源码 |
 | [02-dev-handoff.md](02-dev-handoff.md) | 信息架构、视觉规范（浅色/深色 Token）、组件、状态表达、能力门控、数据依赖、待确认事项、Figma 写入计划、实现顺序 |
+| [03-project-plan.md](03-project-plan.md) | 阶段规划（电脑 · 平板 · 手机）、分工、审核不变量；阶段状态以 `docs/ROADMAP.md` 顶部为准 |
+| [04-requirements.md](04-requirements.md) | 需求说明，按功能编号和三端阶段 |
+| [05-desktop-update.md](05-desktop-update.md) | U1 电脑端一键更新的设计 |
 | [overview.html](overview.html) | 82 张截图总览（`png/00-overview.png` 为整页图） |
 | `prototype/index.html` | 本地可点击原型（浏览器直接打开；演示数据，不调用任何真实接口） |
 | `export-png.sh` | 重新导出 `png/`（需要 Chrome，约 1 分钟） |

@@ -1,5 +1,30 @@
 # CodeTether Roadmap
 
+## v4 Product Stages
+
+Since the v4 redesign (2026-10), these stages are the source of truth for phase order and status. The detail of each stage, along with its dependencies, its split of who does what, and the review invariants, is in [`docs/ux-redesign/03-project-plan.md`](ux-redesign/03-project-plan.md); the requirements are in [`04-requirements.md`](ux-redesign/04-requirements.md). The numbered Phase sections below are the historical record and keep their frozen technical boundaries; new work is named by these stages.
+
+| Stage | Content                                                                                               | Depends on                         | Status                                                                                                                   |
+| ----- | ----------------------------------------------------------------------------------------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| D1    | Desktop v4 (Account › Device › Project › Conversation)                                                | —                                  | Accepted on Windows and macOS; released `v0.1.0-alpha.2` (`0f624ae`)                                                     |
+| D2    | Figma sync                                                                                            | —                                  | Dropped (2026-11-02); `docs/ux-redesign` is the UI source                                                                |
+| U1    | Desktop one-click update                                                                              | D1                                 | Design in [`05-desktop-update.md`](ux-redesign/05-desktop-update.md), awaiting Owner review                              |
+| B0    | Remote access go-live: Control Plane migration 0008, public Relay, Phase 9B.2 forced-Relay validation | —                                  | Code merged (Phase 10A / 10A.1); deployment and validation pending, to be executed by an agent under a deployment prompt |
+| B1    | Remote control: `supervisor_control`, pairing code, approve/reject/stop/changes over Supervisor       | B0                                 | Not started                                                                                                              |
+| B2    | Push over the app's own connection (no FCM)                                                           | B1                                 | Not started                                                                                                              |
+| B3    | Composer backend: per-turn model/effort, file list, images                                            | B1                                 | Not started                                                                                                              |
+| M0    | Native Android technical validation (Rust core, Keystore)                                             | B0                                 | Not started                                                                                                              |
+| M1    | Phone: view                                                                                           | M0                                 | Not started                                                                                                              |
+| M2    | Phone: converse and act (phone MVP)                                                                   | M1 + B1                            | Not started                                                                                                              |
+| M3    | Phone: push                                                                                           | M2 + B2                            | Not started                                                                                                              |
+| X1    | Composer enhancements on all devices                                                                  | M2 + B3                            | Not started                                                                                                              |
+| T1    | Android tablet                                                                                        | M2                                 | Not started                                                                                                              |
+| P1    | Multi-tool support: research and adapter contract                                                     | M2                                 | Not started; see [`MULTI-PROVIDER-STRATEGY.md`](MULTI-PROVIDER-STRATEGY.md)                                              |
+| E1    | One computer = one device (merge Node into Desktop)                                                   | B0; authorization designed with B1 | Not started                                                                                                              |
+| I1    | iOS / iPadOS                                                                                          | T1 + paid Apple membership         | Later                                                                                                                    |
+
+Phase 10.6C.3 and 10.6A below: their branches are merged into `main`; formal closure is unconfirmed.
+
 ## Phase 10.6C.3 — Physical Mac Host Presence production closure
 
 Owner authorizes this narrow continuation from `10b378276a59b7eb85a68e0fb238c61e33cfd811` to diagnose and fix the existing claimed Mac Host's own Presence publication, add privacy-safe local diagnostics, and perform the specified signed-app deployment, renewal, hidden-window, restart, and soak acceptance. This is the sole deployment exception to Phase 10.6A's implementation-only handoff. Do not deploy the Control Plane or Relay, alter identities/authorizations, update Windows, or execute Providers/Turns. See [Phase 10.6A Host-authenticated presence](PHASE10-6A-HOST-AUTHENTICATED-PRESENCE.md) and the Owner-provided Phase 10.6C.3 execution request.
@@ -64,7 +89,7 @@ Forbidden in Phase 1:
 
 Exit gate:
 
-- Approved target screens match Figma at required desktop and mobile breakpoints.
+- Approved target screens match the approved design (originally Figma; `docs/ux-redesign` since the v4 redesign) at required desktop and mobile breakpoints.
 - Core states and interactions are demonstrable with realistic mock data.
 - Shared components and tokens are consistent, accessible, and maintainable.
 - Typecheck, lint, relevant tests, and production build pass.
@@ -1381,7 +1406,7 @@ Supervisor Transport](PHASE9B2-REMOTE-HOST-SUPERVISOR.md).
 
 ### Later Phase 9B — Mobile Supervisor
 
-**Status:** implementation paused until Owner direction after Phase 9B.2.
+**Status:** superseded by the v4 M-series stages (M0–M3, T1) at the top of this file. The phone is chat-first (create, reply, act, push), not monitoring-first; see `docs/PRODUCT.md` Mobile Experience. The exit gate below still applies to the M series.
 
 **Goal:** add focused mobile monitoring first, followed only by separately authorized approval, reply, and native-resume capabilities over an authenticated Host Supervisor boundary.
 

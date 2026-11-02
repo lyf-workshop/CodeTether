@@ -2,7 +2,7 @@
 
 在这台 Windows 电脑上运行，通过 SSH 操作 us-vps-01。依据：`docs/ROADMAP.md` 顶部的 B0、`docs/ux-redesign/03-project-plan.md` §4 和 §6、`docs/PHASE10A1-MULTI-DEVICE-SUPERVISOR-TRANSPORT.md`、`docs/PHASE9B2-REMOTE-HOST-SUPERVISOR.md`、`apps/control-plane/README.md`、`apps/relay/README.md`。
 
-开始前确认这份文件有 6 个二级标题，最后一节是“报告”。
+开始前确认这份文件有 5 个二级标题，最后一节是“报告”。
 
 ## 目标
 

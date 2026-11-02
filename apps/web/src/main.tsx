@@ -16,6 +16,21 @@ const appRoot = rootElement
 getThemeController()
 
 async function renderApp() {
+  if (
+    import.meta.env.DEV &&
+    import.meta.env.VITE_CODETETHER_SUPERVISOR_CHECK === '1' &&
+    (window.location.pathname === '/dev/supervisor-check' ||
+      window.location.hash === '#/dev/supervisor-check')
+  ) {
+    const { SupervisorCheckPage } = await import('./dev/supervisor-check-page')
+    createRoot(appRoot).render(
+      <StrictMode>
+        <SupervisorCheckPage />
+      </StrictMode>,
+    )
+    return
+  }
+
   if (import.meta.env.DEV && window.location.pathname === '/__phase6d') {
     const { FailureDiagnosticsShowcaseApp } =
       await import('./showcase/failure-diagnostics-showcase')

@@ -412,25 +412,30 @@ export async function connectRemoteSupervisor(options: {
   readonly deviceIdentity: ProductDeviceIdentityCapability
   readonly forceRelay?: boolean
   readonly signal?: AbortSignal
+  /** A diagnostic caller owns this fresh session and its individual reads. */
+  readonly detached?: boolean
 }): Promise<RemoteSupervisorSession> {
-  reconnectContexts.set(options.host.hostId, {
-    session: options.session,
-    host: options.host,
-    productDevice: options.productDevice,
-    deviceIdentity: options.deviceIdentity,
-    ...(options.forceRelay === undefined
-      ? {}
-      : { forceRelay: options.forceRelay }),
-  })
+  if (options.detached === true) options.signal?.throwIfAborted()
+  if (options.detached !== true)
+    reconnectContexts.set(options.host.hostId, {
+      session: options.session,
+      host: options.host,
+      productDevice: options.productDevice,
+      deviceIdentity: options.deviceIdentity,
+      ...(options.forceRelay === undefined
+        ? {}
+        : { forceRelay: options.forceRelay }),
+    })
   const cached = remoteSessions.get(options.host.hostId)
   const existing = currentRemoteSupervisorSession(options.host.hostId)
   if (
+    options.detached !== true &&
     existing !== undefined &&
     (options.forceRelay !== true || existing.transport === 'relay')
   ) {
     return existing
   }
-  if (cached !== undefined) {
+  if (options.detached !== true && cached !== undefined) {
     await closeRemoteSupervisorSession(options.host.hostId, cached)
   }
   if (options.host.supervisor === null) {
@@ -448,53 +453,122 @@ export async function connectRemoteSupervisor(options: {
     ...(options.forceRelay === true ? { forceRelay: true } : {}),
   })
   const connectionId = boundedString(pending, 'connectionId')
-  const admissionResource = boundedString(pending, 'admissionResource')
-  const challengeBody = decodeBase64Url(
-    boundedString(pending, 'challengeBodyBase64Url'),
+  let acquiredSessionId: string | undefined
+  try {
+    if (options.detached === true) options.signal?.throwIfAborted()
+    const admissionResource = boundedString(pending, 'admissionResource')
+    const challengeBody = decodeBase64Url(
+      boundedString(pending, 'challengeBodyBase64Url'),
+    )
+    const proof = await createDeviceRequestProof({
+      accessToken: options.session.access_token,
+      deviceId: options.productDevice.device.deviceId,
+      keyGeneration: options.productDevice.device.keyGeneration,
+      keyHandle: options.productDevice.key.keyHandle,
+      identity: options.deviceIdentity,
+      method: 'POST',
+      resource: admissionResource,
+      body: challengeBody,
+    })
+    if (options.detached === true) options.signal?.throwIfAborted()
+    const authenticated = await postLocalJson(
+      `/api/v1/remote-supervisor/connections/${encodeURIComponent(connectionId)}/authenticate`,
+      { accessToken: options.session.access_token, deviceProof: proof },
+    )
+    const sessionId = boundedString(authenticated, 'sessionId')
+    acquiredSessionId = sessionId
+    const expiresAt = boundedString(authenticated, 'expiresAt')
+    const transport = boundedString(pending, 'transport')
+    if (transport !== 'direct' && transport !== 'relay') {
+      throw new Error('Supervisor response is invalid')
+    }
+    const control = boundedString(authenticated, 'control')
+    if (control !== 'read' && control !== 'control') {
+      throw new Error('Supervisor response is invalid')
+    }
+    const [bootstrap, machines] =
+      options.detached === true
+        ? [undefined, undefined]
+        : await Promise.all([
+            readJson(
+              `${hostBaseUrl}/api/v1/remote-supervisor/sessions/${encodeURIComponent(sessionId)}/bootstrap`,
+            ),
+            readJson(
+              `${hostBaseUrl}/api/v1/remote-supervisor/sessions/${encodeURIComponent(sessionId)}/machines`,
+            ),
+          ])
+    const connected: RemoteSupervisorSession = {
+      hostId: options.host.hostId,
+      sessionId,
+      expiresAt,
+      transport,
+      control,
+      bootstrap,
+      machines,
+    }
+    if (options.detached === true) {
+      // Finish authentication before observing cancellation so the caller always
+      // has an exact session to release, including a late response after unmount.
+      if (options.signal?.aborted) {
+        throw new DOMException('The operation was aborted', 'AbortError')
+      }
+    } else remoteSessions.set(options.host.hostId, connected)
+    return connected
+  } catch (error) {
+    if (options.detached === true) {
+      await closeDiagnosticSupervisorConnection(
+        acquiredSessionId === undefined ? 'connections' : 'sessions',
+        acquiredSessionId ?? connectionId,
+      )
+    }
+    throw error
+  }
+}
+
+async function closeDiagnosticSupervisorConnection(
+  kind: 'connections' | 'sessions',
+  id: string,
+): Promise<void> {
+  let response: Response
+  try {
+    response = await fetch(
+      `${hostBaseUrl}/api/v1/remote-supervisor/${kind}/${encodeURIComponent(id)}`,
+      { method: 'DELETE', signal: AbortSignal.timeout(5_000) },
+    )
+  } catch {
+    throw new Error('remote_supervisor_cleanup_failed')
+  }
+  if (!response.ok) throw new Error('remote_supervisor_cleanup_failed')
+}
+
+export async function disconnectRemoteSupervisor(
+  session: RemoteSupervisorSession,
+): Promise<void> {
+  await closeDiagnosticSupervisorConnection('sessions', session.sessionId)
+  if (remoteSessions.get(session.hostId) === session)
+    remoteSessions.delete(session.hostId)
+}
+
+export async function readRemoteBootstrap(
+  session: RemoteSupervisorSession,
+  signal?: AbortSignal,
+): Promise<unknown> {
+  requireRemoteSupervisorSession(session)
+  return await readJson(
+    `${hostBaseUrl}/api/v1/remote-supervisor/sessions/${encodeURIComponent(session.sessionId)}/bootstrap`,
+    { signal },
   )
-  const proof = await createDeviceRequestProof({
-    accessToken: options.session.access_token,
-    deviceId: options.productDevice.device.deviceId,
-    keyGeneration: options.productDevice.device.keyGeneration,
-    keyHandle: options.productDevice.key.keyHandle,
-    identity: options.deviceIdentity,
-    method: 'POST',
-    resource: admissionResource,
-    body: challengeBody,
-  })
-  const authenticated = await postLocalJson(
-    `/api/v1/remote-supervisor/connections/${encodeURIComponent(connectionId)}/authenticate`,
-    { accessToken: options.session.access_token, deviceProof: proof },
+}
+
+export async function readRemoteMachines(
+  session: RemoteSupervisorSession,
+  signal?: AbortSignal,
+): Promise<unknown> {
+  requireRemoteSupervisorSession(session)
+  return await readJson(
+    `${hostBaseUrl}/api/v1/remote-supervisor/sessions/${encodeURIComponent(session.sessionId)}/machines`,
+    { signal },
   )
-  const sessionId = boundedString(authenticated, 'sessionId')
-  const expiresAt = boundedString(authenticated, 'expiresAt')
-  const transport = boundedString(pending, 'transport')
-  if (transport !== 'direct' && transport !== 'relay') {
-    throw new Error('Supervisor response is invalid')
-  }
-  const control = boundedString(authenticated, 'control')
-  if (control !== 'read' && control !== 'control') {
-    throw new Error('Supervisor response is invalid')
-  }
-  const [bootstrap, machines] = await Promise.all([
-    readJson(
-      `${hostBaseUrl}/api/v1/remote-supervisor/sessions/${encodeURIComponent(sessionId)}/bootstrap`,
-    ),
-    readJson(
-      `${hostBaseUrl}/api/v1/remote-supervisor/sessions/${encodeURIComponent(sessionId)}/machines`,
-    ),
-  ])
-  const connected: RemoteSupervisorSession = {
-    hostId: options.host.hostId,
-    sessionId,
-    expiresAt,
-    transport,
-    control,
-    bootstrap,
-    machines,
-  }
-  remoteSessions.set(options.host.hostId, connected)
-  return connected
 }
 
 /**
@@ -528,31 +602,39 @@ export async function reconnectRemoteSupervisor(
 }
 
 export async function readRemoteMachine(
-  hostId: string,
+  hostId: string | RemoteSupervisorSession,
   machineId: string,
+  signal?: AbortSignal,
 ): Promise<unknown> {
-  const session = currentRemoteSupervisorSession(hostId)
+  const session =
+    typeof hostId === 'string'
+      ? currentRemoteSupervisorSession(hostId)
+      : requireRemoteSupervisorSession(hostId)
   if (session === undefined) {
-    const expired = remoteSessions.get(hostId)
+    const expired =
+      typeof hostId === 'string' ? remoteSessions.get(hostId) : undefined
     if (expired !== undefined) {
-      await closeRemoteSupervisorSession(hostId, expired)
+      await closeRemoteSupervisorSession(expired.hostId, expired)
     }
     throw new Error('remote_supervisor_session_expired')
   }
   return await readJson(
     `${hostBaseUrl}/api/v1/remote-supervisor/sessions/${encodeURIComponent(session.sessionId)}/machines/${encodeURIComponent(machineId)}`,
+    { signal },
   )
 }
 
 export async function readRemoteProjects(
-  hostId: string,
+  hostId: string | RemoteSupervisorSession,
   machineId: string,
   page: { readonly limit: number; readonly cursor?: string },
+  signal?: AbortSignal,
 ): Promise<RemoteProjectDirectoryPage> {
   const session = requireRemoteSupervisorSession(hostId)
   const query = directoryQuery(page)
   const value = await readJson(
     `${remoteMachineBaseUrl(session, machineId)}/projects?${query}`,
+    { signal },
   )
   const result = parseProjectPage(value)
   if (result.projects.some((project) => project.machineId !== machineId)) {
@@ -578,15 +660,17 @@ export async function readRemoteProject(
 }
 
 export async function readRemoteConversations(
-  hostId: string,
+  hostId: string | RemoteSupervisorSession,
   machineId: string,
   projectId: string,
   page: { readonly limit: number; readonly cursor?: string },
+  signal?: AbortSignal,
 ): Promise<RemoteConversationDirectoryPage> {
   const session = requireRemoteSupervisorSession(hostId)
   const query = directoryQuery(page)
   const value = await readJson(
     `${remoteMachineBaseUrl(session, machineId)}/projects/${encodeURIComponent(projectId)}/conversations?${query}`,
+    { signal },
   )
   const result = parseConversationPage(value)
   if (
@@ -602,14 +686,16 @@ export async function readRemoteConversations(
 }
 
 export async function readRemoteConversation(
-  hostId: string,
+  hostId: string | RemoteSupervisorSession,
   machineId: string,
   projectId: string,
   conversationId: string,
+  signal?: AbortSignal,
 ): Promise<RemoteConversationDirectoryItem> {
   const session = requireRemoteSupervisorSession(hostId)
   const value = await readJson(
     `${remoteMachineBaseUrl(session, machineId)}/projects/${encodeURIComponent(projectId)}/conversations/${encodeURIComponent(conversationId)}`,
+    { signal },
   )
   const conversation = parseConversation(asRecord(value.conversation))
   if (
@@ -623,7 +709,7 @@ export async function readRemoteConversation(
 }
 
 export async function readRemoteConversationHistory(
-  hostId: string,
+  hostId: string | RemoteSupervisorSession,
   machineId: string,
   projectId: string,
   conversationId: string,
@@ -751,10 +837,11 @@ export async function createRemoteConversation(options: {
 }
 
 function requireRemoteSupervisorSession(
-  hostId: string,
+  hostId: string | RemoteSupervisorSession,
 ): RemoteSupervisorSession {
-  const session = currentRemoteSupervisorSession(hostId)
-  if (session === undefined)
+  const session =
+    typeof hostId === 'string' ? currentRemoteSupervisorSession(hostId) : hostId
+  if (session === undefined || !(Date.parse(session.expiresAt) > Date.now()))
     throw new Error('remote_supervisor_session_expired')
   return session
 }

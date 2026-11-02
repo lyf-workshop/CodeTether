@@ -247,6 +247,8 @@ export async function resolveExistingProductDevice(options: {
   readonly baseUrl: string
   readonly identity: ProductDeviceIdentityCapability
   readonly signal?: AbortSignal
+  /** Diagnostics may observe an existing identity, never register or bind one. */
+  readonly existingOnly?: boolean
   readonly onDevicesObserved?: (
     devices: readonly AccountProductDevice[],
   ) => void
@@ -270,7 +272,9 @@ export async function resolveExistingProductDevice(options: {
   if (matches.length === 1) {
     const match = matches[0]!
     if (
-      match.key.protection === 'macOS_secure_enclave_wrapped_key_file_keychain'
+      match.key.protection ===
+        'macOS_secure_enclave_wrapped_key_file_keychain' &&
+      options.existingOnly !== true
     ) {
       // A prior registration may have reached the server even if persisting
       // the local dev_* binding failed. Fingerprint reconciliation is safe;
@@ -290,6 +294,9 @@ export async function resolveExistingProductDevice(options: {
       'product_device_identity_ambiguous',
       undefined,
     )
+  }
+  if (options.existingOnly === true) {
+    throw new ControlPlaneClientError('product_device_not_available', undefined)
   }
   if (keys.length === 0) {
     return await registerFirstMacProductDevice(options, devices)

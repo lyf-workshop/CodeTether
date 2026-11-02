@@ -35,6 +35,10 @@
   - 网页里已经没有代码调用 `connectRemoteSupervisor`（`apps/web/src/runtime/account/remote-supervisor.ts:408`）。
   - Host 的 `/api/v1/remote-supervisor/connections` 仍然接受 `forceRelay`（`apps/host/src/api/local-http-server.ts:154`）。
 - **旧 Relay 不清楚。** 以前阿里云上有一台 Relay（构建 `git-2b1a67606f24`），现在还在不在不清楚。查到了就在报告里说明，不用处理。
+- **数据库连接。** 可以读服务器上 Control Plane 的环境文件来拿连接串，用来备份和查 `control_plane.schema_migrations`。不要打印连接串。
+- **不要拿 smoke 做部署后的检查。** `pnpm --filter @codetether/control-plane smoke:supabase-postgres` 不是只读的：它会执行迁移，还会写入测试数据再回滚（`apps/control-plane/src/native-postgres-smoke.ts:275`）。它的表白名单 `expectedTables`（同文件第 11 行）也漏了 0007 的 `host_access_requests` 和 0008 的 `host_supervisor_presence`，在已经迁移过的数据库上一定会失败。
+  - 在分支上把这两张表补进白名单，并加一条测试。
+  - 部署后的检查改用 `/healthz`、`/readyz` 和 `schema_migrations` 查询。
 - **SSH。** 这台电脑上应该已经配好了访问 us-vps-01 的 SSH。需要密码或口令时，把命令写成 `! …` 交给用户执行。
 
 ## 诊断页

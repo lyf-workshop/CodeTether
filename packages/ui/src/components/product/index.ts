@@ -20,8 +20,21 @@ export { PermissionCard, type PermissionCardProps } from './permission-card'
 export { QuestionCard, type QuestionCardProps } from './question-card'
 export { ShellRunCard, type ShellRunCardProps } from './shell-run-card'
 export { TerminalCard, type TerminalCardProps } from './terminal-card'
+export { SettingsRow, type SettingsRowProps } from './settings-row'
 export {
   ToolCallCard,
   type ToolCallCardProps,
   type ToolCallDelta,
 } from './tool-call-card'
+
+export { DeviceSection, type DeviceSectionProps } from './device-section'
+
+export {
+  ProjectCard,
+  AddProjectCard,
+  type ProjectCardProps,
+  type AddProjectCardProps,
+} from './project-card'
+
+export { SessionItem, type SessionItemProps } from './session-item'
+export { CommandBlock, type CommandBlockProps } from './command-block'

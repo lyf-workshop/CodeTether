@@ -42,79 +42,79 @@ export interface FailurePresentationContext {
 
 const failureReasonCopy = {
   login_required: {
-    title: '需要登录智能体',
-    cause: '执行电脑上的智能体登录状态不可用。',
+    title: '需要登录AI 工具',
+    cause: '执行电脑上的AI 工具登录状态不可用。',
     guidance: '请在执行电脑上完成登录，然后再开始新一轮。',
   },
   authentication_expired: {
-    title: '智能体登录已过期',
-    cause: '执行电脑上的智能体凭据已过期。',
+    title: 'AI 工具登录已过期',
+    cause: '执行电脑上的AI 工具凭据已过期。',
     guidance: '请在执行电脑上重新登录，然后再开始新一轮。',
   },
   authentication_invalid: {
-    title: '智能体验证失败',
-    cause: '执行电脑无法使用当前智能体凭据。',
+    title: 'AI 工具验证失败',
+    cause: '执行电脑无法使用当前AI 工具凭据。',
     guidance: '请在执行电脑上重新登录并确认账号状态。',
   },
   account_unavailable: {
-    title: '智能体账号不可用',
+    title: 'AI 工具账号不可用',
     cause: '当前账号暂时不能执行这项工作。',
-    guidance: '请检查智能体账号状态或联系智能体服务方。',
+    guidance: '请检查AI 工具账号状态或联系AI 工具服务方。',
   },
   usage_limit_reached: {
     title: '已达到使用限额',
-    cause: '智能体服务暂时没有可用配额。',
+    cause: 'AI 工具服务暂时没有可用配额。',
     guidance: '请等待配额恢复后再开始新一轮。',
   },
   rate_limited: {
     title: '请求过于频繁',
-    cause: '智能体服务暂时限制了请求频率。',
+    cause: 'AI 工具服务暂时限制了请求频率。',
     guidance: '请稍后再开始新一轮。',
   },
   provider_capacity_limited: {
-    title: '智能体服务繁忙',
-    cause: '智能体服务当前没有可用执行容量。',
+    title: 'AI 工具服务繁忙',
+    cause: 'AI 工具服务当前没有可用执行容量。',
     guidance: '请等待服务恢复后再开始新一轮。',
   },
   provider_not_installed: {
-    title: '未安装智能体',
-    cause: '执行电脑上没有检测到该智能体。',
+    title: '未安装AI 工具',
+    cause: '执行电脑上没有检测到该AI 工具。',
     guidance: '请在电脑详情中确认安装状态。',
   },
   provider_unsupported_version: {
-    title: '智能体版本不受支持',
-    cause: '执行电脑上的智能体版本不在当前支持范围内。',
-    guidance: '请更新智能体后重新检测。',
+    title: 'AI 工具版本不受支持',
+    cause: '执行电脑上的AI 工具版本不在当前支持范围内。',
+    guidance: '请更新AI 工具后重新检测。',
   },
   provider_misconfigured: {
-    title: '智能体配置不可用',
-    cause: '智能体已安装，但当前配置无法安全执行。',
+    title: 'AI 工具配置不可用',
+    cause: 'AI 工具已安装，但当前配置无法安全执行。',
     guidance: '请在执行电脑上检查配置，并在电脑详情中重新检测。',
   },
   provider_service_unavailable: {
-    title: '智能体服务暂时不可用',
-    cause: '智能体服务当前无法接受执行请求。',
+    title: 'AI 工具服务暂时不可用',
+    cause: 'AI 工具服务当前无法接受执行请求。',
     guidance: '请稍后再开始新一轮。',
   },
   provider_start_failed: {
-    title: '智能体启动失败',
-    cause: 'CodeTether 未能安全启动智能体进程。',
+    title: 'AI 工具启动失败',
+    cause: 'CodeTether 未能安全启动AI 工具进程。',
     guidance: '请检查电脑详情中的执行状态后再继续。',
   },
   provider_crashed: {
-    title: '智能体意外退出',
-    cause: '智能体进程在完成本轮工作前意外退出。',
+    title: 'AI 工具意外退出',
+    cause: 'AI 工具进程在完成本轮工作前意外退出。',
     guidance: '确认执行环境可用后，可以明确开始一个新轮次。',
   },
   provider_session_lost: {
-    title: '智能体会话已丢失',
-    cause: '智能体无法继续识别这段原生会话。',
+    title: 'AI 工具会话已丢失',
+    cause: 'AI 工具无法继续识别这段原生会话。',
     guidance: '请查看电脑详情；CodeTether 不会假装恢复原生连续性。',
   },
   provider_protocol_error: {
-    title: '智能体协议不兼容',
-    cause: '智能体返回了 CodeTether 无法安全接受的响应。',
-    guidance: '请更新智能体并在电脑详情中重新检测。',
+    title: 'AI 工具协议不兼容',
+    cause: 'AI 工具返回了 CodeTether 无法安全接受的响应。',
+    guidance: '请更新AI 工具并在电脑详情中重新检测。',
   },
   machine_offline: {
     title: '执行电脑离线',
@@ -134,7 +134,7 @@ const failureReasonCopy = {
   remote_execution_unavailable: {
     title: '远程执行不可用',
     cause: '这台电脑当前不满足远程执行条件。',
-    guidance: '请在电脑详情中检查连接和智能体执行状态。',
+    guidance: '请在电脑详情中检查连接和AI 工具执行状态。',
   },
   project_location_missing: {
     title: '缺少项目位置',
@@ -173,7 +173,7 @@ const failureReasonCopy = {
   },
   output_limit_exceeded: {
     title: '输出超过安全上限',
-    cause: '智能体输出超过了 CodeTether 的有界处理范围。',
+    cause: 'AI 工具输出超过了 CodeTether 的有界处理范围。',
     guidance: '请查看已保存的结果；本轮不会继续接收更多输出。',
   },
   protocol_limit_exceeded: {
@@ -198,8 +198,8 @@ const failureReasonCopy = {
   },
   relay_not_configured: {
     title: 'Internet Relay 尚未配置',
-    cause: '这台 Machine 尚未配置用于互联网连通性的 CodeTether Relay。',
-    guidance: '请在 Machine 详情中配置并确认 Relay 身份。',
+    cause: '这台设备尚未配置用于互联网连通性的 CodeTether Relay。',
+    guidance: '请在设备详情中配置并确认 Relay 身份。',
   },
   relay_unreachable: {
     title: 'Internet Relay 暂时无法连接',
@@ -209,7 +209,7 @@ const failureReasonCopy = {
   relay_authentication_failed: {
     title: 'Internet Relay 验证失败',
     cause: 'Relay 无法验证这个已注册的 CodeTether 身份。',
-    guidance: '请在 Machine 详情中检查注册状态；不要绕过身份验证。',
+    guidance: '请在设备详情中检查注册状态；不要绕过身份验证。',
   },
   relay_identity_mismatch: {
     title: 'Internet Relay 身份不匹配',
@@ -224,7 +224,7 @@ const failureReasonCopy = {
   relay_revoked: {
     title: 'Internet Relay 注册已撤销',
     cause: 'Relay 已撤销这个基础设施身份的连接权限。',
-    guidance: 'Machine trust 未被修改；如需恢复，请使用新的单次注册流程。',
+    guidance: '设备信任未被修改；如需恢复，请使用新的单次注册流程。',
   },
   relay_rate_limited: {
     title: 'Internet Relay 暂时限制连接',
@@ -233,7 +233,7 @@ const failureReasonCopy = {
   },
   relay_channel_open_failed: {
     title: 'Internet Relay 通道无法建立',
-    cause: 'CodeTether 无法为这台受信任的 Machine 建立执行通道。',
+    cause: 'CodeTether 无法为这台受信任的设备建立执行通道。',
     guidance: '请等待 Relay 与远程 Node 恢复后，再开始新的请求。',
   },
   relay_channel_lost: {
@@ -243,22 +243,22 @@ const failureReasonCopy = {
   },
   relay_peer_offline: {
     title: '远程 Node 未连接到 Internet Relay',
-    cause: 'Relay 当前无法到达这台受信任 Machine 的 Node。',
+    cause: 'Relay 当前无法到达这台受信任设备的 Node。',
     guidance: '请等待 Node 重新连接；会话历史仍可查看。',
   },
   relay_transport_capacity_reached: {
     title: 'Internet Relay 执行通道已满',
-    cause: '当前 Relay Machine 通道已达到有界容量。',
+    cause: '当前 Relay 设备通道已达到有界容量。',
     guidance: '请等待其他远程任务结束后再试。',
   },
   relay_protocol_error: {
     title: 'Internet Relay 执行协议异常',
-    cause: 'CodeTether 拒绝了无效或不兼容的 Relay Machine 通道数据。',
+    cause: 'CodeTether 拒绝了无效或不兼容的 Relay 设备通道数据。',
     guidance: '请检查 Relay、Desktop 与 Node 版本后再试。',
   },
   provider_error: {
-    title: '智能体执行失败',
-    cause: '智能体未能完成本轮工作。',
+    title: 'AI 工具执行失败',
+    cause: 'AI 工具未能完成本轮工作。',
     guidance: '请查看电脑详情中的执行状态后再继续。',
   },
   runtime_error: {
@@ -274,7 +274,7 @@ const failureReasonCopy = {
 } as const satisfies Record<CanonicalFailureReason, FailureReasonCopy>
 
 const sourceLabels = {
-  provider: '智能体',
+  provider: 'AI 工具',
   machine: '电脑',
   transport: '安全连接',
   project: '项目位置',
@@ -339,7 +339,7 @@ function contextualizedCopy(
     const providerCopy =
       providerName === undefined || providerName.length === 0
         ? value
-        : value.replaceAll('智能体', contextualLabel(providerName))
+        : value.replaceAll('AI 工具', contextualLabel(providerName))
     const machineCopy =
       machineName === undefined || machineName.length === 0
         ? providerCopy

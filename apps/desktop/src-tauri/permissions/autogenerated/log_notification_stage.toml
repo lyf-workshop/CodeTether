@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-log-notification-stage"
+description = "Enables the log_notification_stage command without any pre-configured scope."
+commands.allow = ["log_notification_stage"]
+
+[[permission]]
+identifier = "deny-log-notification-stage"
+description = "Denies the log_notification_stage command without any pre-configured scope."
+commands.deny = ["log_notification_stage"]

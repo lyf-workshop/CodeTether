@@ -19,11 +19,15 @@ use crate::host_supervisor::show_main_window;
 const NOTIFICATION_INTENT_EVENT: &str = "codetether://notification-intent";
 const MAX_DELIVERED_ATTENTION_IDS: usize = 2_048;
 #[cfg(any(windows, target_os = "macos", test))]
+const MAX_ACTIVATED_ATTENTION_IDS: usize = 2_048;
+#[cfg(any(windows, target_os = "macos", test))]
 const MAX_PENDING_INTENTS: usize = 256;
 #[cfg(windows)]
 const MAX_ACTIVE_WINDOWS_TOASTS: usize = 256;
 const MAX_TITLE_CHARACTERS: usize = 96;
 const MAX_BODY_CHARACTERS: usize = 256;
+const NOTIFICATION_SKIPPED_LOG: &str =
+    "[codetether:desktop] notification skipped: already delivered";
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -31,6 +35,126 @@ pub enum AttentionNotificationType {
     Approval,
     CompletedReview,
     Failed,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum NotificationStage {
+    Received,
+    SkipInactive,
+    SkipRecent,
+    SkipDisabled,
+    SkipSuppressed,
+    SkipPermissionDenied,
+    WindowStateStart,
+    WindowStateDone,
+    WindowStateTimeout,
+    MetadataStart,
+    MetadataDone,
+    PermissionStart,
+    PermissionDone,
+    PermissionTimeout,
+    DeliverStart,
+    DeliverDone,
+    FailedRecentIdRead,
+    FailedPreferences,
+    FailedWindowState,
+    FailedPresentation,
+    FailedMetadata,
+    FailedPermission,
+    FailedDelivery,
+    FailedRecentIdWrite,
+    FailedClickListener,
+    FailedNavigation,
+    SseConnected,
+    SseReconnecting,
+    SseReset,
+    SseUnavailable,
+}
+
+fn notification_stage_log(stage: NotificationStage) -> String {
+    let stage = match stage {
+        NotificationStage::Received => "received",
+        NotificationStage::SkipInactive => "skip-inactive",
+        NotificationStage::SkipRecent => "skip-recent",
+        NotificationStage::SkipDisabled => "skip-disabled",
+        NotificationStage::SkipSuppressed => "skip-suppressed",
+        NotificationStage::SkipPermissionDenied => "skip-permission-denied",
+        NotificationStage::WindowStateStart => "window-state-start",
+        NotificationStage::WindowStateDone => "window-state-done",
+        NotificationStage::WindowStateTimeout => "window-state-timeout",
+        NotificationStage::MetadataStart => "metadata-start",
+        NotificationStage::MetadataDone => "metadata-done",
+        NotificationStage::PermissionStart => "permission-start",
+        NotificationStage::PermissionDone => "permission-done",
+        NotificationStage::PermissionTimeout => "permission-timeout",
+        NotificationStage::DeliverStart => "deliver-start",
+        NotificationStage::DeliverDone => "deliver-done",
+        NotificationStage::FailedRecentIdRead => "failed-recent-id-read",
+        NotificationStage::FailedPreferences => "failed-preferences",
+        NotificationStage::FailedWindowState => "failed-window-state",
+        NotificationStage::FailedPresentation => "failed-presentation",
+        NotificationStage::FailedMetadata => "failed-metadata",
+        NotificationStage::FailedPermission => "failed-permission",
+        NotificationStage::FailedDelivery => "failed-delivery",
+        NotificationStage::FailedRecentIdWrite => "failed-recent-id-write",
+        NotificationStage::FailedClickListener => "failed-click-listener",
+        NotificationStage::FailedNavigation => "failed-navigation",
+        NotificationStage::SseConnected => "sse-connected",
+        NotificationStage::SseReconnecting => "sse-reconnecting",
+        NotificationStage::SseReset => "sse-reset",
+        NotificationStage::SseUnavailable => "sse-unavailable",
+    };
+    format!("[codetether:desktop] notification stage={stage}")
+}
+
+#[tauri::command]
+pub fn log_notification_stage(stage: NotificationStage) {
+    eprintln!("{}", notification_stage_log(stage));
+}
+
+fn notification_requested_log(attention_type: &AttentionNotificationType) -> String {
+    let attention_type = match attention_type {
+        AttentionNotificationType::Approval => "approval",
+        AttentionNotificationType::CompletedReview => "completed_review",
+        AttentionNotificationType::Failed => "failed",
+    };
+    format!("[codetether:desktop] notification requested type={attention_type}")
+}
+
+#[cfg(any(windows, test))]
+fn notification_shown_log(attention_type: &AttentionNotificationType, app_id: &str) -> String {
+    let attention_type = match attention_type {
+        AttentionNotificationType::Approval => "approval",
+        AttentionNotificationType::CompletedReview => "completed_review",
+        AttentionNotificationType::Failed => "failed",
+    };
+    format!("[codetether:desktop] notification shown type={attention_type} app_id={app_id}")
+}
+
+#[cfg(any(windows, test))]
+fn notification_activated_log(attention_type: &AttentionNotificationType, repeat: bool) -> String {
+    let attention_type = match attention_type {
+        AttentionNotificationType::Approval => "approval",
+        AttentionNotificationType::CompletedReview => "completed_review",
+        AttentionNotificationType::Failed => "failed",
+    };
+    format!("[codetether:desktop] notification activated type={attention_type} repeat={repeat}")
+}
+
+#[cfg(windows)]
+fn notification_dismissed_log(
+    reason: Option<windows::UI::Notifications::ToastDismissalReason>,
+) -> String {
+    use windows::UI::Notifications::ToastDismissalReason;
+
+    let reason = match reason {
+        Some(ToastDismissalReason::TimedOut) => "TimedOut",
+        Some(ToastDismissalReason::UserCanceled) => "UserCanceled",
+        Some(ToastDismissalReason::ApplicationHidden) => "ApplicationHidden",
+        _ => "unknown",
+    };
+    format!("[codetether:desktop] notification dismissed reason={reason}")
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -48,6 +172,11 @@ pub struct NotificationIntent {
 }
 
 impl NotificationIntent {
+    #[cfg(target_os = "macos")]
+    pub(crate) fn attention_type(&self) -> &AttentionNotificationType {
+        &self.attention_type
+    }
+
     fn validate(&self) -> Result<(), &'static str> {
         if !is_public_id(&self.attention_id, "attn_") {
             return Err("attentionId is not a CodeTether Attention identity");
@@ -77,26 +206,59 @@ impl NotificationIntent {
     }
 }
 
+/// The protocol URL carries only a public Attention identity. After a restart,
+/// Web resolves it from the existing read-only Host index, never from URL data.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NotificationLinkIntent {
+    attention_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(untagged)]
+pub enum NotificationClickIntent {
+    Known(NotificationIntent),
+    Lookup(NotificationLinkIntent),
+}
+
+impl NotificationClickIntent {
+    #[cfg(any(windows, target_os = "macos", test))]
+    fn attention_id(&self) -> &str {
+        match self {
+            Self::Known(intent) => &intent.attention_id,
+            Self::Lookup(intent) => &intent.attention_id,
+        }
+    }
+}
+
 #[derive(Default)]
 struct DeliveryState {
     attention_ids: HashSet<String>,
     delivered_order: VecDeque<String>,
 }
 
-#[cfg_attr(not(windows), derive(Default))]
 struct AttentionNotificationStateInner {
     delivery: Mutex<DeliveryState>,
-    pending: Mutex<VecDeque<NotificationIntent>>,
+    #[cfg(any(windows, target_os = "macos", test))]
+    activations: Mutex<DeliveryState>,
+    pending: Mutex<VecDeque<NotificationClickIntent>>,
+    #[cfg(any(windows, test))]
+    known_intents: Mutex<BoundedRegistry<NotificationIntent>>,
     #[cfg(windows)]
     active_toasts: Mutex<BoundedRegistry<ActiveWindowsToast>>,
 }
 
-#[cfg(windows)]
+// Windows and test builds require explicit capacities for their bounded registries.
+#[allow(clippy::derivable_impls)]
 impl Default for AttentionNotificationStateInner {
     fn default() -> Self {
         Self {
             delivery: Mutex::default(),
+            #[cfg(any(windows, target_os = "macos", test))]
+            activations: Mutex::default(),
             pending: Mutex::default(),
+            #[cfg(any(windows, test))]
+            known_intents: Mutex::new(BoundedRegistry::new(MAX_DELIVERED_ATTENTION_IDS)),
             #[cfg(windows)]
             active_toasts: Mutex::new(BoundedRegistry::new(MAX_ACTIVE_WINDOWS_TOASTS)),
         }
@@ -127,8 +289,13 @@ impl AttentionNotificationState {
         lock(&self.0.delivery).attention_ids.remove(attention_id);
     }
 
-    #[cfg(any(windows, target_os = "macos", test))]
+    #[cfg(test)]
     fn enqueue_intent(&self, intent: NotificationIntent) {
+        self.enqueue_click(NotificationClickIntent::Known(intent));
+    }
+
+    #[cfg(any(windows, target_os = "macos", test))]
+    fn enqueue_click(&self, intent: NotificationClickIntent) {
         let mut pending = lock(&self.0.pending);
         if pending.len() == MAX_PENDING_INTENTS {
             pending.pop_front();
@@ -137,8 +304,38 @@ impl AttentionNotificationState {
         pending.push_back(intent);
     }
 
-    fn take_pending_intent(&self) -> Option<NotificationIntent> {
+    fn take_pending_intent(&self) -> Option<NotificationClickIntent> {
         lock(&self.0.pending).pop_front()
+    }
+
+    #[cfg(any(windows, target_os = "macos", test))]
+    fn reserve_activation(&self, attention_id: &str) -> bool {
+        let mut activations = lock(&self.0.activations);
+        if !activations.attention_ids.insert(attention_id.to_owned()) {
+            return false;
+        }
+        activations
+            .delivered_order
+            .push_back(attention_id.to_owned());
+        while activations.delivered_order.len() > MAX_ACTIVATED_ATTENTION_IDS {
+            if let Some(expired) = activations.delivered_order.pop_front() {
+                activations.attention_ids.remove(&expired);
+            }
+        }
+        true
+    }
+
+    #[cfg(any(windows, test))]
+    fn remember_intent(&self, intent: NotificationIntent) {
+        lock(&self.0.known_intents).insert(intent.attention_id.clone(), intent);
+    }
+
+    #[cfg(any(windows, test))]
+    pub(crate) fn find_intent(&self, attention_id: &str) -> Option<NotificationIntent> {
+        lock(&self.0.known_intents)
+            .entries
+            .get(attention_id)
+            .cloned()
     }
 
     #[cfg(windows)]
@@ -230,11 +427,13 @@ pub fn deliver_attention_notification(
     state: State<'_, AttentionNotificationState>,
     intent: NotificationIntent,
 ) -> Result<bool, String> {
+    eprintln!("{}", notification_requested_log(&intent.attention_type));
     intent
         .validate()
         .map_err(|message| format!("Invalid notification intent: {message}."))?;
 
     if !state.reserve_delivery(&intent.attention_id) {
+        eprintln!("{NOTIFICATION_SKIPPED_LOG}");
         return Ok(false);
     }
 
@@ -294,7 +493,7 @@ fn show_macos_notification(
 #[tauri::command]
 pub fn take_pending_notification_intent(
     state: State<'_, AttentionNotificationState>,
-) -> Option<NotificationIntent> {
+) -> Option<NotificationClickIntent> {
     state.take_pending_intent()
 }
 
@@ -322,9 +521,12 @@ fn show_windows_notification(
     let activation_attention_id = intent.attention_id.clone();
     let activated_handler: TypedEventHandler<ToastNotification, IInspectable> =
         TypedEventHandler::new(move |_, _| {
-            if !activation_flag.swap(true, Ordering::AcqRel)
-                && let Some(inner) = activation_state.upgrade()
-            {
+            let repeat = activation_flag.swap(true, Ordering::AcqRel);
+            eprintln!(
+                "{}",
+                notification_activated_log(&activation_intent.attention_type, repeat)
+            );
+            if !repeat && let Some(inner) = activation_state.upgrade() {
                 let state = AttentionNotificationState(inner);
                 state.remove_active_toast(&activation_attention_id);
                 activate_notification(&activation_app, &state, activation_intent.clone());
@@ -338,8 +540,10 @@ fn show_windows_notification(
         TypedEventHandler::new(
             move |_, args: windows::core::Ref<'_, ToastDismissedEventArgs>| {
                 let reason = args.as_ref().and_then(|args| args.Reason().ok());
-                // A timed-out banner remains clickable in Windows Notification Center,
-                // so retain its source object until activation or bounded eviction.
+                eprintln!("{}", notification_dismissed_log(reason));
+                // Keep an optional in-process activation source for bounded
+                // banner handling. Notification Center activation uses the
+                // installed protocol URL, not an assumption about this callback.
                 if should_remove_after_dismissal(reason)
                     && let Some(inner) = dismissal_state.upgrade()
                 {
@@ -349,7 +553,7 @@ fn show_windows_notification(
             },
         );
 
-    let notification = create_windows_toast(&intent.title, context, message)?;
+    let notification = create_windows_toast(&intent.title, context, message, &intent.attention_id)?;
     let activated_token = notification
         .Activated(&activated_handler)
         .map_err(|error| error.to_string())?;
@@ -362,11 +566,18 @@ fn show_windows_notification(
         dismissed_token,
     };
 
-    let notifier = ToastNotificationManager::CreateToastNotifierWithId(&app_id.into())
+    let notifier = ToastNotificationManager::CreateToastNotifierWithId(&app_id.as_str().into())
         .map_err(|error| error.to_string())?;
+    state.remember_intent(intent.clone());
     notifier
         .Show(&active_toast.notification)
         .map_err(|error| error.to_string())?;
+    // Show returning successfully means Windows accepted the request, not that
+    // a banner was displayed. Do not log notification content or identities.
+    eprintln!(
+        "{}",
+        notification_shown_log(&intent.attention_type, &app_id)
+    );
     state.retain_active_toast_if_pending(&intent.attention_id, active_toast, &activated);
     Ok(())
 }
@@ -398,6 +609,7 @@ fn create_windows_toast(
     title: &str,
     context: &str,
     message: Option<&str>,
+    attention_id: &str,
 ) -> Result<windows::UI::Notifications::ToastNotification, String> {
     use windows::{
         Data::Xml::Dom::XmlDocument, UI::Notifications::ToastNotification, core::HSTRING,
@@ -405,18 +617,29 @@ fn create_windows_toast(
 
     let document = XmlDocument::new().map_err(|error| error.to_string())?;
     document
-        .LoadXml(&HSTRING::from(windows_toast_xml(title, context, message)))
+        .LoadXml(&HSTRING::from(windows_toast_xml(
+            title,
+            context,
+            message,
+            attention_id,
+        )))
         .map_err(|error| error.to_string())?;
     ToastNotification::CreateToastNotification(&document).map_err(|error| error.to_string())
 }
 
 #[cfg(any(windows, test))]
-fn windows_toast_xml(title: &str, context: &str, message: Option<&str>) -> String {
+fn windows_toast_xml(
+    title: &str,
+    context: &str,
+    message: Option<&str>,
+    attention_id: &str,
+) -> String {
     let message = message.map_or_else(String::new, |message| {
         format!("<text id=\"3\">{}</text>", escape_xml_text(message))
     });
     format!(
-        "<toast><visual><binding template=\"ToastGeneric\"><text id=\"1\">{}</text><text id=\"2\">{}</text>{message}</binding></visual></toast>",
+        "<toast activationType=\"protocol\" launch=\"{}\"><visual><binding template=\"ToastGeneric\"><text id=\"1\">{}</text><text id=\"2\">{}</text>{message}</binding></visual></toast>",
+        escape_xml_text(&format!("codetether://notification/{attention_id}")),
         escape_xml_text(title),
         escape_xml_text(context),
     )
@@ -474,9 +697,36 @@ pub(crate) fn activate_notification(
     state: &AttentionNotificationState,
     intent: NotificationIntent,
 ) {
+    activate_click(app, state, NotificationClickIntent::Known(intent));
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+pub(crate) fn activate_notification_link(
+    app: &AppHandle,
+    state: &AttentionNotificationState,
+    attention_id: &str,
+) {
+    activate_click(
+        app,
+        state,
+        NotificationClickIntent::Lookup(NotificationLinkIntent {
+            attention_id: attention_id.to_owned(),
+        }),
+    );
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+fn activate_click(
+    app: &AppHandle,
+    state: &AttentionNotificationState,
+    intent: NotificationClickIntent,
+) {
+    if !state.reserve_activation(intent.attention_id()) {
+        return;
+    }
     // Queue first so a WebView resumed by focus can drain the intent even when
     // its Tauri event listener was suspended while the window was minimized.
-    state.enqueue_intent(intent.clone());
+    state.enqueue_click(intent.clone());
 
     match show_main_window(app) {
         Ok(true) => {}
@@ -534,7 +784,7 @@ fn validate_text(
     Ok(())
 }
 
-fn is_public_id(value: &str, prefix: &str) -> bool {
+pub(crate) fn is_public_id(value: &str, prefix: &str) -> bool {
     let Some(suffix) = value.strip_prefix(prefix) else {
         return false;
     };
@@ -626,6 +876,242 @@ mod tests {
     }
 
     #[test]
+    fn notification_delivery_log_uses_only_type_and_the_actual_app_id() {
+        #[cfg(windows)]
+        let app_ids = [
+            "com.codetether.desktop",
+            tauri_winrt_notification::Toast::POWERSHELL_APP_ID,
+        ];
+        #[cfg(not(windows))]
+        let app_ids = ["com.codetether.desktop"];
+
+        for (attention_type, expected_type) in [
+            (AttentionNotificationType::Approval, "approval"),
+            (
+                AttentionNotificationType::CompletedReview,
+                "completed_review",
+            ),
+            (AttentionNotificationType::Failed, "failed"),
+        ] {
+            let mut value = intent("attn_log_sentinel");
+            value.attention_type = attention_type;
+            value.title = "TITLE_PRIVACY_SENTINEL".to_owned();
+            value.body = "DEVICE_PROJECT_PRIVACY_SENTINEL\nBODY_PRIVACY_SENTINEL".to_owned();
+            value.project_id = "proj_privacy_sentinel".to_owned();
+            value.conversation_id = "conv_privacy_sentinel".to_owned();
+            value.turn_id = Some("turn_privacy_sentinel".to_owned());
+            assert_eq!(value.validate(), Ok(()));
+
+            for app_id in app_ids {
+                let log = notification_shown_log(&value.attention_type, app_id);
+                assert_eq!(
+                    log,
+                    format!(
+                        "[codetether:desktop] notification shown type={expected_type} app_id={app_id}"
+                    )
+                );
+                for private_value in [
+                    value.title.as_str(),
+                    "DEVICE_PROJECT_PRIVACY_SENTINEL",
+                    "BODY_PRIVACY_SENTINEL",
+                    value.attention_id.as_str(),
+                    value.project_id.as_str(),
+                    value.conversation_id.as_str(),
+                    value.turn_id.as_deref().unwrap(),
+                ] {
+                    assert!(!log.contains(private_value));
+                }
+                assert!(!log.contains('\n'));
+            }
+        }
+    }
+
+    #[test]
+    fn notification_requested_log_contains_only_the_controlled_type() {
+        for (attention_type, expected_type) in [
+            (AttentionNotificationType::Approval, "approval"),
+            (
+                AttentionNotificationType::CompletedReview,
+                "completed_review",
+            ),
+            (AttentionNotificationType::Failed, "failed"),
+        ] {
+            let mut value = intent("attn_request_sentinel");
+            value.attention_type = attention_type;
+            value.title = "TITLE_PRIVACY_SENTINEL".to_owned();
+            value.body = "DEVICE_PROJECT_PRIVACY_SENTINEL\nBODY_PRIVACY_SENTINEL".to_owned();
+            let log = notification_requested_log(&value.attention_type);
+            assert_eq!(
+                log,
+                format!("[codetether:desktop] notification requested type={expected_type}")
+            );
+            for private_value in [
+                value.title.as_str(),
+                "DEVICE_PROJECT_PRIVACY_SENTINEL",
+                "BODY_PRIVACY_SENTINEL",
+                value.attention_id.as_str(),
+                value.project_id.as_str(),
+                value.conversation_id.as_str(),
+                value.turn_id.as_deref().unwrap(),
+            ] {
+                assert!(!log.contains(private_value));
+            }
+            assert!(!log.contains('\n'));
+        }
+    }
+
+    #[test]
+    fn notification_stage_log_is_bounded_and_fixed() {
+        let stages = [
+            (NotificationStage::Received, "received"),
+            (NotificationStage::SkipInactive, "skip-inactive"),
+            (NotificationStage::SkipRecent, "skip-recent"),
+            (NotificationStage::SkipDisabled, "skip-disabled"),
+            (NotificationStage::SkipSuppressed, "skip-suppressed"),
+            (
+                NotificationStage::SkipPermissionDenied,
+                "skip-permission-denied",
+            ),
+            (NotificationStage::WindowStateStart, "window-state-start"),
+            (NotificationStage::WindowStateDone, "window-state-done"),
+            (
+                NotificationStage::WindowStateTimeout,
+                "window-state-timeout",
+            ),
+            (NotificationStage::MetadataStart, "metadata-start"),
+            (NotificationStage::MetadataDone, "metadata-done"),
+            (NotificationStage::PermissionStart, "permission-start"),
+            (NotificationStage::PermissionDone, "permission-done"),
+            (NotificationStage::PermissionTimeout, "permission-timeout"),
+            (NotificationStage::DeliverStart, "deliver-start"),
+            (NotificationStage::DeliverDone, "deliver-done"),
+            (
+                NotificationStage::FailedRecentIdRead,
+                "failed-recent-id-read",
+            ),
+            (NotificationStage::FailedPreferences, "failed-preferences"),
+            (NotificationStage::FailedWindowState, "failed-window-state"),
+            (NotificationStage::FailedPresentation, "failed-presentation"),
+            (NotificationStage::FailedMetadata, "failed-metadata"),
+            (NotificationStage::FailedPermission, "failed-permission"),
+            (NotificationStage::FailedDelivery, "failed-delivery"),
+            (
+                NotificationStage::FailedRecentIdWrite,
+                "failed-recent-id-write",
+            ),
+            (
+                NotificationStage::FailedClickListener,
+                "failed-click-listener",
+            ),
+            (NotificationStage::FailedNavigation, "failed-navigation"),
+            (NotificationStage::SseConnected, "sse-connected"),
+            (NotificationStage::SseReconnecting, "sse-reconnecting"),
+            (NotificationStage::SseReset, "sse-reset"),
+            (NotificationStage::SseUnavailable, "sse-unavailable"),
+        ];
+
+        for (stage, expected) in stages {
+            assert_eq!(
+                notification_stage_log(stage),
+                format!("[codetether:desktop] notification stage={expected}")
+            );
+            assert!(!notification_stage_log(stage).contains('\n'));
+        }
+    }
+
+    #[test]
+    fn notification_stage_deserialization_rejects_unknown_or_unsafe_values() {
+        for value in ["unknown", "", "received\nsecret"] {
+            assert!(serde_json::from_value::<NotificationStage>(serde_json::json!(value)).is_err());
+        }
+    }
+
+    #[test]
+    fn notification_skipped_log_contains_no_notification_content_or_identity() {
+        assert_eq!(
+            NOTIFICATION_SKIPPED_LOG,
+            "[codetether:desktop] notification skipped: already delivered"
+        );
+    }
+
+    #[test]
+    fn notification_activation_log_contains_only_type_and_repeat() {
+        for (attention_type, expected_type) in [
+            (AttentionNotificationType::Approval, "approval"),
+            (
+                AttentionNotificationType::CompletedReview,
+                "completed_review",
+            ),
+            (AttentionNotificationType::Failed, "failed"),
+        ] {
+            let mut value = intent("attn_activation_sentinel");
+            value.attention_type = attention_type;
+            value.title = "TITLE_PRIVACY_SENTINEL".to_owned();
+            value.body = "DEVICE_PROJECT_PRIVACY_SENTINEL\nBODY_PRIVACY_SENTINEL".to_owned();
+            for repeat in [false, true] {
+                let log = notification_activated_log(&value.attention_type, repeat);
+                assert_eq!(
+                    log,
+                    format!(
+                        "[codetether:desktop] notification activated type={expected_type} repeat={repeat}"
+                    )
+                );
+                for private_value in [
+                    value.title.as_str(),
+                    "DEVICE_PROJECT_PRIVACY_SENTINEL",
+                    "BODY_PRIVACY_SENTINEL",
+                    value.attention_id.as_str(),
+                    value.project_id.as_str(),
+                    value.conversation_id.as_str(),
+                    value.turn_id.as_deref().unwrap(),
+                ] {
+                    assert!(!log.contains(private_value));
+                }
+                assert!(!log.contains('\n'));
+            }
+        }
+    }
+
+    #[test]
+    fn notification_activation_log_records_repeated_atomic_admission() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let activated = AtomicBool::new(false);
+        for expected_repeat in [false, true, true] {
+            let repeat = activated.swap(true, Ordering::AcqRel);
+            assert_eq!(repeat, expected_repeat);
+            assert_eq!(
+                notification_activated_log(&AttentionNotificationType::CompletedReview, repeat),
+                format!(
+                    "[codetether:desktop] notification activated type=completed_review repeat={expected_repeat}"
+                )
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn notification_dismissal_log_uses_only_controlled_reason_labels() {
+        use windows::UI::Notifications::ToastDismissalReason;
+
+        for (reason, label) in [
+            (Some(ToastDismissalReason::TimedOut), "TimedOut"),
+            (Some(ToastDismissalReason::UserCanceled), "UserCanceled"),
+            (
+                Some(ToastDismissalReason::ApplicationHidden),
+                "ApplicationHidden",
+            ),
+            (None, "unknown"),
+            (Some(ToastDismissalReason(12345)), "unknown"),
+        ] {
+            assert_eq!(
+                notification_dismissed_log(reason),
+                format!("[codetether:desktop] notification dismissed reason={label}")
+            );
+        }
+    }
+
+    #[test]
     fn delivery_dedupe_is_process_scoped_and_bounded() {
         let state = AttentionNotificationState::default();
         assert!(state.reserve_delivery("attn_123456"));
@@ -654,11 +1140,11 @@ mod tests {
         state.enqueue_intent(intent("attn_123456"));
         state.enqueue_intent(intent("attn_654321"));
         assert_eq!(
-            state.take_pending_intent().unwrap().attention_id,
+            state.take_pending_intent().unwrap().attention_id(),
             "attn_123456"
         );
         assert_eq!(
-            state.take_pending_intent().unwrap().attention_id,
+            state.take_pending_intent().unwrap().attention_id(),
             "attn_654321"
         );
         assert_eq!(state.take_pending_intent(), None);
@@ -667,7 +1153,7 @@ mod tests {
             state.enqueue_intent(intent(&format!("attn_{index:06}")));
         }
         assert_eq!(
-            state.take_pending_intent().unwrap().attention_id,
+            state.take_pending_intent().unwrap().attention_id(),
             "attn_000001"
         );
     }
@@ -694,10 +1180,89 @@ mod tests {
             "CodeTether & <批准>",
             "中文项目 🚀",
             Some("say \"yes\" & 'continue'"),
+            "attn_123456",
         );
         assert!(xml.contains("CodeTether &amp; &lt;批准&gt;"));
         assert!(xml.contains("中文项目 🚀"));
         assert!(xml.contains("say &quot;yes&quot; &amp; &apos;continue&apos;"));
+        assert!(xml.starts_with(
+            "<toast activationType=\"protocol\" launch=\"codetether://notification/attn_123456\">"
+        ));
+        let escaped = windows_toast_xml("title", "context", None, "attn_\"<&'");
+        assert!(
+            escaped.contains("launch=\"codetether://notification/attn_&quot;&lt;&amp;&apos;\"")
+        );
+        assert!(!xml.contains("launch=\"codetether://notification/CodeTether"));
+    }
+
+    #[test]
+    fn callback_and_link_share_one_bounded_atomic_activation_claim() {
+        for callback_first in [true, false] {
+            let state = AttentionNotificationState::default();
+            let known = NotificationClickIntent::Known(intent("attn_123456"));
+            let lookup = NotificationClickIntent::Lookup(NotificationLinkIntent {
+                attention_id: "attn_123456".into(),
+            });
+            let arrivals = if callback_first {
+                [known, lookup]
+            } else {
+                [lookup, known]
+            };
+            for arrival in arrivals {
+                if state.reserve_activation(arrival.attention_id()) {
+                    state.enqueue_click(arrival);
+                }
+            }
+            assert!(state.take_pending_intent().is_some());
+            assert!(state.take_pending_intent().is_none());
+        }
+        let state = AttentionNotificationState::default();
+        let workers = (0..16)
+            .map(|_| {
+                let state = state.clone();
+                std::thread::spawn(move || state.reserve_activation("attn_123456"))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            workers
+                .into_iter()
+                .filter_map(|worker| worker.join().ok())
+                .filter(|admitted| *admitted)
+                .count(),
+            1
+        );
+        for index in 0..MAX_ACTIVATED_ATTENTION_IDS {
+            assert!(state.reserve_activation(&format!("attn_{index:06}")));
+        }
+        assert!(state.reserve_activation("attn_123456"));
+    }
+
+    #[test]
+    fn cold_links_are_id_only_and_known_notification_intents_stay_bounded() {
+        let state = AttentionNotificationState::default();
+        assert_eq!(state.find_intent("attn_123456"), None);
+        let lookup = NotificationClickIntent::Lookup(NotificationLinkIntent {
+            attention_id: "attn_123456".into(),
+        });
+        assert_eq!(
+            serde_json::to_value(&lookup).unwrap(),
+            serde_json::json!({"attentionId":"attn_123456"})
+        );
+        assert!(
+            serde_json::from_value::<NotificationClickIntent>(
+                serde_json::json!({"attentionId":"attn_123456", "command":"approve"})
+            )
+            .is_err()
+        );
+        state.remember_intent(intent("attn_123456"));
+        assert_eq!(
+            state.find_intent("attn_123456"),
+            Some(intent("attn_123456"))
+        );
+        for index in 0..MAX_DELIVERED_ATTENTION_IDS {
+            state.remember_intent(intent(&format!("attn_{index:06}")));
+        }
+        assert_eq!(state.find_intent("attn_123456"), None);
     }
 
     #[cfg(windows)]

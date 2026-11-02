@@ -6,6 +6,8 @@ import {
   AgentIdentityMark,
   Badge,
   ConversationItem,
+  SessionItem,
+  StatusBadge,
   agentDefinitions,
   cn,
 } from '@codetether/ui'
@@ -18,6 +20,7 @@ import {
 import {
   formatConversationActivity,
   formatConversationArchivedAt,
+  providerDisplayName,
 } from './conversation-list-model'
 import { providerAgentId } from '../../provider/provider-presentation'
 
@@ -98,6 +101,7 @@ interface ConversationRowProps {
   conversation: ConversationSummary
   selected: boolean
   showUnpinnedDivider: boolean
+  showProvider?: boolean
 }
 
 function ConversationRow({
@@ -105,6 +109,7 @@ function ConversationRow({
   conversation,
   selected,
   showUnpinnedDivider,
+  showProvider = false,
 }: ConversationRowProps) {
   const rowRef = useRef<HTMLLIElement>(null)
   const [restoreError, setRestoreError] = useState<string>()
@@ -128,9 +133,30 @@ function ConversationRow({
     <ConversationOrganizationMenu
       conversation={conversation}
       showRestoreAction={!archived}
+      quickActions={!archived}
       onArchived={focusAdjacentRow}
       onUnarchived={focusAdjacentRow}
     />
+  )
+
+  const organizationActions = archived ? (
+    <div className="flex w-max items-center gap-1">
+      <ConversationRestoreButton
+        conversation={conversation}
+        size="sm"
+        onRestoreError={setRestoreError}
+        onRestored={focusAdjacentRow}
+        showInlineError={false}
+      />
+      {menu}
+    </div>
+  ) : (
+    <div className="flex w-max items-center gap-1 min-[601px]:opacity-0 min-[601px]:group-hover/conversation-row:opacity-100 min-[601px]:group-focus-within/conversation-row:opacity-100">
+      {conversation.pinnedAt === undefined ? null : (
+        <Pin aria-label="已置顶" className="size-3.5 text-text-muted" />
+      )}
+      {menu}
+    </div>
   )
 
   return (
@@ -145,69 +171,88 @@ function ConversationRow({
           <span className="h-px flex-1 bg-border" />
         </li>
       ) : null}
-      <li ref={rowRef} data-conversation-row={conversation.conversationId}>
-        <ConversationItem
-          appearance="row"
-          title={conversation.title}
-          description={
-            archived && conversation.archivedAt !== undefined
-              ? `归档于 ${formatConversationArchivedAt(conversation.archivedAt)}`
-              : undefined
-          }
-          status={conversation.status}
-          model={conversation.model}
-          activity={formatConversationActivity(conversation.lastActivityAt)}
-          activityDetail={
-            archived
-              ? '最近活动'
-              : conversation.pinnedAt === undefined
-                ? undefined
-                : '已置顶'
-          }
-          selected={selected}
-          className={cn(archived ? 'pr-36' : conversation.pinnedAt && 'pr-12')}
-          primaryAction={
-            <Link
-              to="/conversations/$conversationId"
-              params={{
-                conversationId: conversation.conversationId,
-              }}
-              data-conversation-primary-action
-              aria-label={`打开会话：${conversation.title}`}
-              title={conversation.title}
-              className="absolute inset-0 z-0 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
-            />
-          }
-          action={
-            archived ? (
-              <div className="absolute right-0 flex w-max items-center gap-1">
-                <ConversationRestoreButton
-                  conversation={conversation}
-                  size="sm"
-                  className="h-7 px-2 text-xs"
-                  onRestoreError={setRestoreError}
-                  onRestored={focusAdjacentRow}
-                  showInlineError={false}
-                />
-                {menu}
-              </div>
-            ) : (
-              <div className="absolute right-0 flex w-max items-center gap-1">
-                {conversation.pinnedAt === undefined ? null : (
-                  <Pin
-                    aria-label="已置顶"
-                    className="size-3.5 text-text-muted"
-                  />
-                )}
-                {menu}
-              </div>
-            )
-          }
-        />
+      <li
+        ref={rowRef}
+        className="group/conversation-row"
+        data-conversation-row={conversation.conversationId}
+      >
+        {showProvider ? (
+          <SessionItem
+            title={conversation.title}
+            leading={
+              <AgentIdentityMark
+                agent={providerAgentId(conversation.provider)}
+                className="size-7 rounded-sm"
+              />
+            }
+            metadata={
+              <span className="truncate">
+                {providerDisplayName(conversation.provider)}
+                {archived && conversation.archivedAt !== undefined
+                  ? ` · 归档于 ${formatConversationArchivedAt(conversation.archivedAt)}`
+                  : ''}
+              </span>
+            }
+            status={<StatusBadge status={conversation.status} />}
+            activity={
+              <time dateTime={conversation.lastActivityAt}>
+                {formatConversationActivity(conversation.lastActivityAt)}
+              </time>
+            }
+            primaryAction={
+              <Link
+                to="/c/$conversationId"
+                params={{ conversationId: conversation.conversationId }}
+                data-conversation-primary-action
+                aria-label={`打开会话：${conversation.title}`}
+                title={conversation.title}
+                className="absolute inset-0 z-0 rounded-xs outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+              />
+            }
+            actions={organizationActions}
+          />
+        ) : (
+          <ConversationItem
+            appearance="row"
+            title={conversation.title}
+            description={
+              archived && conversation.archivedAt !== undefined
+                ? `归档于 ${formatConversationArchivedAt(conversation.archivedAt)}`
+                : undefined
+            }
+            status={conversation.status}
+            model={conversation.model}
+            activity={formatConversationActivity(conversation.lastActivityAt)}
+            activityDetail={
+              archived
+                ? '最近活动'
+                : conversation.pinnedAt === undefined
+                  ? undefined
+                  : '已置顶'
+            }
+            selected={selected}
+            className={cn(
+              archived ? 'pr-36' : conversation.pinnedAt && 'pr-12',
+            )}
+            primaryAction={
+              <Link
+                to="/c/$conversationId"
+                params={{
+                  conversationId: conversation.conversationId,
+                }}
+                data-conversation-primary-action
+                aria-label={`打开会话：${conversation.title}`}
+                title={conversation.title}
+                className="absolute inset-0 z-0 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+              />
+            }
+            action={organizationActions}
+          />
+        )}{' '}
         {restoreError === undefined ? null : (
           <p
             role="alert"
-            className="mt-1 rounded-sm border border-danger/30 bg-danger-muted px-3 py-2 text-sm text-danger"
+            className="mt-1 rounded-sm border border-danger/30 bg-danger-muted px-3 py-2 text-sm text-danger-text"
           >
             {restoreError}
           </p>
@@ -233,3 +278,26 @@ function findAdjacentConversationAction(
 }
 
 export type { ConversationGroupProps }
+
+export function ConversationRows({
+  archiveView = 'active',
+  conversations,
+}: {
+  archiveView?: 'active' | 'archived'
+  conversations: readonly ConversationSummary[]
+}) {
+  return (
+    <ul className="min-w-0 overflow-hidden rounded-lg border border-border bg-surface [&>li:first-child_article]:border-t-0">
+      {conversations.map((conversation) => (
+        <ConversationRow
+          key={conversation.conversationId}
+          archiveView={archiveView}
+          conversation={conversation}
+          selected={false}
+          showUnpinnedDivider={false}
+          showProvider
+        />
+      ))}
+    </ul>
+  )
+}

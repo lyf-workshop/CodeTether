@@ -374,11 +374,11 @@ test('Provider lifecycle presentation covers installation absence and every back
   }
 
   const backendModes = {
-    first_party: 'Provider 官方服务',
+    first_party: 'AI 工具官方服务',
     custom_gateway: '自定义网关',
     bedrock: 'Amazon Bedrock',
     vertex: 'Google Vertex AI',
-    unknown: '后端模式未知',
+    unknown: 'AI 服务类型未知',
   }
   for (const [mode, label] of Object.entries(backendModes)) {
     const lifecycle = providerLifecycle('claude-code', {

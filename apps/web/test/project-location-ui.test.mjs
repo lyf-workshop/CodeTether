@@ -2,81 +2,97 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import test from 'node:test'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { loadWebComponent } from './fixtures/render-ui.mjs'
 
 const sourceRoot = resolve(import.meta.dirname, '../src')
 
-test('Project Detail presents every durable Machine location without choosing a sole path', async () => {
-  const [detail, locations, row, projectsPage] = await Promise.all([
+test('Project Detail requires an explicit device for legacy multi-location Projects', async () => {
+  const [detail, model] = await Promise.all([
     source('components/projects/project-detail-page.tsx'),
-    source('components/projects/project-locations-section.tsx'),
-    source('components/projects/project-row.tsx'),
-    source('components/projects/projects-page.tsx'),
+    source('components/projects/project-workspace-model.ts'),
   ])
-
-  assert.match(detail, /<ProjectLocationsSection/u)
-  assert.match(detail, /project\.locations\.length/u)
-  assert.doesNotMatch(detail, /soleProjectLocation/u)
-  assert.match(locations, /project\.locations\.map/u)
-  assert.match(locations, /key=\{location\.machineId\}/u)
-  assert.match(locations, /to="\/machines\/\$machineId"/u)
-  assert.match(locations, /远程电脑当前离线/u)
-  assert.match(locations, /truncate/u)
-  assert.match(row, /primaryProjectLocation/u)
-  assert.match(row, /共 \{project\.locations\.length\} 个位置/u)
-  assert.doesNotMatch(projectsPage, /soleProjectLocation/u)
+  assert.match(detail, /resolveProjectWorkspaceContext\(/u)
+  assert.match(detail, /project\.locations\.map/u)
+  assert.match(detail, /key=\{location\.machineId\}/u)
+  assert.match(detail, /machineId: location\.machineId/u)
+  assert.match(detail, /currentMachineId=\{location\.machineId\}/u)
+  assert.match(detail, /title=\{location\.rootPath\}/u)
+  assert.match(detail, /选择要查看的设备/u)
+  assert.match(model, /project\.locations\.length !== 1/u)
+  assert.match(model, /kind: 'choose-device'/u)
+  assert.doesNotMatch(
+    detail,
+    /soleProjectLocation|primaryProjectLocation|AddProjectLocationDialog|RemoveProjectLocationDialog/u,
+  )
 })
 
-test('Add Location is a bounded, keyboard-accessible remote path registration flow', async () => {
-  const dialog = await source(
-    'components/projects/add-project-location-dialog.tsx',
+test('Add Project uses keyboard-accessible exact remote path entry without local directory browsing', () => {
+  const { AddProjectFields } = loadWebComponent(
+    'components/projects/add-project-fields.tsx',
   )
-
-  assert.match(dialog, /runtime\.registerProjectLocation/u)
-  assert.match(dialog, /runtime\.createRemoteProject/u)
-  assert.match(dialog, /createNewProject/u)
-  assert.match(dialog, /machine\.capabilities\.projectAccess/u)
-  assert.match(dialog, /machine\.connectionState === 'online'/u)
-  assert.match(dialog, /registeredMachineIds\.has/u)
-  assert.match(dialog, /candidates\.find/u)
-  assert.match(dialog, /machine\.connectionState === 'online'/u)
-  assert.match(dialog, /aria-label="选择远程电脑"/u)
-  assert.match(dialog, /ref=\{pathInputRef\}/u)
-  assert.match(dialog, /onOpenAutoFocus/u)
-  assert.match(dialog, /if \(!machineReady\) return/u)
-  assert.match(dialog, /aria-invalid/u)
-  assert.match(dialog, /aria-describedby/u)
-  assert.match(dialog, /aria-busy=\{busy\}/u)
-  assert.match(dialog, /role="alert"/u)
-  assert.match(
-    dialog,
-    /showCloseButton=\{!busy && registeredLocation === undefined\}/u,
-  )
-  assert.match(dialog, /if \(!nextOpen && busy\) return/u)
-  assert.match(dialog, /max-w-lg overflow-x-hidden/u)
-  assert.match(dialog, /不浏览文件或执行命令/u)
-  assert.doesNotMatch(
-    dialog,
-    /directoryPicker|nativeCapabilities|shell|invoke/u,
-  )
+  const render = (busy = false) =>
+    renderToStaticMarkup(
+      createElement(AddProjectFields, {
+        machines: [],
+        machine: {
+          machineId: 'machine_remote01',
+          kind: 'remote',
+          displayName: '配对设备',
+        },
+        fixedMachine: true,
+        ready: true,
+        busy,
+        canPickDirectory: false,
+        picking: false,
+        path: '/srv/项目',
+        name: '项目',
+        hasError: false,
+        pathInputRef: { current: null },
+        pickerButtonRef: { current: null },
+        onMachineChange() {},
+        onPathChange() {},
+        onNameChange() {},
+        onPickDirectory() {
+          throw new Error('remote paths must not invoke a local picker')
+        },
+      }),
+    )
+  const html = render()
+  assert.match(html, /aria-label="已固定的设备"/u)
+  assert.match(html, /配对设备/u)
+  assert.match(html, /for="add-project-path"/u)
+  assert.match(html, /value="\/srv\/项目"/u)
+  assert.match(html, /aria-describedby="add-project-path-description"/u)
+  assert.match(html, /配对设备暂不支持浏览文件夹/u)
+  assert.doesNotMatch(html, /id="add-project-directory-picker"/u)
+  assert.match(render(true), /id="add-project-path"[^>]*disabled=""/u)
 })
 
 test('Remote Location removal is explicit, metadata-only, and keyboard accessible', async () => {
   const [locations, dialog, actions] = await Promise.all([
-    source('components/projects/project-locations-section.tsx'),
+    source('components/projects/project-location-removal-action.tsx'),
     source('components/projects/remove-project-location-dialog.tsx'),
     source('runtime/host/project-actions.ts'),
   ])
 
-  assert.match(locations, /machine\?\.kind === 'remote'/u)
-  assert.match(locations, /DropdownMenuTrigger/u)
-  assert.match(locations, /更多工作区位置操作/u)
-  assert.match(locations, /移除位置/u)
-  assert.match(locations, /onCloseAutoFocus/u)
-  assert.match(locations, /tabIndex=\{-1\}/u)
-  assert.doesNotMatch(locations, /disabled=\{!machineReachable\}/u)
+  assert.match(
+    locations,
+    /machine\.kind !== 'remote' \|\| location === undefined/u,
+  )
+  assert.match(
+    locations,
+    /projectLocationForMachine\(project, machine\.machineId\)/u,
+  )
+  assert.match(locations, /从这台设备移除/u)
+  assert.match(locations, /allProjectConversationsQueryOptions/u)
+  assert.match(locations, /conversation\.machineId === machine\.machineId/u)
+  assert.match(locations, /conversation\.archivedAt !== undefined/u)
+  assert.match(locations, /triggerRef\.current \?\? returnFocus\?\.\(\)/u)
 
   assert.match(dialog, /runtime\.removeProjectLocation/u)
-  assert.match(dialog, /移除工作区位置/u)
+  assert.match(dialog, /从这台设备移除项目/u)
   assert.match(dialog, /远程目录/u)
   assert.match(dialog, /其中的文件不会被删除/u)
   assert.match(dialog, /不会删除项目/u)
@@ -98,26 +114,32 @@ test('Remote Location removal is explicit, metadata-only, and keyboard accessibl
   assert.match(actions, /project_location_local_required/u)
 })
 
-test('Remote Machine keeps Projects readable while remote execution and destructive unpair remain capability-gated', async () => {
-  const [detail, projects, unpair] = await Promise.all([
+test('Remote Machine keeps Projects readable while execution and unpair remain capability-gated', async () => {
+  const [detail, projects, unpair, model] = await Promise.all([
     source('components/machines/machine-detail-page.tsx'),
     source('components/machines/machine-projects-section.tsx'),
     source('components/machines/unpair-machine-dialog.tsx'),
+    source('components/machines/device-project-model.ts'),
   ])
-
-  assert.match(detail, /projects=\{machineQuery\.data\.projects\}/u)
   assert.match(
     detail,
-    /<MachineProjectsSection machine=\{machine\} projects=\{projects\}/u,
+    /<MachineProjectsSection\s+machine=\{machine\}\s+projects=\{projects\}/u,
   )
   assert.match(detail, /machine\.capabilities\.providerExecution/u)
-  assert.match(detail, /当前连接或 Agent 尚未满足远程执行条件/u)
-  assert.match(detail, /disabled=\{projects\.length > 0\}/u)
-  assert.match(projects, /projects\.map/u)
+  assert.match(detail, /这台设备当前不能运行 AI 工具/u)
+  assert.match(projects, /ownProjects\.map/u)
   assert.match(projects, /projectLocationForMachine/u)
-  assert.match(unpair, /projectCount > 0/u)
-  assert.match(unpair, /请先在对应的项目详情中明确移除这些位置/u)
-  assert.match(unpair, /取消配对不会自动删除位置/u)
+  assert.match(projects, /machineId: machine\.machineId/u)
+  assert.match(unpair, /unpairMachinePreflight/u)
+  assert.match(unpair, /preflight\.projects\.map/u)
+  assert.match(unpair, /blocked\s*\?\s*\(\s*<DialogClose/u)
+  assert.match(unpair, /知道了/u)
+  assert.match(unpair, /取消配对不会自动移除项目/u)
+  assert.match(model, /blocked: bound\.length > 0/u)
+  assert.doesNotMatch(
+    detail + projects,
+    /AddProjectLocationDialog|RemoveProjectLocationDialog/u,
+  )
 })
 
 async function source(relativePath) {

@@ -1,11 +1,5 @@
 import type { Ref } from 'react'
-import {
-  LoaderCircle,
-  MoreHorizontal,
-  PanelRightClose,
-  PanelRightOpen,
-  Pause,
-} from 'lucide-react'
+import { MoreHorizontal, PanelRightClose, PanelRightOpen } from 'lucide-react'
 import {
   ConversationIdSchema,
   type ConversationSummary,
@@ -13,25 +7,20 @@ import {
 } from '@codetether/protocol'
 import {
   IconButton,
+  StatusBadge,
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from '@codetether/ui'
 
-import type { InterruptController } from './conversation-controls'
-import type {
-  ConversationCapabilitiesViewModel,
-  ConversationViewModel,
-} from './conversation-view-model'
+import type { ConversationViewModel } from './conversation-view-model'
 import { organizationConversationStatus } from './conversation-view-model'
 import { ConversationOrganizationMenu } from '../conversations/conversation-organization-controls'
 
 interface ConversationChromeActionsProps {
   conversation: ConversationViewModel
-  capabilities: ConversationCapabilitiesViewModel
   inspectorOpen: boolean
   inspectorTriggerRef?: Ref<HTMLButtonElement>
-  interruptController?: InterruptController
   projectId?: ProjectId
   onArchived?: (conversation: ConversationSummary) => void
   onToggleInspector: () => void
@@ -39,52 +28,18 @@ interface ConversationChromeActionsProps {
 
 export function ConversationChromeActions({
   conversation,
-  capabilities,
   inspectorOpen,
   inspectorTriggerRef,
-  interruptController,
   projectId,
   onArchived,
   onToggleInspector,
 }: ConversationChromeActionsProps) {
   const conversationId = ConversationIdSchema.safeParse(conversation.id)
-  const inspectorLabel = inspectorOpen ? '隐藏检查器' : '显示检查器'
-  const interruptLabel = interruptController?.pending
-    ? '正在中断当前运行'
-    : '中断当前运行'
+  const inspectorLabel = inspectorOpen ? '隐藏文件面板' : '显示文件面板'
 
   return (
     <>
-      {capabilities.supportsInterrupt ? (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <IconButton
-              label={interruptLabel}
-              variant="ghost"
-              size="sm"
-              className="size-8 text-text-secondary"
-              disabled={
-                !capabilities.canInterrupt ||
-                interruptController?.pending === true
-              }
-              onClick={() => {
-                void interruptController?.execute()
-              }}
-            >
-              {interruptController?.pending ? (
-                <LoaderCircle
-                  aria-hidden="true"
-                  className="animate-spin motion-reduce:animate-none"
-                />
-              ) : (
-                <Pause aria-hidden="true" />
-              )}
-            </IconButton>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">{interruptLabel}</TooltipContent>
-        </Tooltip>
-      ) : null}
-
+      <StatusBadge status={conversation.status} className="shrink-0" />
       <Tooltip>
         <TooltipTrigger asChild>
           <IconButton

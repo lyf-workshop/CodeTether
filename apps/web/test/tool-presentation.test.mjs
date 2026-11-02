@@ -154,7 +154,7 @@ test('keeps raw commands and reduces failure output to a stable short subtitle',
   assert.deepEqual(presentation, {
     kind: 'read-file',
     title: '读取文件',
-    subtitle: 'Path not found',
+    subtitle: '找不到路径',
     rawCommand: command,
   })
   assert.equal(presentation.subtitle?.includes('CategoryInfo'), false)
@@ -166,7 +166,7 @@ test('keeps raw commands and reduces failure output to a stable short subtitle',
       outputSummary:
         'FullyQualifiedErrorId : PathNotFound,Microsoft.PowerShell.Commands.GetContentCommand',
     }).subtitle,
-    'Path not found',
+    '找不到路径',
   )
 
   assert.equal(
@@ -175,7 +175,7 @@ test('keeps raw commands and reduces failure output to a stable short subtitle',
       status: 'failed',
       outputSummary: 'Process exited with code 2',
     }).subtitle,
-    'Exited with code 2',
+    '命令已退出，退出码 2',
   )
 })
 

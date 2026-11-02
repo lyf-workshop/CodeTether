@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
+import { readWorkspaceSidebarSource } from './fixtures/workspace-sidebar-source.mjs'
 
 const conversationComponents = new URL(
   '../src/components/conversation/',
@@ -10,10 +11,19 @@ const conversationComponents = new URL(
 test('Archived Detail keeps history visible and replaces input with explicit restore controls', async () => {
   const source = await sourceOf('conversation-workspace.tsx')
 
-  assert.match(source, /此会话已归档/u)
-  assert.match(source, /历史记录仍然可查看。恢复后可以继续与当前智能体对话。/u)
+  const composer = await sourceOf('composer.tsx')
+  const gate = await sourceOf('conversation-gate-presentation.ts')
+  assert.match(gate, /此会话已归档/u)
+  assert.match(gate, /历史记录仍可查看。恢复后可以继续发送消息。/u)
   assert.match(source, /<ConversationTimeline/u)
-  assert.match(source, /<ArchivedComposer/u)
+  assert.match(source, /<Composer/u)
+  assert.match(source, /archived=\{archived\}/u)
+  assert.match(composer, /hidden=\{editorHidden\}/u)
+  assert.match(
+    composer,
+    /gate\?\.kind === 'archived' \|\| gate\?\.kind === 'unavailable'/u,
+  )
+  assert.match(composer, /<Textarea/u)
   assert.match(source, /<ConversationRestoreButton/u)
   assert.match(source, /viewModel\.archivedAt === undefined/u)
 })
@@ -35,40 +45,37 @@ test('Detail organization actions use one shared control and archive into the UR
 
   assert.match(chromeActions, /ConversationOrganizationMenu/u)
   assert.match(chromeActions, /label="管理会话"/u)
-  assert.match(route, /search: \{ view: 'archived' \}/u)
+  assert.match(
+    route,
+    /search: \{ view: 'archived', machineId: owningMachineId \}/u,
+  )
   assert.match(route, /if \(current\.archivedAt !== undefined\)/u)
 })
 
-test('Workspace Sidebar separates the current archived Conversation from active rows', async () => {
+test('Workspace Sidebar explicitly identifies the current archived Conversation beside active history', async () => {
   const [sidebar, rootLayout] = await Promise.all([
-    readFile(
-      new URL(
-        '../src/components/app-shell/workspace-sidebar.tsx',
-        import.meta.url,
-      ),
-      'utf8',
-    ),
+    readWorkspaceSidebarSource(),
     readFile(
       new URL('../src/components/app-shell/root-layout.tsx', import.meta.url),
       'utf8',
     ),
   ])
 
-  assert.match(sidebar, /currentArchivedConversation/u)
+  assert.match(sidebar, /workspaceLocationConversations/u)
   assert.match(sidebar, /当前已归档/u)
   assert.match(sidebar, /查看已归档会话/u)
   assert.match(rootLayout, /currentConversation=\{currentConversation\}/u)
 })
 
-test('1100-width overlay boundary and stable Workspace rows remain intact', async () => {
+test('1000-width overlay boundary and stable Workspace rows remain intact', async () => {
   const [detail, workspace] = await Promise.all([
     sourceOf('conversation-detail-page.tsx'),
     sourceOf('conversation-workspace.tsx'),
   ])
 
-  assert.match(detail, /max-width: 1439px/u)
+  assert.match(detail, /max-width: 1000px/u)
   assert.match(detail, /minmax\(0,1fr\)/u)
-  assert.match(workspace, /grid-rows-\[auto_minmax\(0,1fr\)_auto_auto\]/u)
+  assert.match(workspace, /grid-rows-\[minmax\(0,1fr\)_auto_auto\]/u)
   assert.match(workspace, /min-w-0/u)
 })
 

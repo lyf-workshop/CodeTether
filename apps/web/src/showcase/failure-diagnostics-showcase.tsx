@@ -187,7 +187,7 @@ const scenarios = [
   },
   {
     id: 'startup',
-    label: 'Provider startup failure',
+    label: 'AI 工具启动失败',
     reason: 'provider_start_failed',
     hostCode: 'provider_start_failed',
     providerName: 'Codex',
@@ -306,7 +306,7 @@ function FailureDiagnosticsShowcase() {
             故障诊断与恢复 UX 验证
           </h1>
           <p className="mt-2 max-w-3xl text-sm leading-relaxed text-text-secondary">
-            此页面复用正式故障呈现、失败卡片和执行健康映射。原始 Provider
+            此页面复用正式故障呈现、失败卡片和执行健康映射。原始 AI 工具
             文本不会进入页面或恢复策略。
           </p>
         </header>
@@ -357,7 +357,7 @@ function FailureDiagnosticsShowcase() {
 
           <output
             aria-live="polite"
-            className="mt-3 block min-h-5 text-xs text-success"
+            className="mt-3 block min-h-5 text-xs text-success-text"
           >
             {newTurnCount > 0
               ? `已通过明确操作创建新的逻辑轮次与 actionId（次数 ${newTurnCount}）；旧失败轮次保持不变。`

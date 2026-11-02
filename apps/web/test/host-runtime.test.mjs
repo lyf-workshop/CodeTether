@@ -23,6 +23,49 @@ const replacementConversationId = 'conv_runtime02'
 const turnId = 'turn_runtime01'
 const itemId = 'item_runtime01'
 
+test('keeps an unobserved runtime projection after five idle minutes', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const queryClient = createQueryClient()
+  // Match the browser default; Node would otherwise use an infinite gcTime.
+  queryClient.setDefaultOptions({
+    queries: { ...queryClient.getDefaultOptions().queries, gcTime: 300_000 },
+  })
+  const client = new FakeHostClient({})
+  const runtime = new HostRuntime({ queryClient, client })
+  t.after(async () => {
+    await runtime.stop()
+    queryClient.clear()
+  })
+
+  const projection = {
+    cursor: { epoch: epochA, seq: 0 },
+    conversations: {},
+  }
+  queryClient.setQueryData(hostQueryKeys.projection, projection)
+  t.mock.timers.tick(301_000)
+
+  assert.strictEqual(readHostProjection(queryClient), projection)
+})
+
+test('collects an unowned projection after five idle minutes', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const queryClient = createQueryClient()
+  // Match the browser default; Node would otherwise use an infinite gcTime.
+  queryClient.setDefaultOptions({
+    queries: { ...queryClient.getDefaultOptions().queries, gcTime: 300_000 },
+  })
+  t.after(() => queryClient.clear())
+
+  const projection = {
+    cursor: { epoch: epochA, seq: 0 },
+    conversations: {},
+  }
+  queryClient.setQueryData(hostQueryKeys.projection, projection)
+  t.mock.timers.tick(301_000)
+
+  assert.equal(readHostProjection(queryClient), undefined)
+})
+
 test('bootstraps and snapshots through QueryClient before opening one stream', async (t) => {
   const stream = new ControlledStream()
   const client = new FakeHostClient({

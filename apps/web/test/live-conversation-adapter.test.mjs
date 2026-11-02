@@ -269,7 +269,7 @@ test('uses semantic Tool titles and keeps failure output out of the row title', 
   assert.deepEqual(
     tools.map((entry) => [entry.title, entry.description, entry.outputSummary]),
     [
-      ['读取文件', undefined, 'Path not found'],
+      ['读取文件', undefined, '找不到路径'],
       ['执行命令', undefined, undefined],
     ],
   )

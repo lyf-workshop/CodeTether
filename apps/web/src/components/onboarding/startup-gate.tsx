@@ -56,9 +56,9 @@ export function StartupGate() {
 
   if (onboardingQuery.data !== undefined) {
     return onboardingQuery.data.step === 'ready' ? (
-      <Navigate to="/hosts" replace />
+      <Navigate to="/devices" replace />
     ) : (
-      <Navigate to="/setup" replace />
+      <Navigate to="/onboarding" replace />
     )
   }
 
@@ -72,7 +72,7 @@ export function StartupGate() {
 
   return (
     <div
-      className="grid min-h-[50vh] place-items-center"
+      className="grid min-h-(--layout-startup-min-height) place-items-center"
       role={blocked ? 'alert' : 'status'}
       aria-live="polite"
     >

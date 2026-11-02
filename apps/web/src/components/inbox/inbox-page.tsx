@@ -12,7 +12,7 @@ import {
 import { attentionErrorMessage } from '../../runtime/host/attention-actions'
 import { mutationErrorMessage } from '../../runtime/host/live-conversation-actions'
 import {
-  acknowledgeFailedAttention,
+  acknowledgeInboxAttention,
   resolveInboxApproval,
   reviewCompletedAttention,
 } from './inbox-actions'
@@ -31,7 +31,6 @@ import {
 import { InboxErrorState, InboxLoadingState } from './inbox-page-states'
 import { InboxSummary } from './inbox-summary'
 import { useInboxMetadata } from './use-inbox-metadata'
-import { providerPresentation } from '../../provider/provider-presentation'
 
 const emptyMutationStates: Readonly<Record<string, InboxItemMutationState>> = {}
 const emptyAttentionItems: readonly AttentionItem[] = []
@@ -71,12 +70,9 @@ export function InboxPage() {
   const controlsEnabled = connectionState === 'connected'
 
   function approvalEnabled(item: AttentionItem): boolean {
-    const provider = metadata.get(String(item.attentionId))?.provider ?? 'codex'
-    const presentation = providerPresentation(runtime.bootstrap, provider)
     return (
       controlsEnabled &&
-      presentation.available &&
-      presentation.capabilities.approvals
+      metadata.get(String(item.attentionId))?.approvalSupported === true
     )
   }
 
@@ -178,19 +174,24 @@ export function InboxPage() {
     mutationGuards.current.add(attentionId)
     setMutation(attentionId, { pending: true, action })
     try {
-      if (item.type === 'completed_review') {
+      if (item.type === 'completed_review' && action === 'review') {
         await reviewCompletedAttention(
           runtime,
           item,
-          async (conversationId, turnId) =>
+          async (conversationId, turnId, reviewFailed) =>
             await navigate({
-              to: '/conversations/$conversationId',
+              to: '/c/$conversationId',
               params: { conversationId },
-              search: turnId === undefined ? {} : { turn: turnId },
+              search: {
+                ...(turnId === undefined ? {} : { turn: turnId }),
+                ...(reviewFailed
+                  ? { attentionReview: 'unresolved' as const }
+                  : {}),
+              },
             }),
         )
       } else {
-        await acknowledgeFailedAttention(runtime, item)
+        await acknowledgeInboxAttention(runtime, item)
       }
       // Failed Attention remains visible until attention.resolved is observed.
     } catch (error) {
@@ -218,18 +219,18 @@ export function InboxPage() {
       connectionState === 'reconnecting')
 
   return (
-    <div className="flex min-h-full min-w-0 flex-col px-[var(--layout-content-inline-padding)] py-[var(--layout-inbox-page-block-padding)]">
+    <div className="mx-auto flex min-h-full w-full max-w-[var(--page-w)] min-w-0 flex-col px-[var(--layout-content-inline-padding)] py-[var(--layout-inbox-page-block-padding)]">
       <header className="flex min-h-[var(--layout-inbox-header-height)] min-w-0 items-start justify-between gap-6">
         <div className="min-w-0">
-          <h1 className="text-page font-semibold text-text-primary">收件箱</h1>
+          <h1 className="text-page font-semibold text-text-primary">待处理</h1>
           <p className="mt-0.5 text-sm font-regular text-text-secondary">
-            所有需要你处理或查看的智能体事项。
+            需要你批准、查看或处理失败的事情。
           </p>
         </div>
         {connectionState === 'reconnecting' && response !== undefined ? (
           <p
             role="status"
-            className="shrink-0 rounded-full border border-warning/30 bg-warning-muted px-3 py-1 text-xs text-warning"
+            className="shrink-0 rounded-full border border-warning/30 bg-warning-muted px-3 py-1 text-xs text-warning-text"
           >
             正在重新连接
           </p>
@@ -245,7 +246,10 @@ export function InboxPage() {
         ) : loading ? (
           <InboxLoadingState />
         ) : response === undefined ? (
-          <InboxErrorState title="无法读取收件箱" onRetry={handleRetry} />
+          <InboxErrorState
+            readFailure={connectionState === 'connected'}
+            onRetry={handleRetry}
+          />
         ) : model === undefined ? null : (
           <>
             <div ref={filtersRef}>
@@ -271,7 +275,7 @@ export function InboxPage() {
               className="mt-[var(--layout-inbox-summary-filter-gap)]"
             >
               {model.items.length > 0 ? (
-                <ol className="space-y-[var(--layout-inbox-item-gap)]">
+                <ol className="divide-y divide-border overflow-hidden rounded-md border border-border">
                   {model.items.map((item, index) => {
                     const attentionId = String(item.attentionId)
                     return (
@@ -319,7 +323,7 @@ export function InboxPage() {
 
       <p className="sr-only" role="status" aria-live="polite">
         {model === undefined
-          ? '正在读取收件箱'
+          ? '正在读取待处理事项'
           : `当前显示 ${model.items.length} 个待处理事项`}
       </p>
     </div>

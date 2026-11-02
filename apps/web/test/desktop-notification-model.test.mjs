@@ -18,6 +18,7 @@ const turnId = 'turn_notification01'
 test('maps only durable Attention type and safe product metadata to notification copy', () => {
   const metadata = {
     projectName: '中文项目',
+    machineName: 'Windows 电脑',
     conversationTitle: '修复 Windows 登录后的自动重连问题 🚀',
   }
 
@@ -37,7 +38,7 @@ test('maps only durable Attention type and safe product metadata to notification
     conversationId,
     turnId,
     title: 'CodeTether · 需要批准',
-    body: '中文项目 · 修复 Windows 登录后的自动重连问题 🚀\n智能体正在等待你的确认',
+    body: 'Windows 电脑 · 中文项目\nAI 工具正在等待你的确认',
   })
   assert.doesNotMatch(approval.body, /secret-wrapper/u)
 
@@ -48,7 +49,7 @@ test('maps only durable Attention type and safe product metadata to notification
     metadata,
   )
   assert.equal(completed.title, 'CodeTether · 工作已完成')
-  assert.match(completed.body, /智能体已完成本轮工作$/u)
+  assert.match(completed.body, /AI 工具已完成本轮工作$/u)
 
   const failed = createNotificationIntent(
     attention('failed', {
@@ -102,7 +103,7 @@ test('failure notifications never expose a Prompt-derived Conversation title', (
     },
   )
 
-  assert.match(failed.body, /^Safe project\n/u)
+  assert.match(failed.body, /^设备 · Safe project\n/u)
   assert.doesNotMatch(
     `${failed.title}\n${failed.body}`,
     /Prompt|Authorization|Bearer|owner-token|script|alert/u,
@@ -124,7 +125,7 @@ test('clamps long labels by grapheme without splitting Unicode emoji', () => {
     },
   )
   const [contextLine] = intent.body.split('\n')
-  assert.ok(contextLine.includes('… · '))
+  assert.equal(contextLine.includes(' · '), true)
   assert.ok(contextLine.endsWith('…'))
   assert.equal(contextLine.includes('\uFFFD'), false)
   assert.ok(Array.from(intent.body).length <= 256)
@@ -232,3 +233,63 @@ function attention(type, payload) {
     payload,
   }
 }
+
+test('short and legacy Conversation URLs suppress the same exact foreground notification', () => {
+  const item = attention('completed_review')
+  const window = { focused: true, visible: true, minimized: false }
+  for (const pathname of [
+    '/c/' + conversationId,
+    '/conversations/' + conversationId,
+  ]) {
+    const surface = notificationSurfaceFromPathname(pathname)
+    assert.deepEqual(surface, { kind: 'conversation', conversationId })
+    assert.equal(
+      shouldSuppressAttentionNotification(item, { surface, window }),
+      true,
+    )
+    assert.equal(
+      shouldSuppressAttentionNotification(item, {
+        surface,
+        window: { ...window, focused: false },
+      }),
+      false,
+    )
+  }
+  assert.deepEqual(
+    notificationSurfaceFromPathname('/c/' + conversationId + '/other'),
+    { kind: 'other' },
+  )
+})
+
+test('all system notification types omit every Prompt-derived title even from hostile metadata getters', () => {
+  for (const type of ['approval', 'completed_review', 'failed']) {
+    const payload =
+      type === 'approval'
+        ? {
+            approvalId: 'approval_safe',
+            kind: 'command',
+            actionTitle: 'secret command',
+          }
+        : type === 'failed'
+          ? {
+              conversationTitle: 'secret prompt',
+              error: { code: 'provider_error', message: 'private diagnostic' },
+            }
+          : { conversationTitle: 'secret prompt' }
+    const metadata = {
+      projectName: '安全项目',
+      get conversationTitle() {
+        throw new Error('Conversation title must never be read')
+      },
+    }
+    const intent = createNotificationIntent(attention(type, payload), metadata)
+    assert.match(intent.body, /^设备 · 安全项目\n/u)
+    assert.doesNotMatch(
+      intent.title + intent.body,
+      /secret|private diagnostic|command|prompt/u,
+    )
+    assert.equal(intent.conversationId, conversationId)
+    assert.equal(intent.projectId, projectId)
+    assert.equal(intent.turnId, turnId)
+  }
+})

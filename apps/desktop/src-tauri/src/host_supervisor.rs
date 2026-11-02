@@ -1192,6 +1192,8 @@ fn finish_desktop_initialization(
         state.surface_initialized.store(true, Ordering::Release);
         lock(&state.lifecycle).mark_window_visible();
         log_lifecycle_event("desktop_ready", &state, serde_json::json!({}));
+        #[cfg(windows)]
+        crate::notification_links::handle_arguments(&app, &std::env::args().collect::<Vec<_>>());
         Ok::<(), (StartupFailureKind, String)>(())
     })();
     if let Err((failure, error)) = initialization {
@@ -1262,21 +1264,31 @@ pub fn run_desktop() {
         std::env::consts::OS,
         std::env::consts::ARCH
     );
-    let app = tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+    let builder = tauri::Builder::default()
+        .manage(AttentionNotificationState::default())
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            #[cfg(windows)]
+            if crate::notification_links::handle_arguments(app, &args) {
+                return;
+            }
+            #[cfg(not(windows))]
+            let _ = args;
             if let Err(error) = show_main_window(app) {
                 eprintln!(
                     "[codetether:desktop] could not restore the main window for a second launch: {error}"
                 );
             }
-        }))
-        .plugin(tauri_plugin_notification::init())
+        }));
+    #[cfg(windows)]
+    let builder = builder.plugin(tauri_plugin_deep_link::init());
+    let app = builder.plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
             crate::project_directory_picker::pick_project_directory,
             crate::provider_guidance::open_provider_guidance,
             crate::attention_notifications::deliver_attention_notification,
+            crate::attention_notifications::log_notification_stage,
             crate::attention_notifications::take_pending_notification_intent,
             crate::product_device_key_store::product_device_key_list,
             crate::product_device_key_store::product_device_key_create,
@@ -1310,8 +1322,8 @@ pub fn run_desktop() {
                 system_tray::background_education_was_shown(app.handle()),
             );
             app.manage(state.clone());
-            let attention_notification_state = AttentionNotificationState::default();
-            app.manage(attention_notification_state.clone());
+            #[cfg(target_os = "macos")]
+            let attention_notification_state = app.state::<AttentionNotificationState>().inner().clone();
             #[cfg(target_os = "macos")]
             app.manage(crate::macos_notifications::install(
                 app.handle(),
@@ -1433,16 +1445,57 @@ pub fn run_desktop() {
                 app_handle.get_webview_window("main"),
             ) {
                 match window.is_minimized() {
-                    Ok(true) => lock(&state.lifecycle).mark_window_minimized(),
+                    Ok(true) => {
+                        let mut lifecycle = lock(&state.lifecycle);
+                        let changed = lifecycle.snapshot().window
+                            != crate::desktop_lifecycle::WindowState::Minimized;
+                        lifecycle.mark_window_minimized();
+                        drop(lifecycle);
+                        if changed {
+                            log_lifecycle_event(
+                                "main_window_minimized",
+                                &state,
+                                serde_json::json!({}),
+                            );
+                        }
+                    }
                     Ok(false) => {
                         if window.is_visible().unwrap_or(false) {
-                            lock(&state.lifecycle).mark_window_visible();
+                            let mut lifecycle = lock(&state.lifecycle);
+                            let changed = lifecycle.snapshot().window
+                                == crate::desktop_lifecycle::WindowState::Minimized;
+                            lifecycle.mark_window_visible();
+                            drop(lifecycle);
+                            if changed {
+                                log_lifecycle_event(
+                                    "main_window_restored",
+                                    &state,
+                                    serde_json::json!({}),
+                                );
+                            }
                         }
                     }
                     Err(error) => eprintln!(
                         "[codetether:desktop] could not observe the main window state: {error}"
                     ),
                 }
+            }
+        }
+        RunEvent::WindowEvent {
+            label,
+            event: WindowEvent::Focused(focused),
+            ..
+        } if label == "main" => {
+            if let Some(state) = app_handle.try_state::<DesktopState>() {
+                log_lifecycle_event(
+                    if focused {
+                        "main_window_focused"
+                    } else {
+                        "main_window_blurred"
+                    },
+                    &state,
+                    serde_json::json!({}),
+                );
             }
         }
         RunEvent::ExitRequested { api, .. } => {

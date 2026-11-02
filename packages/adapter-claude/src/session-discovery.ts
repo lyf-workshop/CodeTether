@@ -1554,8 +1554,8 @@ function normalizeTitle(value: string): string | undefined {
 }
 
 function fallbackTitle(timestamp: string | undefined): string {
-  if (timestamp === undefined) return 'Claude conversation'
-  return `Claude conversation - ${timestamp.slice(0, 16).replace('T', ' ')} UTC`
+  if (timestamp === undefined) return 'Claude 会话'
+  return `Claude 会话 · ${timestamp.slice(0, 16).replace('T', ' ')} UTC`
 }
 
 function toIsoTimestamp(value: number | undefined): string | undefined {

@@ -63,24 +63,13 @@ test('bundled public configuration can initialize a fresh client after Desktop r
   assert.equal((await restarted.auth.getSession()).data.session, null)
 })
 
-test('Desktop packaging requires the preflight and My Hosts reports missing fields', async () => {
-  const [tauri, directory] = await Promise.all([
-    readFile(
-      new URL('../../desktop/src-tauri/tauri.conf.json', import.meta.url),
-      'utf8',
-    ),
-    readFile(
-      new URL(
-        '../src/components/hosts/host-directory-page.tsx',
-        import.meta.url,
-      ),
-      'utf8',
-    ),
-  ])
+test('Desktop packaging requires the public account configuration preflight', async () => {
+  const tauri = await readFile(
+    new URL('../../desktop/src-tauri/tauri.conf.json', import.meta.url),
+    'utf8',
+  )
   assert.equal(
     JSON.parse(tauri).build.beforeBuildCommand,
     'pnpm --dir ../web build:desktop',
   )
-  assert.match(directory, /accountConfigurationErrors\.join\('; '\)/u)
-  assert.match(directory, /if \(session === null\) return <EmailOtpSignIn \/>/u)
 })

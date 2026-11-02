@@ -761,3 +761,29 @@ function providerLifecycleInstallation({
     },
   }
 }
+
+test('connection eligibility copy uses CodeTether without leaking an internal Host noun', () => {
+  for (const [connectionState, reason, message] of [
+    [
+      'unavailable',
+      'host_unavailable',
+      'CodeTether 当前不可用，暂时无法开始新轮次。',
+    ],
+    [
+      'incompatible',
+      'host_incompatible',
+      'CodeTether 版本不兼容，请先更新应用。',
+    ],
+  ]) {
+    const result = deriveComposerEligibility({
+      connectionState,
+      currentTurnStatus: undefined,
+      machine: undefined,
+      projectAvailability: 'unavailable',
+      provider: undefined,
+    })
+    assert.equal(result.reason, reason)
+    assert.equal(result.message, message)
+    assert.equal(result.navigation, undefined)
+  }
+})

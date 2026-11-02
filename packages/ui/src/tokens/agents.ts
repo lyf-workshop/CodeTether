@@ -4,14 +4,16 @@ export const agentDefinitions = {
     shortName: 'Codex',
     icon: 'C',
     accent: 'codex',
-    accentClassName: 'border-agent-codex bg-agent-codex text-text-inverse',
+    accentClassName:
+      'border-agent-codex bg-agent-codex text-agent-codex-foreground',
   },
   claude: {
     name: 'Claude Code',
-    shortName: 'Claude',
+    shortName: 'Claude Code',
     icon: 'C',
     accent: 'claude',
-    accentClassName: 'border-agent-claude bg-agent-claude text-text-inverse',
+    accentClassName:
+      'border-agent-claude bg-agent-claude text-agent-claude-foreground',
   },
   opencode: {
     name: 'OpenCode',

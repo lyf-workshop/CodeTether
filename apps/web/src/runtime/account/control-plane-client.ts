@@ -247,6 +247,9 @@ export async function resolveExistingProductDevice(options: {
   readonly baseUrl: string
   readonly identity: ProductDeviceIdentityCapability
   readonly signal?: AbortSignal
+  readonly onDevicesObserved?: (
+    devices: readonly AccountProductDevice[],
+  ) => void
 }): Promise<ResolvedProductDevice> {
   if (!options.identity.available) {
     throw new ControlPlaneClientError(
@@ -261,6 +264,7 @@ export async function resolveExistingProductDevice(options: {
   const body = await readJson(response)
   if (!response.ok) throw responseError(response, body)
   const devices = parseProductDevices(body)
+  options.onDevicesObserved?.(devices)
   const keys = await options.identity.listKeys()
   const matches = await matchProductDevices(keys, devices)
   if (matches.length === 1) {
@@ -850,9 +854,7 @@ function hostProof(
   keyHandle: string,
   hostIdentity: HostIdentityCapability,
 ): Promise<string> {
-  const header = base64Url(
-    canonicalJsonBytes({ alg: 'ES256', typ: type }),
-  )
+  const header = base64Url(canonicalJsonBytes({ alg: 'ES256', typ: type }))
   const encodedPayload = base64Url(canonicalJsonBytes(payload))
   const signingInput = `${header}.${encodedPayload}`
   return hostIdentity

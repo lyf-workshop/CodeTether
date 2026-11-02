@@ -384,15 +384,15 @@ export function mutationErrorMessage(error: unknown, fallback: string): string {
     case 'provider_not_installed':
     case 'provider_version_unsupported':
     case 'provider_unavailable':
-      return '智能体当前不可用。'
+      return 'AI 工具当前不可用。'
     case 'timeout':
       return '操作等待超时，请重试。'
     case 'provider_error':
     case 'provider_start_failed':
-      return `智能体未能${fallback}。`
+      return `AI 工具未能${fallback}。`
     case 'provider_session_lost':
     case 'provider_conversation_unavailable':
-      return '智能体已无法恢复此会话；会话历史仍可查看。'
+      return 'AI 工具已无法恢复此会话；会话历史仍可查看。'
     case 'project_unavailable':
       return '项目工作区当前不可用；会话历史仍可查看。'
     case 'conversation_archived':

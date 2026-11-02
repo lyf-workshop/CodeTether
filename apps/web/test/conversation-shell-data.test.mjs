@@ -234,6 +234,115 @@ test('double submit shares one request while a conflicting Project fails explici
   assert.notEqual(calls[0].actionId, calls[1].actionId)
 })
 
+test('manual create retry keeps one actionId after a lost response and never automatically retries', async () => {
+  const calls = []
+  const actions = new NewConversationActions(
+    {
+      async createConversation(request) {
+        calls.push(request)
+        if (calls.length === 1) throw new TypeError('response lost')
+        return createResponse(request.actionId, request.projectId)
+      },
+    },
+    idFactory(),
+  )
+  const options = { machineId, provider: 'codex' }
+  await assert.rejects(
+    actions.createConversation(projectId, options),
+    TypeError,
+  )
+  await Promise.resolve()
+  assert.equal(calls.length, 1)
+  await actions.createConversation(projectId, options)
+  assert.equal(calls[0].actionId, calls[1].actionId)
+  await actions.createConversation(projectId, options)
+  assert.notEqual(calls[1].actionId, calls[2].actionId)
+  assert.ok(
+    calls.every((request) => !('input' in request) && !('model' in request)),
+  )
+})
+
+test('manual create retry keeps actionId after invalid success identity, not just transport errors', async () => {
+  const calls = []
+  const actions = new NewConversationActions(
+    {
+      async createConversation(request) {
+        calls.push(request)
+        return createResponse(
+          request.actionId,
+          calls.length === 1 ? 'proj_wrong01' : request.projectId,
+        )
+      },
+    },
+    idFactory(),
+  )
+  const options = { machineId, provider: 'codex' }
+  await assert.rejects(
+    actions.createConversation(projectId, options),
+    CodeTetherProtocolError,
+  )
+  assert.equal(calls.length, 1)
+  await actions.createConversation(projectId, options)
+  assert.equal(calls[0].actionId, calls[1].actionId)
+})
+
+test('an explicit Host refusal ends create intent so a deliberate retry receives a fresh actionId', async () => {
+  const calls = []
+  const actions = new NewConversationActions(
+    {
+      async createConversation(request) {
+        calls.push(request)
+        if (calls.length === 1)
+          throw responseError('project_unavailable', 'Unavailable')
+        return createResponse(request.actionId, request.projectId)
+      },
+    },
+    idFactory(),
+  )
+  const options = { machineId, provider: 'codex' }
+  await assert.rejects(
+    actions.createConversation(projectId, options),
+    CodeTetherResponseError,
+  )
+  await actions.createConversation(projectId, options)
+  assert.notEqual(calls[0].actionId, calls[1].actionId)
+})
+
+for (const [name, changedProject, changedOptions] of [
+  ['Project', 'proj_changed01', {}],
+  ['Machine', projectId, { machineId: 'machine_changed01' }],
+  ['Provider', projectId, { provider: 'claude-code' }],
+  ['reasoning', projectId, { reasoning: 'high' }],
+  ['model', projectId, { model: 'selected-model' }],
+]) {
+  test(`changed ${name} after an ambiguous create is a new explicit intent`, async () => {
+    const calls = []
+    const actions = new NewConversationActions(
+      {
+        async createConversation(request) {
+          calls.push(request)
+          throw new TypeError('response lost')
+        },
+      },
+      idFactory(),
+    )
+    const options = { machineId, provider: 'codex' }
+    await assert.rejects(
+      actions.createConversation(projectId, options),
+      TypeError,
+    )
+    await assert.rejects(
+      actions.createConversation(changedProject, {
+        ...options,
+        ...changedOptions,
+      }),
+      TypeError,
+    )
+    assert.equal(calls.length, 2)
+    assert.notEqual(calls[0].actionId, calls[1].actionId)
+  })
+}
+
 test('created Conversation identity must remain bound to the requested Project', async () => {
   const actions = new NewConversationActions(
     {

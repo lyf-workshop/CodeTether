@@ -190,7 +190,7 @@ test('runner streams one idempotent restricted Turn with stable Read/Search tool
     kind: 'read',
     name: 'Read',
     command: 'Read fixture.txt',
-    summary: 'Read fixture.txt',
+    summary: '读取 fixture.txt',
   })
   runtime.emit({
     type: 'tool.output',
@@ -207,7 +207,7 @@ test('runner streams one idempotent restricted Turn with stable Read/Search tool
     name: 'Read',
     command: 'Read fixture.txt',
     success: true,
-    summary: 'Read fixture.txt',
+    summary: '读取 fixture.txt',
   })
   runtime.emit({
     type: 'tool.started',
@@ -216,7 +216,7 @@ test('runner streams one idempotent restricted Turn with stable Read/Search tool
     kind: 'search',
     name: 'Search',
     command: 'Grep marker in .',
-    summary: 'Search workspace',
+    summary: '搜索项目文件',
   })
   runtime.emit({
     type: 'tool.completed',
@@ -226,7 +226,7 @@ test('runner streams one idempotent restricted Turn with stable Read/Search tool
     name: 'Search',
     command: 'Grep marker in .',
     success: true,
-    summary: 'Search workspace',
+    summary: '搜索项目文件',
   })
   runtime.emit({ type: 'turn.completed', ...base })
   runtime.completions[0].resolve({
@@ -255,7 +255,7 @@ test('runner streams one idempotent restricted Turn with stable Read/Search tool
     kind: 'read',
     name: 'Read',
     command: 'Read fixture.txt',
-    summary: 'Read fixture.txt',
+    summary: '读取 fixture.txt',
   })
   assert.equal(
     events.filter(({ type }) => type === 'message.completed').length,

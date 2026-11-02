@@ -10,7 +10,7 @@ const intent = {
   conversationId: 'conv_123456',
   turnId: 'turn_123456',
   title: 'CodeTether · 工作已完成',
-  body: '中文项目 · 修复自动重连\n智能体已完成本轮工作',
+  body: '中文项目\nAI 工具已完成本轮工作',
 }
 
 test('Browser notifications stay unavailable without loading Tauri modules', async () => {
@@ -55,6 +55,7 @@ test('Browser notifications stay unavailable without loading Tauri modules', asy
     capabilities.notifications.deliver(intent),
     /unavailable/u,
   )
+  await capabilities.notifications.logStage?.('received')
   assert.equal(loads, 0)
 })
 
@@ -129,6 +130,24 @@ test('Desktop window state uses native getters instead of stale WebView state', 
   assert.deepEqual(calls.sort(), ['focused', 'minimized', 'visible'])
 })
 
+test('Desktop window state falls back when a native getter stalls', async () => {
+  const capabilities = createNativeCapabilities({
+    tauriAvailable: true,
+    loadTauriWindow: async () => ({
+      getCurrentWindow: () => ({
+        isFocused: () => new Promise(() => {}),
+        isMinimized: async () => false,
+        isVisible: async () => true,
+      }),
+    }),
+  })
+
+  const state = await capabilities.notifications.getWindowState()
+  assert.equal(typeof state.focused, 'boolean')
+  assert.equal(typeof state.minimized, 'boolean')
+  assert.equal(typeof state.visible, 'boolean')
+})
+
 test('Desktop permission is requested lazily and concurrent checks are shared', async () => {
   let pluginLoads = 0
   let permissionChecks = 0
@@ -167,6 +186,19 @@ test('Desktop permission is requested lazily and concurrent checks are shared', 
   assert.equal(pluginLoads, 1)
 })
 
+test('macOS permission falls back to the native delivery queue when the plugin stalls', async () => {
+  const capabilities = createNativeCapabilities({
+    tauriAvailable: true,
+    platform: 'macos',
+    loadTauriNotification: async () => ({
+      isPermissionGranted: () => new Promise(() => {}),
+      requestPermission: () => new Promise(() => {}),
+    }),
+  })
+
+  assert.equal(await capabilities.notifications.ensurePermission(), true)
+})
+
 test('Desktop delivery invokes only the bounded Attention command', async () => {
   const calls = []
   const capabilities = createNativeCapabilities({
@@ -183,6 +215,26 @@ test('Desktop delivery invokes only the bounded Attention command', async () => 
     {
       command: 'deliver_attention_notification',
       args: { intent },
+    },
+  ])
+})
+
+test('Desktop diagnostic stages invoke only the bounded stage command', async () => {
+  const calls = []
+  const capabilities = createNativeCapabilities({
+    tauriAvailable: true,
+    loadTauriCore: async () => ({
+      invoke: async (command, args) => {
+        calls.push({ command, args })
+      },
+    }),
+  })
+
+  await capabilities.notifications.logStage?.('sse-connected')
+  assert.deepEqual(calls, [
+    {
+      command: 'log_notification_stage',
+      args: { stage: 'sse-connected' },
     },
   ])
 })
@@ -434,6 +486,96 @@ test('Notification click rejects a malformed optional Turn identity', async () =
 
     assert.deepEqual(received, [])
     assert.equal(warnings.length, 1)
+    unsubscribe()
+  } finally {
+    console.warn = originalWarn
+  }
+})
+
+test('ID-only protocol clicks and complete callbacks share native queue/event deduplication', async () => {
+  for (const first of [intent, { attentionId: intent.attentionId }]) {
+    const queued = [null]
+    const received = []
+    let eventListener
+    const capabilities = createNativeCapabilities({
+      tauriAvailable: true,
+      loadTauriCore: async () => ({
+        invoke: async (command) => {
+          assert.equal(command, 'take_pending_notification_intent')
+          return queued.shift() ?? null
+        },
+      }),
+      loadTauriEvent: async () => ({
+        listen: async (event, listener) => {
+          assert.equal(event, 'codetether://notification-intent')
+          eventListener = listener
+          return () => undefined
+        },
+      }),
+    })
+    const unsubscribe = await capabilities.notifications.subscribeToIntents(
+      (value) => received.push(value),
+    )
+    queued.push({ attentionId: intent.attentionId }, intent, null)
+    eventListener({ payload: first })
+    await waitFor(() => received.length === 1)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    assert.deepEqual(received, [first])
+    unsubscribe()
+  }
+})
+
+test('only a strict public ID-only or a complete native intent may cross the click boundary', async () => {
+  const received = []
+  const warnings = []
+  let eventListener
+  const originalWarn = console.warn
+  console.warn = (...values) => warnings.push(values)
+  try {
+    const capabilities = createNativeCapabilities({
+      tauriAvailable: true,
+      loadTauriCore: async () => ({ invoke: async () => null }),
+      loadTauriEvent: async () => ({
+        listen: async (_event, listener) => {
+          eventListener = listener
+          return () => undefined
+        },
+      }),
+    })
+    const unsubscribe = await capabilities.notifications.subscribeToIntents(
+      (value) => received.push(value),
+    )
+    const malformed = [
+      {},
+      [],
+      { attentionId: 'attn_x' },
+      { attentionId: 'ATTN_target01' },
+      { attentionId: 'attn_target%20' },
+      { attentionId: 'attn_' + 'x'.repeat(97) },
+      {
+        attentionId: intent.attentionId,
+        conversationId: intent.conversationId,
+      },
+      { attentionId: intent.attentionId, resolve: true },
+      { ...intent, extra: 'not allowed' },
+      { ...intent, projectId: 'provider_private01' },
+      { ...intent, conversationId: 'provider_private01' },
+    ]
+    for (const payload of malformed) eventListener({ payload })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    assert.deepEqual(received, [])
+    assert.equal(warnings.length, malformed.length)
+    assert.ok(
+      warnings.every(
+        (values) =>
+          values.length === 1 &&
+          values[0] ===
+            '[CodeTether] A notification click could not be delivered.',
+      ),
+    )
+    eventListener({ payload: { attentionId: 'attn_valid_link01' } })
+    await waitFor(() => received.length === 1)
+    assert.deepEqual(received, [{ attentionId: 'attn_valid_link01' }])
     unsubscribe()
   } finally {
     console.warn = originalWarn

@@ -1,6 +1,7 @@
 import type { CanonicalFailureReason } from '@codetether/agent-core'
 
 import { classifyCodexErrorInfo } from './failure-classifier.js'
+import { logCodexFailure } from './logging.js'
 
 export interface CodexErrorOptions extends ErrorOptions {
   readonly failureReason?: CanonicalFailureReason
@@ -87,11 +88,12 @@ export class JsonRpcRemoteError extends CodexProtocolError {
     _message: string,
     readonly data?: unknown,
   ) {
+    const codexErrorInfo = isRecord(data) ? data.codexErrorInfo : undefined
+    const failureReason = classifyCodexErrorInfo(codexErrorInfo)
     super(`Codex App Server rejected ${method} (${String(code)}).`, {
-      failureReason: classifyCodexErrorInfo(
-        isRecord(data) ? data.codexErrorInfo : undefined,
-      ),
+      failureReason,
     })
+    logCodexFailure(codexErrorInfo, failureReason)
   }
 }
 

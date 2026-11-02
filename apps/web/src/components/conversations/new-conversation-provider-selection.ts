@@ -3,11 +3,6 @@ import {
   type ProviderPresentation,
 } from '../../provider/provider-presentation.js'
 
-export interface NewConversationProviderDefaults {
-  readonly model?: string
-  readonly reasoning?: string
-}
-
 export interface NewConversationProviderEligibility {
   readonly eligible: boolean
   readonly label: string
@@ -40,7 +35,7 @@ export function newConversationProviderEligibility(
         eligible: false,
         label: `${provider.displayName} · ${provider.availabilityLabel}`,
         executionLabel: `${health.stateLabel} · ${health.freshnessLabel}`,
-        executionAdvisory: `${health.description} 完成所需操作并通过现有刷新流程重新验证后，才能选择此智能体。`,
+        executionAdvisory: `${health.description} 完成所需操作并通过现有刷新流程重新验证后，才能选择此AI 工具。`,
       }
     }
     return {
@@ -86,24 +81,6 @@ export function effectiveConversationProvider(
     providers.find((provider) => provider.provider === selectedProvider) ??
     providers[0]
   )
-}
-
-export function defaultProviderControls(
-  provider: ProviderPresentation,
-): NewConversationProviderDefaults {
-  const model = defaultProviderModel(provider)
-  return {
-    ...(model === undefined ? {} : { model }),
-  }
-}
-
-export function defaultProviderModel(
-  provider: ProviderPresentation,
-): string | undefined {
-  return (
-    provider.models.find((model) => model.isDefault === true) ??
-    provider.models[0]
-  )?.id
 }
 
 export function effectiveProviderReasoning(

@@ -98,7 +98,7 @@ export function MachineRelaySection({
             </Badge>
           </div>
           <p className="mt-1 text-sm text-text-secondary">
-            出站加密连接，用于授权会合和受限的 Machine 传输。
+            出站加密连接，用于授权会合和受限的设备传输。
           </p>
         </div>
         <Button
@@ -122,7 +122,7 @@ export function MachineRelaySection({
           {status.tone === 'success' ? (
             <Cloud
               aria-hidden="true"
-              className="mt-0.5 size-4 shrink-0 text-success"
+              className="mt-0.5 size-4 shrink-0 text-success-text"
             />
           ) : (
             <CloudOff
@@ -166,7 +166,7 @@ export function MachineRelaySection({
             )}
           />
           <RelayMetadata
-            label="Internet 执行"
+            label="互联网执行"
             value={
               relay?.internetExecutionEnabled === true
                 ? '可用（按需选择）'
@@ -195,12 +195,12 @@ export function MachineRelaySection({
       <div className="mt-4 flex min-w-0 items-start gap-2.5 rounded-sm border border-warning/30 bg-warning-muted px-3 py-3 text-sm text-text-secondary">
         <ShieldCheck
           aria-hidden="true"
-          className="mt-0.5 size-4 shrink-0 text-warning"
+          className="mt-0.5 size-4 shrink-0 text-warning-text"
         />
         <p className="min-w-0 leading-relaxed">
           {relay?.internetExecutionEnabled === true
-            ? '当已验证的直连不可用时，新请求可以使用 Internet Relay。活动中的请求不会在直连与 Relay 之间迁移；Relay 在线也不单独代表项目位置或智能体可执行。'
-            : 'Internet Relay 当前不能承载新的 Machine 执行。Relay 在线状态本身不代表电脑、项目位置或智能体可执行。'}
+            ? '当已验证的直连不可用时，新请求可以使用 Internet Relay。活动中的请求不会在直连与 Relay 之间迁移；Relay 在线也不单独代表项目位置或AI 工具可执行。'
+            : 'Internet Relay 当前不能承载新的设备执行。Relay 在线状态本身不代表电脑、项目位置或AI 工具可执行。'}
         </p>
       </div>
 
@@ -262,7 +262,7 @@ export function MachineRelaySection({
       {operationError === null || operationError === undefined ? null : (
         <p
           role="alert"
-          className="mt-3 break-words rounded-sm border border-danger/30 bg-danger-muted px-3 py-2 text-sm text-danger"
+          className="mt-3 break-words rounded-sm border border-danger/30 bg-danger-muted px-3 py-2 text-sm text-danger-text"
         >
           {relayErrorMessage(operationError)}
         </p>
@@ -292,7 +292,7 @@ export function MachineRelaySection({
               monospace
             />
             <RelayMetadata
-              label="Machine 传输"
+              label="设备传输"
               value={
                 relay.internetExecutionEnabled ? 'eligible' : 'unavailable'
               }
@@ -482,7 +482,7 @@ function ConfigureRelayDialog({
           <DialogHeader>
             <DialogTitle>配置 Internet Relay</DialogTitle>
             <DialogDescription>
-              为“{machine.displayName}”设置 Controller 的出站 Relay 控制连接。
+              为“{machine.displayName}”设置本地控制端的出站 Relay 控制连接。
             </DialogDescription>
           </DialogHeader>
 
@@ -539,7 +539,7 @@ function ConfigureRelayDialog({
               id="relay-display-label"
               label="显示名称（可选）"
               value={displayLabel}
-              placeholder="Owner Relay"
+              placeholder="我的中继服务"
               maxLength={120}
               onChange={setDisplayLabel}
               disabled={mutation.isPending}
@@ -581,7 +581,7 @@ function ConfigureRelayDialog({
               <p
                 id="relay-configuration-error"
                 role="alert"
-                className="break-words rounded-sm border border-danger/30 bg-danger-muted px-3 py-2 text-sm text-danger"
+                className="break-words rounded-sm border border-danger/30 bg-danger-muted px-3 py-2 text-sm text-danger-text"
               >
                 {error}
               </p>
@@ -679,8 +679,8 @@ function EnrollRelayDialog({
             </DialogTitle>
             <DialogDescription>
               {reenrollment
-                ? '撤销后的普通重连仍会被拒绝。只有 Relay 操作员签发的新一次性令牌才能重新注册同一 Controller 身份；电脑配对信任不会改变。'
-                : '此令牌仅用于将现有 Controller 身份注册到 Relay，不会创建电脑信任。'}
+                ? '撤销后的普通重连仍会被拒绝。只有 Relay 操作员签发的新一次性令牌才能重新注册同一本地控制端身份；电脑配对信任不会改变。'
+                : '此令牌仅用于将现有本地控制端身份注册到 Relay，不会创建电脑信任。'}
             </DialogDescription>
           </DialogHeader>
           <div className="mt-5 min-w-0 space-y-4">
@@ -730,7 +730,7 @@ function EnrollRelayDialog({
               <p
                 id="relay-enrollment-error"
                 role="alert"
-                className="break-words rounded-sm border border-danger/30 bg-danger-muted px-3 py-2 text-sm text-danger"
+                className="break-words rounded-sm border border-danger/30 bg-danger-muted px-3 py-2 text-sm text-danger-text"
               >
                 {error}
               </p>

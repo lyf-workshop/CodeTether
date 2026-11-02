@@ -23,7 +23,7 @@ export function ConversationFilesSurface({
       <p role="status" className="text-sm text-text-muted">
         {supportsDiff
           ? '本次会话没有已知文件变更。'
-          : '当前 Agent 未提供文件变更信息。'}
+          : '当前 AI 工具未提供文件变更信息。'}
       </p>
     )
   }
@@ -51,9 +51,11 @@ export function ConversationFilesSurface({
                 {change.path}
               </span>
               <span className="flex shrink-0 items-center gap-1 text-xs tabular-nums">
-                <span className="text-success/90">+{change.additions}</span>
+                <span className="text-success-text">+{change.additions}</span>
                 {change.deletions > 0 ? (
-                  <span className="text-danger/90">-{change.deletions}</span>
+                  <span className="text-danger-text/90">
+                    -{change.deletions}
+                  </span>
                 ) : null}
               </span>
               {canOpen ? (

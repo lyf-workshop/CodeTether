@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
+import { readWorkspaceSidebarSource } from './fixtures/workspace-sidebar-source.mjs'
 
 import {
   providerPresentation,
   providerPresentations,
 } from '../.tmp/test-dist/provider/provider-presentation.js'
 import {
-  defaultProviderControls,
   effectiveConversationProvider,
   effectiveProviderReasoning,
   executableConversationProviders,
@@ -148,13 +148,6 @@ test('Provider reasoning selection omits defaults and rejects stale values', () 
   )
   assert.equal(providerReasoningFromControl('high', provider), 'high')
   assert.equal(providerReasoningFromControl('stale', provider), undefined)
-
-  const providerSwitchDefaults = defaultProviderControls({
-    ...provider,
-    models: [{ id: 'provider-default', label: 'Default', isDefault: true }],
-  })
-  assert.deepEqual(providerSwitchDefaults, { model: 'provider-default' })
-  assert.equal(providerSwitchDefaults.reasoning, undefined)
 })
 
 test('New Conversation falls back to executable Remote Claude and preserves its effort controls', () => {
@@ -409,10 +402,7 @@ test('existing UI surfaces consume Provider truth without adding a switch to Det
       new URL('components/conversations/new-conversation-dialog.tsx', root),
       'utf8',
     ),
-    readFile(
-      new URL('components/app-shell/workspace-sidebar.tsx', root),
-      'utf8',
-    ),
+    readWorkspaceSidebarSource(),
     readFile(
       new URL('components/conversation/conversation-chrome-actions.tsx', root),
       'utf8',
@@ -424,38 +414,64 @@ test('existing UI surfaces consume Provider truth without adding a switch to Det
       new URL('components/conversations/conversation-search-results.tsx', root),
       'utf8',
     ),
-    readFile(
-      new URL('components/app-shell/workspace-sidebar.tsx', root),
-      'utf8',
-    ),
+    readWorkspaceSidebarSource(),
   ])
 
   assert.match(dialog, /providerPresentationsForMachine\(/u)
   assert.match(dialog, /machineDetailQuery\.data\?\.providers/u)
-  assert.match(dialog, /executableConversationProviders/u)
-  assert.match(dialog, /effectiveSelectedProvider/u)
-  assert.match(dialog, /newConversationProviderEligibility/u)
-  assert.match(dialog, /disabled=\{!eligibility\.eligible\}/u)
-  assert.match(dialog, /selectedProviderEligibility\.executionAdvisory/u)
-  assert.match(dialog, /aria-describedby/u)
-  assert.match(dialog, /capabilities\.resume/u)
-  assert.doesNotMatch(dialog, /disabled=\{!provider\.available\}/u)
-  assert.match(dialog, /capabilities\.modelSelection/u)
-  assert.match(dialog, /capabilities\.reasoningControl/u)
-  assert.match(dialog, /reasoningOptions/u)
-  assert.match(dialog, /supportsReasoningSelection/u)
-  assert.match(dialog, /reasoning: effectiveSelectedReasoning/u)
+  const fields = await readFile(
+    new URL('components/conversations/new-conversation-fields.tsx', root),
+    'utf8',
+  )
+  const selection = await readFile(
+    new URL('components/conversations/new-conversation-selection.ts', root),
+    'utf8',
+  )
+  assert.match(dialog, /conversationCreationProviderOptions/u)
+  assert.match(dialog, /resolveConversationCreationProvider/u)
+  assert.match(selection, /newConversationProviderEligibility/u)
+  assert.match(selection, /providerLifecycleSupportsConversationExecution/u)
+  assert.match(fields, /!option\.eligibility\.eligible/u)
+  assert.match(dialog, /selectedProvider\.eligibility\.executionAdvisory/u)
+  assert.match(fields, /aria-describedby/u)
+  assert.match(fields, /capabilities\.reasoningControl/u)
+  assert.match(fields, /reasoningOptions/u)
+  assert.match(dialog, /\{ reasoning \}/u)
+  assert.doesNotMatch(dialog + fields, /modelSelection|选择模型/u)
   assert.doesNotMatch(sidebar, /provider\.availabilityLabel/u)
   assert.doesNotMatch(sidebar, /provider\.version/u)
-  assert.match(chromeActions, /capabilities\.supportsInterrupt/u)
+  const [composer, gate] = await Promise.all([
+    readFile(new URL('components/conversation/composer.tsx', root), 'utf8'),
+    readFile(
+      new URL(
+        'components/conversation/conversation-gate-presentation.ts',
+        root,
+      ),
+      'utf8',
+    ),
+  ])
+  assert.match(
+    gate,
+    /machineKind === 'local' &&\s*capabilities\.supportsInterrupt &&\s*capabilities\.canInterrupt/u,
+  )
+  assert.match(
+    composer,
+    /gate\.canInterrupt && interruptController !== undefined/u,
+  )
+  assert.match(composer, /interruptController\.execute\(\)/u)
+  assert.doesNotMatch(chromeActions, /interruptController|supportsInterrupt/u)
   assert.doesNotMatch(chromeActions, /capabilities\.supportsDiff/u)
   assert.doesNotMatch(chromeActions, /onProviderChange|switchProvider/u)
   assert.match(inbox, /metadata\?\.provider/u)
-  assert.match(
-    inboxPage,
-    /providerPresentation\(runtime\.bootstrap, provider\)/u,
+  const inboxContext = await readFile(
+    new URL('components/inbox/inbox-context.ts', root),
+    'utf8',
   )
-  assert.match(inboxPage, /presentation\.capabilities\.approvals/u)
+  assert.match(inboxPage, /approvalSupported/u)
+  assert.match(inboxContext, /providerPresentationForMachine/u)
+  assert.match(inboxContext, /deriveLiveControlAvailability/u)
+  assert.match(inboxMetadata, /machineDetailQueryOptions/u)
+  assert.doesNotMatch(inboxPage, /providerPresentation\(runtime\.bootstrap/u)
   assert.match(inboxMetadata, /allProjectConversationsQueryOptions/u)
   assert.match(search, /providerDisplayName\(conversation\.provider\)/u)
   assert.match(rail, /workspaceProviderPresentation\(conversation\.provider\)/u)

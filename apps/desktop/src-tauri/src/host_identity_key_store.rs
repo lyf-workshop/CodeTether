@@ -476,6 +476,7 @@ pub fn host_identity_key_destroy(key_handle: String) -> Result<(), String> {
 
 #[cfg(all(test, windows))]
 mod tests {
+    use super::platform::WindowsCngHostIdentityKeyStore;
     use super::*;
     use p256::ecdsa::{Signature, VerifyingKey, signature::hazmat::PrehashVerifier};
     use sha2::{Digest, Sha256};

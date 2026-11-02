@@ -9,6 +9,7 @@ import {
 
 import { CodexProtocolError } from './errors.js'
 import { classifyCodexErrorInfo } from './failure-classifier.js'
+import { logCodexFailure } from './logging.js'
 import type { JsonRpcNotification, JsonRpcRequest } from './protocol.js'
 import { isRecord, readString } from './protocol.js'
 
@@ -18,6 +19,10 @@ export interface NormalizationResult {
 }
 
 export const MAX_FILE_CHANGES_PER_TURN = 1024
+
+// Match the public diff string limit without a reverse dependency on protocol.
+const MAX_SYNTHESIZED_FILE_DIFF_LENGTH = 4 * 1024 * 1024
+const NO_FINAL_NEWLINE_SUFFIX = '\n\\ No newline at end of file\n'
 
 /** Translates only the lifecycle and item shapes required by the Phase 2A spike. */
 export class CodexEventNormalizer {
@@ -251,6 +256,7 @@ export class CodexEventNormalizer {
       }
       seen.add(key)
       this.#seenFileChanges.set(turnKey(threadId, turnId), seen)
+      const normalizedDiff = normalizeFileChangeDiff(kind, diff)
       return [
         {
           type: 'file.changed' as const,
@@ -261,7 +267,7 @@ export class CodexEventNormalizer {
           ...(itemId === undefined ? {} : { itemId }),
           path,
           kind,
-          ...(diff === undefined ? {} : { diff }),
+          ...(normalizedDiff === undefined ? {} : { diff: normalizedDiff }),
           raw,
         },
       ]
@@ -314,6 +320,8 @@ export class CodexEventNormalizer {
       )
     }
     const error = isRecord(turn.error) ? turn.error : undefined
+    const failureReason = classifyCodexErrorInfo(error?.codexErrorInfo)
+    logCodexFailure(error?.codexErrorInfo, failureReason)
     return {
       recognized: true,
       events: [
@@ -325,10 +333,7 @@ export class CodexEventNormalizer {
           turnId,
           error: {
             message: 'Codex could not complete this turn.',
-            failure: canonicalFailure(
-              classifyCodexErrorInfo(error?.codexErrorInfo),
-              timestamp,
-            ),
+            failure: canonicalFailure(failureReason, timestamp),
           },
           raw,
         },
@@ -425,16 +430,14 @@ function approvalSummary(
   params: Record<string, unknown>,
 ): string {
   if (method.includes('commandExecution')) {
-    return readString(params, 'command') ?? 'Codex requested command approval'
+    return readString(params, 'command') ?? 'Codex 请求运行命令'
   }
   if (method === 'execCommandApproval' && Array.isArray(params.command)) {
     return params.command
       .filter((value): value is string => typeof value === 'string')
       .join(' ')
   }
-  return (
-    readString(params, 'reason') ?? 'Codex requested file or permission access'
-  )
+  return readString(params, 'reason') ?? 'Codex 请求访问文件或权限'
 }
 
 function normalizeChangeKind(value: unknown): FileChangeKind {
@@ -445,6 +448,39 @@ function normalizeChangeKind(value: unknown): FileChangeKind {
     return typeof value.move_path === 'string' ? 'renamed' : 'modified'
   }
   return 'unknown'
+}
+
+function normalizeFileChangeDiff(
+  kind: FileChangeKind,
+  diff: string | undefined,
+): string | undefined {
+  if (
+    diff === undefined ||
+    diff === '' ||
+    (kind !== 'added' && kind !== 'deleted') ||
+    /(?:^|\n)(?:@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@|---[ \t]|\+\+\+[ \t])/u.test(
+      diff,
+    )
+  ) {
+    return diff
+  }
+  if (diff.length > MAX_SYNTHESIZED_FILE_DIFF_LENGTH) return undefined
+
+  const hasFinalLf = diff.endsWith('\n')
+  let lineCount = hasFinalLf ? 0 : 1
+  for (let index = 0; index < diff.length; index += 1) {
+    if (diff.charCodeAt(index) === 10) lineCount += 1
+  }
+  const header =
+    kind === 'added'
+      ? `@@ -0,0 +1,${String(lineCount)} @@\n`
+      : `@@ -1,${String(lineCount)} +0,0 @@\n`
+  const suffix = hasFinalLf ? '' : NO_FINAL_NEWLINE_SUFFIX
+  const expandedLength = header.length + diff.length + lineCount + suffix.length
+  if (expandedLength > MAX_SYNTHESIZED_FILE_DIFF_LENGTH) return undefined
+
+  const prefix = kind === 'added' ? '+' : '-'
+  return `${header}${prefix}${diff.replace(/\n(?=[\s\S])/gu, `\n${prefix}`)}${suffix}`
 }
 
 function requireRecord(

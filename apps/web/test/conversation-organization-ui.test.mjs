@@ -3,37 +3,36 @@ import { readFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
+import { conversationOrganizationSource } from './fixtures/conversation-organization-source.mjs'
 
 const webDirectory = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
 test('Conversation list exposes URL-backed Active and Archived views', async () => {
-  const [page, router] = await Promise.all([
-    sourceOf('components/conversations/conversations-page.tsx'),
+  const [page, model, router] = await Promise.all([
+    sourceOf('components/projects/project-conversation-collection.tsx'),
+    sourceOf('components/projects/project-workspace-model.ts'),
     sourceOf('router.tsx'),
   ])
-
-  assert.match(
-    page,
-    /useSearch\(\{ from: '\/projects\/\$projectId\/conversations' \}\)/u,
-  )
   assert.match(page, /search\.view === 'archived' \? 'archived' : 'active'/u)
   assert.match(
     page,
-    /conversationListQueryOptions\(runtime, projectId, 'active'\)/u,
+    /conversationListQueryOptions\(runtime, projectId, 'active', filters\)/u,
   )
   assert.match(
     page,
-    /conversationListQueryOptions\(runtime, projectId, 'archived'\)/u,
+    /conversationListQueryOptions\(runtime, projectId, 'archived', filters\)/u,
   )
-  assert.match(page, /\['active', '活跃'\]/u)
-  assert.match(page, /\['archived', '已归档'\]/u)
-  assert.match(router, /search\.view === 'archived'/u)
+  assert.match(page, /SegmentedControlItem value="active"/u)
+  assert.match(page, /SegmentedControlItem value="archived"/u)
+  assert.match(page, /value === 'archived' \? 'archived' : undefined/u)
+  assert.match(model, /search\.view === 'archived'/u)
+  assert.match(router, /path: '\/projects\/\$projectId\/conversations'/u)
 })
 
 test('Conversation list preserves Host ordering and has no local sort control', async () => {
   const [page, model] = await Promise.all([
-    sourceOf('components/conversations/conversations-page.tsx'),
-    sourceOf('components/conversations/conversation-list-model.ts'),
+    sourceOf('components/projects/project-conversation-collection.tsx'),
+    sourceOf('components/projects/project-workspace-model.ts'),
   ])
 
   assert.doesNotMatch(page, /SortAsc|sortLabels|onSortChange/u)
@@ -68,11 +67,16 @@ test('rows expose only durable organization actions with bounded titles', async 
 })
 
 test('Rename and Archive dialogs preserve input, errors, and keyboard focus', async () => {
-  const controls = await sourceOf(
-    'components/conversations/conversation-organization-controls.tsx',
-  )
+  const controls = (
+    await Promise.all([
+      sourceOf(
+        'components/conversations/conversation-organization-controls.tsx',
+      ),
+      sourceOf('components/conversations/conversation-settings-fields.tsx'),
+    ])
+  ).join('\n')
 
-  assert.match(controls, /<DialogTitle>重命名会话<\/DialogTitle>/u)
+  assert.match(controls, /<DialogTitle>会话设置<\/DialogTitle>/u)
   assert.match(controls, /autoFocus/u)
   assert.match(controls, /onSubmit=/u)
   assert.match(controls, /role="alert"/u)
@@ -86,7 +90,7 @@ test('Rename and Archive dialogs preserve input, errors, and keyboard focus', as
 
 test('Archive safety and organization empty states are truthful', async () => {
   const [page, controls] = await Promise.all([
-    sourceOf('components/conversations/conversations-page.tsx'),
+    sourceOf('components/projects/project-conversation-collection.tsx'),
     sourceOf('components/conversations/conversation-organization-controls.tsx'),
   ])
 
@@ -94,25 +98,28 @@ test('Archive safety and organization empty states are truthful', async () => {
   assert.match(controls, /运行中的会话暂时不能归档/u)
   assert.match(controls, /conversation\.status === 'waiting'/u)
   assert.match(controls, /当前会话仍在等待你的确认/u)
-  assert.match(page, /还没有活跃会话/u)
-  assert.match(page, /暂无已归档会话/u)
-  assert.match(page, /查看已归档/u)
-  assert.match(page, /返回活跃会话/u)
+  assert.match(page, /还没有会话/u)
+  assert.match(page, /没有已归档的会话/u)
+  assert.match(page, /value="active"/u)
+  assert.match(page, /value="archived"/u)
 })
 
 test('removed list rows restore focus across the pinned divider', async () => {
-  const [group, states] = await Promise.all([
+  const [group, collection] = await Promise.all([
     sourceOf('components/conversations/conversation-group.tsx'),
-    sourceOf('components/conversations/conversation-page-states.tsx'),
+    sourceOf('components/projects/project-conversation-collection.tsx'),
   ])
 
   assert.match(group, /findAdjacentConversationAction/u)
   assert.match(group, /while \(candidate !== null\)/u)
   assert.match(group, /candidate = candidate\[direction\]/u)
-  assert.match(states, /100 个会话/u)
-  assert.doesNotMatch(states, /最近 100/u)
+  assert.match(collection, /browseQuery\.data\.length >= 100/u)
+  assert.match(collection, /最多最近 100/u)
+  assert.match(collection, /可以使用项目内搜索查找更早的记录/u)
 })
 
 async function sourceOf(relativePath) {
+  if (relativePath.endsWith('/conversation-organization-controls.tsx'))
+    return conversationOrganizationSource()
   return await readFile(resolve(webDirectory, 'src', relativePath), 'utf8')
 }

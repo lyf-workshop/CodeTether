@@ -6,6 +6,8 @@ mod host_supervisor;
 mod macos_lifecycle;
 #[cfg(target_os = "macos")]
 mod macos_notifications;
+#[cfg(windows)]
+mod notification_links;
 mod product_device_key_store;
 mod project_directory_picker;
 mod provider_guidance;

@@ -5,153 +5,164 @@ import test from 'node:test'
 
 const sourceRoot = resolve(import.meta.dirname, '../src')
 
-test('Machines exposes one real two-step remote pairing flow', async () => {
-  const [page, dialog] = await Promise.all([
+test('device entrances open the canonical wizard, onboarding shares its pairing actions', async () => {
+  const [page, dialog, hook, flow, steps, wizard] = await Promise.all([
     source('components/machines/machines-page.tsx'),
     source('components/machines/add-remote-machine-dialog.tsx'),
+    source('components/machines/use-remote-machine-pairing.ts'),
+    source('components/machines/machine-trust-flow.ts'),
+    source('components/machines/machine-pairing-steps.tsx'),
+    source('components/machines/node-pairing-page.tsx'),
   ])
-
-  assert.match(page, /<AddRemoteMachineDialog/u)
-  assert.match(page, /添加电脑/u)
-  assert.match(dialog, /data-machine-pairing-step="entry"/u)
-  assert.match(dialog, /data-machine-pairing-step="confirmation"/u)
-  assert.match(dialog, /runtime\.beginRemoteMachinePairing/u)
-  assert.match(dialog, /runtime\.confirmRemoteMachinePairing/u)
-  assert.match(dialog, /runtime\.cancelRemoteMachinePairing/u)
-  assert.match(dialog, /信任这台电脑/u)
-  assert.match(dialog, /candidate\.verificationCode/u)
-  assert.match(dialog, /data-machine-pairing-step="success"/u)
-  assert.match(dialog, /电脑已连接/u)
-  assert.match(dialog, /添加这台电脑上的项目/u)
-  assert.match(dialog, /打开项目/u)
-  assert.match(dialog, /查看电脑/u)
-  assert.match(dialog, /setPairingCode\(''\)/u)
-  assert.doesNotMatch(
-    dialog,
-    /localStorage|sessionStorage|dangerouslySetInnerHTML/u,
-  )
-  assert.doesNotMatch(dialog, /candidate\.machineId/u)
+  assert.match(page, /navigate\(\{ to: '\/add' \}\)/u)
+  assert.match(page, /添加设备/u)
+  assert.match(dialog, /useRemoteMachinePairing/u)
+  assert.match(wizard, /useRemoteMachinePairing/u)
+  for (const operation of [
+    'beginRemoteMachinePairing',
+    'confirmRemoteMachinePairing',
+    'cancelRemoteMachinePairing',
+  ])
+    assert.ok(flow.includes(operation))
+  for (const state of ['entry', 'confirmation', 'success'])
+    assert.ok(steps.includes('data-machine-pairing-step="' + state + '"'))
+  assert.match(steps, /candidate\.verificationCode/u)
+  assert.match(steps, /验证码一致，确认配对/u)
+  assert.match(steps, /已配对不等于可以执行/u)
+  assert.match(wizard, /fixedMachineId=\{pairing\.pairedMachine\.machineId\}/u)
+  assert.match(hook, /setPairingCode\(''\)/u)
+  for (const value of [dialog, hook, flow, wizard])
+    assert.doesNotMatch(
+      value,
+      /localStorage|sessionStorage|dangerouslySetInnerHTML/u,
+    )
+  assert.doesNotMatch(steps, /candidate\.machineId/u)
 })
 
-test('pairing inputs are keyboard-oriented, bounded, and restore deliberate focus', async () => {
-  const dialog = await source(
-    'components/machines/add-remote-machine-dialog.tsx',
-  )
-
-  assert.match(dialog, /ref=\{addressInputRef\}/u)
+test('shared pairing inputs preserve keyboard, bounded one-time code and deliberate focus', async () => {
+  const [dialog, steps, hook, wizard] = await Promise.all([
+    source('components/machines/add-remote-machine-dialog.tsx'),
+    source('components/machines/machine-pairing-steps.tsx'),
+    source('components/machines/use-remote-machine-pairing.ts'),
+    source('components/machines/node-pairing-page.tsx'),
+  ])
+  assert.match(dialog, /addressRef=\{addressInputRef\}/u)
   assert.match(dialog, /onOpenAutoFocus/u)
   assert.match(dialog, /confirmationHeadingRef\.current\?\.focus\(\)/u)
-  assert.match(dialog, /inputMode="numeric"/u)
-  assert.match(dialog, /autoComplete="one-time-code"/u)
-  assert.match(dialog, /maxLength=\{6\}/u)
-  assert.match(dialog, /pattern="\[0-9\]\{6\}"/u)
-  assert.match(dialog, /role="alert"/u)
-  assert.match(dialog, /aria-errormessage/u)
+  assert.match(steps, /inputMode="numeric"/u)
+  assert.match(steps, /autoComplete="one-time-code"/u)
+  assert.match(steps, /maxLength=\{6\}/u)
+  assert.match(steps, /pattern="\[0-9\]\{6\}"/u)
+  assert.match(steps, /aria-errormessage/u)
+  assert.match(steps, /tone="err"/u)
+  assert.match(steps, /min-w-0/u)
+  assert.match(steps, /truncate/u)
   assert.match(dialog, /showCloseButton=\{!busy\}/u)
   assert.match(dialog, /if \(busy\) return/u)
   assert.match(dialog, /max-w-lg overflow-x-hidden/u)
-  assert.match(dialog, /min-w-0/u)
-  assert.match(dialog, /truncate/u)
+  assert.match(hook, /submitted\.current/u)
+  assert.match(hook, /retry: false/u)
+  assert.match(wizard, /nodePairingStep/u)
+  assert.match(wizard, /confirmationHeadingRef\.current\?\.focus\(\)/u)
 })
 
-test('remote rows show bounded last-known Provider discovery without triggering detection', async () => {
-  const [page, query, runtime] = await Promise.all([
+test('remote rows show bounded project data without triggering Provider detection', async () => {
+  const [page, providers, query, runtime] = await Promise.all([
     source('components/machines/machines-page.tsx'),
+    source('components/machines/machine-providers-section.tsx'),
     source('runtime/host/machine-query.ts'),
     source('runtime/host/host-runtime.ts'),
   ])
-
-  assert.match(page, /queries: machines\.map/u)
-  assert.match(page, /machine\.kind === 'local' \? \(/u)
-  assert.match(page, /detail\.providerDiscovery\?\.state === 'not_observed'/u)
-  assert.match(page, /detail\.providerDiscovery\.state === 'last_known'/u)
-  assert.match(page, /未检测到已安装 Agent/u)
+  assert.match(page, /projectListQueryOptions/u)
+  assert.doesNotMatch(page, /useQueries|machineDetailQueryOptions/u)
+  assert.match(page, /MachineProjectsSection/u)
+  assert.match(page, /projects=\{projectsQuery\.data\}/u)
   assert.match(page, /machineConnectionStateLabel/u)
-  assert.match(page, /machineConnectionBadgeVariant/u)
-  assert.match(page, /最近连接/u)
-  assert.match(page, /w-full sm:w-auto/u)
-  assert.doesNotMatch(page, /refetchInterval|setInterval/u)
+  assert.match(page, /lastSeenAt/u)
+  assert.match(providers, /discovery\.state !== 'not_observed'/u)
+  assert.match(providers, /discovery\?\.state === 'current'/u)
+  assert.match(providers, /上次已知的状态/u)
+  assert.doesNotMatch(
+    page,
+    /refreshMachineProviders|refetchInterval|setInterval/u,
+  )
   assert.match(query, /invalidateMachineQueries/u)
   assert.match(runtime, /event\.type === 'machine\.updated'/u)
   assert.match(runtime, /invalidateMachineQueries\(this\.#queryClient\)/u)
 })
 
 test('remote detail is truthful and unpair remains explicit and remote-only', async () => {
-  const [detail, unpair, addressDialog] = await Promise.all([
+  const [detail, providers, unpair, addressDialog] = await Promise.all([
     source('components/machines/machine-detail-page.tsx'),
+    source('components/machines/machine-providers-section.tsx'),
     source('components/machines/unpair-machine-dialog.tsx'),
     source('components/machines/update-machine-address-dialog.tsx'),
   ])
-  const remote = sourceSection(
+  assert.match(
     detail,
-    'function RemoteMachineDetail',
-    'function MachineMetadata',
+    /machine\.kind === 'remote' && connection === undefined/u,
   )
-
-  assert.match(detail, /if \(machine\.kind === 'remote'\)/u)
-  assert.match(remote, /可以在这台电脑上注册和查看项目位置/u)
-  assert.match(remote, /位置注册本身不会授予执行权限/u)
-  assert.match(remote, /当前仅启用上方已通过本次连接验证的智能体能力/u)
-  assert.doesNotMatch(remote, /当前仅支持经过验证的 Codex/u)
-  assert.match(remote, /<RemoteMachineProvidersSection/u)
-  assert.match(remote, /runtime\.refreshMachineProviders/u)
-  assert.match(remote, /刷新 Agent 信息/u)
-  assert.match(remote, /aria-describedby/u)
-  assert.match(remote, /远程电脑在线后才能刷新 Agent 信息/u)
-  assert.match(remote, /const installationLabel =/u)
-  assert.match(remote, /providerLifecycleForMachine/u)
-  assert.match(remote, /providerLifecyclePresentation/u)
-  assert.match(remote, /安装状态/u)
-  assert.match(remote, /运行时/u)
-  assert.match(remote, /后端/u)
-  assert.match(remote, /执行状态/u)
-  assert.match(remote, /providerExecutionHealthPresentation/u)
-  assert.match(remote, /health\.freshnessLabel/u)
-  assert.match(remote, /已检测到 CLI；未声明会话所需的远程能力/u)
-  assert.match(remote, /remoteProviderCapabilitySummary/u)
-  assert.match(remote, /capabilities\.fileRead/u)
-  assert.match(remote, /capabilities\.search/u)
-  assert.match(remote, /capabilities\.toolEvents/u)
-  assert.match(remote, /capabilities\.reasoningControl/u)
-  assert.match(remote, /已声明能力/u)
-  assert.match(remote, /providerDiscovery/u)
-  assert.match(remote, /current/u)
-  assert.match(remote, /last_known/u)
-  assert.match(remote, /not_observed/u)
-  assert.match(remote, /machineConnectionStateLabel/u)
-  assert.match(remote, /authentication_failed/u)
-  assert.match(remote, /recovery_required/u)
-  assert.match(remote, /incompatible/u)
-  assert.match(detail, /machineQuery\.data\.connection/u)
-  assert.match(remote, /connection\.currentEndpoint/u)
-  assert.match(remote, /connection\.lastSuccessfulAt/u)
-  assert.match(remote, /connection\.lastAttemptAt/u)
-  assert.match(remote, /runtime\.retryMachineConnection/u)
-  assert.match(remote, /更新连接地址/u)
-  assert.match(remote, /hostConnectionState === 'reconnecting'/u)
+  assert.match(detail, /<MachineProvidersSection/u)
+  assert.match(detail, /runtime\.refreshMachineProviders/u)
+  assert.match(providers, /重新检测/u)
+  assert.match(providers, /aria-describedby/u)
+  assert.match(providers, /设备连接恢复后才能重新检测/u)
+  assert.match(providers, /const installationLabel =/u)
+  for (const field of [
+    'providerLifecycleForMachine',
+    'providerLifecyclePresentation',
+    'providerExecutionHealthPresentation',
+    'remoteProviderCapabilitySummary',
+    'capabilities.fileRead',
+    'capabilities.search',
+    'capabilities.toolEvents',
+    'capabilities.reasoningControl',
+  ])
+    assert.ok(providers.includes(field))
+  for (const label of ['安装状态', '运行时', '后端', '执行状态', '已声明能力'])
+    assert.ok(providers.includes(label))
+  assert.match(providers, /health\.freshnessLabel/u)
+  assert.match(providers, /尚未提供会话所需的远程能力/u)
+  assert.match(detail, /providerDiscovery/u)
+  assert.match(providers, /current/u)
+  assert.match(providers, /not_observed/u)
+  assert.match(providers, /显示的是上次已知的状态/u)
+  assert.match(detail, /connection\.currentEndpoint/u)
+  assert.match(detail, /connection\.lastSuccessfulAt/u)
+  assert.match(detail, /connection\.lastAttemptAt/u)
   assert.match(
-    remote,
-    /hostReadyForConnectionAction = hostConnectionState === 'connected'/u,
+    sourceSection(
+      detail,
+      'function MachineConnectionSection',
+      'function MachineMetadata',
+    ),
+    /runtime\.retryMachineConnection/u,
   )
-  assert.match(remote, /!hostReadyForConnectionAction/u)
-  assert.match(remote, /<UnpairMachineDialog/u)
-  assert.match(remote, /<UpdateMachineAddressDialog/u)
+  assert.match(detail, /更新地址/u)
+  assert.match(detail, /hostConnectionState === 'reconnecting'/u)
+  assert.match(detail, /hostReady = hostConnectionState === 'connected'/u)
+  assert.match(detail, /!hostReady/u)
+  assert.match(detail, /<UnpairMachineDialog/u)
+  assert.match(detail, /<UpdateMachineAddressDialog/u)
   assert.match(
-    remote,
-    /<MachineProjectsSection machine=\{machine\} projects=\{projects\}/u,
+    detail,
+    /<MachineProjectsSection\s+machine=\{machine\}\s+projects=\{projects\}/u,
   )
-  assert.doesNotMatch(remote, /conversations\.map|Start Conversation|创建会话/u)
-  assert.match(remote, /disabled=\{projects\.length > 0\}/u)
-
+  assert.match(detail, /<MachineConversationsSection/u)
+  assert.match(detail, /conversations=\{conversations\}/u)
+  assert.doesNotMatch(
+    detail,
+    /AddProjectLocationDialog|RemoveProjectLocationDialog|setExecutionTransport/u,
+  )
   assert.match(unpair, /if \(machine\.kind !== 'remote'\) return null/u)
   assert.match(unpair, /runtime\.unpairMachine/u)
-  assert.match(unpair, /projectCount > 0/u)
-  assert.match(unpair, /不会删除远程电脑上的文件/u)
-  assert.match(unpair, /不会假装已经远程撤销/u)
-  assert.match(unpair, /<DialogTitle>取消电脑配对<\/DialogTitle>/u)
+  assert.match(unpair, /unpairMachinePreflight/u)
+  assert.match(unpair, /知道了/u)
+  assert.match(unpair, /不会删除设备上的文件/u)
+  assert.match(unpair, /保留设备和信任记录/u)
+  assert.match(unpair, /暂时不能取消配对/u)
   assert.match(unpair, /role="alert"/u)
   assert.match(unpair, /showCloseButton=\{!unpairMutation\.isPending\}/u)
-
   assert.match(addressDialog, /<DialogTitle>更新连接地址<\/DialogTitle>/u)
   assert.match(addressDialog, /runtime\.updateMachineConnectionAddress/u)
   assert.match(addressDialog, /ref=\{inputRef\}/u)
@@ -169,20 +180,26 @@ test('remote detail is truthful and unpair remains explicit and remote-only', as
 })
 
 test('New Conversation excludes identity-only remote Machines by canonical capabilities', async () => {
-  const [dialog, providerSelection] = await Promise.all([
+  const [dialog, providerSelection, machineSelection] = await Promise.all([
     source('components/conversations/new-conversation-dialog.tsx'),
     source('components/conversations/new-conversation-provider-selection.ts'),
+    source('components/conversations/new-conversation-machine-selection.ts'),
   ])
 
-  assert.match(dialog, /machine\.capabilities\.projectAccess/u)
-  assert.match(dialog, /machine\.capabilities\.providerExecution/u)
-  assert.match(dialog, /projectLocationForMachine/u)
-  assert.match(dialog, /executableConversationProviders/u)
+  assert.match(machineSelection, /machine\.capabilities\.projectAccess/u)
+  const selection = await source(
+    'components/conversations/new-conversation-selection.ts',
+  )
+  assert.match(selection, /selectNewConversationMachine/u)
+  assert.match(machineSelection, /machine\.capabilities\.providerExecution/u)
+  assert.match(selection, /project\.locations\.map/u)
+  assert.match(dialog, /conversationCreationProviderOptions/u)
   assert.match(
     providerSelection,
     /provider\.available[\s\S]*provider\.capabilities\.streaming[\s\S]*provider\.capabilities\.resume/u,
   )
-  assert.match(dialog, /当前智能体检测或安全执行条件/u)
+  assert.match(selection, /设备不能运行 AI 工具/u)
+  assert.match(selection, /choice\.unavailableReason !== undefined/u)
   assert.doesNotMatch(dialog, /当前 Codex 检测/u)
 })
 

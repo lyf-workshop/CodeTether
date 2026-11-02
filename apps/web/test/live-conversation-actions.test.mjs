@@ -297,7 +297,7 @@ test('safe mutation errors never expose Provider diagnostics', () => {
     message: 'raw JSON-RPC stack and provider payload',
   })
   const message = mutationErrorMessage(error, '发送消息')
-  assert.equal(message, '智能体未能发送消息。')
+  assert.equal(message, 'AI 工具未能发送消息。')
   assert.equal(message.includes('JSON-RPC'), false)
   assert.equal(
     mutationErrorMessage(new TypeError('network details'), '发送消息'),
@@ -341,7 +341,7 @@ test('structured canonical failures control pre-Turn mutation copy without raw f
     ],
     [
       canonicalFailure('login_required'),
-      '执行电脑上的智能体登录状态不可用。 请在执行电脑上完成登录，然后再开始新一轮。',
+      '执行电脑上的AI 工具登录状态不可用。 请在执行电脑上完成登录，然后再开始新一轮。',
     ],
     [
       canonicalFailure('machine_offline'),

@@ -1,5 +1,8 @@
 import {
+  AttentionIdSchema,
+  ConversationIdSchema,
   EpochIdSchema,
+  ProjectIdSchema,
   ProviderIdSchema,
   TurnIdSchema,
   type EpochId,
@@ -8,6 +11,7 @@ import {
 
 import type {
   DesktopWindowState,
+  NotificationClickIntent,
   NotificationIntent,
 } from '../notifications/desktop-notification-model.js'
 
@@ -21,10 +25,43 @@ export interface DesktopNotifications {
   deliver(intent: NotificationIntent): Promise<void>
   ensurePermission(): Promise<boolean>
   getWindowState(): DesktopWindowState | Promise<DesktopWindowState>
+  logStage?(stage: NotificationStage): void | Promise<void>
   subscribeToIntents(
-    listener: (intent: NotificationIntent) => void | Promise<void>,
+    listener: (intent: NotificationClickIntent) => void | Promise<void>,
   ): Promise<() => void>
 }
+
+export type NotificationStage =
+  | 'received'
+  | 'skip-inactive'
+  | 'skip-recent'
+  | 'skip-disabled'
+  | 'skip-suppressed'
+  | 'skip-permission-denied'
+  | 'window-state-start'
+  | 'window-state-done'
+  | 'window-state-timeout'
+  | 'metadata-start'
+  | 'metadata-done'
+  | 'permission-start'
+  | 'permission-done'
+  | 'permission-timeout'
+  | 'deliver-start'
+  | 'deliver-done'
+  | 'failed-recent-id-read'
+  | 'failed-preferences'
+  | 'failed-window-state'
+  | 'failed-presentation'
+  | 'failed-metadata'
+  | 'failed-permission'
+  | 'failed-delivery'
+  | 'failed-recent-id-write'
+  | 'failed-click-listener'
+  | 'failed-navigation'
+  | 'sse-connected'
+  | 'sse-reconnecting'
+  | 'sse-reset'
+  | 'sse-unavailable'
 
 export interface BackgroundRuntimeCapability {
   readonly available: boolean
@@ -160,9 +197,12 @@ interface NativeCapabilitiesOptions {
   acquireBackgroundExecutionLease?: BackgroundExecutionLeaseFactory
   subscribeToWakeEvents?: WakeEventSubscriber
   tauriAvailable?: boolean
+  platform?: 'macos' | 'other'
 }
 
 const MAX_RECENT_CLICK_INTENT_IDS = 512
+const NATIVE_WINDOW_STATE_TIMEOUT_MS = 1_000
+const NATIVE_PERMISSION_TIMEOUT_MS = 1_000
 
 const loadTauriCore: TauriCoreLoader = async () =>
   await import('@tauri-apps/api/core')
@@ -185,6 +225,7 @@ const unavailableDesktopNotifications: DesktopNotifications = {
     Promise.reject(new Error('Desktop notifications are unavailable.')),
   ensurePermission: () => Promise.resolve(false),
   getWindowState: readDocumentWindowState,
+  logStage: () => undefined,
   subscribeToIntents: () => Promise.resolve(() => undefined),
 }
 
@@ -261,6 +302,9 @@ export function createNativeCapabilities(
   const acquireBackgroundExecutionLease =
     options.acquireBackgroundExecutionLease ??
     acquireDesktopBackgroundExecutionLease
+  const macOSRuntime =
+    options.platform === 'macos' ||
+    (options.platform === undefined && detectMacOSRuntime())
   let inFlight: Promise<string | null> | undefined
   let permissionRequest: Promise<boolean> | undefined
   let permissionResult: boolean | undefined
@@ -293,27 +337,59 @@ export function createNativeCapabilities(
   const notifications: DesktopNotifications = {
     available: true,
     async getWindowState() {
-      const { getCurrentWindow } = await loadWindow()
-      const currentWindow = getCurrentWindow()
-      const [focused, minimized, visible] = await Promise.all([
-        currentWindow.isFocused(),
-        currentWindow.isMinimized(),
-        currentWindow.isVisible(),
-      ])
-      return { focused, minimized, visible }
+      try {
+        const { getCurrentWindow } = await withTimeout(
+          loadWindow(),
+          NATIVE_WINDOW_STATE_TIMEOUT_MS,
+        )
+        const currentWindow = getCurrentWindow()
+        const state = await withTimeout(
+          Promise.all([
+            currentWindow.isFocused(),
+            currentWindow.isMinimized(),
+            currentWindow.isVisible(),
+          ]),
+          NATIVE_WINDOW_STATE_TIMEOUT_MS,
+        )
+        return {
+          focused: state[0],
+          minimized: state[1],
+          visible: state[2],
+        }
+      } catch {
+        return readDocumentWindowState()
+      }
     },
     ensurePermission() {
       if (permissionResult !== undefined) {
         return Promise.resolve(permissionResult)
       }
       if (permissionRequest !== undefined) return permissionRequest
-      const request = loadNotification().then(async (notification) => {
-        const granted =
-          (await notification.isPermissionGranted()) ||
-          (await notification.requestPermission()) === 'granted'
-        permissionResult = granted
-        return granted
-      })
+      const request = (async () => {
+        try {
+          const notification = await withTimeout(
+            loadNotification(),
+            NATIVE_PERMISSION_TIMEOUT_MS,
+          )
+          const granted = await withTimeout(
+            (async () =>
+              (await notification.isPermissionGranted()) ||
+              (await notification.requestPermission()) === 'granted')(),
+            NATIVE_PERMISSION_TIMEOUT_MS,
+          )
+          permissionResult = granted
+          return granted
+        } catch (error) {
+          if (macOSRuntime) {
+            // The macOS Rust delivery queue owns the authorization request and
+            // fails closed if the system has denied notifications. A stalled
+            // WebView plugin call must not block that bounded native path.
+            permissionResult = true
+            return true
+          }
+          throw error
+        }
+      })()
       const trackedRequest = request.finally(() => {
         if (permissionRequest === trackedRequest) permissionRequest = undefined
       })
@@ -324,6 +400,14 @@ export function createNativeCapabilities(
       assertNotificationIntent(intent)
       const { invoke } = await loadCore()
       await invoke<void>('deliver_attention_notification', { intent })
+    },
+    async logStage(stage) {
+      try {
+        const { invoke } = await loadCore()
+        await invoke<void>('log_notification_stage', { stage })
+      } catch {
+        // Diagnostic logging is best-effort and cannot affect notifications.
+      }
     },
     async subscribeToIntents(listener) {
       // WebView2 can suspend a minimized document and therefore pause its SSE
@@ -343,7 +427,7 @@ export function createNativeCapabilities(
       const recentIntentIds = new Set<string>()
       const recentIntentOrder: string[] = []
 
-      const forward = (intent: NotificationIntent): Promise<void> => {
+      const forward = (intent: NotificationClickIntent): Promise<void> => {
         if (recentIntentIds.has(intent.attentionId)) return Promise.resolve()
         recentIntentIds.add(intent.attentionId)
         recentIntentOrder.push(intent.attentionId)
@@ -557,6 +641,33 @@ function readDocumentWindowState(): DesktopWindowState {
   }
 }
 
+function detectMacOSRuntime(): boolean {
+  if (typeof navigator === 'undefined') return false
+  return (
+    /Macintosh|Mac OS X/u.test(navigator.userAgent) ||
+    /^Mac/u.test(navigator.platform)
+  )
+}
+
+async function withTimeout<T>(
+  value: Promise<T>,
+  timeoutMs: number,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      value,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error('Native capability timed out.'))
+        }, timeoutMs)
+      }),
+    ])
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+}
+
 function subscribeToDocumentWakeEvents(listener: () => void): () => void {
   if (typeof window === 'undefined' || typeof document === 'undefined') {
     return () => undefined
@@ -605,18 +716,35 @@ function acquireDesktopBackgroundExecutionLease(): BackgroundExecutionLease {
   }
 }
 
-function parseNotificationIntent(value: unknown): NotificationIntent {
+function parseNotificationIntent(value: unknown): NotificationClickIntent {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new Error('Native notification intent is invalid.')
   }
   const record = value as Record<string, unknown>
+  const keys = Object.keys(record)
+  const attentionId = AttentionIdSchema.parse(record.attentionId)
+  if (keys.length === 1 && keys[0] === 'attentionId') {
+    return { attentionId }
+  }
+  const allowedKeys = new Set([
+    'attentionId',
+    'type',
+    'projectId',
+    'conversationId',
+    'turnId',
+    'title',
+    'body',
+  ])
+  if (keys.some((key) => !allowedKeys.has(key))) {
+    throw new Error('Native notification intent is invalid.')
+  }
   const turnId =
     record.turnId === undefined ? undefined : TurnIdSchema.parse(record.turnId)
   const intent = {
-    attentionId: requiredString(record.attentionId, 160),
+    attentionId,
     type: notificationType(record.type),
-    projectId: requiredString(record.projectId, 160),
-    conversationId: requiredString(record.conversationId, 160),
+    projectId: ProjectIdSchema.parse(record.projectId),
+    conversationId: ConversationIdSchema.parse(record.conversationId),
     ...(turnId === undefined ? {} : { turnId }),
     title: requiredString(record.title, 120),
     body: requiredString(record.body, 512),
@@ -634,10 +762,10 @@ function parseDesktopResumeIntent(value: unknown): DesktopResumeIntent {
 }
 
 function assertNotificationIntent(intent: NotificationIntent): void {
-  requiredString(intent.attentionId, 160)
+  AttentionIdSchema.parse(intent.attentionId)
   notificationType(intent.type)
-  requiredString(intent.projectId, 160)
-  requiredString(intent.conversationId, 160)
+  ProjectIdSchema.parse(intent.projectId)
+  ConversationIdSchema.parse(intent.conversationId)
   if (intent.turnId !== undefined) TurnIdSchema.parse(intent.turnId)
   requiredString(intent.title, 120)
   requiredString(intent.body, 512)

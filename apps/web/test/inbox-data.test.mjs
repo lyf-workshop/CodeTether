@@ -109,7 +109,7 @@ test('non-command Approval presentation keeps normalized Host metadata', () => {
   }
 
   assert.deepEqual(createInboxItemPresentation(item), {
-    conversation: '智能体会话',
+    conversation: 'AI 工具会话',
     description: 'src/example.ts',
     title: '修改文件',
   })
@@ -118,7 +118,7 @@ test('non-command Approval presentation keeps normalized Host metadata', () => {
 test('failed Attention uses canonical product copy without Provider diagnostics', () => {
   const presentation = createInboxItemPresentation(failed)
 
-  assert.equal(presentation.title, '智能体意外退出')
+  assert.equal(presentation.title, 'AI 工具意外退出')
   assert.match(presentation.description, /本轮工作可能不完整/u)
   assert.doesNotMatch(presentation.description, /RAW|stderr/u)
 })
@@ -149,11 +149,19 @@ test('Inbox summary cards use the approved open-attention labels', async () => {
     'utf8',
   )
 
-  assert.match(source, /label: '待处理'/u)
-  assert.match(source, /label: '需要审批'/u)
-  assert.match(source, /label: '完成待查看'/u)
-  assert.match(source, /label: '失败待处理'/u)
-  assert.match(source, /本轮工作失败，等待确认/u)
+  assert.match(source, /label: '全部'/u)
+  assert.match(source, /label: '等待批准'/u)
+  assert.match(source, /label: '待查看'/u)
+  assert.match(source, /label: '失败'/u)
+  for (const field of [
+    'totalOpen',
+    'approvalOpen',
+    'completedReviewOpen',
+    'failedOpen',
+  ])
+    assert.ok(source.includes('summary.' + field))
+  assert.match(source, /aria-pressed=\{activeFilter === item\.filter\}/u)
+  assert.match(source, /overflow-x-auto/u)
   assert.doesNotMatch(source, /Turn 失败/u)
 })
 

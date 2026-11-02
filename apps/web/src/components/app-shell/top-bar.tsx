@@ -1,7 +1,14 @@
-import type { ComponentPropsWithoutRef, MouseEventHandler, Ref } from 'react'
+import type {
+  ComponentPropsWithoutRef,
+  MouseEventHandler,
+  ReactNode,
+  Ref,
+} from 'react'
 import { Link } from '@tanstack/react-router'
+import type { MachineId, ProjectId } from '@codetether/protocol'
 import {
   Bell,
+  ArrowLeft,
   PanelLeftClose,
   PanelLeftOpen,
   Search,
@@ -25,16 +32,28 @@ interface TopBarProfile {
 type TopBarBreadcrumb =
   | { label: string; to?: undefined }
   | { label: string; to: '/machines' }
+  | { label: string; to: '/devices' }
+  | { label: string; to: '/devices/$machineId'; params: { machineId: string } }
   | { label: string; to: '/projects' }
+  | { label: string; to: '/add' }
+  | { label: string; to: '/settings'; search?: { projectId?: ProjectId } }
+  | {
+      label: string
+      to: '/settings/$section'
+      params: { section: string }
+      search?: { projectId?: ProjectId }
+    }
   | {
       label: string
       params: { projectId: string }
       to: '/projects/$projectId'
+      search?: { machineId?: MachineId }
     }
   | {
       label: string
       params: { projectId: string }
       to: '/projects/$projectId/conversations'
+      search?: { machineId?: MachineId }
     }
 
 interface TopBarProps extends Omit<
@@ -75,13 +94,17 @@ function TopBar({
       ? `收件箱，${notificationCount} 个待处理事项`
       : '收件箱'
   const resolvedBreadcrumbs = breadcrumbs ?? [{ label: currentPage }]
+  const parentBreadcrumb = resolvedBreadcrumbs
+    .slice(0, -1)
+    .reverse()
+    .find((breadcrumb) => breadcrumb.to !== undefined)
   const sidebarToggleLabel = sidebarCollapsed ? '显示侧边栏' : '隐藏侧边栏'
 
   return (
     <header
       data-slot="top-bar"
       className={cn(
-        'flex h-[var(--layout-topbar-height)] min-w-0 shrink-0 border-b border-border bg-navigation',
+        'flex h-[var(--layout-topbar-height)] min-w-0 shrink-0 border-b border-border bg-background',
         className,
       )}
       {...props}
@@ -116,7 +139,11 @@ function TopBar({
       </div>
 
       <div className="flex min-w-0 flex-1 items-center gap-3 pr-[var(--layout-topbar-inline-padding)] pl-3">
-        <nav aria-label="当前位置" className="min-w-0 flex-1 overflow-hidden">
+        <nav
+          aria-label="当前位置"
+          data-slot="desktop-breadcrumbs"
+          className="min-w-0 flex-1 overflow-hidden"
+        >
           <ol className="flex min-w-0 items-center gap-3 text-md font-medium">
             {resolvedBreadcrumbs.map((breadcrumb, index) => {
               const isCurrent = index === resolvedBreadcrumbs.length - 1
@@ -144,29 +171,43 @@ function TopBar({
             })}
           </ol>
         </nav>
+        <div data-slot="mobile-breadcrumb">
+          {parentBreadcrumb === undefined ? null : (
+            <span data-slot="mobile-back-link">
+              <BreadcrumbContent
+                breadcrumb={parentBreadcrumb}
+                isCurrent={false}
+              >
+                <ArrowLeft aria-hidden="true" className="size-4" />
+                <span className="sr-only">返回{parentBreadcrumb.label}</span>
+              </BreadcrumbContent>
+            </span>
+          )}
+          <span
+            className="min-w-0 truncate text-md font-medium"
+            title={currentPage}
+          >
+            {currentPage}
+          </span>
+        </div>
 
         <div
           data-slot="top-bar-right-actions"
           className="flex min-w-0 shrink-0 items-center gap-2"
         >
           {onSearch === undefined ? null : (
-            <Button
-              variant="outline"
+            <IconButton
+              type="button"
+              variant="ghost"
               size="sm"
               onClick={onSearch}
+              data-slot="workspace-global-search"
               aria-keyshortcuts="Meta+K Control+K"
-              aria-label="搜索，快捷键 ⌘K 或 Ctrl+K"
-              className="h-9 w-9 justify-center border-border-strong bg-surface-inset px-0 text-text-secondary hover:bg-surface-muted hover:text-text-primary lg:w-44 lg:justify-start lg:px-3"
+              label="搜索，快捷键 ⌘K 或 Ctrl+K"
+              className="size-8 shrink-0 text-text-secondary"
             >
               <Search aria-hidden="true" />
-              <span className="hidden lg:inline">搜索</span>
-              <kbd
-                aria-hidden="true"
-                className="ml-auto hidden whitespace-nowrap font-sans text-2xs text-text-muted xl:inline"
-              >
-                ⌘K / Ctrl+K
-              </kbd>
-            </Button>
+            </IconButton>
           )}
 
           <div className="flex shrink-0 items-center gap-1">
@@ -204,7 +245,7 @@ function TopBar({
                     className="h-8 gap-2 px-2 text-text-secondary hover:text-text-primary"
                   >
                     <ShieldCheck aria-hidden="true" />
-                    <span className="max-[1180px]:sr-only">检查状态</span>
+                    <span className="narrow-desktop:sr-only">检查状态</span>
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom">检查状态</TooltipContent>
@@ -243,7 +284,9 @@ function TopBar({
 function BreadcrumbContent({
   breadcrumb,
   isCurrent,
+  children,
 }: {
+  children?: ReactNode
   breadcrumb: TopBarBreadcrumb
   isCurrent: boolean
 }) {
@@ -260,21 +303,62 @@ function BreadcrumbContent({
             : 'min-w-0 truncate text-text-primary'
         }
       >
-        {breadcrumb.label}
+        {children ?? breadcrumb.label}
       </span>
     )
   }
+  if (breadcrumb.to === '/add')
+    return (
+      <Link to="/add" className={className} title={breadcrumb.label}>
+        {children ?? breadcrumb.label}
+      </Link>
+    )
+  if (breadcrumb.to === '/settings')
+    return (
+      <Link
+        to="/settings"
+        search={breadcrumb.search}
+        className={className}
+        title={breadcrumb.label}
+      >
+        {children ?? breadcrumb.label}
+      </Link>
+    )
+  if (breadcrumb.to === '/settings/$section')
+    return (
+      <Link
+        to="/settings/$section"
+        params={breadcrumb.params}
+        search={breadcrumb.search}
+        className={className}
+        title={breadcrumb.label}
+      >
+        {children ?? breadcrumb.label}
+      </Link>
+    )
   if (breadcrumb.to === '/projects') {
     return (
       <Link to="/projects" className={className} title={breadcrumb.label}>
-        {breadcrumb.label}
+        {children ?? breadcrumb.label}
       </Link>
     )
   }
-  if (breadcrumb.to === '/machines') {
+  if (breadcrumb.to === '/devices/$machineId') {
     return (
-      <Link to="/machines" className={className} title={breadcrumb.label}>
-        {breadcrumb.label}
+      <Link
+        to="/devices/$machineId"
+        params={breadcrumb.params}
+        className={className}
+        title={breadcrumb.label}
+      >
+        {children ?? breadcrumb.label}
+      </Link>
+    )
+  }
+  if (breadcrumb.to === '/machines' || breadcrumb.to === '/devices') {
+    return (
+      <Link to={breadcrumb.to} className={className} title={breadcrumb.label}>
+        {children ?? breadcrumb.label}
       </Link>
     )
   }
@@ -283,10 +367,11 @@ function BreadcrumbContent({
       <Link
         to="/projects/$projectId"
         params={breadcrumb.params}
+        search={breadcrumb.search}
         className={className}
         title={breadcrumb.label}
       >
-        {breadcrumb.label}
+        {children ?? breadcrumb.label}
       </Link>
     )
   }
@@ -294,10 +379,11 @@ function BreadcrumbContent({
     <Link
       to="/projects/$projectId/conversations"
       params={breadcrumb.params}
+      search={breadcrumb.search}
       className={className}
       title={breadcrumb.label}
     >
-      {breadcrumb.label}
+      {children ?? breadcrumb.label}
     </Link>
   )
 }

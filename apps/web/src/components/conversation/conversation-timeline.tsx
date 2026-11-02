@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   type UIEvent,
+  type ReactNode,
 } from 'react'
 import {
   CheckCircle2,
@@ -48,6 +49,7 @@ import { presentProjectPaths } from './message-presentation'
 import { AgentMessage, UserMessage } from './message'
 
 interface ConversationTimelineProps {
+  readonly header?: ReactNode
   anchorRequestKey?: string
   agent: AgentId
   timeline: ConversationTimelineViewModel
@@ -129,7 +131,7 @@ function RoutineToolGroup({
       >
         <CheckCircle2
           aria-hidden="true"
-          className="size-4 shrink-0 text-success"
+          className="size-4 shrink-0 text-success-text"
         />
         <span className="min-w-0 flex-1 truncate font-medium">{label}</span>
         <span className="shrink-0 text-xs text-text-muted">
@@ -221,7 +223,7 @@ function AgentRunExecutions({
             <div className="mt-3 border-t border-border/50">
               <ToolCallCard
                 title={change.path}
-                description="文件已变更，CodeTether 未提供可展示的 Diff"
+                description="文件已变更，CodeTether 未提供可展示的差异内容"
                 status="completed"
                 delta={{
                   additions: change.additions,
@@ -377,6 +379,7 @@ function NativeConversationHistory({
 }
 
 export function ConversationTimeline({
+  header,
   anchorRequestKey,
   agent,
   timeline,
@@ -576,7 +579,8 @@ export function ConversationTimeline({
         viewportRef={viewportRef}
         onViewportScroll={handleScroll}
       >
-        <div className="mx-auto w-full max-w-3xl px-5 pb-5">
+        <div className="mx-auto w-full min-w-0 max-w-(--read-w) px-8 pb-8 max-sm:px-4">
+          {header}
           <p className="flex h-[var(--layout-conversation-day-marker-height)] items-center justify-center text-center text-xs text-text-muted">
             {timeline.dayLabel}
           </p>

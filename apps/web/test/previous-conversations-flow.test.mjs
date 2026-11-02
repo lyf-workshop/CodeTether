@@ -1,9 +1,6 @@
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
-import { resolve } from 'node:path'
 import test from 'node:test'
-
-const sourceDirectory = resolve(import.meta.dirname, '..', 'src')
+import { readProjectFlowSource } from './fixtures/project-flow-source.mjs'
 
 test('Previous Conversations is a bounded explicit discovery and adoption step', async () => {
   const source = await readSource(
@@ -30,7 +27,9 @@ test('selection stays accessible and adoption is an explicit per-candidate mutat
     'components/projects/previous-conversations-step.tsx',
   )
 
-  assert.match(source, /type="checkbox"/u)
+  assert.match(source, /<Checkbox/u)
+  assert.match(source, /onCheckedChange/u)
+  assert.match(source, /htmlFor=\{\s*selectableCandidate/u)
   assert.match(source, /aria-label=\{`选择 \$\{candidate\.title\}`\}/u)
   assert.match(source, /role="status" aria-live="polite"/u)
   assert.match(source, /scanState === 'loading-more'/u)
@@ -40,7 +39,7 @@ test('selection stays accessible and adoption is an explicit per-candidate mutat
   assert.match(source, /\? 'alert'/u)
   assert.match(source, /for \(const candidate of candidates\)/u)
   assert.match(source, /runtime\.adoptProviderSession\(/u)
-  assert.match(source, /导入不会启动智能体/u)
+  assert.match(source, /导入不会启动 AI 工具/u)
   assert.match(source, /已在 CodeTether 中/u)
   assert.match(source, /会话已发生变化，请重新扫描/u)
   assert.doesNotMatch(source, /nativeSessionId/u)
@@ -79,25 +78,28 @@ test('local Add Project preserves completion behavior after optional discovery',
   const source = await readSource('components/projects/add-project-dialog.tsx')
 
   assert.match(source, /<PreviousConversationsStep/u)
-  assert.match(source, /projectId=\{createdProject\.project\.projectId\}/u)
-  assert.match(source, /machineId=\{createdProject\.machineId\}/u)
+  assert.match(source, /projectId=\{context\.projectId\}/u)
+  assert.match(source, /machineId=\{context\.machineId\}/u)
   assert.match(source, /finishCreatedProject/u)
-  assert.match(source, /await onProjectCreated\(project, created\)/u)
+  assert.match(
+    source,
+    /await onProjectCreated\(project, created, exactMachineId\)/u,
+  )
   assert.match(source, /to: '\/projects\/\$projectId'/u)
 })
 
 test('remote ProjectLocation discovery starts only after validated registration', async () => {
-  const source = await readSource(
-    'components/projects/add-project-location-dialog.tsx',
-  )
+  const source = await readSource('components/projects/add-project-dialog.tsx')
 
-  assert.match(source, /onSuccess: async \(response\) =>/u)
-  assert.match(source, /machineId: response\.data\.location\.machineId/u)
-  assert.match(source, /project: response\.data\.project/u)
-  assert.match(source, /setRegisteredLocation\(context\)/u)
-  assert.match(source, /registeredLocation === undefined \? \(/u)
+  assert.match(source, /onSuccess: async \(response, values\) =>/u)
+  assert.match(source, /const project = response\.data\.project/u)
+  assert.match(source, /projectId: project\.projectId/u)
+  assert.match(source, /machineId: values\.machineId/u)
+  assert.match(source, /setCreatedProject\(\{/u)
+  assert.match(source, /createdProject === undefined \? \(/u)
   assert.match(source, /<PreviousConversationsStep/u)
-  assert.match(source, /onFinished=\{\(\) => setDialogOpen\(false\)\}/u)
+  assert.match(source, /machineId=\{context\.machineId\}/u)
+  assert.match(source, /nextProjectCreationStep\(/u)
 })
 
 test('the Web runtime keeps adoption identity private and invalidates durable indexes', async () => {
@@ -109,6 +111,20 @@ test('the Web runtime keeps adoption identity private and invalidates durable in
   assert.match(source, /invalidateConversationDurableQueries/u)
 })
 
+test('opening an adopted conversation cannot interrupt a pending import batch', async () => {
+  const source = await readSource(
+    'components/projects/previous-conversations-step.tsx',
+  )
+  assert.match(
+    source,
+    /async function openConversation\(conversationId: ConversationId\) \{\s*if \(importInFlightRef\.current\) return/u,
+  )
+  assert.match(
+    source,
+    /disabled=\{importing\}\s+onClick=\{\(\) =>\s+void openConversation/u,
+  )
+})
+
 async function readSource(relativePath) {
-  return await readFile(resolve(sourceDirectory, relativePath), 'utf8')
+  return await readProjectFlowSource(relativePath)
 }

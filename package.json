@@ -2,6 +2,7 @@
   "name": "codetether-v2",
   "version": "0.1.0-alpha.0",
   "private": true,
+  "license": "SEE LICENSE IN LICENSE",
   "type": "module",
   "description": "A control center for AI coding agents.",
   "packageManager": "pnpm@11.20.0",

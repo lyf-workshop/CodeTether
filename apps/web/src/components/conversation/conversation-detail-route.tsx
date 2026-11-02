@@ -5,6 +5,7 @@ import {
   useQueryClient,
 } from '@tanstack/react-query'
 import {
+  Link,
   useNavigate,
   useParams,
   useRouterState,
@@ -18,12 +19,14 @@ import {
   type ConversationSummary,
   type GetConversationResponse,
   type MachineSummary,
+  type MachineId,
   type ProjectRecord,
   type ProviderDescriptor,
   type ProviderInstallationSummary,
   type TurnId,
 } from '@codetether/protocol'
 import { Button } from '@codetether/ui'
+import { providerPresentationForMachine } from '../../provider/provider-presentation'
 
 import {
   useHostConnectionState,
@@ -57,7 +60,7 @@ import {
   projectLocationForMachine,
 } from '../../runtime/host/project-location'
 import { ConversationDetailPage } from './conversation-detail-page'
-import { createDemoConversationDetailSource } from './demo-conversation-adapter'
+import { AttentionReviewNotice } from './attention-review-notice'
 import {
   createLiveConversationDetailSource,
   type LiveConversationMachineContext,
@@ -71,15 +74,28 @@ import {
   conversationExecutionBoundaryPresentation,
 } from './conversation-controls'
 import { useLiveConversationControls } from './use-live-conversation-controls'
+import {
+  createConversationDisplayContext,
+  conversationPresentationForDetail,
+  type ConversationDisplayContext,
+} from './conversation-gate-presentation'
 
 export function ConversationDetailRoute() {
-  const { conversationId } = useParams({
-    from: '/conversations/$conversationId',
+  const { conversationId: routeConversationId } = useParams({
+    strict: false,
   })
-  const { focus, panel, turn } = useSearch({
-    from: '/conversations/$conversationId',
+  const conversationId = routeConversationId ?? ''
+  const { focus, panel, turn, attentionReview } = useSearch({
+    strict: false,
   })
-  const navigate = useNavigate({ from: '/conversations/$conversationId' })
+  const currentPath = useRouterState({
+    select: (state) => state.location.pathname,
+  })
+  const navigate = useNavigate({
+    from: currentPath.startsWith('/c/')
+      ? '/c/$conversationId'
+      : '/conversations/$conversationId',
+  })
   const anchorRequestKey = useRouterState({
     select: (state) => state.location.state.__TSR_key ?? state.location.href,
   })
@@ -93,11 +109,10 @@ export function ConversationDetailRoute() {
     const clearIntent = () => {
       void navigate({
         replace: true,
-        to: '/conversations/$conversationId',
-        params: { conversationId },
         search: {
           ...(panel === undefined ? {} : { panel }),
           ...(turn === undefined ? {} : { turn }),
+          ...(attentionReview === undefined ? {} : { attentionReview }),
         },
       })
     }
@@ -106,7 +121,11 @@ export function ConversationDetailRoute() {
       isBlocked: () => document.querySelector('[role="dialog"]') !== null,
       getTarget: () => {
         const composer = document.getElementById('conversation-composer')
-        return composer instanceof HTMLTextAreaElement ? composer : null
+        return composer instanceof HTMLTextAreaElement &&
+          !composer.readOnly &&
+          composer.closest('[hidden]') === null
+          ? composer
+          : null
       },
       claim: () => {
         if (handledFocusRequestRef.current === focusRequestKey) return false
@@ -117,7 +136,7 @@ export function ConversationDetailRoute() {
       observe: (onChange) => {
         const observer = new MutationObserver(onChange)
         observer.observe(document.body, {
-          attributeFilter: ['data-state'],
+          attributeFilter: ['data-state', 'hidden', 'readonly'],
           attributes: true,
           childList: true,
           subtree: true,
@@ -130,29 +149,49 @@ export function ConversationDetailRoute() {
       },
     })
     return () => handoff.dispose()
-  }, [anchorRequestKey, conversationId, focus, navigate, panel, turn])
+  }, [
+    anchorRequestKey,
+    attentionReview,
+    conversationId,
+    focus,
+    navigate,
+    panel,
+    turn,
+  ])
 
   if (liveConversationId.success) {
     return (
-      <LiveConversationDetailRoute
-        anchorRequestKey={anchorRequestKey}
-        conversationId={liveConversationId.data}
-        initialInspectorTab={panel}
-        targetTurnId={turn}
-      />
+      <div className="flex h-full min-h-0 flex-col">
+        {attentionReview === 'unresolved' ? <AttentionReviewNotice /> : null}
+        <div className="min-h-0 flex-1">
+          <LiveConversationDetailRoute
+            anchorRequestKey={anchorRequestKey}
+            conversationId={liveConversationId.data}
+            initialInspectorTab={panel}
+            targetTurnId={turn}
+          />
+        </div>
+      </div>
     )
   }
 
-  const source = createDemoConversationDetailSource(conversationId)
-
   return (
-    <ConversationDetailPage
-      anchorRequestKey={anchorRequestKey}
-      viewModel={source.conversation}
-      connectionIndicator={source.connectionIndicator}
-      initialInspectorTab={panel}
-      targetTurnId={turn}
-    />
+    <section
+      aria-labelledby="missing-conversation-title"
+      className="grid h-full min-h-0 place-items-center bg-background px-6"
+    >
+      <div className="max-w-md space-y-4 text-center">
+        <h1 id="missing-conversation-title" className="text-xl font-semibold">
+          找不到这个会话
+        </h1>
+        <p className="text-md text-text-secondary">
+          会话链接无效。请回到设备，在项目中选择已有会话。
+        </p>
+        <Button asChild variant="secondary">
+          <Link to="/devices">返回设备</Link>
+        </Button>
+      </div>
+    </section>
   )
 }
 
@@ -193,6 +232,7 @@ function LiveConversationDetailRoute({
   return (
     <LoadedLiveConversationDetail
       anchorRequestKey={anchorRequestKey}
+      key={detailQuery.data.conversation.conversationId}
       detail={detailQuery.data}
       connectionState={connectionState}
       initialInspectorTab={initialInspectorTab}
@@ -281,16 +321,12 @@ function LoadedLiveConversationDetail({
     readsNativeHistory,
   ])
 
-  const conversation = projection?.conversations[conversationId]
-  if (conversation === undefined) {
-    return (
-      <LiveConversationBoundary
-        state={connectionState}
-        conversationId={conversationId}
-        onRetry={() => runtime.retry()}
-      />
-    )
-  }
+  const presentation = conversationPresentationForDetail(
+    projection,
+    detail,
+    connectionState,
+  )
+  const conversation = presentation.conversation
 
   if (
     (projectQuery.data === undefined && !projectQuery.isError) ||
@@ -316,7 +352,22 @@ function LoadedLiveConversationDetail({
       anchorRequestKey={anchorRequestKey}
       conversation={conversation}
       summaries={summaries}
-      connectionState={connectionState}
+      displayContext={createConversationDisplayContext({
+        machineId,
+        projectId,
+        adopted: detail.conversation.origin === 'adopted_native',
+        providerName: providerPresentationForMachine(
+          machineQuery.data?.providers ?? [],
+          detail.conversation.provider,
+        ).displayName,
+        machine: machineQuery.data?.machine,
+        project: projectQuery.data,
+        provider: machineQuery.data?.providers.find(
+          (provider) => provider.provider === detail.conversation.provider,
+        ),
+        reasoning: detail.conversation.reasoning,
+      })}
+      connectionState={presentation.connectionState}
       bootstrap={runtime.bootstrap}
       project={projectQuery.data}
       projectAvailability={
@@ -330,6 +381,7 @@ function LoadedLiveConversationDetail({
           : projectLocationForMachine(projectQuery.data, machineId)?.rootPath
       }
       machine={machineQuery.data?.machine}
+      owningMachineId={machineId}
       machineName={machineQuery.data?.machine.displayName ?? '电脑'}
       machineNames={Object.fromEntries(
         (machinesQuery.data ?? []).map((machine) => [
@@ -369,6 +421,8 @@ function LoadedLiveConversationDetail({
 }
 
 interface ConnectedLiveConversationDetailProps {
+  readonly owningMachineId: MachineId
+  readonly displayContext: ConversationDisplayContext
   readonly anchorRequestKey: string
   readonly conversation: ConversationReadModel
   readonly summaries: readonly ConversationSummary[]
@@ -389,6 +443,8 @@ interface ConnectedLiveConversationDetailProps {
 }
 
 function ConnectedLiveConversationDetail({
+  owningMachineId,
+  displayContext,
   anchorRequestKey,
   conversation,
   summaries,
@@ -495,7 +551,8 @@ function ConnectedLiveConversationDetail({
           })}
       controls={controls}
       initialInspectorTab={initialInspectorTab}
-      machineId={machine?.machineId}
+      machineId={owningMachineId}
+      displayContext={displayContext}
       targetTurnId={targetTurnId}
       {...(project === undefined
         ? {}
@@ -505,7 +562,7 @@ function ConnectedLiveConversationDetail({
               void navigate({
                 to: '/projects/$projectId/conversations',
                 params: { projectId: project.projectId },
-                search: { view: 'archived' },
+                search: { view: 'archived', machineId: owningMachineId },
               }).then(() => {
                 window.requestAnimationFrame(() => {
                   document

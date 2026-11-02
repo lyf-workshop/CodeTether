@@ -1,13 +1,26 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
+    <script id="ct-theme-init">
+      ;(() => {
+        let preference = 'light'
+        try {
+          const stored = localStorage.getItem('ct-theme')
+          if (stored === 'light' || stored === 'dark' || stored === 'system')
+            preference = stored
+        } catch {}
+        const systemDark =
+          preference === 'system' &&
+          typeof matchMedia === 'function' &&
+          matchMedia('(prefers-color-scheme: dark)').matches
+        document.documentElement.dataset.theme =
+          preference === 'system' ? (systemDark ? 'dark' : 'light') : preference
+      })()
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" href="data:," />
-    <meta
-      name="description"
-      content="CodeTether — a control center for AI coding agents."
-    />
+    <meta name="description" content="CodeTether — AI 编程工具的工作中心。" />
     <title>CodeTether</title>
   </head>
   <body>

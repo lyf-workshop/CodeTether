@@ -88,6 +88,7 @@ test('foreground suppression skips permission and delivery only for direct UI', 
   await nextTask()
   assert.equal(fixture.adapter.permissionCalls, 0)
   assert.equal(fixture.adapter.deliveries.length, 0)
+  assert.equal(fixture.adapter.stages.includes('skip-suppressed'), true)
 
   fixture.surface = {
     kind: 'conversation',
@@ -141,6 +142,44 @@ test('window state failure cannot silently drop a new Attention', async (t) => {
   assert.deepEqual(fixture.diagnostics, [
     { attentionId: 'attn_window_error01', stage: 'window-state' },
   ])
+  assert.equal(fixture.adapter.stages.includes('failed-window-state'), true)
+})
+
+test('window state timeout keeps delivery moving', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const fixture = createFixture({ windowStatePending: true })
+  t.after(async () => await fixture.coordinator.stop())
+  fixture.coordinator.start()
+  fixture.source.emit(
+    attentionCreated(openAttention('attn_window_timeout01'), 1),
+  )
+  await waitForStage(fixture.adapter, 'window-state-start')
+  t.mock.timers.tick(5_000)
+  await new Promise((resolve) => setImmediate(resolve))
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.deepEqual(
+    fixture.adapter.stages.filter((stage) => stage.startsWith('window-state')),
+    ['window-state-start', 'window-state-timeout'],
+  )
+  assert.equal(fixture.adapter.stages.includes('failed-window-state'), true)
+  assert.equal(fixture.adapter.stages.includes('deliver-start'), true)
+})
+
+test('permission timeout ends only that notification', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const fixture = createFixture({ permissionPending: true })
+  t.after(async () => await fixture.coordinator.stop())
+  fixture.coordinator.start()
+  fixture.source.emit(
+    attentionCreated(openAttention('attn_permission_timeout01'), 1),
+  )
+  await waitForStage(fixture.adapter, 'permission-start')
+  t.mock.timers.tick(5_000)
+  await new Promise((resolve) => setImmediate(resolve))
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(fixture.adapter.deliveries.length, 0)
+  assert.equal(fixture.adapter.stages.includes('permission-timeout'), true)
+  assert.equal(fixture.adapter.stages.includes('failed-permission'), true)
 })
 
 test('reads current preferences for each new Attention without affecting Inbox truth', async (t) => {
@@ -157,6 +196,7 @@ test('reads current preferences for each new Attention without affecting Inbox t
   await nextTask()
   assert.equal(fixture.adapter.deliveries.length, 0)
   assert.equal(fixture.adapter.permissionCalls, 0)
+  assert.equal(fixture.adapter.stages.includes('skip-disabled'), true)
 
   preferences = { ...preferences, completed_review: true }
   fixture.source.emit(attentionCreated(openAttention('attn_enabled01'), 2))
@@ -173,6 +213,7 @@ test('checks permission only for a real delivery need and tolerates denial', asy
   await waitFor(() => fixture.adapter.permissionCalls === 1)
   assert.equal(fixture.adapter.deliveries.length, 0)
   assert.deepEqual(fixture.diagnostics, [])
+  assert.equal(fixture.adapter.stages.includes('skip-permission-denied'), true)
 })
 
 test('uses optional recent delivered IDs without creating a second Attention store', async (t) => {
@@ -196,6 +237,7 @@ test('uses optional recent delivered IDs without creating a second Attention sto
   await waitFor(() => rememberCalls.length === 1)
   assert.equal(fixture.adapter.deliveries[0].attentionId, 'attn_fresh01')
   assert.deepEqual(rememberCalls, ['attn_fresh01'])
+  assert.equal(fixture.adapter.stages.includes('skip-recent'), true)
 })
 
 test('adapter and plugin failures stay best-effort and never stop later arrivals', async (t) => {
@@ -262,6 +304,168 @@ test('click intents navigate without resolving Attention and listener lifecycle 
   await fixture.coordinator.stop()
 })
 
+test('an ID-only click resolves only a read-only navigation target, not a delivery', async (t) => {
+  const item = openAttention('attn_link_target01')
+  const target = {
+    attentionId: item.attentionId,
+    projectId: item.projectId,
+    conversationId: item.conversationId,
+    turnId: item.turnId,
+  }
+  const resolutions = []
+  const navigations = []
+  const fixture = createFixture({
+    resolveClickTarget: async (attentionId, signal) => {
+      resolutions.push({ attentionId, aborted: signal.aborted })
+      return target
+    },
+    navigate: (value) => navigations.push(value),
+  })
+  t.after(async () => await fixture.coordinator.stop())
+  fixture.coordinator.start()
+  await waitFor(() => fixture.adapter.intentSubscribeCalls === 1)
+
+  fixture.adapter.click({ attentionId: item.attentionId })
+  await waitFor(() => navigations.length === 1)
+  assert.deepEqual(resolutions, [
+    { attentionId: item.attentionId, aborted: false },
+  ])
+  assert.strictEqual(navigations[0], target)
+  assert.deepEqual(fixture.metadataCalls, [])
+  assert.equal(fixture.adapter.permissionCalls, 0)
+  assert.deepEqual(fixture.adapter.deliveries, [])
+  assert.deepEqual(fixture.diagnostics, [])
+})
+
+test('callback and protocol clicks claim the same ID before concurrent lookup finishes', async (t) => {
+  const lookup = deferred()
+  const resolutions = []
+  const navigations = []
+  const intent = notificationIntent('attn_link_race01')
+  const fixture = createFixture({
+    resolveClickTarget: async (attentionId) => {
+      resolutions.push(attentionId)
+      return await lookup.promise
+    },
+    navigate: (value) => navigations.push(value),
+  })
+  t.after(async () => await fixture.coordinator.stop())
+  fixture.coordinator.start()
+  await waitFor(() => fixture.adapter.intentSubscribeCalls === 1)
+
+  fixture.adapter.click({ attentionId: intent.attentionId })
+  fixture.adapter.click(intent)
+  fixture.adapter.click({ attentionId: intent.attentionId })
+  assert.deepEqual(resolutions, [intent.attentionId])
+  assert.deepEqual(navigations, [])
+  lookup.resolve(intent)
+  await waitFor(() => navigations.length === 1)
+  fixture.adapter.click(intent)
+  await nextTask()
+  assert.deepEqual(navigations, [intent])
+  assert.deepEqual(fixture.adapter.deliveries, [])
+})
+
+test('a complete callback arriving first never starts a fallback lookup for that ID', async (t) => {
+  let lookups = 0
+  const navigations = []
+  const intent = notificationIntent('attn_callback_first01')
+  const fixture = createFixture({
+    resolveClickTarget: async () => {
+      lookups += 1
+      return undefined
+    },
+    navigate: (value) => navigations.push(value),
+  })
+  t.after(async () => await fixture.coordinator.stop())
+  fixture.coordinator.start()
+  await waitFor(() => fixture.adapter.intentSubscribeCalls === 1)
+  fixture.adapter.click(intent)
+  fixture.adapter.click({ attentionId: intent.attentionId })
+  await nextTask()
+  assert.equal(lookups, 0)
+  assert.deepEqual(navigations, [intent])
+})
+
+test('unknown, absent or mismatched ID-only results leave the current page unchanged', async (t) => {
+  for (const result of [undefined, notificationIntent('attn_different01')]) {
+    const navigations = []
+    const fixture = createFixture({
+      resolveClickTarget: async () => result,
+      navigate: (value) => navigations.push(value),
+    })
+    t.after(async () => await fixture.coordinator.stop())
+    fixture.coordinator.start()
+    await waitFor(() => fixture.adapter.intentSubscribeCalls === 1)
+    fixture.adapter.click({ attentionId: 'attn_not_found01' })
+    await nextTask()
+    assert.deepEqual(navigations, [])
+    assert.deepEqual(fixture.adapter.deliveries, [])
+    assert.equal(fixture.adapter.permissionCalls, 0)
+    assert.deepEqual(fixture.metadataCalls, [])
+  }
+  const fixture = createFixture({
+    navigate: () => assert.fail('No resolver must not guess a target'),
+  })
+  t.after(async () => await fixture.coordinator.stop())
+  fixture.coordinator.start()
+  await waitFor(() => fixture.adapter.intentSubscribeCalls === 1)
+  fixture.adapter.click({ attentionId: 'attn_no_resolver01' })
+  await nextTask()
+})
+
+test('a failed link lookup reports no payload and does not prevent another click', async (t) => {
+  const navigations = []
+  const fixture = createFixture({
+    resolveClickTarget: async () => {
+      throw new Error('Private upstream details must not escape')
+    },
+    navigate: (value) => navigations.push(value),
+  })
+  t.after(async () => await fixture.coordinator.stop())
+  fixture.coordinator.start()
+  await waitFor(() => fixture.adapter.intentSubscribeCalls === 1)
+  fixture.adapter.click({ attentionId: 'attn_lookup_error01' })
+  await waitFor(() => fixture.diagnostics.length === 1)
+  assert.deepEqual(fixture.diagnostics, [
+    { attentionId: 'attn_lookup_error01', stage: 'navigation' },
+  ])
+  const other = notificationIntent('attn_after_lookup_error01')
+  fixture.adapter.click(other)
+  await waitFor(() => navigations.length === 1)
+  assert.deepEqual(navigations, [other])
+})
+
+test('stop aborts a pending lookup and its old generation can never navigate', async () => {
+  const lookup = deferred()
+  let signal
+  const navigations = []
+  const stale = notificationIntent('attn_unmounted_link01')
+  const fixture = createFixture({
+    resolveClickTarget: async (_attentionId, value) => {
+      signal = value
+      return await lookup.promise
+    },
+    navigate: (value) => navigations.push(value),
+  })
+  fixture.coordinator.start()
+  await waitFor(() => fixture.adapter.intentSubscribeCalls === 1)
+  fixture.adapter.click({ attentionId: stale.attentionId })
+  assert.equal(signal.aborted, false)
+  await fixture.coordinator.stop()
+  assert.equal(signal.aborted, true)
+  fixture.coordinator.start()
+  await waitFor(() => fixture.adapter.intentSubscribeCalls === 2)
+  lookup.resolve(stale)
+  await nextTask()
+  assert.deepEqual(navigations, [])
+  const current = notificationIntent('attn_current_link01')
+  fixture.adapter.click(current)
+  await waitFor(() => navigations.length === 1)
+  assert.deepEqual(navigations, [current])
+  await fixture.coordinator.stop()
+})
+
 class FakeEventSource {
   activeListeners = 0
   subscribeCalls = 0
@@ -287,27 +491,44 @@ class FakeEventSource {
 
 class FakeAdapter {
   deliveries = []
+  stages = []
   intentSubscribeCalls = 0
   intentUnsubscribeCalls = 0
   permissionCalls = 0
   #deliveryFailures
   #intentListener
   #permissionGranted
+  #permissionPending
 
-  constructor({ available, deliveryFailures, permissionGranted, windowState }) {
+  constructor({
+    available,
+    deliveryFailures,
+    permissionGranted,
+    permissionPending,
+    windowState,
+    windowStatePending,
+  }) {
     this.available = available
     this.#deliveryFailures = deliveryFailures
     this.#permissionGranted = permissionGranted
+    this.#permissionPending = permissionPending
+    this.windowStatePending = windowStatePending
     this.windowState = windowState
   }
 
   getWindowState() {
+    if (this.windowStatePending) return new Promise(() => {})
     return this.windowState
   }
 
   async ensurePermission() {
     this.permissionCalls += 1
+    if (this.#permissionPending) return await new Promise(() => {})
     return this.#permissionGranted
+  }
+
+  logStage(stage) {
+    this.stages.push(stage)
   }
 
   async deliver(intent) {
@@ -341,7 +562,9 @@ function createFixture(options = {}) {
     available: options.available ?? true,
     deliveryFailures: options.deliveryFailures ?? 0,
     permissionGranted: options.permissionGranted ?? true,
+    permissionPending: options.permissionPending ?? false,
     windowState: options.windowState ?? backgroundWindow,
+    windowStatePending: options.windowStatePending ?? false,
   })
   const metadataCalls = []
   const diagnostics = []
@@ -368,6 +591,7 @@ function createFixture(options = {}) {
     recentIds: options.recentIds,
     reportFailure: (diagnostic) => diagnostics.push(diagnostic),
     resolveMetadata,
+    resolveClickTarget: options.resolveClickTarget,
   })
   return fixture
 }
@@ -486,6 +710,14 @@ function deferred() {
 
 async function nextTask() {
   await new Promise((resolve) => setTimeout(resolve, 0))
+}
+
+async function waitForStage(adapter, stage) {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if (adapter.stages.includes(stage)) return
+    await new Promise((resolve) => setImmediate(resolve))
+  }
+  assert.fail(`Timed out waiting for notification stage ${stage}`)
 }
 
 async function waitFor(predicate, timeoutMs = 2_000) {

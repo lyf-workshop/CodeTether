@@ -106,44 +106,50 @@ test('inaccessible storage stays non-throwing and does not claim persistence', (
 })
 
 test('Settings exposes only the three real Desktop types and a truthful Browser fallback', async () => {
-  const source = await readFile(
-    new URL(
-      '../src/components/settings/desktop-notification-settings.tsx',
-      import.meta.url,
+  const [notification, settings] = await Promise.all([
+    readFile(
+      new URL(
+        '../src/components/settings/desktop-notification-settings.tsx',
+        import.meta.url,
+      ),
+      'utf8',
     ),
-    'utf8',
-  )
-
-  assert.match(source, /nativeCapabilities\.notifications\.available/u)
-  assert.match(source, /nativeCapabilities\.backgroundRuntime\.available/u)
-  assert.match(source, /type: 'approval'/u)
-  assert.match(source, /type: 'completed_review'/u)
-  assert.match(source, /type: 'failed'/u)
-  assert.match(source, /href="#settings-general"/u)
-  assert.match(source, /href="#settings-notifications"/u)
-  assert.match(source, />\s*常规\s*</u)
-  assert.match(source, />\s*通知\s*</u)
-  assert.match(source, /桌面通知需要 CodeTether Desktop/u)
-  assert.match(source, /浏览器中仍可通过收件箱查看/u)
-  assert.doesNotMatch(source, /__TAURI__|isTauri|plugin-notification/u)
+    readFile(
+      new URL('../src/components/settings/settings-page.tsx', import.meta.url),
+      'utf8',
+    ),
+  ])
+  assert.match(notification, /nativeCapabilities\.notifications\.available/u)
+  for (const type of ['approval', 'completed_review', 'failed'])
+    assert.ok(notification.includes("type: '" + type + "'"))
+  assert.match(notification, /桌面通知需要 CodeTether Desktop/u)
+  assert.match(notification, /浏览器中请查看“待处理”/u)
+  assert.match(notification, /persistDesktopNotificationPreferences/u)
+  assert.match(notification, /onCheckedChange/u)
+  assert.match(settings, /to="\/settings\/\$section"/u)
+  assert.match(settings, /id: 'appearance'/u)
+  assert.match(settings, /id: 'notify'/u)
+  assert.doesNotMatch(notification, /__TAURI__|isTauri|plugin-notification/u)
 })
 
 test('Settings describes fixed Desktop background behavior without a Browser tray control', async () => {
   const source = await readFile(
     new URL(
-      '../src/components/settings/desktop-notification-settings.tsx',
+      '../src/components/settings/background-settings.tsx',
       import.meta.url,
     ),
     'utf8',
   )
-
-  assert.match(source, /backgroundRuntimeAvailable \?/u)
-  assert.match(source, />\s*后台运行\s*</u)
-  assert.match(
+  assert.match(source, /nativeCapabilities\.backgroundRuntime\.available/u)
+  assert.match(source, /available \?/u)
+  assert.match(source, /后台运行/u)
+  assert.match(source, /关闭窗口后，CodeTether\s*仍在后台运行/u)
+  assert.match(source, /始终开启/u)
+  assert.match(source, /浏览器没有桌面后台运行能力/u)
+  assert.doesNotMatch(
     source,
-    /关闭窗口后，CodeTether\s*将继续在系统托盘运行，以便任务、审批和通知继续工作。/u,
+    /type="checkbox"|<Switch|setBackground|enableBackground/u,
   )
-  assert.doesNotMatch(source, /后台运行[\s\S]{0,300}type="checkbox"/u)
 })
 
 function memoryStorage(initial = {}) {

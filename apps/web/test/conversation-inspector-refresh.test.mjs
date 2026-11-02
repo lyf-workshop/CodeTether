@@ -54,12 +54,12 @@ test('Inspector toggle owns one fixed chrome slot and restores a wider workspace
   assert.match(source, /inspectorOpen=\{inspectorOpen\}/u)
   assert.match(source, /mediaQuery\.addEventListener\('change'/u)
   assert.match(source, /open=\{inspectorDialogLayout && inspector\.open\}/u)
-  assert.ok(source.includes('min-[1440px]:grid-cols-[minmax(0,1fr)]'))
+  assert.ok(source.includes('min-[1001px]:grid-cols-[minmax(0,1fr)]'))
   assert.equal(
     actions.match(/data-slot="conversation-inspector-toggle"/gu)?.length,
     1,
   )
-  assert.match(actions, /inspectorOpen \? '隐藏检查器' : '显示检查器'/u)
+  assert.match(actions, /inspectorOpen \? '隐藏文件面板' : '显示文件面板'/u)
   assert.match(actions, /aria-pressed=\{inspectorOpen\}/u)
   assert.doesNotMatch(source, /data-inspector-restore|absolute top-/u)
   assert.doesNotMatch(panel, /折叠会话检查器|onCollapse/u)
@@ -81,9 +81,18 @@ test('Conversation chrome keeps real execution and overflow actions without dupl
     ),
   ])
 
-  assert.match(actions, /supportsInterrupt/u)
-  assert.match(actions, /中断当前运行/u)
-  assert.match(actions, /interruptController\?\.execute\(\)/u)
+  const composer = await readFile(
+    new URL('composer.tsx', componentRoot),
+    'utf8',
+  )
+  const gate = await readFile(
+    new URL('conversation-gate-presentation.ts', componentRoot),
+    'utf8',
+  )
+  assert.match(gate, /capabilities\.supportsInterrupt/u)
+  assert.match(composer, /正在停止/u)
+  assert.doesNotMatch(actions, /interruptController|中断当前运行/u)
+  assert.match(composer, /interruptController\.execute\(\)/u)
   assert.match(actions, /ConversationOrganizationMenu/u)
   assert.match(actions, /label="管理会话"/u)
   assert.doesNotMatch(actions, /查看变更|FileDiff/u)
@@ -110,7 +119,7 @@ test('Inspector width preferences clamp invalid values and preserve Conversation
   })
 })
 
-test('Inspector inline width persists while Sheet sizing remains independent', async () => {
+test('Inspector scoped width persists while Sheet sizing remains independent', async () => {
   const values = new Map()
   const storage = {
     getItem: (key) => values.get(key) ?? null,
@@ -140,7 +149,9 @@ test('Inspector inline width persists while Sheet sizing remains independent', a
   assert.match(source, /writeConversationInspectorWidth/u)
   assert.match(source, /ResizeObserver/u)
   assert.match(source, /width=\{resolvedInspectorWidth\}/u)
-  assert.match(source, /w-\[21\.75rem\]/u)
+  assert.match(source, /w-\(--layout-conversation-inspector-width\)/u)
+  assert.match(source, /data-conversation-layout=\{layoutId\}/u)
+  assert.doesNotMatch(source, /style=\{/u)
   assert.doesNotMatch(
     source,
     /DialogContent[\s\S]*?w-\[var\(--layout-conversation-inspector-width\)\]/u,
@@ -204,7 +215,7 @@ test('Files consumes only existing change evidence and opens the existing change
   assert.match(source, /onOpenChange\?\.\(change\.id\)/u)
   assert.match(source, /查看变更/u)
   assert.match(source, /本次会话没有已知文件变更/u)
-  assert.match(source, /当前 Agent 未提供文件变更信息/u)
+  assert.match(source, /当前 AI 工具未提供文件变更信息/u)
   assert.doesNotMatch(source, /fetch\(|readProjectFile|absolutePath|directory/u)
   assert.doesNotMatch(source, /<input|<textarea/u)
 })

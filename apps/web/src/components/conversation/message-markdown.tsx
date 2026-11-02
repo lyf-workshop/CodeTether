@@ -85,7 +85,7 @@ export const MessageMarkdown = memo(function MessageMarkdown({
             key={key}
             tabIndex={0}
             aria-label={
-              block.language ? `${block.language} 代码块` : 'Agent 代码块'
+              block.language ? `${block.language} 代码块` : 'AI 工具代码块'
             }
             className="max-w-full overflow-x-auto rounded-sm border border-border/70 bg-surface-code/80 p-3 text-sm leading-relaxed text-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
           >

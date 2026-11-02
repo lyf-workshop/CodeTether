@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 
 import './styles.css'
 import { LocalSupervisorPresenceCoordinator } from './runtime/account/local-supervisor-presence'
+import { getThemeController } from './runtime/theme/theme-preference'
 
 const rootElement = document.getElementById('root')
 
@@ -12,7 +13,7 @@ if (!rootElement) {
 
 const appRoot = rootElement
 
-document.documentElement.dataset.theme = 'dark'
+getThemeController()
 
 async function renderApp() {
   if (import.meta.env.DEV && window.location.pathname === '/__phase6d') {
@@ -52,8 +53,7 @@ async function renderApp() {
       readDesktopNotificationPreferences,
       resolveNotificationPreferenceStorage,
     },
-    { projectDetailQueryOptions },
-    { conversationListQueryOptions },
+    { resolveAttentionNotificationMetadata, resolveNotificationClickTarget },
     { createHostQueryClient },
   ] = await Promise.all([
     import('@tanstack/react-query'),
@@ -66,8 +66,7 @@ async function renderApp() {
     import('./runtime/notifications/desktop-notification-model'),
     import('./runtime/native/native-capabilities'),
     import('./runtime/native/notification-preferences'),
-    import('./runtime/host/project-query'),
-    import('./runtime/host/conversation-list-query'),
+    import('./runtime/notifications/attention-notification-metadata'),
     import('./runtime/host/host-query-client'),
   ])
   const queryClient = createHostQueryClient()
@@ -85,35 +84,10 @@ async function renderApp() {
       readDesktopNotificationPreferences(notificationStorage),
     readSurface: () =>
       notificationSurfaceFromPathname(router.state.location.pathname),
-    resolveMetadata: async (attention) => {
-      const projectPromise = queryClient.fetchQuery(
-        projectDetailQueryOptions(runtime, attention.projectId),
-      )
-      const conversationTitlePromise =
-        attention.type === 'approval'
-          ? queryClient
-              .fetchQuery(
-                conversationListQueryOptions(runtime, attention.projectId),
-              )
-              .then((conversations) => {
-                const conversation = conversations.find(
-                  (candidate) =>
-                    candidate.conversationId === attention.conversationId,
-                )
-                if (conversation === undefined) {
-                  throw new Error(
-                    'Attention Conversation is missing from its Project index.',
-                  )
-                }
-                return conversation.title
-              })
-          : Promise.resolve(attention.payload.conversationTitle)
-      const [project, conversationTitle] = await Promise.all([
-        projectPromise,
-        conversationTitlePromise,
-      ])
-      return { projectName: project.name, conversationTitle }
-    },
+    resolveMetadata: (attention) =>
+      resolveAttentionNotificationMetadata(queryClient, runtime, attention),
+    resolveClickTarget: (attentionId, signal) =>
+      resolveNotificationClickTarget(queryClient, runtime, attentionId, signal),
     navigate: async (intent) => {
       notificationNavigationSequence += 1
       await router.navigate({
@@ -125,10 +99,30 @@ async function renderApp() {
     },
   })
   notificationCoordinator.start()
+  let lastConnectionState = runtime.getConnectionState()
+  const logConnectionState = () => {
+    const state = runtime.getConnectionState()
+    if (state === lastConnectionState) return
+    lastConnectionState = state
+    if (state === 'connected') {
+      void nativeCapabilities.notifications.logStage?.('sse-connected')
+    } else if (state === 'reconnecting') {
+      void nativeCapabilities.notifications.logStage?.('sse-reconnecting')
+    } else if (state === 'unavailable') {
+      void nativeCapabilities.notifications.logStage?.('sse-unavailable')
+    }
+  }
+  const unsubscribeRuntime = runtime.subscribe(logConnectionState)
+  const unsubscribeStreamResets = runtime.subscribeStreamResets(() => {
+    void nativeCapabilities.notifications.logStage?.('sse-reset')
+  })
+  logConnectionState()
   window.addEventListener(
     'pagehide',
     () => {
       releaseDesktopResumeSubscription()
+      unsubscribeRuntime()
+      unsubscribeStreamResets()
       void notificationCoordinator.stop()
     },
     { once: true },

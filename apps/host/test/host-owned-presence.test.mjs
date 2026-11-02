@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import { createHash, generateKeyPairSync, sign } from 'node:crypto'
 import { mkdtemp, rm, readFile, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -282,6 +283,16 @@ test('presence diagnostics retain only allowlisted fields in a bounded owner-onl
     join(tmpdir(), 'codetether-presence-diagnostics-'),
   )
   try {
+    // Windows diagnostics inherit the private per-user data-root ACL (see
+    // ARCHITECTURE.md). Unlike POSIX mkdtemp(0700), Windows mkdtemp inherits
+    // Temp's ACL, which may grant sandbox/service accounts access. Establish
+    // that existing prerequisite on this empty test-owned root, never on the
+    // generated diagnostic directory/file, then verify the actual inheritance.
+    if (process.platform === 'win32') {
+      assertPrivateWindowsAcl(readWindowsAcl(directory, true))
+    } else {
+      assert.equal((await stat(directory)).mode & 0o777, 0o700)
+    }
     const diagnostics = new HostPresenceDiagnostics(
       join(directory, 'state.sqlite3'),
     )
@@ -315,11 +326,209 @@ test('presence diagnostics retain only allowlisted fields in a bounded owner-onl
     assert.equal(transport.directEndpointCount, 1)
     assert.equal(transport.relayConnected, false)
     assert.equal(transport.host, undefined)
-    assert.equal((await stat(file)).mode & 0o777, 0o600)
+    if (process.platform === 'win32') {
+      assertPrivateWindowsAcl(readWindowsAcl(join(directory, 'logs')))
+      assertPrivateWindowsAcl(readWindowsAcl(file))
+    } else {
+      assert.equal((await stat(join(directory, 'logs'))).mode & 0o777, 0o700)
+      assert.equal((await stat(file)).mode & 0o777, 0o600)
+    }
   } finally {
     await rm(directory, { recursive: true, force: true })
   }
 })
+
+test('Windows diagnostic ACL validation accepts only the user and trusted OS administrators', () => {
+  assert.doesNotThrow(() => assertPrivateWindowsAcl(privateAclFixture()))
+  assert.doesNotThrow(() =>
+    assertPrivateWindowsAcl({
+      ...privateAclFixture(),
+      ownerSid: 'S-1-5-32-544',
+      rules: [
+        ...privateAclFixture().rules,
+        { sid: 'S-1-5-18', type: 'Allow', rights: 0x1f01ff },
+        { sid: 'S-1-5-32-544', type: 'Allow', rights: 0x1f01ff },
+      ],
+    }),
+  )
+})
+
+test('Windows diagnostic ACL validation rejects overbroad read/write access and malformed ownership', () => {
+  for (const sid of ['S-1-1-0', 'S-1-5-11', 'S-1-5-21-1-2-3-1002']) {
+    for (const rights of [0x1, 0x2, 0x1f01ff]) {
+      assert.throws(
+        () =>
+          assertPrivateWindowsAcl({
+            ...privateAclFixture(),
+            rules: [
+              ...privateAclFixture().rules,
+              { sid, type: 'Allow', rights },
+            ],
+          }),
+        /unexpected principal/u,
+      )
+    }
+  }
+  for (const invalid of [
+    { daclPresent: false },
+    { nullDacl: true },
+    { ownerSid: 'S-1-5-21-1-2-3-1002' },
+    { rules: [] },
+    { rules: [{ sid: 'S-1-5-18', type: 'Allow', rights: 0x1f01ff }] },
+    {
+      rules: [
+        {
+          ...privateAclFixture().rules[0],
+          rights: 0x1f01ff,
+          inheritOnly: true,
+        },
+      ],
+    },
+    { rules: [{ ...privateAclFixture().rules[0], rights: 0x1 }] },
+    ...[-1, 0.5, '3', 0x1f0200].map((rights) => ({
+      rules: [{ ...privateAclFixture().rules[0], rights }],
+    })),
+    { rules: [{ ...privateAclFixture().rules[0], type: 'Deny' }] },
+  ]) {
+    assert.throws(() =>
+      assertPrivateWindowsAcl({ ...privateAclFixture(), ...invalid }),
+    )
+  }
+})
+
+function privateAclFixture() {
+  return {
+    currentUserSid: 'S-1-5-21-1-2-3-1001',
+    ownerSid: 'S-1-5-21-1-2-3-1001',
+    daclPresent: true,
+    nullDacl: false,
+    rules: [{ sid: 'S-1-5-21-1-2-3-1001', type: 'Allow', rights: 0x1f01ff }],
+  }
+}
+
+function assertPrivateWindowsAcl(acl) {
+  assert.equal(acl.daclPresent, true, 'diagnostics require a DACL')
+  assert.equal(acl.nullDacl, false, 'a null DACL allows everyone access')
+  assert.ok(
+    typeof acl.currentUserSid === 'string' &&
+      /^S-1-5-21-(?:\d+-){3}\d+$/u.test(acl.currentUserSid),
+    'current Windows user identity must be resolved',
+  )
+  const trusted = new Set([
+    acl.currentUserSid,
+    'S-1-5-18', // SYSTEM, not an ordinary additional user.
+    'S-1-5-32-544', // Administrators already control this Windows endpoint.
+  ])
+  assert.ok(trusted.has(acl.ownerSid), 'unexpected diagnostic file owner')
+  assert.ok(
+    Array.isArray(acl.rules) && acl.rules.length > 0,
+    'missing ACL rules',
+  )
+  for (const rule of acl.rules) {
+    assert.equal(rule.type, 'Allow', 'unexpected diagnostic access rule type')
+    assert.ok(
+      trusted.has(rule.sid),
+      'diagnostic ACL grants an unexpected principal',
+    )
+    assert.ok(
+      Number.isSafeInteger(rule.rights) &&
+        rule.rights >= 0 &&
+        rule.rights <= 0x1f01ff,
+      'invalid diagnostic access mask',
+    )
+  }
+  assert.ok(
+    acl.rules.some(
+      (rule) =>
+        rule.sid === acl.currentUserSid &&
+        rule.inheritOnly !== true &&
+        (rule.rights & 0x3) === 0x3,
+    ),
+    'diagnostic owner must have effective read/write access',
+  )
+}
+
+function readWindowsAcl(path, prepareEmptyPrivateRoot = false) {
+  const prepareRoot = prepareEmptyPrivateRoot
+    ? `
+if (-not [System.IO.Directory]::Exists($path)) { throw 'Fixture root missing' }
+if ([System.IO.Directory]::GetFileSystemEntries($path).Length -ne 0) {
+  throw 'Only an empty test-owned data root may be provisioned'
+}
+$private = [System.Security.AccessControl.DirectorySecurity]::new()
+$private.SetOwner($user)
+$private.SetAccessRuleProtection($true, $false)
+$inherit = [System.Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
+foreach ($sid in @($user.Value, 'S-1-5-18', 'S-1-5-32-544')) {
+  $principal = [System.Security.Principal.SecurityIdentifier]::new($sid)
+  $rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
+    $principal, [System.Security.AccessControl.FileSystemRights]::FullControl,
+    $inherit, [System.Security.AccessControl.PropagationFlags]::None,
+    [System.Security.AccessControl.AccessControlType]::Allow)
+  $private.AddAccessRule($rule)
+}
+[System.IO.Directory]::SetAccessControl($path, $private)
+`
+    : ''
+  // Use a fixed absolute Windows PowerShell executable and literal .NET APIs:
+  // no PATH lookup, profiles, shell path interpolation, ACL-output postprocessing
+  // or dependency on a caller's PowerShell module search path.
+  const script = `
+$ErrorActionPreference = 'Stop'
+$path = $env:CODETETHER_TEST_PRIVATE_ACL_PATH
+$user = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+${prepareRoot}
+if ([System.IO.Directory]::Exists($path)) {
+  $acl = [System.IO.Directory]::GetAccessControl($path)
+} else {
+  $acl = [System.IO.File]::GetAccessControl($path)
+}
+$raw = [System.Security.AccessControl.RawSecurityDescriptor]::new(
+  $acl.GetSecurityDescriptorBinaryForm(), 0)
+$rules = @($acl.GetAccessRules($true, $true,
+  [System.Security.Principal.SecurityIdentifier]) | ForEach-Object {
+  [pscustomobject]@{
+    sid = $_.IdentityReference.Value
+    type = $_.AccessControlType.ToString()
+    rights = [int]$_.FileSystemRights
+    inheritOnly = [bool]($_.PropagationFlags -band
+      [System.Security.AccessControl.PropagationFlags]::InheritOnly)
+  }
+})
+[pscustomobject]@{
+  currentUserSid = $user.Value
+  ownerSid = $acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value
+  daclPresent = [bool]($raw.ControlFlags -band
+    [System.Security.AccessControl.ControlFlags]::DiscretionaryAclPresent)
+  nullDacl = ($null -eq $raw.DiscretionaryAcl)
+  rules = $rules
+} | ConvertTo-Json -Depth 4 -Compress
+`
+  return JSON.parse(
+    execFileSync(
+      join(
+        process.env.SystemRoot,
+        'System32',
+        'WindowsPowerShell',
+        'v1.0',
+        'powershell.exe',
+      ),
+      ['-NoProfile', '-NonInteractive', '-Command', script],
+      {
+        env: {
+          SystemRoot: process.env.SystemRoot,
+          WINDIR: process.env.WINDIR ?? process.env.SystemRoot,
+          CODETETHER_TEST_PRIVATE_ACL_PATH: path,
+        },
+        encoding: 'utf8',
+        windowsHide: true,
+        timeout: 5_000,
+        maxBuffer: 64 * 1024,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    ),
+  )
+}
 
 test('presence diagnostics rotate instead of stopping at one full file', async () => {
   const directory = await mkdtemp(

@@ -1,8 +1,32 @@
 @import '@codetether/ui/styles.css';
+@import './components/app-shell/workspace-responsive.css';
 
 html,
 body,
 #root {
   height: 100%;
   overflow: hidden;
+}
+
+.ct-workspace-shell {
+  --layout-sidebar-current-width: var(
+    --layout-sidebar-user-width,
+    var(--side-w)
+  );
+}
+
+.ct-workspace-shell[data-sidebar-collapsed] {
+  --layout-sidebar-current-width: 0px;
+}
+
+@media (width <= 73.75rem) {
+  .ct-workspace-shell {
+    --side-w: 224px;
+  }
+}
+
+/* Approved v4 prototype: new-conversation dialog is 560px wide. */
+.ct-new-conversation-dialog {
+  --layout-new-conversation-dialog-width: 35rem;
+  max-width: var(--layout-new-conversation-dialog-width);
 }

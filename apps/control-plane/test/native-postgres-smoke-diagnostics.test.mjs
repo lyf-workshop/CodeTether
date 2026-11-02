@@ -250,6 +250,43 @@ test('current migration head accepts the Phase 9A.4 ProductDevice tables', async
   }
 })
 
+test('already migrated access and presence tables pass inspection without allowing schema drift', async () => {
+  const database = await createManagedSmokeDatabase(false)
+  try {
+    const migration = await runMigrations(database)
+    assert.ok(migration.applied.includes('0007_host_access_requests.sql'))
+    assert.ok(migration.applied.includes('0008_host_supervisor_presence.sql'))
+
+    const result = await runNativePostgresSmoke(database, {
+      clientTls: verifiedClientTls,
+      connectionKind: 'supabase_pooler',
+    })
+    assert.deepEqual(result.firstMigration.applied, [])
+    assert.deepEqual(result.repeatedMigration.applied, [])
+    assert.equal(result.fixtureRolledBack, true)
+
+    await database.exec(
+      'CREATE TABLE control_plane.unexpected_schema_drift (id integer PRIMARY KEY)',
+    )
+    await assert.rejects(
+      runNativePostgresSmoke(database, {
+        clientTls: verifiedClientTls,
+        connectionKind: 'supabase_pooler',
+      }),
+      (error) => {
+        assert.equal(error.stage, 'schema_inspection')
+        assert.equal(
+          error.cause.message,
+          'Control Plane schema contains an unexpected table',
+        )
+        return true
+      },
+    )
+  } finally {
+    await database.close()
+  }
+})
+
 test('schema inspection still rejects an unexpected private Control Plane table', async () => {
   const database = await PGliteControlPlaneDatabase.create()
   try {

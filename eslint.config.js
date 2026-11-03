@@ -13,6 +13,8 @@ export default tseslint.config(
       '**/.tmp/**',
       '**/target/**',
       'output/**',
+      // The static design prototype shares globals across classic scripts.
+      'docs/ux-redesign/prototype/**',
     ],
   },
   js.configs.recommended,

@@ -124,7 +124,7 @@
 1. D1 已完成（`v0.1.0-alpha.2`）。
 2. U1：设计已写好（`05-desktop-update.md`），更新文件放在 us-vps-01，等你看设计，然后我写编码提示词；签名私钥由你生成。
 3. B0：已部署（2026-11-02），诊断页已合入 `main`（`b59f911`）。经 Relay 的端到端读取等有了有效授权再补做。
-4. B0 完成后我写 B1 的设计和提示词（M0 可以同时开始）。
+4. B1：已实现（分支 `b1/pairing-remote-control`，`955d567`，未合并），生产控制服务已是 B1 版本。审核没有必须修的问题，有 4 项应该修；先跑修复和 Windows 补测（`docs/reviews/b1-pairing-fix-prompt-r1.md`），再跑 Mac 跨设备验收（`b1-mac-cross-device-prompt.md`），都过了再合并到 `main`。M0 可以同时开始。
 5. 测试设备：手机是 vivo，平板暂时没有 Android 真机，平板布局先用模拟器验证。手机型号是 vivo X60（Android 13，已确认），应用最低支持版本不能高于 Android 13。
 
 阶段表已写进 `docs/ROADMAP.md` 顶部的 “v4 Product Stages”（2026-11-02），阶段状态以那里为准；本文写每个阶段的内容和分工，改动时两处一起改。

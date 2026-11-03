@@ -30,7 +30,7 @@
   - 只有 12 个操作：`host.bootstrap`、`machine.list/get`、`project.list/get`、`conversation.list/get/history/live.read`、`action.get`、`conversation.create`、`conversation.turn.start`。
   - **没有** 待处理列表、批准 / 拒绝、停止。
 - 权限：协议有 `supervisor_read` 和 `supervisor_control`。账号服务只签发 read；control 有 Host 表和 `/api/v1/supervisor/control/approve`，但没有界面调用，出厂不可达。
-- 后端阶段：Phase 10A（跨网络授权）和 10A.1（多设备传输）的代码已合入 `main`；Control Plane 迁移 0008 和公网 Relay 还没部署，9B.2 强制 Relay 的实机验证还没做（2026-11-02 你确认）。ROADMAP 里旧的 Mobile Supervisor（9B）已标为被 M 系列取代。
+- 后端阶段（2026-11-02 B0 部署后）：Control Plane 运行 `main` `454f414`，迁移到 0008；公网 Relay 在 `tls://relay.codetether.org:8443`（`relay_d41fc913a6e74e65b916467b97bc299b`，证书 2027-01-01 到期，需要人工续期后重启）；Windows Host 的 Relay presence 在线。经 Relay 的七项只读读取还没做：Windows 和 Mac 现有的只读授权都已过期，v4 界面没有申请入口，你决定先放着。报告在 `agenthub-archive/b0-report.md`。ROADMAP 里旧的 Mobile Supervisor（9B）已标为被 M 系列取代。
 - 没有推送（APNs / FCM），没有手机或平板客户端。
 - 能力限制会一直带到手机端：停止、审批、变更只支持电脑本机上的 Codex；Claude Code 只读取和搜索。
 
@@ -108,7 +108,7 @@
 
 1. D1 已完成（`v0.1.0-alpha.2`）。
 2. U1：设计已写好（`05-desktop-update.md`），更新文件放在 us-vps-01，等你看设计，然后我写编码提示词；签名私钥由你生成。
-3. B0：我写部署提示词，由智能体部署 Control Plane 迁移 0008 和公网 Relay，再做 9B.2 实机验证。
+3. B0：已部署（2026-11-02），诊断页已合入 `main`（`b59f911`）。经 Relay 的端到端读取等有了有效授权再补做。
 4. B0 完成后我写 B1 的设计和提示词（M0 可以同时开始）。
 5. 测试设备：手机是 vivo，平板暂时没有 Android 真机，平板布局先用模拟器验证。手机型号是 vivo X60（Android 13，已确认），应用最低支持版本不能高于 Android 13。
 

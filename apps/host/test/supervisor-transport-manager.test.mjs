@@ -493,6 +493,342 @@ test('forced-remote manager reads Host state without using local HTTP product da
   }
 })
 
+test('control activation rejects missing, mismatched, and revoked local evidence', async () => {
+  const fixture = await controlActivationFixture()
+  const activation = fixture.activation(authorizationId)
+  try {
+    await assert.rejects(fixture.manager.activate(activation))
+    fixture.addEvidence(activation, authorizationId, {
+      deviceFingerprint: `sha256:${'X'.repeat(43)}`,
+    })
+    await assert.rejects(fixture.manager.activate(activation))
+    fixture.addEvidence(activation, authorizationId, {
+      authorizationExpiresAt: activation.grant.payload.expiresAt + 1,
+    })
+    await assert.rejects(fixture.manager.activate(activation))
+    fixture.addEvidence(activation, authorizationId, {
+      iat: activation.grant.payload.issuedAt + 1,
+    })
+    await assert.rejects(fixture.manager.activate(activation))
+    fixture.addEvidence(activation, authorizationId)
+    fixture.revoked.add(authorizationId)
+    await assert.rejects(fixture.manager.activate(activation))
+    assert.deepEqual(fixture.enabled, [])
+  } finally {
+    await fixture.close()
+  }
+})
+
+test('control activation cannot complete after a revocation during signature verification', async () => {
+  const fixture = await controlActivationFixture()
+  const activation = fixture.activation(authorizationId)
+  fixture.addEvidence(activation, authorizationId)
+  try {
+    const activating = fixture.manager.activate(activation)
+    fixture.revoked.add(authorizationId)
+    await assert.rejects(activating)
+    assert.deepEqual(fixture.enabled, [])
+  } finally {
+    await fixture.close()
+  }
+})
+
+test('control admission rejects a pairing lineage different from local evidence', async () => {
+  const fixture = await controlActivationFixture()
+  const activation = fixture.activation(authorizationId)
+  fixture.addEvidence(activation, authorizationId)
+  try {
+    await fixture.manager.activate(activation)
+    fixture.setAdmissionRoot(`hauth_${'f'.repeat(32)}`)
+    await assert.rejects(fixture.connect(activation), {
+      code: 'authentication_failed',
+    })
+  } finally {
+    await fixture.close()
+  }
+})
+
+test('an activated renewal permanently blocks predecessor activation and admission', async () => {
+  const fixture = await controlActivationFixture()
+  const predecessor = fixture.activation(authorizationId)
+  fixture.addEvidence(predecessor, authorizationId)
+  try {
+    await fixture.manager.activate(predecessor)
+    fixture.durableSuccessors.add(authorizationId)
+    await assert.rejects(fixture.manager.activate(predecessor), {
+      code: 'operation_not_allowed',
+    })
+    await assert.rejects(fixture.connect(predecessor), {
+      code: 'authorization_revoked',
+    })
+  } finally {
+    await fixture.close()
+  }
+})
+
+test('revoking an old control pairing disconnects its lineage and preserves a new pairing of the same device', async () => {
+  const fixture = await controlActivationFixture()
+  const old = fixture.activation(authorizationId)
+  const renewed = fixture.activation(`hauth_${'b'.repeat(32)}`)
+  const newRoot = `hauth_${'c'.repeat(32)}`
+  const fresh = fixture.activation(newRoot)
+  fixture.addEvidence(old, authorizationId)
+  fixture.addEvidence(renewed, authorizationId, {
+    previousAuthorizationId: authorizationId,
+  })
+  fixture.addEvidence(fresh, newRoot)
+  try {
+    await fixture.manager.activate(old)
+    const oldSession = await fixture.connect(old)
+    await fixture.manager.activate(renewed)
+    await assert.rejects(
+      fixture.manager.readRemote(oldSession.sessionId, 'host.bootstrap'),
+    )
+    const renewedSession = await fixture.connect(renewed)
+    await fixture.manager.activate(fresh)
+    const freshSession = await fixture.connect(fresh)
+    const removal = fixture.revocation(renewed, authorizationId)
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await fixture.manager.disableDevice(removal)
+      assert.equal(
+        (
+          await fixture.manager.readRemote(
+            freshSession.sessionId,
+            'host.bootstrap',
+          )
+        ).identity.hostId,
+        hostId,
+      )
+    }
+    await assert.rejects(
+      fixture.manager.readRemote(oldSession.sessionId, 'host.bootstrap'),
+    )
+    await assert.rejects(
+      fixture.manager.readRemote(renewedSession.sessionId, 'host.bootstrap'),
+    )
+    assert.deepEqual(fixture.revocations, [authorizationId, authorizationId])
+  } finally {
+    await fixture.close()
+  }
+})
+
+async function controlActivationFixture() {
+  const { privateKey, publicKey } = generateKeyPairSync('ec', {
+    namedCurve: 'P-256',
+  })
+  const hostPublicJwk = publicKey.export({ format: 'jwk' })
+  const hostFingerprint = `sha256:${'H'.repeat(43)}`
+  const identity = {
+    hostId,
+    fingerprint: hostFingerprint,
+    identityGeneration: 1,
+    publicJwk: JSON.stringify(hostPublicJwk),
+  }
+  const controlPlaneOrigin = 'https://control-plane.example.test'
+  const now = Math.floor(Date.now() / 1_000)
+  const evidence = new Map()
+  const revoked = new Set()
+  const durableSuccessors = new Set()
+  const enabled = []
+  const revocations = []
+  let admissionRoot
+  const manager = await SupervisorTransportManager.create({
+    service: { getHostIdentity: () => identity },
+    persistence: {
+      getHostPresenceConfiguration: () => undefined,
+      getHostSupervisorAuthorizationEvidence: (id) => evidence.get(id),
+      hasDurableHostSupervisorAuthorizationSuccessor: (id) =>
+        durableSuccessors.has(id),
+      isHostSupervisorPairingRevoked: (_device, root) => revoked.has(root),
+      storeHostSupervisorGrant: (grant) => grant,
+      enableHostSupervisorGrant: (id) => {
+        enabled.push(id)
+        const previous = evidence.get(id)?.previousAuthorizationId
+        if (previous != null) durableSuccessors.add(previous)
+      },
+      recordHostSupervisorAuthorizationUse() {},
+      revokeHostSupervisorPairing: (target, root) => {
+        revocations.push(root)
+        revoked.add(root)
+        return [...evidence.values()]
+          .filter(
+            (entry) =>
+              entry.pairingRootAuthorizationId === root &&
+              entry.payload.deviceId === target,
+          )
+          .map((entry) => entry.payload.authorizationId)
+      },
+    },
+    bindHost: '127.0.0.1',
+    advertiseHost: '127.0.0.1',
+    allowLoopbackForTests: true,
+    port: 0,
+    clientBuildIdentity: 'test-host',
+    controlPlaneOrigin,
+  })
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async (_url, init) => {
+    const challenge = JSON.parse(Buffer.from(init.body).toString('utf8'))
+    const entry = evidence.get(challenge.authorizationId)
+    return Response.json({
+      admitted: true,
+      hostId,
+      hostIdentityGeneration: 1,
+      deviceId,
+      deviceKeyGeneration: 1,
+      authorizationId: challenge.authorizationId,
+      scope: 'supervisor_control',
+      pairingRootAuthorizationId:
+        admissionRoot ?? entry.pairingRootAuthorizationId,
+      authorizationExpiresAt: new Date(
+        entry.payload.authorizationExpiresAt * 1_000,
+      ).toISOString(),
+    })
+  }
+  return {
+    manager,
+    enabled,
+    revoked,
+    durableSuccessors,
+    revocations,
+    setAdmissionRoot: (root) => {
+      admissionRoot = root
+    },
+    activation(id) {
+      const payload = {
+        v: 1,
+        aud: 'codetether-host-supervisor',
+        purpose: 'host_supervisor_grant',
+        authorizationId: id,
+        hostId,
+        hostFingerprint,
+        hostIdentityGeneration: 1,
+        deviceId,
+        deviceFingerprint: `sha256:${'D'.repeat(43)}`,
+        deviceKeyGeneration: 1,
+        userId: `usr_${'u'.repeat(32)}`,
+        spaceId: `space_${'s'.repeat(32)}`,
+        scope: 'supervisor_control',
+        authorizationSerial: '1',
+        authorizationGeneration: 1,
+        issuedAt: now,
+        expiresAt: now + 3_600,
+      }
+      const grant = {
+        payload,
+        proof: compactSign(privateKey, supervisorGrantProofType, payload),
+      }
+      const presence = manager.presence()
+      const descriptorPayload = {
+        v: 1,
+        aud: 'codetether-host-supervisor',
+        purpose: 'host_supervisor_presence',
+        hostId,
+        hostFingerprint,
+        hostIdentityGeneration: 1,
+        spaceId: payload.spaceId,
+        transportTlsFingerprint: presence.transportTlsFingerprint,
+        controlPlaneOrigin,
+        directEndpoints: presence.directEndpoints,
+        relay: null,
+        iat: now,
+        exp: now + 300,
+        protocolVersion: 2,
+      }
+      return {
+        hostPublicJwk,
+        grant,
+        descriptor: {
+          payload: descriptorPayload,
+          proof: compactSign(
+            privateKey,
+            supervisorDescriptorProofType,
+            descriptorPayload,
+          ),
+        },
+      }
+    },
+    addEvidence(
+      activation,
+      pairingRootAuthorizationId,
+      { previousAuthorizationId = null, ...changes } = {},
+    ) {
+      const grant = activation.grant.payload
+      evidence.set(grant.authorizationId, {
+        pairingRootAuthorizationId,
+        previousAuthorizationId,
+        payload: {
+          v: 1,
+          aud: 'codetether-control-plane-host',
+          purpose: 'host_device_authorization',
+          authorizationId: grant.authorizationId,
+          challengeId: `enroll_${'e'.repeat(32)}`,
+          hostId: grant.hostId,
+          hostFingerprint: grant.hostFingerprint,
+          hostIdentityGeneration: grant.hostIdentityGeneration,
+          userId: grant.userId,
+          spaceId: grant.spaceId,
+          deviceId: grant.deviceId,
+          deviceFingerprint: grant.deviceFingerprint,
+          deviceKeyGeneration: grant.deviceKeyGeneration,
+          scope: grant.scope,
+          nonce: 'A'.repeat(43),
+          iat: now,
+          exp: now + 300,
+          authorizationExpiresAt: grant.expiresAt,
+          ...changes,
+        },
+      })
+    },
+    revocation(activation, pairingRootAuthorizationId) {
+      const grant = activation.grant.payload
+      const payload = {
+        v: 1,
+        aud: 'codetether-control-plane-host',
+        purpose: 'host_pairing_revoke',
+        hostId,
+        hostFingerprint,
+        hostIdentityGeneration: 1,
+        deviceId,
+        userId: grant.userId,
+        spaceId: grant.spaceId,
+        subjectId: grant.authorizationId,
+        targetDeviceId: deviceId,
+        pairingRootAuthorizationId,
+        nonce: 'A'.repeat(43),
+        iat: now,
+        exp: now + 60,
+      }
+      return {
+        payload,
+        proof: compactSign(
+          privateKey,
+          'codetether-host-pairing-management+jws',
+          payload,
+        ),
+      }
+    },
+    async connect(activation) {
+      const pending = await manager.beginRemote({
+        ...activation,
+        hostId,
+        hostFingerprint,
+        hostIdentityGeneration: 1,
+        deviceId,
+        deviceKeyGeneration: 1,
+      })
+      return await manager.authenticateRemote(pending.connectionId, {
+        accessToken: 'test-token',
+        deviceProof: 'test-proof',
+      })
+    },
+    async close() {
+      globalThis.fetch = originalFetch
+      await manager.close()
+    },
+  }
+}
+
 test('forced Relay HTTP admission stays single-session while Direct fallback remains security-bounded', async () => {
   const root = await mkdtemp(
     join(tmpdir(), 'codetether-host-supervisor-relay-'),

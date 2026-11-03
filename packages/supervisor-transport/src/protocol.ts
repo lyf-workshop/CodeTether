@@ -57,6 +57,63 @@ export type SupervisorGrantPayload = z.infer<
   typeof supervisorGrantPayloadSchema
 >
 
+export const supervisorControlAuthorizationPayloadSchema = z
+  .object({
+    v: z.literal(1),
+    aud: z.literal('codetether-control-plane-host'),
+    purpose: z.literal('host_device_authorization'),
+    authorizationId: opaqueId('hauth'),
+    challengeId: opaqueId('enroll'),
+    hostId: opaqueId('host'),
+    hostFingerprint: digest,
+    hostIdentityGeneration: z.number().int().positive(),
+    spaceId: opaqueId('space'),
+    userId: opaqueId('usr'),
+    deviceId: opaqueId('dev'),
+    deviceKeyGeneration: z.number().int().positive(),
+    deviceFingerprint: digest,
+    scope: z.literal('supervisor_control'),
+    nonce: z.string().regex(/^[A-Za-z0-9_-]{22,86}$/u),
+    iat: timestampSeconds,
+    exp: timestampSeconds,
+    authorizationExpiresAt: timestampSeconds,
+  })
+  .strict()
+  .refine(
+    ({ authorizationExpiresAt, exp, iat }) =>
+      exp > iat && exp - iat <= 300 && authorizationExpiresAt > exp,
+  )
+export type SupervisorControlAuthorizationPayload = z.infer<
+  typeof supervisorControlAuthorizationPayloadSchema
+>
+
+export const supervisorRenewalCheckSchema = z
+  .object({
+    previousAuthorizationId: opaqueId('hauth'),
+    pairingRootAuthorizationId: opaqueId('hauth'),
+    deviceId: opaqueId('dev'),
+    proposal: supervisorControlAuthorizationPayloadSchema.optional(),
+  })
+  .strict()
+export type SupervisorRenewalCheck = z.infer<
+  typeof supervisorRenewalCheckSchema
+>
+
+export const signedSupervisorControlAuthorizationEvidenceSchema = z
+  .object({
+    payload: z
+      .object({
+        authorization: supervisorControlAuthorizationPayloadSchema,
+        previousAuthorizationId: opaqueId('hauth').nullable(),
+      })
+      .strict(),
+    proof: z.string().min(1).max(supervisorTransportLimits.maximumProofBytes),
+  })
+  .strict()
+export type SignedSupervisorControlAuthorizationEvidence = z.infer<
+  typeof signedSupervisorControlAuthorizationEvidenceSchema
+>
+
 export const signedHostSupervisorDeviceRevocationSchema = z
   .object({
     payload: z

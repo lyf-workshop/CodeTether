@@ -60,9 +60,12 @@ import {
   type UpdateOnboardingRequest,
 } from '@codetether/protocol'
 import {
+  canonicalJson,
   signedSupervisorGrantSchema,
+  supervisorControlAuthorizationPayloadSchema,
   supervisorGrantDigest,
   type SignedSupervisorGrant,
+  type SupervisorControlAuthorizationPayload,
 } from '@codetether/supervisor-transport'
 import {
   validateDurableHostIdentity,
@@ -748,12 +751,33 @@ export class ConversationStore {
 
   pruneHostSupervisorGrants(authorizationIds: readonly string[]): void {
     const allowed = new Set(authorizationIds)
+    const now = Date.now()
     this.runInTransaction(() => {
       for (const grant of this.listEnabledHostSupervisorGrants()) {
-        if (!allowed.has(grant.payload.authorizationId)) {
-          this.#statement(
-            'UPDATE host_supervisor_grants SET runtime_enabled=0 WHERE authorization_id=?',
-          ).run(grant.payload.authorizationId)
+        const { authorizationId, deviceId, expiresAt, scope } = grant.payload
+        if (allowed.has(authorizationId)) continue
+        this.#statement(
+          'UPDATE host_supervisor_grants SET runtime_enabled=0 WHERE authorization_id=?',
+        ).run(authorizationId)
+        if (scope === 'supervisor_control' && expiresAt * 1_000 <= now) {
+          const evidence =
+            this.getHostSupervisorAuthorizationEvidence(authorizationId)
+          if (
+            evidence !== undefined &&
+            !this.isHostSupervisorPairingRevoked(
+              deviceId,
+              evidence.pairingRootAuthorizationId,
+            ) &&
+            !this.hasDurableHostSupervisorAuthorizationSuccessor(
+              authorizationId,
+            )
+          ) {
+            // An effective CP snapshot omits naturally expired grants. Keep
+            // locally established backfill eligibility after runtime pruning.
+            this.#statement(
+              'UPDATE host_supervisor_control_authorizations SET backfill_enabled=1 WHERE authorization_id=?',
+            ).run(authorizationId)
+          }
         }
       }
     })
@@ -798,21 +822,185 @@ export class ConversationStore {
     })
   }
 
+  getHostSupervisorAuthorizationEvidence(authorizationId: string):
+    | {
+        readonly payload: SupervisorControlAuthorizationPayload
+        readonly pairingRootAuthorizationId: string
+        readonly previousAuthorizationId: string | null
+      }
+    | undefined {
+    const row = this.#statement(
+      `SELECT payload_json, pairing_root_authorization_id, previous_authorization_id
+       FROM host_supervisor_control_authorizations
+       WHERE authorization_id=? AND abandoned_at IS NULL`,
+    ).get(authorizationId) as
+      | {
+          payload_json: string
+          pairing_root_authorization_id: string
+          previous_authorization_id: string | null
+        }
+      | undefined
+    if (row === undefined) return undefined
+    return {
+      payload: supervisorControlAuthorizationPayloadSchema.parse(
+        JSON.parse(row.payload_json),
+      ),
+      pairingRootAuthorizationId: row.pairing_root_authorization_id,
+      previousAuthorizationId: row.previous_authorization_id,
+    }
+  }
+
+  #getHostSupervisorAuthorizationSuccessor(authorizationId: string):
+    | {
+        readonly authorization_id: string
+        readonly payload_json: string
+        readonly activated: number
+      }
+    | undefined {
+    return this.#statement(
+      `SELECT e.authorization_id, e.payload_json, g.authorization_id IS NOT NULL AS activated
+       FROM host_supervisor_control_authorizations e
+       LEFT JOIN host_supervisor_grants g ON g.authorization_id=e.authorization_id
+       WHERE e.previous_authorization_id=? AND e.abandoned_at IS NULL`,
+    ).get(authorizationId) as
+      | { authorization_id: string; payload_json: string; activated: number }
+      | undefined
+  }
+
+  hasDurableHostSupervisorAuthorizationSuccessor(
+    authorizationId: string,
+  ): boolean {
+    return (
+      this.#getHostSupervisorAuthorizationSuccessor(authorizationId)
+        ?.activated === 1
+    )
+  }
+
+  canReserveHostSupervisorAuthorization(
+    previousAuthorizationId: string,
+    proposal: SupervisorControlAuthorizationPayload,
+  ): boolean {
+    const successor = this.#getHostSupervisorAuthorizationSuccessor(
+      previousAuthorizationId,
+    )
+    if (successor === undefined) return true
+    const reserved = supervisorControlAuthorizationPayloadSchema.parse(
+      JSON.parse(successor.payload_json),
+    )
+    if (successor.authorization_id === proposal.authorizationId) {
+      return canonicalJson(reserved) === canonicalJson(proposal)
+    }
+    return successor.activated === 0 && reserved.exp * 1_000 <= Date.now()
+  }
+
+  storeHostSupervisorAuthorizationEvidence(
+    payload: SupervisorControlAuthorizationPayload,
+    pairingRootAuthorizationId: string,
+    previousAuthorizationId: string | null = null,
+  ): boolean {
+    return this.runInTransaction(() => {
+      const existing = this.getHostSupervisorAuthorizationEvidence(
+        payload.authorizationId,
+      )
+      if (existing !== undefined) {
+        return (
+          existing.pairingRootAuthorizationId === pairingRootAuthorizationId &&
+          existing.previousAuthorizationId === previousAuthorizationId &&
+          canonicalJson(existing.payload) === canonicalJson(payload)
+        )
+      }
+      // An abandoned authorization ID cannot regain local activation rights.
+      if (
+        this.#statement(
+          'SELECT 1 FROM host_supervisor_control_authorizations WHERE authorization_id=?',
+        ).get(payload.authorizationId) !== undefined
+      )
+        return false
+      if (previousAuthorizationId !== null) {
+        if (
+          !this.canReserveHostSupervisorAuthorization(
+            previousAuthorizationId,
+            payload,
+          )
+        )
+          return false
+        this.#statement(
+          `UPDATE host_supervisor_control_authorizations SET abandoned_at=?
+           WHERE previous_authorization_id=? AND abandoned_at IS NULL`,
+        ).run(Date.now(), previousAuthorizationId)
+      }
+      this.#statement(
+        `INSERT INTO host_supervisor_control_authorizations (
+           authorization_id, device_id, pairing_root_authorization_id,
+           previous_authorization_id, payload_json
+         ) VALUES (?, ?, ?, ?, ?)`,
+      ).run(
+        payload.authorizationId,
+        payload.deviceId,
+        pairingRootAuthorizationId,
+        previousAuthorizationId,
+        JSON.stringify(payload),
+      )
+      return true
+    })
+  }
+
+  getHostSupervisorRenewalState(
+    authorizationId: string,
+    deviceId: string,
+    pairingRootAuthorizationId: string,
+  ): { readonly lastUsedAt: number | null } | undefined {
+    return this.#statement(
+      `SELECT (
+         SELECT max(last_used_at) FROM host_supervisor_control_authorizations
+         WHERE device_id=? AND pairing_root_authorization_id=?
+       ) AS lastUsedAt
+       FROM host_supervisor_grants g
+       JOIN host_supervisor_control_authorizations e ON e.authorization_id=g.authorization_id
+       WHERE g.authorization_id=?
+         AND (g.runtime_enabled=1 OR (e.backfill_enabled=1 AND g.expires_at<=?))`,
+    ).get(
+      deviceId,
+      pairingRootAuthorizationId,
+      authorizationId,
+      new Date().toISOString(),
+    ) as { readonly lastUsedAt: number | null } | undefined
+  }
+
+  recordHostSupervisorAuthorizationUse(
+    authorizationId: string,
+    usedAt: number,
+  ): void {
+    this.#statement(
+      `UPDATE host_supervisor_control_authorizations SET last_used_at=?
+       WHERE authorization_id=? AND (last_used_at IS NULL OR last_used_at < ?)`,
+    ).run(usedAt, authorizationId, usedAt)
+  }
+
   revokeHostSupervisorPairing(
     deviceId: string,
     pairingRootAuthorizationId: string,
-  ): boolean {
+  ): readonly string[] {
     return this.runInTransaction(() => {
-      const inserted = this.#statement(
+      this.#statement(
         `INSERT INTO host_supervisor_pairing_revocations (
            device_id, pairing_root_authorization_id
          ) VALUES (?, ?) ON CONFLICT DO NOTHING`,
-      ).run(deviceId, pairingRootAuthorizationId).changes
-      if (inserted === 0) return false
+      ).run(deviceId, pairingRootAuthorizationId)
+      const rows = this.#statement(
+        `SELECT authorization_id FROM host_supervisor_control_authorizations
+         WHERE device_id=? AND pairing_root_authorization_id=?`,
+      ).all(deviceId, pairingRootAuthorizationId) as {
+        authorization_id: string
+      }[]
       this.#statement(
-        'UPDATE host_supervisor_grants SET runtime_enabled=0 WHERE device_id=?',
-      ).run(deviceId)
-      return true
+        `UPDATE host_supervisor_grants SET runtime_enabled=0
+         WHERE authorization_id IN (
+           SELECT authorization_id FROM host_supervisor_control_authorizations
+           WHERE device_id=? AND pairing_root_authorization_id=?
+         )`,
+      ).run(deviceId, pairingRootAuthorizationId)
+      return rows.map(({ authorization_id }) => authorization_id)
     })
   }
 

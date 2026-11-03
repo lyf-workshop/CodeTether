@@ -47,6 +47,7 @@ test('migration 018 preserves existing adopted history and stores only an opaque
 
   const versionSeventeen = new DatabaseSync(fixture.databasePath)
   versionSeventeen.exec(`
+    DROP TABLE host_supervisor_control_authorizations;
     DROP TABLE host_supervisor_pairing_revocations;
     DROP TABLE host_presence_configuration;
     DROP TABLE conversation_create_actions;
@@ -54,12 +55,12 @@ test('migration 018 preserves existing adopted history and stores only an opaque
     DROP TABLE host_supervisor_grants;
     ALTER TABLE conversations DROP COLUMN native_transcript_boundary;
     DROP TABLE host_identity;
-    DELETE FROM schema_migrations WHERE version IN (18, 19, 20, 21, 22, 23, 24);
+    DELETE FROM schema_migrations WHERE version IN (18, 19, 20, 21, 22, 23, 24, 25);
   `)
   versionSeventeen.close()
 
   store = ConversationStore.open({ databasePath: fixture.databasePath })
-  assert.equal(store.schemaVersion, 24)
+  assert.equal(store.schemaVersion, 25)
   assert.equal(
     store.getConversation(legacy.conversationId)?.nativeTranscriptBoundary,
     undefined,
@@ -128,8 +129,8 @@ test('migration 015 backfills CodeTether origin and materialized native-session 
   const migrated = ConversationStore.open({
     databasePath: fixture.databasePath,
   })
-  assert.equal(currentSchemaVersion, 24)
-  assert.equal(migrated.schemaVersion, 24)
+  assert.equal(currentSchemaVersion, 25)
+  assert.equal(migrated.schemaVersion, 25)
   assert.deepEqual(
     pickSessionState(migrated.getConversation('conv_phase8a_unmaterialized')),
     { origin: 'codetether', providerSessionMaterialized: false },

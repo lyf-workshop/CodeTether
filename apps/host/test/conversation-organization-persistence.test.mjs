@@ -33,8 +33,8 @@ test('migration 005 backfills generated organization metadata and preserves the 
 
     const migrated = ConversationStore.open({ databasePath })
     const migratedMachineId = migrated.listMachines()[0].machineId
-    assert.equal(currentSchemaVersion, 24)
-    assert.equal(migrated.schemaVersion, 24)
+    assert.equal(currentSchemaVersion, 25)
+    assert.equal(migrated.schemaVersion, 25)
     assert.deepEqual(migrated.getConversation(created.conversationId), {
       ...created,
       machineId: migratedMachineId,

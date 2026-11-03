@@ -29,6 +29,7 @@ import {
   supervisorClientAuthenticateSchema,
   supervisorRequestSchema,
   type SignedSupervisorGrant,
+  type SupervisorGrantPayload,
   type SignedSupervisorTransport,
   type SupervisorChallenge,
   type SupervisorB1Operation,
@@ -133,6 +134,10 @@ export interface SupervisorServerOptions {
   readonly operations?: (
     request: SupervisorB1Operation,
   ) => unknown | Promise<unknown>
+  readonly onSessionEstablished?: (
+    grant: SupervisorGrantPayload,
+    usedAt: number,
+  ) => void
   readonly onDiagnostic?: (
     event: string,
     fields: Readonly<Record<string, string | number | boolean>>,
@@ -462,6 +467,7 @@ export class SupervisorServer {
       })
       await connection.send(authenticated)
       established = true
+      this.#options.onSessionEstablished?.(grant, this.#now().getTime())
       expiryTimer = setTimeout(
         () => socket.destroy(),
         Math.max(0, sessionExpiresAt.getTime() - this.#now().getTime()),

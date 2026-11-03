@@ -446,6 +446,14 @@ async function reconcileSupervisorGrantSnapshot(
     ) {
       throw new Error('host_supervisor_grant_mismatch')
     }
+    if (authorization.scope === 'supervisor_control') {
+      const local = await postLocalJson(
+        '/api/v1/supervisor/control-grants/check',
+        payload,
+        options.signal,
+      )
+      if (local.allowed !== true) continue
+    }
     const grant: SignedSupervisorGrant = authorization.grant ?? {
       payload,
       proof: await signHostProof(

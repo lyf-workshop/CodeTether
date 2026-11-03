@@ -193,6 +193,28 @@ const migrations: readonly Migration[] = [
       ) STRICT;
     `),
   },
+  {
+    version: 25,
+    name: 'host_supervisor_control_authorization_evidence',
+    up: (database) =>
+      database.exec(`
+      CREATE TABLE host_supervisor_control_authorizations (
+        authorization_id TEXT PRIMARY KEY,
+        device_id TEXT NOT NULL,
+        pairing_root_authorization_id TEXT NOT NULL,
+        previous_authorization_id TEXT,
+        payload_json TEXT NOT NULL,
+        last_used_at INTEGER,
+        backfill_enabled INTEGER NOT NULL DEFAULT 0,
+        abandoned_at INTEGER
+      ) STRICT;
+      CREATE INDEX host_supervisor_control_authorizations_pairing
+        ON host_supervisor_control_authorizations(device_id, pairing_root_authorization_id);
+      CREATE UNIQUE INDEX host_supervisor_control_authorizations_successor
+        ON host_supervisor_control_authorizations(previous_authorization_id)
+        WHERE previous_authorization_id IS NOT NULL AND abandoned_at IS NULL;
+    `),
+  },
 ]
 
 export const currentSchemaVersion = migrations.at(-1)?.version ?? 0

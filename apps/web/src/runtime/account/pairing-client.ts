@@ -402,7 +402,8 @@ export async function listPairedDevices(
 export async function renewPairedDevice(
   context: PairingOwnerContext,
   device: PairedDevice,
-): Promise<void> {
+): Promise<boolean> {
+  if (!(await checkLocalRenewal(context, device))) return false
   const resource = `${hostPath(context)}/paired-authorizations/${encodeURIComponent(device.authorizationId)}/renew`
   const challenge = record(
     await post(
@@ -416,14 +417,18 @@ export async function renewPairedDevice(
     ),
   )
   if (challenge.status !== 'confirmation_required') invalid()
+  const proposal = record(challenge.payload)
+  if (!(await checkLocalRenewal(context, device, proposal))) return false
   const result = record(
     await post(
       context,
       `${resource}/finish`,
       await signAuthorization(
         context,
-        record(challenge.payload),
+        proposal,
         device.deviceId,
+        undefined,
+        device.authorizationId,
       ),
     ),
   )
@@ -437,6 +442,44 @@ export async function renewPairedDevice(
     authorization.scope !== 'supervisor_control'
   )
     invalid()
+  return true
+}
+
+async function checkLocalRenewal(
+  context: PairingOwnerContext,
+  device: PairedDevice,
+  proposal?: Readonly<Record<string, unknown>>,
+): Promise<boolean> {
+  const result = await postLocalPairing(context, 'renewal-check', {
+    previousAuthorizationId: device.authorizationId,
+    pairingRootAuthorizationId: device.pairingRootAuthorizationId,
+    deviceId: device.deviceId,
+    proposal,
+  })
+  if (typeof result.allowed !== 'boolean') invalid()
+  return result.allowed
+}
+
+async function postLocalPairing(
+  context: PairingOwnerContext,
+  operation: 'renewal-check' | 'record',
+  value: unknown,
+): Promise<Record<string, unknown>> {
+  const response = await fetch(
+    `${hostBaseUrl}/api/v1/supervisor/pairing/${operation}`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(value),
+      signal: context.signal,
+    },
+  )
+  if (!response.ok)
+    throw new ControlPlaneClientError(
+      'pairing_local_check_failed',
+      response.status,
+    )
+  return record(await response.json())
 }
 
 export async function removePairedDevice(
@@ -486,6 +529,7 @@ async function signAuthorization(
   payload: Readonly<Record<string, unknown>>,
   deviceId: string,
   challengeId?: string,
+  previousAuthorizationId: string | null = null,
 ) {
   const now = Math.floor(Date.now() / 1_000)
   if (
@@ -527,6 +571,20 @@ async function signAuthorization(
     context.localIdentity.keyHandle,
     context.hostIdentity,
   )
+  context.signal?.throwIfAborted()
+  const evidence = { authorization: payload, previousAuthorizationId }
+  const evidenceProof = await hostProof(
+    'codetether-local-pairing-authorization+jws',
+    evidence,
+    context.localIdentity.keyHandle,
+    context.hostIdentity,
+  )
+  context.signal?.throwIfAborted()
+  const local = await postLocalPairing(context, 'record', {
+    payload: evidence,
+    proof: evidenceProof,
+  })
+  if (local.status !== 'recorded') invalid()
   context.signal?.throwIfAborted()
   return { payload, proof }
 }

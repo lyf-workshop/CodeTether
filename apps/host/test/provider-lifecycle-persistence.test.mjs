@@ -34,6 +34,7 @@ test('migration 016 preserves v15 Conversations and adds an empty lifecycle grap
   const downgrade = new DatabaseSync(fixture.databasePath)
   downgrade.exec('PRAGMA foreign_keys = OFF')
   downgrade.exec(`
+    DROP TABLE host_supervisor_control_authorizations;
     DROP TABLE host_supervisor_pairing_revocations;
     DROP TABLE host_presence_configuration;
     DROP TABLE conversation_create_actions;
@@ -48,7 +49,7 @@ test('migration 016 preserves v15 Conversations and adds an empty lifecycle grap
     DROP TABLE machine_provider_installation_selections;
     DROP TABLE provider_installations;
     DROP INDEX idx_conversations_provider_installation_identity;
-    DELETE FROM schema_migrations WHERE version IN (16, 17, 18, 19, 20, 21, 22, 23, 24);
+    DELETE FROM schema_migrations WHERE version IN (16, 17, 18, 19, 20, 21, 22, 23, 24, 25);
   `)
   downgrade.exec('PRAGMA foreign_keys = ON')
   assert.deepEqual(downgrade.prepare('PRAGMA foreign_key_check').all(), [])
@@ -57,8 +58,8 @@ test('migration 016 preserves v15 Conversations and adds an empty lifecycle grap
   const migrated = ConversationStore.open({
     databasePath: fixture.databasePath,
   })
-  assert.equal(currentSchemaVersion, 24)
-  assert.equal(migrated.schemaVersion, 24)
+  assert.equal(currentSchemaVersion, 25)
+  assert.equal(migrated.schemaVersion, 25)
   const preserved = migrated.getConversation('conv_lifecycle_migration')
   assert.ok(preserved)
   assert.equal(preserved.providerThreadId, 'private-native-session-migration')

@@ -137,6 +137,35 @@ test('paired Supervisor over forced Relay uses local action gates and rejects st
         issuedAt: now,
         expiresAt: now + 3600,
       })
+    for (const [authorizationId, pairingRoot] of pairingRoots) {
+      assert.equal(
+        harness.persistence.storeHostSupervisorAuthorizationEvidence(
+          {
+            v: 1,
+            aud: 'codetether-control-plane-host',
+            purpose: 'host_device_authorization',
+            authorizationId,
+            challengeId: `enroll_${'e'.repeat(32)}`,
+            hostId: identity.hostId,
+            hostFingerprint: identity.fingerprint,
+            hostIdentityGeneration: 1,
+            deviceId,
+            deviceFingerprint: `sha256:${'D'.repeat(43)}`,
+            deviceKeyGeneration: 1,
+            userId,
+            spaceId,
+            scope: 'supervisor_control',
+            nonce: 'A'.repeat(43),
+            iat: now,
+            exp: now + 300,
+            authorizationExpiresAt: now + 3600,
+          },
+          pairingRoot,
+          authorizationId === renewedId ? oldRoot : null,
+        ),
+        true,
+      )
+    }
     globalThis.fetch = async (url, init) => {
       if (String(url).startsWith(`${harness.baseUrl}/`)) {
         return await originalFetch(url, init)
@@ -158,13 +187,15 @@ test('paired Supervisor over forced Relay uses local action gates and rejects st
         authorizationExpiresAt: new Date((now + 3600) * 1000).toISOString(),
       })
     }
-    const connect = async (authorizationId) => {
+    const connect = async (authorizationId, activate = true) => {
       const grant = grantFor(authorizationId)
-      await harness.supervisor.activate({
-        hostPublicJwk: publicJwk,
-        grant,
-        descriptor,
-      })
+      if (activate) {
+        await harness.supervisor.activate({
+          hostPublicJwk: publicJwk,
+          grant,
+          descriptor,
+        })
+      }
       const pending = await harness.supervisor.beginRemote({
         hostId: identity.hostId,
         hostFingerprint: identity.fingerprint,
@@ -372,10 +403,13 @@ test('paired Supervisor over forced Relay uses local action gates and rejects st
     await assert.rejects(
       harness.supervisor.readRemote(session.sessionId, 'host.bootstrap'),
     )
-    await assert.rejects(connect(oldRoot), { code: 'authorization_revoked' })
-    await assert.rejects(connect(renewedId), { code: 'authorization_revoked' })
+    await assert.rejects(connect(oldRoot), { code: 'operation_not_allowed' })
+    await assert.rejects(connect(renewedId), { code: 'operation_not_allowed' })
     const fresh = await connect(freshRoot)
     assert.equal(fresh.control, 'control')
+    await assert.rejects(connect(oldRoot, false), {
+      code: 'authorization_revoked',
+    })
     assert.equal(
       (await postJson(harness.baseUrl, disablePath, revocation)).status,
       200,

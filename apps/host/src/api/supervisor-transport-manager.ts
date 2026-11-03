@@ -19,7 +19,11 @@ import {
   verifySupervisorGrant,
   verifySupervisorHostPresence,
   verifyHostSupervisorDeviceRevocation,
+  verifySupervisorControlAuthorizationEvidence,
   type SignedHostSupervisorDeviceRevocation,
+  type SignedSupervisorControlAuthorizationEvidence,
+  type SupervisorControlAuthorizationPayload,
+  type SupervisorRenewalCheck,
   type SupervisorB1Operation,
   type SignedSupervisorHostPresence,
   type SupervisorHostPresencePayload,
@@ -27,6 +31,7 @@ import {
   type PendingSupervisorConnection,
   type SignedSupervisorGrant,
   type SignedSupervisorTransport,
+  type SupervisorGrantPayload,
   type SupervisorPublicJwk,
   type SupervisorRelayControlConnection,
 } from '@codetether/supervisor-transport'
@@ -211,13 +216,30 @@ export class SupervisorTransportManager {
           if (trustedOrigin === undefined)
             throw new Error('authentication_failed')
           const root = stringField(body, 'pairingRootAuthorizationId')
-          if (!/^hauth_[A-Za-z0-9][A-Za-z0-9_-]{15,95}$/u.test(root)) {
+          const evidence =
+            options.persistence.getHostSupervisorAuthorizationEvidence(
+              input.challenge.authorizationId,
+            )
+          if (
+            evidence === undefined ||
+            root !== evidence.pairingRootAuthorizationId ||
+            evidence.payload.scope !== scope ||
+            evidence.payload.hostId !== input.challenge.hostId ||
+            evidence.payload.hostIdentityGeneration !==
+              input.challenge.hostIdentityGeneration ||
+            evidence.payload.deviceId !== input.challenge.deviceId ||
+            evidence.payload.deviceKeyGeneration !==
+              input.challenge.deviceKeyGeneration
+          ) {
             throw new Error('authentication_failed')
           }
           if (
+            options.persistence.hasDurableHostSupervisorAuthorizationSuccessor(
+              input.challenge.authorizationId,
+            ) ||
             options.persistence.isHostSupervisorPairingRevoked(
               input.challenge.deviceId,
-              root,
+              evidence.pairingRootAuthorizationId,
             )
           ) {
             throw new Error('authorization_revoked')
@@ -378,6 +400,19 @@ export class SupervisorTransportManager {
             },
           }
         },
+      },
+      onSessionEstablished(grant, usedAt) {
+        if (grant.scope !== 'supervisor_control') return
+        try {
+          options.persistence.recordHostSupervisorAuthorizationUse(
+            grant.authorizationId,
+            usedAt,
+          )
+        } catch {
+          process.stderr.write(
+            '{"component":"host","event":"supervisor.authorization.use_not_recorded"}\n',
+          )
+        }
       },
       onDiagnostic(event, fields) {
         process.stderr.write(
@@ -571,6 +606,11 @@ export class SupervisorTransportManager {
       } catch {
         continue
       }
+      if (
+        grant.payload.scope === 'supervisor_control' &&
+        !this.isLocalControlGrantAllowed(grant.payload)
+      )
+        continue
       this.#persistence.configureHostPresence({
         spaceId: grant.payload.spaceId,
         controlPlaneOrigin: new URL(origin).origin,
@@ -665,7 +705,10 @@ export class SupervisorTransportManager {
       // Server activation verifies all Host/grant/scope bindings. Cloud admission
       // still checks revocation on EVERY incoming session; no cloud row is made.
       try {
-        await this.#server.activate({ hostPublicJwk, grant, descriptor })
+        await this.#activateLocalGrant(
+          { hostPublicJwk, grant, descriptor },
+          false,
+        )
       } catch {
         process.stderr.write(
           `${JSON.stringify({ component: 'host', event: 'supervisor.grant.restore_rejected', authorizationId: grant.payload.authorizationId })}\n`,
@@ -737,23 +780,222 @@ export class SupervisorTransportManager {
       throw new Error('Host grant identity mismatch')
     }
     this.#assertRelayDescriptor(descriptor)
-    await this.#server.activate({ hostPublicJwk: publicJwk, grant, descriptor })
-    try {
-      this.#persistence.storeHostSupervisorGrant(
-        grant,
-        TimestampSchema.parse(new Date().toISOString()),
+    await this.#activateLocalGrant(
+      { hostPublicJwk: publicJwk, grant, descriptor },
+      true,
+    )
+    this.#startRelayPresence()
+  }
+
+  isLocalControlGrantAllowed(grant: SupervisorGrantPayload): boolean {
+    if (grant.scope !== 'supervisor_control') return false
+    const identity = this.#service.getHostIdentity()
+    const evidence = this.#persistence.getHostSupervisorAuthorizationEvidence(
+      grant.authorizationId,
+    )
+    if (identity === undefined || evidence === undefined) return false
+    const { payload: authorization, pairingRootAuthorizationId } = evidence
+    return (
+      grant.hostId === identity.hostId &&
+      grant.hostFingerprint === identity.fingerprint &&
+      grant.hostIdentityGeneration === identity.identityGeneration &&
+      authorization.scope === grant.scope &&
+      authorization.authorizationId === grant.authorizationId &&
+      authorization.hostId === grant.hostId &&
+      authorization.hostFingerprint === grant.hostFingerprint &&
+      authorization.hostIdentityGeneration === grant.hostIdentityGeneration &&
+      authorization.spaceId === grant.spaceId &&
+      authorization.userId === grant.userId &&
+      authorization.deviceId === grant.deviceId &&
+      authorization.deviceFingerprint === grant.deviceFingerprint &&
+      authorization.deviceKeyGeneration === grant.deviceKeyGeneration &&
+      authorization.iat === grant.issuedAt &&
+      authorization.authorizationExpiresAt === grant.expiresAt &&
+      !this.#persistence.hasDurableHostSupervisorAuthorizationSuccessor(
+        grant.authorizationId,
+      ) &&
+      !this.#persistence.isHostSupervisorPairingRevoked(
+        grant.deviceId,
+        pairingRootAuthorizationId,
       )
-      this.#persistence.enableHostSupervisorGrant(grant.payload.authorizationId)
+    )
+  }
+
+  async #activateLocalGrant(
+    input: Parameters<SupervisorServer['activate']>[0],
+    persist: boolean,
+  ): Promise<void> {
+    const { grant } = input
+    const control = grant.payload.scope === 'supervisor_control'
+    if (control && !this.isLocalControlGrantAllowed(grant.payload))
+      throw new SupervisorClientError('operation_not_allowed')
+    await this.#server.activate(input)
+    try {
+      // Signature verification yields. A revocation recorded in that window
+      // must win before the activation can be durably enabled or restored.
+      if (control && !this.isLocalControlGrantAllowed(grant.payload))
+        throw new SupervisorClientError('operation_not_allowed')
+      if (persist) {
+        this.#persistence.storeHostSupervisorGrant(
+          grant,
+          TimestampSchema.parse(new Date().toISOString()),
+        )
+        this.#persistence.enableHostSupervisorGrant(grant.payload.authorizationId)
+      }
+      if (control) {
+        const previous =
+          this.#persistence.getHostSupervisorAuthorizationEvidence(
+            grant.payload.authorizationId,
+          )?.previousAuthorizationId
+        if (previous != null) this.#server.deactivate(previous)
+      }
     } catch (error) {
       this.#server.deactivate(grant.payload.authorizationId)
       throw error
     }
-    this.#startRelayPresence()
   }
 
   pruneActivations(authorizationIds: readonly string[]): void {
     this.#persistence.pruneHostSupervisorGrants(authorizationIds)
     this.#server.pruneActivations(new Set(authorizationIds))
+  }
+
+  isPairingRenewalAllowed(input: SupervisorRenewalCheck): boolean {
+    return (
+      this.#renewalRoot(
+        input.previousAuthorizationId,
+        input.deviceId,
+        input.proposal,
+      ) === input.pairingRootAuthorizationId
+    )
+  }
+
+  async recordPairingAuthorization(
+    value: SignedSupervisorControlAuthorizationEvidence,
+  ): Promise<void> {
+    const { authorization, previousAuthorizationId } = value.payload
+    const identity = this.#service.getHostIdentity()
+    if (
+      identity === undefined ||
+      !this.#isCurrentPairingProposal(authorization)
+    ) {
+      throw new SupervisorClientError('operation_not_allowed')
+    }
+    try {
+      await verifySupervisorControlAuthorizationEvidence(
+        value,
+        supervisorPublicJwkSchema.parse(JSON.parse(identity.publicJwk)),
+      )
+    } catch {
+      throw new SupervisorClientError('operation_not_allowed')
+    }
+    const existing = this.#persistence.getHostSupervisorAuthorizationEvidence(
+      authorization.authorizationId,
+    )
+    const root =
+      existing !== undefined
+        ? existing.pairingRootAuthorizationId
+        : previousAuthorizationId === null
+          ? authorization.authorizationId
+          : this.#renewalRoot(
+              previousAuthorizationId,
+              authorization.deviceId,
+              authorization,
+            )
+    if (
+      root === undefined ||
+      !this.#isCurrentPairingProposal(authorization) ||
+      this.#persistence.isHostSupervisorPairingRevoked(
+        authorization.deviceId,
+        root,
+      ) ||
+      !this.#persistence.storeHostSupervisorAuthorizationEvidence(
+        authorization,
+        root,
+        previousAuthorizationId,
+      )
+    ) {
+      throw new SupervisorClientError('operation_not_allowed')
+    }
+  }
+
+  #isCurrentPairingProposal(
+    proposal: SupervisorControlAuthorizationPayload,
+  ): boolean {
+    const identity = this.#service.getHostIdentity()
+    const config = this.#persistence.getHostPresenceConfiguration()
+    const now = Math.floor(Date.now() / 1_000)
+    return (
+      identity !== undefined &&
+      proposal.hostId === identity.hostId &&
+      proposal.hostFingerprint === identity.fingerprint &&
+      proposal.hostIdentityGeneration === identity.identityGeneration &&
+      (config === undefined || proposal.spaceId === config.spaceId) &&
+      proposal.iat <= now + 60 &&
+      proposal.exp > now &&
+      proposal.authorizationExpiresAt - proposal.iat <= 30 * 86_400
+    )
+  }
+
+  #renewalRoot(
+    previousAuthorizationId: string,
+    deviceId: string,
+    proposal?: SupervisorControlAuthorizationPayload,
+  ): string | undefined {
+    const previous = this.#persistence.getHostSupervisorAuthorizationEvidence(
+      previousAuthorizationId,
+    )
+    const grant = this.#persistence.getHostSupervisorGrant(
+      previousAuthorizationId,
+    )
+    if (
+      previous === undefined ||
+      grant === undefined ||
+      previous.payload.deviceId !== deviceId ||
+      !this.isLocalControlGrantAllowed(grant.payload)
+    )
+      return undefined
+
+    const state = this.#persistence.getHostSupervisorRenewalState(
+      previousAuthorizationId,
+      deviceId,
+      previous.pairingRootAuthorizationId,
+    )
+    const now = Date.now()
+    const expiresAt = grant.payload.expiresAt * 1_000
+    const lastUsedAt = state?.lastUsedAt
+    const day = 86_400_000
+    if (
+      lastUsedAt == null ||
+      lastUsedAt >= expiresAt ||
+      lastUsedAt > now ||
+      expiresAt - now >= 15 * day ||
+      lastUsedAt < Math.min(expiresAt, now) - 30 * day
+    )
+      return undefined
+
+    if (proposal !== undefined) {
+      const current = previous.payload
+      if (
+        !this.#isCurrentPairingProposal(proposal) ||
+        proposal.authorizationId === previousAuthorizationId ||
+        proposal.hostId !== current.hostId ||
+        proposal.hostFingerprint !== current.hostFingerprint ||
+        proposal.hostIdentityGeneration !== current.hostIdentityGeneration ||
+        proposal.spaceId !== current.spaceId ||
+        proposal.userId !== current.userId ||
+        proposal.deviceId !== current.deviceId ||
+        proposal.deviceFingerprint !== current.deviceFingerprint ||
+        proposal.deviceKeyGeneration !== current.deviceKeyGeneration ||
+        proposal.authorizationExpiresAt <= current.authorizationExpiresAt ||
+        !this.#persistence.canReserveHostSupervisorAuthorization(
+          previousAuthorizationId,
+          proposal,
+        )
+      )
+        return undefined
+    }
+    return previous.pairingRootAuthorizationId
   }
 
   async beginRemote(input: {
@@ -1124,13 +1366,12 @@ export class SupervisorTransportManager {
     if (payload.exp * 1_000 <= Date.now()) {
       throw new SupervisorClientError('operation_not_allowed')
     }
-    if (
-      this.#persistence.revokeHostSupervisorPairing(
-        payload.targetDeviceId,
-        payload.pairingRootAuthorizationId,
-      )
-    ) {
-      this.#server.deactivateDevice(payload.targetDeviceId)
+    const authorizationIds = this.#persistence.revokeHostSupervisorPairing(
+      payload.targetDeviceId,
+      payload.pairingRootAuthorizationId,
+    )
+    for (const authorizationId of authorizationIds) {
+      this.#server.deactivate(authorizationId)
     }
   }
 

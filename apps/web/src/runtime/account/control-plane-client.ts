@@ -914,7 +914,8 @@ export function hostProof(
     | 'codetether-host-registration+jws'
     | 'codetether-host-claim+jws'
     | 'codetether-host-pairing-management+jws'
-    | 'codetether-host-device-authorization+jws',
+    | 'codetether-host-device-authorization+jws'
+    | 'codetether-local-pairing-authorization+jws',
   payload: unknown,
   keyHandle: string,
   hostIdentity: HostIdentityCapability,

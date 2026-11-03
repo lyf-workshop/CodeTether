@@ -99,9 +99,12 @@ import {
 } from '@codetether/protocol'
 import {
   signedHostSupervisorDeviceRevocationSchema,
+  signedSupervisorControlAuthorizationEvidenceSchema,
   signedSupervisorGrantSchema,
   signedSupervisorTransportSchema,
   supervisorB1OperationSchema,
+  supervisorGrantPayloadSchema,
+  supervisorRenewalCheckSchema,
   supervisorPublicJwkSchema,
 } from '@codetether/supervisor-transport'
 import { z } from 'zod'
@@ -593,6 +596,60 @@ export class LocalHttpServer {
           response,
           200,
           { status: 'pruned' },
+          context.allowedOrigin,
+        )
+        return
+      }
+      if (
+        request.method === 'POST' &&
+        url.pathname === '/api/v1/supervisor/pairing/renewal-check' &&
+        this.#supervisorTransport !== undefined
+      ) {
+        const body = await this.#http.readValidatedBody(
+          request,
+          supervisorRenewalCheckSchema,
+        )
+        this.#http.writeJson(
+          response,
+          200,
+          { allowed: this.#supervisorTransport.isPairingRenewalAllowed(body) },
+          context.allowedOrigin,
+        )
+        return
+      }
+      if (
+        request.method === 'POST' &&
+        url.pathname === '/api/v1/supervisor/pairing/record' &&
+        this.#supervisorTransport !== undefined
+      ) {
+        const body = await this.#http.readValidatedBody(
+          request,
+          signedSupervisorControlAuthorizationEvidenceSchema,
+        )
+        await this.#supervisorTransport.recordPairingAuthorization(body)
+        this.#http.writeJson(
+          response,
+          200,
+          { status: 'recorded' },
+          context.allowedOrigin,
+        )
+        return
+      }
+      if (
+        request.method === 'POST' &&
+        url.pathname === '/api/v1/supervisor/control-grants/check' &&
+        this.#supervisorTransport !== undefined
+      ) {
+        const body = await this.#http.readValidatedBody(
+          request,
+          supervisorGrantPayloadSchema,
+        )
+        this.#http.writeJson(
+          response,
+          200,
+          {
+            allowed: this.#supervisorTransport.isLocalControlGrantAllowed(body),
+          },
           context.allowedOrigin,
         )
         return

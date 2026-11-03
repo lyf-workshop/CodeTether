@@ -123,15 +123,16 @@ export function LocalSupervisorPresenceCoordinator() {
       try {
         devices = await listPairedDevices(context)
         const due = devices.filter((device) => device.renewalEligible)
+        let renewed = false
         for (const device of due) {
           signal.throwIfAborted()
           try {
-            await renewPairedDevice(context, device)
+            if (await renewPairedDevice(context, device)) renewed = true
           } catch (error) {
             pairingError ??= error
           }
         }
-        if (due.length > 0) devices = await listPairedDevices(context)
+        if (renewed) devices = await listPairedDevices(context)
       } catch (error) {
         pairingError = error
       }

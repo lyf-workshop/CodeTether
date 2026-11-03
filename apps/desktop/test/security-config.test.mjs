@@ -19,6 +19,17 @@ test('production Desktop CSP and capabilities stay loopback-only and non-wildcar
       'utf8',
     ),
   )
+  const developmentConfig = JSON.parse(
+    await readFile(resolve(desktopDirectory, 'src-tauri', 'tauri.dev.conf.json'), 'utf8'),
+  )
+  const [pairingOwner, pairingDevice] = await Promise.all(
+    ['pairing-check-owner', 'pairing-check-device'].map(async (name) =>
+      JSON.parse(await readFile(
+        resolve(desktopDirectory, 'src-tauri', 'capabilities', `${name}.json`),
+        'utf8',
+      )),
+    ),
+  )
   const projectDirectoryPermission = await readFile(
     resolve(
       desktopDirectory,
@@ -74,6 +85,19 @@ test('production Desktop CSP and capabilities stay loopback-only and non-wildcar
     JSON.stringify(capability.permissions),
     /notification:default/u,
   )
+  assert.deepEqual(config.app.security.capabilities, ['main'])
+  assert.deepEqual(developmentConfig.app.security.capabilities, [
+    'main', 'pairing-check-owner', 'pairing-check-device',
+  ])
+  assert.deepEqual(pairingOwner.windows, ['main'])
+  assert.deepEqual(pairingOwner.permissions, ['allow-open-pairing-diagnostic'])
+  assert.deepEqual(pairingDevice.windows, ['b1-pairing-check'])
+  assert.deepEqual(pairingDevice.permissions, [
+    'allow-product-device-key-list',
+    'allow-product-device-key-public',
+    'allow-product-device-key-sign',
+    'allow-product-device-registration-metadata',
+  ])
   assert.match(
     projectDirectoryPermission,
     /commands\.allow = \["pick_project_directory"\]/u,
@@ -100,7 +124,7 @@ test('production Desktop CSP and capabilities stay loopback-only and non-wildcar
   )
   assert.match(
     productDeviceKeyPermission,
-    /commands\.allow = \[\s*"product_device_key_list",\s*"product_device_key_create",\s*"product_device_key_public",\s*"product_device_key_sign",\s*"product_device_key_destroy",\s*"product_device_key_bind",?\s*\]/u,
+    /commands\.allow = \[\s*"product_device_key_list",\s*"product_device_key_create",\s*"product_device_key_public",\s*"product_device_key_sign",\s*"product_device_key_destroy",\s*"product_device_key_bind",\s*"product_device_registration_metadata",?\s*\]/u,
   )
   assert.doesNotMatch(
     productDeviceKeyPermission,

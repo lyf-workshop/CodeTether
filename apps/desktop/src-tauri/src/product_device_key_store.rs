@@ -5,6 +5,62 @@ const KEY_HANDLE_PREFIX: &str = "CodeTether.ProductDevice.";
 const MAX_SIGNING_PAYLOAD_BYTES: usize = 4_096;
 const ES256_ALGORITHM: &str = "ES256";
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductDeviceRegistrationMetadata {
+    platform: String,
+    display_name: String,
+}
+
+#[tauri::command]
+pub fn product_device_registration_metadata() -> ProductDeviceRegistrationMetadata {
+    let os = match std::env::consts::OS {
+        "windows" => "Windows",
+        "macos" => "macOS",
+        "linux" => "Linux",
+        other => other,
+    };
+    let architecture = match std::env::consts::ARCH {
+        "x86_64" => "x64",
+        "aarch64" => "arm64",
+        other => other,
+    };
+    let platform = format!("{os}-{architecture}");
+    let mut display_name = system_device_name()
+        .unwrap_or_default()
+        .trim()
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(60)
+        .collect::<String>();
+    if display_name.trim().is_empty() {
+        display_name = os.to_owned();
+    }
+    ProductDeviceRegistrationMetadata {
+        platform,
+        display_name: display_name.trim().to_owned(),
+    }
+}
+
+#[cfg(windows)]
+fn system_device_name() -> Option<String> {
+    std::env::var("COMPUTERNAME").ok()
+}
+
+#[cfg(target_os = "macos")]
+fn system_device_name() -> Option<String> {
+    let result = std::process::Command::new("/usr/sbin/scutil")
+        .args(["--get", "ComputerName"])
+        .output()
+        .ok()?;
+    result.status.success().then(|| String::from_utf8_lossy(&result.stdout).into_owned())
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn system_device_name() -> Option<String> {
+    std::fs::read_to_string("/etc/hostname").ok()
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ProductDevicePublicJwk {
     kty: &'static str,

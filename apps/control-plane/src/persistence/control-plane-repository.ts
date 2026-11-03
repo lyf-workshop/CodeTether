@@ -263,7 +263,9 @@ export class ControlPlaneRepository {
   }
 
   public async createHostDeviceAuthorization(
-    input: CreateHostDeviceAuthorization,
+    input: Omit<CreateHostDeviceAuthorization, 'scope'> & {
+      readonly scope: 'supervisor_read' | 'supervisor_control'
+    },
   ): Promise<boolean> {
     const result = await this.executor.query(
       `INSERT INTO control_plane.host_device_authorizations (

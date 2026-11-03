@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-open-pairing-diagnostic"
+description = "Enables the open_pairing_diagnostic command without any pre-configured scope."
+commands.allow = ["open_pairing_diagnostic"]
+
+[[permission]]
+identifier = "deny-open-pairing-diagnostic"
+description = "Denies the open_pairing_diagnostic command without any pre-configured scope."
+commands.deny = ["open_pairing_diagnostic"]

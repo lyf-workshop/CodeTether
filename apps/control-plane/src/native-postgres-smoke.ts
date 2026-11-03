@@ -16,6 +16,7 @@ const expectedTables = new Set([
   'host_access_requests',
   'host_claims',
   'host_device_authorizations',
+  'host_pairing_sessions',
   'host_registration_challenges',
   'host_supervisor_presence',
   'hosts',

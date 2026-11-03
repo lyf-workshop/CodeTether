@@ -124,6 +124,10 @@ export interface ProductDeviceSignature {
 
 export interface ProductDeviceIdentityCapability {
   readonly available: boolean
+  registrationMetadata?(): Promise<{
+    readonly platform: string
+    readonly displayName: string
+  }>
   listKeys(): Promise<readonly ProductDeviceKeyDescription[]>
   createKey(): Promise<ProductDeviceKeyDescription>
   readPublic(keyHandle: string): Promise<ProductDeviceKeyDescription>
@@ -177,6 +181,7 @@ type TauriNotificationLoader = () => Promise<TauriNotificationModule>
 
 interface TauriWindowModule {
   getCurrentWindow(): {
+    readonly label?: string
     isFocused(): Promise<boolean>
     isMinimized(): Promise<boolean>
     isVisible(): Promise<boolean>
@@ -212,6 +217,16 @@ const loadTauriNotification: TauriNotificationLoader = async () =>
   await import('@tauri-apps/plugin-notification')
 const loadTauriWindow: TauriWindowLoader = async () =>
   await import('@tauri-apps/api/window')
+
+export async function openPairingDiagnostic(): Promise<void> {
+  const { invoke } = await loadTauriCore()
+  await invoke('open_pairing_diagnostic')
+}
+
+export async function readNativeWindowLabel(): Promise<string | undefined> {
+  const { getCurrentWindow } = await loadTauriWindow()
+  return getCurrentWindow().label
+}
 
 const unavailableDirectoryPicker: DirectoryPicker = {
   available: false,
@@ -576,6 +591,12 @@ export function createNativeCapabilities(
 
   const productDeviceIdentity: ProductDeviceIdentityCapability = {
     available: true,
+    async registrationMetadata() {
+      const { invoke } = await loadCore()
+      return await invoke<{ platform: string; displayName: string }>(
+        'product_device_registration_metadata',
+      )
+    },
     async listKeys() {
       const { invoke } = await loadCore()
       return await invoke<readonly ProductDeviceKeyDescription[]>(

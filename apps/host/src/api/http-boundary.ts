@@ -9,6 +9,7 @@ import {
   type HostErrorCode,
   type SafeErrorEnvelope,
 } from '@codetether/protocol'
+import { SupervisorClientError } from '@codetether/supervisor-transport'
 
 import { safeErrorNameForLog } from './safe-log.js'
 
@@ -345,6 +346,52 @@ function toSafeHttpError(error: unknown): HttpBoundaryError {
       error.details,
       error.failure,
     )
+  }
+  if (error instanceof SupervisorClientError) {
+    switch (error.code) {
+      case 'invalid_request':
+        return new HttpBoundaryError(
+          'invalid_request',
+          'Remote request is invalid',
+          400,
+        )
+      case 'operation_not_allowed':
+        return new HttpBoundaryError(
+          'unsupported',
+          'Remote operation is not allowed',
+          403,
+        )
+      case 'not_found':
+        return new HttpBoundaryError(
+          'not_found',
+          'Remote resource was not found',
+          404,
+        )
+      case 'conflict':
+        return new HttpBoundaryError(
+          'conflict',
+          'Remote action is no longer available',
+          409,
+        )
+      case 'unsupported':
+        return new HttpBoundaryError(
+          'unsupported',
+          'The remote operation is unsupported',
+          error.httpStatus ?? 422,
+        )
+      case 'session_expired':
+        return new HttpBoundaryError(
+          'conflict',
+          'Remote connection expired',
+          409,
+        )
+      case 'unavailable':
+        return new HttpBoundaryError(
+          'runtime_unavailable',
+          'Remote service is unavailable',
+          503,
+        )
+    }
   }
   process.stderr.write(
     `[codetether:http-error] ${safeErrorNameForLog(error)}\n`,

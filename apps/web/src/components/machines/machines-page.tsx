@@ -30,11 +30,17 @@ import {
   machineEnvironmentLabel,
 } from './machine-presentation'
 import { MachineProjectsSection } from './machine-projects-section'
+import {
+  AuthorizedMobileDevices,
+  AuthorizedMobileDevicesList,
+} from './authorized-mobile-devices'
+import { useAccountSession } from '../../runtime/account/use-account-session'
 
 export function MachinesPage() {
   const runtime = useHostRuntime()
   const navigate = useNavigate()
   const connectionState = useHostConnectionState()
+  const { query: account } = useAccountSession()
   const machinesQuery = useQuery({
     ...machineListQueryOptions(runtime),
     enabled: connectionState === 'connected',
@@ -217,6 +223,14 @@ export function MachinesPage() {
             )
           })}
         </div>
+      )}
+      {account.data ? (
+        <AuthorizedMobileDevices
+          key={account.data.userId}
+          userId={account.data.userId}
+        />
+      ) : (
+        <AuthorizedMobileDevicesList devices={[]} />
       )}
     </div>
   )

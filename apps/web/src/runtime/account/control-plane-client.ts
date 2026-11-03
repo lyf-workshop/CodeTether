@@ -13,6 +13,9 @@ const REGISTRATION_HEADER = {
 } as const
 
 let registrationInFlight: Promise<ResolvedProductDevice> | undefined
+let registrationAccessToken: string | undefined
+
+export type SupervisorScope = 'supervisor_read' | 'supervisor_control'
 
 export interface AccountProductDevice {
   readonly deviceId: string
@@ -41,7 +44,7 @@ export interface AuthorizedHostDirectoryEntry {
   readonly authorization: {
     readonly state: 'authorized'
     readonly authorizationId: string
-    readonly scope: 'supervisor_read'
+    readonly scope: SupervisorScope
     readonly expiresAt: string
     readonly issuedAt: string
     readonly serial: string
@@ -103,7 +106,7 @@ export interface SupervisorGrantPayload {
   readonly deviceKeyGeneration: number
   readonly userId: string
   readonly spaceId: string
-  readonly scope: 'supervisor_read'
+  readonly scope: SupervisorScope
   readonly authorizationSerial: string
   readonly authorizationGeneration: number
   readonly issuedAt: number
@@ -224,7 +227,8 @@ export interface HostSupervisorAuthorization {
   readonly deviceKeyGeneration: number
   readonly userId: string
   readonly spaceId: string
-  readonly scope: 'supervisor_read'
+  readonly scope: SupervisorScope
+  readonly pairingRootAuthorizationId?: string
   readonly serial: string
   readonly generation: number
   readonly issuedAt: string
@@ -299,7 +303,7 @@ export async function resolveExistingProductDevice(options: {
     throw new ControlPlaneClientError('product_device_not_available', undefined)
   }
   if (keys.length === 0) {
-    return await registerFirstMacProductDevice(options, devices)
+    return await registerFirstProductDevice(options, devices)
   }
   const unboundMacKeys = keys.filter(
     (key) =>
@@ -309,11 +313,7 @@ export async function resolveExistingProductDevice(options: {
     // A previous first-login attempt may have created the protected key but
     // failed before the cloud registration completed. Reuse that sole
     // unmatched macOS key rather than creating a second local identity.
-    return await registerFirstMacProductDevice(
-      options,
-      devices,
-      unboundMacKeys[0],
-    )
+    return await registerFirstProductDevice(options, devices, unboundMacKeys[0])
   }
   throw new ControlPlaneClientError('product_device_not_available', undefined)
 }
@@ -338,7 +338,7 @@ async function matchProductDevices(
   return matches
 }
 
-async function registerFirstMacProductDevice(
+async function registerFirstProductDevice(
   options: {
     readonly accessToken: string
     readonly baseUrl: string
@@ -348,20 +348,32 @@ async function registerFirstMacProductDevice(
   existingDevices: readonly AccountProductDevice[],
   existingKey?: ProductDeviceKeyDescription,
 ): Promise<ResolvedProductDevice> {
-  if (registrationInFlight !== undefined) return await registrationInFlight
-  const request = registerFirstMacProductDeviceOnce(
+  if (registrationInFlight !== undefined) {
+    if (registrationAccessToken !== options.accessToken) {
+      throw new ControlPlaneClientError(
+        'product_device_registration_busy',
+        undefined,
+      )
+    }
+    return await registrationInFlight
+  }
+  registrationAccessToken = options.accessToken
+  const request = registerFirstProductDeviceOnce(
     options,
     existingDevices,
     existingKey,
   )
   const tracked = request.finally(() => {
-    if (registrationInFlight === tracked) registrationInFlight = undefined
+    if (registrationInFlight === tracked) {
+      registrationInFlight = undefined
+      registrationAccessToken = undefined
+    }
   })
   registrationInFlight = tracked
   return await tracked
 }
 
-async function registerFirstMacProductDeviceOnce(
+async function registerFirstProductDeviceOnce(
   options: {
     readonly accessToken: string
     readonly baseUrl: string
@@ -371,6 +383,8 @@ async function registerFirstMacProductDeviceOnce(
   existingDevices: readonly AccountProductDevice[],
   existingKey?: ProductDeviceKeyDescription,
 ): Promise<ResolvedProductDevice> {
+  const metadata = await readProductDeviceRegistrationMetadata(options.identity)
+  options.signal?.throwIfAborted()
   const key = existingKey ?? (await options.identity.createKey())
   const keyCreatedHere = existingKey === undefined
   let registrationSubmitted = !keyCreatedHere
@@ -384,20 +398,15 @@ async function registerFirstMacProductDeviceOnce(
     )
     if (alreadyRegistered !== undefined) {
       registrationSubmitted = true
-      await options.identity.bindDevice(
-        key.keyHandle,
-        alreadyRegistered.deviceId,
-        alreadyRegistered.fingerprint,
-        alreadyRegistered.keyGeneration,
-      )
+      await bindRegisteredMacDevice(options.identity, key, alreadyRegistered)
       return { device: alreadyRegistered, key }
     }
     const candidate = {
       publicKey: key.publicKey,
       keyAlgorithm: key.keyAlgorithm,
       deviceType: 'desktop_client' as const,
-      label: 'CodeTether Desktop',
-      platform: 'macOS-arm64',
+      label: metadata.displayName,
+      platform: metadata.platform,
       appVersion: PRODUCT_VERSION,
       protocolVersion: 1 as const,
     }
@@ -450,12 +459,7 @@ async function registerFirstMacProductDeviceOnce(
         201,
       )
     }
-    await options.identity.bindDevice(
-      key.keyHandle,
-      device.deviceId,
-      device.fingerprint,
-      device.keyGeneration,
-    )
+    await bindRegisteredMacDevice(options.identity, key, device)
     return { device, key }
   } catch (error) {
     if (!registrationSubmitted && keyCreatedHere) {
@@ -467,6 +471,47 @@ async function registerFirstMacProductDeviceOnce(
       }
     }
     throw error
+  }
+}
+
+export async function readProductDeviceRegistrationMetadata(
+  identity: ProductDeviceIdentityCapability,
+) {
+  const metadata = await identity
+    .registrationMetadata?.()
+    .catch(() => undefined)
+  if (
+    typeof metadata?.platform !== 'string' ||
+    !/^(?:Windows|macOS|Linux)-(?:x64|arm64)$/u.test(metadata.platform) ||
+    typeof metadata.displayName !== 'string' ||
+    !isBoundedString(metadata.displayName.trim(), 120) ||
+    Array.from(metadata.displayName).some((character) => {
+      const code = character.charCodeAt(0)
+      return code < 32 || code === 127
+    })
+  )
+    throw new ControlPlaneClientError(
+      'product_device_metadata_unavailable',
+      undefined,
+    )
+  return {
+    platform: metadata.platform,
+    displayName: metadata.displayName.trim(),
+  }
+}
+
+async function bindRegisteredMacDevice(
+  identity: ProductDeviceIdentityCapability,
+  key: ProductDeviceKeyDescription,
+  device: AccountProductDevice,
+) {
+  if (key.protection === 'macOS_secure_enclave_wrapped_key_file_keychain') {
+    await identity.bindDevice(
+      key.keyHandle,
+      device.deviceId,
+      device.fingerprint,
+      device.keyGeneration,
+    )
   }
 }
 
@@ -670,28 +715,37 @@ export async function listHostSupervisorAuthorizations(options: {
   ) {
     invalidResponse()
   }
-  return body.authorizations.map((candidate) => {
-    if (
-      !isRecord(candidate) ||
-      !isId(candidate.authorizationId, 'hauth_') ||
-      candidate.hostId !== options.hostId ||
-      !isPositiveInteger(candidate.hostIdentityGeneration) ||
-      !isId(candidate.deviceId, 'dev_') ||
-      typeof candidate.deviceFingerprint !== 'string' ||
-      !/^sha256:[A-Za-z0-9_-]{43}$/u.test(candidate.deviceFingerprint) ||
-      !isPositiveInteger(candidate.deviceKeyGeneration) ||
-      !isId(candidate.userId, 'usr_') ||
-      !isId(candidate.spaceId, 'space_') ||
-      candidate.scope !== 'supervisor_read' ||
-      !/^(?:0|[1-9][0-9]{0,19})$/u.test(String(candidate.serial)) ||
-      !isPositiveInteger(candidate.generation) ||
-      !isBoundedString(candidate.issuedAt, 64) ||
-      !isBoundedString(candidate.expiresAt, 64) ||
-      (candidate.grant !== null && !isSupervisorGrantValue(candidate.grant))
-    )
-      invalidResponse()
-    return candidate as unknown as HostSupervisorAuthorization
-  })
+  return body.authorizations.map((candidate) =>
+    parseHostSupervisorAuthorization(candidate, options.hostId),
+  )
+}
+
+export function parseHostSupervisorAuthorization(
+  candidate: unknown,
+  hostId: string,
+): HostSupervisorAuthorization {
+  if (
+    !isRecord(candidate) ||
+    !isId(candidate.authorizationId, 'hauth_') ||
+    candidate.hostId !== hostId ||
+    !isPositiveInteger(candidate.hostIdentityGeneration) ||
+    !isId(candidate.deviceId, 'dev_') ||
+    typeof candidate.deviceFingerprint !== 'string' ||
+    !/^sha256:[A-Za-z0-9_-]{43}$/u.test(candidate.deviceFingerprint) ||
+    !isPositiveInteger(candidate.deviceKeyGeneration) ||
+    !isId(candidate.userId, 'usr_') ||
+    !isId(candidate.spaceId, 'space_') ||
+    !isSupervisorScope(candidate.scope) ||
+    (candidate.pairingRootAuthorizationId !== undefined &&
+      !isId(candidate.pairingRootAuthorizationId, 'hauth_')) ||
+    !/^(?:0|[1-9][0-9]{0,19})$/u.test(String(candidate.serial)) ||
+    !isPositiveInteger(candidate.generation) ||
+    !isBoundedString(candidate.issuedAt, 64) ||
+    !isBoundedString(candidate.expiresAt, 64) ||
+    (candidate.grant !== null && !isSupervisorGrantValue(candidate.grant))
+  )
+    invalidResponse()
+  return candidate as unknown as HostSupervisorAuthorization
 }
 
 export async function listOwnedHosts(options: {
@@ -855,8 +909,12 @@ export async function approveHostAccessRequest(options: {
   })
 }
 
-function hostProof(
-  type: 'codetether-host-registration+jws' | 'codetether-host-claim+jws',
+export function hostProof(
+  type:
+    | 'codetether-host-registration+jws'
+    | 'codetether-host-claim+jws'
+    | 'codetether-host-pairing-management+jws'
+    | 'codetether-host-device-authorization+jws',
   payload: unknown,
   keyHandle: string,
   hostIdentity: HostIdentityCapability,
@@ -1009,6 +1067,7 @@ export async function postAuthenticatedProductDeviceJson(options: {
   readonly value: unknown
   readonly signal?: AbortSignal
 }): Promise<unknown> {
+  options.signal?.throwIfAborted()
   const bodyBytes = canonicalJsonBytes(options.value)
   const proof = await createDeviceRequestProof({
     accessToken: options.accessToken,
@@ -1020,6 +1079,7 @@ export async function postAuthenticatedProductDeviceJson(options: {
     resource: options.resource,
     body: bodyBytes,
   })
+  options.signal?.throwIfAborted()
   const response = await fetch(`${options.baseUrl}${options.resource}`, {
     method: 'POST',
     headers: {
@@ -1306,7 +1366,7 @@ function parseHostDirectory(
       !isPublicJwk(candidate.publicKey) ||
       !isRecord(candidate.authorization) ||
       candidate.authorization.state !== 'authorized' ||
-      candidate.authorization.scope !== 'supervisor_read' ||
+      !isSupervisorScope(candidate.authorization.scope) ||
       !isId(candidate.authorization.authorizationId, 'hauth_') ||
       !isBoundedString(candidate.authorization.expiresAt, 64) ||
       !isBoundedString(candidate.authorization.issuedAt, 64) ||
@@ -1448,8 +1508,13 @@ function isSupervisorGrantValue(
     isRecord(value) &&
     isRecord(value.payload) &&
     value.payload.purpose === 'host_supervisor_grant' &&
+    isSupervisorScope(value.payload.scope) &&
     isBoundedString(value.proof, 8_192)
   )
+}
+
+function isSupervisorScope(value: unknown): value is SupervisorScope {
+  return value === 'supervisor_read' || value === 'supervisor_control'
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

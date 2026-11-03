@@ -132,6 +132,10 @@ test('first Mac ProductDevice enrollment uses the existing challenge and registe
       identity: {
         available: true,
         listKeys: async () => [],
+        registrationMetadata: async () => ({
+          platform: 'macOS-arm64',
+          displayName: 'CodeTether Desktop',
+        }),
         createKey: async () => createdKey,
         readPublic: async () => createdKey,
         sign: async (keyHandle, payloadBase64Url) => {
@@ -170,10 +174,13 @@ test('failed first enrollment destroys only the newly-created local key', async 
     keyHandle: `CodeTether.ProductDevice.${'c'.repeat(32)}`,
   }
   let destroyedHandle
-  globalThis.fetch = async (input) => {
+  globalThis.fetch = async (input, init) => {
     if (String(input).endsWith('/v1/devices')) {
       return new Response(JSON.stringify({ devices: [] }), { status: 200 })
     }
+    const candidate = JSON.parse(new TextDecoder().decode(init.body))
+    assert.equal(candidate.platform, 'Windows-x64')
+    assert.equal(candidate.label, 'Test PC')
     return new Response(
       JSON.stringify({ code: 'device_registration_challenge_invalid' }),
       { status: 400 },
@@ -187,6 +194,10 @@ test('failed first enrollment destroys only the newly-created local key', async 
         identity: {
           available: true,
           listKeys: async () => [],
+          registrationMetadata: async () => ({
+            platform: 'Windows-x64',
+            displayName: 'Test PC',
+          }),
           createKey: async () => createdKey,
           readPublic: async () => createdKey,
           sign: async () =>
@@ -265,6 +276,10 @@ test('unmatched orphaned Mac key is reused for first enrollment', async () => {
       identity: {
         available: true,
         listKeys: async () => [orphanedKey],
+        registrationMetadata: async () => ({
+          platform: 'macOS-arm64',
+          displayName: 'CodeTether Desktop',
+        }),
         createKey: async () => {
           createCalled = true
           return orphanedKey

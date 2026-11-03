@@ -6,11 +6,13 @@ import {
   supervisorGrantProofType,
 } from './constants.js'
 import {
+  signedHostSupervisorDeviceRevocationSchema,
   supervisorGrantPayloadSchema,
   supervisorHostPresencePayloadSchema,
   supervisorPublicJwkSchema,
   supervisorTransportDescriptorPayloadSchema,
   type SignedSupervisorGrant,
+  type SignedHostSupervisorDeviceRevocation,
   type SignedSupervisorHostPresence,
   type SignedSupervisorTransportDescriptor,
   type SupervisorGrantPayload,
@@ -82,6 +84,19 @@ export async function verifySupervisorGrant(
     supervisorPublicJwkSchema.parse(publicJwk),
     supervisorGrantProofType,
     supervisorGrantBytes(payload),
+  )
+}
+
+export async function verifyHostSupervisorDeviceRevocation(
+  value: SignedHostSupervisorDeviceRevocation,
+  publicJwk: SupervisorPublicJwk,
+): Promise<void> {
+  const signed = signedHostSupervisorDeviceRevocationSchema.parse(value)
+  await verifyCompactProof(
+    signed.proof,
+    supervisorPublicJwkSchema.parse(publicJwk),
+    'codetether-host-pairing-management+jws',
+    canonicalJsonBytes(signed.payload),
   )
 }
 

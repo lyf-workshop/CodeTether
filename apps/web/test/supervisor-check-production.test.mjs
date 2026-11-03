@@ -31,7 +31,7 @@ test('the real production bundle excludes Supervisor diagnostics even when its f
   assert.ok(
     chunks.every((chunk) =>
       Object.keys(chunk.modules).every(
-        (id) => !/src[\\/]dev[\\/]supervisor-check/u.test(id),
+        (id) => !/src[\\/]dev[\\/]supervisor-(?:check|operation)/u.test(id),
       ),
     ),
   )
@@ -40,8 +40,8 @@ test('the real production bundle excludes Supervisor diagnostics even when its f
       output.type === 'chunk' ? output.code : String(output.source),
     )
     .join('\n')
-  assert.doesNotMatch(
-    contents,
-    /\/dev\/supervisor-check|Supervisor 只读连接检查|supervisor-check-page/u,
-  )
+  const leaked = contents.match(
+    /\/dev\/supervisor-check|Supervisor 只读连接检查|supervisor-check-page|打开配对测试|远程操作检查|open_pairing_diagnostic/u,
+  )?.[0]
+  assert.equal(leaked, undefined)
 })

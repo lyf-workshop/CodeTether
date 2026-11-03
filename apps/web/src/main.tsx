@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 
 import './styles.css'
 import { LocalSupervisorPresenceCoordinator } from './runtime/account/local-supervisor-presence'
+import { nativeCapabilities } from './runtime/native/native-capabilities'
 import { getThemeController } from './runtime/theme/theme-preference'
 
 const rootElement = document.getElementById('root')
@@ -63,7 +64,6 @@ async function renderApp() {
     { subscribeRuntimeToDesktopResume },
     { AttentionNotificationCoordinator },
     { notificationSurfaceFromPathname },
-    { nativeCapabilities },
     {
       readDesktopNotificationPreferences,
       resolveNotificationPreferenceStorage,
@@ -79,7 +79,6 @@ async function renderApp() {
     import('./runtime/host/desktop-resume-subscription'),
     import('./runtime/notifications/attention-notification-coordinator'),
     import('./runtime/notifications/desktop-notification-model'),
-    import('./runtime/native/native-capabilities'),
     import('./runtime/native/notification-preferences'),
     import('./runtime/notifications/attention-notification-metadata'),
     import('./runtime/host/host-query-client'),

@@ -334,6 +334,27 @@ function publicAuthorization(authorization: HostDeviceAuthorizationRecord) {
   }
 }
 
+export function supervisorAuthorizationEntry(
+  record: HostDeviceAuthorizationRecord,
+) {
+  return {
+    authorizationId: record.authorizationId,
+    hostId: record.hostId,
+    hostIdentityGeneration: record.hostIdentityGeneration,
+    deviceId: record.deviceId,
+    deviceFingerprint: record.deviceFingerprint,
+    deviceKeyGeneration: record.deviceKeyGeneration,
+    userId: record.userId,
+    spaceId: record.spaceId,
+    scope: record.scope,
+    serial: record.authorizationSerial.toString(),
+    generation: record.authorizationGeneration,
+    issuedAt: record.issuedAt.toISOString(),
+    expiresAt: record.expiresAt.toISOString(),
+    grant: record.supervisorGrant,
+  }
+}
+
 function supervisorGrantMatchesAuthorization(
   payload: SupervisorGrantPayload,
   authorization: HostDeviceAuthorizationRecord,
@@ -1436,7 +1457,7 @@ export class HostIdentityService {
         deviceFingerprint: payload.deviceFingerprint,
         userId: payload.userId,
         spaceId: payload.spaceId,
-        scope: payload.scope,
+        scope: 'supervisor_read',
         authorizationSerial: sequence.serial,
         authorizationGeneration: sequence.generation,
         issuedAt: new Date(payload.iat * 1000),
@@ -1490,6 +1511,7 @@ export class HostIdentityService {
     const input = authorizationCompletionSchema.parse(untrusted)
     const payload = input.payload
     if (
+      payload.scope !== 'supervisor_read' ||
       human.status !== 'active' ||
       payload.hostId !== hostId ||
       payload.userId !== human.userId ||
@@ -1647,7 +1669,7 @@ export class HostIdentityService {
         deviceFingerprint: payload.deviceFingerprint,
         userId: payload.userId,
         spaceId: payload.spaceId,
-        scope: payload.scope,
+        scope: 'supervisor_read',
         authorizationSerial: sequence.serial,
         authorizationGeneration: sequence.generation,
         issuedAt,
@@ -1801,22 +1823,7 @@ export class HostIdentityService {
       this.now(),
     )
     return {
-      authorizations: records.map((record) => ({
-        authorizationId: record.authorizationId,
-        hostId: record.hostId,
-        hostIdentityGeneration: record.hostIdentityGeneration,
-        deviceId: record.deviceId,
-        deviceFingerprint: record.deviceFingerprint,
-        deviceKeyGeneration: record.deviceKeyGeneration,
-        userId: record.userId,
-        spaceId: record.spaceId,
-        scope: record.scope,
-        serial: record.authorizationSerial.toString(),
-        generation: record.authorizationGeneration,
-        issuedAt: record.issuedAt.toISOString(),
-        expiresAt: record.expiresAt.toISOString(),
-        grant: record.supervisorGrant,
-      })),
+      authorizations: records.map(supervisorAuthorizationEntry),
     }
   }
 
@@ -2051,6 +2058,21 @@ export class HostIdentityService {
     ) {
       throw new HostIdentityFailure('host_supervisor_grant_required')
     }
+    if (authorization.scope === 'supervisor_control') {
+      const recorded = await this.database.transaction(async (transaction) => {
+        const tx = new HostIdentityRepository(transaction)
+        const current = await tx.findDeviceAuthorization(
+          authorization.authorizationId,
+          true,
+        )
+        return (
+          current?.pairingRootAuthorizationId != null &&
+          tx.recordControlAdmission(current, this.now())
+        )
+      })
+      if (!recorded)
+        throw new HostIdentityFailure('host_device_authorization_required')
+    }
     return {
       admitted: true as const,
       hostId,
@@ -2062,6 +2084,12 @@ export class HostIdentityService {
       deviceKeyGeneration: device.keyGeneration,
       authorizationId: authorization.authorizationId,
       scope: authorization.scope,
+      ...(authorization.pairingRootAuthorizationId
+        ? {
+            pairingRootAuthorizationId:
+              authorization.pairingRootAuthorizationId,
+          }
+        : {}),
       authorizationExpiresAt: authorization.expiresAt.toISOString(),
       challengeDigest: supervisorSha256Digest(
         Buffer.from(JSON.stringify(challenge), 'utf8'),

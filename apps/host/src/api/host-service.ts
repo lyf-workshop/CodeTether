@@ -1990,6 +1990,15 @@ export class HostService {
     }
   }
 
+  listRecentSupervisorConversations(machineId: MachineId, limit: number) {
+    const persistence = this.#requireSupervisorDirectoryPersistence()
+    const machine = MachineIdSchema.parse(machineId)
+    if (persistence.getMachine(machine) === undefined) {
+      throw new HostServiceError('not_found', 'Machine was not found', 404)
+    }
+    return persistence.listRecentSupervisorConversations(machine, limit)
+  }
+
   getSupervisorConversation(
     machineId: MachineId,
     projectId: ProjectId,

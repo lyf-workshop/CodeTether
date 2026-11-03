@@ -107,12 +107,14 @@ interface AuthorizationRow extends Record<string, unknown> {
   readonly device_fingerprint: string
   readonly user_id: UserId
   readonly space_id: SpaceId
-  readonly scope: 'supervisor_read'
+  readonly scope: 'supervisor_read' | 'supervisor_control'
   readonly authorization_serial: string | number | bigint
   readonly authorization_generation: number
   readonly issued_at: Date | string
   readonly expires_at: Date | string
   readonly revoked_at: Date | string | null
+  readonly last_used_at: Date | string | null
+  readonly pairing_root_authorization_id: HostAuthorizationId | null
   readonly supervisor_grant_payload: unknown | null
   readonly supervisor_grant_proof: string | null
   readonly supervisor_grant_materialized_at: Date | string | null
@@ -212,12 +214,14 @@ export interface HostDeviceAuthorizationRecord {
   readonly deviceFingerprint: string
   readonly userId: UserId
   readonly spaceId: SpaceId
-  readonly scope: 'supervisor_read'
+  readonly scope: 'supervisor_read' | 'supervisor_control'
   readonly authorizationSerial: bigint
   readonly authorizationGeneration: number
   readonly issuedAt: Date
   readonly expiresAt: Date
   readonly revokedAt: Date | null
+  readonly lastUsedAt: Date | null
+  readonly pairingRootAuthorizationId: HostAuthorizationId | null
   readonly supervisorGrant: SignedSupervisorGrant | null
   readonly supervisorGrantMaterializedAt: Date | null
   readonly supervisorTransport: SignedSupervisorTransportDescriptor | null
@@ -339,6 +343,8 @@ function authorizationFromRow(
     issuedAt: asDate(row.issued_at),
     expiresAt: asDate(row.expires_at),
     revokedAt: optionalDate(row.revoked_at),
+    lastUsedAt: optionalDate(row.last_used_at),
+    pairingRootAuthorizationId: row.pairing_root_authorization_id,
     supervisorGrant:
       row.supervisor_grant_payload === null ||
       row.supervisor_grant_proof === null
@@ -628,13 +634,53 @@ export class HostIdentityRepository {
 
   public async findDeviceAuthorization(
     authorizationId: HostAuthorizationId,
+    lock = false,
   ): Promise<HostDeviceAuthorizationRecord | null> {
+    if (lock) {
+      // Take the same lock for admission, renewal and revocation before
+      // reading the pairing metadata in a fresh statement snapshot.
+      await this.executor.query(
+        `SELECT authorization_id FROM control_plane.host_device_authorizations
+          WHERE authorization_id=$1 FOR UPDATE`,
+        [authorizationId],
+      )
+    }
     const result = await this.executor.query<AuthorizationRow>(
-      `SELECT * FROM control_plane.host_device_authorizations
-        WHERE authorization_id=$1`,
+      `SELECT a.*, ps.last_used_at, ps.pairing_root_authorization_id
+         FROM control_plane.host_device_authorizations a
+         LEFT JOIN control_plane.host_pairing_sessions ps ON ps.completed_authorization_id=a.authorization_id
+        WHERE a.authorization_id=$1`,
       [authorizationId],
     )
     return result.rows[0] ? authorizationFromRow(result.rows[0]) : null
+  }
+
+  public async recordControlAdmission(
+    authorization: HostDeviceAuthorizationRecord,
+    now: Date,
+  ): Promise<boolean> {
+    const result = await this.executor.query(
+      `UPDATE control_plane.host_pairing_sessions ps
+          SET last_used_at=GREATEST(COALESCE(ps.last_used_at,$2),$2)
+         FROM control_plane.host_device_authorizations a
+        WHERE ps.completed_authorization_id=a.authorization_id
+          AND ps.state='paired' AND ps.superseded_by_authorization_id IS NULL
+          AND a.authorization_id=$1 AND a.scope='supervisor_control'
+          AND a.revoked_at IS NULL AND a.expires_at>$2 AND a.supervisor_grant_proof IS NOT NULL
+          AND EXISTS (
+            SELECT 1 FROM control_plane.hosts h
+             WHERE h.host_id=a.host_id AND h.owning_space_id=a.space_id
+               AND h.claim_generation=a.claim_generation AND h.claim_state='claimed' AND h.revoked_at IS NULL
+          )
+          AND EXISTS (
+            SELECT 1 FROM control_plane.product_devices d
+             WHERE d.device_id=a.device_id AND d.owner_user_id=a.user_id
+               AND d.key_generation=a.device_key_generation AND d.fingerprint=a.device_fingerprint
+               AND d.revoked_at IS NULL
+          )`,
+      [authorization.authorizationId, now],
+    )
+    return result.rowCount === 1
   }
 
   public async materializeSupervisorGrant(input: {
@@ -657,6 +703,7 @@ export class HostIdentityRepository {
               supervisor_grant_proof=$3,
               supervisor_grant_materialized_at=$4
         WHERE authorization_id=$1
+          AND revoked_at IS NULL AND expires_at>$4
           AND supervisor_grant_payload IS NULL
           AND supervisor_grant_proof IS NULL
           AND supervisor_grant_materialized_at IS NULL
@@ -738,12 +785,13 @@ export class HostIdentityRepository {
     now: Date,
   ): Promise<readonly HostDeviceAuthorizationRecord[]> {
     const result = await this.executor.query<AuthorizationRow>(
-      `SELECT a.*
+      `SELECT a.*, ps.last_used_at, ps.pairing_root_authorization_id
          FROM control_plane.host_device_authorizations a
+         LEFT JOIN control_plane.host_pairing_sessions ps ON ps.completed_authorization_id=a.authorization_id
          JOIN control_plane.hosts h ON h.host_id=a.host_id
          JOIN control_plane.product_devices d ON d.device_id=a.device_id
         WHERE a.host_id=$1 AND a.user_id=$2 AND a.space_id=$3
-          AND a.scope='supervisor_read'
+          AND (a.scope='supervisor_read' OR (ps.state='paired' AND ps.superseded_by_authorization_id IS NULL))
           AND a.revoked_at IS NULL AND a.expires_at>$4
           AND h.owning_space_id=a.space_id
           AND h.claim_generation=a.claim_generation
@@ -776,8 +824,9 @@ export class HostIdentityRepository {
     now: Date,
   ): Promise<HostDeviceAuthorizationRecord | null> {
     const result = await this.executor.query<AuthorizationRow>(
-      `SELECT a.*
+      `SELECT a.*, ps.last_used_at, ps.pairing_root_authorization_id
          FROM control_plane.host_device_authorizations a
+         LEFT JOIN control_plane.host_pairing_sessions ps ON ps.completed_authorization_id=a.authorization_id
          JOIN control_plane.hosts h ON h.host_id=a.host_id
          JOIN control_plane.product_devices d ON d.device_id=a.device_id
          JOIN control_plane.users u ON u.user_id=a.user_id
@@ -787,7 +836,7 @@ export class HostIdentityRepository {
           AND a.device_id=$2
           AND a.user_id=$3
           AND a.space_id=$4
-          AND a.scope='supervisor_read'
+          AND (a.scope='supervisor_read' OR (ps.state='paired' AND ps.superseded_by_authorization_id IS NULL))
           AND a.revoked_at IS NULL
           AND a.expires_at>$5
           AND h.owning_space_id=a.space_id
@@ -799,7 +848,8 @@ export class HostIdentityRepository {
           AND d.fingerprint=a.device_fingerprint
           AND d.revoked_at IS NULL
           AND u.status='active'
-        ORDER BY a.authorization_generation DESC, a.authorization_id
+        ORDER BY (a.scope='supervisor_control') DESC,
+                 a.authorization_generation DESC, a.authorization_id
         LIMIT 1`,
       [hostId, deviceId, userId, spaceId, now],
     )
@@ -825,7 +875,8 @@ export class HostIdentityRepository {
               a.device_id, a.device_key_generation, a.device_fingerprint,
               a.user_id, a.space_id, a.scope, a.authorization_serial,
               a.authorization_generation, a.issued_at, a.expires_at,
-              a.revoked_at, a.supervisor_grant_payload,
+              a.revoked_at, ps.last_used_at, ps.pairing_root_authorization_id,
+              a.supervisor_grant_payload,
               a.supervisor_grant_proof, a.supervisor_grant_materialized_at,
               a.supervisor_transport_payload, a.supervisor_transport_proof,
               a.supervisor_transport_expires_at,
@@ -833,6 +884,7 @@ export class HostIdentityRepository {
               p.proof AS supervisor_host_presence_proof,
               p.expires_at AS supervisor_host_presence_expires_at
          FROM control_plane.host_device_authorizations a
+         LEFT JOIN control_plane.host_pairing_sessions ps ON ps.completed_authorization_id=a.authorization_id
          JOIN control_plane.hosts h ON h.host_id=a.host_id
          LEFT JOIN control_plane.host_supervisor_presence p ON p.host_id=h.host_id
          JOIN control_plane.product_devices d ON d.device_id=a.device_id
@@ -842,7 +894,7 @@ export class HostIdentityRepository {
         WHERE a.device_id=$1
           AND a.user_id=$2
           AND a.space_id=$3
-          AND a.scope='supervisor_read'
+          AND (a.scope='supervisor_read' OR (ps.state='paired' AND ps.superseded_by_authorization_id IS NULL))
           AND a.revoked_at IS NULL
           AND a.expires_at>$4
           AND h.owning_space_id=a.space_id
@@ -855,6 +907,7 @@ export class HostIdentityRepository {
           AND d.revoked_at IS NULL
           AND u.status='active'
         ORDER BY h.safe_label, h.host_id,
+                 (a.scope='supervisor_control') DESC,
                  a.authorization_generation DESC, a.authorization_id`,
       [deviceId, userId, spaceId, now],
     )

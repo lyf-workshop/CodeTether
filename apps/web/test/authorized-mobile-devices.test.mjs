@@ -3,296 +3,161 @@ import test from 'node:test'
 import { createElement as h } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import * as reactQuery from '@tanstack/react-query'
-import { loadWebComponent } from './fixtures/render-ui.mjs'
+
 import { act, createDom } from './fixtures/dom.mjs'
+import { loadUiComponent, loadWebComponent } from './fixtures/render-ui.mjs'
 
 const { QueryClient, QueryClientProvider, QueryObserver } = reactQuery
-
-const { authorizedMobileDevices } = loadWebComponent(
-  'runtime/account/authorized-mobile-devices.ts',
-)
-const now = Date.parse('2026-10-19T12:00:00Z')
-const device = (id, deviceType = 'mobile') => ({
-  deviceId: id,
-  ownerUserId: 'usr_owner',
-  deviceType,
-  label: id,
-  fingerprint: `fingerprint-${id}`,
-  keyGeneration: 1,
-})
-const authorization = (id, extra = {}) => ({
-  authorizationId: `authorization-${id}`,
-  deviceId: id,
-  userId: 'usr_owner',
-  hostId: 'host_local',
-  scope: 'supervisor_read',
-  deviceFingerprint: `fingerprint-${id}`,
-  deviceKeyGeneration: 1,
-  issuedAt: '2026-10-18T12:00:00Z',
+const identityKey = ['host', 'local-identity-for-directory']
+const grantKey = [
+  'account',
+  'host-supervisor-grants',
+  'host_local',
+  'usr_owner',
+]
+const device = {
+  deviceId: 'dev_phone',
+  label: 'vivo X60',
+  platform: 'Android',
+  authorizationId: 'hauth_private',
+  pairingRootAuthorizationId: 'hauth_lineage',
+  lastUsedAt: '2026-10-18T12:00:00Z',
   expiresAt: '2026-10-20T12:00:00Z',
-  ...extra,
-})
-const context = { hostId: 'host_local', ownerUserId: 'usr_owner', now }
+  status: 'active',
+  renewalEligible: false,
+}
 
-async function renderList(
-  devices,
-  { identity = { hostId: 'host_local' }, stale = false } = {},
-) {
-  const queryClient = new QueryClient({
+function fixture({ loadPairingOwner, removePairedDevice } = {}) {
+  const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
-  const identityKey = ['host', 'local-identity-for-directory']
-  const grantKey = [
-    'account',
-    'host-supervisor-grants',
-    identity?.hostId ?? 'unavailable',
-    'usr_owner',
-  ]
-  queryClient.setQueryData(identityKey, identity)
-  queryClient.setQueryData(grantKey, { devices })
-  if (stale)
-    await queryClient
-      .fetchQuery({
+  const owner = { host: { hostId: 'host_local' } }
+  const { AuthorizedMobileDevices } = loadWebComponent(
+    'components/machines/authorized-mobile-devices.tsx',
+    new Map([
+      ['@tanstack/react-query', reactQuery],
+      [
+        '@codetether/ui',
+        {
+          ...loadUiComponent('index.ts'),
+          // The shared Radix Portal caches document availability before JSDOM.
+          DialogContent: ({ children }) =>
+            h('div', { role: 'dialog' }, children),
+        },
+      ],
+      [
+        '../../runtime/account/account-config.js',
+        { controlPlaneBaseUrl: 'https://control-plane.test' },
+      ],
+      [
+        '../../runtime/account/supabase-account.js',
+        {
+          getSupabaseAccountClient: () => ({
+            auth: {
+              getSession: async () => ({
+                data: { session: { user: { id: 'usr_owner' } } },
+              }),
+            },
+          }),
+        },
+      ],
+      [
+        '../../runtime/native/native-capabilities.js',
+        { nativeCapabilities: {} },
+      ],
+      [
+        '../../runtime/account/pairing-client.js',
+        {
+          loadPairingOwner: loadPairingOwner ?? (async () => owner),
+          removePairedDevice:
+            removePairedDevice ??
+            (async () => assert.fail('unexpected removal')),
+        },
+      ],
+    ]),
+  )
+  client.setQueryData(identityKey, { hostId: 'host_local' })
+  const view = h(
+    QueryClientProvider,
+    { client },
+    h(AuthorizedMobileDevices, { userId: 'usr_owner' }),
+  )
+  return { client, view, owner }
+}
+
+test('device rows show safe name, system, last use, and expired state', async () => {
+  const { client, view } = fixture()
+  try {
+    client.setQueryData(grantKey, {
+      devices: [
+        device,
+        {
+          ...device,
+          deviceId: 'dev_tablet',
+          label: '平板',
+          status: 'expired',
+          lastUsedAt: null,
+        },
+      ],
+    })
+    await assert.rejects(
+      client.fetchQuery({
         queryKey: grantKey,
         queryFn: async () => {
           throw new Error('fixture refresh failed')
         },
-      })
-      .catch(() => {})
-  const beforeQueries = queryClient.getQueryCache().getAll().length
-  const mocks = new Map([
-    ['@tanstack/react-query', reactQuery],
-    [
-      '@tanstack/react-router',
-      {
-        Link: ({ to, children, className }) =>
-          h('a', { href: to, className }, children),
-      },
-    ],
-    [
-      '../../runtime/account/remote-supervisor',
-      {
-        readLocalHostIdentity: () =>
-          assert.fail('read-only view must not fetch identity'),
-      },
-    ],
-  ])
-  const { AuthorizedMobileDevices } = loadWebComponent(
-    'components/settings/authorized-mobile-devices.tsx',
-    mocks,
-  )
-  const html = renderToStaticMarkup(
-    h(
-      QueryClientProvider,
-      { client: queryClient },
-      h(AuthorizedMobileDevices, { userId: 'usr_owner' }),
-    ),
-  )
-  assert.equal(queryClient.getQueryCache().getAll().length, beforeQueries)
-  assert.equal(queryClient.isFetching(), 0)
-  queryClient.clear()
-  return html
-}
-
-test('only current authorizations for this owner and Host expose mobile/tablet metadata', () => {
-  const result = authorizedMobileDevices(
-    context,
-    [authorization('phone'), authorization('tablet'), authorization('desktop')],
-    [
-      device('phone'),
-      device('tablet', 'tablet'),
-      device('desktop', 'desktop_client'),
-    ],
-  )
-  assert.deepEqual(result, [
-    {
-      deviceId: 'phone',
-      name: 'phone',
-      type: 'mobile',
-      authorizedAt: '2026-10-18T12:00:00Z',
-    },
-    {
-      deviceId: 'tablet',
-      name: 'tablet',
-      type: 'tablet',
-      authorizedAt: '2026-10-18T12:00:00Z',
-    },
-  ])
-  assert.doesNotMatch(
-    JSON.stringify(result),
-    /fingerprint|proof|token|keyGeneration/,
-  )
+      }),
+    )
+    const html = renderToStaticMarkup(view)
+    assert.match(html, /手机和平板/)
+    assert.match(html, /vivo X60/)
+    assert.match(html, /Android · 上次使用/)
+    assert.match(html, /dateTime="2026-10-18T12:00:00Z"/)
+    assert.match(html, /暂时无法更新/)
+    assert.match(html, /已失效，重新配对/)
+    assert.match(html, /还未使用/)
+    assert.match(html, /aria-label="移除 vivo X60"/)
+    assert.doesNotMatch(html, /hauth_|dev_phone|fingerprint|proof|keyHandle/)
+    assert.equal(client.getQueryCache().getAll().length, 2)
+  } finally {
+    client.clear()
+  }
 })
 
-test('expired, different Host/account, mismatched key and missing device metadata stay absent', () => {
-  const records = [
-    authorization('expired', { expiresAt: '2026-10-19T11:59:59Z' }),
-    authorization('other-host', { hostId: 'host_other' }),
-    authorization('other-owner', { userId: 'usr_other' }),
-    authorization('wrong-key', { deviceKeyGeneration: 2 }),
-    authorization('wrong-fingerprint', { deviceFingerprint: 'different' }),
-    authorization('missing'),
-    authorization('invalid-date', { issuedAt: 'invalid' }),
-    authorization('wrong-account-device'),
-  ]
-  assert.deepEqual(
-    authorizedMobileDevices(context, records, [
-      ...records
-        .filter(
-          ({ deviceId }) =>
-            deviceId !== 'missing' && deviceId !== 'wrong-account-device',
-        )
-        .map(({ deviceId }) => device(deviceId)),
-      { ...device('wrong-account-device'), ownerUserId: 'usr_other' },
-    ]),
-    [],
-  )
-})
-
-test('duplicate grants collapse by device and missing data never fabricates a list', () => {
-  assert.deepEqual(authorizedMobileDevices(context, [], []), [])
-  const result = authorizedMobileDevices(
-    context,
-    [
-      authorization('phone'),
-      authorization('phone', { issuedAt: '2026-10-19T10:00:00Z' }),
-    ],
-    [device('phone')],
-  )
-  assert.equal(result.length, 1)
-  assert.equal(result[0].authorizedAt, '2026-10-19T10:00:00Z')
-})
-
-test('actual account section renders only safe read-only names, type, authorization date and roadmap', async () => {
-  const devices = authorizedMobileDevices(
-    context,
-    [authorization('phone')],
-    [device('phone')],
-  )
-  const html = await renderList(devices)
-  assert.match(html, /已允许访问的手机和平板/)
-  assert.match(html, /phone/)
-  assert.match(html, /手机 · 授权于/)
-  assert.match(html, /dateTime="2026-10-18T12:00:00Z"/)
-  assert.match(html, /href="\/roadmap"/)
-  assert.match(html, /移除功能会在配对码配对上线时提供/)
-  assert.doesNotMatch(
-    html,
-    /<button|<input|role="switch"|fingerprint|authorizationId|proof|keyHandle/,
-  )
-})
-
-test('no authorizations or no exact local identity hides the whole account section', async () => {
-  assert.equal(await renderList([]), '')
-  assert.equal(
-    await renderList([{ name: 'test', type: 'mobile' }], { identity: null }),
-    '',
-  )
-})
-
-test('a failed refresh labels retained authorization metadata as last known', async () => {
-  const devices = authorizedMobileDevices(
-    context,
-    [authorization('phone')],
-    [device('phone')],
-  )
-  assert.match(await renderList(devices, { stale: true }), /上次读取的授权记录/)
-})
-
-test('mounted cache-only account view cannot replace an active owner fetcher and unsubscribes on unmount', async () => {
+test('device list subscribes to the exact owner cache without replacing its fetcher', async () => {
   const dom = await createDom()
-  const client = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  })
-  const identityKey = ['host', 'local-identity-for-directory']
-  const grantKey = [
-    'account',
-    'host-supervisor-grants',
-    'host_local',
-    'usr_owner',
-  ]
-  client.setQueryData(identityKey, { hostId: 'host_local' })
-  client.setQueryData(grantKey, { devices: [] })
-  let ownerCalls = 0,
-    viewRequests = 0,
-    subscriptions = 0
+  const { client, view } = fixture()
+  let calls = 0
   const fetcher = async () => ({
-    devices: [
-      {
-        deviceId: 'phone',
-        name: 'phone-' + ++ownerCalls,
-        type: 'mobile',
-        authorizedAt: '2026-10-18T12:00:00Z',
-      },
-    ],
+    devices: [{ ...device, label: 'phone-' + ++calls }],
   })
   const owner = new QueryObserver(client, {
     queryKey: grantKey,
     queryFn: fetcher,
     staleTime: Infinity,
-    retry: false,
   })
   const releaseOwner = owner.subscribe(() => {})
-  await owner.refetch()
-  assert.equal(ownerCalls, 1)
   const cache = client.getQueryCache()
-  const originalSubscribe = cache.subscribe.bind(cache)
+  const subscribe = cache.subscribe.bind(cache)
+  let subscriptions = 0
   cache.subscribe = (listener) => {
     subscriptions++
-    const release = originalSubscribe(listener)
+    const release = subscribe(listener)
     return () => {
       subscriptions--
       release()
     }
   }
-  const originalFetch = globalThis.fetch
-  globalThis.fetch = () => {
-    viewRequests++
-    return Promise.reject(new Error('The cache-only view must not fetch'))
-  }
-  const originalError = console.error,
-    errors = []
-  console.error = (...args) => {
-    errors.push(args.join(' '))
-    originalError(...args)
-  }
-  const { AuthorizedMobileDevices } = loadWebComponent(
-    'components/settings/authorized-mobile-devices.tsx',
-    new Map([
-      ['@tanstack/react-query', reactQuery],
-      [
-        '@tanstack/react-router',
-        {
-          Link: ({ to, children, className }) =>
-            h('a', { href: to, className }, children),
-        },
-      ],
-      [
-        '../../runtime/account/remote-supervisor',
-        {
-          readLocalHostIdentity: () => {
-            viewRequests++
-            throw new Error('The cache-only view must not read identity')
-          },
-        },
-      ],
-    ]),
-  )
   let closed = false
   try {
-    await dom.render(
-      h(
-        QueryClientProvider,
-        { client },
-        h(AuthorizedMobileDevices, { userId: 'usr_owner' }),
-      ),
-    )
+    await owner.refetch()
+    await dom.render(view)
     assert.match(dom.container.textContent, /phone-1/u)
     await act(async () => {
       await client.invalidateQueries({ queryKey: grantKey, exact: true })
     })
-    assert.equal(ownerCalls, 2)
     await dom.until(() => dom.container.textContent.includes('phone-2'))
+    assert.equal(calls, 2)
     assert.equal(
       cache.find({ queryKey: grantKey, exact: true }).options.queryFn,
       fetcher,
@@ -305,19 +170,43 @@ test('mounted cache-only account view cannot replace an active owner fetcher and
       cache.find({ queryKey: identityKey, exact: true }).getObserversCount(),
       0,
     )
-    assert.equal(viewRequests, 0)
     assert.equal(subscriptions, 2)
     await dom.close()
     closed = true
     assert.equal(subscriptions, 0)
-    client.setQueryData(grantKey, { devices: [] })
-    await Promise.resolve()
-    assert.deepEqual(errors, [])
   } finally {
     if (!closed) await dom.close()
     releaseOwner()
     client.clear()
-    globalThis.fetch = originalFetch
-    console.error = originalError
+  }
+})
+
+test('remove opens the exact named confirmation and only submits after confirmation', async () => {
+  const dom = await createDom()
+  const calls = []
+  const { client, view, owner } = fixture({
+    removePairedDevice: async (...args) => calls.push(args),
+  })
+  client.setQueryData(grantKey, { devices: [device] })
+  try {
+    await dom.render(view)
+    await act(async () =>
+      dom.container.querySelector('[aria-label="移除 vivo X60"]').click(),
+    )
+    assert.match(
+      document.body.textContent,
+      /移除后 vivo X60 会立刻断开，要再用就重新配对。电脑上正在运行的工作不受影响。/,
+    )
+    assert.equal(calls.length, 0)
+    const confirm = [
+      ...document.querySelectorAll('[role="dialog"] button'),
+    ].find((button) => button.textContent === '移除')
+    assert.ok(confirm)
+    await act(async () => confirm.click())
+    await dom.until(() => !dom.container.textContent.includes('vivo X60'))
+    assert.deepEqual(calls, [[owner, device]])
+  } finally {
+    await dom.close()
+    client.clear()
   }
 })

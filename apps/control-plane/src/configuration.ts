@@ -67,6 +67,13 @@ const databaseEnvironmentSchema = z.object({
 })
 
 const environmentSchema = databaseEnvironmentSchema.extend({
+  CODETETHER_CONTROL_PLANE_PAIRING_HMAC_KEY: z
+    .string()
+    .regex(/^[A-Za-z0-9_-]{43}$/)
+    .refine(
+      (key) => Buffer.from(key, 'base64url').toString('base64url') === key,
+    )
+    .optional(),
   SUPABASE_URL: supabaseUrlSchema,
   SUPABASE_PUBLISHABLE_KEY: z
     .string()
@@ -89,6 +96,7 @@ export interface ControlPlaneDatabaseConfiguration {
 }
 
 export interface ControlPlaneConfiguration extends ControlPlaneDatabaseConfiguration {
+  readonly pairingHmacKey?: string
   readonly supabaseUrl: string
   readonly supabasePublishableKey: string
 }
@@ -161,6 +169,9 @@ export function readControlPlaneConfiguration(
   const value = environmentSchema.parse(environment)
   return {
     ...databaseConfiguration(value),
+    ...(value.CODETETHER_CONTROL_PLANE_PAIRING_HMAC_KEY === undefined
+      ? {}
+      : { pairingHmacKey: value.CODETETHER_CONTROL_PLANE_PAIRING_HMAC_KEY }),
     supabaseUrl: value.SUPABASE_URL,
     supabasePublishableKey: value.SUPABASE_PUBLISHABLE_KEY,
   }

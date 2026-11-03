@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "pairing-check-device",
+  "description": "The development pairing check can prove an existing device identity.",
+  "windows": ["b1-pairing-check"],
+  "permissions": [
+    "allow-product-device-key-list",
+    "allow-product-device-key-public",
+    "allow-product-device-key-sign",
+    "allow-product-device-registration-metadata"
+  ]
+}

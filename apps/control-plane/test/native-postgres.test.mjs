@@ -38,6 +38,7 @@ test(
         '0006_host_supervisor_transport.sql',
         '0007_host_access_requests.sql',
         '0008_host_supervisor_presence.sql',
+        '0009_host_pairing.sql',
       ])
       assert.deepEqual(second.alreadyApplied, [
         '0001_account_foundation.sql',
@@ -48,6 +49,7 @@ test(
         '0006_host_supervisor_transport.sql',
         '0007_host_access_requests.sql',
         '0008_host_supervisor_presence.sql',
+        '0009_host_pairing.sql',
       ])
     } finally {
       await database.close()

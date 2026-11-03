@@ -1,12 +1,24 @@
 import assert from 'node:assert/strict'
+import { generateKeyPairSync, sign } from 'node:crypto'
 import { access, mkdir, mkdtemp, rename, rm } from 'node:fs/promises'
 import { request as httpRequest } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join, sep } from 'node:path'
 import test from 'node:test'
+import { setTimeout as delay } from 'node:timers/promises'
 
 import { canonicalFailure } from '@codetether/agent-core'
 import { SafeErrorEnvelopeSchema } from '@codetether/protocol'
+import {
+  RelayService,
+  RelayStateStore,
+  generateRelayPinnedTlsIdentity,
+} from '@codetether/relay'
+import {
+  canonicalJsonBytes,
+  supervisorDescriptorProofType,
+  supervisorGrantProofType,
+} from '@codetether/supervisor-transport'
 
 import { HostEventPublisher } from '../dist/api/host-event-publisher.js'
 import { HostService } from '../dist/api/host-service.js'
@@ -15,11 +27,439 @@ import {
   startLocalCodexHostWithRuntime,
 } from '../dist/api/local-codex-host.js'
 import { LocalHttpServer } from '../dist/api/local-http-server.js'
+import { SupervisorTransportManager } from '../dist/api/supervisor-transport-manager.js'
 import { WorkspacePolicy } from '../dist/api/workspace-policy.js'
 import { ConversationStore } from '../dist/persistence/index.js'
 
 const epoch = '11111111-1111-4111-8111-111111111111'
 const wrongEpoch = '22222222-2222-4222-8222-222222222222'
+
+test('paired Supervisor over forced Relay uses local action gates and rejects stale renewal after signed removal', async () => {
+  const directory = await mkdtemp(
+    join(tmpdir(), 'codetether-supervisor-b1-relay-'),
+  )
+  const relayStore = new RelayStateStore(join(directory, 'relay'))
+  const relay = new RelayService({
+    stateStore: relayStore,
+    tls: await generateRelayPinnedTlsIdentity(relayStore.identity),
+    host: '127.0.0.1',
+    port: 0,
+    logger: { log() {} },
+  })
+  let harness
+  const originalFetch = globalThis.fetch
+  try {
+    await relay.start()
+    harness = await createHarness({
+      persistence: true,
+      supervisorRelay: {
+        endpoint: `tls+pinned://127.0.0.1:${relay.listeningAddress.port}/`,
+        relayId: relay.relayId,
+        relayFingerprint: relay.relayFingerprint,
+      },
+    })
+    const relayReadyDeadline = Date.now() + 8_000
+    while (
+      harness.supervisor.presence().relay === null &&
+      Date.now() < relayReadyDeadline
+    ) {
+      await delay(10)
+    }
+    assert.notEqual(harness.supervisor.presence().relay, null)
+    const { privateKey, publicKey } = generateKeyPairSync('ec', {
+      namedCurve: 'P-256',
+    })
+    const publicJwk = publicKey.export({ format: 'jwk' })
+    const now = Math.floor(Date.now() / 1000)
+    const identity = {
+      hostId: `host_${'a'.repeat(32)}`,
+      fingerprint: `sha256:${'A'.repeat(43)}`,
+      publicJwk: JSON.stringify(publicJwk),
+      keyAlgorithm: 'ES256',
+      keyHandle: `CodeTether.HostIdentity.${'a'.repeat(32)}`,
+      identityGeneration: 1,
+      safeLabel: 'Paired test Host',
+      platform: 'windows',
+      appVersion: '0.1.0-alpha.0',
+      createdAt: new Date(now * 1_000).toISOString(),
+      updatedAt: new Date(now * 1_000).toISOString(),
+    }
+    harness.persistence.createHostIdentity(identity)
+    const deviceId = `dev_${'d'.repeat(32)}`
+    const spaceId = `space_${'s'.repeat(32)}`
+    const userId = `usr_${'u'.repeat(32)}`
+    const oldRoot = `hauth_${'b'.repeat(32)}`
+    const renewedId = `hauth_${'c'.repeat(32)}`
+    const freshRoot = `hauth_${'e'.repeat(32)}`
+    const pairingRoots = new Map([
+      [oldRoot, oldRoot],
+      [renewedId, oldRoot],
+      [freshRoot, freshRoot],
+    ])
+    const descriptor = testSignedProof(
+      privateKey,
+      supervisorDescriptorProofType,
+      {
+        v: 1,
+        aud: 'codetether-host-supervisor',
+        purpose: 'host_supervisor_presence',
+        hostId: identity.hostId,
+        hostFingerprint: identity.fingerprint,
+        hostIdentityGeneration: 1,
+        spaceId,
+        controlPlaneOrigin: testControlPlaneOrigin,
+        iat: now,
+        exp: now + 600,
+        protocolVersion: 2,
+        ...harness.supervisor.presence(),
+      },
+    )
+    const grantFor = (authorizationId) =>
+      testSignedProof(privateKey, supervisorGrantProofType, {
+        v: 1,
+        aud: 'codetether-host-supervisor',
+        purpose: 'host_supervisor_grant',
+        authorizationId,
+        hostId: identity.hostId,
+        hostFingerprint: identity.fingerprint,
+        hostIdentityGeneration: 1,
+        deviceId,
+        deviceFingerprint: `sha256:${'D'.repeat(43)}`,
+        deviceKeyGeneration: 1,
+        userId,
+        spaceId,
+        scope: 'supervisor_control',
+        authorizationSerial: String(
+          [...pairingRoots.keys()].indexOf(authorizationId) + 1,
+        ),
+        authorizationGeneration:
+          [...pairingRoots.keys()].indexOf(authorizationId) + 1,
+        issuedAt: now,
+        expiresAt: now + 3600,
+      })
+    globalThis.fetch = async (url, init) => {
+      if (String(url).startsWith(`${harness.baseUrl}/`)) {
+        return await originalFetch(url, init)
+      }
+      assert.equal(
+        url,
+        `${testControlPlaneOrigin}/v1/hosts/${identity.hostId}/supervisor-admission`,
+      )
+      const challenge = JSON.parse(Buffer.from(init.body).toString('utf8'))
+      return Response.json({
+        admitted: true,
+        hostId: challenge.hostId,
+        hostIdentityGeneration: challenge.hostIdentityGeneration,
+        deviceId: challenge.deviceId,
+        deviceKeyGeneration: challenge.deviceKeyGeneration,
+        authorizationId: challenge.authorizationId,
+        scope: 'supervisor_control',
+        pairingRootAuthorizationId: pairingRoots.get(challenge.authorizationId),
+        authorizationExpiresAt: new Date((now + 3600) * 1000).toISOString(),
+      })
+    }
+    const connect = async (authorizationId) => {
+      const grant = grantFor(authorizationId)
+      await harness.supervisor.activate({
+        hostPublicJwk: publicJwk,
+        grant,
+        descriptor,
+      })
+      const pending = await harness.supervisor.beginRemote({
+        hostId: identity.hostId,
+        hostFingerprint: identity.fingerprint,
+        hostIdentityGeneration: 1,
+        hostPublicJwk: publicJwk,
+        deviceId,
+        deviceKeyGeneration: 1,
+        grant,
+        descriptor,
+        forceRelay: true,
+      })
+      assert.equal(pending.transport, 'relay')
+      return await harness.supervisor.authenticateRemote(pending.connectionId, {
+        accessToken: 'fixture-account-session',
+        deviceProof: 'fixture-product-device-proof',
+      })
+    }
+    const session = await connect(oldRoot)
+    assert.equal(session.control, 'control')
+    const operations = (value, current = session) =>
+      postJson(
+        harness.baseUrl,
+        `/api/v1/remote-supervisor/sessions/${current.sessionId}/operations`,
+        value,
+      )
+    const projectId = (await getJson(harness.baseUrl, '/api/v1/projects')).body
+      .projects[0].projectId
+    const created = await postJson(harness.baseUrl, '/api/v1/conversations', {
+      actionId: 'act_supervisor_b1_create',
+      provider: 'codex',
+      machineId: harness.machineId,
+      projectId,
+    })
+    assert.equal(created.status, 201)
+    const conversationId = created.body.data.conversation.conversationId
+    const scope = { machineId: harness.machineId, projectId, conversationId }
+    const started = await postJson(
+      harness.baseUrl,
+      `/api/v1/conversations/${conversationId}/turns`,
+      {
+        actionId: 'act_supervisor_b1_start',
+        input: { type: 'text', text: 'fixture turn' },
+      },
+    )
+    assert.equal(started.status, 202)
+    const turnId = started.body.data.turn.turnId
+    const recent = await operations({
+      operation: 'conversation.recent',
+      machineId: harness.machineId,
+    })
+    assert.equal(recent.status, 200)
+    assert.equal(recent.body.conversations[0].conversationId, conversationId)
+    const providerIdentity = {
+      provider: 'codex',
+      threadId: 'provider-thread-1',
+      turnId: 'provider-turn-1',
+      timestamp: '2026-08-26T08:00:00.000Z',
+    }
+    harness.runtime.emit({
+      ...providerIdentity,
+      type: 'file.changed',
+      path: 'src/small.ts',
+      kind: 'modified',
+      diff: '@@ -1 +1 @@\n-old\n+new',
+    })
+    harness.runtime.emit({
+      ...providerIdentity,
+      type: 'file.changed',
+      path: 'src/oversized.ts',
+      kind: 'modified',
+      diff: 'x'.repeat(18 * 1024),
+    })
+    const changes = await operations({
+      operation: 'conversation.changes',
+      ...scope,
+    })
+    assert.equal(changes.status, 200)
+    assert.equal(changes.body.changes[0].diff, '@@ -1 +1 @@\n-old\n+new')
+    assert.equal(changes.body.changes[1].path, 'src/oversized.ts')
+    assert.equal(changes.body.changes[1].diff, undefined)
+    assert.equal(changes.body.omittedDiffs, 1)
+    const attention = await operations({ operation: 'attention.list' })
+    assert.equal(attention.status, 200)
+    assert.deepEqual(attention.body.items, [])
+    const decisions = []
+    const binding = {
+      providerRequestId: 'fixture-approval-request',
+      providerApprovalId: 'fixture-provider-approval',
+      providerThreadId: providerIdentity.threadId,
+      providerTurnId: providerIdentity.turnId,
+    }
+    harness.runtime.emitApprovalRequest({
+      ...binding,
+      kind: 'command',
+      summary: 'Fixture pending approval',
+      respond(decision) {
+        decisions.push(decision)
+        harness.runtime.emitApprovalResolution({ ...binding, decision })
+      },
+    })
+    const pendingApproval = (
+      await operations({
+        operation: 'attention.list',
+        attentionType: 'approval',
+      })
+    ).body.items[0]
+    assert.equal(pendingApproval.type, 'approval')
+    const wrongApprovalOperation = await operations({
+      operation: 'attention.resolve',
+      attentionId: pendingApproval.attentionId,
+      actionId: 'act_supervisor_b1_wrong_approval',
+    })
+    assert.equal(wrongApprovalOperation.status, 422)
+    assert.equal(wrongApprovalOperation.body.code, 'unsupported')
+    const approve = {
+      operation: 'approval.resolve',
+      approvalId: pendingApproval.payload.approvalId,
+      actionId: 'act_supervisor_b1_approve',
+      decision: 'accept',
+    }
+    const approved = await operations(approve)
+    assert.equal(approved.status, 202)
+    assert.deepEqual(await operations(approve), approved)
+    assert.deepEqual(decisions, ['accept'])
+    const archive = await operations({
+      operation: 'conversation.archive',
+      ...scope,
+      actionId: 'act_supervisor_b1_busy_archive',
+    })
+    const localArchive = await postJson(
+      harness.baseUrl,
+      `/api/v1/conversations/${conversationId}/archive`,
+      {
+        actionId: 'act_supervisor_b1_local_busy_archive',
+      },
+    )
+    assert.equal(archive.status, 409)
+    assert.equal(archive.status, localArchive.status)
+    assert.equal(archive.body.code, localArchive.body.code)
+    const interrupt = {
+      operation: 'turn.interrupt',
+      ...scope,
+      turnId,
+      actionId: 'act_supervisor_b1_interrupt',
+    }
+    assert.equal((await operations(interrupt)).status, 202)
+    assert.equal((await operations(interrupt)).status, 202)
+    assert.equal(harness.runtime.interruptTurnCalls.length, 1)
+    assert.equal(
+      (
+        await operations({
+          ...interrupt,
+          actionId: 'act_supervisor_b1_interrupt_busy',
+        })
+      ).status,
+      409,
+    )
+
+    assert.equal(
+      (
+        await postJson(harness.baseUrl, '/api/v1/supervisor/control/approve', {
+          authorizationId: oldRoot,
+        })
+      ).status,
+      404,
+    )
+    const revocation = testSignedProof(
+      privateKey,
+      'codetether-host-pairing-management+jws',
+      {
+        v: 1,
+        aud: 'codetether-control-plane-host',
+        purpose: 'host_pairing_revoke',
+        hostId: identity.hostId,
+        hostFingerprint: identity.fingerprint,
+        hostIdentityGeneration: 1,
+        spaceId,
+        userId,
+        deviceId: `dev_${'w'.repeat(32)}`,
+        subjectId: oldRoot,
+        nonce: 'N'.repeat(43),
+        iat: now,
+        exp: now + 60,
+        targetDeviceId: deviceId,
+        pairingRootAuthorizationId: oldRoot,
+      },
+    )
+    const disablePath = '/api/v1/supervisor/devices/disable'
+    const tampered = {
+      ...revocation,
+      payload: { ...revocation.payload, pairingRootAuthorizationId: freshRoot },
+    }
+    assert.equal(
+      (await postJson(harness.baseUrl, disablePath, tampered)).status,
+      403,
+    )
+    assert.equal(
+      (await operations({ operation: 'attention.list' })).status,
+      200,
+    )
+    assert.equal(
+      (await postJson(harness.baseUrl, disablePath, revocation)).status,
+      200,
+    )
+    await assert.rejects(
+      harness.supervisor.readRemote(session.sessionId, 'host.bootstrap'),
+    )
+    await assert.rejects(connect(oldRoot), { code: 'authorization_revoked' })
+    await assert.rejects(connect(renewedId), { code: 'authorization_revoked' })
+    const fresh = await connect(freshRoot)
+    assert.equal(fresh.control, 'control')
+    assert.equal(
+      (await postJson(harness.baseUrl, disablePath, revocation)).status,
+      200,
+    )
+    assert.equal(
+      (await operations({ operation: 'attention.list' }, fresh)).status,
+      200,
+    )
+    assert.equal(harness.runtime.interruptTurnCalls.length, 1)
+    assert.equal(harness.runtime.closeCalls, 0)
+    const local = await getJson(
+      harness.baseUrl,
+      `/api/v1/conversations/${conversationId}`,
+    )
+    assert.equal(
+      local.body.runtime.turns.find((turn) => turn.turnId === turnId).status,
+      'running',
+    )
+    harness.runtime.emit({
+      type: 'turn.completed',
+      provider: 'codex',
+      threadId: 'provider-thread-1',
+      turnId: 'provider-turn-1',
+      finalMessage: 'fixture complete',
+      timestamp: '2026-08-26T08:00:00.000Z',
+    })
+    const completed = await operations(
+      { operation: 'attention.list', attentionType: 'completed_review' },
+      fresh,
+    )
+    assert.equal(completed.status, 200)
+    const resolve = {
+      operation: 'attention.resolve',
+      attentionId: completed.body.items[0].attentionId,
+      actionId: 'act_supervisor_b1_resolve',
+    }
+    const resolved = await operations(resolve, fresh)
+    assert.equal(resolved.status, 200)
+    assert.equal(resolved.body.data.attention.status, 'resolved')
+    assert.deepEqual(await operations(resolve, fresh), resolved)
+    assert.equal(
+      (
+        await operations(
+          { ...resolve, actionId: 'act_supervisor_b1_resolved_conflict' },
+          fresh,
+        )
+      ).status,
+      409,
+    )
+    const archiveReady = await operations(
+      {
+        operation: 'conversation.archive',
+        ...scope,
+        actionId: 'act_supervisor_b1_completed_archive',
+      },
+      fresh,
+    )
+    assert.equal(archiveReady.status, 200)
+    assert.equal(
+      typeof archiveReady.body.data.conversation.archivedAt,
+      'string',
+    )
+  } finally {
+    globalThis.fetch = originalFetch
+    await harness?.close()
+    await relay.close()
+    await rm(directory, { force: true, recursive: true })
+  }
+})
+
+const testControlPlaneOrigin = 'https://control-plane.example.test'
+
+function testSignedProof(privateKey, type, payload) {
+  const header = Buffer.from(
+    JSON.stringify({ alg: 'ES256', typ: type }),
+  ).toString('base64url')
+  const encoded = Buffer.from(canonicalJsonBytes(payload)).toString('base64url')
+  const input = `${header}.${encoded}`
+  const signature = sign('sha256', Buffer.from(input), {
+    key: privateKey,
+    dsaEncoding: 'ieee-p1363',
+  })
+  return { payload, proof: `${input}.${signature.toString('base64url')}` }
+}
 
 test('closes an already-launched Runtime when Host assembly fails', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'codetether-assembly-test-'))
@@ -2092,6 +2532,12 @@ async function createHarness(options = {}) {
   const runtime = new FakeAgentRuntime()
   const workspacePolicy = await WorkspacePolicy.create([workspace])
   const publisher = new HostEventPublisher({ epoch })
+  const persistence =
+    dataDirectory === undefined
+      ? undefined
+      : ConversationStore.open({
+          databasePath: join(dataDirectory, 'codetether.sqlite3'),
+        })
   const service = new HostService({
     runtime,
     ...(options.providerSessionDiscoveries === undefined
@@ -2101,19 +2547,28 @@ async function createHarness(options = {}) {
     publisher,
     hostVersion: '0.0.0-test',
     now: () => new Date('2026-08-26T08:00:00.000Z'),
-    ...(dataDirectory === undefined
-      ? {}
-      : {
-          persistence: ConversationStore.open({
-            databasePath: join(dataDirectory, 'codetether.sqlite3'),
-          }),
-        }),
+    ...(persistence === undefined ? {} : { persistence }),
   })
   await service.registerInitialProjectRoots([workspace])
   const machine = service.listMachines().machines[0]
   assert.ok(machine)
+  const supervisor =
+    options.supervisorRelay !== undefined
+      ? await SupervisorTransportManager.create({
+          service,
+          persistence,
+          bindHost: '127.0.0.1',
+          advertiseHost: '127.0.0.1',
+          allowLoopbackForTests: true,
+          port: 0,
+          clientBuildIdentity: 'test-host',
+          controlPlaneOrigin: testControlPlaneOrigin,
+          relay: options.supervisorRelay,
+        })
+      : undefined
   const server = new LocalHttpServer({
     service,
+    ...(supervisor === undefined ? {} : { supervisorTransport: supervisor }),
     allowedOrigins: options.allowedOrigins ?? ['http://localhost:5173'],
     heartbeatMs: 60_000,
     ...(options.bodyLimitBytes === undefined
@@ -2130,11 +2585,14 @@ async function createHarness(options = {}) {
     publisher,
     runtime,
     service,
+    persistence,
+    supervisor,
     machineId: machine.machineId,
     workspace,
     close: async () => {
       if (closed) return
       closed = true
+      await supervisor?.close()
       await server.close()
       await rm(workspace, { force: true, recursive: true })
       if (dataDirectory !== undefined) {

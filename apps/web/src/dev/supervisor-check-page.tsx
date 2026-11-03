@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import {
   Button,
+  Input,
   Notice,
   Select,
   SelectContent,
@@ -11,10 +12,16 @@ import {
 } from '@codetether/ui'
 
 import { getSupabaseAccountClient } from '../runtime/account/supabase-account.js'
-import { nativeCapabilities } from '../runtime/native/native-capabilities.js'
+import {
+  nativeCapabilities,
+  readNativeWindowLabel,
+} from '../runtime/native/native-capabilities.js'
 import {
   connectSupervisorCheck,
   loadSupervisorCheckDirectory,
+  openSupervisorCheckSession,
+  pairSupervisorCheckDevice,
+  type SupervisorCheckPairing,
   type SupervisorCheckDirectory,
 } from './supervisor-check-client.js'
 import {
@@ -25,6 +32,8 @@ import {
   type CheckMeasurement,
   type SupervisorCheckResult,
 } from './supervisor-check-model.js'
+import { disconnectRemoteSupervisor } from '../runtime/account/remote-supervisor.js'
+import { SupervisorOperationChecks } from './supervisor-operation-checks.js'
 
 const statusLabels = {
   pending: '未执行',
@@ -42,12 +51,23 @@ export function SupervisorCheckPage() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<CheckError>()
   const [result, setResult] = useState<SupervisorCheckResult>()
+  const [code, setCode] = useState('')
+  const [pairingMessage, setPairingMessage] = useState('')
+  const [allowRegistration, setAllowRegistration] = useState(false)
+  const [registrationAvailable, setRegistrationAvailable] = useState(false)
   const request = useRef<AbortController | undefined>(undefined)
   const mounted = useRef(false)
 
   useEffect(() => {
     mounted.current = true
     let active = true
+    if (nativeCapabilities.productDeviceIdentity.available) {
+      void readNativeWindowLabel()
+        .then((label) => {
+          if (active) setRegistrationAvailable(label === 'main')
+        })
+        .catch(() => undefined)
+    }
     const supabase = getSupabaseAccountClient()
     const resetSession = (next: Session | null) => {
       if (!active) return
@@ -59,6 +79,9 @@ export function SupervisorCheckPage() {
       setBusy(false)
       setResult(undefined)
       setError(undefined)
+      setCode('')
+      setPairingMessage('')
+      setAllowRegistration(false)
     }
     let authObserved = false
     const subscription = supabase?.auth.onAuthStateChange((_event, next) => {
@@ -84,6 +107,71 @@ export function SupervisorCheckPage() {
     }
   }, [])
 
+  const host = directory?.hosts.find((candidate) => candidate.hostId === hostId)
+
+  async function pair() {
+    if (
+      session == null ||
+      request.current !== undefined ||
+      !/^\d{6}$/u.test(code)
+    )
+      return
+    const controller = new AbortController()
+    request.current = controller
+    setBusy(true)
+    setError(undefined)
+    setResult(undefined)
+    setPairingMessage('正在配对…')
+    setDirectory(undefined)
+    setHostId('')
+    setCode('')
+    const current = () => mounted.current && request.current === controller
+    try {
+      const paired = await pairSupervisorCheckDevice({
+        session,
+        identity: nativeCapabilities.productDeviceIdentity,
+        signal: controller.signal,
+        code,
+        allowRegistration: registrationAvailable && allowRegistration,
+      })
+      controller.signal.throwIfAborted()
+      if (!current()) return
+      if (paired.status !== 'paired') {
+        setPairingMessage(pairingStatusLabel(paired))
+        return
+      }
+      const pairedHost = paired.directory.hosts.find(
+        (entry) => entry.hostId === paired.hostId,
+      )
+      if (pairedHost === undefined)
+        throw new Error('remote_supervisor_response_invalid')
+      setDirectory(paired.directory)
+      setHostId(paired.hostId)
+      setPairingMessage('已配对，正在连接…')
+      const connection = await openSupervisorCheckSession({
+        session,
+        host: pairedHost,
+        productDevice: paired.directory.productDevice,
+        identity: nativeCapabilities.productDeviceIdentity,
+        signal: controller.signal,
+        forceRelay: mode === 'relay',
+      })
+      await disconnectRemoteSupervisor(connection)
+      controller.signal.throwIfAborted()
+      if (current()) setPairingMessage(`已连接 ${pairedHost.safeLabel}`)
+    } catch (caught) {
+      if (current()) {
+        setPairingMessage('')
+        setError(checkErrorCategory(caught))
+      }
+    } finally {
+      if (current()) {
+        request.current = undefined
+        setBusy(false)
+      }
+    }
+  }
+
   async function loadDirectory() {
     if (session == null || request.current !== undefined) return
     const controller = new AbortController()
@@ -91,6 +179,7 @@ export function SupervisorCheckPage() {
     setBusy(true)
     setError(undefined)
     setResult(undefined)
+    setPairingMessage('')
     setDirectory(undefined)
     setHostId('')
     try {
@@ -118,9 +207,6 @@ export function SupervisorCheckPage() {
   }
 
   async function run() {
-    const host = directory?.hosts.find(
-      (candidate) => candidate.hostId === hostId,
-    )
     if (
       session == null ||
       directory === undefined ||
@@ -177,6 +263,55 @@ export function SupervisorCheckPage() {
       {!nativeCapabilities.productDeviceIdentity.available ? (
         <Notice tone="warn">需要在桌面开发版中使用已有设备身份。</Notice>
       ) : null}
+      <form
+        className="flex flex-wrap items-end gap-3"
+        onSubmit={(event) => {
+          event.preventDefault()
+          void pair()
+        }}
+      >
+        <label className="block text-sm">
+          输入配对码
+          <Input
+            className="mt-2 max-w-44"
+            inputMode="numeric"
+            autoComplete="off"
+            maxLength={6}
+            value={code}
+            onChange={(event) =>
+              setCode(event.target.value.replace(/\D/gu, ''))
+            }
+            disabled={busy}
+          />
+        </label>
+        <Button
+          type="submit"
+          disabled={
+            busy ||
+            session == null ||
+            code.length !== 6 ||
+            !nativeCapabilities.productDeviceIdentity.available
+          }
+        >
+          配对
+        </Button>
+        {registrationAvailable ? (
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={allowRegistration}
+              disabled={busy}
+              onChange={(event) => setAllowRegistration(event.target.checked)}
+            />
+            在未注册的桌面设备上建立设备身份
+          </label>
+        ) : null}
+      </form>
+      {pairingMessage === '' ? null : (
+        <p role="status" className="text-sm">
+          {pairingMessage}
+        </p>
+      )}
       <div className="flex flex-wrap items-end gap-3">
         <Button
           variant="secondary"
@@ -247,7 +382,7 @@ export function SupervisorCheckPage() {
         </Button>
       </div>
       {directory?.hosts.length === 0 ? (
-        <Notice tone="warn">没有可用的既有只读授权；请先检查现有授权。</Notice>
+        <Notice tone="warn">没有可用的电脑。请在电脑上生成配对码。</Notice>
       ) : null}
       {error !== undefined ? (
         <Notice tone="err">错误类型：{error}</Notice>
@@ -258,7 +393,7 @@ export function SupervisorCheckPage() {
         className="text-sm text-text-secondary"
       >
         {busy
-          ? '正在执行只读检查。'
+          ? '正在执行检查。'
           : result === undefined
             ? '尚未开始检查。'
             : '检查已结束，请查看各项结果。'}
@@ -292,8 +427,36 @@ export function SupervisorCheckPage() {
           </table>
         </div>
       )}
+      {session != null && directory !== undefined && host !== undefined ? (
+        <SupervisorOperationChecks
+          key={`${host.hostId}:${mode}:${host.authorization.authorizationId}`}
+          session={session}
+          host={host}
+          productDevice={directory.productDevice}
+          identity={nativeCapabilities.productDeviceIdentity}
+          forceRelay={mode === 'relay'}
+          disabled={busy}
+        />
+      ) : null}
     </main>
   )
+}
+
+function pairingStatusLabel(
+  status: Exclude<SupervisorCheckPairing, { status: 'paired' }>,
+): string {
+  switch (status.status) {
+    case 'invalid_code':
+      return `配对码不对，还可以试 ${status.remainingAttempts ?? 0} 次。`
+    case 'expired':
+      return '配对码已过期，请在电脑上重新生成。'
+    case 'used':
+      return '配对码已使用，请在电脑上重新生成。'
+    case 'cancelled':
+      return '配对已取消，请在电脑上重新生成。'
+    case 'rate_limited':
+      return '尝试次数已达上限，请在电脑上重新生成配对码。'
+  }
 }
 
 function MeasurementRow({

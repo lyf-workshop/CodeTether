@@ -26,6 +26,8 @@ export const HOST_REGISTRATION_PROOF_TYPE =
 export const HOST_CLAIM_PROOF_TYPE = 'codetether-host-claim+jws' as const
 export const HOST_DEVICE_AUTHORIZATION_PROOF_TYPE =
   'codetether-host-device-authorization+jws' as const
+export const HOST_PAIRING_MANAGEMENT_PROOF_TYPE =
+  'codetether-host-pairing-management+jws' as const
 
 const nonceSchema = z.string().regex(/^[A-Za-z0-9_-]{22,86}$/)
 const safeText = (maximum: number) =>
@@ -96,7 +98,7 @@ export const hostDeviceAuthorizationPayloadSchema = z
     deviceId: productDeviceIdSchema,
     deviceKeyGeneration: z.number().int().nonnegative(),
     deviceFingerprint: fingerprintSchema,
-    scope: z.literal('supervisor_read'),
+    scope: z.enum(['supervisor_read', 'supervisor_control']),
     nonce: nonceSchema,
     iat: z.number().int().nonnegative(),
     exp: z.number().int().positive(),
@@ -108,6 +110,46 @@ export const hostDeviceAuthorizationPayloadSchema = z
   })
 export type HostDeviceAuthorizationPayload = z.infer<
   typeof hostDeviceAuthorizationPayloadSchema
+>
+
+export const hostPairingManagementPayloadSchema = z
+  .object({
+    v: z.literal(HOST_PROOF_VERSION),
+    aud: z.literal(HOST_AUDIENCE),
+    purpose: z.enum([
+      'host_pairing_create',
+      'host_pairing_status',
+      'host_pairing_cancel',
+      'host_pairing_renew',
+      'host_pairing_revoke',
+    ]),
+    hostId: hostIdSchema,
+    hostFingerprint: fingerprintSchema,
+    hostIdentityGeneration: z.number().int().nonnegative(),
+    spaceId: spaceIdSchema,
+    userId: userIdSchema,
+    deviceId: productDeviceIdSchema,
+    subjectId: z.union([
+      enrollmentChallengeIdSchema,
+      hostAuthorizationIdSchema,
+    ]),
+    targetDeviceId: productDeviceIdSchema.optional(),
+    pairingRootAuthorizationId: hostAuthorizationIdSchema.optional(),
+    nonce: nonceSchema,
+    iat: z.number().int().nonnegative(),
+    exp: z.number().int().positive(),
+  })
+  .strict()
+  .refine((value) => value.exp > value.iat && value.exp - value.iat <= 60)
+  .refine((value) =>
+    value.purpose === 'host_pairing_revoke'
+      ? value.targetDeviceId !== undefined &&
+        value.pairingRootAuthorizationId !== undefined
+      : value.targetDeviceId === undefined &&
+        value.pairingRootAuthorizationId === undefined,
+  )
+export type HostPairingManagementPayload = z.infer<
+  typeof hostPairingManagementPayloadSchema
 >
 
 function canonicalJsonBytes(
@@ -279,5 +321,23 @@ export async function verifyHostDeviceAuthorizationProof(
     publicJwk,
     HOST_DEVICE_AUTHORIZATION_PROOF_TYPE,
     encodeHostDeviceAuthorizationPayload(payload),
+  )
+}
+
+export async function verifyHostPairingManagementProof(
+  compact: string,
+  publicJwk: z.infer<typeof productDevicePublicJwkSchema>,
+  payload: HostPairingManagementPayload,
+): Promise<void> {
+  const fields = Object.fromEntries(
+    Object.entries(hostPairingManagementPayloadSchema.parse(payload)).filter(
+      (entry): entry is [string, string | number] => entry[1] !== undefined,
+    ),
+  )
+  await verify(
+    compact,
+    publicJwk,
+    HOST_PAIRING_MANAGEMENT_PROOF_TYPE,
+    canonicalJsonBytes(fields),
   )
 }

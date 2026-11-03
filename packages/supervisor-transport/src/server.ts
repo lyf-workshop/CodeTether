@@ -31,6 +31,7 @@ import {
   type SignedSupervisorGrant,
   type SignedSupervisorTransport,
   type SupervisorChallenge,
+  type SupervisorB1Operation,
   type SupervisorPublicJwk,
   type SupervisorRequest,
 } from './protocol.js'
@@ -49,6 +50,7 @@ export interface SupervisorAdmissionResult {
   readonly deviceKeyGeneration: number
   readonly authorizationId: string
   readonly authorizationExpiresAt: string
+  readonly scope: 'supervisor_read' | 'supervisor_control'
 }
 
 export interface SupervisorHostReadSurface {
@@ -128,9 +130,9 @@ export interface SupervisorServerOptions {
   }) => Promise<SupervisorAdmissionResult>
   readonly reads: SupervisorHostReadSurface
   readonly control?: SupervisorHostControlSurface
-  readonly authorizeControl?: (
-    authorizationId: string,
-  ) => boolean | Promise<boolean>
+  readonly operations?: (
+    request: SupervisorB1Operation,
+  ) => unknown | Promise<unknown>
   readonly onDiagnostic?: (
     event: string,
     fields: Readonly<Record<string, string | number | boolean>>,
@@ -292,6 +294,14 @@ export class SupervisorServer {
     this.#socketsByAuthorization.delete(authorizationId)
   }
 
+  deactivateDevice(deviceId: string): void {
+    for (const [authorizationId, activation] of this.#activations) {
+      if (activation.grant.payload.deviceId === deviceId) {
+        this.deactivate(authorizationId)
+      }
+    }
+  }
+
   pruneActivations(allowed: ReadonlySet<string>): void {
     for (const authorizationId of this.#activations.keys()) {
       if (!allowed.has(authorizationId)) this.deactivate(authorizationId)
@@ -342,6 +352,7 @@ export class SupervisorServer {
     const connection = new FramedMachineConnection(socket)
     let established = false
     let authorizationId: string | undefined
+    let expiryTimer: ReturnType<typeof setTimeout> | undefined
     try {
       let selected: string | undefined
       try {
@@ -413,12 +424,14 @@ export class SupervisorServer {
         controlPlaneOrigin: descriptor.controlPlaneOrigin,
       })
       if (
+        socket.destroyed ||
         !this.#activations.has(authorizationId) ||
         admission.hostId !== challenge.hostId ||
         admission.hostIdentityGeneration !== challenge.hostIdentityGeneration ||
         admission.deviceId !== challenge.deviceId ||
         admission.deviceKeyGeneration !== challenge.deviceKeyGeneration ||
-        admission.authorizationId !== challenge.authorizationId
+        admission.authorizationId !== challenge.authorizationId ||
+        admission.scope !== grant.scope
       ) {
         throw new SupervisorRejection('authentication_failed')
       }
@@ -426,15 +439,17 @@ export class SupervisorServer {
         Math.min(
           this.#now().getTime() + supervisorTransportLimits.sessionLifetimeMs,
           Date.parse(admission.authorizationExpiresAt),
+          grant.expiresAt * 1_000,
           descriptor.exp * 1_000,
         ),
       )
-      if (sessionExpiresAt <= this.#now()) {
+      if (
+        !Number.isFinite(sessionExpiresAt.getTime()) ||
+        sessionExpiresAt <= this.#now()
+      ) {
         throw new SupervisorRejection('authorization_revoked')
       }
-      const controlAuthorized =
-        this.#options.control !== undefined &&
-        (await this.#options.authorizeControl?.(challenge.authorizationId))
+      const controlAuthorized = grant.scope === 'supervisor_control'
       const authenticated = supervisorAuthenticatedSchema.parse({
         type: 'supervisor.authenticated',
         protocolVersion: supervisorProtocolVersion,
@@ -447,6 +462,11 @@ export class SupervisorServer {
       })
       await connection.send(authenticated)
       established = true
+      expiryTimer = setTimeout(
+        () => socket.destroy(),
+        Math.max(0, sessionExpiresAt.getTime() - this.#now().getTime()),
+      )
+      expiryTimer.unref()
       this.#options.onDiagnostic?.('supervisor.session.established', {
         hostId: challenge.hostId,
         deviceId: challenge.deviceId,
@@ -457,6 +477,7 @@ export class SupervisorServer {
         const request = await connection.receive(supervisorRequestSchema, {
           timeoutMs: null,
         })
+        if (socket.destroyed || !this.#activations.has(authorizationId)) break
         if (this.#now() >= sessionExpiresAt) {
           await connection.send({
             type: 'supervisor.response',
@@ -467,7 +488,7 @@ export class SupervisorServer {
           })
           break
         }
-        await this.#respond(connection, request, transport, authorizationId)
+        await this.#respond(connection, request, transport, controlAuthorized)
       }
     } catch (error) {
       const rejectionCode =
@@ -490,6 +511,7 @@ export class SupervisorServer {
         { reason: established ? 'peer_disconnected' : rejectionCode },
       )
     } finally {
+      if (expiryTimer !== undefined) clearTimeout(expiryTimer)
       if (authorizationId !== undefined) {
         const sockets = this.#socketsByAuthorization.get(authorizationId)
         sockets?.delete(socket)
@@ -504,15 +526,11 @@ export class SupervisorServer {
     connection: FramedMachineConnection,
     request: SupervisorRequest,
     transport: 'direct' | 'relay',
-    authorizationId: string,
+    controlAuthorized: boolean,
   ): Promise<void> {
     const startedAt = Date.now()
     try {
-      if (
-        isSupervisorControlOperation(request) &&
-        (this.#options.control === undefined ||
-          !(await this.#options.authorizeControl?.(authorizationId)))
-      ) {
+      if (isSupervisorControlOperation(request) && !controlAuthorized) {
         throw new Error('operation_not_allowed')
       }
       let data: unknown
@@ -597,6 +615,12 @@ export class SupervisorServer {
           }
           data = await this.#options.control.createConversation(request)
           break
+        default:
+          if (this.#options.operations === undefined) {
+            throw new Error('operation_not_allowed')
+          }
+          data = await this.#options.operations(request)
+          break
       }
       await connection.send({
         type: 'supervisor.response',
@@ -613,12 +637,18 @@ export class SupervisorServer {
         ...supervisorReadResultFields(data),
       })
     } catch (error) {
+      const code = supervisorReadErrorCode(error)
+      const status = (error as { readonly httpStatus?: unknown } | undefined)
+        ?.httpStatus
       await connection.send({
         type: 'supervisor.response',
         protocolVersion: supervisorProtocolVersion,
         requestId: request.requestId,
         ok: false,
-        code: supervisorReadErrorCode(error),
+        code,
+        ...(code === 'unsupported' && (status === 409 || status === 422)
+          ? { httpStatus: status }
+          : {}),
       })
     }
   }
@@ -630,9 +660,13 @@ function supervisorReadRequestFields(
   switch (request.operation) {
     case 'host.bootstrap':
     case 'machine.list':
+    case 'attention.list':
+    case 'attention.resolve':
+    case 'approval.resolve':
       return {}
     case 'machine.get':
     case 'project.list':
+    case 'conversation.recent':
       return { machineId: request.machineId }
     case 'project.get':
     case 'conversation.list':
@@ -643,6 +677,9 @@ function supervisorReadRequestFields(
     case 'conversation.get':
     case 'conversation.history':
     case 'conversation.live.read':
+    case 'conversation.changes':
+    case 'conversation.archive':
+    case 'turn.interrupt':
       return {
         machineId: request.machineId,
         projectId: request.projectId,
@@ -664,15 +701,14 @@ function supervisorReadRequestFields(
   }
 }
 
-function isSupervisorControlOperation(
-  request: SupervisorRequest,
-): request is Extract<
-  SupervisorRequest,
-  { operation: 'conversation.turn.start' | 'conversation.create' }
-> {
+function isSupervisorControlOperation(request: SupervisorRequest): boolean {
   return (
     request.operation === 'conversation.turn.start' ||
-    request.operation === 'conversation.create'
+    request.operation === 'conversation.create' ||
+    request.operation === 'conversation.archive' ||
+    request.operation === 'attention.resolve' ||
+    request.operation === 'approval.resolve' ||
+    request.operation === 'turn.interrupt'
   )
 }
 
@@ -765,6 +801,7 @@ function supervisorReadErrorCode(
   | 'operation_not_allowed'
   | 'not_found'
   | 'conflict'
+  | 'unsupported'
   | 'unavailable'
   | 'internal' {
   if (!(error instanceof Error)) return 'internal'
@@ -775,10 +812,13 @@ function supervisorReadErrorCode(
     code === 'operation_not_allowed' ||
     code === 'not_found' ||
     code === 'conflict' ||
+    code === 'unsupported' ||
     code === 'unavailable'
   ) {
     return code
   }
+  if (code === 'runtime_unavailable' || code === 'provider_unavailable')
+    return 'unavailable'
   return 'internal'
 }
 

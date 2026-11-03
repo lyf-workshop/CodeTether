@@ -6,6 +6,7 @@ import { startControlPlaneServer } from './server.js'
 import { AuthenticatedAccountService } from './services/authenticated-account-service.js'
 import { ProductDeviceAuthenticationService } from './services/product-device-authentication-service.js'
 import { HostIdentityService } from './services/host-identity-service.js'
+import { HostPairingService } from './services/host-pairing-service.js'
 
 export async function runControlPlane(
   environment: NodeJS.ProcessEnv = process.env,
@@ -39,6 +40,12 @@ export async function runControlPlane(
       productDeviceAuthenticationService:
         new ProductDeviceAuthenticationService(database),
       hostIdentityService: new HostIdentityService(database),
+      hostPairingService: new HostPairingService(
+        database,
+        configuration.pairingHmacKey === undefined
+          ? undefined
+          : Buffer.from(configuration.pairingHmacKey, 'base64url'),
+      ),
       host: configuration.listenHost,
       port: configuration.listenPort,
       allowedOrigins: configuration.allowedOrigins,

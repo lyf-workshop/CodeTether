@@ -20,6 +20,7 @@ import {
   registerHostIdentity,
   requestHostClaim,
   confirmHostClaim,
+  readProductDeviceRegistrationMetadata,
   postAuthenticatedProductDeviceJson,
   utf8,
   type AuthorizedHostDirectoryEntry,
@@ -103,9 +104,12 @@ export interface RemoteConversationDirectoryPage {
   readonly nextCursor?: string
 }
 
-export async function readLocalHostIdentity(): Promise<LocalHostIdentityRecord | null> {
+export async function readLocalHostIdentity(
+  signal?: AbortSignal,
+): Promise<LocalHostIdentityRecord | null> {
   const response = await fetch(`${hostBaseUrl}/api/v1/host/identity`, {
     headers: { accept: 'application/json' },
+    signal,
   })
   // TanStack Query treats an `undefined` query result as an error. `null`
   // explicitly represents the supported, uninitialized Host state.
@@ -149,18 +153,27 @@ export async function readLocalHostIdentity(): Promise<LocalHostIdentityRecord |
  */
 export async function enableLocalHostIdentity(
   capability: HostIdentityCapability,
+  options: { readonly signal?: AbortSignal; readonly freshOnly?: boolean } = {},
 ): Promise<LocalHostIdentityRecord> {
   if (!capability.available) throw new Error('native_host_identity_unavailable')
-  const existing = await readLocalHostIdentity()
-  if (existing !== null) return existing
+  const existing = await readLocalHostIdentity(options.signal)
+  if (existing !== null) {
+    if (options.freshOnly) throw new Error('local_host_identity_already_exists')
+    return existing
+  }
 
+  options.signal?.throwIfAborted()
   const created = await capability.createKey()
+  options.signal?.throwIfAborted()
   const response = await fetch(`${hostBaseUrl}/api/v1/host/identity`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(created),
+    signal: options.signal,
   })
   if (!response.ok) throw new Error('host_identity_persist_failed')
+  if (options.freshOnly && response.status !== 201)
+    throw new Error('local_host_identity_already_exists')
 
   const identity = await readLocalHostIdentity()
   if (identity === null) throw new Error('host_identity_persist_failed')
@@ -191,16 +204,28 @@ export async function enrollLocalHost(options: {
   readonly spaceId: string
   readonly signal?: AbortSignal
 }): Promise<LocalHostIdentityRecord> {
-  let local = await enableLocalHostIdentity(options.hostIdentity)
+  const metadata = await readProductDeviceRegistrationMetadata(
+    options.productDeviceIdentity,
+  )
+  options.signal?.throwIfAborted()
+  let local = await enableLocalHostIdentity(options.hostIdentity, {
+    signal: options.signal,
+    freshOnly: true,
+  })
   if (local.lastRegisteredAt == null) {
+    const platform = metadata.platform.split('-')[0]?.toLowerCase()
+    options.signal?.throwIfAborted()
     const registration = await registerHostIdentity({
       baseUrl: options.controlPlaneBaseUrl,
       hostIdentity: options.hostIdentity,
       hostKeyHandle: local.keyHandle,
       hostId: local.hostId,
       publicJwk: local.publicJwk,
-      safeLabel: 'CodeTether Host',
-      coarsePlatform: 'macos',
+      safeLabel: metadata.displayName,
+      coarsePlatform:
+        platform === 'windows' || platform === 'macos' || platform === 'linux'
+          ? platform
+          : 'unknown',
       signal: options.signal,
     })
     if (
@@ -279,7 +304,7 @@ async function closeRemoteSupervisorSession(
   if (remoteSessions.get(hostId) === session) remoteSessions.delete(hostId)
 }
 
-export async function reconcileLocalSupervisorGrants(options: {
+interface LocalSupervisorGrantContext {
   readonly session: Session
   readonly controlPlaneBaseUrl: string
   readonly host: Pick<
@@ -291,7 +316,43 @@ export async function reconcileLocalSupervisorGrants(options: {
   readonly deviceIdentity: ProductDeviceIdentityCapability
   readonly hostIdentity: HostIdentityCapability
   readonly signal?: AbortSignal
-}): Promise<readonly HostSupervisorAuthorization[]> {
+}
+
+const grantReconciliations = new Map<
+  string,
+  Promise<readonly HostSupervisorAuthorization[]>
+>()
+
+export async function reconcileLocalSupervisorGrants(
+  options: LocalSupervisorGrantContext,
+): Promise<readonly HostSupervisorAuthorization[]> {
+  const hostId = options.host.hostId
+  const previous = grantReconciliations.get(hostId)
+  // Take each authorization snapshot after the prior local prune and activation.
+  // Pairing completion can otherwise race with the existing owner refresh.
+  const next = (previous ?? Promise.resolve())
+    .catch(() => undefined)
+    .then(() => {
+      const timeout = AbortSignal.timeout(30_000)
+      const signal =
+        options.signal === undefined
+          ? timeout
+          : AbortSignal.any([options.signal, timeout])
+      signal.throwIfAborted()
+      return reconcileSupervisorGrantSnapshot({ ...options, signal })
+    })
+  grantReconciliations.set(hostId, next)
+  try {
+    return await next
+  } finally {
+    if (grantReconciliations.get(hostId) === next)
+      grantReconciliations.delete(hostId)
+  }
+}
+
+async function reconcileSupervisorGrantSnapshot(
+  options: LocalSupervisorGrantContext,
+): Promise<readonly HostSupervisorAuthorization[]> {
   const hostPublicJwk = parsePublicJwk(options.localIdentity.publicJwk)
   if (
     options.host.hostId !== options.localIdentity.hostId ||
@@ -317,6 +378,7 @@ export async function reconcileLocalSupervisorGrants(options: {
       spaceId: options.host.spaceId,
       controlPlaneOrigin: new URL(options.controlPlaneBaseUrl).origin,
     },
+    options.signal,
   )
   if (configured.descriptor === null) return [] // Explicitly disabled Host stays disabled.
   const descriptor = parseSignedTransport(configured.descriptor)
@@ -336,7 +398,8 @@ export async function reconcileLocalSupervisorGrants(options: {
         options.host.identityGeneration ||
       authorization.spaceId !== options.host.spaceId ||
       authorization.userId !== options.productDevice.device.ownerUserId ||
-      authorization.scope !== 'supervisor_read' ||
+      (authorization.scope !== 'supervisor_read' &&
+        authorization.scope !== 'supervisor_control') ||
       Date.parse(authorization.expiresAt) <= Date.now()
     ) {
       throw new Error('host_supervisor_authorization_mismatch')
@@ -344,12 +407,17 @@ export async function reconcileLocalSupervisorGrants(options: {
   }
   // Remove revoked/expired activations before any signing or publication work.
   // A later transient failure cannot leave a removed device active locally.
-  await postLocalJson('/api/v1/supervisor/activations/prune', {
-    authorizationIds: authorizations.map(
-      ({ authorizationId }) => authorizationId,
-    ),
-  })
+  await postLocalJson(
+    '/api/v1/supervisor/activations/prune',
+    {
+      authorizationIds: authorizations.map(
+        ({ authorizationId }) => authorizationId,
+      ),
+    },
+    options.signal,
+  )
   for (const authorization of authorizations) {
+    options.signal?.throwIfAborted()
     const payload = {
       v: 1 as const,
       aud: 'codetether-host-supervisor' as const,
@@ -385,6 +453,16 @@ export async function reconcileLocalSupervisorGrants(options: {
         payload,
       ),
     }
+    options.signal?.throwIfAborted()
+    await postLocalJson(
+      '/api/v1/supervisor/activate',
+      {
+        hostPublicJwk,
+        grant,
+        descriptor,
+      },
+      options.signal,
+    )
     if (authorization.grant === null) {
       await postAuthenticatedProductDeviceJson({
         accessToken: options.session.access_token,
@@ -396,11 +474,6 @@ export async function reconcileLocalSupervisorGrants(options: {
         signal: options.signal,
       })
     }
-    await postLocalJson('/api/v1/supervisor/activate', {
-      hostPublicJwk,
-      grant,
-      descriptor,
-    })
   }
   return authorizations
 }
@@ -921,7 +994,7 @@ function parseConversationPage(
   }
 }
 
-function parseConversation(
+export function parseConversation(
   value: Record<string, unknown>,
 ): RemoteConversationDirectoryItem {
   const titleSource = boundedString(value, 'titleSource')
@@ -992,11 +1065,13 @@ async function signHostProof(
 async function postLocalJson(
   path: string,
   value: unknown,
+  signal?: AbortSignal,
 ): Promise<Record<string, unknown>> {
   const response = await fetch(`${hostBaseUrl}${path}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(value),
+    signal,
   })
   if (!response.ok)
     throw new Error(`remote_supervisor_${String(response.status)}`)

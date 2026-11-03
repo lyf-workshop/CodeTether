@@ -327,6 +327,7 @@ async function createFixture() {
         deviceId: challenge.deviceId,
         deviceKeyGeneration: challenge.deviceKeyGeneration,
         authorizationId: challenge.authorizationId,
+        scope: 'supervisor_read',
         authorizationExpiresAt: new Date(
           Date.now() + 60 * 60_000,
         ).toISOString(),

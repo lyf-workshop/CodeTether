@@ -178,6 +178,21 @@ const migrations: readonly Migration[] = [
         NOT NULL DEFAULT 1 CHECK (runtime_enabled IN (0, 1));
     `),
   },
+  {
+    version: 24,
+    name: 'host_supervisor_pairing_revocations',
+    up: (database) =>
+      database.exec(`
+      DROP INDEX host_supervisor_grants_device_host;
+      CREATE INDEX host_supervisor_grants_device_host
+        ON host_supervisor_grants(device_id, host_id);
+      CREATE TABLE host_supervisor_pairing_revocations (
+        device_id TEXT NOT NULL,
+        pairing_root_authorization_id TEXT NOT NULL,
+        PRIMARY KEY (device_id, pairing_root_authorization_id)
+      ) STRICT;
+    `),
+  },
 ]
 
 export const currentSchemaVersion = migrations.at(-1)?.version ?? 0

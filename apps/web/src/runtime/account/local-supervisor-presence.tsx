@@ -8,12 +8,13 @@ import { controlPlaneBaseUrl } from './account-config.js'
 import {
   listOwnedHosts,
   resolveExistingProductDevice,
-  type AccountProductDevice,
 } from './control-plane-client.js'
+import { localAuthorizedMobileDevicesKey } from './authorized-mobile-devices.js'
 import {
-  authorizedMobileDevices,
-  localAuthorizedMobileDevicesKey,
-} from './authorized-mobile-devices.js'
+  listPairedDevices,
+  renewPairedDevice,
+  type PairingOwnerContext,
+} from './pairing-client.js'
 import {
   reconcileLocalSupervisorGrants,
   readLocalHostIdentity,
@@ -57,15 +58,11 @@ export function LocalSupervisorPresenceCoordinator() {
       if (session === null || session === undefined) {
         throw new Error('account_session_unavailable')
       }
-      let devices: readonly AccountProductDevice[] = []
       const productDevice = await resolveExistingProductDevice({
         accessToken: session.access_token,
         baseUrl: controlPlaneBaseUrl,
         identity: nativeCapabilities.productDeviceIdentity,
         signal,
-        onDevicesObserved: (observed) => {
-          devices = observed
-        },
       })
       const hosts = await listOwnedHosts({
         accessToken: session.access_token,
@@ -74,7 +71,7 @@ export function LocalSupervisorPresenceCoordinator() {
         productDevice,
         signal,
       })
-      return { hosts, productDevice, devices }
+      return { hosts, productDevice }
     },
     enabled: session !== null && session !== undefined,
     retry: false,
@@ -85,7 +82,7 @@ export function LocalSupervisorPresenceCoordinator() {
   })
   const localIdentity = useQuery({
     queryKey: ['host', 'local-identity-for-directory'],
-    queryFn: readLocalHostIdentity,
+    queryFn: ({ signal }) => readLocalHostIdentity(signal),
     enabled: directory.data !== undefined && connectionState === 'connected',
     retry: false,
     staleTime: 0,
@@ -106,27 +103,44 @@ export function LocalSupervisorPresenceCoordinator() {
         session === null ||
         session === undefined ||
         localHost === undefined ||
-        localIdentity.data === null ||
+        localIdentity.data == null ||
         directory.data === undefined
       ) {
         throw new Error('local_host_unavailable')
       }
-      const authorizations = await reconcileLocalSupervisorGrants({
+      const context: PairingOwnerContext = {
         session,
         controlPlaneBaseUrl,
         host: localHost,
-        localIdentity: localIdentity.data!,
+        localIdentity: localIdentity.data,
         productDevice: directory.data.productDevice,
         deviceIdentity: nativeCapabilities.productDeviceIdentity,
         hostIdentity: nativeCapabilities.hostIdentity,
         signal,
-      })
+      }
+      let devices
+      let pairingError: unknown
+      try {
+        devices = await listPairedDevices(context)
+        const due = devices.filter((device) => device.renewalEligible)
+        for (const device of due) {
+          signal.throwIfAborted()
+          try {
+            await renewPairedDevice(context, device)
+          } catch (error) {
+            pairingError ??= error
+          }
+        }
+        if (due.length > 0) devices = await listPairedDevices(context)
+      } catch (error) {
+        pairingError = error
+      }
+      signal.throwIfAborted()
+      // Pruning still runs after a failed renewal or paired-device lookup.
+      await reconcileLocalSupervisorGrants(context)
+      if (pairingError !== undefined) throw pairingError
       return {
-        devices: authorizedMobileDevices(
-          { hostId: localHost.hostId, ownerUserId: session.user.id },
-          authorizations,
-          directory.data.devices,
-        ),
+        devices: devices ?? [],
         observedAt: new Date().toISOString(),
       }
     },

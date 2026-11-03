@@ -57,6 +57,35 @@ export type SupervisorGrantPayload = z.infer<
   typeof supervisorGrantPayloadSchema
 >
 
+export const signedHostSupervisorDeviceRevocationSchema = z
+  .object({
+    payload: z
+      .object({
+        v: z.literal(1),
+        aud: z.literal('codetether-control-plane-host'),
+        purpose: z.literal('host_pairing_revoke'),
+        hostId: opaqueId('host'),
+        hostFingerprint: digest,
+        hostIdentityGeneration: z.number().int().positive(),
+        spaceId: opaqueId('space'),
+        userId: opaqueId('usr'),
+        deviceId: opaqueId('dev'),
+        subjectId: opaqueId('hauth'),
+        nonce: z.string().regex(/^[A-Za-z0-9_-]{22,86}$/u),
+        iat: timestampSeconds,
+        exp: timestampSeconds,
+        targetDeviceId: opaqueId('dev'),
+        pairingRootAuthorizationId: opaqueId('hauth'),
+      })
+      .strict()
+      .refine(({ iat, exp }) => exp > iat && exp - iat <= 60),
+    proof: z.string().min(1).max(supervisorTransportLimits.maximumProofBytes),
+  })
+  .strict()
+export type SignedHostSupervisorDeviceRevocation = z.infer<
+  typeof signedHostSupervisorDeviceRevocationSchema
+>
+
 export const supervisorDirectEndpointSchema = z
   .object({
     host: safeText(supervisorTransportLimits.maximumHostCharacters),
@@ -277,6 +306,57 @@ const supervisorTurnInputSchema = z
   })
   .strict()
 
+const supervisorConversationScope = {
+  machineId: opaqueId('machine'),
+  projectId: opaqueId('proj'),
+  conversationId: opaqueId('conv'),
+}
+
+export const supervisorB1OperationSchema = z.discriminatedUnion('operation', [
+  z.strictObject({
+    operation: z.literal('conversation.recent'),
+    machineId: opaqueId('machine'),
+    limit: supervisorDirectoryLimitSchema.default(50),
+  }),
+  z.strictObject({
+    operation: z.literal('conversation.changes'),
+    ...supervisorConversationScope,
+    offset: z.number().int().min(0).max(2048).default(0),
+  }),
+  z.strictObject({
+    operation: z.literal('conversation.archive'),
+    ...supervisorConversationScope,
+    actionId: supervisorActionIdSchema,
+  }),
+  z.strictObject({
+    operation: z.literal('attention.list'),
+    projectId: opaqueId('proj').optional(),
+    attentionType: z
+      .enum(['approval', 'completed_review', 'failed'])
+      .optional(),
+    status: z.enum(['open', 'resolved', 'expired']).default('open'),
+    limit: supervisorDirectoryLimitSchema.default(50),
+  }),
+  z.strictObject({
+    operation: z.literal('attention.resolve'),
+    attentionId: z.string().regex(/^attn_[A-Za-z0-9][A-Za-z0-9_-]{5,95}$/u),
+    actionId: supervisorActionIdSchema,
+  }),
+  z.strictObject({
+    operation: z.literal('approval.resolve'),
+    approvalId: z.string().regex(/^approval_[A-Za-z0-9][A-Za-z0-9_-]{5,95}$/u),
+    actionId: supervisorActionIdSchema,
+    decision: z.enum(['accept', 'decline']),
+  }),
+  z.strictObject({
+    operation: z.literal('turn.interrupt'),
+    ...supervisorConversationScope,
+    turnId: z.string().regex(/^turn_[A-Za-z0-9][A-Za-z0-9_-]{5,95}$/u),
+    actionId: supervisorActionIdSchema,
+  }),
+])
+export type SupervisorB1Operation = z.output<typeof supervisorB1OperationSchema>
+
 export const supervisorRequestSchema = z.discriminatedUnion('operation', [
   supervisorRequestBaseSchema
     .extend({ operation: z.literal('host.bootstrap') })
@@ -371,6 +451,9 @@ export const supervisorRequestSchema = z.discriminatedUnion('operation', [
       reasoning: z.string().trim().min(1).max(120).optional(),
     })
     .strict(),
+  ...supervisorB1OperationSchema.options.map((operation) =>
+    operation.extend(supervisorRequestBaseSchema.shape),
+  ),
 ])
 export type SupervisorRequest = z.infer<typeof supervisorRequestSchema>
 
@@ -387,15 +470,20 @@ export const supervisorResponseSchema = z
         'operation_not_allowed',
         'not_found',
         'conflict',
+        'unsupported',
         'unavailable',
         'session_expired',
         'internal',
       ])
       .optional(),
+    httpStatus: z.union([z.literal(409), z.literal(422)]).optional(),
   })
   .strict()
   .superRefine((value, context) => {
-    if (value.ok === (value.code !== undefined)) {
+    if (
+      value.ok === (value.code !== undefined) ||
+      (value.httpStatus !== undefined && value.code !== 'unsupported')
+    ) {
       context.addIssue({ code: 'custom', message: 'Invalid response outcome' })
     }
   })

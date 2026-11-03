@@ -25,6 +25,7 @@ import {
   type SignedSupervisorGrant,
   type SignedSupervisorTransport,
   type SupervisorChallenge,
+  type SupervisorB1Operation,
   type SupervisorPublicJwk,
   type SupervisorRequest,
   type SupervisorResponse,
@@ -68,6 +69,7 @@ export class PendingSupervisorConnection {
   readonly transport: 'direct' | 'relay'
   readonly #connection: FramedMachineConnection
   readonly #onClose: (() => void) | undefined
+  readonly #allowsControl: boolean
   #transferred = false
   #closed = false
 
@@ -76,6 +78,7 @@ export class PendingSupervisorConnection {
     challenge: SupervisorChallenge,
     transport: 'direct' | 'relay' = 'direct',
     onClose?: () => void,
+    allowsControl = false,
   ) {
     this.#connection = connection
     this.challenge = challenge
@@ -83,6 +86,7 @@ export class PendingSupervisorConnection {
     this.admissionResource = `/v1/hosts/${challenge.hostId}/supervisor-admission`
     this.transport = transport
     this.#onClose = onClose
+    this.#allowsControl = allowsControl
   }
 
   async authenticate(input: {
@@ -118,6 +122,9 @@ export class PendingSupervisorConnection {
         response.authorizationId !== this.challenge.authorizationId
       ) {
         throw new SupervisorClientError('host_identity_mismatch')
+      }
+      if (response.control === 'control' && !this.#allowsControl) {
+        throw new SupervisorClientError('operation_not_allowed')
       }
       this.#transferred = true
       return new ConnectedSupervisorSession(
@@ -315,6 +322,13 @@ export class ConnectedSupervisorSession {
     )
   }
 
+  async executeB1Operation(
+    input: SupervisorB1Operation,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    return await this.#request(input, signal)
+  }
+
   close(): void {
     if (this.#closed) return
     this.#closed = true
@@ -364,13 +378,18 @@ export class ConnectedSupervisorSession {
       this.close()
       throw new SupervisorClientError('protocol_error')
     }
-    if (!response.ok) throw new SupervisorClientError(response.code!)
+    if (!response.ok) {
+      throw new SupervisorClientError(response.code!, response.httpStatus)
+    }
     return response.data
   }
 }
 
 export class SupervisorClientError extends Error {
-  constructor(readonly code: string) {
+  constructor(
+    readonly code: string,
+    readonly httpStatus?: 409 | 422,
+  ) {
     super(code)
     this.name = 'SupervisorClientError'
   }
@@ -563,6 +582,7 @@ async function completeSupervisorHandshake(
       challenge,
       transport,
       onClose,
+      options.grant.payload.scope === 'supervisor_control',
     )
   } catch (error) {
     connection.destroy()

@@ -41,6 +41,24 @@ const MAX_BOOTSTRAP_BYTES: u64 = 64 * 1024;
 const MAX_SMOKE_EXIT_DELAY_MS: u64 = 3_900_000;
 const DESKTOP_RESUMED_EVENT: &str = "codetether://desktop-resumed";
 
+const RELAY_ENVIRONMENT: [(&str, Option<&str>, &str); 3] = [
+    (
+        "CODETETHER_SUPERVISOR_RELAY_ENDPOINT",
+        option_env!("CODETETHER_SUPERVISOR_RELAY_ENDPOINT"),
+        "tls://relay.codetether.org:8443",
+    ),
+    (
+        "CODETETHER_SUPERVISOR_RELAY_ID",
+        option_env!("CODETETHER_SUPERVISOR_RELAY_ID"),
+        "relay_d41fc913a6e74e65b916467b97bc299b",
+    ),
+    (
+        "CODETETHER_SUPERVISOR_RELAY_FINGERPRINT",
+        option_env!("CODETETHER_SUPERVISOR_RELAY_FINGERPRINT"),
+        "k1TqjlBhncNd1_fFKmuDr1uHOAYKOhVg7C92mopj0sg",
+    ),
+];
+
 #[derive(Clone)]
 struct DesktopState {
     host: Arc<Mutex<Option<HostSupervisor>>>,
@@ -268,6 +286,15 @@ impl HostSupervisor {
         {
             Some(origin) => command.env("CODETETHER_CONTROL_PLANE_URL", origin),
             None => command,
+        };
+        // Inherit a runtime override as one set. An incomplete set must reach
+        // the Host's validator unchanged, never mix with the bundled identity.
+        let command = if RELAY_ENVIRONMENT.iter().any(|(name, _, _)| std::env::var_os(name).is_some()) {
+            command
+        } else {
+            RELAY_ENVIRONMENT.iter().fold(command, |command, (name, compiled, default)| {
+                command.env(name, compiled.unwrap_or(default))
+            })
         };
         let (mut events, child) = command
             .spawn()
@@ -623,6 +650,32 @@ fn desktop_origin() -> &'static str {
 
     #[cfg(not(windows))]
     return "tauri://localhost";
+}
+
+#[tauri::command]
+async fn open_pairing_diagnostic(app: AppHandle) -> Result<(), &'static str> {
+    #[cfg(debug_assertions)]
+    {
+        const LABEL: &str = "b1-pairing-check";
+        if let Some(window) = app.get_webview_window(LABEL) {
+            return window.set_focus().map_err(|_| "pairing_check_unavailable");
+        }
+        tauri::WebviewWindowBuilder::new(
+            &app,
+            LABEL,
+            tauri::WebviewUrl::App("/#/dev/supervisor-check".into()),
+        )
+        .title("CodeTether · 配对检查")
+        .inner_size(900.0, 760.0)
+        .build()
+        .map_err(|_| "pairing_check_unavailable")?;
+        Ok(())
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        let _ = app;
+        Err("pairing_check_unavailable")
+    }
 }
 
 fn parse_bootstrap_response(response: &[u8]) -> Option<BootstrapIdentity> {
@@ -1295,11 +1348,13 @@ pub fn run_desktop() {
             crate::product_device_key_store::product_device_key_public,
             crate::product_device_key_store::product_device_key_sign,
             crate::product_device_key_store::product_device_key_destroy,
-            crate::product_device_key_store::product_device_key_bind
-            ,crate::host_identity_key_store::host_identity_key_create
-            ,crate::host_identity_key_store::host_identity_key_public
-            ,crate::host_identity_key_store::host_identity_key_sign
-            ,crate::host_identity_key_store::host_identity_key_destroy
+            crate::product_device_key_store::product_device_key_bind,
+            crate::product_device_key_store::product_device_registration_metadata,
+            open_pairing_diagnostic,
+            crate::host_identity_key_store::host_identity_key_create,
+            crate::host_identity_key_store::host_identity_key_public,
+            crate::host_identity_key_store::host_identity_key_sign,
+            crate::host_identity_key_store::host_identity_key_destroy,
         ])
         .setup(|app| {
             #[cfg(target_os = "macos")]

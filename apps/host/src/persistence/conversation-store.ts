@@ -798,35 +798,34 @@ export class ConversationStore {
     })
   }
 
-  approveHostSupervisorControl(
-    authorizationId: string,
-    approvedAt: Timestamp,
-  ): void {
-    const timestamp = TimestampSchema.parse(approvedAt)
-    this.runInTransaction(() => {
-      const grant = this.getHostSupervisorGrant(authorizationId)
-      if (grant === undefined) {
-        throw new Error('Host Supervisor grant is not materialized')
-      }
+  revokeHostSupervisorPairing(
+    deviceId: string,
+    pairingRootAuthorizationId: string,
+  ): boolean {
+    return this.runInTransaction(() => {
+      const inserted = this.#statement(
+        `INSERT INTO host_supervisor_pairing_revocations (
+           device_id, pairing_root_authorization_id
+         ) VALUES (?, ?) ON CONFLICT DO NOTHING`,
+      ).run(deviceId, pairingRootAuthorizationId).changes
+      if (inserted === 0) return false
       this.#statement(
-        `INSERT INTO host_supervisor_control (
-           authorization_id, host_id, device_id, approved_at
-         ) VALUES (?, ?, ?, ?)
-         ON CONFLICT(authorization_id) DO NOTHING`,
-      ).run(
-        grant.payload.authorizationId,
-        grant.payload.hostId,
-        grant.payload.deviceId,
-        timestamp,
-      )
+        'UPDATE host_supervisor_grants SET runtime_enabled=0 WHERE device_id=?',
+      ).run(deviceId)
+      return true
     })
   }
 
-  hasHostSupervisorControl(authorizationId: string): boolean {
-    const row = this.#statement(
-      'SELECT authorization_id FROM host_supervisor_control WHERE authorization_id = ?',
-    ).get(authorizationId) as { readonly authorization_id?: string } | undefined
-    return row?.authorization_id === authorizationId
+  isHostSupervisorPairingRevoked(
+    deviceId: string,
+    pairingRootAuthorizationId: string,
+  ): boolean {
+    return (
+      this.#statement(
+        `SELECT 1 FROM host_supervisor_pairing_revocations
+       WHERE device_id=? AND pairing_root_authorization_id=?`,
+      ).get(deviceId, pairingRootAuthorizationId) !== undefined
+    )
   }
 
   updateOnboardingProgress(
@@ -3283,6 +3282,25 @@ export class ConversationStore {
           }
         : {}),
     }
+  }
+
+  listRecentSupervisorConversations(
+    machineId: MachineId,
+    limit: number,
+  ): readonly SupervisorConversationDirectoryItem[] {
+    const rows = this.#statement(
+      `SELECT conversation_id, project_id, machine_id, title, title_source,
+              origin, provider, status, archived_at, provider_thread_id,
+              provider_session_materialized, created_at, updated_at, last_activity_at
+         FROM conversations
+        WHERE machine_id = ? AND status <> 'creating'
+        ORDER BY last_activity_at DESC, conversation_id ASC
+        LIMIT ?`,
+    ).all(
+      MachineIdSchema.parse(machineId),
+      parseSupervisorDirectoryLimit(limit),
+    ) as unknown as SupervisorConversationDirectoryRow[]
+    return rows.map(supervisorConversationDirectoryItemFromRow)
   }
 
   getSupervisorConversation(

@@ -135,6 +135,7 @@ filesystem state.
 | Variable                                                 | Required | Default       | Meaning                                                                                  |
 | -------------------------------------------------------- | -------- | ------------- | ---------------------------------------------------------------------------------------- |
 | `CODETETHER_CONTROL_PLANE_DATABASE_URL`                  | yes      | none          | PostgreSQL connection URL                                                                |
+| `CODETETHER_CONTROL_PLANE_PAIRING_HMAC_KEY`              | no       | none          | Server-only 32 random bytes encoded as 43 unpadded base64url characters. Enables pairing codes. |
 | `CODETETHER_CONTROL_PLANE_ENVIRONMENT`                   | no       | `development` | `development`, `test`, or `production`                                                   |
 | `CODETETHER_CONTROL_PLANE_LISTEN_HOST`                   | no       | `127.0.0.1`   | loopback address only in 9A.2                                                            |
 | `CODETETHER_CONTROL_PLANE_LISTEN_PORT`                   | no       | `4320`        | health/readiness port                                                                    |
@@ -169,6 +170,12 @@ ownership foreign keys use `ON DELETE RESTRICT`; no Cloud deletion cascades into
 another authority. The service performs exact ownership/generation checks in
 addition to composite database constraints. Security events are append-only at
 the database boundary and contain no unrestricted JSON payload.
+
+Migration 0009 widens the authorization scope CHECK and adds
+`control_plane.host_pairing_sessions`. Completed session records track the
+pairing lineage, last use, and supersession. Use the same server-only pairing
+HMAC key across all Control Plane instances so an active code can be redeemed
+by any instance.
 
 ```powershell
 pnpm --filter @codetether/control-plane migrate

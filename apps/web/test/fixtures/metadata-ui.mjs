@@ -174,6 +174,17 @@ export function metadataUiFixture({
         useHostConnectionState: () => state.connection,
       },
     ],
+    [
+      '../../runtime/account/use-account-session',
+      { useAccountSession: () => ({ query: result(null) }) },
+    ],
+    [
+      '../../runtime/account/account-config.js',
+      { controlPlaneBaseUrl: 'https://control-plane.test' },
+    ],
+    ['../../runtime/account/pairing-client.js', {}],
+    ['../../runtime/account/supabase-account.js', {}],
+    ['../../runtime/native/native-capabilities.js', {}],
   ])
   return {
     state,

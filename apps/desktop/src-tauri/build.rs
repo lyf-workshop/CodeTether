@@ -22,6 +22,25 @@ fn main() {
     assert!(!build_id.is_empty(), "Desktop build ID must not be empty");
     println!("cargo:rustc-env=CODETETHER_BUILD_ID={build_id}");
 
+    println!("cargo:rerun-if-env-changed=VITE_CODETETHER_CONTROL_PLANE_URL");
+    let relay_variables = [
+        "CODETETHER_SUPERVISOR_RELAY_ENDPOINT",
+        "CODETETHER_SUPERVISOR_RELAY_ID",
+        "CODETETHER_SUPERVISOR_RELAY_FINGERPRINT",
+    ];
+    let relay_overrides = relay_variables.map(|name| {
+        println!("cargo:rerun-if-env-changed={name}");
+        env::var_os(name)
+    });
+    assert!(
+        relay_overrides.iter().all(Option::is_none)
+            || relay_overrides.iter().all(|value| {
+                value.as_ref().and_then(|value| value.to_str())
+                    .is_some_and(|value| !value.trim().is_empty())
+            }),
+        "Configure all three build-time Relay settings together"
+    );
+
     if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
         let swift_source = manifest_dir.join("src/macos_secure_enclave_bridge.swift");
         println!("cargo:rerun-if-changed={}", swift_source.display());
@@ -81,6 +100,8 @@ fn main() {
             "product_device_key_sign",
             "product_device_key_destroy",
             "product_device_key_bind",
+            "product_device_registration_metadata",
+            "open_pairing_diagnostic",
             "host_identity_key_create",
             "host_identity_key_public",
             "host_identity_key_sign",

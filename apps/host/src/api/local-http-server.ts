@@ -98,8 +98,10 @@ import {
   UpdateOnboardingResponseSchema,
 } from '@codetether/protocol'
 import {
+  signedHostSupervisorDeviceRevocationSchema,
   signedSupervisorGrantSchema,
   signedSupervisorTransportSchema,
+  supervisorB1OperationSchema,
   supervisorPublicJwkSchema,
 } from '@codetether/supervisor-transport'
 import { z } from 'zod'
@@ -158,13 +160,6 @@ const supervisorAuthenticationSchema = z
   .object({
     accessToken: z.string().min(1).max(16_384),
     deviceProof: z.string().min(1).max(16_384),
-  })
-  .strict()
-const supervisorControlApprovalSchema = z
-  .object({
-    authorizationId: z
-      .string()
-      .regex(/^hauth_[A-Za-z0-9][A-Za-z0-9_-]{15,95}$/u),
   })
   .strict()
 const supervisorDirectoryQuerySchema = z
@@ -604,18 +599,49 @@ export class LocalHttpServer {
       }
       if (
         request.method === 'POST' &&
-        url.pathname === '/api/v1/supervisor/control/approve' &&
+        url.pathname === '/api/v1/supervisor/devices/disable' &&
         this.#supervisorTransport !== undefined
       ) {
         const body = await this.#http.readValidatedBody(
           request,
-          supervisorControlApprovalSchema,
+          signedHostSupervisorDeviceRevocationSchema,
         )
-        this.#supervisorTransport.approveControl(body.authorizationId)
+        await this.#supervisorTransport.disableDevice(body)
         this.#http.writeJson(
           response,
           200,
-          { status: 'approved', authorizationId: body.authorizationId },
+          { status: 'disabled' },
+          context.allowedOrigin,
+        )
+        return
+      }
+
+      const supervisorOperationRoute = this.#http.matchPath(
+        url.pathname,
+        /^\/api\/v1\/remote-supervisor\/sessions\/([^/]+)\/operations$/u,
+      )
+      if (
+        request.method === 'POST' &&
+        supervisorOperationRoute !== undefined &&
+        this.#supervisorTransport !== undefined
+      ) {
+        const body = await this.#http.readValidatedBody(
+          request,
+          supervisorB1OperationSchema,
+        )
+        if ('actionId' in body)
+          context.actionId = ActionIdSchema.parse(body.actionId)
+        const result = await this.#supervisorTransport.executeRemoteB1Operation(
+          supervisorOperationRoute[0]!,
+          body,
+        )
+        this.#http.writeJson(
+          response,
+          body.operation === 'approval.resolve' ||
+            body.operation === 'turn.interrupt'
+            ? 202
+            : 200,
+          result,
           context.allowedOrigin,
         )
         return

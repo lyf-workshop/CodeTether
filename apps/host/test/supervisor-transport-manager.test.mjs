@@ -372,6 +372,7 @@ test('forced-remote manager reads Host state without using local HTTP product da
           deviceId,
           deviceKeyGeneration: 1,
           authorizationId,
+          scope: 'supervisor_read',
           authorizationExpiresAt: new Date((now + 3_600) * 1_000).toISOString(),
         }),
         { status: 200, headers: { 'content-type': 'application/json' } },
@@ -604,12 +605,14 @@ test('forced Relay HTTP admission stays single-session while Direct fallback rem
     },
   })
   let localHttp
-  await waitFor(() =>
-    relayLogs.some(
-      (entry) =>
-        entry.event === 'supervisor.connection.authenticated' &&
-        entry.role === 'host',
-    ),
+  await waitFor(
+    () =>
+      manager.presence().relay !== null &&
+      relayLogs.some(
+        (entry) =>
+          entry.event === 'supervisor.connection.authenticated' &&
+          entry.role === 'host',
+      ),
   )
   const originalFetch = globalThis.fetch
   try {
@@ -676,6 +679,7 @@ test('forced Relay HTTP admission stays single-session while Direct fallback rem
           deviceId,
           deviceKeyGeneration: 1,
           authorizationId,
+          scope: 'supervisor_read',
           authorizationExpiresAt: new Date((now + 3_600) * 1_000).toISOString(),
         }),
         { status: 200, headers: { 'content-type': 'application/json' } },

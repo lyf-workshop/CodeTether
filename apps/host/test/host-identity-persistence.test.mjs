@@ -55,7 +55,7 @@ test('durable Host identity remains distinct from Machine identity across restar
   let restarted
   try {
     first = ConversationStore.open({ databasePath })
-    assert.equal(currentSchemaVersion, 23)
+    assert.equal(currentSchemaVersion, 24)
     assert.equal(first.getHostIdentity(), undefined)
     const machineId = first.listMachines()[0].machineId
     assert.notEqual(identity.hostId, machineId)
@@ -64,18 +64,25 @@ test('durable Host identity remains distinct from Machine identity across restar
       first.storeHostSupervisorGrant(grant, '2026-09-22T12:00:00.000Z'),
       grant,
     )
+    const renewal = {
+      ...grant,
+      payload: {
+        ...grant.payload,
+        authorizationId: 'hauth_fedcba9876543210fedcba9876543210',
+        authorizationGeneration: 2,
+        authorizationSerial: '2',
+      },
+    }
+    first.storeHostSupervisorGrant(renewal, '2026-09-22T12:00:01.000Z')
+    assert.equal(first.listEnabledHostSupervisorGrants().length, 2)
     assert.equal(
-      first.hasHostSupervisorControl(grant.payload.authorizationId),
-      false,
-    )
-    first.approveHostSupervisorControl(
-      grant.payload.authorizationId,
-      '2026-09-22T12:00:01.000Z',
-    )
-    assert.equal(
-      first.hasHostSupervisorControl(grant.payload.authorizationId),
+      first.revokeHostSupervisorPairing(
+        grant.payload.deviceId,
+        grant.payload.authorizationId,
+      ),
       true,
     )
+    assert.deepEqual(first.listEnabledHostSupervisorGrants(), [])
     first.close()
     first = undefined
 
@@ -86,9 +93,23 @@ test('durable Host identity remains distinct from Machine identity across restar
       restarted.getHostSupervisorGrant(grant.payload.authorizationId),
       grant,
     )
+    assert.deepEqual(
+      restarted.getHostSupervisorGrant(renewal.payload.authorizationId),
+      renewal,
+    )
     assert.equal(
-      restarted.hasHostSupervisorControl(grant.payload.authorizationId),
+      restarted.isHostSupervisorPairingRevoked(
+        grant.payload.deviceId,
+        grant.payload.authorizationId,
+      ),
       true,
+    )
+    assert.equal(
+      restarted.isHostSupervisorPairingRevoked(
+        grant.payload.deviceId,
+        renewal.payload.authorizationId,
+      ),
+      false,
     )
     assert.throws(
       () =>

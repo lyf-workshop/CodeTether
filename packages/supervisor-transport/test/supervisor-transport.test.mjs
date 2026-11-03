@@ -212,13 +212,43 @@ test('read-only Supervisor sessions cannot control Conversations', async () => {
         error instanceof SupervisorClientError &&
         error.code === 'operation_not_allowed',
     )
+    const actionId = `act_${'j'.repeat(32)}`
+    const conversation = {
+      machineId: `machine_${'m'.repeat(32)}`,
+      projectId: `proj_${'p'.repeat(32)}`,
+      conversationId: `conv_${'c'.repeat(32)}`,
+    }
+    for (const request of [
+      { operation: 'conversation.archive', ...conversation, actionId },
+      {
+        operation: 'attention.resolve',
+        attentionId: `attn_${'a'.repeat(32)}`,
+        actionId,
+      },
+      {
+        operation: 'approval.resolve',
+        approvalId: `approval_${'a'.repeat(32)}`,
+        decision: 'accept',
+        actionId,
+      },
+      {
+        operation: 'turn.interrupt',
+        ...conversation,
+        turnId: `turn_${'a'.repeat(32)}`,
+        actionId,
+      },
+    ]) {
+      await assert.rejects(session.executeB1Operation(request), {
+        code: 'operation_not_allowed',
+      })
+    }
     session.close()
   } finally {
     await fixture.server.close()
   }
 })
 
-test('Host-local control approval admits only the fixed Conversation control union', async () => {
+test('matching signed grant and admission scope permit the fixed control union', async () => {
   const fixture = await createFixture({ controlEnabled: true })
   try {
     const pending = await connectSupervisorDirect(fixture.clientOptions)
@@ -249,6 +279,24 @@ test('Host-local control approval admits only the fixed Conversation control uni
     session.close()
   } finally {
     await fixture.server.close()
+  }
+})
+
+test('a disagreement between signed scope and Control Plane scope fails closed', async () => {
+  for (const controlEnabled of [false, true]) {
+    const fixture = await createFixture({
+      controlEnabled,
+      admittedScope: controlEnabled ? 'supervisor_read' : 'supervisor_control',
+    })
+    try {
+      const pending = await connectSupervisorDirect(fixture.clientOptions)
+      await assert.rejects(
+        pending.authenticate({ accessToken: 'token', deviceProof: 'proof' }),
+        { code: 'authentication_failed' },
+      )
+    } finally {
+      await fixture.server.close()
+    }
   }
 })
 
@@ -288,6 +336,7 @@ test('one Host presence serves two independently scoped ProductDevices', async (
     deviceId: macDeviceId,
     deviceFingerprint: `sha256:${'E'.repeat(43)}`,
     authorizationSerial: '2',
+    scope: 'supervisor_read',
   }
   const macGrant = {
     payload: macGrantPayload,
@@ -393,6 +442,7 @@ test('a restarted Supervisor restores both exact grants under one renewed Host p
       deviceId: challenge.deviceId,
       deviceKeyGeneration: challenge.deviceKeyGeneration,
       authorizationId: challenge.authorizationId,
+      scope: 'supervisor_read',
       authorizationExpiresAt: new Date(
         fixture.now.getTime() + 60 * 60_000,
       ).toISOString(),
@@ -475,6 +525,7 @@ async function createFixture(options = {}) {
         deviceId: challenge.deviceId,
         deviceKeyGeneration: challenge.deviceKeyGeneration,
         authorizationId: challenge.authorizationId,
+        scope: options.admittedScope ?? scope(challenge.authorizationId),
         authorizationExpiresAt: new Date(
           now.getTime() + 60 * 60_000,
         ).toISOString(),
@@ -517,9 +568,7 @@ async function createFixture(options = {}) {
         operation: 'conversation.create',
       }),
     },
-    authorizeControl: async (authorizationId) =>
-      options.controlEnabled === true ||
-      options.controlAuthorizationId === authorizationId,
+    operations: (request) => ({ operation: request.operation }),
   })
   const address = await server.start()
   const grantPayload = {
@@ -535,7 +584,7 @@ async function createFixture(options = {}) {
     deviceKeyGeneration: 1,
     userId: ids.userId,
     spaceId: ids.spaceId,
-    scope: 'supervisor_read',
+    scope: scope(ids.authorizationId),
     authorizationSerial: '1',
     authorizationGeneration: 1,
     issuedAt: Math.floor(now.getTime() / 1_000),
@@ -591,6 +640,13 @@ async function createFixture(options = {}) {
       descriptor,
       now: () => now,
     },
+  }
+
+  function scope(authorizationId) {
+    return options.controlEnabled === true ||
+      options.controlAuthorizationId === authorizationId
+      ? 'supervisor_control'
+      : 'supervisor_read'
   }
 }
 

@@ -18,6 +18,9 @@ import {
   validateSupervisorConnection,
   verifySupervisorGrant,
   verifySupervisorHostPresence,
+  verifyHostSupervisorDeviceRevocation,
+  type SignedHostSupervisorDeviceRevocation,
+  type SupervisorB1Operation,
   type SignedSupervisorHostPresence,
   type SupervisorHostPresencePayload,
   type ConnectedSupervisorSession,
@@ -35,6 +38,7 @@ import {
 } from '@codetether/protocol'
 
 import type { HostService } from './host-service.js'
+import { executeSupervisorB1Operation } from './supervisor-operations.js'
 import type { ConversationStore } from '../persistence/index.js'
 import {
   HostPresenceDiagnosticError,
@@ -158,6 +162,13 @@ export class SupervisorTransportManager {
       port: options.port ?? 4318,
       authorize: async (input) => {
         const resource = `/v1/hosts/${input.challenge.hostId}/supervisor-admission`
+        const trustedOrigin = options.controlPlaneOrigin
+        if (
+          trustedOrigin !== undefined &&
+          new URL(trustedOrigin).origin !== input.controlPlaneOrigin
+        ) {
+          throw new Error('authentication_failed')
+        }
         let response: Response
         try {
           response = await fetch(`${input.controlPlaneOrigin}${resource}`, {
@@ -169,6 +180,7 @@ export class SupervisorTransportManager {
             },
             body: input.challengeBody,
             signal: AbortSignal.timeout(10_000),
+            redirect: 'error',
           })
         } catch {
           throw new Error('control_plane_unavailable')
@@ -190,6 +202,27 @@ export class SupervisorTransportManager {
           }
           throw new Error('authentication_failed')
         }
+        const scope = stringField(body, 'scope')
+        if (scope !== 'supervisor_read' && scope !== 'supervisor_control') {
+          throw new Error('authentication_failed')
+        }
+        if (scope === 'supervisor_control') {
+          // Never grant control using an origin supplied by a loopback caller.
+          if (trustedOrigin === undefined)
+            throw new Error('authentication_failed')
+          const root = stringField(body, 'pairingRootAuthorizationId')
+          if (!/^hauth_[A-Za-z0-9][A-Za-z0-9_-]{15,95}$/u.test(root)) {
+            throw new Error('authentication_failed')
+          }
+          if (
+            options.persistence.isHostSupervisorPairingRevoked(
+              input.challenge.deviceId,
+              root,
+            )
+          ) {
+            throw new Error('authorization_revoked')
+          }
+        }
         return {
           hostId: stringField(body, 'hostId'),
           hostIdentityGeneration: positiveIntegerField(
@@ -203,6 +236,7 @@ export class SupervisorTransportManager {
           ),
           authorizationId: stringField(body, 'authorizationId'),
           authorizationExpiresAt: stringField(body, 'authorizationExpiresAt'),
+          scope,
         }
       },
       reads: {
@@ -293,9 +327,8 @@ export class SupervisorTransportManager {
           }
         },
       },
-      authorizeControl: (authorizationId) =>
-        typeof options.persistence.hasHostSupervisorControl === 'function' &&
-        options.persistence.hasHostSupervisorControl(authorizationId),
+      operations: (request) =>
+        executeSupervisorB1Operation(options.service, request),
       control: {
         startConversationTurn: async (request) => {
           await options.service.getSupervisorConversation(
@@ -696,13 +729,25 @@ export class SupervisorTransportManager {
     }
     const grant = signedSupervisorGrantSchema.parse(input.grant)
     const descriptor = signedSupervisorTransportSchema.parse(input.descriptor)
+    if (
+      grant.payload.hostId !== identity.hostId ||
+      grant.payload.hostFingerprint !== identity.fingerprint ||
+      grant.payload.hostIdentityGeneration !== identity.identityGeneration
+    ) {
+      throw new Error('Host grant identity mismatch')
+    }
     this.#assertRelayDescriptor(descriptor)
-    this.#persistence.storeHostSupervisorGrant(
-      grant,
-      TimestampSchema.parse(new Date().toISOString()),
-    )
     await this.#server.activate({ hostPublicJwk: publicJwk, grant, descriptor })
-    this.#persistence.enableHostSupervisorGrant(grant.payload.authorizationId)
+    try {
+      this.#persistence.storeHostSupervisorGrant(
+        grant,
+        TimestampSchema.parse(new Date().toISOString()),
+      )
+      this.#persistence.enableHostSupervisorGrant(grant.payload.authorizationId)
+    } catch (error) {
+      this.#server.deactivate(grant.payload.authorizationId)
+      throw error
+    }
     this.#startRelayPresence()
   }
 
@@ -1041,11 +1086,52 @@ export class SupervisorTransportManager {
     )
   }
 
-  approveControl(authorizationId: string): void {
-    this.#persistence.approveHostSupervisorControl(
-      authorizationId,
-      TimestampSchema.parse(new Date().toISOString()),
+  async executeRemoteB1Operation(
+    sessionId: string,
+    request: SupervisorB1Operation,
+  ): Promise<unknown> {
+    return await this.#withRemoteSession(sessionId, (session) =>
+      session.executeB1Operation(request),
     )
+  }
+
+  async disableDevice(
+    value: SignedHostSupervisorDeviceRevocation,
+  ): Promise<void> {
+    const identity = this.#service.getHostIdentity()
+    const { payload } = value
+    const config = this.#persistence.getHostPresenceConfiguration()
+    const now = Math.floor(Date.now() / 1_000)
+    if (
+      identity === undefined ||
+      payload.hostId !== identity.hostId ||
+      payload.hostFingerprint !== identity.fingerprint ||
+      payload.hostIdentityGeneration !== identity.identityGeneration ||
+      (config !== undefined && payload.spaceId !== config.spaceId) ||
+      payload.iat > now ||
+      payload.exp <= now
+    ) {
+      throw new SupervisorClientError('operation_not_allowed')
+    }
+    try {
+      await verifyHostSupervisorDeviceRevocation(
+        value,
+        supervisorPublicJwkSchema.parse(JSON.parse(identity.publicJwk)),
+      )
+    } catch {
+      throw new SupervisorClientError('operation_not_allowed')
+    }
+    if (payload.exp * 1_000 <= Date.now()) {
+      throw new SupervisorClientError('operation_not_allowed')
+    }
+    if (
+      this.#persistence.revokeHostSupervisorPairing(
+        payload.targetDeviceId,
+        payload.pairingRootAuthorizationId,
+      )
+    ) {
+      this.#server.deactivateDevice(payload.targetDeviceId)
+    }
   }
 
   async #withRemoteSession(

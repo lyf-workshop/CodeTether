@@ -20,6 +20,7 @@ import {
   HostIdentityFailure,
   type HostIdentityService,
 } from './services/host-identity-service.js'
+import type { HostPairingService } from './services/host-pairing-service.js'
 import { ZodError } from 'zod'
 
 export interface ControlPlaneServerOptions {
@@ -30,6 +31,7 @@ export interface ControlPlaneServerOptions {
   readonly authenticatedAccountService?: AuthenticatedAccountService
   readonly productDeviceAuthenticationService?: ProductDeviceAuthenticationService
   readonly hostIdentityService?: HostIdentityService
+  readonly hostPairingService?: HostPairingService
   readonly allowedOrigins?: readonly string[]
 }
 
@@ -136,10 +138,12 @@ function productDeviceProof(request: IncomingMessage): string | undefined {
 }
 
 function hostIdentityFailureStatus(error: HostIdentityFailure): number {
+  if (error.code === 'host_pairing_unavailable') return 503
   if (
     error.code === 'host_claim_not_found' ||
     error.code === 'host_device_authorization_not_found' ||
-    error.code === 'host_access_request_not_found'
+    error.code === 'host_access_request_not_found' ||
+    error.code === 'host_pairing_session_not_found'
   )
     return 404
   if (
@@ -151,7 +155,10 @@ function hostIdentityFailureStatus(error: HostIdentityFailure): number {
     error.code === 'host_device_authorization_device_unavailable' ||
     error.code === 'host_access_request_owner_mismatch' ||
     error.code === 'host_access_request_device_unavailable' ||
-    error.code === 'host_access_request_host_mismatch'
+    error.code === 'host_access_request_host_mismatch' ||
+    error.code === 'host_pairing_owner_mismatch' ||
+    error.code === 'host_pairing_device_unavailable' ||
+    error.code === 'host_pairing_signature_invalid'
   ) {
     return 403
   }
@@ -165,7 +172,10 @@ function hostIdentityFailureStatus(error: HostIdentityFailure): number {
     error.code === 'host_access_request_conflict' ||
     error.code === 'host_access_request_not_pending' ||
     error.code === 'host_access_request_payload_mismatch' ||
-    error.code === 'host_access_request_challenge_consumed'
+    error.code === 'host_access_request_challenge_consumed' ||
+    error.code === 'host_pairing_session_conflict' ||
+    error.code === 'host_pairing_renewal_ineligible' ||
+    error.code === 'host_pairing_capacity'
   ) {
     return 409
   }
@@ -179,6 +189,57 @@ function hostIdentityFailureStatus(error: HostIdentityFailure): number {
   }
   if (error.code === 'host_space_not_permitted') return 403
   return error.code === 'host_identity_unavailable' ? 503 : 400
+}
+
+type PairingRoute =
+  | { action: 'redeem' }
+  | { action: 'read'; subjectId: string }
+  | { action: 'create' | 'list'; hostId: string }
+  | {
+      action:
+        'status' | 'cancel' | 'finish' | 'renew' | 'renew_finish' | 'revoke'
+      hostId: string
+      subjectId: string
+    }
+
+function matchPairingRoute(path: string): PairingRoute | null {
+  if (path === '/v1/pairing-sessions/redeem') return { action: 'redeem' }
+  const claim =
+    /^\/v1\/pairing-sessions\/(enroll_[A-Za-z0-9][A-Za-z0-9_-]{15,95})$/.exec(
+      path,
+    )
+  if (claim?.[1]) return { action: 'read', subjectId: claim[1] }
+  const owner =
+    /^\/v1\/hosts\/(host_[A-Za-z0-9][A-Za-z0-9_-]{15,95})\/(.+)$/.exec(path)
+  if (!owner?.[1] || !owner[2]) return null
+  const [, hostId, tail] = owner
+  if (tail === 'pairing-sessions') return { action: 'create', hostId }
+  if (tail === 'paired-devices') return { action: 'list', hostId }
+  const session =
+    /^pairing-sessions\/(enroll_[A-Za-z0-9][A-Za-z0-9_-]{15,95})\/(status|cancel|finish)$/.exec(
+      tail,
+    )
+  if (
+    session?.[1] &&
+    (session[2] === 'status' ||
+      session[2] === 'cancel' ||
+      session[2] === 'finish')
+  ) {
+    return { action: session[2], hostId, subjectId: session[1] }
+  }
+  const renewal =
+    /^paired-authorizations\/(hauth_[A-Za-z0-9][A-Za-z0-9_-]{15,95})\/renew(?:\/(finish))?$/.exec(
+      tail,
+    )
+  if (renewal?.[1])
+    return {
+      action: renewal[2] ? 'renew_finish' : 'renew',
+      hostId,
+      subjectId: renewal[1],
+    }
+  const revoke =
+    /^paired-devices\/(dev_[A-Za-z0-9][A-Za-z0-9_-]{15,95})\/revoke$/.exec(tail)
+  return revoke?.[1] ? { action: 'revoke', hostId, subjectId: revoke[1] } : null
 }
 
 export async function startControlPlaneServer(
@@ -698,6 +759,151 @@ export async function startControlPlaneServer(
           return
         }
         sendJson(response, 500, { status: 'internal_error' }, false)
+      }
+      return
+    }
+
+    const pairingRoute = matchPairingRoute(pathname)
+    if (pairingRoute) {
+      const expectsGet =
+        pairingRoute.action === 'read' || pairingRoute.action === 'list'
+      if (method !== (expectsGet ? 'GET' : 'POST')) {
+        sendJson(response, 405, { status: 'method_not_allowed' }, false)
+        return
+      }
+      if (requestUrl.search) {
+        sendJson(response, 400, { status: 'invalid_request' }, false)
+        return
+      }
+      const service = options.hostPairingService
+      if (
+        !options.humanAuthVerifier ||
+        !options.authenticatedAccountService ||
+        !options.productDeviceAuthenticationService ||
+        !service
+      ) {
+        sendJson(response, 503, { status: 'auth_unavailable' }, false)
+        return
+      }
+      try {
+        const body = await readBoundedBody(request, 16_384)
+        if (expectsGet && body.byteLength !== 0)
+          throw new InvalidRequestBodyError('This route requires an empty body')
+        const input = expectsGet ? undefined : parseJsonObject(body)
+        const human =
+          await options.authenticatedAccountService.verifyAndResolveRequestContext(
+            options.humanAuthVerifier,
+            bearerToken(request.headers.authorization),
+          )
+        const device =
+          await options.productDeviceAuthenticationService.authenticateProductDeviceRequest(
+            human,
+            {
+              compactProof: productDeviceProof(request),
+              method,
+              rawResource: request.url ?? pathname,
+              body,
+            },
+          )
+        let result: object
+        switch (pairingRoute.action) {
+          case 'create':
+            result = await service.create(
+              human,
+              device,
+              pairingRoute.hostId,
+              input,
+            )
+            break
+          case 'redeem':
+            result = await service.redeem(human, device, input)
+            break
+          case 'read':
+            result = await service.readClaim(
+              human,
+              device,
+              pairingRoute.subjectId,
+            )
+            break
+          case 'status':
+          case 'cancel':
+            result = await service.manageSession(
+              human,
+              device,
+              pairingRoute.hostId,
+              pairingRoute.subjectId,
+              pairingRoute.action,
+              input,
+            )
+            break
+          case 'finish':
+          case 'renew_finish':
+            result = await service.finish(
+              human,
+              device,
+              pairingRoute.hostId,
+              pairingRoute.subjectId,
+              pairingRoute.action === 'finish' ? 'pair' : 'renew',
+              input,
+            )
+            break
+          case 'renew':
+            result = await service.prepareRenewal(
+              human,
+              device,
+              pairingRoute.hostId,
+              pairingRoute.subjectId,
+              input,
+            )
+            break
+          case 'list':
+            result = await service.listDevices(
+              human,
+              device,
+              pairingRoute.hostId,
+            )
+            break
+          case 'revoke':
+            result = await service.revoke(
+              human,
+              device,
+              pairingRoute.hostId,
+              pairingRoute.subjectId,
+              input,
+            )
+            break
+        }
+        sendJson(response, 200, result, false)
+      } catch (error) {
+        if (
+          error instanceof InvalidRequestBodyError ||
+          error instanceof ZodError
+        ) {
+          sendJson(response, 400, { status: 'invalid_request' }, false)
+        } else if (error instanceof HumanAuthFailure) {
+          sendJson(
+            response,
+            authFailureStatus(error),
+            { status: 'authentication_failed', code: error.code },
+            false,
+          )
+        } else if (error instanceof ProductDeviceAuthFailure) {
+          sendJson(
+            response,
+            deviceAuthFailureStatus(error),
+            { status: 'device_authentication_failed', code: error.code },
+            false,
+          )
+        } else if (error instanceof HostIdentityFailure) {
+          sendJson(
+            response,
+            hostIdentityFailureStatus(error),
+            { status: 'host_identity_failed', code: error.code },
+            false,
+          )
+        } else {
+          sendJson(response, 500, { status: 'internal_error' }, false)
+        }
       }
       return
     }

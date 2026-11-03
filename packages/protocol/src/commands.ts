@@ -538,6 +538,12 @@ export const AttentionListResponseSchema = z
   })
 export type AttentionListResponse = z.infer<typeof AttentionListResponseSchema>
 
+export const SupervisorAttentionListResponseSchema =
+  AttentionListResponseSchema.safeExtend({ truncated: z.boolean() })
+export type SupervisorAttentionListResponse = z.infer<
+  typeof SupervisorAttentionListResponseSchema
+>
+
 export const StartTurnRequestSchema = z
   .object({
     actionId: ActionIdSchema,

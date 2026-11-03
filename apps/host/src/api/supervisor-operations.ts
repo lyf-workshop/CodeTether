@@ -9,13 +9,14 @@ import {
   TurnIdSchema,
   protocolVersion,
   type ConversationFileChangeRecord,
+  type SupervisorAttentionListResponse,
 } from '@codetether/protocol'
 import type { SupervisorB1Operation } from '@codetether/supervisor-transport'
 
-import { HostServiceError, type HostService } from './host-service.js'
+import type { HostService } from './host-service.js'
 
-// Supervisor uses the same 16 KiB framing as Machine transport. Leave space
-// for the response envelope and summaries around these variable-sized rows.
+// Supervisor frames allow 256 KiB. Keep variable-sized rows within a tighter
+// budget and leave space for the response envelope and summaries.
 const maximumRowsBytes = 12 * 1024
 
 function rowBytes(value: unknown): number {
@@ -40,31 +41,29 @@ function boundedChanges(
   const changes: ConversationFileChangeRecord[] = []
   let remaining = maximumRowsBytes
   let omittedDiffs = 0
+  let omittedChanges = 0
+  let nextOffset = offset
   for (const change of rows.slice(offset)) {
     const { diff, ...metadata } = change
+    const changeBytes = rowBytes(change)
     const projected =
-      diff !== undefined && rowBytes(change) > maximumRowsBytes
-        ? metadata
-        : change
-    const bytes = rowBytes(projected)
-    if (bytes > remaining) {
-      if (changes.length === 0) {
-        throw new HostServiceError(
-          'runtime_unavailable',
-          'Change is too large for remote transport',
-          503,
-        )
-      }
-      break
+      diff !== undefined && changeBytes > maximumRowsBytes ? metadata : change
+    const bytes = projected === change ? changeBytes : rowBytes(projected)
+    if (bytes > maximumRowsBytes) {
+      omittedChanges += 1
+      nextOffset += 1
+      continue
     }
+    if (bytes > remaining) break
     if (projected !== change) omittedDiffs += 1
     changes.push(projected)
     remaining -= bytes
+    nextOffset += 1
   }
-  const nextOffset = offset + changes.length
   return {
     changes,
     omittedDiffs,
+    omittedChanges,
     ...(nextOffset < rows.length ? { nextOffset } : {}),
   }
 }
@@ -95,7 +94,12 @@ export function executeSupervisorB1Operation(
           limit: request.limit,
         }),
       )
-      return { ...attention, items: boundedRows(attention.items) }
+      const items = boundedRows(attention.items)
+      return {
+        ...attention,
+        items,
+        truncated: items.length < attention.items.length,
+      } satisfies SupervisorAttentionListResponse
     }
     case 'attention.resolve':
       return service.resolveAttention(

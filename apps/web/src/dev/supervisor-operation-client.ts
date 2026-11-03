@@ -1,10 +1,10 @@
 import {
-  AttentionListResponseSchema,
   ConversationFileChangeRecordSchema,
   InterruptTurnResponseSchema,
   ListMachinesResponseSchema,
   ResolveApprovalResponseSchema,
   ResolveAttentionResponseSchema,
+  SupervisorAttentionListResponseSchema,
   type ActionId,
 } from '@codetether/protocol'
 
@@ -111,15 +111,18 @@ export async function inspectDiagnosticOperations(
   async function measure<T>(
     operation: ReadOperation,
     parse: (value: unknown) => T,
+    describe?: (value: T) => string | undefined,
   ): Promise<T | undefined> {
     const started = performance.now()
     try {
       const value = parse(await postOperation(session, operation, signal))
+      const detail = describe?.(value)
       measurements.push({
         operation: operation.operation,
         status: '成功',
         transport,
         elapsedMs: elapsed(started),
+        ...(detail === undefined ? {} : { detail }),
       })
       return value
     } catch (error) {
@@ -172,13 +175,17 @@ export async function inspectDiagnosticOperations(
       detail: 'no_machine',
     })
 
-  const attention = await measure(
+  const attentionResponse = await measure(
     { operation: 'attention.list', status: 'open', limit: 30 },
     (value) => {
-      const result = AttentionListResponseSchema.safeParse(value)
+      const result = SupervisorAttentionListResponseSchema.safeParse(value)
       if (!result.success) invalid()
-      return result.data.items.filter((item) => item.status === 'open')
+      return result.data
     },
+    (response) => (response.truncated ? '仅返回部分待处理事项' : undefined),
+  )
+  const attention = attentionResponse?.items.filter(
+    (item) => item.status === 'open',
   )
   const first = recent?.[0]
   if (first === undefined) {

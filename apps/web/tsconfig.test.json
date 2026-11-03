@@ -21,6 +21,7 @@
   "include": [
     "src/dev/supervisor-check-model.ts",
     "src/dev/supervisor-check-client.ts",
+    "src/dev/supervisor-operation-client.ts",
     "src/components/app-shell/command-palette-model.ts",
     "src/components/app-shell/command-palette-cache.ts",
     "src/components/inbox/inbox-context.ts",

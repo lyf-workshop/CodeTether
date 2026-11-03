@@ -1,5 +1,5 @@
 /* CodeTether 平板 · 视觉 Token 和布局。iPadOS 式：分组列表、大标题、半透明导航栏、圆角表单。
-   强调色取自应用图标的紫色。点击区域按 Android 不小于 48dp。 */
+   颜色和电脑一致：墨色单色，蓝色只用于链接和运行中，紫色只在应用图标上。点击区域按 Android 不小于 48dp。 */
 :root, [data-theme="light"] {
   color-scheme: light;
   --bg: #f2f2f7;            /* 分组背景 */
@@ -12,11 +12,11 @@
   --text: #1c1c1e;
   --text-2: rgb(60 60 67 / .78);
   --text-3: rgb(60 60 67 / .5);
-  --accent: #7146f0;
-  --accent-text: #5b33d6;
-  --accent-soft: rgb(113 70 240 / .1);
+  --accent: #1c1c1e;        /* 墨色：主按钮、选中、发送，和电脑 --ct-ink 一致 */
   --on-accent: #ffffff;
-  --run: #0a7cff;  --run-soft: rgb(10 124 255 / .1);  --run-text: #0060d1;
+  --sel: rgb(118 118 128 / .16);    /* 侧栏选中行，灰底 */
+  --link: #135e9c;          /* 链接，和电脑 --ct-accent-text 一致 */
+  --run: #1a7fd0;  --run-soft: rgb(26 127 208 / .1);  --run-text: #135e9c;
   --ok: #28a745;   --ok-soft: rgb(40 167 69 / .12);   --ok-text: #1d7a34;
   --warn: #f29a0c; --warn-soft: rgb(242 154 12 / .14); --warn-text: #8f5600;
   --err: #e5392f;  --err-soft: rgb(229 57 47 / .1);   --err-text: #b42318;
@@ -39,11 +39,11 @@
   --text: #f2f2f7;
   --text-2: rgb(235 235 245 / .7);
   --text-3: rgb(235 235 245 / .42);
-  --accent: #9a6bff;
-  --accent-text: #b597ff;
-  --accent-soft: rgb(154 107 255 / .18);
-  --on-accent: #ffffff;
-  --run: #409cff;  --run-soft: rgb(64 156 255 / .18);  --run-text: #6cb4ff;
+  --accent: #f2f2f7;
+  --on-accent: #1c1c1e;
+  --sel: rgb(118 118 128 / .3);
+  --link: #7cc0f2;
+  --run: #3c9be3;  --run-soft: rgb(60 155 227 / .18);  --run-text: #7cc0f2;
   --ok: #32d74b;   --ok-soft: rgb(50 215 75 / .16);    --ok-text: #5ee077;
   --warn: #ffb340; --warn-soft: rgb(255 179 64 / .16); --warn-text: #ffc66b;
   --err: #ff6961;  --err-soft: rgb(255 105 97 / .16);  --err-text: #ff8a84;
@@ -62,7 +62,7 @@ body {
 }
 body.bezel { background: #3a3a3c; display: grid; place-items: center; padding: 40px; }
 button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
-a { color: var(--accent-text); text-decoration: none; }
+a { color: var(--link); text-decoration: none; }
 .ic { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; flex: none; }
 .ic.sm { width: 16px; height: 16px; } .ic.lg { width: 24px; height: 24px; }
 
@@ -86,7 +86,7 @@ body.bezel .screen { border-radius: 22px; outline: 14px solid #111; box-shadow: 
 .side-scrim { position: absolute; inset: 0; background: var(--scrim); z-index: 19; }
 .side-head { display: flex; align-items: center; gap: 10px; padding: 14px 16px 8px; }
 .side-head h1 { font-size: 22px; font-weight: 700; margin: 0; flex: 1; letter-spacing: -.2px; }
-.brand { width: 30px; height: 30px; border-radius: 8px; background: linear-gradient(180deg, #b28cff, #7146f0); display: grid; place-items: center; color: #fff; font: 700 12px/1 ui-monospace, monospace; }
+.brand { width: 30px; height: 30px; border-radius: 8px; background: var(--accent); display: grid; place-items: center; color: var(--on-accent); font: 700 12px/1 ui-monospace, monospace; }
 .side-search { margin: 4px 16px 10px; display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 10px; border-radius: 10px; background: var(--fill); color: var(--text-3); width: calc(100% - 32px); }
 
 /* 主区域 */

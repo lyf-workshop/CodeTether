@@ -3,7 +3,7 @@ const sheetNav = (title, ok = '', okAttr = '') =>
   `<div class="nav"><div class="left"><button class="tb txt" data-close>取消</button></div><div class="center"><b>${title}</b></div><div class="right">${ok ? `<button class="tb txt" style="font-weight:600" ${okAttr}>${ok}</button>` : ''}</div></div>`;
 const sheet = (inner, wide) => `<div class="scrim" data-close-bg><div class="sheet ${wide ? 'wide' : ''}">${inner}</div></div>`;
 const pickRow = (on, title, sub, attrs, disabled) =>
-  `<button class="row" ${disabled ? 'disabled style="opacity:.5"' : attrs}><span class="t"><b>${title}</b>${sub ? `<small>${sub}</small>` : ''}</span>${on ? `<span style="color:var(--accent)">${I('check')}</span>` : ''}</button>`;
+  `<button class="row" ${disabled ? 'disabled style="opacity:.5"' : attrs}><span class="t"><b>${title}</b>${sub ? `<small>${sub}</small>` : ''}</span>${on ? `<span style="color:var(--text)">${I('check')}</span>` : ''}</button>`;
 
 function shNew(arg) {
   // new:p-web 固定项目；new@m-win 预选这台设备上的第一个项目；new 预选最近用过的项目

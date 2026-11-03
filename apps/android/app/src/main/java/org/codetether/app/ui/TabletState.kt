@@ -1,0 +1,98 @@
+package org.codetether.app.ui
+
+import org.codetether.app.account.AccountProfile
+import org.codetether.app.account.PairedComputer
+import org.codetether.app.remote.ConversationTarget
+import org.codetether.app.remote.RemoteAttention
+import org.codetether.app.remote.RemoteChange
+import org.codetether.app.remote.RemoteConnection
+import org.codetether.app.remote.RemoteConversation
+import org.codetether.app.remote.RemoteConversationDetail
+import org.codetether.app.remote.RemoteMachine
+import org.codetether.app.remote.RemoteMessage
+import org.codetether.app.remote.RemoteProject
+import org.codetether.app.remote.RemoteWorkspace
+import uniffi.supervisor_mobile.ConnectionMode
+
+internal sealed interface TabletPage {
+    data object SignIn : TabletPage
+    data object Pair : TabletPage
+    data object Home : TabletPage
+    data object Inbox : TabletPage
+    data object Devices : TabletPage
+    data class Device(val computerId: String, val machineId: String) : TabletPage
+    data class Project(val computerId: String, val project: RemoteProject) : TabletPage
+    data class Conversation(val computerId: String, val target: ConversationTarget) : TabletPage
+    data class Settings(val section: SettingSection = SettingSection.Account) : TabletPage
+    data class Removed(val computerName: String) : TabletPage
+}
+
+internal enum class SettingSection(val label: String) {
+    Account("账号"),
+    Computers("可以使用的电脑"),
+    Appearance("外观"),
+    Connection("连接检查"),
+    Plans("后续规划"),
+}
+
+internal enum class Appearance(val label: String) {
+    System("跟随系统"), Light("浅色"), Dark("深色"),
+}
+
+internal data class ComputerView(
+    val computer: PairedComputer,
+    val workspace: RemoteWorkspace? = null,
+    val connection: RemoteConnection? = null,
+    val problem: String? = null,
+)
+
+internal data class TabletState(
+    val page: TabletPage = TabletPage.SignIn,
+    val profile: AccountProfile? = null,
+    val otpEmail: String? = null,
+    val computers: List<ComputerView> = emptyList(),
+    val loaded: List<Pair<String, RemoteConversation>> = emptyList(),
+    val detail: RemoteConversationDetail? = null,
+    val olderMessages: List<RemoteMessage> = emptyList(),
+    val olderCursor: String? = null,
+    val changes: List<RemoteChange> = emptyList(),
+    val changesLoading: Boolean = false,
+    val projectRows: List<RemoteConversation> = emptyList(),
+    val projectArchived: Boolean = false,
+    val projectStatus: String? = null,
+    val appearance: Appearance = Appearance.System,
+    val mode: ConnectionMode = ConnectionMode.AUTO,
+    val busy: Boolean = false,
+    val error: String? = null,
+    val pairingClaimed: Boolean = false,
+    val lastPairedName: String? = null,
+    val keyProtection: String? = null,
+) {
+    fun computer(id: String): ComputerView? = computers.firstOrNull { it.computer.id == id }
+
+    fun machine(computerId: String, machineId: String): RemoteMachine? =
+        computer(computerId)?.workspace?.machines?.firstOrNull { it.id == machineId }
+}
+
+internal interface TabletActions {
+    fun navigate(page: TabletPage)
+    fun requestCode(email: String)
+    fun verifyCode(email: String, code: String)
+    fun editEmail()
+    fun pair(code: String)
+    fun removeComputer(computer: PairedComputer)
+    fun signOut()
+    fun setAppearance(value: Appearance)
+    fun setMode(value: ConnectionMode)
+    fun refresh()
+    fun setProjectFilter(archived: Boolean, status: String?)
+    fun older()
+    fun loadChanges()
+    fun create(computerId: String, project: RemoteProject, provider: String, text: String, reasoning: String?)
+    fun send(target: TabletPage.Conversation, text: String)
+    fun approve(computerId: String, item: RemoteAttention, accept: Boolean)
+    fun resolveAttention(computerId: String, item: RemoteAttention)
+    fun interrupt(target: TabletPage.Conversation, turnId: String)
+    fun archive(target: TabletPage.Conversation)
+    fun dismissError()
+}

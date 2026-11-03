@@ -40,7 +40,7 @@ export async function runOwnerPairing(
 ): Promise<void> {
   signal.throwIfAborted()
   const sessionId = newPairingSessionId()
-  let paired = false
+  let settled = false
   try {
     // Preserve ordering with cancellation if the create response arrives late.
     // An unopened code is never shown until the create request succeeds.
@@ -57,29 +57,35 @@ export async function runOwnerPairing(
     })
     for (;;) {
       await waitForPairingPoll(signal)
-      if (Date.parse(created.expiresAt) <= Date.now()) {
-        onProgress({ status: 'expired' })
-        return
-      }
       const current = await readOwnerPairingSession(
         { ...context, signal },
         sessionId,
       )
-      signal.throwIfAborted()
-      if (current.status === 'pending') continue
       if (
         current.status === 'expired' ||
         current.status === 'cancelled' ||
         current.status === 'rate_limited'
       ) {
+        // Preserve the server's terminal classification when cleaning up.
+        settled = true
+        signal.throwIfAborted()
         onProgress({ status: current.status })
         return
       }
-      if (current.status !== 'claimed' || current.device === undefined)
+      if (current.status === 'paired') settled = true
+      signal.throwIfAborted()
+      if (current.status === 'pending') continue
+      if (
+        (current.status !== 'claimed' && current.status !== 'paired') ||
+        current.device === undefined
+      ) {
         throw new Error('pairing_response_invalid')
-      onProgress({ status: 'claimed' })
-      await finishPairingSession({ ...context, signal }, current)
-      paired = true
+      }
+      if (current.status === 'claimed') {
+        onProgress({ status: 'claimed' })
+        await finishPairingSession({ ...context, signal }, current)
+        settled = true
+      }
       signal.throwIfAborted()
       onProgress({ status: 'paired', label: current.device.label })
       // If activation is temporarily unavailable, the existing owner loop
@@ -90,7 +96,7 @@ export async function runOwnerPairing(
       return
     }
   } finally {
-    if (!paired) {
+    if (!settled) {
       await cancelPairingSession(
         { ...context, signal: AbortSignal.timeout(5_000) },
         sessionId,

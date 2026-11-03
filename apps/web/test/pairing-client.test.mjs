@@ -210,6 +210,38 @@ test('closing during a late pairing status cancels that code without authorizing
   }
 })
 
+test('natural expiration is observed from the server without cancelling the expired code', async () => {
+  const previous = globalThis.fetch
+  const controller = new AbortController()
+  const calls = []
+  let session
+  globalThis.fetch = async (url, init) => {
+    const path = new URL(String(url)).pathname
+    const { subjectId, purpose } = body(init).payload
+    calls.push(purpose)
+    if (path.endsWith('/pairing-sessions')) {
+      session = {
+        sessionId: subjectId,
+        hostId: 'host_pc',
+        expiresAt: new Date(Date.now() - 1_000).toISOString(),
+      }
+      return Response.json({ ...session, status: 'pending', code: '012345' })
+    }
+    assert.ok(path.endsWith(`/${session.sessionId}/status`))
+    return Response.json({ ...session, status: 'expired' })
+  }
+  try {
+    const progress = []
+    await runOwnerPairing(owner(), controller.signal, (next) =>
+      progress.push(next.status),
+    )
+    assert.deepEqual(progress, ['pending', 'expired'])
+    assert.deepEqual(calls, ['host_pairing_create', 'host_pairing_status'])
+  } finally {
+    globalThis.fetch = previous
+  }
+})
+
 test('removal uses the same Host-signed lineage proof locally before calling Control Plane', async () => {
   const previous = globalThis.fetch
   const requests = []

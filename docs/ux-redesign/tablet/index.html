@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CodeTether 平板原型</title>
+<link rel="stylesheet" href="tablet.css">
+<link rel="stylesheet" href="components.css">
+<link rel="stylesheet" href="conversation.css">
+</head>
+<body>
+<!-- 平板原型（Android 平板，iPadOS 式视觉）。演示数据，不调用任何真实接口。
+     查询参数：?theme=light|dark  ?o=land|port（横屏 1280×800 / 竖屏 800×1280）  ?bezel=1（加设备边框）  ?modal=…  ?side=1（竖屏打开侧栏）
+     页面用 hash 路由，见 router.js 顶部的列表。 -->
+<div id="root"></div>
+<script src="../prototype/icons.js"></script>
+<script src="data.js"></script>
+<script src="ui.js"></script>
+<script src="screens.js"></script>
+<script src="screens-2.js"></script>
+<script src="conversation.js"></script>
+<script src="sheets.js"></script>
+<script src="router.js"></script>
+</body>
+</html>

@@ -10,6 +10,8 @@
 | [04-requirements.md](04-requirements.md) | 需求说明，按功能编号和三端阶段 |
 | [05-desktop-update.md](05-desktop-update.md) | U1 电脑端一键更新的设计 |
 | [06-pairing-remote-control.md](06-pairing-remote-control.md) | B1 配对和远程控制的设计 |
+| [07-tablet.md](07-tablet.md) | T1 平板应用的设计（和 B4 远程管理的范围） |
+| `tablet/index.html` | 平板可点击原型（`?o=port` 竖屏、`?theme=dark` 深色；截图在 `tablet/png/`，用 `tablet/export-png.sh` 导出） |
 | [overview.html](overview.html) | 82 张截图总览（`png/00-overview.png` 为整页图） |
 | `prototype/index.html` | 本地可点击原型（浏览器直接打开；演示数据，不调用任何真实接口） |
 | `export-png.sh` | 重新导出 `png/`（需要 Chrome，约 1 分钟） |

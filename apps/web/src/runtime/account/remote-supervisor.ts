@@ -1,7 +1,9 @@
 import type { Session } from '@supabase/supabase-js'
 import {
+  GetMachineResponseSchema,
   RemoteConversationHistoryPageSchema,
   RemoteConversationLivePageSchema,
+  type GetMachineResponse,
   type RemoteConversationHistoryPage,
   type RemoteConversationLivePage,
 } from '@codetether/protocol'
@@ -678,7 +680,7 @@ export async function readRemoteMachine(
   hostId: string | RemoteSupervisorSession,
   machineId: string,
   signal?: AbortSignal,
-): Promise<unknown> {
+): Promise<Pick<GetMachineResponse, 'machine' | 'providers'>> {
   const session =
     typeof hostId === 'string'
       ? currentRemoteSupervisorSession(hostId)
@@ -691,10 +693,24 @@ export async function readRemoteMachine(
     }
     throw new Error('remote_supervisor_session_expired')
   }
-  return await readJson(
+  const projection = await readJson(
     `${hostBaseUrl}/api/v1/remote-supervisor/sessions/${encodeURIComponent(session.sessionId)}/machines/${encodeURIComponent(machineId)}`,
     { signal },
   )
+  // Supervisor exposes projects and conversations through paginated reads.
+  // Supply empty collections only to reuse the local schema's refinements.
+  if ('projects' in projection || 'conversations' in projection) {
+    throw new Error('remote_supervisor_response_invalid')
+  }
+  const result = GetMachineResponseSchema.safeParse({
+    ...projection,
+    projects: [],
+    conversations: [],
+  })
+  if (!result.success || result.data.machine.machineId !== machineId) {
+    throw new Error('remote_supervisor_response_invalid')
+  }
+  return { machine: result.data.machine, providers: result.data.providers }
 }
 
 export async function readRemoteProjects(

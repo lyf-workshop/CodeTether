@@ -1,7 +1,6 @@
 import {
   AttentionListResponseSchema,
   ConversationFileChangeRecordSchema,
-  GetMachineResponseSchema,
   InterruptTurnResponseSchema,
   ListMachinesResponseSchema,
   ResolveApprovalResponseSchema,
@@ -223,13 +222,9 @@ export async function inspectDiagnosticOperations(
     })
   if (machineId === undefined || recent === undefined || recent.length === 0)
     return { measurements, actions }
-  const machine = GetMachineResponseSchema.safeParse(
-    await readRemoteMachine(session, machineId, signal),
-  )
-  if (!machine.success || machine.data.machine.machineId !== machineId)
-    return { measurements, actions }
+  const machine = await readRemoteMachine(session, machineId, signal)
   const capabilities = new Map(
-    machine.data.providers.map((provider) => [
+    machine.providers.map((provider) => [
       provider.provider,
       provider.capabilities,
     ]),

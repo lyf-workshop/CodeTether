@@ -5,10 +5,72 @@ import {
   currentRemoteSupervisorSession,
   disconnectRemoteSupervisor,
   readRemoteBootstrap,
+  readRemoteMachine,
   readRemoteMachines,
   reconnectRemoteSupervisor,
 } from '../.tmp/test-dist/runtime/account/remote-supervisor.js'
 import { runSupervisorCheck } from '../.tmp/test-dist/dev/supervisor-check-model.js'
+
+test('machine.get accepts the Supervisor projection and rejects mismatched identity or shape', async () => {
+  const previousFetch = globalThis.fetch
+  const machineId = 'machine_diagnostic'
+  const session = {
+    sessionId: 'session_diagnostic',
+    expiresAt: new Date(Date.now() + 300_000).toISOString(),
+  }
+  const machine = {
+    machineId,
+    displayName: 'Fixture PC',
+    kind: 'local',
+    platform: 'windows',
+    architecture: 'x64',
+    availability: 'available',
+    connectionState: 'local',
+    trustState: 'local',
+    isLocal: true,
+    createdAt: '2026-11-03T00:00:00.000Z',
+    capabilities: {
+      projectAccess: true,
+      providerExecution: true,
+      backgroundRuntime: true,
+      nativeFolderPicker: true,
+      notifications: true,
+    },
+  }
+  const projection = {
+    protocolVersion: 1,
+    machine,
+    providers: [],
+    providerLifecycles: [],
+  }
+  let payload = projection
+  globalThis.fetch = async (input) => {
+    assert.ok(
+      String(input).endsWith(
+        `/sessions/${session.sessionId}/machines/${machineId}`,
+      ),
+    )
+    return Response.json(payload)
+  }
+  try {
+    assert.deepEqual(await readRemoteMachine(session, machineId), {
+      machine,
+      providers: [],
+    })
+    for (const invalid of [
+      { ...projection, machine: { ...machine, machineId: 'machine_other' } },
+      { ...projection, providers: [{}] },
+      { ...projection, projects: [] },
+    ]) {
+      payload = invalid
+      await assert.rejects(readRemoteMachine(session, machineId), {
+        message: 'remote_supervisor_response_invalid',
+      })
+    }
+  } finally {
+    globalThis.fetch = previousFetch
+  }
+})
 
 function options(hostId) {
   return {

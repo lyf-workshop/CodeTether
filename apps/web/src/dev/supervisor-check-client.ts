@@ -1,8 +1,5 @@
 import type { Session } from '@supabase/supabase-js'
-import {
-  GetMachineResponseSchema,
-  ListMachinesResponseSchema,
-} from '@codetether/protocol'
+import { ListMachinesResponseSchema } from '@codetether/protocol'
 
 import { controlPlaneBaseUrl } from '../runtime/account/account-config.js'
 import {
@@ -215,11 +212,7 @@ export async function connectSupervisorCheck(
       ].map((machine) => machine.machineId)
     },
     machine: async (machineId, signal) => {
-      const result = GetMachineResponseSchema.safeParse(
-        await readRemoteMachine(session, machineId, signal),
-      )
-      if (!result.success || result.data.machine.machineId !== machineId)
-        throw new SupervisorCheckError('invalid_response')
+      await readRemoteMachine(session, machineId, signal)
     },
     projects: async (machineId, signal) =>
       (

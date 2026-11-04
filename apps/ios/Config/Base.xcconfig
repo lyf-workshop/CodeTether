@@ -1,0 +1,15 @@
+#include? "Local.xcconfig"
+
+PRODUCT_BUNDLE_IDENTIFIER = org.codetether.app
+IPHONEOS_DEPLOYMENT_TARGET = 16.0
+SWIFT_VERSION = 5.0
+TARGETED_DEVICE_FAMILY = 2
+CODE_SIGN_STYLE = Automatic
+GENERATE_INFOPLIST_FILE = YES
+INFOPLIST_KEY_NSLocalNetworkUsageDescription = CodeTether uses your local network to connect directly to your paired computer.
+INFOPLIST_KEY_CodeTetherControlPlaneURL = $(CODETETHER_CONTROL_PLANE_URL)
+INFOPLIST_KEY_CodeTetherSupabaseURL = $(SUPABASE_URL)
+INFOPLIST_KEY_CodeTetherSupabasePublishableKey = $(SUPABASE_PUBLISHABLE_KEY)
+INFOPLIST_KEY_CodeTetherRelayEndpoint = $(RELAY_ENDPOINT)
+INFOPLIST_KEY_CodeTetherRelayID = $(RELAY_ID)
+INFOPLIST_KEY_CodeTetherRelayFingerprint = $(RELAY_FINGERPRINT)

@@ -1,0 +1,6 @@
+Config/Local.xcconfig
+Generated/
+Frameworks/
+*.xcodeproj/
+DerivedData/
+/Tests/Support/InteropFixture.json

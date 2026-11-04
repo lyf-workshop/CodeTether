@@ -25,8 +25,12 @@ internal class RegisteredDevice(
     val identity: AndroidDeviceIdentity,
 )
 
-internal class ControlPlane(private val context: Context, private val http: AccountHttp) {
-    private val origin: HttpUrl get() = configurationOrigin(BuildConfig.CONTROL_PLANE_URL)
+internal class ControlPlane(
+    private val context: Context,
+    private val http: AccountHttp,
+    private val originOverride: HttpUrl? = null,
+) {
+    private val origin: HttpUrl get() = originOverride ?: configurationOrigin(BuildConfig.CONTROL_PLANE_URL)
 
     suspend fun register(session: AccountSession): RegisteredDevice {
         val identity = withContext(Dispatchers.IO) { AndroidDeviceIdentity.loadOrCreate(context, session.profile.id) }
@@ -101,10 +105,9 @@ internal class ControlPlane(private val context: Context, private val http: Acco
             waitForPairing(session, device, sessionId, hostId, expiresAt)
         } ?: PairingTerminal.Failure(PairingRejection.EXPIRED)
         if (terminal is PairingTerminal.Failure) return PairingResult.Rejected(terminal.reason, null)
-        val authorizationId = (terminal as PairingTerminal.Success).authorizationId
 
         val computer = withTimeoutOrNull(25_000L) {
-            waitForDirectoryEntry(session, device, hostId, authorizationId)
+            waitForDirectoryEntry(session, device, hostId)
         } ?: throw AccountFailure(AccountFailureReason.COMPUTER_UNAVAILABLE)
         return PairingResult.Paired(computer)
     }
@@ -137,13 +140,8 @@ internal class ControlPlane(private val context: Context, private val http: Acco
             verifyPairingDevice(status, device)
             when (val name = status.stringValue("status")) {
                 "claimed" -> Unit
-                "paired" -> {
-                    val authorization = status.objectValue("authorization")
-                    authorization.expect("deviceId", device.id)
-                    authorization.expect("hostId", hostId)
-                    authorization.expect("scope", "supervisor_control")
-                    return PairingTerminal.Success(authorization.idValue("authorizationId", "hauth_"))
-                }
+                // The device-facing claim response carries only the session state.
+                "paired" -> return PairingTerminal.Success
                 else -> return PairingTerminal.Failure(rejection(name))
             }
         }
@@ -154,11 +152,10 @@ internal class ControlPlane(private val context: Context, private val http: Acco
         session: suspend () -> AccountSession,
         device: RegisteredDevice,
         hostId: String,
-        authorizationId: String,
     ): PairedComputer {
         while (true) {
             directory(session(), device).firstOrNull {
-                it.id == hostId && it.authorizationId == authorizationId && it.allowsControl && it.isAvailable
+                it.id == hostId && it.allowsControl && it.isAvailable
             }?.let { return it }
             delay(2_000L)
         }
@@ -245,7 +242,8 @@ internal class ControlPlane(private val context: Context, private val http: Acco
             descriptorPayload.expect("controlPlaneOrigin", origin.toString().removeSuffix("/"))
         }
         return PairedComputer(
-            id, json.stringValue("safeLabel", 120), json.stringValue("coarsePlatform", 64),
+            id, json.stringValue("safeLabel", 120).takeUnless { it == "CodeTether Host" } ?: "这台电脑",
+            json.stringValue("coarsePlatform", 64),
             scope == "supervisor_control", expiresAt, authorizationId, fingerprint, generation.toULong(),
             publicKey.toString(), grant?.toString(), descriptor?.toString(),
         )
@@ -298,7 +296,7 @@ internal class ControlPlane(private val context: Context, private val http: Acco
     }
 
     private sealed interface PairingTerminal {
-        class Success(val authorizationId: String) : PairingTerminal
+        data object Success : PairingTerminal
         class Failure(val reason: PairingRejection) : PairingTerminal
     }
 

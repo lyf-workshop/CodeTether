@@ -43,7 +43,7 @@
 
 ## 已知情况
 
-- **起点**：B1 还没合并。`git fetch origin`，从 `origin/b1/pairing-remote-control`（`9694895`）新建分支 `t1a/tablet-app`，工作区 `D:/Projects/Software/agenthub-t1a-tablet`。B1 合并到 `main` 后用户会告诉你，到时候再 rebase 到 `main`。
+- **起点**：B1 已快进合并到 `main`（`9694895`，2026-11-04）。`git fetch origin`，在工作区 `D:/Projects/Software/agenthub-t1a-tablet` 里把 `t1a/tablet-app` rebase 到 `origin/main`。因为合并是快进，`origin/main` 就是现在的基点，rebase 应该是空操作；如果不是，停下来报告，不要强行解决冲突。
 - **协议参考**（行号以 `9694895` 为准）：
   - `packages/supervisor-transport/src`：
     - TLS 和导出密钥在 `tls.ts`。标签是 `EXPORTER-CodeTether-Supervisor-v1`（`constants.ts:9`），Host 证书是 ECDSA P-256；
@@ -67,7 +67,7 @@
   - 移除以后再连，分类是 `request_failed`，和普通连不上分不开。只有控制服务确认已经没有有效授权时才显示“被移除”页，其他情况显示“这台电脑现在连不上……”。
 - **这台电脑上的测试环境**：
   - 安装版是 `v0.1.0-alpha.2`，没有 B1，所以配对只能对 B1 开发版做。启动方法、独立数据目录和合成 Provider 夹具（待批准项、运行中的 Turn、不支持批准和停止的工具），见 B1 补测报告的“Windows 补测”一节和 `agenthub-archive/b1-logs/windows-dev-launch.mjs`。用 B1 工作区 `D:/Projects/Software/agenthub-b1-pairing` 的开发版，只运行，不改那里的代码。
-  - 开发版和安装版都用 4317 端口。B1 的 Mac 跨设备验收也要用这台电脑上的开发版。启动之前先问用户 Mac 那边做完没有；没做完就先做不需要电脑的部分。
+  - 开发版和安装版都用 4317 端口。B1 的 Mac 跨设备验收已经做完（2026-11-04），端口不再和它冲突。启动之前仍要先问用户，确认安装版可以退出；没确认就先做不需要电脑的部分。
   - 用的时候先从托盘退出安装版。测完退出开发版，重新打开安装版，并确认它重新上线。
   - Android 应用不是浏览器，控制服务的 CORS 不用动。
 - **要停下来等用户的地方**：

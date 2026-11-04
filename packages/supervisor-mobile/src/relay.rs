@@ -29,6 +29,9 @@ use crate::{
 const FRAME_BYTES: usize = 8 * 1024;
 const CHANNEL_BYTES: usize = 4 * 1024;
 const CHANNEL_TIMEOUT: Duration = Duration::from_secs(10);
+#[cfg(target_os = "ios")]
+const BUILD_ID: &str = concat!("ios-", env!("CARGO_PKG_VERSION"));
+#[cfg(not(target_os = "ios"))]
 const BUILD_ID: &str = concat!("android-", env!("CARGO_PKG_VERSION"));
 type RelayWire = Framed<TlsStream<TcpStream>, LengthDelimitedCodec>;
 

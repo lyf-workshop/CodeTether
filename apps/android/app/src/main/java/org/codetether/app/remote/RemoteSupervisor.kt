@@ -23,7 +23,6 @@ import org.json.JSONObject
 import uniffi.supervisor_mobile.ConnectionMode
 import uniffi.supervisor_mobile.MobileException
 import uniffi.supervisor_mobile.SupervisorSession
-import uniffi.supervisor_mobile.connectSupervisor
 
 /** A foreground connection to a single selected computer. Reading may reconnect once. */
 class RemoteSupervisor(private val account: TabletAccount) {
@@ -130,8 +129,8 @@ class RemoteSupervisor(private val account: TabletAccount) {
         readHistory(session, target, cursor)
     }
 
-    fun watchConversation(target: ConversationTarget): Flow<RemoteConversationDetail> = flow {
-        var current = conversation(target)
+    fun watchConversation(target: ConversationTarget, loadedHistory: RemoteHistory? = null): Flow<RemoteConversationDetail> = flow {
+        var current = read { session -> readDetail(session, target, loadedHistory) }
         emit(current)
         while (true) {
             delay(750)
@@ -144,9 +143,13 @@ class RemoteSupervisor(private val account: TabletAccount) {
                     event.text("type") in setOf("turn.completed", "turn.failed", "turn.interrupted")
                 }
                 val next = if (reconcile) {
-                    readDetail(session, target)
+                    readDetail(session, target, current.history)
                 } else {
-                    val detail = current.applyLive(page).copy(canControl = session.info.canControl)
+                    val live = current.applyLive(page)
+                    val detail = live.copy(
+                        history = mergeHistory(current.history, live.history),
+                        canControl = session.info.canControl,
+                    )
                     val attentionChanged = page.events.any {
                         val type = it.text("type")
                         type.startsWith("attention.") || type.startsWith("approval.")
@@ -184,6 +187,7 @@ class RemoteSupervisor(private val account: TabletAccount) {
         provider: String,
         text: String,
         reasoning: String? = null,
+        actionId: String = newActionId(),
     ): ConversationTarget = lock.withLock {
         val session = requireControl()
         val detail = request(session, "machine.get", "machineId" to project.machineId)
@@ -193,15 +197,16 @@ class RemoteSupervisor(private val account: TabletAccount) {
         if (!project.available || !tool.canStart) throw RemoteFailure("unsupported")
         if (reasoning != null && tool.reasoning.none { it.id == reasoning }) throw RemoteFailure("invalid_request")
         val response = mutate(session, "conversation.create", "machineId" to project.machineId,
-            "projectId" to project.id, "provider" to provider, "reasoning" to reasoning, "input" to textInput(text))
+            "projectId" to project.id, "provider" to provider, "reasoning" to reasoning, "input" to textInput(text),
+            "actionId" to actionId)
         response.obj("data").obj("conversation").scope().also {
             if (it.machineId != project.machineId || it.projectId != project.id) invalidResponse()
         }
     }
 
-    suspend fun send(target: ConversationTarget, text: String): Unit = lock.withLock {
+    suspend fun send(target: ConversationTarget, text: String, actionId: String = newActionId()): Unit = lock.withLock {
         val session = requireControl()
-        mutate(session, "conversation.turn.start", *target.fields(), "input" to textInput(text))
+        mutate(session, "conversation.turn.start", *target.fields(), "input" to textInput(text), "actionId" to actionId)
     }
 
     suspend fun approve(item: RemoteAttention, accept: Boolean): Unit = lock.withLock {
@@ -241,8 +246,14 @@ class RemoteSupervisor(private val account: TabletAccount) {
         RemoteAction(actionId, row.text("status"), row.optionalText("conversationId"), row.optionalText("turnId"))
     }
 
-    private suspend fun readDetail(session: Attached, target: ConversationTarget): RemoteConversationDetail {
-        val history = readHistory(session, target, null)
+    private suspend fun readDetail(
+        session: Attached,
+        target: ConversationTarget,
+        loadedHistory: RemoteHistory? = null,
+    ): RemoteConversationDetail {
+        val history = reconcileHistory(loadedHistory, readHistory(session, target, null)) { cursor ->
+            readHistory(session, target, cursor)
+        }
         val conversation = readConversation(session, target)
         val provider = readProvider(session, conversation)
         return RemoteConversationDetail(conversation, history, provider, conversationAttention(session, conversation, provider), session.info.canControl)
@@ -381,7 +392,7 @@ class RemoteSupervisor(private val account: TabletAccount) {
         return try {
             val credentials = account.connection(target.computer, target.mode)
             withContext(Dispatchers.IO) {
-                val session = connectSupervisor(credentials.options, credentials.signer)
+                val session = credentials.connect()
                 opened = session
                 val expiration = session.expiresAt()
                 Instant.parse(expiration)
@@ -437,7 +448,7 @@ class RemoteSupervisor(private val account: TabletAccount) {
     }
 
     private suspend fun mutate(session: Attached, operation: String, vararg fields: Pair<String, Any?>): JSONObject {
-        val actionId = "act_${UUID.randomUUID().toString().replace("-", "")}"
+        val actionId = fields.firstOrNull { it.first == "actionId" }?.second as? String ?: newActionId()
         val result = try {
             request(session, operation, *fields, "actionId" to actionId)
         } catch (failure: RemoteFailure) {
@@ -462,6 +473,8 @@ class RemoteSupervisor(private val account: TabletAccount) {
 
 private fun ConversationTarget.fields(): Array<Pair<String, Any?>> =
     arrayOf("machineId" to machineId, "projectId" to projectId, "conversationId" to conversationId)
+
+private fun newActionId(): String = "act_${UUID.randomUUID().toString().replace("-", "")}"
 
 private fun textInput(text: String): JSONObject {
     if (text.isBlank() || text.length > 1_048_576) throw RemoteFailure("invalid_request")

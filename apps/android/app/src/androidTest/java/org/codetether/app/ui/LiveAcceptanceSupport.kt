@@ -123,7 +123,10 @@ internal class LiveAcceptanceReport {
 }
 
 /** One line per connection, forwarded with adb. No application request or credential is accepted. */
-internal class LiveAcceptanceControl(private val report: LiveAcceptanceReport) : Closeable {
+internal class LiveAcceptanceControl(
+    private val report: LiveAcceptanceReport,
+    private val commandHandler: ((String) -> JSONObject?)? = null,
+) : Closeable {
     val started = AtomicBoolean()
     val startedAtNanos = AtomicLong()
     val finished = AtomicBoolean()
@@ -149,7 +152,7 @@ internal class LiveAcceptanceControl(private val report: LiveAcceptanceReport) :
                         "DIFF" -> JSONObject().put("ok", true).also { readDiff.set(true) }
                         "FINISH" -> JSONObject().put("ok", true).also { finished.set(true) }
                         "STATUS" -> report.snapshot().put("ok", true)
-                        else -> JSONObject().put("ok", false)
+                        else -> commandHandler?.invoke(command.orEmpty()) ?: JSONObject().put("ok", false)
                     }
                     socket.getOutputStream().write((response.toString() + "\n").toByteArray(Charsets.US_ASCII))
                 }

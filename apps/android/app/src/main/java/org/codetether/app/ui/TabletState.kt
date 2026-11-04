@@ -39,6 +39,10 @@ internal enum class Appearance(val label: String) {
     System("跟随系统"), Light("浅色"), Dark("深色"),
 }
 
+internal enum class MutationStatus { Pending, Success, Failed, Unknown }
+
+internal data class MutationOutcome(val actionId: String, val status: MutationStatus, val message: String? = null)
+
 internal data class ComputerView(
     val computer: PairedComputer,
     val workspace: RemoteWorkspace? = null,
@@ -58,6 +62,7 @@ internal data class TabletState(
     val changes: List<RemoteChange> = emptyList(),
     val changesLoading: Boolean = false,
     val projectRows: List<RemoteConversation> = emptyList(),
+    val projectLoading: Boolean = false,
     val projectArchived: Boolean = false,
     val projectStatus: String? = null,
     val appearance: Appearance = Appearance.System,
@@ -65,6 +70,9 @@ internal data class TabletState(
     val busy: Boolean = false,
     val error: String? = null,
     val pairingClaimed: Boolean = false,
+    val pairingInProgress: Boolean = false,
+    val sendOutcome: MutationOutcome? = null,
+    val createOutcome: MutationOutcome? = null,
     val lastPairedName: String? = null,
     val keyProtection: String? = null,
 ) {
@@ -80,6 +88,7 @@ internal interface TabletActions {
     fun verifyCode(email: String, code: String)
     fun editEmail()
     fun pair(code: String)
+    fun cancelPairing()
     fun removeComputer(computer: PairedComputer)
     fun signOut()
     fun setAppearance(value: Appearance)
@@ -88,8 +97,8 @@ internal interface TabletActions {
     fun setProjectFilter(archived: Boolean, status: String?)
     fun older()
     fun loadChanges()
-    fun create(computerId: String, project: RemoteProject, provider: String, text: String, reasoning: String?)
-    fun send(target: TabletPage.Conversation, text: String)
+    fun create(computerId: String, project: RemoteProject, provider: String, text: String, reasoning: String?, actionId: String)
+    fun send(target: TabletPage.Conversation, text: String, actionId: String)
     fun approve(computerId: String, item: RemoteAttention, accept: Boolean)
     fun resolveAttention(computerId: String, item: RemoteAttention)
     fun interrupt(target: TabletPage.Conversation, turnId: String)

@@ -29,6 +29,7 @@ internal class ControlPlane(
     private val context: Context,
     private val http: AccountHttp,
     private val originOverride: HttpUrl? = null,
+    private val sessions: AccountSessions? = null,
 ) {
     private val origin: HttpUrl get() = originOverride ?: configurationOrigin(BuildConfig.CONTROL_PLANE_URL)
 
@@ -167,6 +168,39 @@ internal class ControlPlane(
         body: JSONObject? = null,
         device: RegisteredDevice? = null,
     ): JSONObject {
+        val current = sessions?.current()?.also {
+            if (it.profile.id != session.profile.id) throw AccountFailure(AccountFailureReason.SIGN_IN_REQUIRED)
+        } ?: session
+        return try {
+            requestOnce(current, resource, body, device)
+        } catch (status: HttpStatus) {
+            if (status.status != 401 || status.authentication != AuthenticationFailure.SESSION || sessions == null) {
+                throw status.asAccountFailure()
+            }
+            val refreshed = sessions.refreshRejected(current)
+            // Re-read only the directory. Pairing, removal and registration writes
+            // remain explicit caller actions after the rejected request.
+            if (resource != "/v1/hosts/directory" || body != null) {
+                throw AccountFailure(AccountFailureReason.REQUEST_FAILED)
+            }
+            try {
+                requestOnce(refreshed, resource, body, device)
+            } catch (retry: HttpStatus) {
+                if (retry.status == 401 && retry.authentication == AuthenticationFailure.SESSION) {
+                    sessions.clearRejected(refreshed)
+                    throw AccountFailure(AccountFailureReason.SIGN_IN_REQUIRED)
+                }
+                throw retry.asAccountFailure()
+            }
+        }
+    }
+
+    private suspend fun requestOnce(
+        session: AccountSession,
+        resource: String,
+        body: JSONObject?,
+        device: RegisteredDevice?,
+    ): JSONObject {
         val bytes = body?.toString()?.toByteArray(Charsets.UTF_8)
         val method = if (body == null) "GET" else "POST"
         val headers = mutableMapOf("Authorization" to "Bearer ${session.accessToken}")
@@ -177,19 +211,17 @@ internal class ControlPlane(
                 )
             }
         }
-        return try {
-            http.request(origin, resource, method, headers, bytes)
-        } catch (status: HttpStatus) {
-            throw AccountFailure(
-                when (status.status) {
-                    401 -> AccountFailureReason.SIGN_IN_REQUIRED
-                    403 -> AccountFailureReason.AUTHORIZATION_UNAVAILABLE
-                    429 -> AccountFailureReason.RATE_LIMITED
-                    else -> AccountFailureReason.REQUEST_FAILED
-                },
-            )
-        }
+        return http.request(origin, resource, method, headers, bytes)
     }
+
+    private fun HttpStatus.asAccountFailure(): AccountFailure = AccountFailure(
+        when {
+            status == 401 && authentication == AuthenticationFailure.SESSION -> AccountFailureReason.SIGN_IN_REQUIRED
+            status == 403 || authentication == AuthenticationFailure.DEVICE -> AccountFailureReason.AUTHORIZATION_UNAVAILABLE
+            status == 429 -> AccountFailureReason.RATE_LIMITED
+            else -> AccountFailureReason.REQUEST_FAILED
+        },
+    )
 
     private fun parseDevice(json: JSONObject, identity: AndroidDeviceIdentity): RegisteredDevice {
         json.expect("keyAlgorithm", "ES256")

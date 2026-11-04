@@ -29,6 +29,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -134,6 +135,7 @@ private fun PairScreen(state: TabletState, actions: TabletActions, canReturn: Bo
                 if (state.pairingClaimed) "正在等电脑完成连接，请保持电脑上的窗口打开。" else "正在连接…",
                 color = ink.secondary,
             )
+            if (state.pairingInProgress) QuietButton("取消等待", onClick = actions::cancelPairing)
             state.error?.let { Text(it, color = ink.failed, fontSize = 14.sp) }
             if (canReturn) QuietButton("返回", enabled = !state.busy) { actions.navigate(TabletPage.Home) }
             QuietButton("退出登录", enabled = !state.busy) { actions.signOut() }
@@ -154,7 +156,7 @@ private fun EntryCard(content: @Composable androidx.compose.foundation.layout.Co
 
 @Composable
 private fun Workspace(modifier: Modifier, state: TabletState, actions: TabletActions) {
-    var sheet by remember { mutableStateOf<Sheet?>(null) }
+    var sheet by rememberSaveable { mutableStateOf<Sheet?>(null) }
     var changesOpen by remember(state.page) { mutableStateOf(false) }
     val focus = remember { FocusRequester() }
     BoxWithConstraints(modifier) {
@@ -260,9 +262,8 @@ private fun Workspace(modifier: Modifier, state: TabletState, actions: TabletAct
             Sheet.Search -> SearchSheet(state.loaded, onDismiss = { sheet = null }) { computer, row ->
                 go(TabletPage.Conversation(computer, row.target))
             }
-            Sheet.Create -> CreateSheet(state, onDismiss = { sheet = null }) { computer, project, provider, text, reasoning ->
-                sheet = null
-                actions.create(computer, project, provider, text, reasoning)
+            Sheet.Create -> CreateSheet(state, onDismiss = { sheet = null }) { computer, project, provider, text, reasoning, actionId ->
+                actions.create(computer, project, provider, text, reasoning, actionId)
             }
             Sheet.Archive -> CenterSheet("归档会话", { sheet = null }) {
                 Text("归档后可在项目的已归档列表里查看。", color = ink.secondary)

@@ -1,6 +1,7 @@
 package org.codetether.app.ui
 
 import android.os.SystemClock
+import android.graphics.Rect
 import android.view.accessibility.AccessibilityNodeInfo
 import androidx.lifecycle.ViewModelProvider
 import androidx.test.core.app.ActivityScenario
@@ -18,9 +19,11 @@ import okhttp3.Call
 import okhttp3.EventListener
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
+import okhttp3.Interceptor
 import okhttp3.Response
 import org.codetether.app.BuildConfig
 import org.codetether.app.MainActivity
+import org.json.JSONObject
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Test
@@ -29,6 +32,8 @@ import org.junit.runner.RunWith
 /** Observes requests initiated through the real login UI. No request is initiated by this test. */
 @RunWith(AndroidJUnit4::class)
 class AccountHttpLiveDiagnosticsTest {
+    private val accessibilityLock = Any()
+
     @Test
     fun observeLoginHttpStatusUntilTheControllingPcFinishes() {
         val arguments = InstrumentationRegistry.getArguments()
@@ -47,18 +52,25 @@ class AccountHttpLiveDiagnosticsTest {
             val verificationResponses = AtomicLong()
             val otpResponses = AtomicLong()
             val origin = BuildConfig.SUPABASE_URL.toHttpUrl()
+            fun operation(response: Response): String? {
+                val url = response.request.url
+                if (url.scheme != origin.scheme || url.host != origin.host || url.port != origin.port ||
+                    response.request.method != "POST"
+                ) return null
+                return when (url.encodedPath) {
+                    "/auth/v1/otp" -> "otp"
+                    "/auth/v1/verify" -> "verify"
+                    else -> null
+                }
+            }
             val listener = object : EventListener() {
                 override fun responseHeadersEnd(call: Call, response: Response) {
-                    val url = response.request.url
-                    if (url.scheme != origin.scheme || url.host != origin.host || url.port != origin.port ||
-                        response.request.method != "POST"
-                    ) return
-                    when (url.encodedPath) {
-                        "/auth/v1/otp" -> {
+                    when (operation(response)) {
+                        "otp" -> {
                             report.number("otp_http_status", response.code.toLong())
                             report.number("otp_http_responses", otpResponses.incrementAndGet())
                         }
-                        "/auth/v1/verify" -> {
+                        "verify" -> {
                             report.number("verify_http_status", response.code.toLong())
                             report.number("verify_http_responses", verificationResponses.incrementAndGet())
                         }
@@ -67,16 +79,35 @@ class AccountHttpLiveDiagnosticsTest {
                     report.publish()
                 }
             }
+            val classifyError = Interceptor { chain ->
+                val response = chain.proceed(chain.request())
+                val operation = operation(response)
+                if (operation != null && !response.isSuccessful) {
+                    val kind = loginErrorKind(response)
+                    report.number("${operation}_error_kind", kind.toLong())
+                    report.flag("${operation}_error_otp_expired", kind == 1)
+                    report.publish()
+                }
+                response
+            }
             stage = 1
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
                 lateinit var controller: TabletController
                 lateinit var observation: ClientObservation
                 scenario.onActivity { activity ->
                     controller = ViewModelProvider(activity)[TabletController::class.java]
-                    observation = ClientObservation.install(controller, listener)
+                    observation = ClientObservation.install(controller, listener, classifyError)
                 }
                 try {
-                    LiveAcceptanceControl(report).use { control ->
+                    LiveAcceptanceControl(report) { command ->
+                        if (command != "SUBMIT_LOGIN") null else {
+                            val state = controller.state.value
+                            val clicked = state.page == TabletPage.SignIn && state.otpEmail != null &&
+                                !state.busy && submitLoginButton()
+                            report.flag("login_button_click_accepted", clicked)
+                            JSONObject().put("ok", clicked)
+                        }
+                    }.use { control ->
                         report.number("control_port", control.port.toLong())
                         report.flag("diagnostic_ready", true)
                         report.publish()
@@ -109,6 +140,10 @@ class AccountHttpLiveDiagnosticsTest {
                                         report.number("code_field_character_count", field.characters.toLong())
                                         report.number("code_field_digit_count", field.digits.toLong())
                                         report.flag("code_field_text_masked", field.digits < field.characters)
+                                        report.number("code_field_left", field.bounds.left.toLong())
+                                        report.number("code_field_top", field.bounds.top.toLong())
+                                        report.number("code_field_right", field.bounds.right.toLong())
+                                        report.number("code_field_bottom", field.bounds.bottom.toLong())
                                     }
                                 } else {
                                     report.flag("code_field_accessible", false)
@@ -136,14 +171,14 @@ class AccountHttpLiveDiagnosticsTest {
         }
     }
 
-    private fun passwordFieldCounts(): FieldCounts? {
+    private fun passwordFieldCounts(): FieldCounts? = synchronized(accessibilityLock) {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
-        val root = instrumentation.uiAutomation.rootInActiveWindow ?: return null
+        val root = instrumentation.uiAutomation.rootInActiveWindow ?: return@synchronized null
         try {
-            if (root.packageName?.toString() != instrumentation.targetContext.packageName) return null
+            if (root.packageName?.toString() != instrumentation.targetContext.packageName) return@synchronized null
             val fields = mutableListOf<FieldCounts>()
             inspectPasswordFields(root, fields)
-            return fields.singleOrNull()
+            fields.singleOrNull()
         } finally {
             root.recycle()
         }
@@ -152,7 +187,9 @@ class AccountHttpLiveDiagnosticsTest {
     private fun inspectPasswordFields(node: AccessibilityNodeInfo, fields: MutableList<FieldCounts>) {
         if (node.isVisibleToUser && node.isPassword && node.className?.toString() == "android.widget.EditText") {
             val text = node.text
-            fields += FieldCounts(text?.length ?: 0, text?.count { it in '0'..'9' } ?: 0)
+            val bounds = Rect()
+            node.getBoundsInScreen(bounds)
+            fields += FieldCounts(text?.length ?: 0, text?.count { it in '0'..'9' } ?: 0, bounds)
         }
         for (index in 0 until node.childCount) {
             val child = node.getChild(index) ?: continue
@@ -164,7 +201,51 @@ class AccountHttpLiveDiagnosticsTest {
         }
     }
 
-    private data class FieldCounts(val characters: Int, val digits: Int)
+    private fun submitLoginButton(): Boolean = synchronized(accessibilityLock) {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val root = instrumentation.uiAutomation.rootInActiveWindow ?: return@synchronized false
+        try {
+            if (root.packageName?.toString() != instrumentation.targetContext.packageName) return@synchronized false
+            val nodes = root.findAccessibilityNodeInfosByText("登录")
+            try {
+                val button = nodes.singleOrNull { it.text?.toString() == "登录" && it.isVisibleToUser && it.isEnabled }
+                    ?: return@synchronized false
+                if (button.isClickable) return@synchronized button.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                val parent = button.parent ?: return@synchronized false
+                try {
+                    parent.className?.toString() == "android.widget.Button" && parent.isVisibleToUser &&
+                        parent.isEnabled && parent.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                } finally {
+                    parent.recycle()
+                }
+            } finally {
+                nodes.forEach { it.recycle() }
+            }
+        } finally {
+            root.recycle()
+        }
+    }
+
+    /** Numeric allowlist only. The response bytes remain in this test's memory. */
+    private fun loginErrorKind(response: Response): Int = try {
+        val error = JSONObject(response.peekBody(4096).string())
+        val code = listOf("error_code", "code", "error").map { error.optString(it) }
+        when {
+            "otp_expired" in code -> 1
+            "over_email_send_rate_limit" in code -> 2
+            "over_request_rate_limit" in code -> 3
+            "user_not_found" in code -> 4
+            "validation_failed" in code -> 5
+            "bad_jwt" in code -> 6
+            "email_not_confirmed" in code -> 7
+            "invalid_credentials" in code -> 8
+            else -> 0
+        }
+    } catch (_: Exception) {
+        0
+    }
+
+    private data class FieldCounts(val characters: Int, val digits: Int, val bounds: Rect)
 
     private class ClientObservation(
         private val owner: Any,
@@ -179,7 +260,7 @@ class AccountHttpLiveDiagnosticsTest {
         }
 
         companion object {
-            fun install(controller: TabletController, listener: EventListener): ClientObservation {
+            fun install(controller: TabletController, listener: EventListener, interceptor: Interceptor): ClientObservation {
                 val accountField = controller.javaClass.getDeclaredField("account").apply { isAccessible = true }
                 val account = requireNotNull(accountField.get(controller))
                 val httpField = account.javaClass.getDeclaredField("http").apply { isAccessible = true }
@@ -187,7 +268,7 @@ class AccountHttpLiveDiagnosticsTest {
                 val clientField = http.javaClass.getDeclaredField("client").apply { isAccessible = true }
                 val original = clientField.get(http) as? OkHttpClient
                     ?: throw AssertionError("The account client is not the expected OkHttp implementation")
-                val observed = original.newBuilder().eventListener(listener).build()
+                val observed = original.newBuilder().eventListener(listener).addInterceptor(interceptor).build()
                 val observation = ClientObservation(http, clientField, original, observed)
                 clientField.set(http, observed)
                 if (clientField.get(http) !== observed) {

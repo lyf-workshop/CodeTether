@@ -25,7 +25,6 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import uniffi.supervisor_mobile.ConnectionMode
-import uniffi.supervisor_mobile.connectSupervisor
 
 /** Observes the normal Activity/controller. The controlling PC starts the scoped real Provider Turn. */
 @RunWith(AndroidJUnit4::class)
@@ -180,7 +179,7 @@ class RealProviderAcceptanceTest {
         val computer = account.computers().single { it.id == scope.computerId }
         val credentials = account.connection(computer, scope.mode)
         withContext(Dispatchers.IO) {
-            val session = connectSupervisor(credentials.options, credentials.signer)
+            val session = credentials.connect()
             try {
                 assertTrue("The omission probe must use the chosen transport", session.transport() ==
                     if (scope.mode == ConnectionMode.DIRECT) "direct" else "relay")

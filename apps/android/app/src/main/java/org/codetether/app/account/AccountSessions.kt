@@ -59,7 +59,24 @@ internal class AccountSessions(
         val existing = loadIfNeeded() ?: throw AccountFailure(AccountFailureReason.SIGN_IN_REQUIRED)
         val now = System.currentTimeMillis() / 1_000
         if (existing.expiresAt > now + REFRESH_MARGIN) return@withLock existing
+        refresh(existing)
+    }
 
+    suspend fun refreshRejected(rejected: AccountSession): AccountSession = mutex.withLock {
+        val existing = loadIfNeeded() ?: throw AccountFailure(AccountFailureReason.SIGN_IN_REQUIRED)
+        if (existing.profile.id != rejected.profile.id) throw AccountFailure(AccountFailureReason.SIGN_IN_REQUIRED)
+        // A persisted refresh replaces this immutable snapshot even when the
+        // issuer returns the same access-token bytes.
+        if (existing !== rejected) return@withLock existing
+        refresh(existing)
+    }
+
+    suspend fun clearRejected(rejected: AccountSession) = mutex.withLock {
+        val existing = loadIfNeeded()
+        if (existing === rejected) clear()
+    }
+
+    private suspend fun refresh(existing: AccountSession): AccountSession {
         val response = try {
             request(
                 "/auth/v1/token?grant_type=refresh_token",
@@ -78,7 +95,7 @@ internal class AccountSessions(
             throw AccountFailure(AccountFailureReason.SIGN_IN_REQUIRED)
         }
         persist(refreshed)
-        refreshed
+        return refreshed
     }
 
     suspend fun clearLocalSession(): AccountSession? = mutex.withLock {

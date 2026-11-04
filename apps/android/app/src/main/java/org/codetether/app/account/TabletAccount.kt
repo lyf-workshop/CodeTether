@@ -2,6 +2,8 @@ package org.codetether.app.account
 
 import android.content.Context
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -10,10 +12,17 @@ import uniffi.supervisor_mobile.ConnectOptions
 import uniffi.supervisor_mobile.ConnectionMode
 import uniffi.supervisor_mobile.DeviceSigner
 
-class TabletAccount(context: Context) {
-    private val http = AccountHttp()
-    private val sessions = AccountSessions(context.applicationContext, http)
-    private val control = ControlPlane(context.applicationContext, http)
+class TabletAccount internal constructor(
+    context: Context,
+    private val http: AccountHttp,
+    private val sessions: AccountSessions,
+) {
+    constructor(context: Context) : this(context, AccountHttp())
+
+    private constructor(context: Context, http: AccountHttp) :
+        this(context, http, AccountSessions(context.applicationContext, http))
+
+    private val control = ControlPlane(context.applicationContext, http, sessions = sessions)
     private val registration = Mutex()
 
     @Volatile private var activeDevice: AccountDevice? = null
@@ -62,12 +71,15 @@ class TabletAccount(context: Context) {
         control.remove(session, registeredDevice(session), computer)
     }
 
-    suspend fun signOut() {
+    suspend fun signOut(onLocalCleared: suspend () -> Unit = {}) {
         val previous = withContext(NonCancellable) {
-            registration.withLock {
+            val previous = registration.withLock {
                 sessions.clearLocalSession().also { activeDevice = null }
             }
+            onLocalCleared()
+            previous
         }
+        currentCoroutineContext().ensureActive()
         sessions.endRemoteSession(previous)
     }
 
@@ -76,6 +88,8 @@ class TabletAccount(context: Context) {
     suspend fun connection(computer: PairedComputer, mode: ConnectionMode): ConnectionCredentials {
         val session = sessions.current()
         val device = registeredDevice(session)
+        val current = sessions.current()
+        if (current.profile.id != session.profile.id) throw AccountFailure(AccountFailureReason.SIGN_IN_REQUIRED)
         val grant = computer.grantJson ?: throw AccountFailure(AccountFailureReason.COMPUTER_UNAVAILABLE)
         val descriptor = computer.descriptorJson ?: throw AccountFailure(AccountFailureReason.COMPUTER_UNAVAILABLE)
         control.validateRelayConfig(computer, mode)
@@ -89,25 +103,18 @@ class TabletAccount(context: Context) {
                 deviceKeyGeneration = device.generation,
                 grantJson = grant,
                 descriptorJson = descriptor,
-                accessToken = session.accessToken,
+                accessToken = current.accessToken,
                 mode = mode,
             ),
             signerFor(device),
         )
     }
 
-    suspend fun connectionOptions(computer: PairedComputer, mode: ConnectionMode): ConnectOptions =
-        connection(computer, mode).options
-
     val deviceSigner: DeviceSigner
         get() = signerFor(activeDevice?.device ?: throw AccountFailure(AccountFailureReason.DEVICE_IDENTITY_UNAVAILABLE))
 
-    private fun signerFor(device: RegisteredDevice): DeviceSigner = object : DeviceSigner {
-        override fun signDer(message: ByteArray): ByteArray {
-            if (activeDevice?.device !== device) throw AccountFailure(AccountFailureReason.SIGN_IN_REQUIRED)
-            return device.identity.signDer(message)
-        }
-    }
+    private fun signerFor(device: RegisteredDevice): DeviceSigner =
+        DeviceSignerBoundary({ activeDevice?.device === device }, device.identity::signDer)
 
     private suspend fun registeredDevice(session: AccountSession): RegisteredDevice = registration.withLock {
         val current = sessions.current()

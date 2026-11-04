@@ -26,6 +26,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -48,6 +49,7 @@ import org.codetether.app.remote.RemoteConversation
 import org.codetether.app.remote.RemoteMachine
 import org.codetether.app.remote.RemoteMessage
 import org.codetether.app.remote.RemoteProject
+import java.util.UUID
 import uniffi.supervisor_mobile.ConnectionMode
 
 @Composable
@@ -251,7 +253,8 @@ internal fun ProjectPage(
         Segments(statuses.map { it.second to (it.first == state.projectStatus) }) {
             actions.setProjectFilter(state.projectArchived, statuses[it].first)
         }
-        if (state.projectRows.isEmpty()) Empty("没有符合条件的会话") else Group {
+        if (state.projectLoading) Empty("正在读取会话…")
+        else if (state.projectRows.isEmpty()) Empty("没有符合条件的会话") else Group {
             state.projectRows.forEachIndexed { index, row ->
                 if (index > 0) Rule()
                 ConversationRow(page.computerId, row, state, go)
@@ -282,20 +285,37 @@ internal fun ConversationPage(state: TabletState, target: TabletPage.Conversatio
     val connected = state.computer(target.computerId)?.connection != null
     val messages = (state.olderMessages + detail.history.messages).distinctBy { it.id }
     val list = rememberLazyListState()
-    var draft by remember(target) { mutableStateOf("") }
-    var sending by remember(target) { mutableStateOf<String?>(null) }
-    val canSend = connected && detail.canSend && !state.busy
+    var draft by rememberSaveable(target.computerId, target.target) { mutableStateOf("") }
+    var submittedDraft by rememberSaveable(target.computerId, target.target) { mutableStateOf<String?>(null) }
+    var pendingActionId by rememberSaveable(target.computerId, target.target) { mutableStateOf<String?>(null) }
+    var submissionMessage by rememberSaveable(target.computerId, target.target) { mutableStateOf<String?>(null) }
+    val canSend = connected && detail.canSend && !state.busy && pendingActionId == null
     fun send() {
         val input = draft.trim()
-        if (input.isNotEmpty() && canSend && sending == null) {
-            sending = draft
-            actions.send(target, input)
+        if (input.isNotEmpty() && canSend) {
+            val actionId = newSubmissionActionId()
+            pendingActionId = actionId
+            submittedDraft = draft
+            submissionMessage = null
+            actions.send(target, input, actionId)
         }
     }
-    LaunchedEffect(state.busy, state.error) {
-        if (!state.busy && sending != null) {
-            if (state.error == null && draft == sending) draft = ""
-            sending = null
+    LaunchedEffect(state.sendOutcome, pendingActionId) {
+        val outcome = state.sendOutcome?.takeIf { it.actionId == pendingActionId }
+        when (outcome?.status) {
+            MutationStatus.Success -> {
+                if (draft == submittedDraft) draft = ""
+                pendingActionId = null
+                submittedDraft = null
+                submissionMessage = null
+            }
+            MutationStatus.Failed -> {
+                pendingActionId = null
+                submittedDraft = null
+                submissionMessage = outcome.message
+            }
+            MutationStatus.Unknown -> submissionMessage = outcome.message ?: "暂时无法确认这次操作的结果。"
+            MutationStatus.Pending, null -> Unit
         }
     }
     val last = messages.lastOrNull()
@@ -347,7 +367,7 @@ internal fun ConversationPage(state: TabletState, target: TabletPage.Conversatio
                         failed.error?.let { Text(it, color = ink.secondary) }
                         val priorInput = failed.input
                         if (failed.canRetry && canSend && !priorInput.isNullOrBlank()) {
-                            QuietButton("重试") { actions.send(target, priorInput) }
+                            QuietButton("重试") { actions.send(target, priorInput, newSubmissionActionId()) }
                         }
                     }
                 }
@@ -384,6 +404,7 @@ internal fun ConversationPage(state: TabletState, target: TabletPage.Conversatio
                         InkButton("发送", enabled = canSend && draft.isNotBlank(), onClick = ::send)
                     }
                 }
+                submissionMessage?.let { Text(it, color = ink.failed, fontSize = 13.sp) }
             }
         }
     }
@@ -561,26 +582,50 @@ internal fun SearchSheet(
 internal fun CreateSheet(
     state: TabletState,
     onDismiss: () -> Unit,
-    submit: (String, RemoteProject, String, String, String?) -> Unit,
+    submit: (String, RemoteProject, String, String, String?, String) -> Unit,
 ) {
     val available = state.computers.flatMap { entry ->
         entry.workspace?.projects.orEmpty().map { entry to it }
     }
-    var projectSelection by remember { mutableStateOf<Pair<String, RemoteProject>?>(null) }
-    var providerSelection by remember(projectSelection) { mutableStateOf<String?>(null) }
-    var reasoning by remember(projectSelection, providerSelection) { mutableStateOf<String?>(null) }
-    var text by remember { mutableStateOf("") }
-    val project = projectSelection
+    var selectedComputerId by rememberSaveable { mutableStateOf<String?>(null) }
+    var selectedMachineId by rememberSaveable { mutableStateOf<String?>(null) }
+    var selectedProjectId by rememberSaveable { mutableStateOf<String?>(null) }
+    var providerSelection by rememberSaveable(selectedComputerId, selectedMachineId, selectedProjectId) { mutableStateOf<String?>(null) }
+    var reasoning by rememberSaveable(selectedComputerId, selectedMachineId, selectedProjectId, providerSelection) { mutableStateOf<String?>(null) }
+    var text by rememberSaveable { mutableStateOf("") }
+    var pendingActionId by rememberSaveable { mutableStateOf<String?>(null) }
+    var submissionMessage by rememberSaveable { mutableStateOf<String?>(null) }
+    val selected = available.firstOrNull { (entry, row) ->
+        entry.computer.id == selectedComputerId && row.machineId == selectedMachineId && row.id == selectedProjectId
+    }
+    val project = selected?.let { it.first.computer.id to it.second }
     val machine = project?.let { state.machine(it.first, it.second.machineId) }
     val provider = machine?.providers?.firstOrNull { it.id == providerSelection }
     val owner = project?.let { state.computer(it.first) }
     val stillAvailable = owner?.workspace?.projects?.any { it.id == project?.second?.id && it.available } == true
     val enabled = stillAvailable && owner?.connection != null && owner.workspace?.canControl == true &&
-        machine?.available == true && provider?.canStart == true && text.isNotBlank() && !state.busy
+        machine?.available == true && provider?.canStart == true && text.isNotBlank() && !state.busy && pendingActionId == null
+    LaunchedEffect(state.createOutcome, pendingActionId) {
+        val outcome = state.createOutcome?.takeIf { it.actionId == pendingActionId }
+        when (outcome?.status) {
+            MutationStatus.Success -> onDismiss()
+            MutationStatus.Failed -> {
+                pendingActionId = null
+                submissionMessage = outcome.message
+            }
+            MutationStatus.Unknown -> submissionMessage = outcome.message ?: "暂时无法确认这次操作的结果。"
+            MutationStatus.Pending, null -> Unit
+        }
+    }
     fun send() {
         val selection = project ?: return
         val tool = provider ?: return
-        if (enabled) submit(selection.first, selection.second, tool.id, text.trim(), reasoning)
+        if (enabled) {
+            val actionId = newSubmissionActionId()
+            pendingActionId = actionId
+            submissionMessage = null
+            submit(selection.first, selection.second, tool.id, text.trim(), reasoning, actionId)
+        }
     }
     CenterSheet("新建会话", onDismiss) {
         Column(Modifier.heightIn(max = 530.dp).verticalScroll(rememberScrollState()),
@@ -593,8 +638,10 @@ internal fun CreateSheet(
                     RowItem(row.name, if (canUse) entry.computer.name else "${entry.computer.name} · 暂时不能使用",
                         active = project == (entry.computer.id to row),
                         modifier = Modifier.testTag("new-project-${row.id}"),
-                        onClick = if (canUse) ({
-                            projectSelection = entry.computer.id to row
+                        onClick = if (canUse && !state.busy && pendingActionId == null) ({
+                            selectedComputerId = entry.computer.id
+                            selectedMachineId = row.machineId
+                            selectedProjectId = row.id
                         }) else null)
                 }
             }
@@ -604,22 +651,27 @@ internal fun CreateSheet(
                     machine.providers.forEachIndexed { index, tool ->
                         if (index > 0) Rule()
                         RowItem(tool.displayName, providerStatus(tool.status), active = tool.id == providerSelection,
-                            onClick = if (tool.canStart) ({ providerSelection = tool.id }) else null)
+                            onClick = if (tool.canStart && !state.busy && pendingActionId == null) ({ providerSelection = tool.id }) else null)
                     }
                 }
             }
             if (provider?.id == "claude-code" && provider.reasoning.isNotEmpty()) {
                 SectionTitle("推理强度")
                 val options = listOf(null to "默认") + provider.reasoning.map { it.id to it.label }
-                Segments(options.map { it.second to (reasoning == it.first) }) { reasoning = options[it].first }
+                Segments(options.map { it.second to (reasoning == it.first) }) {
+                    if (!state.busy && pendingActionId == null) reasoning = options[it].first
+                }
             }
             InkField(text, { text = it.take(64 * 1024) }, "第一条消息", Modifier.onPreviewKeyEvent { event ->
                 if (event.type == KeyEventType.KeyDown && event.isCtrlPressed && event.key == Key.Enter) {
                     send()
                     true
                 } else false
-            }, singleLine = false)
+            }, singleLine = false, enabled = !state.busy && pendingActionId == null)
+            submissionMessage?.let { Text(it, color = ink.failed, fontSize = 13.sp) }
             InkButton("创建会话", Modifier.fillMaxWidth(), enabled, ::send)
         }
     }
 }
+
+private fun newSubmissionActionId(): String = "act_${UUID.randomUUID().toString().replace("-", "")}"

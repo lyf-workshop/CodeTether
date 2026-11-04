@@ -6,6 +6,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -15,6 +16,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
@@ -28,11 +30,19 @@ import org.codetether.app.remote.RemoteAttention
 import org.codetether.app.remote.RemoteConversation
 import org.codetether.app.remote.RemoteFailure
 import org.codetether.app.remote.RemoteProject
-import org.codetether.app.remote.RemoteSupervisor
+import org.codetether.app.remote.ConversationTarget
+import org.codetether.app.remote.mergeHistory
 import uniffi.supervisor_mobile.ConnectionMode
 
-internal class TabletController(application: Application) : AndroidViewModel(application), TabletActions {
-    private val account = TabletAccount(application)
+internal class TabletController private constructor(
+    application: Application,
+    private val account: TabletAccount,
+    private val dependencies: ControllerDependencies,
+) : AndroidViewModel(application), TabletActions {
+    constructor(application: Application) : this(application, TabletAccount(application))
+    private constructor(application: Application, account: TabletAccount) : this(application, account, ControllerDependencies(account))
+    internal constructor(application: Application, dependencies: ControllerDependencies) : this(application, TabletAccount(application), dependencies)
+    private val accountApi get() = dependencies.account
     private val preferences = application.getSharedPreferences("tablet-appearance", Context.MODE_PRIVATE)
     private val savedAppearance = Appearance.entries.firstOrNull {
         it.name == preferences.getString("appearance", null)
@@ -40,7 +50,7 @@ internal class TabletController(application: Application) : AndroidViewModel(app
     private val mutable = MutableStateFlow(TabletState(appearance = savedAppearance, busy = true))
     val state = mutable.asStateFlow()
 
-    private val clients = mutableMapOf<String, RemoteSupervisor>()
+    private val clients = mutableMapOf<String, ControllerSession>()
     private val directoryMutex = Mutex()
     private val parallelComputers = Semaphore(3)
     private var foreground = false
@@ -49,17 +59,19 @@ internal class TabletController(application: Application) : AndroidViewModel(app
     private var projectJob: Job? = null
     private var changesJob: Job? = null
     private var actionJob: Job? = null
+    private data class PendingMutation(val actionId: String, val computerId: String, val target: ConversationTarget?, val project: RemoteProject?)
+    private val pendingMutations = linkedMapOf<String, PendingMutation>()
 
     init {
         viewModelScope.launch {
             try {
-                val profile = account.restore()
+                val profile = accountApi.restore()
                 mutable.update { it.copy(profile = profile, busy = false) }
                 if (profile != null && foreground) readDirectory(first = true)
             } catch (cancel: CancellationException) {
                 throw cancel
             } catch (failure: Exception) {
-                mutable.update { it.copy(busy = false, error = friendly(failure)) }
+                if (!resetIfSessionEnded(failure)) mutable.update { it.copy(busy = false, error = friendly(failure)) }
             }
         }
     }
@@ -76,7 +88,10 @@ internal class TabletController(application: Application) : AndroidViewModel(app
             val open = clients.values.toList()
             clients.clear()
             mutable.update { current ->
-                current.copy(computers = current.computers.map { it.copy(connection = null) })
+                current.copy(
+                    computers = current.computers.map { it.copy(connection = null) },
+                    projectLoading = current.projectLoading || current.page is TabletPage.Project,
+                )
             }
             viewModelScope.launch { open.forEach { it.disconnect() } }
             return
@@ -90,6 +105,10 @@ internal class TabletController(application: Application) : AndroidViewModel(app
                         if (current is TabletPage.Conversation && watchJob?.isActive != true) {
                             observe(current)
                         }
+                        if (current is TabletPage.Project && projectJob?.isActive != true && state.value.projectLoading) {
+                            loadProject(current)
+                        }
+                        confirmPendingMutations()
                     } catch (cancel: CancellationException) {
                         throw cancel
                     } catch (failure: Exception) {
@@ -114,6 +133,7 @@ internal class TabletController(application: Application) : AndroidViewModel(app
                 changes = emptyList(),
                 changesLoading = false,
                 projectRows = emptyList(),
+                projectLoading = page is TabletPage.Project,
                 projectArchived = false,
                 projectStatus = null,
                 error = null,
@@ -129,7 +149,7 @@ internal class TabletController(application: Application) : AndroidViewModel(app
 
     override fun requestCode(email: String) = action {
         val address = email.trim()
-        account.requestCode(address)
+        accountApi.requestCode(address)
         mutable.update { it.copy(otpEmail = address) }
     }
 
@@ -138,14 +158,14 @@ internal class TabletController(application: Application) : AndroidViewModel(app
     }
 
     override fun verifyCode(email: String, code: String) = action {
-        val profile = account.verifyCode(email, code)
+        val profile = accountApi.verifyCode(email, code)
         mutable.update { it.copy(profile = profile, otpEmail = null, page = TabletPage.Pair) }
         readDirectory(first = true)
     }
 
     override fun pair(code: String) = action {
-        mutable.update { it.copy(pairingClaimed = false, lastPairedName = null) }
-        when (val result = account.pair(code) { mutable.update { it.copy(pairingClaimed = true) } }) {
+        mutable.update { it.copy(pairingInProgress = true, pairingClaimed = false, lastPairedName = null) }
+        when (val result = accountApi.pair(code) { mutable.update { it.copy(pairingClaimed = true) } }) {
             is PairingResult.Paired -> {
                 mutable.update { it.copy(lastPairedName = result.computer.name) }
                 readDirectory()
@@ -157,8 +177,12 @@ internal class TabletController(application: Application) : AndroidViewModel(app
         mutable.update { it.copy(pairingClaimed = false) }
     }
 
+    override fun cancelPairing() {
+        if (state.value.pairingInProgress) actionJob?.cancel()
+    }
+
     override fun removeComputer(computer: PairedComputer) = action {
-        account.removeComputer(computer)
+        accountApi.removeComputer(computer)
         clients.remove(computer.id)?.disconnect()
         mutable.update { current ->
             current.copy(
@@ -170,9 +194,11 @@ internal class TabletController(application: Application) : AndroidViewModel(app
     }
 
     override fun signOut() = action {
-        directoryMutex.withLock {
-            clearAccountView()
-            account.signOut()
+        accountApi.signOut {
+            withContext(NonCancellable) {
+                directoryJob?.cancel()
+                directoryMutex.withLock { clearAccountView() }
+            }
         }
     }
 
@@ -182,14 +208,17 @@ internal class TabletController(application: Application) : AndroidViewModel(app
         changesJob?.cancel()
         val open = clients.values.toList()
         clients.clear()
+        pendingMutations.clear()
         mutable.update { TabletState(appearance = it.appearance, mode = it.mode, busy = it.busy, error = error) }
         open.forEach { it.disconnect() }
     }
 
     private suspend fun resetIfSessionEnded(failure: Exception): Boolean {
-        if (failure !is AccountFailure || failure.reason != AccountFailureReason.SIGN_IN_REQUIRED) return false
+        val ended = (failure is AccountFailure && failure.reason == AccountFailureReason.SIGN_IN_REQUIRED) ||
+            (failure is RemoteFailure && failure.code == "sign_in_required")
+        if (!ended) return false
         return directoryMutex.withLock {
-            if (account.restore() != null) return@withLock false
+            if (accountApi.restore() != null) return@withLock false
             clearAccountView(friendly(failure))
             true
         }
@@ -218,7 +247,7 @@ internal class TabletController(application: Application) : AndroidViewModel(app
 
     override fun setProjectFilter(archived: Boolean, status: String?) {
         val page = state.value.page as? TabletPage.Project ?: return
-        mutable.update { it.copy(projectArchived = archived, projectStatus = status, projectRows = emptyList()) }
+        mutable.update { it.copy(projectArchived = archived, projectStatus = status, projectRows = emptyList(), projectLoading = true) }
         loadProject(page)
     }
 
@@ -228,10 +257,10 @@ internal class TabletController(application: Application) : AndroidViewModel(app
         val cursor = current.olderCursor ?: return@action
         val history = requireClient(page.computerId).olderHistory(page.target, cursor)
         mutable.update {
-            if (it.page == page) it.copy(
-                olderMessages = (history.messages + it.olderMessages).distinctBy { entry -> entry.id },
-                olderCursor = history.beforeCursor,
-            ) else it
+            if (it.page != page || it.detail == null) it else {
+                val merged = mergeHistory(it.detail.history, history, olderPage = true)
+                it.copy(detail = it.detail.copy(history = merged), olderMessages = emptyList(), olderCursor = merged.beforeCursor)
+            }
         }
     }
 
@@ -246,21 +275,25 @@ internal class TabletController(application: Application) : AndroidViewModel(app
             } catch (cancel: CancellationException) {
                 throw cancel
             } catch (failure: Exception) {
-                mutable.update { if (it.page == page) it.copy(error = friendly(failure)) else it }
+                if (!resetIfSessionEnded(failure)) {
+                    mutable.update { if (it.page == page) it.copy(error = friendly(failure)) else it }
+                }
             } finally {
                 mutable.update { if (it.page == page) it.copy(changesLoading = false) else it }
             }
         }
     }
 
-    override fun create(computerId: String, project: RemoteProject, provider: String, text: String, reasoning: String?) =
-        action {
-            val target = requireClient(computerId).create(project, provider, text, reasoning)
+    override fun create(computerId: String, project: RemoteProject, provider: String, text: String, reasoning: String?, actionId: String) =
+        mutation(PendingMutation(actionId, computerId, null, project)) {
+            val target = requireClient(computerId).create(project, provider, text, reasoning, actionId)
             navigate(TabletPage.Conversation(computerId, target))
         }
 
-    override fun send(target: TabletPage.Conversation, text: String) = action {
-        requireClient(target.computerId).send(target.target, text)
+    override fun send(target: TabletPage.Conversation, text: String, actionId: String) = mutation(
+        PendingMutation(actionId, target.computerId, target.target, null),
+    ) {
+        requireClient(target.computerId).send(target.target, text, actionId)
     }
 
     override fun approve(computerId: String, item: RemoteAttention, accept: Boolean) = action {
@@ -311,6 +344,81 @@ internal class TabletController(application: Application) : AndroidViewModel(app
         }
     }
 
+    private fun outcome(pending: PendingMutation, status: MutationStatus, message: String? = null) {
+        mutable.update {
+            val result = MutationOutcome(pending.actionId, status, message)
+            if (pending.project != null) it.copy(createOutcome = result) else it.copy(sendOutcome = result)
+        }
+    }
+
+    private fun mutation(pending: PendingMutation, work: suspend () -> Unit) {
+        if (!pending.actionId.matches(Regex("act_[A-Za-z0-9][A-Za-z0-9_-]{5,95}"))) {
+            outcome(pending, MutationStatus.Failed, "请重新打开输入窗口后再试。")
+            return
+        }
+        if (!foreground || state.value.busy || pendingMutations.values.any { (it.project == null) == (pending.project == null) }) {
+            outcome(pending, MutationStatus.Failed, "请先等当前操作完成或确认上次操作的结果。")
+            return
+        }
+        pendingMutations[pending.actionId] = pending
+        outcome(pending, MutationStatus.Pending)
+        mutable.update { it.copy(busy = true, error = null) }
+        actionJob = viewModelScope.launch {
+            try {
+                work()
+                pendingMutations.remove(pending.actionId)
+                outcome(pending, MutationStatus.Success)
+            } catch (cancel: CancellationException) {
+                outcome(pending, MutationStatus.Unknown, "暂时无法确认这次操作的结果，回来后会重新读取。请勿重复提交。")
+                throw cancel
+            } catch (failure: Exception) {
+                if (failure is RemoteFailure && failure.uncertainActionId != null) {
+                    outcome(pending, MutationStatus.Unknown, friendly(failure))
+                } else {
+                    pendingMutations.remove(pending.actionId)
+                    outcome(pending, MutationStatus.Failed, friendly(failure))
+                }
+                if (!resetIfSessionEnded(failure)) mutable.update { it.copy(error = friendly(failure)) }
+            } finally {
+                mutable.update { it.copy(busy = false) }
+            }
+        }
+    }
+
+    /** Resolve uncertainty with reads only. A mutation is never replayed after cancellation. */
+    private suspend fun confirmPendingMutations() {
+        for (pending in pendingMutations.values.toList()) {
+            if (!foreground) return
+            val client = clients[pending.computerId] ?: continue
+            try {
+                val result = client.action(pending.actionId)
+                when (result.status) {
+                    "accepted", "running", "completed", "failed" -> {
+                        if (result.turnId == null) continue
+                        if (pending.target != null && result.conversationId != pending.target.conversationId) continue
+                        if (pending.project != null) {
+                            val conversationId = result.conversationId ?: continue
+                            // Scope comes from the original local selection, never from an arbitrary response path.
+                            val target = ConversationTarget(pending.project.machineId, pending.project.id, conversationId)
+                            if (state.value.page !is TabletPage.Conversation) navigate(TabletPage.Conversation(pending.computerId, target))
+                        }
+                        pendingMutations.remove(pending.actionId)
+                        outcome(pending, MutationStatus.Success)
+                    }
+                    "rejected" -> {
+                        pendingMutations.remove(pending.actionId)
+                        outcome(pending, MutationStatus.Failed, "这次操作未被接受，输入已保留。")
+                    }
+                    else -> Unit // Unknown remains pending; refreshing the conversation is safe, replaying is not.
+                }
+            } catch (cancel: CancellationException) {
+                throw cancel
+            } catch (failure: Exception) {
+                if (resetIfSessionEnded(failure)) return
+            }
+        }
+    }
+
     private fun action(work: suspend () -> Unit) {
         if (!foreground || state.value.busy) return
         mutable.update { it.copy(busy = true, error = null) }
@@ -324,13 +432,13 @@ internal class TabletController(application: Application) : AndroidViewModel(app
                     mutable.update { it.copy(error = friendly(failure), pairingClaimed = false) }
                 }
             } finally {
-                mutable.update { it.copy(busy = false, pairingClaimed = false) }
+                mutable.update { it.copy(busy = false, pairingClaimed = false, pairingInProgress = false) }
             }
         }
     }
 
     private suspend fun readDirectory(first: Boolean = false) = directoryMutex.withLock {
-        val listed = account.computers()
+        val listed = accountApi.computers()
         val before = state.value
         val listedIds = listed.map { it.id }.toSet()
         val removed = before.computers.filter { it.computer.id !in listedIds }
@@ -347,7 +455,7 @@ internal class TabletController(application: Application) : AndroidViewModel(app
         if (!foreground) return@withLock
         val mode = state.value.mode
         val availableClients = listed.associate { computer ->
-            computer.id to clients.getOrPut(computer.id) { RemoteSupervisor(account) }
+            computer.id to clients.getOrPut(computer.id) { dependencies.session() }
         }
         val results = coroutineScope {
             listed.map { computer ->
@@ -365,6 +473,10 @@ internal class TabletController(application: Application) : AndroidViewModel(app
                             throw cancel
                         } catch (failure: Exception) {
                             client.disconnect()
+                            if ((failure is AccountFailure && failure.reason == AccountFailureReason.SIGN_IN_REQUIRED) ||
+                                (failure is RemoteFailure && failure.code == "sign_in_required")) {
+                                throw AccountFailure(AccountFailureReason.SIGN_IN_REQUIRED)
+                            }
                             if (failure is RemoteFailure && failure.removed) return@withPermit null
                             ComputerView(computer, previous?.workspace, problem = friendly(failure))
                         }
@@ -380,7 +492,12 @@ internal class TabletController(application: Application) : AndroidViewModel(app
                 navigate(TabletPage.Removed(it.name))
             }
         }
-        val protection = runCatching { account.keyProtection().name }.getOrNull()
+        val protection = try { accountApi.keyProtection().name } catch (cancel: CancellationException) {
+            throw cancel
+        } catch (failure: AccountFailure) {
+            if (failure.reason == AccountFailureReason.SIGN_IN_REQUIRED) throw failure
+            null
+        } catch (_: Exception) { null }
         mutable.update { current ->
             val nextPage = if (first && current.page !is TabletPage.Removed) {
                 if (results.isEmpty()) TabletPage.Pair else TabletPage.Home
@@ -404,26 +521,37 @@ internal class TabletController(application: Application) : AndroidViewModel(app
         if (!foreground) return
         watchJob = viewModelScope.launch {
             try {
-                client.watchConversation(page.target).collect { detail ->
+                val seed = state.value.detail?.takeIf { it.conversation.target == page.target }?.history
+                client.watchConversation(page.target, seed).collect { detail ->
                     mutable.update {
-                        if (it.page != page) it else it.copy(
-                            detail = detail,
-                            olderCursor = if (it.detail == null) detail.history.beforeCursor else it.olderCursor,
-                            loaded = retainConversations(listOf(page.computerId to detail.conversation), it.loaded),
-                        )
+                        if (it.page != page) it else {
+                            val merged = mergeHistory(it.detail?.history, detail.history)
+                            it.copy(
+                                detail = detail.copy(history = merged), olderMessages = emptyList(), olderCursor = merged.beforeCursor,
+                                loaded = retainConversations(listOf(page.computerId to detail.conversation), it.loaded),
+                            )
+                        }
                     }
                 }
             } catch (cancel: CancellationException) {
                 throw cancel
             } catch (failure: Exception) {
-                mutable.update { if (it.page == page) it.copy(error = friendly(failure)) else it }
-                if (foreground) runCatching { readDirectory() }
+                if (!resetIfSessionEnded(failure)) {
+                    mutable.update { if (it.page == page) it.copy(error = friendly(failure)) else it }
+                    if (foreground) {
+                        try { readDirectory() } catch (cancel: CancellationException) {
+                            throw cancel
+                        } catch (directoryFailure: Exception) { resetIfSessionEnded(directoryFailure) }
+                    }
+                }
             }
         }
     }
 
     private fun loadProject(page: TabletPage.Project) {
         projectJob?.cancel()
+        if (!foreground) return
+        mutable.update { if (it.page == page) it.copy(projectLoading = true) else it }
         projectJob = viewModelScope.launch {
             try {
                 val current = state.value
@@ -433,18 +561,21 @@ internal class TabletController(application: Application) : AndroidViewModel(app
                 mutable.update {
                     if (it.page != page) it else it.copy(
                         projectRows = rows,
+                        projectLoading = false,
                         loaded = retainConversations(rows.map { row -> page.computerId to row }, it.loaded),
                     )
                 }
             } catch (cancel: CancellationException) {
                 throw cancel
             } catch (failure: Exception) {
-                mutable.update { if (it.page == page) it.copy(error = friendly(failure)) else it }
+                if (!resetIfSessionEnded(failure)) {
+                    mutable.update { if (it.page == page) it.copy(error = friendly(failure), projectLoading = false) else it }
+                }
             }
         }
     }
 
-    private fun requireClient(computerId: String): RemoteSupervisor =
+    private fun requireClient(computerId: String): ControllerSession =
         clients[computerId] ?: error("Computer session unavailable")
 
     private fun retainConversations(
@@ -455,7 +586,7 @@ internal class TabletController(application: Application) : AndroidViewModel(app
     private fun friendly(failure: Exception): String = when (failure) {
         is AccountFailure -> failure.message ?: "现在无法完成，请稍后再试"
         is RemoteFailure -> when {
-            failure.httpStatus == 409 -> "会话正在运行，请等这一轮结束后再试（409）"
+            failure.httpStatus == 409 -> "会话正在运行或等待批准，请等工作结束后再试（409）"
             failure.httpStatus == 422 -> "这个 AI 工具不支持该操作"
             else -> failure.message ?: "这台电脑现在连不上，请确认它开着并且联网"
         }

@@ -2,6 +2,8 @@ package org.codetether.app.account
 
 import uniffi.supervisor_mobile.ConnectOptions
 import uniffi.supervisor_mobile.DeviceSigner
+import uniffi.supervisor_mobile.SupervisorSession
+import uniffi.supervisor_mobile.connectSupervisor
 
 class AccountProfile internal constructor(val id: String, val email: String)
 
@@ -62,6 +64,10 @@ enum class PairingRejection {
 }
 
 class ConnectionCredentials internal constructor(
-    val options: ConnectOptions,
-    val signer: DeviceSigner,
-)
+    private val options: ConnectOptions,
+    private val signer: DeviceSigner,
+) {
+    internal fun connect(): SupervisorSession = connectSupervisor(options, signer)
+
+    override fun toString(): String = "ConnectionCredentials(redacted)"
+}

@@ -18,7 +18,12 @@ import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
 
-internal class HttpStatus(val status: Int) : IOException()
+internal enum class AuthenticationFailure { SESSION, DEVICE }
+
+internal class HttpStatus(
+    val status: Int,
+    val authentication: AuthenticationFailure? = null,
+) : IOException()
 
 internal class AccountHttp(
     private val client: Call.Factory = OkHttpClient.Builder()
@@ -56,7 +61,7 @@ internal class AccountHttp(
             override fun onResponse(call: Call, response: Response) {
                 val result = runCatching {
                     response.use {
-                        if (!it.isSuccessful) throw HttpStatus(it.code)
+                        if (!it.isSuccessful) throw HttpStatus(it.code, authenticationFailure(it))
                         val source = it.body?.source() ?: return@use JSONObject()
                         if (source.request(MAX_RESPONSE_BYTES + 1)) invalidResponse()
                         val data = source.readUtf8()
@@ -74,6 +79,24 @@ internal class AccountHttp(
     private companion object {
         val JSON = "application/json; charset=utf-8".toMediaType()
         const val MAX_RESPONSE_BYTES = 2L * 1024 * 1024
+        const val MAX_ERROR_BYTES = 4096L
+        val SESSION_FAILURE_CODES = setOf(
+            "missing_authentication", "malformed_token", "expired_token", "invalid_signature",
+            "wrong_issuer", "unsupported_signing_mode",
+        )
+
+        fun authenticationFailure(response: Response): AuthenticationFailure? = try {
+            val error = JSONObject(response.peekBody(MAX_ERROR_BYTES).string())
+            when (error.optString("status")) {
+                "authentication_failed" -> AuthenticationFailure.SESSION.takeIf {
+                    error.optString("code") in SESSION_FAILURE_CODES
+                }
+                "device_authentication_failed" -> AuthenticationFailure.DEVICE
+                else -> null
+            }
+        } catch (_: Exception) {
+            null
+        }
     }
 }
 

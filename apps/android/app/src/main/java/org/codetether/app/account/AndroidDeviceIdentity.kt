@@ -28,14 +28,18 @@ internal class AndroidDeviceIdentity private constructor(
     val publicJwk: JSONObject,
     val fingerprint: String,
 ) : DeviceSigner {
-    override fun signDer(message: ByteArray): ByteArray = keystoreOperation {
-        val key = keyStore().getKey(alias, null) as? java.security.PrivateKey ?: unavailable()
-        Signature.getInstance("SHA256withECDSA").run {
-            initSign(key)
-            update(message)
-            sign()
+    private val nativeSigner = DeviceSignerBoundary({ true }) { message ->
+        keystoreOperation {
+            val key = keyStore().getKey(alias, null) as? java.security.PrivateKey ?: unavailable()
+            Signature.getInstance("SHA256withECDSA").run {
+                initSign(key)
+                update(message)
+                sign()
+            }
         }
     }
+
+    override fun signDer(message: ByteArray): ByteArray = nativeSigner.signDer(message)
 
     companion object {
         fun loadOrCreate(context: Context, accountId: String): AndroidDeviceIdentity = keystoreOperation {

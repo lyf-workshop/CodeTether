@@ -97,6 +97,7 @@ class TabletUiTest {
         override fun verifyCode(email: String, code: String) { state = state.copy(page = TabletPage.Pair) }
         override fun editEmail() { state = state.copy(otpEmail = null) }
         override fun pair(code: String) { state = state.copy(lastPairedName = computer.name) }
+        override fun cancelPairing() { state = state.copy(busy = false, pairingInProgress = false) }
         override fun removeComputer(computer: PairedComputer) { acted.add("remove") }
         override fun signOut() { state = TabletState() }
         override fun setAppearance(value: Appearance) { state = state.copy(appearance = value) }
@@ -110,10 +111,14 @@ class TabletUiTest {
             state = state.copy(changes = listOf(RemoteChange("src/conversation-row.tsx", "modified",
                 "@@ -1,1 +1,2 @@\n-<span>{title}</span>\n+<span className=\"truncate\">{title}</span>\n+<time>{updated}</time>", 2, 1)))
         }
-        override fun create(computerId: String, project: RemoteProject, provider: String, text: String, reasoning: String?) {
+        override fun create(computerId: String, project: RemoteProject, provider: String, text: String, reasoning: String?, actionId: String) {
             acted.add("create")
+            state = state.copy(createOutcome = MutationOutcome(actionId, MutationStatus.Success))
         }
-        override fun send(target: TabletPage.Conversation, text: String) { acted.add("send") }
+        override fun send(target: TabletPage.Conversation, text: String, actionId: String) {
+            acted.add("send")
+            state = state.copy(sendOutcome = MutationOutcome(actionId, MutationStatus.Success))
+        }
         override fun approve(computerId: String, item: RemoteAttention, accept: Boolean) {
             acted.add(if (accept) "accept" else "decline")
         }

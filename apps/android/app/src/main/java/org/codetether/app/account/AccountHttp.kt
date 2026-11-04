@@ -20,13 +20,14 @@ import org.json.JSONObject
 
 internal class HttpStatus(val status: Int) : IOException()
 
-internal class AccountHttp {
-    private val client = OkHttpClient.Builder()
+internal class AccountHttp(
+    private val client: Call.Factory = OkHttpClient.Builder()
         .callTimeout(12, TimeUnit.SECONDS)
         .retryOnConnectionFailure(false)
         .followRedirects(false)
         .followSslRedirects(false)
-        .build()
+        .build(),
+) {
 
     suspend fun request(
         origin: HttpUrl,

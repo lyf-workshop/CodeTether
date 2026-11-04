@@ -9,7 +9,12 @@ import kotlinx.coroutines.withContext
 import org.codetether.app.BuildConfig
 import org.json.JSONObject
 
-internal class AccountSessions(context: Context, private val http: AccountHttp) {
+internal class AccountSessions(
+    context: Context,
+    private val http: AccountHttp,
+    private val supabaseUrl: String = BuildConfig.SUPABASE_URL,
+    private val publishableKey: String = BuildConfig.SUPABASE_PUBLISHABLE_KEY,
+) {
     private val store = EncryptedAccountStore(context)
     private val mutex = Mutex()
     private var loaded = false
@@ -115,14 +120,13 @@ internal class AccountSessions(context: Context, private val http: AccountHttp) 
     }
 
     private suspend fun request(resource: String, body: JSONObject, accessToken: String? = null): JSONObject {
-        val origin = configurationOrigin(BuildConfig.SUPABASE_URL)
-        val key = BuildConfig.SUPABASE_PUBLISHABLE_KEY
-        if (!isPublishableKeyConfigured(key)) {
+        val origin = configurationOrigin(supabaseUrl)
+        if (!isPublishableKeyConfigured(publishableKey)) {
             throw AccountFailure(AccountFailureReason.CONFIGURATION_MISSING)
         }
         return http.request(
             origin, resource, "POST",
-            mapOf("apikey" to key, "Authorization" to "Bearer ${accessToken ?: key}"),
+            mapOf("apikey" to publishableKey, "Authorization" to "Bearer ${accessToken ?: publishableKey}"),
             body.toString().toByteArray(Charsets.UTF_8),
         )
     }

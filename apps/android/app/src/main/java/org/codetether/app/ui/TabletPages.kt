@@ -43,6 +43,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.codetether.app.account.PairedComputer
 import org.codetether.app.remote.RemoteAttention
+import org.codetether.app.remote.RemoteChangeKey
 import org.codetether.app.remote.RemoteConversation
 import org.codetether.app.remote.RemoteMachine
 import org.codetether.app.remote.RemoteMessage
@@ -415,9 +416,9 @@ private fun ApprovalButtons(enabled: Boolean, approve: () -> Unit, decline: () -
 
 @Composable
 internal fun ChangesPanel(modifier: Modifier, state: TabletState, close: () -> Unit, refresh: () -> Unit) {
-    var chosen by remember(state.page) { mutableStateOf<String?>(null) }
-    val selected = state.changes.firstOrNull { it.path == chosen } ?: state.changes.firstOrNull()
-    Column(modifier.fillMaxHeight().background(ink.background)) {
+    var chosen by remember(state.page) { mutableStateOf<RemoteChangeKey?>(null) }
+    val selected = state.changes.firstOrNull { it.key == chosen } ?: state.changes.firstOrNull()
+    Column(modifier.testTag("changes-panel").fillMaxHeight().background(ink.background)) {
         Row(Modifier.fillMaxWidth().background(ink.bar).padding(start = 16.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("变更", Modifier.weight(1f), fontWeight = FontWeight.Bold, fontSize = 17.sp, color = ink.text)
             QuietButton("刷新", enabled = !state.changesLoading, onClick = refresh)
@@ -432,20 +433,21 @@ internal fun ChangesPanel(modifier: Modifier, state: TabletState, close: () -> U
                     if (index > 0) Rule()
                     val counts = listOfNotNull(change.additions?.let { "+$it" }, change.deletions?.let { "−$it" })
                     RowItem(change.path.substringAfterLast('/').substringAfterLast('\\'),
-                        trailing = counts.joinToString(" "), active = selected?.path == change.path) { chosen = change.path }
+                        trailing = counts.joinToString(" "), active = selected?.key == change.key,
+                        modifier = Modifier.testTag("change-row-$index")) { chosen = change.key }
                 }
             }
-            if (selected != null) Group {
+            if (selected != null) Group(Modifier.testTag("change-diff")) {
                 RowItem(selected.path)
                 Rule()
                 val diff = selected.diff
                 if (diff == null) RowItem("没有可显示的逐行差异") else {
-                    Column(Modifier.horizontalScroll(rememberScrollState()).padding(vertical = 6.dp)) {
-                        diff.lineSequence().forEach { line ->
+                    Column(Modifier.testTag("change-diff-lines").horizontalScroll(rememberScrollState()).padding(vertical = 6.dp)) {
+                        diff.lineSequence().forEachIndexed { lineIndex, line ->
                             val added = line.startsWith("+") && !line.startsWith("+++")
                             val removed = line.startsWith("-") && !line.startsWith("---")
                             val color = if (added) ink.done else if (removed) ink.failed else ink.text
-                            Text(line.ifEmpty { " " }, Modifier.fillMaxWidth().background(color.copy(alpha = if (added || removed) .12f else 0f))
+                            Text(line.ifEmpty { " " }, Modifier.testTag("change-line-$lineIndex").fillMaxWidth().background(color.copy(alpha = if (added || removed) .12f else 0f))
                                 .padding(horizontal = 8.dp, vertical = 2.dp), color = color,
                                 fontFamily = FontFamily.Monospace, fontSize = 12.sp)
                         }

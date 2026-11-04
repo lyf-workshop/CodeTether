@@ -120,7 +120,14 @@ data class RemoteChange(
     val diff: String?,
     val additions: Int?,
     val deletions: Int?,
-)
+    val turnId: String = "",
+    val itemId: String? = null,
+    val order: Long = 0L,
+) {
+    val key: RemoteChangeKey get() = RemoteChangeKey(turnId, itemId, path, order)
+}
+
+data class RemoteChangeKey(val turnId: String, val itemId: String?, val path: String, val order: Long)
 
 data class RemoteAction(val id: String, val status: String, val conversationId: String?, val turnId: String?)
 

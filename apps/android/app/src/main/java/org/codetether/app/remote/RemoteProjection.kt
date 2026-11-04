@@ -117,6 +117,9 @@ internal fun JSONObject.change() = RemoteChange(
     diff = optionalText("diff"),
     additions = count("additions"),
     deletions = count("deletions"),
+    turnId = text("turnId"),
+    itemId = optionalText("itemId"),
+    order = (opt("order") as? Number)?.toLong() ?: invalidResponse(),
 )
 
 internal fun JSONObject.history(target: ConversationTarget): RemoteHistory {

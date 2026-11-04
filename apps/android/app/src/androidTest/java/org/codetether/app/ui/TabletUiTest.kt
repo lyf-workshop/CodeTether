@@ -182,6 +182,31 @@ class TabletUiTest {
     }
 
     @Test
+    fun changesWithTheSamePathKeepTheirOwnDiffWhenSelectedAndRefreshed() {
+        val first = RemoteChange(
+            "demo.txt", "modified", "@@ -1 +1 @@\n-old-original\n+old-replacement", 1, 1,
+            turnId = "turn_fixture_first", itemId = "item_fixture_first", order = 1,
+        )
+        val second = RemoteChange(
+            "demo.txt", "modified", "@@ -1 +1 @@\n-new-original\n+new-replacement", 1, 1,
+            turnId = "turn_fixture_second", itemId = "item_fixture_second", order = 2,
+        )
+        state = detail().copy(changes = listOf(first, second))
+        compose.setContent {
+            TabletInk(state.appearance) { ChangesPanel(androidx.compose.ui.Modifier, state, {}, {}) }
+        }
+        compose.onNodeWithText("+old-replacement").assertIsDisplayed()
+        compose.onNodeWithTag("change-row-1").performClick()
+        compose.onNodeWithText("+new-replacement").assertIsDisplayed()
+        compose.onNodeWithText("+old-replacement").assertDoesNotExist()
+        display(state.copy(changes = listOf(second.copy(diff = "@@ -1 +1 @@\n-new-original\n+new-refreshed"), first)))
+        compose.onNodeWithText("+new-refreshed").assertIsDisplayed()
+        compose.onNodeWithTag("change-row-1").performClick()
+        compose.onNodeWithText("+old-replacement").assertIsDisplayed()
+        compose.onNodeWithText("+new-refreshed").assertDoesNotExist()
+    }
+
+    @Test
     fun capturePortraitPrototypeScreens() {
         if (compose.activity.resources.configuration.orientation != Configuration.ORIENTATION_PORTRAIT) return
         state = detail()

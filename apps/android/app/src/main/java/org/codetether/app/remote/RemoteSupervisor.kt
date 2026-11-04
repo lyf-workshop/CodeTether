@@ -230,7 +230,7 @@ class RemoteSupervisor(private val account: TabletAccount) {
         try {
             mutate(requireControl(), "conversation.archive", *target.fields())
         } catch (failure: RemoteFailure) {
-            if (failure.httpStatus == 409) throw RemoteFailure("archive_busy", 409)
+            if (failure.code == "conflict" || failure.httpStatus == 409) throw RemoteFailure("archive_busy", 409)
             throw failure
         }
     }

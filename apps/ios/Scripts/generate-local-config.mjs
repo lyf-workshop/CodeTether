@@ -89,5 +89,6 @@ function xcconfigValue(value) {
   const containsControl = Array.from(value, (character) => character.codePointAt(0))
     .some((codePoint) => codePoint < 0x20 || codePoint === 0x7f)
   if (containsControl) throw new Error('Local build setting contains a control character')
-  return `"${value.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`
+  if (/[\s"\\]/u.test(value)) throw new Error('Local build setting contains unsupported whitespace or quoting')
+  return value.replaceAll('://', ':/$()/')
 }

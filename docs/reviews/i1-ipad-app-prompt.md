@@ -81,6 +81,8 @@
   - 回到前台时重读当前页（项目页也要），读取中不要显示成空列表。
   - `DeviceSigner` 回调只抛 `MobileError`。抛别的错误时 Rust 会 panic，因为 `MobileError` 没有实现从 UniFFI 意外回调错误的转换。
   - UniFFI 生成的 `ConnectOptions` 里有 access token，不要打印它，也不要让它进错误信息。
+  - 旋转、分屏、台前调度调整窗口不算切到后台，正在进行的操作和连接都不要断。只有 `scenePhase` 变成 `.background` 才停，`.inactive` 不停。
+  - 新建会话的 actionId 用 `action.get` 查不到（Host 只查发送的 actionId）。结果不确定时让用户用原来的 actionId 和内容重试，Host 会去重；待确认的操作只挡同一个会话或项目。
 - **B1 补测里看到的两件事**，客户端要处理：
   - 续期刚完成时，用旧授权重连会收到 `authorization_revoked`。先重新读一次目录、用最新的授权重试，不要直接判断为被移除。
   - 移除以后再连，分类是 `request_failed`，和普通连不上分不开。只有控制服务确认已经没有有效授权时才显示“被移除”页，其他情况显示“这台电脑现在连不上……”。

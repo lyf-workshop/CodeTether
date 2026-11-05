@@ -132,7 +132,7 @@ CC Switch 式的切换（切换 AI 工具用的 API 服务和模型配置，先�
 3. B0：已部署（2026-11-02），诊断页已合入 `main`（`b59f911`）。经 Relay 的端到端读取等有了有效授权再补做。
 4. B1：Mac 跨设备验收通过（2026-11-04，报告 `agenthub-archive/b1-mac-check-windows.md`），已快进合并到 `main`（`9694895`）。控制服务和 Relay 的代码没有变化，不用重新部署。三项没覆盖到、不阻塞：断开耗时和重连错误（移除时 Mac 会话已断开）、Mac 端不支持工具的按钮可见性（Windows 一侧已确认能力为 false）、Mac 开发版的设备名显示成“CodeTether Desktop”。
 5. 平板：设计已确认（2026-11-03），颜色改成和电脑一样的墨色。T1a 已实现并推送（`t1a/tablet-app`，`f290602`，报告 `agenthub-archive/t1a-report.md`）。审核做完（Rust 没有必须修的；Kotlin 见 `agenthub-archive/t1a-kotlin-review.md`），第 1 轮修复已推送（`a52605d`、`41dbf72`），我审核过：大多修对了，还剩两个问题（旋转会取消正在进行的操作；结果不确定时发送或新建会一直卡住），第 2 轮修复提示词 `docs/reviews/t1a-fix-prompt-r2.md`，修完合并到 `main`。B4 的设计现在可以写。
-6. iPad：I1 第一轮交给 Mac 上的 Codex（2026-11-04），提示词 `docs/reviews/i1-ipad-app-prompt.md`。第一轮已推送（`i1/ipad-app`，`d9ad373`），模拟器和真机构建通过，实机验收等 iPad 准备好。我审核过，修复提示词 `docs/reviews/i1-fix-prompt-r1.md`，这轮只在模拟器上验证。需要你做的：在 Mac 上装好 Xcode 并登录 Apple ID；iPad 用 USB 连上 Mac、点信任、打开开发者模式，第一次安装后信任开发者；输入验证码和配对码。
+6. iPad：I1 第一轮交给 Mac 上的 Codex（2026-11-04），提示词 `docs/reviews/i1-ipad-app-prompt.md`。第一轮已推送（`i1/ipad-app`，`d9ad373`），模拟器和真机构建通过，实机验收等 iPad 准备好。r1 修复已推送（`82a1aff`），我审核过，还剩历史缺轮次、结果不确定的分类和保存几处，修复提示词 `docs/reviews/i1-fix-prompt-r2.md`，仍然只在模拟器上验证。需要你做的：在 Mac 上装好 Xcode 并登录 Apple ID；iPad 用 USB 连上 Mac、点信任、打开开发者模式，第一次安装后信任开发者；输入验证码和配对码。
 7. 测试设备：手机是 vivo X60（Android 13，已确认），应用最低支持版本不能高于 Android 13。平板暂时没有 Android 真机，Android 平板布局用模拟器验证；X60 屏幕是手机尺寸，验证不了平板布局，它的实机验证放到 M1 验收。iPad 用你自己的 iPad 验证。
 
 阶段表已写进 `docs/ROADMAP.md` 顶部的 “v4 Product Stages”（2026-11-02），阶段状态以那里为准；本文写每个阶段的内容和分工，改动时两处一起改。

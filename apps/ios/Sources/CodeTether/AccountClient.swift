@@ -410,9 +410,14 @@ actor AccountClient {
             } catch let error as HTTPStatusError where error.status == 401 {
                 if attempt == 0 {
                     activeSession = try await refreshAfterUnauthorized(activeSession)
-                } else {
+                } else if AccountUnauthorizedResponseClassifier.disposition(
+                    status: error.status, body: error.body, attempt: attempt
+                ) == .clearSession {
                     await clearLocalSession()
                     throw ClientFailure.signInRequired
+                } else {
+                    // A device proof failure does not invalidate the human session.
+                    throw ClientFailure.requestFailed
                 }
             }
         }
@@ -475,7 +480,9 @@ actor AccountClient {
                 data.append(byte)
                 if data.count > 2 * 1024 * 1024 { throw ClientFailure.invalidResponse }
             }
-            guard (200..<300).contains(response.statusCode) else { throw HTTPStatusError(response.statusCode) }
+            guard (200..<300).contains(response.statusCode) else {
+                throw HTTPStatusError(response.statusCode, body: data)
+            }
             if data.isEmpty { return [:] }
             guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw ClientFailure.invalidResponse }
             return json
@@ -608,6 +615,40 @@ private final class NoRedirectDelegate: NSObject, URLSessionTaskDelegate {
 
 private struct HTTPStatusError: Error {
     let status: Int
-    init(_ status: Int) { self.status = status }
+    let body: Data
+
+    init(_ status: Int, body: Data = Data()) {
+        self.status = status
+        self.body = body
+    }
+}
+
+enum AccountUnauthorizedDisposition: Equatable {
+    case refreshSession
+    case clearSession
+    case keepSession
+}
+
+enum AccountUnauthorizedResponseClassifier {
+    private static let humanAuthenticationFailureCodes: Set<String> = [
+        "missing_authentication", "malformed_token", "expired_token", "invalid_signature",
+        "wrong_issuer", "unsupported_signing_mode", "auth_verification_unavailable", "suspended_user",
+    ]
+
+    static func isHumanAuthenticationFailure(status: Int, body: Data) -> Bool {
+        guard status == 401,
+              let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+              object["status"] as? String == "authentication_failed",
+              let code = object["code"] as? String else {
+            return false
+        }
+        return humanAuthenticationFailureCodes.contains(code)
+    }
+
+    static func disposition(status: Int, body: Data, attempt: Int) -> AccountUnauthorizedDisposition {
+        guard status == 401 else { return .keepSession }
+        if attempt == 0 { return .refreshSession }
+        return isHumanAuthenticationFailure(status: status, body: body) ? .clearSession : .keepSession
+    }
 }
 

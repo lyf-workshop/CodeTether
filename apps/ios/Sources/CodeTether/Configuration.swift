@@ -87,7 +87,7 @@ enum ClientFailure: Error, LocalizedError {
         case .computerRemoved: "这台电脑已移除了此设备。要继续使用，请重新配对。"
         case .computerUnavailable, .connectionClosed: "这台电脑现在连不上，请确认它开着并且联网。"
         case .operationNotAllowed: "这台电脑当前不能执行此操作。"
-        case .actionUncertain: "暂时无法确认这次操作的结果。请重新打开会话查看状态。"
+        case .actionUncertain: "暂时无法确认这次操作的结果。可以使用原请求重试。"
         case .unsupported: "当前会话不支持此操作。"
         case .archiveBusy: "会话正在运行或等待批准，工作结束后才能归档。"
         }

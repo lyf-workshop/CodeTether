@@ -79,6 +79,9 @@ actor SupervisorClient {
     private var projectTargets: [String: ProjectTarget] = [:]
     private var attentionRecords: [String: (computerID: String, record: [String: Any])] = [:]
     private var liveCursors: [String: String] = [:]
+    private var conversationHistories: [String: ParsedHistory] = [:]
+    private var uncertainActions: [String: PendingSupervisorAction] = [:]
+    private var retryingActions = Set<String>()
 
     init(account: AccountClient, connector: any SupervisorConnector) {
         self.account = account
@@ -161,6 +164,9 @@ actor SupervisorClient {
         mode: TabletConnectionMode
     ) async throws -> SupervisorCreateResult {
         guard let project = projectTargets[projectID] else { throw ClientFailure.invalidResponse }
+        if let pending = uncertainActions.values.first(where: { $0.projectID == projectID }) {
+            throw ClientFailure.actionUncertain(pending.actionID)
+        }
         guard !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ClientFailure.invalidResponse }
         _ = try await ensureConnected(computerID: project.computerID, mode: mode)
         let machine = try await request(
@@ -180,19 +186,45 @@ actor SupervisorClient {
             "input": ["type": "text", "text": input], "actionId": actionID,
         ]
         if let reasoning { fields["reasoning"] = reasoning }
-        let result = try await mutate(
-            computerID: project.computerID, mode: mode, operation: "conversation.create", fields: fields, actionID: actionID
-        )
+        let result: JSONResponse
+        do {
+            result = try await mutate(
+                computerID: project.computerID, mode: mode, operation: "conversation.create", fields: fields, actionID: actionID
+            )
+        } catch {
+            guard Self.isUncertainWrite(error, actionID: actionID) else { throw error }
+            uncertainActions[actionID] = PendingSupervisorAction(
+                computerID: project.computerID, operation: "conversation.create", fields: fields,
+                actionID: actionID, projectID: project.projectID, conversationID: nil
+            )
+            throw SupervisorClientError(code: "operation_uncertain", status: nil, uncertainActionID: actionID)
+        }
+        do {
+            return try registerCreatedConversation(result, computerID: project.computerID, project: project)
+        } catch {
+            uncertainActions[actionID] = PendingSupervisorAction(
+                computerID: project.computerID, operation: "conversation.create", fields: fields,
+                actionID: actionID, projectID: project.projectID, conversationID: nil
+            )
+            throw SupervisorClientError(code: "invalid_response", status: nil, uncertainActionID: actionID)
+        }
+    }
+
+    private func registerCreatedConversation(
+        _ result: JSONResponse,
+        computerID: String,
+        project: ProjectTarget
+    ) throws -> SupervisorCreateResult {
         guard let data = result.object?["data"] as? [String: Any],
               let conversation = data["conversation"] as? [String: Any],
               let target = try? Self.parseTarget(conversation),
               target.projectID == project.projectID, target.machineID == project.machineID else {
             throw ClientFailure.invalidResponse
         }
-        conversationTargets[target.conversationID] = (project.computerID, target)
+        conversationTargets[target.conversationID] = (computerID, target)
         return SupervisorCreateResult(
-            computerID: project.computerID,
-            target: .conversation(computerID: project.computerID, conversationID: target.conversationID)
+            computerID: computerID,
+            target: .conversation(computerID: computerID, conversationID: target.conversationID)
         )
     }
 
@@ -200,12 +232,60 @@ actor SupervisorClient {
         guard let context = conversationTargets[conversationID], context.computerID == computerID else {
             throw ClientFailure.invalidResponse
         }
+        if let pending = uncertainActions.values.first(where: { $0.conversationID == conversationID }) {
+            throw ClientFailure.actionUncertain(pending.actionID)
+        }
         let actionID = Self.newActionID()
-        _ = try await mutate(
-            computerID: computerID, mode: mode, operation: "conversation.turn.start",
-            fields: context.target.fields.merging(["input": ["type": "text", "text": text]]) { _, next in next },
-            actionID: actionID
-        )
+        let fields = context.target.fields.merging(["input": ["type": "text", "text": text]]) { _, next in next }
+        do {
+            _ = try await mutate(
+                computerID: computerID, mode: mode, operation: "conversation.turn.start",
+                fields: fields, actionID: actionID
+            )
+        } catch {
+            guard Self.isUncertainWrite(error, actionID: actionID) else { throw error }
+            uncertainActions[actionID] = PendingSupervisorAction(
+                computerID: computerID, operation: "conversation.turn.start", fields: fields,
+                actionID: actionID, projectID: nil, conversationID: conversationID
+            )
+            throw SupervisorClientError(code: "operation_uncertain", status: nil, uncertainActionID: actionID)
+        }
+    }
+
+    func retryUncertainAction(actionID: String, mode: TabletConnectionMode) async throws -> SupervisorCreateResult? {
+        guard let pending = uncertainActions[actionID] else { throw ClientFailure.invalidResponse }
+        guard retryingActions.insert(actionID).inserted else { throw ClientFailure.actionUncertain(actionID) }
+        defer { retryingActions.remove(actionID) }
+
+        do {
+            let result = try await pending.replay { operation, fields, actionID in
+                try await self.mutate(
+                    computerID: pending.computerID, mode: mode, operation: operation,
+                    fields: fields, actionID: actionID
+                )
+            }
+            let created: SupervisorCreateResult?
+            if pending.operation == "conversation.create" {
+                guard let projectID = pending.projectID,
+                      let project = projectTargets[projectID] else { throw ClientFailure.invalidResponse }
+                created = try registerCreatedConversation(result, computerID: pending.computerID, project: project)
+            } else {
+                created = nil
+            }
+            uncertainActions.removeValue(forKey: actionID)
+            return created
+        } catch let failure as SupervisorClientError where failure.uncertainActionID == actionID {
+            throw failure
+        } catch let failure as ClientFailure {
+            if pending.operation == "conversation.create", case .invalidResponse = failure {
+                throw SupervisorClientError(code: "invalid_response", status: nil, uncertainActionID: actionID)
+            }
+            uncertainActions.removeValue(forKey: actionID)
+            throw failure
+        } catch {
+            uncertainActions.removeValue(forKey: actionID)
+            throw error
+        }
     }
 
     func approve(attentionID: String, accepted: Bool, mode: TabletConnectionMode) async throws {
@@ -282,7 +362,11 @@ actor SupervisorClient {
             guard next > offset, next <= 2048, all.count <= 2048 else { throw ClientFailure.invalidResponse }
             offset = next
         }
-        return try all.map(Self.parseDiffFile)
+        return try all.enumerated().map { index, change in
+            var identified = change
+            identified["_recordIndex"] = index
+            return try Self.parseDiffFile(identified)
+        }
     }
 
     func olderHistory(computerID: String, conversationID: String, cursor: String, mode: TabletConnectionMode) async throws -> (messages: [TabletTimelineMessage], beforeCursor: String?) {
@@ -296,7 +380,11 @@ actor SupervisorClient {
             )
         }
         let parsed = try Self.parseHistory(page.object ?? [:], target: context.target)
-        return (parsed.messages, parsed.beforeCursor)
+        let merged = Self.mergeHistory(
+            loaded: conversationHistories[conversationID], incoming: parsed, olderPage: true
+        )
+        conversationHistories[conversationID] = merged
+        return (merged.messages, merged.beforeCursor)
     }
 
     private func ensureConnected(computerID: String, mode: TabletConnectionMode, force: Bool = false) async throws -> ActiveConnection {
@@ -342,11 +430,18 @@ actor SupervisorClient {
         do { bytes = try JSONSerialization.data(withJSONObject: requestObject, options: [.sortedKeys]) }
         catch { throw ClientFailure.invalidResponse }
         guard let text = String(data: bytes, encoding: .utf8) else { throw ClientFailure.invalidResponse }
+        var enteredWire = false
         do {
+            enteredWire = true
             let output = try await connection.wire.request(text)
             guard let data = output.data(using: .utf8),
                   let value = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  value.isEmpty == false else { throw ClientFailure.invalidResponse }
+                  value.isEmpty == false else {
+                if let actionID {
+                    throw SupervisorClientError(code: "invalid_response", status: nil, uncertainActionID: actionID)
+                }
+                throw ClientFailure.invalidResponse
+            }
             return JSONResponse(value)
         } catch let failure as SupervisorWireFailure {
             if actionID != nil {
@@ -366,6 +461,14 @@ actor SupervisorClient {
                 computerID: computerID, mode: mode, operation: operation, fields: fields,
                 retryRead: false, actionID: nil
             )
+        } catch let failure as SupervisorClientError {
+            throw failure
+        } catch {
+            if let actionID, enteredWire {
+                await close(computerID: computerID)
+                throw SupervisorClientError(code: "invalid_response", status: nil, uncertainActionID: actionID)
+            }
+            throw error
         }
     }
 
@@ -378,7 +481,7 @@ actor SupervisorClient {
     ) async throws -> JSONResponse {
         let response = try await request(
             computerID: computerID, mode: mode, operation: operation,
-            fields: fields.merging(["actionId": actionID]) { _, next in next },
+            fields: Self.mutationFields(fields, actionID: actionID),
             retryRead: false, actionID: actionID
         )
         guard response.object?["actionId"] as? String == actionID else {
@@ -389,6 +492,15 @@ actor SupervisorClient {
         case "rejected": throw ClientFailure.operationNotAllowed
         default: throw SupervisorClientError(code: "invalid_response", status: nil, uncertainActionID: actionID)
         }
+    }
+
+    static func mutationFields(_ fields: [String: Any], actionID: String) -> [String: Any] {
+        fields.merging(["actionId": actionID]) { _, next in next }
+    }
+
+    private static func isUncertainWrite(_ error: Error, actionID: String) -> Bool {
+        if let failure = error as? SupervisorClientError { return failure.uncertainActionID == actionID }
+        return false
     }
 
     private func readWorkspace(computer: PairedComputer, session: ActiveConnection, mode: TabletConnectionMode) async throws -> (computer: TabletComputer, attentions: [TabletAttention]) {
@@ -485,7 +597,19 @@ actor SupervisorClient {
             projectName: project ?? "项目"
         )
         conversationTargets[target.conversationID] = (session.computer.id, target)
-        let history = try Self.parseHistory(historyPage.object ?? [:], target: target)
+        let pageHistory = try Self.parseHistory(historyPage.object ?? [:], target: target)
+        let history = try await Self.reconcileHistory(
+            loaded: conversationHistories[target.conversationID], latest: pageHistory
+        ) { cursor in
+            let page = try await self.readSizedPage(computerID: session.computer.id, mode: mode, initialLimit: 8) { limit in
+                try await self.request(
+                    computerID: session.computer.id, mode: mode, operation: "conversation.history",
+                    fields: target.fields.merging(["limit": limit, "cursor": cursor]) { _, next in next }
+                )
+            }
+            return try Self.parseHistory(page.object ?? [:], target: target)
+        }
+        conversationHistories[target.conversationID] = history
         liveCursors[target.conversationID] = history.liveCursor
 
         let attentionPage = try await request(computerID: session.computer.id, mode: mode, operation: "attention.list",
@@ -638,53 +762,173 @@ actor SupervisorClient {
                     timestamp: entry["occurredAt"] as? String ?? ""
                 )
             }
-            return ParsedHistory(messages: messages, turns: [], beforeCursor: before, liveCursor: live)
+            return ParsedHistory(messages: messages, turns: [], beforeCursor: before, liveCursor: live, complete: complete)
         case "durable":
             guard let runtime = row["runtime"] as? [String: Any], runtime["conversationId"] as? String == target.conversationID else {
                 throw ClientFailure.invalidResponse
             }
             let turns = runtime["turns"] as? [[String: Any]] ?? []
             var messages: [(Int, TabletTimelineMessage)] = []
-            for turn in turns {
+            let orderedTurns = turns.enumerated().sorted { lhs, rhs in
+                let left = lhs.element["startedAt"] as? String ?? ""
+                let right = rhs.element["startedAt"] as? String ?? ""
+                return left == right ? lhs.offset < rhs.offset : left < right
+            }.map(\.element)
+            for turn in orderedTurns {
                 guard turn["conversationId"] as? String == target.conversationID,
                       let turnID = turn["turnId"] as? String else { throw ClientFailure.invalidResponse }
+                var round: [(order: Int, index: Int, message: TabletTimelineMessage)] = []
                 if let input = turn["input"] as? [String: Any], let text = input["text"] as? String {
-                    messages.append((turn["order"] as? Int ?? Int.max - 1, TabletTimelineMessage(id: "input:\(turnID)", kind: .user, text: text, timestamp: turn["startedAt"] as? String ?? "")))
+                    round.append((Int.min, -1, TabletTimelineMessage(id: "input:\(turnID)", kind: .user, text: text, timestamp: turn["startedAt"] as? String ?? "")))
                 }
-                for message in (runtime["messages"] as? [[String: Any]] ?? []).filter({ $0["turnId"] as? String == turnID }) {
-                    messages.append((message["order"] as? Int ?? 0, TabletTimelineMessage(
+                let turnMessages = (runtime["messages"] as? [[String: Any]] ?? []).filter { $0["turnId"] as? String == turnID }
+                let turnTools = (runtime["tools"] as? [[String: Any]] ?? []).filter { $0["turnId"] as? String == turnID }
+                for (index, message) in turnMessages.enumerated() {
+                    round.append((message["order"] as? Int ?? 0, index, TabletTimelineMessage(
                         id: try requiredString(message, "itemId", max: 200), kind: .assistant,
                         text: message["text"] as? String ?? "", timestamp: message["timestamp"] as? String ?? ""
                     )))
                 }
-                for tool in (runtime["tools"] as? [[String: Any]] ?? []).filter({ $0["turnId"] as? String == turnID }) {
+                for (index, tool) in turnTools.enumerated() {
                     let content = tool["summary"] as? String ?? tool["outputSummary"] as? String ?? tool["name"] as? String ?? "工具活动"
-                    messages.append((tool["order"] as? Int ?? 0, TabletTimelineMessage(
+                    round.append((tool["order"] as? Int ?? 0, turnMessages.count + index, TabletTimelineMessage(
                         id: try requiredString(tool, "itemId", max: 200), kind: .activity,
                         text: content, timestamp: tool["startedAt"] as? String ?? ""
                     )))
                 }
-                if let final = turn["finalMessage"] as? String, !final.isEmpty,
-                   !(runtime["messages"] as? [[String: Any]] ?? []).contains(where: { $0["turnId"] as? String == turnID }) {
-                    messages.append((turn["order"] as? Int ?? 0, TabletTimelineMessage(
+                round.sort { lhs, rhs in lhs.order == rhs.order ? lhs.index < rhs.index : lhs.order < rhs.order }
+                messages.append(contentsOf: round.map { (Int($0.order), $0.message) })
+                if let final = turn["finalMessage"] as? String, !final.isEmpty, turnMessages.isEmpty {
+                    messages.append((Int.max, TabletTimelineMessage(
                         id: "final:\(turnID)", kind: .assistant, text: final,
                         timestamp: turn["completedAt"] as? String ?? turn["startedAt"] as? String ?? ""
                     )))
                 }
             }
-            let sorted = messages.sorted { $0.0 < $1.0 }.map(\.1)
-            return ParsedHistory(messages: Array(sorted.suffix(2048)), turns: turns, beforeCursor: before, liveCursor: live)
+            return ParsedHistory(messages: messages.map(\.1), turns: orderedTurns, beforeCursor: before, liveCursor: live, complete: complete)
         default: throw ClientFailure.invalidResponse
         }
     }
 
-    private static func parseDiffFile(_ row: [String: Any]) throws -> TabletDiffFile {
+    static func parseHistoryForTesting(_ row: [String: Any], conversationID: String) throws -> [TabletTimelineMessage] {
+        let target = ConversationTarget(machineID: "machine_test", projectID: "project_test", conversationID: conversationID)
+        return try parseHistory(row, target: target).messages
+    }
+
+    static func parseHistoryRecordForTesting(_ row: [String: Any], conversationID: String) throws -> ParsedHistory {
+        let target = ConversationTarget(machineID: "machine_test", projectID: "project_test", conversationID: conversationID)
+        return try parseHistory(row, target: target)
+    }
+
+    static func historiesOverlap(_ lhs: ParsedHistory, _ rhs: ParsedHistory) -> Bool {
+        let leftIDs = Set(lhs.messages.map(\.id))
+        if rhs.messages.contains(where: { leftIDs.contains($0.id) }) { return true }
+        let leftTurns = Set(lhs.turns.compactMap { $0["turnId"] as? String })
+        return rhs.turns.contains { turn in
+            guard let id = turn["turnId"] as? String else { return false }
+            return leftTurns.contains(id)
+        }
+    }
+
+    static func reconcileHistory(
+        loaded: ParsedHistory?,
+        latest: ParsedHistory,
+        loadBefore: (String) async throws -> ParsedHistory
+    ) async throws -> ParsedHistory {
+        guard let loaded, !loaded.isEmpty, !latest.isEmpty else {
+            return mergeHistory(loaded: loaded, incoming: latest)
+        }
+        if loaded.complete { return mergeHistory(loaded: loaded, incoming: latest) }
+
+        var refreshed = latest
+        var seenCursors = Set<String>()
+        for _ in 0..<128 {
+            if historiesOverlap(loaded, refreshed) { break }
+            guard let cursor = refreshed.beforeCursor, seenCursors.insert(cursor).inserted else {
+                throw ClientFailure.invalidResponse
+            }
+            let older = try await loadBefore(cursor)
+            refreshed = mergeHistory(loaded: refreshed, incoming: older, olderPage: true)
+            if older.isEmpty { break }
+        }
+        guard historiesOverlap(loaded, refreshed) else { throw ClientFailure.invalidResponse }
+        return mergeHistory(loaded: loaded, incoming: refreshed)
+    }
+
+    static func mergeHistory(loaded: ParsedHistory?, incoming: ParsedHistory, olderPage: Bool = false) -> ParsedHistory {
+        guard let loaded, !loaded.isEmpty else { return incoming }
+        let incomingStartsEarlier: Bool
+        if olderPage {
+            incomingStartsEarlier = true
+        } else {
+            switch (loaded.firstRecord(), incoming.firstRecord()) {
+            case let (left?, right?):
+                if left == right { incomingStartsEarlier = false }
+                else if loaded.containsRecord(right) { incomingStartsEarlier = false }
+                else if incoming.containsRecord(left) { incomingStartsEarlier = true }
+                else { incomingStartsEarlier = right.timestamp < left.timestamp }
+            case (_?, nil): incomingStartsEarlier = false
+            default: incomingStartsEarlier = true
+            }
+        }
+        var messages: [TabletTimelineMessage] = []
+        var messageIndexes: [String: Int] = [:]
+        let firstMessages = incomingStartsEarlier ? incoming.messages : loaded.messages
+        let secondMessages = incomingStartsEarlier ? loaded.messages : incoming.messages
+        for batch in [firstMessages, secondMessages] {
+            for message in batch where messageIndexes[message.id] == nil {
+                messageIndexes[message.id] = messages.count
+                messages.append(message)
+            }
+        }
+        if !olderPage {
+            for message in incoming.messages {
+                if let index = messageIndexes[message.id] { messages[index] = message }
+            }
+        }
+
+        var turns: [[String: Any]] = []
+        var turnIndexes: [String: Int] = [:]
+        let firstTurns = incomingStartsEarlier ? incoming.turns : loaded.turns
+        let secondTurns = incomingStartsEarlier ? loaded.turns : incoming.turns
+        for batch in [firstTurns, secondTurns] {
+            for turn in batch {
+                guard let id = turn["turnId"] as? String, turnIndexes[id] == nil else { continue }
+                turnIndexes[id] = turns.count
+                turns.append(turn)
+            }
+        }
+        if !olderPage {
+            for turn in incoming.turns {
+                guard let id = turn["turnId"] as? String, let index = turnIndexes[id] else { continue }
+                turns[index] = turn
+            }
+        }
+
+        let earliest = olderPage || incomingStartsEarlier ? incoming : loaded
+        return ParsedHistory(
+            messages: messages,
+            turns: turns,
+            beforeCursor: olderPage
+                ? incoming.beforeCursor
+                : (earliest.complete ? nil : earliest.beforeCursor),
+            liveCursor: olderPage ? loaded.liveCursor : incoming.liveCursor,
+            complete: earliest.complete
+        )
+    }
+
+    static func parseDiffFile(_ row: [String: Any]) throws -> TabletDiffFile {
+        let turnID = try requiredString(row, "turnId", max: 160)
+        let itemID = row["itemId"] as? String ?? "no-item"
+        guard !itemID.isEmpty, itemID.utf8.count <= 200 else { throw ClientFailure.invalidResponse }
         let path = try requiredString(row, "path", max: 2_048)
+        let rowIndex = row["_recordIndex"] as? Int
         let diff = row["diff"] as? String ?? ""
         let additions = row["additions"] as? Int ?? 0
         let deletions = row["deletions"] as? Int ?? 0
         let lines = parseUnifiedDiff(diff)
-        return TabletDiffFile(id: path, path: path, additions: additions, deletions: deletions, lines: lines)
+        let identity = "\(turnID):\(itemID):\(path)" + (itemID == "no-item" ? ":\(rowIndex ?? 0)" : "")
+        return TabletDiffFile(id: identity, path: path, additions: additions, deletions: deletions, lines: lines)
     }
 
     private static func parseUnifiedDiff(_ diff: String) -> [TabletDiffLine] {
@@ -757,14 +1001,56 @@ actor SupervisorClient {
     }
 }
 
-private struct ParsedHistory {
+struct ParsedHistory {
     let messages: [TabletTimelineMessage]
     let turns: [[String: Any]]
     let beforeCursor: String?
     let liveCursor: String
+    let complete: Bool
+
+    var isEmpty: Bool { messages.isEmpty && turns.isEmpty }
 }
 
-private struct JSONResponse {
+private struct HistoryRecord: Equatable {
+    let id: String
+    let isTurn: Bool
+    let timestamp: String
+}
+
+private extension ParsedHistory {
+    func firstRecord() -> HistoryRecord? {
+        if let firstMessage = messages.first, !firstMessage.id.hasPrefix("input:") {
+            return HistoryRecord(id: firstMessage.id, isTurn: false, timestamp: firstMessage.timestamp)
+        }
+        if let turn = turns.first, let id = turn["turnId"] as? String {
+            return HistoryRecord(id: id, isTurn: true, timestamp: turn["startedAt"] as? String ?? "")
+        }
+        guard let firstMessage = messages.first else { return nil }
+        return HistoryRecord(id: firstMessage.id, isTurn: false, timestamp: firstMessage.timestamp)
+    }
+
+    func containsRecord(_ record: HistoryRecord) -> Bool {
+        if record.isTurn { return turns.contains { $0["turnId"] as? String == record.id } }
+        return messages.contains { $0.id == record.id }
+    }
+}
+
+struct PendingSupervisorAction {
+    let computerID: String
+    let operation: String
+    let fields: [String: Any]
+    let actionID: String
+    let projectID: String?
+    let conversationID: String?
+
+    func replay(
+        using submit: (String, [String: Any], String) async throws -> JSONResponse
+    ) async throws -> JSONResponse {
+        try await submit(operation, fields, actionID)
+    }
+}
+
+struct JSONResponse {
     let object: [String: Any]?
 
     init(_ object: [String: Any]) { self.object = object }

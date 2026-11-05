@@ -50,7 +50,9 @@ struct TabletViewState {
     var removedComputerName = ""
     var pairingMessage: String?
     var errorMessage: String?
+    var createSessionErrorMessage: String?
     var isBusy = false
+    var pendingActions: [TabletActionScope: TabletPendingAction] = [:]
     var route: TabletRoute = .home
     var appearance: TabletAppearance = .system
     var connectionMode: TabletConnectionMode = .automatic
@@ -80,6 +82,7 @@ struct TabletViewActions {
     var setConnectionMode: (TabletConnectionMode) -> Void = { _ in }
     var refresh: () -> Void = {}
     var createConversation: (String, String, String?, String) -> Void = { _, _, _, _ in }
+    var retryUncertainAction: (String) -> Void = { _ in }
     var send: (String, String) -> Void = { _, _ in }
     var updateDraft: (String, String) -> Void = { _, _ in }
     var approve: (String, Bool) -> Void = { _, _ in }
@@ -1189,6 +1192,22 @@ private struct TabletConversationPage: View {
                         }
                     }
 
+                    if let pending = state.pendingActions[.send(conversationID: conversationID)] {
+                        HStack(spacing: 12) {
+                            Text("上次发送结果尚未确认")
+                                .font(.system(size: 13))
+                                .foregroundStyle(TabletColors.failure)
+                            Spacer(minLength: 4)
+                            Button("使用原请求重试") {
+                                actions.retryUncertainAction(pending.actionID)
+                            }
+                            .buttonStyle(TabletSecondaryButtonStyle())
+                            .disabled(state.isBusy)
+                            .accessibilityIdentifier("conversation-retry-uncertain")
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                    }
                     Divider()
                     HStack(alignment: .bottom, spacing: 10) {
                         TextField(composerPlaceholder(detail), text: draftBinding, axis: .vertical)
@@ -1712,6 +1731,7 @@ private struct NewSessionSheet: View {
     @State private var selectedProviderID = ""
     @State private var selectedReasoningID = ""
     @State private var initialInput = ""
+    @State private var didSubmit = false
 
     private var projects: [TabletProjectChoice] {
         state.computers.flatMap { computer in
@@ -1725,6 +1745,9 @@ private struct NewSessionSheet: View {
     }
     private var providers: [TabletProvider] { selectedTuple?.machine.providers ?? [] }
     private var selectedProvider: TabletProvider? { providers.first { $0.id == selectedProviderID } }
+    private var pendingCreate: TabletPendingAction? {
+        state.pendingActions[.create(projectID: selectedProjectID)]
+    }
 
     var body: some View {
         Form {
@@ -1782,20 +1805,42 @@ private struct NewSessionSheet: View {
                     .accessibilityIdentifier("new-session-input")
             }
             Section {
-                Button("创建会话") {
-                    let input = initialInput.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !selectedProjectID.isEmpty, let provider = selectedProvider, provider.canStart, !input.isEmpty else { return }
-                    actions.createConversation(selectedProjectID, provider.id, selectedReasoningID.isEmpty ? nil : selectedReasoningID, input)
-                    dismiss()
+                if didSubmit, let error = state.createSessionErrorMessage {
+                    Text(error)
+                        .font(.system(size: 13))
+                        .foregroundStyle(TabletColors.failure)
+                        .accessibilityIdentifier("new-session-error")
                 }
-                .buttonStyle(TabletPrimaryButtonStyle())
-                .frame(maxWidth: .infinity)
-                .disabled(selectedProjectID.isEmpty || selectedProvider?.canStart != true || initialInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || state.isBusy)
-                .accessibilityIdentifier("new-session-create")
+                if let pendingCreate {
+                    Button("使用原请求重试") {
+                        actions.retryUncertainAction(pendingCreate.actionID)
+                    }
+                    .buttonStyle(TabletPrimaryButtonStyle())
+                    .frame(maxWidth: .infinity)
+                    .disabled(state.isBusy)
+                    .accessibilityIdentifier("new-session-retry-uncertain")
+                } else {
+                    Button(didSubmit && state.createSessionErrorMessage != nil ? "重试创建" : "创建会话") {
+                        let input = initialInput.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !selectedProjectID.isEmpty, let provider = selectedProvider, provider.canStart, !input.isEmpty else { return }
+                        didSubmit = true
+                        actions.createConversation(selectedProjectID, provider.id, selectedReasoningID.isEmpty ? nil : selectedReasoningID, input)
+                    }
+                    .buttonStyle(TabletPrimaryButtonStyle())
+                    .frame(maxWidth: .infinity)
+                    .disabled(selectedProjectID.isEmpty || selectedProvider?.canStart != true || initialInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || state.isBusy)
+                    .accessibilityIdentifier("new-session-create")
+                }
             }
         }
         .navigationTitle("新建会话")
         .navigationBarTitleDisplayMode(.inline)
+        .onChange(of: state.route) { route in
+            // Keep all fields visible until the Host confirms creation. A route
+            // change is the success signal; failures leave this sheet open.
+            guard didSubmit else { return }
+            if case .conversation = route { dismiss() }
+        }
         .onAppear {
             if selectedProjectID.isEmpty, let first = projects.first(where: { $0.project.available && $0.computer.available }) {
                 selectedProjectID = first.project.id

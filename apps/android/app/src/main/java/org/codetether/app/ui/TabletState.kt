@@ -41,8 +41,6 @@ internal enum class Appearance(val label: String) {
 
 internal enum class MutationStatus { Pending, Success, Failed, Unknown }
 
-internal data class MutationOutcome(val actionId: String, val status: MutationStatus, val message: String? = null)
-
 internal data class ComputerView(
     val computer: PairedComputer,
     val workspace: RemoteWorkspace? = null,
@@ -71,8 +69,7 @@ internal data class TabletState(
     val error: String? = null,
     val pairingClaimed: Boolean = false,
     val pairingInProgress: Boolean = false,
-    val sendOutcome: MutationOutcome? = null,
-    val createOutcome: MutationOutcome? = null,
+    val mutations: List<PendingMutation> = emptyList(),
     val lastPairedName: String? = null,
     val keyProtection: String? = null,
 ) {
@@ -80,6 +77,14 @@ internal data class TabletState(
 
     fun machine(computerId: String, machineId: String): RemoteMachine? =
         computer(computerId)?.workspace?.machines?.firstOrNull { it.id == machineId }
+
+    fun sendMutation(page: TabletPage.Conversation): PendingMutation? = mutations.firstOrNull {
+        it.scope == MutationScope(page.computerId, page.target.machineId, page.target.projectId, page.target.conversationId)
+    }
+
+    fun createMutation(computerId: String, project: RemoteProject): PendingMutation? = mutations.firstOrNull {
+        it.scope == MutationScope(computerId, project.machineId, project.id, null)
+    }
 }
 
 internal interface TabletActions {
@@ -99,6 +104,8 @@ internal interface TabletActions {
     fun loadChanges()
     fun create(computerId: String, project: RemoteProject, provider: String, text: String, reasoning: String?, actionId: String)
     fun send(target: TabletPage.Conversation, text: String, actionId: String)
+    fun retryMutation(actionId: String)
+    fun acknowledgeMutation(actionId: String)
     fun approve(computerId: String, item: RemoteAttention, accept: Boolean)
     fun resolveAttention(computerId: String, item: RemoteAttention)
     fun interrupt(target: TabletPage.Conversation, turnId: String)

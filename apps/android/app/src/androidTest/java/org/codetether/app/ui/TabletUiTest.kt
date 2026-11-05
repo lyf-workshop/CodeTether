@@ -113,12 +113,19 @@ class TabletUiTest {
         }
         override fun create(computerId: String, project: RemoteProject, provider: String, text: String, reasoning: String?, actionId: String) {
             acted.add("create")
-            state = state.copy(createOutcome = MutationOutcome(actionId, MutationStatus.Success))
+            val result = ConversationTarget(project.machineId, project.id, target.conversationId)
+            state = state.copy(mutations = listOf(PendingMutation(
+                MutationRequest.Create(actionId, computerId, project, provider, text, reasoning), MutationStatus.Success, result = result,
+            )))
         }
         override fun send(target: TabletPage.Conversation, text: String, actionId: String) {
             acted.add("send")
-            state = state.copy(sendOutcome = MutationOutcome(actionId, MutationStatus.Success))
+            state = state.copy(mutations = listOf(PendingMutation(
+                MutationRequest.Send(actionId, target.computerId, target.target, text), MutationStatus.Success, result = target.target,
+            )))
         }
+        override fun retryMutation(actionId: String) { acted.add("retry") }
+        override fun acknowledgeMutation(actionId: String) { state = state.copy(mutations = state.mutations.filterNot { it.actionId == actionId }) }
         override fun approve(computerId: String, item: RemoteAttention, accept: Boolean) {
             acted.add(if (accept) "accept" else "decline")
         }

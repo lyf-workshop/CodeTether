@@ -6,10 +6,11 @@ internal fun mergeHistory(
     incoming: RemoteHistory,
     olderPage: Boolean = false,
 ): RemoteHistory {
-    if (loaded == null || loaded.isEmpty()) return incoming
+    if (loaded == null || loaded.isEmpty()) return incoming.copy(messages = incoming.messages.withoutSupersededFinals())
     if (incoming.isEmpty()) {
-        return if (olderPage) loaded.copy(beforeCursor = incoming.beforeCursor, complete = incoming.complete)
+        val retained = if (olderPage) loaded.copy(beforeCursor = incoming.beforeCursor, complete = incoming.complete)
         else loaded.copy(liveCursor = incoming.liveCursor, nativeStatus = incoming.nativeStatus)
+        return retained.copy(messages = retained.messages.withoutSupersededFinals())
     }
     val incomingFirst = incoming.firstRecord()
     val loadedFirst = loaded.firstRecord()
@@ -29,7 +30,7 @@ internal fun mergeHistory(
     authoritative.turns.forEach { turns[it.id] = it }
     val current = if (olderPage) loaded else incoming
     return current.copy(
-        messages = messages.values.toList(),
+        messages = messages.values.toList().withoutSupersededFinals(),
         turns = turns.values.toList(),
         beforeCursor = earliest.beforeCursor,
         complete = earliest.complete,
@@ -42,7 +43,7 @@ internal suspend fun reconcileHistory(
     latest: RemoteHistory,
     loadBefore: suspend (String) -> RemoteHistory,
 ): RemoteHistory {
-    if (loaded == null || loaded.isEmpty()) return latest
+    if (loaded == null || loaded.isEmpty()) return mergeHistory(null, latest)
     var refreshed = latest
     val cursors = mutableSetOf<String>()
     while (!loaded.overlaps(refreshed)) {
@@ -51,6 +52,16 @@ internal suspend fun reconcileHistory(
         refreshed = mergeHistory(refreshed, loadBefore(cursor), olderPage = true)
     }
     return mergeHistory(loaded, refreshed)
+}
+
+/** A genuine assistant item supersedes only its own Turn's final-message fallback. */
+internal fun List<RemoteMessage>.withoutSupersededFinals(): List<RemoteMessage> {
+    val repliedTurns = filter {
+        it.role == "assistant" && it.turnId != null && it.id != "final:${it.turnId}"
+    }.mapTo(hashSetOf()) { it.turnId }
+    return filterNot {
+        it.role == "assistant" && it.turnId in repliedTurns && it.id == "final:${it.turnId}"
+    }
 }
 
 private fun RemoteHistory.isEmpty(): Boolean = messages.isEmpty() && turns.isEmpty()

@@ -175,9 +175,9 @@ class ControllerLifecycleTest {
             assertEquals(1, harness.session.sends.get())
             assertEquals(ACTION_ID, harness.session.lastSentActionId)
             assertEquals(ACTION_ID, harness.session.lastReadActionId)
-            assertEquals(ACTION_ID, harness.controller.state.value.sendOutcome?.actionId)
-            assertEquals(MutationStatus.Unknown, harness.controller.state.value.sendOutcome?.status)
-            assertTrue(!harness.controller.state.value.sendOutcome?.message.isNullOrBlank())
+            assertEquals(ACTION_ID, harness.controller.state.value.sendMutation(CONVERSATION_PAGE)?.actionId)
+            assertEquals(MutationStatus.Unknown, harness.controller.state.value.sendMutation(CONVERSATION_PAGE)?.status)
+            assertTrue(!harness.controller.state.value.sendMutation(CONVERSATION_PAGE)?.message.isNullOrBlank())
             assertTrue(harness.session.sendCancelled.isCompleted)
         }
     }
@@ -191,8 +191,8 @@ class ControllerLifecycleTest {
                 harness.session.actionStatus = status
                 harness.onMain { foreground(true) }
 
-                awaitState { harness.controller.state.value.sendOutcome?.status == MutationStatus.Success }
-                assertEquals(ACTION_ID, harness.controller.state.value.sendOutcome?.actionId)
+                awaitState { harness.controller.state.value.sendMutation(CONVERSATION_PAGE)?.status == MutationStatus.Success }
+                assertEquals(ACTION_ID, harness.controller.state.value.sendMutation(CONVERSATION_PAGE)?.actionId)
                 assertEquals(ACTION_ID, harness.session.lastReadActionId)
                 assertEquals(1, harness.session.sends.get())
             }
@@ -210,8 +210,8 @@ class ControllerLifecycleTest {
 
             awaitState { harness.session.lastReadActionId == ACTION_ID }
             harness.onMain { }
-            assertEquals(MutationStatus.Unknown, harness.controller.state.value.sendOutcome?.status)
-            assertEquals(ACTION_ID, harness.controller.state.value.sendOutcome?.actionId)
+            assertEquals(MutationStatus.Unknown, harness.controller.state.value.sendMutation(CONVERSATION_PAGE)?.status)
+            assertEquals(ACTION_ID, harness.controller.state.value.sendMutation(CONVERSATION_PAGE)?.actionId)
             assertEquals(1, harness.session.sends.get())
         }
     }
@@ -280,9 +280,9 @@ class ControllerLifecycleTest {
         suspend fun cancelSendInBackground() {
             onMain { send(CONVERSATION_PAGE, "synthetic prompt", ACTION_ID) }
             awaitState { session.sendEntered.isCompleted }
-            assertEquals(MutationStatus.Pending, controller.state.value.sendOutcome?.status)
+            assertEquals(MutationStatus.Pending, controller.state.value.sendMutation(CONVERSATION_PAGE)?.status)
             onMain { foreground(false) }
-            awaitState { !controller.state.value.busy && controller.state.value.sendOutcome?.status == MutationStatus.Unknown }
+            awaitState { !controller.state.value.busy && controller.state.value.sendMutation(CONVERSATION_PAGE)?.status == MutationStatus.Unknown }
         }
 
         override fun close() {

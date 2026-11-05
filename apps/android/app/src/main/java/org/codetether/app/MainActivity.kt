@@ -10,18 +10,20 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.codetether.app.ui.TabletApp
 import org.codetether.app.ui.TabletController
 
-class MainActivity : ComponentActivity() {
+open class MainActivity : ComponentActivity() {
     private lateinit var controller: TabletController
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        controller = ViewModelProvider(this)[TabletController::class.java]
+        controller = ViewModelProvider(this, controllerFactory())[TabletController::class.java]
         setContent {
             val state by controller.state.collectAsStateWithLifecycle()
             TabletApp(state, controller)
         }
     }
+
+    protected open fun controllerFactory(): ViewModelProvider.Factory = defaultViewModelProviderFactory
 
     override fun onStart() {
         super.onStart()
@@ -29,7 +31,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onStop() {
-        controller.foreground(false)
+        if (!isChangingConfigurations) controller.foreground(false)
         super.onStop()
     }
 }

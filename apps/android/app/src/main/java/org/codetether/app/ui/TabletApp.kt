@@ -30,6 +30,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -157,6 +158,7 @@ private fun EntryCard(content: @Composable androidx.compose.foundation.layout.Co
 @Composable
 private fun Workspace(modifier: Modifier, state: TabletState, actions: TabletActions) {
     var sheet by rememberSaveable { mutableStateOf<Sheet?>(null) }
+    val conversationDrafts = rememberSaveableStateHolder()
     var changesOpen by remember(state.page) { mutableStateOf(false) }
     val focus = remember { FocusRequester() }
     BoxWithConstraints(modifier) {
@@ -234,7 +236,9 @@ private fun Workspace(modifier: Modifier, state: TabletState, actions: TabletAct
                         TabletPage.Devices -> DevicesPage(state, ::go)
                         is TabletPage.Device -> DevicePage(state, page, ::go)
                         is TabletPage.Project -> ProjectPage(state, page, actions, ::go)
-                        is TabletPage.Conversation -> ConversationPage(state, page, actions)
+                        is TabletPage.Conversation -> conversationDrafts.SaveableStateProvider(
+                            listOf(page.computerId, page.target.machineId, page.target.projectId, page.target.conversationId).joinToString("/"),
+                        ) { ConversationPage(state, page, actions) }
                         is TabletPage.Settings -> SettingsPage(state, page, actions, ::go)
                         else -> Unit
                     }
@@ -262,9 +266,9 @@ private fun Workspace(modifier: Modifier, state: TabletState, actions: TabletAct
             Sheet.Search -> SearchSheet(state.loaded, onDismiss = { sheet = null }) { computer, row ->
                 go(TabletPage.Conversation(computer, row.target))
             }
-            Sheet.Create -> CreateSheet(state, onDismiss = { sheet = null }) { computer, project, provider, text, reasoning, actionId ->
-                actions.create(computer, project, provider, text, reasoning, actionId)
-            }
+            Sheet.Create -> CreateSheet(state, actions, onDismiss = { sheet = null }, onCreated = { computer, target ->
+                actions.navigate(TabletPage.Conversation(computer, target))
+            })
             Sheet.Archive -> CenterSheet("归档会话", { sheet = null }) {
                 Text("归档后可在项目的已归档列表里查看。", color = ink.secondary)
                 InkButton("归档", Modifier.fillMaxWidth(), !state.busy) {

@@ -268,7 +268,7 @@ internal fun RemoteConversationDetail.applyLive(page: RemoteLivePage): RemoteCon
         }
     }
     return copy(conversation = conversation, history = history.copy(
-        messages = messages.values.toList().takeLast(2048),
+        messages = messages.values.toList().withoutSupersededFinals().takeLast(2048),
         turns = turns.values.toList().takeLast(64),
         liveCursor = page.cursor,
     ))

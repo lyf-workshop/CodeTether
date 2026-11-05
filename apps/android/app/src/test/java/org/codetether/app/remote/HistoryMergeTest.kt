@@ -118,6 +118,107 @@ class HistoryMergeTest {
         }
     }
 
+    @Test
+    fun realReplyReplacesOnlyItsTurnsFallbackInBothMergeDirections() {
+        val fallbackPage = history(1, 1).copy(messages = listOf(fallback(1)))
+        val real = reply(1, "real", "same synthetic reply")
+        val replyPage = history(1, 1).copy(messages = listOf(real))
+        for (olderPage in listOf(false, true)) {
+            for ((loaded, incoming) in listOf(fallbackPage to replyPage, replyPage to fallbackPage)) {
+                assertEquals(listOf(real), mergeHistory(loaded, incoming, olderPage).messages)
+            }
+        }
+    }
+
+    @Test
+    fun initialAndEmptyMergePathsAlsoRemoveSupersededFallbacks() = runBlocking {
+        val real = reply(1, "real", "same synthetic reply")
+        val mixed = history(1, 1).copy(messages = listOf(fallback(1), real))
+        val empty = mixed.copy(messages = emptyList(), turns = emptyList())
+
+        assertEquals(listOf(real), mergeHistory(null, mixed).messages)
+        assertEquals(listOf(real), mergeHistory(empty, mixed).messages)
+        assertEquals(listOf(real), mergeHistory(mixed, empty).messages)
+        assertEquals(listOf(real), mergeHistory(mixed, empty, olderPage = true).messages)
+        assertEquals(listOf(real), reconcileHistory(null, mixed) { error("Initial normalization needs no request") }.messages)
+    }
+
+    @Test
+    fun equalTextDoesNotCollapseDistinctRealRepliesOrOtherTurnsFallbacks() {
+        val first = reply(1, "first", "same synthetic reply")
+        val second = reply(1, "second", first.text)
+        val differentTurn = reply(3, "third", first.text)
+        val retainedFallback = fallback(2)
+        val merged = mergeHistory(null, history(1, 3).copy(
+            messages = listOf(fallback(1), first, second, retainedFallback, differentTurn),
+        ))
+
+        assertEquals(listOf(first, second, retainedFallback, differentTurn), merged.messages)
+    }
+
+    @Test
+    fun userAndToolMessagesDoNotSupersedeAnAssistantFallback() {
+        val placeholder = fallback(1)
+        val user = reply(1, "input", placeholder.text).copy(role = "user")
+        val tool = reply(1, "tool", placeholder.text).copy(role = "tool")
+        val merged = mergeHistory(null, history(1, 1).copy(messages = listOf(placeholder, user, tool)))
+
+        assertEquals(listOf(placeholder, user, tool), merged.messages)
+    }
+
+    @Test
+    fun nativeEntriesWithoutTurnIdentityRemainSeparateFromDurableReplies() {
+        val native = nativeHistory(1, 2).copy(messages = nativeHistory(1, 2).messages.map {
+            it.copy(text = "same synthetic reply")
+        })
+        val real = reply(1, "real", "same synthetic reply")
+        val durable = history(1, 1).copy(messages = listOf(fallback(1), real))
+        val merged = mergeHistory(native, durable)
+
+        assertEquals(native.messages + real, merged.messages)
+        assertEquals(native.beforeCursor, merged.beforeCursor)
+        assertFalse(merged.native)
+    }
+
+    @Test
+    fun incrementalRealItemUpdatesStayUniqueAfterAStaleFallbackReturns() {
+        val base = history(1, 1)
+        val placeholder = base.copy(messages = listOf(fallback(1)))
+        val partial = reply(1, "stream", "partial").copy(status = "running")
+        val live = mergeHistory(placeholder, base.copy(messages = listOf(partial)))
+        val completed = partial.copy(text = "partial completed", status = "completed")
+        val terminal = mergeHistory(live, base.copy(messages = listOf(completed)))
+        val reread = mergeHistory(terminal, placeholder)
+
+        assertEquals(listOf(partial), live.messages)
+        assertEquals(listOf(completed), terminal.messages)
+        assertEquals(listOf(completed), reread.messages)
+    }
+
+    @Test
+    fun olderFallbackDeduplicationPreservesTheOldestPaginationBoundary() {
+        val loaded = history(9, 16)
+        val older = history(1, 9).copy(messages = history(1, 9).messages.filterNot {
+            it.id == "reply:9"
+        } + fallback(9))
+        val merged = mergeHistory(loaded, older, olderPage = true)
+
+        assertFalse(merged.messages.any { it.id == "final:${turnId(9)}" })
+        assertEquals(1, merged.messages.count { it.id == "reply:9" })
+        assertEquals((1..16).map(::turnId), merged.turns.map { it.id })
+        assertNull(merged.beforeCursor)
+        assertTrue(merged.complete)
+        assertEquals(loaded.liveCursor, merged.liveCursor)
+    }
+
+    private fun fallback(number: Int): RemoteMessage = RemoteMessage(
+        "final:${turnId(number)}", "assistant", "same synthetic reply", "2026-11-04T00:00:00Z", "completed", turnId(number),
+    )
+
+    private fun reply(number: Int, item: String, text: String): RemoteMessage = RemoteMessage(
+        "item_synthetic_$item", "assistant", text, "2026-11-04T00:00:00Z", "completed", turnId(number),
+    )
+
     private fun history(first: Int, last: Int): RemoteHistory {
         val turns = (first..last).map { number ->
             RemoteTurn(turnId(number), "completed", "input $number", "2026-11-04T00:00:${number.toString().padStart(2, '0')}Z",

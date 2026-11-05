@@ -1,10 +1,13 @@
 package org.codetether.app.ui
 
 import android.app.Application
+import android.os.Bundle
 import android.content.Context
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
@@ -38,16 +41,21 @@ internal class TabletController private constructor(
     application: Application,
     private val account: TabletAccount,
     private val dependencies: ControllerDependencies,
+    private val savedState: SavedStateHandle,
 ) : AndroidViewModel(application), TabletActions {
-    constructor(application: Application) : this(application, TabletAccount(application))
-    private constructor(application: Application, account: TabletAccount) : this(application, account, ControllerDependencies(account))
-    internal constructor(application: Application, dependencies: ControllerDependencies) : this(application, TabletAccount(application), dependencies)
+    constructor(application: Application, savedState: SavedStateHandle) : this(application, TabletAccount(application), savedState)
+    constructor(application: Application) : this(application, SavedStateHandle())
+    private constructor(application: Application, account: TabletAccount, savedState: SavedStateHandle) :
+        this(application, account, ControllerDependencies(account), savedState)
+    internal constructor(application: Application, dependencies: ControllerDependencies, savedState: SavedStateHandle = SavedStateHandle()) :
+        this(application, TabletAccount(application), dependencies, savedState)
     private val accountApi get() = dependencies.account
     private val preferences = application.getSharedPreferences("tablet-appearance", Context.MODE_PRIVATE)
     private val savedAppearance = Appearance.entries.firstOrNull {
         it.name == preferences.getString("appearance", null)
     } ?: Appearance.System
-    private val mutable = MutableStateFlow(TabletState(appearance = savedAppearance, busy = true))
+    private val pendingMutations = PendingMutationStore(savedState)
+    private val mutable = MutableStateFlow(TabletState(appearance = savedAppearance, busy = true, mutations = pendingMutations.all()))
     val state = mutable.asStateFlow()
 
     private val clients = mutableMapOf<String, ControllerSession>()
@@ -59,15 +67,20 @@ internal class TabletController private constructor(
     private var projectJob: Job? = null
     private var changesJob: Job? = null
     private var actionJob: Job? = null
-    private data class PendingMutation(val actionId: String, val computerId: String, val target: ConversationTarget?, val project: RemoteProject?)
-    private val pendingMutations = linkedMapOf<String, PendingMutation>()
+    private val mutationJobs = mutableMapOf<String, Job>()
 
     init {
         viewModelScope.launch {
             try {
                 val profile = accountApi.restore()
-                mutable.update { it.copy(profile = profile, busy = false) }
-                if (profile != null && foreground) readDirectory(first = true)
+                pendingMutations.bindOwner(profile?.id)
+                val restoredPage = if (profile != null) restoredConversation() else null
+                mutable.update { it.copy(profile = profile, busy = false, mutations = pendingMutations.all(), page = restoredPage ?: it.page) }
+                if (profile != null && foreground) {
+                    readDirectory(first = state.value.page == TabletPage.SignIn)
+                    resumePageReads()
+                    confirmPendingMutations()
+                }
             } catch (cancel: CancellationException) {
                 throw cancel
             } catch (failure: Exception) {
@@ -85,6 +98,7 @@ internal class TabletController private constructor(
             projectJob?.cancel()
             changesJob?.cancel()
             actionJob?.cancel()
+            mutationJobs.values.toList().forEach { it.cancel() }
             val open = clients.values.toList()
             clients.clear()
             mutable.update { current ->
@@ -101,13 +115,7 @@ internal class TabletController private constructor(
                 if (state.value.profile != null && !state.value.busy) {
                     try {
                         readDirectory(first = state.value.page == TabletPage.SignIn)
-                        val current = state.value.page
-                        if (current is TabletPage.Conversation && watchJob?.isActive != true) {
-                            observe(current)
-                        }
-                        if (current is TabletPage.Project && projectJob?.isActive != true && state.value.projectLoading) {
-                            loadProject(current)
-                        }
+                        resumePageReads()
                         confirmPendingMutations()
                     } catch (cancel: CancellationException) {
                         throw cancel
@@ -124,6 +132,14 @@ internal class TabletController private constructor(
         watchJob?.cancel()
         projectJob?.cancel()
         changesJob?.cancel()
+        savedState[ACTIVE_CONVERSATION] = (page as? TabletPage.Conversation)?.let {
+            Bundle().apply {
+                putString("computer", it.computerId)
+                putString("machine", it.target.machineId)
+                putString("project", it.target.projectId)
+                putString("conversation", it.target.conversationId)
+            }
+        }
         mutable.update {
             it.copy(
                 page = page,
@@ -159,7 +175,8 @@ internal class TabletController private constructor(
 
     override fun verifyCode(email: String, code: String) = action {
         val profile = accountApi.verifyCode(email, code)
-        mutable.update { it.copy(profile = profile, otpEmail = null, page = TabletPage.Pair) }
+        pendingMutations.bindOwner(profile.id)
+        mutable.update { it.copy(profile = profile, otpEmail = null, page = TabletPage.Pair, mutations = pendingMutations.all()) }
         readDirectory(first = true)
     }
 
@@ -202,13 +219,17 @@ internal class TabletController private constructor(
         }
     }
 
-    private suspend fun clearAccountView(error: String? = null) {
+    private suspend fun clearAccountView(error: String? = null) = withContext(NonCancellable) {
         watchJob?.cancel()
         projectJob?.cancel()
         changesJob?.cancel()
         val open = clients.values.toList()
         clients.clear()
         pendingMutations.clear()
+        savedState[ACTIVE_CONVERSATION] = null
+        val activeMutations = mutationJobs.values.toList()
+        mutationJobs.clear()
+        activeMutations.forEach { it.cancel() }
         mutable.update { TabletState(appearance = it.appearance, mode = it.mode, busy = it.busy, error = error) }
         open.forEach { it.disconnect() }
     }
@@ -285,15 +306,24 @@ internal class TabletController private constructor(
     }
 
     override fun create(computerId: String, project: RemoteProject, provider: String, text: String, reasoning: String?, actionId: String) =
-        mutation(PendingMutation(actionId, computerId, null, project)) {
-            val target = requireClient(computerId).create(project, provider, text, reasoning, actionId)
-            navigate(TabletPage.Conversation(computerId, target))
-        }
+        beginMutation(MutationRequest.Create(actionId, computerId, project, provider, text, reasoning))
 
-    override fun send(target: TabletPage.Conversation, text: String, actionId: String) = mutation(
-        PendingMutation(actionId, target.computerId, target.target, null),
-    ) {
-        requireClient(target.computerId).send(target.target, text, actionId)
+    override fun send(target: TabletPage.Conversation, text: String, actionId: String) =
+        beginMutation(MutationRequest.Send(actionId, target.computerId, target.target, text))
+
+    override fun retryMutation(actionId: String) {
+        val pending = pendingMutations.find(actionId) ?: return
+        if (pending.status != MutationStatus.Unknown || mutationJobs[actionId]?.isActive == true) return
+        if (!foreground || state.value.busy || state.value.profile == null) return
+        // The caller cannot provide a different payload or selection for an existing action.
+        executeMutation(pending.request, retrying = true)
+    }
+
+    override fun acknowledgeMutation(actionId: String) {
+        val entry = pendingMutations.find(actionId) ?: return
+        if (entry.unresolved) return
+        pendingMutations.remove(actionId)
+        mutable.update { it.copy(mutations = pendingMutations.all()) }
     }
 
     override fun approve(computerId: String, item: RemoteAttention, accept: Boolean) = action {
@@ -344,72 +374,86 @@ internal class TabletController private constructor(
         }
     }
 
-    private fun outcome(pending: PendingMutation, status: MutationStatus, message: String? = null) {
-        mutable.update {
-            val result = MutationOutcome(pending.actionId, status, message)
-            if (pending.project != null) it.copy(createOutcome = result) else it.copy(sendOutcome = result)
-        }
+    private fun outcome(request: MutationRequest, status: MutationStatus, message: String? = null, result: ConversationTarget? = null) {
+        // Logout, acknowledgement or replacement must not be undone by a late completion.
+        if (pendingMutations.forScope(request.scope)?.actionId != request.actionId) return
+        pendingMutations.put(PendingMutation(request, status, message, result))
+        mutable.update { it.copy(mutations = pendingMutations.all()) }
     }
 
-    private fun mutation(pending: PendingMutation, work: suspend () -> Unit) {
-        if (!pending.actionId.matches(Regex("act_[A-Za-z0-9][A-Za-z0-9_-]{5,95}"))) {
-            outcome(pending, MutationStatus.Failed, "请重新打开输入窗口后再试。")
-            return
-        }
-        if (!foreground || state.value.busy || pendingMutations.values.any { (it.project == null) == (pending.project == null) }) {
-            outcome(pending, MutationStatus.Failed, "请先等当前操作完成或确认上次操作的结果。")
-            return
-        }
-        pendingMutations[pending.actionId] = pending
-        outcome(pending, MutationStatus.Pending)
-        mutable.update { it.copy(busy = true, error = null) }
-        actionJob = viewModelScope.launch {
+    private fun beginMutation(request: MutationRequest) {
+        if (!foreground || state.value.busy || state.value.profile == null) return
+        val previous = pendingMutations.forScope(request.scope)
+        if (previous?.unresolved == true || previous?.status == MutationStatus.Success) return
+        if (!request.actionId.matches(Regex("act_[A-Za-z0-9][A-Za-z0-9_-]{5,95}")) ||
+            request.text.isBlank() || request.text.length > 65_536 ||
+            pendingMutations.find(request.actionId) != null
+        ) return
+        pendingMutations.put(PendingMutation(request, MutationStatus.Pending))
+        executeMutation(request, retrying = false)
+    }
+
+    private fun executeMutation(request: MutationRequest, retrying: Boolean) {
+        outcome(request, MutationStatus.Pending)
+        val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
             try {
-                work()
-                pendingMutations.remove(pending.actionId)
-                outcome(pending, MutationStatus.Success)
+                val client = requireClient(request.computerId)
+                val result = when (request) {
+                    is MutationRequest.Send -> {
+                        client.send(request.target, request.text.trim(), request.actionId)
+                        request.target
+                    }
+                    is MutationRequest.Create -> client.create(
+                        request.project, request.provider, request.text.trim(), request.reasoning, request.actionId,
+                    )
+                }
+                outcome(request, MutationStatus.Success, result = result)
             } catch (cancel: CancellationException) {
-                outcome(pending, MutationStatus.Unknown, "暂时无法确认这次操作的结果，回来后会重新读取。请勿重复提交。")
+                outcome(request, MutationStatus.Unknown, PendingMutationStore.UNKNOWN_MESSAGE)
                 throw cancel
             } catch (failure: Exception) {
-                if (failure is RemoteFailure && failure.uncertainActionId != null) {
-                    outcome(pending, MutationStatus.Unknown, friendly(failure))
+                val uncertain = retrying || (failure is RemoteFailure &&
+                    (failure.uncertainActionId != null || failure.code in setOf("invalid_response", "internal")))
+                if (uncertain) {
+                    outcome(request, MutationStatus.Unknown, PendingMutationStore.UNKNOWN_MESSAGE)
                 } else {
-                    pendingMutations.remove(pending.actionId)
-                    outcome(pending, MutationStatus.Failed, friendly(failure))
+                    outcome(request, MutationStatus.Failed, friendly(failure))
                 }
-                if (!resetIfSessionEnded(failure)) mutable.update { it.copy(error = friendly(failure)) }
+                resetIfSessionEnded(failure)
             } finally {
-                mutable.update { it.copy(busy = false) }
+                mutationJobs.remove(request.actionId)
             }
         }
+        mutationJobs[request.actionId] = job
+        job.start()
     }
 
-    /** Resolve uncertainty with reads only. A mutation is never replayed after cancellation. */
+    /** Automatic confirmation only reads; retryMutation is the sole retrying write entry. */
     private suspend fun confirmPendingMutations() {
-        for (pending in pendingMutations.values.toList()) {
+        for (pending in pendingMutations.all().filter { it.status == MutationStatus.Unknown }) {
             if (!foreground) return
-            val client = clients[pending.computerId] ?: continue
+            val request = pending.request
+            val client = clients[request.computerId] ?: continue
             try {
                 val result = client.action(pending.actionId)
+                if (pendingMutations.find(pending.actionId)?.status != MutationStatus.Unknown) continue
                 when (result.status) {
                     "accepted", "running", "completed", "failed" -> {
                         if (result.turnId == null) continue
-                        if (pending.target != null && result.conversationId != pending.target.conversationId) continue
-                        if (pending.project != null) {
-                            val conversationId = result.conversationId ?: continue
-                            // Scope comes from the original local selection, never from an arbitrary response path.
-                            val target = ConversationTarget(pending.project.machineId, pending.project.id, conversationId)
-                            if (state.value.page !is TabletPage.Conversation) navigate(TabletPage.Conversation(pending.computerId, target))
+                        val confirmed = when (request) {
+                            is MutationRequest.Send -> {
+                                if (result.conversationId != request.target.conversationId) continue
+                                request.target
+                            }
+                            is MutationRequest.Create -> {
+                                val conversationId = result.conversationId ?: continue
+                                ConversationTarget(request.project.machineId, request.project.id, conversationId)
+                            }
                         }
-                        pendingMutations.remove(pending.actionId)
-                        outcome(pending, MutationStatus.Success)
+                        outcome(request, MutationStatus.Success, result = confirmed)
                     }
-                    "rejected" -> {
-                        pendingMutations.remove(pending.actionId)
-                        outcome(pending, MutationStatus.Failed, "这次操作未被接受，输入已保留。")
-                    }
-                    else -> Unit // Unknown remains pending; refreshing the conversation is safe, replaying is not.
+                    // In particular, not_found never proves that a prior write did not arrive.
+                    else -> Unit
                 }
             } catch (cancel: CancellationException) {
                 throw cancel
@@ -578,6 +622,23 @@ internal class TabletController private constructor(
     private fun requireClient(computerId: String): ControllerSession =
         clients[computerId] ?: error("Computer session unavailable")
 
+    private fun resumePageReads() {
+        val current = state.value.page
+        if (current is TabletPage.Conversation && watchJob?.isActive != true) observe(current)
+        if (current is TabletPage.Project && projectJob?.isActive != true && state.value.projectLoading) loadProject(current)
+    }
+
+    private fun restoredConversation(): TabletPage.Conversation? = runCatching {
+        val route = savedState.get<Bundle>(ACTIVE_CONVERSATION) ?: return null
+        val scope = MutationScope(
+            requireNotNull(route.getString("computer")), requireNotNull(route.getString("machine")),
+            requireNotNull(route.getString("project")), requireNotNull(route.getString("conversation")),
+        )
+        val pending = pendingMutations.forScope(scope)?.takeIf { it.unresolved } ?: return null
+        val request = pending.request as? MutationRequest.Send ?: return null
+        TabletPage.Conversation(request.computerId, request.target)
+    }.getOrNull()
+
     private fun retainConversations(
         incoming: List<Pair<String, RemoteConversation>>,
         cached: List<Pair<String, RemoteConversation>>,
@@ -591,5 +652,9 @@ internal class TabletController private constructor(
             else -> failure.message ?: "这台电脑现在连不上，请确认它开着并且联网"
         }
         else -> "这台电脑现在连不上，请确认它开着并且联网"
+    }
+
+    private companion object {
+        const val ACTIVE_CONVERSATION = "tablet.active-conversation.v1"
     }
 }

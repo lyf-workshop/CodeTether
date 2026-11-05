@@ -44,6 +44,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.codetether.app.account.PairedComputer
 import org.codetether.app.remote.RemoteAttention
+import org.codetether.app.remote.ConversationTarget
 import org.codetether.app.remote.RemoteChangeKey
 import org.codetether.app.remote.RemoteConversation
 import org.codetether.app.remote.RemoteMachine
@@ -285,37 +286,19 @@ internal fun ConversationPage(state: TabletState, target: TabletPage.Conversatio
     val connected = state.computer(target.computerId)?.connection != null
     val messages = (state.olderMessages + detail.history.messages).distinctBy { it.id }
     val list = rememberLazyListState()
-    var draft by rememberSaveable(target.computerId, target.target) { mutableStateOf("") }
-    var submittedDraft by rememberSaveable(target.computerId, target.target) { mutableStateOf<String?>(null) }
-    var pendingActionId by rememberSaveable(target.computerId, target.target) { mutableStateOf<String?>(null) }
-    var submissionMessage by rememberSaveable(target.computerId, target.target) { mutableStateOf<String?>(null) }
-    val canSend = connected && detail.canSend && !state.busy && pendingActionId == null
+    val mutation = state.sendMutation(target)
+    var draft by rememberSaveable(target.computerId, target.target) { mutableStateOf(mutation?.request?.text.orEmpty()) }
+    val awaitingResult = mutation?.unresolved == true
+    val canSend = connected && detail.canSend && !state.busy && !awaitingResult
     fun send() {
-        val input = draft.trim()
-        if (input.isNotEmpty() && canSend) {
-            val actionId = newSubmissionActionId()
-            pendingActionId = actionId
-            submittedDraft = draft
-            submissionMessage = null
-            actions.send(target, input, actionId)
+        if (draft.isNotBlank() && canSend) {
+            actions.send(target, draft, newSubmissionActionId())
         }
     }
-    LaunchedEffect(state.sendOutcome, pendingActionId) {
-        val outcome = state.sendOutcome?.takeIf { it.actionId == pendingActionId }
-        when (outcome?.status) {
-            MutationStatus.Success -> {
-                if (draft == submittedDraft) draft = ""
-                pendingActionId = null
-                submittedDraft = null
-                submissionMessage = null
-            }
-            MutationStatus.Failed -> {
-                pendingActionId = null
-                submittedDraft = null
-                submissionMessage = outcome.message
-            }
-            MutationStatus.Unknown -> submissionMessage = outcome.message ?: "暂时无法确认这次操作的结果。"
-            MutationStatus.Pending, null -> Unit
+    LaunchedEffect(mutation?.actionId, mutation?.status) {
+        if (mutation?.status == MutationStatus.Success) {
+            if (draft == mutation.request.text) draft = ""
+            actions.acknowledgeMutation(mutation.actionId)
         }
     }
     val last = messages.lastOrNull()
@@ -404,7 +387,11 @@ internal fun ConversationPage(state: TabletState, target: TabletPage.Conversatio
                         InkButton("发送", enabled = canSend && draft.isNotBlank(), onClick = ::send)
                     }
                 }
-                submissionMessage?.let { Text(it, color = ink.failed, fontSize = 13.sp) }
+                mutation?.message?.let { Text(it, color = ink.failed, fontSize = 13.sp) }
+                if (mutation?.status == MutationStatus.Unknown) {
+                    Text("重试会使用上次提交的内容。", color = ink.secondary, fontSize = 13.sp)
+                    QuietButton("重试", enabled = connected && detail.canControl && !state.busy) { actions.retryMutation(mutation.actionId) }
+                }
             }
         }
     }
@@ -581,55 +568,76 @@ internal fun SearchSheet(
 @Composable
 internal fun CreateSheet(
     state: TabletState,
+    actions: TabletActions,
     onDismiss: () -> Unit,
-    submit: (String, RemoteProject, String, String, String?, String) -> Unit,
+    onCreated: (String, ConversationTarget) -> Unit,
 ) {
     val available = state.computers.flatMap { entry ->
         entry.workspace?.projects.orEmpty().map { entry to it }
     }
-    var selectedComputerId by rememberSaveable { mutableStateOf<String?>(null) }
-    var selectedMachineId by rememberSaveable { mutableStateOf<String?>(null) }
-    var selectedProjectId by rememberSaveable { mutableStateOf<String?>(null) }
-    var providerSelection by rememberSaveable(selectedComputerId, selectedMachineId, selectedProjectId) { mutableStateOf<String?>(null) }
-    var reasoning by rememberSaveable(selectedComputerId, selectedMachineId, selectedProjectId, providerSelection) { mutableStateOf<String?>(null) }
-    var text by rememberSaveable { mutableStateOf("") }
-    var pendingActionId by rememberSaveable { mutableStateOf<String?>(null) }
-    var submissionMessage by rememberSaveable { mutableStateOf<String?>(null) }
+    val outstanding = state.mutations.filter { it.request is MutationRequest.Create && it.unresolved }
+    val initial = outstanding.firstOrNull()?.request as? MutationRequest.Create
+    var selectedComputerId by rememberSaveable { mutableStateOf(initial?.computerId) }
+    var selectedMachineId by rememberSaveable { mutableStateOf(initial?.project?.machineId) }
+    var selectedProjectId by rememberSaveable { mutableStateOf(initial?.project?.id) }
+    var providerSelection by rememberSaveable { mutableStateOf(initial?.provider) }
+    var reasoning by rememberSaveable { mutableStateOf(initial?.reasoning) }
+    var text by rememberSaveable { mutableStateOf(initial?.text.orEmpty()) }
     val selected = available.firstOrNull { (entry, row) ->
         entry.computer.id == selectedComputerId && row.machineId == selectedMachineId && row.id == selectedProjectId
     }
-    val project = selected?.let { it.first.computer.id to it.second }
+    val stored = state.mutations.mapNotNull { it.request as? MutationRequest.Create }.firstOrNull {
+        it.computerId == selectedComputerId && it.project.machineId == selectedMachineId && it.project.id == selectedProjectId
+    }
+    val project = selected?.let { it.first.computer.id to it.second } ?: stored?.let { it.computerId to it.project }
     val machine = project?.let { state.machine(it.first, it.second.machineId) }
     val provider = machine?.providers?.firstOrNull { it.id == providerSelection }
     val owner = project?.let { state.computer(it.first) }
-    val stillAvailable = owner?.workspace?.projects?.any { it.id == project?.second?.id && it.available } == true
+    val mutation = project?.let { state.createMutation(it.first, it.second) }
+    val awaitingResult = mutation?.unresolved == true
+    val stillAvailable = owner?.workspace?.projects?.any { it.id == project?.second?.id &&
+        it.machineId == project?.second?.machineId && it.available } == true
     val enabled = stillAvailable && owner?.connection != null && owner.workspace?.canControl == true &&
-        machine?.available == true && provider?.canStart == true && text.isNotBlank() && !state.busy && pendingActionId == null
-    LaunchedEffect(state.createOutcome, pendingActionId) {
-        val outcome = state.createOutcome?.takeIf { it.actionId == pendingActionId }
-        when (outcome?.status) {
-            MutationStatus.Success -> onDismiss()
-            MutationStatus.Failed -> {
-                pendingActionId = null
-                submissionMessage = outcome.message
+        machine?.available == true && provider?.canStart == true && text.isNotBlank() && !state.busy && !awaitingResult
+    LaunchedEffect(mutation?.actionId, mutation?.status) {
+        val request = mutation?.request as? MutationRequest.Create
+        if (mutation?.status == MutationStatus.Success && request != null) {
+            if (text == request.text && providerSelection == request.provider && reasoning == request.reasoning) {
+                mutation.result?.let { onCreated(request.computerId, it) }
+                onDismiss()
             }
-            MutationStatus.Unknown -> submissionMessage = outcome.message ?: "暂时无法确认这次操作的结果。"
-            MutationStatus.Pending, null -> Unit
+            actions.acknowledgeMutation(mutation.actionId)
         }
     }
     fun send() {
         val selection = project ?: return
         val tool = provider ?: return
         if (enabled) {
-            val actionId = newSubmissionActionId()
-            pendingActionId = actionId
-            submissionMessage = null
-            submit(selection.first, selection.second, tool.id, text.trim(), reasoning, actionId)
+            actions.create(selection.first, selection.second, tool.id, text, reasoning, newSubmissionActionId())
         }
     }
     CenterSheet("新建会话", onDismiss) {
         Column(Modifier.heightIn(max = 530.dp).verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            if (outstanding.isNotEmpty()) {
+                SectionTitle("待确认的创建")
+                Group {
+                    outstanding.forEachIndexed { index, entry ->
+                        val request = entry.request as MutationRequest.Create
+                        if (index > 0) Rule()
+                        RowItem(request.project.name, if (entry.status == MutationStatus.Pending) "正在创建" else "结果待确认",
+                            modifier = Modifier.testTag("pending-create-$index"),
+                            onClick = if (!state.busy) ({
+                                selectedComputerId = request.computerId
+                                selectedMachineId = request.project.machineId
+                                selectedProjectId = request.project.id
+                                providerSelection = request.provider
+                                reasoning = request.reasoning
+                                text = request.text
+                            }) else null)
+                    }
+                }
+            }
             SectionTitle("项目")
             if (available.isEmpty()) Empty("没有可以使用的项目") else Group {
                 available.forEachIndexed { index, (entry, row) ->
@@ -638,7 +646,11 @@ internal fun CreateSheet(
                     RowItem(row.name, if (canUse) entry.computer.name else "${entry.computer.name} · 暂时不能使用",
                         active = project == (entry.computer.id to row),
                         modifier = Modifier.testTag("new-project-${row.id}"),
-                        onClick = if (canUse && !state.busy && pendingActionId == null) ({
+                        onClick = if (canUse && !state.busy) ({
+                            if (project != (entry.computer.id to row)) {
+                                providerSelection = null
+                                reasoning = null
+                            }
                             selectedComputerId = entry.computer.id
                             selectedMachineId = row.machineId
                             selectedProjectId = row.id
@@ -651,7 +663,12 @@ internal fun CreateSheet(
                     machine.providers.forEachIndexed { index, tool ->
                         if (index > 0) Rule()
                         RowItem(tool.displayName, providerStatus(tool.status), active = tool.id == providerSelection,
-                            onClick = if (tool.canStart && !state.busy && pendingActionId == null) ({ providerSelection = tool.id }) else null)
+                            onClick = if (tool.canStart && !state.busy) ({
+                                if (providerSelection != tool.id) {
+                                    providerSelection = tool.id
+                                    reasoning = null
+                                }
+                            }) else null)
                     }
                 }
             }
@@ -659,7 +676,7 @@ internal fun CreateSheet(
                 SectionTitle("推理强度")
                 val options = listOf(null to "默认") + provider.reasoning.map { it.id to it.label }
                 Segments(options.map { it.second to (reasoning == it.first) }) {
-                    if (!state.busy && pendingActionId == null) reasoning = options[it].first
+                    if (!state.busy) reasoning = options[it].first
                 }
             }
             InkField(text, { text = it.take(64 * 1024) }, "第一条消息", Modifier.onPreviewKeyEvent { event ->
@@ -667,8 +684,14 @@ internal fun CreateSheet(
                     send()
                     true
                 } else false
-            }, singleLine = false, enabled = !state.busy && pendingActionId == null)
-            submissionMessage?.let { Text(it, color = ink.failed, fontSize = 13.sp) }
+            }, singleLine = false, enabled = !state.busy)
+            mutation?.message?.let { Text(it, color = ink.failed, fontSize = 13.sp) }
+            if (mutation?.status == MutationStatus.Unknown) {
+                Text("重试会使用上次提交的内容和选择。", color = ink.secondary, fontSize = 13.sp)
+                QuietButton("重试", enabled = !state.busy && owner?.connection != null && owner.workspace?.canControl == true) {
+                    actions.retryMutation(mutation.actionId)
+                }
+            }
             InkButton("创建会话", Modifier.fillMaxWidth(), enabled, ::send)
         }
     }

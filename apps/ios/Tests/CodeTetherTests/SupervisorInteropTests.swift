@@ -30,25 +30,6 @@ final class SupervisorInteropTests: XCTestCase {
         XCTAssertEqual(first.path, sameTurnDifferentItem.path)
     }
 
-    func testMutationRetryReusesOriginalActionIDAndPayload() async throws {
-        let payload: [String: Any] = ["conversationId": "conv_1", "input": ["type": "text", "text": "继续"]]
-        let pending = PendingSupervisorAction(
-            computerID: "host_1", operation: "conversation.turn.start", fields: payload,
-            actionID: "act_original", projectID: nil, conversationID: "conv_1"
-        )
-        var calls = 0
-        let response = try await pending.replay { operation, fields, actionID in
-            calls += 1
-            XCTAssertEqual(operation, "conversation.turn.start")
-            XCTAssertEqual(actionID, "act_original")
-            XCTAssertEqual((fields["input"] as? [String: Any])?["text"] as? String, "继续")
-            XCTAssertEqual(fields["conversationId"] as? String, "conv_1")
-            return JSONResponse(["actionId": actionID, "status": "accepted"])
-        }
-        XCTAssertEqual(response.object?["actionId"] as? String, "act_original")
-        XCTAssertEqual(calls, 1)
-    }
-
     func testHistoryMergePreservesOlderLoadedRoundsWhenLiveWindowAdvances() throws {
         let target = ["conversationId": "conv_test", "hasMoreBefore": true, "beforeCursor": "older_1", "liveCursor": "c1", "source": "durable", "runtime": ["conversationId": "conv_test", "turns": [["conversationId": "conv_test", "turnId": "turn_1", "startedAt": "2026-01-01T00:00:00Z", "input": ["text": "旧问"], "finalMessage": "旧答"]], "messages": [], "tools": []]] as [String: Any]
         let newer = ["conversationId": "conv_test", "hasMoreBefore": true, "beforeCursor": "before_1", "liveCursor": "c2", "source": "durable", "runtime": ["conversationId": "conv_test", "turns": [["conversationId": "conv_test", "turnId": "turn_2", "startedAt": "2026-01-01T00:00:01Z", "input": ["text": "新问"], "finalMessage": "新答"]], "messages": [], "tools": []]] as [String: Any]
@@ -111,6 +92,74 @@ final class SupervisorInteropTests: XCTestCase {
         XCTAssertEqual(requested, ["gap_1", "gap_2"])
         XCTAssertEqual(merged.messages.map(\.text), ["已加载", "答", "中间二", "答", "最新", "答"])
         XCTAssertEqual(merged.liveCursor, "live")
+    }
+
+    func testCompleteCachedHistoryStillLoadsBridgePages() async throws {
+        func page(_ turns: [Int], before: String?, complete: Bool = false) throws -> ParsedHistory {
+            var row: [String: Any] = [
+                "conversationId": "conv_test", "hasMoreBefore": before != nil, "liveCursor": "latest",
+                "source": "durable", "runtime": [
+                    "conversationId": "conv_test", "turns": turns.map { turn in [
+                        "conversationId": "conv_test", "turnId": "turn_\(turn)",
+                        "startedAt": "2026-01-01T00:00:\(String(format: "%02d", turn))Z",
+                        "input": ["text": "问\(turn)"], "finalMessage": "答\(turn)"
+                    ] }, "messages": [], "tools": []
+                ]
+            ]
+            if let before { row["beforeCursor"] = before }
+            if complete { row["historyComplete"] = true }
+            return try SupervisorClient.parseHistoryRecordForTesting(row, conversationID: "conv_test")
+        }
+
+        let loaded = try page([1, 2], before: nil, complete: true)
+        let latest = try page(Array(5...12), before: "cursor_4")
+        let merged = try await SupervisorClient.reconcileHistory(loaded: loaded, latest: latest) { cursor in
+            switch cursor {
+            case "cursor_4": return try page([4], before: "cursor_3")
+            case "cursor_3": return try page([3], before: "cursor_2")
+            case "cursor_2": return try page([2], before: "cursor_1")
+            case "cursor_1": return try page([1], before: nil, complete: true)
+            default: throw ClientFailure.invalidResponse
+            }
+        }
+        XCTAssertEqual(merged.turns.compactMap { $0["turnId"] as? String }, (1...12).map { "turn_\($0)" })
+        XCTAssertEqual(Set(merged.messages.map(\.id)).count, merged.messages.count)
+    }
+
+    func testHistoryWithoutOverlapFallsBackToLatest() async throws {
+        func page(_ turn: String, before: String?, live: String) throws -> ParsedHistory {
+            var row: [String: Any] = [
+                "conversationId": "conv_test", "hasMoreBefore": before != nil, "liveCursor": live,
+                "source": "durable", "runtime": ["conversationId": "conv_test", "turns": [[
+                    "conversationId": "conv_test", "turnId": turn, "startedAt": "2026-01-01T00:00:00Z",
+                    "input": ["text": turn], "finalMessage": "答"
+                ]], "messages": [], "tools": []]
+            ]
+            if let before { row["beforeCursor"] = before }
+            return try SupervisorClient.parseHistoryRecordForTesting(row, conversationID: "conv_test")
+        }
+
+        let loaded = try page("old", before: nil, live: "old-live")
+        let latest = try page("new", before: nil, live: "new-live")
+        let replaced = try await SupervisorClient.reconcileHistory(loaded: loaded, latest: latest) { _ in
+            XCTFail("no cursor should mean replacement")
+            return latest
+        }
+        XCTAssertEqual(replaced.liveCursor, "new-live")
+        XCTAssertEqual(replaced.turns.compactMap { $0["turnId"] as? String }, ["new"])
+
+        let repeated = try page("new", before: "same", live: "repeated-live")
+        let repeatedResult = try await SupervisorClient.reconcileHistory(loaded: loaded, latest: repeated) { _ in repeated }
+        XCTAssertEqual(repeatedResult.liveCursor, "repeated-live")
+        XCTAssertEqual(repeatedResult.turns.compactMap { $0["turnId"] as? String }, ["new"])
+    }
+
+    func testLongChangePathUsesProtocolLimit() throws {
+        let path = String(repeating: "a", count: 4_096)
+        let file = try SupervisorClient.parseDiffFile([
+            "turnId": "turn_1", "itemId": "item_1", "path": path, "diff": ""
+        ])
+        XCTAssertEqual(file.path.utf8.count, 4_096)
     }
 
     func testSimulatorReadsAndWritesThroughDirectAndRelay() async throws {

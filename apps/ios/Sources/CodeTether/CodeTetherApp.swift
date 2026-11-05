@@ -3,7 +3,7 @@ import SwiftUI
 @main
 struct CodeTetherApp: App {
     @Environment(\.scenePhase) private var scenePhase
-    @StateObject private var model = TabletAppModel()
+    @StateObject private var model = TabletAppModel.makeForLaunch()
 
     var body: some Scene {
         WindowGroup {

@@ -238,7 +238,7 @@ struct TabletRootView: View {
     let state: TabletViewState
     let actions: TabletViewActions
 
-    @State private var sidebarVisible = true
+    @State private var sidebarVisible = false
     @State private var activeSheet: TabletSheet?
     @State private var changesVisible = false
     @State private var sidebarSearch = ""
@@ -312,7 +312,10 @@ struct TabletRootView: View {
             .animation(.easeInOut(duration: 0.2), value: changesVisible)
             .animation(.easeInOut(duration: 0.2), value: sidebarVisible)
             .onChange(of: geometry.size.width) { width in
-                if width >= 900 { sidebarVisible = true }
+                sidebarVisible = width >= 900
+            }
+            .onAppear {
+                sidebarVisible = geometry.size.width >= 900
             }
             .sheet(item: $activeSheet) { sheet in
                 TabletSheetContent(sheet: sheet, state: state, actions: actions) {
@@ -1233,8 +1236,8 @@ private struct TabletConversationPage: View {
                                     .background(TabletColors.accent, in: Circle())
                             }
                             .buttonStyle(.plain)
-                            .disabled(!detail.canSend || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || state.isBusy)
-                            .opacity(!detail.canSend || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || state.isBusy ? 0.45 : 1)
+                            .disabled(!detail.canSend || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || state.isBusy || state.pendingActions[.send(conversationID: conversationID)] != nil)
+                            .opacity(!detail.canSend || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || state.isBusy || state.pendingActions[.send(conversationID: conversationID)] != nil ? 0.45 : 1)
                             .accessibilityLabel("发送")
                             .accessibilityIdentifier("conversation-send")
                             .keyboardShortcut(.return, modifiers: .command)
@@ -1764,6 +1767,7 @@ private struct NewSessionSheet: View {
                         }
                     }
                     .accessibilityIdentifier("new-session-project")
+                    .disabled(state.pendingActions.values.contains(where: { $0.operation == .createConversation }))
                 }
             }
             Section("AI 工具") {
@@ -1790,18 +1794,20 @@ private struct NewSessionSheet: View {
                             .frame(minHeight: 44)
                         }
                         .buttonStyle(.plain)
-                        .disabled(!provider.canStart)
+                        .disabled(!provider.canStart || pendingCreate != nil)
                     }
                 }
                 if let selectedProvider, !selectedProvider.reasoningOptions.isEmpty {
                     Picker("思考强度", selection: $selectedReasoningID) {
                         ForEach(selectedProvider.reasoningOptions) { option in Text(option.name).tag(option.id) }
                     }
+                    .disabled(pendingCreate != nil)
                 }
             }
             Section("第一句话") {
                 TextField("输入要开始的内容", text: $initialInput, axis: .vertical)
                     .lineLimit(4...8)
+                    .disabled(pendingCreate != nil)
                     .accessibilityIdentifier("new-session-input")
             }
             Section {
@@ -1813,6 +1819,7 @@ private struct NewSessionSheet: View {
                 }
                 if let pendingCreate {
                     Button("使用原请求重试") {
+                        didSubmit = true
                         actions.retryUncertainAction(pendingCreate.actionID)
                     }
                     .buttonStyle(TabletPrimaryButtonStyle())
@@ -1842,6 +1849,13 @@ private struct NewSessionSheet: View {
             if case .conversation = route { dismiss() }
         }
         .onAppear {
+            if let pending = state.pendingActions.values.first(where: { $0.operation == .createConversation }) {
+                selectedProjectID = pending.projectID
+                selectedProviderID = pending.provider ?? ""
+                selectedReasoningID = pending.reasoning ?? ""
+                initialInput = pending.input
+                didSubmit = true
+            }
             if selectedProjectID.isEmpty, let first = projects.first(where: { $0.project.available && $0.computer.available }) {
                 selectedProjectID = first.project.id
             }
@@ -1851,6 +1865,7 @@ private struct NewSessionSheet: View {
             }
         }
         .onChange(of: selectedProjectID) { _ in
+            guard pendingCreate == nil else { return }
             selectedProviderID = providers.first(where: \.canStart)?.id ?? ""
             selectedReasoningID = selectedProvider?.reasoningOptions.first?.id ?? ""
         }

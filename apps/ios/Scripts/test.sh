@@ -12,9 +12,17 @@ DERIVED_DATA="$HOME/agenthub-work/i1-ipad-derived"
 PNPM_BIN="$(command -v pnpm)"
 XCODEGEN_BIN="$(command -v xcodegen)"
 CURRENT_USER="$(/usr/bin/id -un)"
-SIMULATOR_ID="${1:?Usage: test.sh <iPad simulator UDID>}"
+SIMULATOR_ID="${1:?Usage: test.sh <iPad simulator UDID> [unit|ui|all]}"
+TEST_SUITE="${2:-all}"
 FIXTURE_CONFIG="$APP_DIR/Tests/Support/InteropFixture.json"
 PATH_VALUE="$NODE_BIN:$CARGO_HOME_DIR/bin:$(dirname "$PNPM_BIN"):$(dirname "$XCODEGEN_BIN"):/usr/bin:/bin:/usr/sbin:/sbin"
+
+case "$TEST_SUITE" in
+  unit) TEST_SELECTION=(-only-testing:CodeTetherTests) ;;
+  ui) TEST_SELECTION=(-only-testing:CodeTetherUITests) ;;
+  all) TEST_SELECTION=() ;;
+  *) printf 'Usage: %s <iPad simulator UDID> [unit|ui|all]\n' "$0" >&2; exit 2 ;;
+esac
 
 if [[ -e "$FIXTURE_CONFIG" ]]; then
   printf 'An iOS interop fixture config already exists; inspect it before retrying.\n' >&2
@@ -48,12 +56,13 @@ for _ in $(seq 1 100); do
 done
 [[ -s "$FIXTURE_CONFIG" ]] || { printf 'The local interoperability fixture did not become ready.\n' >&2; exit 1; }
 
-/bin/bash "$SCRIPT_DIR/build.sh" simulator
+CODETETHER_IOS_CODE_SIGNING_ALLOWED=YES CODETETHER_IOS_CODE_SIGN_IDENTITY=- \
+  /bin/bash "$SCRIPT_DIR/build.sh" simulator
 
 /usr/bin/env -i HOME="$HOME" USER="$CURRENT_USER" LOGNAME="$CURRENT_USER" PATH="$PATH_VALUE" "$XCODEGEN_BIN" generate --spec "$APP_DIR/project.yml" --project "$APP_DIR"
 /usr/bin/env -i HOME="$HOME" USER="$CURRENT_USER" LOGNAME="$CURRENT_USER" PATH="$PATH_VALUE" CODETETHER_REPO_ROOT="$REPO_ROOT" \
   /usr/bin/xcodebuild -project "$APP_DIR/CodeTether.xcodeproj" -scheme CodeTether \
-  -destination "id=$SIMULATOR_ID" -derivedDataPath "$DERIVED_DATA" ARCHS=arm64 CODE_SIGNING_ALLOWED=NO build-for-testing
+  -destination "id=$SIMULATOR_ID" -derivedDataPath "$DERIVED_DATA" ARCHS=arm64 CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- build-for-testing
 
 TEST_BUNDLE="$DERIVED_DATA/Build/Products/Debug-iphonesimulator/CodeTether.app/PlugIns/CodeTetherTests.xctest"
 [[ -d "$TEST_BUNDLE" ]] || { printf 'The iOS unit-test bundle was not built.\n' >&2; exit 1; }
@@ -62,4 +71,5 @@ chmod 600 "$TEST_BUNDLE/InteropFixture.json"
 
 /usr/bin/env -i HOME="$HOME" USER="$CURRENT_USER" LOGNAME="$CURRENT_USER" PATH="$PATH_VALUE" CODETETHER_REPO_ROOT="$REPO_ROOT" \
   /usr/bin/xcodebuild -project "$APP_DIR/CodeTether.xcodeproj" -scheme CodeTether \
-  -destination "id=$SIMULATOR_ID" -derivedDataPath "$DERIVED_DATA" ARCHS=arm64 CODE_SIGNING_ALLOWED=NO test-without-building
+  -destination "id=$SIMULATOR_ID" -derivedDataPath "$DERIVED_DATA" ARCHS=arm64 CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- \
+  test-without-building "${TEST_SELECTION[@]}"

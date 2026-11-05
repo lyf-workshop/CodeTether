@@ -6,11 +6,40 @@ enum TabletActionScope: Hashable {
     case send(conversationID: String)
 }
 
-struct TabletPendingAction: Equatable {
+enum TabletPendingOperation: String, Codable {
+    case createConversation
+    case sendTurn
+}
+
+struct TabletPendingAction: Codable, Equatable, Identifiable {
+    let accountID: String
     let actionID: String
-    let scope: TabletActionScope
+    let operation: TabletPendingOperation
+    let computerID: String
+    let machineID: String
+    let projectID: String
+    let conversationID: String?
+    let provider: String?
+    let reasoning: String?
     let input: String
-    let computerID: String?
+
+    var id: String { actionID }
+    var scope: TabletActionScope {
+        switch operation {
+        case .createConversation: .create(projectID: projectID)
+        case .sendTurn: .send(conversationID: conversationID ?? "")
+        }
+    }
+}
+
+private struct StoredTabletActions: Codable {
+    let accountID: String
+    let actions: [TabletPendingAction]
+}
+
+private struct StoredTabletDrafts: Codable {
+    let accountID: String
+    let drafts: [String: String]
 }
 
 enum TabletLifecyclePolicy {
@@ -23,7 +52,7 @@ enum TabletLifecyclePolicy {
 final class TabletAppModel: ObservableObject {
     @Published private(set) var state: TabletViewState
 
-    private var account: AccountClient?
+    private var account: (any TabletAccountService)?
     private var supervisor: SupervisorClient?
     private var pollTask: Task<Void, Never>?
     private var pairingTask: Task<Void, Never>?
@@ -32,24 +61,55 @@ final class TabletAppModel: ObservableObject {
     private var lastWorkspaceRefresh = Date.distantPast
     private var bootstrapped = false
     private let defaults: UserDefaults
+    private let injectedAccount: (any TabletAccountService)?
+    private let injectedSessionProvider: SupervisorClient.SessionProvider?
+    private var currentAccountID: String?
+    private var accountGeneration = UUID()
+    private var inFlightActionIDs = Set<String>()
+    private var signOutTask: Task<Void, Never>?
     private let isNewSessionFailureUITest: Bool
+    private let isPendingCreateUITest: Bool
 
-    init(defaults: UserDefaults = .standard) {
+    static func makeForLaunch() -> TabletAppModel {
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--ui-test-pending-create-retry") {
+            return TabletAppModel(
+                account: UITestPendingCreateAccount(),
+                sessionProvider: { _, _ in UITestPendingCreateWire() }
+            )
+        }
+        #endif
+        return TabletAppModel()
+    }
+
+    init(
+        defaults: UserDefaults = .standard,
+        account: (any TabletAccountService)? = nil,
+        sessionProvider: SupervisorClient.SessionProvider? = nil,
+        initialState: TabletViewState = TabletViewState()
+    ) {
         self.defaults = defaults
+        injectedAccount = account
+        injectedSessionProvider = sessionProvider
         #if DEBUG
         isNewSessionFailureUITest = ProcessInfo.processInfo.arguments.contains("--ui-test-new-session-failure")
+        isPendingCreateUITest = ProcessInfo.processInfo.arguments.contains("--ui-test-pending-create-retry")
         #else
         isNewSessionFailureUITest = false
+        isPendingCreateUITest = false
         #endif
-        var initial = TabletViewState()
+        var initial = initialState
         initial.appearance = TabletAppearance(rawValue: defaults.string(forKey: "tablet.appearance") ?? "") ?? .system
         initial.connectionMode = TabletConnectionMode(rawValue: defaults.string(forKey: "tablet.connectionMode") ?? "") ?? .automatic
         initial.expandedSidebarIDs = Set(defaults.stringArray(forKey: "tablet.expandedSidebarIDs") ?? [])
-        initial.conversationDrafts = defaults.dictionary(forKey: Self.conversationDraftsKey) as? [String: String] ?? [:]
         #if DEBUG
         if isNewSessionFailureUITest {
             initial.isAuthenticated = true
             initial.computers = Self.newSessionFailureFixture()
+        }
+        if isPendingCreateUITest {
+            initial.isAuthenticated = true
+            initial.computers = UITestPendingCreateFixture.computers
         }
         #endif
         state = initial
@@ -89,30 +149,42 @@ final class TabletAppModel: ObservableObject {
         guard !isNewSessionFailureUITest else { return }
         guard !bootstrapped else { return }
         bootstrapped = true
+        let generation = accountGeneration
         do {
             try configureClients()
             if let profile = try await account?.restore() {
+                guard generation == accountGeneration else { return }
                 update {
                     $0.isAuthenticated = true
                     $0.email = profile.email
                 }
+                setAccount(profile.id)
+                if isPendingCreateUITest {
+                    setPendingAction(UITestPendingCreateFixture.pendingAction)
+                    return
+                }
                 await refreshSnapshot()
             }
         } catch {
+            guard generation == accountGeneration else { return }
             show(error)
         }
     }
 
     func taskDidStart() {
+        guard !isPendingCreateUITest else { return }
         startPolling()
     }
 
     func sceneChanged(_ phase: ScenePhase) {
         if phase == .active {
+            let generation = accountGeneration
             launch { [weak self] in
                 guard let self else { return }
                 await self.start()
+                guard generation == self.accountGeneration else { return }
                 if self.state.isAuthenticated { await self.refreshSnapshot() }
+                guard generation == self.accountGeneration else { return }
                 self.startPolling()
             }
         } else if TabletLifecyclePolicy.suspendsForegroundWork(for: phase) {
@@ -121,42 +193,61 @@ final class TabletAppModel: ObservableObject {
             pairingTask?.cancel()
             for task in operationTasks.values { task.cancel() }
             operationTasks.removeAll()
-            launch { [weak self] in await self?.supervisor?.disconnectAll() }
+            let oldSupervisor = supervisor
+            launch { await oldSupervisor?.disconnectAll() }
         }
     }
 
     private func configureClients() throws {
         guard account == nil else { return }
-        let configuration = try IpadConfiguration()
-        let account = AccountClient(configuration: configuration, crypto: IpadMobileCryptoAdapter())
+        let account: any TabletAccountService
+        if let injectedAccount {
+            account = injectedAccount
+        } else {
+            let configuration = try IpadConfiguration()
+            account = AccountClient(configuration: configuration, crypto: IpadMobileCryptoAdapter())
+        }
         self.account = account
-        supervisor = SupervisorClient(account: account, connector: SupervisorMobileConnector())
+        supervisor = SupervisorClient(
+            account: account, connector: SupervisorMobileConnector(), sessionProvider: injectedSessionProvider
+        )
     }
 
     private func requestSignInCode(_ email: String) {
+        let generation = accountGeneration
         launch { [weak self] in
             guard let self else { return }
             await self.performBusy {
                 do {
+                    await self.signOutTask?.value
+                    guard generation == self.accountGeneration else { return }
                     try self.configureClients()
                     try await self.account?.requestSignInCode(email: email)
+                    guard generation == self.accountGeneration else { return }
                     self.update {
                         $0.email = email.trimmingCharacters(in: .whitespacesAndNewlines)
                         $0.codeRequested = true
                         $0.errorMessage = nil
                     }
-                } catch { self.show(error) }
+                } catch {
+                    guard generation == self.accountGeneration else { return }
+                    self.show(error)
+                }
             }
         }
     }
 
     private func verifySignInCode(_ email: String, _ code: String) {
+        let generation = accountGeneration
         launch { [weak self] in
             guard let self else { return }
             await self.performBusy {
                 do {
+                    await self.signOutTask?.value
+                    guard generation == self.accountGeneration else { return }
                     try self.configureClients()
                     let profile = try await self.account?.verifySignInCode(email: email, code: code)
+                    guard generation == self.accountGeneration else { return }
                     guard let profile else { throw ClientFailure.invalidResponse }
                     self.update {
                         $0.isAuthenticated = true
@@ -164,31 +255,64 @@ final class TabletAppModel: ObservableObject {
                         $0.codeRequested = false
                         $0.errorMessage = nil
                     }
+                    self.setAccount(profile.id)
                     await self.refreshSnapshot()
-                } catch { self.show(error) }
+                } catch {
+                    guard generation == self.accountGeneration else { return }
+                    self.show(error)
+                }
             }
         }
     }
 
     private func signOut() {
-        launch { [weak self] in
-            guard let self else { return }
-            await self.account?.signOut()
-            await self.supervisor?.disconnectAll()
-            self.update {
-                $0.isAuthenticated = false
-                $0.codeRequested = false
-                $0.computers = []
-                $0.attentions = []
-                $0.activeConversation = nil
-                $0.route = .home
-                $0.errorMessage = nil
-            }
+        guard signOutTask == nil else { return }
+        accountGeneration = UUID()
+        let generation = accountGeneration
+        pollTask?.cancel()
+        pollTask = nil
+        pairingTask?.cancel()
+        pairingTask = nil
+        for task in operationTasks.values { task.cancel() }
+        operationTasks.removeAll()
+        inFlightActionIDs.removeAll()
+        busyCount = 0
+        let oldAccount = account
+        let oldSupervisor = supervisor
+        account = nil
+        supervisor = nil
+        clearAccountData()
+        update {
+            $0.isAuthenticated = false
+            $0.email = ""
+            $0.codeRequested = false
+            $0.computers = []
+            $0.attentions = []
+            $0.activeConversation = nil
+            $0.conversationDrafts = [:]
+            $0.pendingActions = [:]
+            $0.changes = []
+            $0.changesLoading = false
+            $0.searchResults = []
+            $0.pairingMessage = nil
+            $0.createSessionErrorMessage = nil
+            $0.route = .home
+            $0.errorMessage = nil
+            $0.isBusy = false
+        }
+        // Invalidate local work before awaiting network or wire cleanup. Native
+        // requests may finish after Task.cancel(), so their account epoch is fenced.
+        signOutTask = Task { @MainActor [weak self] in
+            await oldSupervisor?.clearLocalState()
+            await oldAccount?.signOut()
+            guard let self, generation == self.accountGeneration else { return }
+            self.signOutTask = nil
         }
     }
 
     private func pair(_ code: String) {
         guard pairingTask == nil else { return }
+        let generation = accountGeneration
         pairingTask = Task { @MainActor [weak self] in
             guard let self else { return }
             await self.performBusy {
@@ -196,16 +320,23 @@ final class TabletAppModel: ObservableObject {
                     guard let account = self.account else { throw ClientFailure.signInRequired }
                     self.update { $0.pairingMessage = nil }
                     _ = try await account.pair(code: code) { [weak self] in
-                        Task { @MainActor in self?.update { $0.pairingMessage = "已提交配对请求，正在等待电脑确认。" } }
+                        Task { @MainActor in
+                            guard let self, generation == self.accountGeneration else { return }
+                            self.update { $0.pairingMessage = "已提交配对请求，正在等待电脑确认。" }
+                        }
                     }
+                    guard generation == self.accountGeneration else { return }
                     self.update { $0.pairingMessage = nil; $0.isRemoved = false }
                     await self.refreshSnapshot()
                 } catch is CancellationError {
+                    guard generation == self.accountGeneration else { return }
                     self.update { $0.pairingMessage = "已取消等待。" }
                 } catch {
+                    guard generation == self.accountGeneration else { return }
                     self.update { $0.pairingMessage = error.localizedDescription }
                 }
             }
+            guard generation == self.accountGeneration else { return }
             self.pairingTask = nil
         }
     }
@@ -215,11 +346,13 @@ final class TabletAppModel: ObservableObject {
     }
 
     private func removeComputer(_ id: String) {
+        let generation = accountGeneration
         launch { [weak self] in
             guard let self else { return }
             await self.performBusy {
                 do {
                     try await self.account?.remove(computerID: id)
+                    guard generation == self.accountGeneration else { return }
                     self.update {
                         $0.computers.removeAll { $0.id == id }
                         if case .device(let computerID, _) = $0.route, computerID == id { $0.route = .devices }
@@ -229,7 +362,10 @@ final class TabletAppModel: ObservableObject {
                             $0.activeConversation = nil
                         }
                     }
-                } catch { self.show(error) }
+                } catch {
+                    guard generation == self.accountGeneration else { return }
+                    self.show(error)
+                }
             }
         }
     }
@@ -267,11 +403,14 @@ final class TabletAppModel: ObservableObject {
 
     private func refreshSnapshot() async {
         guard state.isAuthenticated, let supervisor else { return }
+        let generation = accountGeneration
         await performBusy {
             do {
                 let snapshot = try await supervisor.refresh(mode: self.state.connectionMode)
+                guard generation == self.accountGeneration else { return }
                 self.apply(snapshot)
             } catch {
+                guard generation == self.accountGeneration else { return }
                 self.show(error)
             }
         }
@@ -293,14 +432,19 @@ final class TabletAppModel: ObservableObject {
     }
 
     private func loadConversation(computerID: String, conversationID: String) {
+        let generation = accountGeneration
         launch { [weak self] in
             guard let self else { return }
             do {
                 let detail = try await self.supervisor?.conversation(
                     computerID: computerID, conversationID: conversationID, mode: self.state.connectionMode
                 )
+                guard generation == self.accountGeneration else { return }
                 if let detail { self.update { $0.activeConversation = detail } }
-            } catch { self.show(error) }
+            } catch {
+                guard generation == self.accountGeneration else { return }
+                self.show(error)
+            }
         }
     }
 
@@ -312,26 +456,24 @@ final class TabletAppModel: ObservableObject {
             update { $0.createSessionErrorMessage = "模拟创建失败，请检查连接后重试。" }
             return
         }
+        guard let accountID = currentAccountID,
+              let choice = state.computers
+                .flatMap({ computer in computer.machines.flatMap { machine in machine.projects.map { (computer, machine, $0) } } })
+                .first(where: { $0.2.id == projectID }) else {
+            update { $0.createSessionErrorMessage = ClientFailure.invalidResponse.localizedDescription }
+            return
+        }
+        let action = TabletPendingAction(
+            accountID: accountID, actionID: Self.newActionID(), operation: .createConversation,
+            computerID: choice.0.id, machineID: choice.1.id, projectID: projectID,
+            conversationID: nil, provider: provider, reasoning: reasoning, input: input
+        )
+        guard inFlightActionIDs.insert(action.actionID).inserted else { return }
+        setPendingAction(action)
         launch { [weak self] in
             guard let self else { return }
             await self.performBusy {
-                do {
-                    let result = try await self.supervisor?.createConversation(
-                        projectID: projectID, provider: provider, reasoning: reasoning, input: input,
-                        mode: self.state.connectionMode
-                    )
-                    guard let result else { throw ClientFailure.invalidResponse }
-                    self.update { $0.route = result.target }
-                    self.clearPendingAction(for: scope)
-                    self.update { $0.createSessionErrorMessage = nil }
-                    await self.refreshSnapshot()
-                    if case .conversation(let computerID, let conversationID) = result.target {
-                        self.loadConversation(computerID: computerID, conversationID: conversationID)
-                    }
-                } catch {
-                    self.recordUncertainAction(error, scope: scope, input: input, computerID: nil)
-                    self.update { $0.createSessionErrorMessage = error.localizedDescription }
-                }
+                await self.executePendingAction(action, retry: false)
             }
         }
     }
@@ -340,26 +482,20 @@ final class TabletAppModel: ObservableObject {
         guard let detail = state.activeConversation, detail.summary.id == conversationID else { return }
         let scope = TabletActionScope.send(conversationID: conversationID)
         guard state.pendingActions[scope] == nil else { return }
+        update { $0.errorMessage = nil }
         let computerID = detail.summary.computerID
+        guard let accountID = currentAccountID else { return }
+        let action = TabletPendingAction(
+            accountID: accountID, actionID: Self.newActionID(), operation: .sendTurn,
+            computerID: computerID, machineID: detail.summary.machineID,
+            projectID: detail.summary.projectID, conversationID: conversationID,
+            provider: nil, reasoning: nil, input: text
+        )
+        guard inFlightActionIDs.insert(action.actionID).inserted else { return }
+        setPendingAction(action)
         launch { [weak self] in
             guard let self else { return }
-            do {
-                try await self.supervisor?.send(
-                    computerID: computerID, conversationID: conversationID, text: text,
-                    mode: self.state.connectionMode
-                )
-                if self.state.conversationDrafts[conversationID]?.trimmingCharacters(in: .whitespacesAndNewlines) == text {
-                    self.update {
-                        $0.conversationDrafts.removeValue(forKey: conversationID)
-                        self.persistDrafts($0.conversationDrafts)
-                    }
-                }
-                self.clearPendingAction(for: scope)
-                self.loadConversation(computerID: computerID, conversationID: conversationID)
-            } catch {
-                self.recordUncertainAction(error, scope: scope, input: text, computerID: computerID)
-                self.show(error)
-            }
+            await self.executePendingAction(action, retry: false)
         }
     }
 
@@ -371,104 +507,162 @@ final class TabletAppModel: ObservableObject {
     }
 
     private func retryUncertainAction(_ actionID: String) {
-        guard let pending = state.pendingActions.values.first(where: { $0.actionID == actionID }) else { return }
+        guard let pending = state.pendingActions.values.first(where: { $0.actionID == actionID }),
+              pending.accountID == currentAccountID,
+              inFlightActionIDs.insert(actionID).inserted else { return }
         launch { [weak self] in
             guard let self else { return }
             await self.performBusy {
-                do {
-                    let result = try await self.supervisor?.retryUncertainAction(
-                        actionID: actionID, mode: self.state.connectionMode
-                    )
-                    switch pending.scope {
-                    case .create:
-                        guard let result else { throw ClientFailure.invalidResponse }
-                        self.update { $0.route = result.target; $0.errorMessage = nil; $0.createSessionErrorMessage = nil }
-                        self.clearPendingAction(for: pending.scope)
-                        await self.refreshSnapshot()
-                        if case .conversation(let computerID, let conversationID) = result.target {
-                            self.loadConversation(computerID: computerID, conversationID: conversationID)
-                        }
-                    case .send(let conversationID):
-                        if self.state.conversationDrafts[conversationID]?.trimmingCharacters(in: .whitespacesAndNewlines) == pending.input {
-                            self.update {
-                                $0.conversationDrafts.removeValue(forKey: conversationID)
-                                self.persistDrafts($0.conversationDrafts)
-                            }
-                        }
-                        self.clearPendingAction(for: pending.scope)
-                        self.update { $0.errorMessage = nil }
-                        if let computerID = pending.computerID {
-                            self.loadConversation(computerID: computerID, conversationID: conversationID)
-                        }
-                    }
-                } catch {
-                    if let uncertainID = self.uncertainActionID(from: error) {
-                        self.update {
-                            $0.pendingActions[pending.scope] = TabletPendingAction(
-                                actionID: uncertainID, scope: pending.scope, input: pending.input,
-                                computerID: pending.computerID
-                            )
-                        }
-                    } else {
-                        self.clearPendingAction(for: pending.scope)
-                    }
-                    if case .create = pending.scope {
-                        self.update { $0.createSessionErrorMessage = error.localizedDescription }
-                    } else {
-                        self.show(error)
-                    }
-                }
+                await self.executePendingAction(pending, retry: true)
             }
         }
     }
 
-    private func recordUncertainAction(
-        _ error: Error, scope: TabletActionScope, input: String, computerID: String?
-    ) {
-        guard let actionID = uncertainActionID(from: error) else { return }
-        update {
-            $0.pendingActions[scope] = TabletPendingAction(
-                actionID: actionID, scope: scope, input: input, computerID: computerID
-            )
+    private func executePendingAction(_ action: TabletPendingAction, retry: Bool) async {
+        let generation = accountGeneration
+        defer { if generation == accountGeneration { inFlightActionIDs.remove(action.actionID) } }
+        guard action.accountID == currentAccountID,
+              state.pendingActions[action.scope]?.actionID == action.actionID else { return }
+        do {
+            guard let supervisor else { throw ClientFailure.invalidResponse }
+            let result = try await supervisor.perform(action, mode: state.connectionMode)
+            guard generation == accountGeneration, action.accountID == currentAccountID else { return }
+            switch action.operation {
+            case .createConversation:
+                guard let result else { throw ClientFailure.invalidResponse }
+                clearPendingAction(action)
+                update { $0.route = result.target; $0.errorMessage = nil; $0.createSessionErrorMessage = nil }
+                await refreshSnapshot()
+                guard generation == accountGeneration else { return }
+                if case .conversation(let computerID, let conversationID) = result.target {
+                    loadConversation(computerID: computerID, conversationID: conversationID)
+                }
+            case .sendTurn:
+                clearPendingAction(action)
+                if state.conversationDrafts[action.conversationID ?? ""]?.trimmingCharacters(in: .whitespacesAndNewlines) == action.input {
+                    update {
+                        $0.conversationDrafts.removeValue(forKey: action.conversationID ?? "")
+                        persistDrafts($0.conversationDrafts)
+                    }
+                }
+                update { $0.errorMessage = nil }
+                if let conversationID = action.conversationID {
+                    loadConversation(computerID: action.computerID, conversationID: conversationID)
+                }
+            }
+        } catch {
+            guard generation == accountGeneration, action.accountID == currentAccountID else { return }
+            let explicitlyRejected = SupervisorClient.isExplicitWriteRejection(error)
+            let uncertain = (error as? SupervisorClientError)?.uncertainActionID == action.actionID
+            let definite = SupervisorClient.isDefiniteWriteFailure(error)
+            if explicitlyRejected || (!retry && !uncertain && definite) {
+                clearPendingAction(action)
+            }
+            inFlightActionIDs.remove(action.actionID)
+            switch action.operation {
+            case .createConversation:
+                update { $0.createSessionErrorMessage = error.localizedDescription }
+            case .sendTurn:
+                show(error)
+            }
         }
     }
 
-    private func uncertainActionID(from error: Error) -> String? {
-        if let failure = error as? SupervisorClientError { return failure.uncertainActionID }
-        if let failure = error as? ClientFailure, case .actionUncertain(let actionID) = failure { return actionID }
-        return nil
+    private func setPendingAction(_ action: TabletPendingAction) {
+        update { $0.pendingActions[action.scope] = action }
+        persistPendingActions(state.pendingActions)
     }
 
-    private func clearPendingAction(for scope: TabletActionScope) {
-        update { $0.pendingActions.removeValue(forKey: scope) }
+    private func clearPendingAction(_ action: TabletPendingAction) {
+        guard currentAccountID == action.accountID,
+              state.pendingActions[action.scope]?.actionID == action.actionID else { return }
+        update { $0.pendingActions.removeValue(forKey: action.scope) }
+        persistPendingActions(state.pendingActions)
     }
 
     private func persistDrafts(_ drafts: [String: String]) {
-        defaults.set(drafts, forKey: Self.conversationDraftsKey)
+        guard let currentAccountID,
+              let data = try? JSONEncoder().encode(StoredTabletDrafts(accountID: currentAccountID, drafts: drafts)) else { return }
+        defaults.set(data, forKey: Self.conversationDraftsKey)
+    }
+
+    private func persistPendingActions(_ actions: [TabletActionScope: TabletPendingAction]) {
+        guard let currentAccountID else { return }
+        guard !actions.isEmpty else {
+            defaults.removeObject(forKey: Self.pendingActionsKey)
+            return
+        }
+        let stored = StoredTabletActions(accountID: currentAccountID, actions: Array(actions.values))
+        guard let data = try? JSONEncoder().encode(stored) else { return }
+        defaults.set(data, forKey: Self.pendingActionsKey)
+    }
+
+    private func setAccount(_ accountID: String) {
+        guard currentAccountID != accountID else { return }
+        currentAccountID = accountID
+        var drafts: [String: String] = [:]
+        if let data = defaults.data(forKey: Self.conversationDraftsKey),
+           let stored = try? JSONDecoder().decode(StoredTabletDrafts.self, from: data),
+           stored.accountID == accountID {
+            drafts = stored.drafts
+        } else {
+            defaults.removeObject(forKey: Self.conversationDraftsKey)
+        }
+        var pending: [TabletActionScope: TabletPendingAction] = [:]
+        if let data = defaults.data(forKey: Self.pendingActionsKey),
+           let stored = try? JSONDecoder().decode(StoredTabletActions.self, from: data),
+           stored.accountID == accountID {
+            for action in stored.actions where action.accountID == accountID {
+                pending[action.scope] = action
+            }
+        } else {
+            defaults.removeObject(forKey: Self.pendingActionsKey)
+        }
+        update {
+            $0.conversationDrafts = drafts
+            $0.pendingActions = pending
+        }
+    }
+
+    private func clearAccountData() {
+        currentAccountID = nil
+        defaults.removeObject(forKey: Self.conversationDraftsKey)
+        defaults.removeObject(forKey: Self.pendingActionsKey)
     }
 
     private func approve(attentionID: String, accepted: Bool) {
+        let generation = accountGeneration
         launch { [weak self] in
             guard let self else { return }
             do {
                 try await self.supervisor?.approve(attentionID: attentionID, accepted: accepted, mode: self.state.connectionMode)
+                guard generation == self.accountGeneration else { return }
                 await self.refreshSnapshot()
-            } catch { self.show(error) }
+            } catch {
+                guard generation == self.accountGeneration else { return }
+                self.show(error)
+            }
         }
     }
 
     private func resolveAttention(attentionID: String) {
+        let generation = accountGeneration
         launch { [weak self] in
             guard let self else { return }
             do {
                 try await self.supervisor?.resolveAttention(attentionID: attentionID, mode: self.state.connectionMode)
+                guard generation == self.accountGeneration else { return }
                 await self.refreshSnapshot()
-            } catch { self.show(error) }
+            } catch {
+                guard generation == self.accountGeneration else { return }
+                self.show(error)
+            }
         }
     }
 
     private func interrupt(conversationID: String, turnID: String) {
         guard let detail = state.activeConversation, detail.summary.id == conversationID else { return }
+        let generation = accountGeneration
         launch { [weak self] in
             guard let self else { return }
             do {
@@ -476,43 +670,62 @@ final class TabletAppModel: ObservableObject {
                     computerID: detail.summary.computerID, conversationID: conversationID,
                     turnID: turnID, mode: self.state.connectionMode
                 )
+                guard generation == self.accountGeneration else { return }
                 self.loadConversation(computerID: detail.summary.computerID, conversationID: conversationID)
-            } catch { self.show(error) }
+            } catch {
+                guard generation == self.accountGeneration else { return }
+                self.show(error)
+            }
         }
     }
 
     private func archive(conversationID: String) {
         guard let detail = state.activeConversation, detail.summary.id == conversationID else { return }
         let computerID = detail.summary.computerID
+        let generation = accountGeneration
         launch { [weak self] in
             guard let self else { return }
             do {
                 try await self.supervisor?.archive(computerID: computerID, conversationID: conversationID, mode: self.state.connectionMode)
+                guard generation == self.accountGeneration else { return }
                 self.update { $0.activeConversation = nil; $0.route = .home }
                 await self.refreshSnapshot()
-            } catch { self.show(error) }
+            } catch {
+                guard generation == self.accountGeneration else { return }
+                self.show(error)
+            }
         }
     }
 
     private func loadChanges(conversationID: String) {
         guard let detail = state.activeConversation, detail.summary.id == conversationID else { return }
         let computerID = detail.summary.computerID
+        let generation = accountGeneration
         update { $0.changesLoading = true }
         launch { [weak self] in
             guard let self else { return }
-            defer { self.update { $0.changesLoading = false } }
+            defer {
+                if generation == self.accountGeneration {
+                    self.update { $0.changesLoading = false }
+                }
+            }
             do {
                 let files = try await self.supervisor?.changes(
                     computerID: computerID, conversationID: conversationID, mode: self.state.connectionMode
                 ) ?? []
+                guard generation == self.accountGeneration else { return }
                 self.update { $0.changes = files }
-            } catch { self.show(error) }
+            } catch {
+                guard generation == self.accountGeneration else { return }
+                self.show(error)
+            }
         }
     }
 
     private func loadOlder(conversationID: String, cursor: String) {
         guard let detail = state.activeConversation, detail.summary.id == conversationID else { return }
         let computerID = detail.summary.computerID
+        let generation = accountGeneration
         launch { [weak self] in
             guard let self else { return }
             do {
@@ -520,6 +733,7 @@ final class TabletAppModel: ObservableObject {
                     computerID: computerID, conversationID: conversationID, cursor: cursor,
                     mode: self.state.connectionMode
                 ) ?? (messages: [], beforeCursor: nil)
+                guard generation == self.accountGeneration else { return }
                 guard let current = self.state.activeConversation, current.summary.id == conversationID else { return }
                 self.update {
                     $0.activeConversation = TabletConversationDetail(
@@ -536,7 +750,10 @@ final class TabletAppModel: ObservableObject {
                         olderCursor: older.beforeCursor
                     )
                 }
-            } catch { self.show(error) }
+            } catch {
+                guard generation == self.accountGeneration else { return }
+                self.show(error)
+            }
         }
     }
 
@@ -560,15 +777,21 @@ final class TabletAppModel: ObservableObject {
 
     private func pollForeground() async {
         guard state.isAuthenticated else { return }
+        let generation = accountGeneration
         if case .conversation(let computerID, let conversationID) = state.route {
             do {
                 if let detail = try await supervisor?.pollConversation(
                     computerID: computerID, conversationID: conversationID, mode: state.connectionMode
                 ) {
+                    guard generation == accountGeneration else { return }
                     update { $0.activeConversation = detail; $0.attentions = merge($0.attentions, detail.attentions) }
                 }
-            } catch { show(error) }
+            } catch {
+                guard generation == accountGeneration else { return }
+                show(error)
+            }
         }
+        guard generation == accountGeneration else { return }
         if Date().timeIntervalSince(lastWorkspaceRefresh) >= 10 {
             await refreshSnapshot()
         }
@@ -581,11 +804,14 @@ final class TabletAppModel: ObservableObject {
     }
 
     private func performBusy(_ operation: () async -> Void) async {
+        let generation = accountGeneration
         busyCount += 1
         update { $0.isBusy = true }
         defer {
-            busyCount -= 1
-            update { $0.isBusy = busyCount > 0 }
+            if generation == accountGeneration {
+                busyCount -= 1
+                update { $0.isBusy = busyCount > 0 }
+            }
         }
         await operation()
     }
@@ -630,6 +856,11 @@ final class TabletAppModel: ObservableObject {
     }
 
     private static let conversationDraftsKey = "tablet.conversationDrafts"
+    private static let pendingActionsKey = "tablet.pendingActions"
+
+    private static func newActionID() -> String {
+        "act_\(UUID().uuidString.lowercased())"
+    }
 
     #if DEBUG
     private static func newSessionFailureFixture() -> [TabletComputer] {

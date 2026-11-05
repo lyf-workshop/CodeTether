@@ -33,14 +33,24 @@ struct SupervisorClientError: Error, LocalizedError {
     let code: String
     let status: Int?
     let uncertainActionID: String?
+    let isExplicitWriteRejection: Bool
+
+    init(code: String, status: Int?, uncertainActionID: String?, isExplicitWriteRejection: Bool = false) {
+        self.code = code
+        self.status = status
+        self.uncertainActionID = uncertainActionID
+        self.isExplicitWriteRejection = isExplicitWriteRejection
+    }
 
     var errorDescription: String? {
         if let uncertainActionID { return ClientFailure.actionUncertain(uncertainActionID).localizedDescription }
         if code == "computer_removed" { return ClientFailure.computerRemoved.localizedDescription }
         if code == "authorization_revoked", status == 409 { return ClientFailure.computerRemoved.localizedDescription }
         if code == "operation_not_allowed" { return ClientFailure.operationNotAllowed.localizedDescription }
+        if code == "not_found" { return "项目或会话已不存在，请刷新后重试。" }
+        if code == "conflict" { return "请求与当前状态冲突，请刷新后重试。" }
         if code == "unsupported" { return ClientFailure.unsupported.localizedDescription }
-        if code == "archive_busy" || status == 409 { return ClientFailure.archiveBusy.localizedDescription }
+        if code == "archive_busy" { return ClientFailure.archiveBusy.localizedDescription }
         if code == "sign_in_required" { return ClientFailure.signInRequired.localizedDescription }
         if code == "configuration_missing" { return ClientFailure.configurationMissing.localizedDescription }
         if code == "invalid_response" || code == "invalid_request" { return ClientFailure.invalidResponse.localizedDescription }
@@ -49,6 +59,17 @@ struct SupervisorClientError: Error, LocalizedError {
 }
 
 actor SupervisorClient {
+    typealias SessionProvider = @Sendable (PairedComputer, TabletConnectionMode) async throws -> any SupervisorWireSession
+
+    private static let uncertainWriteFailureCodes: Set<String> = [
+        "connection_closed", "connection_failed", "timeout", "session_expired",
+        "authorization_revoked", "internal", "protocol_error", "invalid_response",
+    ]
+
+    private static let explicitWriteRejectionCodes: Set<String> = [
+        "invalid_request", "not_found", "conflict", "operation_not_allowed",
+    ]
+
     private struct ActiveConnection {
         let wire: any SupervisorWireSession
         let computer: PairedComputer
@@ -72,24 +93,31 @@ actor SupervisorClient {
         let projectID: String
     }
 
-    private let account: AccountClient
+    private let account: any TabletAccountService
     private let connector: any SupervisorConnector
+    private let sessionProvider: SessionProvider?
     private var active: [String: ActiveConnection] = [:]
     private var conversationTargets: [String: (computerID: String, target: ConversationTarget)] = [:]
     private var projectTargets: [String: ProjectTarget] = [:]
     private var attentionRecords: [String: (computerID: String, record: [String: Any])] = [:]
     private var liveCursors: [String: String] = [:]
     private var conversationHistories: [String: ParsedHistory] = [:]
-    private var uncertainActions: [String: PendingSupervisorAction] = [:]
-    private var retryingActions = Set<String>()
+    private var stateGeneration: UInt64 = 0
 
-    init(account: AccountClient, connector: any SupervisorConnector) {
+    init(
+        account: any TabletAccountService,
+        connector: any SupervisorConnector,
+        sessionProvider: SessionProvider? = nil
+    ) {
         self.account = account
         self.connector = connector
+        self.sessionProvider = sessionProvider
     }
 
     func refresh(mode: TabletConnectionMode) async throws -> SupervisorSnapshot {
+        let generation = stateGeneration
         let directory = try await account.directory()
+        guard generation == stateGeneration else { throw CancellationError() }
         var computers: [TabletComputer] = []
         var attentions: [TabletAttention] = []
         var selectedTransport = ""
@@ -97,13 +125,17 @@ actor SupervisorClient {
 
         for computer in directory {
             do {
-                let session = try await ensureConnected(computerID: computer.id, mode: mode)
-                let workspace = try await readWorkspace(computer: computer, session: session, mode: mode)
+                let session = try await ensureConnected(computerID: computer.id, mode: mode, generation: generation)
+                let workspace = try await readWorkspace(
+                    computer: computer, session: session, mode: mode, generation: generation
+                )
+                guard generation == stateGeneration else { throw CancellationError() }
                 computers.append(workspace.computer)
                 attentions.append(contentsOf: workspace.attentions)
                 if selectedTransport.isEmpty { selectedTransport = session.wire.transport }
                 connected += 1
             } catch {
+                guard generation == stateGeneration else { throw CancellationError() }
                 await close(computerID: computer.id)
                 computers.append(TabletComputer(
                     id: computer.id, name: computer.name, platform: computer.platform,
@@ -125,100 +157,118 @@ actor SupervisorClient {
         for wire in existing { await wire.close() }
     }
 
+    func clearLocalState() async {
+        stateGeneration &+= 1
+        let existing = active.values.map(\.wire)
+        active.removeAll()
+        conversationTargets.removeAll()
+        projectTargets.removeAll()
+        attentionRecords.removeAll()
+        liveCursors.removeAll()
+        conversationHistories.removeAll()
+        for wire in existing { await wire.close() }
+    }
+
     func connectContext(computerID: String, mode: TabletConnectionMode) async throws -> String {
         let session = try await ensureConnected(computerID: computerID, mode: mode)
         return session.wire.transport
     }
 
     func conversation(computerID: String, conversationID: String, mode: TabletConnectionMode) async throws -> TabletConversationDetail {
+        let generation = stateGeneration
         guard let context = conversationTargets[conversationID], context.computerID == computerID else {
             throw ClientFailure.invalidResponse
         }
-        let session = try await ensureConnected(computerID: computerID, mode: mode)
-        return try await readConversation(session: session, target: context.target, mode: mode)
+        let session = try await ensureConnected(computerID: computerID, mode: mode, generation: generation)
+        guard generation == stateGeneration else { throw CancellationError() }
+        return try await readConversation(session: session, target: context.target, mode: mode, generation: generation)
     }
 
     func pollConversation(computerID: String, conversationID: String, mode: TabletConnectionMode) async throws -> TabletConversationDetail? {
+        let generation = stateGeneration
         guard let context = conversationTargets[conversationID], context.computerID == computerID,
               let cursor = liveCursors[conversationID] else { return nil }
-        let session = try await ensureConnected(computerID: computerID, mode: mode)
+        let session = try await ensureConnected(computerID: computerID, mode: mode, generation: generation)
+        guard generation == stateGeneration else { throw CancellationError() }
         let page = try await readSizedPage(computerID: computerID, mode: mode, initialLimit: 16) { limit in
             try await self.request(
                 computerID: computerID, mode: mode, operation: "conversation.live.read",
-                fields: context.target.fields.merging(["cursor": cursor, "limit": limit, "waitMs": 0]) { _, next in next }
+                fields: context.target.fields.merging(["cursor": cursor, "limit": limit, "waitMs": 0]) { _, next in next },
+                expectedGeneration: generation
             )
         }
+        guard generation == stateGeneration else { throw CancellationError() }
         guard page.object?["conversationId"] as? String == conversationID else { throw ClientFailure.invalidResponse }
         let events = page.array("events")
         if page.object?["resetRequired"] as? Bool == true || !events.isEmpty {
-            return try await readConversation(session: session, target: context.target, mode: mode)
+            return try await readConversation(session: session, target: context.target, mode: mode, generation: generation)
         }
         return nil
     }
 
-    func createConversation(
-        projectID: String,
-        provider: String,
-        reasoning: String?,
-        input: String,
-        mode: TabletConnectionMode
-    ) async throws -> SupervisorCreateResult {
-        guard let project = projectTargets[projectID] else { throw ClientFailure.invalidResponse }
-        if let pending = uncertainActions.values.first(where: { $0.projectID == projectID }) {
-            throw ClientFailure.actionUncertain(pending.actionID)
-        }
-        guard !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ClientFailure.invalidResponse }
-        _ = try await ensureConnected(computerID: project.computerID, mode: mode)
-        let machine = try await request(
-            computerID: project.computerID, mode: mode, operation: "machine.get", fields: ["machineId": project.machineID]
-        )
-        let providers = machine.object?["providers"] as? [[String: Any]] ?? []
-        guard let tool = providers.first(where: { $0["provider"] as? String == provider }),
-              tool["availability"] as? String == "available",
-              ((tool["executionHealth"] as? [String: Any])?["state"] as? String) != "unavailable" else {
-            throw ClientFailure.unsupported
-        }
-        let capabilities = tool["capabilities"] as? [String: Any] ?? [:]
-        guard capabilities["providerExecution"] as? Bool == true else { throw ClientFailure.unsupported }
-        let actionID = Self.newActionID()
-        var fields: [String: Any] = [
-            "machineId": project.machineID, "projectId": project.projectID, "provider": provider,
-            "input": ["type": "text", "text": input], "actionId": actionID,
-        ]
-        if let reasoning { fields["reasoning"] = reasoning }
-        let result: JSONResponse
-        do {
-            result = try await mutate(
-                computerID: project.computerID, mode: mode, operation: "conversation.create", fields: fields, actionID: actionID
+    func perform(_ action: TabletPendingAction, mode: TabletConnectionMode) async throws -> SupervisorCreateResult? {
+        let generation = stateGeneration
+        guard !action.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ClientFailure.invalidResponse }
+        switch action.operation {
+        case .createConversation:
+            guard let provider = action.provider else { throw ClientFailure.invalidResponse }
+            _ = try await ensureConnected(computerID: action.computerID, mode: mode, generation: generation)
+            let machine = try await request(
+                computerID: action.computerID, mode: mode, operation: "machine.get",
+                fields: ["machineId": action.machineID], expectedGeneration: generation
             )
-        } catch {
-            guard Self.isUncertainWrite(error, actionID: actionID) else { throw error }
-            uncertainActions[actionID] = PendingSupervisorAction(
-                computerID: project.computerID, operation: "conversation.create", fields: fields,
-                actionID: actionID, projectID: project.projectID, conversationID: nil
+            guard generation == stateGeneration else { throw CancellationError() }
+            let providers = machine.object?["providers"] as? [[String: Any]] ?? []
+            guard let tool = providers.first(where: { $0["provider"] as? String == provider }),
+                  tool["availability"] as? String == "available",
+                  ((tool["executionHealth"] as? [String: Any])?["state"] as? String) != "unavailable" else {
+                throw ClientFailure.unsupported
+            }
+            let capabilities = tool["capabilities"] as? [String: Any] ?? [:]
+            guard capabilities["providerExecution"] as? Bool == true else { throw ClientFailure.unsupported }
+            var fields: [String: Any] = [
+                "machineId": action.machineID, "projectId": action.projectID, "provider": provider,
+                "input": ["type": "text", "text": action.input],
+            ]
+            if let reasoning = action.reasoning { fields["reasoning"] = reasoning }
+            let result = try await mutate(
+                computerID: action.computerID, mode: mode, operation: "conversation.create",
+                fields: fields, actionID: action.actionID, expectedGeneration: generation
             )
-            throw SupervisorClientError(code: "operation_uncertain", status: nil, uncertainActionID: actionID)
-        }
-        do {
-            return try registerCreatedConversation(result, computerID: project.computerID, project: project)
-        } catch {
-            uncertainActions[actionID] = PendingSupervisorAction(
-                computerID: project.computerID, operation: "conversation.create", fields: fields,
-                actionID: actionID, projectID: project.projectID, conversationID: nil
+            guard generation == stateGeneration else { throw CancellationError() }
+            do {
+                return try registerCreatedConversation(
+                    result, computerID: action.computerID, machineID: action.machineID, projectID: action.projectID
+                )
+            } catch {
+                throw SupervisorClientError(code: "invalid_response", status: nil, uncertainActionID: action.actionID)
+            }
+        case .sendTurn:
+            guard let conversationID = action.conversationID else { throw ClientFailure.invalidResponse }
+            let target = ConversationTarget(
+                machineID: action.machineID, projectID: action.projectID, conversationID: conversationID
             )
-            throw SupervisorClientError(code: "invalid_response", status: nil, uncertainActionID: actionID)
+            conversationTargets[conversationID] = (action.computerID, target)
+            let fields = target.fields.merging(["input": ["type": "text", "text": action.input]]) { _, next in next }
+            _ = try await mutate(
+                computerID: action.computerID, mode: mode, operation: "conversation.turn.start",
+                fields: fields, actionID: action.actionID, expectedGeneration: generation
+            )
+            guard generation == stateGeneration else { throw CancellationError() }
+            return nil
         }
     }
 
     private func registerCreatedConversation(
         _ result: JSONResponse,
         computerID: String,
-        project: ProjectTarget
+        machineID: String,
+        projectID: String
     ) throws -> SupervisorCreateResult {
         guard let data = result.object?["data"] as? [String: Any],
               let conversation = data["conversation"] as? [String: Any],
               let target = try? Self.parseTarget(conversation),
-              target.projectID == project.projectID, target.machineID == project.machineID else {
+              target.projectID == projectID, target.machineID == machineID else {
             throw ClientFailure.invalidResponse
         }
         conversationTargets[target.conversationID] = (computerID, target)
@@ -228,67 +278,8 @@ actor SupervisorClient {
         )
     }
 
-    func send(computerID: String, conversationID: String, text: String, mode: TabletConnectionMode) async throws {
-        guard let context = conversationTargets[conversationID], context.computerID == computerID else {
-            throw ClientFailure.invalidResponse
-        }
-        if let pending = uncertainActions.values.first(where: { $0.conversationID == conversationID }) {
-            throw ClientFailure.actionUncertain(pending.actionID)
-        }
-        let actionID = Self.newActionID()
-        let fields = context.target.fields.merging(["input": ["type": "text", "text": text]]) { _, next in next }
-        do {
-            _ = try await mutate(
-                computerID: computerID, mode: mode, operation: "conversation.turn.start",
-                fields: fields, actionID: actionID
-            )
-        } catch {
-            guard Self.isUncertainWrite(error, actionID: actionID) else { throw error }
-            uncertainActions[actionID] = PendingSupervisorAction(
-                computerID: computerID, operation: "conversation.turn.start", fields: fields,
-                actionID: actionID, projectID: nil, conversationID: conversationID
-            )
-            throw SupervisorClientError(code: "operation_uncertain", status: nil, uncertainActionID: actionID)
-        }
-    }
-
-    func retryUncertainAction(actionID: String, mode: TabletConnectionMode) async throws -> SupervisorCreateResult? {
-        guard let pending = uncertainActions[actionID] else { throw ClientFailure.invalidResponse }
-        guard retryingActions.insert(actionID).inserted else { throw ClientFailure.actionUncertain(actionID) }
-        defer { retryingActions.remove(actionID) }
-
-        do {
-            let result = try await pending.replay { operation, fields, actionID in
-                try await self.mutate(
-                    computerID: pending.computerID, mode: mode, operation: operation,
-                    fields: fields, actionID: actionID
-                )
-            }
-            let created: SupervisorCreateResult?
-            if pending.operation == "conversation.create" {
-                guard let projectID = pending.projectID,
-                      let project = projectTargets[projectID] else { throw ClientFailure.invalidResponse }
-                created = try registerCreatedConversation(result, computerID: pending.computerID, project: project)
-            } else {
-                created = nil
-            }
-            uncertainActions.removeValue(forKey: actionID)
-            return created
-        } catch let failure as SupervisorClientError where failure.uncertainActionID == actionID {
-            throw failure
-        } catch let failure as ClientFailure {
-            if pending.operation == "conversation.create", case .invalidResponse = failure {
-                throw SupervisorClientError(code: "invalid_response", status: nil, uncertainActionID: actionID)
-            }
-            uncertainActions.removeValue(forKey: actionID)
-            throw failure
-        } catch {
-            uncertainActions.removeValue(forKey: actionID)
-            throw error
-        }
-    }
-
     func approve(attentionID: String, accepted: Bool, mode: TabletConnectionMode) async throws {
+        let generation = stateGeneration
         guard let (computerID, cached) = attentionRecords[attentionID] else { throw ClientFailure.invalidResponse }
         let approvalID: String
         if let payload = cached["payload"] as? [String: Any], let value = payload["approvalId"] as? String {
@@ -297,11 +288,13 @@ actor SupervisorClient {
         let actionID = Self.newActionID()
         _ = try await mutate(
             computerID: computerID, mode: mode, operation: "approval.resolve",
-            fields: ["approvalId": approvalID, "decision": accepted ? "accept" : "decline"], actionID: actionID
+            fields: ["approvalId": approvalID, "decision": accepted ? "accept" : "decline"], actionID: actionID,
+            expectedGeneration: generation
         )
     }
 
     func resolveAttention(attentionID: String, mode: TabletConnectionMode) async throws {
+        let generation = stateGeneration
         guard let (computerID, cached) = attentionRecords[attentionID],
               ["completed_review", "failed"].contains(cached["type"] as? String ?? "") else {
             throw ClientFailure.unsupported
@@ -309,25 +302,28 @@ actor SupervisorClient {
         let actionID = Self.newActionID()
         _ = try await mutate(
             computerID: computerID, mode: mode, operation: "attention.resolve",
-            fields: ["attentionId": attentionID], actionID: actionID
+            fields: ["attentionId": attentionID], actionID: actionID, expectedGeneration: generation
         )
     }
 
     func interrupt(computerID: String, conversationID: String, turnID: String, mode: TabletConnectionMode) async throws {
+        let generation = stateGeneration
         guard let context = conversationTargets[conversationID], context.computerID == computerID else {
             throw ClientFailure.invalidResponse
         }
-        let session = try await ensureConnected(computerID: computerID, mode: mode)
-        let detail = try await readConversation(session: session, target: context.target, mode: mode)
+        let session = try await ensureConnected(computerID: computerID, mode: mode, generation: generation)
+        let detail = try await readConversation(session: session, target: context.target, mode: mode, generation: generation)
         guard detail.canInterrupt else { throw ClientFailure.unsupported }
         let actionID = Self.newActionID()
         _ = try await mutate(
             computerID: computerID, mode: mode, operation: "turn.interrupt",
-            fields: context.target.fields.merging(["turnId": turnID]) { _, next in next }, actionID: actionID
+            fields: context.target.fields.merging(["turnId": turnID]) { _, next in next }, actionID: actionID,
+            expectedGeneration: generation
         )
     }
 
     func archive(computerID: String, conversationID: String, mode: TabletConnectionMode) async throws {
+        let generation = stateGeneration
         guard let context = conversationTargets[conversationID], context.computerID == computerID else {
             throw ClientFailure.invalidResponse
         }
@@ -335,7 +331,7 @@ actor SupervisorClient {
         do {
             _ = try await mutate(
                 computerID: computerID, mode: mode, operation: "conversation.archive",
-                fields: context.target.fields, actionID: actionID
+                fields: context.target.fields, actionID: actionID, expectedGeneration: generation
             )
         } catch let failure as SupervisorClientError where failure.status == 409 || failure.code == "conflict" {
             throw ClientFailure.archiveBusy
@@ -343,23 +339,25 @@ actor SupervisorClient {
     }
 
     func changes(computerID: String, conversationID: String, mode: TabletConnectionMode) async throws -> [TabletDiffFile] {
+        let generation = stateGeneration
         guard let context = conversationTargets[conversationID], context.computerID == computerID else {
             throw ClientFailure.invalidResponse
         }
-        let session = try await ensureConnected(computerID: computerID, mode: mode)
-        let detail = try await readConversation(session: session, target: context.target, mode: mode)
+        let session = try await ensureConnected(computerID: computerID, mode: mode, generation: generation)
+        let detail = try await readConversation(session: session, target: context.target, mode: mode, generation: generation)
         guard detail.canViewChanges else { throw ClientFailure.unsupported }
         var all: [[String: Any]] = []
         var offset = 0
         while true {
             let page = try await request(
                 computerID: computerID, mode: mode, operation: "conversation.changes",
-                fields: context.target.fields.merging(["offset": offset]) { _, next in next }
+                fields: context.target.fields.merging(["offset": offset]) { _, next in next },
+                expectedGeneration: generation
             )
             guard page.object?["conversationId"] as? String == conversationID else { throw ClientFailure.invalidResponse }
             all.append(contentsOf: page.array("changes"))
             guard let next = page.object?["nextOffset"] as? Int else { break }
-            guard next > offset, next <= 2048, all.count <= 2048 else { throw ClientFailure.invalidResponse }
+            guard next > offset, next <= 2_048, all.count <= 2_048 else { throw ClientFailure.invalidResponse }
             offset = next
         }
         return try all.enumerated().map { index, change in
@@ -370,15 +368,18 @@ actor SupervisorClient {
     }
 
     func olderHistory(computerID: String, conversationID: String, cursor: String, mode: TabletConnectionMode) async throws -> (messages: [TabletTimelineMessage], beforeCursor: String?) {
+        let generation = stateGeneration
         guard let context = conversationTargets[conversationID], context.computerID == computerID else {
             throw ClientFailure.invalidResponse
         }
         let page = try await readSizedPage(computerID: computerID, mode: mode, initialLimit: 8) { limit in
             try await self.request(
                 computerID: computerID, mode: mode, operation: "conversation.history",
-                fields: context.target.fields.merging(["limit": limit, "cursor": cursor]) { _, next in next }
+                fields: context.target.fields.merging(["limit": limit, "cursor": cursor]) { _, next in next },
+                expectedGeneration: generation
             )
         }
+        guard generation == stateGeneration else { throw CancellationError() }
         let parsed = try Self.parseHistory(page.object ?? [:], target: context.target)
         let merged = Self.mergeHistory(
             loaded: conversationHistories[conversationID], incoming: parsed, olderPage: true
@@ -387,28 +388,59 @@ actor SupervisorClient {
         return (merged.messages, merged.beforeCursor)
     }
 
-    private func ensureConnected(computerID: String, mode: TabletConnectionMode, force: Bool = false) async throws -> ActiveConnection {
+    private func ensureConnected(
+        computerID: String,
+        mode: TabletConnectionMode,
+        force: Bool = false,
+        generation expectedGeneration: UInt64? = nil
+    ) async throws -> ActiveConnection {
+        let generation = expectedGeneration ?? stateGeneration
+        guard generation == stateGeneration else { throw CancellationError() }
         if !force, let current = active[computerID], current.control,
            (mode == .automatic || current.mode == mode),
            let expiry = ISO8601DateFormatter().date(from: current.wire.expiresAt), expiry > Date().addingTimeInterval(3) {
             return current
         }
         if let old = active.removeValue(forKey: computerID) { await old.wire.close() }
-        let context = try await account.connectContext(computerID: computerID, mode: mode)
         do {
-            let wire = try await connector.connect(context, mode: mode)
-            guard wire.control else { await wire.close(); throw ClientFailure.operationNotAllowed }
-            let result = ActiveConnection(wire: wire, computer: context.computer, control: wire.control, mode: mode)
+            let result = try await connect(computerID: computerID, mode: mode)
+            guard generation == stateGeneration else {
+                await result.wire.close()
+                throw CancellationError()
+            }
             active[computerID] = result
             return result
         } catch let failure as SupervisorWireFailure where failure.code == "authorization_revoked" {
-            let latest = try await account.connectContext(computerID: computerID, mode: mode)
-            let wire = try await connector.connect(latest, mode: mode)
-            guard wire.control else { await wire.close(); throw ClientFailure.operationNotAllowed }
-            let result = ActiveConnection(wire: wire, computer: latest.computer, control: wire.control, mode: mode)
+            guard generation == stateGeneration else { throw CancellationError() }
+            let result = try await connect(computerID: computerID, mode: mode)
+            guard generation == stateGeneration else {
+                await result.wire.close()
+                throw CancellationError()
+            }
             active[computerID] = result
             return result
         }
+    }
+
+    private func connect(computerID: String, mode: TabletConnectionMode) async throws -> ActiveConnection {
+        let computer: PairedComputer
+        let wire: any SupervisorWireSession
+        if let sessionProvider {
+            guard let value = try await account.directory().first(where: { $0.id == computerID }) else {
+                throw ClientFailure.computerRemoved
+            }
+            computer = value
+            wire = try await sessionProvider(value, mode)
+        } else {
+            let context = try await account.connectContext(computerID: computerID, mode: mode)
+            computer = context.computer
+            wire = try await connector.connect(context, mode: mode)
+        }
+        guard wire.control else {
+            await wire.close()
+            throw ClientFailure.operationNotAllowed
+        }
+        return ActiveConnection(wire: wire, computer: computer, control: wire.control, mode: mode)
     }
 
     private func close(computerID: String) async {
@@ -422,9 +454,13 @@ actor SupervisorClient {
         operation: String,
         fields: [String: Any] = [:],
         retryRead: Bool = true,
-        actionID: String? = nil
+        actionID: String? = nil,
+        expectedGeneration: UInt64? = nil
     ) async throws -> JSONResponse {
-        let connection = try await ensureConnected(computerID: computerID, mode: mode)
+        let generation = expectedGeneration ?? stateGeneration
+        guard generation == stateGeneration else { throw CancellationError() }
+        let connection = try await ensureConnected(computerID: computerID, mode: mode, generation: generation)
+        guard generation == stateGeneration else { throw CancellationError() }
         let requestObject = fields.merging(["operation": operation]) { current, _ in current }
         let bytes: Data
         do { bytes = try JSONSerialization.data(withJSONObject: requestObject, options: [.sortedKeys]) }
@@ -434,6 +470,7 @@ actor SupervisorClient {
         do {
             enteredWire = true
             let output = try await connection.wire.request(text)
+            guard generation == stateGeneration else { throw CancellationError() }
             guard let data = output.data(using: .utf8),
                   let value = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                   value.isEmpty == false else {
@@ -444,12 +481,16 @@ actor SupervisorClient {
             }
             return JSONResponse(value)
         } catch let failure as SupervisorWireFailure {
+            guard generation == stateGeneration else { throw CancellationError() }
             if actionID != nil {
-                if failure.code == "connection_closed" || failure.code == "connection_failed" || failure.code == "session_expired" || failure.code == "authorization_revoked" || failure.code == "internal" {
+                let uncertain = Self.uncertainWriteFailureCodes.contains(failure.code)
+                if uncertain && ["connection_closed", "connection_failed", "timeout", "session_expired", "authorization_revoked"].contains(failure.code) {
                     await close(computerID: computerID)
-                    throw SupervisorClientError(code: failure.code, status: failure.status, uncertainActionID: actionID)
                 }
-                throw SupervisorClientError(code: failure.code, status: failure.status, uncertainActionID: actionID)
+                throw SupervisorClientError(
+                    code: failure.code, status: failure.status, uncertainActionID: uncertain ? actionID : nil,
+                    isExplicitWriteRejection: !uncertain && Self.explicitWriteRejectionCodes.contains(failure.code)
+                )
             }
             let reconnectable: Set<String> = ["connection_closed", "connection_failed", "session_expired", "authorization_revoked", "remote_host_unreachable", "timeout"]
             guard retryRead, reconnectable.contains(failure.code) else {
@@ -459,11 +500,12 @@ actor SupervisorClient {
             _ = try await ensureConnected(computerID: computerID, mode: mode, force: true)
             return try await request(
                 computerID: computerID, mode: mode, operation: operation, fields: fields,
-                retryRead: false, actionID: nil
+                retryRead: false, actionID: nil, expectedGeneration: generation
             )
         } catch let failure as SupervisorClientError {
             throw failure
         } catch {
+            guard generation == stateGeneration else { throw CancellationError() }
             if let actionID, enteredWire {
                 await close(computerID: computerID)
                 throw SupervisorClientError(code: "invalid_response", status: nil, uncertainActionID: actionID)
@@ -477,19 +519,22 @@ actor SupervisorClient {
         mode: TabletConnectionMode,
         operation: String,
         fields: [String: Any],
-        actionID: String
+        actionID: String,
+        expectedGeneration: UInt64? = nil
     ) async throws -> JSONResponse {
         let response = try await request(
             computerID: computerID, mode: mode, operation: operation,
             fields: Self.mutationFields(fields, actionID: actionID),
-            retryRead: false, actionID: actionID
+            retryRead: false, actionID: actionID, expectedGeneration: expectedGeneration
         )
         guard response.object?["actionId"] as? String == actionID else {
             throw SupervisorClientError(code: "invalid_response", status: nil, uncertainActionID: actionID)
         }
         switch response.object?["status"] as? String {
         case "accepted", "completed": return response
-        case "rejected": throw ClientFailure.operationNotAllowed
+        case "rejected": throw SupervisorClientError(
+            code: "operation_not_allowed", status: nil, uncertainActionID: nil, isExplicitWriteRejection: true
+        )
         default: throw SupervisorClientError(code: "invalid_response", status: nil, uncertainActionID: actionID)
         }
     }
@@ -498,14 +543,31 @@ actor SupervisorClient {
         fields.merging(["actionId": actionID]) { _, next in next }
     }
 
-    private static func isUncertainWrite(_ error: Error, actionID: String) -> Bool {
-        if let failure = error as? SupervisorClientError { return failure.uncertainActionID == actionID }
-        return false
+    static func isExplicitWriteRejection(_ error: Error) -> Bool {
+        (error as? SupervisorClientError)?.isExplicitWriteRejection == true
     }
 
-    private func readWorkspace(computer: PairedComputer, session: ActiveConnection, mode: TabletConnectionMode) async throws -> (computer: TabletComputer, attentions: [TabletAttention]) {
-        _ = try await request(computerID: computer.id, mode: mode, operation: "host.bootstrap")
-        let machinePage = try await request(computerID: computer.id, mode: mode, operation: "machine.list")
+    static func isDefiniteWriteFailure(_ error: Error) -> Bool {
+        if let failure = error as? SupervisorClientError {
+            return failure.uncertainActionID == nil && failure.isExplicitWriteRejection
+        }
+        guard let failure = error as? ClientFailure else { return false }
+        switch failure {
+        case .invalidResponse, .operationNotAllowed, .unsupported: return true
+        default: return false
+        }
+    }
+
+    private func readWorkspace(
+        computer: PairedComputer,
+        session: ActiveConnection,
+        mode: TabletConnectionMode,
+        generation: UInt64
+    ) async throws -> (computer: TabletComputer, attentions: [TabletAttention]) {
+        _ = try await request(computerID: computer.id, mode: mode, operation: "host.bootstrap", expectedGeneration: generation)
+        guard generation == stateGeneration else { throw CancellationError() }
+        let machinePage = try await request(computerID: computer.id, mode: mode, operation: "machine.list", expectedGeneration: generation)
+        guard generation == stateGeneration else { throw CancellationError() }
         let machineRows = machinePage.array("machines")
         guard machineRows.count <= 128 else { throw ClientFailure.invalidResponse }
         var machines: [TabletMachine] = []
@@ -513,7 +575,11 @@ actor SupervisorClient {
 
         for row in machineRows {
             let machineID = try Self.requiredString(row, "machineId", max: 160)
-            let detailPage = try await request(computerID: computer.id, mode: mode, operation: "machine.get", fields: ["machineId": machineID])
+            let detailPage = try await request(
+                computerID: computer.id, mode: mode, operation: "machine.get",
+                fields: ["machineId": machineID], expectedGeneration: generation
+            )
+            guard generation == stateGeneration else { throw CancellationError() }
             let detail = try Self.object(detailPage.object, "machine")
             guard detail["machineId"] as? String == machineID else { throw ClientFailure.invalidResponse }
             let machineAvailable = row["availability"] as? String == "available"
@@ -522,12 +588,20 @@ actor SupervisorClient {
             let providerRows = detailPage.array("providers")
             let providers = try providerRows.map { try Self.parseProvider($0, canExecute: canExecute) }
 
-            let projectRows = try await readPages(computerID: computer.id, mode: mode, operation: "project.list", listKey: "projects", fields: ["machineId": machineID])
+            let projectRows = try await readPages(
+                computerID: computer.id, mode: mode, operation: "project.list", listKey: "projects",
+                fields: ["machineId": machineID], generation: generation
+            )
+            guard generation == stateGeneration else { throw CancellationError() }
             let projectAccess = machineAvailable && machineCapabilities["projectAccess"] as? Bool == true
             var projects = try projectRows.map { try Self.parseProject($0, machineID: machineID, available: projectAccess) }
             for project in projects { projectTargets[project.id] = ProjectTarget(computerID: computer.id, machineID: machineID, projectID: project.id) }
 
-            let recentPage = try await request(computerID: computer.id, mode: mode, operation: "conversation.recent", fields: ["machineId": machineID, "limit": 30])
+            let recentPage = try await request(
+                computerID: computer.id, mode: mode, operation: "conversation.recent",
+                fields: ["machineId": machineID, "limit": 30], expectedGeneration: generation
+            )
+            guard generation == stateGeneration else { throw CancellationError() }
             let recent = try recentPage.array("conversations").map { row -> TabletConversationSummary in
                 let summary = try Self.parseConversation(row, computer: computer, machineName: row["machineName"] as? String ?? (detail["displayName"] as? String ?? "设备"), projectName: projects.first(where: { $0.id == row["projectId"] as? String })?.name ?? "项目")
                 guard summary.machineID == machineID else { throw ClientFailure.invalidResponse }
@@ -548,7 +622,11 @@ actor SupervisorClient {
             ))
         }
 
-        let attentionPage = try await request(computerID: computer.id, mode: mode, operation: "attention.list", fields: ["status": "open", "limit": 50])
+        let attentionPage = try await request(
+            computerID: computer.id, mode: mode, operation: "attention.list",
+            fields: ["status": "open", "limit": 50], expectedGeneration: generation
+        )
+        guard generation == stateGeneration else { throw CancellationError() }
         let attentionRows = attentionPage.array("items")
         var attentions: [TabletAttention] = []
         for row in attentionRows {
@@ -573,17 +651,30 @@ actor SupervisorClient {
         )
     }
 
-    private func readConversation(session: ActiveConnection, target: ConversationTarget, mode: TabletConnectionMode) async throws -> TabletConversationDetail {
+    private func readConversation(
+        session: ActiveConnection,
+        target: ConversationTarget,
+        mode: TabletConnectionMode,
+        generation: UInt64
+    ) async throws -> TabletConversationDetail {
         let historyPage = try await readSizedPage(computerID: session.computer.id, mode: mode, initialLimit: 8) { limit in
             try await self.request(computerID: session.computer.id, mode: mode, operation: "conversation.history",
-                                   fields: target.fields.merging(["limit": limit]) { _, next in next })
+                                   fields: target.fields.merging(["limit": limit]) { _, next in next },
+                                   expectedGeneration: generation)
         }
+        guard generation == stateGeneration else { throw CancellationError() }
         let summaryPage = try await request(
-            computerID: session.computer.id, mode: mode, operation: "conversation.get", fields: target.fields
+            computerID: session.computer.id, mode: mode, operation: "conversation.get", fields: target.fields,
+            expectedGeneration: generation
         )
+        guard generation == stateGeneration else { throw CancellationError() }
         let conversationObject = try Self.object(summaryPage.object, "conversation")
         guard try Self.parseTarget(conversationObject) == target else { throw ClientFailure.invalidResponse }
-        let machinePage = try await request(computerID: session.computer.id, mode: mode, operation: "machine.get", fields: ["machineId": target.machineID])
+        let machinePage = try await request(
+            computerID: session.computer.id, mode: mode, operation: "machine.get",
+            fields: ["machineId": target.machineID], expectedGeneration: generation
+        )
+        guard generation == stateGeneration else { throw CancellationError() }
         let machine = try Self.object(machinePage.object, "machine")
         let providerRows = machinePage.array("providers")
         let providerRaw = providerRows.first(where: { $0["provider"] as? String == conversationObject["provider"] as? String })
@@ -604,16 +695,20 @@ actor SupervisorClient {
             let page = try await self.readSizedPage(computerID: session.computer.id, mode: mode, initialLimit: 8) { limit in
                 try await self.request(
                     computerID: session.computer.id, mode: mode, operation: "conversation.history",
-                    fields: target.fields.merging(["limit": limit, "cursor": cursor]) { _, next in next }
+                    fields: target.fields.merging(["limit": limit, "cursor": cursor]) { _, next in next },
+                    expectedGeneration: generation
                 )
             }
             return try Self.parseHistory(page.object ?? [:], target: target)
         }
+        guard generation == stateGeneration else { throw CancellationError() }
         conversationHistories[target.conversationID] = history
         liveCursors[target.conversationID] = history.liveCursor
 
         let attentionPage = try await request(computerID: session.computer.id, mode: mode, operation: "attention.list",
-                                              fields: ["status": "open", "limit": 50, "projectId": target.projectID])
+                                              fields: ["status": "open", "limit": 50, "projectId": target.projectID],
+                                              expectedGeneration: generation)
+        guard generation == stateGeneration else { throw CancellationError() }
         let attentionValues = try attentionPage.array("items").filter { $0["conversationId"] as? String == target.conversationID }.map { row -> TabletAttention in
             attentionRecords[row["attentionId"] as? String ?? ""] = (session.computer.id, row)
             return try Self.parseAttention(row, computer: session.computer, project: nil, conversation: summary,
@@ -639,14 +734,25 @@ actor SupervisorClient {
         )
     }
 
-    private func readPages(computerID: String, mode: TabletConnectionMode, operation: String, listKey: String, fields: [String: Any]) async throws -> [[String: Any]] {
+    private func readPages(
+        computerID: String,
+        mode: TabletConnectionMode,
+        operation: String,
+        listKey: String,
+        fields: [String: Any],
+        generation: UInt64
+    ) async throws -> [[String: Any]] {
         var result: [[String: Any]] = []
         var seen = Set<String>()
         var cursor: String?
         for _ in 0..<128 {
             var requestFields = fields.merging(["limit": 50]) { _, next in next }
             if let cursor { requestFields["cursor"] = cursor }
-            let page = try await request(computerID: computerID, mode: mode, operation: operation, fields: requestFields)
+            let page = try await request(
+                computerID: computerID, mode: mode, operation: operation,
+                fields: requestFields, expectedGeneration: generation
+            )
+            guard generation == stateGeneration else { throw CancellationError() }
             result.append(contentsOf: page.array(listKey))
             let next = page.object?["nextCursor"] as? String
             guard (page.object?["hasMore"] as? Bool) == (next != nil) else { throw ClientFailure.invalidResponse }
@@ -838,20 +944,16 @@ actor SupervisorClient {
         guard let loaded, !loaded.isEmpty, !latest.isEmpty else {
             return mergeHistory(loaded: loaded, incoming: latest)
         }
-        if loaded.complete { return mergeHistory(loaded: loaded, incoming: latest) }
-
         var refreshed = latest
         var seenCursors = Set<String>()
         for _ in 0..<128 {
             if historiesOverlap(loaded, refreshed) { break }
-            guard let cursor = refreshed.beforeCursor, seenCursors.insert(cursor).inserted else {
-                throw ClientFailure.invalidResponse
-            }
+            guard let cursor = refreshed.beforeCursor, seenCursors.insert(cursor).inserted else { return latest }
             let older = try await loadBefore(cursor)
             refreshed = mergeHistory(loaded: refreshed, incoming: older, olderPage: true)
-            if older.isEmpty { break }
+            if older.isEmpty { return latest }
         }
-        guard historiesOverlap(loaded, refreshed) else { throw ClientFailure.invalidResponse }
+        guard historiesOverlap(loaded, refreshed) else { return latest }
         return mergeHistory(loaded: loaded, incoming: refreshed)
     }
 
@@ -921,7 +1023,7 @@ actor SupervisorClient {
         let turnID = try requiredString(row, "turnId", max: 160)
         let itemID = row["itemId"] as? String ?? "no-item"
         guard !itemID.isEmpty, itemID.utf8.count <= 200 else { throw ClientFailure.invalidResponse }
-        let path = try requiredString(row, "path", max: 2_048)
+        let path = try requiredString(row, "path", max: 4_096)
         let rowIndex = row["_recordIndex"] as? Int
         let diff = row["diff"] as? String ?? ""
         let additions = row["additions"] as? Int ?? 0
@@ -1032,21 +1134,6 @@ private extension ParsedHistory {
     func containsRecord(_ record: HistoryRecord) -> Bool {
         if record.isTurn { return turns.contains { $0["turnId"] as? String == record.id } }
         return messages.contains { $0.id == record.id }
-    }
-}
-
-struct PendingSupervisorAction {
-    let computerID: String
-    let operation: String
-    let fields: [String: Any]
-    let actionID: String
-    let projectID: String?
-    let conversationID: String?
-
-    func replay(
-        using submit: (String, [String: Any], String) async throws -> JSONResponse
-    ) async throws -> JSONResponse {
-        try await submit(operation, fields, actionID)
     }
 }
 

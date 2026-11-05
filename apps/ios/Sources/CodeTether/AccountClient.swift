@@ -48,7 +48,18 @@ protocol IpadMobileCrypto: Sendable {
     ) async throws -> String
 }
 
-actor AccountClient {
+protocol TabletAccountService: Sendable {
+    func restore() async throws -> AccountProfile?
+    func requestSignInCode(email: String) async throws
+    func verifySignInCode(email: String, code: String) async throws -> AccountProfile
+    func signOut() async
+    func directory() async throws -> [PairedComputer]
+    func connectContext(computerID: String, mode: TabletConnectionMode) async throws -> SupervisorConnectContext
+    func pair(code: String, onClaimed: @Sendable () -> Void) async throws -> PairedComputer
+    func remove(computerID: String) async throws
+}
+
+actor AccountClient: TabletAccountService {
     private let configuration: IpadConfiguration
     private let crypto: IpadMobileCrypto
     private let sessionStore = AccountSessionStore()

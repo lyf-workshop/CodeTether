@@ -25,8 +25,8 @@
    - 免费账号每个 Bundle ID（`org.codetether.app`）最多绑 3 台设备、安装 7 天后过期，验收用一次就够。如果之前装过同 Bundle ID 的其他版本，先在 iPad 上删掉。
    - 安装：可以用 `xcrun devicectl device install app --device <UDID> <CodeTether.app 的路径>`，或者 Xcode 里选 iPad 直接运行。免费账号的开发者证书第一次要在 iPad 上信任（设置 › 通用 › VPN 与设备管理 › 开发者 App），没信任应用打不开。记录构建和安装过程。
 3. **Mac 测试电脑**：
-   - 先试 Mac 的已有安装版（`/Applications/CodeTether.app`）：用 `osascript -e 'quit app "CodeTether"'` 退出，`open -a /Applications/CodeTether.app` 重新打开，看应用是否正常启动、Node 服务状态。如果启动正常、有真实的项目和 AI 工具（Codex 或 Claude Code），就用它。
-   - 如果安装版不行，用 Mac 的 B1 开发版（见"已知情况"）。
+   - 用 Mac 上的安装版（`/Applications/CodeTether.app`）。它应该已经按 `docs/reviews/mac-install-b1-prompt.md` 换成了 `origin/main` 的构建。换之前的安装版是 B1 之前的版本，没有"添加手机或平板"，还会因为数据目录已升级到 schema 24 而启动即退出。
+   - 开始前确认：应用的 build id 不是 `git-111f1b08e5f3`，应用能打开并保持运行 60 秒以上。不满足就停下来告诉用户，不要自己安装、改用开发版或动数据目录。
    - 电脑上准备一个测试项目，能实际执行的，有真实的 Codex 或 Claude Code。这样能测出真实的 diff 和文字增量，比 Android 那轮的合成夹具覆盖得更完整。
 4. **本地网络权限**：
    - iPad 第一次访问局域网地址时，iPadOS 会弹"CodeTether 想要查找并连接到本地网络上的设备"。这是 iOS 14 以后的要求。
@@ -56,12 +56,8 @@
 ## 已知情况
 
 - **代码**：`origin/i1/ipad-app` 的 `90cd7f5`，包含 r1（`82a1aff`）和 r2（`7fbff25`）的修复，以及真机构建用的 `Info.plist`（`90cd7f5`）。r2 和 `Info.plist` 之后还没有在真机上跑过。
-- **Mac B1 开发版**（如果安装版不行才用）：
-  - 构建配置用 `set -a; . ~/agenthub-work/v4-build.env; set +a` 在启动的 shell 里加载，不打印内容。
-  - 另外设 `CODETETHER_CONTROL_PLANE_URL=https://api.codetether.org`，`CODETETHER_DATA_DIR` 指向一个新的独立目录，例如 `~/agenthub-work/b1-mac-test-data`。
-  - 启动：`apps/desktop` 下 `node scripts/run-tauri.mjs dev --config src-tauri/tauri.dev.conf.json`。
-  - 开发版和安装版都用 4317。先用 `osascript -e 'quit app "CodeTether"'` 退出安装版，测完用 `open -a /Applications/CodeTether.app` 重新打开。
-- **控制服务的来源名单**：它只管浏览器的跨域检查（`apps/control-plane/src/server.ts`），没有 `Origin` 头的请求不会被拦。iPad 应用是原生程序，代码里不设 `Origin` 头，所以正常情况下不需要放开任何来源，也不需要用户在 Windows 上做事。如果登录或配对时控制服务真的拒绝了请求（比如 `403 origin_not_allowed`），记下状态码和响应内容，停下来告诉用户，等用户回复再继续。不要自己改控制服务的配置。用户如果在 Windows 上放开了来源，会告诉你放开的是什么，测完由用户恢复。
+- **Mac 测试电脑**：安装版 `/Applications/CodeTether.app`，已按 `docs/reviews/mac-install-b1-prompt.md` 换成 `origin/main` 的构建。它用真实的数据目录 `~/Library/Application Support/CodeTether`，里面有真实的项目；换之前数据已备份到 `~/agenthub-archive/`。不要改用开发版：开发版的网页来源是 `http://127.0.0.1:5173`，要用户在 Windows 上通过 SSH 临时改生产控制服务的来源配置，之前几次因为 SSH 超时没成功，是否这样做由用户决定。
+- **控制服务的来源名单**：它只管浏览器的跨域检查（`apps/control-plane/src/server.ts`），没有 `Origin` 头的请求不会被拦。打包后的桌面应用的来源控制服务已经允许；iPad 应用是原生程序，代码里不设 `Origin` 头。所以这轮不需要放开任何来源，也不需要用户在 Windows 上做事。如果登录或配对时控制服务真的拒绝了请求（比如 `403 origin_not_allowed`），记下状态码和响应内容，停下来告诉用户。不要自己改控制服务的配置。
 - **预期问题**：
   - 配对成功后，iPad 这边 `readClaim` 可能只返回 `sessionView`，没有授权对象，要等目录里出现可用的控制授权。
   - 控制服务返回 401 时，应用会刷新一次，还被拒绝才回登录页。
@@ -72,7 +68,7 @@
 ## 注意事项
 
 - 不读 `.secrets/`、其他 `.env`、凭据文件、`~/.codex/auth.json` 和 `~/.claude.json`。`v4-build.env` 只按上面的方法读，不打印内容。
-- 不动 Mac 安装版的数据目录。写操作只用用户准备的测试目标。
+- 不动 Mac 上正式的 `com.codetether.node` 服务和它的数据目录，不直接读写安装版的数据库。写操作只用用户准备的测试目标。
 - 这轮只做验收，不改仓库里的代码，也不提交任何文件。发现问题记进报告，重大问题可以先告诉用户。
 - 不改控制服务的配置。
 
@@ -84,7 +80,7 @@
 - 构建和安装过程：Bundle ID、构建配置、签名用的方式（脚本还是 Xcode）、Relay 配置是 `absent` 还是 `complete`、是否需要改 `deploymentTarget`；
 - 本地网络权限有没有正常弹窗；
 - 目标 5 到 10 每一项的结果：通过 / 失败（记现象和错误）；
-- Mac 测试电脑用的是安装版还是开发版，项目和 AI 工具是什么；
+- Mac 安装版的 build id，项目和 AI 工具是什么；
 - 被移除的断开秒数和再连时的错误；
 - 外观和布局的截图（横屏、竖屏、浅色、深色各一张，只截 iPad 屏幕）；
 - 控制服务有没有拒绝过 iPad 的请求（状态码）；如果用户放开过来源，放开了什么、什么时候恢复的；

@@ -33,6 +33,11 @@
    - `git fetch origin`，在 `~/agenthub-work/mac-install-main` 检出 `origin/main`，记提交（应是 `b668e53` 或更新）。
    - 构建配置用 `set -a; . ~/agenthub-work/v4-build.env; set +a` 在构建的 shell 里加载，不打印内容。
    - 桌面 sidecar 用核对过 SHA256 的官方 Node 26.4.0（位置 `~/agenthub-work/i1-node-26.4.0`，SHA256 记在 `~/agenthub-archive/b4-mac-folder-access.md` 的"环境与范围"一节），放在 `PATH` 最前面。不要用 Homebrew 的 Node：B4 实测里用它打出的 Host 起不来。
+   - pnpm 入口：`apps/desktop/scripts/build-sidecar.mjs` 的 `runPnpm` 把入口写死成 `$PNPM_HOME/node_modules/pnpm/bin/pnpm.mjs`，没设 `PNPM_HOME` 时用 Node 可执行文件所在的目录。官方 Node 压缩包里没有 pnpm，直接构建会报 `MODULE_NOT_FOUND`（2026-11-06 第一次执行时遇到）。这是脚本只按 Windows 的目录布局写的，不是环境坏了。不改仓库，按下面做：
+     - 先看 `~/agenthub-archive/b4-mac-folder-access.md` 和 B4 的工作区 `~/agenthub-work/b4-mac-folder-access`，当时有没有设过 `PNPM_HOME`；有就用同一个。
+     - 没有就装一份：`PATH=<官方 Node 26.4.0 的 bin>:$PATH npm install --prefix ~/agenthub-work/pnpm-home pnpm@11.20.0 --no-audit --no-fund`。装完确认 `~/agenthub-work/pnpm-home/node_modules/pnpm/bin/pnpm.mjs` 存在，并且 `node` 运行它的 `--version` 输出 `11.20.0`。
+     - 只在构建这次的 shell 里 `export PNPM_HOME=<上面那个目录的绝对路径>`，不要写进 shell 配置文件。
+   - 构建脚本把未提交的改动记成 `dirty` 写进 build id。工作区要干净；构建后记下的 build id 带 `dirty` 就停下来告诉用户。
    - `pnpm install --frozen-lockfile`，然后 `pnpm desktop:build`。
    - 构建失败就贴出报错，停下来告诉用户。不要自己换 Node 版本，也不要改代码。
    - 记产物 `CodeTether.app` 的路径（在 `apps/desktop/src-tauri/target/` 下的 bundle 目录）、大小、`codesign -dv` 的 CDHash、build id。

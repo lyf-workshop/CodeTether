@@ -57,6 +57,7 @@ struct TabletViewState {
     var route: TabletRoute = .home
     var appearance: TabletAppearance = .system
     var connectionMode: TabletConnectionMode = .automatic
+    var isCheckingConnection = false
     var expandedSidebarIDs: Set<String> = []
     var conversationDrafts: [String: String] = [:]
     var computers: [TabletComputer] = []
@@ -1524,6 +1525,7 @@ private struct TabletConnectionCheck: View {
                     }
                     .labelsHidden()
                     .fixedSize()
+                    .disabled(state.isCheckingConnection)
                 }
                 Divider()
                 DiagnosticRow(label: "状态", value: state.connectionStatus.isEmpty ? "等待检查" : state.connectionStatus)
@@ -1531,8 +1533,15 @@ private struct TabletConnectionCheck: View {
                 if !state.connectionDiagnostic.isEmpty {
                     DiagnosticRow(label: "Supervisor / Relay", value: state.connectionDiagnostic)
                 }
-                Button("重新检查", action: onRefresh)
+                Button(action: onRefresh) {
+                    HStack(spacing: 8) {
+                        if state.isCheckingConnection { ProgressView().controlSize(.small) }
+                        Text(state.isCheckingConnection ? "检查中" : "重新检查")
+                    }
+                }
                     .buttonStyle(TabletSecondaryButtonStyle())
+                    .disabled(state.isCheckingConnection)
+                    .accessibilityLabel(state.isCheckingConnection ? "正在检查连接" : "重新检查连接")
                     .frame(maxWidth: .infinity, alignment: .trailing)
             }
             .padding(16)

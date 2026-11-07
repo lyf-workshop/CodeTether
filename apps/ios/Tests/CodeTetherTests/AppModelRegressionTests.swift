@@ -4,6 +4,56 @@ import Combine
 @testable import CodeTether
 
 final class AppModelRegressionTests: XCTestCase {
+    func testRefreshReportsTransportAndWorkspaceFailureStages() async throws {
+        let account = TestAccount(profile: TestFixtures.profile, computers: [TestFixtures.computer])
+        await account.setDirectoryAvailable(true)
+        let transportClient = SupervisorClient(account: account, connector: TestConnector()) { _, _ in
+            throw SupervisorWireFailure(code: "remote_host_unreachable", status: nil)
+        }
+        let transport = try await transportClient.refresh(mode: .automatic)
+        XCTAssertEqual(transport.diagnostics, ["连接失败（remote_host_unreachable）"])
+        XCTAssertFalse(try XCTUnwrap(transport.computers.first).available)
+
+        let workspaceClient = SupervisorClient(account: account, connector: TestConnector()) { _, _ in
+            WorkspaceFailureWire()
+        }
+        let workspace = try await workspaceClient.refresh(mode: .automatic)
+        XCTAssertEqual(workspace.diagnostics, ["读取工作区失败（host.bootstrap: invalid_response）"])
+        XCTAssertFalse(try XCTUnwrap(workspace.computers.first).available)
+    }
+
+    @MainActor
+    func testManualConnectionCheckShowsProgressAndCoalescesRepeatedClicks() async throws {
+        let suite = "CodeTether.AppModelRegressionTests.manualCheck.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let account = TestAccount(profile: TestFixtures.profile, computers: [])
+        let model = TabletAppModel(defaults: defaults, account: account)
+        defer { model.sceneChanged(.background) }
+        await model.start()
+
+        await account.setDirectoryAvailable(true)
+        await account.setDirectoryDelay(300_000_000)
+        model.actions.refresh()
+        XCTAssertTrue(model.state.isCheckingConnection)
+        model.actions.refresh()
+        model.actions.setConnectionMode(.relay)
+        XCTAssertEqual(model.state.connectionMode, .automatic)
+        await waitForState(model, description: "manual connection check completed") { !$0.isCheckingConnection }
+        XCTAssertEqual(model.state.connectionStatus, "暂时没有可连接的电脑")
+        let countAfterSuccess = await account.directoryCount()
+        XCTAssertEqual(countAfterSuccess, 2)
+
+        await account.setDirectoryAvailable(false)
+        model.actions.refresh()
+        XCTAssertTrue(model.state.isCheckingConnection)
+        await waitForState(model, description: "manual connection check failed") { !$0.isCheckingConnection }
+        XCTAssertEqual(model.state.connectionStatus, "检查失败")
+        XCTAssertFalse(model.state.connectionDiagnostic.isEmpty)
+        let countAfterFailure = await account.directoryCount()
+        XCTAssertEqual(countAfterFailure, 3)
+    }
+
     @MainActor
     func testPairingStateIsIndependentOfBackgroundRefreshAndCancels() async throws {
         let suite = "CodeTether.AppModelRegressionTests.pairingBusy.\(UUID().uuidString)"
@@ -491,6 +541,7 @@ final class AppModelRegressionTests: XCTestCase {
         var directoryAvailable: Bool
         private var directoryDelay: UInt64 = 0
         private var holdPair = false
+        private var directories = 0
 
         init(profile: AccountProfile, computers: [PairedComputer]) {
             self.profile = profile
@@ -503,6 +554,7 @@ final class AppModelRegressionTests: XCTestCase {
         func verifySignInCode(email: String, code: String) async throws -> AccountProfile { profile }
         func signOut() async { }
         func directory() async throws -> [PairedComputer] {
+            directories += 1
             if directoryDelay > 0 { try await Task.sleep(nanoseconds: directoryDelay) }
             guard directoryAvailable else { throw ClientFailure.computerUnavailable }
             return computers
@@ -518,6 +570,7 @@ final class AppModelRegressionTests: XCTestCase {
         func setDirectoryAvailable(_ available: Bool) { directoryAvailable = available }
         func setDirectoryDelay(_ delay: UInt64) { directoryDelay = delay }
         func setHoldPair(_ hold: Bool) { holdPair = hold }
+        func directoryCount() -> Int { directories }
     }
 
     private actor TestSessionFactory {
@@ -674,6 +727,15 @@ final class AppModelRegressionTests: XCTestCase {
         func connect(_ context: SupervisorConnectContext, mode: TabletConnectionMode) async throws -> any SupervisorWireSession {
             throw ClientFailure.computerUnavailable
         }
+    }
+
+    private struct WorkspaceFailureWire: SupervisorWireSession {
+        let transport = "direct"
+        let control = true
+        let expiresAt = "2099-01-01T00:00:00Z"
+
+        func request(_ json: String) async throws -> String { "{}" }
+        func close() async { }
     }
 
     private final class TestWire: SupervisorWireSession, @unchecked Sendable {

@@ -59,6 +59,8 @@ final class TabletAppModel: ObservableObject {
     private var operationTasks: [UUID: Task<Void, Never>] = [:]
     private var busyCount = 0
     private var lastWorkspaceRefresh = Date.distantPast
+    private var backgroundRefreshID: UUID?
+    private var latestRefreshID = UUID()
     private var bootstrapped = false
     private let defaults: UserDefaults
     private let injectedAccount: (any TabletAccountService)?
@@ -277,6 +279,7 @@ final class TabletAppModel: ObservableObject {
         operationTasks.removeAll()
         inFlightActionIDs.removeAll()
         busyCount = 0
+        backgroundRefreshID = nil
         let oldAccount = account
         let oldSupervisor = supervisor
         account = nil
@@ -296,6 +299,7 @@ final class TabletAppModel: ObservableObject {
             $0.searchResults = []
             $0.pairingMessage = nil
             $0.isPairing = false
+            $0.isCheckingConnection = false
             $0.createSessionErrorMessage = nil
             $0.route = .home
             $0.errorMessage = nil
@@ -395,26 +399,69 @@ final class TabletAppModel: ObservableObject {
     }
 
     private func setConnectionMode(_ mode: TabletConnectionMode) {
+        guard !state.isCheckingConnection else { return }
         update { $0.connectionMode = mode }
         defaults.set(mode.rawValue, forKey: "tablet.connectionMode")
         refresh()
     }
 
     private func refresh() {
-        launch { [weak self] in await self?.refreshSnapshot() }
+        guard !state.isCheckingConnection else { return }
+        let generation = accountGeneration
+        latestRefreshID = UUID()
+        update { $0.isCheckingConnection = true }
+        launch { [weak self] in
+            guard let self else { return }
+            defer {
+                if generation == self.accountGeneration {
+                    self.update { $0.isCheckingConnection = false }
+                }
+            }
+            await self.refreshSnapshot(presentError: true)
+        }
     }
 
-    private func refreshSnapshot() async {
+    /// Refreshes the account snapshot without interrupting pairing or other foreground work.
+    ///
+    /// Startup and polling are background reconciliation. A transient directory/transport
+    /// failure there must not present a modal alert over the pairing sheet, because the user
+    /// needs to be able to enter a newly generated code. Explicit refresh actions opt in to
+    /// presenting the error.
+    private func refreshSnapshot(presentError: Bool = false) async {
         guard state.isAuthenticated, let supervisor else { return }
+        let refreshID: UUID?
+        if presentError {
+            refreshID = nil
+        } else {
+            guard backgroundRefreshID == nil, !state.isCheckingConnection else { return }
+            let id = UUID()
+            backgroundRefreshID = id
+            refreshID = id
+        }
+        let snapshotID = UUID()
+        latestRefreshID = snapshotID
+        defer {
+            if let refreshID, backgroundRefreshID == refreshID { backgroundRefreshID = nil }
+        }
+        lastWorkspaceRefresh = Date()
         let generation = accountGeneration
         await performBusy {
             do {
                 let snapshot = try await supervisor.refresh(mode: self.state.connectionMode)
-                guard generation == self.accountGeneration else { return }
+                guard generation == self.accountGeneration, snapshotID == self.latestRefreshID else { return }
                 self.apply(snapshot)
             } catch {
-                guard generation == self.accountGeneration else { return }
-                self.show(error)
+                guard generation == self.accountGeneration, snapshotID == self.latestRefreshID else { return }
+                // Background refreshes stay non-modal while pairing is in
+                // progress. Explicit refreshes show a controlled diagnostic.
+                if presentError {
+                    self.update {
+                        $0.connectionStatus = "检查失败"
+                        $0.connectionTransport = ""
+                        $0.connectionDiagnostic = (error as? ClientFailure)?.localizedDescription ?? "暂时无法完成连接检查。"
+                    }
+                    self.show(error)
+                }
             }
         }
     }
@@ -427,7 +474,9 @@ final class TabletAppModel: ObservableObject {
             $0.connectionStatus = snapshot.connectedComputerCount > 0
                 ? "已连接 \(snapshot.connectedComputerCount) 台电脑"
                 : "暂时没有可连接的电脑"
-            $0.connectionDiagnostic = snapshot.selectedTransport.isEmpty
+            $0.connectionDiagnostic = !snapshot.diagnostics.isEmpty
+                ? snapshot.diagnostics.joined(separator: "；")
+                : snapshot.selectedTransport.isEmpty
                 ? "请检查电脑是否在线，以及当前连接方式。"
                 : "当前使用 \(snapshot.selectedTransport == "relay" ? "Relay" : "直连")。"
         }

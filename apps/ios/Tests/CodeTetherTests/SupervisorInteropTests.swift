@@ -3,6 +3,34 @@ import XCTest
 @testable import CodeTether
 
 final class SupervisorInteropTests: XCTestCase {
+    func testConnectionDiagnosticsDistinguishStagesAndNeverExposeUnknownErrorText() {
+        let transport = SupervisorDiagnostic.message(
+            stage: "connect", error: SupervisorWireFailure(code: "remote_host_unreachable", status: nil)
+        )
+        let workspace = SupervisorDiagnostic.message(stage: "workspace", error: ClientFailure.invalidResponse)
+        let unknown = SupervisorDiagnostic.message(
+            stage: "workspace", error: SupervisorWireFailure(code: "sensitive-untrusted-value", status: nil)
+        )
+        XCTAssertEqual(transport, "连接失败（remote_host_unreachable）")
+        XCTAssertEqual(workspace, "读取工作区失败（invalid_response）")
+        XCTAssertEqual(unknown, "读取工作区失败（other）")
+    }
+
+    func testWorkspaceDiagnosticIncludesOnlyAllowedOperationAndErrorCode() {
+        let failure = SupervisorWorkspaceFailure(
+            operation: "machine.get", underlying: SupervisorWireFailure(code: "internal", status: nil)
+        )
+        XCTAssertEqual(SupervisorDiagnostic.message(stage: "workspace", error: failure),
+                       "读取工作区失败（machine.get: internal）")
+
+        let untrusted = SupervisorWorkspaceFailure(
+            operation: "private-path-or-id", underlying: SupervisorWireFailure(code: "private-error", status: nil)
+        )
+        XCTAssertEqual(SupervisorDiagnostic.message(stage: "workspace", error: untrusted),
+                       "读取工作区失败（other）")
+        XCTAssertEqual(SupervisorDiagnostic.message(stage: "connect", error: failure), "连接失败（other）")
+    }
+
     func testDurableHistoryKeepsEachQuestionBeforeItsAnswer() throws {
         let row: [String: Any] = [
             "conversationId": "conv_test", "hasMoreBefore": false, "historyComplete": true,

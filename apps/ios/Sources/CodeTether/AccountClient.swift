@@ -5,6 +5,16 @@ import Darwin
 import UIKit
 #endif
 
+enum TabletTimestamp {
+    static func parse(_ value: String) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = formatter.date(from: value) { return date }
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: value)
+    }
+}
+
 struct RegisteredDevice: Sendable {
     let id: String
     let ownerID: String
@@ -169,7 +179,7 @@ actor AccountClient: TabletAccountService {
         let hostID = try Self.identifier(claim, "hostId", prefix: "host_")
         let sessionID = try Self.identifier(claim, "sessionId", prefix: "enroll_")
         let expiryText = try Self.string(claim, "expiresAt", max: 64)
-        guard let expiry = ISO8601DateFormatter().date(from: expiryText), expiry > Date() else { throw ClientFailure.pairingExpired }
+        let expiry = try Self.pairingExpiry(expiryText, now: Date())
         if let claimedDevice = claim["device"] as? [String: Any], claimedDevice["deviceId"] as? String != device.id {
             throw ClientFailure.invalidResponse
         }
@@ -210,6 +220,12 @@ actor AccountClient: TabletAccountService {
             try await Task.sleep(nanoseconds: 2_000_000_000)
         }
         throw ClientFailure.computerUnavailable
+    }
+
+    static func pairingExpiry(_ value: String, now: Date) throws -> Date {
+        guard let expiry = TabletTimestamp.parse(value) else { throw ClientFailure.invalidResponse }
+        guard expiry > now else { throw ClientFailure.pairingExpired }
+        return expiry
     }
 
     func remove(computerID: String) async throws {
@@ -328,7 +344,7 @@ actor AccountClient: TabletAccountService {
         }
         let authorizationID = try Self.identifier(authorization, "authorizationId", prefix: "hauth_")
         let expiresAt = try Self.string(authorization, "expiresAt", max: 64)
-        guard ISO8601DateFormatter().date(from: expiresAt) != nil else { throw ClientFailure.invalidResponse }
+        guard TabletTimestamp.parse(expiresAt) != nil else { throw ClientFailure.invalidResponse }
 
         var grantJSON: String?
         var descriptorJSON: String?

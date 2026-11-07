@@ -398,7 +398,7 @@ actor SupervisorClient {
         guard generation == stateGeneration else { throw CancellationError() }
         if !force, let current = active[computerID], current.control,
            (mode == .automatic || current.mode == mode),
-           let expiry = ISO8601DateFormatter().date(from: current.wire.expiresAt), expiry > Date().addingTimeInterval(3) {
+           let expiry = TabletTimestamp.parse(current.wire.expiresAt), expiry > Date().addingTimeInterval(3) {
             return current
         }
         if let old = active.removeValue(forKey: computerID) { await old.wire.close() }
@@ -1098,7 +1098,7 @@ actor SupervisorClient {
     }
 
     private static func relativeTime(_ value: String?) -> String {
-        guard let value, let date = ISO8601DateFormatter().date(from: value) else { return "" }
+        guard let value, let date = TabletTimestamp.parse(value) else { return "" }
         return RelativeDateTimeFormatter().localizedString(for: date, relativeTo: Date())
     }
 }
@@ -1149,6 +1149,6 @@ private extension JSONResponse {
 }
 
 private func relativeTime(_ value: String?) -> String {
-    guard let value, let date = ISO8601DateFormatter().date(from: value) else { return "" }
+    guard let value, let date = TabletTimestamp.parse(value) else { return "" }
     return RelativeDateTimeFormatter().localizedString(for: date, relativeTo: Date())
 }

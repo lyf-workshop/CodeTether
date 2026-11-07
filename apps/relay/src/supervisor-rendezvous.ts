@@ -409,6 +409,16 @@ export class RelaySupervisorHub {
         sequence: message.sequence,
         data: message.data,
       })
+      // The peer can acknowledge the chunk before its write callback completes.
+      const stillOutstanding = fromDevice
+        ? channel.deviceOutstandingSequence
+        : channel.hostOutstandingSequence
+      if (
+        stillOutstanding !== message.sequence ||
+        this.#channels.get(channel.channelId) !== channel
+      ) {
+        return
+      }
       const timer = setTimeout(() => {
         void this.#failChannel(channel, 'flow_control_violation')
       }, this.#options.channelAcknowledgementTimeoutMs)
@@ -437,6 +447,19 @@ export class RelaySupervisorHub {
     if (outstanding !== message.acknowledgedSequence) {
       return await this.#failChannel(channel, 'flow_control_violation')
     }
+    // The sender can receive this acknowledgement and send its next chunk
+    // before the write callback completes.
+    if (acknowledgesDevice) {
+      channel.deviceOutstandingSequence = undefined
+      if (channel.deviceAcknowledgementTimer !== undefined)
+        clearTimeout(channel.deviceAcknowledgementTimer)
+      channel.deviceAcknowledgementTimer = undefined
+    } else {
+      channel.hostOutstandingSequence = undefined
+      if (channel.hostAcknowledgementTimer !== undefined)
+        clearTimeout(channel.hostAcknowledgementTimer)
+      channel.hostAcknowledgementTimer = undefined
+    }
     const recipient = acknowledgesDevice ? channel.device : channel.host
     try {
       await recipient.framed.send({
@@ -446,17 +469,6 @@ export class RelaySupervisorHub {
         ...this.#binding(channel),
         acknowledgedSequence: message.acknowledgedSequence,
       })
-      if (acknowledgesDevice) {
-        channel.deviceOutstandingSequence = undefined
-        if (channel.deviceAcknowledgementTimer !== undefined)
-          clearTimeout(channel.deviceAcknowledgementTimer)
-        channel.deviceAcknowledgementTimer = undefined
-      } else {
-        channel.hostOutstandingSequence = undefined
-        if (channel.hostAcknowledgementTimer !== undefined)
-          clearTimeout(channel.hostAcknowledgementTimer)
-        channel.hostAcknowledgementTimer = undefined
-      }
     } catch {
       await this.#closeChannel(channel, 'peer_disconnected')
     }

@@ -6,7 +6,9 @@ import { createServer, type Server, type TLSSocket } from 'node:tls'
 import {
   FramedMachineConnection,
   MachineTransportError,
+  MachineWireErrorCodeSchema,
 } from '@codetether/machine-transport'
+import { ZodError } from 'zod'
 
 import {
   supervisorProtocolVersion,
@@ -644,6 +646,13 @@ export class SupervisorServer {
       })
     } catch (error) {
       const code = supervisorReadErrorCode(error)
+      this.#options.onDiagnostic?.('supervisor.read.failed', {
+        operation: request.operation,
+        transport,
+        latencyMs: Date.now() - startedAt,
+        code,
+        ...supervisorReadErrorFields(error),
+      })
       const status = (error as { readonly httpStatus?: unknown } | undefined)
         ?.httpStatus
       await connection.send({
@@ -798,6 +807,30 @@ function record(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : undefined
+}
+
+function supervisorReadErrorFields(
+  error: unknown,
+): Readonly<Record<string, string>> {
+  if (error instanceof MachineTransportError) {
+    const { code } = error
+    const safeCode =
+      code === 'connection_failed' ||
+      code === 'timeout' ||
+      MachineWireErrorCodeSchema.safeParse(code).success
+    return {
+      errorClass: 'MachineTransportError',
+      ...(safeCode ? { causeCode: code } : {}),
+    }
+  }
+  if (error instanceof RangeError) return { errorClass: 'RangeError' }
+  if (error instanceof TypeError) return { errorClass: 'TypeError' }
+  if (error instanceof ZodError) return { errorClass: 'ZodError' }
+  if (!(error instanceof Error)) return { errorClass: 'NonError' }
+  return {
+    errorClass:
+      error.name === 'HostServiceError' ? 'HostServiceError' : 'Error',
+  }
 }
 
 function supervisorReadErrorCode(

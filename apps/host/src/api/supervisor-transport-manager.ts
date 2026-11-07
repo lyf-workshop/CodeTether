@@ -272,11 +272,12 @@ export class SupervisorTransportManager {
         listMachines: () => options.service.listMachines(),
         getMachine: async (machineId) => {
           const detail = await options.service.getMachine(machineId as never)
+          // Supervisor uses the 16 KiB Machine frame limit. Provider lifecycle
+          // details can exceed it on their own and are only used by local UI.
           return {
             protocolVersion: detail.protocolVersion,
             machine: detail.machine,
             providers: detail.providers,
-            providerLifecycles: detail.providerLifecycles,
             ...('connection' in detail
               ? { connection: detail.connection }
               : {}),

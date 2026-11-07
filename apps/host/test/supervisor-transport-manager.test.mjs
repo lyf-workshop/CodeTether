@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 
+import { MachineProviderLifecycleSchema } from '@codetether/protocol'
 import {
   RelayService,
   RelayStateStore,
@@ -181,6 +182,41 @@ test('remote Supervisor loopback endpoints are recognized before Relay fallback'
 })
 
 test('forced-remote manager reads Host state without using local HTTP product data', async () => {
+  const observedAt = '2026-11-06T00:00:00.000Z'
+  const providerLifecycles = ['codex', 'claude-code'].map((provider) =>
+    MachineProviderLifecycleSchema.parse({
+      provider,
+      installations: Array.from({ length: 8 }, (_, index) => ({
+        installationId: `pinst_supervisor_regression_${index}`,
+        provider,
+        selected: false,
+        version: '版'.repeat(120),
+        launcherKind: 'native',
+        installMethod: 'manual',
+        availability: 'available',
+        revision: `prev_supervisor_regression_${index}`,
+        firstObservedAt: observedAt,
+        lastObservedAt: observedAt,
+        backend: {
+          mode: 'custom_gateway',
+          readiness: 'ready',
+          freshness: 'current',
+          configuration: {
+            source: 'unknown',
+            hasBaseUrl: true,
+            hasApiKey: false,
+            hasAuthToken: false,
+            hasOAuthToken: false,
+            bedrockConfigured: false,
+            vertexConfigured: false,
+          },
+          sanitizedOrigin: `https://${'gateway.'.repeat(25)}example.test`,
+          observedAt,
+        },
+      })),
+    }),
+  )
+  assert.ok(Buffer.byteLength(JSON.stringify(providerLifecycles)) > 16 * 1024)
   const { privateKey, publicKey } = generateKeyPairSync('ec', {
     namedCurve: 'P-256',
   })
@@ -222,7 +258,7 @@ test('forced-remote manager reads Host state without using local HTTP product da
         protocolVersion: 1,
         machine: { machineId: `machine_${'m'.repeat(32)}` },
         providers: [{ provider: 'codex', availability: 'available' }],
-        providerLifecycles: [],
+        providerLifecycles,
         projects: [{ path: 'must-not-cross-remote-boundary' }],
         conversations: [{ title: 'must-not-cross-remote-boundary' }],
       }
@@ -404,6 +440,10 @@ test('forced-remote manager reads Host state without using local HTTP product da
     )
     assert.equal(reads.machines, 1)
     assert.equal(reads.detail, 1)
+    assert.deepEqual(detail.providers, [
+      { provider: 'codex', availability: 'available' },
+    ])
+    assert.equal('providerLifecycles' in detail, false)
     assert.equal('projects' in detail, false)
     assert.equal('conversations' in detail, false)
     const machineId = `machine_${'m'.repeat(32)}`

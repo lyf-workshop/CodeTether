@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
+import { MachineTransportError } from '@codetether/machine-transport'
 import { CompactSign, exportJWK, generateKeyPair } from 'jose'
 
 import {
@@ -138,6 +139,76 @@ test('direct Supervisor transport verifies exact identities and exposes only rea
       }).success,
       false,
     )
+  } finally {
+    await fixture.server.close()
+  }
+})
+
+test('Supervisor read failures log only safe operation and error metadata', async () => {
+  const diagnostics = []
+  const machineId = `machine_${'m'.repeat(32)}`
+  const privatePath = 'D:/private/project'
+  const privateTitle = 'Private conversation title'
+  const fixture = await createFixture({
+    reads: {
+      getMachine: () => ({ recentConversations: privateTitle.repeat(800) }),
+      listProjects: () => {
+        throw new MachineTransportError('connection_failed', privatePath)
+      },
+      getProject: () => {
+        throw Object.assign(new Error(privateTitle), {
+          code: privatePath,
+          name: privateTitle,
+        })
+      },
+    },
+    onDiagnostic: (event, fields) => {
+      if (event === 'supervisor.read.failed') diagnostics.push(fields)
+    },
+  })
+  try {
+    const pending = await connectSupervisorDirect(fixture.clientOptions)
+    const session = await pending.authenticate({
+      accessToken: 'test-access-token',
+      deviceProof: 'test-device-proof',
+    })
+    const failure = { name: 'SupervisorClientError', code: 'internal' }
+    await assert.rejects(session.getMachine(machineId), failure)
+    await assert.rejects(
+      session.listProjects(machineId, { limit: 25 }),
+      failure,
+    )
+    await assert.rejects(
+      session.getProject(machineId, `proj_${'p'.repeat(32)}`),
+      failure,
+    )
+    session.close()
+
+    const metadata = diagnostics.map(({ latencyMs, ...fields }) => {
+      assert.ok(Number.isFinite(latencyMs) && latencyMs >= 0)
+      return fields
+    })
+    assert.deepEqual(metadata, [
+      {
+        operation: 'machine.get',
+        transport: 'direct',
+        code: 'internal',
+        errorClass: 'RangeError',
+      },
+      {
+        operation: 'project.list',
+        transport: 'direct',
+        code: 'internal',
+        errorClass: 'MachineTransportError',
+        causeCode: 'connection_failed',
+      },
+      {
+        operation: 'project.get',
+        transport: 'direct',
+        code: 'internal',
+        errorClass: 'Error',
+      },
+    ])
   } finally {
     await fixture.server.close()
   }
@@ -557,7 +628,9 @@ async function createFixture(options = {}) {
         actionId,
         status: 'not_found',
       }),
+      ...options.reads,
     },
+    onDiagnostic: options.onDiagnostic,
     control: {
       startConversationTurn: () => ({
         accepted: true,

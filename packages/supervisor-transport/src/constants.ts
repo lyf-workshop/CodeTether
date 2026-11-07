@@ -1,3 +1,5 @@
+import { machineTransportLimits } from '@codetether/machine-transport'
+
 export const supervisorProtocolVersion = 1 as const
 export const supervisorProofVersion = 1 as const
 export const supervisorAudience = 'codetether-host-supervisor' as const
@@ -9,7 +11,7 @@ export const supervisorTransportAlpn = 'codetether-supervisor-v1'
 export const supervisorTlsExporterLabel = 'EXPORTER-CodeTether-Supervisor-v1'
 
 export const supervisorTransportLimits = {
-  maximumFrameBytes: 256 * 1024,
+  maximumFrameBytes: machineTransportLimits.maximumFrameBytes,
   maximumQueuedFrames: 32,
   maximumEndpoints: 8,
   maximumActivations: 64,

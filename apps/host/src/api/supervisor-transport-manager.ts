@@ -43,6 +43,11 @@ import {
 } from '@codetether/protocol'
 
 import type { HostService } from './host-service.js'
+import {
+  supervisorBootstrap,
+  supervisorMachineDetail,
+  supervisorMachineList,
+} from './supervisor-machine-reads.js'
 import { executeSupervisorB1Operation } from './supervisor-operations.js'
 import type { ConversationStore } from '../persistence/index.js'
 import {
@@ -267,26 +272,14 @@ export class SupervisorTransportManager {
           if (identity === undefined) {
             throw new Error('Host identity is not initialized')
           }
-          return { protocolVersion: 1, identity }
+          return supervisorBootstrap(identity)
         },
-        listMachines: () => options.service.listMachines(),
-        getMachine: async (machineId) => {
-          const detail = await options.service.getMachine(machineId as never)
-          // Supervisor uses the 16 KiB Machine frame limit. Provider lifecycle
-          // details can exceed it on their own and are only used by local UI.
-          return {
-            protocolVersion: detail.protocolVersion,
-            machine: detail.machine,
-            providers: detail.providers,
-            ...('connection' in detail
-              ? { connection: detail.connection }
-              : {}),
-            ...('providerDiscovery' in detail
-              ? { providerDiscovery: detail.providerDiscovery }
-              : {}),
-            ...('relay' in detail ? { relay: detail.relay } : {}),
-          }
-        },
+        listMachines: () =>
+          supervisorMachineList(options.service.listMachines()),
+        getMachine: async (machineId) =>
+          supervisorMachineDetail(
+            await options.service.getMachine(machineId as never),
+          ),
         listProjects: (machineId, page) =>
           options.service.listSupervisorProjects(machineId as never, page),
         getProject: (machineId, projectId) =>

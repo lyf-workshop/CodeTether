@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import test from 'node:test'
 
 import { canonicalFailure } from '@codetether/agent-core'
+import { machineTransportLimits } from '@codetether/machine-transport'
 
 import { ProviderConversationUnavailableError } from '../dist/api/agent-runtime.js'
 import { HostEventPublisher } from '../dist/api/host-event-publisher.js'
@@ -2057,6 +2058,145 @@ test('Supervisor history watermark feeds bounded live replay without owning exec
     assert.equal(started.status, 'accepted')
     await fixture.service.close()
   } finally {
+    await removeEnvironment(environment.directory)
+  }
+})
+
+test('Supervisor transcript pages preserve cursors across oversized Turns and live events', async () => {
+  const environment = await createEnvironment()
+  let fixture
+  try {
+    fixture = await createService(
+      environment,
+      'b1111111-1111-4111-8111-111111111111',
+    )
+    const created = await createConversation(
+      fixture.service,
+      environment.workspace,
+      'act_supervisor_large_history',
+    )
+    const { machineId, projectId, conversationId } = created.data.conversation
+    const scope = [machineId, projectId, conversationId]
+    const large = '😀\\"\n'.repeat(5_000)
+    const newestMessages = []
+    const checkFrame = (data) => {
+      const body = JSON.stringify({
+        type: 'supervisor.response',
+        protocolVersion: 1,
+        requestId: `sreq_${'r'.repeat(96)}`,
+        ok: true,
+        data,
+      })
+      assert.ok(
+        Buffer.byteLength(body, 'utf8') <=
+          machineTransportLimits.maximumFrameBytes,
+      )
+    }
+
+    for (const index of [0, 1]) {
+      const turnId = `turn_supervisor_large_${index}`
+      const at = new Date(Date.parse(timestamp) + index * 1000).toISOString()
+      const input = { type: 'text', text: 'Test input', timestamp: at }
+      const turn = {
+        turnId,
+        conversationId,
+        status: 'completed',
+        input,
+        startedAt: at,
+        completedAt: at,
+      }
+      const messages =
+        index === 0
+          ? []
+          : Array.from({ length: 8 }, (_, order) => ({
+              turnId,
+              itemId: `item_supervisor_large_${order}`,
+              status: 'completed',
+              timestamp: at,
+              text: large,
+              order,
+            }))
+      newestMessages.push(...messages)
+      fixture.store.createTurn({
+        turnId,
+        conversationId,
+        providerTurnId: `provider-supervisor-large-${index}`,
+        input,
+        status: 'completed',
+        startedAt: at,
+        completedAt: at,
+        snapshotVersion: DURABLE_TURN_SNAPSHOT_VERSION,
+        snapshot: { ...initialTurnPresentation(turn), messages },
+      })
+    }
+
+    let history = await fixture.service.readSupervisorConversationHistory(
+      ...scope,
+      { limit: 20 },
+    )
+    const seenMessages = []
+    const liveCursor = history.liveCursor
+    for (let page = 0; page < 10; page += 1) {
+      checkFrame(history)
+      for (const message of history.runtime.messages) {
+        assert.ok(message.text.endsWith('…'))
+        assert.equal(message.turnId, 'turn_supervisor_large_1')
+      }
+      seenMessages.unshift(
+        ...history.runtime.messages.map(({ itemId }) => itemId),
+      )
+      if (history.beforeCursor === undefined) break
+      assert.equal(history.runtime.history.truncated, true)
+      history = await fixture.service.readSupervisorConversationHistory(
+        ...scope,
+        { limit: 20, cursor: history.beforeCursor },
+      )
+    }
+    assert.deepEqual(
+      seenMessages,
+      newestMessages.map(({ itemId }) => itemId),
+    )
+    assert.equal(history.historyComplete, true)
+    assert.equal(history.runtime.turns[0].turnId, 'turn_supervisor_large_0')
+    assert.equal(
+      fixture.store.getTurn('turn_supervisor_large_1').snapshot.messages[0]
+        .text,
+      large,
+    )
+
+    const published = [large, large, 'Small completion'].map((message, index) =>
+      fixture.publisher.publish({
+        conversationId,
+        turnId: 'turn_supervisor_large_1',
+        itemId: `item_supervisor_live_${index}`,
+        timestamp,
+        type: 'message.completed',
+        payload: { message },
+      }),
+    )
+    let cursor = liveCursor
+    const received = []
+    for (let index = 0; index < published.length; index += 1) {
+      const live = await fixture.service.readSupervisorConversationLive(
+        ...scope,
+        { cursor, limit: 64, waitMs: 0 },
+      )
+      checkFrame(live)
+      assert.equal(live.resetRequired, false)
+      received.push(...live.events)
+      cursor = live.cursor
+      if (cursor === published.at(-1).eventId) break
+    }
+    assert.deepEqual(
+      received.map(({ eventId }) => eventId),
+      published.map(({ eventId }) => eventId),
+    )
+    assert.ok(received[0].payload.message.endsWith('…'))
+    assert.ok(received[1].payload.message.endsWith('…'))
+    assert.equal(received[2].payload.message, 'Small completion')
+    assert.equal(published[0].payload.message, large)
+  } finally {
+    await fixture?.service.close()
     await removeEnvironment(environment.directory)
   }
 })

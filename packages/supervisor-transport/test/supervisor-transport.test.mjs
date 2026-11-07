@@ -146,6 +146,7 @@ test('direct Supervisor transport verifies exact identities and exposes only rea
 
 test('Supervisor read failures log only safe operation and error metadata', async () => {
   const diagnostics = []
+  const overflows = []
   const machineId = `machine_${'m'.repeat(32)}`
   const privatePath = 'D:/private/project'
   const privateTitle = 'Private conversation title'
@@ -164,6 +165,7 @@ test('Supervisor read failures log only safe operation and error metadata', asyn
     },
     onDiagnostic: (event, fields) => {
       if (event === 'supervisor.read.failed') diagnostics.push(fields)
+      if (event === 'supervisor.read.frame_too_large') overflows.push(fields)
     },
   })
   try {
@@ -183,6 +185,14 @@ test('Supervisor read failures log only safe operation and error metadata', asyn
       failure,
     )
     session.close()
+
+    assert.equal(overflows.length, 1)
+    const { responseBytes, ...overflow } = overflows[0]
+    assert.ok(responseBytes > 16 * 1024)
+    assert.deepEqual(overflow, {
+      operation: 'machine.get',
+      transport: 'direct',
+    })
 
     const metadata = diagnostics.map(({ latencyMs, ...fields }) => {
       assert.ok(Number.isFinite(latencyMs) && latencyMs >= 0)

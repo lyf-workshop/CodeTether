@@ -397,6 +397,7 @@ export function readDurableConversationHistoryPage(
   options: {
     readonly limit: number
     readonly before?: DurableTurnPageCursor
+    readonly atTurn?: DurableTurnPageCursor
     readonly maxEntries?: number
   },
 ): DurableConversationHistoryPage | undefined {
@@ -426,23 +427,40 @@ export function readDurableConversationHistoryPage(
   const page = store.listTurnHistoryPage(
     conversation.conversationId,
     options.limit,
-    options.before,
+    options.atTurn ?? options.before,
   )
+  const anchoredTurn =
+    options.atTurn === undefined
+      ? undefined
+      : store.getTurn(options.atTurn.turnId)
+  if (
+    options.atTurn !== undefined &&
+    (anchoredTurn?.conversationId !== conversationId ||
+      anchoredTurn.startedAt !== options.atTurn.startedAt)
+  ) {
+    return undefined
+  }
   const reconstructed = reconstructDurableConversation(
     store,
     conversation,
     {
       maxTurns: options.limit,
       maxEntries,
-      compactOrders: true,
+      compactOrders: anchoredTurn === undefined && page.turns.length > 1,
     },
-    page.turns,
+    anchoredTurn === undefined ? page.turns : [anchoredTurn],
   )
+  const before =
+    options.atTurn === undefined
+      ? page.before
+      : page.turns.length > 0
+        ? options.atTurn
+        : undefined
   return {
     record: reconstructed.record,
     runtime: reconstructed.runtime,
-    hasMoreBefore: page.hasMoreBefore,
-    ...(page.before === undefined ? {} : { before: page.before }),
+    hasMoreBefore: before !== undefined,
+    ...(before === undefined ? {} : { before }),
   }
 }
 

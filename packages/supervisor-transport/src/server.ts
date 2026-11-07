@@ -46,6 +46,10 @@ import {
   type SupervisorTlsIdentity,
 } from './tls.js'
 
+// Some existing clients validate Machine data with strict schemas. Keep
+// truncation diagnostics for those responses out of their JSON shape.
+export const supervisorReadTruncated = Symbol('supervisorReadTruncated')
+
 export interface SupervisorAdmissionResult {
   readonly hostId: string
   readonly hostIdentityGeneration: number
@@ -538,7 +542,8 @@ export class SupervisorServer {
   ): Promise<void> {
     const startedAt = Date.now()
     try {
-      if (isSupervisorControlOperation(request) && !controlAuthorized) {
+      const isControl = isSupervisorControlOperation(request)
+      if (isControl && !controlAuthorized) {
         throw new Error('operation_not_allowed')
       }
       let data: unknown
@@ -630,17 +635,33 @@ export class SupervisorServer {
           data = await this.#options.operations(request)
           break
       }
-      await connection.send({
+      const response = {
         type: 'supervisor.response',
         protocolVersion: supervisorProtocolVersion,
         requestId: request.requestId,
         ok: true,
         data,
-      })
+      }
+      const responseBytes = isControl
+        ? undefined
+        : Buffer.byteLength(JSON.stringify(response), 'utf8')
+      if (
+        responseBytes !== undefined &&
+        responseBytes > supervisorTransportLimits.maximumFrameBytes
+      ) {
+        this.#options.onDiagnostic?.('supervisor.read.frame_too_large', {
+          operation: request.operation,
+          transport,
+          responseBytes,
+        })
+        throw new RangeError('Supervisor read exceeds the frame bound')
+      }
+      await connection.send(response)
       this.#options.onDiagnostic?.('supervisor.read', {
         operation: request.operation,
         transport,
         latencyMs: Date.now() - startedAt,
+        ...(responseBytes === undefined ? {} : { responseBytes }),
         ...supervisorReadRequestFields(request),
         ...supervisorReadResultFields(data),
       })
@@ -740,7 +761,12 @@ function supervisorReadResultFields(
         ? value.machines
         : undefined
   const transcriptEntries = remoteTranscriptEntryCount(value)
+  const truncated =
+    value.truncated === true ||
+    (supervisorReadTruncated in value &&
+      value[supervisorReadTruncated] === true)
   return {
+    ...(truncated ? { truncated: true } : {}),
     ...(Array.isArray(collection) ? { resultCount: collection.length } : {}),
     ...(transcriptEntries === undefined
       ? {}

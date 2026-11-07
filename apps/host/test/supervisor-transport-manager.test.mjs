@@ -909,6 +909,10 @@ test('forced Relay HTTP admission stays single-session while Direct fallback rem
     identityGeneration: 1,
   }
   const reads = { machines: 0, detail: 0, history: 0, live: 0 }
+  const machineRows = Array.from({ length: 48 }, (_, index) => ({
+    machineId: `machine_${'m'.repeat(32)}${index || ''}`,
+    displayName: '设备'.repeat(120),
+  }))
   const service = {
     publisher: { subscribe: () => () => undefined },
     close: async () => undefined,
@@ -917,7 +921,7 @@ test('forced Relay HTTP admission stays single-session while Direct fallback rem
       reads.machines += 1
       return {
         protocolVersion: 1,
-        machines: [{ machineId: `machine_${'m'.repeat(32)}` }],
+        machines: machineRows,
       }
     },
     getMachine: async () => {
@@ -925,7 +929,16 @@ test('forced Relay HTTP admission stays single-session while Direct fallback rem
       return {
         protocolVersion: 1,
         machine: { machineId: `machine_${'m'.repeat(32)}` },
-        providers: [{ provider: 'codex', availability: 'available' }],
+        providers: [
+          {
+            provider: 'codex',
+            availability: 'available',
+            models: Array.from({ length: 64 }, (_, index) => ({
+              id: `model-${index}`,
+              label: '模型'.repeat(120),
+            })),
+          },
+        ],
         providerLifecycles: [],
       }
     },
@@ -1109,15 +1122,18 @@ test('forced Relay HTTP admission stays single-session while Direct fallback rem
       `${localBaseUrl}/api/v1/remote-supervisor/sessions/${authenticated.sessionId}/machines`,
     )
     assert.equal(machineListResponse.status, 200)
-    const machineId = (await machineListResponse.json()).machines[0].machineId
+    const machineList = await machineListResponse.json()
+    assert.equal('truncated' in machineList, false)
+    assert.ok(machineList.machines.length < machineRows.length)
+    const machineId = machineList.machines[0].machineId
     const machineDetailResponse = await originalFetch(
       `${localBaseUrl}/api/v1/remote-supervisor/sessions/${authenticated.sessionId}/machines/${machineId}`,
     )
     assert.equal(machineDetailResponse.status, 200)
-    assert.equal(
-      (await machineDetailResponse.json()).machine.machineId,
-      machineId,
-    )
+    const machineDetail = await machineDetailResponse.json()
+    assert.equal(machineDetail.machine.machineId, machineId)
+    assert.equal('truncated' in machineDetail, false)
+    assert.equal(machineDetail.providers[0].provider, 'codex')
     const projectListResponse = await originalFetch(
       `${localBaseUrl}/api/v1/remote-supervisor/sessions/${authenticated.sessionId}/machines/${machineId}/projects?limit=25`,
     )

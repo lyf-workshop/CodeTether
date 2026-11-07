@@ -49,6 +49,7 @@ struct TabletViewState {
     var isRemoved = false
     var removedComputerName = ""
     var pairingMessage: String?
+    var isPairing = false
     var errorMessage: String?
     var createSessionErrorMessage: String?
     var isBusy = false
@@ -1707,14 +1708,14 @@ private struct PairingSheet: View {
                 Section { Text(message).foregroundStyle(TabletColors.failure) }
             }
             Section {
-                Button(state.isBusy ? "正在连接…" : "连接电脑") {
+                Button(state.isPairing ? "正在连接…" : "连接电脑") {
                     if let value = normalizedPairingCode(code) { actions.pair(value) }
                 }
                     .buttonStyle(TabletPrimaryButtonStyle())
                     .frame(maxWidth: .infinity)
-                    .disabled(state.isBusy || normalizedPairingCode(code) == nil)
+                    .disabled(state.isPairing || normalizedPairingCode(code) == nil)
                     .accessibilityIdentifier("pairing-submit")
-                if state.isBusy {
+                if state.isPairing {
                     Button("取消等待") { actions.cancelPair() }
                         .frame(maxWidth: .infinity)
                         .accessibilityIdentifier("pairing-cancel")

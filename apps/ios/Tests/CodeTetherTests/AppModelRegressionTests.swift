@@ -5,6 +5,36 @@ import Combine
 
 final class AppModelRegressionTests: XCTestCase {
     @MainActor
+    func testPairingStateIsIndependentOfBackgroundRefreshAndCancels() async throws {
+        let suite = "CodeTether.AppModelRegressionTests.pairingBusy.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let account = TestAccount(profile: TestFixtures.profile, computers: [])
+        await account.setDirectoryDelay(500_000_000)
+        await account.setHoldPair(true)
+        let model = TabletAppModel(
+            defaults: defaults, account: account,
+            initialState: {
+                var state = TabletViewState()
+                state.isAuthenticated = true
+                return state
+            }()
+        )
+        defer { model.sceneChanged(.background) }
+
+        let startup = Task { await model.start() }
+        await waitForState(model, description: "background refresh in flight") { $0.isBusy }
+        XCTAssertFalse(model.state.isPairing)
+
+        model.actions.pair("123456")
+        await waitForState(model, description: "pairing in flight") { $0.isPairing && $0.isBusy }
+        model.actions.cancelPair()
+        await waitForState(model, description: "pairing cancellation") { !$0.isPairing }
+        XCTAssertEqual(model.state.pairingMessage, "已取消等待。")
+        await startup.value
+    }
+
+    @MainActor
     func testConversationDraftRestoresFromLocalDefaults() async throws {
         let suite = "CodeTether.AppModelRegressionTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -459,6 +489,8 @@ final class AppModelRegressionTests: XCTestCase {
         let profile: AccountProfile
         let computers: [PairedComputer]
         var directoryAvailable: Bool
+        private var directoryDelay: UInt64 = 0
+        private var holdPair = false
 
         init(profile: AccountProfile, computers: [PairedComputer]) {
             self.profile = profile
@@ -471,6 +503,7 @@ final class AppModelRegressionTests: XCTestCase {
         func verifySignInCode(email: String, code: String) async throws -> AccountProfile { profile }
         func signOut() async { }
         func directory() async throws -> [PairedComputer] {
+            if directoryDelay > 0 { try await Task.sleep(nanoseconds: directoryDelay) }
             guard directoryAvailable else { throw ClientFailure.computerUnavailable }
             return computers
         }
@@ -478,10 +511,13 @@ final class AppModelRegressionTests: XCTestCase {
             throw ClientFailure.computerUnavailable
         }
         func pair(code: String, onClaimed: @Sendable () -> Void) async throws -> PairedComputer {
+            if holdPair { try await Task.sleep(nanoseconds: 30_000_000_000) }
             throw ClientFailure.computerUnavailable
         }
         func remove(computerID: String) async throws { }
         func setDirectoryAvailable(_ available: Bool) { directoryAvailable = available }
+        func setDirectoryDelay(_ delay: UInt64) { directoryDelay = delay }
+        func setHoldPair(_ hold: Bool) { holdPair = hold }
     }
 
     private actor TestSessionFactory {

@@ -295,6 +295,7 @@ final class TabletAppModel: ObservableObject {
             $0.changesLoading = false
             $0.searchResults = []
             $0.pairingMessage = nil
+            $0.isPairing = false
             $0.createSessionErrorMessage = nil
             $0.route = .home
             $0.errorMessage = nil
@@ -313,6 +314,7 @@ final class TabletAppModel: ObservableObject {
     private func pair(_ code: String) {
         guard pairingTask == nil else { return }
         let generation = accountGeneration
+        update { $0.isPairing = true }
         pairingTask = Task { @MainActor [weak self] in
             guard let self else { return }
             await self.performBusy {
@@ -338,6 +340,7 @@ final class TabletAppModel: ObservableObject {
             }
             guard generation == self.accountGeneration else { return }
             self.pairingTask = nil
+            self.update { $0.isPairing = false }
         }
     }
 

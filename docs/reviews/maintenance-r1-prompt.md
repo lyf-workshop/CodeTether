@@ -6,7 +6,7 @@
 
 ## 目标
 
-两件独立的小事，各自一个或几个提交。
+三件独立的小事，各自一个或几个提交。
 
 1. **构建脚本自己找到 pnpm**：
    - `apps/desktop/scripts/build-sidecar.mjs` 的 `runPnpm` 和 `apps/node/scripts/build-node.mjs`（:130 附近）把 pnpm 入口写死成 `$PNPM_HOME/node_modules/pnpm/bin/pnpm.mjs`，没设 `PNPM_HOME` 时用 Node 可执行文件所在的目录。这是 Windows 的目录布局，在 macOS 和 Linux 上照 `README` 运行 `pnpm desktop:build` 一定失败，Mac 已经碰到过两次。
@@ -21,6 +21,12 @@
    - 不记请求或响应的内容、路径、会话标题、令牌和设备身份。
    - 在 `docs/DEVELOPMENT.md` 的本地数据目录说明里加一句这个日志的位置。
    - 测试：轮转和上限；白名单以外的字段不会写进去。
+3. **Relay 记录通道关闭的原因**：
+   - 生产 Relay 在通道因违反流控（`flow_control_violation`）等原因被关闭时，把错误帧发给通道两端，但不写服务日志。所以 vivo 那次经 Relay 新建失败，事后查不出原因（`D:/Projects/Software/agenthub-archive/relay-deploy-e4bdd57-report.md`）。
+   - 在 `apps/relay` 里，通道因任何原因关闭或失败时，记一条日志：事件名、原因码、通道里的角色、存活时长、已转发的块数和字节数。不记内容，不记设备或主机的标识（只用不透明的编号），不记路径。
+   - 沿用 Relay 现有的日志方式；限速，避免客户端刷满日志。
+   - 测试：几种关闭原因都有日志，而且日志里没有内容。
+   - 这一项改的是 Relay 服务端，要到下一次部署才生效。**不要自己部署 Relay**，部署另外写提示词。
 
 ## 已知情况
 
@@ -42,6 +48,7 @@
 
 - 第 1 项：改了哪些脚本，三种情况的测试结果，`pnpm desktop:sidecar` 的实跑结果；
 - 第 2 项：诊断原来去了哪里，现在写到哪里，轮转的规则，一条脱敏后的样例记录；
+- 第 3 项：记录哪些关闭原因，一条脱敏后的样例记录，限速的规则；
 - 改动的提交和推送后的远端提交；
 - 质量检查的结果，失败的原样贴出；
 - 没做完的事和原因，以及在"完成"的哪一级。

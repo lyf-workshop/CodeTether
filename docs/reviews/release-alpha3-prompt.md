@@ -10,7 +10,7 @@
 
 要合进去的（都已审核通过）：
 
-- 一条线性的提交链：`main`（`b668e53`）→ `fd1d905`（Supervisor 帧预算）→ `e4bdd57`（Relay 确认竞态）→ `fix/android-retry-explicit-failure` → `fix/t1a-tablet-fidelity`。后一个都是在前一个的基础上开的，可以直接快进。
+- 一条线性的提交链。`main` 已经在 `e4bdd57`（含 `fd1d905` 的 Supervisor 帧预算和 `e4bdd57` 的 Relay 确认竞态），后面还要快进：`fix/android-retry-explicit-failure`（`aeac893`）→ `fix/t1a-tablet-fidelity`。后一个都是在前一个的基础上开的，可以直接快进。开始前先用 `git fetch` 看 `main` 实际在哪个提交，以实际为准。
 - `i1/ipad-app`：从更早的 `f290602` 分出来，`main` 上有 3 个它没有的安卓提交。这个分支已经推送，不能变基，用合并提交合进来。它改了 `packages/supervisor-mobile`，安卓也用这个 Rust 核心。
 
 要做到：

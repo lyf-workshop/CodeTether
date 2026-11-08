@@ -34,7 +34,10 @@
 ## 已知情况
 
 - 验收报告里的"已知情况"四项（文案、一台机器失败、diff 截断没标记、原生会话历史慢），前两项在本轮修；后两项是 Host 的问题，只看报告里的实际现象，不在 iOS 侧补。
-- 发送和新建的重试规则在第 2 轮已经定了：重试成功或 Host 明确拒绝才清掉待确认，其他失败保留，`action.get` 的 `not_found` 不算明确失败。安卓正在按同一规则修，不要改动这部分；如果发现 iPad 不符合，写进报告。
+- 发送和新建的重试规则在第 2 轮已经定了：重试成功或 Host 明确拒绝才清掉待确认，其他失败保留，`action.get` 的 `not_found` 不算明确失败。安卓已按同一规则修完（`origin/fix/android-retry-explicit-failure` 的 `aeac893`，`RemoteSupervisor.kt` 的 `uncertainErrors` 和 `definitiveMutationErrors`），两个平台的分类要一致：
+  - **明确失败**（重试发出的写请求本身得到这些，或 Rust 在发送前本地检查失败）：`invalid_request`、`not_found`、`conflict`、`operation_not_allowed`、`unsupported`。
+  - **不确定**：连接断开、`connection_failed`、`session_expired`、`authorization_revoked`、`remote_host_unreachable`、`timeout`、`invalid_response`、`internal`、`protocol_error`、`unavailable`，以及重试前的读取或连接失败。
+  - iPad 现在的分类如果和这两组不一致（比如把 `unavailable` 当成明确失败），照这两组改，并补测试；已经一致就写明。不要为这部分改别的行为。
 - 测试要走真实的代码路径（`TabletAppModel`、`SupervisorClient` 加假的连接），宽窄切换用 UI 测试或快照覆盖。
 - **规模**：改动超过约 30 个文件或 3000 行（不算测试和截图）时，先完成 1 到 5 并推送，再做 6、7，报告里说明。
 - 构建、签名、安装沿用上一轮的做法。

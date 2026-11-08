@@ -1,7 +1,9 @@
 package org.codetether.app.ui
 
+import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
+import android.os.ParcelFileDescriptor
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
@@ -11,6 +13,8 @@ import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
@@ -18,6 +22,7 @@ import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.lifecycle.ViewModelProvider
 import androidx.test.core.app.ActivityScenario
+import androidx.test.platform.app.InstrumentationRegistry
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
@@ -46,6 +51,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
 import org.junit.Rule
 import org.junit.Test
 import uniffi.supervisor_mobile.ConnectionMode
@@ -181,6 +187,94 @@ class MainActivityRotationTest {
         }
     }
 
+    @Test
+    fun actualRotationRetainsOpenChangesSelectionAndBothScrollOffsets() = withActivity { scenario, controller, _ ->
+        val offsets = openSecondChange(scenario, controller)
+        assertPanelWidth(scenario, 420)
+
+        rotateToPortrait(scenario, controller)
+        assertPanelWidth(scenario, 520)
+        compose.onNodeWithText("@@ second file @@").assertExists()
+        assertEquals(offsets, compose.changesFixtureOffsets())
+
+        scenario.onActivity { it.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE }
+        compose.waitUntil(15_000L) {
+            var landscape = false
+            scenario.onActivity { landscape = it.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE }
+            landscape
+        }
+        assertPanelWidth(scenario, 420)
+        compose.onNodeWithText("@@ second file @@").assertExists()
+        assertEquals(offsets, compose.changesFixtureOffsets())
+    }
+
+    @Test
+    fun actualSplitScreenRetainsChangesAndRestoresFullscreen() {
+        assumeTrue(InstrumentationRegistry.getArguments().getString("t1aRealSplitScreen") == "true")
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        fun shell(command: String): String = ParcelFileDescriptor.AutoCloseInputStream(
+            instrumentation.uiAutomation.executeShellCommand(command),
+        ).bufferedReader().use { it.readText() }
+        val intent = Intent(instrumentation.targetContext, RotationRegressionActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
+        RotationRegressionActivity.contentForTest = {}
+        try {
+            ActivityScenario.launch<RotationRegressionActivity>(intent).use { companion ->
+                var otherTask = -1
+                companion.onActivity { otherTask = it.taskId }
+                withActivity { scenario, controller, _ ->
+                    var ownTask = -1
+                    scenario.onActivity { ownTask = it.taskId }
+                    assertTrue("Expected separate tasks for split screen: $ownTask and $otherTask",
+                        ownTask >= 0 && otherTask >= 0 && ownTask != otherTask)
+                    val offsets = openSecondChange(scenario, controller)
+                    try {
+                        shell("wm shell splitscreen moveToSideStage $otherTask 1")
+                        compose.waitUntil(20_000L) {
+                            var narrow = false
+                            scenario.onActivity { narrow = it.isInMultiWindowMode && it.resources.configuration.screenWidthDp < 900 }
+                            narrow
+                        }
+                        assertPanelWidth(scenario, 520)
+                        compose.onNodeWithText("@@ second file @@").assertExists()
+                        assertEquals(offsets, compose.changesFixtureOffsets())
+                    } finally {
+                        shell("wm shell splitscreen exitSplitScreen $ownTask")
+                        compose.waitUntil(20_000L) {
+                            var fullscreen = false
+                            scenario.onActivity { fullscreen = !it.isInMultiWindowMode && it.resources.configuration.screenWidthDp >= 900 }
+                            fullscreen
+                        }
+                    }
+                    assertPanelWidth(scenario, 420)
+                    compose.onNodeWithText("@@ second file @@").assertExists()
+                    assertEquals(offsets, compose.changesFixtureOffsets())
+                }
+            }
+        } finally {
+            RotationRegressionActivity.contentForTest = null
+        }
+    }
+
+    private fun openSecondChange(
+        scenario: ActivityScenario<MainActivityRegressionActivity>, controller: TabletController,
+    ): Pair<Float, Float> {
+        scenario.onActivity { controller.navigate(TabletPage.Conversation(COMPUTER.id, TARGET)) }
+        compose.waitUntil(15_000L) { controller.state.value.detail?.conversation?.target == TARGET }
+        compose.onNodeWithContentDescription("变更").performClick()
+        compose.waitUntil(15_000L) { controller.state.value.changes.size == 2 }
+        compose.onNodeWithTag("change-row-1").performClick()
+        compose.scrollChangesFixture()
+        return compose.changesFixtureOffsets().also { assertTrue(it.first > 0f && it.second > 0f) }
+    }
+
+    private fun assertPanelWidth(scenario: ActivityScenario<MainActivityRegressionActivity>, widthDp: Int) {
+        var density = 0f
+        scenario.onActivity { density = it.resources.displayMetrics.density }
+        val panel = compose.onNodeWithTag("changes-panel").assertIsDisplayed().fetchSemanticsNode()
+        assertEquals(widthDp * density, panel.boundsInRoot.width, 1f)
+    }
+
     private fun withActivity(
         session: RotationSession = RotationSession(),
         test: (ActivityScenario<MainActivityRegressionActivity>, TabletController, RotationSession) -> Unit,
@@ -305,7 +399,7 @@ class MainActivityRotationTest {
 
         override suspend fun action(actionId: String) = RemoteAction(actionId, "not_found", null, null)
         override suspend fun olderHistory(target: ConversationTarget, cursor: String) = HISTORY
-        override suspend fun changes(target: ConversationTarget): List<RemoteChange> = emptyList()
+        override suspend fun changes(target: ConversationTarget): List<RemoteChange> = changesPanelFixture
         override suspend fun approve(item: RemoteAttention, accept: Boolean) = Unit
         override suspend fun resolveAttention(item: RemoteAttention) = Unit
         override suspend fun interrupt(target: ConversationTarget, turnId: String) = Unit

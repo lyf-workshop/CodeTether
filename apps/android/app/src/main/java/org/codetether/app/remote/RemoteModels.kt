@@ -20,6 +20,7 @@ data class RemoteMachine(
     val providers: List<RemoteProvider>,
     val available: Boolean = true,
     val connection: String? = null,
+    val lastSeenAt: String? = null,
 )
 
 data class RemoteReasoning(val id: String, val label: String)

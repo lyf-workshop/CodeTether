@@ -197,6 +197,29 @@ class ScopedMutationRetryTest {
     }
 
     @Test
+    fun parcelRestoresAnActiveConversationWithoutPendingWritesOnlyForItsOwner() = runBlocking {
+        val backend = Backend()
+        val (ownerState, otherState) = Harness(backend).use { original ->
+            original.ready()
+            original.onMain { navigate(PAGE_A) }
+            awaitState { original.controller.state.value.detail?.conversation?.target == TARGET_A }
+            assertTrue(original.controller.state.value.mutations.isEmpty())
+            parcelClone(original.handle) to parcelClone(original.handle)
+        }
+        Harness(backend, handle = ownerState).use { restored ->
+            restored.ready()
+            awaitState { restored.controller.state.value.detail?.conversation?.target == TARGET_A }
+            assertEquals(PAGE_A, restored.controller.state.value.page)
+        }
+        val other = Account().apply { profile = AccountProfile("usr_synthetic_other_tablet", OWNER.email) }
+        Harness(backend, account = other, handle = otherState).use { restored ->
+            restored.ready()
+            assertEquals(TabletPage.Home, restored.controller.state.value.page)
+        }
+        assertTrue(backend.calls.isEmpty())
+    }
+
+    @Test
     fun parcelSnapshotOfRunningCreateRestoresAsUnknownAndRetriesTheOriginalSelection() = runBlocking {
         val backend = Backend().apply { suspendedResponses.add(CREATE_ID) }
         val account = Account()
@@ -265,6 +288,28 @@ class ScopedMutationRetryTest {
     }
 
     @Test
+    fun directoryDoesNotReopenTheSameRemovalAfterViewingOtherComputers() = runBlocking {
+        val backend = Backend()
+        Harness(backend).use { harness ->
+            harness.ready()
+            backend.revokedComputers += COMPUTER_A.id
+            harness.onMain { refresh() }
+            awaitState {
+                val state = harness.controller.state.value
+                !state.busy && state.page == TabletPage.Removed(COMPUTER_A.name) && state.computer(COMPUTER_A.id) == null
+            }
+            harness.onMain {
+                navigate(TabletPage.Devices)
+                refresh()
+            }
+            awaitState { !harness.controller.state.value.busy }
+            assertEquals(TabletPage.Devices, harness.controller.state.value.page)
+            assertNull(harness.controller.state.value.computer(COMPUTER_A.id))
+            assertEquals(COMPUTER_C, harness.controller.state.value.computer(COMPUTER_C.id)?.computer)
+        }
+    }
+
+    @Test
     fun logoutClearsRequestsAndCancelledCompletionsCannotRecreateThem() = runBlocking {
         val backend = Backend().apply { suspendedResponses.add(SEND_ID) }
         val account = Account()
@@ -303,6 +348,7 @@ class ScopedMutationRetryTest {
         val calls = CopyOnWriteArrayList<Call>()
         val admissions = ConcurrentHashMap<String, Call>()
         val actionReads = CopyOnWriteArrayList<String>()
+        val revokedComputers: MutableSet<String> = ConcurrentHashMap.newKeySet()
         val nextFailures = ConcurrentHashMap<String, RemoteFailure>()
         val lostFirstResponses: MutableSet<String> = ConcurrentHashMap.newKeySet()
         val suspendedResponses: MutableSet<String> = ConcurrentHashMap.newKeySet()
@@ -352,9 +398,10 @@ class ScopedMutationRetryTest {
             return connection()
         }
         override suspend fun disconnect() = Unit
-        override suspend fun workspace(): Pair<RemoteWorkspace, RemoteConnection> = RemoteWorkspace(
-            emptyList(), listOf(PROJECT_A, PROJECT_B, PROJECT_MACHINE), emptyList(), emptyList(), true,
-        ) to connection()
+        override suspend fun workspace(): Pair<RemoteWorkspace, RemoteConnection> {
+            if (computerId in backend.revokedComputers) throw RemoteFailure("computer_removed", removed = true)
+            return RemoteWorkspace(emptyList(), listOf(PROJECT_A, PROJECT_B, PROJECT_MACHINE), emptyList(), emptyList(), true) to connection()
+        }
         override suspend fun send(target: ConversationTarget, text: String, actionId: String) {
             backend.invoke(Call(actionId, "send", computerId, target.machineId, target.projectId,
                 target.conversationId, null, null, text))

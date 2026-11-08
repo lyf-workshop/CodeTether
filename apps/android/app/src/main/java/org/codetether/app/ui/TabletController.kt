@@ -61,6 +61,7 @@ internal class TabletController private constructor(
     val state = mutable.asStateFlow()
 
     private val clients = mutableMapOf<String, ControllerSession>()
+    private val reportedRevocations = mutableSetOf<String>()
     private val directoryMutex = Mutex()
     private val parallelComputers = Semaphore(3)
     private var foreground = false
@@ -76,7 +77,8 @@ internal class TabletController private constructor(
             try {
                 val profile = accountApi.restore()
                 pendingMutations.bindOwner(profile?.id)
-                val restoredPage = if (profile != null) restoredConversation() else null
+                val restoredPage = profile?.let { restoredConversation(it.id) }
+                if (restoredPage == null) savedState[ACTIVE_CONVERSATION] = null
                 mutable.update { it.copy(profile = profile, busy = false, mutations = pendingMutations.all(), page = restoredPage ?: it.page) }
                 if (profile != null && foreground) {
                     readDirectory(first = state.value.page == TabletPage.SignIn)
@@ -136,6 +138,7 @@ internal class TabletController private constructor(
         changesJob?.cancel()
         savedState[ACTIVE_CONVERSATION] = (page as? TabletPage.Conversation)?.let {
             Bundle().apply {
+                putString("owner", state.value.profile?.id)
                 putString("computer", it.computerId)
                 putString("machine", it.target.machineId)
                 putString("project", it.target.projectId)
@@ -228,6 +231,7 @@ internal class TabletController private constructor(
         val open = clients.values.toList()
         clients.clear()
         pendingMutations.clear()
+        reportedRevocations.clear()
         savedState[ACTIVE_CONVERSATION] = null
         val activeMutations = mutationJobs.values.toList()
         mutationJobs.clear()
@@ -523,6 +527,9 @@ internal class TabletController private constructor(
         val before = state.value
         val listedIds = listed.map { it.id }.toSet()
         val removed = before.computers.filter { it.computer.id !in listedIds }
+        val removedIds = removed.map { it.computer.id }.toSet()
+        reportedRevocations.addAll(removedIds)
+        excludeRemovedComputers(removedIds)
         for (entry in removed) clients.remove(entry.computer.id)?.disconnect()
         val pageComputer = when (val page = before.page) {
             is TabletPage.Conversation -> page.computerId
@@ -568,8 +575,12 @@ internal class TabletController private constructor(
         val availableIds = results.map { it.computer.id }.toSet()
         val revoked = listed.filter { it.id !in availableIds }
         revoked.forEach { clients.remove(it.id) }
+        excludeRemovedComputers(revoked.map { it.id }.toSet())
+        // The directory may keep reporting the same revocation until the computer is paired again.
+        reportedRevocations.removeAll(availableIds)
+        val newRevocations = revoked.filter { reportedRevocations.add(it.id) }
         if (state.value.page !is TabletPage.Removed) {
-            (revoked.firstOrNull { it.id == pageComputer } ?: revoked.firstOrNull())?.let {
+            (newRevocations.firstOrNull { it.id == pageComputer } ?: newRevocations.firstOrNull())?.let {
                 navigate(TabletPage.Removed(it.name))
             }
         }
@@ -592,6 +603,16 @@ internal class TabletController private constructor(
                 computers = results,
                 loaded = retainConversations(recent, retained),
                 keyProtection = protection,
+            )
+        }
+    }
+
+    private fun excludeRemovedComputers(ids: Set<String>) {
+        if (ids.isEmpty()) return
+        mutable.update { current ->
+            current.copy(
+                computers = current.computers.filterNot { it.computer.id in ids },
+                loaded = current.loaded.filterNot { it.first in ids },
             )
         }
     }
@@ -661,19 +682,33 @@ internal class TabletController private constructor(
 
     private fun resumePageReads() {
         val current = state.value.page
-        if (current is TabletPage.Conversation && watchJob?.isActive != true) observe(current)
+        if (current is TabletPage.Conversation) {
+            val computers = state.value.computers
+            if (computers.none { it.computer.id == current.computerId }) {
+                navigate(if (computers.isEmpty()) TabletPage.Pair else TabletPage.Home)
+            } else if (watchJob?.isActive != true) {
+                observe(current)
+            }
+        }
         if (current is TabletPage.Project && projectJob?.isActive != true && state.value.projectLoading) loadProject(current)
     }
 
-    private fun restoredConversation(): TabletPage.Conversation? = runCatching {
+    private fun restoredConversation(owner: String): TabletPage.Conversation? = runCatching {
         val route = savedState.get<Bundle>(ACTIVE_CONVERSATION) ?: return null
         val scope = MutationScope(
             requireNotNull(route.getString("computer")), requireNotNull(route.getString("machine")),
             requireNotNull(route.getString("project")), requireNotNull(route.getString("conversation")),
         )
-        val pending = pendingMutations.forScope(scope)?.takeIf { it.unresolved } ?: return null
-        val request = pending.request as? MutationRequest.Send ?: return null
-        TabletPage.Conversation(request.computerId, request.target)
+        val routeOwner = route.getString("owner")
+        if (routeOwner == owner) {
+            TabletPage.Conversation(scope.computerId, ConversationTarget(scope.machineId, scope.projectId, requireNotNull(scope.conversationId)))
+        } else {
+            // Older saved routes did not store the owner; only an owner-bound pending send can restore them.
+            if (routeOwner != null) return null
+            val pending = pendingMutations.forScope(scope)?.takeIf { it.unresolved } ?: return null
+            val request = pending.request as? MutationRequest.Send ?: return null
+            TabletPage.Conversation(request.computerId, request.target)
+        }
     }.getOrNull()
 
     private fun retainConversations(

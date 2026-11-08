@@ -4,16 +4,23 @@ import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.os.SystemClock
 import androidx.activity.ComponentActivity
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
+import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onNodeWithTag
@@ -24,6 +31,9 @@ import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.pressKey
 import androidx.test.platform.app.InstrumentationRegistry
 import java.io.File
+import java.time.Instant
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import org.codetether.app.account.AccountProfile
 import org.codetether.app.account.PairedComputer
 import org.codetether.app.remote.ConversationTarget
@@ -41,6 +51,7 @@ import org.codetether.app.remote.RemoteReasoning
 import org.codetether.app.remote.RemoteTurn
 import org.codetether.app.remote.RemoteWorkspace
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import uniffi.supervisor_mobile.ConnectionMode
@@ -147,6 +158,51 @@ class TabletUiTest {
         attention: List<RemoteAttention> = listOf(pending),
     ) = initial.copy(page = convoPage, detail = RemoteConversationDetail(conversation, history, provider, attention, true))
 
+    private fun connectionPreview(): TabletState {
+        val remote = local.copy(id = "fixture-build-server", name = "build-server", isLocal = false,
+            platform = "Linux · x64", status = "online", providers = emptyList())
+        val offline = PairedComputer("fixture-offline", "MacBook Pro", "macOS-arm64", true, "2030-01-01T00:00:00Z",
+            "fixture-pairing", "", 1uL, "{}", "{}", "{}")
+        val offlineMachine = local.copy(id = "fixture-offline-machine", name = offline.name,
+            lastSeenAt = Instant.now().minusSeconds(9_000).toString())
+        return initial.copy(page = TabletPage.Settings(SettingSection.Connection), computers = listOf(
+            ComputerView(computer, workspace.copy(machines = listOf(local, remote)), connection),
+            ComputerView(offline, workspace.copy(machines = listOf(offlineMachine))),
+        ))
+    }
+
+    @Test
+    fun connectionCheckIsStandaloneWithUserFacingDescriptionsAndDebugControls() {
+        state = initial.copy(page = TabletPage.Settings())
+        compose.setContent { TabletApp(state, actions) }
+        compose.onNodeWithText("连接检查").performClick()
+        compose.onNodeWithText("账号").assertDoesNotExist()
+        display(connectionPreview())
+        compose.onNodeWithText("同一网络，直接连接").assertIsDisplayed()
+        compose.onNodeWithText("经由 Windows 台式机", substring = false).assertIsDisplayed()
+        compose.onNodeWithText("连不上 · 2 小时前在线").assertIsDisplayed()
+        compose.onAllNodesWithText("已连接").assertCountEquals(2)
+        compose.onNodeWithText("设备密钥保护").assertIsDisplayed()
+        compose.onNodeWithText("TEE").assertIsDisplayed()
+        compose.onNodeWithText("只经互联网连接").performClick()
+        assertEquals(ConnectionMode.RELAY, state.mode)
+
+        val first = state.computers.first()
+        display(state.copy(computers = listOf(first.copy(connection = connection.copy(transport = "relay")),
+            state.computers.last().copy(workspace = null))))
+        compose.onNodeWithText("经互联网连接").assertIsDisplayed()
+        compose.onNodeWithText("连不上").assertIsDisplayed()
+        compose.onNodeWithText("同一网络，直接连接").assertDoesNotExist()
+        compose.onNodeWithText("重新检查").performClick()
+        assertEquals(listOf("refresh"), acted)
+        compose.onNodeWithTag("connection-settings-back").performClick()
+        assertEquals(TabletPage.Settings(), state.page)
+        compose.onNodeWithText("退出登录").assertIsDisplayed()
+        compose.onNodeWithText("连接检查").performClick()
+        compose.runOnIdle { compose.activity.onBackPressedDispatcher.onBackPressed() }
+        assertEquals(TabletPage.Settings(), state.page)
+    }
+
     @Test
     fun approvalAndStopRespectProviderCapabilities() {
         state = detail()
@@ -219,6 +275,46 @@ class TabletUiTest {
     }
 
     @Test
+    fun resizedWindowAndSavedStateKeepTheOpenChangesSelectionAndOffsets() {
+        val viewportWidth = mutableStateOf(1100.dp)
+        val restoration = StateRestorationTester(compose)
+        val panelActions = object : TabletActions by actions {
+            override fun loadChanges() = Unit
+        }
+        state = detail().copy(changes = changesPanelFixture)
+        restoration.setContent {
+            Box(Modifier.size(viewportWidth.value, 620.dp)) { TabletApp(state, panelActions) }
+        }
+        compose.onNodeWithContentDescription("变更").performClick()
+        compose.onNodeWithTag("change-row-1").performClick()
+        compose.scrollChangesFixture()
+        val offsets = compose.changesFixtureOffsets()
+        assertTrue(offsets.first > 0f && offsets.second > 0f)
+        val density = compose.activity.resources.displayMetrics.density
+        fun assertPanelWidth(width: Int) {
+            val panel = compose.onNodeWithTag("changes-panel").assertIsDisplayed().fetchSemanticsNode()
+            assertEquals(width * density, panel.boundsInRoot.width, 1f)
+        }
+        assertPanelWidth(420)
+        compose.runOnIdle { viewportWidth.value = 700.dp }
+        assertPanelWidth(520)
+        compose.onNodeWithText("@@ second file @@").assertExists()
+        assertEquals(offsets, compose.changesFixtureOffsets())
+
+        display(state.copy(changes = emptyList(), changesLoading = true))
+        restoration.emulateSavedInstanceStateRestore()
+        compose.onNodeWithText("正在读取变更…").assertIsDisplayed()
+        display(state.copy(changes = changesPanelFixture, changesLoading = false))
+        assertPanelWidth(520)
+        compose.onNodeWithText("@@ second file @@").assertExists()
+        assertEquals(offsets, compose.changesFixtureOffsets())
+
+        compose.runOnIdle { viewportWidth.value = 1100.dp }
+        assertPanelWidth(420)
+        assertEquals(offsets, compose.changesFixtureOffsets())
+    }
+
+    @Test
     fun capturePortraitPrototypeScreens() {
         if (compose.activity.resources.configuration.orientation != Configuration.ORIENTATION_PORTRAIT) return
         state = detail()
@@ -230,6 +326,36 @@ class TabletUiTest {
         compose.onNodeWithContentDescription("侧栏").performClick()
         compose.onNodeWithContentDescription("变更").performClick()
         capture("05-03-port-changes")
+    }
+
+    @Test
+    fun removedHomeKeepsSidebarAndOffersBothRecoveryActions() {
+        val removed = initial.copy(page = TabletPage.Removed(computer.name), computers = emptyList())
+        state = removed
+        compose.setContent { TabletApp(state, actions) }
+        val title = "${computer.name} 已把这台平板移除"
+        compose.onNodeWithText(title).assertIsDisplayed()
+        val configuration = compose.activity.resources.configuration
+        val wide = configuration.screenWidthDp >= 900 && configuration.screenWidthDp > configuration.screenHeightDp
+        if (!wide) compose.onNodeWithContentDescription("侧栏").performClick()
+        compose.onNodeWithText("设置").assertIsDisplayed()
+        if (!wide) compose.runOnUiThread { compose.activity.onBackPressedDispatcher.onBackPressed() }
+
+        compose.onNodeWithText("输入配对码").performClick()
+        compose.onNodeWithText("添加电脑").assertIsDisplayed()
+        compose.onNodeWithText("取消").performClick()
+        compose.onNodeWithText(title).assertIsDisplayed()
+        compose.onNodeWithText("输入配对码").performClick()
+        compose.onNodeWithTag("removed-pair-code").performTextInput("123456")
+        compose.onNodeWithText("连接").performClick()
+        compose.onNodeWithText("已连接").assertIsDisplayed()
+        compose.onNodeWithText("完成").performClick()
+        assertEquals(TabletPage.Home, state.page)
+        compose.onNodeWithText(title).assertDoesNotExist()
+
+        display(removed)
+        compose.onNodeWithText("看其他电脑").performClick()
+        assertEquals(TabletPage.Devices, state.page)
     }
 
     @Test
@@ -303,12 +429,16 @@ class TabletUiTest {
         compose.onNodeWithContentDescription("关闭窗口").performClick()
         display(initial.copy(page = TabletPage.Pair))
         capture("04-03-pair-more")
-        display(initial.copy(page = TabletPage.Settings(SettingSection.Connection)))
+        display(connectionPreview())
+        compose.onNodeWithText("连接检查").assertIsDisplayed()
         capture("04-04-connection")
         display(initial.copy(page = TabletPage.Settings(SettingSection.Plans)))
         capture("04-05-roadmap")
         display(initial.copy(page = TabletPage.Removed(computer.name), computers = emptyList()))
         capture("04-06-removed")
+        compose.onNodeWithText("输入配对码").performClick()
+        capture("04-06-removed-pair")
+        compose.onNodeWithText("取消").performClick()
         display(initial.copy(appearance = Appearance.Dark))
         capture("05-04-dark-home")
         display(detail().copy(appearance = Appearance.Dark))
@@ -319,7 +449,14 @@ class TabletUiTest {
         compose.waitForIdle()
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         instrumentation.waitForIdleSync()
-        // Compose can be idle before the emulator publishes the first composed surface.
+        val frame = CountDownLatch(1)
+        compose.runOnUiThread {
+            val decor = compose.activity.window.decorView
+            decor.viewTreeObserver.registerFrameCommitCallback { frame.countDown() }
+            decor.postInvalidateOnAnimation()
+        }
+        assertTrue("Emulator did not commit the frame for $name", frame.await(5, TimeUnit.SECONDS))
+        // A committed frame may still be waiting for the display compositor.
         SystemClock.sleep(200)
         val directory = requireNotNull(instrumentation.targetContext.getExternalFilesDir("t1a-shots"))
         val image = requireNotNull(instrumentation.uiAutomation.takeScreenshot())

@@ -42,13 +42,14 @@ internal fun JSONObject.machine(detail: JSONObject? = null): RemoteMachine {
     val canExecute = available && obj("capabilities").flag("providerExecution")
     return RemoteMachine(
         id = machineId,
-        name = text("displayName"),
+        name = text("displayName").takeUnless { it == "CodeTether Node" } ?: "远程电脑",
         platform = listOf(text("platform"), text("architecture")).joinToString(" · "),
         isLocal = flag("isLocal"),
         status = text("connectionState"),
         providers = detail?.rows("providers", 8).orEmpty().map { it.provider(canExecute) },
         available = available,
         connection = detail?.optJSONObject("connection")?.optionalText("executionTransport"),
+        lastSeenAt = optionalText("lastSeenAt"),
     )
 }
 

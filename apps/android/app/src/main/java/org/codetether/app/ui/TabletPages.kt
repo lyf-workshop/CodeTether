@@ -45,13 +45,11 @@ import androidx.compose.ui.unit.sp
 import org.codetether.app.account.PairedComputer
 import org.codetether.app.remote.RemoteAttention
 import org.codetether.app.remote.ConversationTarget
-import org.codetether.app.remote.RemoteChangeKey
 import org.codetether.app.remote.RemoteConversation
 import org.codetether.app.remote.RemoteMachine
 import org.codetether.app.remote.RemoteMessage
 import org.codetether.app.remote.RemoteProject
 import java.util.UUID
-import uniffi.supervisor_mobile.ConnectionMode
 
 @Composable
 private fun ListPage(
@@ -423,9 +421,16 @@ private fun ApprovalButtons(enabled: Boolean, approve: () -> Unit, decline: () -
 }
 
 @Composable
-internal fun ChangesPanel(modifier: Modifier, state: TabletState, close: () -> Unit, refresh: () -> Unit) {
-    var chosen by remember(state.page) { mutableStateOf<RemoteChangeKey?>(null) }
-    val selected = state.changes.firstOrNull { it.key == chosen } ?: state.changes.firstOrNull()
+internal fun ChangesPanel(
+    modifier: Modifier,
+    state: TabletState,
+    close: () -> Unit,
+    refresh: () -> Unit,
+    panel: ChangesPanelState = rememberChangesPanelState(state.profile?.id, state.page as? TabletPage.Conversation),
+) {
+    val selected = state.changes.firstOrNull { it.key == panel.selected } ?: state.changes.firstOrNull()
+    // An empty loading frame must not clamp the saved offset before the changes arrive.
+    val scrolling = if (state.changes.isEmpty()) Modifier else Modifier.verticalScroll(panel.listScroll)
     Column(modifier.testTag("changes-panel").fillMaxHeight().background(ink.background)) {
         Row(Modifier.fillMaxWidth().background(ink.bar).padding(start = 16.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("变更", Modifier.weight(1f), fontWeight = FontWeight.Bold, fontSize = 17.sp, color = ink.text)
@@ -433,7 +438,7 @@ internal fun ChangesPanel(modifier: Modifier, state: TabletState, close: () -> U
             IconAction("×", "关闭变更", close)
         }
         Rule()
-        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(14.dp),
+        Column(Modifier.testTag("changes-panel-body").fillMaxWidth().then(scrolling).padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)) {
             if (state.changes.isEmpty()) Empty(if (state.changesLoading) "正在读取变更…" else "没有变更")
             else Group {
@@ -442,7 +447,7 @@ internal fun ChangesPanel(modifier: Modifier, state: TabletState, close: () -> U
                     val counts = listOfNotNull(change.additions?.let { "+$it" }, change.deletions?.let { "−$it" })
                     RowItem(change.path.substringAfterLast('/').substringAfterLast('\\'),
                         trailing = counts.joinToString(" "), active = selected?.key == change.key,
-                        modifier = Modifier.testTag("change-row-$index")) { chosen = change.key }
+                        modifier = Modifier.testTag("change-row-$index")) { panel.selected = change.key }
                 }
             }
             if (selected != null) Group(Modifier.testTag("change-diff")) {
@@ -450,7 +455,7 @@ internal fun ChangesPanel(modifier: Modifier, state: TabletState, close: () -> U
                 Rule()
                 val diff = selected.diff
                 if (diff == null) RowItem("没有可显示的逐行差异") else {
-                    Column(Modifier.testTag("change-diff-lines").horizontalScroll(rememberScrollState()).padding(vertical = 6.dp)) {
+                    Column(Modifier.testTag("change-diff-lines").horizontalScroll(panel.diffScroll).padding(vertical = 6.dp)) {
                         diff.lineSequence().forEachIndexed { lineIndex, line ->
                             val added = line.startsWith("+") && !line.startsWith("+++")
                             val removed = line.startsWith("-") && !line.startsWith("---")
@@ -468,6 +473,10 @@ internal fun ChangesPanel(modifier: Modifier, state: TabletState, close: () -> U
 
 @Composable
 internal fun SettingsPage(state: TabletState, page: TabletPage.Settings, actions: TabletActions, go: (TabletPage) -> Unit) {
+    if (page.section == SettingSection.Connection) {
+        ConnectionCheckPage(state, actions)
+        return
+    }
     var removing by remember { mutableStateOf<PairedComputer?>(null) }
     var signOut by remember { mutableStateOf(false) }
     ListPage("设置") {
@@ -496,22 +505,7 @@ internal fun SettingsPage(state: TabletState, page: TabletPage.Settings, actions
             SettingSection.Appearance -> Segments(Appearance.entries.map { it.label to (state.appearance == it) }) {
                 actions.setAppearance(Appearance.entries[it])
             }
-            SettingSection.Connection -> {
-                Segments(listOf("自动" to (state.mode == ConnectionMode.AUTO), "只走 Relay" to (state.mode == ConnectionMode.RELAY))) {
-                    actions.setMode(if (it == 1) ConnectionMode.RELAY else ConnectionMode.AUTO)
-                }
-                Group {
-                    state.computers.forEach { entry ->
-                        RowItem(entry.computer.name, when (entry.connection?.transport) {
-                            "direct" -> "直连 · Supervisor"
-                            "relay" -> "Relay · Supervisor"
-                            else -> entry.problem ?: "正在检查连接"
-                        })
-                    }
-                    state.keyProtection?.let { RowItem("设备密钥保护", it) }
-                    QuietButton("重新检查", enabled = !state.busy, onClick = actions::refresh)
-                }
-            }
+            SettingSection.Connection -> Unit
             SettingSection.Plans -> Group {
                 listOf(
                     "添加项目、浏览文件夹和导入以前的会话",

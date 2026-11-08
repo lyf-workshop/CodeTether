@@ -12,7 +12,7 @@ B4 让平板和 iPad 能做电脑上剩下的那些管理操作：浏览文件�
 
 - **添加项目**（07 的 03-07 至 03-09）：选设备 → 浏览文件夹 → 名称 → 找到以前的会话，勾选导入。
   - 打开时停在这台电脑的用户目录，只显示文件夹，不显示文件。点一个文件夹进去，点“上一级”回到上一层；往上可以一直到磁盘根目录，Windows 上再往上是各个盘。
-  - 打不开的文件夹，点进去只说原因（没有权限，或者读取超时），不报错弹窗。能不能在列表里提前标出“无法打开”，等 Mac 实测（§3.3）再定。隐藏文件夹默认不显示，有一个“显示隐藏文件夹”的开关。
+  - 打不开的文件夹，点进去只说原因（没有权限，或者读取超时），不报错弹窗。列表里不提前标“无法打开”：Mac 实测里授权前的属性检查都成功，看不出来（§3.3）。隐藏文件夹默认不显示，有一个“显示隐藏文件夹”的开关。
   - 名称默认用文件夹名，可以改。
 - **以前的会话**：添加项目的最后一步和项目页里都能用。扫描时显示“正在查找以前的会话”，可以取消。结果按 AI 工具分组，每条显示标题、上次使用、能不能继续、是不是已经导入过。勾选后导入，已经导入过的不能再勾。
 - **项目页**（07 的 03-04 至 03-06）：
@@ -31,12 +31,12 @@ B4 让平板和 iPad 能做电脑上剩下的那些管理操作：浏览文件�
 
 沿用 06 §1：界面上不出现 Host、Node（E1 之后）、Machine、ProductDevice、Supervisor、Relay、授权、grant、指纹。错误只说发生了什么、怎么办：
 
-- “打不开这个文件夹。请在 Mac 上允许 CodeTether 访问，然后重试。”（macOS 上没有权限）
+- “没有权限打开这个文件夹。请在 Mac 的“系统设置 › 隐私与安全性 › 文件和文件夹”里，允许 CodeTether 访问，然后重试。”（macOS 上被系统拒绝，`systemPrivacy` 为真。经由电脑访问的设备，名字写 codetether-node）
 - “Mac 上可能弹出了授权窗口。请在 Mac 上点“允许”，然后重试。”（macOS 上读取超时）
-- “没有权限打开这个文件夹。”（其他系统上没有权限）
+- “没有权限打开这个文件夹。”（`systemPrivacy` 不为真时，包括其他系统，和 macOS 上普通的文件夹权限不足）
 - “这个文件夹读取超时，可能是网络盘。可以重试。”（其他系统上读取超时）
-- “这台电脑正在等其他文件夹的授权或读取，请稍后再试。”（浏览名额占满，见 §3.3）
-- Node 的授权窗口上写的名字可能不是“CodeTether”，上面两句 macOS 的文案等实测问题 6 再定。
+- “这台电脑正在等其他文件夹的授权或读取，请稍后再试。”（浏览名额占满，见 §3.3。macOS 设备上后面加一句“如果 Mac 上弹出了授权窗口，请先在 Mac 上处理。”）
+- Mac 上授权窗口和系统设置里的名字：Host 是 CodeTether（实测里桌面那一轮显示成 codetether，没查原因），Node 是 codetether-node。B4 验收时在 Mac 上核对 Host 的名字，再改上面的文案。
 - “这个文件夹已经添加过了，请打开已有项目。”
 - “这个项目还有会话，不能移除。”
 - “查找结果过期了，请重新查找。”
@@ -52,7 +52,7 @@ B4 让平板和 iPad 能做电脑上剩下的那些管理操作：浏览文件�
 - **错误被压扁了**。失败响应在 `server.ts:646` 构造，只带 `code` 和（仅 `unsupported` 时的）`httpStatus`。`supervisorReadErrorCode`（`server.ts:803`）按码名认 6 个值，外加 `runtime_unavailable` 和 `provider_unavailable` 映射成 `unavailable`，其余全部变成 `internal`。它不看 HTTP 状态。所以 `project_has_conversations`、`conversation_archived`、`machine_unreachable` 这些本机已经有的原因，远程都看不到。B3 要把发送失败的原因透出来（03 §4 的 B3），B4 用同一套办法，见 §3.2。
 - **大小限制**：
   - 手机和平板的 Rust 核心每个请求不超过 16 KiB，单次等待 8 秒（`packages/supervisor-mobile/src/wire.rs:13-14`）。响应结构 `Response`（:571）用了 `deny_unknown_fields`，但 `data` 是不检查内容的 `Value`，所以返回里加字段不会让旧版本的核心解析失败；请求侧的 `Operation`（:652）由 Kotlin 传来的 JSON 解析（`lib.rs:140`），枚举带 `deny_unknown_fields`（:650），未知操作和未知字段都会被拒绝。核心和 Kotlin 打在同一个安装包里，旧版本发不出新操作和新字段，这是预期的。
-  - 服务端帧上限 256 KiB（`packages/supervisor-transport/src/constants.ts:12`），但返回的行数据被压到 12 KiB 以内（`supervisor-operations.ts:20` 的 `maximumRowsBytes`）。
+  - Supervisor 的实际帧上限是 16 KiB，不是 256 KiB：服务端（`packages/supervisor-transport/src/server.ts:9`）用的是 machine-transport 的 `FramedMachineConnection`，按 `machineTransportLimits.maximumFrameBytes` 16 KiB 限制；`supervisorTransportLimits.maximumFrameBytes` 写的 256 KiB（`constants.ts:12`）线上不生效。Rust 核心读响应帧也按 16 KiB（`wire.rs:373`）。列表的行数据被压到 12 KiB 以内（`supervisor-operations.ts:20` 的 `maximumRowsBytes`），但 `machine.get` 这类详情没有限制，真实数据下会超限，被报成 `internal`（2026-11-07 安卓和 iPad 真机验收发现，修复见 `docs/reviews/b1-supervisor-internal-fix-prompt.md`）。B4 新增的每个操作，包括详情，都要放得进 16 KiB 的帧。
   - 电脑和 Node 之间的帧上限是 16 KiB（`packages/machine-transport/src/constants.ts:26`）。
 - **会话目录缺置顶**。`SupervisorConversationDirectoryItem`（`apps/host/src/persistence/conversation-store.ts:265`）没有 `pinnedAt`，`listSupervisorConversations`（:3403）的查询也不取 `pinned_at`，排序只按 `last_activity_at`。本机侧栏是置顶优先的（`apps/web/src/components/app-shell/workspace-sidebar-model.ts:128`）。
 - **本机已有、远程还没有的**：
@@ -72,7 +72,7 @@ B4 让平板和 iPad 能做电脑上剩下的那些管理操作：浏览文件�
 
 ### 3.1 新增远程操作
 
-全部要求控制权限，加进 `isSupervisorControlOperation`。只读的浏览和搜索也算控制操作：能看文件夹本身就是新开放的能力，不能让只有查看权限的设备用。
+除了 `conversation.search`，全部要求控制权限，加进 `isSupervisorControlOperation`。只读的 `folder.list` 也算控制操作：能看文件夹本身就是新开放的能力，不能让只有查看权限的设备用。`conversation.search` 只要查看权限（§6 第 3 项）。
 
 | 操作                         | 作用                             | 复用                                                                |
 | ---------------------------- | -------------------------------- | ------------------------------------------------------------------- |
@@ -126,7 +126,7 @@ Host 重启过或者记录被挤掉时，重发会再执行一次。所以每个
 `folder.list`（只读，但仍要求控制权限）：
 
 - 请求：`machineId`、可选 `path`、可选 `cursor`、可选 `includeHidden`（默认 `false`）。
-- 返回：`path`、`status`、可选 `parent`、可选 `drives`，`status` 是 `readable` 时再带 `folders`、`skipped`、可选 `nextCursor`。字段含义见 §3.3。
+- 返回：`path`、`status`、可选 `parent`、可选 `drives`，`status` 是 `readable` 时再带 `folders`、`skipped`、可选 `nextCursor`，`status` 是 `access_denied` 时可带 `systemPrivacy`。字段含义见 §3.3。
 
 `project.create`：
 
@@ -200,7 +200,8 @@ Host 重启过或者记录被挤掉时，重发会再执行一次。所以每个
 - `parent`：上一层的路径。已经在根上时不带。
 - `drives`：只有列根而且是 Windows 时带，每项是 `letter`（如 `C:`）和可选的 `label`。
 - `status`：这一层本身读没读到，三种分开返回：`readable`（读到了）、`access_denied`（没有权限）、`timeout`（3 秒内没读完）。只有 `readable` 带 `folders`、`skipped`、`nextCursor`。三种都是成功的响应（`ok: true`），不走 §3.2 的失败：点进一个打不开的文件夹是正常结果，界面只说原因（§1）。这样也不用为“没有权限”新造一个 `HostErrorCode`。
-- `folders`：每项是 `name`、`hidden`。列一层时不打开子文件夹（见下面“不能拖住其他读写”），所以子文件夹上不带能不能打开，点进去由那一层的 `status` 说明。能不能在列表里提前标出来，等 Mac 实测的问题 1。
+- `systemPrivacy`：只在 `status` 是 `access_denied`、系统是 macOS、错误是 `EPERM`（授权被拒绝）时带，值为 `true`。普通的文件夹权限不足是 `EACCES`，不带。客户端据此决定是引导用户去系统设置，还是只说没有权限。
+- `folders`：每项是 `name`、`hidden`。列一层时不打开子文件夹（见下面“不能拖住其他读写”），所以子文件夹上不带能不能打开，点进去由那一层的 `status` 说明。不提前标：Mac 实测里授权前的属性检查都成功，看不出来（§3.3）。
 - `nextCursor`：还有下一页时带。
 
 数量和大小：
@@ -225,45 +226,37 @@ Host 重启过或者记录被挤掉时，重发会再执行一次。所以每个
   - 同一个规范化路径已经有一个没返回的读取时，不再发起第二个，直接返回 `status: timeout`。
   - 名额占满时，新的浏览请求立刻失败，`code: unavailable`、`reason: runtime_unavailable`，不排队。客户端显示“这台电脑正在等其他文件夹的授权或读取，请稍后再试。”
   - 不靠调大 `UV_THREADPOOL_SIZE` 解决：调大只是让卡住的读取多攒几个才出事，线程还是收不回来。
-  - 不用单独的进程去读：Host 和 Node 都是 Node SEA，每列一层拉一个子进程要多花上百毫秒；在 macOS 上还多出一个要单独验证授权归属的进程。
+  - 先不用单独的进程去读：Host 和 Node 都是 Node SEA，每列一层拉一个子进程要多花上百毫秒。Mac 实测里读取最长挂过约 95 分钟，子进程能被杀掉、不占本进程的线程，但子进程触发的授权弹窗算谁的、会不会和 Host、Node 共用同一条授权，都没测过。先用名额限流；实现后如果发现两个名额经常被占满，再单独测这一项。
 - 列盘符同样不能逐个去读：断开的网络盘会让读取卡住，见 §6 第 4 项。
 
-macOS 的授权窗口（待实测，先不定稿）：
-
-- 第一次读“桌面”“文稿”“下载”这类受保护的文件夹时，系统会在 Mac 上弹授权窗口。读操作会不会一直阻塞到人点完、拒绝后再读是立刻失败还是再弹一次、只看文件夹属性会不会弹窗，都还没在 Mac 上验证。
-- 在实测结果出来之前，按最保守的写法实现：3 秒没读完返回 `status: timeout`，没有权限返回 `status: access_denied`，加上上面的限流。客户端在 macOS 设备上收到 `timeout` 时显示“Mac 上可能弹出了授权窗口。请在 Mac 上点“允许”，然后重试。”，收到 `access_denied` 时显示“打不开这个文件夹。请在 Mac 上允许 CodeTether 访问，然后重试。”
-- 这个弹窗只出现在被访问的那台 Mac 上，经由电脑访问时出现在那台设备上，不出现在发起浏览的设备上。
+macOS 的授权窗口（2026-11-05 在 Mac 上实测，macOS 27.0，Apple M4。报告在分支 `spike/b4-mac-folder-access` 的 `docs/reports/B4-MAC-FOLDER-ACCESS-REPORT.md`）：
 
 Mac 上读文件夹的进程有两个，授权分开记：
 
-- **Host**：桌面应用拉起的 Node SEA 子进程（`apps/desktop/src-tauri/tauri.conf.json` 的 `externalBin`，由 `host_supervisor.rs:255` 以 sidecar 拉起）。平板和 iPad 浏览这台 Mac 自己的文件夹时用它。系统按“负责的进程”记授权，子进程算在拉起它的应用名下，所以预计记在 `com.codetether.desktop` 上。桌面应用用 ad-hoc 签名（`tauri.macos.conf.json` 的 `signingIdentity: "-"`），`Info.plist` 里没有 `NSDesktopFolderUsageDescription`、`NSDocumentsFolderUsageDescription`、`NSDownloadsFolderUsageDescription`。
-- **CodeTether Node**：launchd 单独启动的用户服务 `com.codetether.node`（`apps/node/src/service-installation.ts:19`），程序在 `~/Library/Application Support/CodeTether/Node/bin/codetether-node`，构建时 ad-hoc 签名（`apps/node/scripts/build-node.mjs:102`）。从 Windows 浏览这台 Mac 时用它（§3.5）。它不是应用的子进程，也没有应用包，授权预计按程序路径加签名记录。ad-hoc 签名跟着程序内容变，Node 每次更新都换掉程序文件，授权可能要重新给。
+- **Host**：桌面应用拉起的 Node SEA 子进程（`apps/desktop/src-tauri/tauri.conf.json` 的 `externalBin`，由 `host_supervisor.rs:255` 以 sidecar 拉起）。平板和 iPad 浏览这台 Mac 自己的文件夹时用它。桌面应用用 ad-hoc 签名（`tauri.macos.conf.json` 的 `signingIdentity: "-"`），`Info.plist` 里没有 `NSDesktopFolderUsageDescription`、`NSDocumentsFolderUsageDescription`、`NSDownloadsFolderUsageDescription`。
+- **CodeTether Node**：launchd 单独启动的用户服务 `com.codetether.node`（`apps/node/src/service-installation.ts:19`），程序在 `~/Library/Application Support/CodeTether/Node/bin/codetether-node`，构建时 ad-hoc 签名（`apps/node/scripts/build-node.mjs:102`）。从 Windows 浏览这台 Mac 时用它（§3.5）。它不是应用的子进程，也没有应用包。
 
-实测要打在这两个进程上。终端里跑的 `node` 不算：终端拉起的进程，授权记在终端名下。`tauri dev` 和从终端直接运行 `.app` 里的程序也一样。
+实测结果（第一次读“桌面”“文稿”“下载”里的内容时，系统在 Mac 上弹授权窗口）：
 
-清掉旧记录的办法，两个进程不同：
+1. **授权前，属性检查看不出来。** 对这三个文件夹本身和里面的子文件夹做 `stat` 和 `access(R_OK | X_OK)`，都成功、不弹窗（`stat` 不到 2 毫秒，`access` 6 到 27 毫秒）。所以不能用属性判断读不读得进去，列一层时也没法给子文件夹提前标“无法打开”，点进去才知道。拒绝之后 `access` 会返回 `EPERM`，但这时直接 `readdir` 也是立刻 `EPERM`，用不着先查属性。
+2. **`readdir` 在有人处理弹窗前一直不返回，没有上限。** 有人处理的几轮里，最长一次等了 84,969 毫秒，那是用户的反应时间，不是系统的上限。早先没人盯着的几轮，读取分别挂了约 5.8 分钟（最后 `EPERM`）、约 15 分钟（最后 `EPERM`）、约 95 分钟（最后成功）。这几轮没有连续画面，不知道期间弹窗是否一直在，也不知道最后的结果是不是用户操作造成的。设计按“等多久都有可能”处理。远程浏览一台没人在旁边的 Mac 时，平板第一次点“桌面”就会遇到这种情况。
+3. **允许后读取成功；不允许后返回 `EPERM`，再读立刻 `EPERM`（约 0.5 毫秒），没有再弹窗。** 重读是在上一次返回后 12 到 29 秒做的，不是紧接着点击。想改主意只能去 Mac 的“系统设置 › 隐私与安全性 › 文件和文件夹”，每个程序下有桌面、文稿、下载三个开关。“完全磁盘访问权限”里没有出现 Node。
+4. **授权被拒绝是 `EPERM`，普通文件夹权限不足（对照 `chmod 000`）是 `EACCES`，可以区分。**
+5. **授权按程序路径加代码签名记。** 同一个程序重启后，允许保留。Node 的程序内容变了（CDHash 变）后，同一路径再读会再弹；原样复制到另一个路径，也会再弹。Host 重新构建（桌面应用和 sidecar 的 CDHash 都变）后同样再弹。ad-hoc 签名每次构建的 CDHash 都不同，所以每次更新桌面应用或 Node 之后，第一次读这三个文件夹，都要有人在 Mac 上再点一次。
+6. **Host 和 Node 的授权互相独立**，一个允许了不影响另一个。Node 的窗口和设置里的名字是 `codetether-node`。Host 的窗口名字这次看到两种：桌面那一轮是 `codetether`，文稿、下载和重建后是 `CodeTether`，原因没有查。Host 的授权在设置页里记在哪个条目下，这次没有核对。
+7. **卡住的读取会占住线程池。** 同一个进程里有 1 个读取在等授权时，`stat('/tmp')` 和 `dns.lookup('localhost')` 还是毫秒级；4 个同时在等时，两者都被拖住，直到读取返回才完成（Host 拖了 23.5 秒，Node 拖了 30 秒，都是用户点完弹窗才恢复）。所以“同时最多 2 个”是必须的，不是可选的优化。
 
-- Host：按应用标识清，只影响 CodeTether，不影响其他程序。注意这也会清掉已安装的 CodeTether 对这三个文件夹的授权。
+没测到的：授权窗口的截图；用户一直不处理时的真实上限；外接盘（`/Volumes`）、iCloud Drive、网络盘这类同样会被保护的位置。设计不按路径名单处理，统一按行为处理（3 秒超时加限流）。
 
-  ```bash
-  tccutil reset SystemPolicyDesktopFolder com.codetether.desktop
-  tccutil reset SystemPolicyDocumentsFolder com.codetether.desktop
-  tccutil reset SystemPolicyDownloadsFolder com.codetether.desktop
-  ```
+由此定下的做法：
 
-- Node：`tccutil` 只能按应用标识清，或者把一整类全清，后者会连终端在内所有程序对这个文件夹的授权一起清掉。所以不清记录，改用新路径：把 Node 程序复制到一个从没用过的路径，用单独的 launchd 标签启动。新路径上的程序对系统来说是一个没有记录的新程序。每测一轮换一个新路径。这个办法依赖“按路径记录”的假设，问题 7 会验证它。
-
-要回答的问题，Host 和 Node 各测一遍，桌面、文稿、下载至少各测一次：
-
-1. 只看属性会不会弹窗。对受保护的文件夹本身和它里面的子文件夹做 `stat` 和 `access`，不 `readdir`、不打开。看有没有弹窗，以及结果里能不能看出没有权限。
-2. 读取会不会一直阻塞。`readdir` 从调用到返回多久；弹窗是在调用还没返回时出现，还是返回后才出现；不点的话会不会一直不返回。
-3. 拒绝后再读是不是立刻失败，报什么错误码；还是又弹一次、又阻塞。
-4. 授权记在哪里。Host 的允许是不是记在 `com.codetether.desktop` 上；重启后还在不在；重新构建（ad-hoc 签名变了）后会不会失效，失效时是再弹窗还是直接拒绝。
-5. 卡住时占不占线程。一个读取卡在弹窗上时，同一进程里其他文件操作和 `dns.lookup` 慢不慢；4 个读取同时卡住时，其他操作是不是全部停下，点完弹窗后能不能恢复。
-6. Node 会不会弹窗。由 launchd 启动、没有应用包的程序读受保护的文件夹时，是弹窗（窗口上写的名字是什么）、直接拒绝，还是一直阻塞。拒绝后，用户在系统设置的哪里能重新允许。
-7. Node 更新后。换掉程序文件（内容变了，签名跟着变）后，之前的允许还在不在。同一个程序放到另一个路径，算不算新程序。
-
-测完把结果写回这一节，再定三件事：子文件夹能不能在列这一层时就标出打不开（问题 1）；3 秒超时和限流的数字要不要改（问题 2、5）；Node 更新后要不要提示用户重新允许，提示怎么写（问题 6、7）。在那之前，实现按上面的保守写法，不依赖实测结论。实测提示词：`docs/reviews/b4-mac-folder-access-prompt.md`。
+- 3 秒超时和 2 个名额的数字不变。名额按进程算，Host 一份，Node 一份；§3.7 电脑上的浏览入口和 Supervisor 的 `folder.list` 共用 Host 那一份。
+- `status` 保持三种。`access_denied` 在 macOS 上 `errno` 是 `EPERM` 时，再带 `systemPrivacy: true`，让客户端知道要去系统设置里改，不是对所有“没有权限”都这么说。
+- 超时后那次读取不会被取消，继续占着名额，直到系统返回，可能是几分钟。有人在 Mac 上点完后，读取返回，名额释放；用户重试得到的是一次新的读取，这时已经有权限，很快返回。
+- 一台没人在的 Mac 上，两个名额被两个等授权的读取占满后，这台 Mac 上所有浏览都会失败，直到有人在 Mac 上处理弹窗。这是已知的后果，靠提示语说明，不再加办法。
+- 更新桌面应用或 Node 后授权失效，B4 不解决（见 §5）。提示语已经覆盖：第一次读会超时，用户按提示去 Mac 上点“允许”。不加“更新后请重新允许”的主动提示。
+- 这个弹窗只出现在被访问的那台 Mac 上，经由电脑访问时出现在那台设备上，不出现在发起浏览的设备上。
+- 起点（用户目录）和根目录不在受保护的位置里，列出来不应该弹窗。这次实测没有单独测，B4 验收时在 Mac 上确认。
 
 ### 3.4 查找以前的会话
 
@@ -290,7 +283,7 @@ Mac 上读文件夹的进程有两个，授权分开记：
 `folder.list` 的目标设备是经由电脑访问的设备时，电脑把请求转给那台设备上的 Node。照 `project_location.validate` 的样子加一对消息：
 
 - 请求 `folder.list`：`protocolVersion`、`requestId`、`expectedMachineId`、`expectedNodeId`、可选的 `path`、可选的 `cursor`、`includeHidden`。加进 `apps/node/src/node-service.ts:87` 的 `AuthenticatedRequestSchema`。
-- 返回 `folder.listed`：规范化后的 `path`、`status`、可选 `parent`、可选 `drives`，`status` 是 `readable` 时再带 `folders`、`skipped`、可选 `nextCursor`。
+- 返回 `folder.listed`：规范化后的 `path`、`status`、可选 `parent`、可选 `drives`，`status` 是 `readable` 时再带 `folders`、`skipped`、可选 `nextCursor`，`status` 是 `access_denied` 时可带 `systemPrivacy`。
 - 没有权限和超时放在 `folder.listed` 的 `status` 里，不走 `machine.error`，所以不需要新的错误码。其余校验失败走已有的 `machine.error`，复用 `project_location_path_invalid`、`project_location_missing`、`project_location_not_directory`、`project_location_inaccessible`。
 - Node 自己也按 §3.3 限流，同时最多 2 个没返回的浏览读取，名额满时回 `machine.error`，电脑把它报成 `unavailable`、`reason: runtime_unavailable`。错误码用哪个现有值还是新加一个，由执行代理核对 `MachineWireErrorCodeSchema`（`packages/machine-transport/src/messages.ts:1730`）后在报告里说明。
 - 电脑等 Node 回复的时间要比 Node 的 3 秒长，让 Node 先回 `status: timeout`，电脑不自己判超时。
@@ -303,7 +296,7 @@ Mac 上读文件夹的进程有两个，授权分开记：
 - 每个操作的请求都要能放进 16 KiB。上面这些请求最大的是带 4096 字节路径的 `folder.list`，留有余量。
 - 返回给手机和平板的行数据按 12 KiB 截断。截断处必须给得出继续的位置：`folder.list` 和 `provider-sessions.discover` 给 `nextCursor`，`conversation.search` 给 `nextCursor` 和 `hasMore`。`boundedRows` 只丢行、不给游标，不能直接拿来用；用它的逐条累加算法，但要在截断处签发游标。
 - 搜索的 `matchPreview` 在本机可以到 1024 个码元，远程按页截断后一页可能少于请求的 `limit`，这是正常的，用 `hasMore` 说明。搜索的游标按最后一条已返回结果的排序键编码，不能按请求的 `limit` 编码，否则按字节截断后会跳过没返回的结果。
-- 单次请求的服务端处理不超过 6 秒，给 8 秒的客户端超时留余量。`folder.list` 一层 3 秒是读文件夹的内部等待，不是整次请求的等待。卡住的读取怎么不拖住其他读写，见 §3.3 的“不能拖住其他读写”；数字等 §3.3 的实测再定。
+- 单次请求的服务端处理不超过 6 秒，给 8 秒的客户端超时留余量。`folder.list` 一层 3 秒是读文件夹的内部等待，不是整次请求的等待。卡住的读取怎么不拖住其他读写，见 §3.3 的“不能拖住其他读写”；数字已经由 Mac 实测确认，见 §3.3。
 - `provider-sessions.discover` 的 4 秒等待是这里唯一一处接近上限的，不再加长。
 
 ### 3.7 电脑上的浏览入口
@@ -327,6 +320,12 @@ Mac 上读文件夹的进程有两个，授权分开记：
 - **权限**：只有查看权限的连接，§3.1 的每个操作都返回 `operation_not_allowed`；有控制权限的能执行。
 - **浏览**：从用户目录开始，逐层到根，Windows 上能列出各个盘。一层超过 200 个文件夹或放不下时有 `nextCursor`，续页不重复不遗漏。隐藏文件夹默认不出现，打开开关后出现。点进没有权限的文件夹返回 `ok: true`、`status: access_denied`，不报失败。列一层时不打开子文件夹：用测试里换掉的文件系统记下调用，确认只有这一层的一次目录读取和符号链接的 `stat`。
 - **超时和限流**：用测试里换掉的、永远不返回的文件系统。3 秒后返回 `status: timeout`。同一路径再请求立刻返回 `timeout`，不发起第二次读取。两个读取卡住后，第三个浏览请求立刻返回 `unavailable`、`reason: runtime_unavailable`，这时 `project.list`、`conversation.history` 照常返回。卡住的读取返回后名额释放。Node 上同样测一遍。
+- **macOS（在 Mac 上）**：Host 和 Node 各测一遍，桌面、文稿、下载至少各测一次。Host 用 `tccutil reset` 按应用标识清授权，Node 把程序复制到没用过的新路径再启动（不清系统的整类授权）。
+  - 列用户目录和根目录，Mac 上不弹窗。
+  - 第一次点受保护的文件夹：3 秒返回 `timeout`，Mac 上有授权窗口；点“允许”后重试，返回 `readable`。
+  - 点“不允许”后重试：立刻返回 `access_denied`，带 `systemPrivacy: true`。`/tmp` 下 `chmod 000` 的文件夹返回 `access_denied`，不带 `systemPrivacy`。
+  - 两个浏览读取同时在等授权时，`dns.lookup` 和 `project.list` 仍然毫秒级返回。
+  - 记下弹窗和系统设置里的名字，核对 §1 的文案。
 - **重发**：每个 B4 写操作用同一个 actionId 重发，返回第一次的结果；第一次失败时，重发拿回同一个失败。Host 重启后用同一个 actionId 重发：`project.create` 返回 `created: false`，`project.remove` 返回 `not_found`，`provider-sessions.adopt` 返回 `already_adopted`，置顶、重命名、恢复返回成功。
 - **添加和移除**：添加后项目出现在 `project.list` 里。同一个文件夹再添加返回已有项目、`created: false`，不报错；用同一个 `actionId` 重试也返回同一个项目。有会话的项目移除返回 `conflict`、`reason: project_has_conversations`；没有会话的能移除。
 - **以前的会话**：扫描超过 4 秒时先拿到 `status: scanning`，轮询到 `complete`。提前返回不会取消扫描：4 秒时断开等待的那个请求，扫描仍继续，下一轮能拿到结果。同一个扫描不重复发起。`rescan` 为真时丢弃旧快照重新扫。快照过期后带旧游标返回 `conflict`、`reason: provider_session_candidate_expired`。导入一条后，再查到的同一条标已导入；用同一个 `actionId` 重试不导入两次。
@@ -346,15 +345,29 @@ Mac 上读文件夹的进程有两个，授权分开记：
 - 通知和后台保持连接（B2）。
 - `conversation.create` 第二步失败留下空会话、`action.get` 查不到新建会话的 actionId（B3 里顺带处理的两项）。
 - 一台电脑就是一个设备（E1）。B4 仍按现在的方式区分本机设备和经由电脑访问的设备。
+- 桌面应用或 Node 更新后 macOS 授权失效。ad-hoc 签名每次构建的 CDHash 都变，更新后第一次读受保护的文件夹要有人在 Mac 上再点一次（实测见 §3.3）。要不要换成稳定的签名身份来保留授权，由 U1、E1 和分发决定，B4 只靠超时提示说明。
 - 手机上显示哪些管理功能（M 系列）。接口通用，显示由 M 系列决定。
 
 ## 6. 写提示词之前还要定的
 
-1. macOS 受保护文件夹的行为，等 Mac 实测的结果，见 §3.3 的 7 个问题。Host 和 Node 分开测；只有点授权窗口需要你本人。实测提示词：`docs/reviews/b4-mac-folder-access-prompt.md`。
+1. macOS 受保护文件夹的行为：已实测（2026-11-05），结论和由此定下的做法写在 §3.3，不再阻塞写提示词。还有三项没查清，都不影响实现：Host 的授权在系统设置里叫什么（B4 验收时在 Mac 上核对）；用户一直不处理时读取的真实上限（设计按没有上限处理）；授权窗口截图没有取得。另外，实测收尾时发现安装版 `/Applications/CodeTether.app` 启动后约 0.45 秒就退出：它是 B1 之前的构建，数据目录已被更新的版本升级到 schema 24。2026-11-06 已换成 `main` 的构建（`docs/reviews/mac-install-b1-prompt.md`），和 B4 的设计无关。
 2. 重新扫描后勾选怎么保持。候选项编号每次扫描都变，需要一个不暴露 AI 工具会话编号的稳定引用，见 §3.4。
    - 建议：不加字段，把候选项编号本身改成在同一次 Host 运行内稳定。Host 启动时生成一个只在内存里的随机密钥，对“项目、设备、AI 工具、AI 工具的会话编号”算 HMAC，截一段做 `candidate_` 后面的部分（`packages/protocol/src/provider-sessions.ts:24` 要求 16 到 96 个字符）。同一条会话重新扫描后编号不变，勾选自然保留；外面拿不到密钥，从编号反推不出会话编号。Host 重启后编号会变，这时清空勾选，客户端提示重新勾选。
 3. `conversation.search` 现在按控制权限要求。搜索只读已有会话，是否放宽到查看权限，由你定。
    - 建议：放宽到查看权限。搜索查的是标题和你发过的内容，只有查看权限的设备用 `conversation.list` 和 `conversation.history` 本来就能读到这些，放宽不多给任何东西。`folder.list` 不一样，它看的是项目以外的文件夹，仍要求控制权限。
+   - 2026-11-07：按建议，§3.1 已改。B4a 的提示词照这条写，你发出 B4a 提示词就算确认；不同意的话告诉我再改。
 4. Windows 上列盘符和判断隐藏文件夹，Node.js 都没有现成接口：`fs.Stats` 不带 Windows 的文件属性，也没有列盘符的函数，仓库里也没有这样的代码。对 A 到 Z 逐个 `stat` 不行，断开的网络盘会卡住线程（§3.3）。
    - 建议：隐藏只按名字判断：以 `.` 开头，或在一个固定名单里（`$Recycle.Bin`、`System Volume Information`、`$WinREAgent`、`Config.Msi`、`Recovery`，以及用户目录下的 `AppData`）。少数用户自己设成隐藏的文件夹会显示出来，可以接受。
    - 建议：盘符用一次有时限的系统命令取，不经过线程池，命令由执行代理选并在报告里说明。`label` 能顺带拿到就带，拿不到就不带。
+
+## 7. 实现分轮
+
+B4 超过一次审核能看完的大小（`docs/DEVELOPMENT-PROCESS.md` §4），分三轮，每轮一个分支，按顺序做：
+
+| 轮次    | 内容                                                                                                                                                                                                                                        | 依赖的决定 | 提示词                                           |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | ------------------------------------------------ |
+| **B4a** | 失败响应带原因（§3.2）；`conversation.list` 的 `pinnedAt` 和 `archived`；`project.create`、`project.remove`、`conversation.pin`、`conversation.rename`、`conversation.restore`、`conversation.search`；写操作的帧检查；对应的 Rust 核心方法 | §6 第 3 项 | `docs/reviews/b4a-remote-organization-prompt.md` |
+| **B4b** | `folder.list`（§3.3）、经由电脑访问的设备上的列出（§3.5）、电脑上的浏览入口（§3.7）；对应的 Rust 核心方法                                                                                                                                   | §6 第 4 项 | B4a 审核后再写                                   |
+| **B4c** | `provider-sessions.discover`、`provider-sessions.adopt`（§3.4）；对应的 Rust 核心方法                                                                                                                                                       | §6 第 2 项 | B4b 审核后再写                                   |
+
+T1b 和 iPad 的远程管理界面在 B4 三轮都合进 `main` 以后做。

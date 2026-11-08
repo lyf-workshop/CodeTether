@@ -45,7 +45,7 @@ import uniffi.supervisor_mobile.ConnectionMode
 @RunWith(AndroidJUnit4::class)
 class ScopedMutationRetryTest {
     @Test
-    fun unknownSendIsOnlyReadAutomaticallyAndExplicitRetryReusesTheWholeRequest() = runBlocking {
+    fun actionNotFoundAndUncertainRetriesKeepTheOriginalSendUntilOneSuccess() = runBlocking {
         val backend = Backend().apply { lostFirstResponses.add(SEND_ID) }
         Harness(backend).use { harness ->
             harness.ready()
@@ -58,11 +58,29 @@ class ScopedMutationRetryTest {
             assertEquals(1, backend.attempts(SEND_ID).size)
             assertEquals(MutationStatus.Unknown, harness.sendEntry(PAGE_A)?.status)
 
+            // A preflight miss is not a rejection of the replay, even though the code is not_found.
+            backend.nextFailures[SEND_ID] = RemoteFailure("not_found")
+            harness.onMain { retryMutation(SEND_ID) }
+            awaitState { backend.attempts(SEND_ID).size == 2 && harness.sendEntry(PAGE_A)?.status == MutationStatus.Unknown }
+            assertEquals(SEND_ID, harness.sendEntry(PAGE_A)?.actionId)
+
+            backend.nextFailures[SEND_ID] = RemoteFailure("internal")
+            harness.onMain { retryMutation(SEND_ID) }
+            awaitState { backend.attempts(SEND_ID).size == 3 && harness.sendEntry(PAGE_A)?.status == MutationStatus.Unknown }
+            assertEquals(SEND_ID, harness.sendEntry(PAGE_A)?.actionId)
+
             harness.onMain { retryMutation(SEND_ID) }
             awaitState { harness.sendEntry(PAGE_A)?.status == MutationStatus.Success }
-            assertDeduplicatedRetry(backend, SEND_ID)
-            assertEquals(ORIGINAL_TEXT.trim(), backend.attempts(SEND_ID).singlePayload().text)
             assertEquals(TARGET_A, harness.sendEntry(PAGE_A)?.result)
+            harness.onMain {
+                retryMutation(SEND_ID)
+                acknowledgeMutation(SEND_ID)
+                retryMutation(SEND_ID)
+            }
+            assertNull(harness.sendEntry(PAGE_A))
+            assertEquals(4, backend.attempts(SEND_ID).size)
+            assertEquals(ORIGINAL_TEXT.trim(), backend.attempts(SEND_ID).singlePayload().text)
+            assertEquals(1, backend.admissions.values.count { it.actionId == SEND_ID })
         }
     }
 
@@ -142,7 +160,7 @@ class ScopedMutationRetryTest {
     }
 
     @Test
-    fun parcelRestoredUnknownSendKeepsItsPayloadAndNeverWritesUntilRetry() = runBlocking {
+    fun restoredUnknownSendExitsPendingWhenItsRetryIsExplicitlyRejected() = runBlocking {
         val backend = Backend().apply { lostFirstResponses.add(SEND_ID) }
         val account = Account()
         val saved = Harness(backend, account).use { original ->
@@ -162,9 +180,19 @@ class ScopedMutationRetryTest {
             assertEquals(MutationStatus.Unknown, pending.status)
             assertEquals(MutationRequest.Send(SEND_ID, COMPUTER_A.id, TARGET_A, ORIGINAL_TEXT), pending.request)
             assertEquals(1, backend.attempts(SEND_ID).size)
+            // The recovered request may have been admitted before the Host lost its replay record.
+            backend.admissions.remove(SEND_ID)
+            val rejection = RemoteFailure("conflict", definitiveMutationFailure = true)
+            backend.nextFailures[SEND_ID] = rejection
             restored.onMain { retryMutation(SEND_ID) }
-            awaitState { restored.sendEntry(PAGE_A)?.status == MutationStatus.Success }
-            assertDeduplicatedRetry(backend, SEND_ID)
+            awaitState { restored.sendEntry(PAGE_A)?.status == MutationStatus.Failed }
+            val failed = requireNotNull(restored.sendEntry(PAGE_A))
+            assertTrue(!failed.unresolved)
+            assertEquals(rejection.message, failed.message)
+            assertEquals(pending.request, failed.request)
+            restored.onMain { retryMutation(SEND_ID) }
+            assertEquals(2, backend.attempts(SEND_ID).size)
+            assertEquals(ORIGINAL_TEXT.trim(), backend.attempts(SEND_ID).singlePayload().text)
         }
     }
 
@@ -275,12 +303,14 @@ class ScopedMutationRetryTest {
         val calls = CopyOnWriteArrayList<Call>()
         val admissions = ConcurrentHashMap<String, Call>()
         val actionReads = CopyOnWriteArrayList<String>()
+        val nextFailures = ConcurrentHashMap<String, RemoteFailure>()
         val lostFirstResponses: MutableSet<String> = ConcurrentHashMap.newKeySet()
         val suspendedResponses: MutableSet<String> = ConcurrentHashMap.newKeySet()
         val suspendedEntered: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
         suspend fun invoke(call: Call) {
             calls += call
+            nextFailures.remove(call.actionId)?.let { throw it }
             val previous = admissions.putIfAbsent(call.actionId, call)
             check(previous == null || previous == call) { "Synthetic retry changed the admitted request" }
             if (call.actionId in suspendedResponses) {

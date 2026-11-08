@@ -4,7 +4,9 @@ import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
@@ -13,8 +15,10 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextReplacement
 import androidx.lifecycle.ViewModelProvider
 import androidx.test.core.app.ActivityScenario
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -32,12 +36,14 @@ import org.codetether.app.remote.RemoteChange
 import org.codetether.app.remote.RemoteConnection
 import org.codetether.app.remote.RemoteConversation
 import org.codetether.app.remote.RemoteConversationDetail
+import org.codetether.app.remote.RemoteFailure
 import org.codetether.app.remote.RemoteHistory
 import org.codetether.app.remote.RemoteProject
 import org.codetether.app.remote.RemoteProvider
 import org.codetether.app.remote.RemoteMachine
 import org.codetether.app.remote.RemoteWorkspace
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -98,8 +104,87 @@ class MainActivityRotationTest {
         assertEquals(0, session.cancelledCreates.get())
     }
 
-    private fun withActivity(test: (ActivityScenario<MainActivityRegressionActivity>, TabletController, RotationSession) -> Unit) {
-        val session = RotationSession()
+    @Test
+    fun explicitSendRetryFailureRefreshesConversationAndKeepsTheDraftForANewAction() {
+        val rejection = RemoteFailure("invalid_request", definitiveMutationFailure = true)
+        withActivity(RotationSession(rejection)) { scenario, controller, session ->
+            val page = TabletPage.Conversation(COMPUTER.id, TARGET)
+            scenario.onActivity { controller.navigate(page) }
+            compose.waitUntil(15_000L) { controller.state.value.detail?.conversation?.target == TARGET }
+            val readsBeforeRetry = session.conversationReads.size
+            val originalDraft = "Original send draft"
+            compose.onNodeWithText("继续对话").performTextInput(originalDraft)
+            compose.onNodeWithText("发送").performClick()
+            compose.waitUntil(15_000L) { controller.state.value.sendMutation(page)?.status == MutationStatus.Unknown }
+            compose.onNodeWithText("发送").assertIsNotEnabled()
+            compose.onNodeWithText("重试").performClick()
+            compose.waitUntil(15_000L) {
+                controller.state.value.sendMutation(page)?.status == MutationStatus.Failed &&
+                    session.conversationReads.size > readsBeforeRetry
+            }
+            compose.onNodeWithText(requireNotNull(rejection.message)).assertIsDisplayed()
+            compose.onNodeWithText("重试").assertDoesNotExist()
+            assertEquals(originalDraft, fieldText("继续对话"))
+            assertEquals(listOf(TARGET), session.conversationReads.drop(readsBeforeRetry))
+            assertEquals(listOf(session.sendAttempts.first(), session.sendAttempts.first()), session.sendAttempts.toList())
+
+            val editedDraft = "Corrected send draft"
+            compose.onNodeWithText("继续对话").performTextReplacement(editedDraft)
+            compose.onNodeWithText("发送").assertIsEnabled().performClick()
+            compose.waitUntil(15_000L) { session.sendAttempts.size == 3 }
+            assertNotEquals(session.sendAttempts.first().actionId, session.sendAttempts.last().actionId)
+            assertEquals(editedDraft, session.sendAttempts.last().text)
+            session.sendResult.complete(Unit)
+            compose.waitUntil(15_000L) { fieldText("继续对话").isEmpty() }
+            assertEquals(page, controller.state.value.page)
+            assertEquals(3, session.sends.get())
+        }
+    }
+
+    @Test
+    fun explicitCreateRetryNotFoundRefreshesProjectAndKeepsTheFormForANewAction() {
+        val rejection = RemoteFailure("not_found", definitiveMutationFailure = true)
+        withActivity(RotationSession(rejection)) { _, controller, session ->
+            compose.onNodeWithText("＋ 新建会话").performClick()
+            compose.onNode(hasText(PROJECT.name) and hasAnyAncestor(isDialog())).performClick()
+            compose.onNode(hasText("Codex") and hasAnyAncestor(isDialog())).performClick()
+            val originalText = "Original create message"
+            compose.onNodeWithText("第一条消息").performScrollTo().performTextInput(originalText)
+            compose.onNodeWithText("创建会话").performScrollTo().performClick()
+            compose.waitUntil(15_000L) {
+                controller.state.value.createMutation(COMPUTER.id, PROJECT)?.status == MutationStatus.Unknown
+            }
+            compose.onNodeWithText("创建会话").assertIsNotEnabled()
+            compose.onNodeWithText("重试").performScrollTo().performClick()
+            compose.waitUntil(15_000L) {
+                controller.state.value.createMutation(COMPUTER.id, PROJECT)?.status == MutationStatus.Failed &&
+                    session.projectReads.isNotEmpty()
+            }
+            compose.onNodeWithText(requireNotNull(rejection.message)).performScrollTo().assertIsDisplayed()
+            compose.onNodeWithText("重试").assertDoesNotExist()
+            assertEquals(originalText, fieldText("第一条消息"))
+            assertEquals(listOf(PROJECT), session.projectReads.toList())
+            assertEquals(listOf(session.createAttempts.first(), session.createAttempts.first()), session.createAttempts.toList())
+
+            val editedText = "Corrected create message"
+            compose.onNodeWithText("第一条消息").performScrollTo().performTextReplacement(editedText)
+            compose.onNodeWithText("创建会话").performScrollTo().assertIsEnabled().performClick()
+            compose.waitUntil(15_000L) { session.createAttempts.size == 3 }
+            assertNotEquals(session.createAttempts.first().actionId, session.createAttempts.last().actionId)
+            assertEquals(editedText, session.createAttempts.last().text)
+            session.createResult.complete(Unit)
+            compose.waitUntil(15_000L) {
+                controller.state.value.page == TabletPage.Conversation(COMPUTER.id, CREATED_TARGET)
+            }
+            compose.onNodeWithText("第一条消息").assertDoesNotExist()
+            assertEquals(3, session.creates.get())
+        }
+    }
+
+    private fun withActivity(
+        session: RotationSession = RotationSession(),
+        test: (ActivityScenario<MainActivityRegressionActivity>, TabletController, RotationSession) -> Unit,
+    ) {
         MainActivityRegressionActivity.dependenciesForTest = ControllerDependencies(RotationAccount()) { session }
         try {
             ActivityScenario.launch(MainActivityRegressionActivity::class.java).use { scenario ->
@@ -153,7 +238,13 @@ class MainActivityRotationTest {
         override suspend fun removeComputer(computer: PairedComputer) = error("Unexpected synthetic removal")
     }
 
-    private class RotationSession : ControllerSession {
+    private data class Attempt(val actionId: String, val text: String)
+
+    private class RotationSession(private val retryRejection: RemoteFailure? = null) : ControllerSession {
+        val sendAttempts = CopyOnWriteArrayList<Attempt>()
+        val createAttempts = CopyOnWriteArrayList<Attempt>()
+        val conversationReads = CopyOnWriteArrayList<ConversationTarget>()
+        val projectReads = CopyOnWriteArrayList<RemoteProject>()
         val sends = AtomicInteger()
         val creates = AtomicInteger()
         val cancelledSends = AtomicInteger()
@@ -169,15 +260,20 @@ class MainActivityRotationTest {
         }
         override suspend fun disconnect() { disconnects.incrementAndGet() }
         override suspend fun workspace() = WORKSPACE to CONNECTION
-        override suspend fun projectConversations(project: RemoteProject, archived: Boolean, status: String?) = listOf(CONVERSATION)
+        override suspend fun projectConversations(project: RemoteProject, archived: Boolean, status: String?): List<RemoteConversation> {
+            projectReads += project
+            return listOf(CONVERSATION)
+        }
         override fun watchConversation(target: ConversationTarget, loadedHistory: RemoteHistory?): Flow<RemoteConversationDetail> = flow {
+            conversationReads += target
             emit(RemoteConversationDetail(CONVERSATION.copy(target = target), HISTORY, PROVIDER, emptyList(), true))
             awaitCancellation()
         }
         override suspend fun send(target: ConversationTarget, text: String, actionId: String) {
             assertEquals(TARGET, target)
-            assertEquals("旋转中的发送草稿", text)
-            sends.incrementAndGet()
+            if (retryRejection == null) assertEquals("旋转中的发送草稿", text)
+            sendAttempts += Attempt(actionId, text)
+            rejectRetry(sends.incrementAndGet(), actionId)
             try {
                 sendResult.await()
             } catch (cancel: CancellationException) {
@@ -188,8 +284,9 @@ class MainActivityRotationTest {
         override suspend fun create(project: RemoteProject, provider: String, text: String, reasoning: String?, actionId: String): ConversationTarget {
             assertEquals(PROJECT, project)
             assertEquals("codex", provider)
-            assertEquals("旋转中的首条消息", text)
-            creates.incrementAndGet()
+            if (retryRejection == null) assertEquals("旋转中的首条消息", text)
+            createAttempts += Attempt(actionId, text)
+            rejectRetry(creates.incrementAndGet(), actionId)
             try {
                 createResult.await()
             } catch (cancel: CancellationException) {
@@ -198,6 +295,14 @@ class MainActivityRotationTest {
             }
             return CREATED_TARGET
         }
+        private fun rejectRetry(attempt: Int, actionId: String) {
+            val rejection = retryRejection ?: return
+            when (attempt) {
+                1 -> throw RemoteFailure("connection_closed", uncertainActionId = actionId)
+                2 -> throw rejection
+            }
+        }
+
         override suspend fun action(actionId: String) = RemoteAction(actionId, "not_found", null, null)
         override suspend fun olderHistory(target: ConversationTarget, cursor: String) = HISTORY
         override suspend fun changes(target: ConversationTarget): List<RemoteChange> = emptyList()

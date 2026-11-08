@@ -136,6 +136,7 @@ class RemoteFailure(
     val httpStatus: Int? = null,
     val removed: Boolean = false,
     val uncertainActionId: String? = null,
+    internal val definitiveMutationFailure: Boolean = false,
 ) : Exception(remoteFailureMessage(code, httpStatus, removed, uncertainActionId))
 
 private fun remoteFailureMessage(code: String, status: Int?, removed: Boolean, uncertainActionId: String?): String {

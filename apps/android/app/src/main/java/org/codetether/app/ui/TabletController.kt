@@ -16,6 +16,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -33,6 +34,7 @@ import org.codetether.app.remote.RemoteAttention
 import org.codetether.app.remote.RemoteConversation
 import org.codetether.app.remote.RemoteFailure
 import org.codetether.app.remote.RemoteProject
+import org.codetether.app.remote.RemoteSupervisor
 import org.codetether.app.remote.ConversationTarget
 import org.codetether.app.remote.mergeHistory
 import uniffi.supervisor_mobile.ConnectionMode
@@ -374,11 +376,12 @@ internal class TabletController private constructor(
         }
     }
 
-    private fun outcome(request: MutationRequest, status: MutationStatus, message: String? = null, result: ConversationTarget? = null) {
+    private fun outcome(request: MutationRequest, status: MutationStatus, message: String? = null, result: ConversationTarget? = null): Boolean {
         // Logout, acknowledgement or replacement must not be undone by a late completion.
-        if (pendingMutations.forScope(request.scope)?.actionId != request.actionId) return
+        if (pendingMutations.forScope(request.scope)?.actionId != request.actionId) return false
         pendingMutations.put(PendingMutation(request, status, message, result))
         mutable.update { it.copy(mutations = pendingMutations.all()) }
+        return true
     }
 
     private fun beginMutation(request: MutationRequest) {
@@ -412,12 +415,11 @@ internal class TabletController private constructor(
                 outcome(request, MutationStatus.Unknown, PendingMutationStore.UNKNOWN_MESSAGE)
                 throw cancel
             } catch (failure: Exception) {
-                val uncertain = retrying || (failure is RemoteFailure &&
-                    (failure.uncertainActionId != null || failure.code in setOf("invalid_response", "internal")))
-                if (uncertain) {
+                if (RemoteSupervisor.isUncertainMutationFailure(failure, retrying)) {
                     outcome(request, MutationStatus.Unknown, PendingMutationStore.UNKNOWN_MESSAGE)
                 } else {
-                    outcome(request, MutationStatus.Failed, friendly(failure))
+                    val recorded = outcome(request, MutationStatus.Failed, friendly(failure))
+                    if (retrying && recorded) refreshRejectedMutation(request)
                 }
                 resetIfSessionEnded(failure)
             } finally {
@@ -426,6 +428,41 @@ internal class TabletController private constructor(
         }
         mutationJobs[request.actionId] = job
         job.start()
+    }
+
+    private suspend fun refreshRejectedMutation(request: MutationRequest) {
+        val client = clients[request.computerId] ?: return
+        if (!foreground) return
+        val page = state.value.page
+        val rows = try {
+            when (request) {
+                is MutationRequest.Send -> {
+                    val conversation = TabletPage.Conversation(request.computerId, request.target)
+                    if (page == conversation) {
+                        observe(conversation)
+                        return
+                    }
+                    listOf(client.watchConversation(request.target, loadedHistory = null).first().conversation)
+                }
+                is MutationRequest.Create -> {
+                    if (page is TabletPage.Project && page.computerId == request.computerId &&
+                        page.project.machineId == request.project.machineId && page.project.id == request.project.id
+                    ) {
+                        loadProject(page)
+                        return
+                    }
+                    client.projectConversations(request.project, archived = false, status = null)
+                }
+            }
+        } catch (cancel: CancellationException) {
+            throw cancel
+        } catch (failure: Exception) {
+            resetIfSessionEnded(failure)
+            return
+        }
+        if (clients[request.computerId] == client) {
+            mutable.update { it.copy(loaded = retainConversations(rows.map { row -> request.computerId to row }, it.loaded)) }
+        }
     }
 
     /** Automatic confirmation only reads; retryMutation is the sole retrying write entry. */

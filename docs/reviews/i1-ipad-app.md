@@ -1,5 +1,15 @@
 # 审核记录：i1/ipad-app
 
+## 真机验收（30e8b9f，2026-11-08）
+
+报告：`~/agenthub-archive/i1-report.md` 的"真机验收（30e8b9f）"。iPad Air 11-inch (M4)、iPadOS 27.2，Mac 安装版 `git-fd1d90540450`。
+
+- 经互联网的连接检查通过；只读页面和旋转通过。
+- 新建会话失败，"当前会话不支持此操作"。执行代理找的根因我核对过，是对的：`SupervisorClient.swift:280` 从 AI 工具的能力里读 `providerExecution`，这个字段在设备的能力里（`packages/protocol/src/machines.ts:38`）。`readWorkspace`（`:644`）读的位置是对的。模拟器的假数据把字段放错了地方，所以测试没发现。
+- 经互联网的其余业务、断网恢复、移除复配、外观和键盘没做，等修完。
+
+另外读代码找到几个可用性问题（后台刷新禁用输入框、轮询失败反复弹窗、新消息把人拉到底、横屏打开变更面板侧栏不收起、被移除页的电脑名），连同上面的根因都放进 r4（`docs/reviews/i1-fix-prompt-r4.md` 第 6 到 10、13 项），详见 `docs/ux-redesign/09-tablet-usability.md` §6。r4 之后做真机交互测试：`docs/reviews/i1-ipad-interaction-test-prompt.md`。
+
 ## r3 及真机修复（2026-11-07）
 
 审核对象：`origin/i1/ipad-app` 上 `90cd7f5` 之后的 `5004eb9`、`a82162f`（r3 登录配置）、`8d5707d`（毫秒时间）、`e2bba61`（配对忙碌状态）、`30e8b9f`（连接检查）。任务：`docs/reviews/i1-fix-prompt-r3.md`。

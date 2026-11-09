@@ -276,8 +276,8 @@ actor SupervisorClient {
                   ((tool["executionHealth"] as? [String: Any])?["state"] as? String) != "unavailable" else {
                 throw ClientFailure.unsupported
             }
-            let capabilities = tool["capabilities"] as? [String: Any] ?? [:]
-            guard capabilities["providerExecution"] as? Bool == true else { throw ClientFailure.unsupported }
+            let machineCapabilities = (machine.object?["machine"] as? [String: Any])?["capabilities"] as? [String: Any] ?? [:]
+            guard machineCapabilities["providerExecution"] as? Bool == true else { throw ClientFailure.unsupported }
             var fields: [String: Any] = [
                 "machineId": action.machineID, "projectId": action.projectID, "provider": provider,
                 "input": ["type": "text", "text": action.input],
@@ -610,6 +610,23 @@ actor SupervisorClient {
         }
     }
 
+    private static func isComputerLevelFailure(_ error: Error) -> Bool {
+        let codes = Set([
+            "connection_closed", "connection_failed", "remote_host_unreachable", "relay_unavailable",
+            "relay_identity_mismatch", "relay_protocol_error", "session_expired", "authorization_revoked",
+            "computer_removed", "host_identity_mismatch", "tls_unavailable",
+        ])
+        if let failure = error as? SupervisorWireFailure { return codes.contains(failure.code) }
+        if let failure = error as? SupervisorClientError { return codes.contains(failure.code) }
+        if let failure = error as? ClientFailure {
+            switch failure {
+            case .computerUnavailable, .computerRemoved: return true
+            default: return false
+            }
+        }
+        return false
+    }
+
     private func readWorkspace(
         computer: PairedComputer,
         session: ActiveConnection,
@@ -629,56 +646,70 @@ actor SupervisorClient {
             var projectsForAttention: [String: TabletProject] = [:]
 
             for row in machineRows {
-                operation = "machine.list"
                 let machineID = try Self.requiredString(row, "machineId", max: 160)
-                operation = "machine.get"
-                let detailPage = try await request(
-                    computerID: computer.id, mode: mode, operation: "machine.get",
-                    fields: ["machineId": machineID], expectedGeneration: generation
-                )
-                guard generation == stateGeneration else { throw CancellationError() }
-                let detail = try Self.object(detailPage.object, "machine")
-                guard detail["machineId"] as? String == machineID else { throw ClientFailure.invalidResponse }
-                let machineAvailable = row["availability"] as? String == "available"
-                let machineCapabilities = row["capabilities"] as? [String: Any] ?? [:]
-                let canExecute = machineAvailable && machineCapabilities["providerExecution"] as? Bool == true
-                let providerRows = detailPage.array("providers")
-                let providers = try providerRows.map { try Self.parseProvider($0, canExecute: canExecute) }
+                do {
+                    operation = "machine.get"
+                    let detailPage = try await request(
+                        computerID: computer.id, mode: mode, operation: "machine.get",
+                        fields: ["machineId": machineID], expectedGeneration: generation
+                    )
+                    guard generation == stateGeneration else { throw CancellationError() }
+                    let detail = try Self.object(detailPage.object, "machine")
+                    guard detail["machineId"] as? String == machineID else { throw ClientFailure.invalidResponse }
+                    let machineAvailable = row["availability"] as? String == "available"
+                    let machineCapabilities = row["capabilities"] as? [String: Any] ?? [:]
+                    let canExecute = machineAvailable && machineCapabilities["providerExecution"] as? Bool == true
+                    let providerRows = detailPage.array("providers")
+                    let providers = try providerRows.map { try Self.parseProvider($0, canExecute: canExecute) }
 
-                operation = "project.list"
-                let projectRows = try await readPages(
-                    computerID: computer.id, mode: mode, operation: "project.list", listKey: "projects",
-                    fields: ["machineId": machineID], generation: generation
-                )
-                guard generation == stateGeneration else { throw CancellationError() }
-                let projectAccess = machineAvailable && machineCapabilities["projectAccess"] as? Bool == true
-                var projects = try projectRows.map { try Self.parseProject($0, machineID: machineID, available: projectAccess) }
-                for project in projects { projectTargets[project.id] = ProjectTarget(computerID: computer.id, machineID: machineID, projectID: project.id) }
+                    operation = "project.list"
+                    let projectRows = try await readPages(
+                        computerID: computer.id, mode: mode, operation: "project.list", listKey: "projects",
+                        fields: ["machineId": machineID], generation: generation
+                    )
+                    guard generation == stateGeneration else { throw CancellationError() }
+                    let projectAccess = machineAvailable && machineCapabilities["projectAccess"] as? Bool == true
+                    var projects = try projectRows.map { try Self.parseProject($0, machineID: machineID, available: projectAccess) }
+                    for project in projects { projectTargets[project.id] = ProjectTarget(computerID: computer.id, machineID: machineID, projectID: project.id) }
 
-                operation = "conversation.recent"
-                let recentPage = try await request(
-                    computerID: computer.id, mode: mode, operation: "conversation.recent",
-                    fields: ["machineId": machineID, "limit": 30], expectedGeneration: generation
-                )
-                guard generation == stateGeneration else { throw CancellationError() }
-                let recent = try recentPage.array("conversations").map { row -> TabletConversationSummary in
-                    let summary = try Self.parseConversation(row, computer: computer, machineName: row["machineName"] as? String ?? (detail["displayName"] as? String ?? "设备"), projectName: projects.first(where: { $0.id == row["projectId"] as? String })?.name ?? "项目")
-                    guard summary.machineID == machineID else { throw ClientFailure.invalidResponse }
-                    conversationTargets[summary.id] = (computer.id, ConversationTarget(machineID: machineID, projectID: summary.projectID, conversationID: summary.id))
-                    return summary
+                    operation = "conversation.recent"
+                    let recentPage = try await request(
+                        computerID: computer.id, mode: mode, operation: "conversation.recent",
+                        fields: ["machineId": machineID, "limit": 30], expectedGeneration: generation
+                    )
+                    guard generation == stateGeneration else { throw CancellationError() }
+                    let recent = try recentPage.array("conversations").map { row -> TabletConversationSummary in
+                        let summary = try Self.parseConversation(row, computer: computer, machineName: row["machineName"] as? String ?? (detail["displayName"] as? String ?? "设备"), projectName: projects.first(where: { $0.id == row["projectId"] as? String })?.name ?? "项目")
+                        guard summary.machineID == machineID else { throw ClientFailure.invalidResponse }
+                        conversationTargets[summary.id] = (computer.id, ConversationTarget(machineID: machineID, projectID: summary.projectID, conversationID: summary.id))
+                        return summary
+                    }
+                    let projectSessions = Dictionary(grouping: recent, by: \.projectID)
+                    projects = projects.map { project in
+                        TabletProject(id: project.id, computerID: computer.id, machineID: machineID, name: project.name,
+                                      available: project.available, sessions: Array(projectSessions[project.id, default: []].prefix(5)))
+                    }
+                    for project in projects { projectsForAttention[project.id] = project }
+                    machines.append(TabletMachine(
+                        id: machineID, name: detail["displayName"] as? String ?? "设备",
+                        platform: [detail["platform"] as? String, detail["architecture"] as? String].compactMap { $0 }.joined(separator: " · "),
+                        status: row["connectionState"] as? String ?? "offline", isLocal: row["isLocal"] as? Bool ?? false,
+                        projects: projects, recent: Array(recent.prefix(30)), providers: providers
+                    ))
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    if Self.isComputerLevelFailure(error) { throw error }
+                    let name = row["displayName"] as? String ?? "设备"
+                    let platform = [row["platform"] as? String, row["architecture"] as? String]
+                        .compactMap { $0 }.joined(separator: " · ")
+                    machines.append(TabletMachine(
+                        id: machineID, name: name, platform: platform,
+                        status: "unavailable", isLocal: row["isLocal"] as? Bool ?? false,
+                        projects: [], recent: [], providers: [],
+                        unavailableReason: "暂时无法读取，请稍后重试。"
+                    ))
                 }
-                let projectSessions = Dictionary(grouping: recent, by: \.projectID)
-                projects = projects.map { project in
-                    TabletProject(id: project.id, computerID: computer.id, machineID: machineID, name: project.name,
-                                  available: project.available, sessions: Array(projectSessions[project.id, default: []].prefix(5)))
-                }
-                for project in projects { projectsForAttention[project.id] = project }
-                machines.append(TabletMachine(
-                    id: machineID, name: detail["displayName"] as? String ?? "设备",
-                    platform: [detail["platform"] as? String, detail["architecture"] as? String].compactMap { $0 }.joined(separator: " · "),
-                    status: row["connectionState"] as? String ?? "offline", isLocal: row["isLocal"] as? Bool ?? false,
-                    projects: projects, recent: Array(recent.prefix(30)), providers: providers
-                ))
             }
 
             operation = "attention.list"

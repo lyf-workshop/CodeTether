@@ -49,11 +49,6 @@ fi
 if [[ -n "$DEVELOPMENT_TEAM" ]]; then
   XCODEBUILD_SETTINGS+=(DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM")
 fi
-XCODEBUILD_OPTIONS=()
-if [[ "$ALLOW_PROVISIONING_UPDATES" == YES ]]; then
-  XCODEBUILD_OPTIONS+=(-allowProvisioningUpdates)
-fi
-
 XCODEBUILD_COMMAND=(
   /usr/bin/env -i HOME="$HOME" USER="$CURRENT_USER" LOGNAME="$CURRENT_USER" PATH="$PATH_VALUE" /usr/bin/xcodebuild
   -project "$APP_DIR/CodeTether.xcodeproj" -scheme CodeTether -destination "$DESTINATION"

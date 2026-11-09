@@ -101,7 +101,7 @@ private actor LifetimeAccount: TabletAccountService {
     func restore() async throws -> AccountProfile? { Fixtures.profile }
     func requestSignInCode(email: String) async throws { }
     func verifySignInCode(email: String, code: String) async throws -> AccountProfile { Fixtures.profile }
-    func signOut() async { signedOut = true }
+    func signOut() async throws { signedOut = true }
 
     func directory() async throws -> [PairedComputer] {
         guard directoryAvailable else { throw ClientFailure.computerUnavailable }

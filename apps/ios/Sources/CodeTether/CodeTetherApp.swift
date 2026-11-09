@@ -7,7 +7,7 @@ struct CodeTetherApp: App {
 
     var body: some Scene {
         WindowGroup {
-            TabletRootView(state: model.state, actions: model.actions)
+            TabletRootView(model: model)
                 .task {
                     await model.start()
                     model.taskDidStart()

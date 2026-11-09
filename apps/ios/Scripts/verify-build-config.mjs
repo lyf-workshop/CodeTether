@@ -62,7 +62,7 @@ if (relayPresent !== 0 && relayPresent !== relay.length) {
 for (const key of required) console.log(`${key}: present, shape correct`)
 for (const [key, hostname] of urlHostnames) console.log(`${key} host: ${hostname}`)
 for (const key of relay) {
-  console.log(`${key}: ${relayPresent === 0 ? 'absent' : 'present, shape correct'}`)
+  console.log(`${key}: ${relayPresent === 0 ? 'absent' : 'present'}`)
 }
 
 function parseOrigin(value) {

@@ -22,6 +22,74 @@ final class AppModelRegressionTests: XCTestCase {
         XCTAssertFalse(try XCTUnwrap(workspace.computers.first).available)
     }
 
+    func testOneUnreadableMachineDoesNotTakeComputerOffline() async throws {
+        let account = TestAccount(profile: TestFixtures.profile, computers: [TestFixtures.computer])
+        await account.setDirectoryAvailable(true)
+        let client = SupervisorClient(
+            account: account, connector: TestConnector(),
+            sessionProvider: { _, _ in MachineIsolationWire() }
+        )
+
+        let snapshot = try await client.refresh(mode: .automatic)
+        let computer = try XCTUnwrap(snapshot.computers.first)
+        XCTAssertTrue(computer.available)
+        XCTAssertEqual(snapshot.connectedComputerCount, 1)
+        XCTAssertEqual(computer.machines.count, 2)
+        XCTAssertEqual(computer.machines.first(where: { $0.id == "machine_good" })?.status, "online")
+        XCTAssertEqual(computer.machines.first(where: { $0.id == "machine_bad" })?.unavailableReason, "暂时无法读取，请稍后重试。")
+    }
+
+    @MainActor
+    func testPairingStateIsIndependentOfBackgroundRefreshAndCancels() async throws {
+        let suite = "CodeTether.AppModelRegressionTests.pairingBusy.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let account = TestAccount(profile: TestFixtures.profile, computers: [])
+        await account.setDirectoryDelay(500_000_000)
+        await account.setHoldPair(true)
+        let model = TabletAppModel(defaults: defaults, account: account)
+        defer { model.sceneChanged(.background) }
+
+        let startup = Task { await model.start() }
+        await waitForDirectoryRead(account, 1)
+        XCTAssertFalse(model.state.isBusy)
+        XCTAssertFalse(model.state.isPairing)
+        let pairCount = await account.pairCount()
+        XCTAssertEqual(pairCount, 0)
+        model.sceneChanged(.active)
+        try await Task.sleep(nanoseconds: 80_000_000)
+        let concurrentDirectoryCount = await account.directoryCount()
+        XCTAssertEqual(concurrentDirectoryCount, 1)
+        await startup.value
+
+        model.actions.pair("123456")
+        XCTAssertTrue(model.state.isPairing)
+        await waitForState(model, description: "pairing in flight") { $0.isPairing && $0.isBusy }
+        model.actions.cancelPair()
+        await waitForState(model, description: "pairing cancellation") { !$0.isPairing }
+        XCTAssertEqual(model.state.pairingMessage, "已取消等待。")
+    }
+
+    @MainActor
+    func testFailedBackgroundRefreshDoesNotRetryEveryPoll() async throws {
+        let suite = "CodeTether.AppModelRegressionTests.refreshBackoff.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let account = TestAccount(profile: TestFixtures.profile, computers: [])
+        let model = TabletAppModel(defaults: defaults, account: account)
+        defer { model.sceneChanged(.background) }
+
+        await model.start()
+        model.taskDidStart()
+        try await Task.sleep(nanoseconds: 1_700_000_000)
+        let backgroundCount = await account.directoryCount()
+        XCTAssertEqual(backgroundCount, 1)
+        model.actions.refresh()
+        await waitForState(model, description: "manual refresh failure") { $0.errorMessage != nil }
+        let manualCount = await account.directoryCount()
+        XCTAssertEqual(manualCount, 2)
+    }
+
     @MainActor
     func testManualConnectionCheckShowsProgressAndCoalescesRepeatedClicks() async throws {
         let suite = "CodeTether.AppModelRegressionTests.manualCheck.\(UUID().uuidString)"
@@ -55,33 +123,38 @@ final class AppModelRegressionTests: XCTestCase {
     }
 
     @MainActor
-    func testPairingStateIsIndependentOfBackgroundRefreshAndCancels() async throws {
-        let suite = "CodeTether.AppModelRegressionTests.pairingBusy.\(UUID().uuidString)"
+    func testBackgroundDirectoryFailureDoesNotShowModalBeforePairing() async throws {
+        let suite = "CodeTether.AppModelRegressionTests.pairingRefresh.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
-        let account = TestAccount(profile: TestFixtures.profile, computers: [])
-        await account.setDirectoryDelay(500_000_000)
-        await account.setHoldPair(true)
+
+        // No paired computer is a normal pre-pairing state. A failed background
+        // directory refresh must leave the pairing sheet usable instead of
+        // repeatedly presenting the global error alert.
         let model = TabletAppModel(
-            defaults: defaults, account: account,
+            defaults: defaults,
+            account: TestAccount(profile: TestFixtures.profile, computers: []),
             initialState: {
                 var state = TabletViewState()
                 state.isAuthenticated = true
                 return state
             }()
         )
-        defer { model.sceneChanged(.background) }
 
-        let startup = Task { await model.start() }
-        await waitForState(model, description: "background refresh in flight") { $0.isBusy }
-        XCTAssertFalse(model.state.isPairing)
+        await model.start()
 
-        model.actions.pair("123456")
-        await waitForState(model, description: "pairing in flight") { $0.isPairing && $0.isBusy }
-        model.actions.cancelPair()
-        await waitForState(model, description: "pairing cancellation") { !$0.isPairing }
-        XCTAssertEqual(model.state.pairingMessage, "已取消等待。")
-        await startup.value
+        XCTAssertTrue(model.state.isAuthenticated)
+        XCTAssertNil(model.state.errorMessage)
+
+        // Scene activation is the same background refresh path used when the
+        // tablet returns to the foreground. Repeated failures must stay
+        // non-modal so the pairing sheet remains usable.
+        for _ in 0..<3 {
+            model.sceneChanged(.active)
+            try await Task.sleep(nanoseconds: 80_000_000)
+            XCTAssertTrue(model.state.isAuthenticated)
+            XCTAssertNil(model.state.errorMessage)
+        }
     }
 
     @MainActor
@@ -356,6 +429,20 @@ final class AppModelRegressionTests: XCTestCase {
         }
     }
 
+    func testCreateUsesMachineCapabilityWhenProviderCapabilitiesDoNotContainExecution() async throws {
+        let account = TestAccount(profile: TestFixtures.profile, computers: [TestFixtures.computer])
+        await account.setDirectoryAvailable(true)
+        let wire = TestWire(mode: .accept)
+        let client = SupervisorClient(
+            account: account, connector: TestConnector(),
+            sessionProvider: { _, _ in wire }
+        )
+
+        let result = try await client.perform(TestFixtures.pendingCreate, mode: .relay)
+        XCTAssertEqual(result?.target,
+                       .conversation(computerID: TestFixtures.computer.id, conversationID: "conversation_created"))
+    }
+
     @MainActor
     func testExplicitWriteRejectionClearsPendingAndKeepsDraft() async throws {
         let suite = "CodeTether.AppModelRegressionTests.rejection.\(UUID().uuidString)"
@@ -409,6 +496,29 @@ final class AppModelRegressionTests: XCTestCase {
         await TestFixtures.waitForTasks()
         XCTAssertTrue(model.state.pendingActions.isEmpty)
         XCTAssertNotNil(model.state.errorMessage)
+    }
+
+    @MainActor
+    func testRemovedComputerUsesTheComputerThatReportedRevocation() async throws {
+        let suite = "CodeTether.AppModelRegressionTests.removedComputer.(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let account = TestAccount(profile: TestFixtures.profile, computers: [TestFixtures.computer])
+        await account.setDirectoryAvailable(true)
+        let wire = ScriptedWire(outcomes: [.failure("computer_removed")])
+        let model = TabletAppModel(
+            defaults: defaults, account: account,
+            sessionProvider: { _, _ in wire }, initialState: TestFixtures.conversationState
+        )
+        defer { model.sceneChanged(.background) }
+
+        await model.start()
+        model.actions.send("conversation_test", "触发移除")
+        await waitForState(model, description: "removed computer state") { $0.isRemoved }
+
+        XCTAssertEqual(model.state.removedComputerName, TestFixtures.computer.name)
+        XCTAssertEqual(model.state.route, .home)
+        XCTAssertNil(model.state.errorMessage)
     }
 
     func testRetryReusesActionIDAfterConnectionFailure() async throws {
@@ -508,6 +618,15 @@ final class AppModelRegressionTests: XCTestCase {
         XCTFail("Timed out waiting for \(description)")
     }
 
+    private func waitForDirectoryRead(_ account: TestAccount, _ count: Int) async {
+        let deadline = Date().addingTimeInterval(3)
+        while Date() < deadline {
+            if await account.directoryCount() >= count { return }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTFail("Timed out waiting for directory refresh")
+    }
+
     private func waitForMutationCount(_ wire: ScriptedWire, _ count: Int) async {
         let deadline = Date().addingTimeInterval(3)
         while Date() < deadline {
@@ -540,8 +659,9 @@ final class AppModelRegressionTests: XCTestCase {
         let computers: [PairedComputer]
         var directoryAvailable: Bool
         private var directoryDelay: UInt64 = 0
-        private var holdPair = false
         private var directories = 0
+        private var holdPair = false
+        private var pairs = 0
 
         init(profile: AccountProfile, computers: [PairedComputer]) {
             self.profile = profile
@@ -552,7 +672,7 @@ final class AppModelRegressionTests: XCTestCase {
         func restore() async throws -> AccountProfile? { profile }
         func requestSignInCode(email: String) async throws { }
         func verifySignInCode(email: String, code: String) async throws -> AccountProfile { profile }
-        func signOut() async { }
+        func signOut() async throws { }
         func directory() async throws -> [PairedComputer] {
             directories += 1
             if directoryDelay > 0 { try await Task.sleep(nanoseconds: directoryDelay) }
@@ -563,6 +683,7 @@ final class AppModelRegressionTests: XCTestCase {
             throw ClientFailure.computerUnavailable
         }
         func pair(code: String, onClaimed: @Sendable () -> Void) async throws -> PairedComputer {
+            pairs += 1
             if holdPair { try await Task.sleep(nanoseconds: 30_000_000_000) }
             throw ClientFailure.computerUnavailable
         }
@@ -571,6 +692,7 @@ final class AppModelRegressionTests: XCTestCase {
         func setDirectoryDelay(_ delay: UInt64) { directoryDelay = delay }
         func setHoldPair(_ hold: Bool) { holdPair = hold }
         func directoryCount() -> Int { directories }
+        func pairCount() -> Int { pairs }
     }
 
     private actor TestSessionFactory {
@@ -627,12 +749,25 @@ final class AppModelRegressionTests: XCTestCase {
             operations.append(operation)
             if operation == "machine.get" {
                 let providers: [[String: Any]] = [[
-                    "provider": "codex", "availability": "available",
-                    "capabilities": ["providerExecution": true], "executionHealth": ["state": "healthy"]
+                    "provider": "codex", "displayName": "Codex", "availability": "available",
+                    "capabilities": [
+                        "streaming": true, "resume": true, "interrupt": false, "approvals": false,
+                        "fileRead": false, "fileEdit": false, "shell": false, "search": false,
+                        "diff": false, "toolEvents": false, "modelSelection": false, "reasoningControl": false,
+                    ], "executionHealth": ["state": "healthy", "freshness": "current", "observedAt": "2026-01-01T00:00:00Z"]
                 ]]
                 return Self.response([
                     "machineId": "machine_test",
-                    "machine": ["machineId": "machine_test", "displayName": "设备", "platform": "macOS", "architecture": "arm64"],
+                    "machine": [
+                        "machineId": "machine_test", "displayName": "设备", "kind": "remote",
+                        "platform": "macOS", "architecture": "arm64", "availability": "available",
+                        "connectionState": "online", "trustState": "trusted", "isLocal": false,
+                        "createdAt": "2026-01-01T00:00:00Z",
+                        "capabilities": [
+                            "projectAccess": true, "providerExecution": true, "backgroundRuntime": true,
+                            "nativeFolderPicker": false, "notifications": true,
+                        ],
+                    ],
                     "providers": providers,
                 ])
             }
@@ -643,8 +778,14 @@ final class AppModelRegressionTests: XCTestCase {
             if operation == "machine.list" {
                 guard includeWorkspace else { return Self.response(["machines": []]) }
                 return Self.response(["machines": [[
-                    "machineId": "machine_test", "availability": "available", "connectionState": "online",
-                    "isLocal": false, "capabilities": ["projectAccess": true, "providerExecution": true]
+                    "machineId": "machine_test", "displayName": "设备", "kind": "remote",
+                    "platform": "macOS", "architecture": "arm64", "availability": "available",
+                    "connectionState": "online", "trustState": "trusted", "isLocal": false,
+                    "createdAt": "2026-01-01T00:00:00Z",
+                    "capabilities": [
+                        "projectAccess": true, "providerExecution": true, "backgroundRuntime": true,
+                        "nativeFolderPicker": false, "notifications": true,
+                    ]
                 ]]])
             }
             if operation == "project.list" {
@@ -738,6 +879,71 @@ final class AppModelRegressionTests: XCTestCase {
         func close() async { }
     }
 
+    private actor MachineIsolationWire: SupervisorWireSession {
+        nonisolated let transport = "relay"
+        nonisolated let control = true
+        nonisolated let expiresAt = "2099-01-01T00:00:00Z"
+
+        func request(_ json: String) async throws -> String {
+            let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+            let operation = try XCTUnwrap(object["operation"] as? String)
+            switch operation {
+            case "host.bootstrap": return Self.response(["ok": true])
+            case "machine.list":
+                return Self.response(["machines": [
+                    Self.machineRow(id: "machine_good"), Self.machineRow(id: "machine_bad"),
+                ]])
+            case "machine.get":
+                let machineID = try XCTUnwrap(object["machineId"] as? String)
+                if machineID == "machine_bad" {
+                    throw SupervisorWireFailure(code: "invalid_response", status: nil)
+                }
+                return Self.response([
+                    "machine": Self.machineDetail(id: machineID),
+                    "providers": [Self.provider],
+                ])
+            case "project.list":
+                return Self.response(["projects": [[
+                    "projectId": "project_good", "machineId": "machine_good", "name": "项目",
+                ]], "hasMore": false])
+            case "conversation.recent": return Self.response(["conversations": []])
+            case "attention.list": return Self.response(["items": []])
+            default: return Self.response([:])
+            }
+        }
+
+        func close() async { }
+
+        private static let provider: [String: Any] = [
+            "provider": "codex", "displayName": "Codex", "availability": "available",
+            "capabilities": [
+                "streaming": true, "resume": true, "interrupt": false, "approvals": false,
+                "fileRead": false, "fileEdit": false, "shell": false, "search": false,
+                "diff": false, "toolEvents": false, "modelSelection": false, "reasoningControl": false,
+            ],
+            "executionHealth": ["state": "healthy", "freshness": "current", "observedAt": "2026-01-01T00:00:00Z"],
+        ]
+
+        private static func machineRow(id: String) -> [String: Any] {
+            [
+                "machineId": id, "displayName": id == "machine_good" ? "可用设备" : "不可读设备",
+                "kind": "remote", "platform": "macOS", "architecture": "arm64",
+                "availability": "available", "connectionState": "online", "trustState": "trusted",
+                "isLocal": false, "createdAt": "2026-01-01T00:00:00Z",
+                "capabilities": ["projectAccess": true, "providerExecution": true, "backgroundRuntime": true,
+                                  "nativeFolderPicker": false, "notifications": true],
+            ]
+        }
+
+        private static func machineDetail(id: String) -> [String: Any] {
+            machineRow(id: id)
+        }
+
+        private static func response(_ value: [String: Any]) -> String {
+            String(decoding: try! JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]), as: UTF8.self)
+        }
+    }
+
     private final class TestWire: SupervisorWireSession, @unchecked Sendable {
         enum Mode { case accept, reject, failOnce, failThenConflict }
         let mode: Mode
@@ -758,9 +964,22 @@ final class AppModelRegressionTests: XCTestCase {
             let operation = try XCTUnwrap(object["operation"] as? String)
             if delayNanoseconds > 0 { try await Task.sleep(nanoseconds: delayNanoseconds) }
             if operation == "machine.get" {
-                return Self.response(["machineId": "machine_test", "providers": [[
-                    "provider": "codex", "availability": "available",
-                    "capabilities": ["providerExecution": true], "executionHealth": ["state": "healthy"]
+                return Self.response(["machineId": "machine_test", "machine": [
+                    "machineId": "machine_test", "displayName": "设备", "kind": "remote",
+                    "platform": "macOS", "architecture": "arm64", "availability": "available",
+                    "connectionState": "online", "trustState": "trusted", "isLocal": false,
+                    "createdAt": "2026-01-01T00:00:00Z",
+                    "capabilities": [
+                        "projectAccess": true, "providerExecution": true, "backgroundRuntime": true,
+                        "nativeFolderPicker": false, "notifications": true,
+                    ],
+                ], "providers": [[
+                    "provider": "codex", "displayName": "Codex", "availability": "available",
+                    "capabilities": [
+                        "streaming": true, "resume": true, "interrupt": false, "approvals": false,
+                        "fileRead": false, "fileEdit": false, "shell": false, "search": false,
+                        "diff": false, "toolEvents": false, "modelSelection": false, "reasoningControl": false,
+                    ], "executionHealth": ["state": "healthy", "freshness": "current", "observedAt": "2026-01-01T00:00:00Z"]
                 ]]])
             }
             guard let actionID = object["actionId"] as? String else {

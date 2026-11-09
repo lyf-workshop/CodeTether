@@ -50,6 +50,7 @@ enum ClientFailure: Error, LocalizedError {
     case sendCodeFailed
     case verifyCodeFailed
     case signInRequired
+    case sessionStorageFailed
     case requestRateLimited
     case requestFailed
     case invalidResponse
@@ -75,6 +76,7 @@ enum ClientFailure: Error, LocalizedError {
         case .sendCodeFailed: "验证码暂时无法发送，请稍后重试。"
         case .verifyCodeFailed: "验证码不正确或已过期，请检查后重试。"
         case .signInRequired: "登录已过期，请重新登录。"
+        case .sessionStorageFailed: "本地登录信息未能清除，请重新尝试退出。"
         case .requestRateLimited: "尝试次数过多，请稍后再试。"
         case .requestFailed: "暂时无法连接服务，请检查网络后重试。"
         case .invalidResponse: "暂时无法读取，请稍后重试。"

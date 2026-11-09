@@ -62,26 +62,56 @@ protocol TabletAccountService: Sendable {
     func restore() async throws -> AccountProfile?
     func requestSignInCode(email: String) async throws
     func verifySignInCode(email: String, code: String) async throws -> AccountProfile
-    func signOut() async
+    func signOut() async throws
     func directory() async throws -> [PairedComputer]
     func connectContext(computerID: String, mode: TabletConnectionMode) async throws -> SupervisorConnectContext
     func pair(code: String, onClaimed: @Sendable () -> Void) async throws -> PairedComputer
     func remove(computerID: String) async throws
 }
 
+protocol AccountSessionStorage: Sendable {
+    func load() throws -> AccountSession?
+    func save(_ session: AccountSession) throws
+    func clear() throws
+}
+
+extension AccountSessionStore: AccountSessionStorage {}
+
 actor AccountClient: TabletAccountService {
     private let configuration: IpadConfiguration
     private let crypto: IpadMobileCrypto
-    private let sessionStore = AccountSessionStore()
-    private let http = AccountHTTP()
+    private let sessionStore: any AccountSessionStorage
+    private let refreshOverride: (@Sendable (AccountSession) async throws -> AccountSession)?
+    private let logoutOverride: (@Sendable (AccountSession) async -> Void)?
+    private let registrationOverride: (@Sendable (AccountSession) async throws -> RegisteredDevice)?
+    private let http: AccountHTTP
     private var restored = false
     private var accountSession: AccountSession?
     private var registeredDevice: RegisteredDevice?
     private var computersByID: [String: PairedComputer] = [:]
+    private var sessionGeneration = UUID()
+    private var verificationInProgress = false
+    private var refreshTask: (id: UUID, task: Task<AccountSession, Error>)?
+    private var registrationTask: (id: UUID, generation: UUID, task: Task<RegisteredDevice, Error>)?
+    private var loadTask: (id: UUID, task: Task<AccountSession?, Error>)?
+    private var storageTail: Task<Void, Never>?
 
-    init(configuration: IpadConfiguration, crypto: IpadMobileCrypto) {
+    init(
+        configuration: IpadConfiguration,
+        crypto: IpadMobileCrypto,
+        sessionStore: any AccountSessionStorage = AccountSessionStore(),
+        refreshOverride: (@Sendable (AccountSession) async throws -> AccountSession)? = nil,
+        logoutOverride: (@Sendable (AccountSession) async -> Void)? = nil,
+        registrationOverride: (@Sendable (AccountSession) async throws -> RegisteredDevice)? = nil,
+        httpConfiguration: URLSessionConfiguration? = nil
+    ) {
         self.configuration = configuration
         self.crypto = crypto
+        self.sessionStore = sessionStore
+        self.refreshOverride = refreshOverride
+        self.logoutOverride = logoutOverride
+        self.registrationOverride = registrationOverride
+        self.http = AccountHTTP(configuration: httpConfiguration)
     }
 
     func restore() async throws -> AccountProfile? {
@@ -102,17 +132,27 @@ actor AccountClient: TabletAccountService {
         let email = try Self.normalizedEmail(input)
         let code = inputCode.trimmingCharacters(in: .whitespacesAndNewlines)
         guard code.range(of: "^[0-9]{6,10}$", options: .regularExpression) != nil else { throw ClientFailure.invalidCode }
+        guard !verificationInProgress else { throw ClientFailure.requestFailed }
+        verificationInProgress = true
+        defer { verificationInProgress = false }
+        let generation = sessionGeneration
         do {
             let response = try await authRequest("/auth/v1/verify", body: ["email": email, "token": code, "type": "email"])
             let verified = try Self.parseSession(response, fallbackEmail: email)
-            let store = sessionStore
-            try await Task.detached { try store.save(verified) }.value
+            guard generation == sessionGeneration else { throw ClientFailure.signInRequired }
+            try await withSessionStore { try $0.save(verified) }
+            guard generation == sessionGeneration else { throw ClientFailure.signInRequired }
+            sessionGeneration = UUID()
+            refreshTask?.task.cancel()
+            refreshTask = nil
+            registrationTask?.task.cancel()
+            registrationTask = nil
             accountSession = verified
             registeredDevice = nil
             restored = true
             return verified.profile
         } catch let error as HTTPStatusError {
-            throw error.status == 429 ? ClientFailure.requestRateLimited : ClientFailure.verifyCodeFailed
+            throw Self.verificationFailure(status: error.status)
         }
     }
 
@@ -121,15 +161,27 @@ actor AccountClient: TabletAccountService {
         return try await refreshIfNeeded(value)
     }
 
-    func signOut() async {
+    func signOut() async throws {
         let old = accountSession
-        let store = sessionStore
-        do { try await Task.detached { try store.clear() }.value } catch { }
+        sessionGeneration = UUID()
+        refreshTask?.task.cancel()
+        refreshTask = nil
+        registrationTask?.task.cancel()
+        registrationTask = nil
         accountSession = nil
         registeredDevice = nil
         computersByID = [:]
         restored = true
+        do {
+            try await withSessionStore { try $0.clear() }
+        } catch {
+            throw ClientFailure.sessionStorageFailed
+        }
         guard let old else { return }
+        if let logoutOverride {
+            await logoutOverride(old)
+            return
+        }
         do {
             _ = try await authRequest("/auth/v1/logout?scope=local", body: [:], accessToken: old.accessToken)
         } catch { }
@@ -245,44 +297,115 @@ actor AccountClient: TabletAccountService {
 
     private func loadSession() async throws -> AccountSession? {
         if restored { return accountSession }
-        let value = try await Task.detached { try self.sessionStore.load() }.value
+        if let existing = loadTask { return try await existing.task.value }
+        let generation = sessionGeneration
+        let id = UUID()
+        let task = Task { try await self.readSession(generation: generation) }
+        loadTask = (id, task)
+        defer {
+            if loadTask?.id == id { loadTask = nil }
+        }
+        return try await task.value
+    }
+
+    private func readSession(generation: UUID) async throws -> AccountSession? {
+        let value = try await withSessionStore { try $0.load() }
+        guard generation == sessionGeneration else { throw ClientFailure.signInRequired }
         accountSession = value
         restored = true
         return value
     }
 
     private func refreshIfNeeded(_ value: AccountSession) async throws -> AccountSession {
-        if value.expiresAt > Int64(Date().timeIntervalSince1970) + 30 { return value }
+        guard let current = accountSession, current.profile.id == value.profile.id else {
+            throw ClientFailure.signInRequired
+        }
+        if current.expiresAt > Int64(Date().timeIntervalSince1970) + 30 { return current }
+        return try await refreshSession(current)
+    }
+
+    private func refreshSession(_ stale: AccountSession) async throws -> AccountSession {
+        guard let current = accountSession else { throw ClientFailure.signInRequired }
+        guard current.profile.id == stale.profile.id else { throw ClientFailure.signInRequired }
+        if current.accessToken != stale.accessToken,
+           current.expiresAt > Int64(Date().timeIntervalSince1970) + 30 { return current }
+        if let existing = refreshTask { return try await existing.task.value }
+
+        let generation = sessionGeneration
+        let id = UUID()
+        let task = Task { try await self.performRefresh(current, generation: generation) }
+        refreshTask = (id, task)
+        defer {
+            if refreshTask?.id == id { refreshTask = nil }
+        }
+        return try await task.value
+    }
+
+    private func performRefresh(_ value: AccountSession, generation: UUID) async throws -> AccountSession {
         do {
-            let response = try await authRequest(
-                "/auth/v1/token?grant_type=refresh_token", body: ["refresh_token": value.refreshToken]
-            )
-            let next = try Self.parseSession(response, fallbackEmail: value.profile.email)
+            let next: AccountSession
+            if let refreshOverride {
+                next = try await refreshOverride(value)
+            } else {
+                let response = try await authRequest(
+                    "/auth/v1/token?grant_type=refresh_token", body: ["refresh_token": value.refreshToken]
+                )
+                next = try Self.parseSession(response, fallbackEmail: value.profile.email)
+            }
             guard next.profile.id == value.profile.id else { throw ClientFailure.signInRequired }
-            let store = sessionStore
-            try await Task.detached { try store.save(next) }.value
+            guard generation == sessionGeneration else { throw ClientFailure.signInRequired }
+            try await withSessionStore { try $0.save(next) }
+            guard generation == sessionGeneration else { throw ClientFailure.signInRequired }
             accountSession = next
             return next
         } catch let error as HTTPStatusError where [400, 401, 403].contains(error.status) {
-            let store = sessionStore
-            try? await Task.detached { try store.clear() }.value
-            accountSession = nil
-            registeredDevice = nil
+            guard generation == sessionGeneration else { throw ClientFailure.signInRequired }
+            await clearLocalSession()
             throw ClientFailure.signInRequired
+        } catch let error as HTTPStatusError where error.status == 429 {
+            throw ClientFailure.requestRateLimited
+        } catch is HTTPStatusError {
+            throw ClientFailure.requestFailed
+        } catch let error as ClientFailure {
+            if case .signInRequired = error, generation == sessionGeneration { await clearLocalSession() }
+            throw error
         }
     }
 
-    private func ensureRegistered(_ session: AccountSession) async throws -> RegisteredDevice {
+    func ensureRegistered(_ session: AccountSession) async throws -> RegisteredDevice {
         if let current = registeredDevice, current.ownerID == session.profile.id { return current }
+        guard let current = accountSession, current.profile.id == session.profile.id else {
+            throw ClientFailure.signInRequired
+        }
+        if let existing = registrationTask, existing.generation == sessionGeneration {
+            return try await existing.task.value
+        }
+        let generation = sessionGeneration
+        let id = UUID()
+        let task = Task { try await self.performRegistration(session: current, generation: generation) }
+        registrationTask = (id, generation, task)
+        defer {
+            if registrationTask?.id == id { registrationTask = nil }
+        }
+        let device = try await task.value
+        guard generation == sessionGeneration, accountSession?.profile.id == session.profile.id else {
+            throw ClientFailure.signInRequired
+        }
+        registeredDevice = device
+        return device
+    }
+
+    private func performRegistration(session: AccountSession, generation: UUID) async throws -> RegisteredDevice {
+        if let registrationOverride { return try await registrationOverride(session) }
         let accountID = session.profile.id
         let identity = try await Task.detached { try DeviceIdentity.loadOrCreate(accountID: accountID) }.value
+        guard generation == sessionGeneration else { throw ClientFailure.signInRequired }
         let rows = try await requestJSON("/v1/devices", method: "GET", session: session)
         guard let devices = rows["devices"] as? [[String: Any]], devices.count <= 256 else { throw ClientFailure.invalidResponse }
         let matches = devices.filter { $0["fingerprint"] as? String == identity.fingerprint }
         guard matches.count <= 1 else { throw ClientFailure.invalidResponse }
         if let match = matches.first {
             let device = try parseRegisteredDevice(match, identity: identity)
-            registeredDevice = device
             return device
         }
 
@@ -312,7 +435,6 @@ actor AccountClient: TabletAccountService {
         let registered = try parseRegisteredDevice(object, identity: identity)
         guard registered.id == (challenge["candidateDeviceId"] as? String),
               registered.ownerID == (challenge["userId"] as? String) else { throw ClientFailure.invalidResponse }
-        registeredDevice = registered
         return registered
     }
 
@@ -419,6 +541,10 @@ actor AccountClient: TabletAccountService {
         session: AccountSession,
         device: RegisteredDevice? = nil
     ) async throws -> [String: Any] {
+        guard let current = accountSession, current.profile.id == session.profile.id else {
+            throw ClientFailure.signInRequired
+        }
+        let generation = sessionGeneration
         let bytes = try body.map(Self.jsonData) ?? Data()
         var activeSession = session
         for attempt in 0...1 {
@@ -430,56 +556,67 @@ actor AccountClient: TabletAccountService {
                 )
             }
             do {
-                return try await request(
+                let response = try await request(
                     origin: configuration.controlPlaneURL, path: path, method: method,
                     body: body == nil ? nil : bytes, headers: headers
                 )
+                guard generation == sessionGeneration else { throw ClientFailure.signInRequired }
+                return response
             } catch let error as HTTPStatusError where error.status == 401 {
+                guard generation == sessionGeneration else { throw ClientFailure.signInRequired }
                 if attempt == 0 {
                     activeSession = try await refreshAfterUnauthorized(activeSession)
                 } else if AccountUnauthorizedResponseClassifier.disposition(
                     status: error.status, body: error.body, attempt: attempt
                 ) == .clearSession {
+                    guard accountSession?.accessToken == activeSession.accessToken else {
+                        throw ClientFailure.requestFailed
+                    }
                     await clearLocalSession()
                     throw ClientFailure.signInRequired
                 } else {
                     // A device proof failure does not invalidate the human session.
                     throw ClientFailure.requestFailed
                 }
+            } catch let error as HTTPStatusError {
+                throw error.status == 429 ? ClientFailure.requestRateLimited : ClientFailure.requestFailed
             }
         }
         throw ClientFailure.requestFailed
     }
 
     private func refreshAfterUnauthorized(_ stale: AccountSession) async throws -> AccountSession {
-        do {
-            let response = try await authRequest(
-                "/auth/v1/token?grant_type=refresh_token", body: ["refresh_token": stale.refreshToken]
-            )
-            let refreshed = try Self.parseSession(response, fallbackEmail: stale.profile.email)
-            guard refreshed.profile.id == stale.profile.id else { throw ClientFailure.signInRequired }
-            let store = sessionStore
-            try await Task.detached { try store.save(refreshed) }.value
-            accountSession = refreshed
-            return refreshed
-        } catch let error as HTTPStatusError where [400, 401, 403].contains(error.status) {
-            await clearLocalSession()
-            throw ClientFailure.signInRequired
-        } catch let error as HTTPStatusError where error.status == 429 {
-            throw ClientFailure.requestRateLimited
-        } catch let error as ClientFailure {
-            if case .signInRequired = error { await clearLocalSession() }
-            throw error
-        }
+        try await refreshSession(stale)
     }
 
     private func clearLocalSession() async {
-        let store = sessionStore
-        try? await Task.detached { try store.clear() }.value
+        sessionGeneration = UUID()
+        registrationTask?.task.cancel()
+        registrationTask = nil
         accountSession = nil
         registeredDevice = nil
         computersByID = [:]
         restored = true
+        try? await withSessionStore { try $0.clear() }
+    }
+
+    private func withSessionStore<T: Sendable>(
+        _ operation: @escaping @Sendable (any AccountSessionStorage) throws -> T
+    ) async throws -> T {
+        let previous = storageTail
+        let store = sessionStore
+        let task = Task.detached {
+            await previous?.value
+            return try operation(store)
+        }
+        storageTail = Task { _ = try? await task.value }
+        return try await task.value
+    }
+
+    static func verificationFailure(status: Int) -> ClientFailure {
+        if status == 429 { return .requestRateLimited }
+        if [400, 422].contains(status) { return .verifyCodeFailed }
+        return .requestFailed
     }
 
     private func request(
@@ -619,8 +756,8 @@ actor AccountClient: TabletAccountService {
 private final class AccountHTTP: @unchecked Sendable {
     let session: URLSession
 
-    init() {
-        let configuration = URLSessionConfiguration.ephemeral
+    init(configuration supplied: URLSessionConfiguration? = nil) {
+        let configuration = supplied ?? URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 12
         configuration.timeoutIntervalForResource = 15
         configuration.httpShouldSetCookies = false

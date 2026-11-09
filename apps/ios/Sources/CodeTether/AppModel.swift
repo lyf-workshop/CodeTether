@@ -62,6 +62,8 @@ final class TabletAppModel: ObservableObject {
     private var backgroundRefreshID: UUID?
     private var latestRefreshID = UUID()
     private var bootstrapped = false
+    private var restoringSession = false
+    private var lastRestoreAttempt = Date.distantPast
     private let defaults: UserDefaults
     private let injectedAccount: (any TabletAccountService)?
     private let injectedSessionProvider: SupervisorClient.SessionProvider?
@@ -79,6 +81,9 @@ final class TabletAppModel: ObservableObject {
                 account: UITestPendingCreateAccount(),
                 sessionProvider: { _, _ in UITestPendingCreateWire() }
             )
+        }
+        if ProcessInfo.processInfo.arguments.contains("--ui-test-sign-in-fixture") {
+            return TabletAppModel(account: UITestSignInAccount())
         }
         #endif
         return TabletAppModel()
@@ -108,6 +113,7 @@ final class TabletAppModel: ObservableObject {
         if isNewSessionFailureUITest {
             initial.isAuthenticated = true
             initial.computers = Self.newSessionFailureFixture()
+            initial.createSessionErrorMessage = "模拟创建失败，请检查连接后重试。"
         }
         if isPendingCreateUITest {
             initial.isAuthenticated = true
@@ -121,6 +127,9 @@ final class TabletAppModel: ObservableObject {
         var result = TabletViewActions()
         result.requestSignInCode = { [weak self] email in self?.requestSignInCode(email) }
         result.verifySignInCode = { [weak self] email, code in self?.verifySignInCode(email, code) }
+        result.resetSignInCode = { [weak self] in
+            self?.update { $0.codeRequested = false; $0.errorMessage = nil }
+        }
         result.signOut = { [weak self] in self?.signOut() }
         result.pair = { [weak self] code in self?.pair(code) }
         result.cancelPair = { [weak self] in self?.cancelPair() }
@@ -149,16 +158,21 @@ final class TabletAppModel: ObservableObject {
 
     func start() async {
         guard !isNewSessionFailureUITest else { return }
-        guard !bootstrapped else { return }
-        bootstrapped = true
+        guard !bootstrapped, !restoringSession else { return }
+        restoringSession = true
+        lastRestoreAttempt = Date()
+        defer { restoringSession = false }
         let generation = accountGeneration
         do {
             try configureClients()
-            if let profile = try await account?.restore() {
-                guard generation == accountGeneration else { return }
+            let profile = try await account?.restore()
+            guard generation == accountGeneration, !bootstrapped else { return }
+            bootstrapped = true
+            if let profile {
                 update {
                     $0.isAuthenticated = true
                     $0.email = profile.email
+                    $0.errorMessage = nil
                 }
                 setAccount(profile.id)
                 if isPendingCreateUITest {
@@ -168,7 +182,10 @@ final class TabletAppModel: ObservableObject {
                 await refreshSnapshot()
             }
         } catch {
-            guard generation == accountGeneration else { return }
+            guard generation == accountGeneration, !bootstrapped else { return }
+            if let failure = error as? ClientFailure, case .signInRequired = failure {
+                bootstrapped = true
+            }
             show(error)
         }
     }
@@ -216,6 +233,8 @@ final class TabletAppModel: ObservableObject {
     }
 
     private func requestSignInCode(_ email: String) {
+        // An explicit login attempt takes precedence over a pending session restore.
+        bootstrapped = true
         let generation = accountGeneration
         launch { [weak self] in
             guard let self else { return }
@@ -251,6 +270,7 @@ final class TabletAppModel: ObservableObject {
                     let profile = try await self.account?.verifySignInCode(email: email, code: code)
                     guard generation == self.accountGeneration else { return }
                     guard let profile else { throw ClientFailure.invalidResponse }
+                    self.bootstrapped = true
                     self.update {
                         $0.isAuthenticated = true
                         $0.email = profile.email
@@ -258,6 +278,7 @@ final class TabletAppModel: ObservableObject {
                         $0.errorMessage = nil
                     }
                     self.setAccount(profile.id)
+                    if !self.isPendingCreateUITest { self.startPolling() }
                     await self.refreshSnapshot()
                 } catch {
                     guard generation == self.accountGeneration else { return }
@@ -301,6 +322,7 @@ final class TabletAppModel: ObservableObject {
             $0.isPairing = false
             $0.isCheckingConnection = false
             $0.createSessionErrorMessage = nil
+            $0.conversationConnectionMessage = nil
             $0.route = .home
             $0.errorMessage = nil
             $0.isBusy = false
@@ -309,9 +331,15 @@ final class TabletAppModel: ObservableObject {
         // requests may finish after Task.cancel(), so their account epoch is fenced.
         signOutTask = Task { @MainActor [weak self] in
             await oldSupervisor?.clearLocalState()
-            await oldAccount?.signOut()
-            guard let self, generation == self.accountGeneration else { return }
-            self.signOutTask = nil
+            do {
+                try await oldAccount?.signOut()
+                guard let self, generation == self.accountGeneration else { return }
+                self.signOutTask = nil
+            } catch {
+                guard let self, generation == self.accountGeneration else { return }
+                self.signOutTask = nil
+                self.show(error)
+            }
         }
     }
 
@@ -339,6 +367,7 @@ final class TabletAppModel: ObservableObject {
                     self.update { $0.pairingMessage = "已取消等待。" }
                 } catch {
                     guard generation == self.accountGeneration else { return }
+                    if self.handleExpiredAccount(error) { return }
                     self.update { $0.pairingMessage = error.localizedDescription }
                 }
             }
@@ -371,14 +400,21 @@ final class TabletAppModel: ObservableObject {
                     }
                 } catch {
                     guard generation == self.accountGeneration else { return }
-                    self.show(error)
+                    self.show(error, computerID: id)
                 }
             }
         }
     }
 
     private func navigate(_ route: TabletRoute) {
-        update { $0.route = route; $0.errorMessage = nil }
+        update {
+            $0.route = route
+            $0.errorMessage = nil
+            // Diff files belong to one conversation; never show a previous
+            // conversation's count while the next one is loading.
+            $0.changes = []
+            $0.changesLoading = false
+        }
         guard case .conversation(let computerID, let conversationID) = route else {
             update { $0.activeConversation = nil }
             return
@@ -445,15 +481,17 @@ final class TabletAppModel: ObservableObject {
         }
         lastWorkspaceRefresh = Date()
         let generation = accountGeneration
-        await performBusy {
+        await performBusy(updatesBusy: presentError) {
             do {
                 let snapshot = try await supervisor.refresh(mode: self.state.connectionMode)
                 guard generation == self.accountGeneration, snapshotID == self.latestRefreshID else { return }
                 self.apply(snapshot)
             } catch {
                 guard generation == self.accountGeneration, snapshotID == self.latestRefreshID else { return }
-                // Background refreshes stay non-modal while pairing is in
-                // progress. Explicit refreshes show a controlled diagnostic.
+                // Background refreshes must stay non-modal while pairing is in
+                // progress, but an expired account still needs to leave the
+                // authenticated state immediately.
+                if self.handleExpiredAccount(error) { return }
                 if presentError {
                     self.update {
                         $0.connectionStatus = "检查失败"
@@ -492,10 +530,10 @@ final class TabletAppModel: ObservableObject {
                     computerID: computerID, conversationID: conversationID, mode: self.state.connectionMode
                 )
                 guard generation == self.accountGeneration else { return }
-                if let detail { self.update { $0.activeConversation = detail } }
+                if let detail { self.update { $0.activeConversation = detail; $0.conversationConnectionMessage = nil } }
             } catch {
                 guard generation == self.accountGeneration else { return }
-                self.show(error)
+                    self.show(error, computerID: computerID)
             }
         }
     }
@@ -529,6 +567,7 @@ final class TabletAppModel: ObservableObject {
             }
         }
     }
+
 
     private func send(conversationID: String, text: String) {
         guard let detail = state.activeConversation, detail.summary.id == conversationID else { return }
@@ -604,6 +643,7 @@ final class TabletAppModel: ObservableObject {
             }
         } catch {
             guard generation == accountGeneration, action.accountID == currentAccountID else { return }
+            if handleExpiredAccount(error) { return }
             let explicitlyRejected = SupervisorClient.isExplicitWriteRejection(error)
             let uncertain = (error as? SupervisorClientError)?.uncertainActionID == action.actionID
             let definite = SupervisorClient.isDefiniteWriteFailure(error)
@@ -615,7 +655,7 @@ final class TabletAppModel: ObservableObject {
             case .createConversation:
                 update { $0.createSessionErrorMessage = error.localizedDescription }
             case .sendTurn:
-                show(error)
+                show(error, computerID: action.computerID)
             }
         }
     }
@@ -726,7 +766,7 @@ final class TabletAppModel: ObservableObject {
                 self.loadConversation(computerID: detail.summary.computerID, conversationID: conversationID)
             } catch {
                 guard generation == self.accountGeneration else { return }
-                self.show(error)
+                self.show(error, computerID: detail.summary.computerID)
             }
         }
     }
@@ -744,7 +784,7 @@ final class TabletAppModel: ObservableObject {
                 await self.refreshSnapshot()
             } catch {
                 guard generation == self.accountGeneration else { return }
-                self.show(error)
+                self.show(error, computerID: computerID)
             }
         }
     }
@@ -769,7 +809,7 @@ final class TabletAppModel: ObservableObject {
                 self.update { $0.changes = files }
             } catch {
                 guard generation == self.accountGeneration else { return }
-                self.show(error)
+                self.show(error, computerID: computerID)
             }
         }
     }
@@ -828,6 +868,9 @@ final class TabletAppModel: ObservableObject {
     }
 
     private func pollForeground() async {
+        if !bootstrapped && Date().timeIntervalSince(lastRestoreAttempt) >= 10 {
+            await start()
+        }
         guard state.isAuthenticated else { return }
         let generation = accountGeneration
         if case .conversation(let computerID, let conversationID) = state.route {
@@ -836,11 +879,21 @@ final class TabletAppModel: ObservableObject {
                     computerID: computerID, conversationID: conversationID, mode: state.connectionMode
                 ) {
                     guard generation == accountGeneration else { return }
-                    update { $0.activeConversation = detail; $0.attentions = merge($0.attentions, detail.attentions) }
+                    update {
+                        $0.activeConversation = detail
+                        $0.attentions = merge($0.attentions, detail.attentions)
+                        $0.conversationConnectionMessage = nil
+                    }
                 }
             } catch {
                 guard generation == accountGeneration else { return }
-                show(error)
+                if handleExpiredAccount(error) {
+                    return
+                } else if isAuthorizationRevoked(error) {
+                    show(error, computerID: computerID)
+                } else {
+                    update { $0.conversationConnectionMessage = "连不上这台电脑，正在重试。" }
+                }
             }
         }
         guard generation == accountGeneration else { return }
@@ -855,12 +908,14 @@ final class TabletAppModel: ObservableObject {
         return Array(values.values)
     }
 
-    private func performBusy(_ operation: () async -> Void) async {
+    private func performBusy(updatesBusy: Bool = true, _ operation: () async -> Void) async {
         let generation = accountGeneration
-        busyCount += 1
-        update { $0.isBusy = true }
+        if updatesBusy {
+            busyCount += 1
+            update { $0.isBusy = true }
+        }
         defer {
-            if generation == accountGeneration {
+            if updatesBusy, generation == accountGeneration {
                 busyCount -= 1
                 update { $0.isBusy = busyCount > 0 }
             }
@@ -868,27 +923,82 @@ final class TabletAppModel: ObservableObject {
         await operation()
     }
 
-    private func show(_ error: Error) {
-        let authorizationWasRevoked: Bool
-        if let failure = error as? SupervisorClientError {
-            authorizationWasRevoked = failure.code == "computer_removed" ||
-                (failure.code == "authorization_revoked" && failure.status == 409)
-        } else if let failure = error as? ClientFailure, case .computerRemoved = failure {
-            authorizationWasRevoked = true
-        } else {
-            authorizationWasRevoked = false
-        }
-        if authorizationWasRevoked {
+    private func show(_ error: Error, computerID: String? = nil) {
+        if handleExpiredAccount(error) { return }
+        if isAuthorizationRevoked(error) {
+            let removedName = computerID.flatMap { id in
+                state.computers.first(where: { computer in computer.id == id })?.name
+            } ?? state.computers.first(where: { !$0.available })?.name ?? ""
             update {
                 $0.isRemoved = true
-                $0.removedComputerName = $0.computers.first(where: { !$0.available })?.name ?? ""
+                $0.removedComputerName = removedName
                 $0.activeConversation = nil
-                $0.route = .devices
+                $0.route = .home
                 $0.errorMessage = nil
             }
             return
         }
         update { $0.errorMessage = error.localizedDescription }
+    }
+
+    private func isAuthorizationRevoked(_ error: Error) -> Bool {
+        if let failure = error as? SupervisorClientError {
+            return failure.code == "computer_removed" ||
+                (failure.code == "authorization_revoked" && failure.status == 409)
+        }
+        if let failure = error as? ClientFailure, case .computerRemoved = failure { return true }
+        return false
+    }
+
+    private func handleExpiredAccount(_ error: Error) -> Bool {
+        guard state.isAuthenticated, let failure = error as? ClientFailure,
+              case .signInRequired = failure else { return false }
+        expireAccountSession()
+        return true
+    }
+
+    private func expireAccountSession() {
+        accountGeneration = UUID()
+        let generation = accountGeneration
+        pairingTask?.cancel()
+        pairingTask = nil
+        for task in operationTasks.values { task.cancel() }
+        operationTasks.removeAll()
+        inFlightActionIDs.removeAll()
+        busyCount = 0
+        backgroundRefreshID = nil
+        currentAccountID = nil
+        let oldSupervisor = supervisor
+        account = nil
+        supervisor = nil
+        bootstrapped = true
+        update {
+            $0.isAuthenticated = false
+            $0.email = ""
+            $0.codeRequested = false
+            $0.computers = []
+            $0.attentions = []
+            $0.activeConversation = nil
+            $0.conversationDrafts = [:]
+            $0.pendingActions = [:]
+            $0.changes = []
+            $0.changesLoading = false
+            $0.searchResults = []
+            $0.pairingMessage = nil
+            $0.isPairing = false
+            $0.isCheckingConnection = false
+            $0.createSessionErrorMessage = nil
+            $0.conversationConnectionMessage = nil
+            $0.isRemoved = false
+            $0.route = .home
+            $0.isBusy = false
+            $0.errorMessage = ClientFailure.signInRequired.localizedDescription
+        }
+        signOutTask = Task { @MainActor [weak self] in
+            await oldSupervisor?.clearLocalState()
+            guard let self, generation == self.accountGeneration else { return }
+            self.signOutTask = nil
+        }
     }
 
     private func launch(_ operation: @escaping @MainActor () async -> Void) {

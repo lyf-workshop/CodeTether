@@ -15,8 +15,7 @@ final class NewSessionFailureUITests: XCTestCase {
         input.tap()
         input.typeText("first sentence for UI regression")
         app.buttons["new-session-create"].tap()
-
-        XCTAssertTrue(app.staticTexts["new-session-error"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "new-session-error").firstMatch.waitForExistence(timeout: 5))
         XCTAssertTrue(input.exists)
         XCTAssertEqual(input.value as? String, "first sentence for UI regression")
         XCTAssertTrue(app.buttons["new-session-create"].exists)

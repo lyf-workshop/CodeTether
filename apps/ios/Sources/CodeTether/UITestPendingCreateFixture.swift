@@ -48,7 +48,7 @@ actor UITestPendingCreateAccount: TabletAccountService {
     func verifySignInCode(email: String, code: String) async throws -> AccountProfile {
         UITestPendingCreateFixture.account
     }
-    func signOut() async { }
+    func signOut() async throws { }
     func directory() async throws -> [PairedComputer] { [UITestPendingCreateFixture.computer] }
     func connectContext(computerID: String, mode: TabletConnectionMode) async throws -> SupervisorConnectContext {
         throw ClientFailure.computerUnavailable
@@ -75,18 +75,34 @@ actor UITestPendingCreateWire: SupervisorWireSession {
         case "machine.list":
             return Self.response(["machines": [[
                 "machineId": UITestPendingCreateFixture.machineID,
-                "availability": "available", "connectionState": "online", "isLocal": false,
-                "capabilities": ["projectAccess": true, "providerExecution": true]
+                "displayName": "验收测试设备", "kind": "remote",
+                "platform": "iPadOS", "architecture": "arm64",
+                "availability": "available", "connectionState": "online", "trustState": "trusted",
+                "isLocal": false, "createdAt": "2026-01-01T00:00:00Z",
+                "capabilities": [
+                    "projectAccess": true, "providerExecution": true, "backgroundRuntime": true,
+                    "nativeFolderPicker": false, "notifications": true,
+                ]
             ]]])
         case "machine.get":
             return Self.response([
                 "machine": [
                     "machineId": UITestPendingCreateFixture.machineID, "displayName": "验收测试设备",
-                    "platform": "iPadOS", "architecture": "arm64"
+                    "kind": "remote", "platform": "iPadOS", "architecture": "arm64",
+                    "availability": "available", "connectionState": "online", "trustState": "trusted",
+                    "isLocal": false, "createdAt": "2026-01-01T00:00:00Z",
+                    "capabilities": [
+                        "projectAccess": true, "providerExecution": true, "backgroundRuntime": true,
+                        "nativeFolderPicker": false, "notifications": true,
+                    ]
                 ],
                 "providers": [[
                     "provider": "codex", "displayName": "Codex", "availability": "available",
-                    "capabilities": ["providerExecution": true], "executionHealth": ["state": "healthy"]
+                    "capabilities": [
+                        "streaming": true, "resume": true, "interrupt": false, "approvals": false,
+                        "fileRead": false, "fileEdit": false, "shell": false, "search": false,
+                        "diff": false, "toolEvents": false, "modelSelection": false, "reasoningControl": false,
+                    ], "executionHealth": ["state": "healthy", "freshness": "current", "observedAt": "2026-01-01T00:00:00Z"]
                 ]]
             ])
         case "project.list":

@@ -8,18 +8,19 @@ enum TabletRoute: Hashable {
     case project(computerID: String, projectID: String)
     case conversation(computerID: String, conversationID: String)
     case settings
+    case connectionCheck
 }
 
 enum TabletSheet: Identifiable, Hashable {
     case pair
-    case createSession
+    case createSession(projectID: String? = nil)
     case search
     case removeComputer(String)
 
     var id: String {
         switch self {
         case .pair: "pair"
-        case .createSession: "create-session"
+        case .createSession(let projectID): "create-session-\(projectID ?? "all")"
         case .search: "search"
         case .removeComputer(let id): "remove-\(id)"
         }
@@ -69,11 +70,14 @@ struct TabletViewState {
     var connectionStatus = ""
     var connectionTransport = ""
     var connectionDiagnostic = ""
+    /// A non-modal status shown only while the foreground conversation poll is retrying.
+    var conversationConnectionMessage: String?
 }
 
 struct TabletViewActions {
     var requestSignInCode: (String) -> Void = { _ in }
     var verifySignInCode: (String, String) -> Void = { _, _ in }
+    var resetSignInCode: () -> Void = {}
     var signOut: () -> Void = {}
     var pair: (String) -> Void = { _ in }
     var cancelPair: () -> Void = {}
@@ -122,6 +126,29 @@ struct TabletMachine: Identifiable {
     let projects: [TabletProject]
     let recent: [TabletConversationSummary]
     let providers: [TabletProvider]
+    let unavailableReason: String?
+
+    init(
+        id: String,
+        name: String,
+        platform: String,
+        status: String,
+        isLocal: Bool,
+        projects: [TabletProject],
+        recent: [TabletConversationSummary],
+        providers: [TabletProvider],
+        unavailableReason: String? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.platform = platform
+        self.status = status
+        self.isLocal = isLocal
+        self.projects = projects
+        self.recent = recent
+        self.providers = providers
+        self.unavailableReason = unavailableReason
+    }
 }
 
 struct TabletProject: Identifiable {
@@ -237,20 +264,22 @@ struct TabletDiffLine: Identifiable {
 }
 
 struct TabletRootView: View {
-    let state: TabletViewState
-    let actions: TabletViewActions
+    @ObservedObject var model: TabletAppModel
 
     @State private var sidebarVisible = false
     @State private var activeSheet: TabletSheet?
     @State private var changesVisible = false
     @State private var sidebarSearch = ""
 
+    private var state: TabletViewState { model.state }
+    private var actions: TabletViewActions { model.actions }
+
     var body: some View {
         GeometryReader { geometry in
             let compact = geometry.size.width < 900
             ZStack(alignment: .leading) {
                 HStack(spacing: 0) {
-                    if !compact {
+                    if !compact && !changesVisible {
                         TabletSidebar(state: state, actions: actions, searchText: $sidebarSearch) {
                             activeSheet = .search
                         }
@@ -262,14 +291,19 @@ struct TabletRootView: View {
                         TabletToolbar(
                             title: toolbarTitle,
                             subtitle: toolbarSubtitle,
-                            showsSidebarButton: compact,
+                            showsSidebarButton: state.isAuthenticated && (compact || changesVisible || !sidebarVisible),
+                            showsBackButton: state.route == .connectionCheck,
                             isConversation: isConversation,
                             canViewChanges: state.activeConversation?.canViewChanges == true,
+                            changesCount: state.changes.count,
                             canArchive: state.activeConversation?.canArchive == true,
+                            showsCreateSession: canCreateSession,
                             onSidebar: { withAnimation(.easeInOut(duration: 0.2)) { sidebarVisible.toggle() } },
                             onChanges: openChanges,
                             onArchive: archiveCurrent,
-                            onCreate: { activeSheet = .createSession }
+                            onCreate: { presentCreateSession() },
+                            onSubtitle: navigateToConversationProject,
+                            onBack: { actions.navigate(.settings) }
                         )
                         .background(.ultraThinMaterial)
 
@@ -284,7 +318,7 @@ struct TabletRootView: View {
                     }
                 }
 
-                if compact && sidebarVisible && state.isAuthenticated && !state.isRemoved {
+                if ((compact && sidebarVisible) || (!compact && changesVisible && sidebarVisible)) && state.isAuthenticated {
                     Color.black.opacity(0.26)
                         .ignoresSafeArea()
                         .onTapGesture { withAnimation(.easeInOut(duration: 0.2)) { sidebarVisible = false } }
@@ -314,15 +348,16 @@ struct TabletRootView: View {
             .animation(.easeInOut(duration: 0.2), value: changesVisible)
             .animation(.easeInOut(duration: 0.2), value: sidebarVisible)
             .onChange(of: geometry.size.width) { width in
-                sidebarVisible = width >= 900
+                if !changesVisible { sidebarVisible = width >= 900 }
             }
             .onAppear {
                 sidebarVisible = geometry.size.width >= 900
             }
             .sheet(item: $activeSheet) { sheet in
-                TabletSheetContent(sheet: sheet, state: state, actions: actions) {
+                TabletSheetContent(sheet: sheet, model: model) {
                     activeSheet = nil
                 }
+                .id(sheet.id)
                 .presentationDetents(sheet == .search ? [.medium, .large] : [.large])
                 .presentationDragIndicator(.visible)
             }
@@ -331,7 +366,7 @@ struct TabletRootView: View {
         .tint(TabletColors.accent)
         .onReceive(NotificationCenter.default.publisher(for: .tabletNewSessionShortcut)) { _ in
             guard state.isAuthenticated, !state.isRemoved else { return }
-            activeSheet = .createSession
+            activeSheet = .createSession()
         }
         .onReceive(NotificationCenter.default.publisher(for: .tabletSearchShortcut)) { _ in
             guard state.isAuthenticated, !state.isRemoved else { return }
@@ -351,14 +386,14 @@ struct TabletRootView: View {
     private var routeContent: some View {
         if !state.isAuthenticated {
             TabletSignInPage(state: state, actions: actions)
-        } else if state.isRemoved {
-            TabletRemovedPage(computerName: state.removedComputerName) {
-                activeSheet = .pair
-            }
         } else {
             switch state.route {
             case .home:
-                TabletHomePage(state: state, actions: actions)
+                TabletHomePage(state: state, actions: actions, removedComputerName: state.isRemoved ? state.removedComputerName : nil) {
+                    activeSheet = .pair
+                } onOtherComputers: {
+                    actions.navigate(.devices)
+                }
             case .inbox:
                 TabletInboxPage(state: state, actions: actions)
             case .devices:
@@ -376,7 +411,9 @@ struct TabletRootView: View {
                     onShowChanges: openChanges
                 )
             case .settings:
-                TabletSettingsPage(state: state, actions: actions) { activeSheet = $0 }
+                TabletSettingsPage(state: state, actions: actions, present: { activeSheet = $0 })
+            case .connectionCheck:
+                TabletConnectionPage(state: state, mode: state.connectionMode, onMode: actions.setConnectionMode, onRefresh: actions.refresh)
             }
         }
     }
@@ -394,6 +431,23 @@ struct TabletRootView: View {
         return false
     }
 
+    private var canCreateSession: Bool {
+        switch state.route {
+        case .home: return true
+        case .device(let computerID, let machineID):
+            guard let computer = state.computers.first(where: { $0.id == computerID }),
+                  let machine = computer.machines.first(where: { $0.id == machineID }) else { return false }
+            return computer.available && (machine.status == "online" || machine.status == "local") &&
+                machine.projects.contains(where: \.available)
+        case .project(let computerID, let projectID):
+            guard let computer = state.computers.first(where: { $0.id == computerID }),
+                  let project = computer.machines.flatMap(\.projects).first(where: { $0.id == projectID }),
+                  let machine = computer.machines.first(where: { $0.id == project.machineID }) else { return false }
+            return computer.available && project.available && (machine.status == "online" || machine.status == "local")
+        case .devices, .inbox, .conversation, .settings, .connectionCheck: return false
+        }
+    }
+
     private var toolbarTitle: String {
         guard isConversation, let detail = state.activeConversation else {
             return switch state.route {
@@ -402,6 +456,7 @@ struct TabletRootView: View {
             case .devices, .device(_, _): "设备"
             case .project(_, _): "项目"
             case .settings: "设置"
+            case .connectionCheck: "连接检查"
             case .conversation(_, _): "会话"
             }
         }
@@ -421,11 +476,34 @@ struct TabletRootView: View {
         if let detail = state.activeConversation { actions.loadChanges(detail.summary.id) }
     }
 
+    private func presentCreateSession(preferredProjectID: String? = nil) {
+        let projectID: String?
+        if let preferredProjectID {
+            projectID = preferredProjectID
+        } else {
+            switch state.route {
+            case .project(_, let id): projectID = id
+            case .device(let computerID, let machineID):
+                projectID = state.computers.first(where: { $0.id == computerID })?.machines
+                    .first(where: { $0.id == machineID })?.projects
+                    .first(where: { $0.available })?.id
+            default: projectID = nil
+            }
+        }
+        activeSheet = .createSession(projectID: projectID)
+    }
+
     private func closeChanges() { changesVisible = false }
 
     private func archiveCurrent() {
         guard let detail = state.activeConversation, detail.canArchive else { return }
         actions.archive(detail.summary.id)
+    }
+
+    private func navigateToConversationProject() {
+        guard case .conversation(let computerID, _) = state.route,
+              let detail = state.activeConversation else { return }
+        actions.navigate(.project(computerID: computerID, projectID: detail.summary.projectID))
     }
 }
 
@@ -446,17 +524,30 @@ private struct TabletToolbar: View {
     let title: String
     let subtitle: String?
     let showsSidebarButton: Bool
+    let showsBackButton: Bool
     let isConversation: Bool
     let canViewChanges: Bool
+    let changesCount: Int
     let canArchive: Bool
+    let showsCreateSession: Bool
     let onSidebar: () -> Void
     let onChanges: () -> Void
     let onArchive: () -> Void
     let onCreate: () -> Void
+    let onSubtitle: () -> Void
+    let onBack: () -> Void
 
     var body: some View {
         HStack(spacing: 12) {
-            if showsSidebarButton {
+            if showsBackButton {
+                Button(action: onBack) {
+                    Label("设置", systemImage: "chevron.left")
+                        .font(.system(size: 15, weight: .medium))
+                        .frame(minHeight: 44)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("返回设置")
+            } else if showsSidebarButton {
                 Button(action: onSidebar) {
                     Image(systemName: "sidebar.left")
                         .font(.system(size: 18, weight: .medium))
@@ -472,19 +563,23 @@ private struct TabletToolbar: View {
                 VStack(spacing: 2) {
                     Text(title).font(.headline).lineLimit(1)
                     if let subtitle {
-                        Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        Button(action: onSubtitle) {
+                            Text(subtitle).font(.caption).foregroundStyle(TabletColors.link).lineLimit(1)
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
                 .frame(maxWidth: 680)
                 Spacer(minLength: 4)
                 if canViewChanges {
                     Button(action: onChanges) {
-                        Image(systemName: "rectangle.split.2x1")
-                            .font(.system(size: 17, weight: .medium))
-                            .frame(width: 44, height: 44)
+                        Label("变更 \(changesCount)", systemImage: "rectangle.split.2x1")
+                            .font(.system(size: 15, weight: .semibold))
+                            .padding(.horizontal, 12)
+                            .frame(minHeight: 44)
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel("查看变更")
+                    .accessibilityLabel("变更 \(changesCount)")
                 }
                 if canArchive {
                     Menu {
@@ -501,7 +596,7 @@ private struct TabletToolbar: View {
                     .font(.headline)
                     .lineLimit(1)
                 Spacer(minLength: 4)
-                if title == "最近的会话" {
+                if showsCreateSession {
                     Button(action: onCreate) {
                         Label("新建会话", systemImage: "plus")
                             .font(.system(size: 15, weight: .semibold))
@@ -605,7 +700,7 @@ private struct TabletSidebar: View {
             }
 
             Divider()
-            SidebarNavigationRow(title: "设置", icon: "gearshape", selected: state.route == .settings) {
+            SidebarNavigationRow(title: "设置", icon: "gearshape", selected: state.route == .settings || state.route == .connectionCheck) {
                 actions.navigate(.settings)
             }
             .padding(.horizontal, 8)
@@ -745,7 +840,7 @@ private struct SidebarMachineGroup: View {
     private func machineSubtitle(computer: TabletComputer, machine: TabletMachine) -> String {
         let online = machine.status == "online" || machine.status == "local"
         let route = machine.isLocal ? nil : "经由 \(computer.name)"
-        return [online ? "在线" : "离线", route].compactMap { $0 }.joined(separator: " · ")
+        return [machine.unavailableReason ?? (online ? "在线" : "离线"), route].compactMap { $0 }.joined(separator: " · ")
     }
 }
 
@@ -810,12 +905,35 @@ private struct SidebarProjectGroup: View {
 private struct TabletHomePage: View {
     let state: TabletViewState
     let actions: TabletViewActions
+    let removedComputerName: String?
+    let onPair: () -> Void
+    let onOtherComputers: () -> Void
 
     private var openItems: [TabletAttention] { state.attentions }
 
     var body: some View {
         TabletPageScroll {
             TabletPageTitle(title: "最近的会话", subtitle: "所有电脑和设备上的会话，按设备分组。")
+            if let removedComputerName {
+                VStack(alignment: .leading, spacing: 10) {
+                    Label("电脑已移除这台 iPad", systemImage: "exclamationmark.triangle.fill")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(TabletColors.failure)
+                    if !removedComputerName.isEmpty {
+                        Text(removedComputerName).font(.system(size: 14, weight: .medium))
+                    }
+                    Text("重新输入电脑上的配对码，或查看其他电脑。")
+                        .font(.system(size: 13)).foregroundStyle(.secondary)
+                    HStack(spacing: 10) {
+                        Button("输入配对码", action: onPair).buttonStyle(TabletPrimaryButtonStyle())
+                        Button("看其他电脑", action: onOtherComputers).buttonStyle(TabletSecondaryButtonStyle())
+                    }
+                }
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Color.red.opacity(0.2)))
+            }
             if !openItems.isEmpty {
                 TabletSectionTitle(title: "需要你处理", count: openItems.count)
                 VStack(spacing: 0) {
@@ -825,6 +943,24 @@ private struct TabletHomePage: View {
                             if let conversationID = item.conversationID {
                                 actions.navigate(.conversation(computerID: item.computerID, conversationID: conversationID))
                             }
+                        }
+                    }
+                }
+                .tabletCard()
+            }
+
+            let runningItems = state.computers.flatMap { computer in
+                computer.machines.flatMap { machine in
+                    machine.recent.filter { !$0.isArchived && ["running", "starting", "waiting"].contains($0.status) }
+                }
+            }
+            if !runningItems.isEmpty {
+                TabletSectionTitle(title: "正在运行", count: runningItems.count)
+                VStack(spacing: 0) {
+                    ForEach(Array(runningItems.prefix(8).enumerated()), id: \.element.id) { index, session in
+                        if index > 0 { Divider().padding(.leading, 16) }
+                        TabletConversationRow(session: session) {
+                            actions.navigate(.conversation(computerID: session.computerID, conversationID: session.id))
                         }
                     }
                 }
@@ -871,7 +1007,7 @@ private struct TabletHomePage: View {
 
     private func machineSubtitle(_ computer: TabletComputer, _ machine: TabletMachine) -> String {
         let online = machine.status == "online" || machine.status == "local"
-        return [online ? "在线" : "离线", machine.isLocal ? nil : "经由 \(computer.name)"].compactMap { $0 }.joined(separator: " · ")
+        return [machine.unavailableReason ?? (online ? "在线" : "离线"), machine.isLocal ? nil : "经由 \(computer.name)"].compactMap { $0 }.joined(separator: " · ")
     }
 }
 
@@ -971,7 +1107,7 @@ private struct TabletDevicesPage: View {
                                             .font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
                                     }
                                     Spacer()
-                                    StatusLabel(text: machineStatus(machine.status), color: machine.status == "online" || machine.status == "local" ? TabletColors.success : .secondary)
+                                    StatusLabel(text: machine.unavailableReason ?? machineStatus(machine.status), color: machine.status == "online" || machine.status == "local" ? TabletColors.success : .secondary)
                                     Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold)).foregroundStyle(.tertiary)
                                 }
                                 .padding(.horizontal, 16).frame(minHeight: 64).contentShape(Rectangle())
@@ -1000,7 +1136,9 @@ private struct TabletDevicePage: View {
         TabletPageScroll {
             TabletPageTitle(title: machine?.name ?? "设备", subtitle: machine.map { "\($0.platform) · \(machineStatus($0.status))" })
             if let computer, let machine {
-                if !computer.available || !(machine.status == "online" || machine.status == "local") {
+                if let reason = machine.unavailableReason {
+                    TabletInlineNotice(text: reason, symbol: "exclamationmark.triangle")
+                } else if !computer.available || !(machine.status == "online" || machine.status == "local") {
                     TabletInlineNotice(text: "这台电脑现在连不上，请确认它开着并且联网。", symbol: "wifi.slash")
                 }
                 TabletSectionTitle(title: "项目", count: machine.projects.count)
@@ -1133,6 +1271,13 @@ private struct TabletProjectPage: View {
     }
 }
 
+private struct ConversationScrollBottomKey: PreferenceKey {
+    static let defaultValue: CGFloat = .greatestFiniteMagnitude
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
 private struct TabletConversationPage: View {
     let state: TabletViewState
     let computerID: String
@@ -1140,6 +1285,11 @@ private struct TabletConversationPage: View {
     let actions: TabletViewActions
     let onShowChanges: () -> Void
     @FocusState private var composerFocused: Bool
+    @State private var isAtBottom = true
+    @State private var hasNewMessages = false
+    @State private var scrollViewportHeight: CGFloat = 0
+    @State private var showStopConfirmation = false
+    @State private var scrollToBottomToken = 0
 
     private var draft: String { state.conversationDrafts[conversationID] ?? "" }
     private var draftBinding: Binding<String> {
@@ -1158,9 +1308,10 @@ private struct TabletConversationPage: View {
         Group {
             if let detail {
                 VStack(spacing: 0) {
-                    ScrollViewReader { proxy in
-                        ScrollView {
-                            LazyVStack(alignment: .leading, spacing: 14) {
+                    GeometryReader { viewport in
+                        ScrollViewReader { proxy in
+                            ScrollView {
+                                LazyVStack(alignment: .leading, spacing: 14) {
                                 HStack {
                                     Spacer()
                                     StatusLabel(text: conversationStatus(detail), color: statusColor(detail.summary.status))
@@ -1168,6 +1319,10 @@ private struct TabletConversationPage: View {
                                     Spacer()
                                 }
                                 .padding(.top, 12)
+
+                                if let message = state.conversationConnectionMessage {
+                                    TabletInlineNotice(text: message, symbol: "wifi.exclamationmark")
+                                }
 
                                 if let cursor = detail.olderCursor {
                                     Button("加载更早的会话") { actions.loadOlder(conversationID, cursor) }
@@ -1186,15 +1341,55 @@ private struct TabletConversationPage: View {
                                     TabletFailureCard(message: failure)
                                 }
                                 Color.clear.frame(height: 1).id("bottom")
+                                    .background(GeometryReader { geometry in
+                                        Color.clear.preference(
+                                            key: ConversationScrollBottomKey.self,
+                                            value: geometry.frame(in: .named("conversation-scroll")).maxY
+                                        )
+                                    })
                             }
                             .frame(maxWidth: 760)
                             .frame(maxWidth: .infinity)
                             .padding(.horizontal, 20)
                             .padding(.bottom, 18)
                         }
+                        .coordinateSpace(name: "conversation-scroll")
+                        .onPreferenceChange(ConversationScrollBottomKey.self) { bottom in
+                            let atBottom = bottom <= scrollViewportHeight + 28
+                            isAtBottom = atBottom
+                            if atBottom { hasNewMessages = false }
+                        }
                         .onChange(of: detail.messages.count) { _ in
+                            if isAtBottom {
+                                withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("bottom", anchor: .bottom) }
+                            } else {
+                                hasNewMessages = true
+                            }
+                        }
+                        .onChange(of: scrollToBottomToken) { _ in
                             withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("bottom", anchor: .bottom) }
                         }
+                        .onAppear {
+                            scrollViewportHeight = viewport.size.height
+                            DispatchQueue.main.async {
+                                proxy.scrollTo("bottom", anchor: .bottom)
+                                isAtBottom = true
+                            }
+                        }
+                        .onChange(of: viewport.size.height) { height in
+                            scrollViewportHeight = height
+                        }
+                    }
+                    }
+
+                    if hasNewMessages {
+                        Button("有新消息 · 回到最新") {
+                            hasNewMessages = false
+                            isAtBottom = true
+                            scrollToBottomToken &+= 1
+                        }
+                        .buttonStyle(TabletSecondaryButtonStyle())
+                        .padding(.vertical, 6)
                     }
 
                     if let pending = state.pendingActions[.send(conversationID: conversationID)] {
@@ -1221,10 +1416,10 @@ private struct TabletConversationPage: View {
                             .padding(.horizontal, 14)
                             .padding(.vertical, 11)
                             .background(TabletColors.card, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-                            .disabled(!detail.canSend || state.isBusy)
+                            .disabled(!detail.canSend || state.pendingActions[.send(conversationID: conversationID)] != nil)
                             .accessibilityIdentifier("conversation-composer")
-                        if detail.isRunning, detail.canInterrupt, let turnID = detail.currentTurnID {
-                            Button { actions.interrupt(conversationID, turnID) } label: {
+                        if detail.isRunning, detail.canInterrupt, detail.currentTurnID != nil {
+                            Button { showStopConfirmation = true } label: {
                                 Image(systemName: "stop.fill").frame(width: 44, height: 44)
                             }
                             .buttonStyle(TabletIconButtonStyle())
@@ -1238,8 +1433,8 @@ private struct TabletConversationPage: View {
                                     .background(TabletColors.accent, in: Circle())
                             }
                             .buttonStyle(.plain)
-                            .disabled(!detail.canSend || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || state.isBusy || state.pendingActions[.send(conversationID: conversationID)] != nil)
-                            .opacity(!detail.canSend || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || state.isBusy || state.pendingActions[.send(conversationID: conversationID)] != nil ? 0.45 : 1)
+                            .disabled(!detail.canSend || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || state.pendingActions[.send(conversationID: conversationID)] != nil)
+                            .opacity(!detail.canSend || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || state.pendingActions[.send(conversationID: conversationID)] != nil ? 0.45 : 1)
                             .accessibilityLabel("发送")
                             .accessibilityIdentifier("conversation-send")
                             .keyboardShortcut(.return, modifiers: .command)
@@ -1253,6 +1448,21 @@ private struct TabletConversationPage: View {
                 }
                 .background(TabletColors.grouped)
                 .onAppear { composerFocused = false }
+                .confirmationDialog("确认停止这轮工作？", isPresented: $showStopConfirmation) {
+                    Button("停止", role: .destructive) {
+                        if let turnID = detail.currentTurnID { actions.interrupt(conversationID, turnID) }
+                    }
+                    Button("取消", role: .cancel) { }
+                } message: {
+                    Text("停止后，这轮工作不会自动继续。")
+                }
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 40, coordinateSpace: .local).onEnded { value in
+                        guard value.translation.width > 90,
+                              abs(value.translation.height) < 80 else { return }
+                        actions.navigate(.project(computerID: computerID, projectID: detail.summary.projectID))
+                    }
+                )
             } else {
                 TabletEmptyState(icon: "arrow.triangle.2.circlepath", title: "正在读取会话…", detail: "会话历史会在连接可用后显示。")
             }
@@ -1261,7 +1471,8 @@ private struct TabletConversationPage: View {
 
     private func submit(_ detail: TabletConversationDetail) {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, detail.canSend, !state.isBusy else { return }
+        guard !text.isEmpty, detail.canSend,
+              state.pendingActions[.send(conversationID: conversationID)] == nil else { return }
         actions.send(conversationID, text)
         composerFocused = true
     }
@@ -1359,6 +1570,7 @@ private struct TabletFailureCard: View {
 private struct TabletChangesPanel: View {
     let state: TabletViewState
     let onClose: () -> Void
+    @State private var wrapsLines = true
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1371,6 +1583,9 @@ private struct TabletChangesPanel: View {
                         .font(.system(size: 12)).foregroundStyle(.secondary)
                 }
                 Spacer()
+                Toggle("换行", isOn: $wrapsLines)
+                    .toggleStyle(.switch)
+                    .font(.system(size: 12))
                 Button(action: onClose) {
                     Image(systemName: "xmark").font(.system(size: 15, weight: .medium)).frame(width: 44, height: 44)
                 }
@@ -1407,6 +1622,8 @@ private struct TabletChangesPanel: View {
                                         Text(line.newLine.map(String.init) ?? "")
                                             .frame(width: 36, alignment: .trailing)
                                         Text(line.text.isEmpty ? " " : line.text)
+                                            .lineLimit(wrapsLines ? nil : 1)
+                                            .fixedSize(horizontal: false, vertical: wrapsLines)
                                             .frame(maxWidth: .infinity, alignment: .leading)
                                     }
                                     .font(.system(size: 11, design: .monospaced))
@@ -1492,7 +1709,27 @@ private struct TabletSettingsPage: View {
             }
             .pickerStyle(.segmented)
 
-            TabletConnectionCheck(state: state, mode: state.connectionMode, onMode: actions.setConnectionMode, onRefresh: actions.refresh)
+            TabletSectionTitle(title: "关于")
+            VStack(spacing: 0) {
+                Button {
+                    actions.navigate(.connectionCheck)
+                } label: {
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("连接检查").font(.system(size: 15, weight: .medium))
+                            Text("查看每台电脑现在是否连得上").font(.system(size: 12)).foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 8)
+                        Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold)).foregroundStyle(.tertiary)
+                    }
+                    .padding(.horizontal, 16)
+                    .frame(minHeight: 62)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("connection-check-row")
+            }
+            .tabletCard()
 
             TabletSectionTitle(title: "后续规划")
             VStack(spacing: 0) {
@@ -1509,15 +1746,35 @@ private struct TabletSettingsPage: View {
     }
 }
 
-private struct TabletConnectionCheck: View {
+private struct TabletConnectionPage: View {
     let state: TabletViewState
     let mode: TabletConnectionMode
     let onMode: (TabletConnectionMode) -> Void
     let onRefresh: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            TabletSectionTitle(title: "连接检查")
+        TabletPageScroll {
+            TabletPageTitle(
+                title: "连接检查",
+                subtitle: "连接是自动的：同一网络里直接连，不在一起时经互联网连接。"
+            )
+            VStack(spacing: 0) {
+                if state.computers.isEmpty {
+                    Text("还没有可以检查的电脑")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.secondary)
+                        .padding(16)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    ForEach(Array(state.computers.enumerated()), id: \.element.id) { index, computer in
+                        if index > 0 { Divider().padding(.leading, 16) }
+                        ConnectionComputerRow(computer: computer, transport: state.connectionTransport)
+                    }
+                }
+            }
+            .tabletCard()
+
+            #if DEBUG
             VStack(alignment: .leading, spacing: 10) {
                 LabeledContent("连接方式") {
                     Picker("连接方式", selection: Binding(get: { mode }, set: onMode)) {
@@ -1531,7 +1788,7 @@ private struct TabletConnectionCheck: View {
                 DiagnosticRow(label: "状态", value: state.connectionStatus.isEmpty ? "等待检查" : state.connectionStatus)
                 DiagnosticRow(label: "传输", value: state.connectionTransport.isEmpty ? "未连接" : state.connectionTransport)
                 if !state.connectionDiagnostic.isEmpty {
-                    DiagnosticRow(label: "Supervisor / Relay", value: state.connectionDiagnostic)
+                    DiagnosticRow(label: "诊断", value: state.connectionDiagnostic)
                 }
                 Button(action: onRefresh) {
                     HStack(spacing: 8) {
@@ -1546,9 +1803,60 @@ private struct TabletConnectionCheck: View {
             }
             .padding(16)
             .tabletCard()
-            Text("设备配对和连接状态用于诊断。此页面不会显示密钥或连接凭据。")
-                .font(.system(size: 12)).foregroundStyle(.secondary)
+            #else
+            Button(action: onRefresh) {
+                HStack(spacing: 8) {
+                    if state.isCheckingConnection { ProgressView().controlSize(.small) }
+                    Text(state.isCheckingConnection ? "检查中" : "重新检查")
+                }
+            }
+            .buttonStyle(TabletSecondaryButtonStyle())
+            .disabled(state.isCheckingConnection)
+            .accessibilityLabel(state.isCheckingConnection ? "正在检查连接" : "重新检查连接")
+            .frame(maxWidth: .infinity, alignment: .leading)
+            #endif
+            Text("连接状态只用于检查，不会显示密钥或连接凭据。")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
                 .padding(.horizontal, 4)
+        }
+    }
+}
+
+private struct ConnectionComputerRow: View {
+    let computer: TabletComputer
+    let transport: String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(computer.name)
+                    .font(.system(size: 15, weight: .medium))
+                Text(routeDescription)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            Text(computer.available ? "已连接" : "离线")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(computer.available ? TabletColors.success : .secondary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(
+                    (computer.available ? TabletColors.success : Color.secondary).opacity(0.12),
+                    in: Capsule()
+                )
+        }
+        .padding(.horizontal, 16)
+        .frame(minHeight: 62)
+    }
+
+    private var routeDescription: String {
+        guard computer.available else { return "连不上 · 最近曾在线" }
+        switch transport {
+        case "relay": return "经互联网连接"
+        case "direct": return "同一网络，直接连接"
+        default: return "已连接"
         }
     }
 }
@@ -1612,6 +1920,7 @@ private struct TabletSignInPage: View {
                         .keyboardType(.emailAddress)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
+                        .disabled(state.isBusy || state.codeRequested)
                         .padding(14).background(TabletColors.secondaryCard, in: RoundedRectangle(cornerRadius: 10))
                         .accessibilityIdentifier("signin-email")
                     if state.codeRequested {
@@ -1625,18 +1934,32 @@ private struct TabletSignInPage: View {
                         Text(error).font(.system(size: 13)).foregroundStyle(TabletColors.failure)
                     }
                     Button(state.codeRequested ? "验证并登录" : "发送验证码") {
-                        if state.codeRequested { actions.verifySignInCode(email, code) }
+                        if state.codeRequested { actions.verifySignInCode(state.email, code) }
                         else { actions.requestSignInCode(email) }
                     }
                     .buttonStyle(TabletPrimaryButtonStyle())
                     .frame(maxWidth: .infinity)
                     .disabled(state.isBusy || (state.codeRequested ? code.isEmpty : email.isEmpty))
                     .accessibilityIdentifier("signin-submit")
+                    if state.codeRequested {
+                        HStack {
+                            Button("重新发送验证码") { actions.requestSignInCode(state.email) }
+                                .accessibilityIdentifier("signin-resend")
+                            Spacer()
+                            Button("更换邮箱") { actions.resetSignInCode() }
+                                .accessibilityIdentifier("signin-change-email")
+                        }
+                        .disabled(state.isBusy)
+                    }
                 }
                 .padding(18).tabletCard()
             }
             .frame(maxWidth: 560)
             .padding(24)
+        }
+        .onChange(of: state.codeRequested) { requested in
+            if requested { email = state.email }
+            else { code = "" }
         }
     }
 }
@@ -1665,8 +1988,7 @@ private struct TabletRemovedPage: View {
 
 private struct TabletSheetContent: View {
     let sheet: TabletSheet
-    let state: TabletViewState
-    let actions: TabletViewActions
+    @ObservedObject var model: TabletAppModel
     let dismiss: () -> Void
 
     var body: some View {
@@ -1674,13 +1996,13 @@ private struct TabletSheetContent: View {
             Group {
                 switch sheet {
                 case .pair:
-                    PairingSheet(state: state, actions: actions)
-                case .createSession:
-                    NewSessionSheet(state: state, actions: actions, dismiss: dismiss)
+                    PairingSheet(state: model.state, actions: model.actions)
+                case .createSession(let projectID):
+                    NewSessionSheet(model: model, dismiss: dismiss, preferredProjectID: projectID)
                 case .search:
-                    SearchSheet(state: state, actions: actions, dismiss: dismiss)
+                    SearchSheet(state: model.state, actions: model.actions, dismiss: dismiss)
                 case .removeComputer(let id):
-                    RemoveComputerSheet(computer: state.computers.first { $0.id == id }, actions: actions, dismiss: dismiss)
+                    RemoveComputerSheet(computer: model.state.computers.first { $0.id == id }, actions: model.actions, dismiss: dismiss)
                 }
             }
             .toolbar {
@@ -1737,14 +2059,21 @@ private struct PairingSheet: View {
 }
 
 private struct NewSessionSheet: View {
-    let state: TabletViewState
-    let actions: TabletViewActions
+    @ObservedObject var model: TabletAppModel
     let dismiss: () -> Void
+    let preferredProjectID: String?
     @State private var selectedProjectID = ""
     @State private var selectedProviderID = ""
     @State private var selectedReasoningID = ""
     @State private var initialInput = ""
     @State private var didSubmit = false
+
+    private var state: TabletViewState { model.state }
+    private var actions: TabletViewActions { model.actions }
+
+    private var displayedErrorMessage: String? {
+        state.createSessionErrorMessage
+    }
 
     private var projects: [TabletProjectChoice] {
         state.computers.flatMap { computer in
@@ -1764,6 +2093,16 @@ private struct NewSessionSheet: View {
 
     var body: some View {
         Form {
+            if let error = displayedErrorMessage {
+                Section {
+                    Text(error)
+                        .font(.system(size: 13))
+                        .foregroundStyle(TabletColors.failure)
+                        .accessibilityLabel(error)
+                        .accessibilityAddTraits(.isStaticText)
+                        .accessibilityIdentifier("new-session-error")
+                }
+            }
             Section("项目") {
                 if projects.isEmpty {
                     Text("没有可用的项目").foregroundStyle(.secondary)
@@ -1821,12 +2160,6 @@ private struct NewSessionSheet: View {
                     .accessibilityIdentifier("new-session-input")
             }
             Section {
-                if didSubmit, let error = state.createSessionErrorMessage {
-                    Text(error)
-                        .font(.system(size: 13))
-                        .foregroundStyle(TabletColors.failure)
-                        .accessibilityIdentifier("new-session-error")
-                }
                 if let pendingCreate {
                     Button("使用原请求重试") {
                         didSubmit = true
@@ -1837,7 +2170,7 @@ private struct NewSessionSheet: View {
                     .disabled(state.isBusy)
                     .accessibilityIdentifier("new-session-retry-uncertain")
                 } else {
-                    Button(didSubmit && state.createSessionErrorMessage != nil ? "重试创建" : "创建会话") {
+                    Button(displayedErrorMessage != nil ? "重试创建" : "创建会话") {
                         let input = initialInput.trimmingCharacters(in: .whitespacesAndNewlines)
                         guard !selectedProjectID.isEmpty, let provider = selectedProvider, provider.canStart, !input.isEmpty else { return }
                         didSubmit = true
@@ -1845,8 +2178,9 @@ private struct NewSessionSheet: View {
                     }
                     .buttonStyle(TabletPrimaryButtonStyle())
                     .frame(maxWidth: .infinity)
-                    .disabled(selectedProjectID.isEmpty || selectedProvider?.canStart != true || initialInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || state.isBusy)
+                    .disabled(selectedProjectID.isEmpty || selectedProvider?.canStart != true || initialInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || pendingCreate != nil)
                     .accessibilityIdentifier("new-session-create")
+                    .keyboardShortcut(.return, modifiers: .command)
                 }
             }
         }
@@ -1866,8 +2200,20 @@ private struct NewSessionSheet: View {
                 initialInput = pending.input
                 didSubmit = true
             }
-            if selectedProjectID.isEmpty, let first = projects.first(where: { $0.project.available && $0.computer.available }) {
-                selectedProjectID = first.project.id
+            if selectedProjectID.isEmpty {
+                let choice = preferredProjectID.flatMap { preferred in
+                    projects.first(where: { $0.project.id == preferred && $0.project.available && $0.computer.available })
+                } ?? projects.first(where: { $0.project.available && $0.computer.available })
+                if let choice {
+                    // Select the provider from the same choice so this first
+                    // render does not briefly leave the create button disabled
+                    // while the Picker state is settling.
+                    selectedProjectID = choice.project.id
+                    if selectedProviderID.isEmpty, let first = choice.machine.providers.first(where: \.canStart) {
+                        selectedProviderID = first.id
+                        selectedReasoningID = first.reasoningOptions.first?.id ?? ""
+                    }
+                }
             }
             if selectedProviderID.isEmpty, let first = providers.first(where: \.canStart) {
                 selectedProviderID = first.id

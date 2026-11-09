@@ -109,6 +109,8 @@ internal fun JSONObject.attention(conversation: RemoteConversation?, provider: R
             else -> null
         },
         canApprove = open && control && approvalId != null && provider?.approvals == true && conversation != null,
+        conversationTitle = conversation?.title,
+        provider = conversation?.provider,
     )
 }
 

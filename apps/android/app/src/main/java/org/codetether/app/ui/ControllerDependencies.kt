@@ -36,6 +36,9 @@ internal interface ControllerSession {
     suspend fun disconnect()
     suspend fun workspace(): Pair<RemoteWorkspace, RemoteConnection>
     suspend fun projectConversations(project: RemoteProject, archived: Boolean, status: String?): List<RemoteConversation>
+    suspend fun projectConversationDirectory(project: RemoteProject): List<RemoteConversation> =
+        projectConversations(project, archived = false, status = null) +
+            projectConversations(project, archived = true, status = null)
     fun watchConversation(target: ConversationTarget, loadedHistory: RemoteHistory?): Flow<RemoteConversationDetail>
     suspend fun olderHistory(target: ConversationTarget, cursor: String): RemoteHistory
     suspend fun changes(target: ConversationTarget): List<RemoteChange>
@@ -70,6 +73,7 @@ private class LiveControllerSession(private val real: RemoteSupervisor) : Contro
     override suspend fun workspace() = real.workspace()
     override suspend fun projectConversations(project: RemoteProject, archived: Boolean, status: String?) =
         real.projectConversations(project, archived, status)
+    override suspend fun projectConversationDirectory(project: RemoteProject) = real.projectConversationDirectory(project)
     override fun watchConversation(target: ConversationTarget, loadedHistory: RemoteHistory?) =
         real.watchConversation(target, loadedHistory)
     override suspend fun olderHistory(target: ConversationTarget, cursor: String) = real.olderHistory(target, cursor)

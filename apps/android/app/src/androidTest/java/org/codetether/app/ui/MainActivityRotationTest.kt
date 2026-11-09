@@ -354,6 +354,9 @@ class MainActivityRotationTest {
         }
         override suspend fun disconnect() { disconnects.incrementAndGet() }
         override suspend fun workspace() = WORKSPACE to CONNECTION
+        override suspend fun projectConversationDirectory(project: RemoteProject): List<RemoteConversation> =
+            projectConversations(project, archived = false, status = null)
+
         override suspend fun projectConversations(project: RemoteProject, archived: Boolean, status: String?): List<RemoteConversation> {
             projectReads += project
             return listOf(CONVERSATION)

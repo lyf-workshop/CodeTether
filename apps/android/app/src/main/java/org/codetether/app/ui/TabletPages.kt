@@ -1,7 +1,6 @@
 package org.codetether.app.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -43,7 +42,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.codetether.app.account.PairedComputer
-import org.codetether.app.remote.RemoteAttention
 import org.codetether.app.remote.ConversationTarget
 import org.codetether.app.remote.RemoteConversation
 import org.codetether.app.remote.RemoteMachine
@@ -71,91 +69,6 @@ private fun ListPage(
 @Composable
 private fun Empty(text: String) {
     Group { RowItem(text) }
-}
-
-@Composable
-internal fun HomePage(state: TabletState, go: (TabletPage) -> Unit) {
-    ListPage("最近的会话", "所有电脑和设备上的会话，按设备分组。") {
-        val attention = state.computers.flatMap { entry ->
-            entry.workspace?.attention.orEmpty().map { entry.computer.id to it }
-        }
-        if (attention.isNotEmpty()) {
-            SectionTitle("需要你处理  ${attention.size} 个")
-            Group {
-                attention.take(5).forEachIndexed { index, (computer, item) ->
-                    if (index > 0) Rule()
-                    val target = item.target
-                    RowItem(item.title, attentionLabel(item.type), onClick = target?.let {
-                        { go(TabletPage.Conversation(computer, it)) }
-                    })
-                }
-            }
-        }
-        if (state.computers.isEmpty()) Empty("配对一台电脑后，会话会显示在这里。")
-        state.computers.forEach { entry ->
-            val workspace = entry.workspace
-            if (workspace == null) {
-                SectionTitle(entry.computer.name)
-                Empty(entry.problem ?: "正在连接…")
-            } else workspace.machines.forEach { machine ->
-                val rows = workspace.recent.filter { it.target.machineId == machine.id && !it.archived }.take(5)
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        SectionTitle(machine.name)
-                        Text(machineSubtitle(entry, machine), Modifier.padding(start = 12.dp), color = ink.secondary, fontSize = 13.sp)
-                    }
-                    QuietButton("查看全部") { go(TabletPage.Device(entry.computer.id, machine.id)) }
-                }
-                if (rows.isEmpty()) Empty("这里还没有会话") else Group {
-                    rows.forEachIndexed { index, row ->
-                        if (index > 0) Rule()
-                        ConversationRow(entry.computer.id, row, state, go)
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-internal fun InboxPage(state: TabletState, actions: TabletActions, go: (TabletPage) -> Unit) {
-    var filter by remember { mutableStateOf<String?>(null) }
-    val sections = listOf(null to "全部", "approval" to "等待批准", "completed_review" to "已完成待查看", "failed" to "失败")
-    val attention = state.computers.flatMap { entry ->
-        entry.workspace?.attention.orEmpty().map { entry to it }
-    }.filter { filter == null || it.second.type == filter }
-    ListPage("待处理", "在这里处理需要批准、已完成和失败的工作。") {
-        Segments(sections.map { it.second to (it.first == filter) }) { filter = sections[it].first }
-        if (attention.isEmpty()) Empty("没有需要处理的事项")
-        attention.forEach { (computer, item) ->
-            Group {
-                val target = item.target
-                RowItem(item.title, "${computer.computer.name} · ${attentionLabel(item.type)}", onClick = target?.let {
-                    { go(TabletPage.Conversation(computer.computer.id, it)) }
-                })
-                item.detail?.let { Text(it, Modifier.padding(horizontal = 12.dp, vertical = 6.dp), color = ink.secondary) }
-                if (computer.connection != null) {
-                    when {
-                        item.canApprove -> ApprovalButtons(
-                            !state.busy,
-                            { actions.approve(computer.computer.id, item, true) },
-                            { actions.approve(computer.computer.id, item, false) },
-                        )
-                        item.type != "approval" && computer.workspace?.canControl == true ->
-                            QuietButton(if (item.type == "failed") "知道了" else "处理完成", enabled = !state.busy) {
-                                actions.resolveAttention(computer.computer.id, item)
-                            }
-                    }
-                }
-            }
-        }
-    }
-}
-
-private fun attentionLabel(type: String): String = when (type) {
-    "approval" -> "等待批准"
-    "completed_review" -> "已完成待查看"
-    else -> "失败"
 }
 
 @Composable
@@ -236,40 +149,8 @@ private fun providerStatus(status: String): String = when (status) {
 }
 
 @Composable
-internal fun ProjectPage(
-    state: TabletState,
-    page: TabletPage.Project,
-    actions: TabletActions,
-    go: (TabletPage) -> Unit,
-) {
-    val statuses = listOf(null to "全部", "running" to "运行中", "waiting" to "等待批准", "completed" to "已完成", "failed" to "失败")
-    val machine = state.machine(page.computerId, page.project.machineId)
-    ListPage(page.project.name, machine?.name) {
-        QuietButton("返回设备") { go(TabletPage.Device(page.computerId, page.project.machineId)) }
-        Segments(listOf("会话" to !state.projectArchived, "已归档" to state.projectArchived)) {
-            actions.setProjectFilter(it == 1, state.projectStatus)
-        }
-        Segments(statuses.map { it.second to (it.first == state.projectStatus) }) {
-            actions.setProjectFilter(state.projectArchived, statuses[it].first)
-        }
-        if (state.projectLoading) Empty("正在读取会话…")
-        else if (state.projectRows.isEmpty()) Empty("没有符合条件的会话") else Group {
-            state.projectRows.forEachIndexed { index, row ->
-                if (index > 0) Rule()
-                ConversationRow(page.computerId, row, state, go)
-            }
-        }
-    }
-}
-
-@Composable
 private fun ConversationRow(computer: String, row: RemoteConversation, state: TabletState, go: (TabletPage) -> Unit) {
-    val project = state.computer(computer)?.workspace?.projects?.firstOrNull { it.id == row.target.projectId }?.name
-    RowItem(
-        row.title,
-        listOfNotNull(providerLabel(row.provider), project, statusLabel(if (row.archived) "archived" else row.status))
-            .joinToString(" · "),
-    ) { go(TabletPage.Conversation(computer, row.target)) }
+    ConversationListRow(computer, row, state) { go(TabletPage.Conversation(computer, row.target)) }
 }
 
 @Composable
@@ -281,8 +162,24 @@ internal fun ConversationPage(state: TabletState, target: TabletPage.Conversatio
         }
         return
     }
-    val connected = state.computer(target.computerId)?.connection != null
+    val computer = state.computer(target.computerId)
+    val connected = computer?.connection != null
+    val machine = state.machine(target.computerId, target.target.machineId)
+    val project = computer?.workspace?.projects?.firstOrNull {
+        it.id == target.target.projectId && it.machineId == target.target.machineId
+    }
     val messages = (state.olderMessages + detail.history.messages).distinctBy { it.id }
+    val activeTurnId = detail.activeTurnId
+    val activeTurn = detail.history.turns.lastOrNull { it.id == activeTurnId }
+    val running = connected && detail.conversation.status == "running"
+    val activeTool = if (running && activeTurn != null) detail.history.messages.lastOrNull {
+        it.turnId == activeTurn.id && it.role == "tool" && it.status == "running" && it.text.isNotBlank()
+    } else null
+    val runningAction = activeTool?.let { "正在执行 · ${it.text}" } ?: "正在运行"
+    val provider = providerLabel(detail.conversation.provider)
+    val stop = activeTurn?.takeIf { connected && detail.canInterrupt }?.let { turn ->
+        { actions.interrupt(target, turn.id) }
+    }
     val list = rememberLazyListState()
     val mutation = state.sendMutation(target)
     var draft by rememberSaveable(target.computerId, target.target) { mutableStateOf(mutation?.request?.text.orEmpty()) }
@@ -300,7 +197,7 @@ internal fun ConversationPage(state: TabletState, target: TabletPage.Conversatio
         }
     }
     val last = messages.lastOrNull()
-    LaunchedEffect(last?.id, last?.text, detail.attention.size) {
+    LaunchedEffect(last?.id, last?.text, detail.attention.size, running, runningAction) {
         val count = list.layoutInfo.totalItemsCount
         val visible = list.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
         if (count > 0 && (list.firstVisibleItemIndex == 0 || visible >= count - 2)) {
@@ -310,13 +207,20 @@ internal fun ConversationPage(state: TabletState, target: TabletPage.Conversatio
     Column(Modifier.fillMaxSize().background(ink.card)) {
         Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
             LazyColumn(
-                Modifier.widthIn(max = 760.dp).fillMaxWidth().fillMaxHeight().padding(horizontal = 16.dp),
+                Modifier.widthIn(max = 760.dp).fillMaxWidth().fillMaxHeight().padding(horizontal = 28.dp),
                 state = list,
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 item("status") {
-                    Row(Modifier.fillMaxWidth().padding(top = 12.dp), horizontalArrangement = Arrangement.Center) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(top = 18.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         Badge(if (detail.conversation.archived) "archived" else detail.conversation.status)
+                        tabletRelativeTime(detail.conversation.lastActivityAt)?.let {
+                            Text(it, color = ink.secondary, fontSize = 13.sp)
+                        }
                     }
                 }
                 if (state.olderCursor != null) item("older") {
@@ -326,19 +230,17 @@ internal fun ConversationPage(state: TabletState, target: TabletPage.Conversatio
                     Text("从 ${providerLabel(detail.conversation.provider)} 导入", color = ink.secondary, fontSize = 13.sp)
                 }
                 items(messages, key = { "message-${it.id}" }) { message ->
-                    TimelineMessage(message, providerLabel(detail.conversation.provider))
+                    TimelineMessage(message, provider)
                 }
                 items(detail.attention.filter { it.type == "approval" }, key = { "approval-${it.id}" }) { item ->
-                    Column(Modifier.fillMaxWidth().clip(cardShape).background(ink.warningCard).padding(14.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text("需要你批准", color = ink.waiting, fontWeight = FontWeight.Bold)
-                        Text(item.title, color = ink.text)
-                        item.detail?.let { Text(it, color = ink.secondary, fontFamily = FontFamily.Monospace) }
-                        if (detail.canApprove && item.canApprove && connected) {
-                            ApprovalButtons(!state.busy, { actions.approve(target.computerId, item, true) },
-                                { actions.approve(target.computerId, item, false) })
-                        }
-                    }
+                    ConversationApprovalCard(
+                        item = item,
+                        location = listOfNotNull(machine?.name, project?.name).joinToString(" · "),
+                        actionable = detail.canApprove && item.canApprove && connected,
+                        enabled = !state.busy,
+                        approve = { actions.approve(target.computerId, item, true) },
+                        decline = { actions.approve(target.computerId, item, false) },
+                    )
                 }
                 val failed = detail.history.turns.lastOrNull()?.takeIf { it.status == "failed" }
                 if (failed != null) item("failure") {
@@ -352,25 +254,18 @@ internal fun ConversationPage(state: TabletState, target: TabletPage.Conversatio
                         }
                     }
                 }
+                if (running) item("running") { RunningTimelineStatus(provider, runningAction) }
                 item("end") { Spacer(Modifier.height(10.dp)) }
             }
         }
         Rule()
-        Box(Modifier.fillMaxWidth().background(ink.bar).padding(horizontal = 14.dp, vertical = 6.dp),
+        Box(Modifier.fillMaxWidth().background(ink.bar).padding(start = 24.dp, top = 10.dp, end = 24.dp, bottom = 14.dp),
             contentAlignment = Alignment.Center) {
             Column(Modifier.widthIn(max = 760.dp).fillMaxWidth()) {
                 when {
                     !connected -> Text("这台电脑现在连不上，请确认它开着并且联网", Modifier.padding(10.dp), color = ink.secondary)
-                    detail.conversation.status in setOf("running", "waiting") -> Row(
-                        Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(if (detail.conversation.status == "waiting") "先处理上面的批准，这一轮结束后再发送"
-                            else "正在运行，这一轮结束后再发送", Modifier.weight(1f), color = ink.secondary)
-                        val activeTurn = detail.activeTurnId
-                        if (detail.canInterrupt && activeTurn != null) {
-                            QuietButton("停止", enabled = !state.busy) { actions.interrupt(target, activeTurn) }
-                        }
-                    }
+                    detail.conversation.status == "waiting" -> WaitingComposerStatus(!state.busy, stop)
+                    running -> RunningComposerStatus(runningAction, activeTurn?.startedAt, !state.busy, stop)
                     detail.conversation.archived -> Text("这条会话已归档", Modifier.padding(10.dp), color = ink.secondary)
                     !detail.canSend -> Text("暂时不能发送消息", Modifier.padding(10.dp), color = ink.secondary)
                     else -> Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
@@ -417,57 +312,6 @@ private fun ApprovalButtons(enabled: Boolean, approve: () -> Unit, decline: () -
     Row(Modifier.padding(horizontal = 10.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         InkButton("允许一次", enabled = enabled, onClick = approve)
         QuietButton("拒绝", enabled = enabled, onClick = decline)
-    }
-}
-
-@Composable
-internal fun ChangesPanel(
-    modifier: Modifier,
-    state: TabletState,
-    close: () -> Unit,
-    refresh: () -> Unit,
-    panel: ChangesPanelState = rememberChangesPanelState(state.profile?.id, state.page as? TabletPage.Conversation),
-) {
-    val selected = state.changes.firstOrNull { it.key == panel.selected } ?: state.changes.firstOrNull()
-    // An empty loading frame must not clamp the saved offset before the changes arrive.
-    val scrolling = if (state.changes.isEmpty()) Modifier else Modifier.verticalScroll(panel.listScroll)
-    Column(modifier.testTag("changes-panel").fillMaxHeight().background(ink.background)) {
-        Row(Modifier.fillMaxWidth().background(ink.bar).padding(start = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("变更", Modifier.weight(1f), fontWeight = FontWeight.Bold, fontSize = 17.sp, color = ink.text)
-            QuietButton("刷新", enabled = !state.changesLoading, onClick = refresh)
-            IconAction("×", "关闭变更", close)
-        }
-        Rule()
-        Column(Modifier.testTag("changes-panel-body").fillMaxWidth().then(scrolling).padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            if (state.changes.isEmpty()) Empty(if (state.changesLoading) "正在读取变更…" else "没有变更")
-            else Group {
-                state.changes.forEachIndexed { index, change ->
-                    if (index > 0) Rule()
-                    val counts = listOfNotNull(change.additions?.let { "+$it" }, change.deletions?.let { "−$it" })
-                    RowItem(change.path.substringAfterLast('/').substringAfterLast('\\'),
-                        trailing = counts.joinToString(" "), active = selected?.key == change.key,
-                        modifier = Modifier.testTag("change-row-$index")) { panel.selected = change.key }
-                }
-            }
-            if (selected != null) Group(Modifier.testTag("change-diff")) {
-                RowItem(selected.path)
-                Rule()
-                val diff = selected.diff
-                if (diff == null) RowItem("没有可显示的逐行差异") else {
-                    Column(Modifier.testTag("change-diff-lines").horizontalScroll(panel.diffScroll).padding(vertical = 6.dp)) {
-                        diff.lineSequence().forEachIndexed { lineIndex, line ->
-                            val added = line.startsWith("+") && !line.startsWith("+++")
-                            val removed = line.startsWith("-") && !line.startsWith("---")
-                            val color = if (added) ink.done else if (removed) ink.failed else ink.text
-                            Text(line.ifEmpty { " " }, Modifier.testTag("change-line-$lineIndex").fillMaxWidth().background(color.copy(alpha = if (added || removed) .12f else 0f))
-                                .padding(horizontal = 8.dp, vertical = 2.dp), color = color,
-                                fontFamily = FontFamily.Monospace, fontSize = 12.sp)
-                        }
-                    }
-                }
-            }
-        }
     }
 }
 
@@ -533,28 +377,6 @@ internal fun SettingsPage(state: TabletState, page: TabletPage.Settings, actions
         InkButton("退出登录", Modifier.fillMaxWidth(), !state.busy) {
             signOut = false
             actions.signOut()
-        }
-    }
-}
-
-@Composable
-internal fun SearchSheet(
-    loaded: List<Pair<String, RemoteConversation>>,
-    onDismiss: () -> Unit,
-    open: (String, RemoteConversation) -> Unit,
-) {
-    var query by remember { mutableStateOf("") }
-    CenterSheet("搜索会话", onDismiss) {
-        InkField(query, { query = it.take(240) }, "按标题搜索")
-        Text("只搜索已经读取的会话标题。", color = ink.secondary, fontSize = 13.sp)
-        val filtered = loaded.filter { (_, row) -> row.title.contains(query.trim(), ignoreCase = true) }.take(40)
-        if (filtered.isEmpty()) Empty("没有匹配的会话") else {
-            Group(Modifier.heightIn(max = 340.dp).verticalScroll(rememberScrollState())) {
-                filtered.forEachIndexed { index, (computer, row) ->
-                    if (index > 0) Rule()
-                    RowItem(row.title, providerLabel(row.provider)) { open(computer, row) }
-                }
-            }
         }
     }
 }

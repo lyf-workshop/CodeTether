@@ -41,6 +41,8 @@ internal enum class Appearance(val label: String) {
 
 internal enum class MutationStatus { Pending, Success, Failed, Unknown }
 
+internal data class ProjectConversationCounts(val active: Int, val archived: Int)
+
 internal data class ComputerView(
     val computer: PairedComputer,
     val workspace: RemoteWorkspace? = null,
@@ -61,6 +63,7 @@ internal data class TabletState(
     val changesLoading: Boolean = false,
     val projectRows: List<RemoteConversation> = emptyList(),
     val projectLoading: Boolean = false,
+    val projectCounts: ProjectConversationCounts? = null,
     val projectArchived: Boolean = false,
     val projectStatus: String? = null,
     val appearance: Appearance = Appearance.System,

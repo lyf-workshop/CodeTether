@@ -209,7 +209,8 @@ private fun Workspace(modifier: Modifier, state: TabletState, actions: TabletAct
         }.focusRequester(focus).focusable()) {
             Row(Modifier.fillMaxSize()) {
                 if (landscape && (sidebarOpen || removedHome)) {
-                    Sidebar(Modifier.width(300.dp), state, ::go) { sheet = Sheet.Search }
+                    TabletSidebar(Modifier.width(300.dp), state, ::go,
+                        close = if (showChanges) ({ setSidebar(false) }) else null) { sheet = Sheet.Search }
                 }
                 Column(Modifier.weight(1f).fillMaxHeight()) {
                     if (removedHome) {
@@ -270,7 +271,7 @@ private fun Workspace(modifier: Modifier, state: TabletState, actions: TabletAct
             if (!landscape && sidebarOpen) {
                 Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = .25f))
                     .clickable { setSidebar(false) })
-                Sidebar(Modifier.width(300.dp).align(Alignment.CenterStart), state, ::go) {
+                TabletSidebar(Modifier.width(300.dp).align(Alignment.CenterStart), state, ::go, close = { setSidebar(false) }) {
                     setSidebar(false)
                     sheet = Sheet.Search
                 }
@@ -278,7 +279,7 @@ private fun Workspace(modifier: Modifier, state: TabletState, actions: TabletAct
         }
         when (sheet) {
             Sheet.Pair -> RemovedPairSheet(state, actions, onDismiss = { sheet = null }, onConnected = { go(TabletPage.Home) })
-            Sheet.Search -> SearchSheet(state.loaded, onDismiss = { sheet = null }) { computer, row ->
+            Sheet.Search -> SearchSheet(state, onDismiss = { sheet = null }) { computer, row ->
                 go(TabletPage.Conversation(computer, row.target))
             }
             Sheet.Create -> CreateSheet(state, actions, onDismiss = { sheet = null }, onCreated = { computer, target ->
@@ -346,69 +347,6 @@ private fun Header(
         }
     }
     Rule()
-}
-
-@Composable
-private fun Sidebar(modifier: Modifier, state: TabletState, go: (TabletPage) -> Unit, search: () -> Unit) {
-    val attentionCount = state.computers.sumOf { it.workspace?.attentionCount ?: 0 }
-    Column(modifier.fillMaxHeight().background(ink.background).padding(10.dp)) {
-        Row(Modifier.fillMaxWidth().padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
-            Brand()
-            Spacer(Modifier.width(8.dp))
-            Text("CodeTether", color = ink.text, fontSize = 21.sp, fontWeight = FontWeight.Bold)
-        }
-        QuietButton("搜索会话  Ctrl K", Modifier.fillMaxWidth(), onClick = search)
-        Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
-            NavItem("最近的会话", state.page == TabletPage.Home || state.page is TabletPage.Removed) { go(TabletPage.Home) }
-            NavItem(if (attentionCount > 0) "待处理  ${attentionCount}" else "待处理", state.page == TabletPage.Inbox) {
-                go(TabletPage.Inbox)
-            }
-            Spacer(Modifier.height(10.dp))
-            NavItem("设备", state.page == TabletPage.Devices) { go(TabletPage.Devices) }
-            state.computers.forEach { entry ->
-                val workspace = entry.workspace
-                if (workspace == null) {
-                    RowItem(entry.computer.name, "暂时连不上")
-                } else workspace.machines.forEach { machine ->
-                    var machineOpen by remember(entry.computer.id, machine.id) { mutableStateOf(true) }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        IconAction(if (machineOpen) "⌄" else "›", "展开或收起 ${machine.name}") { machineOpen = !machineOpen }
-                        Column(Modifier.weight(1f)) {
-                            NavItem(machine.name, state.page == TabletPage.Device(entry.computer.id, machine.id)) {
-                                go(TabletPage.Device(entry.computer.id, machine.id))
-                            }
-                        }
-                    }
-                    if (machineOpen) workspace.projects.filter { it.machineId == machine.id }.forEach { project ->
-                        var projectOpen by remember(entry.computer.id, project.id) { mutableStateOf(false) }
-                        Row(Modifier.padding(start = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-                            IconAction(if (projectOpen) "⌄" else "›", "展开或收起 ${project.name}") { projectOpen = !projectOpen }
-                            Column(Modifier.weight(1f)) {
-                                NavItem(project.name, state.page == TabletPage.Project(entry.computer.id, project)) {
-                                    go(TabletPage.Project(entry.computer.id, project))
-                                }
-                            }
-                        }
-                        if (projectOpen) workspace.recent.filter { it.target.projectId == project.id && it.target.machineId == machine.id }
-                            .take(5).forEach { row ->
-                                Box(Modifier.padding(start = 44.dp)) {
-                                    NavItem(row.title, state.page == TabletPage.Conversation(entry.computer.id, row.target)) {
-                                        go(TabletPage.Conversation(entry.computer.id, row.target))
-                                    }
-                                }
-                            }
-                    }
-                }
-            }
-        }
-        Rule()
-        NavItem("设置", state.page is TabletPage.Settings) { go(TabletPage.Settings()) }
-    }
-}
-
-@Composable
-private fun NavItem(label: String, selected: Boolean, onClick: () -> Unit) {
-    RowItem(label, active = selected, onClick = onClick)
 }
 
 internal fun providerLabel(id: String): String = when (id) {

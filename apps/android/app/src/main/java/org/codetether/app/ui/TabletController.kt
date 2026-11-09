@@ -155,6 +155,7 @@ internal class TabletController private constructor(
                 changesLoading = false,
                 projectRows = emptyList(),
                 projectLoading = page is TabletPage.Project,
+                projectCounts = null,
                 projectArchived = false,
                 projectStatus = null,
                 error = null,
@@ -367,12 +368,13 @@ internal class TabletController private constructor(
                 } else detail,
                 computers = current.computers.map { computer ->
                     val workspace = computer.workspace
-                    if (computer.computer.id == computerId && workspace != null) {
+                    val removed = workspace?.attention?.firstOrNull { it.id == item.id }
+                    if (computer.computer.id == computerId && workspace != null && removed != null) {
                         val remaining = workspace.attention.filterNot { it.id == item.id }
                         computer.copy(workspace = workspace.copy(
                             attention = remaining,
-                            attentionCount = (workspace.attentionCount - (workspace.attention.size - remaining.size))
-                                .coerceAtLeast(remaining.size),
+                            attentionCount = (workspace.attentionCount - 1).coerceAtLeast(remaining.size),
+                            attentionCounts = workspace.attentionCounts?.without(removed.type),
                         ))
                     } else computer
                 },
@@ -656,16 +658,20 @@ internal class TabletController private constructor(
         mutable.update { if (it.page == page) it.copy(projectLoading = true) else it }
         projectJob = viewModelScope.launch {
             try {
-                val current = state.value
-                val rows = requireClient(page.computerId).projectConversations(
-                    page.project, current.projectArchived, current.projectStatus,
-                )
-                mutable.update {
-                    if (it.page != page) it else it.copy(
-                        projectRows = rows,
-                        projectLoading = false,
-                        loaded = retainConversations(rows.map { row -> page.computerId to row }, it.loaded),
-                    )
+                val directory = requireClient(page.computerId).projectConversationDirectory(page.project)
+                val archivedCount = directory.count { it.archived }
+                mutable.update { current ->
+                    if (current.page != page) current else {
+                        val rows = directory.filter {
+                            it.archived == current.projectArchived && (current.projectStatus == null || it.status == current.projectStatus)
+                        }
+                        current.copy(
+                            projectRows = rows,
+                            projectLoading = false,
+                            projectCounts = ProjectConversationCounts(directory.size - archivedCount, archivedCount),
+                            loaded = retainConversations(rows.map { row -> page.computerId to row }, current.loaded),
+                        )
+                    }
                 }
             } catch (cancel: CancellationException) {
                 throw cancel

@@ -129,22 +129,24 @@ private fun ConnectionRowDivider() {
     HorizontalDivider(Modifier.padding(start = 16.dp), thickness = 1.dp, color = ink.rule)
 }
 
-internal fun offlineConnectionDescription(lastSeenAt: String?, now: Instant = Instant.now()): String {
+internal fun offlineConnectionDescription(lastSeenAt: String?, now: Instant = Instant.now()): String =
+    tabletRelativeTime(lastSeenAt, now)?.let { "连不上 · ${it}在线" } ?: "连不上"
+
+internal fun tabletRelativeTime(timestamp: String?, now: Instant = Instant.now()): String? {
     val seen = try {
-        lastSeenAt?.let(Instant::parse)
+        timestamp?.let(Instant::parse)
     } catch (_: DateTimeParseException) {
         null
     }
-    if (seen == null || seen.isAfter(now)) return "连不上"
+    if (seen == null || seen.isAfter(now)) return null
 
     val elapsed = Duration.between(seen, now)
-    val relativeTime = when {
+    return when {
         elapsed.toDays() > 0 -> "${elapsed.toDays()} 天前"
         elapsed.toHours() > 0 -> "${elapsed.toHours()} 小时前"
         elapsed.toMinutes() > 0 -> "${elapsed.toMinutes()} 分钟前"
         else -> "刚刚"
     }
-    return "连不上 · ${relativeTime}在线"
 }
 
 @Composable

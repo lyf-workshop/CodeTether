@@ -15,6 +15,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
@@ -38,6 +39,7 @@ import org.codetether.app.account.AccountProfile
 import org.codetether.app.account.PairedComputer
 import org.codetether.app.remote.ConversationTarget
 import org.codetether.app.remote.RemoteAttention
+import org.codetether.app.remote.RemoteAttentionCounts
 import org.codetether.app.remote.RemoteChange
 import org.codetether.app.remote.RemoteConnection
 import org.codetether.app.remote.RemoteConversation
@@ -119,8 +121,12 @@ class TabletUiTest {
         }
         override fun older() { acted.add("older") }
         override fun loadChanges() {
-            state = state.copy(changes = listOf(RemoteChange("src/conversation-row.tsx", "modified",
-                "@@ -1,1 +1,2 @@\n-<span>{title}</span>\n+<span className=\"truncate\">{title}</span>\n+<time>{updated}</time>", 2, 1)))
+            state = state.copy(changes = listOf(
+                RemoteChange("src/conversation-row.tsx", "modified",
+                    "@@ -1,1 +1,2 @@\n-<span>{title}</span>\n+<span className=\"truncate\">{title}</span>\n+<time>{updated}</time>", 2, 1),
+                RemoteChange("src/workspace-response.ts", "modified",
+                    "@@ -1 +1,2 @@\n-return rows\n+return rows.filter(isCurrent)\n+// Keep the visible rows.", 2, 1),
+            ))
         }
         override fun create(computerId: String, project: RemoteProject, provider: String, text: String, reasoning: String?, actionId: String) {
             acted.add("create")
@@ -157,6 +163,46 @@ class TabletUiTest {
         history: RemoteHistory = this.history,
         attention: List<RemoteAttention> = listOf(pending),
     ) = initial.copy(page = convoPage, detail = RemoteConversationDetail(conversation, history, provider, attention, true))
+
+    private fun runningHistory(): RemoteHistory {
+        val now = Instant.now()
+        return history.copy(
+            turns = listOf(history.turns.first().copy(startedAt = now.minusSeconds(250).toString())),
+            messages = history.messages + RemoteMessage("running-tool", "tool", "运行 backup.ps1",
+                now.minusSeconds(12).toString(), "running", "fixture-turn"),
+        )
+    }
+
+    private fun listPreview(): TabletState {
+        val now = Instant.now()
+        val waiting = summary.copy(lastActivityAt = now.minusSeconds(90).toString())
+        val running = summary.copy(target = target.copy(conversationId = "fixture-running"),
+            title = "给备份脚本加上失败重试", provider = "claude-code", status = "running",
+            lastActivityAt = now.minusSeconds(250).toString())
+        val done = summary.copy(target = target.copy(conversationId = "fixture-done"),
+            title = completed.title, status = "completed", lastActivityAt = now.minusSeconds(3600).toString())
+        val failure = summary.copy(target = target.copy(conversationId = "fixture-failure"),
+            title = "修复夜间任务", status = "failed", lastActivityAt = now.minusSeconds(7200).toString())
+        val archived = done.copy(target = target.copy(conversationId = "fixture-archived"),
+            title = "整理旧的脚本测试", archived = true)
+        val conversations = listOf(waiting, running, done, failure, archived)
+        val attention = listOf(
+            pending.copy(createdAt = waiting.lastActivityAt, conversationTitle = waiting.title, provider = waiting.provider),
+            completed.copy(target = done.target, createdAt = done.lastActivityAt,
+                conversationTitle = done.title, provider = done.provider),
+            completed.copy(id = "fixture-failed", type = "failed", target = failure.target,
+                title = failure.title, createdAt = failure.lastActivityAt,
+                conversationTitle = failure.title, provider = failure.provider),
+        )
+        val previewWorkspace = workspace.copy(recent = conversations.filterNot { it.archived }, attention = attention,
+            attentionCount = attention.size, attentionCounts = RemoteAttentionCounts(1, 1, 1))
+        return initial.copy(
+            computers = listOf(ComputerView(computer, previewWorkspace, connection)),
+            loaded = conversations.map { computer.id to it },
+            projectRows = conversations.filterNot { it.archived },
+            projectCounts = ProjectConversationCounts(active = 4, archived = 1),
+        )
+    }
 
     private fun connectionPreview(): TabletState {
         val remote = local.copy(id = "fixture-build-server", name = "build-server", isLocal = false,
@@ -207,19 +253,52 @@ class TabletUiTest {
     fun approvalAndStopRespectProviderCapabilities() {
         state = detail()
         compose.setContent { TabletApp(state, actions) }
+        compose.onNodeWithTag("conversation-approval-command").assertTextContains("pnpm --filter @codetether/web test")
         compose.onNodeWithText("允许一次").assertIsDisplayed().performClick()
         compose.onNodeWithText("拒绝").assertIsDisplayed().performClick()
+        display(detail(summary.copy(status = "running"), history = runningHistory(), attention = emptyList()))
+        compose.onNodeWithTag("conversation-running-progress").assertIsDisplayed()
+        compose.onNodeWithTag("conversation-running-action").assertTextContains("正在执行 · 运行 backup.ps1")
+        compose.onNodeWithTag("conversation-running-elapsed").assertTextContains("已运行 4 分钟", substring = true)
         compose.onNodeWithText("停止").assertIsDisplayed().performClick()
         assertEquals(listOf("accept", "decline", "stop"), acted)
 
         display(detail(summary.copy(status = "running"), local.providers[1], attention = listOf(pending.copy(canApprove = false))))
         compose.onNodeWithText("允许一次").assertDoesNotExist()
         compose.onNodeWithText("停止").assertDoesNotExist()
+        compose.onNodeWithText("这台设备上不能停止").assertIsDisplayed()
+        compose.onNodeWithTag("conversation-running-elapsed").assertDoesNotExist()
         compose.onNodeWithContentDescription("变更").assertDoesNotExist()
 
         display(initial.copy(page = TabletPage.Inbox))
-        compose.onNodeWithText("处理完成").performClick()
+        compose.onNodeWithText("查看").performClick()
+        assertEquals(convoPage, state.page)
+        display(initial.copy(page = TabletPage.Inbox))
+        compose.onNodeWithText("知道了").performClick()
         assertEquals("resolve", acted.last())
+    }
+
+    @Test
+    fun listSegmentsShowDirectoryCountsAndProjectFiltersRemainIndependent() {
+        val lists = listPreview()
+        val entry = lists.computers.single()
+        val inbox = requireNotNull(entry.workspace).copy(attentionCount = 8,
+            attentionCounts = RemoteAttentionCounts(4, 1, 3))
+        state = lists.copy(page = TabletPage.Inbox, computers = listOf(entry.copy(workspace = inbox)))
+        compose.setContent { TabletApp(state, actions) }
+        compose.onNodeWithText("全部 8").assertIsDisplayed()
+        compose.onNodeWithText("等待批准 4").assertIsDisplayed()
+        compose.onNodeWithText("失败 3").performClick()
+        compose.onNodeWithText("执行失败").assertIsDisplayed()
+        compose.onNodeWithText("已完成，等你查看").assertDoesNotExist()
+
+        display(lists.copy(page = TabletPage.Project(computer.id, project)))
+        compose.onNodeWithText("会话 4").assertIsDisplayed()
+        compose.onNodeWithText("已归档 1").performClick()
+        assertTrue(state.projectArchived)
+        compose.onNodeWithText("运行中", substring = false).performClick()
+        assertTrue(state.projectArchived)
+        assertEquals("running", state.projectStatus)
     }
 
     @Test
@@ -227,8 +306,8 @@ class TabletUiTest {
         state = initial
         compose.setContent { TabletApp(state, actions) }
         ctrl(Key.K)
-        compose.onNodeWithText("按标题搜索").assertIsDisplayed()
-        compose.onNodeWithText("按标题搜索").performTextInput("窄窗口")
+        compose.onNodeWithText("按标题找会话").assertIsDisplayed()
+        compose.onNodeWithTag("search-query").performTextInput("窄窗口")
         compose.onNode(hasText("修复窄窗口的会话标题") and hasAnyAncestor(isDialog()))
             .assertIsDisplayed().performClick()
         display(detail(summary.copy(status = "idle"), history = history.copy(turns = emptyList()), attention = emptyList()))
@@ -251,23 +330,27 @@ class TabletUiTest {
 
     @Test
     fun changesWithTheSamePathKeepTheirOwnDiffWhenSelectedAndRefreshed() {
+        val path = "D:\\projects\\fixture\\demo.txt"
         val first = RemoteChange(
-            "demo.txt", "modified", "@@ -1 +1 @@\n-old-original\n+old-replacement", 1, 1,
+            path, "modified", "@@ -1 +1 @@\n-old-original\n+old-replacement", 1, 1,
             turnId = "turn_fixture_first", itemId = "item_fixture_first", order = 1,
         )
         val second = RemoteChange(
-            "demo.txt", "modified", "@@ -1 +1 @@\n-new-original\n+new-replacement", 1, 1,
+            path, "modified", "@@ -1 +1 @@\n-new-original\n+new-replacement", 1, 1,
             turnId = "turn_fixture_second", itemId = "item_fixture_second", order = 2,
         )
         state = detail().copy(changes = listOf(first, second))
         compose.setContent {
             TabletInk(state.appearance) { ChangesPanel(androidx.compose.ui.Modifier, state, {}, {}) }
         }
+        compose.onNodeWithText("1 个文件 · +2 −2").assertIsDisplayed()
+        compose.onNodeWithText(path).assertIsDisplayed()
         compose.onNodeWithText("+old-replacement").assertIsDisplayed()
         compose.onNodeWithTag("change-row-1").performClick()
         compose.onNodeWithText("+new-replacement").assertIsDisplayed()
         compose.onNodeWithText("+old-replacement").assertDoesNotExist()
-        display(state.copy(changes = listOf(second.copy(diff = "@@ -1 +1 @@\n-new-original\n+new-refreshed"), first)))
+        display(state.copy(changes = listOf(second.copy(diff = "@@ -1 +1 @@\n-new-original\n+new-refreshed", additions = null), first)))
+        compose.onNodeWithText("1 个文件 · −2").assertIsDisplayed()
         compose.onNodeWithText("+new-refreshed").assertIsDisplayed()
         compose.onNodeWithTag("change-row-1").performClick()
         compose.onNodeWithText("+old-replacement").assertIsDisplayed()
@@ -373,18 +456,28 @@ class TabletUiTest {
         display(state.copy(error = null, lastPairedName = computer.name))
         capture("01-05-paired")
 
-        display(initial)
+        val lists = listPreview()
+        display(lists)
         capture("02-01-home")
-        display(initial.copy(page = TabletPage.Inbox))
+        display(lists.copy(page = TabletPage.Inbox))
         capture("02-02-inbox")
-        display(detail())
+        display(detail(provider = local.providers.first().copy(interrupt = false)))
         capture("02-03-conversation")
         compose.onNodeWithContentDescription("变更").performClick()
         capture("02-04-changes")
         compose.onNodeWithContentDescription("关闭变更").performClick()
-        display(detail(summary.copy(status = "running"), attention = emptyList()))
+        compose.onNodeWithContentDescription("侧栏").performClick()
+        display(detail(summary.copy(status = "running"), history = runningHistory(), attention = emptyList()))
         capture("02-05-running")
-        display(detail(summary.copy(status = "running", provider = "claude-code"), local.providers[1], attention = emptyList()))
+        val restrictedTool = local.providers.first().copy(approvals = false, interrupt = false, diff = false)
+        val remote = local.copy(id = "fixture-build-server", name = "build-server", isLocal = false,
+            platform = "Linux · x64", status = "online", providers = listOf(restrictedTool))
+        val remoteTarget = target.copy(machineId = remote.id)
+        display(detail(summary.copy(target = remoteTarget, status = "running"), restrictedTool,
+            history = runningHistory(), attention = emptyList()).copy(
+            page = TabletPage.Conversation(computer.id, remoteTarget),
+            computers = listOf(ComputerView(computer, workspace.copy(machines = listOf(local, remote)), connection)),
+        ))
         capture("02-06-running-restricted")
         display(detail(summary.copy(status = "failed"),
             history = history.copy(turns = listOf(history.turns.first().copy(status = "failed", error = "请检查电脑上的登录状态", canRetry = true))),
@@ -406,6 +499,7 @@ class TabletUiTest {
         compose.onNodeWithText("Claude Code").performClick()
         capture("02-11-new-claude")
         compose.onNodeWithContentDescription("关闭窗口").performClick()
+        display(lists)
         ctrl(Key.K)
         capture("02-12-search")
         compose.onNodeWithContentDescription("关闭窗口").performClick()
@@ -416,9 +510,9 @@ class TabletUiTest {
         capture("03-02-device")
         display(state.copy(computers = listOf(ComputerView(computer, workspace, problem = "这台电脑现在连不上"))))
         capture("03-03-device-offline")
-        display(initial.copy(page = TabletPage.Project(computer.id, project), projectRows = listOf(summary)))
+        display(lists.copy(page = TabletPage.Project(computer.id, project)))
         capture("03-04-project")
-        display(state.copy(projectArchived = true, projectRows = listOf(summary.copy(archived = true))))
+        display(state.copy(projectArchived = true, projectRows = lists.loaded.map { it.second }.filter { it.archived }))
         capture("03-05-project-archived")
 
         display(initial.copy(page = TabletPage.Settings()))
@@ -439,9 +533,10 @@ class TabletUiTest {
         compose.onNodeWithText("输入配对码").performClick()
         capture("04-06-removed-pair")
         compose.onNodeWithText("取消").performClick()
-        display(initial.copy(appearance = Appearance.Dark))
+        display(lists.copy(appearance = Appearance.Dark))
         capture("05-04-dark-home")
         display(detail().copy(appearance = Appearance.Dark))
+        compose.onNodeWithContentDescription("变更").performClick()
         capture("05-05-dark-conv")
     }
 

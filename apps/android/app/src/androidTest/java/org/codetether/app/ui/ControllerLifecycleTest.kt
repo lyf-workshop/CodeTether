@@ -111,6 +111,7 @@ class ControllerLifecycleTest {
             awaitState { harness.session.projectEntered.isCompleted }
             assertTrue(harness.controller.state.value.projectLoading)
             assertTrue(harness.controller.state.value.projectRows.isEmpty())
+            assertEquals(null, harness.controller.state.value.projectCounts)
 
             harness.onMain { foreground(false) }
             awaitState { harness.session.projectCancelled.isCompleted }
@@ -120,7 +121,12 @@ class ControllerLifecycleTest {
             awaitState { !harness.controller.state.value.projectLoading && harness.controller.state.value.projectRows.isNotEmpty() }
             assertEquals(page, harness.controller.state.value.page)
             assertEquals(listOf(TARGET), harness.controller.state.value.projectRows.map { it.target })
+            assertEquals(ProjectConversationCounts(active = 1, archived = 1), harness.controller.state.value.projectCounts)
             assertEquals(2, harness.session.projectReads.get())
+
+            harness.onMain { setProjectFilter(archived = true, status = null) }
+            awaitState { !harness.controller.state.value.projectLoading && harness.controller.state.value.projectRows.singleOrNull()?.archived == true }
+            assertEquals(ProjectConversationCounts(active = 1, archived = 1), harness.controller.state.value.projectCounts)
         }
     }
 
@@ -375,6 +381,10 @@ class ControllerLifecycleTest {
             listOf(RemoteMachine(TARGET.machineId, "Synthetic machine", "Synthetic", true, "local", listOf(PROVIDER))),
             listOf(PROJECT), listOf(conversation()), emptyList(), true,
         ) to connection()
+
+        override suspend fun projectConversationDirectory(project: RemoteProject): List<RemoteConversation> =
+            projectConversations(project, archived = false, status = null) +
+                conversation().copy(target = TARGET.copy(conversationId = "fixture-archived"), archived = true)
 
         override suspend fun projectConversations(project: RemoteProject, archived: Boolean, status: String?): List<RemoteConversation> {
             val attempt = projectReads.incrementAndGet()

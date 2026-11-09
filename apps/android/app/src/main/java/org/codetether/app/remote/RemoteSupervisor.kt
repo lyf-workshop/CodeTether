@@ -85,8 +85,7 @@ class RemoteSupervisor(private val account: TabletAccount) {
                     row.conversation().also { if (it.target.machineId != machine.id) invalidResponse() }
                 }
         }
-        val recent = recentRows.filterNot { it.archived }.groupBy { it.target.machineId }
-            .values.flatMap { it.take(5) }
+        val recent = recentRows.filterNot { it.archived }
         val attention = attentionPage(session)
         val machineById = machines.associateBy { it.id }
         val conversationsById = recentRows.associateBy { it.target.conversationId }
@@ -100,20 +99,31 @@ class RemoteSupervisor(private val account: TabletAccount) {
             }
             row.attention(conversation, provider, session.info.canControl)
         }
+        val summaryCounts = attention.optJSONObject("summary")
+        val totalCount = summaryCounts?.count("totalOpen")
+        val approvalCount = summaryCounts?.count("approvalOpen")
+        val completedReviewCount = summaryCounts?.count("completedReviewOpen")
+        val failedCount = summaryCounts?.count("failedOpen")
+        val counts = if (approvalCount != null && completedReviewCount != null && failedCount != null) {
+            RemoteAttentionCounts(approvalCount, completedReviewCount, failedCount)
+        } else items.countsByType().takeIf { totalCount == items.size }
         RemoteWorkspace(machines, projects, recent, items, session.info.canControl,
-            attention.optJSONObject("summary")?.count("totalOpen") ?: items.size) to session.info
+            totalCount ?: items.size, counts) to session.info
     }
 
     suspend fun projectConversations(
         project: RemoteProject,
         archived: Boolean = false,
         status: String? = null,
-    ): List<RemoteConversation> = read { session ->
+    ): List<RemoteConversation> = projectConversationDirectory(project)
+        .filter { it.archived == archived && (status == null || it.status == status) }
+
+    suspend fun projectConversationDirectory(project: RemoteProject): List<RemoteConversation> = read { session ->
         pages(session, "conversation.list", "conversations", "machineId" to project.machineId, "projectId" to project.id) {
             it.conversation().also { conversation ->
                 if (conversation.target.machineId != project.machineId || conversation.target.projectId != project.id) invalidResponse()
             }
-        }.filter { it.archived == archived && (status == null || it.status == status) }
+        }
     }
 
     suspend fun project(project: RemoteProject): RemoteProject = read { session ->

@@ -9,6 +9,22 @@ data class RemoteWorkspace(
     val attention: List<RemoteAttention>,
     val canControl: Boolean,
     val attentionCount: Int = attention.size,
+    val attentionCounts: RemoteAttentionCounts? = attention.countsByType().takeIf { attentionCount == attention.size },
+)
+
+data class RemoteAttentionCounts(val approval: Int, val completedReview: Int, val failed: Int) {
+    internal fun without(type: String): RemoteAttentionCounts = when (type) {
+        "approval" -> copy(approval = (approval - 1).coerceAtLeast(0))
+        "completed_review" -> copy(completedReview = (completedReview - 1).coerceAtLeast(0))
+        "failed" -> copy(failed = (failed - 1).coerceAtLeast(0))
+        else -> this
+    }
+}
+
+internal fun List<RemoteAttention>.countsByType() = RemoteAttentionCounts(
+    approval = count { it.type == "approval" },
+    completedReview = count { it.type == "completed_review" },
+    failed = count { it.type == "failed" },
 )
 
 data class RemoteMachine(
@@ -67,6 +83,8 @@ data class RemoteAttention(
     val createdAt: String,
     val detail: String?,
     val canApprove: Boolean,
+    val conversationTitle: String? = null,
+    val provider: String? = null,
 )
 
 data class RemoteConversationDetail(
